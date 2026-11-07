@@ -2113,6 +2113,14 @@ impl<'a> Cg<'a> {
     /// Declares the function `name` for declaration `first` with
     /// signature `sig` (the declaration attributes of
     /// `GetOrCreateLLVMFunction`).
+    /// clang `setNonAliasAttributes` / `SetFunctionAttributes` /
+    /// `EmitStaticVarDecl`: a GNU `section("name")` places the function
+    /// or variable `d` in section `name`, declaration or definition.
+    fn decl_section(&self, d: DeclId) -> Option<Box<str>> {
+        let lit = self.ast.section_of(d)?;
+        Some(String::from_utf8_lossy(self.ast.strings.bytes(lit)).into())
+    }
+
     pub(crate) fn declare_fn(&mut self, name: &str, first: DeclId, sig: &Sig) -> R<FuncId> {
         let ast = self.ast;
         let f = match self.m.add_function(name, sig.fn_ty) {
@@ -2218,9 +2226,11 @@ impl<'a> Cg<'a> {
         // clang `SetFunctionAttributes`: a declaration of a `weak`
         // function is an `extern_weak` reference.
         let weak = ast.is_weak_decl(first) && ast.weakref_target(first).is_none();
+        let section = self.decl_section(first);
         {
             let func = self.m.func_mut(f);
             func.visibility = vis;
+            func.section = section;
             func.attrs.func = fa;
             func.attrs.ret = ret;
             func.attrs.params = params;
@@ -2430,9 +2440,11 @@ impl<'a> Cg<'a> {
         // clang `GetOrCreateLLVMGlobal`: a declaration of a `weak`
         // variable is an `extern_weak` reference.
         let weak = ast.is_weak_decl(first);
+        let section = self.decl_section(first);
         let gv = self.m.global_mut(g);
         gv.linkage = if weak { Linkage::ExternWeak } else { Linkage::External };
         gv.visibility = vis;
+        gv.section = section;
         gv.align = Some(align);
         gv.is_constant = constant;
         self.gvars.insert(first, g);
@@ -2587,10 +2599,12 @@ impl<'a> Cg<'a> {
         // Set before the initialization function, whose guard copies it.
         let vis = if internal { Visibility::Default } else { self.decl_visibility(d, true) };
         let weak_attr = !internal && ast.is_weak_decl(d);
+        let section = self.decl_section(d);
         let gv = self.m.global_mut(g);
         gv.is_constant = constant;
         gv.align = Some(align);
         gv.visibility = vis;
+        gv.section = section;
         if internal {
             gv.linkage = Linkage::Internal;
             gv.dso_local = false;
@@ -2685,10 +2699,12 @@ impl<'a> Cg<'a> {
         });
         let comdat = if inline_fn { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
         let vis = if inline_fn { self.decl_visibility(first, true) } else { Visibility::Default };
+        let section = self.decl_section(d);
         let gv = self.m.global_mut(g);
         gv.is_constant = constant;
         gv.align = Some(align);
         gv.visibility = vis;
+        gv.section = section;
         if inline_fn {
             gv.linkage = Linkage::LinkOnceOdr;
             gv.dso_local = true;

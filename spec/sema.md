@@ -1965,8 +1965,13 @@ and returns the scope it names:
   `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
   `always_inline` with the GNU flag. Test:
   `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
-  - GNU `section`: `'section' attribute ignored` (`visibility`: see
-    "Visibility attributes")
+  - GNU `section("name")` (WP-716, clang `handleSectionAttr`): exactly
+    one string literal (`expected string literal as argument of
+    'section' attribute`, `'section' attribute takes one argument`), on
+    functions and variables with static storage duration (clang's
+    subject-list error otherwise); kept as `AttrKind::SECTION` with the
+    literal, for codegen (spec/codegen.md §8 "Sections").
+    (`visibility`: see "Visibility attributes")
   - GNU `format(archetype, F, A)` (WP-186, clang `handleFormatAttr`, in
     its order): exactly three arguments (`'format' attribute requires
     exactly 3 arguments`), the archetype an identifier (`requires
@@ -3287,6 +3292,23 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   class`, or `using declaration refers into 'C::', which is not a base
   class of 'D'`. A declarator qualified by an
   enumeration works at class scope as anywhere else.
+  - (WP-724) [namespace.udecl]/10: a using-declarator in a class
+    repeats an earlier one, "redeclaration of using declaration" with
+    "previous using declaration", only when both qualifiers name the
+    same class (`previous_class_using`, clang
+    `CheckUsingDeclRedeclaration`). Through another class (`using
+    A::f; using B::f;` with `B` derived from `A`) a member the class
+    already has a shadow of gets no second shadow and no diagnostic
+    (`introduce_shadow`, clang `CheckUsingShadowDecl`;
+    `namespace.udecl/p10-*.cpp`).
+  - (WP-724) [class.qual]/2.2: the declarator names the constructors
+    of the class `C` its qualifier nominates (an inheriting
+    using-declaration) when the name is the qualifier's last spelled
+    component (`using B::B;`) or `C`'s own name, its
+    injected-class-name, however the qualifier is spelled (`using
+    BC::B;` with `typedef B<char> BC`, `using std::regex::basic_regex;`;
+    `class_using_declarator`;
+    `class.qual/p2-injected-class-name-after-typedef-run.cpp`).
 - **`using enum`** ([enum.udecl]): `act_on_using_enum(qual, class, name,
   name_loc)` takes the parser's classification of the (possibly
   qualified) name.
@@ -3882,6 +3904,10 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
 `BIis_constant_evaluated`; `kiln_ast::decl::builtin`).
 The AArch64 NEON target builtins (`__builtin_neon_*`, a generated
 table) are spec/landed/sema/WP-558.md "Target builtins".
+The AArch64 ACLE builtins (`__builtin_arm_*`, clang's
+`BuiltinsAArch64.def` rows, `kiln_ast::decl::builtin::arm`) are
+spec/landed/sema/WP-724.md "ACLE builtins": declared only when the
+target is AArch64, like the NEON ones.
 The x86-64 target builtins (every `__builtin_ia32_*` name the resource
 headers use, `__builtin_ia32_pause` (WP-610), and the header builtins
 `_mm_pause`, ...; a generated table) are spec/landed/sema/WP-630.md:
@@ -4549,7 +4575,12 @@ for them.
     type; a bit-field member is an error. Array indices must be
     integral constants; a non-constant index, and a result outside
     0 to 2^32 - 1 (which a negative index gives), are unsupported.
-    clang's error for a member of a virtual base is not implemented.
+  - (WP-716) A member is found by class member lookup, so through
+    base classes too ([class.member.lookup]; an ambiguous name is
+    reported as for a member access). The offset of the base
+    subobject along the unique path is added; a member of a virtual
+    base is clang's error `invalid application of 'offsetof' to a
+    field of a virtual base` (`ext.gnu.offsetof/base-member*.cpp`).
   - For a class that is not standard-layout it warns
     `-Winvalid-offsetof`. Standard-layout is computed from members
     and bases (`is_standard_layout`) until the definition bits track

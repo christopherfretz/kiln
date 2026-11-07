@@ -660,6 +660,20 @@ impl Ast {
         })
     }
 
+    /// The section a GNU `section("name")` attribute on any declaration
+    /// of `d` places it in (clang `SectionAttr`, inherited by
+    /// redeclarations).
+    pub fn section_of(&self, d: DeclId) -> Option<crate::ids::StringLitId> {
+        use crate::ids::RawId as _;
+        self.redecls_of(d).find_map(|r| {
+            self.lists
+                .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
+                .map(|a| self.attrs.get(a))
+                .find(|a| a.kind == crate::attr::AttrKind::SECTION)
+                .and_then(|a| crate::ids::StringLitId::from_raw(a.a))
+        })
+    }
+
     /// The label of a GNU `goto *&&l;` (clang `IndirectGotoStmt::
     /// getConstantTarget`: the target with parentheses and implicit casts
     /// peeled is an `AddrLabelExpr`), which behaves as `goto l;`.

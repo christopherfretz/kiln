@@ -16,6 +16,7 @@
     clippy::unnecessary_wraps
 )]
 
+mod arm;
 mod asm;
 mod atomic;
 mod auto_init;

@@ -679,7 +679,14 @@ impl Sema<'_, '_> {
         let empty = InitList { items: Vec::new(), lbrace: slot.lbrace, rbrace: slot.rbrace };
         let l = std::mem::replace(slot, empty);
         let r = self.list_ics(&l, to, opts);
+        // A reference bound to a reference-related element fails as
+        // that binding ("would lose const qualifier").
+        let elem = self.ast.types.pointee(to).filter(|_| self.ast.types.is_reference(to));
+        let bound = elem.is_some_and(|p| self.list_ref_element(&l, p).is_some());
         self.ovl.lists[i as usize] = l;
+        if bound {
+            return r;
+        }
         // clang's `TryListConversion` fails with the list itself as the
         // source: "cannot convert initializer list argument to 'T'" (a
         // non-const lvalue reference whose temporary would initialize
@@ -709,11 +716,33 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// `l`'s only element, if it is an expression reference-related to
+    /// `r` ([dcl.init.ref]/4).
+    fn list_ref_element(&mut self, l: &InitList, r: QualType) -> Option<ArgInfo> {
+        let [InitItem { value: InitValue::Expr(e), designator }] = l.items.as_slice() else {
+            return None;
+        };
+        if !designator.is_empty() {
+            return None;
+        }
+        let a = self.arg_info(*e);
+        let (u1, u2) = (self.unqualified_canonical(r), self.unqualified_canonical(a.ty));
+        self.ref_related(u1, u2).0.then_some(a)
+    }
+
     /// [over.ics.list]/9: the ICS of braced-init-list `l` to the
     /// reference type `to` (referring to `r`).
     fn list_ref_ics(&mut self, l: &InitList, to: QualType, r: QualType, opts: IcsOptions) -> Ics {
         let void_from = QualType::VOID;
         let inner = conv::strip_cv(self, r);
+        // One element reference-related to the referee: the reference
+        // is initialized from it ([dcl.init.list]/3.10; clang's
+        // `TryListConversion`), `f({x})` for `f(const X&)`. A failed
+        // binding binds no temporary either (`g({x})` for `g(X&&)` with
+        // `x` an lvalue is not viable).
+        if let Some(a) = self.list_ref_element(l, r) {
+            return self.try_implicit_conversion(&a, to, opts);
+        }
         let lref = matches!(self.ast.types.canonical_view(to), TypeView::LValueRef(_));
         let q = self.ast.types.effective_quals(r);
         if lref && (!q.is_const() || q.is_volatile()) {
@@ -808,10 +837,21 @@ impl Sema<'_, '_> {
                 // [over.best.ics.general]/4: a suppressed user-defined
                 // conversion (clang `TryUserDefinedConversion`), unless the
                 // only element is the class or derived from it (/2).
-                if opts.contains(IcsOptions::SUPPRESS_UDC) && !self.single_elem_of_class(l, c) {
+                if opts.contains(IcsOptions::SUPPRESS_UDC)
+                    && self.single_elem_of_class(l, c).is_none()
+                {
                     return Ics::bad(BadKind::InitList, void_from, to);
                 }
                 return self.list_ctor_conversion(l, c, to, opts);
+            }
+            // /3: an aggregate from one element of its class or a class
+            // derived from it: that element's conversion (CWG2076).
+            if let Some(e) = self.single_elem_of_class(l, c) {
+                let a = self.arg_info(e);
+                return match self.try_implicit_conversion(&a, to, opts) {
+                    Ics::Bad(_) => Ics::bad(BadKind::InitList, void_from, to),
+                    x => x,
+                };
             }
             // /8: an aggregate.
             if self.aggregate_list_fits(l, to) {
@@ -840,18 +880,19 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Whether `l`'s only element is an expression of class `c` or a
-    /// class derived from it ([over.ics.list]/2).
-    fn single_elem_of_class(&mut self, l: &InitList, c: DeclId) -> bool {
+    /// `l`'s only element, if it is an expression of class `c` or a
+    /// class derived from it ([over.ics.list]/3).
+    fn single_elem_of_class(&mut self, l: &InitList, c: DeclId) -> Option<ExprId> {
         let [InitItem { value: InitValue::Expr(e), designator }] = l.items.as_slice() else {
-            return false;
+            return None;
         };
         let ty = self.ety(*e);
-        designator.is_empty()
+        let of_class = designator.is_empty()
             && self.ast.types.as_record(ty).is_some_and(|f| {
                 same_class(self, f, c)
                     || (complete_class(self, f).is_some() && is_derived_from(self, f, c))
-            })
+            });
+        of_class.then_some(*e)
     }
 
     /// The worst conversion of the elements of `l` to `elem`

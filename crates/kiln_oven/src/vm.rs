@@ -1670,11 +1670,10 @@ impl Oven {
             }
             Op::MpActive => {
                 if let Some(e) = self.mp.get(reg!(1))
-                    && e.union
+                    && let Some(cls) = e.union
                     && let Some((_, _, idx)) = e.field
                 {
                     // A union's members are all at its offset 0.
-                    let cls = e.cls;
                     if let Err(f) = self.active_check(reg!(0) as u64, idx, cls, aux) {
                         fail!(f);
                     }

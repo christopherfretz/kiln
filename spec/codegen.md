@@ -1556,7 +1556,10 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
 - **Pointers to members** (`memptr.rs`; Itanium §2.3, the ARM variant on
   AArch64; see spec/abi.md §8.6):
   - `&C::m` constants and Oven `Scalar::MemberPtr` constants, with
-    clang's `getMemberPointerPathAdjustment`;
+    clang's `getMemberPointerPathAdjustment`; for a member of an
+    anonymous union or struct (an `IndirectField`, [class.union.anon])
+    the offset sums its access path (`ASTContext::getFieldOffset`,
+    WP-716);
   - null member pointers;
   - base-to-derived and derived-to-base conversions (the
     `-1`-preserving `select` for data members; `adj` arithmetic for
@@ -3463,7 +3466,10 @@ No lowering changed; the new forms reach codegen as existing AST.
   and the `_x2`..`_x4` forms: the immediate shifts `vshl_n`, `vshrn_n`,
   `vsra_n`, `vsri_n`, `vmovl`, `vqmovn`, `vfma` by lane, the float width
   `vcvt`s, `vpmin`/`vpmax`, `vabd`, `vqadd`, `vminnm`/`vmaxnm`, the
-  reciprocal estimates and steps, `vrnd*`, `vcnt`, `vclz`, `vcmla*`).
+  reciprocal estimates and steps, `vrnd*`, `vcnt`, `vclz`, `vcmla*`;
+  the widening multiply `vmull_v`: spec/landed/sema/WP-724.md "NEON
+  widening multiply"). The AArch64 ACLE builtins (`__builtin_arm_*`,
+  `arm.rs`) are spec/landed/sema/WP-724.md "ACLE builtins".
 - With `CodegenOptions::sve` (AArch64 only), every function definition
   and the global-initialization functions (`__cxx_global_var_init`,
   `_GLOBAL__sub_I_*`, `__tls_init`: `init_fn_attrs`) carry
@@ -3895,6 +3901,16 @@ namespace,pragma,templates,vtable_hidden_o1}.cpp`,
 `tests/codegen/dso_local_{nopic,pie,pic,pic_hidden,pic_nosi,pic_si_direct}.cpp`
 (both oracles, both triples), `crates/kiln_driver/tests/codegen.rs`
 `pic_visibility_and_objects` (`-fPIC -S -emit-llvm` and `-fPIC -c`).
+
+**Sections** (WP-716; clang `SetFunctionAttributes`,
+`setNonAliasAttributes`, `EmitStaticVarDecl`): a GNU `section("name")`
+on any declaration of a function or of a variable with static storage
+duration (`Ast::section_of`) gives its LLVM function or global
+`section "name"`, whether it is defined here or only declared, a static
+local and an instantiated template included, so the ELF linker's
+`__start_name`/`__stop_name` bound the section. Section type conflicts
+(clang `err_section_conflict`) are not diagnosed.
+`tests/codegen/section_attr.cpp`, `tests/conformance/ext.gnu.section/`.
 
 ## Landed sections after WP-488: `spec/landed/codegen/`
 

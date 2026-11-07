@@ -519,6 +519,13 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   of a qualifier in a dependent context (`X<T>::m::name`, `m::name` in
   `X`'s own definition) stays dependent
   (`tests/conformance/temp.arg.type/member-typedef-of-specialization-qualifier.cpp`).
+- A further component after a typedef or alias member of the pattern
+  naming a dependent type (`X<args>::type::name` with `typedef T type;`
+  in `X`'s pattern) cannot be classified there: the lookahead parses the
+  qualifier ahead as an unresolved specialization scope
+  (`annotate_template_scope`, `in_class_template_pattern`; WP-724), so
+  `sizeof(rr<decltype(*p)>::type::value_type)` takes a type-id
+  (`tests/conformance/dcl.ambig.res/sizeof-member-typedef-of-specialization-run.cpp`).
 - `skip_template_args(i)` memoizes its result by token index `i` in
   `Parser::targs_memo`.
 - A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp

@@ -272,13 +272,13 @@ url = "https://github.com/protocolbuffers/protobuf"
 tag = "v33.1"
 build = "cmake"
 cxx_std = 17
-configure = ["-Dprotobuf_BUILD_TESTS=ON", "-Dprotobuf_ABSL_PROVIDER=module", "-Dprotobuf_BUILD_CONFORMANCE=OFF"]
-submodules = true
+configure = ["-Dprotobuf_BUILD_TESTS=ON", "-Dprotobuf_FORCE_FETCH_DEPENDENCIES=ON", "-Dprotobuf_BUILD_CONFORMANCE=OFF"]
+submodules = false
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 3
-verified = false
-notes = "abseil and googletest come from the third_party submodules."
+verified = true
+notes = "No submodules: configure fetches Abseil 20250512.1 and GoogleTest 1.15.2 (FetchContent), compiled with the same compiler. ctest runs lite-test, full-test, lazily-build-dependencies-test and upb-test."
 
 [leveldb]
 url = "https://github.com/google/leveldb"
@@ -298,12 +298,12 @@ url = "https://github.com/facebook/rocksdb"
 tag = "v10.7.5"
 build = "cmake"
 cxx_std = 20
-configure = ["-DWITH_TESTS=ON", "-DWITH_GFLAGS=OFF", "-DFAIL_ON_WARNINGS=OFF", "-DWITH_BENCHMARK_TOOLS=OFF", "-DWITH_TOOLS=OFF", "-DPORTABLE=1"]
-test = "ctest --output-on-failure"
+configure = ["-DCMAKE_BUILD_TYPE=Debug", "-DCMAKE_CXX_FLAGS_DEBUG=-O1", "-DCMAKE_C_FLAGS_DEBUG=-O1", "-DWITH_TESTS=ON", "-DWITH_GFLAGS=OFF", "-DFAIL_ON_WARNINGS=OFF", "-DWITH_BENCHMARK_TOOLS=OFF", "-DWITH_TOOLS=OFF", "-DROCKSDB_BUILD_SHARED=OFF", "-DPORTABLE=1"]
+test = 'ctest --output-on-failure -R "^(AutoVectorTest|Basic/HeapTest|BasicSecondaryCacheTest/BasicSecondaryCacheTest|BitFieldsTest|BlockFetcherTest|BlockPerKVChecksumTest|BlockTest|CRC|CacheReservationHandleTest|CacheReservationManagerDestructorTest|CacheReservationManagerIncreaseReservcationOnFullCacheTest|CacheReservationManagerTest|CacheReservationManagerWithDelayedDecreaseTest|CacheTestInstance/CacheTest|CacheTestInstance/LRUCacheTest|ChargeWriteBufferTest|CleanableTest|ClockCacheTest|Coding|CompactionIteratorTestInstance/CompactionIteratorTest|CompactionIteratorTsGcTestInstance/CompactionIteratorTsGcTest|CompactionIteratorWithAllowIngestBehindTestInstance/CompactionIteratorWithAllowIngestBehindTest|CompactionIteratorWithSnapshotCheckerTest|CompactionJobIOPriorityTest|CompactionJobTest|CompactionJobTimestampTest|CompactionJobTimestampTestWithBbTable|CompactionPickerTest|CompactionPickerU64TsTest|CompressedSecCacheTests/CompressedSecCacheTestWithCompressAndAllocatorParam|CompressedSecCacheTests/CompressedSecCacheTestWithCompressAndSplitParam|CompressedSecCacheTests/CompressedSecCacheTestWithTiered|CompressedSecCacheTests/CompressedSecondaryCacheTestWithCompressionParam|CompressedSecondaryCacheTest/CompressedSecondaryCacheTest|Compression/CompressionLogTest|ConfigOptionsTest|ConfigurableTest|CuckooBuilderTest|CustomizableTest|DBAutoSkip|DBBlobIndexTest|DBCompressionCostPredictor|DBCompressionTest|DBCompressionTest/CompressionFailuresTest|DBEncryptionTest|DBLogicalBlockSizeCacheTest|DBMemTableTest|DBMemTableTestForSeek/DBMemTableTestForSeek|DBMergeOperandTest|DBSecondaryCacheTest/DBSecondaryCacheTest|DBStatisticsTest|DBWideBasicTest|DBWideMergeV3Test|DBWriteTestInstance/DBWriteTest|DBWriteTestUnparameterized|DataBlockHashIndex|DeferTest|FastRange32Test|FastRange64Test|FastRangeGenericTest|FileMetaDataTest|FileNameTest|FormatTest|FormatVersions/PartitionedFilterBlockTest|FullFilterBlockTest|GetFullHistoryTsLowFromU64CutoffTsTest|HandleTimestampSizeDifferenceTest|HashTest|HistogramTest|IOStatsContextTest|LRUCacheTest|LoadCustomizableTest|Log/LogTest|MathTest|MemoryTest|MergeHelperTest|MergerTest|MiscBlockCacheTest|OneElementHeap/HeapTest|OptionTypeInfoTest|OptionsOldApiTest|OptionsParserTest|OptionsSanityCheckTest/OptionsSanityCheckTest|OptionsTest|P/BlockTest|P/DataBlockKVChecksumCorruptionTest|P/DataBlockKVChecksumTest|P/IndexBlockKVChecksumCorruptionTest|P/IndexBlockKVChecksumTest|P/IndexBlockTest|P/MetaIndexBlockKVChecksumCorruptionTest|P/MetaIndexBlockKVChecksumTest|ParamTest/ConfigurableParamTest|PerKeyPlacementCompactionPickerTest/PerKeyPlacementCompactionPickerTest|PinnableSliceTest|PluginFullFilterBlockTest|RandomTest|RangeDelAggregatorTest|RangeTombstoneFragmenterTest|RepeatableThreadTest|RibbonTest|RibbonTypeParamTest|SaveAndRestoreTest|SemaphoreTest|SkipTest|SliceTest|SliceTransformDBTest|SliceTransformTest|SmallEnumSetTest|SmallHeap/HeapTest|SmallValues/HeapTest|StatisticsTest|StatusTest|StreamingCompression/StreamingCompressionTest|StringUtilTest|ThreadListTest|ThreadLocalTest|TimerQueueTest|TimerTest|TimestampCompatibleCompactionTest|ToBaseCharsStringTest|TwoElementHeap/HeapTest|UnownedPtrTest|ValidateUserDefinedTimestampsOptionsTest|VersionBuilderTest|VersionEditTest|WalSet|WalSetTest|WorkQueue|WriteBatchTest|WriteBufferManagerTest|bool/RetriableLogTest)\."'
 c_compiler = "clang-19"
 wave = 3
-verified = false
-notes = "Large (~1000 TUs); the full ctest run is hours, so the tracked number may be a ctest -R subset."
+verified = true
+notes = "Debug, since rocksdb builds its tests only in a Debug build (WITH_TESTS depends on it), at -O1 rather than -O0; ctest is bounded to 62 representative binaries (db, table, util, memtable, cache, options; 2163 cases, about 1 min) by an -R over their gtest suite names, the same filter for both compilers (docs/status/oss/rocksdb.md)."
 
 [llvm_project]
 url = "https://github.com/llvm/llvm-project"

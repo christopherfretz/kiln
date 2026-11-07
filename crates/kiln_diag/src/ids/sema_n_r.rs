@@ -76,6 +76,7 @@ sema_nullability_mismatched_redecl = Warning [Nullability] (2) "nullability spec
 sema_nullability_nonpointer = Error (2) "nullability specifier '{0}' cannot be applied to non-pointer type {1}";
 sema_offsetof_array_type = Error (1) "offsetof requires array type, {0} invalid";
 sema_offsetof_bitfield = Error (1) "cannot compute offset of bit-field '{0}'";
+sema_offsetof_field_of_virtual_base = Error (0) "invalid application of 'offsetof' to a field of a virtual base";
 sema_offsetof_incomplete_type = Error (1) "offsetof of incomplete type {0}";
 sema_offsetof_non_standard_layout = ExtWarn [InvalidOffsetof] (1) "'offsetof' on non-standard-layout type {0}";
 sema_offsetof_non_standard_layout_19 = ExtWarn [InvalidOffsetof] (1) "offset of on non-standard-layout type {0}";
