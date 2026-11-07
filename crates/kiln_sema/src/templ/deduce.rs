@@ -776,7 +776,7 @@ impl Sema<'_, '_> {
         for _ in 0..64 {
             match self.ast.exprs.get(e).kind() {
                 ExprKind::ParenExpr | ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
-                    e = self.ast.exprs.operand(e)
+                    e = self.ast.exprs.operand(e);
                 }
                 ExprKind::SubstNonTypeTemplateParmExpr => e = self.ast.exprs.subst_replacement(e),
                 ExprKind::DeclRefExpr => {

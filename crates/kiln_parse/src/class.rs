@@ -1510,6 +1510,10 @@ impl Parser<'_, '_> {
             && !self.at_qualified_member_declarator()
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one member-declarator list, each kind handled inline"
+    )]
     fn parse_member_declaration_inner(&mut self) {
         let tmpl_kind = self.template_decl_kind.take();
         if !self.stack_ok() || self.parse_member_declaration_leader() {
@@ -1587,9 +1591,7 @@ impl Parser<'_, '_> {
             if first {
                 self.prohibit_friend_lead_attrs(&mut ds);
             }
-            // A variable template's specialization (`template<> constexpr
-            // bool v<int> = true;`) is a static data member as written
-            // ([temp.expl.spec]/3): its initializer is parsed in place.
+            // A member variable template specialization is static ([temp.expl.spec]/3).
             let is_static = is_static || d.spec_id.is_some();
             let data_member = !is_static && !is_typedef && ds.friend.is_none();
             let (nsdmi, init) = self.classify_member_init(&mut d, has_width, is_fn, data_member);

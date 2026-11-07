@@ -2605,6 +2605,7 @@ impl Parser<'_, '_> {
 
     /// noptr-declarator ([dcl.decl]): the declarator-id or `( declarator )`
     /// and the array and function suffixes.
+    #[allow(clippy::too_many_lines, reason = "one arm per declarator-id form")]
     fn parse_direct_declarator(&mut self, d: &mut Declarator) {
         let abstract_ok =
             matches!(d.ctx, DeclaratorContext::Prototype | DeclaratorContext::TypeName);

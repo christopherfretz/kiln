@@ -520,35 +520,51 @@ impl Sema<'_, '_> {
         // A name found in an enumeration qualifier (`d.E::e`) has no
         // naming class and no access check, as for `B::E::e` (clang's
         // `LookupQualifiedName` names only a class).
+        let naming = found.naming.unwrap_or(look);
+        let via = found.found.first().copied().unwrap_or(m);
         if found.naming.is_some() || self.kind_of(look) != DeclKind::Enum {
-            let naming = found.naming.unwrap_or(look);
-            let via = found.found.first().copied().unwrap_or(m);
             self.check_member_access(via, naming, Some(def), loc);
         }
         // clang `DiagnoseUseOfDecl` in `BuildMemberReferenceExpr`.
         self.diagnose_deprecated(m, loc);
         self.check_sve_use(m, loc);
         if self.kind_of(m) == DeclKind::VarTemplate {
-            // `x.v<args>` naming a static data member template
-            // ([temp.names]/3, [expr.ref]/6.1): held as a member set until
-            // its template arguments name the specialization
-            // ([`Sema::act_on_member_template_args`]).
-            let set = crate::overload::OvlMember {
-                name,
-                decls: vec![m],
-                found: vec![via],
-                naming,
-                obj_ty,
-                def,
-                base: b,
-                arrow,
-                nns,
-                implicit: false,
-                targs: None,
-            };
-            return self.build_member_overload(set, loc);
+            let at = (b, obj_ty, def, arrow, nns);
+            return self.member_var_template_set(name, m, via, naming, at, loc);
         }
         self.member_of_object(b, obj_ty, def, arrow, m, found.shadow(0), nns, loc)
+    }
+
+    /// `x.v<args>` naming a static data member template ([temp.names]/3,
+    /// [expr.ref]/6.1): held as the one-member set `set` until its
+    /// template arguments name the specialization
+    /// ([`Sema::act_on_member_template_args`]).
+    /// `at` is the object operand, its type and class, `->` and the
+    /// member's nested-name-specifier.
+    fn member_var_template_set(
+        &mut self,
+        name: kiln_ast::names::DeclName,
+        m: DeclId,
+        via: DeclId,
+        naming: DeclId,
+        at: (ExprId, QualType, DeclId, bool, Option<kiln_ast::NnsId>),
+        loc: Loc,
+    ) -> ExprId {
+        let (base, obj_ty, def, arrow, nns) = at;
+        let set = crate::overload::OvlMember {
+            name,
+            decls: vec![m],
+            found: vec![via],
+            naming,
+            obj_ty,
+            def,
+            base,
+            arrow,
+            nns,
+            implicit: false,
+            targs: None,
+        };
+        self.build_member_overload(set, loc)
     }
 
     /// The member variable template-id `x<targs>` of the member access

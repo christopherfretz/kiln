@@ -1368,6 +1368,7 @@ impl Parser<'_, '_> {
     /// The member designator after `.`/`->` (the operator token at `loc`
     /// already consumed): `[template] id-expression` or a
     /// pseudo-destructor-name ([expr.ref]/1, [expr.prim.id.dtor]).
+    #[allow(clippy::too_many_lines, reason = "one path per member designator form")]
     fn parse_member_access_suffix(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
         // `e.[: r :]`, `p->[: r :]` ([expr.ref]/1 with a splice-expression).
         if self.at_splice() && self.decltype_scope_end(self.pos()).is_none() {
