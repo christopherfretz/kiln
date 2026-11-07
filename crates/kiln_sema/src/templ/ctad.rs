@@ -187,7 +187,16 @@ fn ctad_redepth_param(
                 &news,
                 il.requires,
             );
-            s.sema.builder().template_template_parm(h, inner, depth, index, pi.pack, pi.typename_kw)
+            let np = s.sema.builder().template_template_parm(
+                h,
+                inner,
+                depth,
+                index,
+                pi.pack,
+                pi.typename_kw,
+            );
+            s.sema.builder().set_ttp_kind(np, pi.ttp_kind);
+            np
         }
         _ => return Err(SubstFail),
     };

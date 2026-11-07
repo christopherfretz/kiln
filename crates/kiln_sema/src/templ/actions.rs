@@ -1106,6 +1106,21 @@ impl Sema<'_, '_> {
                 self.ast.types.template_name_view(name)
             {
                 self.check_ttp_arity(decl, args, l)?;
+                // `C<args>` / `V<args>` for a concept or variable template
+                // template parameter (P2841R7): value-dependent until
+                // substituted (spec/sema-templates.md §2.1.1).
+                let k = self.ttp_kind(decl);
+                if k != kiln_ast::templates::TtpKind::Type {
+                    let concept = k == kiln_ast::templates::TtpKind::Concept;
+                    let e = self.builder().ttp_template_id_expr(
+                        decl,
+                        concept,
+                        list,
+                        QualType::BOOL,
+                        l,
+                    );
+                    return Ok(TemplateIdRef::Value(e));
+                }
             }
             return Ok(TemplateIdRef::Type(match self.ast.types.template_name_view(name) {
                 // `TT<args>` for a template template parameter `TT`, and

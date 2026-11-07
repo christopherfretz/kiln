@@ -368,14 +368,16 @@ impl Substituter<'_, '_, '_> {
                 DeclKind::TemplateTemplateParm => {
                     let Some(inner) = pi.params else { return Err(SubstFail) };
                     let inner = self.param_list(inner)?;
-                    self.sema.builder().template_template_parm(
+                    let np = self.sema.builder().template_template_parm(
                         h,
                         inner,
                         depth,
                         pi.index,
                         pi.pack,
                         pi.typename_kw,
-                    )
+                    );
+                    self.sema.builder().set_ttp_kind(np, pi.ttp_kind);
+                    np
                 }
                 _ => return Err(SubstFail),
             };

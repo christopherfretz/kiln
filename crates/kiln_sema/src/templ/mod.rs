@@ -37,13 +37,14 @@ pub mod stack;
 pub mod subst;
 mod ttarg;
 mod ttarg22;
+pub mod ttpkind;
 pub mod var;
 pub(crate) mod written;
 
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
 use kiln_ast::names::DeclName;
-use kiln_ast::templates::{SpecKind, is_template_kind};
+use kiln_ast::templates::{SpecKind, TtpKind, is_template_kind};
 use kiln_ast::types::{ArgView, TemplateArg, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::{DiagId, FixIt};
@@ -822,9 +823,28 @@ impl Sema<'_, '_> {
     /// of a key-less template template parameter
     /// ([`Sema::act_on_keyless_template_template_param`]).
     pub(crate) fn reject_keyless_ttp_arg(&mut self, a: DeclId, at: Loc) {
+        self.reject_ttp_arg_kind(TtpKind::Type, a, at);
+    }
+
+    /// clang 22's rejection of template `a` (at `at`) as the argument of
+    /// a template template parameter of kind `want` whose kind differs
+    /// ([temp.arg.template]/1, /3): "template argument does not refer to
+    /// a {class or alias template|variable template|concept}, or template
+    /// template parameter", with a note at `a`.
+    pub(crate) fn reject_ttp_arg_kind(&mut self, want: TtpKind, a: DeclId, at: Loc) {
+        let param_sel = match want {
+            TtpKind::Type => 0u32,
+            TtpKind::Variable => 1,
+            TtpKind::Concept => 2,
+        };
         let (sel, nloc) = match self.kind_of(a) {
             DeclKind::VarTemplate => (1u32, self.ast.decls.get(a).loc()),
             DeclKind::Concept => (2, self.ast.decls.get(a).loc()),
+            DeclKind::TemplateTemplateParm => match self.ttp_kind(a) {
+                TtpKind::Variable => (1, self.ast.decls.get(a).loc()),
+                TtpKind::Concept => (2, self.ast.decls.get(a).loc()),
+                TtpKind::Type => (0, self.ast.decls.get(a).loc()),
+            },
             DeclKind::TypeAliasTemplate => {
                 let pat = self.ast.template_info(a).and_then(|i| i.pattern);
                 let l = pat.and_then(|p| self.templ.alias_using_loc.get(&p).copied());
@@ -836,7 +856,10 @@ impl Sema<'_, '_> {
             .diag(DiagId::note_template_arg_refers_to_template, nloc)
             .arg(sel)
             .arg(self.decl_name(a));
-        let d = self.diag(DiagId::sema_template_arg_not_valid_template, at).with_note(note);
+        let d = self
+            .diag(DiagId::sema_template_arg_not_valid_template, at)
+            .arg(param_sel)
+            .with_note(note);
         self.emit(d);
     }
 
@@ -866,6 +889,17 @@ impl Sema<'_, '_> {
             {
                 self.reject_keyless_ttp_arg(a, loc);
             }
+            return;
+        }
+        // A default of the wrong kind ([temp.arg.template]/1, P2841R7) is
+        // rejected and dropped (clang 22).
+        if let ArgView::Template(n) = arg.view()
+            && let Some(a) = self.arg_template_decl(n)
+            && let Some(k) = self.template_arg_kind(a)
+            && k != self.ttp_kind(p)
+        {
+            let want = self.ttp_kind(p);
+            self.reject_ttp_arg_kind(want, a, loc);
             return;
         }
         if self.ast.template_parm(p).is_some_and(|x| x.pack) {

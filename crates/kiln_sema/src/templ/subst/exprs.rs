@@ -490,6 +490,12 @@ impl Substituter<'_, '_, '_> {
                     _ => self.unimplemented("this rewritten comparison", loc),
                 }
             }
+            ExprKind::UnresolvedLookupExpr if self.sema.var_ttp_ref(e).is_some() => {
+                // `V<args>` with `V` a variable template template
+                // parameter (P2841R7).
+                let p = self.sema.var_ttp_ref(e).ok_or(SubstFail)?;
+                self.ttp_template_id(e, p, loc).unwrap_or(Err(SubstFail))
+            }
             ExprKind::UnresolvedLookupExpr => match self.local_using_ref(e, false) {
                 Some(r) => Ok(r),
                 // A function template-id not called (`&f<T>`, `auto *p =
