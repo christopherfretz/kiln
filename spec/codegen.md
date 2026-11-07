@@ -553,6 +553,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       became address-space overloaded (an LLVM 19 backend leaves the
       `.p0` name an undefined symbol), declared
       `memory(none)` (WP-782, `builtins_thread_pointer.cpp`).
+      The `_FORTIFY_SOURCE` builtins `__builtin___X_chk` are calls of the
+      library function `__X_chk` with the same arguments, except that
+      `__builtin___memcpy_chk` / `memmove_chk` / `memset_chk` whose size
+      and object size are integer constants with size <= object size
+      (unsigned) are `__builtin_memcpy` / `memmove` / `memset` (clang
+      `EmitBuiltinExpr`; WP-803, `ext.gnu.builtins/fortify-chk-run.cpp`).
       `__builtin_prefetch(p, rw, loc)` is `call void
       @llvm.prefetch.p0(ptr p, i32 rw, i32 loc, i32 1)` (defaults `rw` 0,
       `loc` 3; the trailing 1 selects the data cache), the intrinsic

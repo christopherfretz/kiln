@@ -963,6 +963,7 @@ literal is one instruction and one step, not an interpreted loop.
   allocation", WP-212); `__builtin_debugtrap`, `__builtin_frame_address`
   and `__builtin_return_address`, noted at the call's begin (WP-432),
   and `__builtin_thread_pointer` likewise (WP-782);
+  every `__builtin___X_chk` likewise (WP-803);
   `__builtin_prefetch` likewise (WP-610); every x86 builtin but the
   scalar bit ones below likewise, `__builtin_ia32_pause` (WP-610)
   included, and `__builtin_nontemporal_store` / `_load` and

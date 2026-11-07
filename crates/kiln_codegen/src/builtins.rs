@@ -150,6 +150,8 @@ fn lib_name(b: u32) -> Option<&'static str> {
         | id::SNPRINTF
         | id::SPRINTF
         | id::VSNPRINTF => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
+        // WP-803: `__builtin___memcpy_chk` calls `__memcpy_chk`.
+        _ if id::is_chk(b) => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         _ if id::is_libm(b) => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         _ => None,
     }
@@ -404,6 +406,24 @@ impl Cg<'_> {
         // WP-282: a `__float128` builtin with a `long double` twin lowers
         // as the twin (the operand types pick the intrinsic overload).
         let b = id::f128_twin(b).unwrap_or(b);
+        // WP-803: clang `EmitBuiltinExpr` folds `__builtin___memcpy_chk`,
+        // `memmove_chk` and `memset_chk` to the unchecked builtin when the
+        // size and the object size are constants, size <= object size
+        // (unsigned); otherwise each `_chk` builtin is a library call.
+        let b = match b {
+            id::MEMCPY_CHK | id::MEMMOVE_CHK | id::MEMSET_CHK => {
+                let k = |s: &mut Self, i| arg(i).and_then(|a| s.fold_int(a)).map(|v| v as u64);
+                match (k(self, 2), k(self, 3)) {
+                    (Some(n), Some(m)) if n <= m => match b {
+                        id::MEMCPY_CHK => id::MEMCPY,
+                        id::MEMMOVE_CHK => id::MEMMOVE,
+                        _ => id::MEMSET,
+                    },
+                    _ => b,
+                }
+            }
+            _ => b,
+        };
         if id::is_coro(b) {
             return self.emit_coro_builtin(b, e);
         }
