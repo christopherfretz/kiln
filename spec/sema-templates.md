@@ -1289,6 +1289,8 @@ sema.md and S3C require a complete type. Those places are:
 - `sizeof`/`alignof`;
 - conversion to a base, and derived-to-base checks during overload
   resolution;
+- deduction of a class template-id `P` against the bases of `A`
+  ([temp.deduct.call]/4.3, §6, silently);
 - `new`, `delete`, `throw`, `catch` by value;
 - a by-value parameter or return at a definition or call;
 - pointer arithmetic;
@@ -1312,6 +1314,16 @@ silently (`diag = None`) at those sites. S3O lists them.
    shapes are computed when the partial is declared.
 3. For each partial `p` that remains:
    - deduce `p.params` from `(p.args, A)` with `deduce_args` (§6.2);
+   - check each deduced template template argument against its
+     parameter ([temp.arg.template]/3, §3.2 rules, in the SFINAE frame):
+     a mismatch fails the deduction, as clang's
+     `ConvertDeducedTemplateArgument` does, so `T<Ts...>` for
+     `template<class...> class T` does not match `iseq<int>` of
+     `template<class T, T...>` and cannot make `iseq<T, Is...>`
+     ambiguous; a function template's deduced template template
+     arguments are checked the same way after deduction, a failure being
+     a substitution failure shown without the deduced arguments (WP-669,
+     `tests/conformance/temp.arg.template/p3-deduced-argument-checked.cpp`);
    - finish the deduction: substitute the deduced args into `p.args` and
      require canonical equality with `A`;
    - check `p`'s associated constraints (§8). For a class template, their
@@ -3288,7 +3300,14 @@ adjusted to `T`, deducing `T = U&` (`int (*)(int&) = f` for
 
 A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
-([temp.deduct.call]/4.3). The success must be unique; otherwise the
+([temp.deduct.call]/4.3). An `A` that is a class template specialization
+not yet instantiated is instantiated first, at the deduction's location
+and without the undefined-template diagnostic, so its bases exist
+([temp.inst]/2; clang's `isCompleteType` in `DeduceTemplateBases`; WP-682,
+`tests/conformance/temp.deduct.call/derived-base-instantiates-argument-class.cpp`,
+`libstdcxx-get-uninstantiated-tuple.cpp`: libstdc++ `std::get` on a
+`tuple&` that a qualified call reaches with no ADL to complete it). The
+success must be unique; otherwise the
 result is `MiscellaneousDeductionFailure` (clang). The template of `A` (or
 of a base) is the class template it is a specialization of: alias
 template sugar is looked through ([temp.alias]/2; clang's
@@ -3757,7 +3776,12 @@ guides.
    reference and how it was qualified.
 4. **Deduce both ways.** `f1` is at least as specialized as `f2` if
    deducing f2's params from f1's synthesized types succeeds for every
-   pair. Packs follow /8–11. The last tie-breaker for packs is
+   pair. A constant `P` argument (`f(ie<I, 1>)`) does not deduce from a
+   value-dependent `A` argument (the other side's `N`): it is a
+   mismatch, as clang's integral `P` against an expression `A`
+   (`check_nondeduced_value`; WP-669,
+   `tests/conformance/temp.func.order/p3-constant-argument-more-specialized.cpp`).
+   Packs follow /8–11. The last tie-breaker for packs is
    [temp.func.order]/5: a function without a trailing pack wins.
 5. **Constraints.** If both directions succeed, the more constrained one
    wins ([temp.func.order]/6, P2113; subsumption §8.4), but only when the
@@ -4282,7 +4306,12 @@ The fold and expansion patterns detect a partial element through
 that, after substitution with a pack index, still names an unexpanded
 pack is rebuilt in keep mode as one unexpanded expansion. A
 `PackExpansionExpr` pattern met in keep mode is still "not yet
-implemented".
+implemented". An expression pack expansion in a template argument list
+uses the same detection (`expand_arg` → `element_expr`, WP-669):
+`B<P<Ts, Us>::value...>` in a member template of `A<Ts...>`, met while
+the class is instantiated and only `Ts` is known, stays one partially
+substituted expansion until the member template's `Us` is supplied
+(`tests/conformance/temp.variadic/p5-partial-expr-expansion-member-template.cpp`).
 
 A converted argument pack inside an argument list being substituted is
 rebuilt element by element. This happens for a partial
@@ -5706,7 +5735,10 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   "previous template template parameter is here" at `P`, `P`'s
   parameters, written as arguments at their own locations (a pack as an
   expansion), are checked against `A`'s parameter list as for a
-  template-id `A<...>` (kind, converted-constant conversion, arity); then
+  template-id `A<...>` (kind, converted-constant conversion, arity; a
+  trailing pack expansion left over may be empty, so
+  `template<class, class...> class` takes `template<class> class`,
+  WP-669 `temp.arg.template/p3-trailing-pack-may-be-empty.cpp`); then
   `A`'s parameters are deduced from them (a conflicting deduction is an
   error); last a constrained `P` must be at least as constrained as `A`
   (subsumption over `CanonTemplateTypeParm` atoms). The substituted
@@ -7076,13 +7108,20 @@ declarator scopes.**
 - *`&L::m` in a local class of a template*: an implicit member reference
   written `L::m` keeps its qualifier (`DeclRefExtra::qualifier`), and a
   dependent `&L::m` drops its pending `member_refs` entry, so that
-  instantiation rebuilds a pointer to member, not `&this->m`.
+  instantiation rebuilds a pointer to member, not `&this->m`. Where
+  `this` may be used and `C` is the current instantiation, `C::m` of a
+  dependent type is first built as `this->C::m`; its `&` operand is
+  rebuilt as the qualified `DeclRefExpr` (`undo_dependent_implicit_member`,
+  WP-669; `expr.unary.op/p3-qualified-member-pointer-dependent-type.cpp`).
 - *[expr.cond]/4 class unification* (clang `TryClassUnification`): when
   the operands differ in type and either is a class, each is tried
   against the other. The order is: /4.1–4.2, a glvalue target binding
   directly; /4.3.1–4.3.2, same or derived class with at least the
-  target's cv (otherwise no conversion); /4.3.3, implicit conversion to
-  the other's prvalue type. If both directions succeed, the result is
+  target's cv (otherwise no conversion); a base class operand is not
+  converted to match a derived one at all, even by a converting
+  constructor, so `c ? B() : D()` with `D(B)` is a `B` (WP-669,
+  tests/conformance/expr.cond/p4-base-not-converted-to-derived.cpp);
+  /4.3.3, implicit conversion to the other's prvalue type. If both directions succeed, the result is
   `sema_conditional_ambiguous`; if one does, it is applied. Gap: the
   /6 overloaded-operator candidates are not tried.
 - *[expr.cond]/7 class prvalue result*: when the arms are a class type

@@ -915,7 +915,12 @@ impl Sema<'_, '_> {
             }
         }
         self.prototype_params.push(frame);
-        (scopes, self.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals))
+        // A friend is no member: no `this` (clang's
+        // `InitCXXThisScopeForDeclaratorIfRelevant`).
+        (
+            scopes,
+            !d.friend && self.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals),
+        )
     }
 
     /// Leaves the scopes [`Sema::act_on_start_trailing_requires`] entered.
@@ -2840,6 +2845,7 @@ impl Sema<'_, '_> {
             self.check_decl_attrs(decl, &mut attrs);
         }
         self.check_optnone_conflicts(decl, &mut attrs);
+        self.check_naked_conflicts(decl, &mut attrs);
         self.finish_visibility_attrs(decl, &mut attrs, false);
         self.finish_decl_alignment(decl, &mut attrs);
         self.add_known_function_attrs(decl, &mut attrs);
@@ -2899,6 +2905,7 @@ impl Sema<'_, '_> {
             self.check_decl_attrs(decl, &mut attrs);
         }
         self.check_optnone_conflicts(decl, &mut attrs);
+        self.check_naked_conflicts(decl, &mut attrs);
         self.finish_visibility_attrs(decl, &mut attrs, false);
         self.act_on_asm_label(ds, d, decl, &mut attrs);
         if !attrs.is_empty() {
@@ -9668,6 +9675,7 @@ impl Sema<'_, '_> {
                         | "coro_only_destroy_when_complete"
                         | "optnone"
                         | "minsize"
+                        | "disable_tail_calls"
                         | "uninitialized"
                         | "trivial_abi"
                         | "type_visibility"
@@ -10571,6 +10579,8 @@ fn attr_kind_of(
         // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
         ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,
         ("minsize", _, _) if gnu_syntax || clang_scope => AttrKind::MINSIZE,
+        // clang `Clang<"disable_tail_calls">` (WP-682).
+        ("disable_tail_calls", _, _) if gnu_syntax || clang_scope => AttrKind::DISABLE_TAIL_CALLS,
         ("uninitialized", _, _) if gnu_syntax || clang_scope => AttrKind::UNINITIALIZED,
         // clang `Clang<"trivial_abi">`.
         ("trivial_abi", _, _) if gnu_syntax || clang_scope => AttrKind::TRIVIAL_ABI,

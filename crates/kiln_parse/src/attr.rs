@@ -51,6 +51,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "coro_only_destroy_when_complete"
             | "optnone"
             | "minsize"
+            | "disable_tail_calls"
             | "trivial_abi"
             | "naked"
             | "may_alias"

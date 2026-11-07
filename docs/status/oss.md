@@ -45,7 +45,7 @@ The loop:
 | `cli11` | 1 | `v2.6.1` | not started |
 | `doctest` | 1 | `v2.5.3` | not started |
 | `fmt` | 1 | `12.1.0` | not started |
-| `googletest` | 1 | `v1.17.0` | blocked (1 cluster) |
+| `googletest` | 1 | `v1.17.0` | tests at parity |
 | `magic_enum` | 1 | `v0.9.7` | blocked (1 cluster) |
 | `nlohmann_json` | 1 | `v3.12.0` | not started |
 | `range_v3` | 1 | `0.12.0` | not started |
@@ -76,20 +76,14 @@ The loop:
 | | kiln | clang-19 |
 |---|---|---|
 | configure | ok | ok |
-| build | rc 2 | ok |
-| TUs ok / failed | 15 / 1 | 85 / 0 |
-| links ok / failed | 7 / 0 | 67 / 0 |
-| tests passed / total | 2 / 63 | 63 / 63 |
-| wall | 36 s | 46 s |
-| peak TU RSS | 670 MB | 798 MB |
+| build | ok | ok |
+| TUs ok / failed | 85 / 0 | 85 / 0 |
+| links ok / failed | 67 / 0 | 67 / 0 |
+| tests passed / total | 63 / 63 | 63 / 63 |
+| wall | 53 s | 100 s |
+| peak TU RSS | 668 MB | 794 MB |
 
-Failure clusters (kiln): 1.
-
-1. **1x** `reject: kiln++: error: unknown argument: Q`
-   - e.g. `$KILN/.oss/src/googletest/googletest/src/gtest-all.cc`: `kiln++: error: unknown argument: '-W'`
-   - repro: `cd $KILN/.oss/build/googletest/kiln/googletest && kiln++ -I$KILN/.oss/src/googletest/googletest/include -I$KILN/.oss/src/googletest/googletest -O3 -DNDEBUG -std=c++20 -Wall -Wshadow -Wconversion -Wundef -DGTEST_HAS_PTHREAD=1 -fexceptions -W -Wpointer-arith -Wreturn-type -Wcast-qual -Wwrite-strings -Wswitch -Wunused-parameter -Wcast-align -Winline -Wredundant-decls -Wchar-subscripts -MD -MT googletest/CMakeFiles/gtest.dir/src/gtest-all.cc.o -MF CMakeFiles/gtest.dir/src/gtest-all.cc.o.d -o CMakeFiles/gtest.dir/src/gtest-all.cc.o -c $KILN/.oss/src/googletest/googletest/src/gtest-all.cc`
-
-kiln test run: `3% tests passed, 61 tests failed out of 63`
+Failure clusters (kiln): none.
 <!-- /oss:googletest -->
 
 Reduced repros (WP-666, kiln at main f3751eadd):
@@ -115,6 +109,9 @@ Reduced repros (WP-666, kiln at main f3751eadd):
 
   A `std::tuple<int, int> x;` before `g` makes it compile; `-stdlib=libc++`
   is unaffected. googletest TU: `googlemock/test/gmock-actions_test.cc`.
+
+Both are fixed by WP-682, which brought googletest to parity with the
+clang build. Its working notes are in `docs/status/oss/googletest.md`.
 
 <!-- oss:magic_enum -->
 ### magic_enum (v0.9.7)
