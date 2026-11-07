@@ -963,6 +963,15 @@ pub struct Sema<'a, 'sm> {
     /// ([dcl.contract.func]/7): each once, and the parameter stays
     /// valid, so the body's uses of it evaluate (spec/contracts.md §9).
     pub(crate) post_param_diagnosed: kiln_source::fx::FxHashSet<DeclId>,
+    /// The locations of the template-pattern parameters of non-dependent
+    /// type diagnosed by that rule at definition time, which their
+    /// instantiations do not report again.
+    pub(crate) post_param_pattern_locs: kiln_source::fx::FxHashSet<Loc>,
+    /// A non-dependent friend function of a templated class -> the
+    /// namespace-scope function it will redeclare once instantiated
+    /// (`pattern_friend_prev`): its seq's const rule on postcondition
+    /// parameters is checked on the pattern ([dcl.contract.func]/7).
+    pub(crate) friend_pattern_prev: kiln_source::fx::FxHashMap<DeclId, DeclId>,
     /// The static data member whose out-of-line initializer is being
     /// analysed: its class is the access context ([class.access]/7).
     pub(crate) initializing: Option<DeclId>,
@@ -993,6 +1002,11 @@ pub struct Sema<'a, 'sm> {
     /// The lambdas whose bodies are being analysed, innermost last
     /// (spec/sema-lambda.md; WP-075).
     pub(crate) lambdas: Vec<lambda::LambdaScope>,
+    /// How many of [`Sema::lambdas`] enclose the point of instantiation
+    /// rather than the code being instantiated ([`Sema::in_inst_context`]
+    /// sets the template heads aside, so those lambdas' head counts no
+    /// longer index them).
+    pub(crate) lambda_base: usize,
     /// The packs of enclosing scopes a finished lambda's body names
     /// outside an expansion ([`lambda::LambdaScope`]'s `packs`): what
     /// the lambda-expression's "contains an unexpanded parameter pack"
@@ -1246,6 +1260,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             contract_ctx: Vec::new(),
             has_contracts: false,
             post_param_diagnosed: kiln_source::fx::FxHashSet::default(),
+            post_param_pattern_locs: kiln_source::fx::FxHashSet::default(),
+            friend_pattern_prev: kiln_source::fx::FxHashMap::default(),
             initializing: None,
             inst_enable_if: None,
             templ: templ::TemplState::default(),
@@ -1255,6 +1271,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             meta_names: meta::names::NameCache::default(),
             meta_members: meta::member::MemberState::default(),
             lambdas: Vec::new(),
+            lambda_base: 0,
             lambda_mangle: lambda::ManglingState::default(),
             size_t_sugar: size_t,
             signed_size_t_sugar: ptrdiff_t,

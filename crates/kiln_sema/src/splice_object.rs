@@ -50,12 +50,23 @@ impl Sema<'_, '_> {
     /// object; [expr.prim.splice]/2): an lvalue designating the object,
     /// of the object's type. `None` for an object with no declaration
     /// to name it through (the caller diagnoses).
+    ///
+    /// The object is not a variable, so a contract predicate does not
+    /// make the splice `const` (P3598R0, [expr.prim.splice]/2.3: "the
+    /// expression has the same type as that of S"; only a splice
+    /// designating a variable or structured binding is const-ified,
+    /// /2.5). `[: object_of(^^v) :]` is the paper's deliberate, visible
+    /// way around the const-ification, so the reference to the variable
+    /// holding the object is built outside the contract context.
     pub(crate) fn splice_object_expr(&mut self, p: ConstValueId, loc: Loc) -> Option<ExprId> {
         let Some(Scalar::Pointer { ty, base, offset, .. }) = self.ast.consts.scalar(p) else {
             return None;
         };
         let target = self.ast.types.pointee(ty)?;
-        self.object_lvalue(base, offset, target, loc)
+        let contracts = std::mem::take(&mut self.contract_ctx);
+        let r = self.object_lvalue(base, offset, target, loc);
+        self.contract_ctx = contracts;
+        r
     }
 
     /// What a splice of object reflection `p` that

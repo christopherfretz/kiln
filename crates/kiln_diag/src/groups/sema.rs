@@ -5,6 +5,7 @@
 AbsoluteValue = "absolute-value" [];
 AbstractFinalClass = "abstract-final-class" [];
 AddressOfPackedMember = "address-of-packed-member" [];
+AmbiguousDelete = "ambiguous-delete" [];
 AmbiguousReversedOperator = "ambiguous-reversed-operator" [];
 ArgumentOutsideRange = "argument-outside-range" [];
 ArrayCompare = "array-compare" [];

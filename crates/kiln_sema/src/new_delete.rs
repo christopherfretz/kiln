@@ -567,18 +567,21 @@ impl Sema<'_, '_> {
             global,
             array_form,
             placement.is_some() || params.len() != 1 || variadic,
+            placement.is_some(),
             &params,
             pass_align,
-            tid.loc,
+            (tid.loc, loc),
         );
         if let Some((od, naming)) = op_delete {
             // The deallocation function is access-checked at the
-            // new-expression too ([expr.new]/28, [class.access]/1); clang
-            // looks it up only when exceptions are enabled.
-            if self.exceptions
-                && let Some(naming) = naming
-            {
-                self.check_member_access_distinct(od, naming, loc);
+            // new-expression too ([expr.new]/28, [class.access]/1), and
+            // must not be deleted (P3769R1); clang looks it up only when
+            // exceptions are enabled.
+            if self.exceptions {
+                if let Some(naming) = naming {
+                    self.check_member_access_distinct(od, naming, loc);
+                }
+                self.diagnose_deleted_use(od, loc);
             }
             self.mark_used_at(od, loc);
         }
@@ -1342,9 +1345,10 @@ impl Sema<'_, '_> {
         global: bool,
         array: bool,
         placement: bool,
+        placement_args: bool,
         new_params: &[QualType],
         pass_align: bool,
-        loc: Loc,
+        (loc, new_loc): (Loc, Loc),
     ) -> Option<(DeclId, Option<DeclId>)> {
         let op = if array { OverloadedOperator::ArrayDelete } else { OverloadedOperator::Delete };
         let found = self.alloc_fns(elem, op, global, loc);
@@ -1364,26 +1368,95 @@ impl Sema<'_, '_> {
                     && ps.iter().zip(&params).all(|(a, b)| s.ast.types.same_type(*a, *b))
             })
         };
-        if let Some(f) = found.fns.iter().copied().find(|&f| matches(self, f)) {
-            return Some((f, naming));
+        // [expr.new]/28 as clarified by P3769R1 (a DR): each function
+        // template is replaced by the specialization deduced against the
+        // expected type `void(void*, P2, ..., Pn)` (the allocation
+        // function's parameters after the first; WP-713), the candidates
+        // whose parameter-type-list differs are dropped, then those whose
+        // constraints are not satisfied; the one remaining is selected,
+        // and with several none is (clang `FindAllocationFunctions`).
+        // Each candidate with the declaration it was found as, for
+        // clang's lookup (declaration) order in the notes.
+        let mut selected: Vec<(DeclId, DeclId)> =
+            found.fns.iter().copied().filter(|&f| matches(self, f)).map(|f| (f, f)).collect();
+        if !found.templates.is_empty() {
+            let info = FuncInfo::default();
+            let expected = self.ast.types.function(QualType::VOID, &params, info, ExcSpec::None);
+            for &ft in &found.templates {
+                if let Ok(f) = self.deduce_decl(ft, None, expected, loc)
+                    && matches(self, f)
+                    && !selected.iter().any(|s| s.1 == f)
+                {
+                    selected.push((ft, f));
+                }
+            }
+            selected.sort_by_key(|s| s.0);
         }
-        // [expr.new]/28 (clang `FindAllocationFunctions`): a placement
-        // deallocation function template matches through deduction
-        // against the expected type `void(void*, P2, ..., Pn)`, the
-        // allocation function's parameters after the first (WP-713).
-        if found.templates.is_empty() {
-            return None;
+        if selected.len() > 1 {
+            selected.retain(|&(_, f)| {
+                self.check_function_constraints(f, loc).is_none_or(|sat| self.sat_ok(sat))
+            });
         }
-        let info = FuncInfo::default();
-        let expected = self.ast.types.function(QualType::VOID, &params, info, ExcSpec::None);
-        for &ft in &found.templates {
-            if let Ok(f) = self.deduce_decl(ft, None, expected, loc)
-                && matches(self, f)
-            {
-                return Some((f, naming));
+        match selected[..] {
+            [(_, f)] => {
+                if self.exceptions && placement_args {
+                    self.placement_selects_sized_delete(f, &found.fns, found.in_class, new_loc);
+                }
+                Some((f, naming))
+            }
+            [] => None,
+            _ => {
+                // No deallocation function is called; clang warns.
+                if self.exceptions {
+                    let name = format!("operator {}", op.spelling());
+                    let mut msg = self
+                        .diag(DiagId::sema_ambiguous_suitable_delete, new_loc)
+                        .arg(format!("'{name}'"))
+                        .arg(self.ty_arg(elem));
+                    for &(_, f) in &selected {
+                        let note = self
+                            .diag(DiagId::note_member_declared_named, self.ast.decls.get(f).loc())
+                            .arg(name.clone());
+                        msg = msg.with_note(note);
+                    }
+                    self.emit(msg);
+                }
+                None
             }
         }
-        None
+    }
+
+    /// [expr.new]/28: a placement new-expression whose matching
+    /// deallocation function `f` is a usual one with a `std::size_t`
+    /// parameter is ill-formed (C++14 sized deallocation). As in clang
+    /// (core reflector, 2016-10-09), a class-scope `f` with a
+    /// corresponding unsized usual one among `fns` is not really sized.
+    fn placement_selects_sized_delete(
+        &mut self,
+        f: DeclId,
+        fns: &[DeclId],
+        in_class: bool,
+        loc: Loc,
+    ) {
+        if self.std < kiln_lex::Std::Cxx14 || self.ast.spec_info(f).is_some() {
+            return;
+        }
+        let Some((ps, _)) = self.fn_params(f) else { return };
+        let aligned = ps.len() == 3;
+        if !matches!(self.usual_delete(&[f], in_class, aligned, true, false), Some((_, true))) {
+            return;
+        }
+        if in_class
+            && let Some((g, false)) = self.usual_delete(fns, in_class, aligned, false, false)
+            && self.fn_params(g).is_some_and(|(gs, _)| gs.len() + 1 == ps.len())
+        {
+            return;
+        }
+        let msg = self.diag(DiagId::sema_placement_new_non_placement_delete, loc);
+        let note = self
+            .diag(DiagId::note_entity_declared_here, self.ast.decls.get(f).loc())
+            .arg("'operator delete'");
+        self.emit(msg.with_note(note));
     }
 
     /// The semantic initializer of a new-expression ([expr.new]/23) and,
