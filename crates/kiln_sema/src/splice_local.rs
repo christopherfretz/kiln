@@ -136,7 +136,7 @@ impl Sema<'_, '_> {
                         CastKind::LValueToRValue | CastKind::NoOp
                     ) =>
                 {
-                    e = self.ast.exprs.operand(e)
+                    e = self.ast.exprs.operand(e);
                 }
                 _ => break,
             }
