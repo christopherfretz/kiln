@@ -489,9 +489,15 @@ impl Oven {
         f.nregs = nregs;
         f.ret = ret;
         match root {
-            Some(at) => self.thunks_at.insert((e, at, addr), idx),
-            None => self.thunks.insert((e, object, addr), idx),
-        };
+            Some(at) => {
+                self.thunks_at.insert((e, at, addr), idx);
+                self.last_thunk = None;
+            }
+            None => {
+                self.thunks.insert((e, object, addr), idx);
+                self.note_thunk(idx, (e, object, addr));
+            }
+        }
         idx
     }
 

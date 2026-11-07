@@ -1065,6 +1065,29 @@ fn memory_report_rows() {
     assert_eq!((o.code, o.stderr.as_str()), (0, ""));
 }
 
+/// spec/oven.md "Trial folds" (WP-798): a failed outermost trial fold
+/// gives its thunk's code back, so the `-Winteger-overflow` scan
+/// ([expr.pre]/4) of many non-constant operands keeps no thunk per
+/// operand alive (`oven.thunks` stays small; it held one per `+` before).
+#[test]
+fn failed_trial_folds_keep_no_thunks() {
+    let mut src = String::from("int f(int);\nint g(int);\nint use(int x) {\n  int r = 0;\n");
+    for _ in 0..200 {
+        src.push_str("  r += f(x) + g(x);\n");
+    }
+    src.push_str("  return r;\n}\n");
+    let o = kiln(&["-std=c++26", "-fkiln-memory-report", "-fsyntax-only", "-x", "c++", "-"], &src);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let count = o
+        .stderr
+        .lines()
+        .find_map(|l| l.strip_prefix("memory: oven.thunks count="))
+        .and_then(|r| r.split_whitespace().next())
+        .and_then(|n| n.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("no oven.thunks row: {}", o.stderr));
+    assert!(count < 20, "{count} thunks kept for 200 failed folds");
+}
+
 /// spec/driver.md "Output, diagnostics, exit status" (WP-682): a compile
 /// thread that cannot be created (its stack is reserved up front; here one
 /// larger than any address space) is reported, not a silent exit 70.

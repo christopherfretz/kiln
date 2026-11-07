@@ -95,6 +95,12 @@ impl Excs {
         self.caught.truncate(c);
     }
 
+    /// Forgets function index `f` (a reclaimed thunk's, reused by the
+    /// next compiled function; `reclaim.rs`).
+    pub fn forget_func(&mut self, f: u32) {
+        self.nothrow.remove(&f);
+    }
+
     pub fn clear(&mut self) {
         self.inflight.clear();
         self.caught.clear();
