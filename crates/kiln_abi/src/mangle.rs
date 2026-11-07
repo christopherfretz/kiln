@@ -1575,7 +1575,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
             self.ty(self.param_type(q));
             if let Some(&(_, t, dynamic)) = ps.iter().find(|p| p.0 == i) {
                 let a = if dynamic { "pass_dynamic_object_size" } else { "pass_object_size" };
-                self.out.push_str(&format!("U{}{a}{t}", a.len() + 1));
+                self.out.push('U');
+                self.out.push_str(&(a.len() + 1).to_string());
+                self.out.push_str(a);
+                self.out.push_str(&t.to_string());
             }
         }
         self.fn_depth = saved;

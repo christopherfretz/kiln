@@ -489,9 +489,15 @@ impl Oven {
         f.nregs = nregs;
         f.ret = ret;
         match root {
-            Some(at) => self.thunks_at.insert((e, at, addr), idx),
-            None => self.thunks.insert((e, object, addr), idx),
-        };
+            Some(at) => {
+                self.thunks_at.insert((e, at, addr), idx);
+                self.last_thunk = None;
+            }
+            None => {
+                self.thunks.insert((e, object, addr), idx);
+                self.note_thunk(idx, (e, object, addr));
+            }
+        }
         idx
     }
 
@@ -4788,6 +4794,12 @@ impl Compiler<'_> {
             return self.cx_compound_assign(e);
         }
         let ct = self.ty(x.result_ty);
+        // `b += p` for a `bool b` (a pointer computation stored into a
+        // non-pointer): clang's `ExprConstant` has no rule for it.
+        if matches!(self.kind(ct), TyKind::Ptr(_)) && !matches!(self.kind(lty), TyKind::Ptr(_)) {
+            self.trap(e, "subexpression not valid in a constant expression");
+            return self.lv_rmw(lhs, e);
+        }
         if self.o.types.wide(lty).is_some()
             || self.o.types.wide(ct).is_some()
             || self.is_wide_expr(x.rhs)

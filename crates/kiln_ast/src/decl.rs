@@ -4942,17 +4942,15 @@ pub mod builtin {
     /// arguments are a `va_list` (WP-282).
     pub fn printf_format(id: u32) -> Option<(u16, u16)> {
         Some(match id {
-            SPRINTF => (2, 3),
-            SNPRINTF => (3, 4),
-            VSNPRINTF => (3, 0),
-            // WP-803: clang `PrintfFormat` / `VPrintfFormat` indices + 1.
+            // WP-803: the `__*_chk` rows are clang `PrintfFormat` /
+            // `VPrintfFormat` indices + 1.
+            SPRINTF | PRINTF_CHK => (2, 3),
+            SNPRINTF | FPRINTF_CHK => (3, 4),
+            VSNPRINTF | VFPRINTF_CHK => (3, 0),
             SPRINTF_CHK => (4, 5),
             SNPRINTF_CHK => (5, 6),
             VSPRINTF_CHK => (4, 0),
             VSNPRINTF_CHK => (5, 0),
-            FPRINTF_CHK => (3, 4),
-            PRINTF_CHK => (2, 3),
-            VFPRINTF_CHK => (3, 0),
             VPRINTF_CHK => (2, 0),
             _ => return None,
         })

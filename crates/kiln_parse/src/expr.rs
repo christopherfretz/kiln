@@ -1368,6 +1368,7 @@ impl Parser<'_, '_> {
     /// The member designator after `.`/`->` (the operator token at `loc`
     /// already consumed): `[template] id-expression` or a
     /// pseudo-destructor-name ([expr.ref]/1, [expr.prim.id.dtor]).
+    #[allow(clippy::too_many_lines, reason = "one path per member designator form")]
     fn parse_member_access_suffix(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
         // `e.[: r :]`, `p->[: r :]` ([expr.ref]/1 with a splice-expression).
         if self.at_splice() && self.decltype_scope_end(self.pos()).is_none() {
@@ -1406,7 +1407,12 @@ impl Parser<'_, '_> {
             let q = self.parse_nested_name_nns();
             self.s.end_member_qualifier();
             let Ok(q) = q else { return None };
-            template_kw |= q.is_some() && self.eat_kw(Kw::Template).is_some();
+            // A leading `template` belonged to the qualifier's first
+            // component (`e.template B<T>::m`, CWG1835); only one after
+            // the qualifier applies to the member's name.
+            if q.is_some() {
+                template_kw = self.eat_kw(Kw::Template).is_some();
+            }
             q
         } else {
             None
@@ -1490,6 +1496,9 @@ impl Parser<'_, '_> {
             self.s.diagnose_expr_intended_as_template_name(name, found, nl, angles);
             self.expr_invalid = true;
             return Some(self.s.act_on_error_expr(&[e], nl));
+        } else if !self.at(Punct::Less) {
+            // `x.v` naming a member variable template needs its arguments.
+            e = self.s.act_on_member_without_template_args(e);
         }
         Some(e)
     }
@@ -2043,7 +2052,7 @@ impl Parser<'_, '_> {
         };
         let nl = self.bump().span.lo;
         if let Some(q) = qual
-            && self.s.is_dependent_ctx(q.ctx)
+            && let Some(nns) = self.s.dep_member_nns(q, name, template_kw && self.at(Punct::Less))
         {
             let targs = if template_kw && self.at(Punct::Less) {
                 let (args, _, _) = self.parse_template_arg_list()?;
@@ -2051,31 +2060,11 @@ impl Parser<'_, '_> {
             } else {
                 None
             };
-            let e = self.s.act_dependent_scope_ref(q.nns, DeclName::ident(name), targs, begin, nl);
+            let e = self.s.act_dependent_scope_ref(nns, DeclName::ident(name), targs, begin, nl);
             self.s.set_template_kw(e, template_loc);
             return Some(e);
         }
         let class = self.s.classify_name(name, qual.map(|q| q.ctx));
-        // `D::template f<U>(x)` with `f` in a dependent base of the
-        // current instantiation `D` ([temp.dep.type]/6; WP-803).
-        if let Some(q) = qual
-            && template_kw
-            && class == NameClass::Undeclared
-            && self.at(Punct::Less)
-            && self.s.can_name_unknown_specialization(q)
-        {
-            let (args, _, _) = self.parse_template_arg_list()?;
-            let targs = Some(self.s.ast.types.arg_list(&args));
-            let e = self.s.act_unknown_specialization_template_ref(
-                q,
-                DeclName::ident(name),
-                targs,
-                begin,
-                nl,
-            )?;
-            self.s.set_template_kw(e, template_loc);
-            return Some(e);
-        }
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
             return Some(self.template_id_expr(qual, (class, name, nl), begin, template_loc));
         }

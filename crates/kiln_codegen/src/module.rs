@@ -1074,14 +1074,25 @@ impl<'a> Cg<'a> {
         let instantiated = match ast.templ_link(first).get() {
             Some((TemplLinkKind::MemberOfSpecialization, _)) => true,
             Some((TemplLinkKind::Specialization, _)) => {
-                ast.decls.get(first).ctx().is_some_and(|c| {
+                let ctx = ast.decls.get(first).ctx();
+                let in_class = ctx.is_some_and(|c| {
                     matches!(
                         ast.decls.get(c).kind(),
                         DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
                     )
-                }) && ast
-                    .spec_info(first)
-                    .is_some_and(|(_, s)| s.kind == SpecKind::ImplicitInstantiation)
+                });
+                // An explicit specialization declared in a class template
+                // is redeclared with each instantiated class, which the
+                // walk does not reach either.
+                let in_instantiated = || {
+                    ctx.and_then(|c| ast.spec_info(c))
+                        .is_some_and(|(_, s)| s.kind != SpecKind::ExplicitSpecialization)
+                };
+                in_class
+                    && ast.spec_info(first).is_some_and(|(_, s)| {
+                        s.kind == SpecKind::ImplicitInstantiation
+                            || (s.kind == SpecKind::ExplicitSpecialization && in_instantiated())
+                    })
             }
             _ => false,
         };

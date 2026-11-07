@@ -88,7 +88,8 @@ the evaluator's flattened type table.
   a trap reading `kiln: constant evaluation of <Kind> is not supported yet`:
   an evaluation fails with a note, never a panic.
 - Top-level expressions compile to cached thunks keyed by `ExprId`;
-  re-evaluating an expression compiles nothing.
+  re-evaluating an expression compiles nothing, except after a failed
+  trial fold, whose thunk is reclaimed ("Evaluation entry points").
 
 #### Dispatch — Landed (WP-648)
 `Vm::run_loop` (`vm.rs`) executes the stream in safe Rust; every rule here
@@ -449,6 +450,19 @@ fault counts and trap ids unchanged.
     state (`Oven::globals_digest`), against a second Sema that runs the
     full path only; the `leaf-check` feature asserts the equivalence of
     the answers on every walk of a build.
+  - **Failed trial folds give their thunk back** (WP-798,
+    `reclaim.rs`): when an outermost `try_fold`, `fold_rvalue` or
+    `fold_for_overflow` that took the full path fails, and its run
+    compiled a fresh thunk and nothing else (no callee stub, no other
+    unit) and appended nothing at run time (no unwind block, no
+    reflection trap), the code, site, step-location, origin, trap,
+    function and reflection-site tables are cut back to their lengths
+    before the fold (the padding of the unit before it restored) and the
+    thunk cache forgets the expression; a later fold of it compiles it
+    again. `fold_for_overflow` maps its overflows to sites first. A
+    successful fold, an evaluation and a nested fold keep their thunks.
+    Answers, diagnostics and statistics are unchanged; `oven.code`,
+    `oven.sites`, `oven.funcs` and `oven.thunks` shrink.
 - `Oven::evaluate_chars(bridge, size, data, EvalContext) -> (Vec<u8>,
   Result<(), EvalFailure>)` (WP-356, [dcl.pre]/11-12, P2741; clang
   `Expr::EvaluateCharRangeAsString`): the characters of a `static_assert`

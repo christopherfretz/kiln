@@ -80,6 +80,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::FORMAT => "format",
         AttrKind::NOTHROW => "nothrow",
         AttrKind::NODEBUG => "nodebug",
+        AttrKind::ARTIFICIAL => "artificial",
         AttrKind::MIN_VECTOR_WIDTH => "min_vector_width",
         _ => return None,
     })
@@ -633,6 +634,18 @@ impl Sema<'_, '_> {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "gnu_inline", "functions")
             }
             AttrKind::GNU_INLINE => self.check_gnu_inline_attr(d, node),
+            // clang `Artificial`: `SubjectList<[InlineFunction]>`, a
+            // function declared `inline` (ignored with a warning).
+            AttrKind::ARTIFICIAL
+                if !self.ast.decls.function(d).is_some_and(|f| f.spec.is_inline()) =>
+            {
+                wrong(
+                    self,
+                    DiagId::sema_attribute_wrong_decl_type,
+                    "artificial",
+                    "inline functions",
+                )
+            }
             // clang `TrivialABI`: `SubjectList<[CXXRecord]>` (ignored
             // with a warning).
             AttrKind::TRIVIAL_ABI if !is_record_kind(kind) => {

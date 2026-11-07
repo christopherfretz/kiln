@@ -20,6 +20,12 @@ for f in projects.py oss-report.py kiln-cxx; do
 done
 check "projects.toml loads" "python3 '$HERE/projects.py' list >/dev/null"
 check "oss-build.sh parses" "bash -n '$HERE/oss-build.sh'"
+# `checkout`: defaults to the project name; rows sharing one must agree on
+# url/tag/submodules (WP-787).
+ck() { printf '[a]\nurl="u"\ntag="t"\nbuild="cmake"\ncxx_std=20\ntest="true"\nwave=4\ncheckout="s"\n[b]\nurl="u"\ntag="%s"\nbuild="cmake"\ncxx_std=20\ntest="true"\nwave=4\n%s\n' "$1" "$2" > "$TMP/ck.toml"; python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import projects; d = projects.load(sys.argv[2]); print(d['a']['checkout'], d['b']['checkout'])" "$HERE" "$TMP/ck.toml" 2>&1; }
+check "checkout defaults to the project name" "[ \"\$(ck t '')\" = 's b' ]"
+check "a shared checkout is accepted" "[ \"\$(ck t 'checkout=\"s\"')\" = 's s' ]"
+check "a shared checkout at another tag is refused" "case \"\$(ck t2 'checkout=\"s\"')\" in *\"shares checkout 's'\"*) true ;; *) false ;; esac"
 
 printf '#include <cstdio>\nint main() { std::puts("hello"); }\n' > "$TMP/hello.cpp"
 printf 'int main() { return x; }\n' > "$TMP/bad.cpp"

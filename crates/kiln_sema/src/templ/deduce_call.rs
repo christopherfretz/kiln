@@ -1623,8 +1623,15 @@ impl Sema<'_, '_> {
         // regardless of `noexcept`, as clang's type match does; the
         // function pointer conversion is checked on the deduced `A`
         // (`deduced_a_mismatch`).
-        flags =
-            flags.union(TdfFlags::DERIVED_CLASS).union(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE);
+        // /4.3 applies to a class template-id `P` or a pointer to one,
+        // not through a second pointer: `F<T>**` against `X<A,B>**`
+        // never looks at (or instantiates) `X<A,B>`'s bases (clang's
+        // `isSimpleTemplateIdType` test in `getTDF`).
+        flags = flags.union(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE);
+        let multi_ptr = t.pointee(p).is_some_and(|pe| t.is_pointer(pe)) && t.is_pointer(p);
+        if !multi_ptr {
+            flags = flags.union(TdfFlags::DERIVED_CLASS);
+        }
         self.deduce(p, at, flags, d)
     }
 

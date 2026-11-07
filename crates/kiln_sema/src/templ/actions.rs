@@ -99,28 +99,26 @@ impl Sema<'_, '_> {
         Some(self.act_dependent_name_at(nns, name, None, kw, loc))
     }
 
-    /// Whether [`Sema::unknown_specialization_nns`] gives `q` a specifier.
-    pub fn can_name_unknown_specialization(&self, q: crate::using::Qualifier) -> bool {
-        self.is_dependent_ctx(q.ctx)
-            || (self.kind_of(q.ctx) == DeclKind::CXXRecord && self.has_dependent_bases(q.ctx))
-            || (self.is_unentered_dependent_class(q.ctx) && self.ast.definition(q.ctx).is_none())
-    }
-
-    /// `q::template name<targs>` when lookup found nothing in `q` and `q`
-    /// can name an unknown specialization ([temp.dep.type]/6; the current
-    /// instantiation with a dependent base, `D::template f<U>(x)`): a
-    /// `DependentScopeDeclRefExpr` looked up at instantiation (WP-803).
-    /// `None` otherwise.
-    pub fn act_unknown_specialization_template_ref(
+    /// The specifier of `q::name` in an id-expression: `q`'s own when `q`
+    /// is dependent; for `q::template name<...>` that lookup finds nothing
+    /// for, the [`Sema::unknown_specialization_nns`] of `q` (the current
+    /// instantiation with a dependent base, `D::template f<U>(x)`;
+    /// [temp.dep.type]/6, WP-803); `None` otherwise.
+    pub fn dep_member_nns(
         &mut self,
         q: crate::using::Qualifier,
-        name: DeclName,
-        targs: Option<ArgListId>,
-        begin: Loc,
-        loc: Loc,
-    ) -> Option<ExprId> {
-        let nns = self.unknown_specialization_nns(q)?;
-        Some(self.act_dependent_scope_ref(nns, name, targs, begin, loc))
+        name: Symbol,
+        template_id: bool,
+    ) -> Option<NnsId> {
+        if self.is_dependent_ctx(q.ctx) {
+            Some(q.nns)
+        } else if template_id
+            && self.classify_name(name, Some(q.ctx)) == crate::decl::NameClass::Undeclared
+        {
+            self.unknown_specialization_nns(q)
+        } else {
+            None
+        }
     }
 
     /// The specifier under which `q::name` names a member of an unknown
@@ -2170,7 +2168,10 @@ impl Sema<'_, '_> {
         let d = self.ast.types.template_decl(name)?;
         if !matches!(
             self.kind_of(d),
-            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate | DeclKind::VarTemplate
+            DeclKind::ClassTemplate
+                | DeclKind::TypeAliasTemplate
+                | DeclKind::VarTemplate
+                | DeclKind::Concept
         ) {
             return None;
         }
@@ -2371,10 +2372,27 @@ impl Sema<'_, '_> {
     }
 
     /// `X<A...>` for partial specialization `p`'s own arguments `A`, as
-    /// an `InjectedClassNameType` ([temp.local]/1).
+    /// an `InjectedClassNameType` ([temp.local]/1). The arguments are as
+    /// written (clang `getInjectedSpecializationType`): the converted
+    /// list's argument pack for the primary's trailing parameter pack
+    /// (`vd<int, T...>` for `template<class I, class... T> struct vd`)
+    /// is spread into its elements, so substituting the type converts
+    /// them against the primary's parameters again (WP-787, Boost.Fusion
+    /// `vector_data`).
     pub(crate) fn partial_injected_type(&mut self, p: DeclId) -> Option<QualType> {
         let (_, info) = self.ast.partial_spec_info(p)?;
-        let (tmpl, args) = (info.template, info.args);
+        let (tmpl, mut args) = (info.template, info.args);
+        let written = self.ast.types.args(args);
+        if written.iter().any(|a| matches!(a.view(), ArgView::Pack(_))) {
+            let mut flat = Vec::with_capacity(written.len());
+            for &a in written {
+                match a.view() {
+                    ArgView::Pack(l) => flat.extend_from_slice(self.ast.types.args(l)),
+                    _ => flat.push(a),
+                }
+            }
+            args = self.ast.types.arg_list(&flat);
+        }
         let name = self.template_name_for(tmpl);
         let spec = self.ast.types.template_specialization(name, args, None, false);
         Some(self.ast.types.injected_class_name(p, spec.ty()).into())

@@ -109,6 +109,18 @@ instantiates a `D<int>` named so far only through references or pointers;
 WP-381, `tests/conformance/dcl.init.ref/derived-to-base-instantiates-derived.cpp`),
 and static_cast up and down (`class_relation`, `static_downcast`).
 
+A C-style or functional cast converts between a derived class and its
+base even when the base is inaccessible ([expr.cast]/4, clang's
+`IgnoreBaseAccess`). Pointers and references, upcasts and downcasts are
+all covered: `class_relation` and `static_downcast` skip the access check
+for those styles, and `build_explicit_cast` sets
+`Sema::cast_ignores_base_access` while it applies the standard conversion,
+so `check_base_access` passes. `static_cast` and implicit conversions still
+check access. In a SFINAE context `(D*)(B*)` is therefore valid whenever
+`B` is a non-virtual base, which is how Boost.TypeTraits
+`is_virtual_base_of` tells a virtual base from a non-virtual one (WP-787,
+`tests/conformance/expr.cast/c-style-cast-inaccessible-base.cpp`).
+
 ## 4. Ranking (`compare_standard_conversions`)
 `compare_standard_conversions(a, b) -> IcsCompare {Better, Worse,
 Indistinguishable}` implements these rules in clang 19's

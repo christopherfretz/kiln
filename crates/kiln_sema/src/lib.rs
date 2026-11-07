@@ -348,10 +348,6 @@ pub struct Sema<'a, 'sm> {
     /// The id-expression being built is a qualified name that is the
     /// whole operand of unary `&` ([`Sema::act_on_id_expression_in`]).
     pub(crate) address_operand: bool,
-    /// A C-style or functional cast to a non-class type is being built:
-    /// its derived/base conversions ignore base accessibility
-    /// ([expr.cast]/4; WP-803).
-    pub(crate) cast_ignores_base_access: bool,
     /// [`stmt::FnState::volatile_assigns`] outside a function body (a
     /// namespace-scope initializer, a default member initializer).
     pub(crate) volatile_assigns: Vec<ExprId>,
@@ -713,6 +709,10 @@ pub struct Sema<'a, 'sm> {
     /// complex-to-real conversion is then allowed; clang's
     /// `isCast(CCK)`).
     pub(crate) explicit_conv: bool,
+    /// A C-style or functional cast is converting a pointer to a base
+    /// class: the base may be inaccessible ([expr.cast]/4, clang's
+    /// `IgnoreBaseAccess`).
+    pub(crate) cast_ignores_base_access: bool,
     /// Access checks in a class template pattern (or partial
     /// specialization) that passed only because the class may instantiate
     /// to a befriended specialization, keyed by the pattern's first
@@ -1129,7 +1129,6 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             func: None,
             unevaluated: 0,
             address_operand: false,
-            cast_ignores_base_access: false,
             volatile_assigns: Vec::new(),
             decltype_calls: Vec::new(),
             agg_list_end: None,
@@ -1217,6 +1216,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             depr_init: None,
             exempt_next_delay: false,
             explicit_conv: false,
+            cast_ignores_base_access: false,
             dependent_access: kiln_source::fx::FxHashMap::default(),
             speculative_friend: std::cell::Cell::new(false),
             access_failed: kiln_source::fx::FxHashSet::default(),

@@ -126,7 +126,7 @@ impl Sema<'_, '_> {
     /// class is in the scope of that class ([class.friend]/7), so its
     /// effective context continues there, into the enclosing classes
     /// (clang's `EffectiveContext` walks `getLexicalDeclContext`).
-    fn friend_decl_of(&self, f: DeclId) -> Option<DeclId> {
+    pub(crate) fn friend_decl_of(&self, f: DeclId) -> Option<DeclId> {
         let is_friend = |d: DeclId| self.ast.decls.get(d).misc().friend() != FriendKind::None;
         // A specialization is marked friend too, but declared at
         // namespace scope: the template's own declaration is the one in
@@ -870,6 +870,9 @@ impl Sema<'_, '_> {
         path: &BasePath,
         loc: Loc,
     ) -> bool {
+        if self.cast_ignores_base_access {
+            return true;
+        }
         self.check_base_access_impl(derived_ty, base_ty, path, loc, BaseUse::Conversion)
     }
 
@@ -918,8 +921,7 @@ impl Sema<'_, '_> {
             let b = self.spec_access(Self::deriving_class(derived, path, j), s);
             acc = if j == 0 { b } else { merge_access(acc, b) };
         }
-        if acc == Access::Public || (usage == BaseUse::Conversion && self.cast_ignores_base_access)
-        {
+        if acc == Access::Public {
             return true;
         }
         let t = Target {

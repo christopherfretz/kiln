@@ -769,6 +769,11 @@ pub struct Declarator {
     /// `isFunctionDeclarationContext` is false then: its function
     /// declarator declares no function, [dcl.fct]/22). Set by the parser.
     pub typedef: bool,
+    /// The decl-specifier-seq has a type specifier, so the declarator-id
+    /// names no deduction guide (`auto mk() -> int` where `mk` is a class
+    /// template; clang's `ParseDirectDeclarator` clears
+    /// `AllowDeductionGuide`, [temp.deduct.guide]/1). Set by the parser.
+    pub typed: bool,
     /// The type-constraint of a constrained placeholder in one of the
     /// declarator's trailing return types (`auto (*v)() -> C auto`,
     /// nested ones included), where its "does not satisfy" diagnostics
@@ -923,6 +928,7 @@ impl Declarator {
             decomp: None,
             friend: false,
             typedef: false,
+            typed: false,
             trailing_constraint: Loc::INVALID,
         }
     }
