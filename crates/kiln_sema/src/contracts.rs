@@ -433,13 +433,18 @@ impl Sema<'_, '_> {
     pub(crate) fn check_coroutine_post_params(&mut self, f: DeclId) {
         // The seq is on `f` or, for a definition that omits it, on the
         // first declaration, whose parameters the predicates name.
-        let owner = if self.ast.decls.cold.contracts.get(f).is_some() { f } else { self.ast.first(f) };
+        let owner =
+            if self.ast.decls.cold.contracts.get(f).is_some() { f } else { self.ast.first(f) };
         let stmts = self.function_contracts(owner);
         if stmts.is_empty() {
             return;
         }
         let params_of = |s: &Self, d: DeclId| -> Vec<DeclId> {
-            s.ast.decls.function(d).map(|x| s.ast.lists.iter::<DeclId>(x.params).collect()).unwrap_or_default()
+            s.ast
+                .decls
+                .function(d)
+                .map(|x| s.ast.lists.iter::<DeclId>(x.params).collect())
+                .unwrap_or_default()
         };
         let owner_params = params_of(self, owner);
         let params = params_of(self, f);

@@ -1353,10 +1353,7 @@ mod tests {
         }
         assert_eq!(
             parse("-fcontract-evaluation-semantic=assume a.cpp").errors,
-            [ArgError::UnsupportedValue(
-                "-fcontract-evaluation-semantic=".into(),
-                "assume".into()
-            )]
+            [ArgError::UnsupportedValue("-fcontract-evaluation-semantic=".into(), "assume".into())]
         );
     }
 
