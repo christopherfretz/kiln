@@ -1092,10 +1092,8 @@ impl Substituter<'_, '_, '_> {
         let n = *self.sema.ast.exprs.get(e);
         let x = *self.sema.ast.exprs.new_extra(e);
         let placement = match x.placement {
-            Some(l) => {
-                let args: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
-                Some(NewPlacement { args: self.expand_exprs(&args)?, lparen: loc, rparen: loc })
-            }
+            // The allocation function's default arguments are added again.
+            Some(l) => Some(NewPlacement { args: self.expr_list(l)?, lparen: loc, rparen: loc }),
             None => None,
         };
         let base = self.ty(x.allocated_ty, x.type_loc)?;

@@ -946,6 +946,15 @@ Type flags are computed at intern time (types.md §5.3). The rules:
 | `PackExpansion` | its pattern is dependent | — (and UNEXPANDED_PACK is cleared) |
 | `Auto` | undeduced inside a dependent context | — |
 
+A reference to a variable or parameter with automatic storage declared
+in a template is instantiation-dependent only so that instantiation
+rebinds it (`decl_deps`). The `decltype` of such a reference (or of the
+parenthesized reference) whose declared type is not dependent is the
+plain `Decltype`, as clang computes it: `decltype(V)::iterator` with
+`std::vector<int> V` names a member of a known class, and is a type in a
+template argument with no `typename` (WP-730,
+`tests/conformance/dcl.type.decltype/template-local-nested-name-run.cpp`).
+
 **Three predicates (WP-445).** Every "is this dependent?" question
 asks exactly one of:
 - *dependent type* (`Sema::is_dependent_type`, the `DEPENDENT` bit,
@@ -1003,7 +1012,7 @@ never recomputed (ast.md §5). The rules follow [temp.dep.expr],
 |---|---|
 | any expression | the union of its children's deps, plus `deps_of_type_flags(type)` (gives TYPE when the type is dependent) |
 | `DeclRefExpr` to an NTTP | VALUE \| INST (plus TYPE if the parameter's type is dependent; plus UNEXPANDED_PACK if it is a pack) |
-| `DeclRefExpr` to a variable | TYPE if its type is dependent; VALUE if it is a const integral or `constexpr` variable whose initializer is value-dependent (ast.md §16.15) |
+| `DeclRefExpr` to a variable | TYPE if its type is dependent; VALUE if it is a const integral or `constexpr` variable whose initializer is value-dependent (ast.md §16.15); TYPE \| VALUE \| INST if it is a static data member of the current instantiation declared in its class as an array of unknown bound without an initializer there ([temp.dep.expr]/3, `static const Info Ops[];`). `sizeof`/`alignof` of such a type-dependent operand is checked at instantiation, where a (parenthesized) reference to a static data member of a specialization whose type is an array of unknown bound first instantiates the member's definition and names it with the bound its definition gives (clang `completeExprArrayBound`; [temp.inst]/4; WP-730, test `temp.dep.expr/static-member-array-unknown-bound.cpp`) |
 | `this` in a dependent context | TYPE |
 | `sizeof`, `alignof`, `noexcept`, `typeid(type)`, `__is_*` traits, `requires` | the operand's TYPE becomes VALUE (the result type is fixed); `alignof e` naming a variable or member whose `alignas` operand is dependent is VALUE-dependent too (`Builder::names_dependently_aligned_decl`, clang `computeDependence(UnaryExprOrTypeTraitExpr)`; WP-312) |
 | `noexcept(e)` with a can-throw result that is dependent | also VALUE \| INST |
@@ -1117,6 +1126,13 @@ These are the current instantiation:
   injected-class-name;
 - `A<T>` or `A<T...>` written with the class's own parameters in order;
 - the nested classes of either.
+
+A template-id of the class whose pack expansion argument falls on a
+parameter that is not a pack (`Ts<T...>` in `template<template<class>
+class H, template<class> class... T> struct Ts`) names neither the
+current instantiation nor a partial specialization's injected class: it
+is a dependent specialization checked once substituted (WP-730,
+`temp.local/injected-name-pack-expansion-args.cpp`).
 
 Qualified lookup into the current instantiation happens at definition.
 Lookup of a found member binds it (`typename A<T>::X` resolves to the
@@ -1505,7 +1521,12 @@ and the members of member classes. Member templates are excluded. A
 member class that is not yet defined at that point gets the member
 specialization kind `ExplicitInstantiationDefinition` (so its vtable and
 RTTI are emitted `weak_odr`); one already defined keeps its implicit
-kind (clang `InstantiateClassMembers`; `instantiate_members_of`). A
+kind (clang `InstantiateClassMembers`; `instantiate_members_of`). The
+definition marks the class's vtable used, and that of each member class
+it gives the definition kind, so their virtual members are odr-used and
+an implicit virtual destructor is defined with it (clang
+`MarkVTableUsed(..., true)`; WP-730,
+`temp.explicit/vtable-implicit-virtual-destructor-run.cpp`). A
 member explicit instantiation of a constructor or destructor
 (`template X<int>::X();`) reaches sema through the special-member
 declarator path and names the existing member (WP-170). An explicit

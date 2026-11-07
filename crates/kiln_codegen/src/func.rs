@@ -559,17 +559,26 @@ impl Cg<'_> {
         {
             self.f.bypasses = Some(Box::new(crate::lifetime::detect_bypasses(ast, body)));
         }
-        // A function with contract assertions ([dcl.contract.func]):
-        // their evaluation is WP-707's (spec/contracts.md §6), so the
-        // contracts are never silently dropped unless the semantic is
-        // ignore.
-        if body.is_some()
+        // The preconditions ([dcl.contract.func], spec/contracts.md §6.3):
+        // after the parameters, before the body and a constructor's
+        // mem-initializers; not in a thunk, a lambda's static invoker or
+        // a destructor variant that delegates to the one that checks.
+        let delegating_dtor = kind == DeclKind::CXXDestructor
+            && (structor == Some(mangle::Structor::Deleting)
+                || structor == Some(mangle::Structor::Complete)
+                    && self.structor_has_vbases(d)
+                    && body.is_some_and(|b| {
+                        ast.stmts.get(b).kind() != kiln_ast::stmt::StmtKind::CXXTryStmt
+                    }));
+        let contracts_here = body.is_some()
             && thunk.is_none()
-            && ast.contract_semantic.checks()
-            && let Some(l) = ast.function_contracts(d)
-            && let Some(first) = ast.lists.iter::<kiln_ast::ids::StmtId>(l).next()
-        {
-            return err(Some(ast.stmts.get(first).loc()), crate::stmt::CONTRACT_UNSUPPORTED);
+            && !delegating_dtor
+            && !matches!(
+                ast.closure_thunk(d),
+                Some(kiln_ast::lambda::ClosureThunk::Invoker { .. })
+            );
+        if contracts_here {
+            self.emit_preconditions(d)?;
         }
         match (kind, body) {
             _ if let Some(th) = thunk => {
@@ -617,6 +626,9 @@ impl Cg<'_> {
         let prologue = self.f.cl.prologue;
         self.pop_cleanup_blocks(prologue);
         self.emit_return_block();
+        if contracts_here {
+            self.emit_postconditions(d)?;
+        }
         self.emit_epilog();
         if eh_spec {
             self.pop_terminate();

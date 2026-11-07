@@ -1,0 +1,78 @@
+// <contracts> for C++ standard libraries that ship none (kiln addition;
+// spec/contracts.md §6.3). libc++ 19 has no <contracts>; this header sits
+// in kiln's resource include directory, after the standard library's
+// include directories, so a library that ships its own (libstdc++) wins.
+//
+// The layout and the names match libstdc++'s (GCC 16.1), so a
+// `contract_violation` built by kiln's codegen and a replaced
+// `handle_contract_violation` link the same under either library.
+
+#ifndef __KILN_CONTRACTS
+#define __KILN_CONTRACTS 1
+
+#if __cplusplus > 202302L && defined(__cpp_contracts)
+
+#include <source_location>
+
+#ifndef __cpp_lib_contracts
+#define __cpp_lib_contracts 202502L
+#endif
+
+namespace std {
+namespace contracts {
+
+enum class assertion_kind : __UINT16_TYPE__ {
+  pre = 1,
+  post = 2,
+  assert = 3,
+};
+
+enum class evaluation_semantic : __UINT16_TYPE__ {
+  ignore = 1,
+  observe = 2,
+  enforce = 3,
+  quick_enforce = 4,
+};
+
+enum class detection_mode : __UINT16_TYPE__ {
+  predicate_false = 1,
+  evaluation_exception = 2,
+};
+
+class contract_violation {
+  __UINT16_TYPE__ _M_version;
+  assertion_kind _M_assertion_kind;
+  evaluation_semantic _M_evaluation_semantic;
+  detection_mode _M_detection_mode;
+  const char* _M_comment;
+  const void* _M_src_loc_ptr;
+  void* _M_ext;
+
+public:
+  contract_violation(const contract_violation&) = delete;
+  contract_violation& operator=(const contract_violation&) = delete;
+
+  assertion_kind kind() const noexcept { return _M_assertion_kind; }
+  evaluation_semantic semantic() const noexcept { return _M_evaluation_semantic; }
+  detection_mode mode() const noexcept { return _M_detection_mode; }
+  const char* comment() const noexcept { return _M_comment; }
+  // std::source_location is one pointer to its `{file, function, line,
+  // column}` record in libc++ and libstdc++ alike.
+  std::source_location location() const noexcept {
+    return __builtin_bit_cast(std::source_location, _M_src_loc_ptr);
+  }
+  bool is_terminating() const noexcept {
+    return _M_evaluation_semantic == evaluation_semantic::enforce ||
+           _M_evaluation_semantic == evaluation_semantic::quick_enforce;
+  }
+};
+
+// Defined (weak) by kiln's codegen in a translation unit that checks a
+// contract assertion: GCC's default message on standard error.
+void invoke_default_contract_violation_handler(const contract_violation&) noexcept;
+
+} // namespace contracts
+} // namespace std
+
+#endif // __cplusplus > 202302L && defined(__cpp_contracts)
+#endif // __KILN_CONTRACTS

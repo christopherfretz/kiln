@@ -8,8 +8,9 @@ predicate), [dcl.fct.def.coroutine]/6, [intro.defs] (contract
 violation, contract-violation handler), [cpp.predefined]
 (`__cpp_contracts`). Draft: the Croydon DIS (C++26 as balloted;
 https://eel.is/c++draft/). Papers: P2900R14 with the Kona amendments.
-Status: parsed, analysed and dumped (WP-706); evaluated in neither the
-Oven nor codegen until WP-707 (§6 is its design). This file is the
+Status: parsed, analysed and dumped (WP-706); evaluated in the Oven and
+in codegen, with kiln's violation handler where the standard library
+has none (WP-707, §6); coroutine postconditions are unsupported (§9). This file is the
 contract; spec/ast.md §4 and §6, spec/driver.md (Options) and
 spec/sema-templates.md (substitution) point here.
 
@@ -183,7 +184,7 @@ assertion-statement:
   signature; it does not affect overload resolution, mangling or
   redeclaration matching ([dcl.contract.func]/9).
 
-## 6. Evaluation (design; WP-707 implements)
+## 6. Evaluation (WP-707)
 
 ### 6.1 Semantics and the knob
 
@@ -200,17 +201,23 @@ translation unit; any other value is "unsupported argument". A
 are reserved for a per-assertion semantic (a later extension) and are
 never written today.
 
-### 6.2 Today (WP-706)
+### 6.2 Today (WP-707)
 
-- `ignore`: codegen emits nothing for any assertion; the Oven skips
-  them. Programs with contracts compile, link and run.
-- Any other semantic: codegen reports `unsupported: contract
-  evaluation (WP-707)` at the first assertion of a function definition
-  with function contract specifiers, and at each `contract_assert`
-  (`kiln_codegen/src/func.rs`, `stmt.rs`); the Oven traps a call of
-  such a function, or a `contract_assert`, with the same note
-  (`kiln_oven/src/compile.rs`), so a constant expression that reaches
-  one is not constant. A parsed contract is never dropped silently.
+- Every semantic is implemented in codegen (§6.3) and the Oven (§6.4).
+  `ignore` emits and evaluates nothing (the predicates are still
+  odr-used, so they are instantiated and checked).
+- A function without contract assertions pays nothing in either: no
+  extra IR, no extra Oven bytecode or per-call work
+  (`checking_semantics_cost_nothing_without_contracts`,
+  `tests/stress/contracts-constexpr-1e6.cpp`).
+- One gap is a clean error rather than a silent skip: a postcondition
+  of a coroutine under a checking semantic is `unsupported:
+  postcondition of a coroutine (spec/contracts.md §9)` in codegen; its
+  preconditions are checked.
+- Contracts on the first declaration of a function and evaluated for a
+  later definition name the first declaration's parameters; codegen and
+  the Oven alias them to the definition's
+  (`Ast::contract_param_aliases`).
 
 ### 6.3 Codegen (callee side, as GCC)
 
@@ -242,8 +249,57 @@ never written today.
   ([basic.contract.eval]/9, 13); `quick_enforce` calls `std::terminate()`
   directly ([basic.contract.eval]/10). An exception from the handler of
   a function contract assertion behaves as if thrown by the function
-  ([basic.contract.eval]/17). libc++ has no `<contracts>`; WP-707
-  decides what a libc++ build links (§9).
+  ([basic.contract.eval]/17).
+- Code (`kiln_codegen/src/contracts.rs`): `emit_preconditions` runs from
+  the function prologue, after the parameters are stored and before
+  the body; `emit_postconditions` from the return block, after the
+  locals' cleanups, with the result name bound to the return slot (for
+  a reference result, the returned reference). A thunk, a delegating
+  destructor variant and a lambda's static invoker do not check (the
+  function they forward to does). Each check is a branch to a cold
+  violation block; the `contract_violation` object (`.contract`, with
+  its `.contract.loc` source location `{file, function, line,
+  column}`, where the function is clang's `__PRETTY_FUNCTION__` and
+  the column is the keyword's) is a private constant, one per
+  assertion and detection mode. Under `observe`/`enforce` the predicate
+  runs in an implicit `catch (...)` whose handler calls
+  `handle_contract_violation` with detection mode
+  `evaluation_exception` (`__cxa_begin_catch`/`__cxa_end_catch`
+  around it, so `std::current_exception()` is the exception and an
+  exception from the handler propagates); under `quick_enforce` an
+  escaping exception reaches a terminate scope. `-fno-exceptions`
+  drops the implicit handler.
+- **The handler (libc++ and libstdc++ < 16).** The selected standard
+  library either ships `<contracts>` (libstdc++ 16) or not (libc++ 19
+  and 22, libstdc++ 14). kiln decides per compile, in the driver
+  (`Toolchain::stdlib_ships_contracts`, a `contracts` file in one of
+  the stdlib's include directories), and passes
+  `CodegenOptions::contract_default_handler`:
+  - Without one, kiln's own `resource/include/contracts` serves (the
+    resource directory is searched after the stdlib's, so a stdlib
+    header always wins). It declares `std::contracts` with
+    libstdc++'s layout and ABI (`assertion_kind`,
+    `evaluation_semantic`, `detection_mode`, `contract_violation` with
+    `kind()`, `semantic()`, `mode()`, `comment()`, `location()`,
+    `is_terminating()`, and
+    `invoke_default_contract_violation_handler`), and defines
+    `__cpp_lib_contracts` (202502L). A module that checks an
+    assertion also gets weak definitions of
+    `handle_contract_violation` (calls the default) and of
+    `invoke_default_contract_violation_handler` (also when only
+    referenced), which flushes `stdout` and prints GCC's message to
+    `stderr`:
+    `contract violation in function F at FILE:LINE: COMMENT` and
+    `[assertion_kind: K, semantic: S, mode: M, terminating: yes|no]`.
+    A user's (strong) definition replaces either at link time; no
+    runtime library is needed.
+  - With one, kiln emits no default: the program links the stdlib's
+    handler (libstdc++ 16: with `-lstdc++exp`, as under GCC).
+
+  The alternatives were rejected: libstdc++'s handler cannot be
+  linked into a libc++ program (a second C++ runtime), and
+  `std::terminate` only would break `observe` and the replaceable
+  handler ([basic.contract.handler]).
 
 ### 6.4 The Oven
 
@@ -264,6 +320,20 @@ never written today.
   budgets as the rest of the evaluation; a predicate's side effects are
   allowed only on objects whose lifetime began in the evaluation (the
   usual rule). A postcondition reads the result object in place.
+- Code: the predicates are compiled once, into the function's own
+  bytecode (`kiln_oven/src/compile.rs` `scan_contracts`,
+  `contract_check`, `check_posts`): preconditions after the parameter
+  prologue, postconditions at each normal return after the locals are
+  destroyed, with the result register (or, for a reference or class
+  result, its address) bound to the result name. A false predicate
+  executes `Op::ContractFail`; under `observe` the predicate runs as a
+  trial (`Op::ContractTrial`) so a non-constant predicate can be
+  reported and evaluation go on. Under `ignore` nothing is compiled.
+- A variable's initializer that is not `constexpr`/`constinit` is
+  first tried with every assertion ignored ([expr.const.init]/4.1);
+  only if that is constant is it evaluated again with the semantic
+  (`Oven::check_contract_init`; sema calls it only in a translation
+  unit that has contract assertions).
 
 ## 7. ast-dump
 
@@ -303,7 +373,11 @@ after the decl, the declared type. clang has no such nodes, so the
 | `sema_contract_result_void` | function does not return a value to test |
 | `sema_contract_virtual` | function contract specifiers cannot be added to virtual functions |
 
-Until WP-707: the note `unsupported: contract evaluation (WP-707)` (§6.2).
+Oven (§6.4): `oven_contract_predicate_false` /
+`oven_contract_condition_not_constant` (errors, enforce and
+quick_enforce) and their `_observe` warnings, as notes of the
+evaluation's failure with the call stack. Codegen: `unsupported:
+postcondition of a coroutine (spec/contracts.md §9)` (§6.2).
 Driver: `unsupported argument 'v' to option '-fcontract-evaluation-semantic='`.
 
 ## 9. Known gaps, divergences and open questions
@@ -320,6 +394,21 @@ oracle):
   `mutable-copy-capture.cpp`).
 - GCC accepts a coroutine postcondition that odr-uses a value
   parameter; [dcl.fct.def.coroutine]/6 forbids it.
+- GCC reports an exception escaping a predicate as detection mode
+  `predicate_false`; [basic.contract.eval]/7 makes it
+  `evaluation_exception`, which kiln reports
+  (`run-evaluation-exception.cpp`). Both run the handler inside the
+  implicit handler.
+- The handler's function name is clang's `__PRETTY_FUNCTION__`
+  (`int f(const int)`, `[T = int]`, `auto main()::(lambda)::operator()(int)
+  const`), not GCC's (`int f(int)`, `[with T = int]`,
+  `main()::<lambda(int)>`); the comment is the predicate's source text
+  as written (with macro names when the predicate is inside a macro
+  argument, else the outermost expansion's text), where GCC
+  pretty-prints the expression.
+- kiln's default handler flushes `stdout` first; libstdc++'s writes
+  through `std::cerr`, which is tied to `std::cout`, so the visible
+  order is the same for `printf`-only programs.
 
 Gaps (follow-ups):
 
@@ -338,18 +427,24 @@ Gaps (follow-ups):
   function" note.
 - `-fcontract-evaluation-semantic=` has no per-assertion form;
   `aux` slots 1-3 are reserved.
+- A coroutine's postconditions are not evaluated: codegen rejects them
+  under a checking semantic (§6.2). They must run when the coroutine
+  returns to its caller the first time, on the return object, which
+  the coroutine lowering does not expose to the check yet
+  (`kiln_codegen/src/contracts.rs` `emit_postconditions`).
 
-Open questions:
+Decisions (WP-707):
 
 - **Virtual functions.** The draft's [class.virtual] has no rule against
-  a seq on a virtual function; GCC 16.1 rejects one and kiln follows
-  GCC. Revisit if the DIS or a DR settles it the other way.
-- **Coroutines.** The WP-706 brief said a seq on a coroutine is
-  ill-formed; the DIS permits one (only the postcondition-parameter
-  rule applies), as does GCC, so kiln accepts it.
-- **libc++.** libc++ (19, 22) ships no `<contracts>` and no default
-  handler; WP-707 must pick between linking libstdc++'s handler, a
-  kiln runtime default, or `std::terminate` only.
+  a seq on a virtual function; GCC 16.1 rejects one and kiln keeps
+  following GCC (`sema_contract_virtual`; `virtual.cpp`). Revisit if the DIS or a DR settles
+  it the other way.
+- **Coroutines.** The DIS permits a seq on a coroutine (only the
+  postcondition-parameter rule applies), as does GCC, so kiln accepts
+  it: preconditions are checked, postconditions are `unsupported`
+  (gaps above).
+- **libc++.** kiln's resource `<contracts>` and weak default handler
+  (§6.3).
 
 ## 10. Tests
 
@@ -362,15 +457,30 @@ Open questions:
   return types, a result name in `pre`, modifying the result.
 - `tests/conformance/stmt.contract.assert/`: the statement, syntax,
   the keyword at `-fclang-compat=22` and before C++26, `run-ignore.cpp`,
-  `dump-assert.cpp`; `contract-assert.cpp` stays an xfail (enforce, WP-707).
+  `dump-assert.cpp`, `contract-assert.cpp` (enforce, run).
 - `tests/conformance/basic.contract/`: const-ness of parameters,
   locals, globals, `this` and in lambdas; the Oven under `ignore`,
   `enforce` and `observe`.
 - `tests/conformance/cpp.predefined/contracts-macro*.cpp`:
   `__cpp_contracts`.
-- `crates/kiln_codegen/tests/contracts.rs`: the codegen gate (§6.2);
+- `tests/conformance/basic.contract.eval/`: the Oven under each
+  semantic, manifestly (`const-*`, `not-constant-*`) and tentatively
+  (`tentative-*`, `not-manifest*`) constant-evaluated; and `run` tests
+  compared with GCC 16.1: `run-observe.cpp` (kind, semantic, mode,
+  comment, line; also under libc++, `run-observe-libcxx.cpp`),
+  `run-enforce.cpp`, `run-quick-enforce.cpp` (replaced handlers and a
+  terminate handler); without an oracle (GCC links its default from
+  `-lstdc++exp`, or diverges): `run-evaluation-exception.cpp`,
+  `run-default-handler.cpp`, `run-invoke-default.cpp`.
+- `crates/kiln_codegen/tests/contracts.rs`: the IR shape (an `enforce`
+  golden, `observe`'s detection modes, `quick_enforce`, no default
+  handler when the stdlib ships one, no cost without contracts, the
+  coroutine postcondition error);
   `crates/kiln_driver/src/args.rs` unit test `contract_evaluation_semantic`.
 - `tests/stress/contracts-many.cpp`: 10,000 functions with `pre`, `post`
   and `contract_assert`; WP-706 measured 5.6 s and 48 MiB (debug kiln,
   `-fsyntax-only`) against 2.8 s and 39 MiB without the contracts,
   linear in the count.
+- `tests/stress/contracts-constexpr-1e6.cpp`: a million constant-evaluated
+  calls of a function with `pre` and `post`; the Oven budget pins
+  bounded steps per call and no memory per call.
