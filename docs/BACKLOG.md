@@ -753,8 +753,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-729 | perf: profile protobuf summed compile time (2.65x clang-19; docs/status/oss/protobuf.md) | WP-716 | open |
 | WP-731 | contracts sema gaps: lambda captures of parameters, explicit specialization adding contracts, friend redecl postcondition-param rule, dump prints type-parameter-0-0, spurious constexpr note after predicate error (spec/contracts.md:324-340) | WP-706 | open |
 | WP-732 | C++26 DIS todo papers: P3598, P2841, P3074, P3726, P1494, P3475 (docs/STANDARD_SUPPORT.md:337-342) | WP-706 | open |
-| WP-746 | P2841R7 concept and variable-template template parameters | WP-732 | in progress |
-| WP-743 | C++26 DIS: trivial unions P3074R7 + union lifetime P3726R2 + P3475R2 core (Oven union lifetime) | WP-732 | in progress |
+| WP-746 | P2841R7 concept and variable-template template parameters | WP-732 | P2841R7 partial: concept/variable TTPs, kinds, concept-dependent constraints, mangling (#336) |
+| WP-743 | C++26 DIS: trivial unions P3074R7 + union lifetime P3726R2 + P3475R2 core (Oven union lifetime) | WP-732 | P3074R7 done, P3726R2 partial (Oven union lifetime), P3475R2 core done (#337) |
 | WP-733 | triage untested DRs P4143, P4149, P3769 (docs/STANDARD_SUPPORT.md:393-395) | WP-706 | open |
 | WP-734 | P2308 diag nits: nested braced scalar warning, excess-elements note at the parameter (crates/kiln_sema/src/templ/nttp.rs:619) | WP-706 | open |
 | WP-736 | codegen+sema: remaining AArch64 ACLE builtins (ldrex/strex/ldaex/stlex need elementtype on llvm.aarch64.ldxr/stxr; rsr/wsr, rint*, jcvt, rndr, ld64b/st64b, gcs, chkfeat, prefetch, trap, clrex) at `crates/kiln_codegen/src/arm.rs:129`; exclusive-builtin size check + discarded-qualifiers warning in `crates/kiln_sema/src/builtins.rs` | WP-724 | open |
@@ -773,5 +773,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-752 | sema/parse: friend redeclaration loses GNU noreturn (`crates/kiln_sema/src/decl.rs:3066`); `[]() noexcept __attribute__((noreturn)) {}` accepted, clang rejects (`crates/kiln_parse/src/lambda.rs:252`) | WP-750 | open |
 | WP-753 | predefined: deduced bracket args print `noexcept(false)`/`noexcept(true)` where clang prints nothing/`noexcept` (`crates/kiln_sema/src/predefined.rs:293`); `partial_print_args` scope chain prints unscoped (`crates/kiln_ast/src/dump/names.rs:345`) | WP-750 | open |
 | WP-754 | diag long tail from WP-750 (deferred): -Wc++17-compat-mangling never emitted, -Wignored-attributes for noreturn after trailing return, -Wundefined-internal, typedef exception-spec outer-chunk order, d4 expected-expression/column, #pragma section/__declspec(allocate) (clang PSF_Implicit) | WP-750 | deferred |
+| WP-758 | P2841 gaps: nested TTP kinds in heads not compared (`crates/kiln_sema/src/templ/equiv.rs:206`); fold-expanded concept-pack atoms identified by expression (`templ/concepts/normal.rs:215`); P2963 type-pack folds unused in subsumption (`normal.rs:213`); unexpanded pack in requires-clause concept-id undiagnosed (`templ/pack.rs:997`); [temp.param]/14 for concepts (`templ/mod.rs:1045`); then define `__cpp_template_parameters` | WP-746 | open |
+| WP-759 | union lifetime gaps (P3726R2): `std::start_lifetime` builtin ([obj.lifetime]); constants/copies of unions with partially-constructed array members fail "subobject is not initialized" (`crates/kiln_oven/src/value.rs:876`); `&v..data` double-dot path in Oven diags | WP-743 | open |
+| WP-760 | perf: per-access active-member walk is ~65% of the union inplace_vector bench (`crates/kiln_oven/src/vm.rs:2857` union_path) | WP-743 | open |
 WP-511
 WP-512
