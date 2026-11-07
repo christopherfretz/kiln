@@ -1058,7 +1058,14 @@ impl Substituter<'_, '_, '_> {
                 let e = self.expr(expr)?;
                 self.sema.act_on_noexcept_spec(e, loc, loc)
             }
-            ExcSpec::Dynamic(_) | ExcSpec::DependentNoexcept(_) => {
+            // The type-id-list of a dynamic exception specification is
+            // substituted.
+            ExcSpec::Dynamic(l) => {
+                let tys = self.sema.ast.types.type_list_types(l).to_vec();
+                let tys = self.expand_types(&tys, loc)?;
+                ExcSpec::Dynamic(self.sema.ast.types.type_list(&tys))
+            }
+            ExcSpec::DependentNoexcept(_) => {
                 return self.unimplemented("dependent exception specification", loc);
             }
             other => other,

@@ -2818,9 +2818,12 @@ specification as written (`TypeNames` prints ` noexcept`,
 - **`act_on_dynamic_exception_spec(types, ok, loc, rparen)`**:
   `throw()` is `DynamicNone`, accepted silently (clang 19 accepts it
   in C++26 although P1152/C++20 removed it from the grammar). A
-  non-empty list is `ISO C++17 does not allow dynamic exception
-  specifications` (`-Wdynamic-exception-spec`, default error) with a
-  `use 'noexcept(false)' instead` note, then `Dynamic(types)`.
+  non-empty list is, from C++17 on, `ISO C++17 does not allow dynamic
+  exception specifications` (`-Wdynamic-exception-spec`, default error)
+  with a `use 'noexcept(false)' instead` note, then `Dynamic(types)`;
+  before C++17 it is valid and silent (clang's off-by-default
+  `-Wdeprecated-dynamic-exception-spec` is not implemented; WP-709).
+  Template substitution substitutes the type-id-list (WP-709).
 - **GNU `nothrow`** (WP-186, `apply_nothrow_attrs` in `decl_attrs.rs`;
   clang `handleFunctionTypeAttr` `AT_NoThrow`): `__attribute__((nothrow))`
   or `[[gnu::nothrow]]` anywhere in a declaration whose declared type is
