@@ -60,7 +60,7 @@ The loop:
 | `re2` | 2 | `2025-11-05` | not started |
 | `simdjson` | 2 | `v4.2.4` | not started |
 | `taskflow` | 2 | `v3.10.0` | not started |
-| `yaml_cpp` | 2 | `yaml-cpp-0.9.0` | not started |
+| `yaml_cpp` | 2 | `yaml-cpp-0.9.0` | tests at parity |
 | `folly` | 3 | `v2026.10.26.00` | not started |
 | `leveldb` | 3 | `1.23` | not started |
 | `llvm_project` | 3 | `llvmorg-19.1.7` | not started |
@@ -69,6 +69,22 @@ The loop:
 <!-- /oss:projects -->
 
 ## Results
+
+<!-- oss:yaml_cpp -->
+### yaml_cpp (yaml-cpp-0.9.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 51 / 0 | 51 / 0 |
+| links ok / failed | 1 / 0 | 1 / 0 |
+| tests passed / total | 1 / 1 | 1 / 1 |
+| wall | 34 s | 32 s |
+| peak TU RSS | 721 MB | 807 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:yaml_cpp -->
 
 <!-- oss:googletest -->
 ### googletest (v1.17.0)

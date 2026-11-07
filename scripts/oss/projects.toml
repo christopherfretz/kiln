@@ -193,11 +193,11 @@ url = "https://github.com/jbeder/yaml-cpp"
 tag = "yaml-cpp-0.9.0"
 build = "cmake"
 cxx_std = 17
-configure = ["-DYAML_CPP_BUILD_TESTS=ON", "-DYAML_CPP_BUILD_TOOLS=OFF"]
+configure = ["-DYAML_CPP_BUILD_TESTS=ON", "-DYAML_CPP_BUILD_TOOLS=OFF", "-DCMAKE_CXX_FLAGS=-Wno-c++11-narrowing"]
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 2
-verified = false
+verified = true
 notes = "Tests use a vendored googletest."
 
 [simdjson]
