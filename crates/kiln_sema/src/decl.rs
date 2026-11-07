@@ -300,6 +300,33 @@ impl Sema<'_, '_> {
     /// True if `restrict` may qualify `ty`: a pointer, reference or
     /// member pointer, or a type not known yet (dependent, a placeholder,
     /// an error).
+    /// Whether `p` (or the template it describes) is in `(ctx, name)`'s
+    /// lookup entry as an ordinary, non-ADL-only declaration: a friend
+    /// redeclaring it is then visible too, otherwise it stays hidden
+    /// ([namespace.memdef]/3; clang `Redeclarable::setPreviousDecl`
+    /// carries `IDNS_Ordinary` over from the previous declaration).
+    pub(crate) fn visible_to_ordinary(&self, ctx: DeclId, name: DeclName, p: DeclId) -> bool {
+        let t = self.ast.described_template(p);
+        self.ast.lookup_local(ctx, name).iter_with_flags().any(|(x, fl)| {
+            (x == p || Some(x) == t) && !fl.contains(LookupFlags::ADL_ONLY)
+        })
+    }
+
+    /// Whether a parameter of function `f` has a default argument.
+    pub(crate) fn has_own_default_arg(&self, f: DeclId) -> bool {
+        self.ast.decls.function(f).is_some_and(|x| {
+            self.ast
+                .lists
+                .iter::<DeclId>(x.params)
+                .any(|p| {
+                    self.ast.decls.param(p).is_some_and(|q| {
+                        q.default_arg.is_some()
+                            || q.flags & kiln_ast::decl::ParamData::DEFAULT_ARG_PENDING != 0
+                    })
+                })
+        })
+    }
+
     fn restrict_ok(&self, ty: QualType) -> bool {
         self.is_error_type(ty)
             || self.is_dependent_type(ty)
@@ -4205,6 +4232,19 @@ impl Sema<'_, '_> {
             None => {}
         }
         let (defaults, redefined) = self.merge_default_args(prev_ok, block, &params, !prev_invalid);
+        // [dcl.fct.default]/4: a friend declaration with a default
+        // argument is the only declaration of its function; clang
+        // `MergeCXXFunctionDecl` reports any redeclaration of a hidden
+        // friend that has one (the friend side is
+        // `check_friend_default_args`).
+        if let Some(p) = prev_ok
+            && self.ast.decls.get(p).misc().friend() == FriendKind::Undeclared
+            && self.has_own_default_arg(p)
+        {
+            let msg = self.diag(DiagId::sema_friend_decl_with_def_arg_redeclared, d.name_loc());
+            let msg = self.note_prev(msg, p, false);
+            self.emit(msg);
+        }
         if let Some(p) = prev_ok {
             self.check_param_nullability(p, &params);
             self.check_param_indeterminate(p, &params);
@@ -4220,12 +4260,7 @@ impl Sema<'_, '_> {
         if friend {
             // [namespace.memdef]/3: visible to ordinary lookup only if
             // declared outside the class (before or after).
-            let visible = prev_ok.is_some_and(|p| {
-                self.ast.lookup_local(ctx, dname).iter_with_flags().any(|(x, fl)| {
-                    (x == p || Some(x) == self.ast.described_template(p))
-                        && !fl.contains(LookupFlags::ADL_ONLY)
-                })
-            });
+            let visible = prev_ok.is_some_and(|p| self.visible_to_ordinary(ctx, dname, p));
             let k = if visible || d.qualifier.is_some() && !quiet_friend {
                 FriendKind::Declared
             } else {
@@ -7562,10 +7597,19 @@ impl Sema<'_, '_> {
                 if self.tag_matches(p, keyword) {
                     // A redeclaration of the template, lexically in the
                     // class (clang's friend `ClassTemplateDecl`); the
-                    // befriended entity is its first declaration.
-                    let mut h = DeclHead::new(ns, DeclName::ident(n), nloc);
+                    // befriended entity is its first declaration. It is
+                    // visible to ordinary lookup only if `p` is: a
+                    // redeclaration of a hidden friend template stays
+                    // hidden ([namespace.memdef]/3).
+                    let name = DeclName::ident(n);
+                    let k = if self.visible_to_ordinary(ns, name, p) {
+                        FriendKind::Declared
+                    } else {
+                        FriendKind::Undeclared
+                    };
+                    let mut h = DeclHead::new(ns, name, nloc);
                     h.lexical = Some(self.ctx);
-                    h.misc = h.misc.with_friend(FriendKind::Declared);
+                    h.misc = h.misc.with_friend(k);
                     self.mark_pattern_next();
                     let d = self.builder().record(h, Self::tag_kind_of(keyword), Some(p));
                     self.friend_class_template = self.finish_template_pattern(d);
