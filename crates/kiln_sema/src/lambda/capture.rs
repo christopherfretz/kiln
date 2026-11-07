@@ -775,8 +775,7 @@ impl Sema<'_, '_> {
     /// clears that. Free when no contract assertion is open and none is
     /// pending.
     fn note_contract_capture_use(&mut self, d: Option<DeclId>, loc: Loc, fresh: &[LambdaId]) {
-        if self.contract_ctx.is_empty() && self.lambdas.iter().all(|s| s.contract_caps.is_empty())
-        {
+        if self.contract_ctx.is_empty() && self.lambdas.iter().all(|s| s.contract_caps.is_empty()) {
             return;
         }
         for i in 0..self.lambdas.len() {
@@ -803,7 +802,8 @@ impl Sema<'_, '_> {
     pub(crate) fn check_contract_only_captures(&mut self, caps: &[(Option<DeclId>, Loc)]) {
         for &(d, loc) in caps {
             let name = d.map_or_else(|| "this".to_string(), |d| self.decl_name(d));
-            let mut msg = self.diag(DiagId::sema_contract_only_implicit_capture, loc).arg(name.clone());
+            let mut msg =
+                self.diag(DiagId::sema_contract_only_implicit_capture, loc).arg(name.clone());
             if let Some(d) = d {
                 msg = msg.with_note(
                     self.diag(DiagId::note_entity_declared_at, self.ast.decls.get(d).loc())
