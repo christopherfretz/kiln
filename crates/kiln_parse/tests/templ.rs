@@ -29,9 +29,11 @@ fn param_kind_decision() {
     // Rule 3: an elaborated `struct Q` is a non-type parameter.
     p.assert_dump("NonTypeTemplateParmDecl 'struct Q *' depth 0 index 3 q");
     // Rule 4: a concept name not followed by `auto` is a constrained type
-    // parameter; followed by `auto`, a placeholder non-type parameter.
+    // parameter; followed by `auto`, a placeholder non-type parameter,
+    // `referenced` by its immediately-declared constraint `C<decltype(V)>`
+    // as in clang.
     p.assert_dump("TemplateTypeParmDecl class depth 0 index 4 U");
-    p.assert_dump("NonTypeTemplateParmDecl 'C auto' depth 0 index 5 V");
+    p.assert_dump("NonTypeTemplateParmDecl referenced 'C auto' depth 0 index 5 V");
     // Rule 5: anything else is a non-type parameter (here `auto`), and
     // `template <...> class` a template template parameter.
     p.assert_dump("NonTypeTemplateParmDecl 'auto' depth 0 index 6 W");
