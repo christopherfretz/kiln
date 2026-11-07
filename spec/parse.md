@@ -1795,7 +1795,7 @@ for `^^`, §5 for splices).
   `enum_extensibility` parse their arguments (so Sema can count them);
   other attributes outside `takes_expr_args` skip theirs.
 - **No argument list (WP-182):** a standard attribute that takes no
-  arguments (`carries_dependency`, `fallthrough`, `noreturn`,
+  arguments (`carries_dependency` before C++26, P3475R2, `fallthrough`, `noreturn`,
   `no_unique_address`, `likely`, `unlikely`, `maybe_unused`), written
   unscoped in `[[...]]` with `(...)`, even empty, reports `attribute 'x'
   cannot have an argument list` at the `(`; its tokens are skipped and
