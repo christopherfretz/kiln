@@ -149,7 +149,11 @@ impl Sema<'_, '_> {
     /// The first declarations befriended by class `r`.
     pub(crate) fn friends_of(&self, r: DeclId) -> Vec<DeclId> {
         let def = self.ast.definition(r).unwrap_or(r);
-        if let Some(b) = self.classes.iter().rev().find(|b| same_class(self, b.record, def)) {
+        // A class still being defined, here or outside the instantiation
+        // context in progress (`VTraits<V>` instantiated inside `V`, which
+        // befriends it): its friends are not on the record yet.
+        let mut open = self.classes.iter().rev().chain(self.suspended_classes.iter().rev().flatten());
+        if let Some(b) = open.find(|b| same_class(self, b.record, def)) {
             return b.friends.clone();
         }
         self.ast

@@ -236,6 +236,12 @@ out-of-line member templates instantiated later included, get access
 nested-befriends-enclosing-template*.cpp). An elaborated-type-specifier
 `class X` naming the injected-class-name is the injected type `X<P...>`
 anywhere inside the template, not only in a friend declaration.
+Until `}` a class's friends are the open `ClassBuild`'s list, and that list
+stays visible to an instantiation started inside the class (the stack is
+set aside in `Sema.suspended_classes`, §8.3): `struct V { friend struct
+VTraits<V>; ... typename VTraits<V>::lane_type ... };` instantiates
+`VTraits<V>` with the friendship in force (WP-803; tests/conformance/
+temp.friend/specialization-instantiated-in-befriending-class-run.cpp).
 
 A class first declared inside a template by an elaborated-type-specifier
 that is a plain reference (a parameter or template-argument type `struct P*`,

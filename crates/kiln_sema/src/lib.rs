@@ -680,6 +680,11 @@ pub struct Sema<'a, 'sm> {
     pub(crate) deferred_call_refs: Vec<(ExprId, DeclId)>,
     /// Classes being defined, innermost last (spec/sema-class.md §8.3).
     pub(crate) classes: Vec<class::ClassBuild>,
+    /// The class stacks set aside by each enclosing instantiation
+    /// context, outermost first: a class still being defined there keeps
+    /// its friends for access checks made inside the instantiation
+    /// (spec/sema-class.md §8.3).
+    pub(crate) suspended_classes: Vec<Vec<class::ClassBuild>>,
     /// Which implicit special members each class has declared
     /// (`SpecialKind::bit`s; spec/sema-class.md §4.1).
     pub(crate) implicit_declared: kiln_source::fx::FxHashMap<DeclId, u8>,
@@ -1207,6 +1212,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             designator_pending: None,
             deferred_call_refs: Vec::new(),
             classes: Vec::new(),
+            suspended_classes: Vec::new(),
             implicit_declared: kiln_source::fx::FxHashMap::default(),
             special: class::SpecialState::default(),
             delayed_access: Vec::new(),
