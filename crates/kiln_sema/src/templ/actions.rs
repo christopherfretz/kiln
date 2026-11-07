@@ -478,7 +478,18 @@ impl Sema<'_, '_> {
         // partial specialization's own arguments include them
         // ([temp.arg.general]/9; `template<class T, class S = typename
         // T::S> struct E;` then `template<class U> class E<W<U>>::I`).
-        if !written.iter().any(unconverted) && written.len() >= self.template_params(tmpl).len() {
+        // Or arguments for a template parameter pack, which the partial
+        // specialization's own arguments hold as one argument pack
+        // (`template<class... A> int B<int, A...>::g()`).
+        let params = self.template_params(tmpl);
+        let first_pack = params
+            .iter()
+            .position(|&p| self.ast.template_parm(p).is_some_and(|x| x.pack))
+            .unwrap_or(params.len());
+        if !written.iter().any(unconverted)
+            && written.len() >= params.len()
+            && first_pack == params.len()
+        {
             return None;
         }
         // A pack expansion for a parameter that is not a pack covers an
@@ -486,11 +497,6 @@ impl Sema<'_, '_> {
         // class> class H, template<class> class... T> struct Ts`): the
         // arguments cannot be converted yet, and checking them would
         // report the expansion as an argument of the wrong kind.
-        let params = self.template_params(tmpl);
-        let first_pack = params
-            .iter()
-            .position(|&p| self.ast.template_parm(p).is_some_and(|x| x.pack))
-            .unwrap_or(params.len());
         if written.iter().take(first_pack).any(|&a| self.is_pack_expansion_arg(a)) {
             return None;
         }

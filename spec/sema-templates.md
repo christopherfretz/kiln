@@ -1124,7 +1124,11 @@ arguments are written unconverted is matched by converting them first
 parameter that is not a pack (`Ts<T...>` in `template<template<class>
 class H, template<class> class... T> struct Ts`) is not converted: it
 names no partial specialization, and its argument check waits for the
-substitution.
+substitution. So is one whose primary template has a template parameter
+pack: the partial specialization's own arguments hold the arguments for
+the pack as one argument pack, so `template<class... A> int B<int,
+A...>::g()` is found only after conversion (WP-726,
+`tests/conformance/temp.spec.partial.member/out-of-line-member-pack-arguments.cpp`).
 
 Qualified lookup into the current instantiation happens at definition.
 Lookup of a found member binds it (`typename A<T>::X` resolves to the
