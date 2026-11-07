@@ -677,6 +677,11 @@ impl Compiler<'_> {
             id::EXPECT | id::EXPECT_WITH_PROBABILITY => self.rv_into(arg(0)?, dst),
             // clang: the assumption is not evaluated.
             id::ASSUME => self.konst(dst, 0),
+            // WP-757: a P1494R5 checkpoint has no effect on constant
+            // evaluation, which has no undefined behaviour to bound (GCC
+            // also evaluates `__builtin_observable_checkpoint`; the
+            // library's `std::observable_checkpoint` is not constexpr).
+            id::OBSERVABLE_CHECKPOINT => self.konst(dst, 0),
             // WP-292: the pointer, checked against the alignment (and
             // offset); a failure is noted at the pointer operand.
             id::ASSUME_ALIGNED => {

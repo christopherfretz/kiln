@@ -5103,6 +5103,14 @@ pub mod builtin {
     /// integer, floating or vector type; `freeze poison`), `x` not
     /// evaluated. Kiln-private id.
     pub const NONDETERMINISTIC_VALUE: u32 = 2155;
+    // ---- WP-757 (P1494R5, [intro.abstract]/5).
+    /// `void __builtin_observable_checkpoint()` (GCC 16, `NoThrow`, `Leaf`;
+    /// libstdc++'s `std::observable_checkpoint` in `<utility>`): an
+    /// observable checkpoint. Undefined behavior after it does not reach
+    /// back past it; lowered to an opaque memory barrier
+    /// (spec/codegen.md). Not a constant expression. Kiln-private id
+    /// (clang 22 has no such builtin).
+    pub const OBSERVABLE_CHECKPOINT: u32 = 2170;
     // ---- WP-610.
     /// `void __builtin_prefetch(const void *addr, ...)` (clang 19
     /// `Builtins.td` `Prefetch`, signature `vvC*.`, `NoThrow, Const`): the
@@ -5146,6 +5154,8 @@ pub mod builtin {
         row(NONTEMPORAL_STORE, "__builtin_nontemporal_store", "v.", T),
         row(NONTEMPORAL_LOAD, "__builtin_nontemporal_load", "v.", T),
         row(NONDETERMINISTIC_VALUE, "__builtin_nondeterministic_value", "v.", N | T),
+        // WP-757.
+        row(OBSERVABLE_CHECKPOINT, "__builtin_observable_checkpoint", "v", N),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19

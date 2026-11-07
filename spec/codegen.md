@@ -2074,6 +2074,29 @@ aarch64 and x86_64. Not implemented: `asm goto` (callbr), the `unwind`
 clobber inside a `try` (no `invoke`), `=@cc` outputs, register-variable
 operands, MMX type adjustment.
 
+**Landed (WP-757): observable checkpoints (P1494R5).**
+`__builtin_observable_checkpoint()` is GCC's builtin behind libstdc++'s
+`std::observable_checkpoint()` ([intro.abstract]/5,
+[utility.undefined]): a `void` noexcept function builtin, reported by
+`__has_builtin` (a GCC-only row, as `__builtin_is_string_literal`;
+`__has_constexpr_builtin` answers 0, as clang has no row). clang has no
+lowering to copy; GCC 16.1's keeps the stores before it and emits no
+instruction (an opaque compiler barrier). kiln emits an
+empty volatile asm statement with a memory clobber, as `asm volatile(""
+::: "memory")` lowers (`emit_observable_checkpoint` in `asm.rs`):
+`call void asm sideeffect "", "~{memory}"() #N` with the target's
+machine clobbers appended (x86_64 `~{dirflag},~{fpsr},~{flags}`) and
+`#N = { nounwind }`. LLVM treats the call as one that may read and
+write all memory and may not return, so stores before it are kept and
+undefined behaviour after it cannot be hoisted above it (an `unreachable`
+after it does not erase them). No external call or declaration is
+emitted, so LTO cannot see through it. The Oven evaluates the builtin as
+a no-op, as GCC does (constant evaluation has no undefined behaviour to
+bound); `std::observable_checkpoint` itself is not constexpr. Tests:
+`kiln_codegen/tests/lower.rs` `observable_checkpoint_is_an_opaque_barrier`
+(the IR and, with `opt-19`, the store kept at `-O2` where it is dropped
+without the checkpoint); `tests/conformance/intro.abstract/`.
+
 **Landed (WP-140): `PredefinedExpr`.** The name is a private
 `unnamed_addr constant` array named `<spelling>.<mangled function>`
 (`__func__._Z1fv`), as clang names it (`Module::string_global_named`);
