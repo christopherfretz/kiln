@@ -49,7 +49,7 @@ The loop:
 | `magic_enum` | 1 | `v0.9.7` | blocked (1 cluster) |
 | `nlohmann_json` | 1 | `v3.12.0` | not started |
 | `range_v3` | 1 | `0.12.0` | not started |
-| `spdlog` | 1 | `v1.17.0` | not started |
+| `spdlog` | 1 | `v1.17.0` | tests at parity |
 | `tl_expected` | 1 | `v1.3.1` | not started |
 | `abseil` | 2 | `20260107.1` | not started |
 | `benchmark` | 2 | `v1.9.5` | not started |
@@ -156,3 +156,19 @@ Reduced repros (WP-666, kiln at main f3751eadd):
   ```
 
   The non-template form (`class R : public V<int>`) compiles.
+
+<!-- oss:spdlog -->
+### spdlog (v1.17.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 140 / 0 | 140 / 0 |
+| links ok / failed | 1 / 0 | 1 / 0 |
+| tests passed / total | 1 / 1 | 1 / 1 |
+| wall | 64 s | 25 s |
+| peak TU RSS | 119 MB | 295 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:spdlog -->

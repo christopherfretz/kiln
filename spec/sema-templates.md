@@ -1947,6 +1947,13 @@ class name" at `B`
   generic lambda rebuilt by substitution inherits its pattern's checks
   (`Sema::copy_dependent_access`), so the error carries the
   `in instantiation of function template specialization` note (WP-174).
+  A replayed check's [class.protected] object class is substituted as
+  clang's `BaseObjectType` is: when it is the pattern (or a member class
+  of it), it becomes the instantiated class of the replay's context, so
+  `using B::m;` and an implicit `B::m` naming a protected member of a
+  non-dependent base reached through a dependent base are accessible in
+  `R<int>` (the implicit access records `*this`'s class as its object;
+  `class.protected/dependent-base-current-object.cpp`, WP-680).
   Type names are checked as other names (spec/sema-class.md §2.4).
 - `template<class U> friend struct Y<U*>;` is "partial specialization
   cannot be declared as a friend" ([temp.friend]/9).
@@ -3297,6 +3304,14 @@ pattern `Args&&` of a pack) paired with an lvalue reference `U&` is
 adjusted to `T`, deducing `T = U&` (`int (*)(int&) = f` for
 `template <class... Args> int f(Args&&...)`). WP-446,
 `tests/conformance/temp.deduct.funcaddr/forwarding-reference-{lvalue,conflict}.cpp`.
+
+In a function type's parameter-type-list, a `P` that is not a pack
+expansion paired with an `A` that is one (partial ordering: `A` came from
+a function parameter pack) is `MiscellaneousDeductionFailure`
+([temp.deduct.type]/10; clang's type-list `PackExpansionType` check), so
+`R (C::*)(A) const` and `void (*)(A)` are more specialized than their
+`(A...)` forms instead of ambiguous. WP-680,
+`tests/conformance/temp.deduct.type/function-param-pack-vs-single-ordering.cpp`.
 
 A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A

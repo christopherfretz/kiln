@@ -1898,9 +1898,16 @@ impl Sema<'_, '_> {
         }
         if let Some(naming) = found.naming {
             // [class.access.base]/5: the object is `*this` for an implicit
-            // member access.
-            let object =
-                if self.is_instance_member(d) { self.implicit_object_class(d) } else { None };
+            // member access, also one through a dependent base (an implicit
+            // `this->Q::name`, [temp.dep.type]/6) whose check is replayed in
+            // the instantiation with `*this`'s instantiated class.
+            let object = if !self.is_instance_member(d) {
+                None
+            } else if self.member_via_dependent_base(d) {
+                self.this_class().map(|(_, c)| c)
+            } else {
+                self.implicit_object_class(d)
+            };
             let via = found.found.first().copied().unwrap_or(d);
             self.check_member_access(via, naming, object, loc);
         }
