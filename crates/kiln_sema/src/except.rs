@@ -4,7 +4,7 @@
 
 use kiln_ast::decl::DeclFlags;
 use kiln_ast::expr::{CastKind, ExprKind};
-use kiln_ast::types::{BuiltinType, ExcSpec, NoexceptValue};
+use kiln_ast::types::{BuiltinType, ExcSpec, FuncProto, NoexceptValue};
 use kiln_ast::{DeclId, ExprId};
 use kiln_ast::{QualType, expr::ValueCategory};
 use kiln_diag::{DiagId, FixIt};
@@ -498,7 +498,7 @@ impl Sema<'_, '_> {
     /// incomplete ([class.mem.general]/7; libc++ `counted_iterator`'s
     /// `iter_swap`). A member of a still-dependent specialization is
     /// substituted at once.
-    pub(crate) fn lazy_exc_spec(&self, d: DeclId, p: &kiln_ast::types::FuncProto) -> bool {
+    pub(crate) fn lazy_exc_spec(&self, d: DeclId, p: &FuncProto) -> bool {
         let tmpl = self.ast.described_template(d).is_some();
         matches!(
             self.ast.types.exc_spec(p),
@@ -886,4 +886,213 @@ pub(crate) fn missing_exc_spec_fixit_loc(d: &Declarator) -> Option<Loc> {
 /// spec/diag.md §7.4).
 pub(crate) fn per_instantiation_exc(msg: kiln_diag::Diag, ne: ExcSpec) -> kiln_diag::Diag {
     if matches!(ne, ExcSpec::NoexceptExpr { .. }) { msg.per_instantiation() } else { msg }
+}
+
+/// How a function type's exception specification bounds what it throws,
+/// for [`Sema::exc_spec_compat_error`] (clang `CanThrowResult` with the
+/// `EST_Dynamic` distinction).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExcBound {
+    /// Throws nothing.
+    Cannot,
+    /// May throw anything.
+    Any,
+    /// `throw(T...)`: the listed types.
+    Listed,
+    /// Dependent or not yet computed: not checked.
+    Unknown,
+}
+
+fn exc_bound(e: ExcSpec) -> ExcBound {
+    match e {
+        ExcSpec::Dynamic(_) => ExcBound::Listed,
+        ExcSpec::DependentNoexcept(_)
+        | ExcSpec::Deferred(_)
+        | ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. } => ExcBound::Unknown,
+        e if e.is_nothrow() => ExcBound::Cannot,
+        _ => ExcBound::Any,
+    }
+}
+
+impl Sema<'_, '_> {
+    /// Before C++17, [except.spec]/5 (C++14): when a pointer to function,
+    /// reference to function or pointer to member function is assigned,
+    /// initialized, passed or returned, the target's exception
+    /// specification must allow at least what the source's does, and
+    /// the specifications of function types among its return and
+    /// parameter types must be equivalent. The check is clang
+    /// `CheckExceptionSpecCompatibility` (`CheckExceptionSpecSubset`,
+    /// `CheckParamExceptionSpec`): it reads the specifications as
+    /// written, which before C++17 are sugar over the canonical type
+    /// (spec/types.md §5.4), and is skipped under `-fno-exceptions` and
+    /// for dependent or not yet computed specifications. From C++17 the
+    /// specification is part of the type and the conversion itself fails.
+    /// Returns the error to report at the start of the source expression.
+    pub(crate) fn exc_spec_compat_error(
+        &self,
+        from: QualType,
+        to: QualType,
+    ) -> Option<conv::ConvError> {
+        if self.std >= kiln_lex::Std::Cxx17 || !self.exceptions {
+            return None;
+        }
+        let (sup_e, sup) = self.underlying_fn_proto(to)?;
+        let (sub_e, sub) = self.underlying_fn_proto(from)?;
+        let t = &self.ast.types;
+        let (bsup, bsub) = (exc_bound(sup_e), exc_bound(sub_e));
+        if bsup == ExcBound::Unknown || bsub == ExcBound::Unknown {
+            return None;
+        }
+        let incompatible =
+            || Some(conv::ConvError::new(DiagId::sema_incompatible_exception_specs, Vec::new()));
+        if bsup == ExcBound::Any || bsub == ExcBound::Cannot {
+            return self.param_exc_specs_error(&sup, &sub);
+        }
+        if bsub == ExcBound::Any || bsup == ExcBound::Cannot {
+            return incompatible();
+        }
+        let (ExcSpec::Dynamic(sup_l), ExcSpec::Dynamic(sub_l)) = (sup_e, sub_e) else {
+            return None;
+        };
+        let sup_ts: Vec<QualType> = t.type_list_types(sup_l).to_vec();
+        let sub_ts: Vec<QualType> = t.type_list_types(sub_l).to_vec();
+        for e in sub_ts {
+            let e = self.non_reference(e);
+            if !sup_ts.iter().any(|&h| self.handler_can_catch(h, e)) {
+                return incompatible();
+            }
+        }
+        self.param_exc_specs_error(&sup, &sub)
+    }
+
+    /// clang `GetUnderlyingFunction`: the function type `q` is, or that
+    /// it points or refers to: its written exception specification, and
+    /// the prototype of the first function node in its sugar chain, whose
+    /// return and parameter types keep their own written specifications.
+    fn underlying_fn_proto(&self, q: QualType) -> Option<(ExcSpec, FuncProto)> {
+        let t = &self.ast.types;
+        let f = t.exc_pointee(q).unwrap_or(q);
+        let exc = t.exc_spec(t.proto(f)?);
+        let mut w = f;
+        for _ in 0..256 {
+            if let Some(p) = t.proto_of(w.ty()) {
+                return Some((exc, *p));
+            }
+            let n = t.desugar_once(w);
+            if t.is_canonical(w.ty()) || n.ty() == w.ty() {
+                break;
+            }
+            w = n;
+        }
+        t.proto(f).map(|p| (exc, *p))
+    }
+
+    /// clang `CheckParamExceptionSpec`: function types in the return and
+    /// parameter types of `sup` and `sub` have equivalent specifications.
+    fn param_exc_specs_error(
+        &self,
+        sup: &FuncProto,
+        sub: &FuncProto,
+    ) -> Option<conv::ConvError> {
+        let deep = |which: &str| {
+            Some(conv::ConvError::new(
+                DiagId::sema_deep_exception_specs_differ,
+                vec![which.to_owned()],
+            ))
+        };
+        if !self.exc_specs_equivalent(sup.ret(), sub.ret()) {
+            return deep("0");
+        }
+        let t = &self.ast.types;
+        let pairs: Vec<(QualType, QualType)> =
+            t.params(sup).iter().copied().zip(t.params(sub).iter().copied()).collect();
+        if pairs.into_iter().any(|(a, b)| !self.exc_specs_equivalent(a, b)) {
+            return deep("1");
+        }
+        None
+    }
+
+    /// clang `CheckSpecForTypesEquivalent`: true unless both `a` and `b`
+    /// are (pointers or references to) function types whose exception
+    /// specifications are not equivalent ([except.spec]/3 before C++17:
+    /// both non-throwing, both throw anything, or the same type list).
+    fn exc_specs_equivalent(&self, a: QualType, b: QualType) -> bool {
+        let (Some((ea, _)), Some((eb, _))) =
+            (self.underlying_fn_proto(a), self.underlying_fn_proto(b))
+        else {
+            return true;
+        };
+        let t = &self.ast.types;
+        match (exc_bound(ea), exc_bound(eb)) {
+            (ExcBound::Unknown, _) | (_, ExcBound::Unknown) => true,
+            (ExcBound::Cannot, ExcBound::Cannot) | (ExcBound::Any, ExcBound::Any) => true,
+            (ExcBound::Listed, ExcBound::Listed) => {
+                let (ExcSpec::Dynamic(la), ExcSpec::Dynamic(lb)) = (ea, eb) else { return true };
+                let canon = |l| -> Vec<QualType> {
+                    let mut v: Vec<QualType> = t
+                        .type_list_types(l)
+                        .iter()
+                        .map(|&x| t.canonical(x).without_quals())
+                        .collect();
+                    v.sort();
+                    v.dedup();
+                    v
+                };
+                canon(la) == canon(lb)
+            }
+            _ => false,
+        }
+    }
+
+    /// clang `handlerCanCatch` ([except.handle]/3): a handler of type
+    /// `handler` matches an exception of type `exc` (a reference already
+    /// stripped): the same type, a public unambiguous base class, or a
+    /// pointer that converts by a derived-to-base pointer or
+    /// qualification conversion (or to `void *`).
+    fn handler_can_catch(&self, handler: QualType, exc: QualType) -> bool {
+        let t = &self.ast.types;
+        let h = t.canonical(self.non_reference(handler)).without_quals();
+        let e = t.canonical(exc).without_quals();
+        if t.same_type(h, e) {
+            return true;
+        }
+        if let (Some(hc), Some(ec)) = (t.as_record(h), t.as_record(e)) {
+            return self.is_public_unambiguous_base(ec, hc);
+        }
+        if !(t.is_pointer(h) && t.is_pointer(e)) {
+            return false;
+        }
+        let (Some(hp), Some(ep)) = (t.pointee(h), t.pointee(e)) else { return false };
+        let (hp, ep) = (t.canonical(hp), t.canonical(ep));
+        if !hp.quals().contains(ep.quals()) {
+            return false;
+        }
+        let (hu, eu) = (hp.without_quals(), ep.without_quals());
+        if t.same_type(hu, eu) {
+            return true;
+        }
+        if t.builtin(hu) == Some(BuiltinType::Void) {
+            return !t.is_function(eu);
+        }
+        match (t.as_record(hu), t.as_record(eu)) {
+            (Some(hc), Some(ec)) => self.is_public_unambiguous_base(ec, hc),
+            _ => false,
+        }
+    }
+
+    /// True if class `base` is a public, unambiguous base of class
+    /// `derived`.
+    fn is_public_unambiguous_base(&self, derived: DeclId, base: DeclId) -> bool {
+        let Some(def) = self.ast.definition(derived) else { return false };
+        let conv::bases::BaseSearch::Unique(path) = conv::bases::find_base(self, def, base) else {
+            return false;
+        };
+        let mut from = def;
+        path.specs.iter().zip(&path.classes).all(|(&i, &c)| {
+            let written = self.ast.decls.base_spec(i).access;
+            let ok = self.base_access(from, written) == kiln_ast::decl::Access::Public;
+            from = c;
+            ok
+        })
+    }
 }
