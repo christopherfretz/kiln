@@ -149,14 +149,16 @@ do not add a diagnostic): `-f[no-]stack-clash-protection`,
 is `invalid value '<v>' in '-fcf-protection=<v>'`; accepted on AArch64 too,
 where clang errors), `-f[no-]common`, `-fexcess-precision=fast|standard|16`,
 `-f[no-]math-errno`, `-fstack-usage`, `-gz`, `-gz=none|zlib|zstd`,
-`-fno-trapv`, `-fno-short-enums`, `-m64` (every kiln target is 64-bit;
+`-fno-trapv`, `-fno-short-enums`, `-ffp-model=precise` (clang's default
+model; WP-803), `-m64` (every kiln target is 64-bit;
 `-m32` stays unknown) and `-pipe`. Other
 `-fexcess-precision=`/`-gz=` values
 (and an empty `-mtune=`) are `unsupported argument '<v>' to option '<opt>'`.
 
 **3. Rejected** with `drv_unsupported_flag`, the error `'<flag>' is not
 supported by kiln` (exit 1, no job runs; not the generic `unknown argument`):
-`-ftrapv`, `-fshort-enums`, every `-fsanitize*` and `-fno-sanitize*`
+`-ftrapv`, `-fshort-enums`, `-ffp-model=fast|strict|aggressive` (another
+`-ffp-model=` value is `unsupported argument`), every `-fsanitize*` and `-fno-sanitize*`
 (`-fsanitize=address`, `-fno-sanitize-recover=all`, ...),
 `-fcoverage-mapping`, `-fprofile-arcs`, `-ftest-coverage`, `--coverage`,
 `-fprofile-instr-generate[=...]`, `-fprofile-generate[=...]`,
