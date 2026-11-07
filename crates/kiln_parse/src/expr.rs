@@ -1843,8 +1843,7 @@ impl Parser<'_, '_> {
         }
         // A class template's injected-class-name used as a type
         // ([temp.local]/1): `X(args)` / `X{args}` in its definition.
-        if let Some((end, _, NameClass::TypeTemplate(d), _, q)) =
-            self.scan_name_qual_at(self.pos())
+        if let Some((end, _, NameClass::TypeTemplate(d), _, q)) = self.scan_name_qual_at(self.pos())
             && matches!(Self::punct_of(self.tok_at(end)), Some(Punct::LParen | Punct::LBrace))
             && (end == self.pos() + 1 && self.s.names_injected_class(d)
                 || self.names_ctad_template(q, d))
