@@ -2056,9 +2056,15 @@ impl Sema<'_, '_> {
                 via.push(found.found.get(i).copied().unwrap_or(d));
             }
         }
-        self.note_this_use(loc);
-        let this = self.builder().this_expr(this_ty, true, loc);
+        // With a static candidate too, `this` is captured only once the
+        // call names an instance member (`finish_member_winner`).
+        let all_instance =
+            decls.iter().all(|&d| self.is_instance_member(self.templated_or_self(d)));
         let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
+        if all_instance || self.ast.types.is_dependent(obj_ty) {
+            self.note_this_use(loc);
+        }
+        let this = self.builder().this_expr(this_ty, true, loc);
         if self.ast.types.is_dependent(obj_ty) {
             // [temp.dep.expr]/3: `this` is type-dependent in a member of a
             // class template, so the call of an overloaded member through

@@ -184,9 +184,17 @@ impl Sema<'_, '_> {
             ));
         };
         let (this_ty, _) = self.this_class()?;
-        self.note_this_use(loc);
-        let this = self.builder().this_expr(this_ty, true, loc);
+        // With a static candidate too, `this` is captured only once the
+        // call names an instance member ([`Self::finish_member_winner`]):
+        // the static `f` of `[](int s) { return f(s); }` needs none
+        // (clang's `BuildPossibleImplicitMemberExpr`).
+        let all_instance =
+            decls.iter().all(|&d| self.is_instance_member(self.templated_or_self(d)));
         let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
+        if all_instance || self.ast.types.is_dependent(obj_ty) {
+            self.note_this_use(loc);
+        }
+        let this = self.builder().this_expr(this_ty, true, loc);
         if self.ast.types.is_dependent(obj_ty) {
             // [temp.dep.expr]/3: `this` is type-dependent.
             let b = crate::conv::decay_dependent(self, this);
@@ -343,6 +351,12 @@ impl Sema<'_, '_> {
             let e = self.build_decl_ref_qualified(d, loc, shadow, m.nns);
             self.note_function_name_use(d, e, loc, m.nns.is_none());
             return e;
+        }
+        if m.implicit {
+            // An implicit `this->` naming an instance member: the
+            // enclosing lambdas capture `this` (already done when every
+            // candidate was one).
+            self.note_this_use(loc);
         }
         self.diagnose_deprecated(d, loc);
         let e = self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, d, shadow, m.nns, loc);
