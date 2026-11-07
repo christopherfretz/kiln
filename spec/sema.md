@@ -3896,6 +3896,10 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
 `BIis_constant_evaluated`; `kiln_ast::decl::builtin`).
 The AArch64 NEON target builtins (`__builtin_neon_*`, a generated
 table) are spec/landed/sema/WP-558.md "Target builtins".
+The AArch64 ACLE builtins (`__builtin_arm_*`, clang's
+`BuiltinsAArch64.def` rows, `kiln_ast::decl::builtin::arm`) are
+spec/landed/sema/WP-724.md "ACLE builtins": declared only when the
+target is AArch64, like the NEON ones.
 The x86-64 target builtins (every `__builtin_ia32_*` name the resource
 headers use, `__builtin_ia32_pause` (WP-610), and the header builtins
 `_mm_pause`, ...; a generated table) are spec/landed/sema/WP-630.md:
