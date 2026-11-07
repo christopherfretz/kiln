@@ -113,7 +113,13 @@ type-dependent ([temp.dep.expr]/3, clang's `OverloadExpr` of decls in a
 dependent context): its call is resolved at instantiation, not at the
 definition, where the dependent parameter's conversion is unknown
 (libstdc++ `_Rb_tree::_S_key`; test
-`temp.dep.expr/static-member-overload-dependent-type.cpp`).
+`temp.dep.expr/static-member-overload-dependent-type.cpp`). So is a ULE
+naming any member of a dependent class, member templates included
+(clang's rule: a decl whose context is dependent), even when the call's
+arguments are not dependent: SFINAE-selected static member templates
+`to_char<C = T>(unsigned char)` of a class template are resolved per
+instantiation, not reported ambiguous at the definition (WP-668; test
+`temp.dep.expr/member-template-overload-dependent-context.cpp`).
 
 `act_on_call` resolves a ULE/UME callee. Every other callee — `(g)(x)`,
 `N::f(x)` with one `f`, a single member `h.g(x)`, function pointers — takes
