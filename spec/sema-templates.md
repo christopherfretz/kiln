@@ -1276,6 +1276,8 @@ sema.md and S3C require a complete type. Those places are:
 - `sizeof`/`alignof`;
 - conversion to a base, and derived-to-base checks during overload
   resolution;
+- deduction of a class template-id `P` against the bases of `A`
+  ([temp.deduct.call]/4.3, §6, silently);
 - `new`, `delete`, `throw`, `catch` by value;
 - a by-value parameter or return at a definition or call;
 - pointer arithmetic;
@@ -3275,7 +3277,14 @@ adjusted to `T`, deducing `T = U&` (`int (*)(int&) = f` for
 
 A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
-([temp.deduct.call]/4.3). The success must be unique; otherwise the
+([temp.deduct.call]/4.3). An `A` that is a class template specialization
+not yet instantiated is instantiated first, at the deduction's location
+and without the undefined-template diagnostic, so its bases exist
+([temp.inst]/2; clang's `isCompleteType` in `DeduceTemplateBases`; WP-682,
+`tests/conformance/temp.deduct.call/derived-base-instantiates-argument-class.cpp`,
+`libstdcxx-get-uninstantiated-tuple.cpp`: libstdc++ `std::get` on a
+`tuple&` that a qualified call reaches with no ADL to complete it). The
+success must be unique; otherwise the
 result is `MiscellaneousDeductionFailure` (clang). The template of `A` (or
 of a base) is the class template it is a specialization of: alias
 template sugar is looked through ([temp.alias]/2; clang's

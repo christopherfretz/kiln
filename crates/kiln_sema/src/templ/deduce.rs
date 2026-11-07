@@ -1342,7 +1342,12 @@ impl Sema<'_, '_> {
     }
 
     /// [temp.deduct.call]/4.3: `P` against the bases of `A`; the
-    /// successful base must be unique. `None` when none matches.
+    /// successful base must be unique. `None` when none matches. A class
+    /// template specialization `A` not yet instantiated is instantiated
+    /// first, at the deduction's location, so that its bases exist
+    /// ([temp.inst]/2; clang's `isCompleteType` in
+    /// `DeduceTemplateBases`): libstdc++'s `std::get` on a `tuple&` whose
+    /// class nothing else completed (WP-682).
     fn deduce_from_bases(
         &mut self,
         name: kiln_ast::ids::TemplateNameId,
@@ -1352,6 +1357,11 @@ impl Sema<'_, '_> {
         level: u32,
     ) -> Option<Tdk> {
         let TypeView::Record(r) = self.ast.types.canonical_view(a) else { return None };
+        if self.ast.definition(r).is_none()
+            && (self.ast.spec_info(r).is_some() || self.ast.instantiated_from(r).is_some())
+        {
+            let _ = self.instantiate_class(r, d.loc, false);
+        }
         let mut seen = vec![self.ast.first(r)];
         let mut work = vec![r];
         let mut found: Option<(QualType, DeducedArgs)> = None;
