@@ -264,7 +264,7 @@ pub fn narrowing_kind(
                 Narrowing::NotNarrowing
             }
         }
-        SecondStep::IntegralConversion | SecondStep::IntegralPromotion => {
+        SecondStep::IntegralConversion => {
             let mut fw = int_width(s, from).unwrap_or(0);
             if let Some(bw) = bit_field_width(s, init) {
                 fw = fw.min(bw);
@@ -292,6 +292,12 @@ pub fn narrowing_kind(
                 _ => Narrowing::Variable,
             }
         }
+        // Everything else, including an integral promotion ([conv.prom]),
+        // never narrows: a promotion's target represents every value of
+        // the source, even for an unscoped enumeration without a fixed
+        // underlying type whose promotion type is narrower than its
+        // underlying type (clang's `getNarrowingKind` checks
+        // `ICK_Integral_Conversion` only; WP-782).
         _ => Narrowing::NotNarrowing,
     }
 }

@@ -1959,7 +1959,14 @@ impl Substituter<'_, '_, '_> {
         {
             self.sema.ast.decls.set_definition_tag(spec, t);
         }
+        // clang's `InstantiateClass` copies the pattern's
+        // `MaxFieldAlignmentAttr`: the `#pragma pack` in effect where the
+        // pattern was defined applies, not the one where it is
+        // instantiated (WP-782).
+        let pat = self.sema.ast.decls.cold.record_pack.get(def).copied().unwrap_or(0);
+        let saved = std::mem::replace(&mut self.sema.pack.0, pat);
         self.sema.act_on_start_record_definition(spec);
+        self.sema.pack.0 = saved;
     }
 
     /// [`Substituter::class_body`]; `anonymous` for an anonymous struct

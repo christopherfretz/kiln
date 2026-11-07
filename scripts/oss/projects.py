@@ -22,6 +22,14 @@ REQUIRED = ("url", "tag", "build", "cxx_std", "test", "wave")
 BUILDS = ("cmake", "meson", "make")
 KINDS = ("ok", "reject", "panic", "backend", "link", "timeout", "oom", "other")
 CTEST_RE = re.compile(r"(\d+)% tests passed, (\d+) tests? failed out of (\d+)")
+# lit's summary (LLVM's check-* targets): a total line, then one
+# `  <Result> : N (p%)` line per non-empty result category.
+LIT_TOTAL_RE = re.compile(r"^Total Discovered Tests: (\d+)")
+LIT_LINE_RE = re.compile(r"^  ([A-Za-z ]+?)\s*:\s*(\d+)")
+LIT_FAILED = ("Failed", "Unexpectedly Passed", "Timed Out")
+# The per-project address-space cap may be raised to at most 6 GB virt
+# (WP-782: a few tablegen'd LLVM TUs).
+VMEM_MAX_KB = 6000000
 
 
 def load(path=TOML):
@@ -43,6 +51,12 @@ def load(path=TOML):
         p.setdefault("notes", "")
         p.setdefault("deps", [])
         p.setdefault("install_configure", [])
+        p.setdefault("test_timeout", 1800)
+        p.setdefault("vmem_kb", 3000000)
+        if not (isinstance(p["vmem_kb"], int) and 0 < p["vmem_kb"] <= VMEM_MAX_KB):
+            raise SystemExit(f"{path}: [{name}] vmem_kb must be an integer in 1..{VMEM_MAX_KB}")
+        if not (isinstance(p["test_timeout"], int) and p["test_timeout"] > 0):
+            raise SystemExit(f"{path}: [{name}] test_timeout must be a positive integer")
     for name, p in data.items():
         bad = [d for d in p["deps"] if d not in data or data[d]["build"] != "cmake"]
         if bad:
@@ -111,8 +125,38 @@ def test_summary(log_path):
         if m:
             total, failed = int(m.group(3)), int(m.group(2))
             return line.strip(), {"passed": total - failed, "failed": failed, "total": total}
+    lit = lit_summary(lines)
+    if lit:
+        return lit
     last = next((l.strip() for l in reversed(lines) if l.strip()), "")
     return last, None
+
+
+def lit_summary(lines):
+    """The last lit summary block of a log: (`Total Discovered Tests: T,
+    passed P, failed F`, counts), or None. `passed` is every test that did
+    not fail (Passed, Unsupported, Expectedly Failed, Skipped, ...);
+    `failed` counts Failed, Unexpectedly Passed and Timed Out."""
+    start = None
+    for i in range(len(lines) - 1, -1, -1):
+        if LIT_TOTAL_RE.match(lines[i]):
+            start = i
+            break
+    if start is None:
+        return None
+    total = int(LIT_TOTAL_RE.match(lines[start]).group(1))
+    failed = 0
+    for line in lines[start + 1 :]:
+        m = LIT_LINE_RE.match(line)
+        if not m:
+            break
+        if m.group(1).strip() in LIT_FAILED:
+            failed += int(m.group(2))
+    passed = total - failed
+    return (
+        f"Total Discovered Tests: {total}, passed {passed}, failed {failed}",
+        {"passed": passed, "failed": failed, "total": total},
+    )
 
 
 def cmd_report_json(a):
@@ -174,7 +218,7 @@ def main():
             sys.exit(f"projects.py: unknown project '{a.project}' (see {TOML})")
         p = data[a.project]
         q = shlex.quote
-        for k in ("url", "tag", "build", "cxx_std", "test", "c_compiler", "control_cxx", "source_subdir"):
+        for k in ("url", "tag", "build", "cxx_std", "test", "c_compiler", "control_cxx", "source_subdir", "test_timeout", "vmem_kb"):
             print(f"P_{k.upper()}={q(str(p[k]))}")
         print(f"P_SUBMODULES={'1' if p['submodules'] else ''}")
         print("P_CONFIGURE=(" + " ".join(q(x) for x in p["configure"]) + ")")
