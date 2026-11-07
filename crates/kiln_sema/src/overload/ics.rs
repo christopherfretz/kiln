@@ -1646,62 +1646,114 @@ impl Sema<'_, '_> {
     /// [`Self::conversion_functions`] with the conversion function
     /// templates ([temp.deduct.conv]), which [`Self::add_conversion_candidate`]
     /// deduces.
+    ///
+    /// The conversion functions visible in class `ty` (clang
+    /// `CXXRecordDecl::getVisibleConversionFunctions`): its own, then
+    /// each base's in declaration order, depth first. A base's conversion
+    /// function is hidden when a class derived from that base along the
+    /// same path declares one converting to the same type
+    /// ([class.member.lookup], [class.conv.fct]/9), so two sibling bases'
+    /// `operator int` are both visible (an ambiguous conversion) and the
+    /// one of a virtual base is hidden when it is hidden along any path
+    /// (`struct D : B, C` with `B, C : virtual A` and `B` declaring its
+    /// own). A conversion function a using-declaration names in a class
+    /// is that class's ([namespace.udecl]/1), found as its shadow
+    /// ([namespace.udecl]/19 access). Each function once.
     pub(crate) fn conversion_functions_all(&self, ty: QualType) -> Vec<(DeclId, DeclId)> {
         let mut out: Vec<(DeclId, DeclId)> = Vec::new();
-        let mut seen_types: Vec<QualType> = Vec::new();
         let Some(r) = self.ast.types.as_record(ty) else { return out };
-        let mut work = vec![self.ast.first(r)];
-        let mut visited: Vec<DeclId> = Vec::new();
-        while let Some(c) = work.pop() {
-            if visited.contains(&c) {
+        // Virtual bases' conversion functions, added last unless hidden
+        // along some path.
+        let mut vout: Vec<(DeclId, DeclId)> = Vec::new();
+        let mut hidden_v: Vec<DeclId> = Vec::new();
+        // (class, reached through a virtual base, the types its derived
+        // classes on this path convert to); the bases are pushed in
+        // reverse so they are walked in declaration order.
+        type Hidden = std::rc::Rc<Vec<QualType>>;
+        let mut work: Vec<(DeclId, bool, Hidden)> =
+            vec![(self.ast.first(r), false, Hidden::default())];
+        let mut seen: kiln_source::fx::FxHashSet<(DeclId, bool, Hidden)> =
+            kiln_source::fx::FxHashSet::default();
+        let top = self.ast.first(r);
+        while let Some((c, in_virtual, parent_hidden)) = work.pop() {
+            // A class reached again with the same state adds nothing.
+            if !seen.insert((c, in_virtual, parent_hidden.clone())) {
                 continue;
             }
-            visited.push(c);
             let Some(def) = self.ast.definition(c) else { continue };
-            let mut here: Vec<QualType> = Vec::new();
-            for found in self.ast.decls.members(def) {
-                // A using-declaration names a base's conversion function
-                // in this class ([namespace.udecl]/1): found as its shadow,
-                // whose access is the using-declaration's
-                // ([namespace.udecl]/19).
-                let m = self.ast.strip_shadow(found);
-                let f = if self.kind_of(m) == DeclKind::FunctionTemplate {
-                    match self.templated_function(m) {
-                        Some(f) if self.kind_of(f) == DeclKind::CXXConversion => f,
-                        _ => continue,
+            let mut hidden = parent_hidden.clone();
+            for (found, m, key) in self.own_conversion_functions(def) {
+                if c == top {
+                    std::rc::Rc::make_mut(&mut hidden).push(key);
+                    out.push((found, m));
+                    continue;
+                }
+                let is_hidden = parent_hidden.contains(&key);
+                if !is_hidden && !hidden.contains(&key) {
+                    std::rc::Rc::make_mut(&mut hidden).push(key);
+                }
+                if is_hidden {
+                    if in_virtual {
+                        hidden_v.push(self.ast.first(m));
                     }
+                } else if in_virtual {
+                    vout.push((found, m));
                 } else {
-                    m
-                };
-                if self.kind_of(f) != DeclKind::CXXConversion
-                    || self.ast.decls.get(m).has(DeclFlags::INVALID)
-                {
-                    continue;
+                    out.push((found, m));
                 }
-                let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-                let ret = self
-                    .ast
-                    .types
-                    .proto(fty)
-                    .map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
-                let key = self.ast.types.canonical(ret);
-                if seen_types.contains(&key) {
-                    continue;
-                }
-                if out.iter().any(|&(_, f)| self.ast.first(f) == self.ast.first(m)) {
-                    continue;
-                }
-                here.push(key);
-                out.push((found, m));
             }
-            seen_types.extend(here);
-            for b in self.ast.decls.bases(def, &self.ast.lists) {
+            let bases: Vec<_> = self.ast.decls.bases(def, &self.ast.lists).collect();
+            for b in bases.into_iter().rev() {
                 if let Some(bc) = self.ast.types.as_record(b.ty) {
-                    work.push(self.ast.first(bc));
+                    work.push((self.ast.first(bc), in_virtual || b.is_virtual, hidden.clone()));
                 }
             }
         }
-        out
+        for (found, m) in vout {
+            if !hidden_v.contains(&self.ast.first(m)) {
+                out.push((found, m));
+            }
+        }
+        // A function reached along several paths is one candidate (clang
+        // `OverloadCandidateSet::isNewCandidate`).
+        let mut unique: Vec<(DeclId, DeclId)> = Vec::with_capacity(out.len());
+        for (found, m) in out {
+            if !unique.iter().any(|&(_, f)| self.ast.first(f) == self.ast.first(m)) {
+                unique.push((found, m));
+            }
+        }
+        unique
+    }
+
+    /// The conversion functions (and templates) class definition `def`
+    /// declares, those using-declarations name included, as `(found,
+    /// function or template, canonical converted-to type)`.
+    fn own_conversion_functions(&self, def: DeclId) -> Vec<(DeclId, DeclId, QualType)> {
+        let mut v = Vec::new();
+        for found in self.ast.decls.members(def) {
+            // A using-declaration names a base's conversion function in
+            // this class ([namespace.udecl]/1): found as its shadow, whose
+            // access is the using-declaration's ([namespace.udecl]/19).
+            let m = self.ast.strip_shadow(found);
+            let f = if self.kind_of(m) == DeclKind::FunctionTemplate {
+                match self.templated_function(m) {
+                    Some(f) if self.kind_of(f) == DeclKind::CXXConversion => f,
+                    _ => continue,
+                }
+            } else {
+                m
+            };
+            if self.kind_of(f) != DeclKind::CXXConversion
+                || self.ast.decls.get(m).has(DeclFlags::INVALID)
+            {
+                continue;
+            }
+            let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+            let ret =
+                self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
+            v.push((found, m, self.ast.types.canonical(ret)));
+        }
+        v
     }
 
     /// The implicit object argument's conversion for conversion function

@@ -388,7 +388,14 @@ a target: when a converting constructor takes the set (`dynamic(ObjectMaker
 (*)())`), the set is that constructor's argument
 (`overload_set_converts_to_class`, so `const dynamic& v = dynamic::object`
 binds a temporary); otherwise the set is resolved against the class type
-and finds no match, as in clang. A non-template matches when its type equals
+and finds no match, as in clang. This is the general [over.match.copy] /
+[over.match.ctor] rule, not one shaped to a single constructor (WP-779,
+`over.over/class-target-general.cpp`, `class-target-ambiguous-or-none.cpp`):
+each constructor's parameter selects from the set on its own, so copy-,
+direct- and list-initialization, a return, a by-value argument, `&f` and
+`&S::m` sets all convert; two constructors that both accept are ambiguous,
+a constructor template cannot deduce from a multi-function set
+([temp.deduct.call]/6), and an `explicit` one is no copy-init candidate. A non-template matches when its type equals
 the target's function type after function-pointer conversion; non-static
 members only through `&X::f` to a member pointer; templates via
 `deduce_address_candidate`. Then: if any non-template matches, drop
@@ -888,7 +895,21 @@ these for non-class types; 068b adds the class-member and placement paths.
 Candidates are the conversion functions (templates via
 `deduce_conversion_candidate`) of the class and bases, not hidden; hiding
 is by converted-to type, so lookup keys on the `DeclName` conversion tag
-plus canonical type. A conversion function a using-declaration names in
+plus canonical type. The visible set (`conversion_functions_all`, clang
+`CollectVisibleConversions`; WP-779) walks the class, then each base in
+declaration order, depth first: a base's conversion function is hidden
+only when a class derived from it *on the same path* declares one to the
+same canonical type, so two sibling bases' `operator int` are both
+candidates (an ambiguous conversion); one reached through a virtual base
+is hidden when it is hidden along any path, whatever the base order
+(`struct D : B, C` and `struct D2 : C, B` with `B, C : virtual A` and only
+`B` redeclaring: `B`'s wins in both); a function reached along several
+paths is one candidate. `has_conversion_functions` (`conv/mod.rs`; the
+array-new bound check and the static_cast "without a conversion operator"
+wording) asks the same set, so an inherited or using-declared conversion
+function counts (`tests/conformance/class.conv.fct/inherited-*.cpp`,
+`expr.new/array-size-*.cpp`, `expr.static.cast/inherited-conversion-no-match.cpp`).
+A conversion function a using-declaration names in
 the class (`using B::operator T;`) is a candidate found as its shadow, so
 its access is the using-declaration's ([namespace.udecl]/1, /19): a
 private base's conversion made public that way is accessible (WP-726,

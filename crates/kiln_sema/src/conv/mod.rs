@@ -504,19 +504,16 @@ fn entity_select(ctx: ConvCtx) -> &'static str {
     }
 }
 
+/// Whether class type `q` has a visible conversion function: its own,
+/// a base's ([class.conv.fct]/9: conversion functions are inherited), or
+/// one a using-declaration names ([namespace.udecl]/1), the set
+/// [`Sema::conversion_functions_all`] collects.
 pub(crate) fn has_conversion_functions(s: &Sema<'_, '_>, q: QualType) -> bool {
     let Some(d) = s.ast.types.as_record(q) else { return false };
-    let Some(def) = bases::complete_class(s, d) else { return false };
-    s.ast.decls.members(def).any(|m| {
-        use kiln_ast::decl::DeclKind;
-        match s.ast.decls.get(m).kind() {
-            DeclKind::CXXConversion => true,
-            DeclKind::FunctionTemplate => s
-                .templated_function(m)
-                .is_some_and(|f| s.ast.decls.get(f).kind() == DeclKind::CXXConversion),
-            _ => false,
-        }
-    })
+    if bases::complete_class(s, d).is_none() {
+        return false;
+    }
+    !s.conversion_functions_all(q).is_empty()
 }
 
 /// The "remove `*`" / "remove `&`" / "dereference" / "take the address"
