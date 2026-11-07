@@ -846,7 +846,7 @@ added as needed) over the last call.
 ```rust
 pub struct AllocFns { pub new_fn: DeclId, pub delete_fn: Option<DeclId>,
                       pub pass_align: bool, pub sized_delete: bool }
-// as built (overload/alloc.rs): AllocFns { fns, in_class, naming: Option<DeclId> }
+// as built (overload/alloc.rs): AllocFns { fns, templates, in_class, naming: Option<DeclId> }
 // `naming`: the class a class-scope candidate set was found in, for the
 // access check of [expr.new]/19 and [expr.delete]/12 (WP-335).
 fn find_allocation_functions(&mut self, ty: QualType, array: bool, global_only: bool,
@@ -1322,7 +1322,12 @@ Where the code differs from (or details) the design above:
   is `sema_no_suitable_delete_member` plus `note_member_declared_named`
   per function found; a deleted class `operator new` is `sema_call_deleted_function`. A member
   `operator delete` without an exception specification is implicitly
-  `noexcept` ([except.spec]/9).
+  `noexcept` ([except.spec]/9). A class-scope `operator new` function
+  template ([temp.over]/1) is a candidate when no non-template function
+  matches: `(size_t[, align_val_t], placement...)` go through
+  `add_found_candidates`/`resolve_set` and the deduced specialization is
+  instantiated on use; a placement `operator delete` template is not
+  matched (WP-686).
 - **Gaps (owners).** Reversed and rewritten operator function template
   candidates are not formed (see §10.7). Access
   checks on class `operator new`/`delete`: sema.md §5.9 (WP-457). Destroying
