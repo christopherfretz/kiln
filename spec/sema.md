@@ -4485,7 +4485,13 @@ for them.
     restores them.
   - The final expression statement goes through
     `act_on_stmt_expr_result`: decay, then copy-initialization of a
-    prvalue of its cv-unqualified type.
+    prvalue of its cv-unqualified type. A class prvalue is kept as is;
+    a class glvalue is copied into the result by its copy (or move)
+    constructor (clang `InitializeStmtExprResult`; `arm_neon.h`'s
+    `vld2q` macros end in a local struct). Codegen emits that copy
+    into the destination inside the statement expression's scope,
+    before its locals are destroyed, and the oven initializes a class
+    result object the same way (spec/landed/sema/WP-799.md).
   - The type is that of the last non-null statement, looking through
     labels, when that is an expression statement; otherwise `void`.
     The result is always a prvalue.
