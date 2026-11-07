@@ -177,6 +177,8 @@ pub(crate) struct Cg<'a> {
     /// `WeakRefReferences`): a later ordinary reference makes the symbol
     /// external ([`Cg::strong_ref`]).
     pub weakref_syms: FxHashSet<String>,
+    /// `alias` / `ifunc` definitions ([`crate::alias`]).
+    pub(crate) alias: crate::alias::AliasState,
     /// Whether a duplicate mangled name was diagnosed (clang hands no
     /// later declaration to code generation after an error).
     pub dup_reported: bool,
@@ -379,6 +381,7 @@ impl<'a> Cg<'a> {
             d0_done: FxHashSet::default(),
             reps: FxHashMap::default(),
             weakref_syms: FxHashSet::default(),
+            alias: crate::alias::AliasState::default(),
             dup_reported: false,
             thunk_fns: FxHashMap::default(),
             sdone: FxHashSet::default(),
@@ -462,6 +465,7 @@ impl<'a> Cg<'a> {
         self.resolve_placeholders()?;
         self.emit_global_init_trailer()?;
         self.emit_contract_defaults()?;
+        self.check_aliases();
         self.trailer();
         Ok(())
     }
@@ -623,6 +627,11 @@ impl<'a> Cg<'a> {
             {
                 return Ok(());
             }
+            // An `alias` / `ifunc` declaration is a definition (clang
+            // `EmitGlobal` -> `EmitAliasDefinition`).
+            if self.emit_alias_definition(d)? {
+                return Ok(());
+            }
             match n.kind() {
                 DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export => {
                     self.emit_members(d)?;
@@ -691,6 +700,7 @@ impl<'a> Cg<'a> {
                 self.note_rep(&name, first);
             }
             self.deferred.insert(first, d);
+            self.alias_target_needed(first)?;
         }
         Ok(())
     }
@@ -845,6 +855,7 @@ impl<'a> Cg<'a> {
             self.to_emit.push(Def::Decl(d));
         } else {
             self.deferred.insert(first, d);
+            self.alias_target_needed(first)?;
         }
         Ok(())
     }
@@ -2404,12 +2415,10 @@ impl<'a> Cg<'a> {
                 self.gvars.insert(first, g);
                 return Ok(g);
             }
+            // `GetOrCreateLLVMGlobal` without a declaration: no alignment
+            // and not `constant`.
             let g = self.m.add_global(&target, lt);
-            let align = self.var_align(first);
-            let gv = self.m.global_mut(g);
-            gv.linkage = Linkage::ExternWeak;
-            gv.align = Some(align);
-            gv.is_constant = constant_storage(ast, ty);
+            self.m.global_mut(g).linkage = Linkage::ExternWeak;
             self.gvars.insert(first, g);
             self.weakref_syms.insert(target);
             return Ok(g);
@@ -2432,7 +2441,12 @@ impl<'a> Cg<'a> {
             self.gvars.insert(first, g);
             return Ok(g);
         }
-        let g = self.m.add_global(&name, lt);
+        // A symbol an alias declared by name (an aliasee defined after
+        // the alias) is this variable's global.
+        let g = match self.m.get_global(&name) {
+            Some(g) if self.alias.targets.contains(&name) => g,
+            _ => self.m.add_global(&name, lt),
+        };
         // clang `GetOrCreateLLVMGlobal`: `getDeclAlign(D)`.
         let align = self.var_align(first);
         let constant = constant_storage(ast, ty);
