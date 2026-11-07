@@ -448,12 +448,11 @@ impl Sema<'_, '_> {
             // An array or function parameter was adjusted to a pointer
             // ([dcl.fct]/5): `const int a[2]` is no const parameter.
             let is_const = self.ast.types.effective_quals(t).contains(Quals::CONST);
-            if !is_const {
+            if !is_const && self.post_param_diagnosed.insert(p) {
                 let msg = self
                     .diag(DiagId::sema_contract_post_nonconst_param, n.loc())
                     .with_note(self.diag(DiagId::note_declared_at, n.loc()));
                 self.emit(msg);
-                self.ast.decls.set_flags(p, DeclFlags::INVALID);
             }
         }
     }
@@ -513,7 +512,10 @@ impl Sema<'_, '_> {
             let Some(&p) = params.get(i) else { continue };
             let n = *self.ast.decls.get(p);
             let Some(t) = n.ty() else { continue };
-            if self.ast.types.is_reference(t) || n.has(DeclFlags::INVALID) {
+            if self.ast.types.is_reference(t)
+                || n.has(DeclFlags::INVALID)
+                || self.post_param_diagnosed.contains(&p)
+            {
                 continue;
             }
             let msg = self
