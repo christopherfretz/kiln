@@ -2287,9 +2287,10 @@ impl Parser<'_, '_> {
             let pack_expansion = self.eat(Punct::Ellipsis).is_some();
             return Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs });
         }
-        let Ok(q) = self.parse_nested_name() else {
+        let Ok(qual) = self.parse_nested_name_nns() else {
             return None;
         };
+        let q = qual.map(|q| q.ctx);
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_class_name);
             return None;
@@ -2300,6 +2301,17 @@ impl Parser<'_, '_> {
         // not hide the class (clang's `getTypeName` with `isClassName`
         // looks it up as a nested-name-specifier name).
         let NameClass::Type(ty, d) = self.s.classify_nested_name(name, q) else {
+            // `N::B` with `N` a member class of the current instantiation
+            // that has a dependent base: a member of an unknown
+            // specialization ([temp.dep.type]/6), looked up at
+            // instantiation (oneTBB's `const_accessor : node::scoped_type`;
+            // WP-803).
+            if let Some(ty) = qual.and_then(|qual| {
+                self.s.act_unknown_specialization_type(qual, name, TagKeyword::None, id_loc)
+            }) {
+                let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+                return Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs });
+            }
             self.s.error(DiagId::parse_expected_class_name, id_loc);
             return None;
         };
