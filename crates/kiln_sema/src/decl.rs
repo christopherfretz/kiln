@@ -6949,15 +6949,33 @@ impl Sema<'_, '_> {
     /// a later definition at namespace scope completes the same
     /// non-dependent type. A class declared in a block or class scope
     /// keeps the enclosing template's dependence.
-    fn namespace_tag_record(&mut self, h: DeclHead, tag: TagKind) -> DeclId {
+    fn namespace_tag_record(&mut self, h: DeclHead, tag: TagKind, prev: Option<DeclId>) -> DeclId {
         let ns = self.ast.redecl_context(h.ctx);
         if !matches!(self.kind_of(ns), DeclKind::Namespace | DeclKind::TranslationUnit) {
-            return self.builder().record(h, tag, None);
+            return self.builder().record(h, tag, prev);
         }
         let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
-        let d = self.builder().record(h, tag, None);
+        let d = self.builder().record(h, tag, prev);
         self.ast.templates.dependent_depth = saved;
         d
+    }
+
+    /// The class `friend class n;` declared in namespace `ns`, still
+    /// hidden from ordinary lookup ([namespace.memdef]/3), that an
+    /// elaborated-type-specifier `class n` naming no visible class
+    /// redeclares ([basic.scope.pdecl]/7: it declares `n` in that same
+    /// namespace). clang `ActOnTag` finds it by a redeclaration lookup in
+    /// the namespace; the new declaration joins its chain and is visible,
+    /// so a member `class n *p;` after `friend class n;` and the later
+    /// definition are one class (z3's `smt::context` befriending
+    /// `smt::parallel`; WP-799).
+    fn hidden_friend_tag(&self, ns: DeclId, n: Symbol, keyword: TagKeyword) -> Option<DeclId> {
+        let found = self.ast.lookup_local(ns, DeclName::ident(n)).iter().collect::<Vec<_>>();
+        found.into_iter().rev().find(|&d| {
+            self.kind_of(d) == DeclKind::CXXRecord
+                && self.ast.decls.get(d).misc().friend() == FriendKind::Undeclared
+                && self.tag_matches(d, keyword)
+        })
     }
 
     /// The promotion type of an enumeration with underlying type `t`
@@ -7376,6 +7394,14 @@ impl Sema<'_, '_> {
             }
         }
         let ctx = qualifier.unwrap_or_else(|| self.tag_decl_context(use_));
+        let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
+        if plain_ref
+            && !conflict
+            && keyword != TagKeyword::Enum
+            && let Some((n, _)) = name
+        {
+            prev = self.hidden_friend_tag(ctx, n, keyword);
+        }
         let dname = name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         let mut h = DeclHead::new(ctx, dname, name.map_or(loc, |n| n.1));
         if redefined {
@@ -7386,7 +7412,6 @@ impl Sema<'_, '_> {
             h.misc = h.misc.with_friend(FriendKind::Undeclared);
             h.flags = h.flags.with(DeclFlags::INVALID);
         }
-        let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
         let d = self.new_tag_decl(h, keyword, (scoped, fixed), prev, plain_ref);
         self.finish_member_class_spec(member_class_spec, d);
         if qualifier.is_none() {
@@ -7438,7 +7463,7 @@ impl Sema<'_, '_> {
             let fx = fixed.map(|f| (f, self.enum_promotion(f)));
             self.builder().enumeration(h, scoped, fx, prev)
         } else if plain_ref && self.templ.cur.is_none() {
-            self.namespace_tag_record(h, Self::tag_kind_of(keyword))
+            self.namespace_tag_record(h, Self::tag_kind_of(keyword), prev)
         } else {
             self.mark_pattern_next();
             self.builder().record(h, Self::tag_kind_of(keyword), prev)
@@ -7555,7 +7580,7 @@ impl Sema<'_, '_> {
         let mut h = DeclHead::new(ns, DeclName::ident(n), nloc);
         h.lexical = Some(self.ctx);
         h.misc = h.misc.with_friend(FriendKind::Undeclared);
-        let d = self.namespace_tag_record(h, Self::tag_kind_of(keyword));
+        let d = self.namespace_tag_record(h, Self::tag_kind_of(keyword), None);
         self.friend_tag = Some(d);
         d
     }
