@@ -305,7 +305,11 @@ impl Parser<'_, '_> {
     fn parse_splice_template_args(&mut self, e: ExprId, open: Loc, begin: Loc) -> Option<ExprId> {
         let (args, _, r) = self.parse_template_arg_list()?;
         let x = self.s.act_on_splice_template_expr(e, &args, open, r);
-        Some(if self.template_id_is_callee(begin) { x } else { self.s.resolve_single_template_id(x) })
+        Some(if self.template_id_is_callee(begin) {
+            x
+        } else {
+            self.s.resolve_single_template_id(x)
+        })
     }
 }
 

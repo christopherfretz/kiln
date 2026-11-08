@@ -115,6 +115,26 @@ impl InitValue {
     }
 }
 
+/// Whether a string literal may initialize an array of a given element
+/// type ([dcl.init.string]/1; clang's `StringInitFailureKind`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum StringInit {
+    /// A string initialization.
+    Ok,
+    /// `signed char a[] = u8"..."` with `char8_t` on.
+    Utf8IntoPlainChar,
+    /// `char8_t a[] = "..."`.
+    PlainIntoChar8,
+    /// `wchar_t a[] = "..."`.
+    NarrowIntoWide,
+    /// `char a[] = L"..."`.
+    WideIntoChar,
+    /// `char16_t a[] = U"..."`.
+    IncompatWide,
+    /// Not a character array for this literal (clang `SIF_Other`).
+    Other,
+}
+
 impl Sema<'_, '_> {
     /// The `StringLiteral` `e` is (through parentheses), if any.
     pub(crate) fn string_lit_of(&self, mut e: ExprId) -> Option<ExprId> {
@@ -126,6 +146,60 @@ impl Sema<'_, '_> {
             }
         }
         None
+    }
+
+    /// Whether the string literal `s` may initialize an array of `elem`
+    /// ([dcl.init.string]/1; clang `IsStringInit`). Only `Ok` makes it a
+    /// string initialization: a braced list with any other answer is
+    /// initialized element by element, and an unbraced one is diagnosed by
+    /// the answer.
+    pub(crate) fn string_init_compat(&self, elem: QualType, s: ExprId) -> StringInit {
+        use kiln_ast::expr::StringKind as K;
+        use kiln_ast::types::BuiltinType as B;
+        let c = self.ast.types.canonical(elem);
+        let b = self.ast.types.builtin(c.without_quals());
+        let char_like = matches!(b, Some(B::Char | B::SChar | B::UChar));
+        // clang `IsWideCharCompatible`, qualifiers ignored.
+        let wide = matches!(b, Some(B::WChar | B::Char16 | B::Char32));
+        let narrow = || {
+            if char_like {
+                StringInit::Ok
+            } else if b == Some(B::Char8) {
+                StringInit::PlainIntoChar8
+            } else if wide {
+                StringInit::NarrowIntoWide
+            } else {
+                StringInit::Other
+            }
+        };
+        let wide_kind = |own: B| {
+            if b == Some(own) {
+                StringInit::Ok
+            } else if char_like || b == Some(B::Char8) {
+                StringInit::WideIntoChar
+            } else if wide {
+                StringInit::IncompatWide
+            } else {
+                StringInit::Other
+            }
+        };
+        match self.ast.exprs.string_kind(s) {
+            K::Utf8 if self.char8() => {
+                // C++20 [dcl.init.string]/1 (P2513): `char8_t`, `char` and
+                // `unsigned char` arrays take a UTF-8 literal.
+                if matches!(b, Some(B::Char8 | B::Char | B::UChar)) {
+                    StringInit::Ok
+                } else if b == Some(B::SChar) {
+                    StringInit::Utf8IntoPlainChar
+                } else {
+                    narrow()
+                }
+            }
+            K::Ordinary | K::Utf8 | K::Unevaluated => narrow(),
+            K::Wide => wide_kind(B::WChar),
+            K::Utf16 => wide_kind(B::Char16),
+            K::Utf32 => wide_kind(B::Char32),
+        }
     }
 
     pub(crate) fn is_char_type(&self, t: QualType) -> bool {
@@ -793,10 +867,38 @@ impl Sema<'_, '_> {
             if self.ast.types.is_dependent(elem) || self.expr_is_type_dependent(e) {
                 return e;
             }
-            if let Some(s) = self.string_lit_of(e)
-                && self.is_char_type(elem)
-            {
-                return self.check_string_init(ty, s, e);
+            if let Some(s) = self.string_lit_of(e) {
+                let id = match self.string_init_compat(elem, s) {
+                    StringInit::Ok => return self.check_string_init(ty, s, e),
+                    StringInit::Other => None,
+                    StringInit::Utf8IntoPlainChar => {
+                        let cxx20 = u8::from(self.std >= kiln_lex::Std::Cxx20);
+                        let msg =
+                            self.diag(DiagId::sema_array_init_utf8_string_into_char, at).arg(cxx20);
+                        self.emit(msg);
+                        return self.recover(ty, &[e], at);
+                    }
+                    StringInit::PlainIntoChar8 => {
+                        Some(DiagId::sema_array_init_plain_string_into_char8)
+                    }
+                    StringInit::NarrowIntoWide => {
+                        Some(DiagId::sema_array_init_narrow_string_into_wchar)
+                    }
+                    StringInit::WideIntoChar => Some(DiagId::sema_array_init_wide_string_into_char),
+                    StringInit::IncompatWide => Some(DiagId::sema_array_init_incompat_wide_string),
+                };
+                // clang reports these at the entity (`Kind.getLocation()`);
+                // the `char8_t` one adds a note at the literal.
+                if let Some(id) = id {
+                    let mut msg = self.diag(id, at);
+                    if id == DiagId::sema_array_init_plain_string_into_char8 {
+                        let begin = self.begin_loc(e);
+                        let n = self.diag(DiagId::note_array_init_plain_string_into_char8, begin);
+                        msg = msg.with_note(n);
+                    }
+                    self.emit(msg);
+                    return self.recover(ty, &[e], at);
+                }
             }
             // clang `isCharType` / `IsWideCharCompatible` (which
             // compares qualifiers too) pick the suggested literal; none
@@ -1495,7 +1597,11 @@ impl Sema<'_, '_> {
         };
         let x = *x;
         let elem = self.ast.types.element(ty)?;
-        if !designator.is_empty() || !self.is_char_type(elem) || self.string_lit_of(x).is_none() {
+        if !designator.is_empty()
+            || self
+                .string_lit_of(x)
+                .is_none_or(|s| self.string_init_compat(elem, s) != StringInit::Ok)
+        {
             return None;
         }
         if let Some(extra) = l.items.get(1) {
@@ -2033,7 +2139,8 @@ impl Sema<'_, '_> {
                 let ety = self.ast.exprs.get(e).ty();
                 let elide = if self.ast.types.is_array(ty) {
                     let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
-                    !(self.is_char_type(elem) && self.string_lit_of(e).is_some())
+                    self.string_lit_of(e)
+                        .is_none_or(|s| self.string_init_compat(elem, s) != StringInit::Ok)
                 } else if let Some(r) = self.ast.types.as_record(ty) {
                     // Only an aggregate takes brace elision; a class with
                     // a user constructor is copy-initialized from the

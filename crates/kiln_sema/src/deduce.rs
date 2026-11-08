@@ -314,7 +314,17 @@ impl Sema<'_, '_> {
             return Some(QualType::ERROR);
         }
         let n = *self.ast.exprs.get(e);
-        let ety = n.ty();
+        self.deduce_from_parts(declared, n.ty(), n.value_category() == ValueCategory::LValue)
+    }
+
+    /// [`Self::deduce_from`] for an initializer of type `ety`, an lvalue
+    /// if `lvalue`, below a top-level placeholder.
+    fn deduce_from_parts(
+        &mut self,
+        declared: QualType,
+        ety: QualType,
+        lvalue: bool,
+    ) -> Option<QualType> {
         let t = &self.ast.types;
         // The declarator's own reference node keeps its pointee's sugar
         // (`auto (&r) = x;` is `int (&)`, WP-191).
@@ -329,7 +339,7 @@ impl Sema<'_, '_> {
                 // deduces `A &` ([temp.deduct.call]/3); the reference
                 // collapses ([dcl.ref]/7).
                 if rref
-                    && n.value_category() == ValueCategory::LValue
+                    && lvalue
                     && self.undeduced_keyword(p).is_some()
                     && t.canonical(p).quals().is_empty()
                 {
@@ -355,6 +365,27 @@ impl Sema<'_, '_> {
                 };
                 self.deduce_match(declared, a)
             }
+        }
+    }
+
+    /// The type deduced for `declared` from an lvalue of function type
+    /// `fty` (the static member function specialization a member
+    /// template-id names, [temp.deduct.call]/6 via [over.over]/3):
+    /// `decltype(auto)` gives `fty &` (clang deduces from the resolved
+    /// member access), `auto` the decayed pointer.
+    pub(crate) fn deduce_from_function_lvalue(
+        &mut self,
+        declared: QualType,
+        fty: QualType,
+    ) -> Option<QualType> {
+        match self.undeduced_keyword(declared) {
+            Some(AutoKeyword::DecltypeAuto) => Some(self.ast.types.lvalue_ref_to(fty)),
+            Some(_) => {
+                let p = self.ast.types.pointer_to(fty);
+                let q = declared.quals();
+                Some(if q.is_empty() { p } else { self.ast.types.qualify(p, q) })
+            }
+            None => self.deduce_from_parts(declared, fty, true),
         }
     }
 
