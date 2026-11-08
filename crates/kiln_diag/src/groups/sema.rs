@@ -140,6 +140,8 @@ TautologicalConstantCompare = "tautological-constant-compare" [];
 TautologicalPointerCompare = "tautological-pointer-compare" [];
 TautologicalUndefinedCompare = "tautological-undefined-compare" [];
 UndefinedBoolConversion = "undefined-bool-conversion" [];
+UndefinedInline = "undefined-inline" [];
+UndefinedInternal = "undefined-internal" [];
 // ----- WP-220 (undefined variable templates)
 UndefinedVarTemplate = "undefined-var-template" [];
 UnknownAssumption = "unknown-assumption" [];

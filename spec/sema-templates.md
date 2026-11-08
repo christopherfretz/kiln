@@ -1948,6 +1948,17 @@ errors.
    - If the pattern has no definition: "implicit instantiation of
      undefined template 'X<int>'", with the note "template is declared
      here". The class stays incomplete and is not marked invalid (clang).
+   - If the pattern's definition is still being parsed (`basic<long>::m`
+     or a field `basic<long> x;` inside `template<class S> struct basic`,
+     [temp.inst]/2, [class.mem.general]/8; `class_being_defined`): clang
+     `DiagnoseUninstantiableTemplate`, "implicit instantiation of template
+     'basic<long>' within its own definition", without a note, and the
+     specialization is marked invalid. Silent once the pattern itself is
+     invalid. The current instantiation `basic<S>::`, the
+     injected-class-name and a use from a member function body (a
+     complete-class context, instantiated after the pattern is complete)
+     are unaffected (WP-831; tests
+     `temp.inst/specialization-within-own-definition-*.cpp`).
 3. Push the frame `TemplateInstantiation(Class)`; this checks depth and
    the stack guard. Then `Ast::begin_instantiation()`.
 4. Build `MultiLevelArgs` (§5.1). The innermost level holds the spec's
@@ -5192,26 +5203,74 @@ kind (`typeof`, unary transforms, `auto` with its type-constraint,
 deduced template specializations, dependent vectors and `_BitInt`, pack
 indexing) and every nested-name-specifier and template-name kind,
 reflection splices included (`[: R :]::x`, `typename [: R :]`,
-`[: R :]`, a spliced template name). The whole mapping is kept (`None`)
-only for a lambda-expression, a statement-expression and an expansion
-statement's selector, and for a dependent class or enumeration type (a
-member of a class template, which depends on enclosing parameters it
-does not name) or an unresolved using-declaration; that is never looser
-than the wording. Tests `temp.constr.atomic/p1-used-parameter-mapping.cpp`
-(WP-771), `p1-used-parameter-mapping-kinds.cpp` (WP-776; clang 19, 22
-and GCC 16.1 agree), `p1-used-parameter-mapping-splice.cpp` (WP-776;
-GCC 16.1 agrees, `skip(clang)`).
+`[: R :]`, a spliced template name). A function type's exception
+specification is walked too (`noexcept(E)`, a dynamic list).
+
+A lambda-expression is walked as clang's `RecursiveASTVisitor` does
+(WP-821, `used_in_lambda`): its capture initializers and the types of
+its captured variables, its call operator's template parameter list
+(type-constraints, non-type parameter types, defaults, the
+requires-clause), its parameters (types and default arguments), its
+trailing requires-clause, its body and the call operator's type
+(return type, `noexcept`); its closure type is not walked through the
+`LambdaExpr`'s own type. A statement walk (`used_in_stmt`) is exhaustive
+over every statement kind, and the declarations a body holds are
+walked by `used_in_local_decl`: variables, bindings, typedefs and
+aliases, `static_assert`, local enumerations (underlying type,
+enumerator initializers) and local classes (bases, members, member
+function bodies). A local class or enumeration, and a closure type,
+named later in the body are then known (`Used::locals`, the lambda
+itself), so a type naming them adds nothing more; a statement
+expression walks its compound statement, and an expansion statement
+walks its initializer, declaration and body (expanded or not). An
+expansion statement's selector names the statement's own synthetic
+parameter, deeper than any concept parameter, and adds nothing.
+
+The whole mapping is kept (`None`) only for a dependent member class or
+enumeration of a class template (it depends on enclosing parameters it
+does not name; a dependent specialization of a namespace-scope
+template walks its arguments), an unresolved using-declaration, an
+invalid type, a declaration kind a body cannot hold (a friend, a
+using-declaration) and a parameter index past 63 (the set is a `u64`
+mask); that is never looser than the wording. Tests
+`temp.constr.atomic/p1-used-parameter-mapping.cpp` (WP-771),
+`p1-used-parameter-mapping-kinds.cpp` (WP-776; clang 19, 22 and GCC
+16.1 agree), `p1-used-parameter-mapping-splice.cpp` (WP-776; GCC 16.1
+agrees, `skip(clang)`), `p1-used-parameter-mapping-lambda.cpp`
+(subsumption through lambdas, statement expressions, local classes and
+enums, closure types; clang 19 agrees), `p1-used-parameter-mapping-
+lambda-cache.cpp` (the satisfaction cache keyed by the parameters a
+lambda names, and the note text; clang 19 agrees) and
+`p1-used-parameter-mapping-expansion.cpp` (expansion statements; GCC
+16.1 agrees) (WP-821). GCC 16.1 never treats two lambda atoms as
+identical, so it is no subsumption oracle for them.
 
 The kept arguments are canonical ([temp.constr.atomic]/2, WP-776,
 `written_mapping_arg`): a non-dependent expression argument that
 substitution keeps as written (`1` of `C<1, int>` in a template's
 requires-clause) is its value converted to the parameter's type when
 the parameter is integral or an enumeration (`C<2 - 1, long>` maps
-alike), else its profile. A reflect-expression profiles by its value
-once known, and `^^T` of a template type parameter by its canonical
-type (spec/types.md §7.2), so `C<^^T>` in two templates maps alike.
-Test `temp.constr.atomic/p2-non-dependent-argument-identity.cpp` (clang
-19, 22 and GCC 16.1 agree).
+alike). Any other non-pack parameter of a non-dependent type (a
+pointer, a class type, a reference, `auto`) maps the argument converted
+as a template argument ([temp.arg.nontype]/2) in a SFINAE frame, so
+template-argument-equivalent values ([temp.type]/2) map alike: `&x` and
+`&(x)`, `S{1}` and `S{0 + 1}` (WP-821, `converted_mapping_arg`).
+Otherwise, or when the conversion fails, the argument maps by its
+profile. A reflect-expression profiles by its value once known, `^^T`
+of a template type parameter by its canonical type, and any other
+dependent reflection (`^^A<T>`, `^^T*`, `^^typename A<T>::type`,
+`^^A<T>::x`, `^^TT`) structurally by its operand kind and the operand's
+dependent profile (spec/types.md §7.2, WP-821), so the same reflection
+written in two templates maps alike. Tests
+`temp.constr.atomic/p2-non-dependent-argument-identity.cpp` (clang 19,
+22 and GCC 16.1 agree), `p2-non-integral-argument-identity.cpp` (clang
+19 and 22 agree) and its `-neg` sibling (different values are two atoms
+and the call is ambiguous: GCC 16.1 and clang 19 agree, `skip(clang)`;
+clang 22 treats atoms of a dependent concept-id whose mappings differ
+only in a non-type argument as identical, even `C<T, 1>` and `C<T, 2>`
+of an `int` parameter, against [temp.constr.atomic]/2's "the same
+type" rule), `p2-dependent-reflection-identity.cpp` and its `-neg`
+sibling (GCC 16.1 agrees, `skip(clang)`) (WP-821).
 
 Hash-consing therefore makes identical atoms the **same `NormId`**.
 `normal_forms: DeclId → NormId` caches each entity's associated
@@ -5817,6 +5876,7 @@ row (spec/pp.md "clang compatibility level").
 | carry (WP-557) | `__builtin_addcb`/`addcs`/`addc`/`addcl`/`addcll` and `__builtin_subcb`/`subcs`/`subc`/`subcl`/`subcll` (`T f(T x, T y, T carryin, T *carryout)`, `T` `unsigned char`/`short`/`int`/`long`/`long long`; fixed parameters, not custom-checked: `x + y + carryin` (`x - y - carryin`) modulo 2^N, `*carryout` 1 when either step wrapped) | yes (spec/oven.md "checked arithmetic") | two `llvm.u{add,sub}.with.overflow`, the flags OR-ed into the carry-out (spec/codegen.md §3) |
 | stack allocation (WP-270) | `__builtin_alloca`, `__builtin_alloca_with_align` (the alignment an `I` argument in bits: a power of two, at least 8, at most `INT_MAX`) | no ("subexpression not valid") | dynamic `alloca i8` where the call is |
 | printf family (WP-270) | `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf` (signature letter `R`: `restrict`; implicit `format(printf, F, A)`, WP-282) | no | libcall |
+| printf/scanf family (WP-841) | `__builtin_printf` (1, 2), `__builtin_vprintf` (1, 0), `__builtin_vsprintf` (2, 0) (`NoThrow`, implicit `format(printf, F, A)`, checked by `-Wformat`); `__builtin_scanf`, `__builtin_sscanf`, `__builtin_vscanf`, `__builtin_vsscanf` (not `NoThrow`; no format check, as kiln checks no `scanf` format). clang 19 declares no `__builtin_fprintf`/`vfprintf`/`fscanf`/`vfscanf` (kiln ids 2380–2386, kiln-private) | no | libcall of the library name |
 | library builtins (WP-282) | `__builtin_assume_aligned`†, `__builtin_object_size`, `__builtin_dynamic_object_size` (the type an `I` argument in [0, 3]) | yes | the pointer plus an `align` assumption bundle; `llvm.objectsize` or a folded constant |
 | library builtins (WP-282) | `__builtin_powi`/`f`/`l`, `__builtin_shufflevector`† (a `ShuffleVectorExpr`), `__builtin_verbose_trap`, `__builtin_copysignf16` | `shufflevector` and `copysignf16` (WP-365) yes; the others are "subexpression not valid" | `llvm.powi`, `shufflevector`, `llvm.trap`, `llvm.copysign.f16` |
 | `*f128` math (WP-282) | the `__builtin_*f128` forms of the `math` libm rows (`fabsf128`, `copysignf128`, `ceilf128`, ..., `huge_valf128`, `inff128`, `nanf128`, `nansf128`), typed `_Float128` (signature `LLd`) as GCC, whose libstdc++ x86-64 `<cmath>` passes `_Float128*` to `modff128`/`frexpf128`/`remquof128` (clang 19 types them `__float128` on x86-64 and `long double` on AArch64; values convert either way, pointers do not) (WP-361) | `fabs`/`copysign`/`fmax`/`fmin` and the constants yes, through the `l` twin (`f128_twin`), as clang 19; the P0533 forms (`ceilf128`, `fmodf128`, `nextafterf128`, ...) in binary128 (WP-365) | the twin's path at `fp128` (intrinsic or constant); `roundevenf128` `llvm.roundeven`; the rest a libcall of the builtin's own name (`acosf128`) |
