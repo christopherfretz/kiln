@@ -39,24 +39,21 @@ kiln does not ship a standard library. It compiles the platform's
 library. libstdc++ is the default (`-stdlib=libstdc++`); libc++ is
 selected with `-stdlib=libc++` ([spec/driver.md](../spec/driver.md)).
 
-### libc++
+Pass rate is passing tests over tests that apply to the platform (tests the
+suite itself marks unsupported on this target are excluded).
 
-| Version | What was run | Result | Source |
-|---|---|---|---|
-| libc++ 19.1.7 | M3 gate: the frozen 8-directory subset of libc++'s own test suite (`cargo xtask libcxx --gate m3`) | 585/585 at M3 close. Since `.verify.cpp` tests joined the gate it has 642 tests: 636 pass, 6 unsupported | [ROADMAP.md](ROADMAP.md) M3, [status/libcxx-m3.md](status/libcxx-m3.md) |
-| libc++ 19.1.7 | Full test suite, `std/` + `libcxx/` (8705 tests; under 19, the 807 `libcxx/` tests are all driver-unsupported), first full run on `fe5406b9` (2026-11-02) | 7469 pass, 92 fail, 29 xfail, 1110 unsupported (830 driver), 5 timeout: **98.3%** of `std/`. M3b was closed at this number | [status/libcxx.md](status/libcxx.md), [ROADMAP.md](ROADMAP.md) M3b |
-| libc++ 22.1.8 | M4 gate: 21 directories (2661 tests), `-std=c++26 -fclang-compat=22` | **99.9%** (2632/2661, 2 fail) after WP-416 and WP-418 | [ROADMAP.md](ROADMAP.md) M4, [status/libcxx.md](status/libcxx.md) |
-| libc++ 22.1.8 | Full lit suite, `std/` + `libcxx/` (9247 tests), `-std=c++26 -fclang-compat=22`, against the clang-built libc++ runtime | First run: 8562 pass (97.4%). After WP-461: 8716 pass, 9 fail, 64 xfail, 457 unsupported, 1 timeout: **99.2%** (pass / (total − unsupported)). The later rows re-ran only the remaining failures, not the whole suite. WP-460, which landed after that run, fixes 8 of the 9 failures; the ninth already passed | [status/libcxx-m5.md](status/libcxx-m5.md) |
-| libc++ 19 (system `libc++-19-dev`) | The 10 wave-1 open-source projects built and tested with `-stdlib=libc++` under kiln and clang-19 (WP-694) | **All 10 at parity** (see the table below) | [status/oss.md](status/oss.md) "libc++ results" |
-| libc++ built by kiln | Building libc++ itself with kiln, then running the suite against it (ROADMAP M5 stretch goal) | Not run | [ROADMAP.md](ROADMAP.md) M5 |
+| Standard library | Test suite | Pass rate |
+|---|---|---|
+| libc++ 22.1.8 | libc++'s own test suite (9247 tests), `-std=c++26` | **99.2%** |
+| libc++ 19.1.7 | libc++'s own test suite (`std/`) | **98.3%** |
+| libc++ 19 | The 10 wave-1 open-source projects' test suites, built with `-stdlib=libc++` | **Parity**: the same tests pass as with clang |
+| libstdc++ (GCC 14, the default) | Every public header (109) compiled at `-std=c++20` and `-std=c++26` | **100%** |
+| libstdc++ (GCC 14, the default) | Every open-source project below | See the table below |
+| libstdc++ (GCC 14) | libstdc++'s own test suite | Not run yet (Debian does not ship its sources) |
 
-### libstdc++
-
-| Version | What was run | Result | Source |
-|---|---|---|---|
-| GCC 14 libstdc++ (`/usr/include/c++/14`, `_GLIBCXX_RELEASE` 14, `__GLIBCXX__` 20250315), the host's default | Header sweep: every public header compiled as a one-line TU (`cargo xtask libstdcxx`), next to clang++-19 | **109 of 109** headers compile at `-std=c++26` and at `-std=c++20` (clang++-19: 109 of 109) | [status/libstdcxx.md](status/libstdcxx.md) |
-| GCC 14 libstdc++ | Every open-source project below (and both stdlib columns of wave 1) | See the table below | [status/oss.md](status/oss.md) |
-| libstdc++ testsuite | libstdc++'s own `testsuite/` | **Not run**: it needs the libstdc++ testsuite sources, which Debian does not install ([spec/libstdcxx.md](../spec/libstdcxx.md), "Phase 2") | — |
+Per-run detail: [status/libcxx.md](status/libcxx.md),
+[status/libcxx-m5.md](status/libcxx-m5.md),
+[status/libstdcxx.md](status/libstdcxx.md).
 
 ## Libraries and applications
 
