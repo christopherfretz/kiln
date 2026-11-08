@@ -1834,6 +1834,14 @@ member templates):
    class instantiation and `spec_args`). Test:
    `temp.expl.spec/member-partial-spec-of-implicit-spec-run.cpp`.
 
+**Constructors and destructors of an implicit instantiation**
+(`template<> A<int>::A(int) {...}`, [temp.expl.spec]/1): the out-of-line
+redeclaration marks the member specialization explicit
+(`mark_member_explicit_spec`) and consumes the `template<>` head, so the
+block-scope declarations of its body are not under it (`int i(n);` there is
+a local, not an extraneous variable specialization; WP-803,
+`temp.expl.spec/special-member-spec-body-locals-run.cpp`).
+
 **Member classes and member enumerations of an implicit instantiation**
 ([temp.expl.spec]/1, /5, /7; WP-206), such as `template<> struct
 A<int>::N {...}`, `template<> enum class A<int>::E : int {...}` and the
