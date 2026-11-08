@@ -211,10 +211,10 @@ impl Sema<'_, '_> {
     }
 
     /// clang `isTrackedVar`, for a variable a declaration statement of
-    /// the body declares: an automatic, non-implicit variable of scalar
-    /// or vector type. (A class type is tracked by clang too, but always
-    /// has a construction initializer in C++ and its uses never classify
-    /// as reads, so it cannot be reported.)
+    /// the body declares: an automatic, non-implicit variable of scalar,
+    /// vector or non-empty class type (a class variable is always
+    /// initialized by its declaration in C++, so only its own
+    /// initializer can see it uninitialized).
     fn uninit_tracked(&self, d: DeclId) -> bool {
         if self.kind_of(d) != DeclKind::Var {
             return false;
@@ -228,7 +228,33 @@ impl Sema<'_, '_> {
         if types.is_dependent(t) || types.is_reference(t) {
             return false;
         }
+        if let Some(r) = types.as_record(t) {
+            return self.uninit_record_not_empty(r, 0);
+        }
         self.is_scalar(t) || self.is_vector_type(t)
+    }
+
+    /// clang `recordIsNotEmpty`: a field other than an unnamed bit-field,
+    /// a zero-size field or a field of empty class type (bases do not
+    /// count).
+    fn uninit_record_not_empty(&self, r: DeclId, depth: u32) -> bool {
+        let Some(def) = self.ast.definition(r) else { return false };
+        if depth > 64 {
+            return true;
+        }
+        self.ast.decls.members(def).any(|m| {
+            let n = self.ast.decls.get(m);
+            if n.kind() != DeclKind::Field
+                || (n.name().is_empty() && self.ast.decls.field(m).is_some_and(|f| f.bit_width.is_some()))
+                || self.is_zero_size_field(m)
+            {
+                return false;
+            }
+            match n.ty().and_then(|t| self.ast.types.as_record(t)) {
+                Some(fr) => self.uninit_record_not_empty(fr, depth + 1),
+                None => true,
+            }
+        })
     }
 
     /// clang `stripCasts`: parentheses, `__extension__`, a chosen
@@ -380,8 +406,23 @@ impl Sema<'_, '_> {
             StmtKind::CaseStmt => self.uninit_stmt_end(st.case_data(s).sub),
             StmtKind::DefaultStmt => self.uninit_stmt_end(st.default_sub(s)),
             StmtKind::LabelStmt | StmtKind::AttributedStmt => self.uninit_stmt_end(st.sub_stmt(s)),
+            StmtKind::GotoStmt => self.uninit_next_token(n.loc()).unwrap_or(n.loc()),
             _ => n.loc(),
         }
+    }
+
+    /// The start of the token after the one at `at` (separated by
+    /// whitespace only): a `goto`'s label, which the AST does not locate.
+    fn uninit_next_token(&self, at: Loc) -> Option<Loc> {
+        if at.is_macro() {
+            return None;
+        }
+        let end = self.token_end(at)?;
+        let sm = self.diags.sm();
+        let (file, pos) = sm.offset_of(end)?;
+        let text = sm.text(file).as_bytes();
+        let skip = text.get(pos as usize..)?.iter().take_while(|c| c.is_ascii_whitespace()).count();
+        Some(end.with_offset(skip as u32))
     }
 
     /// A token range `[lo, end of the token at hi]`.
@@ -416,9 +457,18 @@ impl Sema<'_, '_> {
                 let msg = self
                     .diag(DiagId::sema_uninit_const_reference, self.begin_loc(use_.user))
                     .arg(self.decl_arg(v))
-                    .range(self.expr_range(use_.user));
+                    .range(self.uninit_user_range(use_.user));
                 self.emit(msg);
             }
+        }
+    }
+
+    /// The highlighted range of a use: a `DeclRefExpr`'s qualifier and name.
+    fn uninit_user_range(&self, user: ExprId) -> Span {
+        if self.ast.exprs.get(user).kind() == ExprKind::DeclRefExpr {
+            self.self_ref_dre_range(user)
+        } else {
+            self.expr_range(user)
         }
     }
 
@@ -450,7 +500,8 @@ impl Sema<'_, '_> {
                 let msg = self
                     .diag(DiagId::sema_uninit_self_reference_in_init, self.begin_loc(user))
                     .arg(name)
-                    .range(self.expr_range(user));
+                    .range(self.uninit_tok_span(self.ast.decls.get(v).loc(), self.ast.decls.get(v).loc()))
+                    .range(self.uninit_user_range(user));
                 self.emit(msg);
                 return true;
             }
@@ -473,6 +524,12 @@ impl Sema<'_, '_> {
     fn uninit_contains(&self, e: ExprId, needle: ExprId) -> bool {
         if e == needle {
             return true;
+        }
+        if self.ast.exprs.get(e).kind() == ExprKind::StmtExpr {
+            // clang's walk enters the statement-expression body, which
+            // `children` does not: decide by source containment.
+            let (b, end, at) = (self.begin_loc(e), self.expr_end_loc(e), self.begin_loc(needle));
+            return !b.is_macro() && !end.is_macro() && !at.is_macro() && b <= at && at <= end;
         }
         self.ast.exprs.children(e, &self.ast.lists).into_iter().any(|c| self.uninit_contains(c, needle))
     }
@@ -510,7 +567,7 @@ impl Sema<'_, '_> {
     fn uninit_diag_use(&self, f: DeclId, v: DeclId, stmt: StmtId, u: &Use, name: &str) -> Vec<Diag> {
         let user = u.user;
         let user_at = self.begin_loc(user);
-        let user_range = self.expr_range(user);
+        let user_range = self.uninit_user_range(user);
         let use_note = || self.diag(DiagId::note_uninit_var_use, user_at).arg(0).range(user_range);
         let mut out = Vec::new();
         match u.kind() {

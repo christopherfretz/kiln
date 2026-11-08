@@ -7994,7 +7994,7 @@ impl Sema<'_, '_> {
     /// A `[[no_unique_address]]` field of empty class type, a subobject
     /// of zero size ([intro.object]/9) that leaves its class empty
     /// ([meta.unary.prop] `is_empty`; clang `FieldDecl::isZeroSize`).
-    fn is_zero_size_field(&self, f: DeclId) -> bool {
+    pub(crate) fn is_zero_size_field(&self, f: DeclId) -> bool {
         let nua =
             self.ast.decls.field(f).is_some_and(FieldData::no_unique_address) || self.has_nua(f);
         nua && self

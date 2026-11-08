@@ -1661,7 +1661,9 @@ pub struct ColdDeclData {
     /// A bodiless member function declaration → the start of the last
     /// token of its declarator, asm label and GNU attributes (clang's
     /// `FunctionDecl::getEndLoc` before a body is attached), where
-    /// "must be declared with 'noexcept'" points.
+    /// "must be declared with 'noexcept'" points; and a block-scope
+    /// variable whose declarator ends after its name → the start of that
+    /// last token (clang `VarDecl::getEndLoc` without an initializer).
     pub declarator_end: ColdMap<DeclId, Loc>,
     /// Builtin function ids of implicit builtin `Function` decls (§5.3).
     pub builtin_id: ColdMap<DeclId, u32>,

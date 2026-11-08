@@ -11,6 +11,7 @@ use kiln_ast::decl::{DeclKind, TlsKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, TraitKind, UnaryOp};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
+use kiln_source::Span;
 
 use crate::Sema;
 use crate::class::SpecialKind;
@@ -368,9 +369,21 @@ impl Sema<'_, '_> {
             // Other locals are left to the CFG analysis.
             return;
         };
+        // clang: `<< OrigDecl->getLocation() << DRE->getSourceRange()`.
         let at = self.begin_loc(dre);
-        let msg = self.diag(id, at).arg(self.decl_arg(d));
+        let name = self.ast.decls.get(v).loc();
+        let name = Span::new(name, self.token_end(name).unwrap_or(name));
+        let msg = self.diag(id, at).arg(self.decl_arg(d)).range(name).range(self.self_ref_dre_range(dre));
         self.diag_runtime_behavior(msg);
+    }
+
+    /// The source range of a variable `DeclRefExpr`: from its first token
+    /// (a qualifier, if any) to the end of the name token. A stored end
+    /// location is not trusted here: a member-access base can carry the
+    /// enclosing member name's end.
+    pub(crate) fn self_ref_dre_range(&self, dre: ExprId) -> Span {
+        let name = self.ast.exprs.get(dre).loc();
+        Span::new(self.begin_loc(dre), self.token_end(name).unwrap_or(name))
     }
 
     /// clang `VarDecl::isStaticLocal`.

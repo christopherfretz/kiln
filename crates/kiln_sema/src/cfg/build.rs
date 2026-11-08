@@ -450,8 +450,15 @@ impl Sema<'_, '_> {
                 b.igoto.push(e);
             }
             StmtKind::GCCAsmStmt => {
-                if st.asm_bits(s) & kiln_ast::stmt::asm_bits::GOTO != 0 && b.has_pos() {
-                    let labels = st.asm_data(s).labels;
+                // clang `VisitChildren`: the outputs, then the inputs, are
+                // elements before the statement (or the `asm goto`
+                // terminator); the uninitialized-values analysis reads them.
+                for i in 0..self.ast.stmts.asm_operands(s).len() {
+                    let e = self.ast.stmts.asm_operands(s)[i].expr;
+                    self.cfg_expr(e, b);
+                }
+                if self.ast.stmts.asm_bits(s) & kiln_ast::stmt::asm_bits::GOTO != 0 && b.has_pos() {
+                    let labels = self.ast.stmts.asm_data(s).labels;
                     let t = b.terminate(Term::Asm(s));
                     for i in 0..self.ast.lists.len(labels) {
                         let l = self.ast.lists.at::<DeclId>(labels, i).expect("asm label");
@@ -1119,6 +1126,31 @@ impl Sema<'_, '_> {
                 self.cfg_expr(f, b);
                 b.temp_tok(TempTok::Close);
                 b.join(tout);
+                b.push(Elem::Expr(e));
+            }
+            ExprKind::BinaryConditionalOperator => {
+                // clang `VisitConditionalOperator` for `a ?: b`: the
+                // common expression and the condition (when not the bare
+                // opaque value) end the condition block; its true edge
+                // reaches the join directly, its false edge runs `b`.
+                let [common, c, _, f] = ex.binary_conditional_operands(e, &self.ast.lists);
+                let bare = ex.get(c).kind() == ExprKind::OpaqueValueExpr;
+                self.cfg_expr(common, b);
+                if !bare {
+                    self.cfg_expr(c, b);
+                }
+                let kv = self.cfg_truth(c, c, b);
+                let src = b.terminate(Term::Cond(e));
+                let te = b.edge(src, kv.flags(true, false));
+                let fe = b.edge(src, kv.flags(false, false));
+                b.temp_tok(TempTok::Arms);
+                b.temp_tok(TempTok::Open(kv.base));
+                b.temp_tok(TempTok::Close);
+                b.temp_tok(TempTok::Open(kv.base.map(|v| !v)));
+                b.set_pos(vec![fe]);
+                self.cfg_expr(f, b);
+                b.temp_tok(TempTok::Close);
+                b.join(vec![te]);
                 b.push(Elem::Expr(e));
             }
             ExprKind::BinaryOperator
