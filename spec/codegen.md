@@ -283,6 +283,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     (`APFloat::convertToInteger` reporting `opInvalidOp`).
 - Arithmetic:
   - signed add, sub and mul get `nsw`; shifts mask nothing at -O0;
+  - a shift whose count has another integer type is `zext`/`trunc`ed
+    (never sign-extended) to the left operand's type first, element-wise
+    for a vector whose count is the splatted scalar (`v2u64 << int`:
+    `<2 x i32>` to `<2 x i64>`; clang `EmitShl`/`EmitShr`, WP-811,
+    BoringSSL's Keccak rotate;
+    `tests/conformance/ext.vector/shift-scalar-count-other-width-run.cpp`);
   - pointer arithmetic: `gep inbounds` (`gep i8` for void and function
     pointers); pointer difference: `ptrtoint`, `sub`, then `sdiv exact`;
   - floating add/sub (also compound) contract a single-use `fmul`

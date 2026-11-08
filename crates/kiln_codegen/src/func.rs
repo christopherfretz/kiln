@@ -2386,8 +2386,11 @@ impl Cg<'_> {
     /// Integer cast by signedness (`CreateIntCast`).
     pub fn int_cast(&mut self, v: V, to: LTy, signed: bool) -> V {
         let from = self.f.fir.ty(&self.m, v);
-        let fw = self.m.types.int_width(from).unwrap_or(0);
-        let tw = self.m.types.int_width(to).unwrap_or(0);
+        // Element-wise between integer vectors of one length (a vector
+        // shift's splatted `int` count, `v2u64 << int`; WP-811).
+        let elem = |t: LTy| self.m.types.vector_info(t).map_or(t, |(e, _, _)| e);
+        let fw = self.m.types.int_width(elem(from)).unwrap_or(0);
+        let tw = self.m.types.int_width(elem(to)).unwrap_or(0);
         if fw == tw {
             v
         } else if fw > tw {
