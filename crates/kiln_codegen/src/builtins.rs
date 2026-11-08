@@ -1248,6 +1248,8 @@ impl Cg<'_> {
                 let (dv, da) = self.ptr_align(d)?;
                 let (sv, sa) = self.ptr_align(s)?;
                 let nv = self.emit_scalar(n)?;
+                self.ub_builtin_arg_check(crate::ubsan::Tck::Store, dv, da, d)?;
+                self.ub_builtin_arg_check(crate::ubsan::Tck::Load, sv, sa, s)?;
                 let f = if b == id::MEMMOVE {
                     kiln_llvm::intrinsics::memmove(&mut self.m, LTy::I64)
                 } else if b == id::MEMCPY_INLINE {

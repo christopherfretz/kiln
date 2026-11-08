@@ -1014,6 +1014,32 @@ impl Cg<'_> {
         self.ub_on(San::NULL.union(San::ALIGNMENT).union(San::OBJECT_SIZE))
     }
 
+    /// The alignment half of clang `EmitBuiltinExpr`'s `EmitArgCheck` for
+    /// the `memcpy` family: the argument's pointer type (after an implicit
+    /// bit cast) is the checked type, as clang 19 passes it.
+    pub(crate) fn ub_builtin_arg_check(
+        &mut self,
+        tck: Tck,
+        v: V,
+        align: u64,
+        arg: ExprId,
+    ) -> R<()> {
+        if !self.ub_on(San::ALIGNMENT) {
+            return Ok(());
+        }
+        let ast = self.ast;
+        let loc = self.ub_expr_loc(arg);
+        let mut a = arg;
+        if ast.exprs.get(a).kind() == ExprKind::ImplicitCastExpr
+            && ast.exprs.cast_kind(a) == kiln_ast::expr::CastKind::BitCast
+        {
+            a = ast.exprs.operand(a);
+        }
+        let q = ast.exprs.get(a).ty();
+        let tc = TypeCheck::new(tck, loc, q).align(align).skip(San::ALL.without(San::ALIGNMENT));
+        self.ub_type_check(v, tc)
+    }
+
     /// Runs `f` with its aggregate slot marked as already checked (clang
     /// `AggValueSlot::IsSanitizerChecked`: member and delegating
     /// initializers, new-expression initializers).
