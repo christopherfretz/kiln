@@ -1835,7 +1835,7 @@ impl Sema<'_, '_> {
     /// destructor at `loc` (clang `DiagnoseUseOfDecl`, the expression
     /// fails). An inaccessible one is diagnosed with `access` = (location,
     /// diagnostic), clang `CheckDestructorAccess`.
-    fn mark_element_dtor_referenced(
+    pub(crate) fn mark_element_dtor_referenced(
         &mut self,
         mut elem: QualType,
         access: (Loc, DiagId),

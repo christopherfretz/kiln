@@ -4460,6 +4460,14 @@ function) elsewhere.
   functions decayed and top-level cv removed; it must not be (a
   pointer to) an incomplete type other than cv `void` (clang's
   `CheckCXXThrowOperand`).
+- (WP-804) A class-type exception object (not a pointer) must not be
+  abstract ("cannot throw an object of abstract type 'T'", with the
+  pure virtual notes; [class.abstract]/3), and its destructor is
+  potentially invoked ([except.throw]/5): it is marked referenced, an
+  inaccessible one is "exception object of type 'T' has
+  protected/private destructor" at the operand, and a deleted one is
+  the deleted-use error (`mark_element_dtor_referenced`;
+  `expr.throw/abstract-and-inaccessible-dtor.cpp`).
 - The operand is copy-initialized into it after the implicit move
   ([class.copy.elision]/3), which applies only when the named local's
   scope does not extend past the innermost enclosing try-block
