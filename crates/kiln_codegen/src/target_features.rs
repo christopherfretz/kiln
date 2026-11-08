@@ -82,13 +82,21 @@ impl Cg<'_> {
     /// `getFunctionFeatureMap`).
     fn x86_feature_map(&self, d: Option<DeclId>) -> FeatureMap {
         const X86_64: [&str; 7] = ["cmov", "cx8", "fxsr", "mmx", "sse", "sse2", "x87"];
+        // The command-line features that are no CPU's (WP-813: the
+        // retpoline thunks of `-mspeculative-load-hardening`).
+        const OPTION_FEATURES: [&str; 1] = ["+retpoline-indirect-calls"];
         let mut f: FeatureMap = FeatureMap::new();
         let attr = d.and_then(|d| self.target_attr_features(d));
         let own_cpu = attr.as_ref().is_some_and(|a| a.cpu.is_some());
-        if self.opts.target_features.is_empty() && !own_cpu {
+        let cpu_features =
+            self.opts.target_features.iter().any(|e| !OPTION_FEATURES.contains(&&**e));
+        if !cpu_features && !own_cpu {
             f.extend(X86_64.iter().map(|n| ((*n).to_owned(), true)));
         }
-        let module = self.opts.target_features.iter().filter(|_| !own_cpu);
+        // A CPU-naming attribute replaces the `-march=` CPU's features,
+        // not the options' (clang `FeaturesAsWritten`).
+        let module = (self.opts.target_features.iter())
+            .filter(|e| !own_cpu || OPTION_FEATURES.contains(&&***e));
         let attr = attr.iter().flat_map(|a| &a.features);
         for e in module.chain(attr) {
             if let Some((sign, name)) = e.split_at_checked(1) {

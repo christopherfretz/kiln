@@ -435,6 +435,11 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
             Some(v) => errors.push(unsupported("-march=", v)),
             None => {}
         }
+        // WP-813: clang's `getX86TargetFeatures` adds the retpoline call
+        // thunks for `-mspeculative-load-hardening`.
+        if args.codegen.speculative_load_hardening {
+            f.extra.push("+retpoline-indirect-calls".to_owned());
+        }
         if let Some(v) = &args.mcpu {
             errors.push(unsupported("-mcpu=", v));
         }

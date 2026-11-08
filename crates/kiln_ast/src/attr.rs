@@ -380,6 +380,63 @@ impl AttrKind {
         matches!(self, AttrKind::CALLING_CONV | AttrKind::NO_CALLER_SAVED_REGS | AttrKind::REGPARM)
     }
 
+    // WP-813: clang's class B attributes (inlining and call shape,
+    // pointer facts, instrumentation and hardening), each lowered as
+    // clang 19 lowers it (spec/landed/codegen/WP-813.md). Without a
+    // comment, an attribute has no arguments.
+    /// `no_stack_protector`: the definition has no `ssp*` attribute.
+    pub const NO_STACK_PROTECTOR: AttrKind = AttrKind(240);
+    /// `patchable_function_entry(N[, M])`: `a` = N, `b` = M.
+    pub const PATCHABLE_FUNCTION_ENTRY: AttrKind = AttrKind(241);
+    /// `zero_call_used_regs("kind")`: `a` = the kind's index in
+    /// `ZERO_CALL_USED_REGS_KINDS`.
+    pub const ZERO_CALL_USED_REGS: AttrKind = AttrKind(242);
+    pub const SPECULATIVE_LOAD_HARDENING: AttrKind = AttrKind(243);
+    pub const NO_SPECULATIVE_LOAD_HARDENING: AttrKind = AttrKind(244);
+    pub const NO_SPLIT_STACK: AttrKind = AttrKind(245);
+    pub const NO_INSTRUMENT_FUNCTION: AttrKind = AttrKind(246);
+    pub const NO_PROFILE_INSTRUMENT_FUNCTION: AttrKind = AttrKind(247);
+    /// `xray_always_instrument` (`a` = 1) / `xray_never_instrument` (0).
+    pub const XRAY_INSTRUMENT: AttrKind = AttrKind(248);
+    /// `xray_log_args(N)`: `a` = N.
+    pub const XRAY_LOG_ARGS: AttrKind = AttrKind(249);
+    pub const DISABLE_SANITIZER_INSTRUMENTATION: AttrKind = AttrKind(250);
+    pub const NOCF_CHECK: AttrKind = AttrKind(251);
+    /// `function_return("thunk-extern")` (`a` = 1) / `("keep")` (0).
+    pub const FUNCTION_RETURN: AttrKind = AttrKind(252);
+    pub const CFI_CANONICAL_JUMP_TABLE: AttrKind = AttrKind(253);
+    pub const FORCE_ALIGN_ARG_POINTER: AttrKind = AttrKind(254);
+    pub const FLATTEN: AttrKind = AttrKind(255);
+    pub const LEAF: AttrKind = AttrKind(256);
+    /// `nomerge` on a function or a statement.
+    pub const NOMERGE: AttrKind = AttrKind(257);
+    pub const NOT_TAIL_CALLED: AttrKind = AttrKind(258);
+    pub const NODUPLICATE: AttrKind = AttrKind(259);
+    pub const CONVERGENT: AttrKind = AttrKind(260);
+    pub const NOUWTABLE: AttrKind = AttrKind(261);
+    /// `assume_aligned(A[, O])`: `a` = A, `b` = O (both folded).
+    pub const ASSUME_ALIGNED: AttrKind = AttrKind(262);
+    /// `align_value(A)`: `a` = A (folded).
+    pub const ALIGN_VALUE: AttrKind = AttrKind(263);
+    /// `callback(callee, args...)`: `a` = the raw `ListId` of the
+    /// argument indices as written (`u32`, 0 the implicit `this` or
+    /// `__`'s `u32::MAX`), checked against the declaration.
+    pub const CALLBACK: AttrKind = AttrKind(264);
+    pub const NOESCAPE: AttrKind = AttrKind(265);
+    pub const MAYBE_UNDEF: AttrKind = AttrKind(266);
+    /// `[[clang::code_align(N)]]` on a loop: `a` = N.
+    pub const CODE_ALIGN: AttrKind = AttrKind(267);
+    pub const LOADER_UNINITIALIZED: AttrKind = AttrKind(268);
+    pub const LTO_VISIBILITY_PUBLIC: AttrKind = AttrKind(269);
+    /// `[[omp::assume("s")]]`: `a` = the raw `StringLitId` of `s`.
+    pub const OMP_ASSUME: AttrKind = AttrKind(270);
+    /// `standalone_debug` on a class (recorded for debug info).
+    pub const STANDALONE_DEBUG: AttrKind = AttrKind(271);
+    /// clang 22 `coro_await_elidable` on a class.
+    pub const CORO_AWAIT_ELIDABLE: AttrKind = AttrKind(272);
+    /// clang 22 `coro_await_elidable_argument` on a parameter.
+    pub const CORO_AWAIT_ELIDABLE_ARGUMENT: AttrKind = AttrKind(273);
+
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
     /// [`AttrKind::EXT_VECTOR_TYPE`], [`AttrKind::NEON_VECTOR_TYPE`],
@@ -396,7 +453,28 @@ impl AttrKind {
                 | AttrKind::MODE
         )
     }
+
+    /// Whether this is one of WP-813's class B attributes
+    /// ([`AttrKind::NO_STACK_PROTECTOR`] ..=
+    /// [`AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT`]).
+    pub fn is_class_b(self) -> bool {
+        (240..=273).contains(&self.0)
+    }
 }
+
+/// The arguments of `zero_call_used_regs` (clang `ZeroCallUsedRegsKind`),
+/// in the order of [`AttrKind::ZERO_CALL_USED_REGS`]'s `a`.
+pub const ZERO_CALL_USED_REGS_KINDS: [&str; 9] = [
+    "skip",
+    "used-gpr-arg",
+    "used-gpr",
+    "used-arg",
+    "used",
+    "all-gpr-arg",
+    "all-gpr",
+    "all-arg",
+    "all",
+];
 
 /// The spellings of the calling-convention attributes kiln knows, by the
 /// `b` word of an [`AttrKind::CALLING_CONV`] node (WP-808).

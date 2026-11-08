@@ -2241,6 +2241,7 @@ impl<'a> Cg<'a> {
     /// `ConstructAttributeList`, not on a call site; WP-682).
     pub(crate) fn target_attrs_of(&self, out: &mut Vec<Attr>, d: Option<DeclId>) {
         self.size_attrs(out);
+        self.class_b_default_attrs(out, d);
         self.no_builtin_attrs(out, d);
         if let Some(d) = d
             && self.has_fn_attr(d, kiln_ast::attr::AttrKind::DISABLE_TAIL_CALLS)
@@ -2536,7 +2537,7 @@ impl<'a> Cg<'a> {
     /// The declaration attributes of `f` for `first` with signature `sig`.
     pub(crate) fn set_decl_attrs(&mut self, f: FuncId, first: DeclId, sig: &Sig) {
         let ast = self.ast;
-        let (ret, params) = self.sig_attrs(sig, sig.params.len(), false);
+        let (ret, mut params) = self.sig_attrs(sig, sig.params.len(), false);
         let mut fa = Vec::new();
         // clang `ConstructAttributeList`: a non-throwing type or a
         // `NoThrowAttr` (a recognized C library function).
@@ -2567,6 +2568,7 @@ impl<'a> Cg<'a> {
         }
         let fa = self.m.attr_set(&fa);
         let (fa, ret) = self.alloc_fn_attrs(first, fa, ret);
+        let (fa, ret) = self.class_b_fn_sets(f, first, sig, fa, ret, &mut params);
         // clang `SetFunctionAttributes`: virtual member functions are
         // `unnamed_addr`.
         let virt = self.is_virtual_method(first);
@@ -2677,6 +2679,7 @@ impl<'a> Cg<'a> {
             noreturn,
             inline,
             extra,
+            start,
         } = f;
         let mut a = Vec::new();
         if inline == DefInline::Always {
@@ -2715,6 +2718,7 @@ impl<'a> Cg<'a> {
             a.push(Attr::string("min-legal-vector-width", &vector_width.to_string()));
         }
         self.fp_def_attrs(&mut a);
+        self.class_b_def_attrs(&mut a, start);
         self.m.attr_set(&a)
     }
 
@@ -2894,6 +2898,13 @@ impl<'a> Cg<'a> {
             .or_else(|| ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|x| x.init)));
         let mut needs_init = false;
         let init = match any_init.filter(|&i| !ast.is_trivial_default_construction(i)) {
+            // clang `EmitGlobalVarDefinition`: `loader_uninitialized` is
+            // `undef` (WP-813).
+            None if self.has_fn_attr(d, kiln_ast::attr::AttrKind::LOADER_UNINITIALIZED) => {
+                let z = self.null_const(ty)?;
+                let t = self.m.const_type(z);
+                self.m.const_undef(t)
+            }
             None => self.null_const(ty)?,
             Some(e) => {
                 if let Some(c) = self.folds.get(e) {
@@ -3211,6 +3222,8 @@ impl<'a> Cg<'a> {
         self.finish_dso_local();
         let fp = self.frame_pointer().module_flag();
         let direct_access = self.direct_access_external_data();
+        let h = self.opts.hardening.clone();
+        let x86 = self.is_x86();
         let m = &mut self.m;
         // clang 19 emits an empty `!llvm.linker.options` when the language
         // has modules (C++20 and later); clang 20+ emits none.
@@ -3223,6 +3236,18 @@ impl<'a> Cg<'a> {
             m.add_module_flag_i32(1, "SemanticInterposition", 1);
         }
         m.add_module_flag_i32(1, "wchar_size", 4);
+        // clang `CodeGenModule::Release` (WP-813): `-fcf-protection`
+        // (x86's `checkCFProtection*Supported`) and
+        // `-mfunction-return=thunk-extern`.
+        if h.cf_protection_return && x86 {
+            m.add_module_flag_i32(8, "cf-protection-return", 1);
+        }
+        if h.cf_protection_branch && x86 {
+            m.add_module_flag_i32(8, "cf-protection-branch", 1);
+        }
+        if h.fn_return_thunk_extern && x86 {
+            m.add_module_flag_i32(4, "function_return_thunk_extern", 1);
+        }
         match self.opts.reloc {
             RelocModel::Static => {}
             RelocModel::Pic(l) => m.add_module_flag_i32(8, "PIC Level", i32::from(l)),
@@ -3330,6 +3355,8 @@ pub(crate) struct DefFnAttrs {
     pub(crate) inline: DefInline,
     /// `const` / `pure` attributes (`crate::builtins::const_pure_attrs`).
     pub(crate) extra: Vec<Attr>,
+    /// What `StartFunction` knows of the function (WP-813).
+    pub(crate) start: crate::class_b::StartDecl,
 }
 
 /// Removes `optsize` and `minsize` (an `optnone` function).

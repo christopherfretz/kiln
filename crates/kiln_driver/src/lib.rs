@@ -191,6 +191,12 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         ArgError::UnsupportedByKiln(a) => {
             Diag::new(DiagId::drv_unsupported_flag, Span::INVALID).arg(a)
         }
+        ArgError::InvalidArgumentToOption(v, o) => {
+            Diag::new(DiagId::drv_invalid_argument_to_option, Span::INVALID).arg(v).arg(o)
+        }
+        ArgError::PatchableEntryOffset => {
+            Diag::new(DiagId::drv_unsupported_fpatchable_function_entry_argument, Span::INVALID)
+        }
     };
     d.emit(engine);
 }
@@ -292,6 +298,10 @@ fn check_action(args: &Args, drv: &DiagEngine<'_>) {
     if let Some(what) = not_impl {
         Diag::new(DiagId::drv_not_implemented, Span::INVALID).arg(what).emit(drv);
     }
+    // WP-813: clang's `XRayArgs` checks.
+    for d in args.codegen.xray_errors() {
+        d.emit(drv);
+    }
 }
 
 /// Writes the main output and the side dependency files; returns the exit
@@ -377,7 +387,11 @@ fn driver_warnings(
 ) -> bool {
     let promoted = args.promoted_inputs(inputs);
     let ignored = args.outline_atomics.filter(|_| !tc.target.is_aarch64());
-    if promoted.is_empty() && ignored.is_none() {
+    // WP-813: XRay's options without `-fxray-instrument` (clang claims
+    // them only with it).
+    let unused_xray =
+        if args.quiet_unused_arguments { Vec::new() } else { args.codegen.unused_xray_args() };
+    if promoted.is_empty() && ignored.is_none() && unused_xray.is_empty() {
         return false;
     }
     let sm = SourceManager::new();
@@ -398,6 +412,9 @@ fn driver_warnings(
                 .arg(flag)
                 .emit(&e);
         }
+    }
+    for x in unused_xray {
+        Diag::new(DiagId::drv_argument_unused, Span::INVALID).arg(x).emit(&e);
     }
     e.flush();
     e.error_count() > 0
