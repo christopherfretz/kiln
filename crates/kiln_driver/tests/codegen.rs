@@ -1331,11 +1331,11 @@ fn multiversion_unsupported_errors() {
     assert_eq!(o.status.code(), Some(1));
 }
 
-/// spec/codegen.md "Sanitizers" (WP-675): the frontend's ASan and MSan
+/// spec/codegen.md "Sanitizers" (WP-675): the frontend's `ASan` and `MSan`
 /// output: function attributes, the `no_sanitize` opt-outs, the global
 /// `no_sanitize_address`/`sanitize_address_dyninit` markers and the
 /// use-after-scope lifetime markers. (Not an `expect: ir` test: clang keeps
-/// local value names under ASan/MSan and kiln does not name values.)
+/// local value names under `ASan`/`MSan` and kiln does not name values.)
 #[test]
 fn sanitizer_frontend_attributes() {
     let d = scratch("sanitize");
