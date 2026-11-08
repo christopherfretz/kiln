@@ -385,6 +385,14 @@ pub struct Sema<'a, 'sm> {
     /// The functions (first declarations) clang 22 infers `noreturn`
     /// (`InferredNoReturnAttr`, [`Sema::infer_noreturn`]).
     pub(crate) inferred_noreturn: kiln_source::fx::FxHashSet<DeclId>,
+    /// The classes (first declarations) clang infers `[[gsl::Pointer]]`
+    /// on from a `std` container's `iterator` typedef naming them
+    /// (`Sema::inferGslPointerAttribute`, spec/sema-class.md §5.6).
+    pub(crate) gsl_inferred_pointers: kiln_source::fx::FxHashSet<DeclId>,
+    /// Set while a typedef is instantiated: its gsl inference runs only
+    /// for a pattern naming a dependent type (clang
+    /// `TemplateDeclInstantiator::InstantiateTypedefNameDecl`).
+    pub(crate) in_typedef_instantiation: bool,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -1197,6 +1205,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
             cfg_body: cfg::BodyCfg::default(),
             inferred_noreturn: kiln_source::fx::FxHashSet::default(),
+            gsl_inferred_pointers: kiln_source::fx::FxHashSet::default(),
+            in_typedef_instantiation: false,
             pack: (0, Vec::new()),
             ms_struct_pragma: false,
             fp_pragma: (kiln_ast::fp::FpOverride::NONE, Vec::new()),
