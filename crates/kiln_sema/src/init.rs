@@ -2026,9 +2026,12 @@ impl Sema<'_, '_> {
         // clang's `-Wc++11-narrowing-const-reference`).
         let (to, entity) = match self.ast.types.pointee(to) {
             Some(p) if self.ast.types.is_reference(to) => {
-                let lvalue = self.ast.types.canonical_kind(to) == kiln_ast::types::TypeKind::LValueRef;
+                let lvalue =
+                    self.ast.types.canonical_kind(to) == kiln_ast::types::TypeKind::LValueRef;
                 let q = self.ast.types.canonical(p).quals();
-                let binds_temp = !lvalue || (q.contains(kiln_ast::types::Quals::CONST) && !q.contains(kiln_ast::types::Quals::VOLATILE));
+                let binds_temp = !lvalue
+                    || (q.contains(kiln_ast::types::Quals::CONST)
+                        && !q.contains(kiln_ast::types::Quals::VOLATILE));
                 let tc = self.ast.types.canonical(p).without_quals();
                 if !binds_temp || tc == self.ast.types.canonical(from).without_quals() {
                     return;

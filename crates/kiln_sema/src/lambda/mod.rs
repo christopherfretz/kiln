@@ -38,6 +38,10 @@ pub struct LambdaCaptureSpec {
     pub name: Option<(Symbol, Loc)>,
     /// Where the capture begins (`&`, `this`, `*` or the identifier).
     pub loc: Loc,
+    /// The capture's last token (clang's `ExplicitCaptureRanges` end, for
+    /// the `-Wunused-lambda-capture` fix-it); `Loc::INVALID` when rebuilt
+    /// by template instantiation.
+    pub end: Loc,
     /// The `...` of a pack capture.
     pub ellipsis: Option<Loc>,
     /// The initializer of an init-capture, with its syntax as for a
@@ -182,6 +186,13 @@ pub(crate) struct LambdaScope {
     /// assertions, with the first such reference
     /// ([expr.prim.lambda.closure]/10; [`Sema::note_contract_capture_use`]).
     pub(crate) contract_caps: Vec<(Option<DeclId>, Loc)>,
+    /// Per capture, in order: bit 0 odr-used, bit 1 named without an
+    /// odr-use (clang `Capture::markUsed`), for `-Wunused-lambda-capture`.
+    pub(crate) cap_use: Vec<u8>,
+    /// Per explicit capture, in order: its written range (begin, last
+    /// token); empty when an explicit capture was rejected, which turns
+    /// the warning off as clang's `ExprError` does.
+    pub(crate) cap_ranges: Vec<(Loc, Loc)>,
 }
 
 impl Sema<'_, '_> {
@@ -225,6 +236,8 @@ impl Sema<'_, '_> {
             init_caps: Vec::new(),
             init_cap_vars: Vec::new(),
             contract_caps: Vec::new(),
+            cap_use: Vec::new(),
+            cap_ranges: Vec::new(),
         });
         self.act_on_explicit_captures(id, intro);
         self.create_init_capture_vars(id);
@@ -731,6 +744,7 @@ impl Sema<'_, '_> {
         self.pop_lambda_heads(top.heads, top.scope_base);
         self.ast.exprs.lambdas.get_mut(id).body = Some(body);
         let closure = top.closure;
+        self.diagnose_unused_lambda_captures(id, &top);
         self.finish_captures(id, closure, &top.cap_tys);
         self.check_contract_only_captures(&top.contract_caps);
         if let Some(f) = top.call_op {
