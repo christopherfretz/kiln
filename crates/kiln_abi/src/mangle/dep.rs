@@ -10,7 +10,9 @@
 use super::{Mangler, Structor, Sub};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, TraitKind, UnaryOp};
-use kiln_ast::ids::{ArgListId, DeclId, ExprId, NnsId, QualType, TemplateNameId};
+use kiln_ast::ids::{
+    ArgListId, DeclId, ExprId, NnsId, QualType, TemplateNameId, TemplateParamListId,
+};
 use kiln_ast::names::DeclNameView;
 use kiln_ast::types::{ArgView, ExprOperand, Nns, TagKeyword, TemplateName, TypeView};
 use kiln_source::symbol::Symbol;
@@ -45,7 +47,7 @@ impl Mangler<'_, '_> {
             TemplateName::TemplateTemplateParm { depth, index, .. }
             | TemplateName::CanonTemplateTemplateParm { depth, index, .. } => {
                 self.template_template_parm(depth, index);
-                self.template_args(args);
+                self.grouped_args(self.ttp_head(depth, index), args);
             }
             TemplateName::DependentIdentifier { nns, name } => {
                 self.dependent_template_spec(nns, name, args);
@@ -142,6 +144,9 @@ impl Mangler<'_, '_> {
                     TemplateName::TemplateTemplateParm { depth, index, .. }
                     | TemplateName::CanonTemplateTemplateParm { depth, index, .. } => {
                         self.template_template_parm(depth, index);
+                        self.grouped_args(self.ttp_head(depth, index), args);
+                        self.subs.push(key);
+                        return;
                     }
                     TemplateName::DependentIdentifier { nns, name } => {
                         self.dependent_template_prefix(nns, name);
@@ -169,10 +174,16 @@ impl Mangler<'_, '_> {
     /// converted (canonical) list has them: those for a trailing
     /// parameter pack are grouped into one `J ... E` argument pack.
     fn converted_args(&mut self, t: DeclId, args: ArgListId) {
+        let params = self.ast.template_info(self.ast.first(t)).map(|i| i.params);
+        self.grouped_args(params, args);
+    }
+
+    /// [`Self::converted_args`] against the parameter list `params`.
+    fn grouped_args(&mut self, params: Option<TemplateParamListId>, args: ArgListId) {
         let ast = self.ast;
         let list: Vec<_> = ast.types.args(args).to_vec();
-        let pack_at = ast.template_info(ast.first(t)).and_then(|i| {
-            let params = ast.templates.param_list(i.params).params;
+        let pack_at = params.and_then(|pl| {
+            let params = ast.templates.param_list(pl).params;
             ast.lists
                 .iter::<DeclId>(params)
                 .position(|p| ast.template_parm(p).is_some_and(|x| x.pack))
@@ -349,7 +360,9 @@ impl Mangler<'_, '_> {
         let operand = match ast.exprs.trait_type_arg(e) {
             Some(t) => t,
             None => match ast.exprs.first_child(e, &ast.lists) {
-                Some(sub) if ast.exprs.trait_kind(e) == TraitKind::SizeOf => ast.exprs.get(sub).ty(),
+                Some(sub) if ast.exprs.trait_kind(e) == TraitKind::SizeOf => {
+                    ast.exprs.get(sub).ty()
+                }
                 _ => return false,
             },
         };
@@ -359,7 +372,11 @@ impl Mangler<'_, '_> {
             TypeView::LValueRef(r) | TypeView::RValueRef(r) => r,
             _ => operand,
         };
-        let layout = crate::layout::type_size_align(ast, operand, &crate::Target::for_types(ast.types.target()));
+        let layout = crate::layout::type_size_align(
+            ast,
+            operand,
+            &crate::Target::for_types(ast.types.target()),
+        );
         let value = match ast.exprs.trait_kind(e) {
             TraitKind::SizeOf => layout.size,
             TraitKind::AlignOf => layout.align,
@@ -582,9 +599,8 @@ impl Mangler<'_, '_> {
                 self.out.push_str("cl");
                 let args: Vec<ExprId> =
                     ast.lists.iter::<ExprId>(ast.exprs.call_args(expr)).collect();
-                let packs = args
-                    .iter()
-                    .any(|&a| ast.exprs.get(a).kind() == ExprKind::PackExpansionExpr);
+                let packs =
+                    args.iter().any(|&a| ast.exprs.get(a).kind() == ExprKind::PackExpansionExpr);
                 let arity = if packs { UNKNOWN_ARITY } else { args.len() };
                 if !self.expression_arity(ast.exprs.callee(expr), arity) {
                     return false;
@@ -740,7 +756,18 @@ impl Mangler<'_, '_> {
                     args = ast.lists.iter::<ExprId>(ast.exprs.init_list_inits(one)).collect();
                 }
                 self.out.push_str(if list { "tl" } else { "cv" });
-                self.ty(node.ty());
+                // A class template to deduce with dependent arguments is
+                // its template name (clang leaves the deduced type of a
+                // dependent `DeducedTemplateSpecializationType` null; kiln
+                // records `DEPENDENT`, which the canonical type keeps).
+                match ast.types.view(node.ty().ty()) {
+                    TypeView::DeducedTemplateSpecialization { name, deduced }
+                        if deduced.is_none_or(|d| d == QualType::DEPENDENT) =>
+                    {
+                        self.template_name(name);
+                    }
+                    _ => self.ty(node.ty()),
+                }
                 let wrap = !list && args.len() != 1;
                 if wrap {
                     self.out.push('_');
@@ -1091,6 +1118,20 @@ impl Mangler<'_, '_> {
     /// clang `mangleUnresolvedTypeOrSimpleId`: `Some(true)` after an
     /// unresolved type (no closing `E` follows), `Some(false)` after a
     /// simple id, `None` when unsupported.
+    /// The template head of the template template parameter that `ty`,
+    /// as written, specializes.
+    fn written_ttp_params(&self, ty: QualType) -> Option<TemplateParamListId> {
+        let ast = self.ast;
+        let TypeView::TemplateSpecialization { name, .. } = ast.types.view(ty.ty()) else {
+            return None;
+        };
+        let TemplateName::TemplateTemplateParm { decl, .. } = ast.types.template_name_view(name)
+        else {
+            return None;
+        };
+        ast.template_parm(decl).and_then(|x| x.params)
+    }
+
     fn unresolved_type_or_simple_id(&mut self, ty: QualType, recursive: bool) -> Option<bool> {
         let ast = self.ast;
         // An alias template specialization keeps its name as written
@@ -1121,12 +1162,22 @@ impl Mangler<'_, '_> {
                     TemplateName::Template(t) => t,
                     // A template template parameter's specialization is an
                     // unresolved type: `srT_IJ5is_ccIiEEE5value`.
-                    TemplateName::TemplateTemplateParm { .. }
-                    | TemplateName::CanonTemplateTemplateParm { .. } => {
+                    // Its arguments are grouped as clang's converted list
+                    // against the parameter's own template head.
+                    TemplateName::TemplateTemplateParm { depth, index, .. }
+                    | TemplateName::CanonTemplateTemplateParm { depth, index, .. } => {
                         if recursive {
                             self.out.push('N');
                         }
-                        self.ty(q);
+                        let key = Sub::Type(q);
+                        if !self.try_sub(key) {
+                            self.template_template_parm(depth, index);
+                            let origin = ast.types.arg_origin(q.ty());
+                            let params =
+                                self.written_ttp_params(ty).or_else(|| self.ttp_head(depth, index));
+                            self.grouped_args(params, origin.unwrap_or(args));
+                            self.subs.push(key);
+                        }
                         return Some(true);
                     }
                     _ => return None,
