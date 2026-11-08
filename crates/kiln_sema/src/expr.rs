@@ -92,6 +92,12 @@ impl CastStyle {
     fn allows_const(self) -> bool {
         matches!(self, CastStyle::Const | CastStyle::CStyle | CastStyle::Functional)
     }
+
+    /// Whether a conversion between a derived class and its base is
+    /// valid even if the base is inaccessible ([expr.cast]/4).
+    fn ignores_base_access(self) -> bool {
+        matches!(self, CastStyle::CStyle | CastStyle::Functional)
+    }
 }
 
 impl Sema<'_, '_> {
@@ -3596,6 +3602,21 @@ impl Sema<'_, '_> {
                 let p = conv::strip_cv(self, lt);
                 (r2, p, p)
             }
+            // [expr.ass]/6: `b += p` is `b = b + p`, and only a `bool`
+            // takes the pointer back ([conv.bool]); the computation is the
+            // promoted `b` plus `p` (clang's `CheckAdditionOperands` with
+            // `CompLHSTy`, then `CheckAssignmentOperands`).
+            BinaryOp::AddAssign
+                if (self.ast.types.is_pointer(rt) || self.ast.types.is_array(rt))
+                    && self.ast.types.same_unqualified(lt, QualType::BOOL) =>
+            {
+                let r2 = conv::usual_unary_conversions(self, r);
+                let p = conv::strip_cv(self, self.ety(r2));
+                if !self.check_pointer_arith(p, loc) {
+                    return self.recover_err(&[l, r], loc);
+                }
+                (r2, QualType::INT, p)
+            }
             BinaryOp::ShlAssign | BinaryOp::ShrAssign => {
                 let int_like = |s: &Self, t: QualType| {
                     s.ast.types.is_integral(t) || conv::is_unscoped_enum(s, t)
@@ -4201,22 +4222,16 @@ impl Sema<'_, '_> {
         if let Some(res) = self.same_category_conditional(ops) {
             return res;
         }
-        // [expr.cond]/6: still different types with a class arm: overload
-        // resolution among the built-in `operator?:` candidates converts
-        // the arms (a class with `operator const T*()` against a `T*`).
-        // Arms of one class type that differ in cv only were unified by
-        // /4 (clang converts to the more-qualified type) and go on to /7;
-        // `b ? DB() << x : DB()` with `operator bool` must stay a `DB`.
+        // [expr.cond]/6: arms still of different types, one of class
+        // type: overload resolution over the built-in `operator?:`
+        // candidates converts them.
         let (tt, ft) = (self.ety(t), self.ety(f));
         let ops = if !self.ast.types.same_unqualified(tt, ft)
             && (self.ast.types.as_record(tt).is_some() || self.ast.types.as_record(ft).is_some())
         {
-            match self.conditional_builtin_overload(t, f, loc) {
-                Ok(Some([t, f])) if !self.is_err_expr(t) && !self.is_err_expr(f) => {
-                    CondOps { t, f, ..ops }
-                }
-                Ok(None) => ops,
-                Ok(Some(_)) | Err(()) => return self.recover_err(&[c, t, f], loc),
+            match self.overload_class_arms(ops) {
+                Ok((t, f)) => CondOps { c, c2, t, f, loc },
+                Err(res) => return res,
             }
         } else {
             ops
@@ -4273,13 +4288,13 @@ impl Sema<'_, '_> {
             }
             (Ok(Some(ty)), Ok(None)) => {
                 match conv::implicit_convert(self, t, ty, ConvCtx::Initialization) {
-                    Ok(x) => (x, f),
+                    Ok(x) => (self.unified_class_prvalue(x, ty), f),
                     Err(err) => return Err(self.conv_failed(&err, t, f, loc)),
                 }
             }
             (Ok(None), Ok(Some(ty))) => {
                 match conv::implicit_convert(self, f, ty, ConvCtx::Initialization) {
-                    Ok(x) => (t, x),
+                    Ok(x) => (t, self.unified_class_prvalue(x, ty)),
                     Err(err) => return Err(self.conv_failed(&err, t, f, loc)),
                 }
             }
@@ -4289,6 +4304,65 @@ impl Sema<'_, '_> {
             return Err(self.recover_err(&[c, t, f], loc));
         }
         Ok((t, f))
+    }
+
+    /// [expr.cond]/6: the arms converted by overload resolution over the
+    /// built-in `operator?:` candidates ([over.built]/25-26; clang
+    /// `FindConditionalOverload`). No viable candidate leaves the arms
+    /// unchanged (the caller reports them incompatible); `Err` carries
+    /// the recovery expression after a diagnosed failure.
+    fn overload_class_arms(&mut self, o: CondOps) -> Result<(ExprId, ExprId), ExprId> {
+        use crate::overload::{OvlOutcome, SetKind};
+        let CondOps { c, t, f, loc, .. } = o;
+        let mut set = self.begin_set(SetKind::Normal, loc);
+        set.object = Some(self.arg_info(t));
+        let mark = self.push_call_args(&mut set, &[f], &[]);
+        let types = [self.ety(t), self.ety(f)];
+        self.add_conditional_builtin_candidates(&mut set, types);
+        let out = self.resolve_set(&mut set);
+        self.ovl.lists.truncate(mark);
+        let res = match out {
+            OvlOutcome::Success(b) => {
+                let params = set.cand(b).builtin;
+                let conv = self.builtin_operand_conversions(&set, b, &[t, f]);
+                self.end_set(set);
+                let Some(arms) = conv else { return Err(self.recover_err(&[c, t, f], loc)) };
+                let mut out = [t, f];
+                for (i, &a) in arms.iter().enumerate().take(2) {
+                    match conv::implicit_convert(self, a, params[i], ConvCtx::Initialization) {
+                        Ok(x) if !self.is_err_expr(x) => out[i] = x,
+                        Ok(_) => return Err(self.recover_err(&[c, t, f], loc)),
+                        Err(err) => return Err(self.conv_failed(&err, t, f, loc)),
+                    }
+                }
+                return Ok((out[0], out[1]));
+            }
+            OvlOutcome::Ambiguous => {
+                let msg = self
+                    .diag(DiagId::sema_conditional_ambiguous_ovl, loc)
+                    .diff_args(self, types[0], types[1]);
+                self.emit(msg);
+                Err(self.recover_err(&[c, t, f], loc))
+            }
+            OvlOutcome::NoViable | OvlOutcome::Deleted(_) => Ok((t, f)),
+        };
+        self.end_set(set);
+        res
+    }
+
+    /// [expr.cond]/4.3: an arm converted to a class type `ty` (not a
+    /// reference) is a prvalue of exactly `ty`, cv-qualifiers included: a
+    /// `V` prvalue unified with a `const V` lvalue becomes `const V`, so
+    /// the arms then have the same type and the result is a `const V`
+    /// prvalue (clang's `NoOp` cast in `TryClassUnification`).
+    fn unified_class_prvalue(&mut self, x: ExprId, ty: QualType) -> ExprId {
+        if self.is_err_expr(x)
+            || self.ast.types.is_reference(ty)
+            || self.ast.types.same_type(self.ety(x), ty)
+        {
+            return x;
+        }
+        conv::raw_cast(self, CastKind::NoOp, x, ty, ValueCategory::PRValue, None)
     }
 
     /// [expr.cond]/4 and /5: glvalues of the same type and value category
@@ -4391,7 +4465,16 @@ impl Sema<'_, '_> {
         if (same_info || self.ast.types.as_record(tt).is_some())
             && self.ast.types.same_unqualified(tt, ft)
         {
-            let ty = conv::strip_cv(self, tt);
+            // Class arms of the same type, cv-qualifiers included (after
+            // the /4 unification, `c ? V() : cref` has two `const V`
+            // arms), give that type: the result is a `const V` prvalue
+            // (clang `hasSameType(LTy, RTy)`; duckdb binds `auto &` to
+            // one, WP-799).
+            let ty = if !same_info && self.ast.types.same_type(tt, ft) {
+                tt
+            } else {
+                conv::strip_cv(self, tt)
+            };
             if same_info {
                 return self.builder().conditional(c2, t2, f2, ty, loc);
             }
@@ -6309,8 +6392,11 @@ impl Sema<'_, '_> {
             && let Some(scs) = conv::standard_conversion(self, e, to, ConvCtx::Cast)
         {
             let was = std::mem::replace(&mut self.explicit_conv, true);
+            let was_access =
+                std::mem::replace(&mut self.cast_ignores_base_access, style.ignores_base_access());
             let r = conv::apply_standard_conversion(self, e, &scs, to);
             self.explicit_conv = was;
+            self.cast_ignores_base_access = was_access;
             match r {
                 Ok(x) => {
                     self.mark_explicit(x, e);

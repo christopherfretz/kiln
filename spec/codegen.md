@@ -3005,7 +3005,13 @@ reference bound to such a full-expression (`const auto& r = co_await
 a;` with an lvalue-reference `await_resume`) reloads its bound address
 the same way before the reference is stored (clang
 `EmitExprWithCleanupsLValue`; `Cg::emit_ref_binding`; WP-726,
-`expr.await/reference-result-bound-to-reference.cpp`).
+`expr.await/reference-result-bound-to-reference.cpp`). A prvalue use
+of a glvalue `co_await` (`auto v = co_await a;` with a reference
+`await_resume`, the operand of `CK_LValueToRValue`) loads the referee
+through the resume call's lvalue, as for a reference-returning call, so
+the value and not its address is spilled (clang `emitSuspendExpression`
+visits the resume call; `Cg::emit_glvalue_load`; WP-789,
+`expr.await/reference-result-loaded-by-value-run.cpp`).
 
 **`CoroEnd` cleanup (EH only, clang `CallCoroEnd`).** On unwinding,
 `llvm.coro.end(ptr null, i1 true, token none)`. For LLVM 19 it returns
@@ -3573,7 +3579,10 @@ No lowering changed; the new forms reach codegen as existing AST.
   widening multiply"; the pairwise widening add `vpaddl[q]` as
   `{s,u}addlp.VTy.N` of the operand bitcast to twice the lanes at half the
   width, and `vqdmulh[q]`/`vqrdmulh[q]` as one `sq[r]dmulh` call: WP-792,
-  `target.neon/ir-paddl-qdmulh-19.cpp`). The AArch64 ACLE builtins (`__builtin_arm_*`,
+  `target.neon/ir-paddl-qdmulh-19.cpp`; the structure loads and stores
+  `vld2`..`vld4`, `vst2`..`vst4` and the shift-and-insert `vsli_n`:
+  spec/landed/sema/WP-799.md "NEON structure loads and stores"). The
+  AArch64 ACLE builtins (`__builtin_arm_*`,
   `arm.rs`) are spec/landed/sema/WP-724.md "ACLE builtins".
 - With `CodegenOptions::sve` (AArch64 only), every function definition
   and the global-initialization functions (`__cxx_global_var_init`,

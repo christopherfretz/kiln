@@ -422,6 +422,12 @@ residual` (docs/status/wp-184-oracle-switch.md).
   (with `US` a member of the base `G<N>`) finds the enumerator and
   declares a variable ([dcl.ambig.res]/1; WP-782,
   `dcl.ambig.res/member-enum-of-base-specialization-enumerator-run.cpp`).
+  A name that qualified lookup does not find in a class with a
+  dependent base (the current instantiation named by its
+  injected-class-name, `X::B::type` in `X<T> : B<T>`) is `Dependent`: a
+  member of an unknown specialization ([temp.dep.type]/6), so it is a
+  type in a type-only context without `typename` (WP-789;
+  `tests/conformance/temp.dep.type/current-instantiation-qualifier-unknown-member-alias-run.cpp`).
 - A nested-name-specifier component naming a class or enumeration that
   is declared but not defined ([basic.lookup.qual]/1, [class.mem]/1:
   a class is complete only after its definition) is "incomplete type
@@ -1144,7 +1150,13 @@ Redeclaration and linkage rules:
   so `constexpr same_as<const bool> decltype(auto) r = X::v;` (with
   `decltype(X::v)` = `const bool`) is satisfied and `constexpr
   same_as<const int> decltype(auto) d = 1;` is `deduced type 'int' does
-  not satisfy 'same_as<const int>'` (`deduce_var_auto`, WP-335). The
+  not satisfy 'same_as<const int>'` (`deduce_var_auto`, WP-335).
+  The checked concept-id `C<T, A...>` is completed with `C`'s default
+  template arguments first, as for a written concept-id
+  ([temp.arg.general]/9): with `template <class S, class E = env>
+  concept K = sender_in<S, E>;`, `K auto f()` checks `K<T, env>` for
+  variables, return types and parameters alike
+  (`check_placeholder_constraint`, WP-789). The
   variable's type still carries that `const` unless `decltype(e)` is a
   reference: `constexpr decltype(auto) b = 1;` is `const int`,
   `constexpr decltype(auto) r = (g);` is `const int &` for a `constexpr
@@ -1170,6 +1182,15 @@ Redeclaration and linkage rules:
   checks it too (`member_of_object`), so the call through it has the
   deduced type (WP-690,
   `tests/conformance/dcl.spec.auto/static-member-through-dependent-base.cpp`).
+  When the declaration the use names has no instantiable definition,
+  another redeclaration instantiated from a friend definition is
+  instantiated instead ([temp.inst]/4): a friend declared without a body
+  in `key<N>` and defined with a deduced return type in `value<T>` is one
+  function, so once `value<T>` exists `decltype(lookup(key<N>()))` has
+  its deduced type (clang's `isDefined` counts a declaration instantiated
+  from a friend definition; the type map of std::execution
+  implementations, WP-789,
+  `tests/conformance/temp.friend/deduced-friend-defined-by-other-specialization.cpp`).
   A redeclaration
   ([dcl.spec.auto.general]/13) is matched against the declared
   placeholder type (`declared_fn_type`, kept in `declared_returns`), not
@@ -1195,7 +1216,13 @@ Redeclaration and linkage rules:
   still an error in the pattern. A call `x.g()` to a member whose
   return type is not yet deduced goes through `check_undeduced_use`
   (instantiating it when it is a specialization member) before
-  member-call building.
+  member-call building. A use in a class template of a member function
+  template's specialization, before the member template's body is
+  parsed (`static constexpr auto v = compute<true>();`), is
+  type-dependent like a use of a member function of the class
+  (`undeduced_dependent_use` also takes a specialization whose template
+  is in a dependent context; WP-787,
+  `tests/conformance/dcl.spec.auto/deduced-member-template-used-in-class-template.cpp`).
 - Declarator groups ([dcl.spec.auto.general]/3, /8): the parser records
   each declarator of a simple-declaration or member-declaration with
   `act_on_group_declarator(&mut AutoGroup, d)` and closes the group with
@@ -1777,6 +1804,14 @@ and returns the scope it names:
     definition not externally visible (codegen rule in spec/codegen.md
     "GNU inline functions"). Test:
     `tests/conformance/ext.gnu.inline/attribute-diags.cpp`.
+  - `artificial` (GNU syntax or `gnu::`; WP-789, clang `ArtificialAttr`,
+    `SubjectList<[InlineFunction]>`; `AttrKind::ARTIFICIAL`): kept on a
+    function whose declaration spells `inline`; elsewhere (a
+    non-function, or a function that is only implicitly inline) it warns
+    `'artificial' attribute only applies to inline functions`
+    [-Wignored-attributes] and is dropped. It concerns debug information
+    only, so it has no effect on the IR. Test:
+    `tests/conformance/dcl.attr/gnu-artificial.cpp`.
   - `alias("sym")`, `ifunc("resolver")`, `weakref` / `weakref("sym")`
     (GNU syntax or `gnu::`; WP-763, clang `handleAliasAttr`,
     `handleIFuncAttr`, `handleWeakRefAttr`; `AttrKind::ALIAS`,
@@ -1856,6 +1891,46 @@ and returns the scope it names:
     as type attributes (`Sema::apply_type_id_vector_attrs`, clang
     `processTypeAttrs`), so `ext_vector_type` is accepted at clang 19
     too (WP-187; `ext.vector/type-id-run.cpp`).
+  - `mode(M)` (GNU syntax; `vector.rs`, WP-799; clang `handleModeAttr`,
+    `parseModeAttrArg`) takes one identifier (`__M__` is `M`) and is
+    consumed into the declared type like `vector_size`. Modes:
+    `QI`/`HI`/`SI`/`DI`/`TI` are integer modes of 8/16/32/64/128 bits
+    (`byte` 8; `word`, `pointer`, `unwind_word` the pointer width);
+    `HF`/`SF`/`DF`/`XF`/`TF`/`KF`/`IF` floating modes of 16/32/64/96/128
+    bits and `SC`/`DC`/`XC`/`TC`/`KC`/`IC` their complex forms. The
+    floating type is clang's `getRealTypeByWidth`: `__fp16`, `float`,
+    `double`; 96 bits `long double` only if it is x87 (x86-64); `TF`
+    `long double` if that is IEEE quad (AArch64), else `__float128`;
+    `KF` `__float128` only where the target has it (x86-64); `IF` never
+    (`unsupported machine mode 'M'`). `V<N>M`, N a power of two, is a
+    GNU vector of N elements of mode M, with the -Wdeprecated-attributes
+    warning `specifying vector types with the 'mode' attribute is
+    deprecated; use the 'vector_size' attribute instead` (any other
+    `V...` is the whole name). Other names (`CQI`, `libgcc_cmp_return`,
+    ..., as in clang 19) are `unknown machine mode 'M'`. An integral or
+    enumeration type becomes the integer type of the mode's width with
+    the same signedness, a floating type the mode's floating type, a
+    complex floating type with a complex mode its complex type (with a
+    real mode the real type); the result is unqualified (clang replaces
+    the declaration's type). On a vector type a scalar mode replaces the
+    element type, keeping the size and kind; a vector mode builds the
+    vector of the new type. A non-arithmetic type (a complex integer
+    type included) is `mode attribute only supported for integer and
+    floating-point types`; an integer mode on a floating type, a
+    floating mode on an integer type or a complex mode on a real one is
+    `type of machine mode does not match type of base type`; as in
+    clang the mode's type is still installed. A vector mode on an
+    enumeration type is `mode 'M' is not supported for enumeration
+    types`, a complex mode on a vector type also `type of machine mode
+    does not support base vector types` (type unchanged). In a system
+    header the same: `mode` changes size and layout, so it is never
+    ignored (glibc's x86-64 `<bits/floatn.h>` declares `__cfloat128`
+    with `__mode__ (__TC__)`). On an enumeration declaration an integer
+    mode sets the underlying type, from the fixed type or else `int`
+    (clang `AddModeAttr` on an `EnumDecl`), so `enum E {X}
+    __attribute__((mode(QI)))` has underlying type `signed char`. On a
+    dependent type the attribute is dropped (a deviation: clang applies
+    it at instantiation; `ext.gnu.mode/mode-dependent-run.cpp` is xfail).
     Diagnostics (WP-187, `ext.vector/*-diagnostics.cpp`):
     - A type argument whose desugaring reaches a vector typedef stops at
       that typedef as written, with its scope: `'B' (aka 'X::v')`,
@@ -2808,6 +2883,12 @@ and returns the scope it names:
     parameter head prints its canonical replacement without scope
     (`T::y` with `T = ns::S` prints `S::y`, clang's
     `NestedNameSpecifier::print` `SuppressScope`) (WP-302).
+  - A concept-id prints as clang's `ConceptReference::print`: its
+    qualifier as written (kept through instantiation), the concept's
+    name and all its converted arguments, types canonical
+    (`!merror<err<why>>` for `!merror<completions>` with a local alias
+    `completions`; WP-789). Test:
+    `dcl.pre/static-assert-concept-id-requirement.cpp`.
   - The printed names are the substituted ones (clang's
     `FailedBooleanConditionPrinterHelper`, WP-303): a qualified
     `DeclRefExpr` prints its nested-name-specifier with the last type
@@ -3198,6 +3279,11 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   may name its own class's private members, but not those of another
   specialization ([class.friend]/2). The frame note names the
   specialization with its arguments (`'h<long>'`), as clang does.
+  Every non-static member function, a constructor, destructor or
+  conversion function included, substitutes its spec with `this`
+  ([expr.prim.this]/3): `C() noexcept(noexcept(conn(m_)))` calls a
+  member through the implicit `this` (WP-789; test
+  `except.spec/ctor-noexcept-implicit-this-member-run.cpp`).
 - *Consumers*: `noexcept(...)`, the resolution of overloads on a
   noexcept function pointer, member pointers and codegen's `nounwind`
   all go through `exc_spec_needed` / `resolve_exc_for_type`, so each
@@ -3788,7 +3874,12 @@ the initializer, or after default initialization, and before the
     - unary and binary operators, including compound assignment (its
       computation type promotes the left operand's type, bit-fields
       by width, and an unscoped-enumeration left operand is then an
-      error: sema-conv.md §6)
+      error: sema-conv.md §6). `b += p` with a `bool b` and a pointer
+      (or array) `p` is valid ([expr.ass]/6, [conv.bool]): its
+      computation types are `int` and `p`'s pointer type, and the sum
+      converts back to `bool`. No other left type takes a pointer
+      (WP-787, `tests/conformance/expr.ass/bool-add-assign-pointer-run.cpp`).
+      The Oven rejects it as "subexpression not valid", as clang does.
     - `?:`, the comma operator
     - increment and decrement (of `bool`, or `_Atomic(bool)`: `++` is
       clang's DefaultError `-Wincrement-bool` extension and is then
@@ -4419,6 +4510,11 @@ function) elsewhere.
   ([class.copy.elision]/3), which applies only when the named local's
   scope does not extend past the innermost enclosing try-block
   (`thrown_var_in_scope`, WP-100).
+- A non-trivial destructor of a class exception object is odr-used
+  ([except.throw]/5; `use_exception_dtor`, clang `CheckCXXThrowOperand`):
+  its access and deletion are checked as for a temporary, and an
+  implicit one is defined in the translation unit, since `__cxa_throw`
+  is passed its complete-object destructor (WP-799).
 - In `?:`, a throw operand gives the other operand's type and value
   category ([expr.cond]/2).
 - The Oven treats a `throw` it reaches as not a constant expression,
@@ -4508,7 +4604,13 @@ for them.
     restores them.
   - The final expression statement goes through
     `act_on_stmt_expr_result`: decay, then copy-initialization of a
-    prvalue of its cv-unqualified type.
+    prvalue of its cv-unqualified type. A class prvalue is kept as is;
+    a class glvalue is copied into the result by its copy (or move)
+    constructor (clang `InitializeStmtExprResult`; `arm_neon.h`'s
+    `vld2q` macros end in a local struct). Codegen emits that copy
+    into the destination inside the statement expression's scope,
+    before its locals are destroyed, and the oven initializes a class
+    result object the same way (spec/landed/sema/WP-799.md).
   - The type is that of the last non-null statement, looking through
     labels, when that is an expression statement; otherwise `void`.
     The result is always a prvalue.
@@ -6735,6 +6837,17 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   expression) and folded only when they contain none. Unsigned
   arithmetic is silent. The walk is bounded (65 536 nodes, depth 256)
   and skipped when the warning is disabled at the full-expression.
+- **Folds that cannot succeed (WP-798).** An operand is not folded when
+  every evaluation of it reaches a call of a member function the Oven
+  cannot call ([expr.const]/10.2; the Oven's own rule: not `constexpr`
+  on its latest declaration, and neither virtual, trivial, deleted nor a
+  closure's conversion function or invoker): looking through calls,
+  casts, member accesses, temporaries and operators other than `&&` /
+  `||`, nothing guarded by a condition. The fold would compile a thunk
+  and fail at that call; its answer is the same (no value, no record).
+  A failed fold that is tried gives its thunk back (spec/oven.md
+  "Evaluation entry points"). Test: driver
+  `overflow_scan_skips_folds_that_cannot_succeed`.
 - **Calls (WP-468).** An operand that calls a `constexpr` or
   `consteval` function or constructor (directly or below it; the cheap
   filter counts such a call as a candidate) is evaluated in the Oven with
@@ -6826,7 +6939,11 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     aggregate member) converted through a user-defined conversion
     checks its second standard conversion (`struct B { operator
     double(); }; int a[] = {B{}};` narrows, clang
-    `checkNarrowing(SCS.After)`; WP-303)
+    `checkNarrowing(SCS.After)`; WP-303); a parenthesized initializer
+    left empty by a pack expansion (`T x(a...)`, [temp.variadic]/7) is
+    `()` and value-initializes a non-class, non-reference `T` as an
+    `ImplicitValueInitExpr` ([dcl.init.general]/16.4; WP-787,
+    `tests/conformance/temp.variadic/empty-expansion-paren-init-value-initializes.cpp`)
   - references, binding directly or to a temporary
   - class objects by constructor ([dcl.init.general]/16.6.2.1; spec/sema-class.md
     §5): a direct-initialization from one expression of an unrelated class
@@ -7533,6 +7650,12 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   is `Never`; a plain edge plus any other is `Maybe` (`... in all
   control paths`); a plain edge alone is `Always`. A body with no graph
   (an `if consteval` under clang 19, or over the size cap) is `Never`.
+  A body whose last statement is a `return` is `Never` without a graph
+  (WP-798): the closing brace is reached only through that statement.
+  The graph costs 8 bytes per expression and nothing else may ask for
+  it, so building it for every value-returning body cost
+  bench/overload/arrow-chain.cpp 24 MB
+  (`stmt.return/return-ending-body-no-cfg.cpp`).
 - Initialization (one condition in `init.rs`, flagged): brace elision
   ([dcl.init.aggr]/16) only descends into an aggregate element; a class
   with a user-provided constructor is copy-initialized from the element
@@ -8358,7 +8481,10 @@ coroutine's body Sema replaces the body with a `CoroutineBodyStmt`
 - the frame allocation ([dcl.fct.def.coroutine]/9-11): the promise
   class's `operator new` is looked up first; when it exists the call
   tries the placement form `(size, [*this,] params...)` then `(size)`;
-  otherwise the global `operator new(size_t)`. When the promise declares
+  otherwise the global `operator new(size_t)`. The promise's `operator
+  new` templates take part in each try as in a new-expression, so
+  `template <class A> operator new(size_t, allocator_arg_t, A)` serves
+  `task f(allocator_arg_t, A)` (WP-789). When the promise declares
   `get_return_object_on_allocation_failure()` (which must be a static
   member function), the allocation must be non-throwing: a global or
   missing `operator new` becomes `::operator new(size_t, std::nothrow)`

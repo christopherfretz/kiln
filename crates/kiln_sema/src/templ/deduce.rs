@@ -145,6 +145,11 @@ pub struct DeducedArgs {
     /// (`SubstTemplateTypeParmPackType` in a partially substituted
     /// pattern, §7.2).
     pub pack_elem: Option<usize>,
+    /// The parameters (by index) named by the pattern of a pack expansion
+    /// in `P` that matched no `A` element: a pack among them is deduced
+    /// as empty ([temp.deduct.type]/9; clang `PackDeductionScope::finish`).
+    /// Partial ordering reads it ([temp.deduct.partial]/12).
+    pub empty_expanded: Vec<u16>,
     /// Where the deduction was requested (the call, the declaration, the
     /// alias template): the location of a diagnostic issued from a step
     /// that has none of its own.
@@ -161,6 +166,7 @@ impl DeducedArgs {
             pack_cur: None,
             expansions: false,
             pack_elem: None,
+            empty_expanded: Vec::new(),
             loc: Loc::INVALID,
         }
     }
@@ -267,6 +273,16 @@ impl Sema<'_, '_> {
                     let same = rest.len() == 1
                         && self.ast.types.canonical_arg(p) == self.ast.types.canonical_arg(rest[0]);
                     return if same { Tdk::Success } else { Tdk::MiscellaneousDeductionFailure };
+                }
+                if rest.is_empty() && d.pack_cur.is_none() {
+                    let mut used = vec![false; d.args.len()];
+                    self.mark_used_arg(pat, u32::from(d.depth), &mut used, 0);
+                    for (i, _) in used.iter().enumerate().filter(|x| *x.1) {
+                        let i = i as u16;
+                        if !d.empty_expanded.contains(&i) {
+                            d.empty_expanded.push(i);
+                        }
+                    }
                 }
                 return self.deduce_pack_elements(rest.len(), d, |s, i, d| {
                     s.deduce_arg(pat, rest[i], d, level, loc)
@@ -598,12 +614,75 @@ impl Sema<'_, '_> {
         }
         match a.view() {
             ArgView::Value { .. } | ArgView::Expr { .. } | ArgView::Profile(_) => {
-                self.record_deduction(parm.index, parm.pack, a, d)
+                let r = self.record_deduction(parm.index, parm.pack, a, d);
+                if r != Tdk::Success || parm.pack {
+                    return r;
+                }
+                self.deduce_nttp_type(e, a, d)
             }
             _ => {
                 d.info.first = Some(p);
                 d.info.second = Some(a);
                 Tdk::NonDeducedMismatch
+            }
+        }
+    }
+
+    /// [temp.deduct.type]/20 (C++17): a deduced non-type parameter whose
+    /// type is dependent, `template<class T, T *Ptr>`, deduces its type
+    /// from the type of the argument `a` (clang's
+    /// `DeduceNonTypeTemplateArgument`, `TDF_SkipNonDependent`; a
+    /// reference parameter matches the argument's type as that
+    /// reference). `e` names the parameter.
+    fn deduce_nttp_type(&mut self, e: Option<ExprId>, a: TemplateArg, d: &mut DeducedArgs) -> Tdk {
+        if self.std < kiln_lex::Std::Cxx17 {
+            return Tdk::Success;
+        }
+        let Some(decl) = e.and_then(|e| self.nttp_decl_of_expr(e)) else { return Tdk::Success };
+        let Some(pt) = self.ast.decls.get(decl).ty() else { return Tdk::Success };
+        if !self.ast.types.is_dependent(pt) {
+            return Tdk::Success;
+        }
+        let at = match a.view() {
+            ArgView::Value { ty, .. } => ty,
+            ArgView::Expr { expr, .. } => self.ast.exprs.get(expr).ty(),
+            ArgView::Profile(pr) => match self.ast.types.profile_expr(pr) {
+                Some(x) => self.ast.exprs.get(x).ty(),
+                None => return Tdk::Success,
+            },
+            _ => return Tdk::Success,
+        };
+        if at == QualType::ERROR {
+            return Tdk::Success;
+        }
+        let at = match self.ast.types.canonical_view(pt) {
+            TypeView::LValueRef(_) if !self.ast.types.is_reference(at) => {
+                self.ast.types.lvalue_ref_to(at)
+            }
+            TypeView::RValueRef(_) if !self.ast.types.is_reference(at) => {
+                self.ast.types.rvalue_ref_to(at)
+            }
+            _ => at,
+        };
+        self.deduce_ty(pt, at, TdfFlags::SKIP_NON_DEPENDENT, d, 0)
+    }
+
+    /// The non-type template parameter declaration `e` names (as
+    /// [`Self::nttp_of_expr`]).
+    fn nttp_decl_of_expr(&self, mut e: ExprId) -> Option<DeclId> {
+        let ex = &self.ast.exprs;
+        loop {
+            match ex.get(e).kind() {
+                ExprKind::ImplicitCastExpr | ExprKind::ParenExpr | ExprKind::ConstantExpr => {
+                    e = ex.operand(e);
+                }
+                ExprKind::SubstNonTypeTemplateParmExpr => e = ex.subst_replacement(e),
+                ExprKind::DeclRefExpr => {
+                    let decl = ex.decl(e);
+                    return (self.ast.decls.get(decl).kind() == DeclKind::NonTypeTemplateParm)
+                        .then_some(decl);
+                }
+                _ => return None,
             }
         }
     }
@@ -631,10 +710,10 @@ impl Sema<'_, '_> {
             return Tdk::Success;
         }
         let av = match a.view() {
-            ArgView::Value { value, .. } => {
-                let Some(av) = self.const_int(value) else { return Tdk::Success };
-                Some(av)
-            }
+            ArgView::Value { value, ty } => match self.const_int(value) {
+                Some(av) if !self.is_class_typed(e) => Some(av),
+                _ => return self.check_nondeduced_class_value(e, ty, value, p, a, d),
+            },
             ArgView::Expr { .. } | ArgView::Profile(_) => {
                 if self.ast.types.canonical_arg(p) == self.ast.types.canonical_arg(a) {
                     return Tdk::Success;
@@ -658,6 +737,71 @@ impl Sema<'_, '_> {
         d.info.first = Some(p);
         d.info.second = Some(a);
         Tdk::NonDeducedMismatch
+    }
+
+    /// [`Self::check_nondeduced_value`] for an argument `A` whose value
+    /// `value` of type `ty` is not an integer: a `P` of another class
+    /// type, or of class type `ty` with another value, does not match
+    /// (clang's `DeduceTemplateArguments` compares the substituted
+    /// `P`'s structural value with `A`'s; [temp.type]/2). Base classes
+    /// tried for `P` ([temp.deduct.call]/4.3) need it: `get<Tag>(map)`
+    /// with `Tag` given picks the one base whose tag equals it.
+    fn check_nondeduced_class_value(
+        &mut self,
+        e: ExprId,
+        ty: QualType,
+        value: kiln_ast::ConstValueId,
+        p: TemplateArg,
+        a: TemplateArg,
+        d: &mut DeducedArgs,
+    ) -> Tdk {
+        let et = self.ast.exprs.get(e).ty();
+        if self.ast.types.is_dependent(et) {
+            return Tdk::Success;
+        }
+        let et = crate::conv::strip_cv(self, self.ast.types.canonical(et));
+        let at = crate::conv::strip_cv(self, self.ast.types.canonical(ty));
+        let class = |s: &Self, t: QualType| s.ast.types.as_record(t).is_some();
+        if !class(self, et) && !class(self, at) {
+            return Tdk::Success;
+        }
+        let same = et == at
+            && match self.param_object_of(e) {
+                Some(pv) => pv == value,
+                None => self.try_fold(e).is_none_or(|v| v == value),
+            };
+        if same {
+            return Tdk::Success;
+        }
+        d.info.first = Some(p);
+        d.info.second = Some(a);
+        Tdk::NonDeducedMismatch
+    }
+
+    /// Whether the non-dependent type of `e` is a class type.
+    fn is_class_typed(&self, e: ExprId) -> bool {
+        let t = self.ast.exprs.get(e).ty();
+        !self.ast.types.is_dependent(t)
+            && self.ast.types.as_record(self.ast.types.canonical(t)).is_some()
+    }
+
+    /// The interned value of the template parameter object (§13.2
+    /// [temp.param]/8) that `e` names once wrappers are peeled, if any.
+    fn param_object_of(&self, e: ExprId) -> Option<kiln_ast::ConstValueId> {
+        let mut e = e;
+        for _ in 0..64 {
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::ParenExpr | ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
+                    e = self.ast.exprs.operand(e);
+                }
+                ExprKind::SubstNonTypeTemplateParmExpr => e = self.ast.exprs.subst_replacement(e),
+                ExprKind::DeclRefExpr => {
+                    return self.ast.templates.param_object_value(self.ast.exprs.decl(e));
+                }
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// The index of the non-type template parameter of depth `depth`
@@ -1058,6 +1202,10 @@ impl Sema<'_, '_> {
                 self.deduce_noexcept(pexc, aexc, flags, d, p, a)
             }
             TypeView::TemplateSpecialization { name, args, .. } => {
+                // The bases are tried from the deductions made before `A`
+                // itself was (clang's `DeducedOrig`): a failed match of
+                // `I<B>` against `ref<iface>` deduced `I = ref` already.
+                let orig = flags.contains(TdfFlags::DERIVED_CLASS).then(|| d.clone());
                 let r = self.deduce_template_id(name, args, a, d, next);
                 // A mismatch inside the arguments keeps its own `P`/`A`
                 // (clang reports the innermost pair); only an `A` that is
@@ -1071,7 +1219,8 @@ impl Sema<'_, '_> {
                 }
                 // No base matches: the result for `A` itself (clang's
                 // `DeduceTemplateSpecArguments`).
-                match self.deduce_from_bases(name, args, a, d, next) {
+                let orig = orig.unwrap_or_else(|| d.clone());
+                match self.deduce_from_bases(name, args, a, &orig, d, next) {
                     Some(b) => b,
                     None if not_id => mismatch(d),
                     None => r,
@@ -1374,8 +1523,10 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// [temp.deduct.call]/4.3: `P` against the bases of `A`; the
-    /// successful base must be unique. `None` when none matches. A class
+    /// [temp.deduct.call]/4.3: `P` against the bases of `A`, each from
+    /// the deductions `orig` made before `A` was tried; the successful
+    /// base must be unique, its deductions then replace `d`. `None` when
+    /// none matches. A class
     /// template specialization `A` not yet instantiated is instantiated
     /// first, at the deduction's location, so that its bases exist
     /// ([temp.inst]/2; clang's `isCompleteType` in
@@ -1386,6 +1537,7 @@ impl Sema<'_, '_> {
         name: kiln_ast::ids::TemplateNameId,
         args: ArgListId,
         a: QualType,
+        orig: &DeducedArgs,
         d: &mut DeducedArgs,
         level: u32,
     ) -> Option<Tdk> {
@@ -1409,7 +1561,7 @@ impl Sema<'_, '_> {
                     continue;
                 }
                 seen.push(first);
-                let mut trial = d.clone();
+                let mut trial = orig.clone();
                 if self.deduce_template_id(name, args, b, &mut trial, level) == Tdk::Success {
                     let cb = self.ast.types.canonical(b);
                     match &found {

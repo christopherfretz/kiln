@@ -304,6 +304,25 @@ Baselines are committed. Re-record when an intended change moves the numbers,
 when the reference compiler changes, or when the comparison has gone advisory.
 A baseline only means something on the host it was recorded on.
 
+A re-record must never absorb a regression nobody explained (WP-798).
+Before re-recording an entry that reports `REGRESSED`, classify it:
+
+- **real**: kiln got slower or bigger for no good reason. Fix it; do not re-record.
+- **expected**: a change that necessarily costs this. Name the commit.
+- **noise or host**: it does not reproduce.
+
+The re-record commit lists the entries and points at the note that
+classifies them; `docs/status/bench-regressions-WP-798.md` is the model.
+
+- **Time.** Judge a time regression against an older baseline by an
+  interleaved A/B on the current host: a release build of the commit
+  that recorded the baseline against the current build, alternating
+  `--filter <entry>` runs, comparing the fastest run of each. If the
+  baseline commit is as slow today, the regression is host, not kiln.
+- **RSS and Oven counters.** These do not depend on load. Bisect them
+  with a build per commit and `/usr/bin/time -f %M` or
+  `-fconstexpr-report`.
+
 With `--compare-with`, `--record` also **merges** the ratio table (see
 "Output") into `docs/status/perf.md`, the same way:
 

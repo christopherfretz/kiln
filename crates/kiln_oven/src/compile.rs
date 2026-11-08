@@ -489,9 +489,15 @@ impl Oven {
         f.nregs = nregs;
         f.ret = ret;
         match root {
-            Some(at) => self.thunks_at.insert((e, at, addr), idx),
-            None => self.thunks.insert((e, object, addr), idx),
-        };
+            Some(at) => {
+                self.thunks_at.insert((e, at, addr), idx);
+                self.last_thunk = None;
+            }
+            None => {
+                self.thunks.insert((e, object, addr), idx);
+                self.note_thunk(idx, (e, object, addr));
+            }
+        }
         idx
     }
 
@@ -1931,7 +1937,13 @@ impl Compiler<'_> {
     /// expression statement, as the value (into `dst` when given). A
     /// statement that leaves it by `return`, `break` or `continue` is not
     /// supported, as in clang: the note is at that top-level statement.
+    /// A class result initializes the object at `obj` (`(pointer, type)`)
+    /// instead (WP-799).
     fn stmt_expr(&mut self, e: ExprId, dst: Option<u32>) {
+        self.stmt_expr_to(e, dst, None);
+    }
+
+    fn stmt_expr_to(&mut self, e: ExprId, dst: Option<u32>, obj: Option<(u32, OTy)>) {
         let ast = self.b.ast();
         let body = ast.exprs.stmt_expr_body(e);
         let children = ast.lists.get(ast.stmts.compound_body(body)).to_vec();
@@ -1955,9 +1967,10 @@ impl Compiler<'_> {
             if temps {
                 self.open_scope(&[], true);
             }
-            match dst {
-                Some(dst) => self.rv_into(x, dst),
-                None => self.effect(x),
+            match (obj, dst) {
+                (Some((p, ty)), _) => self.init(x, p, ty),
+                (None, Some(dst)) => self.rv_into(x, dst),
+                (None, None) => self.effect(x),
             }
             if temps {
                 self.close_scope();
@@ -4788,6 +4801,12 @@ impl Compiler<'_> {
             return self.cx_compound_assign(e);
         }
         let ct = self.ty(x.result_ty);
+        // `b += p` for a `bool b` (a pointer computation stored into a
+        // non-pointer): clang's `ExprConstant` has no rule for it.
+        if matches!(self.kind(ct), TyKind::Ptr(_)) && !matches!(self.kind(lty), TyKind::Ptr(_)) {
+            self.trap(e, "subexpression not valid in a constant expression");
+            return self.lv_rmw(lhs, e);
+        }
         if self.o.types.wide(lty).is_some()
             || self.o.types.wide(ct).is_some()
             || self.is_wide_expr(x.rhs)
@@ -5047,6 +5066,7 @@ impl Compiler<'_> {
                     self.init_inner(op, p, ty);
                 }
             }
+            ExprKind::StmtExpr => self.stmt_expr_to(e, None, Some((p, ty))),
             _ if n.value_category().is_glvalue() => {
                 let src = self.lv_mem(e, Access::Read);
                 self.emit_at(Op::Copy, 1, &[p, src, ty.0], e);

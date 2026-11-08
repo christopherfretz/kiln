@@ -126,11 +126,14 @@ impl Sema<'_, '_> {
         // parameter-type-list, cv- and ref-qualifiers as a virtual
         // function of a base overrides it.
         // A static member function also "overrides" (diagnosed at `}`).
+        // A member function template overrides nothing ([temp.mem]/4;
+        // clang skips `AddOverriddenMethods` for a described template).
         if site.method
             && site.in_class
             && !site.friend
             && d.explicit_object.is_none()
             && site.prev.is_none()
+            && self.templ.cur.is_none()
         {
             out.overridden = if matches!(
                 self.ast.names.view(site.name),

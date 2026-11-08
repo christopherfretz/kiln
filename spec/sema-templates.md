@@ -554,7 +554,11 @@ resolves to a type-id.
 3. Otherwise the parser parses a `conditional-expression` with
    `greater_is_operator = false`.
 
-A trailing `...` wraps the argument in a pack expansion.
+A trailing `...` wraps the argument in a pack expansion. A
+TemplateExpansion `TT...` for a template template parameter (a partial
+specialization's `E<B, Bs...>`) is checked by its pattern and kept as
+the expansion. Test:
+`temp.variadic/template-template-pack-expansion-partial-spec-run.cpp`.
 
 The parser builds `TemplateArg`s of kind Type, Expr, Template or
 TemplateExpansion (types.md §8.3) and calls `act_template_id` (§11.2).
@@ -672,6 +676,7 @@ All of these are built by sema actions, which compute dependence as in
 | `X<T>` where `X` is a class template | dependent `TemplateSpecialization` type |
 | `T(args)` / `T{args}` with dependent `T` | `CXXUnresolvedConstructExpr` (list flag) |
 | `int x(e)` with a type-dependent `e` | the initializer is kept as `ParenListExpr` |
+| `T x(e)`, `T x = e` with a type-dependent `e` whose type is already a class `U` (`U(a)` with `a` type-dependent, a `CXXUnresolvedConstructExpr`) and a non-dependent `T` | `e` is kept unconverted and the initialization runs at instantiation (clang `InitializationSequence`'s `DependentSequence`), so `T x(U(a))` is direct-initialization there and an explicit `T(const U&)` is a candidate (WP-787, `temp.dep.expr/direct-init-from-dependent-functional-cast-explicit-ctor.cpp`) |
 | a braced argument `{…}` inside a dependent `T(args)`, `new T(args)`, `x(args)` initializer or mem-initializer | kept as a dependent `InitListExpr` with its nested lists intact (`Sema::dependent_args`), not the flattened braced-argument placeholder (`temp.dep.expr/braced-arg-nested-list.cpp`, WP-418). A mem-initializer pattern is rebuilt at instantiation by `written_args` (WP-445) |
 | `X x(e)`, `X x = e`, `X x{e}` whose type `X` is a dependent class type (including the current instantiation, [temp.dep.type]/7) | the initializer is kept unconverted (a `ParenListExpr` for the parenthesized form) and initialization runs only at instantiation, as clang's `AddInitializerToDecl`; overload resolution against a dependent target would treat every candidate's conversion as an identity and report ambiguity (WP-276) |
 | `sizeof...(P)` | `SizeOfPackExpr` |
@@ -805,7 +810,10 @@ non-identifier name; parse.md §2): `template int t<char>(1);` and
 **Deduction guide.** At namespace scope, a declarator whose name is a
 class template visible in scope, followed by a balanced `( … )` and then
 `->`. The parser detects it with a token scan, without tentative sema
-actions. It parses `[explicit-specifier] template-name (params) ->
+actions, and only when the decl-specifier-seq has no type specifier
+(`Declarator::typed`; clang's `AllowDeductionGuide`): `auto mk(F) -> T&`
+declares a function named like a visible class template `mk` (WP-789,
+`temp.deduct.guide/typed-function-named-like-class-template-run.cpp`). It parses `[explicit-specifier] template-name (params) ->
 simple-template-id ;` and calls `act_deduction_guide`.
 
 **Function template partial specialization** (`template<class T> void
@@ -872,6 +880,14 @@ type parameter named `auto:N`, as in clang's dump.
   the specialization's parameters ([temp.inst]/3; WP-298, libc++
   formatter.handle.pass.cpp; `dcl.fct/abbreviated-leading-param-run.cpp`,
   `tests/codegen/abbreviated_template_leading_param.cpp`).
+- `act_on_end_abbreviated` ends only an invented head opened by the
+  declaration that just ended. In a member declaration of a class, the
+  heads that were already open at the class's `{` are not popped
+  (`ClassBuild::heads`). One of them is the head of a generic lambda
+  that encloses a local class, and it stays open until the lambda ends,
+  so the locals declared after the class are still declared in the call
+  operator template ([expr.prim.lambda.general]/6; WP-789,
+  `class.local/generic-lambda-local-class-member-then-local-run.cpp`).
 - A friend function declarator finishes its invented head like any
   other declarator: `friend R f(S, C auto)` (defined in the class or not)
   declares an abbreviated friend function *template* ([dcl.fct]/22,
@@ -1529,7 +1545,23 @@ silently (`diag = None`) at those sites. S3O lists them.
    `DeducedArgs::expansions`), so `template <class... P> X<0, T<P...>>`
    is more specialized than `template <int R, class... P> X<R, T<P...>>`
    whatever the indices of the two `P`s (WP-292; test
-   `templates/spec/temp.spec.partial.order-pack-expansion.cpp`).
+   `templates/spec/temp.spec.partial.order-pack-expansion.cpp`). Each
+   direction also finishes the deduction ([temp.deduct.partial]/12 via
+   [temp.deduct.type]/1, clang `FinishTemplateArgumentDeduction`): the
+   other partial's arguments with the deduced values substituted must
+   equal the synthesized arguments, non-deduced contexts included, packs
+   compared element-wise and nothing converted, so `X<M, when<c>>` is not
+   at least as specialized as `X<T, when<f<T>::value>>` (WP-787,
+   Boost.Hana; `partial_args_match` with `ordering`,
+   `tests/conformance/temp.spec.partial.match/order-non-deduced-context-must-match.cpp`).
+   A request for the specialization while its partials are matched
+   (step 3 substituting a default template argument that names it, as
+   `X<T, enable_if_t<is_convertible_v<T, S>>>` with a constructor
+   template of `S` defaulting to `typename X<T>::type`) finds it
+   incomplete, a substitution failure in that SFINAE context, as clang's
+   `getPatternForClassTemplateSpecialization` does on
+   `isAlreadyInstantiating` (`InstState::selecting`; WP-787,
+   `tests/conformance/temp.inst/partial-match-recursive-request-incomplete.cpp`).
 5. If no unique best partial exists, the error is "ambiguous partial
    specializations of 'X<int *>'", with a note "partial specialization
    matches [with T = int]" for each candidate.
@@ -1538,6 +1570,19 @@ silently (`diag = None`) at those sites. S3O lists them.
 
 Explicit specializations never reach this step: they are found by the
 probe in §4.2.
+
+**In-class explicit specializations of member variable templates**
+([temp.expl.spec]/3, CWG 727). `template<> constexpr bool v<int> =
+true;` in a class declares a static data member without `static` being
+written: its initializer is parsed in place, not saved as a default
+member initializer. In a class template, each instantiation redeclares
+it for the instantiated member template
+(`Substituter::member_explicit_var_spec`): its arguments and type are
+substituted, it becomes that template's explicit specialization, and its
+initializer is instantiated at once. Codegen emits an odr-used one as it
+does a member of the instantiated class, `linkonce_odr`
+(`instantiated_var_def`), as clang (WP-789,
+`temp.expl.spec/in-class-member-variable-template-spec-run.cpp`).
 
 **Member class templates** ([temp.spec.partial.member]/2). When a class
 template is instantiated, each in-class partial specialization of a
@@ -2039,8 +2084,8 @@ class name" at `B`
 - `A` followed by `<`, or used as a template template argument, is the
   template-name ([temp.local]/1–2). The parser forms such an argument as
   a type; `template_id` converts it to the template when the
-  corresponding parameter of a class, alias or variable template is a
-  template template parameter (`injected_template_args`, clang's
+  corresponding parameter of a class, alias or variable template or of
+  a concept is a template template parameter (`injected_template_args`, clang's
   `convertTypeTemplateArgumentToTemplate`), so substitution never sees
   the injected type there (libc++ `__split_buffer:160`
   `__split_buffer_pointer_layout<__split_buffer<…>, …>`, WP-398). Test:
@@ -2082,7 +2127,13 @@ class name" at `B`
   `Record(get_class_spec(tmpl, level args))`. It always hits the map,
   because the specialization exists.
 - Inside a partial specialization, the injected-class-name is the
-  partial's own pattern args, as written.
+  partial's own pattern args, as written: the argument pack the
+  conversion formed for the primary's trailing parameter pack is spread
+  into its elements (`vd<int, T...>`, not `vd<int, <T...>>`), so a
+  substitution (a member alias template naming `vd`) converts them
+  against the primary's parameters again (`partial_injected_type`;
+  WP-787,
+  `tests/conformance/temp.local/partial-pack-injected-name-in-alias-template.cpp`).
 - As a nested-name-specifier (`A::*`, `&A::m`, `A::m`) it is the
   `InjectedClassName` type too, so member pointers formed from it are
   dependent and substituted (spec/sema.md §5.21, WP-608).
@@ -2141,7 +2192,12 @@ class name" at `B`
   `temp.friend/p9-constraint-on-enclosing-distinct.cpp`). The constraint
   may be a template parameter's type-constraint
   (`template<std::convertible_to<T> U>`) or name a level further out
-  (a member class template of a class template). A non-template friend
+  (a member class template of a class template), or name a member class
+  of the enclosing template, which substitutes to another class (the
+  injected-class-name of `outer<C>::type`, defined in the class or out
+  of line; WP-789,
+  `temp.friend/constrained-friend-of-member-class-of-template-run.cpp`).
+  A non-template friend
   with a requires-clause is apart the same way (the paragraph's "such a
   constrained friend function"; `friend_decl` sets the flag from the
   pattern's trailing requires-clause), so `friend int f(Base) requires
@@ -2228,7 +2284,12 @@ parameters, their defaults or their depth goes through one of:
   the arguments are not the primary's own parameters
   ([temp.spec.partial.general]/9.3, "class template partial
   specialization does not specialize any template argument";
-  `check_partial_args`).
+  `check_partial_args`). A non-type argument names the primary's
+  parameter only when the partial specialization's parameter also has
+  the primary parameter's canonical type ([temp.over.link]/6, clang's
+  profile of a non-type parameter includes its type): `template<auto K>
+  class C; template<class T, T *K> class C<K>` specializes `K` (WP-789,
+  tests/conformance/temp.spec.partial.general/auto-primary-same-type-partial-is-primary.cpp).
 - `visible_template(t)`: the latest declaration that is not a friend
   (the one name lookup finds; a friend is invisible to it), else the
   first. The constraints checked for a class template-id
@@ -2270,6 +2331,12 @@ and the §6.2 tests.
   clang's error: "default member initializer for 'x' needed within
   definition of enclosing class 'A<int>' outside of member functions".
 - The frame is `DefaultMemberInitializerInstantiation`.
+- A braced NSDMI `T m{x}` whose pattern is already a construction (`x`
+  only value-dependent) is rebuilt from its braced list, as a variable's
+  initializer is (§5.4, `Substituter::initializer`), so it stays
+  direct-list-initialization and an explicit constructor is usable
+  (WP-787, Boost.Hana `Tracked tracker{i}`,
+  `tests/conformance/class.mem.general/default-member-initializer-direct-list-dependent.cpp`).
 - An NSDMI whose substitution fails makes its field invalid (clang
   `InstantiateInClassInitializer`), so a constructor or aggregate
   initialization that uses it reports nothing more (WP-220;
@@ -2342,6 +2409,14 @@ with a `VarTemplateSpecialization` decl.
   to deduce the type, so a use of `v<T>` inside another constexpr
   initializer is not "depends on itself" (WP-726;
   `tests/conformance/dcl.spec.auto/variable-template-reference-placeholder.cpp`).
+- A class member access `x.v<args>` / `p->template v<args>` naming a
+  static data member template ([temp.names]/3, [expr.ref]/6.1) is held as
+  a one-member set until its arguments follow; non-dependent ones name
+  the specialization, accessed as a static data member (clang
+  `BuildMemberReferenceExpr` → `CheckVarTemplateId`), dependent ones form
+  the access again at instantiation, and none at all is "use of variable
+  template 'v' requires template arguments" (WP-789,
+  `tests/conformance/temp.names/member-access-variable-template-run.cpp`).
 - The `inline constexpr bool xxx_v` family (142 declarations in the M3
   headers, §13.3) is the hottest path. One probe gives the decl and one
   `consts()` lookup gives its value.
@@ -3003,7 +3078,14 @@ recomputed exactly as for non-template code (clang's
   template arguments and its local declarations. Member classes are
   defined with the outermost local class. Member function bodies are
   defined after it is complete, in the re-entered class scopes, as the
-  parser replays them. Local enumerations are substituted the same way.
+  parser replays them. Each body is a function of its own: the enclosing
+  function's references still waiting for the end of their
+  full-expression (odr-use marking, potential lambda captures, as a
+  tuple-like binding's `get` call leaves them) are set aside while it is
+  instantiated, so the body never claims them as references to an
+  enclosing local (WP-789,
+  `tests/conformance/class.local/member-body-after-tuple-binding-run.cpp`).
+  Local enumerations are substituted the same way.
   An anonymous struct or union member of a local class is instantiated as
   in a class template (`unnamed_member_class`), which declares its member
   object and injects its members' names (WP-192). A block-scope
@@ -3631,14 +3713,23 @@ a function parameter pack) is `MiscellaneousDeductionFailure`
 
 A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
-([temp.deduct.call]/4.3). An `A` that is a class template specialization
+([temp.deduct.call]/4.3), each from the deductions made before A was
+tried (clang's `DeducedOrig`): what the failed match of A deduced
+(`I = ref` from `I<B>` against `ref<iface>`) is dropped (WP-789,
+`tests/conformance/temp.deduct.call/base-after-template-template-mismatch-run.cpp`). An `A` that is a class template specialization
 not yet instantiated is instantiated first, at the deduction's location
 and without the undefined-template diagnostic, so its bases exist
 ([temp.inst]/2; clang's `isCompleteType` in `DeduceTemplateBases`; WP-682,
 `tests/conformance/temp.deduct.call/derived-base-instantiates-argument-class.cpp`,
 `libstdcxx-get-uninstantiated-tuple.cpp`: libstdc++ `std::get` on a
-`tuple&` that a qualified call reaches with no ADL to complete it). The
-success must be unique; otherwise the
+`tuple&` that a qualified call reaches with no ADL to complete it).
+`DerivedClass` is set only when P is a template-id or a pointer to one.
+Through a second pointer, `F<T>**` against `X<A, B>**` is a plain type
+match, so a mismatch neither tries the bases nor instantiates `X<A, B>`
+(clang's `isSimpleTemplateIdType` in `getTDF`; WP-787, Boost.Proto
+`template_arity`,
+`tests/conformance/temp.deduct.call/pointer-to-pointer-no-derived-class-deduction.cpp`).
+The success must be unique; otherwise the
 result is `MiscellaneousDeductionFailure` (clang). The template of `A` (or
 of a base) is the class template it is a specialization of: alias
 template sugar is looked through ([temp.alias]/2; clang's
@@ -3655,7 +3746,11 @@ next base (`check_nondeduced_value`; clang converts the substituted
 argument to an integral one). `std::get<1>(tuple)` matches
 `_Tuple_impl<1, _Head, _Tail...>` against the second base, not the first
 (`tests/conformance/temp.deduct.call/libstdcxx-base-explicit-nttp-mismatch.cpp`,
-WP-332).
+WP-332). A class-type value ([temp.param]/8) matches only a value of the
+same class type naming the same template parameter object, so an
+explicitly given class-type tag never matches a base whose argument is an
+integer or another class value (`check_nondeduced_class_value`; WP-789,
+`tests/conformance/temp.deduct.call/explicit-class-nttp-selects-base-run.cpp`).
 
 A dependent class template-id `P` written with fewer arguments than its
 template has is first completed with the template's default arguments
@@ -3690,6 +3785,15 @@ deduction fails as before. Tests:
 - `_Atomic(T)` (WP-154: clang 19 does not deduce through an `AtomicType`,
   so `template<class T> void f(_Atomic(T)*)` called with an
   `_Atomic(int)*` fails to deduce `T`).
+
+**Non-type parameter types** ([temp.deduct.type]/20, C++17 and later).
+A deduced non-type parameter whose declared type is dependent also
+deduces that type from the type of its argument, with
+`SkipNonDependent` (clang's `DeduceNonTypeTemplateArgument`; a reference
+parameter matches the argument's type as that reference): `template<class
+T, T *P> struct S<P>` deduces `T` from `S<&g>`, and the deducibility
+check of a partial specialization finds `T` deducible (WP-789,
+tests/conformance/temp.spec.partial.general/auto-primary-typed-nttp-partial-run.cpp).
 
 **Consistency.** Two deductions of the same param must be canonically
 equal. For NTTPs, the values must be equal after conversion to the
@@ -3935,7 +4039,10 @@ after selection and on any odr-use:
   `__stable_sort` and `__stable_sort_move`) is not instantiated again:
   its definition is in progress, as clang's `isDefined` is once
   `InstantiateFunctionDefinition` has started. Test:
-  `temp.inst/constexpr-mutual-recursion.cpp`.
+  `temp.inst/constexpr-mutual-recursion.cpp`. The same holds for a
+  member function of a class template specialization (a move
+  constructor calling a constexpr `swap` that moves `*this`). Test:
+  `temp.inst/constexpr-members-mutually-recursive-run.cpp`.
 - **Every other specialization** is pushed onto `pending`. It is
   instantiated at end of TU, or earlier through `ensure_body`.
 - **Explicit-instantiation-declaration members** are queued only if they
@@ -4142,6 +4249,11 @@ guides.
    and the same holds for a non-type, template template or pack parameter
    (WP-779, `tests/conformance/temp.func.order/p12-undeduced-used-*.cpp`,
    clang 19 and 22 agree).
+   A pack named by the pattern of a `P` pack expansion that matches no
+   `A` element has a value: the empty pack ([temp.deduct.type]/9; clang
+   `PackDeductionScope::finish`; `DeducedArgs::empty_expanded`). So
+   `f(L<>, F&&)` is more specialized than `f(L<T...>, F&&)` (WP-787,
+   `tests/conformance/temp.func.order/p12-empty-expansion-deduces-empty-pack-run.cpp`).
    The last tie-breaker for packs is
    [temp.func.order]/5: a function without a trailing pack wins.
 5. **Constraints.** If both directions succeed, the more constrained one
@@ -5119,7 +5231,7 @@ Its requirements are processed **in order**, each under
 |---|---|
 | simple `E;` | substituting `E` succeeds (it is not evaluated) |
 | type `typename T::x;` | substitution forms a valid type |
-| compound `{E} noexcept -> C<A…>;` | `E` substitutes; with `noexcept`, `E` cannot throw; with a type-constraint, `C<decltype((E)), A…>` is satisfied |
+| compound `{E} noexcept -> C<A…>;` | `E` substitutes; with `noexcept`, `E` cannot throw; with a type-constraint, `C<decltype((E)), A…>` is satisfied, a pack expansion among `A…` (`-> C<P...>`) expanded to its elements (WP-789) |
 | nested `requires B;` | `B` is satisfied (§8.3), under `NestedRequirementConstraintsCheck` |
 
 A `requires`-expression outside any template whose requirement is
@@ -6592,6 +6704,12 @@ pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
   it if it is a template specialization member (`check_undeduced_use`).
   Otherwise it reports
   `function {0} with deduced return type cannot be used before it is defined`.
+  A conversion function considered as a candidate is treated the same
+  way before its return type is read (`add_conversion_candidate`, as
+  clang's `AddConversionCandidate`): `operator auto` of a class
+  template specialization is instantiated, and one that stays undeduced
+  is no candidate (WP-789,
+  `class.conv.fct/operator-auto-of-class-template-candidate-run.cpp`).
 - `__has_builtin` (and `__has_constexpr_builtin`) consult the table
   only in the sema modes (`-fsyntax-only`, `-emit-llvm`, …;
   `build_preprocessor(.., staged: true)`). `-E` and `-M` answer as
@@ -7708,23 +7826,31 @@ declarator scopes.**
   constructor, so `c ? B() : D()` with `D(B)` is a `B` (WP-669,
   tests/conformance/expr.cond/p4-base-not-converted-to-derived.cpp);
   /4.3.3, implicit conversion to the other's prvalue type. If both directions succeed, the result is
-  `sema_conditional_ambiguous`; if one does, it is applied.
-- *[expr.cond]/6 built-in candidates* (clang `FindConditionalOverload`):
-  if the types still differ and either arm is a class, overload
-  resolution runs over the built-in `operator?:` candidates of
-  [over.built]/24-25: `T(bool, T, T)` for each pointer, pointer-to-member
-  and scoped enumeration type T that an arm converts to (by a
-  non-explicit conversion function or no conversion), and `LR(bool, L, R)`
-  for each pair of promoted arithmetic types. The winner's user-defined
-  conversions are applied to the arms and the /7 rules continue on the
-  result, so `b ? ref : (F *)nullptr` with `operator const F *()` is a
-  `const F *`. An ambiguous set is `sema_conditional_ambiguous_ovl`; no
-  viable candidate falls through to `sema_conditional_incompatible`
-  (WP-801, tests/conformance/expr.cond/p6-builtin-candidates-*.cpp).
-  Arms of one class type that differ only in cv-qualification (a
-  `const B` lvalue and a `B` prvalue) do not reach this step: /4.3.1
-  unified them, and the result stays a `B` prvalue even when `B` has
-  `operator bool` (tests/conformance/expr.cond/p4-cv-differing-class-arms-not-builtin-run.cpp).
+  `sema_conditional_ambiguous`; if one does, it is applied. An arm converted
+  to a class type (not a reference) has exactly that type, cv included
+  (clang's `NoOp` cast): `b ? V() : cref` with `const V &cref` has two
+  `const V` arms and is a `const V` prvalue, so `auto &r = b ? V() :
+  cref;` binds `const V &` (WP-799,
+  tests/conformance/expr.cond/class-prvalue-unified-const-run.cpp).
+- *[expr.cond]/6 built-in `operator?:` candidates* (clang
+  `FindConditionalOverload`; WP-787): when the arms still differ in type
+  after /4 and /5 and either is a class, overload resolution runs over the
+  built-in candidates of [over.built]/25-26 (`T(T, T)` for each pointer,
+  pointer-to-member and scoped enumeration type an arm converts to;
+  `LR(L, R)` for the promoted arithmetic types;
+  `add_conditional_builtin_candidates`). The best one converts both arms
+  to its parameter types and /7 continues, so two classes converting to
+  `bool` give `int`. No best candidate is
+  `sema_conditional_ambiguous_ovl`; no viable one leaves the arms to /7,
+  which reports them incompatible
+  (tests/conformance/expr.cond/p6-class-arms-builtin-overload-run.cpp,
+  `-errors.cpp`).
+- *[expr.cond]/6 cv-only differing class arms*: arms of one class type
+  that differ only in cv-qualification (a `const B` lvalue and a `B`
+  prvalue) do not reach the /6 step: /4.3.1 unified them, and the result
+  stays a class prvalue even when `B` has `operator bool` (WP-801,
+  tests/conformance/expr.cond/p4-cv-differing-class-arms-not-builtin-run.cpp,
+  clang's `Parser.cpp` `c ? Diag(..) << x : Diag(..)`).
 - *[expr.cond]/7 class prvalue result*: when the arms are a class type
   (after /4) and not glvalues of the same category, each glvalue arm
   copy-initializes the prvalue result (clang `PerformCopyInitialization`

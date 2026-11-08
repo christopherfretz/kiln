@@ -382,6 +382,10 @@ pub struct InstState {
     /// The depth limit was hit: no further instantiation (the error is
     /// fatal).
     pub(crate) fatal: bool,
+    /// The class template specializations whose partial specialization
+    /// is being selected (§4.4): a nested request for one of them finds
+    /// it incomplete (clang `isAlreadyInstantiating`).
+    pub(crate) selecting: Vec<DeclId>,
     /// The members already queued in `pending` (no duplicates).
     pub(crate) queued: kiln_source::fx::FxHashSet<DeclId>,
     /// While the end-of-TU drain instantiates one pending definition:
@@ -1846,7 +1850,11 @@ impl Sema<'_, '_> {
         if self.special.has_pending() {
             self.flush_pending_deleted();
         }
-        if self.templ.heads.last().is_some_and(|h| h.invented) {
+        // Only a head the declaration opened: in a member declaration of
+        // a local class of a generic lambda, the invented head below the
+        // class's is the lambda's, open until the lambda ends.
+        let floor = self.classes.last().map_or(0, |c| c.heads);
+        if self.templ.heads.len() > floor && self.templ.heads.last().is_some_and(|h| h.invented) {
             self.templ.heads.pop();
             self.ast.templates.dependent_depth =
                 self.ast.templates.dependent_depth.saturating_sub(1);

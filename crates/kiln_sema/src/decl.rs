@@ -6968,15 +6968,33 @@ impl Sema<'_, '_> {
     /// a later definition at namespace scope completes the same
     /// non-dependent type. A class declared in a block or class scope
     /// keeps the enclosing template's dependence.
-    fn namespace_tag_record(&mut self, h: DeclHead, tag: TagKind) -> DeclId {
+    fn namespace_tag_record(&mut self, h: DeclHead, tag: TagKind, prev: Option<DeclId>) -> DeclId {
         let ns = self.ast.redecl_context(h.ctx);
         if !matches!(self.kind_of(ns), DeclKind::Namespace | DeclKind::TranslationUnit) {
-            return self.builder().record(h, tag, None);
+            return self.builder().record(h, tag, prev);
         }
         let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
-        let d = self.builder().record(h, tag, None);
+        let d = self.builder().record(h, tag, prev);
         self.ast.templates.dependent_depth = saved;
         d
+    }
+
+    /// The class `friend class n;` declared in namespace `ns`, still
+    /// hidden from ordinary lookup ([namespace.memdef]/3), that an
+    /// elaborated-type-specifier `class n` naming no visible class
+    /// redeclares ([basic.scope.pdecl]/7: it declares `n` in that same
+    /// namespace). clang `ActOnTag` finds it by a redeclaration lookup in
+    /// the namespace; the new declaration joins its chain and is visible,
+    /// so a member `class n *p;` after `friend class n;` and the later
+    /// definition are one class (z3's `smt::context` befriending
+    /// `smt::parallel`; WP-799).
+    fn hidden_friend_tag(&self, ns: DeclId, n: Symbol, keyword: TagKeyword) -> Option<DeclId> {
+        let found = self.ast.lookup_local(ns, DeclName::ident(n)).iter().collect::<Vec<_>>();
+        found.into_iter().rev().find(|&d| {
+            self.kind_of(d) == DeclKind::CXXRecord
+                && self.ast.decls.get(d).misc().friend() == FriendKind::Undeclared
+                && self.tag_matches(d, keyword)
+        })
     }
 
     /// The promotion type of an enumeration with underlying type `t`
@@ -7395,6 +7413,14 @@ impl Sema<'_, '_> {
             }
         }
         let ctx = qualifier.unwrap_or_else(|| self.tag_decl_context(use_));
+        let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
+        if plain_ref
+            && !conflict
+            && keyword != TagKeyword::Enum
+            && let Some((n, _)) = name
+        {
+            prev = self.hidden_friend_tag(ctx, n, keyword);
+        }
         let dname = name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         let mut h = DeclHead::new(ctx, dname, name.map_or(loc, |n| n.1));
         if redefined {
@@ -7405,7 +7431,6 @@ impl Sema<'_, '_> {
             h.misc = h.misc.with_friend(FriendKind::Undeclared);
             h.flags = h.flags.with(DeclFlags::INVALID);
         }
-        let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
         let d = self.new_tag_decl(h, keyword, (scoped, fixed), prev, plain_ref);
         self.finish_member_class_spec(member_class_spec, d);
         if qualifier.is_none() {
@@ -7457,7 +7482,7 @@ impl Sema<'_, '_> {
             let fx = fixed.map(|f| (f, self.enum_promotion(f)));
             self.builder().enumeration(h, scoped, fx, prev)
         } else if plain_ref && self.templ.cur.is_none() {
-            self.namespace_tag_record(h, Self::tag_kind_of(keyword))
+            self.namespace_tag_record(h, Self::tag_kind_of(keyword), prev)
         } else {
             self.mark_pattern_next();
             self.builder().record(h, Self::tag_kind_of(keyword), prev)
@@ -7583,7 +7608,7 @@ impl Sema<'_, '_> {
         let mut h = DeclHead::new(ns, DeclName::ident(n), nloc);
         h.lexical = Some(self.ctx);
         h.misc = h.misc.with_friend(FriendKind::Undeclared);
-        let d = self.namespace_tag_record(h, Self::tag_kind_of(keyword));
+        let d = self.namespace_tag_record(h, Self::tag_kind_of(keyword), None);
         self.friend_tag = Some(d);
         d
     }
@@ -7784,7 +7809,9 @@ impl Sema<'_, '_> {
         }
         let _ = self.builder().begin_record_definition(r);
         let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
-        self.classes.push(ClassBuild::new(r, tag, self.ctx));
+        let mut build = ClassBuild::new(r, tag, self.ctx);
+        build.heads = self.templ.heads.len();
+        self.classes.push(build);
         self.defining.push(r);
         self.scopes.push(Scope::new(ScopeKind::Record, Some(r)));
         self.ctx = r;
@@ -8289,6 +8316,11 @@ impl Sema<'_, '_> {
             .or_else(|| self.ast.decls.get(e).ctx())
             .unwrap_or(self.ast.tu);
         let dependent = self.ast.types.is_dependent(self.tag_type(e));
+        // A GNU `mode` on the enumeration sets its underlying type (clang
+        // `AddModeAttr` on an `EnumDecl`, from `int` when not fixed).
+        let mode = self.find_attr(e, AttrKind::MODE).filter(|_| !dependent);
+        let mode = mode.map(|a| *self.ast.attrs.get(a));
+        let mode = mode.and_then(|m| self.enum_mode_type(build.fixed.unwrap_or(QualType::INT), m));
         let computed = if build.fixed.is_some() {
             None
         } else if dependent {
@@ -8297,7 +8329,10 @@ impl Sema<'_, '_> {
             Some((QualType::INT, QualType::INT))
         } else {
             let packed = self.find_attr(e, AttrKind::PACKED).is_some();
-            let (best, promotion) = self.best_enum_types(&build.enumerators, packed);
+            let (best, promotion) = match mode {
+                Some(t) => (t, conv::rank::promoted_type(self, t, None).unwrap_or(t)),
+                None => self.best_enum_types(&build.enumerators, packed),
+            };
             // [dcl.enum]/5 (clang's `ActOnEnumBody`): each initializer is
             // converted to the underlying type.
             for &(d, _) in &build.enumerators {
@@ -8311,6 +8346,9 @@ impl Sema<'_, '_> {
             }
             Some((best, promotion))
         };
+        if let (Some(_), Some(t)) = (build.fixed, mode) {
+            self.ast.decls.replace_fixed_enum_int_type(e, t);
+        }
         let _ = self.builder().complete_enum_definition(e, computed);
     }
 
@@ -9245,6 +9283,17 @@ impl Sema<'_, '_> {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
             None => self.lookup_name(name, LookupKind::Ordinary),
         };
+        // Not found in the current instantiation, which has a dependent
+        // base: a member of an unknown specialization
+        // ([temp.dep.type]/6; `X::B::type` in `X<T> : B<T>`, clang's
+        // `NotFoundInCurrentInstantiation`).
+        if found.decls.is_empty()
+            && let Some(q) = qualifier
+            && self.kind_of(q) == DeclKind::CXXRecord
+            && self.has_dependent_bases(q)
+        {
+            return NameClass::Dependent;
+        }
         self.classify_found(&found)
     }
 
@@ -10956,6 +11005,7 @@ fn attr_kind_of(
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,
         ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
         ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
+        ("mode", _, true) => AttrKind::MODE,
         // clang `Clang<"neon_vector_type">` / `Clang<"neon_polyvector_type">`.
         ("neon_vector_type", _, _) if gnu_syntax || clang_scope => AttrKind::NEON_VECTOR_TYPE,
         ("neon_polyvector_type", _, _) if gnu_syntax || clang_scope => {
@@ -10977,6 +11027,8 @@ fn attr_kind_of(
         ("target", _, true) => AttrKind::TARGET,
         // WP-630: clang `GCC<"nodebug">` and `Clang<"min_vector_width">`.
         ("nodebug", _, true) => AttrKind::NODEBUG,
+        // clang `GCC<"artificial">` (WP-789).
+        ("artificial", _, true) => AttrKind::ARTIFICIAL,
         ("min_vector_width", _, _) if gnu_syntax || clang_scope => AttrKind::MIN_VECTOR_WIDTH,
         _ => return None,
     })

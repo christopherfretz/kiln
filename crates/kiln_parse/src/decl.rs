@@ -2611,6 +2611,7 @@ impl Parser<'_, '_> {
 
     /// noptr-declarator ([dcl.decl]): the declarator-id or `( declarator )`
     /// and the array and function suffixes.
+    #[allow(clippy::too_many_lines, reason = "one arm per declarator-id form")]
     fn parse_direct_declarator(&mut self, d: &mut Declarator) {
         let abstract_ok =
             matches!(d.ctx, DeclaratorContext::Prototype | DeclaratorContext::TypeName);
@@ -2653,6 +2654,7 @@ impl Parser<'_, '_> {
             } else if let Some(n) = self.ident() {
                 let ctor = self.names_constructor(n, last_qual, d.ctx);
                 let guide = if ctor
+                    || d.typed
                     || qual.is_some()
                     || !matches!(d.ctx, DeclaratorContext::File | DeclaratorContext::Member)
                 {
@@ -3612,6 +3614,7 @@ impl Parser<'_, '_> {
         let mut d = Declarator::new(ctx, self.loc());
         d.direct_init = Self::may_have_direct_init(ctx, ds.storage);
         d.typedef = ds.is_typedef();
+        d.typed = ds.has_type_specifier();
         d
     }
 

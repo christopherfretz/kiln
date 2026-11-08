@@ -1313,7 +1313,15 @@ impl Sema<'_, '_> {
     ) -> (Option<DeclId>, bool) {
         use kiln_ast::names::OverloadedOperator as OO;
         let fns = self.alloc_fns(promise_ty, OO::New, global, loc);
-        match self.find_operator_new(&fns.fns, place, pass_align) {
+        // Templates join the overload set as in a new-expression
+        // (`template <class A> operator new(size_t, allocator_arg_t, A)`).
+        let found = if fns.templates.is_empty() {
+            self.find_operator_new(&fns.fns, place, pass_align)
+        } else {
+            let all: Vec<DeclId> = fns.fns.iter().chain(&fns.templates).copied().collect();
+            self.find_operator_new_template(&all, place, pass_align, loc, &mut None)
+        };
+        match found {
             Some((n, a)) => (Some(n), a),
             None => (None, false),
         }

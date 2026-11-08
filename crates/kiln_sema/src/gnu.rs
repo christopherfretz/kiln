@@ -77,14 +77,11 @@ impl Sema<'_, '_> {
         if self.ast.types.is_void(ty) || self.ast.types.is_dependent(ty) {
             return e;
         }
-        if self.ast.types.as_record(ty).is_some() {
-            if n.value_category().is_glvalue() {
-                // Copying a class glvalue needs its copy constructor.
-                self.unsupported("a statement expression with a class lvalue result", n.loc());
-                return self.recover(ty, &[e], n.loc());
-            }
+        if self.ast.types.as_record(ty).is_some() && !n.value_category().is_glvalue() {
             return e;
         }
+        // A class glvalue is copied by its copy (or move) constructor
+        // into the result object (clang `InitializeStmtExprResult`).
         let to = conv::strip_cv(self, ty);
         self.convert_for_init(e, to, ConvCtx::Initialization)
     }

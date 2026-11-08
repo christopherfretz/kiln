@@ -2966,6 +2966,12 @@ impl DeclArena {
         Ok(())
     }
 
+    /// Replaces the underlying type of a fixed enumeration: a GNU `mode`
+    /// attribute on its definition (its promotion follows `int_type`).
+    pub fn replace_fixed_enum_int_type(&mut self, e: DeclId, int_type: QualType) {
+        self.enumeration_mut(e).int_type = Some(int_type);
+    }
+
     /// `}` of an enumeration definition.
     pub fn complete_enum_definition(&mut self, e: DeclId) {
         let d = self.enumeration_mut(e);
