@@ -164,7 +164,10 @@ clang's `CodeGenModule` pipeline:
    `to_emit` (`DeferredDeclsToEmit`). The first reference to a deferred
    name (`get_fn`/`get_gvar`) moves its definition to `to_emit`. A
    variable with a side-effecting dynamic initializer is must-emit and is
-   emitted at its `HandleTopLevelDecl`.
+   emitted at its `HandleTopLevelDecl` (clang `HasSideEffects` with
+   possible effects: a call, and a read of a volatile glvalue,
+   [intro.execution]/7, so LLVM's `static int AnchorDest = AnchorSource;`
+   with `extern volatile int AnchorSource;` is emitted; WP-801).
 2. **Key-function vtables** (`emit_key_function_vtables`, clang
    `DefineUsedVTables` -> `HandleVTable`).
 3. **End-of-TU instantiations** (`emit_end_of_tu_instantiations`). Sema's

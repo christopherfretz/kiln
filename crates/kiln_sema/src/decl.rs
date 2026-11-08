@@ -2327,6 +2327,7 @@ impl Sema<'_, '_> {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("find_prev_function");
         let mut found = self.prev_candidates_dn(dname, qualifier);
+        let visible = if qualifier.is_some() { found.clone() } else { Vec::new() };
         // A friend of a templated class is not visible to redeclaration
         // lookup until instantiated: a later namespace-scope declaration
         // declares a new function, matched by the friend's
@@ -2351,8 +2352,20 @@ impl Sema<'_, '_> {
         if let Some(p) = self.pick_prev_function(&found, new) {
             return Some(p);
         }
-        if qualifier.is_some() {
-            return None;
+        if let Some(q) = qualifier {
+            // A function first declared by a friend declaration is a member
+            // of the namespace, invisible to qualified lookup but nominable
+            // there, so `void N::f(C &) {}` redeclares the friend
+            // ([dcl.meaning.general]/2.3, [namespace.memdef]/3; clang's
+            // redeclaration lookup sees hidden friends).
+            if !matches!(self.kind_of(q), DeclKind::Namespace | DeclKind::TranslationUnit) {
+                return None;
+            }
+            // Only the hidden ones: a declaration qualified lookup found
+            // was already considered (and filtered) above.
+            let mut hidden = self.hidden_friend_redecl_set(q, dname, &new);
+            hidden.retain(|x| !visible.contains(x));
+            return self.pick_prev_function(&hidden, new);
         }
         let ns = self.enclosing_namespace()?;
         let name = dname.as_ident()?;
@@ -7634,9 +7647,18 @@ impl Sema<'_, '_> {
         // namespace counts, and the friend is its target (boost's
         // `friend class iterator_core_access;` through
         // `using iterators::iterator_core_access;`; clang `ActOnTag`).
+        // A name found by class member lookup ([class.member.lookup]) was
+        // found in a class scope, which lies inside the innermost enclosing
+        // namespace: a member of a base class in another namespace counts,
+        // such as the injected-class-name of a base specialization (LLVM's
+        // `friend class TrailingObjects;`; [dcl.type.elab]/4).
         let found_as = lookup.found.last().copied();
-        let prev =
-            found.last().copied().filter(|&p| within(self, found_as.unwrap_or(p))).or_else(hidden);
+        let in_class = lookup.naming.is_some();
+        let prev = found
+            .last()
+            .copied()
+            .filter(|&p| in_class || within(self, found_as.unwrap_or(p)))
+            .or_else(hidden);
         if let Some(p) = prev {
             if self.tag_matches(p, keyword) {
                 self.mark_type_referenced(p);
