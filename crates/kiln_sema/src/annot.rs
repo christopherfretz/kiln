@@ -370,16 +370,18 @@ impl Sema<'_, '_> {
             .filter(|&c| self.kind_of(c) == DeclKind::CXXRecord)
             .or_else(|| self.ast.decls.get(f).ctx())
             .unwrap_or(self.ast.tu);
-        let params = self.annotated_param_pairs(f, pattern);
         self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(f);
             sub.map_contexts(&pairs);
+            let params = sub.annotated_param_pairs(f, pattern);
             sub.subst_entity_annotations(f, &anns, &params);
         });
         self.pop_inst_frame();
     }
+}
 
+impl Substituter<'_, '_, '_> {
     /// The parameters of function `spec` paired with those of its pattern
     /// `def` that carry annotations (a parameter's own, not merged across
     /// redeclarations; spec/annotations.md §4). A pattern function
@@ -387,40 +389,61 @@ impl Sema<'_, '_> {
     /// ([temp.variadic]/5: each element is its own parameter, with its own
     /// annotations; WP-830). An annotation operand cannot name the pack
     /// (it is not a pack expansion pattern), so every element substitutes
-    /// the same operands. With more than one pack the split is unknown
-    /// here and nothing pairs.
-    fn annotated_param_pairs(&self, spec: DeclId, def: DeclId) -> Vec<(DeclId, DeclId)> {
-        if self.ast.decls.function(def).is_none() {
+    /// the same operands. With one pack its length is what the other
+    /// parameters leave; with several (`L<A...>, A..., L<B...>, B...`),
+    /// each takes the length of its own expansion under the current
+    /// arguments, as [`Self::map_params`] does for the body (WP-866). A
+    /// pack that stays a pack (a member template's own, substituted with
+    /// its class) pairs one to one.
+    pub(crate) fn annotated_param_pairs(
+        &mut self,
+        spec: DeclId,
+        def: DeclId,
+    ) -> Vec<(DeclId, DeclId)> {
+        if self.sema.ast.decls.function(def).is_none() {
             return Vec::new();
         }
-        let (ps, qs) = (self.param_decls(spec), self.param_decls(def));
-        let is_pack = |q: DeclId| {
-            self.ast.decls.param(q).is_some_and(|x| x.flags & kiln_ast::decl::ParamData::PACK != 0)
+        let (ps, qs) = (self.sema.param_decls(spec), self.sema.param_decls(def));
+        if !qs.iter().any(|&q| self.sema.ast.annots.has_list(q)) {
+            return Vec::new();
+        }
+        let is_pack = |s: &Self, q: DeclId| {
+            s.sema
+                .ast
+                .decls
+                .param(q)
+                .is_some_and(|x| x.flags & kiln_ast::decl::ParamData::PACK != 0)
         };
-        let packs = qs.iter().filter(|&&q| is_pack(q)).count();
-        let wanted = |&(p, q): &(DeclId, DeclId)| {
-            p != q && self.ast.annots.has_list(q) && !self.ast.annots.has_list(p)
-        };
-        if packs == 0 {
-            if ps.len() != qs.len() {
-                return Vec::new();
+        let packs = qs.iter().filter(|&&q| is_pack(self, q)).count();
+        let lens: Vec<usize> = match packs {
+            0 => vec![1; qs.len()],
+            1 => {
+                let Some(n) = (ps.len() + 1).checked_sub(qs.len()) else { return Vec::new() };
+                qs.iter().map(|&q| if is_pack(self, q) { n } else { 1 }).collect()
             }
-            return ps.into_iter().zip(qs).filter(wanted).collect();
-        }
-        let Some(n) = (ps.len() + 1).checked_sub(qs.len()).filter(|_| packs == 1) else {
+            _ => {
+                let mut v = Vec::with_capacity(qs.len());
+                for &q in &qs {
+                    v.push(if is_pack(self, q) { self.param_pack_len(q).unwrap_or(1) } else { 1 });
+                }
+                v
+            }
+        };
+        if lens.iter().sum::<usize>() != ps.len() {
             return Vec::new();
+        }
+        let ast = &self.sema.ast;
+        let wanted = |&(p, q): &(DeclId, DeclId)| {
+            p != q && ast.annots.has_list(q) && !ast.annots.has_list(p)
         };
         let mut out = Vec::new();
         let mut it = ps.into_iter();
-        for q in qs {
-            let take = if is_pack(q) { n } else { 1 };
-            out.extend(it.by_ref().take(take).map(|p| (p, q)).filter(wanted));
+        for (q, n) in qs.into_iter().zip(lens) {
+            out.extend(it.by_ref().take(n).map(|p| (p, q)).filter(wanted));
         }
         out
     }
-}
 
-impl Substituter<'_, '_, '_> {
     /// The annotations of pattern `def` (every declaration's, in order) on
     /// its instantiation `spec` ([dcl.attr.annotation]/3: each is a new
     /// annotation). A function template specialization's dependent ones
@@ -431,7 +454,7 @@ impl Substituter<'_, '_, '_> {
         if self.sema.ast.annots.is_empty() || spec == def {
             return;
         }
-        let params = self.sema.annotated_param_pairs(spec, def);
+        let params = self.annotated_param_pairs(spec, def);
         let ast = &self.sema.ast;
         let anns =
             if ast.annots.has_list(spec) { Vec::new() } else { ast.annots.of_entity(ast, def) };
