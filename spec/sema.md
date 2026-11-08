@@ -5823,6 +5823,10 @@ and `DiagnoseMisalignedMembers`:
 - **Discard.** A conversion of the recorded `&m` drops it when the
   target is an integer, a dependent type, or a pointer to an incomplete
   type or to a type aligned no more than the culprit:
+  - an explicit cast (C-style, named other than `dynamic_cast`,
+    functional), when it is built (`act_on_cast`; clang
+    `BuildCStyleCastExpr` / `BuildCXXNamedCast`), before the rest of the
+    enclosing expression is parsed (WP-659);
   - every cast node in the full-expression (implicit and explicit);
   - `implicit_convert` in any context except simple assignment (clang's
     `InitializationSequence::Perform` step, even for an identity
@@ -5835,12 +5839,21 @@ and `DiagnoseMisalignedMembers`:
   the `MemberExpr`'s begin location: `taking address of packed member
   'm' of class or structure 'C' may result in an unaligned pointer
   value`. An anonymous class is named by its typedef.
+  Every full-expression reports every pending candidate, including one
+  that a nested full-expression (a template argument, a lambda body, a
+  function body instantiated mid-expression) finds pending from its
+  enclosing expression. Neither kiln nor clang sets the candidates aside
+  in `in_inst_context`: in `fv(&p.i, A<3>::w)` with `fv(void *, int)`
+  the `&p.i` is reported, by clang too, because the argument conversion
+  that would drop it comes after `3`'s full-expression. An explicit cast
+  is dropped earlier, so `f((char *)&p.i, A<3>::w)` is not reported.
 - **Deviations:**
   - A non-dependent `&m` in a template is reported once, at the
     definition. clang repeats it in every instantiation.
   - An anonymous union or struct member as the culprit prints as `''`.
     clang prints `C::(anonymous union at ...)`.
-- Test: `tests/conformance/expr.unary.op/address-of-packed-member.cpp`.
+- Tests: `tests/conformance/expr.unary.op/address-of-packed-member.cpp`,
+  `address-of-packed-member-nested-full-expression.cpp`.
 
 ### 5.15 `-Wnull-dereference` (`null_deref.rs`, WP-191)
 The two syntactic `*null` checks of clang 19

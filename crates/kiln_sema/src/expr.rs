@@ -6199,6 +6199,15 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
+        // A misaligned `&m` converted here is dropped now, as clang
+        // `BuildCStyleCastExpr` / `BuildCXXNamedCast` /
+        // `BuildCXXFunctionalCastExpr` do, before the rest of the
+        // enclosing full-expression is parsed: a nested full-expression
+        // after it (a template argument, a lambda body, an instantiated
+        // body) reports what is still pending (WP-659).
+        if !self.misaligned.is_empty() && style != CastStyle::Dynamic {
+            self.discard_misaligned_member_address(ty, e);
+        }
         let r = self.build_explicit_cast(style, ty, e, loc, rparen);
         self.note_cast_written_type(r, ty);
         r
