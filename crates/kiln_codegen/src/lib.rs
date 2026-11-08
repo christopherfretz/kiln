@@ -286,6 +286,25 @@ pub struct CodegenOptions {
     pub hardening: Hardening,
     /// The `-fsanitize=` set (WP-675, spec/codegen.md "Sanitizers").
     pub sanitize: SanitizeOptions,
+    /// `-flto` / `-flto=thin`: the module is an LTO unit (its module flags
+    /// and vtable `!type` metadata; spec/codegen.md "LTO", WP-873).
+    pub lto: Option<Lto>,
+    /// With [`Self::lto`], the module flags clang's backend pipeline adds
+    /// (`ThinLTO`, `EnableSplitLTOUnit`); off under `-disable-llvm-passes`.
+    pub lto_module_flags: bool,
+}
+
+/// The kind of LTO a module is compiled for (clang
+/// `CodeGenOpts.PrepareForLTO` / `PrepareForThinLTO`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lto {
+    /// `-flto` / `-flto=full`: `ThinLTO` 0 and `EnableSplitLTOUnit` 1.
+    Full,
+    /// `-flto=thin`; the field is `-fsplit-lto-unit` (`EnableSplitLTOUnit`).
+    Thin {
+        /// `-fsplit-lto-unit` was the last of it and `-fno-split-lto-unit`.
+        split: bool,
+    },
 }
 
 /// The resolved sanitizer options (WP-675, docs/design/sanitizers.md).
@@ -681,6 +700,8 @@ impl Default for CodegenOptions {
             debug: DebugOptions::default(),
             hardening: Hardening::default(),
             sanitize: SanitizeOptions::default(),
+            lto: None,
+            lto_module_flags: true,
         }
     }
 }

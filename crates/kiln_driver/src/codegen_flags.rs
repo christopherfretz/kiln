@@ -100,6 +100,11 @@ pub struct CodegenFlags {
     pub invalid_values: [Option<(String, String)>; 3],
     /// `-fxray-ignore-loops` (the last of it and `-fno-xray-ignore-loops`).
     pub xray_ignore_loops: bool,
+    /// The last of `-flto[=full|thin|auto|jobserver]` / `-fno-lto`:
+    /// `Some(false)` full LTO, `Some(true)` thin (WP-873).
+    pub lto: Option<bool>,
+    /// The last of `-fsplit-lto-unit` / `-fno-split-lto-unit`.
+    pub split_lto_unit: Option<bool>,
 }
 
 /// clang's `-fzero-call-used-regs=` values.
@@ -128,6 +133,23 @@ const IGNORED: &[&str] = &[
     "-m64",
     // kiln's jobs talk through pipes already.
     "-pipe",
+    // WP-677: clang accepts these (CMake and configure scripts probe
+    // them). The template-tree printing is not implemented; the
+    // vectorizer and strict vtable pointer flags change clang's IR but are
+    // deliberately ignored (spec/driver.md "Codegen flags").
+    "-fdiagnostics-show-template-tree",
+    "-fstrict-vtable-pointers",
+    "-fno-strict-vtable-pointers",
+    "-fvectorize",
+    "-fno-vectorize",
+    "-fslp-vectorize",
+    "-fno-slp-vectorize",
+    "-ftree-vectorize",
+    "-fno-tree-vectorize",
+    "-ftree-slp-vectorize",
+    "-fno-tree-slp-vectorize",
+    // The default: kiln's LTO objects are bitcode only.
+    "-fno-fat-lto-objects",
 ];
 
 /// Flags rejected (class 3), exactly as written.
@@ -142,6 +164,8 @@ const REJECTED: &[&str] = &[
     "-fprofile-generate",
     "-fprofile-instr-use",
     "-fprofile-use",
+    // Bitcode plus object code in one `.o` (WP-873 follow-up).
+    "-ffat-lto-objects",
 ];
 
 /// Prefixes of flags rejected (class 3): every value of the profiling
@@ -203,6 +227,10 @@ impl CodegenFlags {
             "-fno-xray-instrument" => self.xray_instrument = false,
             "-fxray-ignore-loops" => self.xray_ignore_loops = true,
             "-fno-xray-ignore-loops" => self.xray_ignore_loops = false,
+            "-flto" => self.lto = Some(false),
+            "-fno-lto" => self.lto = None,
+            "-fsplit-lto-unit" => self.split_lto_unit = Some(true),
+            "-fno-split-lto-unit" => self.split_lto_unit = Some(false),
             _ if IGNORED.contains(&arg) => {}
             _ if arg.starts_with("-fxray-") || arg.starts_with("-fno-xray-") => {
                 if !arg.contains('=') {
@@ -231,6 +259,12 @@ impl CodegenFlags {
             Some(Ok(()))
         };
         match flag {
+            // clang `getLTOMode`: `auto` and `jobserver` are full LTO.
+            "-flto" => match v {
+                "full" | "auto" | "jobserver" => self.lto = Some(false),
+                "thin" => self.lto = Some(true),
+                _ => return unsupported(),
+            },
             "-mtune" => {
                 if v.is_empty() {
                     return unsupported();
@@ -302,6 +336,18 @@ impl CodegenFlags {
             _ => return None,
         }
         Some(Ok(()))
+    }
+
+    /// The module's LTO kind (clang: a thin unit is split only with
+    /// `-fsplit-lto-unit`, a full one always).
+    pub fn lto(&self) -> Option<kiln_codegen::Lto> {
+        self.lto.map(|thin| {
+            if thin {
+                kiln_codegen::Lto::Thin { split: self.split_lto_unit.unwrap_or(false) }
+            } else {
+                kiln_codegen::Lto::Full
+            }
+        })
     }
 
     /// The stack protector level (clang's default: off).

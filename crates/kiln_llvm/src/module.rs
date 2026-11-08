@@ -861,6 +861,14 @@ impl Module {
         set_attachment(&mut self.globals[g.index()].md, kind, md);
     }
 
+    /// Attach metadata to a global variable after its attachments of the
+    /// same kind (several `!type` nodes; LLVM `GlobalObject::addMetadata`).
+    pub fn push_global_metadata(&mut self, g: GlobalId, kind: MdKindId, md: MetadataId) {
+        let list = &mut self.globals[g.index()].md;
+        let at = list.partition_point(|e| e.0 <= kind);
+        list.insert(at, (kind, md));
+    }
+
     /// Add an alias `@name = alias value_type, ptr aliasee`.
     pub fn add_alias(
         &mut self,
