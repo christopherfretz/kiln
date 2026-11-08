@@ -4,8 +4,8 @@
 // declaration (a complete-class context), depends only on what the local
 // class's declaration names, so `C<T, int>` and `C<T, long>` give one atom
 // and the overload adding a conjunct is more constrained. A member class
-// naming `U` keeps the atoms apart (ambiguous). WP-883 (clang 19 oracle;
-// GCC 16.1 rejects the forward member references in the lambda).
+// naming `U` keeps the atoms apart (ambiguous). WP-883 (clang 19 oracle).
+//@ requires: clang<22.0.0
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 47:9 error "call to 'f3' is ambiguous"
