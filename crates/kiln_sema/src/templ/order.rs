@@ -693,6 +693,7 @@ impl Sema<'_, '_> {
         // `pb`, as for class template partial specializations; the two
         // packs need not share an index.
         d.expansions = true;
+        d.ordering = true;
         let mut ok = true;
         let mut ai = 0;
         for (pi, p) in pb.iter().enumerate() {

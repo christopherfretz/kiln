@@ -34,7 +34,9 @@ cargo xtask test [options] [paths...]
 `--flag=value` is accepted for every option that takes a value.
 
 `paths` are files or directories (default: `tests/conformance`,
-`tests/differential` and `tests/stress`, whichever exist).
+`tests/debuginfo`, `tests/differential` and `tests/stress`, whichever
+exist; `tests/debuginfo` is a default root everywhere, its tests SKIP
+without gdb and lldb-19, see "Debugger tests").
 
 Exit status: **0** when there is no FAIL, XPASS, ERROR or KILLED (XFAIL and
 SKIP are allowed); **1** when there is at least one; **2** for a usage error, an
@@ -65,7 +67,7 @@ directives are also ERRORs.
 
 | Directive | Semantics |
 |---|---|
-| `expect: compile-ok \| compile-fail \| run \| pp \| ast \| cfg \| layout \| vtables \| ir \| no-crash` | Test kind. Default `compile-ok`. |
+| `expect: compile-ok \| compile-fail \| run \| pp \| ast \| cfg \| layout \| vtables \| ir \| debugger \| no-crash` | Test kind. Default `compile-ok`. |
 | `std: <std>` | `c++98 c++03 c++11 c++14 c++17 c++20 c++23 c++26` (C++), `c89 c99 c11 c17 c23` (C). Default `c++26` / `c17`. Passed as `-std=<std>`. |
 | `args: <flags>` | Extra compiler flags, split shell-style (quotes, backslash). It may be repeated, and the flags accumulate. Placeholders are substituted in each flag (below). |
 | `diag: <line>[:<col>] <sev> "<substring>" [dup(clang)]` | Expected diagnostic. `<sev>` is one of `error fatal warning note remark`. If the column is omitted, any column matches. `dup(clang)`, after the substring and only on a primary (non-note) directive, says clang prints this group twice where kiln's engine prints it once (spec/diag.md §7.4.1); see "Diagnostics". |
@@ -74,6 +76,8 @@ directives are also ERRORs.
 | `stdout: <text>` | `run` only. Each line contributes its value, trimmed, plus `\n`. Repeated lines concatenate in order. |
 | `stdout-file: <path>` | `run` only. The expected stdout is the file's exact contents. The path is relative to the test's directory. It cannot be combined with `stdout:`. |
 | `exit: <code>` | `run` only. Expected exit code. Default 0. |
+| `gdb: <command>` / `lldb: <command>` | `debugger` only. One line of the gdb (lldb) command script, in order; repeatable. See "Debugger tests". |
+| `gdb-check: <text>` / `lldb-check: <text>` | `debugger` only. A substring that must appear in the debugger's output, each check on a line after the previous check's line; repeatable. Commands without checks, checks without commands, and a `debugger` test with neither debugger are ERRORs. |
 | `run-args: <args>` | `run` only. Program arguments, split shell-style as for `args:`. It may be repeated, and the arguments accumulate. |
 | `run-stdin: <text>` | `run` only. Each line contributes its value, trimmed, plus `\n`, to the program's stdin, as for `stdout:`. Repeated lines concatenate in order. |
 | `run-stdin-file: <path>` | `run` only. The program's stdin is the file's exact contents. The path is relative to the test's directory (use `Inputs/`, which discovery skips). It cannot be combined with `run-stdin:`. A missing file is an ERROR. |
@@ -191,6 +195,7 @@ satisfies `compile-fail`.
 | `layout` | kiln: `-fsyntax-only -fdump-record-layouts`; clang: `-fsyntax-only -Xclang -fdump-record-layouts-complete` | exit 0; the diags match; the dump has at least one record layout; the oracle's dump has the same blocks in the same order. See "Layout and vtable tests". |
 | `vtables` | kiln: `-fsyntax-only -fdump-vtable-layouts`; clang: `-S -emit-llvm -o <scratch>/test.ll -Xclang -fdump-vtable-layouts` | exit 0; the diags match; the dump has at least one vtable block; the oracle's dump has the same set of blocks. See "Layout and vtable tests". |
 | `ir` | `-S -emit-llvm -O0 -o <scratch>/test.ll` (the oracle: `<scratch>/oracle.ll`) | exit 0; the diags match; the module defines at least one function; it equals the oracle's after normalization. See "IR tests". |
+| `debugger` | compile and link with `-O0 -g` to `<scratch>/test.out`, then run gdb and/or lldb over it | the compile succeeds and the diags match; each debugger's output contains its checks in order. See "Debugger tests". |
 | `no-crash` | `-fsyntax-only -ferror-limit=0` (before the test's `args:`, so an explicit `-ferror-limit=N` there wins; a crash must not hide behind the error limit, WP-145) | exit 0 or 1 (errors anywhere are fine, in the test file or not), and the diags match; any other exit code (an internal-error exit such as 70 or 101) is a FAIL, as is a crash or hang (above). For robustness tests over input the compiler cannot fully handle yet, e.g. whole headers with `-ferror-limit=0` (WP-141). |
 
 The `run` binary runs with cwd = its scratch dir, the `run-args:` arguments,
@@ -548,6 +553,54 @@ only a newer clang emits (spec/codegen.md §6a): pin them with
 define at least one function, a failing oracle compile is an **ERROR**,
 and the test is a **SKIP** without an oracle or under `other`.
 
+### Debugger tests
+
+`debugger` tests (WP-814) check that a `-g` binary debugs as clang's
+does: the test is compiled and linked with `-O0 -g` (plus `std:`,
+`args:`, the usual `-fclang-compat`), and each debugger with commands
+runs over `<scratch>/test.out`, with cwd = the scratch dir, under
+`--timeout` but never less than 60 s (`DEBUGGER_TIMEOUT`: a debugger
+takes seconds to load the binary and, for lldb, its Python runtime, more
+on a busy CI runner; a session that runs out is a **FAIL** naming the
+timeout, with the output so far), and with `DEBUGINFOD_URLS` removed
+from its environment (no symbol-server lookups, so nothing depends on
+the network): `gdb -batch -nx -x <scratch>/gdb.cmd test.out` and
+`lldb -b -s <scratch>/lldb.cmd test.out` (`lldb-19`, else `lldb`, on
+`PATH`). The script is the `gdb:` (`lldb:`) lines, one command per line.
+The output, stdout then stderr, must contain each `gdb-check:`
+(`lldb-check:`) substring on a line after the line the previous check
+matched; the first missing check is a **FAIL** that shows the output.
+The debugger's exit code is not checked (a batch debugger exits 0 after
+a failed command; the checks catch it). There is no oracle comparison:
+the same test passes under `--compiler clang++-19`, which is the
+reference. A test whose debugger is not on `PATH` is a **SKIP**
+(`requires `gdb` on PATH (`expect: debugger`)`), so a machine without
+gdb or lldb-19 still passes the corpus, with the reason shown. Under
+**`KILN_REQUIRE_DEBUGGERS=1`** (exactly `1`, as `KILN_REQUIRE_GCC`) it is
+an **ERROR** instead (`KILN_REQUIRE_DEBUGGERS=1 and `gdb` is not on PATH
+(`expect: debugger`)`), so the run fails. GitHub CI sets it in every job
+and installs gdb and lldb-19 in the jobs that run the corpus ("CI",
+WP-816), so the debugger tests cannot silently skip there. Like
+`KILN_REQUIRE_GCC`, only the entry points (`cargo xtask test`, the `ci`
+corpus runs) read it, never the harness's own tests.
+`tests/debuginfo` is a default root, so `cargo xtask test` and both `ci`
+corpus runs include it (WP-816; before, it had to be named).
+
+The debuggers need `ptrace` on the test binary they start. A container
+allows that under Docker's default seccomp profile (kernel 4.8 and
+later), and the development container runs the tests with neither
+`CAP_SYS_PTRACE` nor `seccomp=unconfined`; GitHub CI adds
+`--cap-add=SYS_PTRACE` to the jobs that run them anyway, so `ptrace` does
+not depend on the host's Yama setting.
+
+Write checks that hold on both targets and both compilers: source text
+and line numbers rather than addresses, `this=0x` rather than a pointer
+value. lldb in a container cannot disable ASLR (`personality` is
+blocked), so lldb scripts start with `settings set target.disable-aslr
+false`; prefer `frame variable` / `target variable` to `expression`,
+which needs a JIT. gdb `-batch` does not print `finish`'s "Run till
+exit" banner. The corpus is `tests/debuginfo/`.
+
 ### kiln-specific tests
 
 A test with an `oven:` directive is kiln-specific. When the compiler is not
@@ -892,6 +945,13 @@ Neither is the libstdc++ header status (`cargo xtask libstdcxx`), which is
 informational (exit status non-zero only on tool errors); its contract is
 `spec/libstdcxx.md`.
 
+The M8 OSS build harness (`scripts/oss/`) needs the network and is not part
+of `ci`; its contract is spec/landed/harness/WP-666.md. It builds each
+project against libstdc++ by default, and against the system libc++ 19
+(the library clang++-19 uses, so kiln and the clang-19 control link the
+same one) with `oss-build.sh --stdlib libc++`, whose build trees and
+reports are kept apart (`<compiler>-libcxx`, WP-694).
+
 `cargo xtask features` ("Feature table") is not part of `ci` either: it is a
 manual / M4-gate check.
 
@@ -920,7 +980,7 @@ runs, stopping at the first failing step:
    target dir as for `--compiler`'s default);
 
 then the two corpus runs, both over the default paths (`tests/conformance`,
-`tests/differential` and `tests/stress`) with the default oracle
+`tests/debuginfo`, `tests/differential` and `tests/stress`) with the default oracle
 `clang++-N` (N from `KILN_ORACLE`, default 22; "Oracle toolchain"), the
 default GCC oracle ("GCC oracle") and the
 default `--mem-limit` (8192 MiB). A bad `KILN_ORACLE` fails `ci` (exit 2)
@@ -999,9 +1059,14 @@ docs/VALIDATION.md "GitHub Actions"), each in a
 environment (aarch64 Debian 13, clang 19.1.7, GCC 14 for libstdc++
 detection, plus GCC 16.1 in `/usr/local` as the GCC oracle), with
 `clang-19 llvm-19 lld-19 libc++-19-dev libc++abi-19-dev` installed,
-`KILN_REQUIRE_LLVM=1`, `KILN_GCC=/usr/local/bin/g++` and
-`KILN_REQUIRE_GCC=1`, so nothing is skipped there (docs/VALIDATION.md
-"GitHub Actions", WP-226, WP-502). The action first checks that
+`KILN_REQUIRE_LLVM=1`, `KILN_GCC=/usr/local/bin/g++`,
+`KILN_REQUIRE_GCC=1` and `KILN_REQUIRE_DEBUGGERS=1`, so nothing is
+skipped there (docs/VALIDATION.md "GitHub Actions", WP-226, WP-502,
+WP-816). The corpus jobs (`self-check`, `kiln-22`, `kiln-19`) and the
+`unit xtask` job (the debugger fixtures) also install `gdb lldb-19`
+(the setup action's `debuggers` input) in a container started with
+`--cap-add=SYS_PTRACE`; `ci_tests::workflow_installs_the_debuggers`
+checks that every corpus job does. The action first checks that
 `$KILN_GCC -dumpfullversion` is 16.1.x and that it compiles a `<meta>`
 TU with `-std=c++26 -freflection`.
 The fan-in jobs `check` (aarch64) and `check-x86_64` (the same container
@@ -1180,8 +1245,24 @@ or infrastructure error. Parse errors name their line.
     under `fixtures/fake-kiln/kiln` the oracle is not run for a
     `skip(clang)` run test and is for its control; under clang it is a
     SKIP);
+  - `debugger_fixtures_with_clang` (WP-814): `xtask/fixtures/debugger/`
+    under clang++-19 (a gdb and lldb pass, a wrong value and an
+    out-of-order check failing with the missing check named, and the
+    ERROR for commands without checks; skipped without clang++-19, gdb or
+    lldb-19);
   - `--filter`;
   - `--update` (pp and ast goldens).
+- `debugger_directives` (directives.rs) and
+  `debugger_checks_match_successive_lines_in_order` (runner.rs): the
+  `gdb:`/`lldb:` directive errors and the in-order check matcher;
+  `tests/debuginfo/` under kiln and clang++-19.
+- WP-816: `debugger_gate_skips_or_errors_without_the_debugger` (runner.rs:
+  a missing gdb or lldb is a SKIP, an ERROR under the requirement, and
+  only for the debuggers the test drives), `debugger_corpus_is_a_default_root`
+  (tests.rs: `KILN_REQUIRE_DEBUGGERS` parsing, `tests/debuginfo` among the
+  default roots) and `ci_tests::workflow_installs_the_debuggers` (main.rs:
+  `ci-lane.yml` sets the requirement and every corpus job installs the
+  debuggers in a `SYS_PTRACE` container).
 - `kiln_abi::dump_blocks` unit tests: block splitting, builtin records,
   `Original map` and duplicate construction vtables.
 - `tests/conformance/class.derived/layout-*.cpp` and

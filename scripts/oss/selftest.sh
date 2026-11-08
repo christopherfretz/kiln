@@ -4,8 +4,9 @@
 # (KILN_OSS_CXX, else $CARGO_TARGET_DIR/harness/kiln++, else debug/kiln++;
 # skipped when none is built), checks the JSONL fields, and runs
 # oss-report.py on the two-cluster fixture under fixtures/, plain, with
-# --perf (WP-792) and with --update. Prints one PASS/FAIL line per check and
-# exits 1 on any FAIL.
+# --perf (WP-792) and with --update, and the libc++ mode (WP-694): the
+# wrapper's `-stdlib=libc++` and oss-report.py --stdlib libc++. Prints one
+# PASS/FAIL line per check and exits 1 on any FAIL.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIX="$HERE/fixtures"
@@ -61,6 +62,31 @@ printf '%s\n' 'run demo-plain [plain.cpp] [Boost::demo_fw;Boost::other] [PD]' 'r
   'run demo-ser_b [ser.cpp;A.cpp] [Boost::demo_fw;Boost::other] [ARCH=b;PD]' > "$JB/want.txt"
 check "boost shim: library rules, variants, defines and links" "diff -u '$JB/want.txt' '$JB/got.txt'"
 
+# Nested `[ requires ]`, conditional properties, name skip, subset and
+# FORCE over a library whose CMakeLists.txt adds test/ itself (WP-812).
+J2="$TMP/jam2"; mkdir -p "$J2/libs/dm2/test"; cp -r "$JB/cm" "$J2/cm"
+printf 'cmake_minimum_required(VERSION 3.20)\nproject(Boost NONE)\nset(BUILD_TESTING ON)\nlist(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cm")\nadd_subdirectory(libs/dm2)\n' > "$J2/CMakeLists.txt"
+printf 'add_library(boost_dm2 INTERFACE)\nadd_library(Boost::dm2 ALIAS boost_dm2)\nadd_subdirectory(test)\n' > "$J2/libs/dm2/CMakeLists.txt"
+: > "$J2/libs/dm2/test/CMakeLists.txt"
+printf '  [ run a.cpp : : : [ requires x y ] <define>T=1 <toolset>intel:<debug-symbols>off <target-os>linux:<define>L=1 : a_1 ]\n  [ run a.cpp : : : $(SEL) : a_select ]\n  [ run b.cpp ]\n  [ run c.cpp ]\n  [ run d.cpp ]\n  [ run lanczos.cpp ]\n  [ run e.cpp inst//inst : : : : e_i ]\n' > "$J2/libs/dm2/test/Jamfile"
+mkdir -p "$J2/libs/dm2/test/inst"; for f in a b c d lanczos e inst/x; do : > "$J2/libs/dm2/test/$f.cpp"; done
+j2() { cmake -S "$J2" -B "$J2/b$1" -G "Unix Makefiles" -DCMAKE_PROJECT_Boost_INCLUDE="$HERE/shims/boost-jamfile-tests.cmake" \
+  -DKILN_BOOST_JAMFILE_LIBRARIES=dm2 "${@:2}" 2>&1 | sed -n 's/^-- T //p'; }
+j2 1 -DKILN_BOOST_JAMFILE_FORCE_dm2=ON '-DKILN_BOOST_JAMFILE_SKIP_dm2=_select$' '-DKILN_BOOST_JAMFILE_SUBSET_dm2=3|lanczos' > "$J2/got.txt"
+printf '%s\n' 'run dm2-a_1 [a.cpp] [Boost::dm2] [T=1;L=1]' 'run dm2-d [d.cpp] [Boost::dm2] []' 'run dm2-lanczos [lanczos.cpp] [Boost::dm2] []' > "$J2/want.txt"
+check "boost shim: nested requires, conditionals, skip, subset, force" "diff -u '$J2/want.txt' '$J2/got.txt'"
+check "boost shim: a Jam library target links a static library from its glob" \
+  "[ \"\$(j2 3 -DKILN_BOOST_JAMFILE_FORCE_dm2=ON '-DKILN_BOOST_JAMFILE_SKIP_dm2=^[^e]' '-DKILN_BOOST_JAMFILE_LIBS_dm2=inst//inst=inst/*.cpp')\" = 'run dm2-e_i [e.cpp] [kiln_dm2_inst__inst;Boost::dm2] []' ]"
+check "boost shim: a library with CMake tests is skipped without FORCE" "[ -z \"\$(j2 2)\" ]"
+
+# A deterministic subset of a `tests` target's dependencies (WP-812).
+J3="$TMP/sub"; mkdir -p "$J3"
+printf 'cmake_minimum_required(VERSION 3.20)\nproject(Boost NONE)\nadd_custom_target(tests)\nforeach(t g_e g_a g_d other g_c g_b)\n  add_custom_target(${t})\n  add_dependencies(tests ${t})\nendforeach()\n' > "$J3/CMakeLists.txt"
+cmake -S "$J3" -B "$J3/b" -G "Unix Makefiles" -DCMAKE_PROJECT_Boost_INCLUDE="$HERE/shims/boost-jamfile-tests.cmake" \
+  '-DKILN_BOOST_SUBSET_TARGETS=^g_|3|_e$' > "$J3/conf.txt" 2>&1
+printf '%s\n' g_b g_c > "$J3/want.txt"
+check "boost shim: target subset (every N-th plus keep regex)" "diff -u '$J3/want.txt' '$J3/b/kiln-subset-excluded.txt' && grep -q 'kiln: subset /^g_/: 3 of 5 test targets kept' '$J3/conf.txt' && make -s -C '$J3/b' -n kiln_tests > /dev/null"
+
 printf '#include <cstdio>\nint main() { std::puts("hello"); }\n' > "$TMP/hello.cpp"
 printf 'int main() { return x; }\n' > "$TMP/bad.cpp"
 
@@ -83,11 +109,23 @@ run_one() { # <label> <compiler or empty>
   (cd "$TMP" && KILN_OSS_CXX="$cxx" KILN_OSS_LOG="$log" "$HERE/kiln-cxx" --version >/dev/null 2>&1)
   check "$label: query line" "field '$log' 2 'r[\"kind\"]==\"ok\" and r[\"source\"]==\"none\"'"
 }
+# libc++ mode (WP-694): `-stdlib=libc++` first, and the binary runs on libc++.
+stdlib_one() { # <label> <compiler or empty>
+  local label="$1" cxx="$2" log="$TMP/$1-libcxx.jsonl"
+  (cd "$TMP" && KILN_OSS_CXX="$cxx" KILN_OSS_LOG="$log" KILN_OSS_STDLIB=libc++ "$HERE/kiln-cxx" -O1 hello.cpp -o "hello-$label-libcxx" >/dev/null 2>&1)
+  check "$label: libc++ hello builds and runs" "[ \"\$('$TMP/hello-$label-libcxx')\" = hello ]"
+  check "$label: libc++ argv starts with -stdlib=libc++" "field '$log' 0 'r[\"kind\"]==\"ok\" and r[\"argv\"][1]==\"-stdlib=libc++\"'"
+  check "$label: libc++ binary needs libc++.so" "readelf -d '$TMP/hello-$label-libcxx' | grep -q 'libc++.so' && ! readelf -d '$TMP/hello-$label-libcxx' | grep -q 'libstdc++'"
+}
 run_one clang ""
 check "clang: default compiler is clang++-19" "field '$TMP/clang.jsonl' 0 'r[\"argv\"][0]==\"clang++-19\"'"
+stdlib_one clang ""
+(cd "$TMP" && KILN_OSS_STDLIB=bogus "$HERE/kiln-cxx" --version >/dev/null 2>&1)
+check "a bad KILN_OSS_STDLIB exits 2" "[ $? -eq 2 ]"
 if [ -n "$KILN_CXX" ]; then
   echo "kiln++: $KILN_CXX"
   run_one kiln "$KILN_CXX"
+  stdlib_one kiln "$KILN_CXX"
   (cd "$TMP" && KILN_OSS_CXX="$KILN_CXX" KILN_OSS_LOG="$TMP/oom.jsonl" KILN_OSS_VMEM_KB=30000 "$HERE/kiln-cxx" -c hello.cpp -o o.o >/dev/null 2>&1)
   check "kiln: 30 MB address-space cap is kind oom" "field '$TMP/oom.jsonl' 0 'r[\"kind\"]==\"oom\" and r[\"rc\"]!=0 and r[\"diag\"]!=\"\"'"
 else
@@ -108,7 +146,19 @@ python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --up
 check "--update rewrites the section" "grep -q 'Failure clusters (kiln): 2.' '$TMP/status.md' && ! grep -q 'stale text' '$TMP/status.md' && grep -q 'trailing text' '$TMP/status.md'"
 python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --perf demo > "$TMP/perf.md"
 check "--perf: geomean and the slow TU" "grep -q 'geomean kiln/clang-19 time \\*\\*2.00x\\*\\*, RSS \\*\\*1.50x\\*\\*' '$TMP/perf.md' && grep -q 'TUs over 1.2x on time or RSS: 1 of the 1' '$TMP/perf.md'"
+python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --perf --top 0 demo > "$TMP/perf0.md"
+check "--perf --top 0: no TU rows, same totals" "grep -q 'geomean kiln/clang-19 time' '$TMP/perf0.md' && ! grep -q 'e.cc' '$TMP/perf0.md' && grep -q 'e.cc' '$TMP/perf.md'"
 check "--update regenerates the projects table" "grep -q '| \`demo\` | 1 | \`v1.0.0\` | blocked (2 clusters) |' '$TMP/status.md' && grep -q '| \`other\` | 2 | \`v2.0.0\` | tests at parity |' '$TMP/status.md'"
+
+# --stdlib libc++ reads the -libcxx builds into their own block and the
+# projects table's libc++ column, keeping the libstdc++ status (WP-694).
+python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --stdlib libc++ demo > "$TMP/libcxx.md"
+check "--stdlib libc++: the libc++ section" "grep -q '^### demo (v1.0.0), libc++\$' '$TMP/libcxx.md' && grep -q '| tests passed / total | 3 / 4 | 4 / 4 |' '$TMP/libcxx.md'"
+python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --stdlib libc++ --update "$TMP/status.md" demo >/dev/null 2>&1
+check "--stdlib libc++ --update: libc++ column and block" "grep -q '| \`demo\` | 1 | \`v1.0.0\` | blocked (2 clusters) | blocked (tests 3/4 vs clang 4/4) |' '$TMP/status.md' && grep -q '| \`other\` | 2 | \`v2.0.0\` | tests at parity | not run |' '$TMP/status.md' && grep -q '<!-- oss:demo:libcxx -->' '$TMP/status.md' && grep -q 'Failure clusters (kiln): 2.' '$TMP/status.md'"
+printf '# page\n' > "$TMP/page.md"
+python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --stdlib libc++ --update "$TMP/page.md" demo >/dev/null 2>&1
+check "--update adds no projects table to a page without one" "grep -q '<!-- oss:demo:libcxx -->' '$TMP/page.md' && ! grep -q 'oss:projects' '$TMP/page.md'"
 
 echo "selftest: $FAILS failed"
 [ "$FAILS" -eq 0 ]

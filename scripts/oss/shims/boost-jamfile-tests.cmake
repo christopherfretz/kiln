@@ -47,6 +47,27 @@
 #     KILN_BOOST_JAMFILE_DEFINES_<lib> and links KILN_BOOST_JAMFILE_LINK_<lib>: the Jamfile's project-level <define> and
 #     <library> requirements (a compiled library's tests link Boost.Test's
 #     unit_test_framework, thread, filesystem; WP-804).
+#   - on the first line a nested `[ requires ... ]` or `[ check-target-builds
+#     ... ]` is dropped (all of this compiler's features are present; a
+#     check-target-builds dependency that is absent fails under the control
+#     too), and so is a conditional property (`<toolset>intel:<cxxflags>x`)
+#     unless its condition is `<target-os>linux`, which holds here (WP-812).
+#   - KILN_BOOST_JAMFILE_SKIP_<lib> is a regex of test names (`<subdir>_<name>`,
+#     before the prefix) that are not registered: asio's `*_select` reruns
+#     differ only by a Jam variable's defines (WP-812).
+#   - KILN_BOOST_JAMFILE_SUBSET_<lib> `<N>|<keep>` registers a deterministic
+#     subset: of all the library's test names, sorted, every N-th (the 1st,
+#     the N+1-th, ...) plus every name matching the regex <keep> (WP-812:
+#     Boost.Math's 1300 statements).
+#   - KILN_BOOST_JAMFILE_FORCE_<lib> ON registers the b2 tests even when the
+#     library's CMakeLists.txt added test/ (Boost.Math's CMake tests are its
+#     header compile tests only; WP-812).
+#   - KILN_BOOST_JAMFILE_LIBS_<lib>: items `<jam target>=<glob relative to
+#     test/>`. A statement whose sources field names <jam target> (Boost.
+#     Math's `test_instances//test_instances`, the explicit instantiations
+#     its tests link) links a static library built from the glob, with the
+#     tests' includes and defines; it is built only when a registered test
+#     needs it (WP-812).
 # Test names are `<lib>-<subdir>_<name>`; a second statement with the same
 # name (one source built twice with other requirements) is skipped. Every
 # test sees every library's include/ directory, like b2's unified boost/
@@ -67,13 +88,37 @@ function(_kiln_boost_jam_add lib type src name defs)
   foreach(i IN LISTS KILN_BOOST_JAMFILE_INCLUDE_${lib})
     list(PREPEND incs "${CMAKE_SOURCE_DIR}/libs/${lib}/test/${i}")
   endforeach()
+  if(DEFINED KILN_BOOST_JAMFILE_SKIP_${lib} AND name MATCHES "${KILN_BOOST_JAMFILE_SKIP_${lib}}")
+    return()
+  endif()
+  if(_KILN_BOOST_JAM_DRY)
+    set_property(DIRECTORY "${CMAKE_SOURCE_DIR}" APPEND PROPERTY _KILN_BOOST_JAM_ALL "${name}")
+    return()
+  endif()
+  if(DEFINED _KILN_BOOST_JAM_KEEP AND NOT name IN_LIST _KILN_BOOST_JAM_KEEP)
+    return()
+  endif()
   get_property(seen DIRECTORY "${CMAKE_SOURCE_DIR}" PROPERTY _KILN_BOOST_JAM_SEEN)
   if("${lib}-${name}" IN_LIST seen)
     return()
   endif()
   set_property(DIRECTORY "${CMAKE_SOURCE_DIR}" APPEND PROPERTY _KILN_BOOST_JAM_SEEN "${lib}-${name}")
+  set(jamlibs "")
+  foreach(spec IN LISTS _kiln_jam_extra)
+    string(REGEX REPLACE "=.*$" "" word "${spec}")
+    string(REGEX REPLACE "^[^=]*=" "" glob "${spec}")
+    string(MAKE_C_IDENTIFIER "kiln_${lib}_${word}" t)
+    if(NOT TARGET ${t})
+      file(GLOB jsrcs "${CMAKE_SOURCE_DIR}/libs/${lib}/test/${glob}")
+      add_library(${t} STATIC EXCLUDE_FROM_ALL ${jsrcs})
+      target_include_directories(${t} PRIVATE ${incs})
+      target_compile_definitions(${t} PRIVATE ${KILN_BOOST_JAMFILE_DEFINES_${lib}})
+      target_link_libraries(${t} PRIVATE ${_KILN_BOOST_JAM_TARGET} ${KILN_BOOST_JAMFILE_LINK_${lib}})
+    endif()
+    list(APPEND jamlibs ${t})
+  endforeach()
   boost_test(PREFIX "${lib}" NAME "${name}" TYPE "${type}" SOURCES ${src}
-    LINK_LIBRARIES ${_KILN_BOOST_JAM_TARGET} ${KILN_BOOST_JAMFILE_LINK_${lib}}
+    LINK_LIBRARIES ${jamlibs} ${_KILN_BOOST_JAM_TARGET} ${KILN_BOOST_JAMFILE_LINK_${lib}}
     COMPILE_DEFINITIONS ${defs} ${KILN_BOOST_JAMFILE_DEFINES_${lib}}
     INCLUDE_DIRECTORIES ${incs})
 endfunction()
@@ -110,7 +155,13 @@ function(_kiln_boost_jam_file lib testdir jam)
     set(type "${CMAKE_MATCH_1}")
     set(rest "${CMAKE_MATCH_2}")
     set(jamrule "${type}")
+    while(rest MATCHES "\\[[^][]*\\]")
+      string(REGEX REPLACE "\\[[^][]*\\]" "" rest "${rest}")
+    endwhile()
     string(REGEX REPLACE "[];].*$" "" rest "${rest}")
+    string(REGEX REPLACE "\\[.*$" "" rest "${rest}")
+    string(REPLACE "<target-os>linux:<" "<" rest "${rest}")
+    string(REGEX REPLACE "<[^>]+>[^ \t:<]*:<[^ \t]*" "" rest "${rest}")
     # Jam fields are separated by ` : `; CMake lists by `;`.
     string(REPLACE ":" ";" fields "${rest}")
     list(LENGTH fields nf)
@@ -199,6 +250,15 @@ function(_kiln_boost_jam_file lib testdir jam)
     if(NOT sub STREQUAL "")
       set(name "${sub}_${name}")
     endif()
+    set(_kiln_jam_extra "")
+    foreach(spec IN LISTS KILN_BOOST_JAMFILE_LIBS_${lib})
+      string(REGEX REPLACE "=.*$" "" word "${spec}")
+      list(GET fields 0 f0)
+      string(REGEX MATCHALL "[^ \t]+" f0 "${f0}")
+      if(word IN_LIST f0)
+        list(APPEND _kiln_jam_extra "${spec}")
+      endif()
+    endforeach()
     set(variants "")
     foreach(v IN LISTS KILN_BOOST_JAMFILE_VARIANTS_${lib})
       string(FIND "${v}" "${jamrule}|" at)
@@ -228,6 +288,7 @@ function(_kiln_boost_jamfile_tests)
   file(GLOB incs LIST_DIRECTORIES true "${CMAKE_SOURCE_DIR}/libs/*/include" "${CMAKE_SOURCE_DIR}/libs/numeric/*/include")
   set(_KILN_BOOST_ALL_INCLUDES ${incs})
   foreach(lib IN LISTS KILN_BOOST_JAMFILE_LIBRARIES)
+    unset(_KILN_BOOST_JAM_KEEP)
     set(testdir "${CMAKE_SOURCE_DIR}/libs/${lib}/test")
     set(subdirs "")
     set(_KILN_BOOST_JAM_TARGET Boost::${lib})
@@ -236,6 +297,9 @@ function(_kiln_boost_jamfile_tests)
     endif()
     if(TARGET ${_KILN_BOOST_JAM_TARGET})
       get_property(subdirs DIRECTORY "${CMAKE_SOURCE_DIR}/libs/${lib}" PROPERTY SUBDIRECTORIES)
+    endif()
+    if(KILN_BOOST_JAMFILE_FORCE_${lib})
+      set(subdirs "")
     endif()
     if(NOT TARGET ${_KILN_BOOST_JAM_TARGET} OR "${testdir}" IN_LIST subdirs)
       message(STATUS "kiln: ${lib}: no b2 tests registered (not built, or it has CMake tests)")
@@ -265,6 +329,33 @@ function(_kiln_boost_jamfile_tests)
       endforeach()
     else()
       file(GLOB_RECURSE jams "${testdir}/Jamfile" "${testdir}/Jamfile.v2" "${testdir}/Jamfile.jam")
+      if(DEFINED KILN_BOOST_JAMFILE_SUBSET_${lib})
+        # A dry pass collects every name; the subset is chosen from them.
+        set(_KILN_BOOST_JAM_DRY ON)
+        set_property(DIRECTORY "${CMAKE_SOURCE_DIR}" PROPERTY _KILN_BOOST_JAM_ALL "")
+        foreach(jam IN LISTS jams)
+          _kiln_boost_jam_file("${lib}" "${testdir}" "${jam}")
+        endforeach()
+        set(_KILN_BOOST_JAM_DRY OFF)
+        get_property(all DIRECTORY "${CMAKE_SOURCE_DIR}" PROPERTY _KILN_BOOST_JAM_ALL)
+        list(REMOVE_DUPLICATES all)
+        list(SORT all)
+        string(REGEX MATCH "^([0-9]+)\\|?(.*)$" _ "${KILN_BOOST_JAMFILE_SUBSET_${lib}}")
+        set(every "${CMAKE_MATCH_1}")
+        set(keepre "${CMAKE_MATCH_2}")
+        set(_KILN_BOOST_JAM_KEEP "")
+        set(i 0)
+        foreach(n IN LISTS all)
+          math(EXPR r "${i} % ${every}")
+          if(r EQUAL 0 OR (NOT keepre STREQUAL "" AND n MATCHES "${keepre}"))
+            list(APPEND _KILN_BOOST_JAM_KEEP "${n}")
+          endif()
+          math(EXPR i "${i} + 1")
+        endforeach()
+        list(LENGTH all nall)
+        list(LENGTH _KILN_BOOST_JAM_KEEP nkeep)
+        message(STATUS "kiln: ${lib}: subset ${nkeep} of ${nall} b2 test names (every ${every}, plus /${keepre}/)")
+      endif()
       foreach(jam IN LISTS jams)
         _kiln_boost_jam_file("${lib}" "${testdir}" "${jam}")
       endforeach()
@@ -277,3 +368,55 @@ function(_kiln_boost_jamfile_tests)
 endfunction()
 
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _kiln_boost_jamfile_tests)
+
+# KILN_BOOST_SUBSET_TARGETS `<regex>|<N>|<keep>` (WP-812): a deterministic
+# subset of a suite too large to build whole (Boost.Geometry's ~400 test
+# executables). Of the `tests` target's dependencies, those whose name
+# matches <regex> are sorted and every N-th (the 1st, the N+1-th, ...) is
+# kept, plus every one matching <keep>; all others are kept. The kept ones
+# are the dependencies of the target `kiln_tests` (build it instead of
+# `tests`), and the names of the dropped ones go to
+# `<build>/kiln-subset-excluded.txt`, one per line, for `ctest
+# --exclude-from-file` (a dropped target's test has the target's name).
+function(_kiln_boost_subset_targets)
+  if(NOT DEFINED KILN_BOOST_SUBSET_TARGETS OR NOT TARGET tests)
+    return()
+  endif()
+  string(REPLACE "|" ";" parts "${KILN_BOOST_SUBSET_TARGETS}")
+  list(APPEND parts "" "" "")
+  list(GET parts 0 re)
+  list(GET parts 1 every)
+  list(GET parts 2 keepre)
+  get_property(deps TARGET tests PROPERTY MANUALLY_ADDED_DEPENDENCIES)
+  list(REMOVE_DUPLICATES deps)
+  list(SORT deps)
+  set(kept "")
+  set(dropped "")
+  set(i 0)
+  set(nsub 0)
+  foreach(t IN LISTS deps)
+    if(NOT t MATCHES "${re}")
+      list(APPEND kept "${t}")
+      continue()
+    endif()
+    math(EXPR nsub "${nsub} + 1")
+    math(EXPR r "${i} % ${every}")
+    math(EXPR i "${i} + 1")
+    if(r EQUAL 0 OR (NOT keepre STREQUAL "" AND t MATCHES "${keepre}"))
+      list(APPEND kept "${t}")
+    else()
+      list(APPEND dropped "${t}")
+    endif()
+  endforeach()
+  add_custom_target(kiln_tests)
+  if(kept)
+    add_dependencies(kiln_tests ${kept})
+  endif()
+  string(REPLACE ";" "\n" text "${dropped}")
+  file(WRITE "${CMAKE_BINARY_DIR}/kiln-subset-excluded.txt" "${text}\n")
+  list(LENGTH dropped ndrop)
+  math(EXPR nkeep "${nsub} - ${ndrop}")
+  message(STATUS "kiln: subset /${re}/: ${nkeep} of ${nsub} test targets kept (every ${every}, plus /${keepre}/)")
+endfunction()
+
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _kiln_boost_subset_targets)

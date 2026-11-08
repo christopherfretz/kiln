@@ -10,6 +10,7 @@
 
 mod base_info;
 mod empty;
+pub mod padding;
 pub(crate) mod props;
 mod record;
 mod subobject;

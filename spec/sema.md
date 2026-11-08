@@ -3522,6 +3522,12 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   clang's `CheckUsingShadowDecl`. Two distinct entities of one name in
   one scope:
   - an unresolved `using_if_exists` target conflicts with nothing;
+  - in a class, a dependent member using-declarator (`using B<T>::f;`,
+    an `UnresolvedUsingValue`) does not conflict with a function or
+    function template a later using-declarator introduces: it is
+    assumed to name functions that overload, and a conflict is found at
+    instantiation (clang `CheckOverload`; Boost.Cobalt's promises, WP-812,
+    `namespace.udecl/dependent-member-using-overloads-run.cpp`);
   - a tag conflicts only with a tag;
   - two typedefs conflict unless they name the same type;
   - two functions conflict iff their types are the same ignoring
@@ -4435,6 +4441,23 @@ function) elsewhere.
     `noexcept`. Evaluation is spec/oven.md "Builtins"; codegen evaluates
     the argument and emits nothing else (spec/codegen.md). Tests:
     `tests/conformance/obj.lifetime/start-lifetime-*.cpp`.
+  - `__builtin_clear_padding(p)` (WP-774; GCC `BUILT_IN_CLEAR_PADDING`,
+    `check_builtin_function_arguments`; clang has none, LLVM issue
+    64830): a GCC-only builtin (`gcc_only`, `__has_builtin` is 1 at both
+    compat levels, `__has_constexpr_builtin` 0 as in GCC). One argument
+    (`too few`/`too many`), decayed. GCC's checks run in GCC's order; the
+    first that fails is `argument 1 in call to function
+    '__builtin_clear_padding' {does not have pointer type|has pointer to
+    'const' type (T)|points to incomplete type (T)|has pointer to a
+    non-trivially-copyable type (T)}` at the argument
+    (`sema_builtin_clear_padding_invalid_arg`; GCC prints no type for
+    the incomplete case, and kiln emits no forward-declaration note). The
+    checks are: not a pointer; a `const` pointee; an incomplete or `void`
+    pointee (`int (*)[]` included); a pointee that is not trivially
+    copyable. A volatile pointee is accepted. The call is a `void`
+    prvalue. The constant-evaluation semantics are a kiln extension
+    (spec/oven.md "Builtins"); codegen is spec/codegen.md "Clearing
+    padding". Tests: `tests/conformance/ext.gnu.clear_padding/`.
   - `__builtin_align_up` / `__builtin_align_down` / `__builtin_is_aligned`
     (custom, `builtin_align`, clang `BuiltinAlignment`; WP-416): two
     arguments. The source must be an integer (not `bool` or an
@@ -7136,6 +7159,25 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     initializes the array from it (`braced_string_init`), and a further
     element is `excess elements in char array initializer` (WP-668;
     tests `tests/conformance/dcl.init.string/braced-string-literal-*.cpp`)
+  - String literal initializers: the literal's kind must suit the element
+    type (`Sema::string_init_compat`, clang `IsStringInit`): an ordinary
+    literal initializes `char`/`signed char`/`unsigned char`; with
+    `char8_t` on (C++20, or `-fchar8_t`) a `u8` literal initializes
+    `char8_t`, `char` and `unsigned char` (P2513), and with it off is an
+    ordinary literal; `L`/`u`/`U` initialize only `wchar_t`/`char16_t`/
+    `char32_t` (qualifiers ignored). A mismatch with a character element
+    type is an error at the entity: `initializing 'char8_t' array with
+    plain string literal` (with the note `add 'u8' prefix to form a
+    'char8_t' string literal` at the literal), `initializing wide char
+    array with non-wide string literal`, `... with incompatible wide
+    string literal`, `initializing char array with wide string literal`,
+    and for `signed char` from `u8` `initialization of char array with
+    UTF-8 string literal is not permitted by {'-fchar8_t'|C++20}`. A
+    mismatched literal in braces is not a string initialization: it
+    initializes the first element (`cannot initialize an array element
+    ...`), and brace elision treats it the same. WP-697 (WP-823); tests
+    `dcl.init.string/literal-kind-mismatch{,-cxx17-fchar8t}.cpp`,
+    `dcl.init.string/utf8-literal-fno-char8t.cpp`.
   - an array from an expression that is not a braced list or (for a
     character array) a string literal ([dcl.init.general]/16.5) is
     `array initializer must be an initializer list`, at the entity: the
@@ -8645,7 +8687,11 @@ coroutine's body Sema replaces the body with a `CoroutineBodyStmt`
   that fits neither form is `'operator new' provided by <P> is not
   usable with the function signature of '<f>'`;
 - the deallocation: the promise class's usual `operator delete`, else
-  the global one, the sized form `(ptr, size)` preferred;
+  the global one, the sized form `(ptr, size)` preferred. Both lookups
+  compare parameter types without top-level cv ([dcl.fct]/5), so
+  `operator new(const std::size_t)` and `operator delete(void *, const
+  std::size_t)` are the plain and sized forms (WP-812,
+  `dcl.fct.def.coroutine/promise-new-delete-const-size-run.cpp`);
 - `-fcoro-aligned-allocation` (default off, as clang; P2014R0 option 2,
   not in the standard): the frame is allocated with its alignment. Each
   lookup above first tries the `std::align_val_t` form, so a promise's

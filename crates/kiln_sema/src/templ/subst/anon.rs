@@ -138,12 +138,14 @@ impl Substituter<'_, '_, '_> {
     /// Also used for a data member's attributes (`field_decl`) and a
     /// function's (`function_decl`, `function_spec_signature`).
     pub(crate) fn class_attrs(&mut self, spec: DeclId, def: DeclId) {
-        self.copy_attrs(spec, def, false);
+        self.copy_attrs(spec, def, false, false);
     }
 
     /// [`Self::class_attrs`] for function template specialization `spec`
     /// of pattern `pat`, plus the unused-result attributes (`nodiscard`,
-    /// `pure`, `const`) written only on another declaration of the
+    /// `pure`, `const`) and the inlining ones (`always_inline`,
+    /// `noinline`; libstdc++'s `make_format_args`, WP-818) written only
+    /// on another declaration of the
     /// template seen so far: clang substitutes the specialization from
     /// the latest redeclaration, onto which `mergeDeclAttributes` carried
     /// every earlier one's, so an attribute added by a later declaration
@@ -151,9 +153,33 @@ impl Substituter<'_, '_, '_> {
     /// present only on the first applies to calls through any of them
     /// ([dcl.attr.nodiscard]/2). A specialization formed before such a
     /// declaration keeps what it had, as clang's does.
+    ///
+    /// For a member template instantiated with its class, clang
+    /// substitutes from the member declaration made when the class
+    /// specialization was instantiated, which carries the attributes of
+    /// the declarations seen by then: an `always_inline` or `noinline`
+    /// written only on an out-of-line definition seen later does not
+    /// apply (libstdc++'s `basic_string::__resize_and_overwrite`, whose
+    /// `basic_string<char>` is instantiated before `basic_string.tcc`).
+    /// Declaration ids are allocated in creation order, so the
+    /// declarations compare with the instantiated member template by id.
     pub(crate) fn function_spec_attrs(&mut self, spec: DeclId, pat: DeclId) {
-        const MERGED: [AttrKind; 3] = [AttrKind::NODISCARD, AttrKind::PURE, AttrKind::CONST];
-        self.class_attrs(spec, pat);
+        const MERGED: [AttrKind; 5] = [
+            AttrKind::NODISCARD,
+            AttrKind::PURE,
+            AttrKind::CONST,
+            AttrKind::ALWAYS_INLINE,
+            AttrKind::NOINLINE,
+        ];
+        const INLINING: [AttrKind; 2] = [AttrKind::ALWAYS_INLINE, AttrKind::NOINLINE];
+        let member = self
+            .sema
+            .ast
+            .spec_info(spec)
+            .map(|(_, s)| s.template)
+            .filter(|&t| self.sema.inst_template(t) != t);
+        let late = |r: DeclId| member.is_some_and(|m| r > m);
+        self.copy_attrs(spec, pat, false, late(pat));
         let ast = &self.sema.ast;
         let mut have: Vec<AttrKind> = ast
             .lists
@@ -167,7 +193,8 @@ impl Substituter<'_, '_, '_> {
             }
             for a in ast.lists.iter::<AttrId>(ast.attrs.of_decl(r)) {
                 let k = ast.attrs.get(a).kind;
-                if MERGED.contains(&k) && !have.contains(&k) {
+                if MERGED.contains(&k) && !have.contains(&k) && !(late(r) && INLINING.contains(&k))
+                {
                     have.push(k);
                     extra.push(a);
                 }
@@ -180,10 +207,13 @@ impl Substituter<'_, '_, '_> {
     /// instantiation `spec` (clang `InstantiateAttrs` for a local
     /// variable; [dcl.align]/1).
     pub(crate) fn var_align_attrs(&mut self, spec: DeclId, def: DeclId) {
-        self.copy_attrs(spec, def, true);
+        self.copy_attrs(spec, def, true, false);
     }
 
-    fn copy_attrs(&mut self, spec: DeclId, def: DeclId, only_aligned: bool) {
+    /// Copies `def`'s attributes onto `spec`: only `aligned`/`cleanup`
+    /// when `only_aligned`, and without `always_inline`/`noinline` when
+    /// `drop_inlining` ([`Self::function_spec_attrs`]).
+    fn copy_attrs(&mut self, spec: DeclId, def: DeclId, only_aligned: bool, drop_inlining: bool) {
         self.copy_annotations(spec, def);
         let ast = &self.sema.ast;
         let list = ast.attrs.of_decl(def);
@@ -194,6 +224,9 @@ impl Substituter<'_, '_, '_> {
             // A local variable's `cleanup` names a function, not a dependent
             // entity (WP-807).
             .filter(|n| !only_aligned || matches!(n.kind, AttrKind::ALIGNED | AttrKind::CLEANUP))
+            .filter(|n| {
+                !drop_inlining || !matches!(n.kind, AttrKind::ALWAYS_INLINE | AttrKind::NOINLINE)
+            })
             // clang does not clone a visibility attribute (`Clone = 0`):
             // codegen reads the pattern's (spec/codegen.md "Symbol
             // visibility"); a `mode` is applied to the substituted type.

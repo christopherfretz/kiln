@@ -13,10 +13,14 @@ on:
       cache-key: { type: string, required: true }
 # On every job that runs xtask (spec/harness.md "CI"): a missing LLVM tool or
 # GCC oracle is an error, never a skip.
+# Likewise a missing gdb or lldb-19 for a `debugger` test (tests/debuginfo,
+# WP-816): an ERROR, never a SKIP. The jobs that run those tests pass
+# `debuggers: "true"` to the setup action (`ci_tests::workflow_installs_the_debuggers`).
 env:
   KILN_REQUIRE_LLVM: "1"
   KILN_GCC: /usr/local/bin/g++
   KILN_REQUIRE_GCC: "1"
+  KILN_REQUIRE_DEBUGGERS: "1"
 defaults:
   run: { shell: bash }
 jobs:
@@ -28,7 +32,10 @@ jobs:
   # PATH (Rust links with them); Debian's GCC 14 stays in
   # /usr/lib/gcc/<triple>/14, which clang and kiln detect for libstdc++;
   # every binary loads GCC 16.1's ABI-compatible libstdc++.so.6. Each job
-  # checks out (the image ships git) and runs the setup action.
+  # checks out (the image ships git) and runs the setup action. The jobs that
+  # run debugger tests add CAP_SYS_PTRACE to the container (gdb and lldb
+  # trace the test binary; Docker's default seccomp profile allows ptrace,
+  # and the scripts leave ASLR on, since `personality` is blocked).
   lints:
     name: lints
     runs-on: ${{ inputs.runner }}
@@ -46,7 +53,9 @@ jobs:
   unit:
     name: unit ${{ matrix.group }}
     runs-on: ${{ inputs.runner }}
-    container: gcc:16.1.0-trixie
+    container: &debugger-container
+      image: gcc:16.1.0-trixie
+      options: --cap-add=SYS_PTRACE
     strategy:
       fail-fast: false
       matrix:
@@ -57,6 +66,8 @@ jobs:
         with:
           cache-key: "${{ inputs.cache-key }}"
           save-cache: "${{ matrix.group == 'rest' }}"
+          # The harness's end-to-end debugger fixtures (xtask group).
+          debuggers: "${{ matrix.group == 'xtask' }}"
       - run: cargo xtask ci --step unit --unit-group ${{ matrix.group }}
       - if: ${{ !cancelled() && matrix.group == 'codegen' }}
         run: KILN_ORACLE=19 cargo xtask ci --oracle-only --step unit
@@ -65,7 +76,7 @@ jobs:
   self-check:
     name: self-check ${{ matrix.shard }}/${{ strategy.job-total }}
     runs-on: ${{ inputs.runner }}
-    container: gcc:16.1.0-trixie
+    container: *debugger-container
     strategy:
       fail-fast: false
       matrix:
@@ -73,7 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/kiln-ci
-        with: { cache-key: "${{ inputs.cache-key }}" }
+        with: { cache-key: "${{ inputs.cache-key }}", debuggers: "true" }
       - run: cargo xtask ci --step self-check --shard ${{ matrix.shard }}/${{ strategy.job-total }}
   # The kiln corpus run, oracle clang 22, in S shards. S is the length of
   # this list (THE constant to retune; kiln-19 reuses it via the anchor):
@@ -82,7 +93,7 @@ jobs:
   kiln-22:
     name: kiln-22 ${{ matrix.shard }}/${{ strategy.job-total }}
     runs-on: ${{ inputs.runner }}
-    container: gcc:16.1.0-trixie
+    container: *debugger-container
     strategy:
       fail-fast: false
       matrix:
@@ -90,14 +101,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/kiln-ci
-        with: { cache-key: "${{ inputs.cache-key }}" }
+        with: { cache-key: "${{ inputs.cache-key }}", debuggers: "true" }
       - run: cargo xtask ci --step kiln --shard ${{ matrix.shard }}/${{ strategy.job-total }}
   # The two-oracle policy (spec/harness.md "Oracle toolchain", WP-355): the
   # kiln corpus also stays green with clang 19 as the oracle.
   kiln-19:
     name: kiln-19 ${{ matrix.shard }}/${{ strategy.job-total }}
     runs-on: ${{ inputs.runner }}
-    container: gcc:16.1.0-trixie
+    container: *debugger-container
     strategy:
       fail-fast: false
       matrix:
@@ -105,7 +116,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/kiln-ci
-        with: { cache-key: "${{ inputs.cache-key }}" }
+        with: { cache-key: "${{ inputs.cache-key }}", debuggers: "true" }
       - run: >-
           KILN_ORACLE=19 cargo xtask ci --oracle-only --step kiln
           --shard ${{ matrix.shard }}/${{ strategy.job-total }}

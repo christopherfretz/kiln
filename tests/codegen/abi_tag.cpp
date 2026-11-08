@@ -1,7 +1,10 @@
 // abi_tag mangling (WP-172): <abi-tags> after the unqualified name of
 // functions, variables, structors and operators; instantiated tags come
 // from the pattern definition (clang 19), so an out-of-line member
-// definition of a class template that does not repeat the tag drops it.
+// definition of a class template that does not repeat the tag drops it,
+// unless the class specialization was instantiated before that definition
+// was seen (the member's attributes are then taken from the in-class
+// declaration).
 int v __attribute__((abi_tag("x"))) = 1;
 namespace N { int w __attribute__((abi_tag("b", "a", "b"))) = 2; }
 __attribute__((abi_tag("t1"))) int f(int x) { return x + v; }
@@ -45,3 +48,11 @@ template <class T> int V6<T>::s = 3;
 template <class T> struct Q6 { __attribute__((abi_tag("v"))) int f(); };
 template <class T> __attribute__((abi_tag("v"))) int Q6<T>::f() { return 0; }
 int u6() { V6<int> v; Q6<int> q; return v.f() + v.g(1) + V6<int>::s + q.f(); }
+template <class T> struct A7 { __attribute__((abi_tag("a"))) int f(); template <class U> __attribute__((abi_tag("ag"))) int g(U); };
+inline int sizeA7 = sizeof(A7<int>);
+template <class T> int A7<T>::f() { return 0; }
+template <class T> template <class U> int A7<T>::g(U) { return 0; }
+template <class T> struct B7 { __attribute__((abi_tag("b"))) int f(); };
+extern template struct B7<int>;
+template <class T> int B7<T>::f() { return 0; }
+int u7() { return A7<int>().f() + A7<int>().g(1) + B7<int>().f(); }

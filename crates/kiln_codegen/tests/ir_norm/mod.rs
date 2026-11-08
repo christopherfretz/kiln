@@ -11,6 +11,8 @@
 //!   `disjoint`, `samesign`, `inrange(..)`), the target datalayout, and
 //!   the parameter/return attributes that are not ABI (`noundef`,
 //!   `nonnull`, `dereferenceable(N)`, `dead_on_return`, `captures(..)`, ...).
+//!   Debug information goes with the metadata: the `#dbg_*` records and a
+//!   function's `!dbg` attachment (WP-814).
 //!   Each run of consecutive comdat (`$x = comdat ..`) or global (`@x = ..`)
 //!   lines is sorted: their order means nothing and clang 22 emits a
 //!   class's `_ZTI` before its `_ZTS`. Instructions, types, constants,
@@ -33,7 +35,9 @@
 use std::fmt::Write as _;
 
 /// Drops the `ModuleID` comment, `source_filename`, the `llvm.ident`
-/// named metadata and its string node (clang's or kiln's version).
+/// named metadata and its string node (clang's or kiln's version), and
+/// blanks a `DICompileUnit`'s `producer: "..."` (the same version
+/// string, under `-g`).
 pub fn base(s: &str) -> String {
     let mut out = String::new();
     for line in s.lines() {
@@ -46,7 +50,15 @@ pub fn base(s: &str) -> String {
         {
             continue;
         }
-        out.push_str(line);
+        match line.find("producer: \"") {
+            Some(i) if line.contains("!DICompileUnit(") => {
+                let rest = &line[i + 11..];
+                out.push_str(&line[..i]);
+                out.push_str("producer: \"\"");
+                out.push_str(rest.find('"').map_or("", |e| &rest[e + 1..]));
+            }
+            _ => out.push_str(line),
+        }
         out.push('\n');
     }
     out
@@ -184,6 +196,7 @@ fn paren_delta(tok: &str) -> i32 {
 fn structural_line(line: &str) -> Option<String> {
     let line = strip_comment(line).trim_end();
     if line.trim().is_empty()
+        || line.trim_start().starts_with("#dbg_")
         || line.starts_with('!')
         || line.starts_with("attributes #")
         || line.starts_with("target datalayout")
@@ -261,6 +274,17 @@ fn structural_line(line: &str) -> Option<String> {
         i += 1;
     }
     strip_md_attachments(&mut out);
+    if line.starts_with("define ") {
+        // A function's attachments (`!dbg !N`) precede its `{`.
+        let mut k = 0;
+        while k + 1 < out.len() {
+            if out[k].len() > 1 && out[k].starts_with('!') && out[k + 1].starts_with('!') {
+                out.drain(k..k + 2);
+            } else {
+                k += 1;
+            }
+        }
+    }
     let mut s = out.join(" ");
     // A dropped `, align N` leaves its comma on the previous token.
     while s.ends_with(',') {

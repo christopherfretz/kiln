@@ -64,6 +64,7 @@ fn cli_parsing() {
             paths: vec!["tests/a".into(), "b.cpp".into()],
             toolchain: None,
             require_gcc: false,
+            require_debuggers: false,
         }
     );
     assert_eq!(parse_args(strings(&["--help"])).unwrap(), None);
@@ -498,6 +499,20 @@ fn gcc_oracle_with_a_fake_gcc() {
     assert!(execute(&o).unwrap_err().contains("the GCC oracle"));
 }
 
+/// `KILN_REQUIRE_DEBUGGERS` is required only by exactly `1`, and the
+/// debugger corpus is a default root (WP-816, spec/harness.md "Debugger
+/// tests"; the SKIP/ERROR decision is `runner::compat_tests`).
+#[test]
+fn debugger_corpus_is_a_default_root() {
+    assert!(require_debuggers_from(Some("1")) && require_debuggers_from(Some(" 1\n")));
+    assert!(!require_debuggers_from(None) && !require_debuggers_from(Some("0")));
+    assert!(!require_debuggers_from(Some("")) && !require_debuggers_from(Some("true")));
+    let root = repo_root();
+    let roots = discover::default_roots(&root);
+    assert!(roots.contains(&root.join("tests/debuginfo")), "{roots:?}");
+    assert!(roots.contains(&root.join("tests/conformance")), "{roots:?}");
+}
+
 /// `KILN_REQUIRE_GCC=1` ([`Options::require_gcc`]): a run without a usable
 /// GCC oracle is an infrastructure error (exit 2), never a run with the
 /// `oracle: gcc` comparisons dropped (spec/harness.md "GCC oracle").
@@ -564,6 +579,28 @@ fn filter_and_no_tests() {
     let mut o = clang_opts(&[]);
     o.compiler = Some("/nonexistent/compiler".into());
     assert!(execute(&o).unwrap_err().contains("cannot run compiler"));
+}
+
+/// `expect: debugger` (WP-814): gdb and lldb scripts against clang 19's
+/// `-O0 -g` binaries, one fixture per outcome.
+#[test]
+fn debugger_fixtures_with_clang() {
+    let on_path = |n: &str| {
+        std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(n).is_file()))
+    };
+    if !have_clang() || !on_path("gdb") || !on_path("lldb-19") {
+        return;
+    }
+    let results = execute(&clang_opts(&[repo_root().join("xtask/fixtures/debugger")])).unwrap();
+    check_fixture_statuses(&results, 4);
+    let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
+    let d = &by_name("fail-gdb-wrong-value.cpp").details;
+    assert!(d.contains("gdb: no line contains `$1 = 43`"), "{d}");
+    let d = &by_name("fail-gdb-out-of-order.cpp").details;
+    assert!(d.contains("gdb: no line contains `$1 = 1`"), "{d}");
+    let d = &by_name("error-debugger-no-check.cpp").details;
+    assert!(d.contains("`gdb:` commands without a `gdb-check`"), "{d}");
 }
 
 /// `expect: ast` with clang as the compiler under test: its JSON dump is

@@ -681,15 +681,21 @@ Encoding (prefix-free, so equal word sequences mean equal trees):
   `DependentScopeDeclRef`) are `(qualifier, name, explicit args)`. The
   lookup result is not part of the profile;
 - literals are their value plus canonical type;
+- a reflect-expression (`^^x`) is its value (an interned reflection id)
+  once known; a dependent `^^T` of a template type parameter is
+  `T`'s canonical type, so `C<^^T>` written in two templates is
+  equivalent; any other dependent reflection is unique (a type
+  reflection keeps a top-level alias, which the canonical type would
+  lose; WP-776);
 - transparent nodes: `ImplicitCastExpr`, `ConstantExpr`,
   `MaterializeTemporaryExpr`, `CXXBindTemporaryExpr`, `ExprWithCleanups`.
   `SubstNonTypeTemplateParmExpr` profiles as its replacement. `ParenExpr`
   is kept;
 - *unique* kinds are `[UNIQUE | kind, expr id]` and equal only
   themselves. They cover lambdas, statement-expressions, recovery
-  expressions, coroutine and reflection operators, and any kind with no
-  equivalence rule. The match is exhaustive, so a new `ExprKind` must
-  choose a rule.
+  expressions, coroutine operators, splices, the dependent reflections
+  above, and any kind with no equivalence rule. The match is
+  exhaustive, so a new `ExprKind` must choose a rule.
 
 The walk runs on an explicit work stack with no recursion (tested at 200k
 nesting). Its buffers live on `TypeContext` (`profile_scratch`), so

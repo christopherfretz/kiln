@@ -27,7 +27,8 @@
 //!   parentheses are kept.
 //! - Literals are their value and canonical type (not their spelling).
 //! - Kinds with no equivalence rule (lambdas, statement-expressions,
-//!   recovery expressions, coroutine and reflection operators, ...) are
+//!   recovery expressions, coroutine operators, splices, dependent
+//!   reflections other than `^^T` of a template type parameter, ...) are
 //!   *unique*: `[tag | UNIQUE, expr id]`, equal only to themselves. The
 //!   match below is exhaustive so a new `ExprKind` must pick a rule.
 //!
@@ -173,6 +174,21 @@ impl Ast {
 
     fn canon_word(&self, q: QualType) -> u32 {
         self.types.canonical(q).raw()
+    }
+
+    /// The template of a class template name to deduce (`view(r, f)`):
+    /// its canonical type is `Dependent` whatever the template, so the
+    /// name tells `drop_view(...)` from `take_view(...)` (clang profiles
+    /// the `DeducedTemplateSpecializationType`'s template name).
+    fn ctad_word(&self, q: QualType) -> u32 {
+        match self.types.view(q.ty()) {
+            super::TypeView::DeducedTemplateSpecialization { name, deduced }
+                if deduced.is_none_or(|d| d == QualType::DEPENDENT) =>
+            {
+                self.types.canonical_template_name(name).raw().wrapping_add(1)
+            }
+            _ => NONE,
+        }
     }
 
     fn opt_canon_word(&self, q: Option<QualType>) -> u32 {
@@ -468,7 +484,7 @@ impl Ast {
                 stack.push(Work::Opt(id(n.a())));
             }
             K::CXXUnresolvedConstructExpr => {
-                out.extend([tag(k, aux & 1), self.canon_word(n.ty())]);
+                out.extend([tag(k, aux & 1), self.canon_word(n.ty()), self.ctad_word(n.ty())]);
                 self.push_list(ListId::new(n.a()), stack);
             }
             K::CXXParenListInitExpr => {
@@ -605,6 +621,30 @@ impl Ast {
                 out.push(self.args_word(ArgListId::from_raw(n.b())));
             }
 
+            // ----- a reflection: its value (interned, so equal values
+            // are one id) once known; `^^T` of a template type parameter
+            // its canonical type (`(depth, index, pack)` and qualifiers),
+            // so the reflection operands of `C<^^T>` in two templates are
+            // equivalent ([temp.over.link]/5). Every other dependent
+            // reflection is unique: a type keeps a top-level alias
+            // ([meta.reflection]), which the canonical type would lose.
+            K::CXXReflectExpr => match self.reflect_operand(e) {
+                _ if x.reflect_value(e).is_some() => {
+                    out.extend([tag(k, 2), x.reflect_value(e).map_or(NONE, RawId::raw)]);
+                }
+                crate::reflect::Reflectee::Type(q)
+                    if x.reflect_dependent_name(e).is_none()
+                        && matches!(
+                            self.types.view(q.ty()),
+                            super::TypeView::TemplateTypeParm(_)
+                                | super::TypeView::CanonTemplateTypeParm { .. }
+                        ) =>
+                {
+                    out.extend([tag(k, 1), self.canon_word(q)]);
+                }
+                _ => out.extend([tag(k, 0) | UNIQUE, e.raw()]),
+            },
+
             // ----- no equivalence rule: equal only to itself
             K::UserDefinedLiteral
             | K::ImaginaryLiteral
@@ -626,7 +666,6 @@ impl Ast {
             | K::ShuffleVectorExpr
             | K::ConvertVectorExpr
             | K::ExtVectorElementExpr
-            | K::CXXReflectExpr
             | K::CXXSpliceExpr
             | K::RecoveryExpr
             | K::CXXExpansionSelectExpr => out.extend([tag(k, 0) | UNIQUE, e.raw()]),

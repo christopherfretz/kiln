@@ -194,6 +194,7 @@ def cmd_report_json(a):
         "project": a.project,
         "compiler": a.compiler,
         "compiler_path": a.compiler_path,
+        "stdlib": a.stdlib,
         "url": p["url"],
         "tag": p["tag"],
         "cxx_std": p["cxx_std"],
@@ -224,6 +225,7 @@ def main():
     r.add_argument("--project", required=True)
     r.add_argument("--compiler", required=True)
     r.add_argument("--compiler-path", required=True)
+    r.add_argument("--stdlib", choices=("libstdc++", "libc++"), default="libstdc++")
     r.add_argument("--build-dir", required=True)
     r.add_argument("--configure-rc", type=int, required=True)
     r.add_argument("--build-rc", type=int)

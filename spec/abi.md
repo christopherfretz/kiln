@@ -44,6 +44,8 @@ pub struct LayoutCache;   // a finished session's records (Layouter::into_cache 
 pub fn subobjects(&Ast, record: DeclId, &Target) -> Vec<(Subobject, u64)>; // §8.3
 pub const MAX_SUBOBJECTS: usize;              // 65536 (SubobjectId is u16)
 impl Layouter { fn subobjects(&mut self, DeclId) -> Vec<(Subobject, u64)> }
+pub fn padding_mask(&mut Layouter, QualType) -> Option<Vec<u8>>; // §3.3; None: over 16 MiB
+pub const MAX_PADDING_MASK_BYTES: u64;
 // dump (§6, §8.4)
 pub struct DumpOptions<'a> { pub sources: Option<&'a SourceManager>, pub at_definition: bool }
 pub fn dump_record_layout(&Ast, DeclId, &Target) -> String;
@@ -196,6 +198,36 @@ No minimum global alignment applies on the M2 targets. Users: codegen
 `var_align` (global, `alloca`, `catch` and static-local storage), the
 Oven's `SemaBridge::decl_align` (`__builtin_assume_aligned`) and
 `SemaBridge::alignof_decl` (`alignof` of an expression naming `d`).
+
+### 3.3 Padding bits (`layout::padding`, WP-774)
+
+`padding_mask(lay, T)` describes the object representation of a `T`. It
+returns one byte per byte of `T`, and a set bit in it is a padding bit:
+a bit that holds no part of `T`'s value ([basic.types.general]/4). The
+rules are GCC's `__builtin_clear_padding` (`gimple-fold.cc`
+`clear_padding_type`), the only consumer (spec/codegen.md "Clearing
+padding"). A bit is a value bit when the value representation of some
+scalar subobject covers it:
+- every byte of a scalar is a value byte, `bool`, `std::nullptr_t`,
+  enumerations, pointers, member pointers, `__fp16`, `_Complex` and
+  vectors included. The exceptions are x87 `long double` / `_Float64x`
+  (80 value bits of 128) and `_BitInt(N)` (N value bits);
+- a named bit-field's declared bits, capped at its type's width;
+- the vtable pointer;
+- each element of an array, and the first `sizeof(T)` bytes of an
+  `_Atomic(T)`.
+Everything else is padding:
+- gaps between and after members, and the tail of a non-POD base that
+  the derived class does not reuse. A base is its non-virtual part;
+  virtual bases count only in a complete object;
+- unnamed bit-fields;
+- the byte of an empty class, and empty bases and empty
+  `[[no_unique_address]]` members (a non-empty one is laid out as a base
+  subobject);
+- in a union, a bit that is padding in every member.
+Bit-field bits number little-endian, the only byte order kiln targets.
+An object over 16 MiB (`MAX_PADDING_MASK_BYTES`) gets `None`. Class
+masks are memoized for each call.
 
 ## 4. Class properties
 - **POD for the purpose of layout** (Itanium §1.1: the C++03 POD
@@ -1026,20 +1058,40 @@ or the function's own when only its type is substituted for deduction
 against a target type): `Subst::nested_prototype_param` makes a fresh
 parameter keeping index and scope depth, as clang's
 `TransformFunctionTypeParams` does (`tests/mangle/function_param_depth.cpp`).
-An unsupported expression
-(non-dependent `sizeof` whose value would be needed, ...) mangles as
-`XLi0EE` in a template argument and `u7unknown` as a `decltype`
-operand. The
+An expression with no encoding yet mangles as `XLi0EE` in a template
+argument and `u7unknown` as a `decltype` operand; in a requires-clause
+it is an error (§8.16). WP-818's rules (§8.29) cover the cases the
+standard-library sweep found: non-dependent `sizeof`, substituted
+`sizeof...` and enumeration parameters, dependent CTAD, alias templates
+and template template parameters in qualifiers, the injected-class-name
+in constraints, and abi_tag ordering. The
 template-parameter-declaration prefixes `Tn`/`Tp` are §8.14's (WP-117);
 the dependent template-specialization types there are the ones above
 (`dependent_tst`, with a pack's arguments grouped by `converted_args`).
-One difference from clang remains for value-dependent arguments (a
-follow-up). clang mangles the expression that first created the
-enclosing canonical type, but kiln mangles the profile's first
-expression in the TU. The two differ only when one TU spells the same
-dependent expression in more than one way. For example, after
-`R<T>::value`, a new signature that writes `R<T, void>::value` is
-`RIT_vEE` in clang and `RIT_EE` in kiln.
+**First spelling per canonical type (WP-790).** clang keeps, in each
+canonical dependent node (template specialization type, dependent
+template specialization, `DependentDecltypeType`,
+`DependentSizedArrayType`), the expressions of the spelling that first
+created it, and mangles every later spelling of that canonical type
+from them. kiln does the same: when `Canon` interns a new canonical
+type of those kinds, `Types::note_arg_origin` records the written
+`ArgListId` (only when it holds an expression argument) and
+`Types::note_expr_origin` the written `ExprId`, keyed by the canonical
+`TypeId`, first writer wins. The mangler reads them back
+(`Types::arg_origin`, `Types::expr_origin`, falling back to the
+profile's first expression) for the `compound` TST/DTST/decltype/array
+cases and for `dep.rs`'s `type_prefix` and unresolved types. So the
+choice is per enclosing canonical type, not per expression profile:
+`R<T>::value` and `R<T, void>::value` profile alike, so
+`EI<R<T>::value, T>` and `EI<R<T, void>::value, T>` are one canonical
+type; if a signature writes the first, both mangle `RIT_EE`, while
+`EI<R<T, void>::value, T *>` written first makes both `T *` forms
+`RIT_vEE`, in the same TU, as clang 19 (kiln used to take the profile's
+first expression in the TU for every enclosing type). Across
+TUs the names agree whenever the TUs agree on the first spelling, which
+is the same hazard clang has (`tests/codegen/dependent_expr_first_spelling.cpp`
+for both orders in one TU, `tests/conformance/temp.over.link/dependent-expr-first-spelling-two-units-run.cpp`
+for two linked TUs).
 
 ### 8.16 Landed (WP-204): constrained templates (`mangle/constraint.rs`)
 clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
@@ -1094,8 +1146,11 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   il <braced-expression>* E` (nested braced lists recurse as `il ... E`,
   packs as `sp`); an array new `new T[2]{...}` is `na _ <element type>
   il ... E` without the bound, as clang 19. A constraint expression kiln
-  still cannot mangle falls back to `Qu7unknown`, so the symbol stays
-  unique but differs from clang.
+  cannot mangle is the error `cg_cannot_mangle_expression` at the
+  expression, and the TU produces no output (WP-818; it used to mangle
+  as `Qu7unknown`, a name that differs from clang's).
+  An expression splice (P2996) is GCC 16's `DS <expression>
+  [<template-args>] E`.
 - **Not implemented:** a generic lambda's explicit template-head in its
   closure type name (`[]<class T>(){}` is clang's `UlTyvE_`, kiln's
   `UlvE_`, which also shifts later discriminators); clang 19's
@@ -1504,6 +1559,44 @@ appends the vendor qualifier `U17pass_object_size<t>`
 `<bare-function-type>` (clang `mangleBareFunctionType`; `mangle.rs`
 `bare_function_type`), e.g. `_Z5namedPKcU17pass_object_size0i`. The
 hidden `size_t` arguments are not part of the mangled type.
+
+### 8.29 Landed (WP-818): standard-library mangling parity and the sweep
+`scripts/mangle-sweep.sh` (docs/VALIDATION.md "Mangling sweep") compiles
+each TU in `tests/mangle-sweep/` with kiln++ and clang++-19, against
+libc++ and libstdc++, with `-std=c++26 -O0 -S -emit-llvm -fno-exceptions
+-w -U__cpp_explicit_this_parameter` (clang 19 leaves that macro undefined,
+kiln defines it as clang 22 does, and libstdc++ selects overloads on it).
+Both IRs then go through `opt-19 -passes=always-inline`: clang runs the
+always-inliner itself even at -O0 and kiln leaves it to LLVM, so without
+the pass the `always_inline` functions that survive differ. Every `_Z`
+symbol defined, declared or referenced must appear in both;
+internal-linkage closure names `$_N` are compared without their number.
+
+The rules the sweep found are listed in `spec/landed/abi/WP-818.md`:
+non-dependent `sizeof`/`alignof` as literals, substituted `sizeof...` and
+enumeration parameters, dependent CTAD names (untagged, with the
+expression profile keyed on the template name), alias templates and
+template template parameter specializations in qualifiers, the
+injected-class-name as a substitution in constraints, `J...E` grouping of
+a template template parameter's pack, abominable function types, closure
+numbering in pack expansions, abi_tag ordering for out-of-line members,
+and the inheritance of `always_inline`/`noinline` across redeclarations.
+
+The sweep went from 988 mismatches (libc++ 840, libstdc++ 148) to
+17 (libc++ 16, libstdc++ 1). What remains is clang-only: calls clang 19 emits that kiln does
+not, none of them a different name for the same entity.
+
+- libc++ `__introsort<..., false>` (`sort` with `greater<>` and a
+  projection): clang emits the dead arm of `_UseBitSetPartition ?
+  __bitset_partition(...) : __partition_with_equals_on_right(...)`, an
+  aggregate-valued conditional it does not fold at -O0, and with it the
+  `__bitset_partition` helpers (`__populate_left_bitset`,
+  `__swap_bitmap_pos`, `__libcpp_ctz`, `ranges::iter_swap`, ...). kiln
+  folds the constant condition.
+- libstdc++ `std::visit`: kiln folds `__as(v).valueless_by_exception()`
+  for a never-valueless variant to `false` (a constant expression under
+  P2280, which clang 19 does not implement), so it does not call
+  `__variant::__as`.
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386

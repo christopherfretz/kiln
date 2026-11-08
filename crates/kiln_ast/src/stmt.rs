@@ -766,6 +766,11 @@ impl StmtArena {
         self.fp_overrides[self.expect(s, &[StmtKind::CompoundStmt]).aux as usize]
     }
 
+    /// The `)` closing a `DoStmt`'s condition.
+    pub fn do_rparen(&self, s: StmtId) -> Loc {
+        Loc::from_raw(self.expect(s, &[StmtKind::DoStmt]).b)
+    }
+
     /// The `}` of a `CompoundStmt`.
     pub fn rbrace(&self, s: StmtId) -> Loc {
         Loc::from_raw(self.expect(s, &[StmtKind::CompoundStmt]).b)

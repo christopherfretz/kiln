@@ -58,7 +58,7 @@ there (and under `-w` / `-Wno-unknown-attributes`).
 
 Causes 1 to 3 are fixed in WP-805, and so is the class A half of cause 4 (`used`, `aligned` on
 functions). For the class B half of cause 4, WP-813 fixed `nonnull` IR; `likely`/`unlikely`
-branch weights at -O1+ are a WP-813 follow-up and the debug attributes WP-814's. Cause 5 is fixed
+branch weights at -O1+ are a WP-813 follow-up, and WP-814 implemented the debug attributes. Cause 5 is fixed
 in WP-806 (#364).
 
 1. **`__has_attribute`/`__has_cpp_attribute`/`__has_builtin` claim everything clang has**
@@ -158,7 +158,7 @@ aligned-on-function, P-A3, P-A4, F-A4 — plus every attribute row when it appea
 | `aligned(N)` on a function | accepted (no subject error); layout reads only types/vars/fields (crates/kiln_abi/src/layout/props.rs:78). Function `align` is set only to 2 for x86 methods (crates/kiln_codegen/src/func.rs:398-409) | `align N` on the `llvm::Function` | A-low (code relying on function-address alignment / low-bit tagging) | none | fixed in WP-805 |
 | `[[likely]]` / `[[unlikely]]` | checked in sema (crates/kiln_sema/src/stmt.rs:484-534); no codegen reader | branch weights / `llvm.expect` at -O1+ | B | none | open: WP-813 follow-up (xfail `tests/conformance/dcl.attr.class-b/ir-likely-branch-weights-O1-19.cpp`; no IR effect at -O0, as clang) |
 | `nonnull` / `returns_nonnull` | sema warnings only (crates/kiln_sema/src/nonnull.rs, null_compare.rs) | `nonnull` param / return IR attribute | B | none | fixed in WP-813 |
-| `nodebug`, `artificial`, `standalone_debug` | sema subject checks only | debug-info shaping | B (kiln emits no debug info at all) | none | WP-814 (debug info); `standalone_debug` sema in WP-813 |
+| `nodebug`, `artificial`, `standalone_debug` | shape debug info as clang (crates/kiln_codegen/src/debuginfo/func.rs `has_fn_attr(.., NODEBUG)`; `standalone_debug` in `di_omit`, debuginfo/types.rs) | debug-info shaping | B | none | fixed in WP-814 (`standalone_debug` sema in WP-813) |
 | `carries_dependency` | stored, unused | no codegen either | none (matches clang) | — | none (matches clang) |
 | thread-safety (34), `lifetimebound`, `no_sanitize*` (6) | dropped at decl.rs:9911/9915 | analysis (`-Wthread-safety`, `-Wdangling`) / sanitizer instrumentation | C (sanitizers: moot unless `-fsanitize` is accepted — see §4) | none | WP-805: rows in the triage table (C; `no_sanitize*` B) |
 | `AttrKind::MODE`, `INTERNAL_LINKAGE`, `NO_SANITIZE` | defined in crates/kiln_ast/src/attr.rs:71-74 but never produced (only the AST dumper names them) | — | see `mode`, `internal_linkage` below | — | `mode` fixed in WP-799; `internal_linkage` WP-807 |
@@ -219,7 +219,7 @@ triage table, except these. `target_clones` is WP-810's (implemented on AArch64,
 x86-64).
 `randomize_layout`/`no_randomize_layout` and `btf_decl_tag`/`btf_type_tag` are C-only in clang:
 `'X' attribute ignored`, as clang warns in C++. The debug effects of `nodebug`, `artificial` and
-`standalone_debug` are WP-814's. Open follow-ups with xfail repros in
+`standalone_debug` are implemented in WP-814. Open follow-ups with xfail repros in
 tests/conformance/dcl.attr.class-b/: `[[likely]]`/`[[unlikely]]` branch weights at -O1+,
 `noescape` on a function type's parameter, and clang 22's `malloc_span` (still a silent class B
 triage row, without clang's subject checks).
@@ -231,8 +231,11 @@ triage row, without clang's subject checks).
   `nonnull`/`returns_nonnull` IR (1.2), `[[likely]]`/`[[unlikely]]` (1.2), `[[omp::assume]]`.
 - layout-free codegen hints: `code_align`, `loader_uninitialized`, `force_align_arg_pointer`,
   `randomize_layout`/`no_randomize_layout` (only meaningful with a randomizing plugin).
-- debug: `standalone_debug`, `nodebug`, `artificial`, `btf_decl_tag`, `btf_type_tag`,
-  `lto_visibility_public` (kiln emits no debug info at all).
+- debug: `btf_decl_tag`, `btf_type_tag`, `lto_visibility_public`
+  (`-g` is implemented since WP-814; `nodebug`, `artificial` and `standalone_debug` are
+  honoured, these are not).
+  What `-g` leaves out (structured bindings, VLA locals, labels, `using` imports,
+  global-initializer subprograms) is listed in docs/status/debuginfo.md "Gaps".
 - instrumentation / hardening: `patchable_function_entry`, `xray_always_instrument`,
   `xray_never_instrument`, `xray_log_args`, `no_instrument_function`,
   `no_profile_instrument_function`, `no_stack_protector`, `no_split_stack`, `nocf_check`,
@@ -395,7 +398,8 @@ Code: crates/kiln_driver/src/args.rs, codegen_flags.rs. Unknown flags are a hard
 (`ArgError::Unknown`, args.rs:658; also for `-Xclang` args). Explicit ignore table
 codegen_flags.rs:60 (`-f[no-]stack-clash-protection`, `-fcf-protection[=]`, `-f[no-]common`,
 `-f[no-]math-errno`, `-fstack-usage`, `-gz[=]`, `-fno-trapv`, `-fno-short-enums`, `-m64`, `-pipe`)
-+ `-fexcess-precision=` (:165) + `-g*` (args.rs:762-764). Explicit reject tables
++ `-fexcess-precision=` (:165). `-g*` and `-gz[=]` are implemented since WP-814
+(crates/kiln_driver/src/debug_flags.rs; each unimplemented debug flag is an error). Explicit reject tables
 codegen_flags.rs:79/94 (`-ftrapv`, `-fshort-enums`, `-fsanitize*`, `-fprofile-*`, coverage).
 All the strictness-relevant FP flags (`-ffp-contract=`, `-ffp-model=`, `-frounding-math`, ...),
 `-fms-extensions`, `-fno-builtin*`, `-fno-elide-constructors`, `-fopenmp`, `-flto`, `-m<feature>`
@@ -413,9 +417,10 @@ etc. are rejected as unknown (loud; fine by policy).
 ### Class B
 
 Owner: fast-math and `-fno-math-errno` implemented in WP-806 (#364); `-fcf-protection` in WP-813;
-the rest open.
+`-g*` in WP-814; the rest open.
 
-- `-g`, `-g1..3`, `-ggdb*` (args.rs:762): no debug info at all, no diagnostic.
+- `-g`, `-g1..3`, `-ggdb*`: fixed in WP-814 (crates/kiln_driver/src/debug_flags.rs; DWARF as
+  clang 19 emits it, docs/status/debuginfo.md; an unimplemented debug flag is an error).
 - `-ffast-math`/`-Ofast`: macros (`__FAST_MATH__`, predef.rs:582) + basic complex range only; no
   fast-math flags reach IR (fir.rs `FastMath::NONE`). (Note: code testing `__FINITE_MATH_ONLY__`
   takes a branch while kiln keeps NaN semantics — consistent but slower.)
@@ -433,7 +438,7 @@ the rest open.
   verified).
 - `-Xclang -target-feature` off AArch64 (features.rs:415) silently ignored.
 - `-mtune=native` dropped (codegen_cmd.rs:187).
-- `-gz[=...]`.
+- `-gz[=...]`: fixed in WP-814 (the object's debug sections are compressed, docs/status/debuginfo.md).
 
 ### Class C
 

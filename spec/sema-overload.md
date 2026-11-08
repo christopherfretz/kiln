@@ -216,6 +216,46 @@ without an object argument" at the name before overload resolution, with
 or without template arguments, also in an unevaluated operand (clang's
 `IMA_Error_StaticContext` / `IMA_Error_Unrelated`; WP-543).
 
+A qualified `F::f(...)` in a non-static member of a class not derived from
+`F`, naming a set that mixes static and non-static members, is still an
+implicit member access (clang keeps the `UnresolvedMemberExpr` on
+`(*this)`, `IMA_Mixed_Unrelated`): overload resolution runs against
+`*this`, so a static winner is called and a non-static winner is "no
+matching member function for call to 'f'" with each member's candidate
+note (an object-argument mismatch is "no known conversion from 'B' to 'F'
+for object argument"). The object conversion of a member template
+candidate is checked before its specialization is formed (clang
+`CheckNonDependentConversions`), so its failure notes the template
+("candidate function template not viable"), not `[with U = int]`.
+WP-788 (WP-823); test
+`class.mfct.non.static/qualified-mixed-set-from-unrelated-class.cpp`.
+
+#### Member overload sets used other than called
+A class member access naming an overload set (`g.f`, `g.Ns<1>`) that is
+not called follows clang's member `OverloadExpr` rules
+(`Sema::diagnose_member_set_not_called`,
+`single_member_template_spec`):
+- every member is a non-static member function (a bound member set):
+  "reference to non-static member function must be called", with the
+  suffix "; did you mean to call it with no arguments?" when at least one
+  candidate takes no argument and all such candidates return the same type,
+  and a "possible target for call" note per member. This holds for every
+  use: an initializer, a cast, a placeholder, a discarded `g.f;`. kiln
+  reports it once; clang reports it twice for some placeholders and adds
+  errors from its recovery by call (follow-ups).
+- a template-id naming exactly one specialization deducible from its
+  explicit arguments alone, static: it is that function lvalue, so a
+  placeholder deduces from it (`auto` a pointer, `const auto` a const
+  pointer, `auto&` and `decltype(auto)` a reference) and `&g.B<1>` is a
+  function pointer ([dcl.spec.auto.general]/4, [over.over]/3; clang
+  `resolveAndFixSingleFunctionTemplateSpecialization`);
+- anything else (several candidates, a static member among them): a
+  placeholder is "variable 'x' with type 'auto' has incompatible
+  initializer of type '<overloaded function type>'".
+WP-788 (WP-823); tests
+`dcl.spec.auto/member-template-id-single-static-specialization-run.cpp`,
+`dcl.spec.auto/member-set-placeholder-and-unevaluated-use.cpp`.
+
 ### 2.4 Call to an object of class type ([over.call.object])
 `resolve_call_object(obj, args)`. Candidates: every `operator()` of `T`
 (member lookup), then one **surrogate** per non-hidden, non-explicit
@@ -472,7 +512,13 @@ arguments is never formed or instantiated (the parser's
 parenthesized expression followed by `(`). The parentheses stay around the
 resolved name in the AST, as for `(f)(x)` (clang's
 `FixOverloadedFunctionReference`). Test:
-`temp.arg.explicit/parenthesized-template-id-callee.cpp` (WP-695).
+`temp.arg.explicit/parenthesized-template-id-callee.cpp` (WP-695). The
+same rule holds for an operator function template-id, `(operator+<A>)(x,
+y)` and `(::operator+<A>)(x, y)` (`parse_operator_template_id`), and for a
+splice template-id, `(template [: r :]<A>)(x, y)`
+(`parse_splice_template_args`). WP-699 (WP-823); tests
+`temp.arg.explicit/parenthesized-operator-template-id-callee.cpp`,
+`temp.names/parenthesized-splice-template-id-callee.cpp`.
 
 ## 3. Viable functions ([over.match.viable])
 

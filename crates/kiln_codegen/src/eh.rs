@@ -108,6 +108,8 @@ impl Cg<'_> {
         }
         let saved = self.f.fir.cur();
         self.f.fir.set_cur(None);
+        let eh_loc = self.f.fir.dbg.as_deref().map_or(kiln_source::Loc::INVALID, |d| d.eh_loc);
+        let dl = self.dbg_apply_default_artificial(eh_loc);
         let lpad = self.f.fir.create_block();
         self.emit_block(lpad, false);
         // Clauses: walk the scopes from the innermost out.
@@ -147,6 +149,7 @@ impl Cg<'_> {
         self.store(sel, ss, 4, false);
         let next = self.eh_dispatch_block(ie);
         self.br(next);
+        self.dbg_restore(dl);
         self.f.fir.set_cur(saved);
         lpad
     }

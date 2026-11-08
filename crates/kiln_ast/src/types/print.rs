@@ -464,6 +464,27 @@ pub fn write_arg_list_canonical(
     l: ArgListId,
     out: &mut String,
 ) {
+    arg_list_canonical(ctx, names, l, false, out);
+}
+
+/// [`write_arg_list_canonical`] with nested closers split (`> >`), as
+/// clang's debug-information printing policy names class templates.
+pub fn write_arg_list_debug(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    l: ArgListId,
+    out: &mut String,
+) {
+    arg_list_canonical(ctx, names, l, true, out);
+}
+
+fn arg_list_canonical(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    l: ArgListId,
+    split_closers: bool,
+    out: &mut String,
+) {
     let mut p = Printer {
         ctx,
         names,
@@ -472,7 +493,7 @@ pub fn write_arg_list_canonical(
         scope: true,
         suppress_tag: false,
         c_policy: false,
-        split_closers: false,
+        split_closers,
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,

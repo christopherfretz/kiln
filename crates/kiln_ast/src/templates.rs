@@ -303,6 +303,10 @@ pub struct TemplateTables {
     /// The first token of a qualified dependent name whose qualifier is
     /// not its own location (clang's `getBeginLoc`).
     pub expr_begin: ColdMap<ExprId, Loc>,
+    /// The parameter pack of a `sizeof...` whose substitution gave this
+    /// integer literal: clang keeps a non-dependent `SizeOfPackExpr`,
+    /// which still mangles as `sZ <template-param>` (spec/abi.md §8.15).
+    pub size_of_pack_origin: ColdMap<ExprId, DeclId>,
     /// The `.`/`->` of a dependent member access (diagnostics after
     /// substitution point at the operator, as clang's `OperatorLoc`).
     pub member_op_loc: ColdMap<ExprId, Loc>,
@@ -437,6 +441,7 @@ impl Default for TemplateTables {
             trailing_requires: ColdMap::new("trailing_requires"),
             expr_targs: ColdMap::new("expr_targs"),
             expr_begin: ColdMap::new("expr_begin"),
+            size_of_pack_origin: ColdMap::new("size_of_pack_origin"),
             member_op_loc: ColdMap::new("member_op_loc"),
             pseudo_dtor_name: ColdMap::new("pseudo_dtor_name"),
             template_kw: ColdMap::new("template_kw"),
@@ -720,6 +725,7 @@ impl HeapSize for TemplateTables {
         r.push(self.trailing_requires.mem_row());
         r.push(self.expr_targs.mem_row());
         r.push(self.expr_begin.mem_row());
+        r.push(self.size_of_pack_origin.mem_row());
         r.push(self.member_op_loc.mem_row());
         r.push(self.pseudo_dtor_name.mem_row());
         r.push(self.template_kw.mem_row());
@@ -1013,8 +1019,12 @@ impl Ast {
                     {
                         return None;
                     }
-                    if let Some(k) = self.spec_info(c).and_then(|(_, s)| explicit(s.kind)) {
-                        return k;
+                    // A class template specialization governs its members
+                    // whatever its kind: an implicit specialization of a
+                    // member template of an explicitly instantiated class
+                    // is not instantiated by it ([temp.explicit]/10; WP-812).
+                    if let Some((_, s)) = self.spec_info(c) {
+                        return explicit(s.kind).flatten();
                     }
                     if let Some(k) = self.member_spec_info(c).and_then(|(_, m)| explicit(m.kind)) {
                         return k;

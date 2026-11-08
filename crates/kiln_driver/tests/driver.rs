@@ -915,6 +915,59 @@ fn bit_width_and_static_assert_ranges_like_clang() {
     assert_eq!((o.code, o.stderr.as_str()), (1, BIT_WIDTH_GOLDEN));
 }
 
+/// [dcl.init.ref]/5: a reference binding that drops qualifiers underlines
+/// the initializer, as clang streams its source range into
+/// `err_reference_bind_drops_quals` (WP-818).
+const DROPS_QUALS_SOURCE: &str = r"const int ci = 0;
+volatile int vi = 0;
+int &r1 = ci;
+const int &r2 = (vi);
+struct S { const volatile int m = 0; } s;
+int &r3 = s.m;
+int *const icp = nullptr;
+const int *&r4 = icp;
+";
+
+/// clang 19's `-fsyntax-only` output for `DROPS_QUALS_SOURCE`.
+const DROPS_QUALS_GOLDEN: &str = r"<stdin>:3:6: error: binding reference of type 'int' to value of type 'const int' drops 'const' qualifier
+    3 | int &r1 = ci;
+      |      ^    ~~
+<stdin>:4:12: error: binding reference of type 'const int' to value of type 'volatile int' drops 'volatile' qualifier
+    4 | const int &r2 = (vi);
+      |            ^    ~~~~
+<stdin>:6:6: error: binding reference of type 'int' to value of type 'const volatile int' drops 'const volatile' qualifiers
+    6 | int &r3 = s.m;
+      |      ^    ~~~
+<stdin>:8:13: error: binding reference of type 'const int *' to value of type 'int *const' drops 'const' qualifier
+    8 | const int *&r4 = icp;
+      |             ^    ~~~
+4 errors generated.
+";
+
+#[test]
+fn reference_bind_drops_quals_ranges_like_clang() {
+    let o = kiln(&["-std=c++26", "-fsyntax-only", "-"], DROPS_QUALS_SOURCE);
+    assert_eq!((o.code, o.stderr.as_str()), (1, DROPS_QUALS_GOLDEN));
+}
+
+/// P2996 [expr.prim.splice]: an expression splice in a requires-clause
+/// mangles as GCC 16's `DS <expression> [<template-args>] E`, not as an
+/// error (WP-818; the reflection literal before it is still kiln's own).
+#[test]
+fn splice_in_requires_clause_mangles_like_gcc() {
+    let src = "using info = decltype(^^int);
+template <class T> constexpr bool Small = sizeof(T) <= 4;
+template <info R, class T> requires (template [: R :]<T>) int pick() { return 1; }
+constexpr int one = 1;
+template <info R> requires ([: R :] == 1) int pick2() { return 2; }
+int use() { return pick<^^Small, int>() + pick2<^^one>(); }
+";
+    let o = kiln(&["-std=c++26", "-freflection", "-S", "-emit-llvm", "-o", "-", "-"], src);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("EiQDST_IT0_EEEiv("), "{}", o.stdout);
+    assert!(o.stdout.contains("EQeqDST_ELi1EEiv("), "{}", o.stdout);
+}
+
 /// [conv.bool], [dcl.pre]/12: a -Wliteral-conversion range underlines a
 /// whole `&&` or `||` operator, and a range whose ends come from a macro
 /// argument covers its last token (clang `Lexer::getLocForEndOfToken`
@@ -1261,4 +1314,41 @@ fn compile_thread_spawn_failure_is_diagnosed() {
         "{err}"
     );
     assert!(err.ends_with("(lower it with -fkiln-stack-size=)\n"), "{err}");
+}
+
+/// The debug information flags end to end (spec/driver.md "Debug
+/// information flags"): the last level wins, `-gdwarf-N` enables `-g` and
+/// sets the version, `-fdebug-prefix-map=` rewrites the directory, and an
+/// unimplemented flag is an error rather than a silent drop.
+#[test]
+fn debug_info_flags_reach_the_ir() {
+    let src = "int f(int a) { int b = a + 1; return b; }\n";
+    let ir = |flags: &[&str]| {
+        let mut args = vec!["-S", "-emit-llvm", "-o", "-", "-x", "c++"];
+        args.extend_from_slice(flags);
+        args.push("-");
+        let o = kiln(&args, src);
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{flags:?}");
+        o.stdout
+    };
+    let full = ir(&["-g"]);
+    assert!(full.contains("emissionKind: FullDebug"), "{full}");
+    assert!(full.contains("!DILocalVariable(name: \"b\""), "{full}");
+    assert!(full.contains("#dbg_declare("), "{full}");
+    assert!(full.contains("!{i32 7, !\"Dwarf Version\", i32 5}"), "{full}");
+    for off in [&["-g", "-g0"][..], &[]] {
+        let o = ir(off);
+        assert!(!o.contains("!llvm.dbg.cu") && !o.contains("!dbg"), "{off:?}: {o}");
+    }
+    let lines = ir(&["-g", "-gline-tables-only"]);
+    assert!(lines.contains("emissionKind: LineTablesOnly"), "{lines}");
+    assert!(!lines.contains("DILocalVariable"), "{lines}");
+    let v4 = ir(&["-gdwarf-4"]);
+    assert!(v4.contains("emissionKind: FullDebug"), "{v4}");
+    assert!(v4.contains("!{i32 7, !\"Dwarf Version\", i32 4}"), "{v4}");
+    let mapped = ir(&["-g", "-fdebug-prefix-map=/=/mapped/"]);
+    assert!(mapped.contains("directory: \"/mapped/"), "{mapped}");
+    let o = kiln(&["-g", "-gcodeview", "-S", "-emit-llvm", "-o", "-", "-x", "c++", "-"], src);
+    assert_eq!(o.code, 1);
+    assert_eq!(o.stderr, "kiln++: error: '-gcodeview' is not supported by kiln\n");
 }

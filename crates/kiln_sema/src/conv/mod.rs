@@ -25,7 +25,7 @@ pub(crate) mod narrow;
 mod qual;
 pub(crate) use qual::{
     CastAway, casts_away_constness, cv_combined_type, drop_noexcept, function_ref_compatible,
-    is_function_conversion, similar_same_levels,
+    is_function_conversion, similar_ref_relation, similar_same_levels,
 };
 pub(crate) mod rank;
 pub(crate) mod scs;
@@ -35,7 +35,7 @@ use kiln_ast::expr::{CastKind, ExprKind, ObjectKind, ValueCategory};
 use kiln_ast::types::{Quals, TypeView};
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
-use kiln_source::Loc;
+use kiln_source::{Loc, Span};
 
 use crate::Sema;
 use crate::overload::ics::IcsOptions;
@@ -103,11 +103,14 @@ pub struct ConvError {
     /// Where the diagnostic goes regardless of the caller's choice (a
     /// conversion step clang diagnoses at the converted expression).
     pub at: Option<Loc>,
+    /// A source range underlined with `~` (clang streams the
+    /// initializer's range into the reference-binding diagnostics).
+    pub range: Option<Span>,
 }
 
 impl ConvError {
     pub(crate) fn new(id: DiagId, args: Vec<String>) -> ConvError {
-        ConvError { id, args, notes: Vec::new(), at: None }
+        ConvError { id, args, notes: Vec::new(), at: None, range: None }
     }
 
     /// The diagnostic, with its caret at `e`'s location.
@@ -123,6 +126,10 @@ impl ConvError {
             Some(sel) if i == 0 && a == "0" => d.arg(sel),
             _ => d.arg(a.as_str()),
         });
+        let d = match self.range {
+            Some(r) => d.range(r),
+            None => d,
+        };
         self.notes.iter().cloned().fold(d, kiln_diag::Diag::with_note)
     }
 }
@@ -744,7 +751,19 @@ fn bind_reference(
         }
         _ => BaseSearch::NotDerived,
     };
-    let related = same || base.is_derived();
+    // CWG2352 ([dcl.init.ref]/4): similar types are reference-related,
+    // and reference-compatible when a pointer to the initializer's type
+    // converts to a pointer to the referee by a qualification conversion:
+    // `const int *const &r = p` binds the `int *` lvalue `p` directly.
+    let similar_rel = if same || base.is_derived() || s.ast.types.is_function(r_un) {
+        None
+    } else {
+        similar_ref_relation(s, referee, from)
+    };
+    // Similar, related, but not reference-compatible (`const int *&` and
+    // `int *`).
+    let incompatible_similar = similar_rel == Some(false);
+    let related = same || base.is_derived() || similar_rel.is_some();
     // Diagnostics print the referee as written (clang
     // `DestType.getNonReferenceType()`): `I` in `I &&`.
     let written = s.ast.types.desugar_top(to);
@@ -766,13 +785,18 @@ fn bind_reference(
         ValueCategory::XValue => !plain_lref,
         ValueCategory::PRValue => false,
     };
-    if !plain_lref && vk == ValueCategory::PRValue && related && rq.contains(fq) {
+    if !plain_lref
+        && vk == ValueCategory::PRValue
+        && related
+        && !incompatible_similar
+        && rq.contains(fq)
+    {
         // [dcl.init.ref]/5.3.1: a reference-compatible prvalue is
         // materialized and the reference binds the temporary.
         return bind_to_temporary(s, e, referee, rq, rvalue_ref, base);
     }
     if !plain_lref
-        && !related
+        && (!related || incompatible_similar)
         && s.ast.types.as_record(f_un).is_none()
         && s.ast.types.as_record(r_un).is_none()
         && !s.ast.types.is_function(r_un)
@@ -785,6 +809,21 @@ fn bind_reference(
         let Some(scs) = standard_conversion(s, e, r_un, ConvCtx::Initialization) else {
             return Err(reference_bind_failed(s, to_ty, from, vk));
         };
+        if incompatible_similar {
+            // /5.4.3, /5.4.4: a related initializer keeps its top-level
+            // qualifiers, and an rvalue reference binds no lvalue (clang
+            // checks both after forming the temporary's conversion).
+            if !rq.contains(fq) {
+                return Err(drops_quals_error(fq - rq, strs(s), s.expr_range(e)));
+            }
+            if rvalue_ref && vk == ValueCategory::LValue {
+                let (to_str, from_str) = strs(s);
+                return Err(ConvError::new(
+                    DiagId::sema_rvalue_ref_bind_to_lvalue,
+                    vec![to_str, from_str],
+                ));
+            }
+        }
         let mut x = apply_standard_conversion(s, e, &scs, r_un)?;
         if !rq.is_empty() {
             x = qualify_prvalue(s, x, target);
@@ -925,19 +964,16 @@ fn bind_reference(
         return Ok(s.materialize_temporary(x, target, !rvalue_ref));
     }
     if !rq.contains(fq) {
-        let dropped = fq - rq;
-        let names: Vec<&str> =
-            [(Quals::CONST, "const"), (Quals::VOLATILE, "volatile"), (Quals::RESTRICT, "restrict")]
-                .iter()
-                .filter(|(q, _)| dropped.contains(*q))
-                .map(|&(_, n)| n)
-                .collect();
-        let plural = if names.len() > 1 { "1" } else { "0" };
-        let quoted = format!("'{}'", names.join(" "));
+        return Err(drops_quals_error(fq - rq, strs(s), s.expr_range(e)));
+    }
+    if incompatible_similar {
+        // A non-const lvalue reference to a similar lvalue whose nested
+        // qualifiers do not convert (clang `FK_ReferenceInitDropsQualifiers`
+        // with no top-level qualifier dropped).
         let (to_str, from_str) = strs(s);
         return Err(ConvError::new(
-            DiagId::sema_reference_bind_drops_quals,
-            vec![to_str, from_str, quoted, plural.into()],
+            DiagId::sema_reference_bind_incompatible_quals,
+            vec![to_str, from_str],
         ));
     }
     if !bind_ok_category {
@@ -990,6 +1026,29 @@ fn bind_reference(
                 vec![s.ty_arg(strip_cv(s, from)), s.ty_arg(strip_cv(s, referee)), shown],
             ))
         }
+    }
+}
+
+/// "binding reference of type T1 to value of type T2 drops Q
+/// qualifier(s)" for the top-level qualifiers `dropped`, with the
+/// (to, from) type strings `strs`, underlining the initializer's
+/// `range` as clang does.
+fn drops_quals_error(dropped: Quals, strs: (String, String), range: Span) -> ConvError {
+    let names: Vec<&str> =
+        [(Quals::CONST, "const"), (Quals::VOLATILE, "volatile"), (Quals::RESTRICT, "restrict")]
+            .iter()
+            .filter(|(q, _)| dropped.contains(*q))
+            .map(|&(_, n)| n)
+            .collect();
+    let plural = if names.len() > 1 { "1" } else { "0" };
+    let quoted = format!("'{}'", names.join(" "));
+    let (to_str, from_str) = strs;
+    ConvError {
+        range: Some(range),
+        ..ConvError::new(
+            DiagId::sema_reference_bind_drops_quals,
+            vec![to_str, from_str, quoted, plural.into()],
+        )
     }
 }
 
