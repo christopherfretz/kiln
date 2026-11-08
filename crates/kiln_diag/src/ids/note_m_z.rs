@@ -174,6 +174,7 @@ note_unsatisfied_trait_user_special = Note (2) "because it has a user provided {
 note_unsatisfied_trait_vbase = Note (1) "because it has a virtual base {0}";
 note_use_noexcept_false = Note (0) "use 'noexcept(false)' instead";
 note_use_thread_local = Note (0) "use 'thread_local' to allow this";
+note_used_here = Note (0) "used here";
 note_using_decl = Note (0) "using declaration";
 note_using_decl_class_member_alias = Note (0) "use an alias declaration instead";
 note_using_decl_class_member_reference = Note (0) "use a reference instead";
