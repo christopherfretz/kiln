@@ -788,6 +788,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-757 | Croydon DRs P4143/P4149/P3769 conformance + P1494 observable checkpoint builtin | WP-733 | Croydon DRs P4143/P4149/P3769 done, P1494 __builtin_observable_checkpoint (#341) |
 | WP-734 | P2308 diag nits: nested braced scalar warning, excess-elements note at the parameter (crates/kiln_sema/src/templ/nttp.rs:619) | WP-706 | open |
 | WP-736 | codegen+sema: remaining AArch64 ACLE builtins (ldrex/strex/ldaex/stlex need elementtype on llvm.aarch64.ldxr/stxr; rsr/wsr, rint*, jcvt, rndr, ld64b/st64b, gcs, chkfeat, prefetch, trap, clrex) at `crates/kiln_codegen/src/arm.rs:129`; exclusive-builtin size check + discarded-qualifiers warning in `crates/kiln_sema/src/builtins.rs` | WP-724 | open |
+| WP-846 | AArch64 target bundle: close WP-736, WP-737, WP-842 | WP-736 | in progress |
 | WP-737 | pp: `__has_builtin(__dmb)` is 1 in MS modes but `__dmb` and relatives are undeclared (`crates/kiln_pp/src/features.rs`) | WP-724 | open |
 | WP-738 | perf: kiln-built objects link 1.5x slower than clang-19 (rocksdb 630 s vs 412 s summed; compare object/debug-info size per TU; docs/status/oss/rocksdb.md) | WP-724 | open |
 | WP-739 | harness: kiln-cxx OOM_RE matches quoted source snippets, so a rejection logged as out-of-memory (`scripts/oss/kiln-cxx:30`) | WP-730 | open |
