@@ -64,6 +64,7 @@ fn cli_parsing() {
             paths: vec!["tests/a".into(), "b.cpp".into()],
             toolchain: None,
             require_gcc: false,
+            require_debuggers: false,
         }
     );
     assert_eq!(parse_args(strings(&["--help"])).unwrap(), None);
@@ -496,6 +497,20 @@ fn gcc_oracle_with_a_fake_gcc() {
     o.no_gcc = false;
     o.gcc = Some(root.join("xtask/fixtures/no-such-gcc"));
     assert!(execute(&o).unwrap_err().contains("the GCC oracle"));
+}
+
+/// `KILN_REQUIRE_DEBUGGERS` is required only by exactly `1`, and the
+/// debugger corpus is a default root (WP-816, spec/harness.md "Debugger
+/// tests"; the SKIP/ERROR decision is `runner::compat_tests`).
+#[test]
+fn debugger_corpus_is_a_default_root() {
+    assert!(require_debuggers_from(Some("1")) && require_debuggers_from(Some(" 1\n")));
+    assert!(!require_debuggers_from(None) && !require_debuggers_from(Some("0")));
+    assert!(!require_debuggers_from(Some("")) && !require_debuggers_from(Some("true")));
+    let root = repo_root();
+    let roots = discover::default_roots(&root);
+    assert!(roots.contains(&root.join("tests/debuginfo")), "{roots:?}");
+    assert!(roots.contains(&root.join("tests/conformance")), "{roots:?}");
 }
 
 /// `KILN_REQUIRE_GCC=1` ([`Options::require_gcc`]): a run without a usable

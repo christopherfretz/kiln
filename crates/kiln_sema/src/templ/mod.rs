@@ -969,11 +969,19 @@ impl Sema<'_, '_> {
             ArgView::Expr { expr, .. } => Some((PackOperand::Expr(expr), self.begin_loc(expr))),
             _ => None,
         };
-        if let Some((op, at)) = op
-            && self.lambdas.is_empty()
-            && self.diagnose_unexpanded_pack(op, "default argument", at)
-        {
-            return;
+        // In a generic lambda's template-head an enclosing scope's packs
+        // make the lambda-expression contain an unexpanded pack
+        // ([temp.variadic]/5): `[]<class U = Ts>() {}...` expands `Ts`.
+        if let Some((op, at)) = op {
+            let unexpanded = if self.lambdas.is_empty() {
+                self.diagnose_unexpanded_pack(op, "default argument", at)
+            } else {
+                self.inst.stack.is_empty()
+                    && self.diagnose_lambda_local_packs(op, "default argument", at)
+            };
+            if unexpanded {
+                return;
+            }
         }
         if self.builder().set_template_default(p, arg).is_err() {
             self.error(DiagId::sema_template_param_default_redefined, loc);

@@ -134,12 +134,12 @@ url = "https://github.com/ericniebler/range-v3"
 tag = "0.12.0"
 build = "cmake"
 cxx_std = 20
-configure = ["-DRANGE_V3_TESTS=ON", "-DRANGE_V3_EXAMPLES=ON", "-DRANGE_V3_PERF=OFF", "-DRANGE_V3_DOCS=OFF", "-DRANGE_V3_HEADER_CHECKS=OFF"]
+configure = ["-DRANGE_V3_TESTS=ON", "-DRANGE_V3_EXAMPLES=ON", "-DRANGE_V3_PERF=OFF", "-DRANGE_V3_DOCS=OFF", "-DRANGE_V3_HEADER_CHECKS=OFF", "-DRANGES_ENABLE_WERROR=OFF", "-DCMAKE_CXX_FLAGS=-Wno-deprecated-ofast"]
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 1
 verified = false
-notes = "WP-669. Header-only; the test suite is the build (hundreds of TUs, heavy concept checking)."
+notes = "WP-669. Header-only; the test suite is the build (hundreds of TUs, heavy concept checking). RANGES_ENABLE_WERROR=OFF and -Wno-deprecated-ofast as in WP-669 (range-v3 adds -Werror and clang 19 deprecates its Release -Ofast; WP-694)."
 
 # ---------------------------------------------------------------- wave 2
 
@@ -520,6 +520,37 @@ notes = "WP-792. C++20 field reflection by structured bindings and __PRETTY_FUNC
 # KILN_BOOST_JAMFILE_LIBRARIES (the libraries with b2-only tests, registered
 # as CMake tests by shims/boost-jamfile-tests.cmake). Tests are built by the
 # `tests` target (on the jobserver) and run by ctest -j 4.
+
+[boost_heavy]
+url = "https://github.com/boostorg/boost"
+tag = "boost-1.90.0"
+checkout = "boost"
+submodules = true
+build = "cmake"
+cxx_std = 20
+configure = [
+  "-DBUILD_TESTING=ON", "-DBUILD_SHARED_LIBS=OFF", "-DBOOST_ENABLE_MPI=OFF", "-DBOOST_ENABLE_PYTHON=OFF",
+  "-DBOOST_INCLUDE_LIBRARIES=asio;beast;cobalt;graph;geometry;math",
+  "-DCMAKE_PROJECT_Boost_INCLUDE=@OSS@/shims/boost-jamfile-tests.cmake",
+  "-DKILN_BOOST_JAMFILE_LIBRARIES=asio;graph;math",
+  "-DKILN_BOOST_JAMFILE_SKIP_asio=_select$",
+  "-DKILN_BOOST_JAMFILE_FORCE_math=ON",
+  "-DKILN_BOOST_JAMFILE_SUBSET_math=8|constexpr|float128|lanczos|ccmath",
+  "-DKILN_BOOST_JAMFILE_LINK_math=Boost::unit_test_framework",
+  "-DKILN_BOOST_JAMFILE_INCLUDE_math=.;../include_private",
+  "-DKILN_BOOST_JAMFILE_DEFINES_math=BOOST_ALL_NO_LIB=1;BOOST_UBLAS_UNSUPPORTED_COMPILER=0",
+  "-DKILN_BOOST_JAMFILE_LIBS_math=test_instances//test_instances=test_instances/*.cpp;compile_test_main=compile_test/main.cpp",
+  "-DKILN_BOOST_JAMFILE_DEFINES_asio=BOOST_ALL_NO_LIB=1;BOOST_ASIO_DISABLE_DEPRECATED_MSG=1;_XOPEN_SOURCE=600;_GNU_SOURCE=1",
+  "-DKILN_BOOST_JAMFILE_LINK_asio=Boost::context;Boost::chrono",
+  "-DKILN_BOOST_SUBSET_TARGETS=^boost_geometry_|4|",
+]
+build_targets = ["kiln_tests"]
+test = "ctest -j 4 --output-on-failure --timeout 300 --exclude-from-file kiln-subset-excluded.txt -E '^(run-graph-(transitive_closure_test|metric_tsp_approx|all_planar_input_files_test|parallel_edges_loops_test|metis_test|weighted_matching_test|cycle_ratio_tests|random_matching_test|graphml_test|mas_test|stoer_wagner_test)|run-math-cardinal_trigonometric_test_3|boost_geometry_(algorithms_(densify|area_geo|buffer_multi_polygon|buffer_linestring_geo|get_clusters)|formulas_direct|strategies_segment_intersection_geo))$'"
+test_timeout = 7200
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-812: Asio, Beast, Cobalt, Graph, Geometry, Math; Geometry subset to every 4th test, Math's b2 tests to every 8th plus /constexpr|float128|lanczos|ccmath/. docs/status/oss/boost_heavy.md. Final kiln build (d9a4f127a): TUs 1370 ok / 4 failed, links 652 / 4, ctest 602/602, the same as the clang-19 control (the 4 TUs and 4 links are missing optional dependencies). The 19 excluded tests fail under the clang-19 control too: graph transitive_closure_test and metric_tsp_approx need Boost.Timer and all_planar_input_files_test and parallel_edges_loops_test need Boost.Filesystem (not in the row's libraries, so not linked); graph metis_test, weighted_matching_test, cycle_ratio_tests, random_matching_test, graphml_test, mas_test and stoer_wagner_test need command-line arguments or input files that b2 passes; math cardinal_trigonometric_test_3 needs fftw3; geometry densify, area_geo, buffer_multi_polygon, buffer_linestring_geo, get_clusters, formulas_direct and segment_intersection_geo fail numeric checks on aarch64."
 
 [boost_meta]
 url = "https://github.com/boostorg/boost"

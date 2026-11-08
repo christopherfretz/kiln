@@ -22,8 +22,15 @@
 //! bounded however many distinct paths an evaluation touches. Rebuilding
 //! a provisional class slot in place ([`Types::refresh`]) clears it too:
 //! hops computed while the class was `Opaque` would be stale.
+//!
+//! In front of the extent map, a small fixed table ([`ExtentFront`],
+//! WP-760) answers [`Types::extent`] for a whole array at once: an
+//! answer naming an array that no other member overlaps on the way down
+//! from the root is the answer for every byte of that array, so stepping
+//! a pointer through an array member (`union { T data[N]; }` in a class)
+//! costs one probe instead of one map lookup per element.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::hash::Hash;
 
 use kiln_ast::DeclId;
@@ -84,6 +91,7 @@ pub(crate) struct PathCache {
     hops: RefCell<FxHashMap<HopKey, Hop>>,
     extents: RefCell<FxHashMap<Key, Extent>>,
     subobjects: RefCell<FxHashMap<Key, bool>>,
+    front: ExtentFront,
 }
 
 impl PathCache {
@@ -92,6 +100,7 @@ impl PathCache {
         self.hops.get_mut().clear();
         self.extents.get_mut().clear();
         self.subobjects.get_mut().clear();
+        self.front.clear();
     }
 
     /// Bytes of heap the maps hold.
@@ -99,7 +108,75 @@ impl PathCache {
         fn map<K, V>(m: &RefCell<FxHashMap<K, V>>) -> usize {
             m.borrow().capacity() * (size_of::<(K, V)>() + 1)
         }
-        map(&self.hops) + map(&self.extents) + map(&self.subobjects)
+        map(&self.hops)
+            + map(&self.extents)
+            + map(&self.subobjects)
+            + self.front.e.len() * size_of::<FrontEntry>()
+    }
+}
+
+/// log2 of the number of [`ExtentFront`] entries.
+const FRONT_BITS: u32 = 8;
+
+/// An [`ExtentFront`] entry: for a pointer to `p` into an object of type
+/// `root`, every byte in `[lo, hi)` lies in the array of `n` elements
+/// starting at `lo` (`hi == 0`: empty).
+#[derive(Clone, Copy, Debug)]
+struct FrontEntry {
+    root: OTy,
+    p: OTy,
+    lo: u64,
+    hi: u64,
+    n: u64,
+}
+
+const FRONT_EMPTY: FrontEntry = FrontEntry { root: OTy(0), p: OTy(0), lo: 0, hi: 0, n: 0 };
+
+/// The whole-array answers of [`Types::extent`] (WP-760): direct-mapped
+/// and two-way per (root, element type), fixed-size, so a collision
+/// overwrites and the table never grows.
+#[derive(Debug)]
+struct ExtentFront {
+    e: Box<[Cell<FrontEntry>]>,
+}
+
+impl Default for ExtentFront {
+    fn default() -> Self {
+        ExtentFront { e: (0..1usize << FRONT_BITS).map(|_| Cell::new(FRONT_EMPTY)).collect() }
+    }
+}
+
+impl ExtentFront {
+    fn slot(root: OTy, p: OTy) -> usize {
+        let h = (u64::from(root.0) | u64::from(p.0) << 32).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        (h >> (64 - FRONT_BITS)) as usize & !1
+    }
+
+    fn get(&self, root: OTy, o: u64, p: OTy) -> Option<Extent> {
+        let i = Self::slot(root, p);
+        for e in &self.e[i..i + 2] {
+            let e = e.get();
+            if e.root == root && e.p == p && o >= e.lo && o < e.hi {
+                return Some(Some((e.lo, e.n, true)));
+            }
+        }
+        None
+    }
+
+    fn put(&self, root: OTy, p: OTy, lo: u64, hi: u64, n: u64) {
+        let i = Self::slot(root, p);
+        // The first way holds the latest answer; the one it held moves to
+        // the second, so two arrays of one (root, element) pair coexist.
+        let old = self.e[i].replace(FrontEntry { root, p, lo, hi, n });
+        if old.root != root || old.p != p || old.lo != lo {
+            self.e[i + 1].set(old);
+        }
+    }
+
+    fn clear(&mut self) {
+        for e in &mut self.e {
+            *e.get_mut() = FRONT_EMPTY;
+        }
     }
 }
 
@@ -224,6 +301,86 @@ impl Types {
     /// record.
     pub(super) fn extent_cached(&self, t: OTy, rel: u64, p: OTy) -> Extent {
         cached(&self.paths.extents, (t, rel, p), || self.extent_in(t, 0, rel, p, false))
+    }
+
+    /// [`Types::extent`] of the byte at `off` of a `root` object (`past`:
+    /// one past the end of the object there) when the whole-array table
+    /// holds it: the array's first byte and its bound. `None` when the
+    /// table does not (not a fault: [`Types::extent`] decides).
+    #[inline]
+    pub(crate) fn extent_hit(&self, root: OTy, off: u64, past: bool, p: OTy) -> Option<(u64, u64)> {
+        let o = if past { off.checked_sub(1)? } else { off };
+        match self.paths.front.get(root, o, p) {
+            Some(Some((lo, n, _))) => Some((lo, n)),
+            _ => None,
+        }
+    }
+
+    /// [`Types::extent`] of byte `o` (already moved back from one past
+    /// the end) through the whole-array table: a hit, else the walk, whose
+    /// array answer is remembered for the whole array when it is one
+    /// ([`Types::extent_unique`]).
+    pub(super) fn extent_front(&self, root: OTy, o: u64, p: OTy) -> Extent {
+        if let Some(r) = self.paths.front.get(root, o, p) {
+            return r;
+        }
+        let r = self.extent_in(root, 0, o, p, true);
+        if let Some((lo, n, true)) = r {
+            let es = self.size(p);
+            if es > 0
+                && let Some(hi) = n.checked_mul(es).and_then(|b| b.checked_add(lo))
+                && self.extent_unique(root, o, p, lo, hi)
+            {
+                self.paths.front.put(root, p, lo, hi, n);
+            }
+        }
+        r
+    }
+
+    /// Whether the array of `p` at bytes `[lo, hi)` of a `root` object,
+    /// the extent of byte `o`, is the extent of every byte in it: on the
+    /// way down from `root`, no member other than the one holding it
+    /// overlaps those bytes ([`Types::extent_in`] then takes the same
+    /// steps for each of them). Records with many members are not
+    /// examined (`false`).
+    fn extent_unique(&self, mut t: OTy, o: u64, p: OTy, lo: u64, hi: u64) -> bool {
+        const FIELDS_MAX: usize = 64;
+        let mut base = 0;
+        loop {
+            match self.kind(t) {
+                TyKind::Array { elem, n } => {
+                    if self.same_unqualified(elem, p) {
+                        return base == lo;
+                    }
+                    let es = self.size(elem);
+                    if self.same_unqualified(t, p) || es == 0 || n == 0 {
+                        return false;
+                    }
+                    base += (o.saturating_sub(base) / es).min(n - 1) * es;
+                    t = elem;
+                }
+                TyKind::Record { .. } if !self.same_unqualified(t, p) => {
+                    let fs = self.fields(t);
+                    if fs.len() > FIELDS_MAX {
+                        return false;
+                    }
+                    let mut one = None;
+                    for f in fs.iter().filter(|f| f.width.is_none()) {
+                        let start = base + f.offset;
+                        let end = start + self.size(f.ty).max(1);
+                        if start < hi && lo < end {
+                            if one.is_some() {
+                                return false;
+                            }
+                            one = Some((f.ty, start));
+                        }
+                    }
+                    let Some((ft, start)) = one else { return false };
+                    (t, base) = (ft, start);
+                }
+                _ => return false,
+            }
+        }
     }
 
     /// [`Types::has_subobject`] for record `t`, cached.

@@ -982,7 +982,11 @@ impl Sema<'_, '_> {
                 return;
             }
             let n = *self.ast.decls.get(m);
+            // A member that is still dependent (the partial specialization
+            // of a member class template, [temp.spec.partial.member]) is
+            // a template: not instantiated (WP-812).
             if n.flags().contains(DeclFlags::IMPLICIT)
+                || n.flags().contains(DeclFlags::DEPENDENT_CTX)
                 || self.ast.instantiated_from(m).is_none()
                 || self.ast.excluded_from_explicit_instantiation(m)
             {

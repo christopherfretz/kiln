@@ -94,6 +94,15 @@ impl Sema<'_, '_> {
         }
         let (_, info) = self.ast.spec_info(f)?;
         let (tmpl, args) = (info.template, info.args);
+        // The implicit object argument's conversion is one of those
+        // checked first (clang `CheckNonDependentConversions` "Check the
+        // 'this' conversion first"; WP-823).
+        if let CandidateFailure::BadConversion { arg: u16::MAX } = c.failure
+            && !oper_fn
+            && !self.has_explicit_object(f)
+        {
+            return None;
+        }
         if let CandidateFailure::BadConversion { arg } = c.failure
             && (arg != u16::MAX || oper_fn)
             && let Some(pattern) = c.template.and_then(|t| self.templated_function(t))

@@ -976,18 +976,23 @@ impl<'a> Printer<'a> {
                 w.write_char('}')
             }
             MdNode::Specialized { name, fields, .. } => {
-                write!(w, "!{name}(")?;
+                // Plain `write_str`/`write_u64` rather than `write!`: a `-g`
+                // module prints hundreds of thousands of fields (WP-817).
+                w.write_char('!')?;
+                w.write_str(name)?;
+                w.write_char('(')?;
                 for (i, (key, val)) in fields.iter().enumerate() {
                     if i > 0 {
                         w.write_str(", ")?;
                     }
                     if !key.is_empty() {
-                        write!(w, "{key}: ")?;
+                        w.write_str(key)?;
+                        w.write_str(": ")?;
                     }
                     match val {
-                        MdField::Int(x) => write!(w, "{x}")?,
-                        MdField::UInt(x) => write!(w, "{x}")?,
-                        MdField::Bool(b) => write!(w, "{b}")?,
+                        MdField::Int(x) => write_i64(w, *x)?,
+                        MdField::UInt(x) => write_u64(w, *x)?,
+                        MdField::Bool(b) => w.write_str(if *b { "true" } else { "false" })?,
                         MdField::Str(s) => {
                             w.write_char('"')?;
                             write_escaped(w, s.as_bytes())?;
@@ -2183,12 +2188,13 @@ impl<'a> TypeFinder<'a> {
 
     fn md(&mut self, root: MetadataId) {
         let mut stack = vec![root];
+        // One child buffer for the whole walk (not one per node).
+        let mut kids = Vec::new();
         while let Some(n) = stack.pop() {
             if std::mem::replace(&mut self.seen_md[n.index()], true) {
                 continue;
             }
             let node = &self.m.md[n.index()];
-            let mut kids = Vec::new();
             match node {
                 MdNode::Tuple { ops, .. } => {
                     for &o in ops.iter().flatten() {
@@ -2213,7 +2219,7 @@ impl<'a> TypeFinder<'a> {
                 MdNode::Value(_, v) => self.value(*v),
                 MdNode::String(_) => {}
             }
-            for k in kids.into_iter().rev() {
+            for k in kids.drain(..).rev() {
                 stack.push(k);
             }
         }

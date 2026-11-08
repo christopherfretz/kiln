@@ -209,7 +209,7 @@ impl Cg<'_> {
             self.m.md_specialized(
                 "DIExpression",
                 false,
-                vec![("".into(), MdField::Raw("DW_OP_deref".into()))],
+                vec![("", MdField::Raw("DW_OP_deref".into()))],
             )
         } else {
             match self.di.as_deref() {
@@ -454,11 +454,7 @@ impl Cg<'_> {
         let expr = if ops.is_empty() {
             self.di.as_deref().map(|x| x.empty_expr)
         } else {
-            Some(self.m.md_specialized(
-                "DIExpression",
-                false,
-                vec![("".into(), MdField::Raw(ops.into()))],
-            ))
+            Some(self.m.md_specialized("DIExpression", false, vec![("", MdField::Raw(ops.into()))]))
         };
         let gf = Fields::default().n("var", Some(var)).n("expr", expr);
         let gve = self.m.md_specialized("DIGlobalVariableExpression", false, gf.0);

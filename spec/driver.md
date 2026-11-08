@@ -743,6 +743,10 @@ the current directory (standard input is `-`). `-o -` is standard output.
     `-passes=coro-early,cgscc(coro-split),coro-cleanup,globaldce` (the
     coroutine part of clang 19's O0 pipeline); any other `-O0` module
     takes the unchanged `llc`-only path;
+    this scan and the `always_inline` one below read only the IR before
+    its first top-level `!` line (`code_part`, WP-817): the metadata
+    section, half or more of a `-g` module, holds no attribute group or
+    function;
   - at `-O0`, when the IR defines an `always_inline` function (an
     `attributes #N` line holds `alwaysinline`; `needs_always_inline`;
     WP-389), `-passes=default<O0>`: clang 19's whole O0 module pipeline

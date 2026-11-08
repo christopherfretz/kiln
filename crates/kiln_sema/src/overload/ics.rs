@@ -1080,7 +1080,9 @@ impl Sema<'_, '_> {
                     let a = self.arg_info(e);
                     let elide = if self.ast.types.is_array(ety) {
                         let el = self.ast.types.element(ety).unwrap_or(QualType::ERROR);
-                        !(self.is_char_type(el) && self.string_lit_of(e).is_some())
+                        self.string_lit_of(e).is_none_or(|s| {
+                            self.string_init_compat(el, s) != crate::init::StringInit::Ok
+                        })
                     } else if let Some(r) = self.ast.types.as_record(ety) {
                         self.is_aggregate(ety)
                             && self.ast.types.as_record(xty).is_none_or(|x| {
@@ -1213,6 +1215,48 @@ impl Sema<'_, '_> {
                 c.failure = CandidateFailure::Explicit;
             }
         }
+    }
+
+    /// Removes from `found` the constructor templates whose pattern is
+    /// non-dependently explicit, noting each as a non-viable "explicit"
+    /// candidate of `set` without deducing it: [over.match.copy]/1.1
+    /// makes only converting constructors candidates, and clang's
+    /// `AddTemplateOverloadCandidate` excludes such a template before
+    /// deduction and substitution, which may otherwise be ill-formed
+    /// outside the immediate context.
+    fn drop_explicit_ctor_templates(
+        &mut self,
+        set: &mut super::OverloadCandidateSet,
+        found: &mut Vec<DeclId>,
+    ) {
+        found.retain(|&fd| {
+            let ft = if self.kind_of(fd) == DeclKind::ConstructorUsingShadow {
+                match self.ast.using_target(fd) {
+                    Some(t) => t,
+                    None => return true,
+                }
+            } else {
+                fd
+            };
+            if self.kind_of(ft) != DeclKind::FunctionTemplate {
+                return true;
+            }
+            let Some(pattern) = self.templated_function(ft) else { return true };
+            if self.kind_of(pattern) != DeclKind::CXXConstructor
+                || !self.nondependently_explicit(pattern)
+            {
+                return true;
+            }
+            self.ovl.stats.candidates += 1;
+            let mut c = super::Candidate::new(pattern, fd, CandidateKind::Ctor);
+            let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
+            c.ics = start..start;
+            c.template = Some(ft);
+            c.viable = false;
+            c.failure = CandidateFailure::Explicit;
+            set.cands.push(c);
+            false
+        });
     }
 
     /// Whether `c` has a default constructor (a cheap check for the
@@ -1555,6 +1599,9 @@ impl Sema<'_, '_> {
             let mut found = std::mem::take(&mut set.found);
             found.clear();
             found.extend(self.converting_ctors(t, a.list.is_none()));
+            if !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
+                self.drop_explicit_ctor_templates(set, &mut found);
+            }
             self.add_found_candidates(set, &found, CandidateKind::Ctor, first, false);
             set.found = found;
             for c in &mut set.cands[n..] {
