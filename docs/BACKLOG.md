@@ -790,8 +790,9 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-733 | triage untested DRs P4143, P4149, P3769 (docs/STANDARD_SUPPORT.md:393-395) | WP-706 | done by WP-757 (#341) |
 | WP-757 | Croydon DRs P4143/P4149/P3769 conformance + P1494 observable checkpoint builtin | WP-733 | Croydon DRs P4143/P4149/P3769 done, P1494 __builtin_observable_checkpoint (#341) |
 | WP-734 | P2308 diag nits: nested braced scalar warning, excess-elements note at the parameter (crates/kiln_sema/src/templ/nttp.rs:619) | WP-706 | open |
-| WP-736 | codegen+sema: remaining AArch64 ACLE builtins (ldrex/strex/ldaex/stlex need elementtype on llvm.aarch64.ldxr/stxr; rsr/wsr, rint*, jcvt, rndr, ld64b/st64b, gcs, chkfeat, prefetch, trap, clrex) at `crates/kiln_codegen/src/arm.rs:129`; exclusive-builtin size check + discarded-qualifiers warning in `crates/kiln_sema/src/builtins.rs` | WP-724 | open |
-| WP-737 | pp: `__has_builtin(__dmb)` is 1 in MS modes but `__dmb` and relatives are undeclared (`crates/kiln_pp/src/features.rs`) | WP-724 | open |
+| WP-736 | codegen+sema: remaining AArch64 ACLE builtins (ldrex/strex/ldaex/stlex need elementtype on llvm.aarch64.ldxr/stxr; rsr/wsr, rint*, jcvt, rndr, ld64b/st64b, gcs, chkfeat, prefetch, trap, clrex) at `crates/kiln_codegen/src/arm.rs:129`; exclusive-builtin size check + discarded-qualifiers warning in `crates/kiln_sema/src/builtins.rs` | WP-724 | done (#396, via WP-846) |
+| WP-846 | AArch64 target bundle: close WP-736, WP-737, WP-842 | WP-736 | done (#396) |
+| WP-737 | pp: `__has_builtin(__dmb)` is 1 in MS modes but `__dmb` and relatives are undeclared (`crates/kiln_pp/src/features.rs`) | WP-724 | done (#396, via WP-846) |
 | WP-738 | perf: kiln-built objects link 1.5x slower than clang-19 (rocksdb 630 s vs 412 s summed; compare object/debug-info size per TU; docs/status/oss/rocksdb.md) | WP-724 | open |
 | WP-739 | harness: kiln-cxx OOM_RE matches quoted source snippets, so a rejection logged as out-of-memory (`scripts/oss/kiln-cxx:30`) | WP-730 | open |
 | WP-740 | ast-dump/predefined: `__PRETTY_FUNCTION__` class scope prints template args as written not canonical (`C<A, 3>::m`), lambda type arg lacks its location (`crates/kiln_ast/src/dump/names.rs` write_scope_chain) | WP-730 | fixed by WP-750 (PR #335) |
@@ -860,7 +861,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-838 | ABI: reflection literal template argument mangles as `Lu6__infov…`; GCC 16 writes `LDm…` (`kiln_abi/src/mangle.rs`) | WP-818 | open |
 | WP-839 | test: `tests/conformance/dcl.attr/ir-used-retain-aligned.cpp` (WP-805) fails under `--compiler clang++-19`; fix the test or its directives | WP-818 | open |
 | WP-840 | sema accepts-invalid: calling a function template declared but never defined with a lambda argument (clang: "used but not defined ... type does not have linkage") | WP-818 | done (#393, via WP-841) |
-| WP-842 | driver: `-mbranch-protection=` is an unknown argument in kiln++ (clang accepts; AArch64 PAC/BTI function attributes) | WP-811 | open |
+| WP-842 | driver: `-mbranch-protection=` is an unknown argument in kiln++ (clang accepts; AArch64 PAC/BTI function attributes) | WP-811 | done (#396, via WP-846) |
 | WP-843 | sema: `decltype(e)::name` in a parameter declaration; xfail dcl.type.decltype/decltype-qualified-type-parameter-declaration.cpp | WP-811 | done (#394, via WP-851) |
 | WP-844 | perf: small TUs (1-3 s) slow vs clang: in gRPC 436 of 1170 sources that take clang >=0.5 s are over 1.2x, worst `subprocess_posix.cc` 2.6x (docs/status/oss/grpc.md) | WP-811 | open |
 | WP-845 | harness: gRPC `end2end_http2_test` (1095 cases) hits the 300 s limit under both compilers; split with --gtest_filter or raise the limit so it compares case by case (scripts/oss/grpc-tests.sh) | WP-811 | open |
@@ -902,6 +903,12 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-881 | concepts accepts-invalid: an instantiated closure call operator trailing requires-clause is not checked at the call (requires-expression or function body); xfail expr.prim.lambda.closure/trailing-requires-call.cpp | WP-821 | open |
 | WP-882 | sema accepts-invalid: `typeid` of an incomplete local class in a template (`crates/kiln_sema/src/rtti.rs:48` act_on_typeid) | WP-821 | open |
 | WP-883 | concepts: dependent member class/enum in `used_in_tag` still keeps the whole parameter mapping (`crates/kiln_sema/src/templ/concepts/used.rs:573`) | WP-821 | open |
+| WP-893 | oss status: regenerate docs/status/oss.md project index (folly/simdjson/bitcoin_core/boost_compiled/cmake_app shown blocked; eigen 535 vs 539), drop stale libstdcxx.md variant<int,string> link cluster, full re-run of folly + folly_coro after WP-763/WP-802, mark M5 in ROADMAP | WP-666 | open |
+| WP-894 | AArch64 target("arch=...") expands no target features (crates/kiln_driver/src/features.rs:802 skips arch=/cpu=) | WP-846 | open |
+| WP-895 | -mbranch-protection=standard never adds PAuth-LR: model the -march= extension enabling it (crates/kiln_driver/src/codegen_flags.rs branch_protection, crates/kiln_codegen/src/module.rs branch_protection_attrs) | WP-846 | open |
+| WP-896 | MS extensions mode: -fms-extensions/-fms-compatibility predefines, MS LANGBUILTINs (__dmb family, _ReadStatusReg, _Interlocked*, _CountLeadingZeros*), MS keywords and __declspec (crates/kiln_pp/src/features.rs ACLE_HEADER_BUILTINS) | WP-846 | deferred |
+| WP-897 | clang 22 __builtin_arm_gcsss takes void* (crates/kiln_ast/src/decl.rs:6073 is clang 19 "vC*vC*") | WP-846 | open |
+| WP-898 | clang 22 frame-pointer "non-leaf-no-reserve": tests/conformance/target.acle/ir-clrex.cpp fails under --compiler clang++-19 against oracle 22 (pre-existing) | WP-846 | open |
 | WP-884 | concepts and reflection correctness follow-ups: WP-880, WP-881, WP-882, WP-883, WP-869 | WP-821 | in progress |
 WP-511
 WP-512

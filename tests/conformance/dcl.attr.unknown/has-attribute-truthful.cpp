@@ -2,7 +2,8 @@
 // are truthful (spec/sema.md §4.5): 0 for an attribute kiln rejects as
 // class A (clang answers 1), nonzero for an implemented or class B/C one,
 // 0 for a builtin kiln declares but cannot lower and 1 for one it lowers.
-// WP-805; `ms_struct` and `musttail` are implemented since WP-809.
+// WP-805; `ms_struct` and `musttail` are implemented since WP-809, the ACLE
+// `rsr` and `trap` since WP-846.
 //@ skip(clang): clang answers 1 for the attributes kiln rejects
 //@ expect: compile-ok
 //@ strict-diags
@@ -15,5 +16,8 @@ static_assert(__has_attribute(used) != 0 && __has_attribute(retain) != 0);
 static_assert(__has_cpp_attribute(clang::no_destroy) != 0);
 static_assert(__has_attribute(no_sanitize) != 0 && __has_attribute(transparent_union) != 0);
 static_assert(__has_cpp_attribute(nodiscard) != 0 && __has_cpp_attribute(assume) != 0);
-static_assert(!__has_builtin(__builtin_arm_rsr) && !__has_builtin(__builtin_arm_trap));
+static_assert(!__has_builtin(__builtin_neon_vabdd_f64) && !__has_builtin(__builtin_ia32_maskmovq));
+#ifdef __aarch64__
+static_assert(__has_builtin(__builtin_arm_rsr) && __has_builtin(__builtin_arm_trap));
+#endif
 static_assert(__has_builtin(__builtin_assume) != 0 && __has_builtin(__builtin_expect) != 0);
