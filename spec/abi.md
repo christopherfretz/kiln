@@ -1149,6 +1149,8 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   cannot mangle is the error `cg_cannot_mangle_expression` at the
   expression, and the TU produces no output (WP-818; it used to mangle
   as `Qu7unknown`, a name that differs from clang's).
+  An expression splice (P2996) is GCC 16's `DS <expression>
+  [<template-args>] E`.
 - **Not implemented:** a generic lambda's explicit template-head in its
   closure type name (`[]<class T>(){}` is clang's `UlTyvE_`, kiln's
   `UlvE_`, which also shifts later discriminators); clang 19's

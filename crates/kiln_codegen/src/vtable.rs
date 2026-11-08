@@ -2008,11 +2008,14 @@ impl Cg<'_> {
         }
         flags |= 64;
         // The mangling of the function type without its exception
-        // specification: drop the `Do` before `F`.
+        // specification: drop the `Do` before `F`, after the method
+        // qualifiers of an abominable function type (`KDoFvvRE`).
         let q = QualType::unqual(ast.types.canonical(pointee).ty());
         let with = mangle::mangle_rtti(ast, &mut self.anon, q, "_ZTI");
-        let name = match with.strip_prefix("_ZTIDo") {
-            Some(rest) => format!("_ZTI{rest}"),
+        let body = with.strip_prefix("_ZTI").unwrap_or("");
+        let cv = body.len() - body.trim_start_matches(['r', 'V', 'K']).len();
+        let name = match body[cv..].strip_prefix("Do") {
+            Some(rest) => format!("_ZTI{}{rest}", &body[..cv]),
             None => return err(None, format!("unexpected noexcept function mangling `{with}`")),
         };
         if let Some(&g) = self.rtti_globals.get(&name) {

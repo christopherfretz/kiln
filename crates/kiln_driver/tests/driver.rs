@@ -950,6 +950,24 @@ fn reference_bind_drops_quals_ranges_like_clang() {
     assert_eq!((o.code, o.stderr.as_str()), (1, DROPS_QUALS_GOLDEN));
 }
 
+/// P2996 [expr.prim.splice]: an expression splice in a requires-clause
+/// mangles as GCC 16's `DS <expression> [<template-args>] E`, not as an
+/// error (WP-818; the reflection literal before it is still kiln's own).
+#[test]
+fn splice_in_requires_clause_mangles_like_gcc() {
+    let src = "using info = decltype(^^int);
+template <class T> constexpr bool Small = sizeof(T) <= 4;
+template <info R, class T> requires (template [: R :]<T>) int pick() { return 1; }
+constexpr int one = 1;
+template <info R> requires ([: R :] == 1) int pick2() { return 2; }
+int use() { return pick<^^Small, int>() + pick2<^^one>(); }
+";
+    let o = kiln(&["-std=c++26", "-freflection", "-S", "-emit-llvm", "-o", "-", "-"], src);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("EiQDST_IT0_EEEiv("), "{}", o.stdout);
+    assert!(o.stdout.contains("EQeqDST_ELi1EEiv("), "{}", o.stdout);
+}
+
 /// [conv.bool], [dcl.pre]/12: a -Wliteral-conversion range underlines a
 /// whole `&&` or `||` operator, and a range whose ends come from a macro
 /// argument covers its last token (clang `Lexer::getLocForEndOfToken`

@@ -711,6 +711,19 @@ impl Mangler<'_, '_> {
             ExprKind::CXXFunctionalCastExpr
             | ExprKind::CXXTemporaryObjectExpr
             | ExprKind::CXXConstructExpr => return self.construct_expression(expr),
+            // An expression splice `[: r :]` (`template [: r :]<args>`):
+            // GCC 16's `DS <expression> [<template-args>] E` (P2996 has no
+            // Itanium encoding yet).
+            ExprKind::CXXSpliceExpr if ast.exprs.splice_base(expr).is_none() => {
+                self.out.push_str("DS");
+                if !self.expression(ast.exprs.splice_operand(expr)) {
+                    return false;
+                }
+                if let Some(args) = ast.exprs.splice_template_args(expr) {
+                    self.template_args(args);
+                }
+                self.out.push('E');
+            }
             ExprKind::PackExpansionExpr => {
                 self.out.push_str("sp");
                 return self.expression(ast.exprs.operand(expr));
