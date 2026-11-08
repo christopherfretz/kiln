@@ -1143,7 +1143,7 @@ impl Cg<'_> {
             };
         }
         let v = self.emit_complex(s)?;
-        Ok(self.cx_to_scalar(v, sq, q))
+        self.cx_to_scalar(v, sq, q, self.ub_expr_loc(e))
     }
 
     /// `gep inbounds [N x T], p, i64 0, i64 0`.

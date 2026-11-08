@@ -809,10 +809,20 @@ impl Cg<'_> {
         self.ub_overflow(e, BinaryOp::Sub, z, v, q, k, h, &[v]).map(Some)
     }
 
+    /// clang skips the `atomicrmw` form of `++`, `--` and compound
+    /// assignment on an `_Atomic` unsigned integer of value type `vq`
+    /// when unsigned-integer-overflow checks it.
+    pub(crate) fn ub_atomic_unsigned_checked(&self, vq: QualType) -> bool {
+        self.ub_on(San::UNSIGNED_INTEGER_OVERFLOW) && self.ub_int(vq) && !self.is_signed(vq)
+    }
+
     /// The checked increment or decrement `old ± 1` of `e`, or `None`.
+    /// The kind follows the value type of an `_Atomic` operand; clang's
+    /// check data names the `_Atomic` type itself.
     pub(crate) fn ub_inc_dec(&mut self, e: ExprId, old: V, inc: bool) -> R<Option<V>> {
         let q = self.ast.exprs.get(e).ty();
-        let Some(k) = self.ub_overflow_kind(q) else { return Ok(None) };
+        let vq = self.ast.types.as_atomic(q).unwrap_or(q);
+        let Some(k) = self.ub_overflow_kind(vq) else { return Ok(None) };
         if self.ast.exprs.get(e).has(kiln_ast::expr::ExprFlags::CANNOT_OVERFLOW) {
             return Ok(None);
         }
@@ -1202,7 +1212,10 @@ impl Cg<'_> {
             return Ok(());
         };
         let w = self.m.types.int_width(tt).unwrap_or(1);
-        let unsigned = !self.is_signed(to);
+        // clang `isUnsignedIntegerOrEnumerationType`: an `_Atomic`
+        // integer is neither signed nor unsigned, so its bounds are the
+        // signed ones (while its conversion is `fptoui`).
+        let unsigned = self.ast.types.as_atomic(to).is_none() && !self.is_signed(to);
         let one = 1u128 << (of.p - 1);
         // MinSrc: `Min - 1` rounded toward negative infinity.
         let min = if unsigned {

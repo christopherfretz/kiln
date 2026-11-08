@@ -964,7 +964,9 @@ impl Cg<'_> {
             return Ok(self.atomic_rmw_lv(RmwOp::Xchg, lv, one));
         }
         let ty = self.mty(vq);
-        if ast.types.is_integral(vq) {
+        // clang takes the compare-exchange loop for an unsigned type
+        // checked by unsigned-integer-overflow.
+        if ast.types.is_integral(vq) && !self.ub_atomic_unsigned_checked(vq) {
             let amt = self.icn(ty, 1);
             let (op, b) = if inc { (RmwOp::Add, BinOp::Add) } else { (RmwOp::Sub, BinOp::Sub) };
             let old = self.atomic_rmw_lv(op, lv, amt);
@@ -999,7 +1001,7 @@ impl Cg<'_> {
         result_ty: QualType,
     ) -> R<V> {
         let ast = self.ast;
-        if ast.types.is_integral(vq) && !self.is_bool(vq) {
+        if ast.types.is_integral(vq) && !self.is_bool(vq) && !self.ub_atomic_unsigned_checked(vq) {
             let ops = match op {
                 BinaryOp::Add => Some((RmwOp::Add, BinOp::Add)),
                 BinaryOp::Sub => Some((RmwOp::Sub, BinOp::Sub)),
@@ -1012,7 +1014,7 @@ impl Cg<'_> {
                 // clang converts to the `_Atomic` type itself, which is
                 // not a signed integer type (so a `short` target is
                 // zero-extended in the loop below, and so on).
-                let amt = self.conv(rv, rq, lv.q);
+                let amt = self.conv_at(rv, rq, lv.q, self.ub_expr_loc(e))?;
                 let old = self.atomic_rmw_lv(rop, lv, amt);
                 return Ok(self.bin(b, Flags::NONE, old, amt));
             }
@@ -1021,7 +1023,7 @@ impl Cg<'_> {
         let (_, new) = self.atomic_update_loop(lv, vq, &mut |cg, old| {
             let lhs = if ptr { old } else { cg.conv(old, lv.q, lhs_ty) };
             let res = cg.arith(e, op, lhs, rv, lhs_ty, rq, result_ty)?;
-            Ok(if ptr { res } else { cg.conv(res, result_ty, lv.q) })
+            Ok(if ptr { res } else { cg.conv_at(res, result_ty, lv.q, cg.ub_expr_loc(e))? })
         })?;
         Ok(new)
     }
