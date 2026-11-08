@@ -967,7 +967,7 @@ Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
   pragma that needs another (FENV_ACCESS ON, FENV_ROUND other than
   FE_TONEAREST, trapping, rounding, a wider eval method) is an error.
 
-### 3.3 Pointer alignment (WP-819, WP-829, `builtins.rs` `pointer_with_alignment`)
+### 3.3 Pointer alignment (WP-819, WP-829, WP-847, `builtins.rs` `pointer_with_alignment`)
 clang `CodeGenFunction::EmitPointerWithAlignment`, mirrored case by case,
 gives a pointer operand's value, its known alignment, and whether that
 alignment is a declaration's (`AlignmentSource::Decl`). Its users:
@@ -984,7 +984,14 @@ alignment is a declaration's (`AlignmentSource::Decl`). Its users:
 - every `__atomic_*`/`__c11_atomic_*` pointer (`atomic.rs`), memcpy/
   memmove/memset-like builtins, `__builtin_clear_padding`, `va_arg`, NEON
   loads and stores, checked arithmetic results, and the placement
-  argument of a new-expression (§3.1).
+  argument of a new-expression (§3.1);
+- the operand of a delete-expression (`EmitCXXDeleteExpr`, WP-847): the
+  vtable pointer load of a virtual (deleting or destroying-delete)
+  destructor call and of `::delete`'s offset-to-top read the object at
+  that alignment, and `delete[]`'s array cookie load at
+  `min_align(min_align(align, cookie size), cookie offset)`. The null
+  test of a constant operand (`delete &g`) folds as LLVM's constant
+  folder does: `false` for a global that is not `extern_weak`.
 
 After skipping parentheses:
 - **No-op/bitcast** from a non-`void` pointer keeps the operand's
