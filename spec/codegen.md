@@ -2156,7 +2156,10 @@ off and sema rejects `try`/`throw`).
 - **new-expressions** ([expr.new]/28): `CallDeleteDuringNew` as an EH
   cleanup around the initializer, with the pointer, size and placement
   arguments saved to `cond-cleanup.save` slots inside a conditional
-  branch; class `operator new` keeps its declared result type.
+  branch; class `operator new` keeps its declared result type. The
+  reserved placement `operator new(std::size_t, void*)` is inlined, but
+  its pointer is still the placement argument passed to a matching
+  non-reserved `operator delete(void*, void*)` (a class-scope one).
   Array new runs the constructor loop for a non-constant count
   (`arrayctor.cont` isempty check, as clang's
   `EmitCXXAggrConstructorCall`).

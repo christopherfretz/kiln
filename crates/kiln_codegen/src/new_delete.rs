@@ -693,6 +693,11 @@ impl Cg<'_> {
                 return err(loc, "placement new without a placement argument");
             };
             let (p, decl_align) = self.pointer_with_align(arg)?;
+            // The pointer is still the placement argument of a matching
+            // class-scope `operator delete(void*, void*)` should the
+            // initialization throw ([expr.new]/28; clang adds it to
+            // `allocatorArgs`).
+            placement_vals.push(CallArg::Scalar(p));
             (p, decl_align.unwrap_or(alloc_align))
         } else {
             let size_q = params.first().copied().unwrap_or(QualType::unqual(t.target().size_t));
