@@ -547,7 +547,7 @@ impl Cg<'_> {
             | ExprKind::PredefinedExpr
             | ExprKind::MaterializeTemporaryExpr => {
                 let lv = self.emit_checked_lvalue(e, Tck::Load)?;
-                self.load_lv(lv)
+                self.load_lv_at(lv, self.ub_expr_loc(e))?
             }
             // clang `VisitAddrLabelExpr`.
             ExprKind::AddrLabelExpr => {
@@ -857,8 +857,14 @@ impl Cg<'_> {
             CastKind::NoOp | CastKind::LValueBitCast
                 if self.is_glvalue(e) && !ast.types.is_function(q) =>
             {
-                let lv = self.emit_lvalue(e)?;
-                self.load_lv(lv)
+                // A `NoOp` visits its operand (`EmitCheckedLValue` +
+                // `EmitLoadOfScalar`); an `LValueBitCast` loads unchecked.
+                let lv = if ck == CastKind::NoOp {
+                    self.emit_checked_lvalue(e, Tck::Load)?
+                } else {
+                    self.emit_lvalue(e)?
+                };
+                self.load_lv_at(lv, self.ub_expr_loc(e))?
             }
             CastKind::NoOp
             | CastKind::BitCast
@@ -1030,7 +1036,7 @@ impl Cg<'_> {
             if !bit_cast {
                 self.ub_check_lv(inner, lv, Tck::Load)?;
             }
-            return Ok(Some(self.load_lv(lv)));
+            return Ok(Some(self.load_lv_at(lv, self.ub_expr_loc(inner))?));
         }
         self.emit_scalar_opt(s)
     }
@@ -1195,7 +1201,7 @@ impl Cg<'_> {
             UnaryOp::AddrOf => Ok(self.emit_lvalue(s)?.addr.v),
             UnaryOp::Deref => {
                 let lv = self.emit_checked_lvalue(e, Tck::Load)?;
-                Ok(self.load_lv(lv))
+                self.load_lv_at(lv, self.ub_expr_loc(e))
             }
             op @ (UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec) => {
                 let lv = self.emit_lvalue(s)?;
@@ -1233,7 +1239,7 @@ impl Cg<'_> {
         {
             return self.atomic_inc_dec(e, lv, vq, inc, pre);
         }
-        let old = self.load_lv(lv);
+        let old = self.load_lv_at(lv, self.ub_expr_loc(e))?;
         let new = self.inc_dec_value(e, lv.q, old, inc)?;
         let stored = self.store_lv(new, lv, lv.bf.is_some());
         Ok(if pre { stored } else { old })
@@ -1304,7 +1310,7 @@ impl Cg<'_> {
             BinaryOp::LAnd | BinaryOp::LOr => self.emit_logical(e, op == BinaryOp::LAnd)?,
             BinaryOp::PtrMemD | BinaryOp::PtrMemI => {
                 let lv = self.emit_checked_lvalue(e, Tck::Load)?;
-                self.load_lv(lv)
+                self.load_lv_at(lv, self.ub_expr_loc(e))?
             }
             BinaryOp::EQ | BinaryOp::NE
                 if self.is_complex(ast.exprs.get(l).ty())
@@ -2025,7 +2031,7 @@ impl Cg<'_> {
             let v = self.atomic_compound_assign(e, op, lv, vq, rv, rq, ca.lhs_ty, ca.result_ty)?;
             return Ok((lv, v));
         }
-        let old = self.load_lv(lv);
+        let old = self.load_lv_at(lv, self.ub_expr_loc(e))?;
         let promote = |c: &Self, q: QualType| if c.f16_excess(q) { QualType::FLOAT } else { q };
         let (lhs_ty, result_ty) = (promote(self, ca.lhs_ty), promote(self, ca.result_ty));
         let lhs = if ast.types.is_pointer(lq) { old } else { self.conv(old, lq, lhs_ty) };

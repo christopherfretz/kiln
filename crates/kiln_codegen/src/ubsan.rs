@@ -1012,6 +1012,114 @@ impl Cg<'_> {
         res
     }
 
+    // ---- bool and enum loads ------------------------------------------
+
+    /// clang `getRangeForType` with `StrictEnums`: the values `[min, end)`
+    /// of a `bool` (or an enumeration with underlying type `bool`) or of
+    /// an enumeration without a fixed underlying type
+    /// (`EnumDecl::getValueRange`, [dcl.enum]/8); `None` for any other
+    /// type (and for ranges beyond 64 bits).
+    fn ub_value_range(&self, q: QualType) -> Option<(i128, i128)> {
+        if self.has_bool_rep(q) {
+            return Some((0, 2));
+        }
+        let ast = self.ast;
+        let TypeView::Enum(d) = ast.types.canonical_view(q) else { return None };
+        let d = ast.definition(d).unwrap_or(d);
+        let data = ast.decls.enumeration(d)?;
+        if data.flags & kiln_ast::decl::EnumData::FIXED != 0 {
+            return None;
+        }
+        // Sema's `NumPositiveBits` (at least one for a zero enumerator)
+        // and `NumNegativeBits`.
+        let (mut pos, mut neg) = (0u32, 0u32);
+        for m in ast.members(d) {
+            let Some(v) = ast.decls.enumerator(m).and_then(|x| x.value) else { continue };
+            let Some(kiln_ast::consts::Scalar::Int { bits, signed, .. }) = ast.consts.scalar(v)
+            else {
+                continue;
+            };
+            let v = if signed { bits.to_i128()? } else { i128::try_from(bits.to_u128()?).ok()? };
+            if v >= 0 {
+                pos = pos.max(128 - v.leading_zeros()).max(1);
+            } else {
+                neg = neg.max(129 - v.leading_ones());
+            }
+        }
+        // [dcl.enum]/8: an empty enumerator-list acts as one enumerator 0.
+        if pos == 0 && neg == 0 {
+            pos = 1;
+        }
+        if neg == 0 {
+            (pos < 64).then(|| (0, 1i128 << pos))
+        } else {
+            let n = (pos + 1).max(neg);
+            (n <= 64).then(|| (-(1i128 << (n - 1)), 1i128 << (n - 1)))
+        }
+    }
+
+    /// Whether a load of `q` is range-checked (clang
+    /// `EmitScalarRangeCheck` returning true: no `!range` either).
+    fn ub_range_wanted(&self, q: QualType) -> bool {
+        (self.ub_on(San::BOOL) && self.has_bool_rep(q))
+            || (self.ub_on(San::ENUM)
+                && matches!(self.ast.types.canonical_view(q), TypeView::Enum(_)))
+    }
+
+    /// clang `EmitScalarRangeCheck`: `-fsanitize=bool` / `enum` on the
+    /// value `v` of type `q` loaded at `loc` (in its memory form).
+    pub(crate) fn ub_range_check(&mut self, v: V, q: QualType, loc: Option<Loc>) -> R<()> {
+        if !self.ub_range_wanted(q) {
+            return Ok(());
+        }
+        let t = self.f.fir.ty(&self.m, v);
+        let is_bool = self.has_bool_rep(q);
+        if is_bool && t == LTy::I1 {
+            return Ok(());
+        }
+        let Some((min, end)) = self.ub_value_range(q) else { return Ok(()) };
+        let outer = self.ub_begin();
+        let res = (|| {
+            let ok = if min == 0 {
+                let c = self.icn(t, end - 1);
+                self.icmp(IntPredicate::Ule, v, c)
+            } else {
+                let hi = self.icn(t, end - 1);
+                let lo = self.icn(t, min);
+                let u = self.icmp(IntPredicate::Sle, v, hi);
+                let l = self.icmp(IntPredicate::Sge, v, lo);
+                self.ub_and(u, l)
+            };
+            let sl = self.ub_loc(loc)?;
+            let desc = self.ub_type(q)?;
+            let enum_check =
+                self.ub_on(San::ENUM) && matches!(self.ast.types.canonical_view(q), TypeView::Enum(_));
+            let kind = if enum_check { San::ENUM } else { San::BOOL };
+            // clang converts the value (`EmitCheckValue`) before the branch.
+            let cv = self.ub_check_value(v);
+            self.ub_check(&[(ok, kind)], UbHandler::LoadInvalidValue, &[sl, desc], &[cv])
+        })();
+        self.ub_end(outer);
+        res
+    }
+
+    /// clang `EmitLoadOfLValue(lv, loc)` for a scalar: [`Cg::load_lv`]
+    /// with [`Cg::ub_range_check`] between the load and the conversion
+    /// from its memory form.
+    pub(crate) fn load_lv_at(&mut self, lv: LV, loc: Option<Loc>) -> R<V> {
+        if !self.ub_range_wanted(lv.q) || lv.vidx.is_some() {
+            return Ok(self.load_lv(lv));
+        }
+        if lv.bf.is_some() {
+            let v = self.load_lv(lv);
+            self.ub_range_check(v, lv.q, loc)?;
+            return Ok(v);
+        }
+        let raw = self.load_scalar_mem(lv.addr, lv.q, lv.tb, false);
+        self.ub_range_check(raw, lv.q, loc)?;
+        Ok(self.emit_from_memory(raw, lv.q))
+    }
+
     // ---- bounds ----------------------------------------------------------
 
     /// clang `Expr::isFlexibleArrayMemberLike` at the default

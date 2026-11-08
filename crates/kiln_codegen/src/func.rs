@@ -1227,14 +1227,23 @@ impl Cg<'_> {
         if let Some(v) = self.vec_load(a, q, vol) {
             return v;
         }
+        let v = self.load_scalar_mem(a, q, tb, true);
+        self.emit_from_memory(v, q)
+    }
+
+    /// The load of a non-vector [`Self::load_scalar_tb`] in its memory
+    /// form (before [`Self::emit_from_memory`]); `range`: a `bool` load
+    /// may carry `!range`.
+    pub fn load_scalar_mem(&mut self, a: Addr, q: QualType, tb: Tb, range: bool) -> V {
+        let vol = self.ast.types.effective_quals(q).is_volatile();
         let p = self.scalar_tls_addr(a.v);
         let ty = self.scalar_access_ty(a.ty, q);
         let v = self.load(ty, p, a.align, vol);
         self.tbaa_mark(v, q, tb);
-        if self.is_bool_value(q) && self.opts.optimize() && a.ty == LTy::I8 {
+        if range && self.is_bool_value(q) && self.opts.optimize() && a.ty == LTy::I8 {
             self.bool_range(v);
         }
-        self.emit_from_memory(v, q)
+        v
     }
 
     /// clang `EmitFromMemory`: a `bool` is truncated to `i1`, a
