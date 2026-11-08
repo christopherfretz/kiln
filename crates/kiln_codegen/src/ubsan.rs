@@ -19,7 +19,7 @@ use kiln_ast::lambda::CaptureDefault;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::intrinsics::OverflowOp;
 use kiln_llvm::{
-    Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, Flags, GlobalId, GlobalSanitizer,
+    Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, Flags, FloatPredicate, GlobalId, GlobalSanitizer,
     IntPredicate, Linkage, MdKindId, MetadataId, TypeId as LTy, UnnamedAddr, UwTableKind, Value,
 };
 use kiln_source::Loc;
@@ -267,7 +267,21 @@ impl Cg<'_> {
             return Ok(Value::global(g));
         }
         let ast = self.ast;
+        // clang 20+ (#64100): a signed `_BitInt` is kind 2 (`TK_BitInt`),
+        // its exact width appended to the name as `\0`, a 32-bit
+        // little-endian count and `\0`.
+        let mut bit_int = None;
         let (kind, info): (u16, u16) = match ast.types.canonical_view(q) {
+            TypeView::BitInt { signed, width } => {
+                let bits = self.size_align(q).0 * 8;
+                let k = if signed && self.opts.clang_compat >= 22 {
+                    bit_int = Some(width);
+                    2
+                } else {
+                    0
+                };
+                (k, ((bits.max(1).ilog2() as u16) << 1) | u16::from(signed))
+            }
             TypeView::Builtin(b) if b.is_integral() => {
                 let bits = self.size_align(q).0 * 8;
                 (0, ((bits.max(1).ilog2() as u16) << 1) | u16::from(self.is_signed(q)))
@@ -319,6 +333,11 @@ impl Cg<'_> {
             return Ok(Value::global(g));
         }
         let mut bytes = name.into_bytes();
+        if let Some(w) = bit_int {
+            bytes.push(0);
+            bytes.extend_from_slice(&u32::try_from(w).unwrap_or(u32::MAX).to_le_bytes());
+            bytes.push(0);
+        }
         bytes.push(0);
         let elems = [
             self.m.const_int(LTy::I16, i128::from(kind)),
@@ -1095,8 +1114,9 @@ impl Cg<'_> {
             let enum_check =
                 self.ub_on(San::ENUM) && matches!(self.ast.types.canonical_view(q), TypeView::Enum(_));
             let kind = if enum_check { San::ENUM } else { San::BOOL };
-            // clang converts the value (`EmitCheckValue`) before the branch.
-            let cv = self.ub_check_value(v);
+            // clang 19 converts the value (`EmitCheckValue`) before the
+            // branch; clang 20+ passes it to `EmitCheck` raw.
+            let cv = if self.opts.clang_compat >= 22 { v } else { self.ub_check_value(v) };
             self.ub_check(&[(ok, kind)], UbHandler::LoadInvalidValue, &[sl, desc], &[cv])
         })();
         self.ub_end(outer);
@@ -1118,6 +1138,87 @@ impl Cg<'_> {
         let raw = self.load_scalar_mem(lv.addr, lv.q, lv.tb, false);
         self.ub_range_check(raw, lv.q, loc)?;
         Ok(self.emit_from_memory(raw, lv.q))
+    }
+
+    // ---- float-cast-overflow ---------------------------------------------
+
+    /// clang `ScalarExprEmitter::EmitScalarConversion` of a floating
+    /// value `v` of type `from` to the integer type `to` under
+    /// `-fsanitize=float-cast-overflow`, with the check
+    /// (`EmitFloatConversionCheck`) at `loc` between the `__fp16` → `float`
+    /// extension and the `fptosi`/`fptoui`; every other conversion is
+    /// [`Cg::conv`].
+    pub(crate) fn conv_at(&mut self, v: V, from: QualType, to: QualType, loc: Option<Loc>) -> R<V> {
+        let tt = self.lty(to);
+        let ft = self.f.fir.ty(&self.m, v);
+        if !self.ub_on(San::FLOAT_CAST_OVERFLOW)
+            || self.is_bool(to)
+            || !self.is_float_ty(ft)
+            || self.m.types.int_width(tt).is_none()
+            || self.ast.types.is_pointer(to)
+        {
+            return Ok(self.conv(v, from, to));
+        }
+        let src = if self.is_fp16(from) { self.cast(CastOp::FPExt, v, LTy::FLOAT) } else { v };
+        let outer = self.ub_begin();
+        let res = self.ub_float_cast_check(v, src, from, to, loc);
+        self.ub_end(outer);
+        res?;
+        let op = if self.is_signed(to) { CastOp::FPToSI } else { CastOp::FPToUI };
+        Ok(self.cast(op, src, tt))
+    }
+
+    /// clang `EmitFloatConversionCheck`: `src > MinSrc && src < MaxSrc`,
+    /// the bounds being the largest too-small and smallest too-large
+    /// values of the source format (`orig`'s, then widened to `src`'s),
+    /// or an infinity where the integer bound does not fit the format.
+    fn ub_float_cast_check(
+        &mut self,
+        orig: V,
+        src: V,
+        from: QualType,
+        to: QualType,
+        loc: Option<Loc>,
+    ) -> R<()> {
+        let tt = self.lty(to);
+        let (ot, st) = (self.f.fir.ty(&self.m, orig), self.f.fir.ty(&self.m, src));
+        let (Some(of), Some(sf)) = (fp_format(&self.m.types, ot), fp_format(&self.m.types, st))
+        else {
+            return Ok(());
+        };
+        let w = self.m.types.int_width(tt).unwrap_or(1);
+        let unsigned = !self.is_signed(to);
+        let one = 1u128 << (of.p - 1);
+        // MinSrc: `Min - 1` rounded toward negative infinity.
+        let min = if unsigned {
+            Some((one, 0))
+        } else {
+            let k = w - 1;
+            if k > of.emax {
+                None
+            } else if k < of.p {
+                Some((((1u128 << k) + 1) << (of.p - 1 - k), k))
+            } else {
+                Some((one | 1, k))
+            }
+        };
+        // MaxSrc: `Max + 1` rounded toward positive infinity, `2^k`.
+        let k = if unsigned { w } else { w - 1 };
+        let max = (k <= of.emax).then_some((one, k));
+        let minc = V::C(self.m.const_float_bits(st, sf.encode(true, min, of.p)));
+        let maxc = V::C(self.m.const_float_bits(st, sf.encode(false, max, of.p)));
+        let ge = self.fcmp(FloatPredicate::Ogt, src, minc);
+        let le = self.fcmp(FloatPredicate::Olt, src, maxc);
+        let ok = self.ub_and(ge, le);
+        let sl = self.ub_loc(loc)?;
+        let fd = self.ub_type(from)?;
+        let td = self.ub_type(to)?;
+        self.ub_check(
+            &[(ok, San::FLOAT_CAST_OVERFLOW)],
+            UbHandler::FloatCastOverflow,
+            &[sl, fd, td],
+            &[orig],
+        )
     }
 
     // ---- bounds ----------------------------------------------------------
@@ -1201,14 +1302,22 @@ impl Cg<'_> {
             let Some((bound, indexed)) = self.ub_array_bound(base)? else {
                 return Ok(());
             };
-            let iv = self.int_cast(idx, LTy::I64, self.is_signed(iq));
-            let bv = self.int_cast(bound, LTy::I64, false);
+            // clang 19 compares in `size_t` and reports the raw index;
+            // clang 21+ (`EmitBoundsCheckImpl`) compares in the wider of
+            // the index type and `size_t` and reports the converted index.
+            let it = self.f.fir.ty(&self.m, idx);
+            let wide = self.opts.clang_compat >= 22
+                && self.m.types.int_width(it).is_some_and(|w| w > 64);
+            let ct = if wide { it } else { LTy::I64 };
+            let iv = self.int_cast(idx, ct, self.is_signed(iq));
+            let bv = self.int_cast(bound, ct, false);
+            let arg = if self.opts.clang_compat >= 22 { iv } else { idx };
             let loc = self.ub_loc(self.ub_expr_loc(e))?;
             let d1 = self.ub_type(indexed)?;
             let d2 = self.ub_type(iq)?;
             let p = if accessed { IntPredicate::Ult } else { IntPredicate::Ule };
             let ok = self.icmp(p, iv, bv);
-            self.ub_check(&[(ok, San::ARRAY_BOUNDS)], UbHandler::OutOfBounds, &[loc, d1, d2], &[idx])
+            self.ub_check(&[(ok, San::ARRAY_BOUNDS)], UbHandler::OutOfBounds, &[loc, d1, d2], &[arg])
         })();
         self.ub_end(outer);
         res
@@ -1562,5 +1671,45 @@ impl Cg<'_> {
         let cq = self.class_type(rd);
         let tc = TypeCheck::new(tck, loc, cq).align(align).skip(skip).desc(UbDesc::ThisPtr(cv));
         self.ub_type_check(this, tc)
+    }
+}
+
+/// An IEEE-style binary floating-point format: precision `p` (with the
+/// integer bit), maximum exponent `emax` (also the bias), exponent field
+/// width, and whether the integer bit is stored (`x86_fp80`).
+#[derive(Clone, Copy)]
+struct FpFormat {
+    p: u32,
+    emax: u32,
+    ebits: u32,
+    explicit: bool,
+}
+
+fn fp_format(types: &kiln_llvm::TypeTable, t: LTy) -> Option<FpFormat> {
+    use kiln_llvm::TypeData as T;
+    let (p, emax, ebits, explicit) = match types.data(t) {
+        T::Half => (11, 15, 5, false),
+        T::BFloat => (8, 127, 8, false),
+        T::Float => (24, 127, 8, false),
+        T::Double => (53, 1023, 11, false),
+        T::X86Fp80 => (64, 16383, 15, true),
+        T::Fp128 => (113, 16383, 15, false),
+        _ => return None,
+    };
+    Some(FpFormat { p, emax, ebits, explicit })
+}
+
+impl FpFormat {
+    /// The encoding of `±m·2^(e-p+1)` (`m` a `p_src`-bit significand with
+    /// its top bit set, exactly representable here), or of `±inf`.
+    fn encode(self, neg: bool, v: Option<(u128, u32)>, p_src: u32) -> u128 {
+        let frac = if self.explicit { self.p } else { self.p - 1 };
+        let sign = u128::from(neg) << (frac + self.ebits);
+        let (biased, m) = match v {
+            None => ((1u128 << self.ebits) - 1, if self.explicit { 1u128 << (self.p - 1) } else { 0 }),
+            Some((m, e)) => (u128::from(e + self.emax), m << (self.p - p_src)),
+        };
+        let m = if self.explicit { m } else { m & ((1u128 << frac) - 1) };
+        sign | (biased << frac) | m
     }
 }

@@ -938,7 +938,7 @@ impl Cg<'_> {
                     // clang 22: int → bool ext vector, lane-wise `icmp ne 0`.
                     self.convert_vector(v, sq, q)
                 } else {
-                    self.conv(v, sq, q)
+                    self.conv_at(v, sq, q, self.ub_expr_loc(e))?
                 }
             }
             CastKind::FloatingComplexToReal
@@ -2036,7 +2036,11 @@ impl Cg<'_> {
         let (lhs_ty, result_ty) = (promote(self, ca.lhs_ty), promote(self, ca.result_ty));
         let lhs = if ast.types.is_pointer(lq) { old } else { self.conv(old, lq, lhs_ty) };
         let res = self.arith(e, op, lhs, rv, lhs_ty, rq, result_ty)?;
-        let res = if ast.types.is_pointer(lq) { res } else { self.conv(res, result_ty, lq) };
+        let res = if ast.types.is_pointer(lq) {
+            res
+        } else {
+            self.conv_at(res, result_ty, lq, self.ub_expr_loc(e))?
+        };
         let v = self.store_lv(res, lv, true);
         Ok((lv, v))
     }
