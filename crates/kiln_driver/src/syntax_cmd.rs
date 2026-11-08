@@ -68,6 +68,15 @@ impl SyntaxJob<'_> {
         let interner = Arc::new(Interner::new());
         let engine = make_engine(&sm, job.diag_opts, job.stderr.clone(), None);
         let mut result = JobResult::default();
+        // WP-813: a `-cc1` command line clang rejects runs no job.
+        let x86 = !job.toolchain.target.is_aarch64();
+        let invocation = job.args.codegen.invocation_errors(x86, job.toolchain.target.triple);
+        if !invocation.is_empty() {
+            invocation.iter().for_each(|e| e.emit(&engine));
+            engine.flush();
+            result.errors = engine.error_count();
+            return result;
+        }
         if let Some(inputs) = job.pp_inputs(&sm, &engine) {
             self.parse(&sm, &engine, &interner, inputs, None, &mut result);
         }
@@ -154,6 +163,7 @@ impl SyntaxJob<'_> {
         if let Some(signed) = a.predef.char_signed {
             target.types.char_signed = signed;
         }
+        let x86 = !job.toolchain.target.is_aarch64();
         // WP-630: `cx16` makes 128-bit atomics lock-free (clang
         // `X86TargetInfo::setMaxAtomicWidth`).
         if crate::features::resolve(a, &job.toolchain.target).0.x86_cx16() {
@@ -186,6 +196,7 @@ impl SyntaxJob<'_> {
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
             contract_semantic: a.contract_semantic.unwrap_or_default(),
+            cf_protection_branch: a.codegen.cf_protection_branch(x86),
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();

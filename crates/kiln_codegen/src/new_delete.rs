@@ -218,6 +218,8 @@ impl Cg<'_> {
         {
             ret.push(Attr::Align(n as u64));
         }
+        self.class_b_call_attrs(d, extra, ret);
+        self.f.call_decl = Some(d);
     }
 
     /// The one-based parameter index an `alloc_size` / `alloc_align`
@@ -390,6 +392,7 @@ impl Cg<'_> {
             fa.push(Attr::Flag(AttrKind::NoUnwind));
         }
         self.call_size_attrs(Some(f), &mut fa);
+        self.stmt_call_attrs(Some(d), &mut fa);
         let mut ra = self.m.attrs_of(ret).to_vec();
         if af.replaceable && af.is_new {
             fa.push(Attr::AllocSize(0, None));
@@ -427,6 +430,7 @@ impl Cg<'_> {
     /// power of two becomes `llvm.assume(i1 true) ["align"(ptr r, i64 a)]`
     /// (the argument zero-extended to `i64`, clang `emitAlignmentAssumption`).
     pub(crate) fn alloc_align_assume(&mut self, d: DeclId, vals: &[CallArg], r: V) {
+        self.assume_aligned_assume(d, r);
         let Some(i) = self.fn_alloc_align(d) else { return };
         let Some(&CallArg::Scalar(v)) = vals.get(i) else { return };
         if self.cint(v).is_some_and(|(_, n, _)| n.is_power_of_two()) || self.f.fir.cur().is_none() {

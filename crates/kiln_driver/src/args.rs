@@ -298,6 +298,10 @@ pub enum ArgError {
     /// implement (`-ftrapv`, `-fsanitize=`, coverage/profiling;
     /// spec/driver.md "Codegen flags"): "'{arg}' is not supported by kiln".
     UnsupportedByKiln(String),
+    /// "invalid argument '{0}' to -{1}" (`-fpatchable-function-entry=`).
+    InvalidArgumentToOption(String, String),
+    /// `-fpatchable-function-entry=N,M` with `M > N`.
+    PatchableEntryOffset,
 }
 
 /// The parsed command line.

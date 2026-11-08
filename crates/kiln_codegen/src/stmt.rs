@@ -344,7 +344,13 @@ impl Cg<'_> {
                 self.emit_assumptions(s)?;
                 let sub = StmtId::new(n.b());
                 self.f.loop_hints = Some((sub, s));
-                self.emit_stmt(sub)
+                // clang `EmitAttributedStmt`: `SaveAndRestore` of the
+                // statement's own `nomerge` / `noinline` / `always_inline`.
+                let calls = self.stmt_calls_of(s);
+                let saved = std::mem::replace(&mut self.f.stmt_calls, calls);
+                let r = self.emit_stmt(sub);
+                self.f.stmt_calls = saved;
+                r
             }
             StmtKind::LabelStmt => {
                 self.emit_label(DeclId::new(n.a()));

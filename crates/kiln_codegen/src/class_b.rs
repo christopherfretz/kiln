@@ -17,7 +17,8 @@ use kiln_ast::DeclId;
 use kiln_ast::attr::{AttrKind as K, AttrNode};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::RawId;
-use kiln_abi::{ArgKind, IrType};
+use kiln_abi::call::ArgKind;
+use kiln_abi::irtype::IrType;
 use kiln_llvm::{Attr, AttrKind, AttrSetId, TypeId as LTy};
 
 use crate::module::{Cg, Sig};
@@ -282,6 +283,22 @@ impl Cg<'_> {
         out
     }
 
+    /// The typedef declaration of `q` (clang `getAs<TypedefType>`).
+    fn typedef_of(&self, mut q: kiln_ast::QualType) -> Option<DeclId> {
+        let t = &self.ast.types;
+        for _ in 0..64 {
+            if let kiln_ast::types::TypeView::Typedef { decl, .. } = t.view(q.ty()) {
+                return Some(decl);
+            }
+            let n = t.desugar_once(q);
+            if n == q {
+                return None;
+            }
+            q = n;
+        }
+        None
+    }
+
     /// The parameter declarations of the redeclarations of `d`, by
     /// position.
     fn redecl_params(&self, d: DeclId) -> Vec<Vec<DeclId>> {
@@ -360,14 +377,40 @@ impl Cg<'_> {
                 self.add_param_attr(params, at, Attr::Flag(AttrKind::NonNull));
             }
             let av = self.fn_attr(p, K::ALIGN_VALUE).or_else(|| {
-                let t = ast.decls.get(p).ty()?;
-                let td = ast.types.typedef_decl(t)?;
+                let td = self.typedef_of(ast.decls.get(p).ty()?)?;
                 self.fn_attr(td, K::ALIGN_VALUE)
             });
             if let Some(n) = av {
                 self.add_param_attr(params, at, Attr::Align(u64::from(n.a)));
             }
         }
+    }
+
+    /// [`Self::class_b_fn_attrs`] and [`Self::class_b_params`] on the
+    /// attribute sets of a declaration or definition of `d`, and its
+    /// `!callback` (clang `SetFunctionAttributes`).
+    pub(crate) fn class_b_fn_sets(
+        &mut self,
+        f: kiln_llvm::FuncId,
+        d: DeclId,
+        sig: &Sig,
+        fa: AttrSetId,
+        ret: AttrSetId,
+        params: &mut [AttrSetId],
+    ) -> (AttrSetId, AttrSetId) {
+        let mut fv = self.m.attrs_of(fa).to_vec();
+        let mut rv = self.m.attrs_of(ret).to_vec();
+        let (nf, nr) = (fv.len(), rv.len());
+        self.class_b_fn_attrs(d, &mut fv, &mut rv);
+        let fa = if fv.len() == nf && !self.has_fn_attr(d, K::ZERO_CALL_USED_REGS) {
+            fa
+        } else {
+            self.m.attr_set(&fv)
+        };
+        let ret = if rv.len() == nr { ret } else { self.m.attr_set(&rv) };
+        self.class_b_params(d, sig, params);
+        self.callback_md(f, d);
+        (fa, ret)
     }
 
     /// The call-site-only attributes clang `EmitCall` gives a direct call
@@ -410,6 +453,22 @@ impl Cg<'_> {
         {
             fa.push(Attr::Flag(AttrKind::AlwaysInline));
         }
+    }
+
+    /// The call-site attributes of `AttributedStmt` `s`'s own
+    /// statement attributes.
+    pub(crate) fn stmt_calls_of(&self, s: kiln_ast::StmtId) -> StmtCalls {
+        let ast = self.ast;
+        let mut c = StmtCalls::default();
+        for a in ast.lists.iter::<kiln_ast::AttrId>(ast.stmts.stmt_attrs(s)) {
+            match ast.attrs.get(a).kind {
+                K::NOMERGE => c.nomerge = true,
+                K::NOINLINE => c.noinline = true,
+                K::ALWAYS_INLINE => c.always_inline = true,
+                _ => {}
+            }
+        }
+        c
     }
 
     /// The call of `d` is `notail` (clang `EmitCall`: `not_tail_called`).
@@ -456,9 +515,6 @@ impl Cg<'_> {
         let Some(n) = self.fn_attr(d, K::CALLBACK) else { return };
         let Some(l) = kiln_ast::ListId::from_raw(n.a) else { return };
         let words: Vec<u32> = self.ast.lists.get(l).to_vec();
-        if self.m.func(f).md.iter().any(|(k, _)| self.m.md_kind_name(*k) == "callback") {
-            return;
-        }
         let mut ops = Vec::with_capacity(words.len() + 1);
         for w in words {
             let v = self.m.const_int(LTy::I64, i128::from(w.cast_signed()));

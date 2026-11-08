@@ -190,7 +190,11 @@ impl Cg<'_> {
 
     /// The function attributes of an initialization function.
     /// `noinline` only at `-O0` (clang 19 and 22 alike).
-    fn init_fn_attrs(&mut self, vector_width: u64) -> kiln_llvm::AttrSetId {
+    fn init_fn_attrs(
+        &mut self,
+        vector_width: u64,
+        start: crate::class_b::StartDecl,
+    ) -> kiln_llvm::AttrSetId {
         let mut a = Vec::new();
         if !self.opts.optimize() {
             a.push(Attr::Flag(AttrKind::NoInline));
@@ -204,6 +208,7 @@ impl Cg<'_> {
         if self.is_x86() {
             a.push(Attr::string("min-legal-vector-width", &vector_width.to_string()));
         }
+        self.class_b_def_attrs(&mut a, start);
         self.m.attr_set(&a)
     }
 
@@ -240,7 +245,14 @@ impl Cg<'_> {
             self.f.fir.erase_block(rb);
             self.f.ret_block = None;
         }
-        let fa = self.init_fn_attrs(self.f.vector_width);
+        // `StartFunction`'s declaration: the variable (`d`), or none for
+        // `_GLOBAL__sub_I_*` and `__tls_init` (`d` is the TU).
+        let start = if d == self.ast.tu {
+            crate::class_b::StartDecl::None
+        } else {
+            crate::class_b::StartDecl::Var
+        };
+        let fa = self.init_fn_attrs(self.f.vector_width, start);
         self.m.func_mut(f).attrs.func = fa;
         self.nounwind.insert(f, !self.opts.exceptions);
         let fir = std::mem::replace(&mut self.f.fir, Fir::new(Vec::new()));

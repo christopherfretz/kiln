@@ -23,6 +23,7 @@ mod atomic;
 mod auto_init;
 mod builtins;
 mod checked;
+mod class_b;
 mod class;
 mod cleanup;
 mod cleanup_attr;
@@ -258,6 +259,52 @@ pub struct CodegenOptions {
     /// clang 20 that is what emits the empty `!llvm.linker.options`
     /// (spec/codegen.md §2).
     pub cxx_modules: bool,
+    /// The hardening and instrumentation flags (WP-813).
+    pub hardening: Hardening,
+}
+
+/// The hardening and instrumentation driver flags behind the class B
+/// attributes (WP-813, spec/landed/codegen/WP-813.md).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools, reason = "independent command-line switches")]
+pub struct Hardening {
+    /// `-fsplit-stack`.
+    pub split_stack: bool,
+    /// `-mspeculative-load-hardening`.
+    pub speculative_load_hardening: bool,
+    /// `-fzero-call-used-regs=<kind>`.
+    pub zero_call_used_regs: Option<&'static str>,
+    /// `-mfunction-return=thunk-extern` (x86).
+    pub fn_return_thunk_extern: bool,
+    /// `-fpatchable-function-entry=<count>[,<offset>]`.
+    pub patchable_function_entry: Option<(u32, u32)>,
+    /// `-fxray-instrument`, with its options.
+    pub xray: Option<Xray>,
+    /// `-finstrument-functions`.
+    pub instrument_functions: bool,
+    /// `-finstrument-functions-after-inlining`.
+    pub instrument_functions_after_inlining: bool,
+    /// `-finstrument-function-entry-bare`.
+    pub instrument_function_entry_bare: bool,
+    /// `-fcf-protection=branch` or `full` (x86).
+    pub cf_protection_branch: bool,
+    /// `-fcf-protection=return` or `full` (x86).
+    pub cf_protection_return: bool,
+}
+
+/// The `-fxray-instrument` options.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Xray {
+    /// `-fxray-instruction-threshold=` (default 200).
+    pub threshold: u32,
+    /// `-fxray-ignore-loops`.
+    pub ignore_loops: bool,
+}
+
+impl Default for Xray {
+    fn default() -> Self {
+        Xray { threshold: 200, ignore_loops: false }
+    }
 }
 
 /// An `-mcmodel=` code model (LLVM `CodeModel::Model`).
@@ -554,6 +601,7 @@ impl Default for CodegenOptions {
             outline_expansions: OUTLINE_EXPANSIONS_DEFAULT,
             contract_default_handler: true,
             cxx_modules: true,
+            hardening: Hardening::default(),
         }
     }
 }

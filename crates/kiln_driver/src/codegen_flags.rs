@@ -6,14 +6,22 @@
 //!    `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-f[no-]wrapv`,
 //!    `-f[no-]wrapv-pointer`, `-f[no-]strict-overflow`,
 //!    `-f[no-]delete-null-pointer-checks`, `-f[no-]function-sections`,
-//!    `-f[no-]data-sections`, `-mtune=`, `-mcmodel=`);
+//!    `-f[no-]data-sections`, `-mtune=`, `-mcmodel=`, and WP-813's
+//!    hardening and instrumentation flags: `-fcf-protection[=…]`,
+//!    `-fpatchable-function-entry=`, `-fzero-call-used-regs=`,
+//!    `-mfunction-return=`, `-m[no-]speculative-load-hardening`,
+//!    `-f[no-]split-stack`, `-finstrument-functions[-after-inlining]`,
+//!    `-finstrument-function-entry-bare`, `-f[no-]xray-instrument`,
+//!    `-fxray-instruction-threshold=`, `-fxray-ignore-loops`);
 //! 2. accepted and ignored: no observable effect in kiln
-//!    (`-f[no-]stack-clash-protection`, `-fcf-protection[=…]`,
+//!    (`-f[no-]stack-clash-protection`,
 //!    `-f[no-]common`, `-fstack-usage`, `-gz[=…]`, the defaults `-fno-trapv`,
 //!    `-fno-short-enums` and `-m64`, and `-pipe`);
 //! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
 //!    `-fshort-enums`, `-fsanitize*`, `-fno-sanitize*`, coverage and
-//!    profiling). The floating-point flags are `crate::fp_flags`'s.
+//!    profiling, the other `-fxray-*` options and
+//!    `-finstrument-functions-exclude-*`). The floating-point flags are
+//!    `crate::fp_flags`'s.
 //!
 //! `-Wp,<args>` and `-Xpreprocessor <arg>` are spliced into the command
 //! line before parsing ([`splice_preprocessor_args`]).
@@ -53,13 +61,61 @@ pub struct CodegenFlags {
     pub mtune: Option<String>,
     /// The last `-mcmodel=<model>`.
     pub code_model: Option<CodeModel>,
+    /// The last `-fcf-protection[=<kind>]` (`-fcf-protection` is `full`).
+    pub cf_protection: Option<&'static str>,
+    /// The last `-fpatchable-function-entry=<count>[,<offset>]`.
+    pub patchable_function_entry: Option<(u32, u32)>,
+    /// The last `-fzero-call-used-regs=<kind>`.
+    pub zero_call_used_regs: Option<&'static str>,
+    /// The last `-mfunction-return=<keep|thunk-extern>`.
+    pub function_return: Option<&'static str>,
+    /// The last of `-mspeculative-load-hardening` /
+    /// `-mno-speculative-load-hardening`.
+    pub speculative_load_hardening: bool,
+    /// The last of `-fsplit-stack` / `-fno-split-stack`.
+    pub split_stack: bool,
+    /// `-finstrument-functions`.
+    pub instrument_functions: bool,
+    /// `-finstrument-functions-after-inlining`.
+    pub instrument_functions_after_inlining: bool,
+    /// `-finstrument-function-entry-bare`.
+    pub instrument_function_entry_bare: bool,
+    /// The last of `-fxray-instrument` / `-fno-xray-instrument`.
+    pub xray_instrument: bool,
+    /// The last `-fxray-instruction-threshold=<n>` (as written, value).
+    pub xray_threshold: Option<(String, Option<u32>)>,
+    /// The other `-f[no-]xray-*` options, as written: with
+    /// `-fxray-instrument`, not supported by kiln.
+    pub xray_other: Vec<String>,
+    /// Every XRay option but `-f[no-]xray-instrument`, as written, in
+    /// command-line order ([`Self::unused_xray_args`]).
+    pub xray_written: Vec<String>,
+    /// A `-mfunction-return=` was given (even with an invalid value).
+    pub function_return_given: bool,
+    /// The last `-mfunction-return=`, `-fzero-call-used-regs=` and
+    /// `-fcf-protection=` when its value is invalid (as written, value).
+    pub invalid_values: [Option<(String, String)>; 3],
+    /// `-fxray-ignore-loops` (the last of it and `-fno-xray-ignore-loops`).
+    pub xray_ignore_loops: bool,
 }
+
+/// clang's `-fzero-call-used-regs=` values.
+const ZERO_CALL_KINDS: &[&str] = &[
+    "skip",
+    "used-gpr-arg",
+    "used-gpr",
+    "used-arg",
+    "used",
+    "all-gpr-arg",
+    "all-gpr",
+    "all-arg",
+    "all",
+];
 
 /// Flags accepted and ignored (class 2), exactly as written.
 const IGNORED: &[&str] = &[
     "-fstack-clash-protection",
     "-fno-stack-clash-protection",
-    "-fcf-protection",
     "-fcommon",
     "-fno-common",
     "-fstack-usage",
@@ -102,6 +158,11 @@ impl CodegenFlags {
     /// whether it is accepted.
     pub fn parse_arg(&mut self, arg: &str) -> Option<Result<(), ArgError>> {
         let set = |slot: &mut Option<bool>, v: bool| *slot = Some(v);
+        if (arg.starts_with("-fxray-") || arg.starts_with("-fno-xray-"))
+            && !matches!(arg, "-fxray-instrument" | "-fno-xray-instrument")
+        {
+            self.xray_written.push(arg.to_owned());
+        }
         match arg {
             "-fstack-protector" => self.stack_protector = Some(StackProtector::On),
             "-fstack-protector-strong" => self.stack_protector = Some(StackProtector::Strong),
@@ -127,7 +188,31 @@ impl CodegenFlags {
             "-fno-function-sections" => self.function_sections = false,
             "-fdata-sections" => self.data_sections = true,
             "-fno-data-sections" => self.data_sections = false,
+            "-fcf-protection" => {
+                self.cf_protection = Some("full");
+                self.invalid_values[2] = None;
+            }
+            "-mspeculative-load-hardening" => self.speculative_load_hardening = true,
+            "-mno-speculative-load-hardening" => self.speculative_load_hardening = false,
+            "-fsplit-stack" => self.split_stack = true,
+            "-fno-split-stack" => self.split_stack = false,
+            "-finstrument-functions" => self.instrument_functions = true,
+            "-finstrument-functions-after-inlining" => {
+                self.instrument_functions_after_inlining = true;
+            }
+            "-finstrument-function-entry-bare" => self.instrument_function_entry_bare = true,
+            "-fxray-instrument" => self.xray_instrument = true,
+            "-fno-xray-instrument" => self.xray_instrument = false,
+            "-fxray-ignore-loops" => self.xray_ignore_loops = true,
+            "-fno-xray-ignore-loops" => self.xray_ignore_loops = false,
             _ if IGNORED.contains(&arg) => {}
+            _ if arg.starts_with("-fxray-") || arg.starts_with("-fno-xray-") => {
+                if !arg.contains('=') {
+                    self.xray_other.push(arg.to_owned());
+                    return Some(Ok(()));
+                }
+                return self.valued(arg);
+            }
             _ if REJECTED.contains(&arg)
                 || REJECTED_PREFIXES.iter().any(|p| arg.starts_with(p)) =>
             {
@@ -142,6 +227,11 @@ impl CodegenFlags {
     fn valued(&mut self, arg: &str) -> Option<Result<(), ArgError>> {
         let (flag, v) = arg.split_once('=')?;
         let unsupported = || Some(Err(ArgError::UnsupportedValue(format!("{flag}="), v.into())));
+        // `-cc1`'s "invalid value" for the last one ([`Self::invocation_errors`]).
+        let invalid = |me: &mut Self, slot: usize| {
+            me.invalid_values[slot] = Some((arg.to_owned(), v.to_owned()));
+            Some(Ok(()))
+        };
         match flag {
             "-mtune" => {
                 if v.is_empty() {
@@ -154,10 +244,51 @@ impl CodegenFlags {
                 None => return unsupported(),
             },
             // clang's values; an unknown one is its "invalid value".
-            "-fcf-protection" => {
-                if !matches!(v, "full" | "branch" | "return" | "none") {
-                    return Some(Err(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())));
+            "-mfunction-return" => {
+                self.function_return_given = true;
+                self.invalid_values[0] = None;
+                match ["keep", "thunk-extern"].into_iter().find(|k| *k == v) {
+                    Some(k) => self.function_return = Some(k),
+                    None => return invalid(self, 0),
                 }
+            }
+            "-fzero-call-used-regs" => {
+                self.invalid_values[1] = None;
+                match ZERO_CALL_KINDS.iter().find(|k| **k == v) {
+                    Some(k) => self.zero_call_used_regs = Some(k),
+                    None => return invalid(self, 1),
+                }
+            }
+            "-fcf-protection" => {
+                self.invalid_values[2] = None;
+                match ["full", "branch", "return", "none"].into_iter().find(|k| *k == v) {
+                    Some(k) => self.cf_protection = Some(k),
+                    None => return invalid(self, 2),
+                }
+            }
+            // clang `RenderFunctionPatchableEntry`... (`Clang.cpp`):
+            // `<count>[,<offset>]`, the offset at most the count.
+            "-fpatchable-function-entry" => {
+                let mut it = v.splitn(2, ',');
+                let n = it.next().and_then(|n| n.parse::<u32>().ok());
+                let o = it.next().map_or(Some(0), |o| o.parse::<u32>().ok());
+                match (n, o) {
+                    (Some(n), Some(o)) if o <= n => self.patchable_function_entry = Some((n, o)),
+                    (Some(_), Some(_)) => return Some(Err(ArgError::PatchableEntryOffset)),
+                    _ => {
+                        return Some(Err(ArgError::InvalidArgumentToOption(
+                            v.to_owned(),
+                            "fpatchable-function-entry=".to_owned(),
+                        )));
+                    }
+                }
+            }
+            // Checked with `-fxray-instrument` only ([`Self::xray_errors`]).
+            "-fxray-instruction-threshold" => {
+                self.xray_threshold = Some((arg.to_owned(), v.parse::<u32>().ok()));
+            }
+            _ if flag.starts_with("-fxray-") || flag.starts_with("-fno-xray-") => {
+                self.xray_other.push(arg.to_owned());
             }
             "-gz" => {
                 if !matches!(v, "none" | "zlib" | "zstd") {
@@ -208,6 +339,135 @@ impl CodegenFlags {
     /// `-fno-delete-null-pointer-checks` is in effect.
     pub fn null_pointer_is_valid(&self) -> bool {
         self.delete_null_pointer_checks == Some(false)
+    }
+
+    /// The hardening and instrumentation options for a target (`x86`:
+    /// x86_64, else AArch64; the driver reports the flags the target
+    /// rejects, [`Self::target_errors`]).
+    pub fn hardening(&self, x86: bool) -> kiln_codegen::Hardening {
+        let cf = self.cf_protection.unwrap_or("none");
+        kiln_codegen::Hardening {
+            split_stack: self.split_stack,
+            speculative_load_hardening: self.speculative_load_hardening,
+            zero_call_used_regs: self.zero_call_used_regs,
+            fn_return_thunk_extern: x86 && self.function_return == Some("thunk-extern"),
+            patchable_function_entry: self.patchable_function_entry,
+            xray: self.xray_instrument.then(|| kiln_codegen::Xray {
+                threshold: self.xray_threshold.as_ref().and_then(|t| t.1).unwrap_or(200),
+                ignore_loops: self.xray_ignore_loops,
+            }),
+            instrument_functions: self.instrument_functions,
+            instrument_functions_after_inlining: self.instrument_functions_after_inlining,
+            instrument_function_entry_bare: self.instrument_function_entry_bare,
+            cf_protection_branch: x86 && matches!(cf, "full" | "branch"),
+            cf_protection_return: x86 && matches!(cf, "full" | "return"),
+        }
+    }
+
+    /// `nocf_check` is kept: `-fcf-protection=branch` or `full` on x86
+    /// (clang `CodeGenOpts.CFProtectionBranch`).
+    pub fn cf_protection_branch(&self, x86: bool) -> bool {
+        x86 && matches!(self.cf_protection, Some("full" | "branch"))
+    }
+
+    /// The errors of the `-cc1` command line, in clang 19's
+    /// `CompilerInvocation` order: the invalid values of the marshalled
+    /// `-mfunction-return=` and `-fzero-call-used-regs=`, then of
+    /// `-fcf-protection=`, then `ParseCodeGenArgs`'s own
+    /// `-mfunction-return=` check (off x86 "not allowed with", on x86
+    /// the invalid value again). The job then stops with no error count.
+    pub fn invocation_errors(&self, x86: bool, triple: &str) -> Vec<TargetError> {
+        let invalid = |(a, x): &(String, String)| TargetError::InvalidValue(a.clone(), x.clone());
+        let mut v: Vec<TargetError> = self.invalid_values.iter().flatten().map(invalid).collect();
+        if self.function_return_given && !x86 {
+            v.push(TargetError::NotAllowedWith("-mfunction-return=", triple.to_owned()));
+        } else if let Some(e) = &self.invalid_values[0] {
+            v.push(invalid(e));
+        }
+        v
+    }
+
+    /// The code generator's errors for the flags the target rejects:
+    /// `-fcf-protection` off x86 (`TargetInfo::
+    /// checkCFProtection{Return,Branch}Supported`), in clang's order.
+    pub fn target_errors(&self, x86: bool) -> Vec<TargetError> {
+        let mut v = Vec::new();
+        let cf = self.cf_protection.unwrap_or("none");
+        if !x86 && matches!(cf, "full" | "return") {
+            v.push(TargetError::NotValidOnTarget("cf-protection=return"));
+        }
+        if !x86 && matches!(cf, "full" | "branch") {
+            v.push(TargetError::NotValidOnTarget("cf-protection=branch"));
+        }
+        v
+    }
+
+    /// The driver's errors for the XRay options (clang `XRayArgs`): with
+    /// `-fxray-instrument`, an invalid instruction threshold, the
+    /// options kiln does not implement and `-fpatchable-function-entry=`.
+    pub fn xray_errors(&self) -> Vec<kiln_diag::Diag> {
+        use kiln_diag::{Diag, DiagId};
+        use kiln_source::Span;
+        let mut v = Vec::new();
+        if !self.xray_instrument {
+            return v;
+        }
+        if let Some((a, None)) = &self.xray_threshold {
+            let x = a.split_once('=').map_or("", |p| p.1);
+            v.push(Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(a).arg(x));
+        }
+        for a in &self.xray_other {
+            v.push(Diag::new(DiagId::drv_unsupported_flag, Span::INVALID).arg(a));
+        }
+        if self.patchable_function_entry.is_some() {
+            v.push(
+                Diag::new(DiagId::drv_argument_not_allowed_with, Span::INVALID)
+                    .arg("-fxray-instrument")
+                    .arg("-fpatchable-function-entry="),
+            );
+        }
+        v
+    }
+
+    /// The XRay options given without `-fxray-instrument`, as written
+    /// (clang: "argument unused during compilation").
+    pub fn unused_xray_args(&self) -> Vec<String> {
+        if self.xray_instrument {
+            return Vec::new();
+        }
+        self.xray_written.clone()
+    }
+}
+
+/// A `-cc1` error for a flag the target rejects
+/// ([`CodegenFlags::target_errors`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TargetError {
+    /// "invalid value '{1}' in '{0}'".
+    InvalidValue(String, String),
+    /// "invalid argument '{0}' not allowed with '{1}'".
+    NotAllowedWith(&'static str, String),
+    /// "option '{0}' cannot be specified on this target".
+    NotValidOnTarget(&'static str),
+}
+
+impl TargetError {
+    /// Reports the error.
+    pub fn emit(&self, engine: &kiln_diag::DiagEngine<'_>) {
+        use kiln_diag::{Diag, DiagId};
+        use kiln_source::Span;
+        let d = match self {
+            TargetError::InvalidValue(a, v) => {
+                Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(a).arg(v)
+            }
+            TargetError::NotAllowedWith(a, t) => {
+                Diag::new(DiagId::drv_argument_not_allowed_with, Span::INVALID).arg(*a).arg(t)
+            }
+            TargetError::NotValidOnTarget(o) => {
+                Diag::new(DiagId::drv_opt_not_valid_on_target, Span::INVALID).arg(*o)
+            }
+        };
+        d.emit(engine);
     }
 }
 

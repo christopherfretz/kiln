@@ -441,6 +441,7 @@ impl Cg<'_> {
             noreturn,
             inline: DefInline::NoInline,
             extra,
+            start: decl.map_or(crate::class_b::StartDecl::None, crate::class_b::StartDecl::Outlined),
         });
         self.m.func_mut(f).attrs.func = fa;
         self.nounwind.insert(f, nounwind);
