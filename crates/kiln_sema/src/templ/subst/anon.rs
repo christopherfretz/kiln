@@ -201,7 +201,7 @@ impl Substituter<'_, '_, '_> {
     /// substitutes (its operands name the template's parameters) or
     /// never clones.
     fn merges_unsubstituted(n: &AttrNode) -> bool {
-        !matches!(
+        let substituted = matches!(
             n.kind,
             AttrKind::ALIGNED
                 | AttrKind::ENABLE_IF
@@ -209,8 +209,10 @@ impl Substituter<'_, '_, '_> {
                 | AttrKind::VISIBILITY
                 | AttrKind::TYPE_VISIBILITY
                 | AttrKind::MODE
-        ) && !(n.flags & AttrNode::PRIORITY_DEPENDENT != 0
-            && matches!(n.kind, AttrKind::CONSTRUCTOR | AttrKind::DESTRUCTOR))
+        );
+        let dependent_priority = n.flags & AttrNode::PRIORITY_DEPENDENT != 0
+            && matches!(n.kind, AttrKind::CONSTRUCTOR | AttrKind::DESTRUCTOR);
+        !substituted && !dependent_priority
     }
 
     /// The `alignas` attributes of pattern variable `def` on its

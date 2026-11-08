@@ -607,12 +607,15 @@ impl Sema<'_, '_> {
                 return None;
             }
             let t = self.ast.decls.get(d).ty()?;
-            self.ast.types.proto_of(self.ast.types.canonical(t).ty()).map(|p| p.ret())
+            self.ast
+                .types
+                .proto_of(self.ast.types.canonical(t).ty())
+                .map(kiln_ast::types::FuncProto::ret)
         };
         // `None`: no candidate seen; `Some(None)`: they differ.
         let pick = |cands: &mut dyn Iterator<Item = &super::Candidate>| {
             let mut r: Option<Option<QualType>> = None;
-            for t in cands.filter_map(|c| ret(c)) {
+            for t in cands.filter_map(&ret) {
                 let t = self.ast.types.canonical(t);
                 r = match r {
                     None => Some(Some(t)),

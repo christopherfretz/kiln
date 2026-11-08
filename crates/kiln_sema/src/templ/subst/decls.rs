@@ -439,7 +439,11 @@ impl Substituter<'_, '_, '_> {
             let peeled = self.peel_initializer(init);
             let at = self.sema.begin_loc(peeled);
             let e = if top == Some(peeled) && ty.is_some_and(|t| self.sema.ast.types.is_void(t)) {
-                self.sema.builder().opaque_value_of(QualType::VOID, kiln_ast::expr::ValueCategory::PRValue, at)
+                self.sema.builder().opaque_value_of(
+                    QualType::VOID,
+                    kiln_ast::expr::ValueCategory::PRValue,
+                    at,
+                )
             } else {
                 self.sema.recover_err(&[], at)
             };

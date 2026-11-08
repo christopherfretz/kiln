@@ -1042,7 +1042,12 @@ impl Sema<'_, '_> {
     /// `again` exempts it from deduplication, for the report clang
     /// repeats when the initializer it was deduced from is then converted
     /// (`auto a = g.f;`); reported at `at` ([`Self::paren_loc_of`]).
-    pub(crate) fn diagnose_member_set_not_called_at(&mut self, x: ExprId, again: bool, at: Loc) -> bool {
+    pub(crate) fn diagnose_member_set_not_called_at(
+        &mut self,
+        x: ExprId,
+        again: bool,
+        at: Loc,
+    ) -> bool {
         let decls = self.member_overload_decls(x).to_vec();
         let mut ret: Option<QualType> = None;
         let mut no_args = true;
@@ -1072,8 +1077,7 @@ impl Sema<'_, '_> {
             self.ast.exprs.get(m.base).is_type_dependent() || self.is_dependent_type(m.obj_ty)
         });
         let no_args = no_args && ret.is_some() && !dependent && !self.inst.stack.is_sfinae();
-        let msg =
-            self.diag(DiagId::sema_bound_member_not_called, at).arg(u8::from(no_args));
+        let msg = self.diag(DiagId::sema_bound_member_not_called, at).arg(u8::from(no_args));
         let msg = if again { msg.allow_duplicate() } else { msg };
         let notes: Vec<Diag> = decls
             .iter()
