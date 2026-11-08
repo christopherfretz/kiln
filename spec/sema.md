@@ -4916,7 +4916,7 @@ for them.
     placeholder with automatic storage; a variable outside a function,
     `extern` or a handler's exception variable; an init-capture's
     variable (referenced by its capture; clang reports an unused one only
-    as `-Wunused-lambda-capture`, which kiln does not have yet; it can
+    as `-Wunused-lambda-capture`, spec/landed/sema/WP-865.md; it can
     still be `-Wunused-but-set-variable`; WP-703,
     `expr.prim.lambda.capture/init-capture-not-unused-variable.cpp`);
     one of dependent or incomplete type; one whose (array element) class has a non-trivial
