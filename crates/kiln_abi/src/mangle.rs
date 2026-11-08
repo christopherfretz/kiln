@@ -12,7 +12,7 @@ use kiln_ast::Ast;
 use kiln_ast::RawId;
 use kiln_ast::attr::AttrKind;
 use kiln_ast::consts::{ByteImage, ConstValue, Member, PrintEnv, PtrBase, Scalar, Shape};
-use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage};
+use kiln_ast::decl::{DeclFlags, DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage};
 use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, ExprId, QualType, TemplateNameId};
 use kiln_ast::names::{DeclNameView, OverloadedOperator};
 use kiln_ast::types::{
@@ -2140,6 +2140,23 @@ impl<'a, 'b> Mangler<'a, 'b> {
             return;
         }
         self.out.push_str("Ul");
+        // The explicit template parameters (not those invented for
+        // `auto` parameters) and the template-head's requires-clause
+        // (clang `mangleLambdaSig`, cxx-abi issues 31 and 24).
+        if let Some(info) =
+            data.call_op.and_then(|f| ast.described_template(f)).and_then(|t| ast.template_info(t))
+        {
+            let list = *ast.templates.param_list(info.params);
+            let params: Vec<DeclId> = ast.lists.iter::<DeclId>(list.params).collect();
+            for p in params {
+                if !ast.decls.get(p).has(DeclFlags::IMPLICIT) {
+                    self.type_or_template_param_decl(p);
+                }
+            }
+            if let Some(r) = list.requires {
+                self.requires_clause(r, false);
+            }
+        }
         // A bare function type (clang `mangleLambdaSig`): one function
         // type deeper for the `fp`/`fL` nesting.
         let saved = self.fn_depth;

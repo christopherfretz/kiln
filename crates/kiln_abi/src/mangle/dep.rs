@@ -300,9 +300,15 @@ impl Mangler<'_, '_> {
             // A reflection is a literal (`L <info-type> <reflection> E`).
             | ExprKind::CXXReflectExpr => true,
             // An enumerator is its value's literal.
-            ExprKind::DeclRefExpr => {
-                ast.decls.get(ast.exprs.decl(e)).kind() == DeclKind::EnumConstant
-            }
+            ExprKind::DeclRefExpr => matches!(
+                ast.decls.get(ast.exprs.decl(e)).kind(),
+                DeclKind::EnumConstant
+                    | DeclKind::Var
+                    | DeclKind::VarTemplateSpecialization
+                    | DeclKind::Function
+                    | DeclKind::CXXMethod
+                    | DeclKind::TemplateParamObject
+            ),
             // A template parameter reference is wrapped (`XT_E`).
             _ => false,
         }
@@ -337,6 +343,18 @@ impl Mangler<'_, '_> {
                 };
                 self.out.push_str("L_Z");
                 self.symbol(name);
+                self.out.push('E');
+            }
+            // Any other named entity, a variable, function or static data
+            // member: `L <mangled-name> E` (clang `mangleDeclRefExpr`'s
+            // external name; the substitution table is shared).
+            DeclKind::Var
+            | DeclKind::VarTemplateSpecialization
+            | DeclKind::Function
+            | DeclKind::CXXMethod
+            | DeclKind::TemplateParamObject => {
+                self.out.push('L');
+                self.entity(d);
                 self.out.push('E');
             }
             _ => return false,
@@ -739,6 +757,17 @@ impl Mangler<'_, '_> {
     /// simple id, `None` when unsupported.
     fn unresolved_type_or_simple_id(&mut self, ty: QualType, recursive: bool) -> Option<bool> {
         let ast = self.ast;
+        // An alias template specialization keeps its name as written
+        // (clang mangles the qualifier's sugared type): `_And<T>::value`
+        // is `sr4_AndIT_E5value`, not its expansion (WP-818).
+        if let Some((t, args)) = self.written_alias(ty) {
+            let DeclNameView::Identifier(s) = ast.names.view(ast.decls.get(t).name()) else {
+                return None;
+            };
+            self.symbol(s);
+            self.template_args(args);
+            return Some(false);
+        }
         let q = ast.types.canonical(ty);
         match ast.types.canonical_view(q) {
             TypeView::TemplateTypeParm(_)
@@ -800,6 +829,32 @@ impl Mangler<'_, '_> {
                 return None;
             }
             q = n;
+        }
+    }
+}
+
+impl Mangler<'_, '_> {
+    /// The alias template and written arguments of qualifier type `ty`
+    /// when its outermost template specialization, under elaboration,
+    /// parentheses and typedefs, names an alias template.
+    fn written_alias(&self, ty: QualType) -> Option<(DeclId, ArgListId)> {
+        let types = &self.ast.types;
+        let mut q = ty;
+        loop {
+            match types.view(q.ty()) {
+                TypeView::TemplateSpecialization { name, args, alias: true, .. } => {
+                    let n = types.canonical_template_name(name);
+                    let TemplateName::Template(t) = types.template_name_view(n) else {
+                        return None;
+                    };
+                    return Some((t, args));
+                }
+                TypeView::Elaborated { .. }
+                | TypeView::Paren(_)
+                | TypeView::Typedef { .. }
+                | TypeView::Using { .. } => q = types.desugar_once(q),
+                _ => return None,
+            }
         }
     }
 }
