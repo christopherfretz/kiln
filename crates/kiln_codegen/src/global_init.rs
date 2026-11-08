@@ -837,7 +837,7 @@ impl Cg<'_> {
         }
         self.emit_tls_trailer()?;
         if self.gi.ctors.is_empty() {
-            return Ok(());
+            return self.emit_used_lists();
         }
         let mut ctors = std::mem::take(&mut self.gi.ctors);
         ctors.sort_by_key(|&(lex, _, _, _)| lex);
@@ -855,7 +855,12 @@ impl Cg<'_> {
             }
         }
         self.appending_global("llvm.global_ctors", sty, &elems, None)?;
-        // clang `emitLLVMUsed`: each list once, without duplicates.
+        self.emit_used_lists()
+    }
+
+    /// clang `emitLLVMUsed`: `@llvm.used` and `@llvm.compiler.used`, each
+    /// once and without duplicates, after `@llvm.global_ctors`.
+    fn emit_used_lists(&mut self) -> R<()> {
         for (list, name) in [(false, "llvm.used"), (true, "llvm.compiler.used")] {
             let vals =
                 std::mem::take(if list { &mut self.gi.compiler_used } else { &mut self.gi.used });
