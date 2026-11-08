@@ -227,6 +227,11 @@ impl Sema<'_, '_> {
             return;
         }
         let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        // A dependent entity type is initialized at instantiation (clang's
+        // dependent `InitializationSequence` checks nothing).
+        if self.ast.types.is_dependent(ty) {
+            return;
+        }
         let cx = Cx::new(Lk::Extended, Some(v));
         self.check_entity(cx, init, ty, 0);
     }
@@ -234,7 +239,7 @@ impl Sema<'_, '_> {
     /// The lifetime diagnostics of `return c;` in a function returning
     /// `ret` (`c` is the converted operand).
     pub(crate) fn check_return_lifetime(&mut self, c: ExprId, ret: QualType) {
-        if self.expr_is_type_dependent(c) {
+        if self.expr_is_type_dependent(c) || self.ast.types.is_dependent(ret) {
             return;
         }
         self.check_entity(Cx::new(Lk::Return, None), c, ret, 0);
@@ -246,6 +251,9 @@ impl Sema<'_, '_> {
             return;
         }
         let ty = self.ast.decls.get(field).ty().unwrap_or(QualType::ERROR);
+        if self.ast.types.is_dependent(ty) {
+            return;
+        }
         self.check_entity(Cx::new(Lk::MemInit, Some(field)), init, ty, 0);
     }
 
@@ -276,6 +284,11 @@ impl Sema<'_, '_> {
     /// one scalar or same-type initializer initialize the entity itself.
     fn check_entity(&mut self, cx: Cx, init: ExprId, ty: QualType, depth: u32) {
         let e = self.skip_full_expr(init);
+        // An invalid entity or initializer (clang marks the declaration
+        // invalid and never builds the initialization) is not checked.
+        if self.ast.types.is_error(ty) || self.ast.types.is_error(self.ast.exprs.get(e).ty()) {
+            return;
+        }
         if self.ast.exprs.get(e).kind() != ExprKind::InitListExpr || depth > MAX_DEPTH {
             self.check_leaf(cx, init, ty);
             return;

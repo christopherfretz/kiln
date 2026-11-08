@@ -1738,8 +1738,11 @@ variable, after lifetime extension):
   converted right operand) when the left operand is a gsl Pointer
   (`LK_Assignment`).
 
-Type-dependent initializers are skipped; templates are checked again at
-instantiation. A glvalue initializer is walked as clang's
+Type-dependent initializers, and entities of dependent type (a `T`
+variable or member, a return in a template's generic or
+deduced-return-type lambda, whose return type is still dependent) are
+skipped, as clang's dependent `InitializationSequence` checks nothing;
+templates are checked again at instantiation. A glvalue initializer is walked as clang's
 `visitLocalsRetainedByReferenceBinding`, a prvalue as
 `visitLocalsRetainedByInitializer`:
 
@@ -1797,8 +1800,11 @@ or by being named by such a typedef of a `std` container (recorded when
 the typedef is declared, and at instantiation only for a `typename
 T::iterator`-style dependent pattern). The name rules apply to class
 definitions and patterns, not to partial or explicit specializations
-(`std::vector<bool>` is neither); an implicit instantiation takes its
-pattern's kind.
+(`std::vector<bool>` is neither); a specialization itself (its own
+`spec_info`) never matches a name rule. An implicit instantiation takes
+the kind of what it was instantiated from: the primary template's
+pattern, or, from a partial specialization, only that partial
+specialization's own attribute.
 
 Each local reached is judged by the entity (clang's `TemporaryVisitor`),
 located at the first variable, default member initializer or capture on
