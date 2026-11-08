@@ -794,6 +794,9 @@ pub struct Sema<'a, 'sm> {
     /// Set by the access check when friendship came only from such a
     /// befriended specialization.
     pub(crate) speculative_friend: std::cell::Cell<bool>,
+    /// Namespace `std::meta` (primary context) once found: the associated
+    /// namespace of `std::meta::info` for ADL (`overload/adl.rs`).
+    pub(crate) std_meta_ns: std::cell::Cell<Option<DeclId>>,
     /// Access errors reported, as (member, location, innermost context),
     /// so a replayed check does not repeat one its instantiation redid.
     pub(crate) access_failed: kiln_source::fx::FxHashSet<(DeclId, Loc, DeclId)>,
@@ -1312,6 +1315,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cast_ignores_base_access: false,
             dependent_access: kiln_source::fx::FxHashMap::default(),
             speculative_friend: std::cell::Cell::new(false),
+            std_meta_ns: std::cell::Cell::new(None),
             access_failed: kiln_source::fx::FxHashSet::default(),
             replaying_access: false,
             init_entity: None,

@@ -9,6 +9,7 @@ use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
 use crate::Sema;
+use crate::lookup::LookupKind;
 
 /// The associated namespaces and classes of a call's arguments
 /// ([basic.lookup.argdep]/3), each a primary context / first declaration,
@@ -187,8 +188,49 @@ impl Sema<'_, '_> {
                 }
                 self.assoc_entity_ns(d, out);
             }
+            // [basic.lookup.argdep]/3.1 (P2996R13): the associated set
+            // of std::meta::info is the enumeration std::meta::operators,
+            // so std::meta is its associated namespace and an
+            // unqualified `type_of(r)` finds std::meta::type_of.
+            TypeView::Builtin(_) if self.is_meta_info(t) => self.assoc_meta_info(out),
             _ => {}
         }
+    }
+
+    /// [`Self::assoc_type`] of `std::meta::info`: `std::meta::operators`
+    /// and namespace `std::meta`, once `<meta>` declared them.
+    fn assoc_meta_info(&self, out: &mut AssocSet) {
+        let ns = match self.std_meta_ns.get() {
+            Some(ns) => ns,
+            None => {
+                let std = self.intern("std");
+                let found = self.lookup_qualified(self.ast.tu, std, LookupKind::Nested);
+                let Some(std) =
+                    found.decls.iter().copied().find(|&d| self.kind_of(d) == DeclKind::Namespace)
+                else {
+                    return;
+                };
+                let meta = self.intern("meta");
+                let found = self.lookup_qualified(std, meta, LookupKind::Nested);
+                let Some(ns) =
+                    found.decls.iter().copied().find(|&d| self.kind_of(d) == DeclKind::Namespace)
+                else {
+                    return;
+                };
+                let ns = self.ast.primary_context(ns);
+                self.std_meta_ns.set(Some(ns));
+                ns
+            }
+        };
+        let operators = self.intern("operators");
+        let found = self.lookup_qualified(ns, operators, LookupKind::Ordinary);
+        if let Some(e) = found.decls.iter().copied().find(|&d| self.kind_of(d) == DeclKind::Enum) {
+            let f = self.ast.first(e);
+            if !out.enums.contains(&f) {
+                out.enums.push(f);
+            }
+        }
+        self.assoc_namespace(ns, out);
     }
 
     /// The associated entities of argument `e`; an overload-set argument

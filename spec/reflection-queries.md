@@ -53,7 +53,16 @@ declarations are in `tests/support/kiln_meta_queries.h`.
   GCC 16.1 answers; before the definition it is `const char[]`.
   `size_of` measures the same type. An answer that is still an array of
   unknown bound raises `run.impure` (§2), since a later declaration can
-  change it; a complete one cannot (WP-795).
+  change it; a complete one cannot (WP-795). A static data member of a
+  class template specialization still of unknown bound has its
+  definition instantiated by `type_of` first ([temp.inst]/4), so
+  `template<class T> T C<T>::v[] = {1, 2, 3};` gives
+  `type_of(^^C<int>::v) == ^^int[3]`, as GCC 16.1 answers; before the
+  out-of-class definition is seen it stays `int[]`
+  (`meta.reflection.queries/type-of-static-member-unknown-bound.cpp`;
+  WP-796 via WP-879). A variable template specialization of unknown
+  bound is not completed yet (nor is `sizeof` of it:
+  `temp.inst/p4-var-template-unknown-bound.cpp`, xfail).
 - **`return_type_of(r)`** gives the declared return type of a function or
   function type, canonical like `type_of`.
 - **`has_ellipsis_parameter`** (P3096) is the row `is_vararg_function`,
