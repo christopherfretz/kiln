@@ -373,6 +373,14 @@ impl Sema<'_, '_> {
         self.recover(ty, &flat, l.lbrace)
     }
 
+    /// An initializer-clause `e` of a braced-init-list as parsed: clang's
+    /// `ActOnInitList` checks each non-overload placeholder at once, so a
+    /// bound member function element is recovered by calling it
+    /// ([expr.ref]/7.3.2, spec/sema.md §1.2) before the list is used.
+    pub fn act_on_init_clause(&mut self, e: ExprId) -> ExprId {
+        self.recover_bound_member(e)
+    }
+
     /// The C++ checks on the designators of a braced-init-list as
     /// written (clang `ActOnInitList`): `-Wc99-designator` for nested
     /// designators, array designators and a mix of designated and

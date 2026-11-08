@@ -166,7 +166,7 @@ Where clang 22's output differs and kiln has not followed it yet, the
 test pins clang 19 with `requires: clang<22` and the comment `WP-355
 residual` (docs/status/wp-184-oracle-switch.md).
 
-### 1.2 Error recovery (WP-826)
+### 1.2 Error recovery (WP-826, WP-888)
 
 After an error, kiln bounds its work the way clang 19 does, so a
 translation unit that fails costs about what it costs clang:
@@ -185,6 +185,57 @@ translation unit that fails costs about what it costs clang:
   an erroneous expression, and a statement built over it keeps its
   sub-statements, which are still diagnosed as in clang
   (spec/sema-templates.md §5.5).
+- **A failed call keeps its variable** (WP-849). clang builds a
+  `RecoveryExpr` for a call that fails overload resolution (no viable,
+  ambiguous or deleted best function; `FinishOverloadedCallExpr`, also
+  for a one-candidate set found by unqualified lookup) and for a member
+  function call whose arguments do not convert
+  (`BuildCallToMemberFunction`), never under SFINAE. Such a failure
+  records `Sema::call_recovery` (`note_call_recovery`: the
+  instantiation depth and the recovery's type, clang's
+  `chooseRecoveryType`: the best candidate's return type, else the one
+  return type of the viable candidates, else of all of them, else
+  type-dependent). A variable instantiated with an initializer that
+  failed that way, at that depth, stays valid (clang's
+  `InstantiateVariableInitializer` gets a usable initializer): its
+  initializer is erroneous, and later uses are checked with its declared
+  type. A placeholder type is still invalid
+  (`DeduceVariableDeclarationType` over an initializer that contains
+  errors), and so is a variable whose failed call clang does not
+  recover (a qualified call of a single function, an operator). When the
+  failed call is the whole initializer and the recovery's type is `void`,
+  the variable is initialized from a `void` prvalue, so clang's "cannot
+  initialize a variable of type 'int' with an rvalue of type 'void'"
+  follows (`templ/subst/decls.rs` `var_init`, the Substituter's
+  `recovered_call`). Other typed recoveries (a class-type variable from
+  an `int` recovery, a recovery nested in an operator) stay erroneous
+  and silent. `temp.inst/failed-call-initializer-keeps-variable.cpp`.
+- **A failed block-scope typedef is `int`** (WP-848). clang's
+  `InstantiateTypedefNameDecl` declares a typedef or alias-declaration
+  whose type fails to substitute as an invalid `int` typedef. At block
+  scope kiln does the same (`typedef_decl_in`), so the declaration
+  statement stays valid and uses of the name are checked with `int`
+  ("no viable conversion from 'X' to 'bad' (aka 'int')"). A member
+  typedef keeps the error type (its specialization is invalid and its
+  uses are silent, spec/sema-templates.md §5.5).
+  `dcl.typedef/failed-local-typedef-recovers-as-int.cpp`.
+- **Recovery by call** (WP-832). clang's `tryToRecoverWithCall`: a
+  bound member function or an overload set of non-static member
+  functions used where a value is needed ("reference to non-static
+  member function must be called", with the hint "did you mean to call
+  it with no arguments?" exactly when the zero-argument call works) is
+  replaced by that call. kiln recovers the same way
+  (`class/member_expr.rs` `recover_not_called`) where clang runs
+  `CheckPlaceholderExpr`: the operands of binary, unary (not `&`) and
+  conditional operators, a cast's operand, a member access's object, a
+  braced-init-list element (at parse, `act_on_init_clause`), `sizeof`
+  and `alignof`, `decltype`, and an implicit conversion. Follow-on
+  diagnostics are then about the call's result ("cannot initialize ...
+  with an rvalue of type 'int'"). Placeholder deduction diagnoses a copy
+  of the initializer, so `auto a = g.f;` reports "must be called" twice,
+  as clang does (`Diag::allow_duplicate`). The diagnostic is at the
+  member access's location (`(g.f)` at its `(`). Under SFINAE nothing is
+  recovered. `expr.ref/bound-member-recovery-by-call.cpp`.
 
 ## 2. Scopes (`scope.rs`)
 - **Kinds:** `ScopeKind` is one of TranslationUnit, Namespace,
@@ -296,6 +347,12 @@ translation unit that fails costs about what it costs clang:
     member instantiated `std::pair<const int, int>`;
     `expr.unary.op/member-pointer-to-specialization-member.cpp`,
     `temp.inst/instantiation-keeps-pending-member-name.cpp`).
+    A variable's initializer that is such a pending member function
+    name (`auto p = C::f;`, `void (*p)() = C::tm<long>;` in a static
+    member function) is reported when the initializer is attached
+    (`reject_objectless_method_init`) and recovered as erroneous, so no
+    conversion or deduction of it is diagnosed (WP-888,
+    `dcl.spec.auto/member-template-id-in-template-body.cpp`).
   - An ambiguous *type* name (`S s;` with `S` in the namespace and in
     one of its inline namespaces) is diagnosed by the parser through
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
@@ -2231,7 +2288,9 @@ and returns the scope it names:
   `normalizeAttrScopeName`): the reserved spellings `__gnu__` and
   `_Clang` name the `gnu` and `clang` namespaces (`norm_attr_scope` in
   `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
-  `always_inline` with the GNU flag. Test:
+  `always_inline` with the GNU flag. `[[__clang__::x]]` reaches sema as
+  `_Clang` (the parser reads the expanded `__clang__` macro as the
+  scope, spec/parse.md §6.2, WP-891). Test:
   `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
 - **Attribute names** (WP-678; clang `normalizeAttrName`,
   `kiln_ast::attr::normalize_attr_name` / `attr_name_normalizes`): for
@@ -2246,6 +2305,21 @@ and returns the scope it names:
   argument-shape tables, `__has_attribute` / `__has_cpp_attribute` and
   the diagnostic name (`attr_shown`) use the same rule. Test:
   `tests/conformance/dcl.attr.grammar/gnu-attribute-name-normalization.cpp`.
+- **Mutual exclusions** (WP-890/WP-891; clang Attr.td `MutualExclusions`):
+  `check_mutual_exclusions` (from `check_decl_attrs`) adds `hot`/`cold`
+  on a function and `no_destroy`/`always_destroy` on a variable, with
+  the same rule as `check_naked_conflicts`: the later attribute (on this
+  declaration, or on this one when the other is on a prior one) is the
+  error `'X' and 'Y' attributes are not compatible` with `conflicting
+  attribute is here`, and is dropped. The other clang exclusions are
+  already covered (`likely`/`unlikely`, `naked`/`disable_tail_calls`,
+  `always_inline`/`not_tail_called`, gsl `Owner`/`Pointer`,
+  `speculative_load_hardening`/`no_speculative_load_hardening`,
+  `optnone` conflicts, the `target` family) or do not apply to C++ on
+  kiln's targets (CUDA, Mips, Objective-C, `randomize_layout`); the
+  class-C `cf_audited_transfer`/`cf_unknown_transfer` pair is accepted
+  silently (list: spec/landed/sema/WP-891.md). Test:
+  `tests/conformance/dcl.attr.grammar/mutually-exclusive-attributes.cpp`.
   - GNU `section("name")` (WP-716, clang `handleSectionAttr`): exactly
     one string literal (`expected string literal as argument of
     'section' attribute`, `'section' attribute takes one argument`), on
@@ -6270,6 +6344,17 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   gets "use of this statement in a constexpr {function|constructor} is
   a C++23 extension" (`-Wc++23-extensions`) at the first one. Tests
   `tests/conformance/stmt.goto/computed-goto-constexpr-body{,-cxx20}.cpp`.
+  Otherwise, before C++20, the first asm-declaration or try-block
+  statement gets "use of this statement in a constexpr
+  {function|constructor} is a C++20 extension" (`-Wc++20-extensions`),
+  and a function-try-block, checked ahead of the walk, "function try
+  block in constexpr {function|constructor} is a C++20 extension" (clang
+  `CheckConstexprFunctionBody`, WP-890/WP-891). From C++20 an asm
+  statement is valid in the body; evaluating it is not a constant
+  expression. Tests
+  `tests/conformance/dcl.constexpr/constexpr-asm-{try-cxx17,evaluated,never-constant}.cpp`
+  (the last an xfail: the never-constant check only tries parameterless
+  functions).
   Tests of the variable rule:
   `tests/conformance/dcl.constexpr/non-literal-local-cxx{20,23,23-19}.cpp`,
   `tests/conformance/dcl.constexpr/non-literal-local-template-cxx{20,23}.cpp`,
@@ -7626,8 +7711,8 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   is fine once that member is initialized; unevaluated operands,
   `constexpr` variables, static data members of non-class type and
   variables in a linkage specification (clang checks the declaration
-  context) are not diagnosed. Other locals are left to a CFG
-  uninitialized-values analysis kiln does not have.
+  context) are not diagnosed. Other locals are left to the CFG
+  uninitialized-values analysis (§7.14).
 - **Verify-only initialization** (WP-328; clang's `VerifyOnly` in
   `TryOrBuildParenListInitialization`): an attempt that only asks
   "would this initialization succeed" must leave no trace when it
@@ -8458,7 +8543,7 @@ substituted (`subst/stmts.rs`) and rechecked at instantiation.
 immediate range checks
 (`validateInputSize`/`validateOutputSize`), `=@cc` flag outputs, register
 variables (`register int r asm("x0")`) as operands and their clobber
-conflict check, the C++17 "asm in constexpr function" extension warning;
+conflict check;
 `!srcloc` values in headers and macro expansions do not match clang's
 encoding.
 
@@ -8893,6 +8978,137 @@ keeps `DependentCoawaitExpr` (operand only), a one-operand
 rebuilds each through `build_coawait`/`build_coyield`/`build_coreturn`,
 which builds the coroutine as above in the instantiated function.
 Coroutine lambdas follow the same rules (spec/sema-lambda.md).
+
+### 7.14 Uninitialized locals (`uninit.rs`, WP-862)
+
+A port of clang 19's `UninitializedValues.cpp` and of the reporting in
+`AnalysisBasedWarnings.cpp` (`UninitValsDiagReporter`,
+`DiagnoseUninitializedUse`, `DiagUninitUse`,
+`SuggestInitializationFixit`); docs/design/uninitialized-values.md is
+the design. Tests: `basic.indet/uninit-*.cpp`, and the fix-it golden
+`uninit_fixits_like_clang` in `crates/kiln_driver/tests/driver.rs`.
+
+**Groups.** `-Wuninitialized` (in `-Wall` and `-Wmost`) holds
+`-Wsometimes-uninitialized`, `-Wuninitialized-const-reference` and
+`-Wstatic-self-init`. `-Wconditional-uninitialized` is off by default.
+
+**When it runs.** The analysis runs once per function body at the end
+of the body ([`Sema::late_analysis`], after the unreachable-code scan,
+over the body's CFG, §7.5.1), when all of these hold:
+- no uncompilable error has occurred in the TU so far (clang
+  `hasUncompilableErrorOccurred`). A warning promoted by `-Werror` does
+  not count. Functions finished before the first error are still
+  analyzed;
+- the body is not in a dependent context. Each function template
+  specialization is analyzed when it is instantiated, and its warnings
+  carry the instantiation note;
+- one of the four warnings is enabled at the function's location;
+- the body declared an automatic variable without an initializer, or
+  named a variable inside its own initializer (`note_uninit_var`). This
+  is clang's "no tracked variable" fast path, tightened: C++ forbids
+  jumping past an initialization, so a variable with an initializer can
+  be uninitialized only through a self-reference.
+
+**Tracked variables** (clang `isTrackedVar`). A non-implicit automatic
+local, declared alone by a declaration statement of the body, of
+scalar, vector or non-empty class type. A class is non-empty when some
+field is not an unnamed bit-field, not zero-size and not of empty class
+type; base classes do not count. Each variable has two bits per program
+point, `Unknown`, `Initialized`, `Uninitialized` or `MayUninitialized`,
+packed into dense `u64` rows, one row per block.
+
+**Classification** (clang `ClassifyRefs`). Each reference to a tracked
+variable is classified:
+- `Use`: an lvalue-to-rvalue read (including a by-copy lambda
+  capture), `++`/`--`, a compound assignment, or the argument of a
+  `std::move` call.
+- `SelfInit`: `T x = x;`. It is treated as an initialization. The
+  self-init itself is reported only when `x` is also used while always
+  uninitialized.
+- `ConstRefUse`: a const glvalue argument of a call. It becomes
+  `Ignore` when the callee has a trivial (empty) body.
+- `Ignore`: the operand of a `(void)` cast, the left operand of a comma,
+  or a `&x` argument for a pointer-to-const parameter.
+- `Init`: any other reference, which may initialize the variable. This
+  covers the left operand of `=`, an address taken, a non-const
+  reference bound, a by-reference capture and an asm output.
+
+Unevaluated operands are not in the CFG, so they are never seen.
+
+**Fixed point.** A worklist runs in reverse post-order of the live
+edges. The entry state is all `Uninitialized`. A block's input is the
+merge of its analyzed predecessors' outputs. A declaration without an
+initializer sets `Uninitialized`, even on a later loop iteration.
+An `Init` sets `Initialized`. A
+call to a `returns_twice` function (`setjmp`) makes every
+`Uninitialized` variable `MayUninitialized`. An `asm goto`'s
+`Uninitialized` outputs become `MayUninitialized` on its edges. The
+blocks that saw a use are then run once more, in clang's block order,
+to collect reports.
+
+**Reports.** For each variable, uses are recorded through the
+reporting pass, then flushed in variable-declaration order (clang's
+reporter). The kind of each use is computed by `getUninitUse`:
+- `Always`, `AfterDecl` or `AfterCall` for `Uninitialized`.
+- `Sometimes` when one predecessor branch of the use decides it. The
+  branches are found by searching backwards from the use for blocks
+  from which the use is reachable while one successor leaves it.
+- `Maybe` otherwise.
+
+Each use produces one of these warnings:
+- `variable 'x' is uninitialized when used here` [-Wuninitialized]. The
+  `AfterDecl` wording is `... when used within its own initialization`.
+  A self-reference inside the initializer (clang `ContainsReference`,
+  which also enters statement-expression bodies) is reported with the
+  name and use ranges.
+- `variable 'x' is used uninitialized whenever <branch>` [-Wsometimes-
+  uninitialized], for each deciding branch. The branch is one of:
+  `'if' condition is true|false`, `'for'|'while' loop is entered|exits
+  because its condition is false`, `'?:' condition is true|false`,
+  `'&&'|'||' condition is true|false`, `switch case is taken`, `switch
+  default is taken`, or `function 'f' is called` (an always-uninit use
+  under `AfterCall`). Each warning has the note `uninitialized use
+  occurs here`, plus `remove the 'if' if its condition is always
+  true|false` (with the clang fix-its) or `remove the condition if it is
+  always true|false` (replacing the condition with `true`/`false`).
+- `variable 'x' may be uninitialized when used here`
+  [-Wconditional-uninitialized].
+
+The last warning for a variable carries the note `initialize the
+variable 'x' to silence this warning`. It has a fix-it after the
+declarator: ` = 0`, ` = 0.0`, ` = false`, ` = '\0'`, ` = nullptr` (a
+pointer or member pointer), or none for a vector. It is placed after
+the declarator's last token, so after `)` for a function pointer, and
+dropped in a macro.
+
+The uses of each variable are ordered most confident first, then by
+location. The first use that produces a warning is reported, and the
+rest are dropped (clang reports one point per variable).
+
+A self-initialized variable (`SelfInit`) is handled differently:
+- if one of its uses is always-uninitialized, the self-init itself is
+  reported instead;
+- otherwise every use is downgraded to `Maybe`.
+
+`variable 'x' is uninitialized when passed as a const reference
+argument here` [-Wuninitialized-const-reference] is reported once per
+variable, for a `ConstRefUse` reached `Uninitialized`.
+
+**Suppressions.**
+- `__attribute__((uninitialized))` and `[[indeterminate]]` (P2795) do
+  not silence the warning, matching clang 19 and 22. clang 19 also warns
+  that `indeterminate` is an unknown attribute.
+- A class variable whose declaration runs a non-trivial constructor is
+  `Initialized` by it. The syntactic self-reference checker
+  (`self_ref.rs`) reports class-type self-references (`A a(a.get())`).
+  The analysis does not report them a second time, because
+  `ContainsReference` sees the same `DeclRefExpr` and reports it once.
+
+**Gaps.**
+- clang 21's `-Wuninitialized-const-pointer` (a `const T*` argument
+  `&x`) is not implemented, so clang 22 warns there and kiln does not.
+- Field uses in constructor initializers (`S() : x(std::move(x))`) belong
+  to clang's `DiagnoseUninitializedFields`, not to this analysis.
 
 ## 8. Constant evaluation (`oven_bridge.rs`)
 

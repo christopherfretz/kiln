@@ -125,6 +125,7 @@ mod trivial_abi;
 mod try_stmt;
 mod type_diff;
 mod undefined_used;
+mod uninit;
 mod unreachable_code;
 mod unused_file_scope;
 mod unused_var;
@@ -274,6 +275,12 @@ pub struct Sema<'a, 'sm> {
     /// Depth of expressions being rebuilt by substitution (their
     /// consteval-only leaves follow the pattern's, not the builders').
     pub(crate) subst_expr_depth: u32,
+    /// The instantiation-stack length at which the last call that clang
+    /// recovers with a `RecoveryExpr` failed (a call resolved by overload
+    /// resolution, or a member function call whose arguments do not
+    /// convert; spec/sema.md §1.2), with the recovery's type: a variable
+    /// initialized by it stays valid ([`Sema::note_call_recovery`]).
+    pub(crate) call_recovery: Option<(usize, Option<QualType>)>,
     /// A template-id is being formed by substituting into a dependent
     /// one: a class template specialization it creates records all its
     /// arguments as written, as GCC's (spec/reflection.md §3.9).
@@ -389,6 +396,8 @@ pub struct Sema<'a, 'sm> {
     /// The graph of the body being finished, its vectors reused from
     /// body to body.
     pub(crate) cfg_body: cfg::BodyCfg,
+    /// The uninitialized-values analysis' reused buffers (spec/sema.md §7.11).
+    pub(crate) uninit_scratch: uninit::Scratch,
     /// The functions (first declarations) clang 22 infers `noreturn`
     /// (`InferredNoReturnAttr`, [`Sema::infer_noreturn`]).
     pub(crate) inferred_noreturn: kiln_source::fx::FxHashSet<DeclId>,
@@ -1202,6 +1211,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             consteval_only_records: kiln_source::fx::FxHashMap::default(),
             consteval_only_pattern: kiln_source::fx::FxHashSet::default(),
             subst_expr_depth: 0,
+            call_recovery: None,
             subst_template_id: false,
             coro_aligned_allocation: false,
             lax_vector_conversions: LaxVectorConversions::All,
@@ -1230,6 +1240,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_out: String::new(),
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
             cfg_body: cfg::BodyCfg::default(),
+            uninit_scratch: uninit::Scratch::default(),
             inferred_noreturn: kiln_source::fx::FxHashSet::default(),
             gsl_inferred_pointers: kiln_source::fx::FxHashSet::default(),
             in_typedef_instantiation: false,

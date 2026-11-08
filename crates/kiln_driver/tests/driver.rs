@@ -1098,6 +1098,176 @@ fn fixits_in_macro_expansions_like_clang() {
     }
 }
 
+/// [basic.indet]: the uninitialized-use warnings' fix-its (clang
+/// `SuggestInitializationFixit` and the sometimes-uninitialized branch
+/// notes, WP-862): ` = 0`, ` = nullptr`, ` = 0.0`, ` = false`, ` = '\0'`
+/// after the declarator (after a function pointer's `)`), and the
+/// branch-removal replacements for `if`, `&&`, `||`, `?:`, loops and
+/// `switch` defaults.
+const UNINIT_FIXIT_SOURCE: &str = r"int f1() { int i; return i; }
+int *f2() { int *p; return p; }
+double f3() { double d; return d; }
+bool f4() { bool b; return b; }
+char f5() { char c; return c; }
+struct S { int m; };
+int S::*f6() { int S::*mp; return mp; }
+int f7(bool c) { int x; if (c) x = 1; return x; }
+int f8(bool c) { int x; if (c) {} else x = 1; return x; }
+int f9(bool c) { int x; if (c && (x = 1)) {} return x; }
+int f10(bool c) { int x; if (c || (x = 1)) {} return x; }
+int f11(bool c) { int x; c ? x = 1 : 0; return x; }
+int f12(int n) { int x; for (int i = 0; i < n; ++i) x = i; return x; }
+int f13(int n) { int x; while (n) { x = n; --n; } return x; }
+int f14(int k) { int x; switch (k) { case 0: x = 1; break; default: break; } return x; }
+int f15() { int x, y = 0; return x + y; }
+int f16() { int (*fp)(int); return fp(0); }
+";
+
+/// clang 19's and clang 22's `-fsyntax-only -Wuninitialized` output for
+/// `UNINIT_FIXIT_SOURCE`.
+const UNINIT_FIXIT_GOLDEN: &str = r"<stdin>:1:26: warning: variable 'i' is uninitialized when used here [-Wuninitialized]
+    1 | int f1() { int i; return i; }
+      |                          ^
+<stdin>:1:17: note: initialize the variable 'i' to silence this warning
+    1 | int f1() { int i; return i; }
+      |                 ^
+      |                  = 0
+<stdin>:2:28: warning: variable 'p' is uninitialized when used here [-Wuninitialized]
+    2 | int *f2() { int *p; return p; }
+      |                            ^
+<stdin>:2:19: note: initialize the variable 'p' to silence this warning
+    2 | int *f2() { int *p; return p; }
+      |                   ^
+      |                    = nullptr
+<stdin>:3:32: warning: variable 'd' is uninitialized when used here [-Wuninitialized]
+    3 | double f3() { double d; return d; }
+      |                                ^
+<stdin>:3:23: note: initialize the variable 'd' to silence this warning
+    3 | double f3() { double d; return d; }
+      |                       ^
+      |                        = 0.0
+<stdin>:4:28: warning: variable 'b' is uninitialized when used here [-Wuninitialized]
+    4 | bool f4() { bool b; return b; }
+      |                            ^
+<stdin>:4:19: note: initialize the variable 'b' to silence this warning
+    4 | bool f4() { bool b; return b; }
+      |                   ^
+      |                    = false
+<stdin>:5:28: warning: variable 'c' is uninitialized when used here [-Wuninitialized]
+    5 | char f5() { char c; return c; }
+      |                            ^
+<stdin>:5:19: note: initialize the variable 'c' to silence this warning
+    5 | char f5() { char c; return c; }
+      |                   ^
+      |                    = '\0'
+<stdin>:7:35: warning: variable 'mp' is uninitialized when used here [-Wuninitialized]
+    7 | int S::*f6() { int S::*mp; return mp; }
+      |                                   ^~
+<stdin>:7:26: note: initialize the variable 'mp' to silence this warning
+    7 | int S::*f6() { int S::*mp; return mp; }
+      |                          ^
+      |                           = nullptr
+<stdin>:8:29: warning: variable 'x' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
+    8 | int f7(bool c) { int x; if (c) x = 1; return x; }
+      |                             ^
+<stdin>:8:46: note: uninitialized use occurs here
+    8 | int f7(bool c) { int x; if (c) x = 1; return x; }
+      |                                              ^
+<stdin>:8:25: note: remove the 'if' if its condition is always true
+    8 | int f7(bool c) { int x; if (c) x = 1; return x; }
+      |                         ^~~~~~
+<stdin>:8:23: note: initialize the variable 'x' to silence this warning
+    8 | int f7(bool c) { int x; if (c) x = 1; return x; }
+      |                       ^
+      |                        = 0
+<stdin>:9:29: warning: variable 'x' is used uninitialized whenever 'if' condition is true [-Wsometimes-uninitialized]
+    9 | int f8(bool c) { int x; if (c) {} else x = 1; return x; }
+      |                             ^
+<stdin>:9:54: note: uninitialized use occurs here
+    9 | int f8(bool c) { int x; if (c) {} else x = 1; return x; }
+      |                                                      ^
+<stdin>:9:25: note: remove the 'if' if its condition is always false
+    9 | int f8(bool c) { int x; if (c) {} else x = 1; return x; }
+      |                         ^~~~~~~~~~~~~~
+<stdin>:9:23: note: initialize the variable 'x' to silence this warning
+    9 | int f8(bool c) { int x; if (c) {} else x = 1; return x; }
+      |                       ^
+      |                        = 0
+<stdin>:10:29: warning: variable 'x' is used uninitialized whenever '&&' condition is false [-Wsometimes-uninitialized]
+   10 | int f9(bool c) { int x; if (c && (x = 1)) {} return x; }
+      |                             ^
+<stdin>:10:53: note: uninitialized use occurs here
+   10 | int f9(bool c) { int x; if (c && (x = 1)) {} return x; }
+      |                                                     ^
+<stdin>:10:29: note: remove the '&&' if its condition is always true
+   10 | int f9(bool c) { int x; if (c && (x = 1)) {} return x; }
+      |                             ^~~~
+<stdin>:10:23: note: initialize the variable 'x' to silence this warning
+   10 | int f9(bool c) { int x; if (c && (x = 1)) {} return x; }
+      |                       ^
+      |                        = 0
+<stdin>:11:30: warning: variable 'x' is used uninitialized whenever '||' condition is true [-Wsometimes-uninitialized]
+   11 | int f10(bool c) { int x; if (c || (x = 1)) {} return x; }
+      |                              ^
+<stdin>:11:54: note: uninitialized use occurs here
+   11 | int f10(bool c) { int x; if (c || (x = 1)) {} return x; }
+      |                                                      ^
+<stdin>:11:30: note: remove the '||' if its condition is always false
+   11 | int f10(bool c) { int x; if (c || (x = 1)) {} return x; }
+      |                              ^~~~
+<stdin>:11:24: note: initialize the variable 'x' to silence this warning
+   11 | int f10(bool c) { int x; if (c || (x = 1)) {} return x; }
+      |                        ^
+      |                         = 0
+<stdin>:12:26: warning: variable 'x' is used uninitialized whenever '?:' condition is false [-Wsometimes-uninitialized]
+   12 | int f11(bool c) { int x; c ? x = 1 : 0; return x; }
+      |                          ^
+<stdin>:12:48: note: uninitialized use occurs here
+   12 | int f11(bool c) { int x; c ? x = 1 : 0; return x; }
+      |                                                ^
+<stdin>:12:26: note: remove the '?:' if its condition is always true
+   12 | int f11(bool c) { int x; c ? x = 1 : 0; return x; }
+      |                          ^~~       ~~~
+<stdin>:12:24: note: initialize the variable 'x' to silence this warning
+   12 | int f11(bool c) { int x; c ? x = 1 : 0; return x; }
+      |                        ^
+      |                         = 0
+<stdin>:15:60: warning: variable 'x' is used uninitialized whenever switch default is taken [-Wsometimes-uninitialized]
+   15 | int f14(int k) { int x; switch (k) { case 0: x = 1; break; default: break; } return x; }
+      |                                                            ^~~~~~~
+<stdin>:15:85: note: uninitialized use occurs here
+   15 | int f14(int k) { int x; switch (k) { case 0: x = 1; break; default: break; } return x; }
+      |                                                                                     ^
+<stdin>:15:23: note: initialize the variable 'x' to silence this warning
+   15 | int f14(int k) { int x; switch (k) { case 0: x = 1; break; default: break; } return x; }
+      |                       ^
+      |                        = 0
+<stdin>:16:34: warning: variable 'x' is uninitialized when used here [-Wuninitialized]
+   16 | int f15() { int x, y = 0; return x + y; }
+      |                                  ^
+<stdin>:16:18: note: initialize the variable 'x' to silence this warning
+   16 | int f15() { int x, y = 0; return x + y; }
+      |                  ^
+      |                   = 0
+<stdin>:17:36: warning: variable 'fp' is uninitialized when used here [-Wuninitialized]
+   17 | int f16() { int (*fp)(int); return fp(0); }
+      |                                    ^~
+<stdin>:17:27: note: initialize the variable 'fp' to silence this warning
+   17 | int f16() { int (*fp)(int); return fp(0); }
+      |                           ^
+      |                            = nullptr
+14 warnings generated.
+";
+
+#[test]
+fn uninit_fixits_like_clang() {
+    for compat in ["-fclang-compat=19", "-fclang-compat=22"] {
+        let args = ["-std=c++26", "-fsyntax-only", compat, "-Wuninitialized", "-"];
+        let o = kiln(&args, UNINIT_FIXIT_SOURCE);
+        assert_eq!((o.code, o.stderr.as_str()), (0, UNINIT_FIXIT_GOLDEN), "{compat}");
+    }
+}
+
 #[test]
 fn module_missing_import_notes() {
     // [module.reach]: each missing-import error of

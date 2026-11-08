@@ -38,11 +38,15 @@ impl Sema<'_, '_> {
         body: StmtId,
         has_fallthrough: bool,
         expr_start: u32,
+        uninit: bool,
     ) {
         // clang `DiagnoseSwitchLabelsFallthrough`: the unannotated
         // fall-throughs, then the misplaced annotations; the unreachable
         // code (clang `CheckUnreachable`) comes first.
         self.check_unreachable_code(body);
+        if uninit {
+            self.check_uninitialized(f, body);
+        }
         self.check_implicit_fallthrough(body);
         if has_fallthrough {
             self.check_fallthrough_placement(body);

@@ -2586,7 +2586,11 @@ impl Sema<'_, '_> {
 
     /// clang's `getFixItZeroInitializerForType`: ` = 0`, ` = nullptr`,
     /// `{}`, ... ("" when there is none).
-    fn zero_initializer_fixit(&self, t: QualType, defn: Option<DefinitionBits>) -> String {
+    pub(crate) fn zero_initializer_fixit(
+        &self,
+        t: QualType,
+        defn: Option<DefinitionBits>,
+    ) -> String {
         let types = &self.ast.types;
         if let Some(bits) = defn {
             if !bits.contains(DefinitionBits::COMPLETE) {
@@ -5735,6 +5739,7 @@ impl Sema<'_, '_> {
             // `'extern' variable has an initializer`).
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
+        let init = self.reject_objectless_method_init(init);
         self.act_on_init_inner(v, init);
         self.check_cleanup_deduced(v);
         self.check_static_tls(v, paren);
@@ -6102,6 +6107,35 @@ impl Sema<'_, '_> {
         Some(if rvalue { t.rvalue_ref_to(ety) } else { t.lvalue_ref_to(ety) })
     }
 
+    /// An initializer naming a non-static member function without an
+    /// object ([expr.prim.id.general]/4, `auto p = C::f;` in a static
+    /// member function): clang's `BuildDeclarationNameExpr` reports it at
+    /// the name and the initializer is erroneous, so no conversion of it
+    /// is diagnosed. The pending reference
+    /// ([`Self::flush_member_refs`]) is reported now, since an
+    /// initializer is neither of the uses that could still make it valid.
+    fn reject_objectless_method_init(&mut self, init: Initializer) -> Initializer {
+        let reject = |s: &mut Self, e: ExprId| {
+            let x = s.ignore_parens(e);
+            match s.member_refs.get(&x).copied() {
+                Some(r) if r.error && s.kind_of(r.decl) == DeclKind::CXXMethod => {
+                    s.member_refs.remove(&x);
+                    let loc = s.eloc(x);
+                    s.error(DiagId::sema_member_call_without_object, loc);
+                    s.recover_err(&[e], loc)
+                }
+                _ => e,
+            }
+        };
+        match init {
+            Initializer::Expr(e) => Initializer::Expr(reject(self, e)),
+            Initializer::Paren(es, l, r) => {
+                Initializer::Paren(es.into_iter().map(|e| reject(self, e)).collect(), l, r)
+            }
+            list @ Initializer::List(_) => list,
+        }
+    }
+
     /// The declaration whose initializer `v` carries: an instantiated
     /// variable template specialization's pattern (a member variable
     /// template defined out of line is not initialized in its class, as
@@ -6130,6 +6164,18 @@ impl Sema<'_, '_> {
         use crate::templ::auto::AutoFail;
         let (mut items, kind, lbrace) = auto_init_items(init, direct);
         self.resolve_single_overloads(&mut items);
+        // [expr.ref]/7.3.2: clang's `DeduceAutoType` deduces from a bound
+        // member function's recovered call, which leaves the initializer
+        // itself as written (so its initialization reports it again, as
+        // clang does for `auto a = g.f;`).
+        for it in items.iter_mut().flatten() {
+            if self.ety(*it) == QualType::BOUND_MEMBER {
+                *it = self.recover_not_called_as(*it, true);
+                if self.is_err_expr(*it) {
+                    return Some(QualType::ERROR);
+                }
+            }
+        }
         // A member overload set deduces in `deduce_auto` (a member
         // template-id naming one static specialization, WP-788).
         let overload = items.iter().flatten().copied().find(|&e| {
@@ -6566,6 +6612,7 @@ impl Sema<'_, '_> {
             return;
         }
         self.act_on_uninit_inner(v);
+        self.note_uninit_var(v);
         if self.is_var_definition(v) {
             self.check_static_tls(v, None);
             self.check_constinit(v);
@@ -7995,7 +8042,7 @@ impl Sema<'_, '_> {
     /// A `[[no_unique_address]]` field of empty class type, a subobject
     /// of zero size ([intro.object]/9) that leaves its class empty
     /// ([meta.unary.prop] `is_empty`; clang `FieldDecl::isZeroSize`).
-    fn is_zero_size_field(&self, f: DeclId) -> bool {
+    pub(crate) fn is_zero_size_field(&self, f: DeclId) -> bool {
         let nua =
             self.ast.decls.field(f).is_some_and(FieldData::no_unique_address) || self.has_nua(f);
         nua && self
