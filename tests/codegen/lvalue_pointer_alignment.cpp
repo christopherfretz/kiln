@@ -66,7 +66,10 @@ int nv_member(NV *p, NV &r, NVD *f, int NV::*mp) {
   p->m = 1;
   (*p).m = 2;
   p[0].m = 3;
-  return p->m + r.m + p->get() + p->*mp + (*p).*mp + f->m + f->e;
+  // `p->v`: the virtual base is reached at its own non-virtual alignment
+  // once `p` is at least `NV`'s non-virtual alignment.
+  return p->m + r.m + p->get() + p->*mp + (*p).*mp + f->m + f->e + p->v +
+         r.v + f->v;
 }
 
 int vbase_member(VB *p, VB &r, WithV *w) {

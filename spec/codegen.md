@@ -961,14 +961,26 @@ Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
   pragma that needs another (FENV_ACCESS ON, FENV_ROUND other than
   FE_TONEAREST, trapping, rounding, a wider eval method) is an error.
 
-### 3.3 Pointer alignment (WP-819, `builtins.rs` `pointer_with_alignment`)
+### 3.3 Pointer alignment (WP-819, WP-829, `builtins.rs` `pointer_with_alignment`)
 clang `CodeGenFunction::EmitPointerWithAlignment`, mirrored case by case,
 gives a pointer operand's value, its known alignment, and whether that
-alignment is a declaration's (`AlignmentSource::Decl`). Its users: every
-`__atomic_*`/`__c11_atomic_*` pointer (`atomic.rs`), memcpy/memmove/
-memset-like builtins, `__builtin_clear_padding`, `va_arg`, NEON loads and
-stores, checked arithmetic results, VLA subscripts, and the placement
-argument of a new-expression (§3.1). After skipping parentheses:
+alignment is a declaration's (`AlignmentSource::Decl`). Its users:
+- the lvalue of `*p` (`EmitUnaryOpLValue`), of `p[i]` through a pointer
+  (`EmitArraySubscriptExpr`, VLA subscripts included), of `p->m`
+  (`EmitMemberExpr`, `this->m` included), of a vector element through
+  `->` (`EmitExtVectorElementExpr`) and the object of `p->*m`
+  (`EmitPointerToDataMemberBinaryExpr`, WP-829);
+- the object of a member call through `->` (`p->f()`,
+  `EmitCXXMemberOrOperatorMemberCallExpr`), the operand of a scalar
+  derived-to-base conversion (whose virtual step loads the vtable
+  pointer at that alignment) and of `dynamic_cast` (`VisitCastExpr`,
+  WP-829);
+- every `__atomic_*`/`__c11_atomic_*` pointer (`atomic.rs`), memcpy/
+  memmove/memset-like builtins, `__builtin_clear_padding`, `va_arg`, NEON
+  loads and stores, checked arithmetic results, and the placement
+  argument of a new-expression (§3.1).
+
+After skipping parentheses:
 - **No-op/bitcast** from a non-`void` pointer keeps the operand's
   alignment and source; an *explicit* cast whose operand's source is not
   `Decl` takes the target type's natural pointee alignment.
@@ -998,9 +1010,52 @@ parameter, a non-reference field of any base (`.` or `->`; clang
 So libstdc++'s `std::atomic<T>`, whose `alignas(sizeof(T)) T _M_i` is
 passed as `std::__addressof(_M_i)`, gets a naturally aligned inline
 atomic for a power-of-two size, as with clang, and needs no libatomic.
-Not mirrored: the lvalue of `*p` and `p[i]` itself still has the
-pointee's natural alignment (clang computes it with
-`EmitPointerWithAlignment`), so `&*&x` loses `x`'s `alignas`.
+
+The alignment of an lvalue derived from another (WP-829; clang 19
+`EmitLValueForField`, `emitArraySubscriptGEP`, `GetAddressOfBaseClass`):
+- **Field** `b.m` / `p->m`: `alignmentAtOffset(base alignment, offset of
+  m)` (`min_align`, the largest power of two dividing both), the offset
+  being the field's IR struct element offset (a packed struct's,
+  `__attribute__((packed))` or `#pragma pack`, is unpadded), or its byte
+  offset for an empty field with no element; a bit-field's storage unit
+  likewise; a union member keeps the base's. A reference member's
+  referee is the natural pointee alignment of the referenced type.
+- **Subscript** `a[i]` / `p[i]`: the base's alignment (the array lvalue's
+  for a simple array-to-pointer decay, else the pointer's from this
+  section) at the byte offset `i * sizeof(element)` for a constant `i`, or
+  at one element (`MinAlign(align, sizeof(element))`) for a variable
+  one (`getArrayElementAlign`).
+- **Base subobject** (`GetAddressOfBaseClass`): a non-virtual path keeps
+  the derived object's alignment at the non-virtual offset (unchanged
+  for offset 0); a path through a virtual base starts from
+  `getVBaseAlignment` (`vbase_align`): the virtual base's non-virtual
+  alignment if the derived alignment is at least the derived class's
+  non-virtual alignment, else the smaller of the two (an incomplete
+  class takes the smaller), and then takes the non-virtual offset within
+  the virtual base.
+- **`this`** (`LoadCXXThisAddress`, `CXXThisAlignment`) and any class
+  pointer that reaches the fallback: `getClassPointerAlignment`, the
+  class's non-virtual alignment unless it is effectively `final` (`final`
+  class or destructor), when it is the complete-object alignment. A
+  class with a virtual base of stricter alignment is thus accessed through
+  a pointer at its smaller non-virtual alignment: as a base subobject it
+  need not be aligned as a complete object ([class.mi], [basic.align]),
+  and the complete-object alignment there is an over-alignment that lets
+  LLVM emit aligned vector accesses on a misaligned address.
+- **Member pointer** `o.*m` / `p->*m` (`EmitCXXMemberDataPointerAddress`):
+  `getDynamicOffsetAlignment(object alignment, class, natural alignment
+  of the member type)`, the object's alignment from `->*`'s pointer as
+  above.
+- **References**: a reference's referee has the natural pointee
+  alignment of its type (`EmitLoadOfReference`, `forPointeeType`).
+
+So `*&x.m` keeps the `alignas` of `x` and `m`, `(char *)&x` keeps `x`'s
+until an explicit cast to a non-character type whose operand's source is
+not `Decl`, and `arr[2]` of an `alignas(64) int arr[]` is `align 8`.
+Not mirrored: a `delete` expression's operand still has the natural
+pointee alignment (clang `EmitCXXDeleteExpr` uses
+`EmitPointerWithAlignment`); it only affects the array-cookie and vtable
+loads.
 
 ## 4. Statements
 - `stmt.rs` covers compound, declaration, expression, null, if (with

@@ -2230,8 +2230,11 @@ impl Cg<'_> {
     pub(crate) fn vbase_align(&mut self, actual: u64, derived: DeclId, vb: DeclId) -> u64 {
         let Some(vdef) = self.class_def(vb) else { return 1 };
         let expected = u64::from(self.tys.layouter().record(vdef).nv_align);
-        let dalign =
-            self.class_def(derived).map_or(1, |d| u64::from(self.tys.layouter().record(d).align));
+        // `getDynamicOffsetAlignment`: compared with the derived class's
+        // non-virtual alignment, not its complete-object one.
+        let dalign = self
+            .class_def(derived)
+            .map_or(u64::MAX, |d| u64::from(self.tys.layouter().record(d).nv_align));
         if actual >= dalign { expected } else { actual.min(expected) }
     }
 
