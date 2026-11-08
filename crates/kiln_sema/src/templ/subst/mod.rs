@@ -114,6 +114,9 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// expression being rebuilt: its expression statement ends the
     /// statement expression (`act_on_stmt_expr_result`).
     pub(crate) stmt_expr_result: Option<kiln_ast::ExprId>,
+    /// The pattern call whose rebuilt call failed last where clang builds
+    /// a `RecoveryExpr` ([`Sema::note_call_recovery`]).
+    pub(crate) recovered_call: Option<kiln_ast::ExprId>,
     /// Block-scope declarations of the pattern whose instantiation
     /// failed (diagnosed, or silent under SFINAE), with the rest of their
     /// declaration statement: their uses are invalid without another
@@ -189,6 +192,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             failed_inits: Vec::new(),
             failed_init_use: false,
             stmt_expr_result: None,
+            recovered_call: None,
             failed_locals: Vec::new(),
             invalid_decl_stmt: false,
             partial_pack: None,

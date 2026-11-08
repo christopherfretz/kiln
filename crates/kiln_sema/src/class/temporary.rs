@@ -119,6 +119,12 @@ impl Sema<'_, '_> {
         }
         let loc = self.begin_loc(e);
         let Some(dtor) = self.check_temporary_dtor(class, n.ty(), loc) else { return e };
+        // clang's `DiagnoseUseOfDecl` of a deleted destructor makes the
+        // expression an error, so nothing initialized from it is checked
+        // again (`auto l = [x = B()] {};`, WP-834).
+        if self.is_deleted_fn(dtor) {
+            return self.recover_err(&[e], loc);
+        }
         if trivial {
             return e;
         }

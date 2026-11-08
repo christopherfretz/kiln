@@ -408,7 +408,12 @@ impl Substituter<'_, '_, '_> {
         let saved = self.sema.lambda_mangle.var.replace(v);
         let errors = self.sema.diags.error_count();
         let outer = self.sema.note_var_init_subst(Some(v));
+        let recovery = self.sema.call_recovery.take();
+        let last = self.recovered_call.take();
         let i = self.initializer(init, style);
+        let depth = self.sema.inst.stack.len();
+        let recovered = std::mem::replace(&mut self.sema.call_recovery, recovery);
+        let top = std::mem::replace(&mut self.recovered_call, last);
         self.sema.note_var_init_subst(outer);
         self.sema.lambda_mangle.var = saved;
         if let Ok(i) = i {
@@ -416,6 +421,33 @@ impl Substituter<'_, '_, '_> {
                 Some(i) => self.sema.act_on_init(v, i),
                 None => self.sema.act_on_uninit(v),
             }
+            Ok(())
+        } else if let Some((d, ty)) = recovered
+            && d == depth
+            && self.sema.diags.error_count() > errors
+            && !self.sema.has_undeduced_type(v)
+        {
+            // A call of the initializer failed where clang builds a
+            // `RecoveryExpr` (an overloaded call, a member function call;
+            // never under SFINAE): its initializer still substitutes, and
+            // only a placeholder type is invalidated by it
+            // (`DeduceVariableDeclarationType`). The variable stays valid:
+            // later uses are checked and diagnosed (spec/sema.md §1.2).
+            // A `void` recovery that is the whole initializer initializes
+            // nothing: clang's "cannot initialize ... with an rvalue of
+            // type 'void'".
+            let peeled = self.peel_initializer(init);
+            let at = self.sema.begin_loc(peeled);
+            let e = if top == Some(peeled) && ty.is_some_and(|t| self.sema.ast.types.is_void(t)) {
+                self.sema.builder().opaque_value_of(
+                    QualType::VOID,
+                    kiln_ast::expr::ValueCategory::PRValue,
+                    at,
+                )
+            } else {
+                self.sema.recover_err(&[], at)
+            };
+            self.sema.act_on_init(v, crate::init::Initializer::Expr(e));
             Ok(())
         } else {
             // clang marks the declaration invalid: no follow-up
@@ -1380,9 +1412,19 @@ impl Substituter<'_, '_, '_> {
         self.declarator_name = outer_name;
         // clang `VisitTypedefNameDecl`: a member typedef whose type fails
         // to substitute is still declared, invalid (lookup finds it, its
-        // uses are silent, the specialization is invalid).
-        let failed = ty.is_err() && ctx == DeclaratorContext::Member;
-        let ty = if failed { QualType::ERROR } else { ty? };
+        // uses are silent, the specialization is invalid). A block-scope
+        // one is declared invalid as `int` (clang
+        // `InstantiateTypedefNameDecl`'s recovery): its uses are checked
+        // with that type and diagnosed (spec/sema.md §1.2).
+        let failed = ty.is_err();
+        let ty = match ty {
+            Ok(t) => t,
+            Err(_) if ctx == DeclaratorContext::Member => QualType::ERROR,
+            Err(_) if ctx == DeclaratorContext::Block && !self.sema.inst.stack.is_sfinae() => {
+                QualType::INT
+            }
+            Err(f) => return Err(f),
+        };
         let ty = self.sema.apply_pattern_mode(d, ty);
         if n.kind() == DeclKind::TypeAlias {
             let name = n.name().as_ident().ok_or(SubstFail)?;

@@ -245,6 +245,17 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// Records that a failed call is one clang recovers with a
+    /// `RecoveryExpr` (`FinishOverloadedCallExpr`,
+    /// `BuildCallToMemberFunction`): never under SFINAE, where clang
+    /// builds none (spec/sema.md §1.2).
+    /// `ty`: the recovery's type, `None` when it is type-dependent.
+    pub(crate) fn note_call_recovery(&mut self, ty: Option<QualType>) {
+        if !self.inst.stack.is_sfinae() {
+            self.call_recovery = Some((self.inst.stack.len(), ty));
+        }
+    }
+
     /// A `RecoveryExpr` of error type over `kids`.
     pub(crate) fn recover_err(&mut self, kids: &[ExprId], loc: Loc) -> ExprId {
         self.recover(QualType::ERROR, kids, loc)
@@ -2850,7 +2861,17 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) {
             return self.recover_err(&[e], loc);
         }
-        let e = if op == UnaryOp::AddrOf { self.undo_dependent_implicit_member(e) } else { e };
+        let e = if op == UnaryOp::AddrOf {
+            self.undo_dependent_implicit_member(e)
+        } else {
+            // [expr.ref]/7.3.2: clang's `BuildUnaryOp` recovers a bound
+            // member function operand of any operator but `&`.
+            let e = self.recover_bound_member(e);
+            if self.is_err_expr(e) {
+                return self.recover_err(&[e], loc);
+            }
+            e
+        };
         let t0 = self.ety(e);
         if self.is_dependent_overloadable(t0) {
             // `&C::m` of a member of dependent type: formed at
@@ -3312,6 +3333,18 @@ impl Sema<'_, '_> {
         braced: Option<InitList>,
         loc: Loc,
     ) -> ExprId {
+        // [expr.ref]/7.3.2: a bound member function operand is recovered
+        // before overload resolution (clang's `BuildBinOp` runs
+        // `CheckPlaceholderExpr` on each non-overload placeholder).
+        if !matches!(op, BinaryOp::PtrMemD | BinaryOp::PtrMemI)
+            && [l, r].iter().any(|&x| self.ety(x) == QualType::BOUND_MEMBER)
+        {
+            let (l, r) = (self.recover_bound_member(l), self.recover_bound_member(r));
+            if self.is_err_expr(l) || self.is_err_expr(r) {
+                return self.recover_err(&[l, r], loc);
+            }
+            return self.binary_operator(op, l, r, braced, loc);
+        }
         let br = [None, braced];
         match self.try_overloaded_operator(OperForm::Binary(op), &[l, r], &br, loc, Loc::INVALID) {
             OperResult::Done(e) => e,
@@ -4188,7 +4221,16 @@ impl Sema<'_, '_> {
             return self.recover_err(&[c, t, f], loc);
         }
         // clang's `CheckConditionalOperands`: `CheckPlaceholderExpr` on
-        // both operands first.
+        // the condition and both operands first (a bound member function
+        // is recovered by calling it, [expr.ref]/7.3.2).
+        let (c, t, f) = (
+            self.recover_bound_member(c),
+            self.recover_bound_member(t),
+            self.recover_bound_member(f),
+        );
+        if self.is_err_expr(c) || self.is_err_expr(t) || self.is_err_expr(f) {
+            return self.recover_err(&[c, t, f], loc);
+        }
         let t = self.resolve_single_overload_candidate(t);
         let f = self.resolve_single_overload_candidate(f);
         // The GNU element-wise conditional (clang `CXXCheckConditionalOperands`).
@@ -5080,6 +5122,10 @@ impl Sema<'_, '_> {
         let Some(conv_args) =
             self.convert_call_args(callee_info, callee, args, &mut braced, &proto, loc, rparen)
         else {
+            // A one-candidate overload set: clang resolved it as a set.
+            if adl_single == Some(callee) {
+                self.note_call_recovery(Some(proto.ret()));
+            }
             return self.recover_err(&kids, loc);
         };
         if named.and_then(|d| self.ast.decls.builtin_id(d))
@@ -5655,6 +5701,16 @@ impl Sema<'_, '_> {
         if let Some(call) = self.member_base_needs_call(base, arrow) {
             return self.act_on_member_q(call, qual, name, loc, op_loc, arrow);
         }
+        // [expr.ref]/7.3.2: a bound member function base (`g.s.x` for a
+        // member function `s`) is recovered by calling it, as clang's
+        // `PerformMemberExprBaseConversion` does.
+        if self.ety(base) == QualType::BOUND_MEMBER {
+            let call = self.recover_bound_member(base);
+            if self.is_err_expr(call) {
+                return self.recover_err(&[call], loc);
+            }
+            return self.act_on_member_q(call, qual, name, loc, op_loc, arrow);
+        }
         if let Some(e) = self.try_dependent_member_q(base, qual, name, None, false, loc, arrow) {
             if op_loc != loc {
                 let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
@@ -6027,6 +6083,9 @@ impl Sema<'_, '_> {
     }
 
     pub fn act_on_trait_expr(&mut self, kind: TraitKind, e: ExprId, loc: Loc) -> ExprId {
+        // clang's `CreateUnaryExprOrTypeTraitExpr` checks placeholders
+        // first: a bound member function is recovered by calling it.
+        let e = self.recover_bound_member(e);
         if self.is_err_expr(e) {
             return self.recover_err(&[e], loc);
         }
@@ -6281,6 +6340,14 @@ impl Sema<'_, '_> {
         if !is_err && (self.ast.types.is_dependent(ty) || self.expr_is_type_dependent(e)) {
             return self.dependent_cast(style, ty, e, loc, rparen);
         }
+        // [expr.ref]/7.3.2: clang's `checkNonOverloadPlaceholders` recovers
+        // a bound member function operand before any cast is checked.
+        let (e, is_err) = if !is_err && self.ety(e) == QualType::BOUND_MEMBER {
+            let e = self.recover_bound_member(e);
+            (e, self.is_err_expr(e))
+        } else {
+            (e, is_err)
+        };
         if style == CastStyle::Dynamic {
             return self.act_on_dynamic_cast(ty, e, loc, rparen);
         }
