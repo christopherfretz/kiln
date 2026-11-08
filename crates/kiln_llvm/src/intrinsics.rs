@@ -38,6 +38,14 @@ enum Shape {
     NoUnwindMem(MemoryEffects),
     /// `nomerge nounwind`.
     NoMerge,
+    /// `nofree nounwind willreturn` (the `AArch64` exclusive accesses).
+    NoFreeWillReturn,
+    /// `nocallback nounwind` (`llvm.write_register`).
+    NoCallbackNoUnwind,
+    /// `cold noreturn nounwind` (`llvm.aarch64.break`).
+    ColdNoReturn,
+    /// `nounwind willreturn memory(...)` (`llvm.aarch64.prefetch`).
+    WillReturnMem(MemoryEffects),
     /// No attributes (an intrinsic that may throw).
     Throws,
 }
@@ -95,6 +103,10 @@ fn fn_attrs(shape: Shape) -> Vec<Attr> {
         }
         Shape::NoUnwindMem(mem) => vec![f(NoUnwind), Attr::Memory(mem)],
         Shape::NoMerge => vec![f(AttrKind::NoMerge), f(NoUnwind)],
+        Shape::NoFreeWillReturn => vec![f(NoFree), f(NoUnwind), f(WillReturn)],
+        Shape::NoCallbackNoUnwind => vec![f(NoCallback), f(NoUnwind)],
+        Shape::ColdNoReturn => vec![f(Cold), f(NoReturn), f(NoUnwind)],
+        Shape::WillReturnMem(mem) => vec![f(NoUnwind), f(WillReturn), Attr::Memory(mem)],
         Shape::Throws => Vec::new(),
     }
 }
@@ -382,6 +394,35 @@ pub fn prefetch(m: &mut Module) -> FuncId {
     declare(m, &name, TypeId::VOID, &params, &[], Shape::Basic(Some(mem)))
 }
 
+/// `void @llvm.aarch64.prefetch(ptr readonly, i32 immarg rw, i32 immarg
+/// target, i32 immarg stream, i32 immarg is_data)`: `nounwind willreturn
+/// memory(argmem: readwrite, inaccessiblemem: readwrite)` (WP-846).
+pub fn aarch64_prefetch(m: &mut Module) -> FuncId {
+    let p = ptr(m);
+    let f = Attr::Flag;
+    let imm: &[Attr] = &[f(ImmArg)];
+    let params: [(TypeId, &[Attr]); 5] = [
+        (p, &[f(ReadOnly)]),
+        (TypeId::I32, imm),
+        (TypeId::I32, imm),
+        (TypeId::I32, imm),
+        (TypeId::I32, imm),
+    ];
+    let mem = MemoryEffects {
+        argmem: ModRef::ReadWrite,
+        inaccessiblemem: ModRef::ReadWrite,
+        ..MemoryEffects::default()
+    };
+    declare(m, "llvm.aarch64.prefetch", TypeId::VOID, &params, &[], Shape::WillReturnMem(mem))
+}
+
+/// `void @llvm.aarch64.break(i32 immarg)`: `cold noreturn nounwind`
+/// (`__builtin_arm_trap`; WP-846).
+pub fn aarch64_break(m: &mut Module) -> FuncId {
+    let params: [(TypeId, &[Attr]); 1] = [(TypeId::I32, &[Attr::Flag(ImmArg)])];
+    declare(m, "llvm.aarch64.break", TypeId::VOID, &params, &[], Shape::ColdNoReturn)
+}
+
 /// `ptr @llvm.frameaddress.p0(i32 immarg level)`.
 pub fn frameaddress(m: &mut Module) -> FuncId {
     let p = ptr(m);
@@ -427,6 +468,14 @@ pub enum TargetMem {
     UnknownArgWrite,
     /// `nounwind memory(inaccessiblemem: readwrite)`.
     UnknownInaccessible,
+    /// `nocallback nofree nosync nounwind willreturn` (side effects only:
+    /// `llvm.aarch64.rndr`, the GCS intrinsics; WP-846).
+    SideEffects,
+    /// `nofree nounwind willreturn` (`llvm.aarch64.ldxr` and the other
+    /// exclusive accesses; WP-846).
+    NoFree,
+    /// `nocallback nounwind` (`llvm.write_register`; WP-846).
+    NoCallback,
 }
 
 /// A target intrinsic by full name, return type and parameter types (each
@@ -456,6 +505,9 @@ pub fn target_intrinsic(
             inaccessiblemem: ModRef::ReadWrite,
             ..MemoryEffects::default()
         }),
+        TargetMem::SideEffects => Shape::Basic(None),
+        TargetMem::NoFree => Shape::NoFreeWillReturn,
+        TargetMem::NoCallback => Shape::NoCallbackNoUnwind,
     };
     let imm: &[Attr] = &[Attr::Flag(ImmArg)];
     let params: Vec<(TypeId, &[Attr])> =
