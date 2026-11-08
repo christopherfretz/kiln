@@ -585,6 +585,8 @@ pub struct Oven {
     /// The parameter bindings of a [`Job::Subst`].
     pub(crate) subst_binds: Vec<(DeclId, ExprId)>,
     pub(crate) mem: Memory,
+    /// Remembered `union_path` answers (WP-760, `vm/umemo.rs`).
+    pub(crate) umemo: vm::umemo::UnionMemo,
     pub(crate) regs: Vec<u128>,
     pub(crate) stack: Vec<Frame>,
     /// Registered destructions, innermost last (`Op::PushCleanup`).
@@ -667,6 +669,7 @@ impl Oven {
             msg_chars: Vec::new(),
             subst_binds: Vec::new(),
             mem: Memory::new(budget.bytes),
+            umemo: vm::umemo::UnionMemo::default(),
             regs: vec![0; 256],
             stack: Vec::with_capacity(64),
             cleanups: Vec::new(),

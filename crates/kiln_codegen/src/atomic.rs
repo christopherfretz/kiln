@@ -79,67 +79,6 @@ impl Cg<'_> {
         V::C(self.m.const_int(LTy::I32, v))
     }
 
-    /// clang `EmitPointerWithAlignment`: the pointer `e` and the alignment
-    /// of what it points to, from the declaration it was taken from where
-    /// there is one.
-    pub(crate) fn pointer_and_align(&mut self, e: ExprId) -> R<(V, u64)> {
-        Ok(self.pointer_and_align_src(e)?.0)
-    }
-
-    /// [`Cg::pointer_and_align`] and whether the alignment came from a
-    /// declaration (`AlignmentSource::Decl`).
-    fn pointer_and_align_src(&mut self, e: ExprId) -> R<((V, u64), bool)> {
-        let ast = self.ast;
-        let e = self.skip_parens(e);
-        let n = *ast.exprs.get(e);
-        if n.kind().is_cast() {
-            let s = ast.exprs.operand(e);
-            match ast.exprs.cast_kind(e) {
-                CastKind::NoOp | CastKind::BitCast => {
-                    let sq = ast.exprs.get(s).ty();
-                    if ast.types.is_pointer(sq)
-                        && ast.types.pointee(sq).is_some_and(|p| !ast.types.is_void(p))
-                    {
-                        let ((v, a), decl) = self.pointer_and_align_src(s)?;
-                        // An explicit cast of a pointer whose alignment is
-                        // not a declaration's takes the target's.
-                        if n.kind() != ExprKind::ImplicitCastExpr && !decl {
-                            let a = self.natural_pointee_align(n.ty());
-                            return Ok(((v, a), false));
-                        }
-                        return Ok(((v, a), decl));
-                    }
-                }
-                CastKind::ArrayToPointerDecay => {
-                    let lv = self.emit_lvalue(s)?;
-                    let decl = self.lvalue_from_decl(s);
-                    let v = self.decay(lv.addr, lv.q);
-                    return Ok(((v, lv.addr.align), decl));
-                }
-                _ => {}
-            }
-        }
-        if n.kind() == ExprKind::UnaryOperator
-            && ast.exprs.unary_op(e) == kiln_ast::expr::UnaryOp::AddrOf
-        {
-            let s = ast.exprs.operand(e);
-            let lv = self.emit_lvalue(s)?;
-            let decl = self.lvalue_from_decl(s);
-            return Ok(((lv.addr.v, lv.addr.align), decl));
-        }
-        let v = self.emit_scalar(e)?;
-        let a = self.natural_pointee_align(n.ty());
-        Ok(((v, a), false))
-    }
-
-    /// clang `getNaturalPointeeTypeAlignment`.
-    fn natural_pointee_align(&mut self, pq: QualType) -> u64 {
-        match self.ast.types.pointee(pq) {
-            Some(p) => self.natural_align(p),
-            None => 1,
-        }
-    }
-
     /// `DataLayout::getTypeSizeInBits` of `q`'s memory type (80 for the
     /// x87 `long double`, the allocation size otherwise).
     fn mem_bits(&mut self, q: QualType) -> u64 {
@@ -187,7 +126,7 @@ impl Cg<'_> {
         let use_libcall = !size.is_power_of_two() || size > 16;
         let rmw = at::rmw(id);
         let fp = ast.types.is_floating(value_q);
-        let (pv, palign) = self.pointer_and_align(ptr_e)?;
+        let (pv, palign) = self.ptr_align(ptr_e)?;
         if form == Form::Init {
             // clang `EmitAtomicInit`: a plain initialization.
             let Some(v1) = sub(1) else { return err(self.loc_of(e), "malformed AtomicExpr") };
@@ -236,27 +175,27 @@ impl Cg<'_> {
         match form {
             Form::Init | Form::Load => {}
             Form::LoadCopy => {
-                let (v, a) = self.pointer_and_align(need(2)?)?;
+                let (v, a) = self.ptr_align(need(2)?)?;
                 ops.dest = Some(Addr { v, ty: op_ty, align: a });
             }
             Form::Copy if !at::by_value(id) => {
-                let (v, a) = self.pointer_and_align(need(2)?)?;
+                let (v, a) = self.ptr_align(need(2)?)?;
                 ops.val1 = Some(Addr { v, ty: op_ty, align: a });
                 src[0] = pointee(need(2)?);
             }
             Form::GnuXchg => {
-                let (v, a) = self.pointer_and_align(need(2)?)?;
+                let (v, a) = self.ptr_align(need(2)?)?;
                 ops.val1 = Some(Addr { v, ty: op_ty, align: a });
                 src[0] = pointee(need(2)?);
-                let (v, a) = self.pointer_and_align(need(3)?)?;
+                let (v, a) = self.ptr_align(need(3)?)?;
                 ops.dest = Some(Addr { v, ty: op_ty, align: a });
             }
             Form::C11CmpXchg | Form::GnuCmpXchg => {
-                let (v, a) = self.pointer_and_align(need(2)?)?;
+                let (v, a) = self.ptr_align(need(2)?)?;
                 ops.val1 = Some(Addr { v, ty: op_ty, align: a });
                 src[0] = pointee(need(2)?);
                 ops.val2 = Some(if id == at::CMPXCHG {
-                    let (v, a) = self.pointer_and_align(need(4)?)?;
+                    let (v, a) = self.ptr_align(need(4)?)?;
                     src[1] = pointee(need(4)?);
                     Addr { v, ty: op_ty, align: a }
                 } else {
@@ -1102,7 +1041,7 @@ impl Cg<'_> {
             at::TEST_AND_SET | at::CLEAR => {
                 let a0 = arg(0)?;
                 let volatile = self.arg_pointee_volatile(a0);
-                let (p, align) = self.pointer_and_align(a0)?;
+                let (p, align) = self.ptr_align(a0)?;
                 let set = b == at::TEST_AND_SET;
                 let nv = self.icn(LTy::I8, i128::from(set));
                 let order = self.emit_scalar(arg(1)?)?;
@@ -1303,7 +1242,7 @@ impl Cg<'_> {
         let Some(vq) = ast.types.pointee(pq).map(QualType::without_quals) else {
             return err(self.loc_of(e), "__sync builtin without a pointer");
         };
-        let (p, align) = self.pointer_and_align(a0)?;
+        let (p, align) = self.ptr_align(a0)?;
         let bytes = self.size_align(vq).0.max(1);
         let align = if align.is_multiple_of(bytes) {
             align

@@ -146,10 +146,15 @@ fault counts and trap ids unchanged.
   array allocation of exactly the operand's element type: the current
   index is the offset shifted right by `k`, and a new index in `0..=n`
   gives the pointer (past-the-end at `n`); a zero index returns the
-  pointer unchanged. Everything else runs `ptr_add`, which tries the
-  same step with the size read from the type table and otherwise steps
-  within the extent of the subobject the pointer lies in, as before;
-  every result and every fault is the one that general path gives.
+  pointer unchanged. Otherwise, with a nonzero field, `ptr_add_member`
+  (out of line, not cold) tries `ptr_add_front`: a step inside an array
+  member the type table's whole-array extent table already holds
+  (`Types::extent_hit`, "Path cache" below; an `inplace_vector`'s
+  `union { T data[N]; }`), the new index in `0..=n` (WP-760).
+  Everything else runs `ptr_add`, which tries the same two steps with
+  the size read from the type table and otherwise steps within the
+  extent of the subobject the pointer lies in, as before; every result
+  and every fault is the one that general path gives.
 
 ### Abstract memory — normative for M2
 - **Pointers** are one `u64`: offset (32 bits) | past-the-end (1) | slot
@@ -700,8 +705,10 @@ fault counts and trap ids unchanged.
   static object thawed from a value (`resolve_var`, a usable
   `resolve_let`, `thaw`) whose type has one gets the allocation flag
   `MUTABLE_OUTSIDE`. Loads from an allocation with that flag or
-  `HAS_UNION` take the outlined slow path (`slow_access`; no cost for
-  other allocations): `mutable_path` walks from the allocation root to
+  `HAS_UNION` take the outlined slow path (`slow_access`; out of line
+  but not `#[cold]`, since union-backed storage takes it on every
+  access; no cost for other allocations; the union check is
+  `union_path_in`, "Union-path memo" below): `mutable_path` walks from the allocation root to
   the read object (a union through its active member) and faults at the
   outermost `mutable` member on the way; a read of a whole class object
   (the `Copy` of a trivial copy) faults at the first `mutable` member it
@@ -1998,7 +2005,12 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
 space if empty, every byte of the allocation marked within its lifetime,
 then the destroyed object's bytes marked outside it. From then on
 `Memory::check` consults the bytes as for `STD_ALLOC` storage (the
-`flags::TRACKED` mask), so a second explicit destruction, a read, an
+`flags::TRACKED` mask): an access that passes the inlined plain checks
+(`Memory::check_plain`) in tracked storage tests `Memory::live_at` (the
+space's lifetime bits, out of line, a `bool` result) and only on a dead
+byte runs `Memory::check_slow`, which reports the fault in the usual
+order (WP-760: an `inplace_vector`'s frame object is tracked after its
+first `pop_back`, so all its later accesses pay this test), so a second explicit destruction, a read, an
 assignment or a member call of the destroyed object is diagnosed as there,
 and a placement new (`std::construct_at`) re-begins the lifetime. The cost
 is one flag test per access for untracked allocations and nothing per
@@ -2011,7 +2023,12 @@ its lifetime: a registered destruction before its destructor runs
 a scope's trivially destructible objects at `ScopeExit` and of a
 function's at `Ret` (only once `Memory::life_frame` is set; the callee's
 locals in its frame, its parameters in the caller's context, as clang
-destroys them there, [expr.call]/6); and `delete`/`delete[]` before the
+destroys them there, [expr.call]/6; `Memory::life_hi` is one past the
+greatest `Memory::live` index of a `LIFE`-tracked frame object, raised
+by `set_lifetime` and lowered by the frame release, and a scope whose
+mark is at or above it releases no tracked object, so the callers of
+`Oven::scope_life` skip it inline, `Memory::life_above`, WP-760); and
+`delete`/`delete[]` before the
 destructors and the deallocation. Arrays are checked element by element
 from the last, so the note names `a[1]` or `{*new S[2]#0}[0]`. A
 variable's note is at its declaration, others' at the destroying
@@ -2547,15 +2564,72 @@ among the first 64, that may hold the object by the walk's rule), the
 object (`Reached`), a `mutable` member (`mutable_path` only) or the end of
 the path (`Stop`). The walk still reads the union's active member and
 possibly-active members from memory at every access and picks among the
-mask's members exactly as before, so no active-member answer is cached;
-the diagnostics of a member that no possibly-active one holds are composed
-uncached. `Types::extent` and `Types::has_subobject` strip leading arrays
-by arithmetic and cache their answer per (record, offset, type). The
-cache lives in `Types`; each of its three maps holds at most
-`PATH_CACHE_MAX` (`crates/kiln_oven/src/ty/path.rs`, 16,384) entries and
-is cleared by the insert past that, and all three are cleared when a
-provisional class slot is rebuilt in place (`Types::refresh`). It is part
-of `Types::footprint`, which `Oven::footprint` includes.
+mask's members exactly as before, so the path cache holds no
+active-member answer (the union-path memo below remembers whole walks,
+keyed by the state of the active members); the diagnostics of a member
+that no possibly-active one holds are composed uncached. `Types::extent`
+and `Types::has_subobject` strip leading arrays by arithmetic and cache
+their answer per (record, offset, type). The cache lives in `Types`;
+each of its three maps holds at most `PATH_CACHE_MAX`
+(`crates/kiln_oven/src/ty/path.rs`, 16,384) entries and is cleared by
+the insert past that, and all three are cleared when a provisional class
+slot is rebuilt in place (`Types::refresh`, which also counts the
+rebuilds in `Types::rebuilt`). It is part of `Types::footprint`, which
+`Oven::footprint` includes.
+
+The *extent front table* (WP-760, `ExtentFront` in `ty/path.rs`) holds
+whole-array answers of `Types::extent`: 256 entries, two-way per (root
+type, element type), direct-mapped, so a collision overwrites and the
+table never grows (part of the footprint, cleared with the maps). An
+entry `(root, p, lo, hi, n)` says every byte in `[lo, hi)` of a `root`
+object lies in the array of `n` elements of `p` (up to qualifiers)
+starting at `lo`. It is filled when `Types::extent` answers an array
+whose bytes no other member overlaps on the way down from the root
+(`Types::extent_unique`: a single member covers them at every record
+level; records of more than 64 fields are not examined), so the walk
+would take the same steps for every byte in it. `Types::extent_hit`
+reads it without walking; `ptr_add_front` steps with it, and
+`Types::has_subobject` answers true for an offset at an element boundary
+of such an array of `p` (an `inplace_vector`'s `construct_at(&data[n])`)
+before its per-offset cache.
+
+**Union-path memo (WP-760).** `union_path` (an access) and
+`place_in_unions` (a construction) remember their `Ok` answers in the
+Oven's `UnionMemo` (`crates/kiln_oven/src/vm/umemo.rs`): 512 entries,
+direct-mapped and fixed-size (a collision overwrites; its memory does
+not grow with the evaluation), keyed by (walk, allocation key, allocation
+type, accessed type, offset). An entry is stamped with
+`Memory::union_epoch`, which every change to `Memory::unions` or
+`Memory::union_alts` increments (a set, a removal by destruction,
+release or reuse, a trial rollback, a thaw), and with `Types::rebuilt`;
+it answers only while both are what they were. The walk's `Ok` answer
+is a pure function of the allocation's type, the offset, the accessed
+type, the type table and those maps; only a fault depends on the access
+kind, so faults, and a walk that let the access through on a fault path
+(`union_fault` returning `Ok`), are never remembered, and every
+diagnostic is the walk's own. An entry covers one offset, or a *region*:
+when the walk resolved every union by its active member and reached an
+array without unions holding the accessed object, every element at the
+same position (`lo + i * stride + phase` below `lo + len`) is answered
+by the same walk ([intro.object]/9: no two subobjects of one type share
+an address, so each record on the way has one member toward any of
+them), so a `union { T data[N]; }` costs one walk, not one per element.
+`place_in_unions` remembers only a walk that succeeded and changed no
+active member (a hit is a construction that would do nothing); its
+region is the elements of the active array member of the only union on
+the way.
+
+Before the memo, `union_path_in` tests `union_overlaps`: the accessed
+object's bytes against `TyInfo::uhull`, the bytes `[lo, hi)` spanning
+every union subobject of the allocation's type (`(0, 0)` without one;
+`Types::union_hull`, computed at layout), and the access to the whole
+object (offset 0, the allocation's own type), the walk's first step;
+an access outside the hull crosses no union and checks nothing.
+`Memory::may_be_active` (a member access's `bi::UNION_LIVE` and the
+other active-member questions) remembers its last `true` answer with the
+epoch it holds at, in a `Cell` on `Memory`. `Types::holds_no_data`
+answers false without walking the members of a class with a vptr,
+pointer or union subobject.
 
 **Static members and function lvalues (WP-207).** `E.m`/`E->m` naming a
 static data member evaluates `E` for its side effects only

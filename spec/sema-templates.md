@@ -1735,7 +1735,9 @@ Out-of-class partial specializations of a member template (WP-150):
 instantiates the definitions of every member that is defined in the
 pattern and not yet explicitly specialized, including the out-of-line
 definitions of static data members (clang `InstantiateVariableDefinition`)
-and the members of member classes. Member templates are excluded. A
+and the members of member classes. Member templates are excluded, and
+so is the partial specialization of a member class template the
+instantiated class declares, which is still dependent (WP-812). A
 member class that is not yet defined at that point gets the member
 specialization kind `ExplicitInstantiationDefinition` (so its vtable and
 RTTI are emitted `weak_odr`); one already defined keeps its implicit
@@ -3836,6 +3838,36 @@ deduction fails as before. Tests:
 `tests/conformance/temp.deduct.type/default-arg-friend-first-declaration*.cpp`,
 `tests/conformance/temp.deduct.type/default-completion-friend-first.cpp`,
 `tests/conformance/format.functions/libcxx-format-run.cpp`.
+
+A template template parameter's template-id `U<Ps...>` against `A` with
+another number of arguments (packs aside; `deduce_ttp_id_args`, WP-812)
+deduces `Ps` from `A`'s first arguments, and `A`'s remaining arguments
+must be the defaults those give ([temp.arg.template]/3, P0522, CWG2398 as
+clang deduces it): `f(const U<T>)` with `template<class> class U` is
+viable for `rv<double, 1>` of `template<class, size_t = 1> struct rv`
+(Boost.Math's `sinhc_pi` for its reverse-mode `rvar`) and not for
+`rv<double, 2>`. When `A` itself names a template template parameter (the
+unique type of partial ordering, [temp.func.order]/3) the remaining
+arguments are not checked (they bind as the deduced template's defaults,
+P3310R5's `DeducedTemplateName`); a shorter such `A` matches under clang
+19, which ignores `P`'s extra arguments, and fails at `-fclang-compat=22`,
+so `f(TT<int, int>)` beats `f(TT<int>)` only there. The remaining
+arguments are not checked in the partial ordering of function templates
+either, where `A` is the other template's transformed parameter type:
+`U<T>` is deduced from `num<B', E'>` but `num<B, E>` is not deduced from
+`U'<T'>`, so `f(const num<B, E>&)` is more specialized than
+`f(const U<T>)` (clang 19 and 22; Boost.Multiprecision's `sinhc_pi`
+against Boost.Math's). The partial ordering of class template partial
+specializations still checks them, comparing a defaulted non-type
+argument by value: the partial specialization `lambda<protect<T>, Tag>`
+keeps `protect<T>`'s default `0` as an expression, which equals the
+completed default `0`, so it is more specialized than
+`lambda<F<T1>, Tag>` (Boost.MPL). Tests:
+`tests/conformance/temp.arg.template/p0522-deduce-defaulted-args-run.cpp`,
+`tests/conformance/temp.arg.template/p0522-partial-order-defaulted-args-run.cpp`,
+`tests/conformance/temp.arg.template/p0522-partial-spec-order-defaulted-value.cpp`,
+`tests/conformance/temp.arg.template/p0522-partial-order-unique-ttp-clang{19,22}.cpp`,
+`tests/conformance/temp.arg.template/p3310-probe.cpp`.
 
 **Non-deduced contexts:**
 - the nested-name-specifier of a qualified-id;
