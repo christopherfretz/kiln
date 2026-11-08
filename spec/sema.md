@@ -1891,6 +1891,46 @@ and returns the scope it names:
     as type attributes (`Sema::apply_type_id_vector_attrs`, clang
     `processTypeAttrs`), so `ext_vector_type` is accepted at clang 19
     too (WP-187; `ext.vector/type-id-run.cpp`).
+  - `mode(M)` (GNU syntax; `vector.rs`, WP-799; clang `handleModeAttr`,
+    `parseModeAttrArg`) takes one identifier (`__M__` is `M`) and is
+    consumed into the declared type like `vector_size`. Modes:
+    `QI`/`HI`/`SI`/`DI`/`TI` are integer modes of 8/16/32/64/128 bits
+    (`byte` 8; `word`, `pointer`, `unwind_word` the pointer width);
+    `HF`/`SF`/`DF`/`XF`/`TF`/`KF`/`IF` floating modes of 16/32/64/96/128
+    bits and `SC`/`DC`/`XC`/`TC`/`KC`/`IC` their complex forms. The
+    floating type is clang's `getRealTypeByWidth`: `__fp16`, `float`,
+    `double`; 96 bits `long double` only if it is x87 (x86-64); `TF`
+    `long double` if that is IEEE quad (AArch64), else `__float128`;
+    `KF` `__float128` only where the target has it (x86-64); `IF` never
+    (`unsupported machine mode 'M'`). `V<N>M`, N a power of two, is a
+    GNU vector of N elements of mode M, with the -Wdeprecated-attributes
+    warning `specifying vector types with the 'mode' attribute is
+    deprecated; use the 'vector_size' attribute instead` (any other
+    `V...` is the whole name). Other names (`CQI`, `libgcc_cmp_return`,
+    ..., as in clang 19) are `unknown machine mode 'M'`. An integral or
+    enumeration type becomes the integer type of the mode's width with
+    the same signedness, a floating type the mode's floating type, a
+    complex floating type with a complex mode its complex type (with a
+    real mode the real type); the result is unqualified (clang replaces
+    the declaration's type). On a vector type a scalar mode replaces the
+    element type, keeping the size and kind; a vector mode builds the
+    vector of the new type. A non-arithmetic type (a complex integer
+    type included) is `mode attribute only supported for integer and
+    floating-point types`; an integer mode on a floating type, a
+    floating mode on an integer type or a complex mode on a real one is
+    `type of machine mode does not match type of base type`; as in
+    clang the mode's type is still installed. A vector mode on an
+    enumeration type is `mode 'M' is not supported for enumeration
+    types`, a complex mode on a vector type also `type of machine mode
+    does not support base vector types` (type unchanged). In a system
+    header the same: `mode` changes size and layout, so it is never
+    ignored (glibc's x86-64 `<bits/floatn.h>` declares `__cfloat128`
+    with `__mode__ (__TC__)`). On an enumeration declaration an integer
+    mode sets the underlying type, from the fixed type or else `int`
+    (clang `AddModeAttr` on an `EnumDecl`), so `enum E {X}
+    __attribute__((mode(QI)))` has underlying type `signed char`. On a
+    dependent type the attribute is dropped (a deviation: clang applies
+    it at instantiation; `ext.gnu.mode/mode-dependent-run.cpp` is xfail).
     Diagnostics (WP-187, `ext.vector/*-diagnostics.cpp`):
     - A type argument whose desugaring reaches a vector typedef stops at
       that typedef as written, with its scope: `'B' (aka 'X::v')`,
@@ -4464,6 +4504,11 @@ function) elsewhere.
   ([class.copy.elision]/3), which applies only when the named local's
   scope does not extend past the innermost enclosing try-block
   (`thrown_var_in_scope`, WP-100).
+- A non-trivial destructor of a class exception object is odr-used
+  ([except.throw]/5; `use_exception_dtor`, clang `CheckCXXThrowOperand`):
+  its access and deletion are checked as for a temporary, and an
+  implicit one is defined in the translation unit, since `__cxa_throw`
+  is passed its complete-object destructor (WP-799).
 - In `?:`, a throw operand gives the other operand's type and value
   category ([expr.cond]/2).
 - The Oven treats a `throw` it reaches as not a constant expression,
@@ -4553,7 +4598,13 @@ for them.
     restores them.
   - The final expression statement goes through
     `act_on_stmt_expr_result`: decay, then copy-initialization of a
-    prvalue of its cv-unqualified type.
+    prvalue of its cv-unqualified type. A class prvalue is kept as is;
+    a class glvalue is copied into the result by its copy (or move)
+    constructor (clang `InitializeStmtExprResult`; `arm_neon.h`'s
+    `vld2q` macros end in a local struct). Codegen emits that copy
+    into the destination inside the statement expression's scope,
+    before its locals are destroyed, and the oven initializes a class
+    result object the same way (spec/landed/sema/WP-799.md).
   - The type is that of the last non-null statement, looking through
     labels, when that is an expression statement; otherwise `void`.
     The result is always a prvalue.

@@ -3117,14 +3117,48 @@ impl Cg<'_> {
             self.emit_stmt(body)?;
             return Ok(None);
         }
+        let (scope, r) = self.stmt_expr_prefix(e)?;
+        let q = ast.exprs.get(r).ty();
+        let tmp = self.temp(q);
+        if self.is_complex(q) {
+            // A complex result is loaded into `cx_ret`.
+            let v = self.emit_complex(r)?;
+            self.cx_store(v, tmp, q);
+            self.end_scope(scope);
+            let (re, im) = self.cx_load(tmp, q, (false, false));
+            self.f.cx_ret = re.zip(im);
+            return Ok(None);
+        }
+        let v = self.emit_scalar(r)?;
+        self.store_scalar(v, tmp, q);
+        self.end_scope(scope);
+        Ok(Some(self.load_scalar(tmp, q)))
+    }
+
+    /// clang `AggExprEmitter::VisitStmtExpr`: a statement expression of
+    /// class (or array) type initializes `dest` from its result
+    /// expression inside the compound statement's scope, so the copy of a
+    /// local is made before the scope's cleanups destroy it.
+    fn agg_stmt_expr(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
+        let (scope, r) = self.stmt_expr_prefix(e)?;
+        self.emit_agg(r, dest, zeroed)?;
+        self.end_scope(scope);
+        Ok(())
+    }
+
+    /// `EmitCompoundStmt(GetLast)` up to the result: opens the lexical
+    /// scope, emits every statement before the last one that is not a
+    /// null statement, and its labels; returns the scope (for the caller
+    /// to end once the result is stored) and the result expression.
+    fn stmt_expr_prefix(&mut self, e: ExprId) -> R<(crate::stmt::Scope, ExprId)> {
+        let ast = self.ast;
+        let body = ast.exprs.stmt_expr_body(e);
         let children: Vec<StmtId> = ast.lists.iter(ast.stmts.compound_body(body)).collect();
         let Some(result) =
             children.iter().rposition(|&c| ast.stmts.get(c).kind() != StmtKind::NullStmt)
         else {
             return err(self.loc_of(e), "statement expression without a result");
         };
-        // `EmitCompoundStmt(GetLast)`: a lexical scope, the result stored
-        // to a `tmp` so the scope's cleanups can run before it is read.
         let scope = self.begin_scope(true);
         for &c in &children[..result] {
             self.emit_stmt(c)?;
@@ -3143,22 +3177,7 @@ impl Cg<'_> {
             }
         }
         self.ensure_insert_point();
-        let r = ast.stmts.expr_stmt_expr(s);
-        let q = ast.exprs.get(r).ty();
-        let tmp = self.temp(q);
-        if self.is_complex(q) {
-            // A complex result is loaded into `cx_ret`.
-            let v = self.emit_complex(r)?;
-            self.cx_store(v, tmp, q);
-            self.end_scope(scope);
-            let (re, im) = self.cx_load(tmp, q, (false, false));
-            self.f.cx_ret = re.zip(im);
-            return Ok(None);
-        }
-        let v = self.emit_scalar(r)?;
-        self.store_scalar(v, tmp, q);
-        self.end_scope(scope);
-        Ok(Some(self.load_scalar(tmp, q)))
+        Ok((scope, ast.stmts.expr_stmt_expr(s)))
     }
 
     // ---- ignored expressions -------------------------------------------
@@ -4073,6 +4092,7 @@ impl Cg<'_> {
             ExprKind::BinaryOperator if ast.exprs.binary_op(e) == BinaryOp::Cmp => {
                 self.agg_three_way(e, dest)
             }
+            ExprKind::StmtExpr => self.agg_stmt_expr(e, dest, zeroed),
             k => err(self.loc_of(e), format!("aggregate expression {k:?} is not supported yet")),
         }
     }

@@ -22,6 +22,8 @@ REQUIRED = ("url", "tag", "build", "cxx_std", "test", "wave")
 BUILDS = ("cmake", "meson", "make")
 KINDS = ("ok", "reject", "panic", "backend", "link", "timeout", "oom", "other")
 CTEST_RE = re.compile(r"(\d+)% tests passed, (\d+) tests? failed out of (\d+)")
+# Catch2's totals line (duckdb's unittest, WP-799).
+CATCH_RE = re.compile(r"^test cases:\s*(\d+)\s*\|\s*(\d+) passed\s*\|\s*(\d+) failed")
 # lit's summary (LLVM's check-* targets): a total line, then one
 # `  <Result> : N (p%)` line per non-empty result category.
 LIT_TOTAL_RE = re.compile(r"^Total Discovered Tests: (\d+)")
@@ -134,6 +136,10 @@ def test_summary(log_path):
         if m:
             total, failed = int(m.group(3)), int(m.group(2))
             return line.strip(), {"passed": total - failed, "failed": failed, "total": total}
+        m = CATCH_RE.search(line)
+        if m:
+            total, passed, failed = (int(x) for x in m.groups())
+            return line.strip(), {"passed": passed, "failed": failed, "total": total}
     lit = lit_summary(lines)
     if lit:
         return lit

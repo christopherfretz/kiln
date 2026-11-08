@@ -3579,7 +3579,10 @@ No lowering changed; the new forms reach codegen as existing AST.
   widening multiply"; the pairwise widening add `vpaddl[q]` as
   `{s,u}addlp.VTy.N` of the operand bitcast to twice the lanes at half the
   width, and `vqdmulh[q]`/`vqrdmulh[q]` as one `sq[r]dmulh` call: WP-792,
-  `target.neon/ir-paddl-qdmulh-19.cpp`). The AArch64 ACLE builtins (`__builtin_arm_*`,
+  `target.neon/ir-paddl-qdmulh-19.cpp`; the structure loads and stores
+  `vld2`..`vld4`, `vst2`..`vst4` and the shift-and-insert `vsli_n`:
+  spec/landed/sema/WP-799.md "NEON structure loads and stores"). The
+  AArch64 ACLE builtins (`__builtin_arm_*`,
   `arm.rs`) are spec/landed/sema/WP-724.md "ACLE builtins".
 - With `CodegenOptions::sve` (AArch64 only), every function definition
   and the global-initialization functions (`__cxx_global_var_init`,

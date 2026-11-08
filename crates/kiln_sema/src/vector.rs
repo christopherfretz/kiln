@@ -21,7 +21,7 @@ use std::ops::ControlFlow;
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::ids::RawId;
-use kiln_ast::types::{Quals, TypeView, VectorKind};
+use kiln_ast::types::{FloatFormat, Quals, TypeView, VectorKind};
 use kiln_ast::{AttrId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_oven::{EvalContext, EvalKind};
@@ -31,6 +31,14 @@ use crate::Sema;
 use crate::conv;
 use crate::decl::AttrArg;
 use crate::declspec::DeclSpec;
+
+/// The kinds of a GNU `mode` ([`AttrKind::MODE`] `a >> 8 & 7`): an
+/// integer mode, a floating-point one by width, `KF` (IEEE quad) and `IF`
+/// (IBM double-double).
+const MODE_INT: u32 = 0;
+const MODE_FLOAT: u32 = 1;
+const MODE_FLOAT128: u32 = 2;
+const MODE_IBM128: u32 = 3;
 
 impl Sema<'_, '_> {
     /// `ext_vector_type(N)` / `vector_size(N)` as written: exactly one
@@ -86,6 +94,7 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> ControlFlow<Option<AttrId>> {
         match kind {
+            AttrKind::MODE => ControlFlow::Break(self.mode_attribute(syntax, args, loc)),
             k if k.is_vector_type() => {
                 ControlFlow::Break(self.vector_attribute(kind, syntax, raw, args, loc))
             }
@@ -100,6 +109,226 @@ impl Sema<'_, '_> {
             AttrKind::CLEANUP => ControlFlow::Break(self.cleanup_attribute(syntax, args, loc)),
             _ => ControlFlow::Continue(()),
         }
+    }
+
+    /// GNU `mode(M)` as written (clang `handleModeAttr` /
+    /// `parseModeAttrArg`; spec/sema.md "The `mode` attribute"): one
+    /// identifier, `__M__` normalized to `M`. `QI`/`HI`/`SI`/`DI`/`XI`/`TI`
+    /// are 8/16/32/64/96/128-bit integers; `HF`/`SF`/`DF`/`XF`/`TF`
+    /// floating-point of 16/32/64/96/128 bits, `KF` the IEEE quad type and
+    /// `IF` the IBM double-double one; the `C` forms (`SC`, `DC`, `XC`,
+    /// `TC`, ..) their complex types; `byte` 8, `word`/`pointer`/
+    /// `unwind_word` the pointer width. `V<N>M` (N a power of two) is a
+    /// vector of N elements of mode M, deprecated with a warning. Any other
+    /// name is an unknown mode. Whether the target has the type is decided
+    /// by [`Self::apply_mode`]. Encoded as for [`AttrKind::MODE`].
+    fn mode_attribute(&mut self, syntax: AttrSyntax, args: &[AttrArg], loc: Loc) -> Option<AttrId> {
+        let name = "'mode'";
+        if args.len() != 1 {
+            let msg =
+                self.diag(DiagId::sema_attribute_wrong_number_arguments, loc).arg(name).arg("1");
+            self.emit(msg);
+            return None;
+        }
+        let AttrArg::Ident(sym, _) = args[0] else {
+            let msg = self.diag(DiagId::sema_attribute_param_not_ident, loc).arg(name).arg("1");
+            self.emit(msg);
+            return None;
+        };
+        let written = self.ast.symbols().as_str(sym).to_owned();
+        let m = match written.strip_prefix("__").and_then(|w| w.strip_suffix("__")) {
+            Some(w) if written.len() >= 4 => w,
+            _ => written.as_str(),
+        };
+        // `V<N>`: the digits after `V`, a power of two (clang ignores the
+        // prefix otherwise, so `V3SI` is an unknown mode). kiln keeps N up
+        // to 2^16.
+        let digits = m.bytes().skip(1).take_while(u8::is_ascii_digit).count();
+        let lanes = (m.len() >= 4 && m.starts_with('V') && digits > 0)
+            .then(|| m[1..=digits].parse::<u32>().ok())
+            .flatten()
+            .filter(|n| n.is_power_of_two() && *n <= 1 << 16);
+        let base = if lanes.is_some() { &m[digits + 1..] } else { m };
+        if lanes.is_some() {
+            self.error(DiagId::sema_vector_mode_deprecated, loc);
+        }
+        let b = base.as_bytes();
+        let word = u32::from(self.target.pointer_bytes) * 8;
+        // (width, MODE_FLOAT.. kind, complex)
+        let (width, kind, complex) = match (base, b.len()) {
+            ("byte", _) => (8, MODE_INT, false),
+            ("word" | "pointer" | "unwind_word", _) => (word, MODE_INT, false),
+            (_, 2) => {
+                let (w, kind) = match b[0] {
+                    b'Q' => (8, MODE_FLOAT),
+                    b'H' => (16, MODE_FLOAT),
+                    b'S' => (32, MODE_FLOAT),
+                    b'D' => (64, MODE_FLOAT),
+                    b'X' => (96, MODE_FLOAT),
+                    b'T' => (128, MODE_FLOAT),
+                    b'K' => (128, MODE_FLOAT128),
+                    b'I' => (128, MODE_IBM128),
+                    _ => (0, MODE_INT),
+                };
+                match b[1] {
+                    b'I' if kind == MODE_FLOAT => (w, MODE_INT, false),
+                    b'F' => (w, kind, false),
+                    b'C' => (w, kind, true),
+                    _ => (0, MODE_INT, false),
+                }
+            }
+            _ => (0, MODE_INT, false),
+        };
+        if width == 0 {
+            self.machine_mode_error(loc, true, m);
+            return None;
+        }
+        let log2 = lanes.map_or(0, |n| n.trailing_zeros() + 1);
+        let node = AttrNode {
+            kind: AttrKind::MODE,
+            syntax,
+            flags: 0,
+            loc,
+            a: width | kind << 8 | u32::from(complex) << 11 | log2 << 12,
+            b: sym.index(),
+        };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// "unknown/unsupported machine mode 'M'" (clang `err_machine_mode`).
+    fn machine_mode_error(&mut self, loc: Loc, unknown: bool, m: &str) {
+        let msg = self
+            .diag(DiagId::sema_machine_mode, loc)
+            .arg(if unknown { "0" } else { "1" })
+            .arg(format!("'{m}'"));
+        self.emit(msg);
+    }
+
+    /// The real floating-point type of a `width`-bit mode of `kind` (clang
+    /// `TargetInfo::getRealTypeByWidth`): 16/32/64 bits `__fp16`, `float`,
+    /// `double`; 96 bits the x87 `long double`; 128 bits `__float128` for
+    /// `KF`, none for `IF`, otherwise an IEEE quad `long double` or else
+    /// `__float128` where the target has it (x86-64).
+    fn mode_real_type(&self, width: u32, kind: u32) -> Option<QualType> {
+        let x87 = self.target.long_double == FloatFormat::X87Extended;
+        let quad = self.target.long_double == FloatFormat::IeeeQuad;
+        match (width, kind) {
+            (16, _) => Some(QualType::HALF),
+            (32, _) => Some(QualType::FLOAT),
+            (64, _) => Some(QualType::DOUBLE),
+            (96, _) if x87 => Some(QualType::LONGDOUBLE),
+            (128, MODE_FLOAT128) => x87.then_some(QualType::FLOAT128),
+            (128, MODE_FLOAT) if quad => Some(QualType::LONGDOUBLE),
+            (128, MODE_FLOAT) if x87 => Some(QualType::FLOAT128),
+            _ => None,
+        }
+    }
+
+    /// The underlying type an enumeration gets from its `mode` attribute
+    /// `node`, `old` being the type it is applied to (the fixed type, else
+    /// `int`); `None` (diagnosed) for a mode other than an integer one.
+    pub(crate) fn enum_mode_type(&mut self, old: QualType, node: AttrNode) -> Option<QualType> {
+        if node.a >> 12 & 0x1f != 0 {
+            let m = self.ast.symbols().as_str(kiln_source::symbol::Symbol::from_index(node.b));
+            let m = format!("'{}'", m.trim_start_matches("__").trim_end_matches("__"));
+            let msg = self.diag(DiagId::sema_mode_enum_vector, node.loc).arg(m);
+            self.emit(msg);
+            return None;
+        }
+        let t = self.apply_mode(old, node);
+        conv::rank::int_width(self, t).is_some().then_some(t)
+    }
+
+    /// `ty` with the `mode` attribute `node` applied (clang
+    /// `Sema::AddModeAttr`), on `ty` or, for a vector `ty`, its element
+    /// type: an integral or enumeration type becomes the integer type of
+    /// the mode's width with its signedness; a floating-point or complex
+    /// floating-point type the mode's floating-point type, or for a complex
+    /// mode its complex type. A vector mode makes a GNU vector of that
+    /// type; a scalar mode on a vector type keeps its size and kind. All
+    /// without cv-qualifiers (clang sets the declaration's type to the
+    /// unqualified mode type). A complex integer type is not primitive.
+    /// As in clang, a type that does not match the mode is diagnosed and
+    /// the mode's type still installed. A dependent type is left as it is.
+    fn apply_mode(&mut self, ty: QualType, node: AttrNode) -> QualType {
+        if self.is_error_type(ty) || self.ast.types.is_dependent(ty) {
+            return ty;
+        }
+        let (width, kind) = (node.a & 0xff, node.a >> 8 & 7);
+        let (complex, log2) = (node.a >> 11 & 1 == 1, node.a >> 12 & 0x1f);
+        let old_vec = match self.ast.types.canonical_view(ty) {
+            TypeView::Vector { elem, count, kind } => Some((elem, count, kind)),
+            _ => None,
+        };
+        let elem = old_vec.map_or(ty, |v| v.0);
+        let name = || {
+            let m = self.ast.symbols().as_str(kiln_source::symbol::Symbol::from_index(node.b));
+            m.trim_start_matches("__").trim_end_matches("__").to_owned()
+        };
+        if log2 != 0 && self.ast.types.as_enum(elem).is_some() {
+            let msg =
+                self.diag(DiagId::sema_mode_enum_vector, node.loc).arg(format!("'{}'", name()));
+            self.emit(msg);
+            return ty;
+        }
+        let integral = conv::rank::int_width(self, elem).is_some()
+            && !matches!(self.ast.types.canonical_view(elem), TypeView::BitInt { .. });
+        let is_complex =
+            self.ast.types.as_complex(elem).is_some_and(|e| self.ast.types.is_floating(e));
+        let floating = self.ast.types.is_floating(elem) || is_complex;
+        let wrong = if kind == MODE_INT {
+            !integral
+        } else if complex {
+            !is_complex
+        } else {
+            !floating
+        };
+        if !integral && !floating {
+            self.error(DiagId::sema_mode_not_primitive, node.loc);
+        } else if wrong {
+            self.error(DiagId::sema_mode_wrong_type, node.loc);
+        }
+        let new = if kind == MODE_INT {
+            let signed = integral && conv::rank::int_signed(self, elem);
+            match (width, signed) {
+                (8, true) => Some(QualType::SCHAR),
+                (8, false) => Some(QualType::UCHAR),
+                (16, true) => Some(QualType::SHORT),
+                (16, false) => Some(QualType::USHORT),
+                (32, true) => Some(QualType::INT),
+                (32, false) => Some(QualType::UINT),
+                (64, true) => Some(QualType::LONG),
+                (64, false) => Some(QualType::ULONG),
+                (128, true) => Some(QualType::INT128),
+                (128, false) => Some(QualType::UINT128),
+                _ => None,
+            }
+        } else {
+            self.mode_real_type(width, kind)
+        };
+        let Some(mut new) = new else {
+            let m = name();
+            self.machine_mode_error(node.loc, false, &m);
+            return ty;
+        };
+        if complex {
+            new = self.ast.types.complex(new);
+        }
+        if log2 != 0 {
+            return self.ast.types.vector(new, 1 << (log2 - 1), VectorKind::Generic);
+        }
+        let Some((old_elem, count, vkind)) = old_vec else { return new };
+        if complex {
+            self.error(DiagId::sema_mode_complex_vector_base, node.loc);
+            return ty;
+        }
+        let size = |s: &Self, t| crate::target::size_align(&s.ast, t, s.abi()).map_or(0, |x| x.0);
+        let (old_size, new_size) = (size(self, old_elem), size(self, new));
+        if new_size == 0 {
+            return ty;
+        }
+        let lanes = old_size * u64::from(count) / new_size;
+        self.ast.types.vector(new, u32::try_from(lanes).unwrap_or(u32::MAX), vkind)
     }
 
     /// GNU `format(archetype, F, A)` as written (WP-186; clang
@@ -243,6 +472,10 @@ impl Sema<'_, '_> {
                 continue;
             }
             attrs.remove(i);
+            if node.kind == AttrKind::MODE {
+                ty = self.apply_mode(ty, node);
+                continue;
+            }
             if matches!(node.kind, AttrKind::NEON_VECTOR_TYPE | AttrKind::NEON_POLYVECTOR_TYPE) {
                 if self.is_error_type(ty) {
                     continue;
