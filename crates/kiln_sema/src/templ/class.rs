@@ -923,6 +923,37 @@ impl Sema<'_, '_> {
             || self.suspended_classes.iter().flatten().any(|b| b.record == def)
     }
 
+    /// Whether specialization `spec` needs instantiating while its
+    /// pattern `def` is being defined, diagnosed as in
+    /// [`Sema::instantiate_class_as`].
+    fn instantiation_within_definition(
+        &mut self,
+        spec: DeclId,
+        def: DeclId,
+        poi: Loc,
+        diagnose: bool,
+        implicit: bool,
+    ) -> bool {
+        if !self.class_being_defined(def) {
+            return false;
+        }
+        let quiet =
+            self.invalid_defining.contains(&def) || self.ast.decls.get(def).has(DeclFlags::INVALID);
+        if diagnose && !quiet {
+            let t = self.tag_type(spec);
+            let d = self
+                .diag(DiagId::sema_template_instantiate_within_definition, poi)
+                .arg(u8::from(!implicit))
+                .arg(self.decl_ty_str(t));
+            self.emit(d);
+            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            self.inst.undefined_diagnosed.set(Some(spec));
+        } else {
+            self.inst.undefined_diagnosed.set(None);
+        }
+        true
+    }
+
     /// Instantiates the definition of class template specialization
     /// `spec` ([temp.inst]/2-3, §4.3): the member declarations are
     /// substituted, the member definitions are not (§4.4). `poi` is the
@@ -1036,24 +1067,9 @@ impl Sema<'_, '_> {
         // `DiagnoseUninstantiableTemplate`, no note (we are lexically
         // inside the template), the specialization made invalid; quiet
         // once a member of incomplete type made the pattern invalid.
-        if self.class_being_defined(def) {
-            let quiet = self.invalid_defining.contains(&def)
-                || self.ast.decls.get(def).has(DeclFlags::INVALID);
-            if diagnose && !quiet {
-                let t = self.tag_type(spec);
-                let d = self
-                    .diag(DiagId::sema_template_instantiate_within_definition, poi)
-                    .arg(u8::from(!implicit))
-                    .arg(self.decl_ty_str(t));
-                self.emit(d);
-                self.ast.decls.set_flags(spec, DeclFlags::INVALID);
-                self.inst.undefined_diagnosed.set(Some(spec));
-            } else {
-                self.inst.undefined_diagnosed.set(None);
-            }
-            return false;
-        }
-        if !self.push_inst_frame(FrameKind::ClassInstantiation, spec, tmpl, poi) {
+        if self.instantiation_within_definition(spec, def, poi, diagnose, implicit)
+            || !self.push_inst_frame(FrameKind::ClassInstantiation, spec, tmpl, poi)
+        {
             return false;
         }
         if let Some((i, _)) = self.ast.spec_info(spec) {

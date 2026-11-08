@@ -114,7 +114,7 @@ impl Sema<'_, '_> {
     /// clang `checkUndefinedButUsed`, at the end of the translation unit.
     pub(crate) fn diagnose_undefined_used(&mut self) {
         let list = std::mem::take(&mut self.undefined_used);
-        self.undefined_used_seen = Default::default();
+        self.undefined_used_seen.clear();
         if list.is_empty() || self.diags.error_count() > 0 {
             return;
         }

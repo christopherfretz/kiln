@@ -5084,7 +5084,6 @@ pub mod builtin {
             // `VPrintfFormat` indices + 1.
             PRINTF => (1, 2),
             VPRINTF => (1, 0),
-            VSPRINTF => (2, 0),
             SPRINTF | PRINTF_CHK => (2, 3),
             SNPRINTF | FPRINTF_CHK => (3, 4),
             VSNPRINTF | VFPRINTF_CHK => (3, 0),
@@ -5092,7 +5091,7 @@ pub mod builtin {
             SNPRINTF_CHK => (5, 6),
             VSPRINTF_CHK => (4, 0),
             VSNPRINTF_CHK => (5, 0),
-            VPRINTF_CHK => (2, 0),
+            VSPRINTF | VPRINTF_CHK => (2, 0),
             _ => return None,
         })
     }
