@@ -1121,3 +1121,69 @@ fn sve_pure_scalable_by_value() {
         assert!(o.status.success(), "{body}: {}", text(&o.stderr));
     }
 }
+
+/// WP-810: an `<arm_sve.h>` intrinsic kiln does not lower, a call without
+/// the `sve` feature, an SVE tuple by value at `-fclang-compat=22` and an
+/// alias whose declaration does not match its builtin are hard errors.
+#[test]
+fn sve_builtin_alias_errors() {
+    let d = scratch("svealias");
+    let sve = "#include <arm_sve.h>\n";
+    let cases = [
+        (
+            format!("{sve}svint8x2_t a(svint8_t x) {{ return svcreate2_s8(x, x); }}\n"),
+            "-fclang-compat=19",
+            "-march=armv8-a+sve",
+            "t.cpp:2:47: error: code generation for SVE builtin '__builtin_sve_svcreate2_s8' \
+             (called as 'svcreate2_s8') is not supported yet",
+        ),
+        (
+            format!("{sve}uint64_t a() {{ return svcntw(); }}\n"),
+            "-fclang-compat=19",
+            "-march=armv8-a",
+            "t.cpp:2:23: error: 'svcntw' needs target feature sve|sme",
+        ),
+        (
+            format!("{sve}void a(svint8x2_t) {{}}\n"),
+            "-fclang-compat=22",
+            "-march=armv8-a+sve",
+            "t.cpp:2:6: error: passing or returning '__clang_svint8x2_t' by value is not \
+             supported yet: it is an SVE tuple type, which clang 20 and later pass as a \
+             struct of vectors",
+        ),
+        (
+            "unsigned long f(int) \
+             __attribute__((__clang_arm_builtin_alias(__builtin_sve_svcntw)));\n\
+             unsigned long a() { return f(1); }\n"
+                .to_string(),
+            "-fclang-compat=19",
+            "-march=armv8-a+sve",
+            "t.cpp:2:29: error: the function called does not have the signature of SVE \
+             builtin '__builtin_sve_svcntw'",
+        ),
+    ];
+    for (src, compat, march, want) in cases {
+        std::fs::write(d.join("t.cpp"), &src).unwrap();
+        let args =
+            [compat, "--target=aarch64-unknown-linux-gnu", march, "-S", "-emit-llvm", "-o", "k.ll"];
+        let o = kiln_in(&d, &[&args[..], &["t.cpp"]].concat());
+        assert!(text(&o.stderr).starts_with(want), "{src}: {}", text(&o.stderr));
+        assert_eq!(o.status.code(), Some(1), "{src}");
+    }
+    // The tuple is accepted by value where clang 19 passes it as one vector.
+    std::fs::write(d.join("t.cpp"), format!("{sve}void a(svint8x2_t) {{}}\n")).unwrap();
+    let o = kiln_in(
+        &d,
+        &[
+            "-fclang-compat=19",
+            "--target=aarch64-unknown-linux-gnu",
+            "-march=armv8-a+sve",
+            "-S",
+            "-emit-llvm",
+            "-o",
+            "k.ll",
+            "t.cpp",
+        ],
+    );
+    assert!(o.status.success(), "{}", text(&o.stderr));
+}

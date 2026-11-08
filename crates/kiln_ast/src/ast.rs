@@ -685,6 +685,19 @@ impl Ast {
         self.any_redecl_has(d, crate::attr::AttrKind::OVERLOADABLE)
     }
 
+    /// WP-810: the ACLE builtin some declaration of function `d` aliases
+    /// ([`crate::attr::AttrKind::BUILTIN_ALIAS`]): its name, and whether
+    /// the spelling is `__clang_arm_builtin_alias`.
+    pub fn builtin_alias(&self, d: DeclId) -> Option<(kiln_source::symbol::Symbol, bool)> {
+        self.redecls_of(d).find_map(|r| {
+            self.lists.iter::<crate::ids::AttrId>(self.attrs.of_decl(r)).find_map(|a| {
+                let n = self.attrs.get(a);
+                (n.kind == crate::attr::AttrKind::BUILTIN_ALIAS)
+                    .then(|| (kiln_source::symbol::Symbol::from_index(n.a), n.b == 1))
+            })
+        })
+    }
+
     /// Whether some declaration of `d` carries `attr`.
     fn any_redecl_has(&self, d: DeclId, attr: crate::attr::AttrKind) -> bool {
         self.redecls_of(d).any(|r| {

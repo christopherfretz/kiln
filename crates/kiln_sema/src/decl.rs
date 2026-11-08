@@ -6794,6 +6794,13 @@ impl Sema<'_, '_> {
             let loc = self.ast.decls.get(f).loc();
             self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(info.name));
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        } else if self.ast.builtin_alias(f).is_some() {
+            // clang `ActOnStartOfFunctionDef`: an alias of a builtin
+            // (`__clang_arm_builtin_alias`, WP-810) is itself a builtin.
+            let loc = self.ast.decls.get(f).loc();
+            let name = self.decl_name_str(self.ast.decls.get(f).name());
+            self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(name));
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         // clang `ActOnStartOfFunctionDef` resolves the exception
         // specification of every definition: a destructor or defaulted
@@ -10034,6 +10041,20 @@ impl Sema<'_, '_> {
             self.clang_compat,
         ) {
             return None;
+        }
+        // WP-810: clang `Clang<"__clang_arm_builtin_alias">` (no `__`
+        // affixes are removed: `clang_arm_builtin_alias` is unknown) and
+        // `BuiltinAlias` (`GNU<"clang_builtin_alias">`,
+        // `CXX11<"clang", "builtin_alias">`).
+        let alias = match (raw.as_str(), scope_s.as_deref()) {
+            ("__clang_arm_builtin_alias", None) if syntax == AttrSyntax::Gnu => Some(true),
+            ("__clang_arm_builtin_alias", Some("clang")) => Some(true),
+            ("clang_builtin_alias", None) if syntax == AttrSyntax::Gnu => Some(false),
+            ("builtin_alias", Some("clang")) => Some(false),
+            _ => None,
+        };
+        if let Some(arm) = alias {
+            return self.builtin_alias_attribute(arm, syntax, &shown, args, loc);
         }
         // clang 19 names only the attribute, not its scope.
         if scope_s.as_deref().is_some_and(|s| s != "gnu")

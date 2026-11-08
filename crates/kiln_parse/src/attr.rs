@@ -81,6 +81,9 @@ fn takes_expr_args(name: &str) -> bool {
             | "returns_twice"
             | "mode"
             | "arm_sve_vector_bits"
+            | "clang_arm_builtin_alias"
+            | "clang_builtin_alias"
+            | "builtin_alias"
     )
 }
 
@@ -96,7 +99,18 @@ fn takes_ident_arg(name: &str) -> bool {
     let n = name.trim_start_matches("__").trim_end_matches("__");
     // `weakref` / `alias` / `ifunc` take a string literal; clang parses
     // an identifier there as one (and then rejects it).
-    matches!(n, "enum_extensibility" | "format" | "mode" | "weakref" | "alias" | "ifunc")
+    matches!(
+        n,
+        "enum_extensibility"
+            | "format"
+            | "mode"
+            | "weakref"
+            | "alias"
+            | "ifunc"
+            | "clang_arm_builtin_alias"
+            | "clang_builtin_alias"
+            | "builtin_alias"
+    )
 }
 
 /// True for the standard attributes that take no argument list

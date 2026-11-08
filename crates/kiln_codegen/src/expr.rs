@@ -3331,6 +3331,13 @@ impl Cg<'_> {
                 }
             }
         }
+        // WP-810: a call of a builtin alias (`arm_sve.h`'s intrinsics) lowers
+        // as the builtin it names, or is a hard error; never an external call.
+        if let Some(d) = direct
+            && let Some((b, _)) = ast.builtin_alias(d)
+        {
+            return self.emit_sve_alias(d, b, e);
+        }
         // A builtin is never emitted as a function (spec/codegen.md §3, "Calls"):
         // it folds, lowers inline, or calls the library function it names.
         // `std::move(x)` and its kin fold to the address of `x`.

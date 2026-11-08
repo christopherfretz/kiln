@@ -2429,12 +2429,24 @@ impl Sema<'_, '_> {
             self.diagnose_bound_member(e);
             return true;
         }
-        if self.ast.exprs.get(e).ty() != QualType::BUILTIN_FN {
+        if self.ast.exprs.get(e).ty() != QualType::BUILTIN_FN && !self.is_builtin_alias_ref(e) {
             return false;
         }
         let msg = self.diag(DiagId::sema_builtin_fn_use, self.eloc(e));
         self.emit(msg);
         true
+    }
+
+    /// Whether `e` names a function declared with `__clang_arm_builtin_alias`
+    /// or `clang_builtin_alias` (WP-810): clang gives such a declaration the
+    /// builtin's ID, so it too can only be called.
+    pub(crate) fn is_builtin_alias_ref(&self, e: ExprId) -> bool {
+        let e = self.ignore_parens(e);
+        if self.ast.exprs.get(e).kind() != ExprKind::DeclRefExpr {
+            return false;
+        }
+        let d = self.ast.exprs.decl(e);
+        self.ast.decls.get(d).kind() == DeclKind::Function && self.ast.builtin_alias(d).is_some()
     }
 }
 

@@ -239,6 +239,17 @@ size the condition's ("vector condition type V and result type R do not
 have the same number of elements" / "... element size"). Dependent arms
 build a dependent conditional, checked at instantiation.
 
+**SVE tuple types** (WP-810, ACLE "SVE tuple types"): ids 53..=90 are
+`__clang_sv<T>x{2,3,4}_t` for the twelve SVE data types in the order
+above (all `x2`, then `x3`, then `x4`), then `__clang_svboolx2_t` and
+`__clang_svboolx4_t` (`BuiltinType::is_sve_tuple`, `sve_tuple_parts`).
+`<arm_sve.h>` names them `sv<T>x<N>_t`. They are sizeless like their
+element type; the ABI alignment is 16 (2 for the bool tuples); the IR type
+is clang 19's wide scalable vector (`svint8x2_t` is `<vscale x 32 x i8>`);
+they mangle as their `<arm_sve.h>` name (`10svint8x2_t`). Passing or
+returning one by value at `-fclang-compat=22` is a codegen hard error
+(spec/landed/codegen/WP-810.md "Builtin aliases").
+
 **Fixed-length SVE types** (WP-810; ARM ACLE §3.7.3.3, clang AttrDocs
 "arm_sve_vector_bits", clang `HandleArmSveVectorBitsTypeAttr`): with
 `-msve-vector-bits=N` (128, 256, 512, 1024 or 2048) the type attribute

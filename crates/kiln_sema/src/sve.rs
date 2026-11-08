@@ -100,6 +100,63 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// clang `handleArmBuiltinAliasAttr` (`arm`) / `handleBuiltinAliasAttr`
+    /// (WP-810): one identifier naming an `AArch64` ACLE builtin. clang
+    /// accepts the SVE and SME builtins (`SveAliasValid`); kiln knows them
+    /// by their `__builtin_sve_` / `__builtin_sme_` prefix, so a misspelled
+    /// one is accepted and every call of the function is codegen's
+    /// "not supported yet" error. `__clang_arm_builtin_alias` is a target
+    /// attribute (`TargetAnyArm`): unknown, and ignored, on x86-64.
+    pub(crate) fn builtin_alias_attribute(
+        &mut self,
+        arm: bool,
+        syntax: kiln_ast::attr::AttrSyntax,
+        shown: &str,
+        args: &[crate::decl::AttrArg],
+        loc: Loc,
+    ) -> Option<kiln_ast::AttrId> {
+        let aarch64 = self.abi.triple.arch == kiln_abi::target::Arch::AArch64;
+        if arm && !aarch64 {
+            let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
+            self.emit(msg);
+            return None;
+        }
+        let [arg] = args else {
+            let msg = self.diag(DiagId::parse_attribute_wrong_arg_count, loc).arg(shown).arg("1");
+            self.emit(msg);
+            return None;
+        };
+        let crate::decl::AttrArg::Ident(sym, _) = *arg else {
+            let msg = self
+                .diag(DiagId::sema_attribute_param_not_ident, loc)
+                .arg(format!("'{shown}'"))
+                .arg("1");
+            self.emit(msg);
+            return None;
+        };
+        let name = self.ast.symbols().as_str(sym);
+        let acle = name.starts_with("__builtin_sve_") || name.starts_with("__builtin_sme_");
+        if !(aarch64 && acle) {
+            let msg = if arm {
+                self.diag(DiagId::sema_attribute_arm_builtin_alias, loc)
+            } else {
+                self.diag(DiagId::sema_attribute_builtin_alias_target, loc)
+                    .arg(format!("'{shown}'"))
+            };
+            self.emit(msg);
+            return None;
+        }
+        let node = kiln_ast::attr::AttrNode {
+            kind: kiln_ast::attr::AttrKind::BUILTIN_ALIAS,
+            syntax,
+            flags: 0,
+            loc,
+            a: sym.index(),
+            b: u32::from(arm),
+        };
+        Some(self.ast.attrs.push(node))
+    }
+
     /// The SVE types a use of a value of type `q` needs (clang
     /// `checkTypeSupport`): `q` itself, or a function type's parameter
     /// types and then its return type.

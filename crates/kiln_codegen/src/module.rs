@@ -1684,12 +1684,26 @@ impl<'a> Cg<'a> {
     /// (an aggregate of `arm_sve_vector_bits` vectors and predicates)
     /// expanded in SVE registers; kiln does not lower that convention yet,
     /// so a by-value one in `sig` is a hard error rather than a silently
-    /// different ABI. clang 19 lowers it as any other aggregate.
+    /// different ABI. clang 19 lowers it as any other aggregate. The same
+    /// holds for an SVE tuple type, which clang 19 passes as one wide
+    /// scalable vector.
     pub(crate) fn check_pure_scalable(&mut self, sig: &Sig, loc: Option<Loc>) -> R<()> {
         if self.target.triple.arch != Arch::AArch64 || self.opts.clang_compat < 20 {
             return Ok(());
         }
         for q in std::iter::once(sig.ret).chain(sig.params.iter().copied()) {
+            // clang 20+ also lowers an SVE tuple (`svint8x2_t`) as a struct
+            // of vectors, where clang 19 used one wide scalable vector.
+            if self.ast.types.builtin(q).is_some_and(BuiltinType::is_sve_tuple) {
+                let t = print_type(&self.ast.types, self.ast, q, PrintOptions::SUGARED);
+                return err(
+                    loc,
+                    format!(
+                        "passing or returning '{t}' by value is not supported yet: it is an \
+                         SVE tuple type, which clang 20 and later pass as a struct of vectors"
+                    ),
+                );
+            }
             if kiln_abi::call::is_pure_scalable(&mut self.tys, q) {
                 let t = print_type(&self.ast.types, self.ast, q, PrintOptions::SUGARED);
                 return err(
@@ -2105,6 +2119,15 @@ impl<'a> Cg<'a> {
         let first = ast.first(d);
         if let Some(&f) = self.fns.get(&first) {
             return Ok(f);
+        }
+        // WP-810: an alias of a builtin (`__clang_arm_builtin_alias`) has no
+        // function to call or address; a call lowers inline.
+        if let Some((b, _)) = ast.builtin_alias(first) {
+            let b = ast.symbols().as_str(b);
+            return err(
+                Some(ast.decls.get(d).loc()),
+                format!("'{b}' is a builtin with no function body; it can only be called directly"),
+            );
         }
         if let Some(target) = self.weakref_symbol(first) {
             let f = if let Some(f) = self.m.get_function(&target) {

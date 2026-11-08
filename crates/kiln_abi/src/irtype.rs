@@ -1158,6 +1158,13 @@ pub fn record_kind_prefix(ast: &Ast, d: DeclId) -> &'static str {
 /// `CodeGenTypes::ConvertType` with `AArch64SVEACLETypes.def`).
 fn sve_type(b: BuiltinType) -> IrType {
     use BuiltinType as B;
+    // A tuple is clang 19's wide vector of its parts (`svint8x2_t` is
+    // `<vscale x 32 x i8>`; clang 20 makes it a struct, WP-810).
+    if let Some((v, nf)) = b.sve_tuple_parts()
+        && let IrType::ScalableVector(e, n) = sve_type(v)
+    {
+        return IrType::ScalableVector(e, n * u64::from(nf));
+    }
     let (e, n) = match b {
         B::SvInt8 | B::SvUint8 => (IrType::Int(8), 16),
         B::SvInt16 | B::SvUint16 => (IrType::Int(16), 8),
@@ -1187,6 +1194,9 @@ mod tests {
         assert_eq!(sve_type(B::SvBfloat16), sv(IrType::BFloat, 8));
         assert_eq!(sve_type(B::SvBool), sv(IrType::Int(1), 16));
         assert_eq!(sve_type(B::SvCount), IrType::TargetExt("aarch64.svcount"));
-        assert_eq!(B::ALL.iter().filter(|b| b.is_sizeless()).count(), 14);
+        assert_eq!(B::ALL.iter().filter(|b| b.is_sizeless()).count(), 52);
+        assert_eq!(sve_type(B::SvInt8x2), sv(IrType::Int(8), 32));
+        assert_eq!(sve_type(B::SvBoolx4), sv(IrType::Int(1), 64));
+        assert_eq!(sve_type(B::SvFloat64x3), sv(IrType::Double, 6));
     }
 }

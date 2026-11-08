@@ -284,6 +284,14 @@ impl AttrKind {
     /// declared type like [`AttrKind::VECTOR_SIZE`]; `a` the argument
     /// expression).
     pub const ARM_SVE_VECTOR_BITS: AttrKind = AttrKind(220);
+    /// clang `__clang_arm_builtin_alias(B)` (`ArmBuiltinAliasAttr`) or
+    /// `clang_builtin_alias(B)` / `[[clang::builtin_alias(B)]]`
+    /// (`BuiltinAliasAttr`) on a function (WP-810): a call of the function
+    /// is a call of the `AArch64` ACLE builtin `B` (`__builtin_sve_*`,
+    /// `__builtin_sme_*`), with the function's declared signature; it
+    /// cannot be defined or have its address taken. `a` = the `Symbol`
+    /// of `B`, `b` = 1 for the `__clang_arm_builtin_alias` spelling.
+    pub const BUILTIN_ALIAS: AttrKind = AttrKind(221);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

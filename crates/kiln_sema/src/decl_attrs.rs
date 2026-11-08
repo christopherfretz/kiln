@@ -533,6 +533,16 @@ impl Sema<'_, '_> {
                 "pass_object_size",
                 "parameters",
             ),
+            // clang `ArmBuiltinAlias` / `BuiltinAlias`: `SubjectList<[Function],
+            // ErrorDiag>` (WP-810).
+            AttrKind::BUILTIN_ALIAS if !kind.is_function() => {
+                let name = match (node.b, node.syntax) {
+                    (1, _) => "__clang_arm_builtin_alias",
+                    (_, AttrSyntax::Gnu) => "clang_builtin_alias",
+                    _ => "builtin_alias",
+                };
+                wrong(self, DiagId::sema_attribute_wrong_decl_type_error, name, "functions")
+            }
             // clang `Overloadable`: `SubjectList<[Function], ErrorDiag>`.
             AttrKind::OVERLOADABLE if !kind.is_function() => wrong(
                 self,

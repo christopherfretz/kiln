@@ -408,6 +408,10 @@ pub fn target_nomem(m: &mut Module, name: &str, ret: TypeId, params: &[TypeId]) 
 pub enum TargetMem {
     /// `nocallback nofree nosync nounwind willreturn memory(none)`.
     None,
+    /// `nocallback nofree nosync nounwind speculatable willreturn
+    /// memory(none)` (`IntrNoMem, IntrSpeculatable`; the integer SVE
+    /// intrinsics from LLVM 22, WP-810).
+    Speculatable,
     /// `nocallback nofree nosync nounwind willreturn memory(read)`.
     Read,
     /// `nocallback nofree nosync nounwind willreturn memory(argmem: read)`.
@@ -437,6 +441,7 @@ pub fn target_intrinsic(
 ) -> FuncId {
     let shape = match mem {
         TargetMem::None => Shape::Basic(Some(MemoryEffects::all(ModRef::None))),
+        TargetMem::Speculatable => Shape::Pure,
         TargetMem::Read => Shape::Basic(Some(MemoryEffects::all(ModRef::Read))),
         TargetMem::ArgRead => Shape::Basic(Some(MemoryEffects::argmem_only(ModRef::Read))),
         TargetMem::ArgReadWrite => {
@@ -466,6 +471,17 @@ pub fn neon_store_n(m: &mut Module, name: &str, vt: TypeId, k: usize) -> FuncId 
     let nc: &[Attr] = &[Attr::Flag(NoCapture)];
     let mut params: Vec<(TypeId, &[Attr])> = vec![(vt, &[][..]); k];
     params.push((p, nc));
+    let mem = MemoryEffects::argmem_only(ModRef::ReadWrite);
+    declare(m, name, TypeId::VOID, &params, &[], Shape::Basic(Some(mem)))
+}
+
+/// `void @llvm.aarch64.sve.st1.<VTy>(<VTy>, <PTy>, ptr nocapture)` by full
+/// name, as LLVM declares it (`IntrArgMemOnly`, `NoCapture<ArgIndex<2>>`;
+/// WP-810).
+pub fn sve_store(m: &mut Module, name: &str, vt: TypeId, pt: TypeId) -> FuncId {
+    let p = ptr(m);
+    let nc: &[Attr] = &[Attr::Flag(NoCapture)];
+    let params: [(TypeId, &[Attr]); 3] = [(vt, &[]), (pt, &[]), (p, nc)];
     let mem = MemoryEffects::argmem_only(ModRef::ReadWrite);
     declare(m, name, TypeId::VOID, &params, &[], Shape::Basic(Some(mem)))
 }
