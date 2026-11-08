@@ -18,6 +18,7 @@ use kiln_ast::decl::{
 use kiln_ast::ids::{
     ArgListId, ConstValueId, DeclId, ExprId, QualType, TemplateNameId, TemplateParamListId,
 };
+use kiln_ast::expr::ExprKind;
 use kiln_ast::names::{DeclNameView, OverloadedOperator};
 use kiln_ast::types::{
     ArgView, BuiltinType, ExprOperand, RefQual, TemplateName, TypeView, VectorKind,
@@ -1215,6 +1216,10 @@ struct Mangler<'a, 'b> {
     /// The class templates enclosing the function whose name is being
     /// mangled, for [`Mangler::injected_template`].
     class_scope: Vec<DeclId>,
+    /// A class template named as a template to deduce, whose own
+    /// <abi-tags> are not written (clang mangles the `TemplateDecl`,
+    /// which carries no `abi_tag`; the attribute is on its pattern).
+    untagged: Option<DeclId>,
 }
 
 /// The structor-variant spelling of one [`Mangler`] run.
@@ -1329,6 +1334,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             extra_tags: None,
             ttp_scope: Vec::new(),
             class_scope: Vec::new(),
+            untagged: None,
         }
     }
 
@@ -1590,15 +1596,49 @@ impl<'a, 'b> Mangler<'a, 'b> {
             ArgView::Pack(l) => {
                 x.pack
                     && matches!(ast.types.args(l), [one]
-                        if matches!(one.view(), ArgView::Type(q) if expansion(q)))
+                        if !matches!(one.view(), ArgView::Pack(_))
+                            && self.is_own_param_arg(p, one.view()))
             }
             ArgView::Template(n) => matches!(
                 ast.types.template_name_view(ast.types.canonical_template_name(n)),
                 TemplateName::CanonTemplateTemplateParm { depth, index, .. }
                     if depth == d && index == i
             ),
+            ArgView::Profile(pr) | ArgView::Expr { profile: Some(pr), .. } => {
+                ast.types.profile_expr(pr).is_some_and(|e| self.is_nttp_ref(e, d, i, x.pack))
+            }
+            ArgView::Expr { expr, profile: None } => self.is_nttp_ref(expr, d, i, x.pack),
             _ => false,
         }
+    }
+
+    /// Whether `e` names the non-type template parameter at `(d, i)`
+    /// (`N`), or expands it when `pack` (`N...`).
+    fn is_nttp_ref(&self, e: ExprId, d: u32, i: u32, pack: bool) -> bool {
+        let ex = &self.ast.exprs;
+        let mut e = e;
+        let mut expanded = false;
+        for _ in 0..16 {
+            match ex.get(e).kind() {
+                ExprKind::ImplicitCastExpr | ExprKind::ParenExpr | ExprKind::ConstantExpr => {
+                    e = ex.operand(e);
+                }
+                ExprKind::PackExpansionExpr if pack && !expanded => {
+                    expanded = true;
+                    e = ex.operand(e);
+                }
+                ExprKind::DeclRefExpr => {
+                    let r = ex.decl(e);
+                    return expanded == pack
+                        && self.ast.decls.get(r).kind() == DeclKind::NonTypeTemplateParm
+                        && self.ast.template_parm(r).is_some_and(|y| {
+                            u32::from(y.depth) == d && u32::from(y.index) == i
+                        });
+                }
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// The template head of the template template parameter at
@@ -2108,6 +2148,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// other names only implicitly, through a type that mentions it.
     fn write_abi_tags(&mut self, d: DeclId) {
         let ast = self.ast;
+        if self.untagged == Some(d) {
+            return;
+        }
         if ast.decls.get(d).kind() == DeclKind::Namespace {
             // Only the first definition's tags count: a reopening's are
             // not merged (clang reads the canonical declaration).

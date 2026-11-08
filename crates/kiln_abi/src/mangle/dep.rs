@@ -759,12 +759,17 @@ impl Mangler<'_, '_> {
                 // A class template to deduce with dependent arguments is
                 // its template name (clang leaves the deduced type of a
                 // dependent `DeducedTemplateSpecializationType` null; kiln
-                // records `DEPENDENT`, which the canonical type keeps).
+                // records `DEPENDENT`, which the canonical type keeps),
+                // without the pattern's <abi-tags>: clang mangles the
+                // `ClassTemplateDecl` (`NS0_15drop_while_viewE_`).
                 match ast.types.view(node.ty().ty()) {
                     TypeView::DeducedTemplateSpecialization { name, deduced }
                         if deduced.is_none_or(|d| d == QualType::DEPENDENT) =>
                     {
+                        let saved = self.untagged.take();
+                        self.untagged = ast.types.template_decl(name);
                         self.template_name(name);
+                        self.untagged = saved;
                     }
                     _ => self.ty(node.ty()),
                 }

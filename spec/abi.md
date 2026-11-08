@@ -1526,6 +1526,45 @@ appends the vendor qualifier `U17pass_object_size<t>`
 `bare_function_type`), e.g. `_Z5namedPKcU17pass_object_size0i`. The
 hidden `size_t` arguments are not part of the mangled type.
 
+### 8.29 Landed (WP-818): standard-library mangling parity and the sweep
+`scripts/mangle-sweep.sh` (docs/VALIDATION.md "Mangling sweep") compiles
+each TU in `tests/mangle-sweep/` with kiln++ and clang++-19, against
+libc++ and libstdc++, with `-std=c++26 -O0 -S -emit-llvm -fno-exceptions
+-w -U__cpp_explicit_this_parameter` (clang 19 leaves that macro undefined,
+kiln defines it as clang 22 does, and libstdc++ selects overloads on it).
+Both IRs then go through `opt-19 -passes=always-inline`: clang runs the
+always-inliner itself even at -O0 and kiln leaves it to LLVM, so without
+the pass the `always_inline` functions that survive differ. Every `_Z`
+symbol defined, declared or referenced must appear in both;
+internal-linkage closure names `$_N` are compared without their number.
+
+The rules the sweep found are listed in `spec/landed/abi/WP-818.md`:
+non-dependent `sizeof`/`alignof` as literals, substituted `sizeof...` and
+enumeration parameters, dependent CTAD names (untagged, with the
+expression profile keyed on the template name), alias templates and
+template template parameter specializations in qualifiers, the
+injected-class-name as a substitution in constraints, `J...E` grouping of
+a template template parameter's pack, abominable function types, closure
+numbering in pack expansions, abi_tag ordering for out-of-line members,
+and the inheritance of `always_inline`/`noinline` across redeclarations.
+
+The sweep went from 988 mismatches (libc++ 840, libstdc++ 148) to
+@COUNT@. What remains is clang-only: calls clang 19 emits that kiln does
+not, none of them a different name for the same entity.
+
+- libc++ `__introsort<..., false>` (`sort` with `greater<>` and a
+  projection): clang emits the dead arm of `_UseBitSetPartition ?
+  __bitset_partition(...) : __partition_with_equals_on_right(...)`, an
+  aggregate-valued conditional it does not fold at -O0, and with it the
+  `__bitset_partition` helpers (`__populate_left_bitset`,
+  `__swap_bitmap_pos`, `__libcpp_ctz`, `ranges::iter_swap`, ...). kiln
+  folds the constant condition.
+- libstdc++ `std::visit`: kiln folds `__as(v).valueless_by_exception()`
+  for a never-valueless variant to `false` (a constant expression under
+  P2280, which clang 19 does not implement), so it does not call
+  `__variant::__as`.
+@EXTRA@
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

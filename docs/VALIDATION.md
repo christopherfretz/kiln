@@ -455,6 +455,32 @@ clang++-22 by the self-check.
   well-formed constexpr programs that print their results at runtime *and*
   `static_assert` them; both compilers must agree.
 
+### Mangling sweep
+
+`scripts/mangle-sweep.sh` checks symbol parity with clang++-19 over real
+standard-library code. Each TU in `tests/mangle-sweep/` instantiates one
+area of the library (algorithm, format, functional, iterator, memory,
+optional, ranges). The script compiles it to LLVM IR with kiln++ and with
+clang++-19, once against libc++ and once against libstdc++, runs `opt-19
+-passes=always-inline` over both IRs, and compares the `_Z` symbols each
+defines, declares or references. It prints one line per mismatch
+(`<stdlib> <tu> kiln-only|clang-only <symbol>`) and a summary, and exits
+1 on any mismatch (2 when a compiler failed).
+
+```sh
+source scripts/env.sh && cargo build -p kiln_driver
+scripts/mangle-sweep.sh                       # both libraries, every TU
+scripts/mangle-sweep.sh --stdlib libc++ --keep /tmp/sw tests/mangle-sweep/format.cpp
+```
+
+The sweep is run by hand, not in CI: the clang-only symbols that remain
+are calls clang 19 emits and kiln does not (spec/abi.md §8.29), so the
+expected output is not empty. A change to the mangler, to template
+instantiation or to attribute inheritance should not add lines. Add a
+TU when a library area the reference workload uses is not covered. Every
+mismatch fixed gets a reduced test under `tests/mangle/` (or
+`tests/codegen/` when it is about emission).
+
 ### GCC 16.1 header sweep
 
 The reference workload needs GCC 16.1's libstdc++ (its `<meta>`). CI has

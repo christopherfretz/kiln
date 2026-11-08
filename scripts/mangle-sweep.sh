@@ -2,7 +2,7 @@
 # Mangling parity sweep against clang++-19 (spec/abi.md "Mangling sweep",
 # docs/VALIDATION.md). Each TU (default: tests/mangle-sweep/*.cpp) is
 # compiled to LLVM IR by kiln++ and by clang++-19 with the same flags,
-# once per standard library; every `_Z` symbol either IR defines,
+# once per standard library; after the always-inliner, every `_Z` symbol either IR defines,
 # declares or references must appear in both. Prints each mismatch as
 #   <stdlib> <tu> kiln-only|clang-only <symbol>
 # then one summary line, and exits 1 when any mismatch was found
@@ -10,8 +10,8 @@
 #
 #   scripts/mangle-sweep.sh [--stdlib libc++|libstdc++|both] [--keep DIR] [TU...]
 #
-# KILN (default: $CARGO_TARGET_DIR/debug/kiln++) and CLANG (default:
-# clang++-19) name the compilers.
+# KILN (default: $CARGO_TARGET_DIR/debug/kiln++), CLANG (default:
+# clang++-19) and OPT (default: opt-19) name the tools.
 set -u
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 stdlibs="libc++ libstdc++"
@@ -35,10 +35,14 @@ mkdir -p "$work"
 # it (as clang 22 does); libstdc++ picks other overloads on it, so it is
 # undefined for both.
 flags=(-std=c++26 -O0 -S -emit-llvm -fno-exceptions -w -U__cpp_explicit_this_parameter)
-# clang runs the always-inliner even at -O0, which would hide the names of
-# `always_inline` functions (libstdc++ `make_format_args`) that kiln
-# emits; the sweep compares the IR before any LLVM pass.
+# clang runs the always-inliner even at -O0 and kiln leaves it to LLVM
+# (or folds some calls itself), so which `always_inline` functions
+# (libc++ `__voidify`, libstdc++ `__atomic_add`) survive differs. Both
+# IRs are taken before any LLVM pass and then run through the same
+# `opt -passes=always-inline`, so the sweep compares the names a linked
+# -O0 build would see.
 clang_flags=(-Xclang -disable-llvm-passes)
+opt=${OPT:-opt-19}
 # The `$_N` closure names of lambdas with internal linkage are numbered in
 # each compiler's own order and have no ABI: the number is dropped.
 syms() {
@@ -57,8 +61,13 @@ for lib in $stdlibs; do
     if ! "$kiln" "${flags[@]}" -stdlib="$lib" -resource-dir "$here/resource" -o "$k" "$tu" 2>"$k.err"; then
       echo "$lib $base kiln-error (see $k.err)"; failed=1; continue
     fi
-    syms "$k" > "$k.syms"
-    syms "$c" > "$c.syms"
+    for f in "$k" "$c"; do
+      if ! "$opt" -passes=always-inline -S -o "$f.inl" "$f" 2>>"$f.err"; then
+        echo "$lib $base opt-error (see $f.err)"; failed=1; continue 2
+      fi
+    done
+    syms "$k.inl" > "$k.syms"
+    syms "$c.inl" > "$c.syms"
     while read -r s; do echo "$lib $base kiln-only $s"; total=$((total + 1)); done \
       < <(comm -23 "$k.syms" "$c.syms")
     while read -r s; do echo "$lib $base clang-only $s"; total=$((total + 1)); done \

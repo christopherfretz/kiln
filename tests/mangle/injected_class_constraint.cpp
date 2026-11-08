@@ -3,8 +3,9 @@
 // `X<P...>` for X's own parameters name the injected-class-name, which
 // clang makes canonical: it mangles as the specialization and then takes
 // a substitution of its own, so later back-references shift by one
-// (libstdc++ `ranges::ref_view`'s constructor). A specialization of `X`
-// for other arguments, or outside `X`, takes one.
+// (libstdc++ `ranges::ref_view`'s constructor), also when `X` has
+// non-type parameters or packs (`subrange<I, S, K>`'s constructor). A
+// specialization of `X` for other arguments, or outside `X`, takes one.
 template <class T, class U> concept different_from = !__is_same(T, U);
 template <class T, class U> concept convertible_to = __is_convertible(T, U);
 template <class T, class U> concept C = true;
@@ -34,6 +35,16 @@ template <class R, class... P> struct X {
   template <class U> requires C<U, X> && C<U, W<U>> void h(X*, U, X<R, P...>*) {}
   template <class U> requires C<U, X<R, P...>> && C<U, X<U>> && C<U, W<U>> void k(U, X<U>*) {}
 };
+template <class I, int K> struct Z {
+  template <different_from<Z> T>
+    requires convertible_to<T, I&> && convertible_to<T, W<T>>
+  Z(T&&) {}
+};
+template <class I, int... K> struct Zp {
+  template <different_from<Zp> T>
+    requires convertible_to<T, I&> && convertible_to<T, W<T>>
+  Zp(T&&) {}
+};
 template <class R> struct Y {
   template <class U> requires C<U, X<R>> && C<U, W<U>> void m(X<R>*) {}
 };
@@ -43,6 +54,8 @@ void use() {
   ref_view<V> r(v);
   spelled<V> s(v);
   other<V> o(v);
+  Z<V, 1> z(v);
+  Zp<V, 1, 2> zp(v);
   X<int>().g<char>(0, 0, 0);
   X<int, long> x;
   x.h(&x, 1, &x);

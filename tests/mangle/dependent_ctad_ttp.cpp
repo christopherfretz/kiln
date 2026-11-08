@@ -3,7 +3,9 @@
 //   is its template name (`cvN1n4viewE_...`, `tlN1n3refE...`; clang
 //   `DeducedTemplateSpecializationType` without a deduced type), and
 //   two such casts that differ only in the template are different
-//   expressions (`slice(...)` after `view(...)` keeps `5slice`);
+//   expressions (`slice(...)` after `view(...)` keeps `5slice`), and a
+//   template with an `abi_tag` is named without it (`5slice`, not
+//   `5sliceB1t`: clang mangles the template, not its pattern);
 // - a specialization of a template template parameter groups its
 //   arguments by the parameter's own template head (`T_IJilEE` for a
 //   `template <class...> class`), as clang's converted argument list,
@@ -12,7 +14,7 @@ namespace n {
 template <class T> struct view { view(T, int) {} };
 template <class T> struct ref { ref(T&) {} };
 template <class T> view(T, int) -> view<T>;
-template <class T> struct slice { slice(T, int) {} };
+template <class T> struct [[gnu::abi_tag("t")]] slice { slice(T, int) {} };
 template <class T> slice(T, int) -> slice<T>;
 template <class T> struct cref { cref(T&) {} };
 struct fn {
