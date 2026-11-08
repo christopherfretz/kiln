@@ -116,7 +116,8 @@ impl UnionMemo {
     /// Whether walk `w`'s `Ok` answer for the object of type `ty` at
     /// offset `off` of allocation `akey` (of type `aty`) is remembered at
     /// `stamp`.
-    #[inline]
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     pub(crate) fn hit(&self, w: Walk, akey: u64, aty: OTy, ty: OTy, off: u32, stamp: Stamp) -> bool {
         let m = |e: Entry| {
             let d = off.wrapping_sub(e.lo);

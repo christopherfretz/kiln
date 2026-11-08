@@ -2927,14 +2927,29 @@ impl Oven {
     /// walk.
     #[inline(never)]
     fn union_path_memo(&self, aty: OTy, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
-        let p = Ptr::decode(raw);
-        let akey = Ptr::alloc_key(raw);
-        let stamp = umemo::Stamp { epoch: self.mem.union_epoch, rebuilt: self.types.rebuilt() };
-        if self.umemo.hit(umemo::Walk::Access, akey, aty, ty, p.off, stamp) {
+        if self.union_memo_hit(aty, raw, ty) {
             return Ok(());
         }
+        self.union_path_miss(aty, raw, ty, k)
+    }
+
+    /// Whether the union-path memo holds the `Ok` answer of the access to
+    /// the object of type `ty` at `raw` in an allocation of type `aty`.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn union_memo_hit(&self, aty: OTy, raw: u64, ty: OTy) -> bool {
+        let stamp = umemo::Stamp { epoch: self.mem.union_epoch, rebuilt: self.types.rebuilt() };
+        let (akey, off) = (Ptr::alloc_key(raw), Ptr::decode(raw).off);
+        self.umemo.hit(umemo::Walk::Access, akey, aty, ty, off, stamp)
+    }
+
+    /// [`Oven::union_path_memo`] on a memo miss: the walk, whose `Ok`
+    /// answer is remembered when it may be.
+    #[inline(never)]
+    fn union_path_miss(&self, aty: OTy, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+        let stamp = umemo::Stamp { epoch: self.mem.union_epoch, rebuilt: self.types.rebuilt() };
         if let Some(cover) = self.union_walk(aty, raw, ty, k)? {
-            self.umemo.put(umemo::Walk::Access, akey, aty, ty, cover, stamp);
+            self.umemo.put(umemo::Walk::Access, Ptr::alloc_key(raw), aty, ty, cover, stamp);
         }
         Ok(())
     }
@@ -3102,8 +3117,12 @@ impl Oven {
         if fl & flags::MUTABLE_OUTSIDE != 0 && (k == ak::READ || fl & flags::CONST == 0) {
             self.mutable_path(raw, ty, k)?;
         }
-        if fl & flags::HAS_UNION != 0 {
-            self.union_path_in(a.ty, raw, ty, k)?;
+        // The memo probe inlined: a load of union storage hits it.
+        if fl & flags::HAS_UNION != 0
+            && self.union_overlaps(a.ty, Ptr::decode(raw).off, ty)
+            && !self.union_memo_hit(a.ty, raw, ty)
+        {
+            self.union_path_miss(a.ty, raw, ty, k)?;
         }
         Ok(())
     }
