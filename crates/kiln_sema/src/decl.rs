@@ -1768,16 +1768,9 @@ impl Sema<'_, '_> {
         // [dcl.align]/1: not on a function parameter.
         self.reject_alignas(&mut attrs, 0);
         ty = self.apply_vector_attrs(ty, &mut attrs, false, VectorAttrPos::Decl);
-        // A parameter's type is substituted with its function's.
-        attrs.retain(|&a| {
-            let n = *self.ast.attrs.get(a);
-            if n.kind != AttrKind::MODE {
-                return true;
-            }
-            let what = "a 'mode' attribute on a parameter of dependent type";
-            self.emit(self.diag(DiagId::parse_unsupported, n.loc).arg(what));
-            false
-        });
+        // A `mode` left in `attrs` is on a dependent type: kept on the
+        // parameter, applied when it is substituted (clang
+        // `instantiateDependentModeAttr`; `Subst::param_infos`).
         ty = self.apply_noreturn_attrs(ty, &attrs);
         let declared = ty;
         ty = self.adjust_param_type(ty);
@@ -3563,7 +3556,10 @@ impl Sema<'_, '_> {
         // The type-id's attributes modify its type; then those after the
         // name, which appertain to the alias.
         let (own, of_type) = attrs.split_at(own.min(attrs.len()));
+        // A `mode` in the type-id is dropped silently (clang's
+        // `ActOnTypeName` skips the unused-attribute check for an alias).
         let mut type_attrs = of_type.to_vec();
+        type_attrs.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::MODE);
         let ty = self.apply_vector_attrs(ty, &mut type_attrs, true, VectorAttrPos::Type(None));
         let mut attrs = own.to_vec();
         let ty = self.apply_vector_attrs(ty, &mut attrs, true, VectorAttrPos::Decl);

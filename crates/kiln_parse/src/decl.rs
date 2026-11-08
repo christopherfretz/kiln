@@ -3521,6 +3521,7 @@ impl Parser<'_, '_> {
         out: Option<&mut Vec<AttrId>>,
         site: DeclSite,
     ) -> Option<QualType> {
+        let warn_mode = !std::mem::take(&mut self.named_cast_type_id);
         let mut ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
         let vec_out = out.is_some();
         if let Some(out) = out {
@@ -3550,7 +3551,7 @@ impl Parser<'_, '_> {
         self.parse_declarator(&mut d);
         let mut base = self.s.type_from_declspec(&ds);
         if !vec_out {
-            base = self.s.apply_type_id_vector_attrs(base, &ds);
+            base = self.s.apply_type_id_vector_attrs(base, &ds, warn_mode);
         }
         self.type_id_constraint = if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
             ds.constraint_loc

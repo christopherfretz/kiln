@@ -505,6 +505,7 @@ impl Substituter<'_, '_, '_> {
                 };
                 let mut decls = Vec::with_capacity(tys.len());
                 for ty in tys {
+                    let ty = self.sema.apply_pattern_mode(p, ty);
                     let ty = self.param_type(ty, loc)?;
                     let ctx = self.sema.ctx;
                     let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
@@ -530,7 +531,7 @@ impl Substituter<'_, '_, '_> {
             self.type_begin = outer;
             (self.ref_loc, self.chunk_loc) = outer_ref;
             self.declarator_name = outer_name;
-            let declared = ty?;
+            let declared = self.sema.apply_pattern_mode(p, ty?);
             let ty = self.param_type(declared, n.loc())?;
             // Created now, so that the rest of the signature (a trailing
             // return type, the exception specification) refers to it

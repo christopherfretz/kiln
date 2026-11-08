@@ -585,7 +585,7 @@ impl Sema<'_, '_> {
         base: QualType,
         ds: &DeclSpec,
     ) -> QualType {
-        self.apply_declspec_vector_attrs_as(base, ds, ds.is_typedef())
+        self.apply_declspec_vector_attrs_as(base, ds, ds.is_typedef(), false)
     }
 
     /// [`Self::apply_declspec_vector_attrs`] (`typedef` as for
@@ -601,8 +601,12 @@ impl Sema<'_, '_> {
         base: QualType,
         ds: &DeclSpec,
         typedef: bool,
+        type_id: bool,
     ) -> QualType {
         let mut attrs = ds.attrs.clone();
+        if type_id {
+            attrs.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::MODE);
+        }
         if !attrs.iter().any(|&a| self.ast.attrs.get(a).kind.is_vector_type()) {
             return base;
         }
@@ -621,8 +625,33 @@ impl Sema<'_, '_> {
     /// a cast, a template argument): clang `processTypeAttrs` handles
     /// them as type attributes, so `ext_vector_type` is accepted here at
     /// clang 19 too (there is no declaration to restrict it to a typedef).
-    pub fn apply_type_id_vector_attrs(&mut self, base: QualType, ds: &DeclSpec) -> QualType {
-        self.apply_declspec_vector_attrs_as(base, ds, true)
+    /// A GNU `mode` is a declaration attribute, so a type-id drops it
+    /// (clang `ActOnTypeName`'s `checkUnusedDeclAttributes`), with a
+    /// warning when `warn_mode` (not for a named cast or a new-expression,
+    /// whose type clang builds without that check).
+    pub fn apply_type_id_vector_attrs(
+        &mut self,
+        base: QualType,
+        ds: &DeclSpec,
+        warn_mode: bool,
+    ) -> QualType {
+        if warn_mode {
+            self.warn_type_id_modes(&ds.attrs);
+        }
+        self.apply_declspec_vector_attrs_as(base, ds, true, true)
+    }
+
+    /// clang `warn_attribute_ignored_when_parsing_type` for each GNU
+    /// `mode` among `attrs`, the attributes of a type-id.
+    pub(crate) fn warn_type_id_modes(&mut self, attrs: &[AttrId]) {
+        for &a in attrs {
+            let node = *self.ast.attrs.get(a);
+            if node.kind == AttrKind::MODE {
+                let msg =
+                    self.diag(DiagId::sema_attribute_ignored_parsing_type, node.loc).arg("'mode'");
+                self.emit(msg);
+            }
+        }
     }
 
     /// `attrs` without the vector attributes (applied separately by
