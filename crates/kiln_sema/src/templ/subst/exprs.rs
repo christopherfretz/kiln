@@ -2526,6 +2526,25 @@ impl Substituter<'_, '_, '_> {
         lbrace: Loc,
         rbrace: Loc,
     ) -> SubstResult<InitList> {
+        // An initializer-list constructor's one argument is the
+        // `std::initializer_list` built from the whole list
+        // ([dcl.init.list]/3.7, /5): the list is that one, not a list
+        // holding it (clang `TransformInitializer` unwraps
+        // `isStdInitListInitialization`). Rebuilt as `{{...}}`, a list
+        // whose single element initializes one `E` from the elements
+        // would be chosen ([over.match.list]/1.1), so
+        // `std::vector<std::pair<std::string, std::string>> v =
+        // {{"a", b}, {"c", d}}` in a template got one pair.
+        if self.sema.ast.exprs.construct_info(e).std_init_list {
+            let arg =
+                self.sema.ast.lists.iter::<ExprId>(self.sema.ast.exprs.construct_args(e)).next();
+            if let Some(b) = arg.and_then(|a| self.braced_source(a))
+                && self.sema.ast.exprs.get(b).kind() == ExprKind::InitListExpr
+            {
+                let l = self.init_list(b)?;
+                return Ok(InitList { items: l.items, lbrace, rbrace });
+            }
+        }
         let items: Vec<ExprId> = self
             .sema
             .ast
