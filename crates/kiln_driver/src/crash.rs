@@ -128,25 +128,35 @@ fn hook(info: &PanicHookInfo<'_>) {
         backtrace: backtrace_enabled().then(|| Backtrace::force_capture().to_string()),
     };
     let mut slot = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
-    match &*slot {
-        None => *slot = Some(record),
-        // A second panic on the thread of the first, before `main`
-        // reported it, is a panic while unwinding: the runtime aborts
-        // right after this hook, so report now (without a reproducer).
+    let prog = std::env::args().next().unwrap_or_else(|| "kiln".to_owned());
+    if let Some(text) = funnel(&mut slot, record, &program_name(&prog)) {
+        let _ = std::io::stderr().lock().write_all(text.as_bytes());
+    }
+}
+
+/// Funnels one panic into the single crash report: the first panic of the
+/// process is the one reported. A later panic on another thread (the
+/// compile thread re-raising a helper thread's panic, as `thread::scope`
+/// does) is the same crash and is dropped. A second panic on the thread of
+/// the first, before `main` reported it, is a panic while unwinding: the
+/// runtime aborts right after the hook, so the banner is returned to be
+/// printed at once (without a reproducer).
+fn funnel(slot: &mut Option<Record>, record: Record, prog: &str) -> Option<String> {
+    match slot {
+        None => {
+            *slot = Some(record);
+            None
+        }
         Some(first) if first.thread == record.thread => {
-            let prog = std::env::args().next().unwrap_or_else(|| "kiln".to_owned());
-            let mut text = banner(&program_name(&prog), first);
+            let mut text = banner(prog, first);
             let _ = writeln!(
                 text,
-                "{}: note: a second panic while unwinding aborts the compiler: {}",
-                program_name(&prog),
+                "{prog}: note: a second panic while unwinding aborts the compiler: {}",
                 record.message.lines().next().unwrap_or("")
             );
-            let _ = std::io::stderr().lock().write_all(text.as_bytes());
+            Some(text)
         }
-        // A panic on another thread while the first unwinds (the compile
-        // thread re-raising a helper thread's panic): the same crash.
-        Some(_) => {}
+        Some(_) => None,
     }
 }
 
@@ -548,5 +558,33 @@ mod tests {
         );
         assert_eq!(lines[4], version_line());
         assert!(lines[5].contains(BUG_REPORT_URL));
+    }
+
+    /// spec/driver.md "Internal compiler errors": panics from several
+    /// threads make one report, the first panic's.
+    #[test]
+    fn panics_funnel_into_the_first() {
+        let record = |message: &str, thread| Record {
+            message: message.to_owned(),
+            rust_loc: None,
+            thread,
+            thread_name: "t".to_owned(),
+            phase: Phase::Codegen,
+            loc: Loc::INVALID,
+            source_loc: None,
+            backtrace: None,
+        };
+        let here = std::thread::current().id();
+        let other = std::thread::spawn(|| std::thread::current().id()).join().unwrap();
+        let mut slot = None;
+        assert_eq!(funnel(&mut slot, record("helper", other), "kiln"), None);
+        // The compile thread re-raising it: dropped, the first one stays.
+        assert_eq!(funnel(&mut slot, record("a scoped thread panicked", here), "kiln"), None);
+        assert_eq!(slot.as_ref().map(|r| r.message.as_str()), Some("helper"));
+        // A second panic on the first one's thread (while unwinding): the
+        // banner is printed at once.
+        let now = funnel(&mut slot, record("in drop", other), "kiln").unwrap();
+        assert!(now.starts_with("kiln: error: internal compiler error: helper\n"), "{now}");
+        assert!(now.ends_with("a second panic while unwinding aborts the compiler: in drop\n"));
     }
 }
