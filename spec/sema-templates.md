@@ -1834,6 +1834,14 @@ member templates):
    class instantiation and `spec_args`). Test:
    `temp.expl.spec/member-partial-spec-of-implicit-spec-run.cpp`.
 
+**Constructors and destructors of an implicit instantiation**
+(`template<> A<int>::A(int) {...}`, [temp.expl.spec]/1): the out-of-line
+redeclaration marks the member specialization explicit
+(`mark_member_explicit_spec`) and consumes the `template<>` head, so the
+block-scope declarations of its body are not under it (`int i(n);` there is
+a local, not an extraneous variable specialization; WP-803,
+`temp.expl.spec/special-member-spec-body-locals-run.cpp`).
+
 **Member classes and member enumerations of an implicit instantiation**
 ([temp.expl.spec]/1, /5, /7; WP-206), such as `template<> struct
 A<int>::N {...}`, `template<> enum class A<int>::E : int {...}` and the
@@ -5826,6 +5834,15 @@ return type deduction, as clang's instantiated declaration name does:
 `'G::operator int<int>'`, `'operator auto (*)(int)<int>'` for a generic
 lambda (`ColdDeclData::conversion_spec_target`, read by
 `AstNames::write_name`; WP-170).
+
+A class member access that names a conversion function explicitly
+(`e.operator Matx<double,3,3>()`, `this->X::operator T*()`) and finds no
+member of that name deduces each conversion function template of the
+object's class against the named type ([temp.mem]/6, [temp.deduct.conv])
+and takes the specializations that deduce as the lookup result; the
+bases' conversion templates are not searched, as clang 19's
+`LookupDirect` (`Sema::conversion_template_specs`, WP-803,
+`tests/conformance/temp.mem/conversion-template-named-explicitly-run.cpp`).
 
 The texts are taken from clang 19's `DiagnosticSemaKinds.td`. The goldens
 are authoritative: WP-070 checks each of them in `templates/diag/`.

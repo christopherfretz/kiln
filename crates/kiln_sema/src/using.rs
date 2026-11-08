@@ -830,7 +830,10 @@ impl Sema<'_, '_> {
             return !self.ast.types.same_type(ta, tb);
         }
         if ka.is_function() && kb.is_function() {
-            return self.same_ignoring_exc_spec(ta, tb);
+            // A `pass_object_size` function overloads one without
+            // (spec/sema-overload.md §4.3a; WP-803).
+            let ps = |me: &Self, d| me.ast.pass_object_size_params(d).is_empty();
+            return ps(self, a) == ps(self, b) && self.same_ignoring_exc_spec(ta, tb);
         }
         // A function template overloads with functions and with other
         // function templates unless the signatures, including the

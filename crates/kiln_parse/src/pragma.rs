@@ -25,7 +25,7 @@ const IGNORED: &[&str] = &["comment", "unused", "omp"];
 
 /// Pragmas clang knows that change the meaning of the translation unit
 /// and that kiln does not implement yet.
-const UNSUPPORTED: &[&str] = &["align", "options", "ms_struct", "weak", "redefine_extname"];
+const UNSUPPORTED: &[&str] = &["align", "options", "ms_struct", "redefine_extname"];
 
 /// `#pragma clang ...` pragmas accepted without effect.
 const CLANG_IGNORED: &[&str] =
@@ -129,6 +129,7 @@ pub(crate) fn classify(
             }
         },
         "float_control" => crate::fp_pragma::float_control(cx, loc, rest, end),
+        "weak" => weak(cx, loc, rest, end),
         "unroll" => unroll_hint(cx, "unroll", start, loc, rest, end),
         "nounroll" => unroll_hint(cx, "nounroll", start, loc, rest, end),
         "unroll_and_jam" => unroll_hint(cx, "unroll_and_jam", start, loc, rest, end),
@@ -158,6 +159,26 @@ fn pack(cx: &PragmaCx<'_, '_>, loc: Loc, rest: &[Token], end: Loc) -> Option<Eve
         args.push_str(&kiln_lex::spelling(cx.sm, t, cx.lex_opts));
     }
     Some(Event::PragmaPack { loc, args })
+}
+
+/// `#pragma weak name` (clang's `PragmaWeakHandler`); `loc` is the
+/// `weak` token. A missing identifier, or tokens after it, are ignored
+/// with a warning; the alias form `#pragma weak name = alias` is not
+/// supported yet.
+fn weak(cx: &PragmaCx<'_, '_>, loc: Loc, rest: &[Token], end: Loc) -> Option<Event> {
+    let at = |i: usize| rest.get(i).map_or(end, |t| t.span.lo);
+    let Some(TokKind::Identifier(name)) = rest.first().map(|t| t.kind) else {
+        cx.report_what(DiagId::parse_pragma_expected_identifier, "weak", at(0));
+        return None;
+    };
+    if rest.get(1).is_some_and(|t| t.kind == TokKind::Punct(Punct::Equal)) {
+        return Some(Event::UnsupportedPragma { what: "weak name = alias".to_owned(), loc });
+    }
+    if rest.len() > 1 {
+        cx.report_what(DiagId::parse_pragma_extra_tokens, "weak", at(1));
+        return None;
+    }
+    Some(Event::PragmaWeak { name, loc: rest[0].span.lo })
 }
 
 /// `#pragma GCC visibility push(v)` / `pop` (clang's
@@ -373,6 +394,7 @@ impl Parser<'_, '_> {
                 }
             }
             Event::Visibility { loc, push: None } => self.s.act_on_pragma_visibility(None, loc),
+            Event::PragmaWeak { name, loc } => self.s.act_on_pragma_weak(name, loc),
         }
     }
 }

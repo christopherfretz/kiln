@@ -3385,9 +3385,24 @@ impl Cg<'_> {
             self.psabi_call_check(e, d, &args, false);
             self.alloc_call_attrs(d, &vals, &mut extra, &mut ret_extra);
         }
+        // WP-803: a hidden `size_t` argument after each `pass_object_size`
+        // argument (clang `EmitCallArgs`).
+        let ps = direct.map(|d| ast.pass_object_size_params(d)).unwrap_or_default();
+        let (mut cvals, mut cargs) = (Vec::new(), Vec::new());
+        if !ps.is_empty() {
+            (cvals, cargs) = (vals.clone(), args.clone());
+            for &(i, t, dynamic) in ps.iter().rev() {
+                if let (Some(&a), Some(&CallArg::Scalar(v))) = (args.get(i), vals.get(i)) {
+                    let s = self.pass_object_size_arg(a, v, t, dynamic);
+                    cvals.insert(i + 1, CallArg::Scalar(s));
+                    cargs.insert(i + 1, a);
+                }
+            }
+            sig = self.with_object_sizes(sig, fty, &ps, extern_c);
+        }
+        let (cv, ca) = if ps.is_empty() { (&vals, &args) } else { (&cvals, &cargs) };
         let mark = self.f.fir.inst_count();
-        let r =
-            self.call_vals_ret(&sig, callee, fid, None, &vals, &args, dest, &extra, &ret_extra)?;
+        let r = self.call_vals_ret(&sig, callee, fid, None, cv, ca, dest, &extra, &ret_extra)?;
         // WP-806: a library builtin's call takes the FP scope's fast-math
         // flags (clang `EmitBuiltinExpr`'s `CGFPOptionsRAII`).
         if let (Some(d), Some(f)) = (direct, fid)

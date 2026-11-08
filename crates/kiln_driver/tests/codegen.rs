@@ -916,6 +916,7 @@ fn codegen_flags_classes() {
         &["-gz=zlib"],
         &["-fno-trapv"],
         &["-fno-short-enums"],
+        &["-ffp-model=precise"],
         // The common hardening set together, at -O2.
         &[
             "-O2",

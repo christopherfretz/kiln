@@ -13,7 +13,7 @@
 //!    `-fno-short-enums` and `-m64`, and `-pipe`);
 //! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
 //!    `-fshort-enums`, `-fsanitize*`, `-fno-sanitize*`, coverage and
-//!    profiling).
+//!    profiling). The floating-point flags are `crate::fp_flags`'s.
 //!
 //! `-Wp,<args>` and `-Xpreprocessor <arg>` are spliced into the command
 //! line before parsing ([`splice_preprocessor_args`]).
@@ -295,6 +295,7 @@ mod tests {
             "-fstack-usage",
             "-gz",
             "-gz=zlib",
+            "-ffp-model=precise",
             "-mtune=native",
             "-ffunction-sections",
             "-fdata-sections",
@@ -304,6 +305,8 @@ mod tests {
         for a in [
             "-ftrapv",
             "-fshort-enums",
+            "-ffp-model=fast",
+            "-ffp-model=strict",
             "-fsanitize=address",
             "-fno-sanitize-recover=all",
             "-fsanitize-trap=undefined",

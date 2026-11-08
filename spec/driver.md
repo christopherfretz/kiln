@@ -163,11 +163,10 @@ do not add a diagnostic): `-f[no-]stack-clash-protection`,
 is `invalid value '<v>' in '-fcf-protection=<v>'`; accepted on AArch64 too,
 where clang errors), `-f[no-]common`, `-fstack-usage`, `-gz`, `-gz=none|zlib|zstd`,
 `-fno-trapv`, `-fno-short-enums`, `-m64` (every kiln target is 64-bit;
-`-m32` stays unknown) and `-pipe`. Other
-`-fexcess-precision=`/`-gz=` values
+`-m32` stays unknown) and `-pipe`. Other `-gz=` values
 (and an empty `-mtune=`) are `unsupported argument '<v>' to option '<opt>'`.
-(`-fexcess-precision=` and `-f[no-]math-errno` moved to "Floating-point
-flags", WP-806.)
+(`-fexcess-precision=`, `-f[no-]math-errno` and `-ffp-model=` are in
+"Floating-point flags", WP-806.)
 
 **3. Rejected** with `drv_unsupported_flag`, the error `'<flag>' is not
 supported by kiln` (exit 1, no job runs; not the generic `unknown argument`):
