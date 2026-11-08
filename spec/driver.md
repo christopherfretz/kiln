@@ -80,7 +80,7 @@ starting with `-` are inputs.
 | `-fkiln-reproducible-time` | see "Reproducible time" |
 | `-fkiln-source-path-style=<clang\|gcc>` | kiln: how `__builtin_FILE()`, `__builtin_FILE_NAME()`, `std::source_location::current()` (also as a default argument) and `std::meta::source_location_of` spell a file (`SourcePathStyle`, `SourceManager::presumed_file_name`; WP-636). `clang` (the default): the presumed name as written, as clang 19 and 22 (`SourceLocExpr::EvaluateInContext`), so `-I /p//inc/./` gives `/p//inc/./x.h`; `gcc`: GCC 16.1's, an included file's absolute path with empty and `.` components dropped and `dir/..` folded through a real directory (`/p/inc/x.h`; spec/reflection.md §3.9). `-fmacro-prefix-map=` applies after either; `__FILE__` and `__BASE_FILE__` keep clang's spelling under both. Any other value is `invalid value`; the last one wins |
 | `-fconstexpr-steps=N`, `-fconstexpr-depth=N`, `-fconstexpr-backtrace-limit=N` | constant-evaluation limits, as clang's (defaults 1048576, 512, 10; a backtrace limit of 0 shows every frame); `constexpr_opts`, spec/oven.md "Integration". GCC's `-fconstexpr-ops-limit=N` (passed by the reference workload's generator compile) sets the step budget too |
-| `-ffile-prefix-map=<old>=<new>`, `-fmacro-prefix-map=<old>=<new>` | `__FILE__`, `__BASE_FILE__`, `__builtin_FILE()`, `std::source_location` and `std::meta::source_location_of` spell a path starting with `<old>` with `<new>` instead (`SourceManager::remap_macro_path`; clang `processPathForFileMacro`). Entries are tried in descending order of `<old>`, the first match wins, and the match is a plain string prefix. A value without `=` is `invalid value` (deviation 20). `-fdebug-prefix-map=<old>=<new>` is validated and otherwise ignored (no debug information) |
+| `-ffile-prefix-map=<old>=<new>`, `-fmacro-prefix-map=<old>=<new>` | `__FILE__`, `__BASE_FILE__`, `__builtin_FILE()`, `std::source_location` and `std::meta::source_location_of` spell a path starting with `<old>` with `<new>` instead (`SourceManager::remap_macro_path`; clang `processPathForFileMacro`). Entries are tried in descending order of `<old>`, the first match wins, and the match is a plain string prefix. A value without `=` is `invalid value` (deviation 20). `-ffile-prefix-map=` also remaps debug information file names, as `-fdebug-prefix-map=` does ("Debug information flags") |
 | `-fcontract-evaluation-semantic=<ignore\|observe\|enforce\|quick_enforce>` | the contract evaluation semantic of the translation unit (GCC's spelling; `quick-enforce` also accepted; default `enforce`; `ParseOptions::contract_semantic`, `Ast::contract_semantic`); any other value is `unsupported argument`. Until WP-707 only `ignore` compiles a program with contracts to IR; the others are `unsupported: contract evaluation (WP-707)` (spec/contracts.md §6) |
 | `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
 | `-f[no-]reflection` | kiln: the P2996 reflection spike (WP-267; default off; the last one wins): `^^`, `[:`, `:]` are lexed (C++26 only), and `^^`, type splices and the kiln intrinsics are accepted (spec/sema.md §8a, spec/parse.md §5.2). `__cpp_reflection` is not predefined. Passed to the preprocessor, the parser and sema for `-E`, `-fsyntax-only` and codegen jobs |
@@ -115,7 +115,7 @@ starting with `-` are inputs.
 | `-fpic`, `-fPIC`, `-fpie`, `-fPIE`, `-fno-pic` (and `-fno-PIC`/`-fno-pie`/`-fno-PIE`) | the relocation model, the last one winning (default `-fPIE`, as clang on Linux): the `__pic__`/`__pie__` predefines, `llc`'s `-relocation-model=`, the `PIC Level`/`PIE Level` module flags and which globals are `dso_local` (spec/codegen.md "Symbol visibility and `dso_local`", WP-544) |
 | `-f[no-]semantic-interposition`, `-f[no-]direct-access-external-data` | the `dso_local` inputs of clang's `shouldAssumeDSOLocal` (spec/codegen.md "Symbol visibility and `dso_local`"): under `-fPIC`, `-fno-semantic-interposition` makes external non-COMDAT function definitions `dso_local` and `-fsemantic-interposition` adds the `SemanticInterposition` module flag; `-fdirect-access-external-data` (default only with `-fno-pic`) makes non-TLS variable declarations (and, under `-fno-pic`, function declarations) `dso_local` under `-fPIE`/`-fno-pic`, and a value other than the relocation model's default adds the `direct-access-external-data` module flag. The last of each pair wins |
 | `-fvisibility=default\|hidden\|protected\|internal`, `-fvisibility-ms-compat`, `-f[no-]visibility-inlines-hidden` | the default symbol visibility (`CodegenOptions::visibility` / `type_visibility` / `inlines_hidden`, spec/codegen.md "Symbol visibility and `dso_local`", WP-544): the last `-fvisibility=` or `-fvisibility-ms-compat` wins; `internal` is `hidden`, as clang; `-fvisibility-ms-compat` is hidden value visibility with default type visibility (vtables, RTTI), accepted silently as by clang. `-fvisibility-inlines-hidden` hides inline functions that are not explicit instantiations (the last of the pair wins). An unknown value is clang's `-cc1` error `invalid value '<v>' in '-fvisibility=<v>'` (no `kiln++:` prefix, once per input, as the `-std=` one), unless a later `-fvisibility=`/`-fvisibility-ms-compat` replaces it (clang forwards only the last) |
-| `-g`, `-g0`..`-g3`, `-ggdb`, `-ggdb0`..`-ggdb3` | accepted and ignored (no debug info yet) |
+| `-g`, `-g0`..`-g3`, `-ggdb*`, `-gline-tables-only`, `-gdwarf-N`, `-gsplit-dwarf`, `-gz`, ... | DWARF debug information; see "Debug information flags" below (WP-814) |
 | `-l<lib>`, `-L<dir>`, `-B<dir>`, `-Wl,<args>`, `-Xlinker <arg>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs |
 | `-dD`, `-dI` | parsed; "not implemented yet" (WP-017) |
 | `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name is accepted and ignored |
@@ -162,10 +162,9 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 
 **2. Accepted and ignored silently** (no observable effect in kiln today;
 do not add a diagnostic): `-f[no-]stack-clash-protection`,
-`-f[no-]common`, `-fstack-usage`, `-gz`, `-gz=none|zlib|zstd`,
+`-f[no-]common`, `-fstack-usage`,
 `-fno-trapv`, `-fno-short-enums`, `-m64` (every kiln target is 64-bit;
-`-m32` stays unknown) and `-pipe`. Other `-gz=` values
-(and an empty `-mtune=`) are `unsupported argument '<v>' to option '<opt>'`.
+`-m32` stays unknown) and `-pipe`. An empty `-mtune=` is `unsupported argument '<v>' to option '<opt>'`.
 (`-fexcess-precision=`, `-f[no-]math-errno` and `-ffp-model=` are in
 "Floating-point flags", WP-806.)
 
@@ -179,6 +178,63 @@ supported by kiln` (exit 1, no job runs; not the generic `unknown argument`):
 `-fxray-instrument` every `-fxray-*` option but the threshold and
 `-fxray-ignore-loops` (`-fxray-modes=`, `-fxray-always-instrument=`, ...;
 WP-813).
+
+### Debug information flags (WP-814)
+
+`DebugFlags` (`crates/kiln_driver/src/debug_flags.rs`) reads the debug
+flags as clang 19's driver does on Linux and gives codegen its
+`DebugOptions` (spec/codegen.md §5.1, spec/landed/codegen/WP-814.md).
+Every `-g` flag is implemented, accepted as clang's default, or an error.
+
+- **Level** (the last one wins): `-g`, `-g2`, `-g3`, `-ggdb`, `-ggdb2`,
+  `-ggdb3`, `-gfull`, `-gused` give clang's default kind (`Constructor`:
+  limited debug information with constructor type homing); `-g1`,
+  `-ggdb1`, `-gmlt`, `-gline-tables-only` give line tables only;
+  `-gline-directives-only` gives `DebugDirectivesOnly`; `-g0`, `-ggdb0`
+  and no flag give none. `-gdwarf-2`..`-gdwarf-5` and `-gdwarf` (5) set
+  the `"Dwarf Version"` module flag and also enable `-g`;
+  `-fdebug-default-version=N` (2..5) sets the version when no
+  `-gdwarf-N` does.
+- **Kind modifiers:** `-fstandalone-debug` / `-fno-limit-debug-info`
+  (every used type in full) and `-fno-standalone-debug` /
+  `-flimit-debug-info`, the last wins;
+  `-fno-eliminate-unused-debug-types` (also unused types);
+  `-g[no-]column-info`.
+- **Paths:** `-fdebug-prefix-map=<old>=<new>` and
+  `-ffile-prefix-map=<old>=<new>` remap file and directory names (clang
+  `remapDIPath`: the last matching entry wins); a value without `=` is
+  `invalid value`. `-fdebug-compilation-dir=` /
+  `-ffile-compilation-dir=` name the compilation directory (default:
+  the working directory).
+- **Output:** `-gsplit-dwarf[=split]` writes the `.dwo` next to the
+  object (`llc -split-dwarf-file=` / `-split-dwarf-output=`; clang's
+  names: `<output stem>.dwo`, or `<a.out stem>-<input stem>.dwo` when
+  linking), `-gno-split-dwarf` turns it off. `-gz`, `-gz=zlib`,
+  `-gz=zstd` compress the object's debug sections (`llc` cannot, so
+  `objcopy --compress-debug-sections=` runs on the object after `-c`, and
+  the link gets `-gz=<type>`; `.s` output is not compressed); `-gz=none` turns it off; another value is `unsupported
+  argument`. Every `llc` run under `-g` gets `-debugger-tune=gdb`, as
+  clang on Linux.
+- **Accepted with no effect** (each spells clang's Linux default):
+  `-gcolumn-info`, `-gdwarf32`, `-gno-embed-source`, `-gno-codeview`,
+  `-gno-pubnames`, `-gno-gnu-pubnames`, `-ggnu-pubnames-none`,
+  `-gno-simple-template-names`, `-gno-record-command-line`,
+  `-gno-record-gcc-switches`, `-gno-strict-dwarf`, `-gno-modules`,
+  `-gno-inline-line-tables`, `-gno-template-alias`,
+  `-feliminate-unused-debug-types`, `-fno-debug-macro`,
+  `-fno-debug-types-section`, `-fno-split-dwarf-inlining`,
+  `-f[no-]dwarf-directory-asm`.
+- **Rejected** with `'<flag>' is not supported by kiln` (exit 1):
+  `-gembed-source`, `-gcodeview`, `-gcodeview-ghash`, `-gpubnames`,
+  `-ggnu-pubnames`, `-gsimple-template-names[=simple|mangled]`,
+  `-grecord-command-line`, `-grecord-gcc-switches`, `-gstrict-dwarf`,
+  `-gdwarf64`, `-gmodules`, `-glldb`, `-gsce`, `-gdbx`,
+  `-gtemplate-alias`, `-ginline-line-tables`, `-gsplit-dwarf=single`,
+  `-fdebug-macro`, `-fdebug-types-section`, `-fsplit-dwarf-inlining`,
+  `-fdebug-info-for-profiling`.
+
+Tests: `debug_flags.rs` unit tests; `crates/kiln_driver/tests/driver.rs`
+`debug_info_flags_reach_the_ir`.
 
 ### Floating-point flags (WP-806)
 
@@ -924,7 +980,10 @@ Each deviation is covered by a test or a test note.
     would run its backend on them).
 13. **`-E -MD` writes no dependency file after an error** (clang writes
     it unless a header was missing); the other actions match clang.
-14. **No debug information:** `-g*` is accepted and ignored.
+14. **Debug information gaps:** `-g` emits clang 19's DWARF for what
+    kiln lowers, with the gaps listed in docs/status/debuginfo.md (each
+    either a hard error or a documented follow-up); the debug flags kiln
+    does not implement are errors ("Debug information flags").
 15. **`-fdump-record-layouts` dumps every complete class**, as
     `-fdump-record-layouts-complete` does. clang dumps only the classes
     it lays out, in the order it lays them out (spec/abi.md A5).

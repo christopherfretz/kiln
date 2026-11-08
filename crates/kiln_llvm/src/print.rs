@@ -640,6 +640,10 @@ impl<'a> Printer<'a> {
                             }
                         }
                     }
+                    for r in f.debug_records(i) {
+                        self.add_md_slot(r.var, &mut stack);
+                        self.add_md_slot(r.loc, &mut stack);
+                    }
                     for &(_, _, md) in f.inst_metadata(i) {
                         self.add_md_slot(md, &mut stack);
                     }
@@ -1378,28 +1382,53 @@ impl<'a> Printer<'a> {
             w.write_char('\n')?;
         } else {
             self.attachments(w, f.md.iter().copied(), " ")?;
-            w.write_str(" {")?;
-            for (bi, &bb) in f.layout.iter().enumerate() {
-                let name = &f.blocks[bb.index()].name;
-                if !name.is_empty() {
-                    w.write_char('\n')?;
-                    write_llvm_name(w, '\0', name)?;
-                    w.write_char(':')?;
-                } else if bi != 0 {
-                    w.write_char('\n')?;
-                    write_u64(w, u64::from(self.local.blocks[bb.index()]))?;
-                    w.write_char(':')?;
-                }
-                w.write_char('\n')?;
-                for &i in &f.blocks[bb.index()].insts {
-                    self.instruction(w, f, i)?;
-                    w.write_char('\n')?;
-                }
-            }
-            w.write_str("}\n")?;
+            self.function_body(w, fid)?;
         }
         self.cur = None;
         Ok(())
+    }
+
+    /// A definition's ` {`, blocks and `}` line.
+    fn function_body(&mut self, w: Out<'_>, fid: FuncId) -> fmt::Result {
+        let f = &self.m.funcs[fid.index()];
+        w.write_str(" {")?;
+        for (bi, &bb) in f.layout.iter().enumerate() {
+            let name = &f.blocks[bb.index()].name;
+            if !name.is_empty() {
+                w.write_char('\n')?;
+                write_llvm_name(w, '\0', name)?;
+                w.write_char(':')?;
+            } else if bi != 0 {
+                w.write_char('\n')?;
+                write_u64(w, u64::from(self.local.blocks[bb.index()]))?;
+                w.write_char(':')?;
+            }
+            w.write_char('\n')?;
+            for &i in &f.blocks[bb.index()].insts {
+                for r in f.debug_records(i) {
+                    self.debug_record(w, r)?;
+                }
+                self.instruction(w, f, i)?;
+                w.write_char('\n')?;
+            }
+        }
+        w.write_str("}\n")
+    }
+
+    /// `    #dbg_declare(T v, !var, !DIExpression(...), !loc)` and a newline.
+    fn debug_record(&self, w: Out<'_>, r: &crate::function::DbgRecord) -> fmt::Result {
+        w.write_str(match r.kind {
+            crate::function::DbgRecordKind::Declare => "    #dbg_declare(",
+            crate::function::DbgRecordKind::Value => "    #dbg_value(",
+        })?;
+        self.typed(w, r.addr)?;
+        w.write_str(", ")?;
+        self.md_operand(w, r.var)?;
+        w.write_str(", ")?;
+        self.md_operand(w, r.expr)?;
+        w.write_str(", ")?;
+        self.md_operand(w, r.loc)?;
+        w.write_str(")\n")
     }
 
     #[allow(clippy::too_many_lines)]
@@ -2168,7 +2197,10 @@ impl<'a> TypeFinder<'a> {
                     }
                 }
                 MdNode::Specialized { .. } => md_children(node, |c| kids.push(c)),
-                _ => {}
+                // A debug node's constant operand (a template argument's
+                // `value: %struct.S { ... }`), reached in operand order.
+                MdNode::Value(_, v) => self.value(*v),
+                MdNode::String(_) => {}
             }
             for k in kids.into_iter().rev() {
                 stack.push(k);

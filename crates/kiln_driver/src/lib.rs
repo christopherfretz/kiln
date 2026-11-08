@@ -12,6 +12,7 @@ pub mod args;
 pub mod codegen_cmd;
 pub mod codegen_flags;
 pub mod constexpr_opts;
+pub mod debug_flags;
 pub mod deps;
 pub mod features;
 pub mod fp_flags;

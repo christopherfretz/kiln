@@ -33,6 +33,14 @@
 //! scratch BMI and gets `-fmodule-file=<name>=<bmi>`. List the lines in
 //! dependency order (spec/codegen.md §6, "IR-diff corpus").
 //!
+//! Debug-information cases (`debug_*.cpp`, `//@ args: -g`; WP-814) are
+//! compared the same way. Under oracle 19 that is byte-exact, metadata
+//! included: kiln creates its metadata nodes in clang's order, so the
+//! `!N` numbering after `opt-19` is clang's and no renumbering is needed;
+//! [`ir_norm::base`] only blanks the `DICompileUnit`'s `producer:` (the
+//! version string). Under oracle 22 [`ir_norm::structural`] drops the
+//! `#dbg_*` records and `!dbg` attachments with the rest of the metadata.
+//!
 //! A `//@ min-oracle: <N>` line compares the case only under oracle
 //! release N or later; under an older oracle kiln's IR must still verify
 //! (the case follows a newer clang where the older one differs).
