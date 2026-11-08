@@ -428,6 +428,18 @@ impl Cg<'_> {
         {
             self.m.func_mut(f).align = Some(2);
         }
+        // clang `SetLLVMFunctionAttributesForDefinition`: an `aligned(N)`
+        // / `alignas` function is `align N` (`Decl::getMaxAlignment`).
+        if thunk.is_none() {
+            let bits = kiln_abi::layout::decl_max_align(ast, d, self.target);
+            if bits >= 8 {
+                let func = self.m.func_mut(f);
+                func.align = Some(func.align.unwrap_or(1).max(bits / 8));
+            }
+        }
+        if thunk.is_none() {
+            self.note_used_attrs(d, Value::func(f));
+        }
         if structor.is_some() || thunk.is_some() {
             self.m.func_mut(f).unnamed_addr = kiln_llvm::UnnamedAddr::Global;
         }

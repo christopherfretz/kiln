@@ -5,6 +5,7 @@
 //!    19 (`-fstack-protector*`, `-f[no-]unwind-tables`,
 //!    `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-f[no-]wrapv`,
 //!    `-f[no-]wrapv-pointer`, `-f[no-]strict-overflow`,
+//!    `-f[no-]c++-static-destructors[=…]`,
 //!    `-f[no-]delete-null-pointer-checks`, `-f[no-]function-sections`,
 //!    `-f[no-]data-sections`, `-mtune=`, `-mcmodel=`);
 //! 2. accepted and ignored: no observable effect in kiln
@@ -18,7 +19,7 @@
 //! `-Wp,<args>` and `-Xpreprocessor <arg>` are spliced into the command
 //! line before parsing ([`splice_preprocessor_args`]).
 
-use kiln_codegen::{CodeModel, StackProtector, UnwindTables};
+use kiln_codegen::{CodeModel, StackProtector, StaticDestructors, UnwindTables};
 
 use crate::args::ArgError;
 
@@ -36,6 +37,9 @@ pub struct CodegenFlags {
     pub async_unwind_tables: Option<bool>,
     /// The last of `-fno-plt` (true) / `-fplt`.
     pub no_plt: bool,
+    /// The last of `-fc++-static-destructors[=all|thread-local|none]` /
+    /// `-fno-c++-static-destructors` (WP-805).
+    pub static_destructors: StaticDestructors,
     /// The last of `-fwrapv` / `-fno-wrapv`.
     pub wrapv: Option<bool>,
     /// The last of `-fwrapv-pointer` / `-fno-wrapv-pointer` (clang 20+).
@@ -113,6 +117,8 @@ impl CodegenFlags {
             "-fno-asynchronous-unwind-tables" => set(&mut self.async_unwind_tables, false),
             "-fno-plt" => self.no_plt = true,
             "-fplt" => self.no_plt = false,
+            "-fc++-static-destructors" => self.static_destructors = StaticDestructors::All,
+            "-fno-c++-static-destructors" => self.static_destructors = StaticDestructors::None,
             "-fwrapv" => set(&mut self.wrapv, true),
             "-fno-wrapv" => set(&mut self.wrapv, false),
             "-fwrapv-pointer" => set(&mut self.wrapv_pointer, true),
@@ -148,6 +154,17 @@ impl CodegenFlags {
                     return unsupported();
                 }
                 self.mtune = Some(v.to_owned());
+            }
+            // clang's values; an unknown one is its "invalid value".
+            "-fc++-static-destructors" => {
+                self.static_destructors = match v {
+                    "all" => StaticDestructors::All,
+                    "thread-local" => StaticDestructors::ThreadLocal,
+                    "none" => StaticDestructors::None,
+                    _ => {
+                        return Some(Err(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())));
+                    }
+                };
             }
             "-mcmodel" => match CodeModel::from_name(v) {
                 Some(m) => self.code_model = Some(m),

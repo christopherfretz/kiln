@@ -257,6 +257,16 @@ impl ClangFeatures {
         self.compat
     }
 
+    /// Whether the target is `x86_64` (else `aarch64`).
+    pub fn is_x86_64(&self) -> bool {
+        self.triple.target == 1
+    }
+
+    /// Whether the standard is C++26.
+    pub fn is_cxx26(&self) -> bool {
+        self.bit.trailing_zeros() % 7 == 6
+    }
+
     /// [`ClangFeatures::new`] with the flags a clang command line sets:
     /// each option of [`FeatureFlag::options`], with `-fno-X` undoing `-fX`
     /// and vice versa, `-fsanitize=a,b` / `-fno-sanitize=a,b` lists,
@@ -384,6 +394,37 @@ pub fn is_library_builtin(name: &str, clang22: bool) -> bool {
             .any(|o| o.0 == FeatureFlag::NoBuiltin && o.1 == Kind::Builtin && o.2 == name)
     };
     has(table::OVERLAYS) || (clang22 && has(table::COMPAT22_OVERLAYS))
+}
+
+/// A feature-query table, for [`table_keys`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FeatureTable {
+    /// `__has_builtin`.
+    Builtin,
+    /// `__has_attribute`.
+    Attribute,
+    /// `__has_cpp_attribute` (scoped keys are `scope::name`).
+    CppAttribute,
+    /// `__has_declspec_attribute`.
+    DeclspecAttribute,
+}
+
+/// Every key clang 19 or clang 22 answers nonzero for in some
+/// configuration of `t`, sorted and deduplicated, for coverage tests
+/// that walk clang's tables (WP-805: the attribute triage and builtin
+/// lowering tests).
+pub fn table_keys(t: FeatureTable) -> Vec<&'static str> {
+    let (kind, base) = match t {
+        FeatureTable::Builtin => (Kind::Builtin, table::BUILTIN),
+        FeatureTable::Attribute => (Kind::Attribute, table::ATTRIBUTE),
+        FeatureTable::CppAttribute => (Kind::CppAttribute, table::CPP_ATTRIBUTE),
+        FeatureTable::DeclspecAttribute => (Kind::DeclspecAttribute, table::DECLSPEC_ATTRIBUTE),
+    };
+    let mut v: Vec<&'static str> = base.iter().filter(|e| e.1 != 0).map(|e| e.0).collect();
+    v.extend(table::COMPAT22.iter().filter(|d| d.0 == kind && d.2 != 0).map(|d| d.1));
+    v.sort_unstable();
+    v.dedup();
+    v
 }
 
 /// The flag whose first probed option is `option`.

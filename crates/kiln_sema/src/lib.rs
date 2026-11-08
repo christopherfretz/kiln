@@ -19,6 +19,7 @@ mod align_redecl;
 mod annot;
 mod asm;
 mod attr_cond;
+pub mod attr_triage;
 mod bit_int;
 mod bitfield_constant;
 mod builtins;

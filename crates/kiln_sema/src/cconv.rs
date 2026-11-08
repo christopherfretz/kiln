@@ -52,6 +52,35 @@ const fn target_cc(idx: usize, x86: bool) -> Option<CallConv> {
     })
 }
 
+/// The kind of calling-convention attribute `n` (its `__` affixes
+/// removed) written with `syntax` and normalized scope `scope` on x86-64
+/// (`x86`) or `AArch64`, for the attribute triage (WP-805): None for any
+/// other name, a spelling clang does not give it (`[[clang::ms_abi]]`,
+/// `[[gnu::preserve_most]]`), and for `swiftcall` / `swiftasynccall`,
+/// which kiln does not lower (class A, `__has_attribute` 0). x86
+/// `interrupt` is class A too.
+pub(crate) fn cc_attr_kind(
+    n: &str,
+    syntax: AttrSyntax,
+    scope: Option<&str>,
+    x86: bool,
+) -> Option<AttrKind> {
+    let bare = syntax == AttrSyntax::Gnu && scope.is_none();
+    let gnu = bare || scope == Some("gnu");
+    let clang = bare || scope == Some("clang");
+    // x86 `no_caller_saved_registers` (GCC spellings, clang
+    // `TargetSpecificAttr<TargetAnyX86>`): unknown elsewhere.
+    if n == "no_caller_saved_registers" {
+        return (x86 && gnu).then_some(AttrKind::NO_CALLER_SAVED_REGS);
+    }
+    if n == "regparm" {
+        return gnu.then_some(AttrKind::REGPARM);
+    }
+    let idx = CC_ATTR_SPELLINGS.iter().position(|&s| s == n)?;
+    let spelled = if gcc_spelled(idx) { gnu } else { clang };
+    (spelled && !matches!(idx, 11 | 12)).then_some(AttrKind::CALLING_CONV)
+}
+
 /// How clang names convention `cc` in `err_attributes_are_not_compatible`
 /// (a target-default one as `cdecl`).
 fn cc_name(cc: CallConv) -> &'static str {
@@ -60,11 +89,9 @@ fn cc_name(cc: CallConv) -> &'static str {
 
 impl Sema<'_, '_> {
     /// A calling-convention attribute `n` (the name without `__`
-    /// wrappers), or x86 `no_caller_saved_registers` / `interrupt`:
-    /// `Some(node)` when it is one (None after a diagnostic), None for any
-    /// other name. A spelling the syntax does not provide
-    /// (`[[clang::ms_abi]]`, `[[gnu::preserve_most]]`) is left to the
-    /// unknown-attribute warning.
+    /// wrappers), `regparm` or x86 `no_caller_saved_registers`, one
+    /// [`cc_attr_kind`] accepts: `Some(node)` when it is one (None after a
+    /// diagnostic), None for any other name.
     #[allow(clippy::option_option)]
     pub(crate) fn cc_attribute(
         &mut self,
@@ -78,19 +105,16 @@ impl Sema<'_, '_> {
         let bare = syntax == AttrSyntax::Gnu && scope.is_none();
         let gnu = bare || scope == Some("gnu");
         let clang = bare || scope == Some("clang");
-        // x86 `no_caller_saved_registers` and `interrupt` (GCC spellings,
-        // clang `TargetSpecificAttr<TargetAnyX86>`): unknown elsewhere.
-        if x86 && gnu && matches!(n, "no_caller_saved_registers" | "interrupt") {
+        if n == "no_caller_saved_registers" {
+            if !(x86 && gnu) {
+                return None;
+            }
             if !args.is_empty() {
                 let msg = self
                     .diag(DiagId::parse_attribute_wrong_arg_count, loc)
                     .arg(n.to_owned())
                     .arg("0");
                 self.emit(msg);
-                return Some(None);
-            }
-            if n == "interrupt" {
-                self.unsupported("the x86 'interrupt' attribute", loc);
                 return Some(None);
             }
             let node = AttrNode {
@@ -143,14 +167,6 @@ impl Sema<'_, '_> {
             let msg =
                 self.diag(DiagId::parse_attribute_wrong_arg_count, loc).arg(n.to_owned()).arg("0");
             self.emit(msg);
-            return Some(None);
-        }
-        if matches!(idx, 11 | 12) {
-            // clang lowers `swiftcc` / `swifttailcc` arguments with its own
-            // SwiftABI (no extension attributes, `__int128` unsplit, struct
-            // expansion into scalars); kiln has not implemented it, so the
-            // conventions are a hard error rather than a silent ABI break.
-            self.unsupported(&format!("the '{n}' calling convention"), loc);
             return Some(None);
         }
         #[allow(clippy::cast_possible_truncation, reason = "idx < 19")]

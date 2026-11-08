@@ -10201,72 +10201,43 @@ impl Sema<'_, '_> {
         let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
         let shown = self.attr_shown_parts(syntax, scope, name);
         let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
-        let std = scope_s.is_none() && syntax != AttrSyntax::Gnu;
-        let clang_scope = scope_s.as_deref() == Some("clang");
-        // The thread-safety family: known, ignored, no diagnostic (WP-606).
-        if crate::decl_attrs::is_thread_safety_attr(&n, syntax, clang_scope, self.clang_compat) {
-            return None;
-        }
-        // Sanitizer and lifetime-analysis attributes: likewise (WP-667).
-        if crate::decl_attrs::is_ignored_clang_attr(
+        // The triage (spec/sema.md §4.5, WP-805): an implemented
+        // spelling, a clang attribute kiln ignores (class B/C: no
+        // diagnostic, nothing attached), one it rejects (class A), or one
+        // clang does not know either.
+        let x86 = self.abi.triple.arch == kiln_abi::target::Arch::X86_64;
+        let cxx26 = self.std >= kiln_lex::Std::Cxx26;
+        let support = crate::attr_triage::attribute_support(
             &n,
             syntax,
             scope_s.as_deref(),
             self.clang_compat,
-        ) {
-            return None;
-        }
-        // The calling conventions, function type attributes (WP-808).
-        if let Some(r) = self.cc_attribute(syntax, scope_s.as_deref(), &n, args, loc) {
-            return r;
-        }
-        // clang 19 names only the attribute, not its scope.
-        if scope_s.as_deref().is_some_and(|s| s != "gnu")
-            && !(clang_scope
-                && matches!(
-                    n.as_str(),
-                    "using_if_exists"
-                        | "fallthrough"
-                        | "exclude_from_explicit_instantiation"
-                        | "flag_enum"
-                        | "enum_extensibility"
-                        | "preferred_name"
-                        | "coro_only_destroy_when_complete"
-                        | "optnone"
-                        | "minsize"
-                        | "disable_tail_calls"
-                        | "no_builtin"
-                        | "uninitialized"
-                        | "trivial_abi"
-                        | "type_visibility"
-                        | "internal_linkage"
-                        | "min_vector_width"
-                        | "pass_object_size"
-                        | "pass_dynamic_object_size"
-                        | "overloadable"
-                ))
-        {
-            let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
-            self.emit(msg);
-            return None;
-        }
-        // [dcl.attr.indet] is C++26 (clang trunk's `LangOpts<"CPlusPlus26">`
-        // spelling): below it, `indeterminate` is an unknown attribute.
-        // P3475R2 removes `[[carries_dependency]]` from C++26 (WP-743): an
-        // unknown attribute there, warned as clang warns any unknown one.
-        let cxx26 = self.std >= kiln_lex::Std::Cxx26;
-        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax).filter(|&k| {
-            (k != AttrKind::INDETERMINATE || cxx26) && (k != AttrKind::CARRIES_DEPENDENCY || !cxx26)
-        }) else {
-            let id = if gnu && n == "format" {
-                DiagId::parse_attribute_ignored
-            } else {
-                DiagId::parse_unknown_attribute
-            };
-            let msg = self.diag(id, loc).arg(shown);
-            self.emit(msg);
-            return None;
+            cxx26,
+            x86,
+        );
+        let kind = match support {
+            crate::attr_triage::Support::Implemented(k) => k,
+            crate::attr_triage::Support::Ignored(_) => return None,
+            crate::attr_triage::Support::Unsupported => {
+                let msg = self.diag(DiagId::sema_attribute_unsupported_by_kiln, loc).arg(shown);
+                self.emit(msg);
+                return None;
+            }
+            crate::attr_triage::Support::Unknown => {
+                let id = if gnu && n == "format" {
+                    DiagId::parse_attribute_ignored
+                } else {
+                    DiagId::parse_unknown_attribute
+                };
+                let msg = self.diag(id, loc).arg(shown);
+                self.emit(msg);
+                return None;
+            }
         };
+        // The calling conventions, function type attributes (WP-808).
+        if kind.is_fn_type_attr() {
+            return self.cc_attribute(syntax, scope_s.as_deref(), &n, args, loc).flatten();
+        }
         if let std::ops::ControlFlow::Break(r) =
             self.attribute_with_args(kind, syntax, &raw, args, loc)
         {
@@ -11295,7 +11266,7 @@ pub(crate) fn norm_attr_scope(s: &str) -> &str {
     }
 }
 
-fn attr_kind_of(
+pub(crate) fn attr_kind_of(
     n: &str,
     std: bool,
     gnu: bool,
@@ -11407,6 +11378,11 @@ fn attr_kind_of(
         ("nodebug", _, true) => AttrKind::NODEBUG,
         // clang `GCC<"artificial">` (WP-789).
         ("artificial", _, true) => AttrKind::ARTIFICIAL,
+        // clang `GCC<"retain">` (WP-805).
+        ("retain", _, true) => AttrKind::RETAIN,
+        // clang `Clang<"no_destroy">` / `Clang<"always_destroy">` (WP-805).
+        ("no_destroy", _, _) if gnu_syntax || clang_scope => AttrKind::NO_DESTROY,
+        ("always_destroy", _, _) if gnu_syntax || clang_scope => AttrKind::ALWAYS_DESTROY,
         ("min_vector_width", _, _) if gnu_syntax || clang_scope => AttrKind::MIN_VECTOR_WIDTH,
         _ => return None,
     })

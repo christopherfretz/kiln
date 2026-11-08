@@ -105,8 +105,8 @@ pub(crate) fn classify(
                 ("GCC", "nounroll") => unroll_hint(cx, "nounroll", start, loc, &rest[1..], end),
                 ("clang", "loop") => clang_loop(cx, start, loc, &rest[1..], end),
                 ("clang", "fp") => crate::fp_pragma::clang_fp(cx, loc, &rest[1..], end),
-                // Validated by the preprocessor; the warning state is not
-                // applied per location yet (spec/parse.md §2.3).
+                // Validated and applied by the preprocessor, which records
+                // the warning state per location in the diagnostic engine.
                 ("GCC", "diagnostic") => None,
                 ("clang", s) if CLANG_IGNORED.contains(&s) => None,
                 ("clang", s) if CLANG_UNSUPPORTED.contains(&s) => {

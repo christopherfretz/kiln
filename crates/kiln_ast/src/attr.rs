@@ -279,6 +279,18 @@ impl AttrKind {
     /// its name is mangled as C++'s even with C language linkage, and it
     /// may overload a function with C language linkage.
     pub const OVERLOADABLE: AttrKind = AttrKind(187);
+    /// GNU `retain` on a function or variable (clang `RetainAttr`):
+    /// an emitted entity is also added to `@llvm.used`, so the linker's
+    /// section garbage collection keeps it (WP-805).
+    pub const RETAIN: AttrKind = AttrKind(200);
+    /// clang `no_destroy` on a variable with static or thread storage
+    /// duration (clang `NoDestroyAttr`): its destructor is never
+    /// registered to run at exit (WP-805).
+    pub const NO_DESTROY: AttrKind = AttrKind(201);
+    /// clang `always_destroy` (clang `AlwaysDestroyAttr`): the variable's
+    /// destructor is registered even under `-fno-c++-static-destructors`
+    /// (WP-805).
+    pub const ALWAYS_DESTROY: AttrKind = AttrKind(202);
     /// A calling-convention attribute written on a declaration (`ms_abi`,
     /// `preserve_most`, `regcall`, ...; clang's `handleFunctionTypeAttr`
     /// CC kinds): a function type attribute, consumed into the declared
