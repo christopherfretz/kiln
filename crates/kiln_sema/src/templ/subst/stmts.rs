@@ -30,17 +30,7 @@ impl Substituter<'_, '_, '_> {
             // (an error reported here, not in a nested instantiation) is
             // `StmtError` in clang's `BuildReturnStmt`: the body is
             // invalid, and an enclosing `if` stops at it (WP-826).
-            Ok(x) if self.lambda_bodies == 0
-                && self.sema.ast.stmts.get(x).kind() == StmtKind::ReturnStmt
-                && self
-                    .sema
-                    .ast
-                    .stmts
-                    .return_value(x)
-                    .is_some_and(|v| self.sema.is_error_expr(v))
-                && self.sema.diags.error_count().saturating_sub(errors)
-                    > self.sema.inst.body_errors.saturating_sub(body_errors) =>
-            {
+            Ok(x) if self.lambda_bodies == 0 && self.failed_return(x, errors, body_errors) => {
                 self.stmt_failed = true;
                 x
             }
@@ -97,6 +87,17 @@ impl Substituter<'_, '_, '_> {
             }
             Err(SubstFail) => self.sema.act_on_null_stmt(loc),
         }
+    }
+
+    /// Whether substituted statement `x` is a `return` whose operand
+    /// failed to convert, with an error reported since `errors` that is
+    /// not one of a nested instantiation (`body_errors` before).
+    fn failed_return(&self, x: StmtId, errors: usize, body_errors: usize) -> bool {
+        let ast = &self.sema.ast;
+        ast.stmts.get(x).kind() == StmtKind::ReturnStmt
+            && ast.stmts.return_value(x).is_some_and(|v| self.sema.is_error_expr(v))
+            && self.sema.diags.error_count().saturating_sub(errors)
+                > self.sema.inst.body_errors.saturating_sub(body_errors)
     }
 
     /// Whether pattern statement `s` is a `return` whose operand has an

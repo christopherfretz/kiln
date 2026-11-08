@@ -3066,7 +3066,10 @@ recomputed exactly as for non-template code (clang's
   `TransformIfStmt` returns `StmtError` when `Then` is invalid): when
   the `then` branch sets `Substituter::stmt_failed` (a new error, not a
   declaration's failed initializer), the `else` branch is not
-  instantiated and the `if` fails. Test
+  instantiated and the `if` fails. A `return` whose operand fails to
+  convert to the return type (`BuildReturnStmt` returns `StmtError`)
+  sets `stmt_failed` too (`Substituter::failed_return`), so it also
+  invalidates the specialization by the rule above. Test
   `temp.inst/condition-over-failed-local.cpp`.
 - **Labels and `goto`** (WP-153). A `LabelStmt`, a `GotoStmt` and the
   labels of an `asm goto` are rebuilt by name (`act_on_label`,
