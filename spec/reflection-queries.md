@@ -18,6 +18,13 @@ declarations are in `tests/support/kiln_meta_queries.h`.
 - **`object_of(r)`** gives `Object(cv)`. Here `cv` is the interned
   pointer `Scalar::Pointer { base: Decl(first declaration), offset 0 }`,
   so `object_of(^^v) == object_of(^^v)` for every redeclaration of `v`.
+  The pointer type is to the cv-unqualified object type (one reflection
+  per object; `type_of` restores `const`). For a reference `R` usable in
+  constant expressions, `cv` is the pointer value of `R`'s initializer,
+  re-interned the same way: a variable, a template parameter object, a
+  string literal object, a `std::type_info` object or a lifetime-extended
+  temporary. A reference that is not usable in constant expressions fails
+  with `reference 'R' is not usable in constant expressions` (WP-879).
 - **`constant_of(r)`** gives `Value(cv)` with `cv = int_const(canonical
   type, value)`. A constant of an integral or enumeration type from an
   enumerator, a template argument value or a variable usable in constant
@@ -102,7 +109,6 @@ parity is out of scope. The negative tests are `entity-neg.cpp` and
 | `variable_of` | `r` is not a parameter of the function being evaluated | `reflection does not represent parameter of current function` |
 
 **Not implemented yet.** These fail with a `kiln:` note:
-- `object_of` of a reference variable;
 - `constant_of` of a class, array, floating or reference variable, or of
   an `Object` (WP-479).
 

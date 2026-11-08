@@ -60,7 +60,7 @@ impl Sema<'_, '_> {
             QueryOp::TypeOf => MetaOut::Info(self.reflect_type_of(r, loc, oven)?),
             QueryOp::ObjectOf => {
                 self.use_reflected_var(r, loc, oven);
-                MetaOut::Info(self.reflect_object_of(r, loc)?)
+                MetaOut::Info(self.reflect_object_of(r, loc, oven)?)
             }
             QueryOp::ConstantOf => {
                 self.use_reflected_var(r, loc, oven);
@@ -211,8 +211,13 @@ impl Sema<'_, '_> {
             _ => return false,
         };
         match self.ast.consts.scalar(p) {
-            Some(Scalar::Pointer { base: PtrBase::Const(_), .. }) => true,
-            Some(Scalar::Pointer { base: PtrBase::Decl(d), .. }) => {
+            // A string literal object ([lex.string]/1) and a type_info
+            // object ([expr.typeid]/1) are const.
+            Some(Scalar::Pointer {
+                base: PtrBase::Const(_) | PtrBase::StringLit { .. } | PtrBase::TypeInfo(_),
+                ..
+            }) => true,
+            Some(Scalar::Pointer { base: PtrBase::Decl(d) | PtrBase::Temporary(d), .. }) => {
                 let vt = self.ast.decls.get(d).ty();
                 vt.is_some_and(|t| self.ast.types.effective_quals(t).is_const())
             }

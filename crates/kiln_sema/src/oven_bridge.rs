@@ -338,6 +338,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.with_oven(None, |oven, b| oven.try_fold(b, e))
     }
 
+    /// The value of the initializer `e` of variable `var` as a constant
+    /// initializer ([basic.start.static]/2; [`Oven::fold_constant_init`]):
+    /// for a reference, the pointer to the object it binds. Silent.
+    pub(crate) fn fold_constant_init(&mut self, e: ExprId, var: DeclId) -> Option<ConstValueId> {
+        if !self.eval_stack_ok(e) {
+            return None;
+        }
+        self.with_oven(None, |oven, b| oven.fold_constant_init(b, e, var))
+    }
+
     /// [`Sema::try_fold`]'s two paths for `e` (`lax`: those of the lax
     /// fold, [`Oven::fold_rvalue`]), the Oven's trial-fold fast path
     /// (`None` where it declines, `Some(None)` for a definite failure) and

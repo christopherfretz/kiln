@@ -804,10 +804,19 @@ position's operand).
   (`expr.prim.splice/object-no-declaration-run.cpp`; WP-830). An object
   template argument of `substitute`/`reflection_template_arg` at a
   non-zero offset of its complete object is the same subobject lvalue
-  (`meta.reflection.substitute/object-subobject-args-run.cpp`). **Not
-  supported yet** (`parse_unsupported`): a string literal object and a
-  `std::type_info` object (neither is reachable through `reflect_object`
-  of a constant, [temp.arg.nontype]/6).
+  (`meta.reflection.substitute/object-subobject-args-run.cpp`). A string
+  literal object ([lex.string]/9), a `std::type_info` object
+  ([expr.typeid]/1) and a lifetime-extended temporary splice the same
+  way. `reflect_object` cannot reach them ([temp.arg.nontype]/6), but
+  `object_of(^^R)` of a reference `R` usable in constant expressions is
+  the object `R` refers to: the pointer value of `R`'s initializer,
+  interned cv-unqualified like every object reflection, so
+  `object_of(^^r) == object_of(^^v)` for `r` bound to `v`. String literal
+  and type_info objects are const for `type_of`/`is_const`
+  (`expr.prim.splice/p2-unnamed-static-object-run.cpp`, compared with
+  GCC 16.1; WP-870 via WP-879). GCC gives the type_info object an
+  internal pseudo type not derived from `std::type_info`; kiln gives it
+  `const std::type_info`, the type [expr.typeid]/1 names.
 - **Member functions.** A member-function splice is not a qualified-id, so
   `e.[: ^^B::f :]()` of a virtual `f` is a virtual call ([expr.call]/2; the
   [dcl.contract.func] example). `&[: ^^B::f :]` is a pointer to member.
