@@ -150,6 +150,11 @@ pub struct DeducedArgs {
     /// as empty ([temp.deduct.type]/9; clang `PackDeductionScope::finish`).
     /// Partial ordering reads it ([temp.deduct.partial]/12).
     pub empty_expanded: Vec<u16>,
+    /// Deducing for the partial ordering of function templates
+    /// ([temp.func.order]/3): `A` is the other template's transformed
+    /// parameter type, so a template template parameter's template-id
+    /// takes `A`'s extra arguments as its defaults (`deduce_ttp_id_args`).
+    pub ordering: bool,
     /// Where the deduction was requested (the call, the declaration, the
     /// alias template): the location of a diagnostic issued from a step
     /// that has none of its own.
@@ -167,6 +172,7 @@ impl DeducedArgs {
             expansions: false,
             pack_elem: None,
             empty_expanded: Vec::new(),
+            ordering: false,
             loc: Loc::INVALID,
         }
     }
@@ -1501,9 +1507,12 @@ impl Sema<'_, '_> {
     /// matches `rv<double, 1>` of `template<class, size_t = 1> struct rv`.
     /// `P`'s arguments are deduced from the first of `A`'s, and the rest
     /// must be the defaults those give (CWG2398 as clang deduces it;
-    /// `rv<double, 2>` does not match). Against a unique type the rest
-    /// is not checked: `U` is deduced as `A`'s template with the extra
-    /// arguments as its defaults (clang's `DeducedTemplateName`, P3310R5).
+    /// `rv<double, 2>` does not match). Against a unique type, and in the
+    /// partial ordering of function templates, the rest is not checked:
+    /// `U` is deduced as `A`'s template with the extra arguments as its
+    /// defaults (clang's `DeducedTemplateName`, P3310R5), so
+    /// `f(const num<B, E>&)` is more specialized than `f(const U<T>)`
+    /// for `template<class, int = 0> struct num` (Boost.Math `sinhc_pi`).
     /// A shorter unique `A` matches under clang 19, which ignores `P`'s
     /// extra arguments there, and fails under clang 22 (`A`'s template
     /// has too few parameters for `U`), so `f(TT<int, int>)` is more
@@ -1525,7 +1534,7 @@ impl Sema<'_, '_> {
             return self.deduce_arg_list(ps, as_, true, d, level, d.loc);
         }
         let r = self.deduce_arg_list(ps, &as_[..n], true, d, level, d.loc);
-        if r != Tdk::Success || unique {
+        if r != Tdk::Success || unique || d.ordering {
             return r;
         }
         let mut full = as_[..n].to_vec();

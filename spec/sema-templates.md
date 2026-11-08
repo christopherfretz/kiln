@@ -3802,8 +3802,16 @@ unique type of partial ordering, [temp.func.order]/3) the remaining
 arguments are not checked (they bind as the deduced template's defaults,
 P3310R5's `DeducedTemplateName`); a shorter such `A` matches under clang
 19, which ignores `P`'s extra arguments, and fails at `-fclang-compat=22`,
-so `f(TT<int, int>)` beats `f(TT<int>)` only there. Tests:
+so `f(TT<int, int>)` beats `f(TT<int>)` only there. The remaining
+arguments are not checked in the partial ordering of function templates
+either, where `A` is the other template's transformed parameter type:
+`U<T>` is deduced from `num<B', E'>` but `num<B, E>` is not deduced from
+`U'<T'>`, so `f(const num<B, E>&)` is more specialized than
+`f(const U<T>)` (clang 19 and 22; Boost.Multiprecision's `sinhc_pi`
+against Boost.Math's). The partial ordering of class template partial
+specializations still checks them. Tests:
 `tests/conformance/temp.arg.template/p0522-deduce-defaulted-args-run.cpp`,
+`tests/conformance/temp.arg.template/p0522-partial-order-defaulted-args-run.cpp`,
 `tests/conformance/temp.arg.template/p0522-partial-order-unique-ttp-clang{19,22}.cpp`,
 `tests/conformance/temp.arg.template/p3310-probe.cpp`.
 
