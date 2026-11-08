@@ -311,7 +311,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         let std = lex_opts.std;
         let cxx11 = std >= Std::Cxx11;
         let cxx26 = std >= Std::Cxx26;
-        let kw = Keywords::with_std(s.ast.symbols(), s.gnu, cxx11, cxx26, s.clang_compat);
+        let mut kw = Keywords::with_std(s.ast.symbols(), s.gnu, cxx11, cxx26, s.clang_compat);
+        if !lit_opts.char8() {
+            kw.remove(s.ast.symbols(), "char8_t");
+        }
         s.set_std(std);
         let sm = src.source_manager();
         let cur = src.get(0);

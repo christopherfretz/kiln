@@ -316,6 +316,7 @@ impl Sema<'_, '_> {
     /// ([dcl.fct.def.default], spec/sema-class.md §4.4; WP-067a). `loc` is
     /// the `default` keyword.
     pub fn act_on_defaulted(&mut self, f: DeclId, loc: Loc) {
+        self.no_builtin_defined(f, true);
         self.defaulted_impl(f, loc);
     }
 
@@ -323,6 +324,7 @@ impl Sema<'_, '_> {
     /// `f` ([dcl.fct.def.delete], spec/sema-class.md §4.4; WP-067a). `msg`
     /// is the C++26 string-literal message.
     pub fn act_on_deleted(&mut self, f: DeclId, loc: Loc, msg: Option<ExprId>) {
+        self.no_builtin_defined(f, true);
         self.deleted_impl(f, loc, msg);
     }
 

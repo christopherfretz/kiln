@@ -102,6 +102,20 @@ fn lex_ccon_single_values() {
     assert_eq!(decode_char("u8'\\xff'", cxx17).value, -1);
 }
 
+/// [lex.ccon]/3 with `-fno-char8_t` / `-fchar8_t` (WP-808): the flag, not
+/// the standard, decides whether a `u8` literal is a `char8_t`.
+#[test]
+fn lex_ccon_char8_flag() {
+    let no = LiteralOptions { char8: Some(false), ..X86 };
+    assert_eq!(decode_char("u8'a'", no).ty, CharType::Char);
+    assert_eq!(decode_char("u8'\\xff'", no).value, -1);
+    assert!(!decode_char("u8'\\xff'", no).pp_unsigned);
+    let cxx17 = LiteralOptions::new(Std::Cxx17, EncodingParams::LINUX_X86_64);
+    let yes = LiteralOptions { char8: Some(true), ..cxx17 };
+    assert_eq!(decode_char("u8'\\xff'", yes).ty, CharType::Char8);
+    assert_eq!(decode_char("u8'\\xff'", yes).value, 255);
+}
+
 /// [lex.ccon]/3: a c-char that needs more than one code unit is
 /// ill-formed.
 #[test]

@@ -360,6 +360,19 @@ variants are additions to a `#[non_exhaustive]` enum.
   `ExponentNoDigits`, `HexFloatNoExponent`, …).
 - Unevaluated strings: an encoding prefix, a ud-suffix, or a numeric /
   unknown escape is an error (`UnevaluatedString*`).
+- `-fno-char8_t` (WP-808; clang `LangOptions::Char8`, GCC `-fno-char8_t`):
+  `LiteralOptions::char8` (`None`: C++20 and later; the driver's
+  `-f[no-]char8_t`, the last one winning) decides whether a `u8`
+  character literal is a `char8_t` (else a `char`, with `char`'s
+  signedness in `#if`: `PpOptions::char8`, `IfContext::char8`). The
+  same flag drops `char8_t` from the parser's keyword table
+  (`Keywords::remove`; clang `KEYCHAR8`, so C++17 has no `char8_t`
+  keyword unless `-fchar8_t`) and gives a `u8` string literal `char`
+  elements (`Sema::char8`, `string_literal_elem`), so overload
+  resolution, deduction, mangling (`c`, not `Du`) and array
+  initialization see `char`; the predefines drop `__cpp_char8_t` and
+  the `CHAR8_T` lock-free macros (`-fchar8_t` adds them in C++17).
+  Tests: `tests/conformance/lex.char8t/`.
 - Raw strings: body verbatim; CR LF in the body becomes LF.
 
 ### Extended floating suffixes

@@ -11,7 +11,7 @@ use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DefinitionBits, TemplLinkKind, VarStorage,
 };
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::{BuiltinType, PrintOptions, TypeView, print_type};
+use kiln_ast::types::{BuiltinType, CallConv, PrintOptions, TypeView, print_type};
 use kiln_ast::{Ast, DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_llvm::{
@@ -57,9 +57,37 @@ pub(crate) struct Sig {
     /// buildStructorSignature` for base-object structors of classes with
     /// virtual bases).
     pub vtt: bool,
+    /// The function type's calling convention (WP-808).
+    pub cc: CallConv,
+    /// x86 `no_caller_saved_registers` on the function type (WP-808).
+    pub no_csr: bool,
 }
 
 impl Sig {
+    /// The LLVM calling convention of the function type (clang
+    /// `ClangCallConvToLLVMCallConv`; WP-808).
+    pub fn llvm_cc(&self) -> kiln_llvm::CallConv {
+        use kiln_llvm::CallConv as L;
+        match self.cc {
+            CallConv::Default
+            | CallConv::C
+            | CallConv::SysV
+            | CallConv::Aapcs
+            | CallConv::AapcsVfp => L::C,
+            CallConv::Win64 => L::WIN64,
+            CallConv::RegCall => L::X86_REGCALL,
+            CallConv::VectorCall => L::X86_VECTORCALL,
+            CallConv::IntelOclBicc => L::INTEL_OCL_BI,
+            CallConv::PreserveMost => L::PRESERVE_MOST,
+            CallConv::PreserveAll => L::PRESERVE_ALL,
+            CallConv::PreserveNone => L::PRESERVE_NONE,
+            CallConv::AArch64VectorCall => L::AARCH64_VECTOR_PCS,
+            CallConv::AArch64SveCall => L::AARCH64_SVE_VECTOR_PCS,
+            CallConv::Swift => L::SWIFT,
+            CallConv::SwiftAsync => L::SWIFT_TAIL,
+        }
+    }
+
     /// The return is `sret`.
     pub fn sret(&self) -> bool {
         matches!(self.info.ret.kind, ArgKind::Indirect { .. })
@@ -97,6 +125,10 @@ pub(crate) struct Cg<'a> {
     /// Functions declared for an `optnone` declaration: neither they nor
     /// their call sites get the `-Os`/`-Oz` size attributes.
     pub optnone_fns: FxHashSet<FuncId>,
+    /// Functions declared for a declaration with a `no_builtin` attribute
+    /// (its first declaration): their call sites carry its
+    /// `"no-builtin*"` attributes ([`Self::call_size_attrs`]; WP-808).
+    pub nba_fns: FxHashMap<FuncId, DeclId>,
     /// First declaration → global variable.
     pub gvars: FxHashMap<DeclId, GlobalId>,
     /// Whether any visibility other than default can arise (a
@@ -225,6 +257,23 @@ pub(crate) struct Cg<'a> {
 }
 
 impl<'a> Cg<'a> {
+    /// The IR arguments of a flattened `Direct` argument (clang
+    /// `getCanBeFlattened` with a struct coerce type): a literal struct's
+    /// elements, or a class's own named struct's (x86-64 `regcall`); and
+    /// whether it is packed.
+    pub(crate) fn flat_fields(&mut self, k: &ArgKind) -> Option<(Vec<IrType>, bool)> {
+        match k {
+            ArgKind::Direct { coerce: IrType::Struct(fs, p), flatten: true, .. } => {
+                Some((fs.clone(), *p))
+            }
+            ArgKind::Direct { coerce: IrType::Record(d), flatten: true, .. } => {
+                let r = self.tys.record(*d);
+                Some((r.members.clone(), r.packed))
+            }
+            _ => None,
+        }
+    }
+
     /// Whether `t` is consteval-only ([basic.types.general], P2996R13;
     /// sema's `is_consteval_only_type`, spec/reflection-repr.md §6):
     /// `std::meta::info`, or a pointer, reference, array, function or
@@ -341,6 +390,7 @@ impl<'a> Cg<'a> {
             fns: FxHashMap::default(),
             nounwind: FxHashMap::default(),
             optnone_fns: FxHashSet::default(),
+            nba_fns: FxHashMap::default(),
             gvars: FxHashMap::default(),
             deferred: FxHashMap::default(),
             completion_index: FxHashMap::default(),
@@ -1704,9 +1754,11 @@ impl<'a> Cg<'a> {
         let ret = p.ret();
         let nothrow = ast.types.exc_spec(&p).is_nothrow();
         let variadic = p.variadic();
-        let info = self.classify(ret, &params, params.len(), !extern_c, this.is_some());
+        let (cc, no_csr) = (p.info().cc(), p.info().no_caller_saved_regs());
+        let info =
+            self.classify(ret, &params, params.len(), !extern_c, this.is_some(), cc, variadic);
         let fn_ty = self.fn_type(&info, this.is_some(), variadic);
-        Sig { info, fn_ty, ret, params, nothrow, this, vtt: false }
+        Sig { info, fn_ty, ret, params, nothrow, this, vtt: false, cc, no_csr }
     }
 
     /// WP-803: `sig` (of function type `fty`, variadic extras included)
@@ -1735,8 +1787,9 @@ impl<'a> Cg<'a> {
         }
         let n = ast.types.params(&p).len() + ps.len();
         let t = sig.this.is_some();
-        let info = self.classify(sig.ret, &all, n, !extern_c, t);
-        let decl_info = self.classify(sig.ret, &all[..n], n, !extern_c, t);
+        let (cc, va) = (sig.cc, p.variadic());
+        let info = self.classify(sig.ret, &all, n, !extern_c, t, cc, va);
+        let decl_info = self.classify(sig.ret, &all[..n], n, !extern_c, t, cc, va);
         let fn_ty = self.fn_type(&decl_info, t, p.variadic());
         Sig { info, fn_ty, params: all, ..sig }
     }
@@ -1746,13 +1799,24 @@ impl<'a> Cg<'a> {
     /// `arrangeFreeFunctionCall` of a `noexcept` prototype; the `_Complex`
     /// multiplication and division routines).
     pub(crate) fn libcall_sig(&mut self, ret: QualType, params: &[QualType]) -> Sig {
-        let info = self.classify(ret, params, params.len(), true, false);
+        let info = self.classify(ret, params, params.len(), true, false, CallConv::Default, false);
         let fn_ty = self.fn_type(&info, false, false);
-        Sig { info, fn_ty, ret, params: params.to_vec(), nothrow: true, this: None, vtt: false }
+        Sig {
+            info,
+            fn_ty,
+            ret,
+            params: params.to_vec(),
+            nothrow: true,
+            this: None,
+            vtt: false,
+            cc: CallConv::Default,
+            no_csr: false,
+        }
     }
 
     /// clang `arrangeLLVMFunctionInfo`: classifies `this` (when present)
     /// with the parameters, then splits it off.
+    #[allow(clippy::too_many_arguments, reason = "clang's CGFunctionInfo inputs")]
     fn classify(
         &mut self,
         ret: QualType,
@@ -1760,14 +1824,25 @@ impl<'a> Cg<'a> {
         n_required: usize,
         strict_return: bool,
         this: bool,
+        cc: CallConv,
+        variadic: bool,
     ) -> CallInfo {
         if !this {
-            return classify_call(&mut self.tys, ret, params, n_required, strict_return);
+            return classify_call(
+                &mut self.tys,
+                ret,
+                params,
+                n_required,
+                strict_return,
+                cc,
+                variadic,
+            );
         }
         let mut all = Vec::with_capacity(params.len() + 1);
         all.push(self.void_ptr);
         all.extend_from_slice(params);
-        let mut info = classify_call(&mut self.tys, ret, &all, n_required + 1, strict_return);
+        let mut info =
+            classify_call(&mut self.tys, ret, &all, n_required + 1, strict_return, cc, variadic);
         info.args.remove(0);
         info
     }
@@ -1793,11 +1868,12 @@ impl<'a> Cg<'a> {
         let mut all = params.clone();
         all.extend_from_slice(&args[params.len().min(args.len())..]);
         let t = this.is_some();
-        let info = self.classify(ret, &all, params.len(), !extern_c, t);
-        let decl_info = self.classify(ret, &params, params.len(), !extern_c, t);
+        let (cc, no_csr, va) = (p.info().cc(), p.info().no_caller_saved_regs(), p.variadic());
+        let info = self.classify(ret, &all, params.len(), !extern_c, t, cc, va);
+        let decl_info = self.classify(ret, &params, params.len(), !extern_c, t, cc, va);
         let fn_ty = self.fn_type(&decl_info, t, p.variadic());
         let nothrow = ast.types.exc_spec(&p).is_nothrow();
-        Sig { info, fn_ty, ret, params: all, nothrow, this, vtt: false }
+        Sig { info, fn_ty, ret, params: all, nothrow, this, vtt: false, cc, no_csr }
     }
 
     /// `sig` without its parameters (only `this`, and the VTT if any,
@@ -1842,8 +1918,8 @@ impl<'a> Cg<'a> {
         }
         for a in &info.args {
             match &a.kind {
-                ArgKind::Direct { coerce: IrType::Struct(fs, _), flatten: true, .. } => {
-                    for f in fs.clone() {
+                k @ ArgKind::Direct { flatten: true, .. } if self.flat_fields(k).is_some() => {
+                    for f in self.flat_fields(k).map(|f| f.0).unwrap_or_default() {
                         let t = self.ir(&f);
                         ps.push(t);
                     }
@@ -1942,8 +2018,9 @@ impl<'a> Cg<'a> {
                     s.push(Attr::Flag(AttrKind::DeadOnReturn));
                 }
                 ArgKind::Direct { align: Some(n), .. } => s.push(Attr::AlignStack(*n)),
-                ArgKind::Direct { coerce: IrType::Struct(fs, _), flatten: true, .. } => {
-                    for _ in 1..fs.len() {
+                k @ ArgKind::Direct { flatten: true, .. } if self.flat_fields(k).is_some() => {
+                    let n = self.flat_fields(k).map_or(1, |f| f.0.len());
+                    for _ in 1..n {
                         params.push(self.m.attr_set(&s));
                     }
                 }
@@ -2007,9 +2084,81 @@ impl<'a> Cg<'a> {
     /// The call-site function attributes `-Os`/`-Oz` add to a call of
     /// `fid` (`None`: an indirect call) through clang `EmitCall`: the
     /// [`Self::size_attrs`] unless the callee is `optnone`.
+    ///
+    /// With them the `nobuiltin` / `"no-builtin*"` attributes of clang
+    /// `ConstructAttributeList` on a call site (`AttrOnCallSite`, WP-808):
+    /// `nobuiltin` under `-fno-builtin` (`!SimplifyLibCalls`) or for a
+    /// callee named by `-fno-builtin-<name>`, then the
+    /// [`Self::no_builtin_attrs`] of the callee's `no_builtin` attribute.
     pub(crate) fn call_size_attrs(&self, fid: Option<FuncId>, out: &mut Vec<Attr>) {
         if !fid.is_some_and(|f| self.optnone_fns.contains(&f)) {
             self.size_attrs(out);
+        }
+        let named = || {
+            fid.is_some_and(|f| {
+                let name = self.m.func(f).name();
+                self.opts.no_builtin_fns.iter().any(|n| n == name)
+            })
+        };
+        if self.opts.no_builtin || named() {
+            out.push(Attr::Flag(AttrKind::NoBuiltin));
+        }
+        // A thunk's call has no target declaration ([`Fx::thunk`]).
+        let nba = fid.filter(|_| !self.f.thunk).and_then(|f| self.nba_fns.get(&f).copied());
+        self.no_builtin_attrs(out, nba);
+    }
+
+    /// The `no_builtin` attribute of function `d`, its names joined by
+    /// `,` (`*`: all of them): the definition's, else that of any
+    /// declaration (clang reads the declaration it emits; kiln the
+    /// definition's for every use, spec/codegen.md "no-builtin").
+    pub(crate) fn no_builtin_names(&self, d: DeclId) -> Option<&'a str> {
+        let ast = self.ast;
+        let of = |r: DeclId| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .map(|a| ast.attrs.get(a))
+                .find(|n| n.kind == kiln_ast::attr::AttrKind::NO_BUILTIN)
+                .map(|n| ast.symbols().as_str(kiln_source::symbol::Symbol::from_index(n.a)))
+        };
+        ast.definition(d).and_then(of).or_else(|| ast.redecls_of(d).find_map(of))
+    }
+
+    /// The function being emitted has a `no_builtin` attribute naming the
+    /// library function `callee`, or all of them (clang `EmitDirectCallee`:
+    /// the current function's `"no-builtin-<name>"` / `"no-builtins"`; a
+    /// library builtin is then called, not lowered; WP-808).
+    pub(crate) fn no_builtin_here(&self, callee: DeclId) -> bool {
+        let Some(names) = self.f.decl.and_then(|d| self.no_builtin_names(d)) else {
+            return false;
+        };
+        let ast = self.ast;
+        let name = ast.decls.get(callee).name().as_ident().map(|s| ast.symbols().as_str(s));
+        names.split(',').any(|n| n == "*" || Some(n) == name)
+    }
+
+    /// The function attributes of clang `addNoBuiltinAttributes`, on a
+    /// declaration, a definition and a call site alike, for function `d`
+    /// (`None`: a helper without a declaration, or an indirect call):
+    /// `-fno-builtin` gives `"no-builtins"` alone; else each
+    /// `-fno-builtin-<name>` gives `"no-builtin-<name>"`, and the
+    /// `no_builtin` attribute of `d` `"no-builtins"` for its wildcard, else
+    /// `"no-builtin-<name>"` for each name (WP-808).
+    pub(crate) fn no_builtin_attrs(&self, out: &mut Vec<Attr>, d: Option<DeclId>) {
+        if self.opts.no_builtin {
+            out.push(Attr::string("no-builtins", ""));
+            return;
+        }
+        for n in &self.opts.no_builtin_fns {
+            out.push(Attr::string(&format!("no-builtin-{n}"), ""));
+        }
+        let Some(names) = d.and_then(|d| self.no_builtin_names(d)) else { return };
+        if names.split(',').any(|n| n == "*") {
+            out.push(Attr::string("no-builtins", ""));
+            return;
+        }
+        for n in names.split(',').filter(|n| !n.is_empty()) {
+            out.push(Attr::string(&format!("no-builtin-{n}"), ""));
         }
     }
 
@@ -2029,6 +2178,7 @@ impl<'a> Cg<'a> {
     /// `ConstructAttributeList`, not on a call site; WP-682).
     pub(crate) fn target_attrs_of(&self, out: &mut Vec<Attr>, d: Option<DeclId>) {
         self.size_attrs(out);
+        self.no_builtin_attrs(out, d);
         if let Some(d) = d
             && self.has_fn_attr(d, kiln_ast::attr::AttrKind::DISABLE_TAIL_CALLS)
         {
@@ -2319,6 +2469,10 @@ impl<'a> Cg<'a> {
         if ast.is_noreturn_fn(first) {
             fa.push(Attr::Flag(AttrKind::NoReturn));
         }
+        // clang `ConstructAttributeList`: `AnyX86NoCallerSavedRegisters`.
+        if sig.no_csr {
+            fa.push(Attr::Str("no_caller_saved_registers".into(), "".into()));
+        }
         // clang `ConstructAttributeList` under `-fno-plt`: a function not
         // yet defined is `nonlazybind` (kiln: none in the translation unit;
         // spec/codegen.md "Hardening and overflow options").
@@ -2342,8 +2496,10 @@ impl<'a> Cg<'a> {
         // function is an `extern_weak` reference.
         let weak = ast.is_weak_decl(first) && ast.weakref_target(first).is_none();
         let section = self.decl_section(first);
+        let cc = sig.llvm_cc();
         {
             let func = self.m.func_mut(f);
+            func.cc = cc;
             func.visibility = vis;
             func.section = section;
             func.attrs.func = fa;
@@ -2359,6 +2515,9 @@ impl<'a> Cg<'a> {
         self.nounwind.insert(f, nothrow);
         if optnone {
             self.optnone_fns.insert(f);
+        }
+        if self.no_builtin_names(first).is_some() {
+            self.nba_fns.insert(f, first);
         }
     }
 

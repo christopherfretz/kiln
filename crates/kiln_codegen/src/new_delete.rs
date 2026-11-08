@@ -403,7 +403,11 @@ impl Cg<'_> {
         }
         let func = self.m.attr_set(&fa);
         let ret = self.m.attr_set(&ra);
-        let opts = CallOpts { attrs: AttrList { func, ret, params }, ..CallOpts::default() };
+        let opts = CallOpts {
+            attrs: AttrList { func, ret, params },
+            cc: sig.llvm_cc(),
+            ..CallOpts::default()
+        };
         // A class-specific allocation function is no global one: its
         // result type comes from its signature.
         let rty = self.m.types.function_info(sig.fn_ty).map_or(LTy::VOID, |(r, _, _)| r);

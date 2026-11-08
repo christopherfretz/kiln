@@ -84,6 +84,9 @@ pub struct PpOptions {
     /// parser's `PragmaUnrollHintHandler` / `PragmaLoopHintHandler` do in
     /// clang; `-E` keeps them unexpanded (spec/parse.md "Loop hints").
     pub parser_pragmas: bool,
+    /// `-f[no-]char8_t`: a `u8` character literal in `#if` is unsigned
+    /// as `char8_t` (`None`: from C++20 on).
+    pub char8: Option<bool>,
 }
 
 impl PpOptions {
@@ -104,6 +107,7 @@ impl PpOptions {
             reflection: false,
             modules: None,
             parser_pragmas: false,
+            char8: None,
         }
     }
 
