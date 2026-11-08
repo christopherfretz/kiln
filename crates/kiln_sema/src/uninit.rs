@@ -828,7 +828,7 @@ impl Sema<'_, '_> {
 /// The `sema_sometimes_uninit_var` select index of clang's branch kind
 /// (0 `if`/`?:`/logical condition, 1 loop, 2 loop entry, 3 switch case,
 /// 4 after the declaration, 5 after a call). kiln's template lists the
-/// condition alternative last (kiln_diag requires every argument to show in
+/// condition alternative last (`kiln_diag` requires every argument to show in
 /// the fallback alternative), so the other kinds shift down by one.
 fn sometimes_select(kind: u32) -> u32 {
     (kind + 5) % 6
