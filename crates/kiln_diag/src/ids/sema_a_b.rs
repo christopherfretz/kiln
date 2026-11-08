@@ -74,6 +74,7 @@ sema_arith_void_pointer = Extension [GnuPointerArith] (1) "arithmetic on{0: a po
 // [expr.add]/1: in C++ a `void` or function pointee is an error, not
 // the GNU extension of C (WP-219)
 sema_arith_void_pointer_cxx = Error (1) "arithmetic on{0: a|} pointer{0:|s} to void";
+sema_arm_invalid_specialreg = Error (0) "invalid special register for builtin";
 sema_array_comparison = Warning [ArrayCompare] (0) "comparison between two arrays compare their addresses and will be deprecated in c++20; to compare array addresses, use unary '+' to decay operands to pointers";
 sema_array_comparison_cxx26 = WarningError [ArrayCompareCxx26] (0) "comparison between two arrays is ill-formed in C++26; to compare array addresses, use unary '+' to decay operands to pointers";
 sema_array_designator_empty_range = Error (2) "array designator range [{0}, {1}] is empty";
