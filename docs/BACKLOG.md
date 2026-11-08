@@ -909,5 +909,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-896 | MS extensions mode: -fms-extensions/-fms-compatibility predefines, MS LANGBUILTINs (__dmb family, _ReadStatusReg, _Interlocked*, _CountLeadingZeros*), MS keywords and __declspec (crates/kiln_pp/src/features.rs ACLE_HEADER_BUILTINS) | WP-846 | deferred |
 | WP-897 | clang 22 __builtin_arm_gcsss takes void* (crates/kiln_ast/src/decl.rs:6073 is clang 19 "vC*vC*") | WP-846 | open |
 | WP-898 | clang 22 frame-pointer "non-leaf-no-reserve": tests/conformance/target.acle/ir-clrex.cpp fails under --compiler clang++-19 against oracle 22 (pre-existing) | WP-846 | open |
+| WP-879 | reflection correctness bundle 4: WP-796, WP-838, WP-866, WP-867, WP-870 (GCC 16.1 parity) | WP-830 | in progress |
 WP-511
 WP-512

@@ -63,7 +63,15 @@ impl Sema<'_, '_> {
             return None;
         };
         let target = self.ast.types.pointee(ty)?;
-        if let PtrBase::Const(_) = base {
+        // A string literal object ([lex.string]/9) and a `std::type_info`
+        // object ([expr.typeid]/1) are, like a template parameter object,
+        // `const` static-storage objects no declaration names: the splice
+        // designates them the same way ([expr.prim.splice]/2.4).
+        if let PtrBase::Const(_)
+        | PtrBase::StringLit { .. }
+        | PtrBase::TypeInfo(_)
+        | PtrBase::Temporary(_) = base
+        {
             return self.const_object_lvalue(base, offset, target, loc);
         }
         let contracts = std::mem::take(&mut self.contract_ctx);
@@ -107,13 +115,10 @@ impl Sema<'_, '_> {
     /// not-supported diagnostic.
     pub(crate) fn object_splice_unsupported(&self, p: ConstValueId) -> &'static str {
         match self.ast.consts.scalar(p) {
-            Some(Scalar::Pointer { base: PtrBase::StringLit { .. }, .. }) => {
-                "splice of a reflection of a string literal object"
+            Some(Scalar::Pointer { base: PtrBase::Decl(_), .. }) => {
+                "splice of a reflection of this subobject"
             }
-            Some(Scalar::Pointer { base: PtrBase::TypeInfo(_), .. }) => {
-                "splice of a reflection of a 'std::type_info' object"
-            }
-            _ => "splice of a reflection of this subobject",
+            _ => "splice of a reflection of this object",
         }
     }
 
