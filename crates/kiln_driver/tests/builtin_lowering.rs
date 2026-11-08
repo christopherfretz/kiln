@@ -22,6 +22,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -79,7 +80,7 @@ impl Probe {
     fn reported(&self) -> Vec<String> {
         let mut src = String::new();
         for n in kiln_pp::table_keys(kiln_pp::FeatureTable::Builtin) {
-            src += &format!("#if __has_builtin({n})\n#pragma message \"HB {n}\"\n#endif\n");
+            let _ = write!(src, "#if __has_builtin({n})\n#pragma message \"HB {n}\"\n#endif\n");
         }
         std::fs::write(self.dir.join("probe.cpp"), &src).unwrap();
         let out = Command::new(env!("CARGO_BIN_EXE_kiln"))
@@ -110,7 +111,7 @@ impl Probe {
             let args = vec!["Any{}"; k].join(", ");
             let mut src = ANY.to_string();
             for (i, n) in left.iter().enumerate() {
-                src += &format!("auto f{i}() {{ return {n}({args}); }}\n");
+                let _ = writeln!(src, "auto f{i}() {{ return {n}({args}); }}");
             }
             let bad: BTreeSet<usize> = errors(&self.run(&src, &["-fsyntax-only"]))
                 .into_iter()
@@ -138,7 +139,7 @@ impl Probe {
                 let mut src = ANY.to_string();
                 for (i, (n, k)) in chunk.iter().enumerate() {
                     let args = vec!["Any{}"; *k].join(", ");
-                    src += &format!("auto f{i}() {{ return {n}({args}); }}\n");
+                    let _ = writeln!(src, "auto f{i}() {{ return {n}({args}); }}");
                 }
                 let err = self.run(&src, &["-S", "-emit-llvm", "-o", "probe.ll"]);
                 let Some((line, msg)) = errors(&err).into_iter().next() else {
