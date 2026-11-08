@@ -30,11 +30,11 @@ impl Mangler<'_, '_> {
                     parent.is_none_or(|p| ast.decls.get(p).kind() == DeclKind::TranslationUnit);
                 let std = parent.is_some_and(|p| self.is_std(p));
                 if top || std {
-                    self.unscoped_template(t, std);
+                    self.unscoped_template(t, std, None);
                     self.converted_args(t, args);
                 } else {
                     self.out.push('N');
-                    self.template_prefix(t, None, Structor::Complete);
+                    self.template_prefix(t, None, Structor::Complete, None);
                     self.converted_args(t, args);
                     self.out.push('E');
                 }
@@ -128,7 +128,7 @@ impl Mangler<'_, '_> {
                 let n = ast.types.canonical_template_name(name);
                 match ast.types.template_name_view(n) {
                     TemplateName::Template(t) => {
-                        self.template_prefix(t, None, Structor::Complete);
+                        self.template_prefix(t, None, Structor::Complete, None);
                         self.converted_args(t, args);
                         self.subs.push(key);
                         return;

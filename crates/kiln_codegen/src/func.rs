@@ -304,6 +304,7 @@ impl Cg<'_> {
         let f = self.get_fn(d)?;
         let f = self.fn_for_definition(d, f)?;
         self.gen_code(d, f, None)?;
+        self.add_ctor_dtor_entries(d, f);
         self.emit_thunks(d, None)
     }
 

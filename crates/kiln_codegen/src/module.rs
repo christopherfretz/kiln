@@ -679,7 +679,7 @@ impl<'a> Cg<'a> {
         if self.is_explicit_inst_declaration(first) || self.held.contains(&first) {
             return Ok(());
         }
-        if !self.discardable_fn(d) {
+        if !self.discardable_fn(d) || self.is_ctor_dtor_fn(d) {
             // A definition owned by an imported named-module unit (its
             // purview or its global module fragment) belongs to that
             // unit's object file (spec/modules.md §7).
@@ -698,6 +698,12 @@ impl<'a> Cg<'a> {
             if mangle::asm_label(ast, first).is_some() {
                 let name = mangle::mangle_decl(ast, &mut self.anon, first);
                 self.note_rep(&name, first);
+            } else if self.fn_internal(first) {
+                // So it names an internal one: the `$_N` of an unnamed
+                // class in its name (a closure in a template argument)
+                // is allocated here, in clang's first-mangled order
+                // ([`mangle::AnonIds`]). An external name has no `$_N`.
+                let _ = mangle::mangle_decl(ast, &mut self.anon, first);
             }
             self.deferred.insert(first, d);
             self.alias_target_needed(first)?;
@@ -742,6 +748,17 @@ impl<'a> Cg<'a> {
                 DeclKind::CXXConstructor | DeclKind::CXXDestructor if explicit => {
                     if let Some(def) = ast.definition(m) {
                         self.emit_global_structor(def)?;
+                    }
+                }
+                // clang `DeclMustBeEmitted`: an in-class GNU `constructor`
+                // / `destructor` member function of a class that is not
+                // a template specialization (WP-807).
+                DeclKind::CXXMethod
+                    if ast.decls.get(d).kind() == DeclKind::CXXRecord
+                        && self.is_ctor_dtor_fn(m) =>
+                {
+                    if let Some(def) = ast.definition(m).filter(|&x| x == m) {
+                        self.emit_global_fn(def)?;
                     }
                 }
                 // Any out-of-class redeclaration of a static data member

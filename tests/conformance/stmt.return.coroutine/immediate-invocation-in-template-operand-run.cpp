@@ -5,7 +5,6 @@
 //@ expect: run
 //@ std: c++20
 //@ stdout: 10 7 12
-//@ xfail(kiln): WP-789 follow-up, an immediate invocation in a co_return operand of a coroutine template specialization is not evaluated; codegen calls the consteval function and the link fails
 #include <coroutine>
 #include <cstdio>
 
@@ -28,7 +27,7 @@ struct task {
 
 template <class T> task a(T t) { co_return sq(3) + t; }
 template <class T> task b(T t) { co_return next<4>() + t; }
-// The non-template form already works.
+// The non-template form, with `co_return` as the first suspend point.
 task c() { co_return sq(3) + 3; }
 
 int main() {

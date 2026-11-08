@@ -231,6 +231,8 @@ impl Substituter<'_, '_, '_> {
             // another partial expansion is rebuilt.
             TypeView::SubstTemplateTypeParmPack { associated, index, pack } => {
                 if self.pack.keep && self.pack_index.is_none() {
+                    let n = self.sema.ast.types.args(pack).len();
+                    self.sweep_kept(n, |_| crate::templ::pack::PackName::outer(), loc)?;
                     return Ok(q);
                 }
                 let args = self.sema.ast.types.args(pack);
@@ -772,6 +774,8 @@ impl Substituter<'_, '_, '_> {
                     && let ArgView::Pack(l) = a.view()
                 {
                     // Rebuilding a partially substituted expansion (§7.2).
+                    let n = self.sema.ast.types.args(l).len();
+                    self.sweep_kept(n, |s| s.parm_pack_name(decl), loc)?;
                     let assoc = self.assoc(depth).ok_or(SubstFail)?;
                     let p = self.sema.ast.types.subst_template_type_parm_pack(
                         assoc,

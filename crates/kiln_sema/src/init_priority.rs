@@ -91,27 +91,8 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_init_priority_object_attr, node.loc);
             return None;
         }
-        // clang `checkUInt32Argument`.
         let e = ExprId::from_raw(node.a)?;
-        let at = self.ast.exprs.get(e).loc();
-        let Some(v) = self.fold_int(e) else {
-            let msg =
-                self.diag(DiagId::sema_attribute_requires_integer_constant, node.loc).arg(name);
-            self.emit(msg);
-            return None;
-        };
-        let width = self.ast.exprs.get(e).ty();
-        let width = crate::conv::rank::int_width(self, width).unwrap_or(32);
-        // `APSInt::isIntN(32)`: the value's active bits in its own width.
-        let bits = if v < 0 { i128::from(width) } else { i128::from(128 - v.leading_zeros()) };
-        if bits > 32 {
-            let msg =
-                self.diag(DiagId::sema_ice_too_large_unsigned, at).arg(v.to_string()).arg("32");
-            self.emit(msg);
-            return None;
-        }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let p = v as u32;
+        let p = self.uint32_attr_arg(e, &name, node.loc)?;
         if self.clang_compat >= 22 {
             if p > 65535 {
                 let msg = self
@@ -138,6 +119,32 @@ impl Sema<'_, '_> {
             return None;
         }
         Some(p)
+    }
+
+    /// clang `checkUInt32Argument` of attribute argument `e` of the
+    /// attribute shown as `name` (quoted) at `loc`: its value, or `None`
+    /// after a diagnostic.
+    pub(crate) fn uint32_attr_arg(&mut self, e: ExprId, name: &str, loc: Loc) -> Option<u32> {
+        let at = self.ast.exprs.get(e).loc();
+        let Some(v) = self.fold_int(e) else {
+            let msg = self
+                .diag(DiagId::sema_attribute_requires_integer_constant, loc)
+                .arg(name.to_owned());
+            self.emit(msg);
+            return None;
+        };
+        let width = self.ast.exprs.get(e).ty();
+        let width = crate::conv::rank::int_width(self, width).unwrap_or(32);
+        // `APSInt::isIntN(32)`: the value's active bits in its own width.
+        let bits = if v < 0 { i128::from(width) } else { i128::from(128 - v.leading_zeros()) };
+        if bits > 32 {
+            let msg =
+                self.diag(DiagId::sema_ice_too_large_unsigned, at).arg(v.to_string()).arg("32");
+            self.emit(msg);
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Some(v as u32)
     }
 
     /// True if context `c` is (inside) a function.

@@ -5,7 +5,6 @@
 // selected with `T0 = int`. The Boost.FunctionTypes `interface` example
 // (`&member<...>::wrap<&C::f>`) hits this.
 //@ expect: run
-//@ xfail(kiln): WP-787 follow-up, a template-id naming a set of function templates is not matched against the target type template by template
 //@ stdout: 1 5
 extern "C" int printf(const char*, ...);
 template<int N> void wrap(void*) { printf("0\n"); }

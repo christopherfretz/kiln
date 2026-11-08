@@ -256,7 +256,7 @@ impl Substituter<'_, '_, '_> {
                     return self.nttp_ref(e, d, loc);
                 }
                 if let Some(r) = self.kept_parm_pack(e, d, loc) {
-                    return Ok(r);
+                    return r;
                 }
                 if let Some(q) = ex(self).decl_ref_extra(e).and_then(|x| x.qualifier)
                     && self.in_dependent_specialization(d, loc)?
@@ -1850,6 +1850,8 @@ impl Substituter<'_, '_, '_> {
                     && matches!(a.view(), ArgView::Pack(_)) =>
             {
                 let ArgView::Pack(l) = a.view() else { return Err(SubstFail) };
+                let n = self.sema.ast.types.args(l).len();
+                self.sweep_kept(n, |s| s.parm_pack_name(Some(p)), loc)?;
                 let ty = self
                     .sema
                     .ast
@@ -1861,8 +1863,14 @@ impl Substituter<'_, '_, '_> {
                         ArgView::Expr { expr, .. } => Some(self.sema.ast.exprs.get(expr).ty()),
                         _ => None,
                     })
-                    .or_else(|| self.sema.ast.decls.get(p).ty())
-                    .ok_or(SubstFail)?;
+                    .or_else(|| self.sema.ast.decls.get(p).ty());
+                // An empty pack (the length sweep, §7.1): the parameter's
+                // type substituted.
+                let ty = match ty {
+                    Some(t) if self.sema.ast.types.args(l).is_empty() => self.ty(t, loc)?,
+                    Some(t) => t,
+                    None => return Err(SubstFail),
+                };
                 let shown = self.shown_nttp(info.depth, info.index).unwrap_or(p);
                 return Ok(self.sema.ast.builder().subst_nttp_pack_expr(shown, l, ty, loc));
             }
@@ -1915,6 +1923,9 @@ impl Substituter<'_, '_, '_> {
     /// itself while another partial expansion is rebuilt.
     fn subst_nttp_pack(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
         if self.pack.keep && self.pack_index.is_none() {
+            let l = self.sema.ast.exprs.subst_pack_args(e);
+            let n = self.sema.ast.types.args(l).len();
+            self.sweep_kept(n, |_| crate::templ::pack::PackName::outer(), loc)?;
             return Ok(e);
         }
         let p = self.sema.ast.exprs.subst_pack_parameter(e);
@@ -1932,29 +1943,53 @@ impl Substituter<'_, '_, '_> {
     /// (clang's `TransformFunctionParmPackRefExpr` with no pack index).
     /// Each parameter is captured by the enclosing lambdas as a reference
     /// to it would be (clang's `MarkFunctionParmPackReferenced`). `None`
-    /// outside keep mode or for any other declaration.
-    fn kept_parm_pack(&mut self, e: ExprId, d: DeclId, loc: Loc) -> Option<ExprId> {
+    /// outside keep mode or for any other declaration; a failure when the
+    /// length sweep finds it non-empty (§7.1).
+    fn kept_parm_pack(&mut self, e: ExprId, d: DeclId, loc: Loc) -> Option<SubstResult<ExprId>> {
         if !self.pack.keep || self.pack_index.is_some() {
             return None;
         }
         let Some(&super::DeclOrPack::Pack(l)) = self.locals.get(&d) else { return None };
+        let n = self.sema.ast.lists.len(l);
+        let name = |s: &Self| crate::templ::pack::PackName {
+            name: s.sema.decl_name(d),
+            ..crate::templ::pack::PackName::default()
+        };
+        if self.sweep_kept(n, name, loc).is_err() {
+            return Some(Err(SubstFail));
+        }
         let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(l).collect();
         for p in params {
             let _ = self.sema.capture_at_decl_ref(p, loc);
         }
-        let ty = self.sema.ast.exprs.get(e).ty();
-        Some(self.sema.ast.builder().function_parm_pack_expr(d, l, ty, loc))
+        let mut ty = self.sema.ast.exprs.get(e).ty();
+        // The length sweep (§7.1) asks which packs the result names by
+        // declaration: the pattern's type, substituted, names none.
+        if self.pack.sweep {
+            ty = match self.ty(ty, loc) {
+                Ok(t) => t,
+                Err(e) => return Some(Err(e)),
+            };
+        }
+        Some(Ok(self.sema.ast.builder().function_parm_pack_expr(d, l, ty, loc)))
     }
 
     /// A function parameter pack kept while its expansion stayed
     /// dependent (§7.2): a reference to its parameter for the current
     /// index, or itself while another partial expansion is rebuilt.
     fn subst_parm_pack(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
-        if self.pack.keep && self.pack_index.is_none() {
-            return Ok(e);
-        }
         let d = self.sema.ast.exprs.parm_pack_parameter(e);
         let l = self.sema.ast.exprs.parm_pack_params(e);
+        if self.pack.keep && self.pack_index.is_none() {
+            let n = self.sema.ast.lists.len(l);
+            let name = |s: &Self| crate::templ::pack::PackName {
+                name: s.sema.decl_name(d),
+                outer: true,
+                ..crate::templ::pack::PackName::default()
+            };
+            self.sweep_kept(n, name, loc)?;
+            return Ok(e);
+        }
         let n = u32::try_from(self.sema.ast.lists.len(l)).unwrap_or(u32::MAX);
         let i = self.pack_reached(
             n,

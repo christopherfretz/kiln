@@ -571,6 +571,28 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   template: the lookahead cannot instantiate, and an undefined class has
   no members to find (`typedef X<int> T; W<T::rebind<float>, int>`,
   WP-276).
+  A template template argument so classified (`check<Q::fn>`, `Q` a
+  typedef of `quote<int>`; [temp.arg.template]/1) is not the pattern's
+  member template: the qualifier is parsed, which instantiates the
+  specialization, and `fn` is looked up again in it, as for
+  `quote<int>::fn` (WP-802,
+  `tests/conformance/temp.arg.template/member-alias-template-through-typedef-call-run.cpp`).
+- A name not declared in the primary pattern of `X` (in `X<args>::name`)
+  is classified in the primary patterns of the class templates its
+  dependent bases name, in order (`H<int>::type`, `template<class S>
+  struct H : B<S> {}`): clang instantiates `H<int>` to annotate the
+  scope, so `int (*p)(H<int>::type)` declares `p` ([dcl.ambig.res]/1,
+  WP-802,
+  `tests/conformance/dcl.ambig.res/function-type-param-inherited-member-type-run.cpp`).
+  A dependent base names a class template when it is `B<S>`, the
+  injected-class-name of `B`, `Q<A>::template m<S>` with `m` a member
+  class template defined in `Q`'s primary pattern or one of its explicit
+  or partial specializations (the first that defines it), or
+  `typename Q<A>::m` with `m` a typedef or alias, found the same way or
+  inherited through `Q`'s dependent bases, whose type names one
+  (`Sema::base_class_template`, depth 16; WP-802,
+  `tests/conformance/dcl.ambig.res/function-type-param-member-template-base-run.cpp`,
+  `tests/conformance/dcl.ambig.res/function-type-param-typedef-base-run.cpp`).
 - A further component after such a qualifier (`X<args>::m::name`, or
   `D::m::name` with `D` a typedef of `X<args>`) where `m` is a typedef
   or alias member of the pattern naming a class template specialization

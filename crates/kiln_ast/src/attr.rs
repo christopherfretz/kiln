@@ -68,6 +68,9 @@ impl AttrKind {
     pub const PREFERRED_NAME: AttrKind = AttrKind(80);
     pub const EXCLUDE_FROM_EXPLICIT_INSTANTIATION: AttrKind = AttrKind(81);
     pub const ABI_TAG: AttrKind = AttrKind(82);
+    /// clang `internal_linkage` on a variable, function or class (clang
+    /// `InternalLinkageAttr`): the entity, and a class's members, have
+    /// internal linkage as if declared `static` (WP-807).
     pub const INTERNAL_LINKAGE: AttrKind = AttrKind(83);
     pub const LIFETIMEBOUND: AttrKind = AttrKind(84);
     pub const NO_SANITIZE: AttrKind = AttrKind(85);
@@ -231,6 +234,38 @@ impl AttrKind {
     /// debug information treats calls to it as one unit. kiln emits no
     /// debug information, so it has no effect on the IR (WP-789).
     pub const ARTIFICIAL: AttrKind = AttrKind(185);
+    /// GNU `constructor` / `constructor(N)` on a function (clang
+    /// `ConstructorAttr`): the definition is called before `main` from
+    /// `@llvm.global_ctors` at priority `a` (65535 when none is written).
+    /// As written (before `check_decl_attrs`) `a` is the raw `ExprId` of
+    /// the first argument (0: none) and `b` the argument count; with
+    /// [`AttrNode::PRIORITY_DEPENDENT`] `a` stays the value-dependent
+    /// expression, evaluated at instantiation (WP-807).
+    pub const CONSTRUCTOR: AttrKind = AttrKind(190);
+    /// GNU `destructor` / `destructor(N)` (clang `DestructorAttr`): as
+    /// [`AttrKind::CONSTRUCTOR`], through `@llvm.global_dtors`, after
+    /// `main` returns or `exit` is called (WP-807).
+    pub const DESTRUCTOR: AttrKind = AttrKind(191);
+    /// GNU `cleanup(f)` on a local variable (clang `CleanupAttr`): `f(&v)`
+    /// runs when the variable goes out of scope, before its destructor.
+    /// As written `a` is the raw `ExprId` of the first argument (0: none)
+    /// and `b` the argument count; once checked (`check_decl_attrs`) `a`
+    /// is the raw `DeclId` of `f` and `b` the raw `Loc` of the argument
+    /// (WP-807).
+    pub const CLEANUP: AttrKind = AttrKind(192);
+    /// GNU `common` (clang `CommonAttr`): rejected in C++ (clang
+    /// `handleCommonAttr`), so never attached; kept as a kind for its
+    /// subject check (WP-807).
+    pub const COMMON: AttrKind = AttrKind(193);
+    /// GNU `tls_model("model")` (clang `TLSModelAttr`) on a thread-local
+    /// variable: as written `a` is the raw `ExprId` of the first argument
+    /// (0: none) and `b` the argument count; once checked `a` is the
+    /// model, 1-4 for `global-dynamic`, `local-dynamic`, `initial-exec`
+    /// and `local-exec` (WP-807).
+    pub const TLS_MODEL: AttrKind = AttrKind(194);
+    /// GNU `returns_twice` (clang `ReturnsTwiceAttr`): a call of the
+    /// function may return twice, like `setjmp`'s (WP-807).
+    pub const RETURNS_TWICE: AttrKind = AttrKind(195);
     /// clang `pass_object_size(t)` / `pass_dynamic_object_size(t)` on a
     /// pointer parameter (clang `PassObjectSizeAttr`; WP-803): `a` = the
     /// object-size type `t` in [0, 3], `b` = 1 for the dynamic spelling.
@@ -464,6 +499,14 @@ impl AttrNode {
     /// (`[[clang::fallthrough]]`, `[[gnu::fallthrough]]`), so not a C++17
     /// extension before C++17 (clang `handleFallThroughAttr`).
     pub const FALLTHROUGH_SCOPED: u8 = 4;
+    /// `constructor(N)` / `destructor(N)` flag (bit 2): `N` is
+    /// value-dependent (clang 22 accepts it; clang 19 rejects it), so `a`
+    /// is the expression, checked when the function is instantiated.
+    pub const PRIORITY_DEPENDENT: u8 = 4;
+    /// GNU `mode` flag (bit 2): it modifies a dependent type, so it stays
+    /// on the declaration and applies at instantiation (clang
+    /// `instantiateDependentModeAttr`).
+    pub const MODE_DEFERRED: u8 = 4;
     /// Flag (bit 3, any kind): written with the `gnu::` attribute scope
     /// (`[[gnu::noreturn]]`). With `AttrSyntax::Gnu` it selects the GNU
     /// spelling of `NODISCARD` (`warn_unused_result`) and `NORETURN`, and

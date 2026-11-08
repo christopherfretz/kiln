@@ -68,11 +68,6 @@ pub(crate) struct ElemScan {
     exprs: Vec<ExprId>,
 }
 
-/// Functions whose call may return twice (clang `ReturnsTwice` by name):
-/// a helper would return before the second return.
-const RETURNS_TWICE: &[&str] =
-    &["setjmp", "_setjmp", "sigsetjmp", "__sigsetjmp", "savectx", "vfork", "getcontext"];
-
 /// What a helper receives: the addresses of the caller's locals it names,
 /// then `this`, then the closure object.
 struct Captures {
@@ -261,9 +256,8 @@ impl Cg<'_> {
         }
         if ast.exprs.get(c).kind() == ExprKind::DeclRefExpr {
             let d = ast.exprs.decl(c);
-            if ast.decls.get(d).kind() == DeclKind::Function
-                && RETURNS_TWICE.contains(&kiln_abi::mangle::decl_name(ast, d).as_ref())
-            {
+            // A helper would return before the second return.
+            if ast.decls.get(d).kind().is_function() && crate::builtins::returns_twice(ast, d) {
                 return false;
             }
         }

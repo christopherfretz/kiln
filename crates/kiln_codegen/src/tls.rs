@@ -35,13 +35,24 @@ impl Cg<'_> {
         self.ast.decls.var(d).is_some_and(|v| v.spec.tls() != TlsKind::None)
     }
 
+    /// The TLS model of thread-local variable `d` (clang `setTLSMode`):
+    /// its GNU `tls_model`'s, else general dynamic.
+    pub(crate) fn tls_model(&self, d: DeclId) -> TlsModel {
+        match self.ast.inherited_attr(d, kiln_ast::attr::AttrKind::TLS_MODEL).map(|n| n.a) {
+            Some(2) => TlsModel::LocalDynamic,
+            Some(3) => TlsModel::InitialExec,
+            Some(4) => TlsModel::LocalExec,
+            _ => TlsModel::GeneralDynamic,
+        }
+    }
+
     /// Makes global `g` of variable `d` thread-local; a namespace-scope
     /// variable joins clang's `CXXThreadLocals` (in creation order).
     pub(crate) fn mark_tls(&mut self, d: DeclId, g: GlobalId, local: bool) {
         if !self.var_is_tls(d) {
             return;
         }
-        self.m.global_mut(g).thread_local = Some(TlsModel::GeneralDynamic);
+        self.m.global_mut(g).thread_local = Some(self.tls_model(d));
         let first = self.ast.first(d);
         // Only `thread_local` (clang `TLS_Dynamic`) variables get `_ZTW`
         // wrappers; `__thread` ones are always accessed directly.

@@ -4,7 +4,6 @@
 // specialization. Boost.Mp11 `mp_valid<QX::fn>` (mp_valid.cpp:49) hits
 // this.
 //@ expect: run
-//@ xfail(kiln): WP-787 follow-up, a member template named through a typedef of a class template specialization leaves the call unresolved (kiln_codegen expr.rs: UnresolvedLookupExpr not supported)
 //@ stdout: 7
 extern "C" int printf(const char*, ...);
 template<class F> struct quote { template<class... T> using fn = int; };
