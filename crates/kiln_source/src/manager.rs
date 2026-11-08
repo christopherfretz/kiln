@@ -497,7 +497,7 @@ impl SourceManager {
     /// file again (through any path, a symbolic link or a `..` spelling)
     /// returns the same id without reading it again. The file is opened
     /// once, identified with one `fstat` of the open descriptor and read
-    /// from it: no path is canonicalized (spec/source.md "Loading files").
+    /// from it: no path is canonicalized (spec/source.md "SourceManager API").
     /// The buffer's [`file_name`](Self::file_name) is `path` as given on
     /// first load. Invalid UTF-8 is replaced with U+FFFD and recorded in
     /// the [`load_report`](Self::load_report).
@@ -531,6 +531,9 @@ impl SourceManager {
         }
         let bytes = read_open_file(&mut file, &meta)?;
         drop(file);
+        if bytes.len() as u64 >= FILE_SPACE_END {
+            return Err(LoadError::LocSpaceExhausted);
+        }
         let (text, report) = decode_utf8(bytes);
         let id = self.push_file(path.to_string_lossy().into(), text, report)?;
         by_path.insert(key, id);

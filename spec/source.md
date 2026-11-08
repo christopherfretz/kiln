@@ -63,8 +63,8 @@ Buffers:
   canonicalization (WP-820: `realpath` cost a `readlink` per path
   component). A directory is `LoadError::Io` (`IsADirectory`).
 - `load_regular_file(&Path)`: `load_file` that also refuses anything but
-  a regular file (header search; a FIFO or device would block or never
-  end).
+  a regular file (header search: a device or FIFO found under a header's
+  name is not read as one).
 - `read_open_file(&mut File, &Metadata) -> io::Result<Vec<u8>>`: reads an
   opened file whole in one sized read, the length from the metadata
   already fetched (no second `fstat` or probe read as `fs::read` makes).

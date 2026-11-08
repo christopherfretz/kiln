@@ -22,7 +22,7 @@
 #if __has_include(<sub/absent.h>) || __has_include(<absent/x.h>)
 #error found a header that does not exist
 #endif
-#if !__has_include(<sub/m6.h>) || !__has_include_next(<sub/hit.h>)
+#if !__has_include(<sub/m6.h>) || !__has_include(<sub/hit.h>)
 #error lost a header after a miss
 #endif
 static_assert(m1 + m2 + m3 + m4 + m5 + m6 == 21);
