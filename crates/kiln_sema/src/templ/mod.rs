@@ -379,8 +379,11 @@ pub struct InstState {
     pub(crate) alias_cache: kiln_source::fx::FxHashMap<(DeclId, ArgListId), QualType>,
     /// The instantiation report (§11.3).
     pub report: report::InstReport,
-    /// The depth limit was hit: no further instantiation (the error is
-    /// fatal).
+    /// A fatal error was emitted (the depth limit, the error limit, a
+    /// missing `#include`, `-Wfatal-errors`): no further instantiation
+    /// (clang `InstantiatingTemplate` is invalid once
+    /// `hasFatalErrorOccurred`; WP-826). Set by
+    /// [`Sema::instantiation_stopped`].
     pub(crate) fatal: bool,
     /// The class template specializations whose partial specialization
     /// is being selected (§4.4): a nested request for one of them finds

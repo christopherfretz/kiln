@@ -142,6 +142,7 @@ UndefinedInternal = "undefined-internal" [];
 // ----- WP-220 (undefined variable templates)
 UndefinedVarTemplate = "undefined-var-template" [];
 UnknownAssumption = "unknown-assumption" [];
+UnknownSanitizers = "unknown-sanitizers" [];
 UnneededInternalDeclaration = "unneeded-internal-declaration" [];
 UnreachableCodeBreak = "unreachable-code-break" [];
 UnreachableCodeFallthrough = "unreachable-code-fallthrough" [];

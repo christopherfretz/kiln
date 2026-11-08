@@ -12,8 +12,13 @@ use kiln_ast::Ast;
 use kiln_ast::RawId;
 use kiln_ast::attr::AttrKind;
 use kiln_ast::consts::{ByteImage, ConstValue, Member, PrintEnv, PtrBase, Scalar, Shape};
-use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage};
-use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, ExprId, QualType, TemplateNameId};
+use kiln_ast::decl::{
+    DeclFlags, DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage,
+};
+use kiln_ast::expr::ExprKind;
+use kiln_ast::ids::{
+    ArgListId, ConstValueId, DeclId, ExprId, QualType, TemplateNameId, TemplateParamListId,
+};
 use kiln_ast::names::{DeclNameView, OverloadedOperator};
 use kiln_ast::types::{
     ArgView, BuiltinType, ExprOperand, RefQual, TemplateName, TypeView, VectorKind,
@@ -53,6 +58,10 @@ pub struct AnonIds {
     refl_literals: u64,
     /// How reflections mangle (`-fkiln-reflection-mangling=`).
     refl_mode: ReflectionMangling,
+    /// Expressions with no encoding met in a requires-clause (the
+    /// innermost unsupported subexpression), for a hard error
+    /// ([`AnonIds::take_unmangleable`]; WP-818).
+    unmangleable: Vec<ExprId>,
 }
 
 impl AnonIds {
@@ -77,6 +86,14 @@ impl AnonIds {
     /// nested ones included.
     pub fn reflection_literals(&self) -> u64 {
         self.refl_literals
+    }
+
+    /// The expressions of requires-clauses mangled with this table that
+    /// have no encoding (each the innermost unsupported subexpression),
+    /// drained: each is a hard error (clang's "cannot yet mangle
+    /// expression type", spec/abi.md §8.15).
+    pub fn take_unmangleable(&mut self) -> Vec<ExprId> {
+        std::mem::take(&mut self.unmangleable)
     }
 
     /// The id of class `d` (first declaration), assigning the next one
@@ -257,6 +274,8 @@ enum Sub {
     /// A <module-name> prefix (`W1AW1B`), by index into
     /// `Mangler::modnames`.
     Module(u32),
+    /// The injected-class-name of a class template pattern.
+    Injected(DeclId),
 }
 
 /// The constructor or destructor variant of a symbol ([abi:mangling]
@@ -861,21 +880,27 @@ pub fn asm_label(ast: &Ast, d: DeclId) -> Option<String> {
 /// The `abi_tag` tags of `d` (sorted, unique, `,`-separated), from any
 /// redeclaration or, for an instantiation, its pattern (clang instantiates
 /// `AbiTagAttr` and clones it onto redeclarations). Once the walk crosses
-/// a class-template member instantiation, a function pattern with a
-/// definition contributes only that definition's tags: clang 19 takes the
-/// instantiated member's attributes from the pattern definition, so an
-/// out-of-line definition that does not repeat the tag drops it
-/// (spec/abi.md §8.15).
+/// a class-template member instantiation, a function pattern whose
+/// definition was seen before the member was instantiated contributes only
+/// that definition's tags: clang 19 instantiates the member declaration's
+/// attributes from the pattern's most recent declaration at the point the
+/// class specialization is instantiated, so an out-of-line definition seen
+/// earlier that does not repeat the tag drops it, while one seen later does
+/// not (spec/abi.md §8.15). Declaration ids are allocated in creation
+/// order, so the instantiated member and the pattern definition compare by
+/// id.
 fn abi_tags(ast: &Ast, d: DeclId) -> Option<&str> {
-    let mut work = vec![(d, false)];
+    let mut work: Vec<(DeclId, Option<DeclId>)> = vec![(d, None)];
     let mut steps = 0;
     while let Some((cur, member)) = work.pop() {
         steps += 1;
         if steps > 16 {
             break;
         }
-        let def_only =
-            member && is_function_kind(ast.decls.get(cur).kind()) && ast.definition(cur).is_some();
+        let def_only = member.is_some_and(|inst| {
+            is_function_kind(ast.decls.get(cur).kind())
+                && ast.definition(cur).is_some_and(|def| def < inst)
+        });
         let tag_of = |r: DeclId| {
             crate::layout::props::attrs(ast, r)
                 .find(|a| a.kind == AttrKind::ABI_TAG)
@@ -915,10 +940,10 @@ fn abi_tags(ast: &Ast, d: DeclId) -> Option<&str> {
             work.push((p, member));
         }
         if let Some(p) = ast.instantiated_from(f) {
-            work.push((p, true));
+            work.push((p, Some(f)));
         }
         if let Some(p) = member_tmpl {
-            work.push((p, true));
+            work.push((p, Some(f)));
         }
     }
     None
@@ -946,6 +971,16 @@ pub fn mangle_structor(ast: &Ast, anon: &mut AnonIds, d: DeclId, v: Structor) ->
     }
     let mut m = Mangler::new(ast, anon, "_Z");
     m.encoding(d, v);
+    m.out
+}
+
+/// The <lambda-sig> of a lambda with call operator `call_op` (clang
+/// `mangleLambdaSig`), mangled afresh: the key that numbers closure types
+/// within a context (clang `ItaniumNumberingContext::getManglingNumber`).
+pub fn lambda_sig(ast: &Ast, call_op: DeclId) -> String {
+    let mut anon = AnonIds::default();
+    let mut m = Mangler::new(ast, &mut anon, "");
+    m.lambda_sig(Some(call_op));
     m.out
 }
 
@@ -1165,11 +1200,26 @@ struct Mangler<'a, 'b> {
     /// return or variable type, or of a name, derives no implicit tags
     /// for the functions and variables mangled inside it.
     trials: u32,
+    /// The innermost expression [`Mangler::expression`] found no
+    /// encoding for, since last cleared.
+    failed: Option<ExprId>,
     /// The implicit tags of the function or variable whose encoding is
     /// being mangled, written after the unqualified name of the
     /// declarations listed (the entity and, for a function template
     /// specialization, its template).
     extra_tags: Option<([DeclId; 2], Vec<&'a str>)>,
+    /// The template template parameters of the function template whose
+    /// bare function type is being mangled: a canonical specialization
+    /// of one names it only by position, but its arguments group as its
+    /// own template head says (`T_IJilEE`, WP-818).
+    ttp_scope: Vec<DeclId>,
+    /// The class templates enclosing the function whose name is being
+    /// mangled, for [`Mangler::injected_template`].
+    class_scope: Vec<DeclId>,
+    /// A class template named as a template to deduce, whose own
+    /// <abi-tags> are not written (clang mangles the `TemplateDecl`,
+    /// which carries no `abi_tag`; the attribute is on its pattern).
+    untagged: Option<DeclId>,
 }
 
 /// The structor-variant spelling of one [`Mangler`] run.
@@ -1280,7 +1330,11 @@ impl<'a, 'b> Mangler<'a, 'b> {
             used_tags: Vec::new(),
             emitted_tags: Vec::new(),
             trials: 0,
+            failed: None,
             extra_tags: None,
+            ttp_scope: Vec::new(),
+            class_scope: Vec::new(),
+            untagged: None,
         }
     }
 
@@ -1443,10 +1497,166 @@ impl<'a, 'b> Mangler<'a, 'b> {
         // deep (clang `mangleFunctionEncoding`).
         let saved = self.fn_depth;
         self.fn_depth = (saved.0 + 1, false);
+        let scope = self.class_scope_of(d);
+        let saved_scope = std::mem::replace(&mut self.class_scope, scope);
         self.name(d, v);
+        self.class_scope = saved_scope;
         self.fn_depth = saved;
         self.enable_if_conds(d);
+        let scope = self.ttp_scope_of(d);
+        let saved = std::mem::replace(&mut self.ttp_scope, scope);
         self.bare_function_type(d);
+        self.ttp_scope = saved;
+    }
+
+    /// The template template parameters of `d`'s template and of the
+    /// templates enclosing it, innermost first.
+    fn ttp_scope_of(&self, d: DeclId) -> Vec<DeclId> {
+        let ast = self.ast;
+        let mut out = Vec::new();
+        let mut cur = self.spec_of(d).map(|(t, _)| t);
+        while let Some(t) = cur {
+            if let Some(i) = ast.template_info(ast.first(t)) {
+                let params = ast.templates.param_list(i.params).params;
+                out.extend(
+                    ast.lists
+                        .iter::<DeclId>(params)
+                        .filter(|&p| ast.decls.get(p).kind() == DeclKind::TemplateTemplateParm),
+                );
+            }
+            cur = self.parent(t).filter(|&p| ast.template_info(ast.first(p)).is_some());
+        }
+        out
+    }
+
+    /// The class templates enclosing `d` (their first declarations).
+    fn class_scope_of(&self, d: DeclId) -> Vec<DeclId> {
+        let ast = self.ast;
+        let mut out = Vec::new();
+        let mut cur = self.parent(d);
+        while let Some(c) = cur {
+            if ast.decls.get(c).kind() == DeclKind::CXXRecord {
+                let first = ast.first(c);
+                if let Some(t) = self.spec_of(first).map(|s| s.0).or(ast.described_template(first))
+                {
+                    out.push(ast.first(t));
+                }
+            }
+            cur = self.parent(c);
+        }
+        out
+    }
+
+    /// The class template `X` in [`Mangler::class_scope`] whose
+    /// injected-class-name `q` is: `X<P...>` for its own parameters `P`,
+    /// inside a constraint.
+    fn injected_template(&self, q: QualType) -> Option<DeclId> {
+        if !self.real_depth || self.class_scope.is_empty() {
+            return None;
+        }
+        let ast = self.ast;
+        if !ast.types.effective_quals(q).is_empty() {
+            return None;
+        }
+        let TypeView::TemplateSpecialization { name, args, .. } = ast.types.canonical_view(q)
+        else {
+            return None;
+        };
+        let n = ast.types.canonical_template_name(name);
+        let TemplateName::Template(t) = ast.types.template_name_view(n) else { return None };
+        let t = ast.first(t);
+        if !self.class_scope.contains(&t) {
+            return None;
+        }
+        let info = ast.template_info(t)?;
+        let params: Vec<DeclId> =
+            ast.lists.iter::<DeclId>(ast.templates.param_list(info.params).params).collect();
+        let args = ast.types.args(args);
+        (params.len() == args.len()
+            && params.iter().zip(args).all(|(&p, a)| self.is_own_param_arg(p, a.view())))
+        .then_some(t)
+    }
+
+    /// Whether `a` is template parameter `p` itself (`T...` for a pack).
+    fn is_own_param_arg(&self, p: DeclId, arg: ArgView) -> bool {
+        let ast = self.ast;
+        let Some(parm) = ast.template_parm(p) else { return false };
+        let (depth, index) = (u32::from(parm.depth), u32::from(parm.index));
+        let is_parm = |q: QualType| match ast.types.canonical_view(q) {
+            TypeView::CanonTemplateTypeParm { depth: dd, index: ii, .. } => {
+                dd == depth && ii == index
+            }
+            _ => false,
+        };
+        let expansion = |q: QualType| match ast.types.canonical_view(q) {
+            TypeView::PackExpansion { pattern, .. } => is_parm(pattern),
+            _ => false,
+        };
+        match arg {
+            ArgView::Type(q) if parm.pack => expansion(q),
+            ArgView::Type(q) => is_parm(q),
+            ArgView::Pack(list) => {
+                parm.pack
+                    && matches!(ast.types.args(list), [one]
+                        if !matches!(one.view(), ArgView::Pack(_))
+                            && self.is_own_param_arg(p, one.view()))
+            }
+            ArgView::Template(name) => matches!(
+                ast.types.template_name_view(ast.types.canonical_template_name(name)),
+                TemplateName::CanonTemplateTemplateParm { depth: dd, index: ii, .. }
+                    if dd == depth && ii == index
+            ),
+            ArgView::Profile(pr) | ArgView::Expr { profile: Some(pr), .. } => ast
+                .types
+                .profile_expr(pr)
+                .is_some_and(|e| self.is_nttp_ref(e, depth, index, parm.pack)),
+            ArgView::Expr { expr, profile: None } => {
+                self.is_nttp_ref(expr, depth, index, parm.pack)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `e` names the non-type template parameter at `(d, i)`
+    /// (`N`), or expands it when `pack` (`N...`).
+    fn is_nttp_ref(&self, e: ExprId, d: u32, i: u32, pack: bool) -> bool {
+        let ex = &self.ast.exprs;
+        let mut e = e;
+        let mut expanded = false;
+        for _ in 0..16 {
+            match ex.get(e).kind() {
+                ExprKind::ImplicitCastExpr | ExprKind::ParenExpr | ExprKind::ConstantExpr => {
+                    e = ex.operand(e);
+                }
+                ExprKind::PackExpansionExpr if pack && !expanded => {
+                    expanded = true;
+                    e = ex.operand(e);
+                }
+                ExprKind::DeclRefExpr => {
+                    let r = ex.decl(e);
+                    return expanded == pack
+                        && self.ast.decls.get(r).kind() == DeclKind::NonTypeTemplateParm
+                        && self
+                            .ast
+                            .template_parm(r)
+                            .is_some_and(|y| u32::from(y.depth) == d && u32::from(y.index) == i);
+                }
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// The template head of the template template parameter at
+    /// `(depth, index)` in [`Mangler::ttp_scope`].
+    fn ttp_head(&self, depth: u32, index: u32) -> Option<TemplateParamListId> {
+        let ast = self.ast;
+        self.ttp_scope.iter().find_map(|&p| {
+            let x = ast.template_parm(p)?;
+            (u32::from(x.depth) == depth && u32::from(x.index) == index)
+                .then_some(x.params)
+                .flatten()
+        })
     }
 
     /// `Ua9enable_ifI <template-arg>* E`: the conditions of the
@@ -1944,6 +2154,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// other names only implicitly, through a type that mentions it.
     fn write_abi_tags(&mut self, d: DeclId) {
         let ast = self.ast;
+        if self.untagged == Some(d) {
+            return;
+        }
         if ast.decls.get(d).kind() == DeclKind::Namespace {
             // Only the first definition's tags count: a reopening's are
             // not merged (clang reads the canonical declaration).
@@ -2140,12 +2353,40 @@ impl<'a, 'b> Mangler<'a, 'b> {
             return;
         }
         self.out.push_str("Ul");
+        self.lambda_sig(data.call_op);
+        self.out.push('E');
+        if number > 1 {
+            self.out.push_str(&(number - 2).to_string());
+        }
+        self.out.push('_');
+    }
+
+    /// <lambda-sig> (clang `mangleLambdaSig`) of a lambda with call
+    /// operator `call_op`.
+    fn lambda_sig(&mut self, call_op: Option<DeclId>) {
+        let ast = self.ast;
+        // The explicit template parameters (not those invented for
+        // `auto` parameters) and the template-head's requires-clause
+        // (clang `mangleLambdaSig`, cxx-abi issues 31 and 24).
+        if let Some(info) =
+            call_op.and_then(|f| ast.described_template(f)).and_then(|t| ast.template_info(t))
+        {
+            let list = *ast.templates.param_list(info.params);
+            let params: Vec<DeclId> = ast.lists.iter::<DeclId>(list.params).collect();
+            for p in params {
+                if !ast.decls.get(p).has(DeclFlags::IMPLICIT) {
+                    self.type_or_template_param_decl(p);
+                }
+            }
+            if let Some(r) = list.requires {
+                self.requires_clause(r, false);
+            }
+        }
         // A bare function type (clang `mangleLambdaSig`): one function
         // type deeper for the `fp`/`fL` nesting.
         let saved = self.fn_depth;
         self.fn_depth = (saved.0 + 1, false);
-        let proto = data
-            .call_op
+        let proto = call_op
             .and_then(|f| ast.decls.get(f).ty())
             .and_then(|t| ast.types.proto(ast.types.canonical(t)).copied());
         if let Some(p) = proto {
@@ -2163,11 +2404,6 @@ impl<'a, 'b> Mangler<'a, 'b> {
             self.out.push('v');
         }
         self.fn_depth = saved;
-        self.out.push('E');
-        if number > 1 {
-            self.out.push_str(&(number - 2).to_string());
-        }
-        self.out.push('_');
     }
 
     fn source_name(&mut self, s: &str) {
@@ -2869,6 +3105,25 @@ impl<'a, 'b> Mangler<'a, 'b> {
 
     fn ty(&mut self, q: QualType) {
         let ast = self.ast;
+        // In a constraint of a member of class template `X` (mangled
+        // uninstantiated, `real_depth`), `X` or `X<P...>` for its own
+        // parameters is the injected-class-name: a candidate of its own
+        // after the specialization it spells (clang's canonical
+        // `InjectedClassNameType` mangles as its specialization type).
+        if let Some(t) = self.injected_template(q) {
+            let key = Sub::Injected(t);
+            if self.try_sub(key) {
+                return;
+            }
+            let c = ast.types.canonical(q);
+            let spec = Sub::Type(c);
+            if !self.try_sub(spec) {
+                self.compound(c, ast.types.canonical_view(c));
+                self.subs.push(spec);
+            }
+            self.subs.push(key);
+            return;
+        }
         let q = ast.types.canonical(q);
         let quals = ast.types.effective_quals(q);
         // Arrays carry their element's qualifiers; a vector or complex
@@ -3078,6 +3333,13 @@ impl<'a, 'b> Mangler<'a, 'b> {
             TypeView::DependentDecltype(p) => {
                 self.dependent_decltype(ast.types.expr_origin(q.ty(), p));
             }
+            // A class template name to deduce arguments for, in a
+            // dependent functional cast (`cvNS0_14transform_viewE_` for
+            // `transform_view(r, f)`): its template name (clang
+            // `mangleType(const DeducedTemplateSpecializationType *)`).
+            TypeView::DeducedTemplateSpecialization { name, deduced: None } => {
+                self.template_name(name);
+            }
             // A type-dependent GNU `typeof(e)` (clang: a bare vendor name).
             TypeView::TypeOf { .. } => self.out.push_str("u6typeof"),
             // A dependent transform: `u <vendor builtin name> I <base> E`.
@@ -3100,20 +3362,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.ty(QualType::unqual(class));
         let pointee = ast.types.canonical(pointee);
         if let Some(p) = ast.types.proto(pointee).copied() {
-            self.cc_qualifier(&p);
-            let mq = p.info().this_quals();
-            if mq.is_restrict() {
-                self.out.push('r');
-            }
-            if mq.is_volatile() {
-                self.out.push('V');
-            }
-            if mq.is_const() {
-                self.out.push('K');
-            }
             let fkey = Sub::Type(pointee);
             if !self.try_sub(fkey) {
-                self.function_type(pointee, &p, false);
+                self.function_type(pointee, &p, true);
                 self.subs.push(fkey);
             }
         } else {
@@ -3138,12 +3389,26 @@ impl<'a, 'b> Mangler<'a, 'b> {
     }
 
     /// <function-type> ::= [U <cc>] [<CV>] [Do] F [Y] <return> <params>
-    /// [<ref>] E (a member pointer writes the convention and the method
-    /// cv-qualifiers itself: `cc` is false then).
+    /// [<ref>] E. The `<CV>` are the function type's own method
+    /// qualifiers, so a member pointer's pointee and an abominable type
+    /// mangle alike; `cc` is false where the caller wrote the convention.
     fn function_type(&mut self, _q: QualType, p: &kiln_ast::types::FuncProto, cc: bool) {
         let ast = self.ast;
         if cc {
             self.cc_qualifier(p);
+        }
+        // The `this` qualifiers of an abominable function type (clang
+        // `mangleType(const FunctionProtoType *)`'s method quals): `K` in
+        // `M1SKFivE` and in a deduced `KFiiE` (WP-818).
+        let mq = p.info().this_quals();
+        if mq.is_restrict() {
+            self.out.push('r');
+        }
+        if mq.is_volatile() {
+            self.out.push('V');
+        }
+        if mq.is_const() {
+            self.out.push('K');
         }
         if ast.types.exc_spec(p).is_nothrow() {
             self.out.push_str("Do");

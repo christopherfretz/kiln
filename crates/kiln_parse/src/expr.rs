@@ -703,16 +703,23 @@ impl Parser<'_, '_> {
     }
 
     /// At a `(` followed by a qualified name whose class template
-    /// specialization qualifier the lookahead cannot resolve
-    /// ([`Parser::template_scope_end`]): consumes the `(`, parses the
-    /// qualifier ahead, and says whether a type-id follows (and whether that was ambiguous, [`Parser::is_cxx_type_id_at`]). `None` (and
-    /// nothing consumed) at any other token.
+    /// specialization qualifier ([`Parser::template_scope_end`]) or
+    /// `decltype(e)::` qualifier ([`Parser::decltype_scope_end`]) the
+    /// lookahead cannot resolve: consumes the `(`, parses the qualifier
+    /// ahead, and says whether a type-id follows (and whether that was
+    /// ambiguous, [`Parser::is_cxx_type_id_at`]). `None` (and nothing
+    /// consumed) at any other token. With the decltype qualifier parsed,
+    /// `sizeof(decltype(m)::key_type)` is a type operand whatever follows
+    /// the `)` (WP-811).
     fn open_paren_template_scope(&mut self) -> Option<(Loc, bool, bool)> {
-        if !self.at(Punct::LParen) || self.template_scope_end(self.pos() + 1).is_none() {
+        if !self.at(Punct::LParen)
+            || (self.template_scope_end(self.pos() + 1).is_none()
+                && self.decltype_scope_end(self.pos() + 1).is_none())
+        {
             return None;
         }
         let open = self.bump().span.lo;
-        self.annotate_template_scope();
+        self.annotate_decltype_scope_here();
         let (is_type, ambiguous) = self.is_cxx_type_id_at(self.pos(), TypeIdContext::InParens);
         Some((open, is_type, ambiguous))
     }

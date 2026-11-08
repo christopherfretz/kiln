@@ -2069,6 +2069,12 @@ argument skipping) is skipped syntactically (`skip_qualified_rest`) and
 classified by what follows the name: an identifier, a `*`/`&`/`&&`
 before `)`/`,`/`>`, or a `)` before an identifier, literal or `(` make it
 a type. A name begins at the `decltype` keyword (`name_begin`).
+The `(` of a possible cast, parenthesized expression or `sizeof`/`alignof`
+operand followed by `decltype(...)::` is consumed and the qualifier
+annotated before the scan (`open_paren_template_scope`, as for a class
+template specialization qualifier), so the name is classified by lookup:
+`sizeof(decltype(m)::key_type) + 1` takes a type operand and
+`(decltype(m)::v) + 1` is a parenthesized expression (WP-811).
 
 **Landed (WP-379).** A pack-index-specifier `T ... [ expression ] ::`
 (C++26 [dcl.type.pack.index], the other computed-type-specifier) is the

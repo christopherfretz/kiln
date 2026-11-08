@@ -44,6 +44,8 @@ impl Cg<'_> {
                 TypeView::VariableArray { elem, size } => {
                     if !self.f.vla_sizes.contains_key(&size) {
                         let v = self.emit_scalar(size)?;
+                        let sq = self.ast.exprs.get(size).ty();
+                        self.ub_vla_bound(size, v, sq)?;
                         let v = self.int_cast(v, LTy::I64, false);
                         self.f.vla_sizes.insert(size, v);
                     }

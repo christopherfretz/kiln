@@ -1220,7 +1220,7 @@ impl Sema<'_, '_> {
     /// pattern ([temp.inst]/4-5, §4.4). Nothing happens if `f` is already
     /// defined or its pattern has no definition (a link-time reference).
     pub fn instantiate_function_definition(&mut self, f: DeclId, poi: Loc) {
-        if self.ast.definition(f).is_some() || self.inst.fatal {
+        if self.ast.definition(f).is_some() || self.instantiation_stopped() {
             return;
         }
         // [temp.expl.spec]/7: an explicit specialization is never

@@ -298,13 +298,18 @@ pub enum ArgError {
     /// ("unsupported option '{opt}' for target '{triple}'").
     UnsupportedForTarget(String, String),
     /// A GCC/clang flag kiln recognises but deliberately does not
-    /// implement (`-ftrapv`, `-fsanitize=`, coverage/profiling;
+    /// implement (`-ftrapv`, coverage/profiling,
     /// spec/driver.md "Codegen flags"): "'{arg}' is not supported by kiln".
     UnsupportedByKiln(String),
     /// "invalid argument '{0}' to -{1}" (`-fpatchable-function-entry=`).
     InvalidArgumentToOption(String, String),
     /// `-fpatchable-function-entry=N,M` with `M > N`.
     PatchableEntryOffset,
+    /// "invalid argument '{0}' not allowed with '{1}'" (incompatible
+    /// sanitizers).
+    NotAllowedWith(String, String),
+    /// "no such file or directory: '{0}'" (`-fsanitize-ignorelist=`).
+    NoSuchFile(String),
 }
 
 /// The parsed command line.
@@ -466,6 +471,8 @@ pub struct Args {
     /// The floating-point flags, in order (spec/driver.md "Floating-point
     /// flags"; resolved with [`Args::fp_model`]).
     pub fp: crate::fp_flags::FpFlags,
+    /// The sanitizer options (spec/driver.md "Sanitizers").
+    pub sanitize: crate::sanitize::SanitizeFlags,
     /// The debug information flags (`-g*`, `-gdwarf-N`, the prefix maps,
     /// `-gsplit-dwarf`, `-gz`; spec/driver.md "Debug information flags").
     pub debug: crate::debug_flags::DebugFlags,
@@ -648,8 +655,9 @@ impl Args {
             if let Some(r) = a.fp.parse_arg(arg).or_else(|| a.debug.parse_arg(arg)) {
                 a.errors.extend(r.err());
             } else if let Some(r) = a
-                .constexpr
+                .sanitize
                 .parse_arg(arg)
+                .or_else(|| a.constexpr.parse_arg(arg))
                 .or_else(|| a.templ.parse_arg(arg))
                 .or_else(|| a.codegen.parse_arg(arg))
             {
@@ -672,6 +680,14 @@ impl Args {
         a.verify = verify.finish(&mut a.errors);
         let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
         a
+    }
+
+    /// The resolved sanitizers (spec/driver.md "Sanitizers") and their
+    /// errors, for the target (`x86` and its `triple`).
+    #[must_use]
+    pub fn sanitize(&self, x86: bool, triple: &str) -> (crate::sanitize::Sanitize, Vec<ArgError>) {
+        let opt0 = matches!(self.opt_flag.as_deref(), None | Some("-O0"));
+        self.sanitize.resolve(self.predef.rtti.unwrap_or(true), opt0, x86, triple)
     }
 
     /// The floating-point semantics of the command line (spec/driver.md

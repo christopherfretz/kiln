@@ -20,7 +20,8 @@ use kiln_ast::DeclId;
 use kiln_ast::attr::{AttrKind as K, AttrNode};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::RawId;
-use kiln_llvm::{Attr, AttrKind, AttrSetId, TypeId as LTy};
+use kiln_ast::sanitize::{SanitizerSet as San, no_sanitize_set};
+use kiln_llvm::{Attr, AttrKind, AttrSetId, GlobalSanitizer, TypeId as LTy};
 
 use crate::module::{Cg, Sig};
 
@@ -64,6 +65,78 @@ impl StartDecl {
 }
 
 impl Cg<'_> {
+    /// The sanitizers the `no_sanitize*` attributes of `d` exclude (clang
+    /// `NoSanitizeAttr::getMask`, with `address` and `kernel-address`,
+    /// `hwaddress` and `kernel-hwaddress` excluding each other); all of
+    /// them under `disable_sanitizer_instrumentation`.
+    pub(crate) fn no_sanitize_mask(&self, d: DeclId) -> San {
+        if self.has_fn_attr(d, K::DISABLE_SANITIZER_INSTRUMENTATION) {
+            return San::ALL;
+        }
+        let mut m = San::NONE;
+        for n in self.fn_attrs_of(d, K::NO_SANITIZE) {
+            m = m.union(no_sanitize_set(n.a, n.b));
+        }
+        // A variable template's instantiation has its pattern's
+        // attributes (clang `InstantiateAttrs`; kiln keeps them on the
+        // pattern).
+        if let Some(p) = self.var_template_pattern(d) {
+            for n in self.fn_attrs_of(p, K::NO_SANITIZE) {
+                m = m.union(no_sanitize_set(n.a, n.b));
+            }
+        }
+        for pair in
+            [San::ADDRESS.union(San::KERNEL_ADDRESS), San::HWADDRESS.union(San::KERNEL_HWADDRESS)]
+        {
+            if m.has_any(pair) {
+                m = m.union(pair);
+            }
+        }
+        m
+    }
+
+    /// The pattern implicitly instantiated variable template
+    /// specialization `d` was instantiated from.
+    fn var_template_pattern(&self, d: DeclId) -> Option<DeclId> {
+        let ast = self.ast;
+        ast.decls.var(d)?;
+        let (_, info) = ast.spec_info(d)?;
+        if info.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization {
+            return None;
+        }
+        ast.template_info(info.template)?.pattern
+    }
+
+    /// The `SanOpts` of clang `StartFunction` for `start`: the module's
+    /// sanitizers less what the function's attributes exclude. A
+    /// variable's initialization function has the module's.
+    pub(crate) fn fn_sanitizers(&self, start: StartDecl) -> San {
+        let kinds = self.opts.sanitize.kinds;
+        match start.decl() {
+            Some(d) if !kinds.is_empty() => kinds.without(self.no_sanitize_mask(d)),
+            _ => kinds,
+        }
+    }
+
+    /// The sanitizer metadata of the global of variable `d` (clang
+    /// `SanitizerMetadata::reportGlobal`), `dyn_init` when it has a
+    /// dynamic initializer; nothing unless an address, hardware-address
+    /// or memory-tagging sanitizer is on.
+    pub(crate) fn global_sanitizer(&self, d: DeclId, dyn_init: bool) -> GlobalSanitizer {
+        let kinds = expand_kernel(self.opts.sanitize.kinds);
+        if !kinds.has_any(San::ADDRESS.union(San::HWADDRESS).union(San::MEMTAG)) {
+            return GlobalSanitizer::default();
+        }
+        let no = expand_kernel(self.no_sanitize_mask(d)).intersect(kinds);
+        let no_address = no.has_any(San::ADDRESS);
+        GlobalSanitizer {
+            no_address,
+            no_hwaddress: no.has_any(San::HWADDRESS),
+            memtag: kinds.has_any(San::MEMTAG_GLOBALS) && !no.has_any(San::MEMTAG),
+            dyninit: dyn_init && !no_address && kinds.has_any(San::ADDRESS),
+        }
+    }
+
     /// The class B attribute nodes of kind `k` on the redeclarations of
     /// `d`, in declaration order.
     fn fn_attrs_of(&self, d: DeclId, k: K) -> Vec<AttrNode> {
@@ -193,8 +266,29 @@ impl Cg<'_> {
         if has(K::NO_PROFILE_INSTRUMENT_FUNCTION) {
             a.push(Attr::Flag(AttrKind::NoProfile));
         }
+        // `StartFunction`: the sanitizer attributes of its `SanOpts`
+        // (`CreateGlobalInitOrCleanUpFunction` adds the module's to an
+        // initialization function whatever its variable excludes).
         if has(K::DISABLE_SANITIZER_INSTRUMENTATION) {
             a.push(Attr::Flag(AttrKind::DisableSanitizerInstrumentation));
+        } else if self.opts.sanitize.any() {
+            let all = self.opts.sanitize.kinds;
+            let s = self.fn_sanitizers(start);
+            if all.has_any(San::BOUNDS) && !s.has_any(San::BOUNDS) {
+                a.push(Attr::Flag(AttrKind::NoSanitizeBounds));
+            }
+            for (k, f) in [
+                (San::ADDRESS.union(San::KERNEL_ADDRESS), AttrKind::SanitizeAddress),
+                (San::HWADDRESS.union(San::KERNEL_HWADDRESS), AttrKind::SanitizeHWAddress),
+                (San::MEMTAG_STACK, AttrKind::SanitizeMemTag),
+                (San::THREAD, AttrKind::SanitizeThread),
+                (San::MEMORY.union(San::KERNEL_MEMORY), AttrKind::SanitizeMemory),
+                (San::FUZZER.union(San::FUZZER_NO_LINK), AttrKind::OptForFuzzing),
+            ] {
+                if s.has_any(k) {
+                    a.push(Attr::Flag(f));
+                }
+            }
         }
         // `StartFunction`: XRay.
         let xray = h.xray.as_ref();
@@ -538,4 +632,16 @@ pub(crate) struct StmtCalls {
     pub(crate) nomerge: bool,
     pub(crate) noinline: bool,
     pub(crate) always_inline: bool,
+}
+
+/// clang `expandKernelSanitizerMasks`: a kernel sanitizer counts as its
+/// user-space counterpart.
+fn expand_kernel(m: San) -> San {
+    let mut m = m;
+    for (k, u) in [(San::KERNEL_ADDRESS, San::ADDRESS), (San::KERNEL_HWADDRESS, San::HWADDRESS)] {
+        if m.has_any(k) {
+            m = m.union(u);
+        }
+    }
+    m
 }

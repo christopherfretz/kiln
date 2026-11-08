@@ -13,6 +13,7 @@ use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax, ZERO_CALL_USED_REGS_KINDS};
 use kiln_ast::decl::{DeclKind, VarStorage};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::RawId;
+use kiln_ast::sanitize::SanitizerSet;
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::{AttrId, DeclId, ExprId, StmtId};
 use kiln_diag::DiagId;
@@ -34,6 +35,8 @@ enum Spell {
     Gnu,
     /// `CXX11<"omp", "x">` only.
     Omp,
+    /// `Clang<"x">`, plus `[[gnu::x]]` from clang 22 (`no_sanitize`).
+    ClangGcc22,
 }
 
 /// Which targets know the attribute (clang `TargetSpecificAttr`).
@@ -62,7 +65,7 @@ const fn x86(name: &'static str, kind: AttrKind) -> Entry {
     Entry { name, kind, a: 0, spell: Gcc, target: Target::X86, since: 19 }
 }
 
-use Spell::{Clang, Gcc, GccClang, Gnu, Omp};
+use Spell::{Clang, ClangGcc22, Gcc, GccClang, Gnu, Omp};
 
 /// The class B spellings, sorted by name.
 const TABLE: &[Entry] = &[
@@ -86,8 +89,15 @@ const TABLE: &[Entry] = &[
     e("loader_uninitialized", AttrKind::LOADER_UNINITIALIZED, Clang),
     e("lto_visibility_public", AttrKind::LTO_VISIBILITY_PUBLIC, Clang),
     e("maybe_undef", AttrKind::MAYBE_UNDEF, Clang),
+    // The `no_sanitize*` family: `a` is the spelling's index in
+    // `NO_SANITIZE_SPELLINGS` (WP-675).
+    Entry { a: 2, ..e("no_address_safety_analysis", AttrKind::NO_SANITIZE, Gcc) },
     e("no_instrument_function", AttrKind::NO_INSTRUMENT_FUNCTION, Gcc),
     e("no_profile_instrument_function", AttrKind::NO_PROFILE_INSTRUMENT_FUNCTION, Gcc),
+    e("no_sanitize", AttrKind::NO_SANITIZE, ClangGcc22),
+    Entry { a: 1, ..e("no_sanitize_address", AttrKind::NO_SANITIZE, Gcc) },
+    Entry { a: 3, ..e("no_sanitize_memory", AttrKind::NO_SANITIZE, Clang) },
+    Entry { a: 4, ..e("no_sanitize_thread", AttrKind::NO_SANITIZE, Gcc) },
     e("no_speculative_load_hardening", AttrKind::NO_SPECULATIVE_LOAD_HARDENING, Clang),
     e("no_split_stack", AttrKind::NO_SPLIT_STACK, Gcc),
     e("no_stack_protector", AttrKind::NO_STACK_PROTECTOR, GccClang),
@@ -128,6 +138,9 @@ pub(crate) fn kind_of(
         GccClang => gnu || (cxx && matches!(scope, Some("gnu" | "clang"))),
         Gnu => gnu,
         Omp => cxx && scope == Some("omp"),
+        ClangGcc22 => {
+            gnu || (cxx && (scope == Some("clang") || (scope == Some("gnu") && compat >= 22)))
+        }
     };
     (ok && (e.target == Target::Any || x86) && compat >= e.since).then_some((e.kind, e.a))
 }
@@ -153,6 +166,10 @@ pub(crate) fn name(node: &AttrNode) -> Option<&'static str> {
     }
     if node.kind == AttrKind::OMP_ASSUME {
         return Some("assume");
+    }
+    if node.kind == AttrKind::NO_SANITIZE {
+        let tag = kiln_ast::sanitize::no_sanitize_tag(node.b);
+        return kiln_ast::sanitize::NO_SANITIZE_SPELLINGS.get(tag).map(|s| s.0);
     }
     TABLE.iter().find(|e| e.kind == node.kind).map(|e| e.name)
 }
@@ -446,6 +463,63 @@ impl Sema<'_, '_> {
                 }
                 a = self.ast.lists.push_raw(&words).raw();
             }
+            AttrKind::NO_SANITIZE if preset == 0 => {
+                // clang `handleNoSanitizeAttr`.
+                if args.is_empty() {
+                    let msg = self.diag(DiagId::sema_attribute_too_few_arguments_one, loc).arg(q);
+                    self.emit(msg);
+                    return None;
+                }
+                let mut set = SanitizerSet::NONE;
+                let mut not_global = Vec::new();
+                for arg in args {
+                    let at = self.arg_loc(arg, loc);
+                    let lit = match arg {
+                        AttrArg::Expr(e) if self.is_err_expr(*e) => return None,
+                        AttrArg::Expr(e) => self.string_lit_of(*e),
+                        _ => None,
+                    };
+                    let Some(lit) = lit else {
+                        let msg = if matches!(arg, AttrArg::Ident(..)) {
+                            self.diag(DiagId::sema_attribute_requires_string, at).arg(q)
+                        } else {
+                            self.diag(DiagId::parse_attribute_requires_string, at).arg(arg_name)
+                        };
+                        self.emit(msg);
+                        return None;
+                    };
+                    let id = self.ast.exprs.string_lit(lit);
+                    let text = String::from_utf8_lossy(self.ast.strings.bytes(id)).into_owned();
+                    match kiln_ast::sanitize::parse_name(&text, true) {
+                        None if text != "coverage" => {
+                            let msg =
+                                self.diag(DiagId::sema_unknown_sanitizer_ignored, at).arg(text);
+                            self.emit(msg);
+                        }
+                        s => {
+                            set = set.union(s.unwrap_or(SanitizerSet::NONE));
+                            if !matches!(text.as_str(), "address" | "hwaddress" | "memtag") {
+                                not_global.push(text);
+                            }
+                        }
+                    }
+                }
+                (a, b) = kiln_ast::sanitize::no_sanitize_words(set, 0);
+                let id = self.ast.attrs.push(AttrNode { kind, syntax, flags: 0, loc, a, b });
+                if !not_global.is_empty() {
+                    self.no_sanitize_not_global.insert(id, not_global);
+                }
+                return Some(id);
+            }
+            AttrKind::NO_SANITIZE => {
+                if !args.is_empty() {
+                    return count(self, "0");
+                }
+                let set = kiln_ast::sanitize::NO_SANITIZE_SPELLINGS
+                    .get(preset as usize)
+                    .map_or(SanitizerSet::NONE, |s| s.1);
+                (a, b) = kiln_ast::sanitize::no_sanitize_words(set, preset);
+            }
             _ if !args.is_empty() => return count(self, "0"),
             _ => {}
         }
@@ -557,6 +631,7 @@ impl Sema<'_, '_> {
                 }
                 true
             }
+            AttrKind::NO_SANITIZE => self.check_no_sanitize(d, kind, a, node),
             AttrKind::DISABLE_SANITIZER_INSTRUMENTATION if !func && !var => {
                 wrong(self, false, "functions, Objective-C methods, and global variables")
             }
@@ -675,6 +750,63 @@ impl Sema<'_, '_> {
 
     /// Whether `d` is a variable, parameter or field of (reference to)
     /// pointer-to-function type.
+    /// The subject of a `no_sanitize*` attribute (clang: functions,
+    /// Objective-C methods and global variables for `no_sanitize`,
+    /// functions and global variables for the others, functions only for
+    /// `no_sanitize_thread` and `no_sanitize_memory`), and the
+    /// `no_sanitize("...")` arguments a global variable ignores.
+    fn check_no_sanitize(&mut self, d: DeclId, kind: DeclKind, a: AttrId, node: AttrNode) -> bool {
+        let tag = kiln_ast::sanitize::no_sanitize_tag(node.b);
+        let n = name(&node).unwrap_or_default();
+        let q = format!("'{}'", self.attr_shown(&node, n));
+        if kind.is_function() {
+            return true;
+        }
+        let global = matches!(kind, DeclKind::Var | DeclKind::VarTemplateSpecialization)
+            && self.ast.decls.var(d).is_some_and(|v| {
+                let local = self
+                    .ast
+                    .decls
+                    .get(d)
+                    .ctx()
+                    .is_some_and(|c| self.ast.decls.get(c).kind().is_function());
+                !local || v.spec.storage() == VarStorage::Static
+            });
+        let at = self.ast.decls.get(d).loc();
+        if !global {
+            let what = if tag == 0 {
+                "functions, Objective-C methods, and global variables"
+            } else {
+                "functions and global variables"
+            };
+            let msg =
+                self.diag(DiagId::sema_attribute_wrong_decl_type_error, node.loc).arg(q).arg(what);
+            self.emit(msg);
+            return false;
+        }
+        if tag >= 3 {
+            // clang 19 points at the variable, clang 22 at the attribute.
+            let loc = if self.clang_compat >= 22 { node.loc } else { at };
+            let msg = self
+                .diag(DiagId::sema_attribute_wrong_decl_type_error, loc)
+                .arg(q)
+                .arg("functions");
+            self.emit(msg);
+            return false;
+        }
+        if let Some(names) = self.no_sanitize_not_global.get(&a).cloned() {
+            for t in names {
+                let msg = self
+                    .diag(DiagId::sema_attribute_type_not_supported_global, at)
+                    .arg(q.clone())
+                    .arg(t)
+                    .allow_duplicate();
+                self.emit(msg);
+            }
+        }
+        true
+    }
+
     fn is_fn_pointer_decl(&self, d: DeclId) -> bool {
         let t = &self.ast.types;
         self.ast.decls.get(d).ty().is_some_and(|ty| {
@@ -1037,5 +1169,13 @@ impl Sema<'_, '_> {
             exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         out.reverse();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn table_is_sorted_for_binary_search() {
+        assert!(super::TABLE.windows(2).all(|w| w[0].name < w[1].name));
     }
 }

@@ -698,6 +698,11 @@ impl Cg<'_> {
             // clang `EmitCXXNewExpr`: the placement pointer's alignment
             // only when it is a declaration's.
             let p = self.pointer_with_alignment(arg)?;
+            // The pointer is still the placement argument of a matching
+            // class-scope `operator delete(void*, void*)` should the
+            // initialization throw ([expr.new]/28; clang adds it to
+            // `allocatorArgs`).
+            placement_vals.push(CallArg::Scalar(p.v));
             (p.v, if p.decl { p.align } else { alloc_align })
         } else {
             let size_q = params.first().copied().unwrap_or(QualType::unqual(t.target().size_t));
