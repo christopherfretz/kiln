@@ -891,5 +891,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-876 | sema lifetime: coro_lifetimebound, GNU ?:, compound literals, CXXParenListInit in the dangling walk | WP-674 | open |
 | WP-877 | sema lifetime clang 20+/22 parity: lifetime_capture_by/-Wdangling-capture, quoted pointer names in "object backing the pointer", gsl Pointer assignment from an Owner temporary, vector<bool>::begin on a temporary, lifetimebound on a void-returning function parameter, extra lifetimebound subject errors, gsl::-qualified names in attribute-clash errors | WP-674 | open |
 | WP-878 | parse: `__attribute__((gsl::Owner))` emits an extra "to match this (" note clang lacks | WP-674 | open |
+| WP-891 | attribute correctness and dangling-walk gaps: WP-889, WP-890, WP-878, WP-839, WP-874, WP-875, WP-876 | WP-851 | in progress |
 WP-511
 WP-512
