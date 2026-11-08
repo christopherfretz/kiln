@@ -1,4 +1,4 @@
-//! The padding bits of an object representation (spec/abi.md §3
+//! The padding bits of an object representation (spec/abi.md §3.3
 //! "Padding bits", WP-774): which bits of an object of a given type hold
 //! no part of its value ([basic.types.general]/4), as GCC's
 //! `__builtin_clear_padding` (`gimple-fold.cc` `clear_padding_type`)
