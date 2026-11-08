@@ -72,6 +72,9 @@ impl AttrKind {
     /// `InternalLinkageAttr`): the entity, and a class's members, have
     /// internal linkage as if declared `static` (WP-807).
     pub const INTERNAL_LINKAGE: AttrKind = AttrKind(83);
+    /// clang `lifetimebound` (WP-674): on a parameter; on a member
+    /// function (written in its function type) with `a` = 1, for the
+    /// implicit object parameter.
     pub const LIFETIMEBOUND: AttrKind = AttrKind(84);
     pub const NO_SANITIZE: AttrKind = AttrKind(85);
     /// GNU `mode(M)` (clang `ModeAttr`), consumed into the declared type
@@ -436,6 +439,12 @@ impl AttrKind {
     pub const CORO_AWAIT_ELIDABLE: AttrKind = AttrKind(272);
     /// clang 22 `coro_await_elidable_argument` on a parameter.
     pub const CORO_AWAIT_ELIDABLE_ARGUMENT: AttrKind = AttrKind(273);
+    /// `[[gsl::Owner(T)]]` on a class (WP-674): `b` is the raw `QualType`
+    /// of `T` when [`AttrNode::GSL_HAS_TYPE`] is set.
+    pub const GSL_OWNER: AttrKind = AttrKind(274);
+    /// `[[gsl::Pointer(T)]]` on a class (WP-674), encoded as
+    /// [`AttrKind::GSL_OWNER`].
+    pub const GSL_POINTER: AttrKind = AttrKind(275);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
@@ -456,9 +465,12 @@ impl AttrKind {
 
     /// Whether this is one of WP-813's class B attributes
     /// ([`AttrKind::NO_STACK_PROTECTOR`] ..=
-    /// [`AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT`]).
+    /// [`AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT`]), or one of WP-674's
+    /// lifetime attributes spelled and checked the same way
+    /// ([`AttrKind::LIFETIMEBOUND`], [`AttrKind::GSL_OWNER`],
+    /// [`AttrKind::GSL_POINTER`]).
     pub fn is_class_b(self) -> bool {
-        (240..=273).contains(&self.0)
+        (240..=275).contains(&self.0) || self == AttrKind::LIFETIMEBOUND
     }
 }
 
@@ -710,6 +722,13 @@ impl AttrNode {
     /// on the declaration and applies at instantiation (clang
     /// `instantiateDependentModeAttr`).
     pub const MODE_DEFERRED: u8 = 4;
+    /// `gsl::Owner` / `gsl::Pointer` flag (bit 2): a type argument was
+    /// written; `b` holds it.
+    pub const GSL_HAS_TYPE: u8 = 4;
+    /// `lifetimebound` flag (bit 2): an argument list was written, an
+    /// error on a parameter but unchecked in the type position (clang
+    /// does not count the arguments of a type attribute).
+    pub const LIFETIMEBOUND_ARGS: u8 = 4;
     /// Flag (bit 3, any kind): written with the `gnu::` attribute scope
     /// (`[[gnu::noreturn]]`). With `AttrSyntax::Gnu` it selects the GNU
     /// spelling of `NODISCARD` (`warn_unused_result`) and `NORETURN`, and

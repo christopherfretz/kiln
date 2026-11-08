@@ -2798,8 +2798,10 @@ impl Parser<'_, '_> {
                 if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
                     let mut attrs = Vec::new();
                     self.parse_cxx11_attr_seq(&mut attrs);
+                    let lb = self.s.take_fn_type_lifetimebound(&mut attrs);
                     self.s.act_on_type_position_attrs(&mut attrs, true);
                     d.attrs.extend(attrs);
+                    d.attrs.extend(lb);
                 }
             } else {
                 break;

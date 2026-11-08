@@ -127,6 +127,7 @@ fn class_b_takes_expr_args(n: &str) -> bool {
             | "noduplicate"
             | "convergent"
             | "nouwtable"
+            | "lifetimebound"
             | "noinline"
             | "always_inline"
             | "assume_aligned"
@@ -572,8 +573,9 @@ impl Parser<'_, '_> {
                 self.skip_until(&[Punct::RSquare], false, false);
                 break;
             };
-            let loc = self.bump().span.lo;
+            let mut loc = self.bump().span.lo;
             let mut scope = default_scope;
+            let mut name_loc = loc;
             if self.at(Punct::ColonColon) {
                 self.bump();
                 let Some(n) = self.attr_name() else {
@@ -583,14 +585,21 @@ impl Parser<'_, '_> {
                 };
                 scope = Some(name);
                 name = n;
-                self.bump();
+                name_loc = self.bump().span.lo;
             }
             let text = self.s.ast.symbols().as_str(name).to_owned();
             // clang 19 `Clang<"assume">` is the same statement attribute.
             let clang_assume =
                 scope.is_some_and(|s| matches!(self.s.ast.symbols().as_str(s), "clang" | "_Clang"));
+            let gsl = scope.is_some_and(|s| self.s.ast.symbols().as_str(s) == "gsl")
+                && matches!(text.as_str(), "Owner" | "Pointer");
             let args = if (scope.is_none() || clang_assume) && text == "assume" {
                 self.parse_assume_arg(name)
+            } else if gsl && self.at(Punct::LParen) {
+                // clang `ParseAttributeWithTypeArg`: the attribute starts
+                // at its name when it has an argument list.
+                loc = name_loc;
+                self.parse_gsl_type_arg()
             } else if scope.is_none()
                 && self.at(Punct::LParen)
                 && ((forbids_args(&text)
@@ -728,6 +737,22 @@ impl Parser<'_, '_> {
 
     /// The arguments of attribute `name`, if any: `Some(args)`, or `None`
     /// after a syntax error.
+    /// `( type-id opt )` of `gsl::Owner` / `gsl::Pointer`, at the `(`
+    /// (clang `ParseAttributeWithTypeArg`): a missing `)` is reported
+    /// without skipping, so the attribute list resumes at the next token.
+    fn parse_gsl_type_arg(&mut self) -> Option<Vec<AttrArg>> {
+        self.bump();
+        if self.eat(Punct::RParen).is_some() {
+            return Some(Vec::new());
+        }
+        let Some(t) = self.parse_type_id() else {
+            self.skip_until(&[Punct::RParen], false, true);
+            return None;
+        };
+        self.expect(Punct::RParen)?;
+        Some(vec![AttrArg::Type(t)])
+    }
+
     fn parse_attr_args(&mut self, name: Symbol) -> Option<Vec<AttrArg>> {
         let Some(open) = self.eat(Punct::LParen) else { return Some(Vec::new()) };
         let text = self.s.ast.symbols().as_str(name).to_owned();
