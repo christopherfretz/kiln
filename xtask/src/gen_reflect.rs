@@ -1,8 +1,9 @@
 //! `cargo xtask gen-reflect`: writes the reflection perf shapes S1–S6 of
 //! `docs/plans/m6-reflection.md` §3.8, and the reference-workload shapes S7
 //! (a binding generator) and S8 (the bindings it prints, compiled) of
-//! `docs/status/perf-reference-workload.md`, and S9 (reflection-keyed
-//! instantiations, the mangler's load: spec/reflection.md §8.3), as bench
+//! `docs/status/perf-reference-workload.md`, and S9 and S10
+//! (reflection-keyed instantiations, the mangler's load, S10 on deep
+//! template-ids: spec/reflection.md §8.3), as bench
 //! entries under `bench/reflect/` (`spec/bench.md` "Reflection shapes").
 //!
 //! Each shape is a function of one size parameter N and nothing else: the
@@ -18,7 +19,7 @@ use std::process::ExitCode;
 
 /// One shape.
 pub struct Shape {
-    /// `s1` … `s9`: the file stem under `bench/reflect/`.
+    /// `s1` … `s10`: the file stem under `bench/reflect/`.
     pub id: &'static str,
     /// The N the committed file is generated at (small enough for the
     /// merge-queue S-tier, `docs/plans/m6-reflection.md` §3.9).
@@ -53,7 +54,7 @@ pub struct Shape {
 const PLAN_SECTION: &str = "docs/plans/m6-reflection.md §3.8";
 
 /// The shapes, in order.
-pub const SHAPES: [Shape; 9] = [
+pub const SHAPES: [Shape; 10] = [
     Shape {
         id: "s1",
         default_n: 100,
@@ -179,9 +180,24 @@ pub const SHAPES: [Shape; 9] = [
         body: s9,
         budget: |_| "peak_arena<=65536".into(),
     },
+    Shape {
+        id: "s10",
+        default_n: 200,
+        step: 1,
+        what: "N reflection-keyed instantiations f<^^X>() and S<^^X>::count, each X a distinct \
+               template-id six levels deep with six arguments per level (the reflection \
+               mangler's load on long nested types)",
+        source: "spec/bench.md \"Reflection shapes\"",
+        owner: "WP-879",
+        needs: "nothing beyond `^^`",
+        libstdcxx: false,
+        bare: true,
+        body: s10,
+        budget: |_| "peak_arena<=65536".into(),
+    },
 ];
 
-/// The shape named `id` (`s1` … `s9`, case-insensitive).
+/// The shape named `id` (`s1` … `s10`, case-insensitive).
 pub fn shape(id: &str) -> Option<&'static Shape> {
     SHAPES.iter().find(|s| s.id.eq_ignore_ascii_case(id))
 }
@@ -918,12 +934,66 @@ fn s9(n: usize, out: &mut String) {
     out.push_str("};\n");
 }
 
+/// S10: S9's pattern keyed on long nested types. Type `i` at depth `d`
+/// is `lib::Node<d % 4><X(d-1), A1, ..., A5>`, the arguments drawn from
+/// distinct leaves `lib::Tj`, `int`, `const lib::Ti*`, `long` and
+/// `lib::Tj&`, so every name repeats subtrees (substitutions) and no two
+/// keys are equal. The mangled length is linear in depth x width.
+fn s10(n: usize, out: &mut String) {
+    const DEPTH: usize = 6;
+    const WIDTH: usize = 6;
+    fn ty(n: usize, i: usize, d: usize, out: &mut String) {
+        if d == 0 {
+            let _ = write!(out, "lib::T{i:04}");
+            return;
+        }
+        let _ = write!(out, "lib::Node{}<", d % 4);
+        ty(n, i, d - 1, out);
+        for a in 1..WIDTH {
+            let j = (i * 7 + d * 13 + a) % n;
+            let _ = match a % 5 {
+                0 => write!(out, ", lib::T{j:04}"),
+                1 => write!(out, ", int"),
+                2 => write!(out, ", const lib::T{i:04}*"),
+                3 => write!(out, ", long"),
+                _ => write!(out, ", lib::T{j:04}&"),
+            };
+        }
+        out.push('>');
+    }
+    out.push_str(
+        "using info = decltype(^^int);\n\
+         template <info R> int f() { static int n = 0; return ++n; }\n\
+         template <info R> struct S { static int count; };\n\
+         template <info R> int S<R>::count = 0;\n\nnamespace lib {\n",
+    );
+    for k in 0..4 {
+        let _ = writeln!(out, "template <class... Ts> struct Node{k} {{}};");
+    }
+    for i in 0..n {
+        let _ = writeln!(out, "struct T{i:04} {{}};");
+    }
+    out.push_str("}  // namespace lib\n\nint (*fs[])() = {\n");
+    for i in 0..n {
+        out.push_str("  &f<^^");
+        ty(n, i, DEPTH, out);
+        out.push_str(">,\n");
+    }
+    out.push_str("};\n\nint* counts[] = {\n");
+    for i in 0..n {
+        out.push_str("  &S<^^");
+        ty(n, i, DEPTH, out);
+        out.push_str(">::count,\n");
+    }
+    out.push_str("};\n");
+}
+
 pub const USAGE: &str = "\
-usage: cargo xtask gen-reflect [--shape s1..s9] [--n <N>] [--out <dir>] [--check]
+usage: cargo xtask gen-reflect [--shape s1..s10] [--n <N>] [--out <dir>] [--check]
 
 Writes the reflection perf shapes S1-S6 (docs/plans/m6-reflection.md §3.8) and
 the reference-workload shapes S7-S8 (docs/status/perf-reference-workload.md) and
-the reflection-mangling shape S9 (spec/reflection.md §8.3) as bench entries. Without --n each shape is written at its committed default N
+the reflection-mangling shapes S9 and S10 (spec/reflection.md §8.3) as bench entries. Without --n each shape is written at its committed default N
 into bench/reflect/; a different N needs --out (the sweeps of `cargo xtask
 bench --scaling` build their own). --check writes nothing and fails when a
 committed file differs from the generator. See spec/bench.md \"Reflection shapes\".
@@ -953,7 +1023,7 @@ fn run(mut args: impl Iterator<Item = String>) -> Result<bool, String> {
             }
             "--shape" => {
                 let v = value("--shape")?;
-                only = Some(shape(&v).ok_or_else(|| format!("unknown shape `{v}` (s1..s9)"))?);
+                only = Some(shape(&v).ok_or_else(|| format!("unknown shape `{v}` (s1..s10)"))?);
             }
             "--n" => {
                 let v = value("--n")?;
@@ -1063,6 +1133,7 @@ mod tests {
         assert!(s7.contains("bound_classes().size() == 8)"));
         assert!(!s7.contains("C0007\")") && s7.contains("struct C0007 {"));
         assert_eq!(kiln_flags(shape("s9").unwrap()), Vec::<String>::new());
+        assert_eq!(kiln_flags(shape("s10").unwrap()), Vec::<String>::new());
     }
 
     #[test]

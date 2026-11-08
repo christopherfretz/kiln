@@ -81,7 +81,7 @@ pub fn run(
 ) -> Result<bool, String> {
     let name = opts.scaling.as_deref().unwrap_or_default();
     let shape = gen_reflect::shape(name)
-        .ok_or_else(|| format!("unknown --scaling shape `{name}` (s1..s9)"))?;
+        .ok_or_else(|| format!("unknown --scaling shape `{name}` (s1..s10)"))?;
     let n = opts.scaling_n.unwrap_or(shape.default_n);
     if !n.is_multiple_of(shape.step) {
         return Err(format!("shape {} needs --n to be a multiple of {}", shape.id, shape.step));
