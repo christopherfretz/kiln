@@ -9,12 +9,11 @@
 //!    `-f[no-]data-sections`, `-mtune=`, `-mcmodel=`);
 //! 2. accepted and ignored: no observable effect in kiln
 //!    (`-f[no-]stack-clash-protection`, `-fcf-protection[=…]`,
-//!    `-f[no-]common`, `-fexcess-precision=`, `-f[no-]math-errno`,
-//!    `-fstack-usage`, `-gz[=…]`, the defaults `-fno-trapv`,
-//!    `-fno-short-enums`, `-ffp-model=precise` and `-m64`, and `-pipe`);
+//!    `-f[no-]common`, `-fstack-usage`, `-gz[=…]`, the defaults `-fno-trapv`,
+//!    `-fno-short-enums` and `-m64`, and `-pipe`);
 //! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
 //!    `-fshort-enums`, `-fsanitize*`, `-fno-sanitize*`, coverage and
-//!    profiling, `-ffp-model=fast|strict|aggressive`).
+//!    profiling). The floating-point flags are `crate::fp_flags`'s.
 //!
 //! `-Wp,<args>` and `-Xpreprocessor <arg>` are spliced into the command
 //! line before parsing ([`splice_preprocessor_args`]).
@@ -63,8 +62,6 @@ const IGNORED: &[&str] = &[
     "-fcf-protection",
     "-fcommon",
     "-fno-common",
-    "-fmath-errno",
-    "-fno-math-errno",
     "-fstack-usage",
     "-gz",
     "-fno-trapv",
@@ -162,20 +159,6 @@ impl CodegenFlags {
                     return Some(Err(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())));
                 }
             }
-            "-fexcess-precision" => {
-                if !matches!(v, "fast" | "standard" | "16") {
-                    return unsupported();
-                }
-            }
-            // `precise` is clang's default floating-point model (WP-803);
-            // `fast` and `strict` change it, which kiln does not do yet.
-            "-ffp-model" => match v {
-                "precise" => {}
-                "fast" | "strict" | "aggressive" => {
-                    return Some(Err(ArgError::UnsupportedByKiln(arg.to_owned())));
-                }
-                _ => return unsupported(),
-            },
             "-gz" => {
                 if !matches!(v, "none" | "zlib" | "zstd") {
                     return unsupported();
@@ -309,12 +292,9 @@ mod tests {
             "-fcf-protection",
             "-fcf-protection=full",
             "-fno-common",
-            "-fexcess-precision=standard",
-            "-fno-math-errno",
             "-fstack-usage",
             "-gz",
             "-gz=zlib",
-            "-ffp-model=precise",
             "-mtune=native",
             "-ffunction-sections",
             "-fdata-sections",
@@ -324,8 +304,6 @@ mod tests {
         for a in [
             "-ftrapv",
             "-fshort-enums",
-            "-ffp-model=fast",
-            "-ffp-model=strict",
             "-fsanitize=address",
             "-fno-sanitize-recover=all",
             "-fsanitize-trap=undefined",

@@ -673,6 +673,21 @@ pub fn powi(m: &mut Module, ty: TypeId, exp: TypeId) -> FuncId {
     declare(m, &name, ty, &[(ty, &[]), (exp, &[])], &[], Shape::Pure)
 }
 
+/// `T @llvm.ldexp.T.I(T, I)`: `x * 2^exp` (WP-806, `__builtin_ldexp`
+/// under `-fno-math-errno`).
+pub fn ldexp(m: &mut Module, ty: TypeId, exp: TypeId) -> FuncId {
+    let name = overloaded_name(m, "llvm.ldexp", &[ty, exp]);
+    declare(m, &name, ty, &[(ty, &[]), (exp, &[])], &[], Shape::Pure)
+}
+
+/// `R @llvm.<base>.R.T(T)`: the rounding of a floating-point `T` to the
+/// integer `R` (WP-806, `llvm.lround` / `llvm.llround` / `llvm.lrint` /
+/// `llvm.llrint`).
+pub fn fp_to_int(m: &mut Module, base: &str, ret: TypeId, ty: TypeId) -> FuncId {
+    let name = overloaded_name(m, base, &[ret, ty]);
+    declare(m, &name, ret, &[(ty, &[])], &[], Shape::Pure)
+}
+
 /// `R @llvm.objectsize.R.p0(ptr, i1 immarg min, i1 immarg nullunknown,
 /// i1 immarg dynamic)` for an integer result `R` (WP-282,
 /// `__builtin_object_size`).

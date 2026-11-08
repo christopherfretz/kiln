@@ -64,8 +64,16 @@ pub struct PredefConfig {
     pub char_signed: Option<bool>,
     /// PIC / PIE.
     pub pic: PicModel,
-    /// `-ffast-math`.
+    /// clang's cc1 `-ffast-math` (every fast-math flag but contraction):
+    /// `__FAST_MATH__`.
     pub fast_math: bool,
+    /// `-ffinite-math-only` (no infinities and no NaNs):
+    /// `__FINITE_MATH_ONLY__` is 1.
+    pub finite_math: bool,
+    /// `-fno-math-errno`: `__NO_MATH_ERRNO__`.
+    pub no_math_errno: bool,
+    /// clang's cc1 `-funsafe-math-optimizations`: `__ARM_FP_FAST`.
+    pub unsafe_math: bool,
     /// `-ffreestanding`.
     pub freestanding: bool,
     /// `-pthread`.
@@ -138,6 +146,9 @@ impl PredefConfig {
             char_signed: None,
             pic: PicModel::Pie(2),
             fast_math: false,
+            finite_math: false,
+            no_math_errno: false,
+            unsafe_math: false,
             freestanding: false,
             pthread: false,
             threadsafe_statics: true,
@@ -579,13 +590,18 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
             }
         }
     }
+    // clang `InitializePredefinedMacros` / `AArch64TargetInfo`.
     if cfg.fast_math {
         set(m, "__FAST_MATH__", "1");
+    }
+    if cfg.finite_math {
         set(m, "__FINITE_MATH_ONLY__", "1");
+    }
+    if cfg.no_math_errno {
         set(m, "__NO_MATH_ERRNO__", "1");
-        if cfg.aarch64 {
-            set(m, "__ARM_FP_FAST", "1");
-        }
+    }
+    if cfg.unsafe_math && cfg.aarch64 {
+        set(m, "__ARM_FP_FAST", "1");
     }
     if cfg.freestanding {
         set(m, "__STDC_HOSTED__", "0");

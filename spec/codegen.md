@@ -287,7 +287,8 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     pointers); pointer difference: `ptrtoint`, `sub`, then `sdiv exact`;
   - floating add/sub (also compound) contract a single-use `fmul`
     operand (looking through a single-use `fneg`) into
-    `llvm.fmuladd.*`, as `tryEmitFMulAdd` does under `-ffp-contract=on`:
+    `llvm.fmuladd.*`, as `tryEmitFMulAdd` does under `fp_contract(on)`
+    (the default; §3.2 for `off` and `fast`):
     `b*c + a` / `b*c - a` are `fmuladd(b, c, a)` / `fmuladd(b, c, -a)`,
     `a + b*c` / `a - b*c` are `fmuladd(b, c, a)` / `fmuladd(-b, c, a)`
     (the addend of a right product is never negated), and a looked-through
@@ -375,7 +376,7 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `llabs`, and `fabs`, `ceil`, `floor`, `trunc`, `round`, `rint`,
     `nearbyint`, `copysign`, `fmax`, `fmin`, `fma` with their `f` / `l`
     forms (clang's `GenerateIntrinsics` set; `sqrt` stays a call under
-    `-fmath-errno`; WP-419's `roundeven` / `fmaximum_num` / `fminimum_num`
+    `-fmath-errno`, §3.2; WP-419's `roundeven` / `fmaximum_num` / `fminimum_num`
     below) are emitted as their `__builtin_` twin
     (`DeclArena::lib_builtin`, `builtins::lib_intrinsic`; WP-186,
     `tests/codegen/builtins_lib_intrinsic.cpp`). Not done (follow-ups):
@@ -528,7 +529,7 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       the function included; the call is never folded (clang does not
       constant-evaluate the library names). Under clang's default
       `-fmath-errno` the errno-setting ones (`sqrt`, `sin`, `exp`, ...)
-      stay library calls; kiln has no `-fno-math-errno`
+      stay library calls; under `-fno-math-errno` they lower too (§3.2)
       (`tests/codegen/lib_float_intrinsics.cpp`, `_gnu.cpp`).
     - library builtins (WP-282, clang `EmitBuiltinExpr`):
       `__builtin_assume_aligned(p, a[, off])` returns `p` and emits
@@ -906,6 +907,32 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   a conditional, non-constant `align_val_t` arguments, the deallocation
   functions clang does not treat as usual, and every construct Sema
   reports as unsupported (classes needing constructors or destructors).
+
+### 3.2 Floating-point semantics (WP-806, `fp.rs`)
+Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
+7.12.2, [cfenv.syn] / C23 7.6). In short:
+- The FP state of a scope is the command line's `FpOptions`
+  (`CodegenOptions::fp`, spec/driver.md "Floating-point flags") with the
+  `FpOverride` sema recorded on the enclosing compound statement
+  (`#pragma STDC FP_CONTRACT`, `#pragma clang fp`, `#pragma
+  float_control`, `#pragma STDC CX_LIMITED_RANGE`).
+- Contraction: `on` fuses within an expression as `llvm.fmuladd`, `fast`
+  puts `contract` on every FP operation, `off` emits plain operations.
+- The other fast-math flags go on FP binops, `fneg`, `fcmp`, FP `select`
+  / `phi`, and calls of intrinsics and library builtins (the scope's);
+  other calls with an FP result take the command line's. FMF on
+  `fpext`/`fptrunc` and on FP-struct calls need LLVM 20 IR
+  (`Module::ir_version`); at the default LLVM 19 they are omitted.
+- Function attributes `no-infs-fp-math`, `no-nans-fp-math`,
+  `approx-func-fp-math`, `unsafe-fp-math`, `no-signed-zeros-fp-math`,
+  `denormal-fp-math` and `no-trapping-math` follow the command line; a
+  pragma scope that turns one off makes it `"false"` on the definition.
+  `nofpclass` marks FP parameters and returns under finite math.
+- `-fno-math-errno` makes the errno-setting libm functions `memory(none)`
+  and lowers them to their intrinsics (`ldexp`, `exp10` excepted).
+- The floating-point environment is the default one; every flag and
+  pragma that needs another (FENV_ACCESS ON, FENV_ROUND other than
+  FE_TONEAREST, trapping, rounding, a wider eval method) is an error.
 
 ## 4. Statements
 - `stmt.rs` covers compound, declaration, expression, null, if (with
@@ -2915,7 +2942,10 @@ full complex range (`CX_Full`; `CodegenOptions::complex_range`, below).
     the `llvm.fabs` of `c` and `d`, a block scaling by `d/c`, one by
     `c/d`, and a `phi` per part.
   - `promoted` is not supported (the driver rejects it, spec/abi.md
-    §8.17).
+    §8.17, also as clang 22's `-ffp-model=fast` default, spec/driver.md
+    "Floating-point flags").
+  - `#pragma STDC CX_LIMITED_RANGE ON|OFF` selects `Basic` / `Full` in
+    its scope (§3.2, WP-806).
 - **Calls.** A complex argument or return goes through the target
   classification (spec/abi.md §8.17). A returned pair is unpacked from
   the coerced type (`cx_call_result`). Delegating calls (inheriting
@@ -2925,8 +2955,7 @@ full complex range (`CX_Full`; `CodegenOptions::complex_range`, below).
   are exact on aarch64 and x86_64; `tests/conformance/ext.complex/
   {limited,improved,full}-range.cpp` (run) observe each range.
 - **Not implemented:** `_Complex _Float16` (parsed; not checked against clang),
-  `-fcomplex-arithmetic=promoted`, and `#pragma STDC CX_LIMITED_RANGE`
-  (spec/abi.md §8.17 "Deviations").
+  and `-fcomplex-arithmetic=promoted` (spec/abi.md §8.17 "Deviations").
 
 ## 7o. Landed (WP-351): coroutines (`coro.rs`)
 
