@@ -3531,6 +3531,15 @@ formed it:
      explicit args stay parameters.
    - A trailing pack that was given explicitly can be *extended* by
      deduction (/9).
+   - (WP-804) For a call, a return type written before the parameters
+     is substituted too, first and only to check it (clang
+     `SubstituteExplicitTemplateArguments`): with every argument given,
+     `enable_if_t<C<A>, int> f(const S<A>&)` fails here, before the
+     CWG1391 check converts an argument to `S<A>` and so instantiates it
+     (`temp.deduct.call/explicit-args-return-sfinae-before-nondep-conversion.cpp`).
+     A trailing return type may name the parameters and is left to
+     step 4 (xfail
+     `temp.deduct.call/explicit-args-trailing-return-sfinae-before-nondep-conversion.cpp`).
    - Failure gives `InvalidExplicitArguments` or `SubstitutionFailure`.
 2. **Deduce from each (Pᵢ, Aᵢ) pair** ([temp.deduct.call]). Pᵢ is the
    parameter type; Aᵢ is the argument's type and value category.
