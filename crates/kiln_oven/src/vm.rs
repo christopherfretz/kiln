@@ -27,6 +27,7 @@ mod life;
 mod meta;
 #[cfg(feature = "op-stats")]
 mod opstats;
+pub(crate) mod umemo;
 mod virt;
 mod wide;
 
@@ -2864,21 +2865,56 @@ impl Oven {
 
     /// Checks the active members of the unions on the path from the
     /// allocation root to the `len`-byte object of type `ty` at `raw`.
+    /// `Ok` answers are remembered ([`umemo`], WP-760).
     fn union_path(&self, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
         let p = Ptr::decode(raw);
         let Some(a) = self.alloc_any(p) else { return Ok(()) };
-        let (mut t, mut base) = (a.ty, 0u64);
-        let target = u64::from(p.off);
+        let akey = Ptr::alloc_key(raw);
+        let stamp = umemo::Stamp { epoch: self.mem.union_epoch, rebuilt: self.types.rebuilt() };
+        if self.umemo.hit(akey, a.ty, ty, p.off, stamp) {
+            return Ok(());
+        }
+        if let Some(cover) = self.union_walk(a.ty, raw, ty, k)? {
+            self.umemo.put(akey, a.ty, ty, cover, stamp);
+        }
+        Ok(())
+    }
+
+    /// [`Oven::union_path`]'s walk from `root` (the type of `raw`'s
+    /// allocation): on success, the offsets the same answer covers, or
+    /// `None` when the answer depends on the access kind `k` (a fault
+    /// path that lets the access through) and must not be remembered.
+    fn union_walk(
+        &self,
+        root: OTy,
+        raw: u64,
+        ty: OTy,
+        k: u32,
+    ) -> Result<Option<umemo::Cover>, Fault> {
+        let target = u64::from(Ptr::decode(raw).off);
+        let exact = Some(umemo::Cover::At(target as u32));
+        let (mut t, mut base) = (root, 0u64);
+        // Every union so far was resolved by its active member.
+        let mut by_active = true;
         loop {
             if t == ty && base == target {
-                return Ok(());
+                return Ok(exact);
             }
-            match self.types.kind(t) {
+            let info = self.types.info(t);
+            if !info.has_union {
+                // No union below: the rest of the walk cannot fail.
+                return Ok(if by_active {
+                    Some(self.union_free_cover(t, base, target, ty))
+                } else {
+                    exact
+                });
+            }
+            match info.kind {
                 TyKind::Array { elem, n } => {
                     let es = self.types.size(elem).max(1);
                     let i = (target - base) / es;
                     if i >= n {
-                        return Ok(());
+                        return Ok(exact);
                     }
                     base += i * es;
                     t = elem;
@@ -2886,7 +2922,7 @@ impl Oven {
                 // The member choices are cached per (record, offset,
                 // type) (WP-644); the active members are read here.
                 TyKind::Record { .. } => match self.types.hop(Walk::Union, t, target - base, ty) {
-                    Hop::Reached | Hop::Stop | Hop::Mutable(_) => return Ok(()),
+                    Hop::Reached | Hop::Stop | Hop::Mutable(_) => return Ok(exact),
                     Hop::Array { at, t: arr } => {
                         base += at;
                         t = arr;
@@ -2904,19 +2940,49 @@ impl Oven {
                             .chain(alt)
                             .find(|&i| self.types.reaches(Walk::Union, u, rel, ty, reach, i))
                         else {
-                            return self.union_fault(u, rel, ty, k, active);
+                            self.union_fault(u, rel, ty, k, active)?;
+                            return Ok(None);
                         };
+                        by_active &= active == Some(i);
                         let f = fields[i as usize];
                         base += f.offset;
                         t = f.ty;
                         if f.width.is_some() {
-                            return Ok(());
+                            return Ok(exact);
                         }
                     }
                 },
-                _ => return Ok(()),
+                _ => return Ok(exact),
             }
         }
+    }
+
+    /// The offsets [`Oven::union_walk`]'s answer covers once it reaches
+    /// `t`, a type without unions, at byte `base`, having resolved every
+    /// union above by its active member: when `t` is an array and the
+    /// accessed scalar of type `ty` at `target` is a subobject of its
+    /// element, the same position in every element (the walk toward any of
+    /// them makes the same choices: a scalar subobject at one offset of a
+    /// non-union class is unique, and the active member holding this one
+    /// holds those too); else `target` alone.
+    fn union_free_cover(&self, t: OTy, base: u64, target: u64, ty: OTy) -> umemo::Cover {
+        let exact = umemo::Cover::At(target as u32);
+        let TyKind::Array { elem, n } = self.types.kind(t) else { return exact };
+        let es = self.types.size(elem);
+        let len = es.saturating_mul(n);
+        if es == 0
+            || target < base
+            || target - base >= len
+            || base + len > u64::from(u32::MAX)
+            || self.types.scal(ty).is_none()
+        {
+            return exact;
+        }
+        let phase = (target - base) % es;
+        if !self.types.has_subobject(elem, phase, ty) {
+            return exact;
+        }
+        umemo::Cover::Region { lo: base as u32, len: len as u32, stride: es as u32, phase: phase as u32 }
     }
 
     /// The fault of an access `k` of the `ty` object at byte `rel` of union

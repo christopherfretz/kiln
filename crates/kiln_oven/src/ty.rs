@@ -180,6 +180,10 @@ pub(crate) struct Types {
     /// The subobject path cache (WP-644, [`path`]): memoized
     /// memory-independent walk steps, bounded by [`PATH_CACHE_MAX`].
     paths: path::PathCache,
+    /// How many provisional slots were rebuilt in place: a walk result
+    /// remembered across a rebuild is stale (the union-path memo,
+    /// `vm::umemo`, stamps its entries with it; WP-760).
+    rebuilt: u32,
 }
 
 /// Records with fewer fields are scanned linearly ([`Types::near`]).
@@ -508,6 +512,12 @@ impl Types {
             return at;
         }
         self.near(t, off).find(|f| reach(f)).copied().or(at)
+    }
+
+    /// How many provisional slots were rebuilt in place so far
+    /// ([`Types::refresh`]).
+    pub(crate) fn rebuilt(&self) -> u32 {
+        self.rebuilt
     }
 
     pub fn unions(&self, t: OTy) -> &[(u64, OTy)] {
@@ -1008,6 +1018,7 @@ impl Types {
                 // The slot's layout changes from `Opaque`: walks cached
                 // through it are stale.
                 self.paths.clear();
+                self.rebuilt = self.rebuilt.wrapping_add(1);
                 let i = &mut self.infos[t.0 as usize];
                 (i.size, i.align) = (size, align.max(1));
                 t

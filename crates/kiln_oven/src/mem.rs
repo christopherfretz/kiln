@@ -713,7 +713,8 @@ pub(crate) struct Memory {
     /// allocations in `Alloc::frame`).
     pub ctx: u32,
     /// Active member of each union subobject with one: key the
-    /// subobject ([`UKey`]), value the field index.
+    /// subobject ([`UKey`]), value the field index. Every change to it or
+    /// to [`Memory::union_alts`] bumps [`Memory::union_epoch`].
     pub unions: FxHashMap<UKey, u32>,
     /// The members that may equally be the active one of a union whose
     /// member a placement new constructed through a pointer that names
@@ -723,6 +724,11 @@ pub(crate) struct Memory {
     /// or assignment naming another is accepted (WP-233). Cleared with the
     /// entry by [`Memory::union_put`].
     pub union_alts: FxHashMap<UKey, u64>,
+    /// Bumped by every change to [`Memory::unions`] or
+    /// [`Memory::union_alts`]: the union-path memo (`vm::umemo`, WP-760)
+    /// trusts an answer only while the epoch it was computed at is
+    /// current.
+    pub union_epoch: u64,
     /// The designated types of the `void *` values stored to memory
     /// (`kbc::VOID_TAG`), interned: pointer mark `PTR_TAGGED + i` is
     /// `vtags[i]`. Append-only for the translation unit (a rolled-back or
@@ -807,6 +813,7 @@ impl Memory {
             ctx: 0,
             unions: FxHashMap::default(),
             union_alts: FxHashMap::default(),
+            union_epoch: 0,
             vtags: Vec::new(),
             vtag_ix: FxHashMap::default(),
             vspill: FxHashMap::default(),
@@ -917,9 +924,11 @@ impl Memory {
         self.ctx = 0;
         if !self.unions.is_empty() {
             self.unions.retain(|&k, _| (k.alloc_key() as u32) & STATIC_BIT != 0);
+            self.union_epoch += 1;
         }
         if !self.union_alts.is_empty() {
             self.union_alts.retain(|&k, _| (k.alloc_key() as u32) & STATIC_BIT != 0);
+            self.union_epoch += 1;
         }
         self.allocated = 0;
         self.peak = 0;
@@ -983,9 +992,12 @@ impl Memory {
             if a.flags & flags::HAS_UNION != 0 {
                 let key = u64::from(s) | u64::from(a.generation) << 22;
                 for &(o, ut) in types.unions(a.ty) {
-                    self.unions.remove(&UKey::new(key, o, ut));
+                    let mut gone = self.unions.remove(&UKey::new(key, o, ut)).is_some();
                     if !self.union_alts.is_empty() {
-                        self.union_alts.remove(&UKey::new(key, o, ut));
+                        gone |= self.union_alts.remove(&UKey::new(key, o, ut)).is_some();
+                    }
+                    if gone {
+                        self.union_epoch += 1;
                     }
                 }
             }
@@ -1165,8 +1177,10 @@ impl Memory {
         if a.flags & flags::HAS_UNION != 0 {
             let key = Ptr::alloc_key(p);
             for &(o, ut) in types.unions(a.ty) {
-                self.unions.remove(&UKey::new(key, o, ut));
-                self.union_alts.remove(&UKey::new(key, o, ut));
+                let a = self.unions.remove(&UKey::new(key, o, ut)).is_some();
+                if self.union_alts.remove(&UKey::new(key, o, ut)).is_some() || a {
+                    self.union_epoch += 1;
+                }
             }
         }
         if a.generation < GEN_MAX {
@@ -2017,22 +2031,20 @@ impl Memory {
                         *l = life;
                     }
                 }
-                Undo::Union(key, old) => match old {
-                    Some(v) => {
-                        self.unions.insert(key, v);
-                    }
-                    None => {
-                        self.unions.remove(&key);
-                    }
-                },
-                Undo::UnionAlts(key, old) => match old {
-                    Some(v) => {
-                        self.union_alts.insert(key, v);
-                    }
-                    None => {
-                        self.union_alts.remove(&key);
-                    }
-                },
+                Undo::Union(key, old) => {
+                    self.union_epoch += 1;
+                    match old {
+                        Some(v) => self.unions.insert(key, v),
+                        None => self.unions.remove(&key),
+                    };
+                }
+                Undo::UnionAlts(key, old) => {
+                    self.union_epoch += 1;
+                    match old {
+                        Some(v) => self.union_alts.insert(key, v),
+                        None => self.union_alts.remove(&key),
+                    };
+                }
                 Undo::Flags { sp, idx, old } => {
                     let a = match sp {
                         Sp::Static => &mut self.statics[idx as usize],
@@ -2127,8 +2139,11 @@ impl Memory {
             Some(v) => self.unions.insert(key, v),
             None => self.unions.remove(&key),
         };
-        if old != v && self.in_trial() {
-            self.trial_union(key, Undo::Union(key, old));
+        if old != v {
+            self.union_epoch += 1;
+            if self.in_trial() {
+                self.trial_union(key, Undo::Union(key, old));
+            }
         }
         if !self.union_alts.is_empty() {
             self.union_alts_put(key, None);
@@ -2142,8 +2157,19 @@ impl Memory {
             Some(v) => self.union_alts.insert(key, v),
             None => self.union_alts.remove(&key),
         };
-        if old != v && self.in_trial() {
-            self.trial_union(key, Undo::UnionAlts(key, old));
+        if old != v {
+            self.union_epoch += 1;
+            if self.in_trial() {
+                self.trial_union(key, Undo::UnionAlts(key, old));
+            }
+        }
+    }
+
+    /// Sets the active member of union `key` while thawing a frozen
+    /// value (no checkpoint is open then).
+    pub fn union_thaw(&mut self, key: UKey, v: u32) {
+        if self.unions.insert(key, v) != Some(v) {
+            self.union_epoch += 1;
         }
     }
 
