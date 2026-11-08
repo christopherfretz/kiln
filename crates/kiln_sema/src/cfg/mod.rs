@@ -228,6 +228,13 @@ pub(crate) struct Cfg {
     pub(crate) inc: HashMap<Unit, StmtId>,
     pub(crate) ret: HashMap<Unit, StmtId>,
     pub(crate) do_conds: HashSet<ExprId>,
+    /// The comma operators of the body, which have no element (with
+    /// [`CfgReq::uninit`]).
+    pub(crate) commas: Vec<ExprId>,
+    /// Each variable of a multi-variable declaration statement with the
+    /// index of the first element after its initializer, where clang's
+    /// split declaration of it stands (with [`CfgReq::uninit`]).
+    pub(crate) decl_marks: Vec<(u32, DeclId)>,
 }
 
 impl Cfg {
@@ -250,6 +257,8 @@ impl Cfg {
         self.inc.clear();
         self.ret.clear();
         self.do_conds.clear();
+        self.commas.clear();
+        self.decl_marks.clear();
     }
 
     /// The graph exists (clang built one, under the size cap).

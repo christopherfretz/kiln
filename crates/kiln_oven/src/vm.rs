@@ -140,8 +140,11 @@ pub(crate) struct RunState {
     /// The evaluation is a potential-constant-expression check
     /// ([`crate::Oven::evaluate_call`], clang's
     /// `CheckingPotentialConstantExpression`): `-Wconstant-evaluated` is
-    /// not reported, nested evaluations included.
-    pub potential: bool,
+    /// not reported, nested evaluations included. The number is how many
+    /// calls may be active: a further call of a function that can be
+    /// constant-evaluated fails without a note (clang `CheckCallLimit`
+    /// performs no call but the one checked; WP-873).
+    pub potential: Option<u32>,
     /// Every contract assertion is ignored ([expr.const.init]/4.1: the
     /// run deciding whether an initialization is constant-initializable;
     /// [`crate::Oven::check_contract_init`]). A skipped assertion makes
@@ -455,7 +458,7 @@ impl Oven {
     /// `std::is_constant_evaluated` (`aux` = 1) called directly by it,
     /// in an evaluation that is always constant.
     fn always_true_diag(&self, b: &mut dyn SemaBridge, pc: usize, aux: u32) {
-        if self.run.potential {
+        if self.run.potential.is_some() {
             return;
         }
         let depth = self.stack.len() - self.run.entry;
@@ -2051,6 +2054,9 @@ impl Oven {
             return Err(Fault::Callee(callee));
         }
         let active = self.active_calls();
+        if self.run.potential.is_some_and(|n| active >= n) {
+            return Err(Fault::Quiet);
+        }
         if active >= self.budget.depth {
             return Err(Fault::Depth);
         }

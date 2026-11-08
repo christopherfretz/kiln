@@ -164,7 +164,10 @@ impl Sema<'_, '_> {
         // A bound member function or builtin function operand can only be
         // called ([expr.ref]/7.3.2); clang's `CheckPlaceholderExpr` rejects
         // it, so a substitution forming one fails ([temp.deduct.general]/8).
-        if self.check_builtin_fn_use(e) {
+        // Outside SFINAE a bound member function taking no arguments is
+        // recovered as its call (WP-832).
+        let e = self.recover_bound_member(e);
+        if self.is_err_expr(e) || self.check_builtin_fn_use(e) {
             return None;
         }
         self.check_unevaluated_side_effects(e);

@@ -698,13 +698,21 @@ Encoding (prefix-free, so equal word sequences mean equal trees):
     template name) is its canonical template name plus the qualifier;
   - a declaration follows the declaration rules above, plus its written
     template arguments by the `DeclRefExpr` rule;
+- a splice expression (`[: R :]`, `[: R :]<A...>`, `b.[: R :]`,
+  `p->[: R :]`) is `(form, explicit args)` then the operand's profile,
+  then the object expression's for a member splice; the form tells the
+  plain, `.` and `->` spellings apart. So the same dependent splice
+  written in two declarations or two atoms is equivalent (WP-869; GCC
+  16.1 agrees on redeclarations and subsumption). A type splice
+  (`typename [: R :]`) is a type canonicalized by its operand's profile
+  (`splice_type`), so it needs no rule here;
 - transparent nodes: `ImplicitCastExpr`, `ConstantExpr`,
   `MaterializeTemporaryExpr`, `CXXBindTemporaryExpr`, `ExprWithCleanups`.
   `SubstNonTypeTemplateParmExpr` profiles as its replacement. `ParenExpr`
   is kept;
 - *unique* kinds are `[UNIQUE | kind, expr id]` and equal only
   themselves. They cover lambdas, statement-expressions, recovery
-  expressions, coroutine operators, splices, and any kind with no
+  expressions, coroutine operators, and any kind with no
   equivalence rule. The match is
   exhaustive, so a new `ExprKind` must choose a rule.
 

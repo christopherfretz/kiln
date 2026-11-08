@@ -165,6 +165,20 @@ escalated (`FnSpec::escalated`) when the call operator escalated
 kiln follows the standard (`expr.prim.lambda/consteval-conversion.cpp`
 is `xfail(clang)`).
 
+A templated non-generic lambda's conversion function and invoker have
+the call operator's trailing requires-clause and constraint levels
+([expr.prim.lambda.closure]/9; clang `addFunctionPointerConversion`,
+`share_call_constraints`): when the call operator's constraints are not
+satisfied, the closure converts to no function pointer and yields no
+surrogate call candidate ([over.call.object]/2, spec/sema-overload.md),
+so a call in a requires-expression or a function body is "no matching
+function" with the constraint notes, as for the call operator itself
+(WP-881; clang 19 agrees). Tests
+`expr.prim.lambda.closure/trailing-requires-call.cpp`,
+`p9-trailing-requires-call-forms.cpp`,
+`p9-trailing-requires-surrogate.cpp`,
+`p9-trailing-requires-satisfied-run.cpp`.
+
 Neither has a body. `Ast::closure_thunk(d)` classifies them as
 `ClosureThunk::Conversion { target }` (the invoker, or the call operator
 of a static lambda) and `ClosureThunk::Invoker { call_op }`; the Oven

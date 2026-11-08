@@ -57,10 +57,25 @@ impl Sema<'_, '_> {
             return Ok(());
         }
         *out = match q {
-            QueryOp::TypeOf => MetaOut::Info(self.reflect_type_of(r, loc, oven)?),
+            QueryOp::TypeOf => {
+                // A static data member of a class template specialization
+                // (or a variable template specialization) declared with an
+                // array of unknown bound gets its bound from its
+                // definition, which the type depends on, so it is
+                // instantiated now ([temp.inst]/4; GCC 16.1 agrees; WP-796).
+                if let Some(v) = self.reflects_unbounded_array_var(r) {
+                    let v = self.ast.first(v);
+                    if self.ast.instantiated_from(v).is_some() && self.inst_owner(v).is_some() {
+                        self.lend_oven(oven, |s| s.instantiate_static_member_def(v, loc));
+                    } else {
+                        self.use_reflected_var(r, loc, oven);
+                    }
+                }
+                MetaOut::Info(self.reflect_type_of(r, loc, oven)?)
+            }
             QueryOp::ObjectOf => {
                 self.use_reflected_var(r, loc, oven);
-                MetaOut::Info(self.reflect_object_of(r, loc)?)
+                MetaOut::Info(self.reflect_object_of(r, loc, oven)?)
             }
             QueryOp::ConstantOf => {
                 self.use_reflected_var(r, loc, oven);
@@ -155,7 +170,30 @@ impl Sema<'_, '_> {
     /// expression naming `S::k` sees it (`decltype`, `sizeof`) and as
     /// GCC 16.1's `type_of` answers (WP-795).
     pub(in crate::meta) fn reflected_var_type(&self, d: DeclId) -> Option<QualType> {
-        self.ast.decls.get(self.ast.latest(d)).ty()
+        let t = self.ast.decls.get(self.ast.latest(d)).ty()?;
+        if !matches!(self.ast.types.canonical_view(t), TypeView::IncompleteArray(_)) {
+            return Some(t);
+        }
+        // An instantiated member definition that completed the bound need
+        // not be the latest redeclaration.
+        let complete = self.ast.redecls_of(d).find_map(|x| {
+            self.ast.decls.get(x).ty().filter(|&u| {
+                u != QualType::ERROR
+                    && !matches!(self.ast.types.canonical_view(u), TypeView::IncompleteArray(_))
+            })
+        });
+        Some(complete.unwrap_or(t))
+    }
+
+    /// Whether `r` reflects a variable whose type is, so far, an array
+    /// of unknown bound.
+    fn reflects_unbounded_array_var(&self, r: ReflectionId) -> Option<DeclId> {
+        let Reflectee::Decl(d) = self.ast.reflections.get(r) else { return None };
+        if self.kind_of(d) != DeclKind::Var {
+            return None;
+        }
+        let t = self.reflected_var_type(d)?;
+        matches!(self.ast.types.canonical_view(t), TypeView::IncompleteArray(_)).then_some(d)
     }
 
     /// `type_of(r)` ([meta.reflection.queries]): the type of what `r`
@@ -211,8 +249,13 @@ impl Sema<'_, '_> {
             _ => return false,
         };
         match self.ast.consts.scalar(p) {
-            Some(Scalar::Pointer { base: PtrBase::Const(_), .. }) => true,
-            Some(Scalar::Pointer { base: PtrBase::Decl(d), .. }) => {
+            // A string literal object ([lex.string]/1) and a type_info
+            // object ([expr.typeid]/1) are const.
+            Some(Scalar::Pointer {
+                base: PtrBase::Const(_) | PtrBase::StringLit { .. } | PtrBase::TypeInfo(_),
+                ..
+            }) => true,
+            Some(Scalar::Pointer { base: PtrBase::Decl(d) | PtrBase::Temporary(d), .. }) => {
                 let vt = self.ast.decls.get(d).ty();
                 vt.is_some_and(|t| self.ast.types.effective_quals(t).is_const())
             }

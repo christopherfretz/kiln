@@ -4,6 +4,7 @@
 
 sema_section_conflict = Error (2) "{0} causes a section type conflict with {1}";
 sema_selectany_non_extern_data = Error (0) "'selectany' can only be applied to data items with external linkage";
+sema_shadow_field = WarningOff [ShadowField] (4) "{3:parameter|non-static data member} {0} {3:|of {1} }shadows member inherited from type {2}";
 sema_shift_gt_typewidth = Warning [ShiftCountOverflow] (0) "shift count >= width of type";
 sema_shift_negative = Warning [ShiftCountNegative] (0) "shift count is negative";
 sema_shufflevector_argument_too_large = Error (0) "index for __builtin_shufflevector must be less than the total number of vector elements";
@@ -22,6 +23,7 @@ sema_sizeof_incomplete = Error (2) "invalid application of '{0}' to an incomplet
 sema_sizeof_pack_no_pack = Error (1) "{0} does not refer to the name of a parameter pack";
 sema_sizeof_sizeless = Error (2) "invalid application of '{0}' to sizeless type {1}";
 sema_sizeof_void = Extension [PointerArith] (1) "invalid application of '{0}' to a void type";
+sema_sometimes_uninit_var = WarningOff [SometimesUninitialized] (5) "variable {0} is {1:used|captured} uninitialized whenever {2:'{3}' loop {4}|'{3}' loop {4}|switch {3} is taken|its declaration is reached|{3} is called|'{3}' condition is {4}}";
 sema_spaceship_narrowing_const = Error (2) "argument to 'operator<=>' evaluates to {0}, which cannot be narrowed to type {1}";
 sema_spaceship_narrowing_var = Error (2) "argument to 'operator<=>' cannot be narrowed from type {0} to {1}";
 sema_spec_after_instantiation = Error (1) "explicit specialization of '{0}' after instantiation";
@@ -227,8 +229,11 @@ sema_underlying_type_of_incomplete_enum = Error (1) "cannot determine underlying
 sema_unexpanded_pack = Error (2) "{0} contains unexpanded parameter pack{1}";
 sema_unexpected_typedef_ident = Error (1) "unexpected type name '{0}': expected expression";
 sema_unimplemented_template_feature = Error (1) "kiln: not yet implemented: {0}";
+sema_uninit_const_reference = WarningOff [UninitializedConstReference] (1) "variable {0} is uninitialized when passed as a const reference argument here";
 sema_uninit_self_reference_in_init = Warning [Uninitialized] (1) "variable {0} is uninitialized when used within its own initialization";
 sema_uninit_self_reference_in_reference_init = Warning [Uninitialized] (1) "reference {0} is not yet bound to a value when used within its own initialization";
+// ----- WP-862 (flow-based -Wuninitialized; clang `AnalysisBasedWarnings.cpp` `DiagUninitUse`)
+sema_uninit_var = WarningOff [Uninitialized] (2) "variable {0} is uninitialized when {1:used here|captured by block}";
 sema_union_has_base = Error (0) "unions cannot have base classes";
 sema_union_member_reference = Error (2) "union member '{0}' has reference type {1}";
 sema_unknown_assumption = Warning [UnknownAssumption] (1) "unknown assumption string '{0}'; attribute is potentially ignored";
@@ -244,6 +249,7 @@ sema_unreachable_fallthrough_attr = WarningOff [UnreachableCodeFallthrough] (0) 
 sema_unreachable_loop_increment = WarningOff [UnreachableCodeLoopIncrement] (0) "loop will run at most once (loop increment never executed)";
 sema_unsigned_abs = Warning [AbsoluteValue] (1) "taking the absolute value of unsigned type {0} has no effect";
 sema_unsupported_fmv_feature = Warning [IgnoredAttributes] (1) "unsupported '{0}' in the 'target_version' attribute string; 'target_version' attribute ignored";
+sema_unsupported_lifetime_extension = Warning [Dangling] (1) "lifetime extension of {0:temporary|backing array of initializer list} created by aggregate initialization using a default member initializer is not yet supported; lifetime of {0:temporary|backing array} will end at the end of the full-expression";
 sema_unsupported_string_concat = Error (0) "unsupported non-standard concatenation of string literals";
 sema_unsupported_target_attribute = Warning [IgnoredAttributes] (1) "unsupported '{0}' in the 'target' attribute string; 'target' attribute ignored";
 sema_unused_but_set_parameter = WarningOff [UnusedButSetParameter] (1) "parameter {0} set but not used";
@@ -256,6 +262,7 @@ sema_unused_constructor = Warning [UnusedValue] (1) "ignoring temporary created 
 sema_unused_constructor_msg = Warning [UnusedValue] (2) "ignoring temporary created by a constructor declared with {0} attribute: {1}";
 sema_unused_exception_param = WarningOff [UnusedExceptionParameter] (1) "unused exception parameter {0}";
 sema_unused_expr = Warning [UnusedValue] (0) "expression result unused";
+sema_unused_lambda_capture = WarningOff [UnusedLambdaCapture] (2) "lambda capture {0} is not {1:used|required to be captured for this use}";
 sema_unused_result = Warning [UnusedResult] (1) "ignoring return value of function declared with {0} attribute";
 sema_unused_result_msg = Warning [UnusedResult] (2) "ignoring return value of function declared with {0} attribute: {1}";
 sema_unused_result_typedef = Warning [IgnoredAttributes] (1) "{0} attribute ignored when applied to a typedef; consider using '__attribute__((warn_unused_result))' or '[[clang::warn_unused_result]]' instead";

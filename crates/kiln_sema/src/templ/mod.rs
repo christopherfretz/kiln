@@ -1732,9 +1732,14 @@ impl Sema<'_, '_> {
                 .count();
             open <= self.match_template_lists_to_scope(qualifier)
         };
-        let needs_new = self.templ.heads.last().is_none_or(|h| {
-            h.taken || (!h.invented && (h.list.is_none() || qualifier.is_some() && scope_heads()))
-        });
+        // A generic lambda's first `auto` parameter opens the lambda's
+        // own head even when the enclosing one is still open (a lambda
+        // in a concept's constraint-expression, [temp.constr.atomic]/3).
+        let needs_new = self.in_headless_lambda_declarator()
+            || self.templ.heads.last().is_none_or(|h| {
+                h.taken
+                    || (!h.invented && (h.list.is_none() || qualifier.is_some() && scope_heads()))
+            });
         if needs_new {
             let depth = self.template_depth();
             self.templ.heads.push(HeadBuild {

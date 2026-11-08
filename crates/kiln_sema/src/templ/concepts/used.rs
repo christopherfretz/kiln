@@ -12,12 +12,13 @@
 //! statement expression walks its statements, and a closure type or a
 //! local class or enumeration declared in a walked body is accounted for
 //! there.
+//! A member class or enumeration walks its enclosing classes, whose
+//! template parameters are implicit in it (WP-883).
 //! Only what it cannot see answers `None` and keeps the whole mapping
-//! (two atoms then compare as before, never more loosely): a dependent
-//! member class or enumeration (its enclosing template's parameters are
-//! implicit), an unresolved using-declaration, a declaration kind a body
-//! cannot be seen through (a friend, a using-declaration), and a
-//! parameter index past 64.
+//! (two atoms then compare as before, never more loosely): a local class
+//! declared outside the walk, an unresolved using-declaration, a
+//! declaration kind a body cannot be seen through (a friend, a
+//! using-declaration), and a parameter index past 64.
 
 use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::DeclKind;
@@ -566,11 +567,17 @@ impl Sema<'_, '_> {
     /// A dependent class or enumeration type `r`: a closure type walks
     /// its lambda; a local enumeration or class whose declaration a
     /// walked body holds was accounted for there; a class template
-    /// specialization at namespace scope walks its arguments. Anything
-    /// else (a member of a class template, a local class declared
-    /// outside the walk) depends on parameters the type does not name:
-    /// `None`.
+    /// specialization walks its arguments, a partial specialization its
+    /// written arguments and a class template's pattern marks its
+    /// parameters. A member class or enumeration then walks its
+    /// enclosing class the same way (its enclosing templates' parameters
+    /// are implicit in it; WP-883), up to namespace scope. A local class
+    /// declared outside the walk depends on parameters the type does not
+    /// name: `None`.
     fn used_in_tag(&self, r: DeclId, u: &mut Used, depth: u32) -> Option<()> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
         let first = self.ast.first(r);
         if u.locals.contains(&first) {
             return Some(());
@@ -578,15 +585,27 @@ impl Sema<'_, '_> {
         if let Some(l) = self.ast.closure_lambda(r) {
             return self.used_in_lambda(l, u, depth);
         }
-        let (_, s) = self.ast.spec_info(r)?;
-        let ctx = self.ast.decls.get(r).ctx()?;
-        if !matches!(
-            self.ast.decls.get(ctx).kind(),
-            DeclKind::Namespace | DeclKind::TranslationUnit
-        ) {
-            return None;
+        if let Some((_, s)) = self.ast.spec_info(r) {
+            self.used_in_args(s.args, u, depth + 1)?;
+        } else if let Some((_, p)) = self.ast.partial_spec_info(r) {
+            self.used_in_args(p.args, u, depth + 1)?;
+        } else if let Some(t) = self.ast.described_template(r) {
+            let list = *self.ast.templates.param_list(self.ast.template_info(t)?.params);
+            for p in self.ast.lists.iter::<DeclId>(list.params) {
+                self.used_decl(p, u)?;
+            }
         }
-        self.used_in_args(s.args, u, depth + 1)
+        let ctx = self.ast.decls.get(r).ctx()?;
+        match self.ast.decls.get(ctx).kind() {
+            DeclKind::Namespace
+            | DeclKind::TranslationUnit
+            | DeclKind::LinkageSpec
+            | DeclKind::Export => Some(()),
+            DeclKind::CXXRecord
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization => self.used_in_tag(ctx, u, depth + 1),
+            _ => None,
+        }
     }
 
     /// A lambda ([expr.prim.lambda]): its captures (an init-capture's

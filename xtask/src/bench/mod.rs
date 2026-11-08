@@ -43,10 +43,10 @@ entries: every bench/<group>/<name>.cpp, plus, only when named explicitly,
                       (record-only: per-test and aggregate ratios against
                       --compare-with, e.g. clang++-22; never judged against
                       baselines)
-  bench/reflect:      the reflection shapes S1-S9 of `cargo xtask gen-reflect`
+  bench/reflect:      the reflection shapes S1-S10 of `cargo xtask gen-reflect`
 
 off-queue modes (spec/bench.md, Scaling sweeps and External corpora):
-  --scaling <shape>        compile gen-reflect shape s1..s9 at N and 4N; report
+  --scaling <shape>        compile gen-reflect shape s1..s10 at N and 4N; report
                            wall, peak RSS, the constexpr counters and the 4N/N
                            ratios; fail above 4.6x or when peak_arena grows on
                            s1/s2/s4/s5/s8 (writes no records)
@@ -1154,8 +1154,8 @@ fn read_counters(path: &Path, e: &Entry, spec: &BenchSpec) -> Result<Counters, S
         |f: &str| f == e.arg || std::fs::canonicalize(Path::new(f)).is_ok_and(|p| p == e.path);
     oven_report::check_budgets(&report, &spec.oven, &in_entry)
         .map_err(|err| err.trim_end().to_owned())?;
-    // `memo_hits`/`refl_bytes` are budget-only counters: the bench does not record them.
-    Ok(Counters { wall_us: 0, memo_hits: 0, refl_bytes: 0, ..report.total })
+    // `memo_hits`/`refl_bytes`/`splice_fast` are budget-only counters: the bench does not record them.
+    Ok(Counters { wall_us: 0, memo_hits: 0, refl_bytes: 0, splice_fast: 0, ..report.total })
 }
 
 fn describe_outcome(o: &Outcome) -> String {

@@ -69,6 +69,7 @@ mod init_dtor;
 mod init_priority;
 mod int_in_bool;
 mod int_overflow;
+mod int_range;
 mod internal_linkage;
 mod jump_scope;
 mod kind_conflict;
@@ -85,6 +86,7 @@ pub mod modules;
 mod ms_struct;
 mod musttail;
 pub mod names;
+mod never_constant;
 pub mod new_delete;
 mod nonnull;
 mod null_compare;
@@ -104,6 +106,7 @@ pub mod scope;
 mod section;
 mod selectany;
 mod self_ref;
+mod shadow;
 mod side_effects;
 mod splice;
 mod splice_local;
@@ -124,6 +127,7 @@ mod trivial_abi;
 mod try_stmt;
 mod type_diff;
 mod undefined_used;
+mod uninit;
 mod unreachable_code;
 mod unused_file_scope;
 mod unused_var;
@@ -273,6 +277,12 @@ pub struct Sema<'a, 'sm> {
     /// Depth of expressions being rebuilt by substitution (their
     /// consteval-only leaves follow the pattern's, not the builders').
     pub(crate) subst_expr_depth: u32,
+    /// The instantiation-stack length at which the last call that clang
+    /// recovers with a `RecoveryExpr` failed (a call resolved by overload
+    /// resolution, or a member function call whose arguments do not
+    /// convert; spec/sema.md §1.2), with the recovery's type: a variable
+    /// initialized by it stays valid ([`Sema::note_call_recovery`]).
+    pub(crate) call_recovery: Option<(usize, Option<QualType>)>,
     /// A template-id is being formed by substituting into a dependent
     /// one: a class template specialization it creates records all its
     /// arguments as written, as GCC's (spec/reflection.md §3.9).
@@ -388,6 +398,8 @@ pub struct Sema<'a, 'sm> {
     /// The graph of the body being finished, its vectors reused from
     /// body to body.
     pub(crate) cfg_body: cfg::BodyCfg,
+    /// The uninitialized-values analysis' reused buffers (spec/sema.md §7.11).
+    pub(crate) uninit_scratch: uninit::Scratch,
     /// The functions (first declarations) clang 22 infers `noreturn`
     /// (`InferredNoReturnAttr`, [`Sema::infer_noreturn`]).
     pub(crate) inferred_noreturn: kiln_source::fx::FxHashSet<DeclId>,
@@ -550,6 +562,11 @@ pub struct Sema<'a, 'sm> {
     /// The structured binding packs `...xs` declared so far (P1061,
     /// spec/sema.md §4.9).
     pub(crate) binding_packs: std::collections::HashSet<DeclId>,
+    /// Constructor parameters that shadow a field, with the field
+    /// (clang's `Sema::ShadowingDecls`): `-Wshadow-field-in-constructor`
+    /// at the end of the definition unless a modification diagnosed one
+    /// first (spec/diag.md §5).
+    pub(crate) shadow_ctor: Vec<(DeclId, DeclId)>,
     /// A binding pack decomposed once its element count is known: the
     /// bindings it expanded into, which replace it in its decomposition's
     /// binding list (instantiation maps the pattern pack to them).
@@ -696,7 +713,8 @@ pub struct Sema<'a, 'sm> {
     /// result through the first that matches (clang `ExtVectorDecls`).
     pub(crate) ext_vector_typedefs: Vec<DeclId>,
     /// Splices whose operand was read as a frozen constant without an
-    /// Oven evaluation (spec/reflection.md §5, the splice fast path).
+    /// Oven evaluation (spec/reflection.md §5, the splice fast path);
+    /// handed to the Oven's report by [`Sema::into_parts`].
     pub(crate) splice_fast: u64,
     /// The `typeid` expression operands being formed, innermost last:
     /// the open lambda count and the unevaluated depth inside each
@@ -804,6 +822,9 @@ pub struct Sema<'a, 'sm> {
     /// Set by the access check when friendship came only from such a
     /// befriended specialization.
     pub(crate) speculative_friend: std::cell::Cell<bool>,
+    /// Namespace `std::meta` (primary context) once found: the associated
+    /// namespace of `std::meta::info` for ADL (`overload/adl.rs`).
+    pub(crate) std_meta_ns: std::cell::Cell<Option<DeclId>>,
     /// Access errors reported, as (member, location, innermost context),
     /// so a replayed check does not repeat one its instantiation redid.
     pub(crate) access_failed: kiln_source::fx::FxHashSet<(DeclId, Loc, DeclId)>,
@@ -873,7 +894,7 @@ pub struct Sema<'a, 'sm> {
     pub(crate) walk_stack: std::cell::RefCell<Vec<ExprId>>,
     /// [`Sema::walk_stack`] for the implicit-conversion walk, whose work
     /// items carry the context location.
-    pub(crate) conv_walk_stack: Vec<(ExprId, Loc)>,
+    pub(crate) conv_walk_stack: Vec<(ExprId, Loc, bool)>,
     /// The reused buffers of [`Sema::exprs_equivalent`] (WP-645).
     pub(crate) equiv_scratch: std::cell::RefCell<kiln_ast::types::EquivScratch>,
     /// The reused argument and option buffers of call-candidate
@@ -999,6 +1020,13 @@ pub struct Sema<'a, 'sm> {
     /// needed (spec/annotations.md §5): the specialization maps to its
     /// pattern.
     pub(crate) uninstantiated_annots: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// Set while the parser reads a base-specifier's
+    /// attribute-specifier-seq: an annotation operand naming a pack is
+    /// kept, since the base-specifier may turn out to be a pack expansion
+    /// whose pattern includes it ([temp.variadic]/5.4; WP-867). The
+    /// parser checks it once the `...` is known
+    /// ([`Sema::check_base_annotation_packs`]).
+    pub(crate) base_annotation_packs: bool,
     /// The annotation each annotation attribute already produced: one
     /// written on a declaration's leading attribute-specifier-seq
     /// appertains to every declarator's entity and is one annotation
@@ -1190,6 +1218,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             consteval_only_records: kiln_source::fx::FxHashMap::default(),
             consteval_only_pattern: kiln_source::fx::FxHashSet::default(),
             subst_expr_depth: 0,
+            call_recovery: None,
             subst_template_id: false,
             coro_aligned_allocation: false,
             lax_vector_conversions: LaxVectorConversions::All,
@@ -1218,6 +1247,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_out: String::new(),
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
             cfg_body: cfg::BodyCfg::default(),
+            uninit_scratch: uninit::Scratch::default(),
             inferred_noreturn: kiln_source::fx::FxHashSet::default(),
             gsl_inferred_pointers: kiln_source::fx::FxHashSet::default(),
             in_typedef_instantiation: false,
@@ -1266,6 +1296,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             requires_param_scopes: 0,
             decomp_written: std::collections::HashMap::new(),
             binding_packs: std::collections::HashSet::new(),
+            shadow_ctor: Vec::new(),
             binding_pack_elems: std::collections::HashMap::new(),
             refs_minus_assign: std::collections::HashMap::new(),
             attr_macros: (0, Vec::new()),
@@ -1324,6 +1355,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cast_ignores_base_access: false,
             dependent_access: kiln_source::fx::FxHashMap::default(),
             speculative_friend: std::cell::Cell::new(false),
+            std_meta_ns: std::cell::Cell::new(None),
             access_failed: kiln_source::fx::FxHashSet::default(),
             replaying_access: false,
             init_entity: None,
@@ -1374,6 +1406,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             unparsed_default_args: kiln_source::fx::FxHashMap::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
             uninstantiated_annots: kiln_source::fx::FxHashMap::default(),
+            base_annotation_packs: false,
             annot_of_attr: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
@@ -2106,8 +2139,11 @@ fn is_sfinae_failure(id: DiagId) -> bool {
         DiagId::sema_cce_narrowing_value
             | DiagId::sema_designated_init_reordered
             | DiagId::sema_init_list_constant_narrowing
+            | DiagId::sema_init_list_constant_narrowing_const_reference
             | DiagId::sema_init_list_type_narrowing
+            | DiagId::sema_init_list_type_narrowing_const_reference
             | DiagId::sema_init_list_variable_narrowing
+            | DiagId::sema_init_list_variable_narrowing_const_reference
             | DiagId::sema_initializer_overrides
             | DiagId::sema_initializer_union_overrides
     )
