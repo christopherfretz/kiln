@@ -1733,51 +1733,149 @@ collected, and only the temporary bound directly to `__range` is extended.
 Templates collect again when the range is substituted (`templ/subst/stmts.rs`
 `range_for`).
 
-**Returned locals (WP-204, `class/temporary/stack_addr.rs`).**
-`Sema::check_return_lifetime(c, ret)` runs on every converted
-non-dependent return operand (clang `checkExprLifetime`, `LK_Return`). A
-reference return first gets the direct-temporary check above
-(`check_dangling_temporary`); then the operand is walked like clang's
-`visitLocalsRetainedByReferenceBinding` (reference return: through
-parens, no-op / derived-to-base casts, `.` member access, subscripts of
-arrays, `*` of a pointer, the comma's right operand, both `?:` arms, and
-the initializer of a local reference) or `visitLocalsRetainedByInitializer`
-(otherwise: `&`, array decay, no-op / bit / base casts, pointer `+`/`-`,
-both `?:` arms, the initializer of a `const` local read by
-lvalue-to-rvalue conversion, and each capture initializer of a lambda).
-Each automatic variable or parameter reached is `{address of|reference to}
-stack memory associated with {local variable|parameter} 'x' returned`
-[-Wreturn-stack-address] at the first reference/`const` variable or
-capture on the path (else at the name), with one note per path step:
-`binding reference variable 'r' here` / `via initialization of variable
-'p' here`, `captured by reference here`, `implicitly captured by
-reference due to use here` (located at the capture-default), `captured by
-reference via initialization of lambda capture 'r'`. A temporary reached
-through a local reference is `returning reference to local temporary
-object` (reference return; an error in C++26, a warning before, as
-above) or `returning address of local temporary
-object`, with the same notes. A GNU `&&label` reached the same way is
-`returning address of label, which is local` [-Wreturn-stack-address]
-(WP-424). Reference parameters, statics,
-`->` access, captured variables named inside a lambda and aggregate
-(non-lambda) prvalues are not followed. The warning is
-`per_instantiation` (diag.md §7.4): as in clang, a non-dependent return
-warns in the template definition and once more in each instantiation
-(WP-231).
+**Lifetime analysis (WP-204, WP-227, WP-674; `class/temporary/lifetime.rs`,
+`class/temporary/gsl.rs`; clang 19 `CheckExprLifetime.cpp`).** One walk
+serves four entities, run after the initializer is built (and, for a
+variable, after lifetime extension):
 
-**Dangling local pointers (WP-227, clang `LK_Extended` on a pointer
-variable).** `check_dangling_pointer_var(v, init)` (`stack_addr.rs`) runs
-after lifetime extension on the initializer of a non-dependent
-pointer-typed variable (through `ExprWithCleanups` and a one-element
-braced list): it is walked like a returned value, and each temporary
-reached only through `&`/array decay (`const int* p = U{1, 2};`, a
-member array of a class prvalue, a `?:` arm) is `temporary whose address
-is used as value of local variable 'p' will be destroyed at the end of
-the full-expression` [-Wdangling] at the temporary. A lifetime-extended
-temporary or a named array is not. Not covered: a reference variable
-bound through a pointer (`const int* const& r = U{5};`, clang's `bound
-to local reference`), assignments (`-Wdangling-assignment`) and pointer
-members with an NSDMI.
+- `check_var_lifetime(v, init)`: a non-implicit variable (`LK_Extended`),
+  and each element of its braced aggregate initializer as a subobject
+  (an array element, a base, a field, the active union member; braces
+  around one scalar or a same-type initializer are the variable itself);
+- `check_member_init_lifetime(field, init)`: a mem-initializer
+  (`LK_MemInitializer`);
+- `check_return_lifetime(c, ret)`: a converted `return` operand,
+  including a braced `return {...}` (`LK_Return`);
+- `check_assignment_lifetime(lhs, rhs)`: a built-in assignment or
+  compound assignment to a pointer, and a class's `operator=` (with the
+  converted right operand) when the left operand is a gsl Pointer
+  (`LK_Assignment`).
+
+Type-dependent initializers, and entities of dependent type (a `T`
+variable or member, a return in a template's generic or
+deduced-return-type lambda, whose return type is still dependent) are
+skipped, as clang's dependent `InitializationSequence` checks nothing;
+templates are checked again at instantiation. A glvalue initializer is walked as clang's
+`visitLocalsRetainedByReferenceBinding`, a prvalue as
+`visitLocalsRetainedByInitializer`:
+
+- *reference binding*: through full-expressions, transparent braces,
+  rvalue subobject adjustments (parens, `__extension__`, no-op and
+  derived-to-base casts, `.` of a non-reference non-bit-field member,
+  `.*`, the comma's right operand), glvalue-preserving casts, the
+  array operand of a subscript, and a default member initializer; it
+  stops at a temporary (then walks the temporary's initializer), an
+  automatic variable or parameter of non-reference type, the
+  initializer of a local reference (not a reference parameter), `*p`
+  (walks `p`), both `?:` arms and a call (below).
+- *initializer*: through `&` and array decay (a temporary's address),
+  object-preserving casts (no-op, bit, base/derived, dynamic, to-union,
+  user-defined and constructor conversions, integral/pointer casts,
+  vector splat), `std::initializer_list` construction (its backing
+  array), a braced list (elements of an object initialized again only
+  for an assignment or a nested walk; reference members bind), lambda
+  captures (each capture initializer), the copy or move of a
+  temporary, pointer `+`/`-`, both `?:` arms, `&&label`, and an
+  lvalue-to-rvalue read of a `const` variable or temporary (its
+  initializer).
+- *calls*: an argument bound to a `[[clang::lifetimebound]]` parameter
+  (written on any declaration of the callee or of its template
+  pattern), the object of a member function whose implicit object
+  parameter is `lifetimebound`, and the left operand of an assignment
+  operator returning an lvalue reference to its class (or, for a
+  non-member, to its first parameter's type). clang 19's implicit
+  `lifetimebound` on the parameter of `std::addressof`, `__addressof`,
+  `as_const`, `forward`, `forward_like`, `move` and `move_if_noexcept`
+  (exactly one non-variadic parameter, declared in `std`) applies too,
+  as does `__builtin_addressof`'s. Constructors count like functions.
+- *gsl* (only while `-Wdangling-gsl` is enabled): a gsl Pointer
+  constructed from an argument; a member function of an Owner or Pointer
+  class in `std` (or a reserved namespace) returning a pointer or a
+  Pointer named `begin`/`end` and variants, `c_str`, `data`, `get`,
+  `find`, `equal_range`, `lower_bound`, `upper_bound`, or returning a
+  reference named `operator[]`, `operator*`, `front`, `back`, `at`,
+  `top`, `value`; a conversion function to a Pointer; and the `std`
+  free functions `begin`/`end`/... and `data` (pointer result) or `get`
+  and `any_cast` (reference result) of one Owner/Pointer argument. A
+  member of a temporary (`Temp().ptr`) is not followed, nor a value
+  copied from a reference.
+
+A class is an Owner or a Pointer by `[[gsl::Owner]]`/`[[gsl::Pointer]]`
+on any declaration, by clang 19's implicit `std` annotations (`StdOwners`:
+`any`, `array`, `basic_regex`, `basic_string`, `deque`,
+`forward_list`, `vector`, `list`, `map`, `multiset`, `multimap`,
+`optional`, `priority_queue`, `queue`, `set`, `stack`, `unique_ptr`,
+the four unordered containers, `variant`; `StdPointers`:
+`basic_string_view`, `reference_wrapper`, `regex_iterator`, `span`),
+by being a class named `iterator`/`const_iterator`/
+`reverse_iterator`/`const_reverse_iterator` nested in a `std` container,
+or by being named by such a typedef of a `std` container (recorded when
+the typedef is declared, and at instantiation only for a `typename
+T::iterator`-style dependent pattern). The name rules apply to class
+definitions and patterns, not to partial or explicit specializations
+(`std::vector<bool>` is neither); a specialization itself (its own
+`spec_info`) never matches a name rule. An implicit instantiation takes
+the kind of what it was instantiated from: the primary template's
+pattern, or, from a partial specialization, only that partial
+specialization's own attribute.
+
+Each local reached is judged by the entity (clang's `TemporaryVisitor`),
+located at the first variable, default member initializer or capture on
+the path (else at the local), with notes `binding reference variable
+'r' here` / `via initialization of variable 'p' here`, `initializing
+field 'f' with default member initializer`, and the capture notes:
+
+- *variable*: a temporary that the path does not extend (a step other
+  than a capture) is `temporary {whose address is used as value of|bound
+  to} local {variable|reference} 'v' will be destroyed at the end of the
+  full-expression` [-Wdangling], `... local member of 'v' ...`
+  (`sema_dangling_variable_member`) for a subobject, or `array backing
+  {the|local} initializer list subobject of local variable 'v' will be
+  destroyed ...` [-Wdangling-initializer-list]; a gsl Owner temporary
+  reached only through gsl steps is `object backing the pointer will be
+  destroyed at the end of the full-expression` [-Wdangling-gsl]. A path
+  through another variable's initializer is not diagnosed.
+- *mem-initializer*: a temporary is `{reference|backing array for
+  'std::initializer_list'} {|subobject of }member 'f' binds to a
+  temporary object whose lifetime is shorter than the lifetime of the
+  constructed object` [-Wdangling-field], or the error `reference
+  {|subobject of }member 'f' binds to a temporary object whose lifetime
+  would be shorter than the lifetime of the constructed object` when the
+  path would extend it ([class.base.init]/8), with `{reference|
+  std::initializer_list} member declared here`; a gsl Owner temporary is
+  `initializing pointer member 'f' to point to a temporary object ...`
+  [-Wdangling-gsl]; a by-value parameter or local is `binding reference
+  member 'f' to stack allocated {variable|parameter} 'x'` /
+  `initializing pointer member 'f' with the stack address of
+  {variable|parameter} 'x'` [-Wdangling-field].
+- *return*: `{address of|reference to} stack memory associated with
+  {local variable|parameter} 'x' returned`, `returning {reference to|
+  address of} local temporary object` (the reference form an error in
+  C++26, P2748R5 [stmt.return]/6), `returning address of label, which is
+  local` [-Wreturn-stack-address]. A local Owner reached through gsl
+  steps counts as a local (`return std::string();` from a function
+  returning `std::string_view`).
+- *assignment*: a temporary is `object backing the pointer p will be
+  destroyed at the end of the full-expression` [-Wdangling-assignment],
+  or for a gsl Owner temporary [-Wdangling-assignment-gsl] (off by
+  default, as in clang 19).
+
+The diagnostics are `per_instantiation` (diag.md §7.4): a non-dependent
+initializer warns in the template definition and in each instantiation,
+as clang does (WP-231); mem-initializer diagnostics are emitted once.
+Groups: `-Wdangling` contains `-Wdangling-assignment`,
+`-Wdangling-assignment-gsl`, `-Wdangling-field`, `-Wdangling-gsl`,
+`-Wdangling-initializer-list` and `-Wreturn-stack-address` (clang 19).
+
+Not yet (follow-ups): temporaries reached through a default member
+initializer used by an aggregate initializer (clang's
+`ShouldExtend`/`warn_unsupported_lifetime_extension`); `new`-initializers
+(`LK_New`); base and delegating mem-initializers; implicit variables
+(range-for `__range`) and structured bindings; `coro_lifetimebound`; GNU
+`?:`, compound literals and parenthesized aggregate initialization in the
+walk; clang 20+ additions (`lifetime_capture_by`, `-Wdangling-capture`,
+the `-Wdangling-gsl` extensions to more `std` members and the
+`-Wreturn-stack-address` cases of clang 22).
 
 ### 5.5 Copy elision and NRVO ([class.copy.elision])
 - **Guaranteed elision** ([dcl.init.general]/16.6.1): a prvalue of the same

@@ -119,8 +119,10 @@ impl Parser<'_, '_> {
         // declarator, `expected body of lambda expression` (WP-752).
         let mut type_attrs = Vec::new();
         self.parse_cxx11_attr_seq(&mut type_attrs);
+        let lb = self.s.take_fn_type_lifetimebound(&mut type_attrs);
         self.s.act_on_type_position_attrs(&mut type_attrs, true);
         specs.attrs.extend(type_attrs);
+        specs.attrs.extend(lb);
         let mut trailing = None;
         if let Some(arrow) = self.eat(Punct::Arrow) {
             let ty = self.parse_type_id_no_ctad().unwrap_or(kiln_ast::QualType::ERROR);

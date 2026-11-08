@@ -2152,8 +2152,32 @@ and returns the scope it names:
   [-Wignored-attributes]; clang's subject warnings apply. Tests:
   `tests/conformance/dcl.attr.grammar/sanitizer-*.cpp`,
   `gnu-no-sanitize-clang{19,22}.cpp`.
-- **Known and ignored, no diagnostic: `lifetimebound`** (WP-667; until
-  WP-674): attaches nothing; no `-Wdangling` analysis.
+- **Lifetime attributes** (WP-674; `class_b_attrs.rs`,
+  `decl_attrs.rs`; the analysis is spec/sema-class.md §5.4 "Lifetime
+  analysis"):
+  - `[[clang::lifetimebound]]` / `__attribute__((lifetimebound))`
+    (`AttrKind::LIFETIMEBOUND`) on a parameter (`a == 0`) or, written
+    after a member function's declarator, on its implicit object
+    parameter (`a == 1`). clang 19's subject checks: `'lifetimebound'
+    attribute only applies to parameters and implicit object
+    parameters` (an error) elsewhere, `'lifetimebound' attribute
+    cannot be applied to types` in a type position, and the errors
+    `'lifetimebound' attribute cannot be applied to a
+    {constructor|destructor}` and `'lifetimebound' attribute cannot be
+    applied; {static |non-}member function has no implicit object
+    parameter`. Builtin `__builtin_addressof`'s parameter carries it
+    implicitly.
+  - `[[gsl::Owner]]` / `[[gsl::Pointer]]` (`GSL_OWNER`, `GSL_POINTER`)
+    with an optional type argument (the owned / pointed-to type): only
+    on classes and class templates (`'Owner' attribute only applies to
+    structs` [-Wignored-attributes] on a union, enum or variable); `a reference type|an array type ... is an
+    invalid argument to attribute` for a reference or array argument;
+    `'Owner' and 'Pointer' attributes are not compatible` (with a note at
+    the other) when a class has both, and the same error for a repeat
+    naming a different type (as written) across the class's
+    redeclarations. The implicit `std` annotations (clang
+    `inferGslOwnerPointerAttribute`) are computed on demand by
+    `Sema::gsl_kind` (`class/temporary/gsl.rs`).
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.

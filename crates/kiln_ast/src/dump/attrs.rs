@@ -58,6 +58,8 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::ABI_TAG => "AbiTag",
         AttrKind::INTERNAL_LINKAGE => "InternalLinkage",
         AttrKind::LIFETIMEBOUND => "LifetimeBound",
+        AttrKind::GSL_OWNER => "Owner",
+        AttrKind::GSL_POINTER => "Pointer",
         AttrKind::NO_SANITIZE => "NoSanitize",
         AttrKind::MODE => "Mode",
         AttrKind::VECTOR_SIZE => "VectorSize",

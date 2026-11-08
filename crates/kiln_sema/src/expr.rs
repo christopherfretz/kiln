@@ -3587,6 +3587,8 @@ impl Sema<'_, '_> {
                 return self.recover_err(&[l, r], loc);
             }
         };
+        // clang `CheckAssignmentOperands`' lifetime check (spec/sema-class.md §5.6).
+        self.check_assignment_lifetime(l, r2);
         let res = self.builder().binary(BinaryOp::Assign, l, r2, lt, loc);
         self.mark_bitfield_if(res, l);
         self.note_volatile_assign(l);
@@ -3698,6 +3700,7 @@ impl Sema<'_, '_> {
         // P1467 [conv.double]/1: the result converts back to `E1`'s type
         // (GCC: diagnosed at `E2`).
         conv::fp_rank_check(self, r, res_ty, conv::strip_cv(self, lt));
+        self.check_assignment_lifetime(l, r2);
         let res = self.builder().compound_assign(op, l, r2, target_t, lhs_ty, res_ty, loc);
         self.mark_bitfield_if(res, l);
         res
