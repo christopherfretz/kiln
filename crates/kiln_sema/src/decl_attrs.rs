@@ -74,6 +74,13 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::NAKED => "naked",
         AttrKind::MAY_ALIAS => "may_alias",
         AttrKind::INIT_PRIORITY => "init_priority",
+        AttrKind::CONSTRUCTOR => "constructor",
+        AttrKind::DESTRUCTOR => "destructor",
+        AttrKind::CLEANUP => "cleanup",
+        AttrKind::INTERNAL_LINKAGE => "internal_linkage",
+        AttrKind::COMMON => "common",
+        AttrKind::TLS_MODEL => "tls_model",
+        AttrKind::RETURNS_TWICE => "returns_twice",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -422,6 +429,10 @@ impl Sema<'_, '_> {
         self.take_annotations(d, attrs);
         self.check_alignas_subject(d, attrs);
         self.check_init_priority(d, attrs);
+        self.check_ctor_dtor_attrs(d, attrs);
+        self.check_cleanup_attrs(d, attrs);
+        self.check_internal_linkage_attrs(d, attrs);
+        self.check_tls_model_attrs(d, attrs);
         self.check_visibility_attrs(d, attrs);
         self.check_weak_attrs(d, attrs);
         let kind = self.ast.decls.get(d).kind();
@@ -583,6 +594,9 @@ impl Sema<'_, '_> {
             // with a warning); `MinSizeAttr`'s is an error.
             AttrKind::NAKED if !kind.is_function() => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "naked", "functions")
+            }
+            AttrKind::RETURNS_TWICE if !kind.is_function() => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, "returns_twice", "functions")
             }
             AttrKind::MIN_VECTOR_WIDTH if !kind.is_function() => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "min_vector_width", "functions")
@@ -828,7 +842,8 @@ impl Sema<'_, '_> {
             self.emit(msg);
             out.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::WEAKREF);
         }
-        let internal = kiln_abi::mangle::has_internal_linkage(&self.ast, d);
+        let internal = kiln_abi::mangle::has_internal_linkage(&self.ast, d)
+            || has(self, &out, AttrKind::INTERNAL_LINKAGE);
         if let Some(w) = out.iter().copied().find(|&a| self.ast.attrs.get(a).kind == AttrKind::WEAK)
             && internal
         {

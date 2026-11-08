@@ -40,6 +40,12 @@ sema_cdtor_function_try_handler_mem_expr = Warning [Exceptions] (1) "cannot refe
 sema_choose_expr_requires_constant = Error (0) "'__builtin_choose_expr' requires a constant expression";
 sema_circular_arrow = Error (0) "circular pointer delegation detected";
 sema_class_spec_not_in_enclosing_ns = Error (2) "class template specialization of '{0}' not in a namespace enclosing '{1}'";
+sema_cleanup_arg_named_not_function = Error (1) "'cleanup' argument {0} is not a function";
+sema_cleanup_arg_not_function = Error (0) "'cleanup' argument is not a function";
+sema_cleanup_arg_not_single_function = Error (1) "'cleanup' argument {0} is not a single function";
+sema_cleanup_ext = Warning [GccCompat] (0) "GCC does not allow the 'cleanup' attribute argument to be anything other than a simple identifier";
+sema_cleanup_func_arg_incompatible_type = Error (3) "'cleanup' function {0} parameter has type {1} which is incompatible with type {2}";
+sema_cleanup_func_must_take_one_arg = Error (1) "'cleanup' function {0} must take 1 parameter";
 sema_cmp_category_not_found = Error (2) "cannot {1:use builtin operator '<=>'|default 'operator<=>'} because type '{0}' was not found; include <compare>";
 sema_compare_enum_enum_deprecated = Warning [DeprecatedEnumCompare] (3) "{0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} different enumeration types ({1} and {2}) is deprecated";
 sema_comparison_always = Warning [TautologicalCompare] (2) "{0:self-|array }comparison always evaluates to {1:a constant|true|false|'std::strong_ordering::equal'}";
