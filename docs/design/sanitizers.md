@@ -160,8 +160,9 @@ The static data are private, unnamed_addr globals:
   - missing_return and builtin_unreachable: only the location.
 
 The location is the operator's location (the `+` of `a + b`, the `-` of
-`-a`). For `return` it is the closing brace of the function, and for
-`__builtin_unreachable` it is the call.
+`-a`). For `return` it is the function's name in its definition
+(clang's `CurCodeDecl` location), and for `__builtin_unreachable` it is
+the call.
 
 The check sequences (O0, `int` operands shown):
 
@@ -281,18 +282,20 @@ UBSan is pure frontend IR, so it can be compared line by line against
 
 ## 4. Tests
 
-- Exact IR tests against clang 19 for UBSan checks in all three modes,
-  and for the function attributes and global metadata, both before
-  passes.
-- Driver unit tests for the grammar and its diagnostics, and strict-diag
-  corpus tests for the error wording.
-- Run tests: a run test that needs compiler-rt says `//@ requires:
-  sanitizer-runtime`. The harness probes for it once, at startup, by
-  linking an empty `-fsanitize=address,undefined` program with the
-  oracle clang. Machines without the runtime skip these tests instead of
-  failing. CI installs `libclang-rt-19-dev` (and the 22 package for the
-  clang 22 leg), so CI does run them. Trap-mode run tests need no
-  runtime and are always on.
+- Exact IR tests (`expect: ir`, before passes) for the UBSan checks in
+  recover, trap, abort and mixed modes, at `-O0` and `-O2`, under C++17,
+  C++20 and `-fwrapv`, and for the TSan and HWASan function attributes
+  (`tests/conformance/driver.sanitize/`). They hold under both oracles.
+- ASan and MSan cannot be exact IR tests: under them clang keeps local
+  value names (and clang 22 adds alloca `!annotation`s), and kiln does
+  not name values. A driver integration test
+  (`crates/kiln_driver/tests/codegen.rs`,
+  `sanitizer_frontend_attributes`) checks their attributes, global
+  markers and lifetime markers instead.
+- Driver unit tests for the grammar and its diagnostics.
+- A trap-mode run test (no runtime). Recover-mode run tests need
+  compiler-rt and a `requires: sanitizer-runtime` harness capability;
+  that is a follow-up (§5).
 
 ## 5. Not covered by WP-675
 
@@ -301,7 +304,14 @@ These are listed with BACKLOG rows in spec/landed/codegen/WP-675.md:
 - UB checks: null, alignment and object-size (type_mismatch), array
   bounds, bool and enum loads, float-cast-overflow, pointer-overflow,
   vptr, function, nonnull-attribute, returns-nonnull-attribute, builtin,
-  and the unsigned and implicit-conversion `integer` checks.
+  and the implicit-conversion `integer` checks
+  (unsigned-integer-overflow and unsigned-shift-base are covered).
+- Local value names under ASan/MSan (clang keeps them for the stack
+  frame descriptors), and clang 22's alloca annotations there.
+- `-ftrapv`, `-fsanitize-merge=`, and checks on atomic `++`/`--` and
+  compound assignment to atomics.
+- The `requires: sanitizer-runtime` harness capability and
+  recover-mode run tests.
 - Ignorelist contents. Files are checked for existence but not applied.
 - The memory sanitizer's use-after-dtor callbacks.
 - dataflow, cfi, kcfi, safe-stack, shadow-call-stack, scudo, memtag,
