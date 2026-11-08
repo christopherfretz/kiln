@@ -26,6 +26,7 @@ EnumFloatConversion = "enum-float-conversion" [DeprecatedEnumFloatConversion];
 Extra = "extra" [InitializerOverrides, UnusedButSetParameter];
 Format = "format" [FormatExtraArgs, FormatSecurity, FormatInvalidSpecifier, FormatInsufficientArgs];
 Gnu = "gnu" [GnuAlignofExpression, GnuCaseRange, GnuDesignator, GnuEmptyStruct, GnuFlexibleArrayInitializer, GnuFlexibleArrayUnionMember, GnuVariableSizedTypeNotAtEnd, VlaExtension, GnuFoldingConstant, GnuImaginaryConstant, GnuIncludeNext, GnuLabelAsValue, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, ZeroLengthArray];
+IncompatiblePointerTypes = "incompatible-pointer-types" [IncompatiblePointerTypesDiscardsQualifiers];
 LoopAnalysis = "loop-analysis" [ForLoopAnalysis, RangeLoopAnalysis];
 Most = "most" [Comment, Format, FrameAddress, InfiniteRecursion, IntInBoolContext, Multichar, RangeLoopConstruct, Reorder, ReturnType, TautologicalCompare, Trigraphs, Uninitialized, UnknownPragmas, Unused, OverloadedVirtual];
 Narrowing = "narrowing" [Cxx11Narrowing, FloatConversionRank];

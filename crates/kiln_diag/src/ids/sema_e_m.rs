@@ -60,6 +60,7 @@ sema_explicit_spec_storage_class = ExtWarn [ExplicitSpecializationStorageClass] 
 sema_expr_not_cce = Error (1) "{0} is not a constant expression";
 sema_expr_not_ice = Error (0) "expression is not an integral constant expression";
 sema_expr_not_ice_folded = Extension [GnuFoldingConstant] (0) "expression is not an integral constant expression; folding it to a constant is a GNU extension";
+sema_expr_not_string_literal = Error (0) "expression is not a string literal";
 sema_ext_adl_only_template_id = ExtWarn [Cxx20Extensions] (0) "use of function template name with no prior declaration in function call with explicit template arguments is a C++20 extension";
 sema_ext_decomp_decl_spec = ExtWarn [Cxx20Extensions] (1) "structured binding declaration declared {0} is a C++20 extension";
 sema_ext_decomp_decl_spec_19 = ExtWarn [Cxx20Extensions] (1) "decomposition declaration declared {0} is a C++20 extension";
