@@ -359,7 +359,7 @@ impl Cg<'_> {
 
     /// clang `EmitGlobalFunctionDefinition`: the `@llvm.global_ctors` /
     /// `@llvm.global_dtors` entries of GNU `constructor` / `destructor`
-    /// function `d`, defined as `f` (AttrDocs "constructor, destructor";
+    /// function `d`, defined as `f` (`AttrDocs` "constructor, destructor";
     /// WP-807).
     pub(crate) fn add_ctor_dtor_entries(&mut self, d: DeclId, f: FuncId) {
         if let Some(p) = self.ctor_dtor_priority(d, AstAttr::CONSTRUCTOR) {

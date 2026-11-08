@@ -1,5 +1,5 @@
 //! GNU `constructor` / `destructor` (spec/sema.md §4.5; clang
-//! `handleConstructorAttr` / `handleDestructorAttr`, AttrDocs
+//! `handleConstructorAttr` / `handleDestructorAttr`, `AttrDocs`
 //! "constructor, destructor"): a function run before `main` (after it,
 //! for `destructor`) through `@llvm.global_ctors` / `@llvm.global_dtors`,
 //! at the optional priority (65535 when none is written).
@@ -33,7 +33,7 @@ impl Sema<'_, '_> {
         syntax: AttrSyntax,
         args: &[AttrArg],
         loc: Loc,
-    ) -> Option<AttrId> {
+    ) -> AttrId {
         let a = match args.first() {
             Some(AttrArg::Expr(e)) => e.raw(),
             // Not an expression (cannot be written: the parser hands
@@ -42,7 +42,7 @@ impl Sema<'_, '_> {
             None => 0,
         };
         let b = u32::try_from(args.len()).unwrap_or(u32::MAX);
-        Some(self.ast.attrs.push(AttrNode { kind, syntax, flags: 0, loc, a, b }))
+        self.ast.attrs.push(AttrNode { kind, syntax, flags: 0, loc, a, b })
     }
 
     /// Checks the `constructor` / `destructor` attributes among `attrs`

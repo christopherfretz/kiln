@@ -1,12 +1,12 @@
 //! clang `internal_linkage` (spec/sema.md §4.5; clang
-//! `mergeInternalLinkageAttr`, AttrDocs "internal_linkage"): the
+//! `mergeInternalLinkageAttr`, `AttrDocs` `internal_linkage`): the
 //! variable, function or class it appertains to has internal linkage, as
 //! if declared `static`, and a class's members with it
 //! (`kiln_abi::mangle::has_internal_linkage`, through
 //! [`kiln_ast::Ast::has_internal_linkage_attr`]). The mangling follows
 //! from the linkage: an internal name at namespace scope takes `L`.
 
-use kiln_ast::attr::AttrKind;
+use kiln_ast::attr::{AttrKind, AttrNode};
 use kiln_ast::decl::{DeclKind, TemplLinkKind};
 use kiln_ast::{AttrId, DeclId};
 use kiln_diag::DiagId;
@@ -108,37 +108,46 @@ impl Sema<'_, '_> {
                 && let Some(prev) = self.ast.prev(d)
                 && !self.ast.has_internal_linkage_attr(prev)
             {
-                // clang `checkNewAttributesAfterDef` runs first: after
-                // the definition the attribute is ignored with a warning.
-                let def = if kind == DeclKind::Var {
-                    self.ast.redecls_of(prev).find(|&r| r != d && self.is_var_definition(r))
-                } else {
-                    self.ast.definition(prev).filter(|&f| f != d)
-                };
-                if let Some(def) = def {
-                    let note =
-                        self.diag(DiagId::note_previous_definition, self.ast.decls.get(def).loc());
-                    let msg = self
-                        .diag(DiagId::sema_attribute_precede_definition, node.loc)
-                        .with_note(note);
-                    self.emit(msg);
-                } else if !dropped_redecl {
-                    dropped_redecl = true;
-                    let note = self
-                        .diag(DiagId::note_previous_declaration, self.ast.decls.get(prev).loc());
-                    let msg = self
-                        .diag(
-                            DiagId::sema_attribute_missing_on_first_decl,
-                            self.ast.decls.get(d).loc(),
-                        )
-                        .arg(name)
-                        .with_note(note);
-                    self.emit(msg);
-                }
+                self.internal_linkage_on_redecl(d, prev, node, name, &mut dropped_redecl);
                 attrs.remove(i);
                 continue;
             }
             i += 1;
+        }
+    }
+
+    /// Diagnoses `internal_linkage` attribute `node` (shown as `name`)
+    /// added by redeclaration `d` of `prev`, which lacks it (clang
+    /// `checkNewAttributesAfterDef` first: after the definition it is
+    /// ignored with a warning; else an error, once per declaration).
+    fn internal_linkage_on_redecl(
+        &mut self,
+        d: DeclId,
+        prev: DeclId,
+        node: AttrNode,
+        name: String,
+        reported: &mut bool,
+    ) {
+        let def = if self.kind_of(d) == DeclKind::Var {
+            self.ast.redecls_of(prev).find(|&r| r != d && self.is_var_definition(r))
+        } else {
+            self.ast.definition(prev).filter(|&f| f != d)
+        };
+        if let Some(def) = def {
+            let prev_def =
+                self.diag(DiagId::note_previous_definition, self.ast.decls.get(def).loc());
+            let msg =
+                self.diag(DiagId::sema_attribute_precede_definition, node.loc).with_note(prev_def);
+            self.emit(msg);
+        } else if !*reported {
+            *reported = true;
+            let prev_decl =
+                self.diag(DiagId::note_previous_declaration, self.ast.decls.get(prev).loc());
+            let msg = self
+                .diag(DiagId::sema_attribute_missing_on_first_decl, self.ast.decls.get(d).loc())
+                .arg(name)
+                .with_note(prev_decl);
+            self.emit(msg);
         }
     }
 }

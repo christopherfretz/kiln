@@ -1,5 +1,5 @@
 //! GNU `cleanup(f)` on a local variable (clang `EmitAutoVarCleanups` /
-//! `CallCleanupFunction`, AttrDocs "cleanup", spec/landed/codegen/WP-807.md):
+//! `CallCleanupFunction`, `AttrDocs` "cleanup", spec/landed/codegen/WP-807.md):
 //! a `NormalAndEHCleanup` pushed after the variable's destructor cleanup,
 //! so `f(&v)` runs first on every exit from the scope (fallthrough,
 //! `return`, `break` / `continue`, `goto`, and unwinding).
@@ -38,7 +38,7 @@ impl Cg<'_> {
         // clang declares the function here (`GetAddrOfFunction`), before
         // the scope's calls; a failure is reported by the call.
         let _ = self.get_fn(func);
-        self.push_cleanup(Cleanup::CleanupFn { func, addr });
+        self.push_cleanup(Cleanup::AttrFn { func, addr });
     }
 
     /// `CallCleanupFunction::Emit`: calls `func` with the address `addr`

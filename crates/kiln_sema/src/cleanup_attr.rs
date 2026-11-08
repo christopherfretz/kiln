@@ -1,5 +1,5 @@
 //! GNU `cleanup(f)` on a local variable (spec/sema.md §4.5; clang
-//! `handleCleanupAttr`, AttrDocs "cleanup"): `f(&v)` runs when `v` goes
+//! `handleCleanupAttr`, `AttrDocs` "cleanup"): `f(&v)` runs when `v` goes
 //! out of scope, along every exit from its scope (codegen's
 //! `Cleanup::CleanupFn`, before the variable's destructor).
 //!
@@ -30,7 +30,7 @@ impl Sema<'_, '_> {
         syntax: AttrSyntax,
         args: &[AttrArg],
         loc: Loc,
-    ) -> Option<AttrId> {
+    ) -> AttrId {
         let a = match args.first() {
             Some(AttrArg::Expr(e)) => e.raw(),
             Some(_) => u32::MAX,
@@ -38,7 +38,7 @@ impl Sema<'_, '_> {
         };
         let b = u32::try_from(args.len()).unwrap_or(u32::MAX);
         let kind = AttrKind::CLEANUP;
-        Some(self.ast.attrs.push(AttrNode { kind, syntax, flags: 0, loc, a, b }))
+        self.ast.attrs.push(AttrNode { kind, syntax, flags: 0, loc, a, b })
     }
 
     /// Checks the `cleanup` attributes among `attrs` of declaration `d`,
