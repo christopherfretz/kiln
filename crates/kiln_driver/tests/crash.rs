@@ -106,7 +106,7 @@ fn banner_and_reproducer() {
     let ii = &written[0];
     let sh = &written[1];
     let stem = ii.file_name().unwrap().to_string_lossy().into_owned();
-    assert!(stem.starts_with("a-") && stem.ends_with(".ii"), "{stem}");
+    assert!(stem.starts_with("a-") && ii.extension().is_some_and(|e| e == "ii"), "{stem}");
     assert_eq!(sh.with_extension("ii"), *ii);
     // The .ii is the preprocessed input, with line markers.
     let pre = std::fs::read_to_string(ii).unwrap();
@@ -248,5 +248,5 @@ fn crash_outside_any_input_writes_only_the_script() {
     assert_eq!(written, listed(&err));
     assert_eq!(written.len(), 1);
     let name = written[0].file_name().unwrap().to_string_lossy().into_owned();
-    assert!(name.starts_with("a-") && name.ends_with(".sh"), "{name}");
+    assert!(name.starts_with("a-") && written[0].extension().is_some_and(|e| e == "sh"), "{name}");
 }

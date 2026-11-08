@@ -251,23 +251,8 @@ impl Test<'_> {
         if let Some(reason) = self.mode_skip(&spec, &source) {
             return (Status::Skip, Some(reason), String::new());
         }
-        if !spec.modules.is_empty() && !kind.speaks_clang() {
-            let reason = "not supported by this compiler (`module:` needs kiln or clang)";
-            return (Status::Skip, Some(reason.to_owned()), String::new());
-        }
-        if spec.verify && !kind.speaks_clang() {
-            let reason = "not supported by this compiler (`verify` needs kiln or clang)";
-            return (Status::Skip, Some(reason.to_owned()), String::new());
-        }
-        if matches!(spec.expect, Expect::Cfg | Expect::Ast) && !kind.speaks_clang() {
-            let name = if spec.expect == Expect::Cfg { "cfg" } else { "ast" };
-            let reason =
-                format!("not supported by this compiler (`expect: {name}` needs kiln or clang)");
+        if let Some(reason) = unsupported_by(&spec, kind) {
             return (Status::Skip, Some(reason), String::new());
-        }
-        if spec.expect == Expect::Ice && kind != CompilerKind::Kiln {
-            let reason = "not supported by this compiler (`expect: ice` needs kiln)";
-            return (Status::Skip, Some(reason.to_owned()), String::new());
         }
         if let Some((status, why)) = debugger_gate(&spec, self.cfg.require_debuggers) {
             return (status, Some(why), String::new());
@@ -1558,6 +1543,28 @@ fn debugger_program_in(name: &str, path: Option<&std::ffi::OsStr>) -> Option<Pat
 /// runtime before the first command, which takes seconds on a busy CI
 /// runner. A hung session still ends, and fails, deterministically.
 const DEBUGGER_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Why a compiler of `kind` cannot run `spec` at all (a skip), if it
+/// cannot.
+fn unsupported_by(spec: &TestSpec, kind: CompilerKind) -> Option<String> {
+    let needs = |what: &str, who: &str| {
+        Some(format!("not supported by this compiler (`{what}` needs {who})"))
+    };
+    if !spec.modules.is_empty() && !kind.speaks_clang() {
+        return needs("module:", "kiln or clang");
+    }
+    if spec.verify && !kind.speaks_clang() {
+        return needs("verify", "kiln or clang");
+    }
+    if matches!(spec.expect, Expect::Cfg | Expect::Ast) && !kind.speaks_clang() {
+        let name = if spec.expect == Expect::Cfg { "expect: cfg" } else { "expect: ast" };
+        return needs(name, "kiln or clang");
+    }
+    if spec.expect == Expect::Ice && kind != CompilerKind::Kiln {
+        return needs("expect: ice", "kiln");
+    }
+    None
+}
 
 /// Whether the last `-f[no-]crash-diagnostics[=…]` of `args` turns crash
 /// diagnostics off (spec/driver.md "Internal compiler errors").
