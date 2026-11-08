@@ -1955,7 +1955,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if let Some((t, args)) = self.spec_of(c) {
             // A variable template specialization: <template-prefix>
             // <template-args> (clang `mangleClosurePrefix`).
-            self.template_prefix(t, stop, Structor::Complete, None);
+            self.template_prefix(t, stop, Structor::Complete);
             self.template_args(args);
         } else {
             if let Some(p) = self.parent(c) {
@@ -1987,7 +1987,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             // <unscoped-name> / <unscoped-template-name> <template-args>
             let std = !at_top;
             if let Some((t, args)) = spec {
-                self.unscoped_template(t, std, Some(d));
+                self.unscoped_template(t, std);
                 self.template_args_of(t, args);
             } else {
                 if std {
@@ -2003,7 +2003,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.method_quals(d);
         let p = parent.expect("nested name has a parent");
         if let Some((t, args)) = spec {
-            self.template_prefix(t, stop, v, Some(d));
+            self.template_prefix(t, stop, v);
             self.template_args_of(t, args);
         } else {
             self.prefix(p, stop);
@@ -2083,7 +2083,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             return;
         }
         if let Some((t, args)) = self.spec_of(dc) {
-            self.template_prefix(t, stop, Structor::Complete, Some(dc));
+            self.template_prefix(t, stop, Structor::Complete);
             self.template_args(args);
         } else {
             if let Some(c) = self.closure_prefix_decl(dc) {
@@ -2100,15 +2100,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
 
     /// <template-prefix> of template `t` within a nested name.
     /// `v` is the structor variant of a constructor template
-    /// specialization (`C1`/`C2`); `spec` the specialization named,
-    /// whose internal linkage at namespace scope gives the name its `L`.
-    fn template_prefix(
-        &mut self,
-        t: DeclId,
-        stop: Option<DeclId>,
-        v: Structor,
-        spec: Option<DeclId>,
-    ) {
+    /// specialization (`C1`/`C2`). The template's own internal linkage at
+    /// namespace scope gives the name its `L` ([`Self::template_l_prefix`]).
+    fn template_prefix(&mut self, t: DeclId, stop: Option<DeclId>, v: Structor) {
         if self.try_std_abbrev(t) {
             return;
         }
@@ -2122,18 +2116,16 @@ impl<'a, 'b> Mangler<'a, 'b> {
         // A nested template name takes no implicit tags (clang's
         // `mangleTemplatePrefix` is not passed them; an unscoped one is).
         let extra = self.extra_tags.take();
-        if let Some(spec) = spec {
-            self.l_prefix(spec);
-        }
+        self.template_l_prefix(t);
         self.unqualified(t, v);
         self.extra_tags = extra;
         self.subs.push(key);
     }
 
     /// <unscoped-template-name> of template `t` (`St`-prefixed in `std`;
-    /// `L`-prefixed when `spec`, the specialization named, has internal
-    /// linkage, clang `isInternalLinkageDecl`).
-    fn unscoped_template(&mut self, t: DeclId, std: bool, spec: Option<DeclId>) {
+    /// `L`-prefixed when the template has internal linkage,
+    /// [`Self::template_l_prefix`]).
+    fn unscoped_template(&mut self, t: DeclId, std: bool) {
         if self.try_std_abbrev(t) {
             return;
         }
@@ -2144,11 +2136,22 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if std {
             self.out.push_str("St");
         }
-        if let Some(spec) = spec {
-            self.l_prefix(spec);
-        }
+        self.template_l_prefix(t);
         self.unqualified(t, Structor::Complete);
         self.subs.push(key);
+    }
+
+    /// `L` for template `t` when its templated declaration has internal
+    /// linkage at namespace scope outside an unnamed namespace (clang
+    /// `mangleTemplatePrefix` passes the template itself to
+    /// `isInternalLinkageDecl`, WP-603): every specialization of a
+    /// `static` (or `const`, or `internal_linkage`) template is `L`, an
+    /// explicit specialization (`_ZL2vtIlE`) and a closure in a variable
+    /// template's initializer (`_ZNKL2laIiEMUliE_clEi`) included.
+    fn template_l_prefix(&mut self, t: DeclId) {
+        if let Some(p) = self.ast.template_info(t).and_then(|i| i.pattern) {
+            self.l_prefix(p);
+        }
     }
 
     /// <unqualified-name>: operator, constructor, destructor, conversion
