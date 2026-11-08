@@ -1196,6 +1196,7 @@ impl Sema<'_, '_> {
         let pending = std::mem::take(&mut self.volatile_assigns);
         self.warn_volatile_assigns(pending);
         self.check_delegating_cycles();
+        self.diagnose_undefined_used();
         self.diagnose_unused_file_scope_vars();
         self.reject_self_typed_var_specs();
         self.report_no_builtin_declarations();

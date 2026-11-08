@@ -1834,8 +1834,9 @@ impl Sema<'_, '_> {
     pub(crate) fn queue_default_arg_uses(&mut self, p: DeclId, loc: Loc) {
         let Some(d) = self.ast.decls.param(p).and_then(|x| x.default_arg) else { return };
         let Some(uses) = self.inst.deferred_default_uses.get(&d) else { return };
-        for (f, _) in uses.clone() {
+        for (f, at) in uses.clone() {
             self.note_used_for_instantiation(f, loc);
+            self.note_undefined_use(f, at);
         }
     }
 }

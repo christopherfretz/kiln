@@ -4187,6 +4187,54 @@ Names there are not odr-used.
   capture; WP-336).
 - The dump reads `used` and `referenced` from the first declaration.
 
+**Undefined but used entities** (WP-840, `undefined_used.rs`; clang
+`Sema::checkUndefinedButUsed`, [basic.def.odr]/11, [basic.link]/8):
+- Every odr-use outside a template and outside an unevaluated operand
+  (`mark_used_at`, and the variables `act_on_full_expr` marks used)
+  records the first declaration and the location of its first use, when
+  the function or variable has no definition yet (a defaulted or deleted
+  function counts as defined).
+- A default argument is potentially evaluated only where a call uses it
+  ([dcl.fct.default]/5; clang's `PotentiallyEvaluatedIfUsed`): the uses
+  recorded while one is parsed (in place or replayed,
+  `begin_default_arg_uses` / `end_default_arg_uses`) move to the stored
+  argument and are recorded again at each call that uses it
+  (`queue_default_arg_uses`).
+- At the end of the translation unit (`act_on_end_of_translation_unit`,
+  after the pending instantiations and the delegating-constructor
+  cycles, before the unused-file-scope warnings), and only when no
+  error was emitted, each recorded entity still undefined is diagnosed
+  at its first declaration, in first-use order, with a `note: used here`
+  at the use. Skipped: deduction guides, invalid declarations, `weakref`
+  and `alias` entities, variables with an initializer on any
+  redeclaration (an in-class static member initializer), builtins,
+  pure virtual functions (kiln does not tell a virtual call from a
+  qualified one), and anything in namespace `std` or nested in it (the
+  evaluator supplies the `std::meta` metafunctions and a `constexpr`
+  `std::uncaught_exceptions` without a definition).
+- The classification, in order:
+  - external formal linkage, not `extern "C"`, and a type that is not
+    externally visible (a lambda, local class or unnamed-namespace class
+    in the function type or the variable type): an error,
+    "{function|variable} 'N' is used but not defined in this translation
+    unit, and cannot be defined in any other translation unit because
+    its type does not have linkage";
+  - not externally visible (internal linkage, an unnamed namespace, a
+    specialization or member taking internal linkage from a template
+    argument or its class): `-Wundefined-internal`, "{function|variable}
+    'N' has internal linkage but is not defined";
+  - an inline function (`inline`, implicitly inline or `constexpr`, no
+    `gnu_inline`): `-Wundefined-inline`, "inline function 'N' is not
+    defined"; an inline variable: the error "inline variable 'N' is not
+    defined".
+- A function template specialization is named with its template
+  arguments (`g<(lambda at f.cpp:3:5)>`); each specialization of one
+  template is reported, all at the template's location.
+- Not implemented: clang's vtable-use marking (an undefined virtual
+  member of an unnamed-namespace class whose vtable is used is not
+  reported).
+- Tests: `tests/conformance/basic.def.odr/undefined-but-used-*.cpp`.
+
 ### 5.3 The `noexcept` operator (`except.rs`)
 `act_on_noexcept_expr(e, loc, rparen)` ([expr.unary.noexcept]) builds
 a `CXXNoexceptExpr`: a `bool` prvalue whose operand is unevaluated

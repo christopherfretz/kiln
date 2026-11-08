@@ -217,6 +217,10 @@ sema_undeclared_label = Error (1) "use of undeclared label '{0}'";
 sema_undeclared_use = Error (1) "use of undeclared '{0}'";
 sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";
 sema_undeclared_var_use_suggest = Error (2) "use of undeclared identifier '{0}'; did you mean '{1}'?";
+sema_undefined_inline = Warning [UndefinedInline] (1) "inline function '{0}' is not defined";
+sema_undefined_inline_var = Error (1) "inline variable '{0}' is not defined";
+sema_undefined_internal = Warning [UndefinedInternal] (2) "{0:function|variable} '{1}' has internal linkage but is not defined";
+sema_undefined_internal_type = Error (2) "{0:function|variable} '{1}' is used but not defined in this translation unit, and cannot be defined in any other translation unit because its type does not have linkage";
 // ----- WP-220 (-Wundefined-var-template; clang `InstantiateVariableDefinition`)
 sema_undefined_var_template = Warning [UndefinedVarTemplate] (1) "instantiation of variable '{0}' required here, but no definition is available";
 sema_underlying_type_of_incomplete_enum = Error (1) "cannot determine underlying type of incomplete enumeration type {0}";

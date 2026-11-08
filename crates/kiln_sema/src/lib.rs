@@ -123,6 +123,7 @@ mod trivial_abi;
 mod try_stmt;
 mod type_diff;
 mod unreachable_code;
+mod undefined_used;
 mod unused_file_scope;
 mod unused_var;
 pub mod using;
@@ -871,6 +872,13 @@ pub struct Sema<'a, 'sm> {
     /// Delegating constructors and their targets, checked for cycles at
     /// the end of the translation unit ([class.base.init]/6).
     pub(crate) delegating: Vec<(DeclId, DeclId, Loc)>,
+    /// Functions and variables odr-used while undefined, as first
+    /// declarations with their first such use, in use order (clang
+    /// `UndefinedButUsed`), checked at the end of the translation unit
+    /// (`undefined_used.rs`).
+    pub(crate) undefined_used: Vec<(DeclId, Loc)>,
+    /// The first declarations in [`Sema::undefined_used`].
+    pub(crate) undefined_used_seen: kiln_source::fx::FxHashSet<DeclId>,
     /// The subobject the next constructor call initializes, set by a
     /// mem-initializer and consumed by the outermost constructor call it
     /// builds (clang's `InitializedEntity` for bases, members and
@@ -1323,6 +1331,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cand_scratch: Vec::new(),
             deduce_scratch: Vec::new(),
             delegating: Vec::new(),
+            undefined_used: Vec::new(),
+            undefined_used_seen: kiln_source::fx::FxHashSet::default(),
             ctor_entity: None,
             ctor_diag_ty: None,
             list_param_note: None,
