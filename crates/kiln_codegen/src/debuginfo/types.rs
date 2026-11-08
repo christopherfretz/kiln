@@ -103,7 +103,7 @@ impl<'a> Cg<'a> {
         }
         let scope = self.di_scope_nocu(first);
         let inline = self.ast.decls.namespace(first).is_some_and(|n| n.is_inline());
-        let mut f = Fields::default().n("scope", scope);
+        let mut f = Fields::default().nn("scope", scope);
         let name = self.di_ident(first);
         if !name.is_empty() {
             f = f.s("name", &name);
@@ -850,6 +850,9 @@ impl<'a> Cg<'a> {
     /// The method's declared return type contains `auto`.
     fn di_auto_return(&self, m: DeclId) -> bool {
         let ty = &self.ast.types;
+        if self.ast.decls.function(m).is_some_and(|x| x.spec.return_deduced()) {
+            return true;
+        }
         let Some(q) = self.ast.decls.get(m).ty() else { return false };
         let mut t = q.ty();
         loop {

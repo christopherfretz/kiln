@@ -745,6 +745,7 @@ impl Cg<'_> {
         if let Some(inc) = d.inc {
             let c = cont.expect("continue destination");
             self.emit_block(c.blk, false);
+            self.dbg_expr_stmt(inc);
             self.emit_ignored(inc)?;
         }
         self.f.jumps.pop();
@@ -780,9 +781,13 @@ impl Cg<'_> {
         if let Some(i) = d.init {
             self.emit_stmt(i)?;
         }
-        self.emit_var_decl(d.range)?;
-        self.emit_var_decl(begin)?;
-        self.emit_var_decl(end_var)?;
+        // The implicit `DeclStmt`s' stop points (at the range and the `:`).
+        for v in [d.range, begin, end_var] {
+            if self.dbg_on() {
+                self.dbg_stop_point(ast.decls.get(v).loc());
+            }
+            self.emit_var_decl(v)?;
+        }
         let cond_d = self.jump_dest_here();
         let cond_b = cond_d.blk;
         self.emit_block(cond_b, false);
@@ -809,6 +814,7 @@ impl Cg<'_> {
         self.end_scope(sc);
         self.dbg_stmt(s);
         self.emit_block(next.blk, false);
+        self.dbg_expr_stmt(inc);
         self.emit_ignored(inc)?;
         self.f.jumps.pop();
         self.emit_branch(cond_b);

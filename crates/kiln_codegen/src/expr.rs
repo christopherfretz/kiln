@@ -325,6 +325,7 @@ impl Cg<'_> {
                 if ast.decls.get(ast.exprs.decl(e)).kind() == DeclKind::EnumConstant =>
             {
                 let d = ast.exprs.decl(e);
+                self.di_const_ref(d, None);
                 match ast.decls.enumerator(d).and_then(|x| x.value) {
                     Some(c) => V::C(self.const_scalar_value(c, q)?),
                     None => return err(self.loc_of(e), "enumerator without a value"),
@@ -338,6 +339,7 @@ impl Cg<'_> {
                     || ast.decls.get(ast.exprs.decl(e)).kind() == DeclKind::EnumConstant =>
             {
                 let d = ast.exprs.decl(e);
+                self.di_const_ref(d, self.folds.get(e));
                 let c = match self.folds.get(e) {
                     Some(c) => c,
                     None => match ast.decls.enumerator(d).and_then(|x| x.value) {
@@ -531,6 +533,7 @@ impl Cg<'_> {
             // glvalue conditional's arm, is its constant, never a load of a
             // global that need not be defined.
             ExprKind::DeclRefExpr if let Some(c) = self.non_odr_use_constant(e) => {
+                self.di_const_ref(ast.exprs.decl(e), Some(c));
                 V::C(self.const_scalar_value(c, q)?)
             }
             ExprKind::DeclRefExpr
@@ -923,6 +926,15 @@ impl Cg<'_> {
             && !self.is_aggregate(q)
             && !self.is_complex(q)
         {
+            if self.dbg_on() {
+                let mut s = s;
+                while self.ast.exprs.get(s).kind() == ExprKind::ParenExpr {
+                    s = self.ast.exprs.operand(s);
+                }
+                if matches!(self.ast.exprs.get(s).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr) {
+                    self.di_const_ref(self.ast.exprs.decl(s), Some(c));
+                }
+            }
             return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
         }
         self.emit_glvalue_load(s)

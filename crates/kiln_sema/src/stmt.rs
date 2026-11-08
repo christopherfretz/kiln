@@ -864,8 +864,8 @@ impl Sema<'_, '_> {
     }
 
     /// `do body while (cond);` ([stmt.do]).
-    pub fn act_on_do(&mut self, body: StmtId, cond: ExprId, loc: Loc) -> StmtId {
-        self.builder().do_stmt(body, cond, loc)
+    pub fn act_on_do(&mut self, body: StmtId, cond: ExprId, loc: Loc, rparen: Loc) -> StmtId {
+        self.builder().do_stmt(body, cond, loc, rparen)
     }
 
     /// `for (init; cond; inc) body` ([stmt.for]).

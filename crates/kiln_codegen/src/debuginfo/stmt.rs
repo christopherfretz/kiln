@@ -89,6 +89,7 @@ impl Cg<'_> {
             StmtKind::WhileStmt | StmtKind::ForStmt => {
                 ast.stmts.loop_data(s).body.map_or(Loc::INVALID, |b| self.di_stmt_end(b))
             }
+            StmtKind::DoStmt => ast.stmts.do_rparen(s),
             StmtKind::CXXForRangeStmt => self.di_stmt_end(ast.stmts.range_for_data(s).body),
             StmtKind::ExprStmt => self.di_expr_end(ast.stmts.expr_stmt_expr(s)),
             StmtKind::ReturnStmt => ast
@@ -142,6 +143,15 @@ impl Cg<'_> {
     pub(crate) fn dbg_stmt(&mut self, s: StmtId) {
         if self.dbg_on() {
             let loc = self.di_stmt_begin(s);
+            self.dbg_stop_point(loc);
+        }
+    }
+
+    /// `EmitStopPoint` of an expression emitted as a statement (a loop
+    /// increment).
+    pub(crate) fn dbg_expr_stmt(&mut self, e: ExprId) {
+        if self.dbg_on() {
+            let loc = self.ast.begin_loc(e);
             self.dbg_stop_point(loc);
         }
     }

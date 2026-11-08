@@ -34,7 +34,7 @@ impl<'a> Cg<'a> {
     /// location state. A `nodebug` function gets none.
     pub(crate) fn di_fn_start(&mut self, d: DeclId, f: FuncId, thunk: bool, body: Option<StmtId>) {
         let Some(di) = self.di.as_deref() else { return };
-        let (dbg, cu, empty) = (di.dbg, di.cu, di.empty);
+        let (dbg, cu) = (di.dbg, di.cu);
         let ast = self.ast;
         if self.has_fn_attr(d, AttrKind::NODEBUG) {
             return;
@@ -120,13 +120,14 @@ impl<'a> Cg<'a> {
         f_ = f_.n("scope", Some(scope)).n("file", Some(unit)).u("line", u64::from(line)).n("type", Some(ty));
         f_ = f_.u("scopeLine", u64::from(scope_line)).flags("flags", &fl).sp_flags(&sp);
         f_ = f_.n("unit", Some(cu)).n("templateParams", tparams).n("declaration", decl);
-        f_ = f_.n("retainedNodes", Some(empty));
         let s = self.m.md_specialized("DISubprogram", true, f_.0);
         self.m.func_mut(f).add_metadata(dbg, s);
         if let Some(di) = self.di.as_deref_mut() {
             di.regions.insert(first, s);
         }
-        self.f.fir.dbg = Some(Box::new(FirDbg::new(dbg, s)));
+        let mut fd = FirDbg::new(dbg, s);
+        fd.eh_loc = self.di_body_end(body);
+        self.f.fir.dbg = Some(Box::new(fd));
     }
 
     /// The end of the prologue (clang `StartFunction`'s
@@ -190,10 +191,12 @@ impl<'a> Cg<'a> {
             }
         };
         let loc = self.di_location_at(line, col, scope);
-        if let Some(x) = self.f.fir.dbg.as_deref_mut()
-            && self.opts.opt_level > 0
-        {
-            x.vars.push(var);
+        let opt = self.opts.opt_level > 0;
+        if let Some(x) = self.f.fir.dbg.as_deref_mut() {
+            x.tracked = true;
+            if opt {
+                x.vars.push(var);
+            }
         }
         self.f.fir.declare(DbgRec { addr: slot.addr, var, expr, loc });
     }
@@ -262,12 +265,12 @@ impl<'a> Cg<'a> {
         self.di_declare(Some(d), &name, ty, slot, false);
     }
 
-    /// The subprogram's `retainedNodes` when optimizing (clang
-    /// `createParameterVariable` / `createAutoVariable` with
-    /// `AlwaysPreserve`).
+    /// The subprogram's `retainedNodes` once it has a variable (clang
+    /// `createParameterVariable` / `createAutoVariable` start the list;
+    /// it keeps them with `AlwaysPreserve`, when optimizing).
     pub(crate) fn di_fn_finish(&mut self) {
         let Some(x) = self.f.fir.dbg.as_deref_mut() else { return };
-        if x.vars.is_empty() {
+        if !x.tracked {
             return;
         }
         let (sp, vars) = (x.sp, std::mem::take(&mut x.vars));
@@ -325,6 +328,77 @@ impl<'a> Cg<'a> {
         let gf = Fields::default().n("var", Some(var)).n("expr", Some(expr));
         let gve = self.m.md_specialized("DIGlobalVariableExpression", false, gf.0);
         self.m.add_global_metadata(g, dbg, gve);
+        if let Some(x) = self.di.as_deref_mut() {
+            x.gves.insert(first, gve);
+            x.globals.push(gve);
+        }
+    }
+
+    /// clang `EmitDeclRefExprDbgValue` -> `EmitGlobalVariable(const
+    /// ValueDecl *, const APValue &)`: `d` (an enumerator, or a variable
+    /// read as its constant `c`) gets its type; a namespace-scope variable
+    /// a constant global variable expression; a static data member keeps
+    /// its class (WP-814 follow-up: clang skips variables
+    /// `DeclMustBeEmitted`, approximated by the existing definition).
+    pub(crate) fn di_const_ref(&mut self, d: DeclId, c: Option<kiln_ast::ConstValueId>) {
+        if !self.dbg_on() || !self.di_reduced() || self.has_fn_attr(d, AttrKind::NODEBUG) {
+            return;
+        }
+        let ast = self.ast;
+        let n = ast.decls.get(d);
+        let Some(q) = n.ty() else { return };
+        let ty = self.di_type(q);
+        if n.kind() == DeclKind::EnumConstant {
+            if let Some(ed) = n.ctx().and_then(|e| ast.decls.get(e).ty()) {
+                let _ = self.di_type(ed);
+            }
+            return;
+        }
+        if n.ctx().is_some_and(|x| ast.decls.function(x).is_some()) {
+            return;
+        }
+        let first = ast.first(d);
+        if let Some(r) = self.di_parent_record(first) {
+            if let Some(t) = ast.decls.get(r).ty().and_then(|rq| self.di_type(rq))
+                && let Some(x) = self.di.as_deref_mut()
+                && !x.retained.contains(&t)
+            {
+                x.retained.push(t);
+            }
+            return;
+        }
+        if self.di.as_deref().is_none_or(|x| x.gves.contains_key(&first)) {
+            return;
+        }
+        let scope = self.di_scope(d);
+        let loc = ast.decls.get(first).loc();
+        let (file, line) = (self.di_file(loc), self.di_line(loc));
+        let mut ops = String::new();
+        if self.size_align(q).0 <= 8 {
+            let v = c.and_then(|c| match ast.consts.get(c) {
+                kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Int { bits, signed, .. }) => {
+                    if signed { bits.to_i128().and_then(|v| i64::try_from(v).ok()).map(|v| v as u64) } else { bits.to_u128().and_then(|v| u64::try_from(v).ok()) }
+                }
+                kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Bool { value, .. }) => Some(u64::from(value)),
+                kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Float { bits, .. }) => u64::try_from(bits).ok(),
+                _ => None,
+            });
+            if let Some(v) = v {
+                ops = format!("DW_OP_constu, {v}, DW_OP_stack_value");
+            }
+        }
+        let tparams = self.di_template_params(d);
+        let name = self.di_ident(d);
+        let f = Fields::default().s("name", &name).n("scope", scope).n("file", Some(file)).u("line", u64::from(line));
+        let f = f.n("type", ty).b("isLocal", true).b("isDefinition", true).n("templateParams", tparams);
+        let var = self.m.md_specialized("DIGlobalVariable", true, f.0);
+        let expr = if ops.is_empty() {
+            self.di.as_deref().map(|x| x.empty_expr)
+        } else {
+            Some(self.m.md_specialized("DIExpression", false, vec![("".into(), MdField::Raw(ops.into()))]))
+        };
+        let gf = Fields::default().n("var", Some(var)).n("expr", expr);
+        let gve = self.m.md_specialized("DIGlobalVariableExpression", false, gf.0);
         if let Some(x) = self.di.as_deref_mut() {
             x.gves.insert(first, gve);
             x.globals.push(gve);

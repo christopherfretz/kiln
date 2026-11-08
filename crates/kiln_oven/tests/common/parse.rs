@@ -1143,7 +1143,7 @@ impl Parser<'_> {
                 self.expect("while");
                 let c = self.cond();
                 self.expect(";");
-                self.ast.builder().do_stmt(body, c, l)
+                self.ast.builder().do_stmt(body, c, l, l)
             }
             "for" => {
                 self.next();

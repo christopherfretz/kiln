@@ -456,6 +456,10 @@ pub(crate) struct FirDbg {
     pub last_stop: kiln_source::Loc,
     /// clang `CGDebugInfo::CurLoc`: the last valid location emitted.
     pub cur_loc: kiln_source::Loc,
+    /// clang `CurEHLocation`: where landing pads are.
+    pub eh_loc: kiln_source::Loc,
+    /// A variable was described (the subprogram gets `retainedNodes`).
+    pub tracked: bool,
     /// clang `NumReturnExprs` / `NumSimpleReturnExprs`: when every
     /// `return` was simple, the epilogue takes the last stop point.
     pub returns: u32,
@@ -486,6 +490,8 @@ impl FirDbg {
             scopes: vec![sp],
             last_stop: kiln_source::Loc::INVALID,
             cur_loc: kiln_source::Loc::INVALID,
+            eh_loc: kiln_source::Loc::INVALID,
+            tracked: false,
             returns: 0,
             simple_returns: 0,
             ret_ptr: None,

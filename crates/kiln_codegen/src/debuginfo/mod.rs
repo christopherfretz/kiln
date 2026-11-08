@@ -174,7 +174,6 @@ pub(crate) struct Di<'a> {
     /// `!DIExpression()`.
     pub empty_expr: MetadataId,
     /// `!{}`.
-    pub empty: MetadataId,
     /// Files by presumed name.
     files: FxHashMap<Box<str>, MetadataId>,
     /// `DILocation`s by (line, column, scope).
@@ -244,14 +243,12 @@ impl<'a> Cg<'a> {
         self.m.add_named_metadata("llvm.dbg.cu", &[cu]);
         let dbg = self.m.md_kind("dbg");
         let empty_expr = self.m.md_specialized("DIExpression", false, Vec::new());
-        let empty = self.m.md_tuple(&[]);
         self.di = Some(Box::new(Di {
             sm,
             dbg,
             cu,
             cu_file,
             empty_expr,
-            empty,
             files: FxHashMap::default(),
             locs: FxHashMap::default(),
             types: FxHashMap::default(),
