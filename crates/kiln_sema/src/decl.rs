@@ -3485,6 +3485,8 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let td = self.builder().typedef(h, kind, underlying, prev_ok);
+        // gsl Pointer inference (spec/sema-class.md §5.6).
+        self.infer_gsl_declared_typedef(td, prev_ok.is_none());
         if underlying.quals().is_empty()
             && matches!(
                 self.ast.types.view(underlying.ty()),
@@ -6051,7 +6053,7 @@ impl Sema<'_, '_> {
         // long as it does (spec/sema-class.md §5.4).
         if !self.is_err_expr(e) {
             self.extend_temporaries(v, e);
-            self.check_dangling_pointer_var(v, e);
+            self.check_var_lifetime(v, e);
             // [class.dtor]/15 (spec/sema-class.md §4.8).
             let vty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
             self.check_var_destructor(v, vty, loc);

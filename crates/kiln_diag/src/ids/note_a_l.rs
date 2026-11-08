@@ -165,6 +165,7 @@ note_inequality_comparison_to_or_assign = Note (0) "use '|=' to turn this inequa
 note_init_list_narrowing_silence = Note (0) "insert an explicit cast to silence this issue";
 note_init_previous = Note (0) "previous initialization is here";
 note_init_previous_side_effects = Note (0) "previous initialization with side effects is here (side effects will not occur at run time)";
+note_init_with_default_member_init = Note (1) "initializing field {0} with default member initializer";
 note_insert_break_fixit = Note (0) "insert 'break;' to avoid fall-through";
 note_insert_fallthrough_fixit = Note (1) "insert '{0};' to silence this warning";
 note_inst_declaration_hint = Note (1) "add an explicit instantiation declaration to suppress this warning if '{0}' is explicitly instantiated in another translation unit";

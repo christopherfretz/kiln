@@ -351,6 +351,22 @@ wave = 4
 verified = false
 notes = "WP-801: llvm/ plus clang and lld (LLVM_ENABLE_PROJECTS=clang;lld) with the AArch64 and X86 backends, then check-clang and check-lld (lit + unit tests, lit capped at -j 4), each through make so they draw from the shared jobserver. Release with assertions, no debug info. Same tag as llvm_full; its own shallow clone. report.json's `tests` is check-lld's lit block (the last one); both suites are in docs/status/oss/llvm_clang.md."
 
+[llvm_selfhost]
+url = "https://github.com/llvm/llvm-project"
+tag = "llvmorg-19.1.7"
+build = "cmake"
+source_subdir = "llvm"
+checkout = "llvm_clang"
+stage_of = "llvm_clang"
+cxx_std = 17
+configure = ["-DLLVM_TARGETS_TO_BUILD=AArch64;X86", "-DLLVM_ENABLE_PROJECTS=clang;lld", "-DLLVM_ENABLE_ASSERTIONS=ON", "-DLLVM_INCLUDE_TESTS=ON", "-DLLVM_INCLUDE_BENCHMARKS=OFF", "-DLLVM_INCLUDE_EXAMPLES=OFF", "-DLLVM_ENABLE_ZSTD=OFF", "-DLLVM_ENABLE_LIBXML2=OFF", "-DLLVM_LIT_ARGS=-sv -j 4"]
+build_targets = ["all", "clang-test-depends", "ClangUnitTests", "lld-test-depends", "LLDUnitTests"]
+test = "make check-clang; c=$?; make check-lld; l=$?; echo \"check-clang rc=$c check-lld rc=$l\"; [ $c -eq 0 ] && [ $l -eq 0 ]"
+test_timeout = 18000
+wave = 4
+verified = false
+notes = "WP-815: the bootstrap stage 2 of llvm_clang. The same tree, flags and targets as llvm_clang, built with the clang and clang++ that llvm_clang's build produced (stage_of), so `--compiler kiln` builds LLVM with the kiln-built clang 19.1.7 and runs check-clang and check-lld on the result. Shares llvm_clang's checkout. Stage-2/stage-3 IR comparison and results in docs/status/oss/llvm_selfhost.md."
+
 [folly]
 url = "https://github.com/facebook/folly"
 tag = "v2026.10.26.00"

@@ -1215,6 +1215,13 @@ impl Sema<'_, '_> {
         if ty == QualType::ERROR {
             return None;
         }
+        if op == OO::Equal
+            && let [a0, a1] = conv[..]
+        {
+            // clang `CreateOverloadedBinOp`: the lifetime check of the
+            // assignment (spec/sema-class.md §5.6).
+            self.check_assignment_lifetime(a0, a1);
+        }
         let e = self.builder().operator_call(op, callee, &conv, ty, vk, loc, end);
         let e = self.maybe_bind_temporary(e);
         Some(self.check_immediate_invocation(e, f, None))

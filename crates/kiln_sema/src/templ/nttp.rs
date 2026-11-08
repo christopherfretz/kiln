@@ -543,6 +543,15 @@ impl Sema<'_, '_> {
             // declaration (a `define_static_array` element, P3491 §3.5.1):
             // the constant itself, which no expression of the program
             // spells.
+            // A reference argument bound to such an object (a
+            // `reflect_constant_array` result substituted for `const T
+            // (&)[N]`): the lvalue `*p` of that constant pointer.
+            Scalar::Pointer { base: base @ PtrBase::Const(_), offset, .. }
+                if self.ast.types.is_reference(ty) =>
+            {
+                let target = self.ast.types.pointee(ty)?;
+                self.const_object_lvalue(base, offset, target, loc)
+            }
             Scalar::Pointer { base: PtrBase::Const(_), .. } => {
                 let o = self.builder().opaque_value_of(ty, ValueCategory::PRValue, loc);
                 Some(self.builder().constant_expr(o, Some(v)))

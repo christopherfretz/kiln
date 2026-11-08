@@ -107,9 +107,11 @@ static_assert(!is_defaulted(^^free_fn) && !is_deleted(^^free_fn));
 static_assert(is_deleted(^^deleted_fn) && !is_user_provided(^^deleted_fn));
 static_assert(is_operator_function(members_of(^^T, access_context::unchecked())[0]));
 static_assert(!is_operator_function(^^free_fn) && !is_literal_operator(^^free_fn));
-// is_literal_operator(^^operator""_x): ^^ of an operator-function-id
-// does not parse yet ("not supported yet"), and a literal operator is
-// never a class member, so members_of cannot reach one.
+// [expr.reflect]/7: `^^` of a literal-operator-id reflects the literal
+// operator (WP-830 pins it).
+int operator""_x(unsigned long long);
+static_assert(is_literal_operator(^^operator""_x) && is_function(^^operator""_x));
+static_assert(!is_operator_function(^^operator""_x));
 
 // None of these holds for a non-function.
 int var;

@@ -1386,7 +1386,10 @@ impl Substituter<'_, '_, '_> {
         let ty = self.sema.apply_pattern_mode(d, ty);
         if n.kind() == DeclKind::TypeAlias {
             let name = n.name().as_ident().ok_or(SubstFail)?;
+            let outer = std::mem::replace(&mut self.sema.in_typedef_instantiation, true);
             let a = self.sema.act_on_alias_decl(name, loc, ty, &[], 0, Loc::INVALID);
+            self.sema.in_typedef_instantiation = outer;
+            self.sema.infer_gsl_instantiated_typedef(d, a);
             if failed {
                 self.sema.ast.decls.set_flags(a, DeclFlags::INVALID);
             }
@@ -1396,7 +1399,13 @@ impl Substituter<'_, '_, '_> {
         let mut ds = self.pattern_declspec(d, ty);
         ds.storage = Some((StorageSpec::Typedef, loc));
         let dr = self.pattern_declarator(d, ctx)?;
-        let td = self.sema.act_on_declarator(&ds, ty, &dr).ok_or(SubstFail)?;
+        let outer = std::mem::replace(&mut self.sema.in_typedef_instantiation, true);
+        let td = self.sema.act_on_declarator(&ds, ty, &dr);
+        self.sema.in_typedef_instantiation = outer;
+        let td = td.ok_or(SubstFail)?;
+        // clang `InstantiateTypedefNameDecl`: inferred again only for a
+        // `typename T::iterator` pattern.
+        self.sema.infer_gsl_instantiated_typedef(d, td);
         if failed {
             self.sema.ast.decls.set_flags(td, DeclFlags::INVALID);
         }

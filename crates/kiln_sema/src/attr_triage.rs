@@ -118,8 +118,6 @@ const MULTIVERSION: &str =
 /// The rows, sorted by name.
 pub static TABLE: &[Row] = &[
     r("NSObject", G | CL, C, OBJC),
-    r("Owner", GSL, C, LIFETIME),
-    r("Pointer", GSL, C, LIFETIME),
     r("acquire_capability", G | CL, C, TSA),
     r("acquire_handle", G | CL, C, ANALYSIS),
     r("acquire_shared_capability", G | CL, C, TSA),
@@ -204,7 +202,6 @@ pub static TABLE: &[Row] = &[
     rt("kernel", [G, 0, G, 0], C, OFFLOAD),
     r("launch_bounds", G, C, OFFLOAD),
     r22("lifetime_capture_by", G | CL, C, LIFETIME),
-    r("lifetimebound", G | CL, C, LIFETIME),
     r("lock_returned", G, C, TSA),
     r("lockable", G, C, TSA),
     r("locks_excluded", G, C, TSA),
@@ -510,7 +507,13 @@ mod tests {
         assert_eq!(s("no_sanitize", x, Some("gnu"), 22), ns);
         assert_eq!(s("lifetimebound", x, None, 22), Support::Unknown);
         assert_eq!(s("lifetimebound", x, Some("gnu"), 22), Support::Unknown);
-        assert_eq!(s("lifetimebound", x, Some("clang"), 22), Support::Ignored(C));
+        assert_eq!(
+            s("lifetimebound", x, Some("clang"), 22),
+            Support::Implemented(AttrKind::LIFETIMEBOUND)
+        );
+        assert_eq!(s("Owner", x, Some("gsl"), 19), Support::Implemented(AttrKind::GSL_OWNER));
+        assert_eq!(s("Pointer", x, None, 19), Support::Unknown);
+        assert_eq!(s("Owner", g, None, 19), Support::Unknown);
         assert_eq!(s("no_sanitize_address", x, Some("gnu"), 19), ns);
         assert_eq!(s("no_sanitize_address", x, Some("clang"), 22), Support::Unknown);
         // Class A: rejected.
