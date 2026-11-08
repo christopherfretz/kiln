@@ -190,14 +190,36 @@ impl Sema<'_, '_> {
         if self.clang_compat < 22 || syntax != AttrSyntax::Cxx11 {
             return raw;
         }
-        let n = raw.trim_start_matches("__").trim_end_matches("__");
+        let scope =
+            scope.map(|s| crate::decl::norm_attr_scope(self.ast.symbols().as_str(s)).to_owned());
+        let n = if kiln_ast::attr::attr_name_normalizes(syntax, scope.as_deref()) {
+            kiln_ast::attr::normalize_attr_name(&raw)
+        } else {
+            &raw
+        };
         match scope {
-            Some(s) => {
-                let s = self.ast.symbols().as_str(s).to_string();
-                format!("{}::{n}", crate::decl::norm_attr_scope(&s))
-            }
+            Some(s) => format!("{s}::{n}"),
             None => n.to_owned(),
         }
+    }
+
+    /// The `lifetimebound` attributes of the attribute-specifier-seq after
+    /// a parameter clause ([dcl.fct]/1), taken out of `attrs` and marked
+    /// as the implicit object parameter's (`a` = 1): clang makes them an
+    /// `AttributedType` on the function type, which kiln keeps on the
+    /// declaration ([`Sema::check_class_b_attr`] checks the subject).
+    pub fn take_fn_type_lifetimebound(&mut self, attrs: &mut Vec<AttrId>) -> Vec<AttrId> {
+        let mut out = Vec::new();
+        attrs.retain(|&a| {
+            let node = *self.ast.attrs.get(a);
+            if node.kind != AttrKind::LIFETIMEBOUND || node.syntax != AttrSyntax::Cxx11 {
+                return true;
+            }
+            self.ast.attrs.set_args(a, 1, node.b);
+            out.push(a);
+            false
+        });
+        out
     }
 
     pub fn act_on_type_position_attrs(&mut self, attrs: &mut Vec<AttrId>, in_chunk: bool) {
@@ -224,6 +246,11 @@ impl Sema<'_, '_> {
                     .diag(DiagId::sema_attribute_not_type_attr, node.loc)
                     .arg(format!("'{shown}'"));
                 self.emit(msg);
+                return false;
+            }
+            // After a ptr-operator or an array declarator clang applies
+            // it to that type, where it has no effect.
+            if in_chunk && node.kind == AttrKind::LIFETIMEBOUND {
                 return false;
             }
             let Some(name) = attr_name(&node) else {

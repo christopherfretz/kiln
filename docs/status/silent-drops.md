@@ -160,7 +160,7 @@ aligned-on-function, P-A3, P-A4, F-A4 — plus every attribute row when it appea
 | `nonnull` / `returns_nonnull` | sema warnings only (crates/kiln_sema/src/nonnull.rs, null_compare.rs) | `nonnull` param / return IR attribute | B | none | fixed in WP-813 |
 | `nodebug`, `artificial`, `standalone_debug` | shape debug info as clang (crates/kiln_codegen/src/debuginfo/func.rs `has_fn_attr(.., NODEBUG)`; `standalone_debug` in `di_omit`, debuginfo/types.rs) | debug-info shaping | B | none | fixed in WP-814 (`standalone_debug` sema in WP-813) |
 | `carries_dependency` | stored, unused | no codegen either | none (matches clang) | — | none (matches clang) |
-| thread-safety (34), `lifetimebound`, `no_sanitize*` (6) | dropped at decl.rs:9911/9915 | analysis (`-Wthread-safety`, `-Wdangling`) / sanitizer instrumentation | C (sanitizers: moot unless `-fsanitize` is accepted — see §4) | none | WP-805: rows in the triage table (C; `no_sanitize*` B) |
+| thread-safety (34), `lifetimebound`, `no_sanitize*` (6) | dropped at decl.rs:9911/9915 | analysis (`-Wthread-safety`, `-Wdangling`) / sanitizer instrumentation | C (sanitizers: moot unless `-fsanitize` is accepted — see §4) | none | WP-805: rows in the triage table (C; `no_sanitize*` B); `lifetimebound` fixed in WP-674 (`-Wdangling`, spec/landed/sema/WP-674.md) |
 | `AttrKind::MODE`, `INTERNAL_LINKAGE`, `NO_SANITIZE` | defined in crates/kiln_ast/src/attr.rs:71-74 but never produced (only the AST dumper names them) | — | see `mode`, `internal_linkage` below | — | `mode` fixed in WP-799; `internal_linkage` WP-807 |
 
 Verified as lowered (cite): `aligned`/`alignas`/`packed`/`no_unique_address` (kiln_abi layout

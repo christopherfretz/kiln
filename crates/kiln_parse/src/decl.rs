@@ -2798,8 +2798,10 @@ impl Parser<'_, '_> {
                 if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
                     let mut attrs = Vec::new();
                     self.parse_cxx11_attr_seq(&mut attrs);
+                    let lb = self.s.take_fn_type_lifetimebound(&mut attrs);
                     self.s.act_on_type_position_attrs(&mut attrs, true);
                     d.attrs.extend(attrs);
+                    d.attrs.extend(lb);
                 }
             } else {
                 break;
@@ -3345,6 +3347,7 @@ impl Parser<'_, '_> {
         // clang 19 corrects a default argument's delayed typos before it
         // converts it to the parameter type (WP-408).
         let typos = self.begin_typo_correction();
+        let mark = self.s.begin_default_arg_uses();
         let init = if self.at(Punct::LBrace) {
             self.parse_init_list().ok().map(Initializer::List)
         } else {
@@ -3353,7 +3356,13 @@ impl Parser<'_, '_> {
         self.correct_typos(typos, init.is_some());
         if let Some(init) = init {
             self.s.act_on_param_default_init(p, init);
+            let arg = match p.default_arg {
+                DefaultArg::Parsed(e) if !p.invalid => Some(e),
+                _ => None,
+            };
+            self.s.end_default_arg_uses(mark, arg);
         } else {
+            self.s.end_default_arg_uses(mark, None);
             p.invalid = true;
             self.skip_until(&[Punct::Comma, Punct::RParen], false, false);
         }

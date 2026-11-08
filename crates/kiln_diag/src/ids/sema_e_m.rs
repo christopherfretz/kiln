@@ -247,6 +247,8 @@ sema_left_shift_always = Warning [TautologicalConstantCompare] (1) "converting t
 sema_left_shift_in_bool_context = WarningOff [IntInBoolContext] (0) "converting the result of '<<' to a boolean; did you mean to compare with '0'?";
 // clang 19 wording of `sema_left_shift_in_bool_context`.
 sema_left_shift_in_bool_context_expr = WarningOff [IntInBoolContext] (1) "converting the result of '<<' to a boolean; did you mean '({0}) != 0'?";
+sema_lifetimebound_ctor_dtor = Error (1) "'lifetimebound' attribute cannot be applied to a {0:constructor|destructor}";
+sema_lifetimebound_no_object_param = Error (1) "'lifetimebound' attribute cannot be applied; {0:static |non-}member function has no implicit object parameter";
 sema_likelihood_if_conflict = Warning [IgnoredAttributes] (1) "conflicting attributes '{0}' are ignored";
 sema_list_init_in_parens = Error (2) "cannot initialize {0:non-class|reference} type {1} with a parenthesized initializer list";
 sema_literal_conversion = Warning [LiteralConversion] (4) "implicit conversion from {0} to {1} changes value from {2} to {3}";
