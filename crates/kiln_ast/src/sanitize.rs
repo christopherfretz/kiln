@@ -191,7 +191,7 @@ impl SanitizerSet {
     /// The sanitizers kiln implements or accepts (WP-675): the pass
     /// sanitizers whose passes it schedules, the `undefined` family
     /// (spec/codegen.md lists the checks not emitted yet) and
-    /// unsigned-integer-overflow.
+    /// the unsigned integer checks.
     pub const KILN_SUPPORTED: SanitizerSet = SanitizerSet(
         Self::ADDRESS.0
             | Self::HWADDRESS.0
@@ -201,7 +201,8 @@ impl SanitizerSet {
             | Self::FUZZER.0
             | Self::FUZZER_NO_LINK.0
             | Self::UNDEFINED.0
-            | Self::UNSIGNED_INTEGER_OVERFLOW.0,
+            | Self::UNSIGNED_INTEGER_OVERFLOW.0
+            | Self::UNSIGNED_SHIFT_BASE.0,
     );
 
     /// Whether any bit of `o` is set.

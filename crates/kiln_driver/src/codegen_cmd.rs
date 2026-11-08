@@ -332,7 +332,7 @@ impl CodegenJob<'_> {
         let mut module = None;
         if engine.error_count() == 0 {
             let fp = a.fp_model();
-            let opts = CodegenOptions {
+            let mut opts = CodegenOptions {
                 source_filename: if job.path == "-" { "-".to_owned() } else { job.path.to_owned() },
                 exceptions: a.predef.exceptions.unwrap_or(true),
                 rtti: a.predef.rtti.unwrap_or(true),
@@ -402,6 +402,9 @@ impl CodegenJob<'_> {
                 },
                 ..codegen_flag_options(a, feats.cpu.clone(), x86)
             };
+            // UBSan's `shift-base` depends on the language (WP-675).
+            opts.sanitize.cplusplus = job.std.cplusplus;
+            opts.sanitize.cxx20 = job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20;
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).
             tu.oven.set_clang_compat(opts.clang_compat);

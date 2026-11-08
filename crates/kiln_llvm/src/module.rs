@@ -161,6 +161,7 @@ pub struct GlobalVar {
 /// `, no_sanitize_address`, `, no_sanitize_hwaddress`,
 /// `, sanitize_memtag` and `, sanitize_address_dyninit`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools, reason = "LLVM's four independent global flags")]
 pub struct GlobalSanitizer {
     /// `no_sanitize_address`.
     pub no_address: bool,

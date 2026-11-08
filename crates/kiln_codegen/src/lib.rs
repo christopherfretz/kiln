@@ -59,6 +59,7 @@ mod target_features;
 mod tbaa;
 mod tls;
 mod try_catch;
+mod ubsan;
 mod va_arg;
 mod visibility;
 mod vla;
@@ -300,6 +301,12 @@ pub struct SanitizeOptions {
     /// `-fsanitize-address-use-after-scope` (the default) wants lifetime
     /// markers.
     pub use_after_scope: bool,
+    /// The unit is C++ (`UBSan` `shift-base` tolerates a shift into the
+    /// sign bit there).
+    pub cplusplus: bool,
+    /// The unit is C++20 or later (signed `<<` is defined: no
+    /// `shift-base` check of signed shifts).
+    pub cxx20: bool,
 }
 
 impl SanitizeOptions {
@@ -751,6 +758,7 @@ pub fn emit_with_debug(
     }
     let void_ptr = ast.types.pointer_to(kiln_ast::QualType::VOID);
     let mut cg = module::Cg::new(&*ast, &folds, target, opts, void_ptr);
+    cg.sm = sm;
     if let Some(sm) = sm {
         cg.start_debug_info(sm);
     }

@@ -1149,8 +1149,11 @@ impl Cg<'_> {
                 if self.is_float_ty(t) {
                     return Ok(self.fneg(v));
                 }
+                if let Some(r) = self.ub_negate(e, v, q)? {
+                    return Ok(r);
+                }
                 let z = self.icn(t, 0);
-                let fl = self.nsw_if(self.is_signed(q));
+                let fl = self.ub_nsw(q, self.is_signed(q));
                 Ok(self.bin(BinOp::Sub, fl, z, v))
             }
             UnaryOp::Not => {
@@ -1256,9 +1259,12 @@ impl Cg<'_> {
                 let c = self.fconst(t, if inc { 1.0 } else { -1.0 });
                 self.bin(BinOp::FAdd, Flags::NONE, old, c)
             } else {
+                if let Some(r) = self.ub_inc_dec(e, old, inc)? {
+                    return Ok(r);
+                }
                 let c = self.icn(t, amount);
                 let can_overflow = !ast.exprs.get(e).has(ExprFlags::CANNOT_OVERFLOW);
-                let fl = self.nsw_if(can_overflow && self.is_signed(q));
+                let fl = self.ub_nsw(q, can_overflow && self.is_signed(q));
                 self.bin(BinOp::Add, fl, old, c)
             }
         })
@@ -1392,7 +1398,7 @@ impl Cg<'_> {
         // clang `hasSignedIntegerRepresentation`: a vector's elements;
         // `nsw` only for scalars (`isSignedIntegerOrEnumerationType`).
         let signed = self.is_signed(self.scalar_of(q));
-        let nsw = self.nsw_if(self.is_signed(q));
+        let nsw = self.ub_nsw(q, self.is_signed(q));
         Ok(match op {
             BinaryOp::Add | BinaryOp::Sub if lp && rp => {
                 let a = self.cast(CastOp::PtrToInt, l, LTy::I64);
@@ -1441,6 +1447,8 @@ impl Cg<'_> {
                         Some(v) => v,
                         None => self.bin(BinOp::FAdd, Flags::NONE, l, r),
                     }
+                } else if let Some(v) = self.ub_binary_overflow(e, op, l, r, q)? {
+                    v
                 } else {
                     self.bin(BinOp::Add, nsw, l, r)
                 }
@@ -1451,6 +1459,8 @@ impl Cg<'_> {
                         Some(v) => v,
                         None => self.bin(BinOp::FSub, Flags::NONE, l, r),
                     }
+                } else if let Some(v) = self.ub_binary_overflow(e, op, l, r, q)? {
+                    v
                 } else {
                     self.bin(BinOp::Sub, nsw, l, r)
                 }
@@ -1458,6 +1468,8 @@ impl Cg<'_> {
             BinaryOp::Mul => {
                 if float {
                     self.bin(BinOp::FMul, Flags::NONE, l, r)
+                } else if let Some(v) = self.ub_binary_overflow(e, op, l, r, q)? {
+                    v
                 } else {
                     self.bin(BinOp::Mul, nsw, l, r)
                 }
@@ -1466,6 +1478,7 @@ impl Cg<'_> {
                 if float {
                     self.bin(BinOp::FDiv, Flags::NONE, l, r)
                 } else {
+                    self.ub_divrem(e, op, l, r, q)?;
                     self.bin(if signed { BinOp::SDiv } else { BinOp::UDiv }, Flags::NONE, l, r)
                 }
             }
@@ -1473,12 +1486,17 @@ impl Cg<'_> {
                 if float {
                     self.bin(BinOp::FRem, Flags::NONE, l, r)
                 } else {
+                    self.ub_divrem(e, op, l, r, q)?;
                     self.bin(if signed { BinOp::SRem } else { BinOp::URem }, Flags::NONE, l, r)
                 }
             }
             BinaryOp::Shl | BinaryOp::Shr => {
                 let rt = self.f.fir.ty(&self.m, r);
-                let r = if rt == lt { r } else { self.int_cast(r, lt, false) };
+                let rp = if rt == lt { r } else { self.int_cast(r, lt, false) };
+                if !self.f.san.is_empty() {
+                    self.ub_shift(e, op == BinaryOp::Shl, l, r, rp, q, rq)?;
+                }
+                let r = rp;
                 let o = if op == BinaryOp::Shl {
                     BinOp::Shl
                 } else if signed {

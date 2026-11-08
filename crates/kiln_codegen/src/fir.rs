@@ -534,6 +534,10 @@ pub(crate) struct Fir {
     /// Debug locations and records (`None` at `-g0` and for functions
     /// without a subprogram).
     pub dbg: Option<Box<FirDbg>>,
+    /// The `!nosanitize !{}` attachment of an open `UBSan` check scope
+    /// (clang `SanitizerScope`, WP-675): appended to every instruction
+    /// [`Fir::push`] adds.
+    nosan: Option<(MdKindId, MetadataId)>,
 }
 
 impl Fir {
@@ -553,6 +557,7 @@ impl Fir {
             fmf: FastMath::NONE,
             call_fmf: FastMath::NONE,
             dbg: None,
+            nosan: None,
         };
         let e = f.create_block();
         f.place_at_end(e);
@@ -889,6 +894,16 @@ impl Fir {
         self.insts[i as usize].md.push((kind, md));
     }
 
+    /// Opens (`Some`) or closes (`None`) a `UBSan` check scope: the
+    /// instructions appended meanwhile get the `!nosanitize` attachment
+    /// `md` (WP-675). Returns the previous scope.
+    pub fn set_nosanitize(
+        &mut self,
+        md: Option<(MdKindId, MetadataId)>,
+    ) -> Option<(MdKindId, MetadataId)> {
+        std::mem::replace(&mut self.nosan, md)
+    }
+
     /// Sets the `llvm.access.group` (kind `kind`) of the instructions
     /// appended from now on (WP-462, spec/codegen.md "Loop metadata").
     pub fn set_access_group(&mut self, kind: MdKindId, group: Option<MetadataId>) {
@@ -945,6 +960,7 @@ impl Fir {
         if self.dbg.is_some() {
             self.dbg_append(b, n, &mut md);
         }
+        md.extend(self.nosan);
         self.insts.push(Inst { op, ty, block: Some(b), md, fmf: self.fmf });
         self.blocks[b.0 as usize].insts.push(n);
         self.note_refs(n);
@@ -1141,6 +1157,7 @@ impl Fir {
             fmf: self.fmf,
             call_fmf: self.call_fmf,
             dbg: None,
+            nosan: None,
         })
     }
 

@@ -99,9 +99,7 @@ impl Cg<'_> {
     /// specialization `d` was instantiated from.
     fn var_template_pattern(&self, d: DeclId) -> Option<DeclId> {
         let ast = self.ast;
-        if ast.decls.var(d).is_none() {
-            return None;
-        }
+        ast.decls.var(d)?;
         let (_, info) = ast.spec_info(d)?;
         if info.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization {
             return None;

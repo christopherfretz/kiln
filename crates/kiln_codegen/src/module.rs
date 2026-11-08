@@ -160,6 +160,11 @@ pub(crate) struct Cg<'a> {
     pub ref_vars: FxHashMap<(DeclId, bool), Vec<DeclId>>,
     /// String literal globals by (array type, bytes).
     pub strings: FxHashMap<(LTy, Vec<u8>), GlobalId>,
+    /// The `UBSan` type descriptor of each type (clang
+    /// `EmitCheckTypeDescriptor`'s cache, WP-675).
+    pub ub_types: FxHashMap<QualType, GlobalId>,
+    /// The source manager, for `UBSan` source locations (WP-675).
+    pub sm: Option<&'a kiln_source::SourceManager>,
     /// Named struct types by record.
     pub named: FxHashMap<DeclId, LTy>,
     /// Base-subobject (`.base`) struct types by record.
@@ -413,6 +418,8 @@ impl<'a> Cg<'a> {
             },
             to_emit: Vec::new(),
             strings: FxHashMap::default(),
+            ub_types: FxHashMap::default(),
+            sm: None,
             named: FxHashMap::default(),
             named_base: FxHashMap::default(),
             const_objects: FxHashMap::default(),

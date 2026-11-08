@@ -1,8 +1,10 @@
 //! The sanitizer options (spec/driver.md "Sanitizers", WP-675;
 //! docs/design/sanitizers.md §2): `-f[no-]sanitize=`, the recover and
-//! trap lists, the ignorelists, the AddressSanitizer and
-//! MemorySanitizer options and the runtime choice, resolved the way
+//! trap lists, the ignorelists, the address and memory sanitizer
+//! options and the runtime choice, resolved the way
 //! clang 19's `SanitizerArgs` does.
+
+use std::fmt::Write as _;
 
 use kiln_ast::sanitize::{SanitizerSet as S, parse_name};
 use kiln_codegen::SanitizeOptions;
@@ -171,6 +173,7 @@ impl SanitizeFlags {
     /// `rtti` is `-frtti`'s state, `opt0` whether optimization is off,
     /// `x86` the target's architecture and `triple` its name.
     #[must_use]
+    #[allow(clippy::too_many_lines, reason = "clang's single resolution pass")]
     pub fn resolve(
         &self,
         rtti: bool,
@@ -280,6 +283,7 @@ impl SanitizeFlags {
                 trap,
                 use_after_scope: use_after_scope
                     && kinds.has_any(S::ADDRESS.union(S::KERNEL_ADDRESS)),
+                ..SanitizeOptions::default()
             },
             use_after_scope,
             use_after_return: self.use_after_return,
@@ -300,10 +304,10 @@ impl SanitizeFlags {
                     for v in &l.values {
                         match parse_name(v, true) {
                             None => {
-                                errors.push(ArgError::UnsupportedValue(l.opt.into(), v.clone()))
+                                errors.push(ArgError::UnsupportedValue(l.opt.into(), v.clone()));
                             }
                             Some(s) => {
-                                let single = s.0.count_ones() == 1;
+                                let single = s.0.is_power_of_two();
                                 let ok = if single {
                                     S::TRAPPING_SUPPORTED.has(s)
                                 } else {
@@ -425,7 +429,7 @@ impl Sanitize {
                 p.push_str("recover;");
             }
             if self.track_origins != 0 {
-                p.push_str(&format!("track-origins={};", self.track_origins));
+                let _ = write!(p, "track-origins={};", self.track_origins);
             }
             p.push_str("eager-checks");
             passes.push(format!("msan<{p}>"));
