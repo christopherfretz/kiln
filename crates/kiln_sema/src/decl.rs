@@ -5645,6 +5645,13 @@ impl Sema<'_, '_> {
             Initializer::Paren(es, l, _) if es.len() == 1 => Some(*l),
             _ => None,
         };
+        // clang `AddInitializerToDecl`: a `loader_uninitialized`
+        // variable cannot have an initializer (WP-813).
+        if self.has_loader_uninitialized(v) {
+            let at = self.ast.decls.get(v).loc();
+            self.error(DiagId::sema_loader_uninitialized_init, at);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
         if self.check_alias_definition(v) {
             // clang `AddInitializerToDecl` returns at the redefinition: the
             // variable is invalid and its initializer unchecked (no
@@ -6472,6 +6479,15 @@ impl Sema<'_, '_> {
     /// A variable declared without an initializer ([dcl.init]/7).
     pub fn act_on_uninit(&mut self, v: DeclId) {
         self.check_cleanup_deduced(v);
+        // clang `ActOnUninitializedDecl`: a `loader_uninitialized`
+        // variable is not default-initialized (WP-813).
+        if self.has_loader_uninitialized(v) {
+            self.check_loader_uninitialized_ctor(v);
+            self.lambda_mangle.var = None;
+            self.initializing = None;
+            self.check_consteval_only_var(v);
+            return;
+        }
         self.act_on_uninit_inner(v);
         if self.is_var_definition(v) {
             self.check_static_tls(v, None);
@@ -10191,6 +10207,24 @@ impl Sema<'_, '_> {
         ) {
             return None;
         }
+        // WP-813: clang's class B attributes (`class_b_attrs.rs`).
+        let x86 = self.is_x86_target();
+        if crate::class_b_attrs::is_c_only(&n, syntax, scope_s.as_deref()) {
+            let msg = self.diag(DiagId::parse_attribute_ignored, loc).arg(shown);
+            self.emit(msg);
+            return None;
+        }
+        if let Some((kind, preset)) =
+            crate::class_b_attrs::kind_of(&n, syntax, scope_s.as_deref(), x86, self.clang_compat)
+        {
+            let arg_name = if syntax == AttrSyntax::Cxx11 && scope.is_some() && self.clang_compat >= 22
+            {
+                shown.clone()
+            } else {
+                n.clone()
+            };
+            return self.class_b_attribute(kind, preset, syntax, &arg_name, &shown, args, loc);
+        }
         // clang 19 names only the attribute, not its scope.
         if scope_s.as_deref().is_some_and(|s| s != "gnu")
             && !(clang_scope
@@ -10214,6 +10248,9 @@ impl Sema<'_, '_> {
                         | "pass_object_size"
                         | "pass_dynamic_object_size"
                         | "overloadable"
+                        | "noinline"
+                        | "always_inline"
+                        | "assume"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
@@ -11214,7 +11251,8 @@ fn attr_kind_of(
         ("deprecated", _, _) => AttrKind::DEPRECATED,
         ("noreturn", _, _) => AttrKind::NORETURN,
         ("fallthrough", _, _) => AttrKind::FALLTHROUGH,
-        ("assume", true, _) => AttrKind::ASSUME,
+        // clang `CXXAssume`: `CXX11<"", "assume">, Clang<"assume">`.
+        ("assume", _, _) if std || gnu_syntax || clang_scope => AttrKind::ASSUME,
         ("likely", true, _) => AttrKind::LIKELY,
         ("unlikely", true, _) => AttrKind::UNLIKELY,
         ("no_unique_address", true, _) => AttrKind::NO_UNIQUE_ADDRESS,
@@ -11223,8 +11261,10 @@ fn attr_kind_of(
         ("aligned", _, true) | ("alignas", _, _) => AttrKind::ALIGNED,
         ("packed", _, true) => AttrKind::PACKED,
         ("used", _, true) => AttrKind::USED,
-        ("noinline", _, true) => AttrKind::NOINLINE,
-        ("always_inline", _, true) => AttrKind::ALWAYS_INLINE,
+        // `GCC<"noinline">, CXX11<"clang", "noinline">` (the clang
+        // spelling is also a statement attribute, WP-813).
+        ("noinline", _, _) if gnu || clang_scope => AttrKind::NOINLINE,
+        ("always_inline", _, _) if gnu || clang_scope => AttrKind::ALWAYS_INLINE,
         ("gnu_inline", _, true) => AttrKind::GNU_INLINE,
         ("weak", _, true) => AttrKind::WEAK,
         // clang `GCC<"weakref">`, `GCC<"alias">`, `GCC<"ifunc">` (an

@@ -77,6 +77,8 @@ pub struct ParseOptions {
     /// reproduces where they differ (spec/pp.md "clang compatibility
     /// level"; [`kiln_sema::Sema::clang_compat`]).
     pub clang_compat: u32,
+    /// [`kiln_sema::Sema::cf_protection_branch`].
+    pub cf_protection_branch: bool,
     /// GCC's implicit library builtins (`-stdlib=libstdc++`;
     /// [`kiln_sema::Sema::gnu_lib_builtins`]).
     pub gnu_lib_builtins: bool,
@@ -120,6 +122,7 @@ impl Default for ParseOptions {
             coro_aligned_allocation: false,
             lax_vector_conversions: kiln_sema::LaxVectorConversions::All,
             clang_compat: 22,
+            cf_protection_branch: false,
             gnu_lib_builtins: false,
             math_errno: true,
             sve: false,
@@ -285,6 +288,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.lax_vector_conversions = opts.lax_vector_conversions;
     s.gnu = opts.gnu;
     s.clang_compat = opts.clang_compat;
+    s.cf_protection_branch = opts.cf_protection_branch;
     s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
     s.gnu_lib_builtins = opts.gnu_lib_builtins;
     s.math_errno = opts.math_errno;

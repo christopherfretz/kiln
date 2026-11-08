@@ -80,6 +80,57 @@ fn takes_expr_args(name: &str) -> bool {
             | "tls_model"
             | "returns_twice"
             | "mode"
+            // WP-813: the class B attributes.
+            | "no_stack_protector"
+            | "patchable_function_entry"
+            | "zero_call_used_regs"
+            | "speculative_load_hardening"
+            | "no_speculative_load_hardening"
+            | "no_split_stack"
+            | "no_instrument_function"
+            | "no_profile_instrument_function"
+            | "xray_always_instrument"
+            | "xray_never_instrument"
+            | "xray_log_args"
+            | "disable_sanitizer_instrumentation"
+            | "nocf_check"
+            | "function_return"
+            | "cfi_canonical_jump_table"
+            | "force_align_arg_pointer"
+            | "flatten"
+            | "leaf"
+            | "nomerge"
+            | "not_tail_called"
+            | "noduplicate"
+            | "convergent"
+            | "nouwtable"
+            | "noinline"
+            | "always_inline"
+            | "assume_aligned"
+            | "align_value"
+            | "callback"
+            | "noescape"
+            | "maybe_undef"
+            | "code_align"
+            | "loader_uninitialized"
+            | "lto_visibility_public"
+            | "standalone_debug"
+            | "coro_await_elidable"
+            | "coro_await_elidable_argument"
+            // `[[omp::assume("s")]]` (the others parse their own).
+            | "assume"
+    )
+}
+
+/// True for the attributes whose arguments may be identifiers (clang
+/// `attributeHasVariadicIdentifierArg`: `callback`; and
+/// `attributeHasIdentifierArg`: the string `EnumArgument`s of
+/// `zero_call_used_regs` and `function_return`, which sema rejects as
+/// "requires a string").
+fn takes_ident_args(name: &str) -> bool {
+    matches!(
+        name.trim_start_matches("__").trim_end_matches("__"),
+        "callback" | "zero_call_used_regs" | "function_return"
     )
 }
 
@@ -476,7 +527,10 @@ impl Parser<'_, '_> {
                 self.bump();
             }
             let text = self.s.ast.symbols().as_str(name).to_owned();
-            let args = if scope.is_none() && text == "assume" {
+            // clang 19 `Clang<"assume">` is the same statement attribute.
+            let clang_assume = scope
+                .is_some_and(|s| matches!(self.s.ast.symbols().as_str(s), "clang" | "_Clang"));
+            let args = if (scope.is_none() || clang_assume) && text == "assume" {
                 self.parse_assume_arg(name)
             } else if scope.is_none()
                 && self.at(Punct::LParen)
@@ -587,6 +641,8 @@ impl Parser<'_, '_> {
                     self.s.act_on_end_trailing_requires(scope);
                     args
                 }
+                // clang 19 `Clang<"assume">`: `[[assume]]`'s argument.
+                _ if self.s.ast.symbols().as_str(name) == "assume" => self.parse_assume_arg(name),
                 _ => self.parse_attr_args(name),
             };
             if let Some(args) = args
@@ -640,7 +696,19 @@ impl Parser<'_, '_> {
                 return Some(args);
             }
         }
+        let idents = takes_ident_args(&text);
         while !self.at(Punct::RParen) && !self.at_eof() {
+            if idents
+                && let Some(id) = self.ident()
+                && (self.peek_is(1, Punct::Comma) || self.peek_is(1, Punct::RParen))
+            {
+                let at = self.bump().span.lo;
+                args.push(AttrArg::Ident(id, at));
+                if self.eat(Punct::Comma).is_none() {
+                    break;
+                }
+                continue;
+            }
             let e = if self.at_string() {
                 self.parse_string_literal(true)
             } else {

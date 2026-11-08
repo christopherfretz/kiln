@@ -190,4 +190,5 @@ pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
 // The tail block (spec/diag.md §2.4): rows here compile, but `cargo xtask
 // diag-split --check` (run by `cargo xtask ci`) fails until `cargo xtask
 // diag-split` has moved them into their area file under `src/groups/`.
-diag_group_table! {}
+diag_group_table! {
+}

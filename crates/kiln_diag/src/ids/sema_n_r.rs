@@ -34,6 +34,7 @@ sema_no_template_named = Error (1) "no template named '{0}'";
 sema_no_viable_conversion = Error (2) "no viable conversion from {0} to {1}";
 sema_no_viable_conversion_return = Error (2) "no viable conversion from returned value of type {0} to function return type {1}";
 sema_no_viable_destructor = Error (1) "no viable destructor found for class {0}";
+sema_nocf_check_ignored = Warning [IgnoredAttributes] (0) "'nocf_check' attribute ignored; use -fcf-protection to enable the attribute";
 sema_non_aligned_allocation_function = Warning [CoroNonAlignedAllocationFunction] (1) "under -fcoro-aligned-allocation, the non-aligned allocation function for the promise type {0} has higher precedence than the global aligned allocation function";
 sema_non_bool_atomic_constraint = Error (1) "atomic constraint must be of type 'bool' (found {0})";
 sema_non_constant_constraint = Error (0) "substitution into constraint expression resulted in a non-constant expression";

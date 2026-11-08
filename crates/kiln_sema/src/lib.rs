@@ -24,6 +24,7 @@ mod bitfield_constant;
 mod builtins;
 pub mod cfg;
 pub mod class;
+mod class_b_attrs;
 mod cleanup_attr;
 mod complex;
 mod consteval;
@@ -282,6 +283,9 @@ pub struct Sema<'a, 'sm> {
     /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
     /// "Predefined identifiers").
     pub clang_compat: u32,
+    /// `-fcf-protection=branch` (or `full`) is on: `nocf_check` applies
+    /// (clang `LangOptions::CFProtectionBranch`; WP-813).
+    pub cf_protection_branch: bool,
     /// The `AArch64` `sve` target feature is on (`-march=armv8-a+sve`,
     /// `-target-feature +sve`): the SVE vector types are usable in
     /// expressions and as automatic variables (spec/sema.md "SVE").
@@ -1123,6 +1127,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_lifetime_extension: false,
             gnu: false,
             clang_compat: 22,
+            cf_protection_branch: false,
             sve: false,
             nns_start: None,
             gnu_lib_builtins: false,

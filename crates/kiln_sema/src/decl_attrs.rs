@@ -89,6 +89,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::NODEBUG => "nodebug",
         AttrKind::ARTIFICIAL => "artificial",
         AttrKind::MIN_VECTOR_WIDTH => "min_vector_width",
+        k if k.is_class_b() => return crate::class_b_attrs::name(node),
         _ => return None,
     })
 }
@@ -346,7 +347,15 @@ impl Sema<'_, '_> {
             if matches!(
                 node.kind,
                 AttrKind::ASSUME | AttrKind::LIKELY | AttrKind::UNLIKELY | AttrKind::FALLTHROUGH
-            ) {
+            ) || (!asm
+                && matches!(
+                    node.kind,
+                    AttrKind::NOINLINE
+                        | AttrKind::ALWAYS_INLINE
+                        | AttrKind::NOMERGE
+                        | AttrKind::CODE_ALIGN
+                ))
+            {
                 continue;
             }
             let Some(name) = attr_name(&node) else { continue };
@@ -444,8 +453,12 @@ impl Sema<'_, '_> {
             if node.kind == AttrKind::INDETERMINATE {
                 return self.check_indeterminate_subject(d, kind, node);
             }
+            if node.kind.is_class_b() {
+                return self.check_class_b_attr(d, kind, a, node);
+            }
             self.check_decl_attr(d, kind, node)
         });
+        self.check_class_b_exclusions(attrs);
         self.unify_fn_section(d, attrs);
     }
 
