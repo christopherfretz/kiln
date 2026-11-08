@@ -3091,8 +3091,9 @@ impl Oven {
     }
 
     /// The checks of a load from an allocation with unions or with
-    /// `mutable` members it may not read (outlined from the hot path).
-    #[cold]
+    /// `mutable` members it may not read (outlined from the hot path; not
+    /// `#[cold]`, since union-backed storage takes it on every access).
+    #[inline(never)]
     fn slow_access(&self, a: &Alloc, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
         let fl = a.flags;
         // A write is checked in an object that is not `const`: the one
