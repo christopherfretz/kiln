@@ -167,6 +167,28 @@ impl Parser<'_, '_> {
             if n > 0 {
                 self.s.act_on_stmt_decl_attrs(&attrs, asm);
             }
+            // WP-813: `[[clang::noinline]]`, `[[clang::always_inline]]`,
+            // `[[clang::nomerge]]` and `[[clang::code_align]]` are also
+            // statement attributes (on a declaration they stay the
+            // declaration's).
+            let stmt_attrs: Vec<kiln_ast::AttrId> = attrs
+                .iter()
+                .copied()
+                .filter(|&a| {
+                    matches!(
+                        self.s.ast.attrs.get(a).kind,
+                        AttrKind::NOINLINE
+                            | AttrKind::ALWAYS_INLINE
+                            | AttrKind::NOMERGE
+                            | AttrKind::CODE_ALIGN
+                    )
+                })
+                .collect();
+            if !asm && !stmt_attrs.is_empty() {
+                let mut all = std::mem::take(hints);
+                all.extend_from_slice(&stmt_attrs);
+                return Some(self.s.act_on_attributed_stmt(&all, s, start, self.std));
+            }
             return Some(s);
         }
         self.parse_statement_after_attrs()

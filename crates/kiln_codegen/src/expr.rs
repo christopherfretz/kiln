@@ -3663,6 +3663,9 @@ impl Cg<'_> {
     ) -> R<Option<V>> {
         let musttail = std::mem::take(&mut self.f.musttail_armed);
         self.f.vector_width = self.f.vector_width.max(sig.info.max_vector_width);
+        // The direct callee whose class B call-site attributes apply
+        // (set by `alloc_call_attrs`, WP-813).
+        let callee_decl = self.f.call_decl.take();
         self.check_pure_scalable(sig, self.f.call_loc)?;
         let rq = sig.ret;
         let mut ir_args = Vec::new();
@@ -3696,7 +3699,15 @@ impl Cg<'_> {
             };
             let kind = info.kind.clone();
             let loc = args.get(i).and_then(|&a| self.loc_of(a));
+            let at = ir_args.len();
             self.call_arg(&kind, sig.params[i], v, &mut ir_args, loc)?;
+            // clang `EmitCall`: a `maybe_undef` argument is frozen.
+            if callee_decl.is_some_and(|d| self.maybe_undef_param(d, i)) {
+                for a in &mut ir_args[at..] {
+                    let ty = self.f.fir.ty(&self.m, *a);
+                    *a = self.f.fir.push(Op::Freeze { v: *a }, ty);
+                }
+            }
         }
         let callee = match callee {
             Callee::Value(v) => v,
@@ -3710,7 +3721,10 @@ impl Cg<'_> {
             }
             _ => LTy::VOID,
         };
-        let (mut ret, params) = self.sig_attrs(sig, vals.len(), false);
+        let (mut ret, mut params) = self.sig_attrs(sig, vals.len(), false);
+        if let Some(d) = callee_decl {
+            self.class_b_params(d, sig, &mut params);
+        }
         if !ret_extra.is_empty() {
             let mut ra = self.m.attrs_of(ret).to_vec();
             ra.extend(ret_extra.iter().cloned());
@@ -3725,10 +3739,17 @@ impl Cg<'_> {
         }
         fa.extend(extra.iter().cloned());
         self.call_size_attrs(fid, &mut fa);
+        self.stmt_call_attrs(callee_decl, &mut fa);
         let func = if fa.is_empty() { AttrList::default().func } else { self.m.attr_set(&fa) };
+        let tail = if callee_decl.is_some_and(|d| self.not_tail_called(d)) {
+            kiln_llvm::TailKind::NoTail
+        } else {
+            kiln_llvm::TailKind::None
+        };
         let opts = CallOpts {
             attrs: AttrList { func, ret, params },
             cc: sig.llvm_cc(),
+            tail,
             ..CallOpts::default()
         };
         let r = self.emit_call_op(sig.fn_ty, callee, ir_args, opts, rty, fid, sig.nothrow);

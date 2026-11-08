@@ -87,6 +87,7 @@ sema_std_compare_type_form = Error (2) "standard library implementation of {0} i
 sema_std_source_location_impl_malformed = Error (0) "'std::source_location::__impl' must be standard-layout and have only two 'const char *' fields '_M_file_name' and '_M_function_name', and two integral fields '_M_line' and '_M_column'";
 sema_std_source_location_impl_not_found = Error (0) "'std::source_location::__impl' was not found; it must be defined before '__builtin_source_location' is called";
 sema_stmt_attribute_on_decl = Error (1) "'{0}' attribute cannot be applied to a declaration";
+sema_stmt_attribute_precedence = Warning [IgnoredAttributes] (2) "statement attribute {0} has higher precedence than function attribute {1}";
 sema_stmtexpr_file_scope = Error (0) "statement expression not allowed at file scope";
 sema_storage_class_for_member = Error (0) "storage class specified for a member declaration";
 // [class.static.data]/2 (WP-327)
@@ -225,6 +226,7 @@ sema_uninit_self_reference_in_init = Warning [Uninitialized] (1) "variable {0} i
 sema_uninit_self_reference_in_reference_init = Warning [Uninitialized] (1) "reference {0} is not yet bound to a value when used within its own initialization";
 sema_union_has_base = Error (0) "unions cannot have base classes";
 sema_union_member_reference = Error (2) "union member '{0}' has reference type {1}";
+sema_unknown_assumption = Warning [UnknownAssumption] (1) "unknown assumption string '{0}'; attribute is potentially ignored";
 sema_unknown_typename = Error (1) "unknown type name '{0}'";
 sema_unknown_visibility = Warning [IgnoredAttributes] (1) "unknown visibility '{0}'";
 sema_unknown_warning_group = Error (1) "unknown warning group '{0}'";

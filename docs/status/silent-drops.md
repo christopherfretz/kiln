@@ -57,7 +57,9 @@ there (and under `-w` / `-Wno-unknown-attributes`).
 ### Systemic causes (fixing these removes most of the A list at once)
 
 Causes 1 to 3 are fixed in WP-805, and so is the class A half of cause 4 (`used`, `aligned` on
-functions). The class B half of cause 4 is open. Cause 5 is fixed in WP-806 (#364).
+functions). For the class B half of cause 4, WP-813 fixed `nonnull` IR; `likely`/`unlikely`
+branch weights at -O1+ are a WP-813 follow-up and the debug attributes WP-814's. Cause 5 is fixed
+in WP-806 (#364).
 
 1. **`__has_attribute`/`__has_cpp_attribute`/`__has_builtin` claim everything clang has**
    (crates/kiln_pp/src/features.rs:391-440 answer from the clang-generated features_table.rs).
@@ -154,9 +156,9 @@ aligned-on-function, P-A3, P-A4, F-A4 — plus every attribute row when it appea
 |---|---|---|---|---|---|
 | `used` | parsed to `AttrKind::USED` (decl.rs:10904); no reader in kiln_codegen. Deferred emission (`discardable_fn`, crates/kiln_codegen/src/module.rs:1127; `var_must_emit`, global_init.rs:104) never consults it; `llvm.used` (global_init.rs:852-856) holds only unordered-init guards | `UsedAttr`: always emitted (DeclMustBeEmitted) + `@llvm.used` | **A** — an unreferenced `static`/`inline` function or variable marked `used` (asm-referenced helpers, registration tables, `__attribute__((used, section("...")))` plugin/test tables) is not emitted at all | none | fixed in WP-805 |
 | `aligned(N)` on a function | accepted (no subject error); layout reads only types/vars/fields (crates/kiln_abi/src/layout/props.rs:78). Function `align` is set only to 2 for x86 methods (crates/kiln_codegen/src/func.rs:398-409) | `align N` on the `llvm::Function` | A-low (code relying on function-address alignment / low-bit tagging) | none | fixed in WP-805 |
-| `[[likely]]` / `[[unlikely]]` | checked in sema (crates/kiln_sema/src/stmt.rs:484-534); no codegen reader | branch weights / `llvm.expect` at -O1+ | B | none | open (class B; WP-805 follow-up) |
-| `nonnull` / `returns_nonnull` | sema warnings only (crates/kiln_sema/src/nonnull.rs, null_compare.rs) | `nonnull` param / return IR attribute | B | none | open (class B; WP-805 follow-up) |
-| `nodebug`, `artificial`, `standalone_debug` | sema subject checks only | debug-info shaping | B (kiln emits no debug info at all) | none | open (class B; no debug info) |
+| `[[likely]]` / `[[unlikely]]` | checked in sema (crates/kiln_sema/src/stmt.rs:484-534); no codegen reader | branch weights / `llvm.expect` at -O1+ | B | none | open: WP-813 follow-up (xfail `tests/conformance/dcl.attr.class-b/ir-likely-branch-weights-O1-19.cpp`; no IR effect at -O0, as clang) |
+| `nonnull` / `returns_nonnull` | sema warnings only (crates/kiln_sema/src/nonnull.rs, null_compare.rs) | `nonnull` param / return IR attribute | B | none | fixed in WP-813 |
+| `nodebug`, `artificial`, `standalone_debug` | sema subject checks only | debug-info shaping | B (kiln emits no debug info at all) | none | WP-814 (debug info); `standalone_debug` sema in WP-813 |
 | `carries_dependency` | stored, unused | no codegen either | none (matches clang) | — | none (matches clang) |
 | thread-safety (34), `lifetimebound`, `no_sanitize*` (6) | dropped at decl.rs:9911/9915 | analysis (`-Wthread-safety`, `-Wdangling`) / sanitizer instrumentation | C (sanitizers: moot unless `-fsanitize` is accepted — see §4) | none | WP-805: rows in the triage table (C; `no_sanitize*` B) |
 | `AttrKind::MODE`, `INTERNAL_LINKAGE`, `NO_SANITIZE` | defined in crates/kiln_ast/src/attr.rs:71-74 but never produced (only the AST dumper names them) | — | see `mode`, `internal_linkage` below | — | `mode` fixed in WP-799; `internal_linkage` WP-807 |
@@ -211,9 +213,16 @@ system headers / with default warnings".
 ### 1.4 Unknown-to-kiln attributes — class B (optimization / perf / debug / hardening only)
 
 Same path (decl.rs:9959, warn outside system headers, silent inside; `__has_attribute` = 1).
-**Owner: WP-805 (accepted silently as class B rows of the triage table; `target_clones` is
-implemented on AArch64 in WP-810 and an error on x86-64).** `flatten`, `nonnull`/`returns_nonnull` and `[[likely]]`/`[[unlikely]]` lowering stays
-open as a WP-805 follow-up.
+**Owner: fixed in WP-813** (spec/landed/codegen/WP-813.md): every attribute below is
+implemented as clang implements it (sema, IR, `__has_attribute`), and its rows left the WP-805
+triage table, except these. `target_clones` is WP-810's (implemented on AArch64, an error on
+x86-64).
+`randomize_layout`/`no_randomize_layout` and `btf_decl_tag`/`btf_type_tag` are C-only in clang:
+`'X' attribute ignored`, as clang warns in C++. The debug effects of `nodebug`, `artificial` and
+`standalone_debug` are WP-814's. Open follow-ups with xfail repros in
+tests/conformance/dcl.attr.class-b/: `[[likely]]`/`[[unlikely]]` branch weights at -O1+,
+`noescape` on a function type's parameter, and clang 22's `malloc_span` (still a silent class B
+triage row, without clang's subject checks).
 
 - inlining / call shape: `flatten`, `leaf`, `nomerge`, `not_tail_called`, `noduplicate`, `convergent`,
   `nouwtable`, `[[clang::always_inline]]` / `[[clang::noinline]]` (incl. statement forms; the GNU
@@ -403,7 +412,8 @@ etc. are rejected as unknown (loud; fine by policy).
 
 ### Class B
 
-Owner: fast-math and `-fno-math-errno` implemented in WP-806 (#364); the rest open.
+Owner: fast-math and `-fno-math-errno` implemented in WP-806 (#364); `-fcf-protection` in WP-813;
+the rest open.
 
 - `-g`, `-g1..3`, `-ggdb*` (args.rs:762): no debug info at all, no diagnostic.
 - `-ffast-math`/`-Ofast`: macros (`__FAST_MATH__`, predef.rs:582) + basic complex range only; no
@@ -414,7 +424,8 @@ Owner: fast-math and `-fno-math-errno` implemented in WP-806 (#364); the rest op
 - `-fno-threadsafe-statics`: macro only (predef.rs:558); `__cxa_guard_*` still called
   (global_init.rs:545) — extra libc++abi dependency in freestanding builds.
 - `-fcf-protection[=...]` (codegen_flags.rs:62): no CET module flags/endbr -> one kiln object
-  clears IBT/SHSTK for the whole linked binary (security hardening).
+  clears IBT/SHSTK for the whole linked binary (security hardening). **Fixed in WP-813**: the
+  `cf-protection-branch`/`-return` module flags and `nocf_check`, as clang (spec/driver.md).
 - `-fstack-clash-protection`: no `probe-stack` attribute.
 - `-fstack-usage`: no `.su` output.
 - `-march=native` on x86 (features.rs:428-433): only `-mcpu=native` to llc; no feature list, no
@@ -429,4 +440,4 @@ Owner: fast-math and `-fno-math-errno` implemented in WP-806 (#364); the rest op
 Owner: open.
 
 - `-fcf-protection=...` on AArch64 accepted silently (clang: error "option not supported on this
-  target").
+  target"). **Fixed in WP-813**: clang's `-cc1` errors.

@@ -1081,7 +1081,7 @@ impl Sema<'_, '_> {
 
     /// The trivial default constructor half of a trivial class
     /// ([class.prop]/2).
-    fn trivial_default_ctor(&self, r: DeclId) -> bool {
+    pub(crate) fn trivial_default_ctor(&self, r: DeclId) -> bool {
         let b = self.bits_of(r);
         b.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR)
             && !b.contains(DefinitionBits::USER_PROVIDED_DEFAULT_CTOR)

@@ -139,6 +139,7 @@ TautologicalUndefinedCompare = "tautological-undefined-compare" [];
 UndefinedBoolConversion = "undefined-bool-conversion" [];
 // ----- WP-220 (undefined variable templates)
 UndefinedVarTemplate = "undefined-var-template" [];
+UnknownAssumption = "unknown-assumption" [];
 UnneededInternalDeclaration = "unneeded-internal-declaration" [];
 UnreachableCodeBreak = "unreachable-code-break" [];
 UnreachableCodeFallthrough = "unreachable-code-fallthrough" [];

@@ -190,6 +190,15 @@ pub(crate) struct Fx {
     /// The loop statement about to be emitted and the `AttributedStmt`
     /// whose loop hints apply to it (clang `EmitStmt`'s `Attrs`).
     pub loop_hints: Option<(kiln_ast::StmtId, kiln_ast::StmtId)>,
+    /// The call-site attributes of the enclosing `[[clang::nomerge]]`,
+    /// `[[clang::noinline]]` and `[[clang::always_inline]]` statements
+    /// (WP-813).
+    pub stmt_calls: crate::class_b::StmtCalls,
+    /// The function is `flatten` (WP-813).
+    pub flatten: bool,
+    /// The callee of the direct call being emitted, for its call-site
+    /// class B attributes (WP-813).
+    pub call_decl: Option<DeclId>,
     /// The returned call of the enclosing `[[clang::musttail]]` return
     /// statement (clang `MustTailCall`; WP-809).
     pub musttail: Option<kiln_ast::ExprId>,
@@ -287,6 +296,9 @@ impl Fx {
             cx_ret: None,
             calls: Vec::new(),
             loop_hints: None,
+            stmt_calls: crate::class_b::StmtCalls::default(),
+            flatten: false,
+            call_decl: None,
             musttail: None,
             musttail_armed: false,
             conds: Vec::new(),
@@ -399,6 +411,7 @@ impl Cg<'_> {
         self.f.is_main = is_main;
         self.f.thunk = thunk.is_some();
         self.f.naked = thunk.is_none() && self.has_fn_attr(d, kiln_ast::attr::AttrKind::NAKED);
+        self.f.flatten = thunk.is_none() && self.has_fn_attr(d, kiln_ast::attr::AttrKind::FLATTEN);
         self.f.sig = Some(sig.clone());
         // clang `StartFunction`: `min_vector_width(N)` raises the start.
         let min = ast.redecls_of(d).find_map(|r| {
@@ -777,6 +790,11 @@ impl Cg<'_> {
             noreturn,
             inline,
             extra,
+            start: if thunk.is_some() {
+                crate::class_b::StartDecl::None
+            } else {
+                crate::class_b::StartDecl::Fn(d)
+            },
         });
         // clang `EmitFunctionProlog` adds `noalias` to the `sret` argument,
         // and returns before that in a naked function (no `ReturnValue`
@@ -796,6 +814,10 @@ impl Cg<'_> {
             (ret, params) = self.thunk_attrs(&sig, ret, params);
         }
         let (fa, ret) = self.alloc_fn_attrs(d, fa, ret);
+        let (fa, ret) = self.class_b_fn_sets(f, d, attr_sig, fa, ret, &mut params);
+        if thunk.is_none() {
+            self.class_b_prolog_params(d, attr_sig, &mut params);
+        }
         {
             let func = self.m.func_mut(f);
             func.attrs.func = fa;

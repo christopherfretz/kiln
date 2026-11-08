@@ -26,6 +26,7 @@ mod builtins;
 mod cconv;
 pub mod cfg;
 pub mod class;
+mod class_b_attrs;
 mod cleanup_attr;
 mod complex;
 mod consteval;
@@ -289,6 +290,9 @@ pub struct Sema<'a, 'sm> {
     /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
     /// "Predefined identifiers").
     pub clang_compat: u32,
+    /// `-fcf-protection=branch` (or `full`) is on: `nocf_check` applies
+    /// (clang `LangOptions::CFProtectionBranch`; WP-813).
+    pub cf_protection_branch: bool,
     /// The `AArch64` `sve` target feature is on (`-march=armv8-a+sve`,
     /// `-target-feature +sve`): the SVE vector types are usable in
     /// expressions and as automatic variables (spec/sema.md "SVE").
@@ -560,6 +564,11 @@ pub struct Sema<'a, 'sm> {
     /// that is a function or array is diagnosed there (clang's
     /// `FunctionTypeLoc` begin; [dcl.fct]/11, WP-222, WP-241).
     pub(crate) type_spec_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Where a function declared `noinline`, `always_inline` or
+    /// `flatten` begins (its leading attributes included; clang
+    /// `Decl::getBeginLoc`): the note of a statement attribute that
+    /// overrides it points there (WP-813).
+    pub(crate) inline_fn_begin_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// Where the outermost `&`/`&&` of a declaration of dependent
     /// reference type was written (`T &m;`): a substitution that forms
     /// a reference to `void` is diagnosed there (clang's
@@ -1165,6 +1174,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_lifetime_extension: false,
             gnu: false,
             clang_compat: 22,
+            cf_protection_branch: false,
             sve: false,
             sve_vector_bits: None,
             nns_start: None,
@@ -1238,6 +1248,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             type_spec_locs: kiln_source::fx::FxHashMap::default(),
+            inline_fn_begin_locs: kiln_source::fx::FxHashMap::default(),
             ref_locs: kiln_source::fx::FxHashMap::default(),
             inner_chunk_locs: kiln_source::fx::FxHashMap::default(),
             pending_chunk_loc: Loc::INVALID,
