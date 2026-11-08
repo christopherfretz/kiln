@@ -56,6 +56,9 @@ def load(path=TOML):
         p.setdefault("checkout", name)
         p.setdefault("test_timeout", 1800)
         p.setdefault("vmem_kb", 3000000)
+        p.setdefault("stage_of", "")
+        p.setdefault("stage_cxx", "bin/clang++")
+        p.setdefault("stage_cc", "bin/clang")
         if not (isinstance(p["vmem_kb"], int) and 0 < p["vmem_kb"] <= VMEM_MAX_KB):
             raise SystemExit(f"{path}: [{name}] vmem_kb must be an integer in 1..{VMEM_MAX_KB}")
         if not (isinstance(p["test_timeout"], int) and p["test_timeout"] > 0):
@@ -64,6 +67,11 @@ def load(path=TOML):
         bad = [d for d in p["deps"] if d not in data or data[d]["build"] != "cmake"]
         if bad:
             raise SystemExit(f"{path}: [{name}] deps must name cmake projects: {', '.join(bad)}")
+    # A staged row (WP-815) builds with compilers another row built.
+    for name, p in data.items():
+        s = p["stage_of"]
+        if s and (s == name or s not in data or data[s]["build"] != "cmake" or data[s]["stage_of"]):
+            raise SystemExit(f"{path}: [{name}] stage_of must name another cmake project that is not itself staged")
     # Rows sharing a checkout (the Boost superproject, WP-787) must agree on
     # what is cloned.
     first = {}
@@ -233,7 +241,7 @@ def main():
             sys.exit(f"projects.py: unknown project '{a.project}' (see {TOML})")
         p = data[a.project]
         q = shlex.quote
-        for k in ("url", "tag", "build", "cxx_std", "test", "c_compiler", "control_cxx", "source_subdir", "checkout", "test_timeout", "vmem_kb"):
+        for k in ("url", "tag", "build", "cxx_std", "test", "c_compiler", "control_cxx", "source_subdir", "checkout", "test_timeout", "vmem_kb", "stage_of", "stage_cxx", "stage_cc"):
             print(f"P_{k.upper()}={q(str(p[k]))}")
         print(f"P_SUBMODULES={'1' if p['submodules'] else ''}")
         print("P_CONFIGURE=(" + " ".join(q(x) for x in p["configure"]) + ")")

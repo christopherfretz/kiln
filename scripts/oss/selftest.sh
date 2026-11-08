@@ -27,6 +27,17 @@ check "checkout defaults to the project name" "[ \"\$(ck t '')\" = 's b' ]"
 check "a shared checkout is accepted" "[ \"\$(ck t 'checkout=\"s\"')\" = 's s' ]"
 check "a shared checkout at another tag is refused" "case \"\$(ck t2 'checkout=\"s\"')\" in *\"shares checkout 's'\"*) true ;; *) false ;; esac"
 
+# A bootstrap stage (WP-815): `stage_of` must name another unstaged cmake
+# row, and oss-build.sh takes that row's built compilers (`--which`).
+st() { printf '[a]\nurl="u"\ntag="t"\nbuild="cmake"\ncxx_std=20\ntest="true"\nwave=4\n%s\n[b]\nurl="u"\ntag="t"\nbuild="cmake"\ncxx_std=20\ntest="true"\nwave=4\nstage_of="%s"\n' "$1" "$2" > "$TMP/st.toml"; python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import projects; d = projects.load(sys.argv[2]); print(d['b']['stage_of'], d['b']['stage_cxx'], d['b']['stage_cc'])" "$HERE" "$TMP/st.toml" 2>&1; }
+check "stage_of names a row; stage_cxx/stage_cc default" "[ \"\$(st '' a)\" = 'a bin/clang++ bin/clang' ]"
+check "stage_of of itself, an unknown row or a staged row is refused" "case \"\$(st '' b)\$(st '' z)\$(st 'stage_of=\"b\"' a)\" in *'stage_of must'*'stage_of must'*'stage_of must'*) true ;; *) false ;; esac"
+SO="$TMP/stage-oss"; mkdir -p "$SO/build/llvm_clang/kiln/bin"
+ln -s "$(command -v clang++-19)" "$SO/build/llvm_clang/kiln/bin/clang++"; ln -s "$(command -v clang-19)" "$SO/build/llvm_clang/kiln/bin/clang"
+check "staged row: --which takes the stage row's compilers" "[ \"\$(KILN_OSS_ROOT='$SO' KILN_OSS_CXX=/nonexistent '$HERE/oss-build.sh' llvm_selfhost --which 2>/dev/null | tr '\n' ' ')\" = 'CXX=$SO/build/llvm_clang/kiln/bin/clang++ CC=$SO/build/llvm_clang/kiln/bin/clang ' ]"
+KILN_OSS_ROOT="$SO" "$HERE/oss-build.sh" llvm_selfhost --compiler clang --which > /dev/null 2> "$TMP/stage.err"
+check "staged row: an unbuilt stage exits 2 and says so" "[ $? -eq 2 ] && grep -q 'which is not built' '$TMP/stage.err'"
+
 # The Boost Jamfile shim's library rules, variants, defines and links
 # (WP-804): a stub superproject whose boost_test() prints what it is given.
 JB="$TMP/jam"; mkdir -p "$JB/cm" "$JB/libs/demo/test/suite"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # oss-build.sh <project> [--compiler kiln|clang] [--no-test] [--jobs N]
-#        [--install PREFIX]
+#        [--install PREFIX] [--which]
 #
 # Builds one project of scripts/oss/projects.toml through its own build
 # system with scripts/oss/kiln-cxx as the C++ compiler, runs its tests, and
@@ -12,8 +12,15 @@
 # .oss/<dep>-install-<compiler>/ (`--install PREFIX`, which uses the dep's
 # `install_configure` and skips its tests), unless already installed.
 #
+# A row with `stage_of = "<row>"` (WP-815, a bootstrap stage) builds with
+# compilers that row built: `.oss/build/<row>/<compiler>/<stage_cxx>` and
+# `<stage_cc>` (default bin/clang++ and bin/clang), so `--compiler kiln`
+# means "with the compiler kiln++ built" and `--compiler clang` "with the one
+# clang-19 built". `--which` prints the resolved compilers and exits.
+#
 # Environment: KILN_OSS_CXX (the kiln++ to test; default
-# $CARGO_TARGET_DIR/harness/kiln++), KILN_OSS_ROOT (default <kiln>/.oss).
+# $CARGO_TARGET_DIR/harness/kiln++; ignored by a staged row), KILN_OSS_ROOT
+# (default <kiln>/.oss).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +29,7 @@ OSS="${KILN_OSS_ROOT:-$KILN/.oss}"
 WRAP="$HERE/kiln-cxx"
 
 usage() { sed -n '2,3p' "$0" | sed 's/^# //' >&2; exit 2; }
-PROJECT="" COMPILER=kiln RUN_TEST=1 JOBS=4 INSTALL=""
+PROJECT="" COMPILER=kiln RUN_TEST=1 JOBS=4 INSTALL="" WHICH=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --compiler) COMPILER="${2:-}"; shift 2 ;;
@@ -31,6 +38,7 @@ while [ $# -gt 0 ]; do
     --jobs) JOBS="${2:-}"; shift 2 ;;
     --jobs=*) JOBS="${1#*=}"; shift ;;
     --install) INSTALL="${2:-}"; RUN_TEST=""; shift 2 ;;
+    --which) WHICH=1; shift ;;
     -h|--help) usage ;;
     -*) echo "oss-build: unknown option $1" >&2; usage ;;
     *) [ -z "$PROJECT" ] || usage; PROJECT="$1"; shift ;;
@@ -43,7 +51,15 @@ case "$JOBS" in ''|*[!0-9]*) echo "oss-build: --jobs takes a number" >&2; exit 2
 CFG="$(python3 "$HERE/projects.py" shell "$PROJECT")" || exit 2
 eval "$CFG"
 
-if [ "$COMPILER" = kiln ]; then
+if [ -n "$P_STAGE_OF" ]; then
+  # A bootstrap stage: the compilers are another row's build artifacts.
+  stage="$OSS/build/$P_STAGE_OF/$COMPILER"
+  CXX="$stage/$P_STAGE_CXX" P_C_COMPILER="$stage/$P_STAGE_CC"
+  how="stage $P_STAGE_OF/$COMPILER"
+  for t in "$CXX" "$P_C_COMPILER"; do
+    [ -x "$t" ] || { echo "oss-build: $PROJECT builds with $t, which is not built: run 'oss-build.sh $P_STAGE_OF --compiler $COMPILER' first" >&2; exit 2; }
+  done
+elif [ "$COMPILER" = kiln ]; then
   if [ -n "${KILN_OSS_CXX:-}" ]; then
     CXX="$KILN_OSS_CXX"; how='$KILN_OSS_CXX'
   elif [ -n "${CARGO_TARGET_DIR:-}" ] && [ -x "$CARGO_TARGET_DIR/harness/kiln++" ]; then
@@ -60,6 +76,7 @@ else
   how='PATH'
 fi
 CXX="$(cd "$(dirname "$CXX")" && pwd)/$(basename "$CXX")"
+if [ -n "$WHICH" ]; then echo "CXX=$CXX"; echo "CC=$(command -v "$P_C_COMPILER")"; exit 0; fi
 echo "oss-build: $PROJECT $P_TAG with $CXX (from $how)"
 export KILN_OSS_CXX="$CXX"
 
