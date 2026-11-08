@@ -1713,7 +1713,9 @@ Out-of-class partial specializations of a member template (WP-150):
 instantiates the definitions of every member that is defined in the
 pattern and not yet explicitly specialized, including the out-of-line
 definitions of static data members (clang `InstantiateVariableDefinition`)
-and the members of member classes. Member templates are excluded. A
+and the members of member classes. Member templates are excluded, and
+so is the partial specialization of a member class template the
+instantiated class declares, which is still dependent (WP-812). A
 member class that is not yet defined at that point gets the member
 specialization kind `ExplicitInstantiationDefinition` (so its vtable and
 RTTI are emitted `weak_odr`); one already defined keeps its implicit
