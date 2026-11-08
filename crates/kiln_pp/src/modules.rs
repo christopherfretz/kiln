@@ -656,7 +656,9 @@ impl Preprocessor<'_, '_> {
             self.emit(d);
             return false;
         }
-        let Some(c) = self.load_capsule(path, bmi::read(bytes), None, Span::INVALID) else { return false };
+        let Some(c) = self.load_capsule(path, bmi::read(bytes), None, Span::INVALID) else {
+            return false;
+        };
         let builtin = self.sm.add_virtual("<built-in>", c.predefines.clone()).ok();
         let Some(m) = &mut self.modules else { return false };
         m.replays.push(Replay::new(path.to_owned(), c, builtin));

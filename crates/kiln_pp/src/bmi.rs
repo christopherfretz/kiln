@@ -667,9 +667,9 @@ fn body(r: &mut R<'_>) -> Res<Capsule> {
     }
     let n = u32::try_from(files.len()).unwrap_or(u32::MAX);
     let includer_ok = |i: u32| i < n || i == INCLUDER_BUILTIN || i == INCLUDER_NONE;
-    let ninc = r.count(12)?;
-    let mut includes = Vec::with_capacity(ninc);
-    for _ in 0..ninc {
+    let include_count = r.count(12)?;
+    let mut include_log = Vec::with_capacity(include_count);
+    for _ in 0..include_count {
         let includer = r.u32()?;
         let name = r.str()?;
         let angled = r.bool()?;
@@ -695,14 +695,14 @@ fn body(r: &mut R<'_>) -> Res<Capsule> {
         if !includer_ok(includer) {
             return corrupt("includer index out of range");
         }
-        includes.push(IncludeEntry {
+        include_log.push(IncludeEntry {
             key: IncludeKey { includer, name, angled, kind, lookup_from },
             hit,
         });
     }
-    let nemb = r.count(14)?;
-    let mut embeds = Vec::with_capacity(nemb);
-    for _ in 0..nemb {
+    let embed_count = r.count(14)?;
+    let mut embeds = Vec::with_capacity(embed_count);
+    for _ in 0..embed_count {
         let includer = r.u32()?;
         let name = r.str()?;
         let angled = r.bool()?;
@@ -730,7 +730,7 @@ fn body(r: &mut R<'_>) -> Res<Capsule> {
         fingerprint,
         imports,
         files,
-        includes,
+        includes: include_log,
         embeds,
     })
 }
