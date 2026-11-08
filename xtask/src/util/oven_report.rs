@@ -184,6 +184,10 @@ impl Report {
         let sum = evaluations.iter().fold(Counters::default(), |acc, e| acc.combine(&e.counters));
         let mut bad = Vec::new();
         for c in Counter::ALL.into_iter().chain(Counter::EXTRA) {
+            // A total-only counter: work no evaluation did (WP-884).
+            if c == Counter::SpliceFast {
+                continue;
+            }
             // The static space is also used by work no evaluation records
             // (spec/oven.md "Reporting protocol"): its total is a
             // high-water mark, at least every evaluation's.
@@ -374,7 +378,7 @@ mod tests {
         assert_eq!(
             r.total.describe(),
             "steps=116 bytes=172 peak_bytes=50 calls=10 allocs=4 peak_arena=64 frozen_bytes=140 \
-             static_bytes=0 evaluations=4 memo_hits=0 refl_bytes=0"
+             static_bytes=0 evaluations=4 memo_hits=0 refl_bytes=0 splice_fast=0"
         );
         // Located aggregation: line 3 of t.cpp only (not h.h, not the null loc).
         let at3 = r.at(3, None, &in_t);
