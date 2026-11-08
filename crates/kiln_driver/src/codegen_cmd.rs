@@ -295,7 +295,9 @@ impl CodegenJob<'_> {
                 exceptions: a.predef.exceptions.unwrap_or(true),
                 rtti: a.predef.rtti.unwrap_or(true),
                 ident: ident(),
-                outline_atomics: a.outline_atomics.unwrap_or(true),
+                outline_atomics: a
+                    .outline_atomics
+                    .or_else(|| job.toolchain.aarch64_outline_atomics_default().then_some(true)),
                 target_features: feats.extra.clone(),
                 target_attr: Some(if job.toolchain.target.is_aarch64() {
                     crate::features::target_attr_features as kiln_codegen::TargetAttrParser

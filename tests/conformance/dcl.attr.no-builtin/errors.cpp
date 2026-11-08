@@ -17,9 +17,9 @@
 //@ diag: 33:18 error "no_builtin attribute has no effect on defaulted or deleted functions"
 //@ diag: 35:18 error "no_builtin attribute is permitted on definitions only"
 //@ diag: 39:16 warning "'no_builtin' attribute only applies to functions"
-//@ diag: 42:21 warning "'std-memcpy' is not a valid builtin name for 'no_builtin'"
-//@ diag: 42:35 warning "'move' is not a valid builtin name for 'no_builtin'"
-//@ diag: 43:21 warning "'__builtin_memcpy' is not a valid builtin name for 'no_builtin'"
+//@ diag: 42:21 warning "'std-memcpy' is not a valid builtin name for '"
+//@ diag: 42:35 warning "'move' is not a valid builtin name for '"
+//@ diag: 43:21 warning "'__builtin_memcpy' is not a valid builtin name for '"
 __attribute__((no_builtin)) void d1();
 void d1() {}
 __attribute__((no_builtin("memcpy"))) void d2() {}

@@ -10247,7 +10247,9 @@ impl Sema<'_, '_> {
             return self.abi_tag_attribute(syntax, &n, args, loc);
         }
         if kind == AttrKind::NO_BUILTIN {
-            return self.no_builtin_attribute(syntax, args, loc);
+            // clang 22 names `[[clang::no_builtin]]` with its scope.
+            let scoped = syntax == AttrSyntax::Cxx11 && scope.is_some() && self.clang_compat >= 22;
+            return self.no_builtin_attribute(syntax, scoped, args, loc);
         }
         if kind == AttrKind::DIAGNOSE_IF {
             return self.diagnose_if_attribute(syntax, args, loc);
@@ -10689,6 +10691,7 @@ impl Sema<'_, '_> {
     fn no_builtin_attribute(
         &mut self,
         syntax: AttrSyntax,
+        scoped: bool,
         args: &[AttrArg],
         loc: Loc,
     ) -> Option<AttrId> {
@@ -10731,7 +10734,7 @@ impl Sema<'_, '_> {
                 let msg = self
                     .diag(DiagId::sema_no_builtin_invalid_name, at)
                     .arg(name)
-                    .arg("'no_builtin'");
+                    .arg(if scoped { "'clang::no_builtin'" } else { "'no_builtin'" });
                 self.emit(msg);
             }
         }

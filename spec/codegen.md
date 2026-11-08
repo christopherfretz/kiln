@@ -130,8 +130,10 @@ panic and never silently wrong IR.
   target string attributes: on AArch64 `"target-cpu"="generic"` and
   `"target-features"="+fp-armv8,+neon,+outline-atomics,+v8a,-fmv"`, or
   `"+fp-armv8,+neon,+v8a,-fmv,-outline-atomics"` when
-  `CodegenOptions::outline_atomics` is false (`-mno-outline-atomics`,
-  WP-226; `tests/codegen/no_outline_atomics.cpp`); on x86-64
+  `CodegenOptions::outline_atomics` is `Some(false)` (`-mno-outline-atomics`,
+  WP-226; `tests/codegen/no_outline_atomics.cpp`), or
+  `"+fp-armv8,+neon,+v8a,-fmv"` when it is `None` (no flag and no GCC
+  9.3.1+ installation, spec/driver.md; WP-808); on x86-64
   `"target-cpu"="x86-64"`, the baseline features and
   `"tune-cpu"="generic"`.
 - `func.rs`: per-function state (`Fx`) and the prolog and epilog: the
@@ -1093,7 +1095,7 @@ The normative description is spec/driver.md "Code generation". In short:
   `opt-19 -S -passes=verify`. `Exact` cases must also equal
   `clang++-19 -S -emit-llvm -O0 -std=c++26 --target=aarch64-unknown-linux-gnu
   -moutline-atomics` after normalization (the flag for the same reason as
-  in the IR-diff corpus below; kiln's default is on, WP-228). A case that differs but is marked `VerifyOnly` is
+  in the IR-diff corpus below; kiln's default follows the GCC installation as clang's, WP-808). A case that differs but is marked `VerifyOnly` is
   a documented deviation (below); one that becomes exact is reported so
   it can be promoted. `KILN_CASE=<name>` prints both texts.
 - **Normalization:** both texts go through `opt-19 -S -passes=verify`,

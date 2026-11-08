@@ -101,10 +101,12 @@ pub struct CodegenOptions {
     pub rtti: bool,
     /// The `llvm.ident` string; empty for none.
     pub ident: String,
-    /// `AArch64` only: `+outline-atomics` in the functions'
-    /// `target-features` (`-moutline-atomics`, the default), else
-    /// `-outline-atomics` (`-mno-outline-atomics`). Ignored on x86-64.
-    pub outline_atomics: bool,
+    /// `AArch64` only: `+outline-atomics` (`Some(true)`: `-moutline-atomics`,
+    /// or the default with a GCC installation of 9.3.1 or later) or
+    /// `-outline-atomics` (`Some(false)`: `-mno-outline-atomics`) in the
+    /// functions' `target-features`; `None` names neither (clang
+    /// `getAArch64TargetFeatures`). Ignored on x86-64.
+    pub outline_atomics: Option<bool>,
     /// On `AArch64`, the `+name`/`-name` target features beyond the base
     /// set (`-march=armv8-a+sve`, `-target-feature`; one per name), merged
     /// into the functions' `target-features`. On x86-64, the `-march=`
@@ -545,7 +547,7 @@ impl Default for CodegenOptions {
             exceptions: true,
             rtti: true,
             ident: String::new(),
-            outline_atomics: true,
+            outline_atomics: Some(true),
             target_features: Vec::new(),
             target_attr: None,
             sve: false,
