@@ -7684,6 +7684,11 @@ declarator scopes.**
   qualified set, resolved at instantiation against the target type
   ([over.over]; WP-715,
   `expr.unary.op/p3-qualified-overload-set-dependent-base-run.cpp`).
+  A member function template specialization the pattern resolved,
+  `&C::f<A>` or `&Self::f<A>`, keeps its instantiated qualifier when
+  `respecialized_member_template` names it again, so it stays a pointer
+  to member, not `&this->f<A>` (WP-801;
+  `expr.unary.op/p3-member-template-specialization-pointer-to-member-in-template-run.cpp`).
 - *Dependent `noexcept(expr)` in a type*: the canonical
   `ExcSpec::DependentNoexcept(profile)` of a function type (as written
   under a pointer, member pointer, reference or GNU `noreturn`) is
