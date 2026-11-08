@@ -12,6 +12,7 @@ pub mod args;
 pub mod codegen_cmd;
 pub mod codegen_flags;
 pub mod constexpr_opts;
+pub mod coverage_flags;
 pub mod debug_flags;
 pub mod deps;
 pub mod features;
@@ -195,6 +196,9 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         }
         ArgError::InvalidArgumentToOption(v, o) => {
             Diag::new(DiagId::drv_invalid_argument_to_option, Span::INVALID).arg(v).arg(o)
+        }
+        ArgError::OnlyAllowedWith(a, b) => {
+            Diag::new(DiagId::drv_argument_only_allowed_with, Span::INVALID).arg(a).arg(b)
         }
         ArgError::NotAllowedWith(a, b) => {
             Diag::new(DiagId::drv_argument_not_allowed_with, Span::INVALID).arg(a).arg(b)

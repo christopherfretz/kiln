@@ -67,7 +67,8 @@ impl Cg<'_> {
         } else {
             let name = self.di_fn_name(d);
             f_ = f_.s("name", &name);
-            if reduced && fname != name {
+            // clang keeps the linkage name for gcov's notes too (WP-941).
+            if (reduced || self.opts.coverage.gcov.is_some()) && fname != name {
                 f_ = f_.s("linkageName", &fname);
             }
             fl.push("DIFlagPrototyped");
@@ -111,7 +112,11 @@ impl Cg<'_> {
             };
             decl = if reduced && method { self.di_method_decl(d) } else { None };
         }
-        if self.opts.opt_level > 0 && self.opts.debug.dwarf_version.unwrap_or(5) >= 5 {
+        // clang `getCallSiteRelatedAttrs`: none for location tracking.
+        if self.opts.opt_level > 0
+            && self.opts.debug.kind != DebugInfoKind::LocTrackingOnly
+            && self.opts.debug.dwarf_version.unwrap_or(5) >= 5
+        {
             fl.push("DIFlagAllCallsDescribed");
         }
         if self.m.func(f).linkage.is_local() {

@@ -3383,6 +3383,15 @@ impl<'a> Cg<'a> {
             }
             None => {}
         }
+        // clang `CodeGenModule::EmitCoverageFile` (WP-941): one entry per
+        // compile unit.
+        if let (Some((notes, data)), Some(di)) = (&self.opts.coverage.gcov, self.di.as_deref()) {
+            let cu = di.cu;
+            let n = m.md_string(notes.as_bytes());
+            let d = m.md_string(data.as_bytes());
+            let e = m.md_tuple(&[Some(n), Some(d), Some(cu)]);
+            m.add_named_metadata("llvm.gcov", &[e]);
+        }
         m.add_ident(&self.opts.ident);
         self.tbaa_errno();
     }

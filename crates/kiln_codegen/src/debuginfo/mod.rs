@@ -7,6 +7,10 @@ pub enum DebugInfoKind {
     /// No debug information (`-g0`, the default).
     #[default]
     None,
+    /// clang `LocTrackingOnly`: no debug information in the object
+    /// (`emissionKind: NoDebug`), but subprograms and locations for the
+    /// passes that need them: gcov's line tables (WP-941).
+    LocTrackingOnly,
     /// `-gline-directives-only`: `.loc` directives, no line table CU.
     LineDirectivesOnly,
     /// `-gline-tables-only` / `-g1` / `-gmlt`: line tables only.
@@ -252,6 +256,7 @@ impl<'a> Cg<'a> {
         let checksum = o.main_id.map(|f| md5::hex(sm.text(f).as_bytes()));
         let cu_file = self.di_create_file(name, checksum.as_deref(), true);
         let kind = match o.kind {
+            DebugInfoKind::LocTrackingOnly => "NoDebug",
             DebugInfoKind::LineDirectivesOnly => "DebugDirectivesOnly",
             DebugInfoKind::LineTablesOnly => "LineTablesOnly",
             _ => "FullDebug",
@@ -309,7 +314,10 @@ impl<'a> Cg<'a> {
         let (dir, file) =
             if cu { (cur, file) } else { split_against(&file, &cur, name.starts_with('/')) };
         let mut f = Fields::default().s("filename", &file).s("directory", &dir);
-        if let Some(c) = checksum.filter(|_| o.dwarf_version.unwrap_or(5) >= 5) {
+        // clang computes no checksum without a DWARF version (location
+        // tracking only).
+        let dwarf = if o.kind == DebugInfoKind::LocTrackingOnly { 0 } else { 5 };
+        if let Some(c) = checksum.filter(|_| o.dwarf_version.unwrap_or(dwarf) >= 5) {
             f = f.raw("checksumkind", "CSK_MD5").s("checksum", c);
         }
         self.m.md_specialized("DIFile", false, f.0)
