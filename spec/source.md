@@ -53,10 +53,21 @@ chunked append-only arena (`OnceLock` slots, doubling chunk sizes).
 ## SourceManager API
 Buffers:
 - `new()` / `Default`.
-- `load_file(&Path) -> Result<FileId, LoadError>`: identity by canonical
-  path (`fs::canonicalize`); loading the same file again through any path
-  returns the same id without reading the disk. `file_name` is the path as
-  given on first load. Invalid UTF-8 is replaced at load (below).
+- `load_file(&Path) -> Result<FileId, LoadError>`: identity by device and
+  inode (`MetadataExt::dev`/`ino` of the opened file; canonical path on
+  non-Unix hosts), so `..`, `.`, symlinked and hard-linked paths are one
+  file. Loading the same file again through any path returns the same id
+  without reading it again. `file_name` is the path as given on first
+  load. Invalid UTF-8 is replaced at load (below). A load is one `open`,
+  one `fstat` and one sized read (`read_open_file`), with no path
+  canonicalization (WP-820: `realpath` cost a `readlink` per path
+  component). A directory is `LoadError::Io` (`IsADirectory`).
+- `load_regular_file(&Path)`: `load_file` that also refuses anything but
+  a regular file (header search; a FIFO or device would block or never
+  end).
+- `read_open_file(&mut File, &Metadata) -> io::Result<Vec<u8>>`: reads an
+  opened file whole in one sized read, the length from the metadata
+  already fetched (no second `fstat` or probe read as `fs::read` makes).
 - `add_virtual(name: &str, contents: String) -> Result<FileId, LocSpaceExhausted>`:
   never deduplicated.
 - `file_count()`, `text(FileId) -> &str` (always valid UTF-8),
@@ -229,8 +240,8 @@ entries another 2^31 (`len + 1` each). Exhaustion is reported as
   trailing-newline-less files, against a reference model, at every offset
   including EOF; `line_text` strips terminators; byte columns.
 - Invalid UTF-8 replacement positions and original bytes.
-- Identity by canonical path (`..`, `.`, symlink), not-found and directory
-  errors; virtual buffers never deduplicated.
+- Identity by device and inode (`..`, `.`, symlink), not-found and
+  directory errors; virtual buffers never deduplicated.
 - Location partitioning and `offset_of` round trip over many buffers.
 - Expansion/spelling mapping for nested macro expansions (macro body inside
   macro body, macro argument spelled in another expansion, macro name

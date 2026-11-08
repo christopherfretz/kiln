@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use kiln_diag::DiagOptions;
 use kiln_pp::{FileChange, IncludeRequest, PpCallbacks, ResolvedInclude, SearchEvent};
-use kiln_source::SourceManager;
+use kiln_source::{FileId, SourceManager};
 
 use crate::args::{Args, DepHeaders};
 use crate::{Io, report_output_error, write_output};
@@ -82,34 +82,58 @@ fn remove_dots(name: &str) -> String {
     if s.is_empty() { name.to_owned() } else { s }
 }
 
-/// A [`PpCallbacks`] that records entered files into a shared [`DepList`].
+/// A [`PpCallbacks`] that records entered and skipped files into a shared
+/// [`DepList`], each by the path its `#include` found it by (clang's
+/// `FileEntryRef` name; a file reached through a symlink and through its
+/// real path is listed under both).
 #[derive(Debug)]
 pub struct DepCallbacks<'a> {
     /// The list.
     pub list: Rc<RefCell<DepList>>,
     /// The source manager the file ids refer to.
     pub sm: &'a SourceManager,
+    /// The file the last `#include` found and the path it found it by,
+    /// until the file is entered.
+    pending: Option<(FileId, String)>,
+}
+
+impl<'a> DepCallbacks<'a> {
+    /// Callbacks recording into `list`.
+    pub fn new(list: Rc<RefCell<DepList>>, sm: &'a SourceManager) -> Self {
+        DepCallbacks { list, sm, pending: None }
+    }
 }
 
 impl PpCallbacks for DepCallbacks<'_> {
     fn file_changed(&mut self, change: FileChange) {
         if let FileChange::Enter { file, system, .. } = change {
-            self.list.borrow_mut().add(self.sm.file_name(file), system);
+            let path = match self.pending.take() {
+                Some((f, path)) if f == file => path,
+                _ => self.sm.file_name(file).to_owned(),
+            };
+            self.list.borrow_mut().add(&path, system);
         }
     }
 
     fn inclusion_directive(&mut self, _req: &IncludeRequest, result: Option<&ResolvedInclude>) {
-        if result.is_none() {
-            self.list.borrow_mut().missing = true;
+        match result {
+            None => self.list.borrow_mut().missing = true,
+            Some(r) => self.pending = r.path.clone().map(|p| (r.file, p)),
         }
+    }
+
+    fn file_skipped(&mut self, r: &ResolvedInclude, system: bool) {
+        self.pending = None;
+        let path = r.path.as_deref().unwrap_or_else(|| self.sm.file_name(r.file));
+        self.list.borrow_mut().add(path, system);
     }
 }
 
 /// Records a header-search event (`__has_include`, `#embed`).
-pub fn on_search_event(list: &RefCell<DepList>, sm: &SourceManager, e: SearchEvent<'_>) {
+pub fn on_search_event(list: &RefCell<DepList>, e: SearchEvent<'_>) {
     match e {
-        SearchEvent::HasInclude { file, characteristic } => {
-            list.borrow_mut().add(sm.file_name(file), characteristic.is_system());
+        SearchEvent::HasInclude { path, characteristic, .. } => {
+            list.borrow_mut().add(path, characteristic.is_system());
         }
         SearchEvent::Embed { path } => list.borrow_mut().add(path, false),
     }

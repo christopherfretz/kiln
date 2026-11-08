@@ -27,5 +27,5 @@ pub mod symbol;
 pub use loc::{FileId, Loc, Span};
 pub use manager::{
     ExpansionInfo, ExpansionKind, FileKind, LineCol, LoadError, LoadReport, LocSpaceExhausted,
-    PresumedLoc, Replacement, SourceManager, SourcePathStyle,
+    PresumedLoc, Replacement, SourceManager, SourcePathStyle, read_open_file,
 };
