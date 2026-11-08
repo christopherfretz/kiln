@@ -590,7 +590,9 @@ fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
         return false;
     }
     match effective_ctx(ast, d) {
-        Some(c) if is_function_kind(ast.decls.get(c).kind()) => fn_shares_local_linkage(ast, c),
+        Some(c) if is_function_kind(ast.decls.get(c).kind()) => {
+            fn_shares_local_linkage(ast, c) && !is_internal_symbol(ast, c)
+        }
         Some(c) if is_record_kind(ast.decls.get(c).kind()) => {
             tag_externally_visible(ast, ast.first(c))
         }
@@ -640,7 +642,10 @@ pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
     while let Some(ctx) = c {
         let k = ast.decls.get(ctx).kind();
         if is_function_kind(k) {
-            return !fn_shares_local_linkage(ast, ctx) || has_internal_linkage(ast, ctx);
+            // The function's linkage includes its template arguments':
+            // `call<(anonymous)::A>`'s lambda is internal too (clang
+            // `getLVForLocalDecl` takes `getLVForDecl(FD)`).
+            return !fn_shares_local_linkage(ast, ctx) || is_internal_symbol(ast, ctx);
         }
         if !is_record_kind(k) {
             break;
