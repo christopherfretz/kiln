@@ -26,6 +26,24 @@ impl Substituter<'_, '_, '_> {
         let (init_failures, errors) = (self.init_failures, self.sema.diags.error_count());
         let body_errors = self.sema.inst.body_errors;
         match self.stmt_node(s) {
+            // A `return` whose operand does not convert to the return type
+            // (an error reported here, not in a nested instantiation) is
+            // `StmtError` in clang's `BuildReturnStmt`: the body is
+            // invalid, and an enclosing `if` stops at it (WP-826).
+            Ok(x) if self.lambda_bodies == 0
+                && self.sema.ast.stmts.get(x).kind() == StmtKind::ReturnStmt
+                && self
+                    .sema
+                    .ast
+                    .stmts
+                    .return_value(x)
+                    .is_some_and(|v| self.sema.is_error_expr(v))
+                && self.sema.diags.error_count().saturating_sub(errors)
+                    > self.sema.inst.body_errors.saturating_sub(body_errors) =>
+            {
+                self.stmt_failed = true;
+                x
+            }
             Ok(x) => x,
             // The failure was diagnosed (an error in the instantiation, or
             // a `RecoveryExpr` of the pattern): the statement becomes an

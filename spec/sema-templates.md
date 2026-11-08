@@ -3051,6 +3051,21 @@ recomputed exactly as for non-template code (clang's
     initializer does not invalidate it; only the variable is invalid.
 
   Test `expr.prim.lambda/lambda-body-substitution-failure.cpp`.
+- **A condition over a failed local** (WP-826). The condition of an
+  `if` (not `if constexpr`), `while`, `for` or `switch`, or a `for`
+  increment, that fails without a new error (it names a local whose
+  initializer failed) becomes an erroneous expression
+  (`Substituter::recovering_expr`), and the statement is built with it:
+  its sub-statements are still instantiated and diagnosed. clang's
+  reference to such a variable is a `RecoveryExpr` and the condition
+  over it is valid. An `if constexpr` condition is not recovered (it is
+  not a constant expression in clang either; the statement fails).
+- **A failed `then` branch ends the `if`** (WP-826, clang
+  `TransformIfStmt` returns `StmtError` when `Then` is invalid): when
+  the `then` branch sets `Substituter::stmt_failed` (a new error, not a
+  declaration's failed initializer), the `else` branch is not
+  instantiated and the `if` fails. Test
+  `temp.inst/condition-over-failed-local.cpp`.
 - **Labels and `goto`** (WP-153). A `LabelStmt`, a `GotoStmt` and the
   labels of an `asm goto` are rebuilt by name (`act_on_label`,
   `act_on_goto`, `act_on_asm_goto_label`), so each instantiation owns its
@@ -6041,6 +6056,21 @@ instantiation-kind frames exceeds N. The fatal error is "recursive
 template instantiation exceeded maximum depth of 1024", with the note
 "use -ftemplate-depth=N to increase recursive template instantiation
 depth". Fatal means kiln_diag stops the TU.
+
+**Any fatal error stops instantiation** (WP-826). clang's
+`InstantiatingTemplate` constructor makes every instantiation invalid
+once `Diags.hasFatalErrorOccurred() && hasUncompilableErrorOccurred()`,
+and a fatal error is uncompilable. So after the error limit's "too many
+errors emitted" (spec/diag.md §7.3), a missing `#include` or
+`-Wfatal-errors`, no template is instantiated for the rest of the TU:
+`Sema::instantiation_stopped` latches `InstState.fatal` from
+`DiagEngine::has_fatal()` and is asked by `push_inst_frame`,
+`instantiate_function_definition` and the end-of-TU drain
+(`end_of_tu_instantiations`, `drain_pending_instantiations`). Every
+diagnostic after the fatal is dropped, so the work could not be seen.
+Tests `temp.inst/error-limit-stops-instantiation.cpp` (clang parity)
+and `temp.inst/fatal-error-stops-pending-instantiation.cpp` (the
+instantiation report has no row for what follows the fatal).
 
 **Stack guard (D1).**
 - `StackGuard { base: usize, limit: usize }` records the address of a
