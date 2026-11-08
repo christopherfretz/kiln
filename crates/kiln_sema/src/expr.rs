@@ -5014,6 +5014,20 @@ impl Sema<'_, '_> {
         }
         let f = match self.builtin_callee(callee) {
             Some(b) => self.builtin_fn_to_ptr(callee, b),
+            // A builtin alias (WP-810) may be called: its decay is not a use
+            // `check_builtin_fn_use` rejects.
+            None if self.is_builtin_alias_ref(callee) => {
+                let t = self.ety(callee);
+                let p = self.ast.types.pointer_to(t);
+                conv::raw_cast(
+                    self,
+                    CastKind::FunctionToPointerDecay,
+                    callee,
+                    p,
+                    ValueCategory::PRValue,
+                    None,
+                )
+            }
             None => conv::decay(self, callee),
         };
         let ft = self.ety(f);

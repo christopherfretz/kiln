@@ -9,7 +9,7 @@
 
 use kiln_ast::Ast;
 use kiln_ast::ids::{DeclId, QualType};
-use kiln_ast::types::{BuiltinType, CallConv, TypeView};
+use kiln_ast::types::{BuiltinType, CallConv, TypeView, VectorKind};
 
 use crate::irtype::{IrType, IrTypes};
 use crate::layout::props;
@@ -289,6 +289,9 @@ fn ir_bits(t: &mut IrTypes<'_>, ty: &IrType) -> u64 {
         IrType::Int(n) => u64::from(*n),
         IrType::X86Fp80 => 80,
         IrType::Vector(e, n) => ir_bits(t, &e.clone()) * *n,
+        // The known minimum (`TypeSize::isKnownGT` of a scalable size
+        // against a fixed one compares the minimum).
+        IrType::ScalableVector(e, n) => ir_bits(t, &e.clone()) * *n,
         _ => t.size_align(ty).0 * 8,
     }
 }
@@ -324,6 +327,26 @@ fn aarch64_illegal_vector(t: &mut IrTypes<'_>, q: QualType) -> Option<ArgKind> {
     })
 }
 
+/// clang `AArch64ABIInfo::coerceIllegalVector` for a fixed-length SVE
+/// vector (`arm_sve_vector_bits`, WP-810): passed and returned in the
+/// scalable register type, `<vscale x 16 x i1>` for a predicate and
+/// `<vscale x 128/E x T>` for data of element `T` of `E` bits.
+fn aarch64_sve_fixed(t: &mut IrTypes<'_>, q: QualType) -> Option<ArgKind> {
+    let TypeView::Vector { elem, kind, .. } = view(t, q) else {
+        return None;
+    };
+    let sv = |e: IrType, n| direct(IrType::ScalableVector(Box::new(e), n));
+    match kind {
+        VectorKind::SveFixedPredicate => Some(sv(IrType::Int(1), 16)),
+        VectorKind::SveFixedData => {
+            let bits = type_bits(t, elem).max(1);
+            let e = t.convert(elem);
+            Some(sv(e, 128 / bits))
+        }
+        _ => None,
+    }
+}
+
 /// clang `ABIInfo::useFirstFieldIfTransparentUnion`: an argument of a
 /// union that kept `transparent_union` (WP-809) is classified as its
 /// first field.
@@ -342,6 +365,9 @@ fn first_field_if_transparent(ast: &Ast, q: QualType) -> QualType {
 
 fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType, win_variadic: bool) -> ArgKind {
     let q = first_field_if_transparent(t.ast(), q);
+    if let Some(k) = aarch64_sve_fixed(t, q) {
+        return k;
+    }
     if let Some(k) = aarch64_illegal_vector(t, q) {
         return k;
     }
@@ -448,6 +474,9 @@ fn aarch64_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
     }
     if is_indirect_record(t.ast(), q) {
         return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
+    }
+    if let Some(k) = aarch64_sve_fixed(t, q) {
+        return k;
     }
     // Large vector types are returned via memory.
     if matches!(view(t, q), TypeView::Vector { .. }) && type_bits(t, q) > 128 {
@@ -573,6 +602,47 @@ fn byte_vector(t: &mut IrTypes<'_>, q: QualType) -> IrType {
     IrType::Vector(Box::new(IrType::Double), type_bits(t, q) / 64)
 }
 
+/// clang 20+ `AArch64ABIInfo::passAsPureScalableType` with a nonzero
+/// register count (WP-810): `q` is a record (not a union, passable in
+/// registers) or a nonempty array whose non-empty members are, at every
+/// depth, fixed-length SVE vectors (`arm_sve_vector_bits`), at least one.
+/// AAPCS64 passes such an aggregate expanded in SVE registers, which kiln
+/// does not lower yet; clang 19 lowers it as any other aggregate.
+pub fn is_pure_scalable(t: &mut IrTypes<'_>, q: QualType) -> bool {
+    matches!(view(t, q), TypeView::Record(_) | TypeView::ConstantArray(_))
+        && pure_scalable_count(t, q).is_some_and(|n| n > 0)
+}
+
+fn pure_scalable_count(t: &mut IrTypes<'_>, q: QualType) -> Option<u64> {
+    let ast = t.ast();
+    match view(t, q) {
+        TypeView::ConstantArray(a) => {
+            let n = ast.types.array_size(q).filter(|&n| n > 0)?;
+            Some(pure_scalable_count(t, a.elem)? * n)
+        }
+        TypeView::Record(d) => {
+            let def = ast.definition(d)?;
+            if props::class_desc(ast, def).is_union || !can_pass_in_registers(ast, def) {
+                return None;
+            }
+            let mut n = 0;
+            for b in ast.decls.bases(def, &ast.lists) {
+                if !is_empty_record(t, b.ty, true) {
+                    n += pure_scalable_count(t, b.ty)?;
+                }
+            }
+            for f in props::fields(ast, def) {
+                if !is_empty_field(t, &f, true) {
+                    n += pure_scalable_count(t, f.ty)?;
+                }
+            }
+            Some(n)
+        }
+        TypeView::Vector { kind, .. } if kind.is_sve_fixed() => Some(1),
+        _ => None,
+    }
+}
+
 /// clang `isHomogeneousAggregate` with `AArch64`'s base-type and size rules.
 fn homogeneous(t: &mut IrTypes<'_>, q: QualType) -> Option<(QualType, u64)> {
     let mut base = None;
@@ -645,6 +715,11 @@ fn homog(t: &mut IrTypes<'_>, q: QualType, base: &mut Option<QualType>) -> Optio
                         | BuiltinType::LongDouble
                         | BuiltinType::Float128
                 ),
+                // clang 20+ `isHomogeneousAggregateBaseType`: a
+                // fixed-length SVE vector is no HFA/HVA base (WP-810).
+                TypeView::Vector { kind, .. } if kind.is_sve_fixed() && t.clang_compat() >= 20 => {
+                    false
+                }
                 TypeView::Vector { .. } => {
                     let s = type_bits(t, ty);
                     s == 64 || s == 128

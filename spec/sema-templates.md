@@ -4497,6 +4497,15 @@ The `SpecKind` transitions are those of §4.5.
   `AstBuilder::template_param_object(const T, v)`; the argument is
   `TemplateArg::value(canonical T, v)`. Aggregate values are interned, so
   the `ConstValueId` is the (type, value) key.
+- **`_Complex` arguments** (WP-810): a GNU complex type is structural (a
+  scalar, as clang). The argument is `TemplateArg::value(T, v)` with `v`
+  the frozen `T[2]` image; substituted, it is a `ConstantExpr` holding `v`
+  around an opaque prvalue (`nttp_value_expr`), whose parts the Oven reads
+  from the image (`cx_const`) and codegen emits as a constant. Two
+  arguments are the same when their images are identical (`-0.0` differs
+  from `+0.0`). It mangles as clang: `X tl <type> <re> <im> E E`, trailing
+  `+0` parts dropped (`AstNames::shape_at` gives the complex type the
+  `Array` shape of `T[2]`).
 - **The object** is a `TemplateParamObject` decl (`IMPLICIT`, unnamed, in
   the TU, in no lookup or member list) memoized in
   `TemplateTables::{param_objects, param_object_values}`

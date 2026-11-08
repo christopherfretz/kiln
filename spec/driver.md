@@ -149,7 +149,7 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 |---|---|
 | `-fno-inline`, `-finline` | the last wins; `-fno-inline` keeps `__NO_INLINE__` defined at every `-O` level and makes every definition but an `always_inline` one `noinline` (clang `CodeGenOptions::OnlyAlwaysInlining`; at `-O0` that is already the case) |
 | `-mcmodel=tiny\|small\|kernel\|medium\|large` | the `Code Model` module flag (LLVM's enumerator, 0 to 4) and `llc -code-model=<model>`; on x86-64, `medium` and `large` also add the `Large Data Threshold` module flag (`i64` 65536 and 0, clang's driver defaults). Another value is `unsupported argument` |
-| `-fstack-protector`, `-fstack-protector-strong`, `-fstack-protector-all`, `-fno-stack-protector` | function attribute `ssp`, `sspstrong`, `sspreq`, or none (the default) on every function kiln defines (`CodegenOptions::stack_protector`); the last of the four wins. The `no_stack_protector` attribute is not honoured |
+| `-fstack-protector`, `-fstack-protector-strong`, `-fstack-protector-all`, `-fno-stack-protector` | function attribute `ssp`, `sspstrong`, `sspreq`, or none (the default) on every function kiln defines (`CodegenOptions::stack_protector`); the last of the four wins. A `no_stack_protector` function gets none of them (WP-813) |
 | `-f[no-]asynchronous-unwind-tables`, `-f[no-]unwind-tables` | `CodegenOptions::unwind_tables`: asynchronous (`uwtable`, `"uwtable"` module flag 2) unless the last `-f[no-]asynchronous-unwind-tables` is the negative (default: asynchronous, except under `-ffreestanding`); otherwise synchronous (`uwtable(sync)`, flag 1) with `-funwind-tables`, else none (no attribute, no flag). So the flags never remove the default `uwtable` alone |
 | `-fno-plt`, `-fplt` | `nonlazybind` on every function declared but not defined in the TU, the `"RtLibUseGOT"` module flag, and under `-fno-pic` function declarations are not assumed `dso_local` (clang `shouldAssumeDSOLocal`) (`CodegenOptions::no_plt`) |
 | `-ffunction-sections`, `-fdata-sections` | `llc -function-sections` / `-data-sections` (see "Code generation") |
@@ -157,13 +157,12 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 | `-march=<cpu>` (x86-64), `-march=native`, `-mcpu=native` (AArch64, without `-march=`), `-mtune=<cpu>` | x86-64: `-march=` names one of clang's x86 CPUs (`x86-64`, `x86-64-v2`..`v4`, `skylake`, `znver4`, ...; clang 22 adds `wildcatlake`, `novalake`, `diamondrapids`) and sets `"target-cpu"` (the default `"tune-cpu"="generic"` is then omitted, as clang); a CPU clang 21 knows also sets clang 21's `"target-features"` and predefined macros for it (spec/landed/driver/WP-630.md, table layout spec/landed/codegen/WP-660.md; `wildcatlake` and `novalake` are not expanded, deviation). `native` on either target emits no `"target-cpu"` and passes `llc -mcpu=native` (the IR attribute would override `-mcpu`); kiln never inspects the host. `-mtune=<cpu>` sets `"tune-cpu"`; `-mtune=native` is accepted and adds nothing. The triple is unchanged |
 | `-fwrapv`, `-fno-wrapv`, `-f[no-]wrapv-pointer`, `-fno-strict-overflow`, `-fstrict-overflow` | signed overflow wraps (`CodegenOptions::wrapv`): the last of `-f[no-]wrapv`, else `-fno-strict-overflow`; no `nsw` on signed arithmetic, increments, negation, shifts or VLA sizes. Pointer overflow wraps (`wrapv_pointer`): at `-fclang-compat=19` exactly when `wrapv`; at 22 the last of `-f[no-]wrapv-pointer`, else `-fno-strict-overflow`; no `inbounds` on pointer arithmetic and subscripts, and at 22 none on field GEPs either. The Oven is unchanged: signed overflow in a constant expression stays non-constant ([expr.const]/5), unlike GCC, which folds it as wrapping under `-fwrapv` (deliberate divergence, deferred) |
 | `-fno-delete-null-pointer-checks`, `-fdelete-null-pointer-checks` | `CodegenOptions::null_pointer_is_valid`: every definition gets `null_pointer_is_valid`; reference parameters, returns and `this` lose `nonnull` (`this` gets `dereferenceable_or_null`), `nonnull`/`returns_nonnull` attributes, the `operator new` result and loaded references lose `nonnull` (and `!nonnull` metadata), as clang |
+| `-fpatchable-function-entry=N[,M]`, `-fzero-call-used-regs=<kind>`, `-mfunction-return=keep\|thunk-extern` (x86), `-fcf-protection[=full\|branch\|return\|none]` (x86), `-mspeculative-load-hardening`, `-fsplit-stack`, `-finstrument-functions`, `-finstrument-functions-after-inlining`, `-finstrument-function-entry-bare`, `-fxray-instrument`, `-fxray-instruction-threshold=N`, `-fxray-ignore-loops` (WP-813) | `CodegenOptions::hardening` (`kiln_codegen::Hardening`): the function attributes and module flags clang 19 emits for each, with the class B attributes overriding them per function (spec/landed/codegen/WP-813.md). `-mspeculative-load-hardening` on x86 also adds `+retpoline-indirect-calls` to the target features; `-finstrument-functions*` at `-O0` runs `default<O0>` so ee-instrument emits the calls; `-fxray-instrument` is passed on to the link. Errors as clang: a bad `-fpatchable-function-entry=` (`invalid argument 'x' to -fpatchable-function-entry=`, or the offset larger than the count), `-fxray-instrument` with `-fpatchable-function-entry=`, a bad `-fxray-instruction-threshold=` under `-fxray-instrument` are driver errors; a bad `-mfunction-return=` / `-fzero-call-used-regs=` / `-fcf-protection=` value (the last of each wins), `-mfunction-return=` off x86 and (when generating code) `-fcf-protection` off x86 are clang's `-cc1` errors, printed without the `kiln++:` prefix and in cc1's order (an invalid `-mfunction-return=` on x86 is reported twice, as clang 19 does). Without `-fxray-instrument` the other `-fxray-*` options are `argument unused during compilation` |
 | `-Wp,<a>,<b>,...`, `-Xpreprocessor <arg>` | spliced into the argument list before parsing (`codegen_flags::splice_preprocessor_args`), as GCC: `-Wp,-MD,<f>` / `-Wp,-MMD,<f>` become `-MD -MF <f>` / `-MMD -MF <f>`, any other list is split at commas (empty pieces dropped), so `-Wp,-D_FORTIFY_SOURCE=2` is `-D_FORTIFY_SOURCE=2`; `-Xpreprocessor <arg>` is `<arg>` |
 
 **2. Accepted and ignored silently** (no observable effect in kiln today;
 do not add a diagnostic): `-f[no-]stack-clash-protection`,
-`-fcf-protection`, `-fcf-protection=full|branch|return|none` (another value
-is `invalid value '<v>' in '-fcf-protection=<v>'`; accepted on AArch64 too,
-where clang errors), `-f[no-]common`, `-fstack-usage`, `-gz`, `-gz=none|zlib|zstd`,
+`-f[no-]common`, `-fstack-usage`, `-gz`, `-gz=none|zlib|zstd`,
 `-fno-trapv`, `-fno-short-enums`, `-m64` (every kiln target is 64-bit;
 `-m32` stays unknown) and `-pipe`. Other `-gz=` values
 (and an empty `-mtune=`) are `unsupported argument '<v>' to option '<opt>'`.
@@ -176,7 +175,10 @@ supported by kiln` (exit 1, no job runs; not the generic `unknown argument`):
 (`-fsanitize=address`, `-fno-sanitize-recover=all`, ...),
 `-fcoverage-mapping`, `-fprofile-arcs`, `-ftest-coverage`, `--coverage`,
 `-fprofile-instr-generate[=...]`, `-fprofile-generate[=...]`,
-`-fprofile-instr-use[=...]`, `-fprofile-use[=...]`.
+`-fprofile-instr-use[=...]`, `-fprofile-use[=...]`, and under
+`-fxray-instrument` every `-fxray-*` option but the threshold and
+`-fxray-ignore-loops` (`-fxray-modes=`, `-fxray-always-instrument=`, ...;
+WP-813).
 
 ### Floating-point flags (WP-806)
 
@@ -948,8 +950,7 @@ Each deviation is covered by a test or a test note.
     21's features and predefines (also at `-fclang-compat=19`), and not
     at all for `wildcatlake` / `novalake` (spec/landed/driver/WP-630.md);
     `-march=native` emits no `"target-cpu"` and `-mtune=native` no
-    `"tune-cpu"` (clang resolves the host); `-fcf-protection` is accepted
-    on AArch64; `-fwrapv-pointer` is accepted at `-fclang-compat=19`
+    `"tune-cpu"` (clang resolves the host); `-fwrapv-pointer` is accepted at `-fclang-compat=19`
     (clang 19 has no such flag); the sanitizer, coverage,
     profile, `-ftrapv` and `-fshort-enums` flags are errors; and the Oven
     ignores `-fwrapv`.

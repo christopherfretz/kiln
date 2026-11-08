@@ -13,7 +13,8 @@ drv_command_signalled = Error (1) "{0} command failed due to signal (use -v to s
 drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
 drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
 drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
-// WP-811: a driver option spelled like a warning (`-Wframe-larger-than=N`).
+// WP-811: a driver option spelled like a warning (`-Wframe-larger-than=N`);
+// WP-813: `-fpatchable-function-entry=` with a malformed value.
 drv_invalid_argument_to_option = Error (2) "invalid argument '{0}' to -{1}";
 drv_invalid_gcc_install_dir = Error (1) "'{0}' does not contain a GCC installation";
 drv_invalid_int_value = Error (2) "invalid integral value '{1}' in '{0}'";
@@ -25,6 +26,7 @@ drv_missing_argument = Error (2) "argument to '{0}' is missing (expected {1} val
 drv_no_input_files = Error (0) "no input files";
 drv_no_such_file = Error (1) "no such file or directory: '{0}'";
 drv_not_implemented = Error (1) "{0} is not implemented yet";
+drv_opt_not_valid_on_target = Error (1) "option '{0}' cannot be specified on this target";
 // ----- WP-228 (driver flags a target does not support)
 drv_option_ignored = Warning [OptionIgnored] (2) "'{0}' does not support '{1}'; flag ignored";
 drv_out_file_multiple = Error (0) "cannot specify -o when generating multiple output files";
@@ -36,6 +38,7 @@ drv_unknown_argument = Error (1) "unknown argument: '{0}'";
 drv_unknown_argument_suggest = Error (2) "unknown argument '{0}'; did you mean '{1}'?";
 // WP-605: a recognised GCC/clang flag kiln deliberately does not implement.
 drv_unsupported_flag = Error (1) "'{0}' is not supported by kiln";
+drv_unsupported_fpatchable_function_entry_argument = Error (0) "the second argument of '-fpatchable-function-entry' must be smaller than the first argument";
 // WP-469: `-msve-vector-bits=` off AArch64.
 drv_unsupported_opt_for_target = Error (2) "unsupported option '{0}' for target '{1}'";
 drv_unsupported_option_argument = Error (2) "unsupported argument '{1}' to option '{0}'";

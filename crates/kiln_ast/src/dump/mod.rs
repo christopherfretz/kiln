@@ -2070,7 +2070,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
         if matches!(
             node.kind,
-            AttrKind::TARGET | AttrKind::ALIAS | AttrKind::IFUNC | AttrKind::SECTION
+            AttrKind::TARGET
+                | AttrKind::TARGET_VERSION
+                | AttrKind::ALIAS
+                | AttrKind::IFUNC
+                | AttrKind::SECTION
         ) && let Some(l) = StringLitId::from_raw(node.a)
         {
             // `SectionAttr` has two spellings (GNU `section`, `__declspec(

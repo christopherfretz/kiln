@@ -344,13 +344,18 @@ impl Cg<'_> {
                 self.emit_assumptions(s)?;
                 let sub = StmtId::new(n.b());
                 self.f.loop_hints = Some((sub, s));
-                // clang `EmitAttributedStmt`: the returned call of a
-                // `musttail` return (`MustTailCall`).
+                // clang `EmitAttributedStmt`: `SaveAndRestore` of the
+                // statement's own `nomerge` / `noinline` / `always_inline`,
+                // and the returned call of a `musttail` return
+                // (`MustTailCall`).
+                let calls = self.stmt_calls_of(s);
+                let saved_calls = std::mem::replace(&mut self.f.stmt_calls, calls);
                 let mt = self.musttail_call(s, sub);
                 let mt = mt.or(self.f.musttail);
                 let saved = std::mem::replace(&mut self.f.musttail, mt);
                 let r = self.emit_stmt(sub);
                 self.f.musttail = saved;
+                self.f.stmt_calls = saved_calls;
                 r
             }
             StmtKind::LabelStmt => {
