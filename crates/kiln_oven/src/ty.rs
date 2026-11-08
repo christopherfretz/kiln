@@ -1345,7 +1345,7 @@ impl Types {
                     // holds (an `inplace_vector`'s `construct_at(&data[n])`,
                     // WP-760).
                     if let Some((lo, _)) = self.extent_hit(root, off, false, p)
-                        && (off - lo) % self.size(p).max(1) == 0
+                        && (off - lo).is_multiple_of(self.size(p).max(1))
                     {
                         return true;
                     }

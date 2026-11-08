@@ -3914,7 +3914,7 @@ impl Oven {
     /// `base`, as a [`umemo::Cover`] ([`Oven::place_walk`]).
     fn place_region(&self, base: u64, t: OTy, ty: OTy) -> Option<umemo::Cover> {
         let (len, stride) = (self.types.size(t), self.types.size(ty));
-        (stride > 0 && len % stride == 0 && base + len <= u64::from(u32::MAX)).then_some(
+        (stride > 0 && len.is_multiple_of(stride) && u32::try_from(base + len).is_ok()).then_some(
             umemo::Cover::Region {
                 lo: base as u32,
                 len: len as u32,
