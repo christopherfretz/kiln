@@ -150,7 +150,7 @@ parse_requires_clause_needs_parens = Error (0) "parentheses are required around 
 // [temp.names]/1, [expr.prim.splice] (WP-830): a splice used as a whole
 // template-argument must be parenthesized or prefixed with `typename`/`template`.
 parse_splice_template_arg_unparenthesized = Error (0) "unparenthesized splice expression cannot be used as a template argument";
-parse_static_lambda_captures =Error (0) "a static lambda cannot have any captures";
+parse_static_lambda_captures = Error (0) "a static lambda cannot have any captures";
 parse_static_mutable_lambda = Error (0) "lambda cannot be both mutable and static";
 parse_stmt_expr_in_default_arg = Error (0) "default argument may not use a GNU statement expression";
 parse_template_args_expected_gt = Error (0) "expected '>'";
