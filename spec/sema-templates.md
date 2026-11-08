@@ -647,7 +647,13 @@ object is dependent and not the current instantiation, as in
 less-than. When the name is followed by `<`, clang's diagnostic
 `err_missing_dependent_template_keyword` ("use 'template' keyword to
 treat 'f' as a dependent template name") is emitted and the parser
-recovers as if `template` had been written.
+recovers as if `template` had been written. The diagnostic and the
+recovery apply only when nothing but a list fits: the `<` is followed
+by `>` or begins with an unambiguous type-id (clang's
+`isTemplateArgumentList` returning True). In a nested-name-specifier,
+`if_c<rank<T>::value < rank<U>::value, U, T>::type` compares the two
+values (`parse_nested_name_upto`; WP-804,
+`tests/conformance/temp.names/dependent-member-less-than-before-scope.cpp`).
 
 At instantiation, `T::template f<A>` names a template when the lookup of
 `f` in the substituted `T` finds any template: an overload set that also
@@ -2899,12 +2905,15 @@ recomputed exactly as for non-template code (clang's
     ([dcl.init.list]/3.7). A single-argument non-list construct is its
     substituted argument. The list of an initializer-list constructor's
     construct (`ConstructInfo::std_init_list`, `construct_list`) is the
-    braced list its one `std::initializer_list` argument was built from,
-    not a list holding that argument (clang `TransformInitializer`
-    unwraps `isStdInitListInitialization`). Rebuilt as `{{...}}`, a
-    one-element list would be chosen by [over.match.list]/1.1, so
-    `V<P> v = {{"a", "b"}, {"c", "d"}}` stays two elements (WP-801;
-    `dcl.init.list/initializer-list-ctor-in-template-keeps-list-run.cpp`);
+    braced list its one `std::initializer_list` argument was built from
+    (an empty one for the value-initialized `std::initializer_list` of
+    `V v{}`), not a list holding that argument (clang
+    `TransformInitializer` unwraps `isStdInitListInitialization`). Rebuilt
+    as `{{...}}`, a one-element list would be chosen by
+    [over.match.list]/1.1, so `V<P> v = {{"a", "b"}, {"c", "d"}}` stays
+    two elements and `V v{"2", 1}` is not `V v{{"2", 1}}` (WP-801, WP-804;
+    `dcl.init.list/initializer-list-ctor-in-template-keeps-list-run.cpp`,
+    `dcl.init.list/init-list-ctor-element-list-in-template.cpp`);
   - a compound literal `(T){...}` (C99 extension) is rebuilt from its
     peeled initializer as a list, and `act_on_compound_literal` runs
     again;
@@ -3533,6 +3542,15 @@ formed it:
      explicit args stay parameters.
    - A trailing pack that was given explicitly can be *extended* by
      deduction (/9).
+   - (WP-804) For a call, a return type written before the parameters
+     is substituted too, first and only to check it (clang
+     `SubstituteExplicitTemplateArguments`): with every argument given,
+     `enable_if_t<C<A>, int> f(const S<A>&)` fails here, before the
+     CWG1391 check converts an argument to `S<A>` and so instantiates it
+     (`temp.deduct.call/explicit-args-return-sfinae-before-nondep-conversion.cpp`).
+     A trailing return type may name the parameters and is left to
+     step 4 (xfail
+     `temp.deduct.call/explicit-args-trailing-return-sfinae-before-nondep-conversion.cpp`).
    - Failure gives `InvalidExplicitArguments` or `SubstitutionFailure`.
 2. **Deduce from each (Pᵢ, Aᵢ) pair** ([temp.deduct.call]). Pᵢ is the
    parameter type; Aᵢ is the argument's type and value category.
