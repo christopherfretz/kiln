@@ -696,7 +696,8 @@ pub struct Sema<'a, 'sm> {
     /// result through the first that matches (clang `ExtVectorDecls`).
     pub(crate) ext_vector_typedefs: Vec<DeclId>,
     /// Splices whose operand was read as a frozen constant without an
-    /// Oven evaluation (spec/reflection.md §5, the splice fast path).
+    /// Oven evaluation (spec/reflection.md §5, the splice fast path);
+    /// handed to the Oven's report by [`Sema::into_parts`].
     pub(crate) splice_fast: u64,
     /// The `typeid` expression operands being formed, innermost last:
     /// the open lambda count and the unevaluated depth inside each

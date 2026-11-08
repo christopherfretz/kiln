@@ -1242,6 +1242,13 @@ impl Oven {
         &self.stats
     }
 
+    /// Records `n` splices whose operand sema read as a frozen reflection
+    /// without an evaluation (the report's `splice_fast` total;
+    /// spec/oven.md "Reporting protocol").
+    pub fn note_splice_fast(&mut self, n: u64) {
+        self.stats.note_splice_fast(n);
+    }
+
     /// Bytes of heap the evaluator holds (capacities of its code, abstract
     /// memory, registers, stacks, caches, scratch buffers and type table). Compiling
     /// new code grows it; re-evaluating compiled code must not

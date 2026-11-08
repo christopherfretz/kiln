@@ -241,6 +241,17 @@ impl Sema<'_, '_> {
         inner.iter().rev().find(|l| l.body_open).map_or(0, |l| l.heads)
     }
 
+    /// Whether the innermost lambda's declarator is being parsed and
+    /// the lambda has no template head of its own yet: an `auto`
+    /// parameter there starts the lambda's invented head
+    /// ([expr.prim.lambda.general]/6), even where the enclosing head is
+    /// still open (a concept's constraint-expression, a requires-clause;
+    /// [`Sema::act_on_invented_template_param`]).
+    pub(crate) fn in_headless_lambda_declarator(&self) -> bool {
+        let inner = self.lambdas.get(self.lambda_base..).unwrap_or_default();
+        inner.last().is_some_and(|l| !l.body_open && l.heads == self.templ.heads.len())
+    }
+
     /// `<` after the *lambda-introducer*: opens the lambda's
     /// *template-parameter-list* ([expr.prim.lambda.general]/1), a head
     /// one level deeper than the enclosing ones. Closed with the lambda.
@@ -925,6 +936,9 @@ impl Sema<'_, '_> {
         self.ast.templates.pattern_next = list.is_some();
         let conv = self.builder().function(h, DeclKind::CXXConversion, conv_ty, spec, None);
         self.wrap_thunk_template(conv, list);
+        if list.is_none() {
+            self.share_call_constraints(call_op, conv);
+        }
         // The conversion of a static or explicit object call operator
         // returns its address ([expr.prim.lambda.closure]/8, /11).
         if self.is_static_method(call_op) || self.has_explicit_object(call_op) {
@@ -947,6 +961,9 @@ impl Sema<'_, '_> {
         self.ast.templates.pattern_next = list.is_some();
         let inv = self.builder().function(h, DeclKind::CXXMethod, invoker, spec, None);
         self.wrap_thunk_template(inv, list);
+        if list.is_none() {
+            self.share_call_constraints(call_op, inv);
+        }
         let src: Vec<DeclId> = self
             .ast
             .decls
@@ -968,6 +985,24 @@ impl Sema<'_, '_> {
             .collect();
         if !ps.is_empty() {
             let _ = self.builder().set_params(inv, &ps);
+        }
+    }
+
+    /// A templated non-generic lambda's conversion function and invoker
+    /// have the call operator's trailing requires-clause
+    /// ([expr.prim.lambda.closure]/9; clang `addFunctionPointerConversion`,
+    /// GH63181), checked with the same levels as the call operator's
+    /// (`ConceptState::member_constraints`): a closure whose call
+    /// operator's constraints are not satisfied converts to no function
+    /// pointer, and yields no surrogate call ([over.call.object]/2).
+    fn share_call_constraints(&mut self, call_op: DeclId, thunk: DeclId) {
+        let Some(&r) = self.ast.templates.trailing_requires.get(call_op) else { return };
+        let _ = self.ast.templates.trailing_requires.insert(thunk, r);
+        if let Some(m) = self.inst.concepts.member_constraints.get(&call_op).cloned() {
+            self.inst.concepts.member_constraints.insert(thunk, m);
+        }
+        if self.inst.concepts.untemplated_requires.contains(&call_op) {
+            let _ = self.inst.concepts.untemplated_requires.insert(thunk);
         }
     }
 
