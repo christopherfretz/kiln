@@ -30,7 +30,8 @@ enum Shape {
     Basic(Option<MemoryEffects>),
     /// `cold noreturn nounwind memory(inaccessiblemem: write)`.
     Trap,
-    /// `cold noreturn nounwind` (LLVM 19's `llvm.ubsantrap`).
+    /// `cold noreturn nounwind` (LLVM 19's `llvm.ubsantrap`,
+    /// `llvm.aarch64.break`).
     ColdNoReturn,
     /// `nounwind [memory(none)]`.
     NoUnwind(bool),
@@ -44,8 +45,6 @@ enum Shape {
     NoFreeWillReturn,
     /// `nocallback nounwind` (`llvm.write_register`).
     NoCallbackNoUnwind,
-    /// `cold noreturn nounwind` (`llvm.aarch64.break`).
-    ColdNoReturn,
     /// `nounwind willreturn memory(...)` (`llvm.aarch64.prefetch`).
     WillReturnMem(MemoryEffects),
     /// No attributes (an intrinsic that may throw).
@@ -108,7 +107,6 @@ fn fn_attrs(shape: Shape) -> Vec<Attr> {
         Shape::NoMerge => vec![f(AttrKind::NoMerge), f(NoUnwind)],
         Shape::NoFreeWillReturn => vec![f(NoFree), f(NoUnwind), f(WillReturn)],
         Shape::NoCallbackNoUnwind => vec![f(NoCallback), f(NoUnwind)],
-        Shape::ColdNoReturn => vec![f(Cold), f(NoReturn), f(NoUnwind)],
         Shape::WillReturnMem(mem) => vec![f(NoUnwind), f(WillReturn), Attr::Memory(mem)],
         Shape::Throws => Vec::new(),
     }
