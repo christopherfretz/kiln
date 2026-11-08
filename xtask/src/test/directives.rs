@@ -44,6 +44,10 @@ pub enum Expect {
     /// `<test>.expected`, and its shape with the oracle's `debug.DumpCFG`
     /// (spec/harness.md "cfg tests").
     Cfg,
+    /// Compile and link at `-O0 -g`, then drive the binary with `gdb`
+    /// and/or `lldb` scripts and check their output (spec/harness.md
+    /// "Debugger tests"; WP-814).
+    Debugger,
 }
 
 impl Expect {
@@ -59,6 +63,7 @@ impl Expect {
             "ir" => Self::Ir,
             "no-crash" => Self::NoCrash,
             "cfg" => Self::Cfg,
+            "debugger" => Self::Debugger,
             _ => return None,
         })
     }
@@ -76,8 +81,18 @@ impl Expect {
             Self::Ir => "ir",
             Self::NoCrash => "no-crash",
             Self::Cfg => "cfg",
+            Self::Debugger => "debugger",
         }
     }
+}
+
+/// A `debugger` test's script for one debugger: the `gdb:` / `lldb:`
+/// commands in order, and the `gdb-check:` / `lldb-check:` substrings its
+/// output must contain on successive lines, in order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DebuggerScript {
+    pub commands: Vec<String>,
+    pub checks: Vec<String>,
 }
 
 /// How a `pp` test's output is compared (`pp-compare:`).
@@ -330,6 +345,10 @@ pub struct TestSpec {
     /// mode (`xtask test --meta-header`; `spec/harness.md` "Header-
     /// differential mode"), with the reason it cannot run there.
     pub meta_header_skip: Option<String>,
+    /// `gdb:` / `gdb-check:` (`expect: debugger`).
+    pub gdb: DebuggerScript,
+    /// `lldb:` / `lldb-check:` (`expect: debugger`).
+    pub lldb: DebuggerScript,
 }
 
 /// A clang that a test runs, for `requires: clang>=`: what it is to the
@@ -510,8 +529,11 @@ struct Parser {
     requires_llvm: Option<u32>,
     requires_llvm_below: Option<u32>,
     meta_header_skip: Option<String>,
+    gdb: DebuggerScript,
+    lldb: DebuggerScript,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
+    debugger_only: Vec<(usize, &'static str)>,
     pp_only: Vec<(usize, &'static str)>,
     ast_only: Vec<(usize, &'static str)>,
     oracle_line: usize,
@@ -567,6 +589,9 @@ impl Parser {
             requires_llvm: None,
             requires_llvm_below: None,
             run_only: Vec::new(),
+            gdb: DebuggerScript::default(),
+            lldb: DebuggerScript::default(),
+            debugger_only: Vec::new(),
             pp_only: Vec::new(),
             ast_only: Vec::new(),
             oracle_line: 0,
@@ -597,7 +622,7 @@ impl Parser {
                 Some(_) => self.err(line, "duplicate `expect`"),
                 None => self.err(
                     line,
-                    format!("unknown expectation `{value}` (compile-ok|compile-fail|run|pp|ast|layout|vtables)"),
+                    format!("unknown expectation `{value}` (compile-ok|compile-fail|run|pp|ast|layout|vtables|ir|no-crash|cfg|debugger)"),
                 ),
             },
             "std" => self.std_directive(line, value),
@@ -703,6 +728,22 @@ impl Parser {
                 s.push('\n');
             }
             "run-stdin-file" => self.stdin_file_directive(line, value),
+            "gdb" | "gdb-check" | "lldb" | "lldb-check" => {
+                let key = match name {
+                    "gdb" => "gdb",
+                    "gdb-check" => "gdb-check",
+                    "lldb" => "lldb",
+                    _ => "lldb-check",
+                };
+                self.debugger_only.push((line, key));
+                if value.is_empty() {
+                    self.err(line, format!("`{key}` requires a value"));
+                }
+                let script = if name.starts_with("gdb") { &mut self.gdb } else { &mut self.lldb };
+                let list =
+                    if name.ends_with("-check") { &mut script.checks } else { &mut script.commands };
+                list.push(value.to_owned());
+            }
             "env" => self.env_directive(line, value),
             "oracle" => self.oracle_directive(line, value),
             "oven" => match parse_oven(value) {
@@ -1050,6 +1091,25 @@ impl Parser {
         (stdin, stdout)
     }
 
+    /// An `expect: debugger` test drives at least one debugger, and each
+    /// debugger it drives has both commands and checks.
+    fn check_debugger(&mut self) {
+        let first = self.debugger_only.first().map_or(1, |&(l, _)| l);
+        if self.gdb.commands.is_empty() && self.lldb.commands.is_empty() {
+            self.err(first, "`expect: debugger` requires `gdb:` or `lldb:` commands");
+        }
+        for (name, sc) in [("gdb", self.gdb.clone()), ("lldb", self.lldb.clone())] {
+            if sc.commands.is_empty() != sc.checks.is_empty() {
+                let what = if sc.commands.is_empty() {
+                    format!("`{name}-check` without `{name}:` commands")
+                } else {
+                    format!("`{name}:` commands without a `{name}-check`")
+                };
+                self.err(first, what);
+            }
+        }
+    }
+
     /// Validates `oracle: gcc` against `expect`, `verify` and `skip(gcc)`;
     /// returns whether the test has it.
     fn check_gcc(&mut self, expect: Expect, verify: bool) -> bool {
@@ -1100,6 +1160,13 @@ impl Parser {
         if expect != Expect::Run {
             for (line, key) in std::mem::take(&mut self.run_only) {
                 self.err(line, format!("`{key}` only applies to `expect: run`"));
+            }
+        }
+        if expect == Expect::Debugger {
+            self.check_debugger();
+        } else {
+            for (line, key) in std::mem::take(&mut self.debugger_only) {
+                self.err(line, format!("`{key}` only applies to `expect: debugger`"));
             }
         }
         if expect != Expect::Pp {
@@ -1198,6 +1265,8 @@ impl Parser {
             requires_llvm: self.requires_llvm,
             requires_llvm_below: self.requires_llvm_below,
             meta_header_skip: self.meta_header_skip,
+            gdb: self.gdb,
+            lldb: self.lldb,
         })
     }
 }
@@ -1246,6 +1315,10 @@ fn is_known_key(k: &str) -> bool {
             | "module"
             | "min-oracle"
             | "meta-header"
+            | "gdb"
+            | "gdb-check"
+            | "lldb"
+            | "lldb-check"
     )
 }
 
@@ -1889,6 +1962,30 @@ mod tests {
         assert!(e[12].contains("unterminated"));
         // exit is also run-only, reported at finish.
         assert!(e[13].contains("`exit` only applies to `expect: run`"));
+    }
+
+    #[test]
+    fn debugger_directives() {
+        let src = "//@ expect: debugger\n//@ gdb: break t.cpp:4\n//@ gdb: run\n\
+                   //@ gdb-check: t.cpp:4\n//@ lldb: b t.cpp:4\n//@ lldb-check: stop reason\n";
+        let s = parse(src, Lang::Cxx).unwrap();
+        assert_eq!(s.expect, Expect::Debugger);
+        assert_eq!(s.gdb.commands, ["break t.cpp:4", "run"]);
+        assert_eq!(s.gdb.checks, ["t.cpp:4"]);
+        assert_eq!(s.lldb.commands, ["b t.cpp:4"]);
+        assert!(!s.oracle);
+        let e = errs("//@ gdb: run\n");
+        assert_eq!(e, ["line 1: `gdb` only applies to `expect: debugger`"]);
+        let e = errs("//@ expect: debugger\n");
+        assert_eq!(e, ["line 1: `expect: debugger` requires `gdb:` or `lldb:` commands"]);
+        let e = errs("//@ expect: debugger\n//@ gdb: run\n//@ lldb-check: x\n");
+        assert_eq!(
+            e,
+            [
+                "line 2: `gdb:` commands without a `gdb-check`",
+                "line 2: `lldb-check` without `lldb:` commands"
+            ]
+        );
     }
 
     #[test]

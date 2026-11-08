@@ -261,6 +261,11 @@ impl Test<'_> {
                 format!("not supported by this compiler (`expect: {name}` needs kiln or clang)");
             return (Status::Skip, Some(reason), String::new());
         }
+        if spec.expect == Expect::Debugger
+            && let Some(r) = debugger_skip(spec.gdb.commands.is_empty(), spec.lldb.commands.is_empty())
+        {
+            return (Status::Skip, Some(r), String::new());
+        }
         if let Some(dump) = DumpKind::of(spec.expect) {
             let name = dump.expect();
             if !kind.speaks_clang() {
@@ -292,6 +297,7 @@ impl Test<'_> {
             Expect::Ir => self.dump(&spec, DumpKind::Ir),
             Expect::NoCrash => self.no_crash(&spec),
             Expect::Cfg => self.cfg_dump(&spec),
+            Expect::Debugger => self.debugger(&spec),
         };
         let outcome = self.with_gcc_verdict(&spec, outcome);
         // Budgets are checked once the kind's own checks pass.
@@ -956,6 +962,56 @@ impl Test<'_> {
         if failures.is_empty() { Ok(()) } else { Err(Problem::Fail(failures)) }
     }
 
+    /// `expect: debugger`: compile and link at `-O0 -g`, then run each
+    /// script in batch mode (`gdb -batch -nx -x`, `lldb -b -s`) with cwd =
+    /// the scratch dir; each `*-check` must be a substring of a later
+    /// output line (stdout, then stderr) than the previous check's.
+    fn debugger(&mut self, spec: &TestSpec) -> Check {
+        let exe = self.scratch()?.join("test.out");
+        let o = self.compile(spec, &["-O0", "-g"], Some(&exe))?;
+        if !o.success() {
+            return Err(Problem::Fail(format!(
+                "compiling the test failed ({})\n{}",
+                o.describe_end(),
+                indent(&o.stderr_str())
+            )));
+        }
+        self.check_diags(spec, &diag_parse::parse(&o.stderr_str()))?;
+        let mut failures = String::new();
+        for (name, sc) in [("gdb", &spec.gdb), ("lldb", &spec.lldb)] {
+            if sc.commands.is_empty() {
+                continue;
+            }
+            let Some(prog) = debugger_program(name) else { continue };
+            let script = self.dir.join(format!("{name}.cmd"));
+            let mut text = sc.commands.join("\n");
+            text.push('\n');
+            fs::write(&script, text).map_err(|e| {
+                Problem::Broken(format!("cannot write {}: {e}", script.display()))
+            })?;
+            let mut cmd = Command::new(&prog);
+            cmd.current_dir(&self.dir);
+            if name == "gdb" {
+                cmd.args(["-batch", "-nx", "-x"]).arg(&script).arg(&exe);
+            } else {
+                cmd.args(["-b", "-s"]).arg(&script).arg(&exe);
+            }
+            let shown = Shown(&cmd).to_string();
+            let got = self
+                .run_capped(&shown, &cmd, None, None, self.cfg.run_timeout)
+                .map_err(|e| Problem::Broken(format!("could not run `{shown}`: {e}")))?;
+            let out = format!("{}{}", got.stdout_str(), got.stderr_str());
+            if let Some(miss) = first_missing_check(&out, &sc.checks) {
+                let _ = write!(
+                    failures,
+                    "{name}: no line contains `{miss}` (after the earlier checks); output:\n{}",
+                    indent(&out)
+                );
+            }
+        }
+        if failures.is_empty() { Ok(()) } else { Err(Problem::Fail(failures)) }
+    }
+
     fn pp(&mut self, spec: &TestSpec) -> Check {
         let mode: &[&str] = if spec.pp_linemarkers { &["-E"] } else { &["-E", "-P"] };
         let how = self.cfg.pp_compare.unwrap_or(spec.pp_compare);
@@ -1392,6 +1448,38 @@ fn ir_target_flag(kind: DumpKind, spec: &TestSpec, host: &str) -> Option<String>
 /// program: comment lines and trailing comments (`; preds = ...`), the
 /// `; ModuleID` and `source_filename` lines, and `!llvm.ident` with its
 /// `"... version ..."` string node (`spec/harness.md` "IR tests").
+/// The debugger binary for `gdb`/`lldb` scripts: `gdb`, else `lldb-19`
+/// then `lldb`, on `PATH`.
+fn debugger_program(name: &str) -> Option<PathBuf> {
+    let names: &[&str] = if name == "gdb" { &["gdb"] } else { &["lldb-19", "lldb"] };
+    let path = std::env::var_os("PATH")?;
+    names
+        .iter()
+        .find_map(|n| std::env::split_paths(&path).map(|d| d.join(n)).find(|p| p.is_file()))
+}
+
+/// Why a `debugger` test cannot run here: a debugger it drives is missing.
+fn debugger_skip(no_gdb: bool, no_lldb: bool) -> Option<String> {
+    for (name, unused) in [("gdb", no_gdb), ("lldb", no_lldb)] {
+        if !unused && debugger_program(name).is_none() {
+            return Some(format!("requires `{name}` on PATH (`expect: debugger`)"));
+        }
+    }
+    None
+}
+
+/// The first of `checks` that no output line after the previous match
+/// contains (checks match successive lines, in order).
+fn first_missing_check<'c>(out: &str, checks: &'c [String]) -> Option<&'c str> {
+    let mut lines = out.lines();
+    for c in checks {
+        if !lines.by_ref().any(|l| l.contains(c.as_str())) {
+            return Some(c);
+        }
+    }
+    None
+}
+
 fn ir_normalize(ir: &str) -> String {
     let mut out = String::new();
     for line in ir.lines() {
@@ -1627,7 +1715,7 @@ pub(super) fn meta_header_skip(spec: &TestSpec, source: &str) -> Option<String> 
 
 #[cfg(test)]
 mod compat_tests {
-    use super::{DumpKind, compat_for, ir_diff, ir_normalize, ir_target_flag};
+    use super::{DumpKind, compat_for, first_missing_check, ir_diff, ir_normalize, ir_target_flag};
     use crate::test::directives::{Lang, parse};
 
     /// spec/harness.md "Oracle toolchain": kiln imitates the oracle, or
@@ -1641,6 +1729,18 @@ mod compat_tests {
         assert_eq!(compat_for(19, Some([20, 0, 0]), None), 22);
         assert_eq!(compat_for(22, None, Some([22, 0, 0])), 19);
         assert_eq!(compat_for(19, None, Some([22, 0, 0])), 19);
+    }
+
+    #[test]
+    fn debugger_checks_match_successive_lines_in_order() {
+        let out = "Breakpoint 1, f (v=3) at t.cpp:4\n$1 = 3\n$2 = {x = 1, y = 2}\n";
+        let c = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(first_missing_check(out, &c(&["t.cpp:4", "$1 = 3", "x = 1"])), None);
+        // In order: `$1` cannot match before the breakpoint line's match.
+        assert_eq!(first_missing_check(out, &c(&["$2", "$1 = 3"])), Some("$1 = 3"));
+        // One line satisfies one check only.
+        assert_eq!(first_missing_check(out, &c(&["$1", "= 3"])), Some("= 3"));
+        assert_eq!(first_missing_check(out, &c(&["nowhere"])), Some("nowhere"));
     }
 
     #[test]

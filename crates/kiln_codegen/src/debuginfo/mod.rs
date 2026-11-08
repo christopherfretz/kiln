@@ -223,7 +223,7 @@ impl<'a> Cg<'a> {
             name = r;
         }
         let checksum = o.main_id.map(|f| md5::hex(sm.text(f).as_bytes()));
-        let cu_file = self.di_create_file(name, checksum.as_deref());
+        let cu_file = self.di_create_file(name, checksum.as_deref(), true);
         let kind = match o.kind {
             DebugInfoKind::LineDirectivesOnly => "DebugDirectivesOnly",
             DebugInfoKind::LineTablesOnly => "LineTablesOnly",
@@ -272,11 +272,15 @@ impl<'a> Cg<'a> {
 
     /// clang `CGDebugInfo::createFile`: the remapped name split against
     /// the remapped compilation directory.
-    fn di_create_file(&mut self, name: &str, checksum: Option<&str>) -> MetadataId {
+    ///
+    /// `cu`: the compile unit's file, which `CreateCompileUnit` names as
+    /// given, in the compilation directory (no common-prefix split).
+    fn di_create_file(&mut self, name: &str, checksum: Option<&str>, cu: bool) -> MetadataId {
         let o = &self.opts.debug;
         let file = o.remap(name);
         let cur = o.remap(&o.comp_dir);
-        let (dir, file) = split_against(&file, &cur, name.starts_with('/'));
+        let (dir, file) =
+            if cu { (cur, file) } else { split_against(&file, &cur, name.starts_with('/')) };
         let mut f = Fields::default().s("filename", &file).s("directory", &dir);
         if let Some(c) = checksum.filter(|_| o.dwarf_version.unwrap_or(5) >= 5) {
             f = f.raw("checksumkind", "CSK_MD5").s("checksum", c);
@@ -296,7 +300,7 @@ impl<'a> Cg<'a> {
         }
         // A `#line` name has no buffer to checksum.
         let checksum = (p.file_name == sm.file_name(p.file)).then(|| md5::hex(sm.text(p.file).as_bytes()));
-        let f = self.di_create_file(&name, checksum.as_deref());
+        let f = self.di_create_file(&name, checksum.as_deref(), false);
         if let Some(di) = self.di.as_deref_mut() {
             di.files.insert(name.into(), f);
         }
