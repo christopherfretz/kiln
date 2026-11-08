@@ -207,11 +207,11 @@ impl Sema<'_, '_> {
                 if keep(i) { written(a) } else { a.kind() != kiln_ast::types::ArgKind::Null }
             }) {
                 let mut v = Vec::with_capacity(args.len());
-                for (i, a) in args.into_iter().enumerate() {
+                for (i, &a) in args.iter().enumerate() {
                     v.push(match a.view() {
                         _ if !keep(i) => TemplateArg::NULL,
                         ArgView::Expr { expr, profile: None } => {
-                            self.written_mapping_arg(cc, i, expr)
+                            self.written_mapping_arg(cc, i, expr, &args[..i])
                         }
                         _ => a,
                     });
@@ -223,28 +223,62 @@ impl Sema<'_, '_> {
     }
 
     /// The mapping argument of a non-dependent expression `expr` written
-    /// for parameter `i` of concept `c`: an integral or enumeration
-    /// parameter's value converted to its type (`2 - 1` and `1` map
-    /// alike, as converted template arguments, [temp.arg.nontype]/1);
-    /// otherwise the expression's profile (equal for equivalent
-    /// expressions, [temp.over.link]/5).
-    fn written_mapping_arg(&mut self, c: DeclId, i: usize, expr: ExprId) -> TemplateArg {
-        let pty = self.template_params(c).get(i).copied().and_then(|p| {
+    /// for parameter `i` of concept `c` (`prior` the mapping's earlier
+    /// arguments): the converted template argument, so value-equal
+    /// spellings map alike ([temp.arg.nontype]/1, [temp.type]/2
+    /// template-argument-equivalence). An integral or enumeration
+    /// parameter's value is folded to its type (`2 - 1` and `1`); any
+    /// other non-pack parameter of a non-dependent type (a pointer, a
+    /// class type, a reference: `&x` and `&(x)`, `S{1}` and `S{0 + 1}`)
+    /// converts the argument as a template argument in a SFINAE frame.
+    /// Otherwise, or when the conversion fails, the expression's profile
+    /// (equal for equivalent expressions, [temp.over.link]/5).
+    fn written_mapping_arg(
+        &mut self,
+        c: DeclId,
+        i: usize,
+        expr: ExprId,
+        prior: &[TemplateArg],
+    ) -> TemplateArg {
+        let param = self.template_params(c).get(i).copied().and_then(|p| {
             let info = self.ast.template_parm(p)?;
             let ty = self.ast.decls.get(p).ty()?;
-            let canon = self.ast.types.canonical(ty);
-            let t = &self.ast.types;
-            (self.kind_of(p) == DeclKind::NonTypeTemplateParm
-                && !info.pack
-                && (t.is_integral(canon) || t.as_enum(canon).is_some()))
-            .then_some(canon)
+            (self.kind_of(p) == DeclKind::NonTypeTemplateParm && !info.pack)
+                .then(|| (p, self.ast.types.canonical(ty)))
         });
-        if let Some(pty) = pty
-            && let Some(v) = self.fold_int(expr)
-        {
-            return TemplateArg::value(pty, self.int_const(pty, v));
+        if let Some((p, pty)) = param {
+            let t = &self.ast.types;
+            if t.is_integral(pty) || t.as_enum(pty).is_some() {
+                if let Some(v) = self.fold_int(expr) {
+                    return TemplateArg::value(pty, self.int_const(pty, v));
+                }
+            } else if let Some(v) = self.converted_mapping_arg(c, p, expr, prior) {
+                return v;
+            }
         }
         TemplateArg::profile(self.ast.profile_expr(expr))
+    }
+
+    /// `expr` converted as the template argument for non-type parameter
+    /// `p` of concept `c` ([temp.arg.nontype]/2), quietly: `None` unless
+    /// it gives a value.
+    fn converted_mapping_arg(
+        &mut self,
+        c: DeclId,
+        p: DeclId,
+        expr: ExprId,
+        prior: &[TemplateArg],
+    ) -> Option<TemplateArg> {
+        let depth = self.template_param_depth(c);
+        let loc = self.ast.exprs.get(expr).loc();
+        let a = TemplateArg::expr(expr, None);
+        let r = self.in_sfinae(FrameKind::ConstraintSubstitution, c, None, loc, |s| {
+            s.check_template_arg(c, depth, p, a, loc, prior).ok()
+        });
+        match r {
+            Some((Some(v), Ok(()))) if matches!(v.view(), ArgView::Value { .. }) => Some(v),
+            _ => None,
+        }
     }
 
     /// [temp.constr.normal]/1.4: the normal form of concept-id `e` is the
