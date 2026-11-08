@@ -5835,6 +5835,15 @@ return type deduction, as clang's instantiated declaration name does:
 lambda (`ColdDeclData::conversion_spec_target`, read by
 `AstNames::write_name`; WP-170).
 
+A class member access that names a conversion function explicitly
+(`e.operator Matx<double,3,3>()`, `this->X::operator T*()`) and finds no
+member of that name deduces each conversion function template of the
+object's class against the named type ([temp.mem]/6, [temp.deduct.conv])
+and takes the specializations that deduce as the lookup result; the
+bases' conversion templates are not searched, as clang 19's
+`LookupDirect` (`Sema::conversion_template_specs`, WP-803,
+`tests/conformance/temp.mem/conversion-template-named-explicitly-run.cpp`).
+
 The texts are taken from clang 19's `DiagnosticSemaKinds.td`. The goldens
 are authoritative: WP-070 checks each of them in `templates/diag/`.
 

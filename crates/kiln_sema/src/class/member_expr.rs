@@ -395,6 +395,38 @@ impl Sema<'_, '_> {
             })
     }
 
+    /// `e.operator T()` naming a specialization of a conversion function
+    /// template ([temp.mem]/6): it is not found by name lookup; instead
+    /// each conversion function template of class `c` itself whose
+    /// deduction to `T` succeeds ([temp.deduct.conv]) contributes that
+    /// specialization (clang `LookupDirect`, which does not search the
+    /// bases for them). `None` when none does.
+    fn conversion_template_specs(
+        &mut self,
+        c: DeclId,
+        to: QualType,
+        loc: Loc,
+    ) -> Option<crate::lookup::Found> {
+        if self.is_dependent_type(to) {
+            return None;
+        }
+        let naming = self.ast.definition(c).unwrap_or(c);
+        let mut specs = Vec::new();
+        for ft in self.conversion_templates_of(naming) {
+            if let Ok(s) = self.deduce_conversion(ft, to, None, loc)
+                && !specs.contains(&s)
+            {
+                specs.push(s);
+            }
+        }
+        (!specs.is_empty()).then(|| crate::lookup::Found {
+            found: specs.clone(),
+            decls: specs,
+            naming: Some(naming),
+            ..Default::default()
+        })
+    }
+
     /// `base.name` / `base->name` once the object type is known
     /// ([expr.ref]/2-7): class member lookup in `def` (the object's
     /// complete class), ambiguity and access checks, then the access.
@@ -416,10 +448,16 @@ impl Sema<'_, '_> {
         // or one of its bases.
         let look = qual.map_or(def, |q| q.ctx);
         self.declare_implicit_named(look, name);
-        let found = match qual {
+        let mut found = match qual {
             Some(q) => self.lookup_qualified_dn(q.ctx, name, LookupKind::Ordinary),
             None => self.lookup_in_class_dn(def, name, LookupKind::Ordinary),
         };
+        if found.decls.is_empty()
+            && let kiln_ast::names::DeclNameView::Conversion(to) = self.ast.names.view(name)
+            && let Some(f) = self.conversion_template_specs(look, to, loc)
+        {
+            found = f;
+        }
         if self.diagnose_member_ambiguity(&found, name, loc) {
             return self.recover_err(&[base], loc);
         }
