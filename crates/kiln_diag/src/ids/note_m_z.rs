@@ -181,5 +181,6 @@ note_using_decl_conflict = Note (0) "conflicting declaration";
 note_using_decl_target = Note (0) "target of using declaration";
 note_va_start_parameter_type = Note (1) "parameter of type {0} is declared here";
 note_var_declared_const = Note (1) "variable '{0}' declared const here";
+note_var_explicitly_captured_here = Note (2) "variable {0} is{1:| explicitly} captured here";
 note_var_template_spec_here = Note (1) "in instantiation of variable template specialization '{0}' requested here";
 note_which_delegates_to = Note (0) "which delegates to";

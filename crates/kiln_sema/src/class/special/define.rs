@@ -353,6 +353,12 @@ impl Sema<'_, '_> {
         // it instantiates note the exception-specification evaluation.
         self.resolve_exception_spec(f, loc);
         let saved = self.push_synth(f, SynthKind::Special(kind), loc);
+        if matches!(kind, SpecialKind::CopyCtor | SpecialKind::CopyAssign)
+            && self.std >= kiln_lex::Std::Cxx11
+            && n.flags().contains(DeclFlags::IMPLICIT)
+        {
+            self.diagnose_deprecated_copy(class, kind == SpecialKind::CopyAssign);
+        }
         let ok = match kind {
             SpecialKind::DefaultCtor => self.define_ctor(f, class, ImplicitInit::Default),
             SpecialKind::CopyCtor => self.define_ctor(f, class, ImplicitInit::Copy),
@@ -374,6 +380,44 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         self.pop_synth(saved);
+    }
+
+    /// [depr.impldec]/1: the definition of an implicitly declared copy
+    /// constructor (`assign` false) or copy assignment operator of
+    /// `class` is deprecated if the class has a user-declared destructor
+    /// or the other copy operation is user-declared (clang's
+    /// `diagnoseDeprecatedCopyOperation`, `-Wdeprecated-copy` and its
+    /// `-with-dtor`/`-with-user-provided-*` siblings), at that member.
+    fn diagnose_deprecated_copy(&mut self, class: DeclId, assign: bool) {
+        let bits = self.defn_bits(class);
+        let want = if bits.contains(DefinitionBits::USER_DECLARED_DTOR) {
+            SpecialKind::Dtor
+        } else if assign && bits.contains(DefinitionBits::USER_DECLARED_COPY_CTOR) {
+            SpecialKind::CopyCtor
+        } else if !assign && bits.contains(DefinitionBits::USER_DECLARED_COPY_ASSIGN) {
+            SpecialKind::CopyAssign
+        } else {
+            return;
+        };
+        let Some(op) = self
+            .ast
+            .decls
+            .members(class)
+            .find(|&m| self.is_user_declared(m) && self.special_kind_of(m) == Some(want))
+        else {
+            return;
+        };
+        let id = match (self.is_user_provided(op), want == SpecialKind::Dtor) {
+            (true, true) => DiagId::sema_deprecated_copy_with_user_provided_dtor,
+            (true, false) => DiagId::sema_deprecated_copy_with_user_provided_copy,
+            (false, true) => DiagId::sema_deprecated_copy_with_dtor,
+            (false, false) => DiagId::sema_deprecated_copy,
+        };
+        let at = self.ast.decls.get(op).loc();
+        // Once per implicit member, so the copy constructor's and the
+        // copy assignment's warnings at the same member are both shown.
+        let d = self.diag(id, at).arg(self.ty_arg(self.tag_type(class))).arg(u8::from(assign));
+        self.emit(d.allow_duplicate());
     }
 
     fn define_ctor(&mut self, f: DeclId, class: DeclId, iik: ImplicitInit) -> bool {

@@ -4,6 +4,7 @@
 
 sema_section_conflict = Error (2) "{0} causes a section type conflict with {1}";
 sema_selectany_non_extern_data = Error (0) "'selectany' can only be applied to data items with external linkage";
+sema_shadow_field = WarningOff [ShadowField] (4) "{3:parameter|non-static data member} {0} {3:|of {1} }shadows member inherited from type {2}";
 sema_shift_gt_typewidth = Warning [ShiftCountOverflow] (0) "shift count >= width of type";
 sema_shift_negative = Warning [ShiftCountNegative] (0) "shift count is negative";
 sema_shufflevector_argument_too_large = Error (0) "index for __builtin_shufflevector must be less than the total number of vector elements";
@@ -250,6 +251,7 @@ sema_unused_constructor = Warning [UnusedValue] (1) "ignoring temporary created 
 sema_unused_constructor_msg = Warning [UnusedValue] (2) "ignoring temporary created by a constructor declared with {0} attribute: {1}";
 sema_unused_exception_param = WarningOff [UnusedExceptionParameter] (1) "unused exception parameter {0}";
 sema_unused_expr = Warning [UnusedValue] (0) "expression result unused";
+sema_unused_lambda_capture = WarningOff [UnusedLambdaCapture] (2) "lambda capture {0} is not {1:used|required to be captured for this use}";
 sema_unused_result = Warning [UnusedResult] (1) "ignoring return value of function declared with {0} attribute";
 sema_unused_result_msg = Warning [UnusedResult] (2) "ignoring return value of function declared with {0} attribute: {1}";
 sema_unused_result_typedef = Warning [IgnoredAttributes] (1) "{0} attribute ignored when applied to a typedef; consider using '__attribute__((warn_unused_result))' or '[[clang::warn_unused_result]]' instead";

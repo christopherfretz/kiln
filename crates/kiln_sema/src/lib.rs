@@ -2085,8 +2085,11 @@ fn is_sfinae_failure(id: DiagId) -> bool {
         DiagId::sema_cce_narrowing_value
             | DiagId::sema_designated_init_reordered
             | DiagId::sema_init_list_constant_narrowing
+            | DiagId::sema_init_list_constant_narrowing_const_reference
             | DiagId::sema_init_list_type_narrowing
+            | DiagId::sema_init_list_type_narrowing_const_reference
             | DiagId::sema_init_list_variable_narrowing
+            | DiagId::sema_init_list_variable_narrowing_const_reference
             | DiagId::sema_initializer_overrides
             | DiagId::sema_initializer_union_overrides
     )

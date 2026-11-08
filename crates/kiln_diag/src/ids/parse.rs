@@ -120,6 +120,7 @@ parse_long_long_long = Error (0) "'long long long' is invalid";
 parse_misplaced_ellipsis_in_declaration = Error (1) "'...' must {0:immediately precede declared identifier|be innermost component of anonymous pack declaration}";
 parse_misplaced_ellipsis_vararg = Warning [AmbiguousEllipsis] (1) "'...' in this location creates a C-style varargs function{0:, not a function parameter pack|}";
 parse_missing_dependent_template_kw = Error (1) "use 'template' keyword to treat '{0}' as a dependent template name";
+parse_missing_template_arg_list_after_template_kw = WarningError [MissingTemplateArgListAfterTemplateKw] (0) "a template argument list is expected after a name prefixed by the template keyword";
 parse_missing_type_specifier = Error (0) "a type specifier is required for all declarations";
 parse_missing_typename = Error (1) "missing 'typename' prior to dependent type name '{0}'";
 parse_multiple_template_declarators = Error (1) "{0:a template declaration|an explicit template specialization|an explicit template instantiation} can only {0:declare|declare|instantiate} a single entity";
