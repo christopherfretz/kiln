@@ -884,7 +884,7 @@ impl Run<'_, '_, '_> {
         self.s.var_stmts.clear();
         self.s.index.clear();
         let st = &sema.ast.stmts;
-        for (i, el) in cfg.elems.iter().enumerate() {
+        for el in &cfg.elems {
             let Elem::Stmt(s) = *el else { continue };
             if st.get(s).kind() != StmtKind::DeclStmt {
                 continue;
@@ -893,7 +893,6 @@ impl Run<'_, '_, '_> {
             if sema.ast.lists.len(list) != 1 {
                 continue;
             }
-            let _ = i;
             if let Some(d) = sema.ast.lists.at::<DeclId>(list, 0)
                 && sema.uninit_tracked(d)
             {

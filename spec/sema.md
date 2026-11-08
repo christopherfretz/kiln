@@ -7479,8 +7479,8 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   is fine once that member is initialized; unevaluated operands,
   `constexpr` variables, static data members of non-class type and
   variables in a linkage specification (clang checks the declaration
-  context) are not diagnosed. Other locals are left to a CFG
-  uninitialized-values analysis kiln does not have.
+  context) are not diagnosed. Other locals are left to the CFG
+  uninitialized-values analysis (§7.14).
 - **Verify-only initialization** (WP-328; clang's `VerifyOnly` in
   `TryOrBuildParenListInitialization`): an attempt that only asks
   "would this initialization succeed" must leave no trace when it
@@ -8742,6 +8742,137 @@ keeps `DependentCoawaitExpr` (operand only), a one-operand
 rebuilds each through `build_coawait`/`build_coyield`/`build_coreturn`,
 which builds the coroutine as above in the instantiated function.
 Coroutine lambdas follow the same rules (spec/sema-lambda.md).
+
+### 7.14 Uninitialized locals (`uninit.rs`, WP-862)
+
+A port of clang 19's `UninitializedValues.cpp` and of the reporting in
+`AnalysisBasedWarnings.cpp` (`UninitValsDiagReporter`,
+`DiagnoseUninitializedUse`, `DiagUninitUse`,
+`SuggestInitializationFixit`); docs/design/uninitialized-values.md is
+the design. Tests: `basic.indet/uninit-*.cpp`, and the fix-it golden
+`uninit_fixits_like_clang` in `crates/kiln_driver/tests/driver.rs`.
+
+**Groups.** `-Wuninitialized` (in `-Wall` and `-Wmost`) holds
+`-Wsometimes-uninitialized`, `-Wuninitialized-const-reference` and
+`-Wstatic-self-init`. `-Wconditional-uninitialized` is off by default.
+
+**When it runs.** The analysis runs once per function body at the end
+of the body ([`Sema::late_analysis`], after the unreachable-code scan,
+over the body's CFG, §7.5.1), when all of these hold:
+- no uncompilable error has occurred in the TU so far (clang
+  `hasUncompilableErrorOccurred`). A warning promoted by `-Werror` does
+  not count. Functions finished before the first error are still
+  analyzed;
+- the body is not in a dependent context. Each function template
+  specialization is analyzed when it is instantiated, and its warnings
+  carry the instantiation note;
+- one of the four warnings is enabled at the function's location;
+- the body declared an automatic variable without an initializer, or
+  named a variable inside its own initializer (`note_uninit_var`). This
+  is clang's "no tracked variable" fast path, tightened: C++ forbids
+  jumping past an initialization, so a variable with an initializer can
+  be uninitialized only through a self-reference.
+
+**Tracked variables** (clang `isTrackedVar`). A non-implicit automatic
+local, declared alone by a declaration statement of the body, of
+scalar, vector or non-empty class type. A class is non-empty when some
+field is not an unnamed bit-field, not zero-size and not of empty class
+type; base classes do not count. Each variable has two bits per program
+point, `Unknown`, `Initialized`, `Uninitialized` or `MayUninitialized`,
+packed into dense `u64` rows, one row per block.
+
+**Classification** (clang `ClassifyRefs`). Each reference to a tracked
+variable is classified:
+- `Use`: an lvalue-to-rvalue read (including a by-copy lambda
+  capture), `++`/`--`, a compound assignment, or the argument of a
+  `std::move` call.
+- `SelfInit`: `T x = x;`. It is treated as an initialization. The
+  self-init itself is reported only when `x` is also used while always
+  uninitialized.
+- `ConstRefUse`: a const glvalue argument of a call. It becomes
+  `Ignore` when the callee has a trivial (empty) body.
+- `Ignore`: the operand of a `(void)` cast, the left operand of a comma,
+  or a `&x` argument for a pointer-to-const parameter.
+- `Init`: any other reference, which may initialize the variable. This
+  covers the left operand of `=`, an address taken, a non-const
+  reference bound, a by-reference capture and an asm output.
+
+Unevaluated operands are not in the CFG, so they are never seen.
+
+**Fixed point.** A worklist runs in reverse post-order of the live
+edges. The entry state is all `Uninitialized`. A block's input is the
+merge of its analyzed predecessors' outputs. A declaration without an
+initializer sets `Uninitialized`, even on a later loop iteration.
+An `Init` sets `Initialized`. A
+call to a `returns_twice` function (`setjmp`) makes every
+`Uninitialized` variable `MayUninitialized`. An `asm goto`'s
+`Uninitialized` outputs become `MayUninitialized` on its edges. The
+blocks that saw a use are then run once more, in clang's block order,
+to collect reports.
+
+**Reports.** For each variable, uses are recorded through the
+reporting pass, then flushed in variable-declaration order (clang's
+reporter). The kind of each use is computed by `getUninitUse`:
+- `Always`, `AfterDecl` or `AfterCall` for `Uninitialized`.
+- `Sometimes` when one predecessor branch of the use decides it. The
+  branches are found by searching backwards from the use for blocks
+  from which the use is reachable while one successor leaves it.
+- `Maybe` otherwise.
+
+Each use produces one of these warnings:
+- `variable 'x' is uninitialized when used here` [-Wuninitialized]. The
+  `AfterDecl` wording is `... when used within its own initialization`.
+  A self-reference inside the initializer (clang `ContainsReference`,
+  which also enters statement-expression bodies) is reported with the
+  name and use ranges.
+- `variable 'x' is used uninitialized whenever <branch>` [-Wsometimes-
+  uninitialized], for each deciding branch. The branch is one of:
+  `'if' condition is true|false`, `'for'|'while' loop is entered|exits
+  because its condition is false`, `'?:' condition is true|false`,
+  `'&&'|'||' condition is true|false`, `switch case is taken`, `switch
+  default is taken`, or `function 'f' is called` (an always-uninit use
+  under `AfterCall`). Each warning has the note `uninitialized use
+  occurs here`, plus `remove the 'if' if its condition is always
+  true|false` (with the clang fix-its) or `remove the condition if it is
+  always true|false` (replacing the condition with `true`/`false`).
+- `variable 'x' may be uninitialized when used here`
+  [-Wconditional-uninitialized].
+
+The last warning for a variable carries the note `initialize the
+variable 'x' to silence this warning`. It has a fix-it after the
+declarator: ` = 0`, ` = 0.0`, ` = false`, ` = '\0'`, ` = nullptr` (a
+pointer or member pointer), or none for a vector. It is placed after
+the declarator's last token, so after `)` for a function pointer, and
+dropped in a macro.
+
+The uses of each variable are ordered most confident first, then by
+location. The first use that produces a warning is reported, and the
+rest are dropped (clang reports one point per variable).
+
+A self-initialized variable (`SelfInit`) is handled differently:
+- if one of its uses is always-uninitialized, the self-init itself is
+  reported instead;
+- otherwise every use is downgraded to `Maybe`.
+
+`variable 'x' is uninitialized when passed as a const reference
+argument here` [-Wuninitialized-const-reference] is reported once per
+variable, for a `ConstRefUse` reached `Uninitialized`.
+
+**Suppressions.**
+- `__attribute__((uninitialized))` and `[[indeterminate]]` (P2795) do
+  not silence the warning, matching clang 19 and 22. clang 19 also warns
+  that `indeterminate` is an unknown attribute.
+- A class variable whose declaration runs a non-trivial constructor is
+  `Initialized` by it. The syntactic self-reference checker
+  (`self_ref.rs`) reports class-type self-references (`A a(a.get())`).
+  The analysis does not report them a second time, because
+  `ContainsReference` sees the same `DeclRefExpr` and reports it once.
+
+**Gaps.**
+- clang 21's `-Wuninitialized-const-pointer` (a `const T*` argument
+  `&x`) is not implemented, so clang 22 warns there and kiln does not.
+- Field uses in constructor initializers (`S() : x(std::move(x))`) belong
+  to clang's `DiagnoseUninitializedFields`, not to this analysis.
 
 ## 8. Constant evaluation (`oven_bridge.rs`)
 
