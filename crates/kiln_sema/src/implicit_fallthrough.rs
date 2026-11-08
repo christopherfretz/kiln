@@ -96,6 +96,14 @@ impl Sema<'_, '_> {
         self.std = std;
     }
 
+    /// Whether `char8_t` exists and a `u8` literal has it as its type
+    /// ([lex.ccon]/3, [lex.string]/6; clang `LangOptions::Char8`):
+    /// [`Sema::char8`], else from C++20 on.
+    #[must_use]
+    pub fn char8(&self) -> bool {
+        self.char8.unwrap_or(self.std >= Std::Cxx20)
+    }
+
     /// `-Wimplicit-fallthrough` and `-Wunreachable-code-fallthrough` over
     /// the switch labels of function body `body`, in source order (clang
     /// visits the CFG blocks in order). Not in an instantiation for the

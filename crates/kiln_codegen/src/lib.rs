@@ -35,6 +35,7 @@ mod eh;
 mod expr;
 mod fir;
 mod fold;
+mod fp;
 mod func;
 mod global_init;
 mod lambda;
@@ -71,6 +72,7 @@ pub mod x86_intrinsic_table {
     pub use kiln_llvm::intrinsics::TargetMem as Mem;
 }
 
+pub use builtins::{UNLOWERED_BUILTINS, is_unlowered_builtin};
 use kiln_abi::Target;
 use kiln_ast::Ast;
 use kiln_llvm::Module;
@@ -99,10 +101,12 @@ pub struct CodegenOptions {
     pub rtti: bool,
     /// The `llvm.ident` string; empty for none.
     pub ident: String,
-    /// `AArch64` only: `+outline-atomics` in the functions'
-    /// `target-features` (`-moutline-atomics`, the default), else
-    /// `-outline-atomics` (`-mno-outline-atomics`). Ignored on x86-64.
-    pub outline_atomics: bool,
+    /// `AArch64` only: `+outline-atomics` (`Some(true)`: `-moutline-atomics`,
+    /// or the default with a GCC installation of 9.3.1 or later) or
+    /// `-outline-atomics` (`Some(false)`: `-mno-outline-atomics`) in the
+    /// functions' `target-features`; `None` names neither (clang
+    /// `getAArch64TargetFeatures`). Ignored on x86-64.
+    pub outline_atomics: Option<bool>,
     /// On `AArch64`, the `+name`/`-name` target features beyond the base
     /// set (`-march=armv8-a+sve`, `-target-feature`; one per name), merged
     /// into the functions' `target-features`. On x86-64, the `-march=`
@@ -125,6 +129,13 @@ pub struct CodegenOptions {
     /// (`-fcx-limited-range`, `-fcomplex-arithmetic=`; clang's
     /// `LangOptions::ComplexRange`).
     pub complex_range: ComplexRange,
+    /// The command line's floating-point semantics (`-ffp-contract=`,
+    /// `-ffast-math` and its parts, `-f[no-]math-errno`; spec/codegen.md
+    /// "Floating-point semantics", WP-806).
+    pub fp: kiln_ast::fp::FpOptions,
+    /// The `-fdenormal-fp-math=` mode as `"output,input"`
+    /// (`"denormal-fp-math"` on every function); `None` is IEEE.
+    pub fp_denormal: Option<String>,
     /// The optimization level (clang `CodeGenOpts.OptimizationLevel`):
     /// 0 at `-O0`, 1 at `-O`/`-O1`/`-Og`, 2 at `-O2`/`-Os`/`-Oz`, 3 at
     /// `-O3` and above. Above 0 the IR will be optimized (see
@@ -197,6 +208,9 @@ pub struct CodegenOptions {
     /// flag (`-f[no-]asynchronous-unwind-tables`, `-f[no-]unwind-tables`;
     /// clang `CodeGenOpts.UnwindTables`): `None` emits neither.
     pub unwind_tables: Option<UnwindTables>,
+    /// Which static and thread-local variables register their
+    /// destructors (`-f[no-]c++-static-destructors[=…]`; WP-805).
+    pub static_destructors: StaticDestructors,
     /// `-fno-plt`: a function declaration with no definition in the
     /// translation unit is `nonlazybind`, and the module carries
     /// `RtLibUseGOT` (clang `CodeGenOpts.NoPLT`).
@@ -216,6 +230,15 @@ pub struct CodegenOptions {
     /// `null_pointer_is_valid`, and references, `this` and `operator new`
     /// carry no `nonnull` (`this` is `dereferenceable_or_null`).
     pub null_pointer_is_valid: bool,
+    /// `-fno-builtin` / `-ffreestanding` (clang `LangOpts.NoBuiltin`):
+    /// every function and call site is `"no-builtins"`, a call site also
+    /// `nobuiltin`, and no library function is lowered as its builtin
+    /// (spec/codegen.md "no-builtin"; WP-808).
+    pub no_builtin: bool,
+    /// The `-fno-builtin-<name>` names, sorted (clang
+    /// `LangOpts.NoBuiltinFuncs`): `"no-builtin-<name>"` on every function
+    /// and call site, `nobuiltin` on a call of `<name>` itself.
+    pub no_builtin_fns: Vec<String>,
     /// The x86-64 `-march=<cpu>`: the functions' `target-cpu` (and no
     /// default `tune-cpu`, as clang); `None` is the target's default
     /// (`x86-64`, `generic` on `AArch64`). `native` (both targets) emits
@@ -437,6 +460,21 @@ impl FramePointer {
     }
 }
 
+/// Which variables with static or thread storage duration register
+/// their destructors (`-fc++-static-destructors=`; clang
+/// `LangOptions::RegisterStaticDestructorsKind`, `VarDecl::isNoDestroy`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StaticDestructors {
+    /// All of them (the default).
+    #[default]
+    All,
+    /// Only `thread_local` ones (`=thread-local`, clang 22).
+    ThreadLocal,
+    /// None of them (`-fno-c++-static-destructors`, `=none`), except
+    /// `[[clang::always_destroy]]` ones.
+    None,
+}
+
 /// clang's `LangOptions::ComplexRangeKind` (spec/abi.md §8.17): the
 /// algorithm for `_Complex` floating `*` and `/` when both operands are
 /// complex.
@@ -509,12 +547,14 @@ impl Default for CodegenOptions {
             exceptions: true,
             rtti: true,
             ident: String::new(),
-            outline_atomics: true,
+            outline_atomics: Some(true),
             target_features: Vec::new(),
             target_attr: None,
             sve: false,
             sve_vector_bits: None,
             complex_range: ComplexRange::Full,
+            fp: kiln_ast::fp::FpOptions::default(),
+            fp_denormal: None,
             opt_level: 0,
             opt_size: 0,
             strict_aliasing: true,
@@ -533,9 +573,12 @@ impl Default for CodegenOptions {
             stack_protector: StackProtector::Off,
             unwind_tables: Some(UnwindTables::Async),
             no_plt: false,
+            static_destructors: StaticDestructors::All,
             wrapv: false,
             wrapv_pointer: false,
             null_pointer_is_valid: false,
+            no_builtin: false,
+            no_builtin_fns: Vec::new(),
             target_cpu: None,
             tune_cpu: None,
             no_inline: false,

@@ -7,6 +7,7 @@ use std::io::Write;
 use std::path::Path;
 use std::rc::Rc;
 
+use kiln_ast::attr::AttrSyntax;
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions};
 use kiln_lex::Interner;
 use kiln_lex::TokKind;
@@ -144,7 +145,11 @@ impl Job<'_> {
         cfg.char8_t = p.char8_t;
         cfg.char_signed = p.char_signed;
         cfg.pic = p.pic.unwrap_or(PicModel::Pie(2));
-        cfg.fast_math = p.fast_math.unwrap_or(p.ofast);
+        let fp = self.args.fp_model();
+        cfg.fast_math = fp.fast_math;
+        cfg.finite_math = fp.opts.nnan && fp.opts.ninf;
+        cfg.no_math_errno = !fp.opts.math_errno;
+        cfg.unsafe_math = fp.unsafe_math;
         cfg.freestanding = p.freestanding.unwrap_or(false);
         cfg.pthread = p.pthread;
         cfg.threadsafe_statics = p.threadsafe_statics.unwrap_or(true);
@@ -167,6 +172,7 @@ impl Job<'_> {
         o.keep_comments = a.print.comments || a.print.macro_comments;
         o.keep_macro_comments = a.print.macro_comments;
         o.reflection = a.predef.reflection;
+        o.char8 = a.predef.char8_t;
         o.predefines = predefines;
         if let Some(epoch) = time::reproducible_epoch(a.reproducible_time) {
             let (date, t, stamp) = time::spellings(epoch);
@@ -388,6 +394,28 @@ pub(crate) fn finish_deps(
     deps
 }
 
+/// WP-805: the library builtins in the reserved `__` namespace that clang
+/// answers `__has_builtin` for but declares only through a header (glibc's
+/// `__sigsetjmp`, `__finite`, `__exp10`, Apple libm's `__sinpi` family,
+/// `std::__addressof`, `<ia32intrin.h>`'s `__rdtsc`). Kiln calls the
+/// declared function, so they keep clang's answer. Sorted.
+const RESERVED_LIBRARY_BUILTINS: &[&str] = &[
+    "__addressof",
+    "__cospi",
+    "__cospif",
+    "__exp10",
+    "__exp10f",
+    "__finite",
+    "__finitef",
+    "__finitel",
+    "__rdtsc",
+    "__sigsetjmp",
+    "__sinpi",
+    "__sinpif",
+    "__tanpi",
+    "__tanpif",
+];
+
 /// clang 19's feature answers with kiln's builtin staging applied
 /// (spec/sema-templates.md §13.3): `__has_builtin` and
 /// `__has_constexpr_builtin` answer 0 for a trait, transform, builtin
@@ -398,6 +426,13 @@ pub(crate) fn finish_deps(
 /// neither declares nor stages answers 0 too, so a guarded use such as
 /// `#if __has_builtin(__builtin_infer_alloc_token)` is skipped rather
 /// than reaching "use of undeclared identifier".
+///
+/// WP-805 (spec/sema.md §4.5): the answers are truthful. `__has_builtin`
+/// answers 0 for a builtin function kiln does not declare, and for one
+/// it declares but cannot lower ([`kiln_codegen::UNLOWERED_BUILTINS`]).
+/// `__has_attribute`, `__has_cpp_attribute` and
+/// `__has_declspec_attribute` answer 0 for a class-A attribute kiln
+/// rejects ([`kiln_sema::attr_triage`]). `-E` keeps clang's raw answers.
 struct StagedFeatures(ClangFeatures, ClangFeatures);
 
 impl StagedFeatures {
@@ -408,6 +443,47 @@ impl StagedFeatures {
             && kiln_pp::FeatureQueries::has_builtin(&self.1, name) == 0
             && kiln_ast::decl::builtin::by_name(name).is_none()
             && kiln_sema::templ::builtins::table::lookup(name).is_none()
+    }
+
+    /// Whether `name`, which clang answers `__has_builtin` for, is a
+    /// builtin kiln neither handles (a keyword, a preprocessor builtin, a
+    /// staged sema builtin, a declared function) nor lowers. A library
+    /// builtin outside the reserved `__` namespace (`malloc`,
+    /// `std::move`, `_Exit`) is a call to the function its header
+    /// declares, so it keeps clang's answer.
+    fn unavailable_builtin(&self, name: &str) -> bool {
+        let compat = self.0.compat().major();
+        let declared = kiln_ast::decl::builtin::by_name_at(name, compat).is_some()
+            || kiln_ast::decl::builtin::lib_by_name(name).is_some();
+        if declared {
+            return kiln_codegen::is_unlowered_builtin(name);
+        }
+        name.starts_with("__")
+            && RESERVED_LIBRARY_BUILTINS.binary_search(&name).is_err()
+            && !kiln_pp::FeatureQueries::is_keyword(&self.0, name)
+            && !kiln_pp::Builtin::ALL.iter().any(|&(n, _)| n == name)
+            && kiln_sema::templ::builtins::table::lookup(name).is_none()
+    }
+
+    /// Whether attribute `name` written with `syntax` and `scope` is one
+    /// kiln rejects as class A (and so feature-tests as absent).
+    fn unsupported_attribute(&self, syntax: AttrSyntax, scope: Option<&str>, name: &str) -> bool {
+        let scope = scope.map(|s| match s {
+            "__gnu__" => "gnu",
+            "_Clang" => "clang",
+            s => s,
+        });
+        // Trimmed as `Sema::act_on_attribute` trims it (clang's
+        // `__clang_arm_builtin_alias` has a leading `__` only).
+        let name = name.trim_start_matches("__").trim_end_matches("__");
+        kiln_sema::attr_triage::attribute_support(
+            name,
+            syntax,
+            scope,
+            self.0.compat().major(),
+            self.0.is_cxx26(),
+            self.0.is_x86_64(),
+        ) == kiln_sema::attr_triage::Support::Unsupported
     }
 }
 
@@ -427,6 +503,7 @@ impl kiln_pp::FeatureQueries for StagedFeatures {
             // A GCC builtin clang lacks (WP-484: `__builtin_is_string_literal`).
             Some(true) if v == 0 && kiln_sema::templ::builtins::table::gcc_only(name) => 1,
             None if v != 0 && self.undeclared_clang22(name) => 0,
+            None if v != 0 && self.unavailable_builtin(name) => 0,
             _ => v,
         }
     }
@@ -438,15 +515,18 @@ impl kiln_pp::FeatureQueries for StagedFeatures {
     }
 
     fn has_attribute(&self, name: &str) -> u32 {
-        self.0.has_attribute(name)
+        let v = self.0.has_attribute(name);
+        if v != 0 && self.unsupported_attribute(AttrSyntax::Gnu, None, name) { 0 } else { v }
     }
 
     fn has_cpp_attribute(&self, scope: Option<&str>, name: &str) -> u32 {
-        self.0.has_cpp_attribute(scope, name)
+        let v = self.0.has_cpp_attribute(scope, name);
+        if v != 0 && self.unsupported_attribute(AttrSyntax::Cxx11, scope, name) { 0 } else { v }
     }
 
     fn has_declspec_attribute(&self, name: &str) -> bool {
         self.0.has_declspec_attribute(name)
+            && !self.unsupported_attribute(AttrSyntax::Declspec, None, name)
     }
 
     fn is_keyword(&self, name: &str) -> bool {

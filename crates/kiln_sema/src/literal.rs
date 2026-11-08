@@ -331,13 +331,14 @@ pub fn type_char_literal(
 }
 
 /// The element type of a string literal of `encoding` ([lex.string]/6):
-/// a UTF-8 string literal has `char8_t` elements from C++20 and `char`
-/// ones before (C++17 [lex.string]/8, P0482R6; the lexer's character
+/// a UTF-8 string literal has `char8_t` elements with `char8`
+/// ([`Sema::char8`]: C++20 and later unless `-fno-char8_t`) and `char`
+/// ones otherwise (C++17 [lex.string]/8, P0482R6; the lexer's character
 /// literals follow the same rule).
 #[must_use]
-pub fn string_literal_elem(std: kiln_lex::Std, encoding: Encoding) -> QualType {
+pub fn string_literal_elem(char8: bool, encoding: Encoding) -> QualType {
     match encoding {
-        Encoding::Utf8 if std >= kiln_lex::Std::Cxx20 => QualType::CHAR8,
+        Encoding::Utf8 if char8 => QualType::CHAR8,
         Encoding::Ordinary | Encoding::Utf8 => QualType::CHAR,
         Encoding::Wide => QualType::WCHAR,
         Encoding::Utf16 => QualType::CHAR16,
@@ -348,7 +349,7 @@ pub fn string_literal_elem(std: kiln_lex::Std, encoding: Encoding) -> QualType {
 /// The type of a string literal of `encoding` with `units` code units,
 /// including the terminating NUL ([lex.string]/10): `const charT[units]`.
 pub fn string_literal_type(s: &mut Sema<'_, '_>, encoding: Encoding, units: u64) -> QualType {
-    let elem = string_literal_elem(s.std, encoding);
+    let elem = string_literal_elem(s.char8(), encoding);
     let t = &mut s.ast.types;
     let c = t.qualify(elem, Quals::CONST);
     t.constant_array(c, units, None)

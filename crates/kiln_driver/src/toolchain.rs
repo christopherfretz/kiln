@@ -340,6 +340,15 @@ impl Toolchain {
         Ok(())
     }
 
+    /// Whether `-moutline-atomics` is the default on `AArch64` (clang 19/22
+    /// `Linux::IsAArch64OutlineAtomicsDefault`, the libgcc runtime): only
+    /// with a GCC installation of 9.3.1 or later, whose libgcc has the
+    /// helpers. Without one (an `AArch64` cross compile with no `AArch64`
+    /// GCC found) the atomics are inline.
+    pub fn aarch64_outline_atomics_default(&self) -> bool {
+        self.gcc.as_ref().is_some_and(|g| !gcc_version_older_than(&g.version, (9, 3, 1)))
+    }
+
     /// The predefines base file for `std`.
     pub fn predefines_path(&self, std: &LangStd) -> PathBuf {
         self.data_dir.join("predefines").join(format!("{}.{}.txt", self.target.triple, std.base))
@@ -585,6 +594,27 @@ fn driver_gcc_install(gcc: &str) -> Option<GccInstall> {
     gcc_install_dir(dir)
 }
 
+/// clang `GCCVersion::isOlderThan` on the parsed version directory name
+/// `v` (`GCCVersion::Parse`: up to three `.`-separated numbers, a
+/// missing minor or patch is "any", so `9` is not older than 9.3.1; an
+/// unparsable major is older than everything).
+fn gcc_version_older_than(v: &str, (major, minor, patch): (i32, i32, i32)) -> bool {
+    let num = |s: Option<&str>| -> i32 {
+        let s = s.unwrap_or("");
+        let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+        s[..end].parse().unwrap_or(-1)
+    };
+    let mut it = v.splitn(3, '.');
+    let (v_major, v_minor, v_patch) = (num(it.next()), num(it.next()), num(it.next()));
+    if v_major != major {
+        return v_major < major;
+    }
+    if v_minor != minor {
+        return v_minor != -1 && v_minor < minor;
+    }
+    v_patch != patch && v_patch != -1 && v_patch < patch
+}
+
 /// The installation `--gcc-install-dir=<dir>` names: `<dir>` (without a
 /// trailing `/`) if it has a `crtbegin.o`; its triple and version are the
 /// names of its parent and of itself.
@@ -715,5 +745,14 @@ mod tests {
         assert_eq!(gcc_version_key("13.2.0"), Some(vec![13, 2, 0]));
         assert_eq!(gcc_version_key("14"), Some(vec![14]));
         assert_eq!(gcc_version_key("x"), None);
+    }
+
+    // clang `GCCVersion::isOlderThan` against 9.3.1 (WP-808).
+    #[test]
+    fn gcc_version_older_than_clang() {
+        let old = |v| gcc_version_older_than(v, (9, 3, 1));
+        assert!(old("8") && old("9.2") && old("9.3.0") && old("x"));
+        assert!(!old("9") && !old("9.3") && !old("9.3.1") && !old("9.4.0") && !old("14"));
+        assert!(!old("9.3.x") && !old("10-win32") && !old("16.1.0"));
     }
 }

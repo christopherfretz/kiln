@@ -522,10 +522,11 @@ impl Preprocessor<'_, '_> {
     }
 
     /// clang `PragmaDiagnosticHandler` (after `GCC diagnostic` / `clang
-    /// diagnostic`). kiln's diagnostic engine has no severity mappings
-    /// yet, so the pragma is validated (and `push` / `pop` balanced) but
-    /// has no effect on kiln's own diagnostics. Returns the tokens after
-    /// `diagnostic` if the pragma is valid (it is then passed through).
+    /// diagnostic`). The pragma is validated, and `push` / `pop` and the
+    /// severity changes are recorded at its location in the diagnostic
+    /// engine, which applies them to every later diagnostic by location.
+    /// Returns the tokens after `diagnostic` if the pragma is valid (it
+    /// is then passed through).
     fn pragma_diagnostic(&mut self, at: Loc) -> Option<Vec<Token>> {
         let t = self.lex_unexpanded();
         let Some(s) = t.ident() else {

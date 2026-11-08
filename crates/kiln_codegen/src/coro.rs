@@ -609,6 +609,7 @@ impl Cg<'_> {
         decl: Option<DeclId>,
     ) -> R<()> {
         self.f.fir = Fir::new(vec![LTy::PTR, LTy::PTR]);
+        self.start_fp();
         self.f.func = Some(f);
         self.f.decl = decl;
         let ret_block = self.f.fir.create_block();

@@ -235,6 +235,13 @@ impl Keywords {
         }
     }
 
+    /// Makes `spelling` an ordinary identifier: `char8_t` without
+    /// `-fchar8_t` semantics (clang `KEYCHAR8`: C++20 and later unless
+    /// `-fno-char8_t`, or `-fchar8_t`; WP-808).
+    pub fn remove(&mut self, interner: &Interner, spelling: &str) {
+        self.map.remove(&interner.intern(spelling));
+    }
+
     /// The builtin trait or transform `sym` names, if any.
     pub fn builtin(&self, sym: Symbol) -> Option<BuiltinKw> {
         self.builtins.get(&sym).copied()

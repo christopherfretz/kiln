@@ -322,6 +322,7 @@ impl Fir {
                 ty,
                 block: Some(b),
                 md: Vec::new(),
+                fmf: kiln_llvm::FastMath::NONE,
             });
             self.blocks[b.0 as usize].insts.insert(0, n);
             phi_of.insert(b, n);

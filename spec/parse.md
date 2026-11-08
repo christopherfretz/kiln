@@ -397,15 +397,63 @@ when it reaches that token (`handle_events`, as for clang's
 | Pragma | Handling |
 |---|---|
 | unknown (also unknown `GCC x` / `clang x`, empty `#pragma`) | `unknown pragma ignored` [-Wunknown-pragmas], at the first unrecognized token |
-| `STDC FP_CONTRACT`, `FENV_ACCESS`, `CX_LIMITED_RANGE`, `FENV_ROUND` | accepted, no effect |
+| `STDC FP_CONTRACT`, `FENV_ACCESS`, `CX_LIMITED_RANGE`, `FENV_ROUND`, `clang fp`, `float_control` | FP pragmas, below (WP-806) |
 | `STDC <other>` | `unknown pragma in STDC namespace` [-Wunknown-pragmas] |
-| `GCC visibility push(v)` / `pop` | syntax warnings [-Wignored-pragmas] (missing `(`/`)`, `expected identifier`, extra tokens); `Event::Visibility`. An unknown `v` gets `unknown visibility 'v'` [-Wignored-attributes] and is not pushed; an unmatched `pop` is an error. The visibility itself is not applied yet (M3). |
-| `pack ...` | missing `(` gets `missing '(' after '#pragma pack' - ignoring`. Otherwise `Event::PragmaPack`; Sema records `(loc, args)` in `Sema::pragma_packs` and reports `'#pragma pack' is not supported yet` (layout does not apply it yet). |
-| `GCC diagnostic ...`, `clang diagnostic`, `clang fp`, `clang optimize`, `clang max_tokens_*`, `clang __debug` | accepted, ignored. **Not applied:** `clang diagnostic ignored` does not silence anything. |
-| `comment`, `float_control`, `unused`, `omp`, `GCC ivdep` | accepted, ignored |
+| `GCC visibility push(v)` / `pop` | syntax warnings [-Wignored-pragmas] (missing `(`/`)`, `expected identifier`, extra tokens); `Event::Visibility`. An unknown `v` gets `unknown visibility 'v'` [-Wignored-attributes] and is not pushed; an unmatched `pop` is an error. Sema applies the pushed visibility to later declarations (crates/kiln_sema/src/visibility.rs). |
+| `pack ...` | missing `(` gets `missing '(' after '#pragma pack' - ignoring`. Otherwise `Event::PragmaPack`; Sema applies the forms clang accepts silently (`Sema::act_on_pragma_pack`, spec/sema-class.md §6) and reports `'#pragma pack' is not supported yet` for the forms clang diagnoses. |
+| `GCC diagnostic ...`, `clang diagnostic ...` | validated by the preprocessor and applied: `push` / `pop` and severity changes are recorded at the pragma's location in the diagnostic engine. |
+| `clang optimize`, `clang max_tokens_*`, `clang __debug` | accepted, ignored (docs/status/silent-drops.md lists the owners) |
+| `comment`, `unused`, `omp` | accepted, ignored (docs/status/silent-drops.md) |
+| `GCC ivdep` | unknown to clang: `unknown pragma ignored` [-Wunknown-pragmas] |
 | `unroll [N\|(N)]`, `nounroll`, `unroll_and_jam [N\|(N)]`, `nounroll_and_jam`, `GCC unroll [N\|(N)]`, `GCC nounroll`, `clang loop <option>(<arg>)...` | loop hints, below |
 | `weak name` | missing identifier gets `expected identifier in '#pragma weak' - ignored`, tokens after it `extra tokens at end of '#pragma weak' - ignored` [-Wignored-pragmas]; otherwise `Event::PragmaWeak` (spec/sema.md §4.5; WP-803). The alias form `weak name = alias` is `Event::UnsupportedPragma`. |
 | `redefine_extname`, `align`, `options`, `ms_struct`, `clang attribute`, `clang section` | `Event::UnsupportedPragma`: `'#pragma <name>' is not supported yet` |
+
+**FP pragmas** (WP-806; `fp_pragma.rs`; clang `PragmaFPContractHandler`,
+`PragmaFPHandler`, `PragmaFloatControlHandler`, the `PragmaSTDC_*`
+handlers). `pragma::classify` checks the syntax with clang's wording and
+queues an `Event::FpPragma` (its actions) keyed by the next token:
+- `STDC FP_CONTRACT|FENV_ACCESS|CX_LIMITED_RANGE ON|OFF|DEFAULT` (C23
+  7.12.2, 7.6.1, 7.3.4): another word is `expected 'ON' or 'OFF' or
+  'DEFAULT' in pragma`, extra tokens `expected end of directive in
+  pragma` (both ExtWarn [-Wunknown-pragmas], the pragma kept for the
+  latter).
+- `STDC FENV_ROUND <mode>` (C23 7.6.2): a valid `FE_*` mode gets clang's
+  `pragma STDC FENV_ROUND is not supported` [-Wunknown-pragmas] at the
+  end of the directive; an unknown mode `invalid or unsupported rounding
+  mode in '#pragma STDC FENV_ROUND' - ignored` [-Wignored-pragmas]; a
+  non-identifier (or a macro name, which clang sees expanded) `expected
+  identifier`; extra tokens are reported. All but the first drop it.
+- `clang fp <option>(<value>) ...` with `contract(on|off|fast)`,
+  `reassociate(on|off)`, `reciprocal(on|off)`,
+  `exceptions(ignore|maytrap|strict)`, `eval_method(source|double|extended)`:
+  `missing option` / `invalid option 'x'`, `unexpected argument 'v' to
+  '#pragma clang fp <option>'; expected ...`, `expected '('` / `')'`,
+  extra tokens; any error drops the whole pragma.
+- `float_control(precise|except, on|off[, push])`, `(push)`, `(pop)`:
+  `pragma float_control is malformed; use ...` (error), `expected '('`
+  at the `float_control` token, extra tokens.
+
+The parser takes the queued pragmas where clang consumes the annotation
+tokens: at namespace scope (file, namespace, linkage specification) and
+at the start of a compound statement they change sema's FP state
+(`Sema::fp_pragma_state`, an `FpOverride`; push/pop a stack) and every
+compound statement records the state after its leading pragmas
+(`act_on_compound_fp`); the enclosing state returns at its `}`. Before
+any other statement, or before a `}` after statements: `'#pragma <name>'
+can only appear at file scope or at the start of a compound statement`;
+in a class: `this pragma cannot appear in <tag> declaration`;
+`float_control` push/pop in a function: `'#pragma float_control
+push/pop' can only appear at file or namespace scope or within a
+language linkage specification`; a `pop` of an empty stack warns
+`#pragma float_control(pop, ...) failed: stack empty`. The FENV forms
+kiln does not implement (`FENV_ACCESS ON`, `FENV_ROUND` other than
+`FE_TONEAREST`, `float_control(except, on)`, `clang fp
+exceptions(maytrap|strict)`, `eval_method(double|extended)`) are sema
+`unsupported` errors where they take effect (spec/landed/codegen/WP-806.md).
+Known divergence: clang's `LexOnOffSwitch` also leaves a stray
+`expected unqualified-id` after `#pragma STDC FP_CONTRACT ON junk`;
+kiln reports only the warning.
 
 **Loop hints** (WP-449; clang `PragmaLoopHintHandler`,
 `PragmaUnrollHintHandler`, `HandlePragmaLoopHint`): `pragma::classify`

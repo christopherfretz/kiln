@@ -14,6 +14,7 @@ pub mod codegen_flags;
 pub mod constexpr_opts;
 pub mod deps;
 pub mod features;
+pub mod fp_flags;
 pub mod link;
 pub mod pp_cmd;
 pub mod rsp;

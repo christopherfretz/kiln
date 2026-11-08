@@ -1001,6 +1001,25 @@ impl Sema<'_, '_> {
 
     // -- namespace aliases -------------------------------------------------------------
 
+    /// The namespace or namespace alias a namespace-name `name` (in
+    /// `qual`, or unqualified) finds. The lookup considers only
+    /// namespaces ([namespace.udir]/1, [namespace.alias]/1;
+    /// [basic.lookup.qual]/1 kinds), so a function or variable of the
+    /// same name does not hide one: `using namespace index;` after
+    /// `using namespace clang;` with `::index` from <strings.h> nominates
+    /// `clang::index`.
+    pub fn lookup_namespace_name(&self, qual: Option<DeclId>, name: Symbol) -> Option<DeclId> {
+        let found = match qual {
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Nested),
+            None => self.lookup_name(name, LookupKind::Nested),
+        };
+        found
+            .decls
+            .iter()
+            .copied()
+            .find(|&d| matches!(self.kind_of(d), DeclKind::Namespace | DeclKind::NamespaceAlias))
+    }
+
     /// `namespace name = qual target;` ([namespace.alias]).
     pub fn act_on_namespace_alias(
         &mut self,
@@ -1010,15 +1029,7 @@ impl Sema<'_, '_> {
         target: Symbol,
         target_loc: Loc,
     ) -> Option<DeclId> {
-        let found = match qual {
-            Some(q) => self.lookup_qualified(q.ctx, target, LookupKind::Nested),
-            None => self.lookup_name(target, LookupKind::Nested),
-        };
-        let Some(t) =
-            found.decls.iter().copied().find(|&d| {
-                matches!(self.kind_of(d), DeclKind::Namespace | DeclKind::NamespaceAlias)
-            })
-        else {
+        let Some(t) = self.lookup_namespace_name(qual.map(|q| q.ctx), target) else {
             self.error(DiagId::parse_expected_namespace_name, target_loc);
             return None;
         };

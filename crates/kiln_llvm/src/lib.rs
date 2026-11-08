@@ -28,8 +28,8 @@ mod types;
 mod value;
 mod verify;
 
-pub use attr::{Attr, AttrKind, AttrList, MemoryEffects, ModRef, UwTableKind};
-pub use builder::{CallOpts, CmpXchgOpts, IrBuilder, MemOpts, SHUFFLE_POISON};
+pub use attr::{Attr, AttrKind, AttrList, MemoryEffects, ModRef, UwTableKind, fp_class};
+pub use builder::{CallOpts, CmpXchgOpts, IrBuilder, MemOpts, SHUFFLE_POISON, is_fp_math_type};
 pub use constant::{ConstData, IntValue};
 pub use error::{IrError, IrErrorKind, IrResult};
 pub use function::Function;
