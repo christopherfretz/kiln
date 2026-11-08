@@ -885,5 +885,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-869 | reflection: CXXSpliceExpr profiles UNIQUE so equal dependent splices are not equivalent (`crates/kiln_ast/src/types/profile_expr.rs:654`); move splice_fast from ParsedTu to the Oven report (`crates/kiln_parse/src/lib.rs:201`) | WP-830 | open |
 | WP-870 | reflection: splices of string-literal and std::type_info objects still parse_unsupported (`crates/kiln_sema/src/splice_object.rs`) | WP-830 | open |
 | WP-872 | harness: check-script RCC line errors "dirname: missing operand" when no conformance dirs changed (still RCC=0); guard it; `oss-report.py --update` marks llvm_selfhost "blocked (tests)" because the control stage 2 ran without tests | WP-815 | open |
+| WP-879 | reflection correctness bundle 4: WP-796, WP-838, WP-866, WP-867, WP-870 (GCC 16.1 parity) | WP-830 | in progress |
 WP-511
 WP-512
