@@ -126,9 +126,10 @@ impl SanitizerSet {
     /// `implicit-conversion`.
     pub const IMPLICIT_CONVERSION: SanitizerSet =
         SanitizerSet(Self::IMPLICIT_INTEGER_CONVERSION.0 | Self::IMPLICIT_BITFIELD_CONVERSION.0);
-    /// `integer`.
+    /// `integer` (clang 19 and 22 leave `implicit-bitfield-conversion`
+    /// out of it).
     pub const INTEGER: SanitizerSet = SanitizerSet(
-        Self::IMPLICIT_CONVERSION.0
+        Self::IMPLICIT_INTEGER_CONVERSION.0
             | Self::INTEGER_DIVIDE_BY_ZERO.0
             | Self::SHIFT.0
             | Self::SIGNED_INTEGER_OVERFLOW.0
@@ -157,6 +158,7 @@ impl SanitizerSet {
     pub const TRAPPING_SUPPORTED: SanitizerSet = SanitizerSet(
         Self::UNDEFINED.0
             | Self::INTEGER.0
+            | Self::IMPLICIT_CONVERSION.0
             | Self::NULLABILITY.0
             | Self::LOCAL_BOUNDS.0
             | Self::CFI.0
@@ -169,6 +171,7 @@ impl SanitizerSet {
     pub const RECOVERABLE_BY_DEFAULT: SanitizerSet = SanitizerSet(
         (Self::UNDEFINED.0
             | Self::INTEGER.0
+            | Self::IMPLICIT_CONVERSION.0
             | Self::NULLABILITY.0
             | Self::FLOAT_DIVIDE_BY_ZERO.0
             | Self::OBJC_CAST.0)
@@ -201,6 +204,7 @@ impl SanitizerSet {
             | Self::FUZZER.0
             | Self::FUZZER_NO_LINK.0
             | Self::UNDEFINED.0
+            | Self::IMPLICIT_CONVERSION.0
             | Self::UNSIGNED_INTEGER_OVERFLOW.0
             | Self::UNSIGNED_SHIFT_BASE.0,
     );
