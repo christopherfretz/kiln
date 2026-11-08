@@ -23,8 +23,7 @@ pub(crate) enum LState {
     Full,
 }
 
-/// clang `LoopAttributes` (without `CodeAlign`, which kiln does not
-/// model).
+/// clang `LoopAttributes`.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct LoopAttrs {
     vectorize_enable: LState,
@@ -42,6 +41,8 @@ pub(crate) struct LoopAttrs {
     must_progress: bool,
     /// `IsParallel` (`vectorize(assume_safety)`, `interleave(assume_safety)`).
     is_parallel: bool,
+    /// `[[clang::code_align(N)]]` (`CodeAlign`).
+    code_align: u32,
 }
 
 impl LoopAttrs {
@@ -61,6 +62,7 @@ impl LoopAttrs {
             || self.unroll_and_jam_enable != LState::Unspecified
             || self.distribute_enable != LState::Unspecified
             || self.must_progress
+            || self.code_align != 0
     }
 }
 
@@ -313,6 +315,9 @@ impl MdBuilder<'_> {
             let s = self.m.md_string(b"llvm.loop.parallel_accesses");
             props.push(self.m.md_tuple(&[Some(s), Some(g)]));
         }
+        if a.code_align > 0 {
+            props.push(self.value("llvm.loop.align", LTy::I32, a.code_align));
+        }
         props.extend(additional);
         self.full_unroll(a, props, has)
     }
@@ -333,6 +338,10 @@ impl Cg<'_> {
         let list = hints.map(|s| ast.stmts.stmt_attrs(s));
         for at in list.into_iter().flat_map(|l| ast.lists.iter::<kiln_ast::AttrId>(l)) {
             let node = *ast.attrs.get(at);
+            if node.kind == AttrKind::CODE_ALIGN {
+                a.code_align = node.a;
+                continue;
+            }
             if node.kind != AttrKind::LOOP_HINT {
                 continue;
             }

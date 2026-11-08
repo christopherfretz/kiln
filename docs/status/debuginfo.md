@@ -14,6 +14,9 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
 - `-gline-tables-only`, `-gline-directives-only`, `-gsplit-dwarf`, `-gz`,
   the path-remapping flags and `-fstandalone-debug` behave as in clang. A
   debug flag kiln does not implement is a hard error naming it.
+- `nodebug`, `artificial` and `[[clang::standalone_debug]]` shape the
+  output as in clang (`standalone_debug` keeps a class's full definition,
+  `di_omit`, `debuginfo/types.rs:569`).
 - `-g0`, the default, builds no debug metadata and records no locations
   (see "Cost at `-g0`").
 - A construct kiln cannot describe yet is a hard error (see "Gaps"). Debug
@@ -21,7 +24,7 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
 
 ## Evidence
 
-- `tests/codegen/debug_*.cpp`: 29 cases, byte-exact against clang 19 on
+- `tests/codegen/debug_*.cpp`: 30 cases, byte-exact against clang 19 on
   aarch64 and x86_64 (`crates/kiln_codegen/tests/ir_vs_clang.rs`).
 - `llvm-dwarfdump-19 --verify` is clean on all 60 `-g` objects from
   `tests/codegen` and `tests/debuginfo`.
@@ -154,13 +157,13 @@ clang 19 (D). The list matches spec/landed/codegen/WP-814.md
 "Deviations".
 
 - E: a non-integral template value argument that does not lower to an IR
-  constant (`crates/kiln_codegen/src/debuginfo/types.rs:1173`).
+  constant (`crates/kiln_codegen/src/debuginfo/types.rs:1175`).
 - E: a template template argument other than a plain template name
-  (`types.rs:1205`).
+  (`types.rs:1207`).
 - E: SVE and other target builtin types (`types.rs:340`).
 - D: a floating-point template argument in a class name prints as
   `T<1.5e0>` (clang: `T<1.500000e+00>`), at `types.rs:535`.
-- D: no `defaulted: true` on template parameters (`types.rs:1126`).
+- D: no `defaulted: true` on template parameters (`types.rs:1128`).
 - D: no `DIImportedEntity` for `using` declarations or directives
   (`debuginfo/mod.rs:382`).
 - D: no `DISubprogram` for `__cxx_global_var_init`, `__tls_init` or
@@ -171,7 +174,6 @@ clang 19 (D). The list matches spec/landed/codegen/WP-814.md
 - D: statement end locations exist only for compound and loop statements
   (`debuginfo/stmt.rs:82`).
 - D: alias template specializations are unwrapped (`types.rs:134`).
-- D: `[[clang::standalone_debug]]` does not force a full class definition.
 - D: `di_const_ref` approximates `DeclMustBeEmitted`
   (`debuginfo/func.rs:383`), and floating-point static members get no
   `extraData`.

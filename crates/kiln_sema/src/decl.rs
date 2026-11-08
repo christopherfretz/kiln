@@ -2718,6 +2718,24 @@ impl Sema<'_, '_> {
         if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
             self.check_explicit_inst_specifiers(ds, ty);
         }
+        // WP-810: a non-default `target_version` version is hidden, as
+        // clang hides it without the `fmv` target feature (src/fmv.rs).
+        if !ds.is_typedef() && self.ast.types.is_function(ty) {
+            let attrs: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+            if let Some(at) = self.fmv_hidden_version(&attrs) {
+                if d.ctx == DeclaratorContext::Member {
+                    // clang crashes on this (a friend: `act_on_friend`).
+                    let msg = self
+                        .diag(DiagId::sema_multiversion_not_supported, at)
+                        .arg("target_version");
+                    self.emit(msg);
+                } else {
+                    self.fmv_attached(true, &attrs, true);
+                    self.templ.cur = None;
+                    return None;
+                }
+            }
+        }
         if special {
             // [temp.variadic]/12: `S(Ts);`, `operator Ts();`.
             if !invalid && ds.friend.is_none() {
@@ -4386,6 +4404,14 @@ impl Sema<'_, '_> {
         {
             self.type_spec_locs.insert(f, tl);
         }
+        if d.attrs.iter().chain(&ds.attrs).any(|&a| {
+            matches!(
+                self.ast.attrs.get(a).kind,
+                AttrKind::NOINLINE | AttrKind::ALWAYS_INLINE | AttrKind::FLATTEN
+            )
+        }) {
+            self.inline_fn_begin_locs.insert(f, ds.lead_cxx11.unwrap_or(ds.loc));
+        }
         // The return type's innermost `*`/`[` ([`Sema::inner_chunk_locs`]).
         let chunk = Self::inner_chunk_loc(d);
         if chunk.is_valid()
@@ -4696,6 +4722,9 @@ impl Sema<'_, '_> {
                 self.check_tls_model_attrs(pd, &mut attrs);
                 attrs.retain(|&a| {
                     let node = *self.ast.attrs.get(a);
+                    if node.kind.is_class_b() {
+                        return self.check_class_b_attr(pd, DeclKind::ParmVar, a, node);
+                    }
                     if node.kind != AttrKind::RETURNS_TWICE {
                         return true;
                     }
@@ -5691,6 +5720,13 @@ impl Sema<'_, '_> {
             Initializer::Paren(es, l, _) if es.len() == 1 => Some(*l),
             _ => None,
         };
+        // clang `AddInitializerToDecl`: a `loader_uninitialized`
+        // variable cannot have an initializer (WP-813).
+        if self.has_loader_uninitialized(v) {
+            let at = self.ast.decls.get(v).loc();
+            self.error(DiagId::sema_loader_uninitialized_init, at);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
         if self.check_alias_definition(v) {
             // clang `AddInitializerToDecl` returns at the redefinition: the
             // variable is invalid and its initializer unchecked (no
@@ -6518,6 +6554,15 @@ impl Sema<'_, '_> {
     /// A variable declared without an initializer ([dcl.init]/7).
     pub fn act_on_uninit(&mut self, v: DeclId) {
         self.check_cleanup_deduced(v);
+        // clang `ActOnUninitializedDecl`: a `loader_uninitialized`
+        // variable is not default-initialized (WP-813).
+        if self.has_loader_uninitialized(v) {
+            self.check_loader_uninitialized_ctor(v);
+            self.lambda_mangle.var = None;
+            self.initializing = None;
+            self.check_consteval_only_var(v);
+            return;
+        }
         self.act_on_uninit_inner(v);
         if self.is_var_definition(v) {
             self.check_static_tls(v, None);
@@ -6842,6 +6887,13 @@ impl Sema<'_, '_> {
         {
             let loc = self.ast.decls.get(f).loc();
             self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(info.name));
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        } else if self.ast.builtin_alias(f).is_some() {
+            // clang `ActOnStartOfFunctionDef`: an alias of a builtin
+            // (`__clang_arm_builtin_alias`, WP-810) is itself a builtin.
+            let loc = self.ast.decls.get(f).loc();
+            let name = self.decl_name_str(self.ast.decls.get(f).name());
+            self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(name));
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         // clang `ActOnStartOfFunctionDef` resolves the exception
@@ -10238,11 +10290,45 @@ impl Sema<'_, '_> {
         let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
         let shown = self.attr_shown_parts(syntax, scope, name);
         let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
+        let x86 = self.abi.triple.arch == kiln_abi::target::Arch::X86_64;
+        // WP-813: clang's class B attributes (`class_b_attrs.rs`).
+        if crate::class_b_attrs::is_c_only(&n, syntax, scope_s.as_deref()) {
+            let msg = self.diag(DiagId::parse_attribute_ignored, loc).arg(shown);
+            self.emit(msg);
+            return None;
+        }
+        if let Some((kind, preset)) =
+            crate::class_b_attrs::kind_of(&n, syntax, scope_s.as_deref(), x86, self.clang_compat)
+        {
+            let arg_name =
+                if syntax == AttrSyntax::Cxx11 && scope.is_some() && self.clang_compat >= 22 {
+                    shown.clone()
+                } else {
+                    n.clone()
+                };
+            return self.class_b_attribute(kind, preset, syntax, &arg_name, &shown, args, loc);
+        }
+        // WP-810: clang `Clang<"__clang_arm_builtin_alias">` (no `__`
+        // affixes are removed: `clang_arm_builtin_alias` is unknown) and
+        // `BuiltinAlias` (`GNU<"clang_builtin_alias">`,
+        // `CXX11<"clang", "builtin_alias">`).
+        let alias = match (raw.as_str(), scope_s.as_deref()) {
+            ("__clang_arm_builtin_alias", None) if syntax == AttrSyntax::Gnu => Some(true),
+            ("__clang_arm_builtin_alias", Some("clang")) => Some(true),
+            ("clang_builtin_alias", None) if syntax == AttrSyntax::Gnu => Some(false),
+            ("builtin_alias", Some("clang")) => Some(false),
+            _ => None,
+        };
+        if let Some(arm) = alias {
+            return self.builtin_alias_attribute(arm, syntax, &shown, args, loc);
+        }
+        if let Some(r) = self.fmv_attribute(&n, scope_s.as_deref(), syntax, args, loc) {
+            return r;
+        }
         // The triage (spec/sema.md §4.5, WP-805): an implemented
         // spelling, a clang attribute kiln ignores (class B/C: no
         // diagnostic, nothing attached), one it rejects (class A), or one
         // clang does not know either.
-        let x86 = self.abi.triple.arch == kiln_abi::target::Arch::X86_64;
         let cxx26 = self.std >= kiln_lex::Std::Cxx26;
         let support = crate::attr_triage::attribute_support(
             &n,
@@ -10499,12 +10585,13 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         };
-        let lit = match arg {
-            AttrArg::Expr(e) => self.string_lit_of(*e),
-            AttrArg::Type(_) | AttrArg::Ident(..) => None,
+        let (lit, at) = match arg {
+            AttrArg::Expr(e) => (self.string_lit_of(*e), self.ast.exprs.get(*e).loc()),
+            AttrArg::Ident(_, at) => (None, *at),
+            AttrArg::Type(_) => (None, loc),
         };
         let Some(lit) = lit else {
-            let msg = self.diag(DiagId::parse_attribute_requires_string, loc).arg(n.to_owned());
+            let msg = self.diag(DiagId::parse_attribute_requires_string, at).arg(n.to_owned());
             self.emit(msg);
             return None;
         };
@@ -11323,7 +11410,8 @@ pub(crate) fn attr_kind_of(
         ("deprecated", _, _) => AttrKind::DEPRECATED,
         ("noreturn", _, _) => AttrKind::NORETURN,
         ("fallthrough", _, _) => AttrKind::FALLTHROUGH,
-        ("assume", true, _) => AttrKind::ASSUME,
+        // clang `CXXAssume`: `CXX11<"", "assume">, Clang<"assume">`.
+        ("assume", _, _) if std || gnu_syntax || clang_scope => AttrKind::ASSUME,
         ("likely", true, _) => AttrKind::LIKELY,
         ("unlikely", true, _) => AttrKind::UNLIKELY,
         ("no_unique_address", true, _) => AttrKind::NO_UNIQUE_ADDRESS,
@@ -11332,8 +11420,10 @@ pub(crate) fn attr_kind_of(
         ("aligned", _, true) | ("alignas", _, _) => AttrKind::ALIGNED,
         ("packed", _, true) => AttrKind::PACKED,
         ("used", _, true) => AttrKind::USED,
-        ("noinline", _, true) => AttrKind::NOINLINE,
-        ("always_inline", _, true) => AttrKind::ALWAYS_INLINE,
+        // `GCC<"noinline">, CXX11<"clang", "noinline">` (the clang
+        // spelling is also a statement attribute, WP-813).
+        ("noinline", _, _) if gnu || clang_scope => AttrKind::NOINLINE,
+        ("always_inline", _, _) if gnu || clang_scope => AttrKind::ALWAYS_INLINE,
         ("gnu_inline", _, true) => AttrKind::GNU_INLINE,
         ("weak", _, true) => AttrKind::WEAK,
         // clang `GCC<"weakref">`, `GCC<"alias">`, `GCC<"ifunc">` (an
@@ -11411,6 +11501,8 @@ pub(crate) fn attr_kind_of(
         ("neon_polyvector_type", _, _) if gnu_syntax || clang_scope => {
             AttrKind::NEON_POLYVECTOR_TYPE
         }
+        // clang `GNU<"arm_sve_vector_bits">` (WP-810).
+        ("arm_sve_vector_bits", _, _) if gnu_syntax => AttrKind::ARM_SVE_VECTOR_BITS,
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
         ("abi_tag", _, true) => AttrKind::ABI_TAG,
         // clang `GNU<"enable_if">`: no `[[...]]` spelling.

@@ -84,11 +84,97 @@ fn takes_expr_args(name: &str) -> bool {
             | "tls_model"
             | "returns_twice"
             | "mode"
+            | "arm_sve_vector_bits"
+            | "clang_arm_builtin_alias"
+            | "clang_builtin_alias"
+            | "builtin_alias"
+            | "target_version"
+            | "target_clones"
+            | "cpu_dispatch"
+            | "cpu_specific"
             | "regparm"
             | "no_caller_saved_registers"
             | "no_builtin"
             | "interrupt"
     ) || kiln_ast::attr::CC_ATTR_SPELLINGS.contains(&n)
+        || class_b_takes_expr_args(n)
+}
+
+/// WP-813: the class B attributes, whose arguments are expressions.
+fn class_b_takes_expr_args(n: &str) -> bool {
+    matches!(
+        n,
+        "no_stack_protector"
+            | "patchable_function_entry"
+            | "zero_call_used_regs"
+            | "speculative_load_hardening"
+            | "no_speculative_load_hardening"
+            | "no_split_stack"
+            | "no_instrument_function"
+            | "no_profile_instrument_function"
+            | "xray_always_instrument"
+            | "xray_never_instrument"
+            | "xray_log_args"
+            | "disable_sanitizer_instrumentation"
+            | "nocf_check"
+            | "function_return"
+            | "cfi_canonical_jump_table"
+            | "force_align_arg_pointer"
+            | "flatten"
+            | "leaf"
+            | "nomerge"
+            | "not_tail_called"
+            | "noduplicate"
+            | "convergent"
+            | "nouwtable"
+            | "noinline"
+            | "always_inline"
+            | "assume_aligned"
+            | "align_value"
+            | "callback"
+            | "noescape"
+            | "maybe_undef"
+            | "code_align"
+            | "loader_uninitialized"
+            | "lto_visibility_public"
+            | "standalone_debug"
+            | "coro_await_elidable"
+            | "coro_await_elidable_argument"
+            // `[[omp::assume("s")]]` (the others parse their own).
+            | "assume"
+    )
+}
+
+/// True for the attributes whose arguments are all identifiers when
+/// written as one (clang `VariadicIdentifierArgument`: `cpu_dispatch`,
+/// `cpu_specific`).
+fn takes_ident_list(name: &str) -> bool {
+    matches!(name.trim_start_matches("__").trim_end_matches("__"), "cpu_dispatch" | "cpu_specific")
+}
+
+/// True when argument `i` of attribute `name` must be written as a string
+/// literal (clang `attributeStringLiteralListArg`, for the attributes kiln
+/// checks this way): another token there is "expected string literal as
+/// argument of 'name' attribute" at that token and the attribute is
+/// dropped, without parsing the argument as an expression.
+fn string_literal_arg(name: &str, i: usize) -> bool {
+    match name.trim_start_matches("__").trim_end_matches("__") {
+        "target" | "target_version" => i == 0,
+        "target_clones" => true,
+        _ => false,
+    }
+}
+
+/// True for the attributes whose arguments may be identifiers (clang
+/// `attributeHasVariadicIdentifierArg`: `callback`; and
+/// `attributeHasIdentifierArg`: the string `EnumArgument`s of
+/// `zero_call_used_regs` and `function_return`, which sema rejects as
+/// "requires a string").
+fn takes_ident_args(name: &str) -> bool {
+    matches!(
+        name.trim_start_matches("__").trim_end_matches("__"),
+        "callback" | "zero_call_used_regs" | "function_return"
+    )
 }
 
 /// True for the attributes whose argument is a type-id (clang
@@ -103,7 +189,18 @@ fn takes_ident_arg(name: &str) -> bool {
     let n = name.trim_start_matches("__").trim_end_matches("__");
     // `weakref` / `alias` / `ifunc` take a string literal; clang parses
     // an identifier there as one (and then rejects it).
-    matches!(n, "enum_extensibility" | "format" | "mode" | "weakref" | "alias" | "ifunc")
+    matches!(
+        n,
+        "enum_extensibility"
+            | "format"
+            | "mode"
+            | "weakref"
+            | "alias"
+            | "ifunc"
+            | "clang_arm_builtin_alias"
+            | "clang_builtin_alias"
+            | "builtin_alias"
+    )
 }
 
 /// True for the standard attributes that take no argument list
@@ -489,7 +586,10 @@ impl Parser<'_, '_> {
                 self.bump();
             }
             let text = self.s.ast.symbols().as_str(name).to_owned();
-            let args = if scope.is_none() && text == "assume" {
+            // clang 19 `Clang<"assume">` is the same statement attribute.
+            let clang_assume =
+                scope.is_some_and(|s| matches!(self.s.ast.symbols().as_str(s), "clang" | "_Clang"));
+            let args = if (scope.is_none() || clang_assume) && text == "assume" {
                 self.parse_assume_arg(name)
             } else if scope.is_none()
                 && self.at(Punct::LParen)
@@ -600,6 +700,8 @@ impl Parser<'_, '_> {
                     self.s.act_on_end_trailing_requires(scope);
                     args
                 }
+                // clang 19 `Clang<"assume">`: `[[assume]]`'s argument.
+                _ if self.s.ast.symbols().as_str(name) == "assume" => self.parse_assume_arg(name),
                 _ => self.parse_attr_args(name),
             };
             if let Some(args) = args
@@ -653,7 +755,27 @@ impl Parser<'_, '_> {
                 return Some(args);
             }
         }
+        let ident_list = takes_ident_list(&text);
+        let idents = takes_ident_args(&text);
         while !self.at(Punct::RParen) && !self.at_eof() {
+            if let Some(id) = self.ident()
+                && (ident_list
+                    || idents && (self.peek_is(1, Punct::Comma) || self.peek_is(1, Punct::RParen)))
+            {
+                let at = self.bump().span.lo;
+                args.push(AttrArg::Ident(id, at));
+                if self.eat(Punct::Comma).is_none() {
+                    break;
+                }
+                continue;
+            }
+            if !self.at_string() && string_literal_arg(&text, args.len()) {
+                let at = self.tok().span.lo;
+                let d = self.s.diag(DiagId::parse_attribute_requires_string, at).arg(text);
+                self.emit(d);
+                self.skip_until(&[Punct::RParen], false, true);
+                return None;
+            }
             let e = if self.at_string() {
                 self.parse_string_literal(true)
             } else {
@@ -664,6 +786,11 @@ impl Parser<'_, '_> {
                 self.skip_until(&[Punct::RParen], false, false);
                 break;
             };
+            // clang drops an attribute whose argument is invalid; kiln
+            // does so for the string-literal attributes above.
+            if string_literal_arg(&text, 0) && self.s.contains_errors(e) {
+                ok = false;
+            }
             args.push(AttrArg::Expr(e));
             if self.eat(Punct::Comma).is_none() {
                 break;

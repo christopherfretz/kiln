@@ -746,6 +746,14 @@ impl<'a> Cg<'a> {
             if ast.modules.is_imported_named_unit_decl(d) {
                 return Ok(());
             }
+            // clang `MayBeEmittedEagerly`: a `target_version` function
+            // that is not multiversioned (always, without `fmv`) is
+            // emitted at the end of the TU, "until all versions have been
+            // semantically checked".
+            if self.target_version_so_far(d) {
+                self.to_emit.push(Def::Decl(d));
+                return Ok(());
+            }
             return self.emit_fn_def(d);
         }
         if let Some(&f) = self.fns.get(&first) {
@@ -1395,6 +1403,17 @@ impl<'a> Cg<'a> {
         spec(d) || (!explicit_spec && ast.instantiated_from(first).is_some_and(spec))
     }
 
+    /// Whether `d` or a declaration before it has `target_version`
+    /// (clang's attribute is inherited by later redeclarations only).
+    fn target_version_so_far(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        std::iter::successors(Some(d), |&x| ast.prev(x)).any(|r| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .any(|a| ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::TARGET_VERSION)
+        })
+    }
+
     /// Whether a redeclaration of `d` carries an attribute of kind `k`.
     pub(crate) fn has_fn_attr(&self, d: DeclId, k: kiln_ast::attr::AttrKind) -> bool {
         let ast = self.ast;
@@ -1745,6 +1764,44 @@ impl<'a> Cg<'a> {
     }
 
     // ---- signatures ----------------------------------------------------
+
+    /// WP-810: clang 20+ passes and returns an AAPCS64 pure scalable type
+    /// (an aggregate of `arm_sve_vector_bits` vectors and predicates)
+    /// expanded in SVE registers; kiln does not lower that convention yet,
+    /// so a by-value one in `sig` is a hard error rather than a silently
+    /// different ABI. clang 19 lowers it as any other aggregate. The same
+    /// holds for an SVE tuple type, which clang 19 passes as one wide
+    /// scalable vector.
+    pub(crate) fn check_pure_scalable(&mut self, sig: &Sig, loc: Option<Loc>) -> R<()> {
+        if self.target.triple.arch != Arch::AArch64 || self.opts.clang_compat < 20 {
+            return Ok(());
+        }
+        for q in std::iter::once(sig.ret).chain(sig.params.iter().copied()) {
+            // clang 20+ also lowers an SVE tuple (`svint8x2_t`) as a struct
+            // of vectors, where clang 19 used one wide scalable vector.
+            if self.ast.types.builtin(q).is_some_and(BuiltinType::is_sve_tuple) {
+                let t = print_type(&self.ast.types, self.ast, q, PrintOptions::SUGARED);
+                return err(
+                    loc,
+                    format!(
+                        "passing or returning '{t}' by value is not supported yet: it is an \
+                         SVE tuple type, which clang 20 and later pass as a struct of vectors"
+                    ),
+                );
+            }
+            if kiln_abi::call::is_pure_scalable(&mut self.tys, q) {
+                let t = print_type(&self.ast.types, self.ast, q, PrintOptions::SUGARED);
+                return err(
+                    loc,
+                    format!(
+                        "passing or returning '{t}' by value is not supported yet: it is an \
+                         AAPCS64 pure scalable type (an aggregate of fixed-length SVE types)"
+                    ),
+                );
+            }
+        }
+        Ok(())
+    }
 
     /// The lowered signature of function type `fty`.
     pub fn sig(&mut self, fty: QualType, extern_c: bool) -> Sig {
@@ -2184,11 +2241,21 @@ impl<'a> Cg<'a> {
     /// `ConstructAttributeList`, not on a call site; WP-682).
     pub(crate) fn target_attrs_of(&self, out: &mut Vec<Attr>, d: Option<DeclId>) {
         self.size_attrs(out);
+        self.class_b_default_attrs(out, d);
         self.no_builtin_attrs(out, d);
         if let Some(d) = d
             && self.has_fn_attr(d, kiln_ast::attr::AttrKind::DISABLE_TAIL_CALLS)
         {
             out.push(Attr::string("disable-tail-calls", "true"));
+        }
+        // clang 20+ `GetCPUAndFeaturesAttributes`: `"fmv-features"` on a
+        // function with a `target_version` (a default version: the others
+        // are hidden; WP-810), valueless as it names no feature.
+        if let Some(d) = d
+            && self.opts.clang_compat >= 22
+            && self.has_fn_attr(d, kiln_ast::attr::AttrKind::TARGET_VERSION)
+        {
+            out.push(Attr::string("fmv-features", ""));
         }
         if let Some(fp) = self.frame_pointer().attr() {
             out.push(Attr::string("frame-pointer", fp));
@@ -2287,6 +2354,15 @@ impl<'a> Cg<'a> {
         let first = ast.first(d);
         if let Some(&f) = self.fns.get(&first) {
             return Ok(f);
+        }
+        // WP-810: an alias of a builtin (`__clang_arm_builtin_alias`) has no
+        // function to call or address; a call lowers inline.
+        if let Some((b, _)) = ast.builtin_alias(first) {
+            let b = ast.symbols().as_str(b);
+            return err(
+                Some(ast.decls.get(d).loc()),
+                format!("'{b}' is a builtin with no function body; it can only be called directly"),
+            );
         }
         if let Some(target) = self.weakref_symbol(first) {
             let f = if let Some(f) = self.m.get_function(&target) {
@@ -2461,7 +2537,7 @@ impl<'a> Cg<'a> {
     /// The declaration attributes of `f` for `first` with signature `sig`.
     pub(crate) fn set_decl_attrs(&mut self, f: FuncId, first: DeclId, sig: &Sig) {
         let ast = self.ast;
-        let (ret, params) = self.sig_attrs(sig, sig.params.len(), false);
+        let (ret, mut params) = self.sig_attrs(sig, sig.params.len(), false);
         let mut fa = Vec::new();
         // clang `ConstructAttributeList`: a non-throwing type or a
         // `NoThrowAttr` (a recognized C library function).
@@ -2492,6 +2568,7 @@ impl<'a> Cg<'a> {
         }
         let fa = self.m.attr_set(&fa);
         let (fa, ret) = self.alloc_fn_attrs(first, fa, ret);
+        let (fa, ret) = self.class_b_fn_sets(f, first, sig, fa, ret, &mut params);
         // clang `SetFunctionAttributes`: virtual member functions are
         // `unnamed_addr`.
         let virt = self.is_virtual_method(first);
@@ -2602,6 +2679,7 @@ impl<'a> Cg<'a> {
             noreturn,
             inline,
             extra,
+            start,
         } = f;
         let mut a = Vec::new();
         if inline == DefInline::Always {
@@ -2640,6 +2718,7 @@ impl<'a> Cg<'a> {
             a.push(Attr::string("min-legal-vector-width", &vector_width.to_string()));
         }
         self.fp_def_attrs(&mut a);
+        self.class_b_def_attrs(&mut a, start);
         self.m.attr_set(&a)
     }
 
@@ -2819,6 +2898,13 @@ impl<'a> Cg<'a> {
             .or_else(|| ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|x| x.init)));
         let mut needs_init = false;
         let init = match any_init.filter(|&i| !ast.is_trivial_default_construction(i)) {
+            // clang `EmitGlobalVarDefinition`: `loader_uninitialized` is
+            // `undef` (WP-813).
+            None if self.has_fn_attr(d, kiln_ast::attr::AttrKind::LOADER_UNINITIALIZED) => {
+                let z = self.null_const(ty)?;
+                let t = self.m.const_type(z);
+                self.m.const_undef(t)
+            }
             None => self.null_const(ty)?,
             Some(e) => {
                 if let Some(c) = self.folds.get(e) {
@@ -3139,6 +3225,8 @@ impl<'a> Cg<'a> {
         let direct_access = self.direct_access_external_data();
         self.finish_debug_info();
         let has_di = self.di.is_some();
+        let h = self.opts.hardening.clone();
+        let x86 = self.is_x86();
         let m = &mut self.m;
         // clang 19 emits an empty `!llvm.linker.options` when the language
         // has modules (C++20 and later); clang 20+ emits none.
@@ -3160,6 +3248,18 @@ impl<'a> Cg<'a> {
             m.add_module_flag_i32(2, "Debug Info Version", 3);
         }
         m.add_module_flag_i32(1, "wchar_size", 4);
+        // clang `CodeGenModule::Release` (WP-813): `-fcf-protection`
+        // (x86's `checkCFProtection*Supported`) and
+        // `-mfunction-return=thunk-extern`.
+        if h.cf_protection_return && x86 {
+            m.add_module_flag_i32(8, "cf-protection-return", 1);
+        }
+        if h.cf_protection_branch && x86 {
+            m.add_module_flag_i32(8, "cf-protection-branch", 1);
+        }
+        if h.fn_return_thunk_extern && x86 {
+            m.add_module_flag_i32(4, "function_return_thunk_extern", 1);
+        }
         match self.opts.reloc {
             RelocModel::Static => {}
             RelocModel::Pic(l) => m.add_module_flag_i32(8, "PIC Level", i32::from(l)),
@@ -3267,6 +3367,8 @@ pub(crate) struct DefFnAttrs {
     pub(crate) inline: DefInline,
     /// `const` / `pure` attributes (`crate::builtins::const_pure_attrs`).
     pub(crate) extra: Vec<Attr>,
+    /// What `StartFunction` knows of the function (WP-813).
+    pub(crate) start: crate::class_b::StartDecl,
 }
 
 /// Removes `optsize` and `minsize` (an `optnone` function).

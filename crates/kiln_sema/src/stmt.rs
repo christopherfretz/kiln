@@ -493,6 +493,12 @@ impl Sema<'_, '_> {
                 kept.extend(self.handle_loop_hint(a, sub));
                 continue;
             }
+            if let Some(keep) = self.class_b_stmt_attr(a, sub, &kept) {
+                if keep {
+                    kept.push(a);
+                }
+                continue;
+            }
             let name = match node.kind {
                 AttrKind::ASSUME => "assume",
                 AttrKind::LIKELY => "likely",

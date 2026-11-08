@@ -113,6 +113,8 @@ const INSTR: &str = "instrumentation or hardening only; dropping it changes no s
 const HINT: &str = "optimization hint; dropping it is a valid refinement";
 const INLINE: &str = "inlining or call-optimization hint; dropping it changes no semantics";
 const DIAG_REJECT: &str = "only makes clang diagnose a use; no code generation effect";
+const MULTIVERSION: &str =
+    "function multiversioning, which needs resolvers and ifuncs on x86-64 (AArch64: WP-810)";
 
 /// The rows, sorted by name.
 pub static TABLE: &[Row] = &[
@@ -125,9 +127,7 @@ pub static TABLE: &[Row] = &[
     r("acquired_after", G, C, TSA),
     r("acquired_before", G, C, TSA),
     r("address_space", G | CL, A, "places the pointee in another address space"),
-    r("align_value", G, B, HINT),
     r("allocating", G | CL, C, ANALYSIS),
-    r("always_inline", CL, B, INLINE),
     r("amdgpu_flat_work_group_size", G | CL, C, OFFLOAD),
     r("amdgpu_kernel", G | CL, C, OFFLOAD),
     r("amdgpu_max_num_work_groups", G | CL, C, OFFLOAD),
@@ -137,13 +137,10 @@ pub static TABLE: &[Row] = &[
     r("annotate", G | CL, C, ANALYSIS),
     r("annotate_type", CL, C, ANALYSIS),
     r("argument_with_type_tag", G | CL, C, ANALYSIS),
-    r("arm_sve_vector_bits", G, A, "defines a vector or matrix type"),
     r("assert_capability", G | CL, C, TSA),
     r("assert_exclusive_lock", G, C, TSA),
     r("assert_shared_capability", G | CL, C, TSA),
     r("assert_shared_lock", G, C, TSA),
-    r("assume", G | CL | OMP, B, HINT),
-    r("assume_aligned", G | GS, B, HINT),
     r22("atomic", G | CL, B, HINT),
     r("availability", G | CL, C, ANALYSIS),
     r("available_only_in_default_eval_method", G | CL, C, ANALYSIS),
@@ -152,9 +149,7 @@ pub static TABLE: &[Row] = &[
     r("bounded", G, C, OFFLOAD),
     r("btf_decl_tag", G | CL, B, DEBUG),
     r("btf_type_tag", G | CL, B, DEBUG),
-    r("builtin_alias", CL, A, "maps the declaration to a builtin"),
     r("callable_when", G | CL, C, ANALYSIS),
-    r("callback", G | CL, B, HINT),
     r("called_once", G | CL, C, ANALYSIS),
     r("capability", G | CL, C, TSA),
     r("carries_dependency", G, C, ANALYSIS),
@@ -163,32 +158,23 @@ pub static TABLE: &[Row] = &[
     r("cf_returns_not_retained", G | CL, C, OBJC),
     r("cf_returns_retained", G | CL, C, OBJC),
     r("cf_unknown_transfer", G | CL, C, OBJC),
-    r("cfi_canonical_jump_table", G | CL, B, INSTR),
     r22("cfi_salt", G | CL, B, INSTR),
     r22("cfi_unchecked_callee", G | CL, B, INSTR),
-    // clang spells it `__clang_arm_builtin_alias` (the name, its leading
-    // `__` trimmed as sema trims it).
-    rt("clang_arm_builtin_alias", [G | CL, G | CL, 0, 0], A, "maps the declaration to a builtin"),
-    r("clang_builtin_alias", G, A, "maps the declaration to a builtin"),
     r("clspv_libclc_builtin", G | CL, C, OFFLOAD),
     r22("cluster_dims", G, C, OFFLOAD),
-    r("code_align", G | CL, B, HINT),
     r("constant", G, C, OFFLOAD),
     r("constexpr", MS, C, OFFLOAD),
     r("consumable", G | CL, C, ANALYSIS),
     r("consumable_auto_cast_state", G | CL, C, ANALYSIS),
     r("consumable_set_state_on_read", G | CL, C, ANALYSIS),
-    r("convergent", G | CL, B, INLINE),
-    r22("coro_await_elidable", G | CL, B, HINT),
-    r22("coro_await_elidable_argument", G | CL, B, HINT),
     r("coro_disable_lifetimebound", G | CL, C, LIFETIME),
     r("coro_lifetimebound", G | CL, C, LIFETIME),
     r("coro_return_type", G | CL, C, ANALYSIS),
     r("coro_wrapper", G | CL, C, ANALYSIS),
     r("counted_by", G | CL, C, ANALYSIS),
     r("counted_by_or_null", G | CL, C, ANALYSIS),
-    r("cpu_dispatch", G | CL, A, "function multiversioning"),
-    r("cpu_specific", G | CL, A, "function multiversioning"),
+    rt("cpu_dispatch", [0, 0, G | CL, G | CL], A, MULTIVERSION),
+    rt("cpu_specific", [0, 0, G | CL, G | CL], A, MULTIVERSION),
     r("cudart_builtin", G, C, OFFLOAD),
     r("device", G, C, OFFLOAD),
     r("device_builtin", G, C, OFFLOAD),
@@ -196,7 +182,6 @@ pub static TABLE: &[Row] = &[
     r("device_builtin_texture_type", G, C, OFFLOAD),
     r22("device_kernel", G | CL, C, OFFLOAD),
     r("diagnose_as_builtin", G | CL, C, ANALYSIS),
-    r("disable_sanitizer_instrumentation", G | CL, B, INSTR),
     r("enforce_read_only_placement", G | CL, C, ANALYSIS),
     r("enforce_tcb", G | CL, C, ANALYSIS),
     r("enforce_tcb_leaf", G | CL, C, ANALYSIS),
@@ -205,11 +190,8 @@ pub static TABLE: &[Row] = &[
     r("exclusive_locks_required", G | CL, C, TSA),
     r("exclusive_trylock_function", G, C, TSA),
     r("external_source_symbol", G | CL, C, ANALYSIS),
-    r("flatten", G | GS, B, INLINE),
-    rt("force_align_arg_pointer", [0, 0, G | GS, G | GS], B, HINT),
     r("format_arg", G | GS, C, ANALYSIS),
     r22("format_matches", G | GS, C, ANALYSIS),
-    rt("function_return", [0, 0, G | GS, G | GS], B, INSTR),
     r("global", G, C, OFFLOAD),
     r22("grid_constant", G, C, OFFLOAD),
     r("guarded_by", G, C, TSA),
@@ -222,49 +204,34 @@ pub static TABLE: &[Row] = &[
     rt("interrupt", [0, 0, 0, G | GS], A, "calling convention: changes the call ABI (WP-808)"),
     rt("kernel", [G, 0, G, 0], C, OFFLOAD),
     r("launch_bounds", G, C, OFFLOAD),
-    r("leaf", G | GS, B, INLINE),
     r22("lifetime_capture_by", G | CL, C, LIFETIME),
     r("lifetimebound", G | CL, C, LIFETIME),
-    r("loader_uninitialized", G | CL, B, HINT),
     r("lock_returned", G, C, TSA),
     r("lockable", G, C, TSA),
     r("locks_excluded", G, C, TSA),
-    r("lto_visibility_public", G | CL, B, "whole-program devirtualization under LTO only"),
     r22("malloc_span", G | CL, B, HINT),
     r("managed", G, C, OFFLOAD),
     r("matrix_type", G | CL, A, "defines a vector or matrix type"),
-    r("maybe_undef", G | CL, B, HINT),
     r("mig_server_routine", G | CL, C, ANALYSIS),
     rt("model", [0, 0, 0, G | GS], A, "x86-64 code model of the variable's section"),
     r22("modular_format", G | CL, B, HINT),
     r("no_address_safety_analysis", G | GS, B, SAN),
     r22("no_cluster", G, C, OFFLOAD),
-    r("no_instrument_function", G | GS, B, INSTR),
-    r("no_profile_instrument_function", G | GS, B, INSTR),
     r("no_randomize_layout", G | GS, B, HINT),
     rt("no_sanitize", [G | CL, G | GS | CL, G | CL, G | GS | CL], B, SAN),
     r("no_sanitize_address", G | GS, B, SAN),
     r("no_sanitize_memory", G | CL, B, SAN),
     r("no_sanitize_thread", G | GS, B, SAN),
     r22("no_specializations", G | CL, C, ANALYSIS),
-    r("no_speculative_load_hardening", G | CL, B, INSTR),
-    r("no_split_stack", G | GS, B, INSTR),
-    r("no_stack_protector", G | GS | CL, B, INSTR),
     r("no_thread_safety_analysis", G | CL, C, TSA),
-    rt("nocf_check", [0, 0, G | GS, G | GS], B, INSTR),
     r("nocommon", G | GS, C, "a no-op in C++, whose variables are never common symbols"),
     r22("noconvergent", G | CL, B, INLINE),
     r("noderef", G | CL, C, ANALYSIS),
-    r("noduplicate", G | CL, B, INLINE),
-    r("noescape", G | CL, B, HINT),
-    r("noinline", CL | MS, B, INLINE),
-    r("nomerge", G | CL, B, INLINE),
+    r("noinline", MS, B, INLINE),
     r("nonallocating", G | CL, C, ANALYSIS),
     r("nonblocking", G | CL, C, ANALYSIS),
     r22("nonstring", G | GS, C, ANALYSIS),
     r("nosvm", G, C, OFFLOAD),
-    r("not_tail_called", G | CL, B, INLINE),
-    r("nouwtable", G | CL, B, INLINE),
     r("ns_consumed", G | CL, C, OBJC),
     r("ns_consumes_self", G | CL, C, OBJC),
     r("ns_error_domain", G, C, OBJC),
@@ -317,7 +284,6 @@ pub static TABLE: &[Row] = &[
     r("ownership_returns", G | CL, C, ANALYSIS),
     r("ownership_takes", G | CL, C, ANALYSIS),
     r("param_typestate", G | CL, C, ANALYSIS),
-    r("patchable_function_entry", G | GS, B, INSTR),
     r("pointer_with_type_tag", G | CL, C, ANALYSIS),
     r("preferred_type", G | CL, C, ANALYSIS),
     r("pt_guarded_by", G, C, TSA),
@@ -347,8 +313,6 @@ pub static TABLE: &[Row] = &[
     r("shared_trylock_function", G, C, TSA),
     r("sized_by", G | CL, C, ANALYSIS),
     r("sized_by_or_null", G | CL, C, ANALYSIS),
-    r("speculative_load_hardening", G | CL, B, INSTR),
-    r("standalone_debug", G | CL, B, DEBUG),
     r("suppress", G | CL | GSL, C, ANALYSIS),
     r("swift_async", G | CL, C, SWIFT),
     r("swift_async_context", G | CL, A, "Swift-convention parameter ABI (WP-808)"),
@@ -372,8 +336,8 @@ pub static TABLE: &[Row] = &[
     r("sycl_kernel", G | CL, C, OFFLOAD),
     r22("sycl_kernel_entry_point", CL, C, OFFLOAD),
     r("sycl_special_class", G | CL, C, OFFLOAD),
-    r("target_clones", G | GS, A, "function multiversioning"),
-    rt("target_version", [G | GS, G | GS, G | GS, 0], A, "function multiversioning"),
+    rt("target_clones", [0, 0, G | GS, G | GS], A, MULTIVERSION),
+    rt("target_version", [0, 0, G | GS, 0], A, MULTIVERSION),
     r("test_typestate", G | CL, C, ANALYSIS),
     r("try_acquire_capability", G | CL, C, TSA),
     r("try_acquire_shared_capability", G | CL, C, TSA),
@@ -389,16 +353,14 @@ pub static TABLE: &[Row] = &[
     r("warning", G | GS, C, DIAG_REJECT),
     r("weak_import", G | CL, A, "`extern_weak` linkage on ELF"),
     r("work_group_size_hint", G, C, OFFLOAD),
-    r("xray_always_instrument", G | CL, B, INSTR),
-    r("xray_log_args", G | CL, B, INSTR),
-    r("xray_never_instrument", G | CL, B, INSTR),
-    r("zero_call_used_regs", G | GS, B, INSTR),
 ];
 
 /// `[[clang::x]]` spellings kiln implements (clang 19 names only the
 /// attribute, not its scope, in the unknown-attribute warning).
 const CLANG_SCOPED: &[&str] = &[
     "always_destroy",
+    "always_inline",
+    "assume",
     "coro_only_destroy_when_complete",
     "disable_tail_calls",
     "enum_extensibility",
@@ -414,6 +376,7 @@ const CLANG_SCOPED: &[&str] = &[
     "neon_vector_type",
     "no_builtin",
     "no_destroy",
+    "noinline",
     "optnone",
     "overloadable",
     "pass_dynamic_object_size",
@@ -488,6 +451,26 @@ pub fn attribute_support(
     // release, not the unknown-attribute warning (WP-808 follow-up).
     if name == "interrupt" && x86 && sp & (G | GS) != 0 {
         return Support::Unsupported;
+    }
+    // WP-810: dispatched before the triage (`Sema::builtin_alias_attribute`,
+    // `Sema::fmv_attribute`); the x86-64 multiversioning spellings are
+    // class-A rows.
+    let wp810 = match name {
+        "builtin_alias" if sp == CL => Some(AttrKind::BUILTIN_ALIAS),
+        "clang_builtin_alias" if sp == G => Some(AttrKind::BUILTIN_ALIAS),
+        "clang_arm_builtin_alias" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::BUILTIN_ALIAS),
+        "target_version" if !x86 && sp & (G | GS) != 0 => Some(AttrKind::TARGET_VERSION),
+        "target_clones" if !x86 && sp & (G | GS) != 0 => Some(AttrKind::TARGET_CLONES),
+        "cpu_dispatch" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::CPU_DISPATCH),
+        "cpu_specific" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::CPU_SPECIFIC),
+        _ => None,
+    };
+    if let Some(k) = wp810 {
+        return Support::Implemented(k);
+    }
+    // WP-813: the class B attributes (`class_b_attrs.rs`).
+    if let Some((k, _)) = crate::class_b_attrs::kind_of(name, syntax, scope, x86, compat) {
+        return Support::Implemented(k);
     }
     match row(name) {
         Some(r) if sp != 0 && r.spellings_at(compat, x86) & sp != 0 => match r.class {
@@ -572,9 +555,9 @@ mod tests {
         assert_eq!(s("kernel", g, None, 22), Support::Unknown);
         // Implemented spellings win; other spellings of the same name do not.
         assert!(matches!(s("noinline", g, None, 22), Support::Implemented(_)));
-        assert_eq!(s("noinline", x, Some("clang"), 22), Support::Ignored(B));
+        assert!(matches!(s("noinline", x, Some("clang"), 22), Support::Implemented(_)));
         assert!(matches!(s("assume", x, None, 22), Support::Implemented(_)));
-        assert_eq!(s("assume", g, None, 22), Support::Ignored(B));
+        assert!(matches!(s("assume", g, None, 22), Support::Implemented(_)));
         assert!(matches!(s("no_destroy", x, Some("clang"), 22), Support::Implemented(_)));
         assert!(matches!(s("retain", g, None, 19), Support::Implemented(_)));
         // C++26 drops `carries_dependency` (unknown, as clang warns).
@@ -584,6 +567,29 @@ mod tests {
             Support::Implemented(_)
         ));
         assert_eq!(s("not_an_attribute", g, None, 22), Support::Unknown);
+        // WP-810: implemented on AArch64; multiversioning is class A on x86-64.
+        assert!(matches!(s("arm_sve_vector_bits", g, None, 22), Support::Implemented(_)));
+        assert!(matches!(
+            s("clang_arm_builtin_alias", x, Some("clang"), 19),
+            Support::Implemented(_)
+        ));
+        assert!(matches!(s("target_version", x, Some("gnu"), 22), Support::Implemented(_)));
+        let x86 = |n, syn, sc, c| attribute_support(n, syn, sc, c, true, true);
+        assert_eq!(x86("target_clones", g, None, 22), Support::Unsupported);
+        assert_eq!(x86("target_version", g, None, 19), Support::Unsupported);
+        assert_eq!(x86("target_version", g, None, 22), Support::Unknown);
+        assert_eq!(x86("cpu_dispatch", x, Some("clang"), 19), Support::Unsupported);
+        assert_eq!(x86("clang_arm_builtin_alias", g, None, 19), Support::Unknown);
+        assert!(matches!(x86("clang_builtin_alias", g, None, 19), Support::Implemented(_)));
+    }
+
+    /// The class B attributes WP-813 implements (`class_b_attrs.rs`).
+    #[test]
+    fn class_b_names_are_implemented() {
+        for n in ["flatten", "no_stack_protector", "nomerge", "callback"] {
+            let k = attribute_support(n, AttrSyntax::Gnu, None, 19, true, false);
+            assert!(matches!(k, Support::Implemented(_)), "{n}");
+        }
     }
 
     /// The conventions kiln does not lower yet stay class A (WP-808

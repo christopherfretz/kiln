@@ -77,6 +77,8 @@ pub struct ParseOptions {
     /// reproduces where they differ (spec/pp.md "clang compatibility
     /// level"; [`kiln_sema::Sema::clang_compat`]).
     pub clang_compat: u32,
+    /// [`kiln_sema::Sema::cf_protection_branch`].
+    pub cf_protection_branch: bool,
     /// GCC's implicit library builtins (`-stdlib=libstdc++`;
     /// [`kiln_sema::Sema::gnu_lib_builtins`]).
     pub gnu_lib_builtins: bool,
@@ -93,6 +95,8 @@ pub struct ParseOptions {
     /// The `AArch64` `sve` target feature (`-march=armv8-a+sve`;
     /// [`kiln_sema::Sema::sve`]).
     pub sve: bool,
+    /// `-msve-vector-bits=N` ([`kiln_sema::Sema::sve_vector_bits`]).
+    pub sve_vector_bits: Option<u32>,
     /// `-fkiln-dump-cfg` ([`kiln_sema::Sema::cfg_dump`]).
     pub cfg_dump: bool,
     /// `-fkiln-cfg-stats` ([`kiln_sema::Sema::cfg_stats`]).
@@ -128,6 +132,7 @@ impl Default for ParseOptions {
             coro_aligned_allocation: false,
             lax_vector_conversions: kiln_sema::LaxVectorConversions::All,
             clang_compat: 22,
+            cf_protection_branch: false,
             gnu_lib_builtins: false,
             no_builtin: false,
             no_builtin_fns: Vec::new(),
@@ -135,6 +140,7 @@ impl Default for ParseOptions {
             char8: None,
             math_errno: true,
             sve: false,
+            sve_vector_bits: None,
             cfg_dump: false,
             cfg_stats: false,
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
@@ -301,6 +307,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.lax_vector_conversions = opts.lax_vector_conversions;
     s.gnu = opts.gnu;
     s.clang_compat = opts.clang_compat;
+    s.cf_protection_branch = opts.cf_protection_branch;
     s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
     s.gnu_lib_builtins = opts.gnu_lib_builtins;
     s.no_builtin = opts.no_builtin;
@@ -310,6 +317,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.lib_builtin_name = kiln_pp::is_library_builtin;
     s.math_errno = opts.math_errno;
     s.sve = opts.sve;
+    s.sve_vector_bits = opts.sve_vector_bits;
     s.cfg_dump = opts.cfg_dump;
     s.cfg_stats = opts.cfg_stats;
     s.cfg_max_elems = opts.cfg_max_elems;

@@ -192,7 +192,7 @@ pub fn ident() -> String {
 /// The [`CodegenOptions`] fields set by the driver's codegen flags
 /// (spec/driver.md "Codegen flags"), the rest defaulted; `cpu` is the
 /// resolved `-march=` CPU ([`crate::features::TargetFeatures::cpu`]).
-fn codegen_flag_options(a: &Args, cpu: Option<String>) -> CodegenOptions {
+fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOptions {
     let f = &a.codegen;
     CodegenOptions {
         stack_protector: f.stack_protector(),
@@ -208,6 +208,7 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>) -> CodegenOptions {
         tune_cpu: f.mtune.clone().filter(|t| t != "native"),
         no_inline: a.predef.no_inline,
         code_model: f.code_model,
+        hardening: f.hardening(x86),
         reflection_mangling: a.reflection_mangling,
         outline_expansions: a
             .outline_expansions
@@ -232,6 +233,16 @@ impl CodegenJob<'_> {
         let mut diag_opts = job.diag_opts.clone();
         diag_opts.pending.clear();
         let engine = make_engine(&sm, &diag_opts, job.stderr.clone(), None);
+        // WP-813: a `-cc1` command line clang rejects runs no job.
+        let x86 = !job.toolchain.target.is_aarch64();
+        let invocation = job.args.codegen.invocation_errors(x86, job.toolchain.target.triple);
+        if !invocation.is_empty() {
+            for e in &invocation {
+                e.emit(&engine);
+            }
+            engine.flush();
+            return (None, engine.error_count(), None);
+        }
         let mut ir = None;
         let mut deps = None;
         if let Some(inputs) = job.pp_inputs(&sm, &engine) {
@@ -271,6 +282,15 @@ impl CodegenJob<'_> {
         if let Some(signed) = a.predef.char_signed {
             target.types.char_signed = signed;
         }
+        // WP-813: the flags this target rejects end the `-cc1` job.
+        let x86 = !job.toolchain.target.is_aarch64();
+        let target_errors = a.codegen.target_errors(x86);
+        if !target_errors.is_empty() {
+            for e in &target_errors {
+                e.emit(engine);
+            }
+            return None;
+        }
         // WP-630: `cx16` makes 128-bit atomics lock-free (clang
         // `X86TargetInfo::setMaxAtomicWidth`).
         if crate::features::resolve(a, &job.toolchain.target).0.x86_cx16() {
@@ -297,9 +317,11 @@ impl CodegenJob<'_> {
             char8: a.predef.char8_t,
             math_errno: a.fp_model().opts.math_errno,
             sve: feats.sve,
+            sve_vector_bits: feats.sve_vector_bits,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
             contract_semantic: a.contract_semantic.unwrap_or_default(),
+            cf_protection_branch: a.codegen.cf_protection_branch(x86),
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
@@ -377,7 +399,7 @@ impl CodegenJob<'_> {
                         a.debug.split().then(|| dwo_name(a, job.path)),
                     )
                 },
-                ..codegen_flag_options(a, feats.cpu.clone())
+                ..codegen_flag_options(a, feats.cpu.clone(), x86)
             };
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).
@@ -668,6 +690,9 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
     let passes = match opt_pipeline(args.opt_flag.as_deref()) {
         Some(p) => p,
         None if needs_always_inline(ir) => "default<O0>",
+        // WP-813: the O0 pipeline's `ee-instrument` turns the entry and
+        // exit attributes into `__cyg_profile_func_*` calls.
+        None if ir.contains("\"instrument-function-entry") => "default<O0>",
         None if needs_coro_lowering(ir) => "coro-early,cgscc(coro-split),coro-cleanup,globaldce",
         None => return None,
     };
@@ -790,6 +815,10 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
     // `-gz` reaches the linker as `--compress-debug-sections=`.
     if let Some(z) = args.debug.compression() {
         cmd.arg(format!("-gz={}", z.name()));
+    }
+    // WP-813: clang links the XRay runtime for `-fxray-instrument`.
+    if args.codegen.xray_instrument {
+        cmd.arg("-fxray-instrument");
     }
     match args.stdlib {
         Some(StdLib::LibCxx) => {

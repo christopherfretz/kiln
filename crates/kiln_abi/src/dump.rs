@@ -718,6 +718,16 @@ impl<'a> CPrinter<'a> {
                         });
                         let _ = write!(self.out, "{count}))) ");
                     }
+                    VectorKind::SveFixedData | VectorKind::SveFixedPredicate => {
+                        let bits =
+                            if kind == VectorKind::SveFixedPredicate { count * 8 } else { count };
+                        let _ = write!(
+                            self.out,
+                            "__attribute__((__arm_sve_vector_bits__({bits} * sizeof("
+                        );
+                        self.print(elem, "");
+                        self.push(") * 8))) ");
+                    }
                     VectorKind::Ext => {}
                 }
                 self.before(elem);

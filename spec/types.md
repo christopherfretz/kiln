@@ -239,6 +239,49 @@ size the condition's ("vector condition type V and result type R do not
 have the same number of elements" / "... element size"). Dependent arms
 build a dependent conditional, checked at instantiation.
 
+**SVE tuple types** (WP-810, ACLE "SVE tuple types"): ids 53..=90 are
+`__clang_sv<T>x{2,3,4}_t` for the twelve SVE data types in the order
+above (all `x2`, then `x3`, then `x4`), then `__clang_svboolx2_t` and
+`__clang_svboolx4_t` (`BuiltinType::is_sve_tuple`, `sve_tuple_parts`).
+`<arm_sve.h>` names them `sv<T>x<N>_t`. They are sizeless like their
+element type; the ABI alignment is 16 (2 for the bool tuples); the IR type
+is clang 19's wide scalable vector (`svint8x2_t` is `<vscale x 32 x i8>`);
+they mangle as their `<arm_sve.h>` name (`10svint8x2_t`). Passing or
+returning one by value at `-fclang-compat=22` is a codegen hard error
+(spec/landed/codegen/WP-810.md "Builtin aliases").
+
+**Fixed-length SVE types** (WP-810; ARM ACLE §3.7.3.3, clang AttrDocs
+"arm_sve_vector_bits", clang `HandleArmSveVectorBitsTypeAttr`): with
+`-msve-vector-bits=N` (128, 256, 512, 1024 or 2048) the type attribute
+`arm_sve_vector_bits(N)` on a typedef of an SVE data type or `svbool_t`
+makes a sized vector type, `VectorKind::SveFixedData` /
+`SveFixedPredicate` (attribute kind 220):
+- A data vector of element `T` has `N / bits(T)` lanes, size `N/8` and
+  alignment 16; a predicate is a vector of `N/64` `unsigned char` lanes,
+  size `N/64`, alignment 2. Both may be members, array elements, globals
+  and template arguments, and print as `vector of K 'T' values`.
+- Errors, clang's wording: without a fixed length ("is only supported when
+  '-msve-vector-bits=<bits>' is specified ..."), without `+sve`, on a
+  non-typedef ("only applies to typedefs"), on a non-SVE type or
+  `svcount_t` ("applied to non-SVE type"), an argument count other than one,
+  a non-integer or dependent argument ("requires an integer constant") and
+  `N` other than the flag ("invalid SVE vector size").
+- Conversions (clang `isValidSveBitcast` / `areLaxCompatibleSveTypes`): a
+  fixed type converts implicitly to and from its sizeless type; under lax
+  vector conversions (the default `-flax-vector-conversions=integer`) also
+  to and from a GNU vector or another fixed-length type of the same size
+  (`CK_BitCast`); a size mismatch, or a predicate against a data vector, is
+  "cannot initialize ... with an lvalue of type ...".
+- Operators are the GNU vector ones (`vector_ops.rs`), subscripts and
+  brace initialization included; a comparison yields the GNU vector of the
+  signed integer of the element width (a predicate's: `char`
+  lanes). Mixing a fixed type with its sizeless type, or any SVE type with
+  a GNU vector, in a binary operator is "cannot combine fixed-length and
+  sizeless SVE vectors ..." / "cannot combine GNU and SVE vectors ...";
+  `!` is "invalid argument type".
+- Mangling: `9__SVE_VLSI<sizeless type mangling>Lj<N>EE` (clang
+  `mangleAArch64FixedSveVectorType`).
+
 Not yet as clang: a use of an invalid SVE local where the parser
 classifies the name (statement start, conditions, after a `(` that could
 open a type-id, a comma's right operand) is reported again by clang, not

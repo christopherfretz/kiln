@@ -507,6 +507,13 @@ fn vector_conversion(s: &Sema<'_, '_>, from: QualType, to: QualType) -> Option<S
     if s.ast.types.same_unqualified(from, to) {
         return None;
     }
+    // `ICK_SVE_Vector_Conversion`: a sizeless SVE vector to or from a
+    // vector it is (laxly) compatible with.
+    if (s.is_sve_vector(from) || s.is_sve_vector(to))
+        && (s.sve_compatible(from, to) || s.sve_lax_compatible(from, to))
+    {
+        return Some(SecondStep::VectorConversion);
+    }
     if let Some(t) = tv
         && t.is_ext()
     {

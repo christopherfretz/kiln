@@ -564,9 +564,11 @@ impl Cg<'_> {
 
     /// clang `shouldOmitDefinition` (a definition is always taken as
     /// required: kiln does not track `isCompleteDefinitionRequired`).
+    /// `[[clang::standalone_debug]]` on any redeclaration keeps the
+    /// definition, as `-fstandalone-debug` does for every class.
     fn di_omit(&self, rd: DeclId) -> bool {
         let k = self.opts.debug.kind;
-        if k >= DebugInfoKind::Full {
+        if k >= DebugInfoKind::Full || self.has_fn_attr(rd, AttrKind::STANDALONE_DEBUG) {
             return false;
         }
         if self.class_def(rd).is_none() || self.is_dynamic(rd) {
