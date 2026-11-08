@@ -450,7 +450,8 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
         // WP-846: clang's target-specific `-mbranch-protection=`.
         if args.codegen.mbranch_protection_given {
             let t = args.target.as_deref().unwrap_or(target.triple);
-            errors.push(ArgError::UnsupportedForTarget("-mbranch-protection=".to_owned(), t.into()));
+            errors
+                .push(ArgError::UnsupportedForTarget("-mbranch-protection=".to_owned(), t.into()));
         }
         return (f, errors);
     }

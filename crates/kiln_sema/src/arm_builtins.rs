@@ -66,14 +66,13 @@ impl Sema<'_, '_> {
     /// Checks the converted operands of the ACLE builtin `id`; false
     /// after an error (the call is invalid).
     pub(crate) fn check_arm_builtin(&mut self, id: u32, callee: ExprId, args: &[ExprId]) -> bool {
-        let Some(name) = builtin::arm::row(id).and_then(|r| r.info.name.strip_prefix("__builtin_arm_"))
+        let Some(name) =
+            builtin::arm::row(id).and_then(|r| r.info.name.strip_prefix("__builtin_arm_"))
         else {
             return true;
         };
-        if matches!(
-            name,
-            "rsr" | "rsrp" | "wsr" | "wsrp" | "rsr64" | "wsr64" | "rsr128" | "wsr128"
-        ) {
+        if matches!(name, "rsr" | "rsrp" | "wsr" | "wsrp" | "rsr64" | "wsr64" | "rsr128" | "wsr128")
+        {
             return self.check_arm_special_reg(id, name, callee, args);
         }
         ranges(name).iter().all(|&(i, lo, hi)| self.check_arm_range(id, callee, (args, i), lo, hi))
@@ -82,8 +81,16 @@ impl Sema<'_, '_> {
     /// clang `BuiltinConstantArgRange`: operand `i` of the call of `id`
     /// is an integer constant in `[lo, hi]` (a value-dependent one is
     /// checked when instantiated).
-    fn check_arm_range(&mut self, id: u32, callee: ExprId, arg: (&[ExprId], usize), lo: i128, hi: i128) -> bool {
-        let Some(a) = arg.0.get(arg.1).copied().filter(|&a| !self.expr_is_value_dependent(a)) else {
+    fn check_arm_range(
+        &mut self,
+        id: u32,
+        callee: ExprId,
+        arg: (&[ExprId], usize),
+        lo: i128,
+        hi: i128,
+    ) -> bool {
+        let Some(a) = arg.0.get(arg.1).copied().filter(|&a| !self.expr_is_value_dependent(a))
+        else {
             return true;
         };
         let at = self.begin_loc(callee);
@@ -110,7 +117,13 @@ impl Sema<'_, '_> {
     /// literal that is either a name (unchecked, except that a write of a
     /// PSTATE field takes an immediate in its range) or five
     /// colon-separated encoding fields in range.
-    fn check_arm_special_reg(&mut self, id: u32, name: &str, callee: ExprId, args: &[ExprId]) -> bool {
+    fn check_arm_special_reg(
+        &mut self,
+        id: u32,
+        name: &str,
+        callee: ExprId,
+        args: &[ExprId],
+    ) -> bool {
         let Some(&a) = args.first() else { return true };
         if self.expr_is_value_dependent(a) {
             return true;

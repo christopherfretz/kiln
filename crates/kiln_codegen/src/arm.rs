@@ -10,9 +10,7 @@ use kiln_ast::decl::builtin::arm;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::{ExprId, QualType};
 use kiln_llvm::intrinsics::{self, TargetMem};
-use kiln_llvm::{
-    Attr, AttrList, BinOp, CallOpts, CastOp, Flags, FuncId, TypeId as LTy, Value,
-};
+use kiln_llvm::{Attr, AttrList, BinOp, CallOpts, CastOp, Flags, FuncId, TypeId as LTy, Value};
 
 use crate::builtins::BuiltinCall;
 use crate::fir::{Fir, Op, V};
@@ -184,12 +182,10 @@ impl Cg<'_> {
                 self.store(v, p, align, false);
                 self.cast(CastOp::ZExt, ok, LTy::I32)
             }
-            "ld64b" | "st64b" | "st64bv" | "st64bv0" => {
-                match self.emit_arm_ls64(base, &args)? {
-                    Some(v) => v,
-                    None => return Ok(BuiltinCall::Emitted(None)),
-                }
-            }
+            "ld64b" | "st64b" | "st64bv" | "st64bv0" => match self.emit_arm_ls64(base, &args)? {
+                Some(v) => v,
+                None => return Ok(BuiltinCall::Emitted(None)),
+            },
             "gcspopm" | "chkfeat" => {
                 let x = self.emit_scalar(args[0])?;
                 let intr = format!("llvm.aarch64.{base}");
@@ -253,7 +249,8 @@ impl Cg<'_> {
         let none = self.m.attr_set(&[]);
         let mut params = vec![none; args.len()];
         params[idx] = self.m.attr_set(&[Attr::ElementType(et)]);
-        let opts = CallOpts { attrs: AttrList { params, ..AttrList::default() }, ..CallOpts::default() };
+        let opts =
+            CallOpts { attrs: AttrList { params, ..AttrList::default() }, ..CallOpts::default() };
         let r = self.f.fir.push(
             Op::Call { fn_ty, callee: V::C(Value::func(f)), args, opts: Box::new(opts) },
             rty,
@@ -264,9 +261,10 @@ impl Cg<'_> {
 
     /// The width in bits of IR type `ty` (`DataLayout::getTypeSizeInBits`).
     fn ir_bits(&self, ty: LTy) -> u32 {
-        self.m.types.int_width(ty).unwrap_or_else(|| {
-            u32::try_from(self.store_size(ty) * 8).unwrap_or(u32::MAX)
-        })
+        self.m
+            .types
+            .int_width(ty)
+            .unwrap_or_else(|| u32::try_from(self.store_size(ty) * 8).unwrap_or(u32::MAX))
     }
 
     /// `sizeof(q)` in bits (clang `ASTContext::getTypeSize`).

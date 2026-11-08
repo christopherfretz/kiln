@@ -2220,13 +2220,12 @@ impl<'a> Cg<'a> {
             return;
         }
         let mut bp = self.opts.hardening.branch_protection;
-        if let Some(spec) = d.and_then(|d| self.target_attr_str(d)) {
-            if let Some(p) = kiln_abi::BranchProtection::of_target_attr(&spec)
+        if let Some(spec) = d.and_then(|d| self.target_attr_str(d))
+            && let Some(p) = kiln_abi::BranchProtection::of_target_attr(&spec)
                 .filter(|p| !p.is_empty())
                 .and_then(|p| kiln_abi::BranchProtection::parse(p, false).ok())
-            {
-                bp = p;
-            }
+        {
+            bp = p;
         }
         for (k, v) in bp.fn_attrs() {
             out.push(Attr::string(k, v));

@@ -30,9 +30,10 @@ impl SignScope {
 
     /// The scope a `-msign-return-address=` value names.
     pub fn from_name(s: &str) -> Option<SignScope> {
-        ["none", "non-leaf", "all"].iter().position(|n| *n == s).map(|i| {
-            [SignScope::None, SignScope::NonLeaf, SignScope::All][i]
-        })
+        ["none", "non-leaf", "all"]
+            .iter()
+            .position(|n| *n == s)
+            .map(|i| [SignScope::None, SignScope::NonLeaf, SignScope::All][i])
     }
 }
 
@@ -168,9 +169,8 @@ impl BranchProtection {
     /// trimmed (clang `AArch64TargetInfo::parseTargetAttr`), if any.
     pub fn of_target_attr(attr: &str) -> Option<&str> {
         attr.split(',')
-            .map(str::trim)
-            .filter_map(|f| f.strip_prefix("branch-protection="))
-            .last()
+            .rev()
+            .find_map(|f| f.trim().strip_prefix("branch-protection="))
             .map(str::trim)
     }
 }

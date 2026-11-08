@@ -20,6 +20,7 @@ pub mod mangle_decomp;
 pub mod target;
 pub mod vtable;
 
+pub use branch_protection::{BranchProtection, SignScope};
 pub use dump::{
     DumpOptions, dump_all_record_layouts, dump_record_layout, record_definitions,
     write_record_layout, write_record_layout_with,
@@ -30,5 +31,4 @@ pub use layout::{
     record_layout, subobjects, type_size_align,
 };
 pub use mangle::ReflectionMangling;
-pub use branch_protection::{BranchProtection, SignScope};
 pub use target::{Arch, Target, Triple, TripleError, target};

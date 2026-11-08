@@ -395,10 +395,7 @@ impl CodegenFlags {
     /// `-mbranch-protection=` as unsupported for the target and
     /// `-msign-return-address=` as unused). kiln knows no `-march=`
     /// extension enabling PAuth-LR, so `standard` never has it.
-    pub fn branch_protection(
-        &self,
-        aarch64: bool,
-    ) -> Result<kiln_abi::BranchProtection, ArgError> {
+    pub fn branch_protection(&self, aarch64: bool) -> Result<kiln_abi::BranchProtection, ArgError> {
         use kiln_abi::{BranchProtection, SignScope};
         let Some((opt, v)) = self.branch_protection.as_ref().filter(|_| aarch64) else {
             return Ok(BranchProtection::default());
