@@ -9,7 +9,7 @@
 
 use kiln_ast::decl::builtin as id;
 use kiln_ast::decl::{DeclKind, builtin::attr};
-use kiln_ast::expr::{CastKind, ExprKind, UnaryOp};
+use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
 use kiln_llvm::{
@@ -1809,15 +1809,79 @@ impl Cg<'_> {
             let decl = self.lvalue_from_decl(s);
             return Ok(PtrAlign { v: lv.addr.v, align: lv.addr.align, decl });
         }
+        if let Some((ptr_first, sub)) = self.pointer_arith_operands(e) {
+            return self.pointer_arith_with_alignment(e, ptr_first, sub);
+        }
         let v = self.emit_scalar(e)?;
         let align = self.natural_pointee_align(n.ty());
         Ok(PtrAlign { v, align, decl: false })
     }
 
+    /// clang 22 `emitPointerArithmetic` (not in clang 19): `p + i`,
+    /// `i + p` or `p - i` whose pointee size is known gives
+    /// `(left operand is the pointer, subtraction)`.
+    pub(crate) fn pointer_arith_operands(&self, e: ExprId) -> Option<(bool, bool)> {
+        let ast = self.ast;
+        if self.opts.clang_compat < 22 || ast.exprs.get(e).kind() != ExprKind::BinaryOperator {
+            return None;
+        }
+        let sub = match ast.exprs.binary_op(e) {
+            BinaryOp::Add => false,
+            BinaryOp::Sub => true,
+            _ => return None,
+        };
+        let [l, r] = ast.exprs.operands(e);
+        let lp = ast.types.is_pointer(ast.exprs.get(l).ty());
+        let rp = ast.types.is_pointer(ast.exprs.get(r).ty());
+        let pt = ast.types.pointee(ast.exprs.get(e).ty())?;
+        if lp == rp || (sub && !lp) || self.is_vla(pt) {
+            return None;
+        }
+        Some((lp, sub))
+    }
+
+    /// The pointer keeps its operand's alignment source; the result is
+    /// aligned at the constant byte offset from it, or at any element
+    /// for a variable index (clang `getArrayElementAlign`). The operands
+    /// are emitted in source order.
+    fn pointer_arith_with_alignment(&mut self, e: ExprId, ptr_first: bool, sub: bool) -> R<PtrAlign> {
+        let ast = self.ast;
+        let [l, r] = ast.exprs.operands(e);
+        let (base, iv) = if ptr_first {
+            let b = self.pointer_with_alignment(l)?;
+            (b, self.emit_scalar(r)?)
+        } else {
+            let i = self.emit_scalar(l)?;
+            (self.pointer_with_alignment(r)?, i)
+        };
+        let (lq, rq) = (ast.exprs.get(l).ty(), ast.exprs.get(r).ty());
+        let (lv, rv) = if ptr_first { (base.v, iv) } else { (iv, base.v) };
+        let op = if sub { BinaryOp::Sub } else { BinaryOp::Add };
+        let v = self.arith(e, op, lv, rv, lq, rq, ast.exprs.get(e).ty())?;
+        let pt = ast.types.pointee(ast.exprs.get(e).ty()).expect("checked");
+        let elt = if ast.types.is_void(pt) || ast.types.is_function(pt) {
+            1
+        } else {
+            self.size_align(pt).0
+        };
+        let off = match self.cint(iv) {
+            Some((_, x, w)) if w <= 64 => {
+                let x = if w == 64 { x as u64 } else { (x as u64) & ((1u64 << w) - 1) };
+                x.wrapping_mul(elt)
+            }
+            _ => elt,
+        };
+        // `CharUnits::alignmentAtOffset`: the largest power of two
+        // dividing both.
+        let m = base.align | off;
+        let align = if off == 0 { base.align } else { m & m.wrapping_neg() };
+        Ok(PtrAlign { v, align, decl: base.decl })
+    }
+
     /// The argument of the call `e` when it calls `__builtin_addressof`,
     /// `std::addressof` or `std::__addressof` (clang `getBuiltinCallee`
     /// is `BIaddressof`, `BI__addressof` or `BI__builtin_addressof`).
-    fn addressof_call_arg(&self, e: ExprId) -> Option<ExprId> {
+    pub(crate) fn addressof_call_arg(&self, e: ExprId) -> Option<ExprId> {
         let ast = self.ast;
         let mut c = ast.exprs.callee(e);
         loop {

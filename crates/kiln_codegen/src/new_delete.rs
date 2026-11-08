@@ -6,7 +6,7 @@
 
 use kiln_abi::mangle;
 use kiln_ast::decl::{DeclKind, DefinitionBits, NamespaceData, TagKind};
-use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, NewExtra};
+use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, NewExtra, UnaryOp};
 use kiln_ast::names::OverloadedOperator;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -456,28 +456,72 @@ impl Cg<'_> {
         );
     }
 
-    /// The lvalue `e` has `AlignmentSource::Decl`: a named non-reference
-    /// variable, or a `.` member or array element of one.
+    /// The lvalue `e` has clang's `AlignmentSource::Decl`: a named
+    /// non-reference variable; a non-reference field of any base (clang
+    /// `getFieldAlignmentSource` is always `Decl`, `->` included); an
+    /// element of such an array; or `*p`/`p[i]` where the pointer's
+    /// alignment is a declaration's (`EmitPointerWithAlignment`).
     pub(crate) fn lvalue_from_decl(&self, e: ExprId) -> bool {
         let ast = self.ast;
+        let e = self.skip_parens(e);
         let n = *ast.exprs.get(e);
+        let non_ref = |d| ast.decls.get(d).ty().is_some_and(|q| !ast.types.is_reference(q));
         match n.kind() {
-            ExprKind::ParenExpr => self.lvalue_from_decl(ast.exprs.operand(e)),
             ExprKind::DeclRefExpr => {
                 let d = ast.exprs.decl(e);
-                matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar)
-                    && ast.decls.get(d).ty().is_some_and(|q| !ast.types.is_reference(q))
+                matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar) && non_ref(d)
             }
-            ExprKind::MemberExpr if !n.has(ExprFlags::ARROW) => {
-                self.lvalue_from_decl(ast.exprs.operand(e))
+            ExprKind::MemberExpr => {
+                let d = ast.exprs.decl(e);
+                matches!(ast.decls.get(d).kind(), DeclKind::Field | DeclKind::Var) && non_ref(d)
             }
             ExprKind::ArraySubscriptExpr => {
-                let [l, _] = ast.exprs.operands(e);
-                let l = self.skip_parens(l);
-                ast.exprs.get(l).kind().is_cast()
-                    && ast.exprs.cast_kind(l) == CastKind::ArrayToPointerDecay
-                    && self.lvalue_from_decl(ast.exprs.operand(l))
+                let [l, r] = ast.exprs.operands(e);
+                let base = if ast.types.is_pointer(ast.exprs.get(l).ty()) { l } else { r };
+                self.pointer_from_decl(base)
             }
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Deref => {
+                self.pointer_from_decl(ast.exprs.operand(e))
+            }
+            _ => false,
+        }
+    }
+
+    /// The alignment `pointer_with_alignment(e)` computes is a
+    /// declaration's (its `LValueBaseInfo` source is `Decl`), without
+    /// emitting anything.
+    pub(crate) fn pointer_from_decl(&self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let e = self.skip_parens(e);
+        let n = *ast.exprs.get(e);
+        if n.kind().is_cast() {
+            let s = ast.exprs.operand(e);
+            let sq = ast.exprs.get(s).ty();
+            match ast.exprs.cast_kind(e) {
+                CastKind::NoOp | CastKind::BitCast
+                    if ast.types.is_pointer(sq)
+                        && ast.types.pointee(sq).is_some_and(|p| !ast.types.is_void(p)) =>
+                {
+                    return self.pointer_from_decl(s);
+                }
+                CastKind::ArrayToPointerDecay => return self.lvalue_from_decl(s),
+                CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase
+                    if ast.types.pointee(sq).and_then(|t| ast.types.as_record(t)).is_some() =>
+                {
+                    return self.pointer_from_decl(s);
+                }
+                _ => return false,
+            }
+        }
+        match n.kind() {
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::AddrOf => {
+                self.lvalue_from_decl(ast.exprs.operand(e))
+            }
+            ExprKind::CallExpr => self.addressof_call_arg(e).is_some_and(|s| self.lvalue_from_decl(s)),
+            ExprKind::BinaryOperator => self.pointer_arith_operands(e).is_some_and(|(lp, _)| {
+                let [l, r] = ast.exprs.operands(e);
+                self.pointer_from_decl(if lp { l } else { r })
+            }),
             _ => false,
         }
     }
