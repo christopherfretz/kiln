@@ -1182,6 +1182,8 @@ fn sve_pure_scalable_by_value() {
 /// WP-810: an `<arm_sve.h>` intrinsic kiln does not lower, a call without
 /// the `sve` feature, an SVE tuple by value at `-fclang-compat=22` and an
 /// alias whose declaration does not match its builtin are hard errors.
+/// `-ffreestanding` keeps `<stdint.h>` off the host libc, so the test
+/// runs on an x86-64 host without `AArch64` headers.
 #[test]
 fn sve_builtin_alias_errors() {
     let d = scratch("svealias");
@@ -1221,8 +1223,16 @@ fn sve_builtin_alias_errors() {
     ];
     for (src, compat, march, want) in cases {
         std::fs::write(d.join("t.cpp"), &src).unwrap();
-        let args =
-            [compat, "--target=aarch64-unknown-linux-gnu", march, "-S", "-emit-llvm", "-o", "k.ll"];
+        let args = [
+            compat,
+            "--target=aarch64-unknown-linux-gnu",
+            "-ffreestanding",
+            march,
+            "-S",
+            "-emit-llvm",
+            "-o",
+            "k.ll",
+        ];
         let o = kiln_in(&d, &[&args[..], &["t.cpp"]].concat());
         assert!(text(&o.stderr).starts_with(want), "{src}: {}", text(&o.stderr));
         assert_eq!(o.status.code(), Some(1), "{src}");
@@ -1234,6 +1244,7 @@ fn sve_builtin_alias_errors() {
         &[
             "-fclang-compat=19",
             "--target=aarch64-unknown-linux-gnu",
+            "-ffreestanding",
             "-march=armv8-a+sve",
             "-S",
             "-emit-llvm",
