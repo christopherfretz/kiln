@@ -1,0 +1,7 @@
+{"template":"A<T>","kind":"class","loc":"fatal-error-stops-pending-instantiation.cpp:17:27","count":1,"nodes":1,"bytes":81,"self_us":0,"incl_us":0}
+{"template":"B<T>","kind":"class","loc":"fatal-error-stops-pending-instantiation.cpp:18:27","count":1,"nodes":1,"bytes":81,"self_us":0,"incl_us":0}
+{"template":"C<T>","kind":"class","loc":"fatal-error-stops-pending-instantiation.cpp:19:27","count":1,"nodes":1,"bytes":81,"self_us":0,"incl_us":0}
+{"template":"g<T>","kind":"default","loc":"fatal-error-stops-pending-instantiation.cpp:20:25","count":3,"nodes":1,"bytes":64,"self_us":0,"incl_us":0}
+{"template":"A::f","kind":"member","loc":"fatal-error-stops-pending-instantiation.cpp:17:36","count":1,"nodes":3,"bytes":64,"self_us":0,"incl_us":0}
+{"template":"B::f","kind":"member","loc":"fatal-error-stops-pending-instantiation.cpp:18:36","count":1,"nodes":3,"bytes":64,"self_us":0,"incl_us":0}
+{"total":true,"count":8,"nodes":10,"bytes":435,"self_us":0,"sat":0,"sat_cached":0,"atoms":0,"atoms_cached":0}

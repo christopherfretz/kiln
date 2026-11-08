@@ -397,6 +397,22 @@ impl InstantiationStack {
 }
 
 impl Sema<'_, '_> {
+    /// Whether instantiation has stopped for the rest of the translation
+    /// unit: a fatal error was emitted, by the depth limit or by anything
+    /// else (the error limit's "too many errors emitted", a missing
+    /// `#include`, `-Wfatal-errors`). clang's `InstantiatingTemplate`
+    /// constructor makes every instantiation invalid once
+    /// `Diags.hasFatalErrorOccurred() && hasUncompilableErrorOccurred()`
+    /// (a fatal error is uncompilable): every later diagnostic is dropped,
+    /// so the work could not be seen (spec/sema.md "Error recovery",
+    /// WP-826).
+    pub(crate) fn instantiation_stopped(&mut self) -> bool {
+        if !self.inst.fatal && self.diags.has_fatal() {
+            self.inst.fatal = true;
+        }
+        self.inst.fatal
+    }
+
     /// Pushes an instantiation frame ([temp.inst]/16): false, after the
     /// fatal depth diagnostic (once per translation unit), when the
     /// depth limit is reached or a fatal error already stopped
@@ -410,7 +426,7 @@ impl Sema<'_, '_> {
     ) -> bool {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("push_inst_frame");
-        if self.inst.fatal {
+        if self.instantiation_stopped() {
             return false;
         }
         if self.stack_exhausted() || self.stack_low() {
