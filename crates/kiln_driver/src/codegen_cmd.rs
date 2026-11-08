@@ -274,6 +274,7 @@ impl CodegenJob<'_> {
             no_builtin: a.no_builtin(),
             no_builtin_fns: a.no_builtin_fns(),
             sized_deallocation: a.predef.sized_deallocation.unwrap_or(true),
+            char8: a.predef.char8_t,
             math_errno: a.fp_model().opts.math_errno,
             sve: feats.sve,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),

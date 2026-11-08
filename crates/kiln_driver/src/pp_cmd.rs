@@ -171,6 +171,7 @@ impl Job<'_> {
         o.keep_comments = a.print.comments || a.print.macro_comments;
         o.keep_macro_comments = a.print.macro_comments;
         o.reflection = a.predef.reflection;
+        o.char8 = a.predef.char8_t;
         o.predefines = predefines;
         if let Some(epoch) = time::reproducible_epoch(a.reproducible_time) {
             let (date, t, stamp) = time::spellings(epoch);

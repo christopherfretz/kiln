@@ -313,6 +313,9 @@ pub struct Sema<'a, 'sm> {
     /// deallocation lookup never prefers a sized one
     /// ([`Sema::usual_delete`]).
     pub sized_deallocation: bool,
+    /// `-f[no-]char8_t` (clang `LangOptions::Char8`): `None` is the
+    /// default, C++20 and later; see [`Sema::char8`].
+    pub char8: Option<bool>,
     /// Whether a name is one of clang's library builtins at the clang 22
     /// level or not (clang `Builtin::Context::isBuiltinFunc`'s table, set
     /// by the parser from the preprocessor's): the names a `no_builtin`
@@ -1155,6 +1158,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             gnu_lib_builtins: false,
             no_builtin: false,
             sized_deallocation: true,
+            char8: None,
             no_builtin_fns: Vec::new(),
             lib_builtin_name: |n, _| kiln_ast::decl::builtin::lib_by_name(n).is_some(),
             no_builtin_pending: Vec::new(),

@@ -785,6 +785,10 @@ impl IfContext for IfCx<'_, '_, '_> {
     fn std(&self) -> Std {
         self.pp.opts.std
     }
+
+    fn char8(&self) -> bool {
+        self.pp.opts.char8.unwrap_or(self.pp.opts.std >= Std::Cxx20)
+    }
 }
 
 impl Preprocessor<'_, '_> {
