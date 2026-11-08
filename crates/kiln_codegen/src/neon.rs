@@ -123,6 +123,9 @@ fn lowering(name: &str) -> Option<(&'static str, T, &'static [T])> {
     const B4: T = T::V(E::Bf16, 4);
     const B8: T = T::V(E::Bf16, 8);
     const B16: T = T::V(E::I8, 16);
+    const B8I: T = T::V(E::I8, 8);
+    const I2: T = T::V(E::I32, 2);
+    const I4: T = T::V(E::I32, 4);
     let q: &'static [T] = &[F4, B8, B8];
     Some(match name.strip_prefix(neon::PREFIX)? {
         "vbfdot_f32" => ("llvm.aarch64.neon.bfdot.v2f32.v4bf16", F2, &[F2, B4, B4]),
@@ -137,6 +140,12 @@ fn lowering(name: &str) -> Option<(&'static str, T, &'static [T])> {
         // byte vector.
         "vqtbl1_v" => ("llvm.aarch64.neon.tbl1.v8i8", T::V(E::I8, 8), &[B16, T::V(E::I8, 8)]),
         "vqtbl1q_v" => ("llvm.aarch64.neon.tbl1.v16i8", B16, &[B16, B16]),
+        // The dot products (WP-803; clang `EmitCommonNeonBuiltinExpr`'s
+        // `vdot` case): overloaded on the accumulator and the byte vector.
+        "vdot_s32" => ("llvm.aarch64.neon.sdot.v2i32.v8i8", I2, &[I2, B8I, B8I]),
+        "vdot_u32" => ("llvm.aarch64.neon.udot.v2i32.v8i8", I2, &[I2, B8I, B8I]),
+        "vdotq_s32" => ("llvm.aarch64.neon.sdot.v4i32.v16i8", I4, &[I4, B16, B16]),
+        "vdotq_u32" => ("llvm.aarch64.neon.udot.v4i32.v16i8", I4, &[I4, B16, B16]),
         // The 64-bit polynomial multiply: `<16 x i8>`, bitcast to `poly128_t`.
         "vmull_p64" => ("llvm.aarch64.neon.pmull64", B16, &[T::S(E::I64), T::S(E::I64)]),
         _ => return None,
@@ -759,12 +768,15 @@ impl Cg<'_> {
         let ret = self.neon_ty(ret);
         let f = intrinsics::target_nomem(&mut self.m, intr, ret, &ptys);
         let r = self.intrinsic_call(f, vals);
-        // clang's `vbfdot` case returns the intrinsic's `<N x float>`
-        // as is (the header casts it to `float32xN_t` at once; a store or
-        // cast of it goes by its own type, as in clang); the others go
-        // through `EmitCommonNeonBuiltinExpr`'s bitcast to the builtin's
-        // declared type.
-        if intr.starts_with("llvm.aarch64.neon.bfdot.") {
+        // clang's `vbfdot` and `vdot` cases return the intrinsic's
+        // result as is (the header casts it to its vector type at once; a
+        // store or cast of it goes by its own type, as in clang); the
+        // others go through `EmitCommonNeonBuiltinExpr`'s bitcast to the
+        // builtin's declared type.
+        if ["bfdot.", "sdot.", "udot."]
+            .iter()
+            .any(|d| intr.strip_prefix("llvm.aarch64.neon.").is_some_and(|r| r.starts_with(d)))
+        {
             return Ok(BuiltinCall::Emitted(Some(r)));
         }
         Ok(BuiltinCall::Emitted(Some(self.neon_bitcast(r, ret, rty, e)?)))
