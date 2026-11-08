@@ -4,7 +4,7 @@
 
 use kiln_ast::consts::{PtrBase, Scalar};
 use kiln_ast::decl::DeclKind;
-use kiln_ast::expr::{ExprFlags, ExprKind, NonOdrUse};
+use kiln_ast::expr::ExprKind;
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::{ArgView, Quals, TemplateArg, TypeView};
 use kiln_ast::{ArgListId, ConstValueId, DeclId, QualType, ReflectionId, TemplateNameId};
@@ -349,26 +349,11 @@ impl Sema<'_, '_> {
                 let ty = self.ast.consts.ty(v);
                 self.nttp_arg_expr(ty, v, loc).map(|e| TemplateArg::expr(e, None))
             }
-            Reflectee::Object(p) => match self.ast.consts.scalar(p) {
-                Some(Scalar::Pointer { base: PtrBase::Decl(d), offset: 0, .. }) => {
-                    let e = if self.kind_of(d) == DeclKind::TemplateParamObject {
-                        self.ast.decls.get(d).ty().map(|q| {
-                            self.builder().decl_ref(
-                                d,
-                                q,
-                                loc,
-                                None,
-                                NonOdrUse::None,
-                                ExprFlags::NONE,
-                            )
-                        })
-                    } else {
-                        Some(self.build_decl_ref(d, loc))
-                    };
-                    e.map(|e| TemplateArg::expr(e, None))
-                }
-                _ => None,
-            },
+            // The lvalue naming the object, at any offset of a variable,
+            // a template parameter object or an object no declaration
+            // names, as its splice does ([meta.reflection.substitute]/
+            // [temp.arg.nontype]; `splice_object.rs`).
+            Reflectee::Object(p) => self.splice_object_expr(p, loc).map(|e| TemplateArg::expr(e, None)),
             Reflectee::Decl(d)
                 if matches!(
                     self.kind_of(d),
