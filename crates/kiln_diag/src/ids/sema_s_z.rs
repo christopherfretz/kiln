@@ -3,6 +3,7 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 sema_section_conflict = Error (2) "{0} causes a section type conflict with {1}";
+sema_selectany_non_extern_data = Error (0) "'selectany' can only be applied to data items with external linkage";
 sema_shift_gt_typewidth = Warning [ShiftCountOverflow] (0) "shift count >= width of type";
 sema_shift_negative = Warning [ShiftCountNegative] (0) "shift count is negative";
 sema_shufflevector_argument_too_large = Error (0) "index for __builtin_shufflevector must be less than the total number of vector elements";
@@ -99,6 +100,11 @@ sema_subscript_not_integer = Error (0) "array subscript is not an integer";
 sema_subscript_sizeless_type = Error (1) "subscript of pointer to sizeless type {0}";
 sema_subscript_svbool = Error (0) "subscript of svbool_t is not allowed";
 sema_subscript_value = Error (0) "subscripted value is not an array, pointer, or vector";
+sema_sve_bad_vector_size = Error (2) "invalid SVE vector size '{0}', must match value set by '-msve-vector-bits' ('{1}')";
+sema_sve_bits_unsupported = Error (1) "{0} is only supported when '-msve-vector-bits=<bits>' is specified with a value of 128, 256, 512, 1024 or 2048";
+sema_sve_fixed_sizeless_ambiguous = Error (2) "cannot combine fixed-length and sizeless SVE vectors in expression, result is ambiguous ({0} and {1})";
+sema_sve_gnu_ambiguous = Error (2) "cannot combine GNU and SVE vectors in expression, result is ambiguous ({0} and {1})";
+sema_sve_invalid_type = Error (2) "{0} attribute applied to non-SVE type {1}";
 sema_sve_type_without_sve = Error (1) "SVE vector type {0} cannot be used in a target without sve";
 sema_switch_bool_condition = Warning [SwitchBool] (0) "switch condition has boolean value";
 sema_switch_def_missing_case = WarningOff [SwitchEnum] (5) "{0:enumeration value {1} not explicitly handled in switch|enumeration values {1} and {2} not explicitly handled in switch|enumeration values {1}, {2}, and {3} not explicitly handled in switch|{4} enumeration values not explicitly handled in switch: {1}, {2}, {3}...}";
@@ -167,15 +173,22 @@ sema_thread_non_thread = Error (1) "thread-local declaration of '{0}' follows no
 sema_thread_nontrivial_dtor = Error (0) "type of thread-local variable has non-trivial destruction";
 sema_thread_thread_different_kind = Error (2) "thread-local declaration of '{0}' with {1:static|dynamic} initialization follows declaration with {1:dynamic|static} initialization";
 sema_three_way_vector_comparison = Error (0) "three-way comparison between vectors is not supported";
+sema_throw_abstract = Error (1) "cannot throw an object of abstract type {0}";
 sema_throw_disabled = Error (0) "cannot use 'throw' with exceptions disabled";
 sema_throw_in_nothrow_func = Warning [Exceptions] (1) "'{0}' has a non-throwing exception specification but can still throw";
 sema_throw_incomplete = Error (1) "cannot throw object of incomplete type {0}";
 sema_throw_incomplete_ptr = Error (1) "cannot throw pointer to object of incomplete type {0}";
+sema_throw_object_dtor_access = Error (2) "exception object of type {0} has {1:private|protected} destructor";
 sema_too_many_reflections = Fatal (1) "too many reflections in one translation unit (the limit is {0})";
 sema_trailing_requires_non_function = Error (0) "trailing requires clause can only be used when declaring a function";
 sema_trailing_requires_non_template = Error (0) "non-templated function cannot have a requires clause";
 sema_trailing_return_without_auto = Error (1) "function with trailing return type must specify return type 'auto', not {0}";
+sema_transparent_union_field_mismatch = Warning [IgnoredAttributes] (3) "{0:alignment|size} of field '{1}' ({2} bits) does not match the {0:alignment|size} of the first field in transparent union; transparent_union attribute ignored";
+sema_transparent_union_floating = Warning [IgnoredAttributes] (2) "first field of a transparent union cannot have {0:floating point|vector} type {1}; transparent_union attribute ignored";
+sema_transparent_union_not_definition = Warning [IgnoredAttributes] (0) "transparent_union attribute can only be applied to a union definition; attribute ignored";
+sema_transparent_union_zero_fields = Warning [IgnoredAttributes] (0) "transparent union definition must contain at least one field; transparent_union attribute ignored";
 sema_try_disabled = Error (0) "cannot use 'try' with exceptions disabled";
+sema_type_attribute_deprecated_on_decl = Warning [DeprecatedAttributes] (1) "applying attribute '{0}' to a declaration is deprecated; apply it to the type instead";
 sema_type_attribute_wrong_type = Warning [IgnoredAttributes] (2) "{0} only applies to function types; type here is {1}";
 sema_type_defined_in_for_range = Error (0) "types may not be defined in a for range declaration";
 sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
@@ -222,6 +235,7 @@ sema_unreachable_code_return = WarningOff [UnreachableCodeReturn] (0) "'return' 
 sema_unreachable_fallthrough_attr = WarningOff [UnreachableCodeFallthrough] (0) "fallthrough annotation in unreachable code";
 sema_unreachable_loop_increment = WarningOff [UnreachableCodeLoopIncrement] (0) "loop will run at most once (loop increment never executed)";
 sema_unsigned_abs = Warning [AbsoluteValue] (1) "taking the absolute value of unsigned type {0} has no effect";
+sema_unsupported_fmv_feature = Warning [IgnoredAttributes] (1) "unsupported '{0}' in the 'target_version' attribute string; 'target_version' attribute ignored";
 sema_unsupported_string_concat = Error (0) "unsupported non-standard concatenation of string literals";
 sema_unused_but_set_parameter = WarningOff [UnusedButSetParameter] (1) "parameter {0} set but not used";
 sema_unused_but_set_variable = WarningOff [UnusedButSetVariable] (1) "variable {0} set but not used";

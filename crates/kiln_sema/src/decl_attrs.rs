@@ -82,6 +82,11 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::COMMON => "common",
         AttrKind::TLS_MODEL => "tls_model",
         AttrKind::RETURNS_TWICE => "returns_twice",
+        AttrKind::MUSTTAIL => "musttail",
+        AttrKind::TRANSPARENT_UNION => "transparent_union",
+        AttrKind::SELECTANY => "selectany",
+        AttrKind::MS_STRUCT => "ms_struct",
+        AttrKind::GCC_STRUCT => "gcc_struct",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -203,6 +208,23 @@ impl Sema<'_, '_> {
             if matches!(node.syntax, AttrSyntax::Gnu | AttrSyntax::Declspec) {
                 return true;
             }
+            // `[[clang::neon_vector_type(N)]]` and the like after the
+            // type-specifiers: type attributes (WP-809), applied with the
+            // GNU spellings by `Sema::apply_declspec_vector_attrs`.
+            if is_cxx11_vector_type_attr(node.kind) {
+                if !in_chunk {
+                    return true;
+                }
+                // After a ptr-operator, an array or a function declarator
+                // it would make a vector of that compound type, which no
+                // vector kind permits (clang `err_attribute_invalid_vector_type`).
+                let shown = self.attr_shown(&node, vector_attr_name(node.kind));
+                let msg = self
+                    .diag(DiagId::sema_attribute_not_type_attr, node.loc)
+                    .arg(format!("'{shown}'"));
+                self.emit(msg);
+                return false;
+            }
             let Some(name) = attr_name(&node) else {
                 return true;
             };
@@ -252,7 +274,11 @@ impl Sema<'_, '_> {
             let node = *self.ast.attrs.get(a);
             if matches!(
                 node.kind,
-                AttrKind::ASSUME | AttrKind::LIKELY | AttrKind::UNLIKELY | AttrKind::FALLTHROUGH
+                AttrKind::ASSUME
+                    | AttrKind::LIKELY
+                    | AttrKind::UNLIKELY
+                    | AttrKind::FALLTHROUGH
+                    | AttrKind::MUSTTAIL
             ) {
                 continue;
             }
@@ -342,6 +368,8 @@ impl Sema<'_, '_> {
         self.check_tls_model_attrs(d, attrs);
         self.check_visibility_attrs(d, attrs);
         self.check_weak_attrs(d, attrs);
+        self.check_selectany_attrs(d, attrs);
+        self.check_ms_struct_attrs(d, attrs);
         let kind = self.ast.decls.get(d).kind();
         attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);
@@ -353,6 +381,7 @@ impl Sema<'_, '_> {
             }
             self.check_decl_attr(d, kind, node)
         });
+        self.check_fmv_attrs(d, attrs);
         self.unify_fn_section(d, attrs);
         self.check_no_builtin_attrs(d, attrs);
     }
@@ -440,10 +469,24 @@ impl Sema<'_, '_> {
         };
         match node.kind {
             // [dcl.attr.assume]/1, [dcl.attr.fallthrough]/1,
-            // [dcl.attr.likelihood]/1: statement attributes.
-            AttrKind::ASSUME | AttrKind::FALLTHROUGH | AttrKind::LIKELY | AttrKind::UNLIKELY => {
+            // [dcl.attr.likelihood]/1: statement attributes (and clang's
+            // `musttail`, WP-809).
+            AttrKind::ASSUME
+            | AttrKind::FALLTHROUGH
+            | AttrKind::LIKELY
+            | AttrKind::UNLIKELY
+            | AttrKind::MUSTTAIL => {
                 let name = self.attr_shown(&node, attr_name(&node).unwrap_or_default());
                 let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg(name);
+                self.emit(msg);
+                false
+            }
+            // clang `TransparentUnion` is C-only: ignored in C++ (a
+            // class-head one also gets the delayed check,
+            // `Sema::transparent_union_head`).
+            AttrKind::TRANSPARENT_UNION => {
+                let shown = self.attr_shown(&node, "transparent_union");
+                let msg = self.diag(DiagId::parse_attribute_ignored, node.loc).arg(shown);
                 self.emit(msg);
                 false
             }
@@ -527,6 +570,16 @@ impl Sema<'_, '_> {
                 "pass_object_size",
                 "parameters",
             ),
+            // clang `ArmBuiltinAlias` / `BuiltinAlias`: `SubjectList<[Function],
+            // ErrorDiag>` (WP-810).
+            AttrKind::BUILTIN_ALIAS if !kind.is_function() => {
+                let name = match (node.b, node.syntax) {
+                    (1, _) => "__clang_arm_builtin_alias",
+                    (_, AttrSyntax::Gnu) => "clang_builtin_alias",
+                    _ => "builtin_alias",
+                };
+                wrong(self, DiagId::sema_attribute_wrong_decl_type_error, name, "functions")
+            }
             // clang `Overloadable`: `SubjectList<[Function], ErrorDiag>`.
             AttrKind::OVERLOADABLE if !kind.is_function() => wrong(
                 self,
@@ -659,6 +712,17 @@ impl Sema<'_, '_> {
             }
             // clang `TrivialABI`: `SubjectList<[CXXRecord]>` (ignored
             // with a warning).
+            // clang `MSStruct` / `GCCStruct`: `SubjectList<[Record]>`.
+            AttrKind::MS_STRUCT | AttrKind::GCC_STRUCT if !is_record_kind(kind) => {
+                let name =
+                    if node.kind == AttrKind::MS_STRUCT { "ms_struct" } else { "gcc_struct" };
+                wrong(
+                    self,
+                    DiagId::sema_attribute_wrong_decl_type,
+                    name,
+                    "structs, unions, and classes",
+                )
+            }
             AttrKind::TRIVIAL_ABI if !is_record_kind(kind) => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "trivial_abi", "classes")
             }
@@ -1454,5 +1518,25 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+    }
+}
+
+/// The vector type attributes with a `[[clang::...]]` spelling (WP-809):
+/// clang `Clang<"neon_vector_type">`, `Clang<"neon_polyvector_type">`
+/// and, from clang 22, `Clang<"ext_vector_type">` (an unknown attribute
+/// below it).
+fn is_cxx11_vector_type_attr(k: AttrKind) -> bool {
+    matches!(
+        k,
+        AttrKind::NEON_VECTOR_TYPE | AttrKind::NEON_POLYVECTOR_TYPE | AttrKind::EXT_VECTOR_TYPE
+    )
+}
+
+/// The name of vector type attribute `k`.
+fn vector_attr_name(k: AttrKind) -> &'static str {
+    match k {
+        AttrKind::NEON_VECTOR_TYPE => "neon_vector_type",
+        AttrKind::NEON_POLYVECTOR_TYPE => "neon_polyvector_type",
+        _ => "ext_vector_type",
     }
 }

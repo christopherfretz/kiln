@@ -2561,25 +2561,6 @@ impl Substituter<'_, '_, '_> {
         lbrace: Loc,
         rbrace: Loc,
     ) -> SubstResult<InitList> {
-        // An initializer-list constructor's one argument is the
-        // `std::initializer_list` built from the whole list
-        // ([dcl.init.list]/3.7, /5): the list is that one, not a list
-        // holding it (clang `TransformInitializer` unwraps
-        // `isStdInitListInitialization`). Rebuilt as `{{...}}`, a list
-        // whose single element initializes one `E` from the elements
-        // would be chosen ([over.match.list]/1.1), so
-        // `std::vector<std::pair<std::string, std::string>> v =
-        // {{"a", b}, {"c", d}}` in a template got one pair.
-        if self.sema.ast.exprs.construct_info(e).std_init_list {
-            let arg =
-                self.sema.ast.lists.iter::<ExprId>(self.sema.ast.exprs.construct_args(e)).next();
-            if let Some(b) = arg.and_then(|a| self.braced_source(a))
-                && self.sema.ast.exprs.get(b).kind() == ExprKind::InitListExpr
-            {
-                let l = self.init_list(b)?;
-                return Ok(InitList { items: l.items, lbrace, rbrace });
-            }
-        }
         let items: Vec<ExprId> = self
             .sema
             .ast
@@ -2587,6 +2568,25 @@ impl Substituter<'_, '_, '_> {
             .iter::<ExprId>(self.sema.ast.exprs.construct_args(e))
             .take_while(|&a| self.sema.ast.exprs.get(a).kind() != ExprKind::CXXDefaultArgExpr)
             .collect();
+        // An initializer-list constructor's one argument is the
+        // `std::initializer_list` over the whole braced list
+        // ([dcl.init.list]/3.7, /5): the list is that argument's, not a
+        // list holding it (clang `TransformInitializer` unwraps
+        // `isStdInitListInitialization`). Rebuilt as `{{...}}`, a list
+        // whose single element initializes one `E` from the elements
+        // would be chosen ([over.match.list]/1.1): `V v{"2", 1}` would be
+        // `V v{{"2", 1}}` and `{{"a", b}, {"c", d}}` one pair (WP-801,
+        // WP-804). An empty list is the value-initialized
+        // `std::initializer_list`, a list-initializing construct with no
+        // arguments (`V v{}`).
+        if self.sema.ast.exprs.construct_info(e).std_init_list
+            && let [a] = items.as_slice()
+            && let Some(b) = self.braced_source(*a)
+        {
+            let mut l = self.braced_list(b)?;
+            (l.lbrace, l.rbrace) = (lbrace, rbrace);
+            return Ok(l);
+        }
         let out = self.init_items(&items)?;
         Ok(InitList { items: out, lbrace, rbrace })
     }

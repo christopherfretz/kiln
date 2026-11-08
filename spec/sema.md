@@ -1971,8 +1971,19 @@ and returns the scope it names:
     mode sets the underlying type, from the fixed type or else `int`
     (clang `AddModeAttr` on an `EnumDecl`), so `enum E {X}
     __attribute__((mode(QI)))` has underlying type `signed char`. On a
-    dependent type the attribute is dropped (a deviation: clang applies
-    it at instantiation; `ext.gnu.mode/mode-dependent-run.cpp` is xfail).
+    dependent type the attribute stays on the declaration
+    (`AttrNode::MODE_DEFERRED`) and applies to the substituted type of
+    the instantiated variable, field, typedef or function parameter (a
+    pack's elements included; the instantiated function type is built
+    from those parameters), clang `instantiateDependentModeAttr`
+    (WP-807, WP-809). `mode` is a declaration attribute: in a type-id
+    that declares nothing it is dropped (`sizeof(char
+    __attribute__((mode(DI))))` is 1), with clang `ActOnTypeName`'s
+    -Wignored-attributes warning `'mode' attribute ignored when parsing
+    type` in `sizeof`/`alignof`, a C-style cast, a template argument and
+    a trailing return type, silently in a named cast, a new-type-id and
+    an alias-declaration's type-id (the alias's own attributes, after
+    its name, still apply); `ext.gnu.mode/mode-type-id-run.cpp`.
     Diagnostics (WP-187, `ext.vector/*-diagnostics.cpp`):
     - A type argument whose desugaring reaches a vector typedef stops at
       that typedef as written, with its scope: `'B' (aka 'X::v')`,
@@ -4596,15 +4607,21 @@ function) elsewhere.
   functions decayed and top-level cv removed; it must not be (a
   pointer to) an incomplete type other than cv `void` (clang's
   `CheckCXXThrowOperand`).
+- (WP-804) A class-type exception object (not a pointer) must not be
+  abstract ("cannot throw an object of abstract type 'T'", with the
+  pure virtual notes; [class.abstract]/3), and its destructor is
+  potentially invoked ([except.throw]/5): an inaccessible one is
+  "exception object of type 'T' has protected/private destructor" at
+  the operand, and a deleted one is the deleted-use error
+  (`mark_element_dtor_referenced`;
+  `expr.throw/abstract-and-inaccessible-dtor.cpp`). A non-trivial one is
+  odr-used, so an implicit one is defined in the translation unit, since
+  `__cxa_throw` is passed its complete-object destructor (WP-799,
+  `except.throw/rethrow-copy-implicit-dtor-run.cpp`).
 - The operand is copy-initialized into it after the implicit move
   ([class.copy.elision]/3), which applies only when the named local's
   scope does not extend past the innermost enclosing try-block
   (`thrown_var_in_scope`, WP-100).
-- A non-trivial destructor of a class exception object is odr-used
-  ([except.throw]/5; `use_exception_dtor`, clang `CheckCXXThrowOperand`):
-  its access and deletion are checked as for a temporary, and an
-  implicit one is defined in the translation unit, since `__cxa_throw`
-  is passed its complete-object destructor (WP-799).
 - In `?:`, a throw operand gives the other operand's type and value
   category ([expr.cond]/2).
 - The Oven treats a `throw` it reaches as not a constant expression,

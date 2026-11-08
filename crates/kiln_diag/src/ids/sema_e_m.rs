@@ -225,6 +225,7 @@ sema_integer_seq_too_long = Error (2) "integer sequence length {0} exceeds the i
 sema_internal_linkage_local_storage = Warning [IgnoredAttributes] (0) "'internal_linkage' attribute on a non-static local variable is ignored";
 sema_invalid_asm_value_for_constraint = Error (2) "value '{0}' out of range for constraint '{1}'";
 sema_invalid_complex_spec = Error (1) "'_Complex {0}' is invalid";
+sema_invalid_cpu_specific_dispatch_value = Error (2) "invalid option '{0}' for {1}";
 sema_invalid_decl_spec_in_nontype_parm = Error (0) "invalid declaration specifier in template non-type parameter";
 sema_invalid_declarator_global_scope = Error (1) "definition or redeclaration of '{0}' cannot name the global scope";
 sema_invalid_declarator_in_function = Error (1) "definition or redeclaration of '{0}' not allowed inside a function";
@@ -324,6 +325,17 @@ sema_mptr_to_reference = Error (2) "'{0}' declared as a member pointer to a refe
 sema_mptr_to_void = Error (1) "'{0}' declared as a member pointer to void";
 sema_multiple_default_labels = Error (0) "multiple default labels in one switch";
 sema_multiple_final_overriders = Error (2) "virtual function '{0}' has more than one final overrider in {1}";
+sema_multiversion_not_supported = Error (1) "function multiversioning with '{0}' is not supported yet";
+sema_musttail_callconv_mismatch = Error (1) "cannot perform a tail call to function{0} because it uses an incompatible calling convention";
+sema_musttail_member_mismatch = Error (3) "{0:non-member|static member|non-static member|pointer-to-member} function cannot perform a tail call to {1:non-member|static member|non-static member|pointer-to-member} function{2}";
+sema_musttail_mismatch = Error (1) "cannot perform a tail call to function{0} because its signature is incompatible with the calling function";
+// clang `[[clang::musttail]]` (WP-809)
+sema_musttail_needs_call = Error (1) "'{0}' attribute requires that the return value is the result of a function call";
+sema_musttail_needs_trivial_args = Error (0) "tail call requires that the return value, all parameters, and any temporaries created by the expression are trivially destructible";
+sema_musttail_no_return = Error (1) "'{0}' attribute may not be used with no-return-attribute functions";
+sema_musttail_no_variadic = Error (1) "'{0}' attribute may not be used with variadic functions";
+sema_musttail_scope = Error (0) "cannot perform a tail call from this return statement";
+sema_musttail_structors_forbidden = Error (2) "cannot perform a tail call {0:from|to} a {1:constructor|destructor}";
 sema_mutable_const = Error (0) "'mutable' and 'const' cannot be mixed";
 sema_mutable_function = Error (0) "'mutable' cannot be applied to functions";
 // [dcl.stc]/9 (WP-327)

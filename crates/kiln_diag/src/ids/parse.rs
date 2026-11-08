@@ -142,6 +142,7 @@ parse_pragma_loop_invalid_option = Error (2) "{0:invalid|missing} option{1}; exp
 parse_pragma_loop_invalid_vectorize_option = Error (0) "vectorize_width loop hint malformed; use vectorize_width(X, fixed) or vectorize_width(X, scalable) where X is an integer, or vectorize_width('fixed' or 'scalable')";
 parse_pragma_loop_missing_argument = Error (1) "missing argument; expected {0}";
 parse_pragma_misplaced_in_decl = Error (1) "this pragma cannot appear in {0} declaration";
+parse_pragma_ms_struct_malformed = Warning [IgnoredPragmas] (0) "incorrect use of '#pragma ms_struct on|off' - ignored";
 parse_pragma_stdc_expected_eod = ExtWarn [UnknownPragmas] (0) "expected end of directive in pragma";
 parse_pragma_stdc_on_off = ExtWarn [UnknownPragmas] (0) "expected 'ON' or 'OFF' or 'DEFAULT' in pragma";
 parse_pragma_stdc_unknown = ExtWarn [UnknownPragmas] (0) "unknown pragma in STDC namespace";

@@ -1,0 +1,22 @@
+struct Counted {
+  int v;
+  Counted();
+};
+extern int ctor_runs;
+int next_value();
+__attribute__((selectany)) int answer = 42;
+[[gnu::selectany]] const int *ptr = &answer;
+__attribute__((selectany)) extern const int limit = 7;
+__attribute__((selectany)) int table[3] = {1, 2, 3};
+__attribute__((selectany)) int dynamic = next_value();
+__attribute__((selectany)) Counted counted;
+struct Holder { static int member; };
+__attribute__((selectany)) int Holder::member = 5;
+__attribute__((selectany)) thread_local int per_thread = 9;
+int *other_answer();
+const int *other_limit();
+int *other_table();
+int *other_dynamic();
+Counted *other_counted();
+int *other_member();
+int *other_per_thread();

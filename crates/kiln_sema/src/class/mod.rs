@@ -281,6 +281,17 @@ impl Sema<'_, '_> {
         friend_loc: Loc,
     ) -> Option<DeclId> {
         let base = self.ctad_friend_check(ds, base, d);
+        if let Some(d) = d {
+            // A non-default `target_version` friend: clang crashes on a
+            // definition and drops a later ordinary definition of the
+            // function (src/fmv.rs).
+            let attrs: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+            if let Some(at) = self.fmv_hidden_version(&attrs) {
+                let msg =
+                    self.diag(DiagId::sema_multiversion_not_supported, at).arg("target_version");
+                self.emit(msg);
+            }
+        }
         self.declare_friend(ds, base, d, friend_loc)
     }
 

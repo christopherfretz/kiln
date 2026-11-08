@@ -113,6 +113,8 @@ const INSTR: &str = "instrumentation or hardening only; dropping it changes no s
 const HINT: &str = "optimization hint; dropping it is a valid refinement";
 const INLINE: &str = "inlining or call-optimization hint; dropping it changes no semantics";
 const DIAG_REJECT: &str = "only makes clang diagnose a use; no code generation effect";
+const MULTIVERSION: &str =
+    "function multiversioning, which needs resolvers and ifuncs on x86-64 (AArch64: WP-810)";
 
 /// The rows, sorted by name.
 pub static TABLE: &[Row] = &[
@@ -137,7 +139,6 @@ pub static TABLE: &[Row] = &[
     r("annotate", G | CL, C, ANALYSIS),
     r("annotate_type", CL, C, ANALYSIS),
     r("argument_with_type_tag", G | CL, C, ANALYSIS),
-    r("arm_sve_vector_bits", G, A, "defines a vector or matrix type"),
     r("assert_capability", G | CL, C, TSA),
     r("assert_exclusive_lock", G, C, TSA),
     r("assert_shared_capability", G | CL, C, TSA),
@@ -152,7 +153,6 @@ pub static TABLE: &[Row] = &[
     r("bounded", G, C, OFFLOAD),
     r("btf_decl_tag", G | CL, B, DEBUG),
     r("btf_type_tag", G | CL, B, DEBUG),
-    r("builtin_alias", CL, A, "maps the declaration to a builtin"),
     r("callable_when", G | CL, C, ANALYSIS),
     r("callback", G | CL, B, HINT),
     r("called_once", G | CL, C, ANALYSIS),
@@ -166,10 +166,6 @@ pub static TABLE: &[Row] = &[
     r("cfi_canonical_jump_table", G | CL, B, INSTR),
     r22("cfi_salt", G | CL, B, INSTR),
     r22("cfi_unchecked_callee", G | CL, B, INSTR),
-    // clang spells it `__clang_arm_builtin_alias` (the name, its leading
-    // `__` trimmed as sema trims it).
-    rt("clang_arm_builtin_alias", [G | CL, G | CL, 0, 0], A, "maps the declaration to a builtin"),
-    r("clang_builtin_alias", G, A, "maps the declaration to a builtin"),
     r("clspv_libclc_builtin", G | CL, C, OFFLOAD),
     r22("cluster_dims", G, C, OFFLOAD),
     r("code_align", G | CL, B, HINT),
@@ -187,8 +183,8 @@ pub static TABLE: &[Row] = &[
     r("coro_wrapper", G | CL, C, ANALYSIS),
     r("counted_by", G | CL, C, ANALYSIS),
     r("counted_by_or_null", G | CL, C, ANALYSIS),
-    r("cpu_dispatch", G | CL, A, "function multiversioning"),
-    r("cpu_specific", G | CL, A, "function multiversioning"),
+    rt("cpu_dispatch", [0, 0, G | CL, G | CL], A, MULTIVERSION),
+    rt("cpu_specific", [0, 0, G | CL, G | CL], A, MULTIVERSION),
     r("cudart_builtin", G, C, OFFLOAD),
     r("device", G, C, OFFLOAD),
     r("device_builtin", G, C, OFFLOAD),
@@ -204,14 +200,12 @@ pub static TABLE: &[Row] = &[
     r("exclusive_lock_function", G, C, TSA),
     r("exclusive_locks_required", G | CL, C, TSA),
     r("exclusive_trylock_function", G, C, TSA),
-    r22("ext_vector_type", CL, A, "defines a vector type (only the GNU spelling is implemented)"),
     r("external_source_symbol", G | CL, C, ANALYSIS),
     r("flatten", G | GS, B, INLINE),
     rt("force_align_arg_pointer", [0, 0, G | GS, G | GS], B, HINT),
     r("format_arg", G | GS, C, ANALYSIS),
     r22("format_matches", G | GS, C, ANALYSIS),
     rt("function_return", [0, 0, G | GS, G | GS], B, INSTR),
-    r22("gcc_struct", G | GS, A, "selects the MS or GCC bit-field layout"),
     r("global", G, C, OFFLOAD),
     r22("grid_constant", G, C, OFFLOAD),
     r("guarded_by", G, C, TSA),
@@ -239,15 +233,6 @@ pub static TABLE: &[Row] = &[
     r("mig_server_routine", G | CL, C, ANALYSIS),
     rt("model", [0, 0, 0, G | GS], A, "x86-64 code model of the variable's section"),
     r22("modular_format", G | CL, B, HINT),
-    r("ms_struct", G | GS, A, "selects the MS or GCC bit-field layout"),
-    r("musttail", G | CL, A, "guaranteed tail call"),
-    r(
-        "neon_polyvector_type",
-        CL,
-        A,
-        "defines a vector type (only the GNU spelling is implemented)",
-    ),
-    r("neon_vector_type", CL, A, "defines a vector type (only the GNU spelling is implemented)"),
     r("no_address_safety_analysis", G | GS, B, SAN),
     r22("no_cluster", G, C, OFFLOAD),
     r("no_instrument_function", G | GS, B, INSTR),
@@ -349,7 +334,6 @@ pub static TABLE: &[Row] = &[
     r("return_typestate", G | CL, C, ANALYSIS),
     r("riscv_rvv_vector_bits", G, A, "defines a vector or matrix type"),
     r("scoped_lockable", G | CL, C, TSA),
-    r("selectany", G | GS, A, "COMDAT / linkonce linkage for the variable"),
     r("sentinel", G | GS, C, ANALYSIS),
     r("set_typestate", G | CL, C, ANALYSIS),
     r("shared", G, C, OFFLOAD),
@@ -384,10 +368,9 @@ pub static TABLE: &[Row] = &[
     r("sycl_kernel", G | CL, C, OFFLOAD),
     r22("sycl_kernel_entry_point", CL, C, OFFLOAD),
     r("sycl_special_class", G | CL, C, OFFLOAD),
-    r("target_clones", G | GS, A, "function multiversioning"),
-    rt("target_version", [G | GS, G | GS, G | GS, 0], A, "function multiversioning"),
+    rt("target_clones", [0, 0, G | GS, G | GS], A, MULTIVERSION),
+    rt("target_version", [0, 0, G | GS, 0], A, MULTIVERSION),
     r("test_typestate", G | CL, C, ANALYSIS),
-    r("transparent_union", G | GS, C, "clang ignores it in C++ (-Wignored-attributes)"),
     r("try_acquire_capability", G | CL, C, TSA),
     r("try_acquire_shared_capability", G | CL, C, TSA),
     r("type_tag_for_datatype", G | CL, C, ANALYSIS),
@@ -416,11 +399,15 @@ const CLANG_SCOPED: &[&str] = &[
     "disable_tail_calls",
     "enum_extensibility",
     "exclude_from_explicit_instantiation",
+    "ext_vector_type",
     "fallthrough",
     "flag_enum",
     "internal_linkage",
     "min_vector_width",
     "minsize",
+    "musttail",
+    "neon_polyvector_type",
+    "neon_vector_type",
     "no_builtin",
     "no_destroy",
     "optnone",
@@ -473,11 +460,14 @@ pub fn attribute_support(
         let gnu = syntax == AttrSyntax::Gnu || scope == Some("gnu");
         let std = scope.is_none() && syntax != AttrSyntax::Gnu;
         // [dcl.attr.indet] is C++26; P3475R2 removes `carries_dependency`
-        // from C++26 (WP-743).
+        // from C++26 (WP-743). `gcc_struct` and `[[clang::ext_vector_type]]`
+        // are new in clang 22 (WP-809).
         if let Some(k) =
             crate::decl::attr_kind_of(name, std, gnu, clang_scope, syntax).filter(|&k| {
                 (k != AttrKind::INDETERMINATE || cxx26)
                     && (k != AttrKind::CARRIES_DEPENDENCY || !cxx26)
+                    && (k != AttrKind::GCC_STRUCT || compat >= 22)
+                    && (k != AttrKind::EXT_VECTOR_TYPE || !clang_scope || compat >= 22)
             })
         {
             return Support::Implemented(k);
@@ -494,6 +484,22 @@ pub fn attribute_support(
     // release, not the unknown-attribute warning (WP-808 follow-up).
     if name == "interrupt" && x86 && sp & (G | GS) != 0 {
         return Support::Unsupported;
+    }
+    // WP-810: dispatched before the triage (`Sema::builtin_alias_attribute`,
+    // `Sema::fmv_attribute`); the x86-64 multiversioning spellings are
+    // class-A rows.
+    let wp810 = match name {
+        "builtin_alias" if sp == CL => Some(AttrKind::BUILTIN_ALIAS),
+        "clang_builtin_alias" if sp == G => Some(AttrKind::BUILTIN_ALIAS),
+        "clang_arm_builtin_alias" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::BUILTIN_ALIAS),
+        "target_version" if !x86 && sp & (G | GS) != 0 => Some(AttrKind::TARGET_VERSION),
+        "target_clones" if !x86 && sp & (G | GS) != 0 => Some(AttrKind::TARGET_CLONES),
+        "cpu_dispatch" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::CPU_DISPATCH),
+        "cpu_specific" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::CPU_SPECIFIC),
+        _ => None,
+    };
+    if let Some(k) = wp810 {
+        return Support::Implemented(k);
     }
     match row(name) {
         Some(r) if sp != 0 && r.spellings_at(compat, x86) & sp != 0 => match r.class {
@@ -541,7 +547,17 @@ mod tests {
         assert_eq!(s("no_sanitize_address", x, Some("gnu"), 19), Support::Ignored(B));
         assert_eq!(s("no_sanitize_address", x, Some("clang"), 22), Support::Unknown);
         // Class A: rejected.
-        assert_eq!(s("selectany", g, None, 22), Support::Unsupported);
+        assert_eq!(s("address_space", g, None, 22), Support::Unsupported);
+        assert_eq!(s("address_space", x, Some("clang"), 19), Support::Unsupported);
+        // Implemented by WP-809, some spellings only from clang 22.
+        assert!(matches!(s("selectany", g, None, 22), Support::Implemented(_)));
+        assert!(matches!(s("musttail", x, Some("clang"), 19), Support::Implemented(_)));
+        assert!(matches!(s("neon_vector_type", x, Some("clang"), 19), Support::Implemented(_)));
+        assert_eq!(s("gcc_struct", g, None, 19), Support::Unknown);
+        assert!(matches!(s("gcc_struct", g, None, 22), Support::Implemented(_)));
+        assert_eq!(s("ext_vector_type", x, Some("clang"), 19), Support::Unknown);
+        assert!(matches!(s("ext_vector_type", x, Some("clang"), 22), Support::Implemented(_)));
+        assert!(matches!(s("ext_vector_type", g, None, 19), Support::Implemented(_)));
         assert!(matches!(s("cleanup", g, None, 22), Support::Implemented(_)));
         assert!(matches!(s("mode", x, Some("gnu"), 19), Support::Implemented(_)));
         assert_eq!(s("swiftcall", x, Some("clang"), 22), Support::Unsupported);
@@ -580,6 +596,20 @@ mod tests {
             Support::Implemented(_)
         ));
         assert_eq!(s("not_an_attribute", g, None, 22), Support::Unknown);
+        // WP-810: implemented on AArch64; multiversioning is class A on x86-64.
+        assert!(matches!(s("arm_sve_vector_bits", g, None, 22), Support::Implemented(_)));
+        assert!(matches!(
+            s("clang_arm_builtin_alias", x, Some("clang"), 19),
+            Support::Implemented(_)
+        ));
+        assert!(matches!(s("target_version", x, Some("gnu"), 22), Support::Implemented(_)));
+        let x86 = |n, syn, sc, c| attribute_support(n, syn, sc, c, true, true);
+        assert_eq!(x86("target_clones", g, None, 22), Support::Unsupported);
+        assert_eq!(x86("target_version", g, None, 19), Support::Unsupported);
+        assert_eq!(x86("target_version", g, None, 22), Support::Unknown);
+        assert_eq!(x86("cpu_dispatch", x, Some("clang"), 19), Support::Unsupported);
+        assert_eq!(x86("clang_arm_builtin_alias", g, None, 19), Support::Unknown);
+        assert!(matches!(x86("clang_builtin_alias", g, None, 19), Support::Implemented(_)));
     }
 
     /// The conventions kiln does not lower yet stay class A (WP-808

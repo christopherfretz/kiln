@@ -279,6 +279,30 @@ impl AttrKind {
     /// its name is mangled as C++'s even with C language linkage, and it
     /// may overload a function with C language linkage.
     pub const OVERLOADABLE: AttrKind = AttrKind(187);
+    /// clang `[[clang::musttail]]` / GNU `musttail` on a return statement
+    /// (clang `MustTailAttr`; WP-809): the returned call is emitted as a
+    /// `musttail call` followed by `ret`. Kept on the `AttributedStmt`
+    /// only once `Sema::check_musttail` accepts it.
+    pub const MUSTTAIL: AttrKind = AttrKind(196);
+    /// GNU `transparent_union` (clang `TransparentUnionAttr`, a C-only
+    /// attribute; WP-809). In C++ every occurrence is ignored with a
+    /// warning, but clang's delayed check of a class-head occurrence on a
+    /// union definition still keeps it when the fields qualify: such a
+    /// union is then passed by value as its first field (clang
+    /// `useFirstFieldIfTransparentUnion`). Kept on the union only then.
+    pub const TRANSPARENT_UNION: AttrKind = AttrKind(197);
+    /// GNU / Microsoft `selectany` on a variable with external linkage
+    /// (clang `SelectAnyAttr`, WP-809): its definition is `weak_odr` in a
+    /// comdat of its own, so definitions in several translation units
+    /// fold into one object.
+    pub const SELECTANY: AttrKind = AttrKind(198);
+    /// GNU `ms_struct` on a class, or implied by `#pragma ms_struct on`
+    /// (clang `MSStructAttr`, WP-809): the record uses the Microsoft
+    /// bit-field layout rules within the Itanium layout.
+    pub const MS_STRUCT: AttrKind = AttrKind(199);
+    /// GNU `gcc_struct` (clang 22 `GCCStructAttr`, WP-809): the record
+    /// uses the target's default layout; conflicts with `ms_struct`.
+    pub const GCC_STRUCT: AttrKind = AttrKind(215);
     /// GNU `retain` on a function or variable (clang `RetainAttr`):
     /// an emitted entity is also added to `@llvm.used`, so the linker's
     /// section garbage collection keeps it (WP-805).
@@ -317,6 +341,37 @@ impl AttrKind {
     /// `,`-joined (`*` for the wildcard) (WP-808).
     pub const NO_BUILTIN: AttrKind = AttrKind(213);
 
+    /// GNU `arm_sve_vector_bits(N)` on a typedef of a sizeless SVE type:
+    /// the fixed-length vector type of N bits (WP-810; consumed into the
+    /// declared type like [`AttrKind::VECTOR_SIZE`]; `a` the argument
+    /// expression).
+    pub const ARM_SVE_VECTOR_BITS: AttrKind = AttrKind(220);
+    /// clang `__clang_arm_builtin_alias(B)` (`ArmBuiltinAliasAttr`) or
+    /// `clang_builtin_alias(B)` / `[[clang::builtin_alias(B)]]`
+    /// (`BuiltinAliasAttr`) on a function (WP-810): a call of the function
+    /// is a call of the `AArch64` ACLE builtin `B` (`__builtin_sve_*`,
+    /// `__builtin_sme_*`), with the function's declared signature; it
+    /// cannot be defined or have its address taken. `a` = the `Symbol`
+    /// of `B`, `b` = 1 for the `__clang_arm_builtin_alias` spelling.
+    pub const BUILTIN_ALIAS: AttrKind = AttrKind(221);
+    /// GNU `target_version("S")` (`TargetVersionAttr`, `AArch64` function
+    /// multiversioning; WP-810). `a` = the literal's `StringLitId`, `b` =
+    /// the literal's `Loc`. Kept only on a default version (`S` trimmed is
+    /// `"default"`): kiln, like clang without the `fmv` target feature,
+    /// hides a non-default version entirely.
+    pub const TARGET_VERSION: AttrKind = AttrKind(222);
+    /// GNU `target_clones("A", ...)` (`TargetClonesAttr`; WP-810). On
+    /// `AArch64` without `fmv` the function is an ordinary function; `a`,
+    /// `b` unused.
+    pub const TARGET_CLONES: AttrKind = AttrKind(223);
+    /// `cpu_dispatch(...)` / `cpu_specific(...)` (`CPUDispatchAttr`,
+    /// `CPUSpecificAttr`; WP-810): never attached (invalid on `AArch64`,
+    /// not supported on x86); `a` = the `Symbol` of the first CPU name,
+    /// `b` = its `Loc`.
+    pub const CPU_DISPATCH: AttrKind = AttrKind(224);
+    /// See [`AttrKind::CPU_DISPATCH`].
+    pub const CPU_SPECIFIC: AttrKind = AttrKind(225);
+
     /// Whether this is a calling-convention or other function type
     /// attribute sema consumes into the type's
     /// [`crate::types::FuncInfo`] ([`AttrKind::CALLING_CONV`],
@@ -337,6 +392,7 @@ impl AttrKind {
                 | AttrKind::EXT_VECTOR_TYPE
                 | AttrKind::NEON_VECTOR_TYPE
                 | AttrKind::NEON_POLYVECTOR_TYPE
+                | AttrKind::ARM_SVE_VECTOR_BITS
                 | AttrKind::MODE
         )
     }

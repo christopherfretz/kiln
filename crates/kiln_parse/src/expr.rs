@@ -2469,6 +2469,7 @@ impl Parser<'_, '_> {
     fn parse_named_cast(&mut self, style: CastStyle) -> PExpr {
         let loc = self.bump().span.lo;
         self.expect(Punct::Less)?;
+        self.named_cast_type_id = true;
         let ty = self.parse_type_id()?;
         self.expect(Punct::Greater)?;
         let open = self.expect(Punct::LParen)?;

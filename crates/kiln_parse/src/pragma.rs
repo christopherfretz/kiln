@@ -25,7 +25,7 @@ const IGNORED: &[&str] = &["comment", "unused", "omp"];
 
 /// Pragmas clang knows that change the meaning of the translation unit
 /// and that kiln does not implement yet.
-const UNSUPPORTED: &[&str] = &["align", "options", "ms_struct", "redefine_extname"];
+const UNSUPPORTED: &[&str] = &["align", "options", "redefine_extname"];
 
 /// `#pragma clang ...` pragmas accepted without effect.
 const CLANG_IGNORED: &[&str] =
@@ -130,6 +130,7 @@ pub(crate) fn classify(
         },
         "float_control" => crate::fp_pragma::float_control(cx, loc, rest, end),
         "weak" => weak(cx, loc, rest, end),
+        "ms_struct" => ms_struct(cx, rest, end),
         "unroll" => unroll_hint(cx, "unroll", start, loc, rest, end),
         "nounroll" => unroll_hint(cx, "nounroll", start, loc, rest, end),
         "unroll_and_jam" => unroll_hint(cx, "unroll_and_jam", start, loc, rest, end),
@@ -179,6 +180,25 @@ fn weak(cx: &PragmaCx<'_, '_>, loc: Loc, rest: &[Token], end: Loc) -> Option<Eve
         return None;
     }
     Some(Event::PragmaWeak { name, loc: rest[0].span.lo })
+}
+
+/// `#pragma ms_struct on|off|reset` (clang's `PragmaMSStructHandler`):
+/// anything else, or tokens after it, are ignored with a warning.
+fn ms_struct(cx: &PragmaCx<'_, '_>, rest: &[Token], end: Loc) -> Option<Event> {
+    let at = |i: usize| rest.get(i).map_or(end, |t| t.span.lo);
+    let on = match cx.word(rest.first()) {
+        Some("on") => true,
+        Some("off" | "reset") => false,
+        _ => {
+            cx.report(DiagId::parse_pragma_ms_struct_malformed, at(0));
+            return None;
+        }
+    };
+    if rest.len() > 1 {
+        cx.report_what(DiagId::parse_pragma_extra_tokens, "ms_struct", at(1));
+        return None;
+    }
+    Some(Event::PragmaMsStruct { on })
 }
 
 /// `#pragma GCC visibility push(v)` / `pop` (clang's
@@ -373,6 +393,7 @@ impl Parser<'_, '_> {
                 self.unsupported(what, span.lo);
             }
             Event::PragmaPack { loc, args } => self.s.act_on_pragma_pack(loc, args),
+            Event::PragmaMsStruct { on } => self.s.act_on_pragma_ms_struct(on),
             Event::LoopHints { before, hints } => {
                 // Applied when the statement at `before` is parsed.
                 if let Some((_, v)) = self.loop_hints.iter_mut().find(|(l, _)| *l == before) {

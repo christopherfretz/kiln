@@ -63,7 +63,12 @@ impl Cg<'_> {
         let attr = d.and_then(|d| self.target_attr_features(d));
         let attr = attr.iter().flat_map(|a| &a.features);
         for e in self.opts.target_features.iter().chain(attr) {
-            if let Some((sign, name)) = e.split_at_checked(1) {
+            // clang's driver adds its `-fmv` after any `-Xclang
+            // -target-feature -Xclang +fmv`, so `fmv` stays off (WP-810,
+            // src/fmv.rs in `kiln_sema`).
+            if let Some((sign, name)) = e.split_at_checked(1)
+                && name != "fmv"
+            {
                 f.insert(name.to_owned(), sign == "+");
             }
         }

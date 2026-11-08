@@ -784,6 +784,29 @@ impl Cg<'_> {
         if ft == to { v } else { self.cast(CastOp::ZExt, v, to) }
     }
 
+    /// clang `CK_BitCast` of a vector `v` to `t`: a plain
+    /// bitcast, except between fixed-length and scalable vectors (WP-810):
+    /// a vector insert or extract when the elements pair up, else through
+    /// a `saved-value` temporary.
+    fn vector_bitcast(&mut self, v: V, t: LTy) -> V {
+        let from = self.f.fir.ty(&self.m, v);
+        let scal = |m: &kiln_llvm::Module, x: LTy| m.types.vector_info(x).is_some_and(|i| i.2);
+        let (fs, ts) = (scal(&self.m, from), scal(&self.m, t));
+        if fs == ts {
+            return self.cast(CastOp::BitCast, v, t);
+        }
+        let r = if ts { self.sve_to_scalable(v, t) } else { self.sve_to_fixed(v, t) };
+        if let Some(r) = r {
+            return r;
+        }
+        // `CreateDefaultAlignTempAlloca`: the preferred alignment, natural
+        // (the size) for a fixed vector, 16 for a scalable one.
+        let align = if fs { 16 } else { self.alloc_size(from).next_power_of_two() };
+        let a = self.f.fir.alloca(from, align);
+        self.store(v, a, align, false);
+        self.load(t, a, align, false)
+    }
+
     fn emit_cast(&mut self, e: ExprId) -> R<Option<V>> {
         let ast = self.ast;
         let n = *ast.exprs.get(e);
@@ -800,7 +823,7 @@ impl Cg<'_> {
             CastKind::BitCast if self.vec_of(q).is_some() || self.vec_of(sq).is_some() => {
                 let v = self.emit_scalar(s)?;
                 let t = self.lty(q);
-                self.cast(CastOp::BitCast, v, t)
+                self.vector_bitcast(v, t)
             }
             // clang `CK_VectorSplat`: `CreateVectorSplat`.
             CastKind::VectorSplat => {
@@ -3253,6 +3276,13 @@ impl Cg<'_> {
 
     /// clang `EmitCallExpr`; an aggregate result is written to `dest`.
     pub(crate) fn emit_call(&mut self, e: ExprId, dest: Option<Addr>) -> R<Option<V>> {
+        let outer = self.f.call_loc.replace(self.ast.begin_loc(e));
+        let r = self.emit_call_inner(e, dest);
+        self.f.call_loc = outer;
+        r
+    }
+
+    fn emit_call_inner(&mut self, e: ExprId, dest: Option<Addr>) -> R<Option<V>> {
         let ast = self.ast;
         let callee_e = ast.exprs.callee(e);
         let mut direct = None;
@@ -3310,6 +3340,13 @@ impl Cg<'_> {
                     _ => break,
                 }
             }
+        }
+        // WP-810: a call of a builtin alias (`arm_sve.h`'s intrinsics) lowers
+        // as the builtin it names, or is a hard error; never an external call.
+        if let Some(d) = direct
+            && let Some((b, _)) = ast.builtin_alias(d)
+        {
+            return self.emit_sve_alias(d, b, e);
         }
         // A builtin is never emitted as a function (spec/codegen.md §3, "Calls"):
         // it folds, lowers inline, or calls the library function it names.
@@ -3403,6 +3440,7 @@ impl Cg<'_> {
             None => (&vals, &args),
         };
         let mark = self.f.fir.inst_count();
+        self.arm_musttail(e);
         let r = self.call_vals_ret(&sig, callee, fid, None, cv, ca, dest, &extra, &ret_extra)?;
         // WP-806: a library builtin's call takes the FP scope's fast-math
         // flags (clang `EmitBuiltinExpr`'s `CGFPOptionsRAII`).
@@ -3445,6 +3483,56 @@ impl Cg<'_> {
         (ty_nr || gnu || !virt, true)
     }
 
+    /// The returned call `e` of a `[[clang::musttail]]` return is about
+    /// to be emitted, its arguments evaluated (clang `EmitCall`'s
+    /// `IsMustTail`).
+    pub(crate) fn arm_musttail(&mut self, e: ExprId) {
+        if self.f.musttail == Some(e) {
+            self.f.musttail = None;
+            self.f.musttail_armed = true;
+        }
+    }
+
+    /// clang `EmitCall` of a `musttail` call `r` (WP-809): the call is
+    /// marked `musttail` and returned at once (`ret` of its raw result,
+    /// or `ret void`), and what follows goes to a fresh unreachable block
+    /// with an undefined result of type `rq` (`GetUndefRValue`; an
+    /// aggregate gets its unused temporary). A call that became an
+    /// `invoke` skips over cleanups, which LLVM cannot tail-call.
+    fn finish_musttail(
+        &mut self,
+        r: V,
+        rq: QualType,
+        rty: LTy,
+        loc: Option<kiln_source::Loc>,
+    ) -> R<Option<V>> {
+        let i = Fir::last_inst(r);
+        if !matches!(self.f.fir.op(i), Op::Call { .. }) {
+            return err(loc, "cannot compile this tail call skipping over cleanups yet");
+        }
+        self.f.fir.set_musttail(i);
+        let v = (rty != LTy::VOID).then_some(r);
+        self.f.fir.push(Op::Ret { v }, LTy::VOID);
+        self.f.fir.set_cur(None);
+        let cont = self.f.fir.create_block();
+        self.emit_block(cont, false);
+        if self.ast.types.is_void(rq) {
+            return Ok(None);
+        }
+        if self.is_aggregate(rq) || self.is_atomic_aggregate(rq) {
+            self.temp(rq);
+            return Ok(None);
+        }
+        if let Some(eq) = self.cx_elem(rq) {
+            let et = self.lty(eq);
+            let u = V::C(self.m.const_undef(et));
+            self.f.cx_ret = Some((u, u));
+            return Ok(None);
+        }
+        let t = self.lty(rq);
+        Ok(Some(V::C(self.m.const_undef(t))))
+    }
+
     /// clang `EmitCall` of a call that does not return: `unreachable`,
     /// then a dummy block for the unreachable code that follows.
     pub(crate) fn finish_noreturn_call(&mut self) {
@@ -3485,24 +3573,6 @@ impl Cg<'_> {
         }
         let sig = self.with_object_sizes(sig.clone(), fty, &ps, extern_c);
         Some((sig, cvals, cargs))
-    }
-
-    /// clang `EmitCallArgs` + `EmitCall`: evaluates `args` and calls
-    /// `callee` with signature `sig` (`this`: the implicit object
-    /// argument; `extra`: call-site attributes of a library builtin).
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn call_with(
-        &mut self,
-        sig: &Sig,
-        callee: V,
-        fid: Option<FuncId>,
-        this: Option<V>,
-        args: &[ExprId],
-        dest: Option<Addr>,
-        extra: &[Attr],
-    ) -> R<Option<V>> {
-        let vals = self.emit_call_args(sig, args)?;
-        self.call_vals(sig, callee, fid, this, &vals, args, dest, extra)
     }
 
     /// clang `EmitCallArgs`: evaluates every argument, aggregates into
@@ -3591,7 +3661,9 @@ impl Cg<'_> {
         extra: &[Attr],
         ret_extra: &[Attr],
     ) -> R<Option<V>> {
+        let musttail = std::mem::take(&mut self.f.musttail_armed);
         self.f.vector_width = self.f.vector_width.max(sig.info.max_vector_width);
+        self.check_pure_scalable(sig, self.f.call_loc)?;
         let rq = sig.ret;
         let mut ir_args = Vec::new();
         let mut sret_addr = None;
@@ -3660,6 +3732,10 @@ impl Cg<'_> {
             ..CallOpts::default()
         };
         let r = self.emit_call_op(sig.fn_ty, callee, ir_args, opts, rty, fid, sig.nothrow);
+        if musttail {
+            let loc = args.first().and_then(|&a| self.loc_of(a));
+            return self.finish_musttail(r, rq, rty, loc);
+        }
         if let Some(a) = sret_addr {
             // clang `convertTempToRValue`: a scalar returned indirectly
             // (a vector wider than the registers) is loaded back.
@@ -3735,6 +3811,17 @@ impl Cg<'_> {
             else {
                 unreachable!()
             };
+            // clang `EmitCall`: a fixed-length SVE result of the scalable
+            // type's element type is extracted (WP-810); a predicate goes
+            // through memory.
+            let lt = self.lty(rq);
+            if matches!(coerce, kiln_abi::irtype::IrType::ScalableVector(..))
+                && self.m.types.vector_info(rty).map(|x| x.0)
+                    == self.m.types.vector_info(lt).map(|x| x.0)
+                && let Some(v) = self.sve_to_fixed(r, lt)
+            {
+                return Ok(Some(v));
+            }
             let t = self.temp(rq);
             let (size, _) = self.size_align(rq);
             self.coerced_store_sized(r, &coerce, t, size);

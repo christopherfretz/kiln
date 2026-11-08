@@ -429,6 +429,13 @@ impl<'a> Layouter<'a> {
                 if t.max_vector_align_bits != 0 {
                     align = align.min(t.max_vector_align_bits);
                 }
+                // clang: a fixed-length SVE predicate is 2-byte aligned, a
+                // fixed-length SVE vector 16-byte.
+                match kind {
+                    VectorKind::SveFixedPredicate => align = 16,
+                    VectorKind::SveFixedData => align = 128,
+                    _ => {}
+                }
                 Info { width, align }
             }
             TypeView::Typedef { decl, underlying } => {

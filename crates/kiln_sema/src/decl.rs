@@ -35,6 +35,7 @@ use crate::overload::redecl::NewFn;
 use crate::qualified_decl::QualifiedDecl;
 use crate::scope::{Ns, Scope, ScopeKind};
 use crate::type_diff::DiffArgs as _;
+use crate::vector::VectorAttrPos;
 use crate::{Sema, target};
 use kiln_ast::templates::is_template_kind;
 use kiln_oven::{EvalContext, EvalKind};
@@ -1766,17 +1767,10 @@ impl Sema<'_, '_> {
         attrs.extend(d.attrs.iter().copied());
         // [dcl.align]/1: not on a function parameter.
         self.reject_alignas(&mut attrs, 0);
-        ty = self.apply_vector_attrs(ty, &mut attrs, false);
-        // A parameter's type is substituted with its function's.
-        attrs.retain(|&a| {
-            let n = *self.ast.attrs.get(a);
-            if n.kind != AttrKind::MODE {
-                return true;
-            }
-            let what = "a 'mode' attribute on a parameter of dependent type";
-            self.emit(self.diag(DiagId::parse_unsupported, n.loc).arg(what));
-            false
-        });
+        ty = self.apply_vector_attrs(ty, &mut attrs, false, VectorAttrPos::Decl);
+        // A `mode` left in `attrs` is on a dependent type: kept on the
+        // parameter, applied when it is substituted (clang
+        // `instantiateDependentModeAttr`; `Subst::param_infos`).
         ty = self.apply_noreturn_attrs(ty, &attrs);
         ty = self.apply_cc_attrs(ty, &mut attrs, true);
         let declared = ty;
@@ -2724,6 +2718,24 @@ impl Sema<'_, '_> {
         if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
             self.check_explicit_inst_specifiers(ds, ty);
         }
+        // WP-810: a non-default `target_version` version is hidden, as
+        // clang hides it without the `fmv` target feature (src/fmv.rs).
+        if !ds.is_typedef() && self.ast.types.is_function(ty) {
+            let attrs: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+            if let Some(at) = self.fmv_hidden_version(&attrs) {
+                if d.ctx == DeclaratorContext::Member {
+                    // clang crashes on this (a friend: `act_on_friend`).
+                    let msg = self
+                        .diag(DiagId::sema_multiversion_not_supported, at)
+                        .arg("target_version");
+                    self.emit(msg);
+                } else {
+                    self.fmv_attached(true, &attrs, true);
+                    self.templ.cur = None;
+                    return None;
+                }
+            }
+        }
         if special {
             // [temp.variadic]/12: `S(Ts);`, `operator Ts();`.
             if !invalid && ds.friend.is_none() {
@@ -2845,7 +2857,8 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_noreturn_non_function, l);
             }
         }
-        let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef());
+        let pos = if ds.is_typedef() { VectorAttrPos::Typedef } else { VectorAttrPos::Decl };
+        let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef(), pos);
         let ty = self.apply_nothrow_attrs(ty, &mut attrs);
         let ty = self.apply_noreturn_attrs(ty, &attrs);
         let ty = self.apply_cc_attrs(ty, &mut attrs, !ds.is_typedef());
@@ -3572,13 +3585,15 @@ impl Sema<'_, '_> {
     }
 
     /// `using name = type-id;` ([dcl.typedef]/2); `type_loc` is where
-    /// the type-id starts (invalid when not written).
+    /// the type-id starts (invalid when not written). The first `own` of
+    /// `attrs` follow the name; the rest are the type-id's.
     pub fn act_on_alias_decl(
         &mut self,
         name: Symbol,
         name_loc: Loc,
         ty: QualType,
         attrs: &[AttrId],
+        own: usize,
         type_loc: Loc,
     ) -> DeclId {
         if let Some(id) = self.pending_alias_vla.take() {
@@ -3589,8 +3604,17 @@ impl Sema<'_, '_> {
         let ds = DeclSpec::new(name_loc);
         let _ = self.take_template_head(None);
         let _ = self.check_template_in_local_class(false, Loc::INVALID);
-        let mut attrs = attrs.to_vec();
-        let ty = self.apply_vector_attrs(ty, &mut attrs, true);
+        // The type-id's attributes modify its type; then those after the
+        // name, which appertain to the alias.
+        let (own, of_type) = attrs.split_at(own.min(attrs.len()));
+        // A `mode` in the type-id is dropped silently (clang's
+        // `ActOnTypeName` skips the unused-attribute check for an alias).
+        let mut type_attrs = of_type.to_vec();
+        type_attrs.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::MODE);
+        let ty = self.apply_vector_attrs(ty, &mut type_attrs, true, VectorAttrPos::Type(None));
+        let mut attrs = own.to_vec();
+        let ty = self.apply_vector_attrs(ty, &mut attrs, true, VectorAttrPos::Decl);
+        attrs.extend(type_attrs);
         let ty = self.apply_cc_attrs(ty, &mut attrs, false);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
         // [temp.variadic]/12: `using U = Ts;`.
@@ -5138,6 +5162,9 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
+        if self.ms_bitfield_too_wide(ty, v, name, loc) {
+            return None;
+        }
         if let Some((bits, _)) = constfold::int_info(&self.ast, ty) {
             // clang warns for every integral type but `bool`.
             if v > i128::from(bits)
@@ -6514,6 +6541,8 @@ impl Sema<'_, '_> {
             self.check_static_tls(v, None);
             self.check_constinit(v);
             self.unify_var_section(v);
+        } else {
+            self.check_selectany_extern(v);
         }
         self.check_consteval_only_var(v);
     }
@@ -6831,6 +6860,13 @@ impl Sema<'_, '_> {
         {
             let loc = self.ast.decls.get(f).loc();
             self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(info.name));
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        } else if self.ast.builtin_alias(f).is_some() {
+            // clang `ActOnStartOfFunctionDef`: an alias of a builtin
+            // (`__clang_arm_builtin_alias`, WP-810) is itself a builtin.
+            let loc = self.ast.decls.get(f).loc();
+            let name = self.decl_name_str(self.ast.decls.get(f).name());
+            self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(name));
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         // clang `ActOnStartOfFunctionDef` resolves the exception
@@ -7911,6 +7947,8 @@ impl Sema<'_, '_> {
         if self.pack.0 != 0 {
             let _ = self.ast.decls.cold.record_pack.insert(r, self.pack.0);
         }
+        // `AddMsStructLayoutForRecord`: `#pragma ms_struct on`.
+        self.ms_struct_from_pragma(r);
         let _ = self.builder().begin_record_definition(r);
         let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
         let mut build = ClassBuild::new(r, tag, self.ctx);
@@ -8084,6 +8122,8 @@ impl Sema<'_, '_> {
         let bits = self.special_member_bits(r, bits);
         let bits = self.finish_special_members(r, bits);
         let bits = self.trivial_abi_bits(r, bits);
+        self.check_transparent_union(r);
+        self.check_ms_struct_class(r, bits);
         // [class.compare.default]/4: the implicit `operator==`s.
         let mut friends =
             build.as_mut().map(|b| std::mem::take(&mut b.friends)).unwrap_or_default();
@@ -10223,6 +10263,23 @@ impl Sema<'_, '_> {
         let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
         let shown = self.attr_shown_parts(syntax, scope, name);
         let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
+        // WP-810: clang `Clang<"__clang_arm_builtin_alias">` (no `__`
+        // affixes are removed: `clang_arm_builtin_alias` is unknown) and
+        // `BuiltinAlias` (`GNU<"clang_builtin_alias">`,
+        // `CXX11<"clang", "builtin_alias">`).
+        let alias = match (raw.as_str(), scope_s.as_deref()) {
+            ("__clang_arm_builtin_alias", None) if syntax == AttrSyntax::Gnu => Some(true),
+            ("__clang_arm_builtin_alias", Some("clang")) => Some(true),
+            ("clang_builtin_alias", None) if syntax == AttrSyntax::Gnu => Some(false),
+            ("builtin_alias", Some("clang")) => Some(false),
+            _ => None,
+        };
+        if let Some(arm) = alias {
+            return self.builtin_alias_attribute(arm, syntax, &shown, args, loc);
+        }
+        if let Some(r) = self.fmv_attribute(&n, scope_s.as_deref(), syntax, args, loc) {
+            return r;
+        }
         // The triage (spec/sema.md §4.5, WP-805): an implemented
         // spelling, a clang attribute kiln ignores (class B/C: no
         // diagnostic, nothing attached), one it rejects (class A), or one
@@ -10484,12 +10541,13 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         };
-        let lit = match arg {
-            AttrArg::Expr(e) => self.string_lit_of(*e),
-            AttrArg::Type(_) | AttrArg::Ident(..) => None,
+        let (lit, at) = match arg {
+            AttrArg::Expr(e) => (self.string_lit_of(*e), self.ast.exprs.get(*e).loc()),
+            AttrArg::Ident(_, at) => (None, *at),
+            AttrArg::Type(_) => (None, loc),
         };
         let Some(lit) = lit else {
-            let msg = self.diag(DiagId::parse_attribute_requires_string, loc).arg(n.to_owned());
+            let msg = self.diag(DiagId::parse_attribute_requires_string, at).arg(n.to_owned());
             self.emit(msg);
             return None;
         };
@@ -10839,9 +10897,11 @@ impl Sema<'_, '_> {
     /// ([dcl.align]/6, [`Sema::merge_aligned_redecl`]).
     pub fn act_on_tag_attrs(&mut self, d: DeclId, attrs: &[AttrId], use_: TagUse) {
         let mut attrs = attrs.to_vec();
+        let transparent = self.transparent_union_head(d, &mut attrs, use_);
         if !attrs.is_empty() {
             self.check_decl_attrs(d, &mut attrs);
         }
+        attrs.extend(transparent);
         if matches!(use_, TagUse::Declaration | TagUse::Definition) {
             self.finish_visibility_attrs(d, &mut attrs, true);
         }
@@ -11348,6 +11408,13 @@ pub(crate) fn attr_kind_of(
         ("cleanup", _, true) => AttrKind::CLEANUP,
         ("tls_model", _, true) => AttrKind::TLS_MODEL,
         ("returns_twice", _, true) => AttrKind::RETURNS_TWICE,
+        // clang `Clang<"musttail">` on a return statement (WP-809).
+        ("musttail", _, _) if gnu_syntax || clang_scope => AttrKind::MUSTTAIL,
+        // clang `GCC<"transparent_union">`, C-only (WP-809).
+        ("transparent_union", _, true) => AttrKind::TRANSPARENT_UNION,
+        ("selectany", _, true) => AttrKind::SELECTANY,
+        ("ms_struct", _, true) => AttrKind::MS_STRUCT,
+        ("gcc_struct", _, true) => AttrKind::GCC_STRUCT,
         // clang `GCC<"common">`, rejected in C++ (WP-807).
         ("common", _, true) => AttrKind::COMMON,
         // clang `Clang<"internal_linkage">` (WP-807).
@@ -11377,7 +11444,9 @@ pub(crate) fn attr_kind_of(
         ("malloc", _, true) => AttrKind::MALLOC,
         ("alloc_size", _, true) => AttrKind::ALLOC_SIZE,
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,
-        ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
+        // clang `Clang<"ext_vector_type">` from clang 22 (the caller
+        // filters the `clang::` spelling below it); `GNU` before.
+        ("ext_vector_type", _, _) if gnu_syntax || clang_scope => AttrKind::EXT_VECTOR_TYPE,
         ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
         ("mode", _, true) => AttrKind::MODE,
         // clang `Clang<"neon_vector_type">` / `Clang<"neon_polyvector_type">`.
@@ -11385,6 +11454,8 @@ pub(crate) fn attr_kind_of(
         ("neon_polyvector_type", _, _) if gnu_syntax || clang_scope => {
             AttrKind::NEON_POLYVECTOR_TYPE
         }
+        // clang `GNU<"arm_sve_vector_bits">` (WP-810).
+        ("arm_sve_vector_bits", _, _) if gnu_syntax => AttrKind::ARM_SVE_VECTOR_BITS,
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
         ("abi_tag", _, true) => AttrKind::ABI_TAG,
         // clang `GNU<"enable_if">`: no `[[...]]` spelling.

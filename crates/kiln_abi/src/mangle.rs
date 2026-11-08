@@ -2946,6 +2946,18 @@ impl<'a, 'b> Mangler<'a, 'b> {
     }
 
     /// A substitutable type other than a qualified type, builtin or tag.
+    /// clang `mangleAArch64FixedSveVectorType`: a specialization
+    /// `__SVE_VLS<T, N>` of a dummy template, T the sizeless type and N the
+    /// vector bits.
+    fn sve_fixed(&mut self, elem: QualType, count: u32, kind: VectorKind) {
+        let (b, bits) = sve_fixed_builtin(self.ast, elem, count, kind);
+        self.out.push_str("9__SVE_VLSI");
+        self.out.push_str(self.builtin_str(b));
+        self.out.push_str("Lj");
+        self.out.push_str(&bits.to_string());
+        self.out.push_str("EE");
+    }
+
     fn compound(&mut self, q: QualType, view: TypeView) {
         let ast = self.ast;
         match view {
@@ -3000,6 +3012,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 let name = self.neon_vector_name(elem, count, kind == VectorKind::NeonPoly);
                 self.out.push_str(&name.len().to_string());
                 self.out.push_str(&name);
+            }
+            TypeView::Vector { elem, count, kind } if kind.is_sve_fixed() => {
+                self.sve_fixed(elem, count, kind);
             }
             TypeView::Vector { elem, count, .. } => {
                 self.out.push_str("Dv");
@@ -3180,6 +3195,46 @@ pub fn builtin_code(b: BuiltinType) -> &'static str {
         B::SvBfloat16 => "u14__SVBfloat16_t",
         B::SvBool => "u10__SVBool_t",
         B::SvCount => "u11__SVCount_t",
+        // The SVE tuple types mangle as their ACLE names (clang
+        // `AArch64SVEACLETypes.def`; WP-810).
+        B::SvInt8x2 => "10svint8x2_t",
+        B::SvInt16x2 => "11svint16x2_t",
+        B::SvInt32x2 => "11svint32x2_t",
+        B::SvInt64x2 => "11svint64x2_t",
+        B::SvUint8x2 => "11svuint8x2_t",
+        B::SvUint16x2 => "12svuint16x2_t",
+        B::SvUint32x2 => "12svuint32x2_t",
+        B::SvUint64x2 => "12svuint64x2_t",
+        B::SvFloat16x2 => "13svfloat16x2_t",
+        B::SvFloat32x2 => "13svfloat32x2_t",
+        B::SvFloat64x2 => "13svfloat64x2_t",
+        B::SvBfloat16x2 => "14svbfloat16x2_t",
+        B::SvInt8x3 => "10svint8x3_t",
+        B::SvInt16x3 => "11svint16x3_t",
+        B::SvInt32x3 => "11svint32x3_t",
+        B::SvInt64x3 => "11svint64x3_t",
+        B::SvUint8x3 => "11svuint8x3_t",
+        B::SvUint16x3 => "12svuint16x3_t",
+        B::SvUint32x3 => "12svuint32x3_t",
+        B::SvUint64x3 => "12svuint64x3_t",
+        B::SvFloat16x3 => "13svfloat16x3_t",
+        B::SvFloat32x3 => "13svfloat32x3_t",
+        B::SvFloat64x3 => "13svfloat64x3_t",
+        B::SvBfloat16x3 => "14svbfloat16x3_t",
+        B::SvInt8x4 => "10svint8x4_t",
+        B::SvInt16x4 => "11svint16x4_t",
+        B::SvInt32x4 => "11svint32x4_t",
+        B::SvInt64x4 => "11svint64x4_t",
+        B::SvUint8x4 => "11svuint8x4_t",
+        B::SvUint16x4 => "12svuint16x4_t",
+        B::SvUint32x4 => "12svuint32x4_t",
+        B::SvUint64x4 => "12svuint64x4_t",
+        B::SvFloat16x4 => "13svfloat16x4_t",
+        B::SvFloat32x4 => "13svfloat32x4_t",
+        B::SvFloat64x4 => "13svfloat64x4_t",
+        B::SvBfloat16x4 => "14svbfloat16x4_t",
+        B::SvBoolx2 => "10svboolx2_t",
+        B::SvBoolx4 => "10svboolx4_t",
         // The vendor placeholder for `std::meta::info` until WP-102
         // (GCC 16.1 writes `Dm`; spec/reflection.md §8.3).
         B::MetaInfo => "u6__info",
@@ -3312,4 +3367,34 @@ fn first_named_field(ast: &Ast, r: DeclId) -> Option<DeclId> {
             Some(f)
         }
     })
+}
+
+/// The sizeless SVE builtin a fixed-length SVE vector of `count` `elem`
+/// (`kind` [`VectorKind::SveFixedData`] or a predicate's bytes) was made
+/// from, and its `arm_sve_vector_bits` value.
+pub fn sve_fixed_builtin(
+    ast: &Ast,
+    elem: QualType,
+    count: u32,
+    kind: VectorKind,
+) -> (BuiltinType, u32) {
+    use BuiltinType as B;
+    if kind == VectorKind::SveFixedPredicate {
+        return (B::SvBool, count * 64);
+    }
+    let (b, bits) = match ast.types.builtin(elem) {
+        Some(B::SChar | B::Char) => (B::SvInt8, 8),
+        Some(B::UChar) => (B::SvUint8, 8),
+        Some(B::Short) => (B::SvInt16, 16),
+        Some(B::UShort) => (B::SvUint16, 16),
+        Some(B::Int) => (B::SvInt32, 32),
+        Some(B::UInt) => (B::SvUint32, 32),
+        Some(B::Long | B::LongLong) => (B::SvInt64, 64),
+        Some(B::ULong | B::ULongLong) => (B::SvUint64, 64),
+        Some(B::Half) => (B::SvFloat16, 16),
+        Some(B::BFloat16) => (B::SvBfloat16, 16),
+        Some(B::Double) => (B::SvFloat64, 64),
+        _ => (B::SvFloat32, 32),
+    };
+    (b, count * bits)
 }

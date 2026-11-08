@@ -740,6 +740,14 @@ impl<'a> Cg<'a> {
             if ast.modules.is_imported_named_unit_decl(d) {
                 return Ok(());
             }
+            // clang `MayBeEmittedEagerly`: a `target_version` function
+            // that is not multiversioned (always, without `fmv`) is
+            // emitted at the end of the TU, "until all versions have been
+            // semantically checked".
+            if self.target_version_so_far(d) {
+                self.to_emit.push(Def::Decl(d));
+                return Ok(());
+            }
             return self.emit_fn_def(d);
         }
         if let Some(&f) = self.fns.get(&first) {
@@ -1396,6 +1404,17 @@ impl<'a> Cg<'a> {
     }
 
     /// Whether a redeclaration of `d` carries an attribute of kind `k`.
+    /// Whether `d` or a declaration before it has `target_version`
+    /// (clang's attribute is inherited by later redeclarations only).
+    fn target_version_so_far(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        std::iter::successors(Some(d), |&x| ast.prev(x)).any(|r| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .any(|a| ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::TARGET_VERSION)
+        })
+    }
+
     pub(crate) fn has_fn_attr(&self, d: DeclId, k: kiln_ast::attr::AttrKind) -> bool {
         let ast = self.ast;
         ast.redecls_of(d).any(|r| {
@@ -1745,6 +1764,44 @@ impl<'a> Cg<'a> {
     }
 
     // ---- signatures ----------------------------------------------------
+
+    /// WP-810: clang 20+ passes and returns an AAPCS64 pure scalable type
+    /// (an aggregate of `arm_sve_vector_bits` vectors and predicates)
+    /// expanded in SVE registers; kiln does not lower that convention yet,
+    /// so a by-value one in `sig` is a hard error rather than a silently
+    /// different ABI. clang 19 lowers it as any other aggregate. The same
+    /// holds for an SVE tuple type, which clang 19 passes as one wide
+    /// scalable vector.
+    pub(crate) fn check_pure_scalable(&mut self, sig: &Sig, loc: Option<Loc>) -> R<()> {
+        if self.target.triple.arch != Arch::AArch64 || self.opts.clang_compat < 20 {
+            return Ok(());
+        }
+        for q in std::iter::once(sig.ret).chain(sig.params.iter().copied()) {
+            // clang 20+ also lowers an SVE tuple (`svint8x2_t`) as a struct
+            // of vectors, where clang 19 used one wide scalable vector.
+            if self.ast.types.builtin(q).is_some_and(BuiltinType::is_sve_tuple) {
+                let t = print_type(&self.ast.types, self.ast, q, PrintOptions::SUGARED);
+                return err(
+                    loc,
+                    format!(
+                        "passing or returning '{t}' by value is not supported yet: it is an \
+                         SVE tuple type, which clang 20 and later pass as a struct of vectors"
+                    ),
+                );
+            }
+            if kiln_abi::call::is_pure_scalable(&mut self.tys, q) {
+                let t = print_type(&self.ast.types, self.ast, q, PrintOptions::SUGARED);
+                return err(
+                    loc,
+                    format!(
+                        "passing or returning '{t}' by value is not supported yet: it is an \
+                         AAPCS64 pure scalable type (an aggregate of fixed-length SVE types)"
+                    ),
+                );
+            }
+        }
+        Ok(())
+    }
 
     /// The lowered signature of function type `fty`.
     pub fn sig(&mut self, fty: QualType, extern_c: bool) -> Sig {
@@ -2190,6 +2247,15 @@ impl<'a> Cg<'a> {
         {
             out.push(Attr::string("disable-tail-calls", "true"));
         }
+        // clang 20+ `GetCPUAndFeaturesAttributes`: `"fmv-features"` on a
+        // function with a `target_version` (a default version: the others
+        // are hidden; WP-810), valueless as it names no feature.
+        if let Some(d) = d
+            && self.opts.clang_compat >= 22
+            && self.has_fn_attr(d, kiln_ast::attr::AttrKind::TARGET_VERSION)
+        {
+            out.push(Attr::string("fmv-features", ""));
+        }
         if let Some(fp) = self.frame_pointer().attr() {
             out.push(Attr::string("frame-pointer", fp));
         }
@@ -2287,6 +2353,15 @@ impl<'a> Cg<'a> {
         let first = ast.first(d);
         if let Some(&f) = self.fns.get(&first) {
             return Ok(f);
+        }
+        // WP-810: an alias of a builtin (`__clang_arm_builtin_alias`) has no
+        // function to call or address; a call lowers inline.
+        if let Some((b, _)) = ast.builtin_alias(first) {
+            let b = ast.symbols().as_str(b);
+            return err(
+                Some(ast.decls.get(d).loc()),
+                format!("'{b}' is a builtin with no function body; it can only be called directly"),
+            );
         }
         if let Some(target) = self.weakref_symbol(first) {
             let f = if let Some(f) = self.m.get_function(&target) {
@@ -2875,8 +2950,15 @@ impl<'a> Cg<'a> {
             ((quals.is_const() && !has_mutable(ast, ty)) || is_ref) && !needs_init && !needs_dtor;
         let align = self.var_align(d);
         let name = self.m.global(g).name().to_owned();
-        let comdat =
-            if inline && !internal { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
+        // clang `getLLVMLinkageForDeclarator`: `selectany` makes a
+        // definition that is not already discardable `weak_odr`, and
+        // `shouldBeInCOMDAT` puts it in a comdat either way.
+        let selectany = !internal && ast.is_selectany(d);
+        let comdat = if (inline || selectany) && !internal {
+            Some(self.m.comdat(&name, ComdatKind::Any))
+        } else {
+            None
+        };
         if let Err(e) = self.m.set_initializer(g, Some(init)) {
             return err(loc, format!("bad initializer: {e:?}"));
         }
@@ -2901,6 +2983,10 @@ impl<'a> Cg<'a> {
             gv.comdat = comdat;
         } else if inline {
             gv.linkage = instantiated.unwrap_or(Linkage::LinkOnceOdr);
+            gv.dso_local = true;
+            gv.comdat = comdat;
+        } else if selectany {
+            gv.linkage = Linkage::WeakOdr;
             gv.dso_local = true;
             gv.comdat = comdat;
         } else {

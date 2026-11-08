@@ -179,6 +179,9 @@ pub(crate) struct Fx {
     /// clang `LargestVectorWidth`: the widest vector in the signature or
     /// any call's IR arguments and result (x86 `min-legal-vector-width`).
     pub vector_width: u64,
+    /// The call expression being emitted, for diagnostics of the call
+    /// lowering itself (WP-810).
+    pub call_loc: Option<Loc>,
     /// The `(real, imag)` value of the last call returning `_Complex`
     /// (`call_vals_to` returns no scalar for it; spec/codegen.md §3.12).
     pub cx_ret: Option<(V, V)>,
@@ -187,6 +190,12 @@ pub(crate) struct Fx {
     /// The loop statement about to be emitted and the `AttributedStmt`
     /// whose loop hints apply to it (clang `EmitStmt`'s `Attrs`).
     pub loop_hints: Option<(kiln_ast::StmtId, kiln_ast::StmtId)>,
+    /// The returned call of the enclosing `[[clang::musttail]]` return
+    /// statement (clang `MustTailCall`; WP-809).
+    pub musttail: Option<kiln_ast::ExprId>,
+    /// Set right before the musttail call's `call_vals_to` (its
+    /// arguments evaluated): that call is emitted `musttail` + `ret`.
+    pub musttail_armed: bool,
     /// The active conditional evaluations (clang `ConditionalEvaluation`),
     /// innermost last: each is the block the condition started in.
     pub conds: Vec<Blk>,
@@ -274,9 +283,12 @@ impl Fx {
             loops: Vec::new(),
             mustprogress: true,
             vector_width: 0,
+            call_loc: None,
             cx_ret: None,
             calls: Vec::new(),
             loop_hints: None,
+            musttail: None,
+            musttail_armed: false,
             conds: Vec::new(),
             opaque: FxHashMap::default(),
             array_index: Vec::new(),
@@ -449,6 +461,7 @@ impl Cg<'_> {
         self.f.ret_block = Some(ret_block);
         self.f.ret_dest = Some(JumpDest { blk: ret_block, depth: Some(0), index: 1 });
         self.f.cl.next_index = 2;
+        self.check_pure_scalable(&sig, Some(ast.decls.get(d).loc()))?;
         let mut arg_no = 0u32;
         match &sig.info.ret.kind {
             ArgKind::Ignore => {
@@ -1341,6 +1354,15 @@ impl Cg<'_> {
                     *arg_no += 1;
                     return Ok(ParamVal::Direct(v));
                 }
+                // clang `EmitFunctionProlog`: a fixed-length SVE vector
+                // arrives in its scalable register type (WP-810).
+                if !agg && matches!(coerce, IrType::ScalableVector(..)) {
+                    let lt = self.lty(pq);
+                    if let Some(v) = self.sve_to_fixed(V::Arg(*arg_no), lt) {
+                        *arg_no += 1;
+                        return Ok(ParamVal::Direct(v));
+                    }
+                }
                 let align = self.global_align(pq);
                 let a = self.f.fir.alloca(mt, align);
                 let alloca = Addr { v: a, ty: mt, align };
@@ -1514,11 +1536,66 @@ impl Cg<'_> {
         Addr { v, ty: self.ir(coerce), align: min_align(a.align, *offset) }
     }
 
+    /// WP-810: the scalable type a fixed-length SVE value `fixed` is
+    /// moved through to or from the scalable vector type `sc` (clang
+    /// `CreateCoercedLoad`, `EmitFunctionProlog`, `CK_BitCast`): `sc`
+    /// itself for equal element types, `<vscale x N/8 x i8>` for an `i8`
+    /// predicate image of `<vscale x N x i1>`; `None` when the two do not
+    /// pair up that way.
+    pub(crate) fn sve_pair(&mut self, fixed: LTy, sc: LTy) -> Option<LTy> {
+        let (fe, _, fs) = self.m.types.vector_info(fixed)?;
+        let (se, sn, ss) = self.m.types.vector_info(sc)?;
+        if fs || !ss {
+            return None;
+        }
+        if se == fe {
+            return Some(sc);
+        }
+        (se == LTy::I1 && sn % 8 == 0 && fe == LTy::I8)
+            .then(|| self.m.types.scalable_vector(LTy::I8, sn / 8))
+    }
+
+    /// WP-810: the fixed-length vector `fixed` held at the start of
+    /// scalable `v` (clang `cast.fixed`: a predicate is first bitcast to
+    /// its `i8` image), if [`Cg::sve_pair`] pairs them.
+    pub(crate) fn sve_to_fixed(&mut self, v: V, fixed: LTy) -> Option<V> {
+        let sc = self.f.fir.ty(&self.m, v);
+        let via = self.sve_pair(fixed, sc)?;
+        let v = if via == sc { v } else { self.cast(CastOp::BitCast, v, via) };
+        let f = kiln_llvm::intrinsics::vector_extract(&mut self.m, fixed, via);
+        let z = self.i64c(0);
+        Some(self.intrinsic_call(f, vec![v, z]))
+    }
+
+    /// WP-810: the scalable `sc` holding fixed-length `v` at its start
+    /// (clang `cast.scalable`: an insert into `undef`, `poison` from clang
+    /// 22, bitcast to a predicate's `i1` type), if [`Cg::sve_pair`] pairs
+    /// them.
+    pub(crate) fn sve_to_scalable(&mut self, v: V, sc: LTy) -> Option<V> {
+        let fixed = self.f.fir.ty(&self.m, v);
+        let via = self.sve_pair(fixed, sc)?;
+        let f = kiln_llvm::intrinsics::vector_insert(&mut self.m, via, fixed);
+        let u = V::C(if self.opts.clang_compat >= 22 {
+            self.m.const_poison(via)
+        } else {
+            self.m.const_undef(via)
+        });
+        let z = self.i64c(0);
+        let r = self.intrinsic_call(f, vec![u, v, z]);
+        Some(if via == sc { r } else { self.cast(CastOp::BitCast, r, sc) })
+    }
+
     /// clang `CreateCoercedLoad` from `src` to the ABI type `ct`.
     pub fn coerced_load(&mut self, src: Addr, ct: &IrType) -> V {
         let dt = self.ir(ct);
         if src.ty == dt {
             return self.load(dt, src.v, src.align, false);
+        }
+        if matches!(ct, IrType::ScalableVector(..)) && self.sve_pair(src.ty, dt).is_some() {
+            let v = self.load(src.ty, src.v, src.align, false);
+            if let Some(r) = self.sve_to_scalable(v, dt) {
+                return r;
+            }
         }
         let (dsize, _) = self.tys.size_align(ct);
         let src = self.enter_struct_for_coerce(src, dsize);
@@ -1550,6 +1627,11 @@ impl Cg<'_> {
         let mut dst = dst;
         if st != dst.ty {
             dst = self.enter_struct_for_coerce(dst, ssize);
+        }
+        // clang `CreateCoercedStore`: a scalable value is stored as is.
+        if matches!(ct, IrType::ScalableVector(..)) {
+            self.store(v, dst.v, dst.align, false);
+            return;
         }
         if ssize <= dst_size {
             if self.m.types.is_int(st)
