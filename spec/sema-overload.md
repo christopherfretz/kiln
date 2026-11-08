@@ -1522,6 +1522,11 @@ Where the code differs from (or details) the design above:
     complete. Only when the target selects nothing is it
     `template_id_no_match`'s "address of overloaded function does not
     match required type".
+    The specialization resolved early is then not used: when that
+    resolution alone queued its definition, the definition is withdrawn
+    from the queue ([temp.inst]/5), so an ill-formed body of the
+    unselected `wrap<1>(void*)` is never instantiated (WP-802,
+    `tests/conformance/over.over/template-id-retarget-unselected-not-instantiated-run.cpp`).
 
 ### 10.8 Landed (WP-106): the rest of the template candidates
 - Conversion-function templates: `build_conversion_set` /
