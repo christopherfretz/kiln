@@ -10,6 +10,7 @@
 // the same: lines 29-30).
 //@ expect: compile-ok
 //@ strict-diags
+//@ skip(clang): clang 22 no longer reports lines 29-30 (the implicit-conversion case); kiln matches clang 19 here (verified with --compiler clang++-19); clang-22 parity is WP-892
 //@ diag: 25:23 warning "taking address of packed member 'i' of class or structure 'P' may result in an unaligned pointer value"
 //@ diag: 29:17 warning "taking address of packed member 'i' of class or structure 'P' may result in an unaligned pointer value"
 //@ diag: 30:17 warning "taking address of packed member 'i' of class or structure 'P' may result in an unaligned pointer value"
