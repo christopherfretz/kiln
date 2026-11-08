@@ -143,6 +143,12 @@ impl Job<'_> {
             // WP-630: the `-march=<cpu>` macros.
             cfg.x86_macros = crate::features::x86_cpu_macros(&cpu);
         }
+        // Errors were reported by the driver's own `resolve` pass.
+        cfg.sanitize_macros = self
+            .args
+            .sanitize(!cfg.aarch64, self.toolchain.target.triple)
+            .0
+            .macros(p.clang_compat.major() >= 22);
         cfg.opt = p.opt;
         cfg.no_inline = p.no_inline;
         cfg.implicit_includes.clone_from(&self.args.includes);
@@ -283,7 +289,7 @@ impl Job<'_> {
         let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));
         if let Some(d) = &deps {
             let d2 = Rc::clone(d);
-            search.set_observer(Box::new(move |sm, e| on_search_event(&d2, sm, e)));
+            search.set_observer(Box::new(move |_, e| on_search_event(&d2, e)));
         }
         let mut opts = self.pp_options(predefines);
         opts.parser_pragmas = staged;
@@ -312,7 +318,15 @@ impl Job<'_> {
         pp.set_if_evaluator(Box::new(ifeval));
         // `from_args` sees the GNU dialect only through `-std=`; the
         // effective dialect (clang's default is GNU) goes last so it wins.
-        let mut fargs = a.argv.clone();
+        // WP-675: `__has_feature(address_sanitizer)` and friends answer
+        // from the resolved `-fsanitize=` set, not the raw arguments.
+        let mut fargs: Vec<String> = a
+            .argv
+            .iter()
+            .filter(|s| !s.starts_with("-fsanitize=") && !s.starts_with("-fno-sanitize="))
+            .cloned()
+            .collect();
+        fargs.extend(a.sanitize(!self.toolchain.target.is_aarch64(), triple).0.feature_args());
         fargs.push(if self.std.gnu { "-std=gnu++" } else { "-std=c++" }.to_owned());
         let mut features = ClangFeatures::from_args(triple, self.std.lex, &fargs)
             .map(|f| f.with_compat(a.predef.clang_compat));
@@ -350,7 +364,7 @@ impl Job<'_> {
             pp.set_feature_queries(Box::new(features));
         }
         if let Some(d) = &deps {
-            pp.set_callbacks(Box::new(DepCallbacks { list: Rc::clone(d), sm }));
+            pp.set_callbacks(Box::new(DepCallbacks::new(Rc::clone(d), sm)));
         }
         pp.enter_main_file(main);
         Some((pp, deps))

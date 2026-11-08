@@ -3173,6 +3173,27 @@ impl Compiler<'_> {
                     self.unsupported(e);
                 }
             }
+            // An enumerator named by a class member access (`r.E`,
+            // `p->E`): the object expression is evaluated, as a glvalue
+            // for `.` (nothing is read) and as a pointer for `->`, then
+            // discarded ([expr.ref]/7.5; clang `VisitIgnoredBaseExpression`).
+            ExprKind::MemberExpr
+                if self.ast().decls.enumerator(self.ast().exprs.decl(e)).is_some() =>
+            {
+                let ast = self.ast();
+                let v = ast.decls.enumerator(ast.exprs.decl(e)).and_then(|x| x.value);
+                let bits = v.and_then(|v| ast.consts.scalar(v)).and_then(|s| scalar_bits(&s));
+                let base = ast.exprs.operand(e);
+                let m = self.next;
+                if self.node(e).has(kiln_ast::expr::ExprFlags::ARROW) {
+                    self.rv(base);
+                } else {
+                    self.lv(base, Access::Addr);
+                }
+                self.next = m;
+                let (w, s) = int_of(self.kind(ty)).unwrap_or((64, true));
+                self.konst(dst, crate::arith::canon(bits.unwrap_or(0), w, s));
+            }
             ExprKind::UnaryExprOrTypeTraitExpr => self.trait_expr(e, dst, ty),
             // An invalid class's layout is a placeholder: no note (clang).
             ExprKind::OffsetOfExpr if self.ast().exprs.offsetof_invalid_record(e) => {
@@ -4073,7 +4094,16 @@ impl Compiler<'_> {
                             && self.cur_fn.is_some_and(|f| {
                                 new_delete::std_allocator_elem(self.ast(), f, "allocate").is_some()
                             });
-                        if tvoid && !fvoid {
+                        let func = matches!(self.kind(fp), TyKind::Func)
+                            || matches!(self.kind(tp), TyKind::Func);
+                        if func && fp != tp && self.o.clang_compat >= 22 {
+                            // A C-style cast between a function pointer and
+                            // `void *` performs a reinterpret_cast
+                            // ([expr.cast]/4, [expr.const]/10.15): clang 22
+                            // and GCC 16.1 reject it; clang 19 folds it
+                            // (WP-830).
+                            self.cce(e, cce::PTR, dst, r, REINTERPRET_CONV);
+                        } else if tvoid && !fvoid {
                             // `T *` to `void *` keeps the designated
                             // subobject's type for a later placement new
                             // (spec/oven.md "Construction").

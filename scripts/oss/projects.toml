@@ -351,6 +351,22 @@ wave = 4
 verified = false
 notes = "WP-801: llvm/ plus clang and lld (LLVM_ENABLE_PROJECTS=clang;lld) with the AArch64 and X86 backends, then check-clang and check-lld (lit + unit tests, lit capped at -j 4), each through make so they draw from the shared jobserver. Release with assertions, no debug info. Same tag as llvm_full; its own shallow clone. report.json's `tests` is check-lld's lit block (the last one); both suites are in docs/status/oss/llvm_clang.md."
 
+[llvm_selfhost]
+url = "https://github.com/llvm/llvm-project"
+tag = "llvmorg-19.1.7"
+build = "cmake"
+source_subdir = "llvm"
+checkout = "llvm_clang"
+stage_of = "llvm_clang"
+cxx_std = 17
+configure = ["-DLLVM_TARGETS_TO_BUILD=AArch64;X86", "-DLLVM_ENABLE_PROJECTS=clang;lld", "-DLLVM_ENABLE_ASSERTIONS=ON", "-DLLVM_INCLUDE_TESTS=ON", "-DLLVM_INCLUDE_BENCHMARKS=OFF", "-DLLVM_INCLUDE_EXAMPLES=OFF", "-DLLVM_ENABLE_ZSTD=OFF", "-DLLVM_ENABLE_LIBXML2=OFF", "-DLLVM_LIT_ARGS=-sv -j 4"]
+build_targets = ["all", "clang-test-depends", "ClangUnitTests", "lld-test-depends", "LLDUnitTests"]
+test = "make check-clang; c=$?; make check-lld; l=$?; echo \"check-clang rc=$c check-lld rc=$l\"; [ $c -eq 0 ] && [ $l -eq 0 ]"
+test_timeout = 18000
+wave = 4
+verified = false
+notes = "WP-815: the bootstrap stage 2 of llvm_clang. The same tree, flags and targets as llvm_clang, built with the clang and clang++ that llvm_clang's build produced (stage_of), so `--compiler kiln` builds LLVM with the kiln-built clang 19.1.7 and runs check-clang and check-lld on the result. Shares llvm_clang's checkout. Stage-2/stage-3 IR comparison and results in docs/status/oss/llvm_selfhost.md."
+
 [folly]
 url = "https://github.com/facebook/folly"
 tag = "v2026.10.26.00"
@@ -635,3 +651,48 @@ c_compiler = "clang-19"
 wave = 4
 verified = true
 notes = "WP-803. No opencv_contrib, no opencv_extra test data; default CPU_BASELINE and NEON dispatch. BUILD_LIST adds ts (the test framework; without it no tests are built). The 480 gtests failing under the clang control without test data (opencv-gtest-exclude.txt) and opencv_test_imgcodecs (segfaults on its missing data under the control) are excluded in both builds; 4 OpenCV threads per test binary."
+
+# Big apps 3/3 (WP-811): a plain large application (CMake), consensus
+# code (Bitcoin Core) and generated-code RPC (gRPC, whose protoc and
+# grpc_cpp_plugin are built by the compiler under test and then run).
+
+[cmake_app]
+url = "https://github.com/Kitware/CMake"
+tag = "v4.4.5"
+build = "cmake"
+cxx_std = 17
+configure = ["-DCMAKE_USE_SYSTEM_LIBRARIES=OFF", "-DBUILD_TESTING=ON", "-DBUILD_CursesDialog=OFF", "-DBUILD_QtDialog=OFF"]
+test = "ctest --output-on-failure -j 4 --timeout 300"
+test_timeout = 7200
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-811. Kitware CMake bootstrapped with the system cmake (3.31), all bundled third-party libraries (libuv, curl, zlib, ...; C, so clang-19). CMake's own ctest suite (714 tests) runs the built cmake, ctest and cpack; the test projects it configures pick the default system compilers (gcc), so the suite checks the kiln-built CMake, not kiln on the test projects. ccmake is off (no curses headers)."
+
+[bitcoin_core]
+url = "https://github.com/bitcoin/bitcoin"
+tag = "v32.1"
+build = "cmake"
+cxx_std = 20
+configure = ["-DBUILD_GUI=OFF", "-DENABLE_WALLET=OFF", "-DWITH_ZMQ=OFF", "-DENABLE_IPC=OFF", "-DBUILD_BENCH=ON", "-DBUILD_TESTS=ON", "-DWITH_CCACHE=OFF", "-DINSTALL_MAN=OFF"]
+test = 'rc=0; ./bin/bench_bitcoin -sanity-check > bench.log 2>&1 && echo "bench_bitcoin -sanity-check: ok" || { echo "bench_bitcoin -sanity-check: FAILED"; tail -n 20 bench.log; rc=1; }; python3 test/functional/test_runner.py -j 4 --tmpdirprefix="$TMPDIR" --combinedlogslen=0 --exclude feature_reindex_init --exclude feature_reindex_readonly > functional.log 2>&1 || rc=1; grep -E "^(TEST|ALL)|Failed|Passed|Skipped" functional.log | tail -n 400; ctest --output-on-failure -j 4 --timeout 300 -E "^univalue_object_test$" || rc=1; exit $rc'
+test_timeout = 5400
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-811. The CMake build, no depends/: system Boost headers (1.83, Boost.Test header-only), system libevent. No wallet (the container has no sqlite3 headers), no GUI, ZMQ or IPC (no capnp). Tests: bench_bitcoin -sanity-check, the python functional suite (test/functional/test_runner.py -j 4; wallet tests skip themselves), then ctest (test_bitcoin, one ctest test per Boost.Test suite, and the secp256k1/univalue tests), last so its summary is the report's. Excluded under both compilers: feature_reindex_init and feature_reindex_readonly (they make the data directory read-only, which root ignores) and univalue_object_test (its BOOST_CHECK macros are assert()s, which the Release (NDEBUG) build compiles out with their side effects; the control dies with SIGILL)."
+
+[grpc]
+url = "https://github.com/grpc/grpc"
+tag = "v1.85.1"
+build = "cmake"
+cxx_std = 17
+submodules = true
+configure = ["-DgRPC_BUILD_TESTS=ON", "-DgRPC_DOWNLOAD_ARCHIVES=OFF", "-DgRPC_ABSL_PROVIDER=module", "-DgRPC_CARES_PROVIDER=module", "-DgRPC_PROTOBUF_PROVIDER=module", "-DgRPC_RE2_PROVIDER=module", "-DgRPC_SSL_PROVIDER=module", "-DgRPC_ZLIB_PROVIDER=module", "-DgRPC_BENCHMARK_PROVIDER=module", "-DgRPC_BUILD_GRPC_CSHARP_PLUGIN=OFF", "-DgRPC_BUILD_GRPC_NODE_PLUGIN=OFF", "-DgRPC_BUILD_GRPC_OBJECTIVE_C_PLUGIN=OFF", "-DgRPC_BUILD_GRPC_PHP_PLUGIN=OFF", "-DgRPC_BUILD_GRPC_PYTHON_PLUGIN=OFF", "-DgRPC_BUILD_GRPC_RUBY_PLUGIN=OFF"]
+build_targets = ["protoc", "grpc_cpp_plugin", "activity_test", "all_ok_test", "avl_test", "bitset_test", "blackboard_test", "call_filters_test", "call_state_test", "call_utils_test", "cancel_callback_test", "chunked_vector_test", "client_initial_metadata_outstanding_token_test", "common_closures_test", "context_test", "core_configuration_test", "cpp_impl_of_test", "down_cast_test", "dump_args_test", "endpoint_config_test", "event_engine_wakeup_scheduler_test", "exec_ctx_wakeup_scheduler_test", "experiments_tag_test", "experiments_test", "filter_fusion_test", "flow_control_manager_test", "flow_control_test", "for_each_test", "frame_test", "function_signature_test", "idle_filter_state_test", "if_list_test", "if_test", "inter_activity_latch_test", "inter_activity_mutex_test", "inter_activity_pipe_test", "interception_chain_test", "interceptor_list_test", "join_test", "latch_test", "latent_see_test", "layout_test", "load_config_test", "lock_based_mpsc_test", "loop_test", "lru_cache_test", "map_pipe_test", "match_promise_test", "match_test", "memory_usage_test", "miscompile_with_no_unique_address_test", "no_destruct_test", "notification_test", "observable_test", "osa_distance_test", "overload_test", "party_test", "periodic_update_test", "ping_callbacks_test", "pipe_test", "poll_test", "prioritized_race_test", "promise_endpoint_test", "promise_factory_test", "promise_map_test", "promise_mutex_test", "promise_test", "property_list_test", "query_extensions_test", "race_test", "random_early_detection_test", "request_buffer_test", "resource_tracker_test", "ring_buffer_test", "seq_test", "shared_bit_gen_test", "single_set_ptr_test", "sleep_test", "slice_string_helpers_test", "sorted_pack_test", "static_stride_scheduler_test", "status_flag_test", "stream_quota_test", "switch_test", "table_test", "tcp_socket_utils_test", "test_core_event_engine_posix_timer_heap_test", "test_core_event_engine_slice_buffer_test", "test_core_slice_slice_test", "test_core_util_time_test", "test_timeout_test", "thread_quota_test", "timer_list_test", "trie_lookup_test", "try_join_test", "try_seq_metadata_test", "try_seq_test", "unique_ptr_with_bitset_test", "unique_type_name_test", "useful_test", "v3_bridge_test", "wait_for_callback_test", "wait_for_single_owner_test", "write_size_policy_test", "arena_test", "codegen_test_full", "codegen_test_minimal", "proto_utils_test", "proto_buffer_reader_test", "proto_buffer_writer_test", "async_end2end_test", "end2end_test", "client_callback_end2end_test", "generic_end2end_test", "raw_end2end_test", "hybrid_end2end_test", "health_service_end2end_test", "proto_server_reflection_test", "end2end_inproc_test", "end2end_http2_test"]
+test = "bash @OSS@/grpc-tests.sh @OSS@/grpc-tests.txt ../../../src/grpc"
+test_timeout = 7200
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-811. The C++ core with every dependency from its submodule (abseil, protobuf, re2, c-ares, boringssl, zlib; the C ones go to clang-19), no archive downloads. protoc and grpc_cpp_plugin are built by the compiler under test and generate the test protos' code. gRPC registers no ctest tests: build_targets are the binaries of scripts/oss/grpc-tests.txt (the unit tests that link no grpc_test_util, then localhost end2end and generated-code tests; keep the two lists equal), run by scripts/oss/grpc-tests.sh (4 at a time, 300 s each, from the source root, with gRPC's port server on localhost:32766 for the end2end tests). end2end_http2_test (1095 cases) is killed at 300 s under both compilers with no failed case, so both reach 117/118: parity, docs/status/oss/grpc.md."

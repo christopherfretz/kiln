@@ -1390,7 +1390,11 @@ impl Sema<'_, '_> {
                 let used = self.ctx;
                 let arg =
                     self.builder().default_arg(p, used, x.ty(), x.value_category(), Loc::INVALID);
-                // Used where the construction is ([expr.const]/16).
+                // Used where the construction is ([expr.const]/16), which
+                // is also the location a source-location builtin in it
+                // takes ([support.srcloc.cons]/2; clang
+                // `CompleteConstructorCall`'s `GatherArgumentsForCall`).
+                self.note_default_arg_use(arg, p, loc);
                 self.note_default_use(arg, p, loc);
                 out.push(arg);
             }

@@ -30,6 +30,8 @@ enum Shape {
     Basic(Option<MemoryEffects>),
     /// `cold noreturn nounwind memory(inaccessiblemem: write)`.
     Trap,
+    /// `cold noreturn nounwind` (LLVM 19's `llvm.ubsantrap`).
+    ColdNoReturn,
     /// `nounwind [memory(none)]`.
     NoUnwind(bool),
     /// `nounwind memory(argmem: read)`.
@@ -91,6 +93,7 @@ fn fn_attrs(shape: Shape) -> Vec<Attr> {
                 ..MemoryEffects::default()
             }),
         ],
+        Shape::ColdNoReturn => vec![f(Cold), f(NoReturn), f(NoUnwind)],
         Shape::NoUnwind(none) => {
             let mut v = vec![f(NoUnwind)];
             if none {
@@ -364,6 +367,13 @@ pub fn invariant_start(m: &mut Module) -> FuncId {
 /// `void @llvm.trap()`.
 pub fn trap(m: &mut Module) -> FuncId {
     declare(m, "llvm.trap", TypeId::VOID, &[], &[], Shape::Trap)
+}
+
+/// `void @llvm.ubsantrap(i8 immarg)` (WP-675): `cold noreturn nounwind`,
+/// plus `memory(inaccessiblemem: write)` at [`Module::ir_version`] 22.
+pub fn ubsantrap(m: &mut Module) -> FuncId {
+    let shape = if m.ir_version >= 22 { Shape::Trap } else { Shape::ColdNoReturn };
+    declare(m, "llvm.ubsantrap", TypeId::VOID, &[(TypeId::I8, &[Attr::Flag(ImmArg)])], &[], shape)
 }
 
 /// `void @llvm.debugtrap()`.

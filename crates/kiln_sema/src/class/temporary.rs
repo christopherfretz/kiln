@@ -77,6 +77,22 @@ impl Sema<'_, '_> {
         {
             return e;
         }
+        // The call of a conversion function is bound when it is built, so
+        // its `UserDefinedConversion` cast (or a no-op cast of that) is
+        // already a bound temporary: binding it again destroys the object
+        // twice (`S{tl}` with `TL::operator S()`, CWG2327; WP-811).
+        let mut inner = e;
+        while self.ast.exprs.get(inner).kind() == ExprKind::ImplicitCastExpr
+            && matches!(
+                self.ast.exprs.cast_kind(inner),
+                CastKind::UserDefinedConversion | CastKind::NoOp
+            )
+        {
+            inner = self.ast.exprs.operand(inner);
+            if self.ast.exprs.get(inner).kind() == ExprKind::CXXBindTemporaryExpr {
+                return e;
+            }
+        }
         // An array temporary binds the destructor of its base element
         // class (clang searches through the array types).
         let mut base = n.ty();

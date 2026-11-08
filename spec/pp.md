@@ -152,7 +152,41 @@ order.
   last found with (clang `HeaderFileInfo::DirInfo`).
 - The name is the `FileManager` name, so `__FILE__`, line markers,
   diagnostics and `-M` output all spell it as clang does.
+  `ResolvedInclude::path` carries the path the lookup found the file by.
+  A file is one file (`kiln_source` identity: device and inode), so
+  `#pragma once`, `#import` and the guard optimization see it through any
+  path, and `__FILE__`, line markers and diagnostics keep the name it was
+  first loaded by (clang's `ContentCache::OrigEntry`). The `-M` output
+  lists every distinct path an `#include` reached it by, skipped or
+  entered (clang's per-`FileID` name and `FileSkipped`; `spec/driver.md`
+  "Dependency output").
+
+**Lookup caching (WP-820).** Every query below is a system call on
+`RealFs`, which costs most on a slow mount, so header search asks each
+question once per run:
+
 - Opened paths are cached, and so is the absence of a path.
+- Directory existence is cached (`HeaderFs::is_dir`). A name with
+  directory components (`boost/x/y.hpp`) checks each intermediate
+  directory under the search directory, outermost first, before opening:
+  one missing `dir/boost` rules out every `boost/...` header there with a
+  single `stat` (clang checks only the parent directory, through its
+  `SeenDirEntries` cache).
+- A lookup's result is cached per (name, start index), clang's
+  `LookupFileCache`: a repeated `#include` or `#include_next` of a name
+  makes no query.
+- After the fourth failed lookup in one directory
+  (`LIST_AFTER_MISSES`), its listing is read once (`HeaderFs::list_dir`)
+  and later names it does not hold are misses without a query. Names
+  compare ignoring ASCII case, so a case-insensitive file system never
+  gets a false miss. A directory holding a non-ASCII name is never
+  answered from its listing, nor is a component that is non-ASCII, `.`,
+  `..` or empty. A file created during the run in a listed directory is
+  not seen (as with clang's caches).
+
+On a tree with 157 `-I` directories (the WP-824 shape) this cut `-E` from
+about 204,000 system calls to about 12,400; `docs/status/header-search-syscalls.md`
+has the measurements against clang 19.
 
 **`#embed`.** This is clang `LookupEmbedFile`:
 
@@ -163,7 +197,7 @@ order.
 **Observer.** `set_observer(SearchObserver)` reports what the `-M` output
 needs but the `FileChange` callbacks do not see:
 
-- `SearchEvent::HasInclude { file, characteristic }` for each successful
+- `SearchEvent::HasInclude { file, path, characteristic }` for each successful
   `__has_include` / `__has_include_next`;
 - `SearchEvent::Embed { path }` for each `#embed` / `__has_embed` that
   finds a resource.

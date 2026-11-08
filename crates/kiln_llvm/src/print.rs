@@ -1270,6 +1270,17 @@ impl<'a> Printer<'a> {
             write_escaped(w, s.as_bytes())?;
             w.write_char('"')?;
         }
+        let san = g.sanitizer;
+        for (on, kw) in [
+            (san.no_address, ", no_sanitize_address"),
+            (san.no_hwaddress, ", no_sanitize_hwaddress"),
+            (san.memtag, ", sanitize_memtag"),
+            (san.dyninit, ", sanitize_address_dyninit"),
+        ] {
+            if on {
+                w.write_str(kw)?;
+            }
+        }
         self.comdat_ref(w, g.comdat, &g.name, true)?;
         if let Some(a) = g.align {
             w.write_str(", align ")?;

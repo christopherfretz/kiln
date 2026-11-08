@@ -19,8 +19,7 @@
 //!    `-f[no-]common`, `-fstack-usage`, the defaults `-fno-trapv`,
 //!    `-fno-short-enums` and `-m64`, and `-pipe`);
 //! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
-//!    `-fshort-enums`, `-fsanitize*`, `-fno-sanitize*`, coverage and
-//!    profiling, the other `-fxray-*` options and
+//!    `-fshort-enums`, coverage and profiling, the other `-fxray-*` options and
 //!    `-finstrument-functions-exclude-*`). The floating-point flags are
 //!    `crate::fp_flags`'s.
 //!
@@ -154,16 +153,10 @@ const REJECTED: &[&str] = &[
     "-fprofile-use",
 ];
 
-/// Prefixes of flags rejected (class 3): every value of the sanitizer
-/// and profiling options.
-const REJECTED_PREFIXES: &[&str] = &[
-    "-fsanitize",
-    "-fno-sanitize",
-    "-fprofile-instr-generate=",
-    "-fprofile-generate=",
-    "-fprofile-instr-use=",
-    "-fprofile-use=",
-];
+/// Prefixes of flags rejected (class 3): every value of the profiling
+/// options.
+const REJECTED_PREFIXES: &[&str] =
+    &["-fprofile-instr-generate=", "-fprofile-generate=", "-fprofile-instr-use=", "-fprofile-use="];
 
 impl CodegenFlags {
     /// Takes `arg` if it is one of the flags: `None` if it is not, else
@@ -616,9 +609,6 @@ mod tests {
         for a in [
             "-ftrapv",
             "-fshort-enums",
-            "-fsanitize=address",
-            "-fno-sanitize-recover=all",
-            "-fsanitize-trap=undefined",
             "-fcoverage-mapping",
             "-fprofile-arcs",
             "-ftest-coverage",

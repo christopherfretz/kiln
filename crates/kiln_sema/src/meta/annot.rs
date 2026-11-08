@@ -19,6 +19,8 @@ use crate::Sema;
 enum Source {
     Entity(DeclId),
     Param(DeclId, u32),
+    /// The `i`th direct base-specifier of a class (first declaration).
+    Base(DeclId, u32),
     None,
 }
 
@@ -82,10 +84,9 @@ impl Sema<'_, '_> {
             Reflectee::Namespace(d) => Source::Entity(d),
             // A namespace alias has its own annotations, and a
             // namespace-alias-definition admits none: always empty, never
-            // the aliased namespace's (GCC 16.1 agrees; WP-573). A
-            // base-specifier's annotations are not recorded yet
-            // (spec/annotations.md §9 item 1).
-            Reflectee::NamespaceAlias(_) | Reflectee::BaseSpec(..) => Source::None,
+            // the aliased namespace's (GCC 16.1 agrees; WP-573).
+            Reflectee::NamespaceAlias(_) => Source::None,
+            Reflectee::BaseSpec(c, i) => Source::Base(c, i),
             Reflectee::Type(t) => match self.ast.types.view(t.ty()) {
                 // An alias has its own annotations.
                 TypeView::Typedef { decl, .. } => Source::Entity(decl),
@@ -146,6 +147,8 @@ impl Sema<'_, '_> {
         }
         let mut decls: Vec<DeclId> = match src {
             Source::Entity(d) | Source::Param(d, _) => self.ast.redecls_of(d).collect(),
+            // A base-specifier is written once, in the class definition.
+            Source::Base(c, _) => vec![c],
             Source::None => Vec::new(),
         };
         decls.reverse();
@@ -161,7 +164,10 @@ impl Sema<'_, '_> {
                 _ => Some(d),
             };
             let Some(on) = on else { continue };
-            let list = self.ast.annots.of_decl(on);
+            let list = match src {
+                Source::Base(c, i) => self.ast.annots.of_base(c, i),
+                _ => self.ast.annots.of_decl(on),
+            };
             let n = self.ast.lists.get(list).len();
             for k in 0..n {
                 let Some(a) = self.ast.lists.iter::<AnnId>(list).nth(k) else { continue };

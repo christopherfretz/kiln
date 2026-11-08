@@ -73,6 +73,9 @@ impl AttrKind {
     /// internal linkage as if declared `static` (WP-807).
     pub const INTERNAL_LINKAGE: AttrKind = AttrKind(83);
     pub const LIFETIMEBOUND: AttrKind = AttrKind(84);
+    /// The `no_sanitize*` family (clang `NoSanitizeAttr`, WP-675): `a`
+    /// and `b` hold the excluded set and the spelling
+    /// (`kiln_ast::sanitize::no_sanitize_words`).
     pub const NO_SANITIZE: AttrKind = AttrKind(85);
     /// GNU `mode(M)` (clang `ModeAttr`), consumed into the declared type
     /// like the vector attributes: `a` = the mode's width in bits, `| 1
@@ -456,9 +459,10 @@ impl AttrKind {
 
     /// Whether this is one of WP-813's class B attributes
     /// ([`AttrKind::NO_STACK_PROTECTOR`] ..=
-    /// [`AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT`]).
+    /// [`AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT`]), or WP-675's
+    /// [`AttrKind::NO_SANITIZE`].
     pub fn is_class_b(self) -> bool {
-        (240..=273).contains(&self.0)
+        (240..=273).contains(&self.0) || self == AttrKind::NO_SANITIZE
     }
 }
 

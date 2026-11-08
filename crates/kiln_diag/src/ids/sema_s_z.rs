@@ -227,6 +227,7 @@ sema_uninit_self_reference_in_reference_init = Warning [Uninitialized] (1) "refe
 sema_union_has_base = Error (0) "unions cannot have base classes";
 sema_union_member_reference = Error (2) "union member '{0}' has reference type {1}";
 sema_unknown_assumption = Warning [UnknownAssumption] (1) "unknown assumption string '{0}'; attribute is potentially ignored";
+sema_unknown_sanitizer_ignored = Warning [UnknownSanitizers] (1) "unknown sanitizer '{0}' ignored";
 sema_unknown_typename = Error (1) "unknown type name '{0}'";
 sema_unknown_visibility = Warning [IgnoredAttributes] (1) "unknown visibility '{0}'";
 sema_unknown_warning_group = Error (1) "unknown warning group '{0}'";

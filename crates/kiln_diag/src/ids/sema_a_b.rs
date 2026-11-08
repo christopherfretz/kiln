@@ -46,6 +46,9 @@ sema_ambiguous_reference = Error (1) "reference to '{0}' is ambiguous";
 sema_ambiguous_suitable_delete = Warning [AmbiguousDelete] (2) "multiple suitable {0} functions for {1}; no 'operator delete' function will be invoked if initialization throws an exception";
 // WP-509 (spec/sema.md §7.5.1): kiln-only, no clang counterpart.
 sema_analysis_skipped = Remark [KilnAnalysisSkipped] (2) "flow-sensitive warnings for '{0}' skipped: its control-flow graph exceeds -fkiln-cfg-max-elems={1}";
+// [dcl.attr.annotation]/2, [temp.arg.nontype]/6 (WP-830): the value must be
+// a valid constant template argument, as for `reflect_constant`.
+sema_annotation_invalid_value = Error (1) "annotation value refers to {0}, which is not a valid constant template argument";
 sema_annotation_non_declaration = Error (0) "an annotation can appertain only to a declaration";
 sema_annotation_not_allowed = Error (1) "an annotation cannot appertain to {0}";
 sema_annotation_not_structural = Error (1) "annotation has non-structural type {0}";
@@ -185,6 +188,7 @@ sema_attribute_too_few_arguments = Error (2) "{0} attribute takes at least {1} a
 sema_attribute_too_few_arguments_one = Error (1) "{0} attribute takes at least 1 argument";
 sema_attribute_too_many_arguments = Error (2) "{0} attribute takes no more than {1} arguments";
 sema_attribute_too_many_arguments_one = Error (1) "{0} attribute takes no more than 1 argument";
+sema_attribute_type_not_supported_global = Warning [IgnoredAttributes] (2) "{0} attribute argument '{1}' not supported on a global variable";
 sema_attribute_unsupported_by_kiln = Error (1) "'{0}' attribute is not supported by kiln yet";
 sema_attribute_unsupported_target = Error (2) "{0} attribute is not supported on targets missing {1}; specify an appropriate -march= or -mcpu=";
 sema_attribute_void_function = Warning [IgnoredAttributes] (1) "attribute {0} cannot be applied to functions without return value";

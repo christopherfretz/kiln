@@ -1184,10 +1184,24 @@ impl Parser<'_, '_> {
         );
         let a = if ctad_name && let Some(t) = self.at_template_name_arg() {
             t
-        } else if self.at_splice() {
-            // [temp.arg.general]/3 (P2996): a splice-specifier here is a
-            // type splice in the spike (no value or template splices).
-            TemplateArg::ty(self.parse_splice_type()?)
+        } else if self.at_splice()
+            && let Some(end) = self.splice_spec_end(self.pos())
+            && self.at_template_arg_end(end)
+        {
+            // [temp.names]/1 (P2996): a splice-specifier (or
+            // splice-specialization-specifier) forming the whole
+            // template-argument is ill-formed; it must be written
+            // `typename [:r:]`, `template [:r:]` or `([:r:])`. A splice
+            // starting a longer argument (`[:r:] + 1`, `[:r:]::type`)
+            // takes the paths below. GCC 16.1 accepts `[:vt:]<2>` here;
+            // the draft does not (WP-830).
+            let loc = self.loc();
+            self.error_here(DiagId::parse_splice_template_arg_unparenthesized);
+            while self.pos() < end && !self.at_eof() {
+                self.bump();
+            }
+            let e = self.s.act_on_error_expr(&[], loc);
+            self.s.builder().template_arg_expr(e)
         } else if self.is_cxx_type_id_at(self.pos(), TypeIdContext::AsTemplateArgument).0 {
             TemplateArg::ty(
                 self.with_greater_op(false, |p| p.parse_type_id_into(None, DeclSite::TemplateArg))?,

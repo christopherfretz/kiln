@@ -103,6 +103,9 @@ pub struct PredefConfig {
     /// file's: a macro (re)defined with its value, or removed with `None`
     /// (the driver's `features::x86_cpu_macros`; WP-630).
     pub x86_macros: Vec<(String, Option<String>)>,
+    /// The `-fsanitize=` macros (`__SANITIZE_ADDRESS__` and friends; the
+    /// driver's `Sanitize::macros`, WP-675), on every target.
+    pub sanitize_macros: Vec<(String, Option<String>)>,
 }
 
 /// The `AArch64` target state of `-march=` / `-mcpu=` /
@@ -163,6 +166,7 @@ impl PredefConfig {
             reflection: false,
             arm: ArmTarget::default(),
             x86_macros: Vec::new(),
+            sanitize_macros: Vec::new(),
         }
     }
 }
@@ -381,6 +385,11 @@ pub fn build_predefines(base: &str, cfg: &PredefConfig, cmdline: &[CmdMacro]) ->
                     m.remove(n);
                 }
             }
+        }
+    }
+    for (n, v) in &cfg.sanitize_macros {
+        if let Some(v) = v {
+            set(&mut m, n, v);
         }
     }
 

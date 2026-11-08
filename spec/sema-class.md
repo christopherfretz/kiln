@@ -1629,7 +1629,12 @@ an error (§3.4).
   Clang binds a call result even when it then initializes a variable by
   guaranteed elision (`S s2 = make();` dumps `ExprWithCleanups >
   CXXBindTemporaryExpr > CallExpr`); kiln does the same and the Oven/codegen
-  treat such a bind as a no-op.
+  treat such a bind as a no-op. A conversion function's call is bound when
+  it is built, so an `ImplicitCastExpr` (`UserDefinedConversion`, or `NoOp`
+  over one) whose operand is already a `CXXBindTemporaryExpr` is returned
+  unchanged: binding it again destroyed the CWG2327 result of `S{tl}`
+  (`TL::operator S()`) twice (WP-811,
+  `tests/conformance/class.temporary/conversion-function-result-in-braced-cast-destroyed-once-run.cpp`).
 - A by-value class parameter is a temporary the caller destroys at the end of
   the full-expression ([expr.call]/7; clang `shouldBindAsTemporary` is true
   for a parameter entity). This holds however the parameter is initialized:

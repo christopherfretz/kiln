@@ -160,6 +160,11 @@ pub(crate) struct Cg<'a> {
     pub ref_vars: FxHashMap<(DeclId, bool), Vec<DeclId>>,
     /// String literal globals by (array type, bytes).
     pub strings: FxHashMap<(LTy, Vec<u8>), GlobalId>,
+    /// The `UBSan` type descriptor of each type (clang
+    /// `EmitCheckTypeDescriptor`'s cache, WP-675).
+    pub ub_types: FxHashMap<QualType, GlobalId>,
+    /// The source manager, for `UBSan` source locations (WP-675).
+    pub sm: Option<&'a kiln_source::SourceManager>,
     /// Named struct types by record.
     pub named: FxHashMap<DeclId, LTy>,
     /// Base-subobject (`.base`) struct types by record.
@@ -413,6 +418,8 @@ impl<'a> Cg<'a> {
             },
             to_emit: Vec::new(),
             strings: FxHashMap::default(),
+            ub_types: FxHashMap::default(),
+            sm: None,
             named: FxHashMap::default(),
             named_base: FxHashMap::default(),
             const_objects: FxHashMap::default(),
@@ -2189,6 +2196,17 @@ impl<'a> Cg<'a> {
         let nba = fid.filter(|_| !self.f.thunk).and_then(|f| self.nba_fns.get(&f).copied());
         self.no_builtin_attrs(out, nba);
         self.branch_protection_attrs(out, None);
+        self.default_fn_attrs(out);
+    }
+
+    /// The `-default-function-attr`s of clang
+    /// `getTrivialDefaultFunctionAttributes`, on a function and a call site
+    /// alike: `"hwasan-abi"="interceptor"` under the hardware-address
+    /// sanitizer (clang `SanitizerArgs::addArgs`, WP-675).
+    pub(crate) fn default_fn_attrs(&self, out: &mut Vec<Attr>) {
+        if self.opts.sanitize.has(kiln_ast::sanitize::SanitizerSet::HWADDRESS) {
+            out.push(Attr::string("hwasan-abi", "interceptor"));
+        }
     }
 
     /// The branch protection function attributes (clang
@@ -2288,6 +2306,7 @@ impl<'a> Cg<'a> {
         self.class_b_default_attrs(out, d);
         self.no_builtin_attrs(out, d);
         self.branch_protection_attrs(out, d);
+        self.default_fn_attrs(out);
         if let Some(d) = d
             && self.has_fn_attr(d, kiln_ast::attr::AttrKind::DISABLE_TAIL_CALLS)
         {
@@ -3022,11 +3041,13 @@ impl<'a> Cg<'a> {
         let vis = if internal { Visibility::Default } else { self.decl_visibility(d, true) };
         let weak_attr = !internal && ast.is_weak_decl(d);
         let section = self.decl_section(d);
+        let sanitizer = self.global_sanitizer(d, needs_init);
         let gv = self.m.global_mut(g);
         gv.is_constant = constant;
         gv.align = Some(align);
         gv.visibility = vis;
         gv.section = section;
+        gv.sanitizer = sanitizer;
         if internal {
             gv.linkage = Linkage::Internal;
             gv.dso_local = false;
@@ -3128,11 +3149,13 @@ impl<'a> Cg<'a> {
         let comdat = if inline_fn { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
         let vis = if inline_fn { self.decl_visibility(first, true) } else { Visibility::Default };
         let section = self.decl_section(d);
+        let sanitizer = self.global_sanitizer(d, false);
         let gv = self.m.global_mut(g);
         gv.is_constant = constant;
         gv.align = Some(align);
         gv.visibility = vis;
         gv.section = section;
+        gv.sanitizer = sanitizer;
         if inline_fn {
             gv.linkage = Linkage::LinkOnceOdr;
             gv.dso_local = true;

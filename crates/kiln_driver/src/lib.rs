@@ -19,6 +19,7 @@ pub mod fp_flags;
 pub mod link;
 pub mod pp_cmd;
 pub mod rsp;
+pub mod sanitize;
 pub mod syntax_cmd;
 pub mod templ_opts;
 pub mod time;
@@ -195,6 +196,10 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         ArgError::InvalidArgumentToOption(v, o) => {
             Diag::new(DiagId::drv_invalid_argument_to_option, Span::INVALID).arg(v).arg(o)
         }
+        ArgError::NotAllowedWith(a, b) => {
+            Diag::new(DiagId::drv_argument_not_allowed_with, Span::INVALID).arg(a).arg(b)
+        }
+        ArgError::NoSuchFile(f) => Diag::new(DiagId::drv_no_such_file, Span::INVALID).arg(f),
         ArgError::PatchableEntryOffset => {
             Diag::new(DiagId::drv_unsupported_fpatchable_function_entry_argument, Span::INVALID)
         }
@@ -492,6 +497,15 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     }
     for e in &features::resolve(&args, &tc.target).1 {
         emit_arg_error(e, &drv);
+    }
+    // spec/driver.md "Sanitizers".
+    for e in &args.sanitize(!tc.target.is_aarch64(), tc.target.triple).1 {
+        emit_arg_error(e, &drv);
+    }
+    for f in &args.sanitize.ignorelists {
+        if !std::path::Path::new(f).exists() {
+            emit_arg_error(&ArgError::NoSuchFile(f.clone()), &drv);
+        }
     }
     if args.help {
         let _ = io.stdout.write_all(HELP.as_bytes());

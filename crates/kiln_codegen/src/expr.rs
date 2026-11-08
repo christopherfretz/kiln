@@ -882,8 +882,9 @@ impl Cg<'_> {
                 return Ok(None);
             }
             CastKind::Dynamic => {
-                let p = self.emit_scalar(s)?;
-                let align = self.record_align_of(sq);
+                // clang `VisitCastExpr` `CK_Dynamic`: the operand with
+                // `EmitPointerWithAlignment`'s alignment.
+                let (p, align) = self.ptr_align(s)?;
                 self.emit_dynamic_cast(e, p, align)?
             }
             CastKind::ArrayToPointerDecay => {
@@ -1041,8 +1042,8 @@ impl Cg<'_> {
         s: ExprId,
     ) -> R<V> {
         let ast = self.ast;
-        let p = self.emit_scalar(s)?;
         if ck == CastKind::BaseToDerived {
+            let p = self.emit_scalar(s)?;
             let Some(derived) = ast.types.pointee(q).and_then(|t| ast.types.as_record(t)) else {
                 return err(self.loc_of(e), "base-to-derived cast of a non-class pointer");
             };
@@ -1050,18 +1051,14 @@ impl Cg<'_> {
             let null_check = !self.is_this_expr(s);
             return Ok(self.derived_ptr(p, off, null_check));
         }
-        let Some(derived) = ast.types.pointee(sq).and_then(|t| ast.types.as_record(t)) else {
+        if ast.types.pointee(sq).and_then(|t| ast.types.as_record(t)).is_none() {
             return err(self.loc_of(e), "derived-to-base cast of a non-class pointer");
-        };
-        let (vb, off) = self.base_path(e, derived)?;
-        let null_check = ck == CastKind::DerivedToBase && !self.is_this_expr(s);
-        if vb.is_none() {
-            Ok(self.base_ptr(p, off, null_check))
-        } else {
-            let ty = self.mty(ast.types.pointee(sq).expect("checked"));
-            let align = self.record_align_of(sq);
-            Ok(self.base_address(Addr { v: p, ty, align }, derived, vb, off, null_check)?.0)
         }
+        // clang `VisitCastExpr` `CK_DerivedToBase`: the whole cast through
+        // `EmitPointerWithAlignment` (`GetAddressOfBaseClass`), so a
+        // virtual step loads the vtable pointer at the operand's known
+        // alignment.
+        Ok(self.pointer_with_alignment(e)?.v)
     }
 
     /// clang `MustVisitNullValue`: a `nullptr_t` operand of a null pointer
@@ -1149,8 +1146,11 @@ impl Cg<'_> {
                 if self.is_float_ty(t) {
                     return Ok(self.fneg(v));
                 }
+                if let Some(r) = self.ub_negate(e, v, q)? {
+                    return Ok(r);
+                }
                 let z = self.icn(t, 0);
-                let fl = self.nsw_if(self.is_signed(q));
+                let fl = self.ub_nsw(q, self.is_signed(q));
                 Ok(self.bin(BinOp::Sub, fl, z, v))
             }
             UnaryOp::Not => {
@@ -1256,9 +1256,12 @@ impl Cg<'_> {
                 let c = self.fconst(t, if inc { 1.0 } else { -1.0 });
                 self.bin(BinOp::FAdd, Flags::NONE, old, c)
             } else {
+                if let Some(r) = self.ub_inc_dec(e, old, inc)? {
+                    return Ok(r);
+                }
                 let c = self.icn(t, amount);
                 let can_overflow = !ast.exprs.get(e).has(ExprFlags::CANNOT_OVERFLOW);
-                let fl = self.nsw_if(can_overflow && self.is_signed(q));
+                let fl = self.ub_nsw(q, can_overflow && self.is_signed(q));
                 self.bin(BinOp::Add, fl, old, c)
             }
         })
@@ -1392,7 +1395,7 @@ impl Cg<'_> {
         // clang `hasSignedIntegerRepresentation`: a vector's elements;
         // `nsw` only for scalars (`isSignedIntegerOrEnumerationType`).
         let signed = self.is_signed(self.scalar_of(q));
-        let nsw = self.nsw_if(self.is_signed(q));
+        let nsw = self.ub_nsw(q, self.is_signed(q));
         Ok(match op {
             BinaryOp::Add | BinaryOp::Sub if lp && rp => {
                 let a = self.cast(CastOp::PtrToInt, l, LTy::I64);
@@ -1441,6 +1444,8 @@ impl Cg<'_> {
                         Some(v) => v,
                         None => self.bin(BinOp::FAdd, Flags::NONE, l, r),
                     }
+                } else if let Some(v) = self.ub_binary_overflow(e, op, l, r, q)? {
+                    v
                 } else {
                     self.bin(BinOp::Add, nsw, l, r)
                 }
@@ -1451,6 +1456,8 @@ impl Cg<'_> {
                         Some(v) => v,
                         None => self.bin(BinOp::FSub, Flags::NONE, l, r),
                     }
+                } else if let Some(v) = self.ub_binary_overflow(e, op, l, r, q)? {
+                    v
                 } else {
                     self.bin(BinOp::Sub, nsw, l, r)
                 }
@@ -1458,6 +1465,8 @@ impl Cg<'_> {
             BinaryOp::Mul => {
                 if float {
                     self.bin(BinOp::FMul, Flags::NONE, l, r)
+                } else if let Some(v) = self.ub_binary_overflow(e, op, l, r, q)? {
+                    v
                 } else {
                     self.bin(BinOp::Mul, nsw, l, r)
                 }
@@ -1466,6 +1475,7 @@ impl Cg<'_> {
                 if float {
                     self.bin(BinOp::FDiv, Flags::NONE, l, r)
                 } else {
+                    self.ub_divrem(e, op, l, r, q)?;
                     self.bin(if signed { BinOp::SDiv } else { BinOp::UDiv }, Flags::NONE, l, r)
                 }
             }
@@ -1473,12 +1483,17 @@ impl Cg<'_> {
                 if float {
                     self.bin(BinOp::FRem, Flags::NONE, l, r)
                 } else {
+                    self.ub_divrem(e, op, l, r, q)?;
                     self.bin(if signed { BinOp::SRem } else { BinOp::URem }, Flags::NONE, l, r)
                 }
             }
             BinaryOp::Shl | BinaryOp::Shr => {
                 let rt = self.f.fir.ty(&self.m, r);
-                let r = if rt == lt { r } else { self.int_cast(r, lt, false) };
+                let rp = if rt == lt { r } else { self.int_cast(r, lt, false) };
+                if !self.f.san.is_empty() {
+                    self.ub_shift(e, op == BinaryOp::Shl, l, r, rp, q, rq)?;
+                }
+                let r = rp;
                 let o = if op == BinaryOp::Shl {
                     BinOp::Shl
                 } else if signed {
@@ -2193,12 +2208,6 @@ impl Cg<'_> {
         }
     }
 
-    /// The natural alignment of the object pointer type `q` points to.
-    pub(crate) fn record_align_of(&mut self, q: QualType) -> u64 {
-        let p = self.ast.types.pointee(q).unwrap_or(q);
-        self.pointee_layout(p).1
-    }
-
     /// clang `EmitLoadOfReference`: the address a reference of type `rq`
     /// stored at `slot` is bound to. At `-fclang-compat=22` (clang 20+) the
     /// load carries `!nonnull !{}` and, for an object referee whose natural
@@ -2419,9 +2428,15 @@ impl Cg<'_> {
         let ast = self.ast;
         match ast.exprs.unary_op(e) {
             UnaryOp::Deref => {
-                let p = self.emit_scalar(ast.exprs.operand(e))?;
+                // clang `EmitUnaryOpLValue`: the pointer's alignment from
+                // `EmitPointerWithAlignment` (spec/codegen.md §3.3).
+                let s = ast.exprs.operand(e);
+                let (p, align) = if ast.types.is_pointer(ast.exprs.get(s).ty()) {
+                    self.ptr_align(s)?
+                } else {
+                    (self.emit_scalar(s)?, self.natural_align(q))
+                };
                 let ty = if ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
-                let align = self.natural_align(q);
                 Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None, tb: Tb::Type })
             }
             op @ (UnaryOp::PreInc | UnaryOp::PreDec) => {
@@ -2722,10 +2737,11 @@ impl Cg<'_> {
             return self.decl_lvalue(e, field, q);
         }
         let (base_addr, btb) = if n.has(ExprFlags::ARROW) {
-            let p = self.emit_scalar(base)?;
+            // clang `EmitMemberExpr`: `EmitPointerWithAlignment` of the
+            // base (`this` included: a class's pointer alignment).
             let pq = ast.types.pointee(ast.exprs.get(base).ty()).expect("pointee");
+            let (p, align) = self.ptr_align(base)?;
             let ty = self.mty(pq);
-            let align = self.natural_align(pq);
             (Addr { v: p, ty, align }, Tb::Type)
         } else {
             let lv = self.emit_lvalue(base)?;
@@ -2972,11 +2988,11 @@ impl Cg<'_> {
         }
         let base = ast.exprs.operand(inner);
         let addr = if ast.exprs.get(inner).has(ExprFlags::ARROW) {
-            let p = self.emit_scalar(base)?;
             let Some(vq) = ast.types.pointee(ast.exprs.get(base).ty()) else {
                 return err(self.loc_of(inner), "malformed ExtVectorElementExpr");
             };
-            Addr { v: p, ty: self.mty(vq), align: self.natural_align(vq) }
+            let (p, align) = self.ptr_align(base)?;
+            Addr { v: p, ty: self.mty(vq), align }
         } else {
             self.emit_lvalue(base)?.addr
         };
@@ -3144,8 +3160,8 @@ impl Cg<'_> {
                 (Addr { v: p, ty: ety, align }, vec![iv])
             }
         } else {
-            let p = self.emit_scalar(base)?;
-            let align = self.natural_align(q);
+            // The base pointer with `EmitPointerWithAlignment`'s alignment.
+            let (p, align) = self.ptr_align(base)?;
             let iv = match pre {
                 Some(v) => v,
                 None => self.emit_scalar(idx)?,
