@@ -1117,6 +1117,21 @@ literal is one instruction and one step, not an interpreted loop.
   to it active without activating an array member it is an element of,
   and revives ended tracked storage with uninitialized bytes; see "C++26
   union lifetime" below. It has no value.
+- **`__builtin_clear_padding(p)`** (WP-774, `bi::CLEAR_PADDING`,
+  `Vm::clear_padding`; GCC's builtin): one instruction, with `t1` taken
+  from `p`'s designator as for `START_LIFETIME`. GCC rejects the call in
+  a constant expression; kiln accepts it as an extension, so that
+  libstdc++'s `constexpr atomic(T)` (which clears `T`'s padding when
+  `__has_builtin` says it can) still initializes constants. The Oven
+  does not model padding bits: they stay indeterminate, so a later
+  `bit_cast` of them is still non-constant. The call checks that `p`
+  designates storage the evaluation may write (`check_storage` for
+  `sizeof(T)` bytes, then the write rules of an assignment, with access
+  kind `ASSIGN`), and otherwise does nothing. A null, one-past-the-end,
+  freed or out-of-evaluation object (a global not under construction)
+  gives the matching "assignment to ..." / "cannot modify an object
+  that is visible outside" note. It has no value. Tests:
+  `tests/conformance/ext.gnu.clear_padding/clear-padding-constexpr*.cpp`.
 - **`__builtin_is_within_lifetime(p)`** (WP-418, `bi::LIFETIME`;
   P2641R4, clang 20 `IsWithinLifetime`): a null, function or
   one-past-the-end `p` fails with `'__builtin_is_within_lifetime' cannot

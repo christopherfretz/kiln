@@ -1078,7 +1078,15 @@ WP-400 models clang's `DefaultedDefaultConstructorIsConstexpr` and
 - Before C++23 the per-subobject rule holds: each base's and each member's
   selected constructor (default, copy or move as the member requires) or
   assignment must be constexpr, a member without an initializer and a union
-  are fine (P1331), and a virtual base makes it non-constexpr.
+  are fine (P1331), and a virtual base makes it non-constexpr. A member's
+  or base's class "has a constexpr default constructor" (clang
+  `hasConstexprDefaultConstructor`, `Sema::has_constexpr_default_ctor`)
+  when a declared constexpr constructor is callable without arguments,
+  a constructor template included: its pattern has no parameters, or a
+  first parameter with a default argument or that is a pack (clang
+  `addedMember` on the templated declaration; libc++ `std::tuple`'s
+  default constructor is such a template, WP-694). Test:
+  `tests/conformance/class.default.ctor/constexpr-ctor-template.cpp`.
 - An explicitly `constexpr`/`consteval` defaulted member that the rule says
   is not constexpr is an error at the specifier before C++23: "defaulted
   definition of {default constructor|copy constructor|...} cannot be marked

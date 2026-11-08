@@ -776,6 +776,16 @@ impl Compiler<'_> {
                 let p = self.rv(x);
                 op(self, bi::START_LIFETIME, 0, [p, p, p], [t, 0], begin);
             }
+            // WP-774: GCC `__builtin_clear_padding` (a GCC-only kiln
+            // builtin; GCC itself rejects it in a constant expression):
+            // the pointer is checked, the padding left as it is
+            // (`Oven::clear_padding`).
+            id::CLEAR_PADDING => {
+                let x = arg(0)?;
+                let t = self.designator(x);
+                let p = self.rv(x);
+                op(self, bi::CLEAR_PADDING, 0, [p, p, p], [t, 0], begin);
+            }
             // WP-292: the pointer, checked against the alignment (and
             // offset); a failure is noted at the pointer operand.
             id::ASSUME_ALIGNED => {

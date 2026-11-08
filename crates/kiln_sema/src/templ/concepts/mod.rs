@@ -135,8 +135,21 @@ impl crate::Sema<'_, '_> {
     /// ([temp.variadic]/12), diagnosed at its begin as "requires clause
     /// contains unexpanded parameter pack" (clang's
     /// `ActOnRequiresClause`) and replaced by an error expression.
+    ///
+    /// In a lambda's declarator (its template-head's requires-clause or
+    /// its trailing one, before the body opens) the packs the lambda
+    /// declares are diagnosed so, and an enclosing scope's make the
+    /// lambda-expression contain an unexpanded pack, expanded by a pack
+    /// expansion around it ([temp.variadic]/5; clang's
+    /// `DiagnoseUnexpandedParameterPacks` with the lambda's `LocalPacks`).
     pub fn act_on_requires_clause(&mut self, e: ExprId) -> ExprId {
-        if self.diagnose_unexpanded_written(e, "requires clause", None) {
+        let in_declarator = self.lambdas.last().is_some_and(|top| !top.body_open);
+        let unexpanded = if in_declarator {
+            self.diagnose_unexpanded_lambda_declarator(e, "requires clause")
+        } else {
+            self.diagnose_unexpanded_written(e, "requires clause", None)
+        };
+        if unexpanded {
             let at = self.begin_loc(e);
             return self.act_on_error_expr(&[e], at);
         }

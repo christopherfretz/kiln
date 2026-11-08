@@ -649,6 +649,19 @@ fn plan<'a>(
     steps
 }
 
+/// The module text before its metadata section, which LLVM's printer
+/// (and kiln's) writes after every declaration and attribute group: the
+/// checks of [`ir_passes`] look only at those, and a `-g` module's
+/// metadata is most of its text (WP-817). A top-level line opening with
+/// `!` starts the section; no other line does (instructions are
+/// indented and a string's newline is escaped).
+fn code_part(ir: &str) -> &str {
+    if ir.starts_with('!') {
+        return "";
+    }
+    ir.find("\n!").map_or(ir, |i| &ir[..=i])
+}
+
 /// Whether the IR text needs the coroutine lowering: it declares an
 /// `llvm.coro.*` intrinsic (clang's `CoroConditionalWrapper` test,
 /// `coro::declaresAnyIntrinsic`). Every `presplitcoroutine` function
@@ -687,6 +700,7 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
     if args.disable_llvm_passes {
         return None;
     }
+    let ir = code_part(ir);
     let passes = match opt_pipeline(args.opt_flag.as_deref()) {
         Some(p) => p,
         None if needs_always_inline(ir) => "default<O0>",
@@ -889,30 +903,40 @@ fn execute(
         }
         match step {
             Step::Frontend { input, dest } => {
-                ir = frontend(args, tc, input, stdin_text, diag_opts, io).map(String::into_bytes);
+                let text = frontend(args, tc, input, stdin_text, diag_opts, io);
                 // The IR-level passes run before the IR is written or
                 // piped on (spec/driver.md "IR optimization").
-                if let Some(text) = &ir
-                    && let Some(cmds) = ir_passes(args, tc, std::str::from_utf8(text).unwrap_or(""))
-                {
-                    // Each run's output replaces its input: the frontend's
-                    // text is not kept alongside a copy (WP-633).
-                    let mut data = ir.take().unwrap_or_default();
-                    let mut ok = true;
-                    for cmd in &cmds {
-                        if args.verbose {
-                            let mut err = io.stderr.clone();
-                            let _ = err.write_all(cmd.render(false).as_bytes());
-                        }
-                        let mut out = Vec::new();
-                        ok = cmd.run(Some(&data), &mut out, &io.stderr, drv);
-                        if !ok {
-                            break;
-                        }
-                        data = out;
+                let Some(cmds) = text.as_deref().and_then(|t| ir_passes(args, tc, t)) else {
+                    // The frontend's own text is written as is: no UTF-8
+                    // re-validation of a (`-g`: mostly metadata) module.
+                    if let (Some(t), Dest::File(f)) = (&text, dest)
+                        && let Err(e) = write_output(Some(f), t, &mut io.stdout)
+                    {
+                        report_output_error(diag_opts, &io.stderr, f, &e);
+                        failed = true;
                     }
-                    ir = ok.then_some(data);
+                    skip_piped = text.is_none();
+                    failed |= text.is_none();
+                    ir = text.map(String::into_bytes);
+                    continue;
+                };
+                // Each run's output replaces its input: the frontend's
+                // text is not kept alongside a copy (WP-633).
+                let mut data = text.map(String::into_bytes).unwrap_or_default();
+                let mut ok = true;
+                for cmd in &cmds {
+                    if args.verbose {
+                        let mut err = io.stderr.clone();
+                        let _ = err.write_all(cmd.render(false).as_bytes());
+                    }
+                    let mut out = Vec::new();
+                    ok = cmd.run(Some(&data), &mut out, &io.stderr, drv);
+                    if !ok {
+                        break;
+                    }
+                    data = out;
                 }
+                ir = ok.then_some(data);
                 skip_piped = ir.is_none();
                 failed |= ir.is_none();
                 if let (Some(text), Dest::File(f)) = (&ir, dest)
@@ -1037,6 +1061,16 @@ mod tests {
         assert!(needs_always_inline("attributes #1 = { alwaysinline mustprogress nounwind }\n"));
         assert!(!needs_always_inline("attributes #0 = { mustprogress noinline optnone }\n"));
         assert!(!needs_always_inline("define void @alwaysinline() #0 {\n}\n"));
+    }
+
+    #[test]
+    fn code_part_stops_at_metadata() {
+        let ir = "define void @f() #0 !dbg !5 {\n  ret void, !dbg !7\n}\n\nattributes #0 = { alwaysinline }\n\n!llvm.dbg.cu = !{!0}\n!0 = !{}\n";
+        let head = code_part(ir);
+        assert!(head.ends_with("alwaysinline }\n\n"));
+        assert!(needs_always_inline(head));
+        assert_eq!(code_part("!0 = !{}\n"), "");
+        assert_eq!(code_part("declare void @g()\n"), "declare void @g()\n");
     }
 
     #[test]

@@ -4,8 +4,9 @@
 # (KILN_OSS_CXX, else $CARGO_TARGET_DIR/harness/kiln++, else debug/kiln++;
 # skipped when none is built), checks the JSONL fields, and runs
 # oss-report.py on the two-cluster fixture under fixtures/, plain, with
-# --perf (WP-792) and with --update. Prints one PASS/FAIL line per check and
-# exits 1 on any FAIL.
+# --perf (WP-792) and with --update, and the libc++ mode (WP-694): the
+# wrapper's `-stdlib=libc++` and oss-report.py --stdlib libc++. Prints one
+# PASS/FAIL line per check and exits 1 on any FAIL.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIX="$HERE/fixtures"
@@ -66,11 +67,23 @@ run_one() { # <label> <compiler or empty>
   (cd "$TMP" && KILN_OSS_CXX="$cxx" KILN_OSS_LOG="$log" "$HERE/kiln-cxx" --version >/dev/null 2>&1)
   check "$label: query line" "field '$log' 2 'r[\"kind\"]==\"ok\" and r[\"source\"]==\"none\"'"
 }
+# libc++ mode (WP-694): `-stdlib=libc++` first, and the binary runs on libc++.
+stdlib_one() { # <label> <compiler or empty>
+  local label="$1" cxx="$2" log="$TMP/$1-libcxx.jsonl"
+  (cd "$TMP" && KILN_OSS_CXX="$cxx" KILN_OSS_LOG="$log" KILN_OSS_STDLIB=libc++ "$HERE/kiln-cxx" -O1 hello.cpp -o "hello-$label-libcxx" >/dev/null 2>&1)
+  check "$label: libc++ hello builds and runs" "[ \"\$('$TMP/hello-$label-libcxx')\" = hello ]"
+  check "$label: libc++ argv starts with -stdlib=libc++" "field '$log' 0 'r[\"kind\"]==\"ok\" and r[\"argv\"][1]==\"-stdlib=libc++\"'"
+  check "$label: libc++ binary needs libc++.so" "readelf -d '$TMP/hello-$label-libcxx' | grep -q 'libc++.so' && ! readelf -d '$TMP/hello-$label-libcxx' | grep -q 'libstdc++'"
+}
 run_one clang ""
 check "clang: default compiler is clang++-19" "field '$TMP/clang.jsonl' 0 'r[\"argv\"][0]==\"clang++-19\"'"
+stdlib_one clang ""
+(cd "$TMP" && KILN_OSS_STDLIB=bogus "$HERE/kiln-cxx" --version >/dev/null 2>&1)
+check "a bad KILN_OSS_STDLIB exits 2" "[ $? -eq 2 ]"
 if [ -n "$KILN_CXX" ]; then
   echo "kiln++: $KILN_CXX"
   run_one kiln "$KILN_CXX"
+  stdlib_one kiln "$KILN_CXX"
   (cd "$TMP" && KILN_OSS_CXX="$KILN_CXX" KILN_OSS_LOG="$TMP/oom.jsonl" KILN_OSS_VMEM_KB=30000 "$HERE/kiln-cxx" -c hello.cpp -o o.o >/dev/null 2>&1)
   check "kiln: 30 MB address-space cap is kind oom" "field '$TMP/oom.jsonl' 0 'r[\"kind\"]==\"oom\" and r[\"rc\"]!=0 and r[\"diag\"]!=\"\"'"
 else
@@ -92,6 +105,16 @@ check "--update rewrites the section" "grep -q 'Failure clusters (kiln): 2.' '$T
 python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --perf demo > "$TMP/perf.md"
 check "--perf: geomean and the slow TU" "grep -q 'geomean kiln/clang-19 time \\*\\*2.00x\\*\\*, RSS \\*\\*1.50x\\*\\*' '$TMP/perf.md' && grep -q 'TUs over 1.2x on time or RSS: 1 of the 1' '$TMP/perf.md'"
 check "--update regenerates the projects table" "grep -q '| \`demo\` | 1 | \`v1.0.0\` | blocked (2 clusters) |' '$TMP/status.md' && grep -q '| \`other\` | 2 | \`v2.0.0\` | tests at parity |' '$TMP/status.md'"
+
+# --stdlib libc++ reads the -libcxx builds into their own block and the
+# projects table's libc++ column, keeping the libstdc++ status (WP-694).
+python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --stdlib libc++ demo > "$TMP/libcxx.md"
+check "--stdlib libc++: the libc++ section" "grep -q '^### demo (v1.0.0), libc++\$' '$TMP/libcxx.md' && grep -q '| tests passed / total | 3 / 4 | 4 / 4 |' '$TMP/libcxx.md'"
+python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --stdlib libc++ --update "$TMP/status.md" demo >/dev/null 2>&1
+check "--stdlib libc++ --update: libc++ column and block" "grep -q '| \`demo\` | 1 | \`v1.0.0\` | blocked (2 clusters) | blocked (tests 3/4 vs clang 4/4) |' '$TMP/status.md' && grep -q '| \`other\` | 2 | \`v2.0.0\` | tests at parity | not run |' '$TMP/status.md' && grep -q '<!-- oss:demo:libcxx -->' '$TMP/status.md' && grep -q 'Failure clusters (kiln): 2.' '$TMP/status.md'"
+printf '# page\n' > "$TMP/page.md"
+python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --stdlib libc++ --update "$TMP/page.md" demo >/dev/null 2>&1
+check "--update adds no projects table to a page without one" "grep -q '<!-- oss:demo:libcxx -->' '$TMP/page.md' && ! grep -q 'oss:projects' '$TMP/page.md'"
 
 echo "selftest: $FAILS failed"
 [ "$FAILS" -eq 0 ]

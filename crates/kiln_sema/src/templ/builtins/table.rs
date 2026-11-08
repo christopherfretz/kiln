@@ -501,6 +501,10 @@ pub static TABLE: &[Row] = &[
     // `builtin_start_lifetime`, the Oven `bi::START_LIFETIME`, a no-op in
     // codegen (spec/oven.md "C++26 union lifetime").
     f("__builtin_start_lifetime", DONE, Oven::Yes),
+    // WP-774: GCC's (libstdc++'s and libc++ 22's atomics test for it);
+    // sema `builtin_clear_padding`, codegen `emit_clear_padding`, a
+    // validated no-op in the Oven (spec/codegen.md "Clearing padding").
+    f("__builtin_clear_padding", DONE, Oven::Yes),
 ];
 
 /// The row for builtin `name`, if `name` is in the table.
@@ -538,13 +542,14 @@ pub fn has_builtin_staged(name: &str) -> Option<bool> {
 
 /// Whether `name` is a GCC builtin clang does not have, which kiln
 /// implements and reports through `__has_builtin` (WP-484, WP-757,
-/// WP-773).
+/// WP-773, WP-774).
 pub fn gcc_only(name: &str) -> bool {
     matches!(
         name,
         "__builtin_is_string_literal"
             | "__builtin_observable_checkpoint"
             | "__builtin_start_lifetime"
+            | "__builtin_clear_padding"
     )
 }
 
