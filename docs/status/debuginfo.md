@@ -40,9 +40,12 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
   | `step_finish.cpp` | `step` into a method, `finish` with its return value, `next` over a call | pass | pass |
   | `globals_lambda.cpp` | a namespace-scope variable, a static data member, a lambda's by-copy and by-reference captures, `up` | pass | pass |
 
-  The debugger tests are not among `cargo xtask test`'s default roots,
-  because CI has no gdb. Name the directory to run them:
-  `cargo xtask test tests/debuginfo`.
+  Since WP-816 `tests/debuginfo` is a default root of `cargo xtask test`
+  and of both `ci` corpus runs, and GitHub CI runs it on aarch64 and
+  x86_64: the corpus jobs install gdb and lldb-19 and set
+  `KILN_REQUIRE_DEBUGGERS=1`, so a missing debugger is an ERROR there.
+  On a machine without them the tests SKIP with the reason
+  (`requires `gdb` on PATH`).
 
 ## Statistics against clang 19 (OSS builds)
 
@@ -267,7 +270,6 @@ clang 19 (D). The list matches spec/landed/codegen/WP-814.md
   `extraData`.
 - D: no call-site declaration subprograms above `-O0` (the call site
   DIE gap above).
-- `tests/debuginfo` is not run in CI (no gdb in the CI image).
 
 ## Follow-ups
 
@@ -277,8 +279,6 @@ clang 19 (D). The list matches spec/landed/codegen/WP-814.md
   (`kiln_driver/src/codegen_cmd.rs` `ir_passes`); a bitcode writer or a
   single `opt` run would cut it (perf-reference-workload.md F4).
 - Call-site declaration subprograms above `-O0` (the call site DIE gap).
-- A CI image with gdb, so `tests/debuginfo` joins the default roots
-  (`xtask/src/test/runner.rs` `debugger_skip`).
 - The D items under "Gaps", in roughly this order: structured bindings,
   `DIImportedEntity`, global-initializer subprograms, alias templates,
   then the rest.
