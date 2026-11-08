@@ -53,6 +53,10 @@ pub struct AnonIds {
     refl_literals: u64,
     /// How reflections mangle (`-fkiln-reflection-mangling=`).
     refl_mode: ReflectionMangling,
+    /// Expressions with no encoding met in a requires-clause (the
+    /// innermost unsupported subexpression), for a hard error
+    /// ([`AnonIds::take_unmangleable`]; WP-818).
+    unmangleable: Vec<ExprId>,
 }
 
 impl AnonIds {
@@ -77,6 +81,14 @@ impl AnonIds {
     /// nested ones included.
     pub fn reflection_literals(&self) -> u64 {
         self.refl_literals
+    }
+
+    /// The expressions of requires-clauses mangled with this table that
+    /// have no encoding (each the innermost unsupported subexpression),
+    /// drained: each is a hard error (clang's "cannot yet mangle
+    /// expression type", spec/abi.md §8.15).
+    pub fn take_unmangleable(&mut self) -> Vec<ExprId> {
+        std::mem::take(&mut self.unmangleable)
     }
 
     /// The id of class `d` (first declaration), assigning the next one
@@ -861,21 +873,27 @@ pub fn asm_label(ast: &Ast, d: DeclId) -> Option<String> {
 /// The `abi_tag` tags of `d` (sorted, unique, `,`-separated), from any
 /// redeclaration or, for an instantiation, its pattern (clang instantiates
 /// `AbiTagAttr` and clones it onto redeclarations). Once the walk crosses
-/// a class-template member instantiation, a function pattern with a
-/// definition contributes only that definition's tags: clang 19 takes the
-/// instantiated member's attributes from the pattern definition, so an
-/// out-of-line definition that does not repeat the tag drops it
-/// (spec/abi.md §8.15).
+/// a class-template member instantiation, a function pattern whose
+/// definition was seen before the member was instantiated contributes only
+/// that definition's tags: clang 19 instantiates the member declaration's
+/// attributes from the pattern's most recent declaration at the point the
+/// class specialization is instantiated, so an out-of-line definition seen
+/// earlier that does not repeat the tag drops it, while one seen later does
+/// not (spec/abi.md §8.15). Declaration ids are allocated in creation
+/// order, so the instantiated member and the pattern definition compare by
+/// id.
 fn abi_tags(ast: &Ast, d: DeclId) -> Option<&str> {
-    let mut work = vec![(d, false)];
+    let mut work: Vec<(DeclId, Option<DeclId>)> = vec![(d, None)];
     let mut steps = 0;
     while let Some((cur, member)) = work.pop() {
         steps += 1;
         if steps > 16 {
             break;
         }
-        let def_only =
-            member && is_function_kind(ast.decls.get(cur).kind()) && ast.definition(cur).is_some();
+        let def_only = member.is_some_and(|inst| {
+            is_function_kind(ast.decls.get(cur).kind())
+                && ast.definition(cur).is_some_and(|def| def < inst)
+        });
         let tag_of = |r: DeclId| {
             crate::layout::props::attrs(ast, r)
                 .find(|a| a.kind == AttrKind::ABI_TAG)
@@ -915,10 +933,10 @@ fn abi_tags(ast: &Ast, d: DeclId) -> Option<&str> {
             work.push((p, member));
         }
         if let Some(p) = ast.instantiated_from(f) {
-            work.push((p, true));
+            work.push((p, Some(f)));
         }
         if let Some(p) = member_tmpl {
-            work.push((p, true));
+            work.push((p, Some(f)));
         }
     }
     None
@@ -1175,6 +1193,9 @@ struct Mangler<'a, 'b> {
     /// return or variable type, or of a name, derives no implicit tags
     /// for the functions and variables mangled inside it.
     trials: u32,
+    /// The innermost expression [`Mangler::expression`] found no
+    /// encoding for, since last cleared.
+    failed: Option<ExprId>,
     /// The implicit tags of the function or variable whose encoding is
     /// being mangled, written after the unqualified name of the
     /// declarations listed (the entity and, for a function template
@@ -1290,6 +1311,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             used_tags: Vec::new(),
             emitted_tags: Vec::new(),
             trials: 0,
+            failed: None,
             extra_tags: None,
         }
     }
@@ -3111,6 +3133,13 @@ impl<'a, 'b> Mangler<'a, 'b> {
             TypeView::DependentDecltype(p) => {
                 self.dependent_decltype(ast.types.expr_origin(q.ty(), p));
             }
+            // A class template name to deduce arguments for, in a
+            // dependent functional cast (`cvNS0_14transform_viewE_` for
+            // `transform_view(r, f)`): its template name (clang
+            // `mangleType(const DeducedTemplateSpecializationType *)`).
+            TypeView::DeducedTemplateSpecialization { name, deduced: None } => {
+                self.template_name(name);
+            }
             // A type-dependent GNU `typeof(e)` (clang: a bare vendor name).
             TypeView::TypeOf { .. } => self.out.push_str("u6typeof"),
             // A dependent transform: `u <vendor builtin name> I <base> E`.
@@ -3133,20 +3162,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.ty(QualType::unqual(class));
         let pointee = ast.types.canonical(pointee);
         if let Some(p) = ast.types.proto(pointee).copied() {
-            self.cc_qualifier(&p);
-            let mq = p.info().this_quals();
-            if mq.is_restrict() {
-                self.out.push('r');
-            }
-            if mq.is_volatile() {
-                self.out.push('V');
-            }
-            if mq.is_const() {
-                self.out.push('K');
-            }
             let fkey = Sub::Type(pointee);
             if !self.try_sub(fkey) {
-                self.function_type(pointee, &p, false);
+                self.function_type(pointee, &p, true);
                 self.subs.push(fkey);
             }
         } else {
@@ -3171,12 +3189,26 @@ impl<'a, 'b> Mangler<'a, 'b> {
     }
 
     /// <function-type> ::= [U <cc>] [<CV>] [Do] F [Y] <return> <params>
-    /// [<ref>] E (a member pointer writes the convention and the method
-    /// cv-qualifiers itself: `cc` is false then).
+    /// [<ref>] E. The `<CV>` are the function type's own method
+    /// qualifiers, so a member pointer's pointee and an abominable type
+    /// mangle alike; `cc` is false where the caller wrote the convention.
     fn function_type(&mut self, _q: QualType, p: &kiln_ast::types::FuncProto, cc: bool) {
         let ast = self.ast;
         if cc {
             self.cc_qualifier(p);
+        }
+        // The `this` qualifiers of an abominable function type (clang
+        // `mangleType(const FunctionProtoType *)`'s method quals): `K` in
+        // `M1SKFivE` and in a deduced `KFiiE` (WP-818).
+        let mq = p.info().this_quals();
+        if mq.is_restrict() {
+            self.out.push('r');
+        }
+        if mq.is_volatile() {
+            self.out.push('V');
+        }
+        if mq.is_const() {
+            self.out.push('K');
         }
         if ast.types.exc_spec(p).is_nothrow() {
             self.out.push_str("Do");

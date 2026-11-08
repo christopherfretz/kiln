@@ -493,6 +493,15 @@ impl<'a> Cg<'a> {
     /// reported on the way (even when emission fails).
     pub fn run(mut self) -> (R<Module>, Vec<Diag>) {
         let r = self.run_tu();
+        // A requires-clause in a symbol with no encoding (WP-818).
+        let mut seen = FxHashSet::default();
+        for e in self.anon.take_unmangleable() {
+            if seen.insert(e) {
+                let kind = format!("{:?}", self.ast.exprs.get(e).kind());
+                let at = Span::empty(self.ast.begin_loc(e));
+                self.diags.push(Diag::new(DiagId::cg_cannot_mangle_expression, at).arg(&kind));
+            }
+        }
         (r.map(|()| self.m), self.diags)
     }
 

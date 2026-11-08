@@ -147,6 +147,18 @@ pub struct Target {
 }
 
 impl Target {
+    /// The target whose builtin table is `types`, for callers that hold
+    /// only an AST (the two supported targets differ in their `long
+    /// double` format).
+    pub fn for_types(types: &TargetTypes) -> Target {
+        let mut t = match types.long_double {
+            FloatFormat::X87Extended => Target::for_arch(Arch::X86_64),
+            _ => Target::for_arch(Arch::AArch64),
+        };
+        t.types = types.clone();
+        t
+    }
+
     /// The description of `arch`-unknown-linux-gnu.
     pub fn for_arch(arch: Arch) -> Target {
         let x86 = arch == Arch::X86_64;

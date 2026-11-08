@@ -15,6 +15,9 @@ use kiln_ast::names::DeclNameView;
 use kiln_ast::types::{ArgView, ExprOperand, Nns, TagKeyword, TemplateName, TypeView};
 use kiln_source::symbol::Symbol;
 
+/// clang `UnknownArity`: an operator name outside a call.
+pub(super) const UNKNOWN_ARITY: usize = usize::MAX;
+
 impl Mangler<'_, '_> {
     /// A dependent `TemplateSpecialization` type (clang `mangleType(const
     /// TemplateSpecializationType *)`): the unscoped template name at
@@ -257,6 +260,9 @@ impl Mangler<'_, '_> {
     pub(super) fn template_arg_expr(&mut self, e: Option<ExprId>) {
         let (len, subs) = (self.out.len(), self.subs.len());
         if let Some(e) = e {
+            if self.substituted_value(e) {
+                return;
+            }
             let e = self.skip_transparent(e);
             let primary = self.is_primary(e);
             if !primary {
@@ -272,6 +278,101 @@ impl Mangler<'_, '_> {
         self.out.truncate(len);
         self.subs.truncate(subs);
         self.out.push_str("XLi0EE");
+    }
+
+    /// A substituted non-type template parameter whose replacement is an
+    /// integral or enumeration constant mangles as that template argument,
+    /// `L <parameter type> <value> E` (clang `mangleExpression`,
+    /// `SubstNonTypeTemplateParmExprClass`): `LS2_2E`, not the cast
+    /// `XcvS2_Lj2EE` the replacement spells. Returns false, writing
+    /// nothing, for any other expression.
+    fn substituted_value(&mut self, mut e: ExprId) -> bool {
+        let ast = self.ast;
+        let ex = &ast.exprs;
+        loop {
+            e = match ex.get(e).kind() {
+                ExprKind::ParenExpr | ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
+                    ex.operand(e)
+                }
+                ExprKind::SubstNonTypeTemplateParmExpr => break,
+                _ => return false,
+            };
+        }
+        let ty = ex.get(e).ty();
+        if ast.types.as_enum(ty).is_none() {
+            return false;
+        }
+        let mut r = ex.subst_replacement(e);
+        let value = loop {
+            r = match ex.get(r).kind() {
+                ExprKind::ParenExpr
+                | ExprKind::ImplicitCastExpr
+                | ExprKind::ConstantExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::CXXStaticCastExpr => ex.operand(r),
+                ExprKind::IntegerLiteral => match ex.int_value(r) {
+                    Some(v) if i64::try_from(v).is_ok() => break v,
+                    _ => return false,
+                },
+                _ => return false,
+            };
+        };
+        self.out.push('L');
+        self.ty(ty);
+        self.out.push_str(&value.to_string());
+        self.out.push('E');
+        true
+    }
+
+    /// The type of the innermost implicit conversion among the
+    /// transparent nodes over `e` (clang `ImplicitlyConvertedToType`).
+    fn implicitly_converted_to(&self, mut e: ExprId) -> Option<QualType> {
+        let ex = &self.ast.exprs;
+        let mut ty = None;
+        loop {
+            e = match ex.get(e).kind() {
+                ExprKind::ImplicitCastExpr => {
+                    ty = Some(ex.get(e).ty());
+                    ex.operand(e)
+                }
+                ExprKind::ParenExpr | ExprKind::ConstantExpr => ex.operand(e),
+                ExprKind::SubstNonTypeTemplateParmExpr => ex.subst_replacement(e),
+                _ => return ty,
+            };
+        }
+    }
+
+    /// The integer literal a non-dependent `sizeof`/`alignof` stands for
+    /// (clang `mangleExpression`, `UnaryExprOrTypeTraitExprClass`).
+    fn trait_value(&mut self, e: ExprId, converted: Option<QualType>) -> bool {
+        let ast = self.ast;
+        let operand = match ast.exprs.trait_type_arg(e) {
+            Some(t) => t,
+            None => match ast.exprs.first_child(e, &ast.lists) {
+                Some(sub) if ast.exprs.trait_kind(e) == TraitKind::SizeOf => ast.exprs.get(sub).ty(),
+                _ => return false,
+            },
+        };
+        // `sizeof` and `alignof` of a reference are those of the referee.
+        let c = ast.types.canonical(operand);
+        let operand = match ast.types.view(c.ty()) {
+            TypeView::LValueRef(r) | TypeView::RValueRef(r) => r,
+            _ => operand,
+        };
+        let layout = crate::layout::type_size_align(ast, operand, &crate::Target::for_types(ast.types.target()));
+        let value = match ast.exprs.trait_kind(e) {
+            TraitKind::SizeOf => layout.size,
+            TraitKind::AlignOf => layout.align,
+            _ => return false,
+        };
+        let ty = converted
+            .filter(|&t| ast.types.is_integral(t))
+            .unwrap_or_else(|| ast.exprs.get(e).ty());
+        self.out.push('L');
+        self.ty(ty);
+        self.out.push_str(&value.to_string());
+        self.out.push('E');
+        true
     }
 
     /// Parentheses, implicit casts, `ConstantExpr` and substituted
@@ -292,8 +393,9 @@ impl Mangler<'_, '_> {
     fn is_primary(&self, e: ExprId) -> bool {
         let ast = self.ast;
         match ast.exprs.get(e).kind() {
-            ExprKind::IntegerLiteral
-            | ExprKind::CXXBoolLiteralExpr
+            // A substituted `sizeof...` is `sZ`, not a literal.
+            ExprKind::IntegerLiteral => !ast.templates.size_of_pack_origin.contains(e),
+            ExprKind::CXXBoolLiteralExpr
             | ExprKind::CharacterLiteral
             | ExprKind::CXXNullPtrLiteralExpr
             | ExprKind::GNUNullExpr
@@ -365,11 +467,38 @@ impl Mangler<'_, '_> {
     /// One expression; `false` when it (or a subexpression) has no
     /// supported encoding.
     pub(super) fn expression(&mut self, e: ExprId) -> bool {
+        self.expression_arity(e, UNKNOWN_ARITY)
+    }
+
+    /// One expression whose operator names, if any, are mangled for
+    /// `arity` operands (clang `mangleExpression`'s `Arity`: a callee's
+    /// argument count, [`UNKNOWN_ARITY`] elsewhere).
+    fn expression_arity(&mut self, e: ExprId, arity: usize) -> bool {
+        let ok = self.expression_node(e, arity);
+        if !ok && self.failed.is_none() {
+            self.failed = Some(self.skip_transparent(e));
+        }
+        ok
+    }
+
+    fn expression_node(&mut self, e: ExprId, arity: usize) -> bool {
         let ast = self.ast;
+        if self.substituted_value(e) {
+            return true;
+        }
+        let converted = self.implicitly_converted_to(e);
         let e = self.skip_transparent(e);
         let n = ast.exprs.get(e);
         match n.kind() {
             ExprKind::IntegerLiteral => {
+                // A substituted `sizeof...` (a non-dependent
+                // `SizeOfPackExpr` in clang) still names its pack.
+                let pack = ast.templates.size_of_pack_origin.get(e);
+                if let Some(p) = pack.and_then(|&d| ast.template_parm(d)) {
+                    self.out.push_str("sZ");
+                    self.template_param_at(u32::from(p.depth), u32::from(p.index));
+                    return true;
+                }
                 let Some(v) = ast.exprs.int_value(e) else { return false };
                 self.out.push('L');
                 self.ty(n.ty());
@@ -399,34 +528,25 @@ impl Mangler<'_, '_> {
             ExprKind::RequiresExpr => return self.requires_expr(e),
             ExprKind::DependentScopeDeclRefExpr => {
                 let Some(nns) = NnsId::try_new(n.a()) else { return false };
-                let DeclNameView::Identifier(name) =
-                    ast.names.view(ast.dependent_scope_ref_name(e))
-                else {
-                    return false;
-                };
                 if !self.unresolved_prefix(nns, false) {
                     return false;
                 }
-                self.symbol(name);
-                if let Some(&args) = ast.templates.expr_targs.get(e) {
-                    self.template_args(args);
-                }
+                let args = ast.templates.expr_targs.get(e).copied();
+                return self.base_unresolved_name(ast.dependent_scope_ref_name(e), args, arity);
             }
             ExprKind::UnresolvedLookupExpr => {
-                let DeclNameView::Identifier(name) =
-                    ast.names.view(kiln_ast::names::DeclName::from_raw(n.a()).unwrap_or_default())
-                else {
-                    return false;
-                };
+                let name = kiln_ast::names::DeclName::from_raw(n.a()).unwrap_or_default();
                 if let Some(&nns) = ast.templates.expr_nns.get(e)
                     && !self.unresolved_prefix(nns, false)
                 {
                     return false;
                 }
-                self.symbol(name);
-                if let Some(&args) = ast.templates.expr_targs.get(e) {
-                    self.template_args(args);
-                }
+                let args = ast.templates.expr_targs.get(e).copied();
+                return self.base_unresolved_name(name, args, arity);
+            }
+            ExprKind::CXXThisExpr => self.out.push_str("fpT"),
+            ExprKind::CXXDependentScopeMemberExpr | ExprKind::MemberExpr => {
+                return self.member_expression(e, arity);
             }
             ExprKind::SizeOfPackExpr => {
                 let Some(d) = DeclId::try_new(n.a()) else { return false };
@@ -445,23 +565,30 @@ impl Mangler<'_, '_> {
                 }
                 self.out.push('E');
             }
-            _ => return self.operator_expression(e),
+            _ => return self.operator_expression(e, converted),
         }
         true
     }
 
     /// An operator, call, cast, `sizeof`/`alignof` or pack expansion.
-    fn operator_expression(&mut self, expr: ExprId) -> bool {
+    /// `converted` is the type `expr` is implicitly converted to.
+    fn operator_expression(&mut self, expr: ExprId, converted: Option<QualType>) -> bool {
         let ast = self.ast;
         let node = ast.exprs.get(expr);
         match node.kind() {
-            ExprKind::CallExpr => {
+            // clang `CallExprClass`: the callee's operator name takes the
+            // argument count as its arity (unknown with a pack expansion).
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
                 self.out.push_str("cl");
-                if !self.expression(ast.exprs.callee(expr)) {
-                    return false;
-                }
                 let args: Vec<ExprId> =
                     ast.lists.iter::<ExprId>(ast.exprs.call_args(expr)).collect();
+                let packs = args
+                    .iter()
+                    .any(|&a| ast.exprs.get(a).kind() == ExprKind::PackExpansionExpr);
+                let arity = if packs { UNKNOWN_ARITY } else { args.len() };
+                if !self.expression_arity(ast.exprs.callee(expr), arity) {
+                    return false;
+                }
                 for arg in args {
                     if !self.expression(arg) {
                         return false;
@@ -497,10 +624,12 @@ impl Mangler<'_, '_> {
                 return self.expression(cond) && self.expression(then) && self.expression(els);
             }
             ExprKind::UnaryExprOrTypeTraitExpr => {
-                // A non-dependent operand is encoded as the integer result,
-                // which needs the evaluator: not supported here.
+                // A non-instantiation-dependent operand is encoded as the
+                // integer result, typed as the integer type it is
+                // implicitly converted to, else as its own `size_t`
+                // ([abi] 5.1.6.1; `Lm4E` for `sizeof(wchar_t) == 2`).
                 if !node.deps().intersects(ExprDeps::VALUE_INST) {
-                    return false;
+                    return self.trait_value(expr, converted);
                 }
                 let (type_code, expr_code) = match ast.exprs.trait_kind(expr) {
                     TraitKind::SizeOf => ("st", "sz"),
@@ -523,10 +652,38 @@ impl Mangler<'_, '_> {
                 let [lhs, rhs] = ast.exprs.operands(expr);
                 return self.expression(lhs) && self.expression(rhs);
             }
-            ExprKind::CXXDependentScopeMemberExpr
-            | ExprKind::CXXPseudoDestructorExpr
+            ExprKind::CXXPseudoDestructorExpr
             | ExprKind::CXXUnresolvedConstructExpr
             | ExprKind::CXXNewExpr => return self.member_or_construct_expression(expr),
+            // clang `CXXOperatorCallExprClass`: the operator for its operand
+            // count, then the operands (`->` is the enclosing member
+            // access's).
+            ExprKind::CXXOperatorCallExpr => {
+                let args: Vec<ExprId> =
+                    ast.lists.iter::<ExprId>(ast.exprs.call_args(expr)).collect();
+                let op = ast.exprs.operator_call_op(expr);
+                if op != kiln_ast::names::OverloadedOperator::Arrow {
+                    self.out.push_str(super::operator_code(op, args.len()));
+                }
+                for a in args {
+                    if !self.expression(a) {
+                        return false;
+                    }
+                }
+            }
+            ExprKind::CXXNoexceptExpr => {
+                let Some(sub) = ExprId::try_new(node.a()) else { return false };
+                self.out.push_str("nx");
+                return self.expression(sub);
+            }
+            ExprKind::CXXScalarValueInitExpr => {
+                self.out.push_str("cv");
+                self.ty(node.ty());
+                self.out.push_str("_E");
+            }
+            ExprKind::CXXFunctionalCastExpr
+            | ExprKind::CXXTemporaryObjectExpr
+            | ExprKind::CXXConstructExpr => return self.construct_expression(expr),
             ExprKind::PackExpansionExpr => {
                 self.out.push_str("sp");
                 return self.expression(ast.exprs.operand(expr));
@@ -557,29 +714,6 @@ impl Mangler<'_, '_> {
         let ast = self.ast;
         let node = ast.exprs.get(expr);
         match node.kind() {
-            // clang `mangleMemberExpr`: `dt`/`pt <expression>
-            // <unresolved-name>`.
-            ExprKind::CXXDependentScopeMemberExpr => {
-                let Some(base) = ExprId::try_new(node.a()) else { return false };
-                self.out.push_str(if node.aux() & 1 != 0 { "pt" } else { "dt" });
-                if !self.expression(base) {
-                    return false;
-                }
-                if let Some(&nns) = ast.templates.expr_nns.get(expr)
-                    && !self.unresolved_prefix(nns, false)
-                {
-                    return false;
-                }
-                let DeclNameView::Identifier(name) =
-                    ast.names.view(ast.dependent_member_name(expr))
-                else {
-                    return false;
-                };
-                self.symbol(name);
-                if let Some(&args) = ast.templates.expr_targs.get(expr) {
-                    self.template_args(args);
-                }
-            }
             // `p.~T`: `dt <expression> dn <destructor-name>`.
             ExprKind::CXXPseudoDestructorExpr => {
                 let (base, arrow, t) = ast.exprs.pseudo_destructor(expr);
@@ -678,6 +812,208 @@ impl Mangler<'_, '_> {
             self.out.push('E');
         }
         true
+    }
+
+    /// clang `mangleMemberExpr`: `dt`/`pt <expression> <unresolved-name>`;
+    /// a member of the implicit object is `dtdefpT` (as GCC), one named
+    /// by implicit access in a dependent class has no base at all.
+    fn member_expression(&mut self, expr: ExprId, arity: usize) -> bool {
+        let ast = self.ast;
+        let node = ast.exprs.get(expr);
+        let base = ExprId::try_new(node.a());
+        let (arrow, nns, name, args) = if node.kind() == ExprKind::MemberExpr {
+            let extra = ast.exprs.decl_ref_extra(expr);
+            (
+                node.has(kiln_ast::expr::ExprFlags::ARROW),
+                extra.and_then(|x| x.qualifier),
+                ast.decls.get(ast.exprs.decl(expr)).name(),
+                extra.and_then(|x| x.template_args),
+            )
+        } else {
+            (
+                node.aux() & 1 != 0,
+                ast.templates.expr_nns.get(expr).copied(),
+                ast.dependent_member_name(expr),
+                ast.templates.expr_targs.get(expr).copied(),
+            )
+        };
+        if let Some(b) = base {
+            let b = self.skip_transparent(b);
+            let bn = ast.exprs.get(b);
+            if bn.kind() == ExprKind::CXXThisExpr && ast.exprs.this_is_implicit(b) {
+                self.out.push_str("dtdefpT");
+            } else {
+                self.out.push_str(if arrow { "pt" } else { "dt" });
+                if !self.expression(b) {
+                    return false;
+                }
+            }
+        }
+        if let Some(nns) = nns
+            && !self.unresolved_prefix(nns, false)
+        {
+            return false;
+        }
+        self.base_unresolved_name(name, args, arity)
+    }
+
+    /// clang `mangleUnresolvedName`'s <base-unresolved-name> and its
+    /// optional template arguments: `<simple-id>`, `on <operator-name>`
+    /// (an operator for `arity` operands, a conversion `cv <type>`, a
+    /// literal operator `li <source-name>`) or `dn <destructor-name>`.
+    fn base_unresolved_name(
+        &mut self,
+        name: kiln_ast::names::DeclName,
+        args: Option<ArgListId>,
+        arity: usize,
+    ) -> bool {
+        let ast = self.ast;
+        match ast.names.view(name) {
+            DeclNameView::Identifier(s) => self.symbol(s),
+            DeclNameView::Operator(op) => {
+                self.out.push_str("on");
+                self.out.push_str(super::operator_code(op, arity));
+            }
+            DeclNameView::Conversion(q) => {
+                self.out.push_str("oncv");
+                self.ty(q);
+            }
+            DeclNameView::LiteralOperator(s) => {
+                self.out.push_str("onli");
+                self.symbol(s);
+            }
+            DeclNameView::Destructor(t) => {
+                self.out.push_str("dn");
+                if self.unresolved_type_or_simple_id(QualType::unqual(t), false).is_none() {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        if let Some(args) = args {
+            self.template_args(args);
+        }
+        true
+    }
+
+    /// clang's `CXXFunctionalCastExprClass`, `CXXTemporaryObjectExprClass`
+    /// and `CXXConstructExprClass`: `T(a)` is `cv <type> <expression>`,
+    /// `T(a, b)` `cv <type> _ <expression>* E`, `T{a, b}` `tl <type>
+    /// <braced-expression>* E`; an implicit construction is its operand.
+    fn construct_expression(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        let node = ast.exprs.get(expr);
+        match node.kind() {
+            ExprKind::CXXFunctionalCastExpr => {
+                let mut sub = self.skip_implicit(ast.exprs.operand(expr));
+                if ast.exprs.get(sub).kind() == ExprKind::CXXConstructExpr
+                    && !ast.exprs.construct_info(sub).list
+                    && let Some(a) = ast.lists.iter::<ExprId>(ast.exprs.construct_args(sub)).next()
+                {
+                    sub = self.skip_implicit(a);
+                }
+                if ast.exprs.get(sub).kind() == ExprKind::CXXStdInitializerListExpr {
+                    sub = self.skip_implicit(ast.exprs.operand(sub));
+                }
+                if ast.exprs.get(sub).kind() == ExprKind::InitListExpr {
+                    self.out.push_str("tl");
+                    self.ty(node.ty());
+                    return self.braced_elements(sub);
+                }
+                self.out.push_str("cv");
+                self.ty(node.ty());
+                self.expression(sub)
+            }
+            ExprKind::CXXTemporaryObjectExpr => {
+                let info = ast.exprs.construct_info(expr);
+                let args: Vec<ExprId> =
+                    ast.lists.iter::<ExprId>(ast.exprs.construct_args(expr)).collect();
+                self.out.push_str(if info.list { "tl" } else { "cv" });
+                self.ty(node.ty());
+                let wrap = !info.list && args.len() != 1;
+                if wrap {
+                    self.out.push('_');
+                }
+                if info.std_init_list
+                    && let Some(&a) = args.first()
+                {
+                    let mut il = self.skip_implicit(a);
+                    if ast.exprs.get(il).kind() == ExprKind::CXXStdInitializerListExpr {
+                        il = self.skip_implicit(ast.exprs.operand(il));
+                    }
+                    if ast.exprs.get(il).kind() != ExprKind::InitListExpr {
+                        return false;
+                    }
+                    for e in ast.lists.iter::<ExprId>(ast.exprs.init_list_inits(il)) {
+                        if !self.braced_element(e) {
+                            return false;
+                        }
+                    }
+                } else {
+                    for a in args {
+                        if !self.expression(a) {
+                            return false;
+                        }
+                    }
+                }
+                if info.list || wrap {
+                    self.out.push('E');
+                }
+                true
+            }
+            _ => {
+                let info = ast.exprs.construct_info(expr);
+                let args: Vec<ExprId> =
+                    ast.lists.iter::<ExprId>(ast.exprs.construct_args(expr)).collect();
+                if !info.list || info.std_init_list {
+                    return args.first().is_some_and(|&a| self.expression(a));
+                }
+                self.out.push_str("il");
+                for a in args {
+                    if !self.expression(a) {
+                        return false;
+                    }
+                }
+                self.out.push('E');
+                true
+            }
+        }
+    }
+
+    /// clang `IgnoreImplicit`: implicit casts, temporaries and cleanups.
+    fn skip_implicit(&self, mut e: ExprId) -> ExprId {
+        let ex = &self.ast.exprs;
+        loop {
+            e = match ex.get(e).kind() {
+                ExprKind::ImplicitCastExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::ConstantExpr => ex.operand(e),
+                _ => return e,
+            };
+        }
+    }
+
+    /// `<braced-expression>* E` of braced list `list` (clang
+    /// `mangleInitListElements`).
+    fn braced_elements(&mut self, list: ExprId) -> bool {
+        let ast = self.ast;
+        for e in ast.lists.iter::<ExprId>(ast.exprs.init_list_inits(list)) {
+            if !self.braced_element(e) {
+                return false;
+            }
+        }
+        self.out.push('E');
+        true
+    }
+
+    fn braced_element(&mut self, e: ExprId) -> bool {
+        if self.ast.exprs.get(e).kind() == ExprKind::InitListExpr {
+            self.init_list(e)
+        } else {
+            self.expression(e)
+        }
     }
 
     /// `il <braced-expression>* E`: a braced-init-list's elements.
@@ -781,8 +1117,19 @@ impl Mangler<'_, '_> {
             }
             TypeView::TemplateSpecialization { name, args, .. } => {
                 let n = ast.types.canonical_template_name(name);
-                let TemplateName::Template(t) = ast.types.template_name_view(n) else {
-                    return None;
+                let t = match ast.types.template_name_view(n) {
+                    TemplateName::Template(t) => t,
+                    // A template template parameter's specialization is an
+                    // unresolved type: `srT_IJ5is_ccIiEEE5value`.
+                    TemplateName::TemplateTemplateParm { .. }
+                    | TemplateName::CanonTemplateTemplateParm { .. } => {
+                        if recursive {
+                            self.out.push('N');
+                        }
+                        self.ty(q);
+                        return Some(true);
+                    }
+                    _ => return None,
                 };
                 let DeclNameView::Identifier(s) = ast.names.view(ast.decls.get(t).name()) else {
                     return None;

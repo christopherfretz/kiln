@@ -915,6 +915,41 @@ fn bit_width_and_static_assert_ranges_like_clang() {
     assert_eq!((o.code, o.stderr.as_str()), (1, BIT_WIDTH_GOLDEN));
 }
 
+/// [dcl.init.ref]/5: a reference binding that drops qualifiers underlines
+/// the initializer, as clang streams its source range into
+/// `err_reference_bind_drops_quals` (WP-818).
+const DROPS_QUALS_SOURCE: &str = r"const int ci = 0;
+volatile int vi = 0;
+int &r1 = ci;
+const int &r2 = (vi);
+struct S { const volatile int m = 0; } s;
+int &r3 = s.m;
+int *const icp = nullptr;
+const int *&r4 = icp;
+";
+
+/// clang 19's `-fsyntax-only` output for `DROPS_QUALS_SOURCE`.
+const DROPS_QUALS_GOLDEN: &str = r"<stdin>:3:6: error: binding reference of type 'int' to value of type 'const int' drops 'const' qualifier
+    3 | int &r1 = ci;
+      |      ^    ~~
+<stdin>:4:12: error: binding reference of type 'const int' to value of type 'volatile int' drops 'volatile' qualifier
+    4 | const int &r2 = (vi);
+      |            ^    ~~~~
+<stdin>:6:6: error: binding reference of type 'int' to value of type 'const volatile int' drops 'const volatile' qualifiers
+    6 | int &r3 = s.m;
+      |      ^    ~~~
+<stdin>:8:13: error: binding reference of type 'const int *' to value of type 'int *const' drops 'const' qualifier
+    8 | const int *&r4 = icp;
+      |             ^    ~~~
+4 errors generated.
+";
+
+#[test]
+fn reference_bind_drops_quals_ranges_like_clang() {
+    let o = kiln(&["-std=c++26", "-fsyntax-only", "-"], DROPS_QUALS_SOURCE);
+    assert_eq!((o.code, o.stderr.as_str()), (1, DROPS_QUALS_GOLDEN));
+}
+
 /// [conv.bool], [dcl.pre]/12: a -Wliteral-conversion range underlines a
 /// whole `&&` or `||` operator, and a range whose ends come from a macro
 /// argument covers its last token (clang `Lexer::getLocForEndOfToken`

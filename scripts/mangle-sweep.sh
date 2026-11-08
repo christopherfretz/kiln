@@ -31,8 +31,19 @@ kiln=${KILN:-${CARGO_TARGET_DIR:-$here/target}/debug/kiln++}
 clang=${CLANG:-clang++-19}
 work=${keep:-$(mktemp -d "${TMPDIR:-/tmp}/kiln-mangle-sweep.XXXXXX")}
 mkdir -p "$work"
-flags=(-std=c++26 -O0 -S -emit-llvm -fno-exceptions -w)
-syms() { grep -oE '@"?_Z[A-Za-z0-9_.$]+' "$1" | sed 's/^@"\{0,1\}//' | sort -u; }
+# clang 19 leaves __cpp_explicit_this_parameter undefined and kiln defines
+# it (as clang 22 does); libstdc++ picks other overloads on it, so it is
+# undefined for both.
+flags=(-std=c++26 -O0 -S -emit-llvm -fno-exceptions -w -U__cpp_explicit_this_parameter)
+# clang runs the always-inliner even at -O0, which would hide the names of
+# `always_inline` functions (libstdc++ `make_format_args`) that kiln
+# emits; the sweep compares the IR before any LLVM pass.
+clang_flags=(-Xclang -disable-llvm-passes)
+# The `$_N` closure names of lambdas with internal linkage are numbered in
+# each compiler's own order and have no ABI: the number is dropped.
+syms() {
+  grep -oE '@"?_Z[A-Za-z0-9_.$]+' "$1" | sed -e 's/^@"\{0,1\}//' -e 's/\$_[0-9][0-9]*/$_N/g' | sort -u
+}
 total=0
 failed=0
 for lib in $stdlibs; do
@@ -40,7 +51,7 @@ for lib in $stdlibs; do
     base=$(basename "$tu" .cpp)
     k="$work/$base.$lib.kiln.ll"
     c="$work/$base.$lib.clang.ll"
-    if ! "$clang" "${flags[@]}" -stdlib="$lib" -o "$c" "$tu" 2>"$c.err"; then
+    if ! "$clang" "${flags[@]}" "${clang_flags[@]}" -stdlib="$lib" -o "$c" "$tu" 2>"$c.err"; then
       echo "$lib $base clang-error (see $c.err)"; failed=1; continue
     fi
     if ! "$kiln" "${flags[@]}" -stdlib="$lib" -resource-dir "$here/resource" -o "$k" "$tu" 2>"$k.err"; then

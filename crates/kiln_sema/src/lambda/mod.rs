@@ -98,6 +98,35 @@ pub(crate) struct ManglingState {
     /// lambda) and <lambda-sig> (the explicit template parameters, the
     /// template-head's requires-clause and the parameter types).
     numbers: kiln_source::fx::FxHashMap<(DeclId, String), u32>,
+    /// The numbers given while a pack expansion's pattern is probed for
+    /// its packs (`templ::pack`): the probe's lambdas are discarded when
+    /// it found a pack, and their numbers with them, as clang never
+    /// creates them.
+    journal: Option<Vec<(DeclId, String)>>,
+}
+
+impl ManglingState {
+    /// Starts journaling the numbers given; returns the enclosing
+    /// journal for [`Self::end_probe`].
+    pub(crate) fn begin_probe(&mut self) -> Option<Vec<(DeclId, String)>> {
+        self.journal.replace(Vec::new())
+    }
+
+    /// Ends a probe begun by [`Self::begin_probe`]: with `discard`, the
+    /// numbers it gave are taken back; otherwise they stay and join the
+    /// enclosing journal.
+    pub(crate) fn end_probe(&mut self, outer: Option<Vec<(DeclId, String)>>, discard: bool) {
+        let mine = std::mem::replace(&mut self.journal, outer).unwrap_or_default();
+        if discard {
+            for k in mine {
+                if let Some(n) = self.numbers.get_mut(&k) {
+                    *n = n.saturating_sub(1);
+                }
+            }
+        } else if let Some(j) = self.journal.as_mut() {
+            j.extend(mine);
+        }
+    }
 }
 
 /// A lambda whose body is being analysed: what [`Sema`] saved on entry.
@@ -478,6 +507,9 @@ impl Sema<'_, '_> {
         // clang `ItaniumNumberingContext::getManglingNumber` keys on the
         // mangled <lambda-sig>.
         let sig = kiln_abi::mangle::lambda_sig(&self.ast, f);
+        if let Some(j) = self.lambda_mangle.journal.as_mut() {
+            j.push((key, sig.clone()));
+        }
         let n = self.lambda_mangle.numbers.entry((key, sig)).or_insert(0);
         *n += 1;
         let number = *n;
