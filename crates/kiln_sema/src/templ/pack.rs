@@ -1044,7 +1044,7 @@ impl Sema<'_, '_> {
         if self.lambdas.is_empty() {
             return self.diagnose_unexpanded_pack(PackOperand::Expr(e), "default argument", at);
         }
-        self.diagnose_lambda_local_packs(e, "default argument", at)
+        self.diagnose_lambda_local_packs(PackOperand::Expr(e), "default argument", at)
     }
 
     /// [temp.variadic]/5, /12 for expression `e` written in the innermost
@@ -1066,16 +1066,21 @@ impl Sema<'_, '_> {
             return false;
         }
         let at = self.begin_loc(e);
-        self.diagnose_lambda_local_packs(e, what, at)
+        self.diagnose_lambda_local_packs(PackOperand::Expr(e), what, at)
     }
 
-    /// The lambda's own packs `e` names diagnosed at `at`, the enclosing
+    /// The lambda's own packs `op` names diagnosed at `at`, the enclosing
     /// scope's recorded on it. True after the diagnostic.
-    fn diagnose_lambda_local_packs(&mut self, e: ExprId, what: &'static str, at: Loc) -> bool {
-        if !self.operand_has_packs(PackOperand::Expr(e)) {
+    pub(crate) fn diagnose_lambda_local_packs(
+        &mut self,
+        op: PackOperand,
+        what: &'static str,
+        at: Loc,
+    ) -> bool {
+        if !self.operand_has_packs(op) {
             return false;
         }
-        let local = self.split_lambda_packs(PackOperand::Expr(e));
+        let local = self.split_lambda_packs(op);
         if local.is_empty() {
             return false;
         }
