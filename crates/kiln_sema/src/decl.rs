@@ -9087,26 +9087,120 @@ impl Sema<'_, '_> {
         let def = self.ast.definition(p)?;
         let bases: Vec<QualType> =
             self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
-        bases.into_iter().filter(|&t| self.is_dependent_type(t)).find_map(|mut ty| {
-            for _ in 0..64 {
-                ty = match self.ast.types.view(ty.ty()) {
-                    TypeView::Typedef { underlying, .. } => underlying,
-                    TypeView::Elaborated { named, .. } => named,
-                    _ => break,
-                };
-            }
-            let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty())
-            else {
-                return None;
-            };
-            let t = self.ast.types.template_decl(tn)?;
-            if self.kind_of(t) != DeclKind::ClassTemplate {
-                return None;
-            }
+        bases.into_iter().filter(|&t| self.is_dependent_type(t)).find_map(|ty| {
+            let t = self.base_class_template(ty, depth)?;
             match self.classify_template_member_in(t, name, depth + 1) {
                 NameClass::Dependent | NameClass::Undeclared => None,
                 c => Some(c),
             }
+        })
+    }
+
+    /// The class template whose primary pattern the lookahead classifies
+    /// a member of dependent base `ty` in: `B<S>` names `B`; the
+    /// injected-class-name of `B` names `B`; `Q<A>::template apply<S, K>`
+    /// names the member template `apply` of `Q` (boost.mpl's `has_key<S,
+    /// K> : has_key_impl<typename sequence_tag<S>::type>::template
+    /// apply<S, K>`); `typename Q<A>::type` names what the member typedef
+    /// `type` of `Q` names (boost.fusion's `has_key_impl<Tag>::apply :
+    /// mpl::not_<...>::type`). `None` past a depth of 16.
+    fn base_class_template(&self, ty: QualType, depth: u32) -> Option<DeclId> {
+        if depth >= 16 {
+            return None;
+        }
+        let t = match self.ast.types.view(self.strip_sugar_for_classify(ty).ty()) {
+            TypeView::TemplateSpecialization { name: tn, .. } => {
+                self.ast.types.template_decl(tn)?
+            }
+            TypeView::InjectedClassName { pattern, .. } => self.ast.described_template(pattern)?,
+            TypeView::DependentTemplateSpecialization { nns, name: m, .. } => {
+                let kiln_ast::types::Nns::Type { ty: q, .. } = self.ast.types.nns_view(nns) else {
+                    return None;
+                };
+                let q = self.base_class_template(q, depth + 1)?;
+                self.member_of_class_template(q, m, true)?
+            }
+            TypeView::DependentName { nns, name: m, .. } => {
+                let kiln_ast::types::Nns::Type { ty: q, .. } = self.ast.types.nns_view(nns) else {
+                    return None;
+                };
+                let q = self.base_class_template(q, depth + 1)?;
+                let td = self
+                    .member_of_class_template(q, m, false)
+                    .or_else(|| self.typedef_in_dependent_bases(q, m, depth + 1))?;
+                let under = self.ast.decls.get(td).ty()?;
+                return self.base_class_template(under, depth + 1);
+            }
+            _ => return None,
+        };
+        (self.kind_of(t) == DeclKind::ClassTemplate).then_some(t)
+    }
+
+    /// `ty` without typedef and elaborated sugar (bounded).
+    fn strip_sugar_for_classify(&self, mut ty: QualType) -> QualType {
+        for _ in 0..64 {
+            ty = match self.ast.types.view(ty.ty()) {
+                TypeView::Typedef { underlying, .. } => underlying,
+                TypeView::Elaborated { named, .. } => named,
+                _ => break,
+            };
+        }
+        ty
+    }
+
+    /// The typedef `m` that class template `q` inherits through the
+    /// dependent bases of its primary pattern (boost.mpl's `not_<T>` gets
+    /// `type` from `bool_<!C>` through `not_impl<C>`). `None` past a
+    /// depth of 16.
+    fn typedef_in_dependent_bases(&self, q: DeclId, m: Symbol, depth: u32) -> Option<DeclId> {
+        if depth >= 16 {
+            return None;
+        }
+        let pattern = self.ast.template_info(q).and_then(|i| i.pattern)?;
+        let def = self.ast.definition(pattern)?;
+        let bases: Vec<QualType> =
+            self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
+        bases.into_iter().filter(|&t| self.is_dependent_type(t)).find_map(|ty| {
+            let b = self.base_class_template(ty, depth + 1)?;
+            self.member_of_class_template(b, m, false)
+                .or_else(|| self.typedef_in_dependent_bases(b, m, depth + 1))
+        })
+    }
+
+    /// The member `m` of class template `q` the lookahead follows, from
+    /// `q`'s primary pattern, then its explicit, then its partial
+    /// specializations (as [`Sema::specialization_member`]): a class
+    /// template whose pattern is defined when `template_member` (the
+    /// primary of boost.mpl's `has_key_impl<Tag>` only declares `apply`,
+    /// which `has_key_impl<map_tag>` defines), else a typedef or alias.
+    fn member_of_class_template(
+        &self,
+        q: DeclId,
+        m: Symbol,
+        template_member: bool,
+    ) -> Option<DeclId> {
+        use kiln_ast::templates::SpecKind;
+        let first = self.ast.first(q);
+        let t = &self.ast.templates;
+        let primary = self.ast.template_info(q).and_then(|i| i.pattern);
+        let explicit = t.specs_of(first).iter().copied().filter(|&s| {
+            self.ast.spec_info(s).is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization)
+        });
+        let partial = t.partials_of(first).iter().filter_map(|&i| t.partial(i).map(|p| p.partial));
+        primary.into_iter().chain(explicit).chain(partial).find_map(|s| {
+            let def = self.ast.definition(s)?;
+            let found = self.lookup_qualified(def, m, LookupKind::Ordinary);
+            found.decls.iter().copied().map(|d| self.ast.strip_shadow(d)).find(|&d| {
+                match self.kind_of(d) {
+                    DeclKind::ClassTemplate if template_member => self
+                        .ast
+                        .template_info(d)
+                        .and_then(|i| i.pattern)
+                        .is_some_and(|p| self.ast.definition(p).is_some()),
+                    DeclKind::Typedef | DeclKind::TypeAlias => !template_member,
+                    _ => false,
+                }
+            })
         })
     }
 

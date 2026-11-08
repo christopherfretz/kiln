@@ -2,8 +2,8 @@
 // found in the base `B<int>` of the specialization `H<int>`, so
 // `int (*p)(H<int>::type)` is a declaration and `(int (*)(H<int>::type))g`
 // is a cast. Deciding that during the lookahead needs `H<int>` instantiated.
-// Boost.MPL `map.cpp:51` and Boost.Fusion `filter_view.cpp:117`,
-// `joint_view.cpp:162`, `iterator_range.cpp:98` hit this.
+// Boost.MPL `map.cpp:51` and Boost.Fusion `filter_view.cpp:117` hit deeper
+// forms (function-type-param-{member-template,typedef}-base-run.cpp).
 //@ expect: run
 //@ stdout: 4 6
 extern "C" int printf(const char*, ...);
