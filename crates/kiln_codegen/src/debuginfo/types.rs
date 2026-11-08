@@ -419,7 +419,7 @@ impl Cg<'_> {
                 let p = self.di_this_ptr(rd, quals)?;
                 let pointee = match &self.m.md_node(p) {
                     MdNode::Specialized { fields, .. } => {
-                        fields.iter().find(|f| &*f.0 == "baseType").and_then(|f| match f.1 {
+                        fields.iter().find(|f| f.0 == "baseType").and_then(|f| match f.1 {
                             MdField::Node(n) => n,
                             _ => None,
                         })
@@ -784,11 +784,8 @@ impl Cg<'_> {
         if !ident.is_empty() {
             f = f.s("identifier", &ident);
         }
-        let node = MdNode::Specialized {
-            distinct: true,
-            name: "DICompositeType".into(),
-            fields: f.0.into(),
-        };
+        let node =
+            MdNode::Specialized { distinct: true, name: "DICompositeType", fields: f.0.into() };
         let _ = self.m.md_replace(p, node);
     }
 
@@ -830,7 +827,7 @@ impl Cg<'_> {
         if !ident.is_empty() {
             f = f.s("identifier", &ident);
         }
-        MdNode::Specialized { distinct: false, name: "DICompositeType".into(), fields: f.0.into() }
+        MdNode::Specialized { distinct: false, name: "DICompositeType", fields: f.0.into() }
     }
 
     /// `__vtbl_ptr_type` (clang `getOrCreateVTablePtrType`).

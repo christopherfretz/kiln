@@ -1826,23 +1826,20 @@ fn debug_info() {
     let file = m.md_specialized(
         "DIFile",
         false,
-        vec![
-            ("filename".into(), MdField::Str("t.c".into())),
-            ("directory".into(), MdField::Str("/src".into())),
-        ],
+        vec![("filename", MdField::Str("t.c".into())), ("directory", MdField::Str("/src".into()))],
     );
     let cu = m.md_specialized(
         "DICompileUnit",
         true,
         vec![
-            ("language".into(), raw("DW_LANG_C11")),
-            ("file".into(), MdField::Node(Some(file))),
-            ("producer".into(), MdField::Str("kiln".into())),
-            ("isOptimized".into(), MdField::Bool(false)),
-            ("runtimeVersion".into(), MdField::UInt(0)),
-            ("emissionKind".into(), raw("FullDebug")),
-            ("splitDebugInlining".into(), MdField::Bool(false)),
-            ("nameTableKind".into(), raw("None")),
+            ("language", raw("DW_LANG_C11")),
+            ("file", MdField::Node(Some(file))),
+            ("producer", MdField::Str("kiln".into())),
+            ("isOptimized", MdField::Bool(false)),
+            ("runtimeVersion", MdField::UInt(0)),
+            ("emissionKind", raw("FullDebug")),
+            ("splitDebugInlining", MdField::Bool(false)),
+            ("nameTableKind", raw("None")),
         ],
     );
     m.add_named_metadata("llvm.dbg.cu", &[cu]);
@@ -1850,39 +1847,36 @@ fn debug_info() {
         "DIBasicType",
         false,
         vec![
-            ("name".into(), MdField::Str("int".into())),
-            ("size".into(), MdField::UInt(32)),
-            ("encoding".into(), raw("DW_ATE_signed")),
+            ("name", MdField::Str("int".into())),
+            ("size", MdField::UInt(32)),
+            ("encoding", raw("DW_ATE_signed")),
         ],
     );
     let types = m.md_tuple(&[Some(int)]);
-    let sty = m.md_specialized(
-        "DISubroutineType",
-        false,
-        vec![("types".into(), MdField::Node(Some(types)))],
-    );
+    let sty =
+        m.md_specialized("DISubroutineType", false, vec![("types", MdField::Node(Some(types)))]);
     let sp = m.md_specialized(
         "DISubprogram",
         true,
         vec![
-            ("name".into(), MdField::Str("main".into())),
-            ("scope".into(), MdField::Node(Some(file))),
-            ("file".into(), MdField::Node(Some(file))),
-            ("line".into(), MdField::UInt(1)),
-            ("type".into(), MdField::Node(Some(sty))),
-            ("scopeLine".into(), MdField::UInt(1)),
-            ("flags".into(), raw("DIFlagPrototyped")),
-            ("spFlags".into(), raw("DISPFlagDefinition")),
-            ("unit".into(), MdField::Node(Some(cu))),
+            ("name", MdField::Str("main".into())),
+            ("scope", MdField::Node(Some(file))),
+            ("file", MdField::Node(Some(file))),
+            ("line", MdField::UInt(1)),
+            ("type", MdField::Node(Some(sty))),
+            ("scopeLine", MdField::UInt(1)),
+            ("flags", raw("DIFlagPrototyped")),
+            ("spFlags", raw("DISPFlagDefinition")),
+            ("unit", MdField::Node(Some(cu))),
         ],
     );
     let loc = m.md_specialized(
         "DILocation",
         false,
         vec![
-            ("line".into(), MdField::UInt(2)),
-            ("column".into(), MdField::UInt(3)),
-            ("scope".into(), MdField::Node(Some(sp))),
+            ("line", MdField::UInt(2)),
+            ("column", MdField::UInt(3)),
+            ("scope", MdField::Node(Some(sp))),
         ],
     );
     let dbg = m.md_kind("dbg");
@@ -1914,20 +1908,17 @@ fn debug_records() {
     let file = m.md_specialized(
         "DIFile",
         false,
-        vec![
-            ("filename".into(), MdField::Str("t.c".into())),
-            ("directory".into(), MdField::Str("/".into())),
-        ],
+        vec![("filename", MdField::Str("t.c".into())), ("directory", MdField::Str("/".into()))],
     );
     let cu = m.md_specialized(
         "DICompileUnit",
         true,
         vec![
-            ("language".into(), MdField::Raw("DW_LANG_C11".into())),
-            ("file".into(), MdField::Node(Some(file))),
-            ("isOptimized".into(), MdField::Bool(false)),
-            ("runtimeVersion".into(), MdField::UInt(0)),
-            ("emissionKind".into(), MdField::Raw("FullDebug".into())),
+            ("language", MdField::Raw("DW_LANG_C11".into())),
+            ("file", MdField::Node(Some(file))),
+            ("isOptimized", MdField::Bool(false)),
+            ("runtimeVersion", MdField::UInt(0)),
+            ("emissionKind", MdField::Raw("FullDebug".into())),
         ],
     );
     m.add_named_metadata("llvm.dbg.cu", &[cu]);
@@ -1936,22 +1927,22 @@ fn debug_records() {
         "DISubprogram",
         true,
         vec![
-            ("name".into(), MdField::Str("f".into())),
-            ("scope".into(), MdField::Node(None)),
-            ("file".into(), MdField::Node(Some(file))),
-            ("spFlags".into(), MdField::Raw("DISPFlagDefinition".into())),
-            ("unit".into(), MdField::Node(Some(cu))),
+            ("name", MdField::Str("f".into())),
+            ("scope", MdField::Node(None)),
+            ("file", MdField::Node(Some(file))),
+            ("spFlags", MdField::Raw("DISPFlagDefinition".into())),
+            ("unit", MdField::Node(Some(cu))),
         ],
     );
     let var = m.md_specialized(
         "DILocalVariable",
         false,
-        vec![("name".into(), MdField::Str("x".into())), ("scope".into(), MdField::Node(Some(sp)))],
+        vec![("name", MdField::Str("x".into())), ("scope", MdField::Node(Some(sp)))],
     );
     let loc = m.md_specialized(
         "DILocation",
         false,
-        vec![("line".into(), MdField::UInt(2)), ("scope".into(), MdField::Node(Some(sp)))],
+        vec![("line", MdField::UInt(2)), ("scope", MdField::Node(Some(sp)))],
     );
     let expr = m.md_specialized("DIExpression", false, vec![]);
     let dbg = m.md_kind("dbg");
@@ -1988,19 +1979,19 @@ fn md_set_field_cycle() {
         "DICompositeType",
         true,
         vec![
-            ("tag".into(), MdField::Raw("DW_TAG_structure_type".into())),
-            ("name".into(), MdField::Str("S".into())),
-            ("elements".into(), MdField::Node(None)),
+            ("tag", MdField::Raw("DW_TAG_structure_type".into())),
+            ("name", MdField::Str("S".into())),
+            ("elements", MdField::Node(None)),
         ],
     );
     let mem = m.md_specialized(
         "DIDerivedType",
         false,
         vec![
-            ("tag".into(), MdField::Raw("DW_TAG_member".into())),
-            ("name".into(), MdField::Str("x".into())),
-            ("scope".into(), MdField::Node(Some(st))),
-            ("baseType".into(), MdField::Node(None)),
+            ("tag", MdField::Raw("DW_TAG_member".into())),
+            ("name", MdField::Str("x".into())),
+            ("scope", MdField::Node(Some(st))),
+            ("baseType", MdField::Node(None)),
         ],
     );
     let elems = m.md_tuple(&[Some(mem)]);
@@ -2028,18 +2019,18 @@ fn md_replace_placeholder() {
         "DIDerivedType",
         false,
         vec![
-            ("tag".into(), MdField::Raw("DW_TAG_pointer_type".into())),
-            ("baseType".into(), MdField::Node(Some(st))),
-            ("size".into(), MdField::UInt(64)),
+            ("tag", MdField::Raw("DW_TAG_pointer_type".into())),
+            ("baseType", MdField::Node(Some(st))),
+            ("size", MdField::UInt(64)),
         ],
     );
     let fwd = MdNode::Specialized {
         distinct: false,
-        name: "DICompositeType".into(),
+        name: "DICompositeType",
         fields: vec![
-            ("tag".into(), MdField::Raw("DW_TAG_structure_type".into())),
-            ("name".into(), MdField::Str("S".into())),
-            ("flags".into(), MdField::Raw("DIFlagFwdDecl".into())),
+            ("tag", MdField::Raw("DW_TAG_structure_type".into())),
+            ("name", MdField::Str("S".into())),
+            ("flags", MdField::Raw("DIFlagFwdDecl".into())),
         ]
         .into(),
     };
