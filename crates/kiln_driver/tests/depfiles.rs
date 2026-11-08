@@ -213,15 +213,18 @@ fn errors_after_preprocessing_keep_the_file_missing_headers_do_not() {
 #[cfg(unix)]
 #[test]
 fn every_path_a_header_is_reached_by_is_a_dependency() {
-    let d = std::env::temp_dir().join(format!("kiln-depfiles-{}-paths", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
+    let dir = std::env::temp_dir().join(format!("kiln-depfiles-{}-paths", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
     for sub in ["real", "sub", "a", "b", "c"] {
-        std::fs::create_dir_all(d.join(sub)).unwrap();
+        std::fs::create_dir_all(dir.join(sub)).unwrap();
     }
-    std::os::unix::fs::symlink("real", d.join("lnk")).unwrap();
+    std::os::unix::fs::symlink("real", dir.join("lnk")).unwrap();
     let files = [
         ("real/once.h", "#pragma once\nconst char *once_file = __FILE__;\n"),
-        ("real/guard.h", "#ifndef GUARD_H\n#define GUARD_H\nconst char *guard_file = __FILE__;\n#endif\n"),
+        (
+            "real/guard.h",
+            "#ifndef GUARD_H\n#define GUARD_H\nconst char *guard_file = __FILE__;\n#endif\n",
+        ),
         ("real/plain.h", "__FILE__\n"),
         ("a/n.h", "#include_next <n.h>\nint a_n;\n"),
         ("b/n.h", "#include_next <n.h>\nint b_n;\n"),
@@ -235,29 +238,29 @@ fn every_path_a_header_is_reached_by_is_a_dependency() {
         ),
     ];
     for (f, text) in files {
-        std::fs::write(d.join(f), text).unwrap();
+        std::fs::write(dir.join(f), text).unwrap();
     }
     let args = ["-fsyntax-only", "-MMD", "-MF", "out.d", "-Ia", "-Ib", "-Ic", "main.cpp"];
-    let o = run(&kilnpp(), &d, &args);
-    let t = read(&d, "out.d");
+    let out = run(&kilnpp(), &dir, &args);
+    let deps = read(&dir, "out.d");
     assert_eq!(
-        t,
+        deps,
         "main.o: main.cpp real/once.h lnk/once.h sub/../real/once.h lnk/guard.h \\\n  \
          real/guard.h lnk/plain.h real/plain.h a/n.h b/n.h c/n.h\n",
         "{}",
-        String::from_utf8_lossy(&o.stderr)
+        String::from_utf8_lossy(&out.stderr)
     );
-    same_as_clang(&d, &args, "out.d", &t);
-    let e = kiln(&d, &["-E", "-Ia", "-Ib", "-Ic", "main.cpp"]);
+    same_as_clang(&dir, &args, "out.d", &deps);
+    let e = kiln(&dir, &["-E", "-Ia", "-Ib", "-Ic", "main.cpp"]);
     let e = String::from_utf8(e.stdout).unwrap();
     // The second entry, by `real/plain.h`, keeps the first spelling.
     assert!(e.contains("# 1 \"./lnk/plain.h\" 1\n\"./lnk/plain.h\"\n# 11 \"main.cpp\" 2\n"), "{e}");
     if have("clang++-19") {
-        let c = run(Path::new("clang++-19"), &d, &["-E", "-Ia", "-Ib", "-Ic", "main.cpp"]);
-        let c = String::from_utf8(c.stdout).unwrap();
+        let clang = run(Path::new("clang++-19"), &dir, &["-E", "-Ia", "-Ib", "-Ic", "main.cpp"]);
+        let clang = String::from_utf8(clang.stdout).unwrap();
         // From the main file on (the predefines' length differs).
         let from_main = |s: &str| s[s.find("# 1 \"main.cpp\" 2").expect(s)..].to_owned();
-        assert_eq!(from_main(&e), from_main(&c), "-E differs from clang++-19");
+        assert_eq!(from_main(&e), from_main(&clang), "-E differs from clang++-19");
     }
-    std::fs::remove_dir_all(&d).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
 }

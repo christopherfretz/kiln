@@ -57,7 +57,13 @@ impl IncludeResolver for Synth {
         }
         let file =
             sm.add_virtual(&req.name, format!("name_{}\n", req.name.replace('.', "_"))).ok()?;
-        Some(ResolvedInclude { file, lookup_index: Some(3), system: false, extern_c: false, path: None })
+        Some(ResolvedInclude {
+            file,
+            lookup_index: Some(3),
+            system: false,
+            extern_c: false,
+            path: None,
+        })
     }
 }
 
@@ -93,7 +99,13 @@ fn include_next_lookup_from() {
                 _ => ("second\n", 3),
             };
             let file = sm.add_virtual(&format!("{idx}/a.h"), text.to_owned()).ok()?;
-            Some(ResolvedInclude { file, lookup_index: Some(idx), system: false, extern_c: false, path: None })
+            Some(ResolvedInclude {
+                file,
+                lookup_index: Some(idx),
+                system: false,
+                extern_c: false,
+                path: None,
+            })
         }
     }
     let log = Log::default();

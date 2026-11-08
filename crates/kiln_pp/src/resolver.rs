@@ -243,13 +243,12 @@ impl<F: HeaderFs> HeaderSearch<F> {
             None => 0,
         };
         let key = (name.to_owned(), start);
-        let hit = match self.lookups.get(&key) {
-            Some(&hit) => hit,
-            None => {
-                let hit = self.search(sm, start, name);
-                self.lookups.insert(key, hit);
-                hit
-            }
+        let hit = if let Some(&hit) = self.lookups.get(&key) {
+            hit
+        } else {
+            let hit = self.search(sm, start, name);
+            self.lookups.insert(key, hit);
+            hit
         };
         let i = hit?;
         let path = join_path(&self.list.dirs()[i].path, name);

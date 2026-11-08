@@ -376,6 +376,7 @@ enum FileKey {
 
 /// The [`FileKey`] of the file at `path`, whose metadata is `meta`.
 #[cfg(unix)]
+#[allow(clippy::unnecessary_wraps)] // the non-Unix twin can fail
 fn file_key(_path: &Path, meta: &fs::Metadata) -> io::Result<FileKey> {
     use std::os::unix::fs::MetadataExt;
     Ok(FileKey::Unique(meta.dev(), meta.ino()))
@@ -497,7 +498,7 @@ impl SourceManager {
     /// file again (through any path, a symbolic link or a `..` spelling)
     /// returns the same id without reading it again. The file is opened
     /// once, identified with one `fstat` of the open descriptor and read
-    /// from it: no path is canonicalized (spec/source.md "SourceManager API").
+    /// from it: no path is canonicalized (spec/source.md "`SourceManager` API").
     /// The buffer's [`file_name`](Self::file_name) is `path` as given on
     /// first load. Invalid UTF-8 is replaced with U+FFFD and recorded in
     /// the [`load_report`](Self::load_report).

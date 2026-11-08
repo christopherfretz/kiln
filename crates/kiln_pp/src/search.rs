@@ -354,6 +354,7 @@ impl HeaderFs for RealFs {
 /// A directory's identity: its device and inode number (clang compares
 /// `DirectoryEntry`s, which `FileManager` unifies by `UniqueID`).
 #[cfg(unix)]
+#[allow(clippy::unnecessary_wraps)] // the non-Unix twin can fail
 fn dir_key(_path: &str, m: &std::fs::Metadata) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
     Some(format!("{}:{}", m.dev(), m.ino()))
@@ -478,9 +479,12 @@ impl HeaderFs for MemoryFs {
             return None;
         }
         self.lists += 1;
-        let names = self.files.keys().chain(self.dirs.iter()).filter_map(|p| {
-            (p != &d && parent_dir(p) == d).then(|| p.rsplit('/').next().unwrap_or(p).to_owned())
-        });
+        let names = self
+            .files
+            .keys()
+            .chain(self.dirs.iter())
+            .filter(|p| **p != d && parent_dir(p) == d)
+            .map(|p| p.rsplit('/').next().unwrap_or(p).to_owned());
         Some(names.collect())
     }
 
