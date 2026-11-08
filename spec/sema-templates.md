@@ -2895,7 +2895,14 @@ recomputed exactly as for non-template code (clang's
   - a list-initializing `CXXConstructExpr` operand is formed again
     through `init_from_list_at` of the substituted type
     ([dcl.init.list]/3.7). A single-argument non-list construct is its
-    substituted argument;
+    substituted argument. (WP-804) When the construct calls an
+    initializer-list constructor (`ConstructInfo::std_init_list`), its
+    one argument is the `std::initializer_list` over the whole written
+    list, so `construct_list` takes that argument's braced list (an empty
+    one for the value-initialized `std::initializer_list` of `V v{}`) as
+    the list, not as one element of it: `V v{"2", 1}` is not rebuilt as
+    `V v{{"2", 1}}` (clang `isStdInitListInitialization`;
+    `dcl.init.list/init-list-ctor-element-list-in-template.cpp`);
   - a compound literal `(T){...}` (C99 extension) is rebuilt from its
     peeled initializer as a list, and `act_on_compound_literal` runs
     again;

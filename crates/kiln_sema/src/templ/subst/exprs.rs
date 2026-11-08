@@ -2527,6 +2527,21 @@ impl Substituter<'_, '_, '_> {
             .iter::<ExprId>(self.sema.ast.exprs.construct_args(e))
             .take_while(|&a| self.sema.ast.exprs.get(a).kind() != ExprKind::CXXDefaultArgExpr)
             .collect();
+        // An initializer-list constructor's one argument is the
+        // `std::initializer_list` over the whole braced list
+        // ([dcl.init.list]/3.7): the list is that argument's, not a list
+        // holding it (`V v{"2", 1}` is not `V v{{"2", 1}}`; clang
+        // `TransformInitializer` on `isStdInitListInitialization`). An
+        // empty list is the value-initialized `std::initializer_list`, a
+        // list-initializing construct with no arguments (`V v{}`).
+        if self.sema.ast.exprs.construct_info(e).std_init_list
+            && let [a] = items.as_slice()
+            && let Some(b) = self.braced_source(*a)
+        {
+            let mut l = self.braced_list(b)?;
+            (l.lbrace, l.rbrace) = (lbrace, rbrace);
+            return Ok(l);
+        }
         let out = self.init_items(&items)?;
         Ok(InitList { items: out, lbrace, rbrace })
     }
