@@ -1483,6 +1483,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     (like `throw`): `co_yield assignment-expression` or
     `co_yield braced-init-list` (the list goes through
     `act_on_braced_arg`), then `act_on_coyield(operand, kw_loc)`.
+    A parenthesized one is an expression, as a parenthesized `throw`
+    is, not a fold operand: `i = (co_yield i) + i` and
+    `42 == (co_yield *next)` (Boost.Asio's `experimental::coro` tests;
+    WP-812, `tests/conformance/expr.yield/parenthesized-run.cpp`).
   - `operator co_await` is an overloadable operator name (§4.1).
   - Where the keyword may appear (a function body, not a handler, not
     unevaluated) is Sema's call (spec/sema.md §"Coroutines").
