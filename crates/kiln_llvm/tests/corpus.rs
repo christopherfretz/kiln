@@ -1822,27 +1822,24 @@ fn debug_info() {
     let mut m = aarch64();
     m.add_module_flag_i32(7, "Dwarf Version", 5);
     m.add_module_flag_i32(2, "Debug Info Version", 3);
-    let raw = |s: &str| MdField::Raw(s.into());
+    let raw = |s: &'static str| MdField::Raw(s.into());
     let file = m.md_specialized(
         "DIFile",
         false,
-        vec![
-            ("filename".into(), MdField::Str("t.c".into())),
-            ("directory".into(), MdField::Str("/src".into())),
-        ],
+        vec![("filename", MdField::Str("t.c".into())), ("directory", MdField::Str("/src".into()))],
     );
     let cu = m.md_specialized(
         "DICompileUnit",
         true,
         vec![
-            ("language".into(), raw("DW_LANG_C11")),
-            ("file".into(), MdField::Node(Some(file))),
-            ("producer".into(), MdField::Str("kiln".into())),
-            ("isOptimized".into(), MdField::Bool(false)),
-            ("runtimeVersion".into(), MdField::UInt(0)),
-            ("emissionKind".into(), raw("FullDebug")),
-            ("splitDebugInlining".into(), MdField::Bool(false)),
-            ("nameTableKind".into(), raw("None")),
+            ("language", raw("DW_LANG_C11")),
+            ("file", MdField::Node(Some(file))),
+            ("producer", MdField::Str("kiln".into())),
+            ("isOptimized", MdField::Bool(false)),
+            ("runtimeVersion", MdField::UInt(0)),
+            ("emissionKind", raw("FullDebug")),
+            ("splitDebugInlining", MdField::Bool(false)),
+            ("nameTableKind", raw("None")),
         ],
     );
     m.add_named_metadata("llvm.dbg.cu", &[cu]);
@@ -1850,39 +1847,36 @@ fn debug_info() {
         "DIBasicType",
         false,
         vec![
-            ("name".into(), MdField::Str("int".into())),
-            ("size".into(), MdField::UInt(32)),
-            ("encoding".into(), raw("DW_ATE_signed")),
+            ("name", MdField::Str("int".into())),
+            ("size", MdField::UInt(32)),
+            ("encoding", raw("DW_ATE_signed")),
         ],
     );
     let types = m.md_tuple(&[Some(int)]);
-    let sty = m.md_specialized(
-        "DISubroutineType",
-        false,
-        vec![("types".into(), MdField::Node(Some(types)))],
-    );
+    let sty =
+        m.md_specialized("DISubroutineType", false, vec![("types", MdField::Node(Some(types)))]);
     let sp = m.md_specialized(
         "DISubprogram",
         true,
         vec![
-            ("name".into(), MdField::Str("main".into())),
-            ("scope".into(), MdField::Node(Some(file))),
-            ("file".into(), MdField::Node(Some(file))),
-            ("line".into(), MdField::UInt(1)),
-            ("type".into(), MdField::Node(Some(sty))),
-            ("scopeLine".into(), MdField::UInt(1)),
-            ("flags".into(), raw("DIFlagPrototyped")),
-            ("spFlags".into(), raw("DISPFlagDefinition")),
-            ("unit".into(), MdField::Node(Some(cu))),
+            ("name", MdField::Str("main".into())),
+            ("scope", MdField::Node(Some(file))),
+            ("file", MdField::Node(Some(file))),
+            ("line", MdField::UInt(1)),
+            ("type", MdField::Node(Some(sty))),
+            ("scopeLine", MdField::UInt(1)),
+            ("flags", raw("DIFlagPrototyped")),
+            ("spFlags", raw("DISPFlagDefinition")),
+            ("unit", MdField::Node(Some(cu))),
         ],
     );
     let loc = m.md_specialized(
         "DILocation",
         false,
         vec![
-            ("line".into(), MdField::UInt(2)),
-            ("column".into(), MdField::UInt(3)),
-            ("scope".into(), MdField::Node(Some(sp))),
+            ("line", MdField::UInt(2)),
+            ("column", MdField::UInt(3)),
+            ("scope", MdField::Node(Some(sp))),
         ],
     );
     let dbg = m.md_kind("dbg");
@@ -1902,6 +1896,152 @@ fn debug_info() {
             "distinct !DISubprogram(name: \"main\", scope: !",
             "!DIBasicType(name: \"int\", size: 32, encoding: DW_ATE_signed)\n",
             "!DILocation(line: 2, column: 3, scope: !",
+        ],
+    );
+}
+
+/// §2.6: LLVM 19 debug records print on their own line before the
+/// instruction they are attached to, with the expression inline.
+#[test]
+fn debug_records() {
+    let mut m = aarch64();
+    let file = m.md_specialized(
+        "DIFile",
+        false,
+        vec![("filename", MdField::Str("t.c".into())), ("directory", MdField::Str("/".into()))],
+    );
+    let cu = m.md_specialized(
+        "DICompileUnit",
+        true,
+        vec![
+            ("language", MdField::Raw("DW_LANG_C11".into())),
+            ("file", MdField::Node(Some(file))),
+            ("isOptimized", MdField::Bool(false)),
+            ("runtimeVersion", MdField::UInt(0)),
+            ("emissionKind", MdField::Raw("FullDebug".into())),
+        ],
+    );
+    m.add_named_metadata("llvm.dbg.cu", &[cu]);
+    m.add_module_flag_i32(2, "Debug Info Version", 3);
+    let sp = m.md_specialized(
+        "DISubprogram",
+        true,
+        vec![
+            ("name", MdField::Str("f".into())),
+            ("scope", MdField::Node(None)),
+            ("file", MdField::Node(Some(file))),
+            ("spFlags", MdField::Raw("DISPFlagDefinition".into())),
+            ("unit", MdField::Node(Some(cu))),
+        ],
+    );
+    let var = m.md_specialized(
+        "DILocalVariable",
+        false,
+        vec![("name", MdField::Str("x".into())), ("scope", MdField::Node(Some(sp)))],
+    );
+    let loc = m.md_specialized(
+        "DILocation",
+        false,
+        vec![("line", MdField::UInt(2)), ("scope", MdField::Node(Some(sp)))],
+    );
+    let expr = m.md_specialized("DIExpression", false, vec![]);
+    let dbg = m.md_kind("dbg");
+    let mut b = define(&mut m, "f", TypeId::VOID, &[]);
+    let a = b.alloca(TypeId::I32, 4).unwrap();
+    let z = b.module().const_int(TypeId::I32, 0);
+    let st = b.store(z, a, 4).unwrap();
+    let r = b.ret(None).unwrap();
+    let f = b.func();
+    f.add_metadata(dbg, sp);
+    let rec = |kind| DbgRecord { kind, addr: a, var, expr, loc };
+    f.add_debug_record(st.as_inst().unwrap(), rec(DbgRecordKind::Declare));
+    f.add_debug_record(r.as_inst().unwrap(), rec(DbgRecordKind::Declare));
+    f.add_debug_record(r.as_inst().unwrap(), rec(DbgRecordKind::Value));
+    f.add_inst_metadata(r.as_inst().unwrap(), dbg, loc);
+    check(
+        &m,
+        &[
+            "  %1 = alloca i32, align 4\n    #dbg_declare(ptr %1, !4, !DIExpression(), !5)\n  store i32 0",
+            "    #dbg_declare(ptr %1, !4, !DIExpression(), !5)\n    #dbg_value(ptr %1, !4, !DIExpression(), !5)\n  ret void, !dbg !5\n",
+            "!4 = !DILocalVariable(name: \"x\", scope: !3)\n",
+            "!5 = !DILocation(line: 2, scope: !3)\n",
+        ],
+    );
+}
+
+/// `md_set_field` completes a distinct node that its own operands refer
+/// to (a composite type's `elements`), replacing or appending the field;
+/// uniqued nodes refuse it.
+#[test]
+fn md_set_field_cycle() {
+    let mut m = aarch64();
+    let st = m.md_specialized(
+        "DICompositeType",
+        true,
+        vec![
+            ("tag", MdField::Raw("DW_TAG_structure_type".into())),
+            ("name", MdField::Str("S".into())),
+            ("elements", MdField::Node(None)),
+        ],
+    );
+    let mem = m.md_specialized(
+        "DIDerivedType",
+        false,
+        vec![
+            ("tag", MdField::Raw("DW_TAG_member".into())),
+            ("name", MdField::Str("x".into())),
+            ("scope", MdField::Node(Some(st))),
+            ("baseType", MdField::Node(None)),
+        ],
+    );
+    let elems = m.md_tuple(&[Some(mem)]);
+    m.md_set_field(st, "elements", MdField::Node(Some(elems))).unwrap();
+    m.md_set_field(st, "identifier", MdField::Str("_ZTS1S".into())).unwrap();
+    assert!(m.md_set_field(mem, "name", MdField::Str("y".into())).is_err());
+    m.add_named_metadata("n", &[st]);
+    check(
+        &m,
+        &[
+            "!0 = distinct !DICompositeType(tag: DW_TAG_structure_type, name: \"S\", elements: !1, identifier: \"_ZTS1S\")\n",
+            "!1 = !{!2}\n",
+            "!2 = !DIDerivedType(tag: DW_TAG_member, name: \"x\", scope: !0, baseType: null)\n",
+        ],
+    );
+}
+
+/// `md_replace`: a distinct placeholder becomes a uniqued declaration in
+/// place; a uniqued node cannot be replaced.
+#[test]
+fn md_replace_placeholder() {
+    let mut m = aarch64();
+    let st = m.md_specialized("DICompositeType", true, vec![]);
+    let p = m.md_specialized(
+        "DIDerivedType",
+        false,
+        vec![
+            ("tag", MdField::Raw("DW_TAG_pointer_type".into())),
+            ("baseType", MdField::Node(Some(st))),
+            ("size", MdField::UInt(64)),
+        ],
+    );
+    let fwd = MdNode::Specialized {
+        distinct: false,
+        name: "DICompositeType",
+        fields: vec![
+            ("tag", MdField::Raw("DW_TAG_structure_type".into())),
+            ("name", MdField::Str("S".into())),
+            ("flags", MdField::Raw("DIFlagFwdDecl".into())),
+        ]
+        .into(),
+    };
+    m.md_replace(st, fwd.clone()).unwrap();
+    assert!(m.md_replace(p, fwd).is_err());
+    m.add_named_metadata("n", &[p]);
+    check(
+        &m,
+        &[
+            "!0 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !1, size: 64)\n",
+            "!1 = !DICompositeType(tag: DW_TAG_structure_type, name: \"S\", flags: DIFlagFwdDecl)\n",
         ],
     );
 }

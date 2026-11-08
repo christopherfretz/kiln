@@ -1,7 +1,7 @@
 //! `TypeContext`: storage, queries and the interning core (spec/types.md
 //! §3, §4, §7, §13). The per-kind constructors are in `canon.rs`.
 
-use super::args::ArgTable;
+use super::args::{ArgTable, ArgView};
 use super::func::{ExcSpec, FuncProto, NoexceptValue, TypeList};
 use super::intern::{InternTable, KeyedTable, fx_hash};
 use super::kinds::{
@@ -247,6 +247,18 @@ pub struct TypeContext {
     /// `getAs<FunctionProtoType>` stops at the first prototype in the
     /// sugar chain; spec/types.md §5.4).
     pub(crate) exc_protos: kiln_source::fx::FxHashMap<TypeId, FuncProto>,
+    /// For each canonical dependent (template-)specialization type with
+    /// a value-dependent expression argument: the argument list as
+    /// written by the first specialization type that canonicalized to
+    /// it. clang's canonical `TemplateSpecializationType` keeps the
+    /// expressions of the spelling that created it, and mangles those
+    /// (spec/abi.md §8.15, WP-790); [`TypeContext::arg_origin`].
+    pub(crate) arg_origins: kiln_source::fx::FxHashMap<TypeId, ArgListId>,
+    /// The same for a canonical dependent `decltype` or dependent-bound
+    /// array type: the operand or bound written by the first `decltype`
+    /// or array type that canonicalized to it
+    /// ([`TypeContext::expr_origin`]).
+    pub(crate) expr_origins: kiln_source::fx::FxHashMap<TypeId, ExprId>,
     pub(crate) nns: KeyedTable,
     pub(crate) args: ArgTable,
     pub(crate) profiles: ProfileTable,
@@ -299,6 +311,8 @@ impl TypeContext {
             first_dtst_names: kiln_source::fx::FxHashMap::default(),
             dtst_first_spelling: true,
             exc_protos: kiln_source::fx::FxHashMap::default(),
+            arg_origins: kiln_source::fx::FxHashMap::default(),
+            expr_origins: kiln_source::fx::FxHashMap::default(),
             nns: KeyedTable::new(),
             args: ArgTable::new(),
             profiles: ProfileTable::new(),
@@ -1191,6 +1205,48 @@ impl TypeContext {
         self.profiles.first_expr(p)
     }
 
+    /// The written argument list of the specialization type that created
+    /// the canonical dependent specialization type `canonical`, when its
+    /// arguments include a value-dependent expression: the list whose
+    /// expressions name the type in a mangled name (clang mangles the
+    /// creating spelling's expressions, so `R<T>::value` and `R<T,
+    /// void>::value` mangle as the first one written in that enclosing
+    /// type). `None` when the canonical list is all there is.
+    pub fn arg_origin(&self, canonical: TypeId) -> Option<ArgListId> {
+        self.arg_origins.get(&canonical).copied()
+    }
+
+    /// Records `written` as the origin of canonical type `c` if it is
+    /// the first spelling with an expression argument
+    /// ([`TypeContext::arg_origin`]).
+    pub(crate) fn note_arg_origin(&mut self, c: TypeId, written: ArgListId) {
+        if !self.arg_origins.contains_key(&c) && self.has_expr_arg(written) {
+            self.arg_origins.insert(c, written);
+        }
+    }
+
+    /// The expression written by the `decltype` (or dependent-bound
+    /// array) type that created the canonical type `canonical`
+    /// ([`TypeContext::arg_origin`]); else the profile's first
+    /// expression in the TU.
+    pub fn expr_origin(&self, canonical: TypeId, p: ProfileId) -> Option<ExprId> {
+        self.expr_origins.get(&canonical).copied().or_else(|| self.profile_expr(p))
+    }
+
+    /// Records `e` as the origin of canonical type `c` if it is the
+    /// first ([`TypeContext::expr_origin`]).
+    pub(crate) fn note_expr_origin(&mut self, c: TypeId, e: ExprId) {
+        self.expr_origins.entry(c).or_insert(e);
+    }
+
+    fn has_expr_arg(&self, l: ArgListId) -> bool {
+        self.args(l).iter().any(|a| match a.view() {
+            ArgView::Expr { profile: Some(_), .. } => true,
+            ArgView::Pack(p) => self.has_expr_arg(p),
+            _ => false,
+        })
+    }
+
     /// The dependence flags recorded with profile `p`.
     pub fn profile_flags(&self, p: ProfileId) -> TypeFlags {
         self.profiles.flags(p)
@@ -1235,6 +1291,8 @@ impl TypeContext {
         r.push(MemRow::of_set("names.dependent_templates", &self.dependent_templates));
         r.push(MemRow::of_map("names.first_dtst", &self.first_dtst_names));
         r.push(MemRow::of_map("exc_protos", &self.exc_protos));
+        r.push(MemRow::of_map("arg_origins", &self.arg_origins));
+        r.push(MemRow::of_map("expr_origins", &self.expr_origins));
         self.nns.memory("nns", &mut r);
         self.args.memory(&mut r);
         self.profiles.memory(&mut r);

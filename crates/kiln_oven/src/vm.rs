@@ -2265,7 +2265,7 @@ impl Oven {
         let es = self.types.size(elem).max(1);
         let off = u64::from(p.off);
         if let TyKind::Array { elem: e, n } = self.types.kind(a.ty)
-            && self.types.same_unqualified(e, elem)
+            && self.types.alike(e, elem)
         {
             return Ok((0, n, off / es, true));
         }
@@ -3412,6 +3412,20 @@ impl Oven {
         }
         if size != 0 && self.mem.ended(raw, size) {
             self.mem.set_lifetime(raw, size, true).map_err(fault)?;
+        }
+        Ok(())
+    }
+
+    /// `__builtin_clear_padding(raw)` for an object of type `ty` (WP-774;
+    /// spec/oven.md "Clearing padding"): the storage must exist, be in
+    /// bounds and be modifiable by this evaluation. Padding bits are not
+    /// modelled (they read as indeterminate), so nothing is written.
+    pub(super) fn clear_padding(&mut self, raw: u64, ty: OTy) -> Result<(), Fault> {
+        let fault = |f| Fault::Mem { f, ak: ak::ASSIGN, ty, p: raw };
+        let size = self.types.size(ty);
+        let (sp, _, a) = self.mem.check_storage(raw, size, true).map_err(fault)?;
+        if let Some(f) = write_fault(sp, a, ty) {
+            return Err(fault(f));
         }
         Ok(())
     }

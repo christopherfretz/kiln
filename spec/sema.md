@@ -4441,6 +4441,23 @@ function) elsewhere.
     `noexcept`. Evaluation is spec/oven.md "Builtins"; codegen evaluates
     the argument and emits nothing else (spec/codegen.md). Tests:
     `tests/conformance/obj.lifetime/start-lifetime-*.cpp`.
+  - `__builtin_clear_padding(p)` (WP-774; GCC `BUILT_IN_CLEAR_PADDING`,
+    `check_builtin_function_arguments`; clang has none, LLVM issue
+    64830): a GCC-only builtin (`gcc_only`, `__has_builtin` is 1 at both
+    compat levels, `__has_constexpr_builtin` 0 as in GCC). One argument
+    (`too few`/`too many`), decayed. GCC's checks run in GCC's order; the
+    first that fails is `argument 1 in call to function
+    '__builtin_clear_padding' {does not have pointer type|has pointer to
+    'const' type (T)|points to incomplete type (T)|has pointer to a
+    non-trivially-copyable type (T)}` at the argument
+    (`sema_builtin_clear_padding_invalid_arg`; GCC prints no type for
+    the incomplete case, and kiln emits no forward-declaration note). The
+    checks are: not a pointer; a `const` pointee; an incomplete or `void`
+    pointee (`int (*)[]` included); a pointee that is not trivially
+    copyable. A volatile pointee is accepted. The call is a `void`
+    prvalue. The constant-evaluation semantics are a kiln extension
+    (spec/oven.md "Builtins"); codegen is spec/codegen.md "Clearing
+    padding". Tests: `tests/conformance/ext.gnu.clear_padding/`.
   - `__builtin_align_up` / `__builtin_align_down` / `__builtin_is_aligned`
     (custom, `builtin_align`, clang `BuiltinAlignment`; WP-416): two
     arguments. The source must be an integer (not `bool` or an

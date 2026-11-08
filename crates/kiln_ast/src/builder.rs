@@ -3979,13 +3979,13 @@ impl<'a> AstBuilder<'a> {
     }
 
     /// A `do` statement ([stmt.do]).
-    pub fn do_stmt(&mut self, body: StmtId, cond: ExprId, loc: Loc) -> StmtId {
+    pub fn do_stmt(&mut self, body: StmtId, cond: ExprId, loc: Loc, rparen: Loc) -> StmtId {
         let side = self.ast.stmts.push_loop(LoopData {
             cond: Some(cond),
             body: Some(body),
             ..LoopData::default()
         });
-        self.stmt(StmtKind::DoStmt, 0, loc, side, 0)
+        self.stmt(StmtKind::DoStmt, 0, loc, side, rparen.to_raw())
     }
 
     /// A `for` statement ([stmt.for]).

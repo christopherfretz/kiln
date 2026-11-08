@@ -429,6 +429,85 @@ pub(crate) struct IndirectGoto {
     pub br: u32,
 }
 
+/// A `#dbg_declare` record before an instruction (WP-814).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DbgRec {
+    pub addr: V,
+    pub var: MetadataId,
+    pub expr: MetadataId,
+    pub loc: MetadataId,
+}
+
+/// The debug-location state of a function with a `DISubprogram`
+/// (spec/codegen.md "Debug information"): clang's builder location and
+/// `CGDebugInfo::LexicalBlockStack`. Absent at `-g0`.
+#[derive(Clone, Debug)]
+pub(crate) struct FirDbg {
+    /// The `dbg` kind.
+    pub kind: MdKindId,
+    /// The subprogram.
+    pub sp: MetadataId,
+    /// The builder's current location (`None`: no `!dbg`).
+    pub loc: Option<MetadataId>,
+    /// The lexical scopes, innermost last; the subprogram first.
+    pub scopes: Vec<MetadataId>,
+    /// clang `LastStopPoint`'s location (the return's line when every
+    /// return was simple).
+    pub last_stop: kiln_source::Loc,
+    /// clang `CGDebugInfo::CurLoc`: the last valid location emitted.
+    pub cur_loc: kiln_source::Loc,
+    /// clang `CurEHLocation`: where landing pads are.
+    pub eh_loc: kiln_source::Loc,
+    /// A variable was described (the subprogram gets `retainedNodes`).
+    pub tracked: bool,
+    /// clang `NumReturnExprs` / `NumSimpleReturnExprs`: when every
+    /// `return` was simple, the epilogue takes the last stop point.
+    pub returns: u32,
+    pub simple_returns: u32,
+    /// clang `ReturnValuePointer`: the slot holding the `sret` pointer
+    /// (an NRVO variable is described through it).
+    pub ret_ptr: Option<V>,
+    /// The `ret` takes the location of the store it replaces (clang
+    /// `EmitRetDbgLoc`).
+    pub ret_dbg: bool,
+    /// The function's variables (the subprogram's `retainedNodes` when
+    /// optimizing).
+    pub vars: Vec<MetadataId>,
+    /// Records declared at the end of a block, adopted by the next
+    /// instruction appended to it (`DIBuilder::insertDeclare(.., BB)`).
+    trailing: Vec<(Blk, DbgRec)>,
+    /// Records attached before an instruction, in order.
+    recs: Vec<(u32, DbgRec)>,
+}
+
+impl FirDbg {
+    /// The state of a function with subprogram `sp`.
+    pub fn new(kind: MdKindId, sp: MetadataId) -> FirDbg {
+        FirDbg {
+            kind,
+            sp,
+            loc: None,
+            scopes: vec![sp],
+            last_stop: kiln_source::Loc::INVALID,
+            cur_loc: kiln_source::Loc::INVALID,
+            eh_loc: kiln_source::Loc::INVALID,
+            tracked: false,
+            returns: 0,
+            simple_returns: 0,
+            ret_ptr: None,
+            ret_dbg: true,
+            vars: Vec::new(),
+            trailing: Vec::new(),
+            recs: Vec::new(),
+        }
+    }
+
+    /// The innermost scope.
+    pub fn scope(&self) -> MetadataId {
+        self.scopes.last().copied().unwrap_or(self.sp)
+    }
+}
+
 /// The function buffer.
 #[derive(Debug)]
 pub(crate) struct Fir {
@@ -452,6 +531,9 @@ pub(crate) struct Fir {
     /// The fast-math flags of calls to functions other than intrinsics:
     /// the command line's (clang keeps a pragma scope's off them).
     call_fmf: FastMath,
+    /// Debug locations and records (`None` at `-g0` and for functions
+    /// without a subprogram).
+    pub dbg: Option<Box<FirDbg>>,
 }
 
 impl Fir {
@@ -470,6 +552,7 @@ impl Fir {
             access_kind: None,
             fmf: FastMath::NONE,
             call_fmf: FastMath::NONE,
+            dbg: None,
         };
         let e = f.create_block();
         f.place_at_end(e);
@@ -768,6 +851,9 @@ impl Fir {
     /// Erases instruction `i`.
     pub fn erase(&mut self, i: u32) {
         if let Some(b) = self.insts[i as usize].block {
+            if self.dbg.as_ref().is_some_and(|d| d.recs.iter().any(|r| r.0 == i)) {
+                self.move_records(b, i);
+            }
             self.blocks[b.0 as usize].insts.retain(|&x| x != i);
             self.allocas.retain(|&x| x != i);
             self.drop_inst(i);
@@ -852,14 +938,83 @@ impl Fir {
         for s in op.successors() {
             self.blocks[s.0 as usize].uses += 1;
         }
-        let md = match (self.access_kind, self.access_group) {
+        let mut md = match (self.access_kind, self.access_group) {
             (Some(k), Some(g)) if op.may_access_memory() => vec![(k, g)],
             _ => Vec::new(),
         };
+        if self.dbg.is_some() {
+            self.dbg_append(b, n, &mut md);
+        }
         self.insts.push(Inst { op, ty, block: Some(b), md, fmf: self.fmf });
         self.blocks[b.0 as usize].insts.push(n);
         self.note_refs(n);
         V::I(n)
+    }
+
+    /// The builder location and the block's trailing debug records for
+    /// instruction `n` appended to `b` (`IRBuilder::Insert`).
+    fn dbg_append(&mut self, b: Blk, n: u32, md: &mut Vec<(MdKindId, MetadataId)>) {
+        let Some(d) = self.dbg.as_deref_mut() else { return };
+        if let Some(l) = d.loc {
+            md.push((d.kind, l));
+        }
+        if d.trailing.iter().any(|t| t.0 == b) {
+            let (mine, rest): (Vec<_>, Vec<_>) = d.trailing.drain(..).partition(|t| t.0 == b);
+            d.trailing = rest;
+            d.recs.extend(mine.into_iter().map(|(_, r)| (n, r)));
+        }
+    }
+
+    /// Moves the records before instruction `i` (being erased) of block
+    /// `b` to the instruction after it, or to the block's end (LLVM
+    /// `Instruction::eraseFromParent` keeps a marker's records).
+    fn move_records(&mut self, b: Blk, i: u32) {
+        let insts = &self.blocks[b.0 as usize].insts;
+        let next = insts.iter().position(|&x| x == i).and_then(|p| insts.get(p + 1)).copied();
+        let Some(d) = self.dbg.as_deref_mut() else { return };
+        let moved: Vec<DbgRec> = d.recs.iter().filter(|r| r.0 == i).map(|r| r.1).collect();
+        d.recs.retain(|r| r.0 != i);
+        match next {
+            Some(n) => {
+                let at = d.recs.iter().position(|r| r.0 == n).unwrap_or(d.recs.len());
+                for (k, r) in moved.into_iter().enumerate() {
+                    d.recs.insert(at + k, (n, r));
+                }
+            }
+            None => d.trailing.extend(moved.into_iter().map(|r| (b, r))),
+        }
+    }
+
+    /// The `!dbg` of instruction `i`.
+    pub fn inst_dbg(&self, i: u32) -> Option<MetadataId> {
+        let k = self.dbg.as_deref()?.kind;
+        self.insts[i as usize].md.iter().find(|m| m.0 == k).map(|m| m.1)
+    }
+
+    /// Replaces the `!dbg` of instruction `i`.
+    pub fn set_inst_dbg(&mut self, i: u32, loc: Option<MetadataId>) {
+        let Some(k) = self.dbg.as_deref().map(|d| d.kind) else { return };
+        let md = &mut self.insts[i as usize].md;
+        md.retain(|m| m.0 != k);
+        if let Some(l) = loc {
+            md.push((k, l));
+        }
+    }
+
+    /// Sets the builder's debug location, returning the previous one.
+    pub fn set_dbg_loc(&mut self, loc: Option<MetadataId>) -> Option<MetadataId> {
+        match self.dbg.as_deref_mut() {
+            Some(d) => std::mem::replace(&mut d.loc, loc),
+            None => None,
+        }
+    }
+
+    /// A `#dbg_declare` at the end of the current block.
+    pub fn declare(&mut self, rec: DbgRec) {
+        let b = self.cur;
+        if let (Some(d), Some(b)) = (self.dbg.as_deref_mut(), b) {
+            d.trailing.push((b, rec));
+        }
     }
 
     /// Appends `op` to block `b` (which need not be current or placed).
@@ -868,7 +1023,11 @@ impl Fir {
         for s in op.successors() {
             self.blocks[s.0 as usize].uses += 1;
         }
-        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new(), fmf: self.fmf });
+        let mut md = Vec::new();
+        if self.dbg.is_some() {
+            self.dbg_append(b, n, &mut md);
+        }
+        self.insts.push(Inst { op, ty, block: Some(b), md, fmf: self.fmf });
         self.blocks[b.0 as usize].insts.push(n);
         self.note_refs(n);
         V::I(n)
@@ -900,6 +1059,11 @@ impl Fir {
         if let (true, Some(k), Some(g), V::I(n)) = (grouped, self.access_kind, self.access_group, v)
         {
             self.insts[n as usize].md.push((k, g));
+        }
+        if let (Some(d), V::I(n)) = (self.dbg.as_deref(), v)
+            && let Some(l) = d.loc
+        {
+            self.insts[n as usize].md.push((d.kind, l));
         }
         v
     }
@@ -956,8 +1120,16 @@ impl Fir {
         if self.blocks.iter().any(|b| b.llvm.is_some()) {
             return None;
         }
+        // The copy has no subprogram (yet): drop the locations, which
+        // would point into the original's.
+        let mut insts = self.insts.clone();
+        if let Some(d) = self.dbg.as_deref() {
+            for i in &mut insts {
+                i.md.retain(|m| m.0 != d.kind);
+            }
+        }
         Some(Fir {
-            insts: self.insts.clone(),
+            insts,
             blocks: self.blocks.clone(),
             layout: self.layout.clone(),
             allocas: self.allocas.clone(),
@@ -968,6 +1140,7 @@ impl Fir {
             access_kind: self.access_kind,
             fmf: self.fmf,
             call_fmf: self.call_fmf,
+            dbg: None,
         })
     }
 
@@ -1280,8 +1453,45 @@ impl Fir {
                         }
                         b.func().add_inst_metadata(id, k, md);
                     }
+                    // The verifier wants a location on every call in a
+                    // function with a subprogram: line 0 in it.
+                    if let Some(d) = self.dbg.as_deref()
+                        && matches!(inst.op, Op::Call { .. } | Op::Invoke { .. })
+                        && !inst.md.iter().any(|m| m.0 == d.kind)
+                    {
+                        let l = b.module().md_specialized(
+                            "DILocation",
+                            false,
+                            vec![
+                                ("line", kiln_llvm::MdField::UInt(0)),
+                                ("scope", kiln_llvm::MdField::Node(Some(d.sp))),
+                            ],
+                        );
+                        b.func().add_inst_metadata(id, d.kind, l);
+                    }
                 }
                 vmap[i as usize] = Some(r);
+            }
+        }
+        if let Some(d) = self.dbg.as_deref() {
+            for (i, r) in &d.recs {
+                let addr = match r.addr {
+                    V::I(n) => vmap[n as usize],
+                    V::Arg(n) => Some(Value::arg(n)),
+                    V::C(c) => Some(c),
+                    V::P(n) => ph[n as usize],
+                };
+                if let (Some(Some(id)), Some(addr)) = (vmap[*i as usize].map(Value::as_inst), addr)
+                {
+                    let rec = kiln_llvm::DbgRecord {
+                        kind: kiln_llvm::DbgRecordKind::Declare,
+                        addr,
+                        var: r.var,
+                        expr: r.expr,
+                        loc: r.loc,
+                    };
+                    b.func().add_debug_record(id, rec);
+                }
             }
         }
         for (p, i) in phis {

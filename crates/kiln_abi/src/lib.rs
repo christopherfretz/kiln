@@ -24,8 +24,9 @@ pub use dump::{
     write_record_layout, write_record_layout_with,
 };
 pub use layout::{
-    LayoutCache, Layouter, MAX_SUBOBJECTS, TypeLayout, array_layout, ensure_layout, record_layout,
-    subobjects, type_size_align,
+    LayoutCache, Layouter, MAX_SUBOBJECTS, TypeLayout, array_layout, ensure_layout,
+    padding::{MAX_PADDING_MASK_BYTES, padding_mask},
+    record_layout, subobjects, type_size_align,
 };
 pub use mangle::ReflectionMangling;
 pub use target::{Arch, Target, Triple, TripleError, target};

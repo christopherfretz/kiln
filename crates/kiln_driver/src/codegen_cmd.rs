@@ -13,7 +13,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use kiln_codegen::{AutoVarInit, CodegenOptions, RelocModel, Visibility, emit_with_diags};
+use kiln_codegen::{AutoVarInit, CodegenOptions, RelocModel, Visibility};
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, Group};
 use kiln_lex::Interner;
 use kiln_parse::{ParseOptions, parse_preprocessed};
@@ -108,6 +108,24 @@ pub fn default_output(input: &str, phase: Phase) -> String {
             .map_or_else(|| input.to_owned(), |s| s.to_string_lossy().into_owned())
     };
     format!("{stem}.{}", phase.suffix())
+}
+
+/// The `-gsplit-dwarf` `.dwo` file of `input` (clang
+/// `SplitDebugName`): the output with its extension replaced, or for a
+/// link `<output>-<stem>.dwo` (`a-<stem>.dwo` without `-o`).
+pub fn dwo_name(args: &Args, input: &str) -> String {
+    let stem = |p: &str| {
+        Path::new(p).file_stem().map_or_else(|| p.to_owned(), |s| s.to_string_lossy().into_owned())
+    };
+    match (Phase::of(args), &args.output) {
+        (Phase::Link, o) => {
+            let o = o.as_deref().unwrap_or("a");
+            let base = Path::new(o).with_extension("");
+            format!("{}-{}.dwo", base.display(), stem(input))
+        }
+        (_, Some(o)) => Path::new(o).with_extension("dwo").display().to_string(),
+        (_, None) => format!("{}.dwo", stem(input)),
+    }
 }
 
 /// The `llc` optimization level for the driver's `-O` flag. `llc`
@@ -278,6 +296,7 @@ impl CodegenJob<'_> {
         if crate::features::resolve(a, &job.toolchain.target).0.x86_cx16() {
             target.types.max_atomic_inline_bytes = 16;
         }
+        let main_id = inputs.main;
         let (pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
         let popts = ParseOptions {
@@ -365,12 +384,28 @@ impl CodegenJob<'_> {
                 semantic_interposition: a.semantic_interposition,
                 direct_access_external_data: a.direct_access_external_data,
                 cxx_modules: job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20,
+                debug: kiln_codegen::DebugOptions {
+                    main_file: if job.path == "-" { String::new() } else { job.path.to_owned() },
+                    main_id: Some(main_id),
+                    language: kiln_codegen::DebugOptions::language_for(
+                        job.std.cplusplus,
+                        job.std.lex >= kiln_lex::Std::Cxx11,
+                        job.std.lex >= kiln_lex::Std::Cxx14,
+                    ),
+                    ..a.debug.options(
+                        &std::env::current_dir()
+                            .map(|d| d.display().to_string())
+                            .unwrap_or_default(),
+                        a.debug.split().then(|| dwo_name(a, job.path)),
+                    )
+                },
                 ..codegen_flag_options(a, feats.cpu.clone(), x86)
             };
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).
             tu.oven.set_clang_compat(opts.clang_compat);
-            let (r, warnings) = emit_with_diags(&mut tu.ast, &mut tu.oven, &target, &opts);
+            let (r, warnings) =
+                kiln_codegen::emit_with_debug(&mut tu.ast, &mut tu.oven, &target, &opts, Some(sm));
             for w in warnings {
                 w.emit(engine);
             }
@@ -581,13 +616,29 @@ fn plan<'a>(
             }
             Phase::Assembly | Phase::Object => {
                 steps.push(Step::Frontend { input, dest: Dest::Pipe });
-                steps.push(Step::External { cmd: llc(args, tc, phase, out()), piped: true });
+                steps.push(Step::External {
+                    cmd: llc(args, tc, phase, out(), &input.path),
+                    piped: true,
+                });
+                // `-gz`: `llc` cannot compress, so the object's debug
+                // sections are compressed in place after it.
+                if phase == Phase::Object
+                    && args.debug.kind() != kiln_codegen::DebugInfoKind::None
+                    && let Some(z) = args.debug.compression()
+                {
+                    let mut cmd = Command::new(tc, Tool::Objcopy);
+                    cmd.arg(format!("--compress-debug-sections={}", z.name())).arg(out());
+                    steps.push(Step::External { cmd, piped: false });
+                }
             }
             Phase::Link => {
                 let stem = default_output(&input.path, Phase::Object);
                 let obj = temp.file(&format!("{n}-{stem}"));
                 steps.push(Step::Frontend { input, dest: Dest::Pipe });
-                steps.push(Step::External { cmd: llc(args, tc, phase, obj.clone()), piped: true });
+                steps.push(Step::External {
+                    cmd: llc(args, tc, phase, obj.clone(), &input.path),
+                    piped: true,
+                });
                 link_inputs.push((pos, obj));
             }
         }
@@ -596,6 +647,19 @@ fn plan<'a>(
         steps.push(Step::External { cmd: link_command(args, tc, &link_inputs), piped: false });
     }
     steps
+}
+
+/// The module text before its metadata section, which LLVM's printer
+/// (and kiln's) writes after every declaration and attribute group: the
+/// checks of [`ir_passes`] look only at those, and a `-g` module's
+/// metadata is most of its text (WP-817). A top-level line opening with
+/// `!` starts the section; no other line does (instructions are
+/// indented and a string's newline is escaped).
+fn code_part(ir: &str) -> &str {
+    if ir.starts_with('!') {
+        return "";
+    }
+    ir.find("\n!").map_or(ir, |i| &ir[..=i])
 }
 
 /// Whether the IR text needs the coroutine lowering: it declares an
@@ -636,6 +700,7 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
     if args.disable_llvm_passes {
         return None;
     }
+    let ir = code_part(ir);
     let passes = match opt_pipeline(args.opt_flag.as_deref()) {
         Some(p) => p,
         None if needs_always_inline(ir) => "default<O0>",
@@ -673,7 +738,7 @@ fn opt_commands(args: &Args, tc: &Toolchain, passes: &str) -> Vec<Command> {
 }
 
 /// `llc` for an assembly or object output.
-fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String) -> Command {
+fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String, input: &str) -> Command {
     let mut cmd = Command::new(tc, Tool::Llc);
     cmd.arg(llc_opt_level(args.opt_flag.as_deref()));
     let pic = args.predef.pic.unwrap_or(PicModel::Pie(2));
@@ -706,6 +771,18 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String) -> Command {
     // hands the model to the target machine.
     if let Some(cm) = args.codegen.code_model {
         cmd.arg(format!("-code-model={}", cm.name()));
+    }
+    // spec/driver.md "Debug information": clang's debugger tuning, and
+    // `-gsplit-dwarf`'s `.dwo` file.
+    if args.debug.kind() != kiln_codegen::DebugInfoKind::None {
+        cmd.arg("-debugger-tune=gdb");
+        if args.debug.split() {
+            let dwo = dwo_name(args, input);
+            cmd.arg(format!("-split-dwarf-file={dwo}"));
+            if phase != Phase::Assembly {
+                cmd.arg(format!("-split-dwarf-output={dwo}"));
+            }
+        }
     }
     cmd.arg("-o").arg(out).arg("-");
     cmd
@@ -748,6 +825,10 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
     }
     if args.predef.pthread {
         cmd.arg("-pthread");
+    }
+    // `-gz` reaches the linker as `--compress-debug-sections=`.
+    if let Some(z) = args.debug.compression() {
+        cmd.arg(format!("-gz={}", z.name()));
     }
     // WP-813: clang links the XRay runtime for `-fxray-instrument`.
     if args.codegen.xray_instrument {
@@ -822,30 +903,40 @@ fn execute(
         }
         match step {
             Step::Frontend { input, dest } => {
-                ir = frontend(args, tc, input, stdin_text, diag_opts, io).map(String::into_bytes);
+                let text = frontend(args, tc, input, stdin_text, diag_opts, io);
                 // The IR-level passes run before the IR is written or
                 // piped on (spec/driver.md "IR optimization").
-                if let Some(text) = &ir
-                    && let Some(cmds) = ir_passes(args, tc, std::str::from_utf8(text).unwrap_or(""))
-                {
-                    // Each run's output replaces its input: the frontend's
-                    // text is not kept alongside a copy (WP-633).
-                    let mut data = ir.take().unwrap_or_default();
-                    let mut ok = true;
-                    for cmd in &cmds {
-                        if args.verbose {
-                            let mut err = io.stderr.clone();
-                            let _ = err.write_all(cmd.render(false).as_bytes());
-                        }
-                        let mut out = Vec::new();
-                        ok = cmd.run(Some(&data), &mut out, &io.stderr, drv);
-                        if !ok {
-                            break;
-                        }
-                        data = out;
+                let Some(cmds) = text.as_deref().and_then(|t| ir_passes(args, tc, t)) else {
+                    // The frontend's own text is written as is: no UTF-8
+                    // re-validation of a (`-g`: mostly metadata) module.
+                    if let (Some(t), Dest::File(f)) = (&text, dest)
+                        && let Err(e) = write_output(Some(f), t, &mut io.stdout)
+                    {
+                        report_output_error(diag_opts, &io.stderr, f, &e);
+                        failed = true;
                     }
-                    ir = ok.then_some(data);
+                    skip_piped = text.is_none();
+                    failed |= text.is_none();
+                    ir = text.map(String::into_bytes);
+                    continue;
+                };
+                // Each run's output replaces its input: the frontend's
+                // text is not kept alongside a copy (WP-633).
+                let mut data = text.map(String::into_bytes).unwrap_or_default();
+                let mut ok = true;
+                for cmd in &cmds {
+                    if args.verbose {
+                        let mut err = io.stderr.clone();
+                        let _ = err.write_all(cmd.render(false).as_bytes());
+                    }
+                    let mut out = Vec::new();
+                    ok = cmd.run(Some(&data), &mut out, &io.stderr, drv);
+                    if !ok {
+                        break;
+                    }
+                    data = out;
                 }
+                ir = ok.then_some(data);
                 skip_piped = ir.is_none();
                 failed |= ir.is_none();
                 if let (Some(text), Dest::File(f)) = (&ir, dest)
@@ -970,6 +1061,16 @@ mod tests {
         assert!(needs_always_inline("attributes #1 = { alwaysinline mustprogress nounwind }\n"));
         assert!(!needs_always_inline("attributes #0 = { mustprogress noinline optnone }\n"));
         assert!(!needs_always_inline("define void @alwaysinline() #0 {\n}\n"));
+    }
+
+    #[test]
+    fn code_part_stops_at_metadata() {
+        let ir = "define void @f() #0 !dbg !5 {\n  ret void, !dbg !7\n}\n\nattributes #0 = { alwaysinline }\n\n!llvm.dbg.cu = !{!0}\n!0 = !{}\n";
+        let head = code_part(ir);
+        assert!(head.ends_with("alwaysinline }\n\n"));
+        assert!(needs_always_inline(head));
+        assert_eq!(code_part("!0 = !{}\n"), "");
+        assert_eq!(code_part("declare void @g()\n"), "declare void @g()\n");
     }
 
     #[test]

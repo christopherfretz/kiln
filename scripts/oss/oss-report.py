@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""oss-report.py [--root DIR] [--update FILE] [--perf [--top N]] [project ...]
+"""oss-report.py [--root DIR] [--update FILE] [--perf [--top N]] [--stdlib libc++]
+                     [project ...]
 
 Reads .oss/build/<project>/{kiln,clang}/report.json and compile.jsonl (written
 by oss-build.sh and kiln-cxx) and prints, per project, a Markdown table (kiln
@@ -9,7 +10,11 @@ between `<!-- oss:<project> -->` and `<!-- /oss:<project> -->` and the
 projects table between `<!-- oss:projects -->` and `<!-- /oss:projects -->`.
 With --perf each section also gets the per-TU kiln/clang time and peak-RSS
 comparison (spec/landed/harness/WP-792.md); --top N lists the N heaviest
-and the N slowest TUs (default 5, WP-812). The cluster signature rule is the
+and the N slowest TUs (default 5, WP-812). With --stdlib libc++ it reads
+the libc++ builds, .oss/build/<project>/{kiln,clang}-libcxx/ (WP-694): the
+sections are `<!-- oss:<project>:libcxx -->` blocks and the statuses go to
+the projects table's `libc++` column. The projects table is regenerated only
+in a file that already has its markers. The cluster signature rule is the
 contract in spec/landed/harness/WP-666.md.
 """
 
@@ -51,10 +56,13 @@ def signature(rec):
 
 
 # --- loading ---
-def load_project(root, name):
+STDLIBS = {"libstdc++": "", "libc++": "-libcxx"}
+
+
+def load_project(root, name, sfx=""):
     out = {}
     for c in COMPILERS:
-        d = os.path.join(root, "build", name, c)
+        d = os.path.join(root, "build", name, c + sfx)
         rep = None
         try:
             with open(os.path.join(d, "report.json"), encoding="utf-8") as f:
@@ -143,11 +151,11 @@ def control_name(rep):
     return f"{'clang' if m.group(1) == 'clang' else 'gcc'}-{m.group(2)}"
 
 
-def render(name, data, base):
+def render(name, data, base, stdlib="libstdc++"):
     kr, kl = data["kiln"]
     cr, cl = data["clang"]
     tag = (kr or cr or {}).get("tag", "?")
-    lines = [f"### {name} ({tag})", ""]
+    lines = [f"### {name} ({tag}){', libc++' if stdlib == 'libc++' else ''}", ""]
     lines.append(f"| | kiln | {control_name(cr)} |")
     lines.append("|---|---|---|")
     lines.append(f"| configure | {cell_rc(kr, 'configure_rc')} | {cell_rc(cr, 'configure_rc')} |")
@@ -272,19 +280,22 @@ def replace_block(text, key, body):
 
 
 def old_statuses(text):
+    """project -> (status, libc++ status or None) from the projects table."""
     m = re.search(r"<!-- oss:projects -->(.*?)<!-- /oss:projects -->", text, re.S)
     out = {}
     for line in (m.group(1) if m else "").splitlines():
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if len(cells) >= 4 and cells[0] not in ("project", "") and not cells[0].startswith("---"):
-            out[cells[0].strip("`")] = cells[3]
+            out[cells[0].strip("`")] = (cells[3], cells[4] if len(cells) >= 5 else None)
     return out
 
 
 def projects_table(toml, statuses):
-    lines = ["| project | wave | tag | status |", "|---|---|---|---|"]
+    """statuses: project -> (status, libc++ status or None)."""
+    lines = ["| project | wave | tag | status | libc++ |", "|---|---|---|---|---|"]
     for name, p in sorted(toml.items(), key=lambda kv: (kv[1]["wave"], kv[0])):
-        lines.append(f"| `{name}` | {p['wave']} | `{p['tag']}` | {statuses.get(name, 'not started')} |")
+        st, lst = statuses.get(name, (None, None))
+        lines.append(f"| `{name}` | {p['wave']} | `{p['tag']}` | {st or 'not started'} | {lst or 'not run'} |")
     return "\n".join(lines) + "\n"
 
 
@@ -296,7 +307,9 @@ def main():
     ap.add_argument("--update", metavar="FILE")
     ap.add_argument("--perf", action="store_true", help="add the per-TU kiln/clang time and RSS comparison")
     ap.add_argument("--top", type=int, default=5, metavar="N", help="with --perf, list the N heaviest and N slowest TUs (default 5)")
+    ap.add_argument("--stdlib", choices=tuple(STDLIBS), default="libstdc++", help="which builds to read (WP-694)")
     a = ap.parse_args()
+    sfx = STDLIBS[a.stdlib]
     root = os.path.abspath(a.root)
     base = os.path.dirname(root)
     names = a.projects
@@ -304,17 +317,17 @@ def main():
         bdir = os.path.join(root, "build")
         names = sorted(
             d for d in (os.listdir(bdir) if os.path.isdir(bdir) else [])
-            if any(os.path.exists(os.path.join(bdir, d, c, "report.json")) for c in COMPILERS)
+            if any(os.path.exists(os.path.join(bdir, d, c + sfx, "report.json")) for c in COMPILERS)
         )
     if not names:
         sys.exit(f"oss-report: no reports under {root}/build")
     sections, statuses = {}, {}
     for n in names:
-        data = load_project(root, n)
+        data = load_project(root, n, sfx)
         if data["kiln"][0] is None and data["clang"][0] is None:
-            print(f"oss-report: no report for {n} under {root}/build/{n}", file=sys.stderr)
+            print(f"oss-report: no {a.stdlib} report for {n} under {root}/build/{n}", file=sys.stderr)
             continue
-        md, cs = render(n, data, base)
+        md, cs = render(n, data, base, a.stdlib)
         if a.perf:
             md += "\n" + render_perf(data["kiln"][1], data["clang"][1], base, control_name(data["clang"][0]), a.top)
         sections[n] = md
@@ -325,11 +338,16 @@ def main():
     if a.update:
         with open(a.update, encoding="utf-8") as f:
             text = f.read()
-        merged = old_statuses(text)
-        merged.update(statuses)
-        text = replace_block(text, "projects", projects_table(projects.load(a.toml), merged))
+        if "<!-- oss:projects -->" in text:
+            merged = old_statuses(text)
+            col = 1 if sfx else 0
+            for n, st in statuses.items():
+                row = list(merged.get(n, (None, None)))
+                row[col] = st
+                merged[n] = tuple(row)
+            text = replace_block(text, "projects", projects_table(projects.load(a.toml), merged))
         for n, md in sections.items():
-            text = replace_block(text, n, md)
+            text = replace_block(text, n + (":libcxx" if sfx else ""), md)
         with open(a.update, "w", encoding="utf-8") as f:
             f.write(text)
         print(f"oss-report: updated {a.update}", file=sys.stderr)

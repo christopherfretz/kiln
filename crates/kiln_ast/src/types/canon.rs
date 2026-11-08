@@ -310,7 +310,9 @@ impl TypeContext {
             let key = Key::pair(TypeKind::DependentSizedArray, 0, raw(elem), expr.raw());
             self.intern_with(key, flags, |ctx| {
                 let ce = ctx.canonical(elem);
-                Some(Self::uq(ctx.dsa_canonical(ce, size)))
+                let c = Self::uq(ctx.dsa_canonical(ce, size));
+                ctx.note_expr_origin(c.ty(), expr);
+                Some(c)
             })
         };
         t.into()
@@ -756,8 +758,11 @@ impl TypeContext {
                 }
                 let cn = ctx.canonical_template_name(name);
                 let ca = ctx.canonical_args(args);
-                (cn != name || ca != args || alias)
-                    .then(|| Self::uq(ctx.template_specialization(cn, ca, None, false)))
+                (cn != name || ca != args || alias).then(|| {
+                    let c = Self::uq(ctx.template_specialization(cn, ca, None, false));
+                    ctx.note_arg_origin(c.ty(), args);
+                    c
+                })
             })
         };
         t.into()
@@ -811,8 +816,11 @@ impl TypeContext {
                 let ck = Self::canonical_keyword(keyword);
                 let cn = ctx.canonical_nns(nns);
                 let ca = ctx.canonical_args(args);
-                (ck != keyword || cn != nns || ca != args)
-                    .then(|| Self::uq(ctx.dependent_template_specialization(ck, cn, name, ca)))
+                (ck != keyword || cn != nns || ca != args).then(|| {
+                    let c = Self::uq(ctx.dependent_template_specialization(ck, cn, name, ca));
+                    ctx.note_arg_origin(c.ty(), args);
+                    c
+                })
             })
         };
         t.into()
@@ -903,7 +911,11 @@ impl TypeContext {
             match profile {
                 Some(p) => {
                     let flags = sem(self.profile_flags(p)) | TypeFlags::DEPENDENT_INSTANTIATION;
-                    self.intern_with(key, flags, |ctx| Some(Self::uq(ctx.dependent_decltype(p))))
+                    self.intern_with(key, flags, |ctx| {
+                        let c = Self::uq(ctx.dependent_decltype(p));
+                        ctx.note_expr_origin(c.ty(), expr);
+                        Some(c)
+                    })
                 }
                 None => self.intern_with(key, self.qflags(underlying), |ctx| {
                     Some(ctx.canonical(underlying))

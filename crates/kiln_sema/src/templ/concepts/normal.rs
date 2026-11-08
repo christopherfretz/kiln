@@ -190,30 +190,61 @@ impl Sema<'_, '_> {
     /// it, restricted to the parameters `e` names ([temp.constr.atomic]/1):
     /// the others' arguments are null, so `sizeof(T) > 1` of `C<T, int>`
     /// and of `C<T, long>` is one atom. Unknown uses keep the whole
-    /// mapping.
+    /// mapping. A non-dependent expression argument kept as written
+    /// (`1` of `C<1, int>` in a template's requires-clause) is
+    /// canonicalized ([`Self::written_mapping_arg`]), so equal arguments
+    /// written in two declarations map alike ([temp.constr.atomic]/2).
     fn intern_atom(&mut self, e: ExprId, ctx: Option<(DeclId, ArgListId)>) -> NormId {
+        use kiln_ast::types::ArgView;
         let mut mapping = ctx.map_or(ArgListId::EMPTY, |(_, m)| m);
         if let Some((cc, m)) = ctx {
             let level = self.template_param_depth(cc);
-            if let Some(used) = self.used_template_params(e, level) {
-                let args = self.ast.types.args(m);
-                if args.iter().enumerate().any(|(i, a)| {
-                    (i >= 64 || used & (1 << i) == 0) && a.kind() != kiln_ast::types::ArgKind::Null
-                }) {
-                    let v: Vec<TemplateArg> = args
-                        .iter()
-                        .enumerate()
-                        .map(
-                            |(i, &a)| {
-                                if i < 64 && used & (1 << i) != 0 { a } else { TemplateArg::NULL }
-                            },
-                        )
-                        .collect();
-                    mapping = self.ast.types.arg_list(&v);
+            let used = self.used_template_params(e, level);
+            let keep = |i: usize| used.is_none_or(|u| i < 64 && u & (1 << i) != 0);
+            let args = self.ast.types.args(m).to_vec();
+            let written = |a: &TemplateArg| matches!(a.view(), ArgView::Expr { profile: None, .. });
+            if args.iter().enumerate().any(|(i, a)| {
+                if keep(i) { written(a) } else { a.kind() != kiln_ast::types::ArgKind::Null }
+            }) {
+                let mut v = Vec::with_capacity(args.len());
+                for (i, a) in args.into_iter().enumerate() {
+                    v.push(match a.view() {
+                        _ if !keep(i) => TemplateArg::NULL,
+                        ArgView::Expr { expr, profile: None } => {
+                            self.written_mapping_arg(cc, i, expr)
+                        }
+                        _ => a,
+                    });
                 }
+                mapping = self.ast.types.arg_list(&v);
             }
         }
         self.inst.concepts.norm.intern(NormNode::Atomic { expr: e, mapping })
+    }
+
+    /// The mapping argument of a non-dependent expression `expr` written
+    /// for parameter `i` of concept `c`: an integral or enumeration
+    /// parameter's value converted to its type (`2 - 1` and `1` map
+    /// alike, as converted template arguments, [temp.arg.nontype]/1);
+    /// otherwise the expression's profile (equal for equivalent
+    /// expressions, [temp.over.link]/5).
+    fn written_mapping_arg(&mut self, c: DeclId, i: usize, expr: ExprId) -> TemplateArg {
+        let pty = self.template_params(c).get(i).copied().and_then(|p| {
+            let info = self.ast.template_parm(p)?;
+            let ty = self.ast.decls.get(p).ty()?;
+            let canon = self.ast.types.canonical(ty);
+            let t = &self.ast.types;
+            (self.kind_of(p) == DeclKind::NonTypeTemplateParm
+                && !info.pack
+                && (t.is_integral(canon) || t.as_enum(canon).is_some()))
+            .then_some(canon)
+        });
+        if let Some(pty) = pty
+            && let Some(v) = self.fold_int(expr)
+        {
+            return TemplateArg::value(pty, self.int_const(pty, v));
+        }
+        TemplateArg::profile(self.ast.profile_expr(expr))
     }
 
     /// [temp.constr.normal]/1.4: the normal form of concept-id `e` is the
@@ -350,13 +381,21 @@ impl Sema<'_, '_> {
     /// `(E op ... op I)` to `(E op ...) op I` and `(I op ... op E)` to
     /// `I op (... op E)`. The packs `E` expands are identified by their
     /// parameters' (depth, index): the constrained template's own packs,
-    /// or, inside a concept, the packs its mapping gives the concept's
-    /// pack parameters (`AllA<Ts...>`: the concept's pack stands for
-    /// `Ts`, and its pattern is normalized with `Ts` in its place).
+    /// whatever pattern names them (`(C<Ts> && ...)`, `(C<Ts, int> &&
+    /// ...)`, `(C<Box<Ts>> && ...)`).
+    ///
+    /// Inside a concept, /1.4 substitutes the concept-id's arguments into
+    /// the mapping, so the fold expands what its mapping gives the
+    /// concept's pack parameters ([`Self::fold_over_mapping`]): an
+    /// element `X...` stands for each element of `X`'s packs (`AllA<Ts...>`
+    /// and `AllA<Box<Ts>...>` are fold expanded constraints over `Ts`, with
+    /// `X` in the parameter's place), so the constraint and its atoms are
+    /// those the same fold written in the constrained template has.
     /// `None` (the fold stays one atom) for a fold over a concept
     /// template parameter pack (concept-dependent, handled by
-    /// [`Self::normalize_concept_fold`] or kept whole) and for a mapping
-    /// that gives a pack anything but one plain expansion of a pack.
+    /// [`Self::normalize_concept_fold`] or kept whole), over a pack of an
+    /// enclosing level, an empty mapping, and an element whose pattern
+    /// names packs the walk cannot identify.
     fn normalize_fold_expanded(
         &mut self,
         e: ExprId,
@@ -377,10 +416,9 @@ impl Sema<'_, '_> {
         if packs.is_empty() {
             return None;
         }
-        let mut ids = Vec::with_capacity(packs.len());
-        let mut pctx = ctx;
-        match ctx {
+        let mut acc = match ctx {
             None => {
+                let mut ids = Vec::with_capacity(packs.len());
                 for p in packs {
                     if self.ttp_kind(p) == TtpKind::Concept {
                         return None;
@@ -388,30 +426,24 @@ impl Sema<'_, '_> {
                     let info = self.ast.template_parm(p)?;
                     ids.push(u32::from(info.depth) << 16 | u32::from(info.index));
                 }
+                let inner = self.normalize(pattern, None, depth + 1);
+                self.fold_node(op, inner, ids)
             }
             Some((cc, m)) => {
                 let level = self.template_param_depth(cc);
-                let mut margs: Vec<TemplateArg> = self.ast.types.args(m).to_vec();
+                let mut slots: Vec<usize> = Vec::with_capacity(packs.len());
                 for p in packs {
                     let info = *self.ast.template_parm(p)?;
                     if self.ttp_kind(p) == TtpKind::Concept || info.depth != level {
                         return None;
                     }
-                    let slot = margs.get_mut(usize::from(info.index))?;
-                    let ArgView::Pack(l) = slot.view() else { return None };
-                    let &[x] = self.ast.types.args(l) else { return None };
-                    let (arg, id) = self.fold_pack_element(x)?;
-                    *slot = arg;
-                    ids.push(id);
+                    if !slots.contains(&usize::from(info.index)) {
+                        slots.push(usize::from(info.index));
+                    }
                 }
-                let mi = self.ast.types.arg_list(&margs);
-                pctx = Some((cc, self.ast.types.canonical_args(mi)));
+                self.fold_over_mapping(op, pattern, cc, m, &slots, depth)?
             }
-        }
-        let inner = self.normalize(pattern, pctx, depth + 1);
-        let set = self.inst.concepts.norm.intern_packs(ids);
-        let node = NormNode::Fold { and: op == BinaryOp::LAnd, pattern: inner, packs: set };
-        let mut acc = self.inst.concepts.norm.intern(node);
+        };
         if let Some(init) = init {
             let y = self.normalize(init, ctx, depth + 1);
             acc = if right { self.norm_join(op, acc, y) } else { self.norm_join(op, y, acc) };
@@ -419,39 +451,212 @@ impl Sema<'_, '_> {
         Some(acc)
     }
 
-    /// The one element `x` of a pack argument in a concept's parameter
-    /// mapping, when it is a plain pack expansion of a pack parameter
-    /// (`Ts...`, `Ns...`): that parameter as the element standing for
-    /// each of its elements, and its identity (`depth << 16 | index`).
-    fn fold_pack_element(&mut self, x: TemplateArg) -> Option<(TemplateArg, u32)> {
-        use kiln_ast::types::TypeView;
+    /// The fold `(E op ...)` of concept `cc` over its pack parameters at
+    /// `slots`, whose arguments in mapping `m` are known
+    /// ([temp.constr.normal]/1.4: the mapping's arguments are substituted
+    /// into the constraint). With one pack parameter, each element of its
+    /// argument contributes in order, joined by `op`: an element `X...`
+    /// the fold expanded constraint over `X`'s packs with `X` in the
+    /// parameter's place, any other element `E`'s normal form with that
+    /// element (`AllA<int, Ts...>` is `A<int> && (A<Ts> && ...)`, as the
+    /// expansion of `A<Us>...` with `Us` = `int, Ts...` is
+    /// `A<int>, A<Ts>...`). Several pack parameters need one element
+    /// `X...` each, and the fold expands the packs of all of them.
+    fn fold_over_mapping(
+        &mut self,
+        op: BinaryOp,
+        pattern: ExprId,
+        cc: DeclId,
+        m: ArgListId,
+        slots: &[usize],
+        depth: u32,
+    ) -> Option<NormId> {
+        let margs: Vec<TemplateArg> = self.ast.types.args(m).to_vec();
+        let mut elems: Vec<Vec<TemplateArg>> = Vec::with_capacity(slots.len());
+        for &i in slots {
+            let ArgView::Pack(l) = margs.get(i)?.view() else { return None };
+            elems.push(self.ast.types.args(l).to_vec());
+        }
+        let mapped = |s: &mut Self, xs: &[(usize, TemplateArg)]| {
+            let mut mi = margs.clone();
+            for &(i, x) in xs {
+                mi[i] = x;
+            }
+            let mi = s.ast.types.arg_list(&mi);
+            s.ast.types.canonical_args(mi)
+        };
+        if let [one] = slots {
+            let es = elems.pop()?;
+            if es.is_empty() {
+                return None;
+            }
+            let mut acc: Option<NormId> = None;
+            for x in es {
+                let node = if self.is_pack_expansion_arg(x) {
+                    let (arg, ids) = self.fold_pack_element(x)?;
+                    let mi = mapped(self, &[(*one, arg)]);
+                    let inner = self.normalize(pattern, Some((cc, mi)), depth + 1);
+                    self.fold_node(op, inner, ids)
+                } else {
+                    let mi = mapped(self, &[(*one, x)]);
+                    self.normalize(pattern, Some((cc, mi)), depth + 1)
+                };
+                acc = Some(acc.map_or(node, |a| self.norm_join(op, a, node)));
+            }
+            return acc;
+        }
+        let mut ids = Vec::new();
+        let mut xs = Vec::with_capacity(slots.len());
+        for (&i, es) in slots.iter().zip(&elems) {
+            let &[x] = es.as_slice() else { return None };
+            let (arg, mut more) = self.fold_pack_element(x)?;
+            ids.append(&mut more);
+            xs.push((i, arg));
+        }
+        let mi = mapped(self, &xs);
+        let inner = self.normalize(pattern, Some((cc, mi)), depth + 1);
+        Some(self.fold_node(op, inner, ids))
+    }
+
+    /// The fold expanded constraint `(inner op ...)` over the packs `ids`.
+    fn fold_node(&mut self, op: BinaryOp, inner: NormId, ids: Vec<u32>) -> NormId {
+        let set = self.inst.concepts.norm.intern_packs(ids);
+        let node = NormNode::Fold { and: op == BinaryOp::LAnd, pattern: inner, packs: set };
+        self.inst.concepts.norm.intern(node)
+    }
+
+    /// An element `X...` of a pack argument in a concept's parameter
+    /// mapping (a type or a non-type pack expansion): its pattern `X`, the
+    /// argument standing for each of its elements, and the identities
+    /// (`depth << 16 | index`) of the template parameter packs `X` names
+    /// outside a nested expansion. `None` when they cannot all be
+    /// identified.
+    fn fold_pack_element(&mut self, x: TemplateArg) -> Option<(TemplateArg, Vec<u32>)> {
+        let mut ids = Vec::new();
         match x.view() {
             ArgView::Type(q) => {
                 let p = crate::templ::pack::type_pattern(self, q)?;
-                let id = match self.ast.types.canonical_view(p) {
-                    TypeView::CanonTemplateTypeParm { depth, index, pack: true } => {
-                        depth << 16 | index
-                    }
-                    _ => return None,
-                };
-                Some((TemplateArg::ty(p), id))
+                self.canon_type_packs(p, &mut ids, 0)?;
+                (!ids.is_empty()).then(|| (TemplateArg::ty(p), ids))
             }
             ArgView::Expr { expr, .. } => {
                 let p = crate::templ::pack::expr_pattern(self, expr)?;
-                let pn = *self.ast.exprs.get(p);
-                if pn.kind() != ExprKind::DeclRefExpr {
-                    return None;
-                }
-                let d = self.ast.exprs.decl(p);
-                let info = self.ast.template_parm(d)?;
-                if !info.pack {
-                    return None;
-                }
-                let id = u32::from(info.depth) << 16 | u32::from(info.index);
-                Some((self.ast.builder().template_arg_expr(p), id))
+                self.expr_pack_ids(p, &mut ids)?;
+                (!ids.is_empty()).then(|| (self.ast.builder().template_arg_expr(p), ids))
             }
             _ => None,
         }
+    }
+
+    /// The template parameter packs expression `e` names outside an
+    /// expansion, as `depth << 16 | index` ids; `None` for a pack that
+    /// is not a template parameter (a function parameter pack).
+    fn expr_pack_ids(&self, e: ExprId, out: &mut Vec<u32>) -> Option<()> {
+        for p in self.unexpanded_packs(PackOperand::Expr(e)) {
+            let info = self.ast.template_parm(p)?;
+            let id = u32::from(info.depth) << 16 | u32::from(info.index);
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
+        Some(())
+    }
+
+    /// [`Self::expr_pack_ids`] for a canonical type (a mapping's argument,
+    /// whose type parameters are `CanonTemplateTypeParm`s): the packs a
+    /// nested `PackExpansion` or pack index expands are not its own.
+    /// `None` for a type kind holding a pack the walk does not look into.
+    fn canon_type_packs(&self, q: kiln_ast::QualType, out: &mut Vec<u32>, lvl: u32) -> Option<()> {
+        use kiln_ast::types::{ConstArray, ExprOperand, TypeView};
+        if !self.has_unexpanded_pack(q) {
+            return Some(());
+        }
+        let t = &self.ast.types;
+        if lvl > 256 {
+            return None;
+        }
+        let lvl = lvl + 1;
+        let expr_op = |o: ExprOperand| match o {
+            ExprOperand::Expr(e) => Some(e),
+            ExprOperand::Profile(p) => t.profile_expr(p),
+        };
+        match t.canonical_view(q) {
+            TypeView::CanonTemplateTypeParm { depth, index, pack: true } => {
+                let id = depth << 16 | index;
+                if !out.contains(&id) {
+                    out.push(id);
+                }
+            }
+            TypeView::TemplateTypeParm(d) => {
+                let info = self.ast.template_parm(d)?;
+                let id = u32::from(info.depth) << 16 | u32::from(info.index);
+                if info.pack && !out.contains(&id) {
+                    out.push(id);
+                }
+            }
+            TypeView::Pointer(x)
+            | TypeView::LValueRef(x)
+            | TypeView::RValueRef(x)
+            | TypeView::IncompleteArray(x)
+            | TypeView::Paren(x)
+            | TypeView::Complex(x)
+            | TypeView::Atomic(x)
+            | TypeView::ExtQual { base: x, .. }
+            | TypeView::Vector { elem: x, .. }
+            | TypeView::ConstantArray(ConstArray { elem: x, .. }) => {
+                self.canon_type_packs(x, out, lvl)?;
+            }
+            TypeView::DependentSizedArray { elem, size }
+            | TypeView::DependentVector { elem, size, .. } => {
+                self.canon_type_packs(elem, out, lvl)?;
+                self.expr_pack_ids(expr_op(size)?, out)?;
+            }
+            TypeView::MemberPointer { pointee, class } => {
+                self.canon_type_packs(kiln_ast::QualType::unqual(class), out, lvl)?;
+                self.canon_type_packs(pointee, out, lvl)?;
+            }
+            TypeView::Function(p) => {
+                self.canon_type_packs(p.ret(), out, lvl)?;
+                for &x in t.params(&p) {
+                    self.canon_type_packs(x, out, lvl)?;
+                }
+            }
+            TypeView::TemplateSpecialization { args, .. } => {
+                for &a in t.args(args) {
+                    match a.view() {
+                        ArgView::Type(x) => self.canon_type_packs(x, out, lvl)?,
+                        ArgView::Expr { expr, .. } => self.expr_pack_ids(expr, out)?,
+                        ArgView::Template(n) => {
+                            use kiln_ast::types::TemplateName;
+                            if let TemplateName::TemplateTemplateParm {
+                                depth,
+                                index,
+                                pack: true,
+                                ..
+                            }
+                            | TemplateName::CanonTemplateTemplateParm {
+                                depth,
+                                index,
+                                pack: true,
+                                ..
+                            } = t.template_name_view(n)
+                            {
+                                let id = depth << 16 | index;
+                                if !out.contains(&id) {
+                                    out.push(id);
+                                }
+                            }
+                        }
+                        // A nested expansion expands its own packs.
+                        _ => {}
+                    }
+                }
+            }
+            TypeView::Decltype { expr, .. } => self.expr_pack_ids(expr, out)?,
+            TypeView::PackExpansion { .. } => {}
+            _ => return None,
+        }
+        Some(())
     }
 
     /// `a op b` for `op` `&&` (a conjunction) or `||`.

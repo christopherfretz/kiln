@@ -45,51 +45,51 @@ The loop:
 ## Projects
 
 <!-- oss:projects -->
-| project | wave | tag | status |
-|---|---|---|---|
-| `catch2` | 1 | `v3.16.1` | tests at parity |
-| `cli11` | 1 | `v2.6.1` | tests at parity |
-| `doctest` | 1 | `v2.5.3` | tests at parity |
-| `fmt` | 1 | `12.1.0` | tests at parity |
-| `googletest` | 1 | `v1.17.0` | tests at parity |
-| `magic_enum` | 1 | `v0.9.7` | tests at parity |
-| `nlohmann_json` | 1 | `v3.12.0` | tests at parity |
-| `range_v3` | 1 | `0.12.0` | tests at parity |
-| `spdlog` | 1 | `v1.17.0` | tests at parity |
-| `tl_expected` | 1 | `v1.3.1` | tests at parity |
-| `abseil` | 2 | `20260107.1` | tests at parity |
-| `benchmark` | 2 | `v1.9.5` | tests at parity |
-| `cereal` | 2 | `v1.3.2` | tests at parity |
-| `eigen` | 2 | `3.4.1` | tests at parity (132-target subset) |
-| `entt` | 2 | `v3.15.0` | tests at parity |
-| `glog` | 2 | `v0.7.1` | tests at parity |
-| `re2` | 2 | `2025-11-05` | tests at parity |
-| `simdjson` | 2 | `v4.2.4` | blocked (tests 116/117 vs clang 117/117) |
-| `taskflow` | 2 | `v3.10.0` | tests at parity |
-| `yaml_cpp` | 2 | `yaml-cpp-0.9.0` | tests at parity |
-| `folly` | 3 | `v2026.10.26.00` | blocked (tests 3767/3773 vs clang 3773; `[[gnu::ifunc]]`/alias codegen) |
-| `leveldb` | 3 | `1.23` | tests at parity |
-| `llvm_project` | 3 | `llvmorg-19.1.7` | tests at parity |
-| `protobuf` | 3 | `v33.1` | tests at parity |
-| `rocksdb` | 3 | `v10.7.5` | tests at parity |
-| `boost_compiled` | 4 | `boost-1.90.0` | blocked (tests 1326/1327 vs clang 1327/1368) |
-| `boost_heavy` | 4 | `boost-1.90.0` | tests at parity |
-| `boost_meta` | 4 | `boost-1.90.0` | control failures and row 14 only (WP-802) |
-| `ctre` | 4 | `v3.11.0` | tests at parity |
-| `daw_json_link` | 4 | `v3.38.1` | tests at parity |
-| `duckdb` | 4 | `v1.5.6` | tests at parity |
-| `folly_coro` | 4 | `v2026.10.26.00` | blocked (1 cluster) |
-| `glaze` | 4 | `v9.1.0` | tests at parity |
-| `libunifex` | 4 | `v0.4.0` | tests at parity |
-| `llvm_clang` | 4 | `llvmorg-19.1.7` | tests at parity (check-clang, check-lld; [details](oss/llvm_clang.md)) |
-| `llvm_full` | 4 | `llvmorg-19.1.7` | tests at parity (check-llvm) |
-| `mp_units` | 4 | `v2.5.0` | tests at parity |
-| `onetbb` | 4 | `v2022.3.0` | tests at parity |
-| `opencv` | 4 | `4.12.0` | tests at parity |
-| `reflect_cpp` | 4 | `v0.27.1` | tests at parity |
-| `scnlib` | 4 | `v4.0.1` | tests at parity |
-| `stdexec` | 4 | `nvhpc-26.05` | tests at parity |
-| `z3` | 4 | `z3-4.15.8` | tests at parity |
+| project | wave | tag | status | libc++ |
+|---|---|---|---|---|
+| `catch2` | 1 | `v3.16.1` | tests at parity | tests at parity |
+| `cli11` | 1 | `v2.6.1` | tests at parity | tests at parity |
+| `doctest` | 1 | `v2.5.3` | tests at parity | tests at parity |
+| `fmt` | 1 | `12.1.0` | tests at parity | tests at parity |
+| `googletest` | 1 | `v1.17.0` | tests at parity | tests at parity |
+| `magic_enum` | 1 | `v0.9.7` | tests at parity | tests at parity |
+| `nlohmann_json` | 1 | `v3.12.0` | tests at parity | tests at parity |
+| `range_v3` | 1 | `0.12.0` | tests at parity | tests at parity |
+| `spdlog` | 1 | `v1.17.0` | tests at parity | tests at parity |
+| `tl_expected` | 1 | `v1.3.1` | tests at parity | tests at parity |
+| `abseil` | 2 | `20260107.1` | tests at parity | not run |
+| `benchmark` | 2 | `v1.9.5` | tests at parity | not run |
+| `cereal` | 2 | `v1.3.2` | tests at parity | not run |
+| `eigen` | 2 | `3.4.1` | tests at parity (132-target subset) | not run |
+| `entt` | 2 | `v3.15.0` | tests at parity | not run |
+| `glog` | 2 | `v0.7.1` | tests at parity | not run |
+| `re2` | 2 | `2025-11-05` | tests at parity | not run |
+| `simdjson` | 2 | `v4.2.4` | blocked (tests 116/117 vs clang 117/117) | not run |
+| `taskflow` | 2 | `v3.10.0` | tests at parity | not run |
+| `yaml_cpp` | 2 | `yaml-cpp-0.9.0` | tests at parity | not run |
+| `folly` | 3 | `v2026.10.26.00` | blocked (tests 3767/3773 vs clang 3773; `[[gnu::ifunc]]`/alias codegen) | not run |
+| `leveldb` | 3 | `1.23` | tests at parity | not run |
+| `llvm_project` | 3 | `llvmorg-19.1.7` | tests at parity | not run |
+| `protobuf` | 3 | `v33.1` | tests at parity | not run |
+| `rocksdb` | 3 | `v10.7.5` | tests at parity | not run |
+| `boost_compiled` | 4 | `boost-1.90.0` | blocked (tests 1326/1327 vs clang 1327/1368) | not run |
+| `boost_heavy` | 4 | `boost-1.90.0` | tests at parity | not run |
+| `boost_meta` | 4 | `boost-1.90.0` | control failures and row 14 only (WP-802) | not run |
+| `ctre` | 4 | `v3.11.0` | tests at parity | not run |
+| `daw_json_link` | 4 | `v3.38.1` | tests at parity | not run |
+| `duckdb` | 4 | `v1.5.6` | tests at parity | not run |
+| `folly_coro` | 4 | `v2026.10.26.00` | blocked (1 cluster) | not run |
+| `glaze` | 4 | `v9.1.0` | tests at parity | not run |
+| `libunifex` | 4 | `v0.4.0` | tests at parity | not run |
+| `llvm_clang` | 4 | `llvmorg-19.1.7` | tests at parity (check-clang, check-lld; [details](oss/llvm_clang.md)) | not run |
+| `llvm_full` | 4 | `llvmorg-19.1.7` | tests at parity (check-llvm) | not run |
+| `mp_units` | 4 | `v2.5.0` | tests at parity | not run |
+| `onetbb` | 4 | `v2022.3.0` | tests at parity | not run |
+| `opencv` | 4 | `4.12.0` | tests at parity | not run |
+| `reflect_cpp` | 4 | `v0.27.1` | tests at parity | not run |
+| `scnlib` | 4 | `v4.0.1` | tests at parity | not run |
+| `stdexec` | 4 | `nvhpc-26.05` | tests at parity | not run |
+| `z3` | 4 | `z3-4.15.8` | tests at parity | not run |
 <!-- /oss:projects -->
 
 ## Constexpr performance (WP-792)
@@ -1009,3 +1009,232 @@ TUs over 1.2x on time or RSS: 953 of the 1025 that take clang-19 at least 0.5 s.
 - `$KILN/.oss/src/boost/libs/graph/test/delete_edge.cpp`: time 9.2 / 2.4 s = 3.79x, RSS 157 / 277 MB = 0.57x
 - `$KILN/.oss/src/boost/libs/graph/test/read_propmap.cpp`: time 7.3 / 2.0 s = 3.56x, RSS 154 / 256 MB = 0.60x
 <!-- /oss:boost_heavy -->
+
+## libc++ results (WP-694)
+
+The wave-1 projects built with `oss-build.sh <project> --stdlib libc++`
+under kiln++ and the clang-19 control, both against the system libc++ 19
+(`libc++-19-dev`); the `libc++` column of the projects table and the
+`:libcxx` blocks below come from `oss-report.py --stdlib libc++ --update`.
+All ten are at parity with the control. The first kiln build had two
+kiln-only clusters, both fixed in WP-694:
+
+- fmt `test/ranges-test.cc` (2 TUs): "call to consteval function
+  `fmt::fstring<tuple_join_view<…>>` is not a constant expression". Under
+  `-std=gnu++20` the implicit default constructor of a class with a
+  libc++ `std::tuple` member was not constexpr: the tuple's default
+  constructor is a constexpr constructor template, which kiln did not
+  count as a constexpr default constructor. Test:
+  `tests/conformance/class.default.ctor/constexpr-ctor-template.cpp`.
+- googletest `googlemock/test/gmock-actions_test.cc` (1 TU): "cannot form
+  a reference to 'void'" in libc++ `<string>`. kiln deduced libc++'s
+  explicit `basic_string(const T&)` template as a candidate of a
+  copy-initialization (a `void` argument passed to a `std::string`
+  parameter inside a SFINAE test); an explicit constructor template is
+  not a candidate there and is not deduced. Test:
+  `tests/conformance/over.match.copy/explicit-ctor-template-not-deduced.cpp`.
+
+range-v3's two failures fail the same way with clang: `test/view/tokenize.cpp`
+(libc++'s `std::regex_token_iterator` is not a forward iterator either) and
+the `calendar` example, which links the system Boost static libraries that
+were built against libstdc++. The harness entry for range-v3 now passes
+`-DRANGES_ENABLE_WERROR=OFF -DCMAKE_CXX_FLAGS=-Wno-deprecated-ofast`, as
+the WP-669 manual build did; without them the clang control fails every TU
+on clang 19's `-Ofast` deprecation under range-v3's `-Werror`.
+
+**Perf finding: file-system syscalls (WP-694).** Under libc++ kiln's
+per-TU wall time was above clang's (median ratio 1.1 to 1.9 per project),
+although its CPU time was close and its RSS 0.4 to 0.8 times clang's. The
+gap is waiting, not computing: on the workspace bind mount (a virtual file
+system) kiln blocks about 3000 times per TU against clang's about 600, and
+with the same sources copied to the container's own file system the two
+take the same time. Likely cause: `fs::canonicalize` on every opened file
+(`crates/kiln_source/src/manager.rs:447`, one `lstat` per path component)
+and the uncached `metadata` probe per include directory
+(`crates/kiln_pp/src/search.rs:309-325`). Reproduce with catch2 `v3.16.1`,
+TU `tests/SelfTest/UsageTests/Generators.tests.cpp`, from
+`$KILN/.oss/build/catch2/kiln-libcxx/tests`, run under
+`/usr/bin/time -f '%e s %U u %S s %w waits %M KB'` with `<cc>` the
+harness `kiln++` or `clang++-19` (the same command for both; `-o x.o`
+instead of `-fsyntax-only` for the `-c -O3` row):
+`<cc> -stdlib=libc++ -I$KILN/.oss/src/catch2/tests/SelfTest -I$KILN/.oss/src/catch2/src/catch2/.. -I$KILN/.oss/build/catch2/kiln-libcxx/generated-includes -O3 -DNDEBUG -std=gnu++20 -Wabsolute-value -Wall -Wcall-to-pure-virtual-from-ctor-dtor -Wcast-align -Wdangling -Wdeprecated -Wdeprecated-register -Wexceptions -Wexit-time-destructors -Wextra -Wextra-semi -Wfloat-equal -Wglobal-constructors -Winit-self -Wmisleading-indentation -Wmismatched-new-delete -Wmismatched-return-types -Wmismatched-tags -Wmissing-braces -Wmissing-declarations -Wmissing-noreturn -Wmissing-prototypes -Wmissing-variable-declarations -Wnon-virtual-dtor -Wnull-dereference -Wold-style-cast -Woverloaded-virtual -Wparentheses -Wpedantic -Wredundant-decls -Wreorder -Wreturn-std-move -Wshadow -Wstrict-aliasing -Wsuggest-destructor-override -Wsuggest-override -Wundef -Wuninitialized -Wunneeded-internal-declaration -Wunreachable-code-aggressive -Wunused -Wunused-function -Wunused-parameter -Wvla -Wweak-vtables -Wno-missing-noreturn -fsyntax-only $KILN/.oss/src/catch2/tests/SelfTest/UsageTests/Generators.tests.cpp`.
+For the last row the catch2 source tree and `generated-includes` were
+copied under `/tmp` and the `-I` paths pointed there.
+
+| where the sources are | kiln++ | clang++-19 |
+|---|---|---|
+| workspace bind mount, `-fsyntax-only` | 2.84 s wall, 1.62 s user, 3166 waits, 73 MB | 1.85 s wall, 1.43 s user, 577 waits, 206 MB |
+| workspace bind mount, `-c -O3` | 3.88 s wall, 2.62 s user, 90 MB | 2.50 s wall, 2.19 s user, 223 MB |
+| container file system, `-fsyntax-only` | 1.30 s wall, 1.19 s user, 168 waits | 1.37 s wall, 1.23 s user, 69 waits |
+
+The host load average was 17 to 25 during these runs, so the wall times of
+the whole-project rows below are noisy.
+
+<!-- oss:catch2:libcxx -->
+### catch2 (v3.16.1), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 167 / 0 | 167 / 0 |
+| links ok / failed | 1 / 0 | 1 / 0 |
+| tests passed / total | 81 / 81 | 81 / 81 |
+| wall | 529 s | 466 s |
+| peak TU RSS | 117 MB | 444 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:catch2:libcxx -->
+
+<!-- oss:cli11:libcxx -->
+### cli11 (v2.6.1), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 65 / 0 | 65 / 0 |
+| links ok / failed | 60 / 0 | 60 / 0 |
+| tests passed / total | 86 / 86 | 86 / 86 |
+| wall | 246 s | 216 s |
+| peak TU RSS | 438 MB | 949 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:cli11:libcxx -->
+
+<!-- oss:doctest:libcxx -->
+### doctest (v2.5.3), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 121 / 0 | 121 / 0 |
+| links ok / failed | 43 / 0 | 43 / 0 |
+| tests passed / total | 193 / 193 | 193 / 193 |
+| wall | 87 s | 83 s |
+| peak TU RSS | 107 MB | 212 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:doctest:libcxx -->
+
+<!-- oss:fmt:libcxx -->
+### fmt (12.1.0), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 50 / 0 | 50 / 0 |
+| links ok / failed | 22 / 0 | 22 / 0 |
+| tests passed / total | 21 / 21 | 21 / 21 |
+| wall | 95 s | 45 s |
+| peak TU RSS | 351 MB | 434 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:fmt:libcxx -->
+
+<!-- oss:googletest:libcxx -->
+### googletest (v1.17.0), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 85 / 0 | 85 / 0 |
+| links ok / failed | 67 / 0 | 67 / 0 |
+| tests passed / total | 63 / 63 | 63 / 63 |
+| wall | 275 s | 125 s |
+| peak TU RSS | 626 MB | 1270 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:googletest:libcxx -->
+
+<!-- oss:magic_enum:libcxx -->
+### magic_enum (v0.9.7), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 22 / 0 | 22 / 0 |
+| links ok / failed | 22 / 0 | 22 / 0 |
+| tests passed / total | 15 / 15 | 15 / 15 |
+| wall | 44 s | 43 s |
+| peak TU RSS | 324 MB | 553 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:magic_enum:libcxx -->
+
+<!-- oss:nlohmann_json:libcxx -->
+### nlohmann_json (v3.12.0), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 93 / 0 | 93 / 0 |
+| links ok / failed | 88 / 0 | 88 / 0 |
+| tests passed / total | 97 / 97 | 97 / 97 |
+| wall | 697 s | 534 s |
+| peak TU RSS | 278 MB | 566 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:nlohmann_json:libcxx -->
+
+<!-- oss:range_v3:libcxx -->
+### range_v3 (0.12.0), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | rc 2 | rc 2 |
+| TUs ok / failed | 256 / 1 | 256 / 1 |
+| links ok / failed | 254 / 1 | 254 / 1 |
+| tests passed / total | 254 / 255 | 254 / 255 |
+| wall | 216 s | 451 s |
+| peak TU RSS | 243 MB | 512 MB |
+
+Failure clusters (kiln): 2.
+
+1. **1x** `link: (.text+NxN): undefined reference to Q`; 1 also fails with clang
+   - e.g. `link`: `(.text+0x108): undefined reference to `std::_Rb_tree_decrement(std::_Rb_tree_node_base*)'`
+   - repro: `cd $KILN/.oss/build/range_v3/kiln-libcxx/example && kiln++ -stdlib=libc++ -Wno-deprecated-ofast -O3 -DNDEBUG -Xlinker --dependency-file=CMakeFiles/range.v3.calendar.dir/link.d CMakeFiles/range.v3.calendar.dir/calendar.cpp.o -o range.v3.calendar /usr/lib/aarch64-linux-gnu/libboost_date_time.a /usr/lib/aarch64-linux-gnu/libboost_program_options.a`
+2. **1x** `reject: error: static assertion failed due to requirement Q: Concept assertion failed : forward_range<decltype(rng)>`; 1 also fails with clang
+   - e.g. `$KILN/.oss/src/range_v3/test/view/tokenize.cpp`: `$KILN/.oss/src/range_v3/test/view/tokenize.cpp:25:5: error: static assertion failed due to requirement 'static_cast<bool>(forward_range<ranges::tokenize_view<ranges::ref_view<std::string>, std::regex, int>>)': Concept assertion failed : forward_range<decltype(rng)>`
+   - repro: `cd $KILN/.oss/build/range_v3/kiln-libcxx/test/view && kiln++ -stdlib=libc++ -I$KILN/.oss/src/range_v3/include -Wno-deprecated-ofast -O3 -DNDEBUG -std=gnu++20 -std=c++2a -Wall -Wextra -D__extern_always_inline=inline -ftemplate-backtrace-limit=0 -fmacro-backtrace-limit=1 -fomit-frame-pointer -Ofast -fstrict-aliasing -ffast-math -fsized-deallocation -march=native -mtune=native -Weverything -pedantic -pedantic-errors -Wno-c++98-compat -Wno-c++98-compat-pedantic -Wno-weak-vtables -Wno-padded -Wno-missing-variable-declarations -Wno-documentation -Wno-documentation-unknown-command -Wno-old-style-cast -Wno-missing-prototypes -MD -MT test/view/CMakeFiles/range.v3.view.tokenize.dir/tokenize.cpp.o -MF CMakeFiles/range.v3.view.tokenize.dir/tokenize.cpp.o.d -o CMakeFiles/range.v3.view.tokenize.dir/tokenize.cpp.o -c $KILN/.oss/src/range_v3/test/view/tokenize.cpp`
+
+kiln test run: `99% tests passed, 1 tests failed out of 255`
+<!-- /oss:range_v3:libcxx -->
+
+<!-- oss:spdlog:libcxx -->
+### spdlog (v1.17.0), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 140 / 0 | 140 / 0 |
+| links ok / failed | 1 / 0 | 1 / 0 |
+| tests passed / total | 1 / 1 | 1 / 1 |
+| wall | 233 s | 156 s |
+| peak TU RSS | 116 MB | 291 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:spdlog:libcxx -->
+
+<!-- oss:tl_expected:libcxx -->
+### tl_expected (v1.3.1), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 13 / 0 | 13 / 0 |
+| links ok / failed | 1 / 0 | 1 / 0 |
+| tests passed / total | 1 / 1 | 1 / 1 |
+| wall | 29 s | 16 s |
+| peak TU RSS | 202 MB | 371 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:tl_expected:libcxx -->

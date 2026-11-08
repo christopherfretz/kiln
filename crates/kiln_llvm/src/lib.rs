@@ -32,7 +32,7 @@ pub use attr::{Attr, AttrKind, AttrList, MemoryEffects, ModRef, UwTableKind, fp_
 pub use builder::{CallOpts, CmpXchgOpts, IrBuilder, MemOpts, SHUFFLE_POISON, is_fp_math_type};
 pub use constant::{ConstData, IntValue};
 pub use error::{IrError, IrErrorKind, IrResult};
-pub use function::Function;
+pub use function::{DbgRecord, DbgRecordKind, Function};
 pub use inst::{
     Align, BinOp, CallConv, CastOp, Clause, FastMath, Flags, FloatPredicate, GepFlags, Inst,
     IntPredicate, Opcode, OperandBundle, Ordering, RmwOp, SyncScope, TailKind,
