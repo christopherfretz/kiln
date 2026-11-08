@@ -833,12 +833,14 @@ position's operand).
   and a substituted NTTP (`SubstNonTypeTemplateParmExpr`), a `ConstantExpr`
   (its stored value), a `CXXReflectExpr` (its reflection) or a
   `DeclRefExpr` to a constexpr `info` variable whose value is computed.
-  Each hit counts in `Sema::splice_fast_count()` (not an Oven counter, so
-  the constexpr report does not show it); every other operand is
-  evaluated as a constant expression. 1,000 type, 1,000 expression and
+  Each hit counts in the Oven's totals (`EvalTotals::splice_fast`, noted
+  by `OvenBridge::into_parts`), reported as the `total` line's
+  `splice_fast` key of the constexpr report (spec/oven.md "Reporting
+  protocol"; WP-869); every other operand is evaluated as a constant
+  expression. 1,000 type, 1,000 expression and
   1,000 scope splices of three frozen operands start no evaluation
   (`basic.splice/frozen-operand-fast-path.cpp`: `evaluations<=4`, the
-  three initializers and a static_assert). Each distinct `R` in `[: R :]`
+  three initializers and a static_assert, and `splice_fast>=3000`). Each distinct `R` in `[: R :]`
   costs one instantiation, as expected.
 - **NTTPs.** A substituted `info` template argument is rebuilt as the
   `CXXReflectExpr` of the same entity (implemented).

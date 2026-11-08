@@ -1917,7 +1917,12 @@ declaration-only `template<> struct A<int>::N;`:
      → `require_member_enum`).
    This is what makes a later specialization valid. Unscoped member
    enumerations are instantiated together with the class, so specializing
-   one is always "after instantiation", as in clang.
+   one is always "after instantiation", as in clang. So is a scoped member
+   enumeration of a local class (CWG1484: an enumeration inside a function
+   is not separately instantiable; clang `VisitEnumDecl`,
+   `isDeclWithinFunction`), so `L::E::e` and `E::e` in a member function
+   of `L` find their enumerators (WP-884,
+   `temp.inst/p3-local-scoped-enum-defined-with-class-run.cpp`).
 5. `template enum ...`: a qualified name is "enumerations cannot be
    explicitly instantiated". An unqualified name, like `template<> enum
    E ...`, gives "enumeration cannot be a template" at the token after
@@ -5196,13 +5201,22 @@ walks its initializer, declaration and body (expanded or not). An
 expansion statement's selector names the statement's own synthetic
 parameter, deeper than any concept parameter, and adds nothing.
 
-The whole mapping is kept (`None`) only for a dependent member class or
-enumeration of a class template (it depends on enclosing parameters it
-does not name; a dependent specialization of a namespace-scope
-template walks its arguments), an unresolved using-declaration, an
-invalid type, a declaration kind a body cannot hold (a friend, a
-using-declaration) and a parameter index past 63 (the set is a `u64`
-mask); that is never looser than the wording. Tests
+A dependent class or enumeration type (`used_in_tag`) walks its
+closure's lambda, or is known from `Used::locals`; otherwise a class
+template specialization walks its arguments, a partial specialization
+its written arguments and a class template's pattern marks all its
+parameters, and a member class or enumeration then walks its enclosing
+class the same way up to namespace scope (its enclosing templates'
+parameters are implicit in it, WP-883). So a member class or
+enumeration of a local class, named in a member function body before
+its own declaration is walked (a complete-class context), adds what its
+local class's declaration names, not the whole mapping.
+
+The whole mapping is kept (`None`) only for a local class declared
+outside the walk, an unresolved using-declaration, an invalid type, a
+declaration kind a body cannot hold (a friend, a using-declaration) and
+a parameter index past 63 (the set is a `u64` mask); that is never
+looser than the wording. Tests
 `temp.constr.atomic/p1-used-parameter-mapping.cpp` (WP-771),
 `p1-used-parameter-mapping-kinds.cpp` (WP-776; clang 19, 22 and GCC
 16.1 agree), `p1-used-parameter-mapping-splice.cpp` (WP-776; GCC 16.1
@@ -5212,7 +5226,9 @@ enums, closure types; clang 19 agrees), `p1-used-parameter-mapping-
 lambda-cache.cpp` (the satisfaction cache keyed by the parameters a
 lambda names, and the note text; clang 19 agrees) and
 `p1-used-parameter-mapping-expansion.cpp` (expansion statements; GCC
-16.1 agrees) (WP-821). GCC 16.1 never treats two lambda atoms as
+16.1 agrees) (WP-821), `p1-used-parameter-mapping-member-class.cpp`
+(members of a local class named before their declaration; clang 19
+agrees, GCC 16.1 rejects the forward member references) (WP-883). GCC 16.1 never treats two lambda atoms as
 identical, so it is no subsumption oracle for them.
 
 The kept arguments are canonical ([temp.constr.atomic]/2, WP-776,
@@ -5231,7 +5247,17 @@ of a template type parameter by its canonical type, and any other
 dependent reflection (`^^A<T>`, `^^T*`, `^^typename A<T>::type`,
 `^^A<T>::x`, `^^TT`) structurally by its operand kind and the operand's
 dependent profile (spec/types.md §7.2, WP-821), so the same reflection
-written in two templates maps alike. Tests
+written in two templates maps alike. A dependent splice (`[: R :]`,
+`b.[: R :]`, `p->[: R :]`, with template arguments or not) profiles by
+its form, its arguments and its operand's profile (WP-869), so the same
+splice written in two declarations or atoms is equivalent; a type
+splice already canonicalizes by its operand's profile. GCC 16.1 is the
+oracle: `temp.over.link/dependent-splice-equivalent-run.cpp`
+(redeclarations and subsumption) and `dependent-splice-distinct.cpp`
+(different operands or forms are ambiguous) agree with it;
+`dependent-splice-type-concept-id-kiln.cpp` is `skip(gcc)` (GCC 16.1
+reports the subsumption through a type splice in a concept-id
+ambiguous, against [temp.constr.atomic]/2). Tests
 `temp.constr.atomic/p2-non-dependent-argument-identity.cpp` (clang 19,
 22 and GCC 16.1 agree), `p2-non-integral-argument-identity.cpp` (clang
 19 and 22 agree) and its `-neg` sibling (different values are two atoms
@@ -5386,6 +5412,15 @@ whose head the notes name. It evaluates:
     deduced parameter's argument ([temp.arg.explicit]/9; `mk()` for
     `template <class... Args, class E = int>` became `mk<int>` with
     `Args = <int>`). Tests: `temp.deduct.call/pack-before-*.cpp`. WP-629.
+  - A generic lambda in an atom (`[](auto x) { ... }` in a concept's
+    constraint-expression) has its own invented template head one level
+    deeper than the concept's, even though the concept's head is still
+    open while its constraint-expression is parsed
+    (`in_headless_lambda_declarator` in `act_on_invented_template_param`),
+    so substitution into the atom instantiates the lambda instead of
+    failing (WP-880; clang 19 and GCC 16.1 agree). Tests
+    `temp.constr.atomic/p3-generic-lambda-satisfaction.cpp`,
+    `p3-generic-lambda-forms.cpp`.
   - A substitution failure means not satisfied, with the captured
     diagnostic recorded.
   - Otherwise the expression must have type exactly `bool`. Anything else
