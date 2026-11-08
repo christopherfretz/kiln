@@ -3511,6 +3511,9 @@ impl Sema<'_, '_> {
         if let Some(t) = anon_tag {
             let _ = self.ast.decls.set_typedef_for_anon(t, td);
         }
+        if prev.is_none() {
+            self.check_shadow(td, name);
+        }
         self.register_local(name, td);
         td
     }
@@ -5017,6 +5020,9 @@ impl Sema<'_, '_> {
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc())
             .misc(DeclMisc::new().with_name_independent(independent));
         let f = self.builder().field(h, ty, width, flags);
+        if let Some(n) = name {
+            self.check_shadow_inherited_fields(d.name_loc(), n, ctx, true);
+        }
         if field_invalid {
             // [class.mem]: an invalid field makes its class invalid
             // (clang `ActOnFields`; spec/sema-class.md §2.3).
@@ -5646,6 +5652,11 @@ impl Sema<'_, '_> {
         self.check_sizeless_var(v, self.in_local_scope());
         self.record_constinit(v, ds);
         self.check_constexpr_var_literal(v);
+        // clang: not a redeclaration, a placeholder or a block-scope
+        // `extern` (which has global storage).
+        if prev_ok.is_none() && !independent && spec.storage() != VarStorage::Extern {
+            self.check_shadow(v, name);
+        }
         self.register_local(name, v);
         if spec.storage() == VarStorage::Extern {
             self.note_local_extern(name, v);
@@ -6918,9 +6929,23 @@ impl Sema<'_, '_> {
             .function(f)
             .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
             .unwrap_or_default();
+        // clang `CheckParmsForFunctionDef`: `-Wshadow-field` for every
+        // parameter, then `-Wshadow` for each as it enters scope.
+        if let Some(rd) = self.ast.decls.get(f).ctx()
+            && self.diags.is_enabled(DiagId::sema_shadow_field)
+        {
+            for &p in &params {
+                if let Some(sym) = self.ast.decls.get(p).name().as_ident()
+                    && !self.ast.decls.get(p).flags().contains(DeclFlags::INVALID)
+                {
+                    self.check_shadow_inherited_fields(self.ast.decls.get(p).loc(), sym, rd, false);
+                }
+            }
+        }
         for p in params {
             let n = self.ast.decls.get(p).name();
             if let Some(sym) = n.as_ident() {
+                self.check_shadow(p, sym);
                 self.push_local(sym, p);
             }
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
@@ -7006,6 +7031,9 @@ impl Sema<'_, '_> {
         }
         if !self.in_template() {
             self.mark_key_function_vtable_used(f);
+        }
+        if self.kind_of(f) == DeclKind::CXXConstructor {
+            self.diagnose_ctor_param_shadows(f);
         }
         self.pop_scope();
         if let Some(saved) = self.fn_saved.pop() {

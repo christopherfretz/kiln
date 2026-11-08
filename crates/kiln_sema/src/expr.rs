@@ -2659,6 +2659,7 @@ impl Sema<'_, '_> {
     /// [expr.assign]/1, [expr.pre.incr]: the operand must be a modifiable
     /// lvalue. Diagnoses and returns false otherwise.
     pub(crate) fn check_modifiable(&mut self, e: ExprId, loc: Loc) -> bool {
+        self.check_shadowing_decl_modification(e, loc);
         let n = *self.ast.exprs.get(e);
         let t = n.ty();
         if self.ast.types.is_function(t) || self.ast.types.is_array(t) {

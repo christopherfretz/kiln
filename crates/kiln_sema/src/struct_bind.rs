@@ -276,6 +276,9 @@ impl Sema<'_, '_> {
                 self.check_decl_attrs(bd, &mut attrs);
                 let _ = self.builder().attach_attrs(bd, &attrs);
             }
+            if prev.is_none() {
+                self.check_shadow(bd, b.name);
+            }
             self.register_local(b.name, bd);
             if b.ellipsis.is_some() {
                 self.binding_packs.insert(bd);

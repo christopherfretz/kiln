@@ -103,6 +103,7 @@ pub mod scope;
 mod section;
 mod selectany;
 mod self_ref;
+mod shadow;
 mod side_effects;
 mod splice;
 mod splice_local;
@@ -540,6 +541,11 @@ pub struct Sema<'a, 'sm> {
     /// The structured binding packs `...xs` declared so far (P1061,
     /// spec/sema.md §4.9).
     pub(crate) binding_packs: std::collections::HashSet<DeclId>,
+    /// Constructor parameters that shadow a field, with the field
+    /// (clang's `Sema::ShadowingDecls`): `-Wshadow-field-in-constructor`
+    /// at the end of the definition unless a modification diagnosed one
+    /// first (spec/diag.md §5).
+    pub(crate) shadow_ctor: Vec<(DeclId, DeclId)>,
     /// A binding pack decomposed once its element count is known: the
     /// bindings it expanded into, which replace it in its decomposition's
     /// binding list (instantiation maps the pattern pack to them).
@@ -1247,6 +1253,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             requires_param_scopes: 0,
             decomp_written: std::collections::HashMap::new(),
             binding_packs: std::collections::HashSet::new(),
+            shadow_ctor: Vec::new(),
             binding_pack_elems: std::collections::HashMap::new(),
             refs_minus_assign: std::collections::HashMap::new(),
             attr_macros: (0, Vec::new()),

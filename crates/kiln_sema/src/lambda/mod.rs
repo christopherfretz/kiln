@@ -193,6 +193,10 @@ pub(crate) struct LambdaScope {
     /// token); empty when an explicit capture was rejected, which turns
     /// the warning off as clang's `ExprError` does.
     pub(crate) cap_ranges: Vec<(Loc, Loc)>,
+    /// Declarations in the body that shadow a local entity or a field,
+    /// with it, for a lambda with a capture-default: diagnosed once the
+    /// captures are known (clang `LambdaScopeInfo::ShadowingDecls`).
+    pub(crate) shadowing: Vec<(DeclId, DeclId)>,
 }
 
 impl Sema<'_, '_> {
@@ -238,6 +242,7 @@ impl Sema<'_, '_> {
             contract_caps: Vec::new(),
             cap_use: Vec::new(),
             cap_ranges: Vec::new(),
+            shadowing: Vec::new(),
         });
         self.act_on_explicit_captures(id, intro);
         self.create_init_capture_vars(id);
@@ -661,8 +666,31 @@ impl Sema<'_, '_> {
             .function(f)
             .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
             .unwrap_or_default();
+        // clang checks the init-captures for shadowing first, then the
+        // parameters (`ActOnLambdaExpressionAfterIntroducer`,
+        // `ActOnStartOfLambdaDefinition`).
+        if let Some(id) = id
+            && self.diags.is_enabled(DiagId::sema_decl_shadow)
+        {
+            // Out of scope while checked: each is found by lookup from
+            // its introducer on.
+            let vars = self
+                .lambdas
+                .iter_mut()
+                .rev()
+                .find(|s| s.id == id)
+                .map(|s| std::mem::take(&mut s.init_cap_vars))
+                .unwrap_or_default();
+            for &(name, v) in &vars {
+                self.check_shadow(v, name);
+            }
+            if let Some(s) = self.lambdas.iter_mut().rev().find(|s| s.id == id) {
+                s.init_cap_vars = vars;
+            }
+        }
         for p in params {
             if let Some(sym) = self.ast.decls.get(p).name().as_ident() {
+                self.check_shadow(p, sym);
                 self.push_local(sym, p);
             }
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
@@ -745,6 +773,9 @@ impl Sema<'_, '_> {
         self.ast.exprs.lambdas.get_mut(id).body = Some(body);
         let closure = top.closure;
         self.diagnose_unused_lambda_captures(id, &top);
+        if !top.shadowing.is_empty() {
+            self.diagnose_shadowing_lambda_decls(id, &top.shadowing);
+        }
         self.finish_captures(id, closure, &top.cap_tys);
         self.check_contract_only_captures(&top.contract_caps);
         if let Some(f) = top.call_op {
