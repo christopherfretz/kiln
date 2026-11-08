@@ -72,14 +72,17 @@ The loop:
 | `llvm_project` | 3 | `llvmorg-19.1.7` | tests at parity | not run |
 | `protobuf` | 3 | `v33.1` | tests at parity | not run |
 | `rocksdb` | 3 | `v10.7.5` | tests at parity | not run |
+| `bitcoin_core` | 4 | `v32.1` | blocked (tests 357/357 vs clang 357/358; parity by the functional tests, `oss/bitcoin_core.md`) | not run |
 | `boost_compiled` | 4 | `boost-1.90.0` | blocked (tests 1326/1327 vs clang 1327/1368) | not run |
 | `boost_heavy` | 4 | `boost-1.90.0` | tests at parity | not run |
 | `boost_meta` | 4 | `boost-1.90.0` | control failures and row 14 only (WP-802) | not run |
+| `cmake_app` | 4 | `v4.4.5` | blocked (tests 689/714 vs clang 690/714; the 1 differs under reruns, parity, `oss/cmake_app.md`) | not run |
 | `ctre` | 4 | `v3.11.0` | tests at parity | not run |
 | `daw_json_link` | 4 | `v3.38.1` | tests at parity | not run |
 | `duckdb` | 4 | `v1.5.6` | tests at parity | not run |
 | `folly_coro` | 4 | `v2026.10.26.00` | blocked (1 cluster) | not run |
 | `glaze` | 4 | `v9.1.0` | tests at parity | not run |
+| `grpc` | 4 | `v1.85.1` | tests at parity | not run |
 | `libunifex` | 4 | `v0.4.0` | tests at parity | not run |
 | `llvm_clang` | 4 | `llvmorg-19.1.7` | tests at parity (check-clang, check-lld; [details](oss/llvm_clang.md)) | not run |
 | `llvm_full` | 4 | `llvmorg-19.1.7` | tests at parity (check-llvm) | not run |
@@ -1238,3 +1241,57 @@ Failure clusters (kiln): none.
 
 Failure clusters (kiln): none.
 <!-- /oss:tl_expected:libcxx -->
+
+<!-- oss:cmake_app -->
+### cmake_app (v4.4.5)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 587 / 0 | 587 / 0 |
+| links ok / failed | 17 / 0 | 17 / 0 |
+| tests passed / total | 689 / 714 | 690 / 714 |
+| wall | 5830 s | 5916 s |
+| peak TU RSS | 165 MB | 388 MB |
+
+Failure clusters (kiln): none.
+
+kiln test run: `96% tests passed, 25 tests failed out of 714`
+<!-- /oss:cmake_app -->
+
+<!-- oss:bitcoin_core -->
+### bitcoin_core (v32.1)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 477 / 0 | 477 / 0 |
+| links ok / failed | 9 / 0 | 9 / 0 |
+| tests passed / total | 357 / 357 | 357 / 358 |
+| wall | 2167 s | 2002 s |
+| peak TU RSS | 801 MB | 1225 MB |
+
+Failure clusters (kiln): none.
+
+kiln test run: `100% tests passed, 0 tests failed out of 357`
+<!-- /oss:bitcoin_core -->
+
+<!-- oss:grpc -->
+### grpc (v1.85.1)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 5732 / 0 | 5732 / 0 |
+| links ok / failed | 120 / 0 | 120 / 0 |
+| tests passed / total | 117 / 118 | 117 / 118 |
+| wall | 17001 s | 14754 s |
+| peak TU RSS | 327 MB | 799 MB |
+
+Failure clusters (kiln): none.
+
+kiln test run: `99% tests passed, 1 tests failed out of 118`
+<!-- /oss:grpc -->

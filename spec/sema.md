@@ -3522,6 +3522,9 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   clang's `CheckUsingShadowDecl`. Two distinct entities of one name in
   one scope:
   - an unresolved `using_if_exists` target conflicts with nothing;
+  - nor does a dependent using-declarator (`using A::f;` in a template
+    whose `A` is a dependent base): `using A::f; using P::f;` is valid
+    in the definition and checked in each instantiation (WP-811);
   - in a class, a dependent member using-declarator (`using B<T>::f;`,
     an `UnresolvedUsingValue`) does not conflict with a function or
     function template a later using-declarator introduces: it is

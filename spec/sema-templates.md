@@ -266,6 +266,15 @@ delayed meaning; in practice they are always parsed immediately.
   `T = S`, under the "while substituting prior template arguments" note).
   `template<static class T>` declares such a parameter of the incomplete
   class `T`. Test: `temp.param/nttp-incomplete-class-type.cpp`.
+- A non-type parameter whose type, after substitution of prior arguments,
+  is an array or function type has the adjusted pointer type
+  ([temp.param]/10, as at the declaration; clang's
+  `CheckNonTypeTemplateParameterType`): `template<class F> template<F f>`
+  with `F = int(int)` declares `int (*f)(int)`, callable as `f(1)`, and
+  `template<class T, T a>` with `T = const int[3]` declares
+  `const int *a`. This holds in a member template of a class template
+  (gRPC's `ParseValue<F, G>::Parse<F f, G g>`; WP-811). Test:
+  `temp.param/nttp-substituted-function-array-type-adjusted-run.cpp`.
 - A template template parameter's template-head is followed by `class` or
   `typename` ([temp.param]/1). Without one, clang 19 always reports
   "template template parameter requires 'class' or 'typename' after the
@@ -1576,6 +1585,13 @@ silently (`diag = None`) at those sites. S3O lists them.
    at least as specialized as `X<T, when<f<T>::value>>` (WP-787,
    Boost.Hana; `partial_args_match` with `ordering`,
    `tests/conformance/temp.spec.partial.match/order-non-deduced-context-must-match.cpp`).
+   The one exception is a non-type pack whose substituted elements come
+   back as expressions: they are converted before comparing, so
+   `template <char... D> X<'0', 'x', D...>` (`D` = `<'x', D'...>`
+   deduced for `<'0', D...>`) is more specialized than
+   `template <char... D> X<'0', D...>`, as libstdc++'s `_Parse_int` for
+   hex literals needs (WP-811,
+   `tests/conformance/temp.spec.partial.match/order-nontype-pack-leading-values-run.cpp`).
    A request for the specialization while its partials are matched
    (step 3 substituting a default template argument that names it, as
    `X<T, enable_if_t<is_convertible_v<T, S>>>` with a constructor
@@ -7206,8 +7222,10 @@ explicit specialization errors remain. The blockers are:
   (`builtin_custom_call`: `clzg`/`ctzg`/`popcountg`, the classification
   and ordered-compare families, `launder`, `operator_new`/`_delete`
   selecting the usual replaceable functions), `act_on_source_loc_expr`,
-  `note_default_arg_use` (called from `convert_call_args` for every
-  defaulted argument) and the `std::source_location::__impl` check.
+  `note_default_arg_use` (called from `convert_call_args`, from
+  `ctor_args` for a constructor call at the construction's location, and
+  from `new_default_args`, for every defaulted argument; WP-811,
+  `expr.const/builtins-srcloc-constructor-default-arg-run.cpp`) and the `std::source_location::__impl` check.
   `Sema::fold_lone_invalid` keeps clang's single "subexpression not
   valid" note for `__builtin_unreachable`.
   An instantiation that rebuilds a call of a custom-checked builtin

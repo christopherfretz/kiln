@@ -378,14 +378,20 @@ impl Substituter<'_, '_, '_> {
         use crate::templ::pack::{Expansion, type_pattern};
         use kiln_ast::types::TemplateArg;
         let Some(pattern) = type_pattern(self.sema, t).filter(|_| pack) else {
-            return Ok((self.ty(t, loc)?, None));
+            // [temp.param]/10: `template <F f>` with `F` a function type
+            // declares a pointer to function.
+            let t = self.ty(t, loc)?;
+            return Ok((self.sema.adjust_param_type(t), None));
         };
         match self.expand_pattern(|s| s.ty(pattern, loc))? {
             Expansion::Unexpanded(p) => Ok((self.sema.ast.types.pack_expansion(p, None), None)),
             Expansion::Elements(v) => {
                 let kept = self.kept_pack_pattern(|s| s.ty(pattern, loc))?;
                 let ty = self.sema.ast.types.pack_expansion(kept, None);
-                let v: Vec<TemplateArg> = v.into_iter().map(TemplateArg::ty).collect();
+                let v: Vec<TemplateArg> = v
+                    .into_iter()
+                    .map(|t| TemplateArg::ty(self.sema.adjust_param_type(t)))
+                    .collect();
                 Ok((ty, Some(self.sema.ast.types.arg_list(&v))))
             }
         }

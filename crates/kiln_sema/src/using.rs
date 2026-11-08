@@ -827,7 +827,14 @@ impl Sema<'_, '_> {
     /// the same type agree; anything else conflicts.
     pub(crate) fn using_conflicts(&mut self, a: DeclId, b: DeclId) -> bool {
         let (ka, kb) = (self.kind_of(a), self.kind_of(b));
-        if ka == DeclKind::UnresolvedUsingIfExists || kb == DeclKind::UnresolvedUsingIfExists {
+        // A dependent using-declarator (`using A::f;` with `A` a
+        // dependent base) names nothing yet: it is checked when the
+        // template is instantiated, not against the members and the
+        // using-declarators that follow it (clang `CheckUsingShadowDecl`
+        // skips an `UnresolvedUsingValueDecl`; WP-811).
+        let unresolved =
+            |k| matches!(k, DeclKind::UnresolvedUsingIfExists | DeclKind::UnresolvedUsingValue);
+        if unresolved(ka) || unresolved(kb) {
             return false;
         }
         if is_tag_kind(ka) || is_tag_kind(kb) {

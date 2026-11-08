@@ -288,6 +288,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     (`APFloat::convertToInteger` reporting `opInvalidOp`).
 - Arithmetic:
   - signed add, sub and mul get `nsw`; shifts mask nothing at -O0;
+  - a shift whose count has another integer type is `zext`/`trunc`ed
+    (never sign-extended) to the left operand's type first, element-wise
+    for a vector whose count is the splatted scalar (`v2u64 << int`:
+    `<2 x i32>` to `<2 x i64>`; clang `EmitShl`/`EmitShr`, WP-811,
+    BoringSSL's Keccak rotate;
+    `tests/conformance/ext.vector/shift-scalar-count-other-width-run.cpp`);
   - pointer arithmetic: `gep inbounds` (`gep i8` for void and function
     pointers); pointer difference: `ptrtoint`, `sub`, then `sdiv exact`;
   - floating add/sub (also compound) contract a single-use `fmul`
@@ -2232,7 +2238,10 @@ off and sema rejects `try`/`throw`).
 - **new-expressions** ([expr.new]/28): `CallDeleteDuringNew` as an EH
   cleanup around the initializer, with the pointer, size and placement
   arguments saved to `cond-cleanup.save` slots inside a conditional
-  branch; class `operator new` keeps its declared result type.
+  branch; class `operator new` keeps its declared result type. The
+  reserved placement `operator new(std::size_t, void*)` is inlined, but
+  its pointer is still the placement argument passed to a matching
+  non-reserved `operator delete(void*, void*)` (a class-scope one).
   Array new runs the constructor loop for a non-constant count
   (`arrayctor.cont` isempty check, as clang's
   `EmitCXXAggrConstructorCall`).
@@ -3809,7 +3818,13 @@ No lowering changed; the new forms reach codegen as existing AST.
   width, and `vqdmulh[q]`/`vqrdmulh[q]` as one `sq[r]dmulh` call: WP-792,
   `target.neon/ir-paddl-qdmulh-19.cpp`; the structure loads and stores
   `vld2`..`vld4`, `vst2`..`vst4` and the shift-and-insert `vsli_n`:
-  spec/landed/sema/WP-799.md "NEON structure loads and stores"). The
+  spec/landed/sema/WP-799.md "NEON structure loads and stores"; the
+  cryptographic extension `vaes{e,d,mc,imc}q_u8`, `vsha1{c,m,p}q_u32`,
+  `vsha1h_u32`, `vsha1su{0,1}q_u32`, `vsha256h[2]q_u32` and
+  `vsha256su{0,1}q_u32` as one call of the non-overloaded
+  `llvm.aarch64.crypto.*` intrinsic of that name on `<16 x i8>`,
+  `<4 x i32>` and `i32` operands, the AES type code dropped: WP-811,
+  `target.neon/crypto-run.cpp`, `ir-crypto-19.cpp`). The
   AArch64 ACLE builtins (`__builtin_arm_*`,
   `arm.rs`) are spec/landed/sema/WP-724.md "ACLE builtins".
 - With `CodegenOptions::sve` (AArch64 only), every function definition
