@@ -6564,6 +6564,7 @@ impl Sema<'_, '_> {
             return;
         }
         self.act_on_uninit_inner(v);
+        self.note_uninit_var(v);
         if self.is_var_definition(v) {
             self.check_static_tls(v, None);
             self.check_constinit(v);

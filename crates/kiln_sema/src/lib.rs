@@ -122,6 +122,7 @@ mod transparent_union;
 mod trivial_abi;
 mod try_stmt;
 mod type_diff;
+mod uninit;
 mod unreachable_code;
 mod unused_file_scope;
 mod unused_var;
@@ -382,6 +383,8 @@ pub struct Sema<'a, 'sm> {
     /// The graph of the body being finished, its vectors reused from
     /// body to body.
     pub(crate) cfg_body: cfg::BodyCfg,
+    /// The uninitialized-values analysis' reused buffers (spec/sema.md §7.11).
+    pub(crate) uninit_scratch: uninit::Scratch,
     /// The functions (first declarations) clang 22 infers `noreturn`
     /// (`InferredNoReturnAttr`, [`Sema::infer_noreturn`]).
     pub(crate) inferred_noreturn: kiln_source::fx::FxHashSet<DeclId>,
@@ -1196,6 +1199,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_out: String::new(),
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
             cfg_body: cfg::BodyCfg::default(),
+            uninit_scratch: uninit::Scratch::default(),
             inferred_noreturn: kiln_source::fx::FxHashSet::default(),
             pack: (0, Vec::new()),
             ms_struct_pragma: false,

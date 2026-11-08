@@ -130,6 +130,10 @@ pub struct FnState {
     /// among the expressions built after it (the `-Winfinite-recursion`
     /// prefilter, [`Sema::check_infinite_recursion`]).
     pub(crate) expr_start: u32,
+    /// A local variable without an initializer was declared, or a local
+    /// variable was named in its own initializer: the uninitialized-values
+    /// analysis has something to look at (clang's fast path).
+    pub(crate) uninit_vars: bool,
 }
 
 impl FnState {
@@ -163,6 +167,7 @@ impl FnState {
             modified_params: Vec::new(),
             volatile_assigns: Vec::new(),
             expr_start: 0,
+            uninit_vars: false,
         }
     }
 }
@@ -1747,13 +1752,14 @@ impl Sema<'_, '_> {
         body: StmtId,
         runtime_diags: Vec<(kiln_diag::Diag, Option<ExprId>)>,
         has_fallthrough: bool,
+        uninit: bool,
     ) {
         let dead = if self.diags.uncompilable_error_count() > 0 || self.in_template() {
             None
         } else {
             let wanted: HashSet<ExprId> = runtime_diags.iter().filter_map(|(_, e)| *e).collect();
             let probe = !wanted.is_empty();
-            self.cfg_plan(f, body, wanted, has_fallthrough);
+            self.cfg_plan(f, body, wanted, has_fallthrough, uninit);
             if probe { self.with_cfg(body, |_, c| c.unreachable_probes()) } else { None }
         };
         for (msg, anchor) in runtime_diags {
@@ -1832,7 +1838,8 @@ impl Sema<'_, '_> {
             state.runtime_diags.retain(|(_, anchor)| anchor.is_none());
         }
         let runtime_diags = std::mem::take(&mut state.runtime_diags);
-        self.flush_runtime_diags(state.decl, body, runtime_diags, state.has_fallthrough);
+        let uninit = state.uninit_vars && self.uninit_enabled(state.decl);
+        self.flush_runtime_diags(state.decl, body, runtime_diags, state.has_fallthrough, uninit);
         let ret = state.ret;
         // clang skips its analysis-based warnings once an error occurred
         // (`hasUncompilableErrorOccurred`: not a warning promoted by
@@ -1863,7 +1870,7 @@ impl Sema<'_, '_> {
                 };
                 self.error(id, rbrace);
             }
-            self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start);
+            self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start, uninit);
             return wrapped;
         }
         // A coroutine that falls off its end calls `return_void()` when
@@ -1875,7 +1882,7 @@ impl Sema<'_, '_> {
             if !naked && !coroutine && self.ast.types.is_void(ret) {
                 self.suggest_noreturn(state.decl, body);
             }
-            self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start);
+            self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start, uninit);
             return wrapped;
         }
         if !naked && !self.is_main_function(state.decl) {
@@ -1901,7 +1908,7 @@ impl Sema<'_, '_> {
                 Falloff::Maybe => self.error(DiagId::sema_falloff_nonvoid_maybe, rbrace),
             }
         }
-        self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start);
+        self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start, uninit);
         wrapped
     }
 

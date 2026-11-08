@@ -29,6 +29,9 @@ pub(crate) struct CfgReq {
     pub(crate) flow: bool,
     /// Record the unreachable-code scan's tables (`-Wunreachable-code*`).
     pub(crate) scan: bool,
+    /// Record the commas and the multi-variable declarations' per-variable
+    /// points (`-Wuninitialized`, [`Cfg::commas`], [`Cfg::decl_marks`]).
+    pub(crate) uninit: bool,
 }
 
 /// A loop, switch or expansion statement `break`/`continue` leave.
@@ -535,12 +538,20 @@ impl Sema<'_, '_> {
             StmtKind::DeclStmt => {
                 let list = st.decl_stmt_decls(s);
                 let mut has_var = false;
+                // clang splits a multi-variable declaration into one
+                // statement per variable; the uninitialized-values
+                // analysis needs each variable's point.
+                let marks = b.req.uninit && self.ast.lists.len(list) > 1;
                 for i in 0..self.ast.lists.len(list) {
                     let d = self.ast.lists.at::<DeclId>(list, i).expect("decl");
                     if let Some(v) = self.ast.decls.var(d) {
                         has_var = true;
                         if let Some(init) = v.init {
                             self.cfg_expr(init, b);
+                        }
+                        if marks {
+                            let at = b.cfg.elems.len() as u32;
+                            b.cfg.decl_marks.push((at, d));
                         }
                     }
                 }
@@ -1163,6 +1174,8 @@ impl Sema<'_, '_> {
                     && self.ast.exprs.binary_op(e) == BinaryOp::Comma;
                 if !comma {
                     b.push(Elem::Expr(e));
+                } else if b.req.uninit {
+                    b.cfg.commas.push(e);
                 }
                 if b.has_pos() && self.is_noreturn_call(e) {
                     Self::cfg_noreturn(b);

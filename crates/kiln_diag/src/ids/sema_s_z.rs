@@ -22,6 +22,7 @@ sema_sizeof_incomplete = Error (2) "invalid application of '{0}' to an incomplet
 sema_sizeof_pack_no_pack = Error (1) "{0} does not refer to the name of a parameter pack";
 sema_sizeof_sizeless = Error (2) "invalid application of '{0}' to sizeless type {1}";
 sema_sizeof_void = Extension [PointerArith] (1) "invalid application of '{0}' to a void type";
+sema_sometimes_uninit_var = WarningOff [SometimesUninitialized] (5) "variable {0} is {1:used|captured} uninitialized whenever {2:'{3}' condition is {4}|'{3}' loop {4}|'{3}' loop {4}|switch {3} is taken|its declaration is reached|{3} is called}";
 sema_spaceship_narrowing_const = Error (2) "argument to 'operator<=>' evaluates to {0}, which cannot be narrowed to type {1}";
 sema_spaceship_narrowing_var = Error (2) "argument to 'operator<=>' cannot be narrowed from type {0} to {1}";
 sema_spec_after_instantiation = Error (1) "explicit specialization of '{0}' after instantiation";
@@ -222,8 +223,11 @@ sema_underlying_type_of_incomplete_enum = Error (1) "cannot determine underlying
 sema_unexpanded_pack = Error (2) "{0} contains unexpanded parameter pack{1}";
 sema_unexpected_typedef_ident = Error (1) "unexpected type name '{0}': expected expression";
 sema_unimplemented_template_feature = Error (1) "kiln: not yet implemented: {0}";
+sema_uninit_const_reference = WarningOff [UninitializedConstReference] (1) "variable {0} is uninitialized when passed as a const reference argument here";
 sema_uninit_self_reference_in_init = Warning [Uninitialized] (1) "variable {0} is uninitialized when used within its own initialization";
 sema_uninit_self_reference_in_reference_init = Warning [Uninitialized] (1) "reference {0} is not yet bound to a value when used within its own initialization";
+// ----- WP-862 (flow-based -Wuninitialized; clang `AnalysisBasedWarnings.cpp` `DiagUninitUse`)
+sema_uninit_var = WarningOff [Uninitialized] (2) "variable {0} is uninitialized when {1:used here|captured by block}";
 sema_union_has_base = Error (0) "unions cannot have base classes";
 sema_union_member_reference = Error (2) "union member '{0}' has reference type {1}";
 sema_unknown_assumption = Warning [UnknownAssumption] (1) "unknown assumption string '{0}'; attribute is potentially ignored";
