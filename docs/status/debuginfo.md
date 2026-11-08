@@ -135,20 +135,108 @@ command. The `-g0` rows compare this branch with main (fb89f25f5); the
 
 The `-g0` objects are byte-identical between main and this branch.
 
-**Perf finding (not fixed here): `-g` costs kiln's front end about
-+47%.** At `-O0`, `kiln++ -S -emit-llvm` on format-test takes 3.30 s
-without `-g` and 4.86 s with it. The IR grows from 16 MB to 31 MB. For
-templates_wide, the times are 0.42 s and 0.75 s, and the IR grows from
-1.1 MB to 14 MB. clang 19's whole `-g` increment on format-test is
-under 0.3 s (`-O0`: 3.23 to 3.48 s without `-g`, 3.52 s with it). kiln's
-peak RSS stays 25 to 35% below clang's. The time has not been profiled
-(`perf_event_open` is blocked on the dev host). Two candidates:
+The table above is WP-814's measurement. WP-817 below re-measured the
+`-g` rows after cutting the front end's share.
 
-- Each DI node allocates its class name and every field key as a
-  `Box<str>`, and is hashed for interning (`kiln_llvm` `md_specialized`,
-  `module.rs:1459`; `debuginfo::Fields`, `debuginfo/mod.rs:124`). Keys
-  could be `&'static str`.
-- The metadata is printed as IR text and parsed again by `llc-19`.
+### WP-817: the front-end cost of `-g`
+
+WP-814 found that `-g` cost kiln's front end about +47% (`-S
+-emit-llvm`, `-O0`: format-test 3.30 to 4.86 s, templates_wide 0.42 to
+0.75 s), against clang 19's whole `-g` increment of under 0.3 s on
+format-test. WP-817 split that increment and cut the front-end part.
+The IR is byte-identical to before for every TU measured (format-test
+and templates_wide, with and without `-g`) and for every
+`tests/codegen/debug_*` and `tests/debuginfo` test. The design is in
+spec/landed/codegen/WP-817.md.
+
+**Commands.** The TUs are the ones listed above: fmt 12.1.0
+`test/format-test.cc` with the flags above, and
+`bench/frontend/templates_wide.cpp` with `-std=c++26`, plus the new
+`bench/frontend/format-like-g.cpp` with `-std=c++26` (the host's
+libstdc++ 14, as the bench compiles it). Each measured command is
+
+- front end only: `kiln++ -O0 [-g] -Xclang -disable-llvm-passes -S
+  -emit-llvm -o /dev/null <TU flags>` (no `opt-19` run);
+- whole `-S -emit-llvm`: `kiln++ -O0 [-g] -S -emit-llvm -o /dev/null
+  <TU flags>`; for format-test this runs `opt-19 -passes=default<O0>`
+  and `opt-19 -discard-value-names -S`, because `<format>`-style code
+  defines `always_inline` functions (spec/driver.md);
+- object: `kiln++ -O0 [-g] -c -o tu.o <TU flags>`;
+- the same command lines with `clang++-19`.
+
+kiln is a release build of the branch (base: main 5d62a654e), run from a
+tmpfs copy. Times are medians of 7 interleaved before/after runs (front
+end) or 3 (whole and object), with user CPU time next to wall time
+because the shared 24-core aarch64 host is noisy. RSS is the largest
+peak of the runs (`/usr/bin/time -f "%e %M %U"`).
+
+**Where the `-g` increment went (before).** Targeted timers in a
+throw-away instrumented build, one run each:
+
+- format-test front end, +0.35 to +0.41 s user: codegen +0.28 s, of it
+  0.11 s in metadata interning (197,582 `md_intern` calls without `-g`
+  14,753); printing and dropping the module +0.20 s.
+- templates_wide front end, +0.30 s user: codegen +0.20 s (interning
+  0.075 s); printing +0.13 s, most of it dropping the module's 120,656
+  metadata nodes, each with a boxed name and a boxed key per field.
+- LLVM, not kiln: `llc-19 -O0 -filetype=obj` on the printed IR goes from
+  1.36 to 2.28 s on format-test and from 0.02 to 0.36 s on
+  templates_wide; `llvm-as-19` alone (parsing the text) goes from 0.44
+  to 1.13 s and from 0.02 to 0.39 s. On format-test's `-S -emit-llvm`
+  path the two `opt-19` runs add about 1.1 s with `-g`. That is the
+  text round trip (perf-reference-workload.md F4), not front-end work.
+
+**What changed.** Static node names and field keys (`&'static str`), so
+a node allocates only its field list; hash-once interning into a
+`hashbrown::HashTable<(u64, MetadataId)>` that never clones a node;
+allocation-free printing of node names, keys and integers; and the
+driver's `opt` decision scans only the code part of the IR, not the
+metadata.
+
+**After.** The same instrumented build: templates_wide codegen 0.079
+to 0.242 s with `-g` (interning 0.05 s for 140,563 calls), printing
+0.030 s in all, dropping 0.003 s; format-test codegen 0.357 to 0.583 s
+(interning 0.040 s, `DILocation`s 0.044 s for 166 K calls, `DIFile`s
+0.020 s for 32 K calls), printing 0.040 to 0.111 s.
+
+| TU | command | before, no `-g` | before, `-g` | after, no `-g` | after, `-g` | clang 19, no `-g` | clang 19, `-g` |
+|---|---|---|---|---|---|---|---|
+| format-test | front end | 2.61 s (2.27 user), 142 MiB | 3.08 s (2.66), 250 MiB | 2.67 s (2.28), 142 MiB | 2.80 s (2.45), 181 MiB | 2.91 s (2.74), 322 MiB | 3.34 s (3.14), 355 MiB |
+| format-test | `-S -emit-llvm` | 3.62 s (3.09), 143 MiB | 5.44 s (4.81), 247 MiB | 3.59 s (3.09), 143 MiB | 5.21 s (4.56), 206 MiB | 3.11 s (2.90), 322 MiB | 3.76 s (3.45), 355 MiB |
+| format-test | `-c` | 4.17 s (3.67), 163 MiB | 6.22 s (5.42), 247 MiB | 4.21 s (3.74), 163 MiB | 5.71 s (5.18), 230 MiB | 3.58 s (3.40), 322 MiB | 4.45 s (4.23), 355 MiB |
+| templates_wide | front end = `-S -emit-llvm` | 0.39 s (0.36), 89 MiB | 0.73 s (0.67), 182 MiB | 0.37 s (0.35), 90 MiB | 0.53 s (0.49), 117 MiB | 0.64 s (0.58), 231 MiB | 0.82 s (0.76), 253 MiB |
+| templates_wide | `-c` | 0.40 s (0.35), 90 MiB | 1.13 s (0.98), 180 MiB | 0.41 s (0.37), 90 MiB | 0.88 s (0.80), 117 MiB | 0.65 s (0.57), 231 MiB | 0.80 s (0.72), 254 MiB |
+| format-like bench | front end | 0.74 s user, 51 MiB | 0.77 s user, 78 MiB | 0.74 s user, 51 MiB | 0.80 s user, 62 MiB | | |
+
+Against the WP-817 target (the front-end `-g` increment at most 15% of
+the no-`-g` time):
+
+- **format-test: met.** +7.5% user (2.28 to 2.45 s; before +17%), +5%
+  wall. Peak RSS with `-g` 250 to 181 MiB (clang 355 MiB).
+- **templates_wide: not met, inherent.** +40% user (0.35 to 0.49 s;
+  before +86%). The `-g` module is 14 MB of IR against 1.1 MB, 13x: one
+  global of the outermost type makes codegen describe all 20,100
+  specializations, about six nodes and two mangled or printed names
+  each. The remaining 0.14 s is building and printing those 120,656
+  nodes, 1.2 microseconds a node; 15% would be 0.05 s, less than
+  printing the 14 MB alone. clang 19's own `-g` increment on this TU is
+  larger (0.58 to 0.76 s user, +0.18 s), and LLVM needs 0.37 s more to
+  parse the same metadata. Peak RSS with `-g` 182 to 117 MiB (clang
+  253 MiB).
+- **format-like bench** (`bench/frontend/format-like-g.cpp`): front end
+  +5 to +8% user, within the noise of 5 runs; peak RSS with `-g` 78 to
+  62 MiB.
+
+Without `-g` nothing changed: the IR is byte-identical and the times
+and RSS are within noise. What remains of kiln's whole `-g` cost over
+clang's is on the LLVM side: `-c` on format-test is +1.44 s user for
+kiln and +0.83 s for clang, and templates_wide `-c` +0.43 s against
++0.15 s, because LLVM parses the metadata as text (once for `-c`,
+twice through `opt` for format-test's `-S -emit-llvm`).
+
+The bench entries `bench/frontend/templates-wide-g.cpp` and
+`bench/frontend/format-like-g.cpp` (`mode: emit-llvm`, `args: -g`)
+track the front-end cost from now on.
 
 ## Gaps
 
@@ -183,8 +271,11 @@ clang 19 (D). The list matches spec/landed/codegen/WP-814.md
 
 ## Follow-ups
 
-- The `-g` front-end cost above (`kiln_llvm/src/module.rs:1459`,
-  `kiln_codegen/src/debuginfo/mod.rs:124`).
+- The LLVM side of the `-g` cost (WP-817): the metadata is parsed as
+  text by `llc-19`, and twice by the two `opt-19` runs of an
+  `always_inline` module's `-S -emit-llvm`
+  (`kiln_driver/src/codegen_cmd.rs` `ir_passes`); a bitcode writer or a
+  single `opt` run would cut it (perf-reference-workload.md F4).
 - Call-site declaration subprograms above `-O0` (the call site DIE gap).
 - A CI image with gdb, so `tests/debuginfo` joins the default roots
   (`xtask/src/test/runner.rs` `debugger_skip`).
