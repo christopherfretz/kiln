@@ -892,6 +892,13 @@ Neither is the libstdc++ header status (`cargo xtask libstdcxx`), which is
 informational (exit status non-zero only on tool errors); its contract is
 `spec/libstdcxx.md`.
 
+The M8 OSS build harness (`scripts/oss/`) needs the network and is not part
+of `ci`; its contract is spec/landed/harness/WP-666.md. It builds each
+project against libstdc++ by default, and against the system libc++ 19
+(the library clang++-19 uses, so kiln and the clang-19 control link the
+same one) with `oss-build.sh --stdlib libc++`, whose build trees and
+reports are kept apart (`<compiler>-libcxx`, WP-694).
+
 `cargo xtask features` ("Feature table") is not part of `ci` either: it is a
 manual / M4-gate check.
 
