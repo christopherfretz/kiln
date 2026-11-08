@@ -11,7 +11,7 @@ use kiln_ast::ids::{ArgListId, TemplateNameId};
 use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TemplateName, TypeFlags, TypeView};
-use kiln_ast::{DeclId, QualType};
+use kiln_ast::{AnnId, DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -1884,15 +1884,29 @@ impl Substituter<'_, '_, '_> {
     /// ([temp.inst]/3: the base-clause is instantiated with the class;
     /// [temp.variadic]/5: a pack expansion gives one base per element).
     /// The flag is set when a base failed to substitute (clang
-    /// `InstantiateClass`: the specialization is then invalid).
-    fn class_bases(&mut self, def: DeclId) -> (Vec<BaseSpecInfo>, bool) {
+    /// `InstantiateClass`: the specialization is then invalid). With each
+    /// specifier, its annotations substituted for `spec`
+    /// ([dcl.attr.annotation]/3: new annotations; each element of a pack
+    /// expansion gets its own copies).
+    #[allow(clippy::type_complexity)]
+    fn class_bases(
+        &mut self,
+        spec: DeclId,
+        def: DeclId,
+    ) -> (Vec<BaseSpecInfo>, Vec<Vec<AnnId>>, bool) {
         // Base classes ([temp.inst]/3: the base-clause is instantiated
         // with the class).
         let bases: Vec<kiln_ast::decl::BaseSpec> =
             self.sema.ast.decls.bases(def, &self.sema.ast.lists).copied().collect();
         let mut specs = Vec::with_capacity(bases.len());
+        let mut anns: Vec<Vec<AnnId>> = Vec::new();
         let mut failed = false;
-        for b in bases {
+        let def_first = self.sema.ast.first(def);
+        for (bi, b) in bases.into_iter().enumerate() {
+            let ast = &self.sema.ast;
+            let pat: Vec<AnnId> =
+                ast.lists.iter::<AnnId>(ast.annots.of_base(def_first, bi as u32)).collect();
+            let mine = if pat.is_empty() { Vec::new() } else { self.subst_annotations(spec, &pat) };
             if b.pack_expansion {
                 // [temp.variadic]/5: one base per element.
                 let tys = match self.expand_pattern(|s| s.element_ty(b.ty, b.loc)) {
@@ -1906,7 +1920,7 @@ impl Substituter<'_, '_, '_> {
                         continue;
                     }
                 };
-                for ty in tys {
+                for (k, ty) in tys.into_iter().enumerate() {
                     specs.push(BaseSpecInfo {
                         ty,
                         loc: b.loc,
@@ -1915,22 +1929,27 @@ impl Substituter<'_, '_, '_> {
                         pack_expansion: false,
                         attrs: Vec::new(),
                     });
+                    let copies = if k == 0 { mine.clone() } else { self.sema.copy_annots(&mine) };
+                    anns.push(copies);
                 }
                 continue;
             }
             match self.ty(b.ty, b.loc) {
-                Ok(ty) => specs.push(BaseSpecInfo {
-                    ty,
-                    loc: b.loc,
-                    is_virtual: b.is_virtual,
-                    access: b.access,
-                    pack_expansion: false,
-                    attrs: Vec::new(),
-                }),
+                Ok(ty) => {
+                    specs.push(BaseSpecInfo {
+                        ty,
+                        loc: b.loc,
+                        is_virtual: b.is_virtual,
+                        access: b.access,
+                        pack_expansion: false,
+                        attrs: Vec::new(),
+                    });
+                    anns.push(mine);
+                }
                 Err(_) => failed = true,
             }
         }
-        (specs, failed)
+        (specs, anns, failed)
     }
 
     /// Defines `spec` from pattern definition `def` (bases, members,
@@ -2013,8 +2032,8 @@ impl Substituter<'_, '_, '_> {
         self.class_final_and_attrs(spec, def);
         self.map_contexts(&[(def, spec)]);
         let sub = self;
-        let (specs, mut invalid) = sub.class_bases(def);
-        invalid |= !sub.sema.attach_bases(spec, &specs);
+        let (specs, anns, mut invalid) = sub.class_bases(spec, def);
+        invalid |= !sub.sema.attach_bases_annotated(spec, &specs, &anns);
         // clang `CheckBaseSpecifier`: "if the base class is invalid the
         // derived class is as well" (`underlying_type<E>` deriving from an
         // `__underlying_type_impl<E>` whose `type` failed: a later

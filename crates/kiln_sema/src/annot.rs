@@ -206,7 +206,7 @@ impl Sema<'_, '_> {
 
     /// One annotation of `d` with operand `e` at `loc`, appended to the
     /// table (not yet to `d`'s list).
-    fn annotate(&mut self, d: DeclId, e: ExprId, loc: Loc) -> Option<AnnId> {
+    pub(crate) fn annotate(&mut self, d: DeclId, e: ExprId, loc: Loc) -> Option<AnnId> {
         let (value, ty, expr) = self.annotation_value(e, loc)?;
         Some(self.ast.annots.push(Annotation { decl: d, value, loc, written_type: ty, expr }))
     }
@@ -266,6 +266,17 @@ impl Sema<'_, '_> {
                 None
             }
         }
+    }
+
+    /// New annotations with the values of `anns` ([dcl.attr.annotation]/3:
+    /// each instantiation of an annotation is a distinct annotation).
+    pub(crate) fn copy_annots(&mut self, anns: &[AnnId]) -> Vec<AnnId> {
+        anns.iter()
+            .map(|&a| {
+                let n = *self.ast.annots.get(a);
+                self.ast.annots.push(n)
+            })
+            .collect()
     }
 
     /// `T` of an annotation must be structural ([dcl.attr.annotation]/2,
@@ -435,7 +446,7 @@ impl Substituter<'_, '_, '_> {
     /// annotation with the same underlying constant), a dependent operand
     /// is substituted and evaluated. A failure is diagnosed and drops the
     /// annotation ([dcl.attr.annotation]/4: not a deduction failure).
-    fn subst_annotations(&mut self, spec: DeclId, anns: &[AnnId]) -> Vec<AnnId> {
+    pub(crate) fn subst_annotations(&mut self, spec: DeclId, anns: &[AnnId]) -> Vec<AnnId> {
         let mut out = Vec::with_capacity(anns.len());
         for &a in anns {
             let n = *self.sema.ast.annots.get(a);
