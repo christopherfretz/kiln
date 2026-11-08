@@ -266,6 +266,15 @@ delayed meaning; in practice they are always parsed immediately.
   `T = S`, under the "while substituting prior template arguments" note).
   `template<static class T>` declares such a parameter of the incomplete
   class `T`. Test: `temp.param/nttp-incomplete-class-type.cpp`.
+- A non-type parameter whose type, after substitution of prior arguments,
+  is an array or function type has the adjusted pointer type
+  ([temp.param]/10, as at the declaration; clang's
+  `CheckNonTypeTemplateParameterType`): `template<class F> template<F f>`
+  with `F = int(int)` declares `int (*f)(int)`, callable as `f(1)`, and
+  `template<class T, T a>` with `T = const int[3]` declares
+  `const int *a`. This holds in a member template of a class template
+  (gRPC's `ParseValue<F, G>::Parse<F f, G g>`; WP-811). Test:
+  `temp.param/nttp-substituted-function-array-type-adjusted-run.cpp`.
 - A template template parameter's template-head is followed by `class` or
   `typename` ([temp.param]/1). Without one, clang 19 always reports
   "template template parameter requires 'class' or 'typename' after the

@@ -890,7 +890,9 @@ impl Sema<'_, '_> {
     }
 
     /// The type of non-type parameter `p` given the arguments before it
-    /// (its declared type with those substituted).
+    /// (its declared type with those substituted). A substituted array or
+    /// function type is adjusted to a pointer ([temp.param]/10, as at the
+    /// declaration; clang `CheckNonTypeTemplateParameterType`).
     fn nttp_type(
         &mut self,
         tmpl: DeclId,
@@ -909,6 +911,7 @@ impl Sema<'_, '_> {
             s.final_subst = true;
             s.ty(ty, at).map_err(|_| ())
         })
+        .map(|t| self.adjust_param_type(t))
     }
 
     /// Runs `f` with the declaration context of template `tmpl` current
