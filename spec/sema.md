@@ -347,6 +347,12 @@ translation unit that fails costs about what it costs clang:
     member instantiated `std::pair<const int, int>`;
     `expr.unary.op/member-pointer-to-specialization-member.cpp`,
     `temp.inst/instantiation-keeps-pending-member-name.cpp`).
+    A variable's initializer that is such a pending member function
+    name (`auto p = C::f;`, `void (*p)() = C::tm<long>;` in a static
+    member function) is reported when the initializer is attached
+    (`reject_objectless_method_init`) and recovered as erroneous, so no
+    conversion or deduction of it is diagnosed (WP-888,
+    `dcl.spec.auto/member-template-id-in-template-body.cpp`).
   - An ambiguous *type* name (`S s;` with `S` in the namespace and in
     one of its inline namespaces) is diagnosed by the parser through
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery

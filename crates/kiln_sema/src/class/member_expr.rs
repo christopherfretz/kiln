@@ -10,7 +10,7 @@ use kiln_ast::expr::{
 };
 use kiln_ast::types::{Quals, RefQual, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
-use kiln_diag::DiagId;
+use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
 use crate::Sema;
@@ -2210,12 +2210,13 @@ impl Sema<'_, '_> {
     }
 
     /// [`Self::recover_not_called`]; `again` as in
-    /// [`Self::diagnose_member_set_not_called_as`]: placeholder deduction
+    /// [`Self::diagnose_member_set_not_called_at`]: placeholder deduction
     /// reports it on a copy, and the initialization reports it again.
     pub(crate) fn recover_not_called_as(&mut self, e: ExprId, again: bool) -> ExprId {
         let x = self.ignore_parens(e);
         let callable = if let Some(m) = self.member_overload(e) {
-            self.diagnose_member_set_not_called_as(m, again)
+            let at = self.paren_loc_of(e, m);
+            self.diagnose_member_set_not_called_at(m, again, at)
         } else {
             self.diagnose_bound_member_as(e, again)
         };
@@ -2268,9 +2269,15 @@ impl Sema<'_, '_> {
         }
         let no_args = !self.inst.stack.is_sfinae()
             && match self.ast.exprs.get(x).kind() {
+                // No hint on a type-dependent access, as for a member
+                // overload set (`diagnose_member_set_not_called_at`).
                 ExprKind::MemberExpr => {
                     let m = self.ast.exprs.decl(x);
-                    self.ast.decls.function(m).is_some() && self.fn_min_args(m) == 0
+                    let base = self.ast.exprs.operand(x);
+                    self.ast.decls.function(m).is_some()
+                        && self.fn_min_args(m) == 0
+                        && !self.ast.exprs.get(base).is_type_dependent()
+                        && !self.is_dependent_type(self.ast.exprs.get(base).ty())
                 }
                 // `obj.*pmf` / `ptr->*pmf`: the hint follows the pointee
                 // function type (clang's `tryExprAsCall`).
@@ -2291,7 +2298,20 @@ impl Sema<'_, '_> {
             };
         let msg =
             self.diag(DiagId::sema_bound_member_not_called, self.eloc(e)).arg(u8::from(no_args));
-        self.emit(if again { msg.allow_duplicate() } else { msg });
+        let msg = if again { msg.allow_duplicate() } else { msg };
+        // A member template-id resolved early (`C::tm<long>` with an
+        // implicit object) is still an overload set to clang, whose
+        // declarations it lists as possible targets.
+        let notes: Vec<Diag> = self
+            .ovl
+            .template_id_refs
+            .get(&x)
+            .map(|&u| self.ast.unresolved_decls(u))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| self.diag(DiagId::note_possible_target, self.ast.decls.get(d).loc()))
+            .collect();
+        self.emit(notes.into_iter().fold(msg, Diag::with_note));
         no_args
     }
 

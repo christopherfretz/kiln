@@ -5735,6 +5735,7 @@ impl Sema<'_, '_> {
             // `'extern' variable has an initializer`).
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
+        let init = self.reject_objectless_method_init(init);
         self.act_on_init_inner(v, init);
         self.check_cleanup_deduced(v);
         self.check_static_tls(v, paren);
@@ -6100,6 +6101,35 @@ impl Sema<'_, '_> {
         }
         let t = &mut self.ast.types;
         Some(if rvalue { t.rvalue_ref_to(ety) } else { t.lvalue_ref_to(ety) })
+    }
+
+    /// An initializer naming a non-static member function without an
+    /// object ([expr.prim.id.general]/4, `auto p = C::f;` in a static
+    /// member function): clang's `BuildDeclarationNameExpr` reports it at
+    /// the name and the initializer is erroneous, so no conversion of it
+    /// is diagnosed. The pending reference
+    /// ([`Self::flush_member_refs`]) is reported now, since an
+    /// initializer is neither of the uses that could still make it valid.
+    fn reject_objectless_method_init(&mut self, init: Initializer) -> Initializer {
+        let reject = |s: &mut Self, e: ExprId| {
+            let x = s.ignore_parens(e);
+            match s.member_refs.get(&x).copied() {
+                Some(r) if r.error && s.kind_of(r.decl) == DeclKind::CXXMethod => {
+                    s.member_refs.remove(&x);
+                    let loc = s.eloc(x);
+                    s.error(DiagId::sema_member_call_without_object, loc);
+                    s.recover_err(&[e], loc)
+                }
+                _ => e,
+            }
+        };
+        match init {
+            Initializer::Expr(e) => Initializer::Expr(reject(self, e)),
+            Initializer::Paren(es, l, r) => {
+                Initializer::Paren(es.into_iter().map(|e| reject(self, e)).collect(), l, r)
+            }
+            list @ Initializer::List(_) => list,
+        }
     }
 
     /// The declaration whose initializer `v` carries: an instantiated
