@@ -682,10 +682,9 @@ impl Ast {
                         Reflectee::Decl(d) => {
                             out.push(tag(k, 5));
                             self.decl_words(d, out);
-                            out.push(self.ref_args_word(
-                                d,
-                                self.templates.expr_targs.get(e).copied(),
-                            ));
+                            out.push(
+                                self.ref_args_word(d, self.templates.expr_targs.get(e).copied()),
+                            );
                         }
                         _ => out.extend([tag(k, 0) | UNIQUE, e.raw()]),
                     }

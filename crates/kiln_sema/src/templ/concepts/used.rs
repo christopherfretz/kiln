@@ -4,23 +4,37 @@
 //! `C<T, int>` and in `C<T, long>` is one atom (clang
 //! `MarkUsedTemplateParameters` over the atom's expression).
 //!
-//! The walk names every expression, type, template-name and
-//! nested-name-specifier kind (WP-776): splices walk their operand, a
-//! type's expression operand is walked, and sugar walks what it wraps.
+//! The walk names every expression, statement, type, template-name and
+//! nested-name-specifier kind (WP-776, WP-821): splices walk their
+//! operand, a type's expression operand is walked, and sugar walks what
+//! it wraps. A lambda walks its captures, its call operator's template
+//! head, parameters, type and requires-clauses, and its body; a
+//! statement expression walks its statements, and a closure type or a
+//! local class or enumeration declared in a walked body is accounted for
+//! there.
 //! Only what it cannot see answers `None` and keeps the whole mapping
-//! (two atoms then compare as before, never more loosely): a body of
-//! statements (a lambda, a statement expression), a dependent class or
-//! enumeration (its enclosing template's parameters are implicit), and
-//! a parameter index past 64.
+//! (two atoms then compare as before, never more loosely): a dependent
+//! member class or enumeration (its enclosing template's parameters are
+//! implicit), an unresolved using-declaration, a declaration kind a body
+//! cannot be seen through (a friend, a using-declaration), and a
+//! parameter index past 64.
 
+use kiln_ast::attr::AttrKind;
+use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{ExprDeps, ExprKind, OffsetofComponent, TypeidOperand};
+
 use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::reflect::Reflectee;
+use kiln_ast::stmt::StmtKind;
 use kiln_ast::templates::Requirement;
 use kiln_ast::types::{
-    ArgView, ExprOperand, Nns, TemplateName, TypeFlags, TypeOfOperand, TypeView,
+    ArgView, ExcSpec, ExprOperand, Nns, TemplateArg, TemplateName, TypeFlags, TypeOfOperand,
+    TypeView,
 };
-use kiln_ast::{ArgListId, DeclId, ExprId, NnsId, QualType, RawId, TemplateNameId};
+use kiln_ast::{
+    ArgListId, DeclId, ExprId, LambdaId, NnsId, QualType, RawId, StmtId, TemplateNameId,
+    TemplateParamListId,
+};
 
 use crate::Sema;
 
@@ -31,6 +45,10 @@ const MAX_DEPTH: u32 = 256;
 struct Used {
     level: u32,
     mask: u64,
+    /// The lambdas walked (each once: its closure type may recur).
+    lambdas: Vec<LambdaId>,
+    /// The local classes and enumerations whose declarations were walked.
+    locals: Vec<DeclId>,
 }
 
 impl Used {
@@ -52,7 +70,8 @@ impl Sema<'_, '_> {
         if let Some(&r) = self.inst.concepts.used_params.get(&(e, level)) {
             return r;
         }
-        let mut u = Used { level: u32::from(level), mask: 0 };
+        let mut u =
+            Used { level: u32::from(level), mask: 0, lambdas: Vec::new(), locals: Vec::new() };
         let r = self.used_in_expr(e, &mut u, 0).map(|()| u.mask);
         self.inst.concepts.used_params.insert((e, level), r);
         r
@@ -286,11 +305,17 @@ impl Sema<'_, '_> {
                 }
                 return Some(());
             }
-            // A body of statements (a lambda's, a statement expression's)
-            // and an expansion statement's element are not walked: the
-            // atom keeps the whole mapping.
-            ExprKind::LambdaExpr | ExprKind::StmtExpr | ExprKind::CXXExpansionSelectExpr => {
-                return None;
+            // The closure type is the lambda's own: walking the lambda
+            // covers it.
+            ExprKind::LambdaExpr => return self.used_in_lambda(ex.lambda_id(e), u, d),
+            ExprKind::StmtExpr => self.used_in_stmt(ex.stmt_expr_body(e), u, d)?,
+            // An expansion statement's element names its synthetic
+            // template level (deeper than any concept's), whose range the
+            // statement walks ([stmt.expand]).
+            ExprKind::CXXExpansionSelectExpr => {
+                if n.a() == u.level {
+                    return None;
+                }
             }
         }
         if let Some(&l) = self.ast.templates.expr_targs.get(e) {
@@ -327,20 +352,22 @@ impl Sema<'_, '_> {
             return None;
         }
         for &a in self.ast.types.args(l) {
-            match a.view() {
-                ArgView::Null | ArgView::Value { .. } => {}
-                ArgView::Type(q) => self.used_in_type(q, u, depth + 1)?,
-                ArgView::Expr { expr, .. } => self.used_in_expr(expr, u, depth + 1)?,
-                ArgView::Profile(p) => {
-                    self.used_in_expr(self.ast.types.profile_expr(p)?, u, depth + 1)?;
-                }
-                ArgView::Template(t) | ArgView::TemplateExpansion { name: t, .. } => {
-                    self.used_in_template_name(t, u, depth + 1)?;
-                }
-                ArgView::Pack(l) => self.used_in_args(l, u, depth + 1)?,
-            }
+            self.used_in_arg(a, u, depth)?;
         }
         Some(())
+    }
+
+    fn used_in_arg(&self, a: TemplateArg, u: &mut Used, depth: u32) -> Option<()> {
+        match a.view() {
+            ArgView::Null | ArgView::Value { .. } => Some(()),
+            ArgView::Type(q) => self.used_in_type(q, u, depth + 1),
+            ArgView::Expr { expr, .. } => self.used_in_expr(expr, u, depth + 1),
+            ArgView::Profile(p) => self.used_in_expr(self.ast.types.profile_expr(p)?, u, depth + 1),
+            ArgView::Template(t) | ArgView::TemplateExpansion { name: t, .. } => {
+                self.used_in_template_name(t, u, depth + 1)
+            }
+            ArgView::Pack(l) => self.used_in_args(l, u, depth + 1),
+        }
     }
 
     fn used_in_template_name(&self, t: TemplateNameId, u: &mut Used, depth: u32) -> Option<()> {
@@ -414,14 +441,10 @@ impl Sema<'_, '_> {
         let d = depth + 1;
         match t.view(q.ty()) {
             TypeView::Builtin(_) | TypeView::BitInt { .. } => Some(()),
-            // A dependent class or enumeration (a member of a class
-            // template) depends on its enclosing template's parameters,
-            // which the type does not name; an unresolved using-declaration
-            // likewise. The atom keeps the whole mapping.
-            TypeView::Invalid
-            | TypeView::Record(_)
-            | TypeView::Enum(_)
-            | TypeView::UnresolvedUsing(_) => None,
+            TypeView::Record(r) | TypeView::Enum(r) => self.used_in_tag(r, u, d),
+            // An unresolved using-declaration depends on its enclosing
+            // template's parameters, which the type does not name.
+            TypeView::Invalid | TypeView::UnresolvedUsing(_) => None,
             TypeView::TemplateTypeParm(p) => self.used_decl(p, u),
             TypeView::CanonTemplateTypeParm { depth: pd, index, .. } => u.mark(pd, index),
             TypeView::Pointer(x)
@@ -482,7 +505,25 @@ impl Sema<'_, '_> {
                 for &x in t.params(&p) {
                     self.used_in_type(x, u, d)?;
                 }
-                Some(())
+                match t.exc_spec(&p) {
+                    ExcSpec::NoexceptExpr { expr, .. } => self.used_in_expr(expr, u, d),
+                    ExcSpec::DependentNoexcept(p) => {
+                        self.used_in_operand(ExprOperand::Profile(p), u, d)
+                    }
+                    ExcSpec::Dynamic(l) => {
+                        for &x in t.type_list_types(l) {
+                            self.used_in_type(x, u, d)?;
+                        }
+                        Some(())
+                    }
+                    ExcSpec::None
+                    | ExcSpec::Nothrow
+                    | ExcSpec::NothrowAttr
+                    | ExcSpec::DynamicNone
+                    | ExcSpec::BasicNoexcept => Some(()),
+                    // Computed from the declaration's members, not written.
+                    ExcSpec::Deferred(_) => Some(()),
+                }
             }
             TypeView::DependentName { nns, .. } => self.used_in_nns(nns, u, d),
             TypeView::TemplateSpecialization { name, args, .. } => {
@@ -518,6 +559,368 @@ impl Sema<'_, '_> {
                     Some(x) => self.used_in_type(x, u, d),
                     None => Some(()),
                 }
+            }
+        }
+    }
+
+    /// A dependent class or enumeration type `r`: a closure type walks
+    /// its lambda; a local enumeration or class whose declaration a
+    /// walked body holds was accounted for there; a class template
+    /// specialization at namespace scope walks its arguments. Anything
+    /// else (a member of a class template, a local class declared
+    /// outside the walk) depends on parameters the type does not name:
+    /// `None`.
+    fn used_in_tag(&self, r: DeclId, u: &mut Used, depth: u32) -> Option<()> {
+        let first = self.ast.first(r);
+        if u.locals.contains(&first) {
+            return Some(());
+        }
+        if let Some(l) = self.ast.closure_lambda(r) {
+            return self.used_in_lambda(l, u, depth);
+        }
+        let (_, s) = self.ast.spec_info(r)?;
+        let ctx = self.ast.decls.get(r).ctx()?;
+        if !matches!(
+            self.ast.decls.get(ctx).kind(),
+            DeclKind::Namespace | DeclKind::TranslationUnit
+        ) {
+            return None;
+        }
+        self.used_in_args(s.args, u, depth + 1)
+    }
+
+    /// A lambda ([expr.prim.lambda]): its captures (an init-capture's
+    /// variable, a simple capture's initializer), its call operator's
+    /// template head, parameters, type and trailing requires-clause,
+    /// then its body (clang's `RecursiveASTVisitor::TraverseLambdaExpr`).
+    fn used_in_lambda(&self, l: LambdaId, u: &mut Used, depth: u32) -> Option<()> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        if u.lambdas.contains(&l) {
+            return Some(());
+        }
+        u.lambdas.push(l);
+        let d = depth + 1;
+        let data = self.ast.exprs.lambdas.get(l);
+        if let Some(inits) = data.inits {
+            for e in self.ast.lists.iter::<ExprId>(inits) {
+                self.used_in_expr(e, u, d)?;
+            }
+        }
+        for c in &data.captures {
+            let Some(v) = c.var else { continue };
+            if c.init {
+                self.used_in_local_decl(v, u, d)?;
+            } else if let Some(t) = self.ast.decls.get(v).ty() {
+                self.used_in_type(t, u, d)?;
+            }
+        }
+        if let Some(op) = data.call_op {
+            if let Some(t) = self.ast.described_template(op) {
+                let params = self.ast.template_info(t)?.params;
+                self.used_in_template_params(params, u, d)?;
+            }
+            if let Some(f) = self.ast.decls.function(op) {
+                for p in self.ast.lists.iter::<DeclId>(f.params) {
+                    self.used_in_local_decl(p, u, d)?;
+                }
+            }
+            if let Some(&r) = self.ast.templates.trailing_requires.get(op) {
+                self.used_in_expr(r, u, d)?;
+            }
+        }
+        if let Some(b) = data.body {
+            self.used_in_stmt(b, u, d)?;
+        }
+        // The type last: a deduced return type may name a local class
+        // of the body.
+        if let Some(t) = data.call_op.and_then(|op| self.ast.decls.get(op).ty()) {
+            self.used_in_type(t, u, d)?;
+        }
+        Some(())
+    }
+
+    /// A template head: each parameter's type, immediately-declared
+    /// constraint, default and own parameters, and the requires-clause.
+    fn used_in_template_params(
+        &self,
+        l: TemplateParamListId,
+        u: &mut Used,
+        depth: u32,
+    ) -> Option<()> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let d = depth + 1;
+        let list = *self.ast.templates.param_list(l);
+        for p in self.ast.lists.iter::<DeclId>(list.params) {
+            let info = *self.ast.template_parm(p)?;
+            if let Some(c) = info.constraint {
+                self.used_in_expr(c, u, d)?;
+            }
+            if let Some(nested) = info.params {
+                self.used_in_template_params(nested, u, d)?;
+            }
+            if self.ast.decls.get(p).kind() == DeclKind::NonTypeTemplateParm {
+                if let Some(t) = self.ast.decls.get(p).ty() {
+                    self.used_in_type(t, u, d)?;
+                }
+            }
+            if let Some(&a) = self.ast.templates.defaults.get(p) {
+                self.used_in_arg(a, u, d)?;
+            }
+        }
+        match list.requires {
+            Some(r) => self.used_in_expr(r, u, d),
+            None => Some(()),
+        }
+    }
+
+    /// A declaration in a walked body (or a lambda's parameter or
+    /// init-capture): a variable's or parameter's type and initializer, a
+    /// typedef's type, a static assertion, a local enumeration's
+    /// enumerators, a local class's bases and members (a member
+    /// function's type, parameters, requires-clause, ctor-initializers
+    /// and body). A kind not listed answers `None`.
+    fn used_in_local_decl(&self, v: DeclId, u: &mut Used, depth: u32) -> Option<()> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let d = depth + 1;
+        let decls = &self.ast.decls;
+        match decls.get(v).kind() {
+            DeclKind::Var | DeclKind::Binding | DeclKind::ParmVar => {
+                if let Some(t) = decls.get(v).ty() {
+                    self.used_in_type(t, u, d)?;
+                }
+                let init = match decls.get(v).kind() {
+                    DeclKind::Var => decls.var(v).and_then(|x| x.init),
+                    DeclKind::ParmVar => decls.param(v).and_then(|x| x.default_arg),
+                    _ => decls.binding_expr(v),
+                };
+                match init {
+                    Some(e) => self.used_in_expr(e, u, d),
+                    None => Some(()),
+                }
+            }
+            DeclKind::Typedef | DeclKind::TypeAlias => {
+                self.used_in_type(decls.typedef(v)?.underlying, u, d)
+            }
+            DeclKind::StaticAssert | DeclKind::ConstevalBlock => {
+                let x = *decls.static_assert(v)?;
+                self.used_in_expr(x.cond, u, d)?;
+                match x.message {
+                    Some(m) => self.used_in_expr(m, u, d),
+                    None => Some(()),
+                }
+            }
+            DeclKind::Enum => {
+                if let Some(t) = decls.enumeration(v)?.int_type {
+                    self.used_in_type(t, u, d)?;
+                }
+                for m in self.ast.members(v) {
+                    if let Some(e) = decls.enumerator(m).and_then(|x| x.init) {
+                        self.used_in_expr(e, u, d)?;
+                    }
+                }
+                u.locals.push(self.ast.first(v));
+                Some(())
+            }
+            // A closure type is walked with its lambda-expression.
+            DeclKind::CXXRecord if self.ast.closure_lambda(v).is_some() => Some(()),
+            // A local class: its bases and members (it cannot have member
+            // templates, [temp.mem]/2).
+            DeclKind::CXXRecord => {
+                u.locals.push(self.ast.first(v));
+                for b in decls.bases(v, &self.ast.lists) {
+                    self.used_in_type(b.ty, u, d)?;
+                }
+                for m in self.ast.members(v) {
+                    self.used_in_local_decl(m, u, d)?;
+                }
+                Some(())
+            }
+            DeclKind::Field => {
+                if let Some(t) = decls.get(v).ty() {
+                    self.used_in_type(t, u, d)?;
+                }
+                let f = *decls.field(v)?;
+                for e in [f.bit_width, f.init].into_iter().flatten() {
+                    self.used_in_expr(e, u, d)?;
+                }
+                Some(())
+            }
+            DeclKind::Function
+            | DeclKind::CXXMethod
+            | DeclKind::CXXConstructor
+            | DeclKind::CXXDestructor
+            | DeclKind::CXXConversion => {
+                if let Some(t) = decls.get(v).ty() {
+                    self.used_in_type(t, u, d)?;
+                }
+                let f = *decls.function(v)?;
+                for p in self.ast.lists.iter::<DeclId>(f.params) {
+                    self.used_in_local_decl(p, u, d)?;
+                }
+                if let Some(&r) = self.ast.templates.trailing_requires.get(v) {
+                    self.used_in_expr(r, u, d)?;
+                }
+                for i in self.ast.ctor_inits(v) {
+                    self.used_in_expr(i.init, u, d)?;
+                }
+                match f.body {
+                    Some(b) => self.used_in_stmt(b, u, d),
+                    None => Some(()),
+                }
+            }
+            DeclKind::Empty
+            | DeclKind::AccessSpec
+            | DeclKind::IndirectField
+            | DeclKind::UsingDirective
+            | DeclKind::NamespaceAlias => Some(()),
+            _ => None,
+        }
+    }
+
+    /// The statements of a lambda's body or a statement expression
+    /// (every kind is listed; a dependent coroutine's synthesized parts
+    /// come from its function's type, walked with the lambda).
+    #[allow(clippy::too_many_lines)]
+    fn used_in_stmt(&self, s: StmtId, u: &mut Used, depth: u32) -> Option<()> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let d = depth + 1;
+        let st = &self.ast.stmts;
+        let lists = &self.ast.lists;
+        let stmt = |x: Option<StmtId>, u: &mut Used| match x {
+            Some(x) => self.used_in_stmt(x, u, d),
+            None => Some(()),
+        };
+        let expr = |x: Option<ExprId>, u: &mut Used| match x {
+            Some(x) => self.used_in_expr(x, u, d),
+            None => Some(()),
+        };
+        let var = |x: Option<DeclId>, u: &mut Used| match x {
+            Some(x) => self.used_in_local_decl(x, u, d),
+            None => Some(()),
+        };
+        match st.get(s).kind() {
+            StmtKind::NullStmt
+            | StmtKind::BreakStmt
+            | StmtKind::ContinueStmt
+            | StmtKind::GotoStmt => Some(()),
+            StmtKind::CompoundStmt => {
+                for c in lists.iter::<StmtId>(st.compound_body(s)) {
+                    self.used_in_stmt(c, u, d)?;
+                }
+                Some(())
+            }
+            StmtKind::DeclStmt => {
+                for v in lists.iter::<DeclId>(st.decl_stmt_decls(s)) {
+                    self.used_in_local_decl(v, u, d)?;
+                }
+                Some(())
+            }
+            StmtKind::ExprStmt => self.used_in_expr(st.expr_stmt_expr(s), u, d),
+            StmtKind::IfStmt => {
+                let i = *st.if_data(s);
+                stmt(i.init, u)?;
+                var(i.cond_var, u)?;
+                expr(i.cond, u)?;
+                stmt(i.then, u)?;
+                stmt(i.els, u)
+            }
+            StmtKind::SwitchStmt => {
+                let w = *st.switch_data(s);
+                stmt(w.init, u)?;
+                var(w.cond_var, u)?;
+                expr(Some(w.cond), u)?;
+                stmt(Some(w.body), u)
+            }
+            StmtKind::CaseStmt => {
+                let c = *st.case_data(s);
+                expr(Some(c.lhs), u)?;
+                expr(c.rhs, u)?;
+                stmt(Some(c.sub), u)
+            }
+            StmtKind::DefaultStmt => stmt(Some(st.default_sub(s)), u),
+            StmtKind::LabelStmt => stmt(Some(st.sub_stmt(s)), u),
+            StmtKind::AttributedStmt => {
+                // An assumption and a loop hint's value are expressions.
+                for a in lists.iter::<kiln_ast::AttrId>(st.stmt_attrs(s)) {
+                    let node = self.ast.attrs.get(a);
+                    if matches!(node.kind, AttrKind::ASSUME | AttrKind::LOOP_HINT) {
+                        expr(ExprId::from_raw(node.a), u)?;
+                    }
+                }
+                stmt(Some(st.sub_stmt(s)), u)
+            }
+            StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt => {
+                let l = *st.loop_data(s);
+                stmt(l.init, u)?;
+                var(l.cond_var, u)?;
+                expr(l.cond, u)?;
+                expr(l.inc, u)?;
+                stmt(l.body, u)
+            }
+            StmtKind::CXXForRangeStmt => {
+                let r = *st.range_for_data(s);
+                stmt(r.init, u)?;
+                var(Some(r.range), u)?;
+                var(r.begin, u)?;
+                var(r.end, u)?;
+                expr(r.cond, u)?;
+                expr(r.inc, u)?;
+                var(Some(r.loop_var), u)?;
+                stmt(Some(r.body), u)
+            }
+            StmtKind::CXXExpansionStmt => {
+                let x = *st.expansion_data(s);
+                stmt(x.init, u)?;
+                if st.expansion_expanded(s) {
+                    for c in
+                        lists.iter::<StmtId>(x.prelude).chain(lists.iter::<StmtId>(x.expansions))
+                    {
+                        self.used_in_stmt(c, u, d)?;
+                    }
+                    return Some(());
+                }
+                for e in lists.iter::<ExprId>(x.exprs) {
+                    self.used_in_expr(e, u, d)?;
+                }
+                expr(x.range_init, u)?;
+                var(Some(x.decl), u)?;
+                stmt(Some(x.body), u)
+            }
+            StmtKind::ReturnStmt => expr(st.return_value(s), u),
+            StmtKind::IndirectGotoStmt => expr(Some(st.indirect_goto_target(s)), u),
+            StmtKind::ContractAssertStmt => {
+                var(st.contract_result_name(s), u)?;
+                expr(Some(st.contract_cond(s)), u)
+            }
+            StmtKind::CoreturnStmt => {
+                expr(st.coreturn_operand(s), u)?;
+                expr(st.coreturn_promise_call(s), u)
+            }
+            StmtKind::CoroutineBodyStmt => stmt(Some(st.coroutine_body(s).body), u),
+            StmtKind::GCCAsmStmt => {
+                for op in st.asm_operands(s) {
+                    self.used_in_expr(op.expr, u, d)?;
+                }
+                Some(())
+            }
+            StmtKind::CXXTryStmt => {
+                stmt(Some(st.try_block(s)), u)?;
+                for h in lists.iter::<StmtId>(st.try_handlers(s)) {
+                    self.used_in_stmt(h, u, d)?;
+                }
+                Some(())
+            }
+            StmtKind::CXXCatchStmt => {
+                var(st.catch_var(s), u)?;
+                stmt(Some(st.catch_block(s)), u)
             }
         }
     }
