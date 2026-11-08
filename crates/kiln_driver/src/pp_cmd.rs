@@ -283,7 +283,7 @@ impl Job<'_> {
         let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));
         if let Some(d) = &deps {
             let d2 = Rc::clone(d);
-            search.set_observer(Box::new(move |sm, e| on_search_event(&d2, sm, e)));
+            search.set_observer(Box::new(move |_, e| on_search_event(&d2, e)));
         }
         let mut opts = self.pp_options(predefines);
         opts.parser_pragmas = staged;
@@ -358,7 +358,7 @@ impl Job<'_> {
             pp.set_feature_queries(Box::new(features));
         }
         if let Some(d) = &deps {
-            pp.set_callbacks(Box::new(DepCallbacks { list: Rc::clone(d), sm }));
+            pp.set_callbacks(Box::new(DepCallbacks::new(Rc::clone(d), sm)));
         }
         pp.enter_main_file(main);
         Some((pp, deps))

@@ -32,7 +32,7 @@ impl error::Error for LocSpaceExhausted {}
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum LoadError {
-    /// Canonicalizing or reading the path failed.
+    /// Opening or reading the path failed.
     Io(io::Error),
     /// The file does not fit in the remaining location space.
     LocSpaceExhausted,
@@ -298,7 +298,8 @@ pub struct SourceManager {
     /// a mark sets the kind from its location to the end of its range or
     /// the next mark in the range ([`set_file_kind`](Self::set_file_kind)).
     kinds: RwLock<Vec<(u32, FileKind)>>,
-    by_path: Mutex<HashMap<PathBuf, FileId>>,
+    /// Loaded files by identity ([`FileKey`]).
+    by_path: Mutex<HashMap<FileKey, FileId>>,
     alloc: Mutex<Alloc>,
     /// Index of the range found by the last lookup (clang's
     /// `LastFileIDLookup`): a hint only, checked before use.
@@ -333,6 +334,59 @@ pub enum SourcePathStyle {
 
 /// `(old, new)` prefix pairs of a `-f*-prefix-map=` option.
 type PrefixMap = Box<[(Box<str>, Box<str>)]>;
+
+/// The contents of the open file `file`, whose metadata is `meta`: a
+/// regular file is read up to its size at `fstat` time (usually one
+/// `read`; clang's `MemoryBuffer::getOpenFile` reads that many bytes too),
+/// anything else to its end.
+///
+/// # Errors
+/// The read failed.
+pub fn read_open_file(file: &mut fs::File, meta: &fs::Metadata) -> io::Result<Vec<u8>> {
+    if !meta.is_file() {
+        let mut bytes = Vec::new();
+        io::Read::read_to_end(file, &mut bytes)?;
+        return Ok(bytes);
+    }
+    let len = usize::try_from(meta.len()).map_err(|_| io::ErrorKind::OutOfMemory)?;
+    let mut bytes = vec![0; len];
+    let mut n = 0;
+    while n < len {
+        match io::Read::read(file, &mut bytes[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    bytes.truncate(n);
+    Ok(bytes)
+}
+
+/// The identity of a file on disk (clang `llvm::sys::fs::UniqueID`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum FileKey {
+    /// Device and inode number.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Unique(u64, u64),
+    /// The canonical path, where there is no inode number.
+    #[cfg_attr(unix, allow(dead_code))]
+    Canonical(PathBuf),
+}
+
+/// The [`FileKey`] of the file at `path`, whose metadata is `meta`.
+#[cfg(unix)]
+#[allow(clippy::unnecessary_wraps)] // the non-Unix twin can fail
+fn file_key(_path: &Path, meta: &fs::Metadata) -> io::Result<FileKey> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(FileKey::Unique(meta.dev(), meta.ino()))
+}
+
+/// The [`FileKey`] of the file at `path`, whose metadata is `meta`.
+#[cfg(not(unix))]
+fn file_key(path: &Path, _meta: &fs::Metadata) -> io::Result<FileKey> {
+    fs::canonicalize(path).map(FileKey::Canonical)
+}
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -438,24 +492,52 @@ impl SourceManager {
 
     /// Loads the file at `path`.
     ///
-    /// Identity is by canonical path: loading the same file again (through
-    /// any path that canonicalizes to it) returns the same id without
-    /// touching the disk. The buffer's [`file_name`](Self::file_name) is
-    /// `path` as given on first load. Invalid UTF-8 is replaced with U+FFFD
-    /// and recorded in the [`load_report`](Self::load_report).
+    /// Identity is by the file itself, as clang's `FileManager` identifies
+    /// a file by its `UniqueID`: on Unix the device and inode number of
+    /// the opened file, elsewhere its canonical path. Loading the same
+    /// file again (through any path, a symbolic link or a `..` spelling)
+    /// returns the same id without reading it again. The file is opened
+    /// once, identified with one `fstat` of the open descriptor and read
+    /// from it: no path is canonicalized (spec/source.md "`SourceManager` API").
+    /// The buffer's [`file_name`](Self::file_name) is `path` as given on
+    /// first load. Invalid UTF-8 is replaced with U+FFFD and recorded in
+    /// the [`load_report`](Self::load_report).
     pub fn load_file(&self, path: &Path) -> Result<FileId, LoadError> {
-        let canonical = fs::canonicalize(path)?;
+        self.load(path, false)
+    }
+
+    /// [`load_file`](Self::load_file) for a header: only a regular file
+    /// loads; anything else that exists (a directory, a device) is an
+    /// [`io::ErrorKind::InvalidInput`] error.
+    pub fn load_regular_file(&self, path: &Path) -> Result<FileId, LoadError> {
+        self.load(path, true)
+    }
+
+    fn load(&self, path: &Path, regular_only: bool) -> Result<FileId, LoadError> {
+        let mut file = fs::File::open(path)?;
+        let meta = file.metadata()?;
+        if meta.is_dir() {
+            return Err(io::Error::new(io::ErrorKind::IsADirectory, "is a directory").into());
+        }
+        if regular_only && !meta.is_file() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file").into());
+        }
+        let key = file_key(path, &meta)?;
         let mut by_path = lock(&self.by_path);
-        if let Some(&id) = by_path.get(&canonical) {
+        if let Some(&id) = by_path.get(&key) {
             return Ok(id);
         }
-        let bytes = fs::read(&canonical)?;
+        if meta.len() >= FILE_SPACE_END {
+            return Err(LoadError::LocSpaceExhausted);
+        }
+        let bytes = read_open_file(&mut file, &meta)?;
+        drop(file);
         if bytes.len() as u64 >= FILE_SPACE_END {
             return Err(LoadError::LocSpaceExhausted);
         }
         let (text, report) = decode_utf8(bytes);
         let id = self.push_file(path.to_string_lossy().into(), text, report)?;
-        by_path.insert(canonical, id);
+        by_path.insert(key, id);
         Ok(id)
     }
 
