@@ -216,6 +216,7 @@ impl Sema<'_, '_> {
         let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
         let mut out = Vec::with_capacity(written.len());
         let mut has_expr = packed;
+        let mut expanded = false;
         let mut failed = false;
         {
             let mut s = Substituter::new(self, &args);
@@ -228,6 +229,7 @@ impl Sema<'_, '_> {
                     Ok(Some(v)) => {
                         // An expanded pack: compare after conversion.
                         has_expr = true;
+                        expanded = true;
                         out.extend(v);
                         continue;
                     }
@@ -273,8 +275,11 @@ impl Sema<'_, '_> {
             return true;
         }
         // In partial ordering both sides name `a`'s synthesized
-        // parameters: nothing to convert.
-        if !has_expr || ordering {
+        // parameters: nothing to convert, except the elements of an
+        // expanded pack, which come back as expressions (`P<0, D...>`
+        // deducing `D` = `<1, E...>` from `P<0, 1, E...>`; libstdc++'s
+        // `_Parse_int<'0', 'x', D...>` against `<'0', D...>`, WP-811).
+        if !has_expr || (ordering && !expanded) {
             return false;
         }
         // A substituted expression argument (`N + 1`) is converted to

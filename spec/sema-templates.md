@@ -1554,6 +1554,13 @@ silently (`diag = None`) at those sites. S3O lists them.
    at least as specialized as `X<T, when<f<T>::value>>` (WP-787,
    Boost.Hana; `partial_args_match` with `ordering`,
    `tests/conformance/temp.spec.partial.match/order-non-deduced-context-must-match.cpp`).
+   The one exception is a non-type pack whose substituted elements come
+   back as expressions: they are converted before comparing, so
+   `template <char... D> X<'0', 'x', D...>` (`D` = `<'x', D'...>`
+   deduced for `<'0', D...>`) is more specialized than
+   `template <char... D> X<'0', D...>`, as libstdc++'s `_Parse_int` for
+   hex literals needs (WP-811,
+   `tests/conformance/temp.spec.partial.match/order-nontype-pack-leading-values-run.cpp`).
    A request for the specialization while its partials are matched
    (step 3 substituting a default template argument that names it, as
    `X<T, enable_if_t<is_convertible_v<T, S>>>` with a constructor
