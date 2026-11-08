@@ -206,7 +206,8 @@ pub(crate) fn float_control(
         None
     };
     if !is(0, Punct::LParen) {
-        cx.report_what(DiagId::parse_expected, "'('", at(0));
+        // clang reports it at the `float_control` token.
+        cx.report_what(DiagId::parse_expected, "'('", loc);
         return None;
     }
     let Some(kind) = cx.word(rest.get(1)) else { return malformed(1) };

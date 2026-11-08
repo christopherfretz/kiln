@@ -9,6 +9,7 @@
 //! semantics (spec/codegen.md "Floating-point semantics").
 
 use kiln_ast::fp::{FpContract, FpOptions};
+use kiln_codegen::ComplexRange;
 
 use crate::args::ArgError;
 
@@ -44,7 +45,7 @@ const FLAGS: &[&str] = &[
 /// otherwise).
 const VALUED: &[(&str, &[&str])] = &[
     ("-ffp-contract=", &["fast", "on", "off", "fast-honor-pragmas"]),
-    ("-ffp-model=", &["fast", "precise", "strict"]),
+    ("-ffp-model=", &["fast", "precise", "strict", "aggressive"]),
     ("-ffp-exception-behavior=", &["ignore", "maytrap", "strict"]),
     ("-ffp-eval-method=", &["source", "double", "extended"]),
     ("-fexcess-precision=", &["fast", "standard", "16"]),
@@ -76,6 +77,18 @@ pub struct FpModel {
     pub unsafe_math: bool,
     /// The `-fdenormal-fp-math=` mode, `"output,input"` (`None`: IEEE).
     pub denormal: Option<String>,
+    /// The `_Complex` multiply/divide algorithm (clang's cc1
+    /// `-complex-range=`; none is full).
+    pub complex_range: ComplexRange,
+}
+
+/// clang's `LangOptions::ComplexRangeKind` as the driver tracks it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Range {
+    Kiln(ComplexRange),
+    /// `promoted` (clang 22's `-ffp-model=fast`): division in the next
+    /// wider type, which kiln does not implement.
+    Promoted,
 }
 
 impl FpFlags {
@@ -110,6 +123,13 @@ impl FpFlags {
         self.seq.push("-Ofast".to_owned());
     }
 
+    /// Records a valid complex-range flag (`-f[no-]cx-limited-range`,
+    /// `-f[no-]cx-fortran-rules`, `-fcomplex-arithmetic=full|improved|basic`):
+    /// clang orders them with the FP flags.
+    pub fn note_complex(&mut self, arg: &str) {
+        self.seq.push(arg.to_owned());
+    }
+
     /// The flag among `-ffast-math`, `-funsafe-math-optimizations` and
     /// `-ffp-model=fast` that makes the link add `crtfastmath.o` (clang
     /// `isFastMathRuntimeAvailable`: the last of them and their negations,
@@ -125,23 +145,31 @@ impl FpFlags {
                     | "-fno-unsafe-math-optimizations"
             ) || a.starts_with("-ffp-model=")
         })?;
-        matches!(last.as_str(), "-ffast-math" | "-funsafe-math-optimizations" | "-ffp-model=fast")
-            .then_some(last.as_str())
+        matches!(
+            last.as_str(),
+            "-ffast-math"
+                | "-funsafe-math-optimizations"
+                | "-ffp-model=fast"
+                | "-ffp-model=aggressive"
+        )
+        .then_some(last.as_str())
     }
 
     /// Runs the state machine (clang `RenderFloatingPointOptions`):
-    /// `ofast` says `-Ofast` is the optimization level, `default_denormal`
-    /// is the target's denormal mode (x86-64 with `crtfastmath.o`:
-    /// `preserve-sign`). Flags whose final effect needs the FP
-    /// environment are reported to `errors`.
+    /// `ofast` says `-Ofast` is the optimization level, `clang22` selects
+    /// clang 22's rules over clang 19's (`-fclang-compat=`),
+    /// `default_denormal` is the target's denormal mode (x86-64 with
+    /// `crtfastmath.o`: `preserve-sign`). Flags whose final effect needs
+    /// the FP environment are reported to `errors`.
     #[must_use]
     pub fn resolve(
         &self,
         ofast: bool,
+        clang22: bool,
         default_denormal: Option<&str>,
         errors: &mut Vec<ArgError>,
     ) -> FpModel {
-        let mut s = State::new(default_denormal);
+        let mut s = State::new(default_denormal, clang22);
         for a in &self.seq {
             s.apply(a, ofast);
         }
@@ -173,10 +201,17 @@ struct State<'a> {
     seen_unsafe: bool,
     denormal: Option<String>,
     default_denormal: Option<&'a str>,
+    /// clang 22's rules (`-ffp-model=fast` keeps NaNs and infinities and
+    /// promotes complex division; `aggressive` is the old `fast`).
+    clang22: bool,
+    /// The complex range, and the flag that set it.
+    range: Option<(Range, String)>,
+    /// `-ffp-model=aggressive` under clang 19 (an unsupported value).
+    aggressive19: bool,
 }
 
 impl<'a> State<'a> {
-    fn new(default_denormal: Option<&'a str>) -> Self {
+    fn new(default_denormal: Option<&'a str>, clang22: bool) -> Self {
         State {
             honor_infs: true,
             honor_nans: true,
@@ -195,11 +230,20 @@ impl<'a> State<'a> {
             seen_unsafe: false,
             denormal: default_denormal.map(str::to_owned),
             default_denormal,
+            clang22,
+            range: None,
+            aggressive19: false,
         }
     }
 
-    /// clang's `applyFastMath`.
-    fn fast_math(&mut self) {
+    fn set_range(&mut self, r: Range, flag: &str) {
+        self.range = Some((r, flag.to_owned()));
+    }
+
+    /// clang's `applyFastMath` (with the basic complex range of
+    /// `-ffast-math`, `-Ofast` and `-ffp-model=aggressive`).
+    fn fast_math(&mut self, flag: &str) {
+        self.set_range(Range::Kiln(ComplexRange::Basic), flag);
         self.honor_infs = false;
         self.honor_nans = false;
         self.math_errno = false;
@@ -226,10 +270,14 @@ impl<'a> State<'a> {
     fn apply(&mut self, a: &str, ofast: bool) {
         let owned = || Some(a.to_owned());
         match a {
-            "-Ofast" if ofast => self.fast_math(),
+            "-Ofast" if ofast => self.fast_math(a),
             "-Ofast" => {}
-            "-ffast-math" => self.fast_math(),
+            "-ffast-math" => self.fast_math(a),
             "-fno-fast-math" => {
+                // clang 22 drops the complex range too; clang 19 keeps it.
+                if self.clang22 {
+                    self.range = None;
+                }
                 self.honor_infs = true;
                 self.honor_nans = true;
                 self.math_errno = true;
@@ -277,6 +325,11 @@ impl<'a> State<'a> {
             "-fno-trapping-math" => self.trapping = None,
             "-frounding-math" => self.rounding = owned(),
             "-fno-rounding-math" => self.rounding = None,
+            "-fcx-limited-range" => self.set_range(Range::Kiln(ComplexRange::Basic), a),
+            "-fcx-fortran-rules" => self.set_range(Range::Kiln(ComplexRange::Improved), a),
+            "-fno-cx-limited-range" | "-fno-cx-fortran-rules" => {
+                self.set_range(Range::Kiln(ComplexRange::Full), a);
+            }
             _ => self.apply_valued(a),
         }
     }
@@ -300,7 +353,16 @@ impl<'a> State<'a> {
             self.contract = "on";
             self.denormal = None;
             match v {
-                "fast" => self.fast_math(),
+                "fast" if self.clang22 => {
+                    // clang 22: fast math without the finite-math flags,
+                    // and promoted complex division.
+                    self.fast_math(a);
+                    (self.honor_infs, self.honor_nans) = (true, true);
+                    self.set_range(Range::Promoted, a);
+                }
+                "fast" => self.fast_math(a),
+                "aggressive" if self.clang22 => self.fast_math(a),
+                "aggressive" => self.aggressive19 = true,
                 "strict" => {
                     self.trapping = owned();
                     self.rounding = owned();
@@ -308,12 +370,19 @@ impl<'a> State<'a> {
                 }
                 _ => {}
             }
+            if self.clang22 && matches!(v, "precise" | "strict") {
+                self.set_range(Range::Kiln(ComplexRange::Full), a);
+            }
         } else if let Some(v) = a.strip_prefix("-ffp-exception-behavior=") {
             self.trapping = (v != "ignore").then(owned).flatten();
         } else if let Some(v) = a.strip_prefix("-ffp-eval-method=") {
             self.eval = (v != "source").then(owned).flatten();
         } else if let Some(v) = a.strip_prefix("-fexcess-precision=") {
             self.excess = (v == "16").then(owned).flatten();
+        } else if let Some(v) = a.strip_prefix("-fcomplex-arithmetic=") {
+            if let Some(r) = ComplexRange::from_arg(v) {
+                self.set_range(Range::Kiln(r), a);
+            }
         } else if let Some(v) = a.strip_prefix("-fdenormal-fp-math=") {
             let v = if v.contains(',') { v.to_owned() } else { format!("{v},{v}") };
             self.denormal = (v != "ieee,ieee").then_some(v);
@@ -329,6 +398,22 @@ impl<'a> State<'a> {
                 errors.push(ArgError::UnsupportedByKiln(f.clone()));
             }
         }
+        if self.aggressive19 {
+            errors.push(ArgError::UnsupportedValue("-ffp-model=".into(), "aggressive".into()));
+        }
+        let complex_range = match &self.range {
+            None => ComplexRange::Full,
+            Some((Range::Kiln(r), _)) => *r,
+            Some((Range::Promoted, flag)) => {
+                // Promoted complex division (clang 22 `-ffp-model=fast`)
+                // is not implemented: an error, never full or basic
+                // (spec/driver.md "Floating-point flags").
+                errors.push(ArgError::UnsupportedByKiln(format!(
+                    "{flag} (promoted complex arithmetic; add -fcomplex-arithmetic=basic)"
+                )));
+                ComplexRange::Full
+            }
+        };
         let unsafe_math = self.assoc && self.recip && !self.signed_zeros && self.approx_func;
         let fast_math = !self.honor_infs && !self.honor_nans && !self.math_errno && unsafe_math;
         FpModel {
@@ -350,6 +435,7 @@ impl<'a> State<'a> {
             fast_math,
             unsafe_math,
             denormal: self.denormal,
+            complex_range,
         }
     }
 }
@@ -359,18 +445,56 @@ mod tests {
     use super::*;
 
     fn model(args: &[&str]) -> (FpModel, Vec<ArgError>) {
+        model_at(false, args)
+    }
+
+    fn model_at(clang22: bool, args: &[&str]) -> (FpModel, Vec<ArgError>) {
         let mut f = FpFlags::default();
         let mut errors = Vec::new();
         for a in args {
             if *a == "-Ofast" {
                 f.note_ofast();
+            } else if a.contains("cx-") || a.starts_with("-fcomplex-arithmetic=") {
+                f.note_complex(a);
             } else if let Some(Err(e)) = f.parse_arg(a) {
                 errors.push(e);
             }
         }
         let ofast = args.iter().rev().find(|a| a.starts_with("-O")) == Some(&"-Ofast");
-        let m = f.resolve(ofast, None, &mut errors);
+        let m = f.resolve(ofast, clang22, None, &mut errors);
         (m, errors)
+    }
+
+    #[test]
+    fn clang22_fp_models() {
+        // clang 22: `fast` keeps NaNs and infinities (no `__FAST_MATH__`)
+        // and promotes complex division (an error in kiln); `aggressive`
+        // is the old `fast`.
+        let (m, e) = model_at(true, &["-ffp-model=fast"]);
+        assert!(!m.fast_math && m.unsafe_math && !m.opts.nnan && !m.opts.ninf);
+        assert!(m.opts.reassoc && !m.opts.math_errno && m.opts.contract == FpContract::Fast);
+        assert!(
+            matches!(&e[..], [ArgError::UnsupportedByKiln(f)] if f.starts_with("-ffp-model=fast"))
+        );
+        let (m, e) = model_at(true, &["-ffp-model=fast", "-fcx-fortran-rules"]);
+        assert!(e.is_empty() && m.complex_range == ComplexRange::Improved);
+        let (m, e) = model_at(true, &["-ffp-model=aggressive"]);
+        assert!(
+            e.is_empty() && m.fast_math && m.opts.nnan && m.complex_range == ComplexRange::Basic
+        );
+        let (m, e) = model_at(true, &["-ffp-model=fast", "-ffp-model=precise"]);
+        assert!(e.is_empty() && m.opts == FpOptions::default());
+        assert_eq!(m.complex_range, ComplexRange::Full);
+        let (m, _) = model_at(true, &["-fcx-limited-range", "-fno-fast-math"]);
+        assert_eq!(m.complex_range, ComplexRange::Full);
+        // clang 19: `fast` is -ffast-math, `aggressive` an unknown value,
+        // and -fno-fast-math keeps the range.
+        let (m, e) = model(&["-ffp-model=fast"]);
+        assert!(e.is_empty() && m.fast_math && m.complex_range == ComplexRange::Basic);
+        let (_, e) = model(&["-ffp-model=aggressive"]);
+        assert_eq!(e, [ArgError::UnsupportedValue("-ffp-model=".into(), "aggressive".into())]);
+        let (m, _) = model(&["-fcx-limited-range", "-fno-fast-math"]);
+        assert_eq!(m.complex_range, ComplexRange::Basic);
     }
 
     #[test]

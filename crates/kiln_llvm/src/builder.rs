@@ -333,7 +333,7 @@ impl<'m> IrBuilder<'m> {
     }
 
     fn fmf_ok(&self, ty: TypeId, fmf: FastMath) -> IrResult<()> {
-        if fmf != FastMath::NONE && !is_fp_math_type(self.types(), ty) {
+        if fmf != FastMath::NONE && !is_fp_math_type(self.types(), ty, self.m.ir_version) {
             return err(
                 IrErrorKind::InvalidFlags,
                 "fast-math flags on a non-floating-point operation",
@@ -460,7 +460,28 @@ impl<'m> IrBuilder<'m> {
         if !op.allowed_flags().contains(flags) {
             return err(IrErrorKind::InvalidFlags, format!("invalid flags on {}", op.name()));
         }
-        self.insert(InstKind::Cast { op, flags, val }, to)
+        self.insert(InstKind::Cast { op, flags, fmf: FastMath::NONE, val }, to)
+    }
+
+    /// `fpext`/`fptrunc` with fast-math flags (LLVM 20+'s
+    /// `FPMathOperator`; at an older [`Module::ir_version`] the flags are
+    /// dropped, as LLVM's `IRBuilder` would).
+    pub fn cast_fmf(
+        &mut self,
+        op: CastOp,
+        fmf: FastMath,
+        val: Value,
+        to: TypeId,
+    ) -> IrResult<Value> {
+        if fmf == FastMath::NONE
+            || self.m.ir_version < 20
+            || !matches!(op, CastOp::FPExt | CastOp::FPTrunc)
+        {
+            return self.cast_ex(op, Flags::NONE, val, to);
+        }
+        let from = self.operand_ty(val)?;
+        check_cast(self.types(), op, from, to)?;
+        self.insert(InstKind::Cast { op, flags: Flags::NONE, fmf, val }, to)
     }
 
     /// A conversion.
@@ -903,7 +924,7 @@ impl<'m> IrBuilder<'m> {
         }
         if !self.types().is_float_or_float_vector(ret)
             && o.fmf != FastMath::NONE
-            && !is_fp_math_type(self.types(), ret)
+            && !is_fp_math_type(self.types(), ret, self.m.ir_version)
         {
             return err(
                 IrErrorKind::InvalidFlags,
@@ -1240,9 +1261,18 @@ fn to_align(bytes: u64) -> IrResult<Align> {
 }
 
 /// Types that may carry fast-math flags on phi/select/call: floating-point
-/// scalars and vectors, and arrays of them (LLVM's `FPMathOperator`).
-pub fn is_fp_math_type(t: &TypeTable, ty: TypeId) -> bool {
+/// scalars and vectors, and arrays of them (LLVM's `FPMathOperator`); at
+/// `ir_version` 20 and later also a literal struct of one such type
+/// repeated (`{ double, double }`, a complex libcall's result).
+pub fn is_fp_math_type(t: &TypeTable, ty: TypeId, ir_version: u32) -> bool {
     let mut ty = ty;
+    if ir_version >= 20
+        && let TypeData::Struct { fields, .. } = t.data(ty)
+        && let Some(&first) = fields.first()
+        && fields.iter().all(|&f| f == first)
+    {
+        return t.is_float_or_float_vector(first);
+    }
     while let Some((e, _)) = t.array_info(ty) {
         ty = e;
     }

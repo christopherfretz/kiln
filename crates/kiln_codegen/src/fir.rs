@@ -218,7 +218,7 @@ pub(crate) enum Op {
 /// `fmf` if `ty` may carry fast-math flags (LLVM `FPMathOperator`), else
 /// none.
 fn fp_math(m: &Module, ty: TypeId, fmf: FastMath) -> FastMath {
-    if fmf != FastMath::NONE && kiln_llvm::is_fp_math_type(&m.types, ty) {
+    if fmf != FastMath::NONE && kiln_llvm::is_fp_math_type(&m.types, ty, m.ir_version) {
         fmf
     } else {
         FastMath::NONE
@@ -1181,6 +1181,11 @@ impl Fir {
                     Op::Freeze { v } => b.freeze(val(*v))?,
                     Op::ICmp { p, l, r } => b.icmp(*p, val(*l), val(*r))?,
                     Op::FCmp { p, l, r } => b.fcmp_ex(*p, inst.fmf, val(*l), val(*r))?,
+                    Op::Cast { op: op @ (CastOp::FPExt | CastOp::FPTrunc), v, to, .. }
+                        if inst.fmf != FastMath::NONE =>
+                    {
+                        b.cast_fmf(*op, inst.fmf, val(*v), *to)?
+                    }
                     Op::Cast { op, flags, v, to } => b.cast_ex(*op, *flags, val(*v), *to)?,
                     Op::Gep { src, base, idx, flags } => {
                         let idx: Vec<Value> = idx.iter().map(|&x| val(x)).collect();
