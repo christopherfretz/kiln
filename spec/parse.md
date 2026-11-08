@@ -1836,6 +1836,23 @@ for `^^`, §5 for splices).
 ### 6.2 Attributes (`attr.rs`)
 - **Syntax:** `[[ ]]` (with `using ns:`), `alignas(…)`, and GNU
   `__attribute__((…))` are all collected as scope, name and arguments.
+- **Attribute scopes** (WP-889/WP-891; clang
+  `TryParseCXX11AttributeIdentifier`): a `[[...]]` scope, name, or `using`
+  prefix is an identifier or keyword (`cxx11_attr_ident`). `__clang__` is
+  a predefined macro, so `[[__clang__::x]]` arrives as the number `1`; a
+  numeric token whose macro expansion is spelled `__clang__` is read as
+  `_Clang` (the clang scope, spec/sema.md §4.5 "Attribute namespaces")
+  with the warning `'__clang__' is a predefined macro name, not an
+  attribute scope specifier; did you mean '_Clang' instead?`
+  [-Wignored-attributes] and a fix-it to `_Clang`; the attribute itself
+  is kept. Any other number is not a name. Tests:
+  `tests/conformance/dcl.attr.grammar/clang-scope-predefined-macro{,-silenced}.cpp`.
+- **GNU list recovery** (WP-878; clang `ParseGNUAttributes`): in
+  `__attribute__((...))` anything other than a name or `,` ends the list;
+  each of the two closing `)` that is missing is `expected ')'` after the
+  previous token (no `to match this '('` note), followed by a skip to
+  the next `)` that stops at `;`; both are reported when both are
+  missing. Test: `tests/conformance/dcl.attr.grammar/gnu-attribute-list-recovery.cpp`.
 - **Arguments:**
   - Arguments are parsed as expressions only for attributes that take
     them (`takes_expr_args`): `deprecated`, `nodiscard`, `aligned`,

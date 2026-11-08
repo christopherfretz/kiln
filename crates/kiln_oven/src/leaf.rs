@@ -154,7 +154,7 @@ impl Oven {
         if self.ctx_depth != 0
             || self.cev_warn_next
             || self.ub_check_next
-            || self.potential_next
+            || self.potential_next.is_some()
             || self.plain_next
             || self.void_next
             || self.addr_next

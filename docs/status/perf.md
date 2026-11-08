@@ -497,6 +497,78 @@ jobs per step of `S`.
   build cost repeats in every split, so a split would cut at most 30-40 s
   and only on aarch64.
 
+### WP-862: -Wall uninitialized-values analysis cost (2026-11-08)
+
+The analysis runs only in a function that declares a tracked local without
+an initializer, and only when one of its four warnings is enabled
+(spec/sema.md §7.14). Everything below compares `-Wall` with
+`-Wall -Wno-uninitialized` on the `harness`-profile `kiln++` of
+branch `wp/862`, on aarch64. Wall times are the best of 5, and RSS is the
+peak (`/usr/bin/time -f "%e %M"`). The host load was about 20.
+
+Command lines. `S` is the `.oss/src` checkout made by `scripts/oss/oss-build.sh`:
+fmt is at tag 12.1.0 and nlohmann_json at v3.12.0. The same flags go to
+`kiln++` and `clang++-19`, each followed by `-Wall`, or by
+`-Wall -Wno-uninitialized`:
+
+```
+FM: -std=c++20 -fsyntax-only -I$S/fmt/include -I$S/fmt/test -I$S/fmt/test/gtest \
+    -DGTEST_HAS_STD_WSTRING=1 $S/fmt/test/format-test.cc
+JS: -std=c++20 -fsyntax-only -I$S/nlohmann_json/include \
+    -I$S/nlohmann_json/tests/thirdparty/doctest -I$S/nlohmann_json/tests/thirdparty/fifo_map \
+    -DJSON_TEST_KEEP_MACROS $S/nlohmann_json/tests/src/unit-algorithms.cpp
+PS: -std=c++20 -fsyntax-only perf_small.cpp
+```
+
+`perf_small.cpp` is the synthetic worst case: 300 functions, each with 8
+uninitialized locals that are assigned under branches in a loop and read
+afterwards. It is 6601 lines, md5 `7812418212cd0567d8af2cbf9604c533`. To
+generate it:
+
+```python
+print("int g(int);")
+for f in range(300):
+    print(f"int f{f}(int n, bool b) {{")
+    for v in range(8): print(f"  int v{v};")
+    print("  for (int i = 0; i < n; ++i) {")
+    for v in range(8): print(f"    if (b && i > {v}) v{v} = g(i); else v{v} = {v};")
+    print("  }")
+    print("  switch (n) { case 1: v0 = 1; break; default: v1 = 2; }")
+    print("  return " + " + ".join(f"(n ? v{v} : 0)" for v in range(8)) + ";")
+    print("}")
+```
+
+Instruction counts are from `valgrind --tool=callgrind` under
+`ulimit -v 3000000`:
+
+- FM: 15,430,093,412 vs 15,382,733,723 (+0.31%).
+- JS: 11,347,626,373 vs 11,347,646,152 (0.00%).
+- PS: 981,406,398 vs 851,506,828 (+15.3%).
+  - The CFG build accounts for most of it, about 148M (`cfg_ensure`,
+    inclusive). The dataflow itself is about 38M.
+  - clang builds the same CFG whenever an analysis-based warning is enabled.
+
+Wall time and peak RSS, given as `-Wall` / `-Wall -Wno-uninitialized`:
+
+- FM:
+  - kiln++: 2.74 s / 2.81 s, 113 MB / 112 MB;
+  - clang++-19: 2.52 s / 2.50 s, 287 MB / 287 MB.
+- JS:
+  - kiln++: 1.97 s / 2.01 s, 88 MB / 88 MB;
+  - clang++-19: 2.13 s / 2.09 s, 306 MB / 307 MB.
+- PS:
+  - kiln++: 0.08 s / 0.07 s, 13.1 MB / 12.7 MB;
+  - clang++-19: 0.07 s / 0.06 s, 90 MB / 90 MB.
+
+`cargo xtask bench --compiler kwall.sh --compare-with knouninit.sh`, where
+the two wrappers exec `kiln++ -Wall` and `kiln++ -Wall -Wno-uninitialized`,
+over 50 entries × 5 runs:
+
+- geomean time 1.0092 (37,258 ms vs 37,455 ms in total);
+- geomean memory 1.0025.
+
+Both are within noise.
+
 ### WP-879: frontend throughput on repeated nested template-ids (2026-11-08)
 
 Found during the WP-879 reflection-mangling scaling study

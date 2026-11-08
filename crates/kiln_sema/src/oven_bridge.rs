@@ -457,6 +457,23 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.with_oven(Some(at), |oven, b| oven.evaluate_call(b, f, at))
     }
 
+    /// [`Oven::evaluate_potential`] of `e` (a never-constant check of a
+    /// `constexpr` function body), reported at `at`.
+    pub(crate) fn eval_potential(
+        &mut self,
+        e: ExprId,
+        at: Loc,
+    ) -> Result<ConstValueId, EvalFailure> {
+        if !self.eval_stack_ok(e) {
+            return Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant));
+        }
+        self.flush_member_refs();
+        if self.special.has_pending() {
+            self.flush_pending_deleted();
+        }
+        self.with_oven(Some(at), |oven, b| oven.evaluate_potential(b, e))
+    }
+
     /// The stack guard's check before entering the Oven (P4 (c)): the
     /// evaluation may instantiate, which re-enters sema.
     #[inline]

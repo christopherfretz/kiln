@@ -279,6 +279,7 @@ sema_make_signed_bad_type = Error (2) "'{0:make_signed|make_unsigned}' is only c
 sema_malformed_std_coroutine_handle = Error (0) "std::coroutine_handle isn't a class template";
 sema_malformed_std_coroutine_traits = Error (0) "std::coroutine_traits isn't a class template";
 sema_many_braces_around_scalar = Warning [ManyBracesAroundScalarInit] (0) "too many braces around scalar initializer";
+sema_maybe_uninit_var = WarningOff [ConditionalUninitialized] (2) "variable {0} may be uninitialized when {1:used here|captured by block}";
 sema_member_call_without_object = Error (0) "call to non-static member function without an object argument";
 sema_member_decl_no_match = Error (2) "out-of-line declaration of '{0}' does not match any declaration in {1}";
 sema_member_def_no_match = Error (2) "out-of-line definition of '{0}' does not match any declaration in {1}";
