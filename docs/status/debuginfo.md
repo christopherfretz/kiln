@@ -73,7 +73,7 @@ These are fmt 12.1.0 and nlohmann/json 3.12.0, built through
 ## Cost at `-g0`
 
 Every debug-information path is behind `Cg::dbg_on()`
-(`debuginfo/mod.rs:398`, one `Option` check on the function's debug
+(`debuginfo/mod.rs:403`, one `Option` check on the function's debug
 state), and the module's `Cg::di` (`module.rs:258`) stays `None`. `cargo xtask bench` on the
 whole corpus (46 entries, 5 runs each) compared this branch with main
 (fb89f25f5). Both were built with `--profile harness`. Main was recorded
