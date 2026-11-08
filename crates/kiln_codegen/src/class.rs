@@ -133,9 +133,7 @@ impl Cg<'_> {
         match self.opts.static_destructors {
             crate::StaticDestructors::All => false,
             crate::StaticDestructors::None => true,
-            crate::StaticDestructors::ThreadLocal => {
-                v.spec.tls() == kiln_ast::decl::TlsKind::None
-            }
+            crate::StaticDestructors::ThreadLocal => v.spec.tls() == kiln_ast::decl::TlsKind::None,
         }
     }
 

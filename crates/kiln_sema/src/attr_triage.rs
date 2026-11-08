@@ -121,7 +121,12 @@ pub static TABLE: &[Row] = &[
     r("Owner", GSL, C, LIFETIME),
     r("Pointer", GSL, C, LIFETIME),
     r("aarch64_sve_pcs", G | CL, A, "calling convention: changes the call ABI (WP-808)"),
-    r("aarch64_vector_pcs", G | CL, A, "calling convention (WP-808); an AArch64 declaration is accepted"),
+    r(
+        "aarch64_vector_pcs",
+        G | CL,
+        A,
+        "calling convention (WP-808); an AArch64 declaration is accepted",
+    ),
     r("acquire_capability", G | CL, C, TSA),
     r("acquire_handle", G | CL, C, ANALYSIS),
     r("acquire_shared_capability", G | CL, C, TSA),
@@ -170,6 +175,8 @@ pub static TABLE: &[Row] = &[
     r("cfi_canonical_jump_table", G | CL, B, INSTR),
     r22("cfi_salt", G | CL, B, INSTR),
     r22("cfi_unchecked_callee", G | CL, B, INSTR),
+    // clang spells it `__clang_arm_builtin_alias` (the name, its leading
+    // `__` trimmed as sema trims it).
     rt("clang_arm_builtin_alias", [G | CL, G | CL, 0, 0], A, "maps the declaration to a builtin"),
     r("clang_builtin_alias", G, A, "maps the declaration to a builtin"),
     r("cleanup", G | GS, A, "runs a cleanup function at scope exit (WP-807)"),
@@ -179,7 +186,12 @@ pub static TABLE: &[Row] = &[
     r("common", G | GS, A, "common-symbol linkage (clang rejects it in C++)"),
     r("constant", G, C, OFFLOAD),
     r("constexpr", MS, C, OFFLOAD),
-    r("constructor", G | GS, A, "registers the function in `llvm.global_ctors` / `llvm.global_dtors` (WP-807)"),
+    r(
+        "constructor",
+        G | GS,
+        A,
+        "registers the function in `llvm.global_ctors` / `llvm.global_dtors` (WP-807)",
+    ),
     r("consumable", G | CL, C, ANALYSIS),
     r("consumable_auto_cast_state", G | CL, C, ANALYSIS),
     r("consumable_set_state_on_read", G | CL, C, ANALYSIS),
@@ -195,7 +207,12 @@ pub static TABLE: &[Row] = &[
     r("cpu_dispatch", G | CL, A, "function multiversioning"),
     r("cpu_specific", G | CL, A, "function multiversioning"),
     r("cudart_builtin", G, C, OFFLOAD),
-    r("destructor", G | GS, A, "registers the function in `llvm.global_ctors` / `llvm.global_dtors` (WP-807)"),
+    r(
+        "destructor",
+        G | GS,
+        A,
+        "registers the function in `llvm.global_ctors` / `llvm.global_dtors` (WP-807)",
+    ),
     r("device", G, C, OFFLOAD),
     r("device_builtin", G, C, OFFLOAD),
     r("device_builtin_surface_type", G, C, OFFLOAD),
@@ -252,11 +269,21 @@ pub static TABLE: &[Row] = &[
     r("ms_abi", G | GS, A, "calling convention: changes the call ABI (WP-808)"),
     r("ms_struct", G | GS, A, "selects the MS or GCC bit-field layout"),
     r("musttail", G | CL, A, "guaranteed tail call"),
-    r("neon_polyvector_type", CL, A, "defines a vector type (only the GNU spelling is implemented)"),
+    r(
+        "neon_polyvector_type",
+        CL,
+        A,
+        "defines a vector type (only the GNU spelling is implemented)",
+    ),
     r("neon_vector_type", CL, A, "defines a vector type (only the GNU spelling is implemented)"),
     r("no_address_safety_analysis", G | GS, B, SAN),
     r("no_builtin", G | CL, A, "`no-builtins` / `no-builtin-X` function attributes (WP-808)"),
-    rt("no_caller_saved_registers", [0, 0, G | GS, G | GS], A, "calling convention: changes the call ABI (WP-808)"),
+    rt(
+        "no_caller_saved_registers",
+        [0, 0, G | GS, G | GS],
+        A,
+        "calling convention: changes the call ABI (WP-808)",
+    ),
     r22("no_cluster", G, C, OFFLOAD),
     r("no_instrument_function", G | GS, B, INSTR),
     r("no_profile_instrument_function", G | GS, B, INSTR),
@@ -271,7 +298,7 @@ pub static TABLE: &[Row] = &[
     r("no_stack_protector", G | GS | CL, B, INSTR),
     r("no_thread_safety_analysis", G | CL, C, TSA),
     rt("nocf_check", [0, 0, G | GS, G | GS], B, INSTR),
-    r("nocommon", G | GS, A, "common-symbol linkage (clang rejects it in C++)"),
+    r("nocommon", G | GS, C, "a no-op in C++, whose variables are never common symbols"),
     r22("noconvergent", G | CL, B, INLINE),
     r("noderef", G | CL, C, ANALYSIS),
     r("noduplicate", G | CL, B, INLINE),
@@ -338,7 +365,12 @@ pub static TABLE: &[Row] = &[
     r("ownership_takes", G | CL, C, ANALYSIS),
     r("param_typestate", G | CL, C, ANALYSIS),
     r("pascal", G | CL, C, NOCC),
-    r("pass_dynamic_object_size", G | CL, A, "hidden object-size parameter and `PS` mangling (WP-808)"),
+    r(
+        "pass_dynamic_object_size",
+        G | CL,
+        A,
+        "hidden object-size parameter and `PS` mangling (WP-808)",
+    ),
     r("pass_object_size", G | CL, A, "hidden object-size parameter and `PS` mangling (WP-808)"),
     r("patchable_function_entry", G | GS, B, INSTR),
     r("pcs", G | GS, C, NOCC),
@@ -410,7 +442,7 @@ pub static TABLE: &[Row] = &[
     r("test_typestate", G | CL, C, ANALYSIS),
     r("thiscall", G | GS, C, NOCC),
     r("tls_model", G | GS, A, "selects the TLS access model (WP-807)"),
-    r("transparent_union", G | GS, A, "changes how the union is passed"),
+    r("transparent_union", G | GS, C, "clang ignores it in C++ (-Wignored-attributes)"),
     r("try_acquire_capability", G | CL, C, TSA),
     r("try_acquire_shared_capability", G | CL, C, TSA),
     r("type_tag_for_datatype", G | CL, C, ANALYSIS),
@@ -493,9 +525,12 @@ pub fn attribute_support(
         let std = scope.is_none() && syntax != AttrSyntax::Gnu;
         // [dcl.attr.indet] is C++26; P3475R2 removes `carries_dependency`
         // from C++26 (WP-743).
-        if let Some(k) = crate::decl::attr_kind_of(name, std, gnu, clang_scope, syntax).filter(|&k| {
-            (k != AttrKind::INDETERMINATE || cxx26) && (k != AttrKind::CARRIES_DEPENDENCY || !cxx26)
-        }) {
+        if let Some(k) =
+            crate::decl::attr_kind_of(name, std, gnu, clang_scope, syntax).filter(|&k| {
+                (k != AttrKind::INDETERMINATE || cxx26)
+                    && (k != AttrKind::CARRIES_DEPENDENCY || !cxx26)
+            })
+        {
             return Support::Implemented(k);
         }
     }

@@ -70,6 +70,7 @@ pub mod x86_intrinsic_table {
     pub use kiln_llvm::intrinsics::TargetMem as Mem;
 }
 
+pub use builtins::{UNLOWERED_BUILTINS, is_unlowered_builtin};
 use kiln_abi::Target;
 use kiln_ast::Ast;
 use kiln_llvm::Module;
