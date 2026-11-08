@@ -858,5 +858,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-838 | ABI: reflection literal template argument mangles as `Lu6__infov…`; GCC 16 writes `LDm…` (`kiln_abi/src/mangle.rs`) | WP-818 | open |
 | WP-839 | test: `tests/conformance/dcl.attr/ir-used-retain-aligned.cpp` (WP-805) fails under `--compiler clang++-19`; fix the test or its directives | WP-818 | open |
 | WP-840 | sema accepts-invalid: calling a function template declared but never defined with a lambda argument (clang: "used but not defined ... type does not have linkage") | WP-818 | open |
+| WP-865 | diag: accepted-but-ignored warnings bundle (WP-711, WP-725, WP-718, WP-701, WP-702) | WP-711 | in progress |
 WP-511
 WP-512
