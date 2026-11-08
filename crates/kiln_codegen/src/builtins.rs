@@ -545,6 +545,16 @@ pub fn is_unlowered_builtin(name: &str) -> bool {
     UNLOWERED_BUILTINS.split_ascii_whitespace().any(|n| n == name)
 }
 
+/// A pointer and what [`Cg::pointer_with_alignment`] knows of it.
+#[derive(Clone, Copy)]
+pub(crate) struct PtrAlign {
+    pub v: V,
+    /// The alignment of the pointee.
+    pub align: u64,
+    /// The alignment came from a declaration (`AlignmentSource::Decl`).
+    pub decl: bool,
+}
+
 /// How [`Cg::emit_builtin`] handled a builtin call.
 pub(crate) enum BuiltinCall {
     /// Emitted inline: the value, or none for a `void` call.
@@ -1721,13 +1731,32 @@ impl Cg<'_> {
     }
 
     /// The pointer value of `e` and the alignment it is known to have
-    /// (clang `EmitPointerWithAlignment`).
+    /// (clang `EmitPointerWithAlignment`; see [`Cg::pointer_with_alignment`]).
     pub(crate) fn ptr_align(&mut self, e: ExprId) -> R<(V, u64)> {
+        let p = self.pointer_with_alignment(e)?;
+        Ok((p.v, p.align))
+    }
+
+    /// clang 19 `EmitPointerWithAlignment` (WP-819; spec/codegen.md §3,
+    /// "Pointer alignment"): the pointer `e`, the alignment of what it
+    /// points to, and whether that alignment came from a declaration
+    /// (`AlignmentSource::Decl`). Case by case:
+    /// - parentheses are skipped;
+    /// - a `NoOp`/`BitCast` from a pointer to a non-`void` type keeps the
+    ///   operand's alignment; an explicit cast of an operand whose alignment
+    ///   is not a declaration's takes the target's natural pointee alignment;
+    /// - array-to-pointer decay is the array lvalue's alignment;
+    /// - a derived-to-base conversion is the base's address and alignment
+    ///   from the operand's (`GetAddressOfBaseClass`);
+    /// - `&x`, `__builtin_addressof(x)`, `std::addressof(x)` and
+    ///   `std::__addressof(x)` (clang `getBuiltinCallee`, here
+    ///   [`Cg::is_std_builtin`]) are `x`'s lvalue alignment;
+    /// - anything else (including `?:` and `,`, clang's TODO) is the scalar
+    ///   value with its type's natural pointee alignment.
+    pub(crate) fn pointer_with_alignment(&mut self, e: ExprId) -> R<PtrAlign> {
         let ast = self.ast;
+        let e = self.skip_parens(e);
         let n = *ast.exprs.get(e);
-        if n.kind() == ExprKind::ParenExpr {
-            return self.ptr_align(ast.exprs.operand(e));
-        }
         if n.kind().is_cast() {
             let s = ast.exprs.operand(e);
             match ast.exprs.cast_kind(e) {
@@ -1737,63 +1766,146 @@ impl Cg<'_> {
                         && ast.types.is_pointer(sq)
                         && !ast.types.is_void(p)
                     {
-                        let (v, a) = self.ptr_align(s)?;
-                        if n.kind() == ExprKind::ImplicitCastExpr || self.decl_aligned(s) {
-                            return Ok((v, a));
-                        }
+                        let mut r = self.pointer_with_alignment(s)?;
                         // An explicit cast honors the target type's
-                        // alignment unless the source is a declaration.
-                        let a = self.pointee_align(n.ty());
-                        return Ok((v, a));
+                        // alignment unless the operand's is a declaration's.
+                        if n.kind() != ExprKind::ImplicitCastExpr && !r.decl {
+                            r.align = self.natural_pointee_align(n.ty());
+                        }
+                        return Ok(r);
                     }
                 }
                 CastKind::ArrayToPointerDecay => {
                     let lv = self.emit_lvalue(s)?;
+                    let decl = self.lvalue_from_decl(s);
                     let v = self.decay(lv.addr, lv.q);
-                    return Ok((v, lv.addr.align));
+                    return Ok(PtrAlign { v, align: lv.addr.align, decl });
+                }
+                ck @ (CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase) => {
+                    let sq = ast.exprs.get(s).ty();
+                    if let Some(derived) = ast.types.pointee(sq).and_then(|t| ast.types.as_record(t))
+                    {
+                        let r = self.pointer_with_alignment(s)?;
+                        let (vb, off) = self.base_path(e, derived)?;
+                        let null_check = ck == CastKind::DerivedToBase && !self.is_this_expr(s);
+                        let ty = self.mty(ast.types.pointee(sq).expect("checked"));
+                        let this = Addr { v: r.v, ty, align: r.align };
+                        let (v, align) = self.base_address(this, derived, vb, off, null_check)?;
+                        return Ok(PtrAlign { v, align, decl: r.decl });
+                    }
                 }
                 _ => {}
             }
         }
-        if n.kind() == ExprKind::UnaryOperator && ast.exprs.unary_op(e) == UnaryOp::AddrOf {
-            let lv = self.emit_lvalue(ast.exprs.operand(e))?;
-            return Ok((lv.addr.v, lv.addr.align));
+        let lvalue_of = match n.kind() {
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::AddrOf => {
+                Some(ast.exprs.operand(e))
+            }
+            ExprKind::CallExpr => self.addressof_call_arg(e),
+            _ => None,
+        };
+        if let Some(s) = lvalue_of {
+            let lv = self.emit_lvalue(s)?;
+            let decl = self.lvalue_from_decl(s);
+            return Ok(PtrAlign { v: lv.addr.v, align: lv.addr.align, decl });
         }
         let v = self.emit_scalar(e)?;
-        let a = self.pointee_align(n.ty());
-        Ok((v, a))
+        let align = self.natural_pointee_align(n.ty());
+        Ok(PtrAlign { v, align, decl: false })
     }
 
-    /// Whether the pointer `e` (through implicit casts) has its alignment
-    /// from a declaration (`AlignmentSource::Decl`).
-    fn decl_aligned(&self, e: ExprId) -> bool {
+    /// The argument of the call `e` when it calls `__builtin_addressof`,
+    /// `std::addressof` or `std::__addressof` (clang `getBuiltinCallee`
+    /// is `BIaddressof`, `BI__addressof` or `BI__builtin_addressof`).
+    fn addressof_call_arg(&self, e: ExprId) -> Option<ExprId> {
         let ast = self.ast;
-        let n = *ast.exprs.get(e);
-        match n.kind() {
-            ExprKind::ParenExpr => self.decl_aligned(ast.exprs.operand(e)),
-            ExprKind::ImplicitCastExpr => match ast.exprs.cast_kind(e) {
-                CastKind::NoOp | CastKind::BitCast => self.decl_aligned(ast.exprs.operand(e)),
-                CastKind::ArrayToPointerDecay => self.lvalue_from_decl(ast.exprs.operand(e)),
-                _ => false,
-            },
-            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::AddrOf => {
-                self.lvalue_from_decl(ast.exprs.operand(e))
+        let mut c = ast.exprs.callee(e);
+        loop {
+            match ast.exprs.get(c).kind() {
+                ExprKind::ParenExpr => c = ast.exprs.operand(c),
+                ExprKind::ImplicitCastExpr
+                    if matches!(
+                        ast.exprs.cast_kind(c),
+                        CastKind::FunctionToPointerDecay | CastKind::BuiltinFnToFnPtr
+                    ) =>
+                {
+                    c = ast.exprs.operand(c);
+                }
+                ExprKind::DeclRefExpr => break,
+                _ => return None,
             }
-            _ => false,
+        }
+        let d = ast.exprs.decl(c);
+        if ast.decls.get(d).kind() != DeclKind::Function {
+            return None;
+        }
+        let mut args = ast.lists.iter::<ExprId>(ast.exprs.call_args(e));
+        let a = args.next()?;
+        if args.next().is_some() {
+            return None;
+        }
+        if ast.decls.builtin_id(d) == Some(id::ADDRESSOF) {
+            return Some(a);
+        }
+        // Of the standard builtins only `addressof`/`__addressof` return
+        // a pointer.
+        let ret = ast.types.proto(ast.decls.get(d).ty()?)?.ret();
+        (self.is_std_builtin(d) && ast.types.is_pointer(ret)).then_some(a)
+    }
+
+    /// clang `getNaturalPointeeTypeAlignment` (`getNaturalTypeAlignment`
+    /// with `forPointeeType`): 1 for an incomplete, `void` or function
+    /// pointee; a non-final class's non-virtual alignment.
+    /// An alignment attribute on the first typedef in the pointee's sugar
+    /// wins, even for an incomplete or class type (`TT->getDecl()->
+    /// getMaxAlignment()`, e.g. libc++ `atomic_ref`'s `_Aligned_Tp*`).
+    pub(crate) fn natural_pointee_align(&mut self, pq: QualType) -> u64 {
+        let Some(p) = self.ast.types.pointee(pq) else { return 1 };
+        if let Some(a) = self.sugared_pointee(pq).and_then(|s| self.typedef_align_attr(s)) {
+            return a;
+        }
+        self.pointee_layout(p).1
+    }
+
+    /// The pointee of the pointer type `q` with its sugar (clang
+    /// `getPointeeType`, through the first `PointerType` in `q`'s sugar).
+    fn sugared_pointee(&self, q: QualType) -> Option<QualType> {
+        let types = &self.ast.types;
+        let mut q = q;
+        loop {
+            if let kiln_ast::types::TypeView::Pointer(p) = types.view(q.ty()) {
+                return Some(p);
+            }
+            let d = types.desugar_once(q);
+            if d.ty() == q.ty() {
+                return None;
+            }
+            q = d;
         }
     }
 
-    /// clang `getNaturalPointeeTypeAlignment`: an incomplete or `void`
-    /// pointee has alignment 1.
-    fn pointee_align(&mut self, pq: QualType) -> u64 {
+    /// The alignment of the first typedef in the sugar of `q` (clang
+    /// `getAs<TypedefType>`) when that typedef carries an `aligned`
+    /// attribute (`getMaxAlignment` is nonzero).
+    fn typedef_align_attr(&mut self, q: QualType) -> Option<u64> {
         let ast = self.ast;
-        match ast.types.pointee(pq) {
-            Some(p)
-                if !ast.types.is_void(p) && !ast.types.is_function(p) && is_complete(ast, p) =>
-            {
-                self.size_align(p).1
+        let mut q = q;
+        loop {
+            if let kiln_ast::types::TypeView::Typedef { decl, .. } = ast.types.view(q.ty()) {
+                let aligned = ast.redecls_of(decl).any(|r| {
+                    ast.decls.cold.alignment.get(r).is_some()
+                        || ast
+                            .lists
+                            .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                            .any(|a| ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::ALIGNED)
+                });
+                return aligned.then(|| self.size_align(q).1);
             }
-            _ => 1,
+            let d = ast.types.desugar_once(q);
+            if d.ty() == q.ty() {
+                return None;
+            }
+            q = d;
         }
     }
 

@@ -6,7 +6,7 @@
 
 use kiln_abi::mangle;
 use kiln_ast::decl::{DeclKind, DefinitionBits, NamespaceData, TagKind};
-use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, NewExtra, UnaryOp};
+use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, NewExtra};
 use kiln_ast::names::OverloadedOperator;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -456,49 +456,6 @@ impl Cg<'_> {
         );
     }
 
-    /// The pointer value of `e` and, when its alignment comes from a
-    /// declaration, that alignment (clang `EmitPointerWithAlignment` with
-    /// `AlignmentSource::Decl`).
-    fn pointer_with_align(&mut self, e: ExprId) -> R<(V, Option<u64>)> {
-        let ast = self.ast;
-        let mut e = e;
-        while ast.exprs.get(e).kind() == ExprKind::ParenExpr {
-            e = ast.exprs.operand(e);
-        }
-        let n = *ast.exprs.get(e);
-        if n.kind().is_cast() {
-            let s = ast.exprs.operand(e);
-            match ast.exprs.cast_kind(e) {
-                CastKind::NoOp | CastKind::BitCast => {
-                    let sq = ast.exprs.get(s).ty();
-                    if ast.types.pointee(sq).is_some_and(|p| !ast.types.is_void(p))
-                        && ast.types.is_pointer(sq)
-                    {
-                        let (v, a) = self.pointer_with_align(s)?;
-                        // An explicit cast of an opaque pointer takes the
-                        // target type's alignment, which the caller then
-                        // discards; only `Decl` survives either way.
-                        return Ok((v, a));
-                    }
-                }
-                CastKind::ArrayToPointerDecay => {
-                    let lv = self.emit_lvalue(s)?;
-                    let decl = self.lvalue_from_decl(s);
-                    let v = self.decay(lv.addr, lv.q);
-                    return Ok((v, decl.then_some(lv.addr.align)));
-                }
-                _ => {}
-            }
-        }
-        if n.kind() == ExprKind::UnaryOperator && ast.exprs.unary_op(e) == UnaryOp::AddrOf {
-            let s = ast.exprs.operand(e);
-            let lv = self.emit_lvalue(s)?;
-            let decl = self.lvalue_from_decl(s);
-            return Ok((lv.addr.v, decl.then_some(lv.addr.align)));
-        }
-        Ok((self.emit_scalar(e)?, None))
-    }
-
     /// The lvalue `e` has `AlignmentSource::Decl`: a named non-reference
     /// variable, or a `.` member or array element of one.
     pub(crate) fn lvalue_from_decl(&self, e: ExprId) -> bool {
@@ -692,8 +649,10 @@ impl Cg<'_> {
             let Some(&arg) = placement.first() else {
                 return err(loc, "placement new without a placement argument");
             };
-            let (p, decl_align) = self.pointer_with_align(arg)?;
-            (p, decl_align.unwrap_or(alloc_align))
+            // clang `EmitCXXNewExpr`: the placement pointer's alignment
+            // only when it is a declaration's.
+            let p = self.pointer_with_alignment(arg)?;
+            (p.v, if p.decl { p.align } else { alloc_align })
         } else {
             let size_q = params.first().copied().unwrap_or(QualType::unqual(t.target().size_t));
             let mut vals = vec![CallArg::Scalar(size)];
