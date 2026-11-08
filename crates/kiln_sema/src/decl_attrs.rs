@@ -190,9 +190,8 @@ impl Sema<'_, '_> {
         if self.clang_compat < 22 || syntax != AttrSyntax::Cxx11 {
             return raw;
         }
-        let scope = scope.map(|s| {
-            crate::decl::norm_attr_scope(&self.ast.symbols().as_str(s).to_string()).to_owned()
-        });
+        let scope =
+            scope.map(|s| crate::decl::norm_attr_scope(self.ast.symbols().as_str(s)).to_owned());
         let n = if kiln_ast::attr::attr_name_normalizes(syntax, scope.as_deref()) {
             kiln_ast::attr::normalize_attr_name(&raw)
         } else {
