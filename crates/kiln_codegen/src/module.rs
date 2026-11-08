@@ -2066,11 +2066,18 @@ impl<'a> Cg<'a> {
                     s.push(Attr::Align(*align));
                 }
                 // clang 21+: the callee owns an indirect argument the caller
-                // does not destroy (spec/codegen.md §6a; LLVM 21+ syntax).
+                // does not destroy: a trivially destructible one, or one
+                // destroyed in the callee (`[[clang::trivial_abi]]`,
+                // `isParamDestroyedInCallee`), a variadic one included
+                // (spec/codegen.md §6a; LLVM 21+ syntax; WP-774).
                 ArgKind::Indirect { byval: false, .. }
                     if self.opts.clang_compat >= 22
                         && self.opts.llvm_major >= 21
-                        && self.destructed_class(sig.params[i]).is_none() =>
+                        && (self.destructed_class(sig.params[i]).is_none()
+                            || kiln_abi::call::is_destroyed_in_callee(
+                                self.ast,
+                                sig.params[i],
+                            )) =>
                 {
                     s.push(Attr::Flag(AttrKind::DeadOnReturn));
                 }

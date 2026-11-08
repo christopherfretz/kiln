@@ -3248,6 +3248,15 @@ impl Cg<'_> {
                     c = ast.exprs.operand(c);
                 }
                 match ast.exprs.get(c).kind() {
+                    // clang `AggExprEmitter::VisitBinComma`: the left
+                    // operand is ignored, the right one keeps the ignored
+                    // slot, so its result temporary is made in order
+                    // (`M{}.b(), M{}.b();`, WP-774).
+                    ExprKind::BinaryOperator if ast.exprs.binary_op(c) == BinaryOp::Comma => {
+                        let [l, r] = ast.exprs.operands(c);
+                        self.emit_ignored(l)?;
+                        return self.emit_ignored(r);
+                    }
                     ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
                         self.emit_call(c, None)?;
                         return Ok(());
