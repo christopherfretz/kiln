@@ -5,19 +5,19 @@
 // lvalue reference take a temporary of a similar type. clang's wording.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 27:15 error "binding reference of type 'const int *' to value of type 'int *' not permitted due to incompatible qualifiers"
-//@ diag: 28:16 error "rvalue reference to type 'const int *' cannot bind to lvalue of type 'int *'"
-//@ diag: 29:15 error "reference to type 'int *const' could not bind to an lvalue of type 'const int *'"
-//@ diag: 30:15 error "binding reference of type 'const int *' to value of type 'int *const' drops 'const' qualifier"
-//@ diag: 31:22 error "binding reference of type 'const int *const *' to value of type 'int **' not permitted due to incompatible qualifiers"
-//@ diag: 32:15 error "non-const lvalue reference to type 'const int *' cannot bind to a temporary of type 'int *'"
-//@ diag: 37:10 error "call to 'g2' is ambiguous"
+//@ diag: 26:15 error "binding reference of type 'const int *' to value of type 'int *' not permitted due to incompatible qualifiers"
+//@ diag: 27:16 error "rvalue reference to type 'const int *' cannot bind to lvalue of type 'int *'"
+//@ diag: 28:15 error "reference to type 'int *const' could not bind to an lvalue of type 'const int *'"
+//@ diag: 29:15 error "binding reference of type 'const int *' to value of type 'int *const' drops 'const' qualifier"
+//@ diag: 30:22 error "binding reference of type 'const int *const *' to value of type 'int **' not permitted due to incompatible qualifiers"
+//@ diag: 31:15 error "non-const lvalue reference to type 'const int *' cannot bind to a temporary of type 'int *'"
+//@ diag: 36:10 error "call to 'g2' is ambiguous"
+//@ diag: 34:5 note "candidate function"
 //@ diag: 35:5 note "candidate function"
-//@ diag: 36:5 note "candidate function"
-//@ diag: 39:10 error "no matching function for call to 'h'"
-//@ diag: 38:5 note "candidate function not viable: no known conversion from 'int *' to 'const int *&' for 1st argument"
-//@ diag: 41:10 error "no matching function for call to 'k'"
-//@ diag: 40:5 note "candidate function not viable: expects an rvalue for 1st argument"
+//@ diag: 38:10 error "no matching function for call to 'h'"
+//@ diag: 37:5 note "candidate function not viable: no known conversion from 'int *' to 'const int *&' for 1st argument"
+//@ diag: 40:10 error "no matching function for call to 'k'"
+//@ diag: 39:5 note "candidate function not viable: expects an rvalue for 1st argument"
 int *p;
 const int *cp;
 int *const pc = nullptr;

@@ -1033,13 +1033,30 @@ operand. The
 template-parameter-declaration prefixes `Tn`/`Tp` are §8.14's (WP-117);
 the dependent template-specialization types there are the ones above
 (`dependent_tst`, with a pack's arguments grouped by `converted_args`).
-One difference from clang remains for value-dependent arguments (a
-follow-up). clang mangles the expression that first created the
-enclosing canonical type, but kiln mangles the profile's first
-expression in the TU. The two differ only when one TU spells the same
-dependent expression in more than one way. For example, after
-`R<T>::value`, a new signature that writes `R<T, void>::value` is
-`RIT_vEE` in clang and `RIT_EE` in kiln.
+**First spelling per canonical type (WP-790).** clang keeps, in each
+canonical dependent node (template specialization type, dependent
+template specialization, `DependentDecltypeType`,
+`DependentSizedArrayType`), the expressions of the spelling that first
+created it, and mangles every later spelling of that canonical type
+from them. kiln does the same: when `Canon` interns a new canonical
+type of those kinds, `Types::note_arg_origin` records the written
+`ArgListId` (only when it holds an expression argument) and
+`Types::note_expr_origin` the written `ExprId`, keyed by the canonical
+`TypeId`, first writer wins. The mangler reads them back
+(`Types::arg_origin`, `Types::expr_origin`, falling back to the
+profile's first expression) for the `compound` TST/DTST/decltype/array
+cases and for `dep.rs`'s `type_prefix` and unresolved types. So the
+choice is per enclosing canonical type, not per expression profile:
+`R<T>::value` and `R<T, void>::value` profile alike, so
+`EI<R<T>::value, T>` and `EI<R<T, void>::value, T>` are one canonical
+type; if a signature writes the first, both mangle `RIT_EE`, while
+`EI<R<T, void>::value, T *>` written first makes both `T *` forms
+`RIT_vEE`, in the same TU, as clang 19 (kiln used to take the profile's
+first expression in the TU for every enclosing type). Across
+TUs the names agree whenever the TUs agree on the first spelling, which
+is the same hazard clang has (`tests/codegen/dependent_expr_first_spelling.cpp`
+for both orders in one TU, `tests/conformance/temp.over.link/dependent-expr-first-spelling-two-units-run.cpp`
+for two linked TUs).
 
 ### 8.16 Landed (WP-204): constrained templates (`mangle/constraint.rs`)
 clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by

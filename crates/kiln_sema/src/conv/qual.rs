@@ -277,7 +277,8 @@ pub(crate) fn function_ref_compatible(
 /// reference-compatible with `cv2 T2` (a prvalue "pointer to cv2 T2"
 /// converts to "pointer to cv1 T1" by a qualification conversion, so
 /// `const int *const &` binds an `int *` lvalue directly); `Some(false)`
-/// if they are only reference-related (`const int *&` and `int *`).
+/// if they are only reference-related (`const int *&` and `int *`), which
+/// needs the same `P_i` at every level; `None` otherwise.
 /// clang `CompareReferenceRelationship`'s qualification loop, where the
 /// top level takes part in the "const at every level above" rule.
 pub(crate) fn similar_ref_relation(s: &mut Sema<'_, '_>, t1: QualType, t2: QualType) -> Option<bool> {
@@ -286,7 +287,13 @@ pub(crate) fn similar_ref_relation(s: &mut Sema<'_, '_>, t1: QualType, t2: QualT
         return None;
     }
     let (p1, p2) = (s.ast.types.pointer_to(c1), s.ast.types.pointer_to(c2));
-    Some(is_qualification_convertible(s, p2, p1))
+    if is_qualification_convertible(s, p2, p1) {
+        return Some(true);
+    }
+    // Only reference-related: clang 19 counts an array of unknown bound
+    // against one of known bound as unrelated here (`int (&)[3]` from
+    // `int[]`, `int (&)[]` from `const int[3]`), so the levels must agree.
+    similar_same_levels(s, c1, c2).then_some(false)
 }
 
 /// True if a prvalue of `from` converts to `to` by a function pointer
