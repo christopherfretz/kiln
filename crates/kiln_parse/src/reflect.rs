@@ -276,7 +276,7 @@ impl Parser<'_, '_> {
         let open = self.loc();
         let (e, close) = self.parse_splice_specifier()?;
         if self.at(Punct::Less) && self.s.splice_names_template(e) {
-            return self.parse_splice_template_args(e, open);
+            return self.parse_splice_template_args(e, open, open);
         }
         Some(self.s.act_on_splice_expr(e, open, close))
     }
@@ -287,22 +287,25 @@ impl Parser<'_, '_> {
     /// specialization of a variable template, concept or function
     /// template the template-id names.
     pub(crate) fn parse_template_splice_expr(&mut self) -> Option<ExprId> {
-        self.bump();
+        let begin = self.bump().span.lo;
         let open = self.loc();
         let (e, close) = self.parse_splice_specifier()?;
         if self.at(Punct::Less) {
-            return self.parse_splice_template_args(e, open);
+            return self.parse_splice_template_args(e, open, begin);
         }
         Some(self.s.act_on_splice_expr(e, open, close))
     }
 
     /// The `< args >` of the splice template-id whose splice operand is
-    /// `e` (`open` its `[:`): an overload set not called resolves to its
-    /// single specialization ([over.over]).
-    fn parse_splice_template_args(&mut self, e: ExprId, open: Loc) -> Option<ExprId> {
+    /// `e` (`open` its `[:`, `begin` its first token: `template` or
+    /// `[:`): an overload set not called, directly or as the whole of a
+    /// parenthesized callee (`(template [:r:]<A>)(x)`,
+    /// [`Parser::template_id_is_callee`]), resolves to its single
+    /// specialization ([over.over]).
+    fn parse_splice_template_args(&mut self, e: ExprId, open: Loc, begin: Loc) -> Option<ExprId> {
         let (args, _, r) = self.parse_template_arg_list()?;
         let x = self.s.act_on_splice_template_expr(e, &args, open, r);
-        Some(if self.at(Punct::LParen) { x } else { self.s.resolve_single_template_id(x) })
+        Some(if self.template_id_is_callee(begin) { x } else { self.s.resolve_single_template_id(x) })
     }
 }
 
