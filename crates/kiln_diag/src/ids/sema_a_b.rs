@@ -162,6 +162,7 @@ sema_attribute_requires_integer_constant = Error (1) "{0} attribute requires an 
 sema_attribute_too_few_arguments = Error (2) "{0} attribute takes at least {1} arguments";
 sema_attribute_too_many_arguments = Error (2) "{0} attribute takes no more than {1} arguments";
 sema_attribute_too_many_arguments_one = Error (1) "{0} attribute takes no more than 1 argument";
+sema_attribute_unsupported_by_kiln = Error (1) "'{0}' attribute is not supported by kiln yet";
 sema_attribute_void_function = Warning [IgnoredAttributes] (1) "attribute {0} cannot be applied to functions without return value";
 sema_attribute_weak_static = Error (0) "weak declaration cannot have internal linkage";
 sema_attribute_weakref_not_global_context = Error (1) "weakref declaration of {0} must be in a global context";

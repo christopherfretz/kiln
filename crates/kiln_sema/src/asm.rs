@@ -630,6 +630,28 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// A definition of a function some declaration of which carries
+    /// `aarch64_vector_pcs`: kiln would give it the base calling
+    /// convention, which preserves fewer registers than its callers
+    /// assume, so it is the class-A error (WP-805; WP-808 implements it).
+    pub(crate) fn check_vector_pcs_definition(&mut self, f: DeclId) {
+        use kiln_ast::attr::AttrKind;
+        let loc = self.ast.redecls_of(f).find_map(|r| {
+            self.ast
+                .lists
+                .iter::<kiln_ast::AttrId>(self.ast.attrs.of_decl(r))
+                .map(|a| *self.ast.attrs.get(a))
+                .find(|n| n.kind == AttrKind::AARCH64_VECTOR_PCS_DECL)
+                .map(|n| n.loc)
+        });
+        if let Some(loc) = loc {
+            let msg = self
+                .diag(kiln_diag::DiagId::sema_attribute_unsupported_by_kiln, loc)
+                .arg("aarch64_vector_pcs");
+            self.emit(msg);
+        }
+    }
+
     /// A `naked` function's body holds only asm statements, null
     /// statements and local register variables without an initializer
     /// (clang `ActOnFinishFunctionBody`): the first other statement is

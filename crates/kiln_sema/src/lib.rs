@@ -18,6 +18,7 @@ mod absolute_value;
 mod align_redecl;
 mod annot;
 mod asm;
+pub mod attr_triage;
 mod attr_cond;
 mod bit_int;
 mod bitfield_constant;
