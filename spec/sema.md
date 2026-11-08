@@ -2231,8 +2231,25 @@ and returns the scope it names:
   `normalizeAttrScopeName`): the reserved spellings `__gnu__` and
   `_Clang` name the `gnu` and `clang` namespaces (`norm_attr_scope` in
   `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
-  `always_inline` with the GNU flag. Test:
+  `always_inline` with the GNU flag. `[[__clang__::x]]` reaches sema as
+  `_Clang` (the parser reads the expanded `__clang__` macro as the
+  scope, spec/parse.md §6.2, WP-891). Test:
   `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
+- **Mutual exclusions** (WP-890/WP-891; clang Attr.td `MutualExclusions`):
+  `check_mutual_exclusions` (from `check_decl_attrs`) adds `hot`/`cold`
+  on a function and `no_destroy`/`always_destroy` on a variable, with
+  the same rule as `check_naked_conflicts`: the later attribute (on this
+  declaration, or on this one when the other is on a prior one) is the
+  error `'X' and 'Y' attributes are not compatible` with `conflicting
+  attribute is here`, and is dropped. The other clang exclusions are
+  already covered (`likely`/`unlikely`, `naked`/`disable_tail_calls`,
+  `always_inline`/`not_tail_called`, gsl `Owner`/`Pointer`,
+  `speculative_load_hardening`/`no_speculative_load_hardening`,
+  `optnone` conflicts, the `target` family) or do not apply to C++ on
+  kiln's targets (CUDA, Mips, Objective-C, `randomize_layout`); the
+  class-C `cf_audited_transfer`/`cf_unknown_transfer` pair is accepted
+  silently (list: spec/landed/sema/WP-891.md). Test:
+  `tests/conformance/dcl.attr.grammar/mutually-exclusive-attributes.cpp`.
   - GNU `section("name")` (WP-716, clang `handleSectionAttr`): exactly
     one string literal (`expected string literal as argument of
     'section' attribute`, `'section' attribute takes one argument`), on
@@ -6228,6 +6245,17 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   gets "use of this statement in a constexpr {function|constructor} is
   a C++23 extension" (`-Wc++23-extensions`) at the first one. Tests
   `tests/conformance/stmt.goto/computed-goto-constexpr-body{,-cxx20}.cpp`.
+  Otherwise, before C++20, the first asm-declaration or try-block
+  statement gets "use of this statement in a constexpr
+  {function|constructor} is a C++20 extension" (`-Wc++20-extensions`),
+  and a function-try-block, checked ahead of the walk, "function try
+  block in constexpr {function|constructor} is a C++20 extension" (clang
+  `CheckConstexprFunctionBody`, WP-890/WP-891). From C++20 an asm
+  statement is valid in the body; evaluating it is not a constant
+  expression. Tests
+  `tests/conformance/dcl.constexpr/constexpr-asm-{try-cxx17,evaluated,never-constant}.cpp`
+  (the last an xfail: the never-constant check only tries parameterless
+  functions).
   Tests of the variable rule:
   `tests/conformance/dcl.constexpr/non-literal-local-cxx{20,23,23-19}.cpp`,
   `tests/conformance/dcl.constexpr/non-literal-local-template-cxx{20,23}.cpp`,
@@ -8386,7 +8414,7 @@ substituted (`subst/stmts.rs`) and rechecked at instantiation.
 immediate range checks
 (`validateInputSize`/`validateOutputSize`), `=@cc` flag outputs, register
 variables (`register int r asm("x0")`) as operands and their clobber
-conflict check, the C++17 "asm in constexpr function" extension warning;
+conflict check;
 `!srcloc` values in headers and macro expansions do not match clang's
 encoding.
 
