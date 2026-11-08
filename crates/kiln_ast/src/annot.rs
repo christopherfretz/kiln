@@ -49,11 +49,19 @@ pub struct AnnotArena {
     nodes: Vec<Annotation>,
     /// The annotations written on each declaration that has any.
     of_decl: ColdMap<DeclId, ListId>,
+    /// The annotations of each annotated base-specifier, keyed by the
+    /// first declaration of the derived class and the base's index in
+    /// its definition's base list ([dcl.attr.annotation]/1).
+    of_base: ColdMap<(DeclId, u32), ListId>,
 }
 
 impl Default for AnnotArena {
     fn default() -> Self {
-        Self { nodes: Vec::new(), of_decl: ColdMap::new("annot_decls") }
+        Self {
+            nodes: Vec::new(),
+            of_decl: ColdMap::new("annot_decls"),
+            of_base: ColdMap::new("annot_bases"),
+        }
     }
 }
 
@@ -109,6 +117,20 @@ impl AnnotArena {
         }
     }
 
+    /// The annotations of the `index`-th direct base-specifier of the
+    /// class whose first declaration is `class`, in source order
+    /// ([`ListId::EMPTY`] if none).
+    pub fn of_base(&self, class: DeclId, index: u32) -> ListId {
+        self.of_base.get((class, index)).copied().unwrap_or(ListId::EMPTY)
+    }
+
+    /// Records `list` as the annotations of the `index`-th base-specifier
+    /// of the class whose first declaration is `class` (written once,
+    /// when the class is defined).
+    pub fn attach_base(&mut self, class: DeclId, index: u32, list: ListId) {
+        let _ = self.of_base.insert((class, index), list);
+    }
+
     /// The annotations of the entity `d` declares
     /// ([meta.reflection.annotation]): those of each of its
     /// declarations, first declaration to latest, each in source order.
@@ -128,7 +150,9 @@ impl AnnotArena {
     }
 
     pub(crate) fn live_bytes(&self) -> u64 {
-        crate::mem::VecDims::of("nodes", &self.nodes).live_bytes() + self.of_decl.live_bytes()
+        crate::mem::VecDims::of("nodes", &self.nodes).live_bytes()
+            + self.of_decl.live_bytes()
+            + self.of_base.live_bytes()
     }
 }
 
@@ -137,6 +161,7 @@ impl HeapSize for AnnotArena {
         let mut r = MemReport::new();
         r.push(MemRow::of_vec("nodes", &self.nodes));
         r.push(self.of_decl.mem_row());
+        r.push(self.of_base.mem_row());
         r
     }
 }

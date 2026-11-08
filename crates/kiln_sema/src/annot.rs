@@ -206,7 +206,7 @@ impl Sema<'_, '_> {
 
     /// One annotation of `d` with operand `e` at `loc`, appended to the
     /// table (not yet to `d`'s list).
-    fn annotate(&mut self, d: DeclId, e: ExprId, loc: Loc) -> Option<AnnId> {
+    pub(crate) fn annotate(&mut self, d: DeclId, e: ExprId, loc: Loc) -> Option<AnnId> {
         let (value, ty, expr) = self.annotation_value(e, loc)?;
         Some(self.ast.annots.push(Annotation { decl: d, value, loc, written_type: ty, expr }))
     }
@@ -254,6 +254,17 @@ impl Sema<'_, '_> {
         let c = self.act_on_constant_full_expr(c);
         match self.eval_const(c, EvalContext::new(EvalKind::TemplateArg, loc)) {
             Ok(v) => {
+                // [dcl.attr.annotation]/2: the annotation's value is
+                // `reflect_constant(V)`, so V must be a valid constant
+                // template argument: no pointer or reference into a string
+                // literal (`[[="abc"]]`), a temporary, a `typeid` result or
+                // a label ([temp.arg.nontype]/6). GCC 16.1 accepts
+                // `[[="abc"]]`; kiln follows the draft (WP-830).
+                if let Some(why) = self.bad_tparg_base(v) {
+                    let d = self.diag(DiagId::sema_annotation_invalid_value, loc).arg(why);
+                    self.emit(d);
+                    return None;
+                }
                 if self.ast.types.as_record(canon).is_some() {
                     self.builder().template_param_object(cty, v);
                 }
@@ -266,6 +277,17 @@ impl Sema<'_, '_> {
                 None
             }
         }
+    }
+
+    /// New annotations with the values of `anns` ([dcl.attr.annotation]/3:
+    /// each instantiation of an annotation is a distinct annotation).
+    pub(crate) fn copy_annots(&mut self, anns: &[AnnId]) -> Vec<AnnId> {
+        anns.iter()
+            .map(|&a| {
+                let n = *self.ast.annots.get(a);
+                self.ast.annots.push(n)
+            })
+            .collect()
     }
 
     /// `T` of an annotation must be structural ([dcl.attr.annotation]/2,
@@ -360,20 +382,41 @@ impl Sema<'_, '_> {
 
     /// The parameters of function `spec` paired with those of its pattern
     /// `def` that carry annotations (a parameter's own, not merged across
-    /// redeclarations; spec/annotations.md §4). Empty when a pattern pack
-    /// expanded to a different count (spec/annotations.md §9).
+    /// redeclarations; spec/annotations.md §4). A pattern function
+    /// parameter pack pairs with each parameter it expanded to
+    /// ([temp.variadic]/5: each element is its own parameter, with its own
+    /// annotations; WP-830). An annotation operand cannot name the pack
+    /// (it is not a pack expansion pattern), so every element substitutes
+    /// the same operands. With more than one pack the split is unknown
+    /// here and nothing pairs.
     fn annotated_param_pairs(&self, spec: DeclId, def: DeclId) -> Vec<(DeclId, DeclId)> {
         if self.ast.decls.function(def).is_none() {
             return Vec::new();
         }
         let (ps, qs) = (self.param_decls(spec), self.param_decls(def));
-        if ps.len() != qs.len() {
-            return Vec::new();
+        let is_pack = |q: DeclId| {
+            self.ast.decls.param(q).is_some_and(|x| x.flags & kiln_ast::decl::ParamData::PACK != 0)
+        };
+        let packs = qs.iter().filter(|&&q| is_pack(q)).count();
+        let wanted = |&(p, q): &(DeclId, DeclId)| {
+            p != q && self.ast.annots.has_list(q) && !self.ast.annots.has_list(p)
+        };
+        if packs == 0 {
+            if ps.len() != qs.len() {
+                return Vec::new();
+            }
+            return ps.into_iter().zip(qs).filter(wanted).collect();
         }
-        ps.into_iter()
-            .zip(qs)
-            .filter(|&(p, q)| p != q && self.ast.annots.has_list(q) && !self.ast.annots.has_list(p))
-            .collect()
+        let Some(n) = (ps.len() + 1).checked_sub(qs.len()).filter(|_| packs == 1) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut it = ps.into_iter();
+        for q in qs {
+            let take = if is_pack(q) { n } else { 1 };
+            out.extend(it.by_ref().take(take).map(|p| (p, q)).filter(wanted));
+        }
+        out
     }
 }
 
@@ -435,7 +478,7 @@ impl Substituter<'_, '_, '_> {
     /// annotation with the same underlying constant), a dependent operand
     /// is substituted and evaluated. A failure is diagnosed and drops the
     /// annotation ([dcl.attr.annotation]/4: not a deduction failure).
-    fn subst_annotations(&mut self, spec: DeclId, anns: &[AnnId]) -> Vec<AnnId> {
+    pub(crate) fn subst_annotations(&mut self, spec: DeclId, anns: &[AnnId]) -> Vec<AnnId> {
         let mut out = Vec::with_capacity(anns.len());
         for &a in anns {
             let n = *self.sema.ast.annots.get(a);
