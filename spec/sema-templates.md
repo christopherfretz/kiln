@@ -456,10 +456,26 @@ constraint-expression (`act_concept`) are checked like a full-expression:
 start, and the clause becomes a `RecoveryExpr` (never satisfied). Tests
 `temp.variadic/p12-unexpanded-requires-clause.cpp`,
 `temp.variadic/p12-unexpanded-requires-clause-concept-pack.cpp`
-(WP-771). Not done: a lambda's requires-clause naming an enclosing pack
-is reported as an empty expansion, and a lambda's own pack in its
-requires-clause is not diagnosed (lambda pack tracking,
-`kiln_parse/src/lambda.rs`).
+(WP-771).
+
+In a lambda's declarator ([temp.variadic]/5, WP-776; clang's
+`DiagnoseUnexpandedParameterPacks` with the lambda's `LocalPacks`):
+- the packs the lambda declares (its template parameter packs and
+  function parameter packs) named unexpanded in its template-head's or
+  trailing requires-clause are "requires clause contains unexpanded
+  parameter pack 'Us'" at the clause's begin, and in a template
+  parameter's default argument "default argument contains ...";
+- an enclosing template's pack named there (`[]<class U>() requires
+  C<U, Ts> {}...`) makes the lambda-expression contain it, so a pack
+  expansion around the lambda expands it, and without one it is
+  diagnosed at the enclosing full-expression or initializer. The
+  lambda's constraints, checked when its call operator is used, see the
+  expansion's element of each such pack (`lambda_constraint_levels`).
+Tests `temp.variadic/p5-lambda-requires-clause-outer-pack.cpp`,
+`p5-lambda-requires-clause-outer-pack-unsatisfied.cpp`,
+`p5-lambda-template-head-requires-outer-pack.cpp` (`requires: clang<22`:
+clang 22 mis-evaluates the template-head form), and
+`p12-unexpanded-lambda-declarator.cpp`.
 
 **Feature macro.** `__cpp_template_parameters` is 202502L at `-std=c++26`
 and `-fclang-compat=22` (`kiln_pp` `kiln_features`, WP-771); at
@@ -5061,13 +5077,38 @@ the concept's parameters the expression does not name are null. So
 `requires C<T, long> && true` subsumes `requires C<T, int>`. The used set
 (`used_template_params`, `templ/concepts/used.rs`, cached per expression
 and depth) is a whitelist walk over expressions, types, nested-name-
-specifiers, template names and arguments (`DeclRefExpr`, concept-ids,
-`UnresolvedLookupExpr` and dependent-scope names with their qualifiers and
-template arguments, casts, traits, requires-expressions, operators, calls,
-folds); any other dependent node keeps the whole mapping, which is never
-looser than the wording. Test
-`temp.constr.atomic/p1-used-parameter-mapping.cpp` (WP-771; clang 19 and
-22 agree).
+specifiers, template names and arguments. Every kind is listed (no
+fallback arm, WP-776): besides each expression's children, type, written
+template arguments and qualifier, it walks what a node holds elsewhere
+(a cast's written type, `new`'s allocated type, a pseudo-destructor's
+type, trait and `sizeof`/`alignof`/`typeid`/`offsetof` operands, pack
+indexing, `va_arg`'s type, dependent member and dependent-scope names
+including conversion-function and constructor/destructor names, a
+reflect-expression's type, declaration or template), and every type
+kind (`typeof`, unary transforms, `auto` with its type-constraint,
+deduced template specializations, dependent vectors and `_BitInt`, pack
+indexing) and every nested-name-specifier and template-name kind,
+reflection splices included (`[: R :]::x`, `typename [: R :]`,
+`[: R :]`, a spliced template name). The whole mapping is kept (`None`)
+only for a lambda-expression, a statement-expression and an expansion
+statement's selector, and for a dependent class or enumeration type (a
+member of a class template, which depends on enclosing parameters it
+does not name) or an unresolved using-declaration; that is never looser
+than the wording. Tests `temp.constr.atomic/p1-used-parameter-mapping.cpp`
+(WP-771), `p1-used-parameter-mapping-kinds.cpp` (WP-776; clang 19, 22
+and GCC 16.1 agree), `p1-used-parameter-mapping-splice.cpp` (WP-776;
+GCC 16.1 agrees, `skip(clang)`).
+
+The kept arguments are canonical ([temp.constr.atomic]/2, WP-776,
+`written_mapping_arg`): a non-dependent expression argument that
+substitution keeps as written (`1` of `C<1, int>` in a template's
+requires-clause) is its value converted to the parameter's type when
+the parameter is integral or an enumeration (`C<2 - 1, long>` maps
+alike), else its profile. A reflect-expression profiles by its value
+once known, and `^^T` of a template type parameter by its canonical
+type (spec/types.md §7.2), so `C<^^T>` in two templates maps alike.
+Test `temp.constr.atomic/p2-non-dependent-argument-identity.cpp` (clang
+19, 22 and GCC 16.1 agree).
 
 Hash-consing therefore makes identical atoms the **same `NormId`**.
 `normal_forms: DeclId → NormId` caches each entity's associated
@@ -5079,14 +5120,39 @@ unexpanded type or non-type template parameter packs (no concept
 template parameter pack) normalizes to `Fold { and, pattern, packs }`:
 the pattern's normal form and the set of packs it expands (each
 `depth << 16 | index`, interned sorted in `NormTable::pack_sets`). The
-init of `(E op ... op I)` is joined on its side ([temp.constr.normal]/1.5.2:
-`(E && ... && I)` is `(E && ...) ∧ I`). Under a concept's mapping, each
-pack parameter must be mapped to a plain expansion of a pack of the
-constrained declaration (`Ts...` / `Vs...`, `fold_pack_element`); its
-slot becomes that element and the pack set names the declaration's
-packs, so `C<Ts...>` through `concept AllC = (C<Ts> && ...)` and the
-fold written directly give the same node. The immediately declared
-constraint of `C... Ts` is such a fold. Any other fold stays one atom.
+pattern is any constraint-expression over the packs (WP-776):
+`(C<Ts> && ...)`, `(C<Ts, int> && ...)`, `(C<Box<Ts>> && ...)`; its
+atoms are the pattern's as written, so two folds whose patterns
+normalize to the same atoms are one node. The init of `(E op ... op I)` is joined on
+its side ([temp.constr.normal]/1.5.2: `(E && ... && I)` is
+`(E && ...) ∧ I`).
+
+Under a concept's mapping ([temp.constr.normal]/1.4,
+`fold_over_mapping`), the concept's pack parameters the pattern expands
+take the elements the mapping gives them: an element that is itself an
+expansion `X...` of the constrained declaration's packs gives a `Fold`
+over those packs whose pattern is the concept's pattern normalized with
+`X` in the parameter's place (`fold_pack_element`); a mapping of
+non-expansion elements (`AllC<int, long>`) expands to the conjunction
+(disjunction) of the pattern normalized with each element, and a mixed
+list (`AllC<int, Ts...>`, `AllC<Ts..., int>`) joins both kinds in
+order. So
+`AllC<Ts...>` through `concept AllC = (C<Ts> && ...)`, `AllC<Box<Ts>...>`
+(also through a forwarding concept, `concept ViaC = AllC<Vs*...>`, or
+over a non-type pack, `AllN<(Ns * 2)...>`) and the corresponding folds
+written directly give the same nodes. The
+immediately declared constraint of `C... Ts` is such a fold. A fold over
+a concept template parameter pack (concept-dependent, below), over an
+enclosing level's pack, or whose mapped element names packs the walk
+cannot identify stays one atom.
+
+*Wording over clang:* clang 22 identifies the elements of a fold reached
+through a concept by the concept's pack parameter, not by the mapped
+pattern, so its orderings differ where the mapped patterns differ:
+`AllA<Box<Ts>...>` against `AllB<Ts...>` (patterns `A<Box<Ts>>` and
+`B<Ts>`) is ambiguous by the wording. Kiln follows the wording:
+`temp.constr.fold/p1-fold-expanded-concept-mapping.cpp` is `skip(clang)`.
+GCC 16.1 does not implement P2963.
 
 Subsumption (§8.4) treats a `Fold` as a leaf: `leaf_subsumes(a, b)` holds
 when `a == b` or both are folds with the same operator, compatible pack
@@ -5097,7 +5163,13 @@ subsumed by `(D<Ts> && ...)` when `D` subsumes `C`
 [temp.constr.order]/4 compares packs by index. Tests
 `temp.constr.fold/p1-fold-expanded-subsumption.cpp` (clang 19 and 22
 agree), `temp.constr.fold/p1-fold-expanded-subsumption-concepts.cpp`
-(`requires: clang>=22`; clang 19 keeps concept folds atomic).
+(`requires: clang>=22`; clang 19 keeps concept folds atomic), and for
+general patterns (WP-776, `requires: clang>=22`)
+`temp.constr.fold/p1-fold-expanded-general-patterns.cpp` (the
+more-constrained overload wins) and
+`p1-fold-expanded-general-patterns-ambiguous.cpp` (incompatible pack
+sets or non-subsuming patterns are ambiguous, with the "similar
+constraint expressions" notes).
 
 **Concept template parameters** (P2841R7, [temp.constr.normal]/1.4-1.5,
 WP-746; `normalize_concept_id`, `normalize_concept_fold` in
