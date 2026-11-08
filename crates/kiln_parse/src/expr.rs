@@ -2040,6 +2040,7 @@ impl Parser<'_, '_> {
     /// ([temp.dep.expr]/3); an undeclared name before `(` in a template
     /// is found by argument-dependent lookup at instantiation
     /// ([temp.dep.general]/2).
+    #[allow(clippy::too_many_lines, reason = "the id-expression forms in one place")]
     fn parse_id_expression_rest(&mut self) -> PExpr {
         let start = self.pos();
         let begin = self.name_begin();

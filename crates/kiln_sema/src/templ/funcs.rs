@@ -1435,11 +1435,11 @@ impl Sema<'_, '_> {
         op_loc: Loc,
         arrow: bool,
     ) -> ExprId {
-        let bare = targs.is_none();
-        self.template_member_q(base, qual, name, targs, (true, bare), loc, op_loc, arrow)
+        let no_args = targs.is_none();
+        self.template_member_q(base, qual, name, targs, (true, no_args), loc, op_loc, arrow)
     }
 
-    /// `(template_kw, bare)`: `bare` diagnoses a missing template
+    /// `(template_kw, no_args)`: `no_args` diagnoses a missing template
     /// argument list ([`Sema::act_on_template_kw_member_q`]).
     #[allow(clippy::too_many_arguments, reason = "the operands of a member access")]
     fn template_member_q(
@@ -1448,7 +1448,7 @@ impl Sema<'_, '_> {
         qual: Option<crate::using::Qualifier>,
         name: DeclName,
         targs: Option<ArgListId>,
-        (template_kw, bare): (bool, bool),
+        (template_kw, no_args): (bool, bool),
         loc: Loc,
         op_loc: Loc,
         arrow: bool,
@@ -1456,7 +1456,7 @@ impl Sema<'_, '_> {
         if let Some(e) =
             self.try_dependent_member_q(base, qual, name, targs, template_kw, loc, arrow)
         {
-            if bare {
+            if no_args {
                 self.diag_missing_template_arg_list(loc);
             }
             if op_loc != loc {
@@ -1482,7 +1482,7 @@ impl Sema<'_, '_> {
             self.emit(d);
             return self.recover_err(&[e], loc);
         }
-        if bare {
+        if no_args {
             self.diag_missing_template_arg_list(loc);
         }
         match targs {

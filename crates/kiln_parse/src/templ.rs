@@ -1535,6 +1535,7 @@ impl Parser<'_, '_> {
     /// The `template? name (< args >)?` after qualifier `q` naming a type:
     /// a dependent name type (with keyword `kw`) when `q` is dependent,
     /// else the type found by qualified lookup.
+    #[allow(clippy::too_many_lines, reason = "the qualified type-name forms in one place")]
     pub(crate) fn parse_qualified_type_rest(
         &mut self,
         q: Qualifier,

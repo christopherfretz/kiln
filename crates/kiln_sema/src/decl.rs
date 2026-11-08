@@ -3392,6 +3392,7 @@ impl Sema<'_, '_> {
     }
 
     /// `typedef T name;` or `using name = T;` ([dcl.typedef]).
+    #[allow(clippy::too_many_lines, reason = "one declaration's semantic checks in clang's order")]
     fn act_on_typedef(
         &mut self,
         ds: &DeclSpec,
@@ -4910,6 +4911,7 @@ impl Sema<'_, '_> {
         (flags, invalid)
     }
 
+    #[allow(clippy::too_many_lines, reason = "one declaration's semantic checks in clang's order")]
     fn act_on_field(
         &mut self,
         ds: &DeclSpec,
@@ -5541,6 +5543,7 @@ impl Sema<'_, '_> {
         no_member
     }
 
+    #[allow(clippy::too_many_lines, reason = "one declaration's semantic checks in clang's order")]
     fn act_on_var(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
         let spec = self.var_spec(ds, d);
@@ -6871,6 +6874,7 @@ impl Sema<'_, '_> {
 
     /// Starts the definition of function `f` at `{`: checks for a
     /// redefinition, opens the function scope with the parameters.
+    #[allow(clippy::too_many_lines, reason = "one declaration's semantic checks in clang's order")]
     pub fn act_on_start_function_def(&mut self, f: DeclId) {
         self.check_alias_definition(f);
         self.no_builtin_defined(f, false);
@@ -8300,6 +8304,7 @@ impl Sema<'_, '_> {
     }
 
     /// An enumerator-definition ([dcl.enum]/2,5).
+    #[allow(clippy::too_many_lines, reason = "one declaration's semantic checks in clang's order")]
     pub fn act_on_enumerator(
         &mut self,
         name: Symbol,

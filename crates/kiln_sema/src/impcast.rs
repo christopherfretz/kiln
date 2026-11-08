@@ -349,7 +349,7 @@ impl Sema<'_, '_> {
                     .ast
                     .types
                     .builtin(self.ast.exprs.get(a).ty())
-                    .is_some_and(|b| b.is_integral())
+                    .is_some_and(BuiltinType::is_integral)
                 {
                     self.int_float_imp_cast(a, kind, shown, cc);
                 }
@@ -363,7 +363,7 @@ impl Sema<'_, '_> {
         let prec = soft::params(kind).0;
         let width = self.int_range_of_type(from).width;
         // A range is at most one bit wider than its type.
-        if width + 1 <= prec {
+        if width < prec {
             return;
         }
         if self.expr_int_range(e, width).width <= prec {
