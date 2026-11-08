@@ -193,7 +193,8 @@ impl Substituter<'_, '_, '_> {
             }
             for a in ast.lists.iter::<AttrId>(ast.attrs.of_decl(r)) {
                 let k = ast.attrs.get(a).kind;
-                if MERGED.contains(&k) && !have.contains(&k) && !(late(r) && INLINING.contains(&k)) {
+                if MERGED.contains(&k) && !have.contains(&k) && !(late(r) && INLINING.contains(&k))
+                {
                     have.push(k);
                     extra.push(a);
                 }
@@ -223,7 +224,9 @@ impl Substituter<'_, '_, '_> {
             // A local variable's `cleanup` names a function, not a dependent
             // entity (WP-807).
             .filter(|n| !only_aligned || matches!(n.kind, AttrKind::ALIGNED | AttrKind::CLEANUP))
-            .filter(|n| !drop_inlining || !matches!(n.kind, AttrKind::ALWAYS_INLINE | AttrKind::NOINLINE))
+            .filter(|n| {
+                !drop_inlining || !matches!(n.kind, AttrKind::ALWAYS_INLINE | AttrKind::NOINLINE)
+            })
             // clang does not clone a visibility attribute (`Clone = 0`):
             // codegen reads the pattern's (spec/codegen.md "Symbol
             // visibility"); a `mode` is applied to the substituted type.

@@ -15,10 +15,10 @@ use kiln_ast::consts::{ByteImage, ConstValue, Member, PrintEnv, PtrBase, Scalar,
 use kiln_ast::decl::{
     DeclFlags, DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage,
 };
+use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{
     ArgListId, ConstValueId, DeclId, ExprId, QualType, TemplateNameId, TemplateParamListId,
 };
-use kiln_ast::expr::ExprKind;
 use kiln_ast::names::{DeclNameView, OverloadedOperator};
 use kiln_ast::types::{
     ArgView, BuiltinType, ExprOperand, RefQual, TemplateName, TypeView, VectorKind,
@@ -1631,9 +1631,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     let r = ex.decl(e);
                     return expanded == pack
                         && self.ast.decls.get(r).kind() == DeclKind::NonTypeTemplateParm
-                        && self.ast.template_parm(r).is_some_and(|y| {
-                            u32::from(y.depth) == d && u32::from(y.index) == i
-                        });
+                        && self
+                            .ast
+                            .template_parm(r)
+                            .is_some_and(|y| u32::from(y.depth) == d && u32::from(y.index) == i);
                 }
                 _ => return false,
             }
