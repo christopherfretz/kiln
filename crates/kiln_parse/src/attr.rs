@@ -84,8 +84,27 @@ fn takes_expr_args(name: &str) -> bool {
             | "tls_model"
             | "returns_twice"
             | "mode"
-            // WP-813: the class B attributes.
-            | "no_stack_protector"
+            | "arm_sve_vector_bits"
+            | "clang_arm_builtin_alias"
+            | "clang_builtin_alias"
+            | "builtin_alias"
+            | "target_version"
+            | "target_clones"
+            | "cpu_dispatch"
+            | "cpu_specific"
+            | "regparm"
+            | "no_caller_saved_registers"
+            | "no_builtin"
+            | "interrupt"
+    ) || kiln_ast::attr::CC_ATTR_SPELLINGS.contains(&n)
+        || class_b_takes_expr_args(n)
+}
+
+/// WP-813: the class B attributes, whose arguments are expressions.
+fn class_b_takes_expr_args(n: &str) -> bool {
+    matches!(
+        n,
+        "no_stack_protector"
             | "patchable_function_entry"
             | "zero_call_used_regs"
             | "speculative_load_hardening"
@@ -123,19 +142,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "coro_await_elidable_argument"
             // `[[omp::assume("s")]]` (the others parse their own).
             | "assume"
-            | "arm_sve_vector_bits"
-            | "clang_arm_builtin_alias"
-            | "clang_builtin_alias"
-            | "builtin_alias"
-            | "target_version"
-            | "target_clones"
-            | "cpu_dispatch"
-            | "cpu_specific"
-            | "regparm"
-            | "no_caller_saved_registers"
-            | "no_builtin"
-            | "interrupt"
-    ) || kiln_ast::attr::CC_ATTR_SPELLINGS.contains(&n)
+    )
 }
 
 /// True for the attributes whose arguments are all identifiers when
