@@ -7072,33 +7072,63 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   operator with the right operand's range, through the runtime-behaviour
   deferral (clang `CheckShiftOperands` / `CheckMultiplyDivideOperands` /
   `CheckRemainderOperands` with `IsCompAssign`).
-- **Never constant (WP-468).** A `constexpr` or `consteval` function
-  that can never be constant is ill-formed, no diagnostic required
-  ([dcl.constexpr]/6); clang runs `isPotentialConstantExpr` on each
-  written definition when `CheckConstexprFunctionBodies` is on: before
-  C++23, else only under `-Winvalid-constexpr` (the last of
+- **Never constant (WP-468, WP-873).** A `constexpr` or `consteval`
+  function that can never be constant is ill-formed, no diagnostic
+  required ([dcl.constexpr]/6); clang runs `isPotentialConstantExpr` on
+  each written definition when `CheckConstexprFunctionBodies` is on:
+  before C++23, else only under `-Winvalid-constexpr` (the last of
   `-Winvalid-constexpr` / `-Wno-invalid-constexpr` decides,
   `DiagEngine::group_flag`; `-Weverything`, `-Werror=` and pragmas do
-  not turn it on). Kiln checks the narrow shape a body overflow makes
-  (`constexpr_body.rs` `check_never_constant`, after the body's own
-  `-Winteger-overflow`): a non-member or static member function without
-  parameters, not in a template or an instantiation, not invalid, whose
-  call (`Oven::evaluate_call`) fails in its own body with the one note
-  `value N is outside the range of representable values of type 'T'`
-  (`g + 1`, `++i` on `INT_MAX`, `i += 1`). It reports `{constexpr|
-  consteval} function never produces a constant expression`
+  not turn it on). Kiln (`never_constant.rs` `check_never_constant`,
+  called from `constexpr_body.rs` after the body's own warnings, for
+  functions, members, constructors, destructors, conversions and
+  explicitly `constexpr` lambdas; not in a template or an
+  instantiation, not invalid) reports `{constexpr|consteval}
+  {function|constructor} never produces a constant expression`
   (`sema_constexpr_never_constant`, an error by default, group
-  `invalid-constexpr`) at the function's name with that note. A failure
-  in a callee (clang is silent too), an unsigned wrap or a narrowing are
-  not reported. Not yet: other failures clang reports (a call to a
-  non-constexpr function, a step limit), functions with parameters (a
-  read of one fails silently in clang), non-static members, lambdas and
-  constructors.
+  `invalid-constexpr`, so `-Wno-error=invalid-constexpr` makes it a
+  warning) at the function's name (`~` for a destructor) with the
+  failure's notes, when the first failure that does not stem from an
+  unknown value lies in the function's own body:
+  - parameters, `this`, captures and (in kiln) every local variable are
+    unknown, and a read of one fails silently; evaluation goes on past
+    it, and the first reportable failure wins;
+  - a call of any constexpr function is unknown and silent (clang
+    `CheckCallLimit` refuses every nested call; the oven's potential
+    mode, `Oven::evaluate_potential` and `evaluate_call` past its own
+    frame, fails such a call with `Fault::Quiet`), so a failure inside a
+    callee, an undefined callee, `new` and `__builtin_is_constant_evaluated`
+    are never reported;
+  - reportable: a call of a non-constexpr function (with `declared
+    here`), a read of a non-const global, a `throw` before C++26 (from
+    C++26 a throw is a constant subexpression, P3068), an overflow, and
+    any other failure whose notes are not about an uninitialized read, a
+    leak, an unknown initializer, an undefined callee or an unhandled
+    exception;
+  - a non-member or static function without parameters returning a
+    scalar or `void` is evaluated as a call (`Oven::evaluate_call`);
+    any other body is walked in order (constructor mem-initializers and
+    default member initializers first) as far as the path is known: a
+    subexpression that names nothing unknown is evaluated on its own,
+    one that does is taken apart operand by operand (`&&`, `||` and
+    `?:` as in `enable_if` conditions); a known `if` condition picks the
+    branch, a loop with an absent or known-true condition has its first
+    iteration walked, and the walk stops at an unknown condition, a
+    `switch`, a `try`, a label or a `return`.
+  Kiln never reports a function clang accepts; it misses some clang
+  reports because clang tracks local variables (`int z = 0; if (z)
+  ...`) and keeps evaluating past a quiet nested call (WP-873
+  follow-ups). Under the default `-fclang-compat=22` a local of
+  non-literal type is not itself a failure from C++23 (P2448R2), as in
+  clang 22.
 - Tests: `expr.add/integer-overflow-folded.cpp`,
   `expr.add/integer-overflow-constexpr-error.cpp`,
   `expr.pre/integer-overflow-in-call.cpp`,
   `expr.ass/compound-assign-overflow.cpp`,
-  `dcl.constexpr/never-constant-overflow-cxx{20,23,26}.cpp`.
+  `dcl.constexpr/never-constant-overflow-cxx{20,23,26}.cpp`,
+  `dcl.constexpr/never-constant-body-cxx{20,23}.cpp`,
+  `dcl.constexpr/never-constant-default-cxx23.cpp`,
+  `dcl.constexpr/never-constant-no-error-cxx20.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

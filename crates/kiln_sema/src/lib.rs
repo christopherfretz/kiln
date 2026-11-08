@@ -83,6 +83,7 @@ mod missing_noreturn;
 pub mod modules;
 mod ms_struct;
 mod musttail;
+mod never_constant;
 pub mod names;
 pub mod new_delete;
 mod nonnull;
