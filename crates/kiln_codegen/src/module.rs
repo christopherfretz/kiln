@@ -2752,6 +2752,7 @@ impl<'a> Cg<'a> {
         if needs_init || needs_dtor {
             self.emit_var_init_fn(d, g, needs_init)?;
         }
+        self.di_global_var(d, g);
         Ok(())
     }
 

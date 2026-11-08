@@ -76,6 +76,8 @@ pub(crate) struct LoopFrame {
     inner_followup: Option<Vec<MetadataId>>,
     /// clang `AccessGroup`: the `distinct !{}` of a parallel loop.
     access_group: Option<MetadataId>,
+    /// clang `StartLoc` and `EndLoc` (with debug information).
+    locs: Option<[MetadataId; 2]>,
 }
 
 /// The `create*Metadata` chain of one loop.
@@ -83,6 +85,7 @@ struct MdBuilder<'a> {
     m: &'a mut Module,
     inner_followup: Option<&'a [MetadataId]>,
     access_group: Option<MetadataId>,
+    locs: Option<[MetadataId; 2]>,
 }
 
 type Props = Vec<MetadataId>;
@@ -300,7 +303,7 @@ impl MdBuilder<'_> {
 
     /// clang `LoopInfo::createMetadata`.
     fn create(&mut self, a: &LoopAttrs, additional: Props, has: &mut bool) -> Props {
-        let mut props = Vec::new();
+        let mut props: Props = self.locs.into_iter().flatten().collect();
         if a.must_progress {
             props.push(self.flag("llvm.loop.mustprogress"));
         }
@@ -318,7 +321,13 @@ impl MdBuilder<'_> {
 impl Cg<'_> {
     /// clang `LoopInfoStack::push`: the attributes of a loop with the
     /// loop hints of `AttributedStmt` `hints` (if any), made active.
-    pub(crate) fn push_loop(&mut self, header: Blk, hints: Option<StmtId>, must_progress: bool) {
+    pub(crate) fn push_loop(
+        &mut self,
+        header: Blk,
+        hints: Option<StmtId>,
+        must_progress: bool,
+        locs: Option<[MetadataId; 2]>,
+    ) {
         let mut a = LoopAttrs::default();
         let ast = self.ast;
         let list = hints.map(|s| ast.stmts.stmt_attrs(s));
@@ -382,8 +391,15 @@ impl Cg<'_> {
             a.unroll_enable = LState::Disable;
         }
         let access_group = a.is_parallel.then(|| self.m.md_distinct_tuple(&[]));
-        let md = a.any().then(|| self.m.md_distinct_tuple(&[None]));
-        self.f.loops.push(LoopFrame { header, md, attrs: a, inner_followup: None, access_group });
+        let md = (a.any() || locs.is_some()).then(|| self.m.md_distinct_tuple(&[None]));
+        self.f.loops.push(LoopFrame {
+            header,
+            md,
+            attrs: a,
+            inner_followup: None,
+            access_group,
+            locs,
+        });
         if access_group.is_some() {
             self.update_access_group();
         }
@@ -423,6 +439,7 @@ impl Cg<'_> {
             m: &mut self.m,
             inner_followup: l.inner_followup.as_deref(),
             access_group: l.access_group,
+            locs: l.locs,
         };
         if let Some(p) = self.f.loops.last_mut()
             && (p.attrs.unroll_and_jam_enable != LState::Unspecified

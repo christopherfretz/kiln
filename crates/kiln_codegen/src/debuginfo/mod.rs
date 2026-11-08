@@ -103,7 +103,7 @@ impl DebugOptions {
     }
 }
 
-mod func;
+pub(crate) mod func;
 mod md5;
 mod stmt;
 mod types;
@@ -132,7 +132,15 @@ impl Fields {
         self.0.push((k.into(), MdField::Int(v)));
         self
     }
+    /// A node field, left out when null.
     pub fn n(mut self, k: &str, v: Option<MetadataId>) -> Self {
+        if v.is_some() {
+            self.0.push((k.into(), MdField::Node(v)));
+        }
+        self
+    }
+    /// A node field printed even when null (`baseType: null`).
+    pub fn nn(mut self, k: &str, v: Option<MetadataId>) -> Self {
         self.0.push((k.into(), MdField::Node(v)));
         self
     }
@@ -147,6 +155,10 @@ impl Fields {
     /// `flags:` when any are set (`DIFlagA | DIFlagB`).
     pub fn flags(self, k: &str, f: &[&str]) -> Self {
         if f.is_empty() { self } else { self.raw(k, &f.join(" | ")) }
+    }
+    /// `spFlags:`, always printed (none reads as `isDefinition: true`).
+    pub fn sp_flags(self, f: &[&str]) -> Self {
+        if f.is_empty() { self.raw("spFlags", "0") } else { self.raw("spFlags", &f.join(" | ")) }
     }
 }
 
@@ -188,6 +200,8 @@ pub(crate) struct Di<'a> {
     pub decl_sps: FxHashMap<DeclId, MetadataId>,
     /// Namespaces by first declaration.
     pub namespaces: FxHashMap<DeclId, MetadataId>,
+    /// Global variable expressions by first declaration.
+    pub gves: FxHashMap<DeclId, MetadataId>,
     /// Static data member declarations by first declaration.
     pub static_members: FxHashMap<DeclId, MetadataId>,
     pub enums: Vec<MetadataId>,
@@ -250,6 +264,7 @@ impl<'a> Cg<'a> {
             error: None,
             decl_sps: FxHashMap::default(),
             namespaces: FxHashMap::default(),
+            gves: FxHashMap::default(),
             static_members: FxHashMap::default(),
             enums: Vec::new(),
             retained: Vec::new(),
@@ -391,7 +406,7 @@ impl<'a> Cg<'a> {
         }
         self.dbg_emit_location(loc);
         if let Some(d) = self.f.fir.dbg.as_deref_mut() {
-            d.last_stop = d.loc;
+            d.last_stop = loc;
         }
     }
 

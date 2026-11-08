@@ -24,6 +24,8 @@ pub(crate) struct Scope {
     old_cur: Depth,
     /// The enclosing `DidCallStackSave` (WP-183).
     old_stack_save: bool,
+    /// A `LexicalScope`'s debug block end (WP-814).
+    pub(crate) dbg_end: Option<kiln_source::Loc>,
 }
 
 impl Cg<'_> {
@@ -65,6 +67,7 @@ impl Cg<'_> {
             lexical,
             old_cur,
             old_stack_save,
+            dbg_end: None,
         }
     }
 
@@ -86,9 +89,15 @@ impl Cg<'_> {
     /// cleanups are shared with a branch out of the scope (a `co_await`
     /// suspension's destroy path, a statement expression's jump).
     pub(crate) fn end_scope_reload(&mut self, s: Scope, reload: &mut [&mut V]) {
+        // ~LexicalScope: the block ends, then the cleanups run at its end.
+        let dbg = s.dbg_end.and_then(|end| {
+            self.dbg_block_end(true, end);
+            self.dbg_apply(end)
+        });
         let labels = if s.lexical { self.f.lex_labels.pop() } else { None };
         self.deactivate_deferred(s.deferred);
         self.pop_cleanup_blocks_le_reload(s.depth, s.le, reload);
+        self.dbg_restore(dbg);
         self.f.cl.cur_scope = s.old_cur;
         self.f.did_stack_save = s.old_stack_save;
         if let Some(labels) = labels
@@ -300,10 +309,21 @@ impl Cg<'_> {
             }
             self.ensure_insert_point();
         }
+        if !simple
+            || matches!(
+                n.kind(),
+                StmtKind::DeclStmt
+                    | StmtKind::BreakStmt
+                    | StmtKind::ContinueStmt
+                    | StmtKind::GotoStmt
+            ) && self.f.fir.cur().is_some()
+        {
+            self.dbg_stmt(s);
+        }
         match n.kind() {
             StmtKind::NullStmt => Ok(()),
             StmtKind::CompoundStmt => {
-                let sc = self.begin_scope(true);
+                let sc = self.begin_lexical(n.loc(), ast.stmts.rbrace(s));
                 self.emit_compound_without_scope(s)?;
                 self.end_scope(sc);
                 Ok(())
@@ -401,6 +421,7 @@ impl Cg<'_> {
         {
             rv = Some(self.sub(e));
         }
+        self.dbg_count_return(rv);
         let nrvo = ast
             .stmts
             .return_nrvo(s)
@@ -463,7 +484,9 @@ impl Cg<'_> {
             }
             return Ok(());
         }
-        let cond_scope = self.begin_scope(true);
+        let cond = d.cond.expect("if condition");
+        let cond_end = self.di_expr_end(cond);
+        let cond_scope = self.begin_lexical(ast.begin_loc(cond), cond_end);
         if let Some(i) = d.init {
             self.emit_stmt(i)?;
         }
@@ -471,7 +494,6 @@ impl Cg<'_> {
             Some(v) => self.emit_cond_var_decl(v)?.then_some(v),
             None => None,
         };
-        let cond = d.cond.expect("if condition");
         if let Some(b) = self.fold_bool(cond).filter(|_| deferred.is_none()) {
             let (live, dead) = if b { (d.then, d.els) } else { (d.els, d.then) };
             if kind == IfKind::Constexpr || !dead.is_some_and(|x| self.contains_label(x)) {
@@ -502,11 +524,15 @@ impl Cg<'_> {
         }
         self.emit_branch(end_b);
         if let Some(e) = d.els {
+            let nl = self.dbg_apply_empty();
             self.emit_block(else_b, false);
+            self.dbg_restore(nl);
             let sc = self.begin_scope(false);
             self.emit_stmt(e)?;
             self.end_scope(sc);
+            let nl = self.dbg_apply_empty();
             self.emit_branch(end_b);
+            self.dbg_restore(nl);
         }
         self.emit_block(end_b, true);
         self.end_scope(cond_scope);
@@ -594,7 +620,8 @@ impl Cg<'_> {
         }
         let const_true = matches!(self.cint(cv), Some((_, 1, _)));
         let mp = self.loop_must_progress(Some(cond), d.body);
-        self.push_loop(header_b, hints, mp);
+        let locs = self.di_loop_locs(s);
+        self.push_loop(header_b, hints, mp, locs);
         let body = self.f.fir.create_block();
         if !const_true {
             let exit = if self.requires_cleanups(&cond_scope) {
@@ -616,6 +643,7 @@ impl Cg<'_> {
         self.end_scope(body_scope);
         self.f.jumps.pop();
         self.end_scope(cond_scope);
+        self.dbg_stmt(s);
         self.emit_branch(header_b);
         self.pop_loop();
         self.emit_block(end.blk, true);
@@ -645,7 +673,8 @@ impl Cg<'_> {
         self.f.jumps.pop();
         let const_false = matches!(self.cint(cv), Some((_, 0, _)));
         let mp = self.loop_must_progress(Some(cond), d.body);
-        self.push_loop(body_b, hints, mp);
+        let locs = self.di_loop_locs(s);
+        self.push_loop(body_b, hints, mp, locs);
         if !const_false {
             self.cond_br(cv, body_b, end.blk);
         }
@@ -662,7 +691,8 @@ impl Cg<'_> {
         let ast = self.ast;
         let d = *ast.stmts.loop_data(s);
         let end = self.jump_dest_here();
-        let for_scope = self.begin_scope(true);
+        let (begin_l, end_l) = (ast.stmts.get(s).loc(), self.di_stmt_end(s));
+        let mut for_scope = self.begin_lexical(begin_l, end_l);
         if let Some(i) = d.init {
             self.emit_stmt(i)?;
         }
@@ -670,8 +700,9 @@ impl Cg<'_> {
         let cond_b = cond_d.blk;
         self.emit_block(cond_b, false);
         let mp = self.loop_must_progress(d.cond, d.body);
-        self.push_loop(cond_b, hints, mp);
-        let cond_scope = self.begin_scope(true);
+        let locs = self.di_loop_locs(s);
+        self.push_loop(cond_b, hints, mp, locs);
+        let mut cond_scope = self.begin_lexical(begin_l, end_l);
         let mut cont = if d.inc.is_none() {
             Some(cond_d)
         } else if d.cond_var.is_none() {
@@ -717,11 +748,17 @@ impl Cg<'_> {
             self.emit_ignored(inc)?;
         }
         self.f.jumps.pop();
+        // `ForceCleanup` leaves the debug blocks to the scopes' ends.
+        let cond_dbg = cond_scope.dbg_end.take();
         self.end_scope(cond_scope);
+        self.dbg_stmt(s);
         self.emit_branch(cond_b);
+        let for_dbg = for_scope.dbg_end.take();
         self.end_scope(for_scope);
         self.pop_loop();
         self.emit_block(end.blk, true);
+        self.dbg_block_end(cond_dbg.is_some(), end_l);
+        self.dbg_block_end(for_dbg.is_some(), end_l);
         Ok(())
     }
 
@@ -738,7 +775,8 @@ impl Cg<'_> {
             return err(Some(loc), "a dependent range-based for statement");
         };
         let end = self.jump_dest_here();
-        let for_scope = self.begin_scope(true);
+        let end_l = self.di_stmt_end(s);
+        let mut for_scope = self.begin_lexical(loc, end_l);
         if let Some(i) = d.init {
             self.emit_stmt(i)?;
         }
@@ -748,7 +786,8 @@ impl Cg<'_> {
         let cond_d = self.jump_dest_here();
         let cond_b = cond_d.blk;
         self.emit_block(cond_b, false);
-        self.push_loop(cond_b, hints, false);
+        let locs = self.di_loop_locs(s);
+        self.push_loop(cond_b, hints, false, locs);
         let exit =
             if self.requires_cleanups(&for_scope) { self.f.fir.create_block() } else { end.blk };
         let body_b = self.f.fir.create_block();
@@ -761,17 +800,23 @@ impl Cg<'_> {
         self.emit_block(body_b, false);
         let next = self.jump_dest_here();
         self.f.jumps.push(Jump { brk: end, cont: Some(next) });
-        let sc = self.begin_scope(false);
+        let mut sc = self.begin_scope(false);
+        if self.dbg_block_start(loc) {
+            sc.dbg_end = Some(end_l);
+        }
         self.emit_var_decl(d.loop_var)?;
         self.emit_stmt(d.body)?;
         self.end_scope(sc);
+        self.dbg_stmt(s);
         self.emit_block(next.blk, false);
         self.emit_ignored(inc)?;
         self.f.jumps.pop();
         self.emit_branch(cond_b);
+        let for_dbg = for_scope.dbg_end.take();
         self.end_scope(for_scope);
         self.pop_loop();
         self.emit_block(end.blk, true);
+        self.dbg_block_end(for_dbg.is_some(), end_l);
         Ok(())
     }
 

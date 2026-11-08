@@ -112,6 +112,14 @@ impl Cg<'_> {
 
     /// clang `ComplexExprEmitter::Visit` with the ignore flags `ign`.
     pub(crate) fn emit_cx(&mut self, e: ExprId, ign: (bool, bool)) -> R<Cx> {
+        let dl = self.dbg_apply_expr(e);
+        self.di_explicit_cast(e);
+        let r = self.emit_cx_x(e, ign);
+        self.dbg_restore(dl);
+        r
+    }
+
+    fn emit_cx_x(&mut self, e: ExprId, ign: (bool, bool)) -> R<Cx> {
         let ast = self.ast;
         let n = *ast.exprs.get(e);
         let q = n.ty();

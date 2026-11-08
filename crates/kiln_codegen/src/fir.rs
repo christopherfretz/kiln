@@ -453,12 +453,22 @@ pub(crate) struct FirDbg {
     pub scopes: Vec<MetadataId>,
     /// clang `LastStopPoint`'s location (the return's line when every
     /// return was simple).
-    pub last_stop: Option<MetadataId>,
+    pub last_stop: kiln_source::Loc,
     /// clang `CGDebugInfo::CurLoc`: the last valid location emitted.
     pub cur_loc: kiln_source::Loc,
-    /// Every `return` so far was simple (clang `NumSimpleReturnExprs ==
-    /// NumReturnExprs`), so the epilogue takes the last stop point.
-    pub simple_returns: bool,
+    /// clang `NumReturnExprs` / `NumSimpleReturnExprs`: when every
+    /// `return` was simple, the epilogue takes the last stop point.
+    pub returns: u32,
+    pub simple_returns: u32,
+    /// clang `ReturnValuePointer`: the slot holding the `sret` pointer
+    /// (an NRVO variable is described through it).
+    pub ret_ptr: Option<V>,
+    /// The `ret` takes the location of the store it replaces (clang
+    /// `EmitRetDbgLoc`).
+    pub ret_dbg: bool,
+    /// The function's variables (the subprogram's `retainedNodes` when
+    /// optimizing).
+    pub vars: Vec<MetadataId>,
     /// Records declared at the end of a block, adopted by the next
     /// instruction appended to it (`DIBuilder::insertDeclare(.., BB)`).
     trailing: Vec<(Blk, DbgRec)>,
@@ -474,9 +484,13 @@ impl FirDbg {
             sp,
             loc: None,
             scopes: vec![sp],
-            last_stop: None,
+            last_stop: kiln_source::Loc::INVALID,
             cur_loc: kiln_source::Loc::INVALID,
-            simple_returns: true,
+            returns: 0,
+            simple_returns: 0,
+            ret_ptr: None,
+            ret_dbg: true,
+            vars: Vec::new(),
             trailing: Vec::new(),
             recs: Vec::new(),
         }

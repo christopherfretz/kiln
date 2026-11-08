@@ -59,7 +59,7 @@ impl<'a> Cg<'a> {
     }
 
     /// The record `d` is a member of, if any.
-    fn di_parent_record(&self, d: DeclId) -> Option<DeclId> {
+    pub(crate) fn di_parent_record(&self, d: DeclId) -> Option<DeclId> {
         let c = self.ast.decls.get(d).ctx()?;
         matches!(self.ast.decls.get(c).kind(), DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization)
             .then_some(c)
@@ -164,7 +164,7 @@ impl<'a> Cg<'a> {
     }
 
     fn di_derived(&mut self, tag: &str, base: Option<MetadataId>, f: Fields) -> MetadataId {
-        let f = Fields::default().raw("tag", tag).n("baseType", base).0.into_iter().chain(f.0).collect();
+        let f = Fields::default().raw("tag", tag).nn("baseType", base).0.into_iter().chain(f.0).collect();
         self.m.md_specialized("DIDerivedType", false, f)
     }
 
@@ -226,7 +226,7 @@ impl<'a> Cg<'a> {
                 let size = bits_of(self, q);
                 let f = Fields::default()
                     .raw("tag", "DW_TAG_array_type")
-                    .n("baseType", base)
+                    .nn("baseType", base)
                     .u("size", size)
                     .raw("flags", "DIFlagVector")
                     .n("elements", Some(el));
@@ -968,7 +968,7 @@ impl<'a> Cg<'a> {
         if let Some(v) = vindex {
             f = f.n("containingType", Some(rec)).u("virtualIndex", u64::from(v));
         }
-        f = f.flags("flags", &fl).flags("spFlags", &sp).n("templateParams", tparams);
+        f = f.flags("flags", &fl).sp_flags(&sp).n("templateParams", tparams);
         let s = self.m.md_specialized("DISubprogram", false, f.0);
         if let Some(d) = self.di.as_deref_mut() {
             d.decl_sps.insert(first, s);
@@ -1025,7 +1025,7 @@ impl<'a> Cg<'a> {
         match a {
             ArgView::Type(t) => {
                 let t = self.di_type(t);
-                Some(self.m.md_specialized("DITemplateTypeParameter", false, f.n("type", t).0))
+                Some(self.m.md_specialized("DITemplateTypeParameter", false, f.nn("type", t).0))
             }
             ArgView::Value { ty, value } => {
                 let Some(c) = self.di_int(value) else {
