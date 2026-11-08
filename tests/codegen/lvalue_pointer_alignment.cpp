@@ -44,13 +44,30 @@ int over_aligned_array(int i) {
 }
 
 struct V { long long v; };
-struct alignas(32) VB : virtual V { int m; };
+struct alignas(32) VB : virtual V { long long pad; int m; };
 struct VD : VB { int d; };
 struct alignas(64) WithV : virtual V {
   int m;
   int get() { return m + this->m + (*this).m; }
   void set(int x) { m = x; }
 };
+
+// A virtual base stricter than the rest: complete objects are aligned 32,
+// but an `NV` base subobject only 8 (its non-virtual alignment).
+struct alignas(32) BigV { int v; };
+struct NV : virtual BigV {
+  long long pad;  // `m` at offset 16: aligned 16 only in a complete object
+  int m;
+  int get() { return m + this->m + (*this).m; }
+};
+struct NVD final : NV { int e; };
+
+int nv_member(NV *p, NV &r, NVD *f, int NV::*mp) {
+  p->m = 1;
+  (*p).m = 2;
+  p[0].m = 3;
+  return p->m + r.m + p->get() + p->*mp + (*p).*mp + f->m + f->e;
+}
 
 int vbase_member(VB *p, VB &r, WithV *w) {
   // A class with a virtual base is reached at its non-virtual alignment.
