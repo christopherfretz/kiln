@@ -777,9 +777,9 @@ impl Sema<'_, '_> {
         // bound-member type: whatever the target, it can only be called
         // ([expr.ref]/7.3.2; `CheckPlaceholderExpr` diagnoses it before
         // the conversion, WP-788).
-        let decls = self.member_overload_decls(x).to_vec();
-        if decls.iter().all(|&d| self.is_implicit_object_member(self.templated_or_self(d))) {
-            self.diagnose_member_set_not_called(x);
+        if self.member_set_needs_call(x) {
+            let at = self.paren_loc_of(e, x);
+            self.diagnose_member_set_not_called_at(x, false, at);
             return None;
         }
         let m = self.ovl.members.get(&x)?;
@@ -998,7 +998,8 @@ impl Sema<'_, '_> {
         let member =
             self.member_overload(e).or_else(|| self.implicit_member_operand(e).map(|p| p.0));
         if let Some(x) = member {
-            self.diagnose_member_set_not_called(x);
+            let at = self.paren_loc_of(e, x);
+            self.diagnose_member_set_not_called_at(x, false, at);
             return true;
         }
         let Some((ule, _)) = self.overload_operand(e) else { return false };
@@ -1019,8 +1020,34 @@ impl Sema<'_, '_> {
     /// target for call" per member. The "did you mean to call it with no
     /// arguments?" hint follows clang's `isExprCallable`: the members
     /// callable with no arguments (a template's pattern counts) all
-    /// return the same type, and there is one.
-    pub(crate) fn diagnose_member_set_not_called(&mut self, x: ExprId) {
+    /// return the same type, and there is one; never in a SFINAE
+    /// context. True when the hint was given (clang then recovers by
+    /// the call, [`Sema::recover_not_called`]).
+    /// Whether member overload set `x` holds only implicit object member
+    /// functions: clang gives it the bound-member type, so whatever the
+    /// target it can only be called ([expr.ref]/7.3.2).
+    pub(crate) fn member_set_needs_call(&self, x: ExprId) -> bool {
+        self.member_overload_decls(x)
+            .iter()
+            .all(|&d| self.is_implicit_object_member(self.templated_or_self(d)))
+    }
+
+    /// Where clang reports a member overload set `x` that `e` is,
+    /// possibly parenthesized: at the outermost parenthesis (the
+    /// `OverloadExpr` keeps its parentheses, `(g.o)`), else at `x`.
+    pub(crate) fn paren_loc_of(&self, e: ExprId, x: ExprId) -> Loc {
+        if self.ignore_parens(e) == x { self.eloc(e) } else { self.eloc(x) }
+    }
+
+    /// `again` exempts it from deduplication, for the report clang
+    /// repeats when the initializer it was deduced from is then converted
+    /// (`auto a = g.f;`); reported at `at` ([`Self::paren_loc_of`]).
+    pub(crate) fn diagnose_member_set_not_called_at(
+        &mut self,
+        x: ExprId,
+        again: bool,
+        at: Loc,
+    ) -> bool {
         let decls = self.member_overload_decls(x).to_vec();
         let mut ret: Option<QualType> = None;
         let mut no_args = true;
@@ -1043,13 +1070,20 @@ impl Sema<'_, '_> {
                 _ => no_args = false,
             }
         }
-        let no_args = no_args && ret.is_some();
-        let msg =
-            self.diag(DiagId::sema_bound_member_not_called, self.eloc(x)).arg(u8::from(no_args));
+        // clang's `tryExprAsCall` tries no call on a type-dependent
+        // access (the object is the current instantiation in a template
+        // body: `this->f`, `F::tm<long>`), so it gives no hint there.
+        let dependent = self.ovl.members.get(&x).is_some_and(|m| {
+            self.ast.exprs.get(m.base).is_type_dependent() || self.is_dependent_type(m.obj_ty)
+        });
+        let no_args = no_args && ret.is_some() && !dependent && !self.inst.stack.is_sfinae();
+        let msg = self.diag(DiagId::sema_bound_member_not_called, at).arg(u8::from(no_args));
+        let msg = if again { msg.allow_duplicate() } else { msg };
         let notes: Vec<Diag> = decls
             .iter()
             .map(|&d| self.diag(DiagId::note_possible_target, self.ast.decls.get(d).loc()))
             .collect();
         self.emit(notes.into_iter().fold(msg, Diag::with_note));
+        no_args
     }
 }

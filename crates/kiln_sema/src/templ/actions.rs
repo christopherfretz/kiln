@@ -672,7 +672,16 @@ impl Sema<'_, '_> {
         let n = *self.ast.exprs.get(e);
         let nns = self.ast.templates.expr_nns.get(e).copied();
         let targs = self.ast.templates.expr_targs.get(e).copied();
-        self.builder().unresolved_lookup(DeclName::ident(name), &decls, false, nns, targs, n.loc())
+        let dep = self.overload_set_is_dependent(&decls);
+        self.builder().unresolved_lookup_in(
+            DeclName::ident(name),
+            &decls,
+            false,
+            nns,
+            targs,
+            dep,
+            n.loc(),
+        )
     }
 
     /// True if the unqualified `name`, followed by `<`, is assumed to name
@@ -937,7 +946,8 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.act_on_error_expr(&[], loc);
         }
-        self.builder().unresolved_lookup(name, &decls, false, None, Some(list), loc)
+        let dep = self.overload_set_is_dependent(&decls);
+        self.builder().unresolved_lookup_in(name, &decls, false, None, Some(list), dep, loc)
     }
 
     /// The qualified function or variable template-id `e` named at `loc`
@@ -1276,7 +1286,9 @@ impl Sema<'_, '_> {
             }
             DeclKind::FunctionTemplate => {
                 let n = self.ast.decls.get(d).name();
-                let e = self.builder().unresolved_lookup(n, &[d], false, None, Some(list), l);
+                let dep = self.overload_set_is_dependent(&[d]);
+                let e =
+                    self.builder().unresolved_lookup_in(n, &[d], false, None, Some(list), dep, l);
                 Ok(TemplateIdRef::Overload(e))
             }
             DeclKind::Concept => {

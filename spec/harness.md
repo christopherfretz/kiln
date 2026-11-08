@@ -620,8 +620,10 @@ compile fails for that reason. Then:
 - `oven: <counter><=N ...` without a location bounds the report's `total`.
   Its `peak_bytes` and `peak_arena` are the maximum over the evaluations,
   `static_bytes` the static space's high-water mark over the TU (it covers
-  unrecorded work too, spec/oven.md "Reporting protocol"), and
-  `evaluations` their count.
+  unrecorded work too, spec/oven.md "Reporting protocol"),
+  `evaluations` their count, and `splice_fast` the splice operands read
+  without an evaluation (a total-only key: an evaluation line reads it as 0, so only
+  an unlocated bound is meaningful).
 - `oven: <line>[:<col>] <counter><=N ...` bounds the evaluations whose `loc`
   is in the test file at that line (and column, if given), combined as for
   the total (sums; maximum for `peak_bytes`, `peak_arena` and `static_bytes`; count for `evaluations`). If no

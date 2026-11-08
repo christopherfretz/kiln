@@ -4027,8 +4027,25 @@ impl Parser<'_, '_> {
     }
 
     /// Records the end of bodiless function declaration `f`'s declarator
-    /// `d`, where notes about it point (`ColdDeclData::declarator_end`).
+    /// `d`, where notes about it point (`ColdDeclData::declarator_end`);
+    /// also the end of a block-scope variable's declarator that ends
+    /// after its name (`int (*fp)(int)`), where the uninitialized-use
+    /// fix-it inserts (spec/sema.md §7.14).
     pub(crate) fn record_declarator_end(&mut self, f: Option<DeclId>, d: &Declarator) {
+        if let Some(v) = f
+            && d.end != Loc::INVALID
+            && self.s.ast.decls.var(v).is_some()
+            && self.s.ast.decls.get(v).loc() != d.end
+            && self
+                .s
+                .ast
+                .decls
+                .get(v)
+                .ctx()
+                .is_some_and(|c| self.s.ast.decls.get(c).kind().is_function())
+        {
+            let _ = self.s.ast.decls.cold.declarator_end.insert(v, d.end);
+        }
         self.record_fn_end(f, d.end);
     }
 
@@ -4475,7 +4492,7 @@ impl Parser<'_, '_> {
                     self.skip_until(&[Punct::RBrace], false, true);
                     return Err(());
                 };
-                InitValue::Expr(e)
+                InitValue::Expr(self.s.act_on_init_clause(e))
             };
             if let Some(l) = self.eat(Punct::Ellipsis) {
                 // An initializer-clause pack expansion ([temp.variadic]/5.4).

@@ -10,7 +10,7 @@ use kiln_ast::expr::{
 };
 use kiln_ast::types::{Quals, RefQual, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
-use kiln_diag::DiagId;
+use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
 use crate::Sema;
@@ -1686,6 +1686,9 @@ impl Sema<'_, '_> {
         let Some(conv_args) =
             self.convert_call_args(named, callee, args, braced, &proto, loc, rparen)
         else {
+            if method.is_some() {
+                self.note_call_recovery(Some(proto.ret()));
+            }
             return Some(self.recover_err(&kids, loc));
         };
         if let Some(m) = method {
@@ -1798,6 +1801,7 @@ impl Sema<'_, '_> {
         let named = Some(CallCallee { decl: m, overloadable: false, enable_if: !resolved });
         let conv_args = self.convert_call_args(named, r, kids, all_braced, &proto, loc, rparen);
         let Some(conv_args) = conv_args else {
+            self.note_call_recovery(Some(proto.ret()));
             return self.recover_err(kids, loc);
         };
         if !self.check_lambda_explicit_object_call(m, self.begin_loc(obj)) {
@@ -2192,41 +2196,123 @@ impl Sema<'_, '_> {
         reported
     }
 
+    /// A bound member function (or member overload set) `e` used other
+    /// than as a callee ([expr.ref]/7.3.2), recovered as clang's
+    /// `tryToRecoverWithCall` does: "must be called" is reported, and
+    /// when it carries the "did you mean to call it with no arguments?"
+    /// hint (outside a SFINAE context) the expression becomes that
+    /// zero-argument call, so what follows is checked against its result
+    /// (`int *p = g.f;` is then "cannot initialize ... with an rvalue of
+    /// type 'int'"). Otherwise an erroneous expression. spec/sema.md
+    /// §1.2 (WP-832).
+    pub(crate) fn recover_not_called(&mut self, e: ExprId) -> ExprId {
+        self.recover_not_called_as(e, false)
+    }
+
+    /// [`Self::recover_not_called`]; `again` as in
+    /// [`Self::diagnose_member_set_not_called_at`]: placeholder deduction
+    /// reports it on a copy, and the initialization reports it again.
+    pub(crate) fn recover_not_called_as(&mut self, e: ExprId, again: bool) -> ExprId {
+        let x = self.ignore_parens(e);
+        let callable = if let Some(m) = self.member_overload(e) {
+            let at = self.paren_loc_of(e, m);
+            self.diagnose_member_set_not_called_at(m, again, at)
+        } else {
+            self.diagnose_bound_member_as(e, again)
+        };
+        let loc = self.eloc(x);
+        if !callable {
+            return self.recover_err(&[e], loc);
+        }
+        // Resolving the call consumes a member overload set; the copy
+        // deduction reports on keeps it for the initialization.
+        let kept = if again {
+            self.member_overload(e).and_then(|m| Some((m, self.ovl.members.get(&m)?.clone())))
+        } else {
+            None
+        };
+        let end = self.expr_end_loc(e);
+        let call = self.act_on_call(e, &[], end, end);
+        if let Some((m, set)) = kept {
+            let _ = self.ovl.members.insert(m, set);
+        }
+        call
+    }
+
+    /// clang's `CheckPlaceholderExpr` for a bound member function operand
+    /// of an operator, cast, member access, braced list or deduction: the
+    /// [`Self::recover_not_called`] call, else `e` unchanged (an overload
+    /// set waits for its target, [over.over]/1).
+    pub(crate) fn recover_bound_member(&mut self, e: ExprId) -> ExprId {
+        if self.ast.exprs.get(e).ty() == QualType::BOUND_MEMBER {
+            self.recover_not_called(e)
+        } else {
+            e
+        }
+    }
+
     /// A bound member function used other than as a callee
-    /// ([expr.ref]/7.3.2); reports clang's "must be called".
-    pub(crate) fn diagnose_bound_member(&mut self, e: ExprId) {
+    /// ([expr.ref]/7.3.2); reports clang's "must be called". True when
+    /// the hint to call it with no arguments was given, which clang
+    /// recovers by calling it ([`Self::recover_not_called`]); never in a
+    /// SFINAE context, where clang tries no call.
+    pub(crate) fn diagnose_bound_member(&mut self, e: ExprId) -> bool {
+        self.diagnose_bound_member_as(e, false)
+    }
+
+    fn diagnose_bound_member_as(&mut self, e: ExprId, again: bool) -> bool {
         let x = self.ignore_parens(e);
         if self.ast.exprs.get(x).kind() == ExprKind::CXXPseudoDestructorExpr {
             let msg = self.diag(DiagId::sema_pseudo_dtor_not_called, self.begin_loc(x));
             self.emit(msg);
-            return;
+            return false;
         }
-        let no_args = match self.ast.exprs.get(x).kind() {
-            ExprKind::MemberExpr => self
-                .ast
-                .decls
-                .function(self.ast.exprs.decl(x))
-                .is_some_and(|f| self.ast.lists.get(f.params).is_empty()),
-            // `obj.*pmf` / `ptr->*pmf`: the hint follows the pointee
-            // function type (clang's `tryExprAsCall`).
-            ExprKind::BinaryOperator => {
-                let [_, r] = self.ast.exprs.operands(x);
-                let rt = self.ast.types.canonical(self.ast.exprs.get(r).ty()).ty();
-                match self.ast.types.view(rt) {
-                    TypeView::MemberPointer { pointee, .. } => {
-                        match self.ast.types.view(self.ast.types.canonical(pointee).ty()) {
-                            TypeView::Function(p) => p.num_params() == 0 && !p.variadic(),
-                            _ => false,
-                        }
-                    }
-                    _ => false,
+        let no_args = !self.inst.stack.is_sfinae()
+            && match self.ast.exprs.get(x).kind() {
+                // No hint on a type-dependent access, as for a member
+                // overload set (`diagnose_member_set_not_called_at`).
+                ExprKind::MemberExpr => {
+                    let m = self.ast.exprs.decl(x);
+                    let base = self.ast.exprs.operand(x);
+                    self.ast.decls.function(m).is_some()
+                        && self.fn_min_args(m) == 0
+                        && !self.ast.exprs.get(base).is_type_dependent()
+                        && !self.is_dependent_type(self.ast.exprs.get(base).ty())
                 }
-            }
-            _ => false,
-        };
+                // `obj.*pmf` / `ptr->*pmf`: the hint follows the pointee
+                // function type (clang's `tryExprAsCall`).
+                ExprKind::BinaryOperator => {
+                    let [_, r] = self.ast.exprs.operands(x);
+                    let rt = self.ast.types.canonical(self.ast.exprs.get(r).ty()).ty();
+                    match self.ast.types.view(rt) {
+                        TypeView::MemberPointer { pointee, .. } => {
+                            match self.ast.types.view(self.ast.types.canonical(pointee).ty()) {
+                                TypeView::Function(p) => p.num_params() == 0 && !p.variadic(),
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    }
+                }
+                _ => false,
+            };
         let msg =
-            self.diag(DiagId::sema_bound_member_not_called, self.eloc(x)).arg(u8::from(no_args));
-        self.emit(msg);
+            self.diag(DiagId::sema_bound_member_not_called, self.eloc(e)).arg(u8::from(no_args));
+        let msg = if again { msg.allow_duplicate() } else { msg };
+        // A member template-id resolved early (`C::tm<long>` with an
+        // implicit object) is still an overload set to clang, whose
+        // declarations it lists as possible targets.
+        let notes: Vec<Diag> = self
+            .ovl
+            .template_id_refs
+            .get(&x)
+            .map(|&u| self.ast.unresolved_decls(u))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| self.diag(DiagId::note_possible_target, self.ast.decls.get(d).loc()))
+            .collect();
+        self.emit(notes.into_iter().fold(msg, Diag::with_note));
+        no_args
     }
 
     /// Assignment to a member of `*this` in a const member function

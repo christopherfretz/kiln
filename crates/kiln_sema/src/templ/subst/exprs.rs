@@ -76,6 +76,23 @@ impl Substituter<'_, '_, '_> {
         Ok(r)
     }
 
+    /// Rebuilds pattern call `e` with `build`, noting it in
+    /// `recovered_call` when it fails where clang builds a `RecoveryExpr`
+    /// (spec/sema.md §1.2).
+    fn recovering_call(&mut self, e: ExprId, build: impl FnOnce(&mut Self) -> ExprId) -> ExprId {
+        let outer = self.sema.call_recovery.take();
+        let r = build(self);
+        let depth = self.sema.inst.stack.len();
+        if self.sema.call_recovery.is_some_and(|(d, _)| d == depth) {
+            if self.sema.is_err_expr(r) {
+                self.recovered_call = Some(e);
+            }
+        } else {
+            self.sema.call_recovery = outer;
+        }
+        r
+    }
+
     /// A name written `N::template x<A>` that is still unresolved after
     /// substitution keeps its `template` keyword (clang's
     /// `TransformDependentScopeDeclRefExpr` / `TransformUnresolvedLookupExpr`
@@ -400,12 +417,14 @@ impl Substituter<'_, '_, '_> {
                     let m = ex(self).decl(named);
                     let at = ex(self).get(named).loc();
                     let lparen = self.sema.begin_loc(callee);
-                    return Ok(self.sema.rebuild_explicit_object_call(m, at, &args, lparen, end));
+                    return Ok(self.recovering_call(e, |s| {
+                        s.sema.rebuild_explicit_object_call(m, at, &args, lparen, end)
+                    }));
                 }
                 // clang `TransformCallExpr`: the "fake" `(` is where the
                 // callee begins.
                 let lparen = self.sema.begin_loc(callee);
-                Ok(self.sema.act_on_call(callee, &args, lparen, end))
+                Ok(self.recovering_call(e, |s| s.sema.act_on_call(callee, &args, lparen, end)))
             }
             ExprKind::AtomicExpr => {
                 // clang `TransformAtomicExpr`: the operands in source

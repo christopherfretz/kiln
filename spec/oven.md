@@ -873,7 +873,7 @@ line per **top-level evaluation** in the order the evaluations finished,
 then exactly one `total` line, which is the last line:
 ```
 {"loc":"a.cpp:12:1","kind":"static_assert","steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"memo_hits":0,"refl_bytes":0,"wall_us":4}
-{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"memo_hits":0,"refl_bytes":0,"wall_us":4,"evaluations":1}}
+{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"memo_hits":0,"refl_bytes":0,"wall_us":4,"evaluations":1,"splice_fast":0}}
 ```
 A top-level evaluation is one call of an evaluation entry point that the
 language requires (a manifestly constant-evaluated context): it includes
@@ -911,7 +911,12 @@ a nested evaluation's peaks are exclusive, see "Nested evaluation"), and
 (`Memory::static_peak`), which also covers work no line records
 (`has_constant_destruction`, `try_fold`) and so is at least every line's,
 plus `evaluations`, the number
-of evaluation lines. All counters are integers in `[0, 2^53]`.
+of evaluation lines, and `splice_fast`, the splice operands sema read
+from a frozen reflection without starting an evaluation (spec/reflection.md
+"Fast path"; WP-869). `splice_fast` is a total-only key: no evaluation
+line carries it and it is not cross-checked against them; it is optional
+for consumers (absent in reports before WP-884: read as 0). All counters
+are integers in `[0, 2^53]`.
 
 Every counter except `wall_us` is **deterministic**: the same compiler on the
 same input reports the same values, on any host and under any load, which is

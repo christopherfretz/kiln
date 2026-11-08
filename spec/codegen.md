@@ -1232,7 +1232,10 @@ Tests: `conformance/target.acle/` (`ir-*-19.cpp` exact under oracle 19,
   and definition. Its calls get the `noreturn` call-site attribute —
   except a `[[noreturn]]` (C++11 spelling) virtual function's, whose
   overriders may return — and are followed by `unreachable` and a dummy
-  block (`noreturn_call`, `finish_noreturn_call`).
+  block (`noreturn_call`, `finish_noreturn_call`). A call of such a
+  virtual function through the vtable has neither, as in clang
+  (`CallBase::doesNotReturn` with no called function; WP-871). Under
+  `-fsanitize=unreachable` see "Sanitizers".
 
 - `[[assume(e)]]` (WP-160): when there is an insertion point, each
   assumption that is not `ASSUME_IGNORED` is emitted as a scalar and
@@ -1322,7 +1325,7 @@ spec/landed/codegen/WP-814.md; the status, statistics and performance
 are in docs/status/debuginfo.md. WP-817 (spec/landed/codegen/WP-817.md)
 cut the front-end cost of `-g` without changing a byte of the IR.
 
-### 5.2 Sanitizers (WP-675; `ubsan.rs`, `class_b.rs`)
+### 5.2 Sanitizers (WP-675, WP-871; `ubsan.rs`, `class_b.rs`)
 `CodegenOptions::sanitize` (`SanitizeOptions`, set from spec/driver.md
 "Sanitizers") marks the IR as clang 19's frontend does
 (docs/design/sanitizers.md §1); with no sanitizer the IR is unchanged.
@@ -1352,8 +1355,84 @@ cut the front-end cost of `-g` without changing a byte of the IR.
   the default merge set (the unsigned checks), and `@llvm.ubsantrap` is
   `memory(inaccessiblemem: write)` from LLVM 22.
 
-The checks kiln does not emit yet, and the other gaps, are listed with
-their BACKLOG rows in spec/landed/codegen/WP-675.md.
+- **UBSan type and value checks** (WP-871; docs/design/sanitizers.md
+  §1.5 has the coverage table). Each is clang 19's function of the
+  same name, with its handler, static data and location
+  (`getExprLoc`; an overloaded `()`, `[]`, `->`, `++`, `--`, `new`,
+  `delete` or `co_await` call is located at its begin):
+  - null, alignment and object-size (`EmitTypeCheck`) on every
+    glvalue access, reference binding, constructor and member call,
+    up/downcast, `this` prologue, `new` and `delete`, with clang's
+    skips. Alignment is folded for a global or alloca aligned enough.
+    The `memcpy` family checks its pointer arguments' alignment.
+  - array-bounds (`EmitBoundsCheck`), except on flexible-array-like
+    members (`-fstrict-flex-arrays=0`).
+  - bool and enum on scalar loads (`EmitScalarRangeCheck`).
+  - float-cast-overflow (`EmitFloatConversionCheck`), including
+    complex parts and `_Atomic` destinations (signed bounds).
+  - pointer-overflow (`EmitCheckedInBoundsGEP`).
+  - nonnull-attribute, returns-nonnull-attribute (through
+    `return.sloc.ptr`) and builtin (`__builtin_ctz`/`clz` of zero).
+    The `memcpy`/`memmove`/`mempcpy`/`memcpy_inline` builtins check
+    both pointers (`memset` its destination) against the called
+    declaration's `nonnull`, each before its alignment check.
+  - unreachable after a call that does not return: the call site and
+    the called function lose `noreturn`, and a `builtin_unreachable`
+    check at the call's location precedes the `unreachable`; with ASan
+    the frontend puts `__asan_handle_no_return` before the call.
+  - the implicit integer truncation and sign-change checks
+    (`EmitScalarConversion`) and implicit-bitfield-conversion. The
+    `integer` group excludes the bit-field check.
+  - `_Atomic` `++`/`--`/`op=`: an unsigned operand under
+    unsigned-integer-overflow, and any operator `atomicrmw` cannot
+    do, take the compare-exchange loop with the checked operation.
+  - Type descriptors name the written type, or the canonical type
+    (`getRecordType`, `getThisType`, the float-cast operands). A
+    canonical tag prints with its full scope.
+
+  At `-fclang-compat=22`:
+  - a signed `_BitInt` descriptor is kind 2 with its width appended;
+  - a range check passes the raw value;
+  - a bounds check compares in the wider of the index type and
+    `size_t`.
+
+The checks kiln does not emit yet (vptr, function, nullability-*,
+local-bounds) and the other gaps are listed with their BACKLOG rows in
+spec/landed/codegen/WP-675.md and spec/landed/codegen/WP-871.md.
+
+### 5.3 LTO (WP-873; `module.rs`, `vtable.rs`)
+`CodegenOptions::lto` (`Lto::Full` / `Lto::Thin { split }`, set from
+spec/driver.md "Codegen flags" `-flto[=thin]`) makes the module an LTO
+unit as clang 19's `-flto` does (`CodeGenOpts.PrepareForLTO` /
+`PrepareForThinLTO`):
+- **Module flags** (clang `EmitAssemblyHelper::RunOptimizationPipeline`,
+  after the frontend's, behaviour 1): full LTO adds `ThinLTO` 0 and
+  `EnableSplitLTOUnit` 1; thin LTO adds `EnableSplitLTOUnit` 0 or 1
+  (`-fsplit-lto-unit`). `CodegenOptions::lto_module_flags` is off under
+  `-disable-llvm-passes` (clang runs no backend pipeline) and for a thin
+  bitcode object, where `opt --thinlto-bc` adds the flag itself.
+- **Vtable `!type` metadata** (clang `EmitVTableTypeMetadata`, both LTO
+  kinds): on each vtable definition (not an `available_externally` one),
+  for each address point of the group, sorted by the base's `_ZTS` name
+  and then offset, `!type !{i64 <byte offset>, <id>}`; then, for every
+  virtual function slot (destructor slots and unused slots aside),
+  `!type !{i64 <slot offset>, <id of the member pointer type
+  '<fn type> <base>::*'>.virtual}` (`mangle::mangle_member_pointer_rtti`,
+  clang `CreateMetadataIdentifierForVirtualMemPtrType`). An id is the
+  `_ZTS` string of an externally visible type, else one `distinct !{}`
+  per type (`CodeGen::type_md_ids`, clang `MetadataIdMap`). A
+  construction vtable carries its set twice, as clang 19 and 22 do.
+- The module summary, the pre-link pipeline and the bitcode writer are
+  the driver's (`opt`, spec/driver.md).
+- Not yet: `-ffat-lto-objects` (bitcode only), whole-program
+  devirtualization options, and C++26 constant initialization of a class
+  with a shared virtual base (`consts.rs` `record_elems`, xfail
+  `tests/conformance/class.mi/shared-virtual-base-constant-init-run.cpp`),
+  a gap with or without LTO that the LTO tests avoid by using C++23.
+- Tests: `tests/codegen/lto_{full,full_o2,thin,thin_split}.cpp` (exact IR
+  against clang 19, `ir_vs_clang`), `tests/conformance/lex.phases/
+  lto-two-tu-*-run.cpp` (two TUs built, linked and run, with the default
+  linker and `-fuse-ld=lld`).
 
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90

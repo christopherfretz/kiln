@@ -73,7 +73,19 @@ impl Sema<'_, '_> {
         let params: Vec<QualType> = self.ast.types.params(proto).to_vec();
         let variadic = proto.info().variadic();
         let nargs = set.args.len();
+        // [over.match.viable]/3: a conversion function whose trailing
+        // requires-clause is not satisfied (a templated lambda's, which
+        // has its call operator's, [expr.prim.lambda.closure]/9) yields
+        // no surrogate (clang `AddSurrogateCandidate`).
+        let unsat = if cand.viable {
+            self.check_function_constraints(f, set.loc).filter(|&s| !self.sat_ok(s))
+        } else {
+            None
+        };
         if !cand.viable {
+        } else if let Some(sat) = unsat {
+            cand.viable = false;
+            cand.failure = CandidateFailure::ConstraintsNotSatisfied { sat };
         } else if nargs > params.len() && !variadic {
             cand.viable = false;
             cand.failure = CandidateFailure::TooManyArgs {

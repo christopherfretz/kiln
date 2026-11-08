@@ -421,6 +421,7 @@ impl Sema<'_, '_> {
             self.check_decl_attr(d, kind, node)
         });
         self.check_class_b_exclusions(d, attrs);
+        self.check_mutual_exclusions(d, attrs);
         self.check_fmv_attrs(d, attrs);
         self.unify_fn_section(d, attrs);
         self.check_no_builtin_attrs(d, attrs);
@@ -1136,20 +1137,38 @@ impl Sema<'_, '_> {
         self.check_exclusive_pair(d, attrs, PAIR);
     }
 
+    /// The clang Attr.td `MutualExclusions` kiln checks on declarations
+    /// that no other check covers (WP-891): `hot` against `cold` on a
+    /// function, `no_destroy` against `always_destroy` on a variable. As
+    /// [`Sema::check_naked_conflicts`]: the later is an error and dropped.
+    pub(crate) fn check_mutual_exclusions(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        self.check_exclusive_pair(d, attrs, [(AttrKind::HOT, "hot"), (AttrKind::COLD, "cold")]);
+        self.check_exclusive_pair(
+            d,
+            attrs,
+            [(AttrKind::NO_DESTROY, "no_destroy"), (AttrKind::ALWAYS_DESTROY, "always_destroy")],
+        );
+    }
+
     /// The `MutualExclusions` of the two attribute kinds of `pair` on
-    /// function `d`, as [`Sema::check_naked_conflicts`] describes.
+    /// function or variable `d`, as [`Sema::check_naked_conflicts`]
+    /// describes.
     pub(crate) fn check_exclusive_pair(
         &mut self,
         d: DeclId,
         attrs: &mut Vec<AttrId>,
         pair: [(AttrKind, &str); 2],
     ) {
+        if !attrs.iter().any(|&a| pair.iter().any(|&(k, _)| k == self.ast.attrs.get(a).kind)) {
+            return;
+        }
         let own: Vec<AttrNode> = attrs
             .iter()
             .map(|&a| *self.ast.attrs.get(a))
             .filter(|n| pair.iter().any(|&(k, _)| k == n.kind))
             .collect();
-        if own.is_empty() || !self.ast.decls.get(d).kind().is_function() {
+        let kind = self.ast.decls.get(d).kind();
+        if !kind.is_function() && kind != DeclKind::Var {
             return;
         }
         let prior = |s: &Self, k: AttrKind| {

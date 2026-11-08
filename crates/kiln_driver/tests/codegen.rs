@@ -263,6 +263,43 @@ fn print_commands_shows_opt() {
     }
 }
 
+/// WP-873, spec/driver.md "Codegen flags": `-flto` runs clang's pre-link pipeline
+/// (at `-O0` too) and writes a bitcode object with a module summary
+/// (`--thinlto-bc` for `=thin`); a link passes `-flto[=thin]` on.
+#[test]
+fn print_commands_lto() {
+    let d = setup("hash-lto");
+    let o = kiln_in(&d, &["-###", "-c", "-flto=thin", "add.cpp"]);
+    let err = text(&o.stderr);
+    let pre = err.find("\"-passes=thinlto-pre-link<O0>\" \"-o\" \"-\" \"-\"\n").expect(&err);
+    let bc =
+        err.find("\"-discard-value-names\" \"--thinlto-bc\" \"-o\" \"add.o\" \"-\"\n").expect(&err);
+    assert!(pre < bc && !err.contains("llc"), "{err}");
+    let o = kiln_in(&d, &["-###", "-c", "-flto", "-O2", "-fsplit-lto-unit", "add.cpp"]);
+    let err = text(&o.stderr);
+    assert!(err.contains("\"-passes=lto-pre-link<O2>\""), "{err}");
+    assert!(err.contains("\"-module-summary\" \"-o\" \"add.o\" \"-\"\n"), "{err}");
+    let o = kiln_in(&d, &["-###", "-c", "-flto=thin", "-fsplit-lto-unit", "add.cpp"]);
+    assert!(text(&o.stderr).contains("\"--thinlto-bc\" \"--thinlto-split-lto-unit\""));
+    let o = kiln_in(&d, &["-###", "-flto=thin", "main.cpp", "add.cpp"]);
+    let err = text(&o.stderr);
+    assert!(err.contains("clang++\" \"-flto=thin\" "), "{err}");
+    let o = kiln_in(&d, &["-###", "-S", "-emit-llvm", "-flto", "-O1", "add.cpp"]);
+    let err = text(&o.stderr);
+    assert!(err.contains("\"-passes=lto-pre-link<O1>\""), "{err}");
+    assert!(err.contains("\"-S\" \"-module-summary\" \"-o\" \"-\" \"-\"\n"), "{err}");
+    let o = kiln_in(&d, &["-###", "-c", "-flto", "-Xclang", "-disable-llvm-passes", "add.cpp"]);
+    let err = text(&o.stderr);
+    assert!(!err.contains("-passes=") && err.contains("llvm-as\" \"-o\" \"add.o\""), "{err}");
+    for (flag, msg) in [
+        ("-flto=bogus", "kiln++: error: unsupported argument 'bogus' to option '-flto='\n"),
+        ("-ffat-lto-objects", "kiln++: error: '-ffat-lto-objects' is not supported by kiln\n"),
+    ] {
+        let o = kiln_in(&d, &["-c", flag, "add.cpp"]);
+        assert_eq!((o.status.code(), text(&o.stderr)), (Some(1), msg.to_string()), "{flag}");
+    }
+}
+
 /// WP-783, spec/driver.md "IR optimization": `-S -emit-llvm` writes the
 /// IR of the configured backend, so that LLVM's `opt` and `llc` read it
 /// back. At the default `-fclang-compat` with an LLVM 19 backend the

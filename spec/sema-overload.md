@@ -238,16 +238,21 @@ WP-788 (WP-823); test
 #### Member overload sets used other than called
 A class member access naming an overload set (`g.f`, `g.Ns<1>`) that is
 not called follows clang's member `OverloadExpr` rules
-(`Sema::diagnose_member_set_not_called`,
+(`Sema::diagnose_member_set_not_called_at`,
 `single_member_template_spec`):
 - every member is a non-static member function (a bound member set):
   "reference to non-static member function must be called", with the
   suffix "; did you mean to call it with no arguments?" when at least one
   candidate takes no argument and all such candidates return the same type,
   and a "possible target for call" note per member. This holds for every
-  use: an initializer, a cast, a placeholder, a discarded `g.f;`. kiln
-  reports it once; clang reports it twice for some placeholders and adds
-  errors from its recovery by call (follow-ups).
+  use: an initializer, a cast, a placeholder, a discarded `g.f;`. It is
+  reported at the outermost parenthesis of `(g.o)`. A placeholder reports
+  it twice, as clang does, and with the hint the expression is recovered
+  as the call (spec/sema.md §1.2, WP-832). A type-dependent access (the
+  current instantiation's members in a template body: `this->f`,
+  `F::tm<long>`) gets no hint, since clang's `tryExprAsCall` tries no call
+  on it; a member template-id resolved early with an implicit object
+  still lists the template as the possible target (WP-888).
 - a template-id naming exactly one specialization deducible from its
   explicit arguments alone, static: it is that function lvalue, so a
   placeholder deduces from it (`auto` a pointer, `const auto` a const
@@ -257,7 +262,8 @@ not called follows clang's member `OverloadExpr` rules
 - anything else (several candidates, a static member among them): a
   placeholder is "variable 'x' with type 'auto' has incompatible
   initializer of type '<overloaded function type>'".
-WP-788 (WP-823); tests
+WP-788 (WP-823, WP-888); tests
+`dcl.spec.auto/member-template-id-in-template-body.cpp`,
 `dcl.spec.auto/member-template-id-single-static-specialization-run.cpp`,
 `dcl.spec.auto/member-set-placeholder-and-unevaluated-use.cpp`.
 
@@ -349,6 +355,10 @@ whose trailing requires-clause is not satisfied is not viable
 non-const object does not hide a satisfied `operator int() const`, and
 "no viable conversion" notes it as "candidate function not viable:
 constraints not satisfied" with the satisfaction notes (WP-302).
+A surrogate call function ([over.call.object]/2) is not viable either
+when its conversion function's constraints are not satisfied
+(`add_surrogate`, clang `AddSurrogateCandidate`), and no surrogate note
+is printed for it (WP-881).
 
 **Reference direct-initialization** (`int&& r(Ex{})`, `static_cast<T&&>`;
 clang `allowExplicitConversionFunctionsInRefBinding`): `bind_reference`
