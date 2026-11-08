@@ -34,7 +34,12 @@ pub(crate) struct CdbJob<'a> {
 
 /// Writes the `-MJ` fragment of `jobs`, if `-MJ` was given. Reports a
 /// file that cannot be written on `drv`; returns success.
-pub(crate) fn write(args: &Args, tc: &Toolchain, jobs: &[CdbJob<'_>], drv: &DiagEngine<'_>) -> bool {
+pub(crate) fn write(
+    args: &Args,
+    tc: &Toolchain,
+    jobs: &[CdbJob<'_>],
+    drv: &DiagEngine<'_>,
+) -> bool {
     let Some(path) = &args.deps.cdb_fragment else { return true };
     if args.print_commands {
         return true;
@@ -218,7 +223,18 @@ mod tests {
     fn renders_like_clang() {
         assert_eq!(
             r("-c a.cpp -o a.o -Iinc -I inc2 -DX=1 -target x86_64-linux-gnu -Lp -l m -MD -MF a.d"),
-            ["-c", "-I", "inc", "-I", "inc2", "-D", "X=1", "--target=x86_64-linux-gnu", "-Lp", "-lm"]
+            [
+                "-c",
+                "-I",
+                "inc",
+                "-I",
+                "inc2",
+                "-D",
+                "X=1",
+                "--target=x86_64-linux-gnu",
+                "-Lp",
+                "-lm"
+            ]
         );
         assert_eq!(
             r("-std=c++20 --sysroot=/s -xc++ -Xclang -fno-rtti -MJ f.json"),

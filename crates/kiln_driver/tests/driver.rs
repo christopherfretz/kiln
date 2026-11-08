@@ -124,7 +124,12 @@ fn delegated_probes() {
     let o = kiln(&["-print-prog-name=ld"], "");
     assert!(o.code == 0 && o.stdout.ends_with("ld\n"), "{} {}", o.stdout, o.stderr);
     let o = kiln(&["-print-libgcc-file-name"], "");
-    assert!(o.code == 0 && o.stdout.trim_end().ends_with(".a"), "{} {}", o.stdout, o.stderr);
+    assert!(
+        o.code == 0 && Path::new(o.stdout.trim_end()).extension().is_some_and(|e| e == "a"),
+        "{} {}",
+        o.stdout,
+        o.stderr
+    );
     let o = kiln(&["-print-search-dirs"], "");
     assert!(o.code == 0 && o.stdout.starts_with("programs: ="), "{} {}", o.stdout, o.stderr);
     assert!(o.stdout.contains("\nlibraries: ="), "{}", o.stdout);
@@ -192,7 +197,10 @@ fn missing_headers_as_generated() {
     let t = t.to_str().unwrap();
     let o = kiln(&["-MM", "-MG", "-MP", t], "");
     assert_eq!(o.code, 0, "{}", o.stderr);
-    assert_eq!(o.stdout.replace(" \\\n  ", " "), format!("t.o: {t} gen.h gen2.h\ngen.h:\ngen2.h:\n"));
+    assert_eq!(
+        o.stdout.replace(" \\\n  ", " "),
+        format!("t.o: {t} gen.h gen2.h\ngen.h:\ngen2.h:\n")
+    );
     let o = kiln(&["-MM", t], "");
     assert_eq!(o.code, 1);
     assert!(o.stderr.contains("'gen.h' file not found"), "{}", o.stderr);
@@ -251,7 +259,10 @@ fn compilation_database_fragment() {
 fn linker_inputs_alone_are_inputs() {
     let o = kiln(&["-c", "-Wl,--version"], "");
     assert_eq!(o.code, 0);
-    assert_eq!(o.stderr, "kiln++: warning: -Wl,--version: 'linker' input unused [-Wunused-command-line-argument]\n");
+    assert_eq!(
+        o.stderr,
+        "kiln++: warning: -Wl,--version: 'linker' input unused [-Wunused-command-line-argument]\n"
+    );
 }
 
 /// spec/driver.md "Options": clang's `-ftime-trace` family (glaze adds

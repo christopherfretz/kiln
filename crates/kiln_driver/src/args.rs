@@ -1352,7 +1352,10 @@ pub(crate) enum Valued<'a> {
 }
 
 /// If `arg` is a valued option, the option and where its value is.
-pub(crate) fn split_valued<'a>(arg: &'a str, next: Option<&str>) -> Option<(&'static str, Valued<'a>)> {
+pub(crate) fn split_valued<'a>(
+    arg: &'a str,
+    next: Option<&str>,
+) -> Option<(&'static str, Valued<'a>)> {
     for &opt in SEPARATE_OR_EQ {
         if arg == opt {
             return Some((opt, if next.is_some() { Valued::Next } else { Valued::Missing }));

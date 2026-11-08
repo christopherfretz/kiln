@@ -272,7 +272,13 @@ fn immediate(args: &Args, tc: &Toolchain, io: &mut Io, drv: &DiagEngine<'_>) -> 
 /// Asks the linking clang++ (with the toolchain flags a link passes it)
 /// and relays its answer: the honest one for the libraries and programs
 /// a kiln link uses.
-fn delegate(args: &Args, tc: &Toolchain, io: &mut Io, drv: &DiagEngine<'_>, probe: &[String]) -> i32 {
+fn delegate(
+    args: &Args,
+    tc: &Toolchain,
+    io: &mut Io,
+    drv: &DiagEngine<'_>,
+    probe: &[String],
+) -> i32 {
     let mut cmd = link::Command::new(tc, toolchain::Tool::Linker);
     for a in codegen_cmd::toolchain_link_args(args, tc) {
         cmd.arg(a);
