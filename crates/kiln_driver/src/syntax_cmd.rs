@@ -181,6 +181,7 @@ impl SyntaxJob<'_> {
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == crate::toolchain::StdLib::LibStdCxx,
             no_builtin: a.no_builtin(),
             no_builtin_fns: a.no_builtin_fns(),
+            sized_deallocation: a.predef.sized_deallocation.unwrap_or(true),
             sve: crate::features::resolve(a, &job.toolchain.target).0.sve,
             cfg_dump: a.dump_cfg,
             cfg_stats: a.cfg_stats,

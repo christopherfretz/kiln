@@ -303,6 +303,12 @@ pub struct Sema<'a, 'sm> {
     /// `LangOptions::NoBuiltinFuncs`): each is not recognized as a
     /// library builtin; `std-<name>` names a `std` one (WP-808).
     pub no_builtin_fns: Vec<String>,
+    /// `-f[no-]sized-deallocation` (clang `LangOptions::SizedDeallocation`,
+    /// default on; WP-808): off, the sized global `operator delete` and
+    /// `operator delete[]` are not declared implicitly, and a global
+    /// deallocation lookup never prefers a sized one
+    /// ([`Sema::usual_delete`]).
+    pub sized_deallocation: bool,
     /// Whether a name is one of clang's library builtins at the clang 22
     /// level or not (clang `Builtin::Context::isBuiltinFunc`'s table, set
     /// by the parser from the preprocessor's): the names a `no_builtin`
@@ -1127,6 +1133,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             nns_start: None,
             gnu_lib_builtins: false,
             no_builtin: false,
+            sized_deallocation: true,
             no_builtin_fns: Vec::new(),
             lib_builtin_name: |n, _| kiln_ast::decl::builtin::lib_by_name(n).is_some(),
             no_builtin_pending: Vec::new(),

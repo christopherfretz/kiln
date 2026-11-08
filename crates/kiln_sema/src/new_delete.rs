@@ -108,8 +108,11 @@ impl Sema<'_, '_> {
             self.declare_global_op(op, vp, &[size], ExcSpec::None);
             self.declare_global_op(op, vp, &[size, al], ExcSpec::None);
         }
+        // The sized ones only with `-fsized-deallocation` (clang
+        // `DeclareGlobalNewDelete`).
+        let n = if self.sized_deallocation { 4 } else { 2 };
         for op in [O::Delete, O::ArrayDelete] {
-            for params in [&[vp][..], &[vp, al], &[vp, size], &[vp, size, al]] {
+            for params in [&[vp][..], &[vp, al], &[vp, size], &[vp, size, al]].into_iter().take(n) {
                 self.declare_global_op(op, QualType::VOID, params, ExcSpec::BasicNoexcept);
             }
         }

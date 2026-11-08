@@ -273,6 +273,7 @@ impl CodegenJob<'_> {
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == StdLib::LibStdCxx,
             no_builtin: a.no_builtin(),
             no_builtin_fns: a.no_builtin_fns(),
+            sized_deallocation: a.predef.sized_deallocation.unwrap_or(true),
             sve: feats.sve,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,

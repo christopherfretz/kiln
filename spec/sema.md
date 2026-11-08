@@ -5270,8 +5270,18 @@ and aggregate element types.
   both are at the allocated type, the access error worded as for a
   temporary (`temporary of type 'P' has private destructor`), as clang's
   `ActOnCXXDelete` / `BuildCXXNew` do.
-- Gaps: `-fno-sized-deallocation` only removes the macro (Sema always
-  selects the sized form, clang's C++14+ default); `-Wmismatched-new-delete`
+- `-fno-sized-deallocation` (`Sema::sized_deallocation`, WP-808; clang
+  `LangOptions::SizedDeallocation`): the implicit global declarations
+  ([basic.stc.dynamic.general]/2) omit `operator delete(void*,
+  std::size_t)` and its array and aligned twins, so `::operator
+  delete(p, n)` without a declaration is `no matching function`; and a
+  global usual-deallocation lookup (delete-expression, deleting
+  destructor, new-expression cleanup, coroutine frame) never prefers a
+  sized function, even a user-declared one (`usual_delete`, as clang
+  19). A class's own lookup is unchanged: its only `operator
+  delete(void*, std::size_t)` still gets the size.
+  `tests/conformance/expr.delete/fno-sized-deallocation-*.cpp`.
+- Gaps: `-Wmismatched-new-delete`
   is not reported; a non-constant bound in a parenthesized type-id is a
   plain warning (clang's is an extension warning, so an error under
   `-pedantic-errors`); `__hot_cold_t` overloads are not recognized.
