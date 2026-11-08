@@ -725,6 +725,7 @@ impl Sema<'_, '_> {
             }
             self.mark_used(d);
             let at = self.eloc(r);
+            self.note_undefined_use(d, at);
             self.capture_odr_use(d, at);
         }
         e
@@ -894,6 +895,7 @@ impl Sema<'_, '_> {
     pub(crate) fn mark_used_at(&mut self, d: DeclId, loc: Loc) {
         self.mark_used(d);
         self.note_used_for_instantiation(d, loc);
+        self.note_undefined_use(d, loc);
     }
 
     /// Converts `e` to `ty` as in `ctx`, diagnosing failure (the result

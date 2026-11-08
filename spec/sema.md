@@ -4237,6 +4237,54 @@ Names there are not odr-used.
   capture; WP-336).
 - The dump reads `used` and `referenced` from the first declaration.
 
+**Undefined but used entities** (WP-840, `undefined_used.rs`; clang
+`Sema::checkUndefinedButUsed`, [basic.def.odr]/11, [basic.link]/8):
+- Every odr-use outside a template and outside an unevaluated operand
+  (`mark_used_at`, and the variables `act_on_full_expr` marks used)
+  records the first declaration and the location of its first use, when
+  the function or variable has no definition yet (a defaulted or deleted
+  function counts as defined).
+- A default argument is potentially evaluated only where a call uses it
+  ([dcl.fct.default]/5; clang's `PotentiallyEvaluatedIfUsed`): the uses
+  recorded while one is parsed (in place or replayed,
+  `begin_default_arg_uses` / `end_default_arg_uses`) move to the stored
+  argument and are recorded again at each call that uses it
+  (`queue_default_arg_uses`).
+- At the end of the translation unit (`act_on_end_of_translation_unit`,
+  after the pending instantiations and the delegating-constructor
+  cycles, before the unused-file-scope warnings), and only when no
+  error was emitted, each recorded entity still undefined is diagnosed
+  at its first declaration, in first-use order, with a `note: used here`
+  at the use. Skipped: deduction guides, invalid declarations, `weakref`
+  and `alias` entities, variables with an initializer on any
+  redeclaration (an in-class static member initializer), builtins,
+  pure virtual functions (kiln does not tell a virtual call from a
+  qualified one), and anything in namespace `std` or nested in it (the
+  evaluator supplies the `std::meta` metafunctions and a `constexpr`
+  `std::uncaught_exceptions` without a definition).
+- The classification, in order:
+  - external formal linkage, not `extern "C"`, and a type that is not
+    externally visible (a lambda, local class or unnamed-namespace class
+    in the function type or the variable type): an error,
+    "{function|variable} 'N' is used but not defined in this translation
+    unit, and cannot be defined in any other translation unit because
+    its type does not have linkage";
+  - not externally visible (internal linkage, an unnamed namespace, a
+    specialization or member taking internal linkage from a template
+    argument or its class): `-Wundefined-internal`, "{function|variable}
+    'N' has internal linkage but is not defined";
+  - an inline function (`inline`, implicitly inline or `constexpr`, no
+    `gnu_inline`): `-Wundefined-inline`, "inline function 'N' is not
+    defined"; an inline variable: the error "inline variable 'N' is not
+    defined".
+- A function template specialization is named with its template
+  arguments (`g<(lambda at f.cpp:3:5)>`); each specialization of one
+  template is reported, all at the template's location.
+- Not implemented: clang's vtable-use marking (an undefined virtual
+  member of an unnamed-namespace class whose vtable is used is not
+  reported).
+- Tests: `tests/conformance/basic.def.odr/undefined-but-used-*.cpp`.
+
 ### 5.3 The `noexcept` operator (`except.rs`)
 `act_on_noexcept_expr(e, loc, rparen)` ([expr.unary.noexcept]) builds
 a `CXXNoexceptExpr`: a `bool` prvalue whose operand is unevaluated
@@ -8094,14 +8142,18 @@ from `stmt_flow` / `dead_scan`. The AST walks they replace
   skipped; an instantiation of another templated entity (a member of a
   class template, a lambda in a template) inherits its pattern's
   inference without a second warning, while a function template
-  specialization is inferred, and warned, afresh. An inferred function
+  specialization is inferred, and warned, afresh. A lambda's call
+  operator below C++23 is inferred without the warning (clang 22 warns
+  for one only from C++23; WP-841, range-v3 `chunk_by.cpp`
+  `[](int, int) -> bool { throw 0; }` under `-std=c++20`). An inferred function
   is not suggested again by the graph form. In a value-returning
   caller, a body whose last statement is a throw-expression, or a call
   whose direct callee is inferred noreturn, has no -Wreturn-type
   (clang's syntactic check ahead of `CheckFallThroughForBody`).
 - Tests: `expr.call/infinite-recursion*.cpp`,
   `dcl.attr.noreturn/missing-noreturn*.cpp` (the `-inferred` pair under
-  `requires: clang>=22` / `clang<22`),
+  `requires: clang>=22` / `clang<22`; `-lambda-cxx20` and
+  `-lambda-cxx23`),
   `stmt.pre/cfg-analysis-skipped.cpp` (the size cap remark).
 
 ### 7.6 Landed (WP-089): range-based `for` (`range_for.rs`)

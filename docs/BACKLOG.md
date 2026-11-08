@@ -850,6 +850,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-825 | perf: Boost.Geometry heavy TUs at 1.3–3.0x clang CPU, 0.5x RSS (e.g. `geometry/index/test/rtree/generated/b2d/rtree_qua_que_b2d.cpp`); profile and cut (docs/status/oss/boost_heavy.md) | WP-812 | open |
 | WP-827 | M8 coverage: boost_heavy suite gaps — 298 Geometry test executables and 917 Math b2 tests outside the subset; 7 Graph tests need b2 `<testing.arg>` args/input files; 4 need `timer;filesystem` in the row | WP-812 | open |
 | WP-831 | sema: a qualifier naming a specialization of the template being defined must instantiate ("implicit instantiation ... within its own definition"); xfail temp.inst/specialization-within-own-definition-member-typedef.cpp | WP-823 | open |
+| WP-841 | correctness bundle 2: close WP-831, WP-840, WP-679, WP-693, WP-696 | WP-831 | in progress |
 | WP-832 | sema: clang recovery-by-call after "must be called" (follow-on "cannot initialize ... with an rvalue of type int", "cannot cast from type int") and its double emission for auto/braced initializers (overload/address.rs diagnose_member_set_not_called) | WP-823 | open |
 | WP-833 | sema: incompatible-auto initializer from a member template-id in a template body is reported at the definition, not at instantiation with its note (`auto p = F::tm<long>`; templ/auto.rs deduce_from_member_set) | WP-823 | open |
 | WP-834 | sema: protected destructor via lambda init-capture `[x = B()]` has a different diagnostic order/location from clang | WP-823 | open |

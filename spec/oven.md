@@ -1278,7 +1278,8 @@ literal is one instruction and one step, not an interpreted loop.
   `tests/conformance/builtin.carry/carry-constexpr.cpp`).
   `__builtin_alloca`, `__builtin_alloca_with_align`, `__builtin_vsnprintf`,
   `__builtin_snprintf` and `__builtin_sprintf` trap "subexpression not
-  valid in a constant expression", as clang 19.
+  valid in a constant expression", as clang 19, and so do the other
+  `printf`/`scanf` family builtins (WP-841).
 
 - **Landed (WP-282): library builtins.** `__builtin_object_size` and
   `__builtin_dynamic_object_size` are `bi::OBJECT_SIZE` (kbc 22, `SIDE`
