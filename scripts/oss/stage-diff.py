@@ -19,7 +19,10 @@ differ in that. The outputs are DIR/NAME/<i>.ll, or <i>.s for asm.
 
 `compare` normalizes each DIR/<NAME>/<i>.ll (or .s) and compares it across the
 NAMEs. Normalized: the `!llvm.ident` string, or the assembly's `.ident`
-string (a vendor build names itself there). Everything else must match byte for byte. It prints one line per
+string (a vendor build names itself there), and the operands of each node an
+inline asm's `!srcloc` names (source offsets, which move with the length of
+the version strings in the predefines buffer). Everything else must match
+byte for byte. It prints one line per
 differing TU and a summary, and writes the first differing hunk of each to
 DIR/diffs/<i>.diff.
 """
@@ -35,6 +38,8 @@ import sys
 DROP_WITH_VALUE = ("-o", "-MF", "-MT", "-MQ")
 DROP = ("-c", "-MD", "-MMD")
 IDENT_RE = re.compile(r'^(!\d+ = !\{!"|\s*\.ident\s+")[^"]*clang version [^"]*("\}?)$', re.M)
+SRCLOC_RE = re.compile(r"!srcloc !(\d+)")
+SRCLOC_NODE_RE = re.compile(r"^!(\d+) = !\{i64 [^}]*\}$", re.M)
 
 
 def sample(log, n):
@@ -93,7 +98,14 @@ def cmd_make(a):
 
 def normalized(path):
     with open(path, encoding="utf-8", errors="replace") as f:
-        return IDENT_RE.sub(r"\1clang version\2", f.read())
+        text = IDENT_RE.sub(r"\1clang version\2", f.read())
+    # An inline asm's `!srcloc` node holds raw SourceLocation encodings,
+    # offsets into the SourceManager. These shift with the length of the
+    # predefines buffer, which holds __VERSION__ and __clang_version__.
+    ids = set(SRCLOC_RE.findall(text))
+    if ids:
+        text = SRCLOC_NODE_RE.sub(lambda m: f"!{m.group(1)} = !{{srcloc}}" if m.group(1) in ids else m.group(0), text)
+    return text
 
 
 def cmd_compare(a):

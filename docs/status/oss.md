@@ -83,6 +83,7 @@ The loop:
 | `libunifex` | 4 | `v0.4.0` | tests at parity | not run |
 | `llvm_clang` | 4 | `llvmorg-19.1.7` | tests at parity (check-clang, check-lld; [details](oss/llvm_clang.md)) | not run |
 | `llvm_full` | 4 | `llvmorg-19.1.7` | tests at parity (check-llvm) | not run |
+| `llvm_selfhost` | 4 | `llvmorg-19.1.7` | tests at parity (stage 2: check-clang, check-lld; stage-2/stage-3 IR identical; [details](oss/llvm_selfhost.md)) | not run |
 | `mp_units` | 4 | `v2.5.0` | tests at parity | not run |
 | `onetbb` | 4 | `v2022.3.0` | tests at parity | not run |
 | `opencv` | 4 | `4.12.0` | tests at parity | not run |
@@ -891,6 +892,38 @@ Failure clusters (kiln): 13 plus one link failure. Ten were fixed on
 `wp/801` and four on main during the WP; none is open. Perf: five TUs
 over 1.5× clang's CPU time are recorded, not fixed.
 <!-- /oss:llvm_clang -->
+
+<!-- oss:llvm_selfhost -->
+### llvm_selfhost (llvmorg-19.1.7)
+
+The bootstrap stage 2 of `llvm_clang` (WP-815): the clang 19.1.7 that
+kiln++ built (stage 1) builds the same tree again. The `clang` column
+is the stage 2 that the clang-19-built stage 1 built (`--no-test`); its
+test figures are the WP-801 clang++-19 control's. Details, the IR
+comparison and commands are in
+[oss/llvm_selfhost.md](oss/llvm_selfhost.md).
+
+| | kiln (stage 2 of kiln++'s stage 1) | clang (stage 2 of clang-19's stage 1) |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 3565 / 0 | 3565 / 0 |
+| links ok / failed | 157 / 0 | 157 / 0 |
+| check-clang passed / discovered | 35229 / 38003 | 35229 / 38003 (WP-801 control) |
+| check-lld passed / discovered | 2193 / 2961 | 2193 / 2961 (WP-801 control) |
+| summed TU CPU | 15779 s | 14924 s |
+| peak TU RSS | 1161 MB | 1189 MB |
+
+Both stages fail only the control's seven environmental tests; stage 1
+also had one timing flake. The stage-2/stage-3 comparison is
+byte-identical against Debian's clang 19.1.7 after the ident string
+and inline asm source offsets are normalized: 200 TUs as IR and as assembly, and a wider sample of 1000 TUs
+as IR. Per TU
+interleaved, the kiln-built clang is as fast as the clang-built one
+(geomean 0.98x over seven TUs).
+
+Failure clusters (kiln): none.
+<!-- /oss:llvm_selfhost -->
 
 <!-- oss:boost_compiled -->
 ### boost_compiled (boost-1.90.0)

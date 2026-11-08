@@ -24,10 +24,12 @@ Host: aarch64 Linux, libstdc++ 14. Date: 2026-11-08.
 - **Stage 1 tests.** Stage 1's tests match as well. Its one extra
   failure was a timing-dependent unit test, which passed on every rerun.
 - **IR comparison.** The stage-2/stage-3 comparison is byte-identical
-  after normalizing the ident string:
+  after two documented normalizations (the ident string, and inline
+  asm source offsets):
   - 200 TUs to `-S -emit-llvm -O2` and the same 200 to assembly, across
     the stage-1 clang, the stage-2 clang and Debian's clang 19.1.7;
-  - a further 1000 TUs to IR, stage 2 against Debian's clang.
+  - a wider sample of 1000 TUs to IR (the 200 and 800 more), stage 2
+    against Debian's clang.
 - **Clusters.** No cluster was found, so no kiln fix and no xfail test
   were added.
 
@@ -78,12 +80,29 @@ the build's `-O3`, so it wins. `-fdiscard-value-names` is explicit
 because the assertion-enabled stage-1 and stage-2 clangs keep value
 names by default and Debian's release clang does not.
 
-The one normalization is the ident string. In IR, `!llvm.ident` reads
-`clang version 19.1.7 (https://github.com/llvm/llvm-project cd708029e…)`
-for stage 1 and stage 2, and `Debian clang version 19.1.7 (3+b1)` for
-Debian's clang. In assembly, the `.ident` string differs the same way.
-Both become `clang version`. Nothing else was normalized, and nothing
-else needed to be.
+Two things are normalized, and nothing else.
+
+1. **The ident string.** In IR, `!llvm.ident` reads
+   `clang version 19.1.7 (https://github.com/llvm/llvm-project cd708029e…)`
+   for stage 1 and stage 2, and `Debian clang version 19.1.7 (3+b1)` for
+   Debian's clang. In assembly, the `.ident` string differs the same
+   way. Both become `clang version`.
+2. **Inline asm source offsets.** The operands of each metadata node
+   that an inline asm's `!srcloc` names become `{srcloc}`. These
+   operands are raw `SourceLocation` encodings, offsets into the
+   SourceManager, which clang uses only to place diagnostics from the
+   backend's assembler. They shift by the length difference of the
+   predefines buffer. Debian's `__VERSION__` is
+   `"Debian Clang 19.1.7 (3+b1)"` and its `__clang_version__` is
+   `"19.1.7 (3+b1)"`. The upstream build's are
+   `"Clang 19.1.7 (https://github.com/llvm/llvm-project cd708029e…)"`
+   and `"19.1.7 (https://…)"`, 66 and 73 bytes longer.
+
+   One of the 1000 TUs, `llvm/lib/Support/Valgrind.cpp`, has inline
+   asm (from `valgrind.h`). Its two `!srcloc` nodes differed by exactly
+   139 = 66 + 73. Stage 1's output for it is byte-identical to stage
+   2's, because both carry the same version strings. This is the only
+   TU in the sample with `!srcloc`.
 
 ## Results
 
@@ -144,7 +163,7 @@ path, every (3565/N)-th. The 200-TU sample holds 121 `llvm/`, 70
 |---|---|---|---|---|
 | 200 TUs | `-S -emit-llvm -O2` | Debian clang-19, stage 1, stage 2 | 200 | 0 |
 | 200 TUs | `-S -O2` (AArch64 assembly) | Debian clang-19, stage 1, stage 2 | 200 | 0 |
-| 1000 TUs | `-S -emit-llvm -O2` | Debian clang-19, stage 2 | STAGEDIFF1K | |
+| 1000 TUs (the 200 and 800 more) | `-S -emit-llvm -O2` | Debian clang-19, stage 2 | 1000 (999 before the `!srcloc` normalization) | 0 |
 
 So stage 1 (compiled by kiln++) and stage 2 (compiled by stage 1)
 produce the same IR and code as Debian's clang 19.1.7, which kiln
@@ -171,7 +190,36 @@ are noisy: 1008 of the 3452 TUs that take at least 0.5 s are over
 timed again with both stage-1 compilers interleaved, 3 runs each, and
 the minimum CPU time kept (below).
 
-BENCH
+| TU | log kiln-built / clang-built CPU (s) | interleaved min kiln-built / clang-built CPU (s) | ratio | RSS (MB) |
+|---|---|---|---|---|
+| `clang/lib/Sema/SemaExpr.cpp` | 56.5 / 58.1 | 46.89 / 46.26 | 1.01x | 1030 / 1030 |
+| `clang/lib/ASTMatchers/Dynamic/Registry.cpp` | 56.6 / 48.5 | 43.29 / 48.38 | 0.89x | 898 / 899 |
+| `llvm/lib/Target/X86/X86ISelLowering.cpp` | 30.9 / 31.8 | 27.69 / 28.50 | 0.97x | 658 / 661 |
+| `clang/lib/StaticAnalyzer/Core/Checker.cpp` | 6.7 / 3.0 | 2.93 / 2.94 | 1.00x | 296 / 297 |
+| `llvm/lib/MCA/HardwareUnits/Scheduler.cpp` | 2.8 / 1.0 | 0.89 / 0.89 | 1.00x | 136 / 136 |
+| `llvm/lib/Bitcode/Reader/ValueList.cpp` | 2.7 / 1.2 | 1.16 / 1.17 | 0.99x | 157 / 157 |
+| `clang/lib/Tooling/Syntax/Mutations.cpp` | 3.8 / 1.7 | 1.87 / 1.87 | 1.00x | 219 / 219 |
+
+Interleaved, the geomean is 0.98×. The log's 2–3× outliers all fall to
+1.00×, and the heavy TUs scatter ±10% from run to run under the host's
+load (Registry.cpp: 43–55 s kiln-built, 48–52 s clang-built). **kiln's
+`-O3` code for clang runs as fast as clang-19's, within the noise of
+this host.** No perf finding is recorded.
+
+How the TUs were run (the commands, so the timing can be repeated): each
+TU's stage-2 command from `.oss/build/llvm_selfhost/kiln/compile.jsonl`,
+with `-MD`, `-MT`, `-MF` and `-o` dropped and `-o /dev/null` added. It
+was run in the TU's `cwd` from that log as
+`/usr/bin/time -f '%U %S %e %M' nice -n 10 $STAGE1/bin/clang++ <args>`,
+under `ulimit -v 3000000`, where `$STAGE1` is
+`.oss/build/llvm_clang/kiln` for the kiln-built compiler and
+`.oss/build/llvm_clang/clang` for the clang-built one. The two compilers
+alternated, three runs each per TU. For example, for `SemaExpr.cpp`,
+in `$B/tools/clang/lib/Sema`, with `$S` the llvm-project checkout:
+
+```sh
+"$STAGE1/bin/clang++" -DGTEST_HAS_RTTI=0 -D_DEBUG -D_GLIBCXX_ASSERTIONS -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS "-I$B/tools/clang/lib/Sema" "-I$S/clang/lib/Sema" "-I$S/clang/include" "-I$B/tools/clang/include" "-I$B/include" "-I$S/llvm/include" -fPIC -fno-semantic-interposition -fvisibility-inlines-hidden -Werror=date-time -Werror=unguarded-availability-new -Wall -Wextra -Wno-unused-parameter -Wwrite-strings -Wcast-qual -Wmissing-field-initializers -pedantic -Wno-long-long -Wc++98-compat-extra-semi -Wimplicit-fallthrough -Wcovered-switch-default -Wno-noexcept-type -Wnon-virtual-dtor -Wdelete-non-virtual-dtor -Wsuggest-override -Wstring-conversion -Wmisleading-indentation -Wctad-maybe-unsupported -ffunction-sections -fdata-sections -fno-common -Woverloaded-virtual -Wno-nested-anon-types -O3 -DNDEBUG -std=c++17 -fno-exceptions -funwind-tables -fno-rtti -UNDEBUG -c "$S/clang/lib/Sema/SemaExpr.cpp" -o /dev/null
+```
 
 For comparison, the other figures:
 - Debian's clang-19, which has no assertions, compiles the tree in

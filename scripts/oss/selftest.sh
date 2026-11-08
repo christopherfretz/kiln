@@ -44,6 +44,13 @@ printf 'int f(int x) { return x * 3 + 1; }\n' > "$SD/a.cpp"; printf 'struct S { 
 for s in a b; do printf '{"phase":"build","kind":"ok","source":"%s.cpp","cwd":"%s","argv":["kiln++","-O3","-MD","-MT","x","-MF","x.d","-c","%s.cpp","-o","%s.o"]}\n' "$s" "$SD" "$s" "$s"; done > "$SD/c.jsonl"
 python3 "$HERE/stage-diff.py" make --log "$SD/c.jsonl" --sample 200 --out "$SD/out" "A=$(command -v clang++-19)" "B=$(readlink -f "$(command -v clang++-19)")" >/dev/null && make -s -k -f "$SD/out/Makefile" >/dev/null 2>&1
 check "stage-diff: two TUs identical under two clang 19 spellings" "python3 '$HERE/stage-diff.py' compare --out '$SD/out' A B | grep -q '^stage-diff: 2 identical, 0 differ, 0 missing, of 2'"
+# Inline asm `!srcloc` operands are normalized; other metadata is not.
+for n in C D E; do mkdir -p "$SD/out/$n"; cp "$SD/out/A/0.ll" "$SD/out/A/1.ll" "$SD/out/$n/"; done
+printf 'call void asm sideeffect "nop", ""(), !srcloc !90\n!90 = !{i64 100, i64 113}\n' >> "$SD/out/C/0.ll"
+printf 'call void asm sideeffect "nop", ""(), !srcloc !90\n!90 = !{i64 239, i64 252}\n' >> "$SD/out/D/0.ll"
+printf 'call void asm sideeffect "nop", ""(), !srcloc !90\n!90 = !{i64 100, i64 113}\n!91 = !{i64 7}\n' >> "$SD/out/E/0.ll"
+check "stage-diff: inline asm srcloc offsets normalized" "python3 '$HERE/stage-diff.py' compare --out '$SD/out' C D | grep -q '^stage-diff: 2 identical, 0 differ'"
+check "stage-diff: other metadata differences reported" "! python3 '$HERE/stage-diff.py' compare --out '$SD/out' C E >/dev/null && grep -q '^+!91' '$SD/out/diffs/0.diff'"
 
 # The Boost Jamfile shim's library rules, variants, defines and links
 # (WP-804): a stub superproject whose boost_test() prints what it is given.
