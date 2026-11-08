@@ -85,6 +85,7 @@ pub mod modules;
 mod ms_struct;
 mod musttail;
 pub mod names;
+mod never_constant;
 pub mod new_delete;
 mod nonnull;
 mod null_compare;
