@@ -287,7 +287,7 @@ pub struct CodegenOptions {
     /// The `-fsanitize=` set (WP-675, spec/codegen.md "Sanitizers").
     pub sanitize: SanitizeOptions,
     /// `-flto` / `-flto=thin`: the module is an LTO unit (its module flags
-    /// and vtable `!type` metadata; spec/codegen.md "LTO", WP-873).
+    /// and vtable `!type` metadata; spec/codegen.md §5.3 "LTO", WP-873).
     pub lto: Option<Lto>,
     /// With [`Self::lto`], the module flags clang's backend pipeline adds
     /// (`ThinLTO`, `EnableSplitLTOUnit`); off under `-disable-llvm-passes`.

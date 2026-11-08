@@ -263,7 +263,7 @@ fn print_commands_shows_opt() {
     }
 }
 
-/// WP-873, spec/driver.md "LTO": `-flto` runs clang's pre-link pipeline
+/// WP-873, spec/driver.md "Codegen flags": `-flto` runs clang's pre-link pipeline
 /// (at `-O0` too) and writes a bitcode object with a module summary
 /// (`--thinlto-bc` for `=thin`); a link passes `-flto[=thin]` on.
 #[test]

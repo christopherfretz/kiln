@@ -1271,6 +1271,40 @@ cut the front-end cost of `-g` without changing a byte of the IR.
 The checks kiln does not emit yet, and the other gaps, are listed with
 their BACKLOG rows in spec/landed/codegen/WP-675.md.
 
+### 5.3 LTO (WP-873; `module.rs`, `vtable.rs`)
+`CodegenOptions::lto` (`Lto::Full` / `Lto::Thin { split }`, set from
+spec/driver.md "Codegen flags" `-flto[=thin]`) makes the module an LTO
+unit as clang 19's `-flto` does (`CodeGenOpts.PrepareForLTO` /
+`PrepareForThinLTO`):
+- **Module flags** (clang `EmitAssemblyHelper::RunOptimizationPipeline`,
+  after the frontend's, behaviour 1): full LTO adds `ThinLTO` 0 and
+  `EnableSplitLTOUnit` 1; thin LTO adds `EnableSplitLTOUnit` 0 or 1
+  (`-fsplit-lto-unit`). `CodegenOptions::lto_module_flags` is off under
+  `-disable-llvm-passes` (clang runs no backend pipeline) and for a thin
+  bitcode object, where `opt --thinlto-bc` adds the flag itself.
+- **Vtable `!type` metadata** (clang `EmitVTableTypeMetadata`, both LTO
+  kinds): on each vtable definition (not an `available_externally` one),
+  for each address point of the group, sorted by the base's `_ZTS` name
+  and then offset, `!type !{i64 <byte offset>, <id>}`; then, for every
+  virtual function slot (destructor slots and unused slots aside),
+  `!type !{i64 <slot offset>, <id of the member pointer type
+  '<fn type> <base>::*'>.virtual}` (`mangle::mangle_member_pointer_rtti`,
+  clang `CreateMetadataIdentifierForVirtualMemPtrType`). An id is the
+  `_ZTS` string of an externally visible type, else one `distinct !{}`
+  per type (`CodeGen::type_md_ids`, clang `MetadataIdMap`). A
+  construction vtable carries its set twice, as clang 19 and 22 do.
+- The module summary, the pre-link pipeline and the bitcode writer are
+  the driver's (`opt`, spec/driver.md).
+- Not yet: `-ffat-lto-objects` (bitcode only), whole-program
+  devirtualization options, and C++26 constant initialization of a class
+  with a shared virtual base (`consts.rs` `record_elems`, xfail
+  `tests/conformance/class.mi/shared-virtual-base-constant-init-run.cpp`),
+  a gap with or without LTO that the LTO tests avoid by using C++23.
+- Tests: `tests/codegen/lto_{full,full_o2,thin,thin_split}.cpp` (exact IR
+  against clang 19, `ir_vs_clang`), `tests/conformance/lex.phases/
+  lto-two-tu-*-run.cpp` (two TUs built, linked and run, with the default
+  linker and `-fuse-ld=lld`).
+
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90
   inline C++ programs, lowered for `aarch64-unknown-linux-gnu` straight

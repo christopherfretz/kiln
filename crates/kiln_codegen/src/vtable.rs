@@ -568,7 +568,7 @@ impl Cg<'_> {
     }
 
     /// clang `CodeGenModule::EmitVTableTypeMetadata` under LTO (WP-873,
-    /// spec/codegen.md "LTO"): for each address point of group `l` (laid
+    /// spec/codegen.md §5.3 "LTO"): for each address point of group `l` (laid
     /// out in `layout_class`), sorted by the base's `_ZTS` name and then
     /// offset, `!type !{i64 <byte offset>, <id of the base>}`, then one
     /// for every virtual function slot of the group (destructors and
