@@ -1745,8 +1745,22 @@ and returns the scope it names:
   `set_typedef_for_anon` ([dcl.typedef]/9).
 
 ### 4.5 Attributes
+- **Policy: kiln never accepts a semantics-changing construct without
+  implementing it** (WP-805). An attribute clang knows that kiln does not
+  implement is triaged by `attr_triage::TABLE`: class A (semantics, ABI,
+  layout) is the error `'X' attribute is not supported by kiln yet`,
+  which system headers and `-w` do not suppress; class B (optimization,
+  instrumentation, debug, hardening) and class C (diagnostics or
+  analyses only) are accepted silently. A name clang does not know keeps
+  the `unknown attribute` warning. spec/landed/sema/WP-805.md.
+- **Truthful feature tests** (WP-805): in compile modes
+  `__has_attribute` / `__has_cpp_attribute` answer 0 for a class-A
+  name, and `__has_builtin` answers 0 for a builtin codegen cannot lower
+  (`kiln_codegen::UNLOWERED_BUILTINS`); a header that tests for a feature
+  takes the path kiln implements. `-E` keeps clang's answers.
 - `act_on_attribute(syntax, scope, name, args, loc)` maps a parsed
-  attribute to an `AttrKind`, or warns and returns `None`.
+  attribute to an `AttrKind`, or diagnoses it as above and returns
+  `None`.
 - **Recognised kinds:**
   - `nodiscard`/`warn_unused_result`
   - `maybe_unused`/`unused`
