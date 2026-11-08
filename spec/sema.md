@@ -8044,14 +8044,18 @@ from `stmt_flow` / `dead_scan`. The AST walks they replace
   skipped; an instantiation of another templated entity (a member of a
   class template, a lambda in a template) inherits its pattern's
   inference without a second warning, while a function template
-  specialization is inferred, and warned, afresh. An inferred function
+  specialization is inferred, and warned, afresh. A lambda's call
+  operator below C++23 is inferred without the warning (clang 22 warns
+  for one only from C++23; WP-841, range-v3 `chunk_by.cpp`
+  `[](int, int) -> bool { throw 0; }` under `-std=c++20`). An inferred function
   is not suggested again by the graph form. In a value-returning
   caller, a body whose last statement is a throw-expression, or a call
   whose direct callee is inferred noreturn, has no -Wreturn-type
   (clang's syntactic check ahead of `CheckFallThroughForBody`).
 - Tests: `expr.call/infinite-recursion*.cpp`,
   `dcl.attr.noreturn/missing-noreturn*.cpp` (the `-inferred` pair under
-  `requires: clang>=22` / `clang<22`),
+  `requires: clang>=22` / `clang<22`; `-lambda-cxx20` and
+  `-lambda-cxx23`),
   `stmt.pre/cfg-analysis-skipped.cpp` (the size cap remark).
 
 ### 7.6 Landed (WP-089): range-based `for` (`range_for.rs`)

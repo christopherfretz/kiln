@@ -914,6 +914,15 @@ impl Sema<'_, '_> {
         out
     }
 
+    /// Whether the definition of class `def` is being parsed, here or in
+    /// a context an enclosing instantiation set aside (clang
+    /// `TagDecl::isBeingDefined`).
+    pub(crate) fn class_being_defined(&self, def: DeclId) -> bool {
+        self.defining.contains(&def)
+            || self.classes.iter().any(|b| b.record == def)
+            || self.suspended_classes.iter().flatten().any(|b| b.record == def)
+    }
+
     /// Instantiates the definition of class template specialization
     /// `spec` ([temp.inst]/2-3, §4.3): the member declarations are
     /// substituted, the member definitions are not (§4.4). `poi` is the
@@ -1021,6 +1030,29 @@ impl Sema<'_, '_> {
             }
             return false;
         };
+        // The pattern is still being defined (`basic<long>::m` inside
+        // `template<class S> struct basic`, [temp.inst]/2 needs the class
+        // complete, [class.mem.general]/8): clang
+        // `DiagnoseUninstantiableTemplate`, no note (we are lexically
+        // inside the template), the specialization made invalid; quiet
+        // once a member of incomplete type made the pattern invalid.
+        if self.class_being_defined(def) {
+            let quiet = self.invalid_defining.contains(&def)
+                || self.ast.decls.get(def).has(DeclFlags::INVALID);
+            if diagnose && !quiet {
+                let t = self.tag_type(spec);
+                let d = self
+                    .diag(DiagId::sema_template_instantiate_within_definition, poi)
+                    .arg(u8::from(!implicit))
+                    .arg(self.decl_ty_str(t));
+                self.emit(d);
+                self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+                self.inst.undefined_diagnosed.set(Some(spec));
+            } else {
+                self.inst.undefined_diagnosed.set(None);
+            }
+            return false;
+        }
         if !self.push_inst_frame(FrameKind::ClassInstantiation, spec, tmpl, poi) {
             return false;
         }
