@@ -1187,3 +1187,61 @@ fn sve_builtin_alias_errors() {
     );
     assert!(o.status.success(), "{}", text(&o.stderr));
 }
+
+/// WP-810: function multiversioning kiln does not implement is a hard
+/// error, never a silently different function: on x86-64 every form clang
+/// multiversions (`target_version` only before clang 22, an unknown
+/// attribute from 22), and on `AArch64` a non-default `target_version` member
+/// or friend (clang crashes or drops a later definition there).
+#[test]
+fn multiversion_unsupported_errors() {
+    let d = scratch("fmvx86");
+    let src = "__attribute__((target_clones(\"avx2\",\"default\"))) int a() { return 1; }\n\
+               __attribute__((cpu_dispatch(atom, generic))) int b();\n\
+               __attribute__((cpu_specific(atom))) int c() { return 1; }\n\
+               __attribute__((target(\"default\"))) int d() { return 1; }\n\
+               __attribute__((target(\"avx2\"))) int e();\n\
+               __attribute__((target(\"sse4.2\"))) int e();\n\
+               __attribute__((target(\"avx2\"))) int f() { return 1; }\n\
+               int f();\n\
+               __attribute__((target_version(\"default\"))) int g() { return 1; }\n";
+    std::fs::write(d.join("t.cpp"), src).unwrap();
+    let mv = |l: u32, k: &str| {
+        format!("t.cpp:{l}:16: error: function multiversioning with '{k}' is not supported yet")
+    };
+    for (compat, last) in [
+        (
+            "-fclang-compat=22",
+            "t.cpp:9:16: warning: unknown attribute 'target_version' ignored".to_owned(),
+        ),
+        ("-fclang-compat=19", mv(9, "target_version")),
+    ] {
+        let args = [compat, "--target=x86_64-unknown-linux-gnu", "-fsyntax-only", "t.cpp"];
+        let o = kiln_in(&d, &args);
+        let err = text(&o.stderr);
+        let lines: Vec<&str> = err.lines().filter(|l| l.starts_with("t.cpp:")).collect();
+        let want = [
+            mv(1, "target_clones"),
+            mv(2, "cpu_dispatch"),
+            mv(3, "cpu_specific"),
+            mv(4, "target"),
+            mv(6, "target"),
+            last,
+        ];
+        assert_eq!(lines.len(), want.len(), "{compat}: {err}");
+        for (l, w) in lines.iter().zip(&want) {
+            assert!(l.starts_with(w.as_str()), "{compat}: {l} != {w}");
+        }
+        assert_eq!(o.status.code(), Some(1), "{compat}");
+    }
+    let src = "struct S {\n  __attribute__((target_version(\"sve\"))) int m();\n  \
+               friend __attribute__((target_version(\"sve\"))) int fr(S) { return 1; }\n};\n";
+    std::fs::write(d.join("t.cpp"), src).unwrap();
+    let args = ["--target=aarch64-unknown-linux-gnu", "-fsyntax-only", "t.cpp"];
+    let o = kiln_in(&d, &args);
+    let err = text(&o.stderr);
+    let lines: Vec<&str> = err.lines().filter(|l| l.starts_with("t.cpp:")).collect();
+    let tv = "error: function multiversioning with 'target_version' is not supported yet";
+    assert_eq!(lines, [format!("t.cpp:2:18: {tv}"), format!("t.cpp:3:25: {tv}")], "{err}");
+    assert_eq!(o.status.code(), Some(1));
+}

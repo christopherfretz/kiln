@@ -227,6 +227,7 @@ sema_unreachable_code_return = WarningOff [UnreachableCodeReturn] (0) "'return' 
 sema_unreachable_fallthrough_attr = WarningOff [UnreachableCodeFallthrough] (0) "fallthrough annotation in unreachable code";
 sema_unreachable_loop_increment = WarningOff [UnreachableCodeLoopIncrement] (0) "loop will run at most once (loop increment never executed)";
 sema_unsigned_abs = Warning [AbsoluteValue] (1) "taking the absolute value of unsigned type {0} has no effect";
+sema_unsupported_fmv_feature = Warning [IgnoredAttributes] (1) "unsupported '{0}' in the 'target_version' attribute string; 'target_version' attribute ignored";
 sema_unsupported_string_concat = Error (0) "unsupported non-standard concatenation of string literals";
 sema_unused_but_set_parameter = WarningOff [UnusedButSetParameter] (1) "parameter {0} set but not used";
 sema_unused_but_set_variable = WarningOff [UnusedButSetVariable] (1) "variable {0} set but not used";

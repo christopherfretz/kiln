@@ -2710,6 +2710,24 @@ impl Sema<'_, '_> {
         if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
             self.check_explicit_inst_specifiers(ds, ty);
         }
+        // WP-810: a non-default `target_version` version is hidden, as
+        // clang hides it without the `fmv` target feature (src/fmv.rs).
+        if !ds.is_typedef() && self.ast.types.is_function(ty) {
+            let attrs: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+            if let Some(at) = self.fmv_hidden_version(&attrs) {
+                if d.ctx == DeclaratorContext::Member {
+                    // clang crashes on this (a friend: `act_on_friend`).
+                    let msg = self
+                        .diag(DiagId::sema_multiversion_not_supported, at)
+                        .arg("target_version");
+                    self.emit(msg);
+                } else {
+                    self.fmv_attached(true, &attrs, true);
+                    self.templ.cur = None;
+                    return None;
+                }
+            }
+        }
         if special {
             // [temp.variadic]/12: `S(Ts);`, `operator Ts();`.
             if !invalid && ds.friend.is_none() {
@@ -10056,6 +10074,9 @@ impl Sema<'_, '_> {
         if let Some(arm) = alias {
             return self.builtin_alias_attribute(arm, syntax, &shown, args, loc);
         }
+        if let Some(r) = self.fmv_attribute(&n, scope_s.as_deref(), syntax, args, loc) {
+            return r;
+        }
         // clang 19 names only the attribute, not its scope.
         if scope_s.as_deref().is_some_and(|s| s != "gnu")
             && !(clang_scope
@@ -10321,12 +10342,13 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         };
-        let lit = match arg {
-            AttrArg::Expr(e) => self.string_lit_of(*e),
-            AttrArg::Type(_) | AttrArg::Ident(..) => None,
+        let (lit, at) = match arg {
+            AttrArg::Expr(e) => (self.string_lit_of(*e), self.ast.exprs.get(*e).loc()),
+            AttrArg::Ident(_, at) => (None, *at),
+            AttrArg::Type(_) => (None, loc),
         };
         let Some(lit) = lit else {
-            let msg = self.diag(DiagId::parse_attribute_requires_string, loc).arg(n.to_owned());
+            let msg = self.diag(DiagId::parse_attribute_requires_string, at).arg(n.to_owned());
             self.emit(msg);
             return None;
         };

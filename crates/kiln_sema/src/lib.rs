@@ -50,6 +50,7 @@ pub mod expr;
 mod extern_c;
 mod fallthrough;
 mod flex_array;
+mod fmv;
 mod for_loop_analysis;
 mod format_string;
 mod forms;

@@ -292,6 +292,23 @@ impl AttrKind {
     /// cannot be defined or have its address taken. `a` = the `Symbol`
     /// of `B`, `b` = 1 for the `__clang_arm_builtin_alias` spelling.
     pub const BUILTIN_ALIAS: AttrKind = AttrKind(221);
+    /// GNU `target_version("S")` (`TargetVersionAttr`, `AArch64` function
+    /// multiversioning; WP-810). `a` = the literal's `StringLitId`, `b` =
+    /// the literal's `Loc`. Kept only on a default version (`S` trimmed is
+    /// `"default"`): kiln, like clang without the `fmv` target feature,
+    /// hides a non-default version entirely.
+    pub const TARGET_VERSION: AttrKind = AttrKind(222);
+    /// GNU `target_clones("A", ...)` (`TargetClonesAttr`; WP-810). On
+    /// `AArch64` without `fmv` the function is an ordinary function; `a`,
+    /// `b` unused.
+    pub const TARGET_CLONES: AttrKind = AttrKind(223);
+    /// `cpu_dispatch(...)` / `cpu_specific(...)` (`CPUDispatchAttr`,
+    /// `CPUSpecificAttr`; WP-810): never attached (invalid on `AArch64`,
+    /// not supported on x86); `a` = the `Symbol` of the first CPU name,
+    /// `b` = its `Loc`.
+    pub const CPU_DISPATCH: AttrKind = AttrKind(224);
+    /// See [`AttrKind::CPU_DISPATCH`].
+    pub const CPU_SPECIFIC: AttrKind = AttrKind(225);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

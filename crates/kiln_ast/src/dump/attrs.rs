@@ -64,6 +64,8 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::NEON_VECTOR_TYPE => "NeonVectorType",
         AttrKind::NEON_POLYVECTOR_TYPE => "NeonPolyVectorType",
         AttrKind::TARGET => "Target",
+        AttrKind::TARGET_VERSION => "TargetVersion",
+        AttrKind::TARGET_CLONES => "TargetClones",
         AttrKind::NODEBUG => "NoDebug",
         AttrKind::ARTIFICIAL => "Artificial",
         AttrKind::MIN_VECTOR_WIDTH => "MinVectorWidth",

@@ -223,6 +223,7 @@ sema_integer_seq_too_long = Error (2) "integer sequence length {0} exceeds the i
 sema_internal_linkage_local_storage = Warning [IgnoredAttributes] (0) "'internal_linkage' attribute on a non-static local variable is ignored";
 sema_invalid_asm_value_for_constraint = Error (2) "value '{0}' out of range for constraint '{1}'";
 sema_invalid_complex_spec = Error (1) "'_Complex {0}' is invalid";
+sema_invalid_cpu_specific_dispatch_value = Error (2) "invalid option '{0}' for {1}";
 sema_invalid_decl_spec_in_nontype_parm = Error (0) "invalid declaration specifier in template non-type parameter";
 sema_invalid_declarator_global_scope = Error (1) "definition or redeclaration of '{0}' cannot name the global scope";
 sema_invalid_declarator_in_function = Error (1) "definition or redeclaration of '{0}' not allowed inside a function";
@@ -321,6 +322,7 @@ sema_mptr_to_reference = Error (2) "'{0}' declared as a member pointer to a refe
 sema_mptr_to_void = Error (1) "'{0}' declared as a member pointer to void";
 sema_multiple_default_labels = Error (0) "multiple default labels in one switch";
 sema_multiple_final_overriders = Error (2) "virtual function '{0}' has more than one final overrider in {1}";
+sema_multiversion_not_supported = Error (1) "function multiversioning with '{0}' is not supported yet";
 sema_mutable_const = Error (0) "'mutable' and 'const' cannot be mixed";
 sema_mutable_function = Error (0) "'mutable' cannot be applied to functions";
 // [dcl.stc]/9 (WP-327)

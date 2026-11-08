@@ -164,8 +164,10 @@ sema_attribute_pointers_only = Warning [IgnoredAttributes] (1) "{0} attribute on
 sema_attribute_pointers_refs_only = Warning [IgnoredAttributes] (1) "{0} attribute only applies to return values that are pointers or references";
 sema_attribute_precede_definition = Warning [IgnoredAttributes] (0) "attribute declaration must precede definition";
 sema_attribute_preferred_name_arg_invalid = Error (2) "argument {0} to 'preferred_name' attribute is not a typedef for a specialization of {1}";
+sema_attribute_requires_identifier = Error (1) "{0} attribute requires an identifier";
 sema_attribute_requires_integer_constant = Error (1) "{0} attribute requires an integer constant";
 sema_attribute_too_few_arguments = Error (2) "{0} attribute takes at least {1} arguments";
+sema_attribute_too_few_arguments_one = Error (1) "{0} attribute takes at least 1 argument";
 sema_attribute_too_many_arguments = Error (2) "{0} attribute takes no more than {1} arguments";
 sema_attribute_too_many_arguments_one = Error (1) "{0} attribute takes no more than 1 argument";
 sema_attribute_unsupported_target = Error (2) "{0} attribute is not supported on targets missing {1}; specify an appropriate -march= or -mcpu=";

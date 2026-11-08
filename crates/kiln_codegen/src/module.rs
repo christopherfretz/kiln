@@ -686,6 +686,14 @@ impl<'a> Cg<'a> {
             if ast.modules.is_imported_named_unit_decl(d) {
                 return Ok(());
             }
+            // clang `MayBeEmittedEagerly`: a `target_version` function
+            // that is not multiversioned (always, without `fmv`) is
+            // emitted at the end of the TU, "until all versions have been
+            // semantically checked".
+            if self.target_version_so_far(d) {
+                self.to_emit.push(Def::Decl(d));
+                return Ok(());
+            }
             return self.emit_fn_def(d);
         }
         if let Some(&f) = self.fns.get(&first) {
@@ -1330,6 +1338,17 @@ impl<'a> Cg<'a> {
     }
 
     /// Whether a redeclaration of `d` carries an attribute of kind `k`.
+    /// Whether `d` or a declaration before it has `target_version`
+    /// (clang's attribute is inherited by later redeclarations only).
+    fn target_version_so_far(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        std::iter::successors(Some(d), |&x| ast.prev(x)).any(|r| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .any(|a| ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::TARGET_VERSION)
+        })
+    }
+
     pub(crate) fn has_fn_attr(&self, d: DeclId, k: kiln_ast::attr::AttrKind) -> bool {
         let ast = self.ast;
         ast.redecls_of(d).any(|r| {
@@ -2021,6 +2040,15 @@ impl<'a> Cg<'a> {
             && self.has_fn_attr(d, kiln_ast::attr::AttrKind::DISABLE_TAIL_CALLS)
         {
             out.push(Attr::string("disable-tail-calls", "true"));
+        }
+        // clang 20+ `GetCPUAndFeaturesAttributes`: `"fmv-features"` on a
+        // function with a `target_version` (a default version: the others
+        // are hidden; WP-810), valueless as it names no feature.
+        if let Some(d) = d
+            && self.opts.clang_compat >= 22
+            && self.has_fn_attr(d, kiln_ast::attr::AttrKind::TARGET_VERSION)
+        {
+            out.push(Attr::string("fmv-features", ""));
         }
         if let Some(fp) = self.frame_pointer().attr() {
             out.push(Attr::string("frame-pointer", fp));

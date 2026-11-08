@@ -446,6 +446,7 @@ impl Sema<'_, '_> {
             }
             self.check_decl_attr(d, kind, node)
         });
+        self.check_fmv_attrs(d, attrs);
         self.unify_fn_section(d, attrs);
     }
 
