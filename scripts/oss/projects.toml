@@ -348,6 +348,35 @@ wave = 3
 verified = true
 notes = "WP-726. Needs boost, double-conversion, gflags, glog, libevent, fmt and fast_float installed. The shim forces FOLLY_HAS_LIBURING 0 (the container's liburing 2.9 lacks the 2.10 zero-copy receive API folly uses). googletest 1.17 is fetched at configure time. Excluded tests: WriteFileAtomic.directoryPermissions expects a permission error that root does not get; range_test and container_map_util_test do not compile with clang 19 either (RangeTest.cpp, MapUtilTest.cpp), so ctest has no executable for them."
 
+# ---------------------------------------------------------------- wave 4
+# Big applications (WP-799): large self-contained programs whose own test
+# suites check a lot of runtime behaviour.
+
+[duckdb]
+url = "https://github.com/duckdb/duckdb"
+tag = "v1.5.6"
+build = "cmake"
+cxx_std = 17
+configure = ["-DBUILD_UNITTESTS=ON", "-DBUILD_SHELL=ON"]
+build_targets = ["unittest", "shell"]
+test = "DUCKDB_TEST_MAX_THREADS=4 SUMMARIZE_FAILURES=1 test/unittest"
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-799. Release, default extensions (core_functions, parquet), not the amalgamation. The test is unittest with no arguments: the default (non-slow) SQL logic tests, at most 4 threads per database (DUCKDB_TEST_MAX_THREADS)."
+
+[z3]
+url = "https://github.com/Z3Prover/z3"
+tag = "z3-4.15.8"
+build = "cmake"
+cxx_std = 20
+configure = []
+build_targets = ["shell", "test-z3"]
+test = 'rc=0; ./test-z3 /a || rc=1; n=0; for f in ../../../src/z3/examples/SMT-LIB2/*/*.smt2 ../../../src/z3/examples/python/data/*.smt2; do n=$((n+1)); echo "== ${f##*/}: $(timeout 10 ./z3 "$f" 2>&1 | head -c 300 | tr "\n" " ")"; done; echo "test-z3 /a rc=$rc; $n smt2 examples run"; exit $rc'
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-799. Release; z3 pins C++20 itself. test-z3 /a runs all unit tests; then the z3 shell runs each smt2 file of examples/ (10 s each, found from the build dir as ../../../src/z3) and prints its answers, which are compared with the control's."
 # ------------------------------------------------- wave 4: coroutines (WP-789)
 
 [stdexec]
@@ -527,3 +556,36 @@ test = "ctest -j 4 --output-on-failure --timeout 300 -E '^(run-thread-tss_null|r
 c_compiler = "clang-19"
 wave = 4
 notes = "WP-804: compiled Boost libraries (their own .a built by kiln too). docs/status/oss/boost_compiled.md. The 41 excluded tests fail under the clang-19 control too. 30 are Not Run because they do not build: the shim does not read b2 target requirements (exception's /boost//thread and <exception-handling>off, date_time's serialization link and self_contained_header loop, iostreams' windows/deprecated tests, thread's tss_null and 9079/9192/13561, serialization's hashed containers, Boost.Test's shared-library and run-fail tests). 11 fail at run time with clang too: thread test_5502 and the two executor examples, date_time's three facet/tz tests (data files and locale), Boost.Test's four output-pattern tests, stacktrace (Release, no debug info)."
+
+# Big apps 2/3 (WP-803): runtime-heavy suites (SIMD pixels, task-parallel
+# atomics), where miscompiles show up as wrong output or hangs.
+
+[onetbb]
+url = "https://github.com/uxlfoundation/oneTBB"
+tag = "v2022.3.0"
+build = "cmake"
+cxx_std = 20
+configure = ["-DTBB_TEST=ON", "-DTBB_STRICT=OFF", "-DTBBMALLOC_BUILD=ON", "-DTBB_EXAMPLES=OFF"]
+test = "ctest --output-on-failure -j 4 --timeout 300"
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-803. Release, no -g. ctest -j 4, 300 s per test. test_concurrent_map aborts intermittently ('terminate called without an active exception') under the clang-19 control too (4 of 5 runs), so it is flaky in this container, not a kiln finding."
+
+[opencv]
+url = "https://github.com/opencv/opencv"
+tag = "4.12.0"
+build = "cmake"
+cxx_std = 17
+configure = [
+  "-DBUILD_LIST=core,imgproc,features2d,flann,calib3d,ts", "-DBUILD_TESTS=ON", "-DBUILD_PERF_TESTS=OFF",
+  "-DBUILD_EXAMPLES=OFF", "-DBUILD_opencv_python3=OFF", "-DBUILD_JAVA=OFF",
+  "-DWITH_IPP=OFF", "-DWITH_ITT=OFF", "-DWITH_OPENCL=OFF", "-DWITH_FFMPEG=OFF", "-DWITH_GTK=OFF",
+  "-DWITH_GSTREAMER=OFF", "-DWITH_V4L=OFF", "-DWITH_PROTOBUF=OFF", "-DWITH_ADE=OFF", "-DWITH_EIGEN=OFF",
+  "-DWITH_LAPACK=OFF",
+]
+test = "unset OPENCV_TEST_DATA_PATH; export OPENCV_FOR_THREADS_NUM=4 GTEST_FILTER=-$(grep -v '^#' @OSS@/opencv-gtest-exclude.txt | paste -sd:); ctest --output-on-failure -j 4 -E opencv_test_imgcodecs"
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-803. No opencv_contrib, no opencv_extra test data; default CPU_BASELINE and NEON dispatch. BUILD_LIST adds ts (the test framework; without it no tests are built). The 480 gtests failing under the clang control without test data (opencv-gtest-exclude.txt) and opencv_test_imgcodecs (segfaults on its missing data under the control) are excluded in both builds; 4 OpenCV threads per test binary."

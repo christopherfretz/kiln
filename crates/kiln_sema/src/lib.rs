@@ -428,6 +428,10 @@ pub struct Sema<'a, 'sm> {
     pub(crate) vis_stack: Vec<Option<(u32, Loc)>>,
     /// The open namespace definitions that pushed a `None` entry.
     pub(crate) vis_namespaces: Vec<DeclId>,
+    /// The names of `#pragma weak` pragmas that preceded any declaration
+    /// of them, with the name's location (clang
+    /// `WeakUndeclaredIdentifiers`).
+    pub(crate) weak_pending: Vec<(kiln_source::symbol::Symbol, Loc)>,
     /// Functions declared with a parameter that needed the missing-
     /// `typename` recovery: no qualified redeclaration matches them
     /// (spec/sema-templates.md, clang's invalid declaration).
@@ -676,6 +680,11 @@ pub struct Sema<'a, 'sm> {
     pub(crate) deferred_call_refs: Vec<(ExprId, DeclId)>,
     /// Classes being defined, innermost last (spec/sema-class.md §8.3).
     pub(crate) classes: Vec<class::ClassBuild>,
+    /// The class stacks set aside by each enclosing instantiation
+    /// context, outermost first: a class still being defined there keeps
+    /// its friends for access checks made inside the instantiation
+    /// (spec/sema-class.md §8.3).
+    pub(crate) suspended_classes: Vec<Vec<class::ClassBuild>>,
     /// Which implicit special members each class has declared
     /// (`SpecialKind::bit`s; spec/sema-class.md §4.1).
     pub(crate) implicit_declared: kiln_source::fx::FxHashMap<DeclId, u8>,
@@ -1146,6 +1155,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             dropped_qualified_locals: kiln_source::fx::FxHashSet::default(),
             vis_stack: Vec::new(),
             vis_namespaces: Vec::new(),
+            weak_pending: Vec::new(),
             missing_typename_fns: kiln_source::fx::FxHashSet::default(),
             extern_c: kiln_source::fx::FxHashMap::default(),
             split_greaters: kiln_source::fx::FxHashSet::default(),
@@ -1202,6 +1212,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             designator_pending: None,
             deferred_call_refs: Vec::new(),
             classes: Vec::new(),
+            suspended_classes: Vec::new(),
             implicit_declared: kiln_source::fx::FxHashMap::default(),
             special: class::SpecialState::default(),
             delayed_access: Vec::new(),

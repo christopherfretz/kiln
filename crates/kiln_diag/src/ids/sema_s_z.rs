@@ -282,6 +282,7 @@ sema_vector_element_sizes_not_equal = WarningError [VecElemSize] (2) "vector ope
 sema_vector_implicit_truncation = Error (3) "cannot convert between {0:scalar|vector} type {1} and vector type {2} as implicit conversion would cause truncation";
 sema_vector_invalid_element_type = Error (1) "invalid vector element type {0}";
 sema_vector_lengths_not_equal = Error (2) "vector operands do not have the same number of elements ({0} and {1})";
+sema_vector_mode_deprecated = Warning [DeprecatedAttributes] (0) "specifying vector types with the 'mode' attribute is deprecated; use the 'vector_size' attribute instead";
 sema_vector_not_convertible = Error (2) "cannot convert between vector values of different size ({0} and {1})";
 sema_vector_not_convertible_non_scalar = Error (2) "cannot convert between vector and non-scalar values ({0} and {1})";
 sema_vector_size_not_multiple = Error (0) "vector size not an integral multiple of component size";

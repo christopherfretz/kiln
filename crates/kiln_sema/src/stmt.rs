@@ -203,7 +203,7 @@ impl Sema<'_, '_> {
     /// copy-elision candidate `v` (`None` for any other operand): the
     /// candidate keeps its return slot in each scope out to the function
     /// scope that declared it, every other variable loses it.
-    fn update_nrvo_candidate(&mut self, v: Option<DeclId>) {
+    pub(crate) fn update_nrvo_candidate(&mut self, v: Option<DeclId>) {
         let mut can_be_put = false;
         for s in self.scopes.iter_mut().rev() {
             let found = v.is_some_and(|v| s.nrvo.slots.contains(&v));

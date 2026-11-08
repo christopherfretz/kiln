@@ -1282,11 +1282,13 @@ impl Sema<'_, '_> {
     /// specialization explicitly specializes it ([temp.expl.spec]/1,
     /// §4.5): it is no longer instantiated from the pattern (clang
     /// `CheckMemberSpecialization`). Static data members go through
-    /// `act_on_explicit_member_var_spec`.
+    /// `act_on_explicit_member_var_spec`. The head is consumed: the
+    /// declarations in the body that follows are not under it.
     pub(crate) fn mark_member_explicit_spec(&mut self, p: DeclId) {
         if self.templ.explicit_spec.is_none() || !self.at_explicit_head() {
             return;
         }
+        self.templ.explicit_spec = None;
         let Some((i, info)) = self.ast.member_spec_info(self.ast.first(p)).map(|(i, x)| (i, *x))
         else {
             return;

@@ -236,6 +236,17 @@ out-of-line member templates instantiated later included, get access
 nested-befriends-enclosing-template*.cpp). An elaborated-type-specifier
 `class X` naming the injected-class-name is the injected type `X<P...>`
 anywhere inside the template, not only in a friend declaration.
+Until `}` a class's friends are the open `ClassBuild`'s list, and that list
+stays visible to an instantiation started inside the class (the stack is
+set aside in `Sema.suspended_classes`, §8.3): `struct V { friend struct
+VTraits<V>; ... typename VTraits<V>::lane_type ... };` instantiates
+`VTraits<V>` with the friendship in force (WP-803; tests/conformance/
+temp.friend/specialization-instantiated-in-befriending-class-run.cpp).
+`template<class U> friend class X;` redeclares the class template `X` of
+the innermost enclosing namespace, else one that ordinary lookup finds in
+a namespace nested in it (an unnamed namespace's), in that namespace
+(clang `CheckClassTemplate`; WP-803, tests/conformance/temp.friend/
+class-template-in-unnamed-namespace-run.cpp).
 
 A class first declared inside a template by an elaborated-type-specifier
 that is a plain reference (a parameter or template-argument type `struct P*`,
@@ -248,6 +259,13 @@ constraint naming it is a constant after substitution ([temp.constr.atomic]/3;
 libc++ `__bit_iterator::operator=`, probed by `std::formattable<vector<bool>>`;
 tests/conformance/temp.constr.atomic/elaborated-tag-in-template.cpp, WP-298).
 A local class (an enclosing block) keeps the template's dependence.
+A plain reference `class X` that finds no visible `X` but whose namespace
+holds a class only `friend class X;` declared (hidden, [namespace.memdef]/3)
+redeclares that class: the new declaration joins its chain and is visible
+(clang `ActOnTag`'s redeclaration lookup in the namespace; `decl.rs`
+`hidden_friend_tag`), so `friend class X; class X *p;` and a later
+definition of `X` are one class and the friendship holds
+(tests/conformance/class.friend/friend-then-elaborated-member.cpp, WP-799).
 
 **Rule** (`class/access.rs`, clang `SemaAccess`). Member `m` found in naming
 class `N` ([class.access.base]/5) is accessible at context `R` iff: (a) `m` as
@@ -1250,7 +1268,17 @@ current instantiation with a dependent base, `D::B(1)` / `D<T>::B(1)`) is a
 `DependentNameType` (`Sema::act_unknown_specialization_type`). It is looked
 up in the instantiation (`no type named 'Foo' in 'D7<int>'`). The same
 function makes `typename D::X` dependent for such a qualifier
-([temp.res.general]/5). A qualified id naming no type in a non-dependent
+([temp.res.general]/5), and a base-specifier `N::B` whose class-name lookup
+found no type (`N` a member class of the current instantiation with a
+dependent base; WP-803). An id-expression `D::template f<U>` whose lookup in
+such a qualifier found nothing is a `DependentScopeDeclRefExpr`
+(`Sema::dep_member_nns`; WP-803). When the class has a dependent base and
+declares nothing of an unqualified id's name, a typedef the definition-time
+lookup finds in an enclosing scope is bound then ([temp.res.general]/1): the
+pattern keeps its type, so a member of the now-known base cannot hide it in
+the instantiation (`_Alloc_hider : allocator_type` whose allocator has a
+member function `allocator_type`; WP-803,
+`class.base.init/typedef-bound-at-definition-run.cpp`). A qualified id naming no type in a non-dependent
 qualifier is still `qualified member initializers` unsupported. A
 mem-initializer that fails in an instantiation (its substitution, or its
 initialization: `decltype(t)(t)` naming a reference type) makes the
@@ -1768,7 +1796,9 @@ members with an NSDMI.
   cleared (`AstBuilder::clear_return_nrvo`, clang `computeNRVO`). Probes (all
   clang 19, golden `ast/class.copy.elision/nrvo.cpp`): `if (b) { S x; return
   x; } S y; return y;` → both `nrvo`; `S x, y; if (b) return x; return y;` →
-  neither; `S x; if (b) return S(); return x;` → neither; `return p;`
+  neither; `S x; if (b) return S(); return x;` → neither; `S x; if (b) return x; return {1};` → neither
+  (a braced-init-list return has no candidate, so it disables every slot
+  as any other non-candidate return does; WP-799); `return p;`
   (param) → not a candidate. Alignment (`alignas` on the variable) is not
   yet considered (clang `isCopyElisionCandidate` checks it).
 

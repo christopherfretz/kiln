@@ -14,7 +14,7 @@ use kiln_sema::stack_guard::StackGuard;
 fn main() {
     let mut command_line = std::env::args();
     let argv0 = command_line.next().unwrap_or_else(|| "kiln".to_owned());
-    let args: Vec<String> = command_line.collect();
+    let args = kiln_driver::rsp::expand(&command_line.collect::<Vec<String>>());
     let size = kiln_driver::templ_opts::stack_size_of(&args);
     let prog = std::path::Path::new(&argv0)
         .file_name()
