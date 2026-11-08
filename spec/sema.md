@@ -7159,6 +7159,25 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     initializes the array from it (`braced_string_init`), and a further
     element is `excess elements in char array initializer` (WP-668;
     tests `tests/conformance/dcl.init.string/braced-string-literal-*.cpp`)
+  - String literal initializers: the literal's kind must suit the element
+    type (`Sema::string_init_compat`, clang `IsStringInit`): an ordinary
+    literal initializes `char`/`signed char`/`unsigned char`; with
+    `char8_t` on (C++20, or `-fchar8_t`) a `u8` literal initializes
+    `char8_t`, `char` and `unsigned char` (P2513), and with it off is an
+    ordinary literal; `L`/`u`/`U` initialize only `wchar_t`/`char16_t`/
+    `char32_t` (qualifiers ignored). A mismatch with a character element
+    type is an error at the entity: `initializing 'char8_t' array with
+    plain string literal` (with the note `add 'u8' prefix to form a
+    'char8_t' string literal` at the literal), `initializing wide char
+    array with non-wide string literal`, `... with incompatible wide
+    string literal`, `initializing char array with wide string literal`,
+    and for `signed char` from `u8` `initialization of char array with
+    UTF-8 string literal is not permitted by {'-fchar8_t'|C++20}`. A
+    mismatched literal in braces is not a string initialization: it
+    initializes the first element (`cannot initialize an array element
+    ...`), and brace elision treats it the same. WP-697 (WP-823); tests
+    `dcl.init.string/literal-kind-mismatch{,-cxx17-fchar8t}.cpp`,
+    `dcl.init.string/utf8-literal-fno-char8t.cpp`.
   - an array from an expression that is not a braced list or (for a
     character array) a string literal ([dcl.init.general]/16.5) is
     `array initializer must be an initializer list`, at the entity: the

@@ -2288,7 +2288,9 @@ impl Parser<'_, '_> {
             self.s.set_template_id_qualifier(e, q.nns);
             self.s.set_template_kw(e, template_kw);
         }
-        if !self.at(Punct::LParen) {
+        // `(operator()<A>)(x)` is called as `operator()<A>(x)` is
+        // ([`Parser::template_id_is_callee`]).
+        if !self.template_id_is_callee(q.map_or(nl, |(_, begin)| begin)) {
             return Some(self.s.resolve_single_template_id(e));
         }
         Some(e)
@@ -2351,7 +2353,7 @@ impl Parser<'_, '_> {
     /// remaining template arguments ([temp.arg.explicit]/4,
     /// [over.call.func]); one not called names its single
     /// specialization ([over.over]/3).
-    fn template_id_is_callee(&self, begin: Loc) -> bool {
+    pub(crate) fn template_id_is_callee(&self, begin: Loc) -> bool {
         self.at(Punct::LParen)
             || self.paren_callee.is_some_and(|(first, close)| {
                 close == self.pos() && self.tok_at(first).span.lo == begin
