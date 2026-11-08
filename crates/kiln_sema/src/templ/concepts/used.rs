@@ -520,9 +520,9 @@ impl Sema<'_, '_> {
                     | ExcSpec::Nothrow
                     | ExcSpec::NothrowAttr
                     | ExcSpec::DynamicNone
-                    | ExcSpec::BasicNoexcept => Some(()),
+                    | ExcSpec::BasicNoexcept
                     // Computed from the declaration's members, not written.
-                    ExcSpec::Deferred(_) => Some(()),
+                    | ExcSpec::Deferred(_) => Some(()),
                 }
             }
             TypeView::DependentName { nns, .. } => self.used_in_nns(nns, u, d),
@@ -662,10 +662,10 @@ impl Sema<'_, '_> {
             if let Some(nested) = info.params {
                 self.used_in_template_params(nested, u, d)?;
             }
-            if self.ast.decls.get(p).kind() == DeclKind::NonTypeTemplateParm {
-                if let Some(t) = self.ast.decls.get(p).ty() {
-                    self.used_in_type(t, u, d)?;
-                }
+            if self.ast.decls.get(p).kind() == DeclKind::NonTypeTemplateParm
+                && let Some(t) = self.ast.decls.get(p).ty()
+            {
+                self.used_in_type(t, u, d)?;
             }
             if let Some(&a) = self.ast.templates.defaults.get(p) {
                 self.used_in_arg(a, u, d)?;
