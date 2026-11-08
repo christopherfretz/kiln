@@ -92,7 +92,7 @@ impl Substituter<'_, '_, '_> {
     /// Whether substituted statement `x` is a `return` whose operand
     /// failed to convert, with an error reported since `errors` that is
     /// not one of a nested instantiation (`body_errors` before).
-    fn failed_return(&self, x: StmtId, errors: usize, body_errors: usize) -> bool {
+    fn failed_return(&self, x: StmtId, errors: u32, body_errors: u32) -> bool {
         let ast = &self.sema.ast;
         ast.stmts.get(x).kind() == StmtKind::ReturnStmt
             && ast.stmts.return_value(x).is_some_and(|v| self.sema.is_error_expr(v))
