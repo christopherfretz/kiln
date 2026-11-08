@@ -2635,7 +2635,12 @@ pointer or union subobject.
 static data member evaluates `E` for its side effects only
 ([expr.ref]/7.1, clang's `VisitIgnoredBaseExpression`; a null `E->m` is
 not an access) and designates the variable (`GlobalAddr`; a reference
-member designates its referent). An lvalue of function type designates
+member designates its referent). `E.e`/`E->e` naming an enumerator is that
+enumerator's value, after evaluating `E` as a glvalue for `.` (nothing is
+read, so a non-constexpr local or by-value parameter is fine) or as a
+pointer for `->` ([expr.ref]/7.5; WP-811, gRPC's `case response.INITIAL:`;
+`expr.ref/enumerator-member-access-constant-run.cpp`,
+`expr.ref/enumerator-member-access-unknown-base.cpp`). An lvalue of function type designates
 a function in every lvalue position: a `DeclRefExpr` of a function
 reference variable (its referent), `*fp`, and no-op casts and
 `ConstantExpr` around either (`static_cast<F&&>(f)` in libc++'s

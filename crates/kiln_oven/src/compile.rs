@@ -3173,6 +3173,27 @@ impl Compiler<'_> {
                     self.unsupported(e);
                 }
             }
+            // An enumerator named by a class member access (`r.E`,
+            // `p->E`): the object expression is evaluated, as a glvalue
+            // for `.` (nothing is read) and as a pointer for `->`, then
+            // discarded ([expr.ref]/7.5; clang `VisitIgnoredBaseExpression`).
+            ExprKind::MemberExpr
+                if self.ast().decls.enumerator(self.ast().exprs.decl(e)).is_some() =>
+            {
+                let ast = self.ast();
+                let v = ast.decls.enumerator(ast.exprs.decl(e)).and_then(|x| x.value);
+                let bits = v.and_then(|v| ast.consts.scalar(v)).and_then(|s| scalar_bits(&s));
+                let base = ast.exprs.operand(e);
+                let m = self.next;
+                if self.node(e).has(kiln_ast::expr::ExprFlags::ARROW) {
+                    self.rv(base);
+                } else {
+                    self.lv(base, Access::Addr);
+                }
+                self.next = m;
+                let (w, s) = int_of(self.kind(ty)).unwrap_or((64, true));
+                self.konst(dst, crate::arith::canon(bits.unwrap_or(0), w, s));
+            }
             ExprKind::UnaryExprOrTypeTraitExpr => self.trait_expr(e, dst, ty),
             // An invalid class's layout is a placeholder: no note (clang).
             ExprKind::OffsetOfExpr if self.ast().exprs.offsetof_invalid_record(e) => {

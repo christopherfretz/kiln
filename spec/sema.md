@@ -166,6 +166,26 @@ Where clang 22's output differs and kiln has not followed it yet, the
 test pins clang 19 with `requires: clang<22` and the comment `WP-355
 residual` (docs/status/wp-184-oracle-switch.md).
 
+### 1.2 Error recovery (WP-826)
+
+After an error, kiln bounds its work the way clang 19 does, so a
+translation unit that fails costs about what it costs clang:
+- **A fatal error stops instantiation** for the rest of the TU: the
+  error limit's "too many errors emitted" (spec/diag.md §7.3), a missing
+  `#include`, `-Wfatal-errors`, the depth limit. clang's
+  `InstantiatingTemplate` refuses every instantiation once
+  `hasFatalErrorOccurred()`; kiln's `Sema::instantiation_stopped` is
+  asked by `push_inst_frame`, `instantiate_function_definition` and the
+  end-of-TU drain (spec/sema-templates.md §10.3). The parser already
+  stops at a fatal error (spec/parse.md).
+- **A failed specialization is not redone**: an invalid class or
+  function template specialization stays `INVALID` and a later use is
+  no new error (spec/sema-templates.md §5.5, §5.6).
+- **Erroneous expressions do not cascade**: a use of a failed local is
+  an erroneous expression, and a statement built over it keeps its
+  sub-statements, which are still diagnosed as in clang
+  (spec/sema-templates.md §5.5).
+
 ## 2. Scopes (`scope.rs`)
 - **Kinds:** `ScopeKind` is one of TranslationUnit, Namespace,
   LinkageSpec, Record, Enum, Prototype, Function, Block or Control.
@@ -3522,6 +3542,9 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   clang's `CheckUsingShadowDecl`. Two distinct entities of one name in
   one scope:
   - an unresolved `using_if_exists` target conflicts with nothing;
+  - nor does a dependent using-declarator (`using A::f;` in a template
+    whose `A` is a dependent base): `using A::f; using P::f;` is valid
+    in the definition and checked in each instantiation (WP-811);
   - in a class, a dependent member using-declarator (`using B<T>::f;`,
     an `UnresolvedUsingValue`) does not conflict with a function or
     function template a later using-declarator introduces: it is
