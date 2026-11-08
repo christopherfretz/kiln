@@ -1508,6 +1508,43 @@ impl Module {
         }
     }
 
+    /// Sets field `key` of a `distinct` specialized node, replacing it or
+    /// appending it (a placeholder completed once its operands exist, as
+    /// a debug-info composite type's `elements` or a compile unit's lists).
+    pub fn md_set_field(&mut self, node: MetadataId, key: &str, v: MdField) -> IrResult<()> {
+        match &mut self.md[node.index()] {
+            MdNode::Specialized { distinct: true, fields, .. } => {
+                if let Some(f) = fields.iter_mut().find(|f| &*f.0 == key) {
+                    f.1 = v;
+                } else {
+                    let mut all = std::mem::take(fields).into_vec();
+                    all.push((key.into(), v));
+                    *fields = all.into_boxed_slice();
+                }
+                Ok(())
+            }
+            _ => Err(IrError::new(
+                IrErrorKind::BadMetadata,
+                "md_set_field needs a distinct specialized node",
+            )),
+        }
+    }
+
+    /// Replaces placeholder `node` (a `distinct` node, as LLVM's
+    /// temporary nodes) with `new`, keeping its id: a debug-info class
+    /// completed as a definition or a declaration once the unit is done.
+    /// A uniqued `new` equal to an existing node stays a separate copy.
+    pub fn md_replace(&mut self, node: MetadataId, new: MdNode) -> IrResult<()> {
+        if !self.md[node.index()].is_distinct() {
+            return Err(IrError::new(IrErrorKind::BadMetadata, "md_replace needs a distinct node"));
+        }
+        if !new.is_distinct() {
+            self.md_map.entry(new.clone()).or_insert(node);
+        }
+        self.md[node.index()] = new;
+        Ok(())
+    }
+
     /// Append operands to named metadata `!name = !{...}` (created if new).
     pub fn add_named_metadata(&mut self, name: &str, ops: &[MetadataId]) {
         if let Some(e) = self.named_md.iter_mut().find(|e| &*e.0 == name) {

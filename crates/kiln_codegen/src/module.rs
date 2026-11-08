@@ -254,6 +254,8 @@ pub(crate) struct Cg<'a> {
     pub gi: crate::global_init::GlobalInits,
     /// TBAA node caches (`!tbaa`, `!tbaa.struct`).
     pub tbaa: crate::tbaa::TbaaCache,
+    /// Debug information (`-g`; spec/codegen.md "Debug information").
+    pub di: Option<Box<crate::debuginfo::Di<'a>>>,
 }
 
 impl<'a> Cg<'a> {
@@ -455,6 +457,7 @@ impl<'a> Cg<'a> {
                 || ast.attrs.has_kind(kiln_ast::attr::AttrKind::VISIBILITY)
                 || ast.attrs.has_kind(kiln_ast::attr::AttrKind::TYPE_VISIBILITY),
             lv_cache: std::cell::RefCell::default(),
+            di: None,
         }
     }
 
@@ -517,7 +520,10 @@ impl<'a> Cg<'a> {
         self.emit_contract_defaults()?;
         self.check_aliases();
         self.trailer();
-        Ok(())
+        match self.take_debug_info_error() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// Class definition `def` is incomplete to code emitted now: the
@@ -1397,7 +1403,6 @@ impl<'a> Cg<'a> {
         spec(d) || (!explicit_spec && ast.instantiated_from(first).is_some_and(spec))
     }
 
-    /// Whether a redeclaration of `d` carries an attribute of kind `k`.
     /// Whether `d` or a declaration before it has `target_version`
     /// (clang's attribute is inherited by later redeclarations only).
     fn target_version_so_far(&self, d: DeclId) -> bool {
@@ -1409,6 +1414,7 @@ impl<'a> Cg<'a> {
         })
     }
 
+    /// Whether a redeclaration of `d` carries an attribute of kind `k`.
     pub(crate) fn has_fn_attr(&self, d: DeclId, k: kiln_ast::attr::AttrKind) -> bool {
         let ast = self.ast;
         ast.redecls_of(d).any(|r| {
@@ -1515,7 +1521,7 @@ impl<'a> Cg<'a> {
         t
     }
 
-    fn qualified_name(&self, d: DeclId) -> String {
+    pub(crate) fn qualified_name(&self, d: DeclId) -> String {
         let ast = self.ast;
         let is_fn = |k: DeclKind| {
             matches!(
@@ -3002,6 +3008,7 @@ impl<'a> Cg<'a> {
         if needs_init || needs_dtor {
             self.emit_var_init_fn(d, g, needs_init)?;
         }
+        self.di_global_var(d, g);
         Ok(())
     }
 
@@ -3216,6 +3223,8 @@ impl<'a> Cg<'a> {
         self.finish_dso_local();
         let fp = self.frame_pointer().module_flag();
         let direct_access = self.direct_access_external_data();
+        self.finish_debug_info();
+        let has_di = self.di.is_some();
         let h = self.opts.hardening.clone();
         let x86 = self.is_x86();
         let m = &mut self.m;
@@ -3224,10 +3233,19 @@ impl<'a> Cg<'a> {
         if self.opts.clang_compat < 22 && self.opts.cxx_modules {
             m.add_named_metadata("llvm.linker.options", &[]);
         }
+        // clang `CodeGenModule::Release`: the DWARF version (whenever one
+        // was given), then the debug metadata version (spec/codegen.md
+        // "Debug information").
+        if let Some(v) = self.opts.debug.dwarf_version {
+            m.add_module_flag_i32(7, "Dwarf Version", i32::try_from(v).unwrap_or(5));
+        }
         if matches!(self.opts.reloc, RelocModel::Pic(_))
             && self.opts.semantic_interposition == Some(true)
         {
             m.add_module_flag_i32(1, "SemanticInterposition", 1);
+        }
+        if has_di {
+            m.add_module_flag_i32(2, "Debug Info Version", 3);
         }
         m.add_module_flag_i32(1, "wchar_size", 4);
         // clang `CodeGenModule::Release` (WP-813): `-fcf-protection`
