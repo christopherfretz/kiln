@@ -454,6 +454,11 @@ pub(crate) struct FirDbg {
     /// clang `LastStopPoint`'s location (the return's line when every
     /// return was simple).
     pub last_stop: Option<MetadataId>,
+    /// clang `CGDebugInfo::CurLoc`: the last valid location emitted.
+    pub cur_loc: kiln_source::Loc,
+    /// Every `return` so far was simple (clang `NumSimpleReturnExprs ==
+    /// NumReturnExprs`), so the epilogue takes the last stop point.
+    pub simple_returns: bool,
     /// Records declared at the end of a block, adopted by the next
     /// instruction appended to it (`DIBuilder::insertDeclare(.., BB)`).
     trailing: Vec<(Blk, DbgRec)>,
@@ -470,6 +475,8 @@ impl FirDbg {
             loc: None,
             scopes: vec![sp],
             last_stop: None,
+            cur_loc: kiln_source::Loc::INVALID,
+            simple_returns: true,
             trailing: Vec::new(),
             recs: Vec::new(),
         }
@@ -955,6 +962,22 @@ impl Fir {
                 }
             }
             None => d.trailing.extend(moved.into_iter().map(|r| (b, r))),
+        }
+    }
+
+    /// The `!dbg` of instruction `i`.
+    pub fn inst_dbg(&self, i: u32) -> Option<MetadataId> {
+        let k = self.dbg.as_deref()?.kind;
+        self.insts[i as usize].md.iter().find(|m| m.0 == k).map(|m| m.1)
+    }
+
+    /// Replaces the `!dbg` of instruction `i`.
+    pub fn set_inst_dbg(&mut self, i: u32, loc: Option<MetadataId>) {
+        let Some(k) = self.dbg.as_deref().map(|d| d.kind) else { return };
+        let md = &mut self.insts[i as usize].md;
+        md.retain(|m| m.0 != k);
+        if let Some(l) = loc {
+            md.push((k, l));
         }
     }
 

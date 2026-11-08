@@ -103,7 +103,10 @@ impl DebugOptions {
     }
 }
 
+mod func;
 mod md5;
+mod stmt;
+mod types;
 
 use kiln_ast::{DeclId, QualType};
 use kiln_llvm::{MdField, MdKindId, MetadataId};
@@ -172,8 +175,15 @@ pub(crate) struct Di<'a> {
     pub class_order: Vec<DeclId>,
     /// Classes whose definition is already being built (cycle guard).
     pub completed: FxHashSet<DeclId>,
-    /// Classes a constructor of which was emitted (constructor homing).
-    pub ctor_emitted: FxHashSet<DeclId>,
+    /// Classes homed by a constructor (clang `completeUnusedClass`),
+    /// kept in the unit's retained types.
+    pub retained_classes: Vec<DeclId>,
+    /// Function scopes by first declaration (clang `RegionMap`).
+    pub regions: FxHashMap<DeclId, MetadataId>,
+    /// `__vtbl_ptr_type *`.
+    pub vtbl_ptr: Option<MetadataId>,
+    /// The first construct debug information cannot describe yet.
+    pub error: Option<crate::CodegenError>,
     /// Member function declarations by first declaration.
     pub decl_sps: FxHashMap<DeclId, MetadataId>,
     /// Namespaces by first declaration.
@@ -234,7 +244,10 @@ impl<'a> Cg<'a> {
             classes: FxHashMap::default(),
             class_order: Vec::new(),
             completed: FxHashSet::default(),
-            ctor_emitted: FxHashSet::default(),
+            retained_classes: Vec::new(),
+            regions: FxHashMap::default(),
+            vtbl_ptr: None,
+            error: None,
             decl_sps: FxHashMap::default(),
             namespaces: FxHashMap::default(),
             static_members: FxHashMap::default(),
@@ -308,6 +321,47 @@ impl<'a> Cg<'a> {
         l
     }
 
+    /// clang `CGDebugInfo::finalize`: never-completed class placeholders
+    /// become declarations; the compile unit gets its enums, retained
+    /// types, globals and imported entities.
+    pub(crate) fn finish_debug_info(&mut self) {
+        let Some(order) = self.di.as_deref().map(|d| d.class_order.clone()) else { return };
+        for rd in order {
+            let (done, p) = match self.di.as_deref() {
+                Some(d) => (d.completed.contains(&rd), d.classes[&rd]),
+                None => return,
+            };
+            if !done {
+                let node = self.di_class_decl(rd);
+                let _ = self.m.md_replace(p, node);
+            }
+        }
+        let Some(d) = self.di.as_deref_mut() else { return };
+        let homed: Vec<DeclId> = std::mem::take(&mut d.retained_classes);
+        let mut retained = std::mem::take(&mut d.retained);
+        for rd in homed {
+            if let Some(&p) = self.di.as_deref().and_then(|d| d.classes.get(&rd))
+                && !retained.contains(&p)
+            {
+                retained.push(p);
+            }
+        }
+        let Some(d) = self.di.as_deref() else { return };
+        let (cu, lists) = (d.cu, [("enums", d.enums.clone()), ("retainedTypes", retained), ("globals", d.globals.clone()), ("imports", d.imported.clone())]);
+        for (k, v) in lists {
+            if !v.is_empty() {
+                let ops: Vec<Option<MetadataId>> = v.into_iter().map(Some).collect();
+                let t = self.m.md_tuple(&ops);
+                let _ = self.m.md_set_field(cu, k, MdField::Node(Some(t)));
+            }
+        }
+    }
+
+    /// The first unsupported construct met by debug information.
+    pub(crate) fn take_debug_info_error(&mut self) -> Option<crate::CodegenError> {
+        self.di.as_deref_mut().and_then(|d| d.error.take())
+    }
+
     // ---- function locations (clang `CodeGenFunction` + `CGDebugInfo`) ---
 
     /// Whether the current function has debug locations.
@@ -316,50 +370,56 @@ impl<'a> Cg<'a> {
         self.f.fir.dbg.is_some()
     }
 
-    /// clang `CGDebugInfo::EmitLocation`: the builder location becomes
-    /// `loc` in the innermost scope; an invalid location changes nothing.
+    /// clang `CGDebugInfo::setLocation` + `EmitLocation`: a valid `loc`
+    /// becomes `CurLoc`; the builder location becomes `CurLoc` in the
+    /// innermost scope (nothing while `CurLoc` is invalid).
     pub(crate) fn dbg_emit_location(&mut self, loc: Loc) {
-        let Some(d) = self.f.fir.dbg.as_deref() else { return };
-        let scope = d.scope();
-        if let Some(l) = self.di_location(loc, scope) {
+        let Some(d) = self.f.fir.dbg.as_deref_mut() else { return };
+        if loc != Loc::INVALID {
+            d.cur_loc = loc;
+        }
+        let (cur, scope) = (d.cur_loc, d.scope());
+        if let Some(l) = self.di_location(cur, scope) {
             self.f.fir.set_dbg_loc(Some(l));
         }
     }
 
     /// clang `EmitStopPoint`.
     pub(crate) fn dbg_stop_point(&mut self, loc: Loc) {
-        let Some(d) = self.f.fir.dbg.as_deref() else { return };
-        let scope = d.scope();
-        if let Some(l) = self.di_location(loc, scope) {
-            self.f.fir.set_dbg_loc(Some(l));
-            if let Some(d) = self.f.fir.dbg.as_deref_mut() {
-                d.last_stop = Some(l);
-            }
+        if !self.dbg_on() {
+            return;
+        }
+        self.dbg_emit_location(loc);
+        if let Some(d) = self.f.fir.dbg.as_deref_mut() {
+            d.last_stop = d.loc;
         }
     }
 
     /// clang `ApplyDebugLocation(CGF, Loc)`'s constructor: returns the
     /// location to restore (`None` when the function has none).
+    /// Expression locations are always on (clang
+    /// `getExpressionLocationsEnabled` without CodeView).
     #[inline]
     pub(crate) fn dbg_apply(&mut self, loc: Loc) -> Option<Option<MetadataId>> {
         let d = self.f.fir.dbg.as_deref()?;
-        Some(self.dbg_apply_slow(loc, d.loc, d.scope()))
-    }
-
-    fn dbg_apply_slow(&mut self, loc: Loc, orig: Option<MetadataId>, scope: MetadataId) -> Option<MetadataId> {
-        if orig.is_some() && !self.opts.debug.column_info {
-            return orig;
+        let orig = d.loc;
+        if loc == Loc::INVALID {
+            let scope = d.scope();
+            let l = self.di_location_at(0, 0, scope);
+            self.f.fir.set_dbg_loc(Some(l));
+        } else {
+            self.dbg_emit_location(loc);
         }
-        let l = match self.di_location(loc, scope) {
-            Some(l) => l,
-            None => self.di_location_at(0, 0, scope),
-        };
-        self.f.fir.set_dbg_loc(Some(l));
-        orig
+        Some(orig)
     }
 
-    /// clang `ApplyDebugLocation::CreateDefaultArtificial(CGF, Loc)`.
+    /// clang `ApplyDebugLocation::CreateDefaultArtificial(CGF, Loc)`:
+    /// only when the builder has a location.
     pub(crate) fn dbg_apply_default_artificial(&mut self, loc: Loc) -> Option<Option<MetadataId>> {
+        let d = self.f.fir.dbg.as_deref()?;
+        if d.loc.is_none() {
+            return Some(None);
+        }
         self.dbg_apply(loc)
     }
 
@@ -373,20 +433,22 @@ impl<'a> Cg<'a> {
 
     /// clang `LexicalScope`'s constructor (`EmitLexicalBlockStart`): the
     /// location becomes `begin` in the enclosing scope, then a block
-    /// starting there is pushed (not with line tables only).
-    pub(crate) fn dbg_block_start(&mut self, begin: Loc) {
-        let Some(d) = self.f.fir.dbg.as_deref() else { return };
-        let scope = d.scope();
+    /// starting there is pushed (not with line tables only). Returns
+    /// whether a scope was entered (to pass to [`Self::dbg_block_end`]).
+    pub(crate) fn dbg_block_start(&mut self, begin: Loc) -> bool {
+        let Some(d) = self.f.fir.dbg.as_deref_mut() else { return false };
+        if begin != Loc::INVALID {
+            d.cur_loc = begin;
+        }
+        let (scope, cur) = (d.scope(), d.cur_loc);
         let (line, col) = self.di_line_col(begin);
         let l = self.di_location_at(line, col, scope);
         self.f.fir.set_dbg_loc(Some(l));
-        if !self.opts.debug.reduced() && self.opts.debug.kind != DebugInfoKind::LineTablesOnly {
-            // Limited and above push blocks; see below.
-        }
         if self.opts.debug.kind <= DebugInfoKind::LineTablesOnly {
-            return;
+            return true;
         }
-        let file = self.di_file(begin);
+        let file = self.di_file(cur);
+        let (line, col) = self.di_line_col(cur);
         let mut f = Fields::default().n("scope", Some(scope)).n("file", Some(file)).u("line", u64::from(line));
         if col != 0 {
             f = f.u("column", u64::from(col));
@@ -395,12 +457,13 @@ impl<'a> Cg<'a> {
         if let Some(d) = self.f.fir.dbg.as_deref_mut() {
             d.scopes.push(b);
         }
+        true
     }
 
     /// clang `~LexicalScope`'s `EmitLexicalBlockEnd`: the location becomes
     /// `end` in the block, which is popped.
-    pub(crate) fn dbg_block_end(&mut self, end: Loc) {
-        if !self.dbg_on() {
+    pub(crate) fn dbg_block_end(&mut self, started: bool, end: Loc) {
+        if !started || !self.dbg_on() {
             return;
         }
         self.dbg_emit_location(end);
