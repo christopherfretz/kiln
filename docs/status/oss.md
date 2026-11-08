@@ -72,7 +72,7 @@ The loop:
 | `llvm_project` | 3 | `llvmorg-19.1.7` | tests at parity |
 | `protobuf` | 3 | `v33.1` | tests at parity |
 | `rocksdb` | 3 | `v10.7.5` | tests at parity |
-| `boost_meta` | 4 | `boost-1.90.0` | blocked (13 clusters) |
+| `boost_meta` | 4 | `boost-1.90.0` | control failures and row 14 only (WP-802) |
 | `ctre` | 4 | `v3.11.0` | tests at parity |
 | `daw_json_link` | 4 | `v3.38.1` | tests at parity |
 | `folly_coro` | 4 | `v2026.10.26.00` | blocked (1 cluster) |
@@ -670,13 +670,15 @@ TUs over 1.2x on time or RSS: 0 of the 315 that take clang-19 at least 0.5 s.
 |---|---|---|
 | configure | ok | ok |
 | build | rc 2 | rc 2 |
-| TUs ok / failed | 2211 / 42 | 2240 / 13 |
-| links ok / failed | 1986 / 0 | 2013 / 0 |
-| tests passed / total | 2059 / 2087 | 2087 / 2099 |
-| wall | 6508 s | 3153 s |
-| peak TU RSS | 1176 MB | 1087 MB |
+| TUs ok / failed | 2230 / 23 | 2240 / 13 |
+| links ok / failed | 2005 / 0 | 2013 / 0 |
+| tests passed / total | 2079 / 2087 | 2087 / 2099 |
+| wall | 10943 s | 3153 s |
+| peak TU RSS | 1178 MB | 1087 MB |
 
-Failure clusters (kiln): 16.
+Failure clusters (kiln): 16 in the WP-787 final run, listed below. The kiln column is the WP-802 run (`5384ebeeb`), with no clang control rebuilt: its 23 failed TUs are in `docs/status/oss/boost_meta.md` (What remains).
+
+Failure clusters (kiln, WP-787 final): 16.
 
 1. **7x** `reject: fatal error: Q file not found`; 7 also fail with clang
    - e.g. `$KILN/.oss/src/boost/libs/spirit/test/karma/format_manip_attr.cpp`: `$KILN/.oss/src/boost/libs/preprocessor/include/boost/preprocessor/iteration/detail/iter/limits/forward1_256.hpp:19:18: fatal error: 'test_manip_attr.hpp' file not found`

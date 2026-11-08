@@ -93,12 +93,18 @@ other harness builds.
 | clang++-19 (control) | 2240 / 13 | 2013 / 0 | 2087/2099 (the 12 excluded) | 3153 s † | 8404 s | 1087 MB (`preprocessing_mode.cpp`) |
 | kiln, first (`4718aa54e`) | 1118 / 918 (1 panic; 217 not attempted) | 919 / 0 | 989/2099 | 3681 s | 14985 s | 1177 MB (`preprocessing_mode.cpp`) |
 | kiln, final (`50a2647c8`) | 2211 / 42 (13 also fail in the control) | 1986 / 0 | 2059/2099 (27 not built, 1 failed; the 12 excluded) | 6509 s ‡ | 11444 s | 1176 MB (`preprocessing_mode.cpp`) |
+| kiln, WP-802 (`5384ebeeb`) | 2230 / 23 (13 also fail in the control, 5 are row 14, 5 fixed since) | 2005 / 0 | 2079/2087 (8 not built: 5 row 14, 3 fixed since; the 12 excluded) | 10943 s § | - | 1178 MB (`preprocessing_mode.cpp`) |
 
 † The control's wall includes the clone. The kiln runs reused the source.
 
 The clang control's 13 failed TUs are the sources of the 12 excluded
 tests. In the first kiln build, all 217 TUs never attempted are
 spirit's: `make -k` skips a target once one of its TUs fails.
+
+§ The WP-802 build ran on a host shared with several other harness
+builds, so its wall time is not comparable either. Its 5 failed TUs that
+were neither control failures nor row 14 (rows 15 and 18) compile after
+`cb36e2ee6` and `572e16df0`.
 
 ‡ The final build ran while the host was also running a full LLVM build
 (load average 9 to 13), so its wall time is not comparable with the other
@@ -172,15 +178,15 @@ the ctest results once the build got further.
 | 7 | `excess elements in scalar initializer` (`T x(a...)` with `a` empty) | variant2 | 2 | fixed, `c341de3cb` | `tests/conformance/temp.variadic/empty-expansion-paren-init-value-initializes.cpp` |
 | 8 | runtime: `is_virtual_base_of` false for a non-public virtual base (C-style cast checked base access) | type_traits, describe | 0 (3 tests) | fixed, `70a876edf` | `tests/conformance/expr.cast/c-style-cast-inaccessible-base.cpp` |
 | 9 | runtime: `has_plus_assign<bool, int*>` false (`bool += pointer` rejected) | type_traits | 0 (1 test) | fixed, `72d41ec3d` | `tests/conformance/expr.ass/bool-add-assign-pointer-run.cpp` |
-| 10 | `constexpr variable must be initialized by a constant expression` (`BOOST_HOF_CONST_FOLD`: `reinterpret_cast`) | hof | 6 | follow-up, xfail | `hof/detail/constexpr_deduce.hpp:51`; `tests/conformance/expr.const/builtin-constant-p-conditional-folds-reinterpret-cast.cpp` |
-| 11 | `pack expansion contains parameter pack that has a different length` | hof | 5 | follow-up, xfail (same cause as row 22) | `hof/pack.hpp:252`; `tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp` |
-| 12 | `static_assert` failed: `noexcept fold` / `noexcept reverse_fold` | hof | 2 | follow-up, xfail | hof `test/fold.cpp`, `test/reverse_fold.cpp`; `tests/conformance/except.spec/nested-member-template-noexcept-specifier-run.cpp` |
+| 10 | `constexpr variable must be initialized by a constant expression` (`BOOST_HOF_CONST_FOLD`: `reinterpret_cast`) | hof | 6 | fixed (WP-802), `f13e6f615` | `hof/detail/constexpr_deduce.hpp:51`; `tests/conformance/expr.const/builtin-constant-p-conditional-folds-reinterpret-cast.cpp` |
+| 11 | `pack expansion contains parameter pack that has a different length` | hof | 5 | fixed (WP-802), `c8ce199c7` | `hof/pack.hpp:252`; `tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp` |
+| 12 | `static_assert` failed: `noexcept fold` / `noexcept reverse_fold` | hof | 2 | fixed (WP-802), `18d39ab13` | hof `test/fold.cpp`, `test/reverse_fold.cpp`; `tests/conformance/except.spec/nested-member-template-noexcept-specifier-run.cpp` |
 | 13 | `invalid use of 'this' outside of a non-static member function` | hof | 1 | fixed by main (passes after merging `origin/main` at `5644b9de6`) | `hof/implicit.hpp:120` |
 | 14 | `in-class initializer for static data member is not a constant expression` (enumeration out of range) | type_traits, mpl, spirit | 3 (5 final) | matches clang 22, not a bug | type_traits `make_signed_test`, `make_unsigned_test`; mpl `issue_69` |
-| 15 | `address of overloaded function does not match required type` | function_types | 1 | follow-up, xfail | `libs/function_types/example/interface_example.cpp:16`; `tests/conformance/over.over/template-id-overload-set-arity-mismatch-run.cpp` |
-| 16 | `expression UnresolvedLookupExpr is not supported yet` | mp11 | 1 | follow-up, xfail | `libs/mp11/test/mp_valid.cpp:49`; `tests/conformance/temp.arg.template/member-alias-template-through-typedef-call-run.cpp` |
-| 17 | `not yet implemented: pack expansion in this context` (pack into a non-pack alias template parameter) | mp11 | 1 | follow-up, xfail | `libs/mp11/test/mp_defer.cpp:38`; `tests/conformance/temp.arg.template/member-alias-template-through-typedef-pack-run.cpp` |
-| 18 | `expected expression` (parser lookahead: `H<int>::type` inherited from a base, in a function type) | mpl, fusion | 1 (4 final) | follow-up, xfail | `libs/mpl/test/map.cpp:51`, `libs/fusion/test/sequence/filter_view.cpp:117`; `tests/conformance/dcl.ambig.res/function-type-param-inherited-member-type-run.cpp` |
+| 15 | `address of overloaded function does not match required type` | function_types | 1 | fixed (WP-802), `c6e923f74`, `572e16df0` | `libs/function_types/example/interface_example.cpp:16`; `tests/conformance/over.over/template-id-overload-set-arity-mismatch-run.cpp` |
+| 16 | `expression UnresolvedLookupExpr is not supported yet` | mp11 | 1 | fixed (WP-802), `ca89e7afc` | `libs/mp11/test/mp_valid.cpp:49`; `tests/conformance/temp.arg.template/member-alias-template-through-typedef-call-run.cpp` |
+| 17 | `not yet implemented: pack expansion in this context` (pack into a non-pack alias template parameter) | mp11 | 1 | fixed (WP-802), `ca89e7afc` | `libs/mp11/test/mp_defer.cpp:38`; `tests/conformance/temp.arg.template/member-alias-template-through-typedef-pack-run.cpp` |
+| 18 | `expected expression` (parser lookahead: `H<int>::type` inherited from a base, in a function type) | mpl, fusion | 1 (4 final) | fixed (WP-802), `77c93f739`, `cb36e2ee6` | `libs/mpl/test/map.cpp:51`, `libs/fusion/test/sequence/filter_view.cpp:117`; `tests/conformance/dcl.ambig.res/function-type-param-inherited-member-type-run.cpp` |
 
 Cluster 14 is a divergence from the clang-19 control, not a kiln bug. The
 tests give an enumeration with a fixed range a value outside it, in a
@@ -197,8 +203,8 @@ regression from main.
 | 19 | `call to 'group_helper' is ambiguous`, `call to 'mp_for_each_impl' is ambiguous` (an expansion that matched nothing left its pack undeduced in partial ordering) | hana, mp11, describe | 22 | fixed, `757997b83` | `tests/conformance/temp.func.order/p12-empty-expansion-deduces-empty-pack-run.cpp` |
 | 20 | `incompatible operand types ('integral_constant<[...], true>' and 'integral_constant<[...], false>')` (no [expr.cond]/6 built-in candidates; hana `eval_if.hpp:59`, `support/numeric.hpp:75`) | hana | 79 | fixed, `0bfbb7d0e` | `tests/conformance/expr.cond/p6-class-arms-builtin-overload-run.cpp`, `p6-class-arms-builtin-overload-errors.cpp` |
 | 21 | `no type named 'type' in 'boost::proto::_state'` (derived-class deduction through `F<T>**` instantiated `mpl::and_<_state, ...>`; proto `template_arity`) | spirit | 95 | fixed, `50a2647c8` | `tests/conformance/temp.deduct.call/pointer-to-pointer-no-derived-class-deduction.cpp` |
-| 22 | `static_assert` failed in `integer_sequence` `equal`, and at run time `is_constructible<fusion::tuple<>, int>` is true (an empty first pack hides the expansion's other packs) | hana, fusion | 2 (+1 test) | follow-up, xfail | `crates/kiln_sema/src/templ/pack.rs:286`; `tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp` |
-| 23 | `source file is not valid UTF-8` (byte `0xA8` in a comment; clang accepts it) | spirit | 1 | follow-up, xfail | `crates/kiln_pp/src/preprocessor.rs:541`; `tests/conformance/lex.phases/invalid-utf8-in-comment-accepted-run.cpp` |
+| 22 | `static_assert` failed in `integer_sequence` `equal`, and at run time `is_constructible<fusion::tuple<>, int>` is true (an empty first pack hides the expansion's other packs) | hana, fusion | 2 (+1 test) | fixed (WP-802), `c8ce199c7` | `crates/kiln_sema/src/templ/pack.rs:286`; `tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp` |
+| 23 | `source file is not valid UTF-8` (byte `0xA8` in a comment; clang accepts it) | spirit | 1 | fixed (WP-802), `004aaecf2` | `crates/kiln_pp/src/preprocessor.rs:541`; `tests/conformance/lex.phases/invalid-utf8-in-comment-accepted-run.cpp` |
 
 Row 18 now also covers fusion `filter_view.cpp:117`,
 `joint_view.cpp:162` and `iterator_range.cpp:98` (4 TUs in all). Row 14
@@ -206,60 +212,24 @@ now also covers 2 spirit TUs (5 in all).
 
 ## What remains
 
-In the final build, 29 TUs fail that the control compiles, and one test
-fails at run time:
+WP-802 fixed every follow-up row (10 to 12, 15 to 18, 22 and 23). In the
+WP-802 build (`5384ebeeb`), 23 TUs fail: 13 also fail in the control,
+5 are row 14 (kiln matches clang 22), and the other 5 (rows 15 and 18)
+compile after `cb36e2ee6` and `572e16df0`. Fusion `tuple_traits` (row
+22's run-time failure) passes.
 
-- **hof, 14 TUs** (rows 10 to 13):
-  - `reinterpret_cast` in `BOOST_HOF_CONST_FOLD` constant folding:
-    `crates/kiln_oven/src/compile.rs:3863`.
-  - The pack-length mismatch at `hof/pack.hpp:252` has row 22's cause
-    (`crates/kiln_sema/src/templ/pack.rs:286`).
-  - The `noexcept` of a fold: a member template's exception
-    specification, first instantiated inside another function's
-    noexcept-specifier, comes out potentially-throwing.
-  - `this` in `hof/implicit.hpp:120` compiles after merging `origin/main`
-    (`5644b9de6`), so 13 hof TUs remain.
-- **Parser lookahead, 4 TUs** (row 18): `X<A>::type`, where `type` is
-  inherited from a base of the specialization, is not seen as a type when
-  it is the parameter type of a function type in a cast or declarator.
-  - `crates/kiln_sema/src/decl.rs:9015` `classify_template_member`
-    returns `Dependent` without instantiating, and
-    `crates/kiln_parse/src/tentative.rs:396` `after_dependent_name` then
-    rejects the type-id.
-  - The fix needs lookahead to annotate (instantiate) a template-id scope,
-    as clang's `TryAnnotateCXXScopeToken` does. That is a design-level
-    change.
-  - Repro: `template<class T> struct B { typedef int type; }; template<class S> struct H : B<S> {}; void (*p)(H<int>::type) = 0;`.
-- **Pack expansion checks only the first pack, 2 TUs and 1 test** (row 22):
-  - `crates/kiln_sema/src/templ/pack.rs:286` `expand_pattern_impl` takes
-    the expansion's length from the first pack the probe reaches. When
-    that pack is empty the pattern is never substituted, so a pack of
-    another length, or one of a retained level, goes unnoticed.
-  - clang checks all of the pattern's packs first
-    (`TryExpandParameterPacks`).
-  - Repro: `template<class... T> struct tup { template<class... U, class = std::enable_if_t<all<std::is_convertible_v<U, T>...>::value>> explicit tup(U&&...); };` makes `is_constructible_v<tup<>, int>` true.
 - **Divergence from the control, 5 TUs** (row 14): kiln matches clang 22.
-- **Invalid UTF-8 in a comment, 1 TU** (row 23):
-  `crates/kiln_pp/src/preprocessor.rs:541` reports every replaced
-  sequence in the file. clang reports one only where a token is lexed,
-  never in a comment.
-- **Singles:**
-  - function_types `interface_example.cpp:16` (row 15).
-  - mp11 `mp_valid.cpp:49`, `UnresolvedLookupExpr` in codegen:
-    `crates/kiln_codegen/src/expr.rs:517`.
-  - mp11 `mp_defer.cpp:38`: `crates/kiln_sema/src/templ/pack.rs:136`.
 - **Perf:** the TU wall ratio of 1.36x (Performance, above).
 
-Each follow-up has a hand-reduced `xfail(kiln): WP-787 follow-up` test,
-checked to pass under clang++-19:
+The tests that were `xfail(kiln): WP-787 follow-up` pass now:
 
 - `tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp` (rows 11, 22)
 - `tests/conformance/expr.const/builtin-constant-p-conditional-folds-reinterpret-cast.cpp` (row 10)
 - `tests/conformance/except.spec/nested-member-template-noexcept-specifier-run.cpp` (row 12)
-- `tests/conformance/over.over/template-id-overload-set-arity-mismatch-run.cpp` (row 15)
+- `tests/conformance/over.over/template-id-overload-set-arity-mismatch-run.cpp` (row 15), with `tests/conformance/over.over/template-id-retarget-unselected-not-instantiated-run.cpp`
 - `tests/conformance/temp.arg.template/member-alias-template-through-typedef-call-run.cpp` (row 16)
 - `tests/conformance/temp.arg.template/member-alias-template-through-typedef-pack-run.cpp` (row 17)
-- `tests/conformance/dcl.ambig.res/function-type-param-inherited-member-type-run.cpp` (row 18)
+- `tests/conformance/dcl.ambig.res/function-type-param-inherited-member-type-run.cpp` (row 18), with `function-type-param-member-template-base-run.cpp` and `function-type-param-typedef-base-run.cpp`
 - `tests/conformance/lex.phases/invalid-utf8-in-comment-accepted-run.cpp` (row 23)
 
 ## Disk
