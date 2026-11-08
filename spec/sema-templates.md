@@ -3205,6 +3205,36 @@ recomputed exactly as for non-template code (clang's
 - **Member templates** are created as in §4.6.
 - **`static_assert`** is evaluated with the substituted condition.
 - **`using` declarations** with packs give a `UsingPack` decl.
+- **Block-scope typedefs** whose type fails substitution (outside SFINAE)
+  are declared as an invalid `int` typedef, as clang's
+  `TemplateDeclInstantiator::InstantiateTypedefNameDecl` does: later uses
+  are checked against `int` and print `'T2' (aka 'int')`, instead of the
+  declaration vanishing and its uses being silent (WP-848,
+  `dcl.typedef/failed-local-typedef-recovers-as-int.cpp`). A member
+  typedef keeps the error type.
+- **A failed call initializer** keeps its variable (spec/sema.md §1.2,
+  WP-849): the `Substituter` records a call whose overload resolution
+  (or a member call's argument conversion) failed at the current
+  instantiation depth (`Sema::call_recovery`), and `var_init` then
+  initializes the variable with an erroneous expression (a `void`
+  result leaves it uninitialized) rather than marking it failed.
+
+#### Attributes of a specialization
+A function template specialization copies its pattern's attributes
+(substituting dependent operands), and takes as written every attribute
+of another declaration of the template that it does not already carry
+(`Substituter::function_spec_attrs`, `merges_unsubstituted`; not
+`aligned`, `enable_if`, `diagnose_if`, `visibility`, `mode` or a
+dependent `constructor`/`destructor` priority). For a member template of
+a class template, the cutoff is the instantiation of the class: clang
+substitutes from the member declaration made then, so only declarations
+created before the instantiated member template contribute (declaration
+ids are allocated in creation order). An attribute written only on an
+out-of-line definition that follows `A<int> a;` adds nothing to
+`A<int>::f<U>` (`always_inline`, `noinline`: WP-818; `nodiscard`,
+`deprecated`, `pure`, `const`, `cold` and every other attribute: WP-837).
+Tests: `tests/codegen/member_template_late_attrs.cpp` (IR),
+`dcl.attr.nodiscard/member-template-late-definition.cpp`.
 
 ### 5.7 SFINAE
 
