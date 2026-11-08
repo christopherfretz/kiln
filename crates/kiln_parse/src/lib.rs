@@ -337,8 +337,5 @@ pub fn parse_preprocessed<'a, 'sm>(
     let cfg_dump = std::mem::take(&mut s.cfg_out);
     let sema_memory = s.memory();
     let (ast, oven) = s.into_parts();
-    (
-        ParsedTu { ast, oven, inst_report, cfg_dump, sema_memory },
-        src.into_preprocessor(),
-    )
+    (ParsedTu { ast, oven, inst_report, cfg_dump, sema_memory }, src.into_preprocessor())
 }

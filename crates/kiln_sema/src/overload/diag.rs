@@ -391,10 +391,8 @@ impl Sema<'_, '_> {
                 // A surrogate whose conversion function's constraints are
                 // not satisfied (a templated lambda's) is not shown, as in
                 // clang 19.
-                if !matches!(
-                    set.cand(c).failure,
-                    CandidateFailure::ConstraintsNotSatisfied { .. }
-                ) {
+                if !matches!(set.cand(c).failure, CandidateFailure::ConstraintsNotSatisfied { .. })
+                {
                     out.push(self.surrogate_note(set.cand(c).func()));
                 }
             } else {
