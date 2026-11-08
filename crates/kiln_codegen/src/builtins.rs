@@ -626,7 +626,7 @@ impl Cg<'_> {
     /// clang `EmitBuiltinExpr` for the call `e` of builtin `b`:
     /// [`BuiltinCall::Library`] for a library builtin, which the caller
     /// emits as an ordinary call of [`Cg::lib_fn`].
-    pub(crate) fn emit_builtin(&mut self, b: u32, e: ExprId) -> R<BuiltinCall> {
+    pub(crate) fn emit_builtin(&mut self, b: u32, e: ExprId, callee: DeclId) -> R<BuiltinCall> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
         // WP-803: the object size of a `pass_object_size` parameter is its
@@ -714,6 +714,9 @@ impl Cg<'_> {
                 let ctz = matches!(b, id::CTZ | id::CTZL | id::CTZLL | id::CTZG);
                 let fallback = if matches!(b, id::CLZG | id::CTZG) { arg(1) } else { None };
                 let x = self.emit_scalar(a0)?;
+                if fallback.is_none() {
+                    self.ub_builtin_zero(a0, x, ctz)?;
+                }
                 let ty = self.f.fir.ty(&self.m, x);
                 let f = if ctz {
                     kiln_llvm::intrinsics::cttz(&mut self.m, ty)
@@ -1253,6 +1256,12 @@ impl Cg<'_> {
                 let (dv, da) = self.ptr_align(d)?;
                 let (sv, sa) = self.ptr_align(s)?;
                 let nv = self.emit_scalar(n)?;
+                // clang `EmitArgCheck`: `nonnull` (from the called
+                // declaration's attribute), then alignment, per argument.
+                self.ub_nonnull_arg(callee, 0, d, dv)?;
+                self.ub_builtin_arg_check(crate::ubsan::Tck::Store, dv, da, d)?;
+                self.ub_nonnull_arg(callee, 1, s, sv)?;
+                self.ub_builtin_arg_check(crate::ubsan::Tck::Load, sv, sa, s)?;
                 let f = if b == id::MEMMOVE {
                     kiln_llvm::intrinsics::memmove(&mut self.m, LTy::I64)
                 } else if b == id::MEMCPY_INLINE {
@@ -1300,6 +1309,8 @@ impl Cg<'_> {
                 let cv = self.emit_scalar(c)?;
                 let cv = self.int_cast(cv, LTy::I8, false);
                 let nv = self.emit_scalar(n)?;
+                // clang `EmitNonNullArgCheck` of the destination only.
+                self.ub_nonnull_arg(callee, 0, d, dv)?;
                 let f = kiln_llvm::intrinsics::memset(&mut self.m, LTy::I64);
                 let fn_ty = self.m.func(f).ty();
                 let vb = self.m.const_bool(false);
@@ -1799,7 +1810,9 @@ impl Cg<'_> {
                         let null_check = ck == CastKind::DerivedToBase && !self.is_this_expr(s);
                         let ty = self.mty(ast.types.pointee(sq).expect("checked"));
                         let this = Addr { v: r.v, ty, align: r.align };
-                        let (v, align) = self.base_address(this, derived, vb, off, null_check)?;
+                        let loc = self.ub_expr_loc(e);
+                        let (v, align) =
+                            self.base_address(this, derived, vb, off, null_check, Some(loc))?;
                         return Ok(PtrAlign { v, align, decl: r.decl });
                     }
                 }
@@ -1965,7 +1978,7 @@ impl Cg<'_> {
     /// The alignment of the first typedef in the sugar of `q` (clang
     /// `getAs<TypedefType>`) when that typedef carries an `aligned`
     /// attribute (`getMaxAlignment` is nonzero).
-    fn typedef_align_attr(&mut self, q: QualType) -> Option<u64> {
+    pub(crate) fn typedef_align_attr(&mut self, q: QualType) -> Option<u64> {
         let ast = self.ast;
         let mut q = q;
         loop {

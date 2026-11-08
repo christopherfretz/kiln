@@ -1,9 +1,12 @@
 // [temp.constr.atomic]/3, [expr.prim.lambda.closure]/3: a generic lambda
 // in a concept's constraint expression is substituted into during
 // satisfaction checking like any other expression; its call operator
-// template is then deduced and instantiated at the call. Found with
-// WP-821. Verified against clang 19 (GCC 16.1 agrees).
-//@ xfail(kiln): WP-821 follow-up, substituting a generic lambda during satisfaction fails in lambda_declarator (crates/kiln_sema/src/templ/subst/lambda.rs) and the atom reads as ill-formed
+// template is then deduced and instantiated at the call. The lambda's
+// invented parameter belongs to the lambda's own template head, one
+// level deeper than the concept's ([expr.prim.lambda.general]/6), even
+// though the concept's head is still open. Found with WP-821, fixed
+// with WP-884. Verified against clang 19 (GCC 16.1 agrees).
+//@ oracle: gcc
 template <class T> concept K = [](auto x) { return sizeof(x) > 1; }(T{});
 static_assert(K<long>);
 static_assert(!K<char>);

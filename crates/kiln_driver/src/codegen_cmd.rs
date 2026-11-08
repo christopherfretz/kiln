@@ -214,6 +214,11 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOpti
             .outline_expansions
             .unwrap_or(kiln_codegen::OUTLINE_EXPANSIONS_DEFAULT),
         sanitize: a.sanitize(x86, "").0.opts,
+        lto: f.lto(),
+        // `opt --thinlto-bc` adds a thin unit's `EnableSplitLTOUnit` itself.
+        lto_module_flags: !(a.disable_llvm_passes
+            || (f.lto == Some(true)
+                && matches!(Phase::of(a), Phase::Object | Phase::Bitcode | Phase::Link))),
         ..CodegenOptions::default()
     }
 }
@@ -620,6 +625,14 @@ fn plan<'a>(
             Phase::IrText => {
                 steps.push(Step::Frontend { input, dest: Dest::File(out()) });
             }
+            // WP-873: an LTO object is the pre-link pipeline's bitcode.
+            Phase::Bitcode | Phase::Object if args.codegen.lto.is_some() => {
+                steps.push(Step::Frontend { input, dest: Dest::Pipe });
+                steps.push(Step::External { cmd: lto_writer(args, tc, out()), piped: true });
+            }
+            Phase::Assembly if args.codegen.lto.is_some() => {
+                steps.push(Step::Frontend { input, dest: Dest::File(out()) });
+            }
             Phase::Bitcode => {
                 steps.push(Step::Frontend { input, dest: Dest::Pipe });
                 let mut cmd = Command::new(tc, Tool::LlvmAs);
@@ -647,10 +660,12 @@ fn plan<'a>(
                 let stem = default_output(&input.path, Phase::Object);
                 let obj = temp.file(&format!("{n}-{stem}"));
                 steps.push(Step::Frontend { input, dest: Dest::Pipe });
-                steps.push(Step::External {
-                    cmd: llc(args, tc, phase, obj.clone(), &input.path),
-                    piped: true,
-                });
+                let cmd = if args.codegen.lto.is_some() {
+                    lto_writer(args, tc, obj.clone())
+                } else {
+                    llc(args, tc, phase, obj.clone(), &input.path)
+                };
+                steps.push(Step::External { cmd, piped: true });
                 link_inputs.push((pos, obj));
             }
         }
@@ -709,6 +724,9 @@ pub fn needs_always_inline(ir: &str) -> bool {
 /// process and the text round trip were most of the `-O0`
 /// always-inliner's cost (spec/codegen.md §6 "Always-inliner").
 fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
+    if args.codegen.lto.is_some() {
+        return lto_passes(args, tc);
+    }
     if args.disable_llvm_passes {
         return None;
     }
@@ -733,12 +751,72 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
 /// IR declares ([`ir_passes`]) and are not shown (spec/driver.md "IR
 /// optimization").
 fn planned_ir_passes(args: &Args, tc: &Toolchain) -> Option<Vec<Command>> {
+    if args.codegen.lto.is_some() {
+        return lto_passes(args, tc);
+    }
     if args.disable_llvm_passes {
         return None;
     }
     opt_pipeline(args.opt_flag.as_deref())
         .or_else(|| sanitizer_passes(args, tc).map(|_| "default<O0>"))
         .map(|p| opt_commands(args, tc, p))
+}
+
+/// WP-873: under `-flto[=thin]` clang runs the level's LTO pre-link
+/// pipeline (`buildLTOPreLinkDefaultPipeline` /
+/// `buildThinLTOPreLinkDefaultPipeline`, at `-O0` too), and a textual
+/// output carries the module summary (`PrintModulePass` with
+/// `EmitLTOSummary`). For a bitcode output the summary is written by
+/// [`lto_writer`]. `-disable-llvm-passes` runs no pipeline and writes no
+/// summary.
+fn lto_passes(args: &Args, tc: &Toolchain) -> Option<Vec<Command>> {
+    let text = matches!(Phase::of(args), Phase::IrText | Phase::Assembly);
+    if args.disable_llvm_passes {
+        return None;
+    }
+    let level = opt_pipeline(args.opt_flag.as_deref()).unwrap_or("default<O0>");
+    let prefix = if args.codegen.lto == Some(true) { "thinlto-pre-link<" } else { "lto-pre-link<" };
+    let passes = level.replacen("default<", prefix, 1);
+    let mut cmds = opt_commands(args, tc, &passes);
+    if text && let Some(last) = cmds.last_mut() {
+        // Before the trailing `-o - -`.
+        let at = last.args.len().saturating_sub(3);
+        last.args.insert(at, "-module-summary".to_owned());
+    }
+    Some(cmds)
+}
+
+/// WP-873: the `opt` run writing an LTO object (`-c -flto`, or one
+/// before an LTO link) from the pre-link pipeline's bitcode: full LTO's
+/// with its module summary (`BitcodeWriterPass` with `EmitLTOSummary`),
+/// thin LTO's through `ThinLTOBitcodeWriterPass` (`--thinlto-bc`), as
+/// clang's `-flto` `-c`. Under `-disable-llvm-passes`, `llvm-as`.
+fn lto_writer(args: &Args, tc: &Toolchain, out: String) -> Command {
+    if args.disable_llvm_passes {
+        let mut cmd = Command::new(tc, Tool::LlvmAs);
+        cmd.arg("-o").arg(out).arg("-");
+        return cmd;
+    }
+    let mut cmd = Command::new(tc, Tool::Opt);
+    let keep_names = args.sanitize(!tc.target.is_aarch64(), tc.target.triple).0.opts.has(
+        kiln_ast::sanitize::SanitizerSet(
+            kiln_ast::sanitize::SanitizerSet::ADDRESS.0
+                | kiln_ast::sanitize::SanitizerSet::MEMORY.0,
+        ),
+    );
+    if !keep_names {
+        cmd.arg("-discard-value-names");
+    }
+    if args.codegen.lto == Some(true) {
+        cmd.arg("--thinlto-bc");
+        if args.codegen.split_lto_unit == Some(true) {
+            cmd.arg("--thinlto-split-lto-unit");
+        }
+    } else {
+        cmd.arg("-module-summary");
+    }
+    cmd.arg("-o").arg(out).arg("-");
+    cmd
 }
 
 /// clang's `addSanitizers` (WP-675, docs/design/sanitizers.md §1.3): the
@@ -771,7 +849,9 @@ fn opt_commands(args: &Args, tc: &Toolchain, passes: &str) -> Vec<Command> {
         ),
     );
     run.arg("-o").arg("-").arg("-");
-    if matches!(Phase::of(args), Phase::Object | Phase::Link) {
+    if matches!(Phase::of(args), Phase::Object | Phase::Link)
+        || (args.codegen.lto.is_some() && Phase::of(args) == Phase::Bitcode)
+    {
         return vec![run];
     }
     if keep_names {
@@ -875,6 +955,16 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
     // `-gz` reaches the linker as `--compress-debug-sections=`.
     if let Some(z) = args.debug.compression() {
         cmd.arg(format!("-gz={}", z.name()));
+    }
+    // WP-873: the linker's LTO plugin (or lld's LTO) is clang++'s choice.
+    match args.codegen.lto {
+        Some(true) => {
+            cmd.arg("-flto=thin");
+        }
+        Some(false) => {
+            cmd.arg("-flto");
+        }
+        None => {}
     }
     // WP-813: clang links the XRay runtime for `-fxray-instrument`.
     if args.codegen.xray_instrument {
@@ -1010,7 +1100,7 @@ fn execute(
                 if skip_piped {
                     continue;
                 }
-                if cmd.tool == Tool::Llc
+                if matches!(cmd.tool, Tool::Llc | Tool::Opt | Tool::LlvmAs)
                     && Phase::of(args) == Phase::Link
                     && let Err(e) = temp.create()
                 {

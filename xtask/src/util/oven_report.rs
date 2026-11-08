@@ -56,6 +56,9 @@ pub struct Counters {
     pub memo_hits: u64,
     /// Reflection bytes made (0 in a report predating it; WP-479).
     pub refl_bytes: u64,
+    /// Splices read without an evaluation: on the `total` line only (0
+    /// on an evaluation line and in a report predating it; WP-884).
+    pub splice_fast: u64,
     pub wall_us: u64,
     /// How many evaluations these counters cover.
     pub evaluations: u64,
@@ -75,6 +78,7 @@ impl Counters {
             Counter::Evaluations => self.evaluations,
             Counter::MemoHits => self.memo_hits,
             Counter::ReflBytes => self.refl_bytes,
+            Counter::SpliceFast => self.splice_fast,
         }
     }
 
@@ -96,6 +100,7 @@ impl Counters {
             static_bytes: self.static_bytes.max(o.static_bytes),
             memo_hits: self.memo_hits.saturating_add(o.memo_hits),
             refl_bytes: self.refl_bytes.saturating_add(o.refl_bytes),
+            splice_fast: self.splice_fast.saturating_add(o.splice_fast),
             wall_us: self.wall_us.saturating_add(o.wall_us),
             evaluations: self.evaluations.saturating_add(o.evaluations),
         }
@@ -179,6 +184,10 @@ impl Report {
         let sum = evaluations.iter().fold(Counters::default(), |acc, e| acc.combine(&e.counters));
         let mut bad = Vec::new();
         for c in Counter::ALL.into_iter().chain(Counter::EXTRA) {
+            // A total-only counter: work no evaluation did (WP-884).
+            if c == Counter::SpliceFast {
+                continue;
+            }
             // The static space is also used by work no evaluation records
             // (spec/oven.md "Reporting protocol"): its total is a
             // high-water mark, at least every evaluation's.
@@ -272,6 +281,7 @@ fn counters(j: &Json, total: bool) -> Result<Counters, String> {
         static_bytes: if j.get("static_bytes").is_some() { n("static_bytes")? } else { 0 },
         memo_hits: if j.get("memo_hits").is_some() { n("memo_hits")? } else { 0 },
         refl_bytes: if j.get("refl_bytes").is_some() { n("refl_bytes")? } else { 0 },
+        splice_fast: if total && j.get("splice_fast").is_some() { n("splice_fast")? } else { 0 },
         wall_us: n("wall_us")?,
         evaluations: if total { n("evaluations")? } else { 0 },
     })
@@ -368,7 +378,7 @@ mod tests {
         assert_eq!(
             r.total.describe(),
             "steps=116 bytes=172 peak_bytes=50 calls=10 allocs=4 peak_arena=64 frozen_bytes=140 \
-             static_bytes=0 evaluations=4 memo_hits=0 refl_bytes=0"
+             static_bytes=0 evaluations=4 memo_hits=0 refl_bytes=0 splice_fast=0"
         );
         // Located aggregation: line 3 of t.cpp only (not h.h, not the null loc).
         let at3 = r.at(3, None, &in_t);

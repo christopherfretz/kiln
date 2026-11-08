@@ -1535,6 +1535,7 @@ impl Parser<'_, '_> {
     /// The `template? name (< args >)?` after qualifier `q` naming a type:
     /// a dependent name type (with keyword `kw`) when `q` is dependent,
     /// else the type found by qualified lookup.
+    #[allow(clippy::too_many_lines, reason = "the qualified type-name forms in one place")]
     pub(crate) fn parse_qualified_type_rest(
         &mut self,
         q: Qualifier,
@@ -1546,6 +1547,16 @@ impl Parser<'_, '_> {
             self.error_here(DiagId::parse_expected_unqualified_id);
             return None;
         };
+        // `typename T::template X` with no template argument list
+        // ([temp.names]/6; clang's `TryAnnotateTypeOrScopeToken`, which
+        // gives up on the type).
+        if kw == TagKeyword::Typename
+            && template_kw
+            && self.tok_at(self.pos() + 1).kind != TokKind::Punct(Punct::Less)
+        {
+            self.s.diag_missing_template_arg_list(self.loc());
+            return None;
+        }
         let name_loc = self.bump().span.lo;
         if self.s.is_dependent_ctx(q.ctx) {
             let targs = if self.at(Punct::Less) {

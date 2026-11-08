@@ -81,13 +81,49 @@ Behaviours and rules: `spec/landed/sema/WP-681.md`.
 
 - **Nothing for this configuration.** The build is at parity with no
   outstanding cluster.
-- **Not tried:** the Debug build, C++23 or C++26
-  (`-DCMAKE_CXX_STANDARD`), `-DCATCH_BUILD_EXAMPLES=ON`, the extra tests
-  (`-DCATCH_BUILD_EXTRA_TESTS=ON`) and `-DCATCH_ENABLE_WERROR=ON`.
-  - The C++23 build is the one that exercises the multidimensional
-    `operator[]` overload in `Message.tests.cpp`.
-  - kiln is warning-free here, so `CATCH_ENABLE_WERROR=ON` is expected to
-    pass. It was not run.
+- **Not tried:** the Debug build, C++26 (`-DCMAKE_CXX_STANDARD`),
+  `-DCATCH_BUILD_EXAMPLES=ON` and the extra tests
+  (`-DCATCH_BUILD_EXTRA_TESTS=ON`). C++23 and `-DCATCH_ENABLE_WERROR=ON`
+  are below.
+
+## C++23 and `-DCATCH_ENABLE_WERROR=ON` (WP-873, from WP-687)
+
+Two more harness rows share the `catch2` checkout:
+`[catch2_cxx23]` (`cxx_std = 23`, otherwise as `[catch2]`) and
+`[catch2_werror]` (`-DCATCH_ENABLE_WERROR=ON`, C++20). Kiln is main
+`a450c1a89` plus WP-873, date 2026-11-08, host and stdlib as above.
+
+```sh
+scripts/oss/oss-build.sh catch2_cxx23 [--compiler clang]
+scripts/oss/oss-build.sh catch2_werror [--compiler clang]
+```
+
+| Build | TUs ok / failed | Link | Tests | Warnings | wall | Peak TU RSS |
+|---|---|---|---|---|---|---|
+| **kiln, C++23** | **167 / 0** | **1 / 0** | **81 / 81** | **0** | 176 s | **119 MiB** (`MatchersRanges.tests.cpp`) |
+| clang++-19, C++23 | 166 / 1 | — | 1 / 81 | 0 | — | — (report overwritten by the clang 22 run) |
+| **clang++-22, C++23 (the control)** | **167 / 0** | **1 / 0** | **81 / 81** | **0** | 243 s | **456 MiB** (`InternalBenchmark.tests.cpp`) |
+| **kiln, WERROR** | **167 / 0** | **1 / 0** | **81 / 81** | **0** | 119 s | **120 MiB** (`MatchersRanges.tests.cpp`) |
+| **clang++-19, WERROR** | **167 / 0** | **1 / 0** | **81 / 81** | **0** | 99 s | **433 MiB** (`InternalBenchmark.tests.cpp`) |
+
+- **Both configurations pass with no kiln change.** In C++23,
+  `Message.tests.cpp` compiles its multidimensional `operator[]`
+  `CAPTURE` case (`__cpp_multidimensional_subscript`; the parser fix is
+  cluster 4 above). Under `-DCATCH_ENABLE_WERROR=ON` every TU gets
+  `-Werror` with Catch2's warning set (`-Wall -Wextra -Wpedantic`,
+  `-Wshadow`, `-Wold-style-cast`, `-Wunreachable-code-aggressive` and
+  about thirty more), and kiln emits no warning. The C++20 build also
+  runs the new definition-time `-Winvalid-constexpr` check (an error
+  before C++23) on every constexpr function without a false positive.
+- **clang 19 cannot build the C++23 configuration.** It rejects
+  `tests/SelfTest/IntrospectiveTests/UniquePtr.tests.cpp:139`
+  (`REQUIRE(*ptr == std::tuple<int, double, int>{1, 2., 3})`): libstdc++
+  14's C++23 `tuple` `operator<=>` for tuple-like operands instantiates
+  `std::tuple_size<Catch::Decomposer>`, a hard error in clang 19. clang 22,
+  GCC 14 and GCC 16 accept it, and so does kiln. So the C++23 row's control
+  is clang 22 (`control_cxx = "clang++-22"`). Not a kiln breakage.
+- Wall time includes CTest (the ApprovalTests Python script) and host
+  load from eight concurrent builds, as above.
 
 ## libc++ (WP-694)
 

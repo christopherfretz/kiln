@@ -12,6 +12,7 @@ use kiln_abi::call::ArgKind;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 use kiln_ast::{ExprId, QualType};
 use kiln_llvm::{BinOp, Flags, FloatPredicate, IntPredicate, TypeId as LTy, Value};
+use kiln_source::Loc;
 
 use crate::ComplexRange;
 use crate::expr::{Callee, LV, Opaque};
@@ -290,19 +291,20 @@ impl Cg<'_> {
             | CastKind::IntegralComplexCast
             | CastKind::IntegralComplexToFloatingComplex => {
                 let c = self.emit_cx(s, ign)?;
-                Ok(self.cx_convert(c, sq, q))
+                self.cx_convert(c, sq, q, self.ub_expr_loc(e))
             }
             k => err(self.loc_of(e), format!("complex cast {k:?} is not supported yet")),
         }
     }
 
     /// clang `EmitComplexToComplexCast`: each present part converted.
-    fn cx_convert(&mut self, (r, i): Cx, from: QualType, to: QualType) -> Cx {
+    /// `loc`: the float-cast-overflow check location.
+    fn cx_convert(&mut self, (r, i): Cx, from: QualType, to: QualType, loc: Option<Loc>) -> R<Cx> {
         let fe = self.cx_elem(from).expect("complex type");
         let te = self.cx_elem(to).expect("complex type");
-        let r = r.map(|v| self.conv(v, fe, te));
-        let i = i.map(|v| self.conv(v, fe, te));
-        (r, i)
+        let r = r.map(|v| self.conv_at(v, fe, te, loc)).transpose()?;
+        let i = i.map(|v| self.conv_at(v, fe, te, loc)).transpose()?;
+        Ok((r, i))
     }
 
     /// clang `VisitUnaryPlus`/`Minus`/`Not`/`Extension` and the
@@ -451,7 +453,7 @@ impl Cg<'_> {
         let lq = ast.types.as_atomic(lv.q).unwrap_or(lv.q);
         let lhs = if self.is_complex(lq) {
             let v = self.cx_load(lv.addr, lv.q, ALL);
-            self.cx_convert(v, lq, ty)
+            self.cx_convert(v, lq, ty, self.ub_expr_loc(e))?
         } else {
             let v = self.load_lv(lv);
             if ast.types.is_floating(lq) {
@@ -472,12 +474,13 @@ impl Cg<'_> {
             None => self.cx_arith(op, &Ops { lhs, rhs, ty })?,
         };
         if self.is_complex(lq) {
-            let (r, i) = self.cx_convert((Some(res.0), Some(res.1)), ty, lq);
+            let (r, i) =
+                self.cx_convert((Some(res.0), Some(res.1)), ty, lq, self.ub_expr_loc(e))?;
             let v = self.both((r, i), e)?;
             self.cx_store(v, lv.addr, lv.q);
             Ok((lv, (Some(v.0), Some(v.1))))
         } else {
-            let v = self.cx_to_scalar(res, ty, lq);
+            let v = self.cx_to_scalar(res, ty, lq, self.ub_expr_loc(e))?;
             self.store_lv(v, lv, false);
             Ok((lv, (Some(v), None)))
         }
@@ -485,14 +488,20 @@ impl Cg<'_> {
 
     /// clang `EmitComplexToScalarConversion`: to `bool`, `re != 0 | im !=
     /// 0`; otherwise the converted real part.
-    pub(crate) fn cx_to_scalar(&mut self, (r, i): (V, V), from: QualType, to: QualType) -> V {
+    pub(crate) fn cx_to_scalar(
+        &mut self,
+        (r, i): (V, V),
+        from: QualType,
+        to: QualType,
+        loc: Option<Loc>,
+    ) -> R<V> {
         let fe = self.cx_elem(from).expect("complex type");
         if self.is_bool(to) {
             let r = self.conv(r, fe, to);
             let i = self.conv(i, fe, to);
-            return self.bin(BinOp::Or, Flags::NONE, r, i);
+            return Ok(self.bin(BinOp::Or, Flags::NONE, r, i));
         }
-        self.conv(r, fe, to)
+        self.conv_at(r, fe, to, loc)
     }
 
     /// clang `getPromotionType` on a complex type: `_Complex float` when

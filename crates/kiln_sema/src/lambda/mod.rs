@@ -38,6 +38,10 @@ pub struct LambdaCaptureSpec {
     pub name: Option<(Symbol, Loc)>,
     /// Where the capture begins (`&`, `this`, `*` or the identifier).
     pub loc: Loc,
+    /// The capture's last token (clang's `ExplicitCaptureRanges` end, for
+    /// the `-Wunused-lambda-capture` fix-it); `Loc::INVALID` when rebuilt
+    /// by template instantiation.
+    pub end: Loc,
     /// The `...` of a pack capture.
     pub ellipsis: Option<Loc>,
     /// The initializer of an init-capture, with its syntax as for a
@@ -182,6 +186,17 @@ pub(crate) struct LambdaScope {
     /// assertions, with the first such reference
     /// ([expr.prim.lambda.closure]/10; [`Sema::note_contract_capture_use`]).
     pub(crate) contract_caps: Vec<(Option<DeclId>, Loc)>,
+    /// Per capture, in order: bit 0 odr-used, bit 1 named without an
+    /// odr-use (clang `Capture::markUsed`), for `-Wunused-lambda-capture`.
+    pub(crate) cap_use: Vec<u8>,
+    /// Per explicit capture, in order: its written range (begin, last
+    /// token); empty when an explicit capture was rejected, which turns
+    /// the warning off as clang's `ExprError` does.
+    pub(crate) cap_ranges: Vec<(Loc, Loc)>,
+    /// Declarations in the body that shadow a local entity or a field,
+    /// with it, for a lambda with a capture-default: diagnosed once the
+    /// captures are known (clang `LambdaScopeInfo::ShadowingDecls`).
+    pub(crate) shadowing: Vec<(DeclId, DeclId)>,
 }
 
 impl Sema<'_, '_> {
@@ -225,6 +240,9 @@ impl Sema<'_, '_> {
             init_caps: Vec::new(),
             init_cap_vars: Vec::new(),
             contract_caps: Vec::new(),
+            cap_use: Vec::new(),
+            cap_ranges: Vec::new(),
+            shadowing: Vec::new(),
         });
         self.act_on_explicit_captures(id, intro);
         self.create_init_capture_vars(id);
@@ -239,6 +257,17 @@ impl Sema<'_, '_> {
     pub(crate) fn lambda_head_floor(&self) -> usize {
         let inner = self.lambdas.get(self.lambda_base..).unwrap_or_default();
         inner.iter().rev().find(|l| l.body_open).map_or(0, |l| l.heads)
+    }
+
+    /// Whether the innermost lambda's declarator is being parsed and
+    /// the lambda has no template head of its own yet: an `auto`
+    /// parameter there starts the lambda's invented head
+    /// ([expr.prim.lambda.general]/6), even where the enclosing head is
+    /// still open (a concept's constraint-expression, a requires-clause;
+    /// [`Sema::act_on_invented_template_param`]).
+    pub(crate) fn in_headless_lambda_declarator(&self) -> bool {
+        let inner = self.lambdas.get(self.lambda_base..).unwrap_or_default();
+        inner.last().is_some_and(|l| !l.body_open && l.heads == self.templ.heads.len())
     }
 
     /// `<` after the *lambda-introducer*: opens the lambda's
@@ -648,8 +677,31 @@ impl Sema<'_, '_> {
             .function(f)
             .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
             .unwrap_or_default();
+        // clang checks the init-captures for shadowing first, then the
+        // parameters (`ActOnLambdaExpressionAfterIntroducer`,
+        // `ActOnStartOfLambdaDefinition`).
+        if let Some(id) = id
+            && self.diags.is_enabled(DiagId::sema_decl_shadow)
+        {
+            // Out of scope while checked: each is found by lookup from
+            // its introducer on.
+            let vars = self
+                .lambdas
+                .iter_mut()
+                .rev()
+                .find(|s| s.id == id)
+                .map(|s| std::mem::take(&mut s.init_cap_vars))
+                .unwrap_or_default();
+            for &(name, v) in &vars {
+                self.check_shadow(v, name);
+            }
+            if let Some(s) = self.lambdas.iter_mut().rev().find(|s| s.id == id) {
+                s.init_cap_vars = vars;
+            }
+        }
         for p in params {
             if let Some(sym) = self.ast.decls.get(p).name().as_ident() {
+                self.check_shadow(p, sym);
                 self.push_local(sym, p);
             }
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
@@ -731,6 +783,10 @@ impl Sema<'_, '_> {
         self.pop_lambda_heads(top.heads, top.scope_base);
         self.ast.exprs.lambdas.get_mut(id).body = Some(body);
         let closure = top.closure;
+        self.diagnose_unused_lambda_captures(id, &top);
+        if !top.shadowing.is_empty() {
+            self.diagnose_shadowing_lambda_decls(id, &top.shadowing);
+        }
         self.finish_captures(id, closure, &top.cap_tys);
         self.check_contract_only_captures(&top.contract_caps);
         if let Some(f) = top.call_op {
@@ -925,6 +981,9 @@ impl Sema<'_, '_> {
         self.ast.templates.pattern_next = list.is_some();
         let conv = self.builder().function(h, DeclKind::CXXConversion, conv_ty, spec, None);
         self.wrap_thunk_template(conv, list);
+        if list.is_none() {
+            self.share_call_constraints(call_op, conv);
+        }
         // The conversion of a static or explicit object call operator
         // returns its address ([expr.prim.lambda.closure]/8, /11).
         if self.is_static_method(call_op) || self.has_explicit_object(call_op) {
@@ -947,6 +1006,9 @@ impl Sema<'_, '_> {
         self.ast.templates.pattern_next = list.is_some();
         let inv = self.builder().function(h, DeclKind::CXXMethod, invoker, spec, None);
         self.wrap_thunk_template(inv, list);
+        if list.is_none() {
+            self.share_call_constraints(call_op, inv);
+        }
         let src: Vec<DeclId> = self
             .ast
             .decls
@@ -968,6 +1030,24 @@ impl Sema<'_, '_> {
             .collect();
         if !ps.is_empty() {
             let _ = self.builder().set_params(inv, &ps);
+        }
+    }
+
+    /// A templated non-generic lambda's conversion function and invoker
+    /// have the call operator's trailing requires-clause
+    /// ([expr.prim.lambda.closure]/9; clang `addFunctionPointerConversion`,
+    /// GH63181), checked with the same levels as the call operator's
+    /// (`ConceptState::member_constraints`): a closure whose call
+    /// operator's constraints are not satisfied converts to no function
+    /// pointer, and yields no surrogate call ([over.call.object]/2).
+    fn share_call_constraints(&mut self, call_op: DeclId, thunk: DeclId) {
+        let Some(&r) = self.ast.templates.trailing_requires.get(call_op) else { return };
+        let _ = self.ast.templates.trailing_requires.insert(thunk, r);
+        if let Some(m) = self.inst.concepts.member_constraints.get(&call_op).cloned() {
+            self.inst.concepts.member_constraints.insert(thunk, m);
+        }
+        if self.inst.concepts.untemplated_requires.contains(&call_op) {
+            let _ = self.inst.concepts.untemplated_requires.insert(thunk);
         }
     }
 

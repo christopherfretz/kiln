@@ -22,7 +22,11 @@
 //! allowed in constexpr function", the function made invalid); and before
 //! C++23 a body that passes both rules but holds a label or a `goto`
 //! gets "use of this statement in a constexpr function is a C++23
-//! extension" at the first. WP-444.
+//! extension" at the first. WP-444. Otherwise, before C++20, the first
+//! asm-declaration or try-block statement gets "... is a C++20
+//! extension", and a function-try-block "function try block in constexpr
+//! function is a C++20 extension" (clang `CheckConstexprFunctionBody`,
+//! WP-891).
 
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, VarStorage};
 use kiln_ast::stmt::StmtKind;
@@ -37,64 +41,15 @@ impl Sema<'_, '_> {
     pub(crate) fn check_constexpr_body_vars(&mut self, f: DeclId, body: StmtId) {
         if !self.is_lambda_call_op(f) {
             self.constexpr_body_vars(f, body);
-            self.check_never_constant(f);
+            self.check_never_constant(f, body);
         }
-    }
-
-    /// [dcl.constexpr]/6 (no diagnostic required): "constexpr function
-    /// never produces a constant expression" at the name of `f`, a
-    /// `constexpr` or `consteval` function just defined, when no call of
-    /// it is a constant expression (clang `Expr::isPotentialConstantExpr`
-    /// under `CheckConstexprFunctionBodies`: on before C++23, else only
-    /// with `-Winvalid-constexpr`; an error by default). Narrowly: a
-    /// non-member or static member function without parameters, outside
-    /// templates and instantiations, whose call fails in its own body on
-    /// a signed integer overflow (the note "value N is outside the range
-    /// of representable values of type 'T'"); any other failure is not
-    /// reported (spec/sema.md §5.28).
-    pub(crate) fn check_never_constant(&mut self, f: DeclId) {
-        let kind = self.fn_spec(f).constexpr_kind();
-        if kind == ConstexprKind::None
-            || self.ast.decls.get(f).has(DeclFlags::INVALID)
-            || !self.inst.stack.frames.is_empty()
-            || self.in_template()
-            || !self
-                .diags
-                .group_flag("invalid-constexpr")
-                .unwrap_or(self.std < kiln_lex::Std::Cxx23)
-        {
-            return;
-        }
-        match self.kind_of(f) {
-            DeclKind::Function => {}
-            DeclKind::CXXMethod if self.is_static_method(f) => {}
-            _ => return,
-        }
-        let loc = self.ast.decls.get(f).loc();
-        let Err(mut fail) = self.evaluate_call(f, loc) else { return };
-        // The call's own "in call to" note; any other is a failure in a
-        // callee, which clang does not report.
-        if !fail.notes.last().is_some_and(|n| n.loc == loc && n.msg.starts_with("in call to ")) {
-            return;
-        }
-        fail.notes.pop();
-        if fail.notes.len() != 1
-            || !fail.notes[0].msg.contains(" is outside the range of representable values of type ")
-        {
-            return;
-        }
-        let msg = self
-            .diag(DiagId::sema_constexpr_never_constant, loc)
-            .arg(0u8)
-            .arg(u8::from(kind == ConstexprKind::Consteval));
-        let msg = Self::with_failure_notes(msg, fail);
-        self.emit(msg);
     }
 
     /// The same rule for the call operator `f` of a lambda declared
     /// `constexpr` or `consteval` explicitly, at the end of its `body`.
     pub(crate) fn check_constexpr_lambda_body_vars(&mut self, f: DeclId, body: StmtId) {
         self.constexpr_body_vars(f, body);
+        self.check_never_constant(f, body);
     }
 
     /// The call operator `f` of a lambda not declared `constexpr`, at the
@@ -126,6 +81,19 @@ impl Sema<'_, '_> {
         }
         let ctor = self.kind_of(f) == DeclKind::CXXConstructor;
         let pre23 = self.std < kiln_lex::Std::Cxx23;
+        // clang `CheckConstexprFunctionBody`: a function-try-block before
+        // C++20, ahead of the statement walk (WP-891).
+        if self.std < kiln_lex::Std::Cxx20
+            && self.ast.stmts.get(body).kind() == StmtKind::CXXTryStmt
+        {
+            let msg = self
+                .diag(
+                    DiagId::sema_constexpr_function_try_block_cxx20,
+                    self.ast.stmts.get(body).loc(),
+                )
+                .arg(u8::from(ctor));
+            self.emit(msg);
+        }
         let stmts = self.body_stmts(body);
         let var = if pre23 { self.first_non_literal_var(body) } else { None };
         // The first violation in source order is reported.
@@ -144,10 +112,16 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(v) = var else {
-            if pre23 && let Some(loc) = stmts.cxx23 {
-                let msg = self
-                    .diag(DiagId::sema_constexpr_body_invalid_stmt_cxx23, loc)
-                    .arg(u8::from(ctor));
+            // clang reports the C++23 statement, else the C++20 one.
+            let ext = if pre23 && let Some(loc) = stmts.cxx23 {
+                Some((DiagId::sema_constexpr_body_invalid_stmt_cxx23, loc))
+            } else if self.std < kiln_lex::Std::Cxx20 {
+                stmts.cxx20.map(|loc| (DiagId::sema_constexpr_body_invalid_stmt_cxx20, loc))
+            } else {
+                None
+            };
+            if let Some((id, loc)) = ext {
+                let msg = self.diag(id, loc).arg(u8::from(ctor));
                 self.emit(msg);
             }
             return;
@@ -178,6 +152,10 @@ impl Sema<'_, '_> {
                 }
                 StmtKind::LabelStmt | StmtKind::GotoStmt => {
                     out.cxx23.get_or_insert(st.get(s).loc());
+                }
+                // A function-try-block (the body itself) is reported apart.
+                StmtKind::GCCAsmStmt | StmtKind::CXXTryStmt if s != body => {
+                    out.cxx20.get_or_insert(st.get(s).loc());
                 }
                 _ => {}
             }
@@ -263,4 +241,7 @@ struct BodyStmts {
     invalid: Option<StmtId>,
     /// The first label or `goto` (allowed from C++23).
     cxx23: Option<kiln_source::Loc>,
+    /// The first asm-declaration or try-block statement (allowed from
+    /// C++20).
+    cxx20: Option<kiln_source::Loc>,
 }

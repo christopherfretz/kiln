@@ -500,9 +500,10 @@ pub struct Oven {
     /// The outermost evaluation met a contract violation
     /// ([basic.contract.eval]/7; [`Oven::check_contract_init`]).
     pub(crate) contract_violated: bool,
-    /// The next outermost evaluation is [`Oven::evaluate_call`]'s
-    /// (`vm::Run::potential`).
-    potential_next: bool,
+    /// The next outermost evaluation is [`Oven::evaluate_call`]'s or
+    /// [`Oven::evaluate_potential`]'s, with the number of calls it may
+    /// make (`vm::RunState::potential`).
+    potential_next: Option<u32>,
     /// The next outermost or nested evaluation is plainly
     /// constant-evaluated ([`EvalContext::plain`], [`Oven::plain`]).
     plain_next: bool,
@@ -637,7 +638,7 @@ impl Oven {
             ub_check_next: false,
             contracts_off_next: false,
             contract_violated: false,
-            potential_next: false,
+            potential_next: None,
             plain_next: false,
             void_next: false,
             addr_next: false,
@@ -905,13 +906,36 @@ impl Oven {
         if self.ctx_depth != 0 {
             return Ok(());
         }
-        self.potential_next = true;
+        self.potential_next = Some(1);
         let r = self.eval_job(bridge, Job::Call { f, at }, None, false, false, true).0;
-        self.potential_next = false;
+        self.potential_next = None;
         match r {
             Err(e) if e.notes.is_empty() => Ok(()),
             r => r.map(|_| ()),
         }
+    }
+
+    /// `e`, a subexpression of a `constexpr` function's body that names
+    /// none of its parameters or local variables, evaluated as clang's
+    /// `Expr::isPotentialConstantExpr` evaluates it
+    /// (`checkingPotentialConstantExpression`: no "always true"
+    /// `is_constant_evaluated` warning; a call of a `constexpr` function
+    /// fails without a note, as clang's `CheckCallLimit` makes none; a
+    /// `void` expression has a value). WP-873.
+    pub fn evaluate_potential(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        e: ExprId,
+    ) -> Result<ConstValueId, EvalFailure> {
+        if self.ctx_depth != 0 {
+            return Err(EvalFailure::silent(FailKind::NotConstant));
+        }
+        self.potential_next = Some(0);
+        self.void_next = true;
+        let r = self.eval_ctx(bridge, e, None, false, false, true).0;
+        self.potential_next = None;
+        self.void_next = false;
+        r
     }
 
     /// Folds `e` if it is a constant expression; never reports anything
@@ -1240,6 +1264,13 @@ impl Oven {
     /// Per-evaluation records and totals.
     pub fn stats(&self) -> &EvalStats {
         &self.stats
+    }
+
+    /// Records `n` splices whose operand sema read as a frozen reflection
+    /// without an evaluation (the report's `splice_fast` total;
+    /// spec/oven.md "Reporting protocol").
+    pub fn note_splice_fast(&mut self, n: u64) {
+        self.stats.note_splice_fast(n);
     }
 
     /// Bytes of heap the evaluator holds (capacities of its code, abstract

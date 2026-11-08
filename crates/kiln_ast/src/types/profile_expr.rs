@@ -27,7 +27,7 @@
 //!   parentheses are kept.
 //! - Literals are their value and canonical type (not their spelling).
 //! - Kinds with no equivalence rule (lambdas, statement-expressions,
-//!   recovery expressions, coroutine operators, splices, ...) are
+//!   recovery expressions, coroutine operators, ...) are
 //!   *unique*: `[tag | UNIQUE, expr id]`, equal only to themselves. The
 //!   match below is exhaustive so a new `ExprKind` must pick a rule.
 //!
@@ -691,6 +691,22 @@ impl Ast {
                 }
             }
 
+            // ----- a dependent splice `[: r :]`, `template [: r :] < args >`
+            // or a member splice `x.[: r :]` / `p->[: r :]`: its operand
+            // (and object expression) structurally, and the template
+            // arguments as written, so the same splice written in two
+            // templates is equivalent ([temp.over.link]/5, P2996
+            // [temp.type]: dependent splice-specifiers are equivalent
+            // when their constant-expressions are). The detail tells the
+            // three forms apart (WP-884).
+            K::CXXSpliceExpr => {
+                let base = x.splice_base(e);
+                let form = base.map_or(0, |(_, arrow)| 1 + u32::from(arrow));
+                out.extend([tag(k, form), self.args_word(x.splice_template_args(e))]);
+                stack.push(Work::Expr(x.splice_operand(e)));
+                stack.push(Work::Opt(base.map(|(b, _)| b)));
+            }
+
             // ----- no equivalence rule: equal only to itself
             K::UserDefinedLiteral
             | K::ImaginaryLiteral
@@ -712,7 +728,6 @@ impl Ast {
             | K::ShuffleVectorExpr
             | K::ConvertVectorExpr
             | K::ExtVectorElementExpr
-            | K::CXXSpliceExpr
             | K::RecoveryExpr
             | K::CXXExpansionSelectExpr => out.extend([tag(k, 0) | UNIQUE, e.raw()]),
         }

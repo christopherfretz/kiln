@@ -276,6 +276,9 @@ impl Sema<'_, '_> {
                 self.check_decl_attrs(bd, &mut attrs);
                 let _ = self.builder().attach_attrs(bd, &attrs);
             }
+            if prev.is_none() {
+                self.check_shadow(bd, b.name);
+            }
             self.register_local(b.name, bd);
             if b.ellipsis.is_some() {
                 self.binding_packs.insert(bd);
@@ -862,6 +865,9 @@ impl Sema<'_, '_> {
             return None;
         }
         self.extend_temporaries(hv, init);
+        // [dcl.struct.bind]/4: the holding variable is checked as any
+        // reference variable (clang's implicit `-Wdangling` wording).
+        self.check_var_lifetime(hv, init);
         let r = self.build_decl_ref(hv, loc);
         self.ast.decls.set_ty(b, t);
         let _ = self.ast.decls.set_binding(b, r, Some(hv));

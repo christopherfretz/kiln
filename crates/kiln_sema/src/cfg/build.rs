@@ -29,6 +29,9 @@ pub(crate) struct CfgReq {
     pub(crate) flow: bool,
     /// Record the unreachable-code scan's tables (`-Wunreachable-code*`).
     pub(crate) scan: bool,
+    /// Record the commas and the multi-variable declarations' per-variable
+    /// points (`-Wuninitialized`, [`Cfg::commas`], [`Cfg::decl_marks`]).
+    pub(crate) uninit: bool,
 }
 
 /// A loop, switch or expansion statement `break`/`continue` leave.
@@ -447,8 +450,15 @@ impl Sema<'_, '_> {
                 b.igoto.push(e);
             }
             StmtKind::GCCAsmStmt => {
-                if st.asm_bits(s) & kiln_ast::stmt::asm_bits::GOTO != 0 && b.has_pos() {
-                    let labels = st.asm_data(s).labels;
+                // clang `VisitChildren`: the outputs, then the inputs, are
+                // elements before the statement (or the `asm goto`
+                // terminator); the uninitialized-values analysis reads them.
+                for i in 0..self.ast.stmts.asm_operands(s).len() {
+                    let e = self.ast.stmts.asm_operands(s)[i].expr;
+                    self.cfg_expr(e, b);
+                }
+                if self.ast.stmts.asm_bits(s) & kiln_ast::stmt::asm_bits::GOTO != 0 && b.has_pos() {
+                    let labels = self.ast.stmts.asm_data(s).labels;
                     let t = b.terminate(Term::Asm(s));
                     for i in 0..self.ast.lists.len(labels) {
                         let l = self.ast.lists.at::<DeclId>(labels, i).expect("asm label");
@@ -535,12 +545,20 @@ impl Sema<'_, '_> {
             StmtKind::DeclStmt => {
                 let list = st.decl_stmt_decls(s);
                 let mut has_var = false;
+                // clang splits a multi-variable declaration into one
+                // statement per variable; the uninitialized-values
+                // analysis needs each variable's point.
+                let marks = b.req.uninit && self.ast.lists.len(list) > 1;
                 for i in 0..self.ast.lists.len(list) {
                     let d = self.ast.lists.at::<DeclId>(list, i).expect("decl");
                     if let Some(v) = self.ast.decls.var(d) {
                         has_var = true;
                         if let Some(init) = v.init {
                             self.cfg_expr(init, b);
+                        }
+                        if marks {
+                            let at = b.cfg.elems.len() as u32;
+                            b.cfg.decl_marks.push((at, d));
                         }
                     }
                 }
@@ -1110,6 +1128,31 @@ impl Sema<'_, '_> {
                 b.join(tout);
                 b.push(Elem::Expr(e));
             }
+            ExprKind::BinaryConditionalOperator => {
+                // clang `VisitConditionalOperator` for `a ?: b`: the
+                // common expression and the condition (when not the bare
+                // opaque value) end the condition block; its true edge
+                // reaches the join directly, its false edge runs `b`.
+                let [common, c, _, f] = ex.binary_conditional_operands(e, &self.ast.lists);
+                let bare = ex.get(c).kind() == ExprKind::OpaqueValueExpr;
+                self.cfg_expr(common, b);
+                if !bare {
+                    self.cfg_expr(c, b);
+                }
+                let kv = self.cfg_truth(c, c, b);
+                let src = b.terminate(Term::Cond(e));
+                let te = b.edge(src, kv.flags(true, false));
+                let fe = b.edge(src, kv.flags(false, false));
+                b.temp_tok(TempTok::Arms);
+                b.temp_tok(TempTok::Open(kv.base));
+                b.temp_tok(TempTok::Close);
+                b.temp_tok(TempTok::Open(kv.base.map(|v| !v)));
+                b.set_pos(vec![fe]);
+                self.cfg_expr(f, b);
+                b.temp_tok(TempTok::Close);
+                b.join(vec![te]);
+                b.push(Elem::Expr(e));
+            }
             ExprKind::BinaryOperator
                 if matches!(ex.binary_op(e), BinaryOp::LAnd | BinaryOp::LOr) =>
             {
@@ -1163,6 +1206,8 @@ impl Sema<'_, '_> {
                     && self.ast.exprs.binary_op(e) == BinaryOp::Comma;
                 if !comma {
                     b.push(Elem::Expr(e));
+                } else if b.req.uninit {
+                    b.cfg.commas.push(e);
                 }
                 if b.has_pos() && self.is_noreturn_call(e) {
                     Self::cfg_noreturn(b);
