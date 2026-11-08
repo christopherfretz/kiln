@@ -1044,6 +1044,34 @@ impl Sema<'_, '_> {
         if self.lambdas.is_empty() {
             return self.diagnose_unexpanded_pack(PackOperand::Expr(e), "default argument", at);
         }
+        self.diagnose_lambda_local_packs(e, "default argument", at)
+    }
+
+    /// [temp.variadic]/5, /12 for expression `e` written in the innermost
+    /// lambda's declarator before its body opens (a requires-clause of
+    /// its template-head or its trailing one, `what` = "requires
+    /// clause"), at `e`'s begin: the packs the lambda declares (its
+    /// template parameter packs, its function parameter packs) are
+    /// diagnosed; an enclosing scope's make the lambda-expression contain
+    /// an unexpanded pack ([`Sema::split_lambda_packs`]), so
+    /// `[]<class U>() requires C<U, Ts> {}...` expands `Ts`. A
+    /// substituted expression is not checked (§7.2). True after the
+    /// diagnostic.
+    pub(crate) fn diagnose_unexpanded_lambda_declarator(
+        &mut self,
+        e: ExprId,
+        what: &'static str,
+    ) -> bool {
+        if !self.inst.stack.is_empty() {
+            return false;
+        }
+        let at = self.begin_loc(e);
+        self.diagnose_lambda_local_packs(e, what, at)
+    }
+
+    /// The lambda's own packs `e` names diagnosed at `at`, the enclosing
+    /// scope's recorded on it. True after the diagnostic.
+    fn diagnose_lambda_local_packs(&mut self, e: ExprId, what: &'static str, at: Loc) -> bool {
         if !self.operand_has_packs(PackOperand::Expr(e)) {
             return false;
         }
@@ -1051,7 +1079,7 @@ impl Sema<'_, '_> {
         if local.is_empty() {
             return false;
         }
-        self.report_unexpanded_packs(&local, "default argument", at);
+        self.report_unexpanded_packs(&local, what, at);
         true
     }
 

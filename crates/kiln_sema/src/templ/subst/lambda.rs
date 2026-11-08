@@ -12,13 +12,14 @@ use kiln_ast::decl::{ConstexprKind, DeclKind, FnStorage, InitStyle};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::lambda::LambdaCapture;
 use kiln_ast::names::OverloadedOperator;
-use kiln_ast::types::{Quals, RefQual, TypeView};
+use kiln_ast::types::{ArgView, Quals, RefQual, TemplateArg, TypeView};
 use kiln_source::Loc;
 
 use super::{DeclOrPack, SubstFail, SubstResult, Substituter};
 use crate::declspec::{Chunk, Declarator, DeclaratorContext};
 use crate::lambda::{LambdaCaptureSpec, LambdaIntroducer, LambdaSpecifiers};
-use crate::templ::pack::Expansion;
+use crate::templ::args::{LevelMode, MultiLevelArgs};
+use crate::templ::pack::{Expansion, PackOperand};
 use crate::templ::stack::FrameKind;
 
 impl Substituter<'_, '_, '_> {
@@ -92,7 +93,11 @@ impl Substituter<'_, '_, '_> {
         // A generic lambda's dependent access checks are replayed by the
         // instantiations of the new call operator.
         self.sema.copy_dependent_access(call_op, new_op);
-        self.lambda_constraints(head.map(|h| h.0), call_op, new_op);
+        if self.lambda_constraints(head.map(|h| h.0), call_op, new_op, loc).is_err() {
+            self.sema.act_on_lambda_error(lambda);
+            self.forget_pattern_params(call_op);
+            return Err(SubstFail);
+        }
         self.lambda_default_args(call_op, new_op);
         let rbrace = self.sema.ast.stmts.rbrace(body);
         // The body is substituted under a frame of its own, so an error in
@@ -348,8 +353,6 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
-    /// The default arguments of pattern call operator `pat` on `f`; the
-    /// pattern's parameters stay mapped to `f`'s for the body.
     /// The call operator's constraints stay the pattern's, checked with
     /// this instantiation's levels outside the operator's own (as a class
     /// template member's, `ConceptState::member_constraints`,
@@ -359,21 +362,81 @@ impl Substituter<'_, '_, '_> {
         pattern_template: Option<kiln_ast::DeclId>,
         call_op: kiln_ast::DeclId,
         new_op: kiln_ast::DeclId,
-    ) {
+        loc: Loc,
+    ) -> SubstResult<()> {
         let (pat, new) = match pattern_template {
             Some(t) => match self.sema.ast.described_template(new_op) {
                 Some(x) if !self.sema.associated_constraints(t).is_empty() => (t, x),
-                _ => return,
+                _ => return Ok(()),
             },
             None if self.sema.ast.templates.trailing_requires.get(call_op).is_some() => {
                 (call_op, new_op)
             }
-            None => return,
+            None => return Ok(()),
         };
-        let args = self.args.clone();
+        let args = self.lambda_constraint_levels(pat, loc)?;
         self.sema.inst.concepts.member_constraints.insert(new, (pat, args));
+        Ok(())
     }
 
+    /// The levels the constraints of pattern `pat` (the call operator or
+    /// its template) are checked with. A pack of an enclosing template
+    /// that the constraints name unexpanded makes the lambda-expression
+    /// contain it ([temp.variadic]/5), so an expansion around the lambda
+    /// expands it even when nothing else in the lambda names it: it is
+    /// reached here (a probe stops at it, [`Self::pack_reached`]), and
+    /// its argument becomes the element being substituted, so
+    /// `[]<class U>() requires C<U, Ts> {}...` checks `C<U, Ti>` for the
+    /// `i`th closure.
+    fn lambda_constraint_levels(
+        &mut self,
+        pat: kiln_ast::DeclId,
+        loc: Loc,
+    ) -> SubstResult<MultiLevelArgs> {
+        let mut args = self.args.clone();
+        if self.pack.keep && self.pack_index.is_none() {
+            return Ok(args);
+        }
+        let exprs = if self.sema.ast.template_info(pat).is_some() {
+            self.sema.associated_constraints(pat)
+        } else {
+            self.sema.ast.templates.trailing_requires.get(pat).copied().into_iter().collect()
+        };
+        let mut packs = Vec::new();
+        for e in exprs {
+            for p in self.sema.unexpanded_packs(PackOperand::Expr(e)) {
+                if !packs.contains(&p) {
+                    packs.push(p);
+                }
+            }
+        }
+        for p in packs {
+            let Some(info) = self.sema.ast.template_parm(p).copied() else { continue };
+            let Some(level) = args.levels.get(usize::from(info.depth)) else { continue };
+            if level.mode != LevelMode::Substitute {
+                continue;
+            }
+            let level_args = level.args;
+            let mut list: Vec<TemplateArg> = self.sema.ast.types.args(level_args).to_vec();
+            let Some(slot) = list.get_mut(usize::from(info.index)) else { continue };
+            let ArgView::Pack(l) = slot.view() else { continue };
+            let elems = self.sema.ast.types.args(l);
+            let n = u32::try_from(elems.len()).unwrap_or(u32::MAX);
+            let i = self.pack_reached(n, |s| s.parm_pack_name(Some(p)), loc)?;
+            let Some(&elem) = self.sema.ast.types.args(l).get(i as usize) else {
+                return Err(SubstFail);
+            };
+            *slot = elem;
+            let new_args = self.sema.ast.types.arg_list(&list);
+            if let Some(level) = args.levels.get_mut(usize::from(info.depth)) {
+                level.args = new_args;
+            }
+        }
+        Ok(args)
+    }
+
+    /// The default arguments of pattern call operator `pat` on `f`; the
+    /// pattern's parameters stay mapped to `f`'s for the body.
     fn lambda_default_args(&mut self, pat: kiln_ast::DeclId, f: kiln_ast::DeclId) {
         let params = |s: &Self, x: kiln_ast::DeclId| -> Vec<kiln_ast::DeclId> {
             s.sema
