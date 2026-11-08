@@ -968,10 +968,8 @@ fn codegen_flags_rejected() {
     let rejected = [
         "-ftrapv",
         "-fshort-enums",
-        "-fsanitize=address",
-        "-fsanitize=undefined",
-        "-fno-sanitize-recover=all",
-        "-fno-sanitize=all",
+        "-fsanitize=cfi",
+        "-fsanitize-coverage=trace-pc",
         "-fcoverage-mapping",
         "-fprofile-arcs",
         "-ftest-coverage",

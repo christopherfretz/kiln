@@ -32,6 +32,7 @@ pub mod names;
 mod neon_builtins;
 pub mod redecl;
 pub mod reflect;
+pub mod sanitize;
 pub mod slot;
 pub mod stmt;
 pub mod strings;
