@@ -727,6 +727,25 @@ pub fn decl_name(ast: &Ast, d: DeclId) -> String {
     }
 }
 
+/// True if `d` is a function whose type has the `regcall` convention
+/// (only ever set on x86-64; clang `CC_X86RegCall`), whose name gets the
+/// `__regcall3__` prefix (WP-808).
+pub fn is_regcall_fn(ast: &Ast, d: DeclId) -> bool {
+    // clang `getAsFunction`: a function template is its pattern.
+    let d = match ast.decls.get(d).kind() {
+        DeclKind::FunctionTemplate => match ast.template_info(d).and_then(|i| i.pattern) {
+            Some(p) => p,
+            None => return false,
+        },
+        _ => d,
+    };
+    let n = ast.decls.get(d);
+    n.kind().is_function()
+        && n.ty()
+            .and_then(|t| ast.types.proto(ast.types.canonical(t)))
+            .is_some_and(|p| p.info().cc() == kiln_ast::types::CallConv::RegCall)
+}
+
 /// True if the function or variable `d` is emitted under its plain
 /// source name: `main`, `extern "C"` entities, and variables at global
 /// scope.
@@ -904,6 +923,11 @@ pub fn mangle_structor(ast: &Ast, anon: &mut AnonIds, d: DeclId, v: Structor) ->
         return l;
     }
     if is_unmangled(ast, d) {
+        // clang `getMangledNameImpl`: an unmangled `regcall` function is
+        // still prefixed `__regcall3__` (WP-808).
+        if is_regcall_fn(ast, d) {
+            return format!("__regcall3__{}", decl_name(ast, d));
+        }
         return decl_name(ast, d);
     }
     let mut m = Mangler::new(ast, anon, "_Z");
@@ -2047,6 +2071,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
                             self.out.push('_');
                         }
                     }
+                } else if is_regcall_fn(ast, d) {
+                    // clang `mangleUnqualifiedName`: a `regcall` function's
+                    // identifier is prefixed `__regcall3__` (WP-808).
+                    self.source_name(&format!("__regcall3__{nm}"));
                 } else {
                     self.source_name(&nm);
                 }
@@ -2914,7 +2942,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.out.push('_');
                 self.ty(elem);
             }
-            TypeView::Function(p) => self.function_type(q, &p),
+            TypeView::Function(p) => self.function_type(q, &p, true),
             TypeView::MemberPointer { pointee, class } => self.member_pointer(pointee, class),
             TypeView::Complex(e) => {
                 self.out.push('C');
@@ -2986,6 +3014,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.ty(QualType::unqual(class));
         let pointee = ast.types.canonical(pointee);
         if let Some(p) = ast.types.proto(pointee).copied() {
+            self.cc_qualifier(&p);
             let mq = p.info().this_quals();
             if mq.is_restrict() {
                 self.out.push('r');
@@ -2998,7 +3027,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             }
             let fkey = Sub::Type(pointee);
             if !self.try_sub(fkey) {
-                self.function_type(pointee, &p);
+                self.function_type(pointee, &p, false);
                 self.subs.push(fkey);
             }
         } else {
@@ -3006,10 +3035,30 @@ impl<'a, 'b> Mangler<'a, 'b> {
         }
     }
 
-    /// <function-type> ::= [<CV>] [Do] F [Y] <return> <params> [<ref>] E
-    /// (method cv-qualifiers are written by the member-pointer caller).
-    fn function_type(&mut self, _q: QualType, p: &kiln_ast::types::FuncProto) {
+    /// A function type's calling convention as a vendor qualifier (clang
+    /// `mangleExtFunctionInfo` / `getCallingConvQualifierName`): only
+    /// `ms_abi`, `swiftcall` and `swiftasynccall` are spelled; every other
+    /// convention mangles as the default one (WP-808).
+    fn cc_qualifier(&mut self, p: &kiln_ast::types::FuncProto) {
+        use kiln_ast::types::CallConv as C;
+        let q = match p.info().cc() {
+            C::Win64 => "ms_abi",
+            C::Swift => "swiftcall",
+            C::SwiftAsync => "swiftasynccall",
+            _ => return,
+        };
+        self.out.push('U');
+        self.source_name(q);
+    }
+
+    /// <function-type> ::= [U <cc>] [<CV>] [Do] F [Y] <return> <params>
+    /// [<ref>] E (a member pointer writes the convention and the method
+    /// cv-qualifiers itself: `cc` is false then).
+    fn function_type(&mut self, _q: QualType, p: &kiln_ast::types::FuncProto, cc: bool) {
         let ast = self.ast;
+        if cc {
+            self.cc_qualifier(p);
+        }
         if ast.types.exc_spec(p).is_nothrow() {
             self.out.push_str("Do");
         }

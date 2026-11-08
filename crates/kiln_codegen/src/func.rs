@@ -675,6 +675,9 @@ impl Cg<'_> {
         let mut extra = Vec::new();
         let const_pure = crate::builtins::const_pure_attrs(self.ast, d, &sig, &mut extra);
         self.coro_fn_attrs(d, &mut extra);
+        if sig.no_csr {
+            extra.push(Attr::Str("no_caller_saved_registers".into(), "".into()));
+        }
         // A thunk is `nounwind` only by its method's type or attributes
         // (clang `ConstructAttributeList(IsThunk)`): `generateThunk` never
         // runs `TryMarkNoThrow` over its body.
@@ -807,14 +810,14 @@ impl Cg<'_> {
             w = w.max(vec_bits(self, coerce));
         }
         for a in &info.args {
-            if let ArgKind::Direct { coerce, flatten, .. } = &a.kind {
-                match coerce {
-                    IrType::Struct(m, _) if *flatten => {
-                        for e in m {
+            if let ArgKind::Direct { coerce, .. } = &a.kind {
+                match self.flat_fields(&a.kind) {
+                    Some((m, _)) => {
+                        for e in &m {
                             w = w.max(vec_bits(self, e));
                         }
                     }
-                    c => w = w.max(vec_bits(self, c)),
+                    None => w = w.max(vec_bits(self, coerce)),
                 }
             }
         }
@@ -867,14 +870,20 @@ impl Cg<'_> {
                 // clang `EmitFunctionEpilog`, `TEK_Scalar` returned
                 // indirectly: reload the value and store it back.
                 let q = self.f.sig.as_ref().map(|g| g.ret);
+                // `TEK_Complex` (a Win64 `_Complex double`) likewise
+                // reloads both parts and stores them back.
                 if let (Some(q), Some(slot)) = (q, self.f.ret_slot)
-                    && !self.is_aggregate(q)
-                    && !self.is_atomic_aggregate(q)
-                    && !matches!(self.ast.types.canonical_view(q), TypeView::Complex(_))
                     && self.f.fir.cur().is_some()
                 {
-                    let v = self.load_scalar(slot, q);
-                    self.store_scalar(v, slot, q);
+                    if matches!(self.ast.types.canonical_view(q), TypeView::Complex(_)) {
+                        let (re, im) = self.cx_load(slot, q, (false, false));
+                        if let (Some(re), Some(im)) = (re, im) {
+                            self.cx_store((re, im), slot, q);
+                        }
+                    } else if !self.is_aggregate(q) && !self.is_atomic_aggregate(q) {
+                        let v = self.load_scalar(slot, q);
+                        self.store_scalar(v, slot, q);
+                    }
                 }
                 None
             }
@@ -1289,10 +1298,12 @@ impl Cg<'_> {
                         ParamVal::Direct(self.load_scalar(alloca, pq))
                     });
                 }
-                match kind {
-                    ArgKind::Direct {
-                        coerce: IrType::Struct(fs, packed), flatten: true, ..
-                    } if fs.len() > 1 => {
+                let flat = self.flat_fields(kind);
+                match flat {
+                    // clang `EmitFunctionProlog`: flattened stores only
+                    // for a struct of more than one element; one element
+                    // is a coerced store of that element.
+                    Some((fs, packed)) if fs.len() > 1 => {
                         let src_size = self.alloc_size(ct);
                         let dst_size = self.alloc_size(mt);
                         let into = if src_size <= dst_size {
@@ -1300,7 +1311,7 @@ impl Cg<'_> {
                         } else {
                             self.f.fir.alloca(ct, alloca.align)
                         };
-                        let offs = self.tys.struct_offsets(fs, *packed);
+                        let offs = self.tys.struct_offsets(&fs, packed);
                         for (j, off) in offs.iter().enumerate() {
                             let p = self.struct_gep(ct, into, j as u32);
                             self.store(V::Arg(*arg_no), p, min_align(alloca.align, *off), false);
@@ -1310,7 +1321,13 @@ impl Cg<'_> {
                             self.memcpy_v(alloca, into, alloca.align, dst_size);
                         }
                     }
-                    _ => {
+                    Some((fs, _)) if fs.len() == 1 => {
+                        let (size, _) = self.size_align(pq);
+                        self.coerced_store_sized(V::Arg(*arg_no), &fs[0], alloca, size);
+                        *arg_no += 1;
+                    }
+                    Some(_) => {}
+                    None => {
                         let (size, _) = self.size_align(pq);
                         self.coerced_store_sized(V::Arg(*arg_no), coerce, alloca, size);
                         *arg_no += 1;
@@ -1393,10 +1410,7 @@ impl Cg<'_> {
                     out.push(v);
                     return Ok(());
                 }
-                if let ArgKind::Direct {
-                    coerce: IrType::Struct(fs, packed), flatten: true, ..
-                } = kind
-                {
+                if let Some((fs, packed)) = self.flat_fields(kind) {
                     let src_size = self.alloc_size(src.ty);
                     let dst_size = self.alloc_size(ct);
                     let from = if src_size < dst_size {
@@ -1411,7 +1425,7 @@ impl Cg<'_> {
                     } else {
                         src.v
                     };
-                    let offs = self.tys.struct_offsets(fs, *packed);
+                    let offs = self.tys.struct_offsets(&fs, packed);
                     for (j, f) in fs.iter().enumerate() {
                         let ft = self.ir(f);
                         let p = self.struct_gep(ct, from, j as u32);

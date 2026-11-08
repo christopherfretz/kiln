@@ -17,7 +17,7 @@ use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, ValueCategory};
 use kiln_ast::expr::{SourceLocKind, SourceLocValues};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TargetTypes;
-use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, NoexceptValue, Quals, VectorKind};
+use kiln_ast::types::{BuiltinType, CallConv, ExcSpec, FuncInfo, NoexceptValue, Quals, VectorKind};
 use kiln_ast::types::{Nns, TagKeyword};
 use kiln_ast::{Ast, AttrId, DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -1971,6 +1971,17 @@ impl Sema<'_, '_> {
         args: &[ExprId],
         rparen: Loc,
     ) -> Option<(Vec<ExprId>, QualType)> {
+        // clang `checkVAStartABI`: the target's `va_list` cannot walk the
+        // variadic arguments of an `ms_abi` function (WP-808).
+        let f = self.ctx;
+        if self.ast.decls.get(f).kind().is_function()
+            && let Some(fty) = self.ast.decls.get(f).ty()
+            && self.ast.types.proto(fty).is_some_and(|p| p.info().cc() == CallConv::Win64)
+        {
+            let at = self.begin_loc(callee);
+            self.error(DiagId::sema_va_start_wrong_abi, at);
+            return None;
+        }
         if !self.builtin_arg_count(args, 2, rparen) {
             return None;
         }

@@ -214,6 +214,13 @@ sema_reflect_nttp = Error (1) "'^^' cannot be applied to a non-type template par
 sema_reflect_operand = Error (0) "'^^' cannot be applied to this operand";
 sema_reflect_overload_set = Error (0) "cannot take the reflection of an overload set";
 sema_register_storage_class = WarningError [Register] (0) "ISO C++17 does not allow 'register' storage class specifier";
+// clang `err_attribute_regparm_invalid_number` (WP-808)
+sema_regparm_invalid_number = Error (1) "'regparm' parameter must be between 0 and {0} inclusive";
+// clang `err_attributes_regparm_mismatch`; {1} is
+// `without the regparm` or `with the regparm(N)` (WP-808)
+sema_regparm_mismatch = Error (2) "function declared with regparm({0}) attribute was previously declared {1} attribute";
+// clang `err_attribute_regparm_wrong_platform` (WP-808)
+sema_regparm_wrong_platform = Error (0) "'regparm' is not valid on this platform";
 sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
 sema_reorder_ctor = WarningOff [ReorderCtor] (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
 sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order does not match the declaration order";

@@ -22,6 +22,7 @@ mod attr_cond;
 mod bit_int;
 mod bitfield_constant;
 mod builtins;
+mod cconv;
 pub mod cfg;
 pub mod class;
 mod complex;

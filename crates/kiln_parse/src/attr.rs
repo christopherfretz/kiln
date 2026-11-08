@@ -71,7 +71,10 @@ fn takes_expr_args(name: &str) -> bool {
             | "section"
             | "analyzer_noreturn"
             | "mode"
-    )
+            | "regparm"
+            | "no_caller_saved_registers"
+            | "interrupt"
+    ) || kiln_ast::attr::CC_ATTR_SPELLINGS.contains(&n)
 }
 
 /// True for the attributes whose argument is a type-id (clang

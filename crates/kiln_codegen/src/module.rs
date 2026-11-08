@@ -11,7 +11,7 @@ use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DefinitionBits, TemplLinkKind, VarStorage,
 };
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::{BuiltinType, PrintOptions, TypeView, print_type};
+use kiln_ast::types::{BuiltinType, CallConv, PrintOptions, TypeView, print_type};
 use kiln_ast::{Ast, DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_llvm::{
@@ -57,9 +57,37 @@ pub(crate) struct Sig {
     /// buildStructorSignature` for base-object structors of classes with
     /// virtual bases).
     pub vtt: bool,
+    /// The function type's calling convention (WP-808).
+    pub cc: CallConv,
+    /// x86 `no_caller_saved_registers` on the function type (WP-808).
+    pub no_csr: bool,
 }
 
 impl Sig {
+    /// The LLVM calling convention of the function type (clang
+    /// `ClangCallConvToLLVMCallConv`; WP-808).
+    pub fn llvm_cc(&self) -> kiln_llvm::CallConv {
+        use kiln_llvm::CallConv as L;
+        match self.cc {
+            CallConv::Default
+            | CallConv::C
+            | CallConv::SysV
+            | CallConv::Aapcs
+            | CallConv::AapcsVfp => L::C,
+            CallConv::Win64 => L::WIN64,
+            CallConv::RegCall => L::X86_REGCALL,
+            CallConv::VectorCall => L::X86_VECTORCALL,
+            CallConv::IntelOclBicc => L::INTEL_OCL_BI,
+            CallConv::PreserveMost => L::PRESERVE_MOST,
+            CallConv::PreserveAll => L::PRESERVE_ALL,
+            CallConv::PreserveNone => L::PRESERVE_NONE,
+            CallConv::AArch64VectorCall => L::AARCH64_VECTOR_PCS,
+            CallConv::AArch64SveCall => L::AARCH64_SVE_VECTOR_PCS,
+            CallConv::Swift => L::SWIFT,
+            CallConv::SwiftAsync => L::SWIFT_TAIL,
+        }
+    }
+
     /// The return is `sret`.
     pub fn sret(&self) -> bool {
         matches!(self.info.ret.kind, ArgKind::Indirect { .. })
@@ -225,6 +253,23 @@ pub(crate) struct Cg<'a> {
 }
 
 impl<'a> Cg<'a> {
+    /// The IR arguments of a flattened `Direct` argument (clang
+    /// `getCanBeFlattened` with a struct coerce type): a literal struct's
+    /// elements, or a class's own named struct's (x86-64 `regcall`); and
+    /// whether it is packed.
+    pub(crate) fn flat_fields(&mut self, k: &ArgKind) -> Option<(Vec<IrType>, bool)> {
+        match k {
+            ArgKind::Direct { coerce: IrType::Struct(fs, p), flatten: true, .. } => {
+                Some((fs.clone(), *p))
+            }
+            ArgKind::Direct { coerce: IrType::Record(d), flatten: true, .. } => {
+                let r = self.tys.record(*d);
+                Some((r.members.clone(), r.packed))
+            }
+            _ => None,
+        }
+    }
+
     /// Whether `t` is consteval-only ([basic.types.general], P2996R13;
     /// sema's `is_consteval_only_type`, spec/reflection-repr.md §6):
     /// `std::meta::info`, or a pointer, reference, array, function or
@@ -1683,9 +1728,11 @@ impl<'a> Cg<'a> {
         let ret = p.ret();
         let nothrow = ast.types.exc_spec(&p).is_nothrow();
         let variadic = p.variadic();
-        let info = self.classify(ret, &params, params.len(), !extern_c, this.is_some());
+        let (cc, no_csr) = (p.info().cc(), p.info().no_caller_saved_regs());
+        let info =
+            self.classify(ret, &params, params.len(), !extern_c, this.is_some(), cc, variadic);
         let fn_ty = self.fn_type(&info, this.is_some(), variadic);
-        Sig { info, fn_ty, ret, params, nothrow, this, vtt: false }
+        Sig { info, fn_ty, ret, params, nothrow, this, vtt: false, cc, no_csr }
     }
 
     /// The signature of a runtime library call `ret(params...)` that
@@ -1693,13 +1740,24 @@ impl<'a> Cg<'a> {
     /// `arrangeFreeFunctionCall` of a `noexcept` prototype; the `_Complex`
     /// multiplication and division routines).
     pub(crate) fn libcall_sig(&mut self, ret: QualType, params: &[QualType]) -> Sig {
-        let info = self.classify(ret, params, params.len(), true, false);
+        let info = self.classify(ret, params, params.len(), true, false, CallConv::Default, false);
         let fn_ty = self.fn_type(&info, false, false);
-        Sig { info, fn_ty, ret, params: params.to_vec(), nothrow: true, this: None, vtt: false }
+        Sig {
+            info,
+            fn_ty,
+            ret,
+            params: params.to_vec(),
+            nothrow: true,
+            this: None,
+            vtt: false,
+            cc: CallConv::Default,
+            no_csr: false,
+        }
     }
 
     /// clang `arrangeLLVMFunctionInfo`: classifies `this` (when present)
     /// with the parameters, then splits it off.
+    #[allow(clippy::too_many_arguments, reason = "clang's CGFunctionInfo inputs")]
     fn classify(
         &mut self,
         ret: QualType,
@@ -1707,14 +1765,25 @@ impl<'a> Cg<'a> {
         n_required: usize,
         strict_return: bool,
         this: bool,
+        cc: CallConv,
+        variadic: bool,
     ) -> CallInfo {
         if !this {
-            return classify_call(&mut self.tys, ret, params, n_required, strict_return);
+            return classify_call(
+                &mut self.tys,
+                ret,
+                params,
+                n_required,
+                strict_return,
+                cc,
+                variadic,
+            );
         }
         let mut all = Vec::with_capacity(params.len() + 1);
         all.push(self.void_ptr);
         all.extend_from_slice(params);
-        let mut info = classify_call(&mut self.tys, ret, &all, n_required + 1, strict_return);
+        let mut info =
+            classify_call(&mut self.tys, ret, &all, n_required + 1, strict_return, cc, variadic);
         info.args.remove(0);
         info
     }
@@ -1740,11 +1809,12 @@ impl<'a> Cg<'a> {
         let mut all = params.clone();
         all.extend_from_slice(&args[params.len().min(args.len())..]);
         let t = this.is_some();
-        let info = self.classify(ret, &all, params.len(), !extern_c, t);
-        let decl_info = self.classify(ret, &params, params.len(), !extern_c, t);
+        let (cc, no_csr, va) = (p.info().cc(), p.info().no_caller_saved_regs(), p.variadic());
+        let info = self.classify(ret, &all, params.len(), !extern_c, t, cc, va);
+        let decl_info = self.classify(ret, &params, params.len(), !extern_c, t, cc, va);
         let fn_ty = self.fn_type(&decl_info, t, p.variadic());
         let nothrow = ast.types.exc_spec(&p).is_nothrow();
-        Sig { info, fn_ty, ret, params: all, nothrow, this, vtt: false }
+        Sig { info, fn_ty, ret, params: all, nothrow, this, vtt: false, cc, no_csr }
     }
 
     /// `sig` without its parameters (only `this`, and the VTT if any,
@@ -1789,8 +1859,8 @@ impl<'a> Cg<'a> {
         }
         for a in &info.args {
             match &a.kind {
-                ArgKind::Direct { coerce: IrType::Struct(fs, _), flatten: true, .. } => {
-                    for f in fs.clone() {
+                k @ ArgKind::Direct { flatten: true, .. } if self.flat_fields(k).is_some() => {
+                    for f in self.flat_fields(k).map(|f| f.0).unwrap_or_default() {
                         let t = self.ir(&f);
                         ps.push(t);
                     }
@@ -1885,8 +1955,9 @@ impl<'a> Cg<'a> {
                     s.push(Attr::Flag(AttrKind::DeadOnReturn));
                 }
                 ArgKind::Direct { align: Some(n), .. } => s.push(Attr::AlignStack(*n)),
-                ArgKind::Direct { coerce: IrType::Struct(fs, _), flatten: true, .. } => {
-                    for _ in 1..fs.len() {
+                k @ ArgKind::Direct { flatten: true, .. } if self.flat_fields(k).is_some() => {
+                    let n = self.flat_fields(k).map_or(1, |f| f.0.len());
+                    for _ in 1..n {
                         params.push(self.m.attr_set(&s));
                     }
                 }
@@ -2226,6 +2297,10 @@ impl<'a> Cg<'a> {
         if ast.is_noreturn_fn(first) {
             fa.push(Attr::Flag(AttrKind::NoReturn));
         }
+        // clang `ConstructAttributeList`: `AnyX86NoCallerSavedRegisters`.
+        if sig.no_csr {
+            fa.push(Attr::Str("no_caller_saved_registers".into(), "".into()));
+        }
         // clang `ConstructAttributeList` under `-fno-plt`: a function not
         // yet defined is `nonlazybind` (kiln: none in the translation unit;
         // spec/codegen.md "Hardening and overflow options").
@@ -2249,8 +2324,10 @@ impl<'a> Cg<'a> {
         // function is an `extern_weak` reference.
         let weak = ast.is_weak_decl(first) && ast.weakref_target(first).is_none();
         let section = self.decl_section(first);
+        let cc = sig.llvm_cc();
         {
             let func = self.m.func_mut(f);
+            func.cc = cc;
             func.visibility = vis;
             func.section = section;
             func.attrs.func = fa;

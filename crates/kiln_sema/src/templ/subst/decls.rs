@@ -826,9 +826,15 @@ impl Substituter<'_, '_, '_> {
         // clang's `TransformFunctionProtoType` keeps the `ExtInfo`): the
         // rebuilt declarator carries no attributes, so the bit is set on
         // the instantiation's type here (WP-749).
-        if info.noreturn()
-            && let Some(ft) = self.sema.ast.decls.get(f).ty()
-            && let Some(nt) = self.sema.with_fn_noreturn(ft, true, false)
+        // So are its calling convention and `no_caller_saved_registers`
+        // (WP-808).
+        let keep = move |i: kiln_ast::types::FuncInfo| {
+            i.with_noreturn(i.noreturn() || info.noreturn())
+                .with_cc(info.cc())
+                .with_no_caller_saved_regs(info.no_caller_saved_regs())
+        };
+        if let Some(ft) = self.sema.ast.decls.get(f).ty()
+            && let Some(nt) = self.sema.with_fn_info(ft, &keep, false)
         {
             self.sema.ast.decls.set_ty(f, nt);
         }

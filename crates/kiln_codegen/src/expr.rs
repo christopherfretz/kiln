@@ -3584,10 +3584,17 @@ impl Cg<'_> {
         if sig.nothrow {
             fa.push(Attr::Flag(AttrKind::NoUnwind));
         }
+        if sig.no_csr {
+            fa.push(Attr::Str("no_caller_saved_registers".into(), "".into()));
+        }
         fa.extend(extra.iter().cloned());
         self.call_size_attrs(fid, &mut fa);
         let func = if fa.is_empty() { AttrList::default().func } else { self.m.attr_set(&fa) };
-        let opts = CallOpts { attrs: AttrList { func, ret, params }, ..CallOpts::default() };
+        let opts = CallOpts {
+            attrs: AttrList { func, ret, params },
+            cc: sig.llvm_cc(),
+            ..CallOpts::default()
+        };
         let r = self.emit_call_op(sig.fn_ty, callee, ir_args, opts, rty, fid, sig.nothrow);
         if let Some(a) = sret_addr {
             // clang `convertTempToRValue`: a scalar returned indirectly
