@@ -26,15 +26,6 @@ impl Cg<'_> {
         self.di.as_deref().map_or_else(|| super::unreachable_md(), |d| d.cu)
     }
 
-    /// Records the first unsupported construct (reported after emission).
-    pub(crate) fn di_fail(&mut self, loc: Option<kiln_source::Loc>, msg: String) {
-        if let Some(d) = self.di.as_deref_mut()
-            && d.error.is_none()
-        {
-            d.error = Some(crate::CodegenError { loc, msg });
-        }
-    }
-
     /// The identifier naming `d` (clang `getName`; empty when unnamed).
     pub(crate) fn di_ident(&self, d: DeclId) -> String {
         let ast = self.ast;
@@ -269,9 +260,11 @@ impl Cg<'_> {
                 let name = self.di_ident(decl);
                 let mut f =
                     Fields::default().s("name", &name).n("scope", scope).n("file", Some(file));
-                f = f
-                    .u("line", u64::from(line))
-                    .flags("flags", self.di_member_access(decl).as_slice());
+                // An implicit typedef (`__SVInt32_t`) has no line.
+                if line != 0 {
+                    f = f.u("line", u64::from(line));
+                }
+                f = f.flags("flags", self.di_member_access(decl).as_slice());
                 Some(self.di_derived("DW_TAG_typedef", base, f))
             }
             TypeView::Enum(d) => self.di_enum(d, q),
@@ -317,31 +310,72 @@ impl Cg<'_> {
             _ if b.is_floating() => "DW_ATE_float",
             _ if b.is_signed_integer() => signed,
             _ if b.is_integral() => unsigned,
-            T::MetaInfo
-            | T::SvInt8
-            | T::SvInt16
-            | T::SvInt32
-            | T::SvInt64
-            | T::SvUint8
-            | T::SvUint16
-            | T::SvUint32
-            | T::SvUint64
-            | T::SvFloat16
-            | T::SvFloat32
-            | T::SvFloat64
-            | T::SvBfloat16
-            | T::SvBool
-            | T::SvCount => {
-                self.di_fail(
-                    None,
-                    format!("debug information for type `{}` is not supported", b.name()),
-                );
-                return None;
+            // `std::meta::info` (WP-910): clang has no such type. It is a
+            // builtin (kiln and GCC mangle it as a builtin, `u6__info` /
+            // `Dm`, not as a class in `std::meta`), so it is a base type of
+            // its spelling, pointer-sized as the handle it stands for. A
+            // `DW_TAG_unspecified_type` would lose the size: LLVM's DWARF
+            // writer emits only the name of one.
+            T::MetaInfo => {
+                let size = self.ptr_bits();
+                return Some(self.di_basic_node(b.name(), size, unsigned));
             }
+            _ if b.is_sizeless() => return Some(self.di_sve(b)),
             _ => return None,
         };
         let size = self.size_align(q).0 * 8;
         Some(self.di_basic_node(b.name(), size, enc))
+    }
+
+    /// clang `CreateType(const BuiltinType *)` for an SVE ACLE type
+    /// (WP-910): a vector array of its element type whose upper bound is
+    /// a DWARF expression of the vector granule register `VG` (`AArch64`
+    /// DWARF register 46), `elements per granule * VG - 1`. A predicate
+    /// counts bytes (8 lanes each); `svcount_t` is a fixed 2 bytes. The
+    /// name reaches it through the implicit typedef of the builtin's
+    /// spelling (`__SVInt32_t`, in the main file, no line), as in clang.
+    fn di_sve(&mut self, b: T) -> MetadataId {
+        let (vec, tuple) = b.sve_tuple_parts().unwrap_or((b, 1));
+        // The element type and its lanes in a 128-bit granule pair.
+        let (elem, lanes) = match vec {
+            T::SvInt8 => (T::SChar, 16),
+            T::SvInt16 => (T::Short, 8),
+            T::SvInt32 => (T::Int, 4),
+            T::SvInt64 => (T::Long, 2),
+            T::SvUint8 => (T::UChar, 16),
+            T::SvUint16 => (T::UShort, 8),
+            T::SvUint32 => (T::UInt, 4),
+            T::SvUint64 => (T::ULong, 2),
+            T::SvFloat16 => (T::Half, 8),
+            T::SvFloat32 => (T::Float, 4),
+            T::SvFloat64 => (T::Double, 2),
+            T::SvBfloat16 => (T::BFloat16, 8),
+            // A predicate: 16 one-bit lanes per 128 bits, as bytes.
+            _ => (T::UChar, 2),
+        };
+        let n = lanes * u64::from(tuple);
+        let upper = if vec == T::SvCount {
+            MdField::Int(1)
+        } else {
+            let ops = format!(
+                "DW_OP_constu, {}, DW_OP_bregx, 46, 0, DW_OP_mul, DW_OP_constu, 1, DW_OP_minus",
+                n / 2
+            );
+            let e =
+                self.m.md_specialized("DIExpression", false, vec![("", MdField::Raw(ops.into()))]);
+            MdField::Node(Some(e))
+        };
+        let mut sf = Fields::default().i("lowerBound", 0);
+        sf.0.push(("upperBound", upper));
+        let sub = self.m.md_specialized("DISubrange", false, sf.0);
+        let subs = self.m.md_tuple(&[Some(sub)]);
+        let base = self.di_type(elem.qual_type());
+        let f = Fields::default()
+            .raw("tag", "DW_TAG_array_type")
+            .n("baseType", base)
+            .raw("flags", "DIFlagVector")
+            .n("elements", Some(subs));
+        self.m.md_specialized("DICompositeType", false, f.0)
     }
 
     /// clang `CreateType(const ArrayType *)`: nested array types are one
@@ -1114,7 +1148,9 @@ impl Cg<'_> {
         let mut ops = Vec::new();
         for (i, a) in args.into_iter().enumerate() {
             let name = params.get(i).map(|&p| self.di_ident(p)).unwrap_or_default();
-            ops.push(self.di_template_arg(&name, a));
+            if let Some(p) = self.di_template_arg(&name, a) {
+                ops.push(Some(p));
+            }
         }
         Some(self.m.md_tuple(&ops))
     }
@@ -1129,14 +1165,12 @@ impl Cg<'_> {
                 let t = self.di_type(t);
                 Some(self.m.md_specialized("DITemplateTypeParameter", false, f.nn("type", t).0))
             }
-            // clang emits a null pointer argument as `i8 0` (a null
-            // member pointer is still a hard error below).
+            // clang emits a null pointer argument as `i8 0`, a null
+            // member function pointer included; a null data member
+            // pointer is the ABI's `-1`, below.
             ArgView::Value { ty, value }
                 if matches!(self.ast.consts.scalar(value), Some(Scalar::Null { .. }))
-                    && !matches!(
-                        self.ast.types.view(self.ast.types.canonical(ty).ty()),
-                        TypeView::MemberPointer { .. }
-                    ) =>
+                    && (!self.is_mp(ty) || self.is_mfp(ty)) =>
             {
                 let t = self.di_type(ty);
                 Some(self.m.md_specialized(
@@ -1163,21 +1197,22 @@ impl Cg<'_> {
                 } else {
                     self.const_scalar_value(value, ty)
                 };
-                let Some(v) = v.ok().and_then(|v| self.m.md_const(v).ok()) else {
-                    self.di_fail(
-                        None,
-                        "debug information for a non-integral template argument is not supported"
-                            .into(),
-                    );
-                    return None;
-                };
-                let f = f.n("type", t).n("value", Some(v));
+                // A value with no IR constant (a `std::meta::info`, or one
+                // kiln cannot lower) keeps its name and type with `value:
+                // null`, as clang's parameter does when its `ConstantEmitter`
+                // gives none (`CollectTemplateParams`; WP-910).
+                let v = v.ok().and_then(|v| self.m.md_const(v).ok());
+                let f = f.n("type", t).nn("value", v);
                 Some(self.m.md_specialized("DITemplateValueParameter", false, f.0))
             }
             ArgView::Pack(l) => {
                 let args: Vec<ArgView> =
                     self.ast.types.args(l).iter().map(TemplateArg::view).collect();
-                let ops: Vec<_> = args.into_iter().map(|a| self.di_template_arg("", a)).collect();
+                let ops: Vec<_> = args
+                    .into_iter()
+                    .filter_map(|a| self.di_template_arg("", a))
+                    .map(Some)
+                    .collect();
                 let v = self.m.md_tuple(&ops);
                 let f = Fields::default().raw("tag", "DW_TAG_GNU_template_parameter_pack").0;
                 let f = Fields(f).s("name", name).n("value", Some(v));
@@ -1195,13 +1230,11 @@ impl Cg<'_> {
                     f.n("value", Some(v)).0,
                 ))
             }
-            _ => {
-                self.di_fail(
-                    None,
-                    "debug information for a template template argument is not supported".into(),
-                );
-                None
-            }
+            // A template name that resolves to no template declaration
+            // (nothing a concrete specialization should hold): clang's
+            // `createTemplateTemplateParameter` needs the template's name,
+            // so the parameter is left out (WP-910).
+            _ => None,
         }
     }
 }

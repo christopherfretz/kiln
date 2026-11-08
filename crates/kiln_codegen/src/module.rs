@@ -536,10 +536,7 @@ impl<'a> Cg<'a> {
         self.emit_contract_defaults()?;
         self.check_aliases();
         self.trailer();
-        match self.take_debug_info_error() {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     /// Class definition `def` is incomplete to code emitted now: the
