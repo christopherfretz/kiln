@@ -883,5 +883,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-868 | perf: materialize_out stores vector results one element at a time; bulk store (`crates/kiln_oven/src/meta/materialize.rs:395`); S1/S2 bench | WP-830 | open |
 | WP-869 | reflection: CXXSpliceExpr profiles UNIQUE so equal dependent splices are not equivalent (`crates/kiln_ast/src/types/profile_expr.rs:654`); move splice_fast from ParsedTu to the Oven report (`crates/kiln_parse/src/lib.rs:201`) | WP-830 | open |
 | WP-870 | reflection: splices of string-literal and std::type_info objects still parse_unsupported (`crates/kiln_sema/src/splice_object.rs`) | WP-830 | open |
+| WP-873 | driver/sema: -flto/-flto=thin, CMake-probe flags, -Winvalid-constexpr at definition, Catch2 C++23/WERROR (WP-673, WP-677, WP-687) | WP-673 | in progress |
 WP-511
 WP-512
