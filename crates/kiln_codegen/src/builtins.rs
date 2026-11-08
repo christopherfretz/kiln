@@ -840,6 +840,11 @@ impl Cg<'_> {
             }
             id::ASSUME_ALIGNED => self.builtin_assume_aligned(e, &args)?,
             id::ASSUME => {
+                // An assumption with possible side effects is never
+                // evaluated (sema warned, WP-805).
+                if self.ast.exprs.get(e).has(kiln_ast::expr::ExprFlags::ASSUME_IGNORED) {
+                    return Ok(BuiltinCall::Emitted(None));
+                }
                 let c = self.emit_scalar(a0)?;
                 let f = kiln_llvm::intrinsics::assume(&mut self.m);
                 self.intrinsic_call(f, vec![c]);
