@@ -215,6 +215,15 @@ pub struct CodegenOptions {
     /// `null_pointer_is_valid`, and references, `this` and `operator new`
     /// carry no `nonnull` (`this` is `dereferenceable_or_null`).
     pub null_pointer_is_valid: bool,
+    /// `-fno-builtin` / `-ffreestanding` (clang `LangOpts.NoBuiltin`):
+    /// every function and call site is `"no-builtins"`, a call site also
+    /// `nobuiltin`, and no library function is lowered as its builtin
+    /// (spec/codegen.md "no-builtin"; WP-808).
+    pub no_builtin: bool,
+    /// The `-fno-builtin-<name>` names, sorted (clang
+    /// `LangOpts.NoBuiltinFuncs`): `"no-builtin-<name>"` on every function
+    /// and call site, `nobuiltin` on a call of `<name>` itself.
+    pub no_builtin_fns: Vec<String>,
     /// The x86-64 `-march=<cpu>`: the functions' `target-cpu` (and no
     /// default `tune-cpu`, as clang); `None` is the target's default
     /// (`x86-64`, `generic` on `AArch64`). `native` (both targets) emits
@@ -535,6 +544,8 @@ impl Default for CodegenOptions {
             wrapv: false,
             wrapv_pointer: false,
             null_pointer_is_valid: false,
+            no_builtin: false,
+            no_builtin_fns: Vec::new(),
             target_cpu: None,
             tune_cpu: None,
             no_inline: false,

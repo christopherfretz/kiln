@@ -381,7 +381,8 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `tests/codegen/builtins_lib_intrinsic.cpp`). Not done (follow-ups):
     clang's -O0 fold of a library call the constant evaluator accepts
     (`strlen("abc")` is `i64 3`, `memcmp` of literals), clang 22's
-    `modf` to `llvm.modf`, and `-fno-builtin` / `-fno-builtin-<name>`;
+    `modf` to `llvm.modf`; `-fno-builtin` / `-fno-builtin-<name>` and
+    the `no_builtin` attribute are "no-builtin" below;
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
     call initializes an aggregate, otherwise into a temporary; an
@@ -3080,6 +3081,47 @@ Linux targets; `Cg::frame_pointer` applies it.
   `kiln_driver` `frame_pointer_flags_last_win`,
   `tests/codegen/frame_pointer_*.cpp` and `noinline_matrix_o{1,2}.cpp`
   (exact under oracle 19 on both targets).
+
+### no-builtin (WP-808)
+`-fno-builtin` / `-ffreestanding` (`CodegenOptions::no_builtin`, clang
+`LangOpts.NoBuiltin`), `-fno-builtin-<name>`
+(`CodegenOptions::no_builtin_fns`, `LangOpts.NoBuiltinFuncs`) and the
+`no_builtin` attribute (spec/sema.md §4.5), as clang 19
+(`addNoBuiltinAttributes`, `ConstructAttributeList`,
+`EmitDirectCallee`):
+- **Functions.** Every declaration and definition that goes through
+  `Cg::target_attrs_of` (functions, global-init and TLS helpers,
+  `__clang_call_terminate`; not the runtime declarations such
+  as `__cxa_*`) gets `Cg::no_builtin_attrs`: `"no-builtins"` alone under
+  `-fno-builtin`; else `"no-builtin-<name>"` per `-fno-builtin-<name>`,
+  then for its `no_builtin` attribute `"no-builtins"` (wildcard) or
+  `"no-builtin-<name>"` per name. Kiln reads the definition's attribute
+  for every declaration of the function (`Cg::no_builtin_names`; clang
+  reads the declaration it emits, and only definitions may carry one).
+- **Call sites** (`Cg::call_size_attrs`: direct, indirect, virtual,
+  constructor and destructor calls): `nobuiltin` under `-fno-builtin`
+  (clang `!SimplifyLibCalls`) or when the callee's IR name is a
+  `-fno-builtin-<name>`, with the same `"no-builtin*"` strings, the
+  attribute part from the callee's `no_builtin` (`Module::nba_fns`,
+  recorded when the function is declared; none on an indirect call, nor
+  on a thunk's call of its target, `Fx::thunk`).
+- **Lowering.** Sema recognizes no library builtin under the flags
+  (spec/sema.md §5.4), so `memcpy` / `ceil` / ... are calls; inside a
+  function whose `no_builtin` names the callee (or is the wildcard,
+  `Cg::no_builtin_here`) a recognized library builtin is called, not
+  lowered. `__builtin_*` always lower. `Cg::is_std_builtin` (`std::move`
+  and kin) is off under `-fno-builtin` and for `-fno-builtin-std-<name>`;
+  the attribute's `std-<name>` does not stop the fold (clang compares
+  the current function's `"no-builtin-<name>"` with the callee's plain
+  name, here `move`, which the attribute cannot name). **Deviation:**
+  in a function with the wildcard `no_builtin`, clang 19 calls
+  `std::move` without instantiating its definition (sema treated the
+  call as a builtin), an undefined reference at link time; kiln keeps
+  folding it.
+- `-ffreestanding` also drops `uwtable` (`unwind_tables`) and makes
+  `__STDC_HOSTED__` 0. Tests: `tests/conformance/dcl.attr.no-builtin/`
+  (`ir-*.cpp` exact IR, `freestanding-memset-run.cpp`: a byte-loop
+  `memset` at -O2 does not become a recursive `memset` call).
 
 ### Hardening and overflow options (WP-605)
 The driver's "Codegen flags" (spec/driver.md) set these `CodegenOptions`

@@ -3303,7 +3303,9 @@ impl Cg<'_> {
         }
         // A builtin is never emitted as a function (spec/codegen.md §3, "Calls"):
         // it folds, lowers inline, or calls the library function it names.
-        // `std::move(x)` and its kin fold to the address of `x`.
+        // `std::move(x)` and its kin fold to the address of `x` (also in
+        // a function with the wildcard `no_builtin`, unlike clang 19,
+        // spec/codegen.md "no-builtin").
         if let Some(d) = direct
             && self.is_std_builtin(d)
             && let Some(a) = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).next()
@@ -3313,9 +3315,12 @@ impl Cg<'_> {
         let mut lib = None;
         // WP-419: a recognized C library function clang lowers as its
         // `__builtin_` twin (`ceil(x)` -> `llvm.ceil`).
+        // WP-808: not in a function whose `no_builtin` attribute names it
+        // (clang `EmitDirectCallee`, `HasAttributeNoBuiltin`).
         if let Some(d) = direct
-            && let Some(id) =
-                ast.decls.builtin_id(d).or_else(|| crate::builtins::lib_intrinsic(ast, d))
+            && let Some(id) = ast.decls.builtin_id(d).or_else(|| {
+                crate::builtins::lib_intrinsic(ast, d).filter(|_| !self.no_builtin_here(d))
+            })
         {
             match self.emit_builtin(id, e)? {
                 crate::builtins::BuiltinCall::Emitted(v) => return Ok(v),

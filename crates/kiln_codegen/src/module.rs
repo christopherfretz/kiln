@@ -125,6 +125,10 @@ pub(crate) struct Cg<'a> {
     /// Functions declared for an `optnone` declaration: neither they nor
     /// their call sites get the `-Os`/`-Oz` size attributes.
     pub optnone_fns: FxHashSet<FuncId>,
+    /// Functions declared for a declaration with a `no_builtin` attribute
+    /// (its first declaration): their call sites carry its
+    /// `"no-builtin*"` attributes ([`Self::call_size_attrs`]; WP-808).
+    pub nba_fns: FxHashMap<FuncId, DeclId>,
     /// First declaration → global variable.
     pub gvars: FxHashMap<DeclId, GlobalId>,
     /// Whether any visibility other than default can arise (a
@@ -386,6 +390,7 @@ impl<'a> Cg<'a> {
             fns: FxHashMap::default(),
             nounwind: FxHashMap::default(),
             optnone_fns: FxHashSet::default(),
+            nba_fns: FxHashMap::default(),
             gvars: FxHashMap::default(),
             deferred: FxHashMap::default(),
             completion_index: FxHashMap::default(),
@@ -1985,9 +1990,81 @@ impl<'a> Cg<'a> {
     /// The call-site function attributes `-Os`/`-Oz` add to a call of
     /// `fid` (`None`: an indirect call) through clang `EmitCall`: the
     /// [`Self::size_attrs`] unless the callee is `optnone`.
+    ///
+    /// With them the `nobuiltin` / `"no-builtin*"` attributes of clang
+    /// `ConstructAttributeList` on a call site (`AttrOnCallSite`, WP-808):
+    /// `nobuiltin` under `-fno-builtin` (`!SimplifyLibCalls`) or for a
+    /// callee named by `-fno-builtin-<name>`, then the
+    /// [`Self::no_builtin_attrs`] of the callee's `no_builtin` attribute.
     pub(crate) fn call_size_attrs(&self, fid: Option<FuncId>, out: &mut Vec<Attr>) {
         if !fid.is_some_and(|f| self.optnone_fns.contains(&f)) {
             self.size_attrs(out);
+        }
+        let named = || {
+            fid.is_some_and(|f| {
+                let name = self.m.func(f).name();
+                self.opts.no_builtin_fns.iter().any(|n| n == name)
+            })
+        };
+        if self.opts.no_builtin || named() {
+            out.push(Attr::Flag(AttrKind::NoBuiltin));
+        }
+        // A thunk's call has no target declaration ([`Fx::thunk`]).
+        let nba = fid.filter(|_| !self.f.thunk).and_then(|f| self.nba_fns.get(&f).copied());
+        self.no_builtin_attrs(out, nba);
+    }
+
+    /// The `no_builtin` attribute of function `d`, its names joined by
+    /// `,` (`*`: all of them): the definition's, else that of any
+    /// declaration (clang reads the declaration it emits; kiln the
+    /// definition's for every use, spec/codegen.md "no-builtin").
+    pub(crate) fn no_builtin_names(&self, d: DeclId) -> Option<&'a str> {
+        let ast = self.ast;
+        let of = |r: DeclId| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .map(|a| ast.attrs.get(a))
+                .find(|n| n.kind == kiln_ast::attr::AttrKind::NO_BUILTIN)
+                .map(|n| ast.symbols().as_str(kiln_source::symbol::Symbol::from_index(n.a)))
+        };
+        ast.definition(d).and_then(of).or_else(|| ast.redecls_of(d).find_map(of))
+    }
+
+    /// The function being emitted has a `no_builtin` attribute naming the
+    /// library function `callee`, or all of them (clang `EmitDirectCallee`:
+    /// the current function's `"no-builtin-<name>"` / `"no-builtins"`; a
+    /// library builtin is then called, not lowered; WP-808).
+    pub(crate) fn no_builtin_here(&self, callee: DeclId) -> bool {
+        let Some(names) = self.f.decl.and_then(|d| self.no_builtin_names(d)) else {
+            return false;
+        };
+        let ast = self.ast;
+        let name = ast.decls.get(callee).name().as_ident().map(|s| ast.symbols().as_str(s));
+        names.split(',').any(|n| n == "*" || Some(n) == name)
+    }
+
+    /// The function attributes of clang `addNoBuiltinAttributes`, on a
+    /// declaration, a definition and a call site alike, for function `d`
+    /// (`None`: a helper without a declaration, or an indirect call):
+    /// `-fno-builtin` gives `"no-builtins"` alone; else each
+    /// `-fno-builtin-<name>` gives `"no-builtin-<name>"`, and the
+    /// `no_builtin` attribute of `d` `"no-builtins"` for its wildcard, else
+    /// `"no-builtin-<name>"` for each name (WP-808).
+    pub(crate) fn no_builtin_attrs(&self, out: &mut Vec<Attr>, d: Option<DeclId>) {
+        if self.opts.no_builtin {
+            out.push(Attr::string("no-builtins", ""));
+            return;
+        }
+        for n in &self.opts.no_builtin_fns {
+            out.push(Attr::string(&format!("no-builtin-{n}"), ""));
+        }
+        let Some(names) = d.and_then(|d| self.no_builtin_names(d)) else { return };
+        if names.split(',').any(|n| n == "*") {
+            out.push(Attr::string("no-builtins", ""));
+            return;
+        }
+        for n in names.split(',').filter(|n| !n.is_empty()) {
+            out.push(Attr::string(&format!("no-builtin-{n}"), ""));
         }
     }
 
@@ -2007,6 +2084,7 @@ impl<'a> Cg<'a> {
     /// `ConstructAttributeList`, not on a call site; WP-682).
     pub(crate) fn target_attrs_of(&self, out: &mut Vec<Attr>, d: Option<DeclId>) {
         self.size_attrs(out);
+        self.no_builtin_attrs(out, d);
         if let Some(d) = d
             && self.has_fn_attr(d, kiln_ast::attr::AttrKind::DISABLE_TAIL_CALLS)
         {
@@ -2343,6 +2421,9 @@ impl<'a> Cg<'a> {
         self.nounwind.insert(f, nothrow);
         if optnone {
             self.optnone_fns.insert(f);
+        }
+        if self.no_builtin_names(first).is_some() {
+            self.nba_fns.insert(f, first);
         }
     }
 

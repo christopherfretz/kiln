@@ -45,7 +45,7 @@ pub use tentative::TypeIdContext;
 pub use tokens::{Event, LoopHintInfo, TokenSource};
 
 /// Options for [`parse_file`], [`parse_tu`] and [`parse_preprocessed`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ParseOptions {
     /// The language standard.
@@ -79,6 +79,10 @@ pub struct ParseOptions {
     /// GCC's implicit library builtins (`-stdlib=libstdc++`;
     /// [`kiln_sema::Sema::gnu_lib_builtins`]).
     pub gnu_lib_builtins: bool,
+    /// `-fno-builtin` / `-ffreestanding` ([`kiln_sema::Sema::no_builtin`]).
+    pub no_builtin: bool,
+    /// The `-fno-builtin-<name>` names ([`kiln_sema::Sema::no_builtin_fns`]).
+    pub no_builtin_fns: Vec<String>,
     /// The `AArch64` `sve` target feature (`-march=armv8-a+sve`;
     /// [`kiln_sema::Sema::sve`]).
     pub sve: bool,
@@ -118,6 +122,8 @@ impl Default for ParseOptions {
             lax_vector_conversions: kiln_sema::LaxVectorConversions::All,
             clang_compat: 22,
             gnu_lib_builtins: false,
+            no_builtin: false,
+            no_builtin_fns: Vec::new(),
             sve: false,
             cfg_dump: false,
             cfg_stats: false,
@@ -283,6 +289,9 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.clang_compat = opts.clang_compat;
     s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
     s.gnu_lib_builtins = opts.gnu_lib_builtins;
+    s.no_builtin = opts.no_builtin;
+    s.no_builtin_fns.clone_from(&opts.no_builtin_fns);
+    s.lib_builtin_name = kiln_pp::is_library_builtin;
     s.sve = opts.sve;
     s.cfg_dump = opts.cfg_dump;
     s.cfg_stats = opts.cfg_stats;

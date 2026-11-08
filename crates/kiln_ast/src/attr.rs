@@ -248,6 +248,14 @@ impl AttrKind {
     /// [`AttrKind::CALLING_CONV`] into [`crate::types::FuncInfo::regparm`];
     /// `a` is N (WP-808).
     pub const REGPARM: AttrKind = AttrKind(212);
+    /// clang `no_builtin` / `no_builtin("name", ...)` on a function
+    /// definition (clang `NoBuiltinAttr`): the named library builtins (all
+    /// of them for the argument-less form, the wildcard `*`) are not
+    /// recognized in its body, and its IR function and the calls of it
+    /// carry `"no-builtins"` / `"no-builtin-<name>"`. `a` is the
+    /// [`crate::Symbol`] index of the names, sorted, deduplicated and
+    /// `,`-joined (`*` for the wildcard) (WP-808).
+    pub const NO_BUILTIN: AttrKind = AttrKind(213);
 
     /// Whether this is a calling-convention or other function type
     /// attribute sema consumes into the type's

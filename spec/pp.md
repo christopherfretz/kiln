@@ -417,6 +417,12 @@ clang 22 declares as header builtins (`__dmb`, `__dsb`, `__isb`,
 `__has_builtin` answers clang 19's table at either level (0 outside the
 MS modes): kiln ships clang 19's `arm_acle.h`, which defines them only
 when `__has_builtin` is 0 (spec/landed/sema/WP-724.md "ACLE builtins").
+`-ffreestanding` / `-fno-builtin` select the `NoBuiltin` overlay
+(library builtins such as `memcpy` answer 0; `-fhosted` and, for
+`-fno-builtin` only, `-fbuiltin` cancel it), and `-fno-builtin-<name>`
+applies that overlay's row to `<name>` alone (`ClangFeatures::
+no_builtin_fns`, WP-808); `kiln_pp::is_library_builtin` exposes the
+overlay's names for the `no_builtin` attribute's check (spec/sema.md).
 Where kiln implements a feature that clang 19 lacks,
 `build_predefines` raises the macro to clang 22's value in the same modes:
 `__cpp_structured_bindings` is `202411L` wherever it is defined (C++17

@@ -294,6 +294,26 @@ pub struct Sema<'a, 'sm> {
     /// constant evaluation as its `__builtin_` twin, as GCC folds
     /// `::ceil` (spec/sema.md §5.4).
     pub gnu_lib_builtins: bool,
+    /// `-fno-builtin` / `-ffreestanding` (clang `LangOptions::NoBuiltin`,
+    /// WP-808): no library function is recognized as a builtin
+    /// ([`Sema::lib_builtin_info`]), so none gets the implicit attributes
+    /// or lowers as its `__builtin_` twin.
+    pub no_builtin: bool,
+    /// The `-fno-builtin-<name>` names, sorted (clang
+    /// `LangOptions::NoBuiltinFuncs`): each is not recognized as a
+    /// library builtin; `std-<name>` names a `std` one (WP-808).
+    pub no_builtin_fns: Vec<String>,
+    /// Whether a name is one of clang's library builtins at the clang 22
+    /// level or not (clang `Builtin::Context::isBuiltinFunc`'s table, set
+    /// by the parser from the preprocessor's): the names a `no_builtin`
+    /// attribute accepts (WP-808).
+    pub lib_builtin_name: fn(&str, bool) -> bool,
+    /// The functions whose `no_builtin` attribute waits for their
+    /// definition (clang checks the declarator's definition kind), with the
+    /// attribute's location: a `{` body clears one, `= default` / `=
+    /// delete` reports it, the end of the unit reports the rest as
+    /// declarations (WP-808).
+    pub(crate) no_builtin_pending: Vec<(DeclId, Loc)>,
     /// `-fkiln-dump-cfg`: build the graph of every analysed body and
     /// append its dump to [`Sema::cfg_out`] (spec/sema.md §7.5.1).
     pub cfg_dump: bool,
@@ -1106,6 +1126,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             sve: false,
             nns_start: None,
             gnu_lib_builtins: false,
+            no_builtin: false,
+            no_builtin_fns: Vec::new(),
+            lib_builtin_name: |n, _| kiln_ast::decl::builtin::lib_by_name(n).is_some(),
+            no_builtin_pending: Vec::new(),
             cfg_dump: false,
             cfg_stats: false,
             full_deduction: false,

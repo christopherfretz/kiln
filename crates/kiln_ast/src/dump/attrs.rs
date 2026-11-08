@@ -37,6 +37,7 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::IFUNC => "IFunc",
         AttrKind::ANALYZER_NORETURN => "AnalyzerNoReturn",
         AttrKind::DISABLE_TAIL_CALLS => "DisableTailCalls",
+        AttrKind::NO_BUILTIN => "NoBuiltin",
         AttrKind::VISIBILITY => "Visibility",
         AttrKind::TYPE_VISIBILITY => "TypeVisibility",
         AttrKind::TYPE_NULLABLE => "TypeNullable",

@@ -6750,6 +6750,7 @@ impl Sema<'_, '_> {
     /// redefinition, opens the function scope with the parameters.
     pub fn act_on_start_function_def(&mut self, f: DeclId) {
         self.check_alias_definition(f);
+        self.no_builtin_defined(f, false);
         // A deleted function is defined by its first declaration.
         let deleted = Some(self.ast.first(f)).filter(|&p| p != f && self.is_deleted_fn(p));
         if let Some(prev) = deleted.or_else(|| self.ast.definition(f))
@@ -9999,6 +10000,7 @@ impl Sema<'_, '_> {
                         | "optnone"
                         | "minsize"
                         | "disable_tail_calls"
+                        | "no_builtin"
                         | "uninitialized"
                         | "trivial_abi"
                         | "type_visibility"
@@ -10033,6 +10035,9 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::ABI_TAG {
             return self.abi_tag_attribute(syntax, &n, args, loc);
+        }
+        if kind == AttrKind::NO_BUILTIN {
+            return self.no_builtin_attribute(syntax, args, loc);
         }
         if kind == AttrKind::DIAGNOSE_IF {
             return self.diagnose_if_attribute(syntax, args, loc);
@@ -10415,6 +10420,69 @@ impl Sema<'_, '_> {
         tags.dedup();
         let a = self.intern(&tags.join(",")).index();
         let node = AttrNode { kind: AttrKind::ABI_TAG, syntax, flags: 0, loc, a, b: 0 };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// clang `no_builtin` / `no_builtin("name", ...)` as written (clang
+    /// `handleNoBuiltinAttr`; WP-808): no argument is the wildcard `*`;
+    /// each argument a string literal (else "expected string literal",
+    /// dropping the attribute) naming a library builtin, `std-<name>` for
+    /// a `std` one (clang `Builtin::Context::isBuiltinFunc`; another name
+    /// warns and is left out). Encoded as for [`AttrKind::NO_BUILTIN`];
+    /// [`Sema::check_no_builtin_attrs`] composes the ones on a declaration.
+    fn no_builtin_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        const STD: [&str; 7] = [
+            "__addressof",
+            "addressof",
+            "as_const",
+            "forward",
+            "forward_like",
+            "move",
+            "move_if_noexcept",
+        ];
+        let mut names: Vec<String> = Vec::new();
+        if args.is_empty() {
+            names.push("*".to_owned());
+        }
+        for arg in args {
+            let (lit, at) = match arg {
+                AttrArg::Expr(e) => (self.string_lit_of(*e), self.ast.exprs.get(*e).loc()),
+                AttrArg::Type(_) => (None, loc),
+                AttrArg::Ident(_, l) => (None, *l),
+            };
+            let Some(lit) = lit else {
+                let msg = self.diag(DiagId::parse_attribute_requires_string, at).arg("no_builtin");
+                self.emit(msg);
+                return None;
+            };
+            let id = self.ast.exprs.string_lit(lit);
+            let name = String::from_utf8_lossy(self.ast.strings.bytes(id)).into_owned();
+            let valid = match name.strip_prefix("std-") {
+                Some(s) => STD.contains(&s),
+                None => {
+                    !STD.contains(&name.as_str())
+                        && (self.lib_builtin_name)(&name, self.clang_compat >= 22)
+                }
+            };
+            if valid {
+                names.push(name);
+            } else {
+                let msg = self
+                    .diag(DiagId::sema_no_builtin_invalid_name, at)
+                    .arg(name)
+                    .arg("'no_builtin'");
+                self.emit(msg);
+            }
+        }
+        names.sort();
+        names.dedup();
+        let a = self.intern(&names.join(",")).index();
+        let node = AttrNode { kind: AttrKind::NO_BUILTIN, syntax, flags: 0, loc, a, b: 0 };
         Some(self.ast.attrs.push(node))
     }
 
@@ -10997,6 +11065,8 @@ fn attr_kind_of(
         ("minsize", _, _) if gnu_syntax || clang_scope => AttrKind::MINSIZE,
         // clang `Clang<"disable_tail_calls">` (WP-682).
         ("disable_tail_calls", _, _) if gnu_syntax || clang_scope => AttrKind::DISABLE_TAIL_CALLS,
+        // clang `Clang<"no_builtin">` (WP-808).
+        ("no_builtin", _, _) if gnu_syntax || clang_scope => AttrKind::NO_BUILTIN,
         ("uninitialized", _, _) if gnu_syntax || clang_scope => AttrKind::UNINITIALIZED,
         // clang `Clang<"trivial_abi">`.
         ("trivial_abi", _, _) if gnu_syntax || clang_scope => AttrKind::TRIVIAL_ABI,

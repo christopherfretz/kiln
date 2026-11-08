@@ -1790,6 +1790,34 @@ and returns the scope it names:
     this one, is the error `'X' and 'Y' attributes are not compatible`
     (X the later) with `conflicting attribute is here` at the earlier, and
     is dropped. Test: `tests/conformance/dcl.attr/gnu-disable-tail-calls.cpp`.
+  - `no_builtin` (`AttrKind::NO_BUILTIN`; GNU syntax or `clang::`),
+    WP-808, clang `handleNoBuiltinAttr`: `no_builtin_attribute` reads
+    its arguments, each a string literal (else `expected string literal
+    as argument of 'no_builtin' attribute` at the argument, and the
+    attribute is dropped); none is the wildcard `*`. A name is valid
+    when it is a library builtin (`Sema::lib_builtin_name`, the
+    parser's `kiln_pp::is_library_builtin`: a `NoBuiltin`-overlay row of
+    the feature tables at the `-fclang-compat` level) other than the
+    seven standard ones (`move`, `forward`, `addressof`, ...), or
+    `std-` followed by one of those; an invalid one (`*`, `foo`,
+    `__builtin_memcpy`, `move`) warns `'N' is not a valid builtin name
+    for 'no_builtin'` [-Winvalid-no-builtin-names] at its literal and is
+    left out. `a` is the interned, sorted, deduplicated `,`-joined
+    names. On a non-function it warns `'no_builtin' attribute only
+    applies to functions` [-Wignored-attributes].
+    `check_no_builtin_attrs` merges the attributes of one declaration
+    (in order) into one, and each merge that leaves the wildcard among
+    other names is `empty 'no_builtin' cannot be composed with named
+    ones` at the declaration's name. The declaration then waits in
+    `Sema::no_builtin_pending`: its body (`act_on_start_function_def`)
+    clears it, `= default` / `= delete` is `no_builtin attribute has no
+    effect on defaulted or deleted functions` at the attribute, and at
+    the end of the unit (`report_no_builtin_declarations`, skipping
+    instantiations and definitions) it is `no_builtin attribute is
+    permitted on definitions only` (clang reports both at the
+    declarator; the harness compares unordered). Codegen reads the
+    definition's attribute (spec/codegen.md "no-builtin"). Test:
+    `tests/conformance/dcl.attr.no-builtin/errors.cpp`.
   - `gnu_inline` (GNU syntax or `gnu::`; **GNU inline functions**,
     WP-585, clang `handleGNUInlineAttr`; `AttrKind::GNU_INLINE`): on a
     non-function `'gnu_inline' attribute only applies to functions`
@@ -4234,6 +4262,11 @@ function) elsewhere.
   unit's typedef, alias or (as clang's `LookupNecessaryTypesForBuiltin`)
   tag named `FILE`. Not modelled: clang 22's `modf` to `llvm.modf` and
   clang's implicit `alloc_size` on the library allocation functions.
+  Under `-fno-builtin` / `-ffreestanding` (`Sema::no_builtin`) no
+  function is recognized, and under `-fno-builtin-<name>`
+  (`Sema::no_builtin_fns`) not `<name>` (`lib_builtin_info`; clang
+  `Builtin::Context::initializeBuiltins` skips them): no implicit
+  attributes, no twin, an ordinary call (WP-808).
 - **GCC's implicit library builtins** (WP-380, `record_gnu_lib_twin`;
   `Sema::gnu_lib_builtins`, set by the driver for `-stdlib=libstdc++`,
   the default): libstdc++'s `<cmath>` double overloads are `using

@@ -179,6 +179,8 @@ impl SyntaxJob<'_> {
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == crate::toolchain::StdLib::LibStdCxx,
+            no_builtin: a.no_builtin(),
+            no_builtin_fns: a.no_builtin_fns(),
             sve: crate::features::resolve(a, &job.toolchain.target).0.sve,
             cfg_dump: a.dump_cfg,
             cfg_stats: a.cfg_stats,

@@ -73,6 +73,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "mode"
             | "regparm"
             | "no_caller_saved_registers"
+            | "no_builtin"
             | "interrupt"
     ) || kiln_ast::attr::CC_ATTR_SPELLINGS.contains(&n)
 }

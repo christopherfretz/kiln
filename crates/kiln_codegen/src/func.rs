@@ -104,6 +104,10 @@ pub(crate) struct Fx {
     /// `EmitFunctionEpilog`): no parameter prologue, and the epilogue is
     /// `unreachable` instead of a return.
     pub naked: bool,
+    /// A thunk (clang `generateThunk`): its call of the target has no
+    /// target declaration (`CGCallee::forDirect`), so the callee's
+    /// `no_builtin` adds no call-site attribute (WP-808).
+    pub thunk: bool,
     pub jumps: Vec<Jump>,
     pub labels: FxHashMap<DeclId, JumpDest>,
     /// The labels of the enclosing lexical scopes with cleanups (clang
@@ -234,6 +238,7 @@ impl Fx {
             sig: None,
             is_main: false,
             naked: false,
+            thunk: false,
             jumps: Vec::new(),
             labels: FxHashMap::default(),
             lex_labels: Vec::new(),
@@ -365,6 +370,7 @@ impl Cg<'_> {
         self.f.decl = Some(d);
         self.f.func = Some(f);
         self.f.is_main = is_main;
+        self.f.thunk = thunk.is_some();
         self.f.naked = thunk.is_none() && self.has_fn_attr(d, kiln_ast::attr::AttrKind::NAKED);
         self.f.sig = Some(sig.clone());
         // clang `StartFunction`: `min_vector_width(N)` raises the start.

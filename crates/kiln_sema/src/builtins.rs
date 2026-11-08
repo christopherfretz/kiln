@@ -508,13 +508,19 @@ impl Sema<'_, '_> {
     /// with C language linkage, named in the table and with the row's type
     /// ignoring the exception specification; WP-419: and declared at the
     /// `-fclang-compat` level and in the dialect ([`builtin::lib_min_compat`],
-    /// [`builtin::lib_gnu_only`]).
+    /// [`builtin::lib_gnu_only`]). WP-808: none under [`Sema::no_builtin`],
+    /// and not one named by a `-fno-builtin-<name>` (clang
+    /// `Builtin::Context::initializeBuiltins`).
     pub(crate) fn lib_builtin_info(&mut self, f: DeclId) -> Option<builtin::Info> {
-        if self.kind_of(f) != DeclKind::Function {
+        if self.kind_of(f) != DeclKind::Function || self.no_builtin {
             return None;
         }
         let name = self.ast.decls.get(f).name().as_ident()?;
-        let info = builtin::lib_by_name(self.ast.symbols().as_str(name)).copied()?;
+        let name = self.ast.symbols().as_str(name);
+        if self.no_builtin_fns.binary_search_by(|n| n.as_str().cmp(name)).is_ok() {
+            return None;
+        }
+        let info = builtin::lib_by_name(name).copied()?;
         if builtin::lib_min_compat(info.id) > self.clang_compat
             || (builtin::lib_gnu_only(info.id) && !self.gnu)
         {

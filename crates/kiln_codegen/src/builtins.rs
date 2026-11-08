@@ -346,7 +346,9 @@ impl Cg<'_> {
     /// `std` (through inline namespaces) with one non-variadic parameter of
     /// reference type, returning a reference or pointer to the same type up
     /// to qualifiers. A call of one is the address of its argument's
-    /// lvalue; the function itself is not referenced.
+    /// lvalue; the function itself is not referenced. Not under
+    /// `-fno-builtin`, nor `-fno-builtin-std-<name>` (clang
+    /// `isNoBuiltinFunc`; WP-808).
     pub(crate) fn is_std_builtin(&self, d: DeclId) -> bool {
         const NAMES: [&str; 7] = [
             "move",
@@ -358,8 +360,11 @@ impl Cg<'_> {
             "__addressof",
         ];
         let ast = self.ast;
-        if ast.decls.get(d).kind() != DeclKind::Function || !NAMES.iter().any(|n| self.in_std(d, n))
-        {
+        if ast.decls.get(d).kind() != DeclKind::Function || self.opts.no_builtin {
+            return false;
+        }
+        let Some(name) = NAMES.iter().find(|n| self.in_std(d, n)) else { return false };
+        if self.opts.no_builtin_fns.iter().any(|n| n.strip_prefix("std-") == Some(*name)) {
             return false;
         }
         let Some(fty) = ast.decls.get(d).ty() else { return false };

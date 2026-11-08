@@ -19,6 +19,10 @@ sema_new_incomplete_type = Error (1) "allocation of incomplete type {0}";
 // clang: an ExtWarn with no group (kiln prints ExtWarn as -Wpedantic).
 sema_new_paren_array_nonconst = Warning (0) "when type is in parentheses, array cannot have dynamic size";
 sema_new_reference_type = Error (1) "cannot allocate reference type {0} with new";
+sema_no_builtin_defaulted_deleted = Error (1) "{0} attribute has no effect on defaulted or deleted functions";
+sema_no_builtin_invalid_name = Warning [InvalidNoBuiltinNames] (2) "'{0}' is not a valid builtin name for {1}";
+sema_no_builtin_non_definition = Error (1) "{0} attribute is permitted on definitions only";
+sema_no_builtin_wildcard_with_name = Error (1) "empty {0} cannot be composed with named ones";
 sema_no_call_operator = Error (1) "type {0} does not provide a call operator";
 sema_no_declarators = ExtWarn [MissingDeclarations] (0) "declaration does not declare anything";
 sema_no_declarators_error = Error (0) "declaration does not declare anything";

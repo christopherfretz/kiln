@@ -49,6 +49,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::SECTION => "section",
         AttrKind::ANALYZER_NORETURN => "analyzer_noreturn",
         AttrKind::DISABLE_TAIL_CALLS => "disable_tail_calls",
+        AttrKind::NO_BUILTIN => "no_builtin",
         AttrKind::CONST => "const",
         AttrKind::PURE => "pure",
         AttrKind::COLD => "cold",
@@ -402,6 +403,78 @@ impl Sema<'_, '_> {
             self.check_decl_attr(d, kind, node)
         });
         self.unify_fn_section(d, attrs);
+        self.check_no_builtin_attrs(d, attrs);
+    }
+
+    /// The `no_builtin` attributes of function declaration `d` (clang
+    /// `handleNoBuiltinAttr`, WP-808): each adds its names to those before
+    /// it on the declaration, and a wildcard among more than one name is
+    /// an error at the declaration's name, each time; one attribute with
+    /// the union stays, at the last one's location. The declaration then
+    /// waits for its definition ([`Sema::no_builtin_pending`]).
+    fn check_no_builtin_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        if !attrs.iter().any(|&a| self.ast.attrs.get(a).kind == AttrKind::NO_BUILTIN) {
+            return;
+        }
+        let mut names: Vec<String> = Vec::new();
+        let mut last: Option<AttrNode> = None;
+        let name_loc = self.ast.decls.get(d).loc();
+        attrs.retain(|&a| {
+            let node = *self.ast.attrs.get(a);
+            if node.kind != AttrKind::NO_BUILTIN {
+                return true;
+            }
+            let joined = self.ast.symbols().as_str(Symbol::from_index(node.a)).to_owned();
+            names.extend(joined.split(',').filter(|n| !n.is_empty()).map(str::to_owned));
+            names.sort();
+            names.dedup();
+            if names.len() > 1 && names.iter().any(|n| n == "*") {
+                let msg = self
+                    .diag(DiagId::sema_no_builtin_wildcard_with_name, name_loc)
+                    .arg("'no_builtin'");
+                self.emit(msg);
+            }
+            last = Some(node);
+            false
+        });
+        let Some(mut node) = last else { return };
+        node.a = self.intern(&names.join(",")).index();
+        attrs.push(self.ast.attrs.push(node));
+        self.no_builtin_pending.push((d, node.loc));
+    }
+
+    /// The `no_builtin` attribute of function `f` met its body (`{`), or
+    /// `= default` / `= delete` (`defaulted`): clang's "has no effect on
+    /// defaulted or deleted functions" for the latter (WP-808).
+    pub(crate) fn no_builtin_defined(&mut self, f: DeclId, defaulted: bool) {
+        if self.no_builtin_pending.is_empty() {
+            return;
+        }
+        let Some(i) = self.no_builtin_pending.iter().position(|&(g, _)| g == f) else { return };
+        let (_, loc) = self.no_builtin_pending.swap_remove(i);
+        if defaulted {
+            let msg = self.diag(DiagId::sema_no_builtin_defaulted_deleted, loc).arg("no_builtin");
+            self.emit(msg);
+        }
+    }
+
+    /// The end of the unit: a `no_builtin` attribute still waiting is on a
+    /// declaration that is not a definition (clang
+    /// `err_attribute_no_builtin_on_non_definition`; WP-808).
+    pub(crate) fn report_no_builtin_declarations(&mut self) {
+        let mut pending = std::mem::take(&mut self.no_builtin_pending);
+        // An instantiation repeats its pattern's attribute (diagnosed
+        // there), and a definition reached without the parser's `{`
+        // (an instantiated body) is one.
+        pending.retain(|&(d, _)| {
+            self.ast.instantiated_from(d).is_none() && self.ast.definition(d) != Some(d)
+        });
+        pending.sort_by_key(|&(_, l)| l);
+        pending.dedup_by_key(|&mut (_, l)| l);
+        for (_, loc) in pending {
+            let msg = self.diag(DiagId::sema_no_builtin_non_definition, loc).arg("no_builtin");
+            self.emit(msg);
+        }
     }
 
     /// One attribute of [`Sema::check_decl_attrs`]; false drops it.
@@ -558,6 +631,9 @@ impl Sema<'_, '_> {
                 "optnone",
                 "functions and Objective-C methods",
             ),
+            AttrKind::NO_BUILTIN if !kind.is_function() => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, "no_builtin", "functions")
+            }
             AttrKind::DISABLE_TAIL_CALLS if !kind.is_function() => wrong(
                 self,
                 DiagId::sema_attribute_wrong_decl_type,
