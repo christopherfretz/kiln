@@ -59,6 +59,8 @@ enum Lk {
     Return,
     /// The right operand of an assignment.
     Assign,
+    /// The initializer of a new-expression (clang `LK_New`).
+    New,
 }
 
 /// How a local is referred to (clang `ReferenceKind`).
@@ -219,10 +221,19 @@ const STD_LIFETIMEBOUND: [&str; 7] =
 impl Sema<'_, '_> {
     /// The lifetime check of variable `v` initialized by `init` (clang
     /// `checkExprLifetime` for an `EK_Variable` entity and the members
-    /// and elements of its aggregate initializer).
+    /// and elements of its aggregate initializer). `v` may be implicit:
+    /// a for-range `__range` variable, or a structured binding's holding
+    /// variable.
     pub(crate) fn check_var_lifetime(&mut self, v: DeclId, init: ExprId) {
-        if self.ast.decls.get(v).flags().contains(DeclFlags::IMPLICIT)
-            || self.expr_is_type_dependent(init)
+        if self.expr_is_type_dependent(init) {
+            return;
+        }
+        // P2718: the temporaries of a for-range-initializer live as long
+        // as `__range` (clang 22; clang 19 still warns).
+        if self.range_lifetime_extension
+            && self.clang_compat >= 22
+            && self.ast.decls.get(v).flags().contains(DeclFlags::IMPLICIT)
+            && self.ast.decls.var(v).is_some_and(|x| x.spec.is_cxx_for_range())
         {
             return;
         }
@@ -255,6 +266,30 @@ impl Sema<'_, '_> {
             return;
         }
         self.check_entity(Cx::new(Lk::MemInit, Some(field)), init, ty, 0);
+    }
+
+    /// The lifetime check of a base-class mem-initializer `init` of type
+    /// `ty` (clang `EK_Base`): only the members of an aggregate base
+    /// initialized by braces are judged, each as its own mem-initialized
+    /// field; a temporary bound by the base object as a whole is not
+    /// diagnosed (clang's FIXME). A delegating initializer initializes a
+    /// non-aggregate and is not checked at all.
+    pub(crate) fn check_base_init_lifetime(&mut self, init: ExprId, ty: QualType) {
+        if self.expr_is_type_dependent(init) || self.ast.types.is_dependent(ty) {
+            return;
+        }
+        self.check_entity(Cx::new(Lk::MemInit, None), init, ty, 0);
+    }
+
+    /// The lifetime check of the initializer `init` of a new-expression
+    /// allocating `ty` (clang `LK_New`): a temporary bound to a reference
+    /// member or an `std::initializer_list` of the allocated object dies
+    /// at the end of the full-expression.
+    pub(crate) fn check_new_lifetime(&mut self, init: ExprId, ty: QualType) {
+        if self.expr_is_type_dependent(init) || self.ast.types.is_dependent(ty) {
+            return;
+        }
+        self.check_entity(Cx::new(Lk::New, None), init, ty, 0);
     }
 
     /// The lifetime check of the assignment `lhs = rhs` (built-in, or a
@@ -304,18 +339,26 @@ impl Sema<'_, '_> {
             }
             return;
         }
-        let elem = |s: &Self, cx: &Cx| {
+        // An element is a subobject of the entity; the members of a
+        // base class's aggregate initializer are mem-initialized fields of
+        // their own (clang `getEntityLifetime` for `EK_Base`).
+        let elem = |cx: &Cx, field: Option<DeclId>| {
             let mut n = Cx::new(cx.lk, cx.extending);
-            n.has_parent = true;
+            if cx.lk == Lk::MemInit && cx.extending.is_none() {
+                n.extending = field;
+            } else {
+                n.has_parent = true;
+            }
             n.lhs = cx.lhs;
-            let _ = s;
             n
         };
         if self.ast.types.is_array(lty) {
             let ety = self.ast.types.element(lty).unwrap_or(QualType::ERROR);
-            for x in inits {
-                let n = elem(self, &cx);
-                self.check_entity(n, x, ety, depth + 1);
+            // The array filler initializes the remaining elements, once.
+            let filler = self.ast.exprs.init_list(e).array_filler;
+            for x in inits.into_iter().chain(filler) {
+                let n = elem(&cx, None);
+                self.check_element(n, x, ety, depth);
             }
             return;
         }
@@ -323,7 +366,7 @@ impl Sema<'_, '_> {
         if let Some(f) = self.ast.exprs.init_list(e).union_field {
             if let Some(&x) = inits.first() {
                 let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-                let n = elem(self, &cx);
+                let n = elem(&cx, Some(f));
                 self.check_element(n, x, fty, depth);
             }
             return;
@@ -333,23 +376,29 @@ impl Sema<'_, '_> {
             self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
         let fields = self.init_fields(r);
         for (i, &x) in inits.iter().enumerate() {
-            let ety = if i < bases.len() {
-                bases[i]
+            let (ety, field) = if i < bases.len() {
+                (bases[i], None)
             } else if let Some(&f) = fields.get(i - bases.len()) {
-                self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR)
+                (self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR), Some(f))
             } else {
                 break;
             };
-            let n = elem(self, &cx);
+            let n = elem(&cx, field);
             self.check_element(n, x, ety, depth);
         }
     }
 
     /// One element of an aggregate initializer. A default member
-    /// initializer used by it is not checked (clang's `ShouldExtend`
-    /// paths, spec/sema-class.md §5.6).
+    /// initializer used by a variable's initializer extends its
+    /// temporaries in clang 20+ and is not checked there; clang 19 warns
+    /// that the extension is unsupported (its `ShouldExtend` paths,
+    /// spec/sema-class.md §5.6). One used by a mem-initializer or a
+    /// new-expression is checked as any other element.
     fn check_element(&mut self, cx: Cx, x: ExprId, ety: QualType, depth: u32) {
-        if self.ast.exprs.get(x).kind() == ExprKind::CXXDefaultInitExpr {
+        if cx.lk == Lk::Extended
+            && self.clang_compat >= 20
+            && self.ast.exprs.get(x).kind() == ExprKind::CXXDefaultInitExpr
+        {
             return;
         }
         self.check_entity(cx, x, ety, depth + 1);
@@ -470,6 +519,18 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The true and false operands of a conditional operator; a GNU
+    /// `?:`'s true operand is the opaque common operand, which is not
+    /// followed (clang `AbstractConditionalOperator`).
+    fn lt_cond_arms(&self, e: ExprId) -> [ExprId; 2] {
+        if self.ast.exprs.get(e).kind() == ExprKind::BinaryConditionalOperator {
+            let [_, _, t, f] = self.ast.exprs.binary_conditional_operands(e, &self.ast.lists);
+            [t, f]
+        } else {
+            self.ast.exprs.cond_arms(e)
+        }
+    }
+
     fn is_glvalue(&self, e: ExprId) -> bool {
         self.ast.exprs.get(e).value_category().is_glvalue()
     }
@@ -576,8 +637,8 @@ impl Sema<'_, '_> {
                 let s = self.ast.exprs.operand(init);
                 self.by_init(cx, s, true, vis, lw);
             }
-            ExprKind::ConditionalOperator => {
-                for arm in self.ast.exprs.cond_arms(init) {
+            ExprKind::ConditionalOperator | ExprKind::BinaryConditionalOperator => {
+                for arm in self.lt_cond_arms(init) {
                     if !self.ast.types.is_void(self.ast.exprs.get(arm).ty()) {
                         self.by_ref(cx, arm, rk, vis, lw);
                     }
@@ -722,8 +783,8 @@ impl Sema<'_, '_> {
                     self.by_init(cx, r, true, vis, lw);
                 }
             }
-            ExprKind::ConditionalOperator => {
-                for arm in self.ast.exprs.cond_arms(init) {
+            ExprKind::ConditionalOperator | ExprKind::BinaryConditionalOperator => {
+                for arm in self.lt_cond_arms(init) {
                     if !self.ast.types.is_void(self.ast.exprs.get(arm).ty()) {
                         self.by_init(cx, arm, true, vis, lw);
                     }
@@ -924,28 +985,42 @@ impl Sema<'_, '_> {
                     // Extended by `extend_temporaries`; its own
                     // temporaries are walked too.
                     PathKind::Extend => return true,
-                    // A default member initializer's temporary (clang's
-                    // unsupported lifetime extension): not diagnosed.
-                    PathKind::ShouldExtend => return false,
-                    PathKind::NoExtend => {}
+                    // A default member initializer's temporary: clang 20+
+                    // extends it, clang 19 warns the extension is
+                    // unsupported.
+                    PathKind::ShouldExtend => {
+                        if self.clang_compat >= 20 {
+                            return false;
+                        }
+                        // Every member using one shares the location of
+                        // the braces; each is diagnosed.
+                        self.diag(DiagId::sema_unsupported_lifetime_extension, at)
+                            .arg(rk as u8)
+                            .allow_duplicate()
+                    }
+                    PathKind::NoExtend => {
+                        if cx.contains_init() {
+                            return false;
+                        }
+                        let Some(v) = cx.extending else { return false };
+                        self.dangling_variable_diag(cx, v, rk, at)
+                    }
                 }
-                if cx.contains_init() {
+            }
+            Lk::New => {
+                if !is_mte {
+                    // The allocation may outlive a local.
                     return false;
                 }
-                let Some(v) = cx.extending else { return false };
-                match rk {
-                    Rk::Ref => {
-                        let id = if cx.has_parent {
-                            DiagId::sema_dangling_variable_member
-                        } else {
-                            DiagId::sema_dangling_variable
-                        };
-                        self.diag(id, at).arg(u8::from(cx.init_glvalue)).arg(self.decl_arg(v))
+                if gsl_temp {
+                    self.diag(DiagId::sema_dangling_lifetime_pointer, at)
+                } else {
+                    match rk {
+                        Rk::Ref => self.diag(DiagId::sema_new_dangling_reference, at),
+                        Rk::InitList => self
+                            .diag(DiagId::sema_new_dangling_initializer_list, at)
+                            .arg(u8::from(!cx.has_parent)),
                     }
-                    Rk::InitList => self
-                        .diag(DiagId::sema_dangling_init_list, at)
-                        .arg(u8::from(!cx.has_parent))
-                        .arg(self.decl_arg(v)),
                 }
             }
             Lk::Assign => {
@@ -1061,9 +1136,14 @@ impl Sema<'_, '_> {
                     let Some(v) = p.d else { continue };
                     let d = self.ast.decls.get(v);
                     let is_ref = self.ast.types.is_reference(d.ty().unwrap_or(QualType::ERROR));
-                    self.diag(DiagId::note_local_var_init, d.loc())
-                        .arg(u8::from(is_ref))
-                        .arg(self.decl_arg(v))
+                    if d.flags().contains(DeclFlags::IMPLICIT) {
+                        self.diag(DiagId::note_local_var_init_implicit, d.loc())
+                            .arg(u8::from(is_ref))
+                    } else {
+                        self.diag(DiagId::note_local_var_init, d.loc())
+                            .arg(u8::from(is_ref))
+                            .arg(self.decl_arg(v))
+                    }
                 }
                 Ek::LambdaCaptureInit => {
                     let Some((cap, _)) = p.cap else { continue };
@@ -1092,6 +1172,32 @@ impl Sema<'_, '_> {
             self.emit(msg.per_instantiation());
         }
         false
+    }
+
+    /// clang `warn_dangling_variable` for a temporary bound to variable
+    /// `v` (or a subobject of it); an implicit variable is not named.
+    fn dangling_variable_diag(
+        &self,
+        cx: &Cx,
+        v: DeclId,
+        rk: Rk,
+        at: Loc,
+    ) -> kiln_diag::Diag {
+        let implicit = self.ast.decls.get(v).flags().contains(DeclFlags::IMPLICIT);
+        let id = match (rk, cx.has_parent, implicit) {
+            (Rk::Ref, true, false) => DiagId::sema_dangling_variable_member,
+            (Rk::Ref, false, false) => DiagId::sema_dangling_variable,
+            (Rk::Ref, true, true) => DiagId::sema_dangling_variable_member_implicit,
+            (Rk::Ref, false, true) => DiagId::sema_dangling_variable_implicit,
+            (Rk::InitList, _, false) => DiagId::sema_dangling_init_list,
+            (Rk::InitList, _, true) => DiagId::sema_dangling_init_list_implicit,
+        };
+        let sel = match rk {
+            Rk::Ref => u8::from(cx.init_glvalue),
+            Rk::InitList => u8::from(!cx.has_parent),
+        };
+        let msg = self.diag(id, at).arg(sel);
+        if implicit { msg } else { msg.arg(self.decl_arg(v)) }
     }
 
     /// clang `visitLifetimeBoundArguments`: a call's result refers to

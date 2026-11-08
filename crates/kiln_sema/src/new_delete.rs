@@ -605,6 +605,11 @@ impl Sema<'_, '_> {
         } else {
             match self.new_initializer(elem, array_form, first, const_bound, init, tid.loc) {
                 Ok((e, completed)) => {
+                    // [expr.new]/24 (spec/sema-class.md §5.6).
+                    if let Some(x) = e {
+                        let ty = self.ast.exprs.get(x).ty();
+                        self.check_new_lifetime(x, ty);
+                    }
                     if let Some(n) = completed {
                         let size_t = self.size_type();
                         array_size =

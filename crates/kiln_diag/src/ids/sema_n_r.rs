@@ -14,6 +14,8 @@ sema_new_array_of_auto = Error (0) "cannot allocate array of 'auto'";
 sema_new_array_size_unknown = Error (0) "array size must be specified in new expression with no initializer";
 sema_new_auto_multiple_args = Error (1) "new expression for type {0} contains multiple constructor arguments";
 sema_new_auto_requires_ctor_arg = Error (1) "new expression for type {0} requires a constructor argument";
+sema_new_dangling_initializer_list = Warning [DanglingInitializerList] (1) "array backing {0:initializer list subobject of the allocated object|the allocated initializer list} will be destroyed at the end of the full-expression";
+sema_new_dangling_reference = Warning [DanglingField] (0) "temporary bound to reference member of allocated object will be destroyed at the end of the full-expression";
 sema_new_function_type = Error (1) "cannot allocate function type {0} with new";
 sema_new_incomplete_type = Error (1) "allocation of incomplete type {0}";
 // clang: an ExtWarn with no group (kiln prints ExtWarn as -Wpedantic).
