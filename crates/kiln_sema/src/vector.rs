@@ -94,6 +94,9 @@ impl Sema<'_, '_> {
             }
             AttrKind::NONNULL => ControlFlow::Break(self.nonnull_attribute(syntax, args, loc)),
             AttrKind::FORMAT => ControlFlow::Break(self.format_attribute(syntax, args, loc)),
+            AttrKind::CONSTRUCTOR | AttrKind::DESTRUCTOR => {
+                ControlFlow::Break(self.ctor_dtor_attribute(kind, syntax, args, loc))
+            }
             _ => ControlFlow::Continue(()),
         }
     }

@@ -70,6 +70,8 @@ fn takes_expr_args(name: &str) -> bool {
             | "ifunc"
             | "section"
             | "analyzer_noreturn"
+            | "constructor"
+            | "destructor"
     )
 }
 

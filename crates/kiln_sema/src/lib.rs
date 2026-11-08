@@ -33,6 +33,7 @@ pub mod constfold;
 mod contracts;
 pub mod conv;
 mod coroutine;
+mod ctor_attr;
 pub mod decl;
 mod decl_attrs;
 pub mod declspec;

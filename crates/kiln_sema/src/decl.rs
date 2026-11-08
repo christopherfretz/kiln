@@ -10922,6 +10922,9 @@ fn attr_kind_of(
         ("naked", _, true) => AttrKind::NAKED,
         ("may_alias", _, true) => AttrKind::MAY_ALIAS,
         ("init_priority", _, true) => AttrKind::INIT_PRIORITY,
+        // clang `GCC<"constructor">` / `GCC<"destructor">` (WP-807).
+        ("constructor", _, true) => AttrKind::CONSTRUCTOR,
+        ("destructor", _, true) => AttrKind::DESTRUCTOR,
         ("visibility", _, true) => AttrKind::VISIBILITY,
         // clang `Clang<"type_visibility">`.
         ("type_visibility", _, _) if gnu_syntax || clang_scope => AttrKind::TYPE_VISIBILITY,

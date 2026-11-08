@@ -225,6 +225,19 @@ impl Substituter<'_, '_, '_> {
                     continue;
                 }
             }
+            if node.flags & AttrNode::PRIORITY_DEPENDENT != 0
+                && matches!(node.kind, AttrKind::CONSTRUCTOR | AttrKind::DESTRUCTOR)
+            {
+                // clang 22 `instantiateDependentConstructorAttr` (WP-807).
+                let Some(e) = ExprId::from_raw(node.a) else { continue };
+                let Ok(es) = self.expand_exprs(&[e]) else { continue };
+                if let [e] = es[..]
+                    && let Some(n) = self.sema.instantiate_ctor_dtor_priority(node, e)
+                {
+                    out.push(self.sema.ast.attrs.push(n));
+                }
+                continue;
+            }
             if matches!(node.kind, AttrKind::ENABLE_IF | AttrKind::DIAGNOSE_IF) {
                 // Its condition names the instantiation's parameters.
                 if let Some(n) = self.enable_if_cond(spec, def, node) {

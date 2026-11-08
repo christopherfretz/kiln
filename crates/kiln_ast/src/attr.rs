@@ -225,6 +225,18 @@ impl AttrKind {
     /// debug information treats calls to it as one unit. kiln emits no
     /// debug information, so it has no effect on the IR (WP-789).
     pub const ARTIFICIAL: AttrKind = AttrKind(185);
+    /// GNU `constructor` / `constructor(N)` on a function (clang
+    /// `ConstructorAttr`): the definition is called before `main` from
+    /// `@llvm.global_ctors` at priority `a` (65535 when none is written).
+    /// As written (before `check_decl_attrs`) `a` is the raw `ExprId` of
+    /// the first argument (0: none) and `b` the argument count; with
+    /// [`AttrNode::PRIORITY_DEPENDENT`] `a` stays the value-dependent
+    /// expression, evaluated at instantiation (WP-807).
+    pub const CONSTRUCTOR: AttrKind = AttrKind(190);
+    /// GNU `destructor` / `destructor(N)` (clang `DestructorAttr`): as
+    /// [`AttrKind::CONSTRUCTOR`], through `@llvm.global_dtors`, after
+    /// `main` returns or `exit` is called (WP-807).
+    pub const DESTRUCTOR: AttrKind = AttrKind(191);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
@@ -443,6 +455,10 @@ impl AttrNode {
     /// (`[[clang::fallthrough]]`, `[[gnu::fallthrough]]`), so not a C++17
     /// extension before C++17 (clang `handleFallThroughAttr`).
     pub const FALLTHROUGH_SCOPED: u8 = 4;
+    /// `constructor(N)` / `destructor(N)` flag (bit 2): `N` is
+    /// value-dependent (clang 22 accepts it; clang 19 rejects it), so `a`
+    /// is the expression, checked when the function is instantiated.
+    pub const PRIORITY_DEPENDENT: u8 = 4;
     /// Flag (bit 3, any kind): written with the `gnu::` attribute scope
     /// (`[[gnu::noreturn]]`). With `AttrSyntax::Gnu` it selects the GNU
     /// spelling of `NODISCARD` (`warn_unused_result`) and `NORETURN`, and

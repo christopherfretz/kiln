@@ -72,6 +72,8 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::NAKED => "naked",
         AttrKind::MAY_ALIAS => "may_alias",
         AttrKind::INIT_PRIORITY => "init_priority",
+        AttrKind::CONSTRUCTOR => "constructor",
+        AttrKind::DESTRUCTOR => "destructor",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -388,6 +390,7 @@ impl Sema<'_, '_> {
         self.take_annotations(d, attrs);
         self.check_alignas_subject(d, attrs);
         self.check_init_priority(d, attrs);
+        self.check_ctor_dtor_attrs(d, attrs);
         self.check_visibility_attrs(d, attrs);
         self.check_weak_attrs(d, attrs);
         let kind = self.ast.decls.get(d).kind();
