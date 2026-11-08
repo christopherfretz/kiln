@@ -291,6 +291,11 @@ impl AttrKind {
     /// union is then passed by value as its first field (clang
     /// `useFirstFieldIfTransparentUnion`). Kept on the union only then.
     pub const TRANSPARENT_UNION: AttrKind = AttrKind(197);
+    /// GNU / Microsoft `selectany` on a variable with external linkage
+    /// (clang `SelectAnyAttr`, WP-809): its definition is `weak_odr` in a
+    /// comdat of its own, so definitions in several translation units
+    /// fold into one object.
+    pub const SELECTANY: AttrKind = AttrKind(198);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

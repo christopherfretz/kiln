@@ -6477,6 +6477,8 @@ impl Sema<'_, '_> {
             self.check_static_tls(v, None);
             self.check_constinit(v);
             self.unify_var_section(v);
+        } else {
+            self.check_selectany_extern(v);
         }
         self.check_consteval_only_var(v);
     }
@@ -11108,6 +11110,7 @@ fn attr_kind_of(
         ("musttail", _, _) if gnu_syntax || clang_scope => AttrKind::MUSTTAIL,
         // clang `GCC<"transparent_union">`, C-only (WP-809).
         ("transparent_union", _, true) => AttrKind::TRANSPARENT_UNION,
+        ("selectany", _, true) => AttrKind::SELECTANY,
         // clang `GCC<"common">`, rejected in C++ (WP-807).
         ("common", _, true) => AttrKind::COMMON,
         // clang `Clang<"internal_linkage">` (WP-807).

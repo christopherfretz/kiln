@@ -83,6 +83,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::RETURNS_TWICE => "returns_twice",
         AttrKind::MUSTTAIL => "musttail",
         AttrKind::TRANSPARENT_UNION => "transparent_union",
+        AttrKind::SELECTANY => "selectany",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -441,6 +442,7 @@ impl Sema<'_, '_> {
         self.check_tls_model_attrs(d, attrs);
         self.check_visibility_attrs(d, attrs);
         self.check_weak_attrs(d, attrs);
+        self.check_selectany_attrs(d, attrs);
         let kind = self.ast.decls.get(d).kind();
         attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);

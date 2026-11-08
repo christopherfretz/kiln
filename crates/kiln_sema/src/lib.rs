@@ -96,6 +96,7 @@ mod reflect_operand;
 mod rtti;
 pub mod scope;
 mod section;
+mod selectany;
 mod self_ref;
 mod side_effects;
 mod splice;

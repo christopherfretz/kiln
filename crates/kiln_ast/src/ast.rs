@@ -685,6 +685,12 @@ impl Ast {
         self.any_redecl_has(d, crate::attr::AttrKind::OVERLOADABLE)
     }
 
+    /// WP-809: some declaration of variable `d` is `selectany` (clang
+    /// `SelectAnyAttr`, inherited by its redeclarations).
+    pub fn is_selectany(&self, d: DeclId) -> bool {
+        self.any_redecl_has(d, crate::attr::AttrKind::SELECTANY)
+    }
+
     /// Whether some declaration of `d` carries `attr`.
     fn any_redecl_has(&self, d: DeclId, attr: crate::attr::AttrKind) -> bool {
         self.redecls_of(d).any(|r| {
