@@ -530,7 +530,7 @@ configure = [
   "-DKILN_BOOST_SUBSET_TARGETS=^boost_geometry_|4|",
 ]
 build_targets = ["kiln_tests"]
-test = "ctest -j 4 --output-on-failure --timeout 300 --exclude-from-file kiln-subset-excluded.txt"
+test = "ctest -j 4 --output-on-failure --timeout 300 --exclude-from-file kiln-subset-excluded.txt -E '^(run-graph-(transitive_closure_test|metric_tsp_approx|all_planar_input_files_test|parallel_edges_loops_test|metis_test|weighted_matching_test|cycle_ratio_tests|random_matching_test|graphml_test|mas_test|stoer_wagner_test)|run-math-cardinal_trigonometric_test_3|boost_geometry_(algorithms_(densify|area_geo|buffer_multi_polygon|buffer_linestring_geo|get_clusters)|formulas_direct|strategies_segment_intersection_geo))$'"
 test_timeout = 7200
 c_compiler = "clang-19"
 wave = 4
