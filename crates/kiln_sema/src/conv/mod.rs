@@ -1035,7 +1035,10 @@ fn drops_quals_error(dropped: Quals, strs: (String, String)) -> ConvError {
     let plural = if names.len() > 1 { "1" } else { "0" };
     let quoted = format!("'{}'", names.join(" "));
     let (to_str, from_str) = strs;
-    ConvError::new(DiagId::sema_reference_bind_drops_quals, vec![to_str, from_str, quoted, plural.into()])
+    ConvError::new(
+        DiagId::sema_reference_bind_drops_quals,
+        vec![to_str, from_str, quoted, plural.into()],
+    )
 }
 
 /// Binds a reference to the temporary materialized from the

@@ -281,7 +281,11 @@ pub(crate) fn function_ref_compatible(
 /// needs the same `P_i` at every level; `None` otherwise.
 /// clang `CompareReferenceRelationship`'s qualification loop, where the
 /// top level takes part in the "const at every level above" rule.
-pub(crate) fn similar_ref_relation(s: &mut Sema<'_, '_>, t1: QualType, t2: QualType) -> Option<bool> {
+pub(crate) fn similar_ref_relation(
+    s: &mut Sema<'_, '_>,
+    t1: QualType,
+    t2: QualType,
+) -> Option<bool> {
     let (c1, c2) = (s.ast.types.canonical(t1), s.ast.types.canonical(t2));
     if !similar(s, c1, c2) {
         return None;
