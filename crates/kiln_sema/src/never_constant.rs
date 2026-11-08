@@ -150,6 +150,9 @@ impl Sema<'_, '_> {
         !fail.notes.is_empty()
             && !fail.notes.iter().any(|n| {
                 n.msg.starts_with("in call to ")
+                    // An oven gap ("kiln: ... is not supported yet") is
+                    // not proof the body never produces a constant.
+                    || n.msg.starts_with("kiln: ")
                     || n.msg.contains("uninitialized")
                     || n.msg.contains("was not deallocated")
                     || n.msg.starts_with("initializer of ")
@@ -343,7 +346,18 @@ impl Sema<'_, '_> {
                     let field = ex.default_init_field(e);
                     self.ast.decls.field(field).and_then(|fd| fd.init).into_iter().collect()
                 } else {
-                    ex.children(e, &self.ast.lists)
+                    let mut ops = ex.children(e, &self.ast.lists);
+                    if matches!(kind, ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr)
+                        && self.is_direct_callee(ex.callee(e))
+                    {
+                        // A named function is the callee, never a value
+                        // the call reads: clang evaluates a direct callee
+                        // without forming a pointer, so neither a
+                        // consteval function nor a builtin is a failure.
+                        let callee = ex.callee(e);
+                        ops.retain(|&c| c != callee);
+                    }
+                    ops
                 };
                 // Every operand, the first never-constant one deciding.
                 for c in ops {
@@ -355,6 +369,28 @@ impl Sema<'_, '_> {
             }
             _ => Value::Unknown,
         }
+    }
+
+    /// Whether callee `c` names a function directly (a function name,
+    /// possibly parenthesized and decayed to a pointer).
+    fn is_direct_callee(&self, c: ExprId) -> bool {
+        let ex = &self.ast.exprs;
+        let mut c = c;
+        for _ in 0..8 {
+            match ex.get(c).kind() {
+                ExprKind::ImplicitCastExpr | ExprKind::ParenExpr => {
+                    c = ex.children(c, &self.ast.lists)[0];
+                }
+                ExprKind::DeclRefExpr => {
+                    return matches!(
+                        self.kind_of(ex.decl(c)),
+                        DeclKind::Function | DeclKind::CXXMethod
+                    );
+                }
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// `e`, which names an unknown, evaluated on its own: only a success
