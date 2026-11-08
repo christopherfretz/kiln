@@ -679,7 +679,8 @@ impl<'a> Cg<'a> {
         if self.is_explicit_inst_declaration(first) || self.held.contains(&first) {
             return Ok(());
         }
-        if !self.discardable_fn(d) {
+        // clang `DeclMustBeEmitted`: a `used` function is emitted.
+        if !self.discardable_fn(d) || self.has_fn_attr(d, kiln_ast::attr::AttrKind::USED) {
             // A definition owned by an imported named-module unit (its
             // purview or its global module fragment) belongs to that
             // unit's object file (spec/modules.md §7).
@@ -2648,6 +2649,7 @@ impl<'a> Cg<'a> {
             gv.linkage = Linkage::External;
             gv.dso_local = true;
         }
+        self.note_used_attrs(d, gval(g));
         if needs_init || needs_dtor {
             self.emit_var_init_fn(d, g, needs_init)?;
         }

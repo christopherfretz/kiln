@@ -107,10 +107,36 @@ impl Cg<'_> {
     /// [`Cg::destructed_class`], unless `d` has constant destruction
     /// ([expr.const]/7, [`crate::fold::Folds::const_destroyed`]).
     pub(crate) fn var_destructed_class(&self, d: DeclId, q: QualType) -> Option<DeclId> {
-        if self.folds.const_destroyed.contains(&self.ast.first(d)) {
+        if self.folds.const_destroyed.contains(&self.ast.first(d)) || self.is_no_destroy(d) {
             return None;
         }
         self.destructed_class(q)
+    }
+
+    /// clang `VarDecl::isNoDestroy`: variable `d` has static or thread
+    /// storage duration and its destructor is never registered
+    /// (`[[clang::no_destroy]]`, or `-fc++-static-destructors=` excludes
+    /// it and it is not `[[clang::always_destroy]]`; WP-805).
+    pub(crate) fn is_no_destroy(&self, d: DeclId) -> bool {
+        use kiln_ast::attr::AttrKind;
+        let ast = self.ast;
+        let Some(v) = ast.decls.var(d) else { return false };
+        if crate::fold::is_local(ast, d) && !crate::fold::is_static_local(ast, d) {
+            return false;
+        }
+        if self.has_fn_attr(d, AttrKind::NO_DESTROY) {
+            return true;
+        }
+        if self.has_fn_attr(d, AttrKind::ALWAYS_DESTROY) {
+            return false;
+        }
+        match self.opts.static_destructors {
+            crate::StaticDestructors::All => false,
+            crate::StaticDestructors::None => true,
+            crate::StaticDestructors::ThreadLocal => {
+                v.spec.tls() == kiln_ast::decl::TlsKind::None
+            }
+        }
     }
 
     /// Which copy/move special member `f` is (clang
