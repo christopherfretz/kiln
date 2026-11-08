@@ -1,4 +1,4 @@
-# spec: C++20 modules (part A: in-process modules, header units, `import std;`)
+# spec: C++20 modules (part A: in-process modules, header units, `import std;`; part B: module files)
 
 Standard: [module] (module.unit, module.interface, module.import,
 module.global.frag, module.private.frag, module.context, module.reach),
@@ -23,8 +23,11 @@ cost of importing a module is the cost of parsing its source; for
 `import std;` with libc++ 19 that is about the cost of including every
 standard header once.
 
-Part B (a later WP) adds a BMI. The ownership model below is designed so
-that a serialiser can be added without reworking lookup: everything lookup
+Part B (§11, WP-917) adds a module file, so that an interface is compiled
+once and imported by separately compiled TUs; its first format is a
+*source capsule* from which the importer rebuilds the unit exactly as
+above. The ownership model below is designed so that a serialised-AST
+format can be added later without reworking lookup: everything lookup
 and codegen consult is the `kiln_ast::modules::ModuleTable` (units, the
 owner of every declaration, the import graph), which a BMI writer can
 serialise with the AST and a reader can rebuild.
@@ -44,11 +47,13 @@ stays "unsupported".
 
 Module sources are found in this order (spec/driver.md, "Modules"):
 
-1. `-fmodule-file=<name>=<path>`: the interface source for module `<name>`
-   (a partition is named `M:P`). A `-fmodule-file=<path>` without `=` is
-   accepted and ignored (it names a BMI; there is none in part A).
-2. `-fprebuilt-module-path=<dir>` (repeatable, in order): `<dir>/<name>.cppm`,
-   then `.ixx`, then `.cpp`; a partition `M:P` is looked up as `M-P.*`.
+1. `-fmodule-file=<name>=<path>`: the interface source, or the module
+   file (§11), for module `<name>` (a partition is named `M:P`). A
+   `-fmodule-file=<path>` without a name must name a module file, whose
+   header gives the module (§11.6).
+2. `-fprebuilt-module-path=<dir>` (repeatable, in order): `<dir>/<name>.pcm`
+   (§11), then `<dir>/<name>.cppm`, `.ixx`, `.cpp`; a partition `M:P` is
+   looked up as `M-P.*`.
 3. `std` and `std.compat`: `<prefix>/share/libc++/v1/std.cppm` and
    `std.compat.cppm`, where `<prefix>/include/c++/v1` is the libc++ header
    directory `-stdlib=libc++` resolved to (spec/driver.md; symlinks
@@ -437,17 +442,20 @@ part B (§9).
 
 ## 9. Part B hooks
 
-- A BMI writer serialises the AST plus `ModuleTable` for one unit; a reader
-  appends a deserialised unit with fresh `DeclId`s and change points, and
-  its `UnitInfo`; lookup does not change.
-- §6 dedup is replaced by real ODR merging when deserialising.
-- `-fmodule-output`, `--precompile`, and a two-step clang oracle mode in
-  the `cargo xtask test` harness (module initializers are emitted from
-  the in-memory model, §7).
+Part B is §11. Step 1 (WP-917) delivers the source-capsule module file,
+`--precompile`, `-fmodule-output`, module-file `-fmodule-file=` and
+`-fprebuilt-module-path=` lookup, `.pcm` inputs, the mismatch diagnostics
+and the harness's two-step mode (§11.1-§11.8). The serialised-AST format,
+in which a reader appends a unit with fresh `DeclId`s and its `UnitInfo`
+and ODR merging replaces §6 dedup, is step 2 (§11.9), as are dependency
+scanning, CMake and header-unit files.
 
 ## 10. Deviations
 
-1. No BMI; modules are built from source per invocation (§1).
+1. A module file is a source capsule (§11): importing it re-parses the
+   interface unit, so an import costs the unit's parse (clang's BMI is a
+   serialised AST, §11.1). `--precompile` of a unit that is not an
+   importable module unit is an error rather than a PCH (§11.6).
 2. Visibility is not enforced during template instantiation (§5).
 3. Cross-unit merging by source position and length, not by ODR (§6).
 4. (Retired: module initializers are emitted, §7.)
@@ -511,6 +519,300 @@ part B (§9).
     ill-formed, no diagnostic required ([basic.def.odr]/15), so kiln
     conforms; the reference repro is
     `module.global.frag/gmf-merge-importer.cpp`.
+
+## 11. Part B: module files and separate compilation (WP-917)
+
+Part B adds a module file (a *BMI*) so that a module interface is compiled
+once and its importers are compiled separately, with clang's driver
+spellings. Step 1 (this section's §11.1-§11.8, WP-917) is the format, the
+driver and the harness; step 2 (§11.9) is dependency scanning, CMake,
+header-unit files and a serialised-AST format.
+
+### 11.1 Decision: a staged source capsule
+
+The three candidates were: (a) a *source capsule*, the interface unit's
+inputs, from which the importer rebuilds the unit in-process as part A
+does; (b) a serialised AST plus `ModuleTable` (the old §9 plan); (c) (a)
+now, in a format versioned so that (b) can replace it. **kiln takes (c).**
+
+Measured on aarch64 with the `harness` profile (peak RSS from
+`/usr/bin/time -v`):
+
+| run | time | peak RSS |
+|---|---|---|
+| part A: `import std;` + small `main`, `-fsyntax-only` | 1.41 s | 94 MiB |
+| part A: the same, `-c` | 2.04 s | 94 MiB |
+| `std.cppm -fsyntax-only` (the interface alone) | 1.23 s | 90 MiB |
+| `#include <vector>` TU, `-fsyntax-only` | 0.43 s | 32 MiB |
+| clang 19 `--precompile std.cppm` (31.2 MB BMI) | 1.87 s | 261 MiB |
+| clang 19 importing that BMI, `-fsyntax-only` | 0.27 s | 140 MiB |
+
+`std.cppm` reads 1247 files and 8.1 MB of text, so its capsule is about
+8.5 MB, and importing it costs part A's parse plus reading and checking
+8.5 MB: measured in §11.8, within the 1.2x memory budget (the capsule's
+texts move into the source manager, so nothing is held twice). Option (b)
+would bring `import std;` towards clang's 0.27 s, but needs a serialiser
+for every AST node, type, template and constant-evaluator object, and
+makes every later AST change a format change. It is the stage-2 format
+(§11.9), behind the same magic with a different kind byte; the driver,
+the lookup order, the diagnostics and the harness of this section do not
+change when it lands.
+
+A capsule unit is rebuilt by the same `Preprocessor`/`Parser`/`Sema` as
+part A, so everything part A guarantees holds unchanged: ownership and
+visibility (§5), cross-unit dedup (§6), codegen and initializers (§7).
+
+### 11.2 What a capsule holds
+
+A capsule records exactly the inputs of the interface unit's
+preprocessing, so that replaying it is the original compile:
+
+- the module key (`M`, `M:P`) and unit kind (interface, interface
+  partition, implementation partition);
+- the predefines text: the `<built-in>` buffer of the compile that wrote
+  it (`-D`, `-U` and `-include` included), so the unit sees the macros it
+  was built with whatever the importer defines (the isolation [module]
+  requires and clang's BMI has);
+- the flags fingerprint (§11.4) and the kiln version (`CARGO_PKG_VERSION`
+  plus the git sha when the build recorded one);
+- the named-module imports of the unit, each with the path it was found
+  at (a source or a module file);
+- the file table: the path and text of the unit's main file and of every
+  file its preprocessing read (headers, header units nested in it), in
+  first-read order, the main file first;
+- the include log: every `#include`, `#include_next`, `#import`,
+  `__has_include(_next)` and header-unit lookup, keyed by (includer's file
+  index or `<built-in>`, name, `<>`/`""`, kind, `lookup_from`), with its
+  result (file index, `lookup_index`, system, `extern "C"`, path) or "not
+  found";
+- the embed log: every `#embed`/`__has_embed`, keyed by (includer, name,
+  `<>`/`""`, `limit`, `offset`, query-only), with its bytes or "not
+  found".
+
+Recording (`kiln_pp::bmi`, `ModState`). When the driver asks for a module
+file, every resolver call made while the innermost *named-module* unit
+being read is the main unit is logged; header units nested in it are part
+of its capsule, while a named module it imports is not (it has its own
+module file, or is rebuilt from its source as in part A).
+
+Replay. A capsule unit (an import resolved to a module file, or a module
+file given as the main input) gets a *replay resolver* instead of the
+header search: each request is looked up in the include log and answered
+with the logged file. A file is loaded lazily: `load_regular_file(path)`
+is tried first, and when the file on disk still has the recorded text its
+`FileId` is used (so the unit and an importer that includes the same
+header share the `FileId` that §6 dedup and `#pragma once` key on);
+otherwise the recorded text is added as a virtual buffer under the
+recorded path, which keeps the build hermetic when headers have changed or
+moved. The unit enters its own `<built-in>` buffer, holding the recorded
+predefines, instead of the importer's. A request missing from the log
+(possible only for a hand-made file) is "file not found". The resolver of
+the enclosing named-module unit also serves header units nested in a
+capsule unit. Diagnostic suggestions (`missing '#include <h>'`, §5) still
+use the real header search.
+
+A named-module import inside a capsule unit is looked up first through the
+importer's own flags (§11.6) and then at the path the capsule recorded, as
+clang does with the module files a BMI names.
+
+### 11.3 Byte format
+
+All integers are little-endian. A file is:
+
+```
+magic      8 bytes   "KILNBMI\0"
+format     u32       1
+kind       u8        1 = source capsule (2 reserved: serialised AST)
+header     version string, sha string, module key, unit kind (u8)
+body       predefines, fingerprint, imports, files, include log, embed log
+checksum   u64       FNV-1a 64 of every preceding byte
+```
+
+A string is a `u32` byte length and UTF-8; a list is a `u32` count and its
+elements; an optional value is a `u8` tag (0 absent, 1 present) and the
+value; a file index is a `u32` (`0xFFFF_FFFF` is `<built-in>`, `0xFFFF_FFFE`
+no includer).
+
+- **Deterministic.** The same inputs give the same bytes: lists are in
+  first-occurrence order (no hash-map iteration), there is no timestamp,
+  and paths are recorded as the compile spelled them (no
+  canonicalisation). Duplicate log keys are recorded once.
+- **Total reading.** The reader (`bmi::read`, safe Rust) checks the
+  magic, then the checksum over the whole file, then parses with every
+  length and count checked against the bytes that remain before anything
+  is allocated, validates UTF-8 and every file index, and rejects trailing
+  bytes. Any failure is a `BmiError`, reported as a diagnostic (§11.5);
+  nothing user-derived panics. FNV-1a's step is a bijection of its state
+  for a fixed input byte, so changing any single byte always changes the
+  checksum: a flipped byte is always "corrupt", and a truncated file
+  fails the length or checksum check.
+- **Written atomically**: to `<path>.tmp.<pid>` and renamed, so a failed
+  or interrupted compile never leaves a half-written module file. A
+  compile with errors writes no module file (and removes nothing).
+
+The format version changes whenever the layout does; the reader accepts
+only its own. `kiln_pp::bmi` holds the format because a capsule is
+preprocessor input; no new crate is needed. A `kiln_bmi` crate (between
+`kiln_sema` and the driver) comes with the stage-2 format, which
+serialises the AST.
+
+### 11.4 Fingerprint and mismatch diagnostics
+
+The fingerprint is a list of (key, flag spelling) pairs for the options
+that change what the unit means or its ABI, each resolved to its
+effective value: `-std=`, the target triple, `-f[no-]exceptions`,
+`-f[no-]rtti`, the signedness of `char`, `-f[no-]char8_t`,
+`-f[no-]sized-deallocation`, `-ffreestanding`, `-f[no-]reflection`,
+`-fkiln-reflection-mangling=` and `-fclang-compat=`. Options a unit is
+isolated from (`-D`, `-I`, warnings) or that only affect the object file
+(`-O`, `-g`, `-fPIC`) are not part of it.
+
+On import (and for a module file given as the main input), each field
+that differs is an error, then one fatal error, as clang 19/22 do:
+
+```
+error: module file 'm.pcm' was built with '-std=c++20' but the current compilation uses '-std=c++23'
+fatal error: module file 'm.pcm' cannot be loaded due to a configuration mismatch with the current compilation
+```
+
+The other diagnostics, at the import's module name (or without a location
+for a driver input):
+
+| condition | diagnostic |
+|---|---|
+| no module file or source found | `fatal error: module 'M' not found` (§2, unchanged) |
+| `-fmodule-file=` names a missing file | `fatal error: module file 'x.pcm' not found` |
+| the file holds another module | `fatal error: module file 'x.pcm' holds module 'N', not 'M'` |
+| built by another kiln version, or another format version | `fatal error: module file 'x.pcm' was built by kiln V1; this is kiln V2` / `... has format version F, expected 1` |
+| bad checksum, truncated, malformed | `fatal error: module file 'x.pcm' is corrupt: <reason>` |
+| clang's PCM (`CPCH` magic) | `fatal error: module file 'x.pcm' was built by clang; kiln reads only its own module files` |
+| a `.pcm` input that is not a kiln module file | `fatal error: 'x.pcm' is not a kiln module file` |
+
+A capsule is source, so a git-sha difference is harmless and is not
+checked; the sha is shown only in `-v` output.
+
+### 11.5 Ownership and codegen across TUs
+
+Nothing new is needed: §7 already treats a declaration owned by an
+imported named-module unit as clang treats one from a BMI. The interface
+TU's object file (from `-c m.cppm`, or `-c m.pcm`) defines the module
+initializer `_ZGIW...` and every non-inline function and variable with
+module or external linkage, the in-class member definitions of purview
+classes and the purview vtables; an importer declares them and emits only
+inline functions, template specialisations and vtables it needs by the
+vague-linkage rules. §6 dedup works across the capsule boundary because
+the capsule's headers share `FileId`s with the importer's (§11.2); a
+header changed on disk since the module file was written becomes a
+separate virtual buffer, so its declarations are merged by entity (WP-460)
+or diagnosed as redefinitions, which matches clang's ODR checking for that
+case. Module mangling (`W` prefixes, `WP` initializer partitions,
+substitutions) was compared on `export module a.b:part` with namespace,
+class, template, variable and vtable entities: kiln, clang 19 and clang 22
+agree symbol for symbol (`_ZGIW1aW1bWP4part`, `_ZN2nsW1aW1b1S1mEv`,
+`_ZW1aW1b1c`, `_ZW1aW1b2tfIiET_S2_`, `_ZTVN2nsW1aW1b1SE`), so kiln and
+clang objects of one module program link together.
+
+### 11.6 Driver surface
+
+clang's spellings (spec/driver.md, "Modules"):
+
+- `--precompile`: compile a module interface or partition to a module
+  file only (default `<stem>.pcm`, or `-o`). The input must be an
+  importable module unit; anything else is
+  `error: --precompile requires a module interface or partition unit` (clang
+  writes a PCH; kiln has none).
+- `-fmodule-output` / `-fmodule-output=<path>`: with `-c`, `-S`,
+  `-emit-llvm` or a link, also write the module file: to `<path>`,
+  or to the `-o` object path with `.pcm`, or `<stem>.pcm` in the working
+  directory. For a unit that is not importable it is clang's
+  `warning: argument unused during compilation: '-fmodule-output'`.
+- `-fmodule-file=<name>=<path>`: `<path>` may be a module file or, as in
+  part A, a source. A file is a module file when it starts with the magic;
+  otherwise it is a source.
+- `-fmodule-file=<path>`: the module name is read from the file's header
+  (clang 19/22 also accept this form, with
+  `warning: the form '-fmodule-file=<BMI-path>' is deprecated for standard C++ named modules; consider to use '-fmodule-file=<module-name>=<BMI-path>' instead [-Weager-load-cxx-named-modules]`,
+  which kiln gives too). A file that is not a kiln module file is an
+  error. It is never ignored.
+- `-fprebuilt-module-path=<dir>`: `<dir>/<name>.pcm` first (`M-P.pcm`
+  for partition `M:P`), then the sources of §2.
+- A `.pcm` input is compiled from the module file: `-c m.pcm`
+  rebuilds the unit from its capsule and writes its object, as clang does
+  in its two-phase build (libc++'s `format.py` adds `%T/std.pcm` as an
+  input). The fingerprint is checked against the command line.
+- `-x c++-module`, `.cppm`, `.ixx`: a C++ source, as in part A (whether a
+  unit is an interface is decided by its module declaration, not its
+  suffix).
+- `-fmodule-header`, `-fmodule-header=user|system`, `.pcm` header units:
+  step 2 (§11.9); still `error: unsupported option`.
+
+Part A's single invocation (`kiln++ -fmodule-file=m=m.cppm m.cppm
+main.cpp`) is unchanged.
+
+### 11.7 Harness: two-step mode
+
+`cargo xtask test` (spec/harness.md) drives separate compilation for both
+the compiler under test and the clang oracle:
+
+- `module: <name>=<path>` is allowed for `run` tests. Each unit is
+  compiled in listed order, with the earlier units' `-fmodule-file=` flags,
+  to an object and a module file
+  (`-c -fmodule-output=<scratch>/<name>.pcm -o <scratch>/<name>.o`;
+  clang: `--precompile` then `-c` of the `.pcm`), the test file is
+  compiled to an object against the module files, and all objects are
+  linked. A non-inline function defined only in an interface therefore
+  links exactly once or the test fails.
+- `unit: <path>`: an implementation unit (or any other TU) compiled with
+  the same module flags after the module units and linked (`run` only).
+- `two-step`: kiln, too, gets module files in a compile-kind test (it is
+  given sources otherwise, so the existing tests keep testing part A).
+
+### 11.8 Cost of a capsule import
+
+Measured after the implementation landed (harness profile, aarch64), for
+the `import std;` program of §11.1:
+
+Recorded when the implementation lands (WP-917).
+
+### 11.9 Step 2 (follow-up work packages)
+
+- **Dependency scanning and CMake.** CMake 3.28+ identifies kiln as clang
+  (it defines `__clang__`), and for clang 16+ with the GNU front-end
+  variant scans with `${CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS} -format=p1689
+  -- <compiler> <flags> -x c++ <src> -c -o <obj> -MT <ddi> -MD -MF <dep>`,
+  writing P1689r5 JSON to stdout; it finds the scanner with `find_program`
+  for `clang-scan-deps-<major>`, `clang-scan-deps`, hinting the compiler's
+  directory. Its module map is a response file (`@<file>`) of
+  `-fmodule-file=<name>=<bmi>`, `-fmodule-output=<bmi>` and `-x
+  c++-module` lines, and `--precompile` is its BMI-only flag. kiln ships a
+  `kiln-scan-deps` (one binary, dispatching on `argv[0]`, installed also as
+  `clang-scan-deps-<compat major>` beside `kiln++`) that runs kiln's
+  preprocessor on the command after `--` and prints P1689r5
+  (`provides`/`requires`, `is-interface`, `source-path`) plus the make
+  dependency file. If kiln stops identifying as clang to CMake (question
+  Q3), CMake falls back to its GNU rule, `-fdeps-format=p1689r5
+  -fdeps-file=<ddi> -fdeps-target=<obj>` with `-fmodules-ts
+  -fmodule-mapper=` maps, which kiln then implements instead (both are
+  small: the scan is a preprocessor run). A CMake end-to-end test (an
+  interface, a partition, an implementation unit, `import std;`) runs in
+  `cargo xtask` with Ninja.
+- **`import std;` module file.** `kiln++ --precompile -std=c++23
+  <llvm>/share/libc++/v1/std.cppm -o std.pcm` already works through this
+  section's driver; step 2 adds the toolchain-level cache (where a build
+  system or `-fmodules` finds a prebuilt `std.pcm`, keyed by fingerprint),
+  CMake's `CXX_MODULE_STD` support, and the libc++ `format.py`
+  self-tests (§8).
+- **Header units as files.** `-fmodule-header[=user|system]` writes a
+  capsule of kind "header unit" (its exported macros are those of its
+  replay, §3), `-fmodule-file=<hdr.pcm>` imports it, and `import "h";`
+  finds it by the header's path.
+- **Serialised-AST format (kind 2).** A reader that appends a unit's
+  declarations with fresh `DeclId`s and its `UnitInfo`, with ODR merging
+  in place of §6 dedup; lookup does not change (§1). It is also where
+  already-evaluated constant state can be carried (constexpr variable
+  values, consteval results, template instantiations with their oven
+  costs), so importers do not redo compile-time work: kiln's main reason
+  to build it.
 
 ## Tests
 
