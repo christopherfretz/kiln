@@ -16,7 +16,7 @@ use kiln_ast::types::{PrintOptions, Quals, TypeView, aka, print_type, vector_dia
 use kiln_abi::mangle::Structor;
 use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_ast::lambda::CaptureDefault;
-use kiln_ast::{DeclId, ExprId, QualType};
+use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::intrinsics::OverflowOp;
 use kiln_llvm::{
     Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, Flags, FloatPredicate, GlobalId, GlobalSanitizer,
@@ -1481,6 +1481,111 @@ impl Cg<'_> {
         res
     }
 
+    // ---- nonnull family ------------------------------------------------
+
+    /// clang `EmitNonNullArgCheck`: argument `i` (expression `a`, value
+    /// `v`) of a call of `callee` is checked against the `nonnull`
+    /// attribute naming it (clang `getNonNullAttr`: the parameter's own,
+    /// else the function's), when its type is a pointer. A variadic
+    /// argument has no parameter and is named only by the function's
+    /// attribute.
+    pub(crate) fn ub_nonnull_arg(&mut self, callee: DeclId, i: usize, a: ExprId, v: V) -> R<()> {
+        if !self.ub_on(San::NONNULL_ATTRIBUTE) {
+            return Ok(());
+        }
+        let ast = self.ast;
+        let Some(f) = ast.decls.function(callee) else { return Ok(()) };
+        let own: Vec<DeclId> = ast.lists.iter::<DeclId>(f.params).collect();
+        let arg_ty = match own.get(i) {
+            Some(&p) => ast.decls.get(p).ty(),
+            None => Some(ast.exprs.get(a).ty()),
+        };
+        if !arg_ty.is_some_and(|t| ast.types.is_pointer(t)) {
+            return Ok(());
+        }
+        let param_attr = if i < own.len() {
+            self.redecl_params(callee)
+                .iter()
+                .filter_map(|ps| ps.get(i))
+                .find_map(|&p| self.fn_attr(p, kiln_ast::attr::AttrKind::NONNULL))
+        } else {
+            None
+        };
+        let attr = param_attr.or_else(|| {
+            let first = ast.first(callee);
+            let this = u32::from(
+                ast.decls.get(first).kind() == DeclKind::CXXMethod && !self.is_static_method(first),
+            );
+            self.fn_attrs_of(callee, kiln_ast::attr::AttrKind::NONNULL)
+                .into_iter()
+                .find(|n| self.nonnull_covers(n, i, this))
+        });
+        let Some(attr) = attr else { return Ok(()) };
+        let outer = self.ub_begin();
+        let c = self.ub_is_not_null(v);
+        let arg_loc = self.ub_expr_loc(a);
+        let statics = [
+            self.ub_loc(arg_loc)?,
+            self.ub_loc(Some(attr.loc))?,
+            self.m.const_int(LTy::I32, i as i128 + 1),
+        ];
+        let r = self.ub_check(&[(c, San::NONNULL_ATTRIBUTE)], UbHandler::NonnullArg, &statics, &[]);
+        self.ub_end(outer);
+        r
+    }
+
+    /// clang `StartFunction` for `requiresReturnValueCheck`: a
+    /// `returns_nonnull` function `d` keeps the location of the return
+    /// statement taken in `return.sloc.ptr`, null until one runs.
+    pub(crate) fn ub_ret_nonnull_start(&mut self, d: DeclId) {
+        if !self.ub_on(San::RETURNS_NONNULL_ATTRIBUTE) {
+            return;
+        }
+        let Some(a) = self.fn_attr(d, kiln_ast::attr::AttrKind::RETURNS_NONNULL) else { return };
+        let slot = self.f.fir.alloca(LTy::PTR, 8);
+        let z = V::C(self.m.const_null(LTy::PTR));
+        self.store(z, slot, 8, false);
+        self.f.ret_sloc = Some((slot, a.loc));
+    }
+
+    /// clang `EmitReturnStmt`: a checked return stores its own source
+    /// location (a private global) to `return.sloc.ptr`.
+    pub(crate) fn ub_ret_nonnull_stmt(&mut self, s: StmtId) -> R<()> {
+        let Some((slot, _)) = self.f.ret_sloc else { return Ok(()) };
+        let l = self.ub_loc(Some(self.ast.stmts.get(s).loc()))?;
+        let g = self.ub_global(l, false);
+        self.store(V::C(Value::global(g)), slot, 8, false);
+        Ok(())
+    }
+
+    /// clang `EmitReturnValueCheck`: before the `ret`, a return value
+    /// `rv` that a return statement produced is checked non-null. A
+    /// return block emitted without predecessors skips it.
+    pub(crate) fn ub_ret_nonnull_check(&mut self, rv: V) -> R<()> {
+        let Some((slot, attr_loc)) = self.f.ret_sloc else { return Ok(()) };
+        if self.f.ret_block.is_some_and(|rb| self.f.fir.block_uses(rb) == 0) {
+            return Ok(());
+        }
+        let outer = self.ub_begin();
+        let check = self.f.fir.create_block();
+        let no_check = self.f.fir.create_block();
+        let sloc = self.load(LTy::PTR, slot, 8, false);
+        let can = self.ub_is_not_null(sloc);
+        self.f.fir.push(Op::CondBr { c: can, t: check, f: no_check }, LTy::VOID);
+        self.emit_block(check, false);
+        let c = self.ub_is_not_null(rv);
+        let statics = [self.ub_loc(Some(attr_loc))?];
+        let r = self.ub_check(
+            &[(c, San::RETURNS_NONNULL_ATTRIBUTE)],
+            UbHandler::NonnullReturn,
+            &statics,
+            &[sloc],
+        );
+        self.emit_block(no_check, false);
+        self.ub_end(outer);
+        r
+    }
+
     // ---- type checks (null, alignment, object-size) ---------------------
 
     /// clang `sanitizePerformTypeCheck`.
@@ -1529,12 +1634,17 @@ impl Cg<'_> {
 
     /// `icmp ne ptr p, null` as clang's `CreateIsNotNull` with LLVM 19's
     /// constant folder: `true` for a non-`extern_weak` global or function
-    /// and an `inbounds` constant GEP of one.
+    /// and an `inbounds` constant GEP of one, `false` for `null`.
     fn ub_is_not_null(&mut self, p: V) -> V {
         if let V::C(c) = p
             && self.ub_const_nonnull(c)
         {
             return V::C(self.m.const_bool(true));
+        }
+        if let V::C(c) = p
+            && self.m.const_of(c).is_some_and(kiln_llvm::ConstData::is_zero)
+        {
+            return V::C(self.m.const_bool(false));
         }
         let z = V::C(self.m.const_null(LTy::PTR));
         self.f.fir.push(Op::ICmp { p: IntPredicate::Ne, l: p, r: z }, LTy::I1)

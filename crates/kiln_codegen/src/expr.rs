@@ -3528,7 +3528,7 @@ impl Cg<'_> {
         if let Some(d) = direct {
             self.target_feature_call_check(e, d);
         }
-        let vals = self.emit_call_args(&sig, &args)?;
+        let vals = self.emit_call_args_for(&sig, &args, direct)?;
         let mut ret_extra = Vec::new();
         if let Some(d) = direct {
             self.psabi_call_check(e, d, &args, false);
@@ -3685,6 +3685,18 @@ impl Cg<'_> {
     /// clang `EmitCallArgs`: evaluates every argument, aggregates into
     /// `agg.tmp`.
     pub(crate) fn emit_call_args(&mut self, sig: &Sig, args: &[ExprId]) -> R<Vec<CallArg>> {
+        self.emit_call_args_for(sig, args, None)
+    }
+
+    /// [`Self::emit_call_args`] of a call whose direct callee is `callee`
+    /// (clang's `AbstractCallee`): each scalar argument gets its
+    /// `nonnull` check after it is evaluated.
+    pub(crate) fn emit_call_args_for(
+        &mut self,
+        sig: &Sig,
+        args: &[ExprId],
+        callee: Option<DeclId>,
+    ) -> R<Vec<CallArg>> {
         let ast = self.ast;
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
         let mut vals = Vec::with_capacity(args.len());
@@ -3712,7 +3724,11 @@ impl Cg<'_> {
                 let (re, im) = self.emit_complex(a)?;
                 CallArg::Complex(re, im)
             } else {
-                CallArg::Scalar(self.emit_scalar(a)?)
+                let v = self.emit_scalar(a)?;
+                if let Some(d) = callee {
+                    self.ub_nonnull_arg(d, i, a, v)?;
+                }
+                CallArg::Scalar(v)
             };
             vals.push(v);
         }

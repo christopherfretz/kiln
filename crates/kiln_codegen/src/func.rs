@@ -99,6 +99,10 @@ pub(crate) struct Fx {
     /// its hidden `size_t` argument (clang `SizeArguments`).
     pub object_sizes: FxHashMap<DeclId, (u32, Addr)>,
     pub ret_block: Option<Blk>,
+    /// clang `ReturnLocation` (`return.sloc.ptr`) and the
+    /// `returns_nonnull` attribute's location, when the return value is
+    /// checked (`-fsanitize=returns-nonnull-attribute`).
+    pub ret_sloc: Option<(V, Loc)>,
     pub ret_slot: Option<Addr>,
     pub ret_kind: RetKind,
     pub ret_coerce: Option<IrType>,
@@ -274,6 +278,7 @@ impl Fx {
             locals: FxHashMap::default(),
             object_sizes: FxHashMap::default(),
             ret_block: None,
+            ret_sloc: None,
             ret_slot: None,
             ret_kind: RetKind::Void,
             ret_coerce: None,
@@ -498,6 +503,9 @@ impl Cg<'_> {
         self.f.ret_block = Some(ret_block);
         self.f.ret_dest = Some(JumpDest { blk: ret_block, depth: Some(0), index: 1 });
         self.f.cl.next_index = 2;
+        if thunk.is_none() {
+            self.ub_ret_nonnull_start(d);
+        }
         self.check_pure_scalable(&sig, Some(ast.decls.get(d).loc()))?;
         let mut arg_no = 0u32;
         match &sig.info.ret.kind {
@@ -781,7 +789,7 @@ impl Cg<'_> {
         if contracts_here {
             self.emit_postconditions(d)?;
         }
-        self.emit_epilog();
+        self.emit_epilog()?;
         if eh_spec {
             self.pop_terminate();
         }
@@ -1020,10 +1028,10 @@ impl Cg<'_> {
 
     /// clang `EmitFunctionEpilog` (a naked function has no epilogue: the
     /// return block ends in `unreachable`).
-    pub(crate) fn emit_epilog(&mut self) {
+    pub(crate) fn emit_epilog(&mut self) -> R<()> {
         if self.f.naked {
             self.f.fir.push(Op::Unreachable, LTy::VOID);
-            return;
+            return Ok(());
         }
         let mut ret_loc = None;
         let rv = match self.f.ret_kind {
@@ -1077,10 +1085,14 @@ impl Cg<'_> {
                 Some(self.coerced_load(slot, &ct))
             }
         };
+        if let Some(v) = rv {
+            self.ub_ret_nonnull_check(v)?;
+        }
         let ret = self.f.fir.push(Op::Ret { v: rv }, LTy::VOID);
         if ret_loc.is_some() {
             self.f.fir.set_inst_dbg(Fir::last_inst(ret), ret_loc);
         }
+        Ok(())
     }
 
     /// clang `findDominatingStoreToReturnValue`.

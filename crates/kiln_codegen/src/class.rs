@@ -1860,7 +1860,7 @@ impl Cg<'_> {
         let mut sig = if needs_vtt { self.with_vtt(base_sig.clone()) } else { base_sig.clone() };
         let saved = self.f.dest_destructed;
         self.f.dest_destructed = false;
-        let vals = self.emit_call_args(&sig, &args);
+        let vals = self.emit_call_args_for(&sig, &args, Some(ctor));
         self.f.dest_destructed = saved;
         let mut vals = vals?;
         if !checked && self.ub_type_check_on() {
@@ -1986,7 +1986,7 @@ impl Cg<'_> {
             let f = self.get_fn(md)?;
             let mut sig = self.call_sig(fty, false, &arg_tys);
             let (extra, nr) = self.call_extra(md, fty, &mut sig);
-            let vals = self.emit_call_args(&sig, args)?;
+            let vals = self.emit_call_args_for(&sig, args, Some(md))?;
             self.arm_musttail(e);
             let callee = V::C(Value::func(f));
             let r = self.call_vals(&sig, callee, Some(f), None, &vals, args, dest, &extra)?;
@@ -2027,7 +2027,7 @@ impl Cg<'_> {
         let cfty = ast.decls.get(callee_md).ty().expect("method type");
         if rtl && !trivial {
             let sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
-            rtl_vals = Some(self.emit_call_args(&sig, args)?);
+            rtl_vals = Some(self.emit_call_args_for(&sig, args, Some(md))?);
         }
         let this = if arrow {
             // clang `EmitCXXMemberOrOperatorMemberCallExpr`:
@@ -2082,7 +2082,7 @@ impl Cg<'_> {
             // loads the slot.
             let vals = match rtl_vals {
                 Some(v) => v,
-                None => self.emit_call_args(&sig, args)?,
+                None => self.emit_call_args_for(&sig, args, Some(md))?,
             };
             let (mut extra, nr) = self.call_extra(md, cfty, &mut sig);
             // The allocation attributes of the method named by the call
@@ -2111,7 +2111,7 @@ impl Cg<'_> {
         let (mut extra, nr) = self.call_extra(callee_md, cfty, &mut sig);
         let vals = match rtl_vals {
             Some(v) => v,
-            None => self.emit_call_args(&sig, args)?,
+            None => self.emit_call_args_for(&sig, args, Some(md))?,
         };
         let mut ret_extra = Vec::new();
         self.alloc_call_attrs(callee_md, &vals, &mut extra, &mut ret_extra);

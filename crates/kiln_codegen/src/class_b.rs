@@ -139,7 +139,7 @@ impl Cg<'_> {
 
     /// The class B attribute nodes of kind `k` on the redeclarations of
     /// `d`, in declaration order.
-    fn fn_attrs_of(&self, d: DeclId, k: K) -> Vec<AttrNode> {
+    pub(crate) fn fn_attrs_of(&self, d: DeclId, k: K) -> Vec<AttrNode> {
         let ast = self.ast;
         let mut v: Vec<AttrNode> = Vec::new();
         for r in ast.redecls_of(d) {
@@ -397,7 +397,7 @@ impl Cg<'_> {
 
     /// The parameter declarations of the redeclarations of `d`, by
     /// position.
-    fn redecl_params(&self, d: DeclId) -> Vec<Vec<DeclId>> {
+    pub(crate) fn redecl_params(&self, d: DeclId) -> Vec<Vec<DeclId>> {
         let ast = self.ast;
         ast.redecls_of(d)
             .filter_map(|r| ast.decls.function(r))
@@ -436,6 +436,24 @@ impl Cg<'_> {
         }
     }
 
+    /// Whether function attribute `nonnull` `n` (clang
+    /// `NonNullAttr::isNonNull`) names parameter `i` (zero-based, after
+    /// the implicit object parameter, which `this` counts): it has no
+    /// index list, or its one-based list names `i`.
+    pub(crate) fn nonnull_covers(&self, n: &AttrNode, i: usize, this: u32) -> bool {
+        let ast = self.ast;
+        let idx: Vec<u32> = kiln_ast::ListId::from_raw(n.a)
+            .map(|l| {
+                ast.lists
+                    .iter::<kiln_ast::ExprId>(l)
+                    .filter_map(|e| ast.exprs.int_value(e))
+                    .filter_map(|v| u32::try_from(v).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        idx.is_empty() || idx.iter().any(|&v| v.checked_sub(1 + this) == Some(i as u32))
+    }
+
     /// clang `EmitFunctionProlog`'s parameter facts of definition `d`:
     /// `nonnull` on a pointer parameter named by `nonnull` (the
     /// function's, by one-based index, or none for every pointer; or the
@@ -455,19 +473,7 @@ impl Cg<'_> {
             let Some(&p) = own.get(i) else { continue };
             let pty = ast.decls.get(p).ty();
             let is_ptr = pty.is_some_and(|t| ast.types.is_pointer(t));
-            let fn_nn = is_ptr
-                && fn_nonnull.iter().any(|n| {
-                    let idx: Vec<u32> = kiln_ast::ListId::from_raw(n.a)
-                        .map(|l| {
-                            ast.lists
-                                .iter::<kiln_ast::ExprId>(l)
-                                .filter_map(|e| ast.exprs.int_value(e))
-                                .filter_map(|v| u32::try_from(v).ok())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    idx.is_empty() || idx.iter().any(|&v| v.checked_sub(1 + this) == Some(i as u32))
-                });
+            let fn_nn = is_ptr && fn_nonnull.iter().any(|n| self.nonnull_covers(n, i, this));
             if (fn_nn || self.has_fn_attr(p, K::NONNULL)) && !self.opts.null_pointer_is_valid {
                 self.add_param_attr(params, at, Attr::Flag(AttrKind::NonNull));
             }
