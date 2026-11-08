@@ -1,7 +1,9 @@
 // Mangling differential (spec/abi.md §8.15, WP-818):
 // - a class template to deduce in a dependent functional or list cast
 //   is its template name (`cvN1n4viewE_...`, `tlN1n3refE...`; clang
-//   `DeducedTemplateSpecializationType` without a deduced type);
+//   `DeducedTemplateSpecializationType` without a deduced type), and
+//   two such casts that differ only in the template are different
+//   expressions (`slice(...)` after `view(...)` keeps `5slice`);
 // - a specialization of a template template parameter groups its
 //   arguments by the parameter's own template head (`T_IJilEE` for a
 //   `template <class...> class`), as clang's converted argument list,
@@ -10,6 +12,9 @@ namespace n {
 template <class T> struct view { view(T, int) {} };
 template <class T> struct ref { ref(T&) {} };
 template <class T> view(T, int) -> view<T>;
+template <class T> struct slice { slice(T, int) {} };
+template <class T> slice(T, int) -> slice<T>;
+template <class T> struct cref { cref(T&) {} };
 struct fn {
   template <class R, class P>
   auto operator()(R&& r, P&& p) const
@@ -17,6 +22,14 @@ struct fn {
     return view(static_cast<R&&>(r), static_cast<P&&>(p));
   }
   template <class R> auto all(R& r) const -> decltype(ref{r}) { return ref{r}; }
+};
+struct fn2 {
+  template <class R, class P>
+  auto operator()(R&& r, P&& p) const
+      -> decltype(slice(static_cast<R&&>(r), static_cast<P&&>(p))) {
+    return slice(static_cast<R&&>(r), static_cast<P&&>(p));
+  }
+  template <class R> auto all(R& r) const -> decltype(cref{r}) { return cref{r}; }
 };
 }
 
@@ -42,6 +55,9 @@ void use() {
   fo(1, 2);
   int i;
   fo.all(i);
+  n::fn2 f2;
+  f2(1, 2);
+  f2.all(i);
   tup<int, long> t(1, 2L);
   L<char>* a = 0;
   L<int, char>* b = 0;

@@ -175,6 +175,21 @@ impl Ast {
         self.types.canonical(q).raw()
     }
 
+    /// The template of a class template name to deduce (`view(r, f)`):
+    /// its canonical type is `Dependent` whatever the template, so the
+    /// name tells `drop_view(...)` from `take_view(...)` (clang profiles
+    /// the `DeducedTemplateSpecializationType`'s template name).
+    fn ctad_word(&self, q: QualType) -> u32 {
+        match self.types.view(q.ty()) {
+            super::TypeView::DeducedTemplateSpecialization { name, deduced }
+                if deduced.is_none_or(|d| d == QualType::DEPENDENT) =>
+            {
+                self.types.canonical_template_name(name).raw().wrapping_add(1)
+            }
+            _ => NONE,
+        }
+    }
+
     fn opt_canon_word(&self, q: Option<QualType>) -> u32 {
         q.map_or(NONE, |q| self.canon_word(q))
     }
@@ -468,7 +483,7 @@ impl Ast {
                 stack.push(Work::Opt(id(n.a())));
             }
             K::CXXUnresolvedConstructExpr => {
-                out.extend([tag(k, aux & 1), self.canon_word(n.ty())]);
+                out.extend([tag(k, aux & 1), self.canon_word(n.ty()), self.ctad_word(n.ty())]);
                 self.push_list(ListId::new(n.a()), stack);
             }
             K::CXXParenListInitExpr => {

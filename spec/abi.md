@@ -1026,10 +1026,13 @@ or the function's own when only its type is substituted for deduction
 against a target type): `Subst::nested_prototype_param` makes a fresh
 parameter keeping index and scope depth, as clang's
 `TransformFunctionTypeParams` does (`tests/mangle/function_param_depth.cpp`).
-An unsupported expression
-(non-dependent `sizeof` whose value would be needed, ...) mangles as
-`XLi0EE` in a template argument and `u7unknown` as a `decltype`
-operand. The
+An expression with no encoding yet mangles as `XLi0EE` in a template
+argument and `u7unknown` as a `decltype` operand; in a requires-clause
+it is an error (§8.16). WP-818's rules (§8.29) cover the cases the
+standard-library sweep found: non-dependent `sizeof`, substituted
+`sizeof...` and enumeration parameters, dependent CTAD, alias templates
+and template template parameters in qualifiers, the injected-class-name
+in constraints, and abi_tag ordering. The
 template-parameter-declaration prefixes `Tn`/`Tp` are §8.14's (WP-117);
 the dependent template-specialization types there are the ones above
 (`dependent_tst`, with a pack's arguments grouped by `converted_args`).
@@ -1111,8 +1114,9 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   il <braced-expression>* E` (nested braced lists recurse as `il ... E`,
   packs as `sp`); an array new `new T[2]{...}` is `na _ <element type>
   il ... E` without the bound, as clang 19. A constraint expression kiln
-  still cannot mangle falls back to `Qu7unknown`, so the symbol stays
-  unique but differs from clang.
+  cannot mangle is the error `cg_cannot_mangle_expression` at the
+  expression, and the TU produces no output (WP-818; it used to mangle
+  as `Qu7unknown`, a name that differs from clang's).
 - **Not implemented:** a generic lambda's explicit template-head in its
   closure type name (`[]<class T>(){}` is clang's `UlTyvE_`, kiln's
   `UlvE_`, which also shifts later discriminators); clang 19's
