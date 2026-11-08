@@ -152,7 +152,8 @@ impl Sema<'_, '_> {
         // A class still being defined, here or outside the instantiation
         // context in progress (`VTraits<V>` instantiated inside `V`, which
         // befriends it): its friends are not on the record yet.
-        let mut open = self.classes.iter().rev().chain(self.suspended_classes.iter().rev().flatten());
+        let mut open =
+            self.classes.iter().rev().chain(self.suspended_classes.iter().rev().flatten());
         if let Some(b) = open.find(|b| same_class(self, b.record, def)) {
             return b.friends.clone();
         }

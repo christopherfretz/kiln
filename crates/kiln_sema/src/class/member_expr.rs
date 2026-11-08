@@ -395,6 +395,29 @@ impl Sema<'_, '_> {
             })
     }
 
+    /// The members named `name` in the object's class `def`, or in the
+    /// qualifier's class `look`, else the conversion function template
+    /// specializations an `operator T` names there.
+    fn member_lookup(
+        &mut self,
+        qual: Option<crate::using::Qualifier>,
+        def: DeclId,
+        look: DeclId,
+        name: kiln_ast::names::DeclName,
+        loc: Loc,
+    ) -> crate::lookup::Found {
+        let found = match qual {
+            Some(q) => self.lookup_qualified_dn(q.ctx, name, LookupKind::Ordinary),
+            None => self.lookup_in_class_dn(def, name, LookupKind::Ordinary),
+        };
+        match self.ast.names.view(name) {
+            kiln_ast::names::DeclNameView::Conversion(to) if found.decls.is_empty() => {
+                self.conversion_template_specs(look, to, loc).unwrap_or(found)
+            }
+            _ => found,
+        }
+    }
+
     /// `e.operator T()` naming a specialization of a conversion function
     /// template ([temp.mem]/6): it is not found by name lookup; instead
     /// each conversion function template of class `c` itself whose
@@ -448,16 +471,7 @@ impl Sema<'_, '_> {
         // or one of its bases.
         let look = qual.map_or(def, |q| q.ctx);
         self.declare_implicit_named(look, name);
-        let mut found = match qual {
-            Some(q) => self.lookup_qualified_dn(q.ctx, name, LookupKind::Ordinary),
-            None => self.lookup_in_class_dn(def, name, LookupKind::Ordinary),
-        };
-        if found.decls.is_empty()
-            && let kiln_ast::names::DeclNameView::Conversion(to) = self.ast.names.view(name)
-            && let Some(f) = self.conversion_template_specs(look, to, loc)
-        {
-            found = f;
-        }
+        let found = self.member_lookup(qual, def, look, name, loc);
         if self.diagnose_member_ambiguity(&found, name, loc) {
             return self.recover_err(&[base], loc);
         }
