@@ -9593,7 +9593,9 @@ impl Sema<'_, '_> {
     /// parser's lookahead classifies each name of a nested template-id
     /// several times before parsing it.
     pub fn classify_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
-        self.classify_memoized(name, qualifier, false, || self.classify_name_uncached(name, qualifier))
+        self.classify_memoized(name, qualifier, false, || {
+            self.classify_name_uncached(name, qualifier)
+        })
     }
 
     /// [`Sema::classify_name`] through the memo; `nested` keys

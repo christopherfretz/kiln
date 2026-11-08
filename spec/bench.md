@@ -63,7 +63,8 @@ directly in `bench/` (no group) is an error. Entries are sorted by id and run
 other for the CPU.
 
 Every entry is self-contained: no includes outside the standard library, no
-generated inputs. An entry may include itself (by its literal file name, not
+generated inputs other than a `generate:` entry's own ("Generated entries").
+An entry may include itself (by its literal file name, not
 `__FILE__`) to repeat a workload; it stays one file. An entry measures one
 thing; it should take 0.5–3 s with the reference compiler: on a loaded host,
 ~0.1 s entries are dominated by process start-up and scheduling noise.
@@ -80,6 +81,27 @@ program, e.g. a `std::generator<int>` iterated 10M times). `reflect` (the
 reflection shapes, "Reflection shapes") is generated and, like the libc++
 slice, measured only when named (`bench/reflect` or one of its files): the
 default `bench/` skips it.
+
+## Generated entries
+
+An entry with a `generate: <generator> <params>` directive is measured on a
+source generated at bench time, so a multi-megabyte input never lands in the
+repository; the committed file is only its directive header and a comment.
+The harness writes the text to `<scratch>/generated/<id>.cpp` (the run's
+scratch directory, removed at the end) and hands that path to every
+compiler, with the entry's other directives. The text is deterministic, and
+the record's `source_hash` covers the entry file followed by the generated
+text, so a generator change makes the baseline `advisory`. Generators
+(`xtask/src/bench/generate.rs`):
+
+| Generator | Source |
+|---|---|
+| `nested-dup <N> <DEPTH> <WIDTH>` | The repeated nested template-id TU of docs/status/perf.md "WP-879" (byte-identical to its `gen.py N DEPTH WIDTH 1`): `N` reflection-keyed specializations of a function template and of a class template's static member, each keyed by a template-id `DEPTH` levels deep with `WIDTH` arguments per level, every level repeating the previous one twice. 1 <= N <= 100000, DEPTH <= 10, 2 <= WIDTH <= 16. Needs `-freflection`. |
+
+`bench/frontend/nested-template-ids-dup.cpp` (`nested-dup 200 6 4`, 1.3 MB;
+WP-919) is the one generated entry. Its depth stays at 6 to keep the run
+short; the 5.1 MB depth-8 TU of docs/status/perf.md "WP-919" has the same
+slope.
 
 ## The libcxx-slice entry
 
@@ -155,6 +177,7 @@ scanner is shared; the keys are not.
 | `threshold-mem: <PCT>` | This entry's allowed peak-RSS regression (default 2). |
 | `threshold-steps: <PCT>` | This entry's allowed constexpr `steps` regression (default 0). |
 | `threshold-bytes: <PCT>` | This entry's allowed constexpr `bytes`/`peak_bytes`/`peak_arena`/`frozen_bytes`/`static_bytes` regression (default 2). |
+| `generate: <generator> <params>` | Measure a source generated at bench time instead of the file's own body ("Generated entries"). An unknown generator, bad parameters or a repeat is an error. |
 | `budget-time: <ms>` | An absolute wall-clock budget for kiln, in milliseconds (a positive number): kiln's **fastest** run must not take longer (load only ever adds time, as in the time-regression rule). Checked on every kiln run, `--record` included, so re-recording cannot absorb a slowdown past it; a breach fails the entry (`over the time budget: ...`) and the entry is not recorded. Other compilers are not held to it. Host-specific like the baselines: set it at ~1.5x the recorded kiln median on the recording host, next to the number it guards (`bench/pp/headers.cpp`, WP-487). |
 | `xfail(kiln): <reason>` | The entry is expected to fail under kiln; the reason names the owning WP. A kiln failure then counts as `xfail` (row status `xfail (<reason>)`, summary `, N xfail`), not as a failure; a kiln compile that succeeds fails the entry (`XPASS: … remove the marker`). Other compilers measure the entry as usual. A missing reason or a repeat is an error. |
 
@@ -420,7 +443,7 @@ A **measurement** object:
 |---|---|---|
 | `mode` | string | `syntax`, `pp`, `emit-llvm`, `obj` or `run` |
 | `flags` | string | Flags between the compiler and the file name, space-joined |
-| `source_hash` | string | `fnv1a64:<16 hex digits>` of the entry file's bytes |
+| `source_hash` | string | `fnv1a64:<16 hex digits>` of the entry file's bytes (followed by the generated source for a `generate:` entry) |
 | `runs` | integer | N |
 | `wall_ms_median`, `wall_ms_min`, `wall_ms_max` | number | Milliseconds (µs precision) |
 | `spread_pct` | number | Percent, 2 decimals |
