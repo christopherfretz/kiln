@@ -15,6 +15,7 @@ use kiln_source::{Loc, SourceManager, Span};
 
 use crate::class::LateClass;
 use crate::keywords::{Keywords, Kw};
+use crate::tentative::TypeIdContext;
 
 use crate::tokens::TokenSource;
 
@@ -1738,6 +1739,19 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             };
             if !template_kw && !is_template_class(class) {
                 if class != NameClass::Dependent {
+                    break;
+                }
+                // [temp.names]/3: without `template` the `<` after a
+                // dependent name is less-than. It is diagnosed and read as
+                // a list only when nothing but a list fits: `<>` or a
+                // leading unambiguous type (clang's `isTemplateArgumentList`
+                // returning True). `if_c<rank<T>::value < rank<U>::value,
+                // U, T>::type` is a comparison.
+                let less = self.pos + k + 1;
+                let first = self.tok_at(less + 1).kind;
+                if !matches!(first, TokKind::Punct(Punct::Greater | Punct::GreaterGreater))
+                    && !self.is_cxx_type_id_at(less + 1, TypeIdContext::Unambiguous).0
+                {
                     break;
                 }
                 let text = self.s.ast.symbols().as_str(name).to_owned();

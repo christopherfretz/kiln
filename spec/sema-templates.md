@@ -647,7 +647,13 @@ object is dependent and not the current instantiation, as in
 less-than. When the name is followed by `<`, clang's diagnostic
 `err_missing_dependent_template_keyword` ("use 'template' keyword to
 treat 'f' as a dependent template name") is emitted and the parser
-recovers as if `template` had been written.
+recovers as if `template` had been written. The diagnostic and the
+recovery apply only when nothing but a list fits: the `<` is followed
+by `>` or begins with an unambiguous type-id (clang's
+`isTemplateArgumentList` returning True). In a nested-name-specifier,
+`if_c<rank<T>::value < rank<U>::value, U, T>::type` compares the two
+values (`parse_nested_name_upto`; WP-804,
+`tests/conformance/temp.names/dependent-member-less-than-before-scope.cpp`).
 
 At instantiation, `T::template f<A>` names a template when the lookup of
 `f` in the substituted `T` finds any template: an overload set that also
