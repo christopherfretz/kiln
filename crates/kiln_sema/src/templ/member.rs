@@ -388,8 +388,10 @@ impl Substituter<'_, '_, '_> {
             Expansion::Elements(v) => {
                 let kept = self.kept_pack_pattern(|s| s.ty(pattern, loc))?;
                 let ty = self.sema.ast.types.pack_expansion(kept, None);
-                let v: Vec<TemplateArg> =
-                    v.into_iter().map(|t| TemplateArg::ty(self.sema.adjust_param_type(t))).collect();
+                let v: Vec<TemplateArg> = v
+                    .into_iter()
+                    .map(|t| TemplateArg::ty(self.sema.adjust_param_type(t)))
+                    .collect();
                 Ok((ty, Some(self.sema.ast.types.arg_list(&v))))
             }
         }
