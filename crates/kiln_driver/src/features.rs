@@ -484,6 +484,17 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
             _ => errors.push(unsupported("-msve-vector-bits=", v)),
         },
     }
+    // clang `SanitizerArgs::addArgs`: `-target-feature +tagged-globals`
+    // for the hardware-address sanitizer on AArch64 (WP-675).
+    if target.is_aarch64()
+        && args
+            .sanitize(false, target.triple)
+            .0
+            .opts
+            .has(kiln_ast::sanitize::SanitizerSet::HWADDRESS)
+    {
+        f.set("tagged-globals", true);
+    }
     for t in &args.target_features {
         match t.split_at_checked(1) {
             Some(("+", name)) if !name.is_empty() => f.set(name, true),

@@ -260,6 +260,8 @@ command-line order and returns false for anything else.
 | `-w` | ignore all warnings (not positional) | off |
 | `-W<x>` | appended to `warnings` (not `-Wl,` `-Wa,` `-Wp,`) | |
 | `-WX` | alias of `-Werror` | |
+| `-Wframe-larger-than=N` (and its bare alias `-Wframe-larger-than`) | clang's backend stack-frame limit, a driver option: N must be an integer, else error `drv_invalid_argument_to_option` (`invalid argument 'abc' to -Wframe-larger-than=`); kiln emits no frame-size warning, so a valid N is accepted and has no effect (WP-811, BoringSSL). `-Wframe-larger-than` with `-Wno-`/`-Werror=` is the warning group | |
+| `-Wlarger-than=<x>`, `-Wlarger-than-<x>` | GCC options clang ignores, accepted with any value (WP-811) | |
 | `-W` | alias of `-Wextra` (clang's old spelling; WP-682, `dcl.fct/unused-but-set-parameter-bare-w.cpp`) | |
 | `-R<x>` | appended to `remarks` (not `-Rpass*`) | |
 | `-pedantic`, `--pedantic` | extensions at least warnings | off |

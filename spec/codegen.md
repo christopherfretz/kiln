@@ -288,6 +288,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     (`APFloat::convertToInteger` reporting `opInvalidOp`).
 - Arithmetic:
   - signed add, sub and mul get `nsw`; shifts mask nothing at -O0;
+  - a shift whose count has another integer type is `zext`/`trunc`ed
+    (never sign-extended) to the left operand's type first, element-wise
+    for a vector whose count is the splatted scalar (`v2u64 << int`:
+    `<2 x i32>` to `<2 x i64>`; clang `EmitShl`/`EmitShr`, WP-811,
+    BoringSSL's Keccak rotate;
+    `tests/conformance/ext.vector/shift-scalar-count-other-width-run.cpp`);
   - pointer arithmetic: `gep inbounds` (`gep i8` for void and function
     pointers); pointer difference: `ptrtoint`, `sub`, then `sdiv exact`;
   - floating add/sub (also compound) contract a single-use `fmul`
@@ -961,14 +967,26 @@ Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
   pragma that needs another (FENV_ACCESS ON, FENV_ROUND other than
   FE_TONEAREST, trapping, rounding, a wider eval method) is an error.
 
-### 3.3 Pointer alignment (WP-819, `builtins.rs` `pointer_with_alignment`)
+### 3.3 Pointer alignment (WP-819, WP-829, `builtins.rs` `pointer_with_alignment`)
 clang `CodeGenFunction::EmitPointerWithAlignment`, mirrored case by case,
 gives a pointer operand's value, its known alignment, and whether that
-alignment is a declaration's (`AlignmentSource::Decl`). Its users: every
-`__atomic_*`/`__c11_atomic_*` pointer (`atomic.rs`), memcpy/memmove/
-memset-like builtins, `__builtin_clear_padding`, `va_arg`, NEON loads and
-stores, checked arithmetic results, VLA subscripts, and the placement
-argument of a new-expression (§3.1). After skipping parentheses:
+alignment is a declaration's (`AlignmentSource::Decl`). Its users:
+- the lvalue of `*p` (`EmitUnaryOpLValue`), of `p[i]` through a pointer
+  (`EmitArraySubscriptExpr`, VLA subscripts included), of `p->m`
+  (`EmitMemberExpr`, `this->m` included), of a vector element through
+  `->` (`EmitExtVectorElementExpr`) and the object of `p->*m`
+  (`EmitPointerToDataMemberBinaryExpr`, WP-829);
+- the object of a member call through `->` (`p->f()`,
+  `EmitCXXMemberOrOperatorMemberCallExpr`), the operand of a scalar
+  derived-to-base conversion (whose virtual step loads the vtable
+  pointer at that alignment) and of `dynamic_cast` (`VisitCastExpr`,
+  WP-829);
+- every `__atomic_*`/`__c11_atomic_*` pointer (`atomic.rs`), memcpy/
+  memmove/memset-like builtins, `__builtin_clear_padding`, `va_arg`, NEON
+  loads and stores, checked arithmetic results, and the placement
+  argument of a new-expression (§3.1).
+
+After skipping parentheses:
 - **No-op/bitcast** from a non-`void` pointer keeps the operand's
   alignment and source; an *explicit* cast whose operand's source is not
   `Decl` takes the target type's natural pointee alignment.
@@ -998,9 +1016,52 @@ parameter, a non-reference field of any base (`.` or `->`; clang
 So libstdc++'s `std::atomic<T>`, whose `alignas(sizeof(T)) T _M_i` is
 passed as `std::__addressof(_M_i)`, gets a naturally aligned inline
 atomic for a power-of-two size, as with clang, and needs no libatomic.
-Not mirrored: the lvalue of `*p` and `p[i]` itself still has the
-pointee's natural alignment (clang computes it with
-`EmitPointerWithAlignment`), so `&*&x` loses `x`'s `alignas`.
+
+The alignment of an lvalue derived from another (WP-829; clang 19
+`EmitLValueForField`, `emitArraySubscriptGEP`, `GetAddressOfBaseClass`):
+- **Field** `b.m` / `p->m`: `alignmentAtOffset(base alignment, offset of
+  m)` (`min_align`, the largest power of two dividing both), the offset
+  being the field's IR struct element offset (a packed struct's,
+  `__attribute__((packed))` or `#pragma pack`, is unpadded), or its byte
+  offset for an empty field with no element; a bit-field's storage unit
+  likewise; a union member keeps the base's. A reference member's
+  referee is the natural pointee alignment of the referenced type.
+- **Subscript** `a[i]` / `p[i]`: the base's alignment (the array lvalue's
+  for a simple array-to-pointer decay, else the pointer's from this
+  section) at the byte offset `i * sizeof(element)` for a constant `i`, or
+  at one element (`MinAlign(align, sizeof(element))`) for a variable
+  one (`getArrayElementAlign`).
+- **Base subobject** (`GetAddressOfBaseClass`): a non-virtual path keeps
+  the derived object's alignment at the non-virtual offset (unchanged
+  for offset 0); a path through a virtual base starts from
+  `getVBaseAlignment` (`vbase_align`): the virtual base's non-virtual
+  alignment if the derived alignment is at least the derived class's
+  non-virtual alignment, else the smaller of the two (an incomplete
+  class takes the smaller), and then takes the non-virtual offset within
+  the virtual base.
+- **`this`** (`LoadCXXThisAddress`, `CXXThisAlignment`) and any class
+  pointer that reaches the fallback: `getClassPointerAlignment`, the
+  class's non-virtual alignment unless it is effectively `final` (`final`
+  class or destructor), when it is the complete-object alignment. A
+  class with a virtual base of stricter alignment is thus accessed through
+  a pointer at its smaller non-virtual alignment: as a base subobject it
+  need not be aligned as a complete object ([class.mi], [basic.align]),
+  and the complete-object alignment there is an over-alignment that lets
+  LLVM emit aligned vector accesses on a misaligned address.
+- **Member pointer** `o.*m` / `p->*m` (`EmitCXXMemberDataPointerAddress`):
+  `getDynamicOffsetAlignment(object alignment, class, natural alignment
+  of the member type)`, the object's alignment from `->*`'s pointer as
+  above.
+- **References**: a reference's referee has the natural pointee
+  alignment of its type (`EmitLoadOfReference`, `forPointeeType`).
+
+So `*&x.m` keeps the `alignas` of `x` and `m`, `(char *)&x` keeps `x`'s
+until an explicit cast to a non-character type whose operand's source is
+not `Decl`, and `arr[2]` of an `alignas(64) int arr[]` is `align 8`.
+Not mirrored: a `delete` expression's operand still has the natural
+pointee alignment (clang `EmitCXXDeleteExpr` uses
+`EmitPointerWithAlignment`); it only affects the array-cookie and vtable
+loads.
 
 ## 4. Statements
 - `stmt.rs` covers compound, declaration, expression, null, if (with
@@ -1176,6 +1237,39 @@ The normative detail, the gaps and the tests are in
 spec/landed/codegen/WP-814.md; the status, statistics and performance
 are in docs/status/debuginfo.md. WP-817 (spec/landed/codegen/WP-817.md)
 cut the front-end cost of `-g` without changing a byte of the IR.
+
+### 5.2 Sanitizers (WP-675; `ubsan.rs`, `class_b.rs`)
+`CodegenOptions::sanitize` (`SanitizeOptions`, set from spec/driver.md
+"Sanitizers") marks the IR as clang 19's frontend does
+(docs/design/sanitizers.md §1); with no sanitizer the IR is unchanged.
+- **Pass sanitizers.** `sanitize_address`, `sanitize_hwaddress`,
+  `sanitize_thread`, `sanitize_memory` (and `optforfuzzing` under
+  fuzzer) on every definition that does not opt out with
+  `no_sanitize("...")`, `no_sanitize_address`/`_thread`/`_memory` or
+  `disable_sanitizer_instrumentation`; global `no_sanitize_address`/
+  `no_sanitize_hwaddress` and `sanitize_address_dyninit` markers;
+  lifetime markers at `-O0` under ASan use-after-scope and HWASan;
+  TBAA under TSan. The instrumentation itself is LLVM's: the driver
+  runs clang's pass pipeline.
+- **UBSan.** signed-integer-overflow (`+ - *`, unary `-`, `++`/`--`,
+  compound assignment), unsigned-integer-overflow, integer-divide-by-zero
+  and signed `/`/`%` overflow, shift-exponent, shift-base (signed only
+  before C++20) and unsigned-shift-base, return, unreachable and
+  vla-bound, as clang's `EmitCheck`: the checks of one operation are
+  and-ed per mode (trap, recover, abort); a failing check branches (with
+  clang's 1048575:1 weights) to `@llvm.ubsantrap(<handler id>)`, a
+  `@__ubsan_handle_<name>` call or its `_abort` form, with the
+  `.src`/type-descriptor/data globals clang emits, every inserted
+  instruction under `!nosanitize !{}`. Operands promoted from a
+  narrower type are not checked where clang elides the check. Trap
+  blocks are shared per handler except at `-O0`/`optnone`. At
+  `-fclang-compat=22` the trap branch also gets the weights, `nomerge`
+  marks trap and handler calls at `-O0`/`optnone` and for checks outside
+  the default merge set (the unsigned checks), and `@llvm.ubsantrap` is
+  `memory(inaccessiblemem: write)` from LLVM 22.
+
+The checks kiln does not emit yet, and the other gaps, are listed with
+their BACKLOG rows in spec/landed/codegen/WP-675.md.
 
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90
@@ -2232,7 +2326,10 @@ off and sema rejects `try`/`throw`).
 - **new-expressions** ([expr.new]/28): `CallDeleteDuringNew` as an EH
   cleanup around the initializer, with the pointer, size and placement
   arguments saved to `cond-cleanup.save` slots inside a conditional
-  branch; class `operator new` keeps its declared result type.
+  branch; class `operator new` keeps its declared result type. The
+  reserved placement `operator new(std::size_t, void*)` is inlined, but
+  its pointer is still the placement argument passed to a matching
+  non-reserved `operator delete(void*, void*)` (a class-scope one).
   Array new runs the constructor loop for a non-constant count
   (`arrayctor.cont` isempty check, as clang's
   `EmitCXXAggrConstructorCall`).
@@ -3809,7 +3906,13 @@ No lowering changed; the new forms reach codegen as existing AST.
   width, and `vqdmulh[q]`/`vqrdmulh[q]` as one `sq[r]dmulh` call: WP-792,
   `target.neon/ir-paddl-qdmulh-19.cpp`; the structure loads and stores
   `vld2`..`vld4`, `vst2`..`vst4` and the shift-and-insert `vsli_n`:
-  spec/landed/sema/WP-799.md "NEON structure loads and stores"). The
+  spec/landed/sema/WP-799.md "NEON structure loads and stores"; the
+  cryptographic extension `vaes{e,d,mc,imc}q_u8`, `vsha1{c,m,p}q_u32`,
+  `vsha1h_u32`, `vsha1su{0,1}q_u32`, `vsha256h[2]q_u32` and
+  `vsha256su{0,1}q_u32` as one call of the non-overloaded
+  `llvm.aarch64.crypto.*` intrinsic of that name on `<16 x i8>`,
+  `<4 x i32>` and `i32` operands, the AES type code dropped: WP-811,
+  `target.neon/crypto-run.cpp`, `ir-crypto-19.cpp`). The
   AArch64 ACLE builtins (`__builtin_arm_*`,
   `arm.rs`) are spec/landed/sema/WP-724.md "ACLE builtins".
 - With `CodegenOptions::sve` (AArch64 only), every function definition

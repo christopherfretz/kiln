@@ -2010,9 +2010,10 @@ impl Cg<'_> {
             rtl_vals = Some(self.emit_call_args(&sig, args)?);
         }
         let this = if arrow {
-            let p = self.emit_scalar(base)?;
+            // clang `EmitCXXMemberOrOperatorMemberCallExpr`:
+            // `EmitPointerWithAlignment` of the object pointer.
             let pq = ast.types.pointee(ast.exprs.get(base).ty()).expect("pointee");
-            let (_, align) = self.pointee_layout(pq);
+            let (p, align) = self.ptr_align(base)?;
             let ty = self.mty(pq);
             Addr { v: p, ty, align }
         } else {
@@ -2229,8 +2230,11 @@ impl Cg<'_> {
     pub(crate) fn vbase_align(&mut self, actual: u64, derived: DeclId, vb: DeclId) -> u64 {
         let Some(vdef) = self.class_def(vb) else { return 1 };
         let expected = u64::from(self.tys.layouter().record(vdef).nv_align);
-        let dalign =
-            self.class_def(derived).map_or(1, |d| u64::from(self.tys.layouter().record(d).align));
+        // `getDynamicOffsetAlignment`: compared with the derived class's
+        // non-virtual alignment, not its complete-object one.
+        let dalign = self
+            .class_def(derived)
+            .map_or(u64::MAX, |d| u64::from(self.tys.layouter().record(d).nv_align));
         if actual >= dalign { expected } else { actual.min(expected) }
     }
 
