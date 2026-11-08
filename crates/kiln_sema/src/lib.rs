@@ -17,6 +17,7 @@
 mod absolute_value;
 mod align_redecl;
 mod annot;
+mod arm_builtins;
 mod asm;
 mod attr_cond;
 pub mod attr_triage;

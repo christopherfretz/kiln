@@ -38,6 +38,12 @@ the milestones and [docs/BACKLOG.md](docs/BACKLOG.md) for work in progress. What
 in each standard, C++98 to C++26, feature by feature with the tests behind
 each row, is in [docs/STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md).
 
+The libraries and applications kiln has been validated against (libc++,
+libstdc++, and 47 open-source projects built through their own build
+systems and test suites, including LLVM, Boost and folly), with each
+result against a control build (clang 19), are in
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+
 ## Layout
 
 | Path | What |
@@ -50,7 +56,7 @@ each row, is in [docs/STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md).
 | `crates/kiln_driver` | the `kiln` and `kiln++` commands |
 | `xtask/` | test, bench and libc++ harness (`cargo xtask ...`) |
 | `spec/` | per-crate contracts |
-| `docs/` | architecture, roadmap, validation, contributor model, the standard support table (`STANDARD_SUPPORT.md`) |
+| `docs/` | architecture, roadmap, validation, contributor model, the standard support table (`STANDARD_SUPPORT.md`), the compatibility table (`COMPATIBILITY.md`) |
 | `resource/` | clang 19 builtin headers and predefined macro sets |
 | `tests/`, `bench/` | conformance/differential corpus, perf corpus |
 

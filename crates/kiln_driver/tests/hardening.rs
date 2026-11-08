@@ -322,3 +322,44 @@ fn instrumentation_ir() {
         assert_eq!(defs(&k), defs(&c), "{flag}");
     }
 }
+
+/// WP-846: `-mbranch-protection=` / `-msign-return-address=` are checked as
+/// clang 19's driver checks them (`CollectARMPACBTIOptions`): the last of
+/// the two wins on `AArch64`, a bad item is an unsupported argument (`<empty>`
+/// for an empty one), x86 rejects `-mbranch-protection=` and ignores
+/// `-msign-return-address=` as unused. Compared with clang++-19's stderr,
+/// the program name dropped.
+#[test]
+fn branch_protection_flags() {
+    if !have("clang++-19") {
+        eprintln!("skipping: clang++-19 not found");
+        return;
+    }
+    let d = scratch("bp");
+    std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
+    let a64 = "--target=aarch64-unknown-linux-gnu";
+    let x86 = "--target=x86_64-unknown-linux-gnu";
+    let cases: &[&[&str]] = &[
+        &[a64, "-mbranch-protection=x"],
+        &[a64, "-mbranch-protection=bti+"],
+        &[a64, "-mbranch-protection=pac-ret+leaf+bogus"],
+        &[a64, "-msign-return-address=bad"],
+        &[a64, "-mbranch-protection=x", "-msign-return-address=all"],
+        &[a64, "-msign-return-address=all", "-mbranch-protection=standard"],
+        &[x86, "-mbranch-protection=bti"],
+        &[x86, "-fsyntax-only", "-mbranch-protection=x"],
+        &[x86, "-msign-return-address=all"],
+    ];
+    let strip = |s: String| s.replace("clang++-19: ", "").replace("kiln++: ", "");
+    for flags in cases {
+        let mut args = flags.to_vec();
+        args.extend(["-c", "m.cpp", "-o", "e.o"]);
+        let k = run(&kilnpp(), &d, &args);
+        let c = run(Path::new("clang++-19"), &d, &args);
+        assert_eq!(
+            (k.status.code(), strip(text(&k.stderr))),
+            (c.status.code(), strip(text(&c.stderr))),
+            "{flags:?}"
+        );
+    }
+}

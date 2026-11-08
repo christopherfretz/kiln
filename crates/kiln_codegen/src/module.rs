@@ -2200,6 +2200,7 @@ impl<'a> Cg<'a> {
         // A thunk's call has no target declaration ([`Fx::thunk`]).
         let nba = fid.filter(|_| !self.f.thunk).and_then(|f| self.nba_fns.get(&f).copied());
         self.no_builtin_attrs(out, nba);
+        self.branch_protection_attrs(out, None);
         self.default_fn_attrs(out);
     }
 
@@ -2210,6 +2211,29 @@ impl<'a> Cg<'a> {
     pub(crate) fn default_fn_attrs(&self, out: &mut Vec<Attr>) {
         if self.opts.sanitize.has(kiln_ast::sanitize::SanitizerSet::HWADDRESS) {
             out.push(Attr::string("hwasan-abi", "interceptor"));
+        }
+    }
+
+    /// The branch protection function attributes (clang
+    /// `initBranchProtectionFnAttributes`, on a declaration, a definition
+    /// and a call site alike) of function `d` (`None`: a helper or a call
+    /// site): `-mbranch-protection=`'s, which on `AArch64` a
+    /// `target("branch-protection=...")` of `d` replaces (clang
+    /// `AArch64TargetCodeGenInfo::setTargetAttributes`; WP-846).
+    pub(crate) fn branch_protection_attrs(&self, out: &mut Vec<Attr>, d: Option<DeclId>) {
+        if self.is_x86() {
+            return;
+        }
+        let mut bp = self.opts.hardening.branch_protection;
+        if let Some(spec) = d.and_then(|d| self.target_attr_str(d))
+            && let Some(p) = kiln_abi::BranchProtection::of_target_attr(&spec)
+                .filter(|p| !p.is_empty())
+                .and_then(|p| kiln_abi::BranchProtection::parse(p, false).ok())
+        {
+            bp = p;
+        }
+        for (k, v) in bp.fn_attrs() {
+            out.push(Attr::string(k, v));
         }
     }
 
@@ -2285,6 +2309,7 @@ impl<'a> Cg<'a> {
         self.size_attrs(out);
         self.class_b_default_attrs(out, d);
         self.no_builtin_attrs(out, d);
+        self.branch_protection_attrs(out, d);
         self.default_fn_attrs(out);
         if let Some(d) = d
             && self.has_fn_attr(d, kiln_ast::attr::AttrKind::DISABLE_TAIL_CALLS)
@@ -3306,6 +3331,12 @@ impl<'a> Cg<'a> {
         }
         if h.fn_return_thunk_extern && x86 {
             m.add_module_flag_i32(4, "function_return_thunk_extern", 1);
+        }
+        // WP-846: the branch protection flags (`Min`; clang 22 gives them
+        // the value 2).
+        let bp_value = if self.opts.clang_compat >= 22 { 2 } else { 1 };
+        for f in h.branch_protection.module_flags().into_iter().filter(|_| !x86) {
+            m.add_module_flag_i32(8, f, bp_value);
         }
         match self.opts.reloc {
             RelocModel::Static => {}
