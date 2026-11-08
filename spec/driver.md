@@ -461,8 +461,10 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
   (default `/usr/lib/llvm-19`) or the versioned names on `PATH`. The C++ standard
   library is the system's libstdc++ (GCC's installation, "Toolchain") or
   libc++ (`-stdlib=libc++`, from the LLVM directory). The binary itself
-  needs only the C library it was linked against: a release built in the
-  CI container (Debian trixie) needs glibc 2.41 or newer.
+  needs only the C library: the newest glibc symbol version it references
+  (`readelf -V bin/kiln`) is the floor, GLIBC_2.39 for the aarch64 build
+  of WP-927 (Rust's `std::process` uses `pidfd_spawnp`), built in the CI
+  container (Debian trixie, glibc 2.41).
 
 ## Toolchain
 

@@ -28,7 +28,8 @@ jobs:
     name: dist ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     # The reference environment of ci-lane.yml: Debian 13 (glibc 2.41) with
-    # GCC 16.1 in /usr/local. The binaries link against this glibc.
+    # GCC 16.1 in /usr/local. The binaries need glibc 2.39+ (spec/driver.md
+    # "Installation layout", run-time dependencies).
     container: gcc:16.1.0-trixie
     strategy:
       fail-fast: false
