@@ -19,6 +19,10 @@ sema_new_incomplete_type = Error (1) "allocation of incomplete type {0}";
 // clang: an ExtWarn with no group (kiln prints ExtWarn as -Wpedantic).
 sema_new_paren_array_nonconst = Warning (0) "when type is in parentheses, array cannot have dynamic size";
 sema_new_reference_type = Error (1) "cannot allocate reference type {0} with new";
+sema_no_builtin_defaulted_deleted = Error (1) "{0} attribute has no effect on defaulted or deleted functions";
+sema_no_builtin_invalid_name = Warning [InvalidNoBuiltinNames] (2) "'{0}' is not a valid builtin name for {1}";
+sema_no_builtin_non_definition = Error (1) "{0} attribute is permitted on definitions only";
+sema_no_builtin_wildcard_with_name = Error (1) "empty {0} cannot be composed with named ones";
 sema_no_call_operator = Error (1) "type {0} does not provide a call operator";
 sema_no_declarators = ExtWarn [MissingDeclarations] (0) "declaration does not declare anything";
 sema_no_declarators_error = Error (0) "declaration does not declare anything";
@@ -215,6 +219,13 @@ sema_reflect_nttp = Error (1) "'^^' cannot be applied to a non-type template par
 sema_reflect_operand = Error (0) "'^^' cannot be applied to this operand";
 sema_reflect_overload_set = Error (0) "cannot take the reflection of an overload set";
 sema_register_storage_class = WarningError [Register] (0) "ISO C++17 does not allow 'register' storage class specifier";
+// clang `err_attribute_regparm_invalid_number` (WP-808)
+sema_regparm_invalid_number = Error (1) "'regparm' parameter must be between 0 and {0} inclusive";
+// clang `err_attributes_regparm_mismatch`; {1} is
+// `without the regparm` or `with the regparm(N)` (WP-808)
+sema_regparm_mismatch = Error (2) "function declared with regparm({0}) attribute was previously declared {1} attribute";
+// clang `err_attribute_regparm_wrong_platform` (WP-808)
+sema_regparm_wrong_platform = Error (0) "'regparm' is not valid on this platform";
 sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
 sema_reorder_ctor = WarningOff [ReorderCtor] (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
 sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order does not match the declaration order";

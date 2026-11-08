@@ -336,6 +336,21 @@ wave = 4
 verified = false
 notes = "WP-782: all of llvm/ with the AArch64 and X86 backends, every tool, the unit tests and check-llvm (lit + unit tests, lit capped at -j 4). Release with assertions, no debug info. Shares the llvm_project checkout's tag; its own shallow clone."
 
+[llvm_clang]
+url = "https://github.com/llvm/llvm-project"
+tag = "llvmorg-19.1.7"
+build = "cmake"
+source_subdir = "llvm"
+cxx_std = 17
+configure = ["-DLLVM_TARGETS_TO_BUILD=AArch64;X86", "-DLLVM_ENABLE_PROJECTS=clang;lld", "-DLLVM_ENABLE_ASSERTIONS=ON", "-DLLVM_INCLUDE_TESTS=ON", "-DLLVM_INCLUDE_BENCHMARKS=OFF", "-DLLVM_INCLUDE_EXAMPLES=OFF", "-DLLVM_ENABLE_ZSTD=OFF", "-DLLVM_ENABLE_LIBXML2=OFF", "-DLLVM_LIT_ARGS=-sv -j 4"]
+build_targets = ["all", "clang-test-depends", "ClangUnitTests", "lld-test-depends", "LLDUnitTests"]
+test = "make check-clang; c=$?; make check-lld; l=$?; echo \"check-clang rc=$c check-lld rc=$l\"; [ $c -eq 0 ] && [ $l -eq 0 ]"
+test_timeout = 18000
+c_compiler = "clang-19"
+wave = 4
+verified = false
+notes = "WP-801: llvm/ plus clang and lld (LLVM_ENABLE_PROJECTS=clang;lld) with the AArch64 and X86 backends, then check-clang and check-lld (lit + unit tests, lit capped at -j 4), each through make so they draw from the shared jobserver. Release with assertions, no debug info. Same tag as llvm_full; its own shallow clone. report.json's `tests` is check-lld's lit block (the last one); both suites are in docs/status/oss/llvm_clang.md."
+
 [folly]
 url = "https://github.com/facebook/folly"
 tag = "v2026.10.26.00"
@@ -520,6 +535,42 @@ c_compiler = "clang-19"
 wave = 4
 verified = true
 notes = "WP-787: header-only metaprogramming libraries. docs/status/oss/boost_meta.md. The 12 excluded tests do not compile under the clang-19 control either: yap's 5 (call to constructor of term<T> is ambiguous), variant overload_selection (variant.hpp:1615 no matching member), spirit's {karma,qi}_*_attr (BOOST_PP_ITERATE includes test_manip_attr.hpp, found through the b2 project's <include> requirement the shim does not read) and lex regression_matlib_* (matlib_static.h is written by another test's run)."
+
+[boost_compiled]
+url = "https://github.com/boostorg/boost"
+tag = "boost-1.90.0"
+checkout = "boost"
+submodules = true
+build = "cmake"
+cxx_std = 20
+configure = [
+  "-DBUILD_TESTING=ON", "-DBUILD_SHARED_LIBS=OFF",
+  "-DBOOST_INCLUDE_LIBRARIES=system;filesystem;thread;chrono;atomic;regex;program_options;serialization;date_time;container;json;url;random;iostreams;log;locale;context;fiber;nowide;charconv;stacktrace;timer;exception;wave;test",
+  "-DCMAKE_PROJECT_Boost_INCLUDE=@OSS@/shims/boost-jamfile-tests.cmake",
+  "-DKILN_BOOST_JAMFILE_LIBRARIES=filesystem;thread;regex;serialization;date_time;iostreams;log;context;fiber;exception;test",
+  "-DKILN_BOOST_JAMFILE_INCLUDE_filesystem=.",
+  "-DKILN_BOOST_JAMFILE_RULES_thread=thread-run=run||0;thread-test=run||0;thread-run2=run|{1}|0;thread-run2-noit=run|{1}|0;thread-run2-noit-pthread=run|{1}|0;thread-run-lib2=run|{1}|0;thread-compile-fail=compile-fail|{2}|0;thread-compile=compile|{2}|0",
+  "-DKILN_BOOST_JAMFILE_DEFINES_thread=BOOST_THREAD_THROW_IF_PRECONDITION_NOT_SATISFIED",
+  "-DKILN_BOOST_JAMFILE_LINK_thread=Boost::unit_test_framework",
+  "-DKILN_BOOST_JAMFILE_INCLUDE_regex=../src;.",
+  "-DKILN_BOOST_JAMFILE_RULES_serialization=test-bsl-run_files=run|{0}|0,1;test-bsl-run=run|{0}|0,1;test-bsl-run_polymorphic_files=run|{0}|0,1",
+  "-DKILN_BOOST_JAMFILE_VARIANTS_serialization=test-bsl-run_files|BOOST_ARCHIVE_TEST=text_archive.hpp|_text_archive;test-bsl-run_files|BOOST_ARCHIVE_TEST=binary_archive.hpp|_binary_archive;test-bsl-run_files|BOOST_ARCHIVE_TEST=xml_archive.hpp|_xml_archive",
+  "-DKILN_BOOST_JAMFILE_LINK_serialization=Boost::filesystem",
+  "-DKILN_BOOST_JAMFILE_RULES_iostreams=test-iostreams=run||0;compile-fail-iostreams=compile-fail||0",
+  "-DKILN_BOOST_JAMFILE_LINK_iostreams=Boost::unit_test_framework;Boost::filesystem",
+  "-DKILN_BOOST_JAMFILE_GLOB_log=compile=compile/*.cpp;compile-fail=compile_fail/*.cpp;run=run/*.cpp",
+  "-DKILN_BOOST_JAMFILE_EXCLUDE_log=self_contained_header",
+  "-DKILN_BOOST_JAMFILE_INCLUDE_log=common",
+  "-DKILN_BOOST_JAMFILE_LINK_log=Boost::log_setup;Boost::unit_test_framework;Boost::filesystem",
+  "-DKILN_BOOST_JAMFILE_LINK_fiber=Boost::unit_test_framework;Boost::thread;Boost::context",
+  "-DKILN_BOOST_JAMFILE_TARGET_test=Boost::unit_test_framework",
+  "-DKILN_BOOST_JAMFILE_RULES_test=boost.test-self-test={0}|{2}|{1}/{2}.cpp;boost.test-mt-test={0}|{2}|{1}/{2}.cpp",
+]
+build_targets = ["all", "tests"]
+test = "ctest -j 4 --output-on-failure --timeout 300 -E '^(run-thread-tss_null|run-thread-test_5502|run-thread-test_9079_b|run-thread-test_9192|run-thread-ex_this_executor|run-thread-ex_default_executor|run-thread-test_13561|run-serialization-test_map_hashed_text_archive|run-serialization-test_map_hashed_binary_archive|run-serialization-test_map_hashed_xml_archive|run-serialization-test_set_hashed_text_archive|run-serialization-test_set_hashed_binary_archive|run-serialization-test_set_hashed_xml_archive|run-date_time-testgreg_serialize|run-date_time-testtime_input_facet|run-date_time-testtime_formatters|run-date_time-testtime_serialize|run-date_time-testtime_serialize_versioning|run-date_time-testtz_database|run-date_time-testlocal_time_facet|run-iostreams-deprecated_file_descriptor_test|run-iostreams-windows_pipe_test|run-exception-_2_throw_exception_no_exceptions_test|run-exception-_4_throw_exception_no_both_test|run-exception-copy_exception_test|run-exception-copy_exception_no_exceptions_test|run-exception-no_exceptions_test|run-exception-non_intrusive_exception_ptr_test|run-exception-exception_ptr_test|run-exception-visibility_test|run-test-shared_library_custom_init_test|run-test-shared_library_custom_main_test|run-test-log_formatter_test|run-test-test_macro_global_fixture|run-test-message_in_datatestcase_test|run-test-log_count_skipped_test|run-test-sync_access_test|run-fail-test-result_code_test|run-fail-test-system_exception_test|run-fail-test-user_fatal_exception_test|run-boost_stacktrace-test)$'"
+c_compiler = "clang-19"
+wave = 4
+notes = "WP-804: compiled Boost libraries (their own .a built by kiln too). docs/status/oss/boost_compiled.md. The 41 excluded tests fail under the clang-19 control too. 30 are Not Run because they do not build: the shim does not read b2 target requirements (exception's /boost//thread and <exception-handling>off, date_time's serialization link and self_contained_header loop, iostreams' windows/deprecated tests, thread's tss_null and 9079/9192/13561, serialization's hashed containers, Boost.Test's shared-library and run-fail tests). 11 fail at run time with clang too: thread test_5502 and the two executor examples, date_time's three facet/tz tests (data files and locale), Boost.Test's four output-pattern tests, stacktrace (Release, no debug info)."
 
 # Big apps 2/3 (WP-803): runtime-heavy suites (SIMD pixels, task-parallel
 # atomics), where miscompiles show up as wrong output or hangs.

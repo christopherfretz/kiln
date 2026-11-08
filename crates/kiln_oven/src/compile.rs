@@ -550,6 +550,51 @@ impl Oven {
         idx
     }
 
+    /// The function of [`Oven::fold_object_size`] (WP-808): in one
+    /// scope, clang's `tryEvaluateBuiltinObjectSize` of pointer `p` for
+    /// type `ty` ([`Compiler::object_size`] without the side-effect
+    /// default); returns the size as a `size_t`. Not cached (each
+    /// `pass_object_size` argument is folded once).
+    pub(crate) fn compile_object_size(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        p: ExprId,
+        ty: u32,
+    ) -> u32 {
+        let idx = self.funcs.len() as u32;
+        self.funcs.push(Func {
+            decl: None,
+            entry: UNCOMPILED,
+            state: FState::Stub,
+            nregs: 0,
+            ret: RetKind::Void,
+            params: Vec::new(),
+            memo: false,
+            this_reg: None,
+            this_ty: None,
+            base_obj: false,
+        });
+        let size_t = QualType::unqual(b.ast().types.target().size_t);
+        let mut c = Compiler::new(self, b);
+        let entry = c.here();
+        let st = c.ty(size_t);
+        c.open_scope(&[], true);
+        let t = c.reg();
+        c.konst(t, u128::from(ty & 3));
+        let n = c.reg();
+        let begin = c.begin(p);
+        c.object_size(p, p, t, n, begin, false);
+        c.close_scope();
+        c.emit(Op::Ret, 1, &[n]);
+        let nregs = c.end_unit();
+        let f = &mut self.funcs[idx as usize];
+        f.entry = entry;
+        f.state = FState::Ready;
+        f.nregs = nregs;
+        f.ret = RetKind::Scalar(st);
+        idx
+    }
+
     /// The function of [`Oven::evaluate_with_params`]: in one scope, each
     /// parameter of `binds` initialized from its argument (a reference
     /// bound, an object initialized as a local variable), then `cond`

@@ -17,7 +17,7 @@ use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, ValueCategory};
 use kiln_ast::expr::{SourceLocKind, SourceLocValues};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TargetTypes;
-use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, NoexceptValue, Quals, VectorKind};
+use kiln_ast::types::{BuiltinType, CallConv, ExcSpec, FuncInfo, NoexceptValue, Quals, VectorKind};
 use kiln_ast::types::{Nns, TagKeyword};
 use kiln_ast::{Ast, AttrId, DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -524,13 +524,19 @@ impl Sema<'_, '_> {
     /// with C language linkage, named in the table and with the row's type
     /// ignoring the exception specification; WP-419: and declared at the
     /// `-fclang-compat` level and in the dialect ([`builtin::lib_min_compat`],
-    /// [`builtin::lib_gnu_only`]).
+    /// [`builtin::lib_gnu_only`]). WP-808: none under [`Sema::no_builtin`],
+    /// and not one named by a `-fno-builtin-<name>` (clang
+    /// `Builtin::Context::initializeBuiltins`).
     pub(crate) fn lib_builtin_info(&mut self, f: DeclId) -> Option<builtin::Info> {
-        if self.kind_of(f) != DeclKind::Function {
+        if self.kind_of(f) != DeclKind::Function || self.no_builtin {
             return None;
         }
         let name = self.ast.decls.get(f).name().as_ident()?;
-        let info = builtin::lib_by_name(self.ast.symbols().as_str(name)).copied()?;
+        let name = self.ast.symbols().as_str(name);
+        if self.no_builtin_fns.binary_search_by(|n| n.as_str().cmp(name)).is_ok() {
+            return None;
+        }
+        let info = builtin::lib_by_name(name).copied()?;
         if builtin::lib_min_compat(info.id) > self.clang_compat
             || (builtin::lib_gnu_only(info.id) && !self.gnu)
         {
@@ -1987,6 +1993,17 @@ impl Sema<'_, '_> {
         args: &[ExprId],
         rparen: Loc,
     ) -> Option<(Vec<ExprId>, QualType)> {
+        // clang `checkVAStartABI`: the target's `va_list` cannot walk the
+        // variadic arguments of an `ms_abi` function (WP-808).
+        let f = self.ctx;
+        if self.ast.decls.get(f).kind().is_function()
+            && let Some(fty) = self.ast.decls.get(f).ty()
+            && self.ast.types.proto(fty).is_some_and(|p| p.info().cc() == CallConv::Win64)
+        {
+            let at = self.begin_loc(callee);
+            self.error(DiagId::sema_va_start_wrong_abi, at);
+            return None;
+        }
         if !self.builtin_arg_count(args, 2, rparen) {
             return None;
         }
@@ -2445,12 +2462,24 @@ impl Sema<'_, '_> {
             self.diagnose_bound_member(e);
             return true;
         }
-        if self.ast.exprs.get(e).ty() != QualType::BUILTIN_FN {
+        if self.ast.exprs.get(e).ty() != QualType::BUILTIN_FN && !self.is_builtin_alias_ref(e) {
             return false;
         }
         let msg = self.diag(DiagId::sema_builtin_fn_use, self.eloc(e));
         self.emit(msg);
         true
+    }
+
+    /// Whether `e` names a function declared with `__clang_arm_builtin_alias`
+    /// or `clang_builtin_alias` (WP-810): clang gives such a declaration the
+    /// builtin's ID, so it too can only be called.
+    pub(crate) fn is_builtin_alias_ref(&self, e: ExprId) -> bool {
+        let e = self.ignore_parens(e);
+        if self.ast.exprs.get(e).kind() != ExprKind::DeclRefExpr {
+            return false;
+        }
+        let d = self.ast.exprs.decl(e);
+        self.ast.decls.get(d).kind() == DeclKind::Function && self.ast.builtin_alias(d).is_some()
     }
 }
 

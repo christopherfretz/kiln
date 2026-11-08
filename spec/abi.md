@@ -813,7 +813,12 @@ points, thunks and method indices are clang's.
   a class template specialization that is not explicitly specialized
   (clang `getLVForLocalDecl`: `isInlined() ||
   isTemplateInstantiation(TSK)`). Otherwise the local class has no
-  linkage and its members are internal.
+  linkage and its members are internal. The function's linkage counts
+  its template arguments (WP-801): a local class or closure type of
+  `f<(anonymous)::A>`, a unique-external specialization, is internal
+  like `f<A>` itself, as are its members and static locals; they are
+  never `linkonce_odr`, which would let the linker merge two
+  translation units' distinct lambdas.
 - **Discriminator** (`AnonIds::local_tag`): `Z <encoding> E <entity>
   [<discriminator>]`. A named class or enumeration declared directly in
   a function, after the first one of the same name there, gets `_0`,

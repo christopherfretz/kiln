@@ -18,7 +18,7 @@ C++26 draft; "clang" means clang 19 with `-std=c++26` on the container target
 | bases | non-virtual (WP-066/067), virtual (WP-078), `final`, `override`, abstract classes, covariance | |
 | special members | all six: implicit declaration/definition, triviality, deletedness, `constexpr`, `= default`/`= delete`, inheriting ctors (after WP-062); defaulted comparisons ([class.compare], WP-082, §4.12) | trivially relocatable (P2786) |
 | construction | ctor-initializers, delegating ctors, NSDMI, temporaries, cleanups, lifetime extension incl. P2718 range-for, guaranteed elision, NRVO marking, aggregates with bases, paren-aggregate init | function-try-blocks and EH cleanups (exceptions milestone) |
-| layout | full Itanium: bases, vptr, vbases, primary base, EBO, tail padding, bit-fields across bases, `#pragma pack`, `alignas`; vtable layout and VTT | MS ABI, `#pragma ms_struct`, `-fclang-abi-compat` |
+| layout | full Itanium: bases, vptr, vbases, primary base, EBO, tail padding, bit-fields across bases, `#pragma pack`, `alignas`; vtable layout and VTT; `ms_struct` bit-field layout (attribute and `#pragma ms_struct`, WP-809) | MS ABI, `-fclang-abi-compat` |
 | RTTI | `dynamic_cast`/`typeid` sema; final overriders for the Oven | |
 | other | explicit object parameters (P0847): declarations, calls, `&C::f` (§2.5), lambdas (spec/sema-lambda.md §3.1, WP-356) | |
 
@@ -236,6 +236,13 @@ out-of-line member templates instantiated later included, get access
 nested-befriends-enclosing-template*.cpp). An elaborated-type-specifier
 `class X` naming the injected-class-name is the injected type `X<P...>`
 anywhere inside the template, not only in a friend declaration.
+The lookup of an unqualified `friend class X;` searches the class scopes,
+base classes included, before stopping at the innermost enclosing namespace
+([dcl.type.elab]/4): a class found by class member lookup is the friend
+even when it is declared in another namespace, such as the
+injected-class-name of a private base specialization (LLVM's
+`friend class TrailingObjects;`; WP-801; tests/conformance/dcl.type.elab/
+friend-class-found-in-base-class-scope-run.cpp).
 Until `}` a class's friends are the open `ClassBuild`'s list, and that list
 stays visible to an instantiation started inside the class (the stack is
 set aside in `Sema.suspended_classes`, §8.3): `struct V { friend struct
@@ -490,7 +497,13 @@ declaration that is not a function template (clang's second lookup in
 not match any declaration in {1}` takes clang's scope text (`'S'` for a
 class, `namespace 'N::M'`, `the global namespace`) and is now also
 emitted for a qualified namespace-scope function that names no previous
-declaration ([dcl.meaning.general]/2). A class context is printed as
+declaration ([dcl.meaning.general]/2). A function first declared by a
+friend declaration is nominable in its namespace, so a qualified
+namespace-scope definition `void N::f(C &) {}` redeclares that hidden
+friend (`find_prev_function` falls back to `hidden_friend_redecl_set`, adding
+only declarations qualified lookup did not find;
+[dcl.meaning.general]/2.3, [namespace.memdef]/3; WP-801,
+`dcl.meaning/qualified-definition-of-hidden-friend-run.cpp`). A class context is printed as
 its type, a current instantiation unqualified at compat 19 (`'A<T>'`)
 and fully qualified at 22 (`'N::A<T>'`, `class_context_str`); at compat
 22 the error for a class context carries "{0} defined here" at the

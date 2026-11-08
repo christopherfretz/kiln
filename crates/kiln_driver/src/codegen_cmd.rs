@@ -184,6 +184,8 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOpti
         wrapv: f.wrapv(),
         wrapv_pointer: f.wrapv_pointer(a.predef.clang_compat == ClangCompat::Clang22),
         null_pointer_is_valid: f.null_pointer_is_valid(),
+        no_builtin: a.no_builtin(),
+        no_builtin_fns: a.no_builtin_fns(),
         target_cpu: cpu,
         tune_cpu: f.mtune.clone().filter(|t| t != "native"),
         no_inline: a.predef.no_inline,
@@ -290,8 +292,13 @@ impl CodegenJob<'_> {
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == StdLib::LibStdCxx,
+            no_builtin: a.no_builtin(),
+            no_builtin_fns: a.no_builtin_fns(),
+            sized_deallocation: a.predef.sized_deallocation.unwrap_or(true),
+            char8: a.predef.char8_t,
             math_errno: a.fp_model().opts.math_errno,
             sve: feats.sve,
+            sve_vector_bits: feats.sve_vector_bits,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
             contract_semantic: a.contract_semantic.unwrap_or_default(),
@@ -310,7 +317,9 @@ impl CodegenJob<'_> {
                 exceptions: a.predef.exceptions.unwrap_or(true),
                 rtti: a.predef.rtti.unwrap_or(true),
                 ident: ident(),
-                outline_atomics: a.outline_atomics.unwrap_or(true),
+                outline_atomics: a
+                    .outline_atomics
+                    .or_else(|| job.toolchain.aarch64_outline_atomics_default().then_some(true)),
                 target_features: feats.extra.clone(),
                 target_attr: Some(if job.toolchain.target.is_aarch64() {
                     crate::features::target_attr_features as kiln_codegen::TargetAttrParser

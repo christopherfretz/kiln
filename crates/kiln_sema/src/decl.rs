@@ -35,6 +35,7 @@ use crate::overload::redecl::NewFn;
 use crate::qualified_decl::QualifiedDecl;
 use crate::scope::{Ns, Scope, ScopeKind};
 use crate::type_diff::DiffArgs as _;
+use crate::vector::VectorAttrPos;
 use crate::{Sema, target};
 use kiln_ast::templates::is_template_kind;
 use kiln_oven::{EvalContext, EvalKind};
@@ -1766,18 +1767,12 @@ impl Sema<'_, '_> {
         attrs.extend(d.attrs.iter().copied());
         // [dcl.align]/1: not on a function parameter.
         self.reject_alignas(&mut attrs, 0);
-        ty = self.apply_vector_attrs(ty, &mut attrs, false);
-        // A parameter's type is substituted with its function's.
-        attrs.retain(|&a| {
-            let n = *self.ast.attrs.get(a);
-            if n.kind != AttrKind::MODE {
-                return true;
-            }
-            let what = "a 'mode' attribute on a parameter of dependent type";
-            self.emit(self.diag(DiagId::parse_unsupported, n.loc).arg(what));
-            false
-        });
+        ty = self.apply_vector_attrs(ty, &mut attrs, false, VectorAttrPos::Decl);
+        // A `mode` left in `attrs` is on a dependent type: kept on the
+        // parameter, applied when it is substituted (clang
+        // `instantiateDependentModeAttr`; `Subst::param_infos`).
         ty = self.apply_noreturn_attrs(ty, &attrs);
+        ty = self.apply_cc_attrs(ty, &mut attrs, true);
         let declared = ty;
         ty = self.adjust_param_type(ty);
         let mut original_ty = (ty != declared).then_some(declared);
@@ -2327,6 +2322,7 @@ impl Sema<'_, '_> {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("find_prev_function");
         let mut found = self.prev_candidates_dn(dname, qualifier);
+        let visible = if qualifier.is_some() { found.clone() } else { Vec::new() };
         // A friend of a templated class is not visible to redeclaration
         // lookup until instantiated: a later namespace-scope declaration
         // declares a new function, matched by the friend's
@@ -2351,8 +2347,20 @@ impl Sema<'_, '_> {
         if let Some(p) = self.pick_prev_function(&found, new) {
             return Some(p);
         }
-        if qualifier.is_some() {
-            return None;
+        if let Some(q) = qualifier {
+            // A function first declared by a friend declaration is a member
+            // of the namespace, invisible to qualified lookup but nominable
+            // there, so `void N::f(C &) {}` redeclares the friend
+            // ([dcl.meaning.general]/2.3, [namespace.memdef]/3; clang's
+            // redeclaration lookup sees hidden friends).
+            if !matches!(self.kind_of(q), DeclKind::Namespace | DeclKind::TranslationUnit) {
+                return None;
+            }
+            // Only the hidden ones: a declaration qualified lookup found
+            // was already considered (and filtered) above.
+            let mut hidden = self.hidden_friend_redecl_set(q, dname, &new);
+            hidden.retain(|x| !visible.contains(x));
+            return self.pick_prev_function(&hidden, new);
         }
         let ns = self.enclosing_namespace()?;
         let name = dname.as_ident()?;
@@ -2710,6 +2718,24 @@ impl Sema<'_, '_> {
         if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
             self.check_explicit_inst_specifiers(ds, ty);
         }
+        // WP-810: a non-default `target_version` version is hidden, as
+        // clang hides it without the `fmv` target feature (src/fmv.rs).
+        if !ds.is_typedef() && self.ast.types.is_function(ty) {
+            let attrs: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+            if let Some(at) = self.fmv_hidden_version(&attrs) {
+                if d.ctx == DeclaratorContext::Member {
+                    // clang crashes on this (a friend: `act_on_friend`).
+                    let msg = self
+                        .diag(DiagId::sema_multiversion_not_supported, at)
+                        .arg("target_version");
+                    self.emit(msg);
+                } else {
+                    self.fmv_attached(true, &attrs, true);
+                    self.templ.cur = None;
+                    return None;
+                }
+            }
+        }
         if special {
             // [temp.variadic]/12: `S(Ts);`, `operator Ts();`.
             if !invalid && ds.friend.is_none() {
@@ -2831,9 +2857,11 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_noreturn_non_function, l);
             }
         }
-        let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef());
+        let pos = if ds.is_typedef() { VectorAttrPos::Typedef } else { VectorAttrPos::Decl };
+        let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef(), pos);
         let ty = self.apply_nothrow_attrs(ty, &mut attrs);
         let ty = self.apply_noreturn_attrs(ty, &attrs);
+        let ty = self.apply_cc_attrs(ty, &mut attrs, !ds.is_typedef());
         // [dcl.spec.general]/3: a function or member declared with no
         // type (`y();`, `struct S { y; };`) is an invalid `int` one, as
         // clang's `ConvertDeclSpecToType`: later uses name it silently.
@@ -2937,6 +2965,13 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_consteval_dtor, l);
         }
         let mut invalid = invalid;
+        // The calling convention of a constructor, destructor or
+        // conversion function (WP-808).
+        let ty = {
+            let mut written = ds.attrs.clone();
+            written.extend(d.attrs.iter().copied());
+            self.apply_cc_attrs(ty, &mut written, true)
+        };
         let Some(decl) = self.act_on_special_declarator(ds, ty, d, &mut invalid) else {
             self.templ.cur = None;
             return None;
@@ -2963,6 +2998,7 @@ impl Sema<'_, '_> {
         }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
+        attrs.retain(|&a| !self.ast.attrs.get(a).kind.is_fn_type_attr());
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
         }
@@ -3123,15 +3159,25 @@ impl Sema<'_, '_> {
     }
 
     /// Whether function types `a` and `b` are the same apart from their
-    /// exception specifications and GNU `noreturn` (which declarations of
-    /// one function merge, clang `MergeFunctionDecl`).
+    /// exception specifications, GNU `noreturn` and calling convention
+    /// (which declarations of one function merge, clang
+    /// `MergeFunctionDecl`).
     pub(crate) fn same_ignoring_exc_spec(&mut self, a: QualType, b: QualType) -> bool {
         let t = &self.ast.types;
         let (Some(pa), Some(pb)) = (t.proto(a).copied(), t.proto(b).copied()) else {
             return false;
         };
         let (ra, rb) = (t.params(&pa).to_vec(), t.params(&pb).to_vec());
-        let (ia, ib) = (pa.info().with_noreturn(false), pb.info().with_noreturn(false));
+        // The calling convention and `no_caller_saved_registers` do not
+        // decide correspondence either: a redeclaration naming another is
+        // diagnosed by `Sema::merge_cc` (clang `IsOverload` /
+        // `MergeFunctionDecl`, WP-808).
+        let plain = |i: FuncInfo| {
+            i.with_noreturn(false)
+                .with_cc(kiln_ast::types::CallConv::Default)
+                .with_no_caller_saved_regs(false)
+        };
+        let (ia, ib) = (plain(pa.info()), plain(pb.info()));
         let a = self.ast.types.function(pa.ret(), &ra, ia, ExcSpec::None);
         let b = self.ast.types.function(pb.ret(), &rb, ib, ExcSpec::None);
         self.ast.types.same_type(a, b)
@@ -3539,13 +3585,15 @@ impl Sema<'_, '_> {
     }
 
     /// `using name = type-id;` ([dcl.typedef]/2); `type_loc` is where
-    /// the type-id starts (invalid when not written).
+    /// the type-id starts (invalid when not written). The first `own` of
+    /// `attrs` follow the name; the rest are the type-id's.
     pub fn act_on_alias_decl(
         &mut self,
         name: Symbol,
         name_loc: Loc,
         ty: QualType,
         attrs: &[AttrId],
+        own: usize,
         type_loc: Loc,
     ) -> DeclId {
         if let Some(id) = self.pending_alias_vla.take() {
@@ -3556,8 +3604,18 @@ impl Sema<'_, '_> {
         let ds = DeclSpec::new(name_loc);
         let _ = self.take_template_head(None);
         let _ = self.check_template_in_local_class(false, Loc::INVALID);
-        let mut attrs = attrs.to_vec();
-        let ty = self.apply_vector_attrs(ty, &mut attrs, true);
+        // The type-id's attributes modify its type; then those after the
+        // name, which appertain to the alias.
+        let (own, of_type) = attrs.split_at(own.min(attrs.len()));
+        // A `mode` in the type-id is dropped silently (clang's
+        // `ActOnTypeName` skips the unused-attribute check for an alias).
+        let mut type_attrs = of_type.to_vec();
+        type_attrs.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::MODE);
+        let ty = self.apply_vector_attrs(ty, &mut type_attrs, true, VectorAttrPos::Type(None));
+        let mut attrs = own.to_vec();
+        let ty = self.apply_vector_attrs(ty, &mut attrs, true, VectorAttrPos::Decl);
+        attrs.extend(type_attrs);
+        let ty = self.apply_cc_attrs(ty, &mut attrs, false);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
         // [temp.variadic]/12: `using U = Ts;`.
         if self.diagnose_unexpanded_declarator(ty, "declaration type", name_loc) {
@@ -4113,6 +4171,9 @@ impl Sema<'_, '_> {
                 } else if nr(self, ty) && !nr(self, pty) {
                     pty = self.with_fn_noreturn(pty, true, false).unwrap_or(pty);
                 }
+                // The calling convention likewise, when the redeclaration
+                // names none; a different one is an error (WP-808).
+                ty = self.merge_cc(ty, pty, p, d.name_loc());
                 // A friend whose noexcept-specifier waits for the end of
                 // its class (or, instantiated, until needed), or one
                 // redeclaring such a friend before its class is complete,
@@ -5110,6 +5171,9 @@ impl Sema<'_, '_> {
             let msg =
                 self.diag(DiagId::sema_bitfield_zero_width, loc).arg(n).range(self.expr_range(w));
             self.emit(msg);
+            return None;
+        }
+        if self.ms_bitfield_too_wide(ty, v, name, loc) {
             return None;
         }
         if let Some((bits, _)) = constfold::int_info(&self.ast, ty) {
@@ -6504,6 +6568,8 @@ impl Sema<'_, '_> {
             self.check_static_tls(v, None);
             self.check_constinit(v);
             self.unify_var_section(v);
+        } else {
+            self.check_selectany_extern(v);
         }
         self.check_consteval_only_var(v);
     }
@@ -6794,6 +6860,7 @@ impl Sema<'_, '_> {
     /// redefinition, opens the function scope with the parameters.
     pub fn act_on_start_function_def(&mut self, f: DeclId) {
         self.check_alias_definition(f);
+        self.no_builtin_defined(f, false);
         // A deleted function is defined by its first declaration.
         let deleted = Some(self.ast.first(f)).filter(|&p| p != f && self.is_deleted_fn(p));
         if let Some(prev) = deleted.or_else(|| self.ast.definition(f))
@@ -6820,6 +6887,13 @@ impl Sema<'_, '_> {
         {
             let loc = self.ast.decls.get(f).loc();
             self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(info.name));
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        } else if self.ast.builtin_alias(f).is_some() {
+            // clang `ActOnStartOfFunctionDef`: an alias of a builtin
+            // (`__clang_arm_builtin_alias`, WP-810) is itself a builtin.
+            let loc = self.ast.decls.get(f).loc();
+            let name = self.decl_name_str(self.ast.decls.get(f).name());
+            self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(name));
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         // clang `ActOnStartOfFunctionDef` resolves the exception
@@ -6907,7 +6981,6 @@ impl Sema<'_, '_> {
     pub fn act_on_finish_function_def(&mut self, f: DeclId, body: StmtId, rbrace: Loc) {
         self.check_function_try_block(f, body);
         self.check_naked_body(f, body);
-        self.check_vector_pcs_definition(f);
         let body = self.end_function_body(body, rbrace);
         // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`.
         if let Some(fty) = self.ast.decls.get(f).ty() {
@@ -7661,9 +7734,18 @@ impl Sema<'_, '_> {
         // namespace counts, and the friend is its target (boost's
         // `friend class iterator_core_access;` through
         // `using iterators::iterator_core_access;`; clang `ActOnTag`).
+        // A name found by class member lookup ([class.member.lookup]) was
+        // found in a class scope, which lies inside the innermost enclosing
+        // namespace: a member of a base class in another namespace counts,
+        // such as the injected-class-name of a base specialization (LLVM's
+        // `friend class TrailingObjects;`; [dcl.type.elab]/4).
         let found_as = lookup.found.last().copied();
-        let prev =
-            found.last().copied().filter(|&p| within(self, found_as.unwrap_or(p))).or_else(hidden);
+        let in_class = lookup.naming.is_some();
+        let prev = found
+            .last()
+            .copied()
+            .filter(|&p| in_class || within(self, found_as.unwrap_or(p)))
+            .or_else(hidden);
         if let Some(p) = prev {
             if self.tag_matches(p, keyword) {
                 self.mark_type_referenced(p);
@@ -7892,6 +7974,8 @@ impl Sema<'_, '_> {
         if self.pack.0 != 0 {
             let _ = self.ast.decls.cold.record_pack.insert(r, self.pack.0);
         }
+        // `AddMsStructLayoutForRecord`: `#pragma ms_struct on`.
+        self.ms_struct_from_pragma(r);
         let _ = self.builder().begin_record_definition(r);
         let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
         let mut build = ClassBuild::new(r, tag, self.ctx);
@@ -8065,6 +8149,8 @@ impl Sema<'_, '_> {
         let bits = self.special_member_bits(r, bits);
         let bits = self.finish_special_members(r, bits);
         let bits = self.trivial_abi_bits(r, bits);
+        self.check_transparent_union(r);
+        self.check_ms_struct_class(r, bits);
         // [class.compare.default]/4: the implicit `operator==`s.
         let mut friends =
             build.as_mut().map(|b| std::mem::take(&mut b.friends)).unwrap_or_default();
@@ -10222,6 +10308,23 @@ impl Sema<'_, '_> {
                 };
             return self.class_b_attribute(kind, preset, syntax, &arg_name, &shown, args, loc);
         }
+        // WP-810: clang `Clang<"__clang_arm_builtin_alias">` (no `__`
+        // affixes are removed: `clang_arm_builtin_alias` is unknown) and
+        // `BuiltinAlias` (`GNU<"clang_builtin_alias">`,
+        // `CXX11<"clang", "builtin_alias">`).
+        let alias = match (raw.as_str(), scope_s.as_deref()) {
+            ("__clang_arm_builtin_alias", None) if syntax == AttrSyntax::Gnu => Some(true),
+            ("__clang_arm_builtin_alias", Some("clang")) => Some(true),
+            ("clang_builtin_alias", None) if syntax == AttrSyntax::Gnu => Some(false),
+            ("builtin_alias", Some("clang")) => Some(false),
+            _ => None,
+        };
+        if let Some(arm) = alias {
+            return self.builtin_alias_attribute(arm, syntax, &shown, args, loc);
+        }
+        if let Some(r) = self.fmv_attribute(&n, scope_s.as_deref(), syntax, args, loc) {
+            return r;
+        }
         // The triage (spec/sema.md §4.5, WP-805): an implemented
         // spelling, a clang attribute kiln ignores (class B/C: no
         // diagnostic, nothing attached), one it rejects (class A), or one
@@ -10254,6 +10357,10 @@ impl Sema<'_, '_> {
                 return None;
             }
         };
+        // The calling conventions, function type attributes (WP-808).
+        if kind.is_fn_type_attr() {
+            return self.cc_attribute(syntax, scope_s.as_deref(), &n, args, loc).flatten();
+        }
         if let std::ops::ControlFlow::Break(r) =
             self.attribute_with_args(kind, syntax, &raw, args, loc)
         {
@@ -10261,6 +10368,11 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::ABI_TAG {
             return self.abi_tag_attribute(syntax, &n, args, loc);
+        }
+        if kind == AttrKind::NO_BUILTIN {
+            // clang 22 names `[[clang::no_builtin]]` with its scope.
+            let scoped = syntax == AttrSyntax::Cxx11 && scope.is_some() && self.clang_compat >= 22;
+            return self.no_builtin_attribute(syntax, scoped, args, loc);
         }
         if kind == AttrKind::DIAGNOSE_IF {
             return self.diagnose_if_attribute(syntax, args, loc);
@@ -10473,12 +10585,13 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         };
-        let lit = match arg {
-            AttrArg::Expr(e) => self.string_lit_of(*e),
-            AttrArg::Type(_) | AttrArg::Ident(..) => None,
+        let (lit, at) = match arg {
+            AttrArg::Expr(e) => (self.string_lit_of(*e), self.ast.exprs.get(*e).loc()),
+            AttrArg::Ident(_, at) => (None, *at),
+            AttrArg::Type(_) => (None, loc),
         };
         let Some(lit) = lit else {
-            let msg = self.diag(DiagId::parse_attribute_requires_string, loc).arg(n.to_owned());
+            let msg = self.diag(DiagId::parse_attribute_requires_string, at).arg(n.to_owned());
             self.emit(msg);
             return None;
         };
@@ -10692,6 +10805,70 @@ impl Sema<'_, '_> {
         Some(self.ast.attrs.push(node))
     }
 
+    /// clang `no_builtin` / `no_builtin("name", ...)` as written (clang
+    /// `handleNoBuiltinAttr`; WP-808): no argument is the wildcard `*`;
+    /// each argument a string literal (else "expected string literal",
+    /// dropping the attribute) naming a library builtin, `std-<name>` for
+    /// a `std` one (clang `Builtin::Context::isBuiltinFunc`; another name
+    /// warns and is left out). Encoded as for [`AttrKind::NO_BUILTIN`];
+    /// [`Sema::check_no_builtin_attrs`] composes the ones on a declaration.
+    fn no_builtin_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        scoped: bool,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        const STD: [&str; 7] = [
+            "__addressof",
+            "addressof",
+            "as_const",
+            "forward",
+            "forward_like",
+            "move",
+            "move_if_noexcept",
+        ];
+        let mut names: Vec<String> = Vec::new();
+        if args.is_empty() {
+            names.push("*".to_owned());
+        }
+        for arg in args {
+            let (lit, at) = match arg {
+                AttrArg::Expr(e) => (self.string_lit_of(*e), self.ast.exprs.get(*e).loc()),
+                AttrArg::Type(_) => (None, loc),
+                AttrArg::Ident(_, l) => (None, *l),
+            };
+            let Some(lit) = lit else {
+                let msg = self.diag(DiagId::parse_attribute_requires_string, at).arg("no_builtin");
+                self.emit(msg);
+                return None;
+            };
+            let id = self.ast.exprs.string_lit(lit);
+            let name = String::from_utf8_lossy(self.ast.strings.bytes(id)).into_owned();
+            let valid = match name.strip_prefix("std-") {
+                Some(s) => STD.contains(&s),
+                None => {
+                    !STD.contains(&name.as_str())
+                        && (self.lib_builtin_name)(&name, self.clang_compat >= 22)
+                }
+            };
+            if valid {
+                names.push(name);
+            } else {
+                let msg = self
+                    .diag(DiagId::sema_no_builtin_invalid_name, at)
+                    .arg(name)
+                    .arg(if scoped { "'clang::no_builtin'" } else { "'no_builtin'" });
+                self.emit(msg);
+            }
+        }
+        names.sort();
+        names.dedup();
+        let a = self.intern(&names.join(",")).index();
+        let node = AttrNode { kind: AttrKind::NO_BUILTIN, syntax, flags: 0, loc, a, b: 0 };
+        Some(self.ast.attrs.push(node))
+    }
+
     /// The operand `arg` of `alignas`, written at `begin` and followed by
     /// `...` at `ellipsis` ([dcl.align]/1, [temp.variadic]/5): a pack
     /// expansion, expanded into one alignment per element when the
@@ -10764,9 +10941,11 @@ impl Sema<'_, '_> {
     /// ([dcl.align]/6, [`Sema::merge_aligned_redecl`]).
     pub fn act_on_tag_attrs(&mut self, d: DeclId, attrs: &[AttrId], use_: TagUse) {
         let mut attrs = attrs.to_vec();
+        let transparent = self.transparent_union_head(d, &mut attrs, use_);
         if !attrs.is_empty() {
             self.check_decl_attrs(d, &mut attrs);
         }
+        attrs.extend(transparent);
         if matches!(use_, TagUse::Declaration | TagUse::Definition) {
             self.finish_visibility_attrs(d, &mut attrs, true);
         }
@@ -11276,6 +11455,13 @@ pub(crate) fn attr_kind_of(
         ("cleanup", _, true) => AttrKind::CLEANUP,
         ("tls_model", _, true) => AttrKind::TLS_MODEL,
         ("returns_twice", _, true) => AttrKind::RETURNS_TWICE,
+        // clang `Clang<"musttail">` on a return statement (WP-809).
+        ("musttail", _, _) if gnu_syntax || clang_scope => AttrKind::MUSTTAIL,
+        // clang `GCC<"transparent_union">`, C-only (WP-809).
+        ("transparent_union", _, true) => AttrKind::TRANSPARENT_UNION,
+        ("selectany", _, true) => AttrKind::SELECTANY,
+        ("ms_struct", _, true) => AttrKind::MS_STRUCT,
+        ("gcc_struct", _, true) => AttrKind::GCC_STRUCT,
         // clang `GCC<"common">`, rejected in C++ (WP-807).
         ("common", _, true) => AttrKind::COMMON,
         // clang `Clang<"internal_linkage">` (WP-807).
@@ -11291,6 +11477,8 @@ pub(crate) fn attr_kind_of(
         ("minsize", _, _) if gnu_syntax || clang_scope => AttrKind::MINSIZE,
         // clang `Clang<"disable_tail_calls">` (WP-682).
         ("disable_tail_calls", _, _) if gnu_syntax || clang_scope => AttrKind::DISABLE_TAIL_CALLS,
+        // clang `Clang<"no_builtin">` (WP-808).
+        ("no_builtin", _, _) if gnu_syntax || clang_scope => AttrKind::NO_BUILTIN,
         ("uninitialized", _, _) if gnu_syntax || clang_scope => AttrKind::UNINITIALIZED,
         // clang `Clang<"trivial_abi">`.
         ("trivial_abi", _, _) if gnu_syntax || clang_scope => AttrKind::TRIVIAL_ABI,
@@ -11303,7 +11491,9 @@ pub(crate) fn attr_kind_of(
         ("malloc", _, true) => AttrKind::MALLOC,
         ("alloc_size", _, true) => AttrKind::ALLOC_SIZE,
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,
-        ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
+        // clang `Clang<"ext_vector_type">` from clang 22 (the caller
+        // filters the `clang::` spelling below it); `GNU` before.
+        ("ext_vector_type", _, _) if gnu_syntax || clang_scope => AttrKind::EXT_VECTOR_TYPE,
         ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
         ("mode", _, true) => AttrKind::MODE,
         // clang `Clang<"neon_vector_type">` / `Clang<"neon_polyvector_type">`.
@@ -11311,6 +11501,8 @@ pub(crate) fn attr_kind_of(
         ("neon_polyvector_type", _, _) if gnu_syntax || clang_scope => {
             AttrKind::NEON_POLYVECTOR_TYPE
         }
+        // clang `GNU<"arm_sve_vector_bits">` (WP-810).
+        ("arm_sve_vector_bits", _, _) if gnu_syntax => AttrKind::ARM_SVE_VECTOR_BITS,
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
         ("abi_tag", _, true) => AttrKind::ABI_TAG,
         // clang `GNU<"enable_if">`: no `[[...]]` spelling.

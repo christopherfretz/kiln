@@ -49,6 +49,11 @@ struct Builder {
     data_size: u64,
     /// `UnfilledBitsInLastUnit`.
     unfilled: u64,
+    /// `IsMsStruct` (WP-809).
+    ms: bool,
+    /// `LastBitfieldStorageUnitSize` (`ms_struct` only; 0 after anything
+    /// but a non-zero-width bit-field).
+    last_unit: u64,
     /// `PaddedFieldSize`.
     padded_field_size: u64,
     /// `Alignment`, in bits (a multiple of 8).
@@ -222,6 +227,8 @@ pub(super) fn layout_record(lay: &mut Layouter<'_>, def: DeclId) -> RecordFacts 
         size: 0,
         data_size: 0,
         unfilled: 0,
+        ms: class.ms_struct,
+        last_unit: 0,
         padded_field_size: 0,
         align: 8,
         max_field_align: class.max_field_align,
@@ -551,6 +558,10 @@ fn layout_field(b: &mut Builder, lay: &Layouter<'_>, map: &mut EmptySubobjectMap
 
     let mut off = if b.is_union || overlapping_empty { 0 } else { b.data_size };
     b.unfilled = 0;
+    b.last_unit = 0;
+    // clang's ms_struct rounding of a builtin field's alignment up to its
+    // size is a no-op on the LP64 targets kiln supports (every builtin is
+    // naturally aligned).
 
     let field_size = if f.incomplete_array { 0 } else { f.info.width };
     let mut effective = field_size;
@@ -595,6 +606,15 @@ fn layout_field(b: &mut Builder, lay: &Layouter<'_>, map: &mut EmptySubobjectMap
 /// §2.4 II.3.a).
 fn layout_bit_field(b: &mut Builder, lay: &Layouter<'_>, f: &FieldIn, width: u64) {
     let storage_unit = f.info.width;
+    if b.ms {
+        // Wider than its storage was rejected by sema.
+        if width > storage_unit {
+            layout_wide_bit_field(b, lay, width);
+        } else {
+            layout_ms_bit_field(b, f, width);
+        }
+        return;
+    }
     if width > storage_unit {
         layout_wide_bit_field(b, lay, width);
         return;
@@ -642,6 +662,58 @@ fn layout_bit_field(b: &mut Builder, lay: &Layouter<'_>, f: &FieldIn, width: u64
     b.update_align(field_align);
 }
 
+/// clang `LayoutBitField` with `IsMsStruct` (WP-809): a run of
+/// bit-fields whose types have the same size shares one storage unit of
+/// that size, aligned to it; a bit-field of another size, or one that
+/// does not fit in what is left, starts a new unit. A zero-width
+/// bit-field ends the run (and aligns only after a bit-field). `packed`
+/// does not change the placement; `aligned` and `#pragma pack` change
+/// only where a new unit starts.
+fn layout_ms_bit_field(b: &mut Builder, f: &FieldIn, width: u64) {
+    let storage_unit = f.info.width;
+    let mut field_align = storage_unit.max(1);
+    if b.last_unit != storage_unit || b.unfilled < width {
+        if b.last_unit == 0 && width == 0 {
+            field_align = 1;
+        }
+        b.unfilled = 0;
+        b.last_unit = 0;
+    }
+    let mut off = if b.is_union { 0 } else { b.data_size - b.unfilled };
+    if f.max_align != 0 {
+        field_align = field_align.max(f.max_align);
+    }
+    if b.max_field_align != 0 && width != 0 {
+        field_align = field_align.min(b.max_field_align);
+    }
+    if b.is_union {
+        field_align = 1;
+    }
+    if width == 0 || width > b.unfilled {
+        off = align_to(off, field_align);
+        b.unfilled = 0;
+    }
+    b.offsets.push(off);
+    if b.is_union {
+        b.data_size = b.data_size.max(if width == 0 { 8 } else { storage_unit });
+    } else if width != 0 {
+        if b.unfilled == 0 {
+            b.data_size = off.saturating_add(storage_unit);
+            b.unfilled = storage_unit;
+        }
+        b.unfilled -= width;
+        b.last_unit = storage_unit;
+    } else {
+        let end = off.saturating_add(width);
+        b.data_size = align_to(end, 8);
+        b.unfilled = b.data_size - end;
+        b.last_unit = 0;
+    }
+    b.size = b.size.max(b.data_size);
+    b.update_unadjusted(field_align);
+    b.update_align(field_align);
+}
+
 /// clang `LayoutWideBitField`: a bit-field wider than its type is
 /// allocated with the alignment of the largest unsigned integer type
 /// T' with `sizeof(T') * 8 <= width` (Itanium ABI §2.4 II.3.a.i).
@@ -662,6 +734,7 @@ fn layout_wide_bit_field(b: &mut Builder, lay: &Layouter<'_>, width: u64) {
         t_align = align * 8;
     }
     b.unfilled = 0;
+    b.last_unit = 0;
     let off;
     if b.is_union {
         b.data_size = b.data_size.max(align_to(width, 8));

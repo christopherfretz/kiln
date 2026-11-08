@@ -1149,3 +1149,186 @@ fn expansion_outlining_shape() {
     let o0 = ir(&["-O0", "-fkiln-outline-expansions=1"], "o0.ll");
     assert!(!o0.contains(".expand."), "{o0}");
 }
+
+/// spec/codegen.md "SVE fixed-length vectors" (WP-810): an AAPCS64 pure
+/// scalable type (an aggregate of `arm_sve_vector_bits` vectors and
+/// predicates) passed or returned by value is a codegen error from
+/// `-fclang-compat=22` (clang 20+ passes it in SVE registers, which kiln
+/// does not lower yet), at the definition and at the call; clang 19's
+/// lowering (`-fclang-compat=19`) and a struct that also holds a NEON
+/// vector compile. `-fsyntax-only` accepts all of them.
+#[test]
+fn sve_pure_scalable_by_value() {
+    let d = scratch("svepst");
+    let pre = "typedef __SVInt32_t svint32_t; typedef __SVBool_t svbool_t;\n\
+               typedef svint32_t fi32 __attribute__((arm_sve_vector_bits(128)));\n\
+               typedef svbool_t fb __attribute__((arm_sve_vector_bits(128)));\n\
+               typedef __attribute__((neon_vector_type(4))) int n4;\n\
+               struct A { fi32 v; };\n\
+               struct C { fi32 v; n4 n; };\n\
+               struct D { fi32 v[2]; fb p; };\n\
+               void c(C x) { c(x); }\n";
+    let what = "by value is not supported yet: it is an AAPCS64 pure scalable type (an \
+                aggregate of fixed-length SVE types)";
+    let cases = [
+        ("void a(A) {}\n", format!("t.cpp:9:6: error: passing or returning 'A' {what}")),
+        (
+            "D d();\nint e() { d(); return 0; }\n",
+            format!("t.cpp:10:11: error: passing or returning 'D' {what}"),
+        ),
+    ];
+    let flags =
+        ["--target=aarch64-unknown-linux-gnu", "-march=armv8-a+sve", "-msve-vector-bits=128"];
+    for (body, want) in cases {
+        std::fs::write(d.join("t.cpp"), format!("{pre}{body}")).unwrap();
+        let mut args = vec!["-fclang-compat=22", "-S", "-emit-llvm", "-o", "k.ll"];
+        args.extend(flags);
+        args.push("t.cpp");
+        let o = kiln_in(&d, &args);
+        assert!(text(&o.stderr).starts_with(&want), "{body}: {}", text(&o.stderr));
+        assert_eq!(o.status.code(), Some(1), "{body}");
+        args[0] = "-fclang-compat=19";
+        let o = kiln_in(&d, &args);
+        assert!(o.status.success(), "{body}: {}", text(&o.stderr));
+        let mut args = vec!["-fclang-compat=22", "-fsyntax-only"];
+        args.extend(flags);
+        args.push("t.cpp");
+        let o = kiln_in(&d, &args);
+        assert!(o.status.success(), "{body}: {}", text(&o.stderr));
+    }
+}
+
+/// WP-810: an `<arm_sve.h>` intrinsic kiln does not lower, a call without
+/// the `sve` feature, an SVE tuple by value at `-fclang-compat=22` and an
+/// alias whose declaration does not match its builtin are hard errors.
+/// `-ffreestanding` keeps `<stdint.h>` off the host libc, so the test
+/// runs on an x86-64 host without `AArch64` headers.
+#[test]
+fn sve_builtin_alias_errors() {
+    let d = scratch("svealias");
+    let sve = "#include <arm_sve.h>\n";
+    let cases = [
+        (
+            format!("{sve}svint8x2_t a(svint8_t x) {{ return svcreate2_s8(x, x); }}\n"),
+            "-fclang-compat=19",
+            "-march=armv8-a+sve",
+            "t.cpp:2:47: error: code generation for SVE builtin '__builtin_sve_svcreate2_s8' \
+             (called as 'svcreate2_s8') is not supported yet",
+        ),
+        (
+            format!("{sve}uint64_t a() {{ return svcntw(); }}\n"),
+            "-fclang-compat=19",
+            "-march=armv8-a",
+            "t.cpp:2:23: error: 'svcntw' needs target feature sve|sme",
+        ),
+        (
+            format!("{sve}void a(svint8x2_t) {{}}\n"),
+            "-fclang-compat=22",
+            "-march=armv8-a+sve",
+            "t.cpp:2:6: error: passing or returning '__clang_svint8x2_t' by value is not \
+             supported yet: it is an SVE tuple type, which clang 20 and later pass as a \
+             struct of vectors",
+        ),
+        (
+            "unsigned long f(int) \
+             __attribute__((__clang_arm_builtin_alias(__builtin_sve_svcntw)));\n\
+             unsigned long a() { return f(1); }\n"
+                .to_string(),
+            "-fclang-compat=19",
+            "-march=armv8-a+sve",
+            "t.cpp:2:29: error: the function called does not have the signature of SVE \
+             builtin '__builtin_sve_svcntw'",
+        ),
+    ];
+    for (src, compat, march, want) in cases {
+        std::fs::write(d.join("t.cpp"), &src).unwrap();
+        let args = [
+            compat,
+            "--target=aarch64-unknown-linux-gnu",
+            "-ffreestanding",
+            march,
+            "-S",
+            "-emit-llvm",
+            "-o",
+            "k.ll",
+        ];
+        let o = kiln_in(&d, &[&args[..], &["t.cpp"]].concat());
+        assert!(text(&o.stderr).starts_with(want), "{src}: {}", text(&o.stderr));
+        assert_eq!(o.status.code(), Some(1), "{src}");
+    }
+    // The tuple is accepted by value where clang 19 passes it as one vector.
+    std::fs::write(d.join("t.cpp"), format!("{sve}void a(svint8x2_t) {{}}\n")).unwrap();
+    let o = kiln_in(
+        &d,
+        &[
+            "-fclang-compat=19",
+            "--target=aarch64-unknown-linux-gnu",
+            "-ffreestanding",
+            "-march=armv8-a+sve",
+            "-S",
+            "-emit-llvm",
+            "-o",
+            "k.ll",
+            "t.cpp",
+        ],
+    );
+    assert!(o.status.success(), "{}", text(&o.stderr));
+}
+
+/// WP-810: function multiversioning kiln does not implement is a hard
+/// error, never a silently different function: on x86-64 every form clang
+/// multiversions (`target_version` only before clang 22, an unknown
+/// attribute from 22), and on `AArch64` a non-default `target_version` member
+/// or friend (clang crashes or drops a later definition there).
+#[test]
+fn multiversion_unsupported_errors() {
+    let d = scratch("fmvx86");
+    let src = "__attribute__((target_clones(\"avx2\",\"default\"))) int a() { return 1; }\n\
+               __attribute__((cpu_dispatch(atom, generic))) int b();\n\
+               __attribute__((cpu_specific(atom))) int c() { return 1; }\n\
+               __attribute__((target(\"default\"))) int d() { return 1; }\n\
+               __attribute__((target(\"avx2\"))) int e();\n\
+               __attribute__((target(\"sse4.2\"))) int e();\n\
+               __attribute__((target(\"avx2\"))) int f() { return 1; }\n\
+               int f();\n\
+               __attribute__((target_version(\"default\"))) int g() { return 1; }\n";
+    std::fs::write(d.join("t.cpp"), src).unwrap();
+    let mv = |l: u32, k: &str| {
+        format!("t.cpp:{l}:16: error: function multiversioning with '{k}' is not supported yet")
+    };
+    for (compat, last) in [
+        (
+            "-fclang-compat=22",
+            "t.cpp:9:16: warning: unknown attribute 'target_version' ignored".to_owned(),
+        ),
+        ("-fclang-compat=19", mv(9, "target_version")),
+    ] {
+        let args = [compat, "--target=x86_64-unknown-linux-gnu", "-fsyntax-only", "t.cpp"];
+        let o = kiln_in(&d, &args);
+        let err = text(&o.stderr);
+        let lines: Vec<&str> = err.lines().filter(|l| l.starts_with("t.cpp:")).collect();
+        let want = [
+            mv(1, "target_clones"),
+            mv(2, "cpu_dispatch"),
+            mv(3, "cpu_specific"),
+            mv(4, "target"),
+            mv(6, "target"),
+            last,
+        ];
+        assert_eq!(lines.len(), want.len(), "{compat}: {err}");
+        for (l, w) in lines.iter().zip(&want) {
+            assert!(l.starts_with(w.as_str()), "{compat}: {l} != {w}");
+        }
+        assert_eq!(o.status.code(), Some(1), "{compat}");
+    }
+    let src = "struct S {\n  __attribute__((target_version(\"sve\"))) int m();\n  \
+               friend __attribute__((target_version(\"sve\"))) int fr(S) { return 1; }\n};\n";
+    std::fs::write(d.join("t.cpp"), src).unwrap();
+    let args = ["--target=aarch64-unknown-linux-gnu", "-fsyntax-only", "t.cpp"];
+    let o = kiln_in(&d, &args);
+    let err = text(&o.stderr);
+    let lines: Vec<&str> = err.lines().filter(|l| l.starts_with("t.cpp:")).collect();
+    let tv = "error: function multiversioning with 'target_version' is not supported yet";
+    assert_eq!(lines, [format!("t.cpp:2:18: {tv}"), format!("t.cpp:3:25: {tv}")], "{err}");
+    assert_eq!(o.status.code(), Some(1));
+}

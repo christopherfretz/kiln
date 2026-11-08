@@ -46,7 +46,7 @@ pub use tentative::TypeIdContext;
 pub use tokens::{Event, LoopHintInfo, TokenSource};
 
 /// Options for [`parse_file`], [`parse_tu`] and [`parse_preprocessed`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ParseOptions {
     /// The language standard.
@@ -82,11 +82,21 @@ pub struct ParseOptions {
     /// GCC's implicit library builtins (`-stdlib=libstdc++`;
     /// [`kiln_sema::Sema::gnu_lib_builtins`]).
     pub gnu_lib_builtins: bool,
+    /// `-fno-builtin` / `-ffreestanding` ([`kiln_sema::Sema::no_builtin`]).
+    pub no_builtin: bool,
+    /// The `-fno-builtin-<name>` names ([`kiln_sema::Sema::no_builtin_fns`]).
+    pub no_builtin_fns: Vec<String>,
+    /// `-f[no-]sized-deallocation` ([`kiln_sema::Sema::sized_deallocation`]).
+    pub sized_deallocation: bool,
+    /// `-f[no-]char8_t` ([`kiln_sema::Sema::char8`]; `None`: by `std`).
+    pub char8: Option<bool>,
     /// `-f[no-]math-errno` ([`kiln_sema::Sema::math_errno`]).
     pub math_errno: bool,
     /// The `AArch64` `sve` target feature (`-march=armv8-a+sve`;
     /// [`kiln_sema::Sema::sve`]).
     pub sve: bool,
+    /// `-msve-vector-bits=N` ([`kiln_sema::Sema::sve_vector_bits`]).
+    pub sve_vector_bits: Option<u32>,
     /// `-fkiln-dump-cfg` ([`kiln_sema::Sema::cfg_dump`]).
     pub cfg_dump: bool,
     /// `-fkiln-cfg-stats` ([`kiln_sema::Sema::cfg_stats`]).
@@ -124,8 +134,13 @@ impl Default for ParseOptions {
             clang_compat: 22,
             cf_protection_branch: false,
             gnu_lib_builtins: false,
+            no_builtin: false,
+            no_builtin_fns: Vec::new(),
+            sized_deallocation: true,
+            char8: None,
             math_errno: true,
             sve: false,
+            sve_vector_bits: None,
             cfg_dump: false,
             cfg_stats: false,
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
@@ -238,6 +253,7 @@ pub fn parse_tu<'sm>(
     limits: ConstexprLimits,
 ) -> ParsedTu {
     let mut ppo = PpOptions::new(opts.std);
+    ppo.char8 = opts.char8;
     ppo.reflection = opts.reflection;
     ppo.parser_pragmas = true;
     // Module units parse from C++20 on (spec/modules.md §2); no module
@@ -278,7 +294,10 @@ pub fn parse_preprocessed<'a, 'sm>(
     // (spec/types.md §5.4).
     let type_opts = TypeOptions { noexcept_in_type: opts.std >= Std::Cxx17 };
     let ast = Ast::new(interner, TypeContext::with_options(target.types.clone(), type_opts));
-    let lit_opts = LiteralOptions::new(opts.std, encoding_params(&target));
+    let lit_opts = LiteralOptions {
+        char8: opts.char8,
+        ..LiteralOptions::new(opts.std, encoding_params(&target))
+    };
     let mut s = Sema::for_target(ast, diags, target);
     s.set_constexpr_limits(limits.budget, limits.backtrace_limit);
     s.exceptions = opts.exceptions;
@@ -291,8 +310,14 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.cf_protection_branch = opts.cf_protection_branch;
     s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
     s.gnu_lib_builtins = opts.gnu_lib_builtins;
+    s.no_builtin = opts.no_builtin;
+    s.no_builtin_fns.clone_from(&opts.no_builtin_fns);
+    s.sized_deallocation = opts.sized_deallocation;
+    s.char8 = opts.char8;
+    s.lib_builtin_name = kiln_pp::is_library_builtin;
     s.math_errno = opts.math_errno;
     s.sve = opts.sve;
+    s.sve_vector_bits = opts.sve_vector_bits;
     s.cfg_dump = opts.cfg_dump;
     s.cfg_stats = opts.cfg_stats;
     s.cfg_max_elems = opts.cfg_max_elems;

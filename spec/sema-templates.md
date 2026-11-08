@@ -647,7 +647,13 @@ object is dependent and not the current instantiation, as in
 less-than. When the name is followed by `<`, clang's diagnostic
 `err_missing_dependent_template_keyword` ("use 'template' keyword to
 treat 'f' as a dependent template name") is emitted and the parser
-recovers as if `template` had been written.
+recovers as if `template` had been written. The diagnostic and the
+recovery apply only when nothing but a list fits: the `<` is followed
+by `>` or begins with an unambiguous type-id (clang's
+`isTemplateArgumentList` returning True). In a nested-name-specifier,
+`if_c<rank<T>::value < rank<U>::value, U, T>::type` compares the two
+values (`parse_nested_name_upto`; WP-804,
+`tests/conformance/temp.names/dependent-member-less-than-before-scope.cpp`).
 
 At instantiation, `T::template f<A>` names a template when the lookup of
 `f` in the substituted `T` finds any template: an overload set that also
@@ -2897,7 +2903,17 @@ recomputed exactly as for non-template code (clang's
   - a list-initializing `CXXConstructExpr` operand is formed again
     through `init_from_list_at` of the substituted type
     ([dcl.init.list]/3.7). A single-argument non-list construct is its
-    substituted argument;
+    substituted argument. The list of an initializer-list constructor's
+    construct (`ConstructInfo::std_init_list`, `construct_list`) is the
+    braced list its one `std::initializer_list` argument was built from
+    (an empty one for the value-initialized `std::initializer_list` of
+    `V v{}`), not a list holding that argument (clang
+    `TransformInitializer` unwraps `isStdInitListInitialization`). Rebuilt
+    as `{{...}}`, a one-element list would be chosen by
+    [over.match.list]/1.1, so `V<P> v = {{"a", "b"}, {"c", "d"}}` stays
+    two elements and `V v{"2", 1}` is not `V v{{"2", 1}}` (WP-801, WP-804;
+    `dcl.init.list/initializer-list-ctor-in-template-keeps-list-run.cpp`,
+    `dcl.init.list/init-list-ctor-element-list-in-template.cpp`);
   - a compound literal `(T){...}` (C99 extension) is rebuilt from its
     peeled initializer as a list, and `act_on_compound_literal` runs
     again;
@@ -3526,6 +3542,15 @@ formed it:
      explicit args stay parameters.
    - A trailing pack that was given explicitly can be *extended* by
      deduction (/9).
+   - (WP-804) For a call, a return type written before the parameters
+     is substituted too, first and only to check it (clang
+     `SubstituteExplicitTemplateArguments`): with every argument given,
+     `enable_if_t<C<A>, int> f(const S<A>&)` fails here, before the
+     CWG1391 check converts an argument to `S<A>` and so instantiates it
+     (`temp.deduct.call/explicit-args-return-sfinae-before-nondep-conversion.cpp`).
+     A trailing return type may name the parameters and is left to
+     step 4 (xfail
+     `temp.deduct.call/explicit-args-trailing-return-sfinae-before-nondep-conversion.cpp`).
    - Failure gives `InvalidExplicitArguments` or `SubstitutionFailure`.
 2. **Deduce from each (Pᵢ, Aᵢ) pair** ([temp.deduct.call]). Pᵢ is the
    parameter type; Aᵢ is the argument's type and value category.
@@ -4456,6 +4481,15 @@ The `SpecKind` transitions are those of §4.5.
   `AstBuilder::template_param_object(const T, v)`; the argument is
   `TemplateArg::value(canonical T, v)`. Aggregate values are interned, so
   the `ConstValueId` is the (type, value) key.
+- **`_Complex` arguments** (WP-810): a GNU complex type is structural (a
+  scalar, as clang). The argument is `TemplateArg::value(T, v)` with `v`
+  the frozen `T[2]` image; substituted, it is a `ConstantExpr` holding `v`
+  around an opaque prvalue (`nttp_value_expr`), whose parts the Oven reads
+  from the image (`cx_const`) and codegen emits as a constant. Two
+  arguments are the same when their images are identical (`-0.0` differs
+  from `+0.0`). It mangles as clang: `X tl <type> <re> <im> E E`, trailing
+  `+0` parts dropped (`AstNames::shape_at` gives the complex type the
+  `Array` shape of `T[2]`).
 - **The object** is a `TemplateParamObject` decl (`IMPLICIT`, unnamed, in
   the TU, in no lookup or member list) memoized in
   `TemplateTables::{param_objects, param_object_values}`
@@ -7226,7 +7260,14 @@ explicit specialization errors remain. The blockers are:
   templates ([over.match.oper]/3.4, `add_rewritten_template`,
   `more_specialized_operator`), `&f` deduction notes (`address.rs`), and
   dependent member template-ids (`act_on_template_member`,
-  `act_on_member_template_args`).
+  `act_on_member_template_args`). A member template-id with dependent
+  arguments is a dependent member access again at instantiation. It keeps
+  the access's nested-name-specifier, so `this->Base::g<T>()` looks `g`
+  up in `Base` even when the derived class declares a non-template `g`
+  (WP-801,
+  `tests/conformance/temp.names/p3-qualified-member-template-id-dependent-args-run.cpp`).
+  Gap: `(*this).Base::g<T>()` does not parse `<` as a template argument
+  list, because the dereferenced `this` is a dependent type.
 - **`std::initializer_list`** ([dcl.init.list]/5): `CXXStdInitializerListExpr`
   over a `MaterializeTemporaryExpr 'const E[N]'`; `init.rs`
   `std_initializer_list_init`, `init_list_ctor_init` ([over.match.list]
@@ -7829,6 +7870,11 @@ declarator scopes.**
   qualified set, resolved at instantiation against the target type
   ([over.over]; WP-715,
   `expr.unary.op/p3-qualified-overload-set-dependent-base-run.cpp`).
+  A member function template specialization the pattern resolved,
+  `&C::f<A>` or `&Self::f<A>`, keeps its instantiated qualifier when
+  `respecialized_member_template` names it again, so it stays a pointer
+  to member, not `&this->f<A>` (WP-801;
+  `expr.unary.op/p3-member-template-specialization-pointer-to-member-in-template-run.cpp`).
 - *Dependent `noexcept(expr)` in a type*: the canonical
   `ExcSpec::DependentNoexcept(profile)` of a function type (as written
   under a pointer, member pointer, reference or GNU `noreturn`) is
@@ -7867,6 +7913,12 @@ declarator scopes.**
   which reports them incompatible
   (tests/conformance/expr.cond/p6-class-arms-builtin-overload-run.cpp,
   `-errors.cpp`).
+- *[expr.cond]/6 cv-only differing class arms*: arms of one class type
+  that differ only in cv-qualification (a `const B` lvalue and a `B`
+  prvalue) do not reach the /6 step: /4.3.1 unified them, and the result
+  stays a class prvalue even when `B` has `operator bool` (WP-801,
+  tests/conformance/expr.cond/p4-cv-differing-class-arms-not-builtin-run.cpp,
+  clang's `Parser.cpp` `c ? Diag(..) << x : Diag(..)`).
 - *[expr.cond]/7 class prvalue result*: when the arms are a class type
   (after /4) and not glvalues of the same category, each glvalue arm
   copy-initializes the prvalue result (clang `PerformCopyInitialization`

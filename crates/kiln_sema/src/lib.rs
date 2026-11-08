@@ -23,6 +23,7 @@ pub mod attr_triage;
 mod bit_int;
 mod bitfield_constant;
 mod builtins;
+mod cconv;
 pub mod cfg;
 pub mod class;
 mod class_b_attrs;
@@ -52,6 +53,7 @@ pub mod expr;
 mod extern_c;
 mod fallthrough;
 mod flex_array;
+mod fmv;
 mod for_loop_analysis;
 mod format_string;
 mod forms;
@@ -79,6 +81,8 @@ mod macro_fixit;
 mod meta;
 mod missing_noreturn;
 pub mod modules;
+mod ms_struct;
+mod musttail;
 pub mod names;
 pub mod new_delete;
 mod nonnull;
@@ -97,6 +101,7 @@ mod reflect_operand;
 mod rtti;
 pub mod scope;
 mod section;
+mod selectany;
 mod self_ref;
 mod side_effects;
 mod splice;
@@ -113,6 +118,7 @@ pub mod target;
 pub mod templ;
 mod template_id_typo;
 mod tls_model;
+mod transparent_union;
 mod trivial_abi;
 mod try_stmt;
 mod type_diff;
@@ -291,6 +297,9 @@ pub struct Sema<'a, 'sm> {
     /// `-target-feature +sve`): the SVE vector types are usable in
     /// expressions and as automatic variables (spec/sema.md "SVE").
     pub sve: bool,
+    /// `-msve-vector-bits=N` (clang's `VScaleMin` = `VScaleMax` = N/128):
+    /// the one size `arm_sve_vector_bits` accepts (spec/sema.md "SVE").
+    pub sve_vector_bits: Option<u32>,
     /// The begin of the nested-name-specifier whose component the parser
     /// is acting on (set around each `act_on_nested_name_*` call): clang
     /// 22's point of instantiation for a class or enumeration completed
@@ -302,6 +311,35 @@ pub struct Sema<'a, 'sm> {
     /// constant evaluation as its `__builtin_` twin, as GCC folds
     /// `::ceil` (spec/sema.md §5.4).
     pub gnu_lib_builtins: bool,
+    /// `-fno-builtin` / `-ffreestanding` (clang `LangOptions::NoBuiltin`,
+    /// WP-808): no library function is recognized as a builtin
+    /// ([`Sema::lib_builtin_info`]), so none gets the implicit attributes
+    /// or lowers as its `__builtin_` twin.
+    pub no_builtin: bool,
+    /// The `-fno-builtin-<name>` names, sorted (clang
+    /// `LangOptions::NoBuiltinFuncs`): each is not recognized as a
+    /// library builtin; `std-<name>` names a `std` one (WP-808).
+    pub no_builtin_fns: Vec<String>,
+    /// `-f[no-]sized-deallocation` (clang `LangOptions::SizedDeallocation`,
+    /// default on; WP-808): off, the sized global `operator delete` and
+    /// `operator delete[]` are not declared implicitly, and a global
+    /// deallocation lookup never prefers a sized one
+    /// ([`Sema::usual_delete`]).
+    pub sized_deallocation: bool,
+    /// `-f[no-]char8_t` (clang `LangOptions::Char8`): `None` is the
+    /// default, C++20 and later; see [`Sema::char8`].
+    pub char8: Option<bool>,
+    /// Whether a name is one of clang's library builtins at the clang 22
+    /// level or not (clang `Builtin::Context::isBuiltinFunc`'s table, set
+    /// by the parser from the preprocessor's): the names a `no_builtin`
+    /// attribute accepts (WP-808).
+    pub lib_builtin_name: fn(&str, bool) -> bool,
+    /// The functions whose `no_builtin` attribute waits for their
+    /// definition (clang checks the declarator's definition kind), with the
+    /// attribute's location: a `{` body clears one, `= default` / `=
+    /// delete` reports it, the end of the unit reports the rest as
+    /// declarations (WP-808).
+    pub(crate) no_builtin_pending: Vec<(DeclId, Loc)>,
     /// `-f[no-]math-errno` (clang `LangOptions::MathErrno`, the Linux
     /// default on): without it the errno-setting math library functions
     /// are implicitly `const` (spec/sema.md §5.4, WP-806).
@@ -352,6 +390,9 @@ pub struct Sema<'a, 'sm> {
     /// `(label, value)` entries. Applied to each class definition as it
     /// begins (`record_pack`).
     pub(crate) pack: (u16, Vec<(Option<String>, u16)>),
+    /// `#pragma ms_struct on` is in effect (clang `MSStructPragmaOn`):
+    /// each class definition that begins gets an implicit `ms_struct`.
+    pub(crate) ms_struct_pragma: bool,
     /// The FP pragma state (clang's `CurFPFeatureOverrides` and
     /// `FpPragmaStack`): the override in effect, relative to the command
     /// line, and the `float_control(push)` entries.
@@ -1135,8 +1176,15 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             clang_compat: 22,
             cf_protection_branch: false,
             sve: false,
+            sve_vector_bits: None,
             nns_start: None,
             gnu_lib_builtins: false,
+            no_builtin: false,
+            sized_deallocation: true,
+            char8: None,
+            no_builtin_fns: Vec::new(),
+            lib_builtin_name: |n, _| kiln_ast::decl::builtin::lib_by_name(n).is_some(),
+            no_builtin_pending: Vec::new(),
             math_errno: true,
             cfg_dump: false,
             cfg_stats: false,
@@ -1150,6 +1198,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_body: cfg::BodyCfg::default(),
             inferred_noreturn: kiln_source::fx::FxHashSet::default(),
             pack: (0, Vec::new()),
+            ms_struct_pragma: false,
             fp_pragma: (kiln_ast::fp::FpOverride::NONE, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,

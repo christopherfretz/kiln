@@ -35,6 +35,10 @@ pub trait IfContext {
     fn is_enabled(&self, id: DiagId) -> bool;
     /// The language standard.
     fn std(&self) -> Std;
+    /// Whether a `u8` literal is a `char8_t` (`-f[no-]char8_t`).
+    fn char8(&self) -> bool {
+        self.std() >= Std::Cxx20
+    }
 }
 
 /// Evaluates the controlling expression of `#if` / `#elif`.

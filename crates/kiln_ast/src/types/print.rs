@@ -1489,6 +1489,17 @@ impl Printer<'_> {
                         self.num(count);
                         self.push("))) ");
                     }
+                    // clang `TypePrinter::printVectorBefore`: the bits as a
+                    // count times the element size, a predicate's one bit
+                    // per byte multiplied by 8.
+                    VectorKind::SveFixedData | VectorKind::SveFixedPredicate => {
+                        self.push("__attribute__((__arm_sve_vector_bits__(");
+                        let pred = kind == VectorKind::SveFixedPredicate;
+                        self.num(if pred { count * 8 } else { count });
+                        self.push(" * sizeof(");
+                        self.print(elem, "");
+                        self.push(") * 8))) ");
+                    }
                     VectorKind::Ext => {}
                 }
                 self.before(elem);
@@ -1511,7 +1522,7 @@ impl Printer<'_> {
                         self.operand(size);
                         self.push("))) ");
                     }
-                    VectorKind::Ext => {}
+                    VectorKind::Ext | VectorKind::SveFixedData | VectorKind::SveFixedPredicate => {}
                 }
                 self.before(elem);
             }
@@ -1899,6 +1910,13 @@ impl Printer<'_> {
         }
         if info.noreturn() {
             self.push(" __attribute__((noreturn))");
+        }
+        // clang `printFunctionAfter`: `regparm(0)` is not printed.
+        if let Some(n) = info.regparm().filter(|&n| n != 0) {
+            self.push(&format!(" __attribute__((regparm ({n})))"));
+        }
+        if info.no_caller_saved_regs() {
+            self.push(" __attribute__((no_caller_saved_registers))");
         }
         let mq = info.this_quals();
         if !mq.is_empty() {

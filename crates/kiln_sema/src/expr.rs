@@ -2560,7 +2560,7 @@ impl Sema<'_, '_> {
                 .map(|(p, _)| p.encoding)
                 .find(|&e| e != Encoding::Ordinary)
                 .unwrap_or(Encoding::Ordinary);
-            let elem = literal::string_literal_elem(self.std, enc);
+            let elem = literal::string_literal_elem(self.char8(), enc);
             let plain: Vec<(StringLiteral<'_>, Loc)> = pieces
                 .iter()
                 .map(|(p, l)| (StringLiteral { ud_suffix: None, ..p.clone() }, *l))
@@ -5014,6 +5014,20 @@ impl Sema<'_, '_> {
         }
         let f = match self.builtin_callee(callee) {
             Some(b) => self.builtin_fn_to_ptr(callee, b),
+            // A builtin alias (WP-810) may be called: its decay is not a use
+            // `check_builtin_fn_use` rejects.
+            None if self.is_builtin_alias_ref(callee) => {
+                let t = self.ety(callee);
+                let p = self.ast.types.pointer_to(t);
+                conv::raw_cast(
+                    self,
+                    CastKind::FunctionToPointerDecay,
+                    callee,
+                    p,
+                    ValueCategory::PRValue,
+                    None,
+                )
+            }
             None => conv::decay(self, callee),
         };
         let ft = self.ety(f);

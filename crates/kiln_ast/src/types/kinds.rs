@@ -453,7 +453,7 @@ impl TypeKind {
 
 macro_rules! builtins {
     ($($(#[$doc:meta])* $konst:ident = $id:literal, $variant:ident, $name:literal;)*) => {
-        /// The builtin types, pre-interned at fixed ids 1..=52 in this
+        /// The builtin types, pre-interned at fixed ids 1..=90 in this
         /// order (spec/types.md §5.1). The discriminant is the `TypeId`
         /// index.
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
@@ -464,7 +464,7 @@ macro_rules! builtins {
 
         impl BuiltinType {
             /// All builtins in id order.
-            pub const ALL: [BuiltinType; 52] = [$(BuiltinType::$variant,)*];
+            pub const ALL: [BuiltinType; 90] = [$(BuiltinType::$variant,)*];
 
             /// The builtin with type id index `id`, if it is one.
             pub fn from_index(id: u32) -> Option<BuiltinType> {
@@ -621,6 +621,82 @@ builtins! {
     /// (x87 extended on x86-64, binary128 on `AArch64`), distinct from it
     /// (WP-380; clang has no such type).
     FLOAT64X = 52, Float64x, "_Float64x";
+    /// The SVE ACLE tuple type `__clang_svint8x2_t` (`svint8x2_t`).
+    SV_INT8X2 = 53, SvInt8x2, "__clang_svint8x2_t";
+    /// The SVE ACLE tuple type `__clang_svint16x2_t` (`svint16x2_t`).
+    SV_INT16X2 = 54, SvInt16x2, "__clang_svint16x2_t";
+    /// The SVE ACLE tuple type `__clang_svint32x2_t` (`svint32x2_t`).
+    SV_INT32X2 = 55, SvInt32x2, "__clang_svint32x2_t";
+    /// The SVE ACLE tuple type `__clang_svint64x2_t` (`svint64x2_t`).
+    SV_INT64X2 = 56, SvInt64x2, "__clang_svint64x2_t";
+    /// The SVE ACLE tuple type `__clang_svuint8x2_t` (`svuint8x2_t`).
+    SV_UINT8X2 = 57, SvUint8x2, "__clang_svuint8x2_t";
+    /// The SVE ACLE tuple type `__clang_svuint16x2_t` (`svuint16x2_t`).
+    SV_UINT16X2 = 58, SvUint16x2, "__clang_svuint16x2_t";
+    /// The SVE ACLE tuple type `__clang_svuint32x2_t` (`svuint32x2_t`).
+    SV_UINT32X2 = 59, SvUint32x2, "__clang_svuint32x2_t";
+    /// The SVE ACLE tuple type `__clang_svuint64x2_t` (`svuint64x2_t`).
+    SV_UINT64X2 = 60, SvUint64x2, "__clang_svuint64x2_t";
+    /// The SVE ACLE tuple type `__clang_svfloat16x2_t` (`svfloat16x2_t`).
+    SV_FLOAT16X2 = 61, SvFloat16x2, "__clang_svfloat16x2_t";
+    /// The SVE ACLE tuple type `__clang_svfloat32x2_t` (`svfloat32x2_t`).
+    SV_FLOAT32X2 = 62, SvFloat32x2, "__clang_svfloat32x2_t";
+    /// The SVE ACLE tuple type `__clang_svfloat64x2_t` (`svfloat64x2_t`).
+    SV_FLOAT64X2 = 63, SvFloat64x2, "__clang_svfloat64x2_t";
+    /// The SVE ACLE tuple type `__clang_svbfloat16x2_t` (`svbfloat16x2_t`).
+    SV_BFLOAT16X2 = 64, SvBfloat16x2, "__clang_svbfloat16x2_t";
+    /// The SVE ACLE tuple type `__clang_svint8x3_t` (`svint8x3_t`).
+    SV_INT8X3 = 65, SvInt8x3, "__clang_svint8x3_t";
+    /// The SVE ACLE tuple type `__clang_svint16x3_t` (`svint16x3_t`).
+    SV_INT16X3 = 66, SvInt16x3, "__clang_svint16x3_t";
+    /// The SVE ACLE tuple type `__clang_svint32x3_t` (`svint32x3_t`).
+    SV_INT32X3 = 67, SvInt32x3, "__clang_svint32x3_t";
+    /// The SVE ACLE tuple type `__clang_svint64x3_t` (`svint64x3_t`).
+    SV_INT64X3 = 68, SvInt64x3, "__clang_svint64x3_t";
+    /// The SVE ACLE tuple type `__clang_svuint8x3_t` (`svuint8x3_t`).
+    SV_UINT8X3 = 69, SvUint8x3, "__clang_svuint8x3_t";
+    /// The SVE ACLE tuple type `__clang_svuint16x3_t` (`svuint16x3_t`).
+    SV_UINT16X3 = 70, SvUint16x3, "__clang_svuint16x3_t";
+    /// The SVE ACLE tuple type `__clang_svuint32x3_t` (`svuint32x3_t`).
+    SV_UINT32X3 = 71, SvUint32x3, "__clang_svuint32x3_t";
+    /// The SVE ACLE tuple type `__clang_svuint64x3_t` (`svuint64x3_t`).
+    SV_UINT64X3 = 72, SvUint64x3, "__clang_svuint64x3_t";
+    /// The SVE ACLE tuple type `__clang_svfloat16x3_t` (`svfloat16x3_t`).
+    SV_FLOAT16X3 = 73, SvFloat16x3, "__clang_svfloat16x3_t";
+    /// The SVE ACLE tuple type `__clang_svfloat32x3_t` (`svfloat32x3_t`).
+    SV_FLOAT32X3 = 74, SvFloat32x3, "__clang_svfloat32x3_t";
+    /// The SVE ACLE tuple type `__clang_svfloat64x3_t` (`svfloat64x3_t`).
+    SV_FLOAT64X3 = 75, SvFloat64x3, "__clang_svfloat64x3_t";
+    /// The SVE ACLE tuple type `__clang_svbfloat16x3_t` (`svbfloat16x3_t`).
+    SV_BFLOAT16X3 = 76, SvBfloat16x3, "__clang_svbfloat16x3_t";
+    /// The SVE ACLE tuple type `__clang_svint8x4_t` (`svint8x4_t`).
+    SV_INT8X4 = 77, SvInt8x4, "__clang_svint8x4_t";
+    /// The SVE ACLE tuple type `__clang_svint16x4_t` (`svint16x4_t`).
+    SV_INT16X4 = 78, SvInt16x4, "__clang_svint16x4_t";
+    /// The SVE ACLE tuple type `__clang_svint32x4_t` (`svint32x4_t`).
+    SV_INT32X4 = 79, SvInt32x4, "__clang_svint32x4_t";
+    /// The SVE ACLE tuple type `__clang_svint64x4_t` (`svint64x4_t`).
+    SV_INT64X4 = 80, SvInt64x4, "__clang_svint64x4_t";
+    /// The SVE ACLE tuple type `__clang_svuint8x4_t` (`svuint8x4_t`).
+    SV_UINT8X4 = 81, SvUint8x4, "__clang_svuint8x4_t";
+    /// The SVE ACLE tuple type `__clang_svuint16x4_t` (`svuint16x4_t`).
+    SV_UINT16X4 = 82, SvUint16x4, "__clang_svuint16x4_t";
+    /// The SVE ACLE tuple type `__clang_svuint32x4_t` (`svuint32x4_t`).
+    SV_UINT32X4 = 83, SvUint32x4, "__clang_svuint32x4_t";
+    /// The SVE ACLE tuple type `__clang_svuint64x4_t` (`svuint64x4_t`).
+    SV_UINT64X4 = 84, SvUint64x4, "__clang_svuint64x4_t";
+    /// The SVE ACLE tuple type `__clang_svfloat16x4_t` (`svfloat16x4_t`).
+    SV_FLOAT16X4 = 85, SvFloat16x4, "__clang_svfloat16x4_t";
+    /// The SVE ACLE tuple type `__clang_svfloat32x4_t` (`svfloat32x4_t`).
+    SV_FLOAT32X4 = 86, SvFloat32x4, "__clang_svfloat32x4_t";
+    /// The SVE ACLE tuple type `__clang_svfloat64x4_t` (`svfloat64x4_t`).
+    SV_FLOAT64X4 = 87, SvFloat64x4, "__clang_svfloat64x4_t";
+    /// The SVE ACLE tuple type `__clang_svbfloat16x4_t` (`svbfloat16x4_t`).
+    SV_BFLOAT16X4 = 88, SvBfloat16x4, "__clang_svbfloat16x4_t";
+    /// The SVE ACLE tuple type `__clang_svboolx2_t` (`svboolx2_t`).
+    SV_BOOLX2 = 89, SvBoolx2, "__clang_svboolx2_t";
+    /// The SVE ACLE tuple type `__clang_svboolx4_t` (`svboolx4_t`).
+    SV_BOOLX4 = 90, SvBoolx4, "__clang_svboolx4_t";
 }
 
 impl BuiltinType {
@@ -706,8 +782,47 @@ impl BuiltinType {
     /// True for the `AArch64` SVE ACLE sizeless types (`__SVInt8_t` ...
     /// `__SVCount_t`; spec/types.md §5.1): complete, but with no size.
     pub const fn is_sizeless(self) -> bool {
-        (self as u8) >= 34 && (self as u8) <= 47
+        ((self as u8) >= 34 && (self as u8) <= 47) || self.is_sve_tuple()
     }
+
+    /// True for the SVE ACLE tuple types (`__clang_svint8x2_t` ...
+    /// `__clang_svboolx4_t`; WP-810): sizeless, as their element type.
+    pub const fn is_sve_tuple(self) -> bool {
+        (self as u8) >= 53 && (self as u8) <= 90
+    }
+
+    /// The vector type and count of an SVE tuple type
+    /// (`__clang_svint32x3_t` → (`__SVInt32_t`, 3)).
+    pub fn sve_tuple_parts(self) -> Option<(BuiltinType, u32)> {
+        // 12 element types per count, in `SvInt8` ... `SvFloat64`,
+        // `SvBfloat16` order.
+        const ELEMS: [BuiltinType; 12] = [
+            BuiltinType::SvInt8,
+            BuiltinType::SvInt16,
+            BuiltinType::SvInt32,
+            BuiltinType::SvInt64,
+            BuiltinType::SvUint8,
+            BuiltinType::SvUint16,
+            BuiltinType::SvUint32,
+            BuiltinType::SvUint64,
+            BuiltinType::SvFloat16,
+            BuiltinType::SvFloat32,
+            BuiltinType::SvFloat64,
+            BuiltinType::SvBfloat16,
+        ];
+        let i = self as u8;
+        if !self.is_sve_tuple() {
+            return None;
+        }
+        if i >= 89 {
+            return Some((BuiltinType::SvBool, if i == 89 { 2 } else { 4 }));
+        }
+        let k = usize::from(i - 53);
+        Some((ELEMS[k % 12], 2 + (k / 12) as u32))
+    }
+
+    /// The number of builtin types (the highest fixed id).
+    pub const COUNT: usize = 90;
 }
 
 /// The keyword of an elaborated or dependent type name.
@@ -771,15 +886,28 @@ pub enum VectorKind {
     NeonPoly,
     /// Clang `ext_vector_type`.
     Ext,
+    /// A fixed-length SVE data vector (`arm_sve_vector_bits` on an
+    /// `svint32_t` & co.; clang `VectorKind::SveFixedLengthData`).
+    SveFixedData,
+    /// A fixed-length SVE predicate (`arm_sve_vector_bits` on `svbool_t`;
+    /// clang `VectorKind::SveFixedLengthPredicate`): N/8 bits as bytes.
+    SveFixedPredicate,
 }
 
 impl VectorKind {
+    /// A fixed-length SVE vector or predicate.
+    pub fn is_sve_fixed(self) -> bool {
+        matches!(self, VectorKind::SveFixedData | VectorKind::SveFixedPredicate)
+    }
+
     /// The kind with discriminant `v` (`Generic` if out of range).
     pub fn from_u8(v: u8) -> VectorKind {
         match v {
             1 => VectorKind::Neon,
             2 => VectorKind::NeonPoly,
             3 => VectorKind::Ext,
+            4 => VectorKind::SveFixedData,
+            5 => VectorKind::SveFixedPredicate,
             _ => VectorKind::Generic,
         }
     }
@@ -861,7 +989,9 @@ unary_transforms! {
 }
 
 /// Calling conventions (4 bits in `FuncInfo`). Only non-default
-/// conventions written through attributes produce anything but `Default`.
+/// conventions written through attributes produce anything but `Default`;
+/// conventions a target ignores (clang's "calling convention is not
+/// supported for this target" warning) stay `Default` (spec/types.md §5.4).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 #[repr(u8)]
 pub enum CallConv {
@@ -870,12 +1000,12 @@ pub enum CallConv {
     Default = 0,
     /// `cdecl` written explicitly.
     C,
-    /// x86 `stdcall`.
-    StdCall,
-    /// x86 `fastcall`.
-    FastCall,
-    /// x86 `thiscall`.
-    ThisCall,
+    /// x86-64 `intel_ocl_bicc`.
+    IntelOclBicc,
+    /// `swiftcall`.
+    Swift,
+    /// `swiftasynccall`.
+    SwiftAsync,
     /// `vectorcall`.
     VectorCall,
     /// `regcall`.
@@ -906,9 +1036,9 @@ impl CallConv {
         const ALL: [CallConv; 16] = [
             CallConv::Default,
             CallConv::C,
-            CallConv::StdCall,
-            CallConv::FastCall,
-            CallConv::ThisCall,
+            CallConv::IntelOclBicc,
+            CallConv::Swift,
+            CallConv::SwiftAsync,
             CallConv::VectorCall,
             CallConv::RegCall,
             CallConv::PreserveMost,
@@ -929,9 +1059,9 @@ impl CallConv {
     pub const fn attribute(self) -> Option<&'static str> {
         match self {
             CallConv::Default | CallConv::C => None,
-            CallConv::StdCall => Some("stdcall"),
-            CallConv::FastCall => Some("fastcall"),
-            CallConv::ThisCall => Some("thiscall"),
+            CallConv::IntelOclBicc => Some("intel_ocl_bicc"),
+            CallConv::Swift => Some("swiftcall"),
+            CallConv::SwiftAsync => Some("swiftasynccall"),
             CallConv::VectorCall => Some("vectorcall"),
             CallConv::RegCall => Some("regcall"),
             CallConv::PreserveMost => Some("preserve_most"),

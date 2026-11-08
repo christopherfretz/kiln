@@ -53,8 +53,8 @@ fn chains(src: &str, opts: &ParseOptions) -> Vec<String> {
 #[track_caller]
 fn same_both_ways(src: &str) -> Parsed {
     let full_opts = ParseOptions { full_redecl_scan: true, ..opts19() };
-    let fast = parse_with(src, opts19());
-    let full = parse_with(src, full_opts);
+    let fast = parse_with(src, &opts19());
+    let full = parse_with(src, &full_opts);
     assert_eq!(fast.diags, full.diags, "diagnostics differ with the redeclaration index");
     assert_eq!(fast.dump, full.dump, "AST dump differs with the redeclaration index");
     assert_eq!(chains(src, &opts19()), chains(src, &full_opts), "redeclaration links differ");

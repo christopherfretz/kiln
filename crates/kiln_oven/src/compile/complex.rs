@@ -93,6 +93,9 @@ impl Compiler<'_> {
             ),
             ExprKind::CallExpr => self.builtin_complex_args(e).is_some(),
             ExprKind::ImaginaryLiteral => true,
+            // A substituted `_Complex` template argument (WP-810).
+            ExprKind::SubstNonTypeTemplateParmExpr => self.cx_op(ast.exprs.subst_replacement(e)),
+            ExprKind::ConstantExpr => self.cx_const(e, None).is_some(),
             k if k.is_cast() => matches!(
                 ast.exprs.cast_kind(e),
                 CastKind::IntegralRealToComplex
@@ -117,6 +120,31 @@ impl Compiler<'_> {
         self.emit_at(Op::InitStore, 0, &[q, im, elem.0], e);
     }
 
+    /// The register values of the parts of `e` when it is a constant
+    /// expression holding a frozen complex value (a substituted `_Complex`
+    /// template argument, WP-810): each part read from the image's bytes
+    /// (little-endian, real part first). With no `elem` the parts are
+    /// not decoded (zero): only whether there is such a value.
+    fn cx_const(&self, e: ExprId, elem: Option<OTy>) -> Option<[u128; 2]> {
+        let ast = self.ast();
+        if ast.exprs.get(e).kind() != ExprKind::ConstantExpr {
+            return None;
+        }
+        let img = ast.consts.aggregate(ast.exprs.constant_value(e)?)?;
+        ast.types.as_complex(img.ty)?;
+        let Some(elem) = elem else { return Some([0, 0]) };
+        let es = usize::try_from(self.o.types.size(elem)).ok()?.min(16);
+        let part = |i: usize| -> Option<u128> {
+            let b = img.bytes.get(i * es..(i + 1) * es)?;
+            let v = b.iter().rev().fold(0u128, |a, &x| (a << 8) | u128::from(x));
+            Some(match int_of(self.kind(elem)) {
+                Some((w, s)) => crate::arith::canon(v, w, s),
+                None => v,
+            })
+        };
+        Some([part(0)?, part(1)?])
+    }
+
     /// The parts of the complex object at `p`, read with `akind`.
     fn cx_load(&mut self, p: u32, elem: OTy, akind: u32, e: ExprId) -> [u32; 2] {
         let es = self.o.types.size(elem);
@@ -138,6 +166,16 @@ impl Compiler<'_> {
             return [self.reg(), self.reg()];
         };
         let node = self.node(e);
+        if node.kind() == ExprKind::SubstNonTypeTemplateParmExpr {
+            let r = self.ast().exprs.subst_replacement(e);
+            return self.cx_regs(r);
+        }
+        if let Some([re, im]) = self.cx_const(e, Some(elem)) {
+            let r = [self.reg(), self.reg()];
+            self.konst(r[0], re);
+            self.konst(r[1], im);
+            return r;
+        }
         if node.kind() == ExprKind::ConstantExpr {
             let op = self.ast().exprs.operand(e);
             return self.cx_regs(op);

@@ -46,27 +46,29 @@ impl Cg<'_> {
 
     /// The `AArch64` features of function `d` (`None`: the module's): the
     /// base `fp-armv8`, `neon`, `outline-atomics` (per
-    /// `-m[no-]outline-atomics`), `v8a` and `-fmv`, then
+    /// [`crate::CodegenOptions::outline_atomics`]), `v8a` and `-fmv`, then
     /// [`crate::CodegenOptions::target_features`], then the features of
     /// `d`'s `target("...")` attribute (clang `getFunctionFeatureMap`).
     pub(crate) fn feature_map(&self, d: Option<DeclId>) -> FeatureMap {
         if self.is_x86() {
             return self.x86_feature_map(d);
         }
-        let mut f: FeatureMap = [
-            ("fp-armv8", true),
-            ("neon", true),
-            ("outline-atomics", self.opts.outline_atomics),
-            ("v8a", true),
-            ("fmv", false),
-        ]
-        .into_iter()
-        .map(|(n, on)| (n.to_owned(), on))
-        .collect();
+        let mut f: FeatureMap = [("fp-armv8", true), ("neon", true), ("v8a", true), ("fmv", false)]
+            .into_iter()
+            .map(|(n, on)| (n.to_owned(), on))
+            .collect();
+        if let Some(on) = self.opts.outline_atomics {
+            f.insert("outline-atomics".to_owned(), on);
+        }
         let attr = d.and_then(|d| self.target_attr_features(d));
         let attr = attr.iter().flat_map(|a| &a.features);
         for e in self.opts.target_features.iter().chain(attr) {
-            if let Some((sign, name)) = e.split_at_checked(1) {
+            // clang's driver adds its `-fmv` after any `-Xclang
+            // -target-feature -Xclang +fmv`, so `fmv` stays off (WP-810,
+            // src/fmv.rs in `kiln_sema`).
+            if let Some((sign, name)) = e.split_at_checked(1)
+                && name != "fmv"
+            {
                 f.insert(name.to_owned(), sign == "+");
             }
         }

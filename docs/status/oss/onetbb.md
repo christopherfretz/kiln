@@ -121,6 +121,9 @@ and 577 MB under kiln, against 20.0 s and 696 MB under clang.
 ## What remains
 
 - P1.
-- Only simple forms of a `pass_object_size` argument fold to a constant
-  size. Other forms call `llvm.objectsize`, which is what clang does at
-  -O0. The fortify checks keep their meaning either way.
+- A `pass_object_size` argument now folds as clang's does (WP-808,
+  the Oven's `__builtin_object_size` of the argument). Not yet: clang's
+  lenient designator (an out-of-bounds offset, a reinterpreting cast, a
+  member of an unknown base), which takes `llvm.objectsize` and only
+  weakens a fortify check at -O0
+  (`ext.clang.pass.object.size/pass-object-size-lenient-xfail.cpp`).

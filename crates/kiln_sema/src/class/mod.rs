@@ -281,6 +281,17 @@ impl Sema<'_, '_> {
         friend_loc: Loc,
     ) -> Option<DeclId> {
         let base = self.ctad_friend_check(ds, base, d);
+        if let Some(d) = d {
+            // A non-default `target_version` friend: clang crashes on a
+            // definition and drops a later ordinary definition of the
+            // function (src/fmv.rs).
+            let attrs: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+            if let Some(at) = self.fmv_hidden_version(&attrs) {
+                let msg =
+                    self.diag(DiagId::sema_multiversion_not_supported, at).arg("target_version");
+                self.emit(msg);
+            }
+        }
         self.declare_friend(ds, base, d, friend_loc)
     }
 
@@ -316,6 +327,7 @@ impl Sema<'_, '_> {
     /// ([dcl.fct.def.default], spec/sema-class.md §4.4; WP-067a). `loc` is
     /// the `default` keyword.
     pub fn act_on_defaulted(&mut self, f: DeclId, loc: Loc) {
+        self.no_builtin_defined(f, true);
         self.defaulted_impl(f, loc);
     }
 
@@ -323,6 +335,7 @@ impl Sema<'_, '_> {
     /// `f` ([dcl.fct.def.delete], spec/sema-class.md §4.4; WP-067a). `msg`
     /// is the C++26 string-literal message.
     pub fn act_on_deleted(&mut self, f: DeclId, loc: Loc, msg: Option<ExprId>) {
+        self.no_builtin_defined(f, true);
         self.deleted_impl(f, loc, msg);
     }
 

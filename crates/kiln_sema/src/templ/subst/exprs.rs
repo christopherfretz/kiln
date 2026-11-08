@@ -8,7 +8,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{
     BinaryOp, CastKind, ExprDeps, ExprFlags, ExprKind, ExprNode, TypeidOperand, ValueCategory,
 };
-use kiln_ast::ids::{ArgListId, RawId};
+use kiln_ast::ids::{ArgListId, NnsId, RawId};
 use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::{ArgView, BuiltinType, Nns, TemplateArg};
@@ -268,16 +268,16 @@ impl Substituter<'_, '_, '_> {
                     let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
                     return Ok(self.sema.act_dependent_scope_ref(nns, name, None, begin, loc));
                 }
-                if let Some(r) = self.respecialized_member_template(d, loc)? {
-                    return Ok(r);
-                }
-                let i = self.find_instantiated_decl(d, loc)?;
                 // The qualifier as written survives ([temp.inst]; clang's
                 // `TransformDeclRefExpr` transforms the qualifier loc).
                 let nns = match ex(self).decl_ref_extra(e).and_then(|x| x.qualifier) {
                     Some(q) => Some(self.nns(q, loc)?),
                     None => None,
                 };
+                if let Some(r) = self.respecialized_member_template(d, nns, loc)? {
+                    return Ok(r);
+                }
+                let i = self.find_instantiated_decl(d, loc)?;
                 let r = self.sema.build_decl_ref_qualified(i, loc, None, nns);
                 if n.has(ExprFlags::IMMEDIATE_ESCALATING)
                     && self.sema.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr
@@ -624,7 +624,7 @@ impl Substituter<'_, '_, '_> {
             }
             ExprKind::DependentScopeDeclRefExpr => {
                 let callee = std::mem::take(&mut self.as_callee);
-                let Some(nns) = kiln_ast::ids::NnsId::try_new(n.a()) else {
+                let Some(nns) = NnsId::try_new(n.a()) else {
                     return Err(SubstFail);
                 };
                 let name = self.sema.ast.dependent_scope_ref_name(e);
@@ -1213,7 +1213,7 @@ impl Substituter<'_, '_, '_> {
     /// `DependentScopeDeclRefExpr` keeps the `DeclName`).
     fn reflect_dependent_name(&mut self, r: ExprId, loc: Loc, end: Loc) -> SubstResult<ExprId> {
         let Some(e) = self.sema.ast.exprs.reflect_dependent_name(r) else { return Ok(r) };
-        let Some(nns) = kiln_ast::ids::NnsId::try_new(self.sema.ast.exprs.get(e).a()) else {
+        let Some(nns) = NnsId::try_new(self.sema.ast.exprs.get(e).a()) else {
             return Err(SubstFail);
         };
         let name = self.sema.ast.dependent_scope_ref_name(e);
@@ -1304,7 +1304,7 @@ impl Substituter<'_, '_, '_> {
     /// ([basic.lookup.qual.general]/2, WP-121).
     fn member_qualifier(
         &mut self,
-        n: kiln_ast::ids::NnsId,
+        n: NnsId,
         base: ExprId,
         arrow: bool,
         loc: Loc,
@@ -1315,11 +1315,11 @@ impl Substituter<'_, '_, '_> {
 
     fn member_nns(
         &mut self,
-        n: kiln_ast::ids::NnsId,
+        n: NnsId,
         base: ExprId,
         arrow: bool,
         loc: Loc,
-    ) -> SubstResult<(DeclId, kiln_ast::ids::NnsId)> {
+    ) -> SubstResult<(DeclId, NnsId)> {
         match self.sema.ast.types.nns_view(n) {
             Nns::Identifier { prefix: None, name } => {
                 let bt = self.sema.ety(base);
@@ -1366,7 +1366,7 @@ impl Substituter<'_, '_, '_> {
 
     /// True if specifier `n` starts with a dependent `name::` of a
     /// member access's object scope.
-    fn rooted_in_member(&self, mut n: kiln_ast::ids::NnsId) -> bool {
+    fn rooted_in_member(&self, mut n: NnsId) -> bool {
         loop {
             match self.sema.ast.types.nns_view(n) {
                 Nns::Identifier { prefix: None, .. } => return true,
@@ -1706,6 +1706,7 @@ impl Substituter<'_, '_, '_> {
     fn respecialized_member_template(
         &mut self,
         d: DeclId,
+        nns: Option<NnsId>,
         loc: Loc,
     ) -> SubstResult<Option<ExprId>> {
         let Some((ft, args)) = self.sema.ast.spec_info(d).map(|(_, s)| (s.template, s.args)) else {
@@ -1728,7 +1729,7 @@ impl Substituter<'_, '_, '_> {
         }
         let l = self.args(args, loc)?;
         if let Some(spec) = self.structural_member_spec(it, l, loc)? {
-            return Ok(Some(self.sema.build_decl_ref_qualified(spec, loc, None, None)));
+            return Ok(Some(self.sema.build_decl_ref_qualified(spec, loc, None, nns)));
         }
         let ty = &self.sema.ast.types;
         let flat: Vec<TemplateArg> = ty
@@ -1743,6 +1744,11 @@ impl Substituter<'_, '_, '_> {
         match self.sema.act_template_id(tn, &flat, loc, loc) {
             Ok(crate::templ::actions::TemplateIdRef::Value(x)) => Ok(Some(x)),
             Ok(crate::templ::actions::TemplateIdRef::Overload(x)) => {
+                // `&C::f<A>` keeps its qualifier: a pointer to member, not
+                // `&this->f<A>` ([expr.unary.op]/3).
+                if let Some(q) = nns {
+                    self.sema.set_template_id_qualifier(x, q);
+                }
                 Ok(Some(self.sema.resolve_single_template_id(x)))
             }
             _ => Err(SubstFail),
@@ -2562,6 +2568,25 @@ impl Substituter<'_, '_, '_> {
             .iter::<ExprId>(self.sema.ast.exprs.construct_args(e))
             .take_while(|&a| self.sema.ast.exprs.get(a).kind() != ExprKind::CXXDefaultArgExpr)
             .collect();
+        // An initializer-list constructor's one argument is the
+        // `std::initializer_list` over the whole braced list
+        // ([dcl.init.list]/3.7, /5): the list is that argument's, not a
+        // list holding it (clang `TransformInitializer` unwraps
+        // `isStdInitListInitialization`). Rebuilt as `{{...}}`, a list
+        // whose single element initializes one `E` from the elements
+        // would be chosen ([over.match.list]/1.1): `V v{"2", 1}` would be
+        // `V v{{"2", 1}}` and `{{"a", b}, {"c", d}}` one pair (WP-801,
+        // WP-804). An empty list is the value-initialized
+        // `std::initializer_list`, a list-initializing construct with no
+        // arguments (`V v{}`).
+        if self.sema.ast.exprs.construct_info(e).std_init_list
+            && let [a] = items.as_slice()
+            && let Some(b) = self.braced_source(*a)
+        {
+            let mut l = self.braced_list(b)?;
+            (l.lbrace, l.rbrace) = (lbrace, rbrace);
+            return Ok(l);
+        }
         let out = self.init_items(&items)?;
         Ok(InitList { items: out, lbrace, rbrace })
     }

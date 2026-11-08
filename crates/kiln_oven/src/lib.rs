@@ -435,15 +435,19 @@ enum Job {
     /// A call of function `f` without arguments at `at`
     /// ([`Oven::evaluate_call`]).
     Call { f: DeclId, at: Loc },
+    /// The object size of pointer `p` for type `ty`
+    /// ([`Oven::fold_object_size`]).
+    ObjectSize { p: ExprId, ty: u32 },
 }
 
 impl Job {
     /// The location of a depth-limit failure.
     fn loc(self, ast: &Ast) -> Loc {
         match self {
-            Job::Expr(e) | Job::Chars { size: e, .. } | Job::Subst { at: e, .. } => {
-                ast.exprs.get(e).loc()
-            }
+            Job::Expr(e)
+            | Job::Chars { size: e, .. }
+            | Job::Subst { at: e, .. }
+            | Job::ObjectSize { p: e, .. } => ast.exprs.get(e).loc(),
             Job::Call { at, .. } => at,
         }
     }
@@ -948,6 +952,41 @@ impl Oven {
         r
     }
 
+    /// clang `Expr::tryEvaluateObjectSize` (WP-808): the object size of
+    /// pointer expression `p` for type `ty` (0-3) as
+    /// `__builtin_object_size(p, ty)` folds it (codegen's
+    /// `evaluateOrEmitBuiltinObjectSize` of a `pass_object_size`
+    /// argument), without the builtin's side-effect default: `None` when
+    /// the pointer does not fold to a known object. A silent trial, lax as
+    /// [`Oven::fold_rvalue`].
+    pub fn fold_object_size(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        p: ExprId,
+        ty: u32,
+    ) -> Option<u64> {
+        let outer = self.ctx_depth == 0;
+        if outer {
+            self.run.lax = true;
+            self.mem.lax = true;
+        }
+        let mark = self.trial_mark();
+        let job = Job::ObjectSize { p, ty };
+        let r = self.eval_job(bridge, job, None, true, false, false).0.ok();
+        if outer {
+            self.run.lax = false;
+            self.mem.lax = false;
+        }
+        let n = r.and_then(|v| match bridge.ast().consts.scalar(v) {
+            Some(kiln_ast::consts::Scalar::Int { bits, .. }) => bits.to_u128(),
+            _ => None,
+        });
+        if n.is_none() {
+            self.reclaim_failed(mark);
+        }
+        n.and_then(|n| u64::try_from(n).ok())
+    }
+
     /// clang's `Expr::EvaluateForOverflow` of `e` (`EM_IgnoreSideEffects`
     /// with `CheckingForUndefinedBehavior`), as [`Oven::fold_rvalue`]:
     /// a signed integer `+`, `-`, `*` (compound assignments included),
@@ -1429,6 +1468,7 @@ impl Oven {
             Job::Chars { size, data } => self.eval_chars(b, size, data, fb),
             Job::Subst { cond, at } => self.eval_subst(b, cond, at, fb),
             Job::Call { f, at } => self.eval_call(b, f, at, fb),
+            Job::ObjectSize { p, ty } => self.eval_object_size(b, p, ty, fb),
         }
     }
 

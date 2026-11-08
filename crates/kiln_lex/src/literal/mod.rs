@@ -79,6 +79,10 @@ pub struct LiteralOptions {
     pub std: Std,
     /// The target's character types.
     pub params: EncodingParams,
+    /// `-f[no-]char8_t` (clang `LangOptions::Char8`): a UTF-8 literal has
+    /// `char8_t` type ([lex.ccon]/3, P0482R6); `None` is the default, C++20
+    /// and later.
+    pub char8: Option<bool>,
 }
 
 impl Default for LiteralOptions {
@@ -91,7 +95,14 @@ impl Default for LiteralOptions {
 impl LiteralOptions {
     /// Options for `std` and `params`.
     pub const fn new(std: Std, params: EncodingParams) -> Self {
-        LiteralOptions { std, params }
+        LiteralOptions { std, params, char8: None }
+    }
+
+    /// Whether a UTF-8 literal has `char8_t` type: the `char8` field, else
+    /// from C++20 on.
+    #[must_use]
+    pub fn char8(&self) -> bool {
+        self.char8.unwrap_or(self.std >= Std::Cxx20)
     }
 }
 
@@ -840,7 +851,7 @@ pub fn decode_char(spelling: &str, opts: LiteralOptions) -> CharLiteral<'_> {
             diags.push(LexDiagKind::MultiCharNotAllowed, full.start, full.end);
         }
     }
-    let utf8_is_char8 = opts.std >= Std::Cxx20;
+    let utf8_is_char8 = opts.char8();
     let ty = match enc {
         Encoding::Ordinary if multi => CharType::Int,
         Encoding::Utf8 if utf8_is_char8 => CharType::Char8,
