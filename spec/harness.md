@@ -34,7 +34,9 @@ cargo xtask test [options] [paths...]
 `--flag=value` is accepted for every option that takes a value.
 
 `paths` are files or directories (default: `tests/conformance`,
-`tests/differential` and `tests/stress`, whichever exist).
+`tests/debuginfo`, `tests/differential` and `tests/stress`, whichever
+exist; `tests/debuginfo` is a default root everywhere, its tests SKIP
+without gdb and lldb-19, see "Debugger tests").
 
 Exit status: **0** when there is no FAIL, XPASS, ERROR or KILLED (XFAIL and
 SKIP are allowed); **1** when there is at least one; **2** for a usage error, an
@@ -557,7 +559,12 @@ and the test is a **SKIP** without an oracle or under `other`.
 does: the test is compiled and linked with `-O0 -g` (plus `std:`,
 `args:`, the usual `-fclang-compat`), and each debugger with commands
 runs over `<scratch>/test.out`, with cwd = the scratch dir, under
-`--timeout`: `gdb -batch -nx -x <scratch>/gdb.cmd test.out` and
+`--timeout` but never less than 60 s (`DEBUGGER_TIMEOUT`: a debugger
+takes seconds to load the binary and, for lldb, its Python runtime, more
+on a busy CI runner; a session that runs out is a **FAIL** naming the
+timeout, with the output so far), and with `DEBUGINFOD_URLS` removed
+from its environment (no symbol-server lookups, so nothing depends on
+the network): `gdb -batch -nx -x <scratch>/gdb.cmd test.out` and
 `lldb -b -s <scratch>/lldb.cmd test.out` (`lldb-19`, else `lldb`, on
 `PATH`). The script is the `gdb:` (`lldb:`) lines, one command per line.
 The output, stdout then stderr, must contain each `gdb-check:`
@@ -567,7 +574,24 @@ The debugger's exit code is not checked (a batch debugger exits 0 after
 a failed command; the checks catch it). There is no oracle comparison:
 the same test passes under `--compiler clang++-19`, which is the
 reference. A test whose debugger is not on `PATH` is a **SKIP**
-(`requires `gdb` on PATH (`expect: debugger`)`).
+(`requires `gdb` on PATH (`expect: debugger`)`), so a machine without
+gdb or lldb-19 still passes the corpus, with the reason shown. Under
+**`KILN_REQUIRE_DEBUGGERS=1`** (exactly `1`, as `KILN_REQUIRE_GCC`) it is
+an **ERROR** instead (`KILN_REQUIRE_DEBUGGERS=1 and `gdb` is not on PATH
+(`expect: debugger`)`), so the run fails. GitHub CI sets it in every job
+and installs gdb and lldb-19 in the jobs that run the corpus ("CI",
+WP-816), so the debugger tests cannot silently skip there. Like
+`KILN_REQUIRE_GCC`, only the entry points (`cargo xtask test`, the `ci`
+corpus runs) read it, never the harness's own tests.
+`tests/debuginfo` is a default root, so `cargo xtask test` and both `ci`
+corpus runs include it (WP-816; before, it had to be named).
+
+The debuggers need `ptrace` on the test binary they start. A container
+allows that under Docker's default seccomp profile (kernel 4.8 and
+later), and the development container runs the tests with neither
+`CAP_SYS_PTRACE` nor `seccomp=unconfined`; GitHub CI adds
+`--cap-add=SYS_PTRACE` to the jobs that run them anyway, so `ptrace` does
+not depend on the host's Yama setting.
 
 Write checks that hold on both targets and both compilers: source text
 and line numbers rather than addresses, `this=0x` rather than a pointer
@@ -949,7 +973,7 @@ runs, stopping at the first failing step:
    target dir as for `--compiler`'s default);
 
 then the two corpus runs, both over the default paths (`tests/conformance`,
-`tests/differential` and `tests/stress`) with the default oracle
+`tests/debuginfo`, `tests/differential` and `tests/stress`) with the default oracle
 `clang++-N` (N from `KILN_ORACLE`, default 22; "Oracle toolchain"), the
 default GCC oracle ("GCC oracle") and the
 default `--mem-limit` (8192 MiB). A bad `KILN_ORACLE` fails `ci` (exit 2)
@@ -1028,9 +1052,14 @@ docs/VALIDATION.md "GitHub Actions"), each in a
 environment (aarch64 Debian 13, clang 19.1.7, GCC 14 for libstdc++
 detection, plus GCC 16.1 in `/usr/local` as the GCC oracle), with
 `clang-19 llvm-19 lld-19 libc++-19-dev libc++abi-19-dev` installed,
-`KILN_REQUIRE_LLVM=1`, `KILN_GCC=/usr/local/bin/g++` and
-`KILN_REQUIRE_GCC=1`, so nothing is skipped there (docs/VALIDATION.md
-"GitHub Actions", WP-226, WP-502). The action first checks that
+`KILN_REQUIRE_LLVM=1`, `KILN_GCC=/usr/local/bin/g++`,
+`KILN_REQUIRE_GCC=1` and `KILN_REQUIRE_DEBUGGERS=1`, so nothing is
+skipped there (docs/VALIDATION.md "GitHub Actions", WP-226, WP-502,
+WP-816). The corpus jobs (`self-check`, `kiln-22`, `kiln-19`) and the
+`unit xtask` job (the debugger fixtures) also install `gdb lldb-19`
+(the setup action's `debuggers` input) in a container started with
+`--cap-add=SYS_PTRACE`; `ci_tests::workflow_installs_the_debuggers`
+checks that every corpus job does. The action first checks that
 `$KILN_GCC -dumpfullversion` is 16.1.x and that it compiles a `<meta>`
 TU with `-std=c++26 -freflection`.
 The fan-in jobs `check` (aarch64) and `check-x86_64` (the same container
@@ -1220,6 +1249,13 @@ or infrastructure error. Parse errors name their line.
   `debugger_checks_match_successive_lines_in_order` (runner.rs): the
   `gdb:`/`lldb:` directive errors and the in-order check matcher;
   `tests/debuginfo/` under kiln and clang++-19.
+- WP-816: `debugger_gate_skips_or_errors_without_the_debugger` (runner.rs:
+  a missing gdb or lldb is a SKIP, an ERROR under the requirement, and
+  only for the debuggers the test drives), `debugger_corpus_is_a_default_root`
+  (tests.rs: `KILN_REQUIRE_DEBUGGERS` parsing, `tests/debuginfo` among the
+  default roots) and `ci_tests::workflow_installs_the_debuggers` (main.rs:
+  `ci-lane.yml` sets the requirement and every corpus job installs the
+  debuggers in a `SYS_PTRACE` container).
 - `kiln_abi::dump_blocks` unit tests: block splitting, builtin records,
   `Original map` and duplicate construction vtables.
 - `tests/conformance/class.derived/layout-*.cpp` and
