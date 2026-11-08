@@ -354,6 +354,18 @@ pub struct Args {
     /// translation unit ([`kiln_parse::ParsedTu::memory`]) and a total,
     /// on stderr (spec/driver.md).
     pub memory_report: bool,
+    /// `-fno-crash-diagnostics` (or `-fcrash-diagnostics=off`; the last
+    /// of these and `-fcrash-diagnostics[=compiler|all]` wins): no crash
+    /// reproducer after an internal compiler error (spec/driver.md
+    /// "Internal compiler errors").
+    pub no_crash_diagnostics: bool,
+    /// `-fcrash-diagnostics-dir=<dir>`: where the crash reproducer goes
+    /// (default `$TMPDIR`, else `/tmp`).
+    pub crash_diagnostics_dir: Option<String>,
+    /// The hidden `-fkiln-crash-for-testing=<phase>`: panic on purpose in
+    /// that phase ([`kiln_source::activity`]), to test the internal
+    /// compiler error report.
+    pub crash_for_testing: Option<kiln_source::activity::Phase>,
     /// GCC's `-fpermissive`: the C++26 enumeration arithmetic error
     /// (P2864) is the C++20 deprecation warning instead
     /// ([`kiln_sema::Sema::permissive`]; spec/driver.md).
@@ -841,9 +853,24 @@ impl Args {
             "-fkiln-dump-cfg" => self.dump_cfg = true,
             "-fkiln-cfg-stats" => self.cfg_stats = true,
             "-fkiln-memory-report" => self.memory_report = true,
+            "-fcrash-diagnostics" | "-fcrash-diagnostics=compiler" | "-fcrash-diagnostics=all" => {
+                self.no_crash_diagnostics = false;
+            }
+            "-fno-crash-diagnostics" | "-fcrash-diagnostics=off" => {
+                self.no_crash_diagnostics = true;
+            }
             "-fpermissive" => self.permissive = true,
             _ => {
-                if let Some(v) = arg.strip_prefix("-fkiln-source-path-style=") {
+                if let Some(v) = arg.strip_prefix("-fcrash-diagnostics-dir=") {
+                    self.crash_diagnostics_dir = Some(v.to_owned());
+                } else if let Some(v) = arg.strip_prefix("-fkiln-crash-for-testing=") {
+                    match kiln_source::activity::Phase::parse(v) {
+                        Some(p) => self.crash_for_testing = Some(p),
+                        None => self
+                            .errors
+                            .push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())),
+                    }
+                } else if let Some(v) = arg.strip_prefix("-fkiln-source-path-style=") {
                     match v {
                         "clang" => self.source_path_style = SourcePathStyle::Clang,
                         "gcc" => self.source_path_style = SourcePathStyle::Gcc,
@@ -1546,6 +1573,26 @@ mod tests {
         assert_eq!(
             parse("-fkiln-reflection-mangling=msvc a.cpp").errors,
             [ArgError::InvalidFlagValue("-fkiln-reflection-mangling=msvc".into(), "msvc".into())]
+        );
+    }
+
+    #[test]
+    fn crash_diagnostics() {
+        use kiln_source::activity::Phase;
+        let a = parse("a.cpp");
+        assert_eq!((a.no_crash_diagnostics, a.crash_diagnostics_dir, a.crash_for_testing), (false, None, None));
+        assert!(parse("-fno-crash-diagnostics a.cpp").no_crash_diagnostics);
+        assert!(parse("-fcrash-diagnostics=off a.cpp").no_crash_diagnostics);
+        assert!(!parse("-fno-crash-diagnostics -fcrash-diagnostics a.cpp").no_crash_diagnostics);
+        assert!(!parse("-fcrash-diagnostics=off -fcrash-diagnostics=all a.cpp").no_crash_diagnostics);
+        let a = parse("-fcrash-diagnostics-dir=/x/y a.cpp");
+        assert_eq!((a.crash_diagnostics_dir.as_deref(), a.errors), (Some("/x/y"), vec![]));
+        let a = parse("-fkiln-crash-for-testing=oven a.cpp");
+        assert_eq!((a.crash_for_testing, a.errors), (Some(Phase::Oven), vec![]));
+        assert_eq!(parse("-fkiln-crash-for-testing=lex a.cpp").crash_for_testing, Some(Phase::Preprocess));
+        assert_eq!(
+            parse("-fkiln-crash-for-testing=link a.cpp").errors,
+            [ArgError::InvalidFlagValue("-fkiln-crash-for-testing=link".into(), "link".into())]
         );
     }
 

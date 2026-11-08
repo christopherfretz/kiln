@@ -18,7 +18,7 @@ use kiln_sema::{
 };
 use kiln_sema::{ContractDeclKind, DeclSite};
 use kiln_source::symbol::Symbol;
-use kiln_source::{Loc, Span};
+use kiln_source::{Loc, Span, activity};
 
 use crate::class::LateToks;
 use crate::fp_pragma::FpAt;
@@ -129,10 +129,12 @@ impl Parser<'_, '_> {
         self.module_flush();
         // [temp.point]/7: the end of the translation unit is a point of
         // instantiation of every pending definition.
+        let phase = activity::enter(activity::Phase::Sema, Loc::INVALID);
         self.s.end_of_tu_instantiations();
         // Then clang's `ActOnEndOfTranslationUnit` checks (delegating
         // constructor cycles), after the pending instantiations as there.
         self.s.act_on_end_of_translation_unit();
+        drop(phase);
     }
 
     /// A declaration at namespace scope ([dcl.pre] declaration).
@@ -193,6 +195,7 @@ impl Parser<'_, '_> {
         }
         self.discard_attrs_before_unattributed_decl();
         let loc = self.loc();
+        activity::at(loc);
         // A loop-hint pragma at namespace scope (clang's annotation token
         // fails `ParseExternalDeclaration` and the declaration after it is
         // skipped through its `;`).

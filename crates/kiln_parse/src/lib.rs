@@ -39,7 +39,8 @@ use kiln_pp::{PpOptions, Preprocessor};
 use kiln_sema::target::Target;
 use kiln_sema::{Budget, Oven, Sema};
 use kiln_source::symbol::Interner;
-use kiln_source::{FileId, SourceManager};
+use kiln_source::activity::{self, Phase};
+use kiln_source::{FileId, Loc, SourceManager};
 
 pub use parser::{PExpr, Parser};
 pub use tentative::TypeIdContext;
@@ -332,7 +333,10 @@ pub fn parse_preprocessed<'a, 'sm>(
     let mut src = TokenSource::new(pp, diags);
     src.keep_all(opts.keep_tokens);
     let mut p = Parser::new(s, src, lit_opts);
+    // The ICE breadcrumb (spec/driver.md "Internal compiler errors").
+    let phase = activity::enter(Phase::Parse, Loc::INVALID);
     p.parse_translation_unit();
+    drop(phase);
     let (s, src) = p.finish();
     let name = main.rsplit('/').next().unwrap_or(&main);
     let inst_report = s.instantiation_report(name);
