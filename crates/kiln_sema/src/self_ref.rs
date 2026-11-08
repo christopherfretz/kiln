@@ -373,7 +373,8 @@ impl Sema<'_, '_> {
         let at = self.begin_loc(dre);
         let name = self.ast.decls.get(v).loc();
         let name = Span::new(name, self.token_end(name).unwrap_or(name));
-        let msg = self.diag(id, at).arg(self.decl_arg(d)).range(name).range(self.self_ref_dre_range(dre));
+        let msg =
+            self.diag(id, at).arg(self.decl_arg(d)).range(name).range(self.self_ref_dre_range(dre));
         self.diag_runtime_behavior(msg);
     }
 

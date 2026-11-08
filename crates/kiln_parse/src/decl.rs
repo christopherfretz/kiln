@@ -4036,7 +4036,13 @@ impl Parser<'_, '_> {
             && d.end != Loc::INVALID
             && self.s.ast.decls.var(v).is_some()
             && self.s.ast.decls.get(v).loc() != d.end
-            && self.s.ast.decls.get(v).ctx().is_some_and(|c| self.s.ast.decls.get(c).kind().is_function())
+            && self
+                .s
+                .ast
+                .decls
+                .get(v)
+                .ctx()
+                .is_some_and(|c| self.s.ast.decls.get(c).kind().is_function())
         {
             let _ = self.s.ast.decls.cold.declarator_end.insert(v, d.end);
         }

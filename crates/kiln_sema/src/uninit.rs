@@ -109,7 +109,7 @@ impl Use {
 /// One variable's entry of clang's `UninitValsDiagReporter` maps.
 struct Uses {
     var: u32,
-    uses: Vec<Use>,
+    list: Vec<Use>,
     self_init: bool,
 }
 
@@ -123,13 +123,10 @@ struct Reports {
 
 impl Reports {
     fn entry(map: &mut Vec<Uses>, var: u32) -> &mut Uses {
-        let i = match map.iter().position(|u| u.var == var) {
-            Some(i) => i,
-            None => {
-                map.push(Uses { var, uses: Vec::new(), self_init: false });
-                map.len() - 1
-            }
-        };
+        let i = map.iter().position(|u| u.var == var).unwrap_or(map.len());
+        if i == map.len() {
+            map.push(Uses { var, list: Vec::new(), self_init: false });
+        }
         &mut map[i]
     }
 }
@@ -246,7 +243,8 @@ impl Sema<'_, '_> {
         self.ast.decls.members(def).any(|m| {
             let n = self.ast.decls.get(m);
             if n.kind() != DeclKind::Field
-                || (n.name().is_empty() && self.ast.decls.field(m).is_some_and(|f| f.bit_width.is_some()))
+                || (n.name().is_empty()
+                    && self.ast.decls.field(m).is_some_and(|f| f.bit_width.is_some()))
                 || self.is_zero_size_field(m)
             {
                 return false;
@@ -277,7 +275,9 @@ impl Sema<'_, '_> {
                 ExprKind::SubstNonTypeTemplateParmExpr => ex.subst_replacement(e),
                 _ if k.is_cast() => {
                     let sub = ex.operand(e);
-                    if ex.cast_kind(e) == CastKind::LValueBitCast || self.uninit_noop_cast(n.ty(), ex.get(sub).ty()) {
+                    if ex.cast_kind(e) == CastKind::LValueBitCast
+                        || self.uninit_noop_cast(n.ty(), ex.get(sub).ty())
+                    {
                         sub
                     } else {
                         break;
@@ -330,7 +330,7 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `returns_twice` test (the attribute, or one of the C
-    /// library functions clang gives it; kiln_codegen's
+    /// library functions clang gives it; `kiln_codegen`'s
     /// `is_returns_twice`).
     fn uninit_returns_twice(&self, d: DeclId) -> bool {
         let first = self.ast.first(d);
@@ -435,30 +435,32 @@ impl Sema<'_, '_> {
     fn uninit_flush(&self, f: DeclId, s: &Scratch, r: Reports) {
         for u in r.uses {
             let (v, stmt) = (s.vars[u.var as usize], s.var_stmts[u.var as usize]);
-            if !u.uses.is_empty() && u.self_init && Self::uninit_has_always(&u.uses) {
+            if !u.list.is_empty() && u.self_init && Self::uninit_has_always(&u.list) {
                 self.uninit_self_init_use(f, v, stmt);
                 continue;
             }
-            let mut uses = u.uses;
-            uses.sort_by(|a, b| b.kind().cmp(&a.kind()).then(self.begin_loc(a.user).cmp(&self.begin_loc(b.user))));
-            for use_ in uses {
-                let use_ = if u.self_init { Use::new(use_.user, false) } else { use_ };
-                if self.uninit_diagnose_use(f, v, stmt, &use_, false) {
+            let mut list = u.list;
+            list.sort_by(|a, b| {
+                b.kind().cmp(&a.kind()).then(self.begin_loc(a.user).cmp(&self.begin_loc(b.user)))
+            });
+            for one in list {
+                let one = if u.self_init { Use::new(one.user, false) } else { one };
+                if self.uninit_diagnose_use(f, v, stmt, &one, false) {
                     break;
                 }
             }
         }
         for u in r.const_ref {
             let (v, stmt) = (s.vars[u.var as usize], s.var_stmts[u.var as usize]);
-            if !u.uses.is_empty() && u.self_init && Self::uninit_has_always(&u.uses) {
+            if !u.list.is_empty() && u.self_init && Self::uninit_has_always(&u.list) {
                 self.uninit_self_init_use(f, v, stmt);
                 continue;
             }
-            if let Some(use_) = u.uses.first() {
+            if let Some(first) = u.list.first() {
                 let msg = self
-                    .diag(DiagId::sema_uninit_const_reference, self.begin_loc(use_.user))
+                    .diag(DiagId::sema_uninit_const_reference, self.begin_loc(first.user))
                     .arg(self.decl_arg(v))
-                    .range(self.uninit_user_range(use_.user));
+                    .range(self.uninit_user_range(first.user));
                 self.emit(msg);
             }
         }
@@ -475,7 +477,8 @@ impl Sema<'_, '_> {
 
     /// clang `hasAlwaysUninitializedUse`.
     fn uninit_has_always(uses: &[Use]) -> bool {
-        uses.iter().any(|u| matches!(u.kind(), UseKind::Always | UseKind::AfterCall | UseKind::AfterDecl))
+        uses.iter()
+            .any(|u| matches!(u.kind(), UseKind::Always | UseKind::AfterCall | UseKind::AfterDecl))
     }
 
     /// The self-initialized variable's own initializer reported as an
@@ -488,7 +491,14 @@ impl Sema<'_, '_> {
     }
 
     /// clang `DiagnoseUninitializedUse`.
-    fn uninit_diagnose_use(&self, f: DeclId, v: DeclId, stmt: StmtId, u: &Use, always_report: bool) -> bool {
+    fn uninit_diagnose_use(
+        &self,
+        f: DeclId,
+        v: DeclId,
+        stmt: StmtId,
+        u: &Use,
+        always_report: bool,
+    ) -> bool {
         let user = u.user;
         let name = self.decl_arg(v);
         if self.ast.exprs.get(user).kind() == ExprKind::DeclRefExpr
@@ -498,11 +508,14 @@ impl Sema<'_, '_> {
                 return false;
             }
             if self.uninit_contains(init, user) {
-                let msg = self
-                    .diag(DiagId::sema_uninit_self_reference_in_init, self.begin_loc(user))
-                    .arg(name)
-                    .range(self.uninit_tok_span(self.ast.decls.get(v).loc(), self.ast.decls.get(v).loc()))
-                    .range(self.uninit_user_range(user));
+                let msg =
+                    self.diag(DiagId::sema_uninit_self_reference_in_init, self.begin_loc(user))
+                        .arg(name)
+                        .range(self.uninit_tok_span(
+                            self.ast.decls.get(v).loc(),
+                            self.ast.decls.get(v).loc(),
+                        ))
+                        .range(self.uninit_user_range(user));
                 self.emit(msg);
                 return true;
             }
@@ -532,7 +545,11 @@ impl Sema<'_, '_> {
             let (b, end, at) = (self.begin_loc(e), self.expr_end_loc(e), self.begin_loc(needle));
             return !b.is_macro() && !end.is_macro() && !at.is_macro() && b <= at && at <= end;
         }
-        self.ast.exprs.children(e, &self.ast.lists).into_iter().any(|c| self.uninit_contains(c, needle))
+        self.ast
+            .exprs
+            .children(e, &self.ast.lists)
+            .into_iter()
+            .any(|c| self.uninit_contains(c, needle))
     }
 
     /// clang `SuggestInitializationFixit`: the `= 0` note.
@@ -565,7 +582,14 @@ impl Sema<'_, '_> {
 
     /// clang `DiagUninitUse`: the warnings (each with its notes) for one
     /// use; the caller adds the initialization note to the last.
-    fn uninit_diag_use(&self, f: DeclId, v: DeclId, stmt: StmtId, u: &Use, name: &str) -> Vec<Diag> {
+    fn uninit_diag_use(
+        &self,
+        f: DeclId,
+        v: DeclId,
+        stmt: StmtId,
+        u: &Use,
+        name: &str,
+    ) -> Vec<Diag> {
         let user = u.user;
         let user_at = self.begin_loc(user);
         let user_range = self.uninit_user_range(user);
@@ -573,7 +597,9 @@ impl Sema<'_, '_> {
         let mut out = Vec::new();
         match u.kind() {
             UseKind::Always => {
-                out.push(self.diag(DiagId::sema_uninit_var, user_at).arg(name).arg(0).range(user_range));
+                out.push(
+                    self.diag(DiagId::sema_uninit_var, user_at).arg(name).arg(0).range(user_range),
+                );
                 return out;
             }
             UseKind::AfterDecl | UseKind::AfterCall => {
@@ -632,7 +658,12 @@ impl Sema<'_, '_> {
             out.push(msg);
         }
         if out.is_empty() {
-            out.push(self.diag(DiagId::sema_maybe_uninit_var, user_at).arg(name).arg(0).range(user_range));
+            out.push(
+                self.diag(DiagId::sema_maybe_uninit_var, user_at)
+                    .arg(name)
+                    .arg(0)
+                    .range(user_range),
+            );
         }
         out
     }
@@ -640,12 +671,20 @@ impl Sema<'_, '_> {
     /// The `switch` arm of `DiagUninitUse` for one branch: the warning's
     /// selector, the construct's spelling, its range and the removal
     /// note's fix-its; `None` for a terminator clang does not describe.
+    #[allow(clippy::too_many_lines)]
     fn uninit_branch(&self, br: &Branch) -> Option<BranchDiag> {
         let st = &self.ast.stmts;
         let ex = &self.ast.exprs;
         let out = br.output != 0;
         let fixit_str = if out { "true" } else { "false" };
-        let mut b = BranchDiag { kind: 0, str: "", range: Span::empty(Loc::INVALID), remove: None, fixit1: None, fixit2: None };
+        let mut b = BranchDiag {
+            kind: 0,
+            str: "",
+            range: Span::empty(Loc::INVALID),
+            remove: None,
+            fixit1: None,
+            fixit2: None,
+        };
         if let Some(label) = br.label {
             match st.get(label).kind() {
                 StmtKind::CaseStmt => {
@@ -674,7 +713,15 @@ impl Sema<'_, '_> {
                 let then_at = self.stmt_begin_loc(then);
                 let els = d.els.map(|e| (self.stmt_begin_loc(e), self.uninit_stmt_end(e)));
                 let if_end = self.uninit_stmt_end(s);
-                self.uninit_if_fixit(&mut b, out, if_at, if_end, then_at, self.uninit_stmt_end(then), els);
+                self.uninit_if_fixit(
+                    &mut b,
+                    out,
+                    if_at,
+                    if_end,
+                    then_at,
+                    self.uninit_stmt_end(then),
+                    els,
+                );
             }
             Term::Cond(e) if ex.get(e).kind() == ExprKind::ConditionalOperator => {
                 let cond = ExprId::new(ex.get(e).a());
@@ -702,11 +749,12 @@ impl Sema<'_, '_> {
                 b.str = op.spelling();
                 b.range = self.expr_range(l);
                 b.remove = Some(0);
-                b.fixit1 = Some(if (op == BinaryOp::LAnd && out) || (op == BinaryOp::LOr && !out) {
-                    FixIt::remove(self.uninit_tok_span(self.begin_loc(e), ex.get(e).loc()))
-                } else {
-                    FixIt::replace(self.expr_range(e), fixit_str)
-                });
+                b.fixit1 =
+                    Some(if (op == BinaryOp::LAnd && out) || (op == BinaryOp::LOr && !out) {
+                        FixIt::remove(self.uninit_tok_span(self.begin_loc(e), ex.get(e).loc()))
+                    } else {
+                        FixIt::replace(self.expr_range(e), fixit_str)
+                    });
             }
             Term::Loop(s) => match st.get(s).kind() {
                 StmtKind::WhileStmt => {
@@ -721,7 +769,11 @@ impl Sema<'_, '_> {
                     b.str = "for";
                     b.range = self.expr_range(st.loop_data(s).cond?);
                     b.remove = Some(1);
-                    b.fixit1 = Some(if out { FixIt::remove(b.range) } else { FixIt::replace(b.range, fixit_str) });
+                    b.fixit1 = Some(if out {
+                        FixIt::remove(b.range)
+                    } else {
+                        FixIt::replace(b.range, fixit_str)
+                    });
                 }
                 StmtKind::CXXForRangeStmt => {
                     if out {
@@ -815,14 +867,18 @@ impl Run<'_, '_, '_> {
     /// the last to the first, the entry (cfg/dump.rs numbering).
     fn clang_order(&self) -> impl Iterator<Item = BlockId> + use<> {
         let n = self.cfg.blocks.len() as u32;
-        std::iter::once(BlockId::EXIT).chain((2..n).rev().map(BlockId)).chain(std::iter::once(BlockId::ENTRY))
+        std::iter::once(BlockId::EXIT)
+            .chain((2..n).rev().map(BlockId))
+            .chain(std::iter::once(BlockId::ENTRY))
     }
 
     /// clang `findVar`: the tracked variable `e` names, casts stripped.
     fn find_var(&self, e: ExprId) -> Option<u32> {
         let e = self.sema.uninit_strip_casts(e);
         let ex = &self.sema.ast.exprs;
-        (ex.get(e).kind() == ExprKind::DeclRefExpr).then(|| self.s.index.get(&ex.decl(e)).copied()).flatten()
+        (ex.get(e).kind() == ExprKind::DeclRefExpr)
+            .then(|| self.s.index.get(&ex.decl(e)).copied())
+            .flatten()
     }
 
     /// The tracked variable a `DeclRefExpr` names.
@@ -846,7 +902,9 @@ impl Run<'_, '_, '_> {
         for w in &mut self.s.vals[BlockId::ENTRY.idx() * words..][..words] {
             *w = ALL_UNINIT;
         }
-        for v in [&mut self.s.analyzed, &mut self.s.visited, &mut self.s.queued, &mut self.s.had_use] {
+        for v in
+            [&mut self.s.analyzed, &mut self.s.visited, &mut self.s.queued, &mut self.s.had_use]
+        {
             v.clear();
             v.resize(n, false);
         }
@@ -1003,7 +1061,9 @@ impl Run<'_, '_, '_> {
             ExprKind::LambdaExpr => self.lambda_nodes(e, out),
             _ => {
                 let mut kids = ex.children(e, &self.sema.ast.lists);
-                if ex.get(e).kind() == ExprKind::BinaryOperator && ex.binary_op(e) == BinaryOp::Assign {
+                if ex.get(e).kind() == ExprKind::BinaryOperator
+                    && ex.binary_op(e) == BinaryOp::Assign
+                {
                     kids.reverse();
                 }
                 for k in kids {
@@ -1078,7 +1138,9 @@ impl Run<'_, '_, '_> {
             }
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
                 let args = ex.call_args(e);
-                if matches!(k, ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr) && sema.self_ref_is_std_move(e) {
+                if matches!(k, ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr)
+                    && sema.self_ref_is_std_move(e)
+                {
                     if let Some(a) = sema.ast.lists.iter::<ExprId>(args).next()
                         && sema.ast.types.as_record(ex.get(a).ty()).is_none()
                     {
@@ -1092,13 +1154,22 @@ impl Run<'_, '_, '_> {
                     let ty = an.ty();
                     if an.value_category() != ValueCategory::PRValue {
                         if sema.ast.types.effective_quals(ty).is_const() {
-                            self.classify(a, if trivial { Class::Ignore } else { Class::ConstRefUse });
+                            self.classify(
+                                a,
+                                if trivial { Class::Ignore } else { Class::ConstRefUse },
+                            );
                         }
                     } else if sema.ast.types.is_pointer(ty)
-                        && sema.ast.types.pointee(ty).is_some_and(|p| sema.ast.types.effective_quals(p).is_const())
+                        && sema
+                            .ast
+                            .types
+                            .pointee(ty)
+                            .is_some_and(|p| sema.ast.types.effective_quals(p).is_const())
                     {
                         let mut x = sema.uninit_strip_casts(a);
-                        if ex.get(x).kind() == ExprKind::UnaryOperator && ex.unary_op(x) == UnaryOp::AddrOf {
+                        if ex.get(x).kind() == ExprKind::UnaryOperator
+                            && ex.unary_op(x) == UnaryOp::AddrOf
+                        {
                             x = ex.operand(x);
                         }
                         self.classify(x, Class::Ignore);
@@ -1335,7 +1406,15 @@ impl Run<'_, '_, '_> {
     }
 
     /// `reportUse` / `reportConstRefUse`.
-    fn report(&mut self, user: ExprId, i: u32, v: u8, b: BlockId, sink: &mut Sink<'_>, const_ref: bool) {
+    fn report(
+        &mut self,
+        user: ExprId,
+        i: u32,
+        v: u8,
+        b: BlockId,
+        sink: &mut Sink<'_>,
+        const_ref: bool,
+    ) {
         match sink {
             Sink::Prune { had_any } => {
                 *had_any = true;
@@ -1344,7 +1423,7 @@ impl Run<'_, '_, '_> {
             Sink::Report(r) => {
                 let u = self.uninit_use(user, i, v, b);
                 let map = if const_ref { &mut r.const_ref } else { &mut r.uses };
-                Reports::entry(map, i).uses.push(u);
+                Reports::entry(map, i).list.push(u);
             }
         }
     }

@@ -1772,6 +1772,7 @@ impl Sema<'_, '_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn end_function_body(&mut self, body: StmtId, rbrace: Loc) -> StmtId {
         self.leave_function_scope();
         let coroutine = self.coro_state().is_some_and(|c| c.first.is_some());
