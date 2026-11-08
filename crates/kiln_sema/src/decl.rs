@@ -10054,6 +10054,15 @@ impl Sema<'_, '_> {
         ) {
             return None;
         }
+        // clang `AddressSpaceAttr` (`ptr addrspace(N)`, `U3AS<N>` mangling)
+        // is not implemented: a hard error, not a silent drop (WP-809).
+        if n == "address_space" && ((syntax == AttrSyntax::Gnu && scope_s.is_none()) || clang_scope)
+        {
+            let msg =
+                self.diag(DiagId::parse_unsupported, loc).arg("the 'address_space' attribute");
+            self.emit(msg);
+            return None;
+        }
         // clang 19 names only the attribute, not its scope.
         if scope_s.as_deref().is_some_and(|s| s != "gnu")
             && !(clang_scope
