@@ -158,6 +158,10 @@ pub(crate) struct Fx {
     /// The aggregate slot being initialized may overlap other data
     /// (clang `AggValueSlot::Overlap_t`), consumed by the next emission.
     pub overlap: bool,
+    /// The aggregate slot being initialized was already checked by the
+    /// sanitizer (clang `AggValueSlot::IsSanitizerChecked`), consumed by
+    /// the next aggregate emission other than a wrapper.
+    pub ub_checked: bool,
     /// The aggregate slot an `_Atomic` assignment evaluates its right
     /// side into is volatile (clang `AggValueSlot::isVolatile`), consumed
     /// by the atomic load filling it (WP-165).
@@ -290,6 +294,7 @@ impl Fx {
             uses_ph: false,
             error: None,
             overlap: false,
+            ub_checked: false,
             slot_volatile: false,
             dest_destructed: false,
             arg_cleanups: Vec::new(),

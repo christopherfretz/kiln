@@ -11,6 +11,7 @@
 
 use kiln_ast::expr::{BinaryOp, ExprKind};
 use kiln_ast::sanitize::SanitizerSet as San;
+use kiln_ast::dump::AstNames;
 use kiln_ast::types::{PrintOptions, Quals, TypeView, aka, print_type};
 use kiln_abi::mangle::Structor;
 use kiln_ast::decl::{DeclKind, DefinitionBits};
@@ -285,8 +286,12 @@ impl Cg<'_> {
             }
             _ => (0xffff, 0),
         };
-        let s = print_type(&ast.types, ast, q, PrintOptions::SUGARED);
-        let name = match (desc, aka(&ast.types, ast, q)) {
+        let names = match self.sm {
+            Some(sm) => AstNames::with_sources(ast, sm),
+            None => AstNames::new(ast),
+        };
+        let s = print_type(&ast.types, &names, q, PrintOptions::SUGARED);
+        let name = match (desc, aka(&ast.types, &names, q)) {
             (UbDesc::ThisPtr(cv), _) => {
                 let cv = Quals::from_bits(cv);
                 let mut p = String::new();
@@ -303,6 +308,11 @@ impl Cg<'_> {
             (_, None) => format!("'{s}'"),
         };
         let (kind, info) = if matches!(desc, UbDesc::ThisPtr(_)) { (0xffff, 0) } else { (kind, info) };
+        let nkey = (ast.types.canonical(q), key, name.clone().into_boxed_str());
+        if let Some(&g) = self.ub_type_names.get(&nkey) {
+            self.ub_types.insert((q, key), g);
+            return Ok(Value::global(g));
+        }
         let mut bytes = name.into_bytes();
         bytes.push(0);
         let elems = [
@@ -315,6 +325,7 @@ impl Cg<'_> {
         };
         let g = self.ub_global(init, true);
         self.ub_types.insert((q, key), g);
+        self.ub_type_names.insert(nkey, g);
         Ok(Value::global(g))
     }
 
@@ -1001,6 +1012,19 @@ impl Cg<'_> {
     /// clang `sanitizePerformTypeCheck`.
     pub(crate) fn ub_type_check_on(&self) -> bool {
         self.ub_on(San::NULL.union(San::ALIGNMENT).union(San::OBJECT_SIZE))
+    }
+
+    /// Runs `f` with its aggregate slot marked as already checked (clang
+    /// `AggValueSlot::IsSanitizerChecked`: member and delegating
+    /// initializers, new-expression initializers).
+    pub(crate) fn ub_checked<T>(&mut self, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        if !self.ub_type_check_on() {
+            return f(self);
+        }
+        self.f.ub_checked = true;
+        let r = f(self);
+        self.f.ub_checked = false;
+        r
     }
 
     /// `icmp ne ptr p, null` as clang's `CreateIsNotNull` with LLVM 19's

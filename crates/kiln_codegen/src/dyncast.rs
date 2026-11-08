@@ -3,6 +3,7 @@
 //! Itanium `emitDynamicCastCall`, `emitDynamicCastToVoid`, `EmitTypeid`,
 //! `EmitBadCastCall` and `EmitBadTypeidCall`.
 
+use crate::ubsan::{Tck, TypeCheck};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, TypeidOperand, UnaryOp};
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -173,6 +174,13 @@ impl Cg<'_> {
         if !to_void && dst.is_none() {
             return err(loc, "dynamic_cast to a non-class type");
         }
+        // clang `EmitDynamicCast`: [class.cdtor]/5 (the written source
+        // class type).
+        if self.ub_type_check_on() {
+            let srq = if is_ref { sq } else { ast.types.pointee(sq).unwrap_or(sq) };
+            let loc = self.ub_expr_loc(e);
+            self.ub_type_check(this, TypeCheck::new(Tck::DynamicOperation, loc, srq))?;
+        }
         if self.dynamic_cast_always_null(src, dst) {
             if !is_ref {
                 return Ok(V::C(self.m.const_null(LTy::PTR)));
@@ -317,6 +325,11 @@ impl Cg<'_> {
         }
         // EmitTypeidFromVTable.
         let lv = self.emit_lvalue(x)?;
+        // [class.cdtor]/4.
+        if self.ub_type_check_on() {
+            let loc = self.ub_expr_loc(x);
+            self.ub_type_check(lv.addr.v, TypeCheck::new(Tck::DynamicOperation, loc, xq))?;
+        }
         if self.glvalue_from_pointer_deref(x) {
             let bad = self.f.fir.create_block();
             let end = self.f.fir.create_block();

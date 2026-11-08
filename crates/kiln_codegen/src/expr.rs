@@ -4070,6 +4070,20 @@ impl Cg<'_> {
     }
 
     fn agg_visit(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
+        if self.f.ub_checked
+            && !matches!(
+                self.ast.exprs.get(e).kind(),
+                ExprKind::ExprWithCleanups
+                    | ExprKind::CXXBindTemporaryExpr
+                    | ExprKind::ParenExpr
+                    | ExprKind::CXXDefaultInitExpr
+                    | ExprKind::MaterializeTemporaryExpr
+                    | ExprKind::CXXConstructExpr
+                    | ExprKind::CXXTemporaryObjectExpr
+            )
+        {
+            self.f.ub_checked = false;
+        }
         let dl = self.dbg_apply_expr(e);
         self.di_explicit_cast(e);
         let r = self.agg_visit_x(e, dest, zeroed);

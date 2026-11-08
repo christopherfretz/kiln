@@ -1025,7 +1025,7 @@ impl Cg<'_> {
                 CtorInitKind::Delegating => {
                     self.flush_memcpy_run(d, &mut run)?;
                     let this = self.this_addr();
-                    self.emit_agg_into(ci.init, this, false)?;
+                    self.ub_checked(|s| s.emit_agg_into(ci.init, this, false))?;
                     // clang `EmitDelegatingCXXConstructorCall`: once the
                     // target constructor returns the object is complete
                     // ([except.ctor]/4), so a throw destroys it.
@@ -1276,7 +1276,7 @@ impl Cg<'_> {
         let addr = lv.addr;
         if self.is_aggregate(fq) {
             let overlap = false;
-            self.emit_agg_into(init, addr, overlap)?;
+            self.ub_checked(|s| s.emit_agg_into(init, addr, overlap))?;
         } else {
             self.init_to_lvalue(init, lv, false)?;
         }
@@ -1678,6 +1678,7 @@ impl Cg<'_> {
         let info = ast.exprs.construct_info(e);
         let q = ast.exprs.get(e).ty();
         let overlap = std::mem::take(&mut self.f.overlap);
+        let checked = std::mem::take(&mut self.f.ub_checked);
         let rd = ast.decls.get(ctor).ctx().expect("constructor class");
         if info.zeroing && !zeroed {
             match info.kind {
@@ -1706,15 +1707,15 @@ impl Cg<'_> {
             return Ok(());
         }
         if self.array_elem(q).is_some() {
-            return self.construct_array(e, dest);
+            return self.construct_array(e, dest, checked);
         }
-        self.construct_one(e, dest, overlap)
+        self.construct_one(e, dest, overlap, checked)
     }
 
     /// clang `EmitCXXAggrConstructorCall` for a constant-length array: a
     /// loop over the flattened elements, each constructed in its own
     /// cleanup scope. Without exceptions no partial-destroy cleanup.
-    fn construct_array(&mut self, e: ExprId, dest: Addr) -> R<()> {
+    fn construct_array(&mut self, e: ExprId, dest: Addr, checked: bool) -> R<()> {
         let ast = self.ast;
         let mut q = ast.exprs.get(e).ty();
         let mut n = 1u64;
@@ -1751,7 +1752,7 @@ impl Cg<'_> {
         let elem_size = self.alloc_size(elem);
         let elem_align = min_align(dest.align, elem_size);
         let nn = self.i64c(i128::from(n));
-        self.construct_array_n(e, begin, elem, elem_align, nn, false)
+        self.construct_array_n(e, begin, elem, elem_align, nn, false, checked)
     }
 
     /// The element loop of clang `EmitCXXAggrConstructorCall`: `num`
@@ -1759,7 +1760,9 @@ impl Cg<'_> {
     /// its own cleanup scope; a non-constant count is checked for zero
     /// first (`isempty`). With `zero_each` every element is
     /// zero-initialized before its constructor runs (an array new's
-    /// value-initialization, clang's `zeroInitialize`).
+    /// value-initialization, clang's `zeroInitialize`). `checked`: the
+    /// sanitizer already checked the elements (`NewPointerIsChecked`).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn construct_array_n(
         &mut self,
         e: ExprId,
@@ -1768,6 +1771,7 @@ impl Cg<'_> {
         elem_align: u64,
         num: V,
         zero_each: bool,
+        checked: bool,
     ) -> R<()> {
         let ast = self.ast;
         let mut out = None;
@@ -1803,7 +1807,7 @@ impl Cg<'_> {
             }
             self.emit_null_init(at, eq, size)?;
         }
-        let r = self.construct_one(e, at, false);
+        let r = self.construct_one(e, at, false, checked);
         self.end_scope(sc);
         r?;
         let one = self.i64c(1);
@@ -1818,8 +1822,9 @@ impl Cg<'_> {
     }
 
     /// One complete-or-base object construction (clang
-    /// `EmitCXXConstructorCall`).
-    fn construct_one(&mut self, e: ExprId, dest: Addr, overlap: bool) -> R<()> {
+    /// `EmitCXXConstructorCall`). Unless `checked`, the sanitizer checks
+    /// `dest` once the arguments are evaluated.
+    fn construct_one(&mut self, e: ExprId, dest: Addr, overlap: bool, checked: bool) -> R<()> {
         let ast = self.ast;
         let ctor = ast.exprs.constructor(e);
         let info = ast.exprs.construct_info(e);
@@ -1858,6 +1863,12 @@ impl Cg<'_> {
         let vals = self.emit_call_args(&sig, &args);
         self.f.dest_destructed = saved;
         let mut vals = vals?;
+        if !checked && self.ub_type_check_on() {
+            let loc = self.ub_expr_loc(e);
+            let cq = self.class_type(rd);
+            let tc = TypeCheck::new(Tck::ConstructorCall, loc, cq).desc(UbDesc::Record);
+            self.ub_type_check(dest.v, tc)?;
+        }
         if self.inlines_inheriting_ctor(ctor) {
             let vtt = if needs_vtt {
                 let virt = info.kind == ConstructionKind::VirtualBase;

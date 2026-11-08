@@ -163,6 +163,10 @@ pub(crate) struct Cg<'a> {
     /// The `UBSan` type descriptor of each type (clang
     /// `EmitCheckTypeDescriptor`'s cache, WP-675).
     pub ub_types: FxHashMap<(QualType, u8), GlobalId>,
+    /// The UBSan type descriptors by canonical type, kind and spelling:
+    /// clang uniques type sugar, so two written types that print the same
+    /// share one descriptor.
+    pub ub_type_names: FxHashMap<(QualType, u8, Box<str>), GlobalId>,
     /// The source manager, for `UBSan` source locations (WP-675).
     pub sm: Option<&'a kiln_source::SourceManager>,
     /// Named struct types by record.
@@ -419,6 +423,7 @@ impl<'a> Cg<'a> {
             to_emit: Vec::new(),
             strings: FxHashMap::default(),
             ub_types: FxHashMap::default(),
+            ub_type_names: FxHashMap::default(),
             sm: None,
             named: FxHashMap::default(),
             named_base: FxHashMap::default(),

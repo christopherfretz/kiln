@@ -23,6 +23,7 @@ use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, err};
 use crate::tbaa::Tb;
 use crate::ubsan::{Tck, TypeCheck};
+use kiln_ast::sanitize::SanitizerSet as San;
 
 /// What clang knows about a global allocation or deallocation function
 /// (`isReplaceableGlobalAllocationFunction`,
@@ -749,7 +750,7 @@ impl Cg<'_> {
             // Default-initializing a class is a (possibly trivial)
             // constructor call in clang's AST, so it counts as an
             // initializer (`CXXNewExpr::hasInitializer`).
-            && (x.init.is_some() || t.as_record(base).is_some());
+            && (x.init.is_some() || t.as_record(base).is_some() || self.ub_type_check_on());
         let mut null_bb = None;
         let mut cont = None;
         if null_check {
@@ -810,6 +811,19 @@ impl Cg<'_> {
             (alloc, allocation_align)
         };
 
+        // The sanitizer type check of the new pointer, once for the whole
+        // array (clang `EmitCXXNewExpr`, before `EmitNewInitializer`).
+        if self.ub_type_check_on() {
+            let skip = if null_check { San::NULL } else { San::NONE };
+            let mut tc = TypeCheck::new(Tck::ConstructorCall, Some(x.type_loc), base)
+                .align(data_align)
+                .skip(skip);
+            if is_array {
+                tc = tc.array(num);
+            }
+            self.ub_type_check(data, tc)?;
+        }
+
         // The initializer.
         if is_array {
             self.emit_new_array_init(&x, base, esize, data, data_align, num, size_nc, loc)?;
@@ -822,7 +836,7 @@ impl Cg<'_> {
                 vidx: None,
                 tb: Tb::Type,
             };
-            self.init_to_lvalue(init, lv, false)?;
+            self.ub_checked(|s| s.init_to_lvalue(init, lv, false))?;
         }
         if let Some((c, dominator)) = del_cleanup {
             let d = Fir::last_inst(dominator);
@@ -1018,7 +1032,7 @@ impl Cg<'_> {
                     vidx: None,
                     tb: Tb::Type,
                 };
-                self.init_to_lvalue(ie, lv, false)?;
+                self.ub_checked(|s| s.init_to_lvalue(ie, lv, false))?;
                 let one = self.i64c(1);
                 cur = self.gep(cur_ty, cur, vec![one], true);
                 cur_align = min_align(start_align, (k as u64 + 1).wrapping_mul(esize));
@@ -1069,7 +1083,7 @@ impl Cg<'_> {
                 rem = self.bin(BinOp::Sub, Flags::NONE, num, k);
             }
             let ea = min_align(cur_align, esize);
-            return self.construct_array_n(init, cur, base_ty, ea, rem, zeroing);
+            return self.construct_array_n(init, cur, base_ty, ea, rem, zeroing, true);
         }
         // TryMemsetInitialization (only for a zero-initializable element).
         if self.zero_init(base) && self.memset_init(init) {
@@ -1124,7 +1138,7 @@ impl Cg<'_> {
             vidx: None,
             tb: Tb::Type,
         };
-        self.init_to_lvalue(init, lv, false)?;
+        self.ub_checked(|s| s.init_to_lvalue(init, lv, false))?;
         // clang leaves the list's partial-array cleanup in the loop body,
         // after the first element's initializer.
         if let Some(p) = partial.take() {
