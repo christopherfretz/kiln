@@ -135,6 +135,21 @@ fn bad_option_values() {
         run(&["-fdiagnostics-format=xml"]),
         "error: invalid value 'xml' in '-fdiagnostics-format xml'\n1 error generated.\n"
     );
+    // clang's driver options spelled like warnings (WP-811: BoringSSL's
+    // `-Wframe-larger-than=25344` under -Werror).
+    assert_eq!(
+        run(&["-Werror", "-Wframe-larger-than=25344", "-Wlarger-than=1", "-Wlarger-than-x"]),
+        ""
+    );
+    assert_eq!(run(&["-Wno-frame-larger-than", "-Werror=frame-larger-than"]), "");
+    assert_eq!(
+        run(&["-Wframe-larger-than=abc"]),
+        "error: invalid argument 'abc' to -Wframe-larger-than=\n1 error generated.\n"
+    );
+    assert_eq!(
+        run(&["-Wframe-larger-than"]),
+        "error: invalid argument '' to -Wframe-larger-than=\n1 error generated.\n"
+    );
     let mut o = DiagOptions::default();
     assert!(!o.parse_arg("-Wl,--foo"));
     assert!(o.parse_arg("-fno-color-diagnostics") && o.parse_arg("-ferror-limit=0"));
