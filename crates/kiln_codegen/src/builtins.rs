@@ -709,6 +709,9 @@ impl Cg<'_> {
                 let ctz = matches!(b, id::CTZ | id::CTZL | id::CTZLL | id::CTZG);
                 let fallback = if matches!(b, id::CLZG | id::CTZG) { arg(1) } else { None };
                 let x = self.emit_scalar(a0)?;
+                if fallback.is_none() {
+                    self.ub_builtin_zero(a0, x, ctz)?;
+                }
                 let ty = self.f.fir.ty(&self.m, x);
                 let f = if ctz {
                     kiln_llvm::intrinsics::cttz(&mut self.m, ty)

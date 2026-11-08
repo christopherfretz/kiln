@@ -1481,6 +1481,27 @@ impl Cg<'_> {
         res
     }
 
+    // ---- builtin ---------------------------------------------------------
+
+    /// clang `EmitCheckedArgForBuiltin`: the argument `x` (expression
+    /// `a`) of `__builtin_ctz` / `__builtin_clz` without a fallback is
+    /// checked non-zero; the last static byte is clang's
+    /// `BuiltinCheckKind` (`BCK_CTZPassedZero` 0, `BCK_CLZPassedZero` 1).
+    pub(crate) fn ub_builtin_zero(&mut self, a: ExprId, x: V, ctz: bool) -> R<()> {
+        if !self.ub_on(San::BUILTIN) {
+            return Ok(());
+        }
+        let outer = self.ub_begin();
+        let ty = self.f.fir.ty(&self.m, x);
+        let zero = V::C(self.m.const_int(ty, 0));
+        let c = self.icmp(IntPredicate::Ne, x, zero);
+        let loc = self.ub_expr_loc(a);
+        let statics = [self.ub_loc(loc)?, self.m.const_int(LTy::I8, i128::from(!ctz))];
+        let r = self.ub_check(&[(c, San::BUILTIN)], UbHandler::InvalidBuiltin, &statics, &[]);
+        self.ub_end(outer);
+        r
+    }
+
     // ---- nonnull family ------------------------------------------------
 
     /// clang `EmitNonNullArgCheck`: argument `i` (expression `a`, value
