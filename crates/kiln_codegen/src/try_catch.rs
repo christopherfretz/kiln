@@ -10,6 +10,7 @@ use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::{IntPredicate, TypeId as LTy};
 
 use crate::cleanup::{Cleanup, Depth, Handler, Kind};
+use crate::debuginfo::func::VarSlot;
 use crate::expr::{LV, Opaque};
 use crate::fir::{Blk, Op, V};
 use crate::func::Addr;
@@ -235,6 +236,9 @@ impl Cg<'_> {
         let a = self.f.fir.alloca(ty, align);
         let addr = Addr { v: a, ty, align };
         self.f.locals.insert(var, addr);
+        if self.dbg_on() {
+            self.di_declare_var(var, VarSlot { addr: a, arg: None, deref: false });
+        }
         self.init_catch_param(var, q, addr)?;
         // `EmitAutoVarCleanups`.
         if self.f.fir.cur().is_none() {

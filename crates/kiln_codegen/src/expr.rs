@@ -16,6 +16,7 @@ use kiln_llvm::{
 };
 
 use crate::cleanup::{Cleanup, IrregularPartialArray};
+use crate::debuginfo::func::VarSlot;
 use crate::fir::{Fir, Op, V};
 use crate::fold::{is_local, is_static_local};
 use crate::func::{Addr, CallArg, min_align};
@@ -180,6 +181,15 @@ impl Cg<'_> {
 
     /// `EmitScalarExpr` where the expression may be `void`.
     pub(crate) fn emit_scalar_opt(&mut self, e: ExprId) -> R<Option<V>> {
+        let dl = self.dbg_apply_expr(e);
+        self.di_explicit_cast(e);
+        let r = self.emit_scalar_x(e);
+        self.dbg_restore(dl);
+        r
+    }
+
+    /// `ScalarExprEmitter::Visit` without its debug location.
+    fn emit_scalar_x(&mut self, e: ExprId) -> R<Option<V>> {
         let ast = self.ast;
         let n = *ast.exprs.get(e);
         let q = n.ty();
@@ -315,6 +325,7 @@ impl Cg<'_> {
                 if ast.decls.get(ast.exprs.decl(e)).kind() == DeclKind::EnumConstant =>
             {
                 let d = ast.exprs.decl(e);
+                self.di_const_ref(d, None);
                 match ast.decls.enumerator(d).and_then(|x| x.value) {
                     Some(c) => V::C(self.const_scalar_value(c, q)?),
                     None => return err(self.loc_of(e), "enumerator without a value"),
@@ -328,6 +339,7 @@ impl Cg<'_> {
                     || ast.decls.get(ast.exprs.decl(e)).kind() == DeclKind::EnumConstant =>
             {
                 let d = ast.exprs.decl(e);
+                self.di_const_ref(d, self.folds.get(e));
                 let c = match self.folds.get(e) {
                     Some(c) => c,
                     None => match ast.decls.enumerator(d).and_then(|x| x.value) {
@@ -521,6 +533,7 @@ impl Cg<'_> {
             // glvalue conditional's arm, is its constant, never a load of a
             // global that need not be defined.
             ExprKind::DeclRefExpr if let Some(c) = self.non_odr_use_constant(e) => {
+                self.di_const_ref(ast.exprs.decl(e), Some(c));
                 V::C(self.const_scalar_value(c, q)?)
             }
             ExprKind::DeclRefExpr
@@ -936,6 +949,18 @@ impl Cg<'_> {
             && !self.is_aggregate(q)
             && !self.is_complex(q)
         {
+            if self.dbg_on() {
+                let mut s = s;
+                while self.ast.exprs.get(s).kind() == ExprKind::ParenExpr {
+                    s = self.ast.exprs.operand(s);
+                }
+                if matches!(
+                    self.ast.exprs.get(s).kind(),
+                    ExprKind::DeclRefExpr | ExprKind::MemberExpr
+                ) {
+                    self.di_const_ref(self.ast.exprs.decl(s), Some(c));
+                }
+            }
             return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
         }
         self.emit_glvalue_load(s)
@@ -2225,6 +2250,13 @@ impl Cg<'_> {
 
     /// clang `EmitLValue`.
     pub(crate) fn emit_lvalue(&mut self, e: ExprId) -> R<LV> {
+        let dl = self.dbg_apply_expr(e);
+        let r = self.emit_lvalue_x(e);
+        self.dbg_restore(dl);
+        r
+    }
+
+    fn emit_lvalue_x(&mut self, e: ExprId) -> R<LV> {
         let ast = self.ast;
         let n = *ast.exprs.get(e);
         let q = n.ty();
@@ -3988,6 +4020,14 @@ impl Cg<'_> {
     }
 
     fn agg_visit(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
+        let dl = self.dbg_apply_expr(e);
+        self.di_explicit_cast(e);
+        let r = self.agg_visit_x(e, dest, zeroed);
+        self.dbg_restore(dl);
+        r
+    }
+
+    fn agg_visit_x(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
         let ast = self.ast;
         let n = *ast.exprs.get(e);
         let q = n.ty();
@@ -4896,7 +4936,9 @@ impl Cg<'_> {
         match v.spec.storage() {
             _ if is_static_local(ast, d) => {
                 let g = self.static_local(d)?;
-                return self.static_local_init(d, g);
+                self.static_local_init(d, g)?;
+                self.di_global_var(d, g);
+                return Ok(());
             }
             VarStorage::Extern => return Ok(()),
             _ => {}
@@ -4941,19 +4983,33 @@ impl Cg<'_> {
         if let Some(a) = lifetime {
             self.var_lifetime(d, a, ty);
         }
+        if self.dbg_on() {
+            let ret_ptr = self.f.fir.dbg.as_deref().and_then(|x| x.ret_ptr);
+            let slot = match ret_ptr {
+                Some(p) if nrvo_slot.is_some() => VarSlot { addr: p, arg: None, deref: true },
+                _ => VarSlot { addr: addr.v, arg: None, deref: false },
+            };
+            self.di_declare_var(d, slot);
+        }
         // Default-initialization by a trivial constructor emits nothing
         // (but a non-trivial destructor still gets its cleanup).
         let init = v.init.filter(|&i| {
             !ast.is_trivial_default_construction(i) || ast.exprs.construct_info(i).zeroing
         });
-        if let Some(init) = init
+        let dl = self.dbg_apply_default_artificial(ast.decls.get(d).loc());
+        let r = if let Some(init) = init
             && self.f.fir.cur().is_some()
         {
-            self.emit_var_init(d, q, addr, init)?;
-        } else if init.is_none() {
-            // [basic.indet]/1: the erroneous value (spec/codegen.md §7r).
-            self.auto_var_init(d, addr);
-        }
+            self.emit_var_init(d, q, addr, init)
+        } else {
+            if init.is_none() {
+                // [basic.indet]/1: the erroneous value (spec/codegen.md §7r).
+                self.auto_var_init(d, addr);
+            }
+            Ok(())
+        };
+        self.dbg_restore(dl);
+        r?;
         // clang `EmitAutoVarCleanups`: no insertion point, no cleanup
         // (sema rejects jumps into the variable's scope).
         if self.f.fir.cur().is_none() {
