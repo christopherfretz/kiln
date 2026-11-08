@@ -156,6 +156,11 @@ new; `None` operands print as `null`), and **specialized nodes**
 `(key, MdField)` list, enough to express every `DI*` node
 (`!DILocation(line: 1, scope: !5)`). `md_set_operand` patches an operand of
 a distinct tuple (self-references such as `!5 = distinct !{!5, !6}`).
+The node name and field keys are `&'static str`, and an `MdField::Raw`
+value is a `Cow<'static, str>`, so building a `DI*` node allocates only its
+field list (WP-817). Uniqued nodes are indexed by a hash table of
+`(hash, MetadataId)`: a node is hashed once (FxHash, consistent with its
+`Eq`) and compared in place against `md[id]`, never cloned into the index.
 
 Named metadata: `add_named_metadata`, `add_module_flag(_i32)` (into
 `!llvm.module.flags`), `add_ident` (`!llvm.ident`). Attachments:
