@@ -447,6 +447,12 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
             let t = args.target.as_deref().unwrap_or(target.triple);
             errors.push(ArgError::UnsupportedForTarget("-msve-vector-bits=".to_owned(), t.into()));
         }
+        // WP-846: clang's target-specific `-mbranch-protection=`.
+        if args.codegen.mbranch_protection_given {
+            let t = args.target.as_deref().unwrap_or(target.triple);
+            errors
+                .push(ArgError::UnsupportedForTarget("-mbranch-protection=".to_owned(), t.into()));
+        }
         return (f, errors);
     }
     let v22 = args.predef.clang_compat == ClangCompat::Clang22;
@@ -501,6 +507,9 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
             Some(("-", name)) if !name.is_empty() => f.set(name, false),
             _ => errors.push(unsupported("-target-feature", t)),
         }
+    }
+    if let Err(e) = args.codegen.branch_protection(true) {
+        errors.push(e);
     }
     (f, errors)
 }

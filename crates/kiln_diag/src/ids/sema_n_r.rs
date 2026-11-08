@@ -159,6 +159,7 @@ sema_partial_spec_fully_specialized = Error (1) "partial specialization of '{0}'
 sema_partial_spec_not_deducible = WarningError [UnusablePartialSpecialization] (2) "{0:class|variable} template partial specialization contains {1:a template parameter|template parameters} that cannot be deduced; this partial specialization will never be used";
 sema_partial_spec_not_more_specialized = WarningError [InvalidPartialSpecialization] (1) "{0:class|variable} template partial specialization is not more specialized than the primary template";
 sema_partial_spec_redecl_scope = Error (2) "class template partial specialization of '{0}' not in a namespace enclosing '{1}'";
+sema_passing_discards_qualifiers = ExtWarn [IncompatiblePointerTypesDiscardsQualifiers] (2) "passing {0} to parameter of type {1} discards qualifiers";
 sema_placeholder_ambiguous = Error (1) "ambiguous reference to placeholder '{0}', which is defined multiple times";
 sema_placeholder_constraints_not_satisfied = Error (2) "deduced type {0} does not satisfy {1}";
 sema_placement_new_no_operator = Error (1) "no matching {0} function for non-allocating placement new expression; include <new>";

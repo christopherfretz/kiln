@@ -131,6 +131,12 @@ impl Job<'_> {
                 arch: f.arch,
                 features: f.enabled(),
                 sve_vector_bits: f.sve_vector_bits,
+                branch_protection: (self.args.codegen.branch_protection(true))
+                    .unwrap_or_default()
+                    .macros()
+                    .into_iter()
+                    .map(|(n, v)| (n.to_owned(), v))
+                    .collect(),
             };
         } else if let Some(cpu) = crate::features::resolve(self.args, &self.toolchain.target).0.cpu
         {

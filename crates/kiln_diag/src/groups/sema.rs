@@ -83,6 +83,7 @@ ImplicitFunctionDeclaration = "implicit-function-declaration" [];
 ImplicitlyUnsignedLiteral = "implicitly-unsigned-literal" [];
 InaccessibleBase = "inaccessible-base" [];
 IncompatibleMsStruct = "incompatible-ms-struct" [];
+IncompatiblePointerTypesDiscardsQualifiers = "incompatible-pointer-types-discards-qualifiers" [];
 InconsistentMissingOverride = "inconsistent-missing-override" [];
 IncrementBool = "increment-bool" [];
 InfiniteRecursion = "infinite-recursion" [];

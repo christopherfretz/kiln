@@ -1130,7 +1130,8 @@ impl Sema<'_, '_> {
         }
         let mask = builtin::ice_params(id);
         let x86 = builtin::x86::row(id);
-        if mask == 0 && x86.is_none_or(|r| r.imms.is_empty()) {
+        let arm = builtin::arm::is_arm(id);
+        if mask == 0 && x86.is_none_or(|r| r.imms.is_empty()) && !arm {
             return true;
         }
         for (i, &a) in args.iter().enumerate().take(32) {
@@ -1147,6 +1148,9 @@ impl Sema<'_, '_> {
         }
         if let Some(r) = x86 {
             return self.check_x86_imms(r.imms, callee, args);
+        }
+        if arm {
+            return self.check_arm_builtin(id, callee, args);
         }
         if id == builtin::ALLOCA_WITH_ALIGN
             && let Some(&a) = args.get(1)
@@ -1931,13 +1935,22 @@ impl Sema<'_, '_> {
         };
         let qvt = vt;
         let vt = conv::strip_cv(self, vt);
+        // clang converts the address to a pointer to the volatile (and, for
+        // a load, const) unqualified pointee, warning first when that drops
+        // a qualifier of the pointee (`__restrict` included).
+        let q = if load { Quals::CONST | Quals::VOLATILE } else { Quals::VOLATILE };
+        let at_ty = self.ast.types.qualify(vt, q);
+        let at_ty = self.ast.types.pointer_to(at_ty);
+        if !q.contains(self.ast.types.effective_quals(qvt)) {
+            let msg = self
+                .diag(DiagId::sema_passing_discards_qualifiers, at)
+                .arg(self.ty_arg(pt))
+                .arg(self.ty_arg(at_ty));
+            self.emit(msg);
+        }
         let t = &self.ast.types;
         if !(t.is_integral(vt) || t.is_pointer(vt) || t.is_floating(vt)) {
-            // clang names the address as converted: a pointer to the
-            // volatile (and, for a load, const) unqualified pointee.
-            let q = if load { Quals::CONST | Quals::VOLATILE } else { Quals::VOLATILE };
-            let at_ty = self.ast.types.qualify(vt, q);
-            let at_ty = self.ast.types.pointer_to(at_ty);
+            // The error names the address as converted.
             let msg = self
                 .diag(DiagId::sema_atomic_builtin_must_be_pointer_intfltptr, at)
                 .arg(self.ty_arg(at_ty));
