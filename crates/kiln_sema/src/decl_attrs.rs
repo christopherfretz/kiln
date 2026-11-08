@@ -46,6 +46,8 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::WEAKREF => "weakref",
         AttrKind::ALIAS => "alias",
         AttrKind::IFUNC => "ifunc",
+        AttrKind::PASS_OBJECT_SIZE => "pass_object_size",
+        AttrKind::OVERLOADABLE => "overloadable",
         AttrKind::SECTION => "section",
         AttrKind::ANALYZER_NORETURN => "analyzer_noreturn",
         AttrKind::DISABLE_TAIL_CALLS => "disable_tail_calls",
@@ -208,6 +210,38 @@ const fn is_var_kind(kind: DeclKind) -> bool {
 }
 
 impl Sema<'_, '_> {
+    /// WP-803: a `pass_object_size` parameter must have a pointer type
+    /// (clang `handlePassObjectSizeAttr`, `err_attribute_pointers_only`,
+    /// at the parameter's start `begin`); the attribute is dropped
+    /// otherwise. The `const` is only required of a definition's
+    /// parameter (see `act_on_start_function_def`).
+    pub(crate) fn check_param_pass_object_size(
+        &mut self,
+        ty: QualType,
+        begin: kiln_source::Loc,
+        attrs: &mut Vec<AttrId>,
+    ) {
+        let t = &self.ast.types;
+        if t.is_dependent(ty) || t.is_pointer(ty) {
+            return;
+        }
+        let mut reported = false;
+        attrs.retain(|&a| {
+            let node = *self.ast.attrs.get(a);
+            if node.kind != AttrKind::PASS_OBJECT_SIZE {
+                return true;
+            }
+            if !reported {
+                let shown = format!("'{}'", self.attr_shown(&node, "pass_object_size"));
+                let msg =
+                    self.diag(DiagId::sema_attribute_const_pointer_args_only, begin).arg(shown);
+                self.emit(msg);
+                reported = true;
+            }
+            false
+        });
+    }
+
     /// Attributes written where only type attributes may appear: at the
     /// end of a decl-specifier-seq (`int [[deprecated]] x;`,
     /// [dcl.spec.general]/1), after a ptr-operator or array declarator
@@ -490,6 +524,22 @@ impl Sema<'_, '_> {
                 "functions, Objective-C methods, and Objective-C properties",
             ),
             AttrKind::ENABLE_IF | AttrKind::DIAGNOSE_IF => self.check_attr_cond_potential(d, node),
+            // clang `PassObjectSize`: `SubjectList<[ParmVar]>` (WP-803; the
+            // parameter's type is checked by
+            // [`Sema::check_param_pass_object_size`]).
+            AttrKind::PASS_OBJECT_SIZE if kind != DeclKind::ParmVar => wrong(
+                self,
+                DiagId::sema_attribute_wrong_decl_type,
+                "pass_object_size",
+                "parameters",
+            ),
+            // clang `Overloadable`: `SubjectList<[Function], ErrorDiag>`.
+            AttrKind::OVERLOADABLE if !kind.is_function() => wrong(
+                self,
+                DiagId::sema_attribute_wrong_decl_type_error,
+                "overloadable",
+                "functions",
+            ),
             // [dcl.attr.nouniqueaddr]/1.
             AttrKind::NO_UNIQUE_ADDRESS => {
                 (kind == DeclKind::Field

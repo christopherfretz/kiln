@@ -93,7 +93,15 @@ impl Sema<'_, '_> {
         self.fn_corresponds(
             fa,
             ha,
-            NewFn { ty, is_static, head: hb, requires, enable_if, member_using },
+            NewFn {
+                ty,
+                is_static,
+                head: hb,
+                requires,
+                enable_if,
+                member_using,
+                pass_object_size: !self.ast.pass_object_size_params(fb).is_empty(),
+            },
         )
     }
 

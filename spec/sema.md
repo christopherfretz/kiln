@@ -2072,7 +2072,13 @@ and returns the scope it names:
   visibility attribute starts here`, and a push still open at its `}` is
   `#pragma visibility push with no matching #pragma visibility pop` (at
   the innermost push) with `surrounding namespace with visibility
-  attribute ends here`, and is popped. The attributes of an explicit
+  attribute ends here`, and is popped. `#pragma weak name` (clang
+  `ActOnPragmaWeakID`, `ProcessPragmaWeak`) gives an implicit `weak`
+  attribute to the function or variable `name` found by ordinary lookup
+  in the translation unit's scope; when there is none it is recorded
+  (`Sema::weak_pending`) and applied to the first `extern "C"` function
+  or variable later declared with that name (WP-803;
+  `tests/conformance/cpp.pragma/weak-run.cpp`). The attributes of an explicit
   instantiation of a function, variable or class template
   specialization ([temp.explicit]) are checked the same way and become
   the specialization's own (clang `ActOnExplicitInstantiation`); one that
@@ -2458,6 +2464,23 @@ and returns the scope it names:
     Not yet: parameters (`act_on_param_declarator` only checks
     `alignas`) and namespace-definitions are not run through the table.
     Test: `tests/conformance/dcl.attr.grammar/attribute-subjects.cpp`.
+  - **`pass_object_size(t)`** / **`pass_dynamic_object_size(t)`** and
+    **`overloadable`** (clang extensions; WP-803, `decl.rs`
+    `pass_object_size_attribute`, `decl_attrs.rs`
+    `check_param_pass_object_size`; glibc's clang `_FORTIFY_SOURCE`
+    headers): one argument, an integer constant 0..=3 ("requires integer
+    constant between 0 and 3 inclusive" at the argument, "takes one
+    argument"); subject a pointer parameter ("'pass_object_size'
+    attribute only applies to constant pointer arguments" at the
+    parameter's start, the attribute dropped), a `const` one in a
+    definition (the same error, at the parameter's name, the name
+    unquoted, as clang); on a non-parameter a -Wignored-attributes
+    warning. `overloadable` on a non-function is an error. A function
+    declared `overloadable` is mangled even inside `extern "C"` and has
+    no builtin or known-library identity (clang `getBuiltinID`). Overload
+    rules: spec/sema-overload.md §4.3a; calls: spec/codegen.md
+    (`__builtin_object_size`). Tests:
+    `ext.clang.pass.object.size/pass-object-size-{run,errors}.cpp`.
   - **`enable_if`** (clang extension, `__attribute__((enable_if(cond,
     "message")))` only; WP-460, `enable_if.rs`; clang AttrDocs
     "enable_if", `Sema::CheckEnableIf`):

@@ -150,6 +150,8 @@ fn lib_name(b: u32) -> Option<&'static str> {
         | id::SNPRINTF
         | id::SPRINTF
         | id::VSNPRINTF => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
+        // WP-803: `__builtin___memcpy_chk` calls `__memcpy_chk`.
+        _ if id::is_chk(b) => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         _ if id::is_libm(b) => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         _ => None,
     }
@@ -411,6 +413,13 @@ impl Cg<'_> {
     pub(crate) fn emit_builtin(&mut self, b: u32, e: ExprId) -> R<BuiltinCall> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
+        // WP-803: the object size of a `pass_object_size` parameter is its
+        // hidden argument (clang `emitBuiltinObjectSize`).
+        if matches!(b, id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE)
+            && let Some(v) = self.object_size_param(e)
+        {
+            return Ok(BuiltinCall::Emitted(Some(v)));
+        }
         if let Some(c) = self.folds.get(e)
             && (ast.types.is_integral(q) || ast.types.is_floating(q))
         {
@@ -422,6 +431,24 @@ impl Cg<'_> {
         // WP-282: a `__float128` builtin with a `long double` twin lowers
         // as the twin (the operand types pick the intrinsic overload).
         let b = id::f128_twin(b).unwrap_or(b);
+        // WP-803: clang `EmitBuiltinExpr` folds `__builtin___memcpy_chk`,
+        // `memmove_chk` and `memset_chk` to the unchecked builtin when the
+        // size and the object size are constants, size <= object size
+        // (unsigned); otherwise each `_chk` builtin is a library call.
+        let b = match b {
+            id::MEMCPY_CHK | id::MEMMOVE_CHK | id::MEMSET_CHK => {
+                let k = |s: &mut Self, i| arg(i).and_then(|a| s.fold_int(a)).map(|v| v as u64);
+                match (k(self, 2), k(self, 3)) {
+                    (Some(n), Some(m)) if n <= m => match b {
+                        id::MEMCPY_CHK => id::MEMCPY,
+                        id::MEMMOVE_CHK => id::MEMMOVE,
+                        _ => id::MEMSET,
+                    },
+                    _ => b,
+                }
+            }
+            _ => b,
+        };
         if id::is_coro(b) {
             return self.emit_coro_builtin(b, e);
         }
@@ -1271,6 +1298,144 @@ impl Cg<'_> {
         let null_unknown = V::C(self.m.const_bool(true));
         let dynamic = V::C(self.m.const_bool(b == id::DYNAMIC_OBJECT_SIZE));
         Ok(self.intrinsic_call(f, vec![pv, min, null_unknown, dynamic]))
+    }
+
+    /// WP-803: for `__builtin_[dynamic_]object_size(p, t)` call `e` whose
+    /// `p` (ignoring parentheses and implicit casts) names a
+    /// `pass_object_size(N)` parameter of the current function, its hidden
+    /// argument, when `N` serves `t` (clang `areBOSTypesCompatible`: equal,
+    /// 0 for 1, or 3 for 2).
+    fn object_size_param(&mut self, e: ExprId) -> Option<V> {
+        let ast = self.ast;
+        let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
+        let t = self.fold_int(*args.get(1)?)?;
+        let d = self.ps_param_ref(*args.first()?)?;
+        let (n, a) = *self.f.object_sizes.get(&d)?;
+        let n = i128::from(n);
+        if !(n == t || (n == 0 && t == 1) || (n == 3 && t == 2)) {
+            return None;
+        }
+        Some(self.load(a.ty, a.v, a.align, false))
+    }
+
+    /// The part of clang's `tryEvaluateObjectSize` codegen needs for a
+    /// `pass_object_size(t)` argument `a`: the address of a complete
+    /// variable (`buf`, `&x`), or for a subobject type (1, 3) of a member
+    /// (`s.a`, `&s.m`), plus a constant element offset within it; the
+    /// size from that offset to the end. Anything else is not folded
+    /// (the whole-object `llvm.objectsize` serves types 0 and 2).
+    fn const_object_size(&mut self, a: ExprId, t: u32) -> Option<u64> {
+        let ast = self.ast;
+        let mut e = a;
+        let mut off: u64 = 0;
+        let mut addr = false;
+        loop {
+            match ast.exprs.get(e).kind() {
+                ExprKind::ParenExpr => e = ast.exprs.operand(e),
+                ExprKind::ImplicitCastExpr
+                    if matches!(ast.exprs.cast_kind(e), CastKind::NoOp | CastKind::BitCast) =>
+                {
+                    e = ast.exprs.operand(e);
+                }
+                ExprKind::ImplicitCastExpr
+                    if !addr && ast.exprs.cast_kind(e) == CastKind::ArrayToPointerDecay =>
+                {
+                    (e, addr) = (ast.exprs.operand(e), true);
+                }
+                ExprKind::UnaryOperator if !addr && ast.exprs.unary_op(e) == UnaryOp::AddrOf => {
+                    (e, addr) = (ast.exprs.operand(e), true);
+                }
+                ExprKind::BinaryOperator
+                    if !addr && ast.exprs.binary_op(e) == kiln_ast::expr::BinaryOp::Add =>
+                {
+                    let [l, r] = ast.exprs.operands(e);
+                    let elem = ast.types.pointee(ast.exprs.get(l).ty())?;
+                    if !is_complete(ast, elem) {
+                        return None;
+                    }
+                    let mut lit = r;
+                    while ast.exprs.get(lit).kind() == ExprKind::ImplicitCastExpr {
+                        lit = ast.exprs.operand(lit);
+                    }
+                    let k = match self.fold_int(r) {
+                        Some(k) => u64::try_from(k).ok()?,
+                        None if ast.exprs.get(lit).kind() == ExprKind::IntegerLiteral => {
+                            ast.exprs.int_value(lit)?
+                        }
+                        None => return None,
+                    };
+                    off = off.checked_add(k.checked_mul(self.size_align(elem).0)?)?;
+                    e = l;
+                }
+                _ => break,
+            }
+        }
+        if !addr {
+            return None;
+        }
+        let k = ast.exprs.get(e).kind();
+        let d = match k {
+            ExprKind::DeclRefExpr => ast.exprs.decl(e),
+            ExprKind::MemberExpr if t & 1 != 0 => ast.exprs.decl(e),
+            _ => return None,
+        };
+        if !matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar | DeclKind::Field) {
+            return None;
+        }
+        let q = ast.decls.get(d).ty()?;
+        if ast.types.is_reference(q) || !is_complete(ast, q) {
+            return None;
+        }
+        // An array of unknown bound has size 0 here: not a constant.
+        let size = self.size_align(q).0;
+        if size == 0 {
+            return None;
+        }
+        size.checked_sub(off)
+    }
+
+    /// The `pass_object_size` parameter `p` names, ignoring parentheses
+    /// and implicit casts.
+    fn ps_param_ref(&self, mut p: ExprId) -> Option<DeclId> {
+        let ast = self.ast;
+        loop {
+            match ast.exprs.get(p).kind() {
+                ExprKind::ParenExpr | ExprKind::ImplicitCastExpr => p = ast.exprs.operand(p),
+                ExprKind::DeclRefExpr => {
+                    let d = ast.exprs.decl(p);
+                    return self.f.object_sizes.contains_key(&d).then_some(d);
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// WP-803: the hidden `size_t` argument for argument `a` (emitted as
+    /// `v`) of a `pass_object_size(t)` parameter (clang
+    /// `evaluateOrEmitBuiltinObjectSize`): unless `dynamic`, the
+    /// constant object size ([`Cg::const_object_size`]); the caller's own
+    /// hidden argument when `a` names a compatible `pass_object_size`
+    /// parameter; the default for type 3 (`0`); else `llvm.objectsize(v,
+    /// min, nullunknown=true, dynamic)`.
+    pub(crate) fn pass_object_size_arg(&mut self, a: ExprId, v: V, t: u32, dynamic: bool) -> V {
+        let rt = self.lty(QualType::unqual(self.ast.types.target().size_t));
+        if !dynamic && let Some(n) = self.const_object_size(a, t) {
+            return V::C(self.m.const_int(rt, i128::from(n)));
+        }
+        if let Some(d) = self.ps_param_ref(a)
+            && let Some(&(n, addr)) = self.f.object_sizes.get(&d)
+            && (n == t || (n == 0 && t == 1) || (n == 3 && t == 2))
+        {
+            return self.load(addr.ty, addr.v, addr.align, false);
+        }
+        if t == 3 {
+            return V::C(self.m.const_int(rt, 0));
+        }
+        let f = kiln_llvm::intrinsics::objectsize(&mut self.m, rt);
+        let min = V::C(self.m.const_bool(t & 2 != 0));
+        let null_unknown = V::C(self.m.const_bool(true));
+        let dynamic = V::C(self.m.const_bool(dynamic));
+        self.intrinsic_call(f, vec![v, min, null_unknown, dynamic])
     }
 
     /// clang `Builtin::BI__builtin_assume_aligned` (WP-282): the pointer,

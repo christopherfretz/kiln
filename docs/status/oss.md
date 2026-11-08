@@ -81,6 +81,8 @@ The loop:
 | `libunifex` | 4 | `v0.4.0` | tests at parity |
 | `llvm_full` | 4 | `llvmorg-19.1.7` | tests at parity (check-llvm) |
 | `mp_units` | 4 | `v2.5.0` | tests at parity |
+| `onetbb` | 4 | `v2022.3.0` | tests at parity |
+| `opencv` | 4 | `4.12.0` | tests at parity |
 | `reflect_cpp` | 4 | `v0.27.1` | tests at parity |
 | `scnlib` | 4 | `v4.0.1` | tests at parity |
 | `stdexec` | 4 | `nvhpc-26.05` | tests at parity |
@@ -822,3 +824,35 @@ kiln test run: `test cases:   4628 |   4615 passed | 13 failed | 372 skipped`
 
 Failure clusters (kiln): none.
 <!-- /oss:z3 -->
+
+<!-- oss:onetbb -->
+### onetbb (v2022.3.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 184 / 0 | 184 / 0 |
+| links ok / failed | 145 / 0 | 145 / 0 |
+| tests passed / total | 139 / 139 | 139 / 139 |
+| wall | 1077 s | 1011 s |
+| peak TU RSS | 835 MB | 915 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:onetbb -->
+
+<!-- oss:opencv -->
+### opencv (4.12.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 635 / 0 | 635 / 0 |
+| links ok / failed | 19 / 0 | 19 / 0 |
+| tests passed / total | 7 / 7 | 7 / 7 |
+| wall | 997 s | 1091 s |
+| peak TU RSS | 272 MB | 356 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:opencv -->

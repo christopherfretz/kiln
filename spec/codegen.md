@@ -553,6 +553,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       became address-space overloaded (an LLVM 19 backend leaves the
       `.p0` name an undefined symbol), declared
       `memory(none)` (WP-782, `builtins_thread_pointer.cpp`).
+      The `_FORTIFY_SOURCE` builtins `__builtin___X_chk` are calls of the
+      library function `__X_chk` with the same arguments, except that
+      `__builtin___memcpy_chk` / `memmove_chk` / `memset_chk` whose size
+      and object size are integer constants with size <= object size
+      (unsigned) are `__builtin_memcpy` / `memmove` / `memset` (clang
+      `EmitBuiltinExpr`; WP-803, `ext.gnu.builtins/fortify-chk-run.cpp`).
       `__builtin_prefetch(p, rw, loc)` is `call void
       @llvm.prefetch.p0(ptr p, i32 rw, i32 loc, i32 1)` (defaults `rw` 0,
       `loc` 3; the trailing 1 selects the data cache), the intrinsic
@@ -591,7 +597,23 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       speculative evaluation, spec/oven.md, so a local array folds), and
       an operand with side effects (a call included) that does not fold
       is the default (-1 for types 0/1, 0 for 2/3) without being emitted
-      (clang `emitBuiltinObjectSize`; `builtins_object_size.cpp`). `__builtin_powi*` is
+      (clang `emitBuiltinObjectSize`; `builtins_object_size.cpp`).
+      A `pass_object_size(t)` parameter (spec/sema.md §4) adds a hidden
+      `size_t` argument right after it in the IR signature
+      (`module::with_object_sizes`, applied by `decl_sig` and at direct
+      calls); the caller passes, in order: the constant size of a named
+      complete object (`p`, `&p`, `p + k`, a member only for odd `t`),
+      minus the offset, unless the spelling is dynamic; the caller's own
+      hidden value when the argument is a compatible `pass_object_size`
+      parameter (types equal, 0 serving 1, 3 serving 2); 0 for type 3;
+      else `llvm.objectsize` as above. In the callee
+      `__builtin_object_size(param, t)` of a compatible type loads the
+      hidden value (`Fx::object_sizes`; clang `emitBuiltinObjectSize` /
+      `EmitCallArgs`; WP-803,
+      `ext.clang.pass.object.size/pass-object-size-run.cpp`). Not yet:
+      the full Oven fold of the caller's argument (other shapes take the
+      `llvm.objectsize` of the whole object, which only weakens a check).
+      `__builtin_powi*` is
       `llvm.powi.fT.i32`; `__builtin_copysignf16` truncates to `half`,
       calls `llvm.copysign.f16` and extends back;
       `__builtin_verbose_trap` is `llvm.trap` (clang uses the strings
