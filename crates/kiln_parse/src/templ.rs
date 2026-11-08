@@ -1292,10 +1292,16 @@ impl Parser<'_, '_> {
         // is a dependent template name too: the member is looked up again
         // in the specialization `X<T>` becomes ([temp.dep.type]/6).
         let dep_qual = qual.is_some_and(|q| self.s.is_dependent_ctx(q));
+        // A member template of a specialization not instantiated yet
+        // (`Q::fn`, `Q` a typedef of `quote<int>`) was found in the
+        // template's pattern by the lookahead; it is looked up again
+        // below once the qualifier is parsed, which instantiates the
+        // specialization ([temp.inst]/2, [basic.lookup.qual]/1).
+        let via_pattern = qual.is_some_and(|q| self.s.uninstantiated_spec_template(q).is_some());
         let dep_name = (matches!(class, NameClass::Dependent)
             && end >= 2
             && self.kw_of(self.tok_at(end - 2)) == Some(Kw::Template))
-            || (dep_qual && matches!(class, NameClass::TypeTemplate(_)));
+            || ((dep_qual || via_pattern) && matches!(class, NameClass::TypeTemplate(_)));
         let d = match class {
             _ if dep_name => None,
             NameClass::TypeTemplate(d) => Some(d),

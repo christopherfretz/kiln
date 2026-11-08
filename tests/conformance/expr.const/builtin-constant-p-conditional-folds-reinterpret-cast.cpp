@@ -6,7 +6,6 @@
 // on it; clang accepts this and GCC does not.
 //@ expect: run
 //@ oracle: clang
-//@ xfail(kiln): WP-787 follow-up, the __builtin_constant_p conditional is not evaluated in fold mode, so the reinterpret_cast is rejected (kiln_oven compile.rs reinterpret_cast)
 //@ stdout: 1
 extern "C" int printf(const char*, ...);
 struct Tag {};

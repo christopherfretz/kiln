@@ -64,6 +64,17 @@ pub struct PackState {
     /// The expansion site re-forms elements flagged in `rewrap`; only
     /// then is an expansion element stripped to its pattern.
     pub rewrap_ok: bool,
+    /// The length sweep of an expansion whose first pack is empty
+    /// ([temp.variadic]/7; §7.1): the pattern is substituted once more
+    /// in keep mode so every other pack it names is reached; a pack of
+    /// another length is the mismatch, a retained one makes the
+    /// expansion partially substituted.
+    pub sweep: bool,
+    /// The sweep reached a pack of a level not substituted.
+    pub sweep_retained: bool,
+    /// The sweep reached a pack of another length: its length, name and
+    /// where, diagnosed once the sweep ends.
+    pub sweep_mismatch: Option<(u32, PackName, Loc)>,
 }
 
 /// A pack as the length-mismatch diagnostic names it: its name and,
@@ -116,7 +127,32 @@ impl Substituter<'_, '_, '_> {
     /// True while probing once the probe has found its pack: what remains
     /// of the pattern (the rest of a lambda body) is not substituted.
     pub(crate) fn probe_done(&self) -> bool {
-        self.pack.probing && self.pack.found.is_some()
+        (self.pack.probing && self.pack.found.is_some()) || self.pack.sweep
+    }
+
+    /// The length sweep ([`PackState::sweep`]) reached a substituted pack
+    /// of length `n` that it keeps: a non-empty one is the length
+    /// mismatch with the empty first pack ([temp.variadic]/7).
+    pub(crate) fn sweep_kept(
+        &mut self,
+        n: usize,
+        name: impl FnOnce(&Self) -> PackName,
+        loc: Loc,
+    ) -> SubstResult<()> {
+        if self.pack.sweep && n != 0 {
+            return self.pack_reached(u32::try_from(n).unwrap_or(u32::MAX), name, loc).map(|_| ());
+        }
+        Ok(())
+    }
+
+    /// The length sweep substituted a pattern element `op`: a pack it
+    /// still names by declaration is of a level not substituted (the
+    /// substituted packs are kept as `SubstTemplateTypeParmPackType` and
+    /// the like, which name none).
+    fn sweep_note_retained(&mut self, op: PackOperand) {
+        if self.pack.sweep && !self.sema.unexpanded_packs(op).is_empty() {
+            self.pack.sweep_retained = true;
+        }
     }
 
     /// A pack of length `n` named `name` reached during substitution:
@@ -130,6 +166,14 @@ impl Substituter<'_, '_, '_> {
     ) -> SubstResult<u32> {
         if self.pack.probing {
             self.pack.found = Some((n, name(self)));
+            return Err(SubstFail);
+        }
+        // The length sweep cannot substitute an element: an empty pack
+        // ends it; another length is the mismatch below.
+        if self.pack.sweep {
+            if n != 0 && self.pack.sweep_mismatch.is_none() {
+                self.pack.sweep_mismatch = Some((n, name(self), loc));
+            }
             return Err(SubstFail);
         }
         let Some(i) = self.pack_index else {
@@ -292,6 +336,7 @@ impl Substituter<'_, '_, '_> {
             // A probe that reached a pack but still succeeded: the failure
             // was recovered from inside a statement of a lambda body in
             // the pattern (`[] { return sizeof(T); }()...`).
+            (_, Some((0, name))) => self.sweep_empty(ellipsis, rewrap_ok, name, &mut f),
             (_, Some((n, name))) => {
                 self.pack.expanding = Some((n, name));
                 let mut out = Vec::with_capacity(n as usize);
@@ -330,6 +375,46 @@ impl Substituter<'_, '_, '_> {
         self.pack.rewrap =
             if matches!(r, Ok(Expansion::Elements(_))) { rewrap } else { Vec::new() };
         r
+    }
+
+    /// An expansion whose probe reached an empty pack first
+    /// ([temp.variadic]/7; §7.1): no elements, unless the length sweep
+    /// finds another pack of a different length (the mismatch) or a pack
+    /// of a level not substituted (the expansion stays, partially
+    /// substituted, as one whose element failed would).
+    fn sweep_empty<T>(
+        &mut self,
+        ellipsis: Option<Loc>,
+        rewrap_ok: bool,
+        name: PackName,
+        f: &mut impl FnMut(&mut Self) -> SubstResult<T>,
+    ) -> SubstResult<Expansion<T>> {
+        self.pack = PackState {
+            ellipsis,
+            rewrap_ok,
+            keep: true,
+            sweep: true,
+            expanding: Some((0, name.clone())),
+            ..PackState::default()
+        };
+        // What the sweep substitutes is discarded, and so are its
+        // diagnostics: only the mismatch is reported, as expanding reports
+        // it.
+        let held = self.sema.diag_capture.replace(Some((self.sema.inst.stack.len(), Vec::new())));
+        let swept = f(self);
+        let _ = self.sema.diag_capture.replace(held);
+        if let Some((n, second, loc)) = self.pack.sweep_mismatch.take() {
+            self.pack = PackState { ellipsis, expanding: Some((0, name)), ..PackState::default() };
+            let saved_index = self.pack_index.replace(0);
+            let r = self.pack_reached(n, |_| second, loc);
+            self.pack_index = saved_index;
+            return r.and(Err(SubstFail));
+        }
+        if swept.is_ok() && self.pack.sweep_retained {
+            self.pack = PackState { ellipsis, keep: true, ..PackState::default() };
+            return f(self).map(Expansion::Unexpanded);
+        }
+        Ok(Expansion::Elements(Vec::new()))
     }
 
     /// Expands a list of pattern elements (§12 rule 2): an element that
@@ -384,6 +469,7 @@ impl Substituter<'_, '_, '_> {
         let t = self.ty(q, loc);
         let from_elements = std::mem::replace(&mut self.pack.element_has_packs, saved);
         let t = t?;
+        self.sweep_note_retained(PackOperand::Type(t));
         if self.pack_index.is_some()
             && !from_elements
             && self.sema.ast.types.qflags(t).contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK)
@@ -405,6 +491,7 @@ impl Substituter<'_, '_, '_> {
         let r = self.expr(e);
         let from_elements = std::mem::replace(&mut self.pack.element_has_packs, saved);
         let r = r?;
+        self.sweep_note_retained(PackOperand::Expr(r));
         if self.pack_index.is_some()
             && !from_elements
             && self.sema.ast.exprs.get(r).deps().contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK)
