@@ -1540,10 +1540,40 @@ impl Sema<'_, '_> {
         let mut full = as_[..n].to_vec();
         let an = self.ast.types.template_name_of(atmpl);
         self.complete_dependent_args(an, &mut full);
-        let t = &self.ast.types;
         let same = full.len() == as_.len()
-            && full.iter().zip(as_).all(|(x, y)| t.canonical_arg(*x) == t.canonical_arg(*y));
+            && full.iter().zip(as_).all(|(x, y)| self.same_default_arg(*x, *y));
         if same { r } else { Tdk::MiscellaneousDeductionFailure }
+    }
+
+    /// Whether the default `x` that [`Self::deduce_ttp_id_args`] completed
+    /// is `A`'s argument `y`. A dependent `A` (the partial specialization
+    /// `lambda<protect<T>, Tag>` of Boost.MPL, ordered against
+    /// `lambda<F<T1>, Tag>`) keeps a defaulted non-type argument as an
+    /// expression, which is compared by its value.
+    fn same_default_arg(&mut self, x: TemplateArg, y: TemplateArg) -> bool {
+        let t = &self.ast.types;
+        if t.canonical_arg(x) == t.canonical_arg(y) {
+            return true;
+        }
+        let (Some(a), Some(b)) = (self.arg_int_value(x), self.arg_int_value(y)) else {
+            return false;
+        };
+        a == b
+    }
+
+    /// The integer value of a non-type template argument: a converted
+    /// value, or a value-independent expression folded.
+    fn arg_int_value(&mut self, a: TemplateArg) -> Option<i128> {
+        let e = match a.view() {
+            ArgView::Value { value, .. } => return self.const_int(value),
+            ArgView::Expr { expr, .. } => expr,
+            ArgView::Profile(pr) => self.ast.types.profile_expr(pr)?,
+            _ => return None,
+        };
+        if self.expr_is_value_dependent(e) {
+            return None;
+        }
+        self.fold_int(e)
     }
 
     /// The arguments of a dependent class template-id `P` completed with

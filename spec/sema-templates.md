@@ -3809,9 +3809,14 @@ either, where `A` is the other template's transformed parameter type:
 `U'<T'>`, so `f(const num<B, E>&)` is more specialized than
 `f(const U<T>)` (clang 19 and 22; Boost.Multiprecision's `sinhc_pi`
 against Boost.Math's). The partial ordering of class template partial
-specializations still checks them. Tests:
+specializations still checks them, comparing a defaulted non-type
+argument by value: the partial specialization `lambda<protect<T>, Tag>`
+keeps `protect<T>`'s default `0` as an expression, which equals the
+completed default `0`, so it is more specialized than
+`lambda<F<T1>, Tag>` (Boost.MPL). Tests:
 `tests/conformance/temp.arg.template/p0522-deduce-defaulted-args-run.cpp`,
 `tests/conformance/temp.arg.template/p0522-partial-order-defaulted-args-run.cpp`,
+`tests/conformance/temp.arg.template/p0522-partial-spec-order-defaulted-value.cpp`,
 `tests/conformance/temp.arg.template/p0522-partial-order-unique-ttp-clang{19,22}.cpp`,
 `tests/conformance/temp.arg.template/p3310-probe.cpp`.
 
