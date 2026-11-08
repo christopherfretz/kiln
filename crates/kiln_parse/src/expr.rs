@@ -2390,7 +2390,9 @@ impl Parser<'_, '_> {
             self.cast_paren_list = None;
         }
         let outer_invalid = std::mem::replace(&mut self.expr_invalid, false);
-        let e = if self.at_kw(Kw::Throw) {
+        // A throw- or yield-expression is an assignment-expression, not
+        // a fold operand: `(co_yield i) + i` ([expr.yield]/1).
+        let e = if self.at_kw(Kw::Throw) || self.at_kw(Kw::CoYield) {
             self.parse_expression()
         } else {
             self.parse_fold_operand(false, list.then_some(lparen))
