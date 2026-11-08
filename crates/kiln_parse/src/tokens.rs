@@ -391,7 +391,10 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
             Marker::PragmaMessage { .. }
             | Marker::Ident { .. }
             | Marker::FileChange(_)
-            | Marker::Embed { .. } => {}
+            | Marker::Embed { .. }
+            | Marker::Define { .. }
+            | Marker::Undef { .. }
+            | Marker::Include { .. } => {}
         }
     }
 

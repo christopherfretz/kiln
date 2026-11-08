@@ -84,6 +84,9 @@ pub struct PredefConfig {
     pub sized_deallocation: bool,
     /// kiln's version (`__KILN_MAJOR__`, `__KILN_MINOR__`).
     pub kiln_version: (u32, u32),
+    /// `__VERSION__`'s text (unquoted) when set: the driver's `kiln <ver>`
+    /// (WP-920, spec/driver.md "Identity"); `None` keeps clang's.
+    pub version_macro: Option<String>,
     /// Whose predefined macros (`-fclang-compat=`): the base files are
     /// clang 19's; [`ClangCompat::Clang22`] applies `CLANG22_COMMON`
     /// (and `CLANG22_AARCH64` on `AArch64`).
@@ -161,6 +164,7 @@ impl PredefConfig {
             threadsafe_statics: true,
             sized_deallocation: true,
             kiln_version: (0, 0),
+            version_macro: None,
             clang_compat: ClangCompat::Clang22,
             std_float_aliases: true,
             reflection: false,
@@ -367,6 +371,18 @@ pub fn build_predefines(base: &str, cfg: &PredefConfig, cmdline: &[CmdMacro]) ->
         for &(n, v) in CLANG22_COMMON.iter().chain(arch) {
             set(&mut m, n, v);
         }
+    }
+    if let Some(v) = &cfg.version_macro {
+        let mut q = String::with_capacity(v.len() + 2);
+        q.push('"');
+        for c in v.chars() {
+            if c == '"' || c == '\\' {
+                q.push('\\');
+            }
+            q.push(c);
+        }
+        q.push('"');
+        set(&mut m, "__VERSION__", &q);
     }
     let mut driver: Vec<(String, String)> = Vec::new();
     for d in DRIVER_DEFINES {
