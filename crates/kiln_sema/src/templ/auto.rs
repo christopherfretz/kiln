@@ -112,10 +112,14 @@ impl Sema<'_, '_> {
         e: ExprId,
         x: ExprId,
     ) -> Result<QualType, AutoFail> {
-        let decls = self.member_overload_decls(x).to_vec();
-        if decls.iter().all(|&d| self.is_implicit_object_member(self.templated_or_self(d))) {
-            self.diagnose_member_set_not_called(x);
-            return Err(AutoFail::Error);
+        if self.member_set_needs_call(x) {
+            // Recovered by calling it when that takes no arguments
+            // (clang's `tryToRecoverWithCall`, WP-832).
+            let call = self.recover_not_called_as(e, true);
+            if self.is_err_expr(call) {
+                return Err(AutoFail::Error);
+            }
+            return self.deduce_from(declared, call).ok_or(AutoFail::Incompatible(call));
         }
         let Some((d, _)) = self.single_member_template_spec(x) else {
             return Err(AutoFail::Incompatible(e));

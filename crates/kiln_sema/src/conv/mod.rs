@@ -295,6 +295,12 @@ pub fn decay(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
     if s.ast.types.is_dependent(t) {
         return e;
     }
+    // [expr.ref]/7.3.2: recovered by the zero-argument call, as clang's
+    // `CheckPlaceholderExpr` does (WP-832).
+    if t == QualType::BOUND_MEMBER {
+        let r = s.recover_not_called(e);
+        return if s.is_err_expr(r) { r } else { decay(s, r) };
+    }
     if s.check_builtin_fn_use(e) || s.check_overload_use(e) {
         let loc = s.eloc(e);
         return s.recover_err(&[e], loc);
@@ -1146,6 +1152,13 @@ pub fn implicit_convert(
     // a simple assignment does not (`CheckSingleAssignmentConstraints`).
     if !s.misaligned.is_empty() && ctx != ConvCtx::Assignment {
         s.discard_misaligned_member_address(to, e);
+    }
+    if from == QualType::BOUND_MEMBER
+        || (from == QualType::OVERLOAD
+            && s.member_overload(e).is_some_and(|x| s.member_set_needs_call(x)))
+    {
+        let r = s.recover_not_called(e);
+        return if s.is_err_expr(r) { Ok(r) } else { implicit_convert(s, r, to, ctx) };
     }
     if s.check_builtin_fn_use(e) || s.names_invalid_function(e) {
         let loc = s.eloc(e);

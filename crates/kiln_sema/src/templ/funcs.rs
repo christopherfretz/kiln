@@ -1415,9 +1415,50 @@ impl Sema<'_, '_> {
         op_loc: Loc,
         arrow: bool,
     ) -> ExprId {
+        self.template_member_q(base, qual, name, targs, (template_kw, false), loc, op_loc, arrow)
+    }
+
+    /// [`Sema::act_on_template_member_q`] for a member name the parser
+    /// read after `template` (`e.template f`, `e.N::template f<T>`):
+    /// without a template argument list a function or variable template
+    /// (or a dependent name) is ill-formed ([temp.names]/6, C++26; clang's
+    /// `missing_template_arg_list_after_template_kw`, an error by
+    /// default). Not re-diagnosed at instantiation.
+    #[allow(clippy::too_many_arguments, reason = "the operands of a member access")]
+    pub fn act_on_template_kw_member_q(
+        &mut self,
+        base: ExprId,
+        qual: Option<crate::using::Qualifier>,
+        name: DeclName,
+        targs: Option<ArgListId>,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        let no_args = targs.is_none();
+        self.template_member_q(base, qual, name, targs, (true, no_args), loc, op_loc, arrow)
+    }
+
+    /// `(template_kw, no_args)`: `no_args` diagnoses a missing template
+    /// argument list ([`Sema::act_on_template_kw_member_q`]).
+    #[allow(clippy::too_many_arguments, reason = "the operands of a member access")]
+    fn template_member_q(
+        &mut self,
+        base: ExprId,
+        qual: Option<crate::using::Qualifier>,
+        name: DeclName,
+        targs: Option<ArgListId>,
+        (template_kw, no_args): (bool, bool),
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
         if let Some(e) =
             self.try_dependent_member_q(base, qual, name, targs, template_kw, loc, arrow)
         {
+            if no_args {
+                self.diag_missing_template_arg_list(loc);
+            }
             if op_loc != loc {
                 let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
             }
@@ -1441,10 +1482,20 @@ impl Sema<'_, '_> {
             self.emit(d);
             return self.recover_err(&[e], loc);
         }
+        if no_args {
+            self.diag_missing_template_arg_list(loc);
+        }
         match targs {
             Some(l) => self.act_on_member_template_args(e, l),
             None => self.act_on_member_without_template_args(e),
         }
+    }
+
+    /// clang's `missing_template_arg_list_after_template_kw` at the name
+    /// after `template` ([temp.names]/6).
+    pub fn diag_missing_template_arg_list(&mut self, loc: Loc) {
+        let d = self.diag(DiagId::parse_missing_template_arg_list_after_template_kw, loc);
+        self.emit(d);
     }
 
     /// [temp.names]/3.2: whether the dependent member access `e`
