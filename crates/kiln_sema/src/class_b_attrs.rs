@@ -468,6 +468,7 @@ impl Sema<'_, '_> {
         a: AttrId,
         node: AttrNode,
     ) -> bool {
+        const FNS_METHODS: &str = "functions and Objective-C methods";
         let n = name(&node).unwrap_or_default();
         let wrong = |s: &mut Self, error: bool, what: &str| {
             let shown = s.attr_shown(&node, n);
@@ -489,7 +490,6 @@ impl Sema<'_, '_> {
                 | DeclKind::ClassTemplateSpecialization
                 | DeclKind::ClassTemplatePartialSpecialization
         );
-        const FNS_METHODS: &str = "functions and Objective-C methods";
         match node.kind {
             AttrKind::NOCF_CHECK if !self.cf_protection_branch && (func || var) => {
                 let msg = self.diag(DiagId::sema_nocf_check_ignored, node.loc);
@@ -613,7 +613,9 @@ impl Sema<'_, '_> {
                 }
                 true
             }
-            AttrKind::NOESCAPE | AttrKind::MAYBE_UNDEF if kind != DeclKind::ParmVar => {
+            AttrKind::NOESCAPE | AttrKind::MAYBE_UNDEF | AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT
+                if kind != DeclKind::ParmVar =>
+            {
                 wrong(self, false, "parameters")
             }
             AttrKind::NOESCAPE => {
@@ -634,9 +636,6 @@ impl Sema<'_, '_> {
             }
             AttrKind::STANDALONE_DEBUG | AttrKind::CORO_AWAIT_ELIDABLE if !record => {
                 wrong(self, false, "classes")
-            }
-            AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT if kind != DeclKind::ParmVar => {
-                wrong(self, false, "parameters")
             }
             AttrKind::CODE_ALIGN => {
                 let msg = self

@@ -88,106 +88,13 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::NOTHROW => "nothrow",
         AttrKind::NODEBUG => "nodebug",
         AttrKind::ARTIFICIAL => "artificial",
+        AttrKind::RETAIN => "retain",
+        AttrKind::NO_DESTROY => "no_destroy",
+        AttrKind::ALWAYS_DESTROY => "always_destroy",
+        AttrKind::AARCH64_VECTOR_PCS_DECL => "aarch64_vector_pcs",
         AttrKind::MIN_VECTOR_WIDTH => "min_vector_width",
         k if k.is_class_b() => return crate::class_b_attrs::name(node),
         _ => return None,
-    })
-}
-
-/// clang's thread-safety-analysis attributes (`Attr.td`, the
-/// `-Wthread-safety` family; spec/sema.md §4.5): known and ignored, with
-/// their arguments skipped as balanced tokens by the parser (they may
-/// name members declared later). Each entry is the name, whether clang
-/// spells it `Clang<"x">` (`__attribute__((x))` and `[[clang::x]]`)
-/// rather than only `GNU<"x">`, and the first clang release that knows
-/// it (`reentrant_capability` is new in clang 22).
-const THREAD_SAFETY_ATTRS: &[(&str, bool, u32)] = &[
-    ("acquire_capability", true, 0),
-    ("acquire_shared_capability", true, 0),
-    ("acquired_after", false, 0),
-    ("acquired_before", false, 0),
-    ("assert_capability", true, 0),
-    ("assert_exclusive_lock", false, 0),
-    ("assert_shared_capability", true, 0),
-    ("assert_shared_lock", false, 0),
-    ("capability", true, 0),
-    ("exclusive_lock_function", false, 0),
-    ("exclusive_locks_required", true, 0),
-    ("exclusive_trylock_function", false, 0),
-    ("guarded_by", false, 0),
-    ("guarded_var", true, 0),
-    ("lock_returned", false, 0),
-    ("lockable", false, 0),
-    ("locks_excluded", false, 0),
-    ("no_thread_safety_analysis", true, 0),
-    ("pt_guarded_by", false, 0),
-    ("pt_guarded_var", true, 0),
-    ("reentrant_capability", true, 22),
-    ("release_capability", true, 0),
-    ("release_generic_capability", true, 0),
-    ("release_shared_capability", true, 0),
-    ("requires_capability", true, 0),
-    ("requires_shared_capability", true, 0),
-    ("scoped_lockable", true, 0),
-    ("shared_capability", true, 0),
-    ("shared_lock_function", false, 0),
-    ("shared_locks_required", true, 0),
-    ("shared_trylock_function", false, 0),
-    ("try_acquire_capability", true, 0),
-    ("try_acquire_shared_capability", true, 0),
-    ("unlock_function", true, 0),
-];
-
-/// Whether `n` (its `__` affixes removed), written with `syntax` (and
-/// the `clang::` scope when `clang_scope`), is a thread-safety attribute
-/// clang `compat` knows: such an attribute is accepted silently and
-/// attaches nothing.
-pub(crate) fn is_thread_safety_attr(
-    n: &str,
-    syntax: AttrSyntax,
-    clang_scope: bool,
-    compat: u32,
-) -> bool {
-    THREAD_SAFETY_ATTRS.binary_search_by(|&(name, ..)| name.cmp(n)).is_ok_and(|i| {
-        let (_, clang, since) = THREAD_SAFETY_ATTRS[i];
-        compat >= since && (syntax == AttrSyntax::Gnu || (clang && clang_scope))
-    })
-}
-
-/// clang attributes kiln accepts silently because they only steer
-/// sanitizers or `-Wdangling` analysis, which kiln does not implement
-/// (spec/sema.md §4.5, WP-667). Each entry is the name, whether clang
-/// spells it `[[clang::x]]`, and the first clang release that spells it
-/// `[[gnu::x]]` (`u32::MAX`: none). Every entry has the
-/// `__attribute__((x))` spelling. `no_sanitize` gained `gnu::` in clang
-/// 22 (clang 19 warns that it is unknown).
-const IGNORED_CLANG_ATTRS: &[(&str, bool, u32)] = &[
-    ("lifetimebound", true, u32::MAX),
-    ("no_address_safety_analysis", false, 0),
-    ("no_sanitize", true, 22),
-    ("no_sanitize_address", false, 0),
-    ("no_sanitize_memory", true, u32::MAX),
-    ("no_sanitize_thread", false, 0),
-];
-
-/// Whether `n` (its `__` affixes removed), written with `syntax` and
-/// scope `scope` (normalized; `None` for none), is one of
-/// [`IGNORED_CLANG_ATTRS`] in a spelling clang `compat` knows: such an
-/// attribute is accepted without a diagnostic and attaches nothing.
-pub(crate) fn is_ignored_clang_attr(
-    n: &str,
-    syntax: AttrSyntax,
-    scope: Option<&str>,
-    compat: u32,
-) -> bool {
-    IGNORED_CLANG_ATTRS.binary_search_by(|&(name, ..)| name.cmp(n)).is_ok_and(|i| {
-        let (_, clang, gnu_since) = IGNORED_CLANG_ATTRS[i];
-        match scope {
-            None => syntax == AttrSyntax::Gnu,
-            Some("clang") => clang,
-            Some("gnu") => compat >= gnu_since,
-            Some(_) => false,
-        }
     })
 }
 
@@ -605,6 +512,13 @@ impl Sema<'_, '_> {
             }
             // clang `NakedAttr` / `OptimizeNoneAttr` subjects (ignored
             // with a warning); `MinSizeAttr`'s is an error.
+            AttrKind::AARCH64_VECTOR_PCS_DECL if !kind.is_function() => {
+                let msg = self
+                    .diag(DiagId::sema_attribute_unsupported_by_kiln, node.loc)
+                    .arg("aarch64_vector_pcs");
+                self.emit(msg);
+                false
+            }
             AttrKind::NAKED if !kind.is_function() => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "naked", "functions")
             }
@@ -1463,39 +1377,5 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The table is searched by name, so it must stay sorted.
-    #[test]
-    fn thread_safety_table_sorted() {
-        assert!(THREAD_SAFETY_ATTRS.windows(2).all(|w| w[0].0 < w[1].0));
-        assert_eq!(THREAD_SAFETY_ATTRS.len(), 34);
-        assert!(is_thread_safety_attr("guarded_by", AttrSyntax::Gnu, false, 19));
-        assert!(!is_thread_safety_attr("guarded_by", AttrSyntax::Cxx11, true, 22));
-        assert!(is_thread_safety_attr("capability", AttrSyntax::Cxx11, true, 19));
-        assert!(!is_thread_safety_attr("capability", AttrSyntax::Cxx11, false, 22));
-        assert!(!is_thread_safety_attr("reentrant_capability", AttrSyntax::Gnu, false, 19));
-        assert!(is_thread_safety_attr("reentrant_capability", AttrSyntax::Gnu, false, 22));
-    }
-
-    #[test]
-    fn ignored_clang_attrs_sorted_and_spelled() {
-        // [dcl.attr.grammar]/5: an unrecognized attribute-token is
-        // implementation-defined; clang's spellings are the contract.
-        assert!(IGNORED_CLANG_ATTRS.windows(2).all(|w| w[0].0 < w[1].0));
-        let ig = is_ignored_clang_attr;
-        assert!(ig("no_sanitize", AttrSyntax::Gnu, None, 19));
-        assert!(ig("no_sanitize", AttrSyntax::Cxx11, Some("clang"), 19));
-        assert!(!ig("no_sanitize", AttrSyntax::Cxx11, Some("gnu"), 19));
-        assert!(ig("no_sanitize", AttrSyntax::Cxx11, Some("gnu"), 22));
-        assert!(!ig("lifetimebound", AttrSyntax::Cxx11, None, 22));
-        assert!(!ig("lifetimebound", AttrSyntax::Cxx11, Some("gnu"), 22));
-        assert!(ig("no_sanitize_address", AttrSyntax::Cxx11, Some("gnu"), 19));
-        assert!(!ig("no_sanitize_address", AttrSyntax::Cxx11, Some("clang"), 22));
     }
 }

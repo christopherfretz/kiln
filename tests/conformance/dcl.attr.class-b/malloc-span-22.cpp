@@ -1,10 +1,10 @@
 // clang 22's `malloc_span` (a function returning a two-field span-like
-// struct): kiln does not know it, so it warns "unknown attribute" where
-// clang checks its subject, while __has_attribute(malloc_span) is 1.
+// struct): kiln accepts it silently (a class B row of the WP-805 triage
+// table) where clang checks its subject and arguments.
 // WP-813.
 //@ verify
 //@ requires: clang>=22
-//@ xfail(kiln): WP-813 follow-up, malloc_span (clang 22) is not implemented
+//@ xfail(kiln): WP-813 follow-up, malloc_span (clang 22) has no subject or argument checks
 struct sp { void *p; unsigned long n; };
 __attribute__((malloc_span)) sp f1(unsigned long);
 __attribute__((malloc_span)) int f2(); // expected-warning {{'malloc_span' attribute only applies to functions that return span-like structures}} expected-note {{returned type is not a struct type}}

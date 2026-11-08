@@ -180,6 +180,7 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOpti
         stack_protector: f.stack_protector(),
         unwind_tables: f.unwind_tables(a.predef.freestanding.unwrap_or(false)),
         no_plt: f.no_plt,
+        static_destructors: f.static_destructors,
         wrapv: f.wrapv(),
         wrapv_pointer: f.wrapv_pointer(a.predef.clang_compat == ClangCompat::Clang22),
         null_pointer_is_valid: f.null_pointer_is_valid(),
@@ -216,7 +217,9 @@ impl CodegenJob<'_> {
         let x86 = !job.toolchain.target.is_aarch64();
         let invocation = job.args.codegen.invocation_errors(x86, job.toolchain.target.triple);
         if !invocation.is_empty() {
-            invocation.iter().for_each(|e| e.emit(&engine));
+            for e in &invocation {
+                e.emit(&engine);
+            }
             engine.flush();
             return (None, engine.error_count(), None);
         }
@@ -263,7 +266,9 @@ impl CodegenJob<'_> {
         let x86 = !job.toolchain.target.is_aarch64();
         let target_errors = a.codegen.target_errors(x86);
         if !target_errors.is_empty() {
-            target_errors.iter().for_each(|e| e.emit(engine));
+            for e in &target_errors {
+                e.emit(engine);
+            }
             return None;
         }
         // WP-630: `cx16` makes 128-bit atomics lock-free (clang

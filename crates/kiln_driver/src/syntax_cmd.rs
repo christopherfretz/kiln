@@ -72,7 +72,9 @@ impl SyntaxJob<'_> {
         let x86 = !job.toolchain.target.is_aarch64();
         let invocation = job.args.codegen.invocation_errors(x86, job.toolchain.target.triple);
         if !invocation.is_empty() {
-            invocation.iter().for_each(|e| e.emit(&engine));
+            for e in &invocation {
+                e.emit(&engine);
+            }
             engine.flush();
             result.errors = engine.error_count();
             return result;

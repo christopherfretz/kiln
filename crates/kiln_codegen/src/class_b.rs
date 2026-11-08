@@ -2,16 +2,17 @@
 //! (WP-813, spec/landed/codegen/WP-813.md): hardening, instrumentation,
 //! inlining and pointer facts, placed where clang places them.
 //!
-//! - [`Cg::class_b_fn_attrs`]: `ConstructAttributeList`'s declaration
-//!   attributes, on a declaration, a definition and a direct call alike;
-//! - [`Cg::class_b_def_attrs`]: `SetLLVMFunctionAttributesForDefinition`
-//!   and `StartFunction` on a definition;
-//! - [`Cg::class_b_default_attrs`]: the flag defaults of
-//!   `getDefaultFunctionAttributes` (no call site);
-//! - [`Cg::class_b_call_attrs`] and [`Cg::class_b_call_params`]: the
-//!   call-site-only ones of `EmitCall`;
-//! - [`Cg::class_b_prolog_params`]: `EmitFunctionProlog`'s parameter
-//!   facts.
+//! - `ConstructAttributeList`'s declaration attributes, on a declaration,
+//!   a definition and a direct call alike: [`Cg::class_b_fn_attrs`] and
+//!   [`Cg::class_b_params`];
+//! - `SetLLVMFunctionAttributesForDefinition` and `StartFunction` on a
+//!   definition: [`Cg::class_b_def_attrs`];
+//! - the flag defaults of `getDefaultFunctionAttributes` (no call site):
+//!   [`Cg::class_b_default_attrs`];
+//! - the call-site-only ones of `EmitCall`: [`Cg::class_b_call_attrs`]
+//!   and [`Cg::stmt_call_attrs`];
+//! - `EmitFunctionProlog`'s parameter facts:
+//!   [`Cg::class_b_prolog_params`].
 
 use kiln_abi::call::ArgKind;
 use kiln_abi::irtype::IrType;
@@ -155,7 +156,7 @@ impl Cg<'_> {
     /// (`"stackrealign"`), `function_return` (or
     /// `-mfunction-return=thunk-extern`), `no_profile_instrument_function`
     /// (`noprofile`) and `disable_sanitizer_instrumentation`; the
-    /// patchable entry (`patchable_function_entry` over the flag), XRay
+    /// patchable entry (`patchable_function_entry` over the flag), `XRay`
     /// and `-finstrument-functions*` attributes.
     pub(crate) fn class_b_def_attrs(&self, a: &mut Vec<Attr>, start: StartDecl) {
         let d = start.decl();

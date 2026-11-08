@@ -950,7 +950,7 @@ fn codegen_flags_classes() {
                 continue;
             }
         }
-        let mut args = flags.to_vec();
+        let mut args = flags.clone();
         args.extend(["-c", "m.cpp", "-o", "m.o"]);
         let o = kiln_in(&d, &args);
         assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{flags:?}");

@@ -46,18 +46,20 @@ fn text(b: &[u8]) -> String {
 /// Compiles `src` with kiln++ (`-fclang-compat=19`) and clang++-19 with
 /// `args`; returns both outputs' paths (kiln's, clang's).
 fn both(d: &Path, src: &str, out: &str, args: &[&str]) -> (PathBuf, PathBuf) {
-    let k = d.join(format!("k-{out}"));
-    let c = d.join(format!("c-{out}"));
-    for (prog, o, compat) in
-        [(kilnpp(), &k, Some("-fclang-compat=19")), (PathBuf::from("clang++-19"), &c, None)]
-    {
-        let mut a: Vec<&str> = args.to_vec();
-        a.extend(compat);
-        a.extend([src, "-o", o.to_str().unwrap()]);
-        let r = run(&prog, d, &a);
-        assert_eq!((r.status.code(), text(&r.stderr).as_str()), (Some(0), ""), "{prog:?} {a:?}");
+    let kiln_out = d.join(format!("k-{out}"));
+    let clang_out = d.join(format!("c-{out}"));
+    for (prog, path, compat) in [
+        (kilnpp(), &kiln_out, Some("-fclang-compat=19")),
+        (PathBuf::from("clang++-19"), &clang_out, None),
+    ] {
+        let mut cmd: Vec<&str> = args.to_vec();
+        cmd.extend(compat);
+        cmd.extend([src, "-o", path.to_str().unwrap()]);
+        let r = run(&prog, d, &cmd);
+        let shown = prog.display();
+        assert_eq!((r.status.code(), text(&r.stderr).as_str()), (Some(0), ""), "{shown} {cmd:?}");
     }
-    (k, c)
+    (kiln_out, clang_out)
 }
 
 /// The instruction lines of function `name` in assembly `s`, comments and

@@ -5,6 +5,7 @@
 //!    19 (`-fstack-protector*`, `-f[no-]unwind-tables`,
 //!    `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-f[no-]wrapv`,
 //!    `-f[no-]wrapv-pointer`, `-f[no-]strict-overflow`,
+//!    `-f[no-]c++-static-destructors[=…]`,
 //!    `-f[no-]delete-null-pointer-checks`, `-f[no-]function-sections`,
 //!    `-f[no-]data-sections`, `-mtune=`, `-mcmodel=`, and WP-813's
 //!    hardening and instrumentation flags: `-fcf-protection[=…]`,
@@ -26,7 +27,7 @@
 //! `-Wp,<args>` and `-Xpreprocessor <arg>` are spliced into the command
 //! line before parsing ([`splice_preprocessor_args`]).
 
-use kiln_codegen::{CodeModel, StackProtector, UnwindTables};
+use kiln_codegen::{CodeModel, StackProtector, StaticDestructors, UnwindTables};
 
 use crate::args::ArgError;
 
@@ -44,6 +45,9 @@ pub struct CodegenFlags {
     pub async_unwind_tables: Option<bool>,
     /// The last of `-fno-plt` (true) / `-fplt`.
     pub no_plt: bool,
+    /// The last of `-fc++-static-destructors[=all|thread-local|none]` /
+    /// `-fno-c++-static-destructors` (WP-805).
+    pub static_destructors: StaticDestructors,
     /// The last of `-fwrapv` / `-fno-wrapv`.
     pub wrapv: Option<bool>,
     /// The last of `-fwrapv-pointer` / `-fno-wrapv-pointer` (clang 20+).
@@ -87,7 +91,7 @@ pub struct CodegenFlags {
     /// The other `-f[no-]xray-*` options, as written: with
     /// `-fxray-instrument`, not supported by kiln.
     pub xray_other: Vec<String>,
-    /// Every XRay option but `-f[no-]xray-instrument`, as written, in
+    /// Every `XRay` option but `-f[no-]xray-instrument`, as written, in
     /// command-line order ([`Self::unused_xray_args`]).
     pub xray_written: Vec<String>,
     /// A `-mfunction-return=` was given (even with an invalid value).
@@ -174,6 +178,8 @@ impl CodegenFlags {
             "-fno-asynchronous-unwind-tables" => set(&mut self.async_unwind_tables, false),
             "-fno-plt" => self.no_plt = true,
             "-fplt" => self.no_plt = false,
+            "-fc++-static-destructors" => self.static_destructors = StaticDestructors::All,
+            "-fno-c++-static-destructors" => self.static_destructors = StaticDestructors::None,
             "-fwrapv" => set(&mut self.wrapv, true),
             "-fno-wrapv" => set(&mut self.wrapv, false),
             "-fwrapv-pointer" => set(&mut self.wrapv_pointer, true),
@@ -238,6 +244,17 @@ impl CodegenFlags {
                     return unsupported();
                 }
                 self.mtune = Some(v.to_owned());
+            }
+            // clang's values; an unknown one is its "invalid value".
+            "-fc++-static-destructors" => {
+                self.static_destructors = match v {
+                    "all" => StaticDestructors::All,
+                    "thread-local" => StaticDestructors::ThreadLocal,
+                    "none" => StaticDestructors::None,
+                    _ => {
+                        return Some(Err(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())));
+                    }
+                };
             }
             "-mcmodel" => match CodeModel::from_name(v) {
                 Some(m) => self.code_model = Some(m),
@@ -342,7 +359,7 @@ impl CodegenFlags {
     }
 
     /// The hardening and instrumentation options for a target (`x86`:
-    /// x86_64, else AArch64; the driver reports the flags the target
+    /// `x86_64`, else `AArch64`; the driver reports the flags the target
     /// rejects, [`Self::target_errors`]).
     pub fn hardening(&self, x86: bool) -> kiln_codegen::Hardening {
         let cf = self.cf_protection.unwrap_or("none");
@@ -402,7 +419,7 @@ impl CodegenFlags {
         v
     }
 
-    /// The driver's errors for the XRay options (clang `XRayArgs`): with
+    /// The driver's errors for the `XRay` options (clang `XRayArgs`): with
     /// `-fxray-instrument`, an invalid instruction threshold, the
     /// options kiln does not implement and `-fpatchable-function-entry=`.
     pub fn xray_errors(&self) -> Vec<kiln_diag::Diag> {
@@ -429,7 +446,7 @@ impl CodegenFlags {
         v
     }
 
-    /// The XRay options given without `-fxray-instrument`, as written
+    /// The `XRay` options given without `-fxray-instrument`, as written
     /// (clang: "argument unused during compilation").
     pub fn unused_xray_args(&self) -> Vec<String> {
         if self.xray_instrument {
@@ -588,7 +605,7 @@ mod tests {
     /// WP-813: the hardening and instrumentation flags.
     #[test]
     fn hardening() {
-        let (f, r) = parse(&[
+        let (flags, results) = parse(&[
             "-fcf-protection",
             "-fpatchable-function-entry=3,1",
             "-fzero-call-used-regs=used-gpr",
@@ -601,8 +618,8 @@ mod tests {
             "-fxray-instruction-threshold=7",
             "-fxray-ignore-loops",
         ]);
-        assert!(r.iter().all(|r| *r == Some(Ok(()))), "{r:?}");
-        let h = f.hardening(true);
+        assert!(results.iter().all(|r| *r == Some(Ok(()))), "{results:?}");
+        let h = flags.hardening(true);
         assert!(h.cf_protection_branch && h.cf_protection_return && h.fn_return_thunk_extern);
         assert_eq!(h.patchable_function_entry, Some((3, 1)));
         assert_eq!(h.zero_call_used_regs, Some("used-gpr"));
@@ -611,19 +628,19 @@ mod tests {
         let x = h.xray.expect("xray");
         assert_eq!((x.threshold, x.ignore_loops), (7, true));
         // Off x86 the x86-only options are dropped and reported.
-        let a = f.hardening(false);
+        let a = flags.hardening(false);
         assert!(!a.cf_protection_branch && !a.cf_protection_return && !a.fn_return_thunk_extern);
-        assert_eq!(f.target_errors(false).len(), 2);
-        assert!(f.target_errors(true).is_empty());
-        let t = "aarch64-unknown-linux-gnu";
+        assert_eq!(flags.target_errors(false).len(), 2);
+        assert!(flags.target_errors(true).is_empty());
+        let triple = "aarch64-unknown-linux-gnu";
         assert_eq!(
-            f.invocation_errors(false, t),
-            [TargetError::NotAllowedWith("-mfunction-return=", t.into())]
+            flags.invocation_errors(false, triple),
+            [TargetError::NotAllowedWith("-mfunction-return=", triple.into())]
         );
-        assert!(f.invocation_errors(true, t).is_empty());
+        assert!(flags.invocation_errors(true, triple).is_empty());
         // XRay with patchable entries is the driver's error.
-        assert_eq!(f.xray_errors().len(), 1);
-        assert!(!f.cf_protection_branch(false) && f.cf_protection_branch(true));
+        assert_eq!(flags.xray_errors().len(), 1);
+        assert!(!flags.cf_protection_branch(false) && flags.cf_protection_branch(true));
     }
 
     #[test]

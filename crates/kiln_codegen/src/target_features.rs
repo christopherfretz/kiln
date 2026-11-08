@@ -80,12 +80,12 @@ impl Cg<'_> {
     /// `getFunctionFeatureMap`).
     fn x86_feature_map(&self, d: Option<DeclId>) -> FeatureMap {
         const X86_64: [&str; 7] = ["cmov", "cx8", "fxsr", "mmx", "sse", "sse2", "x87"];
-        let mut f: FeatureMap = FeatureMap::new();
-        let attr = d.and_then(|d| self.target_attr_features(d));
-        let own_cpu = attr.as_ref().is_some_and(|a| a.cpu.is_some());
         // The command-line features that are no CPU's (WP-813: the
         // retpoline thunks of `-mspeculative-load-hardening`).
         const OPTION_FEATURES: [&str; 1] = ["+retpoline-indirect-calls"];
+        let mut f: FeatureMap = FeatureMap::new();
+        let attr = d.and_then(|d| self.target_attr_features(d));
+        let own_cpu = attr.as_ref().is_some_and(|a| a.cpu.is_some());
         let cpu_features =
             self.opts.target_features.iter().any(|e| !OPTION_FEATURES.contains(&&**e));
         if !cpu_features && !own_cpu {
