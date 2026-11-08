@@ -33,6 +33,7 @@ DelegatingCtorCycles = "delegating-ctor-cycles" [];
 DeleteIncomplete = "delete-incomplete" [];
 DeprecatedAnonEnumEnumConversion = "deprecated-anon-enum-enum-conversion" [];
 DeprecatedArrayCompare = "deprecated-array-compare" [];
+DeprecatedAttributes = "deprecated-attributes" [];
 DeprecatedBuiltins = "deprecated-builtins" [];
 DeprecatedCommaSubscript = "deprecated-comma-subscript" [];
 DeprecatedDeclarations = "deprecated-declarations" [];

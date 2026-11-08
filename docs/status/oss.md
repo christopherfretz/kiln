@@ -75,6 +75,7 @@ The loop:
 | `boost_meta` | 4 | `boost-1.90.0` | blocked (tests 2059/2087 of control-passing; 8 follow-ups in WP-802) |
 | `ctre` | 4 | `v3.11.0` | tests at parity |
 | `daw_json_link` | 4 | `v3.38.1` | tests at parity |
+| `duckdb` | 4 | `v1.5.6` | tests at parity |
 | `folly_coro` | 4 | `v2026.10.26.00` | blocked (1 cluster) |
 | `glaze` | 4 | `v9.1.0` | tests at parity |
 | `libunifex` | 4 | `v0.4.0` | tests at parity |
@@ -83,6 +84,7 @@ The loop:
 | `reflect_cpp` | 4 | `v0.27.1` | tests at parity |
 | `scnlib` | 4 | `v4.0.1` | tests at parity |
 | `stdexec` | 4 | `nvhpc-26.05` | tests at parity |
+| `z3` | 4 | `z3-4.15.8` | tests at parity |
 <!-- /oss:projects -->
 
 ## Constexpr performance (WP-792)
@@ -786,3 +788,37 @@ kiln test run: `97% tests passed, 3 tests failed out of 94`
 
 Failure clusters (kiln): none.
 <!-- /oss:stdexec -->
+
+<!-- oss:duckdb -->
+### duckdb (v1.5.6)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 421 / 0 | 421 / 0 |
+| links ok / failed | 2 / 0 | 2 / 0 |
+| tests passed / total | 4615 / 4628 | 4615 / 4628 |
+| wall | 1511 s | 1880 s |
+| peak TU RSS | 484 MB | 798 MB |
+
+Failure clusters (kiln): none.
+
+kiln test run: `test cases:   4628 |   4615 passed | 13 failed | 372 skipped`
+<!-- /oss:duckdb -->
+
+<!-- oss:z3 -->
+### z3 (z3-4.15.8)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 972 / 0 | 972 / 0 |
+| links ok / failed | 2 / 0 | 2 / 0 |
+| tests passed / total | ok | ok |
+| wall | 337 s | 1530 s |
+| peak TU RSS | 317 MB | 415 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:z3 -->
