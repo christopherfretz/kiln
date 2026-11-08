@@ -490,6 +490,10 @@ impl AttrNode {
     /// value-dependent (clang 22 accepts it; clang 19 rejects it), so `a`
     /// is the expression, checked when the function is instantiated.
     pub const PRIORITY_DEPENDENT: u8 = 4;
+    /// GNU `mode` flag (bit 2): it modifies a dependent type, so it stays
+    /// on the declaration and applies at instantiation (clang
+    /// `instantiateDependentModeAttr`).
+    pub const MODE_DEFERRED: u8 = 4;
     /// Flag (bit 3, any kind): written with the `gnu::` attribute scope
     /// (`[[gnu::noreturn]]`). With `AttrSyntax::Gnu` it selects the GNU
     /// spelling of `NODISCARD` (`warn_unused_result`) and `NORETURN`, and

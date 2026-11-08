@@ -22,7 +22,7 @@ use std::ops::ControlFlow;
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::ids::RawId;
 use kiln_ast::types::{FloatFormat, Quals, TypeView, VectorKind};
-use kiln_ast::{AttrId, ExprId, QualType};
+use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
@@ -252,7 +252,7 @@ impl Sema<'_, '_> {
     /// unqualified mode type). A complex integer type is not primitive.
     /// As in clang, a type that does not match the mode is diagnosed and
     /// the mode's type still installed. A dependent type is left as it is.
-    fn apply_mode(&mut self, ty: QualType, node: AttrNode) -> QualType {
+    pub(crate) fn apply_mode(&mut self, ty: QualType, node: AttrNode) -> QualType {
         if self.is_error_type(ty) || self.ast.types.is_dependent(ty) {
             return ty;
         }
@@ -473,6 +473,13 @@ impl Sema<'_, '_> {
                 i += 1;
                 continue;
             }
+            // A `mode` on a dependent type stays on the declaration,
+            // applied at instantiation ([`Self::apply_pattern_mode`]).
+            if node.kind == AttrKind::MODE && self.ast.types.is_dependent(ty) {
+                self.ast.attrs.set_flags(attrs[i], AttrNode::MODE_DEFERRED);
+                i += 1;
+                continue;
+            }
             attrs.remove(i);
             if node.kind == AttrKind::MODE {
                 ty = self.apply_mode(ty, node);
@@ -510,6 +517,20 @@ impl Sema<'_, '_> {
             }
         }
         ty
+    }
+
+    /// `ty`, the substituted type of pattern declaration `d`, with the
+    /// GNU `mode` kept on `d` for its dependent type applied (clang
+    /// `instantiateDependentModeAttr`).
+    pub(crate) fn apply_pattern_mode(&mut self, d: DeclId, ty: QualType) -> QualType {
+        let ast = &self.ast;
+        let modes: Vec<AttrNode> = ast
+            .lists
+            .iter::<AttrId>(ast.attrs.of_decl(d))
+            .map(|a| *ast.attrs.get(a))
+            .filter(|n| n.kind == AttrKind::MODE)
+            .collect();
+        modes.into_iter().fold(ty, |ty, node| self.apply_mode(ty, node))
     }
 
     /// `base` with the vector attributes among `ds`'s decl-specifiers
@@ -561,9 +582,14 @@ impl Sema<'_, '_> {
     }
 
     /// `attrs` without the vector attributes (applied separately by
-    /// [`Self::apply_declspec_vector_attrs`]).
+    /// [`Self::apply_declspec_vector_attrs`]), except a `mode` deferred to
+    /// instantiation.
     pub(crate) fn non_vector_attrs(&self, attrs: &[AttrId]) -> Vec<AttrId> {
-        attrs.iter().copied().filter(|&a| !self.ast.attrs.get(a).kind.is_vector_type()).collect()
+        let kept = |n: &AttrNode| {
+            !n.kind.is_vector_type()
+                || n.flags & AttrNode::MODE_DEFERRED != 0 && n.kind == AttrKind::MODE
+        };
+        attrs.iter().copied().filter(|&a| kept(self.ast.attrs.get(a))).collect()
     }
 
     /// The vector of `elem` sized by `size` (the element count for
