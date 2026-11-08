@@ -20,6 +20,7 @@ use kiln_llvm::{
 };
 use kiln_source::Loc;
 
+use crate::expr::LV;
 use crate::fir::{Blk, Fir, Op, V};
 use crate::module::{Cg, R, err};
 
@@ -30,11 +31,19 @@ pub(crate) enum UbHandler {
     AddOverflow,
     BuiltinUnreachable,
     DivremOverflow,
+    FloatCastOverflow,
+    InvalidBuiltin,
+    LoadInvalidValue,
     MissingReturn,
     MulOverflow,
     NegateOverflow,
+    NonnullArg,
+    NonnullReturn,
+    OutOfBounds,
+    PointerOverflow,
     ShiftOutOfBounds,
     SubOverflow,
+    TypeMismatch,
     VlaBoundNotPositive,
 }
 
@@ -44,11 +53,19 @@ impl UbHandler {
             UbHandler::AddOverflow => 0,
             UbHandler::BuiltinUnreachable => 1,
             UbHandler::DivremOverflow => 3,
+            UbHandler::FloatCastOverflow => 5,
+            UbHandler::InvalidBuiltin => 8,
+            UbHandler::LoadInvalidValue => 10,
             UbHandler::MissingReturn => 11,
             UbHandler::MulOverflow => 12,
             UbHandler::NegateOverflow => 13,
+            UbHandler::NonnullArg => 16,
+            UbHandler::NonnullReturn => 17,
+            UbHandler::OutOfBounds => 18,
+            UbHandler::PointerOverflow => 19,
             UbHandler::ShiftOutOfBounds => 20,
             UbHandler::SubOverflow => 21,
+            UbHandler::TypeMismatch => 22,
             UbHandler::VlaBoundNotPositive => 24,
         }
     }
@@ -58,13 +75,48 @@ impl UbHandler {
             UbHandler::AddOverflow => "add_overflow",
             UbHandler::BuiltinUnreachable => "builtin_unreachable",
             UbHandler::DivremOverflow => "divrem_overflow",
+            UbHandler::FloatCastOverflow => "float_cast_overflow",
+            UbHandler::InvalidBuiltin => "invalid_builtin",
+            UbHandler::LoadInvalidValue => "load_invalid_value",
             UbHandler::MissingReturn => "missing_return",
             UbHandler::MulOverflow => "mul_overflow",
             UbHandler::NegateOverflow => "negate_overflow",
+            UbHandler::NonnullArg => "nonnull_arg",
+            UbHandler::NonnullReturn => "nonnull_return_v1",
+            UbHandler::OutOfBounds => "out_of_bounds",
+            UbHandler::PointerOverflow => "pointer_overflow",
             UbHandler::ShiftOutOfBounds => "shift_out_of_bounds",
             UbHandler::SubOverflow => "sub_overflow",
+            UbHandler::TypeMismatch => "type_mismatch_v1",
             UbHandler::VlaBoundNotPositive => "vla_bound_not_positive",
         }
+    }
+}
+
+/// clang `CodeGenFunction::TypeCheckKind`: what a type check guards
+/// (the last byte of the `type_mismatch` static data).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tck {
+    Load = 0,
+    Store = 1,
+    ReferenceBinding = 2,
+    MemberAccess = 3,
+    MemberCall = 4,
+    ConstructorCall = 5,
+    DowncastPointer = 6,
+    DowncastReference = 7,
+    Upcast = 8,
+    UpcastToVirtualBase = 9,
+    DynamicOperation = 11,
+}
+
+impl Tck {
+    /// clang `isNullPointerAllowed`.
+    fn null_allowed(self) -> bool {
+        matches!(
+            self,
+            Tck::DowncastPointer | Tck::Upcast | Tck::UpcastToVirtualBase | Tck::DynamicOperation
+        )
     }
 }
 
@@ -150,7 +202,15 @@ impl Cg<'_> {
     /// anything else kind `0xffff`; the name is `q` as a diagnostic
     /// prints it (`'T'` or `'T' (aka 'U')`).
     pub(crate) fn ub_type(&mut self, q: QualType) -> R<Value> {
-        if let Some(&g) = self.ub_types.get(&q) {
+        self.ub_type_keyed(q, false)
+    }
+
+    /// [`Cg::ub_type`] keyed apart for a class type clang takes from
+    /// `getRecordType` (`record`): its `TypeDescriptorMap` is keyed by
+    /// the `QualType`, and the written (elaborated) spelling of a class is
+    /// a different one, so each gets its own descriptor.
+    pub(crate) fn ub_type_keyed(&mut self, q: QualType, record: bool) -> R<Value> {
+        if let Some(&g) = self.ub_types.get(&(q, record)) {
             return Ok(Value::global(g));
         }
         let ast = self.ast;
@@ -189,7 +249,7 @@ impl Cg<'_> {
             return err(None, "bad UBSan type descriptor");
         };
         let g = self.ub_global(init, true);
-        self.ub_types.insert(q, g);
+        self.ub_types.insert((q, record), g);
         Ok(Value::global(g))
     }
 
@@ -869,5 +929,279 @@ impl Cg<'_> {
         })();
         self.ub_end(outer);
         res
+    }
+
+    // ---- type checks (null, alignment, object-size) ---------------------
+
+    /// clang `sanitizePerformTypeCheck`.
+    pub(crate) fn ub_type_check_on(&self) -> bool {
+        self.ub_on(San::NULL.union(San::ALIGNMENT).union(San::OBJECT_SIZE))
+    }
+
+    /// `icmp ne ptr p, null` as clang's `CreateIsNotNull` with LLVM 19's
+    /// constant folder: `true` for a non-`extern_weak` global or function
+    /// and an `inbounds` constant GEP of one.
+    fn ub_is_not_null(&mut self, p: V) -> V {
+        if let V::C(c) = p
+            && self.ub_const_nonnull(c)
+        {
+            return V::C(self.m.const_bool(true));
+        }
+        let z = V::C(self.m.const_null(LTy::PTR));
+        self.f.fir.push(Op::ICmp { p: IntPredicate::Ne, l: p, r: z }, LTy::I1)
+    }
+
+    fn ub_const_nonnull(&self, c: Value) -> bool {
+        use kiln_llvm::ValueRef;
+        match c.get() {
+            ValueRef::Global(g) => self.m.global(g).linkage != Linkage::ExternWeak,
+            ValueRef::Func(f) => self.m.func(f).linkage != Linkage::ExternWeak,
+            ValueRef::Const(k) => match self.m.const_data(k) {
+                kiln_llvm::ConstData::Gep { flags, ops, .. } => {
+                    flags.0 & kiln_llvm::GepFlags::INBOUNDS.0 != 0
+                        && matches!(
+                            ops.first().map(|b| b.get()),
+                            Some(ValueRef::Global(_) | ValueRef::Func(_))
+                        )
+                        && self.ub_const_nonnull(ops[0])
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// LLVM `stripPointerCasts` then `dyn_cast<AllocaInst>`: the alignment
+    /// of the `alloca` `p` is, through all-zero-index GEPs.
+    fn ub_alloca_align(&self, p: V) -> Option<u64> {
+        let mut p = p;
+        loop {
+            let V::I(i) = p else { return None };
+            match self.f.fir.op(i) {
+                Op::Alloca { align, .. } => return Some(*align),
+                Op::Gep { base, idx, .. }
+                    if idx.iter().all(|&x| self.cint(x).is_some_and(|c| c.1 == 0)) =>
+                {
+                    p = *base;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// clang `getNaturalTypeAlignment(q, forPointeeType)` for a complete
+    /// `q`: an aligned typedef's alignment, else [`Cg::pointee_layout`].
+    pub(crate) fn ub_natural_align(&mut self, q: QualType) -> u64 {
+        if let Some(a) = self.typedef_align_attr(q) {
+            return a;
+        }
+        self.pointee_layout(q).1
+    }
+
+    /// clang `EmitTypeCheck` (without `vptr`): the null, object-size and
+    /// alignment checks of an access of kind `tck` to the `q` at `ptr`,
+    /// aligned `align` (0: `q`'s natural pointee alignment), except the
+    /// checks in `skip`; `array_size` multiplies the object size.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn ub_type_check(
+        &mut self,
+        tck: Tck,
+        loc: Option<Loc>,
+        ptr: V,
+        q: QualType,
+        align: u64,
+        skip: San,
+        array_size: Option<V>,
+    ) -> R<()> {
+        if !self.ub_type_check_on() || self.is_volatile(q) {
+            return Ok(());
+        }
+        let outer = self.ub_begin();
+        let r = self.ub_type_check_in(tck, loc, ptr, q, align, skip, array_size);
+        self.ub_end(outer);
+        r
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn ub_type_check_in(
+        &mut self,
+        tck: Tck,
+        loc: Option<Loc>,
+        ptr: V,
+        q: QualType,
+        align: u64,
+        skip: San,
+        array_size: Option<V>,
+    ) -> R<()> {
+        let mut checks: Vec<(V, San)> = Vec::new();
+        let mut done = None;
+        let alloca = self.ub_alloca_align(ptr);
+        let guaranteed = skip.has_any(San::NULL) || alloca.is_some();
+        let allow_null = tck.null_allowed();
+        if (self.ub_on(San::NULL) || allow_null) && !guaranteed {
+            let nn = self.ub_is_not_null(ptr);
+            if self.cint(nn).is_none_or(|c| c.1 == 0) {
+                if allow_null {
+                    let d = self.f.fir.create_block();
+                    let rest = self.f.fir.create_block();
+                    self.f.fir.push(Op::CondBr { c: nn, t: rest, f: d }, LTy::VOID);
+                    self.emit_block(rest, false);
+                    done = Some(d);
+                } else {
+                    checks.push((nn, San::NULL));
+                }
+            }
+        }
+        let (size, _) = self.pointee_layout(q);
+        let complete = size.is_some();
+        if self.ub_on(San::OBJECT_SIZE)
+            && !skip.has_any(San::OBJECT_SIZE)
+            && let Some(sz) = size
+        {
+            let mut n = self.icn(LTy::I64, i128::from(sz));
+            if let Some(a) = array_size {
+                n = self.bin(BinOp::Mul, Flags::NONE, n, a);
+            }
+            if self.cint(n).is_none_or(|c| c.1 != 0) {
+                let f = kiln_llvm::intrinsics::objectsize(&mut self.m, LTy::I64);
+                let fl = V::C(self.m.const_bool(false));
+                let os = self.intrinsic_call_ty(f, vec![ptr, fl, fl, fl], LTy::I64);
+                checks.push((self.icmp(IntPredicate::Uge, os, n), San::OBJECT_SIZE));
+            }
+        }
+        let mut align_val = None;
+        let mut as_int = None;
+        if self.ub_on(San::ALIGNMENT) && !skip.has_any(San::ALIGNMENT) {
+            align_val = if align != 0 {
+                Some(align)
+            } else if complete {
+                Some(self.ub_natural_align(q))
+            } else {
+                None
+            };
+            if let Some(a) = align_val
+                && a > 1
+                && alloca.is_none_or(|x| x < a)
+            {
+                let pi = self.cast(CastOp::PtrToInt, ptr, LTy::I64);
+                let m = self.icn(LTy::I64, (a - 1) as i128);
+                let low = self.bin(BinOp::And, Flags::NONE, pi, m);
+                let z = self.icn(LTy::I64, 0);
+                let ok = self.icmp(IntPredicate::Eq, low, z);
+                as_int = Some(pi);
+                if self.cint(ok).is_none_or(|c| c.1 == 0) {
+                    checks.push((ok, San::ALIGNMENT));
+                }
+            }
+        }
+        if !checks.is_empty() {
+            let l = self.ub_loc(loc)?;
+            // clang takes the class type from `getRecordType` for these
+            // kinds and through the type of `this` (the member checks it
+            // skips for null and alignment).
+            let record = matches!(
+                tck,
+                Tck::MemberCall | Tck::ConstructorCall | Tck::Upcast | Tck::UpcastToVirtualBase
+            ) || (tck == Tck::MemberAccess && skip.has(San::ALIGNMENT.union(San::NULL)));
+            let desc = self.ub_type_keyed(q, record)?;
+            let lg = align_val.map_or(1, |a| a.max(1).ilog2());
+            let lg = self.m.const_int(LTy::I8, i128::from(lg));
+            let k = self.m.const_int(LTy::I8, tck as i128);
+            self.ub_check(&checks, UbHandler::TypeMismatch, &[l, desc, lg, k], &[as_int
+                .unwrap_or(ptr)])?;
+        }
+        if let Some(d) = done {
+            self.f.fir.push(Op::Br { dest: d }, LTy::VOID);
+            self.emit_block(d, false);
+        }
+        Ok(())
+    }
+
+    /// clang `IsWrappedCXXThis`: `e` is `this` under casts (not a
+    /// `dynamic_cast`), parentheses and `__extension__`.
+    pub(crate) fn ub_wrapped_this(&self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let mut b = e;
+        loop {
+            let k = ast.exprs.get(b).kind();
+            b = match k {
+                ExprKind::CXXThisExpr => return true,
+                ExprKind::CXXDynamicCastExpr => return false,
+                ExprKind::ParenExpr => ast.exprs.operand(b),
+                ExprKind::UnaryOperator
+                    if ast.exprs.unary_op(b) == kiln_ast::expr::UnaryOp::Extension =>
+                {
+                    ast.exprs.operand(b)
+                }
+                _ if k.is_cast() => ast.exprs.operand(b),
+                _ => return false,
+            };
+        }
+    }
+
+    /// The checks a member access through the base `base` skips (clang
+    /// `EmitMemberExpr`/`EmitCheckedLValue`): alignment and null on
+    /// `this`, null on a named object.
+    pub(crate) fn ub_member_skips(&self, base: ExprId) -> San {
+        if self.ub_wrapped_this(base) {
+            San::ALIGNMENT.union(San::NULL)
+        } else if self.ast.exprs.get(base).kind() == ExprKind::DeclRefExpr {
+            San::NULL
+        } else {
+            San::NONE
+        }
+    }
+
+    /// clang `EmitCheckedLValue`: the lvalue `e`, type-checked as an
+    /// access of kind `tck` unless it names a declaration, is a
+    /// bit-field or a vector element.
+    pub(crate) fn emit_checked_lvalue(&mut self, e: ExprId, tck: Tck) -> R<LV> {
+        let lv = self.emit_lvalue(e)?;
+        self.ub_check_lv(e, lv, tck)?;
+        Ok(lv)
+    }
+
+    /// The type check [`Cg::emit_checked_lvalue`] makes of the lvalue `lv`
+    /// of `e`.
+    pub(crate) fn ub_check_lv(&mut self, e: ExprId, lv: LV, tck: Tck) -> R<()> {
+        if !self.ub_type_check_on() {
+            return Ok(());
+        }
+        let ast = self.ast;
+        let n = *ast.exprs.get(e);
+        if n.kind() == ExprKind::DeclRefExpr || lv.bf.is_some() || lv.vidx.is_some() {
+            return Ok(());
+        }
+        let skip = if n.kind() == ExprKind::MemberExpr {
+            self.ub_member_skips(ast.exprs.operand(e))
+        } else {
+            San::NONE
+        };
+        self.ub_type_check(tck, self.ub_expr_loc(e), lv.addr.v, n.ty(), lv.addr.align, skip, None)
+    }
+
+    /// clang `Expr::getExprLoc` where kiln's expression location differs:
+    /// a subscript is located at its base.
+    /// clang's `Expr::getExprLoc`: the operator or member name of the
+    /// nodes that override it, the subscript base's for `a[i]`, and the
+    /// first token for every other node (casts and parentheses included).
+    pub(crate) fn ub_expr_loc(&self, e: ExprId) -> Option<Loc> {
+        let ast = self.ast;
+        let mut e = e;
+        loop {
+            match ast.exprs.get(e).kind() {
+                ExprKind::ArraySubscriptExpr => {
+                    let [l, r] = ast.exprs.operands(e);
+                    e = if self.ub_int(ast.exprs.get(r).ty()) { l } else { r };
+                }
+                ExprKind::CXXMemberCallExpr => e = ast.exprs.callee(e),
+                ExprKind::MemberExpr
+                | ExprKind::BinaryOperator
+                | ExprKind::CompoundAssignOperator
+                | ExprKind::UnaryOperator
+                | ExprKind::CXXOperatorCallExpr => return self.loc_of(e),
+                _ => return Some(ast.begin_loc(e)),
+            }
+        }
     }
 }

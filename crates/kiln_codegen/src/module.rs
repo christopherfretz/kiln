@@ -162,7 +162,7 @@ pub(crate) struct Cg<'a> {
     pub strings: FxHashMap<(LTy, Vec<u8>), GlobalId>,
     /// The `UBSan` type descriptor of each type (clang
     /// `EmitCheckTypeDescriptor`'s cache, WP-675).
-    pub ub_types: FxHashMap<QualType, GlobalId>,
+    pub ub_types: FxHashMap<(QualType, bool), GlobalId>,
     /// The source manager, for `UBSan` source locations (WP-675).
     pub sm: Option<&'a kiln_source::SourceManager>,
     /// Named struct types by record.

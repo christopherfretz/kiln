@@ -22,6 +22,7 @@ use crate::fold::{is_local, is_static_local};
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, Sig, err, gval};
 use crate::tbaa::Tb;
+use crate::ubsan::Tck;
 
 /// The value an `OpaqueValueExpr` stands for.
 #[derive(Clone, Copy, Debug)]
@@ -543,7 +544,7 @@ impl Cg<'_> {
             | ExprKind::StringLiteral
             | ExprKind::PredefinedExpr
             | ExprKind::MaterializeTemporaryExpr => {
-                let lv = self.emit_lvalue(e)?;
+                let lv = self.emit_checked_lvalue(e, Tck::Load)?;
                 self.load_lv(lv)
             }
             // clang `VisitAddrLabelExpr`.
@@ -1024,6 +1025,9 @@ impl Cg<'_> {
             ) && self.is_glvalue(inner)
         {
             let lv = self.emit_lvalue(s)?;
+            if !bit_cast {
+                self.ub_check_lv(inner, lv, Tck::Load)?;
+            }
             return Ok(Some(self.load_lv(lv)));
         }
         self.emit_scalar_opt(s)
@@ -1181,7 +1185,7 @@ impl Cg<'_> {
             UnaryOp::AddrOf if self.is_mp(q) => self.mp_addr_of(e, q),
             UnaryOp::AddrOf => Ok(self.emit_lvalue(s)?.addr.v),
             UnaryOp::Deref => {
-                let lv = self.emit_lvalue(e)?;
+                let lv = self.emit_checked_lvalue(e, Tck::Load)?;
                 Ok(self.load_lv(lv))
             }
             op @ (UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec) => {
@@ -1279,7 +1283,7 @@ impl Cg<'_> {
                     return Ok(Some(lv.addr.v));
                 }
                 let v = self.emit_scalar(r)?;
-                let lv = self.emit_lvalue(l)?;
+                let lv = self.emit_checked_lvalue(l, Tck::Store)?;
                 let res = self.store_lv(v, lv, true);
                 if self.is_volatile(lv.q) { self.load_lv(lv) } else { res }
             }
@@ -1290,7 +1294,7 @@ impl Cg<'_> {
             }
             BinaryOp::LAnd | BinaryOp::LOr => self.emit_logical(e, op == BinaryOp::LAnd)?,
             BinaryOp::PtrMemD | BinaryOp::PtrMemI => {
-                let lv = self.emit_lvalue(e)?;
+                let lv = self.emit_checked_lvalue(e, Tck::Load)?;
                 self.load_lv(lv)
             }
             BinaryOp::EQ | BinaryOp::NE
@@ -2485,7 +2489,7 @@ impl Cg<'_> {
                     return Ok(self.cx_assign(e)?.0);
                 }
                 let v = self.emit_scalar(r)?;
-                let lv = self.emit_lvalue(l)?;
+                let lv = self.emit_checked_lvalue(l, Tck::Store)?;
                 self.store_lv(v, lv, false);
                 Ok(lv)
             }
@@ -2741,10 +2745,14 @@ impl Cg<'_> {
             // base (`this` included: a class's pointer alignment).
             let pq = ast.types.pointee(ast.exprs.get(base).ty()).expect("pointee");
             let (p, align) = self.ptr_align(base)?;
+            if self.ub_type_check_on() {
+                let skip = self.ub_member_skips(base);
+                self.ub_type_check(Tck::MemberAccess, self.loc_of(e), p, pq, 0, skip, None)?;
+            }
             let ty = self.mty(pq);
             (Addr { v: p, ty, align }, Tb::Type)
         } else {
-            let lv = self.emit_lvalue(base)?;
+            let lv = self.emit_checked_lvalue(base, Tck::MemberAccess)?;
             (lv.addr, lv.tb)
         };
         if ast.decls.get(field).kind() != DeclKind::Field {

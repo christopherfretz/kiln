@@ -1960,7 +1960,7 @@ impl Cg<'_> {
     /// The alignment of the first typedef in the sugar of `q` (clang
     /// `getAs<TypedefType>`) when that typedef carries an `aligned`
     /// attribute (`getMaxAlignment` is nonzero).
-    fn typedef_align_attr(&mut self, q: QualType) -> Option<u64> {
+    pub(crate) fn typedef_align_attr(&mut self, q: QualType) -> Option<u64> {
         let ast = self.ast;
         let mut q = q;
         loop {

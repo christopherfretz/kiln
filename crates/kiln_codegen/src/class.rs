@@ -12,6 +12,7 @@ use kiln_ast::decl::{
 };
 use kiln_ast::expr::{ConstructionKind, ExprFlags, ExprKind, StorageDuration};
 use kiln_ast::stmt::StmtKind;
+use kiln_ast::sanitize::SanitizerSet as San;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, TypeId};
 use kiln_llvm::{BinOp, Flags, FuncId, IntPredicate, Linkage, TypeId as LTy, UnnamedAddr, Value};
@@ -21,6 +22,7 @@ use crate::cleanup::Cleanup;
 use crate::fir::{Op, V};
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, Def, R, Sig, err};
+use crate::ubsan::Tck;
 
 /// A special member function (clang `CXXSpecialMemberKind`, the subset
 /// codegen distinguishes).
@@ -1592,6 +1594,18 @@ impl Cg<'_> {
     /// Binds a reference to `e` (clang `EmitReferenceBindingToExpr`): the
     /// address of the glvalue, or of a materialized temporary.
     pub(crate) fn emit_ref_binding(&mut self, e: ExprId) -> R<V> {
+        let v = self.emit_ref_binding_in(e)?;
+        let q = self.ast.exprs.get(e).ty();
+        if self.ub_type_check_on() && !self.ast.types.is_function(q) {
+            // [dcl.ref]/5 (CWG453): the bound glvalue designates an
+            // object of suitable size and alignment.
+            let loc = self.ub_expr_loc(e);
+            self.ub_type_check(Tck::ReferenceBinding, loc, v, q, 0, San::NONE, None)?;
+        }
+        Ok(v)
+    }
+
+    fn emit_ref_binding_in(&mut self, e: ExprId) -> R<V> {
         let ast = self.ast;
         if ast.exprs.get(e).kind() == ExprKind::ExprWithCleanups {
             // clang `EmitExprWithCleanupsLValue`: the bound address
@@ -1599,7 +1613,7 @@ impl Cg<'_> {
             // full-expression (a `co_await` suspension's destroy path),
             // `ForceCleanup({&V})` (WP-726).
             let sc = self.begin_scope(false);
-            let mut r = self.emit_ref_binding(self.sub(e));
+            let mut r = self.emit_ref_binding_in(self.sub(e));
             match &mut r {
                 Ok(v) => self.end_scope_reload(sc, &mut [v]),
                 Err(_) => self.end_scope(sc),
@@ -2037,6 +2051,14 @@ impl Cg<'_> {
                 }
                 return Ok(Some(this.v));
             }
+        }
+        if self.ub_type_check_on() {
+            // clang `EmitCXXMemberOrOperatorMemberCallExpr`'s
+            // `TCK_MemberCall` check of the object.
+            let loc = self.ub_expr_loc(e);
+            let skip = self.ub_member_skips(base);
+            let cq = self.class_type(crd);
+            self.ub_type_check(Tck::MemberCall, loc, this.v, cq, 0, skip, None)?;
         }
         if kind == DeclKind::CXXDestructor {
             let sig = self.call_sig_this(cfty, false, &[], Some(crd));
