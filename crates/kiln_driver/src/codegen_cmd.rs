@@ -270,6 +270,7 @@ impl CodegenJob<'_> {
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == StdLib::LibStdCxx,
             sve: feats.sve,
+            sve_vector_bits: feats.sve_vector_bits,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
             contract_semantic: a.contract_semantic.unwrap_or_default(),

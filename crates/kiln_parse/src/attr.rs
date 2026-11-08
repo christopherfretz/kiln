@@ -80,6 +80,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "tls_model"
             | "returns_twice"
             | "mode"
+            | "arm_sve_vector_bits"
     )
 }
 

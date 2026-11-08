@@ -167,6 +167,7 @@ impl SyntaxJob<'_> {
             let v = Rc::clone(v);
             pp.set_comment_handler(Box::new(move |c| v.borrow_mut().handle_comment(c, engine)));
         }
+        let feats = crate::features::resolve(a, &job.toolchain.target).0;
         let popts = ParseOptions {
             std: job.std.lex,
             gnu: job.std.gnu,
@@ -179,7 +180,8 @@ impl SyntaxJob<'_> {
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == crate::toolchain::StdLib::LibStdCxx,
-            sve: crate::features::resolve(a, &job.toolchain.target).0.sve,
+            sve: feats.sve,
+            sve_vector_bits: feats.sve_vector_bits,
             cfg_dump: a.dump_cfg,
             cfg_stats: a.cfg_stats,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),

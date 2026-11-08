@@ -95,6 +95,9 @@ impl Sema<'_, '_> {
     ) -> ControlFlow<Option<AttrId>> {
         match kind {
             AttrKind::MODE => ControlFlow::Break(self.mode_attribute(syntax, args, loc)),
+            AttrKind::ARM_SVE_VECTOR_BITS => {
+                ControlFlow::Break(self.sve_bits_attribute(syntax, raw, args, loc))
+            }
             k if k.is_vector_type() => {
                 ControlFlow::Break(self.vector_attribute(kind, syntax, raw, args, loc))
             }
@@ -485,6 +488,14 @@ impl Sema<'_, '_> {
                 ty = self.apply_mode(ty, node);
                 continue;
             }
+            if node.kind == AttrKind::ARM_SVE_VECTOR_BITS {
+                if self.is_error_type(ty) {
+                    continue;
+                }
+                let Some(bits) = ExprId::from_raw(node.a) else { continue };
+                ty = self.build_sve_fixed_type(ty, bits, typedef, node.loc);
+                continue;
+            }
             if matches!(node.kind, AttrKind::NEON_VECTOR_TYPE | AttrKind::NEON_POLYVECTOR_TYPE) {
                 if self.is_error_type(ty) {
                     continue;
@@ -728,7 +739,7 @@ impl Sema<'_, '_> {
 
     /// The value of the size operand `e` of attribute `name`: an integral
     /// constant expression (clang `err_attribute_argument_type`).
-    fn vector_size_value(&mut self, e: ExprId, name: &str, loc: Loc) -> Option<u128> {
+    pub(crate) fn vector_size_value(&mut self, e: ExprId, name: &str, loc: Loc) -> Option<u128> {
         let ty = self.ast.exprs.get(e).ty();
         if self.is_error_type(ty) {
             return None;

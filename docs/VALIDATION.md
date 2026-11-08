@@ -109,7 +109,8 @@ Directives (the full contract, including matching and outcome rules, is
   precondition does not hold: the test's effective target (the last
   `--target` in its `args`, else the host) must be `<arch>`, and every clang
   the test runs (the compiler under test, and the oracle when the test
-  compares with one) must be at least that version.
+  compares with one) must be at least that version. `requires: host-sve`
+  skips a `run` test unless the harness host's CPU has SVE (WP-810).
 
 The directive header must come first; a `//@` line after it is an error.
 A `.h` file is a test only if it has directives, and `Inputs/` directories

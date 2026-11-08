@@ -82,6 +82,8 @@ pub struct ParseOptions {
     /// The `AArch64` `sve` target feature (`-march=armv8-a+sve`;
     /// [`kiln_sema::Sema::sve`]).
     pub sve: bool,
+    /// `-msve-vector-bits=N` ([`kiln_sema::Sema::sve_vector_bits`]).
+    pub sve_vector_bits: Option<u32>,
     /// `-fkiln-dump-cfg` ([`kiln_sema::Sema::cfg_dump`]).
     pub cfg_dump: bool,
     /// `-fkiln-cfg-stats` ([`kiln_sema::Sema::cfg_stats`]).
@@ -119,6 +121,7 @@ impl Default for ParseOptions {
             clang_compat: 22,
             gnu_lib_builtins: false,
             sve: false,
+            sve_vector_bits: None,
             cfg_dump: false,
             cfg_stats: false,
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
@@ -284,6 +287,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
     s.gnu_lib_builtins = opts.gnu_lib_builtins;
     s.sve = opts.sve;
+    s.sve_vector_bits = opts.sve_vector_bits;
     s.cfg_dump = opts.cfg_dump;
     s.cfg_stats = opts.cfg_stats;
     s.cfg_max_elems = opts.cfg_max_elems;

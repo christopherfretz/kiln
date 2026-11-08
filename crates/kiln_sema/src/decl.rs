@@ -11135,6 +11135,8 @@ fn attr_kind_of(
         ("neon_polyvector_type", _, _) if gnu_syntax || clang_scope => {
             AttrKind::NEON_POLYVECTOR_TYPE
         }
+        // clang `GNU<"arm_sve_vector_bits">` (WP-810).
+        ("arm_sve_vector_bits", _, _) if gnu_syntax => AttrKind::ARM_SVE_VECTOR_BITS,
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
         ("abi_tag", _, true) => AttrKind::ABI_TAG,
         // clang `GNU<"enable_if">`: no `[[...]]` spelling.

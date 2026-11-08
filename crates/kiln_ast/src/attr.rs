@@ -279,6 +279,11 @@ impl AttrKind {
     /// its name is mangled as C++'s even with C language linkage, and it
     /// may overload a function with C language linkage.
     pub const OVERLOADABLE: AttrKind = AttrKind(187);
+    /// GNU `arm_sve_vector_bits(N)` on a typedef of a sizeless SVE type:
+    /// the fixed-length vector type of N bits (WP-810; consumed into the
+    /// declared type like [`AttrKind::VECTOR_SIZE`]; `a` the argument
+    /// expression).
+    pub const ARM_SVE_VECTOR_BITS: AttrKind = AttrKind(220);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
@@ -292,6 +297,7 @@ impl AttrKind {
                 | AttrKind::EXT_VECTOR_TYPE
                 | AttrKind::NEON_VECTOR_TYPE
                 | AttrKind::NEON_POLYVECTOR_TYPE
+                | AttrKind::ARM_SVE_VECTOR_BITS
                 | AttrKind::MODE
         )
     }

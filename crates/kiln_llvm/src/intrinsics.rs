@@ -626,6 +626,23 @@ pub fn vector_reduce(m: &mut Module, op: &str, vty: TypeId) -> FuncId {
     declare(m, &name, et, &[(vty, &[])], &[], Shape::Pure)
 }
 
+/// `F @llvm.vector.extract.F.S(S, i64 immarg idx)`: the fixed-length
+/// vector `F` at element `idx` of vector `S` (WP-810: a fixed-length SVE
+/// value leaving its scalable register type).
+pub fn vector_extract(m: &mut Module, fixed: TypeId, from: TypeId) -> FuncId {
+    let name = overloaded_name(m, "llvm.vector.extract", &[fixed, from]);
+    let imm: &[Attr] = &[Attr::Flag(ImmArg)];
+    declare(m, &name, fixed, &[(from, &[]), (TypeId::I64, imm)], &[], Shape::Pure)
+}
+
+/// `S @llvm.vector.insert.S.F(S, F, i64 immarg idx)`: vector `S` with the
+/// fixed-length vector `F` stored from element `idx` (WP-810).
+pub fn vector_insert(m: &mut Module, into: TypeId, fixed: TypeId) -> FuncId {
+    let name = overloaded_name(m, "llvm.vector.insert", &[into, fixed]);
+    let imm: &[Attr] = &[Attr::Flag(ImmArg)];
+    declare(m, &name, into, &[(into, &[]), (fixed, &[]), (TypeId::I64, imm)], &[], Shape::Pure)
+}
+
 /// `T @llvm.abs.T(T, i1 immarg is_int_min_poison)`.
 pub fn abs(m: &mut Module, ty: TypeId) -> FuncId {
     unary_flag(m, "llvm.abs", ty)

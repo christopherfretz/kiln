@@ -1680,6 +1680,30 @@ impl<'a> Cg<'a> {
 
     // ---- signatures ----------------------------------------------------
 
+    /// WP-810: clang 20+ passes and returns an AAPCS64 pure scalable type
+    /// (an aggregate of `arm_sve_vector_bits` vectors and predicates)
+    /// expanded in SVE registers; kiln does not lower that convention yet,
+    /// so a by-value one in `sig` is a hard error rather than a silently
+    /// different ABI. clang 19 lowers it as any other aggregate.
+    pub(crate) fn check_pure_scalable(&mut self, sig: &Sig, loc: Option<Loc>) -> R<()> {
+        if self.target.triple.arch != Arch::AArch64 || self.opts.clang_compat < 20 {
+            return Ok(());
+        }
+        for q in std::iter::once(sig.ret).chain(sig.params.iter().copied()) {
+            if kiln_abi::call::is_pure_scalable(&mut self.tys, q) {
+                let t = print_type(&self.ast.types, self.ast, q, PrintOptions::SUGARED);
+                return err(
+                    loc,
+                    format!(
+                        "passing or returning '{t}' by value is not supported yet: it is an \
+                         AAPCS64 pure scalable type (an aggregate of fixed-length SVE types)"
+                    ),
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// The lowered signature of function type `fty`.
     pub fn sig(&mut self, fty: QualType, extern_c: bool) -> Sig {
         self.sig_this(fty, extern_c, None)

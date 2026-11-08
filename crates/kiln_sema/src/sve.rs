@@ -16,7 +16,7 @@
 use kiln_ast::decl::{DeclFlags, DeclKind, TlsKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ValueCategory};
 use kiln_ast::names::DeclName;
-use kiln_ast::types::BuiltinType;
+use kiln_ast::types::{BuiltinType, VectorKind};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -582,5 +582,94 @@ impl Sema<'_, '_> {
             }
             (None, None) => None,
         }
+    }
+}
+
+/// The attribute name as clang's diagnostics quote it.
+const SVE_BITS: &str = "'arm_sve_vector_bits'";
+
+impl Sema<'_, '_> {
+    /// GNU `arm_sve_vector_bits(N)` as written (clang
+    /// `HandleArmSveVectorBitsTypeAttr`, first half): the target must have
+    /// `sve` and `-msve-vector-bits=` must fix the vector length before
+    /// the argument is looked at; then exactly one expression argument,
+    /// kept for [`Self::build_sve_fixed_type`].
+    pub(crate) fn sve_bits_attribute(
+        &mut self,
+        syntax: kiln_ast::attr::AttrSyntax,
+        raw: &str,
+        args: &[crate::decl::AttrArg],
+        loc: Loc,
+    ) -> Option<kiln_ast::AttrId> {
+        if !self.sve {
+            let msg = self
+                .diag(DiagId::sema_attribute_unsupported_target, loc)
+                .arg(SVE_BITS)
+                .arg("'sve'");
+            self.emit(msg);
+            return None;
+        }
+        if self.sve_vector_bits.is_none() {
+            let msg = self.diag(DiagId::sema_sve_bits_unsupported, loc).arg(SVE_BITS);
+            self.emit(msg);
+            return None;
+        }
+        let kind = kiln_ast::attr::AttrKind::ARM_SVE_VECTOR_BITS;
+        self.vector_attribute(kind, syntax, raw, args, loc)
+    }
+
+    /// `ty` with `arm_sve_vector_bits(bits)` applied (clang
+    /// `HandleArmSveVectorBitsTypeAttr`, second half; spec/sema.md "SVE"):
+    /// `bits` an integer constant equal to `-msve-vector-bits`, `ty` a
+    /// sizeless SVE vector or predicate type (not `svcount_t`), and the
+    /// declaration a typedef (an error that keeps the fixed type). A data
+    /// vector becomes `bits / element bits` elements of its element type,
+    /// `svbool_t` `bits / 64` bytes. `ty` unchanged after any other
+    /// diagnostic.
+    pub(crate) fn build_sve_fixed_type(
+        &mut self,
+        ty: QualType,
+        bits: ExprId,
+        typedef: bool,
+        loc: Loc,
+    ) -> QualType {
+        let want = self.sve_vector_bits.unwrap_or(0);
+        if self.expr_is_value_dependent(bits) {
+            let msg =
+                self.diag(DiagId::sema_attribute_requires_integer_constant, loc).arg(SVE_BITS);
+            self.emit(msg);
+            return ty;
+        }
+        let Some(n) = self.vector_size_value(bits, SVE_BITS, loc) else { return ty };
+        if n != u128::from(want) {
+            // clang reads the value as a 32-bit unsigned.
+            let msg = self.diag(DiagId::sema_sve_bad_vector_size, loc).arg(n as u32).arg(want);
+            self.emit(msg);
+            return ty;
+        }
+        let Some((elem, _)) = self.sve_parts(ty) else {
+            let msg =
+                self.diag(DiagId::sema_sve_invalid_type, loc).arg(SVE_BITS).arg(self.ty_arg(ty));
+            self.emit(msg);
+            return ty;
+        };
+        // clang applies the type attribute and then rejects the
+        // declaration attribute: the declared type is still the fixed one.
+        if !typedef {
+            let msg = self
+                .diag(DiagId::sema_attribute_wrong_decl_type_error, loc)
+                .arg(SVE_BITS)
+                .arg("typedefs");
+            self.emit(msg);
+        }
+        let (elem, count, kind) = if elem == QualType::BOOL {
+            (QualType::UCHAR, want / 64, VectorKind::SveFixedPredicate)
+        } else {
+            let ebits =
+                crate::target::size_align(&self.ast, elem, self.abi()).map_or(8, |s| s.0 * 8);
+            (elem, want / u32::try_from(ebits).unwrap_or(8), VectorKind::SveFixedData)
+        };
+        let v = self.ast.types.vector(elem, count, kind);
+        self.ast.types.qualify(v, kiln_ast::types::Quals::from_bits(ty.quals_bits()))
     }
 }

@@ -131,9 +131,7 @@ impl Compiler<'_> {
             return None;
         }
         let img = ast.consts.aggregate(ast.exprs.constant_value(e)?)?;
-        if ast.types.as_complex(img.ty).is_none() {
-            return None;
-        }
+        ast.types.as_complex(img.ty)?;
         let Some(elem) = elem else { return Some([0, 0]) };
         let es = usize::try_from(self.o.types.size(elem)).ok()?.min(16);
         let part = |i: usize| -> Option<u128> {

@@ -771,15 +771,28 @@ pub enum VectorKind {
     NeonPoly,
     /// Clang `ext_vector_type`.
     Ext,
+    /// A fixed-length SVE data vector (`arm_sve_vector_bits` on an
+    /// `svint32_t` & co.; clang `VectorKind::SveFixedLengthData`).
+    SveFixedData,
+    /// A fixed-length SVE predicate (`arm_sve_vector_bits` on `svbool_t`;
+    /// clang `VectorKind::SveFixedLengthPredicate`): N/8 bits as bytes.
+    SveFixedPredicate,
 }
 
 impl VectorKind {
+    /// A fixed-length SVE vector or predicate.
+    pub fn is_sve_fixed(self) -> bool {
+        matches!(self, VectorKind::SveFixedData | VectorKind::SveFixedPredicate)
+    }
+
     /// The kind with discriminant `v` (`Generic` if out of range).
     pub fn from_u8(v: u8) -> VectorKind {
         match v {
             1 => VectorKind::Neon,
             2 => VectorKind::NeonPoly,
             3 => VectorKind::Ext,
+            4 => VectorKind::SveFixedData,
+            5 => VectorKind::SveFixedPredicate,
             _ => VectorKind::Generic,
         }
     }

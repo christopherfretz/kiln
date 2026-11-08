@@ -1073,3 +1073,51 @@ fn expansion_outlining_shape() {
     let o0 = ir(&["-O0", "-fkiln-outline-expansions=1"], "o0.ll");
     assert!(!o0.contains(".expand."), "{o0}");
 }
+
+/// spec/codegen.md "SVE fixed-length vectors" (WP-810): an AAPCS64 pure
+/// scalable type (an aggregate of `arm_sve_vector_bits` vectors and
+/// predicates) passed or returned by value is a codegen error from
+/// `-fclang-compat=22` (clang 20+ passes it in SVE registers, which kiln
+/// does not lower yet), at the definition and at the call; clang 19's
+/// lowering (`-fclang-compat=19`) and a struct that also holds a NEON
+/// vector compile. `-fsyntax-only` accepts all of them.
+#[test]
+fn sve_pure_scalable_by_value() {
+    let d = scratch("svepst");
+    let pre = "typedef __SVInt32_t svint32_t; typedef __SVBool_t svbool_t;\n\
+               typedef svint32_t fi32 __attribute__((arm_sve_vector_bits(128)));\n\
+               typedef svbool_t fb __attribute__((arm_sve_vector_bits(128)));\n\
+               typedef __attribute__((neon_vector_type(4))) int n4;\n\
+               struct A { fi32 v; };\n\
+               struct C { fi32 v; n4 n; };\n\
+               struct D { fi32 v[2]; fb p; };\n\
+               void c(C x) { c(x); }\n";
+    let what = "by value is not supported yet: it is an AAPCS64 pure scalable type (an \
+                aggregate of fixed-length SVE types)";
+    let cases = [
+        ("void a(A) {}\n", format!("t.cpp:9:6: error: passing or returning 'A' {what}")),
+        (
+            "D d();\nint e() { d(); return 0; }\n",
+            format!("t.cpp:10:11: error: passing or returning 'D' {what}"),
+        ),
+    ];
+    let flags =
+        ["--target=aarch64-unknown-linux-gnu", "-march=armv8-a+sve", "-msve-vector-bits=128"];
+    for (body, want) in cases {
+        std::fs::write(d.join("t.cpp"), format!("{pre}{body}")).unwrap();
+        let mut args = vec!["-fclang-compat=22", "-S", "-emit-llvm", "-o", "k.ll"];
+        args.extend(flags);
+        args.push("t.cpp");
+        let o = kiln_in(&d, &args);
+        assert!(text(&o.stderr).starts_with(&want), "{body}: {}", text(&o.stderr));
+        assert_eq!(o.status.code(), Some(1), "{body}");
+        args[0] = "-fclang-compat=19";
+        let o = kiln_in(&d, &args);
+        assert!(o.status.success(), "{body}: {}", text(&o.stderr));
+        let mut args = vec!["-fclang-compat=22", "-fsyntax-only"];
+        args.extend(flags);
+        args.push("t.cpp");
+        let o = kiln_in(&d, &args);
+        assert!(o.status.success(), "{body}: {}", text(&o.stderr));
+    }
+}
