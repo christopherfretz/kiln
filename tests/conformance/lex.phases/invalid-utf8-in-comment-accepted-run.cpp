@@ -3,7 +3,6 @@
 // is off by default) and so does GCC. The comment below holds the
 // byte 0xA8 alone, as Boost.Spirit karma regression_real_0.cpp:20 does.
 //@ expect: run
-//@ xfail(kiln): WP-787 follow-up, every invalid UTF-8 sequence in the file is an error, comments included (kiln_pp preprocessor.rs push_file)
 //@ stdout: ok
 extern "C" int printf(const char*, ...);
 // prints ¨inf¨

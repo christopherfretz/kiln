@@ -303,6 +303,47 @@ impl Sema<'_, '_> {
         !kiln_abi::mangle::has_internal_linkage(&self.ast, decl)
     }
 
+    /// `#pragma weak name` at `loc`, the name (clang `ActOnPragmaWeakID`):
+    /// a function or variable `name` declared at namespace scope of the
+    /// translation unit becomes weak (an implicit `weak` attribute);
+    /// otherwise the pragma waits for the first `extern "C"` function or
+    /// variable declared with that name ([`Sema::apply_pragma_weak`]),
+    /// and has no effect if there is none.
+    pub fn act_on_pragma_weak(&mut self, name: kiln_source::symbol::Symbol, loc: Loc) {
+        let found = self.lookup_in(self.ast.tu, name, crate::lookup::LookupKind::Ordinary);
+        let target = found.decls.first().copied().filter(|&d| {
+            let k = self.kind_of(d);
+            k == DeclKind::Var || k.is_function()
+        });
+        let Some(d) = target else {
+            self.weak_pending.push((name, loc));
+            return;
+        };
+        let a = self.ast.attrs.push(weak_pragma_attr(loc));
+        self.builder().append_attrs(d, &[a]);
+    }
+
+    /// clang `ProcessPragmaWeak`: an `extern "C"` function or variable
+    /// `decl` whose name an earlier `#pragma weak` named while it was
+    /// undeclared takes an implicit `weak` attribute (spec/sema.md §4.5).
+    pub(crate) fn apply_pragma_weak(&mut self, decl: DeclId, attrs: &mut Vec<AttrId>) {
+        if self.weak_pending.is_empty() {
+            return;
+        }
+        let n = self.ast.decls.get(decl);
+        if !(n.kind() == DeclKind::Var || n.kind().is_function()) {
+            return;
+        }
+        let Some(name) = n.name().as_ident() else { return };
+        let Some(i) = self.weak_pending.iter().position(|&(s, _)| s == name) else { return };
+        if !kiln_abi::mangle::is_extern_c(&self.ast, decl) {
+            return;
+        }
+        let (_, loc) = self.weak_pending.swap_remove(i);
+        self.weak_pending.retain(|&(s, _)| s != name);
+        attrs.push(self.ast.attrs.push(weak_pragma_attr(loc)));
+    }
+
     /// `#pragma GCC visibility push(V)` (`Some(V)`, a valid name) or
     /// `pop` (`None`; clang `ActOnPragmaVisibility` /
     /// `PopPragmaVisibility`). A `pop` with nothing pushed, or whose
@@ -383,4 +424,16 @@ fn is_record(k: DeclKind) -> bool {
             | DeclKind::ClassTemplateSpecialization
             | DeclKind::ClassTemplatePartialSpecialization
     )
+}
+
+/// The implicit `weak` attribute a `#pragma weak` at `loc` gives.
+fn weak_pragma_attr(loc: Loc) -> AttrNode {
+    AttrNode {
+        kind: AttrKind::WEAK,
+        syntax: AttrSyntax::Pragma,
+        flags: AttrNode::IMPLICIT,
+        loc,
+        a: 0,
+        b: 0,
+    }
 }

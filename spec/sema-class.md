@@ -236,6 +236,17 @@ out-of-line member templates instantiated later included, get access
 nested-befriends-enclosing-template*.cpp). An elaborated-type-specifier
 `class X` naming the injected-class-name is the injected type `X<P...>`
 anywhere inside the template, not only in a friend declaration.
+Until `}` a class's friends are the open `ClassBuild`'s list, and that list
+stays visible to an instantiation started inside the class (the stack is
+set aside in `Sema.suspended_classes`, §8.3): `struct V { friend struct
+VTraits<V>; ... typename VTraits<V>::lane_type ... };` instantiates
+`VTraits<V>` with the friendship in force (WP-803; tests/conformance/
+temp.friend/specialization-instantiated-in-befriending-class-run.cpp).
+`template<class U> friend class X;` redeclares the class template `X` of
+the innermost enclosing namespace, else one that ordinary lookup finds in
+a namespace nested in it (an unnamed namespace's), in that namespace
+(clang `CheckClassTemplate`; WP-803, tests/conformance/temp.friend/
+class-template-in-unnamed-namespace-run.cpp).
 
 A class first declared inside a template by an elaborated-type-specifier
 that is a plain reference (a parameter or template-argument type `struct P*`,
@@ -1257,7 +1268,17 @@ current instantiation with a dependent base, `D::B(1)` / `D<T>::B(1)`) is a
 `DependentNameType` (`Sema::act_unknown_specialization_type`). It is looked
 up in the instantiation (`no type named 'Foo' in 'D7<int>'`). The same
 function makes `typename D::X` dependent for such a qualifier
-([temp.res.general]/5). A qualified id naming no type in a non-dependent
+([temp.res.general]/5), and a base-specifier `N::B` whose class-name lookup
+found no type (`N` a member class of the current instantiation with a
+dependent base; WP-803). An id-expression `D::template f<U>` whose lookup in
+such a qualifier found nothing is a `DependentScopeDeclRefExpr`
+(`Sema::dep_member_nns`; WP-803). When the class has a dependent base and
+declares nothing of an unqualified id's name, a typedef the definition-time
+lookup finds in an enclosing scope is bound then ([temp.res.general]/1): the
+pattern keeps its type, so a member of the now-known base cannot hide it in
+the instantiation (`_Alloc_hider : allocator_type` whose allocator has a
+member function `allocator_type`; WP-803,
+`class.base.init/typedef-bound-at-definition-run.cpp`). A qualified id naming no type in a non-dependent
 qualifier is still `qualified member initializers` unsupported. A
 mem-initializer that fails in an instantiation (its substitution, or its
 initialization: `decltype(t)(t)` naming a reference type) makes the

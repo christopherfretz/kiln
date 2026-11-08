@@ -123,6 +123,9 @@ fn lowering(name: &str) -> Option<(&'static str, T, &'static [T])> {
     const B4: T = T::V(E::Bf16, 4);
     const B8: T = T::V(E::Bf16, 8);
     const B16: T = T::V(E::I8, 16);
+    const B8I: T = T::V(E::I8, 8);
+    const I2: T = T::V(E::I32, 2);
+    const I4: T = T::V(E::I32, 4);
     let q: &'static [T] = &[F4, B8, B8];
     Some(match name.strip_prefix(neon::PREFIX)? {
         "vbfdot_f32" => ("llvm.aarch64.neon.bfdot.v2f32.v4bf16", F2, &[F2, B4, B4]),
@@ -137,6 +140,12 @@ fn lowering(name: &str) -> Option<(&'static str, T, &'static [T])> {
         // byte vector.
         "vqtbl1_v" => ("llvm.aarch64.neon.tbl1.v8i8", T::V(E::I8, 8), &[B16, T::V(E::I8, 8)]),
         "vqtbl1q_v" => ("llvm.aarch64.neon.tbl1.v16i8", B16, &[B16, B16]),
+        // The dot products (WP-803; clang `EmitCommonNeonBuiltinExpr`'s
+        // `vdot` case): overloaded on the accumulator and the byte vector.
+        "vdot_s32" => ("llvm.aarch64.neon.sdot.v2i32.v8i8", I2, &[I2, B8I, B8I]),
+        "vdot_u32" => ("llvm.aarch64.neon.udot.v2i32.v8i8", I2, &[I2, B8I, B8I]),
+        "vdotq_s32" => ("llvm.aarch64.neon.sdot.v4i32.v16i8", I4, &[I4, B16, B16]),
+        "vdotq_u32" => ("llvm.aarch64.neon.udot.v4i32.v16i8", I4, &[I4, B16, B16]),
         // The 64-bit polynomial multiply: `<16 x i8>`, bitcast to `poly128_t`.
         "vmull_p64" => ("llvm.aarch64.neon.pmull64", B16, &[T::S(E::I64), T::S(E::I64)]),
         _ => return None,
@@ -258,6 +267,33 @@ enum Shape {
     /// `vcvt_f16_f32`, `vcvt_f32_f16`, `vcvt_f32_f64`, `vcvt_f64_f32`
     /// (operand `v`): the [`Fp`] conversion.
     CvtFp(Fp),
+    /// `vshll_n_v` (operands `v`, `n`; WP-803): `shl ({s,z}ext (bitcast v
+    /// to the half-width lanes) to VTy), splat(n)` (clang
+    /// `EmitCommonNeonBuiltinExpr`).
+    ShllN,
+    /// `vrshrn_n_v` (operands `v`, `n`; WP-803): `rshrn.VTy(bitcast v to
+    /// W, i32 n)`, `W` as for [`Shape::ShrnN`] (clang 19
+    /// `EmitAArch64BuiltinExpr` returns it as is).
+    RshrnN,
+    /// `vq{r,}shr{u,}n_n_v` (operands `v`, `n`; WP-803): as
+    /// [`Shape::RshrnN`] with the signed or unsigned intrinsic.
+    QShrnN { s: &'static str, u: &'static str },
+    /// `vqshl[q]_n_v`, `vrshr[q]_n_v` (operands `v`, `n`; WP-803):
+    /// `{s,u}{qshl,rshl}.VTy(v, splat(n))`, `-n` for a right shift (clang
+    /// `EmitNeonShiftVector`), `VTy` as is.
+    ShlCall { s: &'static str, u: &'static str, right: bool },
+    /// `vcvt{n,a,m,p}[q]_{s,u}{32,64}_v` (operand `v`; WP-803):
+    /// `fcvt{n,a,m,p}{s,u}.VTy.FTy(bitcast v to FTy)`.
+    CvtR(u8),
+    /// `vtbl1_v`, `vtbl2_v` (operands `t0`[, `t1`], `i`; WP-803):
+    /// `tbl1.v8i8(shuffle t0, t1 or zero, i)`.
+    Tbl(u8),
+    /// `vqmovun_v` (operand `v`; WP-803): as [`Shape::QMovn`] with
+    /// `sqxtun`.
+    QMovun,
+    /// `vpadal[q]_v` (operands `a`, `b`; WP-803): `add ({s,u}addlp.VTy.N(b
+    /// as N)), (bitcast a to VTy)`, `N` as for [`Shape::Paddl`].
+    Padal,
 }
 
 /// A floating-point width conversion, [`Shape::CvtFp`]: the
@@ -281,6 +317,8 @@ enum Red {
     Max,
     Min,
     Add,
+    /// `vaddlv`: the sum in the next wider element (`uaddlv`/`saddlv`).
+    AddLong,
 }
 
 /// An elementwise NEON intrinsic: its overloaded base names for a
@@ -336,6 +374,28 @@ fn call(b: &str) -> Option<Call> {
         "vqadd" => {
             Call { declared: true, ..i2("llvm.aarch64.neon.sqadd", "llvm.aarch64.neon.uqadd") }
         }
+        "vhadd" => {
+            Call { declared: true, ..i2("llvm.aarch64.neon.shadd", "llvm.aarch64.neon.uhadd") }
+        }
+        "vrhadd" => {
+            Call { declared: true, ..i2("llvm.aarch64.neon.srhadd", "llvm.aarch64.neon.urhadd") }
+        }
+        "vhsub" => {
+            Call { declared: true, ..i2("llvm.aarch64.neon.shsub", "llvm.aarch64.neon.uhsub") }
+        }
+        // The shifts by a signed per-lane register count.
+        "vshl" => Call { declared: true, ..i2("llvm.aarch64.neon.sshl", "llvm.aarch64.neon.ushl") },
+        "vrshl" => {
+            Call { declared: true, ..i2("llvm.aarch64.neon.srshl", "llvm.aarch64.neon.urshl") }
+        }
+        "vqshl" => {
+            Call { declared: true, ..i2("llvm.aarch64.neon.sqshl", "llvm.aarch64.neon.uqshl") }
+        }
+        "vqrshl" => {
+            Call { declared: true, ..i2("llvm.aarch64.neon.sqrshl", "llvm.aarch64.neon.uqrshl") }
+        }
+        "vqabs" => d("llvm.aarch64.neon.sqabs", "", "", 1),
+        "vqneg" => d("llvm.aarch64.neon.sqneg", "", "", 1),
         "vqdmulh" => d("llvm.aarch64.neon.sqdmulh", "", "", 2),
         "vqrdmulh" => d("llvm.aarch64.neon.sqrdmulh", "", "", 2),
         "vqsub" => {
@@ -408,10 +468,15 @@ impl Shape {
             | Shape::Movl
             | Shape::Paddl
             | Shape::QMovn
+            | Shape::QMovun
             | Shape::CvtFp(_) => 2,
             Shape::St1 | Shape::SetLane(_) | Shape::Splat { .. } | Shape::ShrN | Shape::Tst => 3,
             Shape::ShlN | Shape::ShrnN | Shape::Mull => 3,
+            Shape::ShllN | Shape::RshrnN | Shape::Padal => 3,
+            Shape::QShrnN { .. } | Shape::ShlCall { .. } => 3,
+            Shape::CvtR(_) => 2,
             Shape::Ld1Lane | Shape::St1Lane | Shape::Ext | Shape::Perm(_) => 4,
+            Shape::Tbl(k) => k as usize + 2,
         }
     }
 
@@ -428,6 +493,7 @@ impl Shape {
             | Shape::Movl
             | Shape::Paddl
             | Shape::QMovn
+            | Shape::QMovun
             | Shape::CvtFp(_) => &[1],
             Shape::Call(c) => match c.arity {
                 1 => &[1],
@@ -438,6 +504,11 @@ impl Shape {
             Shape::St1 | Shape::SetLane(_) | Shape::Tst | Shape::Mull => &[2],
             Shape::Ld1Lane | Shape::St1Lane | Shape::Ext => &[2, 3],
             Shape::Splat { .. } | Shape::ShrN | Shape::ShlN | Shape::ShrnN => &[1, 2],
+            Shape::ShllN | Shape::RshrnN | Shape::QShrnN { .. } => &[1, 2],
+            Shape::ShlCall { .. } => &[1, 2],
+            Shape::CvtR(_) => &[1],
+            Shape::Padal | Shape::Tbl(1) => &[2],
+            Shape::Tbl(_) => &[3],
             Shape::Sra | Shape::Sri | Shape::Sli => &[2, 3],
             Shape::FmaLane { .. } => &[3, 4],
             Shape::Perm(_) => &[3],
@@ -454,6 +525,20 @@ impl Shape {
 /// for the fold prepass (empty for any other builtin).
 pub(crate) fn imm_args(b: u32) -> &'static [usize] {
     neon::row(b).and_then(|r| shape(r.info.name)).map_or(&[], Shape::imm_args)
+}
+
+/// The rounding letter of `vcvt{n,a,m,p}[q]_{s,u}{32,64}` ([`Shape::CvtR`]).
+fn cvt_rounding(b: &str) -> Option<u8> {
+    let (op, ty) = b.split_once('_')?;
+    let op = op.strip_suffix('q').unwrap_or(op);
+    let r = match op {
+        "vcvtn" => b'n',
+        "vcvta" => b'a',
+        "vcvtm" => b'm',
+        "vcvtp" => b'p',
+        _ => return None,
+    };
+    matches!(ty, "s32" | "u32" | "s64" | "u64").then_some(r)
 }
 
 /// The [`Shape`] of NEON builtin `name`, if it has one.
@@ -497,6 +582,37 @@ fn shape(name: &str) -> Option<Shape> {
             "vpaddl" | "vpaddlq" if n.ends_with("_v") => Some(Shape::Paddl),
             "vqmovn" if n.ends_with("_v") => Some(Shape::QMovn),
             "vmull" if n.ends_with("_v") => Some(Shape::Mull),
+            "vtbl1" if n.ends_with("_v") => Some(Shape::Tbl(1)),
+            "vtbl2" if n.ends_with("_v") => Some(Shape::Tbl(2)),
+            "vqrshrn_n" if n.ends_with("_v") => Some(Shape::QShrnN {
+                s: "llvm.aarch64.neon.sqrshrn",
+                u: "llvm.aarch64.neon.uqrshrn",
+            }),
+            "vqshrn_n" if n.ends_with("_v") => {
+                Some(Shape::QShrnN { s: "llvm.aarch64.neon.sqshrn", u: "llvm.aarch64.neon.uqshrn" })
+            }
+            "vqrshrun_n" if n.ends_with("_v") => {
+                let i = "llvm.aarch64.neon.sqrshrun";
+                Some(Shape::QShrnN { s: i, u: i })
+            }
+            "vqshrun_n" if n.ends_with("_v") => {
+                let i = "llvm.aarch64.neon.sqshrun";
+                Some(Shape::QShrnN { s: i, u: i })
+            }
+            "vqshl_n" | "vqshlq_n" if n.ends_with("_v") => Some(Shape::ShlCall {
+                s: "llvm.aarch64.neon.sqshl",
+                u: "llvm.aarch64.neon.uqshl",
+                right: false,
+            }),
+            "vrshr_n" | "vrshrq_n" if n.ends_with("_v") => Some(Shape::ShlCall {
+                s: "llvm.aarch64.neon.srshl",
+                u: "llvm.aarch64.neon.urshl",
+                right: true,
+            }),
+            "vshll_n" if n.ends_with("_v") => Some(Shape::ShllN),
+            "vrshrn_n" if n.ends_with("_v") => Some(Shape::RshrnN),
+            "vqmovun" if n.ends_with("_v") => Some(Shape::QMovun),
+            "vpadal" | "vpadalq" if n.ends_with("_v") => Some(Shape::Padal),
             "vcvt_f32" | "vcvtq_f32" | "vcvt_f64" | "vcvtq_f64" if n.ends_with("_v") => {
                 Some(Shape::CvtF)
             }
@@ -506,6 +622,7 @@ fn shape(name: &str) -> Option<Shape> {
             {
                 Some(Shape::CvtI)
             }
+            _ if n.ends_with("_v") => cvt_rounding(b).map(Shape::CvtR),
             _ => None,
         };
         if s.is_some() {
@@ -547,13 +664,14 @@ fn shape(name: &str) -> Option<Shape> {
             "vmaxv" => Some(Red::Max),
             "vminv" => Some(Red::Min),
             "vaddv" => Some(Red::Add),
+            "vaddlv" => Some(Red::AddLong),
             _ => None,
         };
         if let Some(red) = red {
             let (unsigned, e) = match sfx.split_at_checked(1)? {
                 ("s", b) => (false, E::from_suffix(&format!("i{b}"))?),
                 ("u", b) => (true, E::from_suffix(&format!("i{b}"))?),
-                ("f", _) => (false, E::from_suffix(sfx)?),
+                ("f", _) if red != Red::AddLong => (false, E::from_suffix(sfx)?),
                 _ => return None,
             };
             return Some(Shape::Reduce(red, T::vec(e, quad), unsigned));
@@ -657,12 +775,15 @@ impl Cg<'_> {
         let ret = self.neon_ty(ret);
         let f = intrinsics::target_nomem(&mut self.m, intr, ret, &ptys);
         let r = self.intrinsic_call(f, vals);
-        // clang's `vbfdot` case returns the intrinsic's `<N x float>`
-        // as is (the header casts it to `float32xN_t` at once; a store or
-        // cast of it goes by its own type, as in clang); the others go
-        // through `EmitCommonNeonBuiltinExpr`'s bitcast to the builtin's
-        // declared type.
-        if intr.starts_with("llvm.aarch64.neon.bfdot.") {
+        // clang's `vbfdot` and `vdot` cases return the intrinsic's
+        // result as is (the header casts it to its vector type at once; a
+        // store or cast of it goes by its own type, as in clang); the
+        // others go through `EmitCommonNeonBuiltinExpr`'s bitcast to the
+        // builtin's declared type.
+        if ["bfdot.", "sdot.", "udot."]
+            .iter()
+            .any(|d| intr.strip_prefix("llvm.aarch64.neon.").is_some_and(|r| r.starts_with(d)))
+        {
             return Ok(BuiltinCall::Emitted(Some(r)));
         }
         Ok(BuiltinCall::Emitted(Some(self.neon_bitcast(r, ret, rty, e)?)))
@@ -980,7 +1101,7 @@ impl Cg<'_> {
                 let r = self.bin(BinOp::Or, Flags::NONE, x, y);
                 Some(self.neon_bitcast(r, bt, vt, e)?)
             }
-            Shape::CvtF | Shape::CvtI => {
+            Shape::CvtF | Shape::CvtI | Shape::CvtR(_) => {
                 let Some(fe) = float_elt(elt) else {
                     return err(self.loc_of(e), format!("invalid type code for {name}"));
                 };
@@ -993,12 +1114,10 @@ impl Cg<'_> {
                     Some(self.cast(op, v, ft))
                 } else {
                     let v = self.neon_as(v, ft, args[0])?;
-                    let base = if unsigned {
-                        "llvm.aarch64.neon.fcvtzu"
-                    } else {
-                        "llvm.aarch64.neon.fcvtzs"
-                    };
-                    let full = intrinsics::overloaded_name(&self.m, base, &[vt, ft]);
+                    let r = if let Shape::CvtR(r) = s { char::from(r) } else { 'z' };
+                    let base =
+                        format!("llvm.aarch64.neon.fcvt{r}{}", if unsigned { 'u' } else { 's' });
+                    let full = intrinsics::overloaded_name(&self.m, &base, &[vt, ft]);
                     let f = intrinsics::target_nomem(&mut self.m, &full, vt, &[ft]);
                     Some(self.intrinsic_call(f, vec![v]))
                 }
@@ -1087,14 +1206,16 @@ impl Cg<'_> {
                 let f = intrinsics::target_nomem(&mut self.m, &full, vt, &[nt]);
                 Some(self.intrinsic_call(f, vec![v]))
             }
-            Shape::QMovn => {
+            Shape::QMovn | Shape::QMovun => {
                 let Some(w) = elt.widened() else {
                     return err(self.loc_of(e), format!("invalid type code for {name}"));
                 };
                 let v = self.emit_scalar(args[0])?;
                 let wt = self.neon_ty(T::V(w, n));
                 let v = self.neon_as(v, wt, args[0])?;
-                let base = if code & 0x10 != 0 {
+                let base = if s == Shape::QMovun {
+                    "llvm.aarch64.neon.sqxtun"
+                } else if code & 0x10 != 0 {
                     "llvm.aarch64.neon.uqxtn"
                 } else {
                     "llvm.aarch64.neon.sqxtn"
@@ -1104,6 +1225,104 @@ impl Cg<'_> {
                 let r = self.intrinsic_call(f, vec![v]);
                 let rty = self.lty(ast.exprs.get(e).ty());
                 Some(self.neon_bitcast(r, vt, rty, e)?)
+            }
+            Shape::Tbl(k) => {
+                if elt != E::I8 || n != 8 {
+                    return err(self.loc_of(e), format!("invalid type code for {name}"));
+                }
+                let t0 = self.emit_scalar(args[0])?;
+                let t0 = self.neon_as(t0, vt, args[0])?;
+                let t1 = if k == 2 {
+                    let t1 = self.emit_scalar(args[1])?;
+                    self.neon_as(t1, vt, args[1])?
+                } else {
+                    V::C(self.m.const_zero(vt))
+                };
+                let ix = usize::from(k);
+                let i = self.emit_scalar(args[ix])?;
+                let i = self.neon_as(i, vt, args[ix])?;
+                let t = self.shuffle(t0, Some(t1), (0..16).collect());
+                let tt = self.neon_ty(T::V(E::I8, 16));
+                let f = intrinsics::target_nomem(
+                    &mut self.m,
+                    "llvm.aarch64.neon.tbl1.v8i8",
+                    vt,
+                    &[tt, vt],
+                );
+                Some(self.intrinsic_call(f, vec![t, i]))
+            }
+            Shape::ShllN => {
+                let half = matches!(elt, E::I16 | E::I32 | E::I64).then(|| int_elt(elt.bits() / 2));
+                let Some(Some(h)) = half else {
+                    return err(self.loc_of(e), format!("invalid type code for {name}"));
+                };
+                let v = self.emit_scalar(args[0])?;
+                let k = self.neon_imm(args[1], name)?;
+                if !(0..=i128::from(h.bits())).contains(&k) {
+                    return err(self.loc_of(args[1]), format!("invalid shift for {name}"));
+                }
+                let ht = self.neon_ty(T::V(h, n));
+                let v = self.neon_as(v, ht, args[0])?;
+                let op = if code & 0x10 != 0 { CastOp::ZExt } else { CastOp::SExt };
+                let v = self.cast(op, v, vt);
+                let s = self.neon_splat(et, n, k, e, name)?;
+                Some(self.bin(BinOp::Shl, Flags::NONE, v, s))
+            }
+            Shape::RshrnN | Shape::QShrnN { .. } => {
+                let Some(w) = elt.widened() else {
+                    return err(self.loc_of(e), format!("invalid type code for {name}"));
+                };
+                let v = self.emit_scalar(args[0])?;
+                let k = self.neon_imm(args[1], name)?;
+                if !(1..=i128::from(elt.bits())).contains(&k) {
+                    return err(self.loc_of(args[1]), format!("invalid shift for {name}"));
+                }
+                let wt = self.neon_ty(T::V(w, n));
+                let v = self.neon_as(v, wt, args[0])?;
+                let base = match s {
+                    Shape::QShrnN { u, .. } if code & 0x10 != 0 => u,
+                    Shape::QShrnN { s, .. } => s,
+                    _ => "llvm.aarch64.neon.rshrn",
+                };
+                let full = intrinsics::overloaded_name(&self.m, base, &[vt]);
+                let f = intrinsics::target_nomem(&mut self.m, &full, vt, &[wt, LTy::I32]);
+                let k = i32c(self, k);
+                Some(self.intrinsic_call(f, vec![v, k]))
+            }
+            Shape::ShlCall { s: si, u, right } => {
+                let v = self.emit_scalar(args[0])?;
+                let k = self.neon_imm(args[1], name)?;
+                let bits = i128::from(elt.bits());
+                let ok = if right { (1..=bits).contains(&k) } else { (0..bits).contains(&k) };
+                if !is_int(elt) || !ok {
+                    return err(self.loc_of(args[1]), format!("invalid shift for {name}"));
+                }
+                let v = self.neon_as(v, vt, args[0])?;
+                let sh = self.neon_splat(et, n, if right { -k } else { k }, e, name)?;
+                let base = if code & 0x10 != 0 { u } else { si };
+                let full = intrinsics::overloaded_name(&self.m, base, &[vt]);
+                let f = intrinsics::target_nomem(&mut self.m, &full, vt, &[vt, vt]);
+                Some(self.intrinsic_call(f, vec![v, sh]))
+            }
+            Shape::Padal => {
+                let half = matches!(elt, E::I16 | E::I32 | E::I64).then(|| int_elt(elt.bits() / 2));
+                let Some(Some(h)) = half else {
+                    return err(self.loc_of(e), format!("invalid type code for {name}"));
+                };
+                let a = self.emit_scalar(args[0])?;
+                let b = self.emit_scalar(args[1])?;
+                let nt = self.neon_ty(T::V(h, 2 * n));
+                let b = self.neon_as(b, nt, args[1])?;
+                let base = if code & 0x10 != 0 {
+                    "llvm.aarch64.neon.uaddlp"
+                } else {
+                    "llvm.aarch64.neon.saddlp"
+                };
+                let full = intrinsics::overloaded_name(&self.m, base, &[vt, nt]);
+                let f = intrinsics::target_nomem(&mut self.m, &full, vt, &[nt]);
+                let t = self.intrinsic_call(f, vec![b]);
+                let a = self.neon_as(a, vt, args[0])?;
+                Some(self.bin(BinOp::Add, Flags::NONE, t, a))
             }
             // clang 19 `EmitAArch64BuiltinExpr` `vmull_v`: the result is
             // `VTy` as is.
@@ -1212,12 +1431,18 @@ impl Cg<'_> {
                     (Red::Min, false, true) => "uminv",
                     (Red::Add, false, false) => "saddv",
                     (Red::Add, false, true) => "uaddv",
+                    (Red::AddLong, _, false) => "saddlv",
+                    (Red::AddLong, _, true) => "uaddlv",
                 };
                 let rt = match elt {
                     _ if float => et,
                     E::I64 => LTy::I64,
+                    E::I32 if red == Red::AddLong => LTy::I64,
                     _ => LTy::I32,
                 };
+                // `vaddlv` returns the wider element (clang truncates the
+                // `i32` sum of `u8` lanes to `i16`).
+                let et = if red == Red::AddLong { self.lty(ast.exprs.get(e).ty()) } else { et };
                 let v = self.emit_scalar(args[0])?;
                 let v = self.neon_as(v, vt, args[0])?;
                 let base = format!("llvm.aarch64.neon.{p}");
@@ -1318,6 +1543,21 @@ mod tests {
         assert!(matches!(s("vqdmulhq_v"), Some(Shape::Call(c)) if c.s.ends_with("sqdmulh")));
         assert_eq!(s("vqmovn_v"), Some(Shape::QMovn));
         assert_eq!(s("vmull_v"), Some(Shape::Mull));
+        assert_eq!(s("vld4_v"), Some(Shape::LdN(4)));
+        assert_eq!(s("vst3q_v"), Some(Shape::StN(3)));
+        assert_eq!(s("vtbl2_v"), Some(Shape::Tbl(2)));
+        assert_eq!(s("vcvtnq_u32_v"), Some(Shape::CvtR(b'n')));
+        assert_eq!(s("vcvtm_s64_v"), Some(Shape::CvtR(b'm')));
+        assert!(
+            matches!(s("vqrshrun_n_v"), Some(Shape::QShrnN { u, .. }) if u.ends_with("sqrshrun"))
+        );
+        assert!(matches!(s("vrshrq_n_v"), Some(Shape::ShlCall { right: true, .. })));
+        assert!(matches!(s("vhaddq_v"), Some(Shape::Call(c)) if c.u.ends_with("uhadd")));
+        assert_eq!(s("vshll_n_v"), Some(Shape::ShllN));
+        assert_eq!(s("vrshrn_n_v"), Some(Shape::RshrnN));
+        assert_eq!(s("vqmovun_v"), Some(Shape::QMovun));
+        assert_eq!(s("vpadalq_v"), Some(Shape::Padal));
+        assert!(matches!(s("vqnegq_v"), Some(Shape::Call(c)) if c.s.ends_with("sqneg")));
         assert_eq!(s("vfmaq_lane_f16"), Some(Shape::FmaLane { laneq: false }));
         assert_eq!(s("vfma_laneq_v"), Some(Shape::FmaLane { laneq: true }));
         assert_eq!(s("vcvt_f32_f16"), Some(Shape::CvtFp(Fp::F32F16)));
@@ -1331,6 +1571,8 @@ mod tests {
         assert_eq!(s("vcvtq_s16_f16"), Some(Shape::CvtI));
         assert_eq!(s("vmaxvq_u8"), Some(Shape::Reduce(Red::Max, T::V(E::I8, 16), true)));
         assert_eq!(s("vaddv_f32"), Some(Shape::Reduce(Red::Add, T::V(E::F32, 2), false)));
+        assert_eq!(s("vaddlvq_u8"), Some(Shape::Reduce(Red::AddLong, T::V(E::I8, 16), true)));
+        assert_eq!(s("vaddlv_s32"), Some(Shape::Reduce(Red::AddLong, T::V(E::I32, 2), false)));
         assert_eq!(s("vminv_s16"), Some(Shape::Reduce(Red::Min, T::V(E::I16, 4), false)));
         assert_eq!(s("vrndxq_v"), None);
         assert_eq!(s("vaddvq_p8"), None);
