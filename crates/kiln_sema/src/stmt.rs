@@ -289,6 +289,47 @@ impl Sema<'_, '_> {
         self.builder().compound(stmts, lbrace, rbrace)
     }
 
+    /// `{ stmts }` whose FP state (after its leading FP pragmas) is `fp`.
+    pub fn act_on_compound_fp(
+        &mut self,
+        stmts: &[StmtId],
+        lbrace: Loc,
+        rbrace: Loc,
+        fp: kiln_ast::fp::FpOverride,
+    ) -> StmtId {
+        self.builder().compound_fp(stmts, lbrace, rbrace, fp)
+    }
+
+    /// The FP pragma state in effect (spec/codegen.md "Floating-point
+    /// semantics").
+    pub fn fp_pragma_state(&self) -> kiln_ast::fp::FpOverride {
+        self.fp_pragma.0
+    }
+
+    /// Sets the FP pragma state (a pragma, or the end of a compound
+    /// statement restoring its enclosing state).
+    pub fn set_fp_pragma_state(&mut self, fp: kiln_ast::fp::FpOverride) {
+        self.fp_pragma.0 = fp;
+    }
+
+    /// `#pragma float_control(push)`: saves the state.
+    pub fn fp_pragma_push(&mut self) {
+        let cur = self.fp_pragma.0;
+        self.fp_pragma.1.push(cur);
+    }
+
+    /// `#pragma float_control(pop)`: restores the last saved state; false
+    /// if none.
+    pub fn fp_pragma_pop(&mut self) -> bool {
+        match self.fp_pragma.1.pop() {
+            Some(s) => {
+                self.fp_pragma.0 = s;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// `;`.
     pub fn act_on_null_stmt(&mut self, loc: Loc) -> StmtId {
         self.builder().null_stmt(loc)

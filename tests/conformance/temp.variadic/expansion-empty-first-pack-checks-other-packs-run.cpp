@@ -7,7 +7,6 @@
 // Boost.HOF `pack_base` (hof/pack.hpp:252) and Boost.Hana integer_sequence
 // `equal` hit this.
 //@ expect: run
-//@ xfail(kiln): WP-787 follow-up, an expansion whose first pack is empty is never substituted, so the other packs' lengths are not checked (kiln_sema templ/pack.rs expand_pattern_impl)
 //@ stdout: 0 1 0 1 0
 extern "C" int printf(const char*, ...);
 template<bool... B> struct all { static constexpr bool value = (B && ...); };

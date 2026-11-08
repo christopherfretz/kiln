@@ -240,6 +240,22 @@ impl Sema<'_, '_> {
             };
             attrs.push(self.ast.attrs.push(n));
         }
+        // WP-806: an errno-setting math function is `const` without
+        // `errno` (clang adds it before the `NoThrowAttr`).
+        if !self.math_errno
+            && info.attrs & builtin::attr::CONST == 0
+            && builtin::const_without_errno(info.name)
+        {
+            let n = AttrNode {
+                kind: AttrKind::CONST,
+                syntax: AttrSyntax::Gnu,
+                flags: 1,
+                loc,
+                a: 0,
+                b: 0,
+            };
+            attrs.push(self.ast.attrs.push(n));
+        }
         for (bit, kind) in [
             (builtin::attr::NOTHROW, AttrKind::NOTHROW),
             (builtin::attr::CONST, AttrKind::CONST),

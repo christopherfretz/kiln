@@ -12,6 +12,7 @@ use kiln_sema::{
 };
 use kiln_source::Loc;
 
+use crate::fp_pragma::FpAt;
 use crate::keywords::Kw;
 use crate::parser::Parser;
 
@@ -34,6 +35,11 @@ impl Parser<'_, '_> {
         if new_scope {
             self.s.push_scope(ScopeKind::Block);
         }
+        // FP pragmas at the start apply to the compound statement
+        // ([stmt.block]; C23 7.12.2/2), which restores the enclosing state
+        // at its end.
+        let fp_outer = self.s.fp_pragma_state();
+        self.take_fp_pragmas(FpAt::Compound);
         let mut stmts = Vec::new();
         while !self.at(Punct::RBrace) && !self.at_eof() {
             self.in_stmt_expr = stmt_expr;
@@ -47,11 +53,14 @@ impl Parser<'_, '_> {
             let _ = self.loop_hint_attrs(h);
             self.expected_here("statement");
         }
+        self.take_fp_pragmas(FpAt::Statement);
         let rbrace = self.expect_closing(Punct::RBrace, Punct::LBrace, lbrace);
         if new_scope {
             self.s.pop_scope();
         }
-        let block = self.s.act_on_compound(&stmts, lbrace, rbrace);
+        let fp = self.s.fp_pragma_state();
+        self.s.set_fp_pragma_state(fp_outer);
+        let block = self.s.act_on_compound_fp(&stmts, lbrace, rbrace, fp);
         self.s.check_empty_loop_bodies(&stmts);
         (block, rbrace)
     }
@@ -90,6 +99,7 @@ impl Parser<'_, '_> {
         if !self.stack_ok() {
             return None;
         }
+        self.take_fp_pragmas(FpAt::Statement);
         // Loop-hint pragmas before the statement (clang
         // `ParsePragmaLoopHint`): attributes of it, before any `[[...]]`.
         let (mut hints, hints_at) = match self.take_loop_hints() {

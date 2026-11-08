@@ -35,6 +35,7 @@ mod eh;
 mod expr;
 mod fir;
 mod fold;
+mod fp;
 mod func;
 mod global_init;
 mod lambda;
@@ -71,6 +72,7 @@ pub mod x86_intrinsic_table {
     pub use kiln_llvm::intrinsics::TargetMem as Mem;
 }
 
+pub use builtins::{UNLOWERED_BUILTINS, is_unlowered_builtin};
 use kiln_abi::Target;
 use kiln_ast::Ast;
 use kiln_llvm::Module;
@@ -125,6 +127,13 @@ pub struct CodegenOptions {
     /// (`-fcx-limited-range`, `-fcomplex-arithmetic=`; clang's
     /// `LangOptions::ComplexRange`).
     pub complex_range: ComplexRange,
+    /// The command line's floating-point semantics (`-ffp-contract=`,
+    /// `-ffast-math` and its parts, `-f[no-]math-errno`; spec/codegen.md
+    /// "Floating-point semantics", WP-806).
+    pub fp: kiln_ast::fp::FpOptions,
+    /// The `-fdenormal-fp-math=` mode as `"output,input"`
+    /// (`"denormal-fp-math"` on every function); `None` is IEEE.
+    pub fp_denormal: Option<String>,
     /// The optimization level (clang `CodeGenOpts.OptimizationLevel`):
     /// 0 at `-O0`, 1 at `-O`/`-O1`/`-Og`, 2 at `-O2`/`-Os`/`-Oz`, 3 at
     /// `-O3` and above. Above 0 the IR will be optimized (see
@@ -197,6 +206,9 @@ pub struct CodegenOptions {
     /// flag (`-f[no-]asynchronous-unwind-tables`, `-f[no-]unwind-tables`;
     /// clang `CodeGenOpts.UnwindTables`): `None` emits neither.
     pub unwind_tables: Option<UnwindTables>,
+    /// Which static and thread-local variables register their
+    /// destructors (`-f[no-]c++-static-destructors[=…]`; WP-805).
+    pub static_destructors: StaticDestructors,
     /// `-fno-plt`: a function declaration with no definition in the
     /// translation unit is `nonlazybind`, and the module carries
     /// `RtLibUseGOT` (clang `CodeGenOpts.NoPLT`).
@@ -437,6 +449,21 @@ impl FramePointer {
     }
 }
 
+/// Which variables with static or thread storage duration register
+/// their destructors (`-fc++-static-destructors=`; clang
+/// `LangOptions::RegisterStaticDestructorsKind`, `VarDecl::isNoDestroy`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StaticDestructors {
+    /// All of them (the default).
+    #[default]
+    All,
+    /// Only `thread_local` ones (`=thread-local`, clang 22).
+    ThreadLocal,
+    /// None of them (`-fno-c++-static-destructors`, `=none`), except
+    /// `[[clang::always_destroy]]` ones.
+    None,
+}
+
 /// clang's `LangOptions::ComplexRangeKind` (spec/abi.md §8.17): the
 /// algorithm for `_Complex` floating `*` and `/` when both operands are
 /// complex.
@@ -515,6 +542,8 @@ impl Default for CodegenOptions {
             sve: false,
             sve_vector_bits: None,
             complex_range: ComplexRange::Full,
+            fp: kiln_ast::fp::FpOptions::default(),
+            fp_denormal: None,
             opt_level: 0,
             opt_size: 0,
             strict_aliasing: true,
@@ -533,6 +562,7 @@ impl Default for CodegenOptions {
             stack_protector: StackProtector::Off,
             unwind_tables: Some(UnwindTables::Async),
             no_plt: false,
+            static_destructors: StaticDestructors::All,
             wrapv: false,
             wrapv_pointer: false,
             null_pointer_is_valid: false,

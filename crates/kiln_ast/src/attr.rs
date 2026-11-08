@@ -302,7 +302,29 @@ impl AttrKind {
     pub const MS_STRUCT: AttrKind = AttrKind(199);
     /// GNU `gcc_struct` (clang 22 `GCCStructAttr`, WP-809): the record
     /// uses the target's default layout; conflicts with `ms_struct`.
-    pub const GCC_STRUCT: AttrKind = AttrKind(200);
+    pub const GCC_STRUCT: AttrKind = AttrKind(215);
+    /// GNU `retain` on a function or variable (clang `RetainAttr`):
+    /// an emitted entity is also added to `@llvm.used`, so the linker's
+    /// section garbage collection keeps it (WP-805).
+    pub const RETAIN: AttrKind = AttrKind(200);
+    /// clang `no_destroy` on a variable with static or thread storage
+    /// duration (clang `NoDestroyAttr`): its destructor is never
+    /// registered to run at exit (WP-805).
+    pub const NO_DESTROY: AttrKind = AttrKind(201);
+    /// clang `always_destroy` (clang `AlwaysDestroyAttr`): the variable's
+    /// destructor is registered even under `-fno-c++-static-destructors`
+    /// (WP-805).
+    pub const ALWAYS_DESTROY: AttrKind = AttrKind(202);
+    /// GNU `aarch64_vector_pcs` on an `AArch64` function declaration
+    /// that is never defined in the TU (glibc's `<bits/math-vector.h>`
+    /// libmvec declarations). kiln has no calling conventions in its
+    /// function types yet (WP-808), so it calls such a function with the
+    /// base AAPCS64: arguments pass identically and the vector PCS
+    /// callee preserves a superset of the base callee-saved registers.
+    /// A definition, or the attribute on anything but a function, is the
+    /// class-A `'X' attribute is not supported by kiln yet` error
+    /// (WP-805).
+    pub const AARCH64_VECTOR_PCS_DECL: AttrKind = AttrKind(203);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

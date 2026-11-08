@@ -191,8 +191,6 @@ pub struct PredefArgs {
     pub char_signed: Option<bool>,
     /// `-f[no-]pic`, `-f[no-]PIC`, `-f[no-]pie`, `-f[no-]PIE` (last wins).
     pub pic: Option<PicModel>,
-    /// `-f[no-]fast-math`.
-    pub fast_math: Option<bool>,
     /// `-ffreestanding` / `-fhosted`.
     pub freestanding: Option<bool>,
     /// `-pthread`.
@@ -458,6 +456,9 @@ pub struct Args {
     /// The GCC/clang code generation flags (`-fstack-protector*`, unwind
     /// tables, `-fwrapv`, …; spec/driver.md "Codegen flags").
     pub codegen: crate::codegen_flags::CodegenFlags,
+    /// The floating-point flags, in order (spec/driver.md "Floating-point
+    /// flags"; resolved with [`Args::fp_model`]).
+    pub fp: crate::fp_flags::FpFlags,
     /// `-c`, `-S`, `-emit-llvm`.
     pub compile: CompileArgs,
     /// Linker options, in order.
@@ -496,11 +497,6 @@ pub struct Args {
     /// `-f[no-]strict-aliasing` (the last wins); `None` is the default
     /// (strict: TBAA metadata above `-O0`, spec/codegen.md "TBAA").
     pub strict_aliasing: Option<bool>,
-    /// The `_Complex` multiply/divide algorithm, the last of
-    /// `-f[no-]cx-limited-range`, `-f[no-]cx-fortran-rules`,
-    /// `-fcomplex-arithmetic=` and `-ffast-math` (basic); `None` is
-    /// clang's default (full, or basic under `-Ofast`).
-    pub complex_range: Option<ComplexRange>,
     /// `-flax-vector-conversions[=none|integer|all]` and
     /// `-fno-lax-vector-conversions` (the last wins; clang's default
     /// `all`, a bare flag `integer`).
@@ -636,7 +632,9 @@ impl Args {
                 }
                 continue;
             }
-            if let Some(r) = a
+            if let Some(r) = a.fp.parse_arg(arg) {
+                a.errors.extend(r.err());
+            } else if let Some(r) = a
                 .constexpr
                 .parse_arg(arg)
                 .or_else(|| a.templ.parse_arg(arg))
@@ -659,7 +657,22 @@ impl Args {
             }
         }
         a.verify = verify.finish(&mut a.errors);
+        let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
         a
+    }
+
+    /// The floating-point semantics of the command line (spec/driver.md
+    /// "Floating-point flags"; the environment flags were errors at parse
+    /// time).
+    #[must_use]
+    pub fn fp_model(&self) -> crate::fp_flags::FpModel {
+        self.fp.resolve(self.predef.ofast, self.clang22(), &mut Vec::new())
+    }
+
+    /// Whether clang 22's driver rules apply (`-fclang-compat=22`, the
+    /// default) rather than clang 19's.
+    fn clang22(&self) -> bool {
+        self.predef.clang_compat != ClangCompat::Clang19
     }
 
     /// The language of `input`: its `-x`, else [`Lang::of_input`] in
@@ -999,25 +1012,27 @@ impl Args {
         true
     }
 
-    /// clang's complex-range flags (`RenderComplexRangeOption`), the last
-    /// wins. `-fcomplex-arithmetic=promoted` is an unsupported value.
+    /// clang's complex-range flags (`RenderComplexRangeOption`), ordered
+    /// with the FP flags (`-ffast-math` and `-ffp-model=` set the range
+    /// too). `-fcomplex-arithmetic=promoted` is an unsupported value.
     fn complex_flag(&mut self, arg: &str) -> bool {
-        self.complex_range = Some(match arg {
-            "-fcx-limited-range" => ComplexRange::Basic,
-            "-fcx-fortran-rules" => ComplexRange::Improved,
-            "-fno-cx-limited-range" | "-fno-cx-fortran-rules" => ComplexRange::Full,
+        match arg {
+            "-fcx-limited-range"
+            | "-fcx-fortran-rules"
+            | "-fno-cx-limited-range"
+            | "-fno-cx-fortran-rules" => {}
             _ => {
                 let Some(v) = arg.strip_prefix("-fcomplex-arithmetic=") else { return false };
-                let Some(r) = ComplexRange::from_arg(v) else {
+                if ComplexRange::from_arg(v).is_none() {
                     self.errors.push(ArgError::UnsupportedValue(
                         "-fcomplex-arithmetic=".to_owned(),
                         v.to_owned(),
                     ));
                     return true;
-                };
-                r
+                }
             }
-        });
+        }
+        self.fp.note_complex(arg);
         true
     }
 
@@ -1056,15 +1071,12 @@ impl Args {
         true
     }
 
-    /// The complex range in effect: the last complex-range flag, else
-    /// basic under `-Ofast` (unless `-fno-fast-math`), else full.
+    /// The complex range in effect (spec/driver.md "Floating-point
+    /// flags": the FP and complex-range flags in order, by the
+    /// `-fclang-compat=` version's rules).
     #[must_use]
     pub fn complex_range(&self) -> ComplexRange {
-        self.complex_range.unwrap_or(if self.predef.ofast && self.predef.fast_math != Some(false) {
-            ComplexRange::Basic
-        } else {
-            ComplexRange::Full
-        })
+        self.fp_model().complex_range
     }
 
     /// Flags that change predefined macros.
@@ -1078,11 +1090,6 @@ impl Args {
             }
             return true;
         }
-        if arg == "-ffast-math" {
-            // clang 19 renders `-complex-range=basic`; `-fno-fast-math`
-            // leaves the range alone.
-            self.complex_range = Some(ComplexRange::Basic);
-        }
         if matches!(
             arg,
             "-O0" | "-O" | "-O1" | "-O2" | "-O3" | "-O4" | "-Og" | "-Ofast" | "-Os" | "-Oz"
@@ -1095,7 +1102,10 @@ impl Args {
             "-O" | "-O1" | "-O2" | "-O3" | "-O4" | "-Og" => {
                 (p.opt, p.ofast) = (OptLevel::Speed, false);
             }
-            "-Ofast" => (p.opt, p.ofast) = (OptLevel::Speed, true),
+            "-Ofast" => {
+                (p.opt, p.ofast) = (OptLevel::Speed, true);
+                self.fp.note_ofast();
+            }
             "-Os" | "-Oz" => (p.opt, p.ofast) = (OptLevel::Size, false),
             "-fexceptions" | "-fcxx-exceptions" => p.exceptions = Some(true),
             "-fno-exceptions" | "-fno-cxx-exceptions" => p.exceptions = Some(false),
@@ -1112,8 +1122,6 @@ impl Args {
             "-fpie" => p.pic = Some(PicModel::Pie(1)),
             "-fPIE" => p.pic = Some(PicModel::Pie(2)),
             "-fno-pic" | "-fno-PIC" | "-fno-pie" | "-fno-PIE" => p.pic = Some(PicModel::None),
-            "-ffast-math" => p.fast_math = Some(true),
-            "-fno-fast-math" => p.fast_math = Some(false),
             "-ffreestanding" => p.freestanding = Some(true),
             "-fhosted" => p.freestanding = Some(false),
             "-pthread" => p.pthread = true,
@@ -1556,14 +1564,37 @@ mod tests {
         assert_eq!(r("-fcx-limited-range -fcomplex-arithmetic=full a.cpp"), Full);
         assert_eq!(r("-ffast-math a.cpp"), Basic);
         assert_eq!(r("-ffast-math -fno-cx-limited-range a.cpp"), Full);
-        assert_eq!(r("-fcx-limited-range -fno-fast-math a.cpp"), Basic);
         assert_eq!(r("-Ofast a.cpp"), Basic);
+        assert_eq!(r("-ffp-model=aggressive a.cpp"), Basic);
+        assert_eq!(r("-ffast-math -ffp-model=precise a.cpp"), Full);
+        // clang 22: -fno-fast-math drops any range; clang 19 keeps it.
+        assert_eq!(r("-fcx-limited-range -fno-fast-math a.cpp"), Full);
         assert_eq!(r("-Ofast -fno-fast-math a.cpp"), Full);
+        assert_eq!(r("-fclang-compat=19 -fcx-limited-range -fno-fast-math a.cpp"), Basic);
+        assert_eq!(r("-fclang-compat=19 -Ofast -fno-fast-math a.cpp"), Basic);
+        assert_eq!(r("-fclang-compat=19 -ffp-model=fast a.cpp"), Basic);
+        assert_eq!(r("-fclang-compat=19 -ffast-math -ffp-model=precise a.cpp"), Basic);
+        assert_eq!(r("-ffp-model=fast -fcomplex-arithmetic=basic a.cpp"), Basic);
         for v in ["promoted", "bogus"] {
             let a = parse(&format!("-fcomplex-arithmetic={v} a.cpp"));
             let e = ArgError::UnsupportedValue("-fcomplex-arithmetic=".into(), v.into());
-            assert_eq!((a.complex_range, a.errors), (None, vec![e]));
+            assert_eq!((a.complex_range(), a.errors), (Full, vec![e]));
         }
+        // clang 22's -ffp-model=fast promotes complex division: not
+        // implemented, an error.
+        let e = |s| parse(s).errors;
+        assert_eq!(
+            e("-ffp-model=fast a.cpp"),
+            vec![ArgError::UnsupportedByKiln(
+                "-ffp-model=fast (promoted complex arithmetic; add -fcomplex-arithmetic=basic)"
+                    .into()
+            )]
+        );
+        assert_eq!(e("-ffp-model=fast -fcx-limited-range a.cpp"), vec![]);
+        assert_eq!(
+            e("-fclang-compat=19 -ffp-model=aggressive a.cpp"),
+            vec![ArgError::UnsupportedValue("-ffp-model=".into(), "aggressive".into())]
+        );
     }
 
     #[test]

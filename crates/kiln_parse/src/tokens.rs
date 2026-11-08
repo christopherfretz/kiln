@@ -100,6 +100,63 @@ pub enum Event {
         /// The hints, in source order.
         hints: Vec<LoopHintInfo>,
     },
+    /// A floating-point pragma (`#pragma STDC FP_CONTRACT`, `#pragma
+    /// clang fp`, `#pragma float_control`, ...; clang's
+    /// `annot_pragma_fp*` tokens, spec/parse.md §2.3), applied at the file
+    /// scope or compound-statement start at `before`.
+    FpPragma {
+        /// The token the pragma precedes (filled in when it is read).
+        before: Loc,
+        /// The pragma.
+        pragma: FpPragma,
+    },
+}
+
+/// A floating-point pragma ([`Event::FpPragma`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FpPragma {
+    /// Where clang reports it: the pragma-name token (`FENV_ROUND`: the
+    /// end of the pragma).
+    pub loc: Loc,
+    /// Its name in the placement errors (`fp_contract`, `clang fp`,
+    /// `float_control`, `STDC FENV_ACCESS`, ...).
+    pub what: &'static str,
+    /// What it does, in order (`#pragma clang fp` takes several options).
+    pub actions: Vec<FpAction>,
+}
+
+/// One effect of a floating-point pragma.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FpAction {
+    /// `STDC FP_CONTRACT` / `clang fp contract` (`None`: `DEFAULT`).
+    Contract(Option<kiln_ast::fp::FpContract>),
+    /// `clang fp reassociate(on|off)`.
+    Reassociate(bool),
+    /// `clang fp reciprocal(on|off)`.
+    Reciprocal(bool),
+    /// `clang fp exceptions(ignore|maytrap|strict)`.
+    Exceptions(&'static str),
+    /// `clang fp eval_method(source|double|extended)`.
+    EvalMethod(&'static str),
+    /// `STDC FENV_ACCESS` (`DEFAULT` is `OFF`).
+    FenvAccess(bool),
+    /// `STDC FENV_ROUND` and its mode.
+    FenvRound(&'static str),
+    /// `STDC CX_LIMITED_RANGE` (`None`: `DEFAULT`).
+    CxLimitedRange(Option<bool>),
+    /// `float_control(precise|except, on|off [, push])`.
+    FloatControl {
+        /// `precise` (else `except`).
+        precise: bool,
+        /// `on`.
+        on: bool,
+        /// `, push`: the state is pushed first.
+        push: bool,
+    },
+    /// `float_control(push)`.
+    FloatControlPush,
+    /// `float_control(pop)`.
+    FloatControlPop,
 }
 
 /// One hint of a loop-hint pragma (clang's `PragmaLoopHintInfo`).
@@ -276,12 +333,13 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
                     if t.kind == TokKind::Eof {
                         self.eof = Some(next);
                     }
-                    // A loop hint applies to the statement this token starts.
+                    // A loop hint applies to the statement this token
+                    // starts, an FP pragma at it.
                     for (at, e) in self.events.iter_mut().rev() {
                         if *at != next {
                             break;
                         }
-                        if let Event::LoopHints { before, .. } = e
+                        if let Event::LoopHints { before, .. } | Event::FpPragma { before, .. } = e
                             && *before == Loc::INVALID
                         {
                             *before = t.span.lo;
@@ -303,6 +361,7 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
                     interner: self.pp.interner(),
                     sm: self.pp.source_manager(),
                     lex_opts: self.pp.lex_options(),
+                    macros: self.pp.macros(),
                 };
                 if let Some(e) = classify(&cx, span, start, &tokens) {
                     self.events.push_back((next, e));

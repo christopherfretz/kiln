@@ -4,7 +4,6 @@
 // template template argument followed by a pack expansion. Boost.Mp11
 // `mp_defer<Q_add_pointer::fn, T...>` (mp_defer.cpp:38) hits this.
 //@ expect: run
-//@ xfail(kiln): WP-787 follow-up, a member template named through a typedef of a class template specialization is rejected before a pack expansion (kiln_sema templ/pack.rs "pack expansion in this context")
 //@ stdout: 8
 extern "C" int printf(const char*, ...);
 template<template<class...> class F, class... T> struct defer { using type = F<T...>; };

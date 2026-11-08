@@ -318,22 +318,24 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         parm: Option<DeclId>,
         loc: Loc,
     ) -> SubstResult<TemplateArg> {
+        self.pack_element(a, |s| s.parm_pack_name(parm), loc)
+    }
+
+    /// Template parameter pack `parm` as the length-mismatch diagnostic
+    /// names it.
+    pub(crate) fn parm_pack_name(&self, parm: Option<DeclId>) -> crate::templ::pack::PackName {
         use crate::templ::pack::PackName;
-        self.pack_element(
-            a,
-            |s| match parm {
-                Some(d) => PackName {
-                    name: s.sema.decl_name(d),
-                    depth: s.sema.ast.template_parm(d).map(|i| i.depth),
-                    outer: false,
-                    partial: s.partial_pack.is_some()
-                        && s.sema.ast.template_parm(d).map(|i| (i.depth, i.index))
-                            == s.partial_pack,
-                },
-                None => PackName::default(),
+        match parm {
+            Some(d) => PackName {
+                name: self.sema.decl_name(d),
+                depth: self.sema.ast.template_parm(d).map(|i| i.depth),
+                outer: false,
+                partial: self.partial_pack.is_some()
+                    && self.sema.ast.template_parm(d).map(|i| (i.depth, i.index))
+                        == self.partial_pack,
             },
-            loc,
-        )
+            None => PackName::default(),
+        }
     }
 
     /// Substitutes into one template argument (§5.3).
