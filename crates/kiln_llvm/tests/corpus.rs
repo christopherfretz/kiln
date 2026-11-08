@@ -1822,7 +1822,7 @@ fn debug_info() {
     let mut m = aarch64();
     m.add_module_flag_i32(7, "Dwarf Version", 5);
     m.add_module_flag_i32(2, "Debug Info Version", 3);
-    let raw = |s: &str| MdField::Raw(s.into());
+    let raw = |s: &'static str| MdField::Raw(s.into());
     let file = m.md_specialized(
         "DIFile",
         false,
