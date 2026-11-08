@@ -1542,7 +1542,12 @@ impl Substituter<'_, '_, '_> {
         let src = self.sema.ast.definition(d).filter(|&x| {
             x == d || self.sema.ast.decls.get(x).ctx() == self.sema.ast.decls.get(d).ctx()
         });
-        let member = n.ctx().is_some_and(|c| self.sema.kind_of(c) == DeclKind::CXXRecord);
+        // A scoped member enumeration is defined on demand ([temp.inst]/3),
+        // but one inside a function is defined with it (CWG1484; clang
+        // `VisitEnumDecl`, `isDeclWithinFunction`), so `L::E::e` of a
+        // local class `L` finds its enumerator.
+        let member = n.ctx().is_some_and(|c| self.sema.kind_of(c) == DeclKind::CXXRecord)
+            && !self.sema.is_local_class(d);
         let src = src.filter(|_| scoped == 0 || !member);
         let use_ = if src.is_some() {
             crate::decl::TagUse::Definition

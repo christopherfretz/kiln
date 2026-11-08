@@ -109,7 +109,16 @@ target scope" or (1.2) X is a non-defining friend declaration.
   its definition's base list; `annotations_of` of a `bases_of` reflection
   reads them, and a class template specialization substitutes them with
   its bases (each element of a base pack expansion gets its own copy).
-  Tests: `meta.reflection.annotation/base-specifier*.cpp` (WP-830).
+  The pattern of a base pack expansion is the whole base-specifier,
+  attribute-specifier-seq included ([temp.variadic]/5.4), so an operand
+  naming the pack (`[[=sizeof(Bs)]] Bs...`) is substituted per element,
+  in source order with the operands substituted once
+  (`Substituter::class_bases`). The parser keeps such an operand
+  (`Sema::set_base_annotation_packs`) until the `...` is known; on a
+  base-specifier without one it is the unexpanded-pack error
+  (`Sema::check_base_annotation_packs`). GCC 16.1 crashes on both forms
+  (docs/status/deviations.md).
+  Tests: `meta.reflection.annotation/base-specifier*.cpp` (WP-830, WP-867).
 - A structured binding declaration's leading annotations appertain to the
   declaration, i.e. the unnamed variable `e` ([dcl.struct.bind]/1): kiln
   accepts them there (open question §9).
@@ -170,8 +179,12 @@ target scope" or (1.2) X is a non-defining friend declaration.
   A function parameter pack (`[[=1]] Ts... xs`) gives each expanded
   parameter its own copy of the pattern's annotations, substituted per
   element (`annotated_param_pairs`; `meta.reflection.annotation/parameter-pack.cpp`,
-  WP-830). A pattern with more than one function parameter pack pairs
-  nothing (follow-up, §9).
+  WP-830). With more than one function parameter pack each pack pairs
+  with the parameters of its own expansion, its length probed under the
+  current arguments as the body's parameter map does
+  (`Substituter::param_pack_len`); a pack that stays a pack (a member
+  template's own, substituted with its class) pairs one to one
+  (`parameter-packs-several.cpp`, WP-866).
 - **Function template specializations are lazy.** "Substituting into an
   annotation is not in the immediate context" ([dcl.attr.annotation]/4):
   a failure is a hard error, never a deduction failure, and Example 4
@@ -222,17 +235,16 @@ pins `evaluations`, `steps`, `calls`, `allocs`, `peak_bytes`,
 
 ## 9. Open questions and follow-ups
 
-1. *Resolved (WP-830).* Base-specifier annotations (§3). An annotation
-   operand naming the base pack's parameter (`[[=sizeof(Bs)]] Bs...`) is
-   still substituted outside the expansion (follow-up).
+1. *Resolved (WP-830, WP-867).* Base-specifier annotations (§3),
+   including an operand naming the base pack (`[[=sizeof(Bs)]] Bs...`),
+   substituted per element.
 2. *Resolved (WP-478).* Parameter annotations across redeclarations
    (Note 1, Example 1): `annotations_of` of a parameter lists the
    parameter's annotations in every declaration of the function
    (spec/reflection-members.md §5).
-3. *Resolved (WP-830) for a single pack.* A pattern parameter pack gives
-   each expanded parameter the pattern's annotations (§5). A pattern with
-   two or more function parameter packs is still not paired
-   (`annotated_param_pairs`, `crates/kiln_sema/src/annot.rs`).
+3. *Resolved (WP-830, WP-866).* A pattern parameter pack gives each
+   expanded parameter the pattern's annotations (§5), with any number of
+   function parameter packs.
 4. *Resolved (WP-830).* A value that is, or points into, a string literal
    (`[[="abc"]]`) is `sema_annotation_invalid_value`
    ([temp.arg.nontype]/6.2; `dcl.attr.annotation/string-literal-neg.cpp`,

@@ -4901,7 +4901,16 @@ an lvalue of type `const std::type_info`.
   and RTTI enabled.
 - References and top-level cv are ignored; a cv-qualified expression
   operand gets a `NoOp` cast to its unqualified type, as in clang.
-- A class type must be complete.
+- A class type must be complete (`incomplete type '…' used in typeid`
+  at the `typeid` keyword, with the forward-declaration note). A
+  type-id operand naming a dependent class that has no definition and
+  is neither a class template's pattern nor one of its specializations
+  (a local class or a member class of the current instantiation that is
+  only declared) is diagnosed in the template definition, as clang's
+  `BuildCXXTypeId` does (`is_incomplete_dependent_record`); an
+  injected-class-name, a template-id and an expression operand wait for
+  instantiation. GCC 16.1 diagnoses only at instantiation; kiln follows
+  clang (WP-882, `expr.typeid/incomplete-in-template.cpp`).
 - A glvalue of polymorphic class type is potentially evaluated
   (`typeid_expr`, sema-class.md §5.1); other operands are unevaluated.
 - `-Wpotentially-evaluated-expression` (WP-219, `side_effects.rs`

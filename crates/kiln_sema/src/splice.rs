@@ -7,9 +7,10 @@
 //! [`Sema::splice_entity`] is the shared operand check: it reads a
 //! frozen operand (a substituted `info` template argument, a
 //! `^^operand`, a `constexpr` variable already evaluated) without an
-//! Oven run (the fast path, counted in `Sema::splice_fast`) and
-//! evaluates anything else. Each position then checks the designated
-//! entity fits it: an expression ([`Sema::act_on_splice_expr`]), a
+//! Oven run (the fast path, counted in `Sema::splice_fast` and reported
+//! as the Oven report's `splice_fast` total) and evaluates anything
+//! else. Each position then checks the designated entity fits it: an
+//! expression ([`Sema::act_on_splice_expr`]), a
 //! member of the object's class ([`Sema::act_on_member_splice`]), a
 //! scope ([`Sema::act_on_nested_name_splice`]), a namespace
 //! ([`Sema::act_on_splice_namespace`]) or a type
@@ -47,12 +48,6 @@ pub(crate) enum Spliced {
 }
 
 impl Sema<'_, '_> {
-    /// The number of splices whose operand was read as a frozen constant
-    /// without an Oven evaluation (the splice fast path).
-    pub fn splice_fast_count(&self) -> u64 {
-        self.splice_fast
-    }
-
     /// The entity splice operand `e` designates ([basic.splice]/1): `e`
     /// must be a converted constant expression of type
     /// `std::meta::info`.

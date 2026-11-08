@@ -451,6 +451,13 @@ clang 22 declares as header builtins (`__dmb`, `__dsb`, `__isb`,
 `__has_builtin` answers clang 19's table at either level (0 outside the
 MS modes): kiln ships clang 19's `arm_acle.h`, which defines them only
 when `__has_builtin` is 0 (spec/landed/sema/WP-724.md "ACLE builtins").
+clang 19 answers 1 for them only under `-fms-extensions`, where they
+are MS language builtins; kiln++ rejects that flag (it has no MS mode,
+spec/driver.md), so the 1 is reachable only through a library
+`ClangFeatures` built with it, and in every mode kiln++ accepts
+`__has_builtin` agrees with what is declared: without `arm_acle.h` the
+names are undeclared, with it they are its inline functions
+(`target.acle/ms-barrier-builtins-*`, WP-846).
 `-ffreestanding` / `-fno-builtin` select the `NoBuiltin` overlay
 (library builtins such as `memcpy` answer 0; `-fhosted` and, for
 `-fno-builtin` only, `-fbuiltin` cancel it), and `-fno-builtin-<name>`
@@ -814,6 +821,19 @@ belong to WP-017, which builds them on `macro_defined` and
     v9, `sve2` and `fullfp16` from the level whatever the extensions say
     (its `setArchFeatures`), and defines `__ARM_NEON_SVE_BRIDGE 1` only in
     SVE mode; clang 22 follows the features and always defines it.
+  - Branch protection (WP-846; `ArmTarget::branch_protection`, filled
+    from `kiln_abi::branch_protection::BranchProtection::macros` of the
+    driver's `-mbranch-protection=` / `-msign-return-address=`, spec/
+    driver.md "Codegen flags"): `__ARM_FEATURE_PAC_DEFAULT` when return
+    addresses are signed (bit 0 the A key, bit 1 the B key, bit 2 every
+    function i.e. `leaf` / `all`, bit 3 PAuth-LR i.e. `pc`),
+    `__ARM_FEATURE_BTI_DEFAULT 1` with `bti` and
+    `__ARM_FEATURE_GCS_DEFAULT 1` with `gcs`; `standard` gives
+    `PAC_DEFAULT 1`, `BTI_DEFAULT 1` and `GCS_DEFAULT 1`. A function's
+    `target("branch-protection=...")` changes only its codegen, never the
+    macros. Tests: `conformance/target.acle/branch-protection-
+    predefines.cpp`, `-sign-all.cpp`, and `kiln_abi` `branch_protection`
+    `derived`.
   Tests: `conformance/cpp.predefined/arm-feature-macros-*.cpp` (pp tests
   of `arm-feature-macros.h` against both oracles: baseline, `+sve`,
   `+sve2`, `+fp16`, `+sve2+fp16`, levels, `-msve-vector-bits=`), and

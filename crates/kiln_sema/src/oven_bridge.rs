@@ -338,6 +338,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.with_oven(None, |oven, b| oven.try_fold(b, e))
     }
 
+    /// The value of the initializer `e` of variable `var` as a constant
+    /// initializer ([basic.start.static]/2; [`Oven::fold_constant_init`]):
+    /// for a reference, the pointer to the object it binds. Silent.
+    pub(crate) fn fold_constant_init(&mut self, e: ExprId, var: DeclId) -> Option<ConstValueId> {
+        if !self.eval_stack_ok(e) {
+            return None;
+        }
+        self.with_oven(None, |oven, b| oven.fold_constant_init(b, e, var))
+    }
+
     /// [`Sema::try_fold`]'s two paths for `e` (`lax`: those of the lax
     /// fold, [`Oven::fold_rvalue`]), the Oven's trial-fold fast path
     /// (`None` where it declines, `Some(None)` for a definite failure) and
@@ -704,7 +714,12 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// The AST and the evaluator, at the end of the translation unit (the
     /// evaluator's [`Oven::stats`] are its `-fconstexpr-report=`).
     pub fn into_parts(self) -> (Ast, Oven) {
-        let Some(oven) = self.oven else { unreachable!("the Oven is out during an evaluation") };
+        let Some(mut oven) = self.oven else {
+            unreachable!("the Oven is out during an evaluation")
+        };
+        // The splice fast path's count goes to the Oven's report: the
+        // evaluations it saved (spec/reflection.md §5).
+        oven.note_splice_fast(self.splice_fast);
         (self.ast, *oven)
     }
 }
