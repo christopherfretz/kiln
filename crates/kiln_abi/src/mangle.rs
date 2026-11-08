@@ -2960,21 +2960,11 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.out.push_str("EE");
     }
 
-    fn compound(&mut self, q: QualType, view: TypeView) {
+    /// `A [<bound>] _ <element type>` for the three array views of
+    /// [`Mangler::compound`].
+    fn array_type(&mut self, q: QualType, view: TypeView) {
         let ast = self.ast;
         match view {
-            TypeView::Pointer(p) => {
-                self.out.push('P');
-                self.ty(p);
-            }
-            TypeView::LValueRef(p) => {
-                self.out.push('R');
-                self.ty(p);
-            }
-            TypeView::RValueRef(p) => {
-                self.out.push('O');
-                self.ty(p);
-            }
             TypeView::ConstantArray(_) => {
                 let n = ast.types.array_size(q).unwrap_or(0);
                 self.out.push('A');
@@ -3004,6 +2994,28 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.out.push('_');
                 self.ty(elem);
             }
+            _ => {}
+        }
+    }
+
+    fn compound(&mut self, q: QualType, view: TypeView) {
+        let ast = self.ast;
+        match view {
+            TypeView::Pointer(p) => {
+                self.out.push('P');
+                self.ty(p);
+            }
+            TypeView::LValueRef(p) => {
+                self.out.push('R');
+                self.ty(p);
+            }
+            TypeView::RValueRef(p) => {
+                self.out.push('O');
+                self.ty(p);
+            }
+            TypeView::ConstantArray(_)
+            | TypeView::IncompleteArray(_)
+            | TypeView::DependentSizedArray { .. } => self.array_type(q, view),
             TypeView::Function(p) => self.function_type(q, &p, true),
             TypeView::MemberPointer { pointee, class } => self.member_pointer(pointee, class),
             TypeView::Complex(e) => {
