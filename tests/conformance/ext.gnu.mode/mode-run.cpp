@@ -32,7 +32,11 @@ static_assert(same<u128, unsigned __int128>::value);
 static_assert(same<s8, signed char>::value);
 static_assert(same<s64, long>::value);
 static_assert(same<f32, float>::value);
+// TF is the 128-bit `long double` where that is IEEE quad (AArch64), else
+// `__float128` (x86-64; mode-complex.cpp).
+#if __LDBL_MANT_DIG__ == 113
 static_assert(same<f128, long double>::value);
+#endif
 
 u128 mul(unsigned long a, unsigned long b) { return (u128)a * b; }
 

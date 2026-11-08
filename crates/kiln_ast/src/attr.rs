@@ -73,9 +73,10 @@ impl AttrKind {
     pub const NO_SANITIZE: AttrKind = AttrKind(85);
     /// GNU `mode(M)` (clang `ModeAttr`), consumed into the declared type
     /// like the vector attributes: `a` = the mode's width in bits, `| 1
-    /// << 8` for a floating-point mode, `| 2 << 8` for `TF` (`long
-    /// double`), `| 3 << 8` for `KF`/`IF`; `b` = the written `Symbol`
-    /// (WP-799).
+    /// << 8` for a floating-point mode, `| 2 << 8` for `KF` (IEEE quad),
+    /// `| 3 << 8` for `IF` (IBM double-double), `| 1 << 11` for a complex
+    /// mode (`SC`, `TC`, ..), `| (log2(N) + 1) << 12` for a vector mode
+    /// `V<N>M`; `b` = the written `Symbol` (WP-799).
     pub const MODE: AttrKind = AttrKind(86);
     pub const VECTOR_SIZE: AttrKind = AttrKind(87);
     /// GNU asm label (`asm("name")` after a declarator): `a` = the

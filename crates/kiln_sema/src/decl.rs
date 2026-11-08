@@ -8294,6 +8294,11 @@ impl Sema<'_, '_> {
             .or_else(|| self.ast.decls.get(e).ctx())
             .unwrap_or(self.ast.tu);
         let dependent = self.ast.types.is_dependent(self.tag_type(e));
+        // A GNU `mode` on the enumeration sets its underlying type (clang
+        // `AddModeAttr` on an `EnumDecl`, from `int` when not fixed).
+        let mode = self.find_attr(e, AttrKind::MODE).filter(|_| !dependent);
+        let mode = mode.map(|a| *self.ast.attrs.get(a));
+        let mode = mode.and_then(|m| self.enum_mode_type(build.fixed.unwrap_or(QualType::INT), m));
         let computed = if build.fixed.is_some() {
             None
         } else if dependent {
@@ -8302,7 +8307,10 @@ impl Sema<'_, '_> {
             Some((QualType::INT, QualType::INT))
         } else {
             let packed = self.find_attr(e, AttrKind::PACKED).is_some();
-            let (best, promotion) = self.best_enum_types(&build.enumerators, packed);
+            let (best, promotion) = match mode {
+                Some(t) => (t, conv::rank::promoted_type(self, t, None).unwrap_or(t)),
+                None => self.best_enum_types(&build.enumerators, packed),
+            };
             // [dcl.enum]/5 (clang's `ActOnEnumBody`): each initializer is
             // converted to the underlying type.
             for &(d, _) in &build.enumerators {
@@ -8316,6 +8324,9 @@ impl Sema<'_, '_> {
             }
             Some((best, promotion))
         };
+        if let (Some(_), Some(t)) = (build.fixed, mode) {
+            self.ast.decls.replace_fixed_enum_int_type(e, t);
+        }
         let _ = self.builder().complete_enum_definition(e, computed);
     }
 
