@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod asm;
+pub mod branch_protection;
 pub mod call;
 pub mod dump;
 pub mod dump_blocks;
@@ -19,6 +20,7 @@ pub mod mangle_decomp;
 pub mod target;
 pub mod vtable;
 
+pub use branch_protection::{BranchProtection, SignScope};
 pub use dump::{
     DumpOptions, dump_all_record_layouts, dump_record_layout, record_definitions,
     write_record_layout, write_record_layout_with,

@@ -450,8 +450,11 @@ fn strip_dunder(name: &str) -> &str {
 /// `ARMACLE_H`), which kiln does not declare (WP-724): kiln ships clang
 /// 19's `arm_acle.h`, which defines each as a macro or inline function
 /// when `__has_builtin` denies it, so `__has_builtin` answers clang 19's
-/// table for them at every compatibility level (0 unless an MS mode
-/// declares them).
+/// table for them at every compatibility level: 0, and kiln declares none
+/// of them, in every mode kiln++ accepts. clang 19's 1 under
+/// `-fms-extensions` (where they are LANGBUILTINs) is reachable only
+/// through a library [`ClangFeatures`] built with that flag; kiln++
+/// rejects `-fms-extensions` (spec/pp.md "Feature queries", WP-846).
 const ACLE_HEADER_BUILTINS: &[&str] =
     &["__dmb", "__dsb", "__isb", "__sev", "__sevl", "__wfe", "__wfi", "__yield"];
 

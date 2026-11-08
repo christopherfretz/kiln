@@ -17,6 +17,7 @@
 mod absolute_value;
 mod align_redecl;
 mod annot;
+mod arm_builtins;
 mod asm;
 mod attr_cond;
 pub mod attr_triage;
@@ -806,6 +807,9 @@ pub struct Sema<'a, 'sm> {
     /// Set by the access check when friendship came only from such a
     /// befriended specialization.
     pub(crate) speculative_friend: std::cell::Cell<bool>,
+    /// Namespace `std::meta` (primary context) once found: the associated
+    /// namespace of `std::meta::info` for ADL (`overload/adl.rs`).
+    pub(crate) std_meta_ns: std::cell::Cell<Option<DeclId>>,
     /// Access errors reported, as (member, location, innermost context),
     /// so a replayed check does not repeat one its instantiation redid.
     pub(crate) access_failed: kiln_source::fx::FxHashSet<(DeclId, Loc, DeclId)>,
@@ -1001,6 +1005,13 @@ pub struct Sema<'a, 'sm> {
     /// needed (spec/annotations.md §5): the specialization maps to its
     /// pattern.
     pub(crate) uninstantiated_annots: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// Set while the parser reads a base-specifier's
+    /// attribute-specifier-seq: an annotation operand naming a pack is
+    /// kept, since the base-specifier may turn out to be a pack expansion
+    /// whose pattern includes it ([temp.variadic]/5.4; WP-867). The
+    /// parser checks it once the `...` is known
+    /// ([`Sema::check_base_annotation_packs`]).
+    pub(crate) base_annotation_packs: bool,
     /// The annotation each annotation attribute already produced: one
     /// written on a declaration's leading attribute-specifier-seq
     /// appertains to every declarator's entity and is one annotation
@@ -1327,6 +1338,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cast_ignores_base_access: false,
             dependent_access: kiln_source::fx::FxHashMap::default(),
             speculative_friend: std::cell::Cell::new(false),
+            std_meta_ns: std::cell::Cell::new(None),
             access_failed: kiln_source::fx::FxHashSet::default(),
             replaying_access: false,
             init_entity: None,
@@ -1377,6 +1389,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             unparsed_default_args: kiln_source::fx::FxHashMap::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
             uninstantiated_annots: kiln_source::fx::FxHashMap::default(),
+            base_annotation_packs: false,
             annot_of_attr: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),

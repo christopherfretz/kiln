@@ -1,8 +1,9 @@
 //! The mangling of reflection template arguments across translation
-//! units (spec/reflection.md §8.3, WP-501): the per-kind encoding table in
-//! both forms (`-fkiln-reflection-mangling=kiln|gcc`), a two-TU program
-//! whose reflection-keyed entities link to one definition each, and link
-//! compatibility with g++-16 (skipped without `KILN_GCC`). Reflections
+//! units (spec/reflection.md §8.3, WP-501, WP-879): the per-kind encoding
+//! table in both forms (`-fkiln-reflection-mangling=kiln|gcc`), a two-TU
+//! program whose reflection-keyed entities link to one definition each in
+//! either form, and link compatibility with g++-16 (skipped without
+//! `KILN_GCC`). Reflections
 //! are kiln and GCC only (clang has no `^^`), so these read the IR and the
 //! objects directly instead of comparing with an oracle.
 #![forbid(unsafe_code)]
@@ -216,14 +217,21 @@ Seen seen_b();
 /// [basic.def.odr]/15, [temp.type]/2 P2996R13: two translation units
 /// that name the same reflection-keyed specializations get one entity
 /// each (equal addresses, one `typeid`, one shared static counter), and
-/// the objects carry them as weak (`W`/`V`), never TU-local.
+/// the objects carry them as weak (`W`/`V`), never TU-local. Run in the
+/// default (kiln, `Lu6__info…`) form and in the gcc (`LDm…`) form.
 #[test]
 fn two_translation_units_link() {
     if !(have("clang++-19") && have("nm")) {
         eprintln!("skipping: clang++-19 / nm not found");
         return;
     }
-    let d = scratch("two-tu");
+    for (flag, info) in [(None, "u6__info"), (Some("-fkiln-reflection-mangling=gcc"), "Dm")] {
+        two_tu(flag, info);
+    }
+}
+
+fn two_tu(flag: Option<&str>, info: &str) {
+    let d = scratch(&format!("two-tu-{info}"));
     std::fs::write(d.join("common.h"), COMMON).unwrap();
     std::fs::write(
         d.join("a.cpp"),
@@ -244,16 +252,19 @@ int main() {
         "#include \"common.h\"\nSeen seen_b() { return SEEN(cnt<^^S>()); }\n",
     )
     .unwrap();
-    kiln(&d, &["-c", "a.cpp"]);
-    kiln(&d, &["-c", "b.cpp"]);
+    for tu in ["a.cpp", "b.cpp"] {
+        let mut args: Vec<&str> = flag.into_iter().collect();
+        args.extend(["-c", tu]);
+        kiln(&d, &args);
+    }
     run(Command::new(kilnpp()).args(["a.o", "b.o", "-o", "prog"]).current_dir(&d));
     let o = run(&mut Command::new(d.join("prog")));
     // Seven equal addresses, one type_info, and the counter reached 1
     // then 2 (1 + 2 = 3).
     assert_eq!(String::from_utf8_lossy(&o.stdout), "7 1 1 3\n");
     for obj in ["a.o", "b.o"] {
-        let syms: Vec<_> =
-            nm(&d, obj).into_iter().filter(|(n, _)| n.contains("u6__info")).collect();
+        let lit = format!("IL{info}");
+        let syms: Vec<_> = nm(&d, obj).into_iter().filter(|(n, _)| n.contains(&lit)).collect();
         let names: BTreeSet<_> = syms.iter().map(|(n, _)| n.as_str()).collect();
         for want in [
             "_ZN1TILu6__infotyiEE5countE",
@@ -265,7 +276,8 @@ int main() {
             "_Z3cntILu6__infoty1SEEiv",
             "_ZTI1TILu6__infota5Alias_iEE",
         ] {
-            assert!(names.contains(want), "{obj}: {want} missing from {syms:?}");
+            let want = want.replace("u6__info", info);
+            assert!(names.contains(want.as_str()), "{obj}: {want} missing from {syms:?}");
         }
         for (n, l) in &syms {
             assert!(matches!(l.as_str(), "W" | "V" | "U"), "{obj}: {n} is {l}, not weak");
