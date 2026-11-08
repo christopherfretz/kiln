@@ -399,6 +399,34 @@ impl Sema<'_, '_> {
         found
     }
 
+    /// The one specialization the member template-id `x` (an overloaded
+    /// member access with explicit template arguments) names without a
+    /// call or a target type, with its found declaration: as
+    /// [`Sema::single_template_spec`] over the member set (clang's
+    /// `ResolveSingleFunctionTemplateSpecialization` of an
+    /// `UnresolvedMemberExpr`).
+    pub(crate) fn single_member_template_spec(&mut self, x: ExprId) -> Option<(DeclId, DeclId)> {
+        let m = self.ovl.members.get(&x)?;
+        let explicit = m.targs?;
+        let cands: Vec<(DeclId, DeclId)> =
+            m.decls.iter().copied().zip(m.found.iter().copied()).collect();
+        let loc = self.ast.exprs.get(x).loc();
+        let mut found = None;
+        for (d, f) in cands {
+            if self.kind_of(d) != DeclKind::FunctionTemplate
+                || self.ast.decls.get(d).has(DeclFlags::INVALID)
+            {
+                continue;
+            }
+            let Ok(spec) = self.deduce_explicit_only(d, Some(explicit), loc) else { continue };
+            if found.is_some() {
+                return None;
+            }
+            found = Some((spec, f));
+        }
+        found
+    }
+
     /// `e`, a function template-id not called: the `DeclRefExpr` naming
     /// the one specialization it names ([over.over]/3), else `e`.
     pub fn resolve_single_template_id(&mut self, e: ExprId) -> ExprId {
@@ -745,6 +773,15 @@ impl Sema<'_, '_> {
         if !complain {
             return None;
         }
+        // A set of only implicit object member functions has clang's
+        // bound-member type: whatever the target, it can only be called
+        // ([expr.ref]/7.3.2; `CheckPlaceholderExpr` diagnoses it before
+        // the conversion, WP-788).
+        let decls = self.member_overload_decls(x).to_vec();
+        if decls.iter().all(|&d| self.is_implicit_object_member(self.templated_or_self(d))) {
+            self.diagnose_member_set_not_called(x);
+            return None;
+        }
         let m = self.ovl.members.get(&x)?;
         let name = self.decl_name_str(m.name);
         let mut cands = m.decls.clone();
@@ -961,19 +998,7 @@ impl Sema<'_, '_> {
         let member =
             self.member_overload(e).or_else(|| self.implicit_member_operand(e).map(|p| p.0));
         if let Some(x) = member {
-            // [expr.ref]/7.3.2: a member function can only be called.
-            let no_args = self.member_overload_decls(x).iter().any(|&d| {
-                self.ast.decls.function(d).is_some_and(|f| self.ast.lists.get(f.params).is_empty())
-            });
-            let msg = self
-                .diag(DiagId::sema_bound_member_not_called, self.eloc(x))
-                .arg(u8::from(no_args));
-            let notes: Vec<Diag> = self
-                .member_overload_decls(x)
-                .iter()
-                .map(|&d| self.diag(DiagId::note_possible_target, self.ast.decls.get(d).loc()))
-                .collect();
-            self.emit(notes.into_iter().fold(msg, Diag::with_note));
+            self.diagnose_member_set_not_called(x);
             return true;
         }
         let Some((ule, _)) = self.overload_operand(e) else { return false };
@@ -986,5 +1011,45 @@ impl Sema<'_, '_> {
             .collect();
         self.emit(notes.into_iter().fold(msg, Diag::with_note));
         true
+    }
+
+    /// The member overload set `x` used other than called ([expr.ref]/7.3.2:
+    /// a non-static member function can only be called): "reference to
+    /// non-static member function must be called" with a "possible
+    /// target for call" per member. The "did you mean to call it with no
+    /// arguments?" hint follows clang's `isExprCallable`: the members
+    /// callable with no arguments (a template's pattern counts) all
+    /// return the same type, and there is one.
+    pub(crate) fn diagnose_member_set_not_called(&mut self, x: ExprId) {
+        let decls = self.member_overload_decls(x).to_vec();
+        let mut ret: Option<QualType> = None;
+        let mut no_args = true;
+        for &d in &decls {
+            let f = self.templated_or_self(d);
+            if self.fn_min_args(f) != 0 {
+                continue;
+            }
+            let r = self.ast.decls.get(f).ty().and_then(|t| {
+                let types = &self.ast.types;
+                types
+                    .proto_of(t.ty())
+                    .or_else(|| types.proto(t))
+                    .map(kiln_ast::types::FuncProto::ret)
+            });
+            let r = r.map(|r| self.ast.types.canonical(r));
+            match (ret, r) {
+                (None, Some(r)) => ret = Some(r),
+                (Some(p), Some(r)) if p == r => {}
+                _ => no_args = false,
+            }
+        }
+        let no_args = no_args && ret.is_some();
+        let msg =
+            self.diag(DiagId::sema_bound_member_not_called, self.eloc(x)).arg(u8::from(no_args));
+        let notes: Vec<Diag> = decls
+            .iter()
+            .map(|&d| self.diag(DiagId::note_possible_target, self.ast.decls.get(d).loc()))
+            .collect();
+        self.emit(notes.into_iter().fold(msg, Diag::with_note));
     }
 }

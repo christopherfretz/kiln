@@ -503,24 +503,26 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return self.recover_err(&[base], loc);
             }
-            if self.implicit_mixed_overload(b, &found.decls) {
-                // clang's `CheckQualifiedMemberReference`: an implicit
-                // member reference that finds a static member is not an
-                // error. `B::f(…)` in a member of a class template with a
-                // dependent base was kept as `this->B::f` until `B` was
-                // known not to be a base; it is the plain qualified set
-                // now, and a non-static winner is diagnosed by the call
-                // ([class.mfct.non.static]/2, [expr.prim.id.general]/3).
-                let valid = found.decls.clone();
-                return self.overload_name_ref(name, &found, &valid, false, Some(q.nns), loc);
+            if !self.implicit_mixed_overload(b, &found.decls) {
+                // clang's `CheckQualifiedMemberReference`.
+                let msg = self
+                    .diag(DiagId::sema_qualified_member_of_unrelated, loc)
+                    .arg(format!("'{}'", self.qualified_decl_name(m)))
+                    .arg(self.ty_arg(obj_ty));
+                self.emit(msg);
+                return self.recover_err(&[base], loc);
             }
-            // clang's `CheckQualifiedMemberReference`.
-            let msg = self
-                .diag(DiagId::sema_qualified_member_of_unrelated, loc)
-                .arg(format!("'{}'", self.qualified_decl_name(m)))
-                .arg(self.ty_arg(obj_ty));
-            self.emit(msg);
-            return self.recover_err(&[base], loc);
+            // clang's `CheckQualifiedMemberReference`: an implicit member
+            // reference that finds a static member is not an error.
+            // `B::f(…)` in a member of a class template with a dependent
+            // base was kept as `this->B::f` until `B` was known not to be
+            // a base; it stays the implicit member set (clang's
+            // implicit-access `UnresolvedMemberExpr`), so the call
+            // resolves it against `*this`: a static winner is named
+            // without an object, while a non-static candidate is not
+            // viable for the object argument ("no matching member
+            // function", WP-788; [class.mfct.non.static]/2,
+            // [over.match.funcs]/4).
         }
         let nns = qual.map(|q| q.nns);
         if found.decls.len() > 1 || self.kind_of(m) == DeclKind::FunctionTemplate {

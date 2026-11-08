@@ -1013,8 +1013,12 @@ impl Ast {
                     {
                         return None;
                     }
-                    if let Some(k) = self.spec_info(c).and_then(|(_, s)| explicit(s.kind)) {
-                        return k;
+                    // A class template specialization governs its members
+                    // whatever its kind: an implicit specialization of a
+                    // member template of an explicitly instantiated class
+                    // is not instantiated by it ([temp.explicit]/10; WP-812).
+                    if let Some((_, s)) = self.spec_info(c) {
+                        return explicit(s.kind).flatten();
                     }
                     if let Some(k) = self.member_spec_info(c).and_then(|(_, m)| explicit(m.kind)) {
                         return k;
