@@ -2958,16 +2958,27 @@ impl<'a> Cg<'a> {
         self.finish_dso_local();
         let fp = self.frame_pointer().module_flag();
         let direct_access = self.direct_access_external_data();
+        self.finish_debug_info();
+        let has_di = self.di.is_some();
         let m = &mut self.m;
         // clang 19 emits an empty `!llvm.linker.options` when the language
         // has modules (C++20 and later); clang 20+ emits none.
         if self.opts.clang_compat < 22 && self.opts.cxx_modules {
             m.add_named_metadata("llvm.linker.options", &[]);
         }
+        // clang `CodeGenModule::Release`: the DWARF version (whenever one
+        // was given), then the debug metadata version (spec/codegen.md
+        // "Debug information").
+        if let Some(v) = self.opts.debug.dwarf_version {
+            m.add_module_flag_i32(7, "Dwarf Version", i32::try_from(v).unwrap_or(5));
+        }
         if matches!(self.opts.reloc, RelocModel::Pic(_))
             && self.opts.semantic_interposition == Some(true)
         {
             m.add_module_flag_i32(1, "SemanticInterposition", 1);
+        }
+        if has_di {
+            m.add_module_flag_i32(2, "Debug Info Version", 3);
         }
         m.add_module_flag_i32(1, "wchar_size", 4);
         match self.opts.reloc {
