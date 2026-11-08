@@ -48,7 +48,10 @@ impl<'a> Cg<'a> {
         let kind = n.kind();
         let method = matches!(
             kind,
-            DeclKind::CXXMethod | DeclKind::CXXConstructor | DeclKind::CXXDestructor | DeclKind::CXXConversion
+            DeclKind::CXXMethod
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+                | DeclKind::CXXConversion
         );
         let (mut fl, mut sp): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
         let fake = |cg: &mut Self| {
@@ -70,8 +73,12 @@ impl<'a> Cg<'a> {
             fl.push("DIFlagPrototyped");
             let ctx = n.ctx();
             scope = match ctx.map(|c| (c, ast.decls.get(c).kind())) {
-                Some((c, DeclKind::Namespace)) if reduced => self.di_scope_nocu(d).unwrap_or_else(|| self.di_file(ast.decls.get(c).loc())),
-                Some((c, DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization)) if reduced => {
+                Some((c, DeclKind::Namespace)) if reduced => {
+                    self.di_scope_nocu(d).unwrap_or_else(|| self.di_file(ast.decls.get(c).loc()))
+                }
+                Some((c, DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization))
+                    if reduced =>
+                {
                     ast.decls.get(c).ty().and_then(|q| self.di_type(q)).unwrap_or(unit)
                 }
                 _ => unit,
@@ -117,7 +124,11 @@ impl<'a> Cg<'a> {
         let line = self.di_line(loc);
         let scope_loc = if thunk { loc } else { body.map_or(loc, |b| ast.stmts.get(b).loc()) };
         let scope_line = self.di_line(scope_loc);
-        f_ = f_.n("scope", Some(scope)).n("file", Some(unit)).u("line", u64::from(line)).n("type", Some(ty));
+        f_ = f_
+            .n("scope", Some(scope))
+            .n("file", Some(unit))
+            .u("line", u64::from(line))
+            .n("type", Some(ty));
         f_ = f_.u("scopeLine", u64::from(scope_line)).flags("flags", &fl).sp_flags(&sp);
         f_ = f_.n("unit", Some(cu)).n("templateParams", tparams).n("declaration", decl);
         let s = self.m.md_specialized("DISubprogram", true, f_.0);
@@ -148,11 +159,19 @@ impl<'a> Cg<'a> {
 
     /// clang `EmitDeclare` for variable `d` (`None`: the implicit `this`
     /// or VTT parameter, or a `pass_object_size` size) of type `ty`.
-    fn di_declare(&mut self, d: Option<DeclId>, name: &str, ty: Option<MetadataId>, slot: VarSlot, this: bool) {
+    fn di_declare(
+        &mut self,
+        d: Option<DeclId>,
+        name: &str,
+        ty: Option<MetadataId>,
+        slot: VarSlot,
+        this: bool,
+    ) {
         let ast = self.ast;
         let unwritten = d.is_none_or(|d| {
             let n = ast.decls.get(d);
-            n.has(DeclFlags::IMPLICIT) || n.ctx().is_some_and(|c| ast.decls.get(c).has(DeclFlags::IMPLICIT))
+            n.has(DeclFlags::IMPLICIT)
+                || n.ctx().is_some_and(|c| ast.decls.get(c).has(DeclFlags::IMPLICIT))
         });
         let Some(ty) = ty else { return };
         let scope = match self.f.fir.dbg.as_deref() {
@@ -179,11 +198,19 @@ impl<'a> Cg<'a> {
         if let Some(a) = slot.arg {
             f = f.u("arg", u64::from(a));
         }
-        f = f.n("scope", Some(scope)).n("file", file).u("line", u64::from(line)).n("type", Some(ty));
+        f = f
+            .n("scope", Some(scope))
+            .n("file", file)
+            .u("line", u64::from(line))
+            .n("type", Some(ty));
         f = f.flags("flags", &fl);
         let var = self.m.md_specialized("DILocalVariable", false, f.0);
         let expr = if slot.deref {
-            self.m.md_specialized("DIExpression", false, vec![("".into(), MdField::Raw("DW_OP_deref".into()))])
+            self.m.md_specialized(
+                "DIExpression",
+                false,
+                vec![("".into(), MdField::Raw("DW_OP_deref".into()))],
+            )
         } else {
             match self.di.as_deref() {
                 Some(x) => x.empty_expr,
@@ -231,12 +258,21 @@ impl<'a> Cg<'a> {
         }
         let bits = u64::from(self.ast.types.target().pointer_bytes) * 8;
         let ptr = |cg: &mut Self, base: Option<MetadataId>| {
-            let f = Fields::default().raw("tag", "DW_TAG_pointer_type").nn("baseType", base).u("size", bits);
+            let f = Fields::default()
+                .raw("tag", "DW_TAG_pointer_type")
+                .nn("baseType", base)
+                .u("size", bits);
             cg.m.md_specialized("DIDerivedType", false, f.0)
         };
         let vp = ptr(self, None);
         let ty = ptr(self, Some(vp));
-        self.di_declare(None, "vtt", Some(ty), VarSlot { addr, arg: Some(arg), deref: false }, false);
+        self.di_declare(
+            None,
+            "vtt",
+            Some(ty),
+            VarSlot { addr, arg: Some(arg), deref: false },
+            false,
+        );
     }
 
     /// A `pass_object_size` parameter's implicit size (unnamed).
@@ -320,7 +356,11 @@ impl<'a> Cg<'a> {
         if !in_fn && gname != name {
             f = f.s("linkageName", &gname);
         }
-        f = f.n("scope", scope).n("file", Some(file)).u("line", u64::from(line)).n("type", Some(ty));
+        f = f
+            .n("scope", scope)
+            .n("file", Some(file))
+            .u("line", u64::from(line))
+            .n("type", Some(ty));
         f = f.b("isLocal", self.m.global(g).linkage.is_local()).b("isDefinition", true);
         f = f.n("declaration", decl).n("templateParams", tparams);
         let var = self.m.md_specialized("DIGlobalVariable", true, f.0);
@@ -376,11 +416,25 @@ impl<'a> Cg<'a> {
         let mut ops = String::new();
         if self.size_align(q).0 <= 8 {
             let v = c.and_then(|c| match ast.consts.get(c) {
-                kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Int { bits, signed, .. }) => {
-                    if signed { bits.to_i128().and_then(|v| i64::try_from(v).ok()).map(|v| v as u64) } else { bits.to_u128().and_then(|v| u64::try_from(v).ok()) }
+                kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Int {
+                    bits,
+                    signed,
+                    ..
+                }) => {
+                    if signed {
+                        bits.to_i128().and_then(|v| i64::try_from(v).ok()).map(|v| v as u64)
+                    } else {
+                        bits.to_u128().and_then(|v| u64::try_from(v).ok())
+                    }
                 }
-                kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Bool { value, .. }) => Some(u64::from(value)),
-                kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Float { bits, .. }) => u64::try_from(bits).ok(),
+                kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Bool {
+                    value,
+                    ..
+                }) => Some(u64::from(value)),
+                kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Float {
+                    bits,
+                    ..
+                }) => u64::try_from(bits).ok(),
                 _ => None,
             });
             if let Some(v) = v {
@@ -389,13 +443,22 @@ impl<'a> Cg<'a> {
         }
         let tparams = self.di_template_params(d);
         let name = self.di_ident(d);
-        let f = Fields::default().s("name", &name).n("scope", scope).n("file", Some(file)).u("line", u64::from(line));
-        let f = f.n("type", ty).b("isLocal", true).b("isDefinition", true).n("templateParams", tparams);
+        let f = Fields::default()
+            .s("name", &name)
+            .n("scope", scope)
+            .n("file", Some(file))
+            .u("line", u64::from(line));
+        let f =
+            f.n("type", ty).b("isLocal", true).b("isDefinition", true).n("templateParams", tparams);
         let var = self.m.md_specialized("DIGlobalVariable", true, f.0);
         let expr = if ops.is_empty() {
             self.di.as_deref().map(|x| x.empty_expr)
         } else {
-            Some(self.m.md_specialized("DIExpression", false, vec![("".into(), MdField::Raw(ops.into()))]))
+            Some(self.m.md_specialized(
+                "DIExpression",
+                false,
+                vec![("".into(), MdField::Raw(ops.into()))],
+            ))
         };
         let gf = Fields::default().n("var", Some(var)).n("expr", expr);
         let gve = self.m.md_specialized("DIGlobalVariableExpression", false, gf.0);
@@ -409,7 +472,9 @@ impl<'a> Cg<'a> {
     pub(crate) fn di_body_end(&self, body: Option<StmtId>) -> Loc {
         let ast = self.ast;
         match body {
-            Some(b) if ast.stmts.get(b).kind() == kiln_ast::stmt::StmtKind::CompoundStmt => ast.stmts.rbrace(b),
+            Some(b) if ast.stmts.get(b).kind() == kiln_ast::stmt::StmtKind::CompoundStmt => {
+                ast.stmts.rbrace(b)
+            }
             _ => Loc::INVALID,
         }
     }
@@ -419,7 +484,8 @@ impl<'a> Cg<'a> {
     pub(crate) fn di_finish_function(&mut self, end: Loc) {
         let prologue = self.f.cl.prologue;
         let has_cleanups = self.f.cl.depth() != prologue;
-        let only_markers = has_cleanups && self.f.cl.stack[prologue..].iter().all(|s| s.is_lifetime_marker());
+        let only_markers =
+            has_cleanups && self.f.cl.stack[prologue..].iter().all(|s| s.is_lifetime_marker());
         let ret_used = self.f.ret_block.is_some_and(|rb| self.f.fir.block_uses(rb) > 0);
         let Some(x) = self.f.fir.dbg.as_deref_mut() else { return };
         x.ret_dbg = !has_cleanups || only_markers;

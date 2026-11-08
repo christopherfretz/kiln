@@ -1452,7 +1452,7 @@ impl<'a> Cg<'a> {
         t
     }
 
-    fn qualified_name(&self, d: DeclId) -> String {
+    pub(crate) fn qualified_name(&self, d: DeclId) -> String {
         let ast = self.ast;
         let is_fn = |k: DeclKind| {
             matches!(

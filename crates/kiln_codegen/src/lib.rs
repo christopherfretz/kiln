@@ -74,10 +74,10 @@ pub mod x86_intrinsic_table {
 }
 
 pub use builtins::{UNLOWERED_BUILTINS, is_unlowered_builtin};
+pub use debuginfo::{DebugInfoKind, DebugOptions};
 use kiln_abi::Target;
 use kiln_ast::Ast;
 use kiln_llvm::Module;
-pub use debuginfo::{DebugInfoKind, DebugOptions};
 pub use kiln_llvm::Visibility;
 use kiln_oven::Oven;
 use kiln_source::Loc;

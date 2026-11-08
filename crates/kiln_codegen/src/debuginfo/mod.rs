@@ -82,7 +82,11 @@ impl DebugOptions {
     /// DWARF 5's newer C++ codes are not used before clang 20's
     /// `-gstrict-dwarf` rules).
     #[must_use]
-    pub fn language_for(cplusplus: bool, at_least_cxx11: bool, at_least_cxx14: bool) -> &'static str {
+    pub fn language_for(
+        cplusplus: bool,
+        at_least_cxx11: bool,
+        at_least_cxx14: bool,
+    ) -> &'static str {
         match (cplusplus, at_least_cxx11, at_least_cxx14) {
             (false, ..) => "DW_LANG_C11",
             (true, _, true) => "DW_LANG_C_plus_plus_14",
@@ -299,7 +303,8 @@ impl<'a> Cg<'a> {
             return f;
         }
         // A `#line` name has no buffer to checksum.
-        let checksum = (p.file_name == sm.file_name(p.file)).then(|| md5::hex(sm.text(p.file).as_bytes()));
+        let checksum =
+            (p.file_name == sm.file_name(p.file)).then(|| md5::hex(sm.text(p.file).as_bytes()));
         let f = self.di_create_file(&name, checksum.as_deref(), false);
         if let Some(di) = self.di.as_deref_mut() {
             di.files.insert(name.into(), f);
@@ -363,7 +368,15 @@ impl<'a> Cg<'a> {
             }
         }
         let Some(d) = self.di.as_deref() else { return };
-        let (cu, lists) = (d.cu, [("enums", d.enums.clone()), ("retainedTypes", retained), ("globals", d.globals.clone()), ("imports", d.imported.clone())]);
+        let (cu, lists) = (
+            d.cu,
+            [
+                ("enums", d.enums.clone()),
+                ("retainedTypes", retained),
+                ("globals", d.globals.clone()),
+                ("imports", d.imported.clone()),
+            ],
+        );
         for (k, v) in lists {
             if !v.is_empty() {
                 let ops: Vec<Option<MetadataId>> = v.into_iter().map(Some).collect();
@@ -465,7 +478,10 @@ impl<'a> Cg<'a> {
         }
         let file = self.di_file(cur);
         let (line, col) = self.di_line_col(cur);
-        let mut f = Fields::default().n("scope", Some(scope)).n("file", Some(file)).u("line", u64::from(line));
+        let mut f = Fields::default()
+            .n("scope", Some(scope))
+            .n("file", Some(file))
+            .u("line", u64::from(line));
         if col != 0 {
             f = f.u("column", u64::from(col));
         }

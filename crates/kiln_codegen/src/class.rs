@@ -1230,7 +1230,13 @@ impl Cg<'_> {
 
     /// clang `EmitMemberInitializer` / `EmitInitializerForField`.
     /// clang `EmitMemberInitializer` (at the mem-initializer's location).
-    fn emit_field_init(&mut self, kind: CtorInitKind, field: DeclId, init: ExprId, loc: kiln_source::Loc) -> R<()> {
+    fn emit_field_init(
+        &mut self,
+        kind: CtorInitKind,
+        field: DeclId,
+        init: ExprId,
+        loc: kiln_source::Loc,
+    ) -> R<()> {
         let dl = self.dbg_apply(loc);
         let r = self.emit_field_init_x(kind, field, init);
         self.dbg_restore(dl);

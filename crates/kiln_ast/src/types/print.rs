@@ -469,7 +469,12 @@ pub fn write_arg_list_canonical(
 
 /// [`write_arg_list_canonical`] with nested closers split (`> >`), as
 /// clang's debug-information printing policy names class templates.
-pub fn write_arg_list_debug(ctx: &TypeContext, names: &dyn TypeNames, l: ArgListId, out: &mut String) {
+pub fn write_arg_list_debug(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    l: ArgListId,
+    out: &mut String,
+) {
     arg_list_canonical(ctx, names, l, true, out);
 }
 

@@ -1940,18 +1940,12 @@ fn debug_records() {
     let var = m.md_specialized(
         "DILocalVariable",
         false,
-        vec![
-            ("name".into(), MdField::Str("x".into())),
-            ("scope".into(), MdField::Node(Some(sp))),
-        ],
+        vec![("name".into(), MdField::Str("x".into())), ("scope".into(), MdField::Node(Some(sp)))],
     );
     let loc = m.md_specialized(
         "DILocation",
         false,
-        vec![
-            ("line".into(), MdField::UInt(2)),
-            ("scope".into(), MdField::Node(Some(sp))),
-        ],
+        vec![("line".into(), MdField::UInt(2)), ("scope".into(), MdField::Node(Some(sp)))],
     );
     let expr = m.md_specialized("DIExpression", false, vec![]);
     let dbg = m.md_kind("dbg");

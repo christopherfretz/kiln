@@ -931,7 +931,10 @@ impl Cg<'_> {
                 while self.ast.exprs.get(s).kind() == ExprKind::ParenExpr {
                     s = self.ast.exprs.operand(s);
                 }
-                if matches!(self.ast.exprs.get(s).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr) {
+                if matches!(
+                    self.ast.exprs.get(s).kind(),
+                    ExprKind::DeclRefExpr | ExprKind::MemberExpr
+                ) {
                     self.di_const_ref(self.ast.exprs.decl(s), Some(c));
                 }
             }

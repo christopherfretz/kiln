@@ -117,7 +117,9 @@ impl DebugFlags {
                 Some(DebugInfoKind::Constructor)
             }
             "-g0" | "-ggdb0" => Some(DebugInfoKind::None),
-            "-g1" | "-ggdb1" | "-gmlt" | "-gline-tables-only" => Some(DebugInfoKind::LineTablesOnly),
+            "-g1" | "-ggdb1" | "-gmlt" | "-gline-tables-only" => {
+                Some(DebugInfoKind::LineTablesOnly)
+            }
             "-gline-directives-only" => Some(DebugInfoKind::LineDirectivesOnly),
             _ => None,
         };
@@ -216,7 +218,11 @@ impl DebugFlags {
             kind,
             // clang passes `-dwarf-version=` whenever debug information is
             // on or a version was given; the module flag follows it.
-            dwarf_version: if on { Some(self.dwarf_version.unwrap_or(5)) } else { self.dwarf_version },
+            dwarf_version: if on {
+                Some(self.dwarf_version.unwrap_or(5))
+            } else {
+                self.dwarf_version
+            },
             column_info: !self.no_column_info,
             prefix_map: self.prefix_map.clone(),
             comp_dir: self.comp_dir.clone().unwrap_or_else(|| cwd.to_owned()),
@@ -253,10 +259,7 @@ mod tests {
         assert_eq!(parse(&["-g0", "-ggdb3"]).0.kind(), DebugInfoKind::Constructor);
         assert_eq!(parse(&["-g", "-gmlt"]).0.kind(), DebugInfoKind::LineTablesOnly);
         assert_eq!(parse(&["-g1"]).0.kind(), DebugInfoKind::LineTablesOnly);
-        assert_eq!(
-            parse(&["-gline-directives-only"]).0.kind(),
-            DebugInfoKind::LineDirectivesOnly
-        );
+        assert_eq!(parse(&["-gline-directives-only"]).0.kind(), DebugInfoKind::LineDirectivesOnly);
         assert_eq!(parse(&[]).0.kind(), DebugInfoKind::None);
         assert_eq!(parse(&["-g", "-fstandalone-debug"]).0.kind(), DebugInfoKind::Full);
         assert_eq!(
@@ -309,7 +312,10 @@ mod tests {
     fn split_and_compression() {
         let f = parse(&["-g", "-gsplit-dwarf"]).0;
         assert!(f.split());
-        assert_eq!(f.options("/w", Some("t.dwo".into())).split_dwarf_file.as_deref(), Some("t.dwo"));
+        assert_eq!(
+            f.options("/w", Some("t.dwo".into())).split_dwarf_file.as_deref(),
+            Some("t.dwo")
+        );
         assert!(!parse(&["-gsplit-dwarf"]).0.split());
         assert!(!parse(&["-g", "-gsplit-dwarf", "-gno-split-dwarf"]).0.split());
         assert_eq!(parse(&["-gz"]).0.compress, Some(DebugCompression::Zlib));

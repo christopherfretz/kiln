@@ -4,11 +4,15 @@
 use kiln_abi::mangle;
 use kiln_ast::attr::AttrKind;
 use kiln_ast::consts::Scalar;
-use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits as B, FnStorage, TagKind, VarEvalState};
+use kiln_ast::decl::{
+    Access, DeclFlags, DeclKind, DefinitionBits as B, FnStorage, TagKind, VarEvalState,
+};
 use kiln_ast::dump::AstNames;
 use kiln_ast::lambda::CaptureKind;
 use kiln_ast::names::DeclNameView;
-use kiln_ast::types::{ArgView, BuiltinType as T, FuncProto, RefQual, TypeView, write_arg_list_debug};
+use kiln_ast::types::{
+    ArgView, BuiltinType as T, FuncProto, RefQual, TypeView, write_arg_list_debug,
+};
 use kiln_ast::{ConstValueId, DeclId, QualType};
 use kiln_llvm::{MdField, MdNode, MetadataId};
 
@@ -61,8 +65,11 @@ impl<'a> Cg<'a> {
     /// The record `d` is a member of, if any.
     pub(crate) fn di_parent_record(&self, d: DeclId) -> Option<DeclId> {
         let c = self.ast.decls.get(d).ctx()?;
-        matches!(self.ast.decls.get(c).kind(), DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization)
-            .then_some(c)
+        matches!(
+            self.ast.decls.get(c).kind(),
+            DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
+        )
+        .then_some(c)
     }
 
     fn di_member_access(&self, d: DeclId) -> Option<&'static str> {
@@ -82,10 +89,12 @@ impl<'a> Cg<'a> {
         }
         match ast.decls.get(c).kind() {
             DeclKind::Namespace => Some(self.di_namespace(cf)),
-            DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => match ast.decls.get(c).ty() {
-                Some(q) => self.di_type(q),
-                None => default,
-            },
+            DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                match ast.decls.get(c).ty() {
+                    Some(q) => self.di_type(q),
+                    None => default,
+                }
+            }
             _ => default,
         }
     }
@@ -164,7 +173,13 @@ impl<'a> Cg<'a> {
     }
 
     fn di_derived(&mut self, tag: &str, base: Option<MetadataId>, f: Fields) -> MetadataId {
-        let f = Fields::default().raw("tag", tag).nn("baseType", base).0.into_iter().chain(f.0).collect();
+        let f = Fields::default()
+            .raw("tag", tag)
+            .nn("baseType", base)
+            .0
+            .into_iter()
+            .chain(f.0)
+            .collect();
         self.m.md_specialized("DIDerivedType", false, f)
     }
 
@@ -215,13 +230,14 @@ impl<'a> Cg<'a> {
                 let f = Fields::default().u("size", size).n("extraData", cls);
                 Some(self.di_derived("DW_TAG_ptr_to_member_type", base, f))
             }
-            TypeView::ConstantArray(_) | TypeView::IncompleteArray(_) | TypeView::VariableArray { .. } => {
-                self.di_array(q)
-            }
+            TypeView::ConstantArray(_)
+            | TypeView::IncompleteArray(_)
+            | TypeView::VariableArray { .. } => self.di_array(q),
             TypeView::Vector { elem, count, .. } => {
                 let base = self.di_type(elem);
                 let c = if count == 0 { -1 } else { i64::from(count) };
-                let sub = self.m.md_specialized("DISubrange", false, Fields::default().i("count", c).0);
+                let sub =
+                    self.m.md_specialized("DISubrange", false, Fields::default().i("count", c).0);
                 let el = self.m.md_tuple(&[Some(sub)]);
                 let size = bits_of(self, q);
                 let f = Fields::default()
@@ -253,13 +269,18 @@ impl<'a> Cg<'a> {
                 let (file, line) = (self.di_file(loc), self.di_line(loc));
                 let scope = self.di_scope_nocu(decl);
                 let name = self.di_ident(decl);
-                let mut f = Fields::default().s("name", &name).n("scope", scope).n("file", Some(file));
-                f = f.u("line", u64::from(line)).flags("flags", self.di_member_access(decl).as_slice());
+                let mut f =
+                    Fields::default().s("name", &name).n("scope", scope).n("file", Some(file));
+                f = f
+                    .u("line", u64::from(line))
+                    .flags("flags", self.di_member_access(decl).as_slice());
                 Some(self.di_derived("DW_TAG_typedef", base, f))
             }
             TypeView::Enum(d) => self.di_enum(d, q),
             TypeView::Record(d) => Some(self.di_record(d, q)),
-            TypeView::QualifiedArray { quals, base } => self.di_type(QualType::new(base, quals.bits())),
+            TypeView::QualifiedArray { quals, base } => {
+                self.di_type(QualType::new(base, quals.bits()))
+            }
             _ => None,
         }
     }
@@ -278,7 +299,9 @@ impl<'a> Cg<'a> {
         let (signed, unsigned) = ("DW_ATE_signed", "DW_ATE_unsigned");
         let enc = match b {
             T::NullPtr => {
-                let f = Fields::default().raw("tag", "DW_TAG_unspecified_type").s("name", "decltype(nullptr)");
+                let f = Fields::default()
+                    .raw("tag", "DW_TAG_unspecified_type")
+                    .s("name", "decltype(nullptr)");
                 return Some(self.m.md_specialized("DIBasicType", false, f.0));
             }
             T::Bool => "DW_ATE_boolean",
@@ -296,10 +319,25 @@ impl<'a> Cg<'a> {
             _ if b.is_floating() => "DW_ATE_float",
             _ if b.is_signed_integer() => signed,
             _ if b.is_integral() => unsigned,
-            T::MetaInfo | T::SvInt8 | T::SvInt16 | T::SvInt32 | T::SvInt64 | T::SvUint8 | T::SvUint16
-            | T::SvUint32 | T::SvUint64 | T::SvFloat16 | T::SvFloat32 | T::SvFloat64 | T::SvBfloat16
-            | T::SvBool | T::SvCount => {
-                self.di_fail(None, format!("debug information for type `{}` is not supported", b.name()));
+            T::MetaInfo
+            | T::SvInt8
+            | T::SvInt16
+            | T::SvInt32
+            | T::SvInt64
+            | T::SvUint8
+            | T::SvUint16
+            | T::SvUint32
+            | T::SvUint64
+            | T::SvFloat16
+            | T::SvFloat32
+            | T::SvFloat64
+            | T::SvBfloat16
+            | T::SvBool
+            | T::SvCount => {
+                self.di_fail(
+                    None,
+                    format!("debug information for type `{}` is not supported", b.name()),
+                );
                 return None;
             }
             _ => return None,
@@ -324,7 +362,8 @@ impl<'a> Cg<'a> {
                 TypeView::IncompleteArray(e) | TypeView::VariableArray { elem: e, .. } => (-1, e),
                 _ => break,
             };
-            let s = self.m.md_specialized("DISubrange", false, Fields::default().i("count", count).0);
+            let s =
+                self.m.md_specialized("DISubrange", false, Fields::default().i("count", count).0);
             subs.push(Some(s));
             el = next;
         }
@@ -370,16 +409,23 @@ impl<'a> Cg<'a> {
 
     /// clang `getOrCreateInstanceMethodType`: the function type with the
     /// artificial object pointer after the return type.
-    fn di_instance_fn_type(&mut self, fp: &FuncProto, rd: Option<DeclId>, _static: bool) -> Option<MetadataId> {
+    fn di_instance_fn_type(
+        &mut self,
+        fp: &FuncProto,
+        rd: Option<DeclId>,
+        _static: bool,
+    ) -> Option<MetadataId> {
         let this = match rd {
             Some(rd) => {
                 let quals = fp.info().this_quals().bits();
                 let p = self.di_this_ptr(rd, quals)?;
                 let pointee = match &self.m.md_node(p) {
-                    MdNode::Specialized { fields, .. } => fields.iter().find(|f| &*f.0 == "baseType").and_then(|f| match f.1 {
-                        MdField::Node(n) => n,
-                        _ => None,
-                    }),
+                    MdNode::Specialized { fields, .. } => {
+                        fields.iter().find(|f| &*f.0 == "baseType").and_then(|f| match f.1 {
+                            MdField::Node(n) => n,
+                            _ => None,
+                        })
+                    }
                     _ => None,
                 };
                 let f = Fields::default()
@@ -463,7 +509,8 @@ impl<'a> Cg<'a> {
         match self.ast.consts.scalar(v)? {
             Scalar::Int { bits, signed, .. } => {
                 let w = bits.width();
-                let v = if signed { bits.to_i128()? } else { i128::try_from(bits.to_u128()?).ok()? };
+                let v =
+                    if signed { bits.to_i128()? } else { i128::try_from(bits.to_u128()?).ok()? };
                 Some((w, v))
             }
             Scalar::Bool { value, .. } => Some((1, i128::from(value))),
@@ -557,7 +604,9 @@ impl<'a> Cg<'a> {
         if retain && self.is_dynamic(rd) {
             return;
         }
-        if self.is_dynamic(rd) && self.vtable_linkage(rd) == crate::vtable::VtLinkage::AvailableExternally {
+        if self.is_dynamic(rd)
+            && self.vtable_linkage(rd) == crate::vtable::VtLinkage::AvailableExternally
+        {
             return;
         }
         let Some(q) = ast.decls.get(rd).ty() else { return };
@@ -573,7 +622,11 @@ impl<'a> Cg<'a> {
     fn di_complete_class(&mut self, rd: DeclId) {
         let ast = self.ast;
         let Some(def) = self.class_def(rd) else { return };
-        let Some(p) = self.di.as_deref_mut().and_then(|d| d.completed.insert(rd).then(|| d.classes.get(&rd).copied())).flatten()
+        let Some(p) = self
+            .di
+            .as_deref_mut()
+            .and_then(|d| d.completed.insert(rd).then(|| d.classes.get(&rd).copied()))
+            .flatten()
         else {
             return;
         };
@@ -634,16 +687,24 @@ impl<'a> Cg<'a> {
             let off = if b.is_virtual {
                 bf.push("DIFlagVirtual");
                 let oo = self.vt_layout(def).ok().and_then(|l| {
-                    l.vbase_offset_offsets.iter().find(|&&(x, _)| ast.first(x) == brd).map(|&(_, o)| o)
+                    l.vbase_offset_offsets
+                        .iter()
+                        .find(|&&(x, _)| ast.first(x) == brd)
+                        .map(|&(_, o)| o)
                 });
                 oo.map_or(0, |o| -o)
             } else {
-                let o = layout.bases.iter().find(|&&(x, _)| ast.first(x) == brd).map_or(0, |&(_, o)| o);
+                let o =
+                    layout.bases.iter().find(|&&(x, _)| ast.first(x) == brd).map_or(0, |&(_, o)| o);
                 i64::try_from(o * 8).unwrap_or(0)
             };
             let acc = if b.access == Access::None { Access::None } else { b.access };
             bf.extend(self.di_access(acc, Some(def)));
-            let f = Fields::default().n("scope", Some(p)).i("offset", off).flags("flags", &bf).raw("extraData", "i32 0");
+            let f = Fields::default()
+                .n("scope", Some(p))
+                .i("offset", off)
+                .flags("flags", &bf)
+                .raw("extraData", "i32 0");
             els.push(Some(self.di_derived("DW_TAG_inheritance", bt, f)));
         }
         // The vtable pointer (clang `CollectVTableInfo`).
@@ -684,9 +745,9 @@ impl<'a> Cg<'a> {
                     if name.is_empty() && !is_rec {
                         continue;
                     }
-                    let floc = lambda.and_then(|l| l.capture_of_field(m)).map_or(n.loc(), |c| {
-                        if c.var.is_some() { c.loc } else { n.loc() }
-                    });
+                    let floc = lambda
+                        .and_then(|l| l.capture_of_field(m))
+                        .map_or(n.loc(), |c| if c.var.is_some() { c.loc } else { n.loc() });
                     els.push(Some(self.di_field(m, &name, fq, floc, off, def, p)));
                 }
                 _ => {}
@@ -699,7 +760,10 @@ impl<'a> Cg<'a> {
             let k = n.kind();
             if !matches!(
                 k,
-                DeclKind::CXXMethod | DeclKind::CXXConstructor | DeclKind::CXXDestructor | DeclKind::CXXConversion
+                DeclKind::CXXMethod
+                    | DeclKind::CXXConstructor
+                    | DeclKind::CXXDestructor
+                    | DeclKind::CXXConversion
             ) || n.has(DeclFlags::IMPLICIT)
                 || self.has_fn_attr(m, AttrKind::NODEBUG)
                 || self.di_auto_return(m)
@@ -720,7 +784,11 @@ impl<'a> Cg<'a> {
         if !ident.is_empty() {
             f = f.s("identifier", &ident);
         }
-        let node = MdNode::Specialized { distinct: true, name: "DICompositeType".into(), fields: f.0.into() };
+        let node = MdNode::Specialized {
+            distinct: true,
+            name: "DICompositeType".into(),
+            fields: f.0.into(),
+        };
         let _ = self.m.md_replace(p, node);
     }
 
@@ -742,7 +810,9 @@ impl<'a> Cg<'a> {
         let mut flags = vec!["DIFlagFwdDecl"];
         let bits = self.class_bits(rd);
         let def = self.class_def(rd);
-        if def.is_none() || !(bits.contains(B::TRIVIAL_DEFAULT_CTOR) && bits.contains(B::TRIVIALLY_COPYABLE)) {
+        if def.is_none()
+            || !(bits.contains(B::TRIVIAL_DEFAULT_CTOR) && bits.contains(B::TRIVIALLY_COPYABLE))
+        {
             flags.push("DIFlagNonTrivial");
         }
         let mut f = Fields::default().raw("tag", tag);
@@ -770,9 +840,17 @@ impl<'a> Cg<'a> {
         }
         let int = self.di_type(QualType::INT);
         let types = self.m.md_tuple(&[int]);
-        let sub = self.m.md_specialized("DISubroutineType", false, Fields::default().n("types", Some(types)).0);
+        let sub = self.m.md_specialized(
+            "DISubroutineType",
+            false,
+            Fields::default().n("types", Some(types)).0,
+        );
         let pb = self.ptr_bits();
-        let inner = self.di_derived(PTR, Some(sub), Fields::default().s("name", "__vtbl_ptr_type").u("size", pb));
+        let inner = self.di_derived(
+            PTR,
+            Some(sub),
+            Fields::default().s("name", "__vtbl_ptr_type").u("size", pb),
+        );
         let v = self.di_derived(PTR, Some(inner), Fields::default().u("size", pb));
         if let Some(d) = self.di.as_deref_mut() {
             d.vtbl_ptr = Some(v);
@@ -795,7 +873,8 @@ impl<'a> Cg<'a> {
         let ast = self.ast;
         let t = self.di_type(fq);
         let (file, line) = (self.di_file(loc), self.di_line(loc));
-        let mut fl: Vec<&str> = self.di_access(ast.decls.get(m).misc().access(), Some(def)).into_iter().collect();
+        let mut fl: Vec<&str> =
+            self.di_access(ast.decls.get(m).misc().access(), Some(def)).into_iter().collect();
         let mut f = Fields::default().s("name", name).n("scope", Some(p)).n("file", Some(file));
         f = f.u("line", u64::from(line));
         if let Some(bf) = self.tys.record(def).bitfields.get(&m).copied() {
@@ -828,15 +907,23 @@ impl<'a> Cg<'a> {
         let n = ast.decls.get(first);
         let t = self.di_type(n.ty()?);
         let (file, line) = (self.di_file(n.loc()), self.di_line(n.loc()));
-        let tag = if self.opts.debug.dwarf_version.unwrap_or(5) >= 5 { "DW_TAG_variable" } else { "DW_TAG_member" };
+        let tag = if self.opts.debug.dwarf_version.unwrap_or(5) >= 5 {
+            "DW_TAG_variable"
+        } else {
+            "DW_TAG_member"
+        };
         let mut fl: Vec<&str> = self.di_member_access(first).into_iter().collect();
         fl.push("DIFlagStaticMember");
-        let mut f = Fields::default().s("name", &self.di_ident(first)).n("scope", Some(rec)).n("file", Some(file));
+        let mut f = Fields::default()
+            .s("name", &self.di_ident(first))
+            .n("scope", Some(rec))
+            .n("file", Some(file));
         f = f.u("line", u64::from(line)).flags("flags", &fl);
-        let c = ast.decls.var(first).filter(|d| d.init.is_some()).and_then(|d| match d.eval.state() {
-            VarEvalState::Value(cv) => self.di_int(cv),
-            _ => None,
-        });
+        let c =
+            ast.decls.var(first).filter(|d| d.init.is_some()).and_then(|d| match d.eval.state() {
+                VarEvalState::Value(cv) => self.di_int(cv),
+                _ => None,
+            });
         if let Some(c) = c {
             f = f.raw("extraData", &Self::di_int_raw(c));
         }
@@ -912,16 +999,24 @@ impl<'a> Cg<'a> {
         let name = self.di_fn_name(first);
         let ty = self.di_method_type(first);
         let local = self.di_in_function(rd);
-        let linkage = (!structor && !local).then(|| mangle::mangle_decl(ast, &mut self.anon, first));
+        let linkage =
+            (!structor && !local).then(|| mangle::mangle_decl(ast, &mut self.anon, first));
         let implicit = n.has(DeclFlags::IMPLICIT);
-        let (file, line) = if implicit { (None, 0) } else { (Some(self.di_file(n.loc())), self.di_line(n.loc())) };
-        let spec = |p: fn(kiln_ast::decl::FnSpec) -> bool| ast.redecls_of(first).any(|r| ast.decls.function(r).is_some_and(|f| p(f.spec)));
+        let (file, line) =
+            if implicit { (None, 0) } else { (Some(self.di_file(n.loc())), self.di_line(n.loc())) };
+        let spec = |p: fn(kiln_ast::decl::FnSpec) -> bool| {
+            ast.redecls_of(first).any(|r| ast.decls.function(r).is_some_and(|f| p(f.spec)))
+        };
         let mut sp: Vec<&str> = Vec::new();
         let mut fl: Vec<&str> = Vec::new();
         let mut vindex = None;
         if spec(|s| s.is_virtual()) {
             sp.push(if spec(|s| s.is_pure()) { "DISPFlagPureVirtual" } else { "DISPFlagVirtual" });
-            vindex = Some(if kind == DeclKind::CXXDestructor { 0 } else { self.method_vtable_index(first, None).unwrap_or(0) });
+            vindex = Some(if kind == DeclKind::CXXDestructor {
+                0
+            } else {
+                self.method_vtable_index(first, None).unwrap_or(0)
+            });
         }
         if spec(|s| s.is_deleted()) {
             sp.push("DISPFlagDeleted");
@@ -940,7 +1035,9 @@ impl<'a> Cg<'a> {
             fl.push("DIFlagArtificial");
         }
         fl.extend(self.di_member_access(first));
-        if matches!(kind, DeclKind::CXXConstructor | DeclKind::CXXConversion) && spec(|s| s.is_explicit()) {
+        if matches!(kind, DeclKind::CXXConstructor | DeclKind::CXXConversion)
+            && spec(|s| s.is_explicit())
+        {
             fl.push("DIFlagExplicit");
         }
         fl.push("DIFlagPrototyped");
@@ -983,7 +1080,9 @@ impl<'a> Cg<'a> {
     pub(crate) fn di_internal(&self, d: DeclId) -> bool {
         let ast = self.ast;
         mangle::has_internal_linkage(ast, d)
-            || self.di_parent_record(d).is_some_and(|r| mangle::class_is_internal(ast, ast.first(r)))
+            || self
+                .di_parent_record(d)
+                .is_some_and(|r| mangle::class_is_internal(ast, ast.first(r)))
     }
 
     /// clang `isFunctionLocalClass`.
@@ -992,7 +1091,9 @@ impl<'a> Cg<'a> {
         let mut c = ast.decls.get(rd).ctx();
         while let Some(x) = c {
             match ast.decls.get(x).kind() {
-                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => c = ast.decls.get(x).ctx(),
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                    c = ast.decls.get(x).ctx()
+                }
                 DeclKind::Function
                 | DeclKind::CXXMethod
                 | DeclKind::CXXConstructor
@@ -1010,7 +1111,8 @@ impl<'a> Cg<'a> {
         let ast = self.ast;
         let (_, si) = ast.spec_info(d)?;
         let info = ast.template_info(si.template)?;
-        let params: Vec<DeclId> = ast.lists.iter::<DeclId>(ast.templates.param_list(info.params).params).collect();
+        let params: Vec<DeclId> =
+            ast.lists.iter::<DeclId>(ast.templates.param_list(info.params).params).collect();
         let args: Vec<ArgView> = ast.types.args(si.args).iter().map(|a| a.view()).collect();
         let mut ops = Vec::new();
         for (i, a) in args.into_iter().enumerate() {
@@ -1030,9 +1132,29 @@ impl<'a> Cg<'a> {
                 let t = self.di_type(t);
                 Some(self.m.md_specialized("DITemplateTypeParameter", false, f.nn("type", t).0))
             }
+            // clang emits a null pointer argument as `i8 0` (a null
+            // member pointer is still a hard error below).
+            ArgView::Value { ty, value }
+                if matches!(self.ast.consts.scalar(value), Some(Scalar::Null { .. }))
+                    && !matches!(
+                        self.ast.types.view(self.ast.types.canonical(ty).ty()),
+                        TypeView::MemberPointer { .. }
+                    ) =>
+            {
+                let t = self.di_type(ty);
+                Some(self.m.md_specialized(
+                    "DITemplateValueParameter",
+                    false,
+                    f.n("type", t).raw("value", "i8 0").0,
+                ))
+            }
             ArgView::Value { ty, value } => {
                 let Some(c) = self.di_int(value) else {
-                    self.di_fail(None, "debug information for a non-integral template argument is not supported".into());
+                    self.di_fail(
+                        None,
+                        "debug information for a non-integral template argument is not supported"
+                            .into(),
+                    );
                     return None;
                 };
                 let t = self.di_type(ty);
@@ -1047,8 +1169,23 @@ impl<'a> Cg<'a> {
                 let f = Fields(f).s("name", name).n("value", Some(v));
                 Some(self.m.md_specialized("DITemplateValueParameter", false, f.0))
             }
+            // clang: the template's `printQualifiedName`.
+            ArgView::Template(n) if let Some(d) = self.ast.types.template_decl(n) => {
+                let q = self.qualified_name(self.ast.first(d));
+                let v = self.m.md_string(q.as_bytes());
+                let f = Fields::default().raw("tag", "DW_TAG_GNU_template_template_param");
+                let f = if name.is_empty() { f } else { f.s("name", name) };
+                Some(self.m.md_specialized(
+                    "DITemplateValueParameter",
+                    false,
+                    f.n("value", Some(v)).0,
+                ))
+            }
             _ => {
-                self.di_fail(None, "debug information for a template template argument is not supported".into());
+                self.di_fail(
+                    None,
+                    "debug information for a template template argument is not supported".into(),
+                );
                 None
             }
         }
