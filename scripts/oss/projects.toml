@@ -568,7 +568,7 @@ test = "ctest --output-on-failure -j 4 --timeout 300"
 test_timeout = 7200
 c_compiler = "clang-19"
 wave = 4
-verified = false
+verified = true
 notes = "WP-811. Kitware CMake bootstrapped with the system cmake (3.31), all bundled third-party libraries (libuv, curl, zlib, ...; C, so clang-19). CMake's own ctest suite (714 tests) runs the built cmake, ctest and cpack; the test projects it configures pick the default system compilers (gcc), so the suite checks the kiln-built CMake, not kiln on the test projects. ccmake is off (no curses headers)."
 
 [bitcoin_core]
@@ -581,7 +581,7 @@ test = 'rc=0; ./bin/bench_bitcoin -sanity-check > bench.log 2>&1 && echo "bench_
 test_timeout = 5400
 c_compiler = "clang-19"
 wave = 4
-verified = false
+verified = true
 notes = "WP-811. The CMake build, no depends/: system Boost headers (1.83, Boost.Test header-only), system libevent. No wallet (the container has no sqlite3 headers), no GUI, ZMQ or IPC (no capnp). Tests: bench_bitcoin -sanity-check, the python functional suite (test/functional/test_runner.py -j 4; wallet tests skip themselves), then ctest (test_bitcoin, one ctest test per Boost.Test suite, and the secp256k1/univalue tests), last so its summary is the report's. Excluded under both compilers: feature_reindex_init and feature_reindex_readonly (they make the data directory read-only, which root ignores) and univalue_object_test (its BOOST_CHECK macros are assert()s, which the Release (NDEBUG) build compiles out with their side effects; the control dies with SIGILL)."
 
 [grpc]
