@@ -858,13 +858,30 @@ impl Cg<'_> {
                 if self.is_glvalue(e) && !ast.types.is_function(q) =>
             {
                 // A `NoOp` visits its operand (`EmitCheckedLValue` +
-                // `EmitLoadOfScalar`); an `LValueBitCast` loads unchecked.
-                let lv = if ck == CastKind::NoOp {
-                    self.emit_checked_lvalue(e, Tck::Load)?
+                // `EmitLoadOfScalar` of the innermost non-`NoOp` glvalue,
+                // so `return p;`'s implicit-move xvalue of a parameter is
+                // a declaration reference, unchecked); an `LValueBitCast`
+                // loads unchecked.
+                if ck == CastKind::NoOp {
+                    let mut inner = s;
+                    while ast.exprs.get(inner).kind().is_cast()
+                        && ast.exprs.cast_kind(inner) == CastKind::NoOp
+                        && self.is_glvalue(inner)
+                    {
+                        inner = self.sub(inner);
+                    }
+                    if ast.exprs.get(inner).kind() == ExprKind::ArraySubscriptExpr {
+                        self.f.ub_accessed = Some(inner);
+                    }
+                    let lv = self.emit_lvalue(e);
+                    self.f.ub_accessed = None;
+                    let lv = lv?;
+                    self.ub_check_lv(inner, lv, Tck::Load)?;
+                    self.load_lv_at(lv, self.ub_expr_loc(inner))?
                 } else {
-                    self.emit_lvalue(e)?
-                };
-                self.load_lv_at(lv, self.ub_expr_loc(e))?
+                    let lv = self.emit_lvalue(e)?;
+                    self.load_lv_at(lv, self.ub_expr_loc(e))?
+                }
             }
             CastKind::NoOp
             | CastKind::BitCast

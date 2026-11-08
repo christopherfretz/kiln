@@ -2256,11 +2256,31 @@ impl Cg<'_> {
                     e = if self.ub_int(ast.exprs.get(r).ty()) { l } else { r };
                 }
                 ExprKind::CXXMemberCallExpr => e = ast.exprs.callee(e),
+                // clang `CXXOperatorCallExpr::getExprLoc`: the begin
+                // location for `new`/`delete`, `->`, `()`, `[]`, `co_await`
+                // and `++`/`--`, else the operator token.
+                ExprKind::CXXOperatorCallExpr => {
+                    use kiln_ast::names::OverloadedOperator as O;
+                    let op = ast.exprs.operator_call_op(e);
+                    let begin = matches!(
+                        op,
+                        O::New
+                            | O::Delete
+                            | O::ArrayNew
+                            | O::ArrayDelete
+                            | O::Arrow
+                            | O::Call
+                            | O::Subscript
+                            | O::Coawait
+                            | O::PlusPlus
+                            | O::MinusMinus
+                    );
+                    return if begin { Some(ast.begin_loc(e)) } else { self.loc_of(e) };
+                }
                 ExprKind::MemberExpr
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator
-                | ExprKind::UnaryOperator
-                | ExprKind::CXXOperatorCallExpr => return self.loc_of(e),
+                | ExprKind::UnaryOperator => return self.loc_of(e),
                 _ => return Some(ast.begin_loc(e)),
             }
         }
