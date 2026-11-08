@@ -1481,7 +1481,7 @@ impl Fir {
                     V::C(c) => Some(c),
                     V::P(n) => ph[n as usize],
                 };
-                if let (Some(Some(id)), Some(addr)) = (vmap[*i as usize].map(|v| v.as_inst()), addr)
+                if let (Some(Some(id)), Some(addr)) = (vmap[*i as usize].map(Value::as_inst), addr)
                 {
                     let rec = kiln_llvm::DbgRecord {
                         kind: kiln_llvm::DbgRecordKind::Declare,

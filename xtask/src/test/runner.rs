@@ -261,10 +261,7 @@ impl Test<'_> {
                 format!("not supported by this compiler (`expect: {name}` needs kiln or clang)");
             return (Status::Skip, Some(reason), String::new());
         }
-        if spec.expect == Expect::Debugger
-            && let Some(r) =
-                debugger_skip(spec.gdb.commands.is_empty(), spec.lldb.commands.is_empty())
-        {
+        if let Some(r) = debugger_skip(&spec) {
             return (Status::Skip, Some(r), String::new());
         }
         if let Some(dump) = DumpKind::of(spec.expect) {
@@ -1444,10 +1441,6 @@ fn ir_target_flag(kind: DumpKind, spec: &TestSpec, host: &str) -> Option<String>
         .then(|| format!("--target={host}-unknown-linux-gnu"))
 }
 
-/// An LLVM module without what differs between producers but not in the
-/// program: comment lines and trailing comments (`; preds = ...`), the
-/// `; ModuleID` and `source_filename` lines, and `!llvm.ident` with its
-/// `"... version ..."` string node (`spec/harness.md` "IR tests").
 /// The debugger binary for `gdb`/`lldb` scripts: `gdb`, else `lldb-19`
 /// then `lldb`, on `PATH`.
 fn debugger_program(name: &str) -> Option<PathBuf> {
@@ -1457,9 +1450,12 @@ fn debugger_program(name: &str) -> Option<PathBuf> {
 }
 
 /// Why a `debugger` test cannot run here: a debugger it drives is missing.
-fn debugger_skip(no_gdb: bool, no_lldb: bool) -> Option<String> {
-    for (name, unused) in [("gdb", no_gdb), ("lldb", no_lldb)] {
-        if !unused && debugger_program(name).is_none() {
+fn debugger_skip(spec: &TestSpec) -> Option<String> {
+    if spec.expect != Expect::Debugger {
+        return None;
+    }
+    for (name, sc) in [("gdb", &spec.gdb), ("lldb", &spec.lldb)] {
+        if !sc.commands.is_empty() && debugger_program(name).is_none() {
             return Some(format!("requires `{name}` on PATH (`expect: debugger`)"));
         }
     }
@@ -1470,14 +1466,13 @@ fn debugger_skip(no_gdb: bool, no_lldb: bool) -> Option<String> {
 /// contains (checks match successive lines, in order).
 fn first_missing_check<'c>(out: &str, checks: &'c [String]) -> Option<&'c str> {
     let mut lines = out.lines();
-    for c in checks {
-        if !lines.by_ref().any(|l| l.contains(c.as_str())) {
-            return Some(c);
-        }
-    }
-    None
+    checks.iter().find(|c| !lines.by_ref().any(|l| l.contains(c.as_str()))).map(String::as_str)
 }
 
+/// An LLVM module without what differs between producers but not in the
+/// program: comment lines and trailing comments (`; preds = ...`), the
+/// `; ModuleID` and `source_filename` lines, and `!llvm.ident` with its
+/// `"... version ..."` string node (`spec/harness.md` "IR tests").
 fn ir_normalize(ir: &str) -> String {
     let mut out = String::new();
     for line in ir.lines() {

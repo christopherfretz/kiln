@@ -1382,31 +1382,37 @@ impl<'a> Printer<'a> {
             w.write_char('\n')?;
         } else {
             self.attachments(w, f.md.iter().copied(), " ")?;
-            w.write_str(" {")?;
-            for (bi, &bb) in f.layout.iter().enumerate() {
-                let name = &f.blocks[bb.index()].name;
-                if !name.is_empty() {
-                    w.write_char('\n')?;
-                    write_llvm_name(w, '\0', name)?;
-                    w.write_char(':')?;
-                } else if bi != 0 {
-                    w.write_char('\n')?;
-                    write_u64(w, u64::from(self.local.blocks[bb.index()]))?;
-                    w.write_char(':')?;
-                }
-                w.write_char('\n')?;
-                for &i in &f.blocks[bb.index()].insts {
-                    for r in f.debug_records(i) {
-                        self.debug_record(w, r)?;
-                    }
-                    self.instruction(w, f, i)?;
-                    w.write_char('\n')?;
-                }
-            }
-            w.write_str("}\n")?;
+            self.function_body(w, fid)?;
         }
         self.cur = None;
         Ok(())
+    }
+
+    /// A definition's ` {`, blocks and `}` line.
+    fn function_body(&mut self, w: Out<'_>, fid: FuncId) -> fmt::Result {
+        let f = &self.m.funcs[fid.index()];
+        w.write_str(" {")?;
+        for (bi, &bb) in f.layout.iter().enumerate() {
+            let name = &f.blocks[bb.index()].name;
+            if !name.is_empty() {
+                w.write_char('\n')?;
+                write_llvm_name(w, '\0', name)?;
+                w.write_char(':')?;
+            } else if bi != 0 {
+                w.write_char('\n')?;
+                write_u64(w, u64::from(self.local.blocks[bb.index()]))?;
+                w.write_char(':')?;
+            }
+            w.write_char('\n')?;
+            for &i in &f.blocks[bb.index()].insts {
+                for r in f.debug_records(i) {
+                    self.debug_record(w, r)?;
+                }
+                self.instruction(w, f, i)?;
+                w.write_char('\n')?;
+            }
+        }
+        w.write_str("}\n")
     }
 
     /// `    #dbg_declare(T v, !var, !DIExpression(...), !loc)` and a newline.

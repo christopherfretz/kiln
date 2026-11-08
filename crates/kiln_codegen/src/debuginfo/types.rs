@@ -5,13 +5,13 @@ use kiln_abi::mangle;
 use kiln_ast::attr::AttrKind;
 use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{
-    Access, DeclFlags, DeclKind, DefinitionBits as B, FnStorage, TagKind, VarEvalState,
+    Access, DeclFlags, DeclKind, DefinitionBits as B, FnSpec, FnStorage, TagKind, VarEvalState,
 };
 use kiln_ast::dump::AstNames;
 use kiln_ast::lambda::CaptureKind;
 use kiln_ast::names::DeclNameView;
 use kiln_ast::types::{
-    ArgView, BuiltinType as T, FuncProto, RefQual, TypeView, write_arg_list_debug,
+    ArgView, BuiltinType as T, FuncProto, RefQual, TemplateArg, TypeView, write_arg_list_debug,
 };
 use kiln_ast::{ConstValueId, DeclId, QualType};
 use kiln_llvm::{MdField, MdNode, MetadataId};
@@ -21,7 +21,7 @@ use crate::module::Cg;
 
 const PTR: &str = "DW_TAG_pointer_type";
 
-impl<'a> Cg<'a> {
+impl Cg<'_> {
     fn di_cu(&self) -> MetadataId {
         self.di.as_deref().map_or_else(|| super::unreachable_md(), |d| d.cu)
     }
@@ -111,7 +111,8 @@ impl<'a> Cg<'a> {
             return n;
         }
         let scope = self.di_scope_nocu(first);
-        let inline = self.ast.decls.namespace(first).is_some_and(|n| n.is_inline());
+        let inline =
+            self.ast.decls.namespace(first).is_some_and(kiln_ast::decl::NamespaceData::is_inline);
         let mut f = Fields::default().nn("scope", scope);
         let name = self.di_ident(first);
         if !name.is_empty() {
@@ -642,8 +643,8 @@ impl<'a> Cg<'a> {
         let tag = match r.tag {
             TagKind::Union => "DW_TAG_union_type",
             TagKind::Class => "DW_TAG_class_type",
-            _ if bits.contains(B::LAMBDA) => "DW_TAG_class_type",
-            _ => "DW_TAG_structure_type",
+            TagKind::Struct if bits.contains(B::LAMBDA) => "DW_TAG_class_type",
+            TagKind::Struct => "DW_TAG_structure_type",
         };
         let mut flags = vec![if kiln_abi::call::can_pass_in_registers(ast, def) {
             "DIFlagTypePassByValue"
@@ -674,7 +675,7 @@ impl<'a> Cg<'a> {
         let mut els = Vec::new();
         // Bases (clang `CollectCXXBases`).
         let mut seen = Vec::new();
-        let bases: Vec<_> = ast.decls.bases(def, &ast.lists).cloned().collect();
+        let bases: Vec<_> = ast.decls.bases(def, &ast.lists).copied().collect();
         for b in bases {
             let Some(brd) = ast.types.as_record(ast.types.canonical(b.ty)) else { continue };
             let brd = ast.first(brd);
@@ -1004,21 +1005,21 @@ impl<'a> Cg<'a> {
         let implicit = n.has(DeclFlags::IMPLICIT);
         let (file, line) =
             if implicit { (None, 0) } else { (Some(self.di_file(n.loc())), self.di_line(n.loc())) };
-        let spec = |p: fn(kiln_ast::decl::FnSpec) -> bool| {
+        let spec = |p: fn(FnSpec) -> bool| {
             ast.redecls_of(first).any(|r| ast.decls.function(r).is_some_and(|f| p(f.spec)))
         };
         let mut sp: Vec<&str> = Vec::new();
         let mut fl: Vec<&str> = Vec::new();
         let mut vindex = None;
-        if spec(|s| s.is_virtual()) {
-            sp.push(if spec(|s| s.is_pure()) { "DISPFlagPureVirtual" } else { "DISPFlagVirtual" });
+        if spec(FnSpec::is_virtual) {
+            sp.push(if spec(FnSpec::is_pure) { "DISPFlagPureVirtual" } else { "DISPFlagVirtual" });
             vindex = Some(if kind == DeclKind::CXXDestructor {
                 0
             } else {
                 self.method_vtable_index(first, None).unwrap_or(0)
             });
         }
-        if spec(|s| s.is_deleted()) {
+        if spec(FnSpec::is_deleted) {
             sp.push("DISPFlagDeleted");
         }
         let fp = match ast.types.view(self.di_unwrap(n.ty()?).ty()) {
@@ -1036,7 +1037,7 @@ impl<'a> Cg<'a> {
         }
         fl.extend(self.di_member_access(first));
         if matches!(kind, DeclKind::CXXConstructor | DeclKind::CXXConversion)
-            && spec(|s| s.is_explicit())
+            && spec(FnSpec::is_explicit)
         {
             fl.push("DIFlagExplicit");
         }
@@ -1092,7 +1093,7 @@ impl<'a> Cg<'a> {
         while let Some(x) = c {
             match ast.decls.get(x).kind() {
                 DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
-                    c = ast.decls.get(x).ctx()
+                    c = ast.decls.get(x).ctx();
                 }
                 DeclKind::Function
                 | DeclKind::CXXMethod
@@ -1113,7 +1114,7 @@ impl<'a> Cg<'a> {
         let info = ast.template_info(si.template)?;
         let params: Vec<DeclId> =
             ast.lists.iter::<DeclId>(ast.templates.param_list(info.params).params).collect();
-        let args: Vec<ArgView> = ast.types.args(si.args).iter().map(|a| a.view()).collect();
+        let args: Vec<ArgView> = ast.types.args(si.args).iter().map(TemplateArg::view).collect();
         let mut ops = Vec::new();
         for (i, a) in args.into_iter().enumerate() {
             let name = params.get(i).map(|&p| self.di_ident(p)).unwrap_or_default();
@@ -1178,7 +1179,8 @@ impl<'a> Cg<'a> {
                 Some(self.m.md_specialized("DITemplateValueParameter", false, f.0))
             }
             ArgView::Pack(l) => {
-                let args: Vec<ArgView> = self.ast.types.args(l).iter().map(|a| a.view()).collect();
+                let args: Vec<ArgView> =
+                    self.ast.types.args(l).iter().map(TemplateArg::view).collect();
                 let ops: Vec<_> = args.into_iter().map(|a| self.di_template_arg("", a)).collect();
                 let v = self.m.md_tuple(&ops);
                 let f = Fields::default().raw("tag", "DW_TAG_GNU_template_parameter_pack").0;

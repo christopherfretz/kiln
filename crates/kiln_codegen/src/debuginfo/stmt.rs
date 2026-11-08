@@ -7,11 +7,12 @@ use kiln_ast::{ExprId, StmtId};
 use kiln_llvm::MetadataId;
 use kiln_source::Loc;
 
+use super::DbgSaved;
 use crate::module::Cg;
 use crate::stmt::Scope;
 
 impl Cg<'_> {
-    /// clang `Expr::getExprLoc` (kiln_sema `expr_loc`).
+    /// clang `Expr::getExprLoc` (`kiln_sema` `expr_loc`).
     pub(crate) fn di_expr_loc(&self, mut e: ExprId) -> Loc {
         use kiln_ast::names::OverloadedOperator as O;
         let (ast, exprs) = (self.ast, &self.ast.exprs);
@@ -50,7 +51,7 @@ impl Cg<'_> {
     /// clang `ApplyDebugLocation DL(CGF, E)` at an expression emitter's
     /// `Visit`; pass the result to [`Cg::dbg_restore`].
     #[inline]
-    pub(crate) fn dbg_apply_expr(&mut self, e: ExprId) -> Option<Option<MetadataId>> {
+    pub(crate) fn dbg_apply_expr(&mut self, e: ExprId) -> Option<DbgSaved> {
         if !self.dbg_on() {
             return None;
         }
@@ -59,10 +60,10 @@ impl Cg<'_> {
     }
 
     /// clang `ApplyDebugLocation::CreateEmpty`.
-    pub(crate) fn dbg_apply_empty(&mut self) -> Option<Option<MetadataId>> {
+    pub(crate) fn dbg_apply_empty(&mut self) -> Option<DbgSaved> {
         let orig = self.f.fir.dbg.as_deref()?.loc;
         self.f.fir.set_dbg_loc(None);
-        Some(orig)
+        Some(DbgSaved(orig))
     }
 
     /// clang `Stmt::getBeginLoc`.

@@ -165,6 +165,11 @@ impl Fields {
         if f.is_empty() { self.raw("spFlags", "0") } else { self.raw("spFlags", &f.join(" | ")) }
     }
 }
+/// The location an `ApplyDebugLocation` replaced (`None` when the builder
+/// had none), for [`Cg::dbg_restore`].
+#[must_use]
+#[derive(Clone, Copy)]
+pub(crate) struct DbgSaved(Option<MetadataId>);
 
 /// The module's debug information state (clang `CGDebugInfo`); present
 /// only when [`DebugOptions::enabled`].
@@ -427,9 +432,9 @@ impl<'a> Cg<'a> {
     /// clang `ApplyDebugLocation(CGF, Loc)`'s constructor: returns the
     /// location to restore (`None` when the function has none).
     /// Expression locations are always on (clang
-    /// `getExpressionLocationsEnabled` without CodeView).
+    /// `getExpressionLocationsEnabled` without `CodeView`).
     #[inline]
-    pub(crate) fn dbg_apply(&mut self, loc: Loc) -> Option<Option<MetadataId>> {
+    pub(crate) fn dbg_apply(&mut self, loc: Loc) -> Option<DbgSaved> {
         let d = self.f.fir.dbg.as_deref()?;
         let orig = d.loc;
         if loc == Loc::INVALID {
@@ -439,23 +444,23 @@ impl<'a> Cg<'a> {
         } else {
             self.dbg_emit_location(loc);
         }
-        Some(orig)
+        Some(DbgSaved(orig))
     }
 
     /// clang `ApplyDebugLocation::CreateDefaultArtificial(CGF, Loc)`:
     /// only when the builder has a location.
-    pub(crate) fn dbg_apply_default_artificial(&mut self, loc: Loc) -> Option<Option<MetadataId>> {
+    pub(crate) fn dbg_apply_default_artificial(&mut self, loc: Loc) -> Option<DbgSaved> {
         let d = self.f.fir.dbg.as_deref()?;
         if d.loc.is_none() {
-            return Some(None);
+            return Some(DbgSaved(None));
         }
         self.dbg_apply(loc)
     }
 
     /// clang `~ApplyDebugLocation`.
     #[inline]
-    pub(crate) fn dbg_restore(&mut self, saved: Option<Option<MetadataId>>) {
-        if let Some(l) = saved {
+    pub(crate) fn dbg_restore(&mut self, saved: Option<DbgSaved>) {
+        if let Some(DbgSaved(l)) = saved {
             self.f.fir.set_dbg_loc(l);
         }
     }

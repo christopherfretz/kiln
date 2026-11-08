@@ -23,7 +23,7 @@ pub(crate) struct VarSlot {
     pub deref: bool,
 }
 
-impl<'a> Cg<'a> {
+impl Cg<'_> {
     pub(crate) fn di_reduced(&self) -> bool {
         self.di.is_some() && self.opts.debug.kind > DebugInfoKind::LineTablesOnly
     }
@@ -484,8 +484,8 @@ impl<'a> Cg<'a> {
     pub(crate) fn di_finish_function(&mut self, end: Loc) {
         let prologue = self.f.cl.prologue;
         let has_cleanups = self.f.cl.depth() != prologue;
-        let only_markers =
-            has_cleanups && self.f.cl.stack[prologue..].iter().all(|s| s.is_lifetime_marker());
+        let only_markers = has_cleanups
+            && self.f.cl.stack[prologue..].iter().all(crate::cleanup::Scope::is_lifetime_marker);
         let ret_used = self.f.ret_block.is_some_and(|rb| self.f.fir.block_uses(rb) > 0);
         let Some(x) = self.f.fir.dbg.as_deref_mut() else { return };
         x.ret_dbg = !has_cleanups || only_markers;
