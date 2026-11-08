@@ -8,9 +8,9 @@
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 12:30 error "'weak_import' attribute is not supported by kiln yet"
-//@ diag: 13:30 error "'clang::musttail' attribute is not supported by kiln yet"
+//@ diag: 13:23 error "'selectany' attribute is not supported by kiln yet"
 //@ diag: 14:23 error "'ms_struct' attribute is not supported by kiln yet"
 # 12 "tests/conformance/dcl.attr.unknown/class-a-error-in-system-header.cpp" 3
 extern int wi __attribute__((weak_import));
-int g(int); int f(int x) { [[clang::musttail]] return g(x); }
+int sa __attribute__((selectany)) = 1;
 struct __attribute__((ms_struct)) S { char c : 4; int i : 4; };

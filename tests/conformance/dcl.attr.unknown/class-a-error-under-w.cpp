@@ -8,9 +8,9 @@
 //@ expect: compile-fail
 //@ strict-diags
 //@ args: -w
-//@ diag: 13:30 error "'clang::musttail' attribute is not supported by kiln yet"
+//@ diag: 13:23 error "'selectany' attribute is not supported by kiln yet"
 //@ diag: 14:30 error "'weak_import' attribute is not supported by kiln yet"
-int g(int); int f(int x) { [[clang::musttail]] return g(x); }
+int sa __attribute__((selectany)) = 1;
 extern int wi __attribute__((weak_import));
 [[clang::no_sanitize("address")]] int sanitized();
 int nc __attribute__((nocommon));
