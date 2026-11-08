@@ -353,7 +353,9 @@ impl Sema<'_, '_> {
             // a template parameter object or an object no declaration
             // names, as its splice does ([meta.reflection.substitute]/
             // [temp.arg.nontype]; `splice_object.rs`).
-            Reflectee::Object(p) => self.splice_object_expr(p, loc).map(|e| TemplateArg::expr(e, None)),
+            Reflectee::Object(p) => {
+                self.splice_object_expr(p, loc).map(|e| TemplateArg::expr(e, None))
+            }
             Reflectee::Decl(d)
                 if matches!(
                     self.kind_of(d),
