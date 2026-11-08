@@ -506,6 +506,30 @@ notes = "WP-792. C++20 field reflection by structured bindings and __PRETTY_FUNC
 # as CMake tests by shims/boost-jamfile-tests.cmake). Tests are built by the
 # `tests` target (on the jobserver) and run by ctest -j 4.
 
+[boost_heavy]
+url = "https://github.com/boostorg/boost"
+tag = "boost-1.90.0"
+checkout = "boost"
+submodules = true
+build = "cmake"
+cxx_std = 20
+configure = [
+  "-DBUILD_TESTING=ON", "-DBUILD_SHARED_LIBS=OFF", "-DBOOST_ENABLE_MPI=OFF", "-DBOOST_ENABLE_PYTHON=OFF",
+  "-DBOOST_INCLUDE_LIBRARIES=asio;beast;cobalt;graph;geometry;math",
+  "-DCMAKE_PROJECT_Boost_INCLUDE=@OSS@/shims/boost-jamfile-tests.cmake",
+  "-DKILN_BOOST_JAMFILE_LIBRARIES=asio;graph;math",
+  "-DKILN_BOOST_JAMFILE_SKIP_asio=_select$",
+  "-DKILN_BOOST_JAMFILE_FORCE_math=ON",
+  "-DKILN_BOOST_JAMFILE_SUBSET_math=8|constexpr|float128|lanczos|ccmath",
+  "-DKILN_BOOST_JAMFILE_LINK_math=Boost::unit_test_framework",
+]
+build_targets = ["tests"]
+test = "ctest -j 4 --output-on-failure --timeout 300"
+c_compiler = "clang-19"
+wave = 4
+verified = false
+notes = "WP-812: Asio, Beast, Cobalt, Graph, Geometry, Math. docs/status/oss/boost_heavy.md."
+
 [boost_meta]
 url = "https://github.com/boostorg/boost"
 tag = "boost-1.90.0"
