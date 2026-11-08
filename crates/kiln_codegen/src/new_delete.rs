@@ -517,7 +517,9 @@ impl Cg<'_> {
             ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::AddrOf => {
                 self.lvalue_from_decl(ast.exprs.operand(e))
             }
-            ExprKind::CallExpr => self.addressof_call_arg(e).is_some_and(|s| self.lvalue_from_decl(s)),
+            ExprKind::CallExpr => {
+                self.addressof_call_arg(e).is_some_and(|s| self.lvalue_from_decl(s))
+            }
             ExprKind::BinaryOperator => self.pointer_arith_operands(e).is_some_and(|(lp, _)| {
                 let [l, r] = ast.exprs.operands(e);
                 self.pointer_from_decl(if lp { l } else { r })

@@ -1783,7 +1783,8 @@ impl Cg<'_> {
                 }
                 ck @ (CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase) => {
                     let sq = ast.exprs.get(s).ty();
-                    if let Some(derived) = ast.types.pointee(sq).and_then(|t| ast.types.as_record(t))
+                    if let Some(derived) =
+                        ast.types.pointee(sq).and_then(|t| ast.types.as_record(t))
                     {
                         let r = self.pointer_with_alignment(s)?;
                         let (vb, off) = self.base_path(e, derived)?;
@@ -1844,7 +1845,12 @@ impl Cg<'_> {
     /// aligned at the constant byte offset from it, or at any element
     /// for a variable index (clang `getArrayElementAlign`). The operands
     /// are emitted in source order.
-    fn pointer_arith_with_alignment(&mut self, e: ExprId, ptr_first: bool, sub: bool) -> R<PtrAlign> {
+    fn pointer_arith_with_alignment(
+        &mut self,
+        e: ExprId,
+        ptr_first: bool,
+        sub: bool,
+    ) -> R<PtrAlign> {
         let ast = self.ast;
         let [l, r] = ast.exprs.operands(e);
         let (base, iv) = if ptr_first {
