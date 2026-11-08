@@ -586,6 +586,11 @@ mod tests {
 
     #[test]
     fn unsupported() {
+        let (r, e) = resolve("-fsanitize=unsigned-integer-overflow,unsigned-shift-base");
+        assert_eq!(e, []);
+        assert!(
+            r.opts.kinds.has(S::UNSIGNED_SHIFT_BASE) && r.opts.recover.has(S::UNSIGNED_SHIFT_BASE)
+        );
         let (_, e) = resolve("-fsanitize=cfi-icall,address");
         assert_eq!(e, [ArgError::UnsupportedByKiln("-fsanitize=cfi-icall".into())]);
         let (_, e) = resolve("-fsanitize=cfi -fno-sanitize=cfi");

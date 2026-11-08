@@ -1330,3 +1330,50 @@ fn multiversion_unsupported_errors() {
     assert_eq!(lines, [format!("t.cpp:2:18: {tv}"), format!("t.cpp:3:25: {tv}")], "{err}");
     assert_eq!(o.status.code(), Some(1));
 }
+
+/// spec/codegen.md "Sanitizers" (WP-675): the frontend's ASan and MSan
+/// output: function attributes, the `no_sanitize` opt-outs, the global
+/// `no_sanitize_address`/`sanitize_address_dyninit` markers and the
+/// use-after-scope lifetime markers. (Not an `expect: ir` test: clang keeps
+/// local value names under ASan/MSan and kiln does not name values.)
+#[test]
+fn sanitizer_frontend_attributes() {
+    let d = scratch("sanitize");
+    let src = "int g = 1;\n\
+               __attribute__((no_sanitize(\"address\"))) int ng = 2;\n\
+               extern int ext;\n\
+               int dyn = ext + 1;\n\
+               void use(int*);\n\
+               int f(int x) { int a[4]; use(a); return a[x] + g; }\n\
+               __attribute__((no_sanitize(\"address\", \"memory\"))) int f2(int x) { return x; }\n\
+               __attribute__((disable_sanitizer_instrumentation)) int f3(int x) { return x; }\n";
+    std::fs::write(d.join("s.cpp"), src).unwrap();
+    let ir = |san: &str| {
+        let o = kiln_in(
+            &d,
+            &[san, "-Xclang", "-disable-llvm-passes", "-S", "-emit-llvm", "-o", "-", "s.cpp"],
+        );
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{san}");
+        text(&o.stdout)
+    };
+    // The attribute group of the function `name`'s definition.
+    let attrs = |ll: &str, name: &str| -> String {
+        let def = ll.lines().find(|l| l.starts_with("define") && l.contains(name)).unwrap();
+        let group = def.rsplit(' ').nth(1).unwrap();
+        let line = format!("attributes {group} = ");
+        ll.lines().find(|l| l.starts_with(&line)).unwrap().to_owned()
+    };
+    let ll = ir("-fsanitize=address");
+    assert!(ll.contains("@ng = dso_local global i32 2, no_sanitize_address, align 4"), "{ll}");
+    assert!(ll.contains("@dyn = dso_local global i32 0, sanitize_address_dyninit, align 4"));
+    assert!(ll.contains("@g = dso_local global i32 1, align 4"), "{ll}");
+    assert!(attrs(&ll, "@_Z1fi").contains(" sanitize_address "), "{ll}");
+    assert!(!attrs(&ll, "@_Z2f2i").contains("sanitize_"), "{ll}");
+    assert!(attrs(&ll, "@_Z2f3i").contains("disable_sanitizer_instrumentation"), "{ll}");
+    assert!(!attrs(&ll, "@_Z2f3i").contains(" sanitize_address"), "{ll}");
+    assert!(ll.contains("call void @llvm.lifetime.start.p0("), "{ll}");
+    let ll = ir("-fsanitize=memory");
+    assert!(attrs(&ll, "@_Z1fi").contains(" sanitize_memory "), "{ll}");
+    assert!(!attrs(&ll, "@_Z2f2i").contains("sanitize_"), "{ll}");
+    assert!(!ll.contains("no_sanitize_address"), "{ll}");
+}
