@@ -15,7 +15,9 @@ use kiln_ast::consts::{ByteImage, ConstValue, Member, PrintEnv, PtrBase, Scalar,
 use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage};
 use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, ExprId, QualType, TemplateNameId};
 use kiln_ast::names::{DeclNameView, OverloadedOperator};
-use kiln_ast::types::{ArgView, BuiltinType, RefQual, TemplateName, TypeView, VectorKind};
+use kiln_ast::types::{
+    ArgView, BuiltinType, ExprOperand, RefQual, TemplateName, TypeView, VectorKind,
+};
 use kiln_source::fx::FxHashMap;
 
 mod constraint;
@@ -2958,21 +2960,11 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.out.push_str("EE");
     }
 
-    fn compound(&mut self, q: QualType, view: TypeView) {
+    /// `A [<bound>] _ <element type>` for the three array views of
+    /// [`Mangler::compound`].
+    fn array_type(&mut self, q: QualType, view: TypeView) {
         let ast = self.ast;
         match view {
-            TypeView::Pointer(p) => {
-                self.out.push('P');
-                self.ty(p);
-            }
-            TypeView::LValueRef(p) => {
-                self.out.push('R');
-                self.ty(p);
-            }
-            TypeView::RValueRef(p) => {
-                self.out.push('O');
-                self.ty(p);
-            }
             TypeView::ConstantArray(_) => {
                 let n = ast.types.array_size(q).unwrap_or(0);
                 self.out.push('A');
@@ -2992,10 +2984,38 @@ impl<'a, 'b> Mangler<'a, 'b> {
             // names a template parameter (`T[N]`) keeps the overloads on
             // `const char (&)[N]` and `const wchar_t (&)[N]` apart.
             TypeView::DependentSizedArray { elem, size } => {
+                let size = match size {
+                    ExprOperand::Profile(p) => {
+                        ast.types.expr_origin(q.ty(), p).map_or(size, ExprOperand::Expr)
+                    }
+                    ExprOperand::Expr(_) => size,
+                };
                 self.dependent_array_bound(size);
                 self.out.push('_');
                 self.ty(elem);
             }
+            _ => {}
+        }
+    }
+
+    fn compound(&mut self, q: QualType, view: TypeView) {
+        let ast = self.ast;
+        match view {
+            TypeView::Pointer(p) => {
+                self.out.push('P');
+                self.ty(p);
+            }
+            TypeView::LValueRef(p) => {
+                self.out.push('R');
+                self.ty(p);
+            }
+            TypeView::RValueRef(p) => {
+                self.out.push('O');
+                self.ty(p);
+            }
+            TypeView::ConstantArray(_)
+            | TypeView::IncompleteArray(_)
+            | TypeView::DependentSizedArray { .. } => self.array_type(q, view),
             TypeView::Function(p) => self.function_type(q, &p, true),
             TypeView::MemberPointer { pointee, class } => self.member_pointer(pointee, class),
             TypeView::Complex(e) => {
@@ -3041,14 +3061,23 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.ty(pattern);
             }
             TypeView::Builtin(b) => self.out.push_str(self.builtin_str(b)),
-            TypeView::TemplateSpecialization { name, args, .. } => self.dependent_tst(name, args),
+            // A value-dependent argument mangles as the expression written
+            // by the spelling that created the canonical type (clang keeps
+            // that spelling's expressions in its canonical node, spec/abi.md
+            // §8.15): the origin list in place of the canonical profiles.
+            TypeView::TemplateSpecialization { name, args, .. } => {
+                self.dependent_tst(name, ast.types.arg_origin(q.ty()).unwrap_or(args));
+            }
             TypeView::DependentName { keyword, nns, name } => {
                 self.dependent_name(keyword, nns, name);
             }
             TypeView::DependentTemplateSpecialization { nns, name, args, .. } => {
+                let args = ast.types.arg_origin(q.ty()).unwrap_or(args);
                 self.dependent_template_spec(nns, name, args);
             }
-            TypeView::DependentDecltype(p) => self.dependent_decltype(ast.types.profile_expr(p)),
+            TypeView::DependentDecltype(p) => {
+                self.dependent_decltype(ast.types.expr_origin(q.ty(), p));
+            }
             // A type-dependent GNU `typeof(e)` (clang: a bare vendor name).
             TypeView::TypeOf { .. } => self.out.push_str("u6typeof"),
             // A dependent transform: `u <vendor builtin name> I <base> E`.
