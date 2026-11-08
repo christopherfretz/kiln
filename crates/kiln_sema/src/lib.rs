@@ -522,6 +522,11 @@ pub struct Sema<'a, 'sm> {
     /// that is a function or array is diagnosed there (clang's
     /// `FunctionTypeLoc` begin; [dcl.fct]/11, WP-222, WP-241).
     pub(crate) type_spec_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Where a function declared `noinline`, `always_inline` or
+    /// `flatten` begins (its leading attributes included; clang
+    /// `Decl::getBeginLoc`): the note of a statement attribute that
+    /// overrides it points there (WP-813).
+    pub(crate) inline_fn_begin_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// Where the outermost `&`/`&&` of a declaration of dependent
     /// reference type was written (`T &m;`): a substitution that forms
     /// a reference to `void` is diagnosed there (clang's
@@ -1193,6 +1198,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             type_spec_locs: kiln_source::fx::FxHashMap::default(),
+            inline_fn_begin_locs: kiln_source::fx::FxHashMap::default(),
             ref_locs: kiln_source::fx::FxHashMap::default(),
             inner_chunk_locs: kiln_source::fx::FxHashMap::default(),
             pending_chunk_loc: Loc::INVALID,

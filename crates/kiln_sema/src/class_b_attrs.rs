@@ -91,7 +91,9 @@ const TABLE: &[Entry] = &[
     e("no_speculative_load_hardening", AttrKind::NO_SPECULATIVE_LOAD_HARDENING, Clang),
     e("no_split_stack", AttrKind::NO_SPLIT_STACK, Gcc),
     e("no_stack_protector", AttrKind::NO_STACK_PROTECTOR, GccClang),
-    x86("nocf_check", AttrKind::NOCF_CHECK),
+    // Known on every target: without `-fcf-protection` (an error off
+    // x86) clang 19 warns it ignored before its target check.
+    e("nocf_check", AttrKind::NOCF_CHECK, Gcc),
     e("noduplicate", AttrKind::NODUPLICATE, Clang),
     e("noescape", AttrKind::NOESCAPE, Clang),
     e("nomerge", AttrKind::NOMERGE, Clang),
@@ -267,7 +269,6 @@ impl Sema<'_, '_> {
                             return None;
                         }
                     };
-                    let at = self.arg_loc(arg, loc);
                     if v < 0 {
                         if kind == AttrKind::PATCHABLE_FUNCTION_ENTRY {
                             let msg = self
@@ -278,19 +279,19 @@ impl Sema<'_, '_> {
                             return None;
                         }
                         if i == 0 {
-                            self.error(DiagId::sema_alignment_not_power_of_two, at);
+                            self.error(DiagId::sema_alignment_not_power_of_two, loc);
                             return None;
                         }
                     }
                     let mut u = u64::try_from(v.max(0)).unwrap_or(u64::MAX);
                     if kind == AttrKind::ASSUME_ALIGNED && i == 0 {
                         if !u.is_power_of_two() {
-                            self.error(DiagId::sema_alignment_not_power_of_two, at);
+                            self.error(DiagId::sema_alignment_not_power_of_two, loc);
                             return None;
                         }
                         if u > MAX_ALIGN {
                             let msg = self
-                                .diag(DiagId::sema_builtin_assume_aligned_too_big, at)
+                                .diag(DiagId::sema_builtin_assume_aligned_too_big, loc)
                                 .arg(MAX_ALIGN.to_string());
                             self.emit(msg);
                             u = MAX_ALIGN;
@@ -349,7 +350,6 @@ impl Sema<'_, '_> {
             }
             AttrKind::XRAY_LOG_ARGS | AttrKind::ALIGN_VALUE | AttrKind::CODE_ALIGN => {
                 let [arg] = args else { return count(self, "1") };
-                let at = self.arg_loc(arg, loc);
                 let v = match self.arg_int(arg) {
                     Ok(v) => v,
                     Err(false) => return None,
@@ -372,7 +372,7 @@ impl Sema<'_, '_> {
                     AttrKind::ALIGN_VALUE => {
                         let u = u64::try_from(v).unwrap_or(0);
                         if !u.is_power_of_two() {
-                            self.error(DiagId::sema_alignment_not_power_of_two, at);
+                            self.error(DiagId::sema_alignment_not_power_of_two, loc);
                             return None;
                         }
                         a = u32::try_from(u).unwrap_or(0);
@@ -497,6 +497,14 @@ impl Sema<'_, '_> {
         match node.kind {
             AttrKind::NOCF_CHECK if !self.cf_protection_branch && (func || var) => {
                 let msg = self.diag(DiagId::sema_nocf_check_ignored, node.loc);
+                self.emit(msg);
+                false
+            }
+            // Off x86 it is otherwise an unknown attribute.
+            AttrKind::NOCF_CHECK if !self.is_x86_target() => {
+                let msg = self
+                    .diag(DiagId::parse_unknown_attribute, node.loc)
+                    .arg(self.attr_shown(&node, n));
                 self.emit(msg);
                 false
             }
@@ -731,8 +739,8 @@ impl Sema<'_, '_> {
                 }) {
                     i64::try_from(p).unwrap_or(0) + 1 + i64::from(this)
                 } else {
-                    let at = Loc::from_raw(w[2]);
-                    let msg = self.diag(DiagId::sema_callback_argument_unknown, at).arg(text);
+                    let msg =
+                        self.diag(DiagId::sema_callback_argument_unknown, node.loc).arg(text);
                     self.emit(msg);
                     return false;
                 }
@@ -763,15 +771,17 @@ impl Sema<'_, '_> {
             return false;
         };
         let want = t.params(fproto).len();
-        if want != enc.len() - 1 {
-            let msg = if want <= 1 {
+        // clang names the payload count written, not the one wanted.
+        let have = enc.len() - 1;
+        if want != have {
+            let msg = if have <= 1 {
                 self.diag(DiagId::parse_attribute_wrong_arg_count, node.loc)
                     .arg(self.attr_shown(&node, "callback"))
-                    .arg(want.to_string())
+                    .arg(have.to_string())
             } else {
                 self.diag(DiagId::sema_attribute_wrong_number_arguments, node.loc)
                     .arg(q)
-                    .arg(want.to_string())
+                    .arg(have.to_string())
             };
             self.emit(msg);
             return false;
@@ -852,7 +862,7 @@ impl Sema<'_, '_> {
     ) -> Option<bool> {
         let node = *self.ast.attrs.get(a);
         let sub_kind = self.ast.stmts.get(sub).kind();
-        let begin = self.ast.stmts.get(sub).loc();
+        let begin = self.stmt_begin(sub);
         match node.kind {
             AttrKind::NOINLINE | AttrKind::ALWAYS_INLINE => {
                 let canonical =
@@ -922,7 +932,7 @@ impl Sema<'_, '_> {
         canonical: &str,
         other: Option<AttrKind>,
     ) -> bool {
-        let begin = self.ast.stmts.get(sub).loc();
+        let begin = self.stmt_begin(sub);
         let shown = format!("'{}'", self.attr_shown(&node, canonical));
         let mut calls = Vec::new();
         let complete = self.stmt_calls(sub, &mut calls);
@@ -954,7 +964,11 @@ impl Sema<'_, '_> {
                     "always_inline"
                 };
                 let fshown = format!("'{}'", self.attr_shown(&fa, fname));
-                let at = self.type_spec_locs.get(&r).copied().unwrap_or_else(|| self.ast.decls.get(r).loc());
+                let at = self
+                    .inline_fn_begin_locs
+                    .get(&r)
+                    .copied()
+                    .unwrap_or_else(|| self.ast.decls.get(r).loc());
                 let msg = self
                     .diag(DiagId::sema_stmt_attribute_precedence, begin)
                     .arg(shown.clone())
@@ -964,6 +978,15 @@ impl Sema<'_, '_> {
             }
         }
         true
+    }
+
+    /// Where statement `s` begins (an expression statement at its
+    /// expression's first token).
+    fn stmt_begin(&self, s: StmtId) -> Loc {
+        if self.ast.stmts.get(s).kind() == StmtKind::ExprStmt {
+            return self.begin_loc(self.ast.stmts.expr_stmt_expr(s));
+        }
+        self.ast.stmts.get(s).loc()
     }
 
     /// The call expressions in statement `s` (clang `CallExprFinder`,

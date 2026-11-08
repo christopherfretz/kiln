@@ -4343,6 +4343,14 @@ impl Sema<'_, '_> {
         {
             self.type_spec_locs.insert(f, tl);
         }
+        if d.attrs.iter().chain(&ds.attrs).any(|&a| {
+            matches!(
+                self.ast.attrs.get(a).kind,
+                AttrKind::NOINLINE | AttrKind::ALWAYS_INLINE | AttrKind::FLATTEN
+            )
+        }) {
+            self.inline_fn_begin_locs.insert(f, ds.lead_cxx11.unwrap_or(ds.loc));
+        }
         // The return type's innermost `*`/`[` ([`Sema::inner_chunk_locs`]).
         let chunk = Self::inner_chunk_loc(d);
         if chunk.is_valid()
@@ -4653,6 +4661,9 @@ impl Sema<'_, '_> {
                 self.check_tls_model_attrs(pd, &mut attrs);
                 attrs.retain(|&a| {
                     let node = *self.ast.attrs.get(a);
+                    if node.kind.is_class_b() {
+                        return self.check_class_b_attr(pd, DeclKind::ParmVar, a, node);
+                    }
                     if node.kind != AttrKind::RETURNS_TWICE {
                         return true;
                     }
