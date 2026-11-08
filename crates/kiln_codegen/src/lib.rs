@@ -73,6 +73,7 @@ pub mod x86_intrinsic_table {
     pub use kiln_llvm::intrinsics::TargetMem as Mem;
 }
 
+pub use builtins::{UNLOWERED_BUILTINS, is_unlowered_builtin};
 use kiln_abi::Target;
 use kiln_ast::Ast;
 use kiln_llvm::Module;
@@ -207,6 +208,9 @@ pub struct CodegenOptions {
     /// flag (`-f[no-]asynchronous-unwind-tables`, `-f[no-]unwind-tables`;
     /// clang `CodeGenOpts.UnwindTables`): `None` emits neither.
     pub unwind_tables: Option<UnwindTables>,
+    /// Which static and thread-local variables register their
+    /// destructors (`-f[no-]c++-static-destructors[=…]`; WP-805).
+    pub static_destructors: StaticDestructors,
     /// `-fno-plt`: a function declaration with no definition in the
     /// translation unit is `nonlazybind`, and the module carries
     /// `RtLibUseGOT` (clang `CodeGenOpts.NoPLT`).
@@ -450,6 +454,21 @@ impl FramePointer {
     }
 }
 
+/// Which variables with static or thread storage duration register
+/// their destructors (`-fc++-static-destructors=`; clang
+/// `LangOptions::RegisterStaticDestructorsKind`, `VarDecl::isNoDestroy`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StaticDestructors {
+    /// All of them (the default).
+    #[default]
+    All,
+    /// Only `thread_local` ones (`=thread-local`, clang 22).
+    ThreadLocal,
+    /// None of them (`-fno-c++-static-destructors`, `=none`), except
+    /// `[[clang::always_destroy]]` ones.
+    None,
+}
+
 /// clang's `LangOptions::ComplexRangeKind` (spec/abi.md §8.17): the
 /// algorithm for `_Complex` floating `*` and `/` when both operands are
 /// complex.
@@ -548,6 +567,7 @@ impl Default for CodegenOptions {
             stack_protector: StackProtector::Off,
             unwind_tables: Some(UnwindTables::Async),
             no_plt: false,
+            static_destructors: StaticDestructors::All,
             wrapv: false,
             wrapv_pointer: false,
             null_pointer_is_valid: false,

@@ -198,6 +198,7 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>) -> CodegenOptions {
         stack_protector: f.stack_protector(),
         unwind_tables: f.unwind_tables(a.predef.freestanding.unwrap_or(false)),
         no_plt: f.no_plt,
+        static_destructors: f.static_destructors,
         wrapv: f.wrapv(),
         wrapv_pointer: f.wrapv_pointer(a.predef.clang_compat == ClangCompat::Clang22),
         null_pointer_is_valid: f.null_pointer_is_valid(),

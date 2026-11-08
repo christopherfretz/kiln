@@ -143,6 +143,10 @@ fn lib_name(b: u32) -> Option<&'static str> {
         | id::NANS
         | id::NANSF
         | id::NANSL
+        | id::NANF16
+        | id::NANF128
+        | id::NANSF16
+        | id::NANSF128
         | id::ABORT
         | id::BCMP
         | id::WMEMCPY
@@ -362,6 +366,141 @@ pub(crate) fn is_complete(ast: &Ast, q: QualType) -> bool {
                 .is_some_and(|x| x.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE))
         })
     })
+}
+
+/// The builtins kiln declares but whose calls are still the error
+/// "code generation for X is not supported yet", sorted and separated by
+/// spaces (mostly the scalar and polymorphic `__builtin_neon_*` forms
+/// `arm_neon.h` wraps, and the ACLE system-register builtins): the
+/// driver's `__has_builtin` answers 0 for them (WP-805), and
+/// `kiln_driver/tests/builtin_lowering.rs` checks the list is exact.
+pub static UNLOWERED_BUILTINS: &str = "__builtin_arm_chkfeat __builtin_arm_prefetch \
+    __builtin_arm_rsr __builtin_arm_rsr64 __builtin_arm_rsrp __builtin_arm_trap __builtin_arm_wsr \
+    __builtin_arm_wsr64 __builtin_arm_wsrp __builtin_ia32_maskmovq __builtin_neon_vabdd_f64 \
+    __builtin_neon_vabds_f32 __builtin_neon_vabsd_s64 __builtin_neon_vadd_v \
+    __builtin_neon_vaddd_s64 __builtin_neon_vaddd_u64 __builtin_neon_vaddhn_v \
+    __builtin_neon_vaddq_p128 __builtin_neon_vaddq_v __builtin_neon_vcage_v \
+    __builtin_neon_vcaged_f64 __builtin_neon_vcageq_v __builtin_neon_vcages_f32 \
+    __builtin_neon_vcagt_v __builtin_neon_vcagtd_f64 __builtin_neon_vcagtq_v \
+    __builtin_neon_vcagts_f32 __builtin_neon_vcale_v __builtin_neon_vcaled_f64 \
+    __builtin_neon_vcaleq_v __builtin_neon_vcales_f32 __builtin_neon_vcalt_v \
+    __builtin_neon_vcaltd_f64 __builtin_neon_vcaltq_v __builtin_neon_vcalts_f32 \
+    __builtin_neon_vceqd_f64 __builtin_neon_vceqd_s64 __builtin_neon_vceqd_u64 \
+    __builtin_neon_vceqs_f32 __builtin_neon_vceqz_v __builtin_neon_vceqzd_f64 \
+    __builtin_neon_vceqzd_s64 __builtin_neon_vceqzd_u64 __builtin_neon_vceqzq_v \
+    __builtin_neon_vceqzs_f32 __builtin_neon_vcged_f64 __builtin_neon_vcged_s64 \
+    __builtin_neon_vcged_u64 __builtin_neon_vcges_f32 __builtin_neon_vcgez_v \
+    __builtin_neon_vcgezd_f64 __builtin_neon_vcgezd_s64 __builtin_neon_vcgezq_v \
+    __builtin_neon_vcgezs_f32 __builtin_neon_vcgtd_f64 __builtin_neon_vcgtd_s64 \
+    __builtin_neon_vcgtd_u64 __builtin_neon_vcgts_f32 __builtin_neon_vcgtz_v \
+    __builtin_neon_vcgtzd_f64 __builtin_neon_vcgtzd_s64 __builtin_neon_vcgtzq_v \
+    __builtin_neon_vcgtzs_f32 __builtin_neon_vcled_f64 __builtin_neon_vcled_s64 \
+    __builtin_neon_vcled_u64 __builtin_neon_vcles_f32 __builtin_neon_vclez_v \
+    __builtin_neon_vclezd_f64 __builtin_neon_vclezd_s64 __builtin_neon_vclezq_v \
+    __builtin_neon_vclezs_f32 __builtin_neon_vcls_v __builtin_neon_vclsq_v \
+    __builtin_neon_vcltd_f64 __builtin_neon_vcltd_s64 __builtin_neon_vcltd_u64 \
+    __builtin_neon_vclts_f32 __builtin_neon_vcltz_v __builtin_neon_vcltzd_f64 \
+    __builtin_neon_vcltzd_s64 __builtin_neon_vcltzq_v __builtin_neon_vcltzs_f32 \
+    __builtin_neon_vcvt_n_f32_v __builtin_neon_vcvt_n_f64_v __builtin_neon_vcvt_n_s32_v \
+    __builtin_neon_vcvt_n_s64_v __builtin_neon_vcvt_n_u32_v __builtin_neon_vcvt_n_u64_v \
+    __builtin_neon_vcvtad_s64_f64 __builtin_neon_vcvtad_u64_f64 __builtin_neon_vcvtas_s32_f32 \
+    __builtin_neon_vcvtas_u32_f32 __builtin_neon_vcvtd_f64_s64 __builtin_neon_vcvtd_f64_u64 \
+    __builtin_neon_vcvtd_n_f64_s64 __builtin_neon_vcvtd_n_f64_u64 __builtin_neon_vcvtd_n_s64_f64 \
+    __builtin_neon_vcvtd_n_u64_f64 __builtin_neon_vcvtd_s64_f64 __builtin_neon_vcvtd_u64_f64 \
+    __builtin_neon_vcvtmd_s64_f64 __builtin_neon_vcvtmd_u64_f64 __builtin_neon_vcvtms_s32_f32 \
+    __builtin_neon_vcvtms_u32_f32 __builtin_neon_vcvtnd_s64_f64 __builtin_neon_vcvtnd_u64_f64 \
+    __builtin_neon_vcvtns_s32_f32 __builtin_neon_vcvtns_u32_f32 __builtin_neon_vcvtpd_s64_f64 \
+    __builtin_neon_vcvtpd_u64_f64 __builtin_neon_vcvtps_s32_f32 __builtin_neon_vcvtps_u32_f32 \
+    __builtin_neon_vcvtq_n_f32_v __builtin_neon_vcvtq_n_f64_v __builtin_neon_vcvtq_n_s32_v \
+    __builtin_neon_vcvtq_n_s64_v __builtin_neon_vcvtq_n_u32_v __builtin_neon_vcvtq_n_u64_v \
+    __builtin_neon_vcvts_f32_s32 __builtin_neon_vcvts_f32_u32 __builtin_neon_vcvts_n_f32_s32 \
+    __builtin_neon_vcvts_n_f32_u32 __builtin_neon_vcvts_n_s32_f32 __builtin_neon_vcvts_n_u32_f32 \
+    __builtin_neon_vcvts_s32_f32 __builtin_neon_vcvts_u32_f32 __builtin_neon_vcvtx_f32_v \
+    __builtin_neon_vcvtxd_f32_f64 __builtin_neon_vfmad_lane_f64 __builtin_neon_vfmad_laneq_f64 \
+    __builtin_neon_vfmas_lane_f32 __builtin_neon_vfmas_laneq_f32 __builtin_neon_vld1_x2_v \
+    __builtin_neon_vld1_x3_v __builtin_neon_vld1_x4_v __builtin_neon_vld1q_x2_v \
+    __builtin_neon_vld1q_x3_v __builtin_neon_vld1q_x4_v __builtin_neon_vld2_dup_v \
+    __builtin_neon_vld2_lane_v __builtin_neon_vld2q_dup_v __builtin_neon_vld2q_lane_v \
+    __builtin_neon_vld3_dup_v __builtin_neon_vld3q_dup_v __builtin_neon_vld4_dup_v \
+    __builtin_neon_vld4q_dup_v __builtin_neon_vmaxnmv_f32 __builtin_neon_vmaxnmvq_f32 \
+    __builtin_neon_vmaxnmvq_f64 __builtin_neon_vminnmv_f32 __builtin_neon_vminnmvq_f32 \
+    __builtin_neon_vminnmvq_f64 __builtin_neon_vmul_lane_v __builtin_neon_vmul_laneq_v \
+    __builtin_neon_vmul_n_f64 __builtin_neon_vmul_v __builtin_neon_vmulq_v __builtin_neon_vmulx_v \
+    __builtin_neon_vmulxd_f64 __builtin_neon_vmulxq_v __builtin_neon_vmulxs_f32 \
+    __builtin_neon_vnegd_s64 __builtin_neon_vpaddd_f64 __builtin_neon_vpaddd_s64 \
+    __builtin_neon_vpaddd_u64 __builtin_neon_vpadds_f32 __builtin_neon_vpmaxnm_v \
+    __builtin_neon_vpmaxnmq_v __builtin_neon_vpmaxnmqd_f64 __builtin_neon_vpmaxnms_f32 \
+    __builtin_neon_vpmaxqd_f64 __builtin_neon_vpmaxs_f32 __builtin_neon_vpminnm_v \
+    __builtin_neon_vpminnmq_v __builtin_neon_vpminnmqd_f64 __builtin_neon_vpminnms_f32 \
+    __builtin_neon_vpminqd_f64 __builtin_neon_vpmins_f32 __builtin_neon_vqabsb_s8 \
+    __builtin_neon_vqabsd_s64 __builtin_neon_vqabsh_s16 __builtin_neon_vqabss_s32 \
+    __builtin_neon_vqaddb_s8 __builtin_neon_vqaddb_u8 __builtin_neon_vqaddd_s64 \
+    __builtin_neon_vqaddd_u64 __builtin_neon_vqaddh_s16 __builtin_neon_vqaddh_u16 \
+    __builtin_neon_vqadds_s32 __builtin_neon_vqadds_u32 __builtin_neon_vqdmlal_v \
+    __builtin_neon_vqdmlalh_lane_s16 __builtin_neon_vqdmlalh_laneq_s16 __builtin_neon_vqdmlalh_s16 \
+    __builtin_neon_vqdmlals_lane_s32 __builtin_neon_vqdmlals_laneq_s32 __builtin_neon_vqdmlals_s32 \
+    __builtin_neon_vqdmlsl_v __builtin_neon_vqdmlslh_lane_s16 __builtin_neon_vqdmlslh_laneq_s16 \
+    __builtin_neon_vqdmlslh_s16 __builtin_neon_vqdmlsls_lane_s32 __builtin_neon_vqdmlsls_laneq_s32 \
+    __builtin_neon_vqdmlsls_s32 __builtin_neon_vqdmulh_lane_v __builtin_neon_vqdmulh_laneq_v \
+    __builtin_neon_vqdmulhh_s16 __builtin_neon_vqdmulhq_lane_v __builtin_neon_vqdmulhq_laneq_v \
+    __builtin_neon_vqdmulhs_s32 __builtin_neon_vqdmull_v __builtin_neon_vqdmullh_s16 \
+    __builtin_neon_vqdmulls_s32 __builtin_neon_vqmovnd_s64 __builtin_neon_vqmovnd_u64 \
+    __builtin_neon_vqmovnh_s16 __builtin_neon_vqmovnh_u16 __builtin_neon_vqmovns_s32 \
+    __builtin_neon_vqmovns_u32 __builtin_neon_vqmovund_s64 __builtin_neon_vqmovunh_s16 \
+    __builtin_neon_vqmovuns_s32 __builtin_neon_vqnegb_s8 __builtin_neon_vqnegd_s64 \
+    __builtin_neon_vqnegh_s16 __builtin_neon_vqnegs_s32 __builtin_neon_vqrdmulh_lane_v \
+    __builtin_neon_vqrdmulh_laneq_v __builtin_neon_vqrdmulhh_s16 __builtin_neon_vqrdmulhq_lane_v \
+    __builtin_neon_vqrdmulhq_laneq_v __builtin_neon_vqrdmulhs_s32 __builtin_neon_vqrshlb_s8 \
+    __builtin_neon_vqrshlb_u8 __builtin_neon_vqrshld_s64 __builtin_neon_vqrshld_u64 \
+    __builtin_neon_vqrshlh_s16 __builtin_neon_vqrshlh_u16 __builtin_neon_vqrshls_s32 \
+    __builtin_neon_vqrshls_u32 __builtin_neon_vqrshrnd_n_s64 __builtin_neon_vqrshrnd_n_u64 \
+    __builtin_neon_vqrshrnh_n_s16 __builtin_neon_vqrshrnh_n_u16 __builtin_neon_vqrshrns_n_s32 \
+    __builtin_neon_vqrshrns_n_u32 __builtin_neon_vqrshrund_n_s64 __builtin_neon_vqrshrunh_n_s16 \
+    __builtin_neon_vqrshruns_n_s32 __builtin_neon_vqshlb_n_s8 __builtin_neon_vqshlb_n_u8 \
+    __builtin_neon_vqshlb_s8 __builtin_neon_vqshlb_u8 __builtin_neon_vqshld_n_s64 \
+    __builtin_neon_vqshld_n_u64 __builtin_neon_vqshld_s64 __builtin_neon_vqshld_u64 \
+    __builtin_neon_vqshlh_n_s16 __builtin_neon_vqshlh_n_u16 __builtin_neon_vqshlh_s16 \
+    __builtin_neon_vqshlh_u16 __builtin_neon_vqshls_n_s32 __builtin_neon_vqshls_n_u32 \
+    __builtin_neon_vqshls_s32 __builtin_neon_vqshls_u32 __builtin_neon_vqshlu_n_v \
+    __builtin_neon_vqshlub_n_s8 __builtin_neon_vqshlud_n_s64 __builtin_neon_vqshluh_n_s16 \
+    __builtin_neon_vqshluq_n_v __builtin_neon_vqshlus_n_s32 __builtin_neon_vqshrnd_n_s64 \
+    __builtin_neon_vqshrnd_n_u64 __builtin_neon_vqshrnh_n_s16 __builtin_neon_vqshrnh_n_u16 \
+    __builtin_neon_vqshrns_n_s32 __builtin_neon_vqshrns_n_u32 __builtin_neon_vqshrund_n_s64 \
+    __builtin_neon_vqshrunh_n_s16 __builtin_neon_vqshruns_n_s32 __builtin_neon_vqsubb_s8 \
+    __builtin_neon_vqsubb_u8 __builtin_neon_vqsubd_s64 __builtin_neon_vqsubd_u64 \
+    __builtin_neon_vqsubh_s16 __builtin_neon_vqsubh_u16 __builtin_neon_vqsubs_s32 \
+    __builtin_neon_vqsubs_u32 __builtin_neon_vqtbl2_v __builtin_neon_vqtbl2q_v \
+    __builtin_neon_vqtbl3_v __builtin_neon_vqtbl3q_v __builtin_neon_vqtbl4_v \
+    __builtin_neon_vqtbl4q_v __builtin_neon_vqtbx1_v __builtin_neon_vqtbx1q_v \
+    __builtin_neon_vqtbx2_v __builtin_neon_vqtbx2q_v __builtin_neon_vqtbx3_v \
+    __builtin_neon_vqtbx3q_v __builtin_neon_vraddhn_v __builtin_neon_vrbit_v \
+    __builtin_neon_vrbitq_v __builtin_neon_vrecped_f64 __builtin_neon_vrecpes_f32 \
+    __builtin_neon_vrecpsd_f64 __builtin_neon_vrecpss_f32 __builtin_neon_vrecpxd_f64 \
+    __builtin_neon_vrecpxs_f32 __builtin_neon_vrndi_v __builtin_neon_vrndiq_v \
+    __builtin_neon_vrndns_f32 __builtin_neon_vrndx_v __builtin_neon_vrndxq_v \
+    __builtin_neon_vrshld_s64 __builtin_neon_vrshld_u64 __builtin_neon_vrshrd_n_s64 \
+    __builtin_neon_vrshrd_n_u64 __builtin_neon_vrsqrted_f64 __builtin_neon_vrsqrtes_f32 \
+    __builtin_neon_vrsqrtsd_f64 __builtin_neon_vrsqrtss_f32 __builtin_neon_vrsra_n_v \
+    __builtin_neon_vrsrad_n_s64 __builtin_neon_vrsrad_n_u64 __builtin_neon_vrsraq_n_v \
+    __builtin_neon_vrsubhn_v __builtin_neon_vshld_n_s64 __builtin_neon_vshld_n_u64 \
+    __builtin_neon_vshld_s64 __builtin_neon_vshld_u64 __builtin_neon_vshrd_n_s64 \
+    __builtin_neon_vshrd_n_u64 __builtin_neon_vslid_n_s64 __builtin_neon_vslid_n_u64 \
+    __builtin_neon_vsqadd_v __builtin_neon_vsqaddb_u8 __builtin_neon_vsqaddd_u64 \
+    __builtin_neon_vsqaddh_u16 __builtin_neon_vsqaddq_v __builtin_neon_vsqadds_u32 \
+    __builtin_neon_vsrad_n_s64 __builtin_neon_vsrad_n_u64 __builtin_neon_vsrid_n_s64 \
+    __builtin_neon_vsrid_n_u64 __builtin_neon_vst1_x2_v __builtin_neon_vst1_x3_v \
+    __builtin_neon_vst1_x4_v __builtin_neon_vst1q_x2_v __builtin_neon_vst1q_x3_v \
+    __builtin_neon_vst1q_x4_v __builtin_neon_vst2_lane_v __builtin_neon_vst2q_lane_v \
+    __builtin_neon_vst3_lane_v __builtin_neon_vst3q_lane_v __builtin_neon_vsubd_s64 \
+    __builtin_neon_vsubd_u64 __builtin_neon_vsubhn_v __builtin_neon_vtbl3_v __builtin_neon_vtbl4_v \
+    __builtin_neon_vtbx1_v __builtin_neon_vtbx2_v __builtin_neon_vtbx3_v __builtin_neon_vtstd_s64 \
+    __builtin_neon_vtstd_u64 __builtin_neon_vuqadd_v __builtin_neon_vuqaddb_s8 \
+    __builtin_neon_vuqaddd_s64 __builtin_neon_vuqaddh_s16 __builtin_neon_vuqaddq_v \
+    __builtin_neon_vuqadds_s32";
+
+/// Whether builtin `name` is in [`UNLOWERED_BUILTINS`].
+pub fn is_unlowered_builtin(name: &str) -> bool {
+    UNLOWERED_BUILTINS.split_ascii_whitespace().any(|n| n == name)
 }
 
 /// How [`Cg::emit_builtin`] handled a builtin call.
@@ -904,6 +1043,11 @@ impl Cg<'_> {
             }
             id::ASSUME_ALIGNED => self.builtin_assume_aligned(e, &args)?,
             id::ASSUME => {
+                // An assumption with possible side effects is never
+                // evaluated (sema warned, WP-805).
+                if self.ast.exprs.get(e).has(kiln_ast::expr::ExprFlags::ASSUME_IGNORED) {
+                    return Ok(BuiltinCall::Emitted(None));
+                }
                 let c = self.emit_scalar(a0)?;
                 let f = kiln_llvm::intrinsics::assume(&mut self.m);
                 self.intrinsic_call(f, vec![c]);
