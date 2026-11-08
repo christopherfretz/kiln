@@ -163,6 +163,24 @@ impl Cg<'_> {
                 }
                 ExprKind::ExprWithCleanups if exprs.cleanups_have_side_effects(x) => return true,
                 ExprKind::CXXTypeidExpr if exprs.typeid_potentially_evaluated(x) => return true,
+                // A volatile read is a side effect ([intro.execution]/7):
+                // `static int d = src;` with `extern volatile int src;`
+                // is emitted (LLVM's anchor idiom pulls in an archive
+                // member through it).
+                ExprKind::ImplicitCastExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::CXXFunctionalCastExpr
+                | ExprKind::CXXStaticCastExpr
+                | ExprKind::CXXConstCastExpr
+                | ExprKind::CXXReinterpretCastExpr
+                    if exprs.cast_kind(x) == CastKind::LValueToRValue
+                        && ast
+                            .types
+                            .effective_quals(exprs.get(exprs.operand(x)).ty())
+                            .is_volatile() =>
+                {
+                    return true;
+                }
                 ExprKind::UnaryExprOrTypeTraitExpr
                 | ExprKind::CXXNoexceptExpr
                 | ExprKind::LambdaExpr
@@ -302,8 +320,11 @@ impl Cg<'_> {
         }
         let internal = mangle::is_internal_symbol(ast, d);
         let key = (!internal).then_some(g);
-        let unordered =
-            self.var_instantiation_linkage(first).is_some() || (self.var_is_inline(d) && !internal);
+        // clang: a `selectany` variable's initializer is unordered too, in
+        // the variable's comdat.
+        let unordered = self.var_instantiation_linkage(first).is_some()
+            || (self.var_is_inline(d) && !internal)
+            || (!internal && ast.is_selectany(d));
         if unordered {
             // [basic.start.dynamic]/1: partially-ordered or unordered
             // initialization, in its own `llvm.global_ctors` entry.

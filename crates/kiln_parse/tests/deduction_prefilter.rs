@@ -25,8 +25,8 @@ use kiln_source::symbol::Interner;
 /// pre-filtered result.
 #[track_caller]
 fn same_both_ways(src: &str) -> Parsed {
-    let fast = parse_with(src, opts19());
-    let full = parse_with(src, ParseOptions { full_deduction: true, ..opts19() });
+    let fast = parse_with(src, &opts19());
+    let full = parse_with(src, &ParseOptions { full_deduction: true, ..opts19() });
     assert_eq!(fast.diags, full.diags, "diagnostics differ with the pre-filters");
     assert_eq!(fast.dump, full.dump, "AST dump differs with the pre-filters");
     fast

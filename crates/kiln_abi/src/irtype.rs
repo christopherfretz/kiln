@@ -431,7 +431,7 @@ impl<'a> IrTypes<'a> {
         }
         let fields = props::fields(ast, def);
         if is_union {
-            self.lower_union(&fields, &layout, layout.size, &mut out);
+            self.lower_union(def, &fields, &layout, layout.size, &mut out);
             // clang 19 `lowerUnion(isNonVirtualBaseType)`: a union whose
             // data size is short of its size (a non-POD member's tail
             // padding) has a `.base` type of `dsize` bytes, which a
@@ -439,7 +439,7 @@ impl<'a> IrTypes<'a> {
             // later members can live in the tail padding.
             if layout.nv_size != layout.size {
                 let mut scratch = IrRecord { zero_init: true, ..IrRecord::default() };
-                self.lower_union(&fields, &layout, layout.data_size, &mut scratch);
+                self.lower_union(def, &fields, &layout, layout.data_size, &mut scratch);
                 out.base_members = Some(scratch.members);
             }
             return out;
@@ -475,11 +475,14 @@ impl<'a> IrTypes<'a> {
         let size = if nv_base { layout.nv_size } else { layout.size };
         let mut members: Vec<Member> = Vec::new();
         let mut seq = 0u32;
+        let discrete = ast.is_ms_struct(def);
         // accumulateFields.
         let mut i = 0;
         while i < fields.len() {
             let f = fields[i];
-            if f.bit_width.is_some() {
+            if f.bit_width.is_some() && discrete {
+                i = self.accumulate_discrete_bitfields(fields, i, layout, &mut members, &mut seq);
+            } else if f.bit_width.is_some() {
                 i = self.accumulate_bitfields(fields, i, layout, &mut members, &mut seq);
             } else if self.is_empty_field(&f) {
                 i += 1;
@@ -859,8 +862,13 @@ impl<'a> IrTypes<'a> {
     }
 
     /// clang `getStorageType(const FieldDecl *)` for a bit-field.
-    fn bitfield_storage_type(&mut self, f: &FieldDesc) -> IrType {
+    /// clang `getStorageType` of a bit-field: its type's memory type in
+    /// the `discrete` (`ms_struct`) ABI, else an integer of its width.
+    fn bitfield_storage_type(&mut self, f: &FieldDesc, discrete: bool) -> IrType {
         let t = self.convert_mem(f.ty);
+        if discrete {
+            return t;
+        }
         let (s, _) = self.size_align(&t);
         IrType::int_n(f.bit_width.unwrap_or(0).min(s * 8))
     }
@@ -870,6 +878,7 @@ impl<'a> IrTypes<'a> {
     /// for the base-subobject type).
     fn lower_union(
         &mut self,
+        def: DeclId,
         fields: &[FieldDesc],
         layout: &kiln_ast::types::RecordLayout,
         layout_size: u64,
@@ -877,12 +886,13 @@ impl<'a> IrTypes<'a> {
     ) {
         let mut storage: Option<IrType> = None;
         let mut seen_named = false;
+        let discrete = self.ast().is_ms_struct(def);
         for f in fields {
             if let Some(w) = f.bit_width {
                 if w == 0 {
                     continue;
                 }
-                let mut ft = self.bitfield_storage_type(f);
+                let mut ft = self.bitfield_storage_type(f, discrete);
                 if layout_size < self.size_align(&ft).0 {
                     ft = IrType::bytes(layout_size);
                 }
@@ -902,7 +912,7 @@ impl<'a> IrTypes<'a> {
             }
             out.field_index.insert(f.decl, 0);
             let ft = if f.bit_width.is_some() {
-                self.bitfield_storage_type(f)
+                self.bitfield_storage_type(f, discrete)
             } else {
                 self.convert_mem(f.ty)
             };
@@ -951,6 +961,58 @@ impl<'a> IrTypes<'a> {
         if !layout.data_size.is_multiple_of(sa) {
             out.packed = true;
         }
+    }
+
+    /// clang `accumulateBitFields` for the discrete bit-field ABI
+    /// (`ms_struct`, WP-809): each run gets a storage member of its first
+    /// field's memory type, and a later bit-field joins it while it starts
+    /// within that storage; a zero-width bit-field ends the run.
+    fn accumulate_discrete_bitfields(
+        &mut self,
+        fields: &[FieldDesc],
+        start: usize,
+        layout: &kiln_ast::types::RecordLayout,
+        members: &mut Vec<Member>,
+        seq: &mut u32,
+    ) -> usize {
+        let mut field = start;
+        let mut run: Option<(u64, u64)> = None;
+        while field < fields.len() && fields[field].bit_width.is_some() {
+            let f = fields[field];
+            field += 1;
+            if f.bit_width == Some(0) {
+                run = None;
+                continue;
+            }
+            let bit_offset = layout.fields[field - 1];
+            let start_bit = match run {
+                Some((start_bit, tail)) if bit_offset < tail => start_bit,
+                _ => {
+                    let ty = self.convert_mem(f.ty);
+                    let (size, align) = self.size_align(&ty);
+                    let tail = bit_offset + size.next_multiple_of(align.max(1)) * 8;
+                    run = Some((bit_offset, tail));
+                    members.push(Member {
+                        offset: bit_offset / 8,
+                        data: Some(ty),
+                        field: None,
+                        base: None,
+                        seq: *seq,
+                    });
+                    *seq += 1;
+                    bit_offset
+                }
+            };
+            members.push(Member {
+                offset: start_bit / 8,
+                data: None,
+                field: Some(f.decl),
+                base: None,
+                seq: *seq,
+            });
+            *seq += 1;
+        }
+        field
     }
 
     /// clang 19 `accumulateBitFields` (access units, non-discrete ABI,

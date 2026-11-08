@@ -287,8 +287,9 @@ impl Sema<'_, '_> {
             let info = p.info().with_trailing_return(true);
             ty = self.ast.types.function(p.ret(), &params, info, exc);
         }
-        let written: Vec<AttrId> = specs.attrs.iter().chain(&d.attrs).copied().collect();
-        self.apply_noreturn_attrs(ty, &written)
+        let mut written: Vec<AttrId> = specs.attrs.iter().chain(&d.attrs).copied().collect();
+        let ty = self.apply_noreturn_attrs(ty, &written);
+        self.apply_cc_attrs(ty, &mut written, true)
     }
 
     /// The *lambda-declarator* `d` (a member declarator whose single

@@ -89,6 +89,9 @@ pub struct FnState {
     /// instantiation, which copies it): its placement is checked at the
     /// end (clang `FunctionScopeInfo::HasFallthroughStmt`).
     pub(crate) has_fallthrough: bool,
+    /// The body has a `[[clang::musttail]]` return (clang
+    /// `setFunctionHasMustTail`): the jump-scope check runs.
+    pub(crate) has_musttail: bool,
     /// Runtime-behavior diagnostics of the body (clang
     /// `FunctionScopeInfo::PossiblyUnreachableDiags`), emitted at its
     /// end (`diag_runtime_behavior`, `diag_if_reachable`), each with
@@ -130,6 +133,12 @@ pub struct FnState {
 }
 
 impl FnState {
+    /// The body has a construct the jump-scope checker verifies (clang
+    /// `NeedsScopeChecking`).
+    fn needs_jump_scope_check(&self) -> bool {
+        self.has_switch || self.has_indirect_goto || self.has_musttail || !self.labels.is_empty()
+    }
+
     pub(crate) fn new(decl: DeclId, ret: QualType) -> Self {
         FnState {
             decl,
@@ -145,6 +154,7 @@ impl FnState {
             has_switch: false,
             has_indirect_goto: false,
             has_fallthrough: false,
+            has_musttail: false,
             runtime_diags: Vec::new(),
             rt_quiet: 0,
             discarded: 0,
@@ -458,6 +468,9 @@ impl Sema<'_, '_> {
     /// Each attribute newer than `std` is an extension warning
     /// (`-Wc++17-attribute-extensions`, `-Wc++20-…`, `-Wc++23-…` under
     /// `-pedantic`).
+    // One arm per statement attribute kind, then the cross-attribute
+    // checks (compat, likelihood, musttail) in clang's order.
+    #[allow(clippy::too_many_lines)]
     pub fn act_on_attributed_stmt(
         &mut self,
         attrs: &[kiln_ast::AttrId],
@@ -470,6 +483,7 @@ impl Sema<'_, '_> {
         let sub_kind = self.ast.stmts.get(sub).kind();
         let mut kept = Vec::new();
         let mut likelihood: Option<kiln_ast::attr::AttrNode> = None;
+        let mut musttail = Vec::new();
         // An annotation appertains only to a declaration
         // ([dcl.attr.annotation]/1).
         self.reject_annotations_in(attrs, None);
@@ -484,13 +498,35 @@ impl Sema<'_, '_> {
                 AttrKind::LIKELY => "likely",
                 AttrKind::UNLIKELY => "unlikely",
                 AttrKind::FALLTHROUGH => "fallthrough",
-                _ => continue,
+                AttrKind::MUSTTAIL => "musttail",
+                // Any other attribute does not apply to a statement
+                // (annotations were rejected above).
+                AttrKind::ANNOTATION => continue,
+                _ => {
+                    if sub_kind != StmtKind::DeclStmt {
+                        self.act_on_stmt_decl_attrs(&[a], false);
+                    }
+                    continue;
+                }
             };
             let name = self.attr_shown(&node, name);
             if sub_kind == StmtKind::DeclStmt {
                 let msg =
                     self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg(name.clone());
                 self.emit(msg);
+                continue;
+            }
+            if node.kind == AttrKind::MUSTTAIL {
+                if sub_kind == StmtKind::ReturnStmt {
+                    musttail.push(node);
+                    kept.push(a);
+                } else {
+                    let msg = self
+                        .diag(DiagId::sema_attribute_wrong_stmt_type, node.loc)
+                        .arg(name)
+                        .arg("return statements");
+                    self.emit(msg);
+                }
                 continue;
             }
             if matches!(node.kind, AttrKind::ASSUME | AttrKind::FALLTHROUGH)
@@ -557,6 +593,16 @@ impl Sema<'_, '_> {
         self.check_loop_hint_compat(&kept);
         if kept.is_empty() {
             return sub;
+        }
+        // clang `BuildAttributedStmt`: a failed `musttail` check drops
+        // the attributed statement (WP-809).
+        for node in musttail {
+            if !self.check_musttail(sub, &node) {
+                return sub;
+            }
+            if let Some(f) = self.func.as_mut() {
+                f.has_musttail = true;
+            }
         }
         self.builder().attributed_stmt(&kept, sub, loc)
     }
@@ -1756,7 +1802,7 @@ impl Sema<'_, '_> {
         }
         // [stmt.dcl]/3, [except.handle]/2: jumps into protected scopes
         // (clang `DiagnoseInvalidJumps`, ahead of the flow warnings).
-        if state.has_switch || state.has_indirect_goto || !state.labels.is_empty() {
+        if state.needs_jump_scope_check() {
             self.check_jump_scopes(body);
         }
         // clang 22 `inferNoReturnAttr` (`PopFunctionScopeInfo`, ahead of

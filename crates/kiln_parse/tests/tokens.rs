@@ -124,7 +124,7 @@ fn window_matches_whole_buffer() {
     }
     src.push_str("struct S { S(int); int a; };\n");
     let window = parse(&src);
-    let whole = parse_with(&src, ParseOptions { keep_tokens: true, ..opts19() });
+    let whole = parse_with(&src, &ParseOptions { keep_tokens: true, ..opts19() });
     assert_eq!(window.diags, whole.diags);
     assert_eq!(window.dump, whole.dump);
     window.assert_dump("FunctionDecl f599");

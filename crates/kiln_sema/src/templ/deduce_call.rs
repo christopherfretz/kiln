@@ -412,20 +412,30 @@ impl Sema<'_, '_> {
     /// parameter pack keeps its pattern; a non-trailing one expands to its
     /// explicit elements, counted in the third result), and, for `whole`
     /// (`Some` the template's function type), the whole function type.
+    /// `ret`: a return type written before the parameters, substituted
+    /// first and only checked (clang `SubstituteExplicitTemplateArguments`
+    /// substitutes the return type for a call too, so
+    /// `enable_if_t<C<A>, R> f(const S<A>&)` with `A` explicit fails
+    /// before the conversion to `S<A>` instantiates it, CWG1391).
     /// Runs under the caller's `ExplicitArgSubstitution` frame.
     #[inline(never)]
+    #[allow(clippy::too_many_arguments, reason = "the step's inputs")]
     fn subst_explicit_param_types(
         &mut self,
         ft: DeclId,
         levels: &crate::templ::args::MultiLevelArgs,
         tys: &[QualType],
         whole: Option<QualType>,
+        ret: Option<QualType>,
         name_loc: Loc,
         loc: Loc,
     ) -> Result<(Vec<QualType>, Option<QualType>, usize), crate::templ::subst::SubstFail> {
         self.in_template_context(ft, |s| {
             let mut sub = Substituter::new(s, levels);
             sub.final_subst = true;
+            if let Some(r) = ret {
+                sub.ty(r, loc)?;
+            }
             // A function parameter pack keeps its pattern: the
             // explicitly given prefix may be extended by deduction.
             // A non-trailing one is a non-deduced context
@@ -674,6 +684,18 @@ impl Sema<'_, '_> {
                 DeduceTarget::None => call.is_none(),
                 DeduceTarget::Conversion(_) => false,
             } && !fn_has_pack;
+            // A call substitutes the leading return type too (not a
+            // trailing one, which may name the parameters).
+            let ret = if whole {
+                None
+            } else {
+                self.ast
+                    .types
+                    .proto_of(pfn.ty())
+                    .filter(|p| !p.info().trailing_return())
+                    .map(kiln_ast::types::FuncProto::ret)
+                    .filter(|&r| self.is_dependent_type(r))
+            };
             // clang substitutes the explicit arguments as written
             // (`SubstituteExplicitTemplateArguments` is `Final`): a
             // parameter they make non-dependent keeps their sugar, so
@@ -739,6 +761,7 @@ impl Sema<'_, '_> {
                         &sugared_levels,
                         &tys,
                         whole.then_some(pfn),
+                        ret,
                         name_loc,
                         loc,
                     )
@@ -836,9 +859,19 @@ impl Sema<'_, '_> {
                 // A declaration's type adopts the template's GNU
                 // `noreturn` (clang `adjustCCAndNoReturn`; spec/types.md
                 // §5.4): the specialization merges it like a redeclaration.
-                let nr = self.ast.types.proto(p0).is_some_and(|p| p.info().noreturn());
+                // Its calling convention too, when the declaration names
+                // none (WP-808).
+                let pi = self.ast.types.proto(p0).map(kiln_ast::types::FuncProto::info);
+                let nr = pi.is_some_and(kiln_ast::types::FuncInfo::noreturn);
                 let a0 = self.with_exc_spec(a, ExcSpec::None);
                 let a0 = self.with_fn_noreturn(a0, nr, false).unwrap_or(a0);
+                let adopt = move |i: kiln_ast::types::FuncInfo| match pi {
+                    Some(p) if i.cc() == kiln_ast::types::CallConv::Default => {
+                        i.with_cc(p.cc()).with_no_caller_saved_regs(p.no_caller_saved_regs())
+                    }
+                    _ => i,
+                };
+                let a0 = self.with_fn_info(a0, &adopt, false).unwrap_or(a0);
                 (p0, a0, TdfFlags::TOP_LEVEL_PARAMETER_TYPE_LIST)
             } else {
                 let tdf = TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT

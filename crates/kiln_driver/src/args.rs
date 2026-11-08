@@ -193,6 +193,9 @@ pub struct PredefArgs {
     pub pic: Option<PicModel>,
     /// `-ffreestanding` / `-fhosted`.
     pub freestanding: Option<bool>,
+    /// `-f[no-]builtin` (the last wins); `-ffreestanding` implies it
+    /// either way (see [`Args::no_builtin`]).
+    pub no_builtin: Option<bool>,
     /// `-pthread`.
     pub pthread: bool,
     /// `-f[no-]threadsafe-statics`.
@@ -528,6 +531,9 @@ pub struct Args {
     pub semantic_interposition: Option<bool>,
     /// The last of `-f[no-]direct-access-external-data`.
     pub direct_access_external_data: Option<bool>,
+    /// The `-fno-builtin-<name>` names, in order (repeatable; clang
+    /// `LangOptions::NoBuiltinFuncs`); see [`Args::no_builtin_fns`].
+    pub no_builtin_names: Vec<String>,
 }
 
 /// Options taking a value, joined (`-Ifoo`) or separate (`-I foo`).
@@ -1074,8 +1080,37 @@ impl Args {
         self.fp_model().complex_range
     }
 
+    /// `-fno-builtin` or `-ffreestanding` is in effect: no library
+    /// function is recognized as a builtin (clang `LangOptions::NoBuiltin`
+    /// = `-fno-builtin || -ffreestanding`; `-fbuiltin` cancels only
+    /// `-fno-builtin`).
+    #[must_use]
+    pub fn no_builtin(&self) -> bool {
+        self.predef.no_builtin == Some(true) || self.predef.freestanding == Some(true)
+    }
+
+    /// The `-fno-builtin-<name>` names, sorted and deduplicated; empty
+    /// under [`Self::no_builtin`] (clang's driver forwards them only
+    /// without `-fno-builtin`).
+    #[must_use]
+    pub fn no_builtin_fns(&self) -> Vec<String> {
+        if self.no_builtin() {
+            return Vec::new();
+        }
+        let mut v = self.no_builtin_names.clone();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
     /// Flags that change predefined macros.
     fn predef_flag(&mut self, arg: &str) -> bool {
+        if let Some(name) = arg.strip_prefix("-fno-builtin-")
+            && !name.is_empty()
+        {
+            self.no_builtin_names.push(name.to_owned());
+            return true;
+        }
         if let Some(v) = arg.strip_prefix("-fclang-compat=") {
             match v.parse().ok().and_then(ClangCompat::from_major) {
                 Some(c) => self.predef.clang_compat = c,
@@ -1119,6 +1154,8 @@ impl Args {
             "-fno-pic" | "-fno-PIC" | "-fno-pie" | "-fno-PIE" => p.pic = Some(PicModel::None),
             "-ffreestanding" => p.freestanding = Some(true),
             "-fhosted" => p.freestanding = Some(false),
+            "-fbuiltin" => p.no_builtin = Some(false),
+            "-fno-builtin" => p.no_builtin = Some(true),
             "-pthread" => p.pthread = true,
             "-fthreadsafe-statics" => p.threadsafe_statics = Some(true),
             "-fno-threadsafe-statics" => p.threadsafe_statics = Some(false),

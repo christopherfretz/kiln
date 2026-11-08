@@ -305,6 +305,27 @@ impl Oven {
         })
     }
 
+    /// Runs the job of [`Oven::fold_object_size`] with its frame at `fb`:
+    /// the size, a `size_t`.
+    pub(crate) fn eval_object_size(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        p: ExprId,
+        ty: u32,
+        fb: u32,
+    ) -> Result<ConstValueId, EvalFailure> {
+        self.run.object = None;
+        let f = self.compile_object_size(b, p, ty);
+        self.let_pending.clear();
+        self.exec(b, f, fb)?;
+        let v = self.regs[fb as usize];
+        let RetKind::Scalar(rt) = self.funcs[f as usize].ret else {
+            return Err(EvalFailure::silent(FailKind::NotConstant));
+        };
+        let loc = expr_loc(b.ast(), p);
+        self.freeze_scalar(b, rt, v, loc).map_err(|_| EvalFailure::silent(FailKind::NotConstant))
+    }
+
     /// Runs the job of [`Oven::evaluate_with_params`] with its frame at
     /// `fb`: the condition's value.
     pub(crate) fn eval_subst(

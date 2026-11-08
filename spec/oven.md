@@ -1284,6 +1284,15 @@ literal is one instruction and one step, not an interpreted loop.
   in clang's `HasSideEffects` sense (a call to a function that is not
   `const`/`pure` included, `SIDE` set) and the note "subexpression not
   valid in a constant expression" at the call otherwise.
+  WP-808: a string literal has no whole-object type (clang
+  `getObjectType`: a variable, a compound literal or a dynamic
+  allocation), so types 0/2 of a pointer into one are not a constant;
+  types 1/3 use its array designator. `Oven::fold_object_size(p, t)` is
+  codegen's `tryEvaluateObjectSize` of a `pass_object_size` argument
+  (`Job::ObjectSize`, compiled by `compile_object_size` as the same
+  speculative region without the side-effect default): the size, or
+  `None` for any failure, silently and with the trial's effects
+  reclaimed.
   The alignment builtins on integers (kbc 26, `ALIGN`, WP-416; clang
   `ExprConstant` `BI__builtin_align_up` / `_down` / `__builtin_is_aligned`):
   the alignment is checked first, at its own location: one that is not a

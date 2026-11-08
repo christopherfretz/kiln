@@ -103,10 +103,12 @@ pub struct CodegenOptions {
     pub rtti: bool,
     /// The `llvm.ident` string; empty for none.
     pub ident: String,
-    /// `AArch64` only: `+outline-atomics` in the functions'
-    /// `target-features` (`-moutline-atomics`, the default), else
-    /// `-outline-atomics` (`-mno-outline-atomics`). Ignored on x86-64.
-    pub outline_atomics: bool,
+    /// `AArch64` only: `+outline-atomics` (`Some(true)`: `-moutline-atomics`,
+    /// or the default with a GCC installation of 9.3.1 or later) or
+    /// `-outline-atomics` (`Some(false)`: `-mno-outline-atomics`) in the
+    /// functions' `target-features`; `None` names neither (clang
+    /// `getAArch64TargetFeatures`). Ignored on x86-64.
+    pub outline_atomics: Option<bool>,
     /// On `AArch64`, the `+name`/`-name` target features beyond the base
     /// set (`-march=armv8-a+sve`, `-target-feature`; one per name), merged
     /// into the functions' `target-features`. On x86-64, the `-march=`
@@ -230,6 +232,15 @@ pub struct CodegenOptions {
     /// `null_pointer_is_valid`, and references, `this` and `operator new`
     /// carry no `nonnull` (`this` is `dereferenceable_or_null`).
     pub null_pointer_is_valid: bool,
+    /// `-fno-builtin` / `-ffreestanding` (clang `LangOpts.NoBuiltin`):
+    /// every function and call site is `"no-builtins"`, a call site also
+    /// `nobuiltin`, and no library function is lowered as its builtin
+    /// (spec/codegen.md "no-builtin"; WP-808).
+    pub no_builtin: bool,
+    /// The `-fno-builtin-<name>` names, sorted (clang
+    /// `LangOpts.NoBuiltinFuncs`): `"no-builtin-<name>"` on every function
+    /// and call site, `nobuiltin` on a call of `<name>` itself.
+    pub no_builtin_fns: Vec<String>,
     /// The x86-64 `-march=<cpu>`: the functions' `target-cpu` (and no
     /// default `tune-cpu`, as clang); `None` is the target's default
     /// (`x86-64`, `generic` on `AArch64`). `native` (both targets) emits
@@ -541,7 +552,7 @@ impl Default for CodegenOptions {
             exceptions: true,
             rtti: true,
             ident: String::new(),
-            outline_atomics: true,
+            outline_atomics: Some(true),
             target_features: Vec::new(),
             target_attr: None,
             sve: false,
@@ -571,6 +582,8 @@ impl Default for CodegenOptions {
             wrapv: false,
             wrapv_pointer: false,
             null_pointer_is_valid: false,
+            no_builtin: false,
+            no_builtin_fns: Vec::new(),
             target_cpu: None,
             tune_cpu: None,
             no_inline: false,

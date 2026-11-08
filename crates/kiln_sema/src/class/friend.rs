@@ -47,7 +47,8 @@ impl Sema<'_, '_> {
         let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
         let ty = self.apply_nothrow_attrs(ty, &mut attrs);
-        self.apply_noreturn_attrs(ty, &attrs)
+        let ty = self.apply_noreturn_attrs(ty, &attrs);
+        self.apply_cc_attrs(ty, &mut attrs, true)
     }
 
     /// [dcl.fct.default]/4: a friend declaration `f` that specifies a
