@@ -20,6 +20,7 @@ pub mod consts;
 pub mod decl;
 pub mod dump;
 pub mod expr;
+pub mod fp;
 pub mod ids;
 pub mod journal;
 pub mod lambda;

@@ -505,6 +505,7 @@ impl Substituter<'_, '_, '_> {
                 };
                 let mut decls = Vec::with_capacity(tys.len());
                 for ty in tys {
+                    let ty = self.sema.apply_pattern_mode(p, ty);
                     let ty = self.param_type(ty, loc)?;
                     let ctx = self.sema.ctx;
                     let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
@@ -530,7 +531,7 @@ impl Substituter<'_, '_, '_> {
             self.type_begin = outer;
             (self.ref_loc, self.chunk_loc) = outer_ref;
             self.declarator_name = outer_name;
-            let declared = ty?;
+            let declared = self.sema.apply_pattern_mode(p, ty?);
             let ty = self.param_type(declared, n.loc())?;
             // Created now, so that the rest of the signature (a trailing
             // return type, the exception specification) refers to it
@@ -827,9 +828,15 @@ impl Substituter<'_, '_, '_> {
         // clang's `TransformFunctionProtoType` keeps the `ExtInfo`): the
         // rebuilt declarator carries no attributes, so the bit is set on
         // the instantiation's type here (WP-749).
-        if info.noreturn()
-            && let Some(ft) = self.sema.ast.decls.get(f).ty()
-            && let Some(nt) = self.sema.with_fn_noreturn(ft, true, false)
+        // So are its calling convention and `no_caller_saved_registers`
+        // (WP-808).
+        let keep = move |i: kiln_ast::types::FuncInfo| {
+            i.with_noreturn(i.noreturn() || info.noreturn())
+                .with_cc(info.cc())
+                .with_no_caller_saved_regs(info.no_caller_saved_regs())
+        };
+        if let Some(ft) = self.sema.ast.decls.get(f).ty()
+            && let Some(nt) = self.sema.with_fn_info(ft, &keep, false)
         {
             self.sema.ast.decls.set_ty(f, nt);
         }
@@ -1379,7 +1386,7 @@ impl Substituter<'_, '_, '_> {
         let ty = self.sema.apply_pattern_mode(d, ty);
         if n.kind() == DeclKind::TypeAlias {
             let name = n.name().as_ident().ok_or(SubstFail)?;
-            let a = self.sema.act_on_alias_decl(name, loc, ty, &[], Loc::INVALID);
+            let a = self.sema.act_on_alias_decl(name, loc, ty, &[], 0, Loc::INVALID);
             if failed {
                 self.sema.ast.decls.set_flags(a, DeclFlags::INVALID);
             }

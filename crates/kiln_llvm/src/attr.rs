@@ -226,6 +226,9 @@ pub enum Attr {
     DereferenceableOrNull(u64),
     /// `memory(...)`.
     Memory(MemoryEffects),
+    /// `nofpclass(...)`: the value is in none of these classes (an
+    /// `llvm::FPClassTest` mask; [`crate::fp_class`]).
+    NoFpClass(u16),
     /// `alignstack(N)`.
     AlignStack(u64),
     /// `uwtable` / `uwtable(sync)`.
@@ -236,6 +239,43 @@ pub enum Attr {
     /// the key alone).
     Str(Box<str>, Box<str>),
 }
+
+/// `llvm::FPClassTest` bits ([`Attr::NoFpClass`]).
+pub mod fp_class {
+    /// Signaling NaN.
+    pub const SNAN: u16 = 0x001;
+    /// Quiet NaN.
+    pub const QNAN: u16 = 0x002;
+    /// Any NaN.
+    pub const NAN: u16 = SNAN | QNAN;
+    /// Negative infinity.
+    pub const NINF: u16 = 0x004;
+    /// Positive infinity.
+    pub const PINF: u16 = 0x200;
+    /// Either infinity.
+    pub const INF: u16 = NINF | PINF;
+}
+
+/// LLVM's `NoFPClassName` table: the names `nofpclass` prints, the
+/// widest first.
+const NOFPCLASS_NAMES: [(u16, &str); 16] = [
+    (0x3ff, "all"),
+    (0x003, "nan"),
+    (0x001, "snan"),
+    (0x002, "qnan"),
+    (0x204, "inf"),
+    (0x004, "ninf"),
+    (0x200, "pinf"),
+    (0x060, "zero"),
+    (0x020, "nzero"),
+    (0x040, "pzero"),
+    (0x090, "sub"),
+    (0x010, "nsub"),
+    (0x080, "psub"),
+    (0x108, "norm"),
+    (0x008, "nnorm"),
+    (0x100, "pnorm"),
+];
 
 impl Attr {
     /// `"key"="value"`.
@@ -269,6 +309,19 @@ impl Attr {
             Attr::Dereferenceable(n) => write!(w, "dereferenceable({n})"),
             Attr::DereferenceableOrNull(n) => write!(w, "dereferenceable_or_null({n})"),
             Attr::Memory(m) => m.write(w),
+            Attr::NoFpClass(m) => {
+                w.write_str("nofpclass(")?;
+                let mut left = *m;
+                let mut sep = "";
+                for (mask, name) in NOFPCLASS_NAMES {
+                    if left & mask == mask {
+                        write!(w, "{sep}{name}")?;
+                        left &= !mask;
+                        sep = " ";
+                    }
+                }
+                w.write_char(')')
+            }
             Attr::AlignStack(n) => write!(w, "alignstack({n})"),
             Attr::UwTable(UwTableKind::Async) => w.write_str("uwtable"),
             Attr::UwTable(UwTableKind::Sync) => w.write_str("uwtable(sync)"),

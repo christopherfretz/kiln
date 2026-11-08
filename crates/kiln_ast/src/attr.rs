@@ -279,6 +279,75 @@ impl AttrKind {
     /// its name is mangled as C++'s even with C language linkage, and it
     /// may overload a function with C language linkage.
     pub const OVERLOADABLE: AttrKind = AttrKind(187);
+    /// clang `[[clang::musttail]]` / GNU `musttail` on a return statement
+    /// (clang `MustTailAttr`; WP-809): the returned call is emitted as a
+    /// `musttail call` followed by `ret`. Kept on the `AttributedStmt`
+    /// only once `Sema::check_musttail` accepts it.
+    pub const MUSTTAIL: AttrKind = AttrKind(196);
+    /// GNU `transparent_union` (clang `TransparentUnionAttr`, a C-only
+    /// attribute; WP-809). In C++ every occurrence is ignored with a
+    /// warning, but clang's delayed check of a class-head occurrence on a
+    /// union definition still keeps it when the fields qualify: such a
+    /// union is then passed by value as its first field (clang
+    /// `useFirstFieldIfTransparentUnion`). Kept on the union only then.
+    pub const TRANSPARENT_UNION: AttrKind = AttrKind(197);
+    /// GNU / Microsoft `selectany` on a variable with external linkage
+    /// (clang `SelectAnyAttr`, WP-809): its definition is `weak_odr` in a
+    /// comdat of its own, so definitions in several translation units
+    /// fold into one object.
+    pub const SELECTANY: AttrKind = AttrKind(198);
+    /// GNU `ms_struct` on a class, or implied by `#pragma ms_struct on`
+    /// (clang `MSStructAttr`, WP-809): the record uses the Microsoft
+    /// bit-field layout rules within the Itanium layout.
+    pub const MS_STRUCT: AttrKind = AttrKind(199);
+    /// GNU `gcc_struct` (clang 22 `GCCStructAttr`, WP-809): the record
+    /// uses the target's default layout; conflicts with `ms_struct`.
+    pub const GCC_STRUCT: AttrKind = AttrKind(215);
+    /// GNU `retain` on a function or variable (clang `RetainAttr`):
+    /// an emitted entity is also added to `@llvm.used`, so the linker's
+    /// section garbage collection keeps it (WP-805).
+    pub const RETAIN: AttrKind = AttrKind(200);
+    /// clang `no_destroy` on a variable with static or thread storage
+    /// duration (clang `NoDestroyAttr`): its destructor is never
+    /// registered to run at exit (WP-805).
+    pub const NO_DESTROY: AttrKind = AttrKind(201);
+    /// clang `always_destroy` (clang `AlwaysDestroyAttr`): the variable's
+    /// destructor is registered even under `-fno-c++-static-destructors`
+    /// (WP-805).
+    pub const ALWAYS_DESTROY: AttrKind = AttrKind(202);
+    /// A calling-convention attribute written on a declaration (`ms_abi`,
+    /// `preserve_most`, `regcall`, ...; clang's `handleFunctionTypeAttr`
+    /// CC kinds): a function type attribute, consumed into the declared
+    /// type's [`crate::types::FuncInfo`] by sema and never kept on a
+    /// declaration. `a` is the [`crate::types::CallConv`] discriminant
+    /// (`Default` for a convention that is the target's default, as
+    /// `sysv_abi` on Linux), `b` its spelling's index in
+    /// [`CC_ATTR_SPELLINGS`] (WP-808).
+    pub const CALLING_CONV: AttrKind = AttrKind(210);
+    /// x86 GNU `no_caller_saved_registers`: a function type attribute,
+    /// consumed like [`AttrKind::CALLING_CONV`] into
+    /// [`crate::types::FuncInfo::no_caller_saved_regs`] (WP-808).
+    pub const NO_CALLER_SAVED_REGS: AttrKind = AttrKind(211);
+    /// x86 GNU `regparm(N)`: a function type attribute, consumed like
+    /// [`AttrKind::CALLING_CONV`] into [`crate::types::FuncInfo::regparm`];
+    /// `a` is N (WP-808).
+    pub const REGPARM: AttrKind = AttrKind(212);
+    /// clang `no_builtin` / `no_builtin("name", ...)` on a function
+    /// definition (clang `NoBuiltinAttr`): the named library builtins (all
+    /// of them for the argument-less form, the wildcard `*`) are not
+    /// recognized in its body, and its IR function and the calls of it
+    /// carry `"no-builtins"` / `"no-builtin-<name>"`. `a` is the
+    /// [`crate::Symbol`] index of the names, sorted, deduplicated and
+    /// `,`-joined (`*` for the wildcard) (WP-808).
+    pub const NO_BUILTIN: AttrKind = AttrKind(213);
+
+    /// Whether this is a calling-convention or other function type
+    /// attribute sema consumes into the type's
+    /// [`crate::types::FuncInfo`] ([`AttrKind::CALLING_CONV`],
+    /// [`AttrKind::NO_CALLER_SAVED_REGS`], [`AttrKind::REGPARM`]).
+    pub fn is_fn_type_attr(self) -> bool {
+        matches!(self, AttrKind::CALLING_CONV | AttrKind::NO_CALLER_SAVED_REGS | AttrKind::REGPARM)
+    }
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
@@ -296,6 +365,30 @@ impl AttrKind {
         )
     }
 }
+
+/// The spellings of the calling-convention attributes kiln knows, by the
+/// `b` word of an [`AttrKind::CALLING_CONV`] node (WP-808).
+pub const CC_ATTR_SPELLINGS: [&str; 19] = [
+    "ms_abi",
+    "sysv_abi",
+    "cdecl",
+    "regcall",
+    "vectorcall",
+    "preserve_most",
+    "preserve_all",
+    "preserve_none",
+    "aarch64_vector_pcs",
+    "aarch64_sve_pcs",
+    "intel_ocl_bicc",
+    "swiftcall",
+    "swiftasynccall",
+    "stdcall",
+    "fastcall",
+    "thiscall",
+    "pascal",
+    "pcs",
+    "m68k_rtd",
+];
 
 /// What a loop hint controls (clang `LoopHintAttr::OptionType`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

@@ -8,7 +8,7 @@
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{DeclKind, EnumData, TagKind};
-use kiln_ast::types::{ExcSpec, NoexceptValue, TagKeyword, TypeView};
+use kiln_ast::types::{ExcSpec, FuncInfo, NoexceptValue, TagKeyword, TypeView};
 use kiln_ast::{AttrId, DeclId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::symbol::Symbol;
@@ -51,6 +51,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::SECTION => "section",
         AttrKind::ANALYZER_NORETURN => "analyzer_noreturn",
         AttrKind::DISABLE_TAIL_CALLS => "disable_tail_calls",
+        AttrKind::NO_BUILTIN => "no_builtin",
         AttrKind::CONST => "const",
         AttrKind::PURE => "pure",
         AttrKind::COLD => "cold",
@@ -81,6 +82,11 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::COMMON => "common",
         AttrKind::TLS_MODEL => "tls_model",
         AttrKind::RETURNS_TWICE => "returns_twice",
+        AttrKind::MUSTTAIL => "musttail",
+        AttrKind::TRANSPARENT_UNION => "transparent_union",
+        AttrKind::SELECTANY => "selectany",
+        AttrKind::MS_STRUCT => "ms_struct",
+        AttrKind::GCC_STRUCT => "gcc_struct",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -88,105 +94,11 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::NOTHROW => "nothrow",
         AttrKind::NODEBUG => "nodebug",
         AttrKind::ARTIFICIAL => "artificial",
+        AttrKind::RETAIN => "retain",
+        AttrKind::NO_DESTROY => "no_destroy",
+        AttrKind::ALWAYS_DESTROY => "always_destroy",
         AttrKind::MIN_VECTOR_WIDTH => "min_vector_width",
         _ => return None,
-    })
-}
-
-/// clang's thread-safety-analysis attributes (`Attr.td`, the
-/// `-Wthread-safety` family; spec/sema.md §4.5): known and ignored, with
-/// their arguments skipped as balanced tokens by the parser (they may
-/// name members declared later). Each entry is the name, whether clang
-/// spells it `Clang<"x">` (`__attribute__((x))` and `[[clang::x]]`)
-/// rather than only `GNU<"x">`, and the first clang release that knows
-/// it (`reentrant_capability` is new in clang 22).
-const THREAD_SAFETY_ATTRS: &[(&str, bool, u32)] = &[
-    ("acquire_capability", true, 0),
-    ("acquire_shared_capability", true, 0),
-    ("acquired_after", false, 0),
-    ("acquired_before", false, 0),
-    ("assert_capability", true, 0),
-    ("assert_exclusive_lock", false, 0),
-    ("assert_shared_capability", true, 0),
-    ("assert_shared_lock", false, 0),
-    ("capability", true, 0),
-    ("exclusive_lock_function", false, 0),
-    ("exclusive_locks_required", true, 0),
-    ("exclusive_trylock_function", false, 0),
-    ("guarded_by", false, 0),
-    ("guarded_var", true, 0),
-    ("lock_returned", false, 0),
-    ("lockable", false, 0),
-    ("locks_excluded", false, 0),
-    ("no_thread_safety_analysis", true, 0),
-    ("pt_guarded_by", false, 0),
-    ("pt_guarded_var", true, 0),
-    ("reentrant_capability", true, 22),
-    ("release_capability", true, 0),
-    ("release_generic_capability", true, 0),
-    ("release_shared_capability", true, 0),
-    ("requires_capability", true, 0),
-    ("requires_shared_capability", true, 0),
-    ("scoped_lockable", true, 0),
-    ("shared_capability", true, 0),
-    ("shared_lock_function", false, 0),
-    ("shared_locks_required", true, 0),
-    ("shared_trylock_function", false, 0),
-    ("try_acquire_capability", true, 0),
-    ("try_acquire_shared_capability", true, 0),
-    ("unlock_function", true, 0),
-];
-
-/// Whether `n` (its `__` affixes removed), written with `syntax` (and
-/// the `clang::` scope when `clang_scope`), is a thread-safety attribute
-/// clang `compat` knows: such an attribute is accepted silently and
-/// attaches nothing.
-pub(crate) fn is_thread_safety_attr(
-    n: &str,
-    syntax: AttrSyntax,
-    clang_scope: bool,
-    compat: u32,
-) -> bool {
-    THREAD_SAFETY_ATTRS.binary_search_by(|&(name, ..)| name.cmp(n)).is_ok_and(|i| {
-        let (_, clang, since) = THREAD_SAFETY_ATTRS[i];
-        compat >= since && (syntax == AttrSyntax::Gnu || (clang && clang_scope))
-    })
-}
-
-/// clang attributes kiln accepts silently because they only steer
-/// sanitizers or `-Wdangling` analysis, which kiln does not implement
-/// (spec/sema.md §4.5, WP-667). Each entry is the name, whether clang
-/// spells it `[[clang::x]]`, and the first clang release that spells it
-/// `[[gnu::x]]` (`u32::MAX`: none). Every entry has the
-/// `__attribute__((x))` spelling. `no_sanitize` gained `gnu::` in clang
-/// 22 (clang 19 warns that it is unknown).
-const IGNORED_CLANG_ATTRS: &[(&str, bool, u32)] = &[
-    ("lifetimebound", true, u32::MAX),
-    ("no_address_safety_analysis", false, 0),
-    ("no_sanitize", true, 22),
-    ("no_sanitize_address", false, 0),
-    ("no_sanitize_memory", true, u32::MAX),
-    ("no_sanitize_thread", false, 0),
-];
-
-/// Whether `n` (its `__` affixes removed), written with `syntax` and
-/// scope `scope` (normalized; `None` for none), is one of
-/// [`IGNORED_CLANG_ATTRS`] in a spelling clang `compat` knows: such an
-/// attribute is accepted without a diagnostic and attaches nothing.
-pub(crate) fn is_ignored_clang_attr(
-    n: &str,
-    syntax: AttrSyntax,
-    scope: Option<&str>,
-    compat: u32,
-) -> bool {
-    IGNORED_CLANG_ATTRS.binary_search_by(|&(name, ..)| name.cmp(n)).is_ok_and(|i| {
-        let (_, clang, gnu_since) = IGNORED_CLANG_ATTRS[i];
-        match scope {
-            None => syntax == AttrSyntax::Gnu,
-            Some("clang") => clang,
-            Some("gnu") => compat >= gnu_since,
-            Some(_) => false,
-        }
     })
 }
 
@@ -296,6 +208,23 @@ impl Sema<'_, '_> {
             if matches!(node.syntax, AttrSyntax::Gnu | AttrSyntax::Declspec) {
                 return true;
             }
+            // `[[clang::neon_vector_type(N)]]` and the like after the
+            // type-specifiers: type attributes (WP-809), applied with the
+            // GNU spellings by `Sema::apply_declspec_vector_attrs`.
+            if is_cxx11_vector_type_attr(node.kind) {
+                if !in_chunk {
+                    return true;
+                }
+                // After a ptr-operator, an array or a function declarator
+                // it would make a vector of that compound type, which no
+                // vector kind permits (clang `err_attribute_invalid_vector_type`).
+                let shown = self.attr_shown(&node, vector_attr_name(node.kind));
+                let msg = self
+                    .diag(DiagId::sema_attribute_not_type_attr, node.loc)
+                    .arg(format!("'{shown}'"));
+                self.emit(msg);
+                return false;
+            }
             let Some(name) = attr_name(&node) else {
                 return true;
             };
@@ -345,7 +274,11 @@ impl Sema<'_, '_> {
             let node = *self.ast.attrs.get(a);
             if matches!(
                 node.kind,
-                AttrKind::ASSUME | AttrKind::LIKELY | AttrKind::UNLIKELY | AttrKind::FALLTHROUGH
+                AttrKind::ASSUME
+                    | AttrKind::LIKELY
+                    | AttrKind::UNLIKELY
+                    | AttrKind::FALLTHROUGH
+                    | AttrKind::MUSTTAIL
             ) {
                 continue;
             }
@@ -435,6 +368,8 @@ impl Sema<'_, '_> {
         self.check_tls_model_attrs(d, attrs);
         self.check_visibility_attrs(d, attrs);
         self.check_weak_attrs(d, attrs);
+        self.check_selectany_attrs(d, attrs);
+        self.check_ms_struct_attrs(d, attrs);
         let kind = self.ast.decls.get(d).kind();
         attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);
@@ -447,6 +382,78 @@ impl Sema<'_, '_> {
             self.check_decl_attr(d, kind, node)
         });
         self.unify_fn_section(d, attrs);
+        self.check_no_builtin_attrs(d, attrs);
+    }
+
+    /// The `no_builtin` attributes of function declaration `d` (clang
+    /// `handleNoBuiltinAttr`, WP-808): each adds its names to those before
+    /// it on the declaration, and a wildcard among more than one name is
+    /// an error at the declaration's name, each time; one attribute with
+    /// the union stays, at the last one's location. The declaration then
+    /// waits for its definition ([`Sema::no_builtin_pending`]).
+    fn check_no_builtin_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        if !attrs.iter().any(|&a| self.ast.attrs.get(a).kind == AttrKind::NO_BUILTIN) {
+            return;
+        }
+        let mut names: Vec<String> = Vec::new();
+        let mut last: Option<AttrNode> = None;
+        let name_loc = self.ast.decls.get(d).loc();
+        attrs.retain(|&a| {
+            let node = *self.ast.attrs.get(a);
+            if node.kind != AttrKind::NO_BUILTIN {
+                return true;
+            }
+            let joined = self.ast.symbols().as_str(Symbol::from_index(node.a)).to_owned();
+            names.extend(joined.split(',').filter(|n| !n.is_empty()).map(str::to_owned));
+            names.sort();
+            names.dedup();
+            if names.len() > 1 && names.iter().any(|n| n == "*") {
+                let msg = self
+                    .diag(DiagId::sema_no_builtin_wildcard_with_name, name_loc)
+                    .arg("'no_builtin'");
+                self.emit(msg);
+            }
+            last = Some(node);
+            false
+        });
+        let Some(mut node) = last else { return };
+        node.a = self.intern(&names.join(",")).index();
+        attrs.push(self.ast.attrs.push(node));
+        self.no_builtin_pending.push((d, node.loc));
+    }
+
+    /// The `no_builtin` attribute of function `f` met its body (`{`), or
+    /// `= default` / `= delete` (`defaulted`): clang's "has no effect on
+    /// defaulted or deleted functions" for the latter (WP-808).
+    pub(crate) fn no_builtin_defined(&mut self, f: DeclId, defaulted: bool) {
+        if self.no_builtin_pending.is_empty() {
+            return;
+        }
+        let Some(i) = self.no_builtin_pending.iter().position(|&(g, _)| g == f) else { return };
+        let (_, loc) = self.no_builtin_pending.swap_remove(i);
+        if defaulted {
+            let msg = self.diag(DiagId::sema_no_builtin_defaulted_deleted, loc).arg("no_builtin");
+            self.emit(msg);
+        }
+    }
+
+    /// The end of the unit: a `no_builtin` attribute still waiting is on a
+    /// declaration that is not a definition (clang
+    /// `err_attribute_no_builtin_on_non_definition`; WP-808).
+    pub(crate) fn report_no_builtin_declarations(&mut self) {
+        let mut pending = std::mem::take(&mut self.no_builtin_pending);
+        // An instantiation repeats its pattern's attribute (diagnosed
+        // there), and a definition reached without the parser's `{`
+        // (an instantiated body) is one.
+        pending.retain(|&(d, _)| {
+            self.ast.instantiated_from(d).is_none() && self.ast.definition(d) != Some(d)
+        });
+        pending.sort_by_key(|&(_, l)| l);
+        pending.dedup_by_key(|&mut (_, l)| l);
+        for (_, loc) in pending {
+            let msg = self.diag(DiagId::sema_no_builtin_non_definition, loc).arg("no_builtin");
+            self.emit(msg);
+        }
     }
 
     /// One attribute of [`Sema::check_decl_attrs`]; false drops it.
@@ -461,10 +468,24 @@ impl Sema<'_, '_> {
         };
         match node.kind {
             // [dcl.attr.assume]/1, [dcl.attr.fallthrough]/1,
-            // [dcl.attr.likelihood]/1: statement attributes.
-            AttrKind::ASSUME | AttrKind::FALLTHROUGH | AttrKind::LIKELY | AttrKind::UNLIKELY => {
+            // [dcl.attr.likelihood]/1: statement attributes (and clang's
+            // `musttail`, WP-809).
+            AttrKind::ASSUME
+            | AttrKind::FALLTHROUGH
+            | AttrKind::LIKELY
+            | AttrKind::UNLIKELY
+            | AttrKind::MUSTTAIL => {
                 let name = self.attr_shown(&node, attr_name(&node).unwrap_or_default());
                 let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg(name);
+                self.emit(msg);
+                false
+            }
+            // clang `TransparentUnion` is C-only: ignored in C++ (a
+            // class-head one also gets the delayed check,
+            // `Sema::transparent_union_head`).
+            AttrKind::TRANSPARENT_UNION => {
+                let shown = self.attr_shown(&node, "transparent_union");
+                let msg = self.diag(DiagId::parse_attribute_ignored, node.loc).arg(shown);
                 self.emit(msg);
                 false
             }
@@ -507,6 +528,21 @@ impl Sema<'_, '_> {
                 false
             }
             AttrKind::NORETURN if node.is_gnu_spelling() => self.check_gnu_noreturn(d, kind, node),
+            // A calling convention left on a declaration with no type
+            // (a class): clang's `'X' attribute only applies to functions
+            // and methods`; on a declarator it is consumed into the type
+            // ([`Sema::apply_cc_attrs`]; WP-808).
+            AttrKind::CALLING_CONV | AttrKind::NO_CALLER_SAVED_REGS | AttrKind::REGPARM => {
+                let name = if node.kind == AttrKind::CALLING_CONV {
+                    kiln_ast::attr::CC_ATTR_SPELLINGS
+                        .get(node.b as usize)
+                        .copied()
+                        .unwrap_or("cdecl")
+                } else {
+                    "no_caller_saved_registers"
+                };
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, name, "functions and methods")
+            }
             // [dcl.attr.noreturn]/1.
             AttrKind::NORETURN if !kind.is_function() => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type_error, "noreturn", "functions")
@@ -607,6 +643,9 @@ impl Sema<'_, '_> {
                 "optnone",
                 "functions and Objective-C methods",
             ),
+            AttrKind::NO_BUILTIN if !kind.is_function() => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, "no_builtin", "functions")
+            }
             AttrKind::DISABLE_TAIL_CALLS if !kind.is_function() => wrong(
                 self,
                 DiagId::sema_attribute_wrong_decl_type,
@@ -662,6 +701,17 @@ impl Sema<'_, '_> {
             }
             // clang `TrivialABI`: `SubjectList<[CXXRecord]>` (ignored
             // with a warning).
+            // clang `MSStruct` / `GCCStruct`: `SubjectList<[Record]>`.
+            AttrKind::MS_STRUCT | AttrKind::GCC_STRUCT if !is_record_kind(kind) => {
+                let name =
+                    if node.kind == AttrKind::MS_STRUCT { "ms_struct" } else { "gcc_struct" };
+                wrong(
+                    self,
+                    DiagId::sema_attribute_wrong_decl_type,
+                    name,
+                    "structs, unions, and classes",
+                )
+            }
             AttrKind::TRIVIAL_ABI if !is_record_kind(kind) => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "trivial_abi", "classes")
             }
@@ -1276,7 +1326,8 @@ impl Sema<'_, '_> {
     /// makes the function type `noreturn` as on a declaration
     /// ([`Sema::apply_noreturn_attrs`]; spec/types.md §5.4, WP-708).
     pub fn act_on_type_id_decl_attrs(&mut self, ty: QualType, attrs: &[AttrId]) -> QualType {
-        self.apply_noreturn_attrs(ty, attrs)
+        let ty = self.apply_noreturn_attrs(ty, attrs);
+        self.apply_cc_attrs_of(ty, attrs)
     }
 
     /// GNU `noreturn` (`__attribute__((noreturn))`, `[[gnu::noreturn]]`)
@@ -1308,6 +1359,18 @@ impl Sema<'_, '_> {
         v: bool,
         outer: bool,
     ) -> Option<QualType> {
+        self.with_fn_info(ty, &|i| i.with_noreturn(v), outer)
+    }
+
+    /// `ty` (a function type, or a pointer, reference or member pointer
+    /// to one when `outer`) with its function type's [`FuncInfo`] mapped
+    /// by `f`; None when it is no such type or `f` changes nothing.
+    pub(crate) fn with_fn_info(
+        &mut self,
+        ty: QualType,
+        f: &dyn Fn(FuncInfo) -> FuncInfo,
+        outer: bool,
+    ) -> Option<QualType> {
         // Sugar (a typedef, `decltype`, a substituted parameter) is
         // stepped through, not canonicalized (clang's
         // `FunctionTypeUnwrapper`): the function type as written keeps
@@ -1315,18 +1378,19 @@ impl Sema<'_, '_> {
         // `noreturn` is a pure addition (WP-748).
         let ty = self.ast.types.desugar_top(ty);
         if let TypeView::Function(p) = self.ast.types.view(ty.ty()) {
-            if p.info().noreturn() == v {
+            let info = f(p.info());
+            if p.info() == info {
                 return None;
             }
             let params = self.ast.types.params(&p).to_vec();
             let exc = self.ast.types.exc_spec(&p);
-            let f = self.ast.types.function(p.ret(), &params, p.info().with_noreturn(v), exc);
-            return Some(self.ast.types.qualify(f, ty.quals()));
+            let fty = self.ast.types.function(p.ret(), &params, info, exc);
+            return Some(self.ast.types.qualify(fty, ty.quals()));
         }
         if self.ast.types.is_function(ty) {
             // Sugar `desugar_top` keeps (a dependent kind).
             let c = self.ast.types.canonical(ty);
-            return self.with_fn_noreturn(c, v, false);
+            return self.with_fn_info(c, f, false);
         }
         if !outer {
             return None;
@@ -1340,20 +1404,20 @@ impl Sema<'_, '_> {
         };
         let built = match view {
             TypeView::Pointer(p) => {
-                let f = self.with_fn_noreturn(p, v, false)?;
-                self.ast.types.pointer_to(f)
+                let g = self.with_fn_info(p, f, false)?;
+                self.ast.types.pointer_to(g)
             }
             TypeView::LValueRef(p) => {
-                let f = self.with_fn_noreturn(p, v, false)?;
-                self.ast.types.lvalue_ref_to(f)
+                let g = self.with_fn_info(p, f, false)?;
+                self.ast.types.lvalue_ref_to(g)
             }
             TypeView::RValueRef(p) => {
-                let f = self.with_fn_noreturn(p, v, false)?;
-                self.ast.types.rvalue_ref_to(f)
+                let g = self.with_fn_info(p, f, false)?;
+                self.ast.types.rvalue_ref_to(g)
             }
             TypeView::MemberPointer { pointee, class } => {
-                let f = self.with_fn_noreturn(pointee, v, false)?;
-                self.ast.types.member_pointer(f, class)
+                let g = self.with_fn_info(pointee, f, false)?;
+                self.ast.types.member_pointer(g, class)
             }
             _ => return None,
         };
@@ -1446,36 +1510,22 @@ impl Sema<'_, '_> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// The vector type attributes with a `[[clang::...]]` spelling (WP-809):
+/// clang `Clang<"neon_vector_type">`, `Clang<"neon_polyvector_type">`
+/// and, from clang 22, `Clang<"ext_vector_type">` (an unknown attribute
+/// below it).
+fn is_cxx11_vector_type_attr(k: AttrKind) -> bool {
+    matches!(
+        k,
+        AttrKind::NEON_VECTOR_TYPE | AttrKind::NEON_POLYVECTOR_TYPE | AttrKind::EXT_VECTOR_TYPE
+    )
+}
 
-    /// The table is searched by name, so it must stay sorted.
-    #[test]
-    fn thread_safety_table_sorted() {
-        assert!(THREAD_SAFETY_ATTRS.windows(2).all(|w| w[0].0 < w[1].0));
-        assert_eq!(THREAD_SAFETY_ATTRS.len(), 34);
-        assert!(is_thread_safety_attr("guarded_by", AttrSyntax::Gnu, false, 19));
-        assert!(!is_thread_safety_attr("guarded_by", AttrSyntax::Cxx11, true, 22));
-        assert!(is_thread_safety_attr("capability", AttrSyntax::Cxx11, true, 19));
-        assert!(!is_thread_safety_attr("capability", AttrSyntax::Cxx11, false, 22));
-        assert!(!is_thread_safety_attr("reentrant_capability", AttrSyntax::Gnu, false, 19));
-        assert!(is_thread_safety_attr("reentrant_capability", AttrSyntax::Gnu, false, 22));
-    }
-
-    #[test]
-    fn ignored_clang_attrs_sorted_and_spelled() {
-        // [dcl.attr.grammar]/5: an unrecognized attribute-token is
-        // implementation-defined; clang's spellings are the contract.
-        assert!(IGNORED_CLANG_ATTRS.windows(2).all(|w| w[0].0 < w[1].0));
-        let ig = is_ignored_clang_attr;
-        assert!(ig("no_sanitize", AttrSyntax::Gnu, None, 19));
-        assert!(ig("no_sanitize", AttrSyntax::Cxx11, Some("clang"), 19));
-        assert!(!ig("no_sanitize", AttrSyntax::Cxx11, Some("gnu"), 19));
-        assert!(ig("no_sanitize", AttrSyntax::Cxx11, Some("gnu"), 22));
-        assert!(!ig("lifetimebound", AttrSyntax::Cxx11, None, 22));
-        assert!(!ig("lifetimebound", AttrSyntax::Cxx11, Some("gnu"), 22));
-        assert!(ig("no_sanitize_address", AttrSyntax::Cxx11, Some("gnu"), 19));
-        assert!(!ig("no_sanitize_address", AttrSyntax::Cxx11, Some("clang"), 22));
+/// The name of vector type attribute `k`.
+fn vector_attr_name(k: AttrKind) -> &'static str {
+    match k {
+        AttrKind::NEON_VECTOR_TYPE => "neon_vector_type",
+        AttrKind::NEON_POLYVECTOR_TYPE => "neon_polyvector_type",
+        _ => "ext_vector_type",
     }
 }

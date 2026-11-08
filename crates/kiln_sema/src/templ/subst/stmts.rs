@@ -134,7 +134,8 @@ impl Substituter<'_, '_, '_> {
                 break;
             }
         }
-        self.sema.act_on_compound(&out, n.loc(), rb)
+        let fp = self.sema.ast.stmts.compound_fp(s);
+        self.sema.ast.builder().compound_fp(&out, n.loc(), rb, fp)
     }
 
     fn opt_stmt(&mut self, s: Option<StmtId>) -> Option<StmtId> {
@@ -385,6 +386,23 @@ impl Substituter<'_, '_, '_> {
                 let sub = self.stmt(StmtId::new(n.b()));
                 if kept.is_empty() {
                     return Ok(sub);
+                }
+                // `musttail` is checked again on the instantiated return
+                // (clang `checkAndRewriteMustTailAttr` from
+                // `BuildAttributedStmt`; WP-809).
+                for &a in &kept {
+                    let node = *self.sema.ast.attrs.get(a);
+                    if node.kind != kiln_ast::attr::AttrKind::MUSTTAIL
+                        || self.sema.ast.stmts.get(sub).kind() != StmtKind::ReturnStmt
+                    {
+                        continue;
+                    }
+                    if !self.sema.check_musttail(sub, &node) {
+                        return Ok(sub);
+                    }
+                    if let Some(f) = self.sema.func.as_mut() {
+                        f.has_musttail = true;
+                    }
                 }
                 Ok(self.sema.builder().attributed_stmt(&kept, sub, loc))
             }

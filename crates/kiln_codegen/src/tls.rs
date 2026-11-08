@@ -116,6 +116,12 @@ impl Cg<'_> {
         if ast.decls.var(ast.latest(first)).is_some_and(|v| v.spec.is_constinit()) {
             return false;
         }
+        // clang `isEmittedWithConstantInitializer`: the initializer of a
+        // weak or `selectany` variable may not be the one the program
+        // uses, so it is not inspected.
+        if ast.is_weak_decl(first) || ast.is_selectany(first) {
+            return true;
+        }
         if self.tls_var_def(first).is_none() {
             return true;
         }

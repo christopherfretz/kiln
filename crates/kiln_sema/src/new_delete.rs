@@ -108,8 +108,11 @@ impl Sema<'_, '_> {
             self.declare_global_op(op, vp, &[size], ExcSpec::None);
             self.declare_global_op(op, vp, &[size, al], ExcSpec::None);
         }
+        // The sized ones only with `-fsized-deallocation` (clang
+        // `DeclareGlobalNewDelete`).
+        let n = if self.sized_deallocation { 4 } else { 2 };
         for op in [O::Delete, O::ArrayDelete] {
-            for params in [&[vp][..], &[vp, al], &[vp, size], &[vp, size, al]] {
+            for params in [&[vp][..], &[vp, al], &[vp, size], &[vp, size, al]].into_iter().take(n) {
                 self.declare_global_op(op, QualType::VOID, params, ExcSpec::BasicNoexcept);
             }
         }
@@ -1323,6 +1326,20 @@ impl Sema<'_, '_> {
                 return (sq.is_const() <= pq.is_const() && sq.is_volatile() <= pq.is_volatile())
                     .then_some(false);
             }
+            // [conv.ptr]/3: a pointer to a derived class converts to a
+            // pointer to its base (clang's `Decl::operator new(size_t,
+            // const ASTContext &, DeclContext *)` called with an
+            // `ObjCContainerDecl *`).
+            let record = |q: QualType| t.as_record(t.canonical(q).without_quals());
+            if let (Some(d), Some(b)) = (record(src), record(pp))
+                && self.ast.first(d) != self.ast.first(b)
+                && conv::is_derived_from(self, d, b)
+            {
+                let sq = t.effective_quals(src);
+                let pq = t.effective_quals(pp);
+                return (sq.is_const() <= pq.is_const() && sq.is_volatile() <= pq.is_volatile())
+                    .then_some(false);
+            }
             return t.same_unqualified(src, pp).then_some(t.is_array(at));
         }
         None
@@ -1835,7 +1852,7 @@ impl Sema<'_, '_> {
     /// destructor at `loc` (clang `DiagnoseUseOfDecl`, the expression
     /// fails). An inaccessible one is diagnosed with `access` = (location,
     /// diagnostic), clang `CheckDestructorAccess`.
-    fn mark_element_dtor_referenced(
+    pub(crate) fn mark_element_dtor_referenced(
         &mut self,
         mut elem: QualType,
         access: (Loc, DiagId),

@@ -90,6 +90,48 @@ fn clang19_unevaluated(b: u32) -> bool {
                 | id::FABSF16
         )
 }
+/// WP-808: the `pass_object_size(t)` arguments of call or construction
+/// `e`, with their `t`, for the fold prepass ([`Cg::pass_object_size_arg`]
+/// asks by the same key). The callee is found as codegen finds it: the
+/// function a call names through parentheses and decays, a member call's
+/// method, or the constructor; an operator call of a member function
+/// passes the object first.
+pub(crate) fn object_size_args(ast: &Ast, e: ExprId) -> Vec<(ExprId, u32)> {
+    let (d, args) = match ast.exprs.get(e).kind() {
+        ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+            (Some(ast.exprs.constructor(e)), ast.exprs.construct_args(e))
+        }
+        _ => {
+            let mut c = ast.exprs.callee(e);
+            let d = loop {
+                match ast.exprs.get(c).kind() {
+                    ExprKind::ParenExpr | ExprKind::ImplicitCastExpr => c = ast.exprs.operand(c),
+                    ExprKind::SubstNonTypeTemplateParmExpr => c = ast.exprs.subst_replacement(c),
+                    ExprKind::DeclRefExpr | ExprKind::MemberExpr => break Some(ast.exprs.decl(c)),
+                    _ => break None,
+                }
+            };
+            (d, ast.exprs.call_args(e))
+        }
+    };
+    let Some(d) = d.filter(|&d| ast.decls.function(d).is_some()) else {
+        return Vec::new();
+    };
+    let ps = ast.pass_object_size_params(d);
+    if ps.is_empty() {
+        return Vec::new();
+    }
+    let args: Vec<ExprId> = ast.lists.iter(args).collect();
+    let skip = usize::from(
+        ast.exprs.get(e).kind() == ExprKind::CXXOperatorCallExpr
+            && ast.decls.get(d).kind() == DeclKind::CXXMethod
+            && ast.decls.function(d).is_some_and(|f| {
+                f.spec.storage() != kiln_ast::decl::FnStorage::Static
+                    && !f.spec.has_explicit_object()
+            }),
+    );
+    ps.iter().filter_map(|&(i, t, _)| Some((*args.get(i + skip)?, t))).collect()
+}
 
 /// The arguments of the builtin call `e` codegen folds rather than emits
 /// (the `__builtin_isfpclass` mask, the `__builtin_object_size` type,
@@ -143,6 +185,10 @@ fn lib_name(b: u32) -> Option<&'static str> {
         | id::NANS
         | id::NANSF
         | id::NANSL
+        | id::NANF16
+        | id::NANF128
+        | id::NANSF16
+        | id::NANSF128
         | id::ABORT
         | id::BCMP
         | id::WMEMCPY
@@ -199,10 +245,19 @@ fn fp_intrinsic(b: u32) -> Option<(&'static str, usize)> {
 /// and the integer `abs` family, which clang lowers through their
 /// builtin id too (`memcpy` -> `llvm.memcpy`, spec/codegen.md §3). The
 /// others (`strlen`, `sqrt`, `cbrt`, ...) stay library calls.
-pub(crate) fn lib_intrinsic(ast: &Ast, d: DeclId) -> Option<u32> {
-    let t = ast.decls.lib_builtin(d)?;
+///
+/// WP-806: where [`Cg::errno_lowering`] holds (`-fno-math-errno`) the
+/// errno-setting functions with an intrinsic are lowered too (`sqrt` ->
+/// `llvm.sqrt`, `fmod` -> `frem`; not `ldexp` or `exp10`, whose library
+/// forms stay calls in clang 19).
+pub(crate) fn lib_intrinsic(cg: &Cg<'_>, d: DeclId) -> Option<u32> {
+    let t = cg.ast.decls.lib_builtin(d)?;
     let mem = matches!(t, id::MEMCPY | id::MEMMOVE | id::MEMSET | id::ABS | id::LABS | id::LLABS);
-    (mem || fp_intrinsic(t).is_some()).then_some(t)
+    let errno = || {
+        let name = id::info(t)?.name.strip_prefix("__builtin_")?;
+        cg.errno_gen().then(|| id::errno_intrinsic(name, cg.opts.clang_compat >= 22))?
+    };
+    (mem || fp_intrinsic(t).is_some() || errno().is_some()).then_some(t)
 }
 
 /// The `llvm.is.fpclass` test of a classification builtin
@@ -238,8 +293,14 @@ fn fp_compare(b: u32) -> Option<FloatPredicate> {
 /// return or argument passed by address (`indirect`; `__builtin_cprojl`'s
 /// x86-64 `long double _Complex`) adds `argmem: readwrite` (clang
 /// `AddPotentialArgAccess`).
-fn lib_attrs(b: u32, indirect: bool, out: &mut Vec<Attr>) {
-    let bits = id::info(b).map_or(0, |i| i.attrs);
+///
+/// WP-806: under `-fno-math-errno` the errno-setting math functions are
+/// `const` (`no_errno`; clang `Sema::AddKnownFunctionAttributes`).
+fn lib_attrs(b: u32, indirect: bool, no_errno: bool, out: &mut Vec<Attr>) {
+    let mut bits = id::info(b).map_or(0, |i| i.attrs);
+    if no_errno && id::info(b).is_some_and(|i| id::const_without_errno(i.name)) {
+        bits |= attr::CONST;
+    }
     if bits & attr::NORETURN != 0 {
         out.push(Attr::Flag(AttrKind::NoReturn));
     }
@@ -349,6 +410,141 @@ pub(crate) fn is_complete(ast: &Ast, q: QualType) -> bool {
     })
 }
 
+/// The builtins kiln declares but whose calls are still the error
+/// "code generation for X is not supported yet", sorted and separated by
+/// spaces (mostly the scalar and polymorphic `__builtin_neon_*` forms
+/// `arm_neon.h` wraps, and the ACLE system-register builtins): the
+/// driver's `__has_builtin` answers 0 for them (WP-805), and
+/// `kiln_driver/tests/builtin_lowering.rs` checks the list is exact.
+pub static UNLOWERED_BUILTINS: &str = "__builtin_arm_chkfeat __builtin_arm_prefetch \
+    __builtin_arm_rsr __builtin_arm_rsr64 __builtin_arm_rsrp __builtin_arm_trap __builtin_arm_wsr \
+    __builtin_arm_wsr64 __builtin_arm_wsrp __builtin_ia32_maskmovq __builtin_neon_vabdd_f64 \
+    __builtin_neon_vabds_f32 __builtin_neon_vabsd_s64 __builtin_neon_vadd_v \
+    __builtin_neon_vaddd_s64 __builtin_neon_vaddd_u64 __builtin_neon_vaddhn_v \
+    __builtin_neon_vaddq_p128 __builtin_neon_vaddq_v __builtin_neon_vcage_v \
+    __builtin_neon_vcaged_f64 __builtin_neon_vcageq_v __builtin_neon_vcages_f32 \
+    __builtin_neon_vcagt_v __builtin_neon_vcagtd_f64 __builtin_neon_vcagtq_v \
+    __builtin_neon_vcagts_f32 __builtin_neon_vcale_v __builtin_neon_vcaled_f64 \
+    __builtin_neon_vcaleq_v __builtin_neon_vcales_f32 __builtin_neon_vcalt_v \
+    __builtin_neon_vcaltd_f64 __builtin_neon_vcaltq_v __builtin_neon_vcalts_f32 \
+    __builtin_neon_vceqd_f64 __builtin_neon_vceqd_s64 __builtin_neon_vceqd_u64 \
+    __builtin_neon_vceqs_f32 __builtin_neon_vceqz_v __builtin_neon_vceqzd_f64 \
+    __builtin_neon_vceqzd_s64 __builtin_neon_vceqzd_u64 __builtin_neon_vceqzq_v \
+    __builtin_neon_vceqzs_f32 __builtin_neon_vcged_f64 __builtin_neon_vcged_s64 \
+    __builtin_neon_vcged_u64 __builtin_neon_vcges_f32 __builtin_neon_vcgez_v \
+    __builtin_neon_vcgezd_f64 __builtin_neon_vcgezd_s64 __builtin_neon_vcgezq_v \
+    __builtin_neon_vcgezs_f32 __builtin_neon_vcgtd_f64 __builtin_neon_vcgtd_s64 \
+    __builtin_neon_vcgtd_u64 __builtin_neon_vcgts_f32 __builtin_neon_vcgtz_v \
+    __builtin_neon_vcgtzd_f64 __builtin_neon_vcgtzd_s64 __builtin_neon_vcgtzq_v \
+    __builtin_neon_vcgtzs_f32 __builtin_neon_vcled_f64 __builtin_neon_vcled_s64 \
+    __builtin_neon_vcled_u64 __builtin_neon_vcles_f32 __builtin_neon_vclez_v \
+    __builtin_neon_vclezd_f64 __builtin_neon_vclezd_s64 __builtin_neon_vclezq_v \
+    __builtin_neon_vclezs_f32 __builtin_neon_vcls_v __builtin_neon_vclsq_v \
+    __builtin_neon_vcltd_f64 __builtin_neon_vcltd_s64 __builtin_neon_vcltd_u64 \
+    __builtin_neon_vclts_f32 __builtin_neon_vcltz_v __builtin_neon_vcltzd_f64 \
+    __builtin_neon_vcltzd_s64 __builtin_neon_vcltzq_v __builtin_neon_vcltzs_f32 \
+    __builtin_neon_vcvt_n_f32_v __builtin_neon_vcvt_n_f64_v __builtin_neon_vcvt_n_s32_v \
+    __builtin_neon_vcvt_n_s64_v __builtin_neon_vcvt_n_u32_v __builtin_neon_vcvt_n_u64_v \
+    __builtin_neon_vcvtad_s64_f64 __builtin_neon_vcvtad_u64_f64 __builtin_neon_vcvtas_s32_f32 \
+    __builtin_neon_vcvtas_u32_f32 __builtin_neon_vcvtd_f64_s64 __builtin_neon_vcvtd_f64_u64 \
+    __builtin_neon_vcvtd_n_f64_s64 __builtin_neon_vcvtd_n_f64_u64 __builtin_neon_vcvtd_n_s64_f64 \
+    __builtin_neon_vcvtd_n_u64_f64 __builtin_neon_vcvtd_s64_f64 __builtin_neon_vcvtd_u64_f64 \
+    __builtin_neon_vcvtmd_s64_f64 __builtin_neon_vcvtmd_u64_f64 __builtin_neon_vcvtms_s32_f32 \
+    __builtin_neon_vcvtms_u32_f32 __builtin_neon_vcvtnd_s64_f64 __builtin_neon_vcvtnd_u64_f64 \
+    __builtin_neon_vcvtns_s32_f32 __builtin_neon_vcvtns_u32_f32 __builtin_neon_vcvtpd_s64_f64 \
+    __builtin_neon_vcvtpd_u64_f64 __builtin_neon_vcvtps_s32_f32 __builtin_neon_vcvtps_u32_f32 \
+    __builtin_neon_vcvtq_n_f32_v __builtin_neon_vcvtq_n_f64_v __builtin_neon_vcvtq_n_s32_v \
+    __builtin_neon_vcvtq_n_s64_v __builtin_neon_vcvtq_n_u32_v __builtin_neon_vcvtq_n_u64_v \
+    __builtin_neon_vcvts_f32_s32 __builtin_neon_vcvts_f32_u32 __builtin_neon_vcvts_n_f32_s32 \
+    __builtin_neon_vcvts_n_f32_u32 __builtin_neon_vcvts_n_s32_f32 __builtin_neon_vcvts_n_u32_f32 \
+    __builtin_neon_vcvts_s32_f32 __builtin_neon_vcvts_u32_f32 __builtin_neon_vcvtx_f32_v \
+    __builtin_neon_vcvtxd_f32_f64 __builtin_neon_vfmad_lane_f64 __builtin_neon_vfmad_laneq_f64 \
+    __builtin_neon_vfmas_lane_f32 __builtin_neon_vfmas_laneq_f32 __builtin_neon_vld1_x2_v \
+    __builtin_neon_vld1_x3_v __builtin_neon_vld1_x4_v __builtin_neon_vld1q_x2_v \
+    __builtin_neon_vld1q_x3_v __builtin_neon_vld1q_x4_v __builtin_neon_vld2_dup_v \
+    __builtin_neon_vld2_lane_v __builtin_neon_vld2q_dup_v __builtin_neon_vld2q_lane_v \
+    __builtin_neon_vld3_dup_v __builtin_neon_vld3q_dup_v __builtin_neon_vld4_dup_v \
+    __builtin_neon_vld4q_dup_v __builtin_neon_vmaxnmv_f32 __builtin_neon_vmaxnmvq_f32 \
+    __builtin_neon_vmaxnmvq_f64 __builtin_neon_vminnmv_f32 __builtin_neon_vminnmvq_f32 \
+    __builtin_neon_vminnmvq_f64 __builtin_neon_vmul_lane_v __builtin_neon_vmul_laneq_v \
+    __builtin_neon_vmul_n_f64 __builtin_neon_vmul_v __builtin_neon_vmulq_v __builtin_neon_vmulx_v \
+    __builtin_neon_vmulxd_f64 __builtin_neon_vmulxq_v __builtin_neon_vmulxs_f32 \
+    __builtin_neon_vnegd_s64 __builtin_neon_vpaddd_f64 __builtin_neon_vpaddd_s64 \
+    __builtin_neon_vpaddd_u64 __builtin_neon_vpadds_f32 __builtin_neon_vpmaxnm_v \
+    __builtin_neon_vpmaxnmq_v __builtin_neon_vpmaxnmqd_f64 __builtin_neon_vpmaxnms_f32 \
+    __builtin_neon_vpmaxqd_f64 __builtin_neon_vpmaxs_f32 __builtin_neon_vpminnm_v \
+    __builtin_neon_vpminnmq_v __builtin_neon_vpminnmqd_f64 __builtin_neon_vpminnms_f32 \
+    __builtin_neon_vpminqd_f64 __builtin_neon_vpmins_f32 __builtin_neon_vqabsb_s8 \
+    __builtin_neon_vqabsd_s64 __builtin_neon_vqabsh_s16 __builtin_neon_vqabss_s32 \
+    __builtin_neon_vqaddb_s8 __builtin_neon_vqaddb_u8 __builtin_neon_vqaddd_s64 \
+    __builtin_neon_vqaddd_u64 __builtin_neon_vqaddh_s16 __builtin_neon_vqaddh_u16 \
+    __builtin_neon_vqadds_s32 __builtin_neon_vqadds_u32 __builtin_neon_vqdmlal_v \
+    __builtin_neon_vqdmlalh_lane_s16 __builtin_neon_vqdmlalh_laneq_s16 __builtin_neon_vqdmlalh_s16 \
+    __builtin_neon_vqdmlals_lane_s32 __builtin_neon_vqdmlals_laneq_s32 __builtin_neon_vqdmlals_s32 \
+    __builtin_neon_vqdmlsl_v __builtin_neon_vqdmlslh_lane_s16 __builtin_neon_vqdmlslh_laneq_s16 \
+    __builtin_neon_vqdmlslh_s16 __builtin_neon_vqdmlsls_lane_s32 __builtin_neon_vqdmlsls_laneq_s32 \
+    __builtin_neon_vqdmlsls_s32 __builtin_neon_vqdmulh_lane_v __builtin_neon_vqdmulh_laneq_v \
+    __builtin_neon_vqdmulhh_s16 __builtin_neon_vqdmulhq_lane_v __builtin_neon_vqdmulhq_laneq_v \
+    __builtin_neon_vqdmulhs_s32 __builtin_neon_vqdmull_v __builtin_neon_vqdmullh_s16 \
+    __builtin_neon_vqdmulls_s32 __builtin_neon_vqmovnd_s64 __builtin_neon_vqmovnd_u64 \
+    __builtin_neon_vqmovnh_s16 __builtin_neon_vqmovnh_u16 __builtin_neon_vqmovns_s32 \
+    __builtin_neon_vqmovns_u32 __builtin_neon_vqmovund_s64 __builtin_neon_vqmovunh_s16 \
+    __builtin_neon_vqmovuns_s32 __builtin_neon_vqnegb_s8 __builtin_neon_vqnegd_s64 \
+    __builtin_neon_vqnegh_s16 __builtin_neon_vqnegs_s32 __builtin_neon_vqrdmulh_lane_v \
+    __builtin_neon_vqrdmulh_laneq_v __builtin_neon_vqrdmulhh_s16 __builtin_neon_vqrdmulhq_lane_v \
+    __builtin_neon_vqrdmulhq_laneq_v __builtin_neon_vqrdmulhs_s32 __builtin_neon_vqrshlb_s8 \
+    __builtin_neon_vqrshlb_u8 __builtin_neon_vqrshld_s64 __builtin_neon_vqrshld_u64 \
+    __builtin_neon_vqrshlh_s16 __builtin_neon_vqrshlh_u16 __builtin_neon_vqrshls_s32 \
+    __builtin_neon_vqrshls_u32 __builtin_neon_vqrshrnd_n_s64 __builtin_neon_vqrshrnd_n_u64 \
+    __builtin_neon_vqrshrnh_n_s16 __builtin_neon_vqrshrnh_n_u16 __builtin_neon_vqrshrns_n_s32 \
+    __builtin_neon_vqrshrns_n_u32 __builtin_neon_vqrshrund_n_s64 __builtin_neon_vqrshrunh_n_s16 \
+    __builtin_neon_vqrshruns_n_s32 __builtin_neon_vqshlb_n_s8 __builtin_neon_vqshlb_n_u8 \
+    __builtin_neon_vqshlb_s8 __builtin_neon_vqshlb_u8 __builtin_neon_vqshld_n_s64 \
+    __builtin_neon_vqshld_n_u64 __builtin_neon_vqshld_s64 __builtin_neon_vqshld_u64 \
+    __builtin_neon_vqshlh_n_s16 __builtin_neon_vqshlh_n_u16 __builtin_neon_vqshlh_s16 \
+    __builtin_neon_vqshlh_u16 __builtin_neon_vqshls_n_s32 __builtin_neon_vqshls_n_u32 \
+    __builtin_neon_vqshls_s32 __builtin_neon_vqshls_u32 __builtin_neon_vqshlu_n_v \
+    __builtin_neon_vqshlub_n_s8 __builtin_neon_vqshlud_n_s64 __builtin_neon_vqshluh_n_s16 \
+    __builtin_neon_vqshluq_n_v __builtin_neon_vqshlus_n_s32 __builtin_neon_vqshrnd_n_s64 \
+    __builtin_neon_vqshrnd_n_u64 __builtin_neon_vqshrnh_n_s16 __builtin_neon_vqshrnh_n_u16 \
+    __builtin_neon_vqshrns_n_s32 __builtin_neon_vqshrns_n_u32 __builtin_neon_vqshrund_n_s64 \
+    __builtin_neon_vqshrunh_n_s16 __builtin_neon_vqshruns_n_s32 __builtin_neon_vqsubb_s8 \
+    __builtin_neon_vqsubb_u8 __builtin_neon_vqsubd_s64 __builtin_neon_vqsubd_u64 \
+    __builtin_neon_vqsubh_s16 __builtin_neon_vqsubh_u16 __builtin_neon_vqsubs_s32 \
+    __builtin_neon_vqsubs_u32 __builtin_neon_vqtbl2_v __builtin_neon_vqtbl2q_v \
+    __builtin_neon_vqtbl3_v __builtin_neon_vqtbl3q_v __builtin_neon_vqtbl4_v \
+    __builtin_neon_vqtbl4q_v __builtin_neon_vqtbx1_v __builtin_neon_vqtbx1q_v \
+    __builtin_neon_vqtbx2_v __builtin_neon_vqtbx2q_v __builtin_neon_vqtbx3_v \
+    __builtin_neon_vqtbx3q_v __builtin_neon_vraddhn_v __builtin_neon_vrbit_v \
+    __builtin_neon_vrbitq_v __builtin_neon_vrecped_f64 __builtin_neon_vrecpes_f32 \
+    __builtin_neon_vrecpsd_f64 __builtin_neon_vrecpss_f32 __builtin_neon_vrecpxd_f64 \
+    __builtin_neon_vrecpxs_f32 __builtin_neon_vrndi_v __builtin_neon_vrndiq_v \
+    __builtin_neon_vrndns_f32 __builtin_neon_vrndx_v __builtin_neon_vrndxq_v \
+    __builtin_neon_vrshld_s64 __builtin_neon_vrshld_u64 __builtin_neon_vrshrd_n_s64 \
+    __builtin_neon_vrshrd_n_u64 __builtin_neon_vrsqrted_f64 __builtin_neon_vrsqrtes_f32 \
+    __builtin_neon_vrsqrtsd_f64 __builtin_neon_vrsqrtss_f32 __builtin_neon_vrsra_n_v \
+    __builtin_neon_vrsrad_n_s64 __builtin_neon_vrsrad_n_u64 __builtin_neon_vrsraq_n_v \
+    __builtin_neon_vrsubhn_v __builtin_neon_vshld_n_s64 __builtin_neon_vshld_n_u64 \
+    __builtin_neon_vshld_s64 __builtin_neon_vshld_u64 __builtin_neon_vshrd_n_s64 \
+    __builtin_neon_vshrd_n_u64 __builtin_neon_vslid_n_s64 __builtin_neon_vslid_n_u64 \
+    __builtin_neon_vsqadd_v __builtin_neon_vsqaddb_u8 __builtin_neon_vsqaddd_u64 \
+    __builtin_neon_vsqaddh_u16 __builtin_neon_vsqaddq_v __builtin_neon_vsqadds_u32 \
+    __builtin_neon_vsrad_n_s64 __builtin_neon_vsrad_n_u64 __builtin_neon_vsrid_n_s64 \
+    __builtin_neon_vsrid_n_u64 __builtin_neon_vst1_x2_v __builtin_neon_vst1_x3_v \
+    __builtin_neon_vst1_x4_v __builtin_neon_vst1q_x2_v __builtin_neon_vst1q_x3_v \
+    __builtin_neon_vst1q_x4_v __builtin_neon_vst2_lane_v __builtin_neon_vst2q_lane_v \
+    __builtin_neon_vst3_lane_v __builtin_neon_vst3q_lane_v __builtin_neon_vsubd_s64 \
+    __builtin_neon_vsubd_u64 __builtin_neon_vsubhn_v __builtin_neon_vtbl3_v __builtin_neon_vtbl4_v \
+    __builtin_neon_vtbx1_v __builtin_neon_vtbx2_v __builtin_neon_vtbx3_v __builtin_neon_vtstd_s64 \
+    __builtin_neon_vtstd_u64 __builtin_neon_vuqadd_v __builtin_neon_vuqaddb_s8 \
+    __builtin_neon_vuqaddd_s64 __builtin_neon_vuqaddh_s16 __builtin_neon_vuqaddq_v \
+    __builtin_neon_vuqadds_s32";
+
+/// Whether builtin `name` is in [`UNLOWERED_BUILTINS`].
+pub fn is_unlowered_builtin(name: &str) -> bool {
+    UNLOWERED_BUILTINS.split_ascii_whitespace().any(|n| n == name)
+}
+
 /// How [`Cg::emit_builtin`] handled a builtin call.
 pub(crate) enum BuiltinCall {
     /// Emitted inline: the value, or none for a `void` call.
@@ -366,7 +562,9 @@ impl Cg<'_> {
     /// `std` (through inline namespaces) with one non-variadic parameter of
     /// reference type, returning a reference or pointer to the same type up
     /// to qualifiers. A call of one is the address of its argument's
-    /// lvalue; the function itself is not referenced.
+    /// lvalue; the function itself is not referenced. Not under
+    /// `-fno-builtin`, nor `-fno-builtin-std-<name>` (clang
+    /// `isNoBuiltinFunc`; WP-808).
     pub(crate) fn is_std_builtin(&self, d: DeclId) -> bool {
         const NAMES: [&str; 7] = [
             "move",
@@ -378,8 +576,11 @@ impl Cg<'_> {
             "__addressof",
         ];
         let ast = self.ast;
-        if ast.decls.get(d).kind() != DeclKind::Function || !NAMES.iter().any(|n| self.in_std(d, n))
-        {
+        if ast.decls.get(d).kind() != DeclKind::Function || self.opts.no_builtin {
+            return false;
+        }
+        let Some(name) = NAMES.iter().find(|n| self.in_std(d, n)) else { return false };
+        if self.opts.no_builtin_fns.iter().any(|n| n.strip_prefix("std-") == Some(*name)) {
             return false;
         }
         let Some(fty) = ast.decls.get(d).ty() else { return false };
@@ -662,6 +863,10 @@ impl Cg<'_> {
                 let y = self.emit_scalar(a1)?;
                 self.nextafter16(x, y)
             }
+            _ if self.errno_lowering(b).is_some() => {
+                let l = self.errno_lowering(b).unwrap_or(id::ErrnoIntrinsic::Frem);
+                self.emit_errno_intrinsic(l, e, &args)?
+            }
             _ if fp_intrinsic(b).is_some() => {
                 let (name, n) = fp_intrinsic(b).unwrap_or(("llvm.fabs", 1));
                 let mut vs = Vec::with_capacity(n);
@@ -885,6 +1090,11 @@ impl Cg<'_> {
             }
             id::ASSUME_ALIGNED => self.builtin_assume_aligned(e, &args)?,
             id::ASSUME => {
+                // An assumption with possible side effects is never
+                // evaluated (sema warned, WP-805).
+                if self.ast.exprs.get(e).has(kiln_ast::expr::ExprFlags::ASSUME_IGNORED) {
+                    return Ok(BuiltinCall::Emitted(None));
+                }
                 let c = self.emit_scalar(a0)?;
                 let f = kiln_llvm::intrinsics::assume(&mut self.m);
                 self.intrinsic_call(f, vec![c]);
@@ -1318,82 +1528,6 @@ impl Cg<'_> {
         Some(self.load(a.ty, a.v, a.align, false))
     }
 
-    /// The part of clang's `tryEvaluateObjectSize` codegen needs for a
-    /// `pass_object_size(t)` argument `a`: the address of a complete
-    /// variable (`buf`, `&x`), or for a subobject type (1, 3) of a member
-    /// (`s.a`, `&s.m`), plus a constant element offset within it; the
-    /// size from that offset to the end. Anything else is not folded
-    /// (the whole-object `llvm.objectsize` serves types 0 and 2).
-    fn const_object_size(&mut self, a: ExprId, t: u32) -> Option<u64> {
-        let ast = self.ast;
-        let mut e = a;
-        let mut off: u64 = 0;
-        let mut addr = false;
-        loop {
-            match ast.exprs.get(e).kind() {
-                ExprKind::ParenExpr => e = ast.exprs.operand(e),
-                ExprKind::ImplicitCastExpr
-                    if matches!(ast.exprs.cast_kind(e), CastKind::NoOp | CastKind::BitCast) =>
-                {
-                    e = ast.exprs.operand(e);
-                }
-                ExprKind::ImplicitCastExpr
-                    if !addr && ast.exprs.cast_kind(e) == CastKind::ArrayToPointerDecay =>
-                {
-                    (e, addr) = (ast.exprs.operand(e), true);
-                }
-                ExprKind::UnaryOperator if !addr && ast.exprs.unary_op(e) == UnaryOp::AddrOf => {
-                    (e, addr) = (ast.exprs.operand(e), true);
-                }
-                ExprKind::BinaryOperator
-                    if !addr && ast.exprs.binary_op(e) == kiln_ast::expr::BinaryOp::Add =>
-                {
-                    let [l, r] = ast.exprs.operands(e);
-                    let elem = ast.types.pointee(ast.exprs.get(l).ty())?;
-                    if !is_complete(ast, elem) {
-                        return None;
-                    }
-                    let mut lit = r;
-                    while ast.exprs.get(lit).kind() == ExprKind::ImplicitCastExpr {
-                        lit = ast.exprs.operand(lit);
-                    }
-                    let k = match self.fold_int(r) {
-                        Some(k) => u64::try_from(k).ok()?,
-                        None if ast.exprs.get(lit).kind() == ExprKind::IntegerLiteral => {
-                            ast.exprs.int_value(lit)?
-                        }
-                        None => return None,
-                    };
-                    off = off.checked_add(k.checked_mul(self.size_align(elem).0)?)?;
-                    e = l;
-                }
-                _ => break,
-            }
-        }
-        if !addr {
-            return None;
-        }
-        let k = ast.exprs.get(e).kind();
-        let d = match k {
-            ExprKind::DeclRefExpr => ast.exprs.decl(e),
-            ExprKind::MemberExpr if t & 1 != 0 => ast.exprs.decl(e),
-            _ => return None,
-        };
-        if !matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar | DeclKind::Field) {
-            return None;
-        }
-        let q = ast.decls.get(d).ty()?;
-        if ast.types.is_reference(q) || !is_complete(ast, q) {
-            return None;
-        }
-        // An array of unknown bound has size 0 here: not a constant.
-        let size = self.size_align(q).0;
-        if size == 0 {
-            return None;
-        }
-        size.checked_sub(off)
-    }
-
     /// The `pass_object_size` parameter `p` names, ignoring parentheses
     /// and implicit casts.
     fn ps_param_ref(&self, mut p: ExprId) -> Option<DeclId> {
@@ -1411,15 +1545,16 @@ impl Cg<'_> {
     }
 
     /// WP-803: the hidden `size_t` argument for argument `a` (emitted as
-    /// `v`) of a `pass_object_size(t)` parameter (clang
-    /// `evaluateOrEmitBuiltinObjectSize`): unless `dynamic`, the
-    /// constant object size ([`Cg::const_object_size`]); the caller's own
-    /// hidden argument when `a` names a compatible `pass_object_size`
-    /// parameter; the default for type 3 (`0`); else `llvm.objectsize(v,
-    /// min, nullunknown=true, dynamic)`.
+    /// `v`) of a `pass_object_size(t)` or `pass_dynamic_object_size(t)`
+    /// parameter (clang `evaluateOrEmitBuiltinObjectSize`): the object
+    /// size the fold prepass found (`Expr::tryEvaluateObjectSize`, the
+    /// Oven's `__builtin_object_size` evaluation, WP-808); else the
+    /// caller's own hidden argument when `a` names a compatible
+    /// `pass_object_size` parameter; the default for type 3 (`0`); else
+    /// `llvm.objectsize(v, min, nullunknown=true, dynamic)`.
     pub(crate) fn pass_object_size_arg(&mut self, a: ExprId, v: V, t: u32, dynamic: bool) -> V {
         let rt = self.lty(QualType::unqual(self.ast.types.target().size_t));
-        if !dynamic && let Some(n) = self.const_object_size(a, t) {
+        if let Some(&n) = self.folds.obj_size.get(&(a, t)) {
             return V::C(self.m.const_int(rt, i128::from(n)));
         }
         if let Some(d) = self.ps_param_ref(a)
@@ -1657,6 +1792,63 @@ impl Cg<'_> {
         }
     }
 
+    /// Whether a math library builtin that may set `errno` lowers to its
+    /// LLVM intrinsic here (clang `EmitBuiltinExpr`'s
+    /// `GenerateIntrinsics`): under `-fno-math-errno` unless a pragma
+    /// turned `errno` back on, and where `#pragma float_control(precise,
+    /// off)` turned it off at `-O1`+.
+    pub(crate) fn errno_gen(&self) -> bool {
+        match self.f.fp_ovr.math_errno() {
+            Some(true) => false,
+            Some(false) => !self.opts.fp.math_errno || self.opts.opt_level > 0,
+            None => !self.opts.fp.math_errno,
+        }
+    }
+
+    /// The intrinsic lowering of the errno-setting math builtin `b`, if
+    /// it has one and [`Self::errno_gen`] holds (WP-806).
+    fn errno_lowering(&self, b: u32) -> Option<id::ErrnoIntrinsic> {
+        let name = id::info(b)?.name;
+        self.errno_gen().then(|| id::errno_intrinsic(name, self.opts.clang_compat >= 22))?
+    }
+
+    /// Emits the call `e` of an errno-setting math builtin as `l` (clang
+    /// `EmitBuiltinExpr`: `emitUnaryMaybeConstrainedFPBuiltin` and kin,
+    /// `CreateFRem`, `llvm.ldexp`, `emitMaybeConstrainedFPToIntRoundBuiltin`).
+    fn emit_errno_intrinsic(&mut self, l: id::ErrnoIntrinsic, e: ExprId, args: &[ExprId]) -> R<V> {
+        let n = match l {
+            id::ErrnoIntrinsic::Fp(_, n) => n,
+            id::ErrnoIntrinsic::Frem | id::ErrnoIntrinsic::Ldexp => 2,
+            id::ErrnoIntrinsic::ToInt(_) => 1,
+        };
+        let mut vs = Vec::with_capacity(n);
+        for i in 0..n {
+            let Some(&a) = args.get(i) else {
+                return err(self.loc_of(e), "math builtin with too few arguments");
+            };
+            vs.push(self.emit_scalar(a)?);
+        }
+        let ty = self.f.fir.ty(&self.m, vs[0]);
+        Ok(match l {
+            id::ErrnoIntrinsic::Fp(base, n) => {
+                let f = kiln_llvm::intrinsics::fp_op(&mut self.m, &format!("llvm.{base}"), ty, n);
+                self.intrinsic_call(f, vs)
+            }
+            id::ErrnoIntrinsic::Frem => self.bin(BinOp::FRem, Flags::NONE, vs[0], vs[1]),
+            id::ErrnoIntrinsic::Ldexp => {
+                let et = self.f.fir.ty(&self.m, vs[1]);
+                let f = kiln_llvm::intrinsics::ldexp(&mut self.m, ty, et);
+                self.intrinsic_call(f, vs)
+            }
+            id::ErrnoIntrinsic::ToInt(base) => {
+                let rt = self.lty(self.ast.exprs.get(e).ty());
+                let f =
+                    kiln_llvm::intrinsics::fp_to_int(&mut self.m, &format!("llvm.{base}"), rt, ty);
+                self.intrinsic_call_ty(f, vs, rt)
+            }
+        })
+    }
+
     /// The library function a library builtin `d` calls (clang
     /// `getBuiltinLibFunction`): declared with the builtin's type and
     /// attributes under the library name.
@@ -1670,7 +1862,7 @@ impl Cg<'_> {
         };
         let sig = self.sig(fty, true);
         let mut extra = Vec::new();
-        lib_attrs(b, sig.passes_indirect(), &mut extra);
+        lib_attrs(b, sig.passes_indirect(), !self.opts.fp.math_errno, &mut extra);
         if let Some(f) = self.m.get_function(name) {
             return Ok((f, extra));
         }

@@ -764,6 +764,12 @@ impl Oven {
         let off = u64::from(ptr.off);
         let size = u64::from(a.size);
         let end = if ty & 1 == 0 {
+            // clang `getObjectType` gives the whole object a type only for
+            // a variable, a compound literal or a dynamic allocation: a
+            // string literal's whole-object size is unknown (WP-808).
+            if matches!(a.origin, Origin::Str(..)) {
+                return Err(Fault::Invalid);
+            }
             size
         } else {
             let elem = self.designated(p, t)?;

@@ -1399,7 +1399,15 @@ Where the code differs from (or details) the design above:
   overload resolution together ([expr.new]/20; `resolve_set`) and the
   chosen specialization is instantiated on use (WP-686, WP-712); with
   no viable candidate the notes are the overload set's, template
-  candidates included. A placement `operator delete` template matches
+  candidates included. Without templates, `find_operator_new` matches
+  each placement argument against its parameter (`placement_arg_match`):
+  the same type is exact, and arithmetic conversions, `nullptr`,
+  object pointer to `void *`, array decay and derived-to-base pointer
+  conversion ([conv.ptr]/3, with no loss of cv) are viable but not exact.
+  The most exact matches win (WP-801,
+  `tests/conformance/expr.new/p19-placement-arg-derived-to-base-pointer-run.cpp`).
+  Gap: this is not [over.ics.rank], so `B *` to `A *` does not beat
+  `B *` to `void *`. A placement `operator delete` template matches
   when deduction against `void(void*, P...)` from the allocation
   function's parameters succeeds ([expr.new]/28, WP-713). The allocation function, the matching deallocation
   function of a new-expression and the deallocation function of a

@@ -990,6 +990,16 @@ impl<'a> AstBuilder<'a> {
         Ok(())
     }
 
+    /// Removes attribute `a` from `d`'s list: one kept provisionally and
+    /// found invalid once more is known (a class-head `transparent_union`
+    /// whose fields fail the check at the closing brace).
+    pub fn remove_attr(&mut self, d: DeclId, a: AttrId) {
+        let old = self.ast.attrs.of_decl(d);
+        let rest: Vec<AttrId> = self.ast.lists.iter(old).filter(|&x| x != a).collect();
+        let list = self.ast.lists.push(&rest);
+        let _ = self.ast.attrs.decl_attrs.refine(d, list);
+    }
+
     /// Appends `attrs` to `d`'s attribute list (attaching one if `d` has
     /// none): for attributes that appertain to a declaration after it was
     /// first given its own (a class's trailing GNU attributes,
@@ -3896,6 +3906,19 @@ impl<'a> AstBuilder<'a> {
     pub fn compound(&mut self, stmts: &[StmtId], lbrace: Loc, rbrace: Loc) -> StmtId {
         let list = self.ast.lists.push(stmts);
         self.stmt(StmtKind::CompoundStmt, 0, lbrace, list.raw(), rbrace.to_raw())
+    }
+
+    /// A compound statement under FP pragma override `fp` (WP-806).
+    pub fn compound_fp(
+        &mut self,
+        stmts: &[StmtId],
+        lbrace: Loc,
+        rbrace: Loc,
+        fp: crate::fp::FpOverride,
+    ) -> StmtId {
+        let list = self.ast.lists.push(stmts);
+        let aux = self.ast.stmts.intern_fp(fp);
+        self.stmt(StmtKind::CompoundStmt, aux, lbrace, list.raw(), rbrace.to_raw())
     }
 
     /// A declaration statement ([stmt.dcl]).

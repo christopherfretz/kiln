@@ -15,6 +15,7 @@ use kiln_source::{Loc, SourceManager, Span};
 
 use crate::class::LateClass;
 use crate::keywords::{Keywords, Kw};
+use crate::tentative::TypeIdContext;
 
 use crate::tokens::TokenSource;
 
@@ -172,6 +173,9 @@ pub struct Parser<'a, 'sm> {
     /// trailing return types), for the enclosing declarator's
     /// [`Declarator::trailing_constraint`]; invalid when none.
     pub(crate) type_id_constraint: Loc,
+    /// The type-id about to be parsed is a named cast's (clang builds it
+    /// without `ActOnTypeName`: no ignored-`mode` warning).
+    pub(crate) named_cast_type_id: bool,
     /// The decl-specifier-seq of a parameter-declaration being parsed is
     /// not one where a dependent qualified name is implicitly a type
     /// ([temp.res.general]/4: a parameter of a function declared at
@@ -228,6 +232,9 @@ pub struct Parser<'a, 'sm> {
     /// Pending loop-hint pragmas, by the location of the token starting
     /// the statement they apply to (spec/parse.md §2.3).
     pub(crate) loop_hints: Vec<(Loc, Vec<crate::tokens::LoopHintInfo>)>,
+    /// The FP pragmas not yet taken, keyed by the token they precede
+    /// (spec/parse.md §2.3).
+    pub(crate) fp_pragmas: Vec<(Loc, crate::tokens::FpPragma)>,
 }
 
 /// A `decltype(e)` parsed ahead as a nested-name-specifier
@@ -305,7 +312,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         let std = lex_opts.std;
         let cxx11 = std >= Std::Cxx11;
         let cxx26 = std >= Std::Cxx26;
-        let kw = Keywords::with_std(s.ast.symbols(), s.gnu, cxx11, cxx26, s.clang_compat);
+        let mut kw = Keywords::with_std(s.ast.symbols(), s.gnu, cxx11, cxx26, s.clang_compat);
+        if !lit_opts.char8() {
+            kw.remove(s.ast.symbols(), "char8_t");
+        }
         s.set_std(std);
         let sm = src.source_manager();
         let cur = src.get(0);
@@ -343,6 +353,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             addr_operand_at: None,
             catch_declarator: false,
             type_id_constraint: Loc::INVALID,
+            named_cast_type_id: false,
             param_typename: ParamTypename::Implicit,
             param_recovery: None,
             param_abort: false,
@@ -357,6 +368,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             lead_decl_attrs: Vec::new(),
             stmt_attrs_loc: None,
             loop_hints: Vec::new(),
+            fp_pragmas: Vec::new(),
         };
         if p.src.get_mut().module_lines() {
             p.module_activate();
@@ -1738,6 +1750,19 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             };
             if !template_kw && !is_template_class(class) {
                 if class != NameClass::Dependent {
+                    break;
+                }
+                // [temp.names]/3: without `template` the `<` after a
+                // dependent name is less-than. It is diagnosed and read as
+                // a list only when nothing but a list fits: `<>` or a
+                // leading unambiguous type (clang's `isTemplateArgumentList`
+                // returning True). `if_c<rank<T>::value < rank<U>::value,
+                // U, T>::type` is a comparison.
+                let less = self.pos + k + 1;
+                let first = self.tok_at(less + 1).kind;
+                if !matches!(first, TokKind::Punct(Punct::Greater | Punct::GreaterGreater))
+                    && !self.is_cxx_type_id_at(less + 1, TypeIdContext::Unambiguous).0
+                {
                     break;
                 }
                 let text = self.s.ast.symbols().as_str(name).to_owned();

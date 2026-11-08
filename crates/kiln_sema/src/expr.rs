@@ -2560,7 +2560,7 @@ impl Sema<'_, '_> {
                 .map(|(p, _)| p.encoding)
                 .find(|&e| e != Encoding::Ordinary)
                 .unwrap_or(Encoding::Ordinary);
-            let elem = literal::string_literal_elem(self.std, enc);
+            let elem = literal::string_literal_elem(self.char8(), enc);
             let plain: Vec<(StringLiteral<'_>, Loc)> = pieces
                 .iter()
                 .map(|(p, l)| (StringLiteral { ud_suffix: None, ..p.clone() }, *l))
@@ -5077,7 +5077,18 @@ impl Sema<'_, '_> {
         }
         let at = self.begin_loc(callee);
         let (ty, vk) = self.call_result_of(proto.ret(), loc, named, at);
-        let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE);
+        // `__builtin_assume(e)` never evaluates `e`: with possible side
+        // effects the assumption is dropped (clang `-Wassume`).
+        let mut flags = ExprFlags::NONE;
+        if named.and_then(|d| self.ast.decls.builtin_id(d)) == Some(kiln_ast::decl::builtin::ASSUME)
+            && let Some(&c) = conv_args.first()
+            && self.has_possible_side_effects(c)
+        {
+            let msg = self.diag(DiagId::sema_assume_side_effects, self.begin_loc(c));
+            self.emit(msg);
+            flags = ExprFlags::ASSUME_IGNORED;
+        }
+        let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, flags);
         let call = self.maybe_bind_temporary(call);
         match named {
             Some(d) => {

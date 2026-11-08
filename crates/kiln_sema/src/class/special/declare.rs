@@ -481,6 +481,7 @@ impl Sema<'_, '_> {
                 Some(p) => {
                     prev_ok = Some(p);
                     let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                    ty = self.merge_cc(ty, pty, p, sloc);
                     if !self.ast.types.same_type(pty, ty) {
                         let (pe, ne) = (self.written_exc_spec(pty), self.written_exc_spec(ty));
                         if ne == ExcSpec::None || matches!(pe, ExcSpec::Deferred(_)) {

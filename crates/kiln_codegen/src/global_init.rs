@@ -53,7 +53,9 @@ pub(crate) struct GlobalInits {
     /// functions in emission order (WP-807).
     dtors: Vec<(u32, FuncId)>,
     /// clang `LLVMUsed`.
-    used: Vec<GlobalId>,
+    used: Vec<Value>,
+    /// clang `LLVMCompilerUsed`.
+    compiler_used: Vec<Value>,
     /// Guard variables by first declaration (clang
     /// `StaticLocalDeclGuardMap`).
     guards: FxHashMap<DeclId, GlobalId>,
@@ -107,6 +109,10 @@ impl Cg<'_> {
     /// it).
     pub(crate) fn var_must_emit(&self, d: DeclId) -> bool {
         let ast = self.ast;
+        // clang `DeclMustBeEmitted`: a `used` variable is emitted.
+        if self.has_fn_attr(d, kiln_ast::attr::AttrKind::USED) {
+            return true;
+        }
         let Some(ty) = ast.decls.get(d).ty() else { return false };
         if !ast.types.is_reference(ty) && self.var_destructed_class(d, ty).is_some() {
             return true;
@@ -157,6 +163,24 @@ impl Cg<'_> {
                 }
                 ExprKind::ExprWithCleanups if exprs.cleanups_have_side_effects(x) => return true,
                 ExprKind::CXXTypeidExpr if exprs.typeid_potentially_evaluated(x) => return true,
+                // A volatile read is a side effect ([intro.execution]/7):
+                // `static int d = src;` with `extern volatile int src;`
+                // is emitted (LLVM's anchor idiom pulls in an archive
+                // member through it).
+                ExprKind::ImplicitCastExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::CXXFunctionalCastExpr
+                | ExprKind::CXXStaticCastExpr
+                | ExprKind::CXXConstCastExpr
+                | ExprKind::CXXReinterpretCastExpr
+                    if exprs.cast_kind(x) == CastKind::LValueToRValue
+                        && ast
+                            .types
+                            .effective_quals(exprs.get(exprs.operand(x)).ty())
+                            .is_volatile() =>
+                {
+                    return true;
+                }
                 ExprKind::UnaryExprOrTypeTraitExpr
                 | ExprKind::CXXNoexceptExpr
                 | ExprKind::LambdaExpr
@@ -211,6 +235,7 @@ impl Cg<'_> {
     fn start_init_fn(&mut self, f: FuncId) {
         self.f = Fx::empty();
         self.f.fir = Fir::new(Vec::new());
+        self.start_fp();
         self.f.func = Some(f);
         self.f.mustprogress = false;
         let ret_block = self.f.fir.create_block();
@@ -295,8 +320,11 @@ impl Cg<'_> {
         }
         let internal = mangle::is_internal_symbol(ast, d);
         let key = (!internal).then_some(g);
-        let unordered =
-            self.var_instantiation_linkage(first).is_some() || (self.var_is_inline(d) && !internal);
+        // clang: a `selectany` variable's initializer is unordered too, in
+        // the variable's comdat.
+        let unordered = self.var_instantiation_linkage(first).is_some()
+            || (self.var_is_inline(d) && !internal)
+            || (!internal && ast.is_selectany(d));
         if unordered {
             // [basic.start.dynamic]/1: partially-ordered or unordered
             // initialization, in its own `llvm.global_ctors` entry.
@@ -306,7 +334,7 @@ impl Cg<'_> {
             };
             self.gi.ctors.push((lex, 65535, f, key));
             if let Some(k) = key {
-                self.gi.used.push(k);
+                self.gi.used.push(gval(k));
                 if let Some(c) = self.m.global(g).comdat {
                     self.m.func_mut(f).comdat = Some(c);
                 }
@@ -880,12 +908,7 @@ impl Cg<'_> {
             .map(|(p, f)| (DONE, p, f, None))
             .collect();
         self.emit_ctor_list("llvm.global_dtors", &dtors)?;
-        let used = std::mem::take(&mut self.gi.used);
-        if !used.is_empty() {
-            let elems: Vec<Value> = used.into_iter().map(gval).collect();
-            self.appending_global("llvm.used", LTy::PTR, &elems, Some("llvm.metadata"))?;
-        }
-        Ok(())
+        self.emit_used_lists()
     }
 
     /// clang `EmitCtorList`: the appending global `name` of `{ i32, ptr,
@@ -912,6 +935,34 @@ impl Cg<'_> {
             }
         }
         self.appending_global(name, sty, &elems, None)
+    }
+
+    /// clang `emitLLVMUsed`: `@llvm.used` and `@llvm.compiler.used`, each
+    /// once and without duplicates, after `@llvm.global_ctors` and
+    /// `@llvm.global_dtors`.
+    fn emit_used_lists(&mut self) -> R<()> {
+        for (list, name) in [(false, "llvm.used"), (true, "llvm.compiler.used")] {
+            let vals =
+                std::mem::take(if list { &mut self.gi.compiler_used } else { &mut self.gi.used });
+            let mut seen = kiln_source::fx::FxHashSet::default();
+            let elems: Vec<Value> = vals.into_iter().filter(|v| seen.insert(*v)).collect();
+            if !elems.is_empty() {
+                self.appending_global(name, LTy::PTR, &elems, Some("llvm.metadata"))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// clang `SetCommonAttributes`: a `used` entity goes into
+    /// `@llvm.compiler.used` (ELF), a `retain` one into `@llvm.used`
+    /// (WP-805).
+    pub(crate) fn note_used_attrs(&mut self, d: DeclId, v: Value) {
+        if self.has_fn_attr(d, kiln_ast::attr::AttrKind::USED) {
+            self.gi.compiler_used.push(v);
+        }
+        if self.has_fn_attr(d, kiln_ast::attr::AttrKind::RETAIN) {
+            self.gi.used.push(v);
+        }
     }
 
     /// Plain calls of the `void()` functions `fns`, in order.
