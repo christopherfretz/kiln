@@ -108,7 +108,8 @@ impl Default for UnionMemo {
 }
 
 fn slot(w: Walk, akey: u64, ty: OTy, off: u64) -> usize {
-    let h = (akey ^ u64::from(ty.0) << 24 ^ off << 40 ^ w as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let h =
+        (akey ^ u64::from(ty.0) << 24 ^ off << 40 ^ w as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     (h >> (64 - BITS)) as usize
 }
 
@@ -118,7 +119,15 @@ impl UnionMemo {
     /// `stamp`.
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    pub(crate) fn hit(&self, w: Walk, akey: u64, aty: OTy, ty: OTy, off: u32, stamp: Stamp) -> bool {
+    pub(crate) fn hit(
+        &self,
+        w: Walk,
+        akey: u64,
+        aty: OTy,
+        ty: OTy,
+        off: u32,
+        stamp: Stamp,
+    ) -> bool {
         let m = |e: Entry| {
             let d = off.wrapping_sub(e.lo);
             e.epoch == stamp.epoch

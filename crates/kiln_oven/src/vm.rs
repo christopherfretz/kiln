@@ -3060,18 +3060,19 @@ impl Oven {
         let TyKind::Array { elem, n } = self.types.kind(t) else { return exact };
         let es = self.types.size(elem);
         let len = es.saturating_mul(n);
-        if es == 0
-            || target < base
-            || target - base >= len
-            || base + len > u64::from(u32::MAX)
-        {
+        if es == 0 || target < base || target - base >= len || base + len > u64::from(u32::MAX) {
             return exact;
         }
         let phase = (target - base) % es;
         if !self.types.has_subobject(elem, phase, ty) {
             return exact;
         }
-        umemo::Cover::Region { lo: base as u32, len: len as u32, stride: es as u32, phase: phase as u32 }
+        umemo::Cover::Region {
+            lo: base as u32,
+            len: len as u32,
+            stride: es as u32,
+            phase: phase as u32,
+        }
     }
 
     /// The fault of an access `k` of the `ty` object at byte `rel` of union
@@ -3914,7 +3915,12 @@ impl Oven {
     fn place_region(&self, base: u64, t: OTy, ty: OTy) -> Option<umemo::Cover> {
         let (len, stride) = (self.types.size(t), self.types.size(ty));
         (stride > 0 && len % stride == 0 && base + len <= u64::from(u32::MAX)).then_some(
-            umemo::Cover::Region { lo: base as u32, len: len as u32, stride: stride as u32, phase: 0 },
+            umemo::Cover::Region {
+                lo: base as u32,
+                len: len as u32,
+                stride: stride as u32,
+                phase: 0,
+            },
         )
     }
 
