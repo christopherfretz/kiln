@@ -640,6 +640,10 @@ impl<'a> Printer<'a> {
                             }
                         }
                     }
+                    for r in f.debug_records(i) {
+                        self.add_md_slot(r.var, &mut stack);
+                        self.add_md_slot(r.loc, &mut stack);
+                    }
                     for &(_, _, md) in f.inst_metadata(i) {
                         self.add_md_slot(md, &mut stack);
                     }
@@ -1392,6 +1396,9 @@ impl<'a> Printer<'a> {
                 }
                 w.write_char('\n')?;
                 for &i in &f.blocks[bb.index()].insts {
+                    for r in f.debug_records(i) {
+                        self.debug_record(w, r)?;
+                    }
                     self.instruction(w, f, i)?;
                     w.write_char('\n')?;
                 }
@@ -1400,6 +1407,22 @@ impl<'a> Printer<'a> {
         }
         self.cur = None;
         Ok(())
+    }
+
+    /// `    #dbg_declare(T v, !var, !DIExpression(...), !loc)` and a newline.
+    fn debug_record(&self, w: Out<'_>, r: &crate::function::DbgRecord) -> fmt::Result {
+        w.write_str(match r.kind {
+            crate::function::DbgRecordKind::Declare => "    #dbg_declare(",
+            crate::function::DbgRecordKind::Value => "    #dbg_value(",
+        })?;
+        self.typed(w, r.addr)?;
+        w.write_str(", ")?;
+        self.md_operand(w, r.var)?;
+        w.write_str(", ")?;
+        self.md_operand(w, r.expr)?;
+        w.write_str(", ")?;
+        self.md_operand(w, r.loc)?;
+        w.write_str(")\n")
     }
 
     #[allow(clippy::too_many_lines)]

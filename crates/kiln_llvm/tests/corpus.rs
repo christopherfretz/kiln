@@ -1900,6 +1900,84 @@ fn debug_info() {
     );
 }
 
+/// §2.6: LLVM 19 debug records print on their own line before the
+/// instruction they are attached to, with the expression inline.
+#[test]
+fn debug_records() {
+    let mut m = aarch64();
+    let file = m.md_specialized(
+        "DIFile",
+        false,
+        vec![
+            ("filename".into(), MdField::Str("t.c".into())),
+            ("directory".into(), MdField::Str("/".into())),
+        ],
+    );
+    let cu = m.md_specialized(
+        "DICompileUnit",
+        true,
+        vec![
+            ("language".into(), MdField::Raw("DW_LANG_C11".into())),
+            ("file".into(), MdField::Node(Some(file))),
+            ("isOptimized".into(), MdField::Bool(false)),
+            ("runtimeVersion".into(), MdField::UInt(0)),
+            ("emissionKind".into(), MdField::Raw("FullDebug".into())),
+        ],
+    );
+    m.add_named_metadata("llvm.dbg.cu", &[cu]);
+    m.add_module_flag_i32(2, "Debug Info Version", 3);
+    let sp = m.md_specialized(
+        "DISubprogram",
+        true,
+        vec![
+            ("name".into(), MdField::Str("f".into())),
+            ("scope".into(), MdField::Node(None)),
+            ("file".into(), MdField::Node(Some(file))),
+            ("spFlags".into(), MdField::Raw("DISPFlagDefinition".into())),
+            ("unit".into(), MdField::Node(Some(cu))),
+        ],
+    );
+    let var = m.md_specialized(
+        "DILocalVariable",
+        false,
+        vec![
+            ("name".into(), MdField::Str("x".into())),
+            ("scope".into(), MdField::Node(Some(sp))),
+        ],
+    );
+    let loc = m.md_specialized(
+        "DILocation",
+        false,
+        vec![
+            ("line".into(), MdField::UInt(2)),
+            ("scope".into(), MdField::Node(Some(sp))),
+        ],
+    );
+    let expr = m.md_specialized("DIExpression", false, vec![]);
+    let dbg = m.md_kind("dbg");
+    let mut b = define(&mut m, "f", TypeId::VOID, &[]);
+    let a = b.alloca(TypeId::I32, 4).unwrap();
+    let z = b.module().const_int(TypeId::I32, 0);
+    let st = b.store(z, a, 4).unwrap();
+    let r = b.ret(None).unwrap();
+    let f = b.func();
+    f.add_metadata(dbg, sp);
+    let rec = |kind| DbgRecord { kind, addr: a, var, expr, loc };
+    f.add_debug_record(st.as_inst().unwrap(), rec(DbgRecordKind::Declare));
+    f.add_debug_record(r.as_inst().unwrap(), rec(DbgRecordKind::Declare));
+    f.add_debug_record(r.as_inst().unwrap(), rec(DbgRecordKind::Value));
+    f.add_inst_metadata(r.as_inst().unwrap(), dbg, loc);
+    check(
+        &m,
+        &[
+            "  %1 = alloca i32, align 4\n    #dbg_declare(ptr %1, !4, !DIExpression(), !5)\n  store i32 0",
+            "    #dbg_declare(ptr %1, !4, !DIExpression(), !5)\n    #dbg_value(ptr %1, !4, !DIExpression(), !5)\n  ret void, !dbg !5\n",
+            "!4 = !DILocalVariable(name: \"x\", scope: !3)\n",
+            "!5 = !DILocation(line: 2, scope: !3)\n",
+        ],
+    );
+}
+
 /// §3.2/§7: every byte value in a `c"..."` initializer and in a metadata
 /// string, and quoted global names with escapes.
 #[test]
