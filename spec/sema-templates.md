@@ -1932,6 +1932,17 @@ errors.
    - If the pattern has no definition: "implicit instantiation of
      undefined template 'X<int>'", with the note "template is declared
      here". The class stays incomplete and is not marked invalid (clang).
+   - If the pattern's definition is still being parsed (`basic<long>::m`
+     or a field `basic<long> x;` inside `template<class S> struct basic`,
+     [temp.inst]/2, [class.mem.general]/8; `class_being_defined`): clang
+     `DiagnoseUninstantiableTemplate`, "implicit instantiation of template
+     'basic<long>' within its own definition", without a note, and the
+     specialization is marked invalid. Silent once the pattern itself is
+     invalid. The current instantiation `basic<S>::`, the
+     injected-class-name and a use from a member function body (a
+     complete-class context, instantiated after the pattern is complete)
+     are unaffected (WP-831; tests
+     `temp.inst/specialization-within-own-definition-*.cpp`).
 3. Push the frame `TemplateInstantiation(Class)`; this checks depth and
    the stack guard. Then `Ast::begin_instantiation()`.
 4. Build `MultiLevelArgs` (§5.1). The innermost level holds the spec's
@@ -5753,6 +5764,7 @@ row (spec/pp.md "clang compatibility level").
 | carry (WP-557) | `__builtin_addcb`/`addcs`/`addc`/`addcl`/`addcll` and `__builtin_subcb`/`subcs`/`subc`/`subcl`/`subcll` (`T f(T x, T y, T carryin, T *carryout)`, `T` `unsigned char`/`short`/`int`/`long`/`long long`; fixed parameters, not custom-checked: `x + y + carryin` (`x - y - carryin`) modulo 2^N, `*carryout` 1 when either step wrapped) | yes (spec/oven.md "checked arithmetic") | two `llvm.u{add,sub}.with.overflow`, the flags OR-ed into the carry-out (spec/codegen.md §3) |
 | stack allocation (WP-270) | `__builtin_alloca`, `__builtin_alloca_with_align` (the alignment an `I` argument in bits: a power of two, at least 8, at most `INT_MAX`) | no ("subexpression not valid") | dynamic `alloca i8` where the call is |
 | printf family (WP-270) | `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf` (signature letter `R`: `restrict`; implicit `format(printf, F, A)`, WP-282) | no | libcall |
+| printf/scanf family (WP-841) | `__builtin_printf` (1, 2), `__builtin_vprintf` (1, 0), `__builtin_vsprintf` (2, 0) (`NoThrow`, implicit `format(printf, F, A)`, checked by `-Wformat`); `__builtin_scanf`, `__builtin_sscanf`, `__builtin_vscanf`, `__builtin_vsscanf` (not `NoThrow`; no format check, as kiln checks no `scanf` format). clang 19 declares no `__builtin_fprintf`/`vfprintf`/`fscanf`/`vfscanf` (kiln ids 2380–2386, kiln-private) | no | libcall of the library name |
 | library builtins (WP-282) | `__builtin_assume_aligned`†, `__builtin_object_size`, `__builtin_dynamic_object_size` (the type an `I` argument in [0, 3]) | yes | the pointer plus an `align` assumption bundle; `llvm.objectsize` or a folded constant |
 | library builtins (WP-282) | `__builtin_powi`/`f`/`l`, `__builtin_shufflevector`† (a `ShuffleVectorExpr`), `__builtin_verbose_trap`, `__builtin_copysignf16` | `shufflevector` and `copysignf16` (WP-365) yes; the others are "subexpression not valid" | `llvm.powi`, `shufflevector`, `llvm.trap`, `llvm.copysign.f16` |
 | `*f128` math (WP-282) | the `__builtin_*f128` forms of the `math` libm rows (`fabsf128`, `copysignf128`, `ceilf128`, ..., `huge_valf128`, `inff128`, `nanf128`, `nansf128`), typed `_Float128` (signature `LLd`) as GCC, whose libstdc++ x86-64 `<cmath>` passes `_Float128*` to `modff128`/`frexpf128`/`remquof128` (clang 19 types them `__float128` on x86-64 and `long double` on AArch64; values convert either way, pointers do not) (WP-361) | `fabs`/`copysign`/`fmax`/`fmin` and the constants yes, through the `l` twin (`f128_twin`), as clang 19; the P0533 forms (`ceilf128`, `fmodf128`, `nextafterf128`, ...) in binary128 (WP-365) | the twin's path at `fp128` (intrinsic or constant); `roundevenf128` `llvm.roundeven`; the rest a libcall of the builtin's own name (`acosf128`) |

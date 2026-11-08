@@ -536,7 +536,10 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `__BIGGEST_ALIGNMENT__` (16); `__builtin_alloca_with_align(n, a)`
       to `a / 8` (`tests/codegen/builtins_alloca.cpp`);
     - `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf`
-      are library builtins (`tests/codegen/builtins_printf_lib.cpp`).
+      are library builtins (`tests/codegen/builtins_printf_lib.cpp`), as
+      are `__builtin_printf`, `__builtin_vprintf`, `__builtin_vsprintf`
+      and the `scanf`, `sscanf`, `vscanf`, `vsscanf` forms (WP-841,
+      `tests/conformance/ext.gnu.builtins/printf-scanf-family-run.cpp`).
     - recognized C library functions (WP-419, clang `EmitBuiltinExpr`
       for a library builtin; spec/sema.md §5.4): a direct call of a
       declaration with a `lib_builtin` twin whose `__builtin_` form is an
