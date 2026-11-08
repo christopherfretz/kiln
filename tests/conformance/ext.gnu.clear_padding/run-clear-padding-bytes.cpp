@@ -34,7 +34,7 @@ struct Bo { bool b; int i; };
 struct Ptrs { char c; void *p; int Bo::*mp; };
 struct BF { unsigned a : 3; unsigned : 0; unsigned char b : 2; int c : 5; };
 struct Bw { unsigned x : 3, y : 7; unsigned short z : 1; };
-struct Unn { char a; int : 5; char b; };
+struct Unn { char a; int : 5; char b; int i; };
 union U { char c; short s; struct { char a; int b; } t; };
 union U2 { int i; char c; };
 struct Emp {};

@@ -5,7 +5,7 @@ Bo: ff 00 00 00 ff ff ff ff
 Ptrs: ff 00 00 00 00 00 00 00 ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
 BF: 07 00 00 00 7f 00 00 00
 Bw: ff 07 00 00
-Unn: ff 00 ff 00
+Unn: ff 00 ff 00 ff ff ff ff
 U: ff ff 00 00 ff ff ff ff
 U2: ff ff ff ff
 Emp: 00
