@@ -129,10 +129,9 @@ impl Sema<'_, '_> {
                 _ => self.qualified_decl_name(d),
             };
             let msg = match kind {
-                Undefined::NoLinkageType => self
-                    .diag(DiagId::sema_undefined_internal_type, n.loc())
-                    .arg(is_var)
-                    .arg(name),
+                Undefined::NoLinkageType => {
+                    self.diag(DiagId::sema_undefined_internal_type, n.loc()).arg(is_var).arg(name)
+                }
                 Undefined::Internal => {
                     self.diag(DiagId::sema_undefined_internal, n.loc()).arg(is_var).arg(name)
                 }
@@ -192,7 +191,8 @@ impl Sema<'_, '_> {
         }
         // A static data member with an in-class initializer is used as a
         // constant without a definition (clang skips it at the use).
-        if is_var && redecls.iter().any(|&r| self.ast.decls.var(r).is_some_and(|v| v.init.is_some()))
+        if is_var
+            && redecls.iter().any(|&r| self.ast.decls.var(r).is_some_and(|v| v.init.is_some()))
         {
             return None;
         }
