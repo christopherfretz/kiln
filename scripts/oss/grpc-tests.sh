@@ -11,10 +11,24 @@
 # a ctest-style `N% tests passed, F tests failed out of T` line, which is
 # what report.json reads (spec/landed/harness/WP-666.md). A missing binary
 # counts as a failure. Each test's output is in test-out/<name>.log.
+#
+# The end2end tests take their ports from gRPC's port server
+# (tools/run_tests/python_utils/port_server.py, Python stdlib only) on
+# localhost:32766; this script starts it first and stops it at exit.
 set -u
 LIST="$1" SRC="$(cd "$2" && pwd)" BIN="$(pwd)"
 OUT="$BIN/test-out"
 mkdir -p "$OUT" && find "$OUT" -mindepth 1 -delete
+PORT_SERVER=32766
+python3 "$SRC/tools/run_tests/python_utils/port_server.py" -p "$PORT_SERVER" \
+  -l "$OUT/port_server.log" > /dev/null 2>&1 &
+PS_PID=$!
+trap 'kill "$PS_PID" 2> /dev/null' EXIT
+for _ in $(seq 50); do
+  python3 -c "import urllib.request as u; u.urlopen('http://localhost:$PORT_SERVER/version_number', timeout=1)" \
+    2> /dev/null && break
+  sleep 0.2
+done
 names=$(sed -e 's/#.*//' "$LIST" | tr -s ' \t' '\n\n' | grep -v '^$')
 run_one() {
   n="$1"
