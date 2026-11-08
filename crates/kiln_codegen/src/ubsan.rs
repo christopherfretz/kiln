@@ -1323,6 +1323,164 @@ impl Cg<'_> {
         res
     }
 
+    // ---- pointer-overflow ------------------------------------------------
+
+    /// clang `EmitCheckedInBoundsGEP`: [`Cg::gep_arith`], then (under
+    /// `-fsanitize=pointer-overflow`) the check that the address
+    /// arithmetic did not wrap. `signed` is whether the indices are of
+    /// signed type, `sub` whether the GEP subtracts (`p - n`, `--p`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn gep_checked(
+        &mut self,
+        src: LTy,
+        base: V,
+        idx: Vec<V>,
+        nuw: bool,
+        signed: bool,
+        sub: bool,
+        loc: Option<Loc>,
+    ) -> R<V> {
+        let check = !self.opts.wrapv_pointer && self.ub_on(San::POINTER_OVERFLOW);
+        let indices = if check { idx.clone() } else { Vec::new() };
+        let g = self.gep_arith(src, base, idx, nuw);
+        if check {
+            self.ub_pointer_overflow(src, base, g, &indices, signed, sub, loc)?;
+        }
+        Ok(g)
+    }
+
+    /// `l + r` or `l - r` on intptr values as `IRBuilder` folds them: a
+    /// constant expression when both are constants.
+    fn ub_ptr_bin(&mut self, op: BinOp, l: V, r: V) -> R<V> {
+        if let (V::C(a), V::C(b)) = (l, r)
+            && (self.cint(l).is_none() || self.cint(r).is_none())
+        {
+            return match self.m.const_binop(op, Flags::NONE, a, b) {
+                Ok(c) => Ok(V::C(c)),
+                Err(e) => err(None, format!("bad pointer-overflow offset: {e:?}")),
+            };
+        }
+        Ok(self.bin(op, Flags::NONE, l, r))
+    }
+
+    /// clang `EmitGEPOffsetInBytes`'s checked `eval`: `l * r` or `l + r`
+    /// in `i64` with `llvm.s{mul,add}.with.overflow`, folded when both are
+    /// constants; `ovf` accumulates the overflow bit.
+    fn ub_offset_op(&mut self, mul: bool, l: V, r: V, ovf: &mut V) -> V {
+        if let (Some((_, a, _)), Some((_, b, _))) = (self.cint(l), self.cint(r)) {
+            let (a, b) = (a as i64, b as i64);
+            let (x, o) = if mul { a.overflowing_mul(b) } else { a.overflowing_add(b) };
+            if o {
+                *ovf = V::C(self.m.const_bool(true));
+            }
+            return self.i64c(i128::from(x));
+        }
+        let oop = if mul { OverflowOp::SMul } else { OverflowOp::SAdd };
+        let f = kiln_llvm::intrinsics::with_overflow(&mut self.m, oop, LTy::I64);
+        let rty = self.m.types.struct_literal(&[LTy::I64, LTy::I1], false);
+        let pair = self.intrinsic_call_ty(f, vec![l, r], rty);
+        let o = self.f.fir.push(Op::ExtractValue { agg: pair, idx: 1 }, LTy::I1);
+        *ovf = self.bin(BinOp::Or, Flags::NONE, o, *ovf);
+        self.f.fir.push(Op::ExtractValue { agg: pair, idx: 0 }, LTy::I64)
+    }
+
+    /// The check half of clang `EmitCheckedInBoundsGEP` for the GEP `g` of
+    /// `base` by `idx` over `src`.
+    #[allow(clippy::too_many_arguments)]
+    fn ub_pointer_overflow(
+        &mut self,
+        src: LTy,
+        base: V,
+        g: V,
+        idx: &[V],
+        signed: bool,
+        sub: bool,
+        loc: Option<Loc>,
+    ) -> R<()> {
+        let null_check = !self.opts.null_pointer_is_valid;
+        let overflow_check = !matches!(g, V::C(_));
+        if !null_check && !overflow_check {
+            return Ok(());
+        }
+        let outer = self.ub_begin();
+        let res = (|| {
+            let fls = V::C(self.m.const_bool(false));
+            let mut ovf = fls;
+            // `EmitGEPOffsetInBytes`.
+            let total = if matches!(g, V::C(_)) {
+                let gi = self.cast(CastOp::PtrToInt, g, LTy::I64);
+                let bi = self.cast(CastOp::PtrToInt, base, LTy::I64);
+                self.ub_ptr_bin(BinOp::Sub, gi, bi)?
+            } else {
+                // clang declares both intrinsics up front, used or not.
+                kiln_llvm::intrinsics::with_overflow(&mut self.m, OverflowOp::SAdd, LTy::I64);
+                kiln_llvm::intrinsics::with_overflow(&mut self.m, OverflowOp::SMul, LTy::I64);
+                let mut total: Option<V> = None;
+                let mut ty = src;
+                for (k, &i) in idx.iter().enumerate() {
+                    if k > 0 {
+                        let Some((e, _)) = self.m.types.array_info(ty) else {
+                            return err(loc, "pointer-overflow check of a non-array GEP");
+                        };
+                        ty = e;
+                    }
+                    let size = self.i64c(i128::from(self.alloc_size(ty)));
+                    let is = self.int_cast(i, LTy::I64, true);
+                    let local = self.ub_offset_op(true, size, is, &mut ovf);
+                    total = Some(match total {
+                        Some(t) if self.cint(t).is_none_or(|c| c.1 != 0) => {
+                            self.ub_offset_op(false, t, local, &mut ovf)
+                        }
+                        _ => local,
+                    });
+                }
+                total.unwrap_or_else(|| self.i64c(0))
+            };
+            if self.cint(total).is_some_and(|c| c.1 == 0) {
+                return Ok(());
+            }
+            let int_ptr = self.cast(CastOp::PtrToInt, base, LTy::I64);
+            let computed = self.ub_ptr_bin(BinOp::Add, int_ptr, total)?;
+            let mut checks = Vec::with_capacity(2);
+            if null_check {
+                let base_nn = self.ub_is_not_null(base);
+                let z = self.i64c(0);
+                let res_nn = self.icmp(IntPredicate::Ne, computed, z);
+                checks.push((self.icmp(IntPredicate::Eq, base_nn, res_nn), San::POINTER_OVERFLOW));
+            }
+            if overflow_check {
+                let t = V::C(self.m.const_bool(true));
+                let no_ovf = self.bin(BinOp::Xor, Flags::NONE, ovf, t);
+                let valid = if signed {
+                    let pos_valid = self.icmp(IntPredicate::Uge, computed, int_ptr);
+                    let z = self.i64c(0);
+                    let pos = self.icmp(IntPredicate::Sge, total, z);
+                    let neg_valid = self.icmp(IntPredicate::Ult, computed, int_ptr);
+                    // `IRBuilder::CreateSelect` folds only all-constant
+                    // operands.
+                    match (self.cint(pos), self.cint(pos_valid), self.cint(neg_valid)) {
+                        (Some(c), Some(_), Some(_)) => {
+                            if c.1 != 0 { pos_valid } else { neg_valid }
+                        }
+                        _ => self.f.fir.push(
+                            Op::Select { c: pos, t: pos_valid, f: neg_valid },
+                            LTy::I1,
+                        ),
+                    }
+                } else if !sub {
+                    self.icmp(IntPredicate::Uge, computed, int_ptr)
+                } else {
+                    self.icmp(IntPredicate::Ule, computed, int_ptr)
+                };
+                checks.push((self.ub_and(valid, no_ovf), San::POINTER_OVERFLOW));
+            }
+            let l = self.ub_loc(loc)?;
+            self.ub_check(&checks, UbHandler::PointerOverflow, &[l], &[int_ptr, computed])
+        })();
+        self.ub_end(outer);
+        res
+    }
+
     // ---- type checks (null, alignment, object-size) ---------------------
 
     /// clang `sanitizePerformTypeCheck`.
@@ -1399,6 +1557,19 @@ impl Cg<'_> {
                 _ => false,
             },
             _ => false,
+        }
+    }
+
+    /// The alignment of `p` when it is a global variable itself (LLVM
+    /// `GlobalValue::getPointerAlignment`), else 1.
+    fn ub_global_align(&self, p: V) -> u64 {
+        use kiln_llvm::ValueRef;
+        match p {
+            V::C(c) => match c.get() {
+                ValueRef::Global(g) => self.m.global(g).align.unwrap_or(1),
+                _ => 1,
+            },
+            _ => 1,
         }
     }
 
@@ -1495,7 +1666,13 @@ impl Cg<'_> {
             {
                 let pi = self.cast(CastOp::PtrToInt, ptr, LTy::I64);
                 let m = self.icn(LTy::I64, (a - 1) as i128);
-                let low = self.bin(BinOp::And, Flags::NONE, pi, m);
+                // LLVM's constant folder: `and (ptrtoint @g), m` is zero
+                // when `@g`'s alignment clears the bits of `m`.
+                let low = if self.ub_global_align(ptr) >= a {
+                    self.icn(LTy::I64, 0)
+                } else {
+                    self.bin(BinOp::And, Flags::NONE, pi, m)
+                };
                 let z = self.icn(LTy::I64, 0);
                 let ok = self.icmp(IntPredicate::Eq, low, z);
                 as_int = Some(pi);

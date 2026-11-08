@@ -1254,7 +1254,8 @@ impl Cg<'_> {
         } else if ast.types.is_pointer(q) {
             let pq = ast.types.pointee(q).expect("pointee");
             if let Some((n, et)) = self.vla_inc_step(pq, inc)? {
-                return Ok(self.gep_arith(et, old, vec![n], inc));
+                let loc = self.ub_expr_loc(e);
+                return self.gep_checked(et, old, vec![n], inc, false, !inc, loc);
             }
             let et = if ast.types.is_void(pq) || ast.types.is_function(pq) {
                 LTy::I8
@@ -1262,7 +1263,8 @@ impl Cg<'_> {
                 self.mty(pq)
             };
             let c = self.icn(LTy::I32, amount);
-            self.gep_arith(et, old, vec![c], inc)
+            let loc = self.ub_expr_loc(e);
+            self.gep_checked(et, old, vec![c], inc, false, !inc, loc)?
         } else {
             let t = self.f.fir.ty(&self.m, old);
             if self.is_float_ty(t) && self.is_fp16(q) {
@@ -1452,14 +1454,16 @@ impl Cg<'_> {
                 }
                 let et = ast.types.pointee(pq).expect("pointee");
                 if let Some((idx, ety)) = self.vla_pointer_step(et, idx)? {
-                    return Ok(self.gep_arith(ety, p, vec![idx], !is && !sub));
+                    let loc = self.ub_expr_loc(e);
+                    return self.gep_checked(ety, p, vec![idx], !is && !sub, is, sub, loc);
                 }
                 let ety = if ast.types.is_void(et) || ast.types.is_function(et) {
                     LTy::I8
                 } else {
                     self.mty(et)
                 };
-                self.gep_arith(ety, p, vec![idx], !is && !sub)
+                let loc = self.ub_expr_loc(e);
+                self.gep_checked(ety, p, vec![idx], !is && !sub, is, sub, loc)?
             }
             BinaryOp::Add => {
                 if float {
@@ -3219,7 +3223,8 @@ impl Cg<'_> {
             Some((_, x, _)) => min_align(addr.align, (x as u64).wrapping_mul(esz)),
             None => min_align(addr.align, esz),
         };
-        let v = self.gep_arith(addr.ty, addr.v, indices, !self.is_signed(iq));
+        let is = self.is_signed(iq);
+        let v = self.gep_checked(addr.ty, addr.v, indices, !is, is, false, self.ub_expr_loc(e))?;
         Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None, vidx: None, tb })
     }
 
