@@ -11,8 +11,8 @@ use kiln_ast::decl::{
     CtorInitKind, DeclKind, Defaulted, DefinitionBits, FnStorage, TagKind, TemplLinkKind,
 };
 use kiln_ast::expr::{ConstructionKind, ExprFlags, ExprKind, StorageDuration};
-use kiln_ast::stmt::StmtKind;
 use kiln_ast::sanitize::SanitizerSet as San;
+use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, TypeId};
 use kiln_llvm::{BinOp, Flags, FuncId, IntPredicate, Linkage, TypeId as LTy, UnnamedAddr, Value};
@@ -2387,7 +2387,10 @@ impl Cg<'_> {
         let adj = self.byte_offset(p, off);
         let from = self.f.fir.cur().expect("insertion point");
         self.emit_block(end, false);
-        Ok(self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR))
+        Ok(self
+            .f
+            .fir
+            .push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR))
     }
 
     /// clang `GetAddressOfDerivedClass` on a pointer: `p - off`

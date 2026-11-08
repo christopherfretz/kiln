@@ -978,8 +978,8 @@ impl Cg<'_> {
             let old = self.atomic_rmw_lv(op, lv, amt);
             return Ok(if pre { self.bin(b, Flags::NONE, old, amt) } else { old });
         }
-        let (input, new) =
-            self.atomic_update_loop(lv, vq, &mut |cg, old| cg.inc_dec_value(e, vq, old, inc))?;
+        let (input, new) = self
+            .atomic_update_loop(lv, vq, &mut |cg, old| cg.inc_dec_value(e, vq, old, inc, false))?;
         Ok(if pre { new } else { input })
     }
 

@@ -9,18 +9,19 @@
 //! descriptors) the runtime prints. Every instruction a check emits
 //! carries `!nosanitize !{}` (clang's `SanitizerScope`).
 
-use kiln_ast::expr::{BinaryOp, CastKind, ExprKind};
-use kiln_ast::sanitize::SanitizerSet as San;
-use kiln_ast::dump::AstNames;
-use kiln_ast::types::{PrintOptions, Quals, TypeView, aka, print_type, vector_diag_arg};
 use kiln_abi::mangle::Structor;
 use kiln_ast::decl::{DeclKind, DefinitionBits};
+use kiln_ast::dump::AstNames;
+use kiln_ast::expr::{BinaryOp, CastKind, ExprKind};
 use kiln_ast::lambda::CaptureDefault;
+use kiln_ast::sanitize::SanitizerSet as San;
+use kiln_ast::types::{PrintOptions, Quals, TypeView, aka, print_type, vector_diag_arg};
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::intrinsics::OverflowOp;
 use kiln_llvm::{
-    Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, Flags, FloatPredicate, GlobalId, GlobalSanitizer,
-    IntPredicate, Linkage, MdKindId, MetadataId, TypeId as LTy, UnnamedAddr, UwTableKind, Value,
+    Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, Flags, FloatPredicate, GlobalId,
+    GlobalSanitizer, IntPredicate, Linkage, MdKindId, MetadataId, TypeId as LTy, UnnamedAddr,
+    UwTableKind, Value,
 };
 use kiln_source::Loc;
 
@@ -36,6 +37,7 @@ pub(crate) enum UbHandler {
     BuiltinUnreachable,
     DivremOverflow,
     FloatCastOverflow,
+    ImplicitConversion,
     InvalidBuiltin,
     LoadInvalidValue,
     MissingReturn,
@@ -58,6 +60,7 @@ impl UbHandler {
             UbHandler::BuiltinUnreachable => 1,
             UbHandler::DivremOverflow => 3,
             UbHandler::FloatCastOverflow => 5,
+            UbHandler::ImplicitConversion => 7,
             UbHandler::InvalidBuiltin => 8,
             UbHandler::LoadInvalidValue => 10,
             UbHandler::MissingReturn => 11,
@@ -80,6 +83,7 @@ impl UbHandler {
             UbHandler::BuiltinUnreachable => "builtin_unreachable",
             UbHandler::DivremOverflow => "divrem_overflow",
             UbHandler::FloatCastOverflow => "float_cast_overflow",
+            UbHandler::ImplicitConversion => "implicit_conversion",
             UbHandler::InvalidBuiltin => "invalid_builtin",
             UbHandler::LoadInvalidValue => "load_invalid_value",
             UbHandler::MissingReturn => "missing_return",
@@ -145,7 +149,15 @@ pub(crate) struct TypeCheck {
 
 impl TypeCheck {
     pub(crate) fn new(tck: Tck, loc: Option<Loc>, q: QualType) -> TypeCheck {
-        TypeCheck { tck, loc, q, desc: UbDesc::Written, align: 0, skip: San::NONE, array_size: None }
+        TypeCheck {
+            tck,
+            loc,
+            q,
+            desc: UbDesc::Written,
+            align: 0,
+            skip: San::NONE,
+            array_size: None,
+        }
     }
     pub(crate) fn align(self, align: u64) -> TypeCheck {
         TypeCheck { align, ..self }
@@ -309,9 +321,11 @@ impl Cg<'_> {
             (UbDesc::ThisPtr(cv), _) => {
                 let cv = Quals::from_bits(cv);
                 let mut p = String::new();
-                for (on, w) in
-                    [(cv.is_const(), "const "), (cv.is_volatile(), "volatile "), (cv.is_restrict(), "restrict ")]
-                {
+                for (on, w) in [
+                    (cv.is_const(), "const "),
+                    (cv.is_volatile(), "volatile "),
+                    (cv.is_restrict(), "restrict "),
+                ] {
                     if on {
                         p.push_str(w);
                     }
@@ -326,7 +340,8 @@ impl Cg<'_> {
                 },
             },
         };
-        let (kind, info) = if matches!(desc, UbDesc::ThisPtr(_)) { (0xffff, 0) } else { (kind, info) };
+        let (kind, info) =
+            if matches!(desc, UbDesc::ThisPtr(_)) { (0xffff, 0) } else { (kind, info) };
         let nkey = (ast.types.canonical(q), key, name.clone().into_boxed_str());
         if let Some(&g) = self.ub_type_names.get(&nkey) {
             self.ub_types.insert((q, key), g);
@@ -1111,8 +1126,8 @@ impl Cg<'_> {
             };
             let sl = self.ub_loc(loc)?;
             let desc = self.ub_type(q)?;
-            let enum_check =
-                self.ub_on(San::ENUM) && matches!(self.ast.types.canonical_view(q), TypeView::Enum(_));
+            let enum_check = self.ub_on(San::ENUM)
+                && matches!(self.ast.types.canonical_view(q), TypeView::Enum(_));
             let kind = if enum_check { San::ENUM } else { San::BOOL };
             // clang 19 converts the value (`EmitCheckValue`) before the
             // branch; clang 20+ passes it to `EmitCheck` raw.
@@ -1306,8 +1321,8 @@ impl Cg<'_> {
             // clang 21+ (`EmitBoundsCheckImpl`) compares in the wider of
             // the index type and `size_t` and reports the converted index.
             let it = self.f.fir.ty(&self.m, idx);
-            let wide = self.opts.clang_compat >= 22
-                && self.m.types.int_width(it).is_some_and(|w| w > 64);
+            let wide =
+                self.opts.clang_compat >= 22 && self.m.types.int_width(it).is_some_and(|w| w > 64);
             let ct = if wide { it } else { LTy::I64 };
             let iv = self.int_cast(idx, ct, self.is_signed(iq));
             let bv = self.int_cast(bound, ct, false);
@@ -1317,7 +1332,12 @@ impl Cg<'_> {
             let d2 = self.ub_type(iq)?;
             let p = if accessed { IntPredicate::Ult } else { IntPredicate::Ule };
             let ok = self.icmp(p, iv, bv);
-            self.ub_check(&[(ok, San::ARRAY_BOUNDS)], UbHandler::OutOfBounds, &[loc, d1, d2], &[arg])
+            self.ub_check(
+                &[(ok, San::ARRAY_BOUNDS)],
+                UbHandler::OutOfBounds,
+                &[loc, d1, d2],
+                &[arg],
+            )
         })();
         self.ub_end(outer);
         res
@@ -1460,12 +1480,16 @@ impl Cg<'_> {
                     // operands.
                     match (self.cint(pos), self.cint(pos_valid), self.cint(neg_valid)) {
                         (Some(c), Some(_), Some(_)) => {
-                            if c.1 != 0 { pos_valid } else { neg_valid }
+                            if c.1 != 0 {
+                                pos_valid
+                            } else {
+                                neg_valid
+                            }
                         }
-                        _ => self.f.fir.push(
-                            Op::Select { c: pos, t: pos_valid, f: neg_valid },
-                            LTy::I1,
-                        ),
+                        _ => self
+                            .f
+                            .fir
+                            .push(Op::Select { c: pos, t: pos_valid, f: neg_valid }, LTy::I1),
                     }
                 } else if !sub {
                     self.icmp(IntPredicate::Uge, computed, int_ptr)
@@ -1479,6 +1503,309 @@ impl Cg<'_> {
         })();
         self.ub_end(outer);
         res
+    }
+
+    // ---- implicit-conversion ---------------------------------------------
+
+    /// clang `Type::isIntegerType`: an integer, `bool`, or a complete
+    /// unscoped enumeration.
+    fn ub_is_integer_type(&self, q: QualType) -> bool {
+        let ast = self.ast;
+        if let Some(d) = ast.types.as_enum(q) {
+            return ast
+                .decls
+                .enumeration(ast.definition(d).unwrap_or(d))
+                .is_some_and(|e| !e.is_scoped() && e.int_type.is_some());
+        }
+        ast.types.is_integral(q)
+    }
+
+    /// clang `ScalarExprEmitter::EmitIntegerTruncationCheck` and
+    /// `EmitIntegerSignChangeCheck` after `EmitScalarConversion` of `src`
+    /// (type `from`) to `dst` (type `to`) with the implicit-conversion
+    /// options. Neither is UB, so the converted value is kept.
+    pub(crate) fn ub_int_conv(
+        &mut self,
+        src: V,
+        from: QualType,
+        dst: V,
+        to: QualType,
+        loc: Option<Loc>,
+    ) -> R<()> {
+        if !self.ub_on(San::IMPLICIT_INTEGER_CONVERSION) {
+            return Ok(());
+        }
+        let t = &self.ast.types;
+        if t.same_unqualified(from, to) || self.is_bool(to) {
+            return Ok(());
+        }
+        if !self.ub_is_integer_type(from) || !self.ub_is_integer_type(to) {
+            return Ok(());
+        }
+        let (st, dt) = (self.f.fir.ty(&self.m, src), self.f.fir.ty(&self.m, dst));
+        let (Some(sb), Some(db)) = (self.m.types.int_width(st), self.m.types.int_width(dt)) else {
+            return Ok(());
+        };
+        let (ss, ds) = (self.is_signed(from), self.is_signed(to));
+        if self.ub_on(San::IMPLICIT_INTEGER_TRUNCATION)
+            && sb > db
+            && !(self.ub_on(San::IMPLICIT_INTEGER_SIGN_CHANGE) && !ss && ds)
+        {
+            let outer = self.ub_begin();
+            let r = self.ub_trunc_check(src, from, dst, to, loc);
+            self.ub_end(outer);
+            r?;
+        }
+        if self.ub_on(San::IMPLICIT_INTEGER_SIGN_CHANGE) {
+            let skip = (ss == ds && sb == db)
+                || (!ss && !ds)
+                || (db > sb && ds)
+                || (self.ub_on(San::IMPLICIT_SIGNED_INTEGER_TRUNCATION) && sb > db && ss);
+            if !skip {
+                let outer = self.ub_begin();
+                let r = self.ub_sign_change_check(src, from, dst, to, loc, sb > db && !ss && ds);
+                self.ub_end(outer);
+                r?;
+            }
+        }
+        Ok(())
+    }
+
+    /// clang `EmitIntegerTruncationCheckHelper`: `ext(dst) == src` and
+    /// its kind and sanitizer.
+    fn ub_trunc_helper(&mut self, src: V, from: QualType, dst: V, to: QualType) -> (V, u8, San) {
+        let (ss, ds) = (self.is_signed(from), self.is_signed(to));
+        let (kind, k) = if !ss && !ds {
+            (1, San::IMPLICIT_UNSIGNED_INTEGER_TRUNCATION)
+        } else {
+            (2, San::IMPLICIT_SIGNED_INTEGER_TRUNCATION)
+        };
+        let st = self.f.fir.ty(&self.m, src);
+        let ext = self.int_cast(dst, st, ds);
+        (self.icmp(IntPredicate::Eq, ext, src), kind, k)
+    }
+
+    /// The `implicit_conversion` static data.
+    fn ub_conv_statics(
+        &mut self,
+        loc: Option<Loc>,
+        from: QualType,
+        to: QualType,
+        kind: u8,
+    ) -> R<[Value; 5]> {
+        Ok([
+            self.ub_loc(loc)?,
+            self.ub_type(from)?,
+            self.ub_type(to)?,
+            self.m.const_int(LTy::I8, i128::from(kind)),
+            self.m.const_int(LTy::I32, 0),
+        ])
+    }
+
+    /// clang `EmitIntegerTruncationCheck` past its early returns (the
+    /// comparison is emitted even when its kind is not enabled).
+    fn ub_trunc_check(
+        &mut self,
+        src: V,
+        from: QualType,
+        dst: V,
+        to: QualType,
+        loc: Option<Loc>,
+    ) -> R<()> {
+        let (c, kind, k) = self.ub_trunc_helper(src, from, dst, to);
+        if !self.ub_on(k) {
+            return Ok(());
+        }
+        let statics = self.ub_conv_statics(loc, from, to, kind)?;
+        self.ub_check(&[(c, k)], UbHandler::ImplicitConversion, &statics, &[src, dst])
+    }
+
+    /// clang `EmitIntegerSignChangeCheck` past its early returns; `trunc`
+    /// adds the larger-unsigned to smaller-signed truncation check.
+    fn ub_sign_change_check(
+        &mut self,
+        src: V,
+        from: QualType,
+        dst: V,
+        to: QualType,
+        loc: Option<Loc>,
+        trunc: bool,
+    ) -> R<()> {
+        let sn = self.ub_is_negative(src, from);
+        let dn = self.ub_is_negative(dst, to);
+        let c = self.icmp(IntPredicate::Eq, sn, dn);
+        let mut checks = vec![(c, San::IMPLICIT_INTEGER_SIGN_CHANGE)];
+        let mut kind = 3;
+        if self.ub_on(San::IMPLICIT_SIGNED_INTEGER_TRUNCATION) && trunc {
+            let (c2, _, _) = self.ub_trunc_helper(src, from, dst, to);
+            checks.push((c2, San::IMPLICIT_SIGNED_INTEGER_TRUNCATION));
+            kind = 4;
+        }
+        let statics = self.ub_conv_statics(loc, from, to, kind)?;
+        self.ub_check(&checks, UbHandler::ImplicitConversion, &statics, &[src, dst])
+    }
+
+    /// clang `EmitScalarPrePostIncDec` with an implicit-conversion check
+    /// on: a promotable integer `old` (type `q`) is promoted, stepped
+    /// with a plain `add` and converted back, checked unless it is a
+    /// bit-field (`bf`).
+    pub(crate) fn ub_inc_dec_promoted(
+        &mut self,
+        e: ExprId,
+        q: QualType,
+        old: V,
+        inc: bool,
+        bf: bool,
+    ) -> R<Option<(V, V, QualType)>> {
+        use kiln_ast::types::BuiltinType as B;
+        if !self.ub_on(
+            San::IMPLICIT_INTEGER_ARITHMETIC_VALUE_CHANGE.union(San::IMPLICIT_BITFIELD_CONVERSION),
+        ) {
+            return Ok(None);
+        }
+        let promotable = matches!(
+            self.ast.types.builtin(q),
+            Some(
+                B::Char
+                    | B::SChar
+                    | B::UChar
+                    | B::WChar
+                    | B::Char8
+                    | B::Char16
+                    | B::Char32
+                    | B::Short
+                    | B::UShort
+            )
+        );
+        if !promotable {
+            return Ok(None);
+        }
+        let t = self.f.fir.ty(&self.m, old);
+        let w = self.m.types.int_width(t).unwrap_or(32);
+        let pq = if w < 32 || self.is_signed(q) { B::Int.qual_type() } else { B::UInt.qual_type() };
+        let wide = self.conv(old, q, pq);
+        let amt = self.icn(LTy::I32, if inc { 1 } else { -1 });
+        let v = self.bin(BinOp::Add, Flags::NONE, wide, amt);
+        let r = self.conv(v, pq, q);
+        if !bf {
+            let loc = self.ub_expr_loc(e);
+            self.ub_int_conv(v, pq, r, q, loc)?;
+        }
+        Ok(Some((r, v, pq)))
+    }
+
+    /// clang `EmitWithOriginalRHSBitfieldAssignment`: the right side `r`
+    /// of `l = r` when `l` designates a bit-field, converted without the
+    /// implicit-conversion checks, and the value before an implicit
+    /// integral conversion with its type (`Previous`, `SrcType`). Only
+    /// taken with an implicit-conversion sanitizer on; the IR is the
+    /// same otherwise.
+    pub(crate) fn ub_bf_rhs(&mut self, l: ExprId, r: ExprId) -> R<(V, Option<(V, QualType)>)> {
+        let ast = self.ast;
+        let x = ast.exprs.get(r);
+        if !self.ub_on(San::IMPLICIT_CONVERSION)
+            || ast.exprs.get(l).object_kind() != kiln_ast::expr::ObjectKind::BitField
+            || x.kind() != ExprKind::ImplicitCastExpr
+        {
+            return Ok((self.emit_scalar(r)?, None));
+        }
+        let sub = self.sub(r);
+        let sq = ast.exprs.get(sub).ty();
+        match ast.exprs.cast_kind(r) {
+            CastKind::IntegralCast => {
+                let p = self.emit_scalar(sub)?;
+                Ok((self.conv(p, sq, x.ty()), Some((p, sq))))
+            }
+            CastKind::LValueToRValue => {
+                let v = self.emit_scalar(r)?;
+                Ok((v, Some((v, sq))))
+            }
+            _ => Ok((self.emit_scalar(r)?, None)),
+        }
+    }
+
+    /// The implicit-bitfield-conversion check of the simple assignment
+    /// `e` that stored `v` (`prev` from [`Self::ub_bf_rhs`]) into `lv`,
+    /// reading back `res`.
+    pub(crate) fn ub_bf_assign(
+        &mut self,
+        e: ExprId,
+        lv: LV,
+        v: V,
+        prev: Option<(V, QualType)>,
+        res: V,
+    ) -> R<()> {
+        let Some(bf) = lv.bf else { return Ok(()) };
+        let [l, r] = self.ast.exprs.operands(e);
+        let (src, sq) = prev.unwrap_or((v, self.ast.exprs.get(r).ty()));
+        let to = self.ast.exprs.get(l).ty();
+        self.ub_bf_conv(src, sq, res, to, bf.size, self.ub_expr_loc(e))
+    }
+
+    /// clang `EmitBitfieldConversionCheck`: `src` (type `from`) stored
+    /// into a `size`-bit bit-field of type `to`, read back as `dst`.
+    pub(crate) fn ub_bf_conv(
+        &mut self,
+        src: V,
+        from: QualType,
+        dst: V,
+        to: QualType,
+        size: u32,
+        loc: Option<Loc>,
+    ) -> R<()> {
+        if !self.ub_on(San::IMPLICIT_BITFIELD_CONVERSION)
+            || !self.ub_is_integer_type(from)
+            || !self.ub_is_integer_type(to)
+            || self.is_bool(from)
+            || self.is_bool(to)
+        {
+            return Ok(());
+        }
+        let st = self.lty(from);
+        let sb = self.m.types.int_width(st).unwrap_or(0);
+        let (ss, ds) = (self.is_signed(from), self.is_signed(to));
+        let trunc = size < sb;
+        let sign = !(ss == ds && sb == size) && (ss || ds) && !(size > sb && ds);
+        if !trunc && !sign {
+            return Ok(());
+        }
+        let outer = self.ub_begin();
+        let (c, mut kind) = if trunc {
+            let vt = self.f.fir.ty(&self.m, src);
+            let ext = self.int_cast(dst, vt, ds);
+            (self.icmp(IntPredicate::Eq, ext, src), if !ss && !ds { 1 } else { 2 })
+        } else {
+            let sn = self.ub_is_negative(src, from);
+            let dn = self.ub_is_negative(dst, to);
+            (self.icmp(IntPredicate::Eq, sn, dn), 3)
+        };
+        if trunc && ds && !ss {
+            kind = 4;
+        }
+        let r = (|| {
+            let statics = [
+                self.ub_loc(loc)?,
+                self.ub_type(from)?,
+                self.ub_type(to)?,
+                self.m.const_int(LTy::I8, i128::from(kind)),
+                self.m.const_int(LTy::I32, i128::from(size)),
+            ];
+            let k = San::IMPLICIT_BITFIELD_CONVERSION;
+            self.ub_check(&[(c, k)], UbHandler::ImplicitConversion, &statics, &[src, dst])
+        })();
+        self.ub_end(outer);
+        r
+    }
+
+    /// clang `EmitIsNegativeTestHelper`.
+    fn ub_is_negative(&mut self, v: V, q: QualType) -> V {
+        if self.is_signed(q) {
+            let t = self.f.fir.ty(&self.m, v);
+            let z = self.icn(t, 0);
+            self.icmp(IntPredicate::Slt, v, z)
+        } else {
+            V::C(self.m.const_bool(false))
+        }
     }
 
     // ---- builtin ---------------------------------------------------------
@@ -1818,8 +2145,12 @@ impl Cg<'_> {
             let lg = align_val.map_or(1, |a| a.max(1).ilog2());
             let lg = self.m.const_int(LTy::I8, i128::from(lg));
             let k = self.m.const_int(LTy::I8, tck as i128);
-            self.ub_check(&checks, UbHandler::TypeMismatch, &[l, desc, lg, k], &[as_int
-                .unwrap_or(ptr)])?;
+            self.ub_check(
+                &checks,
+                UbHandler::TypeMismatch,
+                &[l, desc, lg, k],
+                &[as_int.unwrap_or(ptr)],
+            )?;
         }
         if let Some(d) = done {
             self.f.fir.push(Op::Br { dest: d }, LTy::VOID);
@@ -1941,7 +2272,12 @@ impl Cg<'_> {
     /// `CXXABIThisAlignment`, never object-size; never null either in
     /// the call operator of a captureless lambda (its static invoker
     /// calls it with a null `this`).
-    pub(crate) fn ub_this_check(&mut self, d: DeclId, structor: Option<Structor>, this: V) -> R<()> {
+    pub(crate) fn ub_this_check(
+        &mut self,
+        d: DeclId,
+        structor: Option<Structor>,
+        this: V,
+    ) -> R<()> {
         let ast = self.ast;
         if !self.ub_type_check_on() {
             return Ok(());
@@ -1974,7 +2310,8 @@ impl Cg<'_> {
             Some(TypeView::Function(fp)) => fp.info().this_quals().bits(),
             _ => 0,
         };
-        let tck = if kind == DeclKind::CXXConstructor { Tck::ConstructorCall } else { Tck::MemberCall };
+        let tck =
+            if kind == DeclKind::CXXConstructor { Tck::ConstructorCall } else { Tck::MemberCall };
         let loc = Some(ast.decls.get(d).loc());
         let cq = self.class_type(rd);
         let tc = TypeCheck::new(tck, loc, cq).align(align).skip(skip).desc(UbDesc::ThisPtr(cv));
@@ -2014,7 +2351,9 @@ impl FpFormat {
         let frac = if self.explicit { self.p } else { self.p - 1 };
         let sign = u128::from(neg) << (frac + self.ebits);
         let (biased, m) = match v {
-            None => ((1u128 << self.ebits) - 1, if self.explicit { 1u128 << (self.p - 1) } else { 0 }),
+            None => {
+                ((1u128 << self.ebits) - 1, if self.explicit { 1u128 << (self.p - 1) } else { 0 })
+            }
             Some((m, e)) => (u128::from(e + self.emax), m << (self.p - p_src)),
         };
         let m = if self.explicit { m } else { m & ((1u128 << frac) - 1) };

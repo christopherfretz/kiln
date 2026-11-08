@@ -938,7 +938,17 @@ impl Cg<'_> {
                     // clang 22: int → bool ext vector, lane-wise `icmp ne 0`.
                     self.convert_vector(v, sq, q)
                 } else {
-                    self.conv_at(v, sq, q, self.ub_expr_loc(e))?
+                    let loc = self.ub_expr_loc(e);
+                    let r = self.conv_at(v, sq, q, loc)?;
+                    // clang `VisitCastExpr` `CK_IntegralCast`: an implicit
+                    // conversion not written as part of a cast is checked.
+                    if ck == CastKind::IntegralCast
+                        && ast.exprs.get(e).kind() == ExprKind::ImplicitCastExpr
+                        && !ast.exprs.get(e).has(ExprFlags::PART_OF_EXPLICIT_CAST)
+                    {
+                        self.ub_int_conv(v, sq, r, q, loc)?;
+                    }
+                    r
                 }
             }
             CastKind::FloatingComplexToReal
@@ -1240,13 +1250,36 @@ impl Cg<'_> {
             return self.atomic_inc_dec(e, lv, vq, inc, pre);
         }
         let old = self.load_lv_at(lv, self.ub_expr_loc(e))?;
-        let new = self.inc_dec_value(e, lv.q, old, inc)?;
+        let promoted = match lv.bf {
+            Some(_) => self.ub_inc_dec_promoted(e, lv.q, old, inc, true)?,
+            None => None,
+        };
+        let (new, src, sq) = match promoted {
+            Some((r, v, pq)) if self.ub_on(San::IMPLICIT_BITFIELD_CONVERSION) => (r, v, pq),
+            Some((r, ..)) => (r, r, self.ast.exprs.get(e).ty()),
+            None => {
+                let r = self.inc_dec_value(e, lv.q, old, inc, lv.bf.is_some())?;
+                (r, r, self.ast.exprs.get(e).ty())
+            }
+        };
         let stored = self.store_lv(new, lv, lv.bf.is_some());
+        if let Some(bf) = lv.bf {
+            let to = self.ast.exprs.get(e).ty();
+            self.ub_bf_conv(src, sq, stored, to, bf.size, self.ub_expr_loc(e))?;
+        }
         Ok(if pre { stored } else { old })
     }
 
     /// The incremented (`inc`) or decremented value `old` of type `q`.
-    pub(crate) fn inc_dec_value(&mut self, e: ExprId, q: QualType, old: V, inc: bool) -> R<V> {
+    /// `bf`: the operand is a bit-field.
+    pub(crate) fn inc_dec_value(
+        &mut self,
+        e: ExprId,
+        q: QualType,
+        old: V,
+        inc: bool,
+        bf: bool,
+    ) -> R<V> {
         let ast = self.ast;
         let amount: i128 = if inc { 1 } else { -1 };
         Ok(if self.is_bool(q) && inc {
@@ -1277,6 +1310,9 @@ impl Cg<'_> {
                 let c = self.fconst(t, if inc { 1.0 } else { -1.0 });
                 self.bin(BinOp::FAdd, Flags::NONE, old, c)
             } else {
+                if let Some((r, ..)) = self.ub_inc_dec_promoted(e, q, old, inc, bf)? {
+                    return Ok(r);
+                }
                 if let Some(r) = self.ub_inc_dec(e, old, inc)? {
                     return Ok(r);
                 }
@@ -1299,9 +1335,10 @@ impl Cg<'_> {
                     let lv = self.emit_lvalue(e)?;
                     return Ok(Some(lv.addr.v));
                 }
-                let v = self.emit_scalar(r)?;
+                let (v, prev) = self.ub_bf_rhs(l, r)?;
                 let lv = self.emit_checked_lvalue(l, Tck::Store)?;
                 let res = self.store_lv(v, lv, true);
+                self.ub_bf_assign(e, lv, v, prev, res)?;
                 if self.is_volatile(lv.q) { self.load_lv(lv) } else { res }
             }
             BinaryOp::Comma => {
@@ -2041,11 +2078,21 @@ impl Cg<'_> {
         let lhs = if ast.types.is_pointer(lq) { old } else { self.conv(old, lq, lhs_ty) };
         let res = self.arith(e, op, lhs, rv, lhs_ty, rq, result_ty)?;
         let res = if ast.types.is_pointer(lq) {
-            res
+            (res, None)
         } else {
-            self.conv_at(res, result_ty, lq, self.ub_expr_loc(e))?
+            let loc = self.ub_expr_loc(e);
+            let r = self.conv_at(res, result_ty, lq, loc)?;
+            if lv.bf.is_none() {
+                self.ub_int_conv(res, result_ty, r, ast.exprs.get(l).ty(), loc)?;
+            }
+            (r, Some(res))
         };
+        let (res, prev) = res;
         let v = self.store_lv(res, lv, true);
+        if let (Some(bf), Some(p)) = (lv.bf, prev) {
+            let to = ast.exprs.get(l).ty();
+            self.ub_bf_conv(p, rq, v, to, bf.size, self.ub_expr_loc(e))?;
+        }
         Ok((lv, v))
     }
 
@@ -2515,9 +2562,13 @@ impl Cg<'_> {
                 if self.is_complex(q) {
                     return Ok(self.cx_assign(e)?.0);
                 }
-                let v = self.emit_scalar(r)?;
+                let (v, prev) = self.ub_bf_rhs(l, r)?;
                 let lv = self.emit_checked_lvalue(l, Tck::Store)?;
-                self.store_lv(v, lv, false);
+                // clang computes the stored bit-field value only for the
+                // implicit-bitfield-conversion check.
+                let want = lv.bf.is_some() && self.ub_on(San::IMPLICIT_BITFIELD_CONVERSION);
+                let res = self.store_lv(v, lv, want);
+                self.ub_bf_assign(e, lv, v, prev, res)?;
                 Ok(lv)
             }
             BinaryOp::Comma => {
@@ -2779,8 +2830,10 @@ impl Cg<'_> {
             if self.ub_type_check_on() {
                 let skip = self.ub_member_skips(base);
                 // Through `this`, clang's type is `getRecordType`'s.
-                let desc = if skip.has_any(San::ALIGNMENT) { UbDesc::Record } else { UbDesc::Written };
-                let tc = TypeCheck::new(Tck::MemberAccess, self.loc_of(e), pq).skip(skip).desc(desc);
+                let desc =
+                    if skip.has_any(San::ALIGNMENT) { UbDesc::Record } else { UbDesc::Written };
+                let tc =
+                    TypeCheck::new(Tck::MemberAccess, self.loc_of(e), pq).skip(skip).desc(desc);
                 self.ub_type_check(p, tc)?;
             }
             let ty = self.mty(pq);
