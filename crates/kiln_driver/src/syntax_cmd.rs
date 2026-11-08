@@ -130,6 +130,37 @@ impl SyntaxJob<'_> {
         result
     }
 
+    /// `-fdump-ast`'s options, or `Err` once the reason is diagnosed.
+    fn dump_options<'sm>(
+        &self,
+        sm: &'sm SourceManager,
+        engine: &DiagEngine<'sm>,
+        main: Option<FileId>,
+    ) -> Result<Option<DumpOptions<'sm>>, ()> {
+        let a = self.0.args;
+        Ok(match (&a.dump_ast, main) {
+            (Some(_), None) => {
+                Diag::new(DiagId::drv_not_implemented, Span::INVALID)
+                    .arg("-fdump-ast of a module file")
+                    .emit(engine);
+                return Err(());
+            }
+            (Some(o), Some(main)) => match dump_options(o, a.dump_ast_filter.clone(), sm, main) {
+                Ok(d) => {
+                    Some(DumpOptions { written_tags: a.predef.clang_compat.major() >= 22, ..d })
+                }
+                Err(bad) => {
+                    Diag::new(DiagId::drv_invalid_value, Span::INVALID)
+                        .arg(format!("-fdump-ast={o}"))
+                        .arg(bad)
+                        .emit(engine);
+                    return Err(());
+                }
+            },
+            (None, _) => None,
+        })
+    }
+
     fn parse<'sm>(
         &self,
         sm: &'sm SourceManager,
@@ -141,27 +172,8 @@ impl SyntaxJob<'_> {
     ) {
         let job = &self.0;
         let a = job.args;
-        let main = inputs.main.file();
-        let dump_opts = match (&a.dump_ast, main) {
-            (Some(_), None) => {
-                Diag::new(DiagId::drv_not_implemented, Span::INVALID)
-                    .arg("-fdump-ast of a module file")
-                    .emit(engine);
-                return;
-            }
-            (Some(o), Some(main)) => match dump_options(o, a.dump_ast_filter.clone(), sm, main) {
-                Ok(d) => {
-                    Some(DumpOptions { written_tags: a.predef.clang_compat.major() >= 22, ..d })
-                }
-                Err(bad) => {
-                    Diag::new(DiagId::drv_invalid_value, Span::INVALID)
-                        .arg(format!("-fdump-ast={o}"))
-                        .arg(bad)
-                        .emit(engine);
-                    return;
-                }
-            },
-            (None, _) => None,
+        let Ok(dump_opts) = self.dump_options(sm, engine, inputs.main.file()) else {
+            return;
         };
         let Ok(mut target) = Target::from_triple(job.toolchain.target.triple) else {
             Diag::new(DiagId::drv_unsupported_target, Span::INVALID)
