@@ -35,6 +35,8 @@ enum Spell {
     Gnu,
     /// `CXX11<"omp", "x">` only.
     Omp,
+    /// `CXX11<"gsl", "x">` only (WP-674).
+    Gsl,
     /// `Clang<"x">`, plus `[[gnu::x]]` from clang 22 (`no_sanitize`).
     ClangGcc22,
 }
@@ -65,10 +67,12 @@ const fn x86(name: &'static str, kind: AttrKind) -> Entry {
     Entry { name, kind, a: 0, spell: Gcc, target: Target::X86, since: 19 }
 }
 
-use Spell::{Clang, ClangGcc22, Gcc, GccClang, Gnu, Omp};
+use Spell::{Clang, ClangGcc22, Gcc, GccClang, Gnu, Gsl, Omp};
 
 /// The class B spellings, sorted by name.
 const TABLE: &[Entry] = &[
+    e("Owner", AttrKind::GSL_OWNER, Gsl),
+    e("Pointer", AttrKind::GSL_POINTER, Gsl),
     e("align_value", AttrKind::ALIGN_VALUE, Gnu),
     e("assume", AttrKind::OMP_ASSUME, Omp),
     e("assume_aligned", AttrKind::ASSUME_ALIGNED, Gcc),
@@ -86,6 +90,7 @@ const TABLE: &[Entry] = &[
     x86("force_align_arg_pointer", AttrKind::FORCE_ALIGN_ARG_POINTER),
     x86("function_return", AttrKind::FUNCTION_RETURN),
     e("leaf", AttrKind::LEAF, Gcc),
+    e("lifetimebound", AttrKind::LIFETIMEBOUND, Clang),
     e("loader_uninitialized", AttrKind::LOADER_UNINITIALIZED, Clang),
     e("lto_visibility_public", AttrKind::LTO_VISIBILITY_PUBLIC, Clang),
     e("maybe_undef", AttrKind::MAYBE_UNDEF, Clang),
@@ -138,6 +143,7 @@ pub(crate) fn kind_of(
         GccClang => gnu || (cxx && matches!(scope, Some("gnu" | "clang"))),
         Gnu => gnu,
         Omp => cxx && scope == Some("omp"),
+        Gsl => cxx && scope == Some("gsl"),
         ClangGcc22 => {
             gnu || (cxx && (scope == Some("clang") || (scope == Some("gnu") && compat >= 22)))
         }
@@ -245,7 +251,7 @@ impl Sema<'_, '_> {
             s.emit(msg);
             None
         };
-        let (mut a, mut b) = (preset, 0u32);
+        let (mut a, mut b, mut flags) = (preset, 0u32, 0u8);
         match kind {
             AttrKind::PATCHABLE_FUNCTION_ENTRY | AttrKind::ASSUME_ALIGNED => {
                 if args.is_empty() {
@@ -463,6 +469,36 @@ impl Sema<'_, '_> {
                 }
                 a = self.ast.lists.push_raw(&words).raw();
             }
+            AttrKind::LIFETIMEBOUND if !args.is_empty() => flags = AttrNode::LIFETIMEBOUND_ARGS,
+            AttrKind::GSL_OWNER | AttrKind::GSL_POINTER => {
+                // clang `handleLifetimeCategoryAttr`: an optional type-id
+                // (the parser reports a missing one); a reference or array
+                // type is rejected before the subject is looked at.
+                match args {
+                    [] => {}
+                    [AttrArg::Type(t)] => {
+                        let canon = self.ast.types.canonical(*t);
+                        let bad = if self.ast.types.is_reference(canon) {
+                            Some("0")
+                        } else if self.ast.types.is_array(canon) {
+                            Some("1")
+                        } else {
+                            None
+                        };
+                        if let Some(sel) = bad {
+                            let msg = self
+                                .diag(DiagId::sema_attribute_invalid_argument, loc)
+                                .arg(sel)
+                                .arg(q);
+                            self.emit(msg);
+                            return None;
+                        }
+                        flags = AttrNode::GSL_HAS_TYPE;
+                        b = t.to_raw();
+                    }
+                    _ => return count(self, "1"),
+                }
+            }
             AttrKind::NO_SANITIZE if preset == 0 => {
                 // clang `handleNoSanitizeAttr`.
                 if args.is_empty() {
@@ -523,7 +559,7 @@ impl Sema<'_, '_> {
             _ if !args.is_empty() => return count(self, "0"),
             _ => {}
         }
-        Some(self.ast.attrs.push(AttrNode { kind, syntax, flags: 0, loc, a, b }))
+        Some(self.ast.attrs.push(AttrNode { kind, syntax, flags, loc, a, b }))
     }
 
     fn is_dependent_arg(&self, a: &AttrArg) -> bool {
@@ -565,6 +601,46 @@ impl Sema<'_, '_> {
                 | DeclKind::ClassTemplatePartialSpecialization
         );
         match node.kind {
+            // The type-position form (`a` = 1, clang's `AttributedType`
+            // checked by `checkAttributesAfterMerging`): ignored on a
+            // declarator that does not declare a function.
+            AttrKind::LIFETIMEBOUND if node.a == 1 => {
+                if !func {
+                    return false;
+                }
+                let (id, sel) = match kind {
+                    DeclKind::CXXConstructor => (DiagId::sema_lifetimebound_ctor_dtor, "0"),
+                    DeclKind::CXXDestructor => (DiagId::sema_lifetimebound_ctor_dtor, "1"),
+                    DeclKind::CXXMethod | DeclKind::CXXConversion if !self.is_static_method(d) => {
+                        return true;
+                    }
+                    DeclKind::CXXMethod => (DiagId::sema_lifetimebound_no_object_param, "0"),
+                    _ => (DiagId::sema_lifetimebound_no_object_param, "1"),
+                };
+                let msg = self.diag(id, node.loc).arg(sel);
+                self.emit(msg);
+                false
+            }
+            AttrKind::LIFETIMEBOUND if node.flags & AttrNode::LIFETIMEBOUND_ARGS != 0 => {
+                let msg = self
+                    .diag(DiagId::parse_attribute_wrong_arg_count, node.loc)
+                    .arg("lifetimebound")
+                    .arg("0");
+                self.emit(msg);
+                false
+            }
+            AttrKind::LIFETIMEBOUND => {
+                kind == DeclKind::ParmVar
+                    || wrong(self, true, "parameters and implicit object parameters")
+            }
+            AttrKind::GSL_OWNER | AttrKind::GSL_POINTER => {
+                let union = self
+                    .ast
+                    .decls
+                    .record(d)
+                    .is_some_and(|x| x.tag == kiln_ast::decl::TagKind::Union);
+                (record && !union) || wrong(self, false, "structs")
+            }
             AttrKind::NOCF_CHECK if !self.cf_protection_branch && (func || var) => {
                 let msg = self.diag(DiagId::sema_nocf_check_ignored, node.loc);
                 self.emit(msg);
@@ -746,6 +822,66 @@ impl Sema<'_, '_> {
                 (AttrKind::NOT_TAIL_CALLED, "not_tail_called"),
             ],
         );
+        self.check_gsl_attrs(d, attrs);
+    }
+
+    /// clang `handleLifetimeCategoryAttr`: `gsl::Owner` and `gsl::Pointer`
+    /// exclude each other, and a repeat of one must name the same type
+    /// (as written: a typedef differs from its target) or none, across
+    /// the redeclarations of the class and the attributes before it.
+    fn check_gsl_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        let is_gsl = |k: AttrKind| k == AttrKind::GSL_OWNER || k == AttrKind::GSL_POINTER;
+        if !attrs.iter().any(|&a| is_gsl(self.ast.attrs.get(a).kind)) {
+            return;
+        }
+        let prior: Vec<AttrNode> = self
+            .ast
+            .redecls_of(d)
+            .filter(|&r| r != d)
+            .flat_map(|r| self.ast.lists.iter::<AttrId>(self.ast.attrs.of_decl(r)))
+            .map(|a| *self.ast.attrs.get(a))
+            .filter(|n| is_gsl(n.kind))
+            .collect();
+        let deref = |n: &AttrNode| {
+            (n.flags & AttrNode::GSL_HAS_TYPE != 0)
+                .then(|| kiln_ast::QualType::from_raw(n.b).map(kiln_ast::QualType::without_quals))
+                .flatten()
+        };
+        let mut kept: Vec<AttrNode> = Vec::new();
+        let mut drop: Vec<AttrId> = Vec::new();
+        for &a in attrs.iter() {
+            let n = *self.ast.attrs.get(a);
+            if !is_gsl(n.kind) {
+                continue;
+            }
+            let seen = || prior.iter().chain(kept.iter());
+            let other = seen().find(|e| e.kind != n.kind).copied();
+            let same = seen().find(|e| e.kind == n.kind).copied();
+            let clash = match (other, same) {
+                (Some(e), _) => Some(e),
+                (None, Some(e)) if deref(&e) != deref(&n) => Some(e),
+                (None, Some(_)) => {
+                    drop.push(a);
+                    continue;
+                }
+                (None, None) => None,
+            };
+            if let Some(e) = clash {
+                let shown =
+                    |k: AttrKind| if k == AttrKind::GSL_OWNER { "Owner" } else { "Pointer" };
+                let note = self.diag(DiagId::note_conflicting_attribute, e.loc);
+                let msg = self
+                    .diag(DiagId::sema_attributes_not_compatible, n.loc)
+                    .arg(shown(n.kind))
+                    .arg(shown(e.kind))
+                    .with_note(note);
+                self.emit(msg);
+                drop.push(a);
+            } else {
+                kept.push(n);
+            }
+        }
+        attrs.retain(|a| !drop.contains(a));
     }
 
     /// Whether `d` is a variable, parameter or field of (reference to)

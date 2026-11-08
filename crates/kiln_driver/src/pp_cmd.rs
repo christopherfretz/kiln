@@ -493,9 +493,14 @@ impl StagedFeatures {
             "_Clang" => "clang",
             s => s,
         });
-        // Trimmed as `Sema::act_on_attribute` trims it (clang's
-        // `__clang_arm_builtin_alias` has a leading `__` only).
-        let name = name.trim_start_matches("__").trim_end_matches("__");
+        // Normalized as `Sema::act_on_attribute` normalizes it (clang
+        // `normalizeAttrName`: `__clang_arm_builtin_alias` and `__const`
+        // keep their leading `__`).
+        let name = if kiln_ast::attr::attr_name_normalizes(syntax, scope) {
+            kiln_ast::attr::normalize_attr_name(name)
+        } else {
+            name
+        };
         kiln_sema::attr_triage::attribute_support(
             name,
             syntax,

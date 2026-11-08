@@ -725,6 +725,7 @@ impl Sema<'_, '_> {
             }
             self.mark_used(d);
             let at = self.eloc(r);
+            self.note_undefined_use(d, at);
             self.capture_odr_use(d, at);
         }
         e
@@ -894,6 +895,7 @@ impl Sema<'_, '_> {
     pub(crate) fn mark_used_at(&mut self, d: DeclId, loc: Loc) {
         self.mark_used(d);
         self.note_used_for_instantiation(d, loc);
+        self.note_undefined_use(d, loc);
     }
 
     /// Converts `e` to `ty` as in `ctx`, diagnosing failure (the result
@@ -3587,6 +3589,8 @@ impl Sema<'_, '_> {
                 return self.recover_err(&[l, r], loc);
             }
         };
+        // clang `CheckAssignmentOperands`' lifetime check (spec/sema-class.md §5.6).
+        self.check_assignment_lifetime(l, r2);
         let res = self.builder().binary(BinaryOp::Assign, l, r2, lt, loc);
         self.mark_bitfield_if(res, l);
         self.note_volatile_assign(l);
@@ -3698,6 +3702,7 @@ impl Sema<'_, '_> {
         // P1467 [conv.double]/1: the result converts back to `E1`'s type
         // (GCC: diagnosed at `E2`).
         conv::fp_rank_check(self, r, res_ty, conv::strip_cv(self, lt));
+        self.check_assignment_lifetime(l, r2);
         let res = self.builder().compound_assign(op, l, r2, target_t, lhs_ty, res_ty, loc);
         self.mark_bitfield_if(res, l);
         res
@@ -6199,6 +6204,15 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
+        // A misaligned `&m` converted here is dropped now, as clang
+        // `BuildCStyleCastExpr` / `BuildCXXNamedCast` /
+        // `BuildCXXFunctionalCastExpr` do, before the rest of the
+        // enclosing full-expression is parsed: a nested full-expression
+        // after it (a template argument, a lambda body, an instantiated
+        // body) reports what is still pending (WP-659).
+        if !self.misaligned.is_empty() && style != CastStyle::Dynamic {
+            self.discard_misaligned_member_address(ty, e);
+        }
         let r = self.build_explicit_cast(style, ty, e, loc, rparen);
         self.note_cast_written_type(r, ty);
         r

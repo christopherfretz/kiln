@@ -16,6 +16,7 @@ use kiln_llvm::{
 };
 use kiln_source::Loc;
 
+use crate::builtins::PtrAlign;
 use crate::cleanup::{ArrayDelete, Cleanup, Depth, IrregularPartialArray, NewDelete, Saved};
 use crate::expr::LV;
 use crate::fir::{Fir, Op, V};
@@ -1245,11 +1246,19 @@ impl Cg<'_> {
                 cookie = self.array_cookie_size(b);
             }
         }
-        let p = self.emit_scalar(arg)?;
+        // clang `EmitPointerWithAlignment`: the operand's alignment (a
+        // declaration's, a base subobject's) is that of the vtable and
+        // array cookie loads below (WP-847).
+        let PtrAlign { v: p, align: palign, .. } = self.pointer_with_alignment(arg)?;
         let notnull = self.f.fir.create_block();
         let end = self.f.fir.create_block();
         let z = V::C(self.m.const_null(LTy::PTR));
-        let isnull = self.icmp(IntPredicate::Eq, p, z);
+        // The IR builder's constant folder: `delete &g` tests a global,
+        // which is not null unless `extern_weak`.
+        let isnull = match self.const_ptr_is_null(p) {
+            Some(b) => V::C(self.m.const_bool(b)),
+            None => self.icmp(IntPredicate::Eq, p, z),
+        };
         self.cond_br(isnull, end, notnull);
         self.emit_block(notnull, false);
         let mut ptr = p;
@@ -1276,13 +1285,12 @@ impl Cg<'_> {
             {
                 let fty = ast.decls.get(ast.first(dtor)).ty().expect("destructor type");
                 let sig = self.call_sig_this(fty, false, &[], Some(def));
-                let (_, al) = self.size_align(dt);
-                let fp = self.virtual_fn_ptr(dtor, Some(mangle::Structor::Deleting), p, al)?;
+                let fp = self.virtual_fn_ptr(dtor, Some(mangle::Structor::Deleting), p, palign)?;
                 self.call_vals(&sig, fp, None, Some(p), &[], &[], None, &[])?;
                 self.emit_block(end, false);
                 return Ok(());
             }
-        } else if cookie == 0 && self.emit_object_delete(e, arg, p, dt, loc)? {
+        } else if cookie == 0 && self.emit_object_delete(e, arg, p, palign, dt, loc)? {
             self.emit_block(end, false);
             return Ok(());
         }
@@ -1295,7 +1303,7 @@ impl Cg<'_> {
             return Ok(());
         }
         if cookie != 0 {
-            self.emit_array_delete(od, ptr, dt, cookie);
+            self.emit_array_delete(od, ptr, palign, dt, cookie);
         } else {
             self.emit_delete_call(od, ptr, dt, loc)?;
         }
@@ -1306,14 +1314,15 @@ impl Cg<'_> {
     /// clang `EmitArrayDelete` with an array cookie: reads the element
     /// count back (`ReadArrayCookie`), destroys the elements in reverse
     /// order and deallocates — the latter as a cleanup so that it also
-    /// runs if a destructor throws ([expr.delete]/6-7).
-    fn emit_array_delete(&mut self, od: DeclId, ptr: V, elem: QualType, cookie: u64) {
-        let (_, elem_align) = self.size_align(elem);
+    /// runs if a destructor throws ([expr.delete]/6-7). `align` is the
+    /// operand's (`EmitPointerWithAlignment`), which the cookie load
+    /// derives from.
+    fn emit_array_delete(&mut self, od: DeclId, ptr: V, align: u64, elem: QualType, cookie: u64) {
         let back = self.i64c(-i128::from(cookie));
         let alloc = self.gep(LTy::I8, ptr, vec![back], true);
         let off = cookie - 8;
         let np = self.byte_offset(alloc, off);
-        let num = self.load(LTy::I64, np, min_align(min_align(elem_align, cookie), off), false);
+        let num = self.load(LTy::I64, np, min_align(min_align(align, cookie), off), false);
         self.push_cleanup(Cleanup::ArrayDelete(Box::new(ArrayDelete {
             op_delete: od,
             ptr: alloc,
@@ -1333,7 +1342,8 @@ impl Cg<'_> {
     }
 
     /// clang `EmitObjectDelete` (the destructor part): destroys the object
-    /// of type `dt` at `p` before its deallocation. Returns `true` when a
+    /// of type `dt` at `p` (aligned to `palign`, the operand's alignment)
+    /// before its deallocation. Returns `true` when a
     /// virtual call to the deleting destructor (`emitVirtualObjectDelete`)
     /// also deallocated it.
     fn emit_object_delete(
@@ -1341,6 +1351,7 @@ impl Cg<'_> {
         e: ExprId,
         arg: ExprId,
         p: V,
+        palign: u64,
         dt: QualType,
         loc: Option<Loc>,
     ) -> R<bool> {
@@ -1367,7 +1378,7 @@ impl Cg<'_> {
                 let first = ast.first(dtor);
                 let fty = ast.decls.get(first).ty().expect("destructor type");
                 let sig = self.call_sig_this(fty, false, &[], Some(def));
-                let (_, al) = self.size_align(dt);
+                let al = palign;
                 if ast.exprs.get(e).has(ExprFlags::GLOBAL) {
                     // emitVirtualObjectDelete with UseGlobalDelete: the
                     // complete object is `p + vtable[-2]`; the complete

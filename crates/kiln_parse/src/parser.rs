@@ -942,12 +942,22 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     }
 
     /// [`Parser::scan_name_qual_at`], saying why there is no name.
-    fn scan_name_walk(&self, mut i: usize) -> Result<ScannedName, ScanStop> {
+    fn scan_name_walk(&self, i: usize) -> Result<ScannedName, ScanStop> {
+        self.scan_name_walk_in(i, None)
+    }
+
+    /// [`Parser::scan_name_walk`] from token `i`, the first component
+    /// after a `::` whose scope `scope` is already known.
+    fn scan_name_walk_in(
+        &self,
+        mut i: usize,
+        scope: Option<DeclId>,
+    ) -> Result<ScannedName, ScanStop> {
         use ScanStop::NoName;
         if !self.stack_ok() {
             return Err(NoName);
         }
-        let mut qual: Option<DeclId> = None;
+        let mut qual: Option<DeclId> = scope;
         // A qualifier component was a class template named with dependent
         // arguments outside its own scope ([temp.dep.type]/6): a type
         // found in it by lookahead is a member of an unknown specialization.
@@ -955,7 +965,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         // The qualifier component was `X<args>::` naming the current
         // instantiation ([temp.dep.type]/1): its members stay dependent.
         let mut qual_cur_inst = false;
-        if let Some(d) = self.decltype_scope_at(i) {
+        if scope.is_some() {
+        } else if let Some(d) = self.decltype_scope_at(i) {
             let q = d.qual.ok_or(NoName)?.0;
             // A parsed-ahead `X<T>::` that is not the current
             // instantiation stays the class template (a dependent marker).
@@ -1057,6 +1068,46 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             }
             return Ok((end, false, class, name, qual));
         }
+    }
+
+    /// Lookahead for a `decltype(e)::name` that was not parsed ahead
+    /// (WP-843): when `e`, the tokens between the `decltype (` at `kw`
+    /// and the `)` before the `::` at `cc`, is an unparenthesized
+    /// id-expression naming a variable, data member or enumerator whose
+    /// declared type is a non-dependent class or enumeration that is
+    /// already defined ([dcl.type.decltype]/1.3: `decltype` gives that
+    /// type), the class of `name` looked up in it, with the index after
+    /// the qualified name. `None` when the scope needs the expression
+    /// parsed (anything else), so the caller falls back to the tokens.
+    pub(crate) fn peek_decltype_scope_name(
+        &self,
+        kw: usize,
+        cc: usize,
+    ) -> Option<(usize, NameClass)> {
+        let (end, class, _) = self.scan_name(kw + 2)?;
+        if end + 1 != cc || self.tok_at(end).kind != TokKind::Punct(Punct::RParen) {
+            return None;
+        }
+        let NameClass::Value(d) = class else { return None };
+        let decl = self.s.ast.decls.get(d);
+        if !matches!(
+            decl.kind(),
+            DeclKind::Var | DeclKind::ParmVar | DeclKind::Field | DeclKind::EnumConstant
+        ) {
+            return None;
+        }
+        let ty = decl.ty()?;
+        let t = &self.s.ast.types;
+        if t.is_dependent(ty) || t.is_reference(ty) {
+            return None;
+        }
+        let r = t.as_record(ty).or_else(|| t.as_enum(ty))?;
+        let def = self.s.ast.definition(r)?;
+        if self.s.is_dependent_ctx(def) {
+            return None;
+        }
+        let (end, split, class, _, _) = self.scan_name_walk_in(cc + 1, Some(def)).ok()?;
+        (!split).then_some((end, class))
     }
 
     /// Whether the name at token `i` is qualified by a non-dependent

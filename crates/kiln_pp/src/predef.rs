@@ -482,7 +482,8 @@ fn apply_p1467(m: &mut BTreeMap<String, String>, std_float_aliases: bool, aarch6
 /// The feature-test macros of features kiln implements beyond clang 19
 /// (`docs/STANDARD_SUPPORT.md`), before the flags that remove them:
 /// P1061 structured binding packs (C++17 on) and P2893 variadic friends
-/// (every C++ mode) at clang 22's values in the same modes, and
+/// (every C++ mode) at clang 22's values in the same modes, P2741's
+/// `__cpp_static_assert` and P1330's C++20 `__cpp_constexpr` likewise, and
 /// `KILN_FEATURES` (P2747, P3068, modules) by `__cplusplus`.
 fn kiln_features(m: &mut BTreeMap<String, String>, compat: ClangCompat) {
     let cplusplus =
@@ -498,6 +499,18 @@ fn kiln_features(m: &mut BTreeMap<String, String>, compat: ClangCompat) {
     // implements the paper without defining the macro.
     if compat == ClangCompat::Clang22 && cplusplus >= 202_400 {
         set(m, "__cpp_template_parameters", "202502L");
+    }
+    // P2741 user-generated static_assert messages: kiln accepts them in
+    // every mode (a C++26 extension warning before C++26), so the macro
+    // has clang 22's 202306L wherever it is defined (WP-647, WP-851).
+    if m.contains_key("__cpp_static_assert") {
+        set(m, "__cpp_static_assert", "202306L");
+    }
+    // P1330 (changing the active member of a union in constant
+    // evaluation) is C++20's last `__cpp_constexpr` bump: clang 22 and the
+    // standard say 202002L where clang 19 still says P1331's 201907L.
+    if m.get("__cpp_constexpr").is_some_and(|v| v == "201907L") {
+        set(m, "__cpp_constexpr", "202002L");
     }
     if m.contains_key("__cpp_structured_bindings") {
         set(m, "__cpp_structured_bindings", "202411L");
@@ -913,6 +926,16 @@ mod tests {
         assert!(s.contains("#define __cpp_variadic_friend 202403L\n"), "{s}");
         let s = build_predefines(&cxx17, &PredefConfig::new(false), &[]);
         assert!(!s.contains("__cpp_variadic_friend"), "{s}");
+        // P2741 and P1330 (WP-851): clang 22's values in clang 19's modes.
+        let old =
+            format!("{BASE}#define __cpp_static_assert 200410\n#define __cpp_constexpr 201907L\n");
+        let s = build_predefines(&old, &cfg, &[]);
+        assert!(s.contains("#define __cpp_static_assert 202306L\n"), "{s}");
+        assert!(s.contains("#define __cpp_constexpr 202002L\n"), "{s}");
+        let cxx14 = format!("{BASE}#define __cpp_constexpr 201304L\n");
+        let s = build_predefines(&cxx14, &cfg, &[]);
+        assert!(s.contains("#define __cpp_constexpr 201304L\n"), "{s}");
+        assert!(!s.contains("__cpp_static_assert"), "{s}");
     }
 
     #[test]
