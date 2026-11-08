@@ -7068,8 +7068,10 @@ explicit specialization errors remain. The blockers are:
   (`builtin_custom_call`: `clzg`/`ctzg`/`popcountg`, the classification
   and ordered-compare families, `launder`, `operator_new`/`_delete`
   selecting the usual replaceable functions), `act_on_source_loc_expr`,
-  `note_default_arg_use` (called from `convert_call_args` for every
-  defaulted argument) and the `std::source_location::__impl` check.
+  `note_default_arg_use` (called from `convert_call_args`, from
+  `ctor_args` for a constructor call at the construction's location, and
+  from `new_default_args`, for every defaulted argument; WP-811,
+  `expr.const/builtins-srcloc-constructor-default-arg-run.cpp`) and the `std::source_location::__impl` check.
   `Sema::fold_lone_invalid` keeps clang's single "subexpression not
   valid" note for `__builtin_unreachable`.
   An instantiation that rebuilds a call of a custom-checked builtin

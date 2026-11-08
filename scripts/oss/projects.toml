@@ -577,7 +577,7 @@ tag = "v32.1"
 build = "cmake"
 cxx_std = 20
 configure = ["-DBUILD_GUI=OFF", "-DENABLE_WALLET=OFF", "-DWITH_ZMQ=OFF", "-DENABLE_IPC=OFF", "-DBUILD_BENCH=ON", "-DBUILD_TESTS=ON", "-DWITH_CCACHE=OFF", "-DINSTALL_MAN=OFF"]
-test = 'rc=0; ./bin/bench_bitcoin -sanity-check > bench.log 2>&1 && echo "bench_bitcoin -sanity-check: ok" || { echo "bench_bitcoin -sanity-check: FAILED"; tail -n 20 bench.log; rc=1; }; python3 test/functional/test_runner.py -j 4 --tmpdirprefix="$TMPDIR" --combinedlogslen=0 --exclude feature_reindex_init,feature_reindex_readonly > functional.log 2>&1 || rc=1; grep -E "^(TEST|ALL)|Failed|Passed|Skipped" functional.log | tail -n 400; ctest --output-on-failure -j 4 --timeout 300 -E "^univalue_object_test$" || rc=1; exit $rc'
+test = 'rc=0; ./bin/bench_bitcoin -sanity-check > bench.log 2>&1 && echo "bench_bitcoin -sanity-check: ok" || { echo "bench_bitcoin -sanity-check: FAILED"; tail -n 20 bench.log; rc=1; }; python3 test/functional/test_runner.py -j 4 --tmpdirprefix="$TMPDIR" --combinedlogslen=0 --exclude feature_reindex_init --exclude feature_reindex_readonly > functional.log 2>&1 || rc=1; grep -E "^(TEST|ALL)|Failed|Passed|Skipped" functional.log | tail -n 400; ctest --output-on-failure -j 4 --timeout 300 -E "^univalue_object_test$" || rc=1; exit $rc'
 test_timeout = 5400
 c_compiler = "clang-19"
 wave = 4
