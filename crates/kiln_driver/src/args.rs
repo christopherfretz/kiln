@@ -261,9 +261,10 @@ pub struct PredefArgs {
 impl PredefArgs {
     /// Whether reflection is on for an input in `std` (operator decision
     /// Q7, WP-920): the last `-f[no-]reflection`, else on exactly at
-    /// C++26 (`-std=c++26` / `gnu++26` / `c++2c`). Below C++26
-    /// `-freflection` still enables the tokens and intrinsics, but
-    /// `__cpp_impl_reflection` stays undefined (spec/reflection.md).
+    /// C++26 (`-std=c++26` / `gnu++26` / `c++2c`). Below C++26 an explicit
+    /// `-freflection` is accepted but the lexer still makes no reflection
+    /// tokens and `__cpp_impl_reflection` stays undefined, as before
+    /// (spec/reflection.md §1.4).
     pub fn reflection_for(&self, std: &crate::toolchain::LangStd) -> bool {
         self.reflection.unwrap_or(std.cplusplus && std.lex >= kiln_lex::Std::Cxx26)
     }

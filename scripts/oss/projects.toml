@@ -4,7 +4,9 @@
 # One table per project, keyed by the name `oss-build.sh <project>` takes.
 #   url            git URL (cloned with --depth 1 --branch <tag>)
 #   tag            pinned release tag (checked with `git ls-remote --tags`)
-#   build          cmake | meson | make   (only cmake is driven end to end)
+#   build          cmake | meson | make | autotools (autotools: an out-of-source
+#                  `configure CXX=... CXXFLAGS="-O2 -std=c++<cxx_std>"`, make,
+#                  then `test` in the build dir; WP-920)
 #   cxx_std        CMAKE_CXX_STANDARD (or meson cpp_std)
 #   configure      extra configure flags, a list
 #   build_targets  optional list of make targets (default: all)
@@ -16,6 +18,10 @@
 #   source_subdir  optional: the CMake source dir inside the checkout
 #   checkout       optional: the .oss/src/<name> directory (default: the
 #                  project name); rows sharing one must share url/tag/submodules
+#   archive        optional (WP-920): `url` is a release tarball, not a git
+#                  repo (for autotools projects whose tags carry no generated
+#                  configure: the harness has no autoreconf)
+#   sha256         the tarball's sha256, required with archive = true
 #   notes          free text
 
 # ---------------------------------------------------------------- wave 1
@@ -723,3 +729,31 @@ c_compiler = "clang-19"
 wave = 4
 verified = true
 notes = "WP-811. The C++ core with every dependency from its submodule (abseil, protobuf, re2, c-ares, boringssl, zlib; the C ones go to clang-19), no archive downloads. protoc and grpc_cpp_plugin are built by the compiler under test and generate the test protos' code. gRPC registers no ctest tests: build_targets are the binaries of scripts/oss/grpc-tests.txt (the unit tests that link no grpc_test_util, then localhost end2end and generated-code tests; keep the two lists equal), run by scripts/oss/grpc-tests.sh (4 at a time, 300 s each, from the source root, with gRPC's port server on localhost:32766 for the end2end tests). end2end_http2_test (1095 cases) is killed at 300 s under both compilers with no failed case, so both reach 117/118: parity, docs/status/oss/grpc.md."
+
+# ------------------------------------------- WP-920: other build systems
+
+[jsoncpp_meson]
+url = "https://github.com/open-source-parsers/jsoncpp"
+tag = "1.9.6"
+build = "meson"
+cxx_std = 17
+configure = []
+test = "meson test --num-processes 4"
+c_compiler = "clang-19"
+wave = 1
+verified = true
+notes = "WP-920: the Meson smoke row. Meson classifies a compiler by `--version` (needs `clang` there); kiln-cxx prepends its shim line for meson rows (docs/COMPATIBILITY.md \"Build systems\")."
+
+[hunspell_autotools]
+url = "https://github.com/hunspell/hunspell/releases/download/v1.7.2/hunspell-1.7.2.tar.gz"
+tag = "v1.7.2"
+archive = true
+sha256 = "11ddfa39afe28c28539fe65fc4f1592d410c1e9b6dd7d8a91ca25d85e9ec65b8"
+build = "autotools"
+cxx_std = 17
+configure = ["--disable-nls", "--without-ui", "--without-readline"]
+test = "make -k check"
+c_compiler = "clang-19"
+wave = 1
+verified = true
+notes = "WP-920: the autotools smoke row (autoconf, libtool, automake's test harness), from the release tarball's generated configure."

@@ -12,7 +12,8 @@
 //! line without its inputs, `-o`, `-x` and dependency options (a valued
 //! option with a separate value rendered separately, `-target X` as
 //! `--target=X`), then `--target=<triple>`. The file is truncated once per
-//! driver run and written whatever the jobs' outcome (also under `-###`).
+//! driver run and written whatever the jobs' outcome; `-###` runs no job
+//! and writes none, as clang's.
 
 use std::path::Path;
 
@@ -35,6 +36,9 @@ pub(crate) struct CdbJob<'a> {
 /// file that cannot be written on `drv`; returns success.
 pub(crate) fn write(args: &Args, tc: &Toolchain, jobs: &[CdbJob<'_>], drv: &DiagEngine<'_>) -> bool {
     let Some(path) = &args.deps.cdb_fragment else { return true };
+    if args.print_commands {
+        return true;
+    }
     let text = fragment(args, tc, jobs);
     // `-MJ -` is a file named `-`, as clang's.
     let r = std::fs::write(path, &text).map_err(|e| {
