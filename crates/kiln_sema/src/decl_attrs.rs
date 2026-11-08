@@ -78,6 +78,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::INTERNAL_LINKAGE => "internal_linkage",
         AttrKind::COMMON => "common",
         AttrKind::TLS_MODEL => "tls_model",
+        AttrKind::RETURNS_TWICE => "returns_twice",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -543,6 +544,9 @@ impl Sema<'_, '_> {
             // with a warning); `MinSizeAttr`'s is an error.
             AttrKind::NAKED if !kind.is_function() => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "naked", "functions")
+            }
+            AttrKind::RETURNS_TWICE if !kind.is_function() => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, "returns_twice", "functions")
             }
             AttrKind::MIN_VECTOR_WIDTH if !kind.is_function() => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "min_vector_width", "functions")

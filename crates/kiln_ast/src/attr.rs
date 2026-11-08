@@ -263,6 +263,9 @@ impl AttrKind {
     /// model, 1-4 for `global-dynamic`, `local-dynamic`, `initial-exec`
     /// and `local-exec` (WP-807).
     pub const TLS_MODEL: AttrKind = AttrKind(194);
+    /// GNU `returns_twice` (clang `ReturnsTwiceAttr`): a call of the
+    /// function may return twice, like `setjmp`'s (WP-807).
+    pub const RETURNS_TWICE: AttrKind = AttrKind(195);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

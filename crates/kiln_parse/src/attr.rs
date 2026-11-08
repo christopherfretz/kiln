@@ -76,6 +76,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "internal_linkage"
             | "common"
             | "tls_model"
+            | "returns_twice"
             | "mode"
     )
 }

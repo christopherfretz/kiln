@@ -4623,11 +4623,21 @@ impl Sema<'_, '_> {
                 self.take_annotations(pd, &mut attrs);
                 let range = Span::new(p.range.0, p.range.1);
                 self.check_param_nonnull_attrs(p.ty, range, &mut attrs);
-                // `cleanup` / `internal_linkage` on a parameter: ignored
-                // with a warning.
+                // `cleanup` / `internal_linkage` / `returns_twice` on a
+                // parameter: ignored with a warning; `tls_model`: an error.
                 self.check_cleanup_attrs(pd, &mut attrs);
                 self.check_internal_linkage_attrs(pd, &mut attrs);
                 self.check_tls_model_attrs(pd, &mut attrs);
+                attrs.retain(|&a| {
+                    let node = *self.ast.attrs.get(a);
+                    if node.kind != AttrKind::RETURNS_TWICE {
+                        return true;
+                    }
+                    let shown = format!("'{}'", self.attr_shown(&node, "returns_twice"));
+                    let msg = self.diag(DiagId::sema_attribute_wrong_decl_type, node.loc);
+                    self.emit(msg.arg(shown).arg("functions"));
+                    false
+                });
                 let _ = self.builder().attach_attrs(pd, &attrs);
             }
             match p.default_arg {
@@ -10975,6 +10985,7 @@ fn attr_kind_of(
         // clang `GCC<"cleanup">` (WP-807).
         ("cleanup", _, true) => AttrKind::CLEANUP,
         ("tls_model", _, true) => AttrKind::TLS_MODEL,
+        ("returns_twice", _, true) => AttrKind::RETURNS_TWICE,
         // clang `GCC<"common">`, rejected in C++ (WP-807).
         ("common", _, true) => AttrKind::COMMON,
         // clang `Clang<"internal_linkage">` (WP-807).
