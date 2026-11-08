@@ -18,10 +18,10 @@ one, and the library picture is [status/libstdcxx.md](status/libstdcxx.md)
 | Standard | `-std=` | `__cplusplus` | done | partial | todo | untested |
 |---|---|---|---|---|---|---|
 | [C++98/03](#c9803) | `-std=c++98`, `-std=c++03` | `199711L` | 6 | 0 | 0 | 0 |
-| [C++11](#c11) | `-std=c++11` (`c++0x`) | `201103L` | 42 | 1 | 0 | 0 |
+| [C++11](#c11) | `-std=c++11` (`c++0x`) | `201103L` | 43 | 0 | 0 | 0 |
 | [C++14](#c14) | `-std=c++14` (`c++1y`) | `201402L` | 11 | 0 | 0 | 0 |
-| [C++17](#c17) | `-std=c++17` (`c++1z`; `gnu++17` is the default) | `201703L` | 35 | 1 | 0 | 0 |
-| [C++20](#c20) | `-std=c++20` (`c++2a`) | `202002L` | 53 | 1 | 0 | 0 |
+| [C++17](#c17) | `-std=c++17` (`c++1z`; `gnu++17` is the default) | `201703L` | 36 | 0 | 0 | 0 |
+| [C++20](#c20) | `-std=c++20` (`c++2a`) | `202002L` | 54 | 0 | 0 | 0 |
 | [C++23](#c23) | `-std=c++23` (`c++2b`) | `202302L` | 35 | 0 | 0 | 0 |
 | [C++26](#c26) | `-std=c++26` (`c++2c`) | `202400L` | 32 | 3 | 0 | 0 |
 | [C++26 reflection](#c26-reflection) | `-std=c++26` plus `-freflection` | `202400L` | 16 | 0 | 0 | 0 |
@@ -94,7 +94,7 @@ records the later value.
 | N2756 | Non-static data member initializers | `__cpp_nsdmi` 200809L / 200809L | done | `conformance/class.mem/nsdmi-subst-failure.cpp`<br>`conformance/class.union/nsdmi-empty-init.cpp` | |
 | N2242 | Variadic templates | `__cpp_variadic_templates` 200704L / 200704L | done | `conformance/temp.variadic/member-function-parameter-pack.cpp`<br>`conformance/temp.variadic/p5-array-bound-param-pack.cpp`<br>`conformance/temp.variadic/lambda-in-pack-expansion.cpp` | With N2555 (extending variadic template template parameters). |
 | N2672 | Initializer lists | `__cpp_initializer_lists` 200806L / 200806L | done | `conformance/dcl.init.list/il-run.cpp`<br>`conformance/dcl.init.list/il-phase2.cpp`<br>`conformance/dcl.init.list/narrowing.cpp` | |
-| N1720 | `static_assert` | `__cpp_static_assert` 200410 / 202306L | partial | `conformance/dcl.pre/static-assert-macro.cpp` | The feature works; the macro is stale. clang 22 defines 202306L (P2741, user-generated messages) in every mode, kiln has clang 19's 200410 below C++26 (follow-up). |
+| N1720 | `static_assert` | `__cpp_static_assert` 202306L / 202306L | done | `conformance/dcl.pre/static-assert-macro.cpp`<br>`conformance/cpp.predefined/static-assert-macro-cxx11.cpp` | kiln defines P2741's 202306L (user-generated messages) in every mode, as clang 22 does (WP-851). |
 | N2341 | `alignas` / `alignof` | — | done | `conformance/dcl.align/member-alignas.cpp`<br>`conformance/dcl.align/variable-alignas.cpp` | |
 | N2343 | `decltype` | `__cpp_decltype` 200707L / 200707L | done | `conformance/dcl.type.decltype/id-vs-paren.cpp`<br>`conformance/dcl.type.decltype/unevaluated.cpp` | |
 | N3276 | `decltype` and call expressions (incomplete return types) | — | done | `conformance/dcl.type.decltype/n3276-probe.cpp` | |
@@ -160,7 +160,7 @@ required observable.
 
 | Paper | Feature | `__cpp_*` macro (kiln / clang 22 at `-std=c++17`) | Status | Corpus tests | Notes |
 |---|---|---|---|---|---|
-| N3928 | `static_assert` without a message | `__cpp_static_assert` 201411L / 202306L | partial | `conformance/dcl.pre/n3928-probe.cpp` | The feature works; the macro is stale. clang 22 defines 202306L (P2741) in every mode, kiln has clang 19's 201411L below C++26 (follow-up). |
+| N3928 | `static_assert` without a message | `__cpp_static_assert` 202306L / 202306L | done | `conformance/dcl.pre/n3928-probe.cpp` | kiln defines P2741's 202306L in every mode, as clang 22 does (WP-851). |
 | N4086 | Removing trigraphs | — | done | `conformance/lex.trigraph/n4086-probe.cpp` | |
 | N4051 | `typename` in a template template parameter | — | done | `conformance/temp.param/template-template-param-missing-key-cxx14.cpp` | |
 | N4230 | Nested namespace definitions | `__cpp_nested_namespace_definitions` 201411L / 201411L | done | `conformance/namespace.def/redeclaration-mangling.cpp` | |
@@ -224,7 +224,7 @@ required observable.
 | P1002R1 | `try` blocks in `constexpr` functions | — | done | `conformance/dcl.constexpr/try-block.cpp` | |
 | P1064R0 | Virtual calls in constant expressions | — | done | `conformance/expr.const/virtual-dispatch.cpp` | |
 | P1327R1 | `dynamic_cast` and polymorphic `typeid` in constant expressions | — | done | `conformance/expr.const/virtual-typeid.cpp`<br>`conformance/expr.dynamic.cast/run.cpp` | |
-| P1330R0 | Changing the active member of a union in constant evaluation | `__cpp_constexpr` 201907L / 202002L | partial | `conformance/class.union/constexpr-active.cpp`<br>`conformance/class.union/constexpr-inactive.cpp` | The feature works; the macro is stale: clang 22 defines 202002L at C++20, kiln has clang 19's 201907L (follow-up). 201907L is P1331R2's. |
+| P1330R0 | Changing the active member of a union in constant evaluation | `__cpp_constexpr` 202002L / 202002L | done | `conformance/class.union/constexpr-active.cpp`<br>`conformance/class.union/constexpr-inactive.cpp`<br>`conformance/cpp.predefined/static-assert-constexpr-macros-cxx20.cpp` | kiln defines 202002L at C++20, as clang 22 does (WP-851); clang 19's 201907L is P1331R2's. |
 | P1331R2 | Trivial default initialization in `constexpr` functions | — | done | `conformance/dcl.constexpr/p1331-probe.cpp`<br>`conformance/dcl.constexpr/class-default-init.cpp` | |
 | P1668R1 | `asm` declarations in `constexpr` functions | — | done | `conformance/dcl.asm/constexpr.cpp` | |
 | P0784R7 | `constexpr` dynamic allocation, `constexpr` destructors | `__cpp_constexpr_dynamic_alloc` 201907L / 201907L | done | `conformance/expr.new/churn-tree.cpp`<br>`conformance/expr.new/churn-list.cpp` | |

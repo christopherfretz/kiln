@@ -672,6 +672,29 @@ impl LoopHint {
     }
 }
 
+/// An attribute name with its `__x__` affixes removed, as clang's
+/// `normalizeAttrName` does (WP-678): exactly one leading and one trailing
+/// `__`, and only when both are present on a name of at least four
+/// characters, so `__noinline__` is `noinline` while `__noinline`,
+/// `noinline__` and `____noinline____` stay as written (and are unknown),
+/// and the spellings `__const` and `__clang_arm_builtin_alias` are kept.
+pub fn normalize_attr_name(name: &str) -> &str {
+    if name.len() >= 4 && name.starts_with("__") && name.ends_with("__") {
+        &name[2..name.len() - 2]
+    } else {
+        name
+    }
+}
+
+/// Whether an attribute written with `syntax` and the (normalized, see
+/// clang `normalizeAttrScopeName`) `scope` has its name normalized by
+/// [`normalize_attr_name`]: a GNU attribute, or a `[[...]]` one with no
+/// scope or the `gnu` or `clang` scope (clang `normalizeAttrName`).
+pub fn attr_name_normalizes(syntax: AttrSyntax, scope: Option<&str>) -> bool {
+    syntax == AttrSyntax::Gnu
+        || (syntax == AttrSyntax::Cxx11 && matches!(scope, None | Some("gnu" | "clang")))
+}
+
 /// Attribute syntax.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 #[repr(u8)]

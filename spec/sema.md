@@ -96,7 +96,7 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   operator`.
 - **Attributes and `nodiscard`** (WP-377). A `[[scope::name]]`
   attribute is named in diagnostics as written, with its scope
-  normalized and `__x__` stripped (`'gnu::aligned'`, `'clang::x'`;
+  normalized and `__x__` stripped as below (`'gnu::aligned'`, `'clang::x'`;
   `attr_shown`, `decl_attrs.rs`); clang 19 prints the bare name. An
   unused call whose *type* (not the callee) is `[[nodiscard]]`, or an
   unused temporary of such a type built by a constructor without its own
@@ -2233,6 +2233,19 @@ and returns the scope it names:
   `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
   `always_inline` with the GNU flag. Test:
   `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
+- **Attribute names** (WP-678; clang `normalizeAttrName`,
+  `kiln_ast::attr::normalize_attr_name` / `attr_name_normalizes`): for
+  every attribute, in GNU syntax and in `[[...]]` with no scope or the
+  (normalized) `gnu` or `clang` scope, a name written `__x__` is looked
+  up as `x`: exactly one leading and one trailing `__`, removed only when
+  both are present on a name of at least four characters. `__noinline`,
+  `noinline__` and `____noinline____` are unknown attributes (named as
+  written), `[[msvc::__noinline__]]` keeps its name, and clang's own
+  one-sided spellings `__const` (`GCC<"__const">`) and
+  `__clang_arm_builtin_alias` are matched as such. The parser's
+  argument-shape tables, `__has_attribute` / `__has_cpp_attribute` and
+  the diagnostic name (`attr_shown`) use the same rule. Test:
+  `tests/conformance/dcl.attr.grammar/gnu-attribute-name-normalization.cpp`.
   - GNU `section("name")` (WP-716, clang `handleSectionAttr`): exactly
     one string literal (`expected string literal as argument of
     'section' attribute`, `'section' attribute takes one argument`), on
@@ -5287,7 +5300,14 @@ for them.
     expansion; after taking both locations out of macro arguments, it is
     dropped when that location and the conversion's context are in
     different files or macro expansions (`#define MYNULL __null` does
-    not warn).
+    not warn). The same check covers an operand of type
+    `std::nullptr_t` (`!nullptr`, `nullptr && b`, `if (nullptr)`, a
+    `std::nullptr_t` variable), as `implicit conversion of nullptr
+    constant to 'T'`, reported at the operand with no `NULL` macro step;
+    a conditional operator source is checked arm by arm (clang's
+    `CheckConditionalOperator`; WP-851,
+    `conv.bool/nullptr-null-conversion.cpp`). kiln prints no `false`
+    fix-it.
   - [-Wnull-arithmetic] (clang's `checkArithmeticNull`), at the operator
     of a built-in `+ - * / % << >> & ^ |`, compound assignment, or
     comparison with a `__null` operand (implicit casts and parentheses
@@ -5898,6 +5918,10 @@ and `DiagnoseMisalignedMembers`:
 - **Discard.** A conversion of the recorded `&m` drops it when the
   target is an integer, a dependent type, or a pointer to an incomplete
   type or to a type aligned no more than the culprit:
+  - an explicit cast (C-style, named other than `dynamic_cast`,
+    functional), when it is built (`act_on_cast`; clang
+    `BuildCStyleCastExpr` / `BuildCXXNamedCast`), before the rest of the
+    enclosing expression is parsed (WP-659);
   - every cast node in the full-expression (implicit and explicit);
   - `implicit_convert` in any context except simple assignment (clang's
     `InitializationSequence::Perform` step, even for an identity
@@ -5910,12 +5934,21 @@ and `DiagnoseMisalignedMembers`:
   the `MemberExpr`'s begin location: `taking address of packed member
   'm' of class or structure 'C' may result in an unaligned pointer
   value`. An anonymous class is named by its typedef.
+  Every full-expression reports every pending candidate, including one
+  that a nested full-expression (a template argument, a lambda body, a
+  function body instantiated mid-expression) finds pending from its
+  enclosing expression. Neither kiln nor clang sets the candidates aside
+  in `in_inst_context`: in `fv(&p.i, A<3>::w)` with `fv(void *, int)`
+  the `&p.i` is reported, by clang too, because the argument conversion
+  that would drop it comes after `3`'s full-expression. An explicit cast
+  is dropped earlier, so `f((char *)&p.i, A<3>::w)` is not reported.
 - **Deviations:**
   - A non-dependent `&m` in a template is reported once, at the
     definition. clang repeats it in every instantiation.
   - An anonymous union or struct member as the culprit prints as `''`.
     clang prints `C::(anonymous union at ...)`.
-- Test: `tests/conformance/expr.unary.op/address-of-packed-member.cpp`.
+- Tests: `tests/conformance/expr.unary.op/address-of-packed-member.cpp`,
+  `address-of-packed-member-nested-full-expression.cpp`.
 
 ### 5.15 `-Wnull-dereference` (`null_deref.rs`, WP-191)
 The two syntactic `*null` checks of clang 19

@@ -462,8 +462,12 @@ Where kiln implements a feature that clang 19 lacks,
 `__cpp_structured_bindings` is `202411L` wherever it is defined (C++17
 on; P1061 structured binding packs) and `__cpp_variadic_friend` is
 `202403L` in every C++ mode (P2893), and `__cpp_explicit_this_parameter`
-is `202110L` from C++23 (P0847 with lambdas, WP-356). `predef.rs` unit
-tests check all three.
+is `202110L` from C++23 (P0847 with lambdas, WP-356). Likewise
+`__cpp_static_assert` is `202306L` wherever it is defined (C++11 on; P2741
+user-generated messages, accepted in every mode with a C++26 extension
+warning) and `__cpp_constexpr` is `202002L` at C++20 (P1330; clang 19 has
+P1331's `201907L`), both clang 22's values (WP-851). `predef.rs` unit
+tests check all five.
 
 **`-dM` differences, clang 19.1.7 to 22.1.8** (`-std=c++26 -dM -E -x c++
 /dev/null`; identical for every standard and flag probed; applied by

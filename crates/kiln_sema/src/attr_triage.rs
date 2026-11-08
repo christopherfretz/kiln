@@ -449,7 +449,7 @@ pub fn attribute_support(
     let wp810 = match name {
         "builtin_alias" if sp == CL => Some(AttrKind::BUILTIN_ALIAS),
         "clang_builtin_alias" if sp == G => Some(AttrKind::BUILTIN_ALIAS),
-        "clang_arm_builtin_alias" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::BUILTIN_ALIAS),
+        "__clang_arm_builtin_alias" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::BUILTIN_ALIAS),
         "target_version" if !x86 && sp & (G | GS) != 0 => Some(AttrKind::TARGET_VERSION),
         "target_clones" if !x86 && sp & (G | GS) != 0 => Some(AttrKind::TARGET_CLONES),
         "cpu_dispatch" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::CPU_DISPATCH),
@@ -569,7 +569,7 @@ mod tests {
         // WP-810: implemented on AArch64; multiversioning is class A on x86-64.
         assert!(matches!(s("arm_sve_vector_bits", g, None, 22), Support::Implemented(_)));
         assert!(matches!(
-            s("clang_arm_builtin_alias", x, Some("clang"), 19),
+            s("__clang_arm_builtin_alias", x, Some("clang"), 19),
             Support::Implemented(_)
         ));
         assert!(matches!(s("target_version", x, Some("gnu"), 22), Support::Implemented(_)));
@@ -578,7 +578,7 @@ mod tests {
         assert_eq!(x86("target_version", g, None, 19), Support::Unsupported);
         assert_eq!(x86("target_version", g, None, 22), Support::Unknown);
         assert_eq!(x86("cpu_dispatch", x, Some("clang"), 19), Support::Unsupported);
-        assert_eq!(x86("clang_arm_builtin_alias", g, None, 19), Support::Unknown);
+        assert_eq!(x86("__clang_arm_builtin_alias", g, None, 19), Support::Unknown);
         assert!(matches!(x86("clang_builtin_alias", g, None, 19), Support::Implemented(_)));
     }
 
