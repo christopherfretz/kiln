@@ -1399,7 +1399,15 @@ Where the code differs from (or details) the design above:
   overload resolution together ([expr.new]/20; `resolve_set`) and the
   chosen specialization is instantiated on use (WP-686, WP-712); with
   no viable candidate the notes are the overload set's, template
-  candidates included. A placement `operator delete` template matches
+  candidates included. Without templates, `find_operator_new` matches
+  each placement argument against its parameter (`placement_arg_match`):
+  the same type is exact, and arithmetic conversions, `nullptr`,
+  object pointer to `void *`, array decay and derived-to-base pointer
+  conversion ([conv.ptr]/3, with no loss of cv) are viable but not exact.
+  The most exact matches win (WP-801,
+  `tests/conformance/expr.new/p19-placement-arg-derived-to-base-pointer-run.cpp`).
+  Gap: this is not [over.ics.rank], so `B *` to `A *` does not beat
+  `B *` to `void *`. A placement `operator delete` template matches
   when deduction against `void(void*, P...)` from the allocation
   function's parameters succeeds ([expr.new]/28, WP-713). The allocation function, the matching deallocation
   function of a new-expression and the deallocation function of a
@@ -1526,6 +1534,23 @@ Where the code differs from (or details) the design above:
     its `UnresolvedLookupExpr`); `overload_set_of` sees through it, so
     `o(&t<int>)` and `p = t<long>` read as overload sets in those two
     diagnostics, as in clang.
+  - [over.over]/1, /3 (WP-802): when that specialization does not
+    convert in an initialization, direct-initialization, reference
+    binding or `return` to a pointer or reference to function or a
+    pointer to member function, the set is re-resolved against the
+    target (`retarget_template_id`): every template of the set gets the
+    explicit arguments and deduces the rest from the target, so
+    `void (*p)(void*, int) = &wrap<1>` selects
+    `template<int N, class T> void wrap(void*, T)` over the
+    `template<int N> void wrap(void*)` the explicit arguments alone
+    complete. Only when the target selects nothing is it
+    `template_id_no_match`'s "address of overloaded function does not
+    match required type".
+    The specialization resolved early is then not used: when that
+    resolution alone queued its definition, the definition is withdrawn
+    from the queue ([temp.inst]/5), so an ill-formed body of the
+    unselected `wrap<1>(void*)` is never instantiated (WP-802,
+    `tests/conformance/over.over/template-id-retarget-unselected-not-instantiated-run.cpp`).
 
 ### 10.8 Landed (WP-106): the rest of the template candidates
 - Conversion-function templates: `build_conversion_set` /

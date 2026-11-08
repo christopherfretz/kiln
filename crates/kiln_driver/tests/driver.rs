@@ -452,6 +452,114 @@ fn gcc_toolchain_matches_clang() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
+// spec: driver.md "Target features" (WP-808): `+outline-atomics` is the
+// AArch64 default only with a GCC installation of 9.3.1 or later (clang
+// 19/22 `Linux::IsAArch64OutlineAtomicsDefault`), so a cross compile with
+// no AArch64 GCC gets inline atomics; `-m[no-]outline-atomics` decides
+// regardless. Fake installations are named, so the host's GCC does not
+// matter; clang++-19, when present, must agree.
+#[test]
+fn aarch64_outline_atomics_follow_the_gcc_installation() {
+    let d = scratch("outline-atomics");
+    let mut cases = Vec::new();
+    for (v, want) in [("9.3.0", false), ("9.3.1", true), ("14", true)] {
+        let g = d.join(v).join("lib/gcc/aarch64-linux-gnu").join(v);
+        std::fs::create_dir_all(&g).unwrap();
+        std::fs::write(g.join("crtbegin.o"), "").unwrap();
+        cases.push((format!("--gcc-toolchain={}", d.join(v).display()), None, want));
+    }
+    let none = d.join("none");
+    std::fs::create_dir_all(&none).unwrap();
+    let no_gcc = format!("--gcc-toolchain={}", none.display());
+    cases.push((no_gcc.clone(), None, false));
+    cases.push((no_gcc.clone(), Some("-moutline-atomics"), true));
+    cases.push((cases[2].0.clone(), Some("-mno-outline-atomics"), false));
+    let src = "int f(int *p) { return __atomic_fetch_add(p, 1, 5); }\n";
+    for (gcc, flag, want) in &cases {
+        let mut args = vec!["--target=aarch64-linux-gnu", gcc.as_str(), "-S", "-emit-llvm"];
+        args.extend(flag.iter().copied());
+        args.extend(["-o", "-", "-x", "c++", "-"]);
+        let o = kiln(&args, src);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert_eq!(o.stdout.contains("+outline-atomics"), *want, "{args:?}");
+        // `-outline-atomics` only when written, as clang.
+        assert_eq!(o.stdout.contains("-outline-atomics"), *flag == Some("-mno-outline-atomics"));
+        if let Ok(c) = std::process::Command::new("clang++-19")
+            .args(&args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .and_then(|mut c| {
+                use std::io::Write as _;
+                c.stdin.take().unwrap().write_all(src.as_bytes())?;
+                c.wait_with_output()
+            })
+        {
+            let cout = String::from_utf8_lossy(&c.stdout);
+            if c.status.success() {
+                let f = |s: &str| (s.contains("+outline-atomics"), s.contains("-outline-atomics"));
+                assert_eq!(f(&cout), f(&o.stdout), "clang++-19 {args:?}");
+            }
+        }
+    }
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+// spec: driver.md "Floating-point flags" (WP-806): only
+// `-fdenormal-fp-math=` gives `denormal-fp-math`. `-ffast-math` on x86-64
+// with a GCC installation that has `crtfastmath.o` adds none, as clang 19
+// and 22 (the link still adds `crtfastmath.o`). The host's own GCC must
+// not matter, so a fake installation is named.
+#[test]
+fn fast_math_x86_64_crtfastmath_keeps_ieee_denormals() {
+    let d = scratch("crtfastmath");
+    let g = d.join("tc/lib/gcc/x86_64-linux-gnu/14");
+    std::fs::create_dir_all(&g).unwrap();
+    std::fs::write(g.join("crtbegin.o"), "").unwrap();
+    std::fs::write(g.join("crtfastmath.o"), "").unwrap();
+    let gcc = format!("--gcc-toolchain={}", d.join("tc").display());
+    let src = "float f(float a, float b) { return a * b; }\n";
+    for fast in ["-ffast-math", "-Ofast", "-funsafe-math-optimizations"] {
+        let args = [
+            "--target=x86_64-linux-gnu",
+            &gcc,
+            fast,
+            "-S",
+            "-emit-llvm",
+            "-o",
+            "-",
+            "-x",
+            "c++",
+            "-",
+        ];
+        let o = kiln(&args, src);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert!(o.stdout.contains("\"no-signed-zeros-fp-math\"=\"true\""), "{fast}: {}", o.stdout);
+        assert!(!o.stdout.contains("denormal-fp-math"), "{fast}: {}", o.stdout);
+    }
+    let o = kiln(
+        &[
+            "--target=x86_64-linux-gnu",
+            &gcc,
+            "-ffast-math",
+            "-fdenormal-fp-math=preserve-sign",
+            "-fno-fast-math",
+            "-S",
+            "-emit-llvm",
+            "-o",
+            "-",
+            "-x",
+            "c++",
+            "-",
+        ],
+        src,
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("\"denormal-fp-math\"=\"preserve-sign,preserve-sign\""));
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 /// clang 19's stderr for `clang -E <dir>/a.cpp` with `<dir>` replaced by
 /// `@`: nested and repeated inclusions, a macro-expanded header name, a
 /// note (which prints no include stack of its own) and a diagnostic back

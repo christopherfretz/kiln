@@ -419,20 +419,30 @@ impl CallConv {
     pub const CXX_FAST_TLS: CallConv = CallConv(17);
     /// `tailcc`.
     pub const TAIL: CallConv = CallConv(18);
+    /// `swifttailcc`.
+    pub const SWIFT_TAIL: CallConv = CallConv(20);
+    /// `preserve_nonecc`.
+    pub const PRESERVE_NONE: CallConv = CallConv(21);
     /// `x86_stdcallcc`.
     pub const X86_STDCALL: CallConv = CallConv(64);
     /// `x86_fastcallcc`.
     pub const X86_FASTCALL: CallConv = CallConv(65);
     /// `x86_thiscallcc`.
     pub const X86_THISCALL: CallConv = CallConv(70);
+    /// `intel_ocl_bicc`.
+    pub const INTEL_OCL_BI: CallConv = CallConv(77);
     /// `x86_64_sysvcc`.
     pub const X86_64_SYSV: CallConv = CallConv(78);
     /// `win64cc`.
     pub const WIN64: CallConv = CallConv(79);
     /// `x86_vectorcallcc`.
     pub const X86_VECTORCALL: CallConv = CallConv(80);
+    /// `x86_regcallcc`.
+    pub const X86_REGCALL: CallConv = CallConv(92);
     /// `aarch64_vector_pcs`.
     pub const AARCH64_VECTOR_PCS: CallConv = CallConv(97);
+    /// `aarch64_sve_vector_pcs`.
+    pub const AARCH64_SVE_VECTOR_PCS: CallConv = CallConv(98);
 
     /// The textual keyword (`None` for ccc; `cc N` is used for unknown
     /// numbers).
@@ -450,12 +460,14 @@ impl CallConv {
             18 => "tailcc",
             19 => "cfguard_checkcc",
             20 => "swifttailcc",
+            21 => "preserve_nonecc",
             64 => "x86_stdcallcc",
             65 => "x86_fastcallcc",
             66 => "arm_apcscc",
             67 => "arm_aapcscc",
             68 => "arm_aapcs_vfpcc",
             70 => "x86_thiscallcc",
+            77 => "intel_ocl_bicc",
             78 => "x86_64_sysvcc",
             79 => "win64cc",
             80 => "x86_vectorcallcc",
@@ -598,6 +610,8 @@ pub(crate) enum InstKind {
     Cast {
         op: CastOp,
         flags: Flags,
+        /// Fast-math flags (`fpext`/`fptrunc`, LLVM 20+).
+        fmf: FastMath,
         val: Value,
     },
     Alloca {

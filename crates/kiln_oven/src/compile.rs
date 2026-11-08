@@ -550,6 +550,51 @@ impl Oven {
         idx
     }
 
+    /// The function of [`Oven::fold_object_size`] (WP-808): in one
+    /// scope, clang's `tryEvaluateBuiltinObjectSize` of pointer `p` for
+    /// type `ty` ([`Compiler::object_size`] without the side-effect
+    /// default); returns the size as a `size_t`. Not cached (each
+    /// `pass_object_size` argument is folded once).
+    pub(crate) fn compile_object_size(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        p: ExprId,
+        ty: u32,
+    ) -> u32 {
+        let idx = self.funcs.len() as u32;
+        self.funcs.push(Func {
+            decl: None,
+            entry: UNCOMPILED,
+            state: FState::Stub,
+            nregs: 0,
+            ret: RetKind::Void,
+            params: Vec::new(),
+            memo: false,
+            this_reg: None,
+            this_ty: None,
+            base_obj: false,
+        });
+        let size_t = QualType::unqual(b.ast().types.target().size_t);
+        let mut c = Compiler::new(self, b);
+        let entry = c.here();
+        let st = c.ty(size_t);
+        c.open_scope(&[], true);
+        let t = c.reg();
+        c.konst(t, u128::from(ty & 3));
+        let n = c.reg();
+        let begin = c.begin(p);
+        c.object_size(p, p, t, n, begin, false);
+        c.close_scope();
+        c.emit(Op::Ret, 1, &[n]);
+        let nregs = c.end_unit();
+        let f = &mut self.funcs[idx as usize];
+        f.entry = entry;
+        f.state = FState::Ready;
+        f.nregs = nregs;
+        f.ret = RetKind::Scalar(st);
+        idx
+    }
+
     /// The function of [`Oven::evaluate_with_params`]: in one scope, each
     /// parameter of `binds` initialized from its argument (a reference
     /// bound, an object initialized as a local variable), then `cond`
@@ -3145,6 +3190,7 @@ impl Compiler<'_> {
                 self.load(place, ty, ak::READ, e, dst);
             }
             ExprKind::ConditionalOperator => {
+                let fold = self.bcp_fold_enter(ExprId::new(n.a()));
                 let c = self.rv(ExprId::new(n.a()));
                 let [t, f] = self.ast().exprs.cond_arms(e);
                 let j = self.jmp_if(c, false);
@@ -3153,6 +3199,7 @@ impl Compiler<'_> {
                 self.patch_here(j);
                 self.rv_into(f, dst);
                 self.patch_here(end);
+                self.bcp_fold_exit(fold);
             }
             ExprKind::BinaryConditionalOperator => {
                 let [common, cond, t, f] = self.bind_common(e, Access::Read);
@@ -4563,6 +4610,7 @@ impl Compiler<'_> {
                 Place::Mem(r)
             }
             ExprKind::ConditionalOperator => {
+                let fold = self.bcp_fold_enter(ExprId::new(n.a()));
                 let c = self.rv(ExprId::new(n.a()));
                 let [t, f] = self.ast().exprs.cond_arms(e);
                 let r = self.reg();
@@ -4574,6 +4622,7 @@ impl Compiler<'_> {
                 let pf = self.lv_mem(f, acc);
                 self.emit(Op::Mov, 0, &[r, pf]);
                 self.patch_here(end);
+                self.bcp_fold_exit(fold);
                 Place::Mem(r)
             }
             ExprKind::ConstantExpr => {
@@ -4590,6 +4639,22 @@ impl Compiler<'_> {
             {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
+            }
+            // [expr.reinterpret.cast]/11: the glvalue `reinterpret_cast`
+            // designates the operand's object; not a constant expression
+            // ([expr.const]/5.15) outside a fold (`Op::Cce`).
+            ExprKind::CXXReinterpretCastExpr
+                if n.value_category().is_glvalue()
+                    && self.ast().exprs.cast_kind(e) == CastKind::LValueBitCast =>
+            {
+                self.cce_check(e, "reinterpret_cast is not allowed in a constant expression");
+                let op = self.ast().exprs.operand(e);
+                let sub = match acc {
+                    Access::Write => Access::Write,
+                    Access::Addr => Access::Addr,
+                    Access::Read | Access::Rmw => Access::Addr,
+                };
+                Place::Mem(self.lv_mem(op, sub))
             }
             k if k.is_cast()
                 && n.value_category().is_glvalue()
@@ -5023,6 +5088,7 @@ impl Compiler<'_> {
                 self.member_call(e, Some(p));
             }
             ExprKind::ConditionalOperator => {
+                let fold = self.bcp_fold_enter(ExprId::new(n.a()));
                 let c = self.rv(ExprId::new(n.a()));
                 let [t, f] = self.ast().exprs.cond_arms(e);
                 let j = self.jmp_if(c, false);
@@ -5031,6 +5097,7 @@ impl Compiler<'_> {
                 self.patch_here(j);
                 self.init(f, p, ty);
                 self.patch_here(end);
+                self.bcp_fold_exit(fold);
             }
             ExprKind::BinaryOperator if self.ast().exprs.binary_op(e) == BinaryOp::Comma => {
                 let [a, b] = self.ast().exprs.operands(e);

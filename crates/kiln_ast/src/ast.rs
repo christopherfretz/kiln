@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use kiln_source::symbol::Interner;
 
-use crate::attr::AttrArena;
+use crate::attr::{AttrArena, AttrNode};
 use crate::class::{ClassCache, ClassVirtuals, CmpCategories, VTableLayout};
 use crate::consts::ConstStore;
 use crate::decl::{
@@ -692,6 +692,39 @@ impl Ast {
                 .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
                 .any(|a| self.attrs.get(a).kind == attr)
         })
+    }
+
+    /// Whether some declaration of `d`, or of the pattern it was
+    /// instantiated from, carries clang `internal_linkage` (an inheritable
+    /// attribute: clang `computeLVForDecl` gives the entity internal
+    /// linkage).
+    pub fn has_internal_linkage_attr(&self, d: DeclId) -> bool {
+        self.inherited_attr(d, crate::attr::AttrKind::INTERNAL_LINKAGE).is_some()
+    }
+
+    /// The first `kind` attribute on a declaration of `d` (in declaration
+    /// order), else on one of the pattern it was instantiated from: an
+    /// inheritable attribute (clang `mergeDeclAttributes`).
+    pub fn inherited_attr(&self, d: DeclId, kind: crate::attr::AttrKind) -> Option<AttrNode> {
+        let mut d = d;
+        // Each step leaves one level of instantiation.
+        for _ in 0..64 {
+            let redecls: Vec<DeclId> = self.redecls_of(d).collect();
+            let found = redecls.iter().rev().find_map(|&r| {
+                self.lists
+                    .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
+                    .map(|a| *self.attrs.get(a))
+                    .find(|n| n.kind == kind)
+            });
+            if found.is_some() {
+                return found;
+            }
+            match self.instantiated_from(self.first(d)) {
+                Some(p) if p != d => d = p,
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// Whether `d` is a weak declaration (clang `Decl::isWeak`): some

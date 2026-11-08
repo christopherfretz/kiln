@@ -859,9 +859,19 @@ impl Sema<'_, '_> {
                 // A declaration's type adopts the template's GNU
                 // `noreturn` (clang `adjustCCAndNoReturn`; spec/types.md
                 // §5.4): the specialization merges it like a redeclaration.
-                let nr = self.ast.types.proto(p0).is_some_and(|p| p.info().noreturn());
+                // Its calling convention too, when the declaration names
+                // none (WP-808).
+                let pi = self.ast.types.proto(p0).map(kiln_ast::types::FuncProto::info);
+                let nr = pi.is_some_and(kiln_ast::types::FuncInfo::noreturn);
                 let a0 = self.with_exc_spec(a, ExcSpec::None);
                 let a0 = self.with_fn_noreturn(a0, nr, false).unwrap_or(a0);
+                let adopt = move |i: kiln_ast::types::FuncInfo| match pi {
+                    Some(p) if i.cc() == kiln_ast::types::CallConv::Default => {
+                        i.with_cc(p.cc()).with_no_caller_saved_regs(p.no_caller_saved_regs())
+                    }
+                    _ => i,
+                };
+                let a0 = self.with_fn_info(a0, &adopt, false).unwrap_or(a0);
                 (p0, a0, TdfFlags::TOP_LEVEL_PARAMETER_TYPE_LIST)
             } else {
                 let tdf = TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT

@@ -107,6 +107,10 @@ pub(crate) struct Fx {
     /// `EmitFunctionEpilog`): no parameter prologue, and the epilogue is
     /// `unreachable` instead of a return.
     pub naked: bool,
+    /// A thunk (clang `generateThunk`): its call of the target has no
+    /// target declaration (`CGCallee::forDirect`), so the callee's
+    /// `no_builtin` adds no call-site attribute (WP-808).
+    pub thunk: bool,
     pub jumps: Vec<Jump>,
     pub labels: FxHashMap<DeclId, JumpDest>,
     /// The labels of the enclosing lexical scopes with cleanups (clang
@@ -221,6 +225,12 @@ pub(crate) struct Fx {
     /// (`crate::outline`, spec/landed/codegen/WP-641.md): the next one's
     /// number.
     pub outlined: u32,
+    /// The FP semantics of the scope being emitted (WP-806, `crate::fp`).
+    pub fp: kiln_ast::fp::FpOptions,
+    /// The pragma override [`Fx::fp`] is the command line's with.
+    pub fp_ovr: kiln_ast::fp::FpOverride,
+    /// The `*-fp-math` attributes an FP scope turned off (`crate::fp`).
+    pub fp_attrs_off: u8,
 }
 
 impl Fx {
@@ -238,6 +248,7 @@ impl Fx {
             sig: None,
             is_main: false,
             naked: false,
+            thunk: false,
             jumps: Vec::new(),
             labels: FxHashMap::default(),
             lex_labels: Vec::new(),
@@ -277,6 +288,9 @@ impl Fx {
             lifetime_markers: false,
             bypasses: None,
             outlined: 0,
+            fp: kiln_ast::fp::FpOptions::default(),
+            fp_ovr: kiln_ast::fp::FpOverride::NONE,
+            fp_attrs_off: 0,
         }
     }
 }
@@ -295,6 +309,7 @@ impl Cg<'_> {
         let f = self.get_fn(d)?;
         let f = self.fn_for_definition(d, f)?;
         self.gen_code(d, f, None)?;
+        self.add_ctor_dtor_entries(d, f);
         self.emit_thunks(d, None)
     }
 
@@ -366,9 +381,11 @@ impl Cg<'_> {
         };
         self.f = Fx::empty();
         self.f.fir = Fir::new(params);
+        self.start_fp();
         self.f.decl = Some(d);
         self.f.func = Some(f);
         self.f.is_main = is_main;
+        self.f.thunk = thunk.is_some();
         self.f.naked = thunk.is_none() && self.has_fn_attr(d, kiln_ast::attr::AttrKind::NAKED);
         self.f.sig = Some(sig.clone());
         // clang `StartFunction`: `min_vector_width(N)` raises the start.
@@ -410,6 +427,18 @@ impl Cg<'_> {
             )
         {
             self.m.func_mut(f).align = Some(2);
+        }
+        // clang `SetLLVMFunctionAttributesForDefinition`: an `aligned(N)`
+        // / `alignas` function is `align N` (`Decl::getMaxAlignment`).
+        if thunk.is_none() {
+            let bits = kiln_abi::layout::decl_max_align(ast, d, self.target);
+            if bits >= 8 {
+                let func = self.m.func_mut(f);
+                func.align = Some(func.align.unwrap_or(1).max(bits / 8));
+            }
+        }
+        if thunk.is_none() {
+            self.note_used_attrs(d, Value::func(f));
         }
         if structor.is_some() || thunk.is_some() {
             self.m.func_mut(f).unnamed_addr = kiln_llvm::UnnamedAddr::Global;
@@ -705,6 +734,9 @@ impl Cg<'_> {
         let mut extra = Vec::new();
         let const_pure = crate::builtins::const_pure_attrs(self.ast, d, &sig, &mut extra);
         self.coro_fn_attrs(d, &mut extra);
+        if sig.no_csr {
+            extra.push(Attr::Str("no_caller_saved_registers".into(), "".into()));
+        }
         // A thunk is `nounwind` only by its method's type or attributes
         // (clang `ConstructAttributeList(IsThunk)`): `generateThunk` never
         // runs `TryMarkNoThrow` over its body.
@@ -837,14 +869,14 @@ impl Cg<'_> {
             w = w.max(vec_bits(self, coerce));
         }
         for a in &info.args {
-            if let ArgKind::Direct { coerce, flatten, .. } = &a.kind {
-                match coerce {
-                    IrType::Struct(m, _) if *flatten => {
-                        for e in m {
+            if let ArgKind::Direct { coerce, .. } = &a.kind {
+                match self.flat_fields(&a.kind) {
+                    Some((m, _)) => {
+                        for e in &m {
                             w = w.max(vec_bits(self, e));
                         }
                     }
-                    c => w = w.max(vec_bits(self, c)),
+                    None => w = w.max(vec_bits(self, coerce)),
                 }
             }
         }
@@ -897,14 +929,20 @@ impl Cg<'_> {
                 // clang `EmitFunctionEpilog`, `TEK_Scalar` returned
                 // indirectly: reload the value and store it back.
                 let q = self.f.sig.as_ref().map(|g| g.ret);
+                // `TEK_Complex` (a Win64 `_Complex double`) likewise
+                // reloads both parts and stores them back.
                 if let (Some(q), Some(slot)) = (q, self.f.ret_slot)
-                    && !self.is_aggregate(q)
-                    && !self.is_atomic_aggregate(q)
-                    && !matches!(self.ast.types.canonical_view(q), TypeView::Complex(_))
                     && self.f.fir.cur().is_some()
                 {
-                    let v = self.load_scalar(slot, q);
-                    self.store_scalar(v, slot, q);
+                    if matches!(self.ast.types.canonical_view(q), TypeView::Complex(_)) {
+                        let (re, im) = self.cx_load(slot, q, (false, false));
+                        if let (Some(re), Some(im)) = (re, im) {
+                            self.cx_store((re, im), slot, q);
+                        }
+                    } else if !self.is_aggregate(q) && !self.is_atomic_aggregate(q) {
+                        let v = self.load_scalar(slot, q);
+                        self.store_scalar(v, slot, q);
+                    }
                 }
                 None
             }
@@ -1319,10 +1357,12 @@ impl Cg<'_> {
                         ParamVal::Direct(self.load_scalar(alloca, pq))
                     });
                 }
-                match kind {
-                    ArgKind::Direct {
-                        coerce: IrType::Struct(fs, packed), flatten: true, ..
-                    } if fs.len() > 1 => {
+                let flat = self.flat_fields(kind);
+                match flat {
+                    // clang `EmitFunctionProlog`: flattened stores only
+                    // for a struct of more than one element; one element
+                    // is a coerced store of that element.
+                    Some((fs, packed)) if fs.len() > 1 => {
                         let src_size = self.alloc_size(ct);
                         let dst_size = self.alloc_size(mt);
                         let into = if src_size <= dst_size {
@@ -1330,7 +1370,7 @@ impl Cg<'_> {
                         } else {
                             self.f.fir.alloca(ct, alloca.align)
                         };
-                        let offs = self.tys.struct_offsets(fs, *packed);
+                        let offs = self.tys.struct_offsets(&fs, packed);
                         for (j, off) in offs.iter().enumerate() {
                             let p = self.struct_gep(ct, into, j as u32);
                             self.store(V::Arg(*arg_no), p, min_align(alloca.align, *off), false);
@@ -1340,7 +1380,13 @@ impl Cg<'_> {
                             self.memcpy_v(alloca, into, alloca.align, dst_size);
                         }
                     }
-                    _ => {
+                    Some((fs, _)) if fs.len() == 1 => {
+                        let (size, _) = self.size_align(pq);
+                        self.coerced_store_sized(V::Arg(*arg_no), &fs[0], alloca, size);
+                        *arg_no += 1;
+                    }
+                    Some(_) => {}
+                    None => {
                         let (size, _) = self.size_align(pq);
                         self.coerced_store_sized(V::Arg(*arg_no), coerce, alloca, size);
                         *arg_no += 1;
@@ -1423,10 +1469,7 @@ impl Cg<'_> {
                     out.push(v);
                     return Ok(());
                 }
-                if let ArgKind::Direct {
-                    coerce: IrType::Struct(fs, packed), flatten: true, ..
-                } = kind
-                {
+                if let Some((fs, packed)) = self.flat_fields(kind) {
                     let src_size = self.alloc_size(src.ty);
                     let dst_size = self.alloc_size(ct);
                     let from = if src_size < dst_size {
@@ -1441,7 +1484,7 @@ impl Cg<'_> {
                     } else {
                         src.v
                     };
-                    let offs = self.tys.struct_offsets(fs, *packed);
+                    let offs = self.tys.struct_offsets(&fs, packed);
                     for (j, f) in fs.iter().enumerate() {
                         let ft = self.ir(f);
                         let p = self.struct_gep(ct, from, j as u32);

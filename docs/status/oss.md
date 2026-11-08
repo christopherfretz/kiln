@@ -73,13 +73,14 @@ The loop:
 | `protobuf` | 3 | `v33.1` | tests at parity |
 | `rocksdb` | 3 | `v10.7.5` | tests at parity |
 | `boost_compiled` | 4 | `boost-1.90.0` | blocked (tests 1326/1327 vs clang 1327/1368) |
-| `boost_meta` | 4 | `boost-1.90.0` | blocked (tests 2059/2087 of control-passing; 8 follow-ups in WP-802) |
+| `boost_meta` | 4 | `boost-1.90.0` | control failures and row 14 only (WP-802) |
 | `ctre` | 4 | `v3.11.0` | tests at parity |
 | `daw_json_link` | 4 | `v3.38.1` | tests at parity |
 | `duckdb` | 4 | `v1.5.6` | tests at parity |
 | `folly_coro` | 4 | `v2026.10.26.00` | blocked (1 cluster) |
 | `glaze` | 4 | `v9.1.0` | tests at parity |
 | `libunifex` | 4 | `v0.4.0` | tests at parity |
+| `llvm_clang` | 4 | `llvmorg-19.1.7` | tests at parity (check-clang, check-lld; [details](oss/llvm_clang.md)) |
 | `llvm_full` | 4 | `llvmorg-19.1.7` | tests at parity (check-llvm) |
 | `mp_units` | 4 | `v2.5.0` | tests at parity |
 | `onetbb` | 4 | `v2022.3.0` | tests at parity |
@@ -676,13 +677,15 @@ TUs over 1.2x on time or RSS: 0 of the 315 that take clang-19 at least 0.5 s.
 |---|---|---|
 | configure | ok | ok |
 | build | rc 2 | rc 2 |
-| TUs ok / failed | 2211 / 42 | 2240 / 13 |
-| links ok / failed | 1986 / 0 | 2013 / 0 |
-| tests passed / total | 2059 / 2087 | 2087 / 2099 |
-| wall | 6508 s | 3153 s |
-| peak TU RSS | 1176 MB | 1087 MB |
+| TUs ok / failed | 2230 / 23 | 2240 / 13 |
+| links ok / failed | 2005 / 0 | 2013 / 0 |
+| tests passed / total | 2079 / 2087 | 2087 / 2099 |
+| wall | 10943 s | 3153 s |
+| peak TU RSS | 1178 MB | 1087 MB |
 
-Failure clusters (kiln): 16.
+Failure clusters (kiln): 16 in the WP-787 final run, listed below. The kiln column is the WP-802 run (`5384ebeeb`), with no clang control rebuilt: its 23 failed TUs are in `docs/status/oss/boost_meta.md` (What remains).
+
+Failure clusters (kiln, WP-787 final): 16.
 
 1. **7x** `reject: fatal error: Q file not found`; 7 also fail with clang
    - e.g. `$KILN/.oss/src/boost/libs/spirit/test/karma/format_manip_attr.cpp`: `$KILN/.oss/src/boost/libs/preprocessor/include/boost/preprocessor/iteration/detail/iter/limits/forward1_256.hpp:19:18: fatal error: 'test_manip_attr.hpp' file not found`
@@ -857,6 +860,36 @@ Failure clusters (kiln): none.
 
 Failure clusters (kiln): none.
 <!-- /oss:opencv -->
+
+<!-- oss:llvm_clang -->
+### llvm_clang (llvmorg-19.1.7)
+
+clang and lld with the AArch64 and X86 backends (WP-801). The run is
+run 6; details, clusters and commands are in
+[oss/llvm_clang.md](oss/llvm_clang.md).
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 3565 / 0 | 3565 / 0 |
+| links ok / failed | 157 / 0 | 157 / 0 |
+| check-clang passed / discovered | 35197 / 37973 * | 35229 / 38003 |
+| check-lld passed / discovered | 2193 / 2961 | 2193 / 2961 |
+| wall | 13857 s † | 7951 s |
+| peak TU RSS | 648 MB | 1106 MB |
+
+\* Two `ClangAnalysisFlowSensitiveTests` shards (cluster 13) crashed.
+The cluster was fixed after the run, and the relinked binary then passed
+671/671; that restores the 32 hidden tests (35197 + 32 = 35229). The
+other six failures are the control's own environmental ones. † The run
+shared the host with other agents' builds; summed TU CPU time is 1.00×
+clang's.
+
+Failure clusters (kiln): 13 plus one link failure. Ten were fixed on
+`wp/801` and four on main during the WP; none is open. Perf: five TUs
+over 1.5× clang's CPU time are recorded, not fixed.
+<!-- /oss:llvm_clang -->
 
 <!-- oss:boost_compiled -->
 ### boost_compiled (boost-1.90.0)

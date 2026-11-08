@@ -1745,8 +1745,22 @@ and returns the scope it names:
   `set_typedef_for_anon` ([dcl.typedef]/9).
 
 ### 4.5 Attributes
+- **Policy: kiln never accepts a semantics-changing construct without
+  implementing it** (WP-805). An attribute clang knows that kiln does not
+  implement is triaged by `attr_triage::TABLE`: class A (semantics, ABI,
+  layout) is the error `'X' attribute is not supported by kiln yet`,
+  which system headers and `-w` do not suppress; class B (optimization,
+  instrumentation, debug, hardening) and class C (diagnostics or
+  analyses only) are accepted silently. A name clang does not know keeps
+  the `unknown attribute` warning. spec/landed/sema/WP-805.md.
+- **Truthful feature tests** (WP-805): in compile modes
+  `__has_attribute` / `__has_cpp_attribute` answer 0 for a class-A
+  name, and `__has_builtin` answers 0 for a builtin codegen cannot lower
+  (`kiln_codegen::UNLOWERED_BUILTINS`); a header that tests for a feature
+  takes the path kiln implements. `-E` keeps clang's answers.
 - `act_on_attribute(syntax, scope, name, args, loc)` maps a parsed
-  attribute to an `AttrKind`, or warns and returns `None`.
+  attribute to an `AttrKind`, or diagnoses it as above and returns
+  `None`.
 - **Recognised kinds:**
   - `nodiscard`/`warn_unused_result`
   - `maybe_unused`/`unused`
@@ -1790,6 +1804,34 @@ and returns the scope it names:
     this one, is the error `'X' and 'Y' attributes are not compatible`
     (X the later) with `conflicting attribute is here` at the earlier, and
     is dropped. Test: `tests/conformance/dcl.attr/gnu-disable-tail-calls.cpp`.
+  - `no_builtin` (`AttrKind::NO_BUILTIN`; GNU syntax or `clang::`),
+    WP-808, clang `handleNoBuiltinAttr`: `no_builtin_attribute` reads
+    its arguments, each a string literal (else `expected string literal
+    as argument of 'no_builtin' attribute` at the argument, and the
+    attribute is dropped); none is the wildcard `*`. A name is valid
+    when it is a library builtin (`Sema::lib_builtin_name`, the
+    parser's `kiln_pp::is_library_builtin`: a `NoBuiltin`-overlay row of
+    the feature tables at the `-fclang-compat` level) other than the
+    seven standard ones (`move`, `forward`, `addressof`, ...), or
+    `std-` followed by one of those; an invalid one (`*`, `foo`,
+    `__builtin_memcpy`, `move`) warns `'N' is not a valid builtin name
+    for 'no_builtin'` [-Winvalid-no-builtin-names] at its literal and is
+    left out. `a` is the interned, sorted, deduplicated `,`-joined
+    names. On a non-function it warns `'no_builtin' attribute only
+    applies to functions` [-Wignored-attributes].
+    `check_no_builtin_attrs` merges the attributes of one declaration
+    (in order) into one, and each merge that leaves the wildcard among
+    other names is `empty 'no_builtin' cannot be composed with named
+    ones` at the declaration's name. The declaration then waits in
+    `Sema::no_builtin_pending`: its body (`act_on_start_function_def`)
+    clears it, `= default` / `= delete` is `no_builtin attribute has no
+    effect on defaulted or deleted functions` at the attribute, and at
+    the end of the unit (`report_no_builtin_declarations`, skipping
+    instantiations and definitions) it is `no_builtin attribute is
+    permitted on definitions only` (clang reports both at the
+    declarator; the harness compares unordered). Codegen reads the
+    definition's attribute (spec/codegen.md "no-builtin"). Test:
+    `tests/conformance/dcl.attr.no-builtin/errors.cpp`.
   - `gnu_inline` (GNU syntax or `gnu::`; **GNU inline functions**,
     WP-585, clang `handleGNUInlineAttr`; `AttrKind::GNU_INLINE`): on a
     non-function `'gnu_inline' attribute only applies to functions`
@@ -1953,6 +1995,13 @@ and returns the scope it names:
       elements) and is then `initialization of non-aggregate type T with
       a designated initializer list` (a vector is not an aggregate), at
       the variable or at a nested list's brace.
+    - A list whose leading element is an unbraced vector copy-initializes
+      the whole vector from it (clang `CheckVectorType`, non-OpenCL), so
+      `v4{v2, v2}` with a 2-lane `v2` is `cannot initialize a value of
+      type 'v4' ... with an lvalue of type 'v2'` in clang 19 and 22 alike;
+      kiln does not split a shorter vector into lanes (the OpenCL rule).
+      Test: `tests/conformance/ext.vector/list-init-shorter-vector-element-rejected.cpp`
+      (WP-802).
   - GNU `malloc` (function with a pointer result, else `'malloc'
     attribute only applies to return values that are pointers`; on a
     non-function `... only applies to functions`), `alloc_size(n[, m])`
@@ -3542,6 +3591,12 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   `act_on_namespace_alias(name, name_loc, qual, target, target_loc)`.
   - The target is looked up with `LookupKind::Nested` and must be a
     namespace or alias: `expected namespace name`.
+  - `lookup_namespace_name(qual, name)` gives that lookup. A
+    using-directive whose name does not classify as a namespace falls
+    back to it, so in both forms only namespaces are considered
+    ([namespace.udir]/1, [namespace.alias]/1): `using namespace index;`
+    with a visible function `::index` nominates the namespace (WP-801,
+    `tests/conformance/namespace.udir/p1-function-does-not-hide-namespace-run.cpp`).
   - Redeclaring an alias to the same namespace is allowed (it links to
     the previous one); to a different namespace: `redefinition of 'Q' as
     an alias for a different namespace`, with a note; any other earlier
@@ -4109,7 +4164,14 @@ constant and never look at the operand.
 
 The operands of nested `sizeof`, `alignof` and `noexcept` are not
 looked at (they are unevaluated). An erroneous operand gives an error
-expression.
+expression. Before `can_throw` reads them, the exception specifications of the
+constructors, bound temporaries' destructors and direct callees in the
+operand are resolved ([except.spec]/13, `resolve_operand_exc_specs`,
+WP-802): an operand kept unchanged from a template pattern (`V()` in
+`noexcept(noexcept(V().f(0, x)))` of a function template, with `V`'s
+implicit default constructor) was built without resolving them, and
+the instantiation must not count them as potentially-throwing
+(`tests/conformance/except.spec/p13-noexcept-operand-from-pattern-resolves-specs-run.cpp`).
 
 ### 5.4 Builtin functions (`builtins.rs`)
 clang's `LazilyCreateBuiltin`. kiln knows one builtin,
@@ -4257,6 +4319,11 @@ function) elsewhere.
   unit's typedef, alias or (as clang's `LookupNecessaryTypesForBuiltin`)
   tag named `FILE`. Not modelled: clang 22's `modf` to `llvm.modf` and
   clang's implicit `alloc_size` on the library allocation functions.
+  Under `-fno-builtin` / `-ffreestanding` (`Sema::no_builtin`) no
+  function is recognized, and under `-fno-builtin-<name>`
+  (`Sema::no_builtin_fns`) not `<name>` (`lib_builtin_info`; clang
+  `Builtin::Context::initializeBuiltins` skips them): no implicit
+  attributes, no twin, an ordinary call (WP-808).
 - **GCC's implicit library builtins** (WP-380, `record_gnu_lib_twin`;
   `Sema::gnu_lib_builtins`, set by the driver for `-stdlib=libstdc++`,
   the default): libstdc++'s `<cmath>` double overloads are `using
@@ -5266,8 +5333,18 @@ and aggregate element types.
   both are at the allocated type, the access error worded as for a
   temporary (`temporary of type 'P' has private destructor`), as clang's
   `ActOnCXXDelete` / `BuildCXXNew` do.
-- Gaps: `-fno-sized-deallocation` only removes the macro (Sema always
-  selects the sized form, clang's C++14+ default); `-Wmismatched-new-delete`
+- `-fno-sized-deallocation` (`Sema::sized_deallocation`, WP-808; clang
+  `LangOptions::SizedDeallocation`): the implicit global declarations
+  ([basic.stc.dynamic.general]/2) omit `operator delete(void*,
+  std::size_t)` and its array and aligned twins, so `::operator
+  delete(p, n)` without a declaration is `no matching function`; and a
+  global usual-deallocation lookup (delete-expression, deleting
+  destructor, new-expression cleanup, coroutine frame) never prefers a
+  sized function, even a user-declared one (`usual_delete`, as clang
+  19). A class's own lookup is unchanged: its only `operator
+  delete(void*, std::size_t)` still gets the size.
+  `tests/conformance/expr.delete/fno-sized-deallocation-*.cpp`.
+- Gaps: `-Wmismatched-new-delete`
   is not reported; a non-constant bound in a parenthesized type-id is a
   plain warning (clang's is an extension warning, so an error under
   `-pedantic-errors`); `__hot_cold_t` overloads are not recognized.
@@ -8488,6 +8565,13 @@ two `member '<m>' first declared here` notes. Flowing off the end
 has `return_void`; otherwise `-Wreturn-type` warns `non-void coroutine
 does not return a value` (`... in all control paths` when only some
 paths fall off).
+Immediate invocations in the operand are evaluated at the end of the
+full-expression holding it ([expr.const]/16, WP-802): the promise
+variable and the suspend points a first `co_return` builds are their
+own full-expressions and do not take them (`coro_isolated`), and in a
+template pattern the operand is finished as a full-expression, so an
+instantiation keeps the non-dependent values (`co_return sq(3) + t;`,
+`tests/conformance/stmt.return.coroutine/immediate-invocation-in-template-operand-run.cpp`).
 
 **The body (`complete_coroutine_body`, clang
 `CheckCompletedCoroutineBody`).** At the end of a non-template

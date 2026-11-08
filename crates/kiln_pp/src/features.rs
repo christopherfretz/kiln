@@ -177,6 +177,10 @@ pub struct ClangFeatures {
     compat: ClangCompat,
     /// Feature-gated target builtins answered from the enabled features.
     target_builtins: Option<TargetBuiltins>,
+    /// The `-fno-builtin-<name>` names, sorted (clang
+    /// `LangOptions::NoBuiltinFuncs`): each library builtin among them
+    /// answers 0, as `-fno-builtin` answers all of them (WP-808).
+    no_builtin_fns: Vec<String>,
 }
 
 /// Target builtins whose `__has_builtin` answer depends on the enabled
@@ -229,6 +233,7 @@ impl ClangFeatures {
             flags,
             compat: ClangCompat::default(),
             target_builtins: None,
+            no_builtin_fns: Vec::new(),
         })
     }
 
@@ -252,6 +257,16 @@ impl ClangFeatures {
         self.compat
     }
 
+    /// Whether the target is `x86_64` (else `aarch64`).
+    pub fn is_x86_64(&self) -> bool {
+        self.triple.target == 1
+    }
+
+    /// Whether the standard is C++26.
+    pub fn is_cxx26(&self) -> bool {
+        self.bit.trailing_zeros() % 7 == 6
+    }
+
     /// [`ClangFeatures::new`] with the flags a clang command line sets:
     /// each option of [`FeatureFlag::options`], with `-fno-X` undoing `-fX`
     /// and vice versa, `-fsanitize=a,b` / `-fno-sanitize=a,b` lists,
@@ -260,6 +275,8 @@ impl ClangFeatures {
     /// arguments are ignored; the standard itself comes from `std`.
     pub fn from_args<S: AsRef<str>>(triple: &str, std: Std, args: &[S]) -> Option<ClangFeatures> {
         let mut set: Vec<FeatureFlag> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+        let mut freestanding = false;
         let mut toggle = |f: Option<FeatureFlag>, on: bool| {
             if let Some(f) = f {
                 set.retain(|&g| g != f);
@@ -288,6 +305,12 @@ impl ClangFeatures {
                 toggle(flag_named("NoExceptions"), true);
             } else if arg == "-fcxx-exceptions" {
                 toggle(flag_named("NoExceptions"), false);
+            } else if arg == "-ffreestanding" || arg == "-fhosted" {
+                // clang `Opts.NoBuiltin = -fno-builtin || Freestanding`:
+                // `-fbuiltin` does not undo `-ffreestanding`.
+                freestanding = arg == "-ffreestanding";
+            } else if let Some(name) = arg.strip_prefix("-fno-builtin-") {
+                names.push(name.to_owned());
             } else if let Some(f) = flag_with_option(arg) {
                 toggle(Some(f), true);
             } else if let Some(rest) = arg.strip_prefix("-fno-") {
@@ -296,7 +319,15 @@ impl ClangFeatures {
                 toggle(flag_with_option(&format!("-fno-{rest}")), false);
             }
         }
-        ClangFeatures::new(triple, std, &set)
+        if freestanding {
+            set.push(FeatureFlag::NoBuiltin);
+        }
+        names.sort_unstable();
+        names.dedup();
+        ClangFeatures::new(triple, std, &set).map(|mut f| {
+            f.no_builtin_fns = names;
+            f
+        })
     }
 
     /// The flags in effect, in overlay order.
@@ -351,6 +382,51 @@ impl ClangFeatures {
     }
 }
 
+/// Whether `name` is one of clang's library builtins (the `Builtins.td`
+/// rows with the `f` attribute, which `-fno-builtin` turns off): the
+/// names `__has_builtin` answers 0 for under [`FeatureFlag::NoBuiltin`],
+/// with clang 22's additions when `clang22`. The `std` ones (`move`,
+/// `forward`, ...) are among them (WP-808, sema's `no_builtin` names).
+pub fn is_library_builtin(name: &str, clang22: bool) -> bool {
+    let has = |overlays: &[Overlay]| {
+        overlays
+            .iter()
+            .any(|o| o.0 == FeatureFlag::NoBuiltin && o.1 == Kind::Builtin && o.2 == name)
+    };
+    has(table::OVERLAYS) || (clang22 && has(table::COMPAT22_OVERLAYS))
+}
+
+/// A feature-query table, for [`table_keys`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FeatureTable {
+    /// `__has_builtin`.
+    Builtin,
+    /// `__has_attribute`.
+    Attribute,
+    /// `__has_cpp_attribute` (scoped keys are `scope::name`).
+    CppAttribute,
+    /// `__has_declspec_attribute`.
+    DeclspecAttribute,
+}
+
+/// Every key clang 19 or clang 22 answers nonzero for in some
+/// configuration of `t`, sorted and deduplicated, for coverage tests
+/// that walk clang's tables (WP-805: the attribute triage and builtin
+/// lowering tests).
+pub fn table_keys(t: FeatureTable) -> Vec<&'static str> {
+    let (kind, base) = match t {
+        FeatureTable::Builtin => (Kind::Builtin, table::BUILTIN),
+        FeatureTable::Attribute => (Kind::Attribute, table::ATTRIBUTE),
+        FeatureTable::CppAttribute => (Kind::CppAttribute, table::CPP_ATTRIBUTE),
+        FeatureTable::DeclspecAttribute => (Kind::DeclspecAttribute, table::DECLSPEC_ATTRIBUTE),
+    };
+    let mut v: Vec<&'static str> = base.iter().filter(|e| e.1 != 0).map(|e| e.0).collect();
+    v.extend(table::COMPAT22.iter().filter(|d| d.0 == kind && d.2 != 0).map(|d| d.1));
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
 /// The flag whose first probed option is `option`.
 fn flag_with_option(option: &str) -> Option<FeatureFlag> {
     FeatureFlag::ALL.iter().copied().find(|f| f.options().first() == Some(&option))
@@ -395,7 +471,13 @@ impl FeatureQueries for ClangFeatures {
         if ACLE_HEADER_BUILTINS.contains(&name) {
             return self.lookup_at(Kind::Builtin, table::BUILTIN, name, false);
         }
-        self.lookup(Kind::Builtin, table::BUILTIN, name)
+        let v = self.lookup(Kind::Builtin, table::BUILTIN, name);
+        if self.no_builtin_fns.binary_search_by(|n| n.as_str().cmp(name)).is_ok() {
+            // `-fno-builtin-<name>` drops a library builtin the way
+            // `-fno-builtin` does (clang `Builtin::Context::initializeBuiltins`).
+            return self.overlay(table::OVERLAYS, FeatureFlag::NoBuiltin, Kind::Builtin, name, v);
+        }
+        v
     }
 
     fn has_constexpr_builtin(&self, name: &str) -> bool {

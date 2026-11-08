@@ -36,10 +36,20 @@ sema_cce_conversion_not_allowed = Error (2) "conversion from {0} to {1} is not a
 sema_cce_narrowing_value = WarningError [Cxx11Narrowing] (3) "{0} evaluates to {1}, which cannot be narrowed to type {2}";
 sema_cce_not_implicitly_convertible = Error (2) "value of type {0} is not implicitly convertible to {1}";
 sema_cce_ref_binds_temporary = Error (2) "conversion from {0} to {1} in converted constant expression would bind reference to a temporary";
+// clang `err_cconv_change` / `warn_cconv_unsupported` (WP-808)
+sema_cconv_change = Error (2) "function declared '{0}' here was previously declared {1}";
+sema_cconv_incompatible = Error (2) "{0} and {1} attributes are not compatible";
+sema_cconv_unsupported = Warning [IgnoredAttributes] (1) "'{0}' calling convention is not supported for this target";
 sema_cdtor_function_try_handler_mem_expr = Warning [Exceptions] (1) "cannot refer to a non-static member from the handler of a {0:constructor|destructor} function try block";
 sema_choose_expr_requires_constant = Error (0) "'__builtin_choose_expr' requires a constant expression";
 sema_circular_arrow = Error (0) "circular pointer delegation detected";
 sema_class_spec_not_in_enclosing_ns = Error (2) "class template specialization of '{0}' not in a namespace enclosing '{1}'";
+sema_cleanup_arg_named_not_function = Error (1) "'cleanup' argument {0} is not a function";
+sema_cleanup_arg_not_function = Error (0) "'cleanup' argument is not a function";
+sema_cleanup_arg_not_single_function = Error (1) "'cleanup' argument {0} is not a single function";
+sema_cleanup_ext = Warning [GccCompat] (0) "GCC does not allow the 'cleanup' attribute argument to be anything other than a simple identifier";
+sema_cleanup_func_arg_incompatible_type = Error (3) "'cleanup' function {0} parameter has type {1} which is incompatible with type {2}";
+sema_cleanup_func_must_take_one_arg = Error (1) "'cleanup' function {0} must take 1 parameter";
 sema_cmp_category_not_found = Error (2) "cannot {1:use builtin operator '<=>'|default 'operator<=>'} because type '{0}' was not found; include <compare>";
 sema_compare_enum_enum_deprecated = Warning [DeprecatedEnumCompare] (3) "{0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} different enumeration types ({1} and {2}) is deprecated";
 sema_comparison_always = Warning [TautologicalCompare] (2) "{0:self-|array }comparison always evaluates to {1:a constant|true|false|'std::strong_ordering::equal'}";
@@ -60,6 +70,8 @@ sema_conditional_vector_operand_type = Error (1) "enumeration type {0} is not al
 sema_conditional_vector_scalar_type_unsupported = Error (2) "scalar type {0} not supported with vector condition type {1}";
 sema_conditional_vector_size = Error (2) "vector condition type {0} and result type {1} do not have the same number of elements";
 sema_conditional_void_nonvoid = Error (2) "{0:left|right} operand to ? is void, but {0:right|left} operand is of type {1}";
+// clang `err_conflicting_overriding_cc_attributes` (WP-808)
+sema_conflicting_overriding_cc = Error (3) "virtual function '{0}' has different calling convention attributes ({1}) than the function it overrides (which has calling convention {2})";
 sema_conflicting_types = Error (1) "conflicting types for '{0}'";
 sema_const_member_assign = Error (1) "cannot assign to non-static data member within const member function '{0}'";
 sema_constant_conversion = Warning [ConstantConversion] (4) "implicit conversion from {0} to {1} changes value from {2} to {3}";

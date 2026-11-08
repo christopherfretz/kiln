@@ -8,7 +8,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{
     BinaryOp, CastKind, ExprDeps, ExprFlags, ExprKind, ExprNode, TypeidOperand, ValueCategory,
 };
-use kiln_ast::ids::{ArgListId, RawId};
+use kiln_ast::ids::{ArgListId, NnsId, RawId};
 use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::{ArgView, BuiltinType, Nns, TemplateArg};
@@ -256,7 +256,7 @@ impl Substituter<'_, '_, '_> {
                     return self.nttp_ref(e, d, loc);
                 }
                 if let Some(r) = self.kept_parm_pack(e, d, loc) {
-                    return Ok(r);
+                    return r;
                 }
                 if let Some(q) = ex(self).decl_ref_extra(e).and_then(|x| x.qualifier)
                     && self.in_dependent_specialization(d, loc)?
@@ -268,16 +268,16 @@ impl Substituter<'_, '_, '_> {
                     let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
                     return Ok(self.sema.act_dependent_scope_ref(nns, name, None, begin, loc));
                 }
-                if let Some(r) = self.respecialized_member_template(d, loc)? {
-                    return Ok(r);
-                }
-                let i = self.find_instantiated_decl(d, loc)?;
                 // The qualifier as written survives ([temp.inst]; clang's
                 // `TransformDeclRefExpr` transforms the qualifier loc).
                 let nns = match ex(self).decl_ref_extra(e).and_then(|x| x.qualifier) {
                     Some(q) => Some(self.nns(q, loc)?),
                     None => None,
                 };
+                if let Some(r) = self.respecialized_member_template(d, nns, loc)? {
+                    return Ok(r);
+                }
+                let i = self.find_instantiated_decl(d, loc)?;
                 let r = self.sema.build_decl_ref_qualified(i, loc, None, nns);
                 if n.has(ExprFlags::IMMEDIATE_ESCALATING)
                     && self.sema.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr
@@ -624,7 +624,7 @@ impl Substituter<'_, '_, '_> {
             }
             ExprKind::DependentScopeDeclRefExpr => {
                 let callee = std::mem::take(&mut self.as_callee);
-                let Some(nns) = kiln_ast::ids::NnsId::try_new(n.a()) else {
+                let Some(nns) = NnsId::try_new(n.a()) else {
                     return Err(SubstFail);
                 };
                 let name = self.sema.ast.dependent_scope_ref_name(e);
@@ -1213,7 +1213,7 @@ impl Substituter<'_, '_, '_> {
     /// `DependentScopeDeclRefExpr` keeps the `DeclName`).
     fn reflect_dependent_name(&mut self, r: ExprId, loc: Loc, end: Loc) -> SubstResult<ExprId> {
         let Some(e) = self.sema.ast.exprs.reflect_dependent_name(r) else { return Ok(r) };
-        let Some(nns) = kiln_ast::ids::NnsId::try_new(self.sema.ast.exprs.get(e).a()) else {
+        let Some(nns) = NnsId::try_new(self.sema.ast.exprs.get(e).a()) else {
             return Err(SubstFail);
         };
         let name = self.sema.ast.dependent_scope_ref_name(e);
@@ -1304,7 +1304,7 @@ impl Substituter<'_, '_, '_> {
     /// ([basic.lookup.qual.general]/2, WP-121).
     fn member_qualifier(
         &mut self,
-        n: kiln_ast::ids::NnsId,
+        n: NnsId,
         base: ExprId,
         arrow: bool,
         loc: Loc,
@@ -1315,11 +1315,11 @@ impl Substituter<'_, '_, '_> {
 
     fn member_nns(
         &mut self,
-        n: kiln_ast::ids::NnsId,
+        n: NnsId,
         base: ExprId,
         arrow: bool,
         loc: Loc,
-    ) -> SubstResult<(DeclId, kiln_ast::ids::NnsId)> {
+    ) -> SubstResult<(DeclId, NnsId)> {
         match self.sema.ast.types.nns_view(n) {
             Nns::Identifier { prefix: None, name } => {
                 let bt = self.sema.ety(base);
@@ -1366,7 +1366,7 @@ impl Substituter<'_, '_, '_> {
 
     /// True if specifier `n` starts with a dependent `name::` of a
     /// member access's object scope.
-    fn rooted_in_member(&self, mut n: kiln_ast::ids::NnsId) -> bool {
+    fn rooted_in_member(&self, mut n: NnsId) -> bool {
         loop {
             match self.sema.ast.types.nns_view(n) {
                 Nns::Identifier { prefix: None, .. } => return true,
@@ -1706,6 +1706,7 @@ impl Substituter<'_, '_, '_> {
     fn respecialized_member_template(
         &mut self,
         d: DeclId,
+        nns: Option<NnsId>,
         loc: Loc,
     ) -> SubstResult<Option<ExprId>> {
         let Some((ft, args)) = self.sema.ast.spec_info(d).map(|(_, s)| (s.template, s.args)) else {
@@ -1728,7 +1729,7 @@ impl Substituter<'_, '_, '_> {
         }
         let l = self.args(args, loc)?;
         if let Some(spec) = self.structural_member_spec(it, l, loc)? {
-            return Ok(Some(self.sema.build_decl_ref_qualified(spec, loc, None, None)));
+            return Ok(Some(self.sema.build_decl_ref_qualified(spec, loc, None, nns)));
         }
         let ty = &self.sema.ast.types;
         let flat: Vec<TemplateArg> = ty
@@ -1743,6 +1744,11 @@ impl Substituter<'_, '_, '_> {
         match self.sema.act_template_id(tn, &flat, loc, loc) {
             Ok(crate::templ::actions::TemplateIdRef::Value(x)) => Ok(Some(x)),
             Ok(crate::templ::actions::TemplateIdRef::Overload(x)) => {
+                // `&C::f<A>` keeps its qualifier: a pointer to member, not
+                // `&this->f<A>` ([expr.unary.op]/3).
+                if let Some(q) = nns {
+                    self.sema.set_template_id_qualifier(x, q);
+                }
                 Ok(Some(self.sema.resolve_single_template_id(x)))
             }
             _ => Err(SubstFail),
@@ -1850,6 +1856,8 @@ impl Substituter<'_, '_, '_> {
                     && matches!(a.view(), ArgView::Pack(_)) =>
             {
                 let ArgView::Pack(l) = a.view() else { return Err(SubstFail) };
+                let n = self.sema.ast.types.args(l).len();
+                self.sweep_kept(n, |s| s.parm_pack_name(Some(p)), loc)?;
                 let ty = self
                     .sema
                     .ast
@@ -1861,8 +1869,14 @@ impl Substituter<'_, '_, '_> {
                         ArgView::Expr { expr, .. } => Some(self.sema.ast.exprs.get(expr).ty()),
                         _ => None,
                     })
-                    .or_else(|| self.sema.ast.decls.get(p).ty())
-                    .ok_or(SubstFail)?;
+                    .or_else(|| self.sema.ast.decls.get(p).ty());
+                // An empty pack (the length sweep, §7.1): the parameter's
+                // type substituted.
+                let ty = match ty {
+                    Some(t) if self.sema.ast.types.args(l).is_empty() => self.ty(t, loc)?,
+                    Some(t) => t,
+                    None => return Err(SubstFail),
+                };
                 let shown = self.shown_nttp(info.depth, info.index).unwrap_or(p);
                 return Ok(self.sema.ast.builder().subst_nttp_pack_expr(shown, l, ty, loc));
             }
@@ -1915,6 +1929,9 @@ impl Substituter<'_, '_, '_> {
     /// itself while another partial expansion is rebuilt.
     fn subst_nttp_pack(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
         if self.pack.keep && self.pack_index.is_none() {
+            let l = self.sema.ast.exprs.subst_pack_args(e);
+            let n = self.sema.ast.types.args(l).len();
+            self.sweep_kept(n, |_| crate::templ::pack::PackName::outer(), loc)?;
             return Ok(e);
         }
         let p = self.sema.ast.exprs.subst_pack_parameter(e);
@@ -1932,29 +1949,53 @@ impl Substituter<'_, '_, '_> {
     /// (clang's `TransformFunctionParmPackRefExpr` with no pack index).
     /// Each parameter is captured by the enclosing lambdas as a reference
     /// to it would be (clang's `MarkFunctionParmPackReferenced`). `None`
-    /// outside keep mode or for any other declaration.
-    fn kept_parm_pack(&mut self, e: ExprId, d: DeclId, loc: Loc) -> Option<ExprId> {
+    /// outside keep mode or for any other declaration; a failure when the
+    /// length sweep finds it non-empty (§7.1).
+    fn kept_parm_pack(&mut self, e: ExprId, d: DeclId, loc: Loc) -> Option<SubstResult<ExprId>> {
         if !self.pack.keep || self.pack_index.is_some() {
             return None;
         }
         let Some(&super::DeclOrPack::Pack(l)) = self.locals.get(&d) else { return None };
+        let n = self.sema.ast.lists.len(l);
+        let name = |s: &Self| crate::templ::pack::PackName {
+            name: s.sema.decl_name(d),
+            ..crate::templ::pack::PackName::default()
+        };
+        if self.sweep_kept(n, name, loc).is_err() {
+            return Some(Err(SubstFail));
+        }
         let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(l).collect();
         for p in params {
             let _ = self.sema.capture_at_decl_ref(p, loc);
         }
-        let ty = self.sema.ast.exprs.get(e).ty();
-        Some(self.sema.ast.builder().function_parm_pack_expr(d, l, ty, loc))
+        let mut ty = self.sema.ast.exprs.get(e).ty();
+        // The length sweep (§7.1) asks which packs the result names by
+        // declaration: the pattern's type, substituted, names none.
+        if self.pack.sweep {
+            ty = match self.ty(ty, loc) {
+                Ok(t) => t,
+                Err(e) => return Some(Err(e)),
+            };
+        }
+        Some(Ok(self.sema.ast.builder().function_parm_pack_expr(d, l, ty, loc)))
     }
 
     /// A function parameter pack kept while its expansion stayed
     /// dependent (§7.2): a reference to its parameter for the current
     /// index, or itself while another partial expansion is rebuilt.
     fn subst_parm_pack(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
-        if self.pack.keep && self.pack_index.is_none() {
-            return Ok(e);
-        }
         let d = self.sema.ast.exprs.parm_pack_parameter(e);
         let l = self.sema.ast.exprs.parm_pack_params(e);
+        if self.pack.keep && self.pack_index.is_none() {
+            let n = self.sema.ast.lists.len(l);
+            let name = |s: &Self| crate::templ::pack::PackName {
+                name: s.sema.decl_name(d),
+                outer: true,
+                ..crate::templ::pack::PackName::default()
+            };
+            self.sweep_kept(n, name, loc)?;
+            return Ok(e);
+        }
         let n = u32::try_from(self.sema.ast.lists.len(l)).unwrap_or(u32::MAX);
         let i = self.pack_reached(
             n,
@@ -2529,11 +2570,15 @@ impl Substituter<'_, '_, '_> {
             .collect();
         // An initializer-list constructor's one argument is the
         // `std::initializer_list` over the whole braced list
-        // ([dcl.init.list]/3.7): the list is that argument's, not a list
-        // holding it (`V v{"2", 1}` is not `V v{{"2", 1}}`; clang
-        // `TransformInitializer` on `isStdInitListInitialization`). An
-        // empty list is the value-initialized `std::initializer_list`, a
-        // list-initializing construct with no arguments (`V v{}`).
+        // ([dcl.init.list]/3.7, /5): the list is that argument's, not a
+        // list holding it (clang `TransformInitializer` unwraps
+        // `isStdInitListInitialization`). Rebuilt as `{{...}}`, a list
+        // whose single element initializes one `E` from the elements
+        // would be chosen ([over.match.list]/1.1): `V v{"2", 1}` would be
+        // `V v{{"2", 1}}` and `{{"a", b}, {"c", d}}` one pair (WP-801,
+        // WP-804). An empty list is the value-initialized
+        // `std::initializer_list`, a list-initializing construct with no
+        // arguments (`V v{}`).
         if self.sema.ast.exprs.construct_info(e).std_init_list
             && let [a] = items.as_slice()
             && let Some(b) = self.braced_source(*a)

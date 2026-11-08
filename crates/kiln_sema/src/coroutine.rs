@@ -225,7 +225,12 @@ impl Sema<'_, '_> {
         let odr = std::mem::take(&mut self.pending_odr);
         let ext = self.extend_collector.take();
         let unev = std::mem::replace(&mut self.unevaluated, 0);
+        // The operand's immediate invocations wait for its own
+        // full-expression, not the promise's or a suspend point's
+        // ([expr.const]/16; `co_return sq(3)` as the first suspend).
+        let imm = self.take_immediate_state(false);
         let r = f(self);
+        self.restore_immediate_state(imm);
         self.cleanup = cleanup;
         let mine = std::mem::replace(&mut self.pending_odr, odr);
         self.pending_odr.extend(mine);
@@ -991,9 +996,14 @@ impl Sema<'_, '_> {
             return self.builder().coreturn_stmt(None, None, false, loc);
         };
         let Some(promise) = promise else {
-            if let Some(x) = e {
-                let _ = self.take_braced_arg(x);
-            }
+            // In a template the operand is still a full-expression: its
+            // non-dependent immediate invocations are evaluated here
+            // ([expr.const]/16), as a `return` operand's are; the
+            // instantiation keeps their values.
+            let e = e.map(|x| match self.take_braced_arg(x) {
+                Some(_) => x,
+                None => self.act_on_full_expr(x),
+            });
             return self.builder().coreturn_stmt(e, None, false, loc);
         };
         let (operand, call) = self.coreturn_call(promise, e, loc);

@@ -79,21 +79,21 @@ pub fn opts19() -> ParseOptions {
 
 /// Parses `src` as `t.cpp` for x86-64.
 pub fn parse(src: &str) -> Parsed {
-    parse_with(src, opts19())
+    parse_with(src, &opts19())
 }
 
 /// Parses `src` as `t.cpp` for x86-64 with `opts`.
-pub fn parse_with(src: &str, opts: ParseOptions) -> Parsed {
+pub fn parse_with(src: &str, opts: &ParseOptions) -> Parsed {
     parse_dump(src, opts, false)
 }
 
 /// As [`parse`], with implicit declarations (implicit special members) in
 /// the dump.
 pub fn parse_implicit(src: &str) -> Parsed {
-    parse_dump(src, opts19(), true)
+    parse_dump(src, &opts19(), true)
 }
 
-fn parse_dump(src: &str, opts: ParseOptions, implicit: bool) -> Parsed {
+fn parse_dump(src: &str, opts: &ParseOptions, implicit: bool) -> Parsed {
     let sm = SourceManager::new();
     let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
@@ -101,7 +101,7 @@ fn parse_dump(src: &str, opts: ParseOptions, implicit: bool) -> Parsed {
     let dopts = DiagOptions { clang_compat: opts.clang_compat, ..DiagOptions::default() };
     let engine = DiagEngine::new(&sm, &dopts, sink.clone());
     let target = Target::for_arch(Arch::X86_64);
-    let ast = parse_file(&sm, &interner, file, &engine, target, &opts);
+    let ast = parse_file(&sm, &interner, file, &engine, target, opts);
     let opts = DumpOptions {
         sources: Some(&sm),
         main_file: Some(file),

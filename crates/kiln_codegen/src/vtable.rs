@@ -1557,6 +1557,7 @@ impl Cg<'_> {
             if fa.is_empty() { kiln_llvm::AttrList::default().func } else { self.m.attr_set(&fa) };
         let opts = kiln_llvm::CallOpts {
             attrs: kiln_llvm::AttrList { func, ret, params: pattrs },
+            cc: sig.llvm_cc(),
             ..kiln_llvm::CallOpts::default()
         };
         // The thunk has no cleanups or EH scope: always a plain `call`.

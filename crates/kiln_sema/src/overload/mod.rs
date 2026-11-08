@@ -449,6 +449,11 @@ pub(crate) struct OverloadScratch {
     /// keeps such an operand an overload set, which a candidate note
     /// and an assignment's diagnostic name.
     pub template_id_refs: kiln_source::fx::FxHashMap<kiln_ast::ExprId, kiln_ast::ExprId>,
+    /// Of [`Self::template_id_refs`], the ones whose resolution alone
+    /// queued the specialization's definition for instantiation: the
+    /// specialization, withdrawn when the target re-resolves the
+    /// template-id to another ([`Sema::retarget_template_id`]).
+    pub template_id_queued: kiln_source::fx::FxHashMap<kiln_ast::ExprId, DeclId>,
     /// How many user-defined conversions are being applied
     /// ([`Sema::user_convert`]).
     pub udc_depth: u8,

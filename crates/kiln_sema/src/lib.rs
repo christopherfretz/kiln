@@ -19,11 +19,14 @@ mod align_redecl;
 mod annot;
 mod asm;
 mod attr_cond;
+pub mod attr_triage;
 mod bit_int;
 mod bitfield_constant;
 mod builtins;
+mod cconv;
 pub mod cfg;
 pub mod class;
+mod cleanup_attr;
 mod complex;
 mod consteval;
 mod consteval_block;
@@ -33,6 +36,7 @@ pub mod constfold;
 mod contracts;
 pub mod conv;
 mod coroutine;
+mod ctor_attr;
 pub mod decl;
 mod decl_attrs;
 pub mod declspec;
@@ -62,6 +66,7 @@ mod init_dtor;
 mod init_priority;
 mod int_in_bool;
 mod int_overflow;
+mod internal_linkage;
 mod jump_scope;
 mod kind_conflict;
 pub mod lambda;
@@ -107,6 +112,7 @@ mod switch_enum;
 pub mod target;
 pub mod templ;
 mod template_id_typo;
+mod tls_model;
 mod trivial_abi;
 mod try_stmt;
 mod type_diff;
@@ -293,6 +299,39 @@ pub struct Sema<'a, 'sm> {
     /// constant evaluation as its `__builtin_` twin, as GCC folds
     /// `::ceil` (spec/sema.md §5.4).
     pub gnu_lib_builtins: bool,
+    /// `-fno-builtin` / `-ffreestanding` (clang `LangOptions::NoBuiltin`,
+    /// WP-808): no library function is recognized as a builtin
+    /// ([`Sema::lib_builtin_info`]), so none gets the implicit attributes
+    /// or lowers as its `__builtin_` twin.
+    pub no_builtin: bool,
+    /// The `-fno-builtin-<name>` names, sorted (clang
+    /// `LangOptions::NoBuiltinFuncs`): each is not recognized as a
+    /// library builtin; `std-<name>` names a `std` one (WP-808).
+    pub no_builtin_fns: Vec<String>,
+    /// `-f[no-]sized-deallocation` (clang `LangOptions::SizedDeallocation`,
+    /// default on; WP-808): off, the sized global `operator delete` and
+    /// `operator delete[]` are not declared implicitly, and a global
+    /// deallocation lookup never prefers a sized one
+    /// ([`Sema::usual_delete`]).
+    pub sized_deallocation: bool,
+    /// `-f[no-]char8_t` (clang `LangOptions::Char8`): `None` is the
+    /// default, C++20 and later; see [`Sema::char8`].
+    pub char8: Option<bool>,
+    /// Whether a name is one of clang's library builtins at the clang 22
+    /// level or not (clang `Builtin::Context::isBuiltinFunc`'s table, set
+    /// by the parser from the preprocessor's): the names a `no_builtin`
+    /// attribute accepts (WP-808).
+    pub lib_builtin_name: fn(&str, bool) -> bool,
+    /// The functions whose `no_builtin` attribute waits for their
+    /// definition (clang checks the declarator's definition kind), with the
+    /// attribute's location: a `{` body clears one, `= default` / `=
+    /// delete` reports it, the end of the unit reports the rest as
+    /// declarations (WP-808).
+    pub(crate) no_builtin_pending: Vec<(DeclId, Loc)>,
+    /// `-f[no-]math-errno` (clang `LangOptions::MathErrno`, the Linux
+    /// default on): without it the errno-setting math library functions
+    /// are implicitly `const` (spec/sema.md §5.4, WP-806).
+    pub math_errno: bool,
     /// `-fkiln-dump-cfg`: build the graph of every analysed body and
     /// append its dump to [`Sema::cfg_out`] (spec/sema.md §7.5.1).
     pub cfg_dump: bool,
@@ -339,6 +378,10 @@ pub struct Sema<'a, 'sm> {
     /// `(label, value)` entries. Applied to each class definition as it
     /// begins (`record_pack`).
     pub(crate) pack: (u16, Vec<(Option<String>, u16)>),
+    /// The FP pragma state (clang's `CurFPFeatureOverrides` and
+    /// `FpPragmaStack`): the override in effect, relative to the command
+    /// line, and the `float_control(push)` entries.
+    pub(crate) fp_pragma: (kiln_ast::fp::FpOverride, Vec<kiln_ast::fp::FpOverride>),
     pub(crate) scopes: Vec<scope::Scope>,
     /// The current semantic declaration context.
     pub(crate) ctx: DeclId,
@@ -1114,6 +1157,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             sve: false,
             nns_start: None,
             gnu_lib_builtins: false,
+            no_builtin: false,
+            sized_deallocation: true,
+            char8: None,
+            no_builtin_fns: Vec::new(),
+            lib_builtin_name: |n, _| kiln_ast::decl::builtin::lib_by_name(n).is_some(),
+            no_builtin_pending: Vec::new(),
+            math_errno: true,
             cfg_dump: false,
             cfg_stats: false,
             full_deduction: false,
@@ -1126,6 +1176,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_body: cfg::BodyCfg::default(),
             inferred_noreturn: kiln_source::fx::FxHashSet::default(),
             pack: (0, Vec::new()),
+            fp_pragma: (kiln_ast::fp::FpOverride::NONE, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,
                 ..scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))

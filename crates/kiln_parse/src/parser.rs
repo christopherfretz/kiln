@@ -229,6 +229,9 @@ pub struct Parser<'a, 'sm> {
     /// Pending loop-hint pragmas, by the location of the token starting
     /// the statement they apply to (spec/parse.md §2.3).
     pub(crate) loop_hints: Vec<(Loc, Vec<crate::tokens::LoopHintInfo>)>,
+    /// The FP pragmas not yet taken, keyed by the token they precede
+    /// (spec/parse.md §2.3).
+    pub(crate) fp_pragmas: Vec<(Loc, crate::tokens::FpPragma)>,
 }
 
 /// A `decltype(e)` parsed ahead as a nested-name-specifier
@@ -306,7 +309,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         let std = lex_opts.std;
         let cxx11 = std >= Std::Cxx11;
         let cxx26 = std >= Std::Cxx26;
-        let kw = Keywords::with_std(s.ast.symbols(), s.gnu, cxx11, cxx26, s.clang_compat);
+        let mut kw = Keywords::with_std(s.ast.symbols(), s.gnu, cxx11, cxx26, s.clang_compat);
+        if !lit_opts.char8() {
+            kw.remove(s.ast.symbols(), "char8_t");
+        }
         s.set_std(std);
         let sm = src.source_manager();
         let cur = src.get(0);
@@ -358,6 +364,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             lead_decl_attrs: Vec::new(),
             stmt_attrs_loc: None,
             loop_hints: Vec::new(),
+            fp_pragmas: Vec::new(),
         };
         if p.src.get_mut().module_lines() {
             p.module_activate();

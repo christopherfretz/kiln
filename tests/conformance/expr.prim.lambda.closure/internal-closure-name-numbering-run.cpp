@@ -8,7 +8,6 @@
 // `typeid(...).name()` shows them. Found in LLVM's ScalarEvolution.cpp
 // (`GroupByComplexity`), WP-782.
 //@ expect: run
-//@ xfail(kiln): WP-782 follow-up, `$_N` closure names are numbered in source order, not clang's first-mangled order (crates/kiln_abi/src/mangle.rs `closure_name`, `AnonIds`)
 //@ stdout: ZL1giE3$_1 ZL1giE3$_0 1
 #include <cstdio>
 #include <typeinfo>

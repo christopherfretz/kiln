@@ -8,6 +8,7 @@ use kiln_ast::decl::builtin as id;
 use kiln_ast::expr::{BinaryOp, ExprKind};
 use kiln_ast::types::TypeView;
 use kiln_ast::{Ast, ExprId, QualType};
+use kiln_source::Loc;
 
 use super::{Compiler, float_code, int_of, skip_parens};
 use crate::kbc::{Op, ak, bi, cmp};
@@ -443,6 +444,92 @@ impl Compiler<'_> {
         ok.filter(|&r| Some(r) != init)
     }
 
+    /// clang's `FoldConstant` of a conditional whose condition (through
+    /// parentheses and casts) is a `__builtin_constant_p` call, a GNU
+    /// extension (GCC PR38377): the whole conditional is evaluated as a
+    /// fold (`RunState::fold`), so a cast a constant expression may not
+    /// perform ([expr.const]/5.15) does not fail it. Emits the `Op::Fold`
+    /// that enters the fold and returns the register saving the previous
+    /// mode, for [`Self::bcp_fold_exit`].
+    pub(super) fn bcp_fold_enter(&mut self, cond: ExprId) -> Option<u32> {
+        let ast = self.ast();
+        let mut c = skip_parens(ast, cond);
+        while ast.exprs.get(c).kind().is_cast() {
+            c = skip_parens(ast, ast.exprs.operand(c));
+        }
+        if ast.exprs.get(c).kind() != ExprKind::CallExpr {
+            return None;
+        }
+        let mut f = skip_parens(ast, ast.exprs.callee(c));
+        while ast.exprs.get(f).kind().is_cast() {
+            f = skip_parens(ast, ast.exprs.operand(f));
+        }
+        if ast.exprs.get(f).kind() != ExprKind::DeclRefExpr
+            || ast.decls.builtin_id(ast.exprs.decl(f)) != Some(id::CONSTANT_P)
+        {
+            return None;
+        }
+        let r = self.reg();
+        self.emit(Op::Fold, 1, &[r]);
+        Some(r)
+    }
+
+    /// Leaves the fold [`Self::bcp_fold_enter`] entered.
+    pub(super) fn bcp_fold_exit(&mut self, saved: Option<u32>) {
+        if let Some(r) = saved {
+            self.emit(Op::Fold, 0, &[r]);
+        }
+    }
+
+    /// clang `tryEvaluateBuiltinObjectSize` (WP-292) of pointer `p` for
+    /// the type in register `b`, into `dst` (`site`: the reporting
+    /// expression): the pointer without its pointer casts, evaluated
+    /// speculatively. clang fails any modification of an object from
+    /// before the trial and ignores a failing comma operand: the comma
+    /// left operands of `skipped_comma_lhs` are skipped (any depth,
+    /// WP-302), and a remaining side effect fails the trial. Otherwise the
+    /// pointer runs as a trial. With `default` (the builtin's
+    /// `ExprConstant` case), a failure gives the default when the operand
+    /// has side effects (calls included, clang `HasSideEffects`), else an
+    /// invalid subexpression at the call; without it (codegen's
+    /// `tryEvaluateObjectSize` of a `pass_object_size` argument, WP-808),
+    /// any failure fails.
+    pub(super) fn object_size(
+        &mut self,
+        site: ExprId,
+        p: ExprId,
+        b: u32,
+        dst: u32,
+        begin: Loc,
+        default: bool,
+    ) {
+        let ast = self.ast();
+        let p = strip_pointer_casts(ast, p);
+        let des = designator_type(ast, p);
+        let side = default && (has_side_effects(ast, p) || has_calls(ast, p));
+        let skip = skipped_comma_lhs(ast, p);
+        let still = side_effects_outside(ast, p, &skip);
+        let ty = des.map_or(bi::DYN, |q| self.ty(q).0);
+        let (a, ok) = if still {
+            let ok = self.reg();
+            self.konst(ok, 0);
+            (b, ok)
+        } else {
+            let ok = self.reg();
+            let pc = self.emit(Op::Speculate, 0, &[ok, 0, 0]);
+            let saved = std::mem::replace(&mut self.skip_effects, skip);
+            let v = self.rv(p);
+            self.skip_effects = saved;
+            self.emit(Op::Ret, 1, &[v]);
+            let end = self.here();
+            self.patch(pc + 2, v);
+            self.patch(pc + 3, end);
+            (v, ok)
+        };
+        let sub = bi::OBJECT_SIZE | (u32::from(side) * bi::SIDE) << 8;
+        self.emit_site(Op::Builtin, sub, &[dst, a, b, ok, ty, 0], site, begin);
+    }
+
     /// Lowers call `e` of builtin `bid` into a fresh register; `None` for
     /// a builtin evaluated as an ordinary call.
     pub(super) fn builtin_call(&mut self, e: ExprId, bid: u32, args: &[ExprId]) -> Option<u32> {
@@ -713,42 +800,10 @@ impl Compiler<'_> {
                 };
                 op(self, bi::LIFETIME, 0, [p, ok, p], [t, 0], begin);
             }
-            // clang `tryEvaluateBuiltinObjectSize` (WP-292): the pointer
-            // without its pointer casts, evaluated speculatively. clang
-            // fails any modification of an object from before the trial
-            // and ignores a failing comma operand: the comma left operands
-            // of `skipped_comma_lhs` are skipped (any depth, WP-302), and a
-            // remaining side effect gives the default. Otherwise the
-            // pointer runs as a trial; its failure gives the default when
-            // the operand has side effects (calls included, clang
-            // `HasSideEffects`), else an invalid subexpression at the call.
             id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE => {
                 let (p, t) = (arg(0)?, arg(1)?);
-                let ast = self.ast();
-                let p = strip_pointer_casts(ast, p);
-                let des = designator_type(ast, p);
-                let side = has_side_effects(ast, p) || has_calls(ast, p);
-                let skip = skipped_comma_lhs(ast, p);
-                let still = side_effects_outside(ast, p, &skip);
-                let ty = des.map_or(bi::DYN, |q| self.ty(q).0);
                 let b = self.rv(t);
-                let (a, ok) = if still {
-                    let ok = self.reg();
-                    self.konst(ok, 0);
-                    (b, ok)
-                } else {
-                    let ok = self.reg();
-                    let pc = self.emit(Op::Speculate, 0, &[ok, 0, 0]);
-                    let saved = std::mem::replace(&mut self.skip_effects, skip);
-                    let v = self.rv(p);
-                    self.skip_effects = saved;
-                    self.emit(Op::Ret, 1, &[v]);
-                    let end = self.here();
-                    self.patch(pc + 2, v);
-                    self.patch(pc + 3, end);
-                    (v, ok)
-                };
-                op(self, bi::OBJECT_SIZE, u32::from(side) * bi::SIDE, [a, b, ok], [ty, 0], begin);
+                self.object_size(e, p, b, dst, begin, true);
             }
             // As `::operator new`/`delete` (spec/oven.md "Transient
             // allocation").

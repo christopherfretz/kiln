@@ -396,6 +396,11 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
     if !is_file_context(ast, first) {
         return false;
     }
+    // clang `internal_linkage` (a class's too: clang
+    // `isInternalLinkageDecl` mangles it with `L`).
+    if ast.has_internal_linkage_attr(first) {
+        return true;
+    }
     match n.kind() {
         DeclKind::Function => {
             ast.decls.function(first).is_some_and(|f| f.spec.storage() == FnStorage::Static)
@@ -579,7 +584,7 @@ fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
         // (`getLVForClassMember`, `getLVForLocalDecl`).
         return false;
     }
-    if in_anon_ns(ast, d) {
+    if in_anon_ns(ast, d) || ast.has_internal_linkage_attr(d) {
         return false;
     }
     // A class template specialization takes the linkage of its template
@@ -590,7 +595,9 @@ fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
         return false;
     }
     match effective_ctx(ast, d) {
-        Some(c) if is_function_kind(ast.decls.get(c).kind()) => fn_shares_local_linkage(ast, c),
+        Some(c) if is_function_kind(ast.decls.get(c).kind()) => {
+            fn_shares_local_linkage(ast, c) && !is_internal_symbol(ast, c)
+        }
         Some(c) if is_record_kind(ast.decls.get(c).kind()) => {
             tag_externally_visible(ast, ast.first(c))
         }
@@ -619,7 +626,7 @@ fn is_file_context(ast: &Ast, d: DeclId) -> bool {
 /// linkage.
 pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
     let first = ast.first(d);
-    if internal_by_storage(ast, first) {
+    if internal_by_storage(ast, first) || ast.has_internal_linkage_attr(first) {
         return true;
     }
     // A namespace-scope function or variable of an unnamed namespace
@@ -640,7 +647,10 @@ pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
     while let Some(ctx) = c {
         let k = ast.decls.get(ctx).kind();
         if is_function_kind(k) {
-            return !fn_shares_local_linkage(ast, ctx) || has_internal_linkage(ast, ctx);
+            // The function's linkage includes its template arguments':
+            // `call<(anonymous)::A>`'s lambda is internal too (clang
+            // `getLVForLocalDecl` takes `getLVForDecl(FD)`).
+            return !fn_shares_local_linkage(ast, ctx) || is_internal_symbol(ast, ctx);
         }
         if !is_record_kind(k) {
             break;
@@ -725,6 +735,25 @@ pub fn decl_name(ast: &Ast, d: DeclId) -> String {
         }
         ast.names.simple_spelling(n.name(), ast.symbols()).unwrap_or_default()
     }
+}
+
+/// True if `d` is a function whose type has the `regcall` convention
+/// (only ever set on x86-64; clang `CC_X86RegCall`), whose name gets the
+/// `__regcall3__` prefix (WP-808).
+pub fn is_regcall_fn(ast: &Ast, d: DeclId) -> bool {
+    // clang `getAsFunction`: a function template is its pattern.
+    let d = match ast.decls.get(d).kind() {
+        DeclKind::FunctionTemplate => match ast.template_info(d).and_then(|i| i.pattern) {
+            Some(p) => p,
+            None => return false,
+        },
+        _ => d,
+    };
+    let n = ast.decls.get(d);
+    n.kind().is_function()
+        && n.ty()
+            .and_then(|t| ast.types.proto(ast.types.canonical(t)))
+            .is_some_and(|p| p.info().cc() == kiln_ast::types::CallConv::RegCall)
 }
 
 /// True if the function or variable `d` is emitted under its plain
@@ -906,6 +935,11 @@ pub fn mangle_structor(ast: &Ast, anon: &mut AnonIds, d: DeclId, v: Structor) ->
         return l;
     }
     if is_unmangled(ast, d) {
+        // clang `getMangledNameImpl`: an unmangled `regcall` function is
+        // still prefixed `__regcall3__` (WP-808).
+        if is_regcall_fn(ast, d) {
+            return format!("__regcall3__{}", decl_name(ast, d));
+        }
         return decl_name(ast, d);
     }
     let mut m = Mangler::new(ast, anon, "_Z");
@@ -1694,7 +1728,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if let Some((t, args)) = self.spec_of(c) {
             // A variable template specialization: <template-prefix>
             // <template-args> (clang `mangleClosurePrefix`).
-            self.template_prefix(t, stop, Structor::Complete);
+            self.template_prefix(t, stop, Structor::Complete, None);
             self.template_args(args);
         } else {
             if let Some(p) = self.parent(c) {
@@ -1726,7 +1760,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             // <unscoped-name> / <unscoped-template-name> <template-args>
             let std = !at_top;
             if let Some((t, args)) = spec {
-                self.unscoped_template(t, std);
+                self.unscoped_template(t, std, Some(d));
                 self.template_args_of(t, args);
             } else {
                 if std {
@@ -1742,7 +1776,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.method_quals(d);
         let p = parent.expect("nested name has a parent");
         if let Some((t, args)) = spec {
-            self.template_prefix(t, stop, v);
+            self.template_prefix(t, stop, v, Some(d));
             self.template_args_of(t, args);
         } else {
             self.prefix(p, stop);
@@ -1822,7 +1856,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             return;
         }
         if let Some((t, args)) = self.spec_of(dc) {
-            self.template_prefix(t, stop, Structor::Complete);
+            self.template_prefix(t, stop, Structor::Complete, Some(dc));
             self.template_args(args);
         } else {
             if let Some(c) = self.closure_prefix_decl(dc) {
@@ -1830,6 +1864,8 @@ impl<'a, 'b> Mangler<'a, 'b> {
             } else if let Some(p) = self.parent(dc) {
                 self.prefix(p, stop);
             }
+            // A class with clang `internal_linkage`.
+            self.l_prefix(dc);
             self.unqualified(dc, Structor::Complete);
         }
         self.subs.push(key);
@@ -1837,8 +1873,15 @@ impl<'a, 'b> Mangler<'a, 'b> {
 
     /// <template-prefix> of template `t` within a nested name.
     /// `v` is the structor variant of a constructor template
-    /// specialization (`C1`/`C2`).
-    fn template_prefix(&mut self, t: DeclId, stop: Option<DeclId>, v: Structor) {
+    /// specialization (`C1`/`C2`); `spec` the specialization named,
+    /// whose internal linkage at namespace scope gives the name its `L`.
+    fn template_prefix(
+        &mut self,
+        t: DeclId,
+        stop: Option<DeclId>,
+        v: Structor,
+        spec: Option<DeclId>,
+    ) {
         if self.try_std_abbrev(t) {
             return;
         }
@@ -1852,13 +1895,18 @@ impl<'a, 'b> Mangler<'a, 'b> {
         // A nested template name takes no implicit tags (clang's
         // `mangleTemplatePrefix` is not passed them; an unscoped one is).
         let extra = self.extra_tags.take();
+        if let Some(spec) = spec {
+            self.l_prefix(spec);
+        }
         self.unqualified(t, v);
         self.extra_tags = extra;
         self.subs.push(key);
     }
 
-    /// <unscoped-template-name> of template `t` (`St`-prefixed in `std`).
-    fn unscoped_template(&mut self, t: DeclId, std: bool) {
+    /// <unscoped-template-name> of template `t` (`St`-prefixed in `std`;
+    /// `L`-prefixed when `spec`, the specialization named, has internal
+    /// linkage, clang `isInternalLinkageDecl`).
+    fn unscoped_template(&mut self, t: DeclId, std: bool, spec: Option<DeclId>) {
         if self.try_std_abbrev(t) {
             return;
         }
@@ -1868,6 +1916,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
         }
         if std {
             self.out.push_str("St");
+        }
+        if let Some(spec) = spec {
+            self.l_prefix(spec);
         }
         self.unqualified(t, Structor::Complete);
         self.subs.push(key);
@@ -2062,6 +2113,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
                             self.out.push('_');
                         }
                     }
+                } else if is_regcall_fn(ast, d) {
+                    // clang `mangleUnqualifiedName`: a `regcall` function's
+                    // identifier is prefixed `__regcall3__` (WP-808).
+                    self.source_name(&format!("__regcall3__{nm}"));
                 } else {
                     self.source_name(&nm);
                 }
@@ -2929,7 +2984,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.out.push('_');
                 self.ty(elem);
             }
-            TypeView::Function(p) => self.function_type(q, &p),
+            TypeView::Function(p) => self.function_type(q, &p, true),
             TypeView::MemberPointer { pointee, class } => self.member_pointer(pointee, class),
             TypeView::Complex(e) => {
                 self.out.push('C');
@@ -3001,6 +3056,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.ty(QualType::unqual(class));
         let pointee = ast.types.canonical(pointee);
         if let Some(p) = ast.types.proto(pointee).copied() {
+            self.cc_qualifier(&p);
             let mq = p.info().this_quals();
             if mq.is_restrict() {
                 self.out.push('r');
@@ -3013,7 +3069,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             }
             let fkey = Sub::Type(pointee);
             if !self.try_sub(fkey) {
-                self.function_type(pointee, &p);
+                self.function_type(pointee, &p, false);
                 self.subs.push(fkey);
             }
         } else {
@@ -3021,10 +3077,30 @@ impl<'a, 'b> Mangler<'a, 'b> {
         }
     }
 
-    /// <function-type> ::= [<CV>] [Do] F [Y] <return> <params> [<ref>] E
-    /// (method cv-qualifiers are written by the member-pointer caller).
-    fn function_type(&mut self, _q: QualType, p: &kiln_ast::types::FuncProto) {
+    /// A function type's calling convention as a vendor qualifier (clang
+    /// `mangleExtFunctionInfo` / `getCallingConvQualifierName`): only
+    /// `ms_abi`, `swiftcall` and `swiftasynccall` are spelled; every other
+    /// convention mangles as the default one (WP-808).
+    fn cc_qualifier(&mut self, p: &kiln_ast::types::FuncProto) {
+        use kiln_ast::types::CallConv as C;
+        let q = match p.info().cc() {
+            C::Win64 => "ms_abi",
+            C::Swift => "swiftcall",
+            C::SwiftAsync => "swiftasynccall",
+            _ => return,
+        };
+        self.out.push('U');
+        self.source_name(q);
+    }
+
+    /// <function-type> ::= [U <cc>] [<CV>] [Do] F [Y] <return> <params>
+    /// [<ref>] E (a member pointer writes the convention and the method
+    /// cv-qualifiers itself: `cc` is false then).
+    fn function_type(&mut self, _q: QualType, p: &kiln_ast::types::FuncProto, cc: bool) {
         let ast = self.ast;
+        if cc {
+            self.cc_qualifier(p);
+        }
         if ast.types.exc_spec(p).is_nothrow() {
             self.out.push_str("Do");
         }

@@ -150,6 +150,9 @@ impl Sema<'_, '_> {
             }
             for &o in &out.overridden.clone() {
                 // clang 19 runs both checks for every overridden function.
+                if !is_static {
+                    self.check_override_cc(site.name, d.name_loc(), ty, o);
+                }
                 self.check_override_return(site.name, d.name_loc(), ty, o);
                 self.check_overrides_final(site.name, d.name_loc(), o);
             }
@@ -405,6 +408,23 @@ impl Sema<'_, '_> {
                 .with_note(self.overridden_note(o));
             self.emit(msg);
         }
+    }
+
+    /// clang `CheckOverridingFunctionAttributes`: an overrider has the
+    /// calling convention of the function it overrides (WP-808).
+    fn check_override_cc(&mut self, name: DeclName, at: Loc, ty: QualType, o: DeclId) {
+        let oty = self.ast.decls.get(o).ty().unwrap_or(QualType::ERROR);
+        let cc = |s: &Self, t: QualType| s.ast.types.proto(t).map(|p| p.info().cc());
+        if cc(self, ty) == cc(self, oty) {
+            return;
+        }
+        let msg = self
+            .diag(DiagId::sema_conflicting_overriding_cc, at)
+            .arg(self.decl_name_str(name))
+            .arg(format!("'{}'", self.ty_str(ty)))
+            .arg(format!("'{}'", self.ty_str(oty)))
+            .with_note(self.overridden_note(o));
+        self.emit(msg);
     }
 
     /// `overridden virtual function is here`.

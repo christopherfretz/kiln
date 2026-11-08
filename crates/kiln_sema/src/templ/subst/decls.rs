@@ -197,6 +197,7 @@ impl Substituter<'_, '_, '_> {
         let loc = self.sema.ast.decls.get(d).loc();
         let t = self.decl_ty(d);
         let ty = self.named_decl_ty(d, t, loc)?;
+        let ty = self.sema.apply_pattern_mode(d, ty);
         self.var_function_type(ty, loc, ctx)?;
         let ds = self.pattern_declspec(d, ty);
         let mut dr = self.pattern_declarator(d, ctx)?;
@@ -826,9 +827,15 @@ impl Substituter<'_, '_, '_> {
         // clang's `TransformFunctionProtoType` keeps the `ExtInfo`): the
         // rebuilt declarator carries no attributes, so the bit is set on
         // the instantiation's type here (WP-749).
-        if info.noreturn()
-            && let Some(ft) = self.sema.ast.decls.get(f).ty()
-            && let Some(nt) = self.sema.with_fn_noreturn(ft, true, false)
+        // So are its calling convention and `no_caller_saved_registers`
+        // (WP-808).
+        let keep = move |i: kiln_ast::types::FuncInfo| {
+            i.with_noreturn(i.noreturn() || info.noreturn())
+                .with_cc(info.cc())
+                .with_no_caller_saved_regs(info.no_caller_saved_regs())
+        };
+        if let Some(ft) = self.sema.ast.decls.get(f).ty()
+            && let Some(nt) = self.sema.with_fn_info(ft, &keep, false)
         {
             self.sema.ast.decls.set_ty(f, nt);
         }
@@ -1307,6 +1314,7 @@ impl Substituter<'_, '_, '_> {
         }
         let failed = ty.is_err() || to_function;
         let ty = if to_function { QualType::ERROR } else { ty.unwrap_or(QualType::ERROR) };
+        let ty = self.sema.apply_pattern_mode(d, ty);
         let ds = self.pattern_declspec(d, ty);
         let mut dr = self.pattern_declarator(d, DeclaratorContext::Member)?;
         if failed {
@@ -1374,6 +1382,7 @@ impl Substituter<'_, '_, '_> {
         // uses are silent, the specialization is invalid).
         let failed = ty.is_err() && ctx == DeclaratorContext::Member;
         let ty = if failed { QualType::ERROR } else { ty? };
+        let ty = self.sema.apply_pattern_mode(d, ty);
         if n.kind() == DeclKind::TypeAlias {
             let name = n.name().as_ident().ok_or(SubstFail)?;
             let a = self.sema.act_on_alias_decl(name, loc, ty, &[], Loc::INVALID);

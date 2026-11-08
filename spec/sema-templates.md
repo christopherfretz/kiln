@@ -2903,13 +2903,16 @@ recomputed exactly as for non-template code (clang's
   - a list-initializing `CXXConstructExpr` operand is formed again
     through `init_from_list_at` of the substituted type
     ([dcl.init.list]/3.7). A single-argument non-list construct is its
-    substituted argument. (WP-804) When the construct calls an
-    initializer-list constructor (`ConstructInfo::std_init_list`), its
-    one argument is the `std::initializer_list` over the whole written
-    list, so `construct_list` takes that argument's braced list (an empty
-    one for the value-initialized `std::initializer_list` of `V v{}`) as
-    the list, not as one element of it: `V v{"2", 1}` is not rebuilt as
-    `V v{{"2", 1}}` (clang `isStdInitListInitialization`;
+    substituted argument. The list of an initializer-list constructor's
+    construct (`ConstructInfo::std_init_list`, `construct_list`) is the
+    braced list its one `std::initializer_list` argument was built from
+    (an empty one for the value-initialized `std::initializer_list` of
+    `V v{}`), not a list holding that argument (clang
+    `TransformInitializer` unwraps `isStdInitListInitialization`). Rebuilt
+    as `{{...}}`, a one-element list would be chosen by
+    [over.match.list]/1.1, so `V<P> v = {{"a", "b"}, {"c", "d"}}` stays
+    two elements and `V v{"2", 1}` is not `V v{{"2", 1}}` (WP-801, WP-804;
+    `dcl.init.list/initializer-list-ctor-in-template-keeps-list-run.cpp`,
     `dcl.init.list/init-list-ctor-element-list-in-template.cpp`);
   - a compound literal `(T){...}` (C99 extension) is rebuilt from its
     peeled initializer as a list, and `act_on_compound_literal` runs
@@ -4864,6 +4867,23 @@ uses the same detection (`expand_arg` → `element_expr`, WP-669):
 the class is instantiated and only `Ts` is known, stays one partially
 substituted expansion until the member template's `Us` is supplied
 (`tests/conformance/temp.variadic/p5-partial-expr-expansion-member-template.cpp`).
+
+**An empty first pack** ([temp.variadic]/7, WP-802). The probe stops at
+the first pack it reaches, so when that pack is empty no element is ever
+substituted and the expansion's other packs would go unchecked. Instead
+the pattern is substituted once more in keep mode (the *length sweep*,
+`PackState::sweep`, diagnostics captured and discarded): every
+substituted pack it reaches is kept, and a non-empty one is the length
+mismatch of step 3 (reported once the sweep ends, SFINAE-able as
+always), so `all<is_convertible(U, T)...>` with `T` = {} and `U` =
+{int} is a deduction failure and `is_constructible<tuple<>, int>` is
+false. A sweep element (`element_ty` / `element_expr`) that still names
+a pack by declaration names one of a retained level, and the expansion is
+rebuilt partially substituted as above instead of becoming empty. A sweep
+that fails for another reason (a lambda body, a pack it cannot keep)
+leaves the expansion empty, as before
+(`tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp`,
+`p7-empty-first-pack-length-mismatch.cpp`).
 
 A converted argument pack inside an argument list being substituted is
 rebuilt element by element. This happens for a partial
@@ -7231,7 +7251,14 @@ explicit specialization errors remain. The blockers are:
   templates ([over.match.oper]/3.4, `add_rewritten_template`,
   `more_specialized_operator`), `&f` deduction notes (`address.rs`), and
   dependent member template-ids (`act_on_template_member`,
-  `act_on_member_template_args`).
+  `act_on_member_template_args`). A member template-id with dependent
+  arguments is a dependent member access again at instantiation. It keeps
+  the access's nested-name-specifier, so `this->Base::g<T>()` looks `g`
+  up in `Base` even when the derived class declares a non-template `g`
+  (WP-801,
+  `tests/conformance/temp.names/p3-qualified-member-template-id-dependent-args-run.cpp`).
+  Gap: `(*this).Base::g<T>()` does not parse `<` as a template argument
+  list, because the dereferenced `this` is a dependent type.
 - **`std::initializer_list`** ([dcl.init.list]/5): `CXXStdInitializerListExpr`
   over a `MaterializeTemporaryExpr 'const E[N]'`; `init.rs`
   `std_initializer_list_init`, `init_list_ctor_init` ([over.match.list]
@@ -7834,6 +7861,11 @@ declarator scopes.**
   qualified set, resolved at instantiation against the target type
   ([over.over]; WP-715,
   `expr.unary.op/p3-qualified-overload-set-dependent-base-run.cpp`).
+  A member function template specialization the pattern resolved,
+  `&C::f<A>` or `&Self::f<A>`, keeps its instantiated qualifier when
+  `respecialized_member_template` names it again, so it stays a pointer
+  to member, not `&this->f<A>` (WP-801;
+  `expr.unary.op/p3-member-template-specialization-pointer-to-member-in-template-run.cpp`).
 - *Dependent `noexcept(expr)` in a type*: the canonical
   `ExcSpec::DependentNoexcept(profile)` of a function type (as written
   under a pointer, member pointer, reference or GNU `noreturn`) is
@@ -7872,6 +7904,12 @@ declarator scopes.**
   which reports them incompatible
   (tests/conformance/expr.cond/p6-class-arms-builtin-overload-run.cpp,
   `-errors.cpp`).
+- *[expr.cond]/6 cv-only differing class arms*: arms of one class type
+  that differ only in cv-qualification (a `const B` lvalue and a `B`
+  prvalue) do not reach the /6 step: /4.3.1 unified them, and the result
+  stays a class prvalue even when `B` has `operator bool` (WP-801,
+  tests/conformance/expr.cond/p4-cv-differing-class-arms-not-builtin-run.cpp,
+  clang's `Parser.cpp` `c ? Diag(..) << x : Diag(..)`).
 - *[expr.cond]/7 class prvalue result*: when the arms are a class type
   (after /4) and not glvalues of the same category, each glvalue arm
   copy-initializes the prvalue result (clang `PerformCopyInitialization`

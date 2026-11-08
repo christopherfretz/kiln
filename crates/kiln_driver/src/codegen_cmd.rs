@@ -180,9 +180,12 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>) -> CodegenOptions {
         stack_protector: f.stack_protector(),
         unwind_tables: f.unwind_tables(a.predef.freestanding.unwrap_or(false)),
         no_plt: f.no_plt,
+        static_destructors: f.static_destructors,
         wrapv: f.wrapv(),
         wrapv_pointer: f.wrapv_pointer(a.predef.clang_compat == ClangCompat::Clang22),
         null_pointer_is_valid: f.null_pointer_is_valid(),
+        no_builtin: a.no_builtin(),
+        no_builtin_fns: a.no_builtin_fns(),
         target_cpu: cpu,
         tune_cpu: f.mtune.clone().filter(|t| t != "native"),
         no_inline: a.predef.no_inline,
@@ -269,6 +272,11 @@ impl CodegenJob<'_> {
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == StdLib::LibStdCxx,
+            no_builtin: a.no_builtin(),
+            no_builtin_fns: a.no_builtin_fns(),
+            sized_deallocation: a.predef.sized_deallocation.unwrap_or(true),
+            char8: a.predef.char8_t,
+            math_errno: a.fp_model().opts.math_errno,
             sve: feats.sve,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
@@ -281,12 +289,15 @@ impl CodegenJob<'_> {
         *deps_out = crate::pp_cmd::finish_deps(pp, deps);
         let mut module = None;
         if engine.error_count() == 0 {
+            let fp = a.fp_model();
             let opts = CodegenOptions {
                 source_filename: if job.path == "-" { "-".to_owned() } else { job.path.to_owned() },
                 exceptions: a.predef.exceptions.unwrap_or(true),
                 rtti: a.predef.rtti.unwrap_or(true),
                 ident: ident(),
-                outline_atomics: a.outline_atomics.unwrap_or(true),
+                outline_atomics: a
+                    .outline_atomics
+                    .or_else(|| job.toolchain.aarch64_outline_atomics_default().then_some(true)),
                 target_features: feats.extra.clone(),
                 target_attr: Some(if job.toolchain.target.is_aarch64() {
                     crate::features::target_attr_features as kiln_codegen::TargetAttrParser
@@ -299,6 +310,8 @@ impl CodegenJob<'_> {
                         || feats.enabled().iter().any(|f| f == "neon")),
                 sve_vector_bits: feats.sve_vector_bits,
                 complex_range: a.complex_range(),
+                fp: fp.opts,
+                fp_denormal: fp.denormal,
                 opt_level: opt_level(a.opt_flag.as_deref()),
                 opt_size: opt_size(a.opt_flag.as_deref()),
                 strict_aliasing: a.strict_aliasing.unwrap_or(true),
@@ -658,6 +671,12 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String) -> Command {
     if let Some(cpu) = crate::features::resolve(args, &tc.target).0.cpu {
         cmd.arg(format!("-mcpu={cpu}"));
     }
+    // clang `AllowFPOpFusion`: `-ffp-contract=fast` (not
+    // `fast-honor-pragmas`) fuses across statements in the backend too;
+    // the other fast-math options reach it as function attributes.
+    if args.fp_model().backend_fuse {
+        cmd.arg("-fp-contract=fast");
+    }
     // The module's `Code Model` flag says the same; explicit, as clang
     // hands the model to the target machine.
     if let Some(cm) = args.codegen.code_model {
@@ -695,6 +714,12 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
     }
     if let Some(o) = &args.opt_flag {
         cmd.arg(o.clone());
+    }
+    // clang adds GCC's `crtfastmath.o` (flush denormals) for the last
+    // fast-math flag as for `-Ofast` (spec/driver.md "Floating-point
+    // flags").
+    if let Some(f) = args.fp.fast_math_runtime_flag() {
+        cmd.arg(f.to_owned());
     }
     if args.predef.pthread {
         cmd.arg("-pthread");

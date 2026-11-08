@@ -1498,6 +1498,9 @@ impl Cg<'_> {
     /// clang `tryEmitFMulAdd` (`-ffp-contract=on`): fuse an unused `fmul`
     /// operand of an `fadd`/`fsub` into `llvm.fmuladd`.
     fn try_fmuladd(&mut self, l: V, r: V, sub: bool) -> Option<V> {
+        if !self.contract_on() {
+            return None;
+        }
         let nl = self.peek_fneg(l);
         let nr = self.peek_fneg(r);
         let lm = nl.unwrap_or(l);
@@ -3111,6 +3114,13 @@ impl Cg<'_> {
     /// result statement (the last non-null one, through labels) is
     /// evaluated as the value.
     pub(crate) fn emit_stmt_expr(&mut self, e: ExprId) -> R<Option<V>> {
+        let fp = self.enter_fp(self.ast.exprs.stmt_expr_body(e));
+        let r = self.emit_stmt_expr_in(e);
+        self.leave_fp(fp);
+        r
+    }
+
+    fn emit_stmt_expr_in(&mut self, e: ExprId) -> R<Option<V>> {
         let ast = self.ast;
         let body = ast.exprs.stmt_expr_body(e);
         if ast.types.is_void(ast.exprs.get(e).ty()) {
@@ -3303,7 +3313,9 @@ impl Cg<'_> {
         }
         // A builtin is never emitted as a function (spec/codegen.md §3, "Calls"):
         // it folds, lowers inline, or calls the library function it names.
-        // `std::move(x)` and its kin fold to the address of `x`.
+        // `std::move(x)` and its kin fold to the address of `x` (also in
+        // a function with the wildcard `no_builtin`, unlike clang 19,
+        // spec/codegen.md "no-builtin").
         if let Some(d) = direct
             && self.is_std_builtin(d)
             && let Some(a) = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).next()
@@ -3313,9 +3325,12 @@ impl Cg<'_> {
         let mut lib = None;
         // WP-419: a recognized C library function clang lowers as its
         // `__builtin_` twin (`ceil(x)` -> `llvm.ceil`).
+        // WP-808: not in a function whose `no_builtin` attribute names it
+        // (clang `EmitDirectCallee`, `HasAttributeNoBuiltin`).
         if let Some(d) = direct
-            && let Some(id) =
-                ast.decls.builtin_id(d).or_else(|| crate::builtins::lib_intrinsic(ast, d))
+            && let Some(id) = ast.decls.builtin_id(d).or_else(|| {
+                crate::builtins::lib_intrinsic(self, d).filter(|_| !self.no_builtin_here(d))
+            })
         {
             match self.emit_builtin(id, e)? {
                 crate::builtins::BuiltinCall::Emitted(v) => return Ok(v),
@@ -3377,21 +3392,25 @@ impl Cg<'_> {
         }
         // WP-803: a hidden `size_t` argument after each `pass_object_size`
         // argument (clang `EmitCallArgs`).
-        let ps = direct.map(|d| ast.pass_object_size_params(d)).unwrap_or_default();
-        let (mut cvals, mut cargs) = (Vec::new(), Vec::new());
-        if !ps.is_empty() {
-            (cvals, cargs) = (vals.clone(), args.clone());
-            for &(i, t, dynamic) in ps.iter().rev() {
-                if let (Some(&a), Some(&CallArg::Scalar(v))) = (args.get(i), vals.get(i)) {
-                    let s = self.pass_object_size_arg(a, v, t, dynamic);
-                    cvals.insert(i + 1, CallArg::Scalar(s));
-                    cargs.insert(i + 1, a);
-                }
+        let sized =
+            direct.and_then(|d| self.object_size_args(d, fty, &sig, &vals, &args, extern_c));
+        let (cvals, cargs);
+        let (cv, ca) = match sized {
+            Some((s, v, a)) => {
+                (sig, cvals, cargs) = (s, v, a);
+                (&cvals, &cargs)
             }
-            sig = self.with_object_sizes(sig, fty, &ps, extern_c);
-        }
-        let (cv, ca) = if ps.is_empty() { (&vals, &args) } else { (&cvals, &cargs) };
+            None => (&vals, &args),
+        };
+        let mark = self.f.fir.inst_count();
         let r = self.call_vals_ret(&sig, callee, fid, None, cv, ca, dest, &extra, &ret_extra)?;
+        // WP-806: a library builtin's call takes the FP scope's fast-math
+        // flags (clang `EmitBuiltinExpr`'s `CGFPOptionsRAII`).
+        if let (Some(d), Some(f)) = (direct, fid)
+            && (ast.decls.builtin_id(d).is_some() || ast.decls.lib_builtin(d).is_some())
+        {
+            self.f.fir.mark_scope_calls(mark, f);
+        }
         if let (Some(d), Some(p)) = (direct, r) {
             self.alloc_align_assume(d, &vals, p);
         }
@@ -3436,6 +3455,36 @@ impl Cg<'_> {
         self.f.fir.set_cur(None);
         let cont = self.f.fir.create_block();
         self.emit_block(cont, false);
+    }
+
+    /// WP-803: a call of `d` (type `fty`, signature `sig`) with a hidden
+    /// `size_t` argument after each `pass_object_size` argument (clang
+    /// `EmitCallArgs`, `MaybeEmitImplicitObjectSize`): the signature, the
+    /// values and the argument expressions with them; `None` if `d` has
+    /// no such parameter. `vals` are `args` emitted (no object argument).
+    pub(crate) fn object_size_args(
+        &mut self,
+        d: DeclId,
+        fty: QualType,
+        sig: &Sig,
+        vals: &[CallArg],
+        args: &[ExprId],
+        extern_c: bool,
+    ) -> Option<(Sig, Vec<CallArg>, Vec<ExprId>)> {
+        let ps = self.ast.pass_object_size_params(d);
+        if ps.is_empty() {
+            return None;
+        }
+        let (mut cvals, mut cargs) = (vals.to_vec(), args.to_vec());
+        for &(i, t, dynamic) in ps.iter().rev() {
+            if let (Some(&a), Some(&CallArg::Scalar(v))) = (args.get(i), vals.get(i)) {
+                let s = self.pass_object_size_arg(a, v, t, dynamic);
+                cvals.insert(i + 1, CallArg::Scalar(s));
+                cargs.insert(i + 1, a);
+            }
+        }
+        let sig = self.with_object_sizes(sig.clone(), fty, &ps, extern_c);
+        Some((sig, cvals, cargs))
     }
 
     /// clang `EmitCallArgs` + `EmitCall`: evaluates `args` and calls
@@ -3599,10 +3648,17 @@ impl Cg<'_> {
         if sig.nothrow {
             fa.push(Attr::Flag(AttrKind::NoUnwind));
         }
+        if sig.no_csr {
+            fa.push(Attr::Str("no_caller_saved_registers".into(), "".into()));
+        }
         fa.extend(extra.iter().cloned());
         self.call_size_attrs(fid, &mut fa);
         let func = if fa.is_empty() { AttrList::default().func } else { self.m.attr_set(&fa) };
-        let opts = CallOpts { attrs: AttrList { func, ret, params }, ..CallOpts::default() };
+        let opts = CallOpts {
+            attrs: AttrList { func, ret, params },
+            cc: sig.llvm_cc(),
+            ..CallOpts::default()
+        };
         let r = self.emit_call_op(sig.fn_ty, callee, ir_args, opts, rty, fid, sig.nothrow);
         if let Some(a) = sret_addr {
             // clang `convertTempToRValue`: a scalar returned indirectly
@@ -4740,7 +4796,9 @@ impl Cg<'_> {
         let q = ast.decls.get(d).ty().expect("var type");
         if self.is_vla(q) {
             let init = v.init.filter(|&i| !ast.is_trivial_default_construction(i));
-            return self.emit_vla_var(d, q, init);
+            self.emit_vla_var(d, q, init)?;
+            self.push_cleanup_attr(d);
+            return Ok(());
         }
         // clang `EmitAutoVarAlloca`: `EmitVariablyModifiedType` (a pointer
         // or reference to a variable length array).
@@ -4803,6 +4861,7 @@ impl Cg<'_> {
             };
             self.push_cleanup(c);
         }
+        self.push_cleanup_attr(d);
         Ok(())
     }
 
