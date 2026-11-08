@@ -8316,6 +8316,12 @@ impl Sema<'_, '_> {
         } else {
             self.lookup_current_scope_outside_enum(name)
         };
+        // clang `ActOnEnumConstant`: a template parameter, then any other
+        // entity, hidden.
+        self.check_template_param_shadow(name, loc);
+        if !scoped {
+            self.check_enumerator_shadow(e, name, loc);
+        }
         if let Some(p) = clash {
             let id = if self.ast.decls.get(p).kind() == DeclKind::EnumConstant {
                 DiagId::sema_redefinition_of_enumerator

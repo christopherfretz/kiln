@@ -5,14 +5,15 @@
 //! A block-scope variable, parameter, structured binding or typedef-name
 //! that hides an entity of the same kind found by unqualified lookup
 //! ([basic.scope.hiding]) is diagnosed once, at the definition: never
-//! during template instantiation. Everything but `-Wshadow-field` is
+//! during template instantiation; so is an unscoped enumeration's
+//! enumerator that hides a variable, function or enumerator. Everything but `-Wshadow-field` is
 //! gated on `-Wshadow` itself, as clang's `Diags.isIgnored` checks are.
 
 use kiln_ast::DeclId;
-use kiln_ast::decl::{Access, DeclKind};
+use kiln_ast::decl::{Access, DeclKind, NamespaceData};
 use kiln_ast::ids::LambdaId;
 use kiln_ast::lambda::CaptureDefault;
-use kiln_diag::DiagId;
+use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
@@ -29,22 +30,7 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        let r = self.lookup_name(name, LookupKind::Ordinary);
-        let ([old], [found]) = (r.decls.as_slice(), r.found.as_slice()) else { return };
-        // A using-declaration's shadow is not a variable (clang's
-        // `getFoundDecl`).
-        if r.ambiguity.is_some() || old != found {
-            return;
-        }
-        let old = *old;
-        // clang's redeclaration lookup does not look into base classes:
-        // a member is found only in a class enclosing the declaration.
-        if let Some(c) = self.ast.decls.get(old).ctx()
-            && self.kind_of(c) == DeclKind::CXXRecord
-            && !self.shadow_encloses(c, self.ctx)
-        {
-            return;
-        }
+        let Some((old, found)) = self.shadow_lookup(name) else { return };
         let typedef = |k| matches!(k, DeclKind::Typedef | DeclKind::TypeAlias);
         let ok = self.kind_of(old);
         if typedef(self.kind_of(d)) {
@@ -63,11 +49,153 @@ impl Sema<'_, '_> {
             .iter()
             .rev()
             .find(|s| s.is_local())
-            .is_some_and(|s| s.locals.iter().any(|&(_, x, _)| x == old))
+            .is_some_and(|s| s.locals.iter().any(|&(_, x, _)| x == old || x == found))
         {
             return;
         }
         self.check_shadow_of(d, old);
+    }
+
+    /// clang `ActOnEnumConstant`'s `CheckShadow`: an enumerator of the
+    /// unscoped enumeration `en`, named `name` at `loc` and not yet
+    /// declared, that hides a variable, function, field or enumerator.
+    /// clang diagnoses even one it then rejects as a redefinition.
+    pub(crate) fn check_enumerator_shadow(&mut self, en: DeclId, name: Symbol, loc: Loc) {
+        if !self.diags.is_enabled(DiagId::sema_decl_shadow)
+            || self.inst.stack.in_instantiation_record()
+        {
+            return;
+        }
+        let Some((old, _)) = self.shadow_lookup(name) else { return };
+        // A `ValueDecl` other than a template parameter.
+        if !matches!(
+            self.kind_of(old),
+            DeclKind::Var
+                | DeclKind::ParmVar
+                | DeclKind::Field
+                | DeclKind::IndirectField
+                | DeclKind::EnumConstant
+                | DeclKind::Binding
+                | DeclKind::Function
+                | DeclKind::CXXMethod
+        ) {
+            return;
+        }
+        let (Some(old_dc), Some(re_dc)) = (self.shadow_redecl_ctx(old), self.shadow_redecl_ctx(en))
+        else {
+            return;
+        };
+        // clang 22: not a field from a static or explicit object member
+        // function (through lambdas).
+        if self.clang_compat >= 22 && self.kind_of(old) == DeclKind::Field {
+            let mut f = re_dc;
+            while let Some(l) = self.lambda_of_call_op(f) {
+                let Some(p) = self.lambda_parent_ctx(l) else { break };
+                f = p;
+            }
+            if self.is_static_method(f) || self.has_explicit_object(f) {
+                return;
+            }
+        }
+        // clang 21: a member enumerator hides only a member of its own
+        // class.
+        if self.clang_compat >= 21
+            && self.kind_of(re_dc) == DeclKind::CXXRecord
+            && self.ast.first(old_dc) != self.ast.first(re_dc)
+        {
+            return;
+        }
+        if self.is_placeholder_decl(old) {
+            return;
+        }
+        let msg = self.shadow_diag(DiagId::sema_decl_shadow, loc, old, old_dc);
+        let prev = self.diag(DiagId::note_previous_declaration, self.ast.decls.get(old).loc());
+        self.emit(msg.with_note(prev));
+    }
+
+    /// The single entity unqualified lookup finds for `name` and the
+    /// declaration through which clang's redeclaration lookup finds it (a
+    /// using-declaration's shadow, for one; clang's `getFoundDecl` is the
+    /// entity). The same entity found twice (through a using-declaration
+    /// and a using-directive) is one result.
+    fn shadow_lookup(&mut self, name: Symbol) -> Option<(DeclId, DeclId)> {
+        let r = self.lookup_name(name, LookupKind::Ordinary);
+        let old = *r.decls.first()?;
+        if r.ambiguity.is_some()
+            || r.decls.iter().any(|&d| self.ast.first(d) != self.ast.first(old))
+        {
+            return None;
+        }
+        let found = r.found.iter().copied().find(|&f| self.redecl_lookup_finds(f))?;
+        Some((old, found))
+    }
+
+    /// Whether `found`, a result of unqualified lookup at the current
+    /// point, is also a result of clang's redeclaration lookup
+    /// (`ForVisibleRedeclaration`), which `CheckShadow` uses: it does not
+    /// look into base classes, and of the namespaces it searches only those
+    /// up to the innermost enclosing namespace scope (an out-of-line
+    /// definition's semantic ones too), not the namespaces outside it.
+    fn redecl_lookup_finds(&self, found: DeclId) -> bool {
+        let Some(mut c) = self.shadow_redecl_ctx(found) else { return false };
+        match self.kind_of(c) {
+            DeclKind::CXXRecord => return self.shadow_encloses(c, self.ctx),
+            DeclKind::Namespace | DeclKind::TranslationUnit => {}
+            _ => return true,
+        }
+        // The innermost lexically enclosing namespace: an out-of-line
+        // definition's scopes include its semantic namespaces, which
+        // redeclaration lookup searches only as far as the lexical one.
+        let mut lex = None;
+        let mut y = Some(self.ctx);
+        for _ in 0..1024 {
+            let Some(x) = y else { break };
+            if matches!(self.kind_of(x), DeclKind::Namespace | DeclKind::TranslationUnit) {
+                lex = Some(x);
+                break;
+            }
+            y = self.ast.decls.lexical_ctx(x);
+        }
+        let Some(lex) = lex else { return true };
+        let lex = self.ast.first(lex);
+        let searched = |c: DeclId| {
+            let c = self.ast.first(c);
+            let mut x = Some(self.ctx);
+            while let Some(y) = x {
+                let y1 = self.ast.first(y);
+                if y1 == c {
+                    return true;
+                }
+                if y1 == lex {
+                    return false;
+                }
+                x = self.ast.decls.get(y).ctx();
+            }
+            false
+        };
+        // A member of an inline namespace is found in the enclosing one,
+        // and of an unnamed namespace through its implicit
+        // using-directive ([namespace.unnamed]).
+        for _ in 0..256 {
+            if searched(c) {
+                return true;
+            }
+            if !(self.is_inline_ns(c) || self.is_anon_ns(c)) {
+                return false;
+            }
+            let Some(p) = self.shadow_redecl_ctx(c) else { return false };
+            c = p;
+        }
+        false
+    }
+
+    fn is_inline_ns(&self, ns: DeclId) -> bool {
+        self.ast.decls.namespace(self.ast.first(ns)).is_some_and(NamespaceData::is_inline)
+    }
+
+    fn is_anon_ns(&self, ns: DeclId) -> bool {
+        self.kind_of(ns) == DeclKind::Namespace
+            && self.ast.decls.get(ns).name().as_ident().is_none()
     }
 
     fn check_shadow_of(&mut self, d: DeclId, old: DeclId) {
@@ -158,6 +286,22 @@ impl Sema<'_, '_> {
         old_dc: DeclId,
         capture: Option<(Loc, u32)>,
     ) {
+        let loc = self.ast.decls.get(d).loc();
+        let mut msg = self.shadow_diag(id, loc, old, old_dc);
+        if let Some((cl, explicit)) = capture {
+            let note = self
+                .diag(DiagId::note_var_explicitly_captured_here, cl)
+                .arg(self.decl_arg(d))
+                .arg(explicit);
+            msg = msg.with_note(note);
+        }
+        let prev = self.diag(DiagId::note_previous_declaration, self.ast.decls.get(old).loc());
+        self.emit(msg.with_note(prev));
+    }
+
+    /// The `-Wshadow` warning `id` at `loc` for a declaration hiding `old`
+    /// (clang `computeShadowedDeclKind`), without its notes.
+    fn shadow_diag(&self, id: DiagId, loc: Loc, old: DeclId, old_dc: DeclId) -> Diag {
         let kind: u32 = match self.kind_of(old) {
             DeclKind::TypeAlias => 5,
             DeclKind::Typedef => 4,
@@ -178,17 +322,7 @@ impl Sema<'_, '_> {
             }
             _ => 0,
         };
-        let loc = self.ast.decls.get(d).loc();
-        let mut msg = self.diag(id, loc).arg(kind).arg(self.shadow_ctx_desc(old_dc));
-        if let Some((cl, explicit)) = capture {
-            let note = self
-                .diag(DiagId::note_var_explicitly_captured_here, cl)
-                .arg(self.decl_arg(d))
-                .arg(explicit);
-            msg = msg.with_note(note);
-        }
-        let prev = self.diag(DiagId::note_previous_declaration, self.ast.decls.get(old).loc());
-        self.emit(msg.with_note(prev));
+        self.diag(id, loc).arg(kind).arg(self.shadow_ctx_desc(old_dc))
     }
 
     /// clang `DiagnoseShadowingLambdaDecls`: the declarations of lambda
@@ -358,11 +492,13 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// clang's `getRedeclContext` of `d`'s context: linkage specifications
-    /// and export declarations are transparent.
+    /// clang's `getRedeclContext` of `d`'s context: linkage specifications,
+    /// export declarations and unscoped enumerations are transparent.
     fn shadow_redecl_ctx(&self, d: DeclId) -> Option<DeclId> {
         let mut c = self.ast.decls.get(d).ctx()?;
-        while matches!(self.kind_of(c), DeclKind::LinkageSpec | DeclKind::Export) {
+        while matches!(self.kind_of(c), DeclKind::LinkageSpec | DeclKind::Export)
+            || self.kind_of(c) == DeclKind::Enum && !self.is_scoped_enum(c)
+        {
             c = self.ast.decls.get(c).ctx()?;
         }
         Some(c)
@@ -421,6 +557,19 @@ impl Sema<'_, '_> {
     /// A declaration context as clang prints one in a diagnostic.
     fn shadow_ctx_desc(&self, dc: DeclId) -> String {
         match self.kind_of(dc) {
+            // clang names an unnamed namespace itself `(anonymous)`.
+            DeclKind::Namespace if self.is_anon_ns(dc) => {
+                match self
+                    .ast
+                    .decls
+                    .get(dc)
+                    .ctx()
+                    .filter(|&p| self.kind_of(p) == DeclKind::Namespace)
+                {
+                    Some(p) => format!("namespace '{}::(anonymous)'", self.qualified_decl_name(p)),
+                    None => "namespace '(anonymous)'".to_owned(),
+                }
+            }
             DeclKind::TranslationUnit | DeclKind::Namespace | DeclKind::CXXRecord => {
                 self.qualifier_desc(dc)
             }
