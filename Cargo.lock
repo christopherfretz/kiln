@@ -84,6 +84,7 @@ dependencies = [
 name = "kiln_llvm"
 version = "0.0.1"
 dependencies = [
+ "hashbrown",
  "kiln_source",
 ]
 

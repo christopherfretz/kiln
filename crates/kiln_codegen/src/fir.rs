@@ -1463,8 +1463,8 @@ impl Fir {
                             "DILocation",
                             false,
                             vec![
-                                ("line".into(), kiln_llvm::MdField::UInt(0)),
-                                ("scope".into(), kiln_llvm::MdField::Node(Some(d.sp))),
+                                ("line", kiln_llvm::MdField::UInt(0)),
+                                ("scope", kiln_llvm::MdField::Node(Some(d.sp))),
                             ],
                         );
                         b.func().add_inst_metadata(id, d.kind, l);

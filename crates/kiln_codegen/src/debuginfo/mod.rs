@@ -112,6 +112,8 @@ mod md5;
 mod stmt;
 mod types;
 
+use std::borrow::Cow;
+
 use kiln_ast::{DeclId, QualType};
 use kiln_llvm::{MdField, MdKindId, MetadataId};
 use kiln_source::fx::{FxHashMap, FxHashSet};
@@ -120,49 +122,65 @@ use kiln_source::{Loc, SourceManager};
 use crate::module::Cg;
 
 /// A specialized node's fields, in print order (`opt` reorders them).
-#[derive(Default)]
-pub(crate) struct Fields(pub Vec<(Box<str>, MdField)>);
+/// Keys are static and `Raw` values usually are (WP-817: no per-node
+/// string allocation for the class name, the keys or the enumerators).
+pub(crate) struct Fields(pub Vec<(&'static str, MdField)>);
+
+impl Default for Fields {
+    fn default() -> Self {
+        // Most DI nodes have under a dozen fields: one allocation.
+        Fields(Vec::with_capacity(12))
+    }
+}
 
 impl Fields {
-    pub fn s(mut self, k: &str, v: &str) -> Self {
-        self.0.push((k.into(), MdField::Str(v.into())));
+    pub fn s(mut self, k: &'static str, v: &str) -> Self {
+        self.0.push((k, MdField::Str(v.into())));
         self
     }
-    pub fn u(mut self, k: &str, v: u64) -> Self {
-        self.0.push((k.into(), MdField::UInt(v)));
+    pub fn u(mut self, k: &'static str, v: u64) -> Self {
+        self.0.push((k, MdField::UInt(v)));
         self
     }
-    pub fn i(mut self, k: &str, v: i64) -> Self {
-        self.0.push((k.into(), MdField::Int(v)));
+    pub fn i(mut self, k: &'static str, v: i64) -> Self {
+        self.0.push((k, MdField::Int(v)));
         self
     }
     /// A node field, left out when null.
-    pub fn n(mut self, k: &str, v: Option<MetadataId>) -> Self {
+    pub fn n(mut self, k: &'static str, v: Option<MetadataId>) -> Self {
         if v.is_some() {
-            self.0.push((k.into(), MdField::Node(v)));
+            self.0.push((k, MdField::Node(v)));
         }
         self
     }
     /// A node field printed even when null (`baseType: null`).
-    pub fn nn(mut self, k: &str, v: Option<MetadataId>) -> Self {
-        self.0.push((k.into(), MdField::Node(v)));
+    pub fn nn(mut self, k: &'static str, v: Option<MetadataId>) -> Self {
+        self.0.push((k, MdField::Node(v)));
         self
     }
-    pub fn raw(mut self, k: &str, v: &str) -> Self {
-        self.0.push((k.into(), MdField::Raw(v.into())));
+    pub fn raw(mut self, k: &'static str, v: impl Into<Cow<'static, str>>) -> Self {
+        self.0.push((k, MdField::Raw(v.into())));
         self
     }
-    pub fn b(mut self, k: &str, v: bool) -> Self {
-        self.0.push((k.into(), MdField::Bool(v)));
+    pub fn b(mut self, k: &'static str, v: bool) -> Self {
+        self.0.push((k, MdField::Bool(v)));
         self
     }
     /// `flags:` when any are set (`DIFlagA | DIFlagB`).
-    pub fn flags(self, k: &str, f: &[&str]) -> Self {
-        if f.is_empty() { self } else { self.raw(k, &f.join(" | ")) }
+    pub fn flags(self, k: &'static str, f: &[&'static str]) -> Self {
+        match f {
+            [] => self,
+            [one] => self.raw(k, *one),
+            _ => self.raw(k, f.join(" | ")),
+        }
     }
     /// `spFlags:`, always printed (none reads as `isDefinition: true`).
-    pub fn sp_flags(self, f: &[&str]) -> Self {
-        if f.is_empty() { self.raw("spFlags", "0") } else { self.raw("spFlags", &f.join(" | ")) }
+    pub fn sp_flags(self, f: &[&'static str]) -> Self {
+        match f {
+            [] => self.raw("spFlags", "0"),
+            [one] => self.raw("spFlags", *one),
+            _ => self.raw("spFlags", f.join(" | ")),
+        }
     }
 }
 /// The location an `ApplyDebugLocation` replaced (`None` when the builder
