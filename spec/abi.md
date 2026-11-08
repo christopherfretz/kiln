@@ -1549,7 +1549,7 @@ numbering in pack expansions, abi_tag ordering for out-of-line members,
 and the inheritance of `always_inline`/`noinline` across redeclarations.
 
 The sweep went from 988 mismatches (libc++ 840, libstdc++ 148) to
-@COUNT@. What remains is clang-only: calls clang 19 emits that kiln does
+17 (libc++ 16, libstdc++ 1). What remains is clang-only: calls clang 19 emits that kiln does
 not, none of them a different name for the same entity.
 
 - libc++ `__introsort<..., false>` (`sort` with `greater<>` and a
@@ -1563,7 +1563,6 @@ not, none of them a different name for the same entity.
   for a never-valueless variant to `false` (a constant expression under
   P2280, which clang 19 does not implement), so it does not call
   `__variant::__as`.
-@EXTRA@
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
