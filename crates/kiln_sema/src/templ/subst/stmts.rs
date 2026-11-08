@@ -134,7 +134,8 @@ impl Substituter<'_, '_, '_> {
                 break;
             }
         }
-        self.sema.act_on_compound(&out, n.loc(), rb)
+        let fp = self.sema.ast.stmts.compound_fp(s);
+        self.sema.ast.builder().compound_fp(&out, n.loc(), rb, fp)
     }
 
     fn opt_stmt(&mut self, s: Option<StmtId>) -> Option<StmtId> {

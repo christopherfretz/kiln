@@ -1526,6 +1526,23 @@ Where the code differs from (or details) the design above:
     its `UnresolvedLookupExpr`); `overload_set_of` sees through it, so
     `o(&t<int>)` and `p = t<long>` read as overload sets in those two
     diagnostics, as in clang.
+  - [over.over]/1, /3 (WP-802): when that specialization does not
+    convert in an initialization, direct-initialization, reference
+    binding or `return` to a pointer or reference to function or a
+    pointer to member function, the set is re-resolved against the
+    target (`retarget_template_id`): every template of the set gets the
+    explicit arguments and deduces the rest from the target, so
+    `void (*p)(void*, int) = &wrap<1>` selects
+    `template<int N, class T> void wrap(void*, T)` over the
+    `template<int N> void wrap(void*)` the explicit arguments alone
+    complete. Only when the target selects nothing is it
+    `template_id_no_match`'s "address of overloaded function does not
+    match required type".
+    The specialization resolved early is then not used: when that
+    resolution alone queued its definition, the definition is withdrawn
+    from the queue ([temp.inst]/5), so an ill-formed body of the
+    unselected `wrap<1>(void*)` is never instantiated (WP-802,
+    `tests/conformance/over.over/template-id-retarget-unselected-not-instantiated-run.cpp`).
 
 ### 10.8 Landed (WP-106): the rest of the template candidates
 - Conversion-function templates: `build_conversion_set` /

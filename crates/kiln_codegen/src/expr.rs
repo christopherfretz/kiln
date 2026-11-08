@@ -1521,6 +1521,9 @@ impl Cg<'_> {
     /// clang `tryEmitFMulAdd` (`-ffp-contract=on`): fuse an unused `fmul`
     /// operand of an `fadd`/`fsub` into `llvm.fmuladd`.
     fn try_fmuladd(&mut self, l: V, r: V, sub: bool) -> Option<V> {
+        if !self.contract_on() {
+            return None;
+        }
         let nl = self.peek_fneg(l);
         let nr = self.peek_fneg(r);
         let lm = nl.unwrap_or(l);
@@ -3134,6 +3137,13 @@ impl Cg<'_> {
     /// result statement (the last non-null one, through labels) is
     /// evaluated as the value.
     pub(crate) fn emit_stmt_expr(&mut self, e: ExprId) -> R<Option<V>> {
+        let fp = self.enter_fp(self.ast.exprs.stmt_expr_body(e));
+        let r = self.emit_stmt_expr_in(e);
+        self.leave_fp(fp);
+        r
+    }
+
+    fn emit_stmt_expr_in(&mut self, e: ExprId) -> R<Option<V>> {
         let ast = self.ast;
         let body = ast.exprs.stmt_expr_body(e);
         if ast.types.is_void(ast.exprs.get(e).ty()) {
@@ -3352,7 +3362,7 @@ impl Cg<'_> {
         // `__builtin_` twin (`ceil(x)` -> `llvm.ceil`).
         if let Some(d) = direct
             && let Some(id) =
-                ast.decls.builtin_id(d).or_else(|| crate::builtins::lib_intrinsic(ast, d))
+                ast.decls.builtin_id(d).or_else(|| crate::builtins::lib_intrinsic(self, d))
         {
             match self.emit_builtin(id, e)? {
                 crate::builtins::BuiltinCall::Emitted(v) => return Ok(v),
@@ -3428,7 +3438,15 @@ impl Cg<'_> {
             sig = self.with_object_sizes(sig, fty, &ps, extern_c);
         }
         let (cv, ca) = if ps.is_empty() { (&vals, &args) } else { (&cvals, &cargs) };
+        let mark = self.f.fir.inst_count();
         let r = self.call_vals_ret(&sig, callee, fid, None, cv, ca, dest, &extra, &ret_extra)?;
+        // WP-806: a library builtin's call takes the FP scope's fast-math
+        // flags (clang `EmitBuiltinExpr`'s `CGFPOptionsRAII`).
+        if let (Some(d), Some(f)) = (direct, fid)
+            && (ast.decls.builtin_id(d).is_some() || ast.decls.lib_builtin(d).is_some())
+        {
+            self.f.fir.mark_scope_calls(mark, f);
+        }
         if let (Some(d), Some(p)) = (direct, r) {
             self.alloc_align_assume(d, &vals, p);
         }

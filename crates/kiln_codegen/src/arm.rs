@@ -60,7 +60,7 @@ impl Cg<'_> {
         let name = row.info.name;
         let base = name.strip_prefix(arm::PREFIX).unwrap_or(name);
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
-        let n = if hint(base).is_some() {
+        let n = if hint(base).is_some() || base == "clrex" {
             0
         } else if crc32(base).is_some() {
             2
@@ -91,6 +91,17 @@ impl Cg<'_> {
             return Ok(BuiltinCall::Emitted(Some(self.intrinsic_call(f, vec![c, v]))));
         }
         let v = match base {
+            "clrex" => {
+                let f = intrinsics::target_intrinsic(
+                    &mut self.m,
+                    "llvm.aarch64.clrex",
+                    LTy::VOID,
+                    &[],
+                    TargetMem::Unknown,
+                );
+                self.intrinsic_call(f, vec![]);
+                return Ok(BuiltinCall::Emitted(None));
+            }
             "dmb" | "dsb" | "isb" => {
                 let x = self.emit_scalar(args[0])?;
                 let intr = format!("llvm.aarch64.{base}");

@@ -3898,6 +3898,19 @@ impl<'a> AstBuilder<'a> {
         self.stmt(StmtKind::CompoundStmt, 0, lbrace, list.raw(), rbrace.to_raw())
     }
 
+    /// A compound statement under FP pragma override `fp` (WP-806).
+    pub fn compound_fp(
+        &mut self,
+        stmts: &[StmtId],
+        lbrace: Loc,
+        rbrace: Loc,
+        fp: crate::fp::FpOverride,
+    ) -> StmtId {
+        let list = self.ast.lists.push(stmts);
+        let aux = self.ast.stmts.intern_fp(fp);
+        self.stmt(StmtKind::CompoundStmt, aux, lbrace, list.raw(), rbrace.to_raw())
+    }
+
     /// A declaration statement ([stmt.dcl]).
     pub fn decl_stmt(&mut self, decls: &[DeclId], loc: Loc) -> StmtId {
         let list = self.ast.lists.push(decls);

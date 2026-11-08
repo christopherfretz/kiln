@@ -180,6 +180,7 @@ impl SyntaxJob<'_> {
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == crate::toolchain::StdLib::LibStdCxx,
+            math_errno: a.fp_model().opts.math_errno,
             sve: feats.sve,
             sve_vector_bits: feats.sve_vector_bits,
             cfg_dump: a.dump_cfg,

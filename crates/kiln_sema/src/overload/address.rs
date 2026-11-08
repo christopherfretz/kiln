@@ -417,7 +417,12 @@ impl Sema<'_, '_> {
         } else {
             self.take_suppressed_diags(d, loc)
         };
+        let fresh = !self.inst.queued.contains(&d)
+            && !self.ast.decls.get(self.ast.first(d)).has(DeclFlags::USED);
         let r = self.finish_overload_ref(d, f, naming, loc, nns, e, false);
+        if fresh && self.inst.queued.contains(&d) {
+            let _ = self.ovl.template_id_queued.insert(r, d);
+        }
         if !held.is_empty() {
             if self.is_err_expr(r) {
                 self.emit_held_warnings(held);
@@ -444,13 +449,19 @@ impl Sema<'_, '_> {
         if let Some((u, _)) = self.overload_operand(e) {
             return Some(u);
         }
-        let mut x = self.ignore_parens(e);
+        self.ovl.template_id_refs.get(&self.addr_operand(e)).copied()
+    }
+
+    /// `e` without parentheses and one `&` (the reference a function
+    /// template-id resolved early is, under them).
+    fn addr_operand(&self, e: ExprId) -> ExprId {
+        let x = self.ignore_parens(e);
         if self.ast.exprs.get(x).kind() == ExprKind::UnaryOperator
             && self.ast.exprs.unary_op(x) == UnaryOp::AddrOf
         {
-            x = self.ignore_parens(self.ast.exprs.operand(x));
+            return self.ignore_parens(self.ast.exprs.operand(x));
         }
-        self.ovl.template_id_refs.get(&x).copied()
+        x
     }
 
     /// The name of the overload set an argument `e` is
@@ -658,6 +669,41 @@ impl Sema<'_, '_> {
         let cands = self.ule_candidates(ule);
         let notes = self.addr_no_match_notes(ule, &cands, fnty, true, loc);
         Some((loc, name, fnty, notes))
+    }
+
+    /// [over.over]/1: `e`, a function template-id resolved early to the
+    /// one specialization its explicit arguments alone name
+    /// ([`Sema::resolve_single_template_id`]), that does not convert to
+    /// `to` (a pointer or reference to function or a pointer to member
+    /// function): clang keeps the template-id an overload set, so the
+    /// target selects among every template of the set, deducing the
+    /// arguments the template-id leaves out from the target (`&f<1>` to
+    /// `void (*)(void*, int)` with `f<int, class T>(void*, T)` beside
+    /// `f<int>(void*)`). The resolved expression, or `None` (silently)
+    /// when the target selects no single function.
+    pub(crate) fn retarget_template_id(&mut self, e: ExprId, to: QualType) -> Option<ExprId> {
+        let ule = self.overload_set_of(e)?;
+        let (fnty, _) = self.address_target(to);
+        if !self.ast.types.is_function(fnty)
+            || self.ast.templates.expr_targs.get(ule).is_none()
+            || self.ast.exprs.get(ule).ty() != QualType::OVERLOAD
+        {
+            return None;
+        }
+        let at = self.begin_loc(ule);
+        let r = self.resolve_address_of_overloaded(ule, to, false, AddrCtx::Convert, at)?;
+        self.drop_template_id_warnings(e);
+        // The specialization resolved early is not used: its definition
+        // is not instantiated ([temp.inst]/5), unless something else
+        // queued it (`wrap<&C::f>(void*)` beside `wrap<&C::f, T0>(void*,
+        // T0)`, its body ill-formed for a one-parameter `f`).
+        if let Some(d) = self.ovl.template_id_queued.remove(&self.addr_operand(e))
+            && self.referenced_decl_of_callee(r) != Some(d)
+        {
+            let _ = self.inst.queued.remove(&d);
+            self.inst.pending.retain(|p| p.decl != d);
+        }
+        Some(r)
     }
 
     /// [`Sema::resolve_address_of_overloaded`] of the overloaded member

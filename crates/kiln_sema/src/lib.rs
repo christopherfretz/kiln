@@ -19,6 +19,7 @@ mod align_redecl;
 mod annot;
 mod asm;
 mod attr_cond;
+pub mod attr_triage;
 mod bit_int;
 mod bitfield_constant;
 mod builtins;
@@ -301,6 +302,10 @@ pub struct Sema<'a, 'sm> {
     /// constant evaluation as its `__builtin_` twin, as GCC folds
     /// `::ceil` (spec/sema.md §5.4).
     pub gnu_lib_builtins: bool,
+    /// `-f[no-]math-errno` (clang `LangOptions::MathErrno`, the Linux
+    /// default on): without it the errno-setting math library functions
+    /// are implicitly `const` (spec/sema.md §5.4, WP-806).
+    pub math_errno: bool,
     /// `-fkiln-dump-cfg`: build the graph of every analysed body and
     /// append its dump to [`Sema::cfg_out`] (spec/sema.md §7.5.1).
     pub cfg_dump: bool,
@@ -347,6 +352,10 @@ pub struct Sema<'a, 'sm> {
     /// `(label, value)` entries. Applied to each class definition as it
     /// begins (`record_pack`).
     pub(crate) pack: (u16, Vec<(Option<String>, u16)>),
+    /// The FP pragma state (clang's `CurFPFeatureOverrides` and
+    /// `FpPragmaStack`): the override in effect, relative to the command
+    /// line, and the `float_control(push)` entries.
+    pub(crate) fp_pragma: (kiln_ast::fp::FpOverride, Vec<kiln_ast::fp::FpOverride>),
     pub(crate) scopes: Vec<scope::Scope>,
     /// The current semantic declaration context.
     pub(crate) ctx: DeclId,
@@ -1123,6 +1132,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             sve_vector_bits: None,
             nns_start: None,
             gnu_lib_builtins: false,
+            math_errno: true,
             cfg_dump: false,
             cfg_stats: false,
             full_deduction: false,
@@ -1135,6 +1145,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_body: cfg::BodyCfg::default(),
             inferred_noreturn: kiln_source::fx::FxHashSet::default(),
             pack: (0, Vec::new()),
+            fp_pragma: (kiln_ast::fp::FpOverride::NONE, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,
                 ..scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))
