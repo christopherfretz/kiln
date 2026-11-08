@@ -9,6 +9,7 @@ use std::process::ExitCode;
 mod bench;
 mod clang_ast;
 mod diag_split;
+mod dist;
 mod entity_lint;
 mod features;
 mod gen_pp;
@@ -51,6 +52,10 @@ commands:
               kiln's __cpp_* values match clang 22's and the summary matches the
               sections (--summary prints it); an M4-gate check, not part of
               ci (`cargo xtask features --help`; spec/harness.md \"Feature table\")
+  dist        build the release tarballs kiln-<ver>-<triple>{,-symbols}.tar.xz and
+              SHA256SUMS (dist profile, split debug info, deterministic); --check
+              smoke-tests the extracted install tree; not part of ci (`cargo xtask
+              dist --help`; spec/harness.md \"Dist\", spec/driver.md \"Installation layout\")
   jobserver   status|refill: count, or top up, the shared jobserver pool's idle tokens
               (`cargo xtask jobserver --help`; spec/harness.md \"Jobserver\")
   ci          the merge gate: diag-split --check, the spec/landed lint, fmt --check, clippy
@@ -83,6 +88,7 @@ fn main() -> ExitCode {
         Some("libstdcxx") => libstdcxx::main(args),
         Some("features") => features::main(args),
         Some("stress") => stress(args),
+        Some("dist") => dist::main(args),
         Some("jobserver") => jobs::main(args),
         Some("ci") => ci(args),
         _ => {

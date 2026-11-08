@@ -1,0 +1,91 @@
+name: release
+# Release archives (WP-927; spec/harness.md "Dist", spec/driver.md
+# "Installation layout"). Runs only when a `v*` tag is pushed: never on a
+# branch push, a pull request or the merge queue. Each architecture builds
+# `cargo xtask dist --check` in the CI reference container (the image and
+# setup of ci-lane.yml), which writes kiln-<ver>-<triple>.tar.xz, the
+# -symbols archive and SHA256SUMS and smoke-tests the extracted tree; the
+# last job attaches the four archives and the merged SHA256SUMS to a DRAFT
+# GitHub release for the tag, which a maintainer reviews and publishes.
+# The tag must name the workspace version (`v` + Cargo.toml's
+# [workspace.package] version); the build job checks it.
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  KILN_REQUIRE_LLVM: "1"
+  KILN_GCC: /usr/local/bin/g++
+  KILN_REQUIRE_GCC: "1"
+defaults:
+  run: { shell: bash }
+jobs:
+  dist:
+    name: dist ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    # The reference environment of ci-lane.yml: Debian 13 (glibc 2.41) with
+    # GCC 16.1 in /usr/local. The binaries link against this glibc.
+    container: gcc:16.1.0-trixie
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: aarch64, runner: ubuntu-24.04-arm, cache-key: ci-arm }
+          - { arch: x86_64, runner: ubuntu-24.04, cache-key: ci-x86_64 }
+    steps:
+      - uses: actions/checkout@v4
+      # The container runs as root over a workspace the runner owns: let git
+      # read it (the build script records the commit, xtask dist takes
+      # SOURCE_DATE_EPOCH from it).
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: ./.github/actions/kiln-ci
+        with: { cache-key: "${{ matrix.cache-key }}" }
+      - name: the tag names the workspace version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          echo "tag $GITHUB_REF_NAME, workspace version $version"
+          test "$GITHUB_REF_NAME" = "v$version"
+      - name: cargo xtask dist --check
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          cargo xtask dist --check --out "$RUNNER_TEMP/dist"
+          ls -l "$RUNNER_TEMP/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/dist/*.tar.xz
+            ${{ runner.temp }}/dist/SHA256SUMS
+          if-no-files-found: error
+  release:
+    name: draft release
+    needs: [dist]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, pattern: dist-*, merge-multiple: false }
+      - name: merge SHA256SUMS
+        run: |
+          mkdir out
+          for d in dist/dist-*; do
+            cp "$d"/*.tar.xz out/
+            cat "$d/SHA256SUMS"
+          done | LC_ALL=C sort -k2 > out/SHA256SUMS
+          cat out/SHA256SUMS
+          (cd out && sha256sum -c SHA256SUMS)
+          test "$(ls out/*.tar.xz | wc -l)" -eq 4
+      - name: create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "kiln ${GITHUB_REF_NAME#v}" \
+            --notes "Release archives for kiln ${GITHUB_REF_NAME#v}: unpack, put bin/ on PATH (README.md \"Installing\"). The -symbols archives carry the full debug information. What a version promises: docs/STABILITY.md." \
+            out/*.tar.xz out/SHA256SUMS
