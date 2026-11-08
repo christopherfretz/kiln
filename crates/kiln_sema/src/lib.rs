@@ -69,6 +69,7 @@ mod init_dtor;
 mod init_priority;
 mod int_in_bool;
 mod int_overflow;
+mod int_range;
 mod internal_linkage;
 mod jump_scope;
 mod kind_conflict;
@@ -105,6 +106,7 @@ pub mod scope;
 mod section;
 mod selectany;
 mod self_ref;
+mod shadow;
 mod side_effects;
 mod splice;
 mod splice_local;
@@ -275,6 +277,12 @@ pub struct Sema<'a, 'sm> {
     /// Depth of expressions being rebuilt by substitution (their
     /// consteval-only leaves follow the pattern's, not the builders').
     pub(crate) subst_expr_depth: u32,
+    /// The instantiation-stack length at which the last call that clang
+    /// recovers with a `RecoveryExpr` failed (a call resolved by overload
+    /// resolution, or a member function call whose arguments do not
+    /// convert; spec/sema.md §1.2), with the recovery's type: a variable
+    /// initialized by it stays valid ([`Sema::note_call_recovery`]).
+    pub(crate) call_recovery: Option<(usize, Option<QualType>)>,
     /// A template-id is being formed by substituting into a dependent
     /// one: a class template specialization it creates records all its
     /// arguments as written, as GCC's (spec/reflection.md §3.9).
@@ -554,6 +562,11 @@ pub struct Sema<'a, 'sm> {
     /// The structured binding packs `...xs` declared so far (P1061,
     /// spec/sema.md §4.9).
     pub(crate) binding_packs: std::collections::HashSet<DeclId>,
+    /// Constructor parameters that shadow a field, with the field
+    /// (clang's `Sema::ShadowingDecls`): `-Wshadow-field-in-constructor`
+    /// at the end of the definition unless a modification diagnosed one
+    /// first (spec/diag.md §5).
+    pub(crate) shadow_ctor: Vec<(DeclId, DeclId)>,
     /// A binding pack decomposed once its element count is known: the
     /// bindings it expanded into, which replace it in its decomposition's
     /// binding list (instantiation maps the pattern pack to them).
@@ -884,7 +897,7 @@ pub struct Sema<'a, 'sm> {
     pub(crate) classify_memo: std::cell::RefCell<decl::ClassifyMemo>,
     /// [`Sema::walk_stack`] for the implicit-conversion walk, whose work
     /// items carry the context location.
-    pub(crate) conv_walk_stack: Vec<(ExprId, Loc)>,
+    pub(crate) conv_walk_stack: Vec<(ExprId, Loc, bool)>,
     /// The reused buffers of [`Sema::exprs_equivalent`] (WP-645).
     pub(crate) equiv_scratch: std::cell::RefCell<kiln_ast::types::EquivScratch>,
     /// The reused argument and option buffers of call-candidate
@@ -1208,6 +1221,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             consteval_only_records: kiln_source::fx::FxHashMap::default(),
             consteval_only_pattern: kiln_source::fx::FxHashSet::default(),
             subst_expr_depth: 0,
+            call_recovery: None,
             subst_template_id: false,
             coro_aligned_allocation: false,
             lax_vector_conversions: LaxVectorConversions::All,
@@ -1285,6 +1299,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             requires_param_scopes: 0,
             decomp_written: std::collections::HashMap::new(),
             binding_packs: std::collections::HashSet::new(),
+            shadow_ctor: Vec::new(),
             binding_pack_elems: std::collections::HashMap::new(),
             refs_minus_assign: std::collections::HashMap::new(),
             attr_macros: (0, Vec::new()),
@@ -2128,8 +2143,11 @@ fn is_sfinae_failure(id: DiagId) -> bool {
         DiagId::sema_cce_narrowing_value
             | DiagId::sema_designated_init_reordered
             | DiagId::sema_init_list_constant_narrowing
+            | DiagId::sema_init_list_constant_narrowing_const_reference
             | DiagId::sema_init_list_type_narrowing
+            | DiagId::sema_init_list_type_narrowing_const_reference
             | DiagId::sema_init_list_variable_narrowing
+            | DiagId::sema_init_list_variable_narrowing_const_reference
             | DiagId::sema_initializer_overrides
             | DiagId::sema_initializer_union_overrides
     )

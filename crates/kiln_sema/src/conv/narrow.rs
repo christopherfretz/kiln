@@ -325,20 +325,45 @@ fn clamp(neg: bool, mag: u128, w: u32, signed: bool) -> (bool, u128) {
 pub fn narrowing_diag(s: &Sema<'_, '_>, n: &Narrowing, init: ExprId, to: QualType) -> Option<Diag> {
     let loc = s.begin_loc(init);
     let range = s.expr_range(init);
-    let to_arg = s.ty_arg(super::strip_cv(s, to));
+    // A reference entity (an aggregate's reference member bound to a
+    // temporary): clang's `-Wc++11-narrowing-const-reference` ids, naming
+    // the referenced type.
+    let by_ref = s.ast.types.is_reference(to);
+    let non_ref = if by_ref { s.ast.types.pointee(to).unwrap_or(to) } else { to };
+    let to_arg = s.ty_arg(super::strip_cv(s, non_ref));
+    let pick = |plain: DiagId, cref: DiagId| if by_ref { cref } else { plain };
     let d = match n {
         Narrowing::NotNarrowing | Narrowing::Dependent => return None,
         Narrowing::Type => s
-            .diag(DiagId::sema_init_list_type_narrowing, loc)
+            .diag(
+                pick(
+                    DiagId::sema_init_list_type_narrowing,
+                    DiagId::sema_init_list_type_narrowing_const_reference,
+                ),
+                loc,
+            )
             .arg(s.ty_arg(ty(s, init).without_quals()))
             .arg(to_arg),
         Narrowing::Variable => s
-            .diag(DiagId::sema_init_list_variable_narrowing, loc)
+            .diag(
+                pick(
+                    DiagId::sema_init_list_variable_narrowing,
+                    DiagId::sema_init_list_variable_narrowing_const_reference,
+                ),
+                loc,
+            )
             .arg(s.ty_arg(ty(s, init).without_quals()))
             .arg(to_arg),
-        Narrowing::Constant { value } => {
-            s.diag(DiagId::sema_init_list_constant_narrowing, loc).arg(value).arg(to_arg)
-        }
+        Narrowing::Constant { value } => s
+            .diag(
+                pick(
+                    DiagId::sema_init_list_constant_narrowing,
+                    DiagId::sema_init_list_constant_narrowing_const_reference,
+                ),
+                loc,
+            )
+            .arg(value)
+            .arg(to_arg),
     };
     let d = d.range(range);
     // clang offers the `static_cast<T>(...)` fix-it (and its note) only

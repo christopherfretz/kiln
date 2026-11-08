@@ -43,17 +43,27 @@ impl Sema<'_, '_> {
         // is dependent): the SFINAE-selected static member templates
         // `to_char_type<C = CharType>(std::uint8_t)` of a class template
         // are resolved per instantiation (WP-668).
-        let dependent = decls.iter().any(|&d| {
-            let n = self.ast.decls.get(d);
-            (self.kind_of(d) != DeclKind::FunctionTemplate
-                && n.ty().is_some_and(|t| self.ast.types.is_dependent(t)))
-                || n.ctx().is_some_and(|c| self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX))
-        });
+        let dependent = self.overload_set_is_dependent(decls);
         let e = self.builder().unresolved_lookup_in(name, decls, adl, nns, None, dependent, loc);
         if naming.is_some() || found.iter().zip(decls).any(|(f, d)| f != d) {
             self.ovl.ule_found.insert(e, UleFound { found: found.to_vec(), naming });
         }
         e
+    }
+
+    /// Whether an overload set naming `decls` is type-dependent
+    /// ([`Self::build_overload_ref`]; clang's
+    /// `computeDependence(OverloadExpr)`), with or without explicit
+    /// template arguments: `F::ov<long>` naming the static member
+    /// templates of class template `F` is resolved per instantiation
+    /// (WP-833).
+    pub(crate) fn overload_set_is_dependent(&self, decls: &[DeclId]) -> bool {
+        decls.iter().any(|&d| {
+            let n = self.ast.decls.get(d);
+            (self.kind_of(d) != DeclKind::FunctionTemplate
+                && n.ty().is_some_and(|t| self.ast.types.is_dependent(t)))
+                || n.ctx().is_some_and(|c| self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX))
+        })
     }
 
     /// Resolves the non-dependent call of the overloaded name `callee` (an
@@ -551,6 +561,10 @@ impl Sema<'_, '_> {
             }
             return None;
         }
+        if !matches!(out, OvlOutcome::Success(_)) {
+            let ty = self.recovery_type(set, out);
+            self.note_call_recovery(ty);
+        }
         let (id, ambiguous) = match out {
             OvlOutcome::Success(b) => return Some(b),
             OvlOutcome::Deleted(b) => {
@@ -580,6 +594,46 @@ impl Sema<'_, '_> {
         let msg = self.with_ovl_notes(msg, set, ambiguous);
         self.emit(msg);
         None
+    }
+
+    /// The type of clang's `RecoveryExpr` for the failed call of `set`
+    /// (`chooseRecoveryType`): the return type of the best candidate,
+    /// else the one return type of the viable candidates, else of all
+    /// candidates; `None` when they differ (a type-dependent recovery).
+    fn recovery_type(&self, set: &OverloadCandidateSet, out: OvlOutcome) -> Option<QualType> {
+        let ret = |c: &super::Candidate| -> Option<QualType> {
+            let d = c.decl?;
+            if self.ast.decls.get(d).has(DeclFlags::INVALID) {
+                return None;
+            }
+            let t = self.ast.decls.get(d).ty()?;
+            self.ast
+                .types
+                .proto_of(self.ast.types.canonical(t).ty())
+                .map(kiln_ast::types::FuncProto::ret)
+        };
+        // `None`: no candidate seen; `Some(None)`: they differ.
+        let pick = |cands: &mut dyn Iterator<Item = &super::Candidate>| {
+            let mut r: Option<Option<QualType>> = None;
+            for t in cands.filter_map(&ret) {
+                let t = self.ast.types.canonical(t);
+                r = match r {
+                    None => Some(Some(t)),
+                    Some(Some(u)) if u == t => Some(Some(t)),
+                    Some(_) => Some(None),
+                };
+            }
+            r
+        };
+        let best = match out {
+            OvlOutcome::Deleted(b) => ret(set.cand(b)).map(|t| Some(self.ast.types.canonical(t))),
+            _ => None,
+        };
+        let r = best
+            .or_else(|| pick(&mut set.cands.iter().filter(|c| c.viable)))
+            .or_else(|| pick(&mut set.cands.iter()))
+            .flatten()?;
+        (!self.is_dependent_type(r) && self.contained_placeholder(r).is_none()).then_some(r)
     }
 
     /// The `DeclRefExpr` naming the selected function `d` (found as

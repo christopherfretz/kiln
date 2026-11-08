@@ -3408,6 +3408,7 @@ impl Sema<'_, '_> {
     }
 
     /// `typedef T name;` or `using name = T;` ([dcl.typedef]).
+    #[allow(clippy::too_many_lines, reason = "one declaration's semantic checks in clang's order")]
     fn act_on_typedef(
         &mut self,
         ds: &DeclSpec,
@@ -3528,6 +3529,9 @@ impl Sema<'_, '_> {
         }
         if let Some(t) = anon_tag {
             let _ = self.ast.decls.set_typedef_for_anon(t, td);
+        }
+        if prev.is_none() {
+            self.check_shadow(td, name);
         }
         self.register_local(name, td);
         td
@@ -4923,6 +4927,7 @@ impl Sema<'_, '_> {
         (flags, invalid)
     }
 
+    #[allow(clippy::too_many_lines, reason = "one declaration's semantic checks in clang's order")]
     fn act_on_field(
         &mut self,
         ds: &DeclSpec,
@@ -5035,6 +5040,9 @@ impl Sema<'_, '_> {
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc())
             .misc(DeclMisc::new().with_name_independent(independent));
         let f = self.builder().field(h, ty, width, flags);
+        if let Some(n) = name {
+            self.check_shadow_inherited_fields(d.name_loc(), n, ctx, true);
+        }
         if field_invalid {
             // [class.mem]: an invalid field makes its class invalid
             // (clang `ActOnFields`; spec/sema-class.md §2.3).
@@ -5551,6 +5559,7 @@ impl Sema<'_, '_> {
         no_member
     }
 
+    #[allow(clippy::too_many_lines, reason = "one declaration's semantic checks in clang's order")]
     fn act_on_var(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
         let spec = self.var_spec(ds, d);
@@ -5664,6 +5673,11 @@ impl Sema<'_, '_> {
         self.check_sizeless_var(v, self.in_local_scope());
         self.record_constinit(v, ds);
         self.check_constexpr_var_literal(v);
+        // clang: not a redeclaration, a placeholder or a block-scope
+        // `extern` (which has global storage).
+        if prev_ok.is_none() && !independent && spec.storage() != VarStorage::Extern {
+            self.check_shadow(v, name);
+        }
         self.register_local(name, v);
         if spec.storage() == VarStorage::Extern {
             self.note_local_extern(name, v);
@@ -5751,6 +5765,7 @@ impl Sema<'_, '_> {
             // `'extern' variable has an initializer`).
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
+        let init = self.reject_objectless_method_init(init);
         self.act_on_init_inner(v, init);
         self.check_cleanup_deduced(v);
         self.check_static_tls(v, paren);
@@ -6118,6 +6133,35 @@ impl Sema<'_, '_> {
         Some(if rvalue { t.rvalue_ref_to(ety) } else { t.lvalue_ref_to(ety) })
     }
 
+    /// An initializer naming a non-static member function without an
+    /// object ([expr.prim.id.general]/4, `auto p = C::f;` in a static
+    /// member function): clang's `BuildDeclarationNameExpr` reports it at
+    /// the name and the initializer is erroneous, so no conversion of it
+    /// is diagnosed. The pending reference
+    /// ([`Self::flush_member_refs`]) is reported now, since an
+    /// initializer is neither of the uses that could still make it valid.
+    fn reject_objectless_method_init(&mut self, init: Initializer) -> Initializer {
+        let reject = |s: &mut Self, e: ExprId| {
+            let x = s.ignore_parens(e);
+            match s.member_refs.get(&x).copied() {
+                Some(r) if r.error && s.kind_of(r.decl) == DeclKind::CXXMethod => {
+                    s.member_refs.remove(&x);
+                    let loc = s.eloc(x);
+                    s.error(DiagId::sema_member_call_without_object, loc);
+                    s.recover_err(&[e], loc)
+                }
+                _ => e,
+            }
+        };
+        match init {
+            Initializer::Expr(e) => Initializer::Expr(reject(self, e)),
+            Initializer::Paren(es, l, r) => {
+                Initializer::Paren(es.into_iter().map(|e| reject(self, e)).collect(), l, r)
+            }
+            list @ Initializer::List(_) => list,
+        }
+    }
+
     /// The declaration whose initializer `v` carries: an instantiated
     /// variable template specialization's pattern (a member variable
     /// template defined out of line is not initialized in its class, as
@@ -6146,6 +6190,18 @@ impl Sema<'_, '_> {
         use crate::templ::auto::AutoFail;
         let (mut items, kind, lbrace) = auto_init_items(init, direct);
         self.resolve_single_overloads(&mut items);
+        // [expr.ref]/7.3.2: clang's `DeduceAutoType` deduces from a bound
+        // member function's recovered call, which leaves the initializer
+        // itself as written (so its initialization reports it again, as
+        // clang does for `auto a = g.f;`).
+        for it in items.iter_mut().flatten() {
+            if self.ety(*it) == QualType::BOUND_MEMBER {
+                *it = self.recover_not_called_as(*it, true);
+                if self.is_err_expr(*it) {
+                    return Some(QualType::ERROR);
+                }
+            }
+        }
         // A member overload set deduces in `deduce_auto` (a member
         // template-id naming one static specialization, WP-788).
         let overload = items.iter().flatten().copied().find(|&e| {
@@ -6877,6 +6933,7 @@ impl Sema<'_, '_> {
 
     /// Starts the definition of function `f` at `{`: checks for a
     /// redefinition, opens the function scope with the parameters.
+    #[allow(clippy::too_many_lines, reason = "one declaration's semantic checks in clang's order")]
     pub fn act_on_start_function_def(&mut self, f: DeclId) {
         self.check_alias_definition(f);
         self.no_builtin_defined(f, false);
@@ -6937,9 +6994,23 @@ impl Sema<'_, '_> {
             .function(f)
             .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
             .unwrap_or_default();
+        // clang `CheckParmsForFunctionDef`: `-Wshadow-field` for every
+        // parameter, then `-Wshadow` for each as it enters scope.
+        if let Some(rd) = self.ast.decls.get(f).ctx()
+            && self.diags.is_enabled(DiagId::sema_shadow_field)
+        {
+            for &p in &params {
+                if let Some(sym) = self.ast.decls.get(p).name().as_ident()
+                    && !self.ast.decls.get(p).flags().contains(DeclFlags::INVALID)
+                {
+                    self.check_shadow_inherited_fields(self.ast.decls.get(p).loc(), sym, rd, false);
+                }
+            }
+        }
         for p in params {
             let n = self.ast.decls.get(p).name();
             if let Some(sym) = n.as_ident() {
+                self.check_shadow(p, sym);
                 self.push_local(sym, p);
             }
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
@@ -7025,6 +7096,9 @@ impl Sema<'_, '_> {
         }
         if !self.in_template() {
             self.mark_key_function_vtable_used(f);
+        }
+        if self.kind_of(f) == DeclKind::CXXConstructor {
+            self.diagnose_ctor_param_shadows(f);
         }
         self.pop_scope();
         if let Some(saved) = self.fn_saved.pop() {
@@ -8289,6 +8363,7 @@ impl Sema<'_, '_> {
     }
 
     /// An enumerator-definition ([dcl.enum]/2,5).
+    #[allow(clippy::too_many_lines, reason = "one declaration's semantic checks in clang's order")]
     pub fn act_on_enumerator(
         &mut self,
         name: Symbol,
@@ -8307,6 +8382,12 @@ impl Sema<'_, '_> {
         } else {
             self.lookup_current_scope_outside_enum(name)
         };
+        // clang `ActOnEnumConstant`: a template parameter, then any other
+        // entity, hidden.
+        self.check_template_param_shadow(name, loc);
+        if !scoped {
+            self.check_enumerator_shadow(e, name, loc);
+        }
         if let Some(p) = clash {
             let id = if self.ast.decls.get(p).kind() == DeclKind::EnumConstant {
                 DiagId::sema_redefinition_of_enumerator
