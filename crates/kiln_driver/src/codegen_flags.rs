@@ -146,12 +146,8 @@ const REJECTED: &[&str] = &[
 
 /// Prefixes of flags rejected (class 3): every value of the profiling
 /// options.
-const REJECTED_PREFIXES: &[&str] = &[
-    "-fprofile-instr-generate=",
-    "-fprofile-generate=",
-    "-fprofile-instr-use=",
-    "-fprofile-use=",
-];
+const REJECTED_PREFIXES: &[&str] =
+    &["-fprofile-instr-generate=", "-fprofile-generate=", "-fprofile-instr-use=", "-fprofile-use="];
 
 impl CodegenFlags {
     /// Takes `arg` if it is one of the flags: `None` if it is not, else

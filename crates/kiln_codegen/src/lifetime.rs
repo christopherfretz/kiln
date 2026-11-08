@@ -232,9 +232,16 @@ impl Detector<'_> {
 }
 
 impl Cg<'_> {
-    /// clang `ShouldEmitLifetimeMarkers`: optimizing, or in a coroutine.
+    /// clang `ShouldEmitLifetimeMarkers`: optimizing, an address
+    /// sanitizer checking use after scope, a hardware-address or memory
+    /// sanitizer, or in a coroutine.
     pub(crate) fn lifetime_markers_on(&self) -> bool {
-        self.opts.optimize() || self.f.lifetime_markers
+        use kiln_ast::sanitize::SanitizerSet as S;
+        let san = &self.opts.sanitize;
+        self.opts.optimize()
+            || self.f.lifetime_markers
+            || san.use_after_scope
+            || san.kinds.has_any(S::HWADDRESS.union(S::MEMORY))
     }
 
     /// clang `EmitLifetimeStart` of the alloca `addr` of type `ty`: the

@@ -178,6 +178,7 @@ sema_attribute_too_few_arguments = Error (2) "{0} attribute takes at least {1} a
 sema_attribute_too_few_arguments_one = Error (1) "{0} attribute takes at least 1 argument";
 sema_attribute_too_many_arguments = Error (2) "{0} attribute takes no more than {1} arguments";
 sema_attribute_too_many_arguments_one = Error (1) "{0} attribute takes no more than 1 argument";
+sema_attribute_type_not_supported_global = Warning [IgnoredAttributes] (2) "{0} attribute argument '{1}' not supported on a global variable";
 sema_attribute_unsupported_by_kiln = Error (1) "'{0}' attribute is not supported by kiln yet";
 sema_attribute_unsupported_target = Error (2) "{0} attribute is not supported on targets missing {1}; specify an appropriate -march= or -mcpu=";
 sema_attribute_void_function = Warning [IgnoredAttributes] (1) "attribute {0} cannot be applied to functions without return value";

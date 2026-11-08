@@ -296,6 +296,10 @@ pub struct SanitizeOptions {
     pub recover: kiln_ast::sanitize::SanitizerSet,
     /// The UB checks that trap (`-fsanitize-trap=`).
     pub trap: kiln_ast::sanitize::SanitizerSet,
+    /// clang `SanitizeAddressUseAfterScope`: an address sanitizer with
+    /// `-fsanitize-address-use-after-scope` (the default) wants lifetime
+    /// markers.
+    pub use_after_scope: bool,
 }
 
 impl SanitizeOptions {

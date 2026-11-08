@@ -124,9 +124,8 @@ impl SanitizerSet {
             | Self::IMPLICIT_UNSIGNED_INTEGER_TRUNCATION.0,
     );
     /// `implicit-conversion`.
-    pub const IMPLICIT_CONVERSION: SanitizerSet = SanitizerSet(
-        Self::IMPLICIT_INTEGER_CONVERSION.0 | Self::IMPLICIT_BITFIELD_CONVERSION.0,
-    );
+    pub const IMPLICIT_CONVERSION: SanitizerSet =
+        SanitizerSet(Self::IMPLICIT_INTEGER_CONVERSION.0 | Self::IMPLICIT_BITFIELD_CONVERSION.0);
     /// `integer`.
     pub const INTEGER: SanitizerSet = SanitizerSet(
         Self::IMPLICIT_CONVERSION.0
@@ -258,7 +257,10 @@ pub const GROUPS: &[(&str, SanitizerSet)] = &[
     ("bounds", SanitizerSet::BOUNDS),
     ("cfi", SanitizerSet::CFI),
     ("implicit-conversion", SanitizerSet::IMPLICIT_CONVERSION),
-    ("implicit-integer-arithmetic-value-change", SanitizerSet::IMPLICIT_INTEGER_ARITHMETIC_VALUE_CHANGE),
+    (
+        "implicit-integer-arithmetic-value-change",
+        SanitizerSet::IMPLICIT_INTEGER_ARITHMETIC_VALUE_CHANGE,
+    ),
     ("implicit-integer-conversion", SanitizerSet::IMPLICIT_INTEGER_CONVERSION),
     ("implicit-integer-truncation", SanitizerSet::IMPLICIT_INTEGER_TRUNCATION),
     ("integer", SanitizerSet::INTEGER),
@@ -277,11 +279,41 @@ pub fn parse_name(name: &str, allow_all: bool) -> Option<SanitizerSet> {
     if name == "all" && !allow_all {
         return None;
     }
-    SANITIZERS
-        .iter()
-        .chain(GROUPS)
-        .find(|(n, _)| *n == name)
-        .map(|(_, s)| *s)
+    SANITIZERS.iter().chain(GROUPS).find(|(n, _)| *n == name).map(|(_, s)| *s)
+}
+
+/// The `no_sanitize*` attribute spellings (`AttrKind::NO_SANITIZE`) and
+/// the set each one names (`no_sanitize("...")` names its arguments'). An
+/// attribute node keeps the set in `a` and `b` ([`SanitizerSet::words`]),
+/// and its spelling's index here in `b`'s top four bits (the set has no
+/// bit above 59).
+pub const NO_SANITIZE_SPELLINGS: [(&str, SanitizerSet); 5] = [
+    ("no_sanitize", SanitizerSet::NONE),
+    ("no_sanitize_address", SanitizerSet::ADDRESS),
+    ("no_address_safety_analysis", SanitizerSet::ADDRESS),
+    ("no_sanitize_memory", SanitizerSet::MEMORY),
+    ("no_sanitize_thread", SanitizerSet::THREAD),
+];
+
+/// The `a` and `b` words of a `no_sanitize*` attribute node of spelling
+/// `tag` ([`NO_SANITIZE_SPELLINGS`]) naming `set`.
+#[must_use]
+pub const fn no_sanitize_words(set: SanitizerSet, tag: u32) -> (u32, u32) {
+    let (a, b) = set.words();
+    (a, b | (tag << 28))
+}
+
+/// The set a `no_sanitize*` attribute node's words name.
+#[must_use]
+pub const fn no_sanitize_set(a: u32, b: u32) -> SanitizerSet {
+    SanitizerSet::from_words(a, b & 0x0fff_ffff)
+}
+
+/// The spelling index ([`NO_SANITIZE_SPELLINGS`]) of a `no_sanitize*`
+/// attribute node's `b` word.
+#[must_use]
+pub const fn no_sanitize_tag(b: u32) -> usize {
+    (b >> 28) as usize
 }
 
 #[cfg(test)]

@@ -739,14 +739,12 @@ fn opt_commands(args: &Args, tc: &Toolchain, passes: &str) -> Vec<Command> {
             run.arg(c.clone());
         }
     }
-    let keep_names = args
-        .sanitize(!tc.target.is_aarch64(), tc.target.triple)
-        .0
-        .opts
-        .has(kiln_ast::sanitize::SanitizerSet(
+    let keep_names = args.sanitize(!tc.target.is_aarch64(), tc.target.triple).0.opts.has(
+        kiln_ast::sanitize::SanitizerSet(
             kiln_ast::sanitize::SanitizerSet::ADDRESS.0
                 | kiln_ast::sanitize::SanitizerSet::MEMORY.0,
-        ));
+        ),
+    );
     run.arg("-o").arg("-").arg("-");
     if matches!(Phase::of(args), Phase::Object | Phase::Link) {
         return vec![run];

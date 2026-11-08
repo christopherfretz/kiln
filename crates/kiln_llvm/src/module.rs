@@ -152,7 +152,24 @@ pub struct GlobalVar {
     pub comdat: Option<ComdatId>,
     /// `align N`.
     pub align: Option<u64>,
+    /// The sanitizer metadata (`no_sanitize_address`, ...).
+    pub sanitizer: GlobalSanitizer,
     pub(crate) md: Vec<(MdKindId, MetadataId)>,
+}
+
+/// A global's `SanitizerMetadata`, printed after its section as
+/// `, no_sanitize_address`, `, no_sanitize_hwaddress`,
+/// `, sanitize_memtag` and `, sanitize_address_dyninit`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GlobalSanitizer {
+    /// `no_sanitize_address`.
+    pub no_address: bool,
+    /// `no_sanitize_hwaddress`.
+    pub no_hwaddress: bool,
+    /// `sanitize_memtag`.
+    pub memtag: bool,
+    /// `sanitize_address_dyninit`.
+    pub dyninit: bool,
 }
 
 impl GlobalVar {
@@ -759,6 +776,7 @@ impl Module {
             unnamed_addr: UnnamedAddr::None,
             addrspace: 0,
             externally_initialized: false,
+            sanitizer: GlobalSanitizer::default(),
             section: None,
             comdat: None,
             align: None,

@@ -171,7 +171,13 @@ impl SanitizeFlags {
     /// `rtti` is `-frtti`'s state, `opt0` whether optimization is off,
     /// `x86` the target's architecture and `triple` its name.
     #[must_use]
-    pub fn resolve(&self, rtti: bool, opt0: bool, x86: bool, triple: &str) -> (Sanitize, Vec<ArgError>) {
+    pub fn resolve(
+        &self,
+        rtti: bool,
+        opt0: bool,
+        x86: bool,
+        triple: &str,
+    ) -> (Sanitize, Vec<ArgError>) {
         let mut errors = Vec::new();
         let trap = self.trap_kinds(&mut errors);
         let target_unsupported = if x86 {
@@ -266,9 +272,16 @@ impl SanitizeFlags {
         }
         let trap = trap.intersect(kinds);
         let recover = recover.intersect(kinds).without(S::UNRECOVERABLE).without(trap);
+        let use_after_scope = self.use_after_scope.unwrap_or(true);
         let s = Sanitize {
-            opts: SanitizeOptions { kinds, recover, trap },
-            use_after_scope: self.use_after_scope.unwrap_or(true),
+            opts: SanitizeOptions {
+                kinds,
+                recover,
+                trap,
+                use_after_scope: use_after_scope
+                    && kinds.has_any(S::ADDRESS.union(S::KERNEL_ADDRESS)),
+            },
+            use_after_scope,
             use_after_return: self.use_after_return,
             track_origins: self.track_origins.unwrap_or(0),
         };
@@ -286,7 +299,9 @@ impl SanitizeFlags {
                     let mut add = S::NONE;
                     for v in &l.values {
                         match parse_name(v, true) {
-                            None => errors.push(ArgError::UnsupportedValue(l.opt.into(), v.clone())),
+                            None => {
+                                errors.push(ArgError::UnsupportedValue(l.opt.into(), v.clone()))
+                            }
                             Some(s) => {
                                 let single = s.0.count_ones() == 1;
                                 let ok = if single {
@@ -334,10 +349,7 @@ impl SanitizeFlags {
 
 /// The values' union, unknown names ignored.
 fn values_set(l: &ListArg) -> S {
-    l.values
-        .iter()
-        .filter_map(|v| parse_name(v, l.list != List::Add))
-        .fold(S::NONE, S::union)
+    l.values.iter().filter_map(|v| parse_name(v, l.list != List::Add)).fold(S::NONE, S::union)
 }
 
 /// The single sanitizers named outright and the expanded union, with an
@@ -418,7 +430,9 @@ impl Sanitize {
             p.push_str("eager-checks");
             passes.push(format!("msan<{p}>"));
             if opt_level > 0 {
-                passes.push("function(early-cse<>,instcombine,jump-threading,gvn<>,instcombine)".into());
+                passes.push(
+                    "function(early-cse<>,instcombine,jump-threading,gvn<>,instcombine)".into(),
+                );
             }
         }
         if k.has_any(S::THREAD) {
@@ -437,7 +451,9 @@ impl Sanitize {
             }
         }
         if k.has_any(S::HWADDRESS) {
-            passes.push(if rec.has_any(S::HWADDRESS) { "hwasan<recover>" } else { "hwasan<>" }.into());
+            passes.push(
+                if rec.has_any(S::HWADDRESS) { "hwasan<recover>" } else { "hwasan<>" }.into(),
+            );
             if opt_level == 0 {
                 cl.push("-hwasan-use-stack-safety=0".into());
             }
@@ -591,11 +607,15 @@ mod tests {
 
     #[test]
     fn trap_and_recover() {
-        let (r, e) = resolve("-fsanitize=undefined,address -fsanitize-trap=undefined -fno-sanitize-trap=shift");
+        let (r, e) = resolve(
+            "-fsanitize=undefined,address -fsanitize-trap=undefined -fno-sanitize-trap=shift",
+        );
         assert_eq!(e, []);
         assert!(r.opts.trap.has(S::SIGNED_INTEGER_OVERFLOW));
         assert!(!r.opts.trap.has_any(S::SHIFT));
-        assert!(r.opts.recover.has(S::SHIFT) && !r.opts.recover.has_any(S::SIGNED_INTEGER_OVERFLOW));
+        assert!(
+            r.opts.recover.has(S::SHIFT) && !r.opts.recover.has_any(S::SIGNED_INTEGER_OVERFLOW)
+        );
         let (r, _) = resolve("-fsanitize=signed-integer-overflow -fsanitize-trap=all");
         assert_eq!(r.link_list(), None);
         let (r, _) = resolve("-fsanitize=address -fsanitize-recover=address");
