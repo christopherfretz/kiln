@@ -3972,7 +3972,14 @@ immediate context: errors are hard.
   template substitutes it when the class is instantiated. A template is
   "not a candidate" before deduction only when it is explicit
   non-dependently (clang `isNonDependentlyExplicit`;
-  `Sema::nondependently_explicit`).
+  `Sema::nondependently_explicit`). That holds for a constructor template
+  in a user-defined conversion's copy-initialization too
+  ([over.match.copy]/1.1; `Sema::drop_explicit_ctor_templates`): it is
+  noted "explicit constructor is not a candidate" and never deduced, so a
+  substitution that would be ill-formed outside the immediate context
+  (libc++'s explicit `basic_string(const T&)` with `T = void`) is not
+  reached (WP-694; test
+  `over.match.copy/explicit-ctor-template-not-deduced.cpp`).
 - **Return types** ([temp.deduct.general]/11.10). A substituted
   signature (or any substituted function type) whose return type is an
   array or function type fails with `function cannot return
