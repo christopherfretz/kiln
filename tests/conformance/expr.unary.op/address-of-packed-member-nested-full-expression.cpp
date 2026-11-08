@@ -6,8 +6,7 @@
 // template argument, a lambda body, a function body instantiated
 // mid-expression) does not report it (WP-659; spec/sema.md §5.14). An
 // implicit conversion drops it only when the call converts its arguments,
-// after the nested full-expression has already reported it (clang does
-// the same: lines 29-30).
+// after the nested full-expression has reported it (clang 19: lines 29-30).
 //@ expect: compile-ok
 //@ strict-diags
 //@ skip(clang): clang 22 no longer reports lines 29-30 (the implicit-conversion case); kiln matches clang 19 here (verified with --compiler clang++-19); clang-22 parity is WP-892
