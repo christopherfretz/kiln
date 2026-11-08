@@ -222,3 +222,31 @@ fn standard_input() {
     assert!(name.starts_with("stdin-"), "{name}");
     assert!(std::fs::read_to_string(&written[0]).unwrap().contains("int first = 1;"));
 }
+
+#[test]
+fn crash_outside_any_input_writes_only_the_script() {
+    let d = workdir("driver");
+    let crash = d.join("crash");
+    let dir_flag = format!("-fcrash-diagnostics-dir={}", crash.display());
+    let o = run(
+        &kilnpp(),
+        &d,
+        &d,
+        &["-fsyntax-only", "-fkiln-crash-for-testing=driver", &dir_flag, "a.cpp"],
+        &[],
+    );
+    let err = stderr(&o);
+    assert_eq!(o.status.code(), Some(1), "{err}");
+    assert!(err.contains("kiln++: note: while running the driver (phase: driver)\n"), "{err}");
+    assert!(
+        err.contains(
+            "note: diagnostic msg: the crash happened outside any input; only the run script was written"
+        ),
+        "{err}"
+    );
+    let written = files(&crash);
+    assert_eq!(written, listed(&err));
+    assert_eq!(written.len(), 1);
+    let name = written[0].file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.starts_with("a-") && name.ends_with(".sh"), "{name}");
+}

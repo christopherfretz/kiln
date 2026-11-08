@@ -488,6 +488,13 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     // The hidden `-fkiln-crash-for-testing=` (spec/driver.md "Internal
     // compiler errors"); per thread, so set (or cleared) on every run.
     kiln_source::activity::set_crash_for_testing(args.crash_for_testing);
+    if args.crash_for_testing == Some(kiln_source::activity::Phase::Driver) {
+        // Entering the requested phase panics: a crash outside any input.
+        drop(kiln_source::activity::enter(
+            kiln_source::activity::Phase::Driver,
+            kiln_source::Loc::INVALID,
+        ));
+    }
     let mut diag_opts = DiagOptions::from_args(&args.diag_args);
     diag_opts.clang_compat = args.predef.clang_compat.major();
     let dsm = SourceManager::new();

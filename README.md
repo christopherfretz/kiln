@@ -74,6 +74,13 @@ scripts/fetch-libcxx-tests.sh           # once: libc++ 19.1.7 tests into .toolch
 cargo xtask libcxx --gate m3            # libc++'s own tests with kiln (manual gate, not in ci)
 ```
 
+## Reporting bugs
+
+File issues at https://github.com/christopherfretz/kiln/issues. A crash
+prints an "internal compiler error" report and writes a reproducer (a
+preprocessed `.ii` and a `.sh` that reruns the command). Attach both
+files. See [docs/REPORTING-BUGS.md](docs/REPORTING-BUGS.md).
+
 ## License
 
 Dual-licensed under MIT or Apache-2.0, at your option. `resource/include`
