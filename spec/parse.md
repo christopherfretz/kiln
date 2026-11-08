@@ -399,10 +399,12 @@ when it reaches that token (`handle_events`, as for clang's
 | unknown (also unknown `GCC x` / `clang x`, empty `#pragma`) | `unknown pragma ignored` [-Wunknown-pragmas], at the first unrecognized token |
 | `STDC FP_CONTRACT`, `FENV_ACCESS`, `CX_LIMITED_RANGE`, `FENV_ROUND`, `clang fp`, `float_control` | FP pragmas, below (WP-806) |
 | `STDC <other>` | `unknown pragma in STDC namespace` [-Wunknown-pragmas] |
-| `GCC visibility push(v)` / `pop` | syntax warnings [-Wignored-pragmas] (missing `(`/`)`, `expected identifier`, extra tokens); `Event::Visibility`. An unknown `v` gets `unknown visibility 'v'` [-Wignored-attributes] and is not pushed; an unmatched `pop` is an error. The visibility itself is not applied yet (M3). |
-| `pack ...` | missing `(` gets `missing '(' after '#pragma pack' - ignoring`. Otherwise `Event::PragmaPack`; Sema records `(loc, args)` in `Sema::pragma_packs` and reports `'#pragma pack' is not supported yet` (layout does not apply it yet). |
-| `GCC diagnostic ...`, `clang diagnostic`, `clang optimize`, `clang max_tokens_*`, `clang __debug` | accepted, ignored. **Not applied:** `clang diagnostic ignored` does not silence anything. |
-| `comment`, `unused`, `omp`, `GCC ivdep` | accepted, ignored |
+| `GCC visibility push(v)` / `pop` | syntax warnings [-Wignored-pragmas] (missing `(`/`)`, `expected identifier`, extra tokens); `Event::Visibility`. An unknown `v` gets `unknown visibility 'v'` [-Wignored-attributes] and is not pushed; an unmatched `pop` is an error. Sema applies the pushed visibility to later declarations (crates/kiln_sema/src/visibility.rs). |
+| `pack ...` | missing `(` gets `missing '(' after '#pragma pack' - ignoring`. Otherwise `Event::PragmaPack`; Sema applies the forms clang accepts silently (`Sema::act_on_pragma_pack`, spec/sema-class.md §6) and reports `'#pragma pack' is not supported yet` for the forms clang diagnoses. |
+| `GCC diagnostic ...`, `clang diagnostic ...` | validated by the preprocessor and applied: `push` / `pop` and severity changes are recorded at the pragma's location in the diagnostic engine. |
+| `clang optimize`, `clang max_tokens_*`, `clang __debug` | accepted, ignored (docs/status/silent-drops.md lists the owners) |
+| `comment`, `unused`, `omp` | accepted, ignored (docs/status/silent-drops.md) |
+| `GCC ivdep` | unknown to clang: `unknown pragma ignored` [-Wunknown-pragmas] |
 | `unroll [N\|(N)]`, `nounroll`, `unroll_and_jam [N\|(N)]`, `nounroll_and_jam`, `GCC unroll [N\|(N)]`, `GCC nounroll`, `clang loop <option>(<arg>)...` | loop hints, below |
 | `weak name` | missing identifier gets `expected identifier in '#pragma weak' - ignored`, tokens after it `extra tokens at end of '#pragma weak' - ignored` [-Wignored-pragmas]; otherwise `Event::PragmaWeak` (spec/sema.md §4.5; WP-803). The alias form `weak name = alias` is `Event::UnsupportedPragma`. |
 | `redefine_extname`, `align`, `options`, `ms_struct`, `clang attribute`, `clang section` | `Event::UnsupportedPragma`: `'#pragma <name>' is not supported yet` |
