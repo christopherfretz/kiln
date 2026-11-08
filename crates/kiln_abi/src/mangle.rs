@@ -588,8 +588,22 @@ pub fn type_externally_visible(ast: &Ast, q: QualType) -> bool {
 }
 
 fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
-    if ast.closure_lambda(d).is_some() {
+    if let Some(l) = ast.closure_lambda(d) {
         if is_unnumbered_closure(ast, d) {
+            return false;
+        }
+        // clang `getLVForClosureType`: a closure initializing a variable
+        // (a `static` variable template's specialization) is externally
+        // visible only if that variable is. The variable's own type is
+        // the closure, so only its declared linkage is consulted
+        // (`IgnoreVarTypeLinkage`).
+        if let Some(c) = ast.exprs.lambdas.get(l).mangling.context
+            && matches!(
+                ast.decls.get(c).kind(),
+                DeclKind::Var | DeclKind::VarTemplateSpecialization
+            )
+            && has_internal_linkage(ast, c)
+        {
             return false;
         }
     } else if decl_name(ast, d).is_empty()
@@ -2725,7 +2739,8 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// A `void *` that designates an object of type `designated` mangles
     /// as clang does: the address of that object, converted to the
     /// pointer type (`X cv <type> ad ... E`) when it is the whole
-    /// argument.
+    /// argument. So does a whole object of another type than the
+    /// pointee (`_Z5derefIXcvPKiadL_Z1gEEEiv`, `_Z2r1IXcvRKiL_Z1gEEEiv`).
     fn pointer_value(
         &mut self,
         ty: QualType,
@@ -2758,9 +2773,21 @@ impl<'a, 'b> Mangler<'a, 'b> {
             PtrBase::Decl(_) => self.lvalue_path(ast.decls.get(d).ty(), offset, pointee),
             _ => LvaluePath::default(),
         };
+        // A whole object whose type is not the parameter's pointee (a
+        // qualification or function-pointer conversion: `const int *`
+        // to `int g`) is converted to the parameter type, as clang's
+        // `mangleValueInTemplateArg` does when the designated type is
+        // not the same type; a subobject's `so` names its type instead.
         // Inside a class value the member's type is known: no conversion.
-        let conv = top && designated.is_some() && !is_ref;
-        let wrap = top && (!is_ref || path.nonempty || path.past_end);
+        let whole = !path.nonempty && !path.past_end;
+        let converted = whole
+            && designated.is_none()
+            && match (ast.decls.get(d).ty(), ast.types.pointee(ty)) {
+                (Some(dt), Some(pt)) => !ast.types.same_type(dt, pt),
+                _ => false,
+            };
+        let conv = top && ((designated.is_some() && !is_ref) || converted);
+        let wrap = top && (!is_ref || !whole || conv);
         if wrap {
             self.out.push('X');
         }

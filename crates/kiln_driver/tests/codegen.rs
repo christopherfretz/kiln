@@ -709,6 +709,36 @@ fn alias_ifunc_diagnostics() {
 /// definition as the note; nothing is written. Every structor variant
 /// taking one label is a single entity and is no error.
 #[test]
+fn unmangleable_expression_is_an_error() {
+    // spec/abi.md "Expressions": a template-argument expression form with
+    // no Itanium encoding yet is a hard error at its location (clang's
+    // `cannot yet mangle expression type`), never a fallback name that
+    // could collide with another overload's (WP-593). clang adds the
+    // expression's range; kiln's caret has none.
+    let d = scratch("unmangleable");
+    let src = "template <bool B> struct E { using type = int; };\n\
+               template <class T> typename E<(__builtin_bit_cast(unsigned, T(1)) > 0)>::type \
+               f(T) { return 1; }\nint g() { return f(1); }\n";
+    let first = "t.cpp:2:32: error: cannot yet mangle expression type BuiltinBitCastExpr";
+    std::fs::write(d.join("t.cpp"), src).unwrap();
+    let _ = std::fs::remove_file(d.join("t.ll"));
+    let o = kiln_in(&d, &["-std=c++26", "-S", "-emit-llvm", "t.cpp"]);
+    let err = text(&o.stderr);
+    assert_eq!(err.lines().next(), Some(first), "{err}");
+    assert!(err.ends_with("1 error generated.\n"), "{err}");
+    assert_eq!(o.status.code(), Some(1));
+    assert!(!d.join("t.ll").exists());
+    if have("clang++-19") {
+        let c = Command::new("clang++-19")
+            .args(["-std=c++26", "-S", "-emit-llvm", "-o", "c.ll", "t.cpp"])
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert_eq!(text(&c.stderr).lines().next(), Some(first), "clang++-19");
+    }
+}
+
+#[test]
 fn duplicate_mangled_name() {
     let d = scratch("dupname");
     let cases = [

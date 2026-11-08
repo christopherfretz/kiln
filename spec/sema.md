@@ -7313,7 +7313,14 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     `?:` as in `enable_if` conditions); a known `if` condition picks the
     branch, a loop with an absent or known-true condition has its first
     iteration walked, and the walk stops at an unknown condition, a
-    `switch`, a `try`, a label or a `return`.
+    `switch`, a `try`, a label or a `return`. The callee of a call that
+    names its function directly (a `DeclRefExpr` to a function or member
+    function, through implicit casts and parentheses) is not an operand
+    of its own: the call as a whole is the unit (WP-933; a forward-declared
+    `consteval` callee or `__builtin_expect` was evaluated alone and
+    reported);
+  - a failure whose note starts with `kiln: ` is an oven gap, not a
+    property of the program, and is never reported (WP-933).
   Kiln never reports a function clang accepts; it misses some clang
   reports because clang tracks local variables (`int z = 0; if (z)
   ...`) and keeps evaluating past a quiet nested call (WP-873
@@ -7327,7 +7334,8 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `dcl.constexpr/never-constant-overflow-cxx{20,23,26}.cpp`,
   `dcl.constexpr/never-constant-body-cxx{20,23}.cpp`,
   `dcl.constexpr/never-constant-default-cxx23.cpp`,
-  `dcl.constexpr/never-constant-no-error-cxx20.cpp`.
+  `dcl.constexpr/never-constant-no-error-cxx20.cpp`,
+  `dcl.constexpr/never-constant-direct-callee-cxx20.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

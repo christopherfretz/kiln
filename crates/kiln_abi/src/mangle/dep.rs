@@ -235,10 +235,17 @@ impl Mangler<'_, '_> {
                     | ExprKind::UnresolvedMemberExpr
             );
             self.out.push_str(if id { "Dt" } else { "DT" });
+            let saved_failed = self.failed.take();
             if self.expression(e) {
                 self.out.push('E');
+                self.failed = saved_failed;
                 return;
             }
+            // As in a template argument: a hard error, never a shared
+            // placeholder name (WP-593).
+            let at = self.failed.unwrap_or(e);
+            self.anon.unmangleable.push(at);
+            self.failed = saved_failed;
         }
         self.out.truncate(len);
         self.subs.truncate(subs);
@@ -246,7 +253,8 @@ impl Mangler<'_, '_> {
     }
 
     /// The `A <expression>` head of a dependent-bound array type; an
-    /// unencodable bound is the vendor placeholder.
+    /// unencodable bound is a hard error (the vendor placeholder keeps the
+    /// name well formed).
     pub(super) fn dependent_array_bound(&mut self, size: ExprOperand) {
         let (len, subs) = (self.out.len(), self.subs.len());
         let e = match size {
@@ -254,8 +262,15 @@ impl Mangler<'_, '_> {
             ExprOperand::Profile(p) => self.ast.types.profile_expr(p),
         };
         self.out.push('A');
-        if e.is_some_and(|e| self.expression(e)) {
-            return;
+        if let Some(e) = e {
+            let saved_failed = self.failed.take();
+            if self.expression(e) {
+                self.failed = saved_failed;
+                return;
+            }
+            let at = self.failed.unwrap_or(e);
+            self.anon.unmangleable.push(at);
+            self.failed = saved_failed;
         }
         self.out.truncate(len);
         self.subs.truncate(subs);
