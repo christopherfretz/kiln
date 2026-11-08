@@ -702,6 +702,12 @@ impl<'a> Cg<'a> {
             if mangle::asm_label(ast, first).is_some() {
                 let name = mangle::mangle_decl(ast, &mut self.anon, first);
                 self.note_rep(&name, first);
+            } else if self.fn_internal(first) {
+                // So it names an internal one: the `$_N` of an unnamed
+                // class in its name (a closure in a template argument)
+                // is allocated here, in clang's first-mangled order
+                // ([`mangle::AnonIds`]). An external name has no `$_N`.
+                let _ = mangle::mangle_decl(ast, &mut self.anon, first);
             }
             self.deferred.insert(first, d);
             self.alias_target_needed(first)?;

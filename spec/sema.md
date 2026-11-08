@@ -1967,6 +1967,13 @@ and returns the scope it names:
       elements) and is then `initialization of non-aggregate type T with
       a designated initializer list` (a vector is not an aggregate), at
       the variable or at a nested list's brace.
+    - A list whose leading element is an unbraced vector copy-initializes
+      the whole vector from it (clang `CheckVectorType`, non-OpenCL), so
+      `v4{v2, v2}` with a 2-lane `v2` is `cannot initialize a value of
+      type 'v4' ... with an lvalue of type 'v2'` in clang 19 and 22 alike;
+      kiln does not split a shorter vector into lanes (the OpenCL rule).
+      Test: `tests/conformance/ext.vector/list-init-shorter-vector-element-rejected.cpp`
+      (WP-802).
   - GNU `malloc` (function with a pointer result, else `'malloc'
     attribute only applies to return values that are pointers`; on a
     non-function `... only applies to functions`), `alloc_size(n[, m])`
@@ -4123,7 +4130,14 @@ constant and never look at the operand.
 
 The operands of nested `sizeof`, `alignof` and `noexcept` are not
 looked at (they are unevaluated). An erroneous operand gives an error
-expression.
+expression. Before `can_throw` reads them, the exception specifications of the
+constructors, bound temporaries' destructors and direct callees in the
+operand are resolved ([except.spec]/13, `resolve_operand_exc_specs`,
+WP-802): an operand kept unchanged from a template pattern (`V()` in
+`noexcept(noexcept(V().f(0, x)))` of a function template, with `V`'s
+implicit default constructor) was built without resolving them, and
+the instantiation must not count them as potentially-throwing
+(`tests/conformance/except.spec/p13-noexcept-operand-from-pattern-resolves-specs-run.cpp`).
 
 ### 5.4 Builtin functions (`builtins.rs`)
 clang's `LazilyCreateBuiltin`. kiln knows one builtin,
@@ -8496,6 +8510,13 @@ two `member '<m>' first declared here` notes. Flowing off the end
 has `return_void`; otherwise `-Wreturn-type` warns `non-void coroutine
 does not return a value` (`... in all control paths` when only some
 paths fall off).
+Immediate invocations in the operand are evaluated at the end of the
+full-expression holding it ([expr.const]/16, WP-802): the promise
+variable and the suspend points a first `co_return` builds are their
+own full-expressions and do not take them (`coro_isolated`), and in a
+template pattern the operand is finished as a full-expression, so an
+instantiation keeps the non-dependent values (`co_return sq(3) + t;`,
+`tests/conformance/stmt.return.coroutine/immediate-invocation-in-template-operand-run.cpp`).
 
 **The body (`complete_coroutine_body`, clang
 `CheckCompletedCoroutineBody`).** At the end of a non-template

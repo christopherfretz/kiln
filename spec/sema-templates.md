@@ -4843,6 +4843,23 @@ the class is instantiated and only `Ts` is known, stays one partially
 substituted expansion until the member template's `Us` is supplied
 (`tests/conformance/temp.variadic/p5-partial-expr-expansion-member-template.cpp`).
 
+**An empty first pack** ([temp.variadic]/7, WP-802). The probe stops at
+the first pack it reaches, so when that pack is empty no element is ever
+substituted and the expansion's other packs would go unchecked. Instead
+the pattern is substituted once more in keep mode (the *length sweep*,
+`PackState::sweep`, diagnostics captured and discarded): every
+substituted pack it reaches is kept, and a non-empty one is the length
+mismatch of step 3 (reported once the sweep ends, SFINAE-able as
+always), so `all<is_convertible(U, T)...>` with `T` = {} and `U` =
+{int} is a deduction failure and `is_constructible<tuple<>, int>` is
+false. A sweep element (`element_ty` / `element_expr`) that still names
+a pack by declaration names one of a retained level, and the expansion is
+rebuilt partially substituted as above instead of becoming empty. A sweep
+that fails for another reason (a lambda body, a pack it cannot keep)
+leaves the expansion empty, as before
+(`tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp`,
+`p7-empty-first-pack-length-mismatch.cpp`).
+
 A converted argument pack inside an argument list being substituted is
 rebuilt element by element. This happens for a partial
 specialization's `<U>` against `class... Up`, which is stored as the
