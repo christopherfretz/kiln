@@ -27,6 +27,7 @@
 //! generation is never reached: it marks a pointer that points at
 //! nothing ([`NOWHERE`]).
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType, StringLitId};
@@ -713,7 +714,8 @@ pub(crate) struct Memory {
     /// allocations in `Alloc::frame`).
     pub ctx: u32,
     /// Active member of each union subobject with one: key the
-    /// subobject ([`UKey`]), value the field index.
+    /// subobject ([`UKey`]), value the field index. Every change to it or
+    /// to [`Memory::union_alts`] bumps [`Memory::union_epoch`].
     pub unions: FxHashMap<UKey, u32>,
     /// The members that may equally be the active one of a union whose
     /// member a placement new constructed through a pointer that names
@@ -723,6 +725,15 @@ pub(crate) struct Memory {
     /// or assignment naming another is accepted (WP-233). Cleared with the
     /// entry by [`Memory::union_put`].
     pub union_alts: FxHashMap<UKey, u64>,
+    /// Bumped by every change to [`Memory::unions`] or
+    /// [`Memory::union_alts`]: the union-path memo (`vm::umemo`, WP-760)
+    /// trusts an answer only while the epoch it was computed at is
+    /// current.
+    pub union_epoch: u64,
+    /// The last `true` answer of [`Memory::may_be_active`], with the
+    /// [`Memory::union_epoch`] it holds at (`u64::MAX`: none): a member
+    /// access checks the same union's member again and again (WP-760).
+    active_memo: Cell<(UKey, u32, u64)>,
     /// The designated types of the `void *` values stored to memory
     /// (`kbc::VOID_TAG`), interned: pointer mark `PTR_TAGGED + i` is
     /// `vtags[i]`. Append-only for the translation unit (a rolled-back or
@@ -757,6 +768,11 @@ pub(crate) struct Memory {
     /// A frame object has been [`flags::LIFE`]-tracked in this evaluation:
     /// leaving a scope checks the objects it releases (`Oven::scope_life`).
     pub life_frame: bool,
+    /// One past the greatest index into [`Memory::live`] of a
+    /// [`flags::LIFE`]-tracked frame object, or more: leaving a scope whose
+    /// mark is at or above it releases no tracked object, and
+    /// `Oven::scope_life` returns at once (WP-760).
+    pub life_hi: usize,
     /// A lax fold is running (`Oven::fold_rvalue`): a [`LAX_READ`] object
     /// may be read.
     pub lax: bool,
@@ -807,6 +823,8 @@ impl Memory {
             ctx: 0,
             unions: FxHashMap::default(),
             union_alts: FxHashMap::default(),
+            union_epoch: 0,
+            active_memo: Cell::new((UKey { at: 0, ty: OTy(0) }, 0, u64::MAX)),
             vtags: Vec::new(),
             vtag_ix: FxHashMap::default(),
             vspill: FxHashMap::default(),
@@ -818,6 +836,7 @@ impl Memory {
             cur_frame: 0,
             serial: 0,
             life_frame: false,
+            life_hi: 0,
             lax: false,
             unconstructed: Vec::new(),
             trial: Trial::default(),
@@ -903,6 +922,7 @@ impl Memory {
     pub fn reset(&mut self) {
         self.frame.top = 0;
         self.life_frame = false;
+        self.life_hi = 0;
         self.unconstructed.clear();
         self.slots.truncate(1);
         self.free.clear();
@@ -917,9 +937,11 @@ impl Memory {
         self.ctx = 0;
         if !self.unions.is_empty() {
             self.unions.retain(|&k, _| (k.alloc_key() as u32) & STATIC_BIT != 0);
+            self.union_epoch += 1;
         }
         if !self.union_alts.is_empty() {
             self.union_alts.retain(|&k, _| (k.alloc_key() as u32) & STATIC_BIT != 0);
+            self.union_epoch += 1;
         }
         self.allocated = 0;
         self.peak = 0;
@@ -983,9 +1005,12 @@ impl Memory {
             if a.flags & flags::HAS_UNION != 0 {
                 let key = u64::from(s) | u64::from(a.generation) << 22;
                 for &(o, ut) in types.unions(a.ty) {
-                    self.unions.remove(&UKey::new(key, o, ut));
+                    let mut gone = self.unions.remove(&UKey::new(key, o, ut)).is_some();
                     if !self.union_alts.is_empty() {
-                        self.union_alts.remove(&UKey::new(key, o, ut));
+                        gone |= self.union_alts.remove(&UKey::new(key, o, ut)).is_some();
+                    }
+                    if gone {
+                        self.union_epoch += 1;
                     }
                 }
             }
@@ -994,6 +1019,7 @@ impl Memory {
             }
         }
         self.live.truncate(n);
+        self.life_hi = self.life_hi.min(n);
         self.frame.top = mark & 0xFFFF_FFFF;
     }
 
@@ -1165,8 +1191,10 @@ impl Memory {
         if a.flags & flags::HAS_UNION != 0 {
             let key = Ptr::alloc_key(p);
             for &(o, ut) in types.unions(a.ty) {
-                self.unions.remove(&UKey::new(key, o, ut));
-                self.union_alts.remove(&UKey::new(key, o, ut));
+                let a = self.unions.remove(&UKey::new(key, o, ut)).is_some();
+                if self.union_alts.remove(&UKey::new(key, o, ut)).is_some() || a {
+                    self.union_epoch += 1;
+                }
             }
         }
         if a.generation < GEN_MAX {
@@ -1256,6 +1284,14 @@ impl Memory {
     }
 
     /// The live or dead (same generation) allocation `p` designates.
+    /// Whether leaving a scope at frame mark `mark` may release a
+    /// [`flags::LIFE`]-tracked object ([`Memory::life_hi`]); the callers
+    /// of `Oven::scope_life` test it inline.
+    #[inline]
+    pub fn life_above(&self, mark: u64) -> bool {
+        self.life_frame && ((mark >> 32) as usize) < self.life_hi
+    }
+
     pub fn alloc_any(&self, p: Ptr) -> Option<&Alloc> {
         match p.space() {
             _ if p.is_fn() => None,
@@ -1298,25 +1334,36 @@ impl Memory {
     /// Checks an access of `len` bytes at `p` and returns its absolute
     /// address in the pointer's space.
     ///
-    /// The access that passes every check and whose storage is not
-    /// [`flags::TRACKED`] takes [`Memory::check_plain`], inlined into
-    /// every caller (the `Load` and `Store` arms above all); any other
-    /// runs [`Memory::check_slow`].
+    /// The access that passes every check takes [`Memory::check_plain`],
+    /// inlined into every caller (the `Load` and `Store` arms above all),
+    /// and, in [`flags::TRACKED`] storage, [`Memory::live_at`]'s lifetime
+    /// test (WP-760: a frame object whose lifetimes an explicit
+    /// destruction ended, such as an `inplace_vector`'s, is tracked for
+    /// every access to it); any other runs [`Memory::check_slow`].
     // Always inlined: the plain predicate is a few compares, while the
     // call and the `Result` returned through memory cost more than it.
     #[allow(clippy::inline_always)]
     #[inline(always)]
     pub fn check(&self, raw: u64, len: u64, write: bool) -> Result<(Sp, u64, &Alloc), MemFault> {
-        match self.check_plain(raw, len, flags::EXTERNAL | flags::TRACKED) {
-            Some(r) => Ok(r),
-            None => self.check_slow(raw, len, write),
+        match self.check_plain(raw, len, flags::EXTERNAL) {
+            Some(r) if r.2.flags & flags::TRACKED == 0 || self.live_at(r.0, r.1, len) => Ok(r),
+            _ => self.check_slow(raw, len, write),
         }
     }
 
-    /// [`Memory::check`] of an access the plain predicate refused: the
-    /// plain access to tracked storage then tests its lifetime alone
-    /// (the common case of `std::allocator` storage); any other runs the
-    /// checks in their order, then the lifetime test. Cold for the
+    /// Whether every byte of `[abs, abs + len)` in space `sp` is within
+    /// an object's lifetime: [`Memory::check`]'s test of tracked storage,
+    /// out of line (a `bool` in a register, not the `Result` of
+    /// [`Memory::check_slow`]).
+    #[inline(never)]
+    fn live_at(&self, sp: Sp, abs: u64, len: u64) -> bool {
+        self.space(sp).is_live(abs, len)
+    }
+
+    /// [`Memory::check`] of an access the plain predicate or the lifetime
+    /// test refused: the plain access to tracked storage outside its
+    /// lifetime faults; any other runs the checks in their order, then
+    /// the lifetime test. Cold for the
     /// callers' code layout: marked otherwise, the `Load` arm grows.
     #[cold]
     #[inline(never)]
@@ -1759,6 +1806,8 @@ impl Memory {
         let sp = p.space();
         if sp == Sp::Frame {
             self.life_frame = true;
+            let i = self.live.iter().rposition(|&s| s == p.slot).map_or(self.live.len(), |i| i + 1);
+            self.life_hi = self.life_hi.max(i);
         }
         let s = self.space_mut(sp);
         s.ensure_life();
@@ -2017,22 +2066,20 @@ impl Memory {
                         *l = life;
                     }
                 }
-                Undo::Union(key, old) => match old {
-                    Some(v) => {
-                        self.unions.insert(key, v);
-                    }
-                    None => {
-                        self.unions.remove(&key);
-                    }
-                },
-                Undo::UnionAlts(key, old) => match old {
-                    Some(v) => {
-                        self.union_alts.insert(key, v);
-                    }
-                    None => {
-                        self.union_alts.remove(&key);
-                    }
-                },
+                Undo::Union(key, old) => {
+                    self.union_epoch += 1;
+                    match old {
+                        Some(v) => self.unions.insert(key, v),
+                        None => self.unions.remove(&key),
+                    };
+                }
+                Undo::UnionAlts(key, old) => {
+                    self.union_epoch += 1;
+                    match old {
+                        Some(v) => self.union_alts.insert(key, v),
+                        None => self.union_alts.remove(&key),
+                    };
+                }
                 Undo::Flags { sp, idx, old } => {
                     let a = match sp {
                         Sp::Static => &mut self.statics[idx as usize],
@@ -2127,8 +2174,11 @@ impl Memory {
             Some(v) => self.unions.insert(key, v),
             None => self.unions.remove(&key),
         };
-        if old != v && self.in_trial() {
-            self.trial_union(key, Undo::Union(key, old));
+        if old != v {
+            self.union_epoch += 1;
+            if self.in_trial() {
+                self.trial_union(key, Undo::Union(key, old));
+            }
         }
         if !self.union_alts.is_empty() {
             self.union_alts_put(key, None);
@@ -2142,18 +2192,36 @@ impl Memory {
             Some(v) => self.union_alts.insert(key, v),
             None => self.union_alts.remove(&key),
         };
-        if old != v && self.in_trial() {
-            self.trial_union(key, Undo::UnionAlts(key, old));
+        if old != v {
+            self.union_epoch += 1;
+            if self.in_trial() {
+                self.trial_union(key, Undo::UnionAlts(key, old));
+            }
+        }
+    }
+
+    /// Sets the active member of union `key` while thawing a frozen
+    /// value (no checkpoint is open then).
+    pub fn union_thaw(&mut self, key: UKey, v: u32) {
+        if self.unions.insert(key, v) != Some(v) {
+            self.union_epoch += 1;
         }
     }
 
     /// Whether field `idx` is (or may be, [`Memory::union_alts`]) the
     /// active member of union `key`.
     pub fn may_be_active(&self, key: UKey, idx: u32) -> bool {
-        self.unions.get(&key) == Some(&idx)
+        if self.active_memo.get() == (key, idx, self.union_epoch) {
+            return true;
+        }
+        let r = self.unions.get(&key) == Some(&idx)
             || idx < 64
                 && !self.union_alts.is_empty()
-                && self.union_alts.get(&key).is_some_and(|m| m & 1 << idx != 0)
+                && self.union_alts.get(&key).is_some_and(|m| m & 1 << idx != 0);
+        if r {
+            self.active_memo.set((key, idx, self.union_epoch));
+        }
+        r
     }
 
     #[inline(never)]

@@ -1662,7 +1662,7 @@ impl Oven {
                     Some((i, ut))
                 });
             if let Some((i, ut)) = idx {
-                self.mem.unions.insert(Ptr::union_key(p, u64::from(pp.off) + at, ut), i as u32);
+                self.mem.union_thaw(Ptr::union_key(p, u64::from(pp.off) + at, ut), i as u32);
             }
         }
     }

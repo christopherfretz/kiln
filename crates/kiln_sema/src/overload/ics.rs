@@ -1080,7 +1080,9 @@ impl Sema<'_, '_> {
                     let a = self.arg_info(e);
                     let elide = if self.ast.types.is_array(ety) {
                         let el = self.ast.types.element(ety).unwrap_or(QualType::ERROR);
-                        !(self.is_char_type(el) && self.string_lit_of(e).is_some())
+                        self.string_lit_of(e).is_none_or(|s| {
+                            self.string_init_compat(el, s) != crate::init::StringInit::Ok
+                        })
                     } else if let Some(r) = self.ast.types.as_record(ety) {
                         self.is_aggregate(ety)
                             && self.ast.types.as_record(xty).is_none_or(|x| {

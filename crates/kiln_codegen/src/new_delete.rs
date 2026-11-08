@@ -456,71 +456,74 @@ impl Cg<'_> {
         );
     }
 
-    /// The pointer value of `e` and, when its alignment comes from a
-    /// declaration, that alignment (clang `EmitPointerWithAlignment` with
-    /// `AlignmentSource::Decl`).
-    fn pointer_with_align(&mut self, e: ExprId) -> R<(V, Option<u64>)> {
+    /// The lvalue `e` has clang's `AlignmentSource::Decl`: a named
+    /// non-reference variable; a non-reference field of any base (clang
+    /// `getFieldAlignmentSource` is always `Decl`, `->` included); an
+    /// element of such an array; or `*p`/`p[i]` where the pointer's
+    /// alignment is a declaration's (`EmitPointerWithAlignment`).
+    pub(crate) fn lvalue_from_decl(&self, e: ExprId) -> bool {
         let ast = self.ast;
-        let mut e = e;
-        while ast.exprs.get(e).kind() == ExprKind::ParenExpr {
-            e = ast.exprs.operand(e);
+        let e = self.skip_parens(e);
+        let n = *ast.exprs.get(e);
+        let non_ref = |d| ast.decls.get(d).ty().is_some_and(|q| !ast.types.is_reference(q));
+        match n.kind() {
+            ExprKind::DeclRefExpr => {
+                let d = ast.exprs.decl(e);
+                matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar) && non_ref(d)
+            }
+            ExprKind::MemberExpr => {
+                let d = ast.exprs.decl(e);
+                matches!(ast.decls.get(d).kind(), DeclKind::Field | DeclKind::Var) && non_ref(d)
+            }
+            ExprKind::ArraySubscriptExpr => {
+                let [l, r] = ast.exprs.operands(e);
+                let base = if ast.types.is_pointer(ast.exprs.get(l).ty()) { l } else { r };
+                self.pointer_from_decl(base)
+            }
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Deref => {
+                self.pointer_from_decl(ast.exprs.operand(e))
+            }
+            _ => false,
         }
+    }
+
+    /// The alignment `pointer_with_alignment(e)` computes is a
+    /// declaration's (its `LValueBaseInfo` source is `Decl`), without
+    /// emitting anything.
+    pub(crate) fn pointer_from_decl(&self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let e = self.skip_parens(e);
         let n = *ast.exprs.get(e);
         if n.kind().is_cast() {
             let s = ast.exprs.operand(e);
+            let sq = ast.exprs.get(s).ty();
             match ast.exprs.cast_kind(e) {
-                CastKind::NoOp | CastKind::BitCast => {
-                    let sq = ast.exprs.get(s).ty();
-                    if ast.types.pointee(sq).is_some_and(|p| !ast.types.is_void(p))
-                        && ast.types.is_pointer(sq)
-                    {
-                        let (v, a) = self.pointer_with_align(s)?;
-                        // An explicit cast of an opaque pointer takes the
-                        // target type's alignment, which the caller then
-                        // discards; only `Decl` survives either way.
-                        return Ok((v, a));
-                    }
+                CastKind::NoOp | CastKind::BitCast
+                    if ast.types.is_pointer(sq)
+                        && ast.types.pointee(sq).is_some_and(|p| !ast.types.is_void(p)) =>
+                {
+                    return self.pointer_from_decl(s);
                 }
-                CastKind::ArrayToPointerDecay => {
-                    let lv = self.emit_lvalue(s)?;
-                    let decl = self.lvalue_from_decl(s);
-                    let v = self.decay(lv.addr, lv.q);
-                    return Ok((v, decl.then_some(lv.addr.align)));
+                CastKind::ArrayToPointerDecay => return self.lvalue_from_decl(s),
+                CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase
+                    if ast.types.pointee(sq).and_then(|t| ast.types.as_record(t)).is_some() =>
+                {
+                    return self.pointer_from_decl(s);
                 }
-                _ => {}
+                _ => return false,
             }
         }
-        if n.kind() == ExprKind::UnaryOperator && ast.exprs.unary_op(e) == UnaryOp::AddrOf {
-            let s = ast.exprs.operand(e);
-            let lv = self.emit_lvalue(s)?;
-            let decl = self.lvalue_from_decl(s);
-            return Ok((lv.addr.v, decl.then_some(lv.addr.align)));
-        }
-        Ok((self.emit_scalar(e)?, None))
-    }
-
-    /// The lvalue `e` has `AlignmentSource::Decl`: a named non-reference
-    /// variable, or a `.` member or array element of one.
-    pub(crate) fn lvalue_from_decl(&self, e: ExprId) -> bool {
-        let ast = self.ast;
-        let n = *ast.exprs.get(e);
         match n.kind() {
-            ExprKind::ParenExpr => self.lvalue_from_decl(ast.exprs.operand(e)),
-            ExprKind::DeclRefExpr => {
-                let d = ast.exprs.decl(e);
-                matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar)
-                    && ast.decls.get(d).ty().is_some_and(|q| !ast.types.is_reference(q))
-            }
-            ExprKind::MemberExpr if !n.has(ExprFlags::ARROW) => {
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::AddrOf => {
                 self.lvalue_from_decl(ast.exprs.operand(e))
             }
-            ExprKind::ArraySubscriptExpr => {
-                let [l, _] = ast.exprs.operands(e);
-                let l = self.skip_parens(l);
-                ast.exprs.get(l).kind().is_cast()
-                    && ast.exprs.cast_kind(l) == CastKind::ArrayToPointerDecay
-                    && self.lvalue_from_decl(ast.exprs.operand(l))
+            ExprKind::CallExpr => {
+                self.addressof_call_arg(e).is_some_and(|s| self.lvalue_from_decl(s))
             }
+            ExprKind::BinaryOperator => self.pointer_arith_operands(e).is_some_and(|(lp, _)| {
+                let [l, r] = ast.exprs.operands(e);
+                self.pointer_from_decl(if lp { l } else { r })
+            }),
             _ => false,
         }
     }
@@ -692,8 +695,10 @@ impl Cg<'_> {
             let Some(&arg) = placement.first() else {
                 return err(loc, "placement new without a placement argument");
             };
-            let (p, decl_align) = self.pointer_with_align(arg)?;
-            (p, decl_align.unwrap_or(alloc_align))
+            // clang `EmitCXXNewExpr`: the placement pointer's alignment
+            // only when it is a declaration's.
+            let p = self.pointer_with_alignment(arg)?;
+            (p.v, if p.decl { p.align } else { alloc_align })
         } else {
             let size_q = params.first().copied().unwrap_or(QualType::unqual(t.target().size_t));
             let mut vals = vec![CallArg::Scalar(size)];
