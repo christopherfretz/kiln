@@ -5265,6 +5265,15 @@ pub mod builtin {
     /// `void *__builtin_thread_pointer()` (clang `NoThrow`; WP-782): the
     /// thread pointer, `llvm.thread.pointer`; never a constant.
     pub const THREAD_POINTER: u32 = 2180;
+    // ---- WP-774.
+    /// `void __builtin_clear_padding(T *p)` (GCC, `NoThrow`,
+    /// `CustomTypeChecking`; libstdc++'s and libc++'s `std::atomic` and
+    /// `std::atomic_ref` use it): `T` complete, trivially copyable and
+    /// not `const`. Zeroes the padding bits of `*p` (`kiln_abi`
+    /// `padding_mask`); a validated no-op in a constant evaluation
+    /// (spec/codegen.md "Clearing padding"). Kiln-private id (clang 22
+    /// has no such builtin).
+    pub const CLEAR_PADDING: u32 = 2274;
 
     // WP-803: the `_FORTIFY_SOURCE` checking builtins (clang 19
     // `Builtins.td` `__builtin___*_chk`; kiln-private ids). Each is a call
@@ -5366,6 +5375,8 @@ pub mod builtin {
         row(START_LIFETIME, "__builtin_start_lifetime", "v.", N | T),
         // WP-782.
         row(THREAD_POINTER, "__builtin_thread_pointer", "v*", N),
+        // WP-774.
+        row(CLEAR_PADDING, "__builtin_clear_padding", "v.", N | T),
         // WP-803.
         row(MEMCPY_CHK, "__builtin___memcpy_chk", "v*v*vC*zz", N | F),
         row(MEMMOVE_CHK, "__builtin___memmove_chk", "v*v*vC*zz", N | F),

@@ -435,6 +435,11 @@ impl Oven {
                 self.start_lifetime(a as u64, OTy(t1))?;
                 Ok(0)
             }
+            bi::CLEAR_PADDING if t1 == bi::DYN => Err(Fault::Invalid),
+            bi::CLEAR_PADDING => {
+                self.clear_padding(a as u64, OTy(t1))?;
+                Ok(0)
+            }
             bi::UNION_LIVE => {
                 let raw = a as u64;
                 let key = Ptr::union_key(raw, u64::from(Ptr::decode(raw).off), OTy(t1));

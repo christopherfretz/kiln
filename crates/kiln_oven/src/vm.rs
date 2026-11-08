@@ -3416,6 +3416,20 @@ impl Oven {
         Ok(())
     }
 
+    /// `__builtin_clear_padding(raw)` for an object of type `ty` (WP-774;
+    /// spec/oven.md "Clearing padding"): the storage must exist, be in
+    /// bounds and be modifiable by this evaluation. Padding bits are not
+    /// modelled (they read as indeterminate), so nothing is written.
+    pub(super) fn clear_padding(&mut self, raw: u64, ty: OTy) -> Result<(), Fault> {
+        let fault = |f| Fault::Mem { f, ak: ak::ASSIGN, ty, p: raw };
+        let size = self.types.size(ty);
+        let (sp, _, a) = self.mem.check_storage(raw, size, true).map_err(fault)?;
+        if let Some(f) = write_fault(sp, a, ty) {
+            return Err(fault(f));
+        }
+        Ok(())
+    }
+
     fn placement(&mut self, raw: u64, ty: OTy, stat: Option<OTy>, aux: u32) -> Result<(), Fault> {
         let fault = |f| Fault::Mem { f, ak: ak::INIT, ty, p: raw };
         let (sp, _, a) = self.mem.check_storage(raw, 0, true).map_err(fault)?;

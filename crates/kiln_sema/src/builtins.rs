@@ -820,6 +820,7 @@ impl Sema<'_, '_> {
             builtin::LAUNDER => self.builtin_launder(callee, args, rparen),
             builtin::IS_WITHIN_LIFETIME => self.builtin_is_within_lifetime(args, rparen),
             builtin::START_LIFETIME => self.builtin_start_lifetime(args, rparen),
+            builtin::CLEAR_PADDING => self.builtin_clear_padding(args, rparen),
             builtin::IS_STRING_LITERAL => self.builtin_is_string_literal(args, rparen),
             builtin::ASSUME_ALIGNED => self.builtin_assume_aligned(callee, args, rparen),
             builtin::COMPLEX => self.builtin_complex(callee, args, rparen),
@@ -1796,6 +1797,49 @@ impl Sema<'_, '_> {
         if let Some(which) = bad {
             let msg = self
                 .diag(DiagId::sema_builtin_start_lifetime_invalid_arg, at)
+                .arg(self.ty_arg(t))
+                .arg(which);
+            self.emit(msg);
+            return None;
+        }
+        Some((vec![a], QualType::VOID))
+    }
+
+    /// `__builtin_clear_padding(p)` (GCC's `check_builtin_function_arguments`
+    /// `BUILT_IN_CLEAR_PADDING`, WP-774): one argument, decayed and
+    /// converted to an rvalue, a pointer to a non-`const`, complete,
+    /// trivially copyable type, diagnosed at the argument in that order;
+    /// the call is `void`.
+    fn builtin_clear_padding(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 1, rparen) {
+            return None;
+        }
+        let a = conv::decay(self, args[0]);
+        let t = self.ety(a);
+        if t == QualType::ERROR {
+            return None;
+        }
+        let at = self.expr_loc(a);
+        let pointee = self.ast.types.pointee(t).filter(|_| self.ast.types.is_pointer(t));
+        let bad = match pointee {
+            None => Some(0),
+            Some(p) if self.ast.types.effective_quals(p).is_const() => Some(1),
+            Some(p)
+                if !self.ast.types.is_function(p)
+                    && (self.ast.types.is_void(p) || !self.require_complete(p, at)) =>
+            {
+                Some(2)
+            }
+            Some(p) if !self.is_trivially_copyable_type(p) => Some(3),
+            Some(_) => None,
+        };
+        if let Some(which) = bad {
+            let msg = self
+                .diag(DiagId::sema_builtin_clear_padding_invalid_arg, at)
                 .arg(self.ty_arg(t))
                 .arg(which);
             self.emit(msg);

@@ -2074,10 +2074,7 @@ impl<'a> Cg<'a> {
                     if self.opts.clang_compat >= 22
                         && self.opts.llvm_major >= 21
                         && (self.destructed_class(sig.params[i]).is_none()
-                            || kiln_abi::call::is_destroyed_in_callee(
-                                self.ast,
-                                sig.params[i],
-                            )) =>
+                            || kiln_abi::call::is_destroyed_in_callee(self.ast, sig.params[i])) =>
                 {
                     s.push(Attr::Flag(AttrKind::DeadOnReturn));
                 }

@@ -27,6 +27,7 @@ mod class;
 mod class_b;
 mod cleanup;
 mod cleanup_attr;
+mod clear_padding;
 mod complex;
 mod consts;
 mod contracts;
