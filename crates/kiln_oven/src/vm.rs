@@ -2871,11 +2871,11 @@ impl Oven {
         let Some(a) = self.alloc_any(p) else { return Ok(()) };
         let akey = Ptr::alloc_key(raw);
         let stamp = umemo::Stamp { epoch: self.mem.union_epoch, rebuilt: self.types.rebuilt() };
-        if self.umemo.hit(akey, a.ty, ty, p.off, stamp) {
+        if self.umemo.hit(umemo::Walk::Access, akey, a.ty, ty, p.off, stamp) {
             return Ok(());
         }
         if let Some(cover) = self.union_walk(a.ty, raw, ty, k)? {
-            self.umemo.put(akey, a.ty, ty, cover, stamp);
+            self.umemo.put(umemo::Walk::Access, akey, a.ty, ty, cover, stamp);
         }
         Ok(())
     }
@@ -2960,11 +2960,12 @@ impl Oven {
     /// The offsets [`Oven::union_walk`]'s answer covers once it reaches
     /// `t`, a type without unions, at byte `base`, having resolved every
     /// union above by its active member: when `t` is an array and the
-    /// accessed scalar of type `ty` at `target` is a subobject of its
+    /// accessed object of type `ty` at `target` is a subobject of its
     /// element, the same position in every element (the walk toward any of
-    /// them makes the same choices: a scalar subobject at one offset of a
-    /// non-union class is unique, and the active member holding this one
-    /// holds those too); else `target` alone.
+    /// them makes the same choices: no two subobjects of one type share an
+    /// address, [intro.object]/9, so a non-union class has one member
+    /// toward it, and the active member holding this one holds those
+    /// too); else `target` alone.
     fn union_free_cover(&self, t: OTy, base: u64, target: u64, ty: OTy) -> umemo::Cover {
         let exact = umemo::Cover::At(target as u32);
         let TyKind::Array { elem, n } = self.types.kind(t) else { return exact };
@@ -2974,7 +2975,6 @@ impl Oven {
             || target < base
             || target - base >= len
             || base + len > u64::from(u32::MAX)
-            || self.types.scal(ty).is_none()
         {
             return exact;
         }
@@ -3604,6 +3604,10 @@ impl Oven {
     /// activates the array (below); `__builtin_start_lifetime` passes
     /// false, the array then being a containing object outside its
     /// lifetime ("construction of subobject of member").
+    ///
+    /// A walk that succeeds and changes nothing is remembered ([`umemo`],
+    /// WP-760): while the active members stay as they are, the same
+    /// construction again would do nothing.
     fn place_in_unions(
         &mut self,
         raw: u64,
@@ -3611,25 +3615,63 @@ impl Oven {
         ty: OTy,
         implicit: bool,
     ) -> Result<(), Fault> {
+        let p = Ptr::decode(raw);
+        let akey = Ptr::alloc_key(raw);
+        let stamp = umemo::Stamp { epoch: self.mem.union_epoch, rebuilt: self.types.rebuilt() };
+        if self.umemo.hit(umemo::Walk::Place, akey, root, ty, p.off, stamp) {
+            return Ok(());
+        }
+        if let Some(cover) = self.place_walk(raw, root, ty, implicit)? {
+            self.umemo.put(umemo::Walk::Place, akey, root, ty, cover, stamp);
+        }
+        Ok(())
+    }
+
+    /// [`Oven::place_in_unions`]'s walk: on success, the offsets the same
+    /// answer covers, or `None` when the walk changed an active member
+    /// (or recorded possibly active ones), which is not remembered. The
+    /// region is the elements of the active array member of the only
+    /// union on the way, when the object is one of them: the walk toward
+    /// any of them makes the same choices (no two objects of one type
+    /// share an address, [intro.object]/9, so each non-union record
+    /// leads toward that union; at it, the active array member holds
+    /// every element).
+    fn place_walk(
+        &mut self,
+        raw: u64,
+        root: OTy,
+        ty: OTy,
+        implicit: bool,
+    ) -> Result<Option<umemo::Cover>, Fault> {
         let target = u64::from(Ptr::decode(raw).off);
+        let exact = Some(umemo::Cover::At(target as u32));
         let (mut t, mut base) = (root, 0u64);
+        let (mut clean, mut unions, mut region) = (true, 0u32, None);
         loop {
             if t == ty && base == target {
-                return Ok(());
+                return Ok(if !clean {
+                    None
+                } else if unions == 1 && region.is_some() {
+                    region
+                } else {
+                    exact
+                });
             }
             match self.types.kind(t) {
                 TyKind::Array { elem, n } => {
                     let es = self.types.size(elem).max(1);
                     let i = (target - base) / es;
                     if i >= n {
-                        return Ok(());
+                        return Ok(exact.filter(|_| clean));
                     }
                     base += i * es;
                     t = elem;
                 }
                 TyKind::Record { .. } => {
                     let (at, u, reach) = match self.types.hop(Walk::Place, t, target - base, ty) {
-                        Hop::Reached | Hop::Stop | Hop::Mutable(_) => return Ok(()),
+                        Hop::Reached | Hop::Stop | Hop::Mutable(_) => {
+                            return Ok(exact.filter(|_| clean));
+                        }
                         Hop::Array { at, t: arr } => {
                             base += at;
                             t = arr;
@@ -3639,6 +3681,7 @@ impl Oven {
                     };
                     base += at;
                     t = u;
+                    unions += 1;
                     let rel = target - base;
                     let fields = self.types.fields(t);
                     let reach = |i: u32| self.types.reaches(Walk::Place, u, rel, ty, reach, i);
@@ -3689,6 +3732,7 @@ impl Oven {
                             })?;
                             let i = arrs.trailing_zeros();
                             let (fo, ft) = (fields[i as usize].offset, fields[i as usize].ty);
+                            clean = false;
                             self.activate(raw, base, t, i);
                             if arrs.count_ones() > 1 {
                                 self.mem.union_alts_put(key, Some(arrs));
@@ -3702,7 +3746,7 @@ impl Oven {
                                 .near(t, rel)
                                 .find(|f| self.types.union_member_reaches(Walk::Place, rel, ty, f))
                             else {
-                                return Ok(());
+                                return Ok(exact.filter(|_| clean));
                             };
                             return Err(Fault::Union {
                                 ak: ak::CONSTRUCT,
@@ -3723,18 +3767,20 @@ impl Oven {
                             if (direct | arrs).count_ones() > 1 {
                                 self.mem.union_alts_put(key, Some(direct | arrs));
                             }
-                            return Ok(());
+                            return Ok(None);
                         }
                         Some(i) if arrs & 1 << i != 0 => {
                             // An element of the active array member: the
                             // array is the member (a possibly active one
                             // becomes the active one).
                             if active != Some(i) {
+                                clean = false;
                                 self.mem.union_put(key, Some(i));
                             }
                             let f = fields[i as usize];
                             base += f.offset;
                             t = f.ty;
+                            region = self.place_region(base, t, ty);
                         }
                         Some(i) if (direct | arrs) & !(1 << i) == 0 => {
                             let f = fields[i as usize];
@@ -3743,13 +3789,22 @@ impl Oven {
                         }
                         Some(i) => {
                             self.mem.union_alts_put(key, Some(alts | direct | arrs | 1 << i));
-                            return Ok(());
+                            return Ok(None);
                         }
                     }
                 }
-                _ => return Ok(()),
+                _ => return Ok(exact.filter(|_| clean)),
             }
         }
+    }
+
+    /// The elements of type `ty` of the array member of type `t` at byte
+    /// `base`, as a [`umemo::Cover`] ([`Oven::place_walk`]).
+    fn place_region(&self, base: u64, t: OTy, ty: OTy) -> Option<umemo::Cover> {
+        let (len, stride) = (self.types.size(t), self.types.size(ty));
+        (stride > 0 && len % stride == 0 && base + len <= u64::from(u32::MAX)).then_some(
+            umemo::Cover::Region { lo: base as u32, len: len as u32, stride: stride as u32, phase: 0 },
+        )
     }
 
     /// Whether the byte at `off` of an object of type `t` begins an element

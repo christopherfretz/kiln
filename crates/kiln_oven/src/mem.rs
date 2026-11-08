@@ -763,6 +763,11 @@ pub(crate) struct Memory {
     /// A frame object has been [`flags::LIFE`]-tracked in this evaluation:
     /// leaving a scope checks the objects it releases (`Oven::scope_life`).
     pub life_frame: bool,
+    /// One past the greatest index into [`Memory::live`] of a
+    /// [`flags::LIFE`]-tracked frame object, or more: leaving a scope whose
+    /// mark is at or above it releases no tracked object, and
+    /// `Oven::scope_life` returns at once (WP-760).
+    pub life_hi: usize,
     /// A lax fold is running (`Oven::fold_rvalue`): a [`LAX_READ`] object
     /// may be read.
     pub lax: bool,
@@ -825,6 +830,7 @@ impl Memory {
             cur_frame: 0,
             serial: 0,
             life_frame: false,
+            life_hi: 0,
             lax: false,
             unconstructed: Vec::new(),
             trial: Trial::default(),
@@ -910,6 +916,7 @@ impl Memory {
     pub fn reset(&mut self) {
         self.frame.top = 0;
         self.life_frame = false;
+        self.life_hi = 0;
         self.unconstructed.clear();
         self.slots.truncate(1);
         self.free.clear();
@@ -1006,6 +1013,7 @@ impl Memory {
             }
         }
         self.live.truncate(n);
+        self.life_hi = self.life_hi.min(n);
         self.frame.top = mark & 0xFFFF_FFFF;
     }
 
@@ -1773,6 +1781,8 @@ impl Memory {
         let sp = p.space();
         if sp == Sp::Frame {
             self.life_frame = true;
+            let i = self.live.iter().rposition(|&s| s == p.slot).map_or(self.live.len(), |i| i + 1);
+            self.life_hi = self.life_hi.max(i);
         }
         let s = self.space_mut(sp);
         s.ensure_life();

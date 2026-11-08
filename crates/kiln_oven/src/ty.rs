@@ -1181,7 +1181,7 @@ impl Types {
     /// element (treated as an array of one, [expr.add]/4).
     pub fn extent(&self, root: OTy, off: u64, past: bool, p: OTy) -> Option<(u64, u64, bool)> {
         let o = if past { off.checked_sub(1)? } else { off };
-        self.extent_in(root, 0, o, p, true)
+        self.extent_front(root, o, p)
     }
 
     /// [`Types::extent`] of the object at byte `o` below byte `base`
