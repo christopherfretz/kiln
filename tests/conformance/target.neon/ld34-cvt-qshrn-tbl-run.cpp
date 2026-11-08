@@ -2,7 +2,8 @@
 // de-interleaving `vld3`/`vld4`/`vst3`/`vst4`, the directed-rounding conversions
 // `vcvt{n,a,m,p}`, the halving `vhadd`/`vrhadd`/`vhsub`, the saturating narrowing shifts
 // `vq(r)shr(u)n_n`, the saturating `vqshl_n`, the rounding `vrshr_n` and the table lookups
-// `vtbl1`/`vtbl2`, and the widening sums `vaddlv` (WP-803).
+// `vtbl1`/`vtbl2`, the widening sums `vaddlv` and the register shifts `vshl`/`vrshl`/`vqshl`/
+// `vqrshl` (WP-803).
 //@ expect: run
 //@ requires: target-aarch64
 //@ args: -O0
@@ -17,6 +18,7 @@
 //@ stdout: qshl 127 -128 8 | qshlu 65535 12 | rshr 1 -1 3 | rshru 2 128
 //@ stdout: tbl1 3 0 7 0 | tbl2 15 0 9 2
 //@ stdout: addlv 4080 -16 131070 -6000000000
+//@ stdout: shl 20 2 0 | rshl 3 | qshl 127 -128 | qrshl 65535 2
 #include <arm_neon.h>
 #include <cstdio>
 
@@ -133,4 +135,22 @@ int main() {
   int32x4_t as32 = vdupq_n_s32(-1500000000);
   std::printf("addlv %d %d %u %lld\n", vaddlvq_u8(au), vaddlv_s8(as), vaddlv_u16(au16),
               (long long)vaddlvq_s32(as32));
+
+  {
+    uint8x16_t s0 = vdupq_n_u8(10);
+    int8x16_t c0 = {1, -2, -8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    uint8x16_t sh = vshlq_u8(s0, c0);
+    int16x4_t s1 = vdup_n_s16(5);
+    int16x4_t c1 = vdup_n_s16(-1);
+    int8x8_t s2 = {100, -100, 0, 0, 0, 0, 0, 0};
+    int8x8_t c2 = vdup_n_s8(2);
+    uint16x8_t s3 = {60000, 3, 0, 0, 0, 0, 0, 0};
+    int16x8_t c3 = {4, -1, 0, 0, 0, 0, 0, 0};
+    uint16x8_t qr = vqrshlq_u16(s3, c3);
+    int8x8_t qs = vqshl_s8(s2, c2);
+    std::printf("shl %d %d %d | rshl %d | qshl %d %d | qrshl %d %d\n", vgetq_lane_u8(sh, 0),
+                vgetq_lane_u8(sh, 1), vgetq_lane_u8(sh, 2), vget_lane_s16(vrshl_s16(s1, c1), 0),
+                vget_lane_s8(qs, 0), vget_lane_s8(qs, 1), vgetq_lane_u16(qr, 0),
+                vgetq_lane_u16(qr, 1));
+  }
 }

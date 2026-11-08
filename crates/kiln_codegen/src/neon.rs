@@ -371,6 +371,17 @@ fn call(b: &str) -> Option<Call> {
         "vhsub" => {
             Call { declared: true, ..i2("llvm.aarch64.neon.shsub", "llvm.aarch64.neon.uhsub") }
         }
+        // The shifts by a signed per-lane register count.
+        "vshl" => Call { declared: true, ..i2("llvm.aarch64.neon.sshl", "llvm.aarch64.neon.ushl") },
+        "vrshl" => {
+            Call { declared: true, ..i2("llvm.aarch64.neon.srshl", "llvm.aarch64.neon.urshl") }
+        }
+        "vqshl" => {
+            Call { declared: true, ..i2("llvm.aarch64.neon.sqshl", "llvm.aarch64.neon.uqshl") }
+        }
+        "vqrshl" => {
+            Call { declared: true, ..i2("llvm.aarch64.neon.sqrshl", "llvm.aarch64.neon.uqrshl") }
+        }
         "vqabs" => d("llvm.aarch64.neon.sqabs", "", "", 1),
         "vqneg" => d("llvm.aarch64.neon.sqneg", "", "", 1),
         "vqdmulh" => d("llvm.aarch64.neon.sqdmulh", "", "", 2),
