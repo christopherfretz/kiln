@@ -1989,9 +1989,10 @@ impl Cg<'_> {
             let vals = self.emit_call_args_for(&sig, args, Some(md))?;
             self.arm_musttail(e);
             let callee = V::C(Value::func(f));
+            let from = self.f.calls.len();
             let r = self.call_vals(&sig, callee, Some(f), None, &vals, args, dest, &extra)?;
             if nr {
-                self.finish_noreturn_call();
+                self.finish_noreturn_call(from, Some(f), Some(e))?;
             }
             return Ok(r);
         }
@@ -2098,12 +2099,16 @@ impl Cg<'_> {
                 None => (&sig, &vals[..], args),
             };
             self.arm_musttail(e);
+            let from = self.f.calls.len();
             let r = self.call_vals_to(sig, fp, None, this, cv, ca, dest, &extra, &ret_extra)?;
             if let Some(p) = r {
                 self.alloc_align_assume(md, &vals, p);
             }
-            if nr {
-                self.finish_noreturn_call();
+            // Through the vtable only the call site's own `noreturn`
+            // ends the block (clang `CallBase::doesNotReturn`, no called
+            // function).
+            if nr && extra.contains(&kiln_llvm::Attr::Flag(kiln_llvm::AttrKind::NoReturn)) {
+                self.finish_noreturn_call(from, None, Some(e))?;
             }
             return Ok(r);
         }
@@ -2123,12 +2128,13 @@ impl Cg<'_> {
             None => (&sig, &vals[..], args),
         };
         self.arm_musttail(e);
+        let from = self.f.calls.len();
         let r = self.call_vals_ret(sig, callee, Some(f), this, cv, ca, dest, &extra, &ret_extra)?;
         if let Some(p) = r {
             self.alloc_align_assume(callee_md, &vals, p);
         }
         if nr {
-            self.finish_noreturn_call();
+            self.finish_noreturn_call(from, Some(f), Some(e))?;
         }
         Ok(r)
     }
@@ -2285,7 +2291,9 @@ impl Cg<'_> {
     }
 
     /// clang `GetAddressOfBaseClass` with the path split by `base_path`:
-    /// the address of the base and its alignment.
+    /// the address of the base and its alignment. `upcast` is `Some` for
+    /// a conversion `UBSan` checks, with the location of its expression.
+    #[allow(clippy::option_option, reason = "a checked upcast may have no location")]
     pub(crate) fn base_address(
         &mut self,
         this: Addr,

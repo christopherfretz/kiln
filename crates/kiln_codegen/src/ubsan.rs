@@ -19,7 +19,7 @@ use kiln_ast::types::{PrintOptions, Quals, TypeView, aka, print_type, vector_dia
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::intrinsics::OverflowOp;
 use kiln_llvm::{
-    Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, Flags, FloatPredicate, GlobalId,
+    Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, Flags, FloatPredicate, FuncId, GlobalId,
     GlobalSanitizer, IntPredicate, Linkage, MdKindId, MetadataId, TypeId as LTy, UnnamedAddr,
     UwTableKind, Value,
 };
@@ -339,10 +339,10 @@ impl Cg<'_> {
         // A canonical type (`getRecordType`, `getThisType`, the
         // canonicalized types of `EmitScalarConversion`) has no written
         // qualifier or elaboration: clang prints its tags with full scope.
-        let opts = if desc != UbDesc::Written {
-            PrintOptions { full_scope: true, ..PrintOptions::SUGARED }
-        } else {
+        let opts = if desc == UbDesc::Written {
             PrintOptions::SUGARED
+        } else {
+            PrintOptions { full_scope: true, ..PrintOptions::SUGARED }
         };
         let s = print_type(&ast.types, &names, q, opts);
         let name = match (desc, aka(&ast.types, &names, q)) {
@@ -378,7 +378,7 @@ impl Cg<'_> {
         let mut bytes = name.into_bytes();
         if let Some(w) = bit_int {
             bytes.push(0);
-            bytes.extend_from_slice(&u32::try_from(w).unwrap_or(u32::MAX).to_le_bytes());
+            bytes.extend_from_slice(&w.to_le_bytes());
             bytes.push(0);
         }
         bytes.push(0);
@@ -551,7 +551,7 @@ impl Cg<'_> {
     }
 
     /// A call of `f` with call-site function attributes `site`.
-    fn ub_call(&mut self, f: kiln_llvm::FuncId, args: Vec<V>, site: &[Attr]) {
+    fn ub_call(&mut self, f: FuncId, args: Vec<V>, site: &[Attr]) {
         let fn_ty = self.m.func(f).ty();
         let fa = self.m.attr_set(site);
         let opts =
@@ -1057,6 +1057,80 @@ impl Cg<'_> {
         })();
         self.ub_end(outer);
         res
+    }
+
+    /// clang `EmitCall` of a call that does not return, under
+    /// `-fsanitize=unreachable` (WP-871): the call (the first one
+    /// recorded in `self.f.calls` from `from` whose callee is `fid`)
+    /// loses its `noreturn`, and so does `fid` itself at the end of the
+    /// module ([`Cg::ub_strip_noreturn_decls`]); with `ASan`,
+    /// `__asan_handle_no_return` goes right before it; then the
+    /// `builtin_unreachable` check at the location of call `e` (none for
+    /// a call without an expression; `EmitUnreachable`). The
+    /// caller adds the `unreachable` itself.
+    pub(crate) fn ub_noreturn_call(
+        &mut self,
+        from: usize,
+        fid: Option<FuncId>,
+        e: Option<ExprId>,
+    ) -> R<()> {
+        if !self.ub_on(San::UNREACHABLE) || self.f.fir.cur().is_none() {
+            return Ok(());
+        }
+        let loc = e.and_then(|e| self.ub_expr_loc(e));
+        let calls = &self.f.calls[from.min(self.f.calls.len())..];
+        if let Some(i) = calls.iter().find(|c| c.1 == fid).map(|c| c.0)
+            && let Some(fa) = self.f.fir.call_opts_mut(i).map(|o| o.attrs.func)
+        {
+            let fa = self.without_noreturn(fa);
+            if let Some(o) = self.f.fir.call_opts_mut(i) {
+                o.attrs.func = fa;
+            }
+            if let Some(f) = fid {
+                self.ub_returning.insert(f);
+            }
+            // ASan relies on `noreturn` to place this call itself.
+            if self.ub_on(San::ADDRESS.union(San::KERNEL_ADDRESS)) {
+                let f = self.runtime_fn("__asan_handle_no_return", LTy::VOID, &[], &[])?;
+                let fn_ty = self.m.func(f).ty();
+                let nu = self.m.attr_set(&[Attr::Flag(AttrKind::NoUnwind)]);
+                let opts = CallOpts {
+                    attrs: AttrList { func: nu, ..AttrList::default() },
+                    ..CallOpts::default()
+                };
+                let callee = V::C(Value::func(f));
+                let op = Op::Call { fn_ty, callee, args: Vec::new(), opts: Box::new(opts) };
+                let c = Fir::last_inst(self.f.fir.insert_before(i, op, LTy::VOID));
+                // `SetInsertPoint(CI)` takes the call's location.
+                let dbg = self.f.fir.inst_dbg(i);
+                self.f.fir.set_inst_dbg(c, dbg);
+                let k = self.m.md_kind("nosanitize");
+                let md = self.m.md_tuple(&[]);
+                self.f.fir.add_md(c, k, md);
+                self.f.calls.push((c, Some(f), true));
+            }
+        }
+        self.ub_unreachable(loc)
+    }
+
+    /// Attribute set `fa` without `noreturn`.
+    fn without_noreturn(&mut self, fa: kiln_llvm::AttrSetId) -> kiln_llvm::AttrSetId {
+        let nr = Attr::Flag(AttrKind::NoReturn);
+        let kept: Vec<Attr> = self.m.attrs_of(fa).iter().filter(|a| **a != nr).cloned().collect();
+        self.m.attr_set(&kept)
+    }
+
+    /// The end of the module: the functions [`Cg::ub_noreturn_call`]
+    /// reached lose `noreturn` (clang `removeFnAttr` on the
+    /// `llvm::Function`, which its definition, emitted before or after,
+    /// shares).
+    pub(crate) fn ub_strip_noreturn_decls(&mut self) {
+        let mut fs: Vec<FuncId> = self.ub_returning.iter().copied().collect();
+        fs.sort_unstable();
+        for f in fs {
+            let fa = self.without_noreturn(self.m.func(f).attrs.func);
+            self.m.func_mut(f).attrs.func = fa;
+        }
     }
 
     /// clang `EmitVariablyModifiedType`'s `vla-bound` check of the bound
@@ -1959,8 +2033,8 @@ impl Cg<'_> {
         let outer = self.ub_begin();
         let check = self.f.fir.create_block();
         let no_check = self.f.fir.create_block();
-        let sloc = self.load(LTy::PTR, slot, 8, false);
-        let can = self.ub_is_not_null(sloc);
+        let saved = self.load(LTy::PTR, slot, 8, false);
+        let can = self.ub_is_not_null(saved);
         self.f.fir.push(Op::CondBr { c: can, t: check, f: no_check }, LTy::VOID);
         self.emit_block(check, false);
         let c = self.ub_is_not_null(rv);
@@ -1969,7 +2043,7 @@ impl Cg<'_> {
             &[(c, San::RETURNS_NONNULL_ATTRIBUTE)],
             UbHandler::NonnullReturn,
             &statics,
-            &[sloc],
+            &[saved],
         );
         self.emit_block(no_check, false);
         self.ub_end(outer);
@@ -2165,7 +2239,7 @@ impl Cg<'_> {
                 && alloca.is_none_or(|x| x < a)
             {
                 let pi = self.cast(CastOp::PtrToInt, ptr, LTy::I64);
-                let m = self.icn(LTy::I64, (a - 1) as i128);
+                let m = self.icn(LTy::I64, i128::from(a - 1));
                 // LLVM's constant folder: `and (ptrtoint @g), m` is zero
                 // when `@g`'s alignment clears the bits of `m`.
                 let low = if self.ub_global_align(ptr) >= a {

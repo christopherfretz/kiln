@@ -18,7 +18,13 @@ use crate::module::{Cg, R, err};
 impl Cg<'_> {
     /// The runtime function `name` (`ret(params)`) with function
     /// attributes `fa` (clang `CreateRuntimeFunction`).
-    fn runtime_fn(&mut self, name: &str, ret: LTy, params: &[LTy], fa: &[Attr]) -> R<FuncId> {
+    pub(crate) fn runtime_fn(
+        &mut self,
+        name: &str,
+        ret: LTy,
+        params: &[LTy],
+        fa: &[Attr],
+    ) -> R<FuncId> {
         if let Some(f) = self.m.get_function(name) {
             return Ok(f);
         }

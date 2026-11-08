@@ -3546,7 +3546,7 @@ impl Cg<'_> {
                 crate::builtins::lib_intrinsic(self, d).filter(|_| !self.no_builtin_here(d))
             })
         {
-            match self.emit_builtin(id, e)? {
+            match self.emit_builtin(id, e, d)? {
                 crate::builtins::BuiltinCall::Emitted(v) => return Ok(v),
                 crate::builtins::BuiltinCall::Library => lib = Some(self.lib_fn(d, id)?),
             }
@@ -3617,6 +3617,7 @@ impl Cg<'_> {
             None => (&vals, &args),
         };
         let mark = self.f.fir.inst_count();
+        let from = self.f.calls.len();
         self.arm_musttail(e);
         let r = self.call_vals_ret(&sig, callee, fid, None, cv, ca, dest, &extra, &ret_extra)?;
         // WP-806: a library builtin's call takes the FP scope's fast-math
@@ -3630,7 +3631,7 @@ impl Cg<'_> {
             self.alloc_align_assume(d, &vals, p);
         }
         if noreturn {
-            self.finish_noreturn_call();
+            self.finish_noreturn_call(from, fid, Some(e))?;
         }
         Ok(r)
     }
@@ -3710,16 +3711,25 @@ impl Cg<'_> {
         Ok(Some(V::C(self.m.const_undef(t))))
     }
 
-    /// clang `EmitCall` of a call that does not return: `unreachable`,
-    /// then a dummy block for the unreachable code that follows.
-    pub(crate) fn finish_noreturn_call(&mut self) {
+    /// clang `EmitCall` of a call that does not return (of `fid`, the
+    /// first one recorded in `self.f.calls` from `from`; `e` its
+    /// expression): `unreachable` ([`Cg::ub_noreturn_call`] first), then
+    /// a dummy block for the unreachable code that follows.
+    pub(crate) fn finish_noreturn_call(
+        &mut self,
+        from: usize,
+        fid: Option<FuncId>,
+        e: Option<ExprId>,
+    ) -> R<()> {
         if self.f.fir.cur().is_none() {
-            return;
+            return Ok(());
         }
+        self.ub_noreturn_call(from, fid, e)?;
         self.f.fir.push(Op::Unreachable, LTy::VOID);
         self.f.fir.set_cur(None);
         let cont = self.f.fir.create_block();
         self.emit_block(cont, false);
+        Ok(())
     }
 
     /// WP-803: a call of `d` (type `fty`, signature `sig`) with a hidden

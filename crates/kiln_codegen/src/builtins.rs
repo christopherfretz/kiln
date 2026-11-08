@@ -621,7 +621,7 @@ impl Cg<'_> {
     /// clang `EmitBuiltinExpr` for the call `e` of builtin `b`:
     /// [`BuiltinCall::Library`] for a library builtin, which the caller
     /// emits as an ordinary call of [`Cg::lib_fn`].
-    pub(crate) fn emit_builtin(&mut self, b: u32, e: ExprId) -> R<BuiltinCall> {
+    pub(crate) fn emit_builtin(&mut self, b: u32, e: ExprId, callee: DeclId) -> R<BuiltinCall> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
         // WP-803: the object size of a `pass_object_size` parameter is its
@@ -1251,7 +1251,11 @@ impl Cg<'_> {
                 let (dv, da) = self.ptr_align(d)?;
                 let (sv, sa) = self.ptr_align(s)?;
                 let nv = self.emit_scalar(n)?;
+                // clang `EmitArgCheck`: `nonnull` (from the called
+                // declaration's attribute), then alignment, per argument.
+                self.ub_nonnull_arg(callee, 0, d, dv)?;
                 self.ub_builtin_arg_check(crate::ubsan::Tck::Store, dv, da, d)?;
+                self.ub_nonnull_arg(callee, 1, s, sv)?;
                 self.ub_builtin_arg_check(crate::ubsan::Tck::Load, sv, sa, s)?;
                 let f = if b == id::MEMMOVE {
                     kiln_llvm::intrinsics::memmove(&mut self.m, LTy::I64)
@@ -1300,6 +1304,8 @@ impl Cg<'_> {
                 let cv = self.emit_scalar(c)?;
                 let cv = self.int_cast(cv, LTy::I8, false);
                 let nv = self.emit_scalar(n)?;
+                // clang `EmitNonNullArgCheck` of the destination only.
+                self.ub_nonnull_arg(callee, 0, d, dv)?;
                 let f = kiln_llvm::intrinsics::memset(&mut self.m, LTy::I64);
                 let fn_ty = self.m.func(f).ty();
                 let vb = self.m.const_bool(false);

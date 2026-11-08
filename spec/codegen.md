@@ -1148,7 +1148,10 @@ loads.
   and definition. Its calls get the `noreturn` call-site attribute —
   except a `[[noreturn]]` (C++11 spelling) virtual function's, whose
   overriders may return — and are followed by `unreachable` and a dummy
-  block (`noreturn_call`, `finish_noreturn_call`).
+  block (`noreturn_call`, `finish_noreturn_call`). A call of such a
+  virtual function through the vtable has neither, as in clang
+  (`CallBase::doesNotReturn` with no called function; WP-871). Under
+  `-fsanitize=unreachable` see "Sanitizers".
 
 - `[[assume(e)]]` (WP-160): when there is an insertion point, each
   assumption that is not `ASSUME_IGNORED` is emitted as a scalar and
@@ -1286,6 +1289,13 @@ cut the front-end cost of `-g` without changing a byte of the IR.
   - pointer-overflow (`EmitCheckedInBoundsGEP`).
   - nonnull-attribute, returns-nonnull-attribute (through
     `return.sloc.ptr`) and builtin (`__builtin_ctz`/`clz` of zero).
+    The `memcpy`/`memmove`/`mempcpy`/`memcpy_inline` builtins check
+    both pointers (`memset` its destination) against the called
+    declaration's `nonnull`, each before its alignment check.
+  - unreachable after a call that does not return: the call site and
+    the called function lose `noreturn`, and a `builtin_unreachable`
+    check at the call's location precedes the `unreachable`; with ASan
+    the frontend puts `__asan_handle_no_return` before the call.
   - the implicit integer truncation and sign-change checks
     (`EmitScalarConversion`) and implicit-bitfield-conversion. The
     `integer` group excludes the bit-field check.

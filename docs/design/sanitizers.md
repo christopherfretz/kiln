@@ -203,6 +203,7 @@ subsection it pins.
 | nonnull-attribute | nonnull_arg (16) | `EmitNonNullArgCheck` | `ub_nonnull_arg` | done; not through member-pointer calls (§1.5.6) |
 | returns-nonnull-attribute | nonnull_return_v1 (17) | `EmitReturnValueCheck` | `ub_ret_nonnull_*` | done (§1.5.6) |
 | builtin | invalid_builtin (8) | `EmitCheckedArgForBuiltin` | `ub_builtin_zero` | done (§1.5.6) |
+| unreachable after a call that does not return | builtin_unreachable (1) | `EmitCall`, `EmitUnreachable` | `ub_noreturn_call` | done (§1.5.6) |
 | implicit-{unsigned,signed}-integer-truncation, implicit-integer-sign-change | implicit_conversion (7) | `EmitIntegerTruncationCheck`, `EmitIntegerSignChangeCheck` | `ub_int_conv` | done (§1.5.7) |
 | implicit-bitfield-conversion | implicit_conversion (7) | `EmitBitfieldConversionCheck` | `ub_bf_conv` | done (§1.5.7) |
 | checks on `_Atomic` `++`/`--`/`op=` | as the operator | `EmitScalarPrePostIncDec`, `EmitCompoundAssignLValue` | `atomic.rs`, `ub_inc_dec` | done (§1.5.8) |
@@ -255,7 +256,7 @@ constructor and member-call checks, and `getThisType` for the
 prologue check of `this`. An implicit-move `return x;` is loaded
 unchecked, as clang visits through the `NoOp` cast. The `memcpy`
 family checks the alignment of its pointer arguments as clang 19 does
-(`EmitArgCheck`).
+(`EmitArgCheck`), each after its `nonnull` check (§1.5.6).
 
 #### 1.5.2 array-bounds
 
@@ -325,13 +326,33 @@ Both checks are reported together with the base and the result.
   `l`/`ll` forms) without a fallback must be non-zero. The last data
   byte is `BCK_CTZPassedZero` (0) or `BCK_CLZPassedZero` (1).
 
+- The `memcpy`, `memmove`, `mempcpy` and `memcpy_inline` builtins
+  check each pointer against the called declaration's `nonnull` (glibc
+  declares one; `__builtin_memcpy` has none), destination then source,
+  each before its alignment check (`EmitArgCheck`). `memset` checks
+  its destination only.
+- `unreachable`: a call that does not return (`CallBase::
+  doesNotReturn`: the site's `noreturn`, or the called function's) loses
+  `noreturn` at the call site and on the called function (also its
+  definition, emitted before or after), and is followed by
+  `br i1 false` to `builtin_unreachable` at the call's location, then
+  `unreachable`. After an `invoke` the check is in `invoke.cont`. With
+  ASan, `__asan_handle_no_return` (`nounwind`, `!nosanitize`) goes
+  right before the call, as ASan no longer sees `noreturn`. A call
+  through the vtable of a `[[noreturn]]` virtual function returns
+  (overriders need not inherit the attribute), with or without
+  sanitizers.
+
 Gaps:
 
-- clang also checks `nonnull` on the `memcpy`/`memset` builtins.
 - A call through a member pointer passes no callee to the check.
 - A lambda's trailing `returns_nonnull` lands on the wrong
   declaration in sema (`ubsan-lambda-returns-nonnull-ir.cpp`, an
   xfail).
+- Under ASan clang keeps value names, and clang 22 annotates the
+  allocas ASan instruments (`!annotation alloca_name_altered`); kiln
+  does neither, so `ubsan-noreturn-asan-ir.cpp` is an xfail although
+  the instructions match.
 
 #### 1.5.7 implicit-conversion
 

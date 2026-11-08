@@ -163,10 +163,14 @@ pub(crate) struct Cg<'a> {
     /// The `UBSan` type descriptor of each type (clang
     /// `EmitCheckTypeDescriptor`'s cache, WP-675).
     pub ub_types: FxHashMap<(QualType, u8), GlobalId>,
-    /// The UBSan type descriptors by canonical type, kind and spelling:
+    /// The `UBSan` type descriptors by canonical type, kind and spelling:
     /// clang uniques type sugar, so two written types that print the same
     /// share one descriptor.
     pub ub_type_names: FxHashMap<(QualType, u8, Box<str>), GlobalId>,
+    /// The functions a non-returning call reached under
+    /// `-fsanitize=unreachable` (clang `EmitCall` removes `noreturn`
+    /// from the called `llvm::Function`, WP-871).
+    pub ub_returning: FxHashSet<FuncId>,
     /// The source manager, for `UBSan` source locations (WP-675).
     pub sm: Option<&'a kiln_source::SourceManager>,
     /// Named struct types by record.
@@ -424,6 +428,7 @@ impl<'a> Cg<'a> {
             strings: FxHashMap::default(),
             ub_types: FxHashMap::default(),
             ub_type_names: FxHashMap::default(),
+            ub_returning: FxHashSet::default(),
             sm: None,
             named: FxHashMap::default(),
             named_base: FxHashMap::default(),
@@ -540,6 +545,7 @@ impl<'a> Cg<'a> {
         self.emit_global_init_trailer()?;
         self.emit_contract_defaults()?;
         self.check_aliases();
+        self.ub_strip_noreturn_decls();
         self.trailer();
         match self.take_debug_info_error() {
             Some(e) => Err(e),
