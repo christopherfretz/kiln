@@ -3603,7 +3603,13 @@ No lowering changed; the new forms reach codegen as existing AST.
   width, and `vqdmulh[q]`/`vqrdmulh[q]` as one `sq[r]dmulh` call: WP-792,
   `target.neon/ir-paddl-qdmulh-19.cpp`; the structure loads and stores
   `vld2`..`vld4`, `vst2`..`vst4` and the shift-and-insert `vsli_n`:
-  spec/landed/sema/WP-799.md "NEON structure loads and stores"). The
+  spec/landed/sema/WP-799.md "NEON structure loads and stores"; the
+  cryptographic extension `vaes{e,d,mc,imc}q_u8`, `vsha1{c,m,p}q_u32`,
+  `vsha1h_u32`, `vsha1su{0,1}q_u32`, `vsha256h[2]q_u32` and
+  `vsha256su{0,1}q_u32` as one call of the non-overloaded
+  `llvm.aarch64.crypto.*` intrinsic of that name on `<16 x i8>`,
+  `<4 x i32>` and `i32` operands, the AES type code dropped: WP-811,
+  `target.neon/crypto-run.cpp`, `ir-crypto-19.cpp`). The
   AArch64 ACLE builtins (`__builtin_arm_*`,
   `arm.rs`) are spec/landed/sema/WP-724.md "ACLE builtins".
 - With `CodegenOptions::sve` (AArch64 only), every function definition
