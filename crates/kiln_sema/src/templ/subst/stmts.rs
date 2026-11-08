@@ -26,6 +26,14 @@ impl Substituter<'_, '_, '_> {
         let (init_failures, errors) = (self.init_failures, self.sema.diags.error_count());
         let body_errors = self.sema.inst.body_errors;
         match self.stmt_node(s) {
+            // A `return` whose operand does not convert to the return type
+            // (an error reported here, not in a nested instantiation) is
+            // `StmtError` in clang's `BuildReturnStmt`: the body is
+            // invalid, and an enclosing `if` stops at it (WP-826).
+            Ok(x) if self.lambda_bodies == 0 && self.failed_return(x, errors, body_errors) => {
+                self.stmt_failed = true;
+                x
+            }
             Ok(x) => x,
             // The failure was diagnosed (an error in the instantiation, or
             // a `RecoveryExpr` of the pattern): the statement becomes an
@@ -79,6 +87,17 @@ impl Substituter<'_, '_, '_> {
             }
             Err(SubstFail) => self.sema.act_on_null_stmt(loc),
         }
+    }
+
+    /// Whether substituted statement `x` is a `return` whose operand
+    /// failed to convert, with an error reported since `errors` that is
+    /// not one of a nested instantiation (`body_errors` before).
+    fn failed_return(&self, x: StmtId, errors: u32, body_errors: u32) -> bool {
+        let ast = &self.sema.ast;
+        ast.stmts.get(x).kind() == StmtKind::ReturnStmt
+            && ast.stmts.return_value(x).is_some_and(|v| self.sema.is_error_expr(v))
+            && self.sema.diags.error_count().saturating_sub(errors)
+                > self.sema.inst.body_errors.saturating_sub(body_errors)
     }
 
     /// Whether pattern statement `s` is a `return` whose operand has an
@@ -158,7 +177,30 @@ impl Substituter<'_, '_, '_> {
             let (v3, c) = self.sema.act_on_condition_var(v2, loc);
             return Ok((v3, Some(c)));
         }
-        Ok((None, self.opt_expr(cond)?))
+        Ok((None, self.recovering_expr(cond, loc)?))
+    }
+
+    /// The condition expression of a (not `constexpr`) `if`, `while`,
+    /// `for` or `switch`, or a `for` increment. One that fails without a
+    /// new error (it names a local whose initializer failed) is an
+    /// erroneous expression, and the statement is still built: clang's
+    /// reference to such a variable is a `RecoveryExpr`, the condition
+    /// over it is valid, and the sub-statements are instantiated and
+    /// diagnosed (spec/sema-templates.md §5.5, WP-826).
+    fn recovering_expr(&mut self, e: Option<ExprId>, loc: Loc) -> SubstResult<Option<ExprId>> {
+        let errors = self.sema.diags.error_count();
+        match self.opt_expr(e) {
+            Err(SubstFail)
+                if self.sema.diags.error_count() == errors
+                    && self.sema.has_errors()
+                    && !self.sema.diags.has_fatal()
+                    && !self.probe_done() =>
+            {
+                let l = e.map_or(loc, |e| self.sema.ast.exprs.get(e).loc());
+                Ok(Some(self.sema.recover_err(&[], l)))
+            }
+            r => r,
+        }
     }
 
     #[allow(clippy::too_many_lines, reason = "one flat match over the statement kinds")]
@@ -280,7 +322,7 @@ impl Substituter<'_, '_, '_> {
                     let init = self.opt_stmt(l.init);
                     let (var, c) = self.condition(l.cond_var, l.cond, loc)?;
                     let c = c.map(|c| self.sema.act_on_condition_at(c, loc));
-                    let inc = self.opt_expr(l.inc)?;
+                    let inc = self.recovering_expr(l.inc, loc)?;
                     self.sema.act_on_start_loop();
                     let body = l.body.map(|b| self.sub_stmt(b));
                     self.sema.act_on_end_loop();
@@ -572,7 +614,14 @@ impl Substituter<'_, '_, '_> {
         self.sema.push_scope(ScopeKind::Control);
         let r = (|| {
             let init = self.opt_stmt(d.init);
-            let (var, c) = self.condition(d.cond_var, d.cond, loc)?;
+            // clang's `constexpr` condition over a `RecoveryExpr` is not a
+            // constant expression: the statement fails, its branches are
+            // not instantiated.
+            let (var, c) = if kind == IfKind::Constexpr && d.cond_var.is_none() {
+                (None, self.opt_expr(d.cond)?)
+            } else {
+                self.condition(d.cond_var, d.cond, loc)?
+            };
             let c = c.ok_or(SubstFail)?;
             if kind == IfKind::Constexpr {
                 let c = self.sema.act_on_constexpr_condition(c, loc);
@@ -614,10 +663,19 @@ impl Substituter<'_, '_, '_> {
                 return Ok(self.sema.act_on_if(kind, init, var, Some(c), then, els, loc));
             }
             let c = self.sema.act_on_condition_at(c, loc);
+            // clang's `TransformIfStmt` stops at a `then` branch that is
+            // `StmtError`: the `else` branch of a statement whose `then`
+            // branch failed is not instantiated (WP-826).
+            let failed = std::mem::take(&mut self.stmt_failed);
             let then = match d.then {
                 Some(t) => self.sub_stmt(t),
                 None => self.sema.act_on_null_stmt(loc),
             };
+            let then_failed = self.stmt_failed;
+            self.stmt_failed |= failed;
+            if then_failed {
+                return Err(SubstFail);
+            }
             let els = d.els.map(|e| self.sub_stmt(e));
             Ok(self.sema.act_on_if(kind, init, var, Some(c), then, els, loc))
         })();

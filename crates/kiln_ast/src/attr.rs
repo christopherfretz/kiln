@@ -76,6 +76,9 @@ impl AttrKind {
     /// function (written in its function type) with `a` = 1, for the
     /// implicit object parameter.
     pub const LIFETIMEBOUND: AttrKind = AttrKind(84);
+    /// The `no_sanitize*` family (clang `NoSanitizeAttr`, WP-675): `a`
+    /// and `b` hold the excluded set and the spelling
+    /// (`kiln_ast::sanitize::no_sanitize_words`).
     pub const NO_SANITIZE: AttrKind = AttrKind(85);
     /// GNU `mode(M)` (clang `ModeAttr`), consumed into the declared type
     /// like the vector attributes: `a` = the mode's width in bits, `| 1
@@ -465,12 +468,14 @@ impl AttrKind {
 
     /// Whether this is one of WP-813's class B attributes
     /// ([`AttrKind::NO_STACK_PROTECTOR`] ..=
-    /// [`AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT`]), or one of WP-674's
-    /// lifetime attributes spelled and checked the same way
-    /// ([`AttrKind::LIFETIMEBOUND`], [`AttrKind::GSL_OWNER`],
-    /// [`AttrKind::GSL_POINTER`]).
+    /// [`AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT`]), WP-675's
+    /// [`AttrKind::NO_SANITIZE`], or one of WP-674's lifetime attributes
+    /// spelled and checked the same way ([`AttrKind::LIFETIMEBOUND`],
+    /// [`AttrKind::GSL_OWNER`], [`AttrKind::GSL_POINTER`]).
     pub fn is_class_b(self) -> bool {
-        (240..=275).contains(&self.0) || self == AttrKind::LIFETIMEBOUND
+        (240..=275).contains(&self.0)
+            || self == AttrKind::LIFETIMEBOUND
+            || self == AttrKind::NO_SANITIZE
     }
 }
 

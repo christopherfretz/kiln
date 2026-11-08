@@ -297,12 +297,11 @@ impl Cg<'_> {
         let ast = self.ast;
         let [l, _] = ast.exprs.operands(e);
         if ast.exprs.binary_op(e) == BinaryOp::PtrMemI {
-            let p = self.emit_scalar(l)?;
             let lq = ast.exprs.get(l).ty();
             let Some(pq) = ast.types.pointee(lq) else {
                 return err(self.loc_of(e), "->* on a non-pointer");
             };
-            let (_, align) = self.pointee_layout(pq);
+            let (p, align) = self.ptr_align(l)?;
             let ty = self.mty(pq);
             Ok(Addr { v: p, ty, align })
         } else {

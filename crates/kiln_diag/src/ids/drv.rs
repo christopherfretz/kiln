@@ -13,6 +13,7 @@ drv_command_signalled = Error (1) "{0} command failed due to signal (use -v to s
 drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
 drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
 drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
+// WP-811: a driver option spelled like a warning (`-Wframe-larger-than=N`);
 // WP-813: `-fpatchable-function-entry=` with a malformed value.
 drv_invalid_argument_to_option = Error (2) "invalid argument '{0}' to -{1}";
 drv_invalid_gcc_install_dir = Error (1) "'{0}' does not contain a GCC installation";

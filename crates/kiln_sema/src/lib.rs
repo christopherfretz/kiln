@@ -230,6 +230,10 @@ pub struct Sema<'a, 'sm> {
     /// The named sections seen, each with the first declaration placed in
     /// it and its flags (clang `ASTContext::SectionInfos`; [`section`]).
     pub(crate) sections: kiln_source::fx::FxHashMap<Box<[u8]>, (DeclId, u8)>,
+    /// The known `no_sanitize("...")` arguments clang does not allow on a
+    /// global variable, by attribute: warned about once the subject is
+    /// known to be one (WP-675; `class_b_attrs`).
+    pub(crate) no_sanitize_not_global: kiln_source::fx::FxHashMap<kiln_ast::AttrId, Vec<String>>,
     /// The attribute-token as written (scope, name) of each attribute
     /// spelled with a scope or a `__`-affixed name, by its location; how
     /// diagnostics name it ([`Sema::attr_shown`]).
@@ -1166,6 +1170,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             layout_cache: kiln_abi::LayoutCache::default(),
             pragma_packs: Vec::new(),
             sections: kiln_source::fx::FxHashMap::default(),
+            no_sanitize_not_global: kiln_source::fx::FxHashMap::default(),
             attr_spellings: kiln_source::fx::FxHashMap::default(),
             traits: templ::builtins::TraitState::default(),
             exceptions: true,

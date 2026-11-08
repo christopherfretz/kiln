@@ -48,7 +48,7 @@ impl Sema<'_, '_> {
         // more (class/virtual/used.rs).
         loop {
             self.define_used_vtables();
-            if self.inst.fatal {
+            if self.instantiation_stopped() {
                 break;
             }
             if self.inst.pending.is_empty() {
@@ -81,7 +81,7 @@ impl Sema<'_, '_> {
             (std::collections::VecDeque<PendingInst>, Vec<(DeclId, Loc)>, bool, Option<DeclId>);
         let mut saved: Vec<Saved> = Vec::new();
         loop {
-            if self.inst.fatal {
+            if self.instantiation_stopped() {
                 self.inst.pending.clear();
                 for (q, _, resumed, _) in &mut saved {
                     q.clear();

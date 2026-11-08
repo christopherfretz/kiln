@@ -102,7 +102,6 @@ const fn rt(name: &'static str, spellings: [u8; 4], class: Class, why: &'static 
 use Class::{A, B, C};
 
 const TSA: &str = "thread-safety analysis (-Wthread-safety), which kiln does not run";
-const SAN: &str = "sanitizer instrumentation, which kiln does not emit";
 const LIFETIME: &str = "lifetime analysis (-Wdangling), which kiln does not run";
 const ANALYSIS: &str = "diagnostics or static analysis only";
 const OBJC: &str = "Objective-C / CoreFoundation only; no effect on C++ code generation";
@@ -212,13 +211,8 @@ pub static TABLE: &[Row] = &[
     r("mig_server_routine", G | CL, C, ANALYSIS),
     rt("model", [0, 0, 0, G | GS], A, "x86-64 code model of the variable's section"),
     r22("modular_format", G | CL, B, HINT),
-    r("no_address_safety_analysis", G | GS, B, SAN),
     r22("no_cluster", G, C, OFFLOAD),
     r("no_randomize_layout", G | GS, B, HINT),
-    rt("no_sanitize", [G | CL, G | GS | CL, G | CL, G | GS | CL], B, SAN),
-    r("no_sanitize_address", G | GS, B, SAN),
-    r("no_sanitize_memory", G | CL, B, SAN),
-    r("no_sanitize_thread", G | GS, B, SAN),
     r22("no_specializations", G | CL, C, ANALYSIS),
     r("no_thread_safety_analysis", G | CL, C, TSA),
     r("nocommon", G | GS, C, "a no-op in C++, whose variables are never common symbols"),
@@ -505,10 +499,12 @@ mod tests {
         assert_eq!(s("reentrant_capability", g, None, 19), Support::Unknown);
         assert_eq!(s("reentrant_capability", g, None, 22), Support::Ignored(C));
         // Sanitizer and lifetime attributes (formerly WP-667's table).
-        assert_eq!(s("no_sanitize", g, None, 19), Support::Ignored(B));
-        assert_eq!(s("no_sanitize", x, Some("clang"), 19), Support::Ignored(B));
+        // WP-675 implements the sanitizer family (`class_b_attrs.rs`).
+        let ns = Support::Implemented(AttrKind::NO_SANITIZE);
+        assert_eq!(s("no_sanitize", g, None, 19), ns);
+        assert_eq!(s("no_sanitize", x, Some("clang"), 19), ns);
         assert_eq!(s("no_sanitize", x, Some("gnu"), 19), Support::Unknown);
-        assert_eq!(s("no_sanitize", x, Some("gnu"), 22), Support::Ignored(B));
+        assert_eq!(s("no_sanitize", x, Some("gnu"), 22), ns);
         assert_eq!(s("lifetimebound", x, None, 22), Support::Unknown);
         assert_eq!(s("lifetimebound", x, Some("gnu"), 22), Support::Unknown);
         assert_eq!(
@@ -518,7 +514,7 @@ mod tests {
         assert_eq!(s("Owner", x, Some("gsl"), 19), Support::Implemented(AttrKind::GSL_OWNER));
         assert_eq!(s("Pointer", x, None, 19), Support::Unknown);
         assert_eq!(s("Owner", g, None, 19), Support::Unknown);
-        assert_eq!(s("no_sanitize_address", x, Some("gnu"), 19), Support::Ignored(B));
+        assert_eq!(s("no_sanitize_address", x, Some("gnu"), 19), ns);
         assert_eq!(s("no_sanitize_address", x, Some("clang"), 22), Support::Unknown);
         // Class A: rejected.
         assert_eq!(s("address_space", g, None, 22), Support::Unsupported);

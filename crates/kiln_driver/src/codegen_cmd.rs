@@ -213,6 +213,7 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOpti
         outline_expansions: a
             .outline_expansions
             .unwrap_or(kiln_codegen::OUTLINE_EXPANSIONS_DEFAULT),
+        sanitize: a.sanitize(x86, "").0.opts,
         ..CodegenOptions::default()
     }
 }
@@ -331,7 +332,7 @@ impl CodegenJob<'_> {
         let mut module = None;
         if engine.error_count() == 0 {
             let fp = a.fp_model();
-            let opts = CodegenOptions {
+            let mut opts = CodegenOptions {
                 source_filename: if job.path == "-" { "-".to_owned() } else { job.path.to_owned() },
                 exceptions: a.predef.exceptions.unwrap_or(true),
                 rtti: a.predef.rtti.unwrap_or(true),
@@ -401,6 +402,9 @@ impl CodegenJob<'_> {
                 },
                 ..codegen_flag_options(a, feats.cpu.clone(), x86)
             };
+            // UBSan's `shift-base` depends on the language (WP-675).
+            opts.sanitize.cplusplus = job.std.cplusplus;
+            opts.sanitize.cxx20 = job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20;
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).
             tu.oven.set_clang_compat(opts.clang_compat);
@@ -703,6 +707,8 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
     let ir = code_part(ir);
     let passes = match opt_pipeline(args.opt_flag.as_deref()) {
         Some(p) => p,
+        // WP-675: the sanitizer passes run at every level.
+        None if sanitizer_passes(args, tc).is_some() => "default<O0>",
         None if needs_always_inline(ir) => "default<O0>",
         // WP-813: the O0 pipeline's `ee-instrument` turns the entry and
         // exit attributes into `__cyg_profile_func_*` calls.
@@ -714,22 +720,54 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
 }
 
 /// The `opt` runs `-###` prints after a frontend step: those of an `-O1`
-/// or higher level, whose pipeline does not depend on the IR. At `-O0`
-/// the runs depend on what the IR declares ([`ir_passes`]) and are not
-/// shown (spec/driver.md "IR optimization").
+/// or higher level, whose pipeline does not depend on the IR, and those
+/// of a sanitizer build. Otherwise at `-O0` the runs depend on what the
+/// IR declares ([`ir_passes`]) and are not shown (spec/driver.md "IR
+/// optimization").
 fn planned_ir_passes(args: &Args, tc: &Toolchain) -> Option<Vec<Command>> {
     if args.disable_llvm_passes {
         return None;
     }
-    opt_pipeline(args.opt_flag.as_deref()).map(|p| opt_commands(args, tc, p))
+    opt_pipeline(args.opt_flag.as_deref())
+        .or_else(|| sanitizer_passes(args, tc).map(|_| "default<O0>"))
+        .map(|p| opt_commands(args, tc, p))
+}
+
+/// clang's `addSanitizers` (WP-675, docs/design/sanitizers.md §1.3): the
+/// `OptimizerLast` passes and their `cl::opt` flags.
+fn sanitizer_passes(args: &Args, tc: &Toolchain) -> Option<(String, Vec<String>)> {
+    args.sanitize(!tc.target.is_aarch64(), tc.target.triple)
+        .0
+        .optimizer_last(opt_level(args.opt_flag.as_deref()))
 }
 
 /// The `opt` run of `passes`, then for a textual or bitcode output the
-/// run that discards local value names ([`ir_passes`]).
+/// run that discards local value names ([`ir_passes`]). With a sanitizer
+/// the instrumentation joins the pipeline at its last extension point;
+/// under address or memory clang keeps the value names (its
+/// `-discard-value-names` is off), so there is no second run.
 fn opt_commands(args: &Args, tc: &Toolchain, passes: &str) -> Vec<Command> {
     let mut run = Command::new(tc, Tool::Opt);
-    run.arg(format!("-passes={passes}")).arg("-o").arg("-").arg("-");
+    run.arg(format!("-passes={passes}"));
+    let san = sanitizer_passes(args, tc);
+    if let Some((ep, cl)) = &san {
+        run.arg(format!("--passes-ep-optimizer-last={ep}"));
+        for c in cl {
+            run.arg(c.clone());
+        }
+    }
+    let keep_names = args.sanitize(!tc.target.is_aarch64(), tc.target.triple).0.opts.has(
+        kiln_ast::sanitize::SanitizerSet(
+            kiln_ast::sanitize::SanitizerSet::ADDRESS.0
+                | kiln_ast::sanitize::SanitizerSet::MEMORY.0,
+        ),
+    );
+    run.arg("-o").arg("-").arg("-");
     if matches!(Phase::of(args), Phase::Object | Phase::Link) {
+        return vec![run];
+    }
+    if keep_names {
+        run.arg("-S");
         return vec![run];
     }
     let mut names = Command::new(tc, Tool::Opt);
@@ -833,6 +871,19 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
     // WP-813: clang links the XRay runtime for `-fxray-instrument`.
     if args.codegen.xray_instrument {
         cmd.arg("-fxray-instrument");
+    }
+    // WP-675: the linking clang++ picks the sanitizer runtimes.
+    if let Some(l) = args.sanitize(!tc.target.is_aarch64(), tc.target.triple).0.link_list() {
+        cmd.arg(l);
+        match args.sanitize.shared_libsan {
+            Some(true) => {
+                cmd.arg("-shared-libsan");
+            }
+            Some(false) => {
+                cmd.arg("-static-libsan");
+            }
+            None => {}
+        }
     }
     match args.stdlib {
         Some(StdLib::LibCxx) => {

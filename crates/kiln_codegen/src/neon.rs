@@ -126,6 +126,7 @@ fn lowering(name: &str) -> Option<(&'static str, T, &'static [T])> {
     const B8I: T = T::V(E::I8, 8);
     const I2: T = T::V(E::I32, 2);
     const I4: T = T::V(E::I32, 4);
+    const U32: T = T::S(E::I32);
     let q: &'static [T] = &[F4, B8, B8];
     Some(match name.strip_prefix(neon::PREFIX)? {
         "vbfdot_f32" => ("llvm.aarch64.neon.bfdot.v2f32.v4bf16", F2, &[F2, B4, B4]),
@@ -148,6 +149,23 @@ fn lowering(name: &str) -> Option<(&'static str, T, &'static [T])> {
         "vdotq_u32" => ("llvm.aarch64.neon.udot.v4i32.v16i8", I4, &[I4, B16, B16]),
         // The 64-bit polynomial multiply: `<16 x i8>`, bitcast to `poly128_t`.
         "vmull_p64" => ("llvm.aarch64.neon.pmull64", B16, &[T::S(E::I64), T::S(E::I64)]),
+        // The cryptographic extension (WP-811; clang `AArch64SIMDIntrinsicMap`
+        // and `AArch64SISDIntrinsicMap`, `aarch64_crypto_*`, none overloaded;
+        // the AES builtins' trailing type code is not passed).
+        "vaeseq_u8" => ("llvm.aarch64.crypto.aese", B16, &[B16, B16]),
+        "vaesdq_u8" => ("llvm.aarch64.crypto.aesd", B16, &[B16, B16]),
+        "vaesmcq_u8" => ("llvm.aarch64.crypto.aesmc", B16, &[B16]),
+        "vaesimcq_u8" => ("llvm.aarch64.crypto.aesimc", B16, &[B16]),
+        "vsha1cq_u32" => ("llvm.aarch64.crypto.sha1c", I4, &[I4, U32, I4]),
+        "vsha1mq_u32" => ("llvm.aarch64.crypto.sha1m", I4, &[I4, U32, I4]),
+        "vsha1pq_u32" => ("llvm.aarch64.crypto.sha1p", I4, &[I4, U32, I4]),
+        "vsha1h_u32" => ("llvm.aarch64.crypto.sha1h", U32, &[U32]),
+        "vsha1su0q_u32" => ("llvm.aarch64.crypto.sha1su0", I4, &[I4, I4, I4]),
+        "vsha1su1q_u32" => ("llvm.aarch64.crypto.sha1su1", I4, &[I4, I4]),
+        "vsha256hq_u32" => ("llvm.aarch64.crypto.sha256h", I4, &[I4, I4, I4]),
+        "vsha256h2q_u32" => ("llvm.aarch64.crypto.sha256h2", I4, &[I4, I4, I4]),
+        "vsha256su0q_u32" => ("llvm.aarch64.crypto.sha256su0", I4, &[I4, I4]),
+        "vsha256su1q_u32" => ("llvm.aarch64.crypto.sha256su1", I4, &[I4, I4, I4]),
         _ => return None,
     })
 }

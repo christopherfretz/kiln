@@ -123,7 +123,9 @@ impl DiagOptions {
     /// diagnostic option (consumed), false if it is not. Bad values are
     /// recorded in [`pending`](Self::pending).
     ///
-    /// Accepted: `-w`, `-W<x>` (except `-Wl,`/`-Wa,`/`-Wp,`), `-WX` (alias
+    /// Accepted: `-w`, `-W<x>` (except `-Wl,`/`-Wa,`/`-Wp,`;
+    /// `-Wframe-larger-than=N`, `-Wlarger-than=` and `-Wlarger-than-` are
+    /// checked or ignored, not warning groups), `-WX` (alias
     /// of `-Werror`), bare `-W` (alias of `-Wextra`), `-R<x>` (except `-Rpass*`), `-pedantic`,
     /// `--pedantic`, `-pedantic-errors`, `-ferror-limit=N`,
     /// `-fmacro-backtrace-limit=N`, `-ftabstop=N`,
@@ -164,6 +166,25 @@ impl DiagOptions {
         if let Some(w) = arg.strip_prefix("-W") {
             if w.is_empty() || w.starts_with("l,") || w.starts_with("a,") || w.starts_with("p,") {
                 return false;
+            }
+            // clang's `-Wframe-larger-than=N` (bare `-Wframe-larger-than`
+            // is its alias with no value) is a code-generation option, the
+            // backend's stack-frame limit: the value must be an integer,
+            // and kiln emits no frame-size warning. `-Wlarger-than=` and
+            // `-Wlarger-than-` are GCC options clang ignores with any value.
+            if let Some(v) =
+                w.strip_prefix("frame-larger-than=").or((w == "frame-larger-than").then_some(""))
+            {
+                if v.parse::<u64>().is_err() {
+                    self.pending.push(OptionDiag {
+                        id: DiagId::drv_invalid_argument_to_option,
+                        args: vec![v.to_string(), "Wframe-larger-than=".to_string()],
+                    });
+                }
+                return true;
+            }
+            if w.starts_with("larger-than=") || w.starts_with("larger-than-") {
+                return true;
             }
             self.warnings.push(w.to_string());
         } else if let Some(r) = arg.strip_prefix("-R") {
