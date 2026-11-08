@@ -1423,10 +1423,8 @@ impl Oven {
         const_context: bool,
     ) -> (Result<ConstValueId, EvalFailure>, Cost) {
         // The ICE breadcrumb (spec/driver.md "Internal compiler errors").
-        let _phase = kiln_source::activity::enter(
-            kiln_source::activity::Phase::Oven,
-            e.loc(bridge.ast()),
-        );
+        let _phase =
+            kiln_source::activity::enter(kiln_source::activity::Phase::Oven, e.loc(bridge.ast()));
         let start = Instant::now();
         self.types.refresh(bridge);
         self.mp_refresh(bridge);

@@ -236,7 +236,8 @@ fn banner(prog: &str, r: &Record) -> String {
             let _ = writeln!(s, "{prog}: note: compiler backtrace:\n{}", bt.trim_end());
         }
         None => {
-            let _ = writeln!(s, "{prog}: note: set KILN_BACKTRACE=1 to include the compiler backtrace");
+            let _ =
+                writeln!(s, "{prog}: note: set KILN_BACKTRACE=1 to include the compiler backtrace");
         }
     }
     s
@@ -318,8 +319,7 @@ fn random_suffix(attempt: u32) -> String {
 
 /// A word for a POSIX shell.
 fn shell_quote(s: &str) -> String {
-    if !s.is_empty()
-        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_./=+,:@%^".contains(&b))
+    if !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_./=+,:@%^".contains(&b))
     {
         s.to_owned()
     } else {
@@ -338,8 +338,10 @@ fn run_script(argv0: &str, expanded: &[String], input: Option<&str>, ii: Option<
     } else {
         argv0.to_owned()
     };
-    let original: Vec<String> =
-        std::iter::once(argv0).chain(expanded.iter().map(String::as_str)).map(shell_quote).collect();
+    let original: Vec<String> = std::iter::once(argv0)
+        .chain(expanded.iter().map(String::as_str))
+        .map(shell_quote)
+        .collect();
     let mut words = vec![shell_quote(&program)];
     let mut replaced = false;
     let mut prev = "";
@@ -432,8 +434,7 @@ fn write_reproducer(
                 Err(e) => lines.push(format!("cannot write '{}': {e}", ii.display())),
             },
             None => lines.push(
-                "preprocessing the input also crashed; only the run script was written"
-                    .to_owned(),
+                "preprocessing the input also crashed; only the run script was written".to_owned(),
             ),
         },
     }
@@ -541,7 +542,10 @@ mod tests {
         assert_eq!(lines[1], "  second line");
         // No input recorded: the library never installs the hook.
         assert_eq!(lines[2], "kiln++: note: while running the driver (phase: oven, at t.cpp:3:4)");
-        assert_eq!(lines[3], "kiln++: note: in compiler source crates/x/src/y.rs:1:2 (thread 'kiln')");
+        assert_eq!(
+            lines[3],
+            "kiln++: note: in compiler source crates/x/src/y.rs:1:2 (thread 'kiln')"
+        );
         assert_eq!(lines[4], version_line());
         assert!(lines[5].contains(BUG_REPORT_URL));
     }

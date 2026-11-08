@@ -1580,16 +1580,24 @@ mod tests {
     fn crash_diagnostics() {
         use kiln_source::activity::Phase;
         let a = parse("a.cpp");
-        assert_eq!((a.no_crash_diagnostics, a.crash_diagnostics_dir, a.crash_for_testing), (false, None, None));
+        assert_eq!(
+            (a.no_crash_diagnostics, a.crash_diagnostics_dir, a.crash_for_testing),
+            (false, None, None)
+        );
         assert!(parse("-fno-crash-diagnostics a.cpp").no_crash_diagnostics);
         assert!(parse("-fcrash-diagnostics=off a.cpp").no_crash_diagnostics);
         assert!(!parse("-fno-crash-diagnostics -fcrash-diagnostics a.cpp").no_crash_diagnostics);
-        assert!(!parse("-fcrash-diagnostics=off -fcrash-diagnostics=all a.cpp").no_crash_diagnostics);
+        assert!(
+            !parse("-fcrash-diagnostics=off -fcrash-diagnostics=all a.cpp").no_crash_diagnostics
+        );
         let a = parse("-fcrash-diagnostics-dir=/x/y a.cpp");
         assert_eq!((a.crash_diagnostics_dir.as_deref(), a.errors), (Some("/x/y"), vec![]));
         let a = parse("-fkiln-crash-for-testing=oven a.cpp");
         assert_eq!((a.crash_for_testing, a.errors), (Some(Phase::Oven), vec![]));
-        assert_eq!(parse("-fkiln-crash-for-testing=lex a.cpp").crash_for_testing, Some(Phase::Preprocess));
+        assert_eq!(
+            parse("-fkiln-crash-for-testing=lex a.cpp").crash_for_testing,
+            Some(Phase::Preprocess)
+        );
         assert_eq!(
             parse("-fkiln-crash-for-testing=link a.cpp").errors,
             [ArgError::InvalidFlagValue("-fkiln-crash-for-testing=link".into(), "link".into())]

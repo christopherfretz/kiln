@@ -108,8 +108,7 @@ impl SyntaxJob<'_> {
         let mut verifier = None;
         crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = job.pp_inputs(&sm, &engine) {
-                let dirs: Vec<String> =
-                    inputs.list.dirs().iter().map(|d| d.path.clone()).collect();
+                let dirs: Vec<String> = inputs.list.dirs().iter().map(|d| d.path.clone()).collect();
                 let v = Verifier::new(&sm, opts.clone(), Some(inputs.main), quoted_lookup(dirs));
                 let v = Rc::new(RefCell::new(v));
                 self.parse(&sm, &engine, &interner, inputs, Some(&v), &mut result);

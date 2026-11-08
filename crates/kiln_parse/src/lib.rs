@@ -38,8 +38,8 @@ use kiln_lex::literal::{EncodingParams, LiteralOptions};
 use kiln_pp::{PpOptions, Preprocessor};
 use kiln_sema::target::Target;
 use kiln_sema::{Budget, Oven, Sema};
-use kiln_source::symbol::Interner;
 use kiln_source::activity::{self, Phase};
+use kiln_source::symbol::Interner;
 use kiln_source::{FileId, Loc, SourceManager};
 
 pub use parser::{PExpr, Parser};
