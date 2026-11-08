@@ -327,8 +327,13 @@ impl Substituter<'_, '_, '_> {
         self.pack.rewrap_ok = rewrap_ok;
         let saved_index = self.pack_index.take();
         self.pack.probing = true;
+        let outer = self.sema.lambda_mangle.begin_probe();
         let probe = f(self);
         let found = self.pack.found.take();
+        // A probe that found a pack is discarded: so are the mangling
+        // numbers of the closure types it created (clang substitutes the
+        // pattern only per element).
+        self.sema.lambda_mangle.end_probe(outer, found.is_some());
         self.pack.probing = false;
         let r = match (probe, found) {
             (Ok(x), None) => Ok(Expansion::Unexpanded(x)),
@@ -835,7 +840,9 @@ impl Substituter<'_, '_, '_> {
         // for the substituted `SizeOfPackExpr` (its dump differs).
         let _ = end;
         let st = self.sema.size_type();
-        Ok(self.int_literal(st, len as i128, loc))
+        let lit = self.int_literal(st, len as i128, loc);
+        let _ = self.sema.ast.templates.size_of_pack_origin.insert(lit, d);
+        Ok(lit)
     }
 }
 

@@ -24,6 +24,10 @@ cg_avx_calling_convention = Warning [Psabi] (3) "AVX vector {0:return|argument} 
 // clang `err_builtin_needs_feature` (`checkTargetFeatures`): {0} the
 // builtin, {1} its required-feature expression; WP-558.
 cg_builtin_needs_feature = Error (2) "'{0}' needs target feature {1}";
+// clang's custom "cannot yet mangle expression type %0" error
+// (`CXXNameMangler::mangleExpression`): {0} the expression's class; a
+// requires-clause the mangler cannot encode (spec/abi.md §8.15; WP-818).
+cg_cannot_mangle_expression = Error (1) "cannot yet mangle expression type {0}";
 // clang `err_cyclic_alias`: {0} is 0 for an alias, 1 for an ifunc;
 // WP-763.
 cg_cyclic_alias = Error (1) "{0:alias|ifunc} definition is part of a cycle";

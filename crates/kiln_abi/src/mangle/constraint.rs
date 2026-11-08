@@ -180,15 +180,16 @@ impl Mangler<'_, '_> {
             self.fn_depth = (saved_fn.0 + 1, true);
         }
         let saved_depth = std::mem::replace(&mut self.real_depth, true);
-        let (len, subs) = (self.out.len(), self.subs.len());
+        let saved_failed = self.failed.take();
         self.out.push('Q');
         if !self.expression(r) {
-            // No encoding yet: keep the clause visible (and distinct from
-            // an unconstrained overload) without a wrong partial one.
-            self.out.truncate(len + 1);
-            self.subs.truncate(subs);
-            self.out.push_str("u7unknown");
+            // No encoding: a hard error at the innermost unsupported
+            // subexpression (clang's "cannot yet mangle expression
+            // type"), never a silently wrong name.
+            let at = self.failed.unwrap_or(r);
+            self.anon.unmangleable.push(at);
         }
+        self.failed = saved_failed;
         self.real_depth = saved_depth;
         self.fn_depth = saved_fn;
     }
