@@ -850,7 +850,7 @@ fn golden_while_do() {
     let lc = x.load(c);
     let zero = x.lit(0);
     let gt = x.bin(BinaryOp::GT, lc, zero, QualType::BOOL);
-    let s3 = x.ast.builder().do_stmt(body, gt, L);
+    let s3 = x.ast.builder().do_stmt(body, gt, L, L);
     // while (true) break;
     let t = x.ast.builder().bool_literal(QualType::BOOL, true, L);
     let brk = x.ast.builder().break_stmt(L);

@@ -626,6 +626,25 @@ impl Types {
         }
     }
 
+    /// [`Types::same_unqualified`] or [`Types::similar`], level by level:
+    /// whether an array of `a` holds objects that a pointer to `b` may
+    /// step over ([expr.add]/6 allows similar types: a `const int *const
+    /// (&)[2]` bound directly to an `int *[2]`, CWG2352).
+    pub fn alike(&self, mut a: OTy, mut b: OTy) -> bool {
+        loop {
+            if self.same_class(a, b) {
+                return true;
+            }
+            match (self.kind(a), self.kind(b)) {
+                (TyKind::Ptr(x), TyKind::Ptr(y)) => (a, b) = (x, y),
+                (TyKind::Array { elem: x, n }, TyKind::Array { elem: y, n: m }) if n == m => {
+                    (a, b) = (x, y);
+                }
+                _ => return false,
+            }
+        }
+    }
+
     /// [conv.qual]/2: whether `a` and `b` are similar types (alike but
     /// for the cv-qualifiers at each level; [`Types::intern`] drops the
     /// top-level ones).
@@ -1225,11 +1244,11 @@ impl Types {
         loop {
             match self.kind(t) {
                 TyKind::Array { elem, n } => {
-                    if self.same_unqualified(elem, p) {
+                    if self.alike(elem, p) {
                         return Some((base, n, true));
                     }
                     // The array object itself (`&arr`), not an element.
-                    if self.same_unqualified(t, p) {
+                    if self.alike(t, p) {
                         return Some((base, 1, false));
                     }
                     let es = self.size(elem);
@@ -1240,7 +1259,7 @@ impl Types {
                     base += i * es;
                     t = elem;
                 }
-                _ if self.same_unqualified(t, p) => return Some((base, 1, false)),
+                _ if self.alike(t, p) => return Some((base, 1, false)),
                 // A union's members overlap, and so may a class's: an
                 // empty `[[no_unique_address]]` member shares its offset
                 // with the next one ([intro.object]/9), so each member

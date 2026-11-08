@@ -27,10 +27,12 @@ mod class;
 mod class_b;
 mod cleanup;
 mod cleanup_attr;
+mod clear_padding;
 mod complex;
 mod consts;
 mod contracts;
 mod coro;
+mod debuginfo;
 mod dyncast;
 mod eh;
 mod expr;
@@ -75,6 +77,7 @@ pub mod x86_intrinsic_table {
 }
 
 pub use builtins::{UNLOWERED_BUILTINS, is_unlowered_builtin};
+pub use debuginfo::{DebugInfoKind, DebugOptions};
 use kiln_abi::Target;
 use kiln_ast::Ast;
 use kiln_llvm::Module;
@@ -275,6 +278,9 @@ pub struct CodegenOptions {
     /// clang 20 that is what emits the empty `!llvm.linker.options`
     /// (spec/codegen.md §2).
     pub cxx_modules: bool,
+    /// Debug information (`-g` and friends; spec/codegen.md "Debug
+    /// information", WP-814).
+    pub debug: DebugOptions,
     /// The hardening and instrumentation flags (WP-813).
     pub hardening: Hardening,
 }
@@ -635,6 +641,7 @@ impl Default for CodegenOptions {
             outline_expansions: OUTLINE_EXPANSIONS_DEFAULT,
             contract_default_handler: true,
             cxx_modules: true,
+            debug: DebugOptions::default(),
             hardening: Hardening::default(),
         }
     }
@@ -680,6 +687,19 @@ pub fn emit_with_diags(
     target: &Target,
     opts: &CodegenOptions,
 ) -> (Result<Module, CodegenError>, Vec<kiln_diag::Diag>) {
+    emit_with_debug(ast, oven, target, opts, None)
+}
+
+/// [`emit_with_diags`] with the unit's sources, from which debug
+/// information takes its files and lines (`opts.debug`; without `sm` no
+/// debug information is emitted).
+pub fn emit_with_debug(
+    ast: &mut Ast,
+    oven: &mut Oven,
+    target: &Target,
+    opts: &CodegenOptions,
+    sm: Option<&kiln_source::SourceManager>,
+) -> (Result<Module, CodegenError>, Vec<kiln_diag::Diag>) {
     let folds = fold::prepass(ast, oven, target);
     // The mangler reads data member descriptions from the AST
     // (spec/reflection.md §8.3).
@@ -699,7 +719,11 @@ pub fn emit_with_diags(
         ast.reflections.set_dms(dms);
     }
     let void_ptr = ast.types.pointer_to(kiln_ast::QualType::VOID);
-    module::Cg::new(&*ast, &folds, target, opts, void_ptr).run()
+    let mut cg = module::Cg::new(&*ast, &folds, target, opts, void_ptr);
+    if let Some(sm) = sm {
+        cg.start_debug_info(sm);
+    }
+    cg.run()
 }
 
 #[cfg(test)]

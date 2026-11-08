@@ -119,8 +119,11 @@ impl Mangler<'_, '_> {
     fn type_prefix(&mut self, ty: QualType) {
         let ast = self.ast;
         let q = ast.types.canonical(ty);
+        // The creating spelling's expressions, as in `Mangler::compound`.
+        let origin = ast.types.arg_origin(q.ty());
         match ast.types.canonical_view(q) {
             TypeView::TemplateSpecialization { name, args, .. } => {
+                let args = origin.unwrap_or(args);
                 let key = Sub::Type(q);
                 if self.try_sub(key) {
                     return;
@@ -146,6 +149,7 @@ impl Mangler<'_, '_> {
                 self.subs.push(key);
             }
             TypeView::DependentTemplateSpecialization { nns, name, args, .. } => {
+                let args = origin.unwrap_or(args);
                 let key = Sub::Type(q);
                 if self.try_sub(key) {
                     return;
@@ -755,7 +759,8 @@ impl Mangler<'_, '_> {
                     return None;
                 };
                 self.symbol(s);
-                self.template_args(self.written_args(ty).unwrap_or(args));
+                let origin = ast.types.arg_origin(q.ty());
+                self.template_args(self.written_args(ty).or(origin).unwrap_or(args));
                 Some(false)
             }
             TypeView::DependentTemplateSpecialization { name, args, .. } => {

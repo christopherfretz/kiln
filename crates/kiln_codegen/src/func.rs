@@ -18,6 +18,7 @@ use kiln_source::fx::FxHashMap;
 
 use crate::CodegenError;
 use crate::cleanup::{Cleanup, Cleanups, JumpDest};
+use crate::debuginfo::func::VarSlot;
 use crate::fir::{Blk, Fir, Op, V};
 use crate::module::{Cg, R, Sig, err};
 use crate::tbaa::Tb;
@@ -470,6 +471,7 @@ impl Cg<'_> {
         }
 
         // StartFunction.
+        self.di_fn_start(d, f, thunk.is_some(), body);
         let ret_block = self.f.fir.create_block();
         self.f.ret_block = Some(ret_block);
         self.f.ret_dest = Some(JumpDest { blk: ret_block, depth: Some(0), index: 1 });
@@ -496,6 +498,9 @@ impl Cg<'_> {
                 if !*byval {
                     let p = self.f.fir.alloca(LTy::PTR, 8);
                     self.store(V::Arg(0), p, 8, false);
+                    if let Some(x) = self.f.fir.dbg.as_deref_mut() {
+                        x.ret_ptr = Some(p);
+                    }
                 }
             }
             ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => {
@@ -569,11 +574,18 @@ impl Cg<'_> {
             }
         }
         let this_class = ast.decls.get(d).ctx();
+        // clang `EmitParmDecl`'s argument numbers (none in a thunk).
+        let declare = thunk.is_none();
+        let mut dn = 0u32;
         let this_addr = this_arg.filter(|_| !self.f.naked).map(|v| {
             let a = self.f.fir.alloca(LTy::PTR, 8);
             let st = self.store(v, a, 8, false);
             if let Some(rd) = this_class {
                 self.tbaa_this_store(st, rd);
+            }
+            dn += 1;
+            if declare {
+                self.di_declare_this(a);
             }
             a
         });
@@ -581,17 +593,24 @@ impl Cg<'_> {
             let a = self.f.fir.alloca(LTy::PTR, 8);
             let st = self.store(v, a, 8, false);
             self.tbaa_vtt_store(st);
+            dn += 1;
+            if declare {
+                self.di_declare_vtt(a, dn);
+            }
             a
         });
         for (&p, val) in param_decls.iter().zip(vals) {
             let pq = ast.decls.get(p).ty().expect("param type");
-            let addr = match val {
+            dn += 1;
+            let (addr, slot) = match val {
                 ParamVal::Indirect(a, spill) => {
+                    let mut slot = VarSlot { addr: a.v, arg: Some(dn), deref: false };
                     if spill {
                         let p = self.f.fir.alloca(LTy::PTR, 8);
                         self.store(a.v, p, 8, false);
+                        slot = VarSlot { addr: p, arg: Some(dn), deref: true };
                     }
-                    a
+                    (a, slot)
                 }
                 ParamVal::Direct(v) => {
                     let mt = self.mty(pq);
@@ -599,9 +618,12 @@ impl Cg<'_> {
                     let a = self.f.fir.alloca(mt, align);
                     let addr = Addr { v: a, ty: mt, align };
                     self.store_scalar(v, addr, pq);
-                    addr
+                    (addr, VarSlot { addr: a, arg: Some(dn), deref: false })
                 }
             };
+            if declare {
+                self.di_declare_var(p, slot);
+            }
             self.f.locals.insert(p, addr);
             if let Some(&(_, t, v)) = hidden.iter().find(|h| h.0 == p) {
                 let mt = self.mty(size_q);
@@ -609,6 +631,10 @@ impl Cg<'_> {
                 let a = self.f.fir.alloca(mt, align);
                 let addr = Addr { v: a, ty: mt, align };
                 self.store_scalar(v, addr, size_q);
+                dn += 1;
+                if declare {
+                    self.di_declare_size(a, dn);
+                }
                 self.f.object_sizes.insert(p, (t, addr));
             }
             // clang `EmitParmDecl`: a parameter destroyed in the callee
@@ -641,6 +667,8 @@ impl Cg<'_> {
         if let Some(a) = vtt_addr {
             self.f.vtt = Some(self.load(LTy::PTR, a, 8, false));
         }
+        let start = body.map_or(ast.decls.get(d).loc(), |b| self.di_stmt_begin(b));
+        self.di_prologue_end(start, thunk.is_some());
 
         // GenerateCode: `Bypasses.Init` over the body when lifetime
         // markers are on (a coroutine redoes it over its own body).
@@ -714,6 +742,8 @@ impl Cg<'_> {
             }
         }
         // FinishFunction.
+        let end = self.di_body_end(body);
+        self.di_finish_function(end);
         let prologue = self.f.cl.prologue;
         self.pop_cleanup_blocks(prologue);
         self.emit_return_block();
@@ -755,6 +785,7 @@ impl Cg<'_> {
         {
             self.f.fir.erase(i);
         }
+        self.di_fn_finish();
 
         // Attributes.
         let mut extra = Vec::new();
@@ -942,6 +973,11 @@ impl Cg<'_> {
                 && let Some(t) = self.f.fir.terminator(p)
                 && matches!(self.f.fir.op(t), Op::Br { .. })
             {
+                // The `ret` takes the branch's location (`ApplyDebugLocation
+                // AL(*this, Loc)` in `FinishFunction`).
+                if let Some(l) = self.f.fir.inst_dbg(t) {
+                    self.f.fir.set_dbg_loc(Some(l));
+                }
                 self.f.fir.erase(t);
                 self.f.fir.set_cur(Some(p));
                 self.f.ret_block = None;
@@ -958,6 +994,7 @@ impl Cg<'_> {
             self.f.fir.push(Op::Unreachable, LTy::VOID);
             return;
         }
+        let mut ret_loc = None;
         let rv = match self.f.ret_kind {
             RetKind::Void => None,
             RetKind::Sret => {
@@ -986,6 +1023,9 @@ impl Cg<'_> {
                 match self.dominating_store(slot) {
                     Some(st) => {
                         let Op::Store { val, .. } = *self.f.fir.op(st) else { unreachable!() };
+                        if self.f.fir.dbg.as_deref().is_some_and(|x| x.ret_dbg) {
+                            ret_loc = self.f.fir.inst_dbg(st);
+                        }
                         self.f.fir.erase(st);
                         if self.f.fir.uses(slot.v) == 0 {
                             self.f.fir.erase(Fir::last_inst(slot.v));
@@ -1006,7 +1046,10 @@ impl Cg<'_> {
                 Some(self.coerced_load(slot, &ct))
             }
         };
-        self.f.fir.push(Op::Ret { v: rv }, LTy::VOID);
+        let ret = self.f.fir.push(Op::Ret { v: rv }, LTy::VOID);
+        if ret_loc.is_some() {
+            self.f.fir.set_inst_dbg(Fir::last_inst(ret), ret_loc);
+        }
     }
 
     /// clang `findDominatingStoreToReturnValue`.

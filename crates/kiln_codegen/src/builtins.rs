@@ -1221,6 +1221,11 @@ impl Cg<'_> {
                 self.emit_ignored(a0)?;
                 return Ok(BuiltinCall::Emitted(None));
             }
+            // WP-774: GCC's padding-bit clear (`crate::clear_padding`).
+            id::CLEAR_PADDING => {
+                self.emit_clear_padding(a0)?;
+                return Ok(BuiltinCall::Emitted(None));
+            }
             id::TRAP | id::VERBOSE_TRAP => {
                 let f = kiln_llvm::intrinsics::trap(&mut self.m);
                 self.intrinsic_call(f, vec![]);

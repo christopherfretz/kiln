@@ -84,3 +84,39 @@ compiler in any build.
   `CLI11_SINGLE_FILE=ON`, shared library. `docs/status/oss.md` is not
   updated here (`scripts/oss/oss-report.py --update docs/status/oss.md
   cli11` regenerates its row).
+
+## libc++ (WP-694)
+
+Built and tested with `-stdlib=libc++` (the system libc++ 19) by both kiln++ and the clang++-19 control: `scripts/oss/oss-build.sh --stdlib libc++ <project>`, report via `scripts/oss/oss-report.py --stdlib libc++ --perf <project>`. The clang-control build tree was deleted after these numbers were recorded. Wall-time differences are dominated by file-system syscalls on the bind mount (see the perf finding in [../oss.md](../oss.md#libc-results-wp-694)).
+
+The known-good check: the WP-685 `std::function` swap miscompile (cluster 2 above) stays fixed under libc++.
+
+<!-- oss:cli11:libcxx -->
+### cli11 (v2.6.1), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 65 / 0 | 65 / 0 |
+| links ok / failed | 60 / 0 | 60 / 0 |
+| tests passed / total | 86 / 86 | 86 / 86 |
+| wall | 246 s | 216 s |
+| peak TU RSS | 438 MB | 949 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 64 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **1.03x**, RSS **0.43x**; total 510 s vs 491 s; peak TU RSS 438 MB vs 949 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/cli11/tests/OptionTypeTest.cpp` | 21.0 | 22.2 | 1.06 | 949 | 438 | 0.46 |
+| `$KILN/.oss/src/cli11/tests/AppTest.cpp` | 16.6 | 17.7 | 1.06 | 685 | 317 | 0.46 |
+| `$KILN/.oss/src/cli11/tests/TransformTest.cpp` | 16.0 | 16.9 | 1.05 | 733 | 326 | 0.45 |
+| `$KILN/.oss/src/cli11/tests/ConfigFileTest.cpp` | 15.6 | 16.5 | 1.06 | 598 | 320 | 0.54 |
+| `$KILN/.oss/src/cli11/tests/SetTest.cpp` | 15.1 | 15.8 | 1.04 | 715 | 319 | 0.45 |
+
+TUs over 1.2x on time or RSS: 1 of the 64 that take clang-19 at least 0.5 s.
+- `$KILN/.oss/src/cli11/tests/TimerTest.cpp`: time 1.6 / 1.1 s = 1.43x, RSS 73 / 196 MB = 0.37x
+<!-- /oss:cli11:libcxx -->

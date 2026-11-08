@@ -981,7 +981,7 @@ impl Parser<'_, '_> {
             self.eat(Punct::Semi);
             return None;
         };
-        let s = self.s.act_on_do(body, cond, loc);
+        let s = self.s.act_on_do(body, cond, loc, self.prev_lo());
         self.expect_semi_after_stmt("do/while");
         Some(s)
     }

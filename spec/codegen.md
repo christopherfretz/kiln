@@ -409,7 +409,14 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `AggExprEmitter::VisitExprWithCleanups`), so there is no extra
     result temporary ahead of the object and argument temporaries
     (WP-777; `tests/codegen/discarded_member_call_on_temporary.cpp`,
-    `tests/conformance/expr.call/run-discarded-member-call-on-temporary-order.cpp`);
+    `tests/conformance/expr.call/run-discarded-member-call-on-temporary-order.cpp`).
+    A discarded comma whose operands are such calls (`M{}.b(), M{}.b();`)
+    ignores each operand the same way (clang `AggExprEmitter::VisitBinComma`),
+    so each result temporary is made in order and none is made for the
+    comma itself; chained calls, calls through returned references,
+    temporary arguments and discarded conditionals are covered too (WP-774;
+    `tests/codegen/discarded_member_call_chain.cpp`,
+    `tests/conformance/expr.call/run-discarded-member-call-chain-order.cpp`);
   - an assignment operator call (`CXXOperatorCallExpr` with `=`, `+=`,
     ... and a member callee) evaluates its right operand before the
     object (clang `EvaluationOrder::ForceRightToLeft`): a trivial
@@ -1097,8 +1104,39 @@ The normative description is spec/driver.md "Code generation". In short:
 - Tools come from `$KILN_LLVM_DIR/bin` (default `/usr/lib/llvm-19`), else
   the versioned name on `PATH`.
 - `-O<n>` selects `llc`'s level and is passed to the link; the IR is
-  always the `-O0` IR. `-g` is ignored. `-###` and `-v` print the steps.
+  always the `-O0` IR. `-g` adds DWARF debug information (§5.1).
+  `-###` and `-v` print the steps.
 - Every job calls `ConstexprOpts::write_report`.
+
+### 5.1 Debug information (WP-814; `debuginfo/`)
+`CodegenOptions::debug` (`DebugOptions`, set from the flags in
+spec/driver.md "Debug information flags") selects clang 19's
+`codegenoptions::DebugInfoKind`. At `None` (the default) the IR is
+unchanged, byte for byte. Otherwise kiln emits what clang 19's
+`CGDebugInfo` emits for the same program, in clang's node creation
+order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
+(producer string aside):
+- a `DICompileUnit` (`!llvm.dbg.cu`) whose file carries the main
+  buffer's MD5, the `"Dwarf Version"` and `"Debug Info Version"` module
+  flags, and `DIFile`s split against the compilation directory after
+  `-fdebug-prefix-map=`;
+- under line tables only, a `DISubprogram` per definition with
+  `DILocation`s on instructions;
+- under `-g`, also types (basic, pointer/reference, arrays, enums,
+  typedefs, classes with members, bases, methods, vtable holders and
+  template parameters; class definitions homed as clang's
+  `-fno-standalone-debug` does), namespaces, global and static member
+  variables (`DIGlobalVariableExpression`), parameters and locals
+  (`#dbg_declare`), and lexical blocks;
+- statement and expression locations with clang's `EmitStopPoint`,
+  `ApplyDebugLocation` and cleanup/landing-pad rules, so a debugger
+  steps, breaks and finishes where it does in a clang build.
+
+A construct that debug information cannot describe yet is a hard error,
+`debug information for <what> is not supported`, never a silent drop.
+The normative detail, the gaps and the tests are in
+spec/landed/codegen/WP-814.md; the status, statistics and performance
+are in docs/status/debuginfo.md.
 
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90
@@ -1564,7 +1602,7 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 | AArch64 empty class by value as `i64` (spec/abi.md §8.21) | compat ≥ 22 | `i8` / ignored |
 | x86-64 `__int128`, `_BitInt(128)` and a class starting with an `i128` by value and returned as `i128` (spec/abi.md §8.25) | compat ≥ 22 | `{ i64, i64 }` / two `i64`s |
 | GEP `nuw` (§3 "GEP flags") | compat ≥ 22 | `inbounds` only |
-| `dead_on_return` on an indirect, non-`byval` parameter whose type has a trivial destructor (AArch64 aggregates over 16 bytes, non-trivially-copyable classes, large vectors), on definitions, declarations and calls, before `noundef` | compat ≥ 22 and LLVM ≥ 21 | none (LLVM 19's `llvm-as` rejects it) |
+| `dead_on_return` on an indirect, non-`byval` parameter whose type has a trivial destructor (AArch64 aggregates over 16 bytes, non-trivially-copyable classes, large vectors) or which the callee destroys (a `[[clang::trivial_abi]]` class with a non-trivial destructor, `kiln_abi::call::is_destroyed_in_callee`), on definitions, declarations and calls (a variadic argument too), before `noundef`; a class the caller destroys gets none (WP-774, `tests/conformance/expr.call/ir-clang22-dead-on-return-variadic.cpp`) | compat ≥ 22 and LLVM ≥ 21 | none (LLVM 19's `llvm-as` rejects it) |
 | `"frame-pointer"="non-leaf-no-reserve"` and module flag `frame-pointer` 4 for `non-leaf` (AArch64's default; "Frame pointer") | compat ≥ 22 and LLVM ≥ 22 | `"non-leaf"`, 1 (LLVM 19 rejects the value) |
 | no empty `!llvm.linker.options` | compat ≥ 22 | `!llvm.linker.options = !{}` in C++20 and later only (clang 19 emits it when the language has modules, `LangOptions::Modules` set by `CPlusPlusModules`; `CodegenOptions::cxx_modules`, WP-769) |
 | a padded `_Atomic` operand's atomic-sized temporary zeroed before the copy, and a failed compare-exchange's old value copied back to `*expected` (`atomic.rs`, WP-411; `tests/codegen/atomic_padded.cpp`) | compat ≥ 22 | the temporary's padding left uninitialized; the old value stored only to the temporary |
@@ -2235,6 +2273,28 @@ A constant whose union holds an array member with unconstructed elements
 (spec/oven.md "C++26 union lifetime") is emitted with those elements as
 zero bytes, like any byte not covered by the constant's image. Test:
 `tests/conformance/obj.lifetime/start-lifetime-run.cpp`.
+
+**Clearing padding (WP-774).** `__builtin_clear_padding(p)` (GCC; clang
+has no such builtin, LLVM issue 64830) zeroes the padding bits of `*p`
+and leaves every value bit alone (`clear_padding.rs`). The bits are
+`kiln_abi::padding_mask` (spec/abi.md §3.3 "Padding bits"), which follows
+GCC's `clear_padding_type`. `p` is evaluated once. Nested constant arrays
+are flattened to their innermost element type `E` and a count `n`:
+- no padding in `E`: nothing is emitted;
+- `n == 1`, or the whole object is at most 64 bytes: straight-line code
+  for each element;
+- otherwise a loop over the elements (an `i64` byte-offset phi stepping by
+  `sizeof(E)`, exit on `icmp eq` against the total, as `array_init_loop`).
+Within an element, each run of whole padding bytes is one `llvm.memset`
+to 0 (a lone byte is a `store i8 0`). A byte holding both value and
+padding bits, as in a bit-field's storage unit, is loaded, `and`ed with
+its value bits and stored back. Each access has the pointer's alignment
+reduced by its offset. A volatile pointee makes every access volatile.
+An element over 16 MiB is an internal error (its mask is not built). At
+run time `std::atomic<T>` in libstdc++ clears padding through this builtin
+(`__has_builtin` is 1, spec/pp.md). Tests:
+`tests/conformance/ext.gnu.clear_padding/` (the run test's bytes are
+compared with GCC 16.1's).
 
 **Landed (WP-140): `PredefinedExpr`.** The name is a private
 `unnamed_addr constant` array named `<spelling>.<mangled function>`

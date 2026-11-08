@@ -203,6 +203,7 @@ sema_ref_uninit_use = Warning [Uninitialized] (1) "reference {0} is not yet boun
 sema_refconst_no_ctor = Warning (2) "{0:struct|interface|union|class|enum} {1} does not declare any constructor to initialize its non-modifiable members";
 sema_reference_bind_drops_quals = Error (4) "binding reference of type {0} to value of type {1} drops {2} qualifier{3:|s}";
 sema_reference_bind_failed = Error (4) "reference to {1:type|incomplete type} {0} could not bind to an {2:rvalue|lvalue} of type {3}";
+sema_reference_bind_incompatible_quals = Error (2) "binding reference of type {0} to value of type {1} not permitted due to incompatible qualifiers";
 sema_reference_bind_to_bitfield = Error (2) "{0:non-const|volatile} reference cannot bind to bit-field{1}";
 sema_reference_bind_to_init_list = Error (1) "reference to type {0} cannot bind to an initializer list";
 sema_reference_bind_to_vector_element = Error (1) "{0:non-const|volatile} reference cannot bind to vector element";
