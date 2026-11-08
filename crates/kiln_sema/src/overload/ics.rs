@@ -15,8 +15,9 @@ use super::{CandidateFailure, CandidateKind, OvlOutcome, SetKind};
 use crate::Sema;
 use crate::conv::bases::{complete_class, is_derived_from, same_class};
 use crate::conv::{
-    self, ConvCtx, IcsCompare, ListArray, RefBinding, SecondStep, StandardConversion,
-    compare_standard_conversions, function_ref_compatible, standard_conversion_from,
+    self, ConvCtx, IcsCompare, ListArray, RefBinding, SecondStep, StandardConversion, ThirdStep,
+    compare_standard_conversions, function_ref_compatible, similar_ref_relation,
+    standard_conversion_from,
 };
 use crate::init::{InitItem, InitList, InitValue};
 
@@ -489,10 +490,21 @@ impl Sema<'_, '_> {
         if is_fn && !related {
             related = function_ref_compatible(self, u1, u2);
         }
+        // CWG2352: similar types are reference-related, and compatible
+        // through a qualification conversion of pointers to them; a
+        // direct binding that adds qualifiers below the top level ranks as
+        // a qualification conversion (clang `NestedQualification`, its
+        // fix for the CWG2352 ranking defect: `f(const int *const &)` and
+        // `f(const int *)` are ambiguous for an `int *`).
+        let mut similar_rel = None;
+        if !related && !is_fn && !class_src {
+            similar_rel = similar_ref_relation(self, t1, a.ty);
+            related = similar_rel.is_some();
+        }
         if related && !q1.contains(q2) && self.unknown_bound_of(u1, u2) {
             related = false;
         }
-        let compatible = related && q1.contains(q2);
+        let compatible = related && q1.contains(q2) && similar_rel != Some(false);
         let lv = a.vk == ValueCategory::LValue;
         let base =
             if lref { RefBinding::IS_REF.with(RefBinding::LVALUE_REF) } else { RefBinding::IS_REF };
@@ -504,6 +516,9 @@ impl Sema<'_, '_> {
             };
             s.from = a.ty;
             s.to_types[2] = t1;
+            if similar_rel == Some(true) {
+                s.third = ThirdStep::Qualification;
+            }
             s
         };
         // /5.1.1: an lvalue reference (or a function lvalue) binds a
@@ -534,6 +549,8 @@ impl Sema<'_, '_> {
         if plain_lref {
             let kind = match (related, lv) {
                 (true, false) => BadKind::LvalueRequired,
+                // Nested qualifiers that do not convert: no conversion.
+                (true, true) if (q2 - q1).is_empty() => BadKind::NoConversion,
                 (true, true) => BadKind::LosesQuals(q2 - q1),
                 _ => BadKind::NoConversion,
             };

@@ -2265,7 +2265,7 @@ impl Oven {
         let es = self.types.size(elem).max(1);
         let off = u64::from(p.off);
         if let TyKind::Array { elem: e, n } = self.types.kind(a.ty)
-            && self.types.same_unqualified(e, elem)
+            && self.types.alike(e, elem)
         {
             return Ok((0, n, off / es, true));
         }

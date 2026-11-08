@@ -270,6 +270,25 @@ pub(crate) fn function_ref_compatible(
     s.ast.types.is_function(referee) && is_function_conversion(s, from, referee)
 }
 
+/// CWG2352 ([dcl.init.ref]/4): referee type `t1` against `t2`, the
+/// initializer's type, both with their own cv-qualifiers, when the two are
+/// similar ([conv.qual]/2) but not the same type up to top-level cv:
+/// `None` if they are not similar; `Some(true)` if `cv1 T1` is
+/// reference-compatible with `cv2 T2` (a prvalue "pointer to cv2 T2"
+/// converts to "pointer to cv1 T1" by a qualification conversion, so
+/// `const int *const &` binds an `int *` lvalue directly); `Some(false)`
+/// if they are only reference-related (`const int *&` and `int *`).
+/// clang `CompareReferenceRelationship`'s qualification loop, where the
+/// top level takes part in the "const at every level above" rule.
+pub(crate) fn similar_ref_relation(s: &mut Sema<'_, '_>, t1: QualType, t2: QualType) -> Option<bool> {
+    let (c1, c2) = (s.ast.types.canonical(t1), s.ast.types.canonical(t2));
+    if !similar(s, c1, c2) {
+        return None;
+    }
+    let (p1, p2) = (s.ast.types.pointer_to(c1), s.ast.types.pointer_to(c2));
+    Some(is_qualification_convertible(s, p2, p1))
+}
+
 /// True if a prvalue of `from` converts to `to` by a function pointer
 /// conversion ([conv.fctptr]): "pointer to `noexcept` function" to
 /// "pointer to function", and likewise for pointers to member
