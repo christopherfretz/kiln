@@ -773,6 +773,16 @@ impl Sema<'_, '_> {
             if e != es && fnlike(self, es) && fnlike(self, target) {
                 continue;
             }
+            // A dependent member using-declarator (`using B<T>::f;`) is
+            // assumed to introduce functions that overload with this one;
+            // a conflict is found at instantiation (clang `CheckOverload`,
+            // `UnresolvedUsingValueDecl`; Boost.Cobalt's promises, WP-812).
+            if in_class
+                && self.kind_of(es) == DeclKind::UnresolvedUsingValue
+                && fnlike(self, target)
+            {
+                continue;
+            }
             if in_class && e == es && fnlike(self, es) && fnlike(self, target) {
                 // [namespace.udecl]/14: a member function (template) of
                 // the class hides the one the declarator would introduce

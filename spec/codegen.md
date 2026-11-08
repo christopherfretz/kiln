@@ -1946,7 +1946,13 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   class was explicitly instantiated keeps an implicit vtable (emitted
   `linkonce_odr` only if used; `Cg::vtable_explicit_inst_kind`), though
   its member functions are still `weak_odr` (clang
-  `InstantiateClassMembers`). A member explicit instantiation (`template void X<int>::f();`,
+  `InstantiateClassMembers`). A dependent member (the partial
+  specialization of a member class template) is not emitted, and a
+  member of an implicit specialization of a member template
+  (`X<int>::M<char>`) takes that specialization's kind, not the enclosing
+  explicit instantiation's (`governing_explicit_inst_kind`; `linkonce_odr`,
+  emitted only if used; WP-812, `explicit_inst_member_partial_spec.cpp`).
+  A member explicit instantiation (`template void X<int>::f();`,
   `template X<int>::X();`) is emitted right after the declaration that
   precedes it lexically (sema records it in
   `TemplateTables::explicit_member_insts`). Base-object structors of a

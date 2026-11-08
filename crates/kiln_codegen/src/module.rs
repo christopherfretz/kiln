@@ -798,7 +798,13 @@ impl<'a> Cg<'a> {
         let members: Vec<DeclId> = ast.decls.members(d).collect();
         for m in members {
             let n = ast.decls.get(m);
-            if n.has(DeclFlags::INVALID) {
+            // A templated member is emitted only as instantiated: the
+            // partial specialization of a member class template that
+            // instantiating the enclosing class declares
+            // ([temp.spec.partial.member]; Boost.Math's
+            // `hyperexponential_distribution::is_iterator`, WP-812) is
+            // still dependent.
+            if n.has(DeclFlags::INVALID) || n.has(DeclFlags::DEPENDENT_CTX) {
                 continue;
             }
             // An explicitly specialized member is an ordinary definition,

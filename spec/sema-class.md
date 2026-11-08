@@ -291,7 +291,7 @@ is a protected member of 'S'` + note `can only access this member on an object
 of type 'D'`; for a constructor or destructor, or a constructor template,
 the note is `protected constructor can only be used to construct a base class
 subobject` / `... destructor ... destroy ...`, clang `TryDiagnoseProtectedAccess`;
-`class.protected/ctor-restricted-note.cpp`, WP-680). A member function
+`class.protected/ctor-restricted-note.cpp`, WP-680; every destructor use, a local, a static or `thread_local` variable, an array, a temporary, a thrown object, a by-value argument, a discarded or returned prvalue, `delete`/`delete[]` and `new B[n]`'s cleanup, `class.protected/dtor-restricted-note.cpp`, WP-684 (WP-823)). A member function
 template is non-static when its pattern is: the object's class is checked
 for it as for a member function, so a friend of a class that derives
 privately from the base reaches it through an object of that class

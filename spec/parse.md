@@ -605,6 +605,13 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   of a qualifier in a dependent context (`X<T>::m::name`, `m::name` in
   `X`'s own definition) stays dependent
   (`tests/conformance/temp.arg.type/member-typedef-of-specialization-qualifier.cpp`).
+  Nor does it apply when `X<args>` is the current instantiation (inside
+  `X`'s definition, `X<T>` with its own parameters): a typename-less
+  `X<T>::m::name` there names a member of an unknown specialization and
+  is an expression, so as a template argument it is "template argument
+  for template type parameter must be a type; did you forget
+  'typename'?" (WP-676, WP-823;
+  `tests/conformance/temp.res.general/missing-typename-current-instantiation-member-typedef.cpp`).
 - A further component after a typedef or alias member of the pattern
   naming a dependent type (`X<args>::type::name` with `typedef T type;`
   in `X`'s pattern) cannot be classified there: the lookahead parses the
@@ -1483,6 +1490,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     (like `throw`): `co_yield assignment-expression` or
     `co_yield braced-init-list` (the list goes through
     `act_on_braced_arg`), then `act_on_coyield(operand, kw_loc)`.
+    A parenthesized one is an expression, as a parenthesized `throw`
+    is, not a fold operand: `i = (co_yield i) + i` and
+    `42 == (co_yield *next)` (Boost.Asio's `experimental::coro` tests;
+    WP-812, `tests/conformance/expr.yield/parenthesized-run.cpp`).
   - `operator co_await` is an overloadable operator name (§4.1).
   - Where the keyword may appear (a function body, not a handler, not
     unevaluated) is Sema's call (spec/sema.md §"Coroutines").

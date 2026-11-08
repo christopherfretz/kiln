@@ -24,6 +24,7 @@ note_ambiguous_candidate = Note (1) "candidate found by name lookup is '{0}'";
 note_ambiguous_member_found = Note (0) "member found by ambiguous name lookup";
 note_ambiguous_member_type_found = Note (1) "member type {0} found by ambiguous name lookup";
 note_ambiguous_type_conversion = Note (2) "because of ambiguity in conversion of {0} to {1}";
+note_array_init_plain_string_into_char8 = Note (0) "add 'u8' prefix to form a 'char8_t' string literal";
 note_array_size_conversion = Note (2) "conversion to {0:integral|enumeration} type {1} declared here";
 note_asm_input_duplicate_first = Note (1) "constraint '{0}' is already present here";
 note_asm_missing_constraint_modifier = Note (1) "use constraint modifier \"{0}\"";
