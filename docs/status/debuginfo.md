@@ -16,7 +16,7 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
   debug flag kiln does not implement is a hard error naming it.
 - `nodebug`, `artificial` and `[[clang::standalone_debug]]` shape the
   output as in clang (`standalone_debug` keeps a class's full definition,
-  `di_omit`, `debuginfo/types.rs:600`).
+  `di_omit`, `debuginfo/types.rs:614`).
 - `-g0`, the default, builds no debug metadata and records no locations
   (see "Cost at `-g0`").
 - Since WP-910 `-g` is total: at any level it compiles every program kiln
@@ -26,10 +26,16 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
 
 ## Evidence
 
-- `tests/codegen/debug_*.cpp`: 32 cases, byte-exact against clang 19 on
+- `tests/codegen/debug_*.cpp`: 34 cases, byte-exact against clang 19 on
   aarch64 and x86_64 (`crates/kiln_codegen/tests/ir_vs_clang.rs`).
 - `llvm-dwarfdump-19 --verify` is clean on all 60 `-g` objects from
   `tests/codegen` and `tests/debuginfo`.
+- The debug-info sweep (`cargo xtask test --debug-sweep`, WP-910,
+  docs/VALIDATION.md) over `tests/conformance` on 11-08: 2539 tests
+  compile with and without `-g` and pass `llvm-dwarfdump --verify`, and
+  none fails (before the fixes: 21 failures, plus 3 in the reflection
+  directories). The reflection directories (`expr.reflect`,
+  `meta.reflection*`): 130 swept, 0 failures.
 - `llvm-symbolizer-19` gives the same function, file, line and inlining
   stack for kiln and clang 19 objects of the debugger tests.
 - Debugger tests (`tests/debuginfo`, spec/harness.md "Debugger tests"):
@@ -259,19 +265,22 @@ spec/landed/codegen/WP-814.md "Deviations" and WP-910.md.
   `value: null` (no IR constant). lldb names `Holder<^^int>` as
   `Holder<unsigned long>`.
 - D: a floating-point template argument in a class name prints as
-  `T<1.5e0>` (clang: `T<1.500000e+00>`), at
-  `crates/kiln_codegen/src/debuginfo/types.rs:549`.
-- D: no `defaulted: true` on template parameters (`types.rs:1164`).
+  `T<1.5e0>` (clang: `T<1.500000e+00>`), and an integer argument of a
+  type other than `int` has no suffix (`Arr<int, 3>`; clang:
+  `Arr<int, 3UL>`), in `write_arg_list_debug`
+  (`crates/kiln_ast/src/types/print.rs:472`, called from
+  `crates/kiln_codegen/src/debuginfo/types.rs:584`).
+- D: no `defaulted: true` on template parameters (`types.rs:1178`).
 - D: no `DIImportedEntity` for `using` declarations or directives
   (`debuginfo/mod.rs:417`).
 - D: no `DISubprogram` for `__cxx_global_var_init`, `__tls_init` or
   atexit stubs.
 - D: no `DILocalVariable` for structured bindings or variable-length
-  arrays. A VLA type has `count: -1` (`types.rs:394`).
+  arrays. A VLA type has `count: -1` (`types.rs:408`).
 - D: no `DILabel`.
 - D: statement end locations exist only for compound and loop statements
   (`debuginfo/stmt.rs:82`).
-- D: alias template specializations are unwrapped (`types.rs:122`), so
+- D: alias template specializations are unwrapped (`types.rs:135`), so
   `C<int>` for an alias template `C` loses its `Alias<int>` typedef.
 - D: `di_const_ref` approximates `DeclMustBeEmitted`
   (`debuginfo/func.rs:388`), and floating-point static members get no

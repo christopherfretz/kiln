@@ -557,6 +557,31 @@ intrinsics); `cargo test -p kiln_oven` checks that every intrinsic has a
 row, and with `KILN_GCC16_ROOT` set, that the list equals the header's.
 A new GCC release's `<meta>` starts there.
 
+### Debug-info sweep
+
+`-g` must never break a program kiln compiles (WP-910). The debug-info
+sweep compiles every positive test (`compile-ok`, `run`, `ir`, `layout`,
+`vtables`, `debugger`) to an object with and without `-g` and runs
+`llvm-dwarfdump --verify` on the `-g` object (spec/harness.md
+"Debug-info sweep"). A test that compiles without `-g` and fails with it
+is a FAIL:
+
+```sh
+source scripts/env.sh
+cargo xtask test --debug-sweep tests/conformance/expr.reflect 'tests/conformance/meta.reflection*'
+cargo xtask test --debug-sweep tests/conformance      # the whole corpus
+```
+
+Run it by hand before a change to `kiln_codegen::debuginfo`, to the
+printer's metadata, or to anything that can reach debug information
+from new AST (reflection, templates), and for a release candidate. It is
+not in `cargo xtask ci`: on the shared 24-core host (load about 18) the
+reflection directories take 83 s and the whole corpus 5 min 25 s (5192
+tests: 2539 swept and clean, 2431 not swept by kind, 76 that do not
+compile to an object without `-g`, the rest skipped by `requires`; peak
+RSS 253 MB). Every breakage it finds gets a reduced `-g` run test under
+`tests/conformance` (spec/landed/codegen/WP-910.md).
+
 ## Performance tracking
 
 `cargo xtask bench` runs each entry in `bench/` and records wall-clock
