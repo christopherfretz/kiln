@@ -162,6 +162,10 @@ pub(crate) struct Fx {
     /// sanitizer (clang `AggValueSlot::IsSanitizerChecked`), consumed by
     /// the next aggregate emission other than a wrapper.
     pub ub_checked: bool,
+    /// The subscript whose element the next lvalue emission accesses
+    /// (clang `EmitArraySubscriptExpr`'s `Accessed`): its bounds check
+    /// excludes the one-past-the-end index.
+    pub ub_accessed: Option<kiln_ast::ExprId>,
     /// The aggregate slot an `_Atomic` assignment evaluates its right
     /// side into is volatile (clang `AggValueSlot::isVolatile`), consumed
     /// by the atomic load filling it (WP-165).
@@ -295,6 +299,7 @@ impl Fx {
             error: None,
             overlap: false,
             ub_checked: false,
+            ub_accessed: None,
             slot_volatile: false,
             dest_destructed: false,
             arg_cleanups: Vec::new(),

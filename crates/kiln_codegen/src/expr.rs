@@ -480,6 +480,7 @@ impl Cg<'_> {
                     None => self.emit_scalar(base)?,
                 };
                 let i = self.emit_scalar(idx)?;
+                self.ub_bounds(e, base, i, ast.exprs.get(idx).ty(), true)?;
                 self.extract_elt(v, i)
             }
             ExprKind::ShuffleVectorExpr => {
@@ -1438,6 +1439,10 @@ impl Cg<'_> {
                 if sub {
                     let z = self.i64c(0);
                     idx = self.bin(BinOp::Sub, Flags::NONE, z, idx);
+                }
+                if let Some((le, re)) = self.ub_operands(e) {
+                    let (pe, ie) = if lp || sub { (le, re) } else { (re, le) };
+                    self.ub_bounds(e, pe, idx, ast.exprs.get(ie).ty(), false)?;
                 }
                 let et = ast.types.pointee(pq).expect("pointee");
                 if let Some((idx, ety)) = self.vla_pointer_step(et, idx)? {
@@ -3129,9 +3134,11 @@ impl Cg<'_> {
         let q = ast.exprs.get(e).ty();
         // `LValue::MakeVectorElt`: the vector's address and the
         // unpromoted index.
+        let accessed = self.f.ub_accessed.take() == Some(e);
         if let Some((base, idx)) = self.vec_subscript(e) {
             let blv = self.emit_lvalue(base)?;
             let i = self.emit_scalar(idx)?;
+            self.ub_bounds(e, base, i, ast.exprs.get(idx).ty(), accessed)?;
             return Ok(LV {
                 addr: blv.addr,
                 q,
@@ -3153,6 +3160,8 @@ impl Cg<'_> {
         let mut tb = Tb::Type;
         let (addr, indices) = if let Some(arr) = self.simple_decay_operand(base) {
             let alv = if ast.exprs.get(arr).kind() == ExprKind::ArraySubscriptExpr {
+                // clang: the inner subscript of `a[i][j]` is accessed.
+                self.f.ub_accessed = Some(arr);
                 self.subscript_lvalue(arr)?
             } else {
                 self.emit_lvalue(arr)?
@@ -3162,6 +3171,7 @@ impl Cg<'_> {
                 Some(v) => v,
                 None => self.emit_scalar(idx)?,
             };
+            self.ub_bounds(e, base, iv, iq, accessed)?;
             let iv = self.int_cast(iv, LTy::I64, self.is_signed(iq));
             let z = self.i64c(0);
             (alv.addr, vec![z, iv])
@@ -3174,6 +3184,7 @@ impl Cg<'_> {
                 Some(v) => v,
                 None => self.emit_scalar(idx)?,
             };
+            self.ub_bounds(e, base, iv, iq, accessed)?;
             let iv = self.int_cast(iv, LTy::I64, self.is_signed(iq));
             if let Some((iv, elem)) = self.vla_scaled_index(q, iv)? {
                 esz = self.size_align(elem).0;
@@ -3189,6 +3200,7 @@ impl Cg<'_> {
                 Some(v) => v,
                 None => self.emit_scalar(idx)?,
             };
+            self.ub_bounds(e, base, iv, iq, accessed)?;
             let iv = self.int_cast(iv, LTy::I64, self.is_signed(iq));
             (Addr { v: p, ty: ety, align }, vec![iv])
         };

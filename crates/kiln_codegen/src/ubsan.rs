@@ -9,10 +9,10 @@
 //! descriptors) the runtime prints. Every instruction a check emits
 //! carries `!nosanitize !{}` (clang's `SanitizerScope`).
 
-use kiln_ast::expr::{BinaryOp, ExprKind};
+use kiln_ast::expr::{BinaryOp, CastKind, ExprKind};
 use kiln_ast::sanitize::SanitizerSet as San;
 use kiln_ast::dump::AstNames;
-use kiln_ast::types::{PrintOptions, Quals, TypeView, aka, print_type};
+use kiln_ast::types::{PrintOptions, Quals, TypeView, aka, print_type, vector_diag_arg};
 use kiln_abi::mangle::Structor;
 use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_ast::lambda::CaptureDefault;
@@ -304,8 +304,13 @@ impl Cg<'_> {
                 }
                 format!("'{p}{s} *'")
             }
-            (_, Some(a)) => format!("'{s}' (aka '{a}')"),
-            (_, None) => format!("'{s}'"),
+            (_, a) => match vector_diag_arg(&ast.types, &names, q, self.opts.clang_compat >= 22) {
+                Some(v) => v,
+                None => match a {
+                    Some(a) => format!("'{s}' (aka '{a}')"),
+                    None => format!("'{s}'"),
+                },
+            },
         };
         let (kind, info) = if matches!(desc, UbDesc::ThisPtr(_)) { (0xffff, 0) } else { (kind, info) };
         let nkey = (ast.types.canonical(q), key, name.clone().into_boxed_str());
@@ -581,7 +586,7 @@ impl Cg<'_> {
     // ---- checks ---------------------------------------------------------
 
     /// The operands of the binary or compound assignment `e`.
-    fn ub_operands(&self, e: ExprId) -> Option<(ExprId, ExprId)> {
+    pub(crate) fn ub_operands(&self, e: ExprId) -> Option<(ExprId, ExprId)> {
         let ast = self.ast;
         match ast.exprs.get(e).kind() {
             ExprKind::BinaryOperator => {
@@ -1007,6 +1012,100 @@ impl Cg<'_> {
         res
     }
 
+    // ---- bounds ----------------------------------------------------------
+
+    /// clang `Expr::isFlexibleArrayMemberLike` at the default
+    /// `-fstrict-flex-arrays=0`: a zero-length array, or an array member
+    /// that is the last field of its class (or any one- or zero-element
+    /// array member of a union).
+    fn ub_fam_like(&self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let e = self.skip_parens(e);
+        let q = ast.exprs.get(e).ty();
+        let size = match ast.types.canonical_view(q) {
+            TypeView::ConstantArray(a) => Some(a.size),
+            TypeView::IncompleteArray(_) => None,
+            _ => return false,
+        };
+        if size == Some(0) {
+            return true;
+        }
+        let d = match ast.exprs.get(e).kind() {
+            ExprKind::MemberExpr | ExprKind::DeclRefExpr => ast.exprs.decl(e),
+            _ => return false,
+        };
+        if ast.decls.get(d).kind() != DeclKind::Field {
+            return false;
+        }
+        let Some(rd) = ast.decls.get(d).ctx() else { return false };
+        if size == Some(1) && self.is_union(rd) {
+            return true;
+        }
+        ast.decls.members(rd).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).last()
+            == Some(d)
+    }
+
+    /// clang `getArrayIndexingBound`: the element count of the array
+    /// `base` indexes (a vector, or a decayed array that is not
+    /// flexible-array-member-like) and the indexed type.
+    fn ub_array_bound(&mut self, base: ExprId) -> R<Option<(V, QualType)>> {
+        let ast = self.ast;
+        let bq = ast.exprs.get(base).ty();
+        if let Some((_, n)) = self.vec_of(bq) {
+            return Ok(Some((self.icn(LTy::I32, i128::from(n)), bq)));
+        }
+        let b = self.skip_parens(base);
+        if !(ast.exprs.get(b).kind().is_cast()
+            && ast.exprs.cast_kind(b) == CastKind::ArrayToPointerDecay)
+        {
+            // clang `LoadPassedObjectSize`: a `pass_object_size` parameter
+            // (WP-871 follow-up).
+            return Ok(None);
+        }
+        let sub = ast.exprs.operand(b);
+        if self.ub_fam_like(sub) {
+            return Ok(None);
+        }
+        let aq = ast.exprs.get(sub).ty();
+        Ok(match ast.types.canonical_view(aq) {
+            TypeView::ConstantArray(a) => Some((self.i64c(i128::from(a.size)), aq)),
+            TypeView::VariableArray { .. } => Some((self.vla_size(aq)?.0, aq)),
+            _ => None,
+        })
+    }
+
+    /// clang `EmitBoundsCheck`: `-fsanitize=array-bounds` on the index
+    /// `idx` (of type `iq`) into `base` at `e`; an `accessed` element must
+    /// be in bounds, any other index may also be one past the end.
+    pub(crate) fn ub_bounds(
+        &mut self,
+        e: ExprId,
+        base: ExprId,
+        idx: V,
+        iq: QualType,
+        accessed: bool,
+    ) -> R<()> {
+        if !self.ub_on(San::ARRAY_BOUNDS) {
+            return Ok(());
+        }
+        let outer = self.ub_begin();
+        let res = (|| {
+            let Some((bound, indexed)) = self.ub_array_bound(base)? else {
+                return Ok(());
+            };
+            let iv = self.int_cast(idx, LTy::I64, self.is_signed(iq));
+            let bv = self.int_cast(bound, LTy::I64, false);
+            let loc = self.ub_loc(self.ub_expr_loc(e))?;
+            let d1 = self.ub_type(indexed)?;
+            let d2 = self.ub_type(iq)?;
+            let p = if accessed { IntPredicate::Ult } else { IntPredicate::Ule };
+            let ok = self.icmp(p, iv, bv);
+            self.ub_check(&[(ok, San::ARRAY_BOUNDS)], UbHandler::OutOfBounds, &[loc, d1, d2], &[idx])
+        })();
+        self.ub_end(outer);
+        res
+    }
+
     // ---- type checks (null, alignment, object-size) ---------------------
 
     /// clang `sanitizePerformTypeCheck`.
@@ -1031,7 +1130,7 @@ impl Cg<'_> {
         let loc = self.ub_expr_loc(arg);
         let mut a = arg;
         if ast.exprs.get(a).kind() == ExprKind::ImplicitCastExpr
-            && ast.exprs.cast_kind(a) == kiln_ast::expr::CastKind::BitCast
+            && ast.exprs.cast_kind(a) == CastKind::BitCast
         {
             a = ast.exprs.operand(a);
         }
@@ -1093,7 +1192,7 @@ impl Cg<'_> {
         loop {
             let V::I(i) = p else { return None };
             match self.f.fir.op(i) {
-                Op::Alloca { align, .. } => return Some(*align),
+                Op::Alloca { align, .. } | Op::DynAlloca { align, .. } => return Some(*align),
                 Op::Gep { base, idx, .. }
                     if idx.iter().all(|&x| self.cint(x).is_some_and(|c| c.1 == 0)) =>
                 {
@@ -1243,7 +1342,12 @@ impl Cg<'_> {
     /// access of kind `tck` unless it names a declaration, is a
     /// bit-field or a vector element.
     pub(crate) fn emit_checked_lvalue(&mut self, e: ExprId, tck: Tck) -> R<LV> {
-        let lv = self.emit_lvalue(e)?;
+        if self.ast.exprs.get(e).kind() == ExprKind::ArraySubscriptExpr {
+            self.f.ub_accessed = Some(e);
+        }
+        let lv = self.emit_lvalue(e);
+        self.f.ub_accessed = None;
+        let lv = lv?;
         self.ub_check_lv(e, lv, tck)?;
         Ok(lv)
     }
