@@ -466,10 +466,7 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `fcmp` (`ogt oge olt ole one uno`) zero-extended;
     - memcpy/memmove are `llvm.memcpy`/`llvm.memmove` (`i64` length,
       not volatile) with each pointer's known alignment as a parameter
-      `align` (clang `EmitPointerWithAlignment`: implicit casts and
-      casts of a declaration keep the inner alignment, other casts take
-      the target's pointee alignment, `&x` and array decay the lvalue's,
-      otherwise the pointee's natural alignment, 1 for `void`/incomplete);
+      `align` (clang `EmitPointerWithAlignment`, §3.3);
       the value is the destination pointer;
     - frexp is `llvm.frexp`, the exponent stored at `int` alignment;
     - `__builtin_operator_new`/`_delete` call the global replaceable
@@ -963,6 +960,47 @@ Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
 - The floating-point environment is the default one; every flag and
   pragma that needs another (FENV_ACCESS ON, FENV_ROUND other than
   FE_TONEAREST, trapping, rounding, a wider eval method) is an error.
+
+### 3.3 Pointer alignment (WP-819, `builtins.rs` `pointer_with_alignment`)
+clang `CodeGenFunction::EmitPointerWithAlignment`, mirrored case by case,
+gives a pointer operand's value, its known alignment, and whether that
+alignment is a declaration's (`AlignmentSource::Decl`). Its users: every
+`__atomic_*`/`__c11_atomic_*` pointer (`atomic.rs`), memcpy/memmove/
+memset-like builtins, `__builtin_clear_padding`, `va_arg`, NEON loads and
+stores, checked arithmetic results, VLA subscripts, and the placement
+argument of a new-expression (§3.1). After skipping parentheses:
+- **No-op/bitcast** from a non-`void` pointer keeps the operand's
+  alignment and source; an *explicit* cast whose operand's source is not
+  `Decl` takes the target type's natural pointee alignment.
+- **Array-to-pointer decay**: the array lvalue's alignment and source.
+- **Derived-to-base**: the operand's, then the base subobject's
+  (`GetAddressOfBaseClass`, null-checked unless the operand is `this`).
+- **`&lvalue`**, and a call of `__builtin_addressof`, `std::addressof` or
+  `std::__addressof` (clang's library builtins; one argument, a pointer
+  result): the operand lvalue's alignment (a member's `alignas`
+  included) and source.
+- **`p + i`, `i + p`, `p - i`** (clang 22 `emitPointerArithmetic`; only
+  at `-fclang-compat=22`): the base pointer's source and its alignment
+  at the byte offset `zext(i) * sizeof(*p)` for a constant `i`, or at
+  any element (`MinAlign(align, sizeof(*p))`) otherwise; operands are
+  emitted in source order. clang 19 takes the natural alignment.
+- **Anything else**: the scalar value with the natural pointee alignment
+  (`getNaturalPointeeTypeAlignment`): an `aligned` attribute on the first
+  typedef in the pointee's sugar wins (libc++ `atomic_ref`'s
+  `_Aligned_Tp*`); `void`, functions and incomplete types are 1; a class
+  uses its pointer alignment (non-virtual alignment unless `final`).
+
+An lvalue's source is `Decl` for a named non-reference variable or
+parameter, a non-reference field of any base (`.` or `->`; clang
+`getFieldAlignmentSource` is always `Decl`) or static member, and for
+`*p` and `p[i]`/an array element when the pointer's (array's) source is
+`Decl`; otherwise (reference variables, calls, ...) it is the type's.
+So libstdc++'s `std::atomic<T>`, whose `alignas(sizeof(T)) T _M_i` is
+passed as `std::__addressof(_M_i)`, gets a naturally aligned inline
+atomic for a power-of-two size, as with clang, and needs no libatomic.
+Not mirrored: the lvalue of `*p` and `p[i]` itself still has the
+pointee's natural alignment (clang computes it with
+`EmitPointerWithAlignment`), so `&*&x` loses `x`'s `alignas`.
 
 ## 4. Statements
 - `stmt.rs` covers compound, declaration, expression, null, if (with
@@ -1572,10 +1610,9 @@ are in docs/status/debuginfo.md.
   initialized as written (`emit_agg_into`, WP-201).
 - **New/delete (§3.1).** The EH cleanup is emulated only for
   initializers that cannot throw; clang's `invoke` + landing pad for a
-  throwing one waits for EH. The placement-argument alignment is
-  approximated by `pointer_with_align` (declaration alignment for named
-  variables, array elements and members; otherwise the pointee type's
-  alignment). Corpus cases do not use `if (c && new T)` (clang folds the
+  throwing one waits for EH. The placement argument's alignment is
+  used only when its source is a declaration (§3.3, as clang
+  `EmitCXXNewExpr`); otherwise the allocated type's. Corpus cases do not use `if (c && new T)` (clang folds the
   non-null `new` in `EmitBranchOnBoolExpr`; kiln emits the branch). The
   `class` vs `struct` `memset` distinction is implemented but not
   covered (access specifiers do not parse yet).
@@ -2305,8 +2342,7 @@ literal. `tests/codegen/predefined.cpp`.
 ## 7d. Landed (WP-154): atomics (`atomic.rs`)
 clang 19 `CGAtomic` at -O0, mirrored:
 - **`AtomicExpr`** (`emit_atomic_expr`): the pointer and its alignment
-  (the pointee's, or the operand's before an implicit cast for the generic
-  forms); value operands are stored to `iN` temporaries of the atomic
+  (`EmitPointerWithAlignment`, §3.3); value operands are stored to `iN` temporaries of the atomic
   width (`atomic.tmp`/`.atomictmp`) and reloaded. A constant memory order
   picks one LLVM ordering (an order invalid for the op emits nothing, as
   clang); a non-constant one is a `switch` over the C ABI values
@@ -2910,6 +2946,16 @@ by `const int& a = {};`; the `A{&d}` array temporary; parsing
   aggregate is complete. Deactivation allocates its `cleanup.isactive`
   flag as an auxiliary alloca of the enclosing scope, erased with it when
   the cleanup turns out unused.
+- **Callee-destroyed arguments** (`expr.rs` `push_arg_cleanup` /
+  `deactivate_arg_cleanups`, clang `CallArgList::addArgCleanupDeactivation`):
+  a `trivial_abi` by-value argument gets a caller EH cleanup while the
+  later arguments are evaluated; the cleanups are deactivated, innermost
+  first, right before the call, and one with a later argument's cleanup
+  still above it gets its `cleanup.isactive` flag (`eh.rs`
+  `deactivate_cleanup_block`). Byte-identical to clang 19 and 22 for free,
+  member, static, constructor and new-expression calls (WP-819); each
+  object is destroyed once whether a later argument or the callee throws
+  (`class.temporary/run-trivial-abi-cleanup-isactive.cpp`).
 - **Sema (flagged):** `temporaries_in_aggregate` also descends into both
   arms of a conditional operator, so `const A& a = c ? A{T()} : A{T()}`
   extends the `T` temporaries of each arm ([class.temporary]/6.10).
