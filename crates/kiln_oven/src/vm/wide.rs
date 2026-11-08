@@ -27,7 +27,7 @@ impl Oven {
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) = self.rmw_check(raw, len, ty, k)?;
         if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
-            self.slow_access(a.flags, raw, ty, k)?;
+            self.slow_access(a, raw, ty, k)?;
         }
         let sp = self.mem.space(st);
         if !sp.is_init(abs, len) {
@@ -93,7 +93,7 @@ impl Oven {
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) = self.rmw_check(raw, nb, ty, k)?;
         if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
-            self.slow_access(a.flags, raw, ty, k)?;
+            self.slow_access(a, raw, ty, k)?;
         }
         let sp = self.mem.space(st);
         if !sp.is_init(abs, nb) {

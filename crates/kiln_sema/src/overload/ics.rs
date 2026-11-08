@@ -15,8 +15,9 @@ use super::{CandidateFailure, CandidateKind, OvlOutcome, SetKind};
 use crate::Sema;
 use crate::conv::bases::{complete_class, is_derived_from, same_class};
 use crate::conv::{
-    self, ConvCtx, IcsCompare, ListArray, RefBinding, SecondStep, StandardConversion,
-    compare_standard_conversions, function_ref_compatible, standard_conversion_from,
+    self, ConvCtx, IcsCompare, ListArray, RefBinding, SecondStep, StandardConversion, ThirdStep,
+    compare_standard_conversions, function_ref_compatible, similar_ref_relation,
+    standard_conversion_from,
 };
 use crate::init::{InitItem, InitList, InitValue};
 
@@ -489,10 +490,21 @@ impl Sema<'_, '_> {
         if is_fn && !related {
             related = function_ref_compatible(self, u1, u2);
         }
+        // CWG2352: similar types are reference-related, and compatible
+        // through a qualification conversion of pointers to them; a
+        // direct binding that adds qualifiers below the top level ranks as
+        // a qualification conversion (clang `NestedQualification`, its
+        // fix for the CWG2352 ranking defect: `f(const int *const &)` and
+        // `f(const int *)` are ambiguous for an `int *`).
+        let mut similar_rel = None;
+        if !related && !is_fn && !class_src {
+            similar_rel = similar_ref_relation(self, t1, a.ty);
+            related = similar_rel.is_some();
+        }
         if related && !q1.contains(q2) && self.unknown_bound_of(u1, u2) {
             related = false;
         }
-        let compatible = related && q1.contains(q2);
+        let compatible = related && q1.contains(q2) && similar_rel != Some(false);
         let lv = a.vk == ValueCategory::LValue;
         let base =
             if lref { RefBinding::IS_REF.with(RefBinding::LVALUE_REF) } else { RefBinding::IS_REF };
@@ -504,6 +516,9 @@ impl Sema<'_, '_> {
             };
             s.from = a.ty;
             s.to_types[2] = t1;
+            if similar_rel == Some(true) {
+                s.third = ThirdStep::Qualification;
+            }
             s
         };
         // /5.1.1: an lvalue reference (or a function lvalue) binds a
@@ -534,6 +549,8 @@ impl Sema<'_, '_> {
         if plain_lref {
             let kind = match (related, lv) {
                 (true, false) => BadKind::LvalueRequired,
+                // Nested qualifiers that do not convert: no conversion.
+                (true, true) if (q2 - q1).is_empty() => BadKind::NoConversion,
                 (true, true) => BadKind::LosesQuals(q2 - q1),
                 _ => BadKind::NoConversion,
             };
@@ -1198,6 +1215,48 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Removes from `found` the constructor templates whose pattern is
+    /// non-dependently explicit, noting each as a non-viable "explicit"
+    /// candidate of `set` without deducing it: [over.match.copy]/1.1
+    /// makes only converting constructors candidates, and clang's
+    /// `AddTemplateOverloadCandidate` excludes such a template before
+    /// deduction and substitution, which may otherwise be ill-formed
+    /// outside the immediate context.
+    fn drop_explicit_ctor_templates(
+        &mut self,
+        set: &mut super::OverloadCandidateSet,
+        found: &mut Vec<DeclId>,
+    ) {
+        found.retain(|&fd| {
+            let ft = if self.kind_of(fd) == DeclKind::ConstructorUsingShadow {
+                match self.ast.using_target(fd) {
+                    Some(t) => t,
+                    None => return true,
+                }
+            } else {
+                fd
+            };
+            if self.kind_of(ft) != DeclKind::FunctionTemplate {
+                return true;
+            }
+            let Some(pattern) = self.templated_function(ft) else { return true };
+            if self.kind_of(pattern) != DeclKind::CXXConstructor
+                || !self.nondependently_explicit(pattern)
+            {
+                return true;
+            }
+            self.ovl.stats.candidates += 1;
+            let mut c = super::Candidate::new(pattern, fd, CandidateKind::Ctor);
+            let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
+            c.ics = start..start;
+            c.template = Some(ft);
+            c.viable = false;
+            c.failure = CandidateFailure::Explicit;
+            set.cands.push(c);
+            false
+        });
+    }
+
     /// Whether `c` has a default constructor (a cheap check for the
     /// `{}` rule of [dcl.init.list]/3.5).
     pub(crate) fn has_default_ctor_cheap(&mut self, c: DeclId) -> bool {
@@ -1538,6 +1597,9 @@ impl Sema<'_, '_> {
             let mut found = std::mem::take(&mut set.found);
             found.clear();
             found.extend(self.converting_ctors(t, a.list.is_none()));
+            if !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
+                self.drop_explicit_ctor_templates(set, &mut found);
+            }
             self.add_found_candidates(set, &found, CandidateKind::Ctor, first, false);
             set.found = found;
             for c in &mut set.cands[n..] {

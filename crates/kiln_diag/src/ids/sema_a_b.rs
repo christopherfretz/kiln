@@ -254,6 +254,7 @@ sema_break_not_in_loop_or_switch = Error (0) "'break' statement not in loop or s
 sema_builtin_arg_must_be = Error (3) "{0:1st|2nd|3rd|4th|5th} argument must be a {1} (was {2})";
 sema_builtin_assume_aligned_non_pointer = Error (0) "non-pointer argument to '__builtin_assume_aligned' is not allowed";
 sema_builtin_assume_aligned_too_big = Warning [BuiltinAssumeAlignedAlignment] (1) "requested alignment must be {0} bytes or smaller; maximum alignment assumed";
+sema_builtin_clear_padding_invalid_arg = Error (2) "argument 1 in call to function '__builtin_clear_padding' {1:does not have pointer type|has pointer to 'const' type ({0})|points to incomplete type ({0})|has pointer to a non-trivially-copyable type ({0})}";
 sema_builtin_definition = Error (1) "definition of builtin function '{0}'";
 sema_builtin_fn_use = Error (0) "builtin functions must be directly called";
 sema_builtin_fp_class_arg = Error (1) "floating point classification requires argument of floating point type (passed in {0})";

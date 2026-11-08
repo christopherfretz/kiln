@@ -76,3 +76,41 @@ the 86. Clusters 2-4 were masked by cluster 1 in the first build.
 - Not measured: a `-stdlib=libc++` build (libstdc++ is the default),
   `-DCMAKE_BUILD_TYPE=Debug`, and per-TU timing medians (one run each).
   The expensive tests ran (`JSON_FastTests` defaults to OFF).
+
+## libc++ (WP-694)
+
+Built and tested with `-stdlib=libc++` (the system libc++ 19) by both kiln++ and the clang++-19 control: `scripts/oss/oss-build.sh --stdlib libc++ <project>`, report via `scripts/oss/oss-report.py --stdlib libc++ --perf <project>`. The clang-control build tree was deleted after these numbers were recorded. Wall-time differences are dominated by file-system syscalls on the bind mount (see the perf finding in [../oss.md](../oss.md#libc-results-wp-694)).
+
+<!-- oss:nlohmann_json:libcxx -->
+### nlohmann_json (v3.12.0), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 93 / 0 | 93 / 0 |
+| links ok / failed | 88 / 0 | 88 / 0 |
+| tests passed / total | 97 / 97 | 97 / 97 |
+| wall | 697 s | 534 s |
+| peak TU RSS | 278 MB | 566 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 78 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **1.23x**, RSS **0.43x**; total 326 s vs 280 s; peak TU RSS 278 MB vs 566 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/nlohmann_json/tests/src/unit-regression1.cpp` | 13.1 | 12.7 | 0.97 | 566 | 238 | 0.42 |
+| `$KILN/.oss/src/nlohmann_json/tests/src/unit-element_access2.cpp` | 12.9 | 13.6 | 1.05 | 435 | 270 | 0.62 |
+| `$KILN/.oss/src/nlohmann_json/tests/src/unit-regression2.cpp` | 12.5 | 14.2 | 1.13 | 516 | 242 | 0.47 |
+| `$KILN/.oss/src/nlohmann_json/tests/src/unit-deserialization.cpp` | 12.5 | 14.9 | 1.19 | 399 | 269 | 0.67 |
+| `$KILN/.oss/src/nlohmann_json/tests/src/unit-bjdata.cpp` | 11.2 | 12.3 | 1.10 | 387 | 278 | 0.72 |
+
+TUs over 1.2x on time or RSS: 45 of the 78 that take clang-19 at least 0.5 s.
+- `$KILN/.oss/src/nlohmann_json/tests/src/unit-type_traits.cpp`: time 1.1 / 0.5 s = 2.00x, RSS 65 / 158 MB = 0.41x
+- `$KILN/.oss/src/nlohmann_json/tests/src/unit-large_json.cpp`: time 2.3 / 1.5 s = 1.46x, RSS 81 / 205 MB = 0.39x
+- `$KILN/.oss/src/nlohmann_json/tests/src/unit-constructor2.cpp`: time 2.4 / 1.6 s = 1.45x, RSS 75 / 218 MB = 0.35x
+- `$KILN/.oss/src/nlohmann_json/tests/src/unit-ordered_json.cpp`: time 3.6 / 2.5 s = 1.45x, RSS 90 / 257 MB = 0.35x
+- `$KILN/.oss/src/nlohmann_json/tests/src/unit-concepts.cpp`: time 1.7 / 1.2 s = 1.44x, RSS 72 / 202 MB = 0.35x
+<!-- /oss:nlohmann_json:libcxx -->

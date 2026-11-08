@@ -63,6 +63,10 @@ pub struct Config {
     /// `None` (`--mem-limit 0`) leaves only `mem<=N` budgets
     /// (`spec/harness.md` "Resource limits").
     pub mem_limit: Option<MemLimit>,
+    /// `KILN_REQUIRE_DEBUGGERS=1`: a `debugger` test whose debugger is not
+    /// on `PATH` is an ERROR rather than a SKIP (`spec/harness.md`
+    /// "Debugger tests").
+    pub require_debuggers: bool,
 }
 
 /// Outcome of one test.
@@ -261,6 +265,9 @@ impl Test<'_> {
                 format!("not supported by this compiler (`expect: {name}` needs kiln or clang)");
             return (Status::Skip, Some(reason), String::new());
         }
+        if let Some((status, why)) = debugger_gate(&spec, self.cfg.require_debuggers) {
+            return (status, Some(why), String::new());
+        }
         if let Some(dump) = DumpKind::of(spec.expect) {
             let name = dump.expect();
             if !kind.speaks_clang() {
@@ -292,6 +299,7 @@ impl Test<'_> {
             Expect::Ir => self.dump(&spec, DumpKind::Ir),
             Expect::NoCrash => self.no_crash(&spec),
             Expect::Cfg => self.cfg_dump(&spec),
+            Expect::Debugger => self.debugger(&spec),
         };
         let outcome = self.with_gcc_verdict(&spec, outcome);
         // Budgets are checked once the kind's own checks pass.
@@ -956,6 +964,64 @@ impl Test<'_> {
         if failures.is_empty() { Ok(()) } else { Err(Problem::Fail(failures)) }
     }
 
+    /// `expect: debugger`: compile and link at `-O0 -g`, then run each
+    /// script in batch mode (`gdb -batch -nx -x`, `lldb -b -s`) with cwd =
+    /// the scratch dir; each `*-check` must be a substring of a later
+    /// output line (stdout, then stderr) than the previous check's.
+    fn debugger(&mut self, spec: &TestSpec) -> Check {
+        let exe = self.scratch()?.join("test.out");
+        let o = self.compile(spec, &["-O0", "-g"], Some(&exe))?;
+        if !o.success() {
+            return Err(Problem::Fail(format!(
+                "compiling the test failed ({})\n{}",
+                o.describe_end(),
+                indent(&o.stderr_str())
+            )));
+        }
+        self.check_diags(spec, &diag_parse::parse(&o.stderr_str()))?;
+        let mut failures = String::new();
+        for (name, sc) in [("gdb", &spec.gdb), ("lldb", &spec.lldb)] {
+            if sc.commands.is_empty() {
+                continue;
+            }
+            let Some(prog) = debugger_program(name) else { continue };
+            let script = self.dir.join(format!("{name}.cmd"));
+            let mut text = sc.commands.join("\n");
+            text.push('\n');
+            fs::write(&script, text)
+                .map_err(|e| Problem::Broken(format!("cannot write {}: {e}", script.display())))?;
+            let mut cmd = Command::new(&prog);
+            cmd.current_dir(&self.dir);
+            // No symbol-server lookups: the test binary has all its debug
+            // information, and a network round trip is neither fast nor
+            // deterministic.
+            cmd.env_remove("DEBUGINFOD_URLS");
+            if name == "gdb" {
+                cmd.args(["-batch", "-nx", "-x"]).arg(&script).arg(&exe);
+            } else {
+                cmd.args(["-b", "-s"]).arg(&script).arg(&exe);
+            }
+            let shown = Shown(&cmd).to_string();
+            let got = self
+                .run_capped(&shown, &cmd, None, None, self.cfg.run_timeout.max(DEBUGGER_TIMEOUT))
+                .map_err(|e| Problem::Broken(format!("could not run `{shown}`: {e}")))?;
+            let out = format!("{}{}", got.stdout_str(), got.stderr_str());
+            if got.timed_out() {
+                let _ =
+                    write!(failures, "{name}: {}; output:\n{}", got.describe_end(), indent(&out));
+                continue;
+            }
+            if let Some(miss) = first_missing_check(&out, &sc.checks) {
+                let _ = write!(
+                    failures,
+                    "{name}: no line contains `{miss}` (after the earlier checks); output:\n{}",
+                    indent(&out)
+                );
+            }
+        }
+        if failures.is_empty() { Ok(()) } else { Err(Problem::Fail(failures)) }
+    }
+
     fn pp(&mut self, spec: &TestSpec) -> Check {
         let mode: &[&str] = if spec.pp_linemarkers { &["-E"] } else { &["-E", "-P"] };
         let how = self.cfg.pp_compare.unwrap_or(spec.pp_compare);
@@ -1388,6 +1454,58 @@ fn ir_target_flag(kind: DumpKind, spec: &TestSpec, host: &str) -> Option<String>
         .then(|| format!("--target={host}-unknown-linux-gnu"))
 }
 
+/// The debugger binary for `gdb`/`lldb` scripts: `gdb`, else `lldb-19`
+/// then `lldb`, on `PATH`.
+fn debugger_program(name: &str) -> Option<PathBuf> {
+    debugger_program_in(name, std::env::var_os("PATH").as_deref())
+}
+
+/// [`debugger_program`] with `path` as the value of `PATH`.
+fn debugger_program_in(name: &str, path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    let names: &[&str] = if name == "gdb" { &["gdb"] } else { &["lldb-19", "lldb"] };
+    names.iter().find_map(|n| std::env::split_paths(path?).map(|d| d.join(n)).find(|p| p.is_file()))
+}
+
+/// The least time a debugger script gets, whatever `--timeout` says: a
+/// debugger loads the binary's debug information and (lldb) its Python
+/// runtime before the first command, which takes seconds on a busy CI
+/// runner. A hung session still ends, and fails, deterministically.
+const DEBUGGER_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// A `debugger` test that drives a debugger not on `PATH` cannot run: a
+/// SKIP, or under `require` (`KILN_REQUIRE_DEBUGGERS=1`) an ERROR, with
+/// the reason.
+fn debugger_gate(spec: &TestSpec, require: bool) -> Option<(Status, String)> {
+    debugger_gate_in(spec, std::env::var_os("PATH").as_deref(), require)
+}
+
+/// [`debugger_gate`] with `path` as the value of `PATH`.
+fn debugger_gate_in(
+    spec: &TestSpec,
+    path: Option<&std::ffi::OsStr>,
+    require: bool,
+) -> Option<(Status, String)> {
+    if spec.expect != Expect::Debugger {
+        return None;
+    }
+    let (name, _) = [("gdb", &spec.gdb), ("lldb", &spec.lldb)]
+        .into_iter()
+        .find(|(name, sc)| !sc.commands.is_empty() && debugger_program_in(name, path).is_none())?;
+    Some(if require {
+        let env = super::REQUIRE_DEBUGGERS_ENV;
+        (Status::Error, format!("{env}=1 and `{name}` is not on PATH (`expect: debugger`)"))
+    } else {
+        (Status::Skip, format!("requires `{name}` on PATH (`expect: debugger`)"))
+    })
+}
+
+/// The first of `checks` that no output line after the previous match
+/// contains (checks match successive lines, in order).
+fn first_missing_check<'c>(out: &str, checks: &'c [String]) -> Option<&'c str> {
+    let mut lines = out.lines();
+    checks.iter().find(|c| !lines.by_ref().any(|l| l.contains(c.as_str()))).map(String::as_str)
+}
+
 /// An LLVM module without what differs between producers but not in the
 /// program: comment lines and trailing comments (`; preds = ...`), the
 /// `; ModuleID` and `source_filename` lines, and `!llvm.ident` with its
@@ -1627,7 +1745,10 @@ pub(super) fn meta_header_skip(spec: &TestSpec, source: &str) -> Option<String> 
 
 #[cfg(test)]
 mod compat_tests {
-    use super::{DumpKind, compat_for, ir_diff, ir_normalize, ir_target_flag};
+    use super::{
+        DumpKind, Status, compat_for, debugger_gate_in, first_missing_check, ir_diff, ir_normalize,
+        ir_target_flag,
+    };
     use crate::test::directives::{Lang, parse};
 
     /// spec/harness.md "Oracle toolchain": kiln imitates the oracle, or
@@ -1641,6 +1762,58 @@ mod compat_tests {
         assert_eq!(compat_for(19, Some([20, 0, 0]), None), 22);
         assert_eq!(compat_for(22, None, Some([22, 0, 0])), 19);
         assert_eq!(compat_for(19, None, Some([22, 0, 0])), 19);
+    }
+
+    #[test]
+    fn debugger_checks_match_successive_lines_in_order() {
+        let out = "Breakpoint 1, f (v=3) at t.cpp:4\n$1 = 3\n$2 = {x = 1, y = 2}\n";
+        let c = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(first_missing_check(out, &c(&["t.cpp:4", "$1 = 3", "x = 1"])), None);
+        // In order: `$1` cannot match before the breakpoint line's match.
+        assert_eq!(first_missing_check(out, &c(&["$2", "$1 = 3"])), Some("$1 = 3"));
+        // One line satisfies one check only.
+        assert_eq!(first_missing_check(out, &c(&["$1", "= 3"])), Some("= 3"));
+        assert_eq!(first_missing_check(out, &c(&["nowhere"])), Some("nowhere"));
+    }
+
+    /// spec/harness.md "Debugger tests": a missing debugger is a SKIP,
+    /// an ERROR under `KILN_REQUIRE_DEBUGGERS=1`, and nothing when the
+    /// test does not drive it.
+    #[test]
+    fn debugger_gate_skips_or_errors_without_the_debugger() {
+        let dir = std::env::temp_dir().join(format!("kiln-debugger-gate-{}", std::process::id()));
+        let (empty, tools) = (dir.join("empty"), dir.join("tools"));
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::write(tools.join("gdb"), "").unwrap();
+        let both = parse(
+            "//@ expect: debugger\n//@ gdb: run\n//@ gdb-check: x\n//@ lldb: run\n\
+             //@ lldb-check: x\n",
+            Lang::Cxx,
+        )
+        .unwrap();
+        let gdb_only =
+            parse("//@ expect: debugger\n//@ gdb: run\n//@ gdb-check: x\n", Lang::Cxx).unwrap();
+        let none = empty.as_os_str();
+        let (status, why) = debugger_gate_in(&both, Some(none), false).unwrap();
+        assert_eq!(status, Status::Skip);
+        assert_eq!(why, "requires `gdb` on PATH (`expect: debugger`)");
+        let (status, why) = debugger_gate_in(&both, Some(none), true).unwrap();
+        assert_eq!(status, Status::Error);
+        assert_eq!(why, "KILN_REQUIRE_DEBUGGERS=1 and `gdb` is not on PATH (`expect: debugger`)");
+        assert_eq!(debugger_gate_in(&both, None, true).unwrap().0, Status::Error);
+        // gdb found, lldb missing.
+        let (status, why) = debugger_gate_in(&both, Some(tools.as_os_str()), true).unwrap();
+        assert_eq!(status, Status::Error);
+        assert!(why.contains("`lldb`"), "{why}");
+        // A test that drives only gdb needs only gdb.
+        assert_eq!(debugger_gate_in(&gdb_only, Some(tools.as_os_str()), true), None);
+        std::fs::write(tools.join("lldb-19"), "").unwrap();
+        assert_eq!(debugger_gate_in(&both, Some(tools.as_os_str()), true), None);
+        // Not a debugger test: never gated.
+        let plain = parse("//@ expect: compile-ok\n", Lang::Cxx).unwrap();
+        assert_eq!(debugger_gate_in(&plain, Some(none), true), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

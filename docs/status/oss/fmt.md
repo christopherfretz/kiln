@@ -97,3 +97,43 @@ CMake then picks, and in the include and resource directories.
   - fmt's C++20 module build (`FMT_MODULE=ON`). It needs CMake's Ninja generator, which this run may not use.
   - `FMT_FUZZ`.
   - `FMT_OS=OFF` and the header-only (`fmt::fmt-header-only`) consumer, apart from what `FMT_PEDANTIC`'s `add-subdirectory-test` / `find-package-test` cover.
+
+## libc++ (WP-694)
+
+Built and tested with `-stdlib=libc++` (the system libc++ 19) by both kiln++ and the clang++-19 control: `scripts/oss/oss-build.sh --stdlib libc++ <project>`, report via `scripts/oss/oss-report.py --stdlib libc++ --perf <project>`. The clang-control build tree was deleted after these numbers were recorded. Wall-time differences are dominated by file-system syscalls on the bind mount (see the perf finding in [../oss.md](../oss.md#libc-results-wp-694)).
+
+Before the fix kiln++ failed 2 of 50 TUs (both built from `test/ranges-test.cc`) with "call to consteval function `fmt::fstring<tuple_join_view<…>>` is not a constant expression": under `-std=gnu++20` the implicit default constructor of a class with a libc++ `std::tuple` member was not constexpr, because kiln did not count the tuple's constexpr default constructor template as a constexpr default constructor ([class.default.ctor]/1). Fixed in `has_constexpr_default_ctor` (crates/kiln_sema/src/class/special/implicit.rs), test `tests/conformance/class.default.ctor/constexpr-ctor-template.cpp`.
+
+<!-- oss:fmt:libcxx -->
+### fmt (12.1.0), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 50 / 0 | 50 / 0 |
+| links ok / failed | 22 / 0 | 22 / 0 |
+| tests passed / total | 21 / 21 | 21 / 21 |
+| wall | 95 s | 45 s |
+| peak TU RSS | 351 MB | 434 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 30 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **1.42x**, RSS **0.44x**; total 140 s vs 105 s; peak TU RSS 351 MB vs 434 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/fmt/test/printf-test.cc` | 13.7 | 16.4 | 1.19 | 434 | 351 | 0.81 |
+| `$KILN/.oss/src/fmt/test/chrono-test.cc` | 11.0 | 14.7 | 1.34 | 373 | 280 | 0.75 |
+| `$KILN/.oss/src/fmt/test/format-test.cc` | 9.4 | 12.5 | 1.32 | 362 | 261 | 0.72 |
+| `$KILN/.oss/src/fmt/test/base-test.cc` | 7.0 | 9.5 | 1.36 | 415 | 190 | 0.46 |
+| `$KILN/.oss/src/fmt/test/gtest/gmock-gtest-all.cc` | 5.4 | 6.5 | 1.19 | 289 | 154 | 0.53 |
+
+TUs over 1.2x on time or RSS: 26 of the 30 that take clang-19 at least 0.5 s.
+- `$KILN/.oss/src/fmt/test/test-main.cc`: time 1.9 / 1.0 s = 1.97x, RSS 66 / 194 MB = 0.34x
+- `$KILN/.oss/src/fmt/test/util.cc`: time 1.0 / 0.6 s = 1.77x, RSS 64 / 157 MB = 0.41x
+- `$KILN/.oss/src/fmt/test/color-test.cc`: time 3.1 / 1.9 s = 1.68x, RSS 84 / 217 MB = 0.39x
+- `$KILN/.oss/src/fmt/test/gtest-extra-test.cc`: time 3.2 / 2.0 s = 1.61x, RSS 93 / 215 MB = 0.43x
+- `$KILN/.oss/src/fmt/test/args-test.cc`: time 2.5 / 1.5 s = 1.61x, RSS 76 / 212 MB = 0.36x
+<!-- /oss:fmt:libcxx -->

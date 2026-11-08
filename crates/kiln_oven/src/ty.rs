@@ -94,6 +94,10 @@ pub(crate) struct TyInfo {
     pub has_mutable: bool,
     /// Union subobjects at fixed offsets: `union_pos[upos.0..upos.1]`.
     pub upos: (u32, u32),
+    /// The bytes `[lo, hi)` spanning every union subobject in `upos`
+    /// (`(0, 0)` without one; [`Types::union_hull`]): an access outside
+    /// them crosses no union (WP-760).
+    pub uhull: (u32, u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -180,6 +184,10 @@ pub(crate) struct Types {
     /// The subobject path cache (WP-644, [`path`]): memoized
     /// memory-independent walk steps, bounded by [`PATH_CACHE_MAX`].
     paths: path::PathCache,
+    /// How many provisional slots were rebuilt in place: a walk result
+    /// remembered across a rebuild is stale (the union-path memo,
+    /// `vm::umemo`, stamps its entries with it; WP-760).
+    rebuilt: u32,
 }
 
 /// Records with fewer fields are scanned linearly ([`Types::near`]).
@@ -454,8 +462,10 @@ impl Types {
     /// so zero-initializing it writes no byte ([dcl.init.general]/6.2).
     pub fn holds_no_data(&self, t: OTy) -> bool {
         let i = self.info(t);
+        // A pointer or union subobject holds data: the common class
+        // answers without the walk over its members (WP-760).
         matches!(i.kind, TyKind::Record { union: false, .. })
-            && !i.has_vptr
+            && !(i.has_vptr || i.has_ptr || i.has_union)
             && self.fields(t).iter().all(|f| f.width.is_none() && self.holds_no_data(f.ty))
     }
 
@@ -508,6 +518,27 @@ impl Types {
             return at;
         }
         self.near(t, off).find(|f| reach(f)).copied().or(at)
+    }
+
+    /// How many provisional slots were rebuilt in place so far
+    /// ([`Types::refresh`]).
+    pub(crate) fn rebuilt(&self) -> u32 {
+        self.rebuilt
+    }
+
+    /// The bytes spanning the union subobjects `union_pos[a..b]`
+    /// ([`TyInfo::uhull`]), clamped to `u32` offsets.
+    fn union_hull(&self, a: u32, b: u32) -> (u32, u32) {
+        let us = &self.union_pos[a as usize..b as usize];
+        let lo = us.iter().map(|&(o, _)| o).min();
+        let hi = us.iter().map(|&(o, u)| o.saturating_add(self.size(u).max(1))).max();
+        match (lo, hi) {
+            (Some(lo), Some(hi)) => {
+                let c = |v: u64| u32::try_from(v).unwrap_or(u32::MAX);
+                (c(lo), c(hi))
+            }
+            _ => (0, 0),
+        }
     }
 
     pub fn unions(&self, t: OTy) -> &[(u64, OTy)] {
@@ -595,6 +626,25 @@ impl Types {
         }
     }
 
+    /// [`Types::same_unqualified`] or [`Types::similar`], level by level:
+    /// whether an array of `a` holds objects that a pointer to `b` may
+    /// step over ([expr.add]/6 allows similar types: a `const int *const
+    /// (&)[2]` bound directly to an `int *[2]`, CWG2352).
+    pub fn alike(&self, mut a: OTy, mut b: OTy) -> bool {
+        loop {
+            if self.same_class(a, b) {
+                return true;
+            }
+            match (self.kind(a), self.kind(b)) {
+                (TyKind::Ptr(x), TyKind::Ptr(y)) => (a, b) = (x, y),
+                (TyKind::Array { elem: x, n }, TyKind::Array { elem: y, n: m }) if n == m => {
+                    (a, b) = (x, y);
+                }
+                _ => return false,
+            }
+        }
+    }
+
     /// [conv.qual]/2: whether `a` and `b` are similar types (alike but
     /// for the cv-qualifiers at each level; [`Types::intern`] drops the
     /// top-level ones).
@@ -641,6 +691,7 @@ impl Types {
             has_vptr: e.has_vptr,
             has_mutable: e.has_mutable,
             upos: (start, end),
+            uhull: self.union_hull(start, end),
         });
         self.arrays.insert((elem, n), t);
         t
@@ -678,6 +729,7 @@ impl Types {
             has_vptr: false,
             has_mutable: false,
             upos: (0, 0),
+            uhull: (0, 0),
         })
     }
 
@@ -779,6 +831,7 @@ impl Types {
                     has_vptr: e.has_vptr,
                     has_mutable: e.has_mutable,
                     upos: (start, end),
+                    uhull: self.union_hull(start, end),
                 });
                 let _ = self.const_arrays.insert((elem, a.size), t);
                 t
@@ -1008,6 +1061,7 @@ impl Types {
                 // The slot's layout changes from `Opaque`: walks cached
                 // through it are stale.
                 self.paths.clear();
+                self.rebuilt = self.rebuilt.wrapping_add(1);
                 let i = &mut self.infos[t.0 as usize];
                 (i.size, i.align) = (size, align.max(1));
                 t
@@ -1114,6 +1168,7 @@ impl Types {
                 has_vptr,
                 has_mutable,
                 upos: (ustart, uend),
+                uhull: self.union_hull(ustart, uend),
             });
             self.nv_views.insert(me, view);
             // The view holds the same non-virtual bases, empty ones included.
@@ -1149,6 +1204,7 @@ impl Types {
         let ustart = self.union_pos.len() as u32;
         self.union_pos.extend(upos);
         let uend = self.union_pos.len() as u32;
+        let uhull = self.union_hull(ustart, uend);
         let info = &mut self.infos[me.0 as usize];
         info.kind = TyKind::Record { decl: def, union, first, count };
         info.has_union = has_union;
@@ -1156,6 +1212,7 @@ impl Types {
         info.has_vptr = has_vptr;
         info.has_mutable = has_mutable;
         info.upos = (ustart, uend);
+        info.uhull = uhull;
         self.index_fields(me);
         if let Some(&view) = self.nv_views.get(&me) {
             self.index_fields(view);
@@ -1170,7 +1227,7 @@ impl Types {
     /// element (treated as an array of one, [expr.add]/4).
     pub fn extent(&self, root: OTy, off: u64, past: bool, p: OTy) -> Option<(u64, u64, bool)> {
         let o = if past { off.checked_sub(1)? } else { off };
-        self.extent_in(root, 0, o, p, true)
+        self.extent_front(root, o, p)
     }
 
     /// [`Types::extent`] of the object at byte `o` below byte `base`
@@ -1187,11 +1244,11 @@ impl Types {
         loop {
             match self.kind(t) {
                 TyKind::Array { elem, n } => {
-                    if self.same_unqualified(elem, p) {
+                    if self.alike(elem, p) {
                         return Some((base, n, true));
                     }
                     // The array object itself (`&arr`), not an element.
-                    if self.same_unqualified(t, p) {
+                    if self.alike(t, p) {
                         return Some((base, 1, false));
                     }
                     let es = self.size(elem);
@@ -1202,7 +1259,7 @@ impl Types {
                     base += i * es;
                     t = elem;
                 }
-                _ if self.same_unqualified(t, p) => return Some((base, 1, false)),
+                _ if self.alike(t, p) => return Some((base, 1, false)),
                 // A union's members overlap, and so may a class's: an
                 // empty `[[no_unique_address]]` member shares its offset
                 // with the next one ([intro.object]/9), so each member
@@ -1283,7 +1340,17 @@ impl Types {
                     off %= es;
                     root = elem;
                 }
-                TyKind::Record { .. } => return self.subobject_cached(root, off, p),
+                TyKind::Record { .. } => {
+                    // An element of an array of `p` the whole-array table
+                    // holds (an `inplace_vector`'s `construct_at(&data[n])`,
+                    // WP-760).
+                    if let Some((lo, _)) = self.extent_hit(root, off, false, p)
+                        && (off - lo).is_multiple_of(self.size(p).max(1))
+                    {
+                        return true;
+                    }
+                    return self.subobject_cached(root, off, p);
+                }
                 _ => return false,
             }
         }

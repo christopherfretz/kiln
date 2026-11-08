@@ -491,6 +491,11 @@ pub(crate) mod bi {
     /// begins the lifetime of the object of static type `t1` at `a`
     /// without initializing it (`Oven::start_lifetime`); the result is 0.
     pub const START_LIFETIME: u32 = 35;
+    /// `__builtin_clear_padding(a)` (GCC, WP-774): checks that `a`
+    /// designates writable storage for an object of static type `t1`;
+    /// the Oven does not model padding bits, so nothing else happens
+    /// (`Oven::clear_padding`). The result is 0.
+    pub const CLEAR_PADDING: u32 = 36;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).

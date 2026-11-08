@@ -271,7 +271,7 @@ impl Substituter<'_, '_, '_> {
                 let body = body.unwrap_or_else(|| self.sema.act_on_null_stmt(loc));
                 let c = self.expr(l.cond.ok_or(SubstFail)?)?;
                 let c = self.sema.act_on_condition_at(c, loc);
-                Ok(self.sema.act_on_do(body, c, loc))
+                Ok(self.sema.act_on_do(body, c, loc, self.sema.ast.stmts.do_rparen(s)))
             }
             StmtKind::ForStmt => {
                 let l = *self.sema.ast.stmts.loop_data(s);

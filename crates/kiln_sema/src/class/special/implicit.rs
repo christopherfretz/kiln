@@ -478,10 +478,29 @@ impl Sema<'_, '_> {
 
     /// Whether complete class `c` has a constexpr default constructor,
     /// declared or still to be implicitly declared (clang
-    /// `hasConstexprDefaultConstructor`).
+    /// `hasConstexprDefaultConstructor`). As clang's `addedMember` sets
+    /// it, a constexpr constructor template callable without arguments
+    /// (no parameters, or a first parameter with a default argument or
+    /// that is a pack) counts too ([class.default.ctor]/1: a default
+    /// constructor is any constructor callable with no arguments).
     pub(crate) fn has_constexpr_default_ctor(&self, c: DeclId) -> bool {
         let d = self.class_def(c);
         let declared = self.ast.constructors(d).iter().any(|f| {
+            if self.kind_of(f) == DeclKind::FunctionTemplate {
+                return self.pattern_of(f).is_some_and(|p| {
+                    self.kind_of(p) == DeclKind::CXXConstructor
+                        && self.fn_spec(p).constexpr_kind() != ConstexprKind::None
+                        && self.param_decls(p).first().is_none_or(|&q| {
+                            self.param_has_default(q)
+                                || self.ast.decls.get(q).ty().is_some_and(|t| {
+                                    matches!(
+                                        self.ast.types.view(t.ty()),
+                                        TypeView::PackExpansion { .. }
+                                    )
+                                })
+                        })
+                });
+            }
             self.special_kind_of(f) == Some(SpecialKind::DefaultCtor)
                 && self.fn_spec(f).constexpr_kind() != ConstexprKind::None
         });
