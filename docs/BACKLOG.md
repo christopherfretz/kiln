@@ -757,6 +757,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-693 | sema: declare __builtin_printf and the other clang printf-family builtins (CLI11 find, docs/status/oss/cli11.md) | WP-685 | done (#393, via WP-841) |
 | WP-694 | M8: libc++ pass of the wave-1 projects (fmt, json, range-v3, spdlog, Catch2, googletest, magic_enum, doctest, tl_expected): rerun scripts/oss with -stdlib=libc++; WP-685 found a libc++-only miscompile | WP-685 | done (#375) |
 | WP-696 | sema: -Wuninitialized for a local read before any assignment (simdjson iterate_char_star_should_not_compile expects it under -Werror); follow-up of WP-443 UNINIT-a, design docs/design/uninitialized-values.md | WP-691 | open |
+| WP-862 | sema: flow-based -Wuninitialized/-Wsometimes-uninitialized per docs/design/uninitialized-values.md | WP-696 | in progress |
 | WP-697 | driver/lex: honour -fchar8_t / -fno-char8_t for the type of u8 literals (crates/kiln_lex/src/literal/mod.rs, crates/kiln_sema/src/literal.rs) | WP-691 | done (#382, via WP-823) |
 | WP-699 | parse: the parenthesized-template-id-callee rule of WP-695 also for (operator()<A>)(x) in parse_operator_template_id and in the reflection parser (crates/kiln_parse/src/reflect.rs) | WP-695 | done (#382, via WP-823) |
 | WP-701 | Implement -Wshadow (accepted, currently ignored; surfaced by yaml-cpp) | WP-698 | open |

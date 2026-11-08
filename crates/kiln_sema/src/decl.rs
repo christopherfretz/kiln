@@ -2586,7 +2586,11 @@ impl Sema<'_, '_> {
 
     /// clang's `getFixItZeroInitializerForType`: ` = 0`, ` = nullptr`,
     /// `{}`, ... ("" when there is none).
-    fn zero_initializer_fixit(&self, t: QualType, defn: Option<DefinitionBits>) -> String {
+    pub(crate) fn zero_initializer_fixit(
+        &self,
+        t: QualType,
+        defn: Option<DefinitionBits>,
+    ) -> String {
         let types = &self.ast.types;
         if let Some(bits) = defn {
             if !bits.contains(DefinitionBits::COMPLETE) {
@@ -6566,6 +6570,7 @@ impl Sema<'_, '_> {
             return;
         }
         self.act_on_uninit_inner(v);
+        self.note_uninit_var(v);
         if self.is_var_definition(v) {
             self.check_static_tls(v, None);
             self.check_constinit(v);
@@ -7995,7 +8000,7 @@ impl Sema<'_, '_> {
     /// A `[[no_unique_address]]` field of empty class type, a subobject
     /// of zero size ([intro.object]/9) that leaves its class empty
     /// ([meta.unary.prop] `is_empty`; clang `FieldDecl::isZeroSize`).
-    fn is_zero_size_field(&self, f: DeclId) -> bool {
+    pub(crate) fn is_zero_size_field(&self, f: DeclId) -> bool {
         let nua =
             self.ast.decls.field(f).is_some_and(FieldData::no_unique_address) || self.has_nua(f);
         nua && self

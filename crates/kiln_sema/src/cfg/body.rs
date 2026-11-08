@@ -35,6 +35,7 @@ impl Sema<'_, '_> {
         body: StmtId,
         probes: HashSet<ExprId>,
         has_fallthrough: bool,
+        uninit: bool,
     ) {
         let d = &self.diags;
         let in_inst = !self.inst.stack.is_empty();
@@ -52,7 +53,7 @@ impl Sema<'_, '_> {
             .any(|&id| d.is_enabled(id));
         let c = &mut self.cfg_body;
         c.at = Some((f, body));
-        c.req = CfgReq { probes, flow, scan };
+        c.req = CfgReq { probes, flow, scan, uninit };
         c.built = false;
         c.graph.clear();
     }
