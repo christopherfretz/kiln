@@ -77,6 +77,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::CLEANUP => "cleanup",
         AttrKind::INTERNAL_LINKAGE => "internal_linkage",
         AttrKind::COMMON => "common",
+        AttrKind::TLS_MODEL => "tls_model",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -396,6 +397,7 @@ impl Sema<'_, '_> {
         self.check_ctor_dtor_attrs(d, attrs);
         self.check_cleanup_attrs(d, attrs);
         self.check_internal_linkage_attrs(d, attrs);
+        self.check_tls_model_attrs(d, attrs);
         self.check_visibility_attrs(d, attrs);
         self.check_weak_attrs(d, attrs);
         let kind = self.ast.decls.get(d).kind();

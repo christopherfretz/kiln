@@ -75,6 +75,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "cleanup"
             | "internal_linkage"
             | "common"
+            | "tls_model"
             | "mode"
     )
 }

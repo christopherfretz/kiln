@@ -4627,6 +4627,7 @@ impl Sema<'_, '_> {
                 // with a warning.
                 self.check_cleanup_attrs(pd, &mut attrs);
                 self.check_internal_linkage_attrs(pd, &mut attrs);
+                self.check_tls_model_attrs(pd, &mut attrs);
                 let _ = self.builder().attach_attrs(pd, &attrs);
             }
             match p.default_arg {
@@ -10032,6 +10033,9 @@ impl Sema<'_, '_> {
         if kind == AttrKind::ENUM_EXTENSIBILITY {
             return self.enum_extensibility_attribute(syntax, args, loc);
         }
+        if kind == AttrKind::TLS_MODEL {
+            return self.tls_model_attribute(syntax, &n, args, loc);
+        }
         if kind == AttrKind::INIT_PRIORITY {
             return self.init_priority_attribute(syntax, &shown, args, loc);
         }
@@ -10970,6 +10974,7 @@ fn attr_kind_of(
         ("destructor", _, true) => AttrKind::DESTRUCTOR,
         // clang `GCC<"cleanup">` (WP-807).
         ("cleanup", _, true) => AttrKind::CLEANUP,
+        ("tls_model", _, true) => AttrKind::TLS_MODEL,
         // clang `GCC<"common">`, rejected in C++ (WP-807).
         ("common", _, true) => AttrKind::COMMON,
         // clang `Clang<"internal_linkage">` (WP-807).

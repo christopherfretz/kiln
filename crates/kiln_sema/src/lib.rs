@@ -110,6 +110,7 @@ mod switch_enum;
 pub mod target;
 pub mod templ;
 mod template_id_typo;
+mod tls_model;
 mod trivial_abi;
 mod try_stmt;
 mod type_diff;

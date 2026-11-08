@@ -665,8 +665,9 @@ impl Cg<'_> {
         let g = self.m.add_global(&name, lt);
         self.gi.temps.insert(t, g);
         if self.var_is_tls(vfirst) {
-            // [basic.stc.thread]: one temporary per thread.
-            self.m.global_mut(g).thread_local = Some(kiln_llvm::TlsModel::GeneralDynamic);
+            // [basic.stc.thread]: one temporary per thread, with the
+            // variable's model (clang `GetAddrOfGlobalTemporary`).
+            self.m.global_mut(g).thread_local = Some(self.tls_model(vfirst));
         }
         let value = match init {
             Some(k) => k,

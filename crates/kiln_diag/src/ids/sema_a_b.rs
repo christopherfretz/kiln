@@ -142,6 +142,7 @@ sema_atomic_op_needs_non_const_pointer = Error (1) "address argument to atomic o
 sema_atomic_op_needs_trivial_copy = Error (1) "address argument to atomic operation must be a pointer to a trivially-copyable type ({0} invalid)";
 sema_atomic_specifier_bad_type = Error (2) "_Atomic cannot be applied to {0:array|function|reference|atomic|qualified|integer} type {1}";
 sema_attr_cond_never_constant_expr = Error (1) "{0} attribute expression never produces a constant expression";
+sema_attr_tlsmodel_arg = Error (0) "tls_model must be \"global-dynamic\", \"local-dynamic\", \"initial-exec\" or \"local-exec\"";
 sema_attribute_arg_not_supported = Warning [IgnoredAttributes] (2) "{0} attribute argument not supported: {1}";
 sema_attribute_argument_out_of_range = Error (3) "{0} attribute requires integer constant between {1} and {2} inclusive";
 sema_attribute_ignored_on_type = Warning [IgnoredAttributes] (1) "attribute {0} ignored, because it cannot be applied to a type";

@@ -257,6 +257,12 @@ impl AttrKind {
     /// `handleCommonAttr`), so never attached; kept as a kind for its
     /// subject check (WP-807).
     pub const COMMON: AttrKind = AttrKind(193);
+    /// GNU `tls_model("model")` (clang `TLSModelAttr`) on a thread-local
+    /// variable: as written `a` is the raw `ExprId` of the first argument
+    /// (0: none) and `b` the argument count; once checked `a` is the
+    /// model, 1-4 for `global-dynamic`, `local-dynamic`, `initial-exec`
+    /// and `local-exec` (WP-807).
+    pub const TLS_MODEL: AttrKind = AttrKind(194);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
