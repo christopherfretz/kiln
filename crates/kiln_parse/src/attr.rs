@@ -32,7 +32,7 @@ struct AnnotMix {
 
 /// True for the attributes whose arguments are expressions.
 fn takes_expr_args(name: &str) -> bool {
-    let n = name.trim_start_matches("__").trim_end_matches("__");
+    let n = kiln_ast::attr::normalize_attr_name(name);
     matches!(
         n,
         "deprecated"
@@ -85,7 +85,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "returns_twice"
             | "mode"
             | "arm_sve_vector_bits"
-            | "clang_arm_builtin_alias"
+            | "__clang_arm_builtin_alias"
             | "clang_builtin_alias"
             | "builtin_alias"
             | "target_version"
@@ -155,7 +155,7 @@ fn class_b_takes_expr_args(n: &str) -> bool {
 /// written as one (clang `VariadicIdentifierArgument`: `cpu_dispatch`,
 /// `cpu_specific`).
 fn takes_ident_list(name: &str) -> bool {
-    matches!(name.trim_start_matches("__").trim_end_matches("__"), "cpu_dispatch" | "cpu_specific")
+    matches!(kiln_ast::attr::normalize_attr_name(name), "cpu_dispatch" | "cpu_specific")
 }
 
 /// True when argument `i` of attribute `name` must be written as a string
@@ -164,7 +164,7 @@ fn takes_ident_list(name: &str) -> bool {
 /// argument of 'name' attribute" at that token and the attribute is
 /// dropped, without parsing the argument as an expression.
 fn string_literal_arg(name: &str, i: usize) -> bool {
-    match name.trim_start_matches("__").trim_end_matches("__") {
+    match kiln_ast::attr::normalize_attr_name(name) {
         "target" | "target_version" => i == 0,
         "target_clones" | "no_sanitize" => true,
         _ => false,
@@ -178,7 +178,7 @@ fn string_literal_arg(name: &str, i: usize) -> bool {
 /// "requires a string").
 fn takes_ident_args(name: &str) -> bool {
     matches!(
-        name.trim_start_matches("__").trim_end_matches("__"),
+        kiln_ast::attr::normalize_attr_name(name),
         "callback" | "zero_call_used_regs" | "function_return"
     )
 }
@@ -186,13 +186,13 @@ fn takes_ident_args(name: &str) -> bool {
 /// True for the attributes whose argument is a type-id (clang
 /// `attributeIsTypeArgAttr`).
 fn takes_type_arg(name: &str) -> bool {
-    name.trim_start_matches("__").trim_end_matches("__") == "preferred_name"
+    kiln_ast::attr::normalize_attr_name(name) == "preferred_name"
 }
 
 /// True for the attributes whose first argument is an identifier when
 /// one is written (clang `attributeHasIdentifierArg`).
 fn takes_ident_arg(name: &str) -> bool {
-    let n = name.trim_start_matches("__").trim_end_matches("__");
+    let n = kiln_ast::attr::normalize_attr_name(name);
     // `weakref` / `alias` / `ifunc` take a string literal; clang parses
     // an identifier there as one (and then rejects it).
     matches!(
@@ -203,7 +203,7 @@ fn takes_ident_arg(name: &str) -> bool {
             | "weakref"
             | "alias"
             | "ifunc"
-            | "clang_arm_builtin_alias"
+            | "__clang_arm_builtin_alias"
             | "clang_builtin_alias"
             | "builtin_alias"
     )
@@ -779,7 +779,7 @@ impl Parser<'_, '_> {
     /// function's parameters.
     fn sees_params(&self, name: Symbol) -> bool {
         let n = self.s.ast.symbols().as_str(name);
-        matches!(n.trim_start_matches("__").trim_end_matches("__"), "enable_if" | "diagnose_if")
+        matches!(kiln_ast::attr::normalize_attr_name(n), "enable_if" | "diagnose_if")
     }
 
     /// `( type-id opt )` of `gsl::Owner` / `gsl::Pointer`, at the `(`

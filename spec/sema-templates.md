@@ -5173,26 +5173,74 @@ kind (`typeof`, unary transforms, `auto` with its type-constraint,
 deduced template specializations, dependent vectors and `_BitInt`, pack
 indexing) and every nested-name-specifier and template-name kind,
 reflection splices included (`[: R :]::x`, `typename [: R :]`,
-`[: R :]`, a spliced template name). The whole mapping is kept (`None`)
-only for a lambda-expression, a statement-expression and an expansion
-statement's selector, and for a dependent class or enumeration type (a
-member of a class template, which depends on enclosing parameters it
-does not name) or an unresolved using-declaration; that is never looser
-than the wording. Tests `temp.constr.atomic/p1-used-parameter-mapping.cpp`
-(WP-771), `p1-used-parameter-mapping-kinds.cpp` (WP-776; clang 19, 22
-and GCC 16.1 agree), `p1-used-parameter-mapping-splice.cpp` (WP-776;
-GCC 16.1 agrees, `skip(clang)`).
+`[: R :]`, a spliced template name). A function type's exception
+specification is walked too (`noexcept(E)`, a dynamic list).
+
+A lambda-expression is walked as clang's `RecursiveASTVisitor` does
+(WP-821, `used_in_lambda`): its capture initializers and the types of
+its captured variables, its call operator's template parameter list
+(type-constraints, non-type parameter types, defaults, the
+requires-clause), its parameters (types and default arguments), its
+trailing requires-clause, its body and the call operator's type
+(return type, `noexcept`); its closure type is not walked through the
+`LambdaExpr`'s own type. A statement walk (`used_in_stmt`) is exhaustive
+over every statement kind, and the declarations a body holds are
+walked by `used_in_local_decl`: variables, bindings, typedefs and
+aliases, `static_assert`, local enumerations (underlying type,
+enumerator initializers) and local classes (bases, members, member
+function bodies). A local class or enumeration, and a closure type,
+named later in the body are then known (`Used::locals`, the lambda
+itself), so a type naming them adds nothing more; a statement
+expression walks its compound statement, and an expansion statement
+walks its initializer, declaration and body (expanded or not). An
+expansion statement's selector names the statement's own synthetic
+parameter, deeper than any concept parameter, and adds nothing.
+
+The whole mapping is kept (`None`) only for a dependent member class or
+enumeration of a class template (it depends on enclosing parameters it
+does not name; a dependent specialization of a namespace-scope
+template walks its arguments), an unresolved using-declaration, an
+invalid type, a declaration kind a body cannot hold (a friend, a
+using-declaration) and a parameter index past 63 (the set is a `u64`
+mask); that is never looser than the wording. Tests
+`temp.constr.atomic/p1-used-parameter-mapping.cpp` (WP-771),
+`p1-used-parameter-mapping-kinds.cpp` (WP-776; clang 19, 22 and GCC
+16.1 agree), `p1-used-parameter-mapping-splice.cpp` (WP-776; GCC 16.1
+agrees, `skip(clang)`), `p1-used-parameter-mapping-lambda.cpp`
+(subsumption through lambdas, statement expressions, local classes and
+enums, closure types; clang 19 agrees), `p1-used-parameter-mapping-
+lambda-cache.cpp` (the satisfaction cache keyed by the parameters a
+lambda names, and the note text; clang 19 agrees) and
+`p1-used-parameter-mapping-expansion.cpp` (expansion statements; GCC
+16.1 agrees) (WP-821). GCC 16.1 never treats two lambda atoms as
+identical, so it is no subsumption oracle for them.
 
 The kept arguments are canonical ([temp.constr.atomic]/2, WP-776,
 `written_mapping_arg`): a non-dependent expression argument that
 substitution keeps as written (`1` of `C<1, int>` in a template's
 requires-clause) is its value converted to the parameter's type when
 the parameter is integral or an enumeration (`C<2 - 1, long>` maps
-alike), else its profile. A reflect-expression profiles by its value
-once known, and `^^T` of a template type parameter by its canonical
-type (spec/types.md §7.2), so `C<^^T>` in two templates maps alike.
-Test `temp.constr.atomic/p2-non-dependent-argument-identity.cpp` (clang
-19, 22 and GCC 16.1 agree).
+alike). Any other non-pack parameter of a non-dependent type (a
+pointer, a class type, a reference, `auto`) maps the argument converted
+as a template argument ([temp.arg.nontype]/2) in a SFINAE frame, so
+template-argument-equivalent values ([temp.type]/2) map alike: `&x` and
+`&(x)`, `S{1}` and `S{0 + 1}` (WP-821, `converted_mapping_arg`).
+Otherwise, or when the conversion fails, the argument maps by its
+profile. A reflect-expression profiles by its value once known, `^^T`
+of a template type parameter by its canonical type, and any other
+dependent reflection (`^^A<T>`, `^^T*`, `^^typename A<T>::type`,
+`^^A<T>::x`, `^^TT`) structurally by its operand kind and the operand's
+dependent profile (spec/types.md §7.2, WP-821), so the same reflection
+written in two templates maps alike. Tests
+`temp.constr.atomic/p2-non-dependent-argument-identity.cpp` (clang 19,
+22 and GCC 16.1 agree), `p2-non-integral-argument-identity.cpp` (clang
+19 and 22 agree) and its `-neg` sibling (different values are two atoms
+and the call is ambiguous: GCC 16.1 and clang 19 agree, `skip(clang)`;
+clang 22 treats atoms of a dependent concept-id whose mappings differ
+only in a non-type argument as identical, even `C<T, 1>` and `C<T, 2>`
+of an `int` parameter, against [temp.constr.atomic]/2's "the same
+type" rule), `p2-dependent-reflection-identity.cpp` and its `-neg`
+sibling (GCC 16.1 agrees, `skip(clang)`) (WP-821).
 
 Hash-consing therefore makes identical atoms the **same `NormId`**.
 `normal_forms: DeclId → NormId` caches each entity's associated

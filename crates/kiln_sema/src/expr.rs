@@ -5898,6 +5898,14 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) {
             return false;
         }
+        // A dependent operand type is checked when it is substituted
+        // ([temp.res.general]/6): `sizeof(void(T))` is a function type in
+        // every instantiation, but clang `CreateUnaryExprOrTypeTraitExpr`
+        // checks only a non-dependent type, so the uninstantiated
+        // template is accepted.
+        if self.is_dependent_type(ty) {
+            return true;
+        }
         let size_like = matches!(kind, TraitKind::SizeOf | TraitKind::DataSizeOf);
         let t = if size_like { self.non_reference(ty) } else { ty };
         // [expr.sizeof]/1, [expr.alignof]/1: in C++ a function type is an
@@ -6047,8 +6055,9 @@ impl Sema<'_, '_> {
         let e = self.complete_expr_array_bound(e);
         let ty = self.ety(e);
         // [expr.sizeof]/1: in C++ an expression of function type is an
-        // error, not the GNU extension the type form gets.
-        if self.ast.types.is_function(ty) {
+        // error, not the GNU extension the type form gets (a dependent
+        // one when it is substituted).
+        if self.ast.types.is_function(ty) && !self.is_dependent_type(ty) {
             let msg = self.diag(DiagId::sema_sizeof_function_expr, self.eloc(e));
             self.emit(msg.arg(Self::trait_name(kind)));
             return self.recover_err(&[e], loc);
@@ -6204,6 +6213,15 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
+        // A misaligned `&m` converted here is dropped now, as clang
+        // `BuildCStyleCastExpr` / `BuildCXXNamedCast` /
+        // `BuildCXXFunctionalCastExpr` do, before the rest of the
+        // enclosing full-expression is parsed: a nested full-expression
+        // after it (a template argument, a lambda body, an instantiated
+        // body) reports what is still pending (WP-659).
+        if !self.misaligned.is_empty() && style != CastStyle::Dynamic {
+            self.discard_misaligned_member_address(ty, e);
+        }
         let r = self.build_explicit_cast(style, ty, e, loc, rparen);
         self.note_cast_written_type(r, ty);
         r

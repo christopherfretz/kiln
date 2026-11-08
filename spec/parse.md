@@ -2082,7 +2082,14 @@ primary expressions, `is_cxx_declaration_statement`,
 `is_cxx_condition_declaration`, `is_cxx_type_id` and template
 arguments. A `decltype(e)::name` seen by lookahead at another index (the
 tentative scanner after the `(` of a possible cast or `sizeof`, template
-argument skipping) is skipped syntactically (`skip_qualified_rest`) and
+argument skipping) is first looked up without parsing when the operand
+is an unparenthesized id-expression naming a variable, parameter, data
+member or enumerator whose declared type is a non-dependent, defined,
+non-reference class or enumeration (`peek_decltype_scope_name`; that type
+is the decltype's, [dcl.type.decltype]/1.3): the name is then classified
+by lookup in it (`void g(decltype(m)::key_type);` declares a function,
+`int v(decltype(m)::value);` a variable; WP-843, WP-851). Otherwise it is
+skipped syntactically (`skip_qualified_rest`) and
 classified by what follows the name: an identifier, a `*`/`&`/`&&`
 before `)`/`,`/`>`, or a `)` before an identifier, literal or `(` make it
 a type. A name begins at the `decltype` keyword (`name_begin`).
