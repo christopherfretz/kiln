@@ -81,7 +81,19 @@ impl Cg<'_> {
         match ast.decls.get(c).kind() {
             DeclKind::Namespace => Some(self.di_namespace(cf)),
             DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
-                match ast.decls.get(c).ty() {
+                // clang `getContextDescriptor`: a dependent class (a
+                // template pattern) is no scope. Sema keeps the pattern's
+                // typedef sugar on a non-dependent type of an instantiated
+                // member (`size_type` of `std::array<int, 3>::size`), as
+                // clang does, and its typedef lands in the unit.
+                let cn = ast.decls.get(c);
+                if cn.has(DeclFlags::DEPENDENT_CTX)
+                    || ast.described_template(c).is_some()
+                    || ast.partial_spec_info(c).is_some()
+                {
+                    return default;
+                }
+                match cn.ty() {
                     Some(q) => self.di_type(q),
                     None => default,
                 }
@@ -239,7 +251,9 @@ impl Cg<'_> {
             }
             TypeView::Complex(e) => {
                 let int = self.ast.types.is_integral(e);
-                let enc = if int { "DW_ATE_lo_user" } else { "DW_ATE_complex_float" };
+                // clang's `DW_ATE_lo_user` (0x80) for an integer element
+                // prints as a number: LLParser has no name for it.
+                let enc = if int { "128" } else { "DW_ATE_complex_float" };
                 let size = bits_of(self, q);
                 Some(self.di_basic_node("complex", size, enc))
             }

@@ -65,6 +65,7 @@ fn cli_parsing() {
             toolchain: None,
             require_gcc: false,
             require_debuggers: false,
+            debug_sweep: false,
         }
     );
     assert_eq!(parse_args(strings(&["--help"])).unwrap(), None);
@@ -977,6 +978,26 @@ fn meta_header_mode_selection() {
         Some("meta-header mode: the test does not use libstdc++")
     );
     assert!(skip("//@ expect: ast\n#include \"kiln_meta.h\"\n").is_some());
+}
+
+/// `--debug-sweep` (spec/harness.md "Debug-info sweep").
+#[test]
+fn debug_sweep_mode_selection() {
+    let o = parse_args(strings(&["--debug-sweep", "tests/conformance"])).unwrap().unwrap();
+    assert!(o.debug_sweep);
+    assert!(parse_args(strings(&["--debug-sweep=1"])).is_err());
+    let skip = |src: &str| {
+        runner::debug_sweep_skip(&directives::parse(src, directives::Lang::Cxx).unwrap())
+    };
+    for kind in ["compile-ok", "run", "ir", "layout", "vtables"] {
+        assert_eq!(skip(&format!("//@ expect: {kind}\n")), None, "{kind}");
+    }
+    assert_eq!(
+        skip("//@ expect: compile-fail\n").as_deref(),
+        Some("not swept (`expect: compile-fail`, `--debug-sweep`)")
+    );
+    assert!(skip("//@ expect: ast\n").is_some());
+    assert!(skip("//@ expect: pp\n").is_some());
 }
 
 #[test]

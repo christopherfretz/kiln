@@ -16,15 +16,17 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
   debug flag kiln does not implement is a hard error naming it.
 - `nodebug`, `artificial` and `[[clang::standalone_debug]]` shape the
   output as in clang (`standalone_debug` keeps a class's full definition,
-  `di_omit`, `debuginfo/types.rs:569`).
+  `di_omit`, `debuginfo/types.rs:600`).
 - `-g0`, the default, builds no debug metadata and records no locations
   (see "Cost at `-g0`").
-- A construct kiln cannot describe yet is a hard error (see "Gaps"). Debug
-  information is never silently dropped.
+- Since WP-910 `-g` is total: at any level it compiles every program kiln
+  compiles without it. A construct kiln cannot describe degrades the
+  way clang's does (spec/landed/codegen/WP-910.md); the differences
+  from clang that remain are listed under "Gaps".
 
 ## Evidence
 
-- `tests/codegen/debug_*.cpp`: 30 cases, byte-exact against clang 19 on
+- `tests/codegen/debug_*.cpp`: 32 cases, byte-exact against clang 19 on
   aarch64 and x86_64 (`crates/kiln_codegen/tests/ir_vs_clang.rs`).
 - `llvm-dwarfdump-19 --verify` is clean on all 60 `-g` objects from
   `tests/codegen` and `tests/debuginfo`.
@@ -39,6 +41,7 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
   | `locals.cpp` | file:line breakpoint, `bt`, a parameter, a local, a struct member, a scoped enumerator, a reference, a class template member | pass | pass |
   | `step_finish.cpp` | `step` into a method, `finish` with its return value, `next` over a call | pass | pass |
   | `globals_lambda.cpp` | a namespace-scope variable, a static data member, a lambda's by-copy and by-reference captures, `up` | pass | pass |
+  | `reflection.cpp` (WP-910) | a `define_aggregate` class, a `Holder<^^int>` specialization, a `constexpr std::meta::info` | pass | skip (no P2996) |
 
   Since WP-816 `tests/debuginfo` is a default root of `cargo xtask test`
   and of both `ci` corpus runs, and GitHub CI runs it on aarch64 and
@@ -79,8 +82,8 @@ These are fmt 12.1.0 and nlohmann/json 3.12.0, built through
 ## Cost at `-g0`
 
 Every debug-information path is behind `Cg::dbg_on()`
-(`debuginfo/mod.rs:403`, one `Option` check on the function's debug
-state), and the module's `Cg::di` (`module.rs:258`) stays `None`. `cargo xtask bench` on the
+(`debuginfo/mod.rs:433`, one `Option` check on the function's debug
+state), and the module's `Cg::di` (`module.rs:263`) stays `None`. `cargo xtask bench` on the
 whole corpus (46 entries, 5 runs each) compared this branch with main
 (fb89f25f5). Both were built with `--profile harness`. Main was recorded
 into a scratch baseline (`--record --baseline <dir>`), then this branch
@@ -243,30 +246,35 @@ track the front-end cost from now on.
 
 ## Gaps
 
-Each gap is either a hard error (E) or a documented difference from
-clang 19 (D). The list matches spec/landed/codegen/WP-814.md
-"Deviations".
+Every gap is a documented difference from clang 19 (D). Since WP-910
+none is a hard error (E): the three E items WP-814 listed (template
+value arguments with no IR constant, template template arguments that
+are not a plain name, SVE types) now degrade as in clang
+(spec/landed/codegen/WP-910.md). The list matches
+spec/landed/codegen/WP-814.md "Deviations" and WP-910.md.
 
-- E: a non-integral template value argument that does not lower to an IR
-  constant (`crates/kiln_codegen/src/debuginfo/types.rs:1175`).
-- E: a template template argument other than a plain template name
-  (`types.rs:1207`).
-- E: SVE and other target builtin types (`types.rs:340`).
+- D: `std::meta::info` has no clang counterpart. It is a pointer-sized
+  `DW_ATE_unsigned` base type named `std::meta::info`, so gdb prints a
+  value as a number, and a template value argument of the type has
+  `value: null` (no IR constant). lldb names `Holder<^^int>` as
+  `Holder<unsigned long>`.
 - D: a floating-point template argument in a class name prints as
-  `T<1.5e0>` (clang: `T<1.500000e+00>`), at `types.rs:535`.
-- D: no `defaulted: true` on template parameters (`types.rs:1128`).
+  `T<1.5e0>` (clang: `T<1.500000e+00>`), at
+  `crates/kiln_codegen/src/debuginfo/types.rs:549`.
+- D: no `defaulted: true` on template parameters (`types.rs:1164`).
 - D: no `DIImportedEntity` for `using` declarations or directives
-  (`debuginfo/mod.rs:382`).
+  (`debuginfo/mod.rs:417`).
 - D: no `DISubprogram` for `__cxx_global_var_init`, `__tls_init` or
   atexit stubs.
 - D: no `DILocalVariable` for structured bindings or variable-length
-  arrays. A VLA type has `count: -1` (`types.rs:363`).
+  arrays. A VLA type has `count: -1` (`types.rs:394`).
 - D: no `DILabel`.
 - D: statement end locations exist only for compound and loop statements
   (`debuginfo/stmt.rs:82`).
-- D: alias template specializations are unwrapped (`types.rs:134`).
+- D: alias template specializations are unwrapped (`types.rs:122`), so
+  `C<int>` for an alias template `C` loses its `Alias<int>` typedef.
 - D: `di_const_ref` approximates `DeclMustBeEmitted`
-  (`debuginfo/func.rs:383`), and floating-point static members get no
+  (`debuginfo/func.rs:388`), and floating-point static members get no
   `extraData`.
 - D: no call-site declaration subprograms above `-O0` (the call site
   DIE gap above).

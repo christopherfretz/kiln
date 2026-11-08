@@ -1315,10 +1315,17 @@ order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
   `ApplyDebugLocation` and cleanup/landing-pad rules, so a debugger
   steps, breaks and finishes where it does in a clang build.
 
-A construct that debug information cannot describe yet is a hard error,
-`debug information for <what> is not supported`, never a silent drop.
-The normative detail, the gaps and the tests are in
-spec/landed/codegen/WP-814.md; the status, statistics and performance
+Debug information is total (WP-910, spec/landed/codegen/WP-910.md): `-g`
+at any level compiles every program kiln compiles without it. A
+construct it cannot describe degrades the way clang's does. A type with
+no `DIType` leaves out the field or node that refers to it. A template
+value argument with no IR constant keeps its parameter with `value:
+null`. A template template argument with no template declaration leaves
+its parameter out. `std::meta::info` is a pointer-sized `DIBasicType` of
+that name. SVE types are clang's `VG`-scaled vector arrays. The
+remaining differences from clang are listed in docs/status/debuginfo.md
+"Gaps". The normative detail and the tests are in
+spec/landed/codegen/WP-814.md and WP-910.md; the status, statistics and performance
 are in docs/status/debuginfo.md. WP-817 (spec/landed/codegen/WP-817.md)
 cut the front-end cost of `-g` without changing a byte of the IR.
 

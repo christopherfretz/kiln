@@ -19,6 +19,7 @@ cargo xtask test [options] [paths...]
 | `--gcc <path>` | The GCC oracle of `oracle: gcc` tests (see "GCC oracle"). Default `$KILN_GCC`, else `g++-16` on `PATH`. A GCC named by the flag or by `KILN_GCC` that does not run or does not identify as GCC is a usage error (exit 2); the default one missing drops the GCC comparisons. |
 | `--no-gcc` | Drop the GCC comparisons only. |
 | `--meta-header` | The header-differential mode: the reflection tests compile against GCC 16.1's real `<meta>` instead of kiln's `tests/support/kiln_meta.h` (see "Header-differential mode"). Needs kiln as the compiler under test and a GCC oracle whose install prefix can be found (a usage error, exit 2, otherwise). |
+| `--debug-sweep` | The debug-info sweep: compile each positive test with and without `-g` instead of checking its expectations (see "Debug-info sweep"). Not with `--meta-header` (usage error). |
 | `--external <dir>` | Instead of the corpus, the never-crash run of a directory outside the repository (see "External corpora"). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
 | `--shard K/N` | Run only shard `K` of `N` (`1 <= K <= N`, else a usage error): of the sorted test list (after `--filter`), test `i` (0-based) runs iff `i % N == K - 1`. Round-robin, so a slow directory is spread over every shard, and shards `1..N` of one `N` are exactly the unsharded run, each test in one shard. A shard of a list shorter than `N` may be empty, which is not an error (an empty selection before sharding still is). The run's first line says `(shard K/N of M)`. Not with `--external` (usage error). `ci --shard` passes it to both corpus runs (WP-692, "CI"). |
@@ -368,6 +369,32 @@ A test whose answer through the real header is known to differ guards
 the difference with `#if defined(__KILN__) && !defined(KILN_REAL_META)`
 or opts out with `meta-header: skip`. The mode is a local and release
 check (docs/VALIDATION.md), not part of `cargo xtask ci`.
+
+### Debug-info sweep
+
+`cargo xtask test --debug-sweep [paths...]` (WP-910) checks that `-g`
+never breaks a program kiln compiles. For each test it:
+
+- **SKIP**s a test that is not `compile-ok`, `run`, `ir`, `layout`,
+  `vtables` or `debugger` (reason ``not swept (`expect: <kind>`,
+  `--debug-sweep`)``), after the usual `requires`/`skip` gates;
+- compiles the test with its `args` and `-c` to an object, without
+  `-g`. A test that does not compile to an object (an `xfail(kiln)`, a
+  `-fsyntax-only` in its `args`) is a **SKIP**, ``does not compile to an
+  object without -g (<end>)``;
+- compiles it again with `-c -g`, which must succeed and write the
+  object, else **FAIL** with the compiler's stderr;
+- runs `llvm-dwarfdump --verify` on the `-g` object (the toolchain's
+  `bin/llvm-dwarfdump`, else `llvm-dwarfdump-N` on `PATH` for the
+  toolchain's major version, else none, and the sweep only compiles); a
+  verifier error is a **FAIL** with its output.
+
+`xfail` does not apply (a test is swept only when it compiles), and
+neither do diagnostics, oracles, run output or `oven:` budgets. Both
+compiles run under the test's memory cap and the compile timeout; a
+crash or hang is a FAIL as in any mode. The sweep is a local and release
+check (docs/VALIDATION.md), not part of `cargo xtask ci`: the whole
+conformance corpus takes several minutes.
 
 ### verify tests
 
@@ -1179,6 +1206,8 @@ or infrastructure error. Parse errors name their line.
   (tests.rs), `gcc_install_prefix_is_four_up_from_install` and
   `gcc_args_drop_gcc_toolchain` (oracle.rs); the corpus run under
   `--meta-header` (docs/VALIDATION.md).
+- Debug-info sweep (WP-910): `debug_sweep_mode_selection` (tests.rs);
+  the sweep of `tests/conformance` (docs/VALIDATION.md).
 - `module:` / `min-oracle:` (WP-405): `module_and_min_oracle_directives`
   (directives.rs) and the `xtask/fixtures/basic` fixtures
   `pass-module.cpp` (two chained units precompiled by clang),
