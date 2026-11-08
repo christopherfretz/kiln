@@ -157,19 +157,11 @@ impl FpFlags {
 
     /// Runs the state machine (clang `RenderFloatingPointOptions`):
     /// `ofast` says `-Ofast` is the optimization level, `clang22` selects
-    /// clang 22's rules over clang 19's (`-fclang-compat=`),
-    /// `default_denormal` is the target's denormal mode (x86-64 with
-    /// `crtfastmath.o`: `preserve-sign`). Flags whose final effect needs
-    /// the FP environment are reported to `errors`.
+    /// clang 22's rules over clang 19's (`-fclang-compat=`). Flags whose
+    /// final effect needs the FP environment are reported to `errors`.
     #[must_use]
-    pub fn resolve(
-        &self,
-        ofast: bool,
-        clang22: bool,
-        default_denormal: Option<&str>,
-        errors: &mut Vec<ArgError>,
-    ) -> FpModel {
-        let mut s = State::new(default_denormal, clang22);
+    pub fn resolve(&self, ofast: bool, clang22: bool, errors: &mut Vec<ArgError>) -> FpModel {
+        let mut s = State::new(clang22);
         for a in &self.seq {
             s.apply(a, ofast);
         }
@@ -179,7 +171,7 @@ impl FpFlags {
 
 /// clang's local variables in `RenderFloatingPointOptions`.
 #[allow(clippy::struct_excessive_bools, reason = "clang's flags")]
-struct State<'a> {
+struct State {
     honor_infs: bool,
     honor_nans: bool,
     approx_func: bool,
@@ -199,8 +191,11 @@ struct State<'a> {
     contract: &'static str,
     last_seen_contract: Option<&'static str>,
     seen_unsafe: bool,
+    /// The last `-fdenormal-fp-math=` (`None`: IEEE). No other flag
+    /// changes it, and no target has another default: clang 19 and 22
+    /// emit no `denormal-fp-math` for x86-64 Linux even when the link adds
+    /// `crtfastmath.o`.
     denormal: Option<String>,
-    default_denormal: Option<&'a str>,
     /// clang 22's rules (`-ffp-model=fast` keeps NaNs and infinities and
     /// promotes complex division; `aggressive` is the old `fast`).
     clang22: bool,
@@ -210,8 +205,8 @@ struct State<'a> {
     aggressive19: bool,
 }
 
-impl<'a> State<'a> {
-    fn new(default_denormal: Option<&'a str>, clang22: bool) -> Self {
+impl State {
+    fn new(clang22: bool) -> Self {
         State {
             honor_infs: true,
             honor_nans: true,
@@ -228,8 +223,7 @@ impl<'a> State<'a> {
             contract: "on",
             last_seen_contract: None,
             seen_unsafe: false,
-            denormal: default_denormal.map(str::to_owned),
-            default_denormal,
+            denormal: None,
             clang22,
             range: None,
             aggressive19: false,
@@ -285,7 +279,6 @@ impl<'a> State<'a> {
                 self.recip = false;
                 self.approx_func = false;
                 self.signed_zeros = true;
-                self.denormal = self.default_denormal.map(str::to_owned);
                 self.restore_contract();
             }
             "-funsafe-math-optimizations" => {
@@ -302,7 +295,6 @@ impl<'a> State<'a> {
                 self.recip = false;
                 self.signed_zeros = true;
                 self.approx_func = false;
-                self.denormal = None;
                 self.restore_contract();
             }
             "-ffinite-math-only" => (self.honor_infs, self.honor_nans) = (false, false),
@@ -351,7 +343,6 @@ impl<'a> State<'a> {
             self.recip = false;
             self.signed_zeros = true;
             self.contract = "on";
-            self.denormal = None;
             match v {
                 "fast" if self.clang22 => {
                     // clang 22: fast math without the finite-math flags,
@@ -461,7 +452,7 @@ mod tests {
             }
         }
         let ofast = args.iter().rev().find(|a| a.starts_with("-O")) == Some(&"-Ofast");
-        let m = f.resolve(ofast, clang22, None, &mut errors);
+        let m = f.resolve(ofast, clang22, &mut errors);
         (m, errors)
     }
 
@@ -559,5 +550,28 @@ mod tests {
         assert_eq!(r(&["-ffast-math", "-fno-unsafe-math-optimizations"]), None);
         assert_eq!(r(&["-ffp-model=fast"]).as_deref(), Some("-ffp-model=fast"));
         assert_eq!(r(&["-ffp-model=fast", "-ffp-model=precise"]), None);
+    }
+
+    // clang 19 and 22: only `-fdenormal-fp-math=` sets the denormal mode.
+    // The fast-math flags do not (not even on x86-64 with `crtfastmath.o`),
+    // and the flags that undo them leave an explicit mode alone.
+    #[test]
+    fn denormal_only_from_its_flag() {
+        for a in [&["-ffast-math"][..], &["-Ofast"], &["-funsafe-math-optimizations"]] {
+            assert_eq!(model(a).0.denormal, None, "{a:?}");
+        }
+        let ps = Some("preserve-sign,preserve-sign");
+        for undo in [
+            "-ffast-math",
+            "-fno-fast-math",
+            "-fno-unsafe-math-optimizations",
+            "-ffp-model=precise",
+            "-ffp-model=fast",
+        ] {
+            let (m, _) = model(&["-fdenormal-fp-math=preserve-sign", undo]);
+            assert_eq!(m.denormal.as_deref(), ps, "{undo}");
+        }
+        let (m, _) = model(&["-fdenormal-fp-math=preserve-sign", "-fdenormal-fp-math=ieee"]);
+        assert_eq!(m.denormal, None);
     }
 }

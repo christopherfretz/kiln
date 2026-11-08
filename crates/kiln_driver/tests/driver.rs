@@ -452,6 +452,60 @@ fn gcc_toolchain_matches_clang() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
+// spec: driver.md "Floating-point flags" (WP-806): only
+// `-fdenormal-fp-math=` gives `denormal-fp-math`. `-ffast-math` on x86-64
+// with a GCC installation that has `crtfastmath.o` adds none, as clang 19
+// and 22 (the link still adds `crtfastmath.o`). The host's own GCC must
+// not matter, so a fake installation is named.
+#[test]
+fn fast_math_x86_64_crtfastmath_keeps_ieee_denormals() {
+    let d = scratch("crtfastmath");
+    let g = d.join("tc/lib/gcc/x86_64-linux-gnu/14");
+    std::fs::create_dir_all(&g).unwrap();
+    std::fs::write(g.join("crtbegin.o"), "").unwrap();
+    std::fs::write(g.join("crtfastmath.o"), "").unwrap();
+    let gcc = format!("--gcc-toolchain={}", d.join("tc").display());
+    let src = "float f(float a, float b) { return a * b; }\n";
+    for fast in ["-ffast-math", "-Ofast", "-funsafe-math-optimizations"] {
+        let args = [
+            "--target=x86_64-linux-gnu",
+            &gcc,
+            fast,
+            "-S",
+            "-emit-llvm",
+            "-o",
+            "-",
+            "-x",
+            "c++",
+            "-",
+        ];
+        let o = kiln(&args, src);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert!(o.stdout.contains("\"no-signed-zeros-fp-math\"=\"true\""), "{fast}: {}", o.stdout);
+        assert!(!o.stdout.contains("denormal-fp-math"), "{fast}: {}", o.stdout);
+    }
+    let o = kiln(
+        &[
+            "--target=x86_64-linux-gnu",
+            &gcc,
+            "-ffast-math",
+            "-fdenormal-fp-math=preserve-sign",
+            "-fno-fast-math",
+            "-S",
+            "-emit-llvm",
+            "-o",
+            "-",
+            "-x",
+            "c++",
+            "-",
+        ],
+        src,
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("\"denormal-fp-math\"=\"preserve-sign,preserve-sign\""));
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 /// clang 19's stderr for `clang -E <dir>/a.cpp` with `<dir>` replaced by
 /// `@`: nested and repeated inclusions, a macro-expanded header name, a
 /// note (which prints no include stack of its own) and a diagnostic back

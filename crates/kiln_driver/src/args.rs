@@ -657,16 +657,16 @@ impl Args {
             }
         }
         a.verify = verify.finish(&mut a.errors);
-        let _ = a.fp.resolve(a.predef.ofast, a.clang22(), None, &mut a.errors);
+        let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
         a
     }
 
-    /// The floating-point semantics of the command line, with the
-    /// target's default denormal mode (spec/driver.md "Floating-point
-    /// flags"; the environment flags were errors at parse time).
+    /// The floating-point semantics of the command line (spec/driver.md
+    /// "Floating-point flags"; the environment flags were errors at parse
+    /// time).
     #[must_use]
-    pub fn fp_model(&self, default_denormal: Option<&str>) -> crate::fp_flags::FpModel {
-        self.fp.resolve(self.predef.ofast, self.clang22(), default_denormal, &mut Vec::new())
+    pub fn fp_model(&self) -> crate::fp_flags::FpModel {
+        self.fp.resolve(self.predef.ofast, self.clang22(), &mut Vec::new())
     }
 
     /// Whether clang 22's driver rules apply (`-fclang-compat=22`, the
@@ -1076,7 +1076,7 @@ impl Args {
     /// `-fclang-compat=` version's rules).
     #[must_use]
     pub fn complex_range(&self) -> ComplexRange {
-        self.fp_model(None).complex_range
+        self.fp_model().complex_range
     }
 
     /// Flags that change predefined macros.

@@ -269,7 +269,7 @@ impl CodegenJob<'_> {
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == StdLib::LibStdCxx,
-            math_errno: a.fp_model(None).opts.math_errno,
+            math_errno: a.fp_model().opts.math_errno,
             sve: feats.sve,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
@@ -282,7 +282,7 @@ impl CodegenJob<'_> {
         *deps_out = crate::pp_cmd::finish_deps(pp, deps);
         let mut module = None;
         if engine.error_count() == 0 {
-            let fp = a.fp_model(default_denormal(a, job.toolchain).as_deref());
+            let fp = a.fp_model();
             let opts = CodegenOptions {
                 source_filename: if job.path == "-" { "-".to_owned() } else { job.path.to_owned() },
                 exceptions: a.predef.exceptions.unwrap_or(true),
@@ -638,18 +638,6 @@ fn opt_commands(args: &Args, tc: &Toolchain, passes: &str) -> Vec<Command> {
     vec![run, names]
 }
 
-/// The target's denormal mode under the command line (clang 19
-/// `Linux::getDefaultDenormalModeForType`): x86-64 flushes when the link
-/// adds GCC's `crtfastmath.o` (`-Ofast`, `-ffast-math`,
-/// `-funsafe-math-optimizations`, `-ffp-model=fast`); `AArch64` is IEEE.
-fn default_denormal(args: &Args, tc: &Toolchain) -> Option<String> {
-    let fast = args.predef.ofast || args.fp.fast_math_runtime_flag().is_some();
-    (fast
-        && !tc.target.is_aarch64()
-        && tc.gcc.as_ref().is_some_and(|g| Path::new(&g.path).join("crtfastmath.o").is_file()))
-    .then(|| "preserve-sign,preserve-sign".to_owned())
-}
-
 /// `llc` for an assembly or object output.
 fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String) -> Command {
     let mut cmd = Command::new(tc, Tool::Llc);
@@ -677,7 +665,7 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String) -> Command {
     // clang `AllowFPOpFusion`: `-ffp-contract=fast` (not
     // `fast-honor-pragmas`) fuses across statements in the backend too;
     // the other fast-math options reach it as function attributes.
-    if args.fp_model(None).backend_fuse {
+    if args.fp_model().backend_fuse {
         cmd.arg("-fp-contract=fast");
     }
     // The module's `Code Model` flag says the same; explicit, as clang

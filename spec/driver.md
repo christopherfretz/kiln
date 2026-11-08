@@ -238,11 +238,15 @@ implemented or an error; none is accepted and ignored.
   `AllowFPOpFusion`; `fast-honor-pragmas` does not).
 - **Link and denormals.** The link passes the last of `-ffast-math`,
   `-funsafe-math-optimizations` and `-ffp-model=fast|aggressive` (unless
-  a negation follows) to `clang++`, which adds GCC's `crtfastmath.o`. On
-  x86-64 with that file present, the default denormal mode is then
-  `preserve-sign`.
+  a negation follows) to `clang++`, which adds GCC's `crtfastmath.o`.
+  The denormal mode comes only from the last `-fdenormal-fp-math=`; no
+  other flag changes it, and every target defaults to IEEE (no
+  attribute). This holds on x86-64 too when `crtfastmath.o` is linked:
+  clang 19 and 22 then emit no `denormal-fp-math` (checked with a fake
+  GCC installation).
 - **Tests:**
   - `kiln_driver` `fp_flags` unit tests;
+  - `tests/driver.rs` `fast_math_x86_64_crtfastmath_keeps_ieee_denormals`;
   - `tests/codegen.rs` `fp_environment_flags_rejected`;
   - `tests/codegen/fp_*.cpp`.
 

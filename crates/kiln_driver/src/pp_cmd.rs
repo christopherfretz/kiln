@@ -144,7 +144,7 @@ impl Job<'_> {
         cfg.char8_t = p.char8_t;
         cfg.char_signed = p.char_signed;
         cfg.pic = p.pic.unwrap_or(PicModel::Pie(2));
-        let fp = self.args.fp_model(None);
+        let fp = self.args.fp_model();
         cfg.fast_math = fp.fast_math;
         cfg.finite_math = fp.opts.nnan && fp.opts.ninf;
         cfg.no_math_errno = !fp.opts.math_errno;
