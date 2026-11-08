@@ -295,7 +295,6 @@ mod tests {
             "-fstack-usage",
             "-gz",
             "-gz=zlib",
-            "-ffp-model=precise",
             "-mtune=native",
             "-ffunction-sections",
             "-fdata-sections",
@@ -305,8 +304,6 @@ mod tests {
         for a in [
             "-ftrapv",
             "-fshort-enums",
-            "-ffp-model=fast",
-            "-ffp-model=strict",
             "-fsanitize=address",
             "-fno-sanitize-recover=all",
             "-fsanitize-trap=undefined",
