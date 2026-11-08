@@ -173,15 +173,12 @@ impl Cg<'_> {
         t
     }
 
-    fn di_derived(&mut self, tag: &str, base: Option<MetadataId>, f: Fields) -> MetadataId {
-        let f = Fields::default()
-            .raw("tag", tag)
-            .nn("baseType", base)
-            .0
-            .into_iter()
-            .chain(f.0)
-            .collect();
-        self.m.md_specialized("DIDerivedType", false, f)
+    fn di_derived(&mut self, tag: &'static str, base: Option<MetadataId>, f: Fields) -> MetadataId {
+        let mut all = Vec::with_capacity(f.0.len() + 2);
+        all.push(("tag", MdField::Raw(tag.into())));
+        all.push(("baseType", MdField::Node(base)));
+        all.extend(f.0);
+        self.m.md_specialized("DIDerivedType", false, all)
     }
 
     fn di_create_type(&mut self, q: QualType) -> Option<MetadataId> {
@@ -290,7 +287,7 @@ impl Cg<'_> {
         u64::from(self.ast.types.target().pointer_bytes) * 8
     }
 
-    fn di_basic_node(&mut self, name: &str, size: u64, enc: &str) -> MetadataId {
+    fn di_basic_node(&mut self, name: &str, size: u64, enc: &'static str) -> MetadataId {
         let f = Fields::default().s("name", name).u("size", size).raw("encoding", enc);
         self.m.md_specialized("DIBasicType", false, f.0)
     }
@@ -422,7 +419,7 @@ impl Cg<'_> {
                 let p = self.di_this_ptr(rd, quals)?;
                 let pointee = match &self.m.md_node(p) {
                     MdNode::Specialized { fields, .. } => {
-                        fields.iter().find(|f| &*f.0 == "baseType").and_then(|f| match f.1 {
+                        fields.iter().find(|f| f.0 == "baseType").and_then(|f| match f.1 {
                             MdField::Node(n) => n,
                             _ => None,
                         })
@@ -787,11 +784,8 @@ impl Cg<'_> {
         if !ident.is_empty() {
             f = f.s("identifier", &ident);
         }
-        let node = MdNode::Specialized {
-            distinct: true,
-            name: "DICompositeType".into(),
-            fields: f.0.into(),
-        };
+        let node =
+            MdNode::Specialized { distinct: true, name: "DICompositeType", fields: f.0.into() };
         let _ = self.m.md_replace(p, node);
     }
 
@@ -833,7 +827,7 @@ impl Cg<'_> {
         if !ident.is_empty() {
             f = f.s("identifier", &ident);
         }
-        MdNode::Specialized { distinct: false, name: "DICompositeType".into(), fields: f.0.into() }
+        MdNode::Specialized { distinct: false, name: "DICompositeType", fields: f.0.into() }
     }
 
     /// `__vtbl_ptr_type` (clang `getOrCreateVTablePtrType`).
@@ -884,7 +878,7 @@ impl Cg<'_> {
             let storage = bf.storage_offset * 8;
             fl.push("DIFlagBitField");
             f = f.u("size", u64::from(bf.size)).u("offset", storage + u64::from(bf.offset));
-            f = f.flags("flags", &fl).raw("extraData", &format!("i64 {storage}"));
+            f = f.flags("flags", &fl).raw("extraData", format!("i64 {storage}"));
         } else {
             let canon = ast.types.canonical(fq);
             let size = match ast.types.view(canon.ty()) {
@@ -928,7 +922,7 @@ impl Cg<'_> {
                 _ => None,
             });
         if let Some(c) = c {
-            f = f.raw("extraData", &Self::di_int_raw(c));
+            f = f.raw("extraData", Self::di_int_raw(c));
         }
         let s = self.di_derived(tag, t, f);
         if let Some(d) = self.di.as_deref_mut() {
@@ -1154,7 +1148,7 @@ impl Cg<'_> {
             ArgView::Value { ty, value } => {
                 let t = self.di_type(ty);
                 if let Some(c) = self.di_int(value) {
-                    let f = f.n("type", t).raw("value", &Self::di_int_raw(c));
+                    let f = f.n("type", t).raw("value", Self::di_int_raw(c));
                     return Some(self.m.md_specialized("DITemplateValueParameter", false, f.0));
                 }
                 // clang: the address of a variable or function, a member

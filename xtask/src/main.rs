@@ -138,6 +138,9 @@ usage: cargo xtask ci [--quick] [--oracle-only] [--step <steps>] [--shard <K/N>]
 
 KILN_REQUIRE_GCC=1: no usable GCC oracle (KILN_GCC, else g++-16) is an error
 (exit 2) before any step runs (spec/harness.md \"GCC oracle\").
+KILN_REQUIRE_DEBUGGERS=1: in the corpus runs, a `debugger` test (tests/debuginfo)
+whose gdb or lldb-19 is not on PATH is an ERROR, not a SKIP (spec/harness.md
+\"Debugger tests\").
 ";
 
 /// The cargo test targets whose outcome depends on `KILN_ORACLE`, as
@@ -457,7 +460,13 @@ fn ci_corpus(
 ) -> test::CorpusOutcome {
     let shard_flag = shard.map_or_else(String::new, |s| format!(" --shard {s}"));
     eprintln!("xtask ci: cargo xtask test {what}{shard_flag}");
-    let opts = test::Options { compiler, require_gcc, shard, ..test::Options::default() };
+    let opts = test::Options {
+        compiler,
+        require_gcc,
+        require_debuggers: test::require_debuggers_from_env(),
+        shard,
+        ..test::Options::default()
+    };
     let start = std::time::Instant::now();
     let run = test::execute(&opts);
     if let Err(e) = &run {
@@ -653,5 +662,39 @@ mod ci_tests {
         want.push(UNIT_REST);
         want.sort_unstable();
         assert_eq!(listed, want, "{}", path.display());
+    }
+
+    /// The debugger tests cannot silently skip in GitHub CI (WP-816,
+    /// spec/harness.md "Debugger tests"): `.github/workflows/ci-lane.yml`
+    /// sets `KILN_REQUIRE_DEBUGGERS: "1"`, and every job that runs a corpus
+    /// step installs gdb and lldb-19 (`debuggers: "true"`) in a container
+    /// with `CAP_SYS_PTRACE`.
+    #[test]
+    fn workflow_installs_the_debuggers() {
+        let path = util::repo_root().join(".github/workflows/ci-lane.yml");
+        let yml = std::fs::read_to_string(&path).unwrap();
+        assert!(yml.contains("\n  KILN_REQUIRE_DEBUGGERS: \"1\"\n"), "{}", path.display());
+        assert!(yml.contains("options: --cap-add=SYS_PTRACE"), "{}", path.display());
+        let jobs = &yml[yml.find("\njobs:\n").expect("a jobs: map")..];
+        // Each job is a two-space-indented `name:` line and what follows.
+        let mut blocks: Vec<(String, String)> = Vec::new();
+        for line in jobs.lines().skip(2) {
+            let top = line.len() > 2 && !line[2..].starts_with([' ', '#']);
+            if line.starts_with("  ") && top {
+                blocks.push((line.trim().trim_end_matches(':').to_owned(), String::new()));
+            } else if let Some((_, b)) = blocks.last_mut() {
+                b.push_str(line);
+                b.push('\n');
+            }
+        }
+        let corpus: Vec<&(String, String)> = blocks
+            .iter()
+            .filter(|(_, b)| b.contains("--step kiln") || b.contains("--step self-check"))
+            .collect();
+        assert!(corpus.len() >= 3, "self-check, kiln-22, kiln-19 in {}", path.display());
+        for (name, b) in corpus {
+            assert!(b.contains("debuggers: \"true\""), "job `{name}` installs no debuggers");
+            assert!(b.contains("container: *debugger-container"), "job `{name}` lacks ptrace");
+        }
     }
 }

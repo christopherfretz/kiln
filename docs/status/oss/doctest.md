@@ -101,3 +101,41 @@ No miscompiles were found.
   and later (doctest pins `gnu++11` for its tests), and
   `-DDOCTEST_INTERNAL_WERROR=ON`. The last should behave the same,
   since there are no warnings.
+
+## libc++ (WP-694)
+
+Built and tested with `-stdlib=libc++` (the system libc++ 19) by both kiln++ and the clang++-19 control: `scripts/oss/oss-build.sh --stdlib libc++ <project>`, report via `scripts/oss/oss-report.py --stdlib libc++ --perf <project>`. The clang-control build tree was deleted after these numbers were recorded. Wall-time differences are dominated by file-system syscalls on the bind mount (see the perf finding in [../oss.md](../oss.md#libc-results-wp-694)).
+
+<!-- oss:doctest:libcxx -->
+### doctest (v2.5.3), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 121 / 0 | 121 / 0 |
+| links ok / failed | 43 / 0 | 43 / 0 |
+| tests passed / total | 193 / 193 | 193 / 193 |
+| wall | 87 s | 83 s |
+| peak TU RSS | 107 MB | 212 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 69 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **1.41x**, RSS **0.43x**; total 78 s vs 57 s; peak TU RSS 107 MB vs 212 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/doctest/examples/all_features/main.cpp` | 2.3 | 2.6 | 1.15 | 210 | 106 | 0.50 |
+| `$KILN/.oss/src/doctest/tests/doctest/test_color.ansi.cpp` | 2.2 | 2.9 | 1.29 | 211 | 107 | 0.51 |
+| `$KILN/.oss/src/doctest/tests/regression/test.915.cpp` | 2.2 | 2.7 | 1.21 | 212 | 104 | 0.49 |
+| `$KILN/.oss/src/doctest/examples/exe_with_static_libs/main.cpp` | 2.2 | 2.6 | 1.17 | 208 | 104 | 0.50 |
+| `$KILN/.oss/src/doctest/tests/doctest/test_color.none.cpp` | 2.2 | 3.0 | 1.38 | 211 | 104 | 0.49 |
+
+TUs over 1.2x on time or RSS: 29 of the 37 that take clang-19 at least 0.5 s.
+- `$KILN/.oss/src/doctest/tests/doctest/test_platform.cpp`: time 0.9 / 0.6 s = 1.55x, RSS 68 / 165 MB = 0.41x
+- `$KILN/.oss/src/doctest/tests/doctest/test_filters.cpp`: time 1.2 / 0.8 s = 1.49x, RSS 74 / 182 MB = 0.41x
+- `$KILN/.oss/src/doctest/tests/doctest/matchers/test_is_nan.cpp`: time 1.1 / 0.7 s = 1.49x, RSS 74 / 169 MB = 0.44x
+- `$KILN/.oss/src/doctest/tests/doctest/test_color.win32.cpp`: time 3.2 / 2.2 s = 1.49x, RSS 103 / 210 MB = 0.49x
+- `$KILN/.oss/src/doctest/tests/doctest/test_xml.cpp`: time 1.2 / 0.8 s = 1.47x, RSS 75 / 170 MB = 0.44x
+<!-- /oss:doctest:libcxx -->

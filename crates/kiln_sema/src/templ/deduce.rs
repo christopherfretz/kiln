@@ -150,6 +150,11 @@ pub struct DeducedArgs {
     /// as empty ([temp.deduct.type]/9; clang `PackDeductionScope::finish`).
     /// Partial ordering reads it ([temp.deduct.partial]/12).
     pub empty_expanded: Vec<u16>,
+    /// Deducing for the partial ordering of function templates
+    /// ([temp.func.order]/3): `A` is the other template's transformed
+    /// parameter type, so a template template parameter's template-id
+    /// takes `A`'s extra arguments as its defaults (`deduce_ttp_id_args`).
+    pub ordering: bool,
     /// Where the deduction was requested (the call, the declaration, the
     /// alias template): the location of a diagnostic issued from a step
     /// that has none of its own.
@@ -167,6 +172,7 @@ impl DeducedArgs {
             expansions: false,
             pack_elem: None,
             empty_expanded: Vec::new(),
+            ordering: false,
             loc: Loc::INVALID,
         }
     }
@@ -1475,13 +1481,99 @@ impl Sema<'_, '_> {
         if ps.len() < as_.len() {
             self.complete_dependent_args(name, &mut ps);
         }
-        let r = self.deduce_arg_list(&ps, &as_, true, d, level, d.loc);
+        let n = ps.len();
+        let packs = ps.iter().chain(&as_).any(|x| self.is_pack_arg(*x));
+        // `A` a template template parameter's template-id: a unique type
+        // of partial ordering ([temp.func.order]/3).
+        let unique = self.template_parm_of_name(aname).is_some();
+        let r = if n != as_.len() && self.template_parm_of_name(name).is_some() && !packs {
+            self.deduce_ttp_id_args(&ps, &as_, (atmpl, unique), d, level)
+        } else {
+            self.deduce_arg_list(&ps, &as_, true, d, level, d.loc)
+        };
         if r == Tdk::NonDeducedMismatch {
             // clang deduces against `P`'s canonical arguments, so an inner
             // `P` prints canonically (`pr<type-parameter-0-0, int>`).
             d.info.first = d.info.first.map(|x| self.ast.types.canonical_arg(x));
         }
         r
+    }
+
+    /// `U<Ps...>` for a template template parameter `U` against `A`'s
+    /// arguments `as_` of another length (template `atmpl`; `unique` when
+    /// `A` names a template template parameter), packs aside.
+    ///
+    /// [temp.arg.template]/3 (P0522): `U<T>` for `template<class> class U`
+    /// matches `rv<double, 1>` of `template<class, size_t = 1> struct rv`.
+    /// `P`'s arguments are deduced from the first of `A`'s, and the rest
+    /// must be the defaults those give (CWG2398 as clang deduces it;
+    /// `rv<double, 2>` does not match). Against a unique type, and in the
+    /// partial ordering of function templates, the rest is not checked:
+    /// `U` is deduced as `A`'s template with the extra arguments as its
+    /// defaults (clang's `DeducedTemplateName`, P3310R5), so
+    /// `f(const num<B, E>&)` is more specialized than `f(const U<T>)`
+    /// for `template<class, int = 0> struct num` (Boost.Math `sinhc_pi`).
+    /// A shorter unique `A` matches under clang 19, which ignores `P`'s
+    /// extra arguments there, and fails under clang 22 (`A`'s template
+    /// has too few parameters for `U`), so `f(TT<int, int>)` is more
+    /// specialized than `f(TT<int>)` only under clang 22.
+    fn deduce_ttp_id_args(
+        &mut self,
+        ps: &[TemplateArg],
+        as_: &[TemplateArg],
+        a: (DeclId, bool),
+        d: &mut DeducedArgs,
+        level: u32,
+    ) -> Tdk {
+        let (atmpl, unique) = a;
+        let n = ps.len();
+        if n > as_.len() {
+            if unique && self.clang_compat < 22 {
+                return self.deduce_arg_list(&ps[..as_.len()], as_, true, d, level, d.loc);
+            }
+            return self.deduce_arg_list(ps, as_, true, d, level, d.loc);
+        }
+        let r = self.deduce_arg_list(ps, &as_[..n], true, d, level, d.loc);
+        if r != Tdk::Success || unique || d.ordering {
+            return r;
+        }
+        let mut full = as_[..n].to_vec();
+        let an = self.ast.types.template_name_of(atmpl);
+        self.complete_dependent_args(an, &mut full);
+        let same = full.len() == as_.len()
+            && full.iter().zip(as_).all(|(x, y)| self.same_default_arg(*x, *y));
+        if same { r } else { Tdk::MiscellaneousDeductionFailure }
+    }
+
+    /// Whether the default `x` that [`Self::deduce_ttp_id_args`] completed
+    /// is `A`'s argument `y`. A dependent `A` (the partial specialization
+    /// `lambda<protect<T>, Tag>` of Boost.MPL, ordered against
+    /// `lambda<F<T1>, Tag>`) keeps a defaulted non-type argument as an
+    /// expression, which is compared by its value.
+    fn same_default_arg(&mut self, x: TemplateArg, y: TemplateArg) -> bool {
+        let t = &self.ast.types;
+        if t.canonical_arg(x) == t.canonical_arg(y) {
+            return true;
+        }
+        let (Some(a), Some(b)) = (self.arg_int_value(x), self.arg_int_value(y)) else {
+            return false;
+        };
+        a == b
+    }
+
+    /// The integer value of a non-type template argument: a converted
+    /// value, or a value-independent expression folded.
+    fn arg_int_value(&mut self, a: TemplateArg) -> Option<i128> {
+        let e = match a.view() {
+            ArgView::Value { value, .. } => return self.const_int(value),
+            ArgView::Expr { expr, .. } => expr,
+            ArgView::Profile(pr) => self.ast.types.profile_expr(pr)?,
+            _ => return None,
+        };
+        if self.expr_is_value_dependent(e) {
+            return None;
+        }
+        self.fold_int(e)
     }
 
     /// The arguments of a dependent class template-id `P` completed with

@@ -952,6 +952,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         // arguments outside its own scope ([temp.dep.type]/6): a type
         // found in it by lookahead is a member of an unknown specialization.
         let mut dep_tid = false;
+        // The qualifier component was `X<args>::` naming the current
+        // instantiation ([temp.dep.type]/1): its members stay dependent.
+        let mut qual_cur_inst = false;
         if let Some(d) = self.decltype_scope_at(i) {
             let q = d.qual.ok_or(NoName)?.0;
             // A parsed-ahead `X<T>::` that is not the current
@@ -989,6 +992,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 class = c;
             }
             let mut end = i + 1;
+            let mut cur_inst = false;
             if (template_kw || is_template_class(class))
                 && self.tok_at(end).kind == TokKind::Punct(Punct::Less)
             {
@@ -998,9 +1002,12 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     && self.tok_at(close + 1).kind == TokKind::Punct(Punct::ColonColon)
                     && self.s.ast.decls.get(d).kind() == DeclKind::ClassTemplate
                     && self.template_args_dependent(end, close)
-                    && !self.s.may_name_current_instantiation(d)
                 {
-                    dep_tid = true;
+                    if self.s.may_name_current_instantiation(d) {
+                        cur_inst = true;
+                    } else {
+                        dep_tid = true;
+                    }
                 }
                 class = type_if_args(class);
                 if split {
@@ -1012,14 +1019,23 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 // `X<args>::m::` (or `D::m::`, `D` a typedef of `X<args>`)
                 // with `m` a member typedef of `X`'s pattern naming
                 // `Y<...>`: scan on in `Y` (WP-668). Not for a qualifier
-                // in a dependent context (`X<T>::`, the current
-                // instantiation), whose members stay dependent.
+                // in a dependent context (`X<T>::`), nor for a dependent
+                // `m` of the current instantiation (`X<S>::` in `X`'s
+                // definition, or its injected-class-name `X::`), which
+                // names a member of an unknown specialization: there
+                // `X<S>::m::name` needs `typename` (WP-676).
                 let tid_member = |d: DeclId| {
-                    qual.filter(|&q| {
-                        self.s.ast.decls.get(q).kind() == DeclKind::ClassTemplate
-                            || !self.s.is_dependent_ctx(q)
-                    })
-                    .and_then(|_| self.s.member_typedef_class_template(d))
+                    let q = qual?;
+                    let template = self.s.ast.decls.get(q).kind() == DeclKind::ClassTemplate;
+                    if !template && self.s.is_dependent_ctx(q) {
+                        return None;
+                    }
+                    if (qual_cur_inst || !template)
+                        && self.s.ast.decls.get(d).ty().is_some_and(|t| self.s.is_dependent_type(t))
+                    {
+                        return None;
+                    }
+                    self.s.member_typedef_class_template(d)
                 };
                 qual = Some(match class {
                     NameClass::Type(_, d) if let Some(t) = tid_member(d) => t,
@@ -1035,6 +1051,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     }
                     _ => return Err(ScanStop::NotAScope),
                 });
+                qual_cur_inst = cur_inst;
                 i = end + 1;
                 continue;
             }

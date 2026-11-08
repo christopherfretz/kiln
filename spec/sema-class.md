@@ -291,7 +291,7 @@ is a protected member of 'S'` + note `can only access this member on an object
 of type 'D'`; for a constructor or destructor, or a constructor template,
 the note is `protected constructor can only be used to construct a base class
 subobject` / `... destructor ... destroy ...`, clang `TryDiagnoseProtectedAccess`;
-`class.protected/ctor-restricted-note.cpp`, WP-680). A member function
+`class.protected/ctor-restricted-note.cpp`, WP-680; every destructor use, a local, a static or `thread_local` variable, an array, a temporary, a thrown object, a by-value argument, a discarded or returned prvalue, `delete`/`delete[]` and `new B[n]`'s cleanup, `class.protected/dtor-restricted-note.cpp`, WP-684 (WP-823)). A member function
 template is non-static when its pattern is: the object's class is checked
 for it as for a member function, so a friend of a class that derives
 privately from the base reaches it through an object of that class
@@ -1078,7 +1078,15 @@ WP-400 models clang's `DefaultedDefaultConstructorIsConstexpr` and
 - Before C++23 the per-subobject rule holds: each base's and each member's
   selected constructor (default, copy or move as the member requires) or
   assignment must be constexpr, a member without an initializer and a union
-  are fine (P1331), and a virtual base makes it non-constexpr.
+  are fine (P1331), and a virtual base makes it non-constexpr. A member's
+  or base's class "has a constexpr default constructor" (clang
+  `hasConstexprDefaultConstructor`, `Sema::has_constexpr_default_ctor`)
+  when a declared constexpr constructor is callable without arguments,
+  a constructor template included: its pattern has no parameters, or a
+  first parameter with a default argument or that is a pack (clang
+  `addedMember` on the templated declaration; libc++ `std::tuple`'s
+  default constructor is such a template, WP-694). Test:
+  `tests/conformance/class.default.ctor/constexpr-ctor-template.cpp`.
 - An explicitly `constexpr`/`consteval` defaulted member that the rule says
   is not constexpr is an error at the specifier before C++23: "defaulted
   definition of {default constructor|copy constructor|...} cannot be marked

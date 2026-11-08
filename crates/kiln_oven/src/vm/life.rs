@@ -119,6 +119,9 @@ impl Oven {
     /// `cleanup_life`; this catches the trivially destructible ones.
     pub(super) fn scope_life(&self, ast: &Ast, mark: u64, objs: Objs) -> Result<(), Fault> {
         let n = (mark >> 32) as usize;
+        if n >= self.mem.life_hi {
+            return Ok(());
+        }
         for &s in self.mem.live.get(n..).unwrap_or_default().iter().rev() {
             let a = &self.mem.slots[s as usize];
             if a.flags & flags::LIFE == 0 {

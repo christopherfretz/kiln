@@ -6133,11 +6133,11 @@ impl Sema<'_, '_> {
         use crate::templ::auto::AutoFail;
         let (mut items, kind, lbrace) = auto_init_items(init, direct);
         self.resolve_single_overloads(&mut items);
-        let overload = items
-            .iter()
-            .flatten()
-            .copied()
-            .find(|&e| self.ast.exprs.get(e).ty() == QualType::OVERLOAD);
+        // A member overload set deduces in `deduce_auto` (a member
+        // template-id naming one static specialization, WP-788).
+        let overload = items.iter().flatten().copied().find(|&e| {
+            self.ast.exprs.get(e).ty() == QualType::OVERLOAD && self.member_overload(e).is_none()
+        });
         let paren_braces = self.auto_paren_braces(init, direct);
         let fail = match (overload, paren_braces) {
             (_, Some(nested)) => AutoFail::ParenBraces(nested),

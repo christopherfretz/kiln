@@ -880,18 +880,18 @@ impl Cg<'_> {
         let i32c = |cg: &mut Self, x: i128| V::C(cg.m.const_int(LTy::I32, x));
         Ok(match s {
             Shape::Ld1 => {
-                let (p, a) = self.pointer_and_align(args[0])?;
+                let (p, a) = self.ptr_align(args[0])?;
                 Some(self.load(vt, p, a, false))
             }
             Shape::St1 => {
-                let (p, a) = self.pointer_and_align(args[0])?;
+                let (p, a) = self.ptr_align(args[0])?;
                 let v = self.emit_scalar(args[1])?;
                 let v = self.neon_as(v, vt, args[1])?;
                 self.store(v, p, a, false);
                 None
             }
             Shape::Ld1Lane => {
-                let (p, a) = self.pointer_and_align(args[0])?;
+                let (p, a) = self.ptr_align(args[0])?;
                 let v = self.emit_scalar(args[1])?;
                 let lane = self.neon_imm(args[2], name)?;
                 let v = self.neon_as(v, vt, args[1])?;
@@ -900,7 +900,7 @@ impl Cg<'_> {
                 Some(self.insert_elt(v, x, lane))
             }
             Shape::St1Lane => {
-                let (p, a) = self.pointer_and_align(args[0])?;
+                let (p, a) = self.ptr_align(args[0])?;
                 let v = self.emit_scalar(args[1])?;
                 let lane = self.neon_imm(args[2], name)?;
                 let v = self.neon_as(v, vt, args[1])?;
@@ -951,7 +951,7 @@ impl Cg<'_> {
                 None
             }
             Shape::Ld1Dup => {
-                let (p, a) = self.pointer_and_align(args[0])?;
+                let (p, a) = self.ptr_align(args[0])?;
                 let x = self.load(et, p, a, false);
                 let undef = V::C(self.m.const_poison(vt));
                 let zero = i32c(self, 0);

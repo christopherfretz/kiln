@@ -78,7 +78,13 @@ sema_array_designator_negative = Error (1) "array designator value '{0}' is nega
 sema_array_designator_non_array = Error (1) "array designator cannot initialize non-array type {0}";
 sema_array_designator_too_large = Error (2) "array designator index ({0}) exceeds array bounds ({1})";
 sema_array_incomplete_type = Error (1) "array has incomplete element type {0}";
+// [dcl.init.string]/1: the literal kind must match the element type (WP-823)
+sema_array_init_incompat_wide_string = Error (0) "initializing wide char array with incompatible wide string literal";
+sema_array_init_narrow_string_into_wchar = Error (0) "initializing wide char array with non-wide string literal";
 sema_array_init_not_init_list = Error (1) "array initializer must be an initializer list{0:| or string literal| or wide string literal}";
+sema_array_init_plain_string_into_char8 = Error (0) "initializing 'char8_t' array with plain string literal";
+sema_array_init_utf8_string_into_char = Error (1) "initialization of char array with UTF-8 string literal is not permitted by {0:'-fchar8_t'|C++20}";
+sema_array_init_wide_string_into_char = Error (0) "initializing char array with wide string literal";
 sema_array_not_modifiable = Error (1) "array type {0} is not assignable";
 sema_array_of_functions = Error (2) "'{0}' declared as array of functions of type {1}";
 sema_array_of_references = Error (2) "'{0}' declared as array of references of type {1}";

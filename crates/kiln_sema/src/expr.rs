@@ -3016,6 +3016,18 @@ impl Sema<'_, '_> {
                     ExprFlags::CANNOT_OVERFLOW,
                 );
             }
+            // `&b.f<args>` naming one static member function
+            // specialization is that function's address ([over.over]/3;
+            // clang's `ResolveSingleFunctionTemplateSpecialization`).
+            if let Some((d, f)) = self.single_member_template_spec(x)
+                && self.is_static_method(d)
+                && let Some(m) = self.ovl.members.remove(&x)
+            {
+                let at = self.ast.exprs.get(x).loc();
+                let r = self.finish_member_winner(&m, d, f, at);
+                let r = self.rebuild_parens(e, r);
+                return self.address_of(r, loc);
+            }
             // [expr.unary.op]/4: `&b.f` is not a pointer to member.
             self.error(DiagId::sema_nonconst_member_fn_ptr, loc);
             return self.recover_err(&[e], loc);

@@ -111,3 +111,52 @@ Each repro file is the conformance test that was reduced from the cluster.
 Nothing blocks the build. The follow-ups above are all diagnostics or driver
 polish. `tokenize` fails under clang too and needs a libstdc++ or range-v3
 change.
+
+## libc++ (WP-694)
+
+Built and tested with `-stdlib=libc++` (the system libc++ 19) by both kiln++ and the clang++-19 control: `scripts/oss/oss-build.sh --stdlib libc++ <project>`, report via `scripts/oss/oss-report.py --stdlib libc++ --perf <project>`. The clang-control build tree was deleted after these numbers were recorded. Wall-time differences are dominated by file-system syscalls on the bind mount (see the perf finding in [../oss.md](../oss.md#libc-results-wp-694)).
+
+The harness entry now passes `-DRANGES_ENABLE_WERROR=OFF -DCMAKE_CXX_FLAGS=-Wno-deprecated-ofast` (as WP-669 did by hand): without them the clang-19 control fails every TU on range-v3's `-Werror` plus clang 19's `-Ofast` deprecation. Both compilers fail the same TU and link: `test/view/tokenize.cpp` (libc++ 19's `regex_token_iterator` does not model a forward iterator, so the view does not satisfy the test's concept checks) and the `calendar` example link (the system Boost is built against libstdc++). Neither is a kiln issue.
+
+<!-- oss:range_v3:libcxx -->
+### range_v3 (0.12.0), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | rc 2 | rc 2 |
+| TUs ok / failed | 256 / 1 | 256 / 1 |
+| links ok / failed | 254 / 1 | 254 / 1 |
+| tests passed / total | 254 / 255 | 254 / 255 |
+| wall | 216 s | 451 s |
+| peak TU RSS | 243 MB | 512 MB |
+
+Failure clusters (kiln): 2.
+
+1. **1x** `link: (.text+NxN): undefined reference to Q`; 1 also fails with clang
+   - e.g. `link`: `(.text+0x108): undefined reference to `std::_Rb_tree_decrement(std::_Rb_tree_node_base*)'`
+   - repro: `cd $KILN/.oss/build/range_v3/kiln-libcxx/example && kiln++ -stdlib=libc++ -Wno-deprecated-ofast -O3 -DNDEBUG -Xlinker --dependency-file=CMakeFiles/range.v3.calendar.dir/link.d CMakeFiles/range.v3.calendar.dir/calendar.cpp.o -o range.v3.calendar /usr/lib/aarch64-linux-gnu/libboost_date_time.a /usr/lib/aarch64-linux-gnu/libboost_program_options.a`
+2. **1x** `reject: error: static assertion failed due to requirement Q: Concept assertion failed : forward_range<decltype(rng)>`; 1 also fails with clang
+   - e.g. `$KILN/.oss/src/range_v3/test/view/tokenize.cpp`: `$KILN/.oss/src/range_v3/test/view/tokenize.cpp:25:5: error: static assertion failed due to requirement 'static_cast<bool>(forward_range<ranges::tokenize_view<ranges::ref_view<std::string>, std::regex, int>>)': Concept assertion failed : forward_range<decltype(rng)>`
+   - repro: `cd $KILN/.oss/build/range_v3/kiln-libcxx/test/view && kiln++ -stdlib=libc++ -I$KILN/.oss/src/range_v3/include -Wno-deprecated-ofast -O3 -DNDEBUG -std=gnu++20 -std=c++2a -Wall -Wextra -D__extern_always_inline=inline -ftemplate-backtrace-limit=0 -fmacro-backtrace-limit=1 -fomit-frame-pointer -Ofast -fstrict-aliasing -ffast-math -fsized-deallocation -march=native -mtune=native -Weverything -pedantic -pedantic-errors -Wno-c++98-compat -Wno-c++98-compat-pedantic -Wno-weak-vtables -Wno-padded -Wno-missing-variable-declarations -Wno-documentation -Wno-documentation-unknown-command -Wno-old-style-cast -Wno-missing-prototypes -MD -MT test/view/CMakeFiles/range.v3.view.tokenize.dir/tokenize.cpp.o -MF CMakeFiles/range.v3.view.tokenize.dir/tokenize.cpp.o.d -o CMakeFiles/range.v3.view.tokenize.dir/tokenize.cpp.o -c $KILN/.oss/src/range_v3/test/view/tokenize.cpp`
+
+kiln test run: `99% tests passed, 1 tests failed out of 255`
+
+Performance over the 256 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **1.06x**, RSS **0.37x**; total 556 s vs 566 s; peak TU RSS 243 MB vs 512 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/range_v3/test/algorithm/search.cpp` | 12.4 | 5.5 | 0.44 | 280 | 120 | 0.43 |
+| `$KILN/.oss/src/range_v3/example/calendar.cpp` | 9.2 | 8.7 | 0.95 | 512 | 243 | 0.47 |
+| `$KILN/.oss/src/range_v3/test/algorithm/transform.cpp` | 9.2 | 7.8 | 0.85 | 344 | 168 | 0.49 |
+| `$KILN/.oss/src/range_v3/test/algorithm/set_symmetric_difference4.cpp` | 8.3 | 6.6 | 0.80 | 400 | 162 | 0.41 |
+| `$KILN/.oss/src/range_v3/test/algorithm/set_symmetric_difference2.cpp` | 8.2 | 6.4 | 0.78 | 403 | 156 | 0.39 |
+
+TUs over 1.2x on time or RSS: 46 of the 253 that take clang-19 at least 0.5 s.
+- `$KILN/.oss/src/range_v3/test/algorithm/merge.cpp`: time 1.4 / 1.0 s = 1.44x, RSS 67 / 192 MB = 0.35x
+- `$KILN/.oss/src/range_v3/test/algorithm/max.cpp`: time 2.0 / 1.4 s = 1.40x, RSS 75 / 204 MB = 0.37x
+- `$KILN/.oss/src/range_v3/test/algorithm/lower_bound.cpp`: time 1.7 / 1.2 s = 1.37x, RSS 72 / 202 MB = 0.36x
+- `$KILN/.oss/src/range_v3/test/algorithm/make_heap.cpp`: time 1.9 / 1.4 s = 1.36x, RSS 73 / 207 MB = 0.35x
+- `$KILN/.oss/src/range_v3/test/algorithm/any_of.cpp`: time 1.4 / 1.0 s = 1.35x, RSS 67 / 192 MB = 0.35x
+<!-- /oss:range_v3:libcxx -->
