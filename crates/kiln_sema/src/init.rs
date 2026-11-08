@@ -2028,6 +2028,26 @@ impl Sema<'_, '_> {
         if self.is_error_type(from) || self.is_error_type(to) {
             return;
         }
+        // A reference element bound to a temporary of an arithmetic type
+        // (`struct S { const int &r; } s{1.5};`): the temporary's
+        // initialization narrows ([dcl.init.list]/3.10, [dcl.init.ref]/5.4;
+        // clang's `-Wc++11-narrowing-const-reference`).
+        let (to, entity) = match self.ast.types.pointee(to) {
+            Some(p) if self.ast.types.is_reference(to) => {
+                let lvalue =
+                    self.ast.types.canonical_kind(to) == kiln_ast::types::TypeKind::LValueRef;
+                let q = self.ast.types.canonical(p).quals();
+                let binds_temp = !lvalue
+                    || (q.contains(kiln_ast::types::Quals::CONST)
+                        && !q.contains(kiln_ast::types::Quals::VOLATILE));
+                let tc = self.ast.types.canonical(p).without_quals();
+                if !binds_temp || tc == self.ast.types.canonical(from).without_quals() {
+                    return;
+                }
+                (p, entity)
+            }
+            _ => (to, entity),
+        };
         let t = conv::strip_cv(self, to);
         // A vector target narrows only through clang 20+'s integer to
         // `bool` ext vector conversion (a type narrowing, as from a

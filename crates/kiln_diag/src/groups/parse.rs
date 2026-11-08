@@ -17,5 +17,6 @@ ExpansionStmtMissingBraces = "expansion-stmt-missing-braces" [];
 GnuCaseRange = "gnu-case-range" [];
 GnuLabelAsValue = "gnu-label-as-value" [];
 IgnoredPragmas = "ignored-pragmas" [];
+MissingTemplateArgListAfterTemplateKw = "missing-template-arg-list-after-template-kw" [];
 UnknownAttributes = "unknown-attributes" [];
 VexingParse = "vexing-parse" [];

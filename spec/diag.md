@@ -190,8 +190,9 @@ An umbrella lists every subgroup kiln implements, in the order clang 19's
 for is left out rather than declared empty, so that the group table only
 holds groups that have members. Membership is checked against clang by
 probe (`clang++-19 -fsyntax-only -Wno-everything -W<umbrella>`), and the
-probes are recorded in the tests named below. There is no `-Wextra`
-umbrella yet.
+probes are recorded in the tests named below. `extra` holds
+`deprecated-copy`, `initializer-overrides` and `unused-but-set-parameter`
+(WP-865).
 
 | Umbrella | Kiln's subgroups (clang order) | Tests |
 |---|---|---|
@@ -199,11 +200,23 @@ umbrella yet.
 | `most` | `comment`, `format`, `multichar`, `range-loop-construct`, `reorder`, `return-type`, `tautological-compare`, `trigraphs`, `uninitialized`, `unknown-pragmas`, `unused`, `overloaded-virtual` | `intro.compliance/wmost-members.cpp`, `intro.compliance/wmost-tautological-compare.cpp` |
 | `bool-conversion` | `pointer-bool-conversion`, `undefined-bool-conversion` | `intro.compliance/wbool-conversion-members.cpp` |
 | `unused-value` | `unused-comparison`, `unused-result`, `unevaluated-expression` | `intro.compliance/wunused-value-unevaluated.cpp` |
+| `extra` | `deprecated-copy`, `initializer-overrides`, `unused-but-set-parameter` | `depr.impldec/deprecated-copy.cpp`, `dcl.fct/unused-but-set-parameter-bare-w.cpp` |
+| `shadow-all` | `shadow` (⊃ `shadow-field-in-constructor-modified`), `shadow-field-in-constructor` (⊃ the same), `shadow-uncaptured-local`, `shadow-field` | `basic.scope.block/shadow*.cpp`, `class.base.init/shadow-*.cpp` |
 | `gnu` | `gnu-case-range`, `gnu-designator`, `vla-extension`, `gnu-folding-constant`, `gnu-imaginary-constant`, `gnu-include-next`, `gnu-line-marker`, `gnu-pointer-arith`, `gnu-string-literal-operator-template`, `gnu-zero-line-directive`, `gnu-zero-variadic-macro-arguments` | `ext.gnu.extension/wgnu-*.cpp` |
 
 `conversion` holds `bool-conversion`, `literal-conversion`,
-`constant-conversion` and `null-conversion` (WP-408 added
-`bool-conversion`, whose warnings are on by default).
+`constant-conversion`, `enum-conversion`, `implicit-float-conversion` and
+`null-conversion` (WP-408 added `bool-conversion`, whose warnings are on
+by default). `implicit-float-conversion` ⊃ `implicit-int-float-conversion`
+⊃ `implicit-const-int-float-conversion` (on by default; WP-865,
+spec/landed/sema/WP-865.md). `c++11-narrowing` ⊃
+`c++11-narrowing-const-reference`. `deprecated` holds `deprecated-copy`
+and `deprecated-copy-with-dtor`; `deprecated-copy` ⊃
+`deprecated-copy-with-user-provided-copy`, `deprecated-copy-dtor` ⊃
+`deprecated-copy-with-dtor` ⊃ `deprecated-copy-with-user-provided-dtor`.
+`unused` holds `unused-lambda-capture`. The `shadow` family is in no
+umbrella but `shadow-all`; clang's `shadow-ivar` (Objective-C) is
+accepted as a name only.
 
 `unevaluated-expression` is reached from `most` through `unused` ⊃
 `unused-value`, as in clang, so `-Wmost -Wno-unused-value` turns it off.
@@ -235,7 +248,7 @@ diagnostics land):
   `sizeof-array-decay`, `string-plus-int`,
   `user-defined-warnings`, `volatile-register-var`; under `unused`:
   `unused-argument`, `unused-function`, `unused-label`,
-  `unused-lambda-capture`, `unused-local-typedef`, `unused-private-field`;
+  `unused-local-typedef`, `unused-private-field`;
   under `uninitialized`: `sometimes-uninitialized`.
 - `gnu` (clang order): `gnu-alignof-expression`, `gnu-anonymous-struct`,
   `gnu-auto-type`, `gnu-binary-literal`, `gnu-complex-integer`,
