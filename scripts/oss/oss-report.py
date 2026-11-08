@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""oss-report.py [--root DIR] [--update FILE] [--perf] [project ...]
+"""oss-report.py [--root DIR] [--update FILE] [--perf [--top N]] [project ...]
 
 Reads .oss/build/<project>/{kiln,clang}/report.json and compile.jsonl (written
 by oss-build.sh and kiln-cxx) and prints, per project, a Markdown table (kiln
@@ -8,7 +8,8 @@ With --update FILE (docs/status/oss.md) it rewrites each project's section
 between `<!-- oss:<project> -->` and `<!-- /oss:<project> -->` and the
 projects table between `<!-- oss:projects -->` and `<!-- /oss:projects -->`.
 With --perf each section also gets the per-TU kiln/clang time and peak-RSS
-comparison (spec/landed/harness/WP-792.md). The cluster signature rule is the
+comparison (spec/landed/harness/WP-792.md); --top N lists the N heaviest
+and the N slowest TUs (default 5, WP-812). The cluster signature rule is the
 contract in spec/landed/harness/WP-666.md.
 """
 
@@ -294,6 +295,7 @@ def main():
     ap.add_argument("--toml", default=projects.TOML)
     ap.add_argument("--update", metavar="FILE")
     ap.add_argument("--perf", action="store_true", help="add the per-TU kiln/clang time and RSS comparison")
+    ap.add_argument("--top", type=int, default=5, metavar="N", help="with --perf, list the N heaviest and N slowest TUs (default 5)")
     a = ap.parse_args()
     root = os.path.abspath(a.root)
     base = os.path.dirname(root)
@@ -314,7 +316,7 @@ def main():
             continue
         md, cs = render(n, data, base)
         if a.perf:
-            md += "\n" + render_perf(data["kiln"][1], data["clang"][1], base, control_name(data["clang"][0]))
+            md += "\n" + render_perf(data["kiln"][1], data["clang"][1], base, control_name(data["clang"][0]), a.top)
         sections[n] = md
         st = status_of(data, cs)
         if st:

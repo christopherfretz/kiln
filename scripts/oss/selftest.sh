@@ -116,6 +116,8 @@ python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --up
 check "--update rewrites the section" "grep -q 'Failure clusters (kiln): 2.' '$TMP/status.md' && ! grep -q 'stale text' '$TMP/status.md' && grep -q 'trailing text' '$TMP/status.md'"
 python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --perf demo > "$TMP/perf.md"
 check "--perf: geomean and the slow TU" "grep -q 'geomean kiln/clang-19 time \\*\\*2.00x\\*\\*, RSS \\*\\*1.50x\\*\\*' '$TMP/perf.md' && grep -q 'TUs over 1.2x on time or RSS: 1 of the 1' '$TMP/perf.md'"
+python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --perf --top 0 demo > "$TMP/perf0.md"
+check "--perf --top 0: no TU rows, same totals" "grep -q 'geomean kiln/clang-19 time' '$TMP/perf0.md' && ! grep -q 'e.cc' '$TMP/perf0.md' && grep -q 'e.cc' '$TMP/perf.md'"
 check "--update regenerates the projects table" "grep -q '| \`demo\` | 1 | \`v1.0.0\` | blocked (2 clusters) |' '$TMP/status.md' && grep -q '| \`other\` | 2 | \`v2.0.0\` | tests at parity |' '$TMP/status.md'"
 
 echo "selftest: $FAILS failed"
