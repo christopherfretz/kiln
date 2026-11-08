@@ -1475,13 +1475,66 @@ impl Sema<'_, '_> {
         if ps.len() < as_.len() {
             self.complete_dependent_args(name, &mut ps);
         }
-        let r = self.deduce_arg_list(&ps, &as_, true, d, level, d.loc);
+        let n = ps.len();
+        let packs = ps.iter().chain(&as_).any(|x| self.is_pack_arg(*x));
+        // `A` a template template parameter's template-id: a unique type
+        // of partial ordering ([temp.func.order]/3).
+        let unique = self.template_parm_of_name(aname).is_some();
+        let r = if n != as_.len() && self.template_parm_of_name(name).is_some() && !packs {
+            self.deduce_ttp_id_args(&ps, &as_, (atmpl, unique), d, level)
+        } else {
+            self.deduce_arg_list(&ps, &as_, true, d, level, d.loc)
+        };
         if r == Tdk::NonDeducedMismatch {
             // clang deduces against `P`'s canonical arguments, so an inner
             // `P` prints canonically (`pr<type-parameter-0-0, int>`).
             d.info.first = d.info.first.map(|x| self.ast.types.canonical_arg(x));
         }
         r
+    }
+
+    /// `U<Ps...>` for a template template parameter `U` against `A`'s
+    /// arguments `as_` of another length (template `atmpl`; `unique` when
+    /// `A` names a template template parameter), packs aside.
+    ///
+    /// [temp.arg.template]/3 (P0522): `U<T>` for `template<class> class U`
+    /// matches `rv<double, 1>` of `template<class, size_t = 1> struct rv`.
+    /// `P`'s arguments are deduced from the first of `A`'s, and the rest
+    /// must be the defaults those give (CWG2398 as clang deduces it;
+    /// `rv<double, 2>` does not match). Against a unique type the rest
+    /// is not checked: `U` is deduced as `A`'s template with the extra
+    /// arguments as its defaults (clang's `DeducedTemplateName`, P3310R5).
+    /// A shorter unique `A` matches under clang 19, which ignores `P`'s
+    /// extra arguments there, and fails under clang 22 (`A`'s template
+    /// has too few parameters for `U`), so `f(TT<int, int>)` is more
+    /// specialized than `f(TT<int>)` only under clang 22.
+    fn deduce_ttp_id_args(
+        &mut self,
+        ps: &[TemplateArg],
+        as_: &[TemplateArg],
+        a: (DeclId, bool),
+        d: &mut DeducedArgs,
+        level: u32,
+    ) -> Tdk {
+        let (atmpl, unique) = a;
+        let n = ps.len();
+        if n > as_.len() {
+            if unique && self.clang_compat < 22 {
+                return self.deduce_arg_list(&ps[..as_.len()], as_, true, d, level, d.loc);
+            }
+            return self.deduce_arg_list(ps, as_, true, d, level, d.loc);
+        }
+        let r = self.deduce_arg_list(ps, &as_[..n], true, d, level, d.loc);
+        if r != Tdk::Success || unique {
+            return r;
+        }
+        let mut full = as_[..n].to_vec();
+        let an = self.ast.types.template_name_of(atmpl);
+        self.complete_dependent_args(an, &mut full);
+        let t = &self.ast.types;
+        let same = full.len() == as_.len()
+            && full.iter().zip(as_).all(|(x, y)| t.canonical_arg(*x) == t.canonical_arg(*y));
+        if same { r } else { Tdk::MiscellaneousDeductionFailure }
     }
 
     /// The arguments of a dependent class template-id `P` completed with

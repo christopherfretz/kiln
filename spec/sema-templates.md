@@ -3781,6 +3781,23 @@ deduction fails as before. Tests:
 `tests/conformance/temp.deduct.type/default-completion-friend-first.cpp`,
 `tests/conformance/format.functions/libcxx-format-run.cpp`.
 
+A template template parameter's template-id `U<Ps...>` against `A` with
+another number of arguments (packs aside; `deduce_ttp_id_args`, WP-812)
+deduces `Ps` from `A`'s first arguments, and `A`'s remaining arguments
+must be the defaults those give ([temp.arg.template]/3, P0522, CWG2398 as
+clang deduces it): `f(const U<T>)` with `template<class> class U` is
+viable for `rv<double, 1>` of `template<class, size_t = 1> struct rv`
+(Boost.Math's `sinhc_pi` for its reverse-mode `rvar`) and not for
+`rv<double, 2>`. When `A` itself names a template template parameter (the
+unique type of partial ordering, [temp.func.order]/3) the remaining
+arguments are not checked (they bind as the deduced template's defaults,
+P3310R5's `DeducedTemplateName`); a shorter such `A` matches under clang
+19, which ignores `P`'s extra arguments, and fails at `-fclang-compat=22`,
+so `f(TT<int, int>)` beats `f(TT<int>)` only there. Tests:
+`tests/conformance/temp.arg.template/p0522-deduce-defaulted-args-run.cpp`,
+`tests/conformance/temp.arg.template/p0522-partial-order-unique-ttp-clang{19,22}.cpp`,
+`tests/conformance/temp.arg.template/p3310-probe.cpp`.
+
 **Non-deduced contexts:**
 - the nested-name-specifier of a qualified-id;
 - `decltype(e)`;
