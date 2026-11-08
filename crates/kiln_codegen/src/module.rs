@@ -2869,8 +2869,15 @@ impl<'a> Cg<'a> {
             ((quals.is_const() && !has_mutable(ast, ty)) || is_ref) && !needs_init && !needs_dtor;
         let align = self.var_align(d);
         let name = self.m.global(g).name().to_owned();
-        let comdat =
-            if inline && !internal { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
+        // clang `getLLVMLinkageForDeclarator`: `selectany` makes a
+        // definition that is not already discardable `weak_odr`, and
+        // `shouldBeInCOMDAT` puts it in a comdat either way.
+        let selectany = !internal && ast.is_selectany(d);
+        let comdat = if (inline || selectany) && !internal {
+            Some(self.m.comdat(&name, ComdatKind::Any))
+        } else {
+            None
+        };
         if let Err(e) = self.m.set_initializer(g, Some(init)) {
             return err(loc, format!("bad initializer: {e:?}"));
         }
@@ -2895,6 +2902,10 @@ impl<'a> Cg<'a> {
             gv.comdat = comdat;
         } else if inline {
             gv.linkage = instantiated.unwrap_or(Linkage::LinkOnceOdr);
+            gv.dso_local = true;
+            gv.comdat = comdat;
+        } else if selectany {
+            gv.linkage = Linkage::WeakOdr;
             gv.dso_local = true;
             gv.comdat = comdat;
         } else {

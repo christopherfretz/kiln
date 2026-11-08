@@ -187,6 +187,12 @@ pub(crate) struct Fx {
     /// The loop statement about to be emitted and the `AttributedStmt`
     /// whose loop hints apply to it (clang `EmitStmt`'s `Attrs`).
     pub loop_hints: Option<(kiln_ast::StmtId, kiln_ast::StmtId)>,
+    /// The returned call of the enclosing `[[clang::musttail]]` return
+    /// statement (clang `MustTailCall`; WP-809).
+    pub musttail: Option<kiln_ast::ExprId>,
+    /// Set right before the musttail call's `call_vals_to` (its
+    /// arguments evaluated): that call is emitted `musttail` + `ret`.
+    pub musttail_armed: bool,
     /// The active conditional evaluations (clang `ConditionalEvaluation`),
     /// innermost last: each is the block the condition started in.
     pub conds: Vec<Blk>,
@@ -277,6 +283,8 @@ impl Fx {
             cx_ret: None,
             calls: Vec::new(),
             loop_hints: None,
+            musttail: None,
+            musttail_armed: false,
             conds: Vec::new(),
             opaque: FxHashMap::default(),
             array_index: Vec::new(),

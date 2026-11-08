@@ -163,6 +163,9 @@ pub(crate) struct ClassDesc {
     /// The `#pragma pack` value in effect at the definition, in bits
     /// (clang `MaxFieldAlignment`; 0 = none).
     pub max_field_align: u64,
+    /// `ms_struct` (WP-809): the Microsoft bit-field rules (clang
+    /// `RecordDecl::isMsStruct`).
+    pub ms_struct: bool,
 }
 
 pub(crate) fn class_desc(ast: &Ast, def: DeclId) -> ClassDesc {
@@ -179,6 +182,7 @@ pub(crate) fn class_desc(ast: &Ast, def: DeclId) -> ClassDesc {
             || defn.contains(DefinitionBits::POLYMORPHIC)
             || defn.contains(DefinitionBits::HAS_VIRTUAL_BASES),
         max_field_align: ast.decls.cold.record_pack.get(def).map_or(0, |&n| u64::from(n) * 8),
+        ms_struct: ast.is_ms_struct(def),
     }
 }
 

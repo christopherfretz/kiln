@@ -52,6 +52,8 @@ struct Checker<'s, 'a, 'sm> {
     /// Labels whose address is taken, in walk order
     /// (`IndirectJumpTargets`).
     indirect_targets: Vec<DeclId>,
+    /// `[[clang::musttail]]` return statements (`MustTailStmts`).
+    musttail: Vec<StmtId>,
 }
 
 impl Sema<'_, '_> {
@@ -71,11 +73,13 @@ impl Sema<'_, '_> {
             jumps: Vec::new(),
             indirect_jumps: Vec::new(),
             indirect_targets: Vec::new(),
+            musttail: Vec::new(),
         };
         let mut parent = 0;
         c.stmt(body, &mut parent);
         c.verify_jumps();
         c.verify_indirect_jumps();
+        c.verify_musttail();
     }
 }
 
@@ -144,7 +148,17 @@ impl Checker<'_, '_, '_> {
                 self.expr(d.cond, p);
                 self.stmt(d.body, p);
             }
-            StmtKind::AttributedStmt => self.stmt(StmtId::new(n.b()), p),
+            StmtKind::AttributedStmt => {
+                let musttail = ast
+                    .lists
+                    .iter::<kiln_ast::AttrId>(st.stmt_attrs(s))
+                    .any(|a| ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::MUSTTAIL);
+                if musttail {
+                    self.at.insert(s, *p);
+                    self.musttail.push(s);
+                }
+                self.stmt(StmtId::new(n.b()), p);
+            }
             StmtKind::GotoStmt => self.record_jump(s, *p),
             StmtKind::IndirectGotoStmt => {
                 // `goto *&&l` is an ordinary goto, and its operand is not
@@ -397,6 +411,13 @@ impl Checker<'_, '_, '_> {
         }
         let Some(v) = ast.decls.var(d) else { return (None, None) };
         let Some(ty) = n.ty() else { return (None, None) };
+        if ast
+            .lists
+            .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(d))
+            .any(|a| ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::CLEANUP)
+        {
+            return (Some(DiagId::note_protected_by_cleanup), Some(DiagId::note_exits_cleanup));
+        }
         let mut in_diag = self.variably_modified(ty).then_some(DiagId::note_protected_by_vla);
         let local = !matches!(v.spec.storage(), VarStorage::Static | VarStorage::Extern)
             && v.spec.tls() == kiln_ast::decl::TlsKind::None;
@@ -528,6 +549,27 @@ impl Checker<'_, '_, '_> {
         }
         if let Some(d) = msg {
             self.sema.emit(d);
+        }
+    }
+
+    /// clang `VerifyMustTailStmts`: a `musttail` return may not leave a
+    /// scope with an "out" note (a destructor or a try block would have
+    /// to run after the call), one error per such scope (WP-809).
+    fn verify_musttail(&self) {
+        for &s in &self.musttail {
+            let loc = self.sema.ast.stmts.get(s).loc();
+            let mut i = self.at[&s];
+            while i != 0 && i != u32::MAX {
+                let sc = self.scopes[i as usize];
+                if let Some(id) = sc.out_diag {
+                    let msg = self
+                        .sema
+                        .diag(DiagId::sema_musttail_scope, loc)
+                        .with_note(self.sema.diag(id, sc.loc));
+                    self.sema.emit(msg);
+                }
+                i = sc.parent;
+            }
         }
     }
 

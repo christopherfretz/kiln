@@ -79,6 +79,8 @@ mod macro_fixit;
 mod meta;
 mod missing_noreturn;
 pub mod modules;
+mod ms_struct;
+mod musttail;
 pub mod names;
 pub mod new_delete;
 mod nonnull;
@@ -97,6 +99,7 @@ mod reflect_operand;
 mod rtti;
 pub mod scope;
 mod section;
+mod selectany;
 mod self_ref;
 mod side_effects;
 mod splice;
@@ -113,6 +116,7 @@ pub mod target;
 pub mod templ;
 mod template_id_typo;
 mod tls_model;
+mod transparent_union;
 mod trivial_abi;
 mod try_stmt;
 mod type_diff;
@@ -378,6 +382,9 @@ pub struct Sema<'a, 'sm> {
     /// `(label, value)` entries. Applied to each class definition as it
     /// begins (`record_pack`).
     pub(crate) pack: (u16, Vec<(Option<String>, u16)>),
+    /// `#pragma ms_struct on` is in effect (clang `MSStructPragmaOn`):
+    /// each class definition that begins gets an implicit `ms_struct`.
+    pub(crate) ms_struct_pragma: bool,
     /// The FP pragma state (clang's `CurFPFeatureOverrides` and
     /// `FpPragmaStack`): the override in effect, relative to the command
     /// line, and the `float_control(push)` entries.
@@ -1176,6 +1183,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_body: cfg::BodyCfg::default(),
             inferred_noreturn: kiln_source::fx::FxHashSet::default(),
             pack: (0, Vec::new()),
+            ms_struct_pragma: false,
             fp_pragma: (kiln_ast::fp::FpOverride::NONE, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,

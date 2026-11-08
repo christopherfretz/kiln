@@ -320,8 +320,11 @@ impl Cg<'_> {
         }
         let internal = mangle::is_internal_symbol(ast, d);
         let key = (!internal).then_some(g);
-        let unordered =
-            self.var_instantiation_linkage(first).is_some() || (self.var_is_inline(d) && !internal);
+        // clang: a `selectany` variable's initializer is unordered too, in
+        // the variable's comdat.
+        let unordered = self.var_instantiation_linkage(first).is_some()
+            || (self.var_is_inline(d) && !internal)
+            || (!internal && ast.is_selectany(d));
         if unordered {
             // [basic.start.dynamic]/1: partially-ordered or unordered
             // initialization, in its own `llvm.global_ctors` entry.

@@ -279,6 +279,30 @@ impl AttrKind {
     /// its name is mangled as C++'s even with C language linkage, and it
     /// may overload a function with C language linkage.
     pub const OVERLOADABLE: AttrKind = AttrKind(187);
+    /// clang `[[clang::musttail]]` / GNU `musttail` on a return statement
+    /// (clang `MustTailAttr`; WP-809): the returned call is emitted as a
+    /// `musttail call` followed by `ret`. Kept on the `AttributedStmt`
+    /// only once `Sema::check_musttail` accepts it.
+    pub const MUSTTAIL: AttrKind = AttrKind(196);
+    /// GNU `transparent_union` (clang `TransparentUnionAttr`, a C-only
+    /// attribute; WP-809). In C++ every occurrence is ignored with a
+    /// warning, but clang's delayed check of a class-head occurrence on a
+    /// union definition still keeps it when the fields qualify: such a
+    /// union is then passed by value as its first field (clang
+    /// `useFirstFieldIfTransparentUnion`). Kept on the union only then.
+    pub const TRANSPARENT_UNION: AttrKind = AttrKind(197);
+    /// GNU / Microsoft `selectany` on a variable with external linkage
+    /// (clang `SelectAnyAttr`, WP-809): its definition is `weak_odr` in a
+    /// comdat of its own, so definitions in several translation units
+    /// fold into one object.
+    pub const SELECTANY: AttrKind = AttrKind(198);
+    /// GNU `ms_struct` on a class, or implied by `#pragma ms_struct on`
+    /// (clang `MSStructAttr`, WP-809): the record uses the Microsoft
+    /// bit-field layout rules within the Itanium layout.
+    pub const MS_STRUCT: AttrKind = AttrKind(199);
+    /// GNU `gcc_struct` (clang 22 `GCCStructAttr`, WP-809): the record
+    /// uses the target's default layout; conflicts with `ms_struct`.
+    pub const GCC_STRUCT: AttrKind = AttrKind(215);
     /// GNU `retain` on a function or variable (clang `RetainAttr`):
     /// an emitted entity is also added to `@llvm.used`, so the linker's
     /// section garbage collection keeps it (WP-805).

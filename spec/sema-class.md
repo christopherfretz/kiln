@@ -18,7 +18,7 @@ C++26 draft; "clang" means clang 19 with `-std=c++26` on the container target
 | bases | non-virtual (WP-066/067), virtual (WP-078), `final`, `override`, abstract classes, covariance | |
 | special members | all six: implicit declaration/definition, triviality, deletedness, `constexpr`, `= default`/`= delete`, inheriting ctors (after WP-062); defaulted comparisons ([class.compare], WP-082, §4.12) | trivially relocatable (P2786) |
 | construction | ctor-initializers, delegating ctors, NSDMI, temporaries, cleanups, lifetime extension incl. P2718 range-for, guaranteed elision, NRVO marking, aggregates with bases, paren-aggregate init | function-try-blocks and EH cleanups (exceptions milestone) |
-| layout | full Itanium: bases, vptr, vbases, primary base, EBO, tail padding, bit-fields across bases, `#pragma pack`, `alignas`; vtable layout and VTT | MS ABI, `#pragma ms_struct`, `-fclang-abi-compat` |
+| layout | full Itanium: bases, vptr, vbases, primary base, EBO, tail padding, bit-fields across bases, `#pragma pack`, `alignas`; vtable layout and VTT; `ms_struct` bit-field layout (attribute and `#pragma ms_struct`, WP-809) | MS ABI, `-fclang-abi-compat` |
 | RTTI | `dynamic_cast`/`typeid` sema; final overriders for the Oven | |
 | other | explicit object parameters (P0847): declarations, calls, `&C::f` (§2.5), lambdas (spec/sema-lambda.md §3.1, WP-356) | |
 

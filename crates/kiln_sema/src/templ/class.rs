@@ -1991,8 +1991,12 @@ impl Substituter<'_, '_, '_> {
         // instantiated (WP-782).
         let pat = self.sema.ast.decls.cold.record_pack.get(def).copied().unwrap_or(0);
         let saved = std::mem::replace(&mut self.sema.pack.0, pat);
+        // Nor does `#pragma ms_struct` (the pattern's `ms_struct`, implied
+        // or written, is copied with its attributes).
+        let saved_ms = std::mem::replace(&mut self.sema.ms_struct_pragma, false);
         self.sema.act_on_start_record_definition(spec);
         self.sema.pack.0 = saved;
+        self.sema.ms_struct_pragma = saved_ms;
     }
 
     /// [`Substituter::class_body`]; `anonymous` for an anonymous struct

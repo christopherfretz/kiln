@@ -204,14 +204,12 @@ pub static TABLE: &[Row] = &[
     r("exclusive_lock_function", G, C, TSA),
     r("exclusive_locks_required", G | CL, C, TSA),
     r("exclusive_trylock_function", G, C, TSA),
-    r22("ext_vector_type", CL, A, "defines a vector type (only the GNU spelling is implemented)"),
     r("external_source_symbol", G | CL, C, ANALYSIS),
     r("flatten", G | GS, B, INLINE),
     rt("force_align_arg_pointer", [0, 0, G | GS, G | GS], B, HINT),
     r("format_arg", G | GS, C, ANALYSIS),
     r22("format_matches", G | GS, C, ANALYSIS),
     rt("function_return", [0, 0, G | GS, G | GS], B, INSTR),
-    r22("gcc_struct", G | GS, A, "selects the MS or GCC bit-field layout"),
     r("global", G, C, OFFLOAD),
     r22("grid_constant", G, C, OFFLOAD),
     r("guarded_by", G, C, TSA),
@@ -239,15 +237,6 @@ pub static TABLE: &[Row] = &[
     r("mig_server_routine", G | CL, C, ANALYSIS),
     rt("model", [0, 0, 0, G | GS], A, "x86-64 code model of the variable's section"),
     r22("modular_format", G | CL, B, HINT),
-    r("ms_struct", G | GS, A, "selects the MS or GCC bit-field layout"),
-    r("musttail", G | CL, A, "guaranteed tail call"),
-    r(
-        "neon_polyvector_type",
-        CL,
-        A,
-        "defines a vector type (only the GNU spelling is implemented)",
-    ),
-    r("neon_vector_type", CL, A, "defines a vector type (only the GNU spelling is implemented)"),
     r("no_address_safety_analysis", G | GS, B, SAN),
     r22("no_cluster", G, C, OFFLOAD),
     r("no_instrument_function", G | GS, B, INSTR),
@@ -349,7 +338,6 @@ pub static TABLE: &[Row] = &[
     r("return_typestate", G | CL, C, ANALYSIS),
     r("riscv_rvv_vector_bits", G, A, "defines a vector or matrix type"),
     r("scoped_lockable", G | CL, C, TSA),
-    r("selectany", G | GS, A, "COMDAT / linkonce linkage for the variable"),
     r("sentinel", G | GS, C, ANALYSIS),
     r("set_typestate", G | CL, C, ANALYSIS),
     r("shared", G, C, OFFLOAD),
@@ -387,7 +375,6 @@ pub static TABLE: &[Row] = &[
     r("target_clones", G | GS, A, "function multiversioning"),
     rt("target_version", [G | GS, G | GS, G | GS, 0], A, "function multiversioning"),
     r("test_typestate", G | CL, C, ANALYSIS),
-    r("transparent_union", G | GS, C, "clang ignores it in C++ (-Wignored-attributes)"),
     r("try_acquire_capability", G | CL, C, TSA),
     r("try_acquire_shared_capability", G | CL, C, TSA),
     r("type_tag_for_datatype", G | CL, C, ANALYSIS),
@@ -416,11 +403,15 @@ const CLANG_SCOPED: &[&str] = &[
     "disable_tail_calls",
     "enum_extensibility",
     "exclude_from_explicit_instantiation",
+    "ext_vector_type",
     "fallthrough",
     "flag_enum",
     "internal_linkage",
     "min_vector_width",
     "minsize",
+    "musttail",
+    "neon_polyvector_type",
+    "neon_vector_type",
     "no_builtin",
     "no_destroy",
     "optnone",
@@ -473,11 +464,14 @@ pub fn attribute_support(
         let gnu = syntax == AttrSyntax::Gnu || scope == Some("gnu");
         let std = scope.is_none() && syntax != AttrSyntax::Gnu;
         // [dcl.attr.indet] is C++26; P3475R2 removes `carries_dependency`
-        // from C++26 (WP-743).
+        // from C++26 (WP-743). `gcc_struct` and `[[clang::ext_vector_type]]`
+        // are new in clang 22 (WP-809).
         if let Some(k) =
             crate::decl::attr_kind_of(name, std, gnu, clang_scope, syntax).filter(|&k| {
                 (k != AttrKind::INDETERMINATE || cxx26)
                     && (k != AttrKind::CARRIES_DEPENDENCY || !cxx26)
+                    && (k != AttrKind::GCC_STRUCT || compat >= 22)
+                    && (k != AttrKind::EXT_VECTOR_TYPE || !clang_scope || compat >= 22)
             })
         {
             return Support::Implemented(k);
@@ -541,7 +535,17 @@ mod tests {
         assert_eq!(s("no_sanitize_address", x, Some("gnu"), 19), Support::Ignored(B));
         assert_eq!(s("no_sanitize_address", x, Some("clang"), 22), Support::Unknown);
         // Class A: rejected.
-        assert_eq!(s("selectany", g, None, 22), Support::Unsupported);
+        assert_eq!(s("address_space", g, None, 22), Support::Unsupported);
+        assert_eq!(s("address_space", x, Some("clang"), 19), Support::Unsupported);
+        // Implemented by WP-809, some spellings only from clang 22.
+        assert!(matches!(s("selectany", g, None, 22), Support::Implemented(_)));
+        assert!(matches!(s("musttail", x, Some("clang"), 19), Support::Implemented(_)));
+        assert!(matches!(s("neon_vector_type", x, Some("clang"), 19), Support::Implemented(_)));
+        assert_eq!(s("gcc_struct", g, None, 19), Support::Unknown);
+        assert!(matches!(s("gcc_struct", g, None, 22), Support::Implemented(_)));
+        assert_eq!(s("ext_vector_type", x, Some("clang"), 19), Support::Unknown);
+        assert!(matches!(s("ext_vector_type", x, Some("clang"), 22), Support::Implemented(_)));
+        assert!(matches!(s("ext_vector_type", g, None, 19), Support::Implemented(_)));
         assert!(matches!(s("cleanup", g, None, 22), Support::Implemented(_)));
         assert!(matches!(s("mode", x, Some("gnu"), 19), Support::Implemented(_)));
         assert_eq!(s("swiftcall", x, Some("clang"), 22), Support::Unsupported);

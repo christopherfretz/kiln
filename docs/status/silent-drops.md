@@ -5,7 +5,8 @@ as the inventory of the policy in spec/sema.md §4.5: kiln never accepts a
 semantics-changing construct without implementing it. Every row names its
 owner: **fixed in WP-805**, or the work package that implements it
 (WP-799 `mode`, WP-806 floating point, WP-807 semantic attributes, WP-808
-ABI attributes and flags). A row still marked open with "error since WP-805"
+ABI attributes and flags, WP-809 musttail, transparent_union, selectany,
+ms_struct, `[[clang::]]` vector spellings and dependent `mode`). A row still marked open with "error since WP-805"
 is rejected loudly until someone implements it. Owners update their own
 rows when they land.
 
@@ -104,8 +105,8 @@ functions). The class B half of cause 4 is open. Cause 5 is fixed in WP-806 (#36
 18. attr `address_space(256/257)`, `transparent_union`, `ms_struct`/`gcc_struct`,
     `arm_sve_vector_bits`, `[[clang::neon_vector_type]]`-style spellings, `musttail`,
     multiversioning (`target_clones`, `target_version`, `cpu_specific`/`cpu_dispatch`),
-    `aligned` on functions (**no diagnostic**), `x86 interrupt`. (A13-A22) **Owner: `aligned` on functions fixed in WP-805; `transparent_union` is class C (clang ignores it in C++); the others are an error since WP-805, unowned.**
-19. attr `__clang_arm_builtin_alias` / `clang_builtin_alias`, `selectany` — break at link (loud). (A12, A17) **Owner: error since WP-805, unowned.**
+    `aligned` on functions (**no diagnostic**), `x86 interrupt`. (A13-A22) **Owner: `aligned` on functions fixed in WP-805; `transparent_union`, `ms_struct`/`gcc_struct`, the `[[clang::]]` vector spellings and `musttail` fixed in WP-809; `address_space` an error since WP-805 (WP-809 follow-up); the others are an error since WP-805, unowned.**
+19. attr `__clang_arm_builtin_alias` / `clang_builtin_alias`, `selectany` — break at link (loud). (A12, A17) **Owner: `selectany` fixed in WP-809; the builtin aliases an error since WP-805, unowned.**
 20. pragma `STDC FENV_ROUND`, flag `-fexcess-precision=16`, pragma `clang fp eval_method`. (P-A3, F-A4, P-A4) **An error since WP-806 (#364), except `FENV_ROUND FE_TONEAREST` and `eval_method(source)`.**
 
 Fully silent A items before WP-805 (no diagnostic anywhere): #2, #4, #5, #8 (flag), #12, #16, #17,
@@ -195,15 +196,15 @@ system headers / with default warnings".
 | A9 | `no_builtin` / `no_builtin("memcpy")` | dropped | `no-builtins` / `no-builtin-memcpy` fn attr | warn — memcpy/memset implementations get loop-idiom-recognized into self-calls (infinite recursion) | fixed in WP-808 |
 | A10 | `tls_model("initial-exec"/"local-exec"/...)` | dropped | `thread_local(initialexec)` etc. | warn — default general-dynamic TLS in malloc implementations/`dlopen`ed libs: recursion into allocator, or perf; wrong model can break preload libs | fixed in WP-807 |
 | A11 | `retain` | dropped | `llvm.used` + `SHF_GNU_RETAIN` | warn — section-registered entries stripped by `--gc-sections` | fixed in WP-805 |
-| A12 | `selectany` (GNU spelling) | dropped | linkonce/COMDAT for the variable | warn — duplicate-symbol link errors (loud) | error since WP-805, unowned |
-| A13 | `ms_struct` / `gcc_struct` | dropped | MS bitfield layout | warn — layout/ABI | error since WP-805, unowned |
-| A14 | `transparent_union` | dropped (`__has_attribute` = 1) | clang ignores it in C++ too (`-Wignored-attributes`); the C-only effect (union passed as its first member) never applies | none in C++ | WP-805: class C row (accepted silently) |
-| A15 | `address_space(N)` | dropped | pointee in addrspace N (x86 `256`=gs, `257`=fs) | warn — gs/fs-relative accesses become flat-memory accesses | error since WP-805, unowned |
+| A12 | `selectany` (GNU spelling) | dropped | linkonce/COMDAT for the variable | warn — duplicate-symbol link errors (loud) | fixed in WP-809 |
+| A13 | `ms_struct` / `gcc_struct` | dropped | MS bitfield layout | warn — layout/ABI | fixed in WP-809 (`gcc_struct` at `-fclang-compat=22`) |
+| A14 | `transparent_union` | dropped (`__has_attribute` = 1) | clang ignores it in C++ too (`-Wignored-attributes`); the C-only effect (union passed as its first member) never applies | none in C++ | fixed in WP-809: clang's ignored warning and delayed subject/field checks; a kept union is passed as its first field |
+| A15 | `address_space(N)` | dropped | pointee in addrspace N (x86 `256`=gs, `257`=fs) | warn — gs/fs-relative accesses become flat-memory accesses | error since WP-805; WP-809 follow-up (xfail `ext.clang.address_space/address-space-run.cpp`) |
 | A16 | `pass_object_size(N)`, `pass_dynamic_object_size(N)` | dropped | hidden extra size_t parameter + different mangling (`PS`) | warn — **ABI + mangling mismatch** with clang-built objects (clang-oriented fortify headers use these; silent in sys hdr) | fixed in WP-803; argument folds as clang's `tryEvaluateObjectSize` in WP-808 (lenient-designator cases: xfail `ext.clang.pass.object.size/pass-object-size-lenient-xfail.cpp`) |
 | A17 | `__clang_arm_builtin_alias`, `clang_builtin_alias` | dropped | maps the declared function to a builtin | warn; silent in `arm_sve.h`/`arm_mve.h`/`arm_sme.h`/`riscv_vector.h` — functions become undefined external references (link failure, loud) | error since WP-805, unowned |
-| A18 | `[[clang::musttail]]` (statement) | dropped | guaranteed tail call (`musttail`) or error | warn — interpreters relying on guaranteed TCO overflow the stack | error since WP-805, unowned |
+| A18 | `[[clang::musttail]]` (statement) | dropped | guaranteed tail call (`musttail`) or error | warn — interpreters relying on guaranteed TCO overflow the stack | fixed in WP-809 |
 | A19 | `arm_sve_vector_bits(N)` | dropped, although the driver accepts `-msve-vector-bits=` (crates/kiln_driver/src/args.rs:733) | fixed-length SVE type with sizeof = N/8 | warn — sizeof/layout differ | error since WP-805, unowned |
-| A20 | `[[clang::neon_vector_type]]`, `[[clang::neon_polyvector_type]]`, `[[clang::ext_vector_type]]` (`[[...]]` spellings only; GNU spellings are implemented) | unknown scope path, dropped | vector type | warn — type is scalar instead of vector | error since WP-805, unowned |
+| A20 | `[[clang::neon_vector_type]]`, `[[clang::neon_polyvector_type]]`, `[[clang::ext_vector_type]]` (`[[...]]` spellings only; GNU spellings are implemented) | unknown scope path, dropped | vector type | warn — type is scalar instead of vector | fixed in WP-809 (`[[clang::ext_vector_type]]` at `-fclang-compat=22`) |
 | A21 | `aligned(N)` on a function | see 1.2 | function alignment | **none** | fixed in WP-805 |
 | A22 | `target_version`, `cpu_specific`, `cpu_dispatch`, `target_clones` (also listed in B) | dropped | function multiversioning | warn — redefinition errors or wrong single version (target_clones silently becomes one default version) | error since WP-805, unowned |
 
