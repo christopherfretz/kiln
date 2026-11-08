@@ -56,7 +56,8 @@ const STD_OWNERS: [&str; 22] = [
 ];
 
 /// clang 19 `StdPointers`.
-const STD_POINTERS: [&str; 4] = ["basic_string_view", "reference_wrapper", "regex_iterator", "span"];
+const STD_POINTERS: [&str; 4] =
+    ["basic_string_view", "reference_wrapper", "regex_iterator", "span"];
 
 /// clang 19 `inferGslPointerAttribute`'s `Containers`.
 const CONTAINERS: [&str; 17] = [
@@ -185,6 +186,15 @@ impl Sema<'_, '_> {
             .is_some_and(|p| CONTAINERS.contains(&self.ast.symbols().as_str(p)))
     }
 
+    /// clang `ActOnTypedefNameDecl`'s gsl inference for the typedef `td`
+    /// just declared (`first`: not a redeclaration). An instantiated
+    /// typedef infers in [`Self::infer_gsl_instantiated_typedef`] instead.
+    pub(crate) fn infer_gsl_declared_typedef(&mut self, td: DeclId, first: bool) {
+        if first && !self.in_typedef_instantiation {
+            self.infer_gsl_typedef(td);
+        }
+    }
+
     /// clang `inferGslPointerAttribute(TypedefNameDecl *)` for the new
     /// typedef `td`: a `std` container's `iterator` typedef makes the
     /// class it names (or the pattern of the template it specializes) a
@@ -228,19 +238,15 @@ impl Sema<'_, '_> {
     pub(crate) fn infer_gsl_instantiated_typedef(&mut self, pattern: DeclId, td: DeclId) {
         let Some(mut u) = self.ast.decls.typedef(pattern).map(|x| x.underlying) else { return };
         for _ in 0..64 {
-            match self.ast.types.view(u.ty()) {
-                TypeView::DependentName { .. } => {
-                    self.infer_gsl_typedef(td);
-                    return;
-                }
-                _ => {
-                    let next = self.ast.types.desugar_once(u);
-                    if next == u {
-                        return;
-                    }
-                    u = next;
-                }
+            if let TypeView::DependentName { .. } = self.ast.types.view(u.ty()) {
+                self.infer_gsl_typedef(td);
+                return;
             }
+            let next = self.ast.types.desugar_once(u);
+            if next == u {
+                return;
+            }
+            u = next;
         }
     }
 }

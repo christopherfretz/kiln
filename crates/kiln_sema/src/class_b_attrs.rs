@@ -537,9 +537,7 @@ impl Sema<'_, '_> {
                 let (id, sel) = match kind {
                     DeclKind::CXXConstructor => (DiagId::sema_lifetimebound_ctor_dtor, "0"),
                     DeclKind::CXXDestructor => (DiagId::sema_lifetimebound_ctor_dtor, "1"),
-                    DeclKind::CXXMethod | DeclKind::CXXConversion
-                        if !self.is_static_method(d) =>
-                    {
+                    DeclKind::CXXMethod | DeclKind::CXXConversion if !self.is_static_method(d) => {
                         return true;
                     }
                     DeclKind::CXXMethod => (DiagId::sema_lifetimebound_no_object_param, "0"),
@@ -562,8 +560,11 @@ impl Sema<'_, '_> {
                     || wrong(self, true, "parameters and implicit object parameters")
             }
             AttrKind::GSL_OWNER | AttrKind::GSL_POINTER => {
-                let union =
-                    self.ast.decls.record(d).is_some_and(|x| x.tag == kiln_ast::decl::TagKind::Union);
+                let union = self
+                    .ast
+                    .decls
+                    .record(d)
+                    .is_some_and(|x| x.tag == kiln_ast::decl::TagKind::Union);
                 (record && !union) || wrong(self, false, "structs")
             }
             AttrKind::NOCF_CHECK if !self.cf_protection_branch && (func || var) => {
@@ -791,7 +792,8 @@ impl Sema<'_, '_> {
                 (None, None) => None,
             };
             if let Some(e) = clash {
-                let shown = |k: AttrKind| if k == AttrKind::GSL_OWNER { "Owner" } else { "Pointer" };
+                let shown =
+                    |k: AttrKind| if k == AttrKind::GSL_OWNER { "Owner" } else { "Pointer" };
                 let note = self.diag(DiagId::note_conflicting_attribute, e.loc);
                 let msg = self
                     .diag(DiagId::sema_attributes_not_compatible, n.loc)

@@ -527,6 +527,10 @@ impl Parser<'_, '_> {
     }
 
     /// `[[ attribute-list ]]` ([dcl.attr.grammar]).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one arm per attribute argument grammar, as clang's ParseCXX11AttributeArgs"
+    )]
     fn parse_cxx11_attributes(&mut self, out: &mut Vec<AttrId>) {
         let before = self.prev_lo();
         let open = self.bump().span.lo;
@@ -735,8 +739,6 @@ impl Parser<'_, '_> {
         matches!(n.trim_start_matches("__").trim_end_matches("__"), "enable_if" | "diagnose_if")
     }
 
-    /// The arguments of attribute `name`, if any: `Some(args)`, or `None`
-    /// after a syntax error.
     /// `( type-id opt )` of `gsl::Owner` / `gsl::Pointer`, at the `(`
     /// (clang `ParseAttributeWithTypeArg`): a missing `)` is reported
     /// without skipping, so the attribute list resumes at the next token.
@@ -753,6 +755,8 @@ impl Parser<'_, '_> {
         Some(vec![AttrArg::Type(t)])
     }
 
+    /// The arguments of attribute `name`, if any: `Some(args)`, or `None`
+    /// after a syntax error.
     fn parse_attr_args(&mut self, name: Symbol) -> Option<Vec<AttrArg>> {
         let Some(open) = self.eat(Punct::LParen) else { return Some(Vec::new()) };
         let text = self.s.ast.symbols().as_str(name).to_owned();

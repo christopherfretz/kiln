@@ -294,7 +294,8 @@ impl Sema<'_, '_> {
             return;
         }
         let lty = self.ast.exprs.get(e).ty();
-        let inits: Vec<ExprId> = self.ast.lists.iter::<ExprId>(self.ast.exprs.init_list_inits(e)).collect();
+        let inits: Vec<ExprId> =
+            self.ast.lists.iter::<ExprId>(self.ast.exprs.init_list_inits(e)).collect();
         let aggregate = self.ast.types.is_array(lty)
             || (self.ast.types.as_record(lty).is_some() && !self.ile_transparent(e));
         if !aggregate {
@@ -328,7 +329,8 @@ impl Sema<'_, '_> {
             return;
         }
         let def = self.ast.definition(r).unwrap_or(r);
-        let bases: Vec<QualType> = self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
+        let bases: Vec<QualType> =
+            self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
         let fields = self.init_fields(r);
         for (i, &x) in inits.iter().enumerate() {
             let ety = if i < bases.len() {
@@ -372,7 +374,9 @@ impl Sema<'_, '_> {
     fn skip_full_expr(&self, mut e: ExprId) -> ExprId {
         for _ in 0..MAX_DEPTH {
             match self.ast.exprs.get(e).kind() {
-                ExprKind::ExprWithCleanups | ExprKind::ConstantExpr => e = self.ast.exprs.operand(e),
+                ExprKind::ExprWithCleanups | ExprKind::ConstantExpr => {
+                    e = self.ast.exprs.operand(e);
+                }
                 _ => break,
             }
         }
@@ -418,8 +422,7 @@ impl Sema<'_, '_> {
                 ExprKind::MemberExpr if !n.has(ExprFlags::ARROW) => {
                     let d = ex.decl(e);
                     let fty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
-                    let bitfield =
-                        self.ast.decls.field(d).is_some_and(|f| f.bit_width.is_some());
+                    let bitfield = self.ast.decls.field(d).is_some_and(|f| f.bit_width.is_some());
                     (self.kind_of(d) == DeclKind::Field
                         && !bitfield
                         && !self.ast.types.is_reference(fty))
@@ -504,8 +507,11 @@ impl Sema<'_, '_> {
             if self.ast.exprs.get(init).kind() == ExprKind::ArraySubscriptExpr {
                 let [l, r] = self.ast.exprs.operands(init);
                 let lt = self.ast.exprs.get(l).ty();
-                let base =
-                    if self.ast.types.is_pointer(lt) || self.ast.types.is_array(lt) { l } else { r };
+                let base = if self.ast.types.is_pointer(lt) || self.ast.types.is_array(lt) {
+                    l
+                } else {
+                    r
+                };
                 let b = *self.ast.exprs.get(base);
                 if b.kind() == ExprKind::ImplicitCastExpr
                     && self.ast.exprs.cast_kind(base) == CastKind::ArrayToPointerDecay
@@ -596,7 +602,18 @@ impl Sema<'_, '_> {
         cx.path.truncate(len);
     }
 
-    fn by_init_in(&mut self, cx: &mut Cx, mut init: ExprId, revisit: bool, vis: &Vis<'_>, lw: bool) {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "clang's visitLocalsRetainedByInitializer, one arm per form in its order"
+    )]
+    fn by_init_in(
+        &mut self,
+        cx: &mut Cx,
+        mut init: ExprId,
+        revisit: bool,
+        vis: &Vis<'_>,
+        lw: bool,
+    ) {
         for _ in 0..MAX_DEPTH {
             let old = init;
             if self.ast.exprs.get(init).kind() == ExprKind::CXXDefaultInitExpr {
@@ -666,8 +683,7 @@ impl Sema<'_, '_> {
                 if matches!(
                     self.special_kind_of(ctor),
                     Some(SpecialKind::CopyCtor | SpecialKind::MoveCtor)
-                ) && let Some(a) =
-                    self.first_of(self.ast.exprs.construct_args(init))
+                ) && let Some(a) = self.first_of(self.ast.exprs.construct_args(init))
                     && self.ast.exprs.get(a).kind() == ExprKind::MaterializeTemporaryExpr
                 {
                     let s = self.ast.exprs.operand(a);
@@ -847,9 +863,9 @@ impl Sema<'_, '_> {
         for p in path.iter().skip(i) {
             match p.kind {
                 Ek::VarInit => {
-                    let implicit = p
-                        .d
-                        .is_some_and(|d| self.ast.decls.get(d).flags().contains(DeclFlags::IMPLICIT));
+                    let implicit = p.d.is_some_and(|d| {
+                        self.ast.decls.get(d).flags().contains(DeclFlags::IMPLICIT)
+                    });
                     return if implicit { Loc::INVALID } else { self.begin_loc(p.e) };
                 }
                 Ek::DefaultInit => return self.begin_loc(p.e),
@@ -866,6 +882,10 @@ impl Sema<'_, '_> {
 
     /// clang's `TemporaryVisitor`: judges local `l` by the entity's
     /// lifetime.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "clang's TemporaryVisitor, one judgement per entity kind in its order"
+    )]
     fn visit_local(&mut self, cx: &mut Cx, l: ExprId, rk: Rk) -> bool {
         let at = self.next_path_loc(&cx.path, 0, l);
         let n = *self.ast.exprs.get(l);
@@ -950,7 +970,9 @@ impl Sema<'_, '_> {
                         let msg = self
                             .diag(DiagId::sema_dangling_lifetime_pointer_member, at)
                             .arg(self.decl_arg(field))
-                            .with_note(self.diag(DiagId::note_ref_or_ptr_member_here, floc).arg(1u8));
+                            .with_note(
+                                self.diag(DiagId::note_ref_or_ptr_member_here, floc).arg(1u8),
+                            );
                         self.emit(msg);
                         return false;
                     }
@@ -1029,8 +1051,11 @@ impl Sema<'_, '_> {
                 Ek::DefaultInit => {
                     let Some(f) = p.d else { continue };
                     let _ = i;
-                    self.diag(DiagId::note_init_with_default_member_init, self.ast.decls.get(f).loc())
-                        .arg(self.decl_arg(f))
+                    self.diag(
+                        DiagId::note_init_with_default_member_init,
+                        self.ast.decls.get(f).loc(),
+                    )
+                    .arg(self.decl_arg(f))
                 }
                 Ek::VarInit => {
                     let Some(v) = p.d else { continue };
@@ -1225,8 +1250,7 @@ impl Sema<'_, '_> {
                 let Some(m) = self.direct_callee(call) else { return };
                 if self.is_instance_member(m)
                     && self.track_implicit_object_arg(m)
-                    && let Some(o) =
-                        self.first_of(self.ast.exprs.call_args(call))
+                    && let Some(o) = self.first_of(self.ast.exprs.call_args(call))
                 {
                     let value = !self.ast.types.is_reference(self.fn_ret(m));
                     self.visit_pointer_arg(cx, m, o, value, vis);
@@ -1235,8 +1259,7 @@ impl Sema<'_, '_> {
             ExprKind::CallExpr => {
                 let Some(f) = self.direct_callee(call) else { return };
                 if self.track_first_argument(f)
-                    && let Some(a) =
-                        self.first_of(self.ast.exprs.call_args(call))
+                    && let Some(a) = self.first_of(self.ast.exprs.call_args(call))
                 {
                     let value = !self.ast.types.is_reference(self.fn_ret(f));
                     self.visit_pointer_arg(cx, f, a, value, vis);
@@ -1257,7 +1280,14 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn visit_pointer_arg(&mut self, cx: &mut Cx, d: DeclId, arg: ExprId, value: bool, vis: &Vis<'_>) {
+    fn visit_pointer_arg(
+        &mut self,
+        cx: &mut Cx,
+        d: DeclId,
+        arg: ExprId,
+        value: bool,
+        vis: &Vis<'_>,
+    ) {
         // Not the temporary base object of a Pointer: `Temp().ptr` may
         // not dangle.
         if self.ast.exprs.get(self.ignore_imp_casts(arg)).kind() == ExprKind::MemberExpr {
@@ -1306,7 +1336,9 @@ impl Sema<'_, '_> {
     /// clang `shouldTrackImplicitObjectArg`.
     fn track_implicit_object_arg(&self, m: DeclId) -> bool {
         let ret = self.fn_ret(m);
-        if self.kind_of(m) == DeclKind::CXXConversion && self.type_gsl_kind(ret) == Some(Gsl::Pointer) {
+        if self.kind_of(m) == DeclKind::CXXConversion
+            && self.type_gsl_kind(ret) == Some(Gsl::Pointer)
+        {
             return true;
         }
         let Some(class) = self.ast.decls.get(m).ctx() else { return false };
@@ -1338,7 +1370,10 @@ impl Sema<'_, '_> {
         let Some(r) = self.ast.types.pointee(pty).and_then(|p| self.ast.types.as_record(p)) else {
             return false;
         };
-        if !self.is_in_std_namespace(f) || !self.is_in_std_namespace(r) || self.gsl_kind(r).is_none() {
+        if !self.is_in_std_namespace(f)
+            || !self.is_in_std_namespace(r)
+            || self.gsl_kind(r).is_none()
+        {
             return false;
         }
         let name = self.ast.symbols().as_str(name);

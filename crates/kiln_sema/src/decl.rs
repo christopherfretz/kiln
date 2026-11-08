@@ -3485,11 +3485,8 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let td = self.builder().typedef(h, kind, underlying, prev_ok);
-        // clang `ActOnTypedefNameDecl`: a `std` container's `iterator`
-        // typedef makes its class a gsl Pointer (spec/sema-class.md §5.6).
-        if prev_ok.is_none() && !self.in_typedef_instantiation {
-            self.infer_gsl_typedef(td);
-        }
+        // gsl Pointer inference (spec/sema-class.md §5.6).
+        self.infer_gsl_declared_typedef(td, prev_ok.is_none());
         if underlying.quals().is_empty()
             && matches!(
                 self.ast.types.view(underlying.ty()),
