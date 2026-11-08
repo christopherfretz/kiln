@@ -452,6 +452,7 @@ impl Cg<'_> {
 
     fn emit_return(&mut self, s: StmtId) -> R<()> {
         let ast = self.ast;
+        self.ub_ret_nonnull_stmt(s)?;
         let sc = self.begin_scope(false);
         let mut rv = ast.stmts.return_value(s);
         if let Some(e) = rv

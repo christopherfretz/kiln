@@ -1620,7 +1620,10 @@ an error (§3.4).
   destructor is non-trivial, and not the top-level operand of `decltype`
   ([dcl.type.decltype]/2): check the destructor (access: `temporary of type 'S'
   has private destructor`; deleted), mark it referenced, wrap
-  `CXXBindTemporaryExpr(e, dtor)`, set `cleanup.needs = cleanup.side_effects =
+  `CXXBindTemporaryExpr(e, dtor)` (a deleted destructor gives an erroneous
+  expression instead, as clang's `ExprError`, so nothing initialized from it
+  is diagnosed again: `auto l = [x = B()] {};` with a protected `~B`,
+  WP-834, `expr.prim.lambda.capture/init-capture-deleted-closure-destructor.cpp`), set `cleanup.needs = cleanup.side_effects =
   true`. Call sites exactly as clang: results of calls (`CallExpr`,
   `CXXMemberCallExpr`, `CXXOperatorCallExpr`) returning a class prvalue,
   `CXXTemporaryObjectExpr`, functional casts and conversion results that

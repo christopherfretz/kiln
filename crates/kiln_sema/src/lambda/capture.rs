@@ -11,16 +11,16 @@
 //! The closure's members and their initializers are made at the lambda's
 //! `}` ([`Sema::finish_captures`]).
 
-use kiln_ast::decl::{DeclFlags, DeclKind, InitStyle, VarSpec};
+use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, InitStyle, VarSpec};
 use kiln_ast::expr::{ExprDeps, UnaryOp};
 use kiln_ast::ids::{ExprId, LambdaId};
 use kiln_ast::lambda::{CaptureDefault, CaptureKind, LambdaCapture};
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{AutoKeyword, Quals};
 use kiln_ast::{DeclHead, DeclId, QualType};
-use kiln_diag::DiagId;
-use kiln_source::Loc;
+use kiln_diag::{DiagId, FixIt};
 use kiln_source::symbol::Symbol;
+use kiln_source::{Loc, Span};
 
 use super::{LambdaIntroducer, LambdaScope};
 use crate::Sema;
@@ -279,6 +279,9 @@ impl Sema<'_, '_> {
         if chain.is_empty() && start.is_none() {
             return Captured::NotNeeded;
         }
+        if let Some((l, i)) = start {
+            self.mark_capture_used(l, i, build);
+        }
         let (mut cap, mut rf) = if let Some((l, i)) = start {
             let cap = self.capture_type(l, i);
             let data = self.ast.exprs.lambdas.get(l);
@@ -526,7 +529,28 @@ impl Sema<'_, '_> {
         self.ast.exprs.lambdas.get_mut(l).captures.push(c);
         if let Some(s) = self.lambda_scope_mut(l) {
             s.cap_tys.push(ty);
+            s.cap_use.push(0);
         }
+    }
+
+    /// clang `Capture::markUsed`: capture `i` of lambda `l` is named, as
+    /// an odr-use when `odr` (`-Wunused-lambda-capture`). No-op once the
+    /// lambda is complete.
+    fn mark_capture_used(&mut self, l: LambdaId, i: usize, odr: bool) {
+        if let Some(u) = self.lambda_scope_mut(l).and_then(|s| s.cap_use.get_mut(i)) {
+            *u |= if odr { 1 } else { 2 };
+        }
+    }
+
+    /// The index of lambda `l`'s `this` / `*this` capture.
+    fn this_capture_index(&self, l: LambdaId) -> Option<usize> {
+        self.ast
+            .exprs
+            .lambdas
+            .get(l)
+            .captures
+            .iter()
+            .position(|c| matches!(c.kind, CaptureKind::This | CaptureKind::StarThis))
     }
 
     /// The type of a use of variable `d` at `loc` and whether it refers
@@ -538,7 +562,9 @@ impl Sema<'_, '_> {
             return None;
         }
         let r = self.try_capture_var(d, loc, TryCapture::Implicit, None, Loc::INVALID, false);
-        if self.unevaluated == 0 && !self.might_be_constant(d) {
+        // A discarded statement only formally odr-uses `d` (clang's
+        // `OdrUseContext::FormallyOdrUsed`): nothing is captured.
+        if self.unevaluated == 0 && !self.might_be_constant(d) && !self.in_discarded_statement() {
             let _ = self.try_capture_var(d, loc, TryCapture::Implicit, None, Loc::INVALID, true);
         }
         match r {
@@ -551,7 +577,7 @@ impl Sema<'_, '_> {
     /// odr-use captures it, if it might be usable in constant expressions
     /// (any other was captured when named).
     pub(crate) fn capture_odr_use(&mut self, d: DeclId, loc: Loc) {
-        if self.might_be_constant(d) && self.may_need_capture(d) {
+        if self.might_be_constant(d) && self.may_need_capture(d) && !self.in_discarded_statement() {
             let _ = self.try_capture_var(d, loc, TryCapture::Implicit, None, Loc::INVALID, true);
         }
     }
@@ -714,10 +740,11 @@ impl Sema<'_, '_> {
                 }
                 break;
             };
-            let data = self.ast.exprs.lambdas.get(l);
-            if data.this_capture().is_some() {
+            if let Some(i) = self.this_capture_index(l) {
+                self.mark_capture_used(l, i, true);
                 break;
             }
+            let data = self.ast.exprs.lambdas.get(l);
             if data.default == CaptureDefault::None {
                 let rbracket = data.rbracket;
                 if let Some(f) = data.call_op {
@@ -945,6 +972,124 @@ impl Sema<'_, '_> {
             let ellipsis = c.ellipsis.unwrap_or(Loc::INVALID);
             let _ = self.try_capture_var(var, nloc, kind, Some(id), ellipsis, true);
         }
+        // The written ranges, for `-Wunused-lambda-capture`, when every
+        // explicit capture was accepted (clang gives up on the lambda
+        // otherwise).
+        let explicit =
+            self.ast.exprs.lambdas.get(id).captures.iter().filter(|c| !c.implicit).count();
+        if explicit == intro.captures.len()
+            && let Some(s) = self.lambda_scope_mut(id)
+        {
+            s.cap_ranges.extend(intro.captures.iter().map(|c| (c.loc, c.end)));
+        }
+    }
+
+    /// clang `DiagnoseUnusedLambdaCapture` from `BuildLambdaExpr`: at the
+    /// end of lambda `id` (scope `top`) outside a dependent context, each
+    /// explicit capture that was never odr-used (`-Wunused-lambda-capture`),
+    /// unless copying it may have side effects (an init-capture whose
+    /// initializer may, a volatile copy, a copy of a class that is
+    /// incomplete or not trivially copyable or destructible), it is an
+    /// init-capture `_`, or a generic lambda's init-capture named without
+    /// an odr-use. The fix-it removes the capture with the comma before it
+    /// (after the last used capture or the default), or the comma after it
+    /// when nothing used precedes it.
+    pub(crate) fn diagnose_unused_lambda_captures(&mut self, id: LambdaId, top: &LambdaScope) {
+        if top.cap_ranges.is_empty()
+            || self.in_template()
+            || !self.diags.is_enabled(DiagId::sema_unused_lambda_capture)
+        {
+            return;
+        }
+        let data = self.ast.exprs.lambdas.get(id);
+        let (default, default_loc, lbracket) = (data.default, data.default_loc, data.lbracket);
+        let n = top.cap_ranges.len();
+        let generic = top.call_template.is_some();
+        let mut has_prev = default != CaptureDefault::None;
+        let mut prev = if has_prev { default_loc } else { lbracket };
+        for (i, &(begin, end)) in top.cap_ranges.iter().enumerate() {
+            let Some(&c) = self.ast.exprs.lambdas.get(id).captures.get(i) else { break };
+            let used = top.cap_use.get(i).copied().unwrap_or(1);
+            let mut diagnosed = false;
+            if used & 1 == 0 && !(generic && used & 2 != 0 && c.init) {
+                let fix = if !end.is_valid() {
+                    None
+                } else if !has_prev && i + 1 != n {
+                    self.token_end(end)
+                        .and_then(|e| Some(Span::new(begin, self.next_token_end(e)?)))
+                } else {
+                    self.token_end(prev).zip(self.token_end(end)).map(|(b, e)| Span::new(b, e))
+                };
+                let ty = top.cap_tys.get(i).copied().unwrap_or(QualType::ERROR);
+                if !self.capture_has_side_effects(c, ty) && !self.capture_is_placeholder(c) {
+                    let name = match c.var {
+                        Some(v) => self.decl_arg(v),
+                        None => "'this'".to_string(),
+                    };
+                    let mut d = self
+                        .diag(DiagId::sema_unused_lambda_capture, c.loc)
+                        .arg(name)
+                        .arg(u32::from(used & 2 != 0));
+                    if let Some(f) = fix.filter(|f| !f.lo.is_macro() && !f.hi.is_macro()) {
+                        d = d.fixit(FixIt::remove(f));
+                    }
+                    // The elements of an expanded capture pack share a
+                    // location; clang warns for each.
+                    self.emit(d.allow_duplicate());
+                    diagnosed = true;
+                }
+            }
+            if end.is_valid() {
+                has_prev |= !diagnosed;
+                prev = end;
+            }
+        }
+    }
+
+    /// clang `CaptureHasSideEffects` for capture `c` whose member has
+    /// type `ty`.
+    fn capture_has_side_effects(&self, c: LambdaCapture, ty: QualType) -> bool {
+        if c.init
+            && let Some(v) = c.var
+            && let Some(init) = self.ast.decls.var(v).and_then(|x| x.init)
+            && self.has_possible_side_effects(init)
+        {
+            return true;
+        }
+        if !matches!(c.kind, CaptureKind::ByCopy | CaptureKind::StarThis) {
+            return false;
+        }
+        if ty.quals().is_volatile() {
+            return true;
+        }
+        let base = self.base_element(ty);
+        let Some(r) = self.ast.types.as_record(base) else { return false };
+        let bits = self.defn_bits(r);
+        !bits.contains(DefinitionBits::COMPLETE)
+            || !bits.contains(DefinitionBits::TRIVIAL_COPY_CTOR)
+            || !bits.contains(DefinitionBits::TRIVIAL_DTOR)
+    }
+
+    /// An init-capture `_` ([basic.scope.scope]/5; clang
+    /// `isPlaceholderVar`).
+    fn capture_is_placeholder(&self, c: LambdaCapture) -> bool {
+        c.init
+            && c.var.is_some_and(|v| {
+                self.ast.decls.get(v).name().as_ident().is_some_and(|s| self.is_placeholder_name(s))
+            })
+    }
+
+    /// `at` plus the length of the token after the whitespace there:
+    /// where clang's printed fix-it range ends for a token range ending
+    /// at `at` (`Lexer::MeasureTokenLength` lexes raw from `at`).
+    fn next_token_end(&self, at: Loc) -> Option<Loc> {
+        let sm = self.diags.sm();
+        let (file, pos) = sm.offset_of(at)?;
+        let text = sm.text(file).as_bytes();
+        let ws = text.get(pos as usize..)?.iter().take_while(|c| c.is_ascii_whitespace()).count();
+        let tok = at.with_offset(u32::try_from(ws).ok()?);
+        let len = sm.same_entry_distance(tok, self.token_end(tok)?)?;
+        Some(at.with_offset(len))
     }
 
     /// Whether init-capture initializer `init` holds an invalid
@@ -1191,9 +1336,7 @@ impl Sema<'_, '_> {
     pub(crate) fn finish_captures(&mut self, id: LambdaId, closure: DeclId, cap_tys: &[QualType]) {
         let data = self.ast.exprs.lambdas.get(id);
         if data.default != CaptureDefault::None || !data.captures.is_empty() {
-            self.ast
-                .decls
-                .set_definition_bits(closure, kiln_ast::decl::DefinitionBits::LAMBDA_CAPTURES);
+            self.ast.decls.set_definition_bits(closure, DefinitionBits::LAMBDA_CAPTURES);
         }
         if data.captures.is_empty() {
             return;
