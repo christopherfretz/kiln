@@ -13,14 +13,19 @@
 //!    `-mfunction-return=`, `-m[no-]speculative-load-hardening`,
 //!    `-f[no-]split-stack`, `-finstrument-functions[-after-inlining]`,
 //!    `-finstrument-function-entry-bare`, `-f[no-]xray-instrument`,
-//!    `-fxray-instruction-threshold=`, `-fxray-ignore-loops`);
+//!    `-fxray-instruction-threshold=`, `-fxray-ignore-loops`; and WP-873's
+//!    `-flto[=full|thin|auto|jobserver]`, `-fno-lto`, `-f[no-]split-lto-unit`);
 //! 2. accepted and ignored: no observable effect in kiln
 //!    (`-f[no-]stack-clash-protection`,
 //!    `-f[no-]common`, `-fstack-usage`, the defaults `-fno-trapv`,
-//!    `-fno-short-enums` and `-m64`, and `-pipe`);
+//!    `-fno-short-enums` and `-m64`, and `-pipe`), or deliberately ignored
+//!    although clang honours it (WP-873: `-fdiagnostics-show-template-tree`,
+//!    `-f[no-]strict-vtable-pointers`, `-f[no-]vectorize`,
+//!    `-f[no-]slp-vectorize`, `-f[no-]tree-[slp-]vectorize`,
+//!    `-fno-fat-lto-objects`; spec/driver.md "Codegen flags");
 //! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
-//!    `-fshort-enums`, coverage and profiling, the other `-fxray-*` options and
-//!    `-finstrument-functions-exclude-*`). The floating-point flags are
+//!    `-fshort-enums`, coverage and profiling, the other `-fxray-*` options,
+//!    `-finstrument-functions-exclude-*` and `-ffat-lto-objects`). The floating-point flags are
 //!    `crate::fp_flags`'s.
 //!
 //! `-Wp,<args>` and `-Xpreprocessor <arg>` are spliced into the command
@@ -624,6 +629,55 @@ mod tests {
         }
         assert_eq!(parse(&["-fbogus"]).1, [None]);
         assert_eq!(parse(&["-mtune=x86-64"]).0.mtune.as_deref(), Some("x86-64"));
+    }
+
+    /// WP-873: `-flto[=...]`, `-f[no-]split-lto-unit`, and the flags
+    /// CMake probes that kiln accepts and ignores (WP-677).
+    #[test]
+    fn lto_and_probe_flags() {
+        use kiln_codegen::Lto;
+        assert_eq!(CodegenFlags::default().lto(), None);
+        for (a, want) in [
+            ("-flto", Some(Lto::Full)),
+            ("-flto=full", Some(Lto::Full)),
+            ("-flto=auto", Some(Lto::Full)),
+            ("-flto=jobserver", Some(Lto::Full)),
+            ("-flto=thin", Some(Lto::Thin { split: false })),
+        ] {
+            let (f, r) = parse(&[a]);
+            assert_eq!(r, [Some(Ok(()))], "{a}");
+            assert_eq!(f.lto(), want, "{a}");
+        }
+        assert_eq!(parse(&["-flto=thin", "-fno-lto"]).0.lto(), None);
+        assert_eq!(parse(&["-fno-lto", "-flto"]).0.lto(), Some(Lto::Full));
+        let (f, _) = parse(&["-fsplit-lto-unit", "-flto=thin"]);
+        assert_eq!(f.lto(), Some(Lto::Thin { split: true }));
+        let (f, _) = parse(&["-flto=thin", "-fsplit-lto-unit", "-fno-split-lto-unit"]);
+        assert_eq!(f.lto(), Some(Lto::Thin { split: false }));
+        assert_eq!(
+            parse(&["-flto=bogus"]).1,
+            [Some(Err(ArgError::UnsupportedValue("-flto=".into(), "bogus".into())))]
+        );
+        assert_eq!(
+            parse(&["-ffat-lto-objects"]).1,
+            [Some(Err(ArgError::UnsupportedByKiln("-ffat-lto-objects".into())))]
+        );
+        for a in [
+            "-fdiagnostics-show-template-tree",
+            "-fstrict-vtable-pointers",
+            "-fno-strict-vtable-pointers",
+            "-fvectorize",
+            "-fno-vectorize",
+            "-fslp-vectorize",
+            "-fno-slp-vectorize",
+            "-ftree-vectorize",
+            "-fno-tree-slp-vectorize",
+            "-fno-fat-lto-objects",
+        ] {
+            let (f, r) = parse(&[a]);
+            assert_eq!(r, [Some(Ok(()))], "{a}");
+            assert_eq!(f, CodegenFlags::default(), "{a}");
+        }
     }
 
     /// WP-813: the hardening and instrumentation flags.
