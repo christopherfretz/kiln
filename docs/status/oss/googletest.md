@@ -97,3 +97,43 @@ Notes on the clusters:
   - a Debug or C++26 build
   - `-stdlib=libc++`
   - googletest's optional Python-driven tests beyond the CTest default set
+
+## libc++ (WP-694)
+
+Built and tested with `-stdlib=libc++` (the system libc++ 19) by both kiln++ and the clang++-19 control: `scripts/oss/oss-build.sh --stdlib libc++ <project>`, report via `scripts/oss/oss-report.py --stdlib libc++ --perf <project>`. The clang-control build tree was deleted after these numbers were recorded. Wall-time differences are dominated by file-system syscalls on the bind mount (see the perf finding in [../oss.md](../oss.md#libc-results-wp-694)).
+
+Before the fix kiln++ rejected 1 of 85 TUs (`googlemock/test/gmock-actions_test.cc`) with "cannot form a reference to 'void'" in libc++ `<string>`: kiln deduced libc++'s explicit `basic_string(const T&)` template as a candidate of a copy-initialization inside a SFINAE test; an explicit constructor template is not a candidate there ([over.match.copy]/1) and is not deduced. Fixed in `drop_explicit_ctor_templates` (crates/kiln_sema/src/overload/ics.rs), test `tests/conformance/over.match.copy/explicit-ctor-template-not-deduced.cpp`.
+
+<!-- oss:googletest:libcxx -->
+### googletest (v1.17.0), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 85 / 0 | 85 / 0 |
+| links ok / failed | 67 / 0 | 67 / 0 |
+| tests passed / total | 63 / 63 | 63 / 63 |
+| wall | 275 s | 125 s |
+| peak TU RSS | 626 MB | 1270 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 67 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **1.40x**, RSS **0.42x**; total 383 s vs 284 s; peak TU RSS 626 MB vs 1270 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/googletest/googlemock/test/gmock-matchers-containers_test.cc` | 26.7 | 37.1 | 1.39 | 798 | 626 | 0.78 |
+| `$KILN/.oss/src/googletest/googlemock/test/gmock-actions_test.cc` | 25.7 | 36.3 | 1.41 | 1270 | 552 | 0.43 |
+| `$KILN/.oss/src/googletest/googletest/test/gtest_all_test.cc` | 21.0 | 26.6 | 1.26 | 721 | 593 | 0.82 |
+| `$KILN/.oss/src/googletest/googlemock/test/gmock-matchers-misc_test.cc` | 21.0 | 29.4 | 1.40 | 663 | 472 | 0.71 |
+| `$KILN/.oss/src/googletest/googlemock/test/gmock-matchers-comparisons_test.cc` | 17.6 | 25.8 | 1.46 | 602 | 426 | 0.71 |
+
+TUs over 1.2x on time or RSS: 64 of the 66 that take clang-19 at least 0.5 s.
+- `$KILN/.oss/src/googletest/googletest/src/gtest_main.cc`: time 1.8 / 1.0 s = 1.85x, RSS 68 / 196 MB = 0.35x
+- `$KILN/.oss/src/googletest/googlemock/test/gmock_stress_test.cc`: time 3.7 / 2.1 s = 1.74x, RSS 88 / 245 MB = 0.36x
+- `$KILN/.oss/src/googletest/googlemock/src/gmock_main.cc`: time 2.0 / 1.2 s = 1.68x, RSS 73 / 208 MB = 0.35x
+- `$KILN/.oss/src/googletest/googletest/test/gtest_help_test_.cc`: time 1.7 / 1.0 s = 1.65x, RSS 70 / 199 MB = 0.35x
+- `$KILN/.oss/src/googletest/googletest/test/googletest-env-var-test_.cc`: time 1.7 / 1.0 s = 1.64x, RSS 69 / 200 MB = 0.35x
+<!-- /oss:googletest:libcxx -->

@@ -88,3 +88,41 @@ Behaviours and rules: `spec/landed/sema/WP-681.md`.
     `operator[]` overload in `Message.tests.cpp`.
   - kiln is warning-free here, so `CATCH_ENABLE_WERROR=ON` is expected to
     pass. It was not run.
+
+## libc++ (WP-694)
+
+Built and tested with `-stdlib=libc++` (the system libc++ 19) by both kiln++ and the clang++-19 control: `scripts/oss/oss-build.sh --stdlib libc++ <project>`, report via `scripts/oss/oss-report.py --stdlib libc++ --perf <project>`. The clang-control build tree was deleted after these numbers were recorded. Wall-time differences are dominated by file-system syscalls on the bind mount (see the perf finding in [../oss.md](../oss.md#libc-results-wp-694)).
+
+<!-- oss:catch2:libcxx -->
+### catch2 (v3.16.1), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 167 / 0 | 167 / 0 |
+| links ok / failed | 1 / 0 | 1 / 0 |
+| tests passed / total | 81 / 81 | 81 / 81 |
+| wall | 529 s | 466 s |
+| peak TU RSS | 117 MB | 444 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 167 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **1.34x**, RSS **0.39x**; total 204 s vs 156 s; peak TU RSS 117 MB vs 444 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/catch2/tests/SelfTest/IntrospectiveTests/InternalBenchmark.tests.cpp` | 3.5 | 1.9 | 0.53 | 444 | 77 | 0.17 |
+| `$KILN/.oss/src/catch2/tests/SelfTest/UsageTests/MatchersRanges.tests.cpp` | 2.9 | 3.6 | 1.25 | 216 | 117 | 0.54 |
+| `$KILN/.oss/src/catch2/tests/SelfTest/UsageTests/Matchers.tests.cpp` | 2.7 | 3.4 | 1.24 | 217 | 116 | 0.53 |
+| `$KILN/.oss/src/catch2/tests/SelfTest/IntrospectiveTests/CmdLine.tests.cpp` | 2.4 | 2.9 | 1.22 | 219 | 95 | 0.43 |
+| `$KILN/.oss/src/catch2/tests/SelfTest/IntrospectiveTests/GeneratorsImpl.tests.cpp` | 2.3 | 2.7 | 1.18 | 213 | 102 | 0.48 |
+
+TUs over 1.2x on time or RSS: 141 of the 151 that take clang-19 at least 0.5 s.
+- `$KILN/.oss/src/catch2/tests/SelfTest/UsageTests/ToStringByte.tests.cpp`: time 1.4 / 0.8 s = 1.70x, RSS 66 / 179 MB = 0.37x
+- `$KILN/.oss/src/catch2/tests/SelfTest/UsageTests/ToStringOptional.tests.cpp`: time 1.5 / 0.9 s = 1.70x, RSS 67 / 183 MB = 0.37x
+- `$KILN/.oss/src/catch2/tests/SelfTest/UsageTests/ToStringPair.tests.cpp`: time 1.4 / 0.9 s = 1.69x, RSS 67 / 184 MB = 0.36x
+- `$KILN/.oss/src/catch2/tests/SelfTest/UsageTests/ToStringTuple.tests.cpp`: time 1.4 / 0.9 s = 1.64x, RSS 68 / 186 MB = 0.37x
+- `$KILN/.oss/src/catch2/tests/SelfTest/UsageTests/ToStringChrono.tests.cpp`: time 1.4 / 0.9 s = 1.64x, RSS 67 / 183 MB = 0.37x
+<!-- /oss:catch2:libcxx -->

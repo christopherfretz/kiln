@@ -101,3 +101,41 @@ hit any of them.
 
 - **Variants not run:** Debug, `MAGIC_ENUM_OPT_ENABLE_NONASCII`, and
   the C++26 reflection backend.
+
+## libc++ (WP-694)
+
+Built and tested with `-stdlib=libc++` (the system libc++ 19) by both kiln++ and the clang++-19 control: `scripts/oss/oss-build.sh --stdlib libc++ <project>`, report via `scripts/oss/oss-report.py --stdlib libc++ --perf <project>`. The clang-control build tree was deleted after these numbers were recorded. Wall-time differences are dominated by file-system syscalls on the bind mount (see the perf finding in [../oss.md](../oss.md#libc-results-wp-694)).
+
+<!-- oss:magic_enum:libcxx -->
+### magic_enum (v0.9.7), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 22 / 0 | 22 / 0 |
+| links ok / failed | 22 / 0 | 22 / 0 |
+| tests passed / total | 15 / 15 | 15 / 15 |
+| wall | 44 s | 43 s |
+| peak TU RSS | 324 MB | 553 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 12 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **1.22x**, RSS **0.44x**; total 69 s vs 58 s; peak TU RSS 324 MB vs 553 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/magic_enum/test/test.cpp` | 14.5 | 16.8 | 1.16 | 553 | 324 | 0.59 |
+| `$KILN/.oss/src/magic_enum/test/test_flags.cpp` | 11.7 | 13.8 | 1.18 | 438 | 260 | 0.59 |
+| `$KILN/.oss/src/magic_enum/test/test_containers.cpp` | 9.3 | 11.0 | 1.19 | 399 | 213 | 0.53 |
+| `$KILN/.oss/src/magic_enum/test/test_wchar_t.cpp` | 9.0 | 11.0 | 1.22 | 393 | 209 | 0.53 |
+| `$KILN/.oss/src/magic_enum/test/test_aliases.cpp` | 8.7 | 10.3 | 1.19 | 386 | 203 | 0.53 |
+
+TUs over 1.2x on time or RSS: 7 of the 12 that take clang-19 at least 0.5 s.
+- `$KILN/.oss/src/magic_enum/example/example_custom_name.cpp`: time 1.0 / 0.7 s = 1.34x, RSS 65 / 176 MB = 0.37x
+- `$KILN/.oss/src/magic_enum/example/enum_flag_example.cpp`: time 0.8 / 0.7 s = 1.28x, RSS 66 / 169 MB = 0.39x
+- `$KILN/.oss/src/magic_enum/example/example_switch.cpp`: time 1.0 / 0.8 s = 1.26x, RSS 66 / 181 MB = 0.37x
+- `$KILN/.oss/src/magic_enum/example/example_containers_bitset.cpp`: time 0.8 / 0.6 s = 1.23x, RSS 64 / 168 MB = 0.38x
+- `$KILN/.oss/src/magic_enum/example/example.cpp`: time 1.0 / 0.8 s = 1.23x, RSS 66 / 177 MB = 0.37x
+<!-- /oss:magic_enum:libcxx -->
