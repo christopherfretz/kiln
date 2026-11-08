@@ -405,7 +405,8 @@ when it reaches that token (`handle_events`, as for clang's
 | `comment`, `float_control`, `unused`, `omp`, `GCC ivdep` | accepted, ignored |
 | `unroll [N\|(N)]`, `nounroll`, `unroll_and_jam [N\|(N)]`, `nounroll_and_jam`, `GCC unroll [N\|(N)]`, `GCC nounroll`, `clang loop <option>(<arg>)...` | loop hints, below |
 | `weak name` | missing identifier gets `expected identifier in '#pragma weak' - ignored`, tokens after it `extra tokens at end of '#pragma weak' - ignored` [-Wignored-pragmas]; otherwise `Event::PragmaWeak` (spec/sema.md §4.5; WP-803). The alias form `weak name = alias` is `Event::UnsupportedPragma`. |
-| `redefine_extname`, `align`, `options`, `ms_struct`, `clang attribute`, `clang section` | `Event::UnsupportedPragma`: `'#pragma <name>' is not supported yet` |
+| `ms_struct on\|off\|reset` | anything else gets `incorrect use of '#pragma ms_struct on\|off' - ignored`, tokens after it `extra tokens at end of '#pragma ms_struct' - ignored` [-Wignored-pragmas]; otherwise `Event::PragmaMsStruct { on }`. While on, each class definition begun gets an implicit `ms_struct` (WP-809; spec/landed/codegen/WP-809.md). |
+| `redefine_extname`, `align`, `options`, `clang attribute`, `clang section` | `Event::UnsupportedPragma`: `'#pragma <name>' is not supported yet` |
 
 **Loop hints** (WP-449; clang `PragmaLoopHintHandler`,
 `PragmaUnrollHintHandler`, `HandlePragmaLoopHint`): `pragma::classify`

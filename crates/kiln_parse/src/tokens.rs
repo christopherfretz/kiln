@@ -39,6 +39,11 @@ pub enum Event {
         /// The spelling of the tokens between the parentheses.
         args: String,
     },
+    /// `#pragma ms_struct on` (`on`) or `off` / `reset`.
+    PragmaMsStruct {
+        /// `on`.
+        on: bool,
+    },
     /// `#pragma GCC visibility push(v)` / `pop`.
     Visibility {
         /// The `visibility` token.

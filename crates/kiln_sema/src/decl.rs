@@ -5101,6 +5101,9 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
+        if self.ms_bitfield_too_wide(ty, v, name, loc) {
+            return None;
+        }
         if let Some((bits, _)) = constfold::int_info(&self.ast, ty) {
             // clang warns for every integral type but `bool`.
             if v > i128::from(bits)
@@ -7866,6 +7869,8 @@ impl Sema<'_, '_> {
         if self.pack.0 != 0 {
             let _ = self.ast.decls.cold.record_pack.insert(r, self.pack.0);
         }
+        // `AddMsStructLayoutForRecord`: `#pragma ms_struct on`.
+        self.ms_struct_from_pragma(r);
         let _ = self.builder().begin_record_definition(r);
         let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
         let mut build = ClassBuild::new(r, tag, self.ctx);
@@ -8040,6 +8045,7 @@ impl Sema<'_, '_> {
         let bits = self.finish_special_members(r, bits);
         let bits = self.trivial_abi_bits(r, bits);
         self.check_transparent_union(r);
+        self.check_ms_struct_class(r, bits);
         // [class.compare.default]/4: the implicit `operator==`s.
         let mut friends =
             build.as_mut().map(|b| std::mem::take(&mut b.friends)).unwrap_or_default();
@@ -10074,7 +10080,9 @@ impl Sema<'_, '_> {
         // unknown attribute there, warned as clang warns any unknown one.
         let cxx26 = self.std >= kiln_lex::Std::Cxx26;
         let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax).filter(|&k| {
-            (k != AttrKind::INDETERMINATE || cxx26) && (k != AttrKind::CARRIES_DEPENDENCY || !cxx26)
+            (k != AttrKind::INDETERMINATE || cxx26)
+                && (k != AttrKind::CARRIES_DEPENDENCY || !cxx26)
+                && (k != AttrKind::GCC_STRUCT || self.clang_compat >= 22)
         }) else {
             let id = if gnu && n == "format" {
                 DiagId::parse_attribute_ignored
@@ -11111,6 +11119,8 @@ fn attr_kind_of(
         // clang `GCC<"transparent_union">`, C-only (WP-809).
         ("transparent_union", _, true) => AttrKind::TRANSPARENT_UNION,
         ("selectany", _, true) => AttrKind::SELECTANY,
+        ("ms_struct", _, true) => AttrKind::MS_STRUCT,
+        ("gcc_struct", _, true) => AttrKind::GCC_STRUCT,
         // clang `GCC<"common">`, rejected in C++ (WP-807).
         ("common", _, true) => AttrKind::COMMON,
         // clang `Clang<"internal_linkage">` (WP-807).

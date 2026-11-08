@@ -296,6 +296,13 @@ impl AttrKind {
     /// comdat of its own, so definitions in several translation units
     /// fold into one object.
     pub const SELECTANY: AttrKind = AttrKind(198);
+    /// GNU `ms_struct` on a class, or implied by `#pragma ms_struct on`
+    /// (clang `MSStructAttr`, WP-809): the record uses the Microsoft
+    /// bit-field layout rules within the Itanium layout.
+    pub const MS_STRUCT: AttrKind = AttrKind(199);
+    /// GNU `gcc_struct` (clang 22 `GCCStructAttr`, WP-809): the record
+    /// uses the target's default layout; conflicts with `ms_struct`.
+    pub const GCC_STRUCT: AttrKind = AttrKind(200);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

@@ -77,6 +77,7 @@ mod macro_fixit;
 mod meta;
 mod missing_noreturn;
 pub mod modules;
+mod ms_struct;
 mod musttail;
 pub mod names;
 pub mod new_delete;
@@ -346,6 +347,9 @@ pub struct Sema<'a, 'sm> {
     /// `(label, value)` entries. Applied to each class definition as it
     /// begins (`record_pack`).
     pub(crate) pack: (u16, Vec<(Option<String>, u16)>),
+    /// `#pragma ms_struct on` is in effect (clang `MSStructPragmaOn`):
+    /// each class definition that begins gets an implicit `ms_struct`.
+    pub(crate) ms_struct_pragma: bool,
     pub(crate) scopes: Vec<scope::Scope>,
     /// The current semantic declaration context.
     pub(crate) ctx: DeclId,
@@ -1133,6 +1137,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_body: cfg::BodyCfg::default(),
             inferred_noreturn: kiln_source::fx::FxHashSet::default(),
             pack: (0, Vec::new()),
+            ms_struct_pragma: false,
             scopes: vec![scope::Scope {
                 first_decl: 0,
                 ..scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))

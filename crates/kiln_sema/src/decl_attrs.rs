@@ -84,6 +84,8 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::MUSTTAIL => "musttail",
         AttrKind::TRANSPARENT_UNION => "transparent_union",
         AttrKind::SELECTANY => "selectany",
+        AttrKind::MS_STRUCT => "ms_struct",
+        AttrKind::GCC_STRUCT => "gcc_struct",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -443,6 +445,7 @@ impl Sema<'_, '_> {
         self.check_visibility_attrs(d, attrs);
         self.check_weak_attrs(d, attrs);
         self.check_selectany_attrs(d, attrs);
+        self.check_ms_struct_attrs(d, attrs);
         let kind = self.ast.decls.get(d).kind();
         attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);
@@ -684,6 +687,17 @@ impl Sema<'_, '_> {
             }
             // clang `TrivialABI`: `SubjectList<[CXXRecord]>` (ignored
             // with a warning).
+            // clang `MSStruct` / `GCCStruct`: `SubjectList<[Record]>`.
+            AttrKind::MS_STRUCT | AttrKind::GCC_STRUCT if !is_record_kind(kind) => {
+                let name =
+                    if node.kind == AttrKind::MS_STRUCT { "ms_struct" } else { "gcc_struct" };
+                wrong(
+                    self,
+                    DiagId::sema_attribute_wrong_decl_type,
+                    name,
+                    "structs, unions, and classes",
+                )
+            }
             AttrKind::TRIVIAL_ABI if !is_record_kind(kind) => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "trivial_abi", "classes")
             }

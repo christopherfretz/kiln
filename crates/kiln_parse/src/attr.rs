@@ -53,6 +53,8 @@ fn takes_expr_args(name: &str) -> bool {
             | "optnone"
             | "musttail"
             | "selectany"
+            | "ms_struct"
+            | "gcc_struct"
             | "minsize"
             | "disable_tail_calls"
             | "trivial_abi"
