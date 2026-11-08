@@ -459,6 +459,9 @@ pub struct Args {
     /// The floating-point flags, in order (spec/driver.md "Floating-point
     /// flags"; resolved with [`Args::fp_model`]).
     pub fp: crate::fp_flags::FpFlags,
+    /// The debug information flags (`-g*`, `-gdwarf-N`, the prefix maps,
+    /// `-gsplit-dwarf`, `-gz`; spec/driver.md "Debug information flags").
+    pub debug: crate::debug_flags::DebugFlags,
     /// `-c`, `-S`, `-emit-llvm`.
     pub compile: CompileArgs,
     /// Linker options, in order.
@@ -632,7 +635,7 @@ impl Args {
                 }
                 continue;
             }
-            if let Some(r) = a.fp.parse_arg(arg) {
+            if let Some(r) = a.fp.parse_arg(arg).or_else(|| a.debug.parse_arg(arg)) {
                 a.errors.extend(r.err());
             } else if let Some(r) = a
                 .constexpr
@@ -772,9 +775,6 @@ impl Args {
             "-mno-omit-leaf-frame-pointer" => self.omit_leaf_frame_pointer = Some(false),
             "-fstrict-aliasing" => self.strict_aliasing = Some(true),
             "-fno-strict-aliasing" => self.strict_aliasing = Some(false),
-            // Debug information is not generated (spec/codegen.md §5).
-            "-g" | "-g0" | "-g1" | "-g2" | "-g3" | "-ggdb" | "-ggdb0" | "-ggdb1" | "-ggdb2"
-            | "-ggdb3" => {}
             "-static" | "-nostdlib" | "-shared" | "-rdynamic" | "-pie" | "-no-pie" => {
                 let kind = if matches!(arg, "-static" | "-nostdlib") {
                     LinkOptKind::Silent
@@ -866,11 +866,14 @@ impl Args {
                     .iter()
                     .find_map(|p| arg.strip_prefix(p).map(|v| (p, v)))
                 {
-                    // `__FILE__` and source locations; kiln emits no debug
-                    // information for `-ffile-prefix-map=` to remap too.
+                    // `__FILE__` and source locations; `-ffile-prefix-map=`
+                    // also remaps the debug information's paths.
                     match v.split_once('=') {
                         Some((old, new)) => {
                             self.macro_prefix_map.push((old.to_owned(), new.to_owned()));
+                            if opt.starts_with("-ffile") {
+                                self.debug.prefix_map.push((old.to_owned(), new.to_owned()));
+                            }
                         }
                         None => self
                             .errors
@@ -880,14 +883,6 @@ impl Args {
                     || arg.starts_with("-ftime-trace-granularity=")
                 {
                     self.time_trace.push(arg.to_owned());
-                } else if let Some(v) = arg.strip_prefix("-fdebug-prefix-map=") {
-                    // No debug information: validated, otherwise ignored.
-                    if !v.contains('=') {
-                        self.errors.push(ArgError::InvalidValue(
-                            "-fdebug-prefix-map=".to_owned(),
-                            v.to_owned(),
-                        ));
-                    }
                 } else if let Some(v) = arg.strip_prefix("-fprebuilt-module-path=") {
                     self.prebuilt_module_paths.push(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fdump-ast-filter=") {

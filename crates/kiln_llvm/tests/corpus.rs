@@ -1978,6 +1978,83 @@ fn debug_records() {
     );
 }
 
+/// `md_set_field` completes a distinct node that its own operands refer
+/// to (a composite type's `elements`), replacing or appending the field;
+/// uniqued nodes refuse it.
+#[test]
+fn md_set_field_cycle() {
+    let mut m = aarch64();
+    let st = m.md_specialized(
+        "DICompositeType",
+        true,
+        vec![
+            ("tag".into(), MdField::Raw("DW_TAG_structure_type".into())),
+            ("name".into(), MdField::Str("S".into())),
+            ("elements".into(), MdField::Node(None)),
+        ],
+    );
+    let mem = m.md_specialized(
+        "DIDerivedType",
+        false,
+        vec![
+            ("tag".into(), MdField::Raw("DW_TAG_member".into())),
+            ("name".into(), MdField::Str("x".into())),
+            ("scope".into(), MdField::Node(Some(st))),
+            ("baseType".into(), MdField::Node(None)),
+        ],
+    );
+    let elems = m.md_tuple(&[Some(mem)]);
+    m.md_set_field(st, "elements", MdField::Node(Some(elems))).unwrap();
+    m.md_set_field(st, "identifier", MdField::Str("_ZTS1S".into())).unwrap();
+    assert!(m.md_set_field(mem, "name", MdField::Str("y".into())).is_err());
+    m.add_named_metadata("n", &[st]);
+    check(
+        &m,
+        &[
+            "!0 = distinct !DICompositeType(tag: DW_TAG_structure_type, name: \"S\", elements: !1, identifier: \"_ZTS1S\")\n",
+            "!1 = !{!2}\n",
+            "!2 = !DIDerivedType(tag: DW_TAG_member, name: \"x\", scope: !0, baseType: null)\n",
+        ],
+    );
+}
+
+/// `md_replace`: a distinct placeholder becomes a uniqued declaration in
+/// place; a uniqued node cannot be replaced.
+#[test]
+fn md_replace_placeholder() {
+    let mut m = aarch64();
+    let st = m.md_specialized("DICompositeType", true, vec![]);
+    let p = m.md_specialized(
+        "DIDerivedType",
+        false,
+        vec![
+            ("tag".into(), MdField::Raw("DW_TAG_pointer_type".into())),
+            ("baseType".into(), MdField::Node(Some(st))),
+            ("size".into(), MdField::UInt(64)),
+        ],
+    );
+    let fwd = MdNode::Specialized {
+        distinct: false,
+        name: "DICompositeType".into(),
+        fields: vec![
+            ("tag".into(), MdField::Raw("DW_TAG_structure_type".into())),
+            ("name".into(), MdField::Str("S".into())),
+            ("flags".into(), MdField::Raw("DIFlagFwdDecl".into())),
+        ]
+        .into(),
+    };
+    m.md_replace(st, fwd.clone()).unwrap();
+    assert!(m.md_replace(p, fwd).is_err());
+    m.add_named_metadata("n", &[p]);
+    check(
+        &m,
+        &[
+            "!0 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !1, size: 64)\n",
+            "!1 = !DICompositeType(tag: DW_TAG_structure_type, name: \"S\", flags: DIFlagFwdDecl)\n",
+        ],
+    );
+}
+
 /// §3.2/§7: every byte value in a `c"..."` initializer and in a metadata
 /// string, and quoted global names with escapes.
 #[test]

@@ -9,7 +9,7 @@
 //!    `-f[no-]data-sections`, `-mtune=`, `-mcmodel=`);
 //! 2. accepted and ignored: no observable effect in kiln
 //!    (`-f[no-]stack-clash-protection`, `-fcf-protection[=…]`,
-//!    `-f[no-]common`, `-fstack-usage`, `-gz[=…]`, the defaults `-fno-trapv`,
+//!    `-f[no-]common`, `-fstack-usage`, the defaults `-fno-trapv`,
 //!    `-fno-short-enums` and `-m64`, and `-pipe`);
 //! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
 //!    `-fshort-enums`, `-fsanitize*`, `-fno-sanitize*`, coverage and
@@ -63,7 +63,6 @@ const IGNORED: &[&str] = &[
     "-fcommon",
     "-fno-common",
     "-fstack-usage",
-    "-gz",
     "-fno-trapv",
     "-fno-short-enums",
     // Every target kiln has is 64-bit (`-m32` stays unknown).
@@ -157,11 +156,6 @@ impl CodegenFlags {
             "-fcf-protection" => {
                 if !matches!(v, "full" | "branch" | "return" | "none") {
                     return Some(Err(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())));
-                }
-            }
-            "-gz" => {
-                if !matches!(v, "none" | "zlib" | "zstd") {
-                    return unsupported();
                 }
             }
             _ => return None,
@@ -293,8 +287,6 @@ mod tests {
             "-fcf-protection=full",
             "-fno-common",
             "-fstack-usage",
-            "-gz",
-            "-gz=zlib",
             "-mtune=native",
             "-ffunction-sections",
             "-fdata-sections",
@@ -317,10 +309,6 @@ mod tests {
         ] {
             assert_eq!(parse(&[a]).1, [Some(Err(ArgError::UnsupportedByKiln(a.into())))], "{a}");
         }
-        assert_eq!(
-            parse(&["-gz=lzma"]).1,
-            [Some(Err(ArgError::UnsupportedValue("-gz=".into(), "lzma".into())))]
-        );
         assert_eq!(
             parse(&["-fcf-protection=bogus"]).1,
             [Some(Err(ArgError::InvalidFlagValue("-fcf-protection=bogus".into(), "bogus".into())))]

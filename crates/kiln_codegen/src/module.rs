@@ -222,6 +222,8 @@ pub(crate) struct Cg<'a> {
     pub gi: crate::global_init::GlobalInits,
     /// TBAA node caches (`!tbaa`, `!tbaa.struct`).
     pub tbaa: crate::tbaa::TbaaCache,
+    /// Debug information (`-g`; spec/codegen.md "Debug information").
+    pub di: Option<Box<crate::debuginfo::Di<'a>>>,
 }
 
 impl<'a> Cg<'a> {
@@ -405,6 +407,7 @@ impl<'a> Cg<'a> {
                 || ast.attrs.has_kind(kiln_ast::attr::AttrKind::VISIBILITY)
                 || ast.attrs.has_kind(kiln_ast::attr::AttrKind::TYPE_VISIBILITY),
             lv_cache: std::cell::RefCell::default(),
+            di: None,
         }
     }
 
