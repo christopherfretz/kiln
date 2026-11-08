@@ -231,6 +231,19 @@ impl AttrKind {
     /// debug information treats calls to it as one unit. kiln emits no
     /// debug information, so it has no effect on the IR (WP-789).
     pub const ARTIFICIAL: AttrKind = AttrKind(185);
+    /// clang `pass_object_size(t)` / `pass_dynamic_object_size(t)` on a
+    /// pointer parameter (clang `PassObjectSizeAttr`; WP-803): `a` = the
+    /// object-size type `t` in [0, 3], `b` = 1 for the dynamic spelling.
+    /// A call passes `__builtin_[dynamic_]object_size(arg, t)` of the
+    /// argument as a hidden `size_t` argument after it, which a
+    /// compatible `__builtin_object_size` of the parameter in the body
+    /// reads; the function cannot have its address taken and overloads
+    /// one without such parameters (spec/sema-overload.md §2).
+    pub const PASS_OBJECT_SIZE: AttrKind = AttrKind(186);
+    /// clang `overloadable` on a function (`OverloadableAttr`; WP-803):
+    /// its name is mangled as C++'s even with C language linkage, and it
+    /// may overload a function with C language linkage.
+    pub const OVERLOADABLE: AttrKind = AttrKind(187);
     /// GNU `retain` on a function or variable (clang `RetainAttr`):
     /// an emitted entity is also added to `@llvm.used`, so the linker's
     /// section garbage collection keeps it (WP-805).

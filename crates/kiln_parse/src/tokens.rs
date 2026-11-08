@@ -46,10 +46,17 @@ pub enum Event {
         /// The pushed visibility (`None` for `pop`).
         push: Option<String>,
     },
-    /// A pragma clang implements and kiln does not yet (`weak`,
+    /// `#pragma weak name`.
+    PragmaWeak {
+        /// The name.
+        name: Symbol,
+        /// Its token.
+        loc: Loc,
+    },
+    /// A pragma clang implements and kiln does not yet (`weak = alias`,
     /// `clang attribute`, ...).
     UnsupportedPragma {
-        /// The pragma's name (`"weak"`, `"clang attribute"`).
+        /// The pragma's name (`"weak name = alias"`, `"clang attribute"`).
         what: String,
         /// Its first token.
         loc: Loc,

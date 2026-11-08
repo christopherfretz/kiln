@@ -96,7 +96,7 @@ functions). The class B half of cause 4 is open. Cause 5 is WP-806.
 12. pragma `STDC FENV_ACCESS ON` / `float_control(except)` / `clang fp exceptions` — no
     constrained FP. **No diagnostic.** (P-A2) **Owner: WP-806.**
 13. attr `tls_model`. (A10) **Owner: WP-807.**
-14. attr `pass_object_size` / `pass_dynamic_object_size` — hidden-parameter ABI + mangling. (A16) **Owner: WP-808.**
+14. attr `pass_object_size` / `pass_dynamic_object_size` — hidden-parameter ABI + mangling. (A16) **Fixed in WP-803.**
 15. attr `retain` (gc-sections). (A11) **Owner: fixed in WP-805.**
 16. flag `-fno-sized-deallocation` — still emits sized delete. **No diagnostic.** (F-A2) **Owner: WP-808.**
 17. flag `-fno-char8_t` — macros only. **No diagnostic.** (F-A3) **Owner: WP-808.**
@@ -198,7 +198,7 @@ system headers / with default warnings".
 | A13 | `ms_struct` / `gcc_struct` | dropped | MS bitfield layout | warn — layout/ABI | error since WP-805, unowned |
 | A14 | `transparent_union` | dropped (`__has_attribute` = 1) | clang ignores it in C++ too (`-Wignored-attributes`); the C-only effect (union passed as its first member) never applies | none in C++ | WP-805: class C row (accepted silently) |
 | A15 | `address_space(N)` | dropped | pointee in addrspace N (x86 `256`=gs, `257`=fs) | warn — gs/fs-relative accesses become flat-memory accesses | error since WP-805, unowned |
-| A16 | `pass_object_size(N)`, `pass_dynamic_object_size(N)` | dropped | hidden extra size_t parameter + different mangling (`PS`) | warn — **ABI + mangling mismatch** with clang-built objects (clang-oriented fortify headers use these; silent in sys hdr) | WP-808 (error since WP-805) |
+| A16 | `pass_object_size(N)`, `pass_dynamic_object_size(N)` | dropped | hidden extra size_t parameter + different mangling (`PS`) | warn — **ABI + mangling mismatch** with clang-built objects (clang-oriented fortify headers use these; silent in sys hdr) | fixed in WP-803 |
 | A17 | `__clang_arm_builtin_alias`, `clang_builtin_alias` | dropped | maps the declared function to a builtin | warn; silent in `arm_sve.h`/`arm_mve.h`/`arm_sme.h`/`riscv_vector.h` — functions become undefined external references (link failure, loud) | error since WP-805, unowned |
 | A18 | `[[clang::musttail]]` (statement) | dropped | guaranteed tail call (`musttail`) or error | warn — interpreters relying on guaranteed TCO overflow the stack | error since WP-805, unowned |
 | A19 | `arm_sve_vector_bits(N)` | dropped, although the driver accepts `-msve-vector-bits=` (crates/kiln_driver/src/args.rs:733) | fixed-length SVE type with sizeof = N/8 | warn — sizeof/layout differ | error since WP-805, unowned |
@@ -256,7 +256,7 @@ error at a use. `common` is a class A row, an error since WP-805 (clang rejects 
   `no_specializations`, `lifetime_capture_by`, `format_matches`, `require_explicit_initialization`.
 - **Rejection lost** (clang errors, kiln warns and continues): `error("msg")`/`warning("msg")`
   (clang: error/warning when a call survives to codegen), `unavailable` (clang rejects uses),
-  `overloadable` (clang changes mangling and allows overloading in C — C++ only: no effect),
+  `overloadable` (implemented by WP-803),
   `common` (clang: error in C++), `matrix_type`/`riscv_rvv_vector_bits` (clang errors
   without the enabling flag), `diagnose_if(..., "error")` (clang errors at matching calls).
 - target-irrelevant calling conventions on x86_64/aarch64 (`stdcall`, `fastcall`, `thiscall`,

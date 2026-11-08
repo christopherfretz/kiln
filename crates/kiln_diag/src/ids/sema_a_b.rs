@@ -144,6 +144,7 @@ sema_atomic_specifier_bad_type = Error (2) "_Atomic cannot be applied to {0:arra
 sema_attr_cond_never_constant_expr = Error (1) "{0} attribute expression never produces a constant expression";
 sema_attribute_arg_not_supported = Warning [IgnoredAttributes] (2) "{0} attribute argument not supported: {1}";
 sema_attribute_argument_out_of_range = Error (3) "{0} attribute requires integer constant between {1} and {2} inclusive";
+sema_attribute_const_pointer_args_only = Error (1) "{0} attribute only applies to constant pointer arguments";
 sema_attribute_ignored_on_type = Warning [IgnoredAttributes] (1) "attribute {0} ignored, because it cannot be applied to a type";
 sema_attribute_implicit_this_arg = Error (1) "{0} attribute is invalid for the implicit this argument";
 sema_attribute_no_effect_on_using = Warning [IgnoredAttributes] (1) "{0} currently has no effect on a using declaration";

@@ -94,6 +94,9 @@ pub(crate) struct Fx {
     pub decl: Option<DeclId>,
     pub func: Option<FuncId>,
     pub locals: FxHashMap<DeclId, Addr>,
+    /// WP-803: each `pass_object_size(N)` parameter's `N` and the slot of
+    /// its hidden `size_t` argument (clang `SizeArguments`).
+    pub object_sizes: FxHashMap<DeclId, (u32, Addr)>,
     pub ret_block: Option<Blk>,
     pub ret_slot: Option<Addr>,
     pub ret_kind: RetKind,
@@ -227,6 +230,7 @@ impl Fx {
             decl: None,
             func: None,
             locals: FxHashMap::default(),
+            object_sizes: FxHashMap::default(),
             ret_block: None,
             ret_slot: None,
             ret_kind: RetKind::Void,
@@ -496,12 +500,30 @@ impl Cg<'_> {
             } else {
                 ast.lists.iter(fd.params).collect()
             };
+        // WP-803: a `pass_object_size` parameter's hidden `size_t`
+        // argument follows it (clang `GenerateCode` adds an implicit
+        // parameter after each).
+        let object_sizes =
+            if param_decls.is_empty() { Vec::new() } else { ast.pass_object_size_params(d) };
+        let size_q = QualType::unqual(ast.types.target().size_t);
         let mut vals = Vec::with_capacity(param_decls.len());
+        let mut hidden = Vec::with_capacity(object_sizes.len());
+        let mut si = 0;
         for (i, &p) in param_decls.iter().enumerate() {
             let pq = ast.decls.get(p).ty().expect("param type");
-            let info = sig.info.args[i].clone();
+            let info = sig.info.args[si].clone();
+            si += 1;
             let loc = Some(ast.decls.get(p).loc());
             vals.push(self.prolog_arg(&info.kind, pq, &mut arg_no, loc)?);
+            if let Some(&(_, t, _)) = object_sizes.iter().find(|o| o.0 == i) {
+                let info = sig.info.args[si].clone();
+                si += 1;
+                if let ParamVal::Direct(v) =
+                    self.prolog_arg(&info.kind, size_q, &mut arg_no, loc)?
+                {
+                    hidden.push((p, t, v));
+                }
+            }
         }
         let this_class = ast.decls.get(d).ctx();
         let this_addr = this_arg.filter(|_| !self.f.naked).map(|v| {
@@ -538,6 +560,14 @@ impl Cg<'_> {
                 }
             };
             self.f.locals.insert(p, addr);
+            if let Some(&(_, t, v)) = hidden.iter().find(|h| h.0 == p) {
+                let mt = self.mty(size_q);
+                let (_, align) = self.size_align(size_q);
+                let a = self.f.fir.alloca(mt, align);
+                let addr = Addr { v: a, ty: mt, align };
+                self.store_scalar(v, addr, size_q);
+                self.f.object_sizes.insert(p, (t, addr));
+            }
             // clang `EmitParmDecl`: a parameter destroyed in the callee
             // (`isParamDestroyedInCallee`, not in a thunk) gets its
             // destructor cleanup here, run at the end of the function.

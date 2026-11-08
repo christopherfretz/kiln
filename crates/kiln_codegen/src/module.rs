@@ -1689,6 +1689,38 @@ impl<'a> Cg<'a> {
         Sig { info, fn_ty, ret, params, nothrow, this, vtt: false }
     }
 
+    /// WP-803: `sig` (of function type `fty`, variadic extras included)
+    /// with a hidden `size_t` parameter after each `pass_object_size`
+    /// parameter `ps` (clang `appendParameterTypes` /
+    /// `getExtParameterInfos`).
+    pub(crate) fn with_object_sizes(
+        &mut self,
+        sig: Sig,
+        fty: QualType,
+        ps: &[(usize, u32, bool)],
+        extern_c: bool,
+    ) -> Sig {
+        if ps.is_empty() {
+            return sig;
+        }
+        let ast = self.ast;
+        let p = *ast.types.proto(fty).expect("function prototype");
+        let size_q = QualType::unqual(ast.types.target().size_t);
+        let mut all = Vec::with_capacity(sig.params.len() + ps.len());
+        for (i, &q) in sig.params.iter().enumerate() {
+            all.push(q);
+            if ps.iter().any(|o| o.0 == i) {
+                all.push(size_q);
+            }
+        }
+        let n = ast.types.params(&p).len() + ps.len();
+        let t = sig.this.is_some();
+        let info = self.classify(sig.ret, &all, n, !extern_c, t);
+        let decl_info = self.classify(sig.ret, &all[..n], n, !extern_c, t);
+        let fn_ty = self.fn_type(&decl_info, t, p.variadic());
+        Sig { info, fn_ty, params: all, ..sig }
+    }
+
     /// The signature of a runtime library call `ret(params...)` that
     /// cannot throw and has no target declaration (clang
     /// `arrangeFreeFunctionCall` of a `noexcept` prototype; the `_Complex`

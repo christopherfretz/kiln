@@ -198,7 +198,7 @@ regression from main.
 | 20 | `incompatible operand types ('integral_constant<[...], true>' and 'integral_constant<[...], false>')` (no [expr.cond]/6 built-in candidates; hana `eval_if.hpp:59`, `support/numeric.hpp:75`) | hana | 79 | fixed, `0bfbb7d0e` | `tests/conformance/expr.cond/p6-class-arms-builtin-overload-run.cpp`, `p6-class-arms-builtin-overload-errors.cpp` |
 | 21 | `no type named 'type' in 'boost::proto::_state'` (derived-class deduction through `F<T>**` instantiated `mpl::and_<_state, ...>`; proto `template_arity`) | spirit | 95 | fixed, `50a2647c8` | `tests/conformance/temp.deduct.call/pointer-to-pointer-no-derived-class-deduction.cpp` |
 | 22 | `static_assert` failed in `integer_sequence` `equal`, and at run time `is_constructible<fusion::tuple<>, int>` is true (an empty first pack hides the expansion's other packs) | hana, fusion | 2 (+1 test) | follow-up, xfail | `crates/kiln_sema/src/templ/pack.rs:286`; `tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp` |
-| 23 | `source file is not valid UTF-8` (byte `0xA8` in a comment; clang accepts it) | spirit | 1 | follow-up, xfail | `crates/kiln_pp/src/preprocessor.rs:541`; `tests/conformance/lex.phases/invalid-utf8-in-comment-accepted-run.cpp` |
+| 23 | `source file is not valid UTF-8` (byte `0xA8` in a comment; clang accepts it) | spirit | 1 | fixed by WP-803, `2e5a0fd97` | `crates/kiln_pp/src/preprocessor.rs:541`; `tests/conformance/lex.phases/invalid-utf8-in-comment-accepted-run.cpp` |
 
 Row 18 now also covers fusion `filter_view.cpp:117`,
 `joint_view.cpp:162` and `iterator_range.cpp:98` (4 TUs in all). Row 14
@@ -239,10 +239,8 @@ fails at run time:
     (`TryExpandParameterPacks`).
   - Repro: `template<class... T> struct tup { template<class... U, class = std::enable_if_t<all<std::is_convertible_v<U, T>...>::value>> explicit tup(U&&...); };` makes `is_constructible_v<tup<>, int>` true.
 - **Divergence from the control, 5 TUs** (row 14): kiln matches clang 22.
-- **Invalid UTF-8 in a comment, 1 TU** (row 23):
-  `crates/kiln_pp/src/preprocessor.rs:541` reports every replaced
-  sequence in the file. clang reports one only where a token is lexed,
-  never in a comment.
+- **Invalid UTF-8 in a comment, 1 TU** (row 23): fixed by WP-803
+  (`2e5a0fd97`); its test no longer carries an xfail.
 - **Singles:**
   - function_types `interface_example.cpp:16` (row 15).
   - mp11 `mp_valid.cpp:49`, `UnresolvedLookupExpr` in codegen:
@@ -260,7 +258,6 @@ checked to pass under clang++-19:
 - `tests/conformance/temp.arg.template/member-alias-template-through-typedef-call-run.cpp` (row 16)
 - `tests/conformance/temp.arg.template/member-alias-template-through-typedef-pack-run.cpp` (row 17)
 - `tests/conformance/dcl.ambig.res/function-type-param-inherited-member-type-run.cpp` (row 18)
-- `tests/conformance/lex.phases/invalid-utf8-in-comment-accepted-run.cpp` (row 23)
 
 ## Disk
 

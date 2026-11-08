@@ -64,7 +64,10 @@ impl Cg<'_> {
             return err(Some(ast.decls.get(first).loc()), "function without a type");
         };
         let this = self.this_class_of(first);
-        Ok(self.sig_this(fty, mangle::is_extern_c(ast, first), this))
+        let extern_c = mangle::is_extern_c(ast, first);
+        let sig = self.sig_this(fty, extern_c, this);
+        let ps = ast.pass_object_size_params(first);
+        Ok(self.with_object_sizes(sig, fty, &ps, extern_c))
     }
 
     /// The definition of class `rd`.

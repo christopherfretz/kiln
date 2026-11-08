@@ -783,7 +783,7 @@ impl Sema<'_, '_> {
     /// The conversion function templates declared in class definition
     /// `def` (first declarations): a specialization of one is not found
     /// by name lookup, every one is considered instead ([temp.mem]/6).
-    fn conversion_templates_of(&self, def: DeclId) -> Vec<DeclId> {
+    pub(crate) fn conversion_templates_of(&self, def: DeclId) -> Vec<DeclId> {
         let mut out = Vec::new();
         for m in self.ast.decls.members(def) {
             if self.kind_of(m) == DeclKind::FunctionTemplate

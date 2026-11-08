@@ -178,14 +178,17 @@ fn check(target: &'static str, compat: u32) -> BTreeSet<&'static str> {
     let mut confirmed = BTreeSet::new();
     if compat == 22 {
         let listed: Vec<String> = unlowered_list().into_iter().map(String::from).collect();
+        let mut lowered = Vec::new();
         for (n, k) in p.callable(&listed) {
-            let rejected = p.unlowered(&[(n.clone(), k)]);
-            assert!(
-                !rejected.is_empty(),
-                "{target}: {n} lowers now: drop it from kiln_codegen::UNLOWERED_BUILTINS"
-            );
+            if p.unlowered(&[(n.clone(), k)]).is_empty() {
+                lowered.push(n.clone());
+            }
             confirmed.insert(*unlowered_list().iter().find(|&&m| m == n).unwrap());
         }
+        assert!(
+            lowered.is_empty(),
+            "{target}: these lower now: drop them from kiln_codegen::UNLOWERED_BUILTINS: {lowered:?}"
+        );
     }
     let _ = std::fs::remove_dir_all(&p.dir);
     confirmed
