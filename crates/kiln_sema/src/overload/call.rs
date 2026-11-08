@@ -43,17 +43,27 @@ impl Sema<'_, '_> {
         // is dependent): the SFINAE-selected static member templates
         // `to_char_type<C = CharType>(std::uint8_t)` of a class template
         // are resolved per instantiation (WP-668).
-        let dependent = decls.iter().any(|&d| {
-            let n = self.ast.decls.get(d);
-            (self.kind_of(d) != DeclKind::FunctionTemplate
-                && n.ty().is_some_and(|t| self.ast.types.is_dependent(t)))
-                || n.ctx().is_some_and(|c| self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX))
-        });
+        let dependent = self.overload_set_is_dependent(decls);
         let e = self.builder().unresolved_lookup_in(name, decls, adl, nns, None, dependent, loc);
         if naming.is_some() || found.iter().zip(decls).any(|(f, d)| f != d) {
             self.ovl.ule_found.insert(e, UleFound { found: found.to_vec(), naming });
         }
         e
+    }
+
+    /// Whether an overload set naming `decls` is type-dependent
+    /// ([`Self::build_overload_ref`]; clang's
+    /// `computeDependence(OverloadExpr)`), with or without explicit
+    /// template arguments: `F::ov<long>` naming the static member
+    /// templates of class template `F` is resolved per instantiation
+    /// (WP-833).
+    pub(crate) fn overload_set_is_dependent(&self, decls: &[DeclId]) -> bool {
+        decls.iter().any(|&d| {
+            let n = self.ast.decls.get(d);
+            (self.kind_of(d) != DeclKind::FunctionTemplate
+                && n.ty().is_some_and(|t| self.ast.types.is_dependent(t)))
+                || n.ctx().is_some_and(|c| self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX))
+        })
     }
 
     /// Resolves the non-dependent call of the overloaded name `callee` (an

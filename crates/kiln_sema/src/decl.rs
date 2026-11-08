@@ -6130,6 +6130,18 @@ impl Sema<'_, '_> {
         use crate::templ::auto::AutoFail;
         let (mut items, kind, lbrace) = auto_init_items(init, direct);
         self.resolve_single_overloads(&mut items);
+        // [expr.ref]/7.3.2: clang's `DeduceAutoType` deduces from a bound
+        // member function's recovered call, which leaves the initializer
+        // itself as written (so its initialization reports it again, as
+        // clang does for `auto a = g.f;`).
+        for it in items.iter_mut().flatten() {
+            if self.ety(*it) == QualType::BOUND_MEMBER {
+                *it = self.recover_not_called_as(*it, true);
+                if self.is_err_expr(*it) {
+                    return Some(QualType::ERROR);
+                }
+            }
+        }
         // A member overload set deduces in `deduce_auto` (a member
         // template-id naming one static specialization, WP-788).
         let overload = items.iter().flatten().copied().find(|&e| {

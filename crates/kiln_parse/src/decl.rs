@@ -4468,7 +4468,7 @@ impl Parser<'_, '_> {
                     self.skip_until(&[Punct::RBrace], false, true);
                     return Err(());
                 };
-                InitValue::Expr(e)
+                InitValue::Expr(self.s.act_on_init_clause(e))
             };
             if let Some(l) = self.eat(Punct::Ellipsis) {
                 // An initializer-clause pack expansion ([temp.variadic]/5.4).

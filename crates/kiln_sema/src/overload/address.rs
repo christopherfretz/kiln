@@ -777,8 +777,7 @@ impl Sema<'_, '_> {
         // bound-member type: whatever the target, it can only be called
         // ([expr.ref]/7.3.2; `CheckPlaceholderExpr` diagnoses it before
         // the conversion, WP-788).
-        let decls = self.member_overload_decls(x).to_vec();
-        if decls.iter().all(|&d| self.is_implicit_object_member(self.templated_or_self(d))) {
+        if self.member_set_needs_call(x) {
             self.diagnose_member_set_not_called(x);
             return None;
         }
@@ -1019,8 +1018,26 @@ impl Sema<'_, '_> {
     /// target for call" per member. The "did you mean to call it with no
     /// arguments?" hint follows clang's `isExprCallable`: the members
     /// callable with no arguments (a template's pattern counts) all
-    /// return the same type, and there is one.
-    pub(crate) fn diagnose_member_set_not_called(&mut self, x: ExprId) {
+    /// return the same type, and there is one; never in a SFINAE
+    /// context. True when the hint was given (clang then recovers by
+    /// the call, [`Sema::recover_not_called`]).
+    /// Whether member overload set `x` holds only implicit object member
+    /// functions: clang gives it the bound-member type, so whatever the
+    /// target it can only be called ([expr.ref]/7.3.2).
+    pub(crate) fn member_set_needs_call(&self, x: ExprId) -> bool {
+        self.member_overload_decls(x)
+            .iter()
+            .all(|&d| self.is_implicit_object_member(self.templated_or_self(d)))
+    }
+
+    pub(crate) fn diagnose_member_set_not_called(&mut self, x: ExprId) -> bool {
+        self.diagnose_member_set_not_called_as(x, false)
+    }
+
+    /// [`Self::diagnose_member_set_not_called`]; `again` exempts it from
+    /// deduplication, for the report clang repeats when the initializer
+    /// it was deduced from is then converted (`auto a = g.f;`).
+    pub(crate) fn diagnose_member_set_not_called_as(&mut self, x: ExprId, again: bool) -> bool {
         let decls = self.member_overload_decls(x).to_vec();
         let mut ret: Option<QualType> = None;
         let mut no_args = true;
@@ -1043,13 +1060,15 @@ impl Sema<'_, '_> {
                 _ => no_args = false,
             }
         }
-        let no_args = no_args && ret.is_some();
+        let no_args = no_args && ret.is_some() && !self.inst.stack.is_sfinae();
         let msg =
             self.diag(DiagId::sema_bound_member_not_called, self.eloc(x)).arg(u8::from(no_args));
+        let msg = if again { msg.allow_duplicate() } else { msg };
         let notes: Vec<Diag> = decls
             .iter()
             .map(|&d| self.diag(DiagId::note_possible_target, self.ast.decls.get(d).loc()))
             .collect();
         self.emit(notes.into_iter().fold(msg, Diag::with_note));
+        no_args
     }
 }
