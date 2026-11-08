@@ -303,6 +303,19 @@ impl Types {
         cached(&self.paths.extents, (t, rel, p), || self.extent_in(t, 0, rel, p, false))
     }
 
+    /// [`Types::extent`] of the byte at `off` of a `root` object (`past`:
+    /// one past the end of the object there) when the whole-array table
+    /// holds it: the array's first byte and its bound. `None` when the
+    /// table does not (not a fault: [`Types::extent`] decides).
+    #[inline]
+    pub(crate) fn extent_hit(&self, root: OTy, off: u64, past: bool, p: OTy) -> Option<(u64, u64)> {
+        let o = if past { off.checked_sub(1)? } else { off };
+        match self.paths.front.get(root, o, p) {
+            Some(Some((lo, n, _))) => Some((lo, n)),
+            _ => None,
+        }
+    }
+
     /// [`Types::extent`] of byte `o` (already moved back from one past
     /// the end) through the whole-array table: a hit, else the walk, whose
     /// array answer is remembered for the whole array when it is one

@@ -1278,6 +1278,14 @@ impl Memory {
     }
 
     /// The live or dead (same generation) allocation `p` designates.
+    /// Whether leaving a scope at frame mark `mark` may release a
+    /// [`flags::LIFE`]-tracked object ([`Memory::life_hi`]); the callers
+    /// of `Oven::scope_life` test it inline.
+    #[inline]
+    pub fn life_above(&self, mark: u64) -> bool {
+        self.life_frame && ((mark >> 32) as usize) < self.life_hi
+    }
+
     pub fn alloc_any(&self, p: Ptr) -> Option<&Alloc> {
         match p.space() {
             _ if p.is_fn() => None,

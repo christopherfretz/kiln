@@ -1107,7 +1107,7 @@ impl Oven {
                         }
                         continue;
                     }
-                    if self.mem.life_frame
+                    if self.mem.life_above(m as u64)
                         && let Err(f) = self.scope_life(b.ast(), m as u64, life::Objs::All)
                     {
                         fail!(f);
@@ -1181,9 +1181,9 @@ impl Oven {
                         }
                         continue;
                     }
-                    if self.mem.life_frame
-                        && let Some(fr) = self.stack.last()
+                    if let Some(fr) = self.stack.last()
                         && fr.mark != BOTTOM
+                        && self.mem.life_above(fr.mark)
                         && let Err(f) = self.scope_life(b.ast(), fr.mark, life::Objs::Locals)
                     {
                         fail!(f);
@@ -1193,7 +1193,7 @@ impl Oven {
                     let Some(fr) = self.stack.pop() else { return Ok(()) };
                     if fr.mark != BOTTOM {
                         // The caller destroys the parameters ([expr.call]/6).
-                        if self.mem.life_frame
+                        if self.mem.life_above(fr.mark)
                             && let Err(f) = self.scope_life(b.ast(), fr.mark, life::Objs::Params)
                         {
                             return Err((f, fr.ret_pc as usize));
@@ -2282,8 +2282,31 @@ impl Oven {
     pub(crate) fn ptr_add(&self, raw: u64, i: i128, elem: OTy) -> Result<u64, Fault> {
         match self.ptr_add_array(raw, i, false, elem, None) {
             Some(p) => Ok(p),
-            None => self.ptr_add_slow(raw, i, elem),
+            None => match self.ptr_add_front(raw, i, elem) {
+                Some(p) => Ok(p),
+                None => self.ptr_add_slow(raw, i, elem),
+            },
         }
+    }
+
+    /// [`Oven::ptr_add_slow`]'s step when the type table's whole-array
+    /// table already holds the extent `raw` lies in ([`Types::extent_hit`]:
+    /// an element of an array member, such as an `inplace_vector`'s
+    /// `union { T data[N]; }`) and the new index stays in `[0, n]`
+    /// (WP-760). `None` for anything else, the slow path then deciding.
+    #[inline]
+    fn ptr_add_front(&self, raw: u64, i: i128, elem: OTy) -> Option<u64> {
+        let a = self.mem.alloc_raw(raw)?;
+        let p = Ptr::decode(raw);
+        let off = u64::from(p.off);
+        let (start, n) = self.types.extent_hit(a.ty, off, p.past, elem)?;
+        let es = self.types.size(elem).max(1);
+        let new = i128::from((off - start) / es).checked_add(i)?;
+        if new < 0 || new > i128::from(n) {
+            return None;
+        }
+        let new = new as u64;
+        Some(Ptr::with_off(raw, start + new * es, new == n))
     }
 
     /// The `PtrAdd` op's inline step: `raw + v` within an array allocation
@@ -2867,23 +2890,55 @@ impl Oven {
     /// allocation root to the `len`-byte object of type `ty` at `raw`.
     /// `Ok` answers are remembered ([`umemo`], WP-760).
     fn union_path(&self, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
-        let p = Ptr::decode(raw);
-        let Some(a) = self.alloc_any(p) else { return Ok(()) };
-        let akey = Ptr::alloc_key(raw);
-        let stamp = umemo::Stamp { epoch: self.mem.union_epoch, rebuilt: self.types.rebuilt() };
-        if self.umemo.hit(umemo::Walk::Access, akey, a.ty, ty, p.off, stamp) {
+        let Some(a) = self.alloc_any(Ptr::decode(raw)) else { return Ok(()) };
+        self.union_path_in(a.ty, raw, ty, k)
+    }
+
+    /// [`Oven::union_path`] in an allocation of type `aty`: nothing to
+    /// check when no union overlaps the accessed object.
+    #[inline]
+    fn union_path_in(&self, aty: OTy, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+        if !self.union_overlaps(aty, Ptr::decode(raw).off, ty) {
             return Ok(());
         }
-        if let Some(cover) = self.union_walk(a.ty, raw, ty, k)? {
-            self.umemo.put(umemo::Walk::Access, akey, a.ty, ty, cover, stamp);
+        self.union_path_memo(aty, raw, ty, k)
+    }
+
+    /// [`Oven::union_path_in`] past its overlap test: the memo, else the
+    /// walk.
+    #[inline(never)]
+    fn union_path_memo(&self, aty: OTy, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+        let p = Ptr::decode(raw);
+        let akey = Ptr::alloc_key(raw);
+        let stamp = umemo::Stamp { epoch: self.mem.union_epoch, rebuilt: self.types.rebuilt() };
+        if self.umemo.hit(umemo::Walk::Access, akey, aty, ty, p.off, stamp) {
+            return Ok(());
+        }
+        if let Some(cover) = self.union_walk(aty, raw, ty, k)? {
+            self.umemo.put(umemo::Walk::Access, akey, aty, ty, cover, stamp);
         }
         Ok(())
+    }
+
+    /// Whether a union subobject of an object of type `aty` may overlap
+    /// the object of type `ty` at offset `off`: `false` when the object
+    /// lies outside the bytes spanning them ([`crate::ty::TyInfo::uhull`]), so no
+    /// union is on the path to it and [`Oven::union_walk`] has nothing to
+    /// check; and for the object of type `aty` itself, the walk's first
+    /// step.
+    #[inline]
+    fn union_overlaps(&self, aty: OTy, off: u32, ty: OTy) -> bool {
+        let (ulo, uhi) = self.types.info(aty).uhull;
+        let lo = u64::from(off);
+        let hi = lo + self.types.size(ty).max(1);
+        lo < u64::from(uhi) && u64::from(ulo) < hi && !(off == 0 && ty == aty)
     }
 
     /// [`Oven::union_path`]'s walk from `root` (the type of `raw`'s
     /// allocation): on success, the offsets the same answer covers, or
     /// `None` when the answer depends on the access kind `k` (a fault
     /// path that lets the access through) and must not be remembered.
+    #[inline(never)]
     fn union_walk(
         &self,
         root: OTy,
@@ -3019,7 +3074,8 @@ impl Oven {
     /// The checks of a load from an allocation with unions or with
     /// `mutable` members it may not read (outlined from the hot path).
     #[cold]
-    fn slow_access(&self, fl: u8, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+    fn slow_access(&self, a: &Alloc, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+        let fl = a.flags;
         // A write is checked in an object that is not `const`: the one
         // `Oven::has_constant_destruction` destroys, whose `mutable`
         // members are outside their lifetime.
@@ -3027,7 +3083,7 @@ impl Oven {
             self.mutable_path(raw, ty, k)?;
         }
         if fl & flags::HAS_UNION != 0 {
-            self.union_path(raw, ty, k)?;
+            self.union_path_in(a.ty, raw, ty, k)?;
         }
         Ok(())
     }
@@ -3061,7 +3117,7 @@ impl Oven {
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) = self.rmw_check(raw, len, ty, k)?;
         if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
-            self.slow_access(a.flags, raw, ty, k)?;
+            self.slow_access(a, raw, ty, k)?;
         }
         let sp = self.mem.space(st);
         if !sp.is_init(abs, len) {
@@ -3098,13 +3154,14 @@ impl Oven {
             return Err(fault(f));
         }
         let has_union = a.flags & flags::HAS_UNION != 0;
+        let aty = a.ty;
         let mutable = a.flags & (flags::MUTABLE_OUTSIDE | flags::CONST) == flags::MUTABLE_OUTSIDE;
         if mutable && !init {
             self.mutable_path(raw, ty, k)?;
         }
         self.mem.trial_write(raw, len).map_err(fault)?;
         if has_union {
-            self.union_path(raw, ty, k)?;
+            self.union_path_in(aty, raw, ty, k)?;
         }
         // A pointer keeps its `void *` tag in its mark (`kbc::VOID_TAG`).
         let mark = if !is_ptr {
@@ -3126,7 +3183,7 @@ impl Oven {
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) = self.rmw_check(raw, n, ty, k)?;
         if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
-            self.slow_access(a.flags, raw, ty, k)?;
+            self.slow_access(a, raw, ty, k)?;
         }
         let sp = self.mem.space(st);
         if !sp.is_init(abs, n) {
@@ -3183,13 +3240,14 @@ impl Oven {
             return Err(fault(f));
         }
         let has_union = a.flags & flags::HAS_UNION != 0;
+        let aty = a.ty;
         let mutable = a.flags & (flags::MUTABLE_OUTSIDE | flags::CONST) == flags::MUTABLE_OUTSIDE;
         if mutable && !init {
             self.mutable_path(raw, ty, k)?;
         }
         self.mem.trial_write(raw, n).map_err(fault)?;
         if has_union {
-            self.union_path(raw, ty, k)?;
+            self.union_path_in(aty, raw, ty, k)?;
         }
         if width == 0 {
             return Ok(());
@@ -3851,7 +3909,7 @@ impl Oven {
                 return Err(Fault::Mem { f: MemFault::Lifetime, ak: ak::MEMBER_CALL, ty, p: raw });
             }
             if a.flags & flags::HAS_UNION != 0 {
-                self.union_path(raw, ty, ak::MEMBER_CALL)?;
+                self.union_path_in(a.ty, raw, ty, ak::MEMBER_CALL)?;
             }
             return self.member_call_life(raw, ty);
         }
@@ -3876,9 +3934,10 @@ impl Oven {
             // is not active is checked as an access ("destruction of
             // member 's' of union with no active member").
             if self.cxx_year >= 2026
-                && self.alloc_any(Ptr::decode(raw)).is_some_and(|a| a.flags & flags::HAS_UNION != 0)
+                && let Some(a) = self.alloc_any(Ptr::decode(raw))
+                && a.flags & flags::HAS_UNION != 0
             {
-                self.union_path(raw, ty, ak::DESTROY)?;
+                self.union_path_in(a.ty, raw, ty, ak::DESTROY)?;
             }
         }
         if aux & 2 != 0 {

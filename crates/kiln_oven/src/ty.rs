@@ -94,6 +94,10 @@ pub(crate) struct TyInfo {
     pub has_mutable: bool,
     /// Union subobjects at fixed offsets: `union_pos[upos.0..upos.1]`.
     pub upos: (u32, u32),
+    /// The bytes `[lo, hi)` spanning every union subobject in `upos`
+    /// (`(0, 0)` without one; [`Types::union_hull`]): an access outside
+    /// them crosses no union (WP-760).
+    pub uhull: (u32, u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -520,6 +524,21 @@ impl Types {
         self.rebuilt
     }
 
+    /// The bytes spanning the union subobjects `union_pos[a..b]`
+    /// ([`TyInfo::uhull`]), clamped to `u32` offsets.
+    fn union_hull(&self, a: u32, b: u32) -> (u32, u32) {
+        let us = &self.union_pos[a as usize..b as usize];
+        let lo = us.iter().map(|&(o, _)| o).min();
+        let hi = us.iter().map(|&(o, u)| o.saturating_add(self.size(u).max(1))).max();
+        match (lo, hi) {
+            (Some(lo), Some(hi)) => {
+                let c = |v: u64| u32::try_from(v).unwrap_or(u32::MAX);
+                (c(lo), c(hi))
+            }
+            _ => (0, 0),
+        }
+    }
+
     pub fn unions(&self, t: OTy) -> &[(u64, OTy)] {
         let (a, b) = self.info(t).upos;
         &self.union_pos[a as usize..b as usize]
@@ -651,6 +670,7 @@ impl Types {
             has_vptr: e.has_vptr,
             has_mutable: e.has_mutable,
             upos: (start, end),
+            uhull: self.union_hull(start, end),
         });
         self.arrays.insert((elem, n), t);
         t
@@ -688,6 +708,7 @@ impl Types {
             has_vptr: false,
             has_mutable: false,
             upos: (0, 0),
+            uhull: (0, 0),
         })
     }
 
@@ -789,6 +810,7 @@ impl Types {
                     has_vptr: e.has_vptr,
                     has_mutable: e.has_mutable,
                     upos: (start, end),
+                    uhull: self.union_hull(start, end),
                 });
                 let _ = self.const_arrays.insert((elem, a.size), t);
                 t
@@ -1125,6 +1147,7 @@ impl Types {
                 has_vptr,
                 has_mutable,
                 upos: (ustart, uend),
+                uhull: self.union_hull(ustart, uend),
             });
             self.nv_views.insert(me, view);
             // The view holds the same non-virtual bases, empty ones included.
@@ -1160,6 +1183,7 @@ impl Types {
         let ustart = self.union_pos.len() as u32;
         self.union_pos.extend(upos);
         let uend = self.union_pos.len() as u32;
+        let uhull = self.union_hull(ustart, uend);
         let info = &mut self.infos[me.0 as usize];
         info.kind = TyKind::Record { decl: def, union, first, count };
         info.has_union = has_union;
@@ -1167,6 +1191,7 @@ impl Types {
         info.has_vptr = has_vptr;
         info.has_mutable = has_mutable;
         info.upos = (ustart, uend);
+        info.uhull = uhull;
         self.index_fields(me);
         if let Some(&view) = self.nv_views.get(&me) {
             self.index_fields(view);
