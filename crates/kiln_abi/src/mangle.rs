@@ -396,6 +396,11 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
     if !is_file_context(ast, first) {
         return false;
     }
+    // clang `internal_linkage` (a class's too: clang
+    // `isInternalLinkageDecl` mangles it with `L`).
+    if ast.has_internal_linkage_attr(first) {
+        return true;
+    }
     match n.kind() {
         DeclKind::Function => {
             ast.decls.function(first).is_some_and(|f| f.spec.storage() == FnStorage::Static)
@@ -579,7 +584,7 @@ fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
         // (`getLVForClassMember`, `getLVForLocalDecl`).
         return false;
     }
-    if in_anon_ns(ast, d) {
+    if in_anon_ns(ast, d) || ast.has_internal_linkage_attr(d) {
         return false;
     }
     // A class template specialization takes the linkage of its template
@@ -619,7 +624,7 @@ fn is_file_context(ast: &Ast, d: DeclId) -> bool {
 /// linkage.
 pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
     let first = ast.first(d);
-    if internal_by_storage(ast, first) {
+    if internal_by_storage(ast, first) || ast.has_internal_linkage_attr(first) {
         return true;
     }
     // A namespace-scope function or variable of an unnamed namespace
@@ -754,7 +759,9 @@ pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
     if ast.decls.decomp_bindings(d).is_some() {
         return false;
     }
-    if is_extern_c(ast, d) {
+    // An `overloadable` function is always mangled (clang
+    // `shouldMangleCXXName`), even with C language linkage.
+    if is_extern_c(ast, d) && !ast.is_overloadable(d) {
         return true;
     }
     match n.kind() {
@@ -1389,7 +1396,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let ast = self.ast;
         let n = ast.decls.get(d);
         let is_fn = is_function_kind(n.kind());
-        if is_fn && (is_extern_c(ast, d) || (decl_name(ast, d) == "main" && in_global_ns(ast, d))) {
+        if is_fn
+            && ((is_extern_c(ast, d) && !ast.is_overloadable(d))
+                || (decl_name(ast, d) == "main" && in_global_ns(ast, d)))
+        {
             // Unmangled functions appear in local names by source name only.
             self.source_name(&decl_name(ast, d));
             return;
@@ -1587,8 +1597,18 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if params.is_empty() && !p.variadic() {
             self.out.push('v');
         }
-        for q in params {
+        // `pass_object_size(N)` is a vendor qualifier on the parameter
+        // type (clang `mangleBareFunctionType`): `U17pass_object_size1`.
+        let ps = ast.pass_object_size_params(src);
+        for (i, q) in params.into_iter().enumerate() {
             self.ty(self.param_type(q));
+            if let Some(&(_, t, dynamic)) = ps.iter().find(|p| p.0 == i) {
+                let a = if dynamic { "pass_dynamic_object_size" } else { "pass_object_size" };
+                self.out.push('U');
+                self.out.push_str(&(a.len() + 1).to_string());
+                self.out.push_str(a);
+                self.out.push_str(&t.to_string());
+            }
         }
         self.fn_depth = saved;
         if p.variadic() {
@@ -1703,7 +1723,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if let Some((t, args)) = self.spec_of(c) {
             // A variable template specialization: <template-prefix>
             // <template-args> (clang `mangleClosurePrefix`).
-            self.template_prefix(t, stop, Structor::Complete);
+            self.template_prefix(t, stop, Structor::Complete, None);
             self.template_args(args);
         } else {
             if let Some(p) = self.parent(c) {
@@ -1735,7 +1755,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             // <unscoped-name> / <unscoped-template-name> <template-args>
             let std = !at_top;
             if let Some((t, args)) = spec {
-                self.unscoped_template(t, std);
+                self.unscoped_template(t, std, Some(d));
                 self.template_args_of(t, args);
             } else {
                 if std {
@@ -1751,7 +1771,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.method_quals(d);
         let p = parent.expect("nested name has a parent");
         if let Some((t, args)) = spec {
-            self.template_prefix(t, stop, v);
+            self.template_prefix(t, stop, v, Some(d));
             self.template_args_of(t, args);
         } else {
             self.prefix(p, stop);
@@ -1831,7 +1851,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             return;
         }
         if let Some((t, args)) = self.spec_of(dc) {
-            self.template_prefix(t, stop, Structor::Complete);
+            self.template_prefix(t, stop, Structor::Complete, Some(dc));
             self.template_args(args);
         } else {
             if let Some(c) = self.closure_prefix_decl(dc) {
@@ -1839,6 +1859,8 @@ impl<'a, 'b> Mangler<'a, 'b> {
             } else if let Some(p) = self.parent(dc) {
                 self.prefix(p, stop);
             }
+            // A class with clang `internal_linkage`.
+            self.l_prefix(dc);
             self.unqualified(dc, Structor::Complete);
         }
         self.subs.push(key);
@@ -1846,8 +1868,15 @@ impl<'a, 'b> Mangler<'a, 'b> {
 
     /// <template-prefix> of template `t` within a nested name.
     /// `v` is the structor variant of a constructor template
-    /// specialization (`C1`/`C2`).
-    fn template_prefix(&mut self, t: DeclId, stop: Option<DeclId>, v: Structor) {
+    /// specialization (`C1`/`C2`); `spec` the specialization named,
+    /// whose internal linkage at namespace scope gives the name its `L`.
+    fn template_prefix(
+        &mut self,
+        t: DeclId,
+        stop: Option<DeclId>,
+        v: Structor,
+        spec: Option<DeclId>,
+    ) {
         if self.try_std_abbrev(t) {
             return;
         }
@@ -1861,13 +1890,18 @@ impl<'a, 'b> Mangler<'a, 'b> {
         // A nested template name takes no implicit tags (clang's
         // `mangleTemplatePrefix` is not passed them; an unscoped one is).
         let extra = self.extra_tags.take();
+        if let Some(spec) = spec {
+            self.l_prefix(spec);
+        }
         self.unqualified(t, v);
         self.extra_tags = extra;
         self.subs.push(key);
     }
 
-    /// <unscoped-template-name> of template `t` (`St`-prefixed in `std`).
-    fn unscoped_template(&mut self, t: DeclId, std: bool) {
+    /// <unscoped-template-name> of template `t` (`St`-prefixed in `std`;
+    /// `L`-prefixed when `spec`, the specialization named, has internal
+    /// linkage, clang `isInternalLinkageDecl`).
+    fn unscoped_template(&mut self, t: DeclId, std: bool, spec: Option<DeclId>) {
         if self.try_std_abbrev(t) {
             return;
         }
@@ -1877,6 +1911,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
         }
         if std {
             self.out.push_str("St");
+        }
+        if let Some(spec) = spec {
+            self.l_prefix(spec);
         }
         self.unqualified(t, Structor::Complete);
         self.subs.push(key);

@@ -13,6 +13,7 @@ mod consteval_block;
 mod contracts;
 mod decl;
 mod expr;
+mod fp_pragma;
 pub mod keywords;
 mod lambda;
 mod loop_hint;
@@ -85,6 +86,8 @@ pub struct ParseOptions {
     pub no_builtin_fns: Vec<String>,
     /// `-f[no-]sized-deallocation` ([`kiln_sema::Sema::sized_deallocation`]).
     pub sized_deallocation: bool,
+    /// `-f[no-]math-errno` ([`kiln_sema::Sema::math_errno`]).
+    pub math_errno: bool,
     /// The `AArch64` `sve` target feature (`-march=armv8-a+sve`;
     /// [`kiln_sema::Sema::sve`]).
     pub sve: bool,
@@ -127,6 +130,7 @@ impl Default for ParseOptions {
             no_builtin: false,
             no_builtin_fns: Vec::new(),
             sized_deallocation: true,
+            math_errno: true,
             sve: false,
             cfg_dump: false,
             cfg_stats: false,
@@ -296,6 +300,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.no_builtin_fns.clone_from(&opts.no_builtin_fns);
     s.sized_deallocation = opts.sized_deallocation;
     s.lib_builtin_name = kiln_pp::is_library_builtin;
+    s.math_errno = opts.math_errno;
     s.sve = opts.sve;
     s.cfg_dump = opts.cfg_dump;
     s.cfg_stats = opts.cfg_stats;

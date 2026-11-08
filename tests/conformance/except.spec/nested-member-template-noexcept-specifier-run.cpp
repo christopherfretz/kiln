@@ -5,7 +5,6 @@
 // and `f`'s is first needed while `call`'s noexcept-specifier is being
 // instantiated. Boost.HOF `fold` and `reverse_fold` (`v_fold`) hit this.
 //@ expect: run
-//@ xfail(kiln): WP-787 follow-up, a member template's exception specification instantiated inside another noexcept-specifier comes out potentially-throwing
 //@ stdout: 1 1
 extern "C" int printf(const char*, ...);
 struct V {

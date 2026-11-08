@@ -1274,7 +1274,8 @@ impl Oven {
                 | Op::CatchBegin
                 | Op::ContractSkip
                 | Op::ContractFail
-                | Op::ContractTrial => {
+                | Op::ContractTrial
+                | Op::Fold => {
                     (pc, fb) = self.run_cold(b, op, pc, fb)?;
                 }
             }
@@ -1825,6 +1826,15 @@ impl Oven {
                     Err(f) => fail!(f),
                 }
                 pc = arg!(2);
+            }
+            Op::Fold => {
+                if aux == 1 {
+                    reg!(0) = u128::from(self.run.fold);
+                    self.run.fold = true;
+                } else {
+                    self.run.fold = reg!(0) != 0;
+                }
+                pc += 2;
             }
             Op::ContractSkip => {
                 if self.run.contracts_off {

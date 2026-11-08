@@ -470,6 +470,9 @@ pub struct StmtArena {
     asms: Vec<AsmData>,
     asm_operands: Vec<AsmOperand>,
     coros: Vec<CoroutineBodyData>,
+    /// The FP pragma overrides compound statements record (index 0: none;
+    /// WP-806, spec/codegen.md "Floating-point semantics").
+    fp_overrides: Vec<crate::fp::FpOverride>,
 }
 
 impl Default for StmtArena {
@@ -537,6 +540,7 @@ impl Default for StmtArena {
                 return_on_alloc_failure: None,
                 param_moves: ListId::EMPTY,
             }],
+            fp_overrides: vec![crate::fp::FpOverride::NONE],
         }
     }
 }
@@ -598,6 +602,20 @@ impl StmtArena {
     }
     pub(crate) fn push_coro(&mut self, x: CoroutineBodyData) -> u32 {
         push_side(&mut self.coros, x)
+    }
+    /// The index of FP override `o` in the table (0 for none; equal
+    /// overrides share an index).
+    pub(crate) fn intern_fp(&mut self, o: crate::fp::FpOverride) -> u16 {
+        if o.is_empty() {
+            return 0;
+        }
+        if let Some(i) = self.fp_overrides.iter().position(|x| *x == o) {
+            return i as u16;
+        }
+        // 7 mask bits x 3 contraction modes bound the distinct overrides.
+        assert!(self.fp_overrides.len() < u16::MAX as usize, "FP override space exhausted");
+        self.fp_overrides.push(o);
+        (self.fp_overrides.len() - 1) as u16
     }
     pub(crate) fn push_asm(&mut self, mut x: AsmData, ops: &[AsmOperand]) -> u32 {
         x.operands = self.asm_operands.len() as u32;
@@ -739,6 +757,13 @@ impl StmtArena {
     /// The statements of a `CompoundStmt` (a `ListId` of `StmtId`s).
     pub fn compound_body(&self, s: StmtId) -> ListId {
         ListId::new(self.expect(s, &[StmtKind::CompoundStmt]).a)
+    }
+
+    /// The FP pragma override in effect in a `CompoundStmt`, relative to
+    /// the command line (WP-806; [`crate::fp::FpOverride::NONE`] when no
+    /// pragma applies).
+    pub fn compound_fp(&self, s: StmtId) -> crate::fp::FpOverride {
+        self.fp_overrides[self.expect(s, &[StmtKind::CompoundStmt]).aux as usize]
     }
 
     /// The `}` of a `CompoundStmt`.

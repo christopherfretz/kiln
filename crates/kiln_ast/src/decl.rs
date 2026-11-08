@@ -4072,6 +4072,113 @@ pub mod builtin {
         by_name(&format!("__builtin_{name}"))
     }
 
+    /// The math function a library or `__builtin_` name names, without
+    /// its `__builtin_` prefix and its `f` / `l` / `f16` / `f128` type
+    /// suffix (`__builtin_sqrtf` -> `sqrt`); `None` if not one of
+    /// `bases`.
+    fn math_base<'a>(name: &'a str, bases: &[&str]) -> Option<&'a str> {
+        let n = name.strip_prefix("__builtin_").unwrap_or(name);
+        if bases.contains(&n) {
+            return Some(n);
+        }
+        ["f128", "f16", "f", "l"]
+            .iter()
+            .find_map(|s| n.strip_suffix(s))
+            .filter(|b| bases.contains(b))
+    }
+
+    /// WP-806: clang 19's `ConstIgnoringErrnoAndExceptions` (`e`) math
+    /// builtins: under `-fno-math-errno` the function (library or
+    /// `__builtin_` form, any type suffix) gets an implicit `ConstAttr`
+    /// (clang `Sema::AddKnownFunctionAttributes`).
+    pub fn const_without_errno(name: &str) -> bool {
+        const BASES: &[&str] = &[
+            "acos",
+            "acosh",
+            "asin",
+            "asinh",
+            "atan",
+            "atan2",
+            "atanh",
+            "cos",
+            "cosh",
+            "erf",
+            "erfc",
+            "exp",
+            "exp2",
+            "exp10",
+            "expm1",
+            "fdim",
+            "fmod",
+            "hypot",
+            "ilogb",
+            "ldexp",
+            "llrint",
+            "llround",
+            "log",
+            "log10",
+            "log1p",
+            "log2",
+            "logb",
+            "lrint",
+            "lround",
+            "nextafter",
+            "nexttoward",
+            "pow",
+            "remainder",
+            "scalbln",
+            "scalbn",
+            "sin",
+            "sinh",
+            "sqrt",
+            "tan",
+            "tanh",
+            "tgamma",
+        ];
+        math_base(name, BASES).is_some()
+    }
+
+    /// How an errno-setting math builtin lowers when `errno` is off
+    /// (clang `EmitBuiltinExpr`'s `GenerateIntrinsics` cases).
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum ErrnoIntrinsic {
+        /// The elementwise `llvm.<base>` intrinsic with this many operands.
+        Fp(&'static str, usize),
+        /// `frem` (`fmod`).
+        Frem,
+        /// `llvm.ldexp.T.i32` (the `__builtin_` forms only).
+        Ldexp,
+        /// `llvm.<base>.R.T`, an integer result (`lround`, `lrint`, ...).
+        ToInt(&'static str),
+    }
+
+    /// WP-806: the intrinsic the math builtin `name` (library or
+    /// `__builtin_` form) lowers to without `errno` (clang 19
+    /// `EmitBuiltinExpr`; clang 22 adds `atan2`, `clang22`). `ldexp` and
+    /// `exp10` lower in their `__builtin_` form only.
+    pub fn errno_intrinsic(name: &str, clang22: bool) -> Option<ErrnoIntrinsic> {
+        const UNARY: &[&str] = &[
+            "acos", "asin", "atan", "cos", "cosh", "exp", "exp2", "exp10", "log", "log10", "log2",
+            "sin", "sinh", "sqrt", "tan", "tanh",
+        ];
+        const OTHER: &[&str] =
+            &["atan2", "pow", "fmod", "ldexp", "lround", "llround", "lrint", "llrint"];
+        let builtin = name.starts_with("__builtin_");
+        if let Some(b) = math_base(name, UNARY) {
+            let b = UNARY.iter().find(|&&u| u == b)?;
+            return (builtin || *b != "exp10").then_some(ErrnoIntrinsic::Fp(b, 1));
+        }
+        let b = *OTHER.iter().find(|&&u| Some(u) == math_base(name, OTHER))?;
+        Some(match b {
+            "atan2" if clang22 => ErrnoIntrinsic::Fp("atan2", 2),
+            "pow" => ErrnoIntrinsic::Fp("pow", 2),
+            "fmod" => ErrnoIntrinsic::Frem,
+            "ldexp" if builtin => ErrnoIntrinsic::Ldexp,
+            "lround" | "llround" | "lrint" | "llrint" => ErrnoIntrinsic::ToInt(b),
+            _ => return None,
+        })
+    }
+
     /// WP-150: the remaining GCC integer builtins (`ffs`, `parity`,
     /// `clrsb`, `bitreverse`, `rotate*`) and memory builtins. All but
     /// `memset`/`mempcpy` are constant-evaluated (clang 19 `Constexpr`).
@@ -4948,9 +5055,16 @@ pub mod builtin {
     /// arguments are a `va_list` (WP-282).
     pub fn printf_format(id: u32) -> Option<(u16, u16)> {
         Some(match id {
-            SPRINTF => (2, 3),
-            SNPRINTF => (3, 4),
-            VSNPRINTF => (3, 0),
+            // WP-803: the `__*_chk` rows are clang `PrintfFormat` /
+            // `VPrintfFormat` indices + 1.
+            SPRINTF | PRINTF_CHK => (2, 3),
+            SNPRINTF | FPRINTF_CHK => (3, 4),
+            VSNPRINTF | VFPRINTF_CHK => (3, 0),
+            SPRINTF_CHK => (4, 5),
+            SNPRINTF_CHK => (5, 6),
+            VSPRINTF_CHK => (4, 0),
+            VSNPRINTF_CHK => (5, 0),
+            VPRINTF_CHK => (2, 0),
             _ => return None,
         })
     }
@@ -5152,6 +5266,60 @@ pub mod builtin {
     /// thread pointer, `llvm.thread.pointer`; never a constant.
     pub const THREAD_POINTER: u32 = 2180;
 
+    // WP-803: the `_FORTIFY_SOURCE` checking builtins (clang 19
+    // `Builtins.td` `__builtin___*_chk`; kiln-private ids). Each is a call
+    // of the library function its name less `__builtin_` names, except a
+    // `memcpy` / `memmove` / `memset` one whose size and object size are
+    // constants with size <= object size, which lowers as the unchecked
+    // builtin (clang `EmitBuiltinExpr`).
+    /// `__builtin___memcpy_chk`.
+    pub const MEMCPY_CHK: u32 = 2181;
+    /// `__builtin___memmove_chk`.
+    pub const MEMMOVE_CHK: u32 = 2182;
+    /// `__builtin___mempcpy_chk`.
+    pub const MEMPCPY_CHK: u32 = 2183;
+    /// `__builtin___memset_chk`.
+    pub const MEMSET_CHK: u32 = 2184;
+    /// `__builtin___memccpy_chk`.
+    pub const MEMCCPY_CHK: u32 = 2185;
+    /// `__builtin___stpcpy_chk`.
+    pub const STPCPY_CHK: u32 = 2186;
+    /// `__builtin___strcat_chk`.
+    pub const STRCAT_CHK: u32 = 2187;
+    /// `__builtin___strcpy_chk`.
+    pub const STRCPY_CHK: u32 = 2188;
+    /// `__builtin___stpncpy_chk`.
+    pub const STPNCPY_CHK: u32 = 2189;
+    /// `__builtin___strncat_chk`.
+    pub const STRNCAT_CHK: u32 = 2190;
+    /// `__builtin___strncpy_chk`.
+    pub const STRNCPY_CHK: u32 = 2191;
+    /// `__builtin___strlcat_chk`.
+    pub const STRLCAT_CHK: u32 = 2192;
+    /// `__builtin___strlcpy_chk`.
+    pub const STRLCPY_CHK: u32 = 2193;
+    /// `__builtin___snprintf_chk`.
+    pub const SNPRINTF_CHK: u32 = 2194;
+    /// `__builtin___sprintf_chk`.
+    pub const SPRINTF_CHK: u32 = 2195;
+    /// `__builtin___vsnprintf_chk`.
+    pub const VSNPRINTF_CHK: u32 = 2196;
+    /// `__builtin___vsprintf_chk`.
+    pub const VSPRINTF_CHK: u32 = 2197;
+    /// `__builtin___fprintf_chk`.
+    pub const FPRINTF_CHK: u32 = 2198;
+    /// `__builtin___printf_chk`.
+    pub const PRINTF_CHK: u32 = 2199;
+    /// `__builtin___vfprintf_chk`.
+    pub const VFPRINTF_CHK: u32 = 2200;
+    /// `__builtin___vprintf_chk`.
+    pub const VPRINTF_CHK: u32 = 2201;
+
+    /// Whether `id` is one of the WP-803 `__builtin___*_chk` builtins.
+    pub fn is_chk(id: u32) -> bool {
+        (MEMCPY_CHK..=VPRINTF_CHK).contains(&id)
+    }
+
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
     pub static EXTRA: &[Info] = &[
@@ -5198,6 +5366,28 @@ pub mod builtin {
         row(START_LIFETIME, "__builtin_start_lifetime", "v.", N | T),
         // WP-782.
         row(THREAD_POINTER, "__builtin_thread_pointer", "v*", N),
+        // WP-803.
+        row(MEMCPY_CHK, "__builtin___memcpy_chk", "v*v*vC*zz", N | F),
+        row(MEMMOVE_CHK, "__builtin___memmove_chk", "v*v*vC*zz", N | F),
+        row(MEMPCPY_CHK, "__builtin___mempcpy_chk", "v*v*vC*zz", N | F),
+        row(MEMSET_CHK, "__builtin___memset_chk", "v*v*izz", N | F),
+        row(MEMCCPY_CHK, "__builtin___memccpy_chk", "v*v*vC*izz", N),
+        row(STPCPY_CHK, "__builtin___stpcpy_chk", "c*c*cC*z", N | F),
+        row(STRCAT_CHK, "__builtin___strcat_chk", "c*c*cC*z", N | F),
+        row(STRCPY_CHK, "__builtin___strcpy_chk", "c*c*cC*z", N | F),
+        row(STPNCPY_CHK, "__builtin___stpncpy_chk", "c*c*cC*zz", N | F),
+        row(STRNCAT_CHK, "__builtin___strncat_chk", "c*c*cC*zz", N | F),
+        row(STRNCPY_CHK, "__builtin___strncpy_chk", "c*c*cC*zz", N | F),
+        row(STRLCAT_CHK, "__builtin___strlcat_chk", "zc*cC*zz", N | F),
+        row(STRLCPY_CHK, "__builtin___strlcpy_chk", "zc*cC*zz", N | F),
+        row(SNPRINTF_CHK, "__builtin___snprintf_chk", "ic*RzizcC*R.", F),
+        row(SPRINTF_CHK, "__builtin___sprintf_chk", "ic*RizcC*R.", F),
+        row(VSNPRINTF_CHK, "__builtin___vsnprintf_chk", "ic*RzizcC*Ra", F),
+        row(VSPRINTF_CHK, "__builtin___vsprintf_chk", "ic*RizcC*Ra", F),
+        row(FPRINTF_CHK, "__builtin___fprintf_chk", "iP*RicC*R.", F),
+        row(PRINTF_CHK, "__builtin___printf_chk", "iicC*R.", F),
+        row(VFPRINTF_CHK, "__builtin___vfprintf_chk", "iP*RicC*Ra", F),
+        row(VPRINTF_CHK, "__builtin___vprintf_chk", "iicC*Ra", F),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19

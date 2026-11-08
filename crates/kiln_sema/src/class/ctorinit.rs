@@ -114,6 +114,11 @@ impl Sema<'_, '_> {
             if let Initializer::Paren(es, ..) = &mut info.init {
                 *es = self.dependent_args(es);
             }
+            if let MemInitId::Ident(name) = info.id
+                && let Some(ty) = self.mem_init_bound_typedef(ctor, name)
+            {
+                info.id = MemInitId::Type(ty);
+            }
             self.mem_inits.pattern.push(info);
             self.cleanup = super::CleanupState::default();
             return;
@@ -191,6 +196,31 @@ impl Sema<'_, '_> {
     /// so it is never constant-evaluated ([temp.inst]; WP-374).
     pub(crate) fn instantiated_mem_inits_failed(&self, ctor: DeclId) -> bool {
         self.mem_inits.ctor == Some(ctor) && self.mem_inits.any_errors
+    }
+
+    /// The type an unqualified mem-initializer-id of a constructor in a
+    /// template is bound to at its definition ([temp.res.general]/1): a
+    /// typedef found outside the constructor's class when that class has a
+    /// dependent base and declares nothing of the name. The instantiation
+    /// does not look it up again, where a member of the now-known base
+    /// could hide it (`_Alloc_hider : allocator_type` with an allocator
+    /// that has a member function `allocator_type`; WP-803).
+    fn mem_init_bound_typedef(&mut self, ctor: DeclId, name: Symbol) -> Option<QualType> {
+        let class = self.ast.decls.get(ctor).ctx()?;
+        let def = self.class_def(class);
+        if !self.has_dependent_bases(def)
+            || !self.lookup_in(def, name, LookupKind::Ordinary).decls.is_empty()
+        {
+            return None;
+        }
+        match self.classify_name(name, None) {
+            crate::NameClass::Type(ty, d)
+                if matches!(self.kind_of(d), DeclKind::Typedef | DeclKind::TypeAlias) =>
+            {
+                Some(ty)
+            }
+            _ => None,
+        }
     }
 
     /// The definition-time check of an unqualified mem-initializer-id of a

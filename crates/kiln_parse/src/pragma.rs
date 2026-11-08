@@ -21,15 +21,15 @@ use crate::tokens::{Event, LoopHintInfo};
 
 /// Pragmas clang knows and kiln accepts without effect on the
 /// translation unit (codegen hints and `#pragma comment`).
-const IGNORED: &[&str] = &["comment", "float_control", "unused", "omp"];
+const IGNORED: &[&str] = &["comment", "unused", "omp"];
 
 /// Pragmas clang knows that change the meaning of the translation unit
 /// and that kiln does not implement yet.
-const UNSUPPORTED: &[&str] = &["align", "options", "ms_struct", "weak", "redefine_extname"];
+const UNSUPPORTED: &[&str] = &["align", "options", "ms_struct", "redefine_extname"];
 
 /// `#pragma clang ...` pragmas accepted without effect.
 const CLANG_IGNORED: &[&str] =
-    &["diagnostic", "fp", "optimize", "max_tokens_here", "max_tokens_total", "__debug"];
+    &["diagnostic", "optimize", "max_tokens_here", "max_tokens_total", "__debug"];
 
 /// `#pragma clang ...` pragmas kiln does not implement yet.
 const CLANG_UNSUPPORTED: &[&str] = &["attribute", "section"];
@@ -47,23 +47,25 @@ pub(crate) struct PragmaCx<'x, 'sm> {
     pub interner: &'x Interner,
     pub sm: &'sm SourceManager,
     pub lex_opts: &'x LexOptions,
+    /// The macros defined where the pragma is (a macro-expanded operand).
+    pub macros: &'x kiln_pp::MacroTable,
 }
 
 impl PragmaCx<'_, '_> {
     /// The identifier spelling of `t`, if it is an identifier (keywords
     /// included).
-    fn word(&self, t: Option<&Token>) -> Option<&str> {
+    pub(crate) fn word(&self, t: Option<&Token>) -> Option<&str> {
         match t?.kind {
             TokKind::Identifier(s) => Some(self.interner.as_str(s)),
             _ => None,
         }
     }
 
-    fn report(&self, id: DiagId, loc: Loc) {
+    pub(crate) fn report(&self, id: DiagId, loc: Loc) {
         Diag::new(id, Span::empty(loc)).emit(self.diags);
     }
 
-    fn report_what(&self, id: DiagId, what: &str, loc: Loc) {
+    pub(crate) fn report_what(&self, id: DiagId, what: &str, loc: Loc) {
         Diag::new(id, Span::empty(loc)).arg(what).emit(self.diags);
     }
 }
@@ -102,6 +104,7 @@ pub(crate) fn classify(
                 ("GCC", "unroll") => unroll_hint(cx, "unroll", start, loc, &rest[1..], end),
                 ("GCC", "nounroll") => unroll_hint(cx, "nounroll", start, loc, &rest[1..], end),
                 ("clang", "loop") => clang_loop(cx, start, loc, &rest[1..], end),
+                ("clang", "fp") => crate::fp_pragma::clang_fp(cx, loc, &rest[1..], end),
                 // Validated by the preprocessor; the warning state is not
                 // applied per location yet (spec/parse.md §2.3).
                 ("GCC", "diagnostic") => None,
@@ -115,13 +118,18 @@ pub(crate) fn classify(
                 }
             }
         }
-        "STDC" => {
-            if !cx.word(rest.first()).is_some_and(|s| STDC.contains(&s)) {
+        "STDC" => match cx.word(rest.first()) {
+            Some(s) if STDC.contains(&s) => {
+                crate::fp_pragma::stdc(cx, s, rest[0].span.lo, &rest[1..], end)
+            }
+            _ => {
                 let at = rest.first().map_or(end, |t| t.span.lo);
                 cx.report(DiagId::parse_pragma_stdc_unknown, at);
+                None
             }
-            None
-        }
+        },
+        "float_control" => crate::fp_pragma::float_control(cx, loc, rest, end),
+        "weak" => weak(cx, loc, rest, end),
         "unroll" => unroll_hint(cx, "unroll", start, loc, rest, end),
         "nounroll" => unroll_hint(cx, "nounroll", start, loc, rest, end),
         "unroll_and_jam" => unroll_hint(cx, "unroll_and_jam", start, loc, rest, end),
@@ -151,6 +159,26 @@ fn pack(cx: &PragmaCx<'_, '_>, loc: Loc, rest: &[Token], end: Loc) -> Option<Eve
         args.push_str(&kiln_lex::spelling(cx.sm, t, cx.lex_opts));
     }
     Some(Event::PragmaPack { loc, args })
+}
+
+/// `#pragma weak name` (clang's `PragmaWeakHandler`); `loc` is the
+/// `weak` token. A missing identifier, or tokens after it, are ignored
+/// with a warning; the alias form `#pragma weak name = alias` is not
+/// supported yet.
+fn weak(cx: &PragmaCx<'_, '_>, loc: Loc, rest: &[Token], end: Loc) -> Option<Event> {
+    let at = |i: usize| rest.get(i).map_or(end, |t| t.span.lo);
+    let Some(TokKind::Identifier(name)) = rest.first().map(|t| t.kind) else {
+        cx.report_what(DiagId::parse_pragma_expected_identifier, "weak", at(0));
+        return None;
+    };
+    if rest.get(1).is_some_and(|t| t.kind == TokKind::Punct(Punct::Equal)) {
+        return Some(Event::UnsupportedPragma { what: "weak name = alias".to_owned(), loc });
+    }
+    if rest.len() > 1 {
+        cx.report_what(DiagId::parse_pragma_extra_tokens, "weak", at(1));
+        return None;
+    }
+    Some(Event::PragmaWeak { name, loc: rest[0].span.lo })
 }
 
 /// `#pragma GCC visibility push(v)` / `pop` (clang's
@@ -353,6 +381,7 @@ impl Parser<'_, '_> {
                     self.loop_hints.push((before, hints));
                 }
             }
+            Event::FpPragma { before, pragma } => self.queue_fp_pragma(before, pragma),
             Event::UnsupportedPragma { what, loc } => self.s.act_on_unsupported_pragma(&what, loc),
             // clang's `ActOnPragmaVisibility`; sema applies the pushed
             // visibility to the declarations that follow.
@@ -365,6 +394,7 @@ impl Parser<'_, '_> {
                 }
             }
             Event::Visibility { loc, push: None } => self.s.act_on_pragma_visibility(None, loc),
+            Event::PragmaWeak { name, loc } => self.s.act_on_pragma_weak(name, loc),
         }
     }
 }

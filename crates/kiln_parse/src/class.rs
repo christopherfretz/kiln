@@ -26,6 +26,7 @@ use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
 
 use crate::decl::{is_deduction_guide, is_untyped_special};
+use crate::fp_pragma::FpAt;
 use crate::keywords::Kw;
 use crate::parser::{Parser, quote};
 use kiln_sema::templ::auto::AutoGroup;
@@ -593,6 +594,7 @@ impl Parser<'_, '_> {
                 self.parse_member_declaration();
                 self.s.act_on_end_abbreviated();
             }
+            self.take_fp_pragmas(FpAt::Class(self.class_key_name()));
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
             // clang `ParseCXXMemberSpecification`: GNU attributes after
             // the `}` appertain to the class.
@@ -1140,21 +1142,30 @@ impl Parser<'_, '_> {
     /// The member-declarations that a leading token decides (empty
     /// declarations, access specifiers, `static_assert`, `using`,
     /// templates): parses one and returns true, or returns false.
+    /// The class-key of the class being defined, as clang's
+    /// `err_pragma_misplaced_in_decl` names it.
+    fn class_key_name(&self) -> &'static str {
+        let tag = self.late.last().and_then(|c| self.s.ast.decls.record(c.record));
+        match tag.map(|r| r.tag) {
+            Some(kiln_ast::decl::TagKind::Class) => "class",
+            Some(kiln_ast::decl::TagKind::Union) => "union",
+            _ => "struct",
+        }
+    }
+
     fn parse_member_declaration_leader(&mut self) -> bool {
         self.skip_extension_before_using();
         let loc = self.loc();
-        // A loop-hint pragma in a class (clang
+        // A loop-hint or FP pragma in a class (clang
         // `ParseCXXClassMemberDeclarationWithPragmas`): only the pragma is
         // skipped.
         if let Some(h) = self.take_loop_hints() {
-            let tag = self.late.last().and_then(|c| self.s.ast.decls.record(c.record));
-            let tag = match tag.map(|r| r.tag) {
-                Some(kiln_ast::decl::TagKind::Class) => "class",
-                Some(kiln_ast::decl::TagKind::Union) => "union",
-                _ => "struct",
-            };
+            let tag = self.class_key_name();
             let d = self.s.diag(DiagId::parse_pragma_misplaced_in_decl, h[0].start).arg(tag);
             self.emit(d);
+            return true;
+        }
+        if self.take_fp_pragmas(FpAt::Class(self.class_key_name())) {
             return true;
         }
         match (Self::punct_of(self.tok()), self.kw()) {
@@ -2294,9 +2305,10 @@ impl Parser<'_, '_> {
             let pack_expansion = self.eat(Punct::Ellipsis).is_some();
             return Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs });
         }
-        let Ok(q) = self.parse_nested_name() else {
+        let Ok(qual) = self.parse_nested_name_nns() else {
             return None;
         };
+        let q = qual.map(|q| q.ctx);
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_class_name);
             return None;
@@ -2307,6 +2319,17 @@ impl Parser<'_, '_> {
         // not hide the class (clang's `getTypeName` with `isClassName`
         // looks it up as a nested-name-specifier name).
         let NameClass::Type(ty, d) = self.s.classify_nested_name(name, q) else {
+            // `N::B` with `N` a member class of the current instantiation
+            // that has a dependent base: a member of an unknown
+            // specialization ([temp.dep.type]/6), looked up at
+            // instantiation (oneTBB's `const_accessor : node::scoped_type`;
+            // WP-803).
+            if let Some(ty) = qual.and_then(|qual| {
+                self.s.act_unknown_specialization_type(qual, name, TagKeyword::None, id_loc)
+            }) {
+                let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+                return Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs });
+            }
             self.s.error(DiagId::parse_expected_class_name, id_loc);
             return None;
         };

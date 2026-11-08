@@ -610,6 +610,8 @@ pub(crate) enum InstKind {
     Cast {
         op: CastOp,
         flags: Flags,
+        /// Fast-math flags (`fpext`/`fptrunc`, LLVM 20+).
+        fmf: FastMath,
         val: Value,
     },
     Alloca {

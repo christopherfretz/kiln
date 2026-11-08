@@ -100,3 +100,7 @@ Performance (kept apart from correctness):
 - P1.
 - kiln warns "unknown attribute 'flatten' ignored" on glaze's
   `[[gnu::flatten]]`, which clang knows (no effect on the result).
+- Checked by WP-802: the WP-797 follow-up "`v4{v2, v2}` vector init
+  rejected" is not a kiln bug. clang 19 and 22 reject it too (a leading
+  vector element copy-initializes the whole vector in C++). Pinned by
+  `tests/conformance/ext.vector/list-init-shorter-vector-element-rejected.cpp`.

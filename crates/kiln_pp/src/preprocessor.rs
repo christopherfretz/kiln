@@ -193,6 +193,9 @@ pub(crate) struct FileFrame<'a> {
     pub(crate) mi: MiOpt,
     /// The file of an imported unit: the importer's saved state.
     pub(crate) unit: Option<Box<crate::modules::UnitSave>>,
+    /// Locations of the U+FFFD replacing invalid UTF-8 (ascending; empty
+    /// for a valid file): reported when a token covers one.
+    pub(crate) bad_utf8: Vec<Loc>,
 }
 
 /// A macro expansion or a token stream being read.
@@ -537,13 +540,17 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         if system {
             self.sm.set_file_kind(base, file_kind(system, extern_c));
         }
-        if self.entered.insert(file) {
-            for r in &self.sm.load_report(file).replacements {
-                let at = base.with_offset(r.offset);
-                Diag::new(DiagId::lex_invalid_utf8, Span::new(at, at.with_offset(3)))
-                    .emit(self.diags);
-            }
-        }
+        self.entered.insert(file);
+        // Invalid UTF-8 is an error only in a token: clang accepts it in
+        // a comment (`-Winvalid-utf8`, off by default), so it is reported
+        // by `lex_raw_from` rather than here (WP-803).
+        let bad_utf8 = self
+            .sm
+            .load_report(file)
+            .replacements
+            .iter()
+            .map(|r| base.with_offset(r.offset))
+            .collect();
         let mut lx = Lexer::new(self.sm, self.interner, file, base, self.lex_opts);
         if self.comment_handler.is_some() {
             lx.set_record_comments(true);
@@ -561,6 +568,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             marker_depth: 0,
             mi: MiOpt::default(),
             unit: None,
+            bad_utf8,
         })));
         self.file_change(FileChange::Enter { file, from, system, extern_c });
     }
@@ -668,6 +676,16 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         } else {
             crate::profile::count!(raw_tokens);
             let t = f.lx.next();
+            if !f.bad_utf8.is_empty() && !self.quiet_lex {
+                let first = f.bad_utf8.partition_point(|&at| at < t.span.lo);
+                let bad: Vec<Loc> =
+                    f.bad_utf8[first..].iter().copied().take_while(|&at| at < t.span.hi).collect();
+                for at in bad {
+                    Diag::new(DiagId::lex_invalid_utf8, Span::new(at, at.with_offset(3)))
+                        .emit(self.diags);
+                }
+            }
+            let Frame::File(f) = &mut self.frames[i] else { unreachable!() };
             let comments = if f.lx.has_comments() { f.lx.take_comments() } else { Vec::new() };
             if !f.lx.diagnostics().is_empty() {
                 let ds = f.lx.take_diagnostics();

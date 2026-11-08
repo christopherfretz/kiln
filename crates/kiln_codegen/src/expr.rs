@@ -1498,6 +1498,9 @@ impl Cg<'_> {
     /// clang `tryEmitFMulAdd` (`-ffp-contract=on`): fuse an unused `fmul`
     /// operand of an `fadd`/`fsub` into `llvm.fmuladd`.
     fn try_fmuladd(&mut self, l: V, r: V, sub: bool) -> Option<V> {
+        if !self.contract_on() {
+            return None;
+        }
         let nl = self.peek_fneg(l);
         let nr = self.peek_fneg(r);
         let lm = nl.unwrap_or(l);
@@ -3111,6 +3114,13 @@ impl Cg<'_> {
     /// result statement (the last non-null one, through labels) is
     /// evaluated as the value.
     pub(crate) fn emit_stmt_expr(&mut self, e: ExprId) -> R<Option<V>> {
+        let fp = self.enter_fp(self.ast.exprs.stmt_expr_body(e));
+        let r = self.emit_stmt_expr_in(e);
+        self.leave_fp(fp);
+        r
+    }
+
+    fn emit_stmt_expr_in(&mut self, e: ExprId) -> R<Option<V>> {
         let ast = self.ast;
         let body = ast.exprs.stmt_expr_body(e);
         if ast.types.is_void(ast.exprs.get(e).ty()) {
@@ -3319,7 +3329,7 @@ impl Cg<'_> {
         // (clang `EmitDirectCallee`, `HasAttributeNoBuiltin`).
         if let Some(d) = direct
             && let Some(id) = ast.decls.builtin_id(d).or_else(|| {
-                crate::builtins::lib_intrinsic(ast, d).filter(|_| !self.no_builtin_here(d))
+                crate::builtins::lib_intrinsic(self, d).filter(|_| !self.no_builtin_here(d))
             })
         {
             match self.emit_builtin(id, e)? {
@@ -3380,8 +3390,31 @@ impl Cg<'_> {
             self.psabi_call_check(e, d, &args, false);
             self.alloc_call_attrs(d, &vals, &mut extra, &mut ret_extra);
         }
-        let r =
-            self.call_vals_ret(&sig, callee, fid, None, &vals, &args, dest, &extra, &ret_extra)?;
+        // WP-803: a hidden `size_t` argument after each `pass_object_size`
+        // argument (clang `EmitCallArgs`).
+        let ps = direct.map(|d| ast.pass_object_size_params(d)).unwrap_or_default();
+        let (mut cvals, mut cargs) = (Vec::new(), Vec::new());
+        if !ps.is_empty() {
+            (cvals, cargs) = (vals.clone(), args.clone());
+            for &(i, t, dynamic) in ps.iter().rev() {
+                if let (Some(&a), Some(&CallArg::Scalar(v))) = (args.get(i), vals.get(i)) {
+                    let s = self.pass_object_size_arg(a, v, t, dynamic);
+                    cvals.insert(i + 1, CallArg::Scalar(s));
+                    cargs.insert(i + 1, a);
+                }
+            }
+            sig = self.with_object_sizes(sig, fty, &ps, extern_c);
+        }
+        let (cv, ca) = if ps.is_empty() { (&vals, &args) } else { (&cvals, &cargs) };
+        let mark = self.f.fir.inst_count();
+        let r = self.call_vals_ret(&sig, callee, fid, None, cv, ca, dest, &extra, &ret_extra)?;
+        // WP-806: a library builtin's call takes the FP scope's fast-math
+        // flags (clang `EmitBuiltinExpr`'s `CGFPOptionsRAII`).
+        if let (Some(d), Some(f)) = (direct, fid)
+            && (ast.decls.builtin_id(d).is_some() || ast.decls.lib_builtin(d).is_some())
+        {
+            self.f.fir.mark_scope_calls(mark, f);
+        }
         if let (Some(d), Some(p)) = (direct, r) {
             self.alloc_align_assume(d, &vals, p);
         }
@@ -4737,7 +4770,9 @@ impl Cg<'_> {
         let q = ast.decls.get(d).ty().expect("var type");
         if self.is_vla(q) {
             let init = v.init.filter(|&i| !ast.is_trivial_default_construction(i));
-            return self.emit_vla_var(d, q, init);
+            self.emit_vla_var(d, q, init)?;
+            self.push_cleanup_attr(d);
+            return Ok(());
         }
         // clang `EmitAutoVarAlloca`: `EmitVariablyModifiedType` (a pointer
         // or reference to a variable length array).
@@ -4800,6 +4835,7 @@ impl Cg<'_> {
             };
             self.push_cleanup(c);
         }
+        self.push_cleanup_attr(d);
         Ok(())
     }
 

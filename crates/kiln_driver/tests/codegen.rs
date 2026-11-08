@@ -916,6 +916,7 @@ fn codegen_flags_classes() {
         &["-gz=zlib"],
         &["-fno-trapv"],
         &["-fno-short-enums"],
+        &["-ffp-model=precise"],
         // The common hardening set together, at -O2.
         &[
             "-O2",
@@ -988,6 +989,63 @@ fn codegen_flags_rejected() {
             (o.status.code(), text(&o.stderr)),
             (Some(1), format!("kiln++: error: {want}\n"))
         );
+    }
+}
+
+/// spec/driver.md "Floating-point flags" (WP-806): flags whose final
+/// effect needs the floating-point environment ([cfenv.syn]) or promoted
+/// complex division are driver errors, never ignored; a later flag that
+/// restores the default clears the error.
+#[test]
+fn fp_environment_flags_rejected() {
+    let d = scratch("fpenv-rej");
+    std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
+    for (flags, want) in [
+        (&["-frounding-math"][..], "'-frounding-math' is not supported by kiln"),
+        (
+            &["-ffp-exception-behavior=strict"],
+            "'-ffp-exception-behavior=strict' is not supported by kiln",
+        ),
+        (
+            &["-ffp-exception-behavior=maytrap"],
+            "'-ffp-exception-behavior=maytrap' is not supported by kiln",
+        ),
+        (&["-ffp-model=strict"], "'-ffp-model=strict' is not supported by kiln"),
+        // `precise` keeps `strict`'s rounding and exception behavior.
+        (
+            &["-ffp-model=strict", "-ffp-model=precise"],
+            "'-ffp-model=strict' is not supported by kiln",
+        ),
+        (&["-ffp-eval-method=double"], "'-ffp-eval-method=double' is not supported by kiln"),
+        (
+            &["-ffp-model=fast"],
+            "'-ffp-model=fast (promoted complex arithmetic; add -fcomplex-arithmetic=basic)' is not supported by kiln",
+        ),
+        (
+            &["-fclang-compat=19", "-ffp-model=aggressive"],
+            "unsupported argument 'aggressive' to option '-ffp-model='",
+        ),
+    ] {
+        let mut args = flags.to_vec();
+        args.extend(["-c", "m.cpp", "-o", "r.o"]);
+        let o = kiln_in(&d, &args);
+        assert_eq!(
+            (o.status.code(), text(&o.stderr)),
+            (Some(1), format!("kiln++: error: {want}\n")),
+            "{flags:?}"
+        );
+    }
+    for flags in [
+        &["-frounding-math", "-fno-rounding-math"][..],
+        &["-ffp-model=strict", "-fno-rounding-math", "-ffp-exception-behavior=ignore"],
+        &["-ffp-model=fast", "-fcx-limited-range"],
+        &["-fclang-compat=19", "-ffp-model=fast"],
+        &["-ffp-model=aggressive"],
+    ] {
+        let mut args = flags.to_vec();
+        args.extend(["-c", "m.cpp", "-o", "a.o"]);
+        let o = kiln_in(&d, &args);
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{flags:?}");
     }
 }
 

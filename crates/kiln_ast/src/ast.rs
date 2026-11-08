@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use kiln_source::symbol::Interner;
 
-use crate::attr::AttrArena;
+use crate::attr::{AttrArena, AttrNode};
 use crate::class::{ClassCache, ClassVirtuals, CmpCategories, VTableLayout};
 use crate::consts::ConstStore;
 use crate::decl::{
@@ -656,6 +656,35 @@ impl Ast {
         })
     }
 
+    /// WP-803: the `pass_object_size` of parameter `p` (clang
+    /// `PassObjectSizeAttr`): its object-size type and whether it is the
+    /// dynamic spelling.
+    pub fn pass_object_size(&self, p: DeclId) -> Option<(u32, bool)> {
+        self.lists
+            .iter::<crate::ids::AttrId>(self.attrs.of_decl(p))
+            .map(|a| self.attrs.get(a))
+            .find(|n| n.kind == crate::attr::AttrKind::PASS_OBJECT_SIZE)
+            .map(|n| (n.a, n.b != 0))
+    }
+
+    /// WP-803: `(index, type, dynamic)` of each parameter of function `d`
+    /// with a `pass_object_size` (each takes a hidden `size_t` argument
+    /// after it).
+    pub fn pass_object_size_params(&self, d: DeclId) -> Vec<(usize, u32, bool)> {
+        let Some(f) = self.decls.function(d) else { return Vec::new() };
+        let params = self.lists.iter::<DeclId>(f.params);
+        params
+            .enumerate()
+            .filter_map(|(i, p)| self.pass_object_size(p).map(|(t, y)| (i, t, y)))
+            .collect()
+    }
+
+    /// WP-803: some declaration of `d` is `overloadable` (clang
+    /// `OverloadableAttr`).
+    pub fn is_overloadable(&self, d: DeclId) -> bool {
+        self.any_redecl_has(d, crate::attr::AttrKind::OVERLOADABLE)
+    }
+
     /// Whether some declaration of `d` carries `attr`.
     fn any_redecl_has(&self, d: DeclId, attr: crate::attr::AttrKind) -> bool {
         self.redecls_of(d).any(|r| {
@@ -663,6 +692,39 @@ impl Ast {
                 .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
                 .any(|a| self.attrs.get(a).kind == attr)
         })
+    }
+
+    /// Whether some declaration of `d`, or of the pattern it was
+    /// instantiated from, carries clang `internal_linkage` (an inheritable
+    /// attribute: clang `computeLVForDecl` gives the entity internal
+    /// linkage).
+    pub fn has_internal_linkage_attr(&self, d: DeclId) -> bool {
+        self.inherited_attr(d, crate::attr::AttrKind::INTERNAL_LINKAGE).is_some()
+    }
+
+    /// The first `kind` attribute on a declaration of `d` (in declaration
+    /// order), else on one of the pattern it was instantiated from: an
+    /// inheritable attribute (clang `mergeDeclAttributes`).
+    pub fn inherited_attr(&self, d: DeclId, kind: crate::attr::AttrKind) -> Option<AttrNode> {
+        let mut d = d;
+        // Each step leaves one level of instantiation.
+        for _ in 0..64 {
+            let redecls: Vec<DeclId> = self.redecls_of(d).collect();
+            let found = redecls.iter().rev().find_map(|&r| {
+                self.lists
+                    .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
+                    .map(|a| *self.attrs.get(a))
+                    .find(|n| n.kind == kind)
+            });
+            if found.is_some() {
+                return found;
+            }
+            match self.instantiated_from(self.first(d)) {
+                Some(p) if p != d => d = p,
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// Whether `d` is a weak declaration (clang `Decl::isWeak`): some

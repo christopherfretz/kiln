@@ -613,7 +613,7 @@ impl Cg<'_> {
         let bc = self.bin(BinOp::FMul, fl, b, c);
         let re = self.bin(BinOp::FSub, fl, ac, bd);
         let im = self.bin(BinOp::FAdd, fl, ad, bc);
-        if self.opts.complex_range != ComplexRange::Full {
+        if self.complex_range() != ComplexRange::Full {
             return Ok((re, im));
         }
         let cont = self.f.fir.create_block();
@@ -649,6 +649,17 @@ impl Cg<'_> {
         Ok((rp, ip))
     }
 
+    /// The complex range in the current FP scope: `#pragma STDC
+    /// CX_LIMITED_RANGE ON` is `basic`, `OFF` `full` (clang
+    /// `ActOnPragmaCXLimitedRange`), else the command line's.
+    fn complex_range(&self) -> ComplexRange {
+        match self.f.fp_ovr.cx_limited {
+            Some(true) => ComplexRange::Basic,
+            Some(false) => ComplexRange::Full,
+            None => self.opts.complex_range,
+        }
+    }
+
     /// A conditional branch with clang's unlikely branch weights
     /// (`MDBuilder::createUnlikelyBranchWeights`: 1 to 2^20 - 1).
     fn unlikely_br(&mut self, c: V, t: crate::fir::Blk, f: crate::fir::Blk) -> R<()> {
@@ -678,7 +689,7 @@ impl Cg<'_> {
                 return Ok((re, self.bin(BinOp::FDiv, fl, b, c)));
             };
             let b = b.unwrap_or_else(|| V::C(self.m.const_zero(t)));
-            match self.opts.complex_range {
+            match self.complex_range() {
                 ComplexRange::Full => {}
                 ComplexRange::Improved => return Ok(self.cx_div_smith(t, a, b, c, d)),
                 ComplexRange::Basic => return Ok(self.cx_div_algebraic(true, a, b, c, d)),

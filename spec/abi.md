@@ -784,7 +784,13 @@ points, thunks and method indices are clang's.
   as `T_`-style template parameters at the lambda's level). An unnumbered
   one mangles as an unnamed class, `$_N`, from the module's
   `AnonIds` table (clang `getAnonymousStructId`: per function for a
-  class in a function, else one module-wide counter). A closure created
+  class in a function, else one module-wide counter), numbered in
+  first-mangled order: codegen names an internal-linkage definition when
+  it is deferred, as clang `EmitGlobal` does, so a closure in a later
+  template argument of an earlier internal function takes its `$_N`
+  before the closures in that function's body (WP-802,
+  `expr.prim.lambda.closure/internal-closure-name-numbering-run.cpp`).
+  A closure created
   in a default argument of a function's parameter mangles in that
   function's local scope with `d [<number>] _` (the parameter counted
   from the last, clang `mangleLocalName`); one created in the initializer
@@ -1157,7 +1163,9 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   (clang `AddPotentialArgAccess`). `tests/codegen/complex_math_builtins.cpp`.
 - **Deviations.** `-fcomplex-arithmetic=promoted` (clang widens a
   division's operands to the next type with twice the exponent range,
-  warning when none exists) is rejected with "unsupported argument";
+  warning when none exists) is rejected with "unsupported argument", and
+  clang 22's `-ffp-model=fast`, which selects it, with
+  `drv_unsupported_flag` (spec/driver.md "Floating-point flags");
   clang's `-Woverriding-option` warnings between complex-range flags are
   not issued. `_Complex _Float16` is supported (`ext.complex/complex-half.cpp`).
   `_Complex __bf16` (spelled directly or through a type-name, as
@@ -1482,6 +1490,15 @@ another `### 8.NN`: it is its own file, `spec/landed/abi/WP-NNN.md`
 above), so open pull requests never conflict on this chapter
 (spec/README.md "Landed sections"). They are as normative as this file;
 read that directory after the last numbered subsection above.
+
+### 8.28 Landed (WP-803): `pass_object_size` and `overloadable`
+A function declared `overloadable` is mangled even with C language
+linkage (clang `shouldMangleCXXName`). A `pass_object_size(t)` parameter
+appends the vendor qualifier `U17pass_object_size<t>`
+(`U25pass_dynamic_object_size<t>`) after the parameter's type in the
+`<bare-function-type>` (clang `mangleBareFunctionType`; `mangle.rs`
+`bare_function_type`), e.g. `_Z5namedPKcU17pass_object_size0i`. The
+hidden `size_t` arguments are not part of the mangled type.
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386

@@ -729,7 +729,7 @@ impl<'a> Cg<'a> {
         if self.is_explicit_inst_declaration(first) || self.held.contains(&first) {
             return Ok(());
         }
-        if !self.discardable_fn(d) {
+        if !self.discardable_fn(d) || self.is_ctor_dtor_fn(d) {
             // A definition owned by an imported named-module unit (its
             // purview or its global module fragment) belongs to that
             // unit's object file (spec/modules.md §7).
@@ -748,6 +748,12 @@ impl<'a> Cg<'a> {
             if mangle::asm_label(ast, first).is_some() {
                 let name = mangle::mangle_decl(ast, &mut self.anon, first);
                 self.note_rep(&name, first);
+            } else if self.fn_internal(first) {
+                // So it names an internal one: the `$_N` of an unnamed
+                // class in its name (a closure in a template argument)
+                // is allocated here, in clang's first-mangled order
+                // ([`mangle::AnonIds`]). An external name has no `$_N`.
+                let _ = mangle::mangle_decl(ast, &mut self.anon, first);
             }
             self.deferred.insert(first, d);
             self.alias_target_needed(first)?;
@@ -792,6 +798,17 @@ impl<'a> Cg<'a> {
                 DeclKind::CXXConstructor | DeclKind::CXXDestructor if explicit => {
                     if let Some(def) = ast.definition(m) {
                         self.emit_global_structor(def)?;
+                    }
+                }
+                // clang `DeclMustBeEmitted`: an in-class GNU `constructor`
+                // / `destructor` member function of a class that is not
+                // a template specialization (WP-807).
+                DeclKind::CXXMethod
+                    if ast.decls.get(d).kind() == DeclKind::CXXRecord
+                        && self.is_ctor_dtor_fn(m) =>
+                {
+                    if let Some(def) = ast.definition(m).filter(|&x| x == m) {
+                        self.emit_global_fn(def)?;
                     }
                 }
                 // Any out-of-class redeclaration of a static data member
@@ -1740,6 +1757,39 @@ impl<'a> Cg<'a> {
         Sig { info, fn_ty, ret, params, nothrow, this, vtt: false, cc, no_csr }
     }
 
+    /// WP-803: `sig` (of function type `fty`, variadic extras included)
+    /// with a hidden `size_t` parameter after each `pass_object_size`
+    /// parameter `ps` (clang `appendParameterTypes` /
+    /// `getExtParameterInfos`).
+    pub(crate) fn with_object_sizes(
+        &mut self,
+        sig: Sig,
+        fty: QualType,
+        ps: &[(usize, u32, bool)],
+        extern_c: bool,
+    ) -> Sig {
+        if ps.is_empty() {
+            return sig;
+        }
+        let ast = self.ast;
+        let p = *ast.types.proto(fty).expect("function prototype");
+        let size_q = QualType::unqual(ast.types.target().size_t);
+        let mut all = Vec::with_capacity(sig.params.len() + ps.len());
+        for (i, &q) in sig.params.iter().enumerate() {
+            all.push(q);
+            if ps.iter().any(|o| o.0 == i) {
+                all.push(size_q);
+            }
+        }
+        let n = ast.types.params(&p).len() + ps.len();
+        let t = sig.this.is_some();
+        let (cc, va) = (sig.cc, p.variadic());
+        let info = self.classify(sig.ret, &all, n, !extern_c, t, cc, va);
+        let decl_info = self.classify(sig.ret, &all[..n], n, !extern_c, t, cc, va);
+        let fn_ty = self.fn_type(&decl_info, t, p.variadic());
+        Sig { info, fn_ty, params: all, ..sig }
+    }
+
     /// The signature of a runtime library call `ret(params...)` that
     /// cannot throw and has no target declaration (clang
     /// `arrangeFreeFunctionCall` of a `noexcept` prototype; the `_Complex`
@@ -1908,11 +1958,12 @@ impl<'a> Cg<'a> {
                 }
                 ret.push(Attr::Flag(if *signed { AttrKind::SExt } else { AttrKind::ZExt }));
             }
-            ArgKind::Direct { .. } => {
+            ArgKind::Direct { coerce, .. } => {
                 if sig.info.ret.noundef {
                     ret.push(Attr::Flag(AttrKind::NoUndef));
                 }
                 self.ref_attrs(sig.ret, &mut ret);
+                ret.extend(self.no_fp_class(sig.ret, coerce, false));
             }
             ArgKind::Ignore => {}
         }
@@ -1941,6 +1992,9 @@ impl<'a> Cg<'a> {
                 s.push(Attr::Flag(AttrKind::NoUndef));
             }
             self.ref_attrs(sig.params[i], &mut s);
+            if let ArgKind::Direct { coerce, flatten, .. } = &a.kind {
+                s.extend(self.no_fp_class(sig.params[i], coerce, *flatten));
+            }
             match &a.kind {
                 ArgKind::Extend { signed, .. } => {
                     s.push(Attr::Flag(if *signed { AttrKind::SExt } else { AttrKind::ZExt }));
@@ -1973,6 +2027,42 @@ impl<'a> Cg<'a> {
         }
         let ret = self.m.attr_set(&ret);
         (ret, params)
+    }
+
+    /// `nofpclass(nan inf)` on an FP value passed as `coerce` (a
+    /// flattened struct when `flat`) under `-ffinite-math-only` and its
+    /// parts (clang `canApplyNoFPClass`, `getNoFPClassTestMask`; WP-806).
+    fn no_fp_class(&self, q: QualType, coerce: &IrType, flat: bool) -> Option<Attr> {
+        use kiln_llvm::fp_class;
+        fn fp_ty(mut c: &IrType) -> bool {
+            while let IrType::Array(e, _) = c {
+                c = e;
+            }
+            if let IrType::Vector(e, _) | IrType::ScalableVector(e, _) = c {
+                c = e;
+            }
+            matches!(
+                c,
+                IrType::Half
+                    | IrType::BFloat
+                    | IrType::Float
+                    | IrType::Double
+                    | IrType::X86Fp80
+                    | IrType::Fp128
+            )
+        }
+        let fp = self.opts.fp;
+        let mask =
+            if fp.nnan { fp_class::NAN } else { 0 } | if fp.ninf { fp_class::INF } else { 0 };
+        let t = &self.ast.types;
+        if mask == 0 || !(t.is_floating(q) || t.element(q).is_some_and(|e| t.is_floating(e))) {
+            return None;
+        }
+        let ok = match coerce {
+            IrType::Struct(fs, _) => flat && fs.iter().all(fp_ty),
+            c => fp_ty(c),
+        };
+        ok.then_some(Attr::NoFpClass(mask))
     }
 
     /// The size attributes of `-Os` (`optsize`) and `-Oz` (`optsize
@@ -2096,7 +2186,7 @@ impl<'a> Cg<'a> {
         if self.opts.null_pointer_is_valid {
             out.push(Attr::Flag(AttrKind::NullPointerIsValid));
         }
-        out.push(Attr::string("no-trapping-math", "true"));
+        self.fp_fn_attrs(out);
         out.push(Attr::string("stack-protector-buffer-size", "8"));
         let tune = self.opts.tune_cpu.as_deref();
         // `-march=native`: no `target-cpu`, the backend's `-mcpu=native`.
@@ -2539,6 +2629,7 @@ impl<'a> Cg<'a> {
         if self.is_x86() {
             a.push(Attr::string("min-legal-vector-width", &vector_width.to_string()));
         }
+        self.fp_def_attrs(&mut a);
         self.m.attr_set(&a)
     }
 

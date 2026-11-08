@@ -690,6 +690,22 @@ function's identity, so a set may hold overloads that differ only in them
   condition falls back to `XLi0EE` (spec/abi.md §8.15), so two such
   overloads in one translation unit can still collide.
 
+### 4.3a `pass_object_size` overloads (clang extension; WP-803)
+A function with a `pass_object_size` parameter (spec/sema.md §4) never
+redeclares one without it, in either order (clang `IsOverload`;
+`NewFn::pass_object_size`, compared in `fn_corresponds_in`), and is not
+merged with an `extern "C"` function of the same name. In
+[over.match.best], after the `enable_if` tiebreak of §4.3, a candidate
+with such a parameter beats one without (clang `isBetterOverloadCandidate`
+`HasPassObjSize`). Such a function cannot have its address taken: it is
+skipped by §2.9 address resolution (`address_matches`,
+`single_overload_candidate`). A using-declaration whose target is one of
+the two does not conflict with the other already in scope
+([namespace.udecl]/11; `using_conflicts`; libstdc++'s `<stdlib.h>`
+re-exports glibc's fortify wrappers that way; test
+`namespace.udecl/using-pass-object-size-overload.cpp`). Mangling:
+spec/abi.md §8.28.
+
 ### 4.4 Deferred template candidates (clang 21; `overload/defer.rs`)
 At `-fclang-compat=22` most candidate sets resolve in two phases (clang
 21's `TwoPhaseResolution`). `defer_templates(set)` turns it on (sets
@@ -1510,6 +1526,23 @@ Where the code differs from (or details) the design above:
     its `UnresolvedLookupExpr`); `overload_set_of` sees through it, so
     `o(&t<int>)` and `p = t<long>` read as overload sets in those two
     diagnostics, as in clang.
+  - [over.over]/1, /3 (WP-802): when that specialization does not
+    convert in an initialization, direct-initialization, reference
+    binding or `return` to a pointer or reference to function or a
+    pointer to member function, the set is re-resolved against the
+    target (`retarget_template_id`): every template of the set gets the
+    explicit arguments and deduces the rest from the target, so
+    `void (*p)(void*, int) = &wrap<1>` selects
+    `template<int N, class T> void wrap(void*, T)` over the
+    `template<int N> void wrap(void*)` the explicit arguments alone
+    complete. Only when the target selects nothing is it
+    `template_id_no_match`'s "address of overloaded function does not
+    match required type".
+    The specialization resolved early is then not used: when that
+    resolution alone queued its definition, the definition is withdrawn
+    from the queue ([temp.inst]/5), so an ill-formed body of the
+    unselected `wrap<1>(void*)` is never instantiated (WP-802,
+    `tests/conformance/over.over/template-id-retarget-unselected-not-instantiated-run.cpp`).
 
 ### 10.8 Landed (WP-106): the rest of the template candidates
 - Conversion-function templates: `build_conversion_set` /

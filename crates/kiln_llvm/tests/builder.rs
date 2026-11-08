@@ -375,3 +375,38 @@ fn replace_global_with_alias() {
         IrErrorKind::BadGlobal
     );
 }
+
+/// LLVM 20's `FPMathOperator`: fast-math flags on `fpext`/`fptrunc` and
+/// on calls returning a homogeneous FP struct, only at
+/// [`Module::ir_version`] 20 or later (WP-806).
+#[test]
+fn fp_math_operators_by_version() {
+    /// The module text, and whether the homogeneous-struct call and the
+    /// mixed-struct call took the flags.
+    fn build(ir_version: u32) -> (String, bool, bool) {
+        let mut m = module();
+        m.ir_version = ir_version;
+        let cd = m.types.struct_literal(&[TypeId::DOUBLE, TypeId::DOUBLE], false);
+        let mixed = m.types.struct_literal(&[TypeId::FLOAT, TypeId::DOUBLE], false);
+        let mty = m.types.function(cd, &[TypeId::DOUBLE], false);
+        let mul = m.add_function("mul", mty).unwrap();
+        let xty = m.types.function(mixed, &[], false);
+        let mx = m.add_function("mixed", xty).unwrap();
+        let mut b = define(&mut m, TypeId::FLOAT, &[TypeId::FLOAT]);
+        let x = b.func_ref().arg(0);
+        let d = b.cast_fmf(CastOp::FPExt, FastMath::CONTRACT, x, TypeId::DOUBLE).unwrap();
+        let o = CallOpts { fmf: FastMath::NNAN, ..CallOpts::default() };
+        let mixed_ok = b.call_ex(xty, Value::func(mx), &[], &o).is_ok();
+        let homog_ok = b.call_ex(mty, Value::func(mul), &[d], &o).is_ok();
+        let f = b.cast_fmf(CastOp::FPTrunc, FastMath::FAST, d, TypeId::FLOAT).unwrap();
+        b.ret(Some(f)).unwrap();
+        (m.to_text(), homog_ok, mixed_ok)
+    }
+    let (t, homog, mixed) = build(19);
+    assert!(t.contains("fpext float %0 to double") && t.contains("fptrunc double"), "{t}");
+    assert!(!homog && !mixed);
+    let (t, homog, mixed) = build(20);
+    assert!(t.contains("fpext contract float %0 to double"), "{t}");
+    assert!(t.contains("fptrunc fast double") && t.contains("call nnan { double, double }"), "{t}");
+    assert!(homog && !mixed);
+}
