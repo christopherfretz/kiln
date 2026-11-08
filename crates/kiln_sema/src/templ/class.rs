@@ -44,7 +44,6 @@ struct SavedState {
     requires_param_scopes: usize,
     deferring_call_ref: bool,
     deferred_call_refs: Vec<(kiln_ast::ExprId, DeclId)>,
-    classes: Vec<crate::class::ClassBuild>,
     cleanup: crate::class::CleanupState,
     extend_collector: Option<Vec<kiln_ast::ExprId>>,
     nsdmi_this: Vec<(DeclId, QualType)>,
@@ -72,6 +71,8 @@ impl Sema<'_, '_> {
             self.range_for_outer_depth = Some(self.clang_scope_depth());
         }
         let imm = self.take_immediate_state(true);
+        let classes = std::mem::take(&mut self.classes);
+        self.suspended_classes.push(classes);
         let saved = SavedState {
             scopes: std::mem::take(&mut self.scopes),
             ctx: Some(self.ctx),
@@ -87,7 +88,6 @@ impl Sema<'_, '_> {
             requires_param_scopes: std::mem::take(&mut self.requires_param_scopes),
             deferring_call_ref: std::mem::take(&mut self.deferring_call_ref),
             deferred_call_refs: std::mem::take(&mut self.deferred_call_refs),
-            classes: std::mem::take(&mut self.classes),
             cleanup: std::mem::take(&mut self.cleanup),
             extend_collector: self.extend_collector.take(),
             nsdmi_this: std::mem::take(&mut self.nsdmi_this),
@@ -150,7 +150,7 @@ impl Sema<'_, '_> {
         self.requires_param_scopes = saved.requires_param_scopes;
         self.deferring_call_ref = saved.deferring_call_ref;
         self.deferred_call_refs = saved.deferred_call_refs;
-        self.classes = saved.classes;
+        self.classes = self.suspended_classes.pop().unwrap_or_default();
         self.cleanup = saved.cleanup;
         self.extend_collector = saved.extend_collector;
         self.range_for_outer_depth = outer_depth;

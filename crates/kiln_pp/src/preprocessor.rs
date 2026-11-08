@@ -193,6 +193,9 @@ pub(crate) struct FileFrame<'a> {
     pub(crate) mi: MiOpt,
     /// The file of an imported unit: the importer's saved state.
     pub(crate) unit: Option<Box<crate::modules::UnitSave>>,
+    /// Locations of the U+FFFD replacing invalid UTF-8 (ascending; empty
+    /// for a valid file): reported when a token covers one.
+    pub(crate) bad_utf8: Vec<Loc>,
 }
 
 /// A macro expansion or a token stream being read.
@@ -537,23 +540,17 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         if system {
             self.sm.set_file_kind(base, file_kind(system, extern_c));
         }
-        if self.entered.insert(file) && !self.sm.load_report(file).is_clean() {
-            // [lex.phases]/1.1 (implementation-defined): an invalid UTF-8
-            // sequence in a comment is accepted, as clang's and GCC's
-            // (`-Winvalid-utf8` is off by default); anywhere else (a
-            // literal, an identifier, between tokens) it is an error.
-            let comments = self.comment_offsets(file, base);
-            let mut c = comments.iter().peekable();
-            for r in &self.sm.load_report(file).replacements {
-                while c.next_if(|&&(_, hi)| hi <= r.offset).is_some() {}
-                if c.peek().is_some_and(|&&(lo, _)| lo <= r.offset) {
-                    continue;
-                }
-                let at = base.with_offset(r.offset);
-                Diag::new(DiagId::lex_invalid_utf8, Span::new(at, at.with_offset(3)))
-                    .emit(self.diags);
-            }
-        }
+        self.entered.insert(file);
+        // Invalid UTF-8 is an error only in a token: clang accepts it in
+        // a comment (`-Winvalid-utf8`, off by default), so it is reported
+        // by `lex_raw_from` rather than here (WP-803).
+        let bad_utf8 = self
+            .sm
+            .load_report(file)
+            .replacements
+            .iter()
+            .map(|r| base.with_offset(r.offset))
+            .collect();
         let mut lx = Lexer::new(self.sm, self.interner, file, base, self.lex_opts);
         if self.comment_handler.is_some() {
             lx.set_record_comments(true);
@@ -571,21 +568,9 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             marker_depth: 0,
             mi: MiOpt::default(),
             unit: None,
+            bad_utf8,
         })));
         self.file_change(FileChange::Enter { file, from, system, extern_c });
-    }
-
-    /// The byte ranges of the comments of `file` (entered at `base`), in
-    /// file order: a raw lex of the whole buffer recording comments, run
-    /// only for a file with invalid UTF-8 ([`Self::push_file`]). The
-    /// decoded text is not changed; each sequence's original bytes stay
-    /// in the file's `LoadReport`.
-    fn comment_offsets(&self, file: FileId, base: Loc) -> Vec<(u32, u32)> {
-        let mut lx = Lexer::new(self.sm, self.interner, file, base, self.lex_opts);
-        lx.set_record_comments(true);
-        while lx.next().kind != TokKind::Eof {}
-        let at = |l: Loc| l.to_raw().wrapping_sub(base.to_raw());
-        lx.take_comments().iter().map(|sp| (at(sp.lo), at(sp.hi))).collect()
     }
 
     /// Whether warnings located in system headers are dropped (no
@@ -691,6 +676,16 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         } else {
             crate::profile::count!(raw_tokens);
             let t = f.lx.next();
+            if !f.bad_utf8.is_empty() && !self.quiet_lex {
+                let first = f.bad_utf8.partition_point(|&at| at < t.span.lo);
+                let bad: Vec<Loc> =
+                    f.bad_utf8[first..].iter().copied().take_while(|&at| at < t.span.hi).collect();
+                for at in bad {
+                    Diag::new(DiagId::lex_invalid_utf8, Span::new(at, at.with_offset(3)))
+                        .emit(self.diags);
+                }
+            }
+            let Frame::File(f) = &mut self.frames[i] else { unreachable!() };
             let comments = if f.lx.has_comments() { f.lx.take_comments() } else { Vec::new() };
             if !f.lx.diagnostics().is_empty() {
                 let ds = f.lx.take_diagnostics();

@@ -690,6 +690,22 @@ function's identity, so a set may hold overloads that differ only in them
   condition falls back to `XLi0EE` (spec/abi.md §8.15), so two such
   overloads in one translation unit can still collide.
 
+### 4.3a `pass_object_size` overloads (clang extension; WP-803)
+A function with a `pass_object_size` parameter (spec/sema.md §4) never
+redeclares one without it, in either order (clang `IsOverload`;
+`NewFn::pass_object_size`, compared in `fn_corresponds_in`), and is not
+merged with an `extern "C"` function of the same name. In
+[over.match.best], after the `enable_if` tiebreak of §4.3, a candidate
+with such a parameter beats one without (clang `isBetterOverloadCandidate`
+`HasPassObjSize`). Such a function cannot have its address taken: it is
+skipped by §2.9 address resolution (`address_matches`,
+`single_overload_candidate`). A using-declaration whose target is one of
+the two does not conflict with the other already in scope
+([namespace.udecl]/11; `using_conflicts`; libstdc++'s `<stdlib.h>`
+re-exports glibc's fortify wrappers that way; test
+`namespace.udecl/using-pass-object-size-overload.cpp`). Mangling:
+spec/abi.md §8.28.
+
 ### 4.4 Deferred template candidates (clang 21; `overload/defer.rs`)
 At `-fclang-compat=22` most candidate sets resolve in two phases (clang
 21's `TwoPhaseResolution`). `defer_templates(set)` turns it on (sets

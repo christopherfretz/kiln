@@ -178,8 +178,11 @@ impl Sema<'_, '_> {
     /// pointer conversion. Non-static members match only a pointer to
     /// member function, the others only a non-member target.
     fn address_matches(&mut self, d: DeclId, (fnty, member): (QualType, bool)) -> bool {
+        // clang `checkAddressOfFunctionIsAvailable`: never a function
+        // with `pass_object_size` parameters (WP-803).
         if !matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)
             || self.is_implicit_object_member(d) != member
+            || !self.ast.pass_object_size_params(d).is_empty()
         {
             return false;
         }
@@ -927,7 +930,11 @@ impl Sema<'_, '_> {
     /// its found declaration.
     pub(crate) fn single_overload_candidate(&self, e: ExprId) -> Option<(ExprId, DeclId, DeclId)> {
         let (ule, _) = self.overload_operand(e)?;
-        let [(d, found)] = self.ule_candidates(ule)[..] else { return None };
+        // Those whose address can be taken (WP-803: not one with
+        // `pass_object_size` parameters).
+        let mut cands = self.ule_candidates(ule);
+        cands.retain(|&(d, _)| self.ast.pass_object_size_params(d).is_empty());
+        let [(d, found)] = cands[..] else { return None };
         (matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)
             && !self.is_class_member_ref(d))
         .then_some((ule, d, found))

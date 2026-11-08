@@ -71,6 +71,12 @@ impl AttrKind {
     pub const INTERNAL_LINKAGE: AttrKind = AttrKind(83);
     pub const LIFETIMEBOUND: AttrKind = AttrKind(84);
     pub const NO_SANITIZE: AttrKind = AttrKind(85);
+    /// GNU `mode(M)` (clang `ModeAttr`), consumed into the declared type
+    /// like the vector attributes: `a` = the mode's width in bits, `| 1
+    /// << 8` for a floating-point mode, `| 2 << 8` for `KF` (IEEE quad),
+    /// `| 3 << 8` for `IF` (IBM double-double), `| 1 << 11` for a complex
+    /// mode (`SC`, `TC`, ..), `| (log2(N) + 1) << 12` for a vector mode
+    /// `V<N>M`; `b` = the written `Symbol` (WP-799).
     pub const MODE: AttrKind = AttrKind(86);
     pub const VECTOR_SIZE: AttrKind = AttrKind(87);
     /// GNU asm label (`asm("name")` after a declarator): `a` = the
@@ -225,11 +231,25 @@ impl AttrKind {
     /// debug information treats calls to it as one unit. kiln emits no
     /// debug information, so it has no effect on the IR (WP-789).
     pub const ARTIFICIAL: AttrKind = AttrKind(185);
+    /// clang `pass_object_size(t)` / `pass_dynamic_object_size(t)` on a
+    /// pointer parameter (clang `PassObjectSizeAttr`; WP-803): `a` = the
+    /// object-size type `t` in [0, 3], `b` = 1 for the dynamic spelling.
+    /// A call passes `__builtin_[dynamic_]object_size(arg, t)` of the
+    /// argument as a hidden `size_t` argument after it, which a
+    /// compatible `__builtin_object_size` of the parameter in the body
+    /// reads; the function cannot have its address taken and overloads
+    /// one without such parameters (spec/sema-overload.md §2).
+    pub const PASS_OBJECT_SIZE: AttrKind = AttrKind(186);
+    /// clang `overloadable` on a function (`OverloadableAttr`; WP-803):
+    /// its name is mangled as C++'s even with C language linkage, and it
+    /// may overload a function with C language linkage.
+    pub const OVERLOADABLE: AttrKind = AttrKind(187);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
     /// [`AttrKind::EXT_VECTOR_TYPE`], [`AttrKind::NEON_VECTOR_TYPE`],
-    /// [`AttrKind::NEON_POLYVECTOR_TYPE`]).
+    /// [`AttrKind::NEON_POLYVECTOR_TYPE`]), or GNU [`AttrKind::MODE`],
+    /// which is consumed the same way.
     pub fn is_vector_type(self) -> bool {
         matches!(
             self,
@@ -237,6 +257,7 @@ impl AttrKind {
                 | AttrKind::EXT_VECTOR_TYPE
                 | AttrKind::NEON_VECTOR_TYPE
                 | AttrKind::NEON_POLYVECTOR_TYPE
+                | AttrKind::MODE
         )
     }
 }

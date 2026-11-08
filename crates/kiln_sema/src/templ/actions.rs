@@ -99,6 +99,31 @@ impl Sema<'_, '_> {
         Some(self.act_dependent_name_at(nns, name, None, kw, loc))
     }
 
+    /// The specifier of `q::name` in an id-expression: `q`'s own when `q`
+    /// is dependent; for `q::template name<...>` that lookup finds nothing
+    /// for, the [`Sema::unknown_specialization_nns`] of `q` (the current
+    /// instantiation with a dependent base, `D::template f<U>(x)`;
+    /// [temp.dep.type]/6, WP-803); `None` otherwise.
+    pub fn dep_member_nns(
+        &mut self,
+        q: crate::using::Qualifier,
+        name: Symbol,
+        template_id: bool,
+    ) -> Option<NnsId> {
+        if self.is_dependent_ctx(q.ctx) {
+            Some(q.nns)
+        } else if template_id
+            && matches!(
+                self.classify_name(name, Some(q.ctx)),
+                crate::decl::NameClass::Undeclared | crate::decl::NameClass::Dependent
+            )
+        {
+            self.unknown_specialization_nns(q)
+        } else {
+            None
+        }
+    }
+
     /// The specifier under which `q::name` names a member of an unknown
     /// specialization when lookup found nothing in `q` ([temp.dep.type]/6):
     /// `q`'s own when it is dependent, the injected-class-name type's when

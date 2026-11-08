@@ -11,10 +11,10 @@
 //!    (`-f[no-]stack-clash-protection`, `-fcf-protection[=…]`,
 //!    `-f[no-]common`, `-fexcess-precision=`, `-f[no-]math-errno`,
 //!    `-fstack-usage`, `-gz[=…]`, the defaults `-fno-trapv`,
-//!    `-fno-short-enums` and `-m64`, and `-pipe`);
+//!    `-fno-short-enums`, `-ffp-model=precise` and `-m64`, and `-pipe`);
 //! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
 //!    `-fshort-enums`, `-fsanitize*`, `-fno-sanitize*`, coverage and
-//!    profiling).
+//!    profiling, `-ffp-model=fast|strict|aggressive`).
 //!
 //! `-Wp,<args>` and `-Xpreprocessor <arg>` are spliced into the command
 //! line before parsing ([`splice_preprocessor_args`]).
@@ -167,6 +167,15 @@ impl CodegenFlags {
                     return unsupported();
                 }
             }
+            // `precise` is clang's default floating-point model (WP-803);
+            // `fast` and `strict` change it, which kiln does not do yet.
+            "-ffp-model" => match v {
+                "precise" => {}
+                "fast" | "strict" | "aggressive" => {
+                    return Some(Err(ArgError::UnsupportedByKiln(arg.to_owned())));
+                }
+                _ => return unsupported(),
+            },
             "-gz" => {
                 if !matches!(v, "none" | "zlib" | "zstd") {
                     return unsupported();
@@ -305,6 +314,7 @@ mod tests {
             "-fstack-usage",
             "-gz",
             "-gz=zlib",
+            "-ffp-model=precise",
             "-mtune=native",
             "-ffunction-sections",
             "-fdata-sections",
@@ -314,6 +324,8 @@ mod tests {
         for a in [
             "-ftrapv",
             "-fshort-enums",
+            "-ffp-model=fast",
+            "-ffp-model=strict",
             "-fsanitize=address",
             "-fno-sanitize-recover=all",
             "-fsanitize-trap=undefined",

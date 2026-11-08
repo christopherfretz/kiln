@@ -156,13 +156,29 @@ impl Parser<'_, '_> {
             return true;
         }
         let after = self.tok_at(j + 1);
+        if after.kind == TokKind::Punct(Punct::RParen) {
+            // `T()`: a function type only if what follows can continue a
+            // parenthesized type-id; `new (A<T>().allocate(1)) T` is a
+            // placement whose argument is a member call on a temporary
+            // (clang `isTypeIdInParens` requires the closing `)`).
+            let k = self.tok_at(j + 2);
+            return matches!(
+                k.kind,
+                TokKind::Punct(
+                    Punct::RParen | Punct::Amp | Punct::AmpAmp | Punct::LSquare | Punct::LParen
+                )
+            ) || self
+                .kw_of(k)
+                .is_some_and(|w| matches!(w, Kw::Const | Kw::Volatile | Kw::Noexcept | Kw::Throw))
+                || (k.kind == TokKind::Punct(Punct::Arrow)
+                    && self.kw_of(self.tok_at(i)) == Some(Kw::Auto));
+        }
         match after.kind {
             TokKind::Punct(
                 Punct::Star
                 | Punct::Amp
                 | Punct::AmpAmp
                 | Punct::Caret
-                | Punct::RParen
                 | Punct::LSquare
                 | Punct::LParen
                 | Punct::Ellipsis,

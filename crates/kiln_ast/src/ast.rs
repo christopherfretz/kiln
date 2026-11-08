@@ -656,6 +656,35 @@ impl Ast {
         })
     }
 
+    /// WP-803: the `pass_object_size` of parameter `p` (clang
+    /// `PassObjectSizeAttr`): its object-size type and whether it is the
+    /// dynamic spelling.
+    pub fn pass_object_size(&self, p: DeclId) -> Option<(u32, bool)> {
+        self.lists
+            .iter::<crate::ids::AttrId>(self.attrs.of_decl(p))
+            .map(|a| self.attrs.get(a))
+            .find(|n| n.kind == crate::attr::AttrKind::PASS_OBJECT_SIZE)
+            .map(|n| (n.a, n.b != 0))
+    }
+
+    /// WP-803: `(index, type, dynamic)` of each parameter of function `d`
+    /// with a `pass_object_size` (each takes a hidden `size_t` argument
+    /// after it).
+    pub fn pass_object_size_params(&self, d: DeclId) -> Vec<(usize, u32, bool)> {
+        let Some(f) = self.decls.function(d) else { return Vec::new() };
+        let params = self.lists.iter::<DeclId>(f.params);
+        params
+            .enumerate()
+            .filter_map(|(i, p)| self.pass_object_size(p).map(|(t, y)| (i, t, y)))
+            .collect()
+    }
+
+    /// WP-803: some declaration of `d` is `overloadable` (clang
+    /// `OverloadableAttr`).
+    pub fn is_overloadable(&self, d: DeclId) -> bool {
+        self.any_redecl_has(d, crate::attr::AttrKind::OVERLOADABLE)
+    }
+
     /// Whether some declaration of `d` carries `attr`.
     fn any_redecl_has(&self, d: DeclId, attr: crate::attr::AttrKind) -> bool {
         self.redecls_of(d).any(|r| {

@@ -204,7 +204,7 @@ regression from main.
 | 20 | `incompatible operand types ('integral_constant<[...], true>' and 'integral_constant<[...], false>')` (no [expr.cond]/6 built-in candidates; hana `eval_if.hpp:59`, `support/numeric.hpp:75`) | hana | 79 | fixed, `0bfbb7d0e` | `tests/conformance/expr.cond/p6-class-arms-builtin-overload-run.cpp`, `p6-class-arms-builtin-overload-errors.cpp` |
 | 21 | `no type named 'type' in 'boost::proto::_state'` (derived-class deduction through `F<T>**` instantiated `mpl::and_<_state, ...>`; proto `template_arity`) | spirit | 95 | fixed, `50a2647c8` | `tests/conformance/temp.deduct.call/pointer-to-pointer-no-derived-class-deduction.cpp` |
 | 22 | `static_assert` failed in `integer_sequence` `equal`, and at run time `is_constructible<fusion::tuple<>, int>` is true (an empty first pack hides the expansion's other packs) | hana, fusion | 2 (+1 test) | fixed (WP-802), `c8ce199c7` | `crates/kiln_sema/src/templ/pack.rs:286`; `tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp` |
-| 23 | `source file is not valid UTF-8` (byte `0xA8` in a comment; clang accepts it) | spirit | 1 | fixed (WP-802), `004aaecf2` | `crates/kiln_pp/src/preprocessor.rs:541`; `tests/conformance/lex.phases/invalid-utf8-in-comment-accepted-run.cpp` |
+| 23 | `source file is not valid UTF-8` (byte `0xA8` in a comment; clang accepts it) | spirit | 1 | fixed by WP-803, `2e5a0fd97` | `crates/kiln_pp/src/preprocessor.rs:541`; `tests/conformance/lex.phases/invalid-utf8-in-comment-accepted-run.cpp` |
 
 Row 18 now also covers fusion `filter_view.cpp:117`,
 `joint_view.cpp:162` and `iterator_range.cpp:98` (4 TUs in all). Row 14
@@ -212,13 +212,16 @@ now also covers 2 spirit TUs (5 in all).
 
 ## What remains
 
-WP-802 fixed every follow-up row (10 to 12, 15 to 18, 22 and 23). In the
+WP-802 fixed every follow-up row (10 to 12, 15 to 18 and 22; WP-803
+fixed row 23). In the
 WP-802 build (`5384ebeeb`), 23 TUs fail: 13 also fail in the control,
 5 are row 14 (kiln matches clang 22), and the other 5 (rows 15 and 18)
 compile after `cb36e2ee6` and `572e16df0`. Fusion `tuple_traits` (row
 22's run-time failure) passes.
 
 - **Divergence from the control, 5 TUs** (row 14): kiln matches clang 22.
+- **Invalid UTF-8 in a comment, 1 TU** (row 23): fixed by WP-803
+  (`2e5a0fd97`); WP-802's own fix (`004aaecf2`) was dropped at the merge.
 - **Perf:** the TU wall ratio of 1.36x (Performance, above).
 
 The tests that were `xfail(kiln): WP-787 follow-up` pass now:

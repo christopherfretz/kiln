@@ -404,7 +404,8 @@ when it reaches that token (`handle_events`, as for clang's
 | `GCC diagnostic ...`, `clang diagnostic`, `clang fp`, `clang optimize`, `clang max_tokens_*`, `clang __debug` | accepted, ignored. **Not applied:** `clang diagnostic ignored` does not silence anything. |
 | `comment`, `float_control`, `unused`, `omp`, `GCC ivdep` | accepted, ignored |
 | `unroll [N\|(N)]`, `nounroll`, `unroll_and_jam [N\|(N)]`, `nounroll_and_jam`, `GCC unroll [N\|(N)]`, `GCC nounroll`, `clang loop <option>(<arg>)...` | loop hints, below |
-| `weak`, `redefine_extname`, `align`, `options`, `ms_struct`, `clang attribute`, `clang section` | `Event::UnsupportedPragma`: `'#pragma <name>' is not supported yet` |
+| `weak name` | missing identifier gets `expected identifier in '#pragma weak' - ignored`, tokens after it `extra tokens at end of '#pragma weak' - ignored` [-Wignored-pragmas]; otherwise `Event::PragmaWeak` (spec/sema.md §4.5; WP-803). The alias form `weak name = alias` is `Event::UnsupportedPragma`. |
+| `redefine_extname`, `align`, `options`, `ms_struct`, `clang attribute`, `clang section` | `Event::UnsupportedPragma`: `'#pragma <name>' is not supported yet` |
 
 **Loop hints** (WP-449; clang `PragmaLoopHintHandler`,
 `PragmaUnrollHintHandler`, `HandlePragmaLoopHint`): `pragma::classify`
@@ -1448,7 +1449,11 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   decides. `{` means an expression (`new (int{1}) T` is a placement); a
   `(` is a type-id only when followed by `* & && ^ ) [ ( ...`, a type-id
   start or a decl-specifier keyword, so `new (short(n), 'x') int` is a
-  placement and `new (int (*)[2])` a type-id. A `(` followed by a
+  placement and `new (int (*)[2])` a type-id. An empty `()` (`T()`, a
+  function type) is a type-id only when the token after it can continue
+  one (`) & && [ (`, `const`, `volatile`, `noexcept`, `throw`, or `->`
+  after `auto`), so `new (A<T>().allocate(1)) T` is a placement (WP-803,
+  `expr.new/placement-temporary-member-call-run.cpp`). A `(` followed by a
   member-pointer declarator (`new (void (T::*)())`, `member_pointer_at`;
   WP-216) is a type-id too. `decltype`, `typeof`, `__typeof_unqual`,
   `typename` and a class-key are always a type-id, and so is a
@@ -1935,8 +1940,8 @@ in `kiln_diag` for now; nothing emits them.
 
 ## 9. To be implemented (M3+)
 - **Pragmas:** applying `#pragma pack` to layout, `GCC visibility` to
-  linkage, `clang diagnostic` to the diagnostic engine; `weak` and the
-  other unsupported pragmas of §2.3.
+  linkage, `clang diagnostic` to the diagnostic engine; `weak name =
+  alias` and the other unsupported pragmas of §2.3.
 - **Classes** (parsed by WP-065; their Sema is WP-066b):
   - qualified non-type mem-initializer-ids, braced
     default arguments

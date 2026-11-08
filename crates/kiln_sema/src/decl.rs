@@ -2894,10 +2894,15 @@ impl Sema<'_, '_> {
         self.check_optnone_conflicts(decl, &mut attrs);
         self.check_naked_conflicts(decl, &mut attrs);
         self.finish_visibility_attrs(decl, &mut attrs, false);
+        self.apply_pragma_weak(decl, &mut attrs);
         self.finish_decl_alignment(decl, &mut attrs);
-        self.add_known_function_attrs(decl, &mut attrs);
-        self.recognize_builtin_decl(decl, &mut attrs);
-        self.record_gnu_lib_twin(decl);
+        // WP-803: an `overloadable` function is never the C library
+        // function of its name (clang `FunctionDecl::getBuiltinID`).
+        if !attrs.iter().any(|&a| self.ast.attrs.get(a).kind == AttrKind::OVERLOADABLE) {
+            self.add_known_function_attrs(decl, &mut attrs);
+            self.recognize_builtin_decl(decl, &mut attrs);
+            self.record_gnu_lib_twin(decl);
+        }
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
@@ -3756,6 +3761,11 @@ impl Sema<'_, '_> {
             requires: d.trailing_requires,
             enable_if: self.new_fn_enable_if(&d.attrs),
             member_using: false,
+            pass_object_size: d.function_params().is_some_and(|ps| {
+                ps.iter()
+                    .flat_map(|p| &p.attrs)
+                    .any(|&a| self.ast.attrs.get(a).kind == AttrKind::PASS_OBJECT_SIZE)
+            }),
         };
         let dname = d.fn_decl_name(name);
         let fname = match d.op_name {
@@ -3881,7 +3891,10 @@ impl Sema<'_, '_> {
                 && self.templ.cur.is_none()
                 && dname.as_ident().is_some() =>
             {
-                let p = self.extern_c_prev(name, false, new_fn.is_static, d.name_loc());
+                // WP-803: a `pass_object_size` overload is never the C
+                // entity of its name (clang `IsOverload`).
+                let own = new_fn.is_static || new_fn.pass_object_size;
+                let p = self.extern_c_prev(name, false, own, d.name_loc());
                 extern_c_redecl = p.is_some();
                 p
             }
@@ -4623,6 +4636,7 @@ impl Sema<'_, '_> {
                 self.take_annotations(pd, &mut attrs);
                 let range = Span::new(p.range.0, p.range.1);
                 self.check_param_nonnull_attrs(p.ty, range, &mut attrs);
+                self.check_param_pass_object_size(p.ty, p.range.0, &mut attrs);
                 let _ = self.builder().attach_attrs(pd, &attrs);
             }
             match p.default_arg {
@@ -6782,6 +6796,27 @@ impl Sema<'_, '_> {
                 self.push_local(sym, p);
             }
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+            // clang `CheckParmsForFunctionDef`: a definition's
+            // `pass_object_size` parameter must be `const` (reported at
+            // the parameter's name, the attribute unquoted, as clang).
+            if !pty.quals().is_const()
+                && !self.ast.types.is_dependent(pty)
+                && let Some(a) = self
+                    .ast
+                    .lists
+                    .iter::<AttrId>(self.ast.attrs.of_decl(p))
+                    .find(|&a| self.ast.attrs.get(a).kind == AttrKind::PASS_OBJECT_SIZE)
+            {
+                let node = *self.ast.attrs.get(a);
+                let shown = self.attr_shown(&node, "pass_object_size");
+                let msg = self
+                    .diag(
+                        DiagId::sema_attribute_const_pointer_args_only,
+                        self.ast.decls.get(p).loc(),
+                    )
+                    .arg(shown);
+                self.emit(msg);
+            }
             // clang `CheckParmsForFunctionDef`: a parameter whose class
             // template specialization fails to instantiate is invalid.
             if self.invalid_by_failed_spec(p, pty, self.ast.decls.get(p).loc()) {
@@ -6955,15 +6990,33 @@ impl Sema<'_, '_> {
     /// a later definition at namespace scope completes the same
     /// non-dependent type. A class declared in a block or class scope
     /// keeps the enclosing template's dependence.
-    fn namespace_tag_record(&mut self, h: DeclHead, tag: TagKind) -> DeclId {
+    fn namespace_tag_record(&mut self, h: DeclHead, tag: TagKind, prev: Option<DeclId>) -> DeclId {
         let ns = self.ast.redecl_context(h.ctx);
         if !matches!(self.kind_of(ns), DeclKind::Namespace | DeclKind::TranslationUnit) {
-            return self.builder().record(h, tag, None);
+            return self.builder().record(h, tag, prev);
         }
         let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
-        let d = self.builder().record(h, tag, None);
+        let d = self.builder().record(h, tag, prev);
         self.ast.templates.dependent_depth = saved;
         d
+    }
+
+    /// The class `friend class n;` declared in namespace `ns`, still
+    /// hidden from ordinary lookup ([namespace.memdef]/3), that an
+    /// elaborated-type-specifier `class n` naming no visible class
+    /// redeclares ([basic.scope.pdecl]/7: it declares `n` in that same
+    /// namespace). clang `ActOnTag` finds it by a redeclaration lookup in
+    /// the namespace; the new declaration joins its chain and is visible,
+    /// so a member `class n *p;` after `friend class n;` and the later
+    /// definition are one class (z3's `smt::context` befriending
+    /// `smt::parallel`; WP-799).
+    fn hidden_friend_tag(&self, ns: DeclId, n: Symbol, keyword: TagKeyword) -> Option<DeclId> {
+        let found = self.ast.lookup_local(ns, DeclName::ident(n)).iter().collect::<Vec<_>>();
+        found.into_iter().rev().find(|&d| {
+            self.kind_of(d) == DeclKind::CXXRecord
+                && self.ast.decls.get(d).misc().friend() == FriendKind::Undeclared
+                && self.tag_matches(d, keyword)
+        })
     }
 
     /// The promotion type of an enumeration with underlying type `t`
@@ -7382,6 +7435,14 @@ impl Sema<'_, '_> {
             }
         }
         let ctx = qualifier.unwrap_or_else(|| self.tag_decl_context(use_));
+        let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
+        if plain_ref
+            && !conflict
+            && keyword != TagKeyword::Enum
+            && let Some((n, _)) = name
+        {
+            prev = self.hidden_friend_tag(ctx, n, keyword);
+        }
         let dname = name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         let mut h = DeclHead::new(ctx, dname, name.map_or(loc, |n| n.1));
         if redefined {
@@ -7392,7 +7453,6 @@ impl Sema<'_, '_> {
             h.misc = h.misc.with_friend(FriendKind::Undeclared);
             h.flags = h.flags.with(DeclFlags::INVALID);
         }
-        let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
         let d = self.new_tag_decl(h, keyword, (scoped, fixed), prev, plain_ref);
         self.finish_member_class_spec(member_class_spec, d);
         if qualifier.is_none() {
@@ -7444,7 +7504,7 @@ impl Sema<'_, '_> {
             let fx = fixed.map(|f| (f, self.enum_promotion(f)));
             self.builder().enumeration(h, scoped, fx, prev)
         } else if plain_ref && self.templ.cur.is_none() {
-            self.namespace_tag_record(h, Self::tag_kind_of(keyword))
+            self.namespace_tag_record(h, Self::tag_kind_of(keyword), prev)
         } else {
             self.mark_pattern_next();
             self.builder().record(h, Self::tag_kind_of(keyword), prev)
@@ -7561,7 +7621,7 @@ impl Sema<'_, '_> {
         let mut h = DeclHead::new(ns, DeclName::ident(n), nloc);
         h.lexical = Some(self.ctx);
         h.misc = h.misc.with_friend(FriendKind::Undeclared);
-        let d = self.namespace_tag_record(h, Self::tag_kind_of(keyword));
+        let d = self.namespace_tag_record(h, Self::tag_kind_of(keyword), None);
         self.friend_tag = Some(d);
         d
     }
@@ -7613,6 +7673,23 @@ impl Sema<'_, '_> {
             .into_iter()
             .rev()
             .find(|&d| is_tag_kind(self.kind_of(d)) || self.kind_of(d) == DeclKind::ClassTemplate);
+        // Else a class template that ordinary lookup finds in a namespace
+        // nested in `ns` (an unnamed namespace's, through its implicit
+        // using-directive) is the one redeclared, in its own namespace
+        // (clang `CheckClassTemplate`: `OutermostContext->Encloses`).
+        let (prev, ns) = if let Some(d) = prev {
+            (Some(d), ns)
+        } else {
+            let nested = self.lookup_name(n, LookupKind::All).decls.last().and_then(|&d| {
+                let c = self.ast.decls.get(d).ctx()?;
+                (self.kind_of(d) == DeclKind::ClassTemplate
+                    && self.kind_of(c) == DeclKind::Namespace
+                    && self.ast.first(c) != self.ast.first(ns)
+                    && self.encloses(ns, c))
+                .then_some((d, c))
+            });
+            nested.map_or((None, ns), |(d, c)| (Some(d), c))
+        };
         let prev = prev.map(|d| self.pattern_of(d).unwrap_or(d));
         if let Some(p) = prev {
             if self.ast.described_template(p).is_some() {
@@ -8269,6 +8346,11 @@ impl Sema<'_, '_> {
             .or_else(|| self.ast.decls.get(e).ctx())
             .unwrap_or(self.ast.tu);
         let dependent = self.ast.types.is_dependent(self.tag_type(e));
+        // A GNU `mode` on the enumeration sets its underlying type (clang
+        // `AddModeAttr` on an `EnumDecl`, from `int` when not fixed).
+        let mode = self.find_attr(e, AttrKind::MODE).filter(|_| !dependent);
+        let mode = mode.map(|a| *self.ast.attrs.get(a));
+        let mode = mode.and_then(|m| self.enum_mode_type(build.fixed.unwrap_or(QualType::INT), m));
         let computed = if build.fixed.is_some() {
             None
         } else if dependent {
@@ -8277,7 +8359,10 @@ impl Sema<'_, '_> {
             Some((QualType::INT, QualType::INT))
         } else {
             let packed = self.find_attr(e, AttrKind::PACKED).is_some();
-            let (best, promotion) = self.best_enum_types(&build.enumerators, packed);
+            let (best, promotion) = match mode {
+                Some(t) => (t, conv::rank::promoted_type(self, t, None).unwrap_or(t)),
+                None => self.best_enum_types(&build.enumerators, packed),
+            };
             // [dcl.enum]/5 (clang's `ActOnEnumBody`): each initializer is
             // converted to the underlying type.
             for &(d, _) in &build.enumerators {
@@ -8291,6 +8376,9 @@ impl Sema<'_, '_> {
             }
             Some((best, promotion))
         };
+        if let (Some(_), Some(t)) = (build.fixed, mode) {
+            self.ast.decls.replace_fixed_enum_int_type(e, t);
+        }
         let _ = self.builder().complete_enum_definition(e, computed);
     }
 
@@ -10095,6 +10183,9 @@ impl Sema<'_, '_> {
                         | "trivial_abi"
                         | "type_visibility"
                         | "min_vector_width"
+                        | "pass_object_size"
+                        | "pass_dynamic_object_size"
+                        | "overloadable"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
@@ -10138,6 +10229,9 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::MIN_VECTOR_WIDTH {
             return self.min_vector_width_attribute(syntax, args, loc);
+        }
+        if kind == AttrKind::PASS_OBJECT_SIZE {
+            return self.pass_object_size_attribute(syntax, &n, args, loc);
         }
         if kind == AttrKind::ENABLE_IF {
             return self.enable_if_attribute(syntax, args, loc);
@@ -10472,6 +10566,46 @@ impl Sema<'_, '_> {
         };
         let a = u32::try_from(v.max(0)).unwrap_or(u32::MAX);
         let node = AttrNode { kind: AttrKind::MIN_VECTOR_WIDTH, syntax, flags: 0, loc, a, b: 0 };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// clang `handlePassObjectSizeAttr`: exactly one integer constant in
+    /// [0, 3], kept in `a`; `b` = 1 for `pass_dynamic_object_size`.
+    fn pass_object_size_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        n: &str,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        let shown = format!("'{n}'");
+        let [arg] = args else {
+            let msg =
+                self.diag(DiagId::parse_attribute_wrong_arg_count, loc).arg(n.to_owned()).arg("1");
+            self.emit(msg);
+            return None;
+        };
+        // clang reports at the argument.
+        let (v, at) = match arg {
+            AttrArg::Expr(e) => (self.fold_int(*e), self.begin_loc(*e)),
+            AttrArg::Type(_) | AttrArg::Ident(..) => (None, loc),
+        };
+        let Some(v) = v else {
+            let msg = self.diag(DiagId::sema_attribute_requires_integer_constant, at).arg(shown);
+            self.emit(msg);
+            return None;
+        };
+        let Ok(a @ 0..=3) = u32::try_from(v) else {
+            let msg = self
+                .diag(DiagId::sema_attribute_argument_out_of_range, at)
+                .arg(shown)
+                .arg("0")
+                .arg("3");
+            self.emit(msg);
+            return None;
+        };
+        let b = u32::from(n.contains("dynamic"));
+        let node = AttrNode { kind: AttrKind::PASS_OBJECT_SIZE, syntax, flags: 0, loc, a, b };
         Some(self.ast.attrs.push(node))
     }
 
@@ -11067,6 +11201,12 @@ fn attr_kind_of(
         ("weakref", _, true) => AttrKind::WEAKREF,
         ("alias", _, true) => AttrKind::ALIAS,
         ("ifunc", _, true) => AttrKind::IFUNC,
+        // WP-803: clang `pass_object_size` / `pass_dynamic_object_size`
+        // and `overloadable` (GNU and `clang::`).
+        ("pass_object_size" | "pass_dynamic_object_size", _, _) if gnu_syntax || clang_scope => {
+            AttrKind::PASS_OBJECT_SIZE
+        }
+        ("overloadable", _, _) if gnu_syntax || clang_scope => AttrKind::OVERLOADABLE,
         // clang `GCC<"section">`.
         ("section", _, true) => AttrKind::SECTION,
         // clang `GNU<"analyzer_noreturn">`: no `[[...]]` spelling.
@@ -11103,6 +11243,7 @@ fn attr_kind_of(
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,
         ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
         ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
+        ("mode", _, true) => AttrKind::MODE,
         // clang `Clang<"neon_vector_type">` / `Clang<"neon_polyvector_type">`.
         ("neon_vector_type", _, _) if gnu_syntax || clang_scope => AttrKind::NEON_VECTOR_TYPE,
         ("neon_polyvector_type", _, _) if gnu_syntax || clang_scope => {
