@@ -1395,7 +1395,9 @@ impl Sema<'_, '_> {
                 continue;
             };
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-            if narrowing && !self.ast.types.is_reference(pty) {
+            // A reference parameter bound to a temporary narrows like the
+            // temporary's initialization (`check_narrowing`).
+            if narrowing {
                 self.check_list_narrowing(a, pty);
             }
             // [over.match.ref]/1.1: the reference of a direct-
