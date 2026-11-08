@@ -1,7 +1,13 @@
 # Design note: flow-based uninitialized-value analysis for locals
 
-Status: proposal (WP-186 item 11). It depends on the per-function CFG
-of [reachability.md](reachability.md). No code yet.
+Status: implemented (WP-862, `crates/kiln_sema/src/uninit.rs`;
+spec/sema.md §7.14 is the contract). It was proposed as WP-186 item 11
+and depends on the per-function CFG of [reachability.md](reachability.md).
+The implementation differs from this note in three ways:
+- it tracks non-empty class types too, as clang 19 does;
+- it has no memory budget or skip remark, because the scratch is two
+  bits per variable per block and is reused;
+- the tests are in `tests/conformance/basic.indet/uninit-*.cpp`.
 
 ## What clang computes
 

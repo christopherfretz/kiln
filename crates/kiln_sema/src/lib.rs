@@ -85,6 +85,7 @@ pub mod modules;
 mod ms_struct;
 mod musttail;
 pub mod names;
+mod never_constant;
 pub mod new_delete;
 mod nonnull;
 mod null_compare;
@@ -124,6 +125,7 @@ mod trivial_abi;
 mod try_stmt;
 mod type_diff;
 mod undefined_used;
+mod uninit;
 mod unreachable_code;
 mod unused_file_scope;
 mod unused_var;
@@ -388,6 +390,8 @@ pub struct Sema<'a, 'sm> {
     /// The graph of the body being finished, its vectors reused from
     /// body to body.
     pub(crate) cfg_body: cfg::BodyCfg,
+    /// The uninitialized-values analysis' reused buffers (spec/sema.md §7.11).
+    pub(crate) uninit_scratch: uninit::Scratch,
     /// The functions (first declarations) clang 22 infers `noreturn`
     /// (`InferredNoReturnAttr`, [`Sema::infer_noreturn`]).
     pub(crate) inferred_noreturn: kiln_source::fx::FxHashSet<DeclId>,
@@ -696,7 +700,8 @@ pub struct Sema<'a, 'sm> {
     /// result through the first that matches (clang `ExtVectorDecls`).
     pub(crate) ext_vector_typedefs: Vec<DeclId>,
     /// Splices whose operand was read as a frozen constant without an
-    /// Oven evaluation (spec/reflection.md §5, the splice fast path).
+    /// Oven evaluation (spec/reflection.md §5, the splice fast path);
+    /// handed to the Oven's report by [`Sema::into_parts`].
     pub(crate) splice_fast: u64,
     /// The `typeid` expression operands being formed, innermost last:
     /// the open lambda count and the unevaluated depth inside each
@@ -804,6 +809,9 @@ pub struct Sema<'a, 'sm> {
     /// Set by the access check when friendship came only from such a
     /// befriended specialization.
     pub(crate) speculative_friend: std::cell::Cell<bool>,
+    /// Namespace `std::meta` (primary context) once found: the associated
+    /// namespace of `std::meta::info` for ADL (`overload/adl.rs`).
+    pub(crate) std_meta_ns: std::cell::Cell<Option<DeclId>>,
     /// Access errors reported, as (member, location, innermost context),
     /// so a replayed check does not repeat one its instantiation redid.
     pub(crate) access_failed: kiln_source::fx::FxHashSet<(DeclId, Loc, DeclId)>,
@@ -999,6 +1007,13 @@ pub struct Sema<'a, 'sm> {
     /// needed (spec/annotations.md §5): the specialization maps to its
     /// pattern.
     pub(crate) uninstantiated_annots: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// Set while the parser reads a base-specifier's
+    /// attribute-specifier-seq: an annotation operand naming a pack is
+    /// kept, since the base-specifier may turn out to be a pack expansion
+    /// whose pattern includes it ([temp.variadic]/5.4; WP-867). The
+    /// parser checks it once the `...` is known
+    /// ([`Sema::check_base_annotation_packs`]).
+    pub(crate) base_annotation_packs: bool,
     /// The annotation each annotation attribute already produced: one
     /// written on a declaration's leading attribute-specifier-seq
     /// appertains to every declarator's entity and is one annotation
@@ -1218,6 +1233,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_out: String::new(),
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
             cfg_body: cfg::BodyCfg::default(),
+            uninit_scratch: uninit::Scratch::default(),
             inferred_noreturn: kiln_source::fx::FxHashSet::default(),
             gsl_inferred_pointers: kiln_source::fx::FxHashSet::default(),
             in_typedef_instantiation: false,
@@ -1324,6 +1340,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cast_ignores_base_access: false,
             dependent_access: kiln_source::fx::FxHashMap::default(),
             speculative_friend: std::cell::Cell::new(false),
+            std_meta_ns: std::cell::Cell::new(None),
             access_failed: kiln_source::fx::FxHashSet::default(),
             replaying_access: false,
             init_entity: None,
@@ -1374,6 +1391,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             unparsed_default_args: kiln_source::fx::FxHashMap::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
             uninstantiated_annots: kiln_source::fx::FxHashMap::default(),
+            base_annotation_packs: false,
             annot_of_attr: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),

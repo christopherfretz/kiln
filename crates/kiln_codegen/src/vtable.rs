@@ -17,7 +17,7 @@ use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{
     Attr, AttrKind, CastOp, ComdatKind, FuncId, GepFlags, GlobalId, IntPredicate, Linkage,
-    TypeId as LTy, UnnamedAddr, Value, ValueRef, Visibility,
+    MdKindId, MetadataId, TypeId as LTy, UnnamedAddr, Value, ValueRef, Visibility,
 };
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
@@ -558,7 +558,79 @@ impl Cg<'_> {
         let rd_ty = self.class_type(first);
         let rtti = self.rtti_descriptor(rd_ty)?;
         let init = self.vtable_init(&l, rtti, first)?;
-        self.define_vtable_global(g, init, linkage, first)
+        self.define_vtable_global(g, init, linkage, first)?;
+        // clang `emitVTableDefinitions`: not on an `available_externally`
+        // vtable (without whole-program vtables).
+        if linkage != VtLinkage::AvailableExternally {
+            self.vtable_type_metadata(g, &l, first);
+        }
+        Ok(())
+    }
+
+    /// clang `CodeGenModule::EmitVTableTypeMetadata` under LTO (WP-873,
+    /// spec/codegen.md §5.3 "LTO"): for each address point of group `l` (laid
+    /// out in `layout_class`), sorted by the base's `_ZTS` name and then
+    /// offset, `!type !{i64 <byte offset>, <id of the base>}`, then one
+    /// for every virtual function slot of the group (destructors and
+    /// unused slots aside) with the id of the member function pointer
+    /// type `<fn type> <base>::*` suffixed `.virtual`. An id is the
+    /// mangled `_ZTS` name of an externally visible type, else a
+    /// `distinct !{}` per type.
+    fn vtable_type_metadata(&mut self, g: GlobalId, l: &VTableLayout, layout_class: DeclId) {
+        if self.opts.lto.is_none() {
+            return;
+        }
+        let ast = self.ast;
+        let table = self.vts.subobjects(layout_class);
+        let mut aps: Vec<(String, u32, DeclId)> = l
+            .address_points
+            .iter()
+            .filter_map(|&(sub, idx)| {
+                let &(so, _) = table.list.get(usize::from(sub.0))?;
+                let name = mangle::mangle_class_special(ast, &mut self.anon, "_ZTS", so.class);
+                Some((name, idx, so.class))
+            })
+            .collect();
+        aps.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        aps.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+        let kind = self.m.md_kind("type");
+        for (name, idx, base) in aps {
+            let visible = !mangle::class_is_internal(ast, base);
+            let id = self.type_md_id(name, visible);
+            self.push_type_md(g, kind, idx, id);
+            let class_ty = self.class_type(base).ty();
+            for (i, c) in l.components.iter().enumerate() {
+                let VTableComponent::Func(f) = *c else { continue };
+                let Some(fty) = ast.decls.get(f).ty() else { continue };
+                let mut name =
+                    mangle::mangle_member_pointer_rtti(ast, &mut self.anon, fty, class_ty, "_ZTS");
+                name.push_str(".virtual");
+                let fn_visible = visible && mangle::type_externally_visible(ast, fty);
+                let id = self.type_md_id(name, fn_visible);
+                self.push_type_md(g, kind, i as u32, id);
+            }
+        }
+    }
+
+    /// A `!type` identifier ([`Self::vtable_type_metadata`]).
+    fn type_md_id(&mut self, name: String, visible: bool) -> MetadataId {
+        if visible {
+            return self.m.md_string(name.as_bytes());
+        }
+        if let Some(&id) = self.type_md_ids.get(&name) {
+            return id;
+        }
+        let id = self.m.md_distinct_tuple(&[]);
+        self.type_md_ids.insert(name, id);
+        id
+    }
+
+    /// `!type !{i64 <8 * slot>, id}` on vtable `g`.
+    fn push_type_md(&mut self, g: GlobalId, kind: MdKindId, slot: u32, id: MetadataId) {
+        let off = self.m.const_int(LTy::I64, 8 * i128::from(slot));
+        let Ok(off) = self.m.md_const(off) else { return };
+        let node = self.m.md_tuple(&[Some(off), Some(id)]);
+        self.m.push_global_metadata(g, kind, node);
     }
 
     /// clang `GetAddrOfVTT`: the `_ZTT` global of `rd` (declared).
@@ -637,6 +709,10 @@ impl Cg<'_> {
             let rtti = self.rtti_descriptor(bty)?;
             let init = self.vtable_init(&l, rtti, rd)?;
             self.define_vtable_global(g, init, linkage, rd)?;
+            // clang `GenerateConstructionVTable`; clang 19 and 22 attach a
+            // construction vtable's set twice.
+            self.vtable_type_metadata(g, &l, rd);
+            self.vtable_type_metadata(g, &l, rd);
             groups.push((Value::global(g), l));
         }
         let mut elems = Vec::with_capacity(comps.len());
@@ -1943,7 +2019,11 @@ impl Cg<'_> {
             // clang `BuildTypeInfo`: vector and complex types are not
             // in the C++ runtime, so their `__fundamental_type_info` is
             // emitted where used, like a class's.
-            TypeView::Vector { .. } | TypeView::Complex(_) => {
+            // GCC 16.1 likewise emits `std::meta::info`'s (`_ZTIDm`)
+            // where used: libstdc++ does not define it (WP-879).
+            TypeView::Vector { .. }
+            | TypeView::Complex(_)
+            | TypeView::Builtin(BuiltinType::MetaInfo) => {
                 "_ZTVN10__cxxabiv123__fundamental_type_infoE"
             }
             _ => return err(None, format!("RTTI for type `{name}` is not supported yet")),
@@ -2134,11 +2214,13 @@ impl Cg<'_> {
     }
 
     /// clang `IsStandardLibraryRTTIDescriptor`: fundamental types and
-    /// (const) pointers to them.
+    /// (const) pointers to them. `std::meta::info` is not one: the C++
+    /// runtime has no `_ZTIDm` (nor `_ZTIu6__info`), so its descriptor is
+    /// a weak definition where used, as g++-16 emits it (WP-879).
     fn is_std_lib_rtti(&self, q: QualType) -> bool {
         let ast = self.ast;
         let fund = |q: QualType| match ast.types.canonical_view(q) {
-            TypeView::Builtin(b) => !matches!(b, BuiltinType::Dependent),
+            TypeView::Builtin(b) => !matches!(b, BuiltinType::Dependent | BuiltinType::MetaInfo),
             _ => false,
         };
         if fund(q) {

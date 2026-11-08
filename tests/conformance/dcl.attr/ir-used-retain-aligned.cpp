@@ -4,7 +4,10 @@
 // `aligned(N)` on a function or member function sets its `align` (clang
 // `CodeGenModule::addUsedOrCompilerUsedGlobal`,
 // `SetLLVMFunctionAttributesForDefinition`; spec/landed/sema/WP-805.md).
-// WP-805.
+// WP-805. clang 19's IR differs in the AArch64 datalayout and
+// "frame-pointer" attributes, so this compares with clang 22 and the
+// `-19` sibling with clang 19 (WP-839).
+//@ requires: clang>=22
 //@ expect: ir
 __attribute__((used)) static int used_var = 1;
 __attribute__((used)) static int used_fn() { return 2; }

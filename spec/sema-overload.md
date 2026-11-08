@@ -168,7 +168,12 @@ namespace (+ class if a member); class → itself, all bases, their innermost
 enclosing namespaces; a template specialization adds its own template
 arguments' entities (not a base's, nor an enclosing class's: WP-418,
 `tests/conformance/basic.lookup.argdep/base-template-args-not-associated.cpp`,
-libc++ `iterator_robust_against_adl`); an overload-set (ULE) argument adds every candidate's.
+libc++ `iterator_robust_against_adl`); an overload-set (ULE) argument adds every candidate's;
+`std::meta::info` → the enumeration `std::meta::operators` and namespace
+`std::meta` once `<meta>` declared it (/3.1, P2996R13; the namespace is
+cached in `Sema::std_meta_ns`), so unqualified `type_of(r)` finds
+`std::meta::type_of` (WP-796 via WP-879,
+`basic.lookup.argdep/p3-meta-info-std-meta*.cpp`, compared with GCC 16.1).
 An associated class that is an undefined class template specialization (or
 member class of one) is instantiated first, silently, from the call's
 location, and the set recomputed until nothing new is instantiated (clang
@@ -344,6 +349,10 @@ whose trailing requires-clause is not satisfied is not viable
 non-const object does not hide a satisfied `operator int() const`, and
 "no viable conversion" notes it as "candidate function not viable:
 constraints not satisfied" with the satisfaction notes (WP-302).
+A surrogate call function ([over.call.object]/2) is not viable either
+when its conversion function's constraints are not satisfied
+(`add_surrogate`, clang `AddSurrogateCandidate`), and no surrogate note
+is printed for it (WP-881).
 
 **Reference direct-initialization** (`int&& r(Ex{})`, `static_cast<T&&>`;
 clang `allowExplicitConversionFunctionsInRefBinding`): `bind_reference`
