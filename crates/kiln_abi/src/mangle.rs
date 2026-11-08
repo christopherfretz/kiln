@@ -1578,36 +1578,41 @@ impl<'a, 'b> Mangler<'a, 'b> {
     }
 
     /// Whether `a` is template parameter `p` itself (`T...` for a pack).
-    fn is_own_param_arg(&self, p: DeclId, a: ArgView) -> bool {
+    fn is_own_param_arg(&self, p: DeclId, arg: ArgView) -> bool {
         let ast = self.ast;
-        let Some(x) = ast.template_parm(p) else { return false };
-        let (d, i) = (u32::from(x.depth), u32::from(x.index));
+        let Some(parm) = ast.template_parm(p) else { return false };
+        let (depth, index) = (u32::from(parm.depth), u32::from(parm.index));
         let is_parm = |q: QualType| match ast.types.canonical_view(q) {
-            TypeView::CanonTemplateTypeParm { depth, index, .. } => depth == d && index == i,
+            TypeView::CanonTemplateTypeParm { depth: dd, index: ii, .. } => {
+                dd == depth && ii == index
+            }
             _ => false,
         };
         let expansion = |q: QualType| match ast.types.canonical_view(q) {
             TypeView::PackExpansion { pattern, .. } => is_parm(pattern),
             _ => false,
         };
-        match a {
-            ArgView::Type(q) if x.pack => expansion(q),
+        match arg {
+            ArgView::Type(q) if parm.pack => expansion(q),
             ArgView::Type(q) => is_parm(q),
-            ArgView::Pack(l) => {
-                x.pack
-                    && matches!(ast.types.args(l), [one]
+            ArgView::Pack(list) => {
+                parm.pack
+                    && matches!(ast.types.args(list), [one]
                         if !matches!(one.view(), ArgView::Pack(_))
                             && self.is_own_param_arg(p, one.view()))
             }
-            ArgView::Template(n) => matches!(
-                ast.types.template_name_view(ast.types.canonical_template_name(n)),
-                TemplateName::CanonTemplateTemplateParm { depth, index, .. }
-                    if depth == d && index == i
+            ArgView::Template(name) => matches!(
+                ast.types.template_name_view(ast.types.canonical_template_name(name)),
+                TemplateName::CanonTemplateTemplateParm { depth: dd, index: ii, .. }
+                    if dd == depth && ii == index
             ),
-            ArgView::Profile(pr) | ArgView::Expr { profile: Some(pr), .. } => {
-                ast.types.profile_expr(pr).is_some_and(|e| self.is_nttp_ref(e, d, i, x.pack))
+            ArgView::Profile(pr) | ArgView::Expr { profile: Some(pr), .. } => ast
+                .types
+                .profile_expr(pr)
+                .is_some_and(|e| self.is_nttp_ref(e, depth, index, parm.pack)),
+            ArgView::Expr { expr, profile: None } => {
+                self.is_nttp_ref(expr, depth, index, parm.pack)
             }
-            ArgView::Expr { expr, profile: None } => self.is_nttp_ref(expr, d, i, x.pack),
             _ => false,
         }
     }

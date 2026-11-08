@@ -587,31 +587,65 @@ impl Mangler<'_, '_> {
         true
     }
 
+    /// clang `CallExprClass`: `cl <callee> <arg>* E`; the callee's
+    /// operator name takes the argument count as its arity (unknown with
+    /// a pack expansion).
+    fn call_expression(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        self.out.push_str("cl");
+        let args: Vec<ExprId> = ast.lists.iter::<ExprId>(ast.exprs.call_args(expr)).collect();
+        let packs = args.iter().any(|&a| ast.exprs.get(a).kind() == ExprKind::PackExpansionExpr);
+        let arity = if packs { UNKNOWN_ARITY } else { args.len() };
+        if !self.expression_arity(ast.exprs.callee(expr), arity) {
+            return false;
+        }
+        for arg in args {
+            if !self.expression(arg) {
+                return false;
+            }
+        }
+        self.out.push('E');
+        true
+    }
+
+    /// `sizeof`/`alignof` of a type (`st`/`at`) or an expression
+    /// (`sz`/`az`). `converted` is the type `expr` is implicitly
+    /// converted to.
+    fn trait_expression(&mut self, expr: ExprId, converted: Option<QualType>) -> bool {
+        let ast = self.ast;
+        let node = ast.exprs.get(expr);
+        // A non-instantiation-dependent operand is encoded as the
+        // integer result, typed as the integer type it is
+        // implicitly converted to, else as its own `size_t`
+        // ([abi] 5.1.6.1; `Lm4E` for `sizeof(wchar_t) == 2`).
+        if !node.deps().intersects(ExprDeps::VALUE_INST) {
+            return self.trait_value(expr, converted);
+        }
+        let (type_code, expr_code) = match ast.exprs.trait_kind(expr) {
+            TraitKind::SizeOf => ("st", "sz"),
+            TraitKind::AlignOf => ("at", "az"),
+            _ => return false,
+        };
+        if let Some(arg) = ast.exprs.trait_type_arg(expr) {
+            self.out.push_str(type_code);
+            self.ty(arg);
+        } else {
+            let Some(sub) = ast.exprs.first_child(expr, &ast.lists) else {
+                return false;
+            };
+            self.out.push_str(expr_code);
+            return self.expression(sub);
+        }
+        true
+    }
+
     /// An operator, call, cast, `sizeof`/`alignof` or pack expansion.
     /// `converted` is the type `expr` is implicitly converted to.
     fn operator_expression(&mut self, expr: ExprId, converted: Option<QualType>) -> bool {
         let ast = self.ast;
         let node = ast.exprs.get(expr);
         match node.kind() {
-            // clang `CallExprClass`: the callee's operator name takes the
-            // argument count as its arity (unknown with a pack expansion).
-            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
-                self.out.push_str("cl");
-                let args: Vec<ExprId> =
-                    ast.lists.iter::<ExprId>(ast.exprs.call_args(expr)).collect();
-                let packs =
-                    args.iter().any(|&a| ast.exprs.get(a).kind() == ExprKind::PackExpansionExpr);
-                let arity = if packs { UNKNOWN_ARITY } else { args.len() };
-                if !self.expression_arity(ast.exprs.callee(expr), arity) {
-                    return false;
-                }
-                for arg in args {
-                    if !self.expression(arg) {
-                        return false;
-                    }
-                }
-                self.out.push('E');
-            }
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => return self.call_expression(expr),
             ExprKind::UnaryOperator => {
                 let code = match ast.exprs.unary_op(expr) {
                     UnaryOp::PostInc | UnaryOp::PreInc => "pp",
@@ -639,30 +673,7 @@ impl Mangler<'_, '_> {
                 self.out.push_str("qu");
                 return self.expression(cond) && self.expression(then) && self.expression(els);
             }
-            ExprKind::UnaryExprOrTypeTraitExpr => {
-                // A non-instantiation-dependent operand is encoded as the
-                // integer result, typed as the integer type it is
-                // implicitly converted to, else as its own `size_t`
-                // ([abi] 5.1.6.1; `Lm4E` for `sizeof(wchar_t) == 2`).
-                if !node.deps().intersects(ExprDeps::VALUE_INST) {
-                    return self.trait_value(expr, converted);
-                }
-                let (type_code, expr_code) = match ast.exprs.trait_kind(expr) {
-                    TraitKind::SizeOf => ("st", "sz"),
-                    TraitKind::AlignOf => ("at", "az"),
-                    _ => return false,
-                };
-                if let Some(arg) = ast.exprs.trait_type_arg(expr) {
-                    self.out.push_str(type_code);
-                    self.ty(arg);
-                } else {
-                    let Some(sub) = ast.exprs.first_child(expr, &ast.lists) else {
-                        return false;
-                    };
-                    self.out.push_str(expr_code);
-                    return self.expression(sub);
-                }
-            }
+            ExprKind::UnaryExprOrTypeTraitExpr => return self.trait_expression(expr, converted),
             ExprKind::ArraySubscriptExpr => {
                 self.out.push_str("ix");
                 let [lhs, rhs] = ast.exprs.operands(expr);
