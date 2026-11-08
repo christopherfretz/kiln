@@ -112,7 +112,6 @@ const DEBUG: &str = "debug info only";
 const INSTR: &str = "instrumentation or hardening only; dropping it changes no semantics";
 const HINT: &str = "optimization hint; dropping it is a valid refinement";
 const INLINE: &str = "inlining or call-optimization hint; dropping it changes no semantics";
-const NOCC: &str = "calling convention clang ignores on aarch64 and x86-64";
 const DIAG_REJECT: &str = "only makes clang diagnose a use; no code generation effect";
 
 /// The rows, sorted by name.
@@ -120,13 +119,6 @@ pub static TABLE: &[Row] = &[
     r("NSObject", G | CL, C, OBJC),
     r("Owner", GSL, C, LIFETIME),
     r("Pointer", GSL, C, LIFETIME),
-    r("aarch64_sve_pcs", G | CL, A, "calling convention: changes the call ABI (WP-808)"),
-    r(
-        "aarch64_vector_pcs",
-        G | CL,
-        A,
-        "calling convention (WP-808); an AArch64 declaration is accepted",
-    ),
     r("acquire_capability", G | CL, C, TSA),
     r("acquire_handle", G | CL, C, ANALYSIS),
     r("acquire_shared_capability", G | CL, C, TSA),
@@ -166,7 +158,6 @@ pub static TABLE: &[Row] = &[
     r("called_once", G | CL, C, ANALYSIS),
     r("capability", G | CL, C, TSA),
     r("carries_dependency", G, C, ANALYSIS),
-    r("cdecl", G | GS, C, NOCC),
     r("cf_audited_transfer", G | CL, C, OBJC),
     r("cf_consumed", G | CL, C, OBJC),
     r("cf_returns_not_retained", G | CL, C, OBJC),
@@ -215,7 +206,6 @@ pub static TABLE: &[Row] = &[
     r("exclusive_trylock_function", G, C, TSA),
     r22("ext_vector_type", CL, A, "defines a vector type (only the GNU spelling is implemented)"),
     r("external_source_symbol", G | CL, C, ANALYSIS),
-    r("fastcall", G | GS, C, NOCC),
     r("flatten", G | GS, B, INLINE),
     rt("force_align_arg_pointer", [0, 0, G | GS, G | GS], B, HINT),
     r("format_arg", G | GS, C, ANALYSIS),
@@ -230,7 +220,6 @@ pub static TABLE: &[Row] = &[
     r("ibaction", G | CL, C, OBJC),
     r("iboutlet", G | CL, C, OBJC),
     r("iboutletcollection", G | CL, C, OBJC),
-    r("intel_ocl_bicc", G | CL, A, "calling convention: changes the call ABI (WP-808)"),
     r("intel_reqd_sub_group_size", G, C, OFFLOAD),
     rt("interrupt", [0, 0, 0, G | GS], A, "calling convention: changes the call ABI (WP-808)"),
     rt("kernel", [G, 0, G, 0], C, OFFLOAD),
@@ -243,7 +232,6 @@ pub static TABLE: &[Row] = &[
     r("lockable", G, C, TSA),
     r("locks_excluded", G, C, TSA),
     r("lto_visibility_public", G | CL, B, "whole-program devirtualization under LTO only"),
-    r("m68k_rtd", G | CL, C, NOCC),
     r22("malloc_span", G | CL, B, HINT),
     r("managed", G, C, OFFLOAD),
     r("matrix_type", G | CL, A, "defines a vector or matrix type"),
@@ -251,7 +239,6 @@ pub static TABLE: &[Row] = &[
     r("mig_server_routine", G | CL, C, ANALYSIS),
     rt("model", [0, 0, 0, G | GS], A, "x86-64 code model of the variable's section"),
     r22("modular_format", G | CL, B, HINT),
-    r("ms_abi", G | GS, A, "calling convention: changes the call ABI (WP-808)"),
     r("ms_struct", G | GS, A, "selects the MS or GCC bit-field layout"),
     r("musttail", G | CL, A, "guaranteed tail call"),
     r(
@@ -262,13 +249,6 @@ pub static TABLE: &[Row] = &[
     ),
     r("neon_vector_type", CL, A, "defines a vector type (only the GNU spelling is implemented)"),
     r("no_address_safety_analysis", G | GS, B, SAN),
-    r("no_builtin", G | CL, A, "`no-builtins` / `no-builtin-X` function attributes (WP-808)"),
-    rt(
-        "no_caller_saved_registers",
-        [0, 0, G | GS, G | GS],
-        A,
-        "calling convention: changes the call ABI (WP-808)",
-    ),
     r22("no_cluster", G, C, OFFLOAD),
     r("no_instrument_function", G | GS, B, INSTR),
     r("no_profile_instrument_function", G | GS, B, INSTR),
@@ -348,21 +328,14 @@ pub static TABLE: &[Row] = &[
     r("ownership_returns", G | CL, C, ANALYSIS),
     r("ownership_takes", G | CL, C, ANALYSIS),
     r("param_typestate", G | CL, C, ANALYSIS),
-    r("pascal", G | CL, C, NOCC),
     r("patchable_function_entry", G | GS, B, INSTR),
-    r("pcs", G | GS, C, NOCC),
     r("pointer_with_type_tag", G | CL, C, ANALYSIS),
     r("preferred_type", G | CL, C, ANALYSIS),
-    r("preserve_all", G | CL, A, "calling convention: changes the call ABI (WP-808)"),
-    r("preserve_most", G | CL, A, "calling convention: changes the call ABI (WP-808)"),
-    r("preserve_none", G | CL, A, "calling convention: changes the call ABI (WP-808)"),
     r("pt_guarded_by", G, C, TSA),
     r("pt_guarded_var", G | CL, C, TSA),
     r("ptrauth_vtable_pointer", G | CL, C, OFFLOAD),
     r("randomize_layout", G | GS, B, HINT),
     r22("reentrant_capability", G | CL, C, TSA),
-    r("regcall", G | GS, A, "calling convention: changes the call ABI (WP-808)"),
-    r("regparm", G | GS, C, NOCC),
     r("reinitializes", G | CL, C, ANALYSIS),
     r("release_capability", G | CL, C, TSA),
     r("release_generic_capability", G | CL, C, TSA),
@@ -388,7 +361,6 @@ pub static TABLE: &[Row] = &[
     r("sized_by_or_null", G | CL, C, ANALYSIS),
     r("speculative_load_hardening", G | CL, B, INSTR),
     r("standalone_debug", G | CL, B, DEBUG),
-    r("stdcall", G | GS, C, NOCC),
     r("suppress", G | CL | GSL, C, ANALYSIS),
     r("swift_async", G | CL, C, SWIFT),
     r("swift_async_context", G | CL, A, "Swift-convention parameter ABI (WP-808)"),
@@ -412,11 +384,9 @@ pub static TABLE: &[Row] = &[
     r("sycl_kernel", G | CL, C, OFFLOAD),
     r22("sycl_kernel_entry_point", CL, C, OFFLOAD),
     r("sycl_special_class", G | CL, C, OFFLOAD),
-    r("sysv_abi", G | GS, C, NOCC),
     r("target_clones", G | GS, A, "function multiversioning"),
     rt("target_version", [G | GS, G | GS, G | GS, 0], A, "function multiversioning"),
     r("test_typestate", G | CL, C, ANALYSIS),
-    r("thiscall", G | GS, C, NOCC),
     r("transparent_union", G | GS, C, "clang ignores it in C++ (-Wignored-attributes)"),
     r("try_acquire_capability", G | CL, C, TSA),
     r("try_acquire_shared_capability", G | CL, C, TSA),
@@ -427,7 +397,6 @@ pub static TABLE: &[Row] = &[
     r("use_handle", G | CL, C, ANALYSIS),
     r("vec_type_hint", G, C, OFFLOAD),
     r("vecreturn", G | CL, C, OFFLOAD),
-    r("vectorcall", G | CL, A, "calling convention: changes the call ABI (WP-808)"),
     r("warn_unused", G | GS, C, ANALYSIS),
     r("warn_unused_result", CL, C, ANALYSIS),
     r("warning", G | GS, C, DIAG_REJECT),
@@ -452,6 +421,7 @@ const CLANG_SCOPED: &[&str] = &[
     "internal_linkage",
     "min_vector_width",
     "minsize",
+    "no_builtin",
     "no_destroy",
     "optnone",
     "overloadable",
@@ -513,11 +483,17 @@ pub fn attribute_support(
             return Support::Implemented(k);
         }
     }
+    // The calling conventions, `regparm` and `no_caller_saved_registers`
+    // (WP-808; `swiftcall` / `swiftasynccall` stay class A).
+    if let Some(k) = crate::cconv::cc_attr_kind(name, syntax, scope, x86) {
+        return Support::Implemented(k);
+    }
     let sp = spelling_of(syntax, scope);
-    // Accepted on a declaration only; a definition is rejected
-    // (AttrKind::AARCH64_VECTOR_PCS_DECL; Sema::act_on_finish_function_def).
-    if name == "aarch64_vector_pcs" && !x86 && sp & (G | GS | CL) != 0 {
-        return Support::Implemented(AttrKind::AARCH64_VECTOR_PCS_DECL);
+    // clang 19 handles x86 `interrupt` (`handleAnyX86InterruptAttr`)
+    // although its `__has_attribute` answers 0 there: class A at every
+    // release, not the unknown-attribute warning (WP-808 follow-up).
+    if name == "interrupt" && x86 && sp & (G | GS) != 0 {
+        return Support::Unsupported;
     }
     match row(name) {
         Some(r) if sp != 0 && r.spellings_at(compat, x86) & sp != 0 => match r.class {
@@ -569,15 +545,25 @@ mod tests {
         assert!(matches!(s("cleanup", g, None, 22), Support::Implemented(_)));
         assert!(matches!(s("mode", x, Some("gnu"), 19), Support::Implemented(_)));
         assert_eq!(s("swiftcall", x, Some("clang"), 22), Support::Unsupported);
-        // Declaration-only on AArch64 (AttrKind::AARCH64_VECTOR_PCS_DECL).
-        assert!(matches!(s("aarch64_vector_pcs", g, None, 19), Support::Implemented(_)));
+        // The calling conventions (WP-808): each spelling clang 19 gives
+        // it, on every target (one the target ignores warns, as clang).
+        let cc = Support::Implemented(AttrKind::CALLING_CONV);
+        assert_eq!(s("aarch64_vector_pcs", g, None, 19), cc);
+        assert_eq!(attribute_support("aarch64_vector_pcs", g, None, 19, true, true), cc);
+        assert_eq!(s("preserve_most", x, Some("clang"), 22), cc);
+        assert_eq!(s("ms_abi", x, Some("gnu"), 19), cc);
+        assert_eq!(s("ms_abi", x, Some("clang"), 19), Support::Unknown);
+        assert_eq!(s("regparm", g, None, 22), Support::Implemented(AttrKind::REGPARM));
+        assert_eq!(s("no_caller_saved_registers", g, None, 22), Support::Unknown);
         assert_eq!(
-            attribute_support("aarch64_vector_pcs", g, None, 19, true, true),
-            Support::Unsupported
+            attribute_support("no_caller_saved_registers", x, Some("gnu"), 19, true, true),
+            Support::Implemented(AttrKind::NO_CALLER_SAVED_REGS)
         );
+        assert!(matches!(s("no_builtin", x, Some("clang"), 19), Support::Implemented(_)));
         // Target- and release-dependent rows.
         assert_eq!(s("interrupt", g, None, 22), Support::Unknown);
         assert_eq!(attribute_support("interrupt", g, None, 22, true, true), Support::Unsupported);
+        assert_eq!(attribute_support("interrupt", g, None, 19, true, true), Support::Unsupported);
         assert_eq!(s("kernel", g, None, 19), Support::Ignored(C));
         assert_eq!(s("kernel", g, None, 22), Support::Unknown);
         // Implemented spellings win; other spellings of the same name do not.
@@ -596,10 +582,11 @@ mod tests {
         assert_eq!(s("not_an_attribute", g, None, 22), Support::Unknown);
     }
 
-    /// The names sibling work packages own stay class A until they land.
+    /// The conventions kiln does not lower yet stay class A (WP-808
+    /// follow-ups).
     #[test]
-    fn owned_names_are_class_a() {
-        for n in ["no_builtin", "vectorcall", "ms_abi", "preserve_most"] {
+    fn unlowered_conventions_are_class_a() {
+        for n in ["swiftcall", "swiftasynccall", "interrupt"] {
             assert_eq!(row(n).map(|r| r.class), Some(A), "{n}");
         }
     }

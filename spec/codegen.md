@@ -130,8 +130,10 @@ panic and never silently wrong IR.
   target string attributes: on AArch64 `"target-cpu"="generic"` and
   `"target-features"="+fp-armv8,+neon,+outline-atomics,+v8a,-fmv"`, or
   `"+fp-armv8,+neon,+v8a,-fmv,-outline-atomics"` when
-  `CodegenOptions::outline_atomics` is false (`-mno-outline-atomics`,
-  WP-226; `tests/codegen/no_outline_atomics.cpp`); on x86-64
+  `CodegenOptions::outline_atomics` is `Some(false)` (`-mno-outline-atomics`,
+  WP-226; `tests/codegen/no_outline_atomics.cpp`), or
+  `"+fp-armv8,+neon,+v8a,-fmv"` when it is `None` (no flag and no GCC
+  9.3.1+ installation, spec/driver.md; WP-808); on x86-64
   `"target-cpu"="x86-64"`, the baseline features and
   `"tune-cpu"="generic"`.
 - `func.rs`: per-function state (`Fx`) and the prolog and epilog: the
@@ -385,7 +387,8 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `tests/codegen/builtins_lib_intrinsic.cpp`). Not done (follow-ups):
     clang's -O0 fold of a library call the constant evaluator accepts
     (`strlen("abc")` is `i64 3`, `memcmp` of literals), clang 22's
-    `modf` to `llvm.modf`, and `-fno-builtin` / `-fno-builtin-<name>`;
+    `modf` to `llvm.modf`; `-fno-builtin` / `-fno-builtin-<name>` and
+    the `no_builtin` attribute are "no-builtin" below;
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
     call initializes an aggregate, otherwise into a temporary; an
@@ -605,18 +608,26 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       A `pass_object_size(t)` parameter (spec/sema.md §4) adds a hidden
       `size_t` argument right after it in the IR signature
       (`module::with_object_sizes`, applied by `decl_sig` and at direct
-      calls); the caller passes, in order: the constant size of a named
-      complete object (`p`, `&p`, `p + k`, a member only for odd `t`),
-      minus the offset, unless the spelling is dynamic; the caller's own
-      hidden value when the argument is a compatible `pass_object_size`
-      parameter (types equal, 0 serving 1, 3 serving 2); 0 for type 3;
-      else `llvm.objectsize` as above. In the callee
+      calls, member, operator and constructor calls included); the caller
+      passes, in order (clang `MaybeEmitImplicitObjectSize`): the Oven's
+      fold of `__builtin_object_size(arg, t)` at the call site
+      (`Oven::fold_object_size`, run by the fold prepass
+      `Collect::ps_args` -> `Folds::obj_size`; no side-effect default, a
+      failure is not an error), for `pass_dynamic_object_size` too; the
+      caller's own hidden value when the argument is a compatible
+      `pass_object_size` parameter (types equal, 0 serving 1, 3 serving
+      2); 0 for type 3; else `llvm.objectsize(arg, t & 2, true, dynamic)`.
+      In the callee
       `__builtin_object_size(param, t)` of a compatible type loads the
       hidden value (`Fx::object_sizes`; clang `emitBuiltinObjectSize` /
-      `EmitCallArgs`; WP-803,
-      `ext.clang.pass.object.size/pass-object-size-run.cpp`). Not yet:
-      the full Oven fold of the caller's argument (other shapes take the
-      `llvm.objectsize` of the whole object, which only weakens a check).
+      `EmitCallArgs`; WP-803, WP-808,
+      `ext.clang.pass.object.size/pass-object-size-run.cpp`,
+      `ir-pass-object-size-fold.cpp`). Not yet (WP-808 follow-up,
+      `pass-object-size-lenient-xfail.cpp`): clang's lenient designator
+      (an out-of-bounds or negative offset gives 0, a reinterpreting
+      cast keeps the byte offset, a member of an unknown base keeps its
+      designator); those arguments take `llvm.objectsize`, which only
+      weakens a check at -O0.
       `__builtin_powi*` is
       `llvm.powi.fT.i32`; `__builtin_copysignf16` truncates to `half`,
       calls `llvm.copysign.f16` and extends back;
@@ -1087,7 +1098,7 @@ The normative description is spec/driver.md "Code generation". In short:
   `opt-19 -S -passes=verify`. `Exact` cases must also equal
   `clang++-19 -S -emit-llvm -O0 -std=c++26 --target=aarch64-unknown-linux-gnu
   -moutline-atomics` after normalization (the flag for the same reason as
-  in the IR-diff corpus below; kiln's default is on, WP-228). A case that differs but is marked `VerifyOnly` is
+  in the IR-diff corpus below; kiln's default follows the GCC installation as clang's, WP-808). A case that differs but is marked `VerifyOnly` is
   a documented deviation (below); one that becomes exact is reported so
   it can be promoted. `KILN_CASE=<name>` prints both texts.
 - **Normalization:** both texts go through `opt-19 -S -passes=verify`,
@@ -3134,6 +3145,47 @@ Linux targets; `Cg::frame_pointer` applies it.
   `kiln_driver` `frame_pointer_flags_last_win`,
   `tests/codegen/frame_pointer_*.cpp` and `noinline_matrix_o{1,2}.cpp`
   (exact under oracle 19 on both targets).
+
+### no-builtin (WP-808)
+`-fno-builtin` / `-ffreestanding` (`CodegenOptions::no_builtin`, clang
+`LangOpts.NoBuiltin`), `-fno-builtin-<name>`
+(`CodegenOptions::no_builtin_fns`, `LangOpts.NoBuiltinFuncs`) and the
+`no_builtin` attribute (spec/sema.md §4.5), as clang 19
+(`addNoBuiltinAttributes`, `ConstructAttributeList`,
+`EmitDirectCallee`):
+- **Functions.** Every declaration and definition that goes through
+  `Cg::target_attrs_of` (functions, global-init and TLS helpers,
+  `__clang_call_terminate`; not the runtime declarations such
+  as `__cxa_*`) gets `Cg::no_builtin_attrs`: `"no-builtins"` alone under
+  `-fno-builtin`; else `"no-builtin-<name>"` per `-fno-builtin-<name>`,
+  then for its `no_builtin` attribute `"no-builtins"` (wildcard) or
+  `"no-builtin-<name>"` per name. Kiln reads the definition's attribute
+  for every declaration of the function (`Cg::no_builtin_names`; clang
+  reads the declaration it emits, and only definitions may carry one).
+- **Call sites** (`Cg::call_size_attrs`: direct, indirect, virtual,
+  constructor and destructor calls): `nobuiltin` under `-fno-builtin`
+  (clang `!SimplifyLibCalls`) or when the callee's IR name is a
+  `-fno-builtin-<name>`, with the same `"no-builtin*"` strings, the
+  attribute part from the callee's `no_builtin` (`Module::nba_fns`,
+  recorded when the function is declared; none on an indirect call, nor
+  on a thunk's call of its target, `Fx::thunk`).
+- **Lowering.** Sema recognizes no library builtin under the flags
+  (spec/sema.md §5.4), so `memcpy` / `ceil` / ... are calls; inside a
+  function whose `no_builtin` names the callee (or is the wildcard,
+  `Cg::no_builtin_here`) a recognized library builtin is called, not
+  lowered. `__builtin_*` always lower. `Cg::is_std_builtin` (`std::move`
+  and kin) is off under `-fno-builtin` and for `-fno-builtin-std-<name>`;
+  the attribute's `std-<name>` does not stop the fold (clang compares
+  the current function's `"no-builtin-<name>"` with the callee's plain
+  name, here `move`, which the attribute cannot name). **Deviation:**
+  in a function with the wildcard `no_builtin`, clang 19 calls
+  `std::move` without instantiating its definition (sema treated the
+  call as a builtin), an undefined reference at link time; kiln keeps
+  folding it.
+- `-ffreestanding` also drops `uwtable` (`unwind_tables`) and makes
+  `__STDC_HOSTED__` 0. Tests: `tests/conformance/dcl.attr.no-builtin/`
+  (`ir-*.cpp` exact IR, `freestanding-memset-run.cpp`: a byte-loop
+  `memset` at -O2 does not become a recursive `memset` call).
 
 ### Hardening and overflow options (WP-605)
 The driver's "Codegen flags" (spec/driver.md) set these `CodegenOptions`

@@ -80,7 +80,11 @@ fn takes_expr_args(name: &str) -> bool {
             | "tls_model"
             | "returns_twice"
             | "mode"
-    )
+            | "regparm"
+            | "no_caller_saved_registers"
+            | "no_builtin"
+            | "interrupt"
+    ) || kiln_ast::attr::CC_ATTR_SPELLINGS.contains(&n)
 }
 
 /// True for the attributes whose argument is a type-id (clang

@@ -22,10 +22,10 @@ What WP-805 changed for every attribute row below:
   builtin kiln cannot lower or does not declare
   (crates/kiln_driver/src/pp_cmd.rs `StagedFeatures`). `-E` keeps clang's
   raw answers. `__has_c_attribute` is not defined in C++ mode, as in clang.
-- AArch64 `aarch64_vector_pcs` is accepted on a declaration: glibc's
-  libmvec declarations in `<math.h>` carry it, the argument passing is
-  base AAPCS64, and a vector-PCS callee preserves more registers than the
-  base convention. A definition with it is the class A error (WP-808).
+- AArch64 `aarch64_vector_pcs` was accepted on a declaration only, as an
+  interim (glibc's libmvec declarations in `<math.h>` carry it). WP-808
+  implements it, with the other calling conventions, as a function-type
+  property.
 
 The audit text follows, with owners added.
 
@@ -88,19 +88,19 @@ functions). The class B half of cause 4 is open. Cause 5 is fixed in WP-806 (#36
    warns). **No diagnostic.** (§2 B-A1) **Owner: fixed in WP-805.**
 6. attr `no_destroy` — destructor registered at exit; silent in libc++ (`_LIBCPP_NO_DESTROY`). (A5) **Owner: fixed in WP-805 (also `always_destroy`, `-f[no-]c++-static-destructors`).**
 7. attr calling conventions (`ms_abi`, `regcall`, `vectorcall`, `preserve_*`, `aarch64_vector_pcs`,
-   `aarch64_sve_pcs`, ...) — ABI mismatch at every call. warn / silent in sys hdr. (A6) **Owner: WP-808; error since WP-805, AArch64 `aarch64_vector_pcs` declarations accepted.**
+   `aarch64_sve_pcs`, ...) — ABI mismatch at every call. warn / silent in sys hdr. (A6) **Fixed in WP-808; `swiftcall`, `swiftasynccall` and x86 `interrupt` are still the class A error.**
 8. flag `-ffreestanding` with no `no-builtins` + attr `no_builtin` dropped — memcpy/memset
-   implementations can be turned into self-recursion. **No diagnostic** for the flag. (F-A1, A9) **Owner: WP-808; `no_builtin` is an error since WP-805.**
+   implementations can be turned into self-recursion. **No diagnostic** for the flag. (F-A1, A9) **Fixed in WP-808 (also `-fno-builtin[-<name>]`).**
 9. attr `mode(...)` — wrong integer/vector width. (A4) **Owner: fixed in WP-799.**
 10. attr `internal_linkage` — linkage/ODR differs; silent in libc++ configs that use it. (A8) **Fixed in WP-807.**
 11. attr `returns_twice` on user functions. (A7) **Fixed in WP-807.**
 12. pragma `STDC FENV_ACCESS ON` / `float_control(except)` / `clang fp exceptions` — no
     constrained FP. **No diagnostic.** (P-A2) **An error since WP-806 (#364); `float_control(except, off)` and `clang fp exceptions(ignore)` accepted.**
 13. attr `tls_model`. (A10) **Fixed in WP-807.**
-14. attr `pass_object_size` / `pass_dynamic_object_size` — hidden-parameter ABI + mangling. (A16) **Fixed in WP-803.**
+14. attr `pass_object_size` / `pass_dynamic_object_size` — hidden-parameter ABI + mangling. (A16) **Fixed in WP-803; the argument folds as clang's in WP-808.**
 15. attr `retain` (gc-sections). (A11) **Owner: fixed in WP-805.**
-16. flag `-fno-sized-deallocation` — still emits sized delete. **No diagnostic.** (F-A2) **Owner: WP-808.**
-17. flag `-fno-char8_t` — macros only. **No diagnostic.** (F-A3) **Owner: WP-808.**
+16. flag `-fno-sized-deallocation` — still emits sized delete. **No diagnostic.** (F-A2) **Fixed in WP-808.**
+17. flag `-fno-char8_t` — macros only. **No diagnostic.** (F-A3) **Fixed in WP-808 (also `-fchar8_t` under C++17).**
 18. attr `address_space(256/257)`, `transparent_union`, `ms_struct`/`gcc_struct`,
     `arm_sve_vector_bits`, `[[clang::neon_vector_type]]`-style spellings, `musttail`,
     multiversioning (`target_clones`, `target_version`, `cpu_specific`/`cpu_dispatch`),
@@ -189,17 +189,17 @@ system headers / with default warnings".
 | A3 | `used` | see 1.2 (known kind, not lowered) | always emitted + `llvm.used` | **none** | fixed in WP-805 |
 | A4 | `mode(QI/HI/SI/DI/TI/word/pointer/V4SI...)` | dropped; `AttrKind::MODE` exists but is never produced | changes the typedef's type (e.g. `typedef int ti __attribute__((mode(TI)))` is 128-bit) | warn — wrong type width/ABI (libgcc-style, glibc `<sys/types.h>` `__intN_t` uses it under some configs, softfloat, compiler-rt style code) | fixed in WP-799 |
 | A5 | `no_destroy` / `[[clang::no_destroy]]` | dropped | no `__cxa_atexit` registration for the variable | warn; **silent in libc++ headers** (`_LIBCPP_NO_DESTROY`) — destructor runs at exit -> static-destruction-order bugs/use-after-destroy at shutdown | fixed in WP-805 |
-| A6 | calling conventions: `ms_abi`, `regcall`, `vectorcall`, `preserve_most`, `preserve_all`, `preserve_none`, `aarch64_vector_pcs`, `aarch64_sve_pcs`, `intel_ocl_bicc`, `no_caller_saved_registers`, `interrupt` (x86) | dropped (crates/kiln_llvm/src/inst.rs:412-463 can print these CCs but no codegen path sets them from an attribute) | function and call sites use that CC | warn — **ABI mismatch** at every call across the boundary (Wine/EFI-style `ms_abi`, AArch64 vector-math library declarations that use `aarch64_vector_pcs` — silent when they sit in a system header) | WP-808 (error since WP-805; `aarch64_vector_pcs` declarations accepted) |
+| A6 | calling conventions: `ms_abi`, `regcall`, `vectorcall`, `preserve_most`, `preserve_all`, `preserve_none`, `aarch64_vector_pcs`, `aarch64_sve_pcs`, `intel_ocl_bicc`, `no_caller_saved_registers`, `interrupt` (x86) | dropped (crates/kiln_llvm/src/inst.rs:412-463 can print these CCs but no codegen path sets them from an attribute) | function and call sites use that CC | warn — **ABI mismatch** at every call across the boundary (Wine/EFI-style `ms_abi`, AArch64 vector-math library declarations that use `aarch64_vector_pcs` — silent when they sit in a system header) | fixed in WP-808, except `swiftcall`/`swiftasynccall` and x86 `interrupt` (class A error; xfail repros `dcl.attr.cconv/ir-swiftcall.cpp`, `x86-interrupt.cpp`) |
 | A7 | `returns_twice` | dropped; codegen applies `returns_twice` only by callee name (crates/kiln_codegen/src/outline.rs:71) | `returns_twice` on decl/calls | warn — custom setjmp-like/vfork wrappers miscompile at -O | fixed in WP-807 |
 | A8 | `internal_linkage` / `[[clang::internal_linkage]]` | dropped (`AttrKind::INTERNAL_LINKAGE` never produced) | entity gets internal linkage | warn; **silent in libc++** (`_LIBCPP_HIDE_FROM_ABI` under some configs, `_LIBCPP_INTERNAL_LINKAGE`) — static locals in inline functions merge across TUs instead of per-TU, ODR/ABI differences | fixed in WP-807 |
-| A9 | `no_builtin` / `no_builtin("memcpy")` | dropped | `no-builtins` / `no-builtin-memcpy` fn attr | warn — memcpy/memset implementations get loop-idiom-recognized into self-calls (infinite recursion) | WP-808 (error since WP-805) |
+| A9 | `no_builtin` / `no_builtin("memcpy")` | dropped | `no-builtins` / `no-builtin-memcpy` fn attr | warn — memcpy/memset implementations get loop-idiom-recognized into self-calls (infinite recursion) | fixed in WP-808 |
 | A10 | `tls_model("initial-exec"/"local-exec"/...)` | dropped | `thread_local(initialexec)` etc. | warn — default general-dynamic TLS in malloc implementations/`dlopen`ed libs: recursion into allocator, or perf; wrong model can break preload libs | fixed in WP-807 |
 | A11 | `retain` | dropped | `llvm.used` + `SHF_GNU_RETAIN` | warn — section-registered entries stripped by `--gc-sections` | fixed in WP-805 |
 | A12 | `selectany` (GNU spelling) | dropped | linkonce/COMDAT for the variable | warn — duplicate-symbol link errors (loud) | error since WP-805, unowned |
 | A13 | `ms_struct` / `gcc_struct` | dropped | MS bitfield layout | warn — layout/ABI | error since WP-805, unowned |
 | A14 | `transparent_union` | dropped (`__has_attribute` = 1) | clang ignores it in C++ too (`-Wignored-attributes`); the C-only effect (union passed as its first member) never applies | none in C++ | WP-805: class C row (accepted silently) |
 | A15 | `address_space(N)` | dropped | pointee in addrspace N (x86 `256`=gs, `257`=fs) | warn — gs/fs-relative accesses become flat-memory accesses | error since WP-805, unowned |
-| A16 | `pass_object_size(N)`, `pass_dynamic_object_size(N)` | dropped | hidden extra size_t parameter + different mangling (`PS`) | warn — **ABI + mangling mismatch** with clang-built objects (clang-oriented fortify headers use these; silent in sys hdr) | fixed in WP-803 |
+| A16 | `pass_object_size(N)`, `pass_dynamic_object_size(N)` | dropped | hidden extra size_t parameter + different mangling (`PS`) | warn — **ABI + mangling mismatch** with clang-built objects (clang-oriented fortify headers use these; silent in sys hdr) | fixed in WP-803; argument folds as clang's `tryEvaluateObjectSize` in WP-808 (lenient-designator cases: xfail `ext.clang.pass.object.size/pass-object-size-lenient-xfail.cpp`) |
 | A17 | `__clang_arm_builtin_alias`, `clang_builtin_alias` | dropped | maps the declared function to a builtin | warn; silent in `arm_sve.h`/`arm_mve.h`/`arm_sme.h`/`riscv_vector.h` — functions become undefined external references (link failure, loud) | error since WP-805, unowned |
 | A18 | `[[clang::musttail]]` (statement) | dropped | guaranteed tail call (`musttail`) or error | warn — interpreters relying on guaranteed TCO overflow the stack | error since WP-805, unowned |
 | A19 | `arm_sve_vector_bits(N)` | dropped, although the driver accepts `-msve-vector-bits=` (crates/kiln_driver/src/args.rs:733) | fixed-length SVE type with sizeof = N/8 | warn — sizeof/layout differ | error since WP-805, unowned |
@@ -263,7 +263,7 @@ error at a use. `common` is rejected in C++ as clang does (WP-807);
 - target-irrelevant calling conventions on x86_64/aarch64 (`stdcall`, `fastcall`, `thiscall`,
   `cdecl`, `pascal`, `regparm`, `pcs`, `m68k_rtd`, `sysv_abi`): clang ignores them with a
   "calling convention ignored for this target" warning (or they are the default); kiln warns
-  differently. Wording only.
+  as clang since WP-808 (`regparm` is implemented on x86_64).
 - `carries_dependency`, `deprecated`, `format`, `analyzer_noreturn`, `_Nullable`/`_Nonnull`,
   `unused`/`maybe_unused`, `preferred_name`, `flag_enum`, `enum_extensibility`: implemented as
   diagnostics, as in clang (not gaps).
@@ -396,9 +396,9 @@ etc. are rejected as unknown (loud; fine by policy).
 
 | # | flag | where | kiln | clang | owner |
 |---|---|---|---|---|---|
-| F-A1 | `-ffreestanding` | args.rs:1117 -> only predefined macros (pp_cmd.rs:148) + unwind default (codegen_cmd.rs:181) | no `no-builtins` fn attribute anywhere in kiln_codegen (verified: grep finds only the `nobuiltin` call-site attr for operator new/delete, new_delete.rs:307); library builtins still recognized | implies `-fno-builtin`: `"no-builtins"` on every function -> no loop-idiom self-recursion in `memcpy`/`memset` implementations | WP-808 |
-| F-A2 | `-fno-sized-deallocation` | args.rs:1123 -> only pp_cmd.rs:151 / `__cpp_sized_deallocation` (predef.rs:561) | still emits sized `operator delete(void*, size_t)` (codegen new_delete.rs:1509) | unsized delete | WP-808 |
-| F-A3 | `-fno-char8_t` | args.rs:1107 -> macros only (predef.rs:541) | `char8_t` stays a keyword; `u8""` stays `const char8_t[]` (parse decl.rs:883) | `u8""` is `const char[]`, `char8_t` not a keyword (mostly loud errors; some overloads/mangling silently differ) | WP-808 |
+| F-A1 | `-ffreestanding` | args.rs:1117 -> only predefined macros (pp_cmd.rs:148) + unwind default (codegen_cmd.rs:181) | no `no-builtins` fn attribute anywhere in kiln_codegen (verified: grep finds only the `nobuiltin` call-site attr for operator new/delete, new_delete.rs:307); library builtins still recognized | implies `-fno-builtin`: `"no-builtins"` on every function -> no loop-idiom self-recursion in `memcpy`/`memset` implementations | fixed in WP-808 |
+| F-A2 | `-fno-sized-deallocation` | args.rs:1123 -> only pp_cmd.rs:151 / `__cpp_sized_deallocation` (predef.rs:561) | still emits sized `operator delete(void*, size_t)` (codegen new_delete.rs:1509) | unsized delete | fixed in WP-808 |
+| F-A3 | `-fno-char8_t` | args.rs:1107 -> macros only (predef.rs:541) | `char8_t` stays a keyword; `u8""` stays `const char8_t[]` (parse decl.rs:883) | `u8""` is `const char[]`, `char8_t` not a keyword (mostly loud errors; some overloads/mangling silently differ) | fixed in WP-808 |
 | F-A4 | `-fexcess-precision=16` | codegen_flags.rs:165 | validated, dropped; always "standard" `_Float16`/`__bf16` (codegen expr.rs:1283) | no excess precision for `_Float16` | an error since WP-806 (#364) |
 
 ### Class B

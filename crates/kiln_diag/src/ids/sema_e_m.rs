@@ -131,6 +131,8 @@ sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match
 sema_friend_invalid_in_context = Error (0) "'friend' used outside of class";
 sema_friend_not_class_or_fn = Error (0) "friends can only be classes or functions";
 sema_func_returning_array_function = Error (2) "function cannot return {0:array|function} type {1}";
+// clang `err_function_attribute_mismatch` (WP-808)
+sema_function_attribute_mismatch = Error (1) "function declared with '{0}' attribute was previously declared without the '{0}' attribute";
 sema_function_partial_spec = Error (0) "function template partial specialization is not allowed";
 sema_function_spec_not_in_enclosing_ns = Error (2) "function template specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_gcc_requires_variadic = Warning [GccCompat] (1) "GCC requires a function with the {0} attribute to be variadic";
@@ -231,6 +233,7 @@ sema_invalid_float_suffix = Error (1) "invalid suffix '{0}' on floating constant
 sema_invalid_member_in_static = Error (1) "invalid use of member '{0}' in static member function";
 sema_invalid_nonstatic_member_use = Error (1) "invalid use of non-static data member '{0}'";
 sema_invalid_operands = Error (2) "invalid operands to binary expression ({0} and {1})";
+sema_invalid_pcs = Error (0) "invalid PCS type";
 sema_invalid_storage_class_in_func_decl = Error (0) "invalid storage class specifier in function declarator";
 sema_invalid_unary_operand = Error (1) "invalid argument type {0} to unary expression";
 sema_invalid_use_of_function_type = Error (0) "a function type is not allowed here";

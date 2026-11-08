@@ -1827,16 +1827,14 @@ impl Cg<'_> {
         // is still called with the arguments (clang
         // `arrangeCXXConstructorCall` with `PassProtoArgs` false keeps the
         // argument list; only the callee's prototype omits them).
-        let mut sig = self.call_sig_this(fty, false, &arg_tys, Some(rd));
+        let base_sig = self.call_sig_this(fty, false, &arg_tys, Some(rd));
         let needs_vtt = v == Structor::Base && self.structor_has_vbases(first);
-        if needs_vtt {
-            sig = self.with_vtt(sig);
-        }
+        let mut sig = if needs_vtt { self.with_vtt(base_sig.clone()) } else { base_sig.clone() };
         let saved = self.f.dest_destructed;
         self.f.dest_destructed = false;
         let vals = self.emit_call_args(&sig, &args);
         self.f.dest_destructed = saved;
-        let vals = vals?;
+        let mut vals = vals?;
         if self.inlines_inheriting_ctor(ctor) {
             let vtt = if needs_vtt {
                 let virt = info.kind == ConstructionKind::VirtualBase;
@@ -1852,6 +1850,14 @@ impl Cg<'_> {
             let delegating = info.kind == ConstructionKind::Delegating;
             let vtt = self.vtt_arg(rd, virt, delegating)?;
             self.f.call_vtt = Some(vtt);
+        }
+        // WP-808: the hidden `pass_object_size` arguments (clang
+        // `EmitCXXConstructorCall` through `EmitCallArgs`).
+        let mut args = args;
+        if let Some((s, sv, sa)) = self.object_size_args(ctor, fty, &base_sig, &vals, &args, false)
+        {
+            sig = if needs_vtt { self.with_vtt(s) } else { s };
+            (vals, args) = (sv, sa);
         }
         let (callee, fid) = self.structor_ref(ctor, v)?;
         self.call_vals(&sig, callee, fid, Some(dest.v), &vals, &args, None, &[])?;
@@ -2040,8 +2046,12 @@ impl Cg<'_> {
             self.alloc_call_attrs(md, &vals, &mut extra, &mut ret_extra);
             let fp = crate::expr::Callee::Virtual { md, this: this.v, align: this.align };
             let this = Some(this.v);
-            let r =
-                self.call_vals_to(&sig, fp, None, this, &vals, args, dest, &extra, &ret_extra)?;
+            let sized = self.object_size_args(md, cfty, &sig, &vals, args, false);
+            let (sig, cv, ca) = match &sized {
+                Some((s, v, a)) => (s, &v[..], &a[..]),
+                None => (&sig, &vals[..], args),
+            };
+            let r = self.call_vals_to(sig, fp, None, this, cv, ca, dest, &extra, &ret_extra)?;
             if let Some(p) = r {
                 self.alloc_align_assume(md, &vals, p);
             }
@@ -2060,8 +2070,12 @@ impl Cg<'_> {
         self.alloc_call_attrs(callee_md, &vals, &mut extra, &mut ret_extra);
         let callee = V::C(Value::func(f));
         let this = Some(this.v);
-        let r =
-            self.call_vals_ret(&sig, callee, Some(f), this, &vals, args, dest, &extra, &ret_extra)?;
+        let sized = self.object_size_args(md, cfty, &sig, &vals, args, false);
+        let (sig, cv, ca) = match &sized {
+            Some((s, v, a)) => (s, &v[..], &a[..]),
+            None => (&sig, &vals[..], args),
+        };
+        let r = self.call_vals_ret(sig, callee, Some(f), this, cv, ca, dest, &extra, &ret_extra)?;
         if let Some(p) = r {
             self.alloc_align_assume(callee_md, &vals, p);
         }

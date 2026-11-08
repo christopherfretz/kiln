@@ -8,7 +8,7 @@
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{DeclKind, EnumData, TagKind};
-use kiln_ast::types::{ExcSpec, NoexceptValue, TagKeyword, TypeView};
+use kiln_ast::types::{ExcSpec, FuncInfo, NoexceptValue, TagKeyword, TypeView};
 use kiln_ast::{AttrId, DeclId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::symbol::Symbol;
@@ -51,6 +51,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::SECTION => "section",
         AttrKind::ANALYZER_NORETURN => "analyzer_noreturn",
         AttrKind::DISABLE_TAIL_CALLS => "disable_tail_calls",
+        AttrKind::NO_BUILTIN => "no_builtin",
         AttrKind::CONST => "const",
         AttrKind::PURE => "pure",
         AttrKind::COLD => "cold",
@@ -91,7 +92,6 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::RETAIN => "retain",
         AttrKind::NO_DESTROY => "no_destroy",
         AttrKind::ALWAYS_DESTROY => "always_destroy",
-        AttrKind::AARCH64_VECTOR_PCS_DECL => "aarch64_vector_pcs",
         AttrKind::MIN_VECTOR_WIDTH => "min_vector_width",
         _ => return None,
     })
@@ -354,6 +354,78 @@ impl Sema<'_, '_> {
             self.check_decl_attr(d, kind, node)
         });
         self.unify_fn_section(d, attrs);
+        self.check_no_builtin_attrs(d, attrs);
+    }
+
+    /// The `no_builtin` attributes of function declaration `d` (clang
+    /// `handleNoBuiltinAttr`, WP-808): each adds its names to those before
+    /// it on the declaration, and a wildcard among more than one name is
+    /// an error at the declaration's name, each time; one attribute with
+    /// the union stays, at the last one's location. The declaration then
+    /// waits for its definition ([`Sema::no_builtin_pending`]).
+    fn check_no_builtin_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        if !attrs.iter().any(|&a| self.ast.attrs.get(a).kind == AttrKind::NO_BUILTIN) {
+            return;
+        }
+        let mut names: Vec<String> = Vec::new();
+        let mut last: Option<AttrNode> = None;
+        let name_loc = self.ast.decls.get(d).loc();
+        attrs.retain(|&a| {
+            let node = *self.ast.attrs.get(a);
+            if node.kind != AttrKind::NO_BUILTIN {
+                return true;
+            }
+            let joined = self.ast.symbols().as_str(Symbol::from_index(node.a)).to_owned();
+            names.extend(joined.split(',').filter(|n| !n.is_empty()).map(str::to_owned));
+            names.sort();
+            names.dedup();
+            if names.len() > 1 && names.iter().any(|n| n == "*") {
+                let msg = self
+                    .diag(DiagId::sema_no_builtin_wildcard_with_name, name_loc)
+                    .arg("'no_builtin'");
+                self.emit(msg);
+            }
+            last = Some(node);
+            false
+        });
+        let Some(mut node) = last else { return };
+        node.a = self.intern(&names.join(",")).index();
+        attrs.push(self.ast.attrs.push(node));
+        self.no_builtin_pending.push((d, node.loc));
+    }
+
+    /// The `no_builtin` attribute of function `f` met its body (`{`), or
+    /// `= default` / `= delete` (`defaulted`): clang's "has no effect on
+    /// defaulted or deleted functions" for the latter (WP-808).
+    pub(crate) fn no_builtin_defined(&mut self, f: DeclId, defaulted: bool) {
+        if self.no_builtin_pending.is_empty() {
+            return;
+        }
+        let Some(i) = self.no_builtin_pending.iter().position(|&(g, _)| g == f) else { return };
+        let (_, loc) = self.no_builtin_pending.swap_remove(i);
+        if defaulted {
+            let msg = self.diag(DiagId::sema_no_builtin_defaulted_deleted, loc).arg("no_builtin");
+            self.emit(msg);
+        }
+    }
+
+    /// The end of the unit: a `no_builtin` attribute still waiting is on a
+    /// declaration that is not a definition (clang
+    /// `err_attribute_no_builtin_on_non_definition`; WP-808).
+    pub(crate) fn report_no_builtin_declarations(&mut self) {
+        let mut pending = std::mem::take(&mut self.no_builtin_pending);
+        // An instantiation repeats its pattern's attribute (diagnosed
+        // there), and a definition reached without the parser's `{`
+        // (an instantiated body) is one.
+        pending.retain(|&(d, _)| {
+            self.ast.instantiated_from(d).is_none() && self.ast.definition(d) != Some(d)
+        });
+        pending.sort_by_key(|&(_, l)| l);
+        pending.dedup_by_key(|&mut (_, l)| l);
+        for (_, loc) in pending {
+            let msg = self.diag(DiagId::sema_no_builtin_non_definition, loc).arg("no_builtin");
+            self.emit(msg);
+        }
     }
 
     /// One attribute of [`Sema::check_decl_attrs`]; false drops it.
@@ -414,6 +486,21 @@ impl Sema<'_, '_> {
                 false
             }
             AttrKind::NORETURN if node.is_gnu_spelling() => self.check_gnu_noreturn(d, kind, node),
+            // A calling convention left on a declaration with no type
+            // (a class): clang's `'X' attribute only applies to functions
+            // and methods`; on a declarator it is consumed into the type
+            // ([`Sema::apply_cc_attrs`]; WP-808).
+            AttrKind::CALLING_CONV | AttrKind::NO_CALLER_SAVED_REGS | AttrKind::REGPARM => {
+                let name = if node.kind == AttrKind::CALLING_CONV {
+                    kiln_ast::attr::CC_ATTR_SPELLINGS
+                        .get(node.b as usize)
+                        .copied()
+                        .unwrap_or("cdecl")
+                } else {
+                    "no_caller_saved_registers"
+                };
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, name, "functions and methods")
+            }
             // [dcl.attr.noreturn]/1.
             AttrKind::NORETURN if !kind.is_function() => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type_error, "noreturn", "functions")
@@ -499,13 +586,6 @@ impl Sema<'_, '_> {
             }
             // clang `NakedAttr` / `OptimizeNoneAttr` subjects (ignored
             // with a warning); `MinSizeAttr`'s is an error.
-            AttrKind::AARCH64_VECTOR_PCS_DECL if !kind.is_function() => {
-                let msg = self
-                    .diag(DiagId::sema_attribute_unsupported_by_kiln, node.loc)
-                    .arg("aarch64_vector_pcs");
-                self.emit(msg);
-                false
-            }
             AttrKind::NAKED if !kind.is_function() => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "naked", "functions")
             }
@@ -521,6 +601,9 @@ impl Sema<'_, '_> {
                 "optnone",
                 "functions and Objective-C methods",
             ),
+            AttrKind::NO_BUILTIN if !kind.is_function() => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, "no_builtin", "functions")
+            }
             AttrKind::DISABLE_TAIL_CALLS if !kind.is_function() => wrong(
                 self,
                 DiagId::sema_attribute_wrong_decl_type,
@@ -1190,7 +1273,8 @@ impl Sema<'_, '_> {
     /// makes the function type `noreturn` as on a declaration
     /// ([`Sema::apply_noreturn_attrs`]; spec/types.md §5.4, WP-708).
     pub fn act_on_type_id_decl_attrs(&mut self, ty: QualType, attrs: &[AttrId]) -> QualType {
-        self.apply_noreturn_attrs(ty, attrs)
+        let ty = self.apply_noreturn_attrs(ty, attrs);
+        self.apply_cc_attrs_of(ty, attrs)
     }
 
     /// GNU `noreturn` (`__attribute__((noreturn))`, `[[gnu::noreturn]]`)
@@ -1222,6 +1306,18 @@ impl Sema<'_, '_> {
         v: bool,
         outer: bool,
     ) -> Option<QualType> {
+        self.with_fn_info(ty, &|i| i.with_noreturn(v), outer)
+    }
+
+    /// `ty` (a function type, or a pointer, reference or member pointer
+    /// to one when `outer`) with its function type's [`FuncInfo`] mapped
+    /// by `f`; None when it is no such type or `f` changes nothing.
+    pub(crate) fn with_fn_info(
+        &mut self,
+        ty: QualType,
+        f: &dyn Fn(FuncInfo) -> FuncInfo,
+        outer: bool,
+    ) -> Option<QualType> {
         // Sugar (a typedef, `decltype`, a substituted parameter) is
         // stepped through, not canonicalized (clang's
         // `FunctionTypeUnwrapper`): the function type as written keeps
@@ -1229,18 +1325,19 @@ impl Sema<'_, '_> {
         // `noreturn` is a pure addition (WP-748).
         let ty = self.ast.types.desugar_top(ty);
         if let TypeView::Function(p) = self.ast.types.view(ty.ty()) {
-            if p.info().noreturn() == v {
+            let info = f(p.info());
+            if p.info() == info {
                 return None;
             }
             let params = self.ast.types.params(&p).to_vec();
             let exc = self.ast.types.exc_spec(&p);
-            let f = self.ast.types.function(p.ret(), &params, p.info().with_noreturn(v), exc);
-            return Some(self.ast.types.qualify(f, ty.quals()));
+            let fty = self.ast.types.function(p.ret(), &params, info, exc);
+            return Some(self.ast.types.qualify(fty, ty.quals()));
         }
         if self.ast.types.is_function(ty) {
             // Sugar `desugar_top` keeps (a dependent kind).
             let c = self.ast.types.canonical(ty);
-            return self.with_fn_noreturn(c, v, false);
+            return self.with_fn_info(c, f, false);
         }
         if !outer {
             return None;
@@ -1254,20 +1351,20 @@ impl Sema<'_, '_> {
         };
         let built = match view {
             TypeView::Pointer(p) => {
-                let f = self.with_fn_noreturn(p, v, false)?;
-                self.ast.types.pointer_to(f)
+                let g = self.with_fn_info(p, f, false)?;
+                self.ast.types.pointer_to(g)
             }
             TypeView::LValueRef(p) => {
-                let f = self.with_fn_noreturn(p, v, false)?;
-                self.ast.types.lvalue_ref_to(f)
+                let g = self.with_fn_info(p, f, false)?;
+                self.ast.types.lvalue_ref_to(g)
             }
             TypeView::RValueRef(p) => {
-                let f = self.with_fn_noreturn(p, v, false)?;
-                self.ast.types.rvalue_ref_to(f)
+                let g = self.with_fn_info(p, f, false)?;
+                self.ast.types.rvalue_ref_to(g)
             }
             TypeView::MemberPointer { pointee, class } => {
-                let f = self.with_fn_noreturn(pointee, v, false)?;
-                self.ast.types.member_pointer(f, class)
+                let g = self.with_fn_info(pointee, f, false)?;
+                self.ast.types.member_pointer(g, class)
             }
             _ => return None,
         };

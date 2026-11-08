@@ -88,7 +88,7 @@ impl Sema<'_, '_> {
     /// deallocation]/5, [expr.delete]/10): the alignment parameter must
     /// match `aligned` when one that does exists; then a class-scope
     /// lookup prefers the unsized function, a global one the sized one
-    /// when `sized`. With `destroying` (a delete-expression or a deleting
+    /// when `sized` (and `-fsized-deallocation`). With `destroying` (a delete-expression or a deleting
     /// destructor, not a new-expression's cleanup), a destroying operator
     /// delete `operator delete(C*, std::destroying_delete_t, ...)` is
     /// usual too, and when one is found only those are considered
@@ -146,7 +146,9 @@ impl Sema<'_, '_> {
         if usual.iter().any(|u| u.2 == aligned) {
             usual.retain(|u| u.2 == aligned);
         }
-        let want_size = !in_class && sized;
+        // `-fno-sized-deallocation`: a global sized function is never
+        // preferred, even when declared (clang 19).
+        let want_size = !in_class && sized && self.sized_deallocation;
         let pick = usual.iter().find(|u| u.1 == want_size).or_else(|| usual.first())?;
         Some((pick.0, pick.1))
     }

@@ -1778,6 +1778,7 @@ impl Sema<'_, '_> {
             false
         });
         ty = self.apply_noreturn_attrs(ty, &attrs);
+        ty = self.apply_cc_attrs(ty, &mut attrs, true);
         let declared = ty;
         ty = self.adjust_param_type(ty);
         let mut original_ty = (ty != declared).then_some(declared);
@@ -2847,6 +2848,7 @@ impl Sema<'_, '_> {
         let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef());
         let ty = self.apply_nothrow_attrs(ty, &mut attrs);
         let ty = self.apply_noreturn_attrs(ty, &attrs);
+        let ty = self.apply_cc_attrs(ty, &mut attrs, !ds.is_typedef());
         // [dcl.spec.general]/3: a function or member declared with no
         // type (`y();`, `struct S { y; };`) is an invalid `int` one, as
         // clang's `ConvertDeclSpecToType`: later uses name it silently.
@@ -2950,6 +2952,13 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_consteval_dtor, l);
         }
         let mut invalid = invalid;
+        // The calling convention of a constructor, destructor or
+        // conversion function (WP-808).
+        let ty = {
+            let mut written = ds.attrs.clone();
+            written.extend(d.attrs.iter().copied());
+            self.apply_cc_attrs(ty, &mut written, true)
+        };
         let Some(decl) = self.act_on_special_declarator(ds, ty, d, &mut invalid) else {
             self.templ.cur = None;
             return None;
@@ -2976,6 +2985,7 @@ impl Sema<'_, '_> {
         }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
+        attrs.retain(|&a| !self.ast.attrs.get(a).kind.is_fn_type_attr());
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
         }
@@ -3136,15 +3146,25 @@ impl Sema<'_, '_> {
     }
 
     /// Whether function types `a` and `b` are the same apart from their
-    /// exception specifications and GNU `noreturn` (which declarations of
-    /// one function merge, clang `MergeFunctionDecl`).
+    /// exception specifications, GNU `noreturn` and calling convention
+    /// (which declarations of one function merge, clang
+    /// `MergeFunctionDecl`).
     pub(crate) fn same_ignoring_exc_spec(&mut self, a: QualType, b: QualType) -> bool {
         let t = &self.ast.types;
         let (Some(pa), Some(pb)) = (t.proto(a).copied(), t.proto(b).copied()) else {
             return false;
         };
         let (ra, rb) = (t.params(&pa).to_vec(), t.params(&pb).to_vec());
-        let (ia, ib) = (pa.info().with_noreturn(false), pb.info().with_noreturn(false));
+        // The calling convention and `no_caller_saved_registers` do not
+        // decide correspondence either: a redeclaration naming another is
+        // diagnosed by `Sema::merge_cc` (clang `IsOverload` /
+        // `MergeFunctionDecl`, WP-808).
+        let plain = |i: FuncInfo| {
+            i.with_noreturn(false)
+                .with_cc(kiln_ast::types::CallConv::Default)
+                .with_no_caller_saved_regs(false)
+        };
+        let (ia, ib) = (plain(pa.info()), plain(pb.info()));
         let a = self.ast.types.function(pa.ret(), &ra, ia, ExcSpec::None);
         let b = self.ast.types.function(pb.ret(), &rb, ib, ExcSpec::None);
         self.ast.types.same_type(a, b)
@@ -3571,6 +3591,7 @@ impl Sema<'_, '_> {
         let _ = self.check_template_in_local_class(false, Loc::INVALID);
         let mut attrs = attrs.to_vec();
         let ty = self.apply_vector_attrs(ty, &mut attrs, true);
+        let ty = self.apply_cc_attrs(ty, &mut attrs, false);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
         // [temp.variadic]/12: `using U = Ts;`.
         if self.diagnose_unexpanded_declarator(ty, "declaration type", name_loc) {
@@ -4126,6 +4147,9 @@ impl Sema<'_, '_> {
                 } else if nr(self, ty) && !nr(self, pty) {
                     pty = self.with_fn_noreturn(pty, true, false).unwrap_or(pty);
                 }
+                // The calling convention likewise, when the redeclaration
+                // names none; a different one is an error (WP-808).
+                ty = self.merge_cc(ty, pty, p, d.name_loc());
                 // A friend whose noexcept-specifier waits for the end of
                 // its class (or, instantiated, until needed), or one
                 // redeclaring such a friend before its class is complete,
@@ -6780,6 +6804,7 @@ impl Sema<'_, '_> {
     /// redefinition, opens the function scope with the parameters.
     pub fn act_on_start_function_def(&mut self, f: DeclId) {
         self.check_alias_definition(f);
+        self.no_builtin_defined(f, false);
         // A deleted function is defined by its first declaration.
         let deleted = Some(self.ast.first(f)).filter(|&p| p != f && self.is_deleted_fn(p));
         if let Some(prev) = deleted.or_else(|| self.ast.definition(f))
@@ -6893,7 +6918,6 @@ impl Sema<'_, '_> {
     pub fn act_on_finish_function_def(&mut self, f: DeclId, body: StmtId, rbrace: Loc) {
         self.check_function_try_block(f, body);
         self.check_naked_body(f, body);
-        self.check_vector_pcs_definition(f);
         let body = self.end_function_body(body, rbrace);
         // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`.
         if let Some(fty) = self.ast.decls.get(f).ty() {
@@ -10232,6 +10256,10 @@ impl Sema<'_, '_> {
                 return None;
             }
         };
+        // The calling conventions, function type attributes (WP-808).
+        if kind.is_fn_type_attr() {
+            return self.cc_attribute(syntax, scope_s.as_deref(), &n, args, loc).flatten();
+        }
         if let std::ops::ControlFlow::Break(r) =
             self.attribute_with_args(kind, syntax, &raw, args, loc)
         {
@@ -10239,6 +10267,11 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::ABI_TAG {
             return self.abi_tag_attribute(syntax, &n, args, loc);
+        }
+        if kind == AttrKind::NO_BUILTIN {
+            // clang 22 names `[[clang::no_builtin]]` with its scope.
+            let scoped = syntax == AttrSyntax::Cxx11 && scope.is_some() && self.clang_compat >= 22;
+            return self.no_builtin_attribute(syntax, scoped, args, loc);
         }
         if kind == AttrKind::DIAGNOSE_IF {
             return self.diagnose_if_attribute(syntax, args, loc);
@@ -10667,6 +10700,70 @@ impl Sema<'_, '_> {
         tags.dedup();
         let a = self.intern(&tags.join(",")).index();
         let node = AttrNode { kind: AttrKind::ABI_TAG, syntax, flags: 0, loc, a, b: 0 };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// clang `no_builtin` / `no_builtin("name", ...)` as written (clang
+    /// `handleNoBuiltinAttr`; WP-808): no argument is the wildcard `*`;
+    /// each argument a string literal (else "expected string literal",
+    /// dropping the attribute) naming a library builtin, `std-<name>` for
+    /// a `std` one (clang `Builtin::Context::isBuiltinFunc`; another name
+    /// warns and is left out). Encoded as for [`AttrKind::NO_BUILTIN`];
+    /// [`Sema::check_no_builtin_attrs`] composes the ones on a declaration.
+    fn no_builtin_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        scoped: bool,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        const STD: [&str; 7] = [
+            "__addressof",
+            "addressof",
+            "as_const",
+            "forward",
+            "forward_like",
+            "move",
+            "move_if_noexcept",
+        ];
+        let mut names: Vec<String> = Vec::new();
+        if args.is_empty() {
+            names.push("*".to_owned());
+        }
+        for arg in args {
+            let (lit, at) = match arg {
+                AttrArg::Expr(e) => (self.string_lit_of(*e), self.ast.exprs.get(*e).loc()),
+                AttrArg::Type(_) => (None, loc),
+                AttrArg::Ident(_, l) => (None, *l),
+            };
+            let Some(lit) = lit else {
+                let msg = self.diag(DiagId::parse_attribute_requires_string, at).arg("no_builtin");
+                self.emit(msg);
+                return None;
+            };
+            let id = self.ast.exprs.string_lit(lit);
+            let name = String::from_utf8_lossy(self.ast.strings.bytes(id)).into_owned();
+            let valid = match name.strip_prefix("std-") {
+                Some(s) => STD.contains(&s),
+                None => {
+                    !STD.contains(&name.as_str())
+                        && (self.lib_builtin_name)(&name, self.clang_compat >= 22)
+                }
+            };
+            if valid {
+                names.push(name);
+            } else {
+                let msg = self
+                    .diag(DiagId::sema_no_builtin_invalid_name, at)
+                    .arg(name)
+                    .arg(if scoped { "'clang::no_builtin'" } else { "'no_builtin'" });
+                self.emit(msg);
+            }
+        }
+        names.sort();
+        names.dedup();
+        let a = self.intern(&names.join(",")).index();
+        let node = AttrNode { kind: AttrKind::NO_BUILTIN, syntax, flags: 0, loc, a, b: 0 };
         Some(self.ast.attrs.push(node))
     }
 
@@ -11266,6 +11363,8 @@ pub(crate) fn attr_kind_of(
         ("minsize", _, _) if gnu_syntax || clang_scope => AttrKind::MINSIZE,
         // clang `Clang<"disable_tail_calls">` (WP-682).
         ("disable_tail_calls", _, _) if gnu_syntax || clang_scope => AttrKind::DISABLE_TAIL_CALLS,
+        // clang `Clang<"no_builtin">` (WP-808).
+        ("no_builtin", _, _) if gnu_syntax || clang_scope => AttrKind::NO_BUILTIN,
         ("uninitialized", _, _) if gnu_syntax || clang_scope => AttrKind::UNINITIALIZED,
         // clang `Clang<"trivial_abi">`.
         ("trivial_abi", _, _) if gnu_syntax || clang_scope => AttrKind::TRIVIAL_ABI,
