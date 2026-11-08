@@ -1208,3 +1208,40 @@ fn compile_thread_spawn_failure_is_diagnosed() {
     );
     assert!(err.ends_with("(lower it with -fkiln-stack-size=)\n"), "{err}");
 }
+
+/// The debug information flags end to end (spec/driver.md "Debug
+/// information flags"): the last level wins, `-gdwarf-N` enables `-g` and
+/// sets the version, `-fdebug-prefix-map=` rewrites the directory, and an
+/// unimplemented flag is an error rather than a silent drop.
+#[test]
+fn debug_info_flags_reach_the_ir() {
+    let src = "int f(int a) { int b = a + 1; return b; }\n";
+    let ir = |flags: &[&str]| {
+        let mut args = vec!["-S", "-emit-llvm", "-o", "-", "-x", "c++"];
+        args.extend_from_slice(flags);
+        args.push("-");
+        let o = kiln(&args, src);
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{flags:?}");
+        o.stdout
+    };
+    let full = ir(&["-g"]);
+    assert!(full.contains("emissionKind: FullDebug"), "{full}");
+    assert!(full.contains("!DILocalVariable(name: \"b\""), "{full}");
+    assert!(full.contains("#dbg_declare("), "{full}");
+    assert!(full.contains("!{i32 7, !\"Dwarf Version\", i32 5}"), "{full}");
+    for off in [&["-g", "-g0"][..], &[]] {
+        let o = ir(off);
+        assert!(!o.contains("!llvm.dbg.cu") && !o.contains("!dbg"), "{off:?}: {o}");
+    }
+    let lines = ir(&["-g", "-gline-tables-only"]);
+    assert!(lines.contains("emissionKind: LineTablesOnly"), "{lines}");
+    assert!(!lines.contains("DILocalVariable"), "{lines}");
+    let v4 = ir(&["-gdwarf-4"]);
+    assert!(v4.contains("emissionKind: FullDebug"), "{v4}");
+    assert!(v4.contains("!{i32 7, !\"Dwarf Version\", i32 4}"), "{v4}");
+    let mapped = ir(&["-g", "-fdebug-prefix-map=/=/mapped/"]);
+    assert!(mapped.contains("directory: \"/mapped/"), "{mapped}");
+    let o = kiln(&["-g", "-gcodeview", "-S", "-emit-llvm", "-o", "-", "-x", "c++", "-"], src);
+    assert_eq!(o.code, 1);
+    assert_eq!(o.stderr, "kiln++: error: '-gcodeview' is not supported by kiln\n");
+}
