@@ -20,7 +20,7 @@
 //!   the path is known: a statement or initializer that names no
 //!   parameter, local variable or `this` is evaluated on its own
 //!   ([`Sema::eval_potential`]); one that does is taken apart operand by
-//!   operand, as `enable_if` conditions are (attr_cond.rs). A loop
+//!   operand, as `enable_if` conditions are (`attr_cond.rs`). A loop
 //!   whose condition is absent or known true has its first iteration
 //!   walked; the walk stops at an unknown condition, a `switch`, a `try`,
 //!   a label or a `return`; a constructor's body is walked only if each of its
@@ -198,7 +198,10 @@ impl Sema<'_, '_> {
                     .and_then(|fd| fd.init)
                     .is_some_and(|i| self.names_unknown(i, depth + 1))
             }
-            _ => ex.children(e, &self.ast.lists).into_iter().any(|c| self.names_unknown(c, depth + 1)),
+            _ => ex
+                .children(e, &self.ast.lists)
+                .into_iter()
+                .any(|c| self.names_unknown(c, depth + 1)),
         }
     }
 
@@ -227,6 +230,53 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// A `throw`: clang `Error(E)` (the operand is not evaluated) before
+    /// C++26; from C++26 (P3068) a handler in a calling constant
+    /// expression may catch it, so it is unknown.
+    fn nc_throw(&self, e: ExprId) -> Value {
+        if self.std >= kiln_lex::Std::Cxx26 {
+            return Value::Unknown;
+        }
+        Value::Fails(EvalFailure {
+            kind: FailKind::NotConstant,
+            notes: vec![Note::new(
+                self.begin_loc(e),
+                "subexpression not valid in a constant expression",
+            )],
+        })
+    }
+
+    /// `c ? t : f`: a known condition picks the arm; an unknown one fails
+    /// only when both arms do (clang `CheckPotentialConstantConditional`).
+    fn nc_conditional(&mut self, e: ExprId, depth: u32) -> Value {
+        let ex = &self.ast.exprs;
+        let c = ex.children(e, &self.ast.lists)[0];
+        let [t, f] = ex.cond_arms(e);
+        match self.nc_expr(c, depth + 1) {
+            Value::Known(v) => match self.const_truth(v) {
+                Some(b) => self.nc_expr(if b { t } else { f }, depth + 1),
+                None => Value::Unknown,
+            },
+            Value::Unknown => {
+                // clang `CheckPotentialConstantConditional`.
+                for arm in [f, t] {
+                    if !matches!(self.nc_expr(arm, depth + 1), Value::Fails(_)) {
+                        return Value::Unknown;
+                    }
+                }
+                Value::Fails(EvalFailure {
+                    kind: FailKind::NotConstant,
+                    notes: vec![Note::new(
+                        self.begin_loc(e),
+                        "both arms of conditional operator are unable to produce a \
+                         constant expression",
+                    )],
+                })
+            }
+            p @ Value::Fails(_) => p,
+        }
+    }
+
     /// `e` evaluated with the parameters, locals and `this` unknown
     /// (clang's evaluator in `checkingPotentialConstantExpression` mode:
     /// every operand of an operator or call is evaluated, except past an
@@ -238,27 +288,13 @@ impl Sema<'_, '_> {
         let ex = &self.ast.exprs;
         let kind = ex.get(e).kind();
         if kind == ExprKind::CXXThrowExpr {
-            if self.std >= kiln_lex::Std::Cxx26 {
-                // P3068: a handler in a calling constant expression may
-                // catch it.
-                return Value::Unknown;
-            }
-            // clang `Error(E)`: the operand is not evaluated.
-            return Value::Fails(EvalFailure {
-                kind: FailKind::NotConstant,
-                notes: vec![Note::new(
-                    self.begin_loc(e),
-                    "subexpression not valid in a constant expression",
-                )],
-            });
+            return self.nc_throw(e);
         }
         let evaluable = self.nc_evaluable(e);
         if !self.names_unknown(e, 0) {
             return if evaluable { self.nc_eval(e) } else { Value::Unknown };
         }
-        if evaluable
-            && let Value::Known(v) = self.nc_eval_trial(e)
-        {
+        if evaluable && let Value::Known(v) = self.nc_eval_trial(e) {
             // An unknown name in an unevaluated operand, or one whose
             // value is not needed (a `const` local usable in constant
             // expressions).
@@ -280,33 +316,7 @@ impl Sema<'_, '_> {
                     p => p,
                 }
             }
-            ExprKind::ConditionalOperator => {
-                let c = ex.children(e, &self.ast.lists)[0];
-                let [t, f] = ex.cond_arms(e);
-                match self.nc_expr(c, depth + 1) {
-                    Value::Known(v) => match self.const_truth(v) {
-                        Some(b) => self.nc_expr(if b { t } else { f }, depth + 1),
-                        None => Value::Unknown,
-                    },
-                    Value::Unknown => {
-                        // clang `CheckPotentialConstantConditional`.
-                        for arm in [f, t] {
-                            if !matches!(self.nc_expr(arm, depth + 1), Value::Fails(_)) {
-                                return Value::Unknown;
-                            }
-                        }
-                        Value::Fails(EvalFailure {
-                            kind: FailKind::NotConstant,
-                            notes: vec![Note::new(
-                                self.begin_loc(e),
-                                "both arms of conditional operator are unable to produce a \
-                                 constant expression",
-                            )],
-                        })
-                    }
-                    p @ Value::Fails(_) => p,
-                }
-            }
+            ExprKind::ConditionalOperator => self.nc_conditional(e, depth),
             ExprKind::ParenExpr
             | ExprKind::ImplicitCastExpr
             | ExprKind::CStyleCastExpr
@@ -368,7 +378,8 @@ impl Sema<'_, '_> {
             StmtKind::NullStmt => Flow::Next,
             StmtKind::AttributedStmt => self.nc_stmt(st.sub_stmt(s), depth + 1),
             StmtKind::CompoundStmt => {
-                let subs: Vec<StmtId> = self.ast.lists.iter::<StmtId>(st.compound_body(s)).collect();
+                let subs: Vec<StmtId> =
+                    self.ast.lists.iter::<StmtId>(st.compound_body(s)).collect();
                 for sub in subs {
                     match self.nc_stmt(sub, depth + 1) {
                         Flow::Next => {}
@@ -386,7 +397,8 @@ impl Sema<'_, '_> {
                 _ => Flow::Stop,
             },
             StmtKind::DeclStmt => {
-                let decls: Vec<DeclId> = self.ast.lists.iter::<DeclId>(st.decl_stmt_decls(s)).collect();
+                let decls: Vec<DeclId> =
+                    self.ast.lists.iter::<DeclId>(st.decl_stmt_decls(s)).collect();
                 for d in decls {
                     match self.kind_of(d) {
                         DeclKind::Var => {}

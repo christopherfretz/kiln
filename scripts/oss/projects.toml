@@ -77,9 +77,10 @@ cxx_std = 23
 configure = ["-DCATCH_DEVELOPMENT_BUILD=ON", "-DCATCH_BUILD_TESTING=ON", "-DCATCH_ENABLE_WERROR=OFF", "-DCATCH_BUILD_EXAMPLES=OFF"]
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
+control_cxx = "clang++-22"
 wave = 1
 verified = true
-notes = "WP-873 (WP-687). [catch2] in C++23: Message.tests.cpp then covers a multi-argument operator[] in CAPTURE. docs/status/oss/catch2.md."
+notes = "WP-873 (WP-687). [catch2] in C++23: Message.tests.cpp then covers a multi-argument operator[] in CAPTURE. The control is clang 22 (control_cxx): clang 19 rejects UniquePtr.tests.cpp with libstdc++ 14 (tuple_size<Catch::Decomposer> instantiated by tuple operator<=> in C++23; clang 22 and GCC accept). docs/status/oss/catch2.md."
 
 [catch2_werror]
 url = "https://github.com/catchorg/Catch2"

@@ -216,9 +216,9 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOpti
         sanitize: a.sanitize(x86, "").0.opts,
         lto: f.lto(),
         // `opt --thinlto-bc` adds a thin unit's `EnableSplitLTOUnit` itself.
-        lto_module_flags: !a.disable_llvm_passes
-            && !(f.lto == Some(true)
-                && matches!(Phase::of(a), Phase::Object | Phase::Bitcode | Phase::Link)),
+        lto_module_flags: !(a.disable_llvm_passes
+            || (f.lto == Some(true)
+                && matches!(Phase::of(a), Phase::Object | Phase::Bitcode | Phase::Link))),
         ..CodegenOptions::default()
     }
 }
@@ -791,11 +791,11 @@ fn lto_writer(args: &Args, tc: &Toolchain, out: String) -> Command {
     }
     let mut cmd = Command::new(tc, Tool::Opt);
     let keep_names = args.sanitize(!tc.target.is_aarch64(), tc.target.triple).0.opts.has(
-            kiln_ast::sanitize::SanitizerSet(
-                kiln_ast::sanitize::SanitizerSet::ADDRESS.0
-                    | kiln_ast::sanitize::SanitizerSet::MEMORY.0,
-            ),
-        );
+        kiln_ast::sanitize::SanitizerSet(
+            kiln_ast::sanitize::SanitizerSet::ADDRESS.0
+                | kiln_ast::sanitize::SanitizerSet::MEMORY.0,
+        ),
+    );
     if !keep_names {
         cmd.arg("-discard-value-names");
     }

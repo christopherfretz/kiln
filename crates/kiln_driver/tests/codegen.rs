@@ -272,7 +272,8 @@ fn print_commands_lto() {
     let o = kiln_in(&d, &["-###", "-c", "-flto=thin", "add.cpp"]);
     let err = text(&o.stderr);
     let pre = err.find("\"-passes=thinlto-pre-link<O0>\" \"-o\" \"-\" \"-\"\n").expect(&err);
-    let bc = err.find("\"-discard-value-names\" \"--thinlto-bc\" \"-o\" \"add.o\" \"-\"\n").expect(&err);
+    let bc =
+        err.find("\"-discard-value-names\" \"--thinlto-bc\" \"-o\" \"add.o\" \"-\"\n").expect(&err);
     assert!(pre < bc && !err.contains("llc"), "{err}");
     let o = kiln_in(&d, &["-###", "-c", "-flto", "-O2", "-fsplit-lto-unit", "add.cpp"]);
     let err = text(&o.stderr);

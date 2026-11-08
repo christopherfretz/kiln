@@ -16,8 +16,8 @@ use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{
-    Attr, AttrKind, CastOp, ComdatKind, FuncId, GepFlags, GlobalId, IntPredicate, Linkage, MdKindId,
-    MetadataId, TypeId as LTy, UnnamedAddr, Value, ValueRef, Visibility,
+    Attr, AttrKind, CastOp, ComdatKind, FuncId, GepFlags, GlobalId, IntPredicate, Linkage,
+    MdKindId, MetadataId, TypeId as LTy, UnnamedAddr, Value, ValueRef, Visibility,
 };
 use kiln_source::fx::{FxHashMap, FxHashSet};
 

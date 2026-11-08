@@ -449,7 +449,11 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// [`Oven::evaluate_potential`] of `e` (a never-constant check of a
     /// `constexpr` function body), reported at `at`.
-    pub(crate) fn eval_potential(&mut self, e: ExprId, at: Loc) -> Result<ConstValueId, EvalFailure> {
+    pub(crate) fn eval_potential(
+        &mut self,
+        e: ExprId,
+        at: Loc,
+    ) -> Result<ConstValueId, EvalFailure> {
         if !self.eval_stack_ok(e) {
             return Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant));
         }

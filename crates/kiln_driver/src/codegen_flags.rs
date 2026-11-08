@@ -632,7 +632,7 @@ mod tests {
     }
 
     /// WP-873: `-flto[=...]`, `-f[no-]split-lto-unit`, and the flags
-    /// CMake probes that kiln accepts and ignores (WP-677).
+    /// `CMake` probes that kiln accepts and ignores (WP-677).
     #[test]
     fn lto_and_probe_flags() {
         use kiln_codegen::Lto;
