@@ -2159,13 +2159,25 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// linkage at namespace scope outside an unnamed namespace (clang
     /// `mangleTemplatePrefix` passes the template itself to
     /// `isInternalLinkageDecl`, WP-603): every specialization of a
-    /// `static` (or `const`, or `internal_linkage`) template is `L`, an
-    /// explicit specialization (`_ZL2vtIlE`) and a closure in a variable
-    /// template's initializer (`_ZNKL2laIiEMUliE_clEi`) included.
+    /// `static` (or `internal_linkage`) template is `L`, an explicit
+    /// specialization (`_ZL2vtIlE`) and a closure in a variable
+    /// template's initializer (`_ZNKL2laIiEMUliE_clEi`) included. A
+    /// `const` variable template keeps external linkage (CWG2387; clang
+    /// `getLVForNamespaceScopeDecl` skips the `const` rule for templates):
+    /// `_Z3cvtIlE`.
     fn template_l_prefix(&mut self, t: DeclId) {
-        if let Some(p) = self.ast.template_info(t).and_then(|i| i.pattern) {
-            self.l_prefix(p);
+        let Some(p) = self.ast.template_info(t).and_then(|i| i.pattern) else { return };
+        let ast = self.ast;
+        let first = ast.first(p);
+        if ast.decls.get(first).kind() == DeclKind::Var {
+            let internal = ast.has_internal_linkage_attr(first)
+                || ast.decls.var(first).is_some_and(|v| v.spec.storage() == VarStorage::Static);
+            if internal && is_file_context(ast, first) && !in_anon_ns(ast, first) {
+                self.out.push('L');
+            }
+            return;
         }
+        self.l_prefix(p);
     }
 
     /// <unqualified-name>: operator, constructor, destructor, conversion

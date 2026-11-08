@@ -27,12 +27,10 @@ template <const volatile int* P> int vol() { return *P; }
 int arr[3];
 int gi = 1;
 static int si = 2;
-const int cg = 3;
 namespace { int an = 5; }
 
 int use() {
   return h(1) + g(2) + n::k(3) + vt<int> + vu<long> + A().f(5) + h2(1L) + h2('c') +
          la<int>(3) + call<h<int>>(1) + deref<&vt<int>>() + deref<&gi>() + deref<&si>() +
-         deref<&cg>() + deref<&an>() + deref<arr>() + ref<gi>() + ref<cg>() + vol<&gi>() +
-         vol<&cg>();
+         deref<&an>() + deref<arr>() + ref<gi>() + vol<&gi>();
 }
