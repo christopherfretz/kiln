@@ -70,3 +70,41 @@ No miscompiles were found.
 
 - **Variants not run:** Debug, C++11/14 (`CMAKE_CXX_STANDARD`), and
   `-fno-exceptions` (`TL_EXPECTED_EXCEPTIONS_ENABLED` off).
+
+## libc++ (WP-694)
+
+Built and tested with `-stdlib=libc++` (the system libc++ 19) by both kiln++ and the clang++-19 control: `scripts/oss/oss-build.sh --stdlib libc++ <project>`, report via `scripts/oss/oss-report.py --stdlib libc++ --perf <project>`. The clang-control build tree was deleted after these numbers were recorded. Wall-time differences are dominated by file-system syscalls on the bind mount (see the perf finding in [../oss.md](../oss.md#libc-results-wp-694)).
+
+<!-- oss:tl_expected:libcxx -->
+### tl_expected (v1.3.1), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 13 / 0 | 13 / 0 |
+| links ok / failed | 1 / 0 | 1 / 0 |
+| tests passed / total | 1 / 1 | 1 / 1 |
+| wall | 29 s | 16 s |
+| peak TU RSS | 202 MB | 371 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 13 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **1.18x**, RSS **0.38x**; total 25 s vs 22 s; peak TU RSS 202 MB vs 371 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/tl_expected/tests/main.cpp` | 8.6 | 9.8 | 1.14 | 371 | 202 | 0.54 |
+| `$KILN/.oss/src/tl_expected/tests/extensions.cpp` | 1.5 | 1.8 | 1.20 | 202 | 80 | 0.40 |
+| `$KILN/.oss/src/tl_expected/tests/swap.cpp` | 1.2 | 1.4 | 1.16 | 195 | 74 | 0.38 |
+| `$KILN/.oss/src/tl_expected/tests/assertions.cpp` | 1.2 | 1.1 | 0.93 | 189 | 69 | 0.36 |
+| `$KILN/.oss/src/tl_expected/tests/issues.cpp` | 1.2 | 1.4 | 1.19 | 198 | 75 | 0.38 |
+
+TUs over 1.2x on time or RSS: 6 of the 13 that take clang-19 at least 0.5 s.
+- `$KILN/.oss/src/tl_expected/tests/observers.cpp`: time 1.2 / 0.9 s = 1.29x, RSS 69 / 190 MB = 0.37x
+- `$KILN/.oss/src/tl_expected/tests/noexcept.cpp`: time 1.1 / 0.9 s = 1.27x, RSS 68 / 184 MB = 0.37x
+- `$KILN/.oss/src/tl_expected/tests/constexpr.cpp`: time 1.2 / 0.9 s = 1.27x, RSS 69 / 185 MB = 0.37x
+- `$KILN/.oss/src/tl_expected/tests/relops.cpp`: time 1.1 / 0.9 s = 1.25x, RSS 70 / 189 MB = 0.37x
+- `$KILN/.oss/src/tl_expected/tests/constructors.cpp`: time 1.4 / 1.2 s = 1.23x, RSS 73 / 198 MB = 0.37x
+<!-- /oss:tl_expected:libcxx -->
