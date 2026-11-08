@@ -21,7 +21,7 @@
 //! is reused from body to body.
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
 
 use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{DeclFlags, DeclKind};
@@ -30,6 +30,7 @@ use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::{TypeKind, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_diag::{Diag, DiagId, FixIt};
+use kiln_source::fx::FxHashMap;
 use kiln_source::{Loc, Span};
 
 use crate::Sema;
@@ -140,8 +141,8 @@ pub(crate) struct Scratch {
     vars: Vec<DeclId>,
     /// Each tracked variable's declaration statement (its begin loc).
     var_stmts: Vec<StmtId>,
-    index: HashMap<DeclId, u32>,
-    class: HashMap<ExprId, Class>,
+    index: FxHashMap<DeclId, u32>,
+    class: FxHashMap<ExprId, Class>,
     /// `u64` words per value row.
     words: usize,
     /// The value row at each block's exit (`blocks * words`).
