@@ -190,30 +190,61 @@ impl Sema<'_, '_> {
     /// it, restricted to the parameters `e` names ([temp.constr.atomic]/1):
     /// the others' arguments are null, so `sizeof(T) > 1` of `C<T, int>`
     /// and of `C<T, long>` is one atom. Unknown uses keep the whole
-    /// mapping.
+    /// mapping. A non-dependent expression argument kept as written
+    /// (`1` of `C<1, int>` in a template's requires-clause) is
+    /// canonicalized ([`Self::written_mapping_arg`]), so equal arguments
+    /// written in two declarations map alike ([temp.constr.atomic]/2).
     fn intern_atom(&mut self, e: ExprId, ctx: Option<(DeclId, ArgListId)>) -> NormId {
+        use kiln_ast::types::ArgView;
         let mut mapping = ctx.map_or(ArgListId::EMPTY, |(_, m)| m);
         if let Some((cc, m)) = ctx {
             let level = self.template_param_depth(cc);
-            if let Some(used) = self.used_template_params(e, level) {
-                let args = self.ast.types.args(m);
-                if args.iter().enumerate().any(|(i, a)| {
-                    (i >= 64 || used & (1 << i) == 0) && a.kind() != kiln_ast::types::ArgKind::Null
-                }) {
-                    let v: Vec<TemplateArg> = args
-                        .iter()
-                        .enumerate()
-                        .map(
-                            |(i, &a)| {
-                                if i < 64 && used & (1 << i) != 0 { a } else { TemplateArg::NULL }
-                            },
-                        )
-                        .collect();
-                    mapping = self.ast.types.arg_list(&v);
+            let used = self.used_template_params(e, level);
+            let keep = |i: usize| used.is_none_or(|u| i < 64 && u & (1 << i) != 0);
+            let args = self.ast.types.args(m).to_vec();
+            let written = |a: &TemplateArg| matches!(a.view(), ArgView::Expr { profile: None, .. });
+            if args.iter().enumerate().any(|(i, a)| {
+                if keep(i) { written(a) } else { a.kind() != kiln_ast::types::ArgKind::Null }
+            }) {
+                let mut v = Vec::with_capacity(args.len());
+                for (i, a) in args.into_iter().enumerate() {
+                    v.push(match a.view() {
+                        _ if !keep(i) => TemplateArg::NULL,
+                        ArgView::Expr { expr, profile: None } => {
+                            self.written_mapping_arg(cc, i, expr)
+                        }
+                        _ => a,
+                    });
                 }
+                mapping = self.ast.types.arg_list(&v);
             }
         }
         self.inst.concepts.norm.intern(NormNode::Atomic { expr: e, mapping })
+    }
+
+    /// The mapping argument of a non-dependent expression `expr` written
+    /// for parameter `i` of concept `c`: an integral or enumeration
+    /// parameter's value converted to its type (`2 - 1` and `1` map
+    /// alike, as converted template arguments, [temp.arg.nontype]/1);
+    /// otherwise the expression's profile (equal for equivalent
+    /// expressions, [temp.over.link]/5).
+    fn written_mapping_arg(&mut self, c: DeclId, i: usize, expr: ExprId) -> TemplateArg {
+        let pty = self.template_params(c).get(i).copied().and_then(|p| {
+            let info = self.ast.template_parm(p)?;
+            let ty = self.ast.decls.get(p).ty()?;
+            let canon = self.ast.types.canonical(ty);
+            let t = &self.ast.types;
+            (self.kind_of(p) == DeclKind::NonTypeTemplateParm
+                && !info.pack
+                && (t.is_integral(canon) || t.as_enum(canon).is_some()))
+            .then_some(canon)
+        });
+        if let Some(pty) = pty
+            && let Some(v) = self.fold_int(expr)
+        {
+            return TemplateArg::value(pty, self.int_const(pty, v));
+        }
+        TemplateArg::profile(self.ast.profile_expr(expr))
     }
 
     /// [temp.constr.normal]/1.4: the normal form of concept-id `e` is the
@@ -597,7 +628,12 @@ impl Sema<'_, '_> {
                         ArgView::Expr { expr, .. } => self.expr_pack_ids(expr, out)?,
                         ArgView::Template(n) => {
                             use kiln_ast::types::TemplateName;
-                            if let TemplateName::TemplateTemplateParm { depth, index, pack: true, .. }
+                            if let TemplateName::TemplateTemplateParm {
+                                depth,
+                                index,
+                                pack: true,
+                                ..
+                            }
                             | TemplateName::CanonTemplateTemplateParm {
                                 depth,
                                 index,
