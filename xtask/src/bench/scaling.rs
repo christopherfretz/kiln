@@ -301,7 +301,7 @@ mod tests {
             ..Options::default()
         };
         assert_eq!(run(&opts, &scratch, &cc, &id), Ok(false));
-        let bad = Options { scaling: Some("s10".into()), ..opts };
+        let bad = Options { scaling: Some("s99".into()), ..opts };
         assert!(run(&bad, &scratch, &cc, &id).unwrap_err().contains("unknown --scaling shape"));
         let _ = std::fs::remove_dir_all(&scratch);
     }
