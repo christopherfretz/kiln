@@ -102,7 +102,9 @@ impl Sema<'_, '_> {
             if let Some(k) = self.gsl_own_kind(cur) {
                 return Some(k);
             }
-            if self.kind_of(cur) == DeclKind::ClassTemplatePartialSpecialization {
+            if self.kind_of(cur) == DeclKind::ClassTemplatePartialSpecialization
+                || self.ast.partial_spec_info(cur).is_some()
+            {
                 return None;
             }
             if let Some((_, s)) = self.ast.spec_info(cur) {
@@ -110,7 +112,10 @@ impl Sema<'_, '_> {
                     return None;
                 }
                 let from = s.from;
-                let next = if is_template_kind(self.kind_of(from)) {
+                let from_kind = self.kind_of(from);
+                let next = if from_kind != DeclKind::ClassTemplatePartialSpecialization
+                    && is_template_kind(from_kind)
+                {
                     self.ast.template_info(from).and_then(|t| t.pattern)
                 } else {
                     Some(from)
@@ -143,6 +148,8 @@ impl Sema<'_, '_> {
             }
         }
         if self.kind_of(d) == DeclKind::CXXRecord
+            && self.ast.spec_info(d).is_none()
+            && self.ast.partial_spec_info(d).is_none()
             && let Some(name) = self.ast.decls.get(d).name().as_ident()
         {
             let name = self.ast.symbols().as_str(name);

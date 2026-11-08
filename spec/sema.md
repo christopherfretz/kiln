@@ -2115,22 +2115,44 @@ and returns the scope it names:
   cannot be applied to types` for `[[clang::x]]` after a function
   declarator are not diagnosed. Tests:
   `tests/conformance/dcl.attr.grammar/thread-safety-*.cpp`.
-- **Known and ignored, no diagnostic: sanitizer and lifetime
-  attributes** (WP-667; table `IGNORED_CLANG_ATTRS` in `decl_attrs.rs`,
-  checked right after the thread-safety family). kiln has no sanitizers
-  and no `-Wdangling` analysis, so these attach nothing and get no
-  subject or argument check. `__attribute__((x))` (and `__x__`) for
-  every name; `[[clang::x]]` for `no_sanitize`, `no_sanitize_memory` and
-  `lifetimebound` (clang `Clang<"x">`); `[[gnu::x]]` for
-  `no_sanitize_address`, `no_sanitize_thread` and
-  `no_address_safety_analysis` (clang `GCC<"x">`), and for `no_sanitize`
-  from `-fclang-compat=22` (clang 22's spelling; unknown at 19). Any other
-  scope, and unscoped `[[x]]`, is an unknown attribute. Not yet: clang's
-  subject warnings (`'lifetimebound' attribute only applies to
-  parameters and implicit object parameters`), its `-Wdangling` warnings
-  and the unknown-sanitizer warning. Tests:
+- **Known and ignored, no diagnostic: sanitizer attributes** (WP-667;
+  now rows of the WP-805 triage table, `attr_triage.rs`). kiln has no
+  sanitizers, so these attach nothing and get no subject or argument
+  check. `__attribute__((x))` (and `__x__`) for every name;
+  `[[clang::x]]` for `no_sanitize` and `no_sanitize_memory` (clang
+  `Clang<"x">`); `[[gnu::x]]` for `no_sanitize_address`,
+  `no_sanitize_thread` and `no_address_safety_analysis` (clang
+  `GCC<"x">`), and for `no_sanitize` from `-fclang-compat=22` (clang 22's
+  spelling; unknown at 19). Any other scope, and unscoped `[[x]]`, is an
+  unknown attribute. Not yet: the unknown-sanitizer warning. Tests:
   `tests/conformance/dcl.attr.grammar/sanitizer-*.cpp`,
   `gnu-no-sanitize-clang{19,22}.cpp`.
+- **Lifetime attributes** (WP-674; `class_b_attrs.rs`,
+  `decl_attrs.rs`; the analysis is spec/sema-class.md §5.4 "Lifetime
+  analysis"):
+  - `[[clang::lifetimebound]]` / `__attribute__((lifetimebound))`
+    (`AttrKind::LIFETIMEBOUND`) on a parameter (`a == 0`) or, written
+    after a member function's declarator, on its implicit object
+    parameter (`a == 1`). clang 19's subject checks: `'lifetimebound'
+    attribute only applies to parameters and implicit object
+    parameters` (an error) elsewhere, `'lifetimebound' attribute
+    cannot be applied to types` in a type position, and the errors
+    `'lifetimebound' attribute cannot be applied to a
+    {constructor|destructor}` and `'lifetimebound' attribute cannot be
+    applied; {static |non-}member function has no implicit object
+    parameter`. Builtin `__builtin_addressof`'s parameter carries it
+    implicitly.
+  - `[[gsl::Owner]]` / `[[gsl::Pointer]]` (`GSL_OWNER`, `GSL_POINTER`)
+    with an optional type argument (the owned / pointed-to type): only
+    on classes and class templates (`'Owner' attribute only applies to
+    structs` [-Wignored-attributes] on a union, enum or variable); `a reference type|an array type ... is an
+    invalid argument to attribute` for a reference or array argument;
+    `'Owner' and 'Pointer' attributes are not compatible` (with a note at
+    the other) when a class has both, and the same error for a repeat
+    naming a different type (as written) across the class's
+    redeclarations. The implicit `std` annotations (clang
+    `inferGslOwnerPointerAttribute`) are computed on demand by
+    `Sema::gsl_kind` (`class/temporary/gsl.rs`).
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
