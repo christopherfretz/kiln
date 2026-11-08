@@ -2341,8 +2341,17 @@ impl Sema<'_, '_> {
         if let Some(p) = self.pick_prev_function(&found, new) {
             return Some(p);
         }
-        if qualifier.is_some() {
-            return None;
+        if let Some(q) = qualifier {
+            // A function first declared by a friend declaration is a member
+            // of the namespace, invisible to qualified lookup but nominable
+            // there, so `void N::f(C &) {}` redeclares the friend
+            // ([dcl.meaning.general]/2.3, [namespace.memdef]/3; clang's
+            // redeclaration lookup sees hidden friends).
+            if !matches!(self.kind_of(q), DeclKind::Namespace | DeclKind::TranslationUnit) {
+                return None;
+            }
+            let hidden = self.hidden_friend_redecl_set(q, dname, &new);
+            return self.pick_prev_function(&hidden, new);
         }
         let ns = self.enclosing_namespace()?;
         let name = dname.as_ident()?;
