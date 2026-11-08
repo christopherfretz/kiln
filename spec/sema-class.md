@@ -242,6 +242,11 @@ set aside in `Sema.suspended_classes`, §8.3): `struct V { friend struct
 VTraits<V>; ... typename VTraits<V>::lane_type ... };` instantiates
 `VTraits<V>` with the friendship in force (WP-803; tests/conformance/
 temp.friend/specialization-instantiated-in-befriending-class-run.cpp).
+`template<class U> friend class X;` redeclares the class template `X` of
+the innermost enclosing namespace, else one that ordinary lookup finds in
+a namespace nested in it (an unnamed namespace's), in that namespace
+(clang `CheckClassTemplate`; WP-803, tests/conformance/temp.friend/
+class-template-in-unnamed-namespace-run.cpp).
 
 A class first declared inside a template by an elaborated-type-specifier
 that is a plain reference (a parameter or template-argument type `struct P*`,

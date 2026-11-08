@@ -7648,6 +7648,24 @@ impl Sema<'_, '_> {
             .into_iter()
             .rev()
             .find(|&d| is_tag_kind(self.kind_of(d)) || self.kind_of(d) == DeclKind::ClassTemplate);
+        // Else a class template that ordinary lookup finds in a namespace
+        // nested in `ns` (an unnamed namespace's, through its implicit
+        // using-directive) is the one redeclared, in its own namespace
+        // (clang `CheckClassTemplate`: `OutermostContext->Encloses`).
+        let (prev, ns) = match prev {
+            Some(d) => (Some(d), ns),
+            None => {
+                let nested = self.lookup_name(n, LookupKind::All).decls.last().and_then(|&d| {
+                    let c = self.ast.decls.get(d).ctx()?;
+                    (self.kind_of(d) == DeclKind::ClassTemplate
+                        && self.kind_of(c) == DeclKind::Namespace
+                        && self.ast.first(c) != self.ast.first(ns)
+                        && self.encloses(ns, c))
+                    .then_some((d, c))
+                });
+                nested.map_or((None, ns), |(d, c)| (Some(d), c))
+            }
+        };
         let prev = prev.map(|d| self.pattern_of(d).unwrap_or(d));
         if let Some(p) = prev {
             if self.ast.described_template(p).is_some() {
