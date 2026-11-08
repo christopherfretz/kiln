@@ -390,8 +390,12 @@ fn driver_warnings(
     let ignored = args.outline_atomics.filter(|_| !tc.target.is_aarch64());
     // WP-813: XRay's options without `-fxray-instrument` (clang claims
     // them only with it).
-    let unused_xray =
+    let mut unused_xray =
         if args.quiet_unused_arguments { Vec::new() } else { args.codegen.unused_xray_args() };
+    // WP-846: clang claims `-msign-return-address=` on `AArch64` only.
+    if !args.quiet_unused_arguments && !tc.target.is_aarch64() {
+        unused_xray.extend(args.codegen.sign_return_address_written.iter().cloned());
+    }
     if promoted.is_empty() && ignored.is_none() && unused_xray.is_empty() {
         return false;
     }

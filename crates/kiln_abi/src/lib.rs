@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod asm;
+pub mod branch_protection;
 pub mod call;
 pub mod dump;
 pub mod dump_blocks;
@@ -29,4 +30,5 @@ pub use layout::{
     record_layout, subobjects, type_size_align,
 };
 pub use mangle::ReflectionMangling;
+pub use branch_protection::{BranchProtection, SignScope};
 pub use target::{Arch, Target, Triple, TripleError, target};

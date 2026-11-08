@@ -312,6 +312,9 @@ pub struct Hardening {
     pub cf_protection_branch: bool,
     /// `-fcf-protection=return` or `full` (x86).
     pub cf_protection_return: bool,
+    /// `-mbranch-protection=` / `-msign-return-address=` (`AArch64`;
+    /// WP-846).
+    pub branch_protection: kiln_abi::BranchProtection,
 }
 
 /// The `-fxray-instrument` options.

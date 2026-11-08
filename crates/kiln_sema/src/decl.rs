@@ -10571,7 +10571,10 @@ impl Sema<'_, '_> {
     /// GNU `target("features")` (clang `handleTargetAttr`): exactly one
     /// string literal, kept as its `StringLitId` in `a`. The feature
     /// names are not checked (clang's `warn_unsupported_target_attribute`
-    /// is a follow-up); codegen reads them on `AArch64`.
+    /// is a follow-up); codegen reads them on `AArch64`. A non-empty
+    /// `branch-protection=<spec>` (clang `checkTargetAttr`, WP-846) must
+    /// parse on `AArch64` ("invalid or misplaced branch protection
+    /// specification"); off it the attribute is ignored with a warning.
     fn target_attribute(
         &mut self,
         syntax: AttrSyntax,
@@ -10595,7 +10598,24 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         };
-        let a = self.ast.exprs.string_lit(lit).raw();
+        let id = self.ast.exprs.string_lit(lit);
+        let text = String::from_utf8_lossy(self.ast.strings.bytes(id)).into_owned();
+        if let Some(spec) = kiln_abi::BranchProtection::of_target_attr(&text)
+            && !spec.is_empty()
+        {
+            let msg = if self.abi.triple.arch != kiln_abi::Arch::AArch64 {
+                self.diag(DiagId::sema_unsupported_target_attribute, at).arg("branch-protection")
+            } else if let Err(e) = kiln_abi::BranchProtection::parse(spec, false) {
+                self.diag(DiagId::sema_invalid_branch_protection_spec, at).arg(e)
+            } else {
+                let a = id.raw();
+                let node = AttrNode { kind: AttrKind::TARGET, syntax, flags: 0, loc, a, b: 0 };
+                return Some(self.ast.attrs.push(node));
+            };
+            self.emit(msg);
+            return None;
+        }
+        let a = id.raw();
         let node = AttrNode { kind: AttrKind::TARGET, syntax, flags: 0, loc, a, b: 0 };
         Some(self.ast.attrs.push(node))
     }

@@ -117,6 +117,9 @@ pub struct ArmTarget {
     pub features: Vec<String>,
     /// `-msve-vector-bits=N`: `__ARM_FEATURE_SVE_BITS N`.
     pub sve_vector_bits: Option<u32>,
+    /// The `__ARM_FEATURE_{PAC,BTI,GCS}_DEFAULT` macros of
+    /// `-mbranch-protection=` (name, value; WP-846).
+    pub branch_protection: Vec<(String, String)>,
 }
 
 impl Default for ArmTarget {
@@ -126,6 +129,7 @@ impl Default for ArmTarget {
             arch: (8, 0),
             features: vec!["fp-armv8".to_owned(), "neon".to_owned()],
             sve_vector_bits: None,
+            branch_protection: Vec::new(),
         }
     }
 }
@@ -770,6 +774,9 @@ fn apply_arm(m: &mut BTreeMap<String, String>, t: &ArmTarget, compat: ClangCompa
     if let Some(bits) = t.sve_vector_bits {
         def("__ARM_FEATURE_SVE_BITS", &bits.to_string());
     }
+    for (n, v) in &t.branch_protection {
+        def(n, v);
+    }
 }
 
 /// The SVE `__ARM_FEATURE_<name>`s (value 1) beyond `SVE` itself of
@@ -1055,6 +1062,7 @@ mod tests {
             arch,
             features: features.split(',').filter(|f| !f.is_empty()).map(str::to_owned).collect(),
             sve_vector_bits: bits,
+            branch_protection: Vec::new(),
         };
         let base = "#define __ARM_ARCH 8\n#define __ARM_FP 0xE\n#define __ARM_NEON 1\n\
             #define __ARM_NEON_FP 0xE\n#define __ARM_FEATURE_TME 1\n";
