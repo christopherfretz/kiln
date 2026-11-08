@@ -862,6 +862,9 @@ impl Sema<'_, '_> {
             return None;
         }
         self.extend_temporaries(hv, init);
+        // [dcl.struct.bind]/4: the holding variable is checked as any
+        // reference variable (clang's implicit `-Wdangling` wording).
+        self.check_var_lifetime(hv, init);
         let r = self.build_decl_ref(hv, loc);
         self.ast.decls.set_ty(b, t);
         let _ = self.ast.decls.set_binding(b, r, Some(hv));

@@ -31,6 +31,7 @@ DanglingAssignment = "dangling-assignment" [];
 DanglingAssignmentGsl = "dangling-assignment-gsl" [];
 DanglingField = "dangling-field" [];
 DanglingGsl = "dangling-gsl" [];
+DanglingInitializerList = "dangling-initializer-list" [];
 DefaultedFunctionDeleted = "defaulted-function-deleted" [];
 DelegatingCtorCycles = "delegating-ctor-cycles" [];
 DeleteIncomplete = "delete-incomplete" [];
