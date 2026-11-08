@@ -489,7 +489,8 @@ emitted for a qualified namespace-scope function that names no previous
 declaration ([dcl.meaning.general]/2). A function first declared by a
 friend declaration is nominable in its namespace, so a qualified
 namespace-scope definition `void N::f(C &) {}` redeclares that hidden
-friend (`find_prev_function` falls back to `hidden_friend_redecl_set`;
+friend (`find_prev_function` falls back to `hidden_friend_redecl_set`, adding
+only declarations qualified lookup did not find;
 [dcl.meaning.general]/2.3, [namespace.memdef]/3; WP-801,
 `dcl.meaning/qualified-definition-of-hidden-friend-run.cpp`). A class context is printed as
 its type, a current instantiation unqualified at compat 19 (`'A<T>'`)
