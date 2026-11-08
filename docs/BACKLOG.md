@@ -915,3 +915,4 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-907 | sema: complete a variable template specialization of unknown array bound for sizeof/type_of (xfail temp.inst/p4-var-template-unknown-bound.cpp) | WP-879 | open |
 | WP-908 | perf: frontend ~3x slower than g++-16 on large repeated nested template-ids (5.1 MB TU: 1.28 s vs 0.44 s -fsyntax-only; docs/status/perf.md WP-879) | WP-879 | open |
 | WP-909 | decision: default -fkiln-reflection-mangling form (WP-879 study recommends gcc; operator decides) | WP-879 | open |
+| WP-871 | codegen: UBSan checks accepted but not instrumented (WP-852, WP-853, WP-854) | WP-675 | in progress |
