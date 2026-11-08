@@ -68,6 +68,9 @@ impl AttrKind {
     pub const PREFERRED_NAME: AttrKind = AttrKind(80);
     pub const EXCLUDE_FROM_EXPLICIT_INSTANTIATION: AttrKind = AttrKind(81);
     pub const ABI_TAG: AttrKind = AttrKind(82);
+    /// clang `internal_linkage` on a variable, function or class (clang
+    /// `InternalLinkageAttr`): the entity, and a class's members, have
+    /// internal linkage as if declared `static` (WP-807).
     pub const INTERNAL_LINKAGE: AttrKind = AttrKind(83);
     pub const LIFETIMEBOUND: AttrKind = AttrKind(84);
     pub const NO_SANITIZE: AttrKind = AttrKind(85);
@@ -250,6 +253,10 @@ impl AttrKind {
     /// is the raw `DeclId` of `f` and `b` the raw `Loc` of the argument
     /// (WP-807).
     pub const CLEANUP: AttrKind = AttrKind(192);
+    /// GNU `common` (clang `CommonAttr`): rejected in C++ (clang
+    /// `handleCommonAttr`), so never attached; kept as a kind for its
+    /// subject check (WP-807).
+    pub const COMMON: AttrKind = AttrKind(193);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

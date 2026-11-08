@@ -198,6 +198,7 @@ impl Sema<'_, '_> {
         }
         let mut attrs = attrs.to_vec();
         self.take_annotations(ns, &mut attrs);
+        self.check_internal_linkage_attrs(ns, &mut attrs);
         self.check_visibility_attrs(ns, &mut attrs);
         if attrs.iter().any(|&a| self.ast.attrs.get(a).kind == AttrKind::VISIBILITY) {
             self.push_namespace_visibility(ns);

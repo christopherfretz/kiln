@@ -4623,8 +4623,10 @@ impl Sema<'_, '_> {
                 self.take_annotations(pd, &mut attrs);
                 let range = Span::new(p.range.0, p.range.1);
                 self.check_param_nonnull_attrs(p.ty, range, &mut attrs);
-                // `cleanup` on a parameter: ignored with a warning.
+                // `cleanup` / `internal_linkage` on a parameter: ignored
+                // with a warning.
                 self.check_cleanup_attrs(pd, &mut attrs);
+                self.check_internal_linkage_attrs(pd, &mut attrs);
                 let _ = self.builder().attach_attrs(pd, &attrs);
             }
             match p.default_arg {
@@ -9978,6 +9980,7 @@ impl Sema<'_, '_> {
                         | "uninitialized"
                         | "trivial_abi"
                         | "type_visibility"
+                        | "internal_linkage"
                         | "min_vector_width"
                 ))
         {
@@ -10967,6 +10970,10 @@ fn attr_kind_of(
         ("destructor", _, true) => AttrKind::DESTRUCTOR,
         // clang `GCC<"cleanup">` (WP-807).
         ("cleanup", _, true) => AttrKind::CLEANUP,
+        // clang `GCC<"common">`, rejected in C++ (WP-807).
+        ("common", _, true) => AttrKind::COMMON,
+        // clang `Clang<"internal_linkage">` (WP-807).
+        ("internal_linkage", _, _) if gnu_syntax || clang_scope => AttrKind::INTERNAL_LINKAGE,
         ("visibility", _, true) => AttrKind::VISIBILITY,
         // clang `Clang<"type_visibility">`.
         ("type_visibility", _, _) if gnu_syntax || clang_scope => AttrKind::TYPE_VISIBILITY,

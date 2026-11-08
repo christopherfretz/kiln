@@ -665,6 +665,25 @@ impl Ast {
         })
     }
 
+    /// Whether some declaration of `d`, or of the pattern it was
+    /// instantiated from, carries clang `internal_linkage` (an inheritable
+    /// attribute: clang `computeLVForDecl` gives the entity internal
+    /// linkage).
+    pub fn has_internal_linkage_attr(&self, d: DeclId) -> bool {
+        let mut d = d;
+        // Each step leaves one level of instantiation.
+        for _ in 0..64 {
+            if self.any_redecl_has(d, crate::attr::AttrKind::INTERNAL_LINKAGE) {
+                return true;
+            }
+            match self.instantiated_from(self.first(d)) {
+                Some(p) if p != d => d = p,
+                _ => return false,
+            }
+        }
+        false
+    }
+
     /// Whether `d` is a weak declaration (clang `Decl::isWeak`): some
     /// declaration of it carries GNU `weak` or `weakref`. Its address may
     /// be null at run time, so a test of it is not a constant expression

@@ -73,6 +73,8 @@ fn takes_expr_args(name: &str) -> bool {
             | "constructor"
             | "destructor"
             | "cleanup"
+            | "internal_linkage"
+            | "common"
             | "mode"
     )
 }

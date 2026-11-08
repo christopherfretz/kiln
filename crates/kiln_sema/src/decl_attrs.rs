@@ -75,6 +75,8 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::CONSTRUCTOR => "constructor",
         AttrKind::DESTRUCTOR => "destructor",
         AttrKind::CLEANUP => "cleanup",
+        AttrKind::INTERNAL_LINKAGE => "internal_linkage",
+        AttrKind::COMMON => "common",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -393,6 +395,7 @@ impl Sema<'_, '_> {
         self.check_init_priority(d, attrs);
         self.check_ctor_dtor_attrs(d, attrs);
         self.check_cleanup_attrs(d, attrs);
+        self.check_internal_linkage_attrs(d, attrs);
         self.check_visibility_attrs(d, attrs);
         self.check_weak_attrs(d, attrs);
         let kind = self.ast.decls.get(d).kind();
@@ -783,7 +786,8 @@ impl Sema<'_, '_> {
             self.emit(msg);
             out.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::WEAKREF);
         }
-        let internal = kiln_abi::mangle::has_internal_linkage(&self.ast, d);
+        let internal = kiln_abi::mangle::has_internal_linkage(&self.ast, d)
+            || has(self, &out, AttrKind::INTERNAL_LINKAGE);
         if let Some(w) = out.iter().copied().find(|&a| self.ast.attrs.get(a).kind == AttrKind::WEAK)
             && internal
         {
