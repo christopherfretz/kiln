@@ -277,6 +277,7 @@ impl Sema<'_, '_> {
         &mut self,
         r: ReflectionId,
         loc: Loc,
+        oven: &mut Oven,
     ) -> Result<ReflectionId, MetaError> {
         let x = self.ast.reflections.get(r);
         if let Reflectee::Object(_) = x {
@@ -290,16 +291,17 @@ impl Sema<'_, '_> {
             )
         };
         let Reflectee::Decl(d) = x else { return not_object(loc) };
-        if !self.has_static_storage(d) {
-            return not_object(loc);
-        }
         let Some(ty) = self.ast.decls.get(d).ty().filter(|&t| t != QualType::ERROR) else {
             return not_object(loc);
         };
         if self.ast.types.is_reference(ty) {
-            return fail(loc, "kiln: object_of a reference variable is not implemented yet");
+            return self.referenced_object(d, loc, oven);
         }
-        let ty = self.ast.types.canonical(ty);
+        if !self.has_static_storage(d) {
+            return not_object(loc);
+        }
+        // Interned cv-unqualified, one per object (`const_object`).
+        let ty = self.ast.types.canonical(ty).without_quals();
         let ptr = self.ast.types.pointer_to(ty);
         let base = PtrBase::Decl(self.ast.first(d));
         match self.ast.consts.push_scalar(Scalar::Pointer {
@@ -308,6 +310,54 @@ impl Sema<'_, '_> {
             offset: 0,
             designated: None,
         }) {
+            Ok(cv) => Ok(self.intern_reflection(Reflectee::Object(cv), loc)?),
+            Err(_) => fail(loc, "kiln: constant store exhausted"),
+        }
+    }
+
+    /// `object_of(^^R)` for a reference `R`: the object `R` refers to,
+    /// when `R` is usable in constant expressions ([meta.reflection.queries]
+    /// `object_of`; [expr.const]/3). Its value is the pointer to that
+    /// object: a variable, a template parameter object, a string literal
+    /// object or a `std::type_info` object, all static storage (a
+    /// permitted result, [expr.const]/22).
+    fn referenced_object(
+        &mut self,
+        d: DeclId,
+        loc: Loc,
+        oven: &mut Oven,
+    ) -> Result<ReflectionId, MetaError> {
+        let v = self.var_init_value(d, oven).and_then(|cv| self.ast.consts.scalar(cv));
+        let Some(Scalar::Pointer { ty, base, offset, .. }) = v else {
+            return fail(
+                loc,
+                format!("reference '{}' is not usable in constant expressions", self.decl_name(d)),
+            );
+        };
+        let static_object = match base {
+            PtrBase::Decl(x) => self.has_static_storage(x),
+            PtrBase::Const(_)
+            | PtrBase::StringLit { .. }
+            | PtrBase::TypeInfo(_)
+            | PtrBase::Temporary(_) => true,
+            _ => false,
+        };
+        if !static_object {
+            return fail(
+                loc,
+                "reflection does not represent an object with static storage duration, or a \
+                 reference to such an object",
+            );
+        }
+        let Some(obj) = self.ast.types.pointee(ty) else {
+            return fail(loc, "reference does not refer to an object");
+        };
+        let ty = self.ast.types.pointer_to(self.ast.types.canonical(obj).without_quals());
+        let base = match base {
+            PtrBase::Decl(x) => PtrBase::Decl(self.ast.first(x)),
+            b => b,
+        };
+        match self.ast.consts.push_scalar(Scalar::Pointer { ty, base, offset, designated: None }) {
             Ok(cv) => Ok(self.intern_reflection(Reflectee::Object(cv), loc)?),
             Err(_) => fail(loc, "kiln: constant store exhausted"),
         }
@@ -409,21 +459,31 @@ impl Sema<'_, '_> {
                 ),
             );
         }
-        let Some(holder) = self
+        Ok(self.var_init_value(d, oven))
+    }
+
+    /// The value of the constant initializer of variable `d` (evaluated
+    /// now if it was not yet); `None` when it has none.
+    fn var_init_value(&mut self, d: DeclId, oven: &mut Oven) -> Option<ConstValueId> {
+        let holder = self
             .ast
             .redecls_of(d)
-            .find(|&x| self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
-        else {
-            return Ok(None);
-        };
+            .find(|&x| self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))?;
         let data = |s: &Self| s.ast.decls.var(holder).map(|y| (y.eval.state(), y.init));
         match data(self) {
-            Some((VarEvalState::Value(cv), _)) => Ok(Some(cv)),
+            Some((VarEvalState::Value(cv), _)) => Some(cv),
             Some((VarEvalState::NotEvaluated, Some(init))) => {
                 // A const variable that is not constexpr has no recorded
                 // value: its initializer, if it is a constant initializer
                 // ([basic.start.static]/2), gives it.
-                Ok(self.lend_oven(oven, |s| {
+                // A reference's value is the object it binds, which only
+                // the initializer evaluated as the variable's gives.
+                let reference =
+                    self.ast.decls.get(holder).ty().is_some_and(|t| self.ast.types.is_reference(t));
+                self.lend_oven(oven, |s| {
+                    if reference {
+                        return s.fold_constant_init(init, holder);
+                    }
                     if !s.is_constant_initialized(holder) {
                         return None;
                     }
@@ -431,9 +491,9 @@ impl Sema<'_, '_> {
                         Some((VarEvalState::Value(cv), _)) => Some(cv),
                         _ => s.try_fold(init),
                     }
-                }))
+                })
             }
-            _ => Ok(None),
+            _ => None,
         }
     }
 }

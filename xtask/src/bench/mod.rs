@@ -43,10 +43,10 @@ entries: every bench/<group>/<name>.cpp, plus, only when named explicitly,
                       (record-only: per-test and aggregate ratios against
                       --compare-with, e.g. clang++-22; never judged against
                       baselines)
-  bench/reflect:      the reflection shapes S1-S9 of `cargo xtask gen-reflect`
+  bench/reflect:      the reflection shapes S1-S10 of `cargo xtask gen-reflect`
 
 off-queue modes (spec/bench.md, Scaling sweeps and External corpora):
-  --scaling <shape>        compile gen-reflect shape s1..s9 at N and 4N; report
+  --scaling <shape>        compile gen-reflect shape s1..s10 at N and 4N; report
                            wall, peak RSS, the constexpr counters and the 4N/N
                            ratios; fail above 4.6x or when peak_arena grows on
                            s1/s2/s4/s5/s8 (writes no records)

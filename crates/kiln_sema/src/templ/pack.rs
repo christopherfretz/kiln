@@ -587,7 +587,7 @@ impl Substituter<'_, '_, '_> {
     /// expands to under the current arguments: its type's pattern probed
     /// for the pack it names, as [`Self::expand_pattern`] does. `None`
     /// when no pack is substituted (one retained, or `p` no expansion).
-    fn param_pack_len(&mut self, p: DeclId) -> Option<usize> {
+    pub(crate) fn param_pack_len(&mut self, p: DeclId) -> Option<usize> {
         let pd = self.sema.ast.decls.param(p).copied();
         let t = pd.and_then(|x| x.original_ty).unwrap_or_else(|| self.decl_ty(p));
         let pat = type_pattern(self.sema, t)?;

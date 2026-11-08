@@ -23,7 +23,7 @@ use crate::init::Initializer;
 use crate::scope::{Scope, ScopeKind};
 use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::stack::FrameKind;
-use crate::templ::subst::{LocalMethod, SubstFail, Substituter};
+use crate::templ::subst::{LocalMethod, SubstFail, SubstResult, Substituter};
 
 /// The parse state set aside while an instantiation runs in the context
 /// of its template (§4.5): an instantiation can be triggered from deep
@@ -1955,10 +1955,40 @@ impl Substituter<'_, '_, '_> {
             let ast = &self.sema.ast;
             let pat: Vec<AnnId> =
                 ast.lists.iter::<AnnId>(ast.annots.of_base(def_first, bi as u32)).collect();
-            let mine = if pat.is_empty() { Vec::new() } else { self.subst_annotations(spec, &pat) };
+            // [temp.variadic]/5.4: the pattern of `B...` is the whole
+            // base-specifier, so an annotation operand naming the pack is
+            // substituted per element (WP-867); the others once, copied.
+            let in_pattern = |a: AnnId| {
+                let n = ast.annots.get(a);
+                n.value.is_none()
+                    && ast
+                        .exprs
+                        .get(n.expr)
+                        .deps()
+                        .contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK)
+            };
+            let per_elem: Vec<AnnId> = if b.pack_expansion {
+                pat.iter().copied().filter(|&a| in_pattern(a)).collect()
+            } else {
+                Vec::new()
+            };
+            let once: Vec<AnnId> = if per_elem.is_empty() {
+                pat.clone()
+            } else {
+                pat.iter().copied().filter(|a| !per_elem.contains(a)).collect()
+            };
+            let mine =
+                if once.is_empty() { Vec::new() } else { self.subst_annotations(spec, &once) };
             if b.pack_expansion {
                 // [temp.variadic]/5: one base per element.
-                let tys = match self.expand_pattern(|s| s.element_ty(b.ty, b.loc)) {
+                let exprs: Vec<kiln_ast::ExprId> =
+                    per_elem.iter().map(|&a| self.sema.ast.annots.get(a).expr).collect();
+                let elems = self.expand_pattern(|s| {
+                    let ty = s.element_ty(b.ty, b.loc)?;
+                    let es = exprs.iter().map(|&e| s.expr(e)).collect::<SubstResult<Vec<_>>>()?;
+                    Ok((ty, es))
+                });
+                let elems = match elems {
                     Ok(crate::templ::pack::Expansion::Elements(v)) => v,
                     Ok(crate::templ::pack::Expansion::Unexpanded(_)) => {
                         let _ = self.unimplemented::<()>("base pack expansion", b.loc);
@@ -1969,7 +1999,7 @@ impl Substituter<'_, '_, '_> {
                         continue;
                     }
                 };
-                for (k, ty) in tys.into_iter().enumerate() {
+                for (k, (ty, es)) in elems.into_iter().enumerate() {
                     specs.push(BaseSpecInfo {
                         ty,
                         loc: b.loc,
@@ -1979,7 +2009,27 @@ impl Substituter<'_, '_, '_> {
                         attrs: Vec::new(),
                     });
                     let copies = if k == 0 { mine.clone() } else { self.sema.copy_annots(&mine) };
-                    anns.push(copies);
+                    if es.is_empty() {
+                        anns.push(copies);
+                        continue;
+                    }
+                    // Source order: the pattern's list, each operand
+                    // naming the pack taken from this element.
+                    let (mut copies, mut es) = (copies.into_iter(), es.into_iter());
+                    let mut list = Vec::with_capacity(pat.len());
+                    for &a in &pat {
+                        if per_elem.contains(&a) {
+                            let loc = self.sema.ast.annots.get(a).loc;
+                            if let Some(e) = es.next()
+                                && let Some(id) = self.sema.annotate(spec, e, loc)
+                            {
+                                list.push(id);
+                            }
+                        } else if let Some(id) = copies.next() {
+                            list.push(id);
+                        }
+                    }
+                    anns.push(list);
                 }
                 continue;
             }

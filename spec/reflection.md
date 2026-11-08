@@ -549,7 +549,7 @@ answers as of that point.
   (`meta_calls`, `meta_cache_hits`, `injected_decls`,
   `instantiations_from_meta`) were not added: WP-483's bench gates on the
   existing counters (`steps`, `peak_bytes`, `peak_arena`, `evaluations`).
-- The reflection bench shapes (`bench/reflect/` S1–S9, spec/bench.md
+- The reflection bench shapes (`bench/reflect/` S1–S10, spec/bench.md
   "Reflection shapes") and the 4N scaling gate are WP-483's; their
   results are in docs/status/perf.md and
   docs/status/perf-reference-workload.md "kiln vs GCC 16.1".
@@ -804,10 +804,19 @@ position's operand).
   (`expr.prim.splice/object-no-declaration-run.cpp`; WP-830). An object
   template argument of `substitute`/`reflection_template_arg` at a
   non-zero offset of its complete object is the same subobject lvalue
-  (`meta.reflection.substitute/object-subobject-args-run.cpp`). **Not
-  supported yet** (`parse_unsupported`): a string literal object and a
-  `std::type_info` object (neither is reachable through `reflect_object`
-  of a constant, [temp.arg.nontype]/6).
+  (`meta.reflection.substitute/object-subobject-args-run.cpp`). A string
+  literal object ([lex.string]/9), a `std::type_info` object
+  ([expr.typeid]/1) and a lifetime-extended temporary splice the same
+  way. `reflect_object` cannot reach them ([temp.arg.nontype]/6), but
+  `object_of(^^R)` of a reference `R` usable in constant expressions is
+  the object `R` refers to: the pointer value of `R`'s initializer,
+  interned cv-unqualified like every object reflection, so
+  `object_of(^^r) == object_of(^^v)` for `r` bound to `v`. String literal
+  and type_info objects are const for `type_of`/`is_const`
+  (`expr.prim.splice/p2-unnamed-static-object-run.cpp`, compared with
+  GCC 16.1; WP-870 via WP-879). GCC gives the type_info object an
+  internal pseudo type not derived from `std::type_info`; kiln gives it
+  `const std::type_info`, the type [expr.typeid]/1 names.
 - **Member functions.** A member-function splice is not a qualified-id, so
   `e.[: ^^B::f :]()` of a virtual `f` is a virtual call ([expr.call]/2; the
   [dcl.contract.func] example). `&[: ^^B::f :]` is a pointer to member.
@@ -1215,8 +1224,11 @@ the spelling; the default is `kiln`.
 - **GCC link compatibility.** In gcc mode, kiln objects and g++-16 objects
   link against each other for reflection-keyed symbols. `gcc_link_compat`
   requires every `Dm` symbol defined by both compilers to be equal, with at
-  least 25 of them. The remaining name differences are general ABI
-  divergences, not reflection ones (spec/abi.md §8):
+  least 25 of them. The corpus test
+  `tests/conformance/expr.reflect/reflection-mangle-gcc-run.cpp` prints the
+  `typeid(...).name()` of a class template keyed by every kind and is
+  compared with g++-16's output (WP-879). The remaining name differences
+  are general ABI divergences, not reflection ones (spec/abi.md §8):
   - GCC writes `L` before an anonymous namespace's members
     (`N12_GLOBAL__N_1L5anonvE`);
   - GCC writes an empty non-type pack as `JE` without `TpTnDm`;
@@ -1225,6 +1237,12 @@ the spelling; the default is `kiln`.
     clang write `…EEE1cfp_ES0_`);
   - GCC gives template static data members `STB_GNU_UNIQUE` (`nm` letter
     `u`, where kiln writes `V`).
+- **`type_info` of the info type.** The C++ runtime defines no `type_info`
+  for `std::meta::info`, so `typeid(info)` defines `_ZTI<info-type>` and
+  `_ZTS<info-type>` where used, `linkonce_odr` in a comdat with
+  `__fundamental_type_info`'s vtable, as g++-16 does for `_ZTIDm`, in every
+  form (WP-879; before it kiln referenced an undefined external one).
+  `kiln_codegen/tests/reflection_mangle.rs`, `expr.reflect/typeid-info-run.cpp`.
 - **Cost.** These numbers are for bench shape S9 (spec/bench.md):
   - N types `lib::Tnnnn`;
   - `f<^^Tnnnn>()` and `S<^^Tnnnn>::count` for each type;
@@ -1263,6 +1281,24 @@ the spelling; the default is `kiln`.
   compared against a TU-local form that could not link across TUs. Against
   a type-keyed template of the same linkage shape, codegen RSS is within
   3%.
+- **Cost on deep keys (WP-879).** Keys that are nested template-ids
+  (bench shape S10; the study's generator varies N, depth D and width W,
+  spec/landed/sema/WP-879.md has the command lines and every number):
+  - **Length.** The mangled name grows linearly in D × W, and the forms
+    differ by a constant: `Dm` is 6 bytes shorter than `u6__info` per
+    reflection literal, so the gcc form is 1-5% shorter on these keys.
+    kiln-hashed is fixed at 57 bytes.
+  - **Time.** Mangling costs about 30 ns per emitted byte in both forms
+    (measured in-process, best of 30), linear in N, D and W. Neither form
+    is superlinear. At N=500, D=6, W=6 it is 12.7 ms (kiln) and 12.8 ms
+    (gcc) of about 200 ms for `-c`. kiln-hashed costs the same, because it
+    hashes the full name.
+  - **Substitutions.** A key whose arguments repeat the previous level
+    (the source doubles per level) grows its name by only 16 bytes per
+    level, and mangling time grows with the name, not with the source.
+  - **Whole compile.** Wall time, CPU time and peak RSS of `kiln` and
+    `gcc` mode agree within run-to-run noise, at every size measured.
+    The objects differ only by the symbol bytes.
 - A consteval-only value reaching codegen stays the error of §4.1, not a
   mangling question: a non-template `info` variable with static storage
   that is not `constexpr` is rejected before any symbol exists
@@ -1296,7 +1332,7 @@ the spelling; the default is `kiln`.
 - **WP-470 tests.** `reflection/dispatch-inline-ns.cpp` covers §3.1.
   `reflection/memo-purity.cpp` covers §3.3 and §3.6.
 - **Bench.** The `bench/reflect/` shapes and the scaling gate are WP-483's
-  (S1–S6; S7/S8 WP-551, S9 WP-501; spec/bench.md).
+  (S1–S6; S7/S8 WP-551, S9 WP-501, S10 WP-879; spec/bench.md).
 - **Status.** `docs/STANDARD_SUPPORT.md` "C++26 reflection" has one
   row per WP-470..485. The spike's findings are frozen in
   docs/status/reflection-spike.md.
