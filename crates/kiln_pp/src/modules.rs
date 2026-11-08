@@ -13,20 +13,30 @@ use kiln_lex::{Punct, TokKind, Token};
 use kiln_source::symbol::Symbol;
 use kiln_source::{FileId, Loc, Span};
 
+use crate::bmi::{
+    self, BmiError, Capsule, CapsuleFile, EmbedEntry, EmbedKey, IncludeEntry, IncludeHit,
+    IncludeKey, UnitKind,
+};
 use crate::directive::Dir;
-use crate::include::{IncludeKind, IncludeRequest};
+use crate::include::{EmbedData, EmbedRequest, IncludeKind, IncludeRequest, ResolvedInclude};
 use crate::macros::{MacroDef, MacroTable, SymMap};
 use crate::preprocessor::{Frame, Marker, Preprocessor};
 
-/// Where module interface sources are found (spec/modules.md §2).
+/// Where module interfaces are found (spec/modules.md §2, §11).
 #[derive(Clone, Debug, Default)]
 pub struct ModuleOptions {
-    /// `-fmodule-file=<name>=<path>`: the source of module `<name>`
-    /// (`M:P` for a partition).
+    /// `-fmodule-file=<name>=<path>`: the source or module file of module
+    /// `<name>` (`M:P` for a partition).
     pub module_files: Vec<(String, PathBuf)>,
-    /// `-fprebuilt-module-path=<dir>`, in order: `<dir>/<name>.cppm`,
-    /// `.ixx`, `.cpp` (`M-P.*` for partition `M:P`).
+    /// `-fprebuilt-module-path=<dir>`, in order: `<dir>/<name>.pcm`, then
+    /// `.cppm`, `.ixx`, `.cpp` (`M-P.*` for partition `M:P`).
     pub prebuilt_paths: Vec<PathBuf>,
+    /// This compilation's flags fingerprint, compared with a module
+    /// file's (spec/modules.md §11.4).
+    pub fingerprint: Vec<(String, String)>,
+    /// Record the main unit's inputs for a module file
+    /// ([`Preprocessor::take_capsule`]).
+    pub record: bool,
     /// The libc++ module source directory (`<llvm>/share/libc++/v1`),
     /// holding `std.cppm` and `std.compat.cppm`.
     pub std_dir: Option<PathBuf>,
@@ -118,12 +128,115 @@ pub(crate) struct ModState {
     pub(crate) builtin_file: Option<FileId>,
     /// Header units by key: the file and whether it is a system header.
     header_files: HashMap<String, (FileId, bool)>,
+    /// The main unit's inputs, recorded for a module file.
+    pub(crate) record: Option<Box<Recorder>>,
+    /// Module files being or having been replayed.
+    replays: Vec<Replay>,
+    /// Parallel to `building`: the replay of each unit read from a module
+    /// file.
+    unit_replay: Vec<Option<usize>>,
+    /// The replay of the main unit, when it is read from a module file.
+    main_replay: Option<usize>,
+    /// The main unit's module declaration: its key and, when it is
+    /// importable, its kind.
+    main_unit: Option<(String, Option<UnitKind>)>,
 }
 
 impl ModState {
     pub(crate) fn new(opts: ModuleOptions) -> ModState {
-        ModState { opts, ..ModState::default() }
+        let record = opts.record.then(Box::default);
+        ModState { opts, record, ..ModState::default() }
     }
+}
+
+/// The resolver lookups of the main unit, for its module file
+/// (spec/modules.md §11.2).
+#[derive(Debug, Default)]
+pub(crate) struct Recorder {
+    files: Vec<FileId>,
+    index: HashMap<FileId, u32>,
+    includes: Vec<IncludeEntry>,
+    include_keys: HashSet<IncludeKey>,
+    embeds: Vec<EmbedEntry>,
+    embed_keys: HashSet<EmbedKey>,
+    imports: Vec<(String, String)>,
+}
+
+impl Recorder {
+    pub(crate) fn file(&mut self, f: FileId) -> u32 {
+        if let Some(&i) = self.index.get(&f) {
+            return i;
+        }
+        let i = u32::try_from(self.files.len()).unwrap_or(bmi::INCLUDER_NONE - 1);
+        self.files.push(f);
+        self.index.insert(f, i);
+        i
+    }
+
+    fn includer(&mut self, f: Option<FileId>) -> u32 {
+        f.map_or(bmi::INCLUDER_NONE, |f| self.file(f))
+    }
+}
+
+/// A module file read back: its lookups answered from the logs and its
+/// files loaded on first use (spec/modules.md §11.2).
+struct Replay {
+    /// The module file's path.
+    path: String,
+    /// Each file's path and, until it is loaded, its text.
+    files: Vec<(String, Option<String>)>,
+    ids: Vec<Option<FileId>>,
+    index: HashMap<FileId, u32>,
+    includes: HashMap<IncludeKey, Option<IncludeHit>>,
+    embeds: HashMap<EmbedKey, Option<Vec<u8>>>,
+    /// The unit's own `<built-in>` buffer.
+    builtin: Option<FileId>,
+    imports: Vec<(String, String)>,
+}
+
+impl std::fmt::Debug for Replay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Replay").field("path", &self.path).finish_non_exhaustive()
+    }
+}
+
+impl Replay {
+    fn new(path: String, c: Capsule, builtin: Option<FileId>) -> Replay {
+        let ids = vec![None; c.files.len()];
+        Replay {
+            path,
+            files: c.files.into_iter().map(|f| (f.path, Some(f.text))).collect(),
+            ids,
+            index: HashMap::new(),
+            includes: c.includes.into_iter().map(|e| (e.key, e.hit)).collect(),
+            embeds: c.embeds.into_iter().map(|e| (e.key, e.bytes)).collect(),
+            builtin,
+            imports: c.imports,
+        }
+    }
+
+    fn includer(&self, f: Option<FileId>) -> u32 {
+        match f {
+            None => bmi::INCLUDER_NONE,
+            Some(f) => self.index.get(&f).copied().unwrap_or(bmi::INCLUDER_NONE - 1),
+        }
+    }
+}
+
+/// Whose lookups a resolver request belongs to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ctx {
+    /// The main unit (or a header unit it imports): the header search,
+    /// recorded when a module file is requested.
+    Main,
+    /// A unit read from a module file.
+    Replay(usize),
+    /// A named module built from its source (part A): the header search.
+    Source,
+}
+
+fn is_pcm(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "pcm")
 }
 
 impl std::fmt::Debug for UnitSave {
@@ -163,6 +276,19 @@ impl Preprocessor<'_, '_> {
             DirectiveKind::Module { name, partition, name_span } => {
                 if let Some(m) = &mut self.modules {
                     m.module = Some(name.clone());
+                    if m.building.is_empty() && m.main_unit.is_none() {
+                        let key = match partition {
+                            Some(p) => format!("{name}:{p}"),
+                            None => name.clone(),
+                        };
+                        let kind = match (export, partition.is_some()) {
+                            (true, false) => Some(UnitKind::Interface),
+                            (true, true) => Some(UnitKind::InterfacePartition),
+                            (false, true) => Some(UnitKind::ImplementationPartition),
+                            (false, false) => None,
+                        };
+                        m.main_unit = Some((key, kind));
+                    }
                 }
                 // [module.unit]/8: an implementation unit implicitly
                 // imports its primary interface.
@@ -195,8 +321,7 @@ impl Preprocessor<'_, '_> {
     /// precede a module directive was seen (`exempt`: a null directive or
     /// a line marker).
     pub(crate) fn note_unit_directive(&mut self, at: Loc, dir: Option<Dir>, exempt: bool) {
-        let builtin = self.modules.as_ref().and_then(|m| m.builtin_file);
-        if self.cur_file_ref().is_none_or(|f| Some(f.file) == builtin) {
+        if self.cur_file_ref().is_none_or(|f| self.is_builtin_file(f.file)) {
             return;
         }
         self.unit_first_hash.get_or_insert(at);
@@ -351,7 +476,7 @@ impl Preprocessor<'_, '_> {
             name_span: ft.tok.span,
             directive_span: ft.tok.span,
         };
-        let res = self.resolver.resolve(self.sm, &req);
+        let res = self.resolve_include(&req);
         self.callbacks.inclusion_directive(&req, res.as_ref());
         let Some(r) = res else {
             self.emit(Diag::new(DiagId::pp_file_not_found, ft.tok.span).arg(&req.name));
@@ -365,19 +490,28 @@ impl Preprocessor<'_, '_> {
         Some(DirectiveKind::Import { key, display, header: true, name_span: ft.tok.span })
     }
 
-    /// The interface source of module `name` (spec/modules.md §2).
+    /// The module file or interface source of module `name`
+    /// (spec/modules.md §2, §11.6).
     fn find_module(&self, name: &str) -> Option<PathBuf> {
-        let o = &self.modules.as_ref()?.opts;
+        let m = self.modules.as_ref()?;
+        let o = &m.opts;
         if let Some((_, p)) = o.module_files.iter().rev().find(|(n, _)| n == name) {
             return Some(p.clone());
         }
         let stem = name.replace(':', "-");
         for dir in &o.prebuilt_paths {
-            for ext in ["cppm", "ixx", "cpp"] {
+            for ext in ["pcm", "cppm", "ixx", "cpp"] {
                 let p = dir.join(format!("{stem}.{ext}"));
                 if p.is_file() {
                     return Some(p);
                 }
+            }
+        }
+        // The paths the module files read so far recorded for their
+        // imports (clang reads the module files a BMI names).
+        for r in m.replays.iter().rev() {
+            if let Some((_, p)) = r.imports.iter().find(|(n, _)| n == name) {
+                return Some(PathBuf::from(p));
             }
         }
         if matches!(name, "std" | "std.compat")
@@ -391,7 +525,8 @@ impl Preprocessor<'_, '_> {
         None
     }
 
-    /// Imports named module (or partition) `key`.
+    /// Imports named module (or partition) `key`: from a module file
+    /// (spec/modules.md §11) or from its source (§1).
     fn import_module(&mut self, key: &str, span: Span) {
         if self.already_built(key, span) {
             return;
@@ -400,12 +535,312 @@ impl Preprocessor<'_, '_> {
             self.emit(Diag::new(DiagId::pp_module_not_found, span).arg(key));
             return;
         };
-        if let Ok(file) = self.sm.load_file(Path::new(&path)) {
-            self.begin_unit(key.to_string(), false, file, false, span);
-        } else {
-            let p = path.display().to_string();
-            self.emit(Diag::new(DiagId::pp_file_not_found, span).arg(p));
+        let shown = path.display().to_string();
+        if self.unit_ctx() == Ctx::Main
+            && let Some(rec) = self.modules.as_mut().and_then(|m| m.record.as_mut())
+            && !rec.imports.iter().any(|(k, _)| k == key)
+        {
+            rec.imports.push((key.to_owned(), shown.clone()));
         }
+        match bmi::sniff(&path) {
+            bmi::Sniffed::Kiln => {
+                let read = bmi::read_file(&path);
+                let Some(c) = self.load_capsule(&shown, read, Some(key), span) else { return };
+                self.begin_capsule_unit(key.to_owned(), shown, c, span);
+            }
+            bmi::Sniffed::Clang => {
+                self.emit(Diag::new(DiagId::pp_module_file_clang, span).arg(shown));
+            }
+            bmi::Sniffed::Missing if is_pcm(&path) => {
+                self.emit(Diag::new(DiagId::pp_module_file_not_found, span).arg(shown));
+            }
+            // A `.pcm` is never read as a module source (§11.4).
+            bmi::Sniffed::Source if is_pcm(&path) => {
+                self.emit(Diag::new(DiagId::pp_not_module_file, span).arg(shown));
+            }
+            bmi::Sniffed::Source | bmi::Sniffed::Missing => {
+                if let Ok(file) = self.sm.load_file(Path::new(&path)) {
+                    self.begin_unit(key.to_string(), false, file, false, span, None);
+                } else {
+                    self.emit(Diag::new(DiagId::pp_file_not_found, span).arg(shown));
+                }
+            }
+        }
+    }
+
+    /// Checks the module file `path` as read (`read`), expected to hold
+    /// module `expected` when that is known (spec/modules.md §11.4); every
+    /// failure is diagnosed at `span`.
+    fn load_capsule(
+        &mut self,
+        path: &str,
+        read: Result<Capsule, BmiError>,
+        expected: Option<&str>,
+        span: Span,
+    ) -> Option<Capsule> {
+        let c = match read {
+            Ok(c) => c,
+            Err(BmiError::NotKiln { clang: true }) => {
+                self.emit(Diag::new(DiagId::pp_module_file_clang, span).arg(path));
+                return None;
+            }
+            Err(BmiError::NotKiln { clang: false }) => {
+                self.emit(Diag::new(DiagId::pp_not_module_file, span).arg(path));
+                return None;
+            }
+            Err(BmiError::Format(v)) => {
+                let d = Diag::new(DiagId::pp_module_file_format, span)
+                    .arg(path)
+                    .arg(v.to_string())
+                    .arg(bmi::FORMAT_VERSION.to_string());
+                self.emit(d);
+                return None;
+            }
+            Err(BmiError::Corrupt(why)) => {
+                self.emit(Diag::new(DiagId::pp_module_file_corrupt, span).arg(path).arg(why));
+                return None;
+            }
+        };
+        if c.version != bmi::KILN_VERSION {
+            let d = Diag::new(DiagId::pp_module_file_version, span)
+                .arg(path)
+                .arg(&c.version)
+                .arg(bmi::KILN_VERSION);
+            self.emit(d);
+            return None;
+        }
+        if let Some(e) = expected
+            && c.module != e
+        {
+            let d = Diag::new(DiagId::pp_module_file_wrong_module, span)
+                .arg(path)
+                .arg(&c.module)
+                .arg(e);
+            self.emit(d);
+            return None;
+        }
+        let current = self.modules.as_ref().map(|m| m.opts.fingerprint.clone()).unwrap_or_default();
+        let diffs = bmi::mismatches(&c.fingerprint, &current);
+        if !diffs.is_empty() {
+            for (was, now) in diffs {
+                let d = Diag::new(DiagId::pp_module_file_config, span).arg(path).arg(was).arg(now);
+                self.emit(d);
+            }
+            self.emit(Diag::new(DiagId::pp_module_file_config_mismatch, span).arg(path));
+            return None;
+        }
+        Some(c)
+    }
+
+    /// Starts reading unit `key` from the module file `path`.
+    fn begin_capsule_unit(&mut self, key: String, path: String, c: Capsule, span: Span) {
+        let builtin = self.sm.add_virtual("<built-in>", c.predefines.clone()).ok();
+        let Some(m) = &mut self.modules else { return };
+        m.replays.push(Replay::new(path.clone(), c, builtin));
+        let i = m.replays.len() - 1;
+        let Some(file) = self.replay_file(i, 0) else {
+            self.emit(Diag::new(DiagId::pp_module_file_not_found, span).arg(path));
+            return;
+        };
+        self.begin_unit(key, false, file, false, span, Some(i));
+    }
+
+    /// Enters the module file `path` (`bytes`) as the main unit: its main
+    /// file under its own predefines, its lookups answered from its logs
+    /// (a `.pcm` input, spec/modules.md §11.6). False after diagnosing a
+    /// file that cannot be used; nothing is entered then.
+    pub fn enter_main_capsule(&mut self, path: &str, bytes: &[u8]) -> bool {
+        if self.modules.is_none() {
+            // Modules are off before C++20, and a module file needs them.
+            let d = Diag::new(DiagId::pp_module_file_config_mismatch, Span::INVALID).arg(path);
+            self.emit(d);
+            return false;
+        }
+        let Some(c) = self.load_capsule(path, bmi::read(bytes), None, Span::INVALID) else { return false };
+        let builtin = self.sm.add_virtual("<built-in>", c.predefines.clone()).ok();
+        let Some(m) = &mut self.modules else { return false };
+        m.replays.push(Replay::new(path.to_owned(), c, builtin));
+        let i = m.replays.len() - 1;
+        m.main_replay = Some(i);
+        m.builtin_file = builtin;
+        // A module file is not recorded again.
+        m.record = None;
+        let Some(file) = self.replay_file(i, 0) else {
+            self.emit(Diag::new(DiagId::pp_module_file_not_found, Span::INVALID).arg(path));
+            return false;
+        };
+        self.main_file = Some(file);
+        self.push_file(file, None, None, None, false, false);
+        if let Some(b) = builtin {
+            self.push_file(b, None, None, None, false, false);
+        }
+        self.module_lines = has_module_lines(self.sm.text(file));
+        true
+    }
+
+    /// The main unit's recorded inputs as a module file, when recording
+    /// was requested ([`ModuleOptions::record`]) and the main unit is an
+    /// importable module unit (spec/modules.md §11.2); `None` otherwise.
+    /// Call once, after the unit was read to its end.
+    pub fn take_capsule(&mut self) -> Option<Capsule> {
+        let m = self.modules.as_mut()?;
+        let rec = m.record.take()?;
+        let (module, Some(kind)) = m.main_unit.clone()? else { return None };
+        let predefines = m.builtin_file.map(|b| self.sm.text(b).to_owned()).unwrap_or_default();
+        let files = rec
+            .files
+            .iter()
+            .map(|&f| CapsuleFile {
+                path: self.sm.file_name(f).to_owned(),
+                text: self.sm.text(f).to_owned(),
+            })
+            .collect();
+        Some(Capsule {
+            version: bmi::KILN_VERSION.to_owned(),
+            sha: bmi::kiln_sha().to_owned(),
+            module,
+            kind,
+            predefines,
+            fingerprint: m.opts.fingerprint.clone(),
+            imports: rec.imports,
+            files,
+            includes: rec.includes,
+            embeds: rec.embeds,
+        })
+    }
+
+    /// The main unit's module declaration: its key (`M`, `M:P`) and, when
+    /// it is importable, its kind. `None` before one was read or without
+    /// one.
+    pub fn main_module_unit(&self) -> Option<(String, Option<UnitKind>)> {
+        self.modules.as_ref()?.main_unit.clone()
+    }
+
+    /// Whose lookups a request made now belongs to: that of the innermost
+    /// named-module unit being read (header units belong to the unit that
+    /// imports them).
+    fn unit_ctx(&self) -> Ctx {
+        let Some(m) = &self.modules else { return Ctx::Main };
+        for (key, r) in m.building.iter().zip(&m.unit_replay).rev() {
+            if key.starts_with('"') {
+                continue;
+            }
+            return r.map_or(Ctx::Source, Ctx::Replay);
+        }
+        m.main_replay.map_or(Ctx::Main, Ctx::Replay)
+    }
+
+    /// The predefines buffer of the main unit or of a module file.
+    pub(crate) fn is_builtin_file(&self, f: FileId) -> bool {
+        self.modules.as_ref().is_some_and(|m| {
+            m.builtin_file == Some(f) || m.replays.iter().any(|r| r.builtin == Some(f))
+        })
+    }
+
+    /// Finds the header `req` names: from the module file whose unit is
+    /// being read, else through the header search (recorded for the main
+    /// unit's module file).
+    pub(crate) fn resolve_include(&mut self, req: &IncludeRequest) -> Option<ResolvedInclude> {
+        match self.unit_ctx() {
+            Ctx::Replay(i) => self.replay_include(i, req),
+            ctx => {
+                let res = self.resolver.resolve(self.sm, req);
+                if ctx == Ctx::Main
+                    && let Some(rec) = self.modules.as_mut().and_then(|m| m.record.as_mut())
+                {
+                    let key = IncludeKey {
+                        includer: rec.includer(req.includer),
+                        name: req.name.clone(),
+                        angled: req.angled,
+                        kind: req.kind,
+                        lookup_from: req.lookup_from,
+                    };
+                    if rec.include_keys.insert(key.clone()) {
+                        let hit = res.as_ref().map(|r| IncludeHit {
+                            file: rec.file(r.file),
+                            lookup_index: r.lookup_index,
+                            system: r.system,
+                            extern_c: r.extern_c,
+                            path: r.path.clone(),
+                        });
+                        rec.includes.push(IncludeEntry { key, hit });
+                    }
+                }
+                res
+            }
+        }
+    }
+
+    /// [`resolve_include`](Self::resolve_include) for `#embed` /
+    /// `__has_embed`.
+    pub(crate) fn resolve_embed_req(&mut self, req: &EmbedRequest) -> Option<EmbedData> {
+        match self.unit_ctx() {
+            Ctx::Replay(i) => {
+                let r = self.modules.as_ref()?.replays.get(i)?;
+                let key = embed_key(r.includer(req.includer), req);
+                let bytes = r.embeds.get(&key)?.clone()?;
+                Some(EmbedData { bytes })
+            }
+            ctx => {
+                let res = self.resolver.resolve_embed(self.sm, req);
+                if ctx == Ctx::Main
+                    && let Some(rec) = self.modules.as_mut().and_then(|m| m.record.as_mut())
+                {
+                    let key = embed_key(rec.includer(req.includer), req);
+                    if rec.embed_keys.insert(key.clone()) {
+                        let bytes = res.as_ref().map(|d| d.bytes.clone());
+                        rec.embeds.push(EmbedEntry { key, bytes });
+                    }
+                }
+                res
+            }
+        }
+    }
+
+    fn replay_include(&mut self, i: usize, req: &IncludeRequest) -> Option<ResolvedInclude> {
+        let r = self.modules.as_ref()?.replays.get(i)?;
+        let key = IncludeKey {
+            includer: r.includer(req.includer),
+            name: req.name.clone(),
+            angled: req.angled,
+            kind: req.kind,
+            lookup_from: req.lookup_from,
+        };
+        let hit = r.includes.get(&key)?.clone()?;
+        let file = self.replay_file(i, hit.file)?;
+        Some(ResolvedInclude {
+            file,
+            lookup_index: hit.lookup_index,
+            system: hit.system,
+            extern_c: hit.extern_c,
+            path: hit.path,
+        })
+    }
+
+    /// The `FileId` of file `idx` of replay `i`, loaded on first use: the
+    /// file on disk when it still has the recorded text (sharing its
+    /// `FileId` with the importer, for §6 dedup), else the recorded text
+    /// as a buffer of the recorded name.
+    fn replay_file(&mut self, i: usize, idx: u32) -> Option<FileId> {
+        let m = self.modules.as_mut()?;
+        let r = m.replays.get_mut(i)?;
+        let k = idx as usize;
+        if let Some(id) = *r.ids.get(k)? {
+            return Some(id);
+        }
+        let (path, text) = r.files.get_mut(k)?;
+        let text = text.take()?;
+        // The file itself when it still holds the recorded text (its
+        // FileId is then shared with any textual inclusion of it, §6);
+        // otherwise the recorded text under the file's name (§11.3).
+        let id = match self.sm.load_regular_file_expecting(Path::new(path.as_str()), text) {
+            Ok((id, None)) => id,
+            Ok((id, Some(text))) if self.sm.text(id) == text => id,
+            Ok((_, Some(text))) | Err((_, text)) => self.sm.add_virtual(path, text).ok()?,
+        };
+        r.ids[k] = Some(id);
+        r.index.insert(id, idx);
+        Some(id)
     }
 
     /// Imports the header unit `key` (resolved by `read_header_import`).
@@ -422,7 +857,7 @@ impl Preprocessor<'_, '_> {
         if self.already_built(&key, span) {
             return;
         }
-        self.begin_unit(key, true, file, system, span);
+        self.begin_unit(key, true, file, system, span, None);
     }
 
     /// True if `key` is built (nothing to do) or being built (a cycle,
@@ -443,11 +878,28 @@ impl Preprocessor<'_, '_> {
     }
 
     /// Starts reading unit `key` from `file`: saves the importer's state,
-    /// then pushes the file and the predefines over it.
-    fn begin_unit(&mut self, key: String, header: bool, file: FileId, system: bool, span: Span) {
+    /// then pushes the file and the predefines over it. `replay` is the
+    /// module file it is read from; the predefines are its own then, those
+    /// of the importing unit for a header unit, and the main unit's
+    /// otherwise.
+    fn begin_unit(
+        &mut self,
+        key: String,
+        header: bool,
+        file: FileId,
+        system: bool,
+        span: Span,
+        replay: Option<usize>,
+    ) {
+        let ctx = self.unit_ctx();
         let Some(m) = &mut self.modules else { return };
+        let builtin = match (replay, ctx) {
+            (Some(i), _) => m.replays.get(i).and_then(|r| r.builtin),
+            (None, Ctx::Replay(i)) if header => m.replays.get(i).and_then(|r| r.builtin),
+            _ => m.builtin_file,
+        };
         m.building.push(key.clone());
-        let builtin = m.builtin_file;
+        m.unit_replay.push(replay);
         let module = m.module.take();
         let save = UnitSave {
             key: key.clone(),
@@ -478,7 +930,6 @@ impl Preprocessor<'_, '_> {
     /// queues [`Marker::UnitEnd`].
     pub(crate) fn end_unit(&mut self, save: Box<UnitSave>) {
         let save = *save;
-        let builtin = self.modules.as_ref().and_then(|m| m.builtin_file);
         let exported: Vec<Rc<MacroDef>> = if save.header {
             let mut v: Vec<Rc<MacroDef>> = self
                 .macros
@@ -489,7 +940,7 @@ impl Preprocessor<'_, '_> {
                         && self
                             .sm
                             .offset_of(d.name_span.lo)
-                            .is_some_and(|(f, _)| Some(f) != builtin)
+                            .is_some_and(|(f, _)| !self.is_builtin_file(f))
                 })
                 .cloned()
                 .collect();
@@ -510,6 +961,7 @@ impl Preprocessor<'_, '_> {
         if let Some(m) = &mut self.modules {
             m.module = save.module;
             m.building.pop();
+            m.unit_replay.pop();
             m.built.insert(save.key.clone(), exported.clone());
         }
         self.apply_header_macros(&exported);
@@ -521,5 +973,16 @@ impl Preprocessor<'_, '_> {
         for d in defs {
             self.macros.map.insert(d.name, d.clone());
         }
+    }
+}
+
+fn embed_key(includer: u32, req: &EmbedRequest) -> EmbedKey {
+    EmbedKey {
+        includer,
+        name: req.name.clone(),
+        angled: req.angled,
+        limit: req.limit,
+        offset: req.offset,
+        query_only: req.query_only,
     }
 }

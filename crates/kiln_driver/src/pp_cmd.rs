@@ -13,7 +13,7 @@ use kiln_lex::Interner;
 use kiln_lex::TokKind;
 use kiln_pp::{
     ClangFeatures, DirGroup, HeaderSearch, IfEval, PicModel, PpOptions, PredefConfig, Preprocessor,
-    PrintOptions, RealFs, SearchDirSpec, SearchList, build_predefines, print_macros,
+    PrintOptions, RealFs, SearchDirSpec, SearchList, bmi, build_predefines, print_macros,
     print_preprocessed,
 };
 use kiln_source::{FileId, SourceManager, Span};
@@ -45,10 +45,30 @@ pub(crate) type SharedDeps = Rc<RefCell<DepList>>;
 pub(crate) struct PpInputs {
     /// The header search list.
     pub list: SearchList,
-    /// The main file.
-    pub main: FileId,
+    /// The main input.
+    pub main: MainInput,
     /// The predefines buffer (`<built-in>`).
     pub predefines: String,
+}
+
+/// The main input of a job: a source, or a module file whose unit is
+/// rebuilt from its capsule (spec/modules.md §11.6).
+#[derive(Debug)]
+pub(crate) enum MainInput {
+    /// A source file (or standard input).
+    File(FileId),
+    /// A module file's bytes.
+    Capsule(Vec<u8>),
+}
+
+impl MainInput {
+    /// The source file, for a source input.
+    pub fn file(&self) -> Option<FileId> {
+        match self {
+            MainInput::File(f) => Some(*f),
+            MainInput::Capsule(_) => None,
+        }
+    }
 }
 
 /// One input to preprocess.
@@ -194,13 +214,43 @@ impl Job<'_> {
         o
     }
 
-    fn load_main(&self, sm: &SourceManager, engine: &DiagEngine<'_>) -> Option<FileId> {
+    fn load_main(&self, sm: &SourceManager, engine: &DiagEngine<'_>) -> Option<MainInput> {
+        if self.stdin_text.is_none() {
+            // A module file, by its magic (or a `.pcm` that is not one).
+            let path = Path::new(self.path);
+            let pcm = path.extension().is_some_and(|e| e == "pcm");
+            match bmi::sniff(path) {
+                bmi::Sniffed::Kiln => match std::fs::read(path) {
+                    Ok(b) => return Some(MainInput::Capsule(b)),
+                    Err(e) => {
+                        Diag::new(DiagId::drv_cannot_read_input, Span::INVALID)
+                            .arg(self.path)
+                            .arg(e.to_string())
+                            .emit(engine);
+                        return None;
+                    }
+                },
+                bmi::Sniffed::Clang => {
+                    Diag::new(DiagId::pp_module_file_clang, Span::INVALID)
+                        .arg(self.path)
+                        .emit(engine);
+                    return None;
+                }
+                bmi::Sniffed::Source if pcm => {
+                    Diag::new(DiagId::pp_not_module_file, Span::INVALID)
+                        .arg(self.path)
+                        .emit(engine);
+                    return None;
+                }
+                _ => {}
+            }
+        }
         let r = match &self.stdin_text {
             Some(t) => sm.add_virtual("<stdin>", t.clone()).map_err(|e| e.to_string()),
             None => sm.load_file(Path::new(self.path)).map_err(|e| e.to_string()),
         };
         match r {
-            Ok(f) => Some(f),
+            Ok(f) => Some(MainInput::File(f)),
             Err(e) => {
                 Diag::new(DiagId::drv_cannot_read_input, Span::INVALID)
                     .arg(self.path)
@@ -296,15 +346,26 @@ impl Job<'_> {
         // Modules for the modes that run sema, from C++20 (spec/modules.md
         // §2); `-E`/`-M` keep the directives as text.
         if staged && self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx20 {
+            let mut module_files: Vec<(String, std::path::PathBuf)> = a
+                .module_files
+                .iter()
+                .map(|(n, p)| (n.clone(), std::path::PathBuf::from(p)))
+                .collect();
+            for path in &a.nameless_module_files {
+                module_files.push((nameless_module_name(path, engine)?, path.into()));
+            }
             opts.modules = Some(kiln_pp::ModuleOptions {
-                module_files: a
-                    .module_files
-                    .iter()
-                    .map(|(n, p)| (n.clone(), std::path::PathBuf::from(p)))
-                    .collect(),
+                module_files,
                 prebuilt_paths: a.prebuilt_module_paths.iter().map(Into::into).collect(),
                 std_dir: Some(self.toolchain.libcxx_module_dir()),
+                fingerprint: self.fingerprint(),
+                record: a.precompile || a.module_output.is_some(),
             });
+        } else if let MainInput::Capsule(_) = &main {
+            let what =
+                if staged { "a module file before C++20" } else { "preprocessing a module file" };
+            Diag::new(DiagId::drv_not_implemented, Span::INVALID).arg(what).emit(engine);
+            return None;
         }
         let mut pp = Preprocessor::new(sm, engine, interner, opts);
         pp.set_include_resolver(Box::new(search));
@@ -366,8 +427,143 @@ impl Job<'_> {
         if let Some(d) = &deps {
             pp.set_callbacks(Box::new(DepCallbacks::new(Rc::clone(d), sm)));
         }
-        pp.enter_main_file(main);
+        match main {
+            MainInput::File(f) => pp.enter_main_file(f),
+            MainInput::Capsule(bytes) => {
+                if !pp.enter_main_capsule(self.path, &bytes) {
+                    return None;
+                }
+            }
+        }
         Some((pp, deps))
+    }
+
+    /// The options a module file records and checks (spec/modules.md
+    /// §11.4), as (key, effective flag spelling).
+    fn fingerprint(&self) -> Vec<(String, String)> {
+        let a = self.args;
+        let p = &a.predef;
+        let on = |b: bool, yes: &str, no: &str| if b { yes.to_owned() } else { no.to_owned() };
+        let std = match self.std.base.strip_prefix("c++") {
+            Some(v) if self.std.gnu => format!("-std=gnu++{v}"),
+            _ => format!("-std={}", self.std.base),
+        };
+        let char_signed = p.char_signed.unwrap_or_else(|| {
+            kiln_sema::target::Target::from_triple(self.toolchain.target.triple)
+                .map_or(true, |t| t.types.char_signed)
+        });
+        let mangling = match a.reflection_mangling {
+            kiln_abi::ReflectionMangling::Kiln => "kiln",
+            kiln_abi::ReflectionMangling::Gcc => "gcc",
+            kiln_abi::ReflectionMangling::KilnHashed => "kiln-hashed",
+        };
+        let fields = [
+            ("std", std),
+            ("target", format!("--target={}", self.toolchain.target.triple)),
+            ("exceptions", on(p.exceptions.unwrap_or(true), "-fexceptions", "-fno-exceptions")),
+            ("rtti", on(p.rtti.unwrap_or(true), "-frtti", "-fno-rtti")),
+            ("char", on(char_signed, "-fsigned-char", "-funsigned-char")),
+            (
+                "char8_t",
+                on(
+                    p.char8_t.unwrap_or(self.std.lex >= kiln_lex::Std::Cxx20),
+                    "-fchar8_t",
+                    "-fno-char8_t",
+                ),
+            ),
+            (
+                "sized-deallocation",
+                on(
+                    p.sized_deallocation.unwrap_or(true),
+                    "-fsized-deallocation",
+                    "-fno-sized-deallocation",
+                ),
+            ),
+            ("freestanding", on(p.freestanding.unwrap_or(false), "-ffreestanding", "-fhosted")),
+            ("reflection", on(p.reflection, "-freflection", "-fno-reflection")),
+            ("reflection-mangling", format!("-fkiln-reflection-mangling={mangling}")),
+            ("clang-compat", format!("-fclang-compat={}", p.clang_compat.major())),
+        ];
+        fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()
+    }
+
+    /// Where this job's module file goes (spec/modules.md §11.6):
+    /// `--precompile`'s `-o` or `<stem>.pcm`; `-fmodule-output=<path>`;
+    /// for `-fmodule-output`, the `-c` object's path with `.pcm`, else
+    /// `<stem>.pcm`. `None` when no module file is requested.
+    pub(crate) fn module_output_path(&self) -> Option<String> {
+        let a = self.args;
+        let stem = || {
+            let s = Path::new(self.path)
+                .file_stem()
+                .map_or_else(|| self.path.to_owned(), |s| s.to_string_lossy().into_owned());
+            format!("{s}.pcm")
+        };
+        if a.action == crate::args::Action::Precompile {
+            return Some(a.output.clone().unwrap_or_else(stem));
+        }
+        if !matches!(a.action, crate::args::Action::Compile | crate::args::Action::Link) {
+            return None;
+        }
+        match &a.module_output {
+            None => None,
+            Some((_, Some(p))) => Some(p.clone()),
+            Some((_, None)) => Some(match (&a.output, a.action) {
+                (Some(o), crate::args::Action::Compile) => {
+                    Path::new(o).with_extension("pcm").display().to_string()
+                }
+                _ => stem(),
+            }),
+        }
+    }
+
+    /// Writes the main unit's module file once `pp` has read it to its
+    /// end without errors (spec/modules.md §11.2, §11.6). A unit that is
+    /// not importable is `--precompile`'s error, or `-fmodule-output`'s
+    /// unused-argument warning. False after an error.
+    pub(crate) fn write_module_file(
+        &self,
+        pp: &mut Preprocessor<'_, '_>,
+        engine: &DiagEngine<'_>,
+    ) -> bool {
+        let a = self.args;
+        let Some(out) = self.module_output_path() else { return true };
+        let Some(capsule) = pp.take_capsule() else {
+            if a.action == crate::args::Action::Precompile {
+                Diag::new(DiagId::drv_precompile_not_module, Span::INVALID).emit(engine);
+                return false;
+            }
+            if let Some((flag, _)) = &a.module_output
+                && !a.quiet_unused_arguments
+            {
+                let sm = SourceManager::new();
+                let drv = make_engine(
+                    &sm,
+                    &crate::codegen_cmd::driver_diag_options(self.diag_opts),
+                    self.stderr.clone(),
+                    Some(&a.program),
+                );
+                Diag::new(DiagId::drv_argument_unused, Span::INVALID).arg(flag).emit(&drv);
+                drv.flush();
+                return drv.error_count() == 0;
+            }
+            return true;
+        };
+        let bytes = bmi::write(&capsule);
+        drop(capsule);
+        if let Err(e) = bmi::write_file(Path::new(&out), &bytes) {
+            let why = if e.kind() == std::io::ErrorKind::NotFound {
+                "No such file or directory".to_owned()
+            } else {
+                e.to_string()
+            };
+            Diag::new(DiagId::drv_cannot_open_output, Span::INVALID)
+                .arg(&out)
+                .arg(why)
+                .emit(engine);
+            return false;
+        }
+        true
     }
 
     fn preprocess<'a>(
@@ -397,6 +593,41 @@ impl Job<'_> {
         }
         drop(pp);
         result.deps = deps.map(|d| d.borrow().files().to_vec());
+    }
+}
+
+/// The module a nameless `-fmodule-file=<path>` holds, read from its
+/// header, with clang's deprecation warning (spec/modules.md §11.6);
+/// `None` after diagnosing a file that is not a kiln module file.
+fn nameless_module_name(path: &str, engine: &DiagEngine<'_>) -> Option<String> {
+    let Ok(bytes) = std::fs::read(path) else {
+        Diag::new(DiagId::pp_module_file_not_found, Span::INVALID).arg(path).emit(engine);
+        return None;
+    };
+    match bmi::peek(&bytes) {
+        Ok(h) => {
+            Diag::new(DiagId::drv_module_file_nameless, Span::INVALID).emit(engine);
+            Some(h.module)
+        }
+        Err(e) => {
+            let d = match e {
+                bmi::BmiError::NotKiln { clang: true } => {
+                    Diag::new(DiagId::pp_module_file_clang, Span::INVALID).arg(path)
+                }
+                bmi::BmiError::NotKiln { clang: false } => {
+                    Diag::new(DiagId::pp_not_module_file, Span::INVALID).arg(path)
+                }
+                bmi::BmiError::Format(v) => Diag::new(DiagId::pp_module_file_format, Span::INVALID)
+                    .arg(path)
+                    .arg(v.to_string())
+                    .arg(bmi::FORMAT_VERSION.to_string()),
+                bmi::BmiError::Corrupt(why) => {
+                    Diag::new(DiagId::pp_module_file_corrupt, Span::INVALID).arg(path).arg(why)
+                }
+            };
+            d.emit(engine);
+            None
+        }
     }
 }
 

@@ -106,7 +106,7 @@ impl SyntaxJob<'_> {
         let mut verifier = None;
         if let Some(inputs) = job.pp_inputs(&sm, &engine) {
             let dirs: Vec<String> = inputs.list.dirs().iter().map(|d| d.path.clone()).collect();
-            let v = Verifier::new(&sm, opts.clone(), Some(inputs.main), quoted_lookup(dirs));
+            let v = Verifier::new(&sm, opts.clone(), inputs.main.file(), quoted_lookup(dirs));
             let v = Rc::new(RefCell::new(v));
             self.parse(&sm, &engine, &interner, inputs, Some(&v), &mut result);
             verifier = Some(v);
@@ -141,8 +141,15 @@ impl SyntaxJob<'_> {
     ) {
         let job = &self.0;
         let a = job.args;
-        let dump_opts = match &a.dump_ast {
-            Some(o) => match dump_options(o, a.dump_ast_filter.clone(), sm, inputs.main) {
+        let main = inputs.main.file();
+        let dump_opts = match (&a.dump_ast, main) {
+            (Some(_), None) => {
+                Diag::new(DiagId::drv_not_implemented, Span::INVALID)
+                    .arg("-fdump-ast of a module file")
+                    .emit(engine);
+                return;
+            }
+            (Some(o), Some(main)) => match dump_options(o, a.dump_ast_filter.clone(), sm, main) {
                 Ok(d) => {
                     Some(DumpOptions { written_tags: a.predef.clang_compat.major() >= 22, ..d })
                 }
@@ -154,7 +161,7 @@ impl SyntaxJob<'_> {
                     return;
                 }
             },
-            None => None,
+            (None, _) => None,
         };
         let Ok(mut target) = Target::from_triple(job.toolchain.target.triple) else {
             Diag::new(DiagId::drv_unsupported_target, Span::INVALID)
@@ -210,6 +217,9 @@ impl SyntaxJob<'_> {
         let limits = a.constexpr.limits();
         let (tu, mut pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
+        if engine.error_count() == 0 {
+            job.write_module_file(&mut pp, engine);
+        }
         if verify.is_some() || deps.is_some() {
             // The parser stops at a fatal error; clang's preprocessor lexes
             // on to the end (its diagnostics suppressed), so every comment

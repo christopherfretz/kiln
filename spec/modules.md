@@ -549,8 +549,9 @@ Measured on aarch64 with the `harness` profile (peak RSS from
 
 `std.cppm` reads 1247 files and 8.1 MB of text, so its capsule is about
 8.5 MB, and importing it costs part A's parse plus reading and checking
-8.5 MB: measured in §11.8, within the 1.2x memory budget (the capsule's
-texts move into the source manager, so nothing is held twice). Option (b)
+8.5 MB: measured in §11.8 at 1.05x part A's peak memory and the same
+time, within the 1.2x budget (the capsule's texts become the source
+manager's buffers, so nothing is held twice). Option (b)
 would bring `import std;` towards clang's 0.27 s, but needs a serialiser
 for every AST node, type, template and constant-evaluator object, and
 makes every later AST change a format change. It is the stage-2 format
@@ -598,13 +599,18 @@ module file, or is rebuilt from its source as in part A).
 Replay. A capsule unit (an import resolved to a module file, or a module
 file given as the main input) gets a *replay resolver* instead of the
 header search: each request is looked up in the include log and answered
-with the logged file. A file is loaded lazily: `load_regular_file(path)`
-is tried first, and when the file on disk still has the recorded text its
-`FileId` is used (so the unit and an importer that includes the same
-header share the `FileId` that §6 dedup and `#pragma once` key on);
-otherwise the recorded text is added as a virtual buffer under the
-recorded path, which keeps the build hermetic when headers have changed or
-moved. The unit enters its own `<built-in>` buffer, holding the recorded
+with the logged file. A file is loaded lazily, through
+`SourceManager::load_regular_file_expecting(path, text)`: when the file
+exists, is not loaded yet and has the recorded text's size, the recorded
+text becomes its buffer under the file's identity without reading it;
+when it is already loaded or its size differs, the loaded or read text is
+compared with the recorded one. Either way an unchanged file keeps one
+`FileId` (so the unit and an importer that includes the same header share
+the `FileId` that §6 dedup and `#pragma once` key on); a changed or
+missing file is added as a virtual buffer under the recorded path, which
+keeps the build hermetic when headers have changed or moved. (A same-size
+edit made after the module file was written is not detected; clang checks
+size and mtime and reports the file as modified.) The unit enters its own `<built-in>` buffer, holding the recorded
 predefines, instead of the importer's. A request missing from the log
 (possible only for a hand-made file) is "file not found". The resolver of
 the enclosing named-module unit also serves header units nested in a
@@ -637,12 +643,17 @@ no includer).
   first-occurrence order (no hash-map iteration), there is no timestamp,
   and paths are recorded as the compile spelled them (no
   canonicalisation). Duplicate log keys are recorded once.
-- **Total reading.** The reader (`bmi::read`, safe Rust) checks the
-  magic, then the checksum over the whole file, then parses with every
-  length and count checked against the bytes that remain before anything
-  is allocated, validates UTF-8 and every file index, and rejects trailing
-  bytes. Any failure is a `BmiError`, reported as a diagnostic (§11.5);
-  nothing user-derived panics. FNV-1a's step is a bijection of its state
+- **Total reading.** The reader (`bmi::read_file`/`read_from`, safe
+  Rust) checks the magic and format version, then decodes the body as it
+  streams in, every length and count checked against the bytes that
+  remain (known from the file's size) before anything is allocated,
+  validates UTF-8 and every file index, rejects trailing bytes, and
+  finally checks the checksum of everything read. A body that fails to
+  decode is reported as "checksum mismatch" when the checksum is wrong
+  too (damage), and by the decoding failure otherwise. Any failure is a
+  `BmiError`, reported as a diagnostic (§11.4); nothing user-derived
+  panics. Streaming matters for memory: a file's text is read straight
+  into the buffer the source manager keeps (§11.8). FNV-1a's step is a bijection of its state
   for a fixed input byte, so changing any single byte always changes the
   checksum: a flipped byte is always "corrupt", and a truncated file
   fails the length or checksum check.
@@ -731,7 +742,7 @@ clang's spellings (spec/driver.md, "Modules"):
   otherwise it is a source.
 - `-fmodule-file=<path>`: the module name is read from the file's header
   (clang 19/22 also accept this form, with
-  `warning: the form '-fmodule-file=<BMI-path>' is deprecated for standard C++ named modules; consider to use '-fmodule-file=<module-name>=<BMI-path>' instead [-Weager-load-cxx-named-modules]`,
+  `warning: the form '-fmodule-file=<BMI-path>' is deprecated for standard C++ named modules;consider to use '-fmodule-file=<module-name>=<BMI-path>' instead [-Weager-load-cxx-named-modules]`,
   which kiln gives too). A file that is not a kiln module file is an
   error. It is never ignored.
 - `-fprebuilt-module-path=<dir>`: `<dir>/<name>.pcm` first (`M-P.pcm`
@@ -767,12 +778,41 @@ the compiler under test and the clang oracle:
 - `two-step`: kiln, too, gets module files in a compile-kind test (it is
   given sources otherwise, so the existing tests keep testing part A).
 
+The oracle's module files and objects are `oracle-<name>.pcm`/`.o` in the
+same scratch directory. A module unit the compiler under test rejects (or
+crashes on) fails the test; one the oracle rejects makes it broken. The
+GCC oracle is not run for tests with `module:` or `unit:` lines (GCC's
+module flags differ).
+
 ### 11.8 Cost of a capsule import
 
-Measured after the implementation landed (harness profile, aarch64), for
-the `import std;` program of §11.1:
+Measured after the implementation landed (release profile, aarch64, one
+session, so the ratios are like for like; the absolute numbers are lower
+than §11.1's, taken on a busier host), for the `import std;` program of
+§11.1 against libc++ 19's `std.cppm`:
 
-Recorded when the implementation lands (WP-917).
+| run | time | peak RSS | vs part A |
+|---|---|---|---|
+| part A, `-fsyntax-only` | 1.01 s | 84.8 MiB | |
+| capsule import (`-fmodule-file=std=std.pcm`), `-fsyntax-only` | 1.02 s | 89.6 MiB | 1.06x |
+| part A, `-c` | 1.15 s | 85.4 MiB | |
+| capsule import, `-c` | 1.12 s | 89.5 MiB | 1.05x |
+| `--precompile std.cppm` (writes the 8.9 MB `std.pcm`) | 1.07 s | 96.8 MiB | |
+| `-c -x c++-module std.cppm -fmodule-output=std.pcm` | 1.16 s | 96.8 MiB | |
+
+The import is within the 1.2x budget; the remaining 5 MiB is the include
+log (9012 entries for `std.cppm`) and its replay maps. Time is part A's:
+a capsule import is O(parse) (§11.1). The importer's object defines only
+`main`; `std`'s object owns the rest, and the two link and run. The writer
+holds a second copy of every text (the recorder's) until the file is
+written, hence the precompile's extra 12 MiB.
+
+A first reader that read the whole file into one buffer peaked at
+98-101 MiB (1.18x): freeing that 8.9 MB buffer raised glibc's dynamic
+mmap threshold to its size, so the parser's later large allocations came
+from the heap and were never returned. With the threshold pinned
+(`MALLOC_MMAP_THRESHOLD_=131072`) the same reader measured 86 MiB. The
+streaming reader (§11.3) never allocates a whole-file buffer.
 
 ### 11.9 Step 2 (follow-up work packages)
 
@@ -866,3 +906,28 @@ Recorded when the implementation lands (WP-917).
   import-only, implementation unit), using the IR-diff corpus's
   `//@ module:` two-step mode (spec/codegen.md §6).
 - libc++'s `std/modules/` through `cargo xtask libcxx` (§8).
+- Part B (WP-917), two-step `run` tests (each module unit compiled to a
+  module file and an object, the importer and `unit:` files compiled
+  separately, then linked; under kiln and clang 19/22):
+  `module.interface/two-step-run.cpp` (non-inline function and variable
+  defined once, exported inline variable, exported function and class
+  templates instantiated by the importers, a static data member, two
+  importers), `module.unit/two-step-partitions-run.cpp` (interface and
+  implementation partitions, an implementation unit),
+  `module.unit/two-step-impl-unit-run.cpp`,
+  `basic.start.dynamic/two-step-module-init-run.cpp` (observable
+  initialization order, once only), `module.global.frag/two-step-gmf-dup-run.cpp`
+  (kiln only: clang emits the GMF class's vtable in every importer,
+  deviation 7), and `module.interface/two-step-visibility.cpp` (the
+  visibility diagnostics through a module file).
+- `crates/kiln_pp/src/bmi.rs` unit tests: round trip, foreign and
+  version-mismatched files, every truncation and single-byte flip of a
+  small capsule (a diagnostic, never a panic), a damaged body behind a
+  valid checksum, the fingerprint comparison.
+- `crates/kiln_driver/tests/modules_bmi.rs`: `--precompile` determinism
+  and the three lookups (named, prebuilt path, nameless with its
+  warning), `-fmodule-output` (default and explicit paths, same bytes as
+  `--precompile`), `-c m.pcm` and a two-step link, the unused-argument
+  warning and the `--precompile` error, the mismatch, missing,
+  wrong-module and clang-file diagnostics, and 40 truncated or flipped
+  module files through the driver (each a fatal error, exit code 1).

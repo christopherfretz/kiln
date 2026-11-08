@@ -334,6 +334,14 @@ pub struct TestSpec {
     /// imports, in dependency order, paths relative to the test's directory
     /// (`spec/harness.md` "Modules"; the same lines `ir_vs_clang` reads).
     pub modules: Vec<(String, PathBuf)>,
+    /// `unit: <path>`: further translation units (an implementation unit,
+    /// any other TU) a `run` test compiles separately, against the module
+    /// files, and links (`spec/harness.md` "Modules").
+    pub units: Vec<PathBuf>,
+    /// `two-step`: kiln, too, compiles the `module:` units to module files
+    /// (the test then imports those) instead of reading their sources.
+    /// Implied for `run` tests.
+    pub two_step: bool,
     /// `min-oracle: N`: every clang the test runs must be release N or
     /// later; otherwise a SKIP (`ir_vs_clang` compares the case only under
     /// such an oracle).
@@ -542,6 +550,11 @@ struct Parser {
     modules: Vec<(String, PathBuf)>,
     /// Line of the first `module:` (0: none).
     module_line: usize,
+    units: Vec<PathBuf>,
+    /// Line of the first `unit:` (0: none).
+    unit_line: usize,
+    /// Line of `two-step` (0: absent).
+    two_step_line: usize,
     min_oracle: Option<u32>,
     requires_llvm: Option<u32>,
     requires_llvm_below: Option<u32>,
@@ -603,6 +616,9 @@ impl Parser {
             requires_clang_below: None,
             modules: Vec::new(),
             module_line: 0,
+            units: Vec::new(),
+            unit_line: 0,
+            two_step_line: 0,
             min_oracle: None,
             requires_llvm: None,
             requires_llvm_below: None,
@@ -778,6 +794,18 @@ impl Parser {
             "skip" | "xfail" => self.marker(line, name, qualifier, value),
             "requires" => self.requires_directive(line, value),
             "module" => self.module_directive(line, value),
+            "unit" => {
+                if value.is_empty() || value.contains(char::is_whitespace) {
+                    self.err(line, "expected `unit: <path>`");
+                } else if Path::new(value).is_absolute() {
+                    self.err(line, "a `unit` path is relative to the test's directory");
+                } else {
+                    if self.unit_line == 0 {
+                        self.unit_line = line;
+                    }
+                    self.units.push(PathBuf::from(value));
+                }
+            }
             "min-oracle" => match value.parse::<u32>() {
                 Ok(_) if self.min_oracle.is_some() => self.err(line, "duplicate `min-oracle`"),
                 Ok(n) if n > 0 => self.min_oracle = Some(n),
@@ -817,6 +845,16 @@ impl Parser {
                 self.err(line, "duplicate `verify`");
             } else {
                 self.verify_line = line;
+            }
+            return None;
+        }
+        if name == "two-step" {
+            if value.is_some() {
+                self.err(line, "`two-step` takes no value");
+            } else if self.two_step_line != 0 {
+                self.err(line, "duplicate `two-step`");
+            } else {
+                self.two_step_line = line;
             }
             return None;
         }
@@ -1234,13 +1272,24 @@ impl Parser {
         }
         if self.module_line != 0
             && (verify
-                || !matches!(expect, Expect::CompileOk | Expect::CompileFail | Expect::NoCrash))
+                || !matches!(
+                    expect,
+                    Expect::CompileOk | Expect::CompileFail | Expect::NoCrash | Expect::Run
+                ))
         {
             let line = self.module_line;
             self.err(
                 line,
-                "`module` only applies to `compile-ok`, `compile-fail` and `no-crash` tests",
+                "`module` only applies to `compile-ok`, `compile-fail`, `no-crash` and `run` tests",
             );
+        }
+        if self.unit_line != 0 && expect != Expect::Run {
+            let line = self.unit_line;
+            self.err(line, "`unit` only applies to `run` tests");
+        }
+        if self.two_step_line != 0 && (self.module_line == 0 || expect == Expect::Run) {
+            let line = self.two_step_line;
+            self.err(line, "`two-step` needs `module:` lines and is implied for `run` tests");
         }
         if expect == Expect::Pp {
             for line in std::mem::take(&mut self.oven_lines) {
@@ -1292,6 +1341,8 @@ impl Parser {
             requires_clang: self.requires_clang,
             requires_clang_below: self.requires_clang_below,
             modules: self.modules,
+            units: self.units,
+            two_step: self.two_step_line != 0,
             min_oracle: self.min_oracle,
             requires_llvm: self.requires_llvm,
             requires_llvm_below: self.requires_llvm_below,
@@ -1371,6 +1422,7 @@ fn is_known_key(k: &str) -> bool {
             | "cfg-diverges"
             | "requires"
             | "module"
+            | "unit"
             | "min-oracle"
             | "meta-header"
             | "gdb"
@@ -1757,8 +1809,16 @@ mod tests {
         for bad in ["a", "=x.cppm", "a=", "a=/abs.cppm"] {
             assert!(!errs(&format!("//@ module: {bad}\n")).is_empty(), "{bad}");
         }
-        let e = errs("//@ expect: run\n//@ module: a=x.cppm\n");
-        assert!(e.iter().any(|e| e.contains("`module` only applies")), "{e:?}");
+        let s = ok("//@ expect: run\n//@ module: a=x.cppm\n//@ unit: u.cpp\n");
+        assert_eq!(s.units, [PathBuf::from("u.cpp")]);
+        let e = errs("//@ unit: u.cpp\n");
+        assert!(e.iter().any(|e| e.contains("`unit` only applies")), "{e:?}");
+        let e = errs("//@ expect: run\n//@ module: a=x.cppm\n//@ two-step\n");
+        assert!(e.iter().any(|e| e.contains("`two-step` needs")), "{e:?}");
+        let e = errs("//@ two-step\n");
+        assert!(e.iter().any(|e| e.contains("`two-step` needs")), "{e:?}");
+        let s = ok("//@ module: a=x.cppm\n//@ two-step\n");
+        assert!(s.two_step);
         let e = errs("//@ verify\n//@ module: a=x.cppm\n");
         assert!(e.iter().any(|e| e.contains("`module` only applies")), "{e:?}");
         for bad in ["0", "x", "22.1"] {

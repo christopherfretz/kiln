@@ -501,7 +501,11 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                 m.builtin_file = Some(b);
             }
         }
-        if self.modules.is_some() {
+        if let Some(m) = &mut self.modules {
+            if let Some(rec) = m.record.as_mut() {
+                // The main file is file 0 of a module file.
+                rec.file(file);
+            }
             self.module_lines = crate::modules::has_module_lines(self.sm.text(file));
         }
     }

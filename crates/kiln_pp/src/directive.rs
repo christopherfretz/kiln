@@ -1254,7 +1254,7 @@ impl Preprocessor<'_, '_> {
             name_span: ft.tok.span,
             directive_span: name.tok.span,
         };
-        let res = self.resolver.resolve(self.sm, &req);
+        let res = self.resolve_include(&req);
         self.callbacks.inclusion_directive(&req, res.as_ref());
         let Some(r) = res else {
             self.emit(Diag::new(DiagId::pp_file_not_found, ft.tok.span).arg(&req.name));
@@ -1360,7 +1360,7 @@ impl Preprocessor<'_, '_> {
         };
         let found = {
             crate::profile::time!(t_has_include_ns);
-            self.resolver.resolve(self.sm, &req).is_some()
+            self.resolve_include(&req).is_some()
         };
         Ok((found, close.tok.span))
     }
@@ -1641,7 +1641,7 @@ impl Preprocessor<'_, '_> {
             name_span: h.tok.span,
             query_only: true,
         };
-        let v = match self.resolver.resolve_embed(self.sm, &req) {
+        let v = match self.resolve_embed_req(&req) {
             None => 0,
             Some(d) if d.bytes.is_empty() => 2,
             Some(_) => 1,
@@ -1671,7 +1671,7 @@ impl Preprocessor<'_, '_> {
             name_span: ft.tok.span,
             query_only: false,
         };
-        let Some(data) = self.resolver.resolve_embed(self.sm, &req) else {
+        let Some(data) = self.resolve_embed_req(&req) else {
             self.emit(Diag::new(DiagId::pp_file_not_found, ft.tok.span).arg(&req.name));
             return;
         };

@@ -251,7 +251,7 @@ impl Test<'_> {
         if let Some(reason) = self.mode_skip(&spec, &source) {
             return (Status::Skip, Some(reason), String::new());
         }
-        if !spec.modules.is_empty() && !kind.speaks_clang() {
+        if !(spec.modules.is_empty() && spec.units.is_empty()) && !kind.speaks_clang() {
             let reason = "not supported by this compiler (`module:` needs kiln or clang)";
             return (Status::Skip, Some(reason.to_owned()), String::new());
         }
@@ -280,7 +280,9 @@ impl Test<'_> {
                 return (Status::Skip, Some(reason), String::new());
             }
         }
-        if let Err(p) = self.precompile_modules(&spec) {
+        if spec.expect != Expect::Run
+            && let Err(p) = self.build_modules(&self.cfg.compiler.clone(), &spec, false)
+        {
             return match p {
                 Problem::Killed { mib, details } => {
                     (Status::Killed, Some(format!("memory limit {mib} MiB")), details)
@@ -390,9 +392,7 @@ impl Test<'_> {
             c.args(self.meta_header_flags(true));
         }
         c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
-        if program == self.cfg.compiler {
-            c.args(self.module_flags(spec, spec.modules.len()));
-        }
+        c.args(self.module_flags(program, spec, spec.modules.len()));
         c.arg(&self.case.name);
         if let Some(o) = out {
             c.arg("-o").arg(o);
@@ -405,15 +405,24 @@ impl Test<'_> {
         self.case.path.parent().unwrap_or(&self.cfg.root).join(path)
     }
 
+    /// Separate compilation of the module units (spec/modules.md §11.7):
+    /// `run` tests with `module:` or `unit:` lines, and `two-step`.
+    fn two_step(&self, spec: &TestSpec) -> bool {
+        spec.two_step
+            || (spec.expect == Expect::Run && !(spec.modules.is_empty() && spec.units.is_empty()))
+    }
+
     /// The `-fmodule-file=<name>=<file>` flags of the first `n` `module:`
-    /// lines for the compiler under test: kiln builds each from its source,
-    /// clang reads the BMI [`Self::precompile_modules`] wrote.
-    fn module_flags(&self, spec: &TestSpec, n: usize) -> Vec<std::ffi::OsString> {
-        let kiln = self.cfg.compiler_kind == CompilerKind::Kiln;
+    /// lines for `program`: kiln builds each from its source unless the
+    /// test is [two-step](Self::two_step); otherwise `program` reads the
+    /// module file [`Self::build_modules`] wrote.
+    fn module_flags(&self, program: &Path, spec: &TestSpec, n: usize) -> Vec<std::ffi::OsString> {
+        let source = self.is_kiln(program) && !self.two_step(spec);
+        let oracle = program != self.cfg.compiler;
         spec.modules[..n]
             .iter()
             .map(|(name, path)| {
-                let file = if kiln { self.module_source(path) } else { self.bmi(name) };
+                let file = if source { self.module_source(path) } else { self.bmi(name, oracle) };
                 let mut f = std::ffi::OsString::from(format!("-fmodule-file={name}="));
                 f.push(file);
                 f
@@ -421,19 +430,39 @@ impl Test<'_> {
             .collect()
     }
 
-    fn bmi(&self, name: &str) -> PathBuf {
-        self.dir.join(format!("{name}.pcm"))
+    /// The module file of unit `name` (the oracle's apart).
+    fn bmi(&self, name: &str, oracle: bool) -> PathBuf {
+        let stem = name.replace(':', "-");
+        self.dir.join(if oracle { format!("oracle-{stem}.pcm") } else { format!("{stem}.pcm") })
     }
 
-    /// For clang, precompiles each `module:` unit in order (`--precompile
-    /// -x c++-module`, the test's `-std` and `args:`, the earlier units'
-    /// BMIs) into the scratch directory, as `ir_vs_clang` does. A unit the
-    /// compiler rejects makes the test broken.
-    fn precompile_modules(&mut self, spec: &TestSpec) -> Check {
-        if spec.modules.is_empty() || self.cfg.compiler_kind != CompilerKind::Clang {
-            return Ok(());
+    /// The object of module unit `name` or of `unit:` file `i`.
+    fn unit_object(&self, stem: &str, oracle: bool) -> PathBuf {
+        self.dir.join(if oracle { format!("oracle-{stem}.o") } else { format!("{stem}.o") })
+    }
+
+    /// Compiles each `module:` unit in order, with the test's `-std` and
+    /// `args:` and the earlier units' module files, into the scratch
+    /// directory: a module file (`--precompile -x c++-module`), and with
+    /// `objects` also its object (kiln: `-c -fmodule-output=`; clang: `-c`
+    /// of the module file, its two-phase build). Kiln builds nothing
+    /// unless the test is [two-step](Self::two_step). Returns the objects.
+    /// A unit the compiler under test rejects fails the test; one the
+    /// oracle rejects makes it broken.
+    fn build_modules(
+        &mut self,
+        program: &Path,
+        spec: &TestSpec,
+        objects: bool,
+    ) -> Result<Vec<PathBuf>, Problem> {
+        if spec.modules.is_empty() || (self.is_kiln(program) && !self.two_step(spec)) {
+            return Ok(Vec::new());
         }
         self.scratch()?;
+        let oracle = program != self.cfg.compiler;
+        let who = if oracle { "the oracle" } else { "the compiler" };
+        let kiln = self.is_kiln(program);
+        let mut out = Vec::new();
         for (i, (name, path)) in spec.modules.iter().enumerate() {
             let src = self.module_source(path);
             if !src.is_file() {
@@ -443,22 +472,114 @@ impl Test<'_> {
                     src.display()
                 )));
             }
-            let mut c = Command::new(&self.cfg.compiler);
-            c.current_dir(&self.cfg.root);
-            c.arg(format!("-std={}", spec.std));
-            c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
-            c.args(self.module_flags(spec, i));
-            c.args(["--precompile", "-x", "c++-module"]).arg(&src).arg("-o").arg(self.bmi(name));
-            let o = self.exec("the compiler", &c, self.cfg.compile_timeout)?;
-            if !o.success() {
-                return Err(Problem::Broken(format!(
-                    "the compiler could not precompile module `{name}` ({})\n{}",
-                    o.describe_end(),
-                    indent(&o.stderr_str())
-                )));
+            let bmi = self.bmi(name, oracle);
+            let obj = self.unit_object(&name.replace(':', "-"), oracle);
+            let base = |c: &mut Command| {
+                c.current_dir(&self.cfg.root);
+                if kiln {
+                    c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
+                }
+                c.arg(format!("-std={}", spec.std));
+                if let Some(n) = self.clang_compat(program, spec) {
+                    c.arg(format!("-fclang-compat={n}"));
+                }
+                c.args(
+                    spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))),
+                );
+                c.args(self.module_flags(program, spec, i));
+            };
+            let mut steps = Vec::new();
+            let mut c = Command::new(program);
+            base(&mut c);
+            if kiln && objects {
+                let mut f = std::ffi::OsString::from("-fmodule-output=");
+                f.push(&bmi);
+                c.arg(f).args(["-c", "-x", "c++-module"]).arg(&src).arg("-o").arg(&obj);
+                steps.push(c);
+            } else {
+                c.args(["--precompile", "-x", "c++-module"]).arg(&src).arg("-o").arg(&bmi);
+                steps.push(c);
+                if objects {
+                    let mut c = Command::new(program);
+                    base(&mut c);
+                    c.arg("-c").arg(&bmi).arg("-o").arg(&obj);
+                    steps.push(c);
+                }
+            }
+            for c in &steps {
+                let o = self.exec(who, c, self.cfg.compile_timeout)?;
+                let crashed = o.stderr_str().contains("panicked at");
+                if !o.success() || crashed {
+                    let msg = format!(
+                        "{who} could not build module `{name}` ({})\n{}",
+                        o.describe_end(),
+                        indent(&o.stderr_str())
+                    );
+                    return Err(if oracle { Problem::Broken(msg) } else { Problem::Fail(msg) });
+                }
+            }
+            if objects {
+                out.push(obj);
             }
         }
-        Ok(())
+        Ok(out)
+    }
+
+    /// A [two-step](Self::two_step) `run` build by `program` into `exe`:
+    /// the module units ([`Self::build_modules`]), the test file and each
+    /// `unit:` file to objects against the module files, then one link.
+    /// Returns the test file's compile (its diagnostics are checked), or
+    /// that of the first step that failed.
+    fn build_two_step(
+        &mut self,
+        program: &Path,
+        spec: &TestSpec,
+        exe: &Path,
+    ) -> Result<Output, Problem> {
+        let oracle = program != self.cfg.compiler;
+        let who = if oracle { "the oracle" } else { "the compiler" };
+        let mut objects = self.build_modules(program, spec, true)?;
+        let test_obj = self.unit_object("test", oracle);
+        let main = self.command(program, spec, &["-c"], Some(&test_obj));
+        let main_out = self.exec(who, &main, self.cfg.compile_timeout)?;
+        if !main_out.success() {
+            return Ok(main_out);
+        }
+        for (i, unit) in spec.units.iter().enumerate() {
+            let src = self.module_source(unit);
+            let obj = self.unit_object(&format!("unit{i}"), oracle);
+            let mut c = Command::new(program);
+            c.current_dir(&self.cfg.root);
+            if self.is_kiln(program) {
+                c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
+            }
+            c.arg(format!("-std={}", spec.std));
+            if let Some(n) = self.clang_compat(program, spec) {
+                c.arg(format!("-fclang-compat={n}"));
+            }
+            c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+            c.args(self.module_flags(program, spec, spec.modules.len()));
+            c.arg("-c").arg(&src).arg("-o").arg(&obj);
+            let o = self.exec(who, &c, self.cfg.compile_timeout)?;
+            if !o.success() {
+                return Ok(o);
+            }
+            objects.push(obj);
+        }
+        objects.push(test_obj);
+        let mut link = Command::new(program);
+        link.current_dir(&self.cfg.root);
+        if self.is_kiln(program) {
+            link.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
+        }
+        link.arg("-Qunused-arguments");
+        link.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+        link.args(&objects).arg("-o").arg(exe);
+        let o = self.exec(who, &link, self.cfg.compile_timeout)?;
+        if !o.success() {
+            return Ok(o);
+        }
+        Ok(main_out)
     }
 
     /// The `-fclang-compat=<major>` kiln is run with: the oracle clang's
@@ -637,6 +758,7 @@ impl Test<'_> {
         mode: &[&str],
         out: Option<&Path>,
     ) -> Result<Output, Problem> {
+        self.build_modules(oracle, spec, false)?;
         let cmd = self.command(oracle, spec, mode, out);
         let o = self.exec("the oracle", &cmd, self.cfg.compile_timeout)?;
         if o.success() {
@@ -883,7 +1005,20 @@ impl Test<'_> {
 
     fn run(&mut self, spec: &TestSpec) -> Check {
         let exe = self.scratch()?.join("test.out");
-        let o = self.compile(spec, &[], Some(&exe))?;
+        let o = if self.two_step(spec) {
+            let o = self.build_two_step(&self.cfg.compiler.clone(), spec, &exe)?;
+            if o.code().is_none() || o.stderr_str().contains("panicked at") {
+                let what = if o.timed_out() { "hung" } else { "crashed" };
+                return Err(Problem::Fail(format!(
+                    "compiler {what} ({})\n{}",
+                    o.describe_end(),
+                    indent(&o.stderr_str())
+                )));
+            }
+            o
+        } else {
+            self.compile(spec, &[], Some(&exe))?
+        };
         if !o.success() {
             return Err(Problem::Fail(format!(
                 "compiling the test failed ({})\n{}",
@@ -930,7 +1065,19 @@ impl Test<'_> {
             && let Some(oracle) = self.cfg.oracle.clone()
         {
             let oexe = self.dir.join("oracle.out");
-            self.oracle_compile(&oracle, spec, &[], Some(&oexe))?;
+            if self.two_step(spec) {
+                let o = self.build_two_step(&oracle, spec, &oexe)?;
+                if !o.success() {
+                    return Err(Problem::Broken(format!(
+                        "the oracle ({}) rejected the test ({})\n{}",
+                        oracle.display(),
+                        o.describe_end(),
+                        indent(&o.stderr_str())
+                    )));
+                }
+            } else {
+                self.oracle_compile(&oracle, spec, &[], Some(&oexe))?;
+            }
             let theirs = self.execute_binary(&oexe, spec, stdin.as_deref(), true)?;
             if theirs.code().is_none() {
                 // The oracle's binary is the reference; if it hangs or
