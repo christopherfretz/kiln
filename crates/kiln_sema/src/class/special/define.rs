@@ -708,6 +708,9 @@ impl Sema<'_, '_> {
             let Some(init) = self.default_member_init(field, info.ctor, loc) else {
                 return true;
             };
+            // [class.base.init]/11: a temporary bound to a reference member
+            // by its default member initializer (spec/sema-class.md §5.6).
+            self.check_member_init_lifetime(field, init);
             // Its immediate invocations are evaluated here
             // ([expr.const]/16; clang's rebuilt `CXXDefaultInitExpr`).
             let ctor = info.ctor;

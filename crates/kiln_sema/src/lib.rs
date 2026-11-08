@@ -86,6 +86,7 @@ pub mod modules;
 mod ms_struct;
 mod musttail;
 pub mod names;
+mod never_constant;
 pub mod new_delete;
 mod nonnull;
 mod null_compare;
@@ -126,6 +127,7 @@ mod trivial_abi;
 mod try_stmt;
 mod type_diff;
 mod undefined_used;
+mod uninit;
 mod unreachable_code;
 mod unused_file_scope;
 mod unused_var;
@@ -390,6 +392,8 @@ pub struct Sema<'a, 'sm> {
     /// The graph of the body being finished, its vectors reused from
     /// body to body.
     pub(crate) cfg_body: cfg::BodyCfg,
+    /// The uninitialized-values analysis' reused buffers (spec/sema.md §7.11).
+    pub(crate) uninit_scratch: uninit::Scratch,
     /// The functions (first declarations) clang 22 infers `noreturn`
     /// (`InferredNoReturnAttr`, [`Sema::infer_noreturn`]).
     pub(crate) inferred_noreturn: kiln_source::fx::FxHashSet<DeclId>,
@@ -703,7 +707,8 @@ pub struct Sema<'a, 'sm> {
     /// result through the first that matches (clang `ExtVectorDecls`).
     pub(crate) ext_vector_typedefs: Vec<DeclId>,
     /// Splices whose operand was read as a frozen constant without an
-    /// Oven evaluation (spec/reflection.md §5, the splice fast path).
+    /// Oven evaluation (spec/reflection.md §5, the splice fast path);
+    /// handed to the Oven's report by [`Sema::into_parts`].
     pub(crate) splice_fast: u64,
     /// The `typeid` expression operands being formed, innermost last:
     /// the open lambda count and the unevaluated depth inside each
@@ -1235,6 +1240,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_out: String::new(),
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
             cfg_body: cfg::BodyCfg::default(),
+            uninit_scratch: uninit::Scratch::default(),
             inferred_noreturn: kiln_source::fx::FxHashSet::default(),
             gsl_inferred_pointers: kiln_source::fx::FxHashSet::default(),
             in_typedef_instantiation: false,

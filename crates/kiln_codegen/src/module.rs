@@ -163,6 +163,10 @@ pub(crate) struct Cg<'a> {
     /// The `UBSan` type descriptor of each type (clang
     /// `EmitCheckTypeDescriptor`'s cache, WP-675).
     pub ub_types: FxHashMap<QualType, GlobalId>,
+    /// The `distinct !{}` type identifier of each type without linkage
+    /// in vtable `!type` metadata, by `_ZTS` name (WP-873; clang
+    /// `MetadataIdMap` / `VirtualMetadataIdMap`).
+    pub type_md_ids: FxHashMap<String, kiln_llvm::MetadataId>,
     /// The source manager, for `UBSan` source locations (WP-675).
     pub sm: Option<&'a kiln_source::SourceManager>,
     /// Named struct types by record.
@@ -419,6 +423,7 @@ impl<'a> Cg<'a> {
             to_emit: Vec::new(),
             strings: FxHashMap::default(),
             ub_types: FxHashMap::default(),
+            type_md_ids: FxHashMap::default(),
             sm: None,
             named: FxHashMap::default(),
             named_base: FxHashMap::default(),
@@ -3365,6 +3370,18 @@ impl<'a> Cg<'a> {
         }
         if let Some(v) = fp {
             m.add_module_flag_i32(7, "frame-pointer", v);
+        }
+        // clang `EmitAssemblyHelper::RunOptimizationPipeline`'s LTO flags,
+        // after the frontend's (WP-873).
+        match self.opts.lto.filter(|_| self.opts.lto_module_flags) {
+            Some(crate::Lto::Full) => {
+                m.add_module_flag_i32(1, "ThinLTO", 0);
+                m.add_module_flag_i32(1, "EnableSplitLTOUnit", 1);
+            }
+            Some(crate::Lto::Thin { split }) => {
+                m.add_module_flag_i32(1, "EnableSplitLTOUnit", i32::from(split));
+            }
+            None => {}
         }
         m.add_ident(&self.opts.ident);
         self.tbaa_errno();

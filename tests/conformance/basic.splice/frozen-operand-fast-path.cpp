@@ -9,7 +9,7 @@
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
-//@ oven: evaluations<=4 steps<=8
+//@ oven: evaluations<=4 steps<=8 splice_fast>=3000
 #include "kiln_meta.h"
 namespace N { int x = 2; }
 int v = 1;

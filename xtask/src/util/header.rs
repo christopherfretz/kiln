@@ -89,6 +89,8 @@ pub enum Counter {
     Evaluations,
     MemoHits,
     ReflBytes,
+    /// Total-only: splices sema read without an evaluation (WP-884).
+    SpliceFast,
 }
 
 impl Counter {
@@ -106,7 +108,7 @@ impl Counter {
 
     /// The counters a budget can also name that the bench does not
     /// record (diagnostic counts rather than costs).
-    pub const EXTRA: [Self; 2] = [Self::MemoHits, Self::ReflBytes];
+    pub const EXTRA: [Self; 3] = [Self::MemoHits, Self::ReflBytes, Self::SpliceFast];
 
     /// The report's field name (and the budget key).
     pub fn name(self) -> &'static str {
@@ -122,6 +124,7 @@ impl Counter {
             Self::Evaluations => "evaluations",
             Self::MemoHits => "memo_hits",
             Self::ReflBytes => "refl_bytes",
+            Self::SpliceFast => "splice_fast",
         }
     }
 
@@ -166,7 +169,7 @@ pub struct OvenBudget {
 pub fn parse_oven(value: &str) -> Result<OvenBudget, String> {
     let usage = "expected `oven: [<line>[:<col>]] <counter><=N|<counter>>=N...` with counters \
                  steps|bytes|peak_bytes|calls|allocs|peak_arena|frozen_bytes|static_bytes|\
-                 evaluations|memo_hits|refl_bytes";
+                 evaluations|memo_hits|refl_bytes|splice_fast";
     let mut items = value.split_whitespace().peekable();
     let at = match items.peek() {
         Some(first) if first.starts_with(|c: char| c.is_ascii_digit()) => {

@@ -166,3 +166,4 @@ parse_unsupported = Error (1) "{0} is not supported yet";
 parse_using_enum_requires_name = Error (0) "using enum requires an enum or typedef name";
 parse_vexing_parse = Warning [VexingParse] (0) "parentheses were disambiguated as a function declaration";
 parse_virt_specifier_outside_class = Error (1) "'{0}' specifier is not allowed outside a class definition";
+parse_wrong_clang_attr_namespace = Warning [IgnoredAttributes] (0) "'__clang__' is a predefined macro name, not an attribute scope specifier; did you mean '_Clang' instead?";

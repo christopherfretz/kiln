@@ -349,6 +349,10 @@ whose trailing requires-clause is not satisfied is not viable
 non-const object does not hide a satisfied `operator int() const`, and
 "no viable conversion" notes it as "candidate function not viable:
 constraints not satisfied" with the satisfaction notes (WP-302).
+A surrogate call function ([over.call.object]/2) is not viable either
+when its conversion function's constraints are not satisfied
+(`add_surrogate`, clang `AddSurrogateCandidate`), and no surrogate note
+is printed for it (WP-881).
 
 **Reference direct-initialization** (`int&& r(Ex{})`, `static_cast<T&&>`;
 clang `allowExplicitConversionFunctionsInRefBinding`): `bind_reference`

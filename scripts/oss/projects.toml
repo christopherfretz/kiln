@@ -68,6 +68,33 @@ wave = 1
 verified = true
 notes = "Some ctest cases run python3 scripts (ApprovalTests)."
 
+[catch2_cxx23]
+url = "https://github.com/catchorg/Catch2"
+tag = "v3.16.1"
+checkout = "catch2"
+build = "cmake"
+cxx_std = 23
+configure = ["-DCATCH_DEVELOPMENT_BUILD=ON", "-DCATCH_BUILD_TESTING=ON", "-DCATCH_ENABLE_WERROR=OFF", "-DCATCH_BUILD_EXAMPLES=OFF"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+control_cxx = "clang++-22"
+wave = 1
+verified = true
+notes = "WP-873 (WP-687). [catch2] in C++23: Message.tests.cpp then covers a multi-argument operator[] in CAPTURE. The control is clang 22 (control_cxx): clang 19 rejects UniquePtr.tests.cpp with libstdc++ 14 (tuple_size<Catch::Decomposer> instantiated by tuple operator<=> in C++23; clang 22 and GCC accept). docs/status/oss/catch2.md."
+
+[catch2_werror]
+url = "https://github.com/catchorg/Catch2"
+tag = "v3.16.1"
+checkout = "catch2"
+build = "cmake"
+cxx_std = 20
+configure = ["-DCATCH_DEVELOPMENT_BUILD=ON", "-DCATCH_BUILD_TESTING=ON", "-DCATCH_ENABLE_WERROR=ON", "-DCATCH_BUILD_EXAMPLES=OFF"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 1
+verified = true
+notes = "WP-873 (WP-687). [catch2] with -DCATCH_ENABLE_WERROR=ON: Catch2's own warning set (-Wall -Wextra -Wpedantic and about thirty more) plus -Werror. docs/status/oss/catch2.md."
+
 [googletest]
 url = "https://github.com/google/googletest"
 tag = "v1.17.0"

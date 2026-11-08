@@ -626,6 +626,8 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) {
             return None;
         }
+        // The members of an aggregate base (spec/sema-class.md §5.6).
+        self.check_base_init_lifetime(e, spec.ty);
         let e = self.act_on_full_expr(e);
         Some(CtorInit {
             target: ty.ty().index(),
