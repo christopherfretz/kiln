@@ -691,4 +691,16 @@ faster. Diagnostics and IR are byte-identical before and after (stderr of
 all four real TUs, `-S -emit-llvm` of dup6).
 
 **Bench A/B** (`cargo xtask bench --compiler <after> --compare-with
-<before> --runs 5`, the default corpus, same host): AB_RESULT
+<before> --runs 5`, the default corpus, same host, load ~19): geometric
+mean after/before **time 0.94x, memory 0.99x** over 51 entries. The
+largest memory ratio is 1.03x (`oven/churn-list`, 10.0 vs 9.7 MB), so no
+entry's RSS grew by more than 3%. Front-end entries: `nested-template-ids`
+0.54x (the WP-086 depth-2,000 template-id), the new
+`nested-template-ids-dup` 0.47x (170 vs 359 ms, 12.4 vs 12.7 MB),
+`overload/calls` 0.66x, `templates_wide` 0.93x, `format-like-g` 0.94x;
+the rest are within noise (0.96-1.04x). Above 1.1x are only the noisy
+(spread > 10%) `oven/churn-tree` 2.33x, `frontend/expansion-outline-obj`
+1.33x and `frontend/virtual-lattice` 1.19x (a 46 vs 55 ms entry), which do
+not touch the changed code paths (`oven/churn-mixed` moved the other way,
+0.27x). Results file: `bench/results/2026-11-08T225947.json` (not
+committed).
