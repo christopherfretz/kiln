@@ -22,7 +22,11 @@
 //! allowed in constexpr function", the function made invalid); and before
 //! C++23 a body that passes both rules but holds a label or a `goto`
 //! gets "use of this statement in a constexpr function is a C++23
-//! extension" at the first. WP-444.
+//! extension" at the first. WP-444. Otherwise, before C++20, the first
+//! asm-declaration or try-block statement gets "... is a C++20
+//! extension", and a function-try-block "function try block in constexpr
+//! function is a C++20 extension" (clang `CheckConstexprFunctionBody`,
+//! WP-891).
 
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, VarStorage};
 use kiln_ast::stmt::StmtKind;
@@ -126,6 +130,15 @@ impl Sema<'_, '_> {
         }
         let ctor = self.kind_of(f) == DeclKind::CXXConstructor;
         let pre23 = self.std < kiln_lex::Std::Cxx23;
+        // clang `CheckConstexprFunctionBody`: a function-try-block before
+        // C++20, ahead of the statement walk (WP-891).
+        if self.std < kiln_lex::Std::Cxx20 && self.ast.stmts.get(body).kind() == StmtKind::CXXTryStmt
+        {
+            let msg = self
+                .diag(DiagId::sema_constexpr_function_try_block_cxx20, self.ast.stmts.get(body).loc())
+                .arg(u8::from(ctor));
+            self.emit(msg);
+        }
         let stmts = self.body_stmts(body);
         let var = if pre23 { self.first_non_literal_var(body) } else { None };
         // The first violation in source order is reported.
@@ -144,10 +157,16 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(v) = var else {
-            if pre23 && let Some(loc) = stmts.cxx23 {
-                let msg = self
-                    .diag(DiagId::sema_constexpr_body_invalid_stmt_cxx23, loc)
-                    .arg(u8::from(ctor));
+            // clang reports the C++23 statement, else the C++20 one.
+            let ext = if pre23 && let Some(loc) = stmts.cxx23 {
+                Some((DiagId::sema_constexpr_body_invalid_stmt_cxx23, loc))
+            } else if self.std < kiln_lex::Std::Cxx20 {
+                stmts.cxx20.map(|loc| (DiagId::sema_constexpr_body_invalid_stmt_cxx20, loc))
+            } else {
+                None
+            };
+            if let Some((id, loc)) = ext {
+                let msg = self.diag(id, loc).arg(u8::from(ctor));
                 self.emit(msg);
             }
             return;
@@ -178,6 +197,10 @@ impl Sema<'_, '_> {
                 }
                 StmtKind::LabelStmt | StmtKind::GotoStmt => {
                     out.cxx23.get_or_insert(st.get(s).loc());
+                }
+                // A function-try-block (the body itself) is reported apart.
+                StmtKind::GCCAsmStmt | StmtKind::CXXTryStmt if s != body => {
+                    out.cxx20.get_or_insert(st.get(s).loc());
                 }
                 _ => {}
             }
@@ -263,4 +286,7 @@ struct BodyStmts {
     invalid: Option<StmtId>,
     /// The first label or `goto` (allowed from C++23).
     cxx23: Option<kiln_source::Loc>,
+    /// The first asm-declaration or try-block statement (allowed from
+    /// C++20).
+    cxx20: Option<kiln_source::Loc>,
 }
