@@ -242,6 +242,7 @@ impl Cg<'_> {
         self.f.fir = Fir::new(Vec::new());
         self.start_fp();
         self.f.func = Some(f);
+        self.f.san = self.opts.sanitize.kinds;
         self.f.mustprogress = false;
         let ret_block = self.f.fir.create_block();
         self.f.ret_block = Some(ret_block);

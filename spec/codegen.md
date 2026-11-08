@@ -1238,6 +1238,39 @@ spec/landed/codegen/WP-814.md; the status, statistics and performance
 are in docs/status/debuginfo.md. WP-817 (spec/landed/codegen/WP-817.md)
 cut the front-end cost of `-g` without changing a byte of the IR.
 
+### 5.2 Sanitizers (WP-675; `ubsan.rs`, `class_b.rs`)
+`CodegenOptions::sanitize` (`SanitizeOptions`, set from spec/driver.md
+"Sanitizers") marks the IR as clang 19's frontend does
+(docs/design/sanitizers.md §1); with no sanitizer the IR is unchanged.
+- **Pass sanitizers.** `sanitize_address`, `sanitize_hwaddress`,
+  `sanitize_thread`, `sanitize_memory` (and `optforfuzzing` under
+  fuzzer) on every definition that does not opt out with
+  `no_sanitize("...")`, `no_sanitize_address`/`_thread`/`_memory` or
+  `disable_sanitizer_instrumentation`; global `no_sanitize_address`/
+  `no_sanitize_hwaddress` and `sanitize_address_dyninit` markers;
+  lifetime markers at `-O0` under ASan use-after-scope and HWASan;
+  TBAA under TSan. The instrumentation itself is LLVM's: the driver
+  runs clang's pass pipeline.
+- **UBSan.** signed-integer-overflow (`+ - *`, unary `-`, `++`/`--`,
+  compound assignment), unsigned-integer-overflow, integer-divide-by-zero
+  and signed `/`/`%` overflow, shift-exponent, shift-base (signed only
+  before C++20) and unsigned-shift-base, return, unreachable and
+  vla-bound, as clang's `EmitCheck`: the checks of one operation are
+  and-ed per mode (trap, recover, abort); a failing check branches (with
+  clang's 1048575:1 weights) to `@llvm.ubsantrap(<handler id>)`, a
+  `@__ubsan_handle_<name>` call or its `_abort` form, with the
+  `.src`/type-descriptor/data globals clang emits, every inserted
+  instruction under `!nosanitize !{}`. Operands promoted from a
+  narrower type are not checked where clang elides the check. Trap
+  blocks are shared per handler except at `-O0`/`optnone`. At
+  `-fclang-compat=22` the trap branch also gets the weights, `nomerge`
+  marks trap and handler calls at `-O0`/`optnone` and for checks outside
+  the default merge set (the unsigned checks), and `@llvm.ubsantrap` is
+  `memory(inaccessiblemem: write)` from LLVM 22.
+
+The checks kiln does not emit yet, and the other gaps, are listed with
+their BACKLOG rows in spec/landed/codegen/WP-675.md.
+
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90
   inline C++ programs, lowered for `aarch64-unknown-linux-gnu` straight

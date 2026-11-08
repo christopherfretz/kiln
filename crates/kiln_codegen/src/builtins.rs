@@ -1399,6 +1399,9 @@ impl Cg<'_> {
             }
             id::UNREACHABLE => {
                 // clang `EmitUnreachable`, then an insertion point.
+                if self.ub_on(kiln_ast::sanitize::SanitizerSet::UNREACHABLE) {
+                    self.ub_unreachable(Some(self.ast.begin_loc(e)))?;
+                }
                 self.f.fir.push(Op::Unreachable, LTy::VOID);
                 self.f.fir.set_cur(None);
                 let cont = self.f.fir.create_block();
