@@ -96,7 +96,7 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   operator`.
 - **Attributes and `nodiscard`** (WP-377). A `[[scope::name]]`
   attribute is named in diagnostics as written, with its scope
-  normalized and `__x__` stripped (`'gnu::aligned'`, `'clang::x'`;
+  normalized and `__x__` stripped as below (`'gnu::aligned'`, `'clang::x'`;
   `attr_shown`, `decl_attrs.rs`); clang 19 prints the bare name. An
   unused call whose *type* (not the callee) is `[[nodiscard]]`, or an
   unused temporary of such a type built by a constructor without its own
@@ -2186,6 +2186,19 @@ and returns the scope it names:
   `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
   `always_inline` with the GNU flag. Test:
   `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
+- **Attribute names** (WP-678; clang `normalizeAttrName`,
+  `kiln_ast::attr::normalize_attr_name` / `attr_name_normalizes`): for
+  every attribute, in GNU syntax and in `[[...]]` with no scope or the
+  (normalized) `gnu` or `clang` scope, a name written `__x__` is looked
+  up as `x`: exactly one leading and one trailing `__`, removed only when
+  both are present on a name of at least four characters. `__noinline`,
+  `noinline__` and `____noinline____` are unknown attributes (named as
+  written), `[[msvc::__noinline__]]` keeps its name, and clang's own
+  one-sided spellings `__const` (`GCC<"__const">`) and
+  `__clang_arm_builtin_alias` are matched as such. The parser's
+  argument-shape tables, `__has_attribute` / `__has_cpp_attribute` and
+  the diagnostic name (`attr_shown`) use the same rule. Test:
+  `tests/conformance/dcl.attr.grammar/gnu-attribute-name-normalization.cpp`.
   - GNU `section("name")` (WP-716, clang `handleSectionAttr`): exactly
     one string literal (`expected string literal as argument of
     'section' attribute`, `'section' attribute takes one argument`), on
