@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "project": "demo",
+  "compiler": "clang",
+  "compiler_path": "x",
+  "url": "https://example.invalid/demo",
+  "tag": "v1.0.0",
+  "cxx_std": 20,
+  "date": "2026-11-06T00:00:00Z",
+  "configure_rc": 0,
+  "build_rc": 0,
+  "test_rc": 0,
+  "test_summary": "100% tests passed, 0 tests failed out of 4",
+  "tests": {
+    "passed": 4,
+    "failed": 0,
+    "total": 4
+  },
+  "wall_s": 9.0,
+  "tus": {
+    "total": 4,
+    "ok": 4,
+    "failed": 0,
+    "by_kind": {
+      "ok": 4
+    }
+  },
+  "links": {
+    "total": 1,
+    "ok": 1,
+    "failed": 0
+  },
+  "peak_tu_rss_kb": 200000,
+  "peak_tu": "/work/kiln/.oss/src/demo/test/e.cc",
+  "max_tu_wall_s": 1.0,
+  "stdlib": "libc++"
+}
