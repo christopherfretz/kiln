@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """stage-diff.py: the bootstrap IR comparison of WP-815.
 
-  stage-diff.py make --log compile.jsonl --sample N --out DIR NAME=CXX...
+  stage-diff.py make --log compile.jsonl --sample N [--emit llvm|asm] --out DIR NAME=CXX...
   stage-diff.py compare --out DIR NAME...
 
 `make` takes every `kind == "ok"` build-phase TU of a harness log (the
@@ -10,14 +10,16 @@ of N of them (sorted by source path, every len/N-th, so the sample is the
 same for the same tree), and writes DIR/Makefile: for each compiler NAME=CXX
 and each sampled TU, the TU's own command with CXX as the compiler, its
 `-c`, `-o` and dependency-file flags dropped and `-S -emit-llvm -O2
--fdiscard-value-names -o DIR/NAME/<i>.ll` appended. Run it with `make -k -f
-DIR/Makefile` so it draws from the shared jobserver. `-fdiscard-value-names`
-is explicit because clang keeps value names by default only in a build with
-assertions, and the compilers compared differ in that.
+-fdiscard-value-names -o DIR/NAME/<i>.ll` appended (`--emit asm`: `-S -O2
+-fdiscard-value-names`, AArch64 or x86 assembly, which also exercises the
+backend). Run it with `make -k -f DIR/Makefile` so it draws from the shared
+jobserver. `-fdiscard-value-names` is explicit because clang keeps value
+names by default only in a build with assertions, and the compilers compared
+differ in that. The outputs are DIR/NAME/<i>.ll, or <i>.s for asm.
 
-`compare` normalizes each DIR/<NAME>/<i>.ll and compares it across the
-NAMEs. Normalized: the `!llvm.ident` string (a vendor build names itself
-there). Everything else must match byte for byte. It prints one line per
+`compare` normalizes each DIR/<NAME>/<i>.ll (or .s) and compares it across the
+NAMEs. Normalized: the `!llvm.ident` string, or the assembly's `.ident`
+string (a vendor build names itself there). Everything else must match byte for byte. It prints one line per
 differing TU and a summary, and writes the first differing hunk of each to
 DIR/diffs/<i>.diff.
 """
@@ -32,7 +34,7 @@ import sys
 
 DROP_WITH_VALUE = ("-o", "-MF", "-MT", "-MQ")
 DROP = ("-c", "-MD", "-MMD")
-IDENT_RE = re.compile(r'^(!\d+ = !\{!")[^"]*clang version [^"]*("\})$', re.M)
+IDENT_RE = re.compile(r'^(!\d+ = !\{!"|\s*\.ident\s+")[^"]*clang version [^"]*("\}?)$', re.M)
 
 
 def sample(log, n):
@@ -52,7 +54,7 @@ def sample(log, n):
     return [tus[int(i * step)] for i in range(n)]
 
 
-def emit_args(argv):
+def emit_args(argv, emit):
     out, skip = [], False
     for a in argv[1:]:
         if skip:
@@ -64,7 +66,7 @@ def emit_args(argv):
         if a in DROP or (a.startswith("-o") and len(a) > 2):
             continue
         out.append(a)
-    return out + ["-S", "-emit-llvm", "-O2", "-fdiscard-value-names"]
+    return out + ["-S"] + (["-emit-llvm"] if emit == "llvm" else []) + ["-O2", "-fdiscard-value-names"]
 
 
 def cmd_make(a):
@@ -76,9 +78,9 @@ def cmd_make(a):
     index = []
     for i, r in enumerate(tus):
         index.append({"i": i, "source": r["source"], "cwd": r["cwd"]})
-        args = emit_args(r["argv"])
+        args = emit_args(r["argv"], a.emit)
         for name, cxx in comps:
-            t = f"{out}/{name}/{i}.ll"
+            t = f"{out}/{name}/{i}.{'ll' if a.emit == 'llvm' else 's'}"
             targets.append(t)
             cmd = " ".join(shlex.quote(x) for x in [cxx] + args + ["-o", t])
             rules.append(f"{t}:\n\t@mkdir -p {out}/{name} && cd {shlex.quote(r['cwd'])} && {cmd}\n")
@@ -102,7 +104,8 @@ def cmd_compare(a):
     same = differ = missing = 0
     for e in index:
         i = e["i"]
-        paths = [f"{out}/{n}/{i}.ll" for n in a.names]
+        ext = "s" if os.path.exists(f"{out}/{a.names[0]}/{i}.s") else "ll"
+        paths = [f"{out}/{n}/{i}.{ext}" for n in a.names]
         if not all(os.path.exists(p) for p in paths):
             missing += 1
             print(f"MISSING {i} {e['source']}: " + " ".join(n for n, p in zip(a.names, paths) if not os.path.exists(p)))
@@ -128,6 +131,7 @@ def main():
     m = sub.add_parser("make")
     m.add_argument("--log", required=True)
     m.add_argument("--sample", type=int, default=200)
+    m.add_argument("--emit", choices=("llvm", "asm"), default="llvm")
     m.add_argument("--out", required=True)
     m.add_argument("compilers", nargs="+", metavar="NAME=CXX")
     c = sub.add_parser("compare")
