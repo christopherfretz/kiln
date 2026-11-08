@@ -205,8 +205,13 @@ impl Sema<'_, '_> {
         let ty = self.ast.decls.get(f).ty()?;
         // The written (sugared) proto when the type is one, so that
         // diagnostics print `std::align_val_t` as clang does.
+        // A parameter's top-level cv-qualifiers are not part of the
+        // function type ([dcl.fct]/5): `operator delete(void *, const
+        // std::size_t)` is a usual deallocation function (Boost.Cobalt's
+        // promises, WP-812).
         let p = self.ast.types.proto_of(ty.ty()).or_else(|| self.ast.types.proto(ty))?;
-        Some((self.ast.types.params(p).to_vec(), p.info().variadic()))
+        let ps = self.ast.types.params(p).iter().map(|q| q.without_quals()).collect();
+        Some((ps, p.info().variadic()))
     }
 
     /// A namespace-scope declaration of `operator op` of type `ty`

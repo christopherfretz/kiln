@@ -98,6 +98,39 @@ pub(crate) fn auto_list_items(l: &crate::init::InitList, copy: bool) -> Vec<Opti
 }
 
 impl Sema<'_, '_> {
+    /// [`Self::deduce_auto`] from `e`, an overloaded member access `x`
+    /// (kiln's `UnresolvedMemberExpr`). A set of only implicit object
+    /// member functions can only be called ([expr.ref]/7.3.2; clang gives
+    /// it the bound-member type and diagnoses it before deduction).
+    /// Otherwise P is no function type, so only a member template-id
+    /// naming a single specialization deduces ([temp.deduct.call]/6,
+    /// [over.over]/3), and only a static one: a non-static member is no
+    /// function lvalue without a call (clang's `GetTypeOfFunction`).
+    fn deduce_from_member_set(
+        &mut self,
+        declared: QualType,
+        e: ExprId,
+        x: ExprId,
+    ) -> Result<QualType, AutoFail> {
+        let decls = self.member_overload_decls(x).to_vec();
+        if decls.iter().all(|&d| self.is_implicit_object_member(self.templated_or_self(d))) {
+            self.diagnose_member_set_not_called(x);
+            return Err(AutoFail::Error);
+        }
+        let Some((d, _)) = self.single_member_template_spec(x) else {
+            return Err(AutoFail::Incompatible(e));
+        };
+        if !self.is_static_method(d) {
+            return Err(AutoFail::Incompatible(e));
+        }
+        let loc = self.ast.exprs.get(x).loc();
+        if self.check_undeduced_use(d, loc) {
+            return Err(AutoFail::Error);
+        }
+        let Some(fty) = self.ast.decls.get(d).ty() else { return Err(AutoFail::Error) };
+        self.deduce_from_function_lvalue(declared, fty).ok_or(AutoFail::Incompatible(e))
+    }
+
     /// The type deduced for a variable declared with type `declared`
     /// containing a placeholder from initializer `init`
     /// ([dcl.type.auto.deduct]/2-4). `init` holds the initializer's
@@ -139,6 +172,9 @@ impl Sema<'_, '_> {
                 let Some(Some(e)) = init.first().copied() else {
                     return Err(AutoFail::FromInitList);
                 };
+                if let Some(x) = self.member_overload(e) {
+                    return self.deduce_from_member_set(declared, e, x);
+                }
                 self.deduce_from(declared, e).ok_or(AutoFail::Incompatible(e))
             }
             AutoInit::CopyList => {
