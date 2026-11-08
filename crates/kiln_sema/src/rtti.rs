@@ -4,7 +4,7 @@
 
 use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_ast::expr::{CastKind, TypeidOperand};
-use kiln_ast::types::{Nns, Quals, TagKeyword};
+use kiln_ast::types::{Nns, Quals, TagKeyword, TypeKind};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -71,7 +71,9 @@ impl Sema<'_, '_> {
             return self.recover_err(&kids, loc);
         }
         let unqual = conv::strip_cv(self, written);
-        if self.ast.types.as_record(unqual).is_some() && !self.require_complete(unqual, loc) {
+        if (operand.is_err() && self.is_incomplete_dependent_record(unqual))
+            || self.ast.types.as_record(unqual).is_some() && !self.require_complete(unqual, loc)
+        {
             let msg = self.diag(DiagId::sema_typeid_incomplete, loc).arg(self.ty_arg(unqual));
             self.emit(self.incomplete_note(msg, unqual));
             return self.recover_err(&kids, loc);
@@ -104,6 +106,28 @@ impl Sema<'_, '_> {
         let named = self.ast.types.elaborated(TagKeyword::None, Some(nns), rec);
         let ty = self.ast.types.qualify(named, Quals::CONST);
         self.builder().typeid_expr(operand, evaluated, ty, loc, rparen)
+    }
+
+    /// Whether the type-id operand `t` (cv-unqualified, not a reference)
+    /// names a dependent class that has no definition yet and is neither
+    /// a class template's pattern nor one of its specializations: a
+    /// local class or a member class of the current instantiation that
+    /// is only declared. clang diagnoses such an operand where the
+    /// template is defined, before any instantiation, because its
+    /// `RequireCompleteType` looks at the record itself, not at whether
+    /// the type is dependent (`BuildCXXTypeId`; spec/sema.md §5.6). An
+    /// injected-class-name or a template-id is not a plain record type
+    /// to clang and waits for instantiation. GCC 16.1 diagnoses at
+    /// instantiation only; kiln follows clang (WP-884).
+    fn is_incomplete_dependent_record(&self, t: QualType) -> bool {
+        let types = &self.ast.types;
+        if !types.is_dependent(t) || types.canonical_node(t).kind() != TypeKind::Record {
+            return false;
+        }
+        let Some(r) = types.as_record(t) else { return false };
+        self.ast.definition(r).is_none()
+            && self.ast.described_template(r).is_none()
+            && self.ast.spec_info(r).is_none()
     }
 
     /// Whether `e` is a glvalue of (possibly cv-qualified) polymorphic
