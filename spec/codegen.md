@@ -343,6 +343,15 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   `aligned` attribute sets the `align` of a global, a static local, a
   local's or `catch` variable's `alloca`, and of the loads and stores
   through them.
+- Class B attributes and their flags (WP-813, `class_b.rs`): the
+  hardening, instrumentation, inlining and pointer-fact attributes and
+  `CodegenOptions::hardening` add clang 19's function, parameter and
+  call-site attributes, `!callback` and loop metadata, `llvm.assume`
+  align bundles and module flags at the points clang adds them
+  (`ConstructAttributeList`, `SetLLVMFunctionAttributesForDefinition`,
+  `StartFunction`, `EmitFunctionProlog`, `EmitCall`); the per-attribute
+  rules are spec/landed/codegen/WP-813.md
+  (`tests/codegen/class_b_*.cpp`).
 - Calls:
   - a call site gets `nounwind` only when the callee's prototype is
     nothrow, or the direct callee has a `NoThrow` attribute (a

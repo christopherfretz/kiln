@@ -458,7 +458,7 @@ impl Sema<'_, '_> {
             }
             self.check_decl_attr(d, kind, node)
         });
-        self.check_class_b_exclusions(attrs);
+        self.check_class_b_exclusions(d, attrs);
         self.unify_fn_section(d, attrs);
     }
 
@@ -1045,10 +1045,21 @@ impl Sema<'_, '_> {
     pub(crate) fn check_naked_conflicts(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
         const PAIR: [(AttrKind, &str); 2] =
             [(AttrKind::NAKED, "naked"), (AttrKind::DISABLE_TAIL_CALLS, "disable_tail_calls")];
+        self.check_exclusive_pair(d, attrs, PAIR);
+    }
+
+    /// The `MutualExclusions` of the two attribute kinds of `pair` on
+    /// function `d`, as [`Sema::check_naked_conflicts`] describes.
+    pub(crate) fn check_exclusive_pair(
+        &mut self,
+        d: DeclId,
+        attrs: &mut Vec<AttrId>,
+        pair: [(AttrKind, &str); 2],
+    ) {
         let own: Vec<AttrNode> = attrs
             .iter()
             .map(|&a| *self.ast.attrs.get(a))
-            .filter(|n| PAIR.iter().any(|&(k, _)| k == n.kind))
+            .filter(|n| pair.iter().any(|&(k, _)| k == n.kind))
             .collect();
         if own.is_empty() || !self.ast.decls.get(d).kind().is_function() {
             return;
@@ -1062,14 +1073,10 @@ impl Sema<'_, '_> {
                     .find(|n| n.kind == k)
             })
         };
-        let name = |k: AttrKind| PAIR.iter().find(|&&(x, _)| x == k).map_or("", |&(_, n)| n);
+        let name = |k: AttrKind| pair.iter().find(|&&(x, _)| x == k).map_or("", |&(_, n)| n);
         let mut dropped = Vec::new();
         for (i, n) in own.iter().enumerate() {
-            let other = if n.kind == AttrKind::NAKED {
-                AttrKind::DISABLE_TAIL_CALLS
-            } else {
-                AttrKind::NAKED
-            };
+            let other = if n.kind == pair[0].0 { pair[1].0 } else { pair[0].0 };
             let earlier =
                 prior(self, other).or_else(|| own[..i].iter().copied().find(|e| e.kind == other));
             let Some(e) = earlier else { continue };
@@ -1084,7 +1091,7 @@ impl Sema<'_, '_> {
         }
         attrs.retain(|&a| {
             let n = self.ast.attrs.get(a);
-            !(dropped.contains(&n.loc) && PAIR.iter().any(|&(k, _)| k == n.kind))
+            !(dropped.contains(&n.loc) && pair.iter().any(|&(k, _)| k == n.kind))
         });
     }
 

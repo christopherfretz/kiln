@@ -593,7 +593,13 @@ impl Sema<'_, '_> {
                 if !(var || kind == DeclKind::ParmVar || kind == DeclKind::Field || typedef) {
                     return wrong(self, false, "variables and typedefs");
                 }
-                let ty = self.ast.decls.get(d).ty();
+                // A typedef's underlying type (clang `TypedefNameDecl::
+                // getUnderlyingType`), as the message shows it.
+                let ty = if typedef {
+                    self.ast.decls.typedef(d).map(|t| t.underlying)
+                } else {
+                    self.ast.decls.get(d).ty()
+                };
                 let t = &self.ast.types;
                 if let Some(ty) = ty
                     && !(t.is_pointer(ty) || t.is_reference(ty) || t.is_dependent(ty))
@@ -644,38 +650,28 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The `speculative_load_hardening` / `no_speculative_load_hardening`
-    /// exclusion among the attributes `attrs` of one declaration (clang
-    /// `MutualExclusions`): the second is an error and dropped.
-    pub(crate) fn check_class_b_exclusions(&mut self, attrs: &mut Vec<AttrId>) {
-        let mut seen: Option<AttrNode> = None;
-        attrs.retain(|&a| {
-            let node = *self.ast.attrs.get(a);
-            let slh = matches!(
-                node.kind,
-                AttrKind::SPECULATIVE_LOAD_HARDENING | AttrKind::NO_SPECULATIVE_LOAD_HARDENING
-            );
-            if !slh {
-                return true;
-            }
-            match seen {
-                Some(prev) if prev.kind != node.kind => {
-                    let this = self.attr_shown(&node, name(&node).unwrap_or_default());
-                    let other = self.attr_shown(&prev, name(&prev).unwrap_or_default());
-                    let msg = self
-                        .diag(DiagId::sema_attributes_not_compatible, node.loc)
-                        .arg(this)
-                        .arg(other)
-                        .with_note(self.diag(DiagId::note_conflicting_attribute, prev.loc));
-                    self.emit(msg);
-                    false
-                }
-                _ => {
-                    seen = Some(node);
-                    true
-                }
-            }
-        });
+    /// The class B `MutualExclusions` on function `d` (clang
+    /// Attr.td): `speculative_load_hardening` against
+    /// `no_speculative_load_hardening`, and `always_inline` against
+    /// `not_tail_called`; on one declaration or across redeclarations
+    /// the later is an error and dropped ([`Sema::check_exclusive_pair`]).
+    pub(crate) fn check_class_b_exclusions(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        self.check_exclusive_pair(
+            d,
+            attrs,
+            [
+                (AttrKind::SPECULATIVE_LOAD_HARDENING, "speculative_load_hardening"),
+                (AttrKind::NO_SPECULATIVE_LOAD_HARDENING, "no_speculative_load_hardening"),
+            ],
+        );
+        self.check_exclusive_pair(
+            d,
+            attrs,
+            [
+                (AttrKind::ALWAYS_INLINE, "always_inline"),
+                (AttrKind::NOT_TAIL_CALLED, "not_tail_called"),
+            ],
+        );
     }
 
     /// Whether `d` is a variable, parameter or field of (reference to)

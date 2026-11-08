@@ -1999,6 +1999,37 @@ and returns the scope it names:
     attribute only applies to classes` [-Wignored-attributes]; takes no
     arguments. A coroutine whose return type's class carries it gets the
     LLVM function attribute of that name (spec/codegen.md §7o).
+  - **Class B attributes** (WP-813, `class_b_attrs.rs`, `AttrKind` 240
+    to 273): the hardening, instrumentation, inlining and pointer-fact
+    attributes (`no_stack_protector`, `patchable_function_entry`,
+    `zero_call_used_regs`, `[no_]speculative_load_hardening`,
+    `no_split_stack`, `no_instrument_function`,
+    `no_profile_instrument_function`, `xray_*`,
+    `disable_sanitizer_instrumentation`, `nocf_check`, `function_return`,
+    `cfi_canonical_jump_table`, `force_align_arg_pointer`, `flatten`,
+    `leaf`, `nomerge`, `not_tail_called`, `noduplicate`, `convergent`,
+    `nouwtable`, `assume_aligned`, `align_value`, `callback`, `noescape`,
+    `maybe_undef`, `code_align`, `loader_uninitialized`,
+    `lto_visibility_public`, `omp::assume`, `standalone_debug`,
+    `coro_await_elidable[_argument]` from clang 22) are spelled as
+    clang's `Attr.td` (`kind_of`, the sorted spelling table) and their
+    arguments, subjects and targets are checked with clang 19's
+    diagnostics (`SemaDeclAttr.cpp` handlers; the x86-only ones are
+    unknown elsewhere, `nocf_check` is ignored without
+    `-fcf-protection=branch|full`). `speculative_load_hardening` /
+    `no_speculative_load_hardening` and `always_inline` /
+    `not_tail_called` exclude each other across redeclarations, as
+    `naked` / `disable_tail_calls` do (`check_exclusive_pair`: `'X' and
+    'Y' attributes are not compatible` with `conflicting attribute is
+    here`, the later one dropped). The statement forms
+    `[[clang::nomerge]]`, `[[clang::noinline]]`,
+    `[[clang::always_inline]]` and `[[clang::code_align(N)]]` stay on the
+    `AttributedStmt`. What codegen emits for each is
+    spec/landed/codegen/WP-813.md; `__has_attribute` /
+    `__has_cpp_attribute` are 1 for each. Not done (xfail repros in
+    `tests/conformance/dcl.attr.class-b/`): `noescape` on a function
+    type's parameter is not kept in the type, and clang 22's
+    `malloc_span` is unknown though `__has_attribute` says 1.
 - **Known and ignored, no diagnostic: the thread-safety family**
   (WP-606; clang `Attr.td`, the `-Wthread-safety` attributes, which
   libraries enable under `#if defined(__clang__)`; table
