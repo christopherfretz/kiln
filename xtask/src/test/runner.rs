@@ -230,20 +230,28 @@ impl Test<'_> {
         None
     }
 
-    fn evaluate(&mut self) -> (Status, Option<String>, String) {
+    /// The test's source and its parsed directives, or the ERROR result.
+    fn read_spec(&self) -> Result<(String, TestSpec), (Status, Option<String>, String)> {
         let source = match fs::read(&self.case.path) {
             Ok(b) => String::from_utf8_lossy(&b).into_owned(),
-            Err(e) => return (Status::Error, None, format!("cannot read test: {e}")),
+            Err(e) => return Err((Status::Error, None, format!("cannot read test: {e}"))),
         };
-        let spec = match directives::parse(&source, self.case.lang) {
-            Ok(s) => s,
+        match directives::parse(&source, self.case.lang) {
+            Ok(s) => Ok((source, s)),
             Err(errs) => {
                 let mut d = String::from("malformed directives:\n");
                 for e in errs {
                     let _ = writeln!(d, "  {e}");
                 }
-                return (Status::Error, None, d);
+                Err((Status::Error, None, d))
             }
+        }
+    }
+
+    fn evaluate(&mut self) -> (Status, Option<String>, String) {
+        let (source, spec) = match self.read_spec() {
+            Ok(r) => r,
+            Err(e) => return e,
         };
         if let Some(n) = spec.mem_mib {
             let budget = MemLimit { mib: n };
