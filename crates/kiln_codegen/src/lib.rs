@@ -34,6 +34,7 @@ mod eh;
 mod expr;
 mod fir;
 mod fold;
+mod fp;
 mod func;
 mod global_init;
 mod lambda;
@@ -124,6 +125,13 @@ pub struct CodegenOptions {
     /// (`-fcx-limited-range`, `-fcomplex-arithmetic=`; clang's
     /// `LangOptions::ComplexRange`).
     pub complex_range: ComplexRange,
+    /// The command line's floating-point semantics (`-ffp-contract=`,
+    /// `-ffast-math` and its parts, `-f[no-]math-errno`; spec/codegen.md
+    /// "Floating-point semantics", WP-806).
+    pub fp: kiln_ast::fp::FpOptions,
+    /// The `-fdenormal-fp-math=` mode as `"output,input"`
+    /// (`"denormal-fp-math"` on every function); `None` is IEEE.
+    pub fp_denormal: Option<String>,
     /// The optimization level (clang `CodeGenOpts.OptimizationLevel`):
     /// 0 at `-O0`, 1 at `-O`/`-O1`/`-Og`, 2 at `-O2`/`-Os`/`-Oz`, 3 at
     /// `-O3` and above. Above 0 the IR will be optimized (see
@@ -514,6 +522,8 @@ impl Default for CodegenOptions {
             sve: false,
             sve_vector_bits: None,
             complex_range: ComplexRange::Full,
+            fp: kiln_ast::fp::FpOptions::default(),
+            fp_denormal: None,
             opt_level: 0,
             opt_size: 0,
             strict_aliasing: true,

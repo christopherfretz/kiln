@@ -269,6 +269,7 @@ impl CodegenJob<'_> {
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == StdLib::LibStdCxx,
+            math_errno: a.fp_model(None).opts.math_errno,
             sve: feats.sve,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
@@ -281,6 +282,7 @@ impl CodegenJob<'_> {
         *deps_out = crate::pp_cmd::finish_deps(pp, deps);
         let mut module = None;
         if engine.error_count() == 0 {
+            let fp = a.fp_model(default_denormal(a, job.toolchain).as_deref());
             let opts = CodegenOptions {
                 source_filename: if job.path == "-" { "-".to_owned() } else { job.path.to_owned() },
                 exceptions: a.predef.exceptions.unwrap_or(true),
@@ -299,6 +301,8 @@ impl CodegenJob<'_> {
                         || feats.enabled().iter().any(|f| f == "neon")),
                 sve_vector_bits: feats.sve_vector_bits,
                 complex_range: a.complex_range(),
+                fp: fp.opts,
+                fp_denormal: fp.denormal,
                 opt_level: opt_level(a.opt_flag.as_deref()),
                 opt_size: opt_size(a.opt_flag.as_deref()),
                 strict_aliasing: a.strict_aliasing.unwrap_or(true),
@@ -634,6 +638,18 @@ fn opt_commands(args: &Args, tc: &Toolchain, passes: &str) -> Vec<Command> {
     vec![run, names]
 }
 
+/// The target's denormal mode under the command line (clang 19
+/// `Linux::getDefaultDenormalModeForType`): x86-64 flushes when the link
+/// adds GCC's `crtfastmath.o` (`-Ofast`, `-ffast-math`,
+/// `-funsafe-math-optimizations`, `-ffp-model=fast`); `AArch64` is IEEE.
+fn default_denormal(args: &Args, tc: &Toolchain) -> Option<String> {
+    let fast = args.predef.ofast || args.fp.fast_math_runtime_flag().is_some();
+    (fast
+        && !tc.target.is_aarch64()
+        && tc.gcc.as_ref().is_some_and(|g| Path::new(&g.path).join("crtfastmath.o").is_file()))
+    .then(|| "preserve-sign,preserve-sign".to_owned())
+}
+
 /// `llc` for an assembly or object output.
 fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String) -> Command {
     let mut cmd = Command::new(tc, Tool::Llc);
@@ -657,6 +673,12 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String) -> Command {
     }
     if let Some(cpu) = crate::features::resolve(args, &tc.target).0.cpu {
         cmd.arg(format!("-mcpu={cpu}"));
+    }
+    // clang `AllowFPOpFusion`: `-ffp-contract=fast` (not
+    // `fast-honor-pragmas`) fuses across statements in the backend too;
+    // the other fast-math options reach it as function attributes.
+    if args.fp_model(None).backend_fuse {
+        cmd.arg("-fp-contract=fast");
     }
     // The module's `Code Model` flag says the same; explicit, as clang
     // hands the model to the target machine.
@@ -695,6 +717,12 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
     }
     if let Some(o) = &args.opt_flag {
         cmd.arg(o.clone());
+    }
+    // clang adds GCC's `crtfastmath.o` (flush denormals) for the last
+    // fast-math flag as for `-Ofast` (spec/driver.md "Floating-point
+    // flags").
+    if let Some(f) = args.fp.fast_math_runtime_flag() {
+        cmd.arg(f.to_owned());
     }
     if args.predef.pthread {
         cmd.arg("-pthread");

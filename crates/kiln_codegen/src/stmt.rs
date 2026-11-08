@@ -42,7 +42,10 @@ impl Cg<'_> {
     fn emit_compound_without_scope(&mut self, s: StmtId) -> R<()> {
         let ast = self.ast;
         let list: Vec<StmtId> = ast.lists.iter(ast.stmts.compound_body(s)).collect();
-        self.emit_stmt_list(&list)
+        let fp = self.enter_fp(s);
+        let r = self.emit_stmt_list(&list);
+        self.leave_fp(fp);
+        r
     }
 
     // ---- scopes --------------------------------------------------------

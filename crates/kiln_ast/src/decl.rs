@@ -4066,6 +4066,113 @@ pub mod builtin {
         by_name(&format!("__builtin_{name}"))
     }
 
+    /// The math function a library or `__builtin_` name names, without
+    /// its `__builtin_` prefix and its `f` / `l` / `f16` / `f128` type
+    /// suffix (`__builtin_sqrtf` -> `sqrt`); `None` if not one of
+    /// `bases`.
+    fn math_base<'a>(name: &'a str, bases: &[&str]) -> Option<&'a str> {
+        let n = name.strip_prefix("__builtin_").unwrap_or(name);
+        if bases.contains(&n) {
+            return Some(n);
+        }
+        ["f128", "f16", "f", "l"]
+            .iter()
+            .find_map(|s| n.strip_suffix(s))
+            .filter(|b| bases.contains(b))
+    }
+
+    /// WP-806: clang 19's `ConstIgnoringErrnoAndExceptions` (`e`) math
+    /// builtins: under `-fno-math-errno` the function (library or
+    /// `__builtin_` form, any type suffix) gets an implicit `ConstAttr`
+    /// (clang `Sema::AddKnownFunctionAttributes`).
+    pub fn const_without_errno(name: &str) -> bool {
+        const BASES: &[&str] = &[
+            "acos",
+            "acosh",
+            "asin",
+            "asinh",
+            "atan",
+            "atan2",
+            "atanh",
+            "cos",
+            "cosh",
+            "erf",
+            "erfc",
+            "exp",
+            "exp2",
+            "exp10",
+            "expm1",
+            "fdim",
+            "fmod",
+            "hypot",
+            "ilogb",
+            "ldexp",
+            "llrint",
+            "llround",
+            "log",
+            "log10",
+            "log1p",
+            "log2",
+            "logb",
+            "lrint",
+            "lround",
+            "nextafter",
+            "nexttoward",
+            "pow",
+            "remainder",
+            "scalbln",
+            "scalbn",
+            "sin",
+            "sinh",
+            "sqrt",
+            "tan",
+            "tanh",
+            "tgamma",
+        ];
+        math_base(name, BASES).is_some()
+    }
+
+    /// How an errno-setting math builtin lowers when `errno` is off
+    /// (clang `EmitBuiltinExpr`'s `GenerateIntrinsics` cases).
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum ErrnoIntrinsic {
+        /// The elementwise `llvm.<base>` intrinsic with this many operands.
+        Fp(&'static str, usize),
+        /// `frem` (`fmod`).
+        Frem,
+        /// `llvm.ldexp.T.i32` (the `__builtin_` forms only).
+        Ldexp,
+        /// `llvm.<base>.R.T`, an integer result (`lround`, `lrint`, ...).
+        ToInt(&'static str),
+    }
+
+    /// WP-806: the intrinsic the math builtin `name` (library or
+    /// `__builtin_` form) lowers to without `errno` (clang 19
+    /// `EmitBuiltinExpr`; clang 22 adds `atan2`, `clang22`). `ldexp` and
+    /// `exp10` lower in their `__builtin_` form only.
+    pub fn errno_intrinsic(name: &str, clang22: bool) -> Option<ErrnoIntrinsic> {
+        const UNARY: &[&str] = &[
+            "acos", "asin", "atan", "cos", "cosh", "exp", "exp2", "exp10", "log", "log10", "log2",
+            "sin", "sinh", "sqrt", "tan", "tanh",
+        ];
+        const OTHER: &[&str] =
+            &["atan2", "pow", "fmod", "ldexp", "lround", "llround", "lrint", "llrint"];
+        let builtin = name.starts_with("__builtin_");
+        if let Some(b) = math_base(name, UNARY) {
+            let b = UNARY.iter().find(|&&u| u == b)?;
+            return (builtin || *b != "exp10").then_some(ErrnoIntrinsic::Fp(b, 1));
+        }
+        let b = *OTHER.iter().find(|&&u| Some(u) == math_base(name, OTHER))?;
+        Some(match b {
+            "atan2" if clang22 => ErrnoIntrinsic::Fp("atan2", 2),
+            "pow" => ErrnoIntrinsic::Fp("pow", 2),
+            "fmod" => ErrnoIntrinsic::Frem,
+            "ldexp" if builtin => ErrnoIntrinsic::Ldexp,
+            "lround" | "llround" | "lrint" | "llrint" => ErrnoIntrinsic::ToInt(b),
+            _ => return None,
+        })
+    }
+
     /// WP-150: the remaining GCC integer builtins (`ffs`, `parity`,
     /// `clrsb`, `bitreverse`, `rotate*`) and memory builtins. All but
     /// `memset`/`mempcpy` are constant-evaluated (clang 19 `Constexpr`).

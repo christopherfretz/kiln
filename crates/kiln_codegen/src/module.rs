@@ -1833,11 +1833,12 @@ impl<'a> Cg<'a> {
                 }
                 ret.push(Attr::Flag(if *signed { AttrKind::SExt } else { AttrKind::ZExt }));
             }
-            ArgKind::Direct { .. } => {
+            ArgKind::Direct { coerce, .. } => {
                 if sig.info.ret.noundef {
                     ret.push(Attr::Flag(AttrKind::NoUndef));
                 }
                 self.ref_attrs(sig.ret, &mut ret);
+                ret.extend(self.no_fp_class(sig.ret, coerce, false));
             }
             ArgKind::Ignore => {}
         }
@@ -1866,6 +1867,9 @@ impl<'a> Cg<'a> {
                 s.push(Attr::Flag(AttrKind::NoUndef));
             }
             self.ref_attrs(sig.params[i], &mut s);
+            if let ArgKind::Direct { coerce, flatten, .. } = &a.kind {
+                s.extend(self.no_fp_class(sig.params[i], coerce, *flatten));
+            }
             match &a.kind {
                 ArgKind::Extend { signed, .. } => {
                     s.push(Attr::Flag(if *signed { AttrKind::SExt } else { AttrKind::ZExt }));
@@ -1897,6 +1901,42 @@ impl<'a> Cg<'a> {
         }
         let ret = self.m.attr_set(&ret);
         (ret, params)
+    }
+
+    /// `nofpclass(nan inf)` on an FP value passed as `coerce` (a
+    /// flattened struct when `flat`) under `-ffinite-math-only` and its
+    /// parts (clang `canApplyNoFPClass`, `getNoFPClassTestMask`; WP-806).
+    fn no_fp_class(&self, q: QualType, coerce: &IrType, flat: bool) -> Option<Attr> {
+        use kiln_llvm::fp_class;
+        fn fp_ty(mut c: &IrType) -> bool {
+            while let IrType::Array(e, _) = c {
+                c = e;
+            }
+            if let IrType::Vector(e, _) | IrType::ScalableVector(e, _) = c {
+                c = e;
+            }
+            matches!(
+                c,
+                IrType::Half
+                    | IrType::BFloat
+                    | IrType::Float
+                    | IrType::Double
+                    | IrType::X86Fp80
+                    | IrType::Fp128
+            )
+        }
+        let fp = self.opts.fp;
+        let mask =
+            if fp.nnan { fp_class::NAN } else { 0 } | if fp.ninf { fp_class::INF } else { 0 };
+        let t = &self.ast.types;
+        if mask == 0 || !(t.is_floating(q) || t.element(q).is_some_and(|e| t.is_floating(e))) {
+            return None;
+        }
+        let ok = match coerce {
+            IrType::Struct(fs, _) => flat && fs.iter().all(fp_ty),
+            c => fp_ty(c),
+        };
+        ok.then_some(Attr::NoFpClass(mask))
     }
 
     /// The size attributes of `-Os` (`optsize`) and `-Oz` (`optsize
@@ -1947,7 +1987,7 @@ impl<'a> Cg<'a> {
         if self.opts.null_pointer_is_valid {
             out.push(Attr::Flag(AttrKind::NullPointerIsValid));
         }
-        out.push(Attr::string("no-trapping-math", "true"));
+        self.fp_fn_attrs(out);
         out.push(Attr::string("stack-protector-buffer-size", "8"));
         let tune = self.opts.tune_cpu.as_deref();
         // `-march=native`: no `target-cpu`, the backend's `-mcpu=native`.
@@ -2381,6 +2421,7 @@ impl<'a> Cg<'a> {
         if self.is_x86() {
             a.push(Attr::string("min-legal-vector-width", &vector_width.to_string()));
         }
+        self.fp_def_attrs(&mut a);
         self.m.attr_set(&a)
     }
 

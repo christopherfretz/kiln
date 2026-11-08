@@ -397,6 +397,7 @@ impl Cg<'_> {
         this_class: Option<DeclId>,
     ) -> u32 {
         self.f.fir = Fir::new(ptys);
+        self.start_fp();
         self.f.func = Some(f);
         self.f.decl = decl;
         self.f.this_class = this_class;

@@ -1241,7 +1241,7 @@ fn to_align(bytes: u64) -> IrResult<Align> {
 
 /// Types that may carry fast-math flags on phi/select/call: floating-point
 /// scalars and vectors, and arrays of them (LLVM's `FPMathOperator`).
-fn is_fp_math_type(t: &TypeTable, ty: TypeId) -> bool {
+pub fn is_fp_math_type(t: &TypeTable, ty: TypeId) -> bool {
     let mut ty = ty;
     while let Some((e, _)) = t.array_info(ty) {
         ty = e;

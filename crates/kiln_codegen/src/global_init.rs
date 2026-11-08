@@ -207,6 +207,7 @@ impl Cg<'_> {
     fn start_init_fn(&mut self, f: FuncId) {
         self.f = Fx::empty();
         self.f.fir = Fir::new(Vec::new());
+        self.start_fp();
         self.f.func = Some(f);
         self.f.mustprogress = false;
         let ret_block = self.f.fir.create_block();

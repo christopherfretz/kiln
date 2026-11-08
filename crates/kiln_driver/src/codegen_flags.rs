@@ -9,8 +9,7 @@
 //!    `-f[no-]data-sections`, `-mtune=`, `-mcmodel=`);
 //! 2. accepted and ignored: no observable effect in kiln
 //!    (`-f[no-]stack-clash-protection`, `-fcf-protection[=…]`,
-//!    `-f[no-]common`, `-fexcess-precision=`, `-f[no-]math-errno`,
-//!    `-fstack-usage`, `-gz[=…]`, the defaults `-fno-trapv`,
+//!    `-f[no-]common`, `-fstack-usage`, `-gz[=…]`, the defaults `-fno-trapv`,
 //!    `-fno-short-enums` and `-m64`, and `-pipe`);
 //! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
 //!    `-fshort-enums`, `-fsanitize*`, `-fno-sanitize*`, coverage and
@@ -63,8 +62,6 @@ const IGNORED: &[&str] = &[
     "-fcf-protection",
     "-fcommon",
     "-fno-common",
-    "-fmath-errno",
-    "-fno-math-errno",
     "-fstack-usage",
     "-gz",
     "-fno-trapv",
@@ -160,11 +157,6 @@ impl CodegenFlags {
             "-fcf-protection" => {
                 if !matches!(v, "full" | "branch" | "return" | "none") {
                     return Some(Err(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())));
-                }
-            }
-            "-fexcess-precision" => {
-                if !matches!(v, "fast" | "standard" | "16") {
-                    return unsupported();
                 }
             }
             "-gz" => {
@@ -300,8 +292,6 @@ mod tests {
             "-fcf-protection",
             "-fcf-protection=full",
             "-fno-common",
-            "-fexcess-precision=standard",
-            "-fno-math-errno",
             "-fstack-usage",
             "-gz",
             "-gz=zlib",

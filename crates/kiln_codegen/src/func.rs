@@ -218,6 +218,12 @@ pub(crate) struct Fx {
     /// (`crate::outline`, spec/landed/codegen/WP-641.md): the next one's
     /// number.
     pub outlined: u32,
+    /// The FP semantics of the scope being emitted (WP-806, `crate::fp`).
+    pub fp: kiln_ast::fp::FpOptions,
+    /// The pragma override [`Fx::fp`] is the command line's with.
+    pub fp_ovr: kiln_ast::fp::FpOverride,
+    /// The `*-fp-math` attributes an FP scope turned off (`crate::fp`).
+    pub fp_attrs_off: u8,
 }
 
 impl Fx {
@@ -273,6 +279,9 @@ impl Fx {
             lifetime_markers: false,
             bypasses: None,
             outlined: 0,
+            fp: kiln_ast::fp::FpOptions::default(),
+            fp_ovr: kiln_ast::fp::FpOverride::NONE,
+            fp_attrs_off: 0,
         }
     }
 }
@@ -362,6 +371,7 @@ impl Cg<'_> {
         };
         self.f = Fx::empty();
         self.f.fir = Fir::new(params);
+        self.start_fp();
         self.f.decl = Some(d);
         self.f.func = Some(f);
         self.f.is_main = is_main;

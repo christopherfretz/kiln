@@ -458,6 +458,9 @@ pub struct Args {
     /// The GCC/clang code generation flags (`-fstack-protector*`, unwind
     /// tables, `-fwrapv`, …; spec/driver.md "Codegen flags").
     pub codegen: crate::codegen_flags::CodegenFlags,
+    /// The floating-point flags, in order (spec/driver.md "Floating-point
+    /// flags"; resolved with [`Args::fp_model`]).
+    pub fp: crate::fp_flags::FpFlags,
     /// `-c`, `-S`, `-emit-llvm`.
     pub compile: CompileArgs,
     /// Linker options, in order.
@@ -636,7 +639,12 @@ impl Args {
                 }
                 continue;
             }
-            if let Some(r) = a
+            if let Some(r) = a.fp.parse_arg(arg) {
+                if r.is_ok() {
+                    a.fp_flag(arg);
+                }
+                a.errors.extend(r.err());
+            } else if let Some(r) = a
                 .constexpr
                 .parse_arg(arg)
                 .or_else(|| a.templ.parse_arg(arg))
@@ -659,7 +667,32 @@ impl Args {
             }
         }
         a.verify = verify.finish(&mut a.errors);
+        let _ = a.fp.resolve(a.predef.ofast, None, &mut a.errors);
         a
+    }
+
+    /// The floating-point semantics of the command line, with the
+    /// target's default denormal mode (spec/driver.md "Floating-point
+    /// flags"; the environment flags were errors at parse time).
+    #[must_use]
+    pub fn fp_model(&self, default_denormal: Option<&str>) -> crate::fp_flags::FpModel {
+        self.fp.resolve(self.predef.ofast, default_denormal, &mut Vec::new())
+    }
+
+    /// The other effects of the FP flag `arg`: `-ffast-math` and
+    /// `-ffp-model=fast` select the basic complex range (clang 19
+    /// renders `-complex-range=basic`; nothing turns it back).
+    fn fp_flag(&mut self, arg: &str) {
+        match arg {
+            "-ffast-math" | "-ffp-model=fast" => {
+                self.complex_range = Some(ComplexRange::Basic);
+                if arg == "-ffast-math" {
+                    self.predef.fast_math = Some(true);
+                }
+            }
+            "-fno-fast-math" => self.predef.fast_math = Some(false),
+            _ => {}
+        }
     }
 
     /// The language of `input`: its `-x`, else [`Lang::of_input`] in
@@ -1078,11 +1111,6 @@ impl Args {
             }
             return true;
         }
-        if arg == "-ffast-math" {
-            // clang 19 renders `-complex-range=basic`; `-fno-fast-math`
-            // leaves the range alone.
-            self.complex_range = Some(ComplexRange::Basic);
-        }
         if matches!(
             arg,
             "-O0" | "-O" | "-O1" | "-O2" | "-O3" | "-O4" | "-Og" | "-Ofast" | "-Os" | "-Oz"
@@ -1095,7 +1123,10 @@ impl Args {
             "-O" | "-O1" | "-O2" | "-O3" | "-O4" | "-Og" => {
                 (p.opt, p.ofast) = (OptLevel::Speed, false);
             }
-            "-Ofast" => (p.opt, p.ofast) = (OptLevel::Speed, true),
+            "-Ofast" => {
+                (p.opt, p.ofast) = (OptLevel::Speed, true);
+                self.fp.note_ofast();
+            }
             "-Os" | "-Oz" => (p.opt, p.ofast) = (OptLevel::Size, false),
             "-fexceptions" | "-fcxx-exceptions" => p.exceptions = Some(true),
             "-fno-exceptions" | "-fno-cxx-exceptions" => p.exceptions = Some(false),
@@ -1112,8 +1143,6 @@ impl Args {
             "-fpie" => p.pic = Some(PicModel::Pie(1)),
             "-fPIE" => p.pic = Some(PicModel::Pie(2)),
             "-fno-pic" | "-fno-PIC" | "-fno-pie" | "-fno-PIE" => p.pic = Some(PicModel::None),
-            "-ffast-math" => p.fast_math = Some(true),
-            "-fno-fast-math" => p.fast_math = Some(false),
             "-ffreestanding" => p.freestanding = Some(true),
             "-fhosted" => p.freestanding = Some(false),
             "-pthread" => p.pthread = true,

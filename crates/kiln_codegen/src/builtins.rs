@@ -197,10 +197,19 @@ fn fp_intrinsic(b: u32) -> Option<(&'static str, usize)> {
 /// and the integer `abs` family, which clang lowers through their
 /// builtin id too (`memcpy` -> `llvm.memcpy`, spec/codegen.md §3). The
 /// others (`strlen`, `sqrt`, `cbrt`, ...) stay library calls.
-pub(crate) fn lib_intrinsic(ast: &Ast, d: DeclId) -> Option<u32> {
-    let t = ast.decls.lib_builtin(d)?;
+///
+/// WP-806: where [`Cg::errno_lowering`] holds (`-fno-math-errno`) the
+/// errno-setting functions with an intrinsic are lowered too (`sqrt` ->
+/// `llvm.sqrt`, `fmod` -> `frem`; not `ldexp` or `exp10`, whose library
+/// forms stay calls in clang 19).
+pub(crate) fn lib_intrinsic(cg: &Cg<'_>, d: DeclId) -> Option<u32> {
+    let t = cg.ast.decls.lib_builtin(d)?;
     let mem = matches!(t, id::MEMCPY | id::MEMMOVE | id::MEMSET | id::ABS | id::LABS | id::LLABS);
-    (mem || fp_intrinsic(t).is_some()).then_some(t)
+    let errno = || {
+        let name = id::info(t)?.name.strip_prefix("__builtin_")?;
+        cg.errno_gen().then(|| id::errno_intrinsic(name, cg.opts.clang_compat >= 22))?
+    };
+    (mem || fp_intrinsic(t).is_some() || errno().is_some()).then_some(t)
 }
 
 /// The `llvm.is.fpclass` test of a classification builtin
@@ -236,8 +245,14 @@ fn fp_compare(b: u32) -> Option<FloatPredicate> {
 /// return or argument passed by address (`indirect`; `__builtin_cprojl`'s
 /// x86-64 `long double _Complex`) adds `argmem: readwrite` (clang
 /// `AddPotentialArgAccess`).
-fn lib_attrs(b: u32, indirect: bool, out: &mut Vec<Attr>) {
-    let bits = id::info(b).map_or(0, |i| i.attrs);
+///
+/// WP-806: under `-fno-math-errno` the errno-setting math functions are
+/// `const` (`no_errno`; clang `Sema::AddKnownFunctionAttributes`).
+fn lib_attrs(b: u32, indirect: bool, no_errno: bool, out: &mut Vec<Attr>) {
+    let mut bits = id::info(b).map_or(0, |i| i.attrs);
+    if no_errno && id::info(b).is_some_and(|i| id::const_without_errno(i.name)) {
+        bits |= attr::CONST;
+    }
     if bits & attr::NORETURN != 0 {
         out.push(Attr::Flag(AttrKind::NoReturn));
     }
@@ -616,6 +631,10 @@ impl Cg<'_> {
                 let x = self.emit_scalar(a0)?;
                 let y = self.emit_scalar(a1)?;
                 self.nextafter16(x, y)
+            }
+            _ if self.errno_lowering(b).is_some() => {
+                let l = self.errno_lowering(b).unwrap_or(id::ErrnoIntrinsic::Frem);
+                self.emit_errno_intrinsic(l, e, &args)?
             }
             _ if fp_intrinsic(b).is_some() => {
                 let (name, n) = fp_intrinsic(b).unwrap_or(("llvm.fabs", 1));
@@ -1474,6 +1493,63 @@ impl Cg<'_> {
         }
     }
 
+    /// Whether a math library builtin that may set `errno` lowers to its
+    /// LLVM intrinsic here (clang `EmitBuiltinExpr`'s
+    /// `GenerateIntrinsics`): under `-fno-math-errno` unless a pragma
+    /// turned `errno` back on, and where `#pragma float_control(precise,
+    /// off)` turned it off at `-O1`+.
+    pub(crate) fn errno_gen(&self) -> bool {
+        match self.f.fp_ovr.math_errno() {
+            Some(true) => false,
+            Some(false) => !self.opts.fp.math_errno || self.opts.opt_level > 0,
+            None => !self.opts.fp.math_errno,
+        }
+    }
+
+    /// The intrinsic lowering of the errno-setting math builtin `b`, if
+    /// it has one and [`Self::errno_gen`] holds (WP-806).
+    fn errno_lowering(&self, b: u32) -> Option<id::ErrnoIntrinsic> {
+        let name = id::info(b)?.name;
+        self.errno_gen().then(|| id::errno_intrinsic(name, self.opts.clang_compat >= 22))?
+    }
+
+    /// Emits the call `e` of an errno-setting math builtin as `l` (clang
+    /// `EmitBuiltinExpr`: `emitUnaryMaybeConstrainedFPBuiltin` and kin,
+    /// `CreateFRem`, `llvm.ldexp`, `emitMaybeConstrainedFPToIntRoundBuiltin`).
+    fn emit_errno_intrinsic(&mut self, l: id::ErrnoIntrinsic, e: ExprId, args: &[ExprId]) -> R<V> {
+        let n = match l {
+            id::ErrnoIntrinsic::Fp(_, n) => n,
+            id::ErrnoIntrinsic::Frem | id::ErrnoIntrinsic::Ldexp => 2,
+            id::ErrnoIntrinsic::ToInt(_) => 1,
+        };
+        let mut vs = Vec::with_capacity(n);
+        for i in 0..n {
+            let Some(&a) = args.get(i) else {
+                return err(self.loc_of(e), "math builtin with too few arguments");
+            };
+            vs.push(self.emit_scalar(a)?);
+        }
+        let ty = self.f.fir.ty(&self.m, vs[0]);
+        Ok(match l {
+            id::ErrnoIntrinsic::Fp(base, n) => {
+                let f = kiln_llvm::intrinsics::fp_op(&mut self.m, &format!("llvm.{base}"), ty, n);
+                self.intrinsic_call(f, vs)
+            }
+            id::ErrnoIntrinsic::Frem => self.bin(BinOp::FRem, Flags::NONE, vs[0], vs[1]),
+            id::ErrnoIntrinsic::Ldexp => {
+                let et = self.f.fir.ty(&self.m, vs[1]);
+                let f = kiln_llvm::intrinsics::ldexp(&mut self.m, ty, et);
+                self.intrinsic_call(f, vs)
+            }
+            id::ErrnoIntrinsic::ToInt(base) => {
+                let rt = self.lty(self.ast.exprs.get(e).ty());
+                let f =
+                    kiln_llvm::intrinsics::fp_to_int(&mut self.m, &format!("llvm.{base}"), rt, ty);
+                self.intrinsic_call_ty(f, vs, rt)
+            }
+        })
+    }
+
     /// The library function a library builtin `d` calls (clang
     /// `getBuiltinLibFunction`): declared with the builtin's type and
     /// attributes under the library name.
@@ -1487,7 +1563,7 @@ impl Cg<'_> {
         };
         let sig = self.sig(fty, true);
         let mut extra = Vec::new();
-        lib_attrs(b, sig.passes_indirect(), &mut extra);
+        lib_attrs(b, sig.passes_indirect(), !self.opts.fp.math_errno, &mut extra);
         if let Some(f) = self.m.get_function(name) {
             return Ok((f, extra));
         }

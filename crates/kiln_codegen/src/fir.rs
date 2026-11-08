@@ -215,6 +215,28 @@ pub(crate) enum Op {
     },
 }
 
+/// `fmf` if `ty` may carry fast-math flags (LLVM `FPMathOperator`), else
+/// none.
+fn fp_math(m: &Module, ty: TypeId, fmf: FastMath) -> FastMath {
+    if fmf != FastMath::NONE && kiln_llvm::is_fp_math_type(&m.types, ty) {
+        fmf
+    } else {
+        FastMath::NONE
+    }
+}
+
+/// The [`Inst::fmf`] bit (not an LLVM flag) of a call taking the FP
+/// scope's fast-math flags ([`Fir::mark_scope_calls`]).
+const SCOPE_CALL: u8 = 0x80;
+
+/// Whether `op` calls an LLVM intrinsic (`llvm.*`): its fast-math flags
+/// are the FP scope's, a library call's the command line's (WP-806).
+fn calls_intrinsic(m: &Module, op: &Op) -> bool {
+    let Op::Call { callee: V::C(c), .. } = op else { return false };
+    let ValueRef::Func(g) = c.get() else { return false };
+    m.func(g).name().starts_with("llvm.")
+}
+
 /// Whether `op` calls a function whose attributes say `memory(none)`.
 fn calls_memory_none(m: &Module, op: &Op) -> bool {
     let (Op::Call { callee: V::C(c), .. }
@@ -374,6 +396,9 @@ struct Inst {
     ty: TypeId,
     block: Option<Blk>,
     md: Vec<(MdKindId, MetadataId)>,
+    /// The fast-math flags in effect when it was appended (applied by
+    /// [`Fir::lower`] to the ops LLVM's `FPMathOperator` covers).
+    fmf: FastMath,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -420,6 +445,13 @@ pub(crate) struct Fir {
     access_group: Option<MetadataId>,
     /// The `llvm.access.group` kind, once a parallel loop was entered.
     access_kind: Option<MdKindId>,
+    /// The fast-math flags of the FP scope being emitted (clang's
+    /// `Builder.getFastMathFlags()`, WP-806): recorded in each
+    /// instruction appended.
+    fmf: FastMath,
+    /// The fast-math flags of calls to functions other than intrinsics:
+    /// the command line's (clang keeps a pragma scope's off them).
+    call_fmf: FastMath,
 }
 
 impl Fir {
@@ -436,6 +468,8 @@ impl Fir {
             igoto: None,
             access_group: None,
             access_kind: None,
+            fmf: FastMath::NONE,
+            call_fmf: FastMath::NONE,
         };
         let e = f.create_block();
         f.place_at_end(e);
@@ -776,6 +810,38 @@ impl Fir {
         self.access_group = group;
     }
 
+    /// Sets the fast-math flags of the instructions appended from now on
+    /// (WP-806, spec/codegen.md "Floating-point semantics").
+    pub fn set_fmf(&mut self, fmf: FastMath) {
+        self.fmf = fmf;
+    }
+
+    /// Sets the fast-math flags of the function's base FP scope: those of
+    /// its calls to non-intrinsic functions, and of what follows.
+    pub fn set_base_fmf(&mut self, fmf: FastMath) {
+        self.fmf = fmf;
+        self.call_fmf = fmf;
+    }
+
+    /// The number of instructions appended so far (a mark for
+    /// [`Fir::mark_scope_calls`]).
+    pub fn inst_count(&self) -> usize {
+        self.insts.len()
+    }
+
+    /// Gives the calls of `callee` appended since mark `from` the FP
+    /// scope's fast-math flags instead of the command line's: a library
+    /// builtin's call (clang `EmitBuiltinExpr` enters `CGFPOptionsRAII`).
+    pub fn mark_scope_calls(&mut self, from: usize, callee: FuncId) {
+        for inst in self.insts.iter_mut().skip(from) {
+            if let Op::Call { callee: V::C(c), .. } = &inst.op
+                && matches!(c.get(), ValueRef::Func(g) if g == callee)
+            {
+                inst.fmf = FastMath(inst.fmf.0 | SCOPE_CALL);
+            }
+        }
+    }
+
     /// Appends `op` with result type `ty` to the current block. Under a
     /// parallel loop an instruction that may access memory (LLVM
     /// `mayReadOrWriteMemory`) gets the loop's access group; a call does
@@ -790,7 +856,7 @@ impl Fir {
             (Some(k), Some(g)) if op.may_access_memory() => vec![(k, g)],
             _ => Vec::new(),
         };
-        self.insts.push(Inst { op, ty, block: Some(b), md });
+        self.insts.push(Inst { op, ty, block: Some(b), md, fmf: self.fmf });
         self.blocks[b.0 as usize].insts.push(n);
         self.note_refs(n);
         V::I(n)
@@ -802,7 +868,7 @@ impl Fir {
         for s in op.successors() {
             self.blocks[s.0 as usize].uses += 1;
         }
-        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new() });
+        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new(), fmf: self.fmf });
         self.blocks[b.0 as usize].insts.push(n);
         self.note_refs(n);
         V::I(n)
@@ -816,7 +882,7 @@ impl Fir {
         for s in op.successors() {
             self.blocks[s.0 as usize].uses += 1;
         }
-        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new() });
+        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new(), fmf: self.fmf });
         let insts = &mut self.blocks[b.0 as usize].insts;
         let at = insts.len().saturating_sub(1);
         insts.insert(at, n);
@@ -861,7 +927,7 @@ impl Fir {
         for s in op.successors() {
             self.blocks[s.0 as usize].uses += 1;
         }
-        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new() });
+        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new(), fmf: self.fmf });
         self.blocks[b.0 as usize].insts.insert(pos, n);
         self.note_refs(n);
         V::I(n)
@@ -875,7 +941,7 @@ impl Fir {
         for s in op.successors() {
             self.blocks[s.0 as usize].uses += 1;
         }
-        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new() });
+        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new(), fmf: self.fmf });
         let insts = &mut self.blocks[b.0 as usize].insts;
         let pos = insts.iter().position(|&x| x == at).expect("instruction in its block");
         insts.insert(pos, n);
@@ -900,6 +966,8 @@ impl Fir {
             igoto: self.igoto,
             access_group: None,
             access_kind: self.access_kind,
+            fmf: self.fmf,
+            call_fmf: self.call_fmf,
         })
     }
 
@@ -1017,6 +1085,7 @@ impl Fir {
             ty: TypeId::PTR,
             block: Some(e),
             md: Vec::new(),
+            fmf: FastMath::NONE,
         });
         let pos = self.allocas.len();
         self.blocks[e.0 as usize].insts.insert(pos, n);
@@ -1105,26 +1174,44 @@ impl Fir {
                     Op::Load { ty, ptr, mem } => b.load_ex(*ty, val(*ptr), *mem)?,
                     Op::Store { val: v, ptr, mem } => b.store_ex(val(*v), val(*ptr), *mem)?,
                     Op::Bin { op, flags, l, r } => {
-                        b.binop_ex(*op, *flags, FastMath::NONE, val(*l), val(*r))?
+                        let fmf = if op.is_float() { inst.fmf } else { FastMath::NONE };
+                        b.binop_ex(*op, *flags, fmf, val(*l), val(*r))?
                     }
-                    Op::FNeg { v } => b.fneg(val(*v), FastMath::NONE)?,
+                    Op::FNeg { v } => b.fneg(val(*v), inst.fmf)?,
                     Op::Freeze { v } => b.freeze(val(*v))?,
                     Op::ICmp { p, l, r } => b.icmp(*p, val(*l), val(*r))?,
-                    Op::FCmp { p, l, r } => b.fcmp(*p, val(*l), val(*r))?,
+                    Op::FCmp { p, l, r } => b.fcmp_ex(*p, inst.fmf, val(*l), val(*r))?,
                     Op::Cast { op, flags, v, to } => b.cast_ex(*op, *flags, val(*v), *to)?,
                     Op::Gep { src, base, idx, flags } => {
                         let idx: Vec<Value> = idx.iter().map(|&x| val(x)).collect();
                         b.gep(*src, val(*base), &idx, *flags)?
                     }
                     Op::Phi { ty, .. } => {
-                        let p = b.phi(*ty, &[])?;
+                        let fmf = fp_math(b.module_ref(), *ty, inst.fmf);
+                        let p = b.phi_ex(*ty, fmf, &[])?;
                         phis.push((p, i));
                         p
                     }
-                    Op::Select { c, t, f } => b.select(val(*c), val(*t), val(*f))?,
+                    Op::Select { c, t, f } => {
+                        let fmf = fp_math(b.module_ref(), inst.ty, inst.fmf);
+                        b.select_ex(fmf, val(*c), val(*t), val(*f))?
+                    }
                     Op::Call { fn_ty, callee, args, opts } => {
                         let args: Vec<Value> = args.iter().map(|&x| val(x)).collect();
-                        b.call_ex(*fn_ty, val(*callee), &args, opts)?
+                        let fmf = if inst.fmf.0 & SCOPE_CALL != 0
+                            || calls_intrinsic(b.module_ref(), &inst.op)
+                        {
+                            FastMath(inst.fmf.0 & !SCOPE_CALL)
+                        } else {
+                            self.call_fmf
+                        };
+                        let fmf = fp_math(b.module_ref(), inst.ty, fmf);
+                        if fmf == FastMath::NONE || opts.fmf != FastMath::NONE {
+                            b.call_ex(*fn_ty, val(*callee), &args, opts)?
+                        } else {
+                            let opts = CallOpts { fmf, ..(**opts).clone() };
+                            b.call_ex(*fn_ty, val(*callee), &args, &opts)?
+                        }
                     }
                     Op::AssumeBundle { fn_ty, callee, cond, tag, args } => {
                         let args: Vec<Value> = args.iter().map(|&x| val(x)).collect();
