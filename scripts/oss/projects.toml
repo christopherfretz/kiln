@@ -134,12 +134,12 @@ url = "https://github.com/ericniebler/range-v3"
 tag = "0.12.0"
 build = "cmake"
 cxx_std = 20
-configure = ["-DRANGE_V3_TESTS=ON", "-DRANGE_V3_EXAMPLES=ON", "-DRANGE_V3_PERF=OFF", "-DRANGE_V3_DOCS=OFF", "-DRANGE_V3_HEADER_CHECKS=OFF"]
+configure = ["-DRANGE_V3_TESTS=ON", "-DRANGE_V3_EXAMPLES=ON", "-DRANGE_V3_PERF=OFF", "-DRANGE_V3_DOCS=OFF", "-DRANGE_V3_HEADER_CHECKS=OFF", "-DRANGES_ENABLE_WERROR=OFF", "-DCMAKE_CXX_FLAGS=-Wno-deprecated-ofast"]
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 1
 verified = false
-notes = "WP-669. Header-only; the test suite is the build (hundreds of TUs, heavy concept checking)."
+notes = "WP-669. Header-only; the test suite is the build (hundreds of TUs, heavy concept checking). RANGES_ENABLE_WERROR=OFF and -Wno-deprecated-ofast as in WP-669 (range-v3 adds -Werror and clang 19 deprecates its Release -Ofast; WP-694)."
 
 # ---------------------------------------------------------------- wave 2
 
