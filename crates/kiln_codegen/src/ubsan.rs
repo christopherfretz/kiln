@@ -11,8 +11,11 @@
 
 use kiln_ast::expr::{BinaryOp, ExprKind};
 use kiln_ast::sanitize::SanitizerSet as San;
-use kiln_ast::types::{PrintOptions, TypeView, aka, print_type};
-use kiln_ast::{ExprId, QualType};
+use kiln_ast::types::{PrintOptions, Quals, TypeView, aka, print_type};
+use kiln_abi::mangle::Structor;
+use kiln_ast::decl::{DeclKind, DefinitionBits};
+use kiln_ast::lambda::CaptureDefault;
+use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::intrinsics::OverflowOp;
 use kiln_llvm::{
     Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, Flags, GlobalId, GlobalSanitizer,
@@ -110,6 +113,53 @@ pub(crate) enum Tck {
     DynamicOperation = 11,
 }
 
+/// Which `QualType` clang names in a type check's descriptor; its
+/// `TypeDescriptorMap` is keyed by the `QualType` object, so a class
+/// type it builds with `getRecordType` and the written (elaborated) one
+/// get separate descriptors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UbDesc {
+    /// The type as written (an expression's type).
+    Written,
+    /// `getRecordType(class)`.
+    Record,
+    /// `MD->getThisType()` (`cv C *`, these `Quals` bits) of the class
+    /// type checked: the `this` check of a member function's prologue.
+    ThisPtr(u8),
+}
+
+/// One clang `EmitTypeCheck` call: the access kind, its location, the
+/// type accessed, the alignment (0: natural), the checks skipped and the
+/// element count of an array `new`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TypeCheck {
+    pub tck: Tck,
+    pub loc: Option<Loc>,
+    pub q: QualType,
+    pub desc: UbDesc,
+    pub align: u64,
+    pub skip: San,
+    pub array_size: Option<V>,
+}
+
+impl TypeCheck {
+    pub(crate) fn new(tck: Tck, loc: Option<Loc>, q: QualType) -> TypeCheck {
+        TypeCheck { tck, loc, q, desc: UbDesc::Written, align: 0, skip: San::NONE, array_size: None }
+    }
+    pub(crate) fn align(self, align: u64) -> TypeCheck {
+        TypeCheck { align, ..self }
+    }
+    pub(crate) fn skip(self, skip: San) -> TypeCheck {
+        TypeCheck { skip, ..self }
+    }
+    pub(crate) fn desc(self, desc: UbDesc) -> TypeCheck {
+        TypeCheck { desc, ..self }
+    }
+    pub(crate) fn array(self, n: V) -> TypeCheck {
+        TypeCheck { array_size: Some(n), ..self }
+    }
+}
+
 impl Tck {
     /// clang `isNullPointerAllowed`.
     fn null_allowed(self) -> bool {
@@ -202,15 +252,17 @@ impl Cg<'_> {
     /// anything else kind `0xffff`; the name is `q` as a diagnostic
     /// prints it (`'T'` or `'T' (aka 'U')`).
     pub(crate) fn ub_type(&mut self, q: QualType) -> R<Value> {
-        self.ub_type_keyed(q, false)
+        self.ub_type_keyed(q, UbDesc::Written)
     }
 
-    /// [`Cg::ub_type`] keyed apart for a class type clang takes from
-    /// `getRecordType` (`record`): its `TypeDescriptorMap` is keyed by
-    /// the `QualType`, and the written (elaborated) spelling of a class is
-    /// a different one, so each gets its own descriptor.
-    pub(crate) fn ub_type_keyed(&mut self, q: QualType, record: bool) -> R<Value> {
-        if let Some(&g) = self.ub_types.get(&(q, record)) {
+    /// [`Cg::ub_type`] of the `QualType` `desc` names for `q`.
+    pub(crate) fn ub_type_keyed(&mut self, q: QualType, desc: UbDesc) -> R<Value> {
+        let key = match desc {
+            UbDesc::Written => 0,
+            UbDesc::Record => 1,
+            UbDesc::ThisPtr(cv) => 2 + cv,
+        };
+        if let Some(&g) = self.ub_types.get(&(q, key)) {
             return Ok(Value::global(g));
         }
         let ast = self.ast;
@@ -234,10 +286,23 @@ impl Cg<'_> {
             _ => (0xffff, 0),
         };
         let s = print_type(&ast.types, ast, q, PrintOptions::SUGARED);
-        let name = match aka(&ast.types, ast, q) {
-            Some(a) => format!("'{s}' (aka '{a}')"),
-            None => format!("'{s}'"),
+        let name = match (desc, aka(&ast.types, ast, q)) {
+            (UbDesc::ThisPtr(cv), _) => {
+                let cv = Quals::from_bits(cv);
+                let mut p = String::new();
+                for (on, w) in
+                    [(cv.is_const(), "const "), (cv.is_volatile(), "volatile "), (cv.is_restrict(), "restrict ")]
+                {
+                    if on {
+                        p.push_str(w);
+                    }
+                }
+                format!("'{p}{s} *'")
+            }
+            (_, Some(a)) => format!("'{s}' (aka '{a}')"),
+            (_, None) => format!("'{s}'"),
         };
+        let (kind, info) = if matches!(desc, UbDesc::ThisPtr(_)) { (0xffff, 0) } else { (kind, info) };
         let mut bytes = name.into_bytes();
         bytes.push(0);
         let elems = [
@@ -249,7 +314,7 @@ impl Cg<'_> {
             return err(None, "bad UBSan type descriptor");
         };
         let g = self.ub_global(init, true);
-        self.ub_types.insert((q, record), g);
+        self.ub_types.insert((q, key), g);
         Ok(Value::global(g))
     }
 
@@ -999,40 +1064,19 @@ impl Cg<'_> {
     }
 
     /// clang `EmitTypeCheck` (without `vptr`): the null, object-size and
-    /// alignment checks of an access of kind `tck` to the `q` at `ptr`,
-    /// aligned `align` (0: `q`'s natural pointee alignment), except the
-    /// checks in `skip`; `array_size` multiplies the object size.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn ub_type_check(
-        &mut self,
-        tck: Tck,
-        loc: Option<Loc>,
-        ptr: V,
-        q: QualType,
-        align: u64,
-        skip: San,
-        array_size: Option<V>,
-    ) -> R<()> {
-        if !self.ub_type_check_on() || self.is_volatile(q) {
+    /// alignment checks `tc` of the access to `ptr`.
+    pub(crate) fn ub_type_check(&mut self, ptr: V, tc: TypeCheck) -> R<()> {
+        if !self.ub_type_check_on() || self.is_volatile(tc.q) {
             return Ok(());
         }
         let outer = self.ub_begin();
-        let r = self.ub_type_check_in(tck, loc, ptr, q, align, skip, array_size);
+        let r = self.ub_type_check_in(ptr, tc);
         self.ub_end(outer);
         r
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn ub_type_check_in(
-        &mut self,
-        tck: Tck,
-        loc: Option<Loc>,
-        ptr: V,
-        q: QualType,
-        align: u64,
-        skip: San,
-        array_size: Option<V>,
-    ) -> R<()> {
+    fn ub_type_check_in(&mut self, ptr: V, tc: TypeCheck) -> R<()> {
+        let TypeCheck { tck, loc, q, desc, align, skip, array_size } = tc;
         let mut checks: Vec<(V, San)> = Vec::new();
         let mut done = None;
         let alloca = self.ub_alloca_align(ptr);
@@ -1096,14 +1140,7 @@ impl Cg<'_> {
         }
         if !checks.is_empty() {
             let l = self.ub_loc(loc)?;
-            // clang takes the class type from `getRecordType` for these
-            // kinds and through the type of `this` (the member checks it
-            // skips for null and alignment).
-            let record = matches!(
-                tck,
-                Tck::MemberCall | Tck::ConstructorCall | Tck::Upcast | Tck::UpcastToVirtualBase
-            ) || (tck == Tck::MemberAccess && skip.has(San::ALIGNMENT.union(San::NULL)));
-            let desc = self.ub_type_keyed(q, record)?;
+            let desc = self.ub_type_keyed(q, desc)?;
             let lg = align_val.map_or(1, |a| a.max(1).ilog2());
             let lg = self.m.const_int(LTy::I8, i128::from(lg));
             let k = self.m.const_int(LTy::I8, tck as i128);
@@ -1177,7 +1214,8 @@ impl Cg<'_> {
         } else {
             San::NONE
         };
-        self.ub_type_check(tck, self.ub_expr_loc(e), lv.addr.v, n.ty(), lv.addr.align, skip, None)
+        let tc = TypeCheck::new(tck, self.ub_expr_loc(e), n.ty()).align(lv.addr.align).skip(skip);
+        self.ub_type_check(lv.addr.v, tc)
     }
 
     /// clang `Expr::getExprLoc` where kiln's expression location differs:
@@ -1203,5 +1241,64 @@ impl Cg<'_> {
                 _ => return Some(ast.begin_loc(e)),
             }
         }
+    }
+
+    /// clang `EmitReferenceBindingToExpr`'s `TCK_ReferenceBinding` check
+    /// of the glvalue `e` bound at `v` ([dcl.ref]/5, CWG453: it designates
+    /// an object of suitable size and alignment).
+    pub(crate) fn ub_ref_binding(&mut self, e: ExprId, v: V) -> R<()> {
+        let q = self.ast.exprs.get(e).ty();
+        if !self.ub_type_check_on() || self.ast.types.is_function(q) {
+            return Ok(());
+        }
+        let loc = self.ub_expr_loc(e);
+        self.ub_type_check(v, TypeCheck::new(Tck::ReferenceBinding, loc, q))
+    }
+
+    /// clang `StartFunction`'s check of `this` (`CXXABIThisValue`, the
+    /// `this` loaded in member function `d`'s prologue, variant
+    /// `structor`): `TCK_ConstructorCall` in a constructor, else
+    /// `TCK_MemberCall`, of the type `MD->getThisType()`, aligned
+    /// `CXXABIThisAlignment`, never object-size; never null either in
+    /// the call operator of a captureless lambda (its static invoker
+    /// calls it with a null `this`).
+    pub(crate) fn ub_this_check(&mut self, d: DeclId, structor: Option<Structor>, this: V) -> R<()> {
+        let ast = self.ast;
+        if !self.ub_type_check_on() {
+            return Ok(());
+        }
+        let Some(rd) = ast.decls.get(d).ctx() else { return Ok(()) };
+        let kind = ast.decls.get(d).kind();
+        let mut skip = San::OBJECT_SIZE;
+        if let Some(l) = ast.call_op_lambda(d) {
+            let data = ast.exprs.lambdas.get(l);
+            if data.default == CaptureDefault::None && data.captures.is_empty() {
+                skip = skip.union(San::NULL);
+            }
+        }
+        // clang `CGCXXABI::buildThisParam`: the class's alignment when it
+        // has no virtual bases, is effectively final or `this` is a
+        // complete object, else its non-virtual alignment.
+        let def = ast.definition(rd).unwrap_or(rd);
+        let complete = matches!(structor, Some(Structor::Complete | Structor::Deleting));
+        let align = if self.class_incomplete_now(def) {
+            1
+        } else {
+            let full = !self.class_bits(def).contains(DefinitionBits::HAS_VIRTUAL_BASES)
+                || self.class_is_final(def)
+                || self.dtor_is_final(def)
+                || complete;
+            let l = self.tys.layouter().record(def);
+            u64::from(if full { l.align } else { l.nv_align })
+        };
+        let cv = match ast.decls.get(d).ty().map(|q| ast.types.view(q.ty())) {
+            Some(TypeView::Function(fp)) => fp.info().this_quals().bits(),
+            _ => 0,
+        };
+        let tck = if kind == DeclKind::CXXConstructor { Tck::ConstructorCall } else { Tck::MemberCall };
+        let loc = Some(ast.decls.get(d).loc());
+        let cq = self.class_type(rd);
+        let tc = TypeCheck::new(tck, loc, cq).align(align).skip(skip).desc(UbDesc::ThisPtr(cv));
+        self.ub_type_check(this, tc)
     }
 }

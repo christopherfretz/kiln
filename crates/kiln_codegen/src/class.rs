@@ -16,13 +16,14 @@ use kiln_ast::sanitize::SanitizerSet as San;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, TypeId};
 use kiln_llvm::{BinOp, Flags, FuncId, IntPredicate, Linkage, TypeId as LTy, UnnamedAddr, Value};
+use kiln_source::Loc;
 use kiln_source::fx::FxHashSet;
 
 use crate::cleanup::Cleanup;
 use crate::fir::{Op, V};
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, Def, R, Sig, err};
-use crate::ubsan::Tck;
+use crate::ubsan::{Tck, TypeCheck, UbDesc};
 
 /// A special member function (clang `CXXSpecialMemberKind`, the subset
 /// codegen distinguishes).
@@ -1237,7 +1238,7 @@ impl Cg<'_> {
         kind: CtorInitKind,
         field: DeclId,
         init: ExprId,
-        loc: kiln_source::Loc,
+        loc: Loc,
     ) -> R<()> {
         let dl = self.dbg_apply(loc);
         let r = self.emit_field_init_x(kind, field, init);
@@ -1595,13 +1596,7 @@ impl Cg<'_> {
     /// address of the glvalue, or of a materialized temporary.
     pub(crate) fn emit_ref_binding(&mut self, e: ExprId) -> R<V> {
         let v = self.emit_ref_binding_in(e)?;
-        let q = self.ast.exprs.get(e).ty();
-        if self.ub_type_check_on() && !self.ast.types.is_function(q) {
-            // [dcl.ref]/5 (CWG453): the bound glvalue designates an
-            // object of suitable size and alignment.
-            let loc = self.ub_expr_loc(e);
-            self.ub_type_check(Tck::ReferenceBinding, loc, v, q, 0, San::NONE, None)?;
-        }
+        self.ub_ref_binding(e, v)?;
         Ok(v)
     }
 
@@ -2058,7 +2053,8 @@ impl Cg<'_> {
             let loc = self.ub_expr_loc(e);
             let skip = self.ub_member_skips(base);
             let cq = self.class_type(crd);
-            self.ub_type_check(Tck::MemberCall, loc, this.v, cq, 0, skip, None)?;
+            let tc = TypeCheck::new(Tck::MemberCall, loc, cq).skip(skip).desc(UbDesc::Record);
+            self.ub_type_check(this.v, tc)?;
         }
         if kind == DeclKind::CXXDestructor {
             let sig = self.call_sig_this(cfty, false, &[], Some(crd));
@@ -2286,9 +2282,32 @@ impl Cg<'_> {
         vbase: Option<DeclId>,
         nv: u64,
         null_check: bool,
+        upcast: Option<Option<Loc>>,
     ) -> R<(V, u64)> {
+        // clang's `TCK_Upcast` / `TCK_UpcastToVirtualBase` check of the
+        // derived object (`getRecordType(Derived)`, aligned
+        // `getClassPointerAlignment(Derived)`): null-checked only by a
+        // null-checking cast with no offset, after the null branch
+        // otherwise.
+        let check = match upcast {
+            Some(loc) if self.ub_type_check_on() => {
+                let dq = self.class_type(derived);
+                let align = self.this_layout(derived).1;
+                let tck = if vbase.is_some() { Tck::UpcastToVirtualBase } else { Tck::Upcast };
+                Some(TypeCheck::new(tck, loc, dq).align(align).desc(UbDesc::Record).skip(San::NULL))
+            }
+            _ => None,
+        };
         let Some(vb) = vbase else {
-            return Ok((self.base_ptr(this.v, nv, null_check), min_align(this.align, nv)));
+            if nv == 0 {
+                if let Some(tc) = check {
+                    let skip = if null_check { San::NONE } else { San::NULL };
+                    self.ub_type_check(this.v, tc.skip(skip))?;
+                }
+                return Ok((this.v, this.align));
+            }
+            let v = self.base_ptr(this.v, nv, null_check, check)?;
+            return Ok((v, min_align(this.align, nv)));
         };
         let blocks = null_check.then(|| {
             let not_null = self.f.fir.create_block();
@@ -2302,6 +2321,9 @@ impl Cg<'_> {
             orig = self.f.fir.cur();
             self.cond_br(is_null, end, not_null);
             self.emit_block(not_null, false);
+        }
+        if let Some(tc) = check {
+            self.ub_type_check(this.v, tc)?;
         }
         let voff = self.vbase_offset_value(this, derived, vb)?;
         let off = if nv == 0 {
@@ -2325,12 +2347,21 @@ impl Cg<'_> {
 
     /// clang `GetAddressOfBaseClass` on a pointer: `p + off`, null-checked
     /// when `null_check` and the offset is not zero.
-    pub(crate) fn base_ptr(&mut self, p: V, off: u64, null_check: bool) -> V {
+    pub(crate) fn base_ptr(
+        &mut self,
+        p: V,
+        off: u64,
+        null_check: bool,
+        check: Option<TypeCheck>,
+    ) -> R<V> {
         if off == 0 {
-            return p;
+            return Ok(p);
         }
         if !null_check {
-            return self.byte_offset(p, off);
+            if let Some(tc) = check {
+                self.ub_type_check(p, tc)?;
+            }
+            return Ok(self.byte_offset(p, off));
         }
         let not_null = self.f.fir.create_block();
         let end = self.f.fir.create_block();
@@ -2339,10 +2370,13 @@ impl Cg<'_> {
         let orig = self.f.fir.cur().expect("insertion point");
         self.cond_br(is_null, end, not_null);
         self.emit_block(not_null, false);
+        if let Some(tc) = check {
+            self.ub_type_check(p, tc)?;
+        }
         let adj = self.byte_offset(p, off);
         let from = self.f.fir.cur().expect("insertion point");
         self.emit_block(end, false);
-        self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR)
+        Ok(self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR))
     }
 
     /// clang `GetAddressOfDerivedClass` on a pointer: `p - off`

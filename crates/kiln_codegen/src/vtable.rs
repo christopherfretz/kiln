@@ -924,7 +924,7 @@ impl Cg<'_> {
         let field = if needs_vtt && vp.nearest_vbase.is_some() {
             // isVirtualOffsetNeededForVTableField.
             let vb = vp.nearest_vbase;
-            self.base_address(this, vtable_class, vb, vp.offset_from_vbase, false)?
+            self.base_address(this, vtable_class, vb, vp.offset_from_vbase, false, None)?
         } else {
             (self.byte_offset(this.v, vp.offset), min_align(this.align, vp.offset))
         };

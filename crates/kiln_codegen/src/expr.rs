@@ -22,7 +22,8 @@ use crate::fold::{is_local, is_static_local};
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, Sig, err, gval};
 use crate::tbaa::Tb;
-use crate::ubsan::Tck;
+use crate::ubsan::{Tck, TypeCheck, UbDesc};
+use kiln_ast::sanitize::SanitizerSet as San;
 
 /// The value an `OpaqueValueExpr` stands for.
 #[derive(Clone, Copy, Debug)]
@@ -1053,7 +1054,14 @@ impl Cg<'_> {
             };
             let off = self.derived_cast_offset(e, derived)?;
             let null_check = !self.is_this_expr(s);
-            return Ok(self.derived_ptr(p, off, null_check));
+            let v = self.derived_ptr(p, off, null_check);
+            // [expr.static.cast]/11: the object is of the derived type.
+            if self.ub_type_check_on() {
+                let loc = self.ub_expr_loc(e);
+                let dq = ast.types.pointee(q).expect("checked");
+                self.ub_type_check(v, TypeCheck::new(Tck::DowncastPointer, loc, dq))?;
+            }
+            return Ok(v);
         }
         if ast.types.pointee(sq).and_then(|t| ast.types.as_record(t)).is_none() {
             return err(self.loc_of(e), "derived-to-base cast of a non-class pointer");
@@ -2004,7 +2012,7 @@ impl Cg<'_> {
         } else {
             (self.emit_scalar(ca.rhs)?, rq)
         };
-        let lv = self.emit_lvalue(l)?;
+        let lv = self.emit_checked_lvalue(l, Tck::Store)?;
         let lq = lv.q;
         if lv.bf.is_none()
             && let Some(vq) = ast.types.as_atomic(lq)
@@ -2605,7 +2613,8 @@ impl Cg<'_> {
                     return err(self.loc_of(e), "derived-to-base cast of a non-class");
                 };
                 let (vb, off) = self.base_path(e, derived)?;
-                let (v, align) = self.base_address(lv.addr, derived, vb, off, false)?;
+                let loc = self.ub_expr_loc(e);
+                let (v, align) = self.base_address(lv.addr, derived, vb, off, false, Some(loc))?;
                 let ty = self.mty(q);
                 Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, tb: lv.tb.sub() })
             }
@@ -2617,6 +2626,9 @@ impl Cg<'_> {
                 };
                 let off = self.derived_cast_offset(e, derived)?;
                 let v = self.derived_ptr(lv.addr.v, off, false);
+                // [expr.static.cast]/2: the object is of the derived type.
+                let loc = self.ub_expr_loc(e);
+                self.ub_type_check(v, TypeCheck::new(Tck::DowncastReference, loc, q))?;
                 Ok(self.ref_lvalue(v, q))
             }
             CastKind::Dynamic => {
@@ -2747,7 +2759,10 @@ impl Cg<'_> {
             let (p, align) = self.ptr_align(base)?;
             if self.ub_type_check_on() {
                 let skip = self.ub_member_skips(base);
-                self.ub_type_check(Tck::MemberAccess, self.loc_of(e), p, pq, 0, skip, None)?;
+                // Through `this`, clang's type is `getRecordType`'s.
+                let desc = if skip.has_any(San::ALIGNMENT) { UbDesc::Record } else { UbDesc::Written };
+                let tc = TypeCheck::new(Tck::MemberAccess, self.loc_of(e), pq).skip(skip).desc(desc);
+                self.ub_type_check(p, tc)?;
             }
             let ty = self.mty(pq);
             (Addr { v: p, ty, align }, Tb::Type)
@@ -3649,7 +3664,9 @@ impl Cg<'_> {
         for (i, &a) in args.iter().enumerate() {
             let v = if self.referee(sig.params[i]).is_some() {
                 // A reference parameter binds the argument glvalue.
-                CallArg::Scalar(self.emit_lvalue(a)?.addr.v)
+                let v = self.emit_lvalue(a)?.addr.v;
+                self.ub_ref_binding(a, v)?;
+                CallArg::Scalar(v)
             } else if self.is_aggregate(arg_tys[i]) || self.is_atomic_aggregate(arg_tys[i]) {
                 let t = self.temp(arg_tys[i]);
                 // clang `EmitCallArg`: an argument the callee destroys is

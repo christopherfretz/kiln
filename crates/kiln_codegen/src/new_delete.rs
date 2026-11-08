@@ -22,6 +22,7 @@ use crate::fir::{Fir, Op, V};
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, err};
 use crate::tbaa::Tb;
+use crate::ubsan::{Tck, TypeCheck};
 
 /// What clang knows about a global allocation or deallocation function
 /// (`isReplaceableGlobalAllocationFunction`,
@@ -1253,7 +1254,8 @@ impl Cg<'_> {
         self.cond_br(isnull, end, notnull);
         self.emit_block(notnull, false);
         let mut ptr = p;
-        if matches!(t.canonical_view(dt), TypeView::ConstantArray(_)) {
+        let const_array = matches!(t.canonical_view(dt), TypeView::ConstantArray(_));
+        if const_array {
             let src = self.mty(dt);
             let zero = self.icn(LTy::I32, 0);
             let mut idx = vec![zero];
@@ -1262,6 +1264,15 @@ impl Cg<'_> {
                 idx.push(zero);
             }
             ptr = self.gep(src, p, idx, true);
+        }
+        // clang `EmitObjectDelete`: [expr.delete]/3, the object's static
+        // type is its dynamic type or a base with a virtual destructor.
+        if !array_form && !ast.is_destroying_operator_delete(od) {
+            let loc = self.ub_expr_loc(e);
+            self.ub_type_check(ptr, TypeCheck::new(Tck::MemberCall, loc, dt))?;
+        }
+        if const_array {
+            // The element pointer goes to `operator delete` below.
         } else if ast.is_destroying_operator_delete(od) {
             // [expr.delete]/7: a destroying operator delete runs no
             // destructor; it is responsible for destroying the object.

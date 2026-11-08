@@ -669,6 +669,10 @@ impl Cg<'_> {
                 let closure = self.this_value();
                 self.lambda_prolog(l, closure)?;
             }
+            if thunk.is_none() {
+                let this = self.this_value();
+                self.ub_this_check(d, structor, this)?;
+            }
         } else if let Some(l) = ast.call_op_lambda(d)
             && let Some(&obj) = param_decls.first()
             && self.is_explicit_object_method(d)

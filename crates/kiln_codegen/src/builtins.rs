@@ -1794,7 +1794,9 @@ impl Cg<'_> {
                         let null_check = ck == CastKind::DerivedToBase && !self.is_this_expr(s);
                         let ty = self.mty(ast.types.pointee(sq).expect("checked"));
                         let this = Addr { v: r.v, ty, align: r.align };
-                        let (v, align) = self.base_address(this, derived, vb, off, null_check)?;
+                        let loc = self.ub_expr_loc(e);
+                        let (v, align) =
+                            self.base_address(this, derived, vb, off, null_check, Some(loc))?;
                         return Ok(PtrAlign { v, align, decl: r.decl });
                     }
                 }
