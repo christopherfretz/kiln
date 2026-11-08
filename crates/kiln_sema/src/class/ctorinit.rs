@@ -21,7 +21,6 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 use kiln_source::symbol::Symbol;
 
 use super::special::{ImplicitInit, InitEntity, Selected, SpecialKind};
-use super::temporary::BindingSite;
 use super::{MemInitId, MemInitInfo};
 use crate::lookup::LookupKind;
 use crate::{Initializer, Sema};
@@ -514,10 +513,8 @@ impl Sema<'_, '_> {
         let e = self.with_init_entity(crate::init::entity::MEMBER, |s| s.mem_init_value(fty, info));
         self.ctor_entity = None;
         self.check_bit_field_init(field, e, info.loc);
-        if self.ast.types.is_reference(fty) {
-            self.check_dangling_temporary(BindingSite::Member(field), e);
-        }
-        self.check_dangling_field(field, fty, e);
+        // [class.base.init]/8, clang's `-Wdangling-field` (spec/sema-class.md §5.6).
+        self.check_member_init_lifetime(field, e);
         self.note_member_init_full_expr(field, true);
         let e = self.act_on_full_expr(e);
         CtorInit {
@@ -661,68 +658,6 @@ impl Sema<'_, '_> {
             init: e,
             loc: info.loc,
         }
-    }
-
-    /// clang's `-Wdangling-field` for a member initialized from a
-    /// parameter: a reference member bound to a by-value parameter, a
-    /// pointer member initialized with its address.
-    fn check_dangling_field(&mut self, field: DeclId, fty: QualType, init: ExprId) {
-        let pointer = self.ast.types.is_pointer(fty);
-        if !pointer && !self.ast.types.is_reference(fty) {
-            return;
-        }
-        let mut e = init;
-        for _ in 0..64 {
-            let n = self.ast.exprs.get(e);
-            match n.kind() {
-                ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
-                ExprKind::ImplicitCastExpr
-                    if matches!(
-                        self.ast.exprs.cast_kind(e),
-                        CastKind::NoOp | CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase
-                    ) =>
-                {
-                    e = self.ast.exprs.operand(e);
-                }
-                ExprKind::UnaryOperator
-                    if pointer && self.ast.exprs.unary_op(e) == UnaryOp::AddrOf =>
-                {
-                    e = self.ast.exprs.operand(e);
-                    while self.ast.exprs.get(e).kind() == ExprKind::ParenExpr {
-                        e = self.ast.exprs.operand(e);
-                    }
-                    break;
-                }
-                _ => {
-                    if pointer {
-                        return;
-                    }
-                    break;
-                }
-            }
-        }
-        if self.ast.exprs.get(e).kind() != ExprKind::DeclRefExpr {
-            return;
-        }
-        let p = self.ast.exprs.decl(e);
-        let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-        if self.kind_of(p) != DeclKind::ParmVar || self.ast.types.is_reference(pty) {
-            return;
-        }
-        let id = if pointer {
-            DiagId::sema_dangling_field_param_addr
-        } else {
-            DiagId::sema_dangling_field_param
-        };
-        let note = self
-            .diag(DiagId::note_ref_or_ptr_member_here, self.ast.decls.get(field).loc())
-            .arg(u8::from(pointer));
-        let msg = self
-            .diag(id, self.ast.exprs.get(e).loc())
-            .arg(self.decl_arg(field))
-            .arg(self.decl_arg(p))
-            .with_note(note);
-        self.emit(msg);
     }
 
     // -- -Wreorder-ctor ------------------------------------------------------------
