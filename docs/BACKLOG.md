@@ -743,6 +743,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-720 | M8 wave 3: leveldb 1.23 through its own CMake build + tests with kiln++ via scripts/oss; every failure → reduced conformance test + fix | WP-666 | done (PR #328; leveldb 1.23 at parity, 30/30 tests; -fno-rtti vtable fix + per-build TEST_TMPDIR; follow-up WP-725) |
 | WP-685 | M8 wave 2: CLI11 v2.6.1 through its own build + tests with kiln++ via scripts/oss (docs/status/oss/cli11.md) | WP-666 | done (PR #316; CLI11 v2.6.1 at parity on libstdc++ and libc++; 2 sema fixes; follow-ups WP-693/694) |
 | WP-684 | protected destructor access on a local variable: clang error + "protected destructor can only be used to destroy a base class subobject" note; hook next to use_ctor in class/special/define.rs | WP-680 | open |
+| WP-823 | correctness bundle: close WP-676, WP-684, WP-697, WP-699, WP-788 (accepts-invalid / rejects-valid gaps) | WP-684 | in progress |
 | WP-687 | M8: Catch2 v3.16.1 extra configurations under kiln++: C++23 build (multi-argument operator[] in Message.tests.cpp) and -DCATCH_ENABLE_WERROR=ON | WP-681 | open |
 | WP-688 | diag: static_assert "evaluates to" note for an enum based on bool prints true == false where clang prints 1 == 0 (docs/status/oss/magic-enum.md) | WP-683 | open |
 | WP-689 | perf: doctest summed TU time 2.5x clang on small -O3 TUs (slowest TU 3.7 s vs 1.9 s; docs/status/oss/doctest.md); profile and fix | WP-683 | open |
