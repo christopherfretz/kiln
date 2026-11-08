@@ -15,6 +15,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | Debugger | `tests/debuginfo/` (`expect: debugger`, spec/harness.md "Debugger tests"); a default root, SKIP without gdb/lldb-19, ERROR under `KILN_REQUIRE_DEBUGGERS=1` (GitHub CI) | A `-O0 -g` binary debugs under gdb and lldb-19 as clang's does: breakpoints, backtraces, variables, stepping |
 | Goldens | alongside the above, `*.expected` | AST dumps, diagnostics, IR shapes (FileCheck-style) |
 | libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh [<tag>]`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md`, whole-suite status and the 10% sample procedure in `docs/status/libcxx.md` (M3b) | The real world |
+| Accepts-invalid | clang's own C++ negative tests (`clang/test/{CXX,SemaCXX}` of llvmorg-22.1.8, `-verify` files; `scripts/fetch-clang-tests.sh`), driven by `cargo xtask clang-neg` (`spec/clang-neg.md`); informational, not part of `ci`; status in `docs/status/accepts-invalid.md` | kiln rejects what clang rejects: no file where clang expects an error passes silently through kiln (accept vs reject only, no wording) |
 | libstdc++ headers | every public header of the system libstdc++ (`/usr/include/c++/14`) as a one-line TU, driven by `cargo xtask libstdcxx` (`spec/libstdcxx.md`); informational, not part of `ci`; status in `docs/status/libstdcxx.md` | The other real world (GCC's library) |
 | Feature table | `docs/STANDARD_SUPPORT.md`, the standard support table (one section per standard, C++98/03 to C++26, reflection and kiln extensions), checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every core-language feature marked `done` has passing tests and clang 22's `__cpp_*` value at its standard; the summary matches the sections |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
@@ -34,7 +35,7 @@ run in CI and a missing debugger fails it (WP-816). On the dev host, where `scri
 `cargo xtask ci` and `cargo xtask test` run the same comparisons. Off the queue, by hand or nightly on the dev
 host: `cargo xtask bench` (including `bench/reflect` and the vs-GCC table
 via `--compiler $KILN_GCC`), `--scaling` sweeps, `--external` corpora,
-`cargo xtask libcxx`, `libstdcxx` and `features`.
+`cargo xtask libcxx`, `libstdcxx`, `clang-neg` and `features`.
 
 **OSS builds** (ROADMAP M8). `scripts/oss/oss-build.sh <project>
 [--compiler kiln|clang]` clones a project of `scripts/oss/projects.toml`
@@ -251,6 +252,27 @@ page, with the hand-written cluster triage and its corpus repros
 only for a tool error (kiln did not build, a compile could not be run, the
 report could not be written), never for header failures. The contract is
 `spec/libstdcxx.md`.
+
+`cargo xtask clang-neg` measures what kiln wrongly accepts, also outside
+`ci` (WP-912). It reads clang's own negative tests from a checkout
+(`scripts/fetch-clang-tests.sh`, gitignored `.oss/clang-tests`; never
+vendored). It turns each `%clang_cc1 ... -verify` RUN line into one kiln++
+`-fsyntax-only -verify` case per standard, mapping the cc1 flags to driver
+flags and skipping, by counted reason, other targets, unimplemented
+language modes (`-fms-*`, `-fobjc*`, `-fblocks`, modules, ...),
+multi-step runs and unmet `REQUIRES`. The test is copied with every
+`expected-error` text made unmatchable, so kiln's own clang-faithful
+verifier lists each active expected error (after `#if`, prefixes, `@`
+locations and counts) and each error kiln emitted, with file and line. A
+case is ACCEPTS-INVALID when clang expects an error and kiln reports none.
+An expected-error line with no kiln error is MISSED-ERROR. Errors in an
+`expected-no-diagnostics` file are REJECTS-VALID. Crashes, timeouts and
+OOM are counted apart. Wording is never compared. `--report` splices the
+generated region (totals, per-directory rates, top 50 accepts-invalid
+files, missed-error clusters, skips) into `docs/status/accepts-invalid.md`,
+which also carries the hand-written triage and its xfail repros. The unit
+tests use inline text, so `ci` needs no checkout. The contract is
+`spec/clang-neg.md`.
 
 `cargo xtask features` is outside `ci` as well. It checks the language
 feature table, `docs/STANDARD_SUPPORT.md`, which has one section per standard
