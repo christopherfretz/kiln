@@ -250,6 +250,11 @@ pub(crate) struct Fx {
     pub fp_ovr: kiln_ast::fp::FpOverride,
     /// The `*-fp-math` attributes an FP scope turned off (`crate::fp`).
     pub fp_attrs_off: u8,
+    /// clang's per-function `SanOpts` (WP-675, `crate::ubsan`).
+    pub san: kiln_ast::sanitize::SanitizerSet,
+    /// The trap block of each `UBSan` handler at `-O1` and up (clang
+    /// `TrapBBs`, `crate::ubsan`).
+    pub ub_traps: Vec<(u8, Blk)>,
 }
 
 impl Fx {
@@ -316,6 +321,8 @@ impl Fx {
             fp: kiln_ast::fp::FpOptions::default(),
             fp_ovr: kiln_ast::fp::FpOverride::NONE,
             fp_attrs_off: 0,
+            san: kiln_ast::sanitize::SanitizerSet::NONE,
+            ub_traps: Vec::new(),
         }
     }
 }
@@ -411,6 +418,11 @@ impl Cg<'_> {
         self.f.func = Some(f);
         self.f.is_main = is_main;
         self.f.thunk = thunk.is_some();
+        self.f.san = self.fn_sanitizers(if thunk.is_some() {
+            crate::class_b::StartDecl::None
+        } else {
+            crate::class_b::StartDecl::Fn(d)
+        });
         self.f.naked = thunk.is_none() && self.has_fn_attr(d, kiln_ast::attr::AttrKind::NAKED);
         self.f.flatten = thunk.is_none() && self.has_fn_attr(d, kiln_ast::attr::AttrKind::FLATTEN);
         self.f.sig = Some(sig.clone());
@@ -734,7 +746,12 @@ impl Cg<'_> {
             && self.f.ret_kind != RetKind::Void
             && self.f.fir.cur().is_some()
         {
-            if self.opts.optimize() {
+            if self.ub_on(kiln_ast::sanitize::SanitizerSet::RETURN) {
+                // WP-675: the `return` check at the function's name.
+                self.ub_missing_return(Some(ast.decls.get(d).loc()))?;
+                self.f.fir.push(Op::Unreachable, LTy::VOID);
+                self.f.fir.set_cur(None);
+            } else if self.opts.optimize() {
                 self.f.fir.push(Op::Unreachable, LTy::VOID);
                 self.f.fir.set_cur(None);
             } else {

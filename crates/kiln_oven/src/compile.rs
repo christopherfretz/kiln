@@ -4094,7 +4094,16 @@ impl Compiler<'_> {
                             && self.cur_fn.is_some_and(|f| {
                                 new_delete::std_allocator_elem(self.ast(), f, "allocate").is_some()
                             });
-                        if tvoid && !fvoid {
+                        let func = matches!(self.kind(fp), TyKind::Func)
+                            || matches!(self.kind(tp), TyKind::Func);
+                        if func && fp != tp && self.o.clang_compat >= 22 {
+                            // A C-style cast between a function pointer and
+                            // `void *` performs a reinterpret_cast
+                            // ([expr.cast]/4, [expr.const]/10.15): clang 22
+                            // and GCC 16.1 reject it; clang 19 folds it
+                            // (WP-830).
+                            self.cce(e, cce::PTR, dst, r, REINTERPRET_CONV);
+                        } else if tvoid && !fvoid {
                             // `T *` to `void *` keeps the designated
                             // subobject's type for a later placement new
                             // (spec/oven.md "Construction").

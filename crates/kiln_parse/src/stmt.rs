@@ -284,7 +284,16 @@ impl Parser<'_, '_> {
         {
             self.bump();
             self.bump();
-            self.skip_attributes();
+            // GNU attributes after the colon are the label's (kiln keeps
+            // none); a C++11 attribute-specifier-seq there starts the
+            // sub-statement and appertains to it or to the declaration it
+            // declares ([stmt.pre]/1, [stmt.label]; clang
+            // `ParseLabeledStatement`), so an annotation there is checked
+            // like any other, never dropped (WP-830).
+            let mut label_attrs = Vec::new();
+            while self.at_kw(Kw::Attribute) {
+                self.parse_gnu_attributes(&mut label_attrs);
+            }
             let l = self.s.act_on_label(name, loc);
             let sub = self.parse_labeled_sub(in_stmt_expr);
             return Some(self.s.act_on_label_stmt(l, sub, loc));

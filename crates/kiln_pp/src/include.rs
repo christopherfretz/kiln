@@ -53,7 +53,7 @@ pub struct IncludeRequest {
 }
 
 /// A found header.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ResolvedInclude {
     /// The buffer, already loaded into the source manager.
     pub file: FileId,
@@ -67,6 +67,14 @@ pub struct ResolvedInclude {
     /// `C_ExternCSystem`, `-internal-externc-isystem`; line-marker flag
     /// 4). Implies `system`.
     pub extern_c: bool,
+    /// The path it was found by: the directory joined with the name, not
+    /// normalized (clang's `FileEntryRef` name). The `-M` dependency output
+    /// lists every distinct path a file was reached by, while `__FILE__`
+    /// and line markers keep the name the file was first loaded by, so the
+    /// two differ for a second spelling through a symlink or a `..` path.
+    /// `None` when the resolver has no path (in-memory headers): the
+    /// file's name is used.
+    pub path: Option<String>,
 }
 
 /// One `#embed` request ([cpp.embed]). The resource name is resolved like
@@ -212,6 +220,7 @@ impl IncludeResolver for MemoryResolver {
                 lookup_index: Some(2),
                 system: false,
                 extern_c: false,
+                path: None,
             });
         }
         if let Some(text) = self.headers.get(&req.name).cloned() {
@@ -221,6 +230,7 @@ impl IncludeResolver for MemoryResolver {
                 lookup_index: Some(0),
                 system: false,
                 extern_c: false,
+                path: None,
             });
         }
         if req.angled
@@ -232,6 +242,7 @@ impl IncludeResolver for MemoryResolver {
                 lookup_index: Some(1),
                 system: true,
                 extern_c: false,
+                path: None,
             });
         }
         None

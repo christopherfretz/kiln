@@ -110,7 +110,16 @@ impl Sema<'_, '_> {
             &[d] if qual.is_none() && self.reflect_local_across_lambda(d, name_loc) => {
                 self.recover(info, &[], loc)
             }
-            &[d] => self.reflect_entity(d, name_loc, loc, end),
+            &[d] => {
+                // The operand names a member: it is access-checked like
+                // any other use of the name ([class.access]/4; GCC 16.1
+                // rejects `^^C::priv` outside C). Splices are not
+                // ([expr.prim.splice]), so this is the only check.
+                if !self.check_found_access(&found, name_loc) {
+                    return self.recover(info, &[], loc);
+                }
+                self.reflect_entity(d, name_loc, loc, end)
+            }
             _ => self.reflect_overload_set(name_loc, loc),
         }
     }

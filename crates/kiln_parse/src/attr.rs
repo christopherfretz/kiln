@@ -32,7 +32,7 @@ struct AnnotMix {
 
 /// True for the attributes whose arguments are expressions.
 fn takes_expr_args(name: &str) -> bool {
-    let n = name.trim_start_matches("__").trim_end_matches("__");
+    let n = kiln_ast::attr::normalize_attr_name(name);
     matches!(
         n,
         "deprecated"
@@ -85,7 +85,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "returns_twice"
             | "mode"
             | "arm_sve_vector_bits"
-            | "clang_arm_builtin_alias"
+            | "__clang_arm_builtin_alias"
             | "clang_builtin_alias"
             | "builtin_alias"
             | "target_version"
@@ -127,6 +127,7 @@ fn class_b_takes_expr_args(n: &str) -> bool {
             | "noduplicate"
             | "convergent"
             | "nouwtable"
+            | "lifetimebound"
             | "noinline"
             | "always_inline"
             | "assume_aligned"
@@ -138,6 +139,11 @@ fn class_b_takes_expr_args(n: &str) -> bool {
             | "loader_uninitialized"
             | "lto_visibility_public"
             | "standalone_debug"
+            | "no_sanitize"
+            | "no_sanitize_address"
+            | "no_address_safety_analysis"
+            | "no_sanitize_memory"
+            | "no_sanitize_thread"
             | "coro_await_elidable"
             | "coro_await_elidable_argument"
             // `[[omp::assume("s")]]` (the others parse their own).
@@ -149,7 +155,7 @@ fn class_b_takes_expr_args(n: &str) -> bool {
 /// written as one (clang `VariadicIdentifierArgument`: `cpu_dispatch`,
 /// `cpu_specific`).
 fn takes_ident_list(name: &str) -> bool {
-    matches!(name.trim_start_matches("__").trim_end_matches("__"), "cpu_dispatch" | "cpu_specific")
+    matches!(kiln_ast::attr::normalize_attr_name(name), "cpu_dispatch" | "cpu_specific")
 }
 
 /// True when argument `i` of attribute `name` must be written as a string
@@ -158,9 +164,9 @@ fn takes_ident_list(name: &str) -> bool {
 /// argument of 'name' attribute" at that token and the attribute is
 /// dropped, without parsing the argument as an expression.
 fn string_literal_arg(name: &str, i: usize) -> bool {
-    match name.trim_start_matches("__").trim_end_matches("__") {
+    match kiln_ast::attr::normalize_attr_name(name) {
         "target" | "target_version" => i == 0,
-        "target_clones" => true,
+        "target_clones" | "no_sanitize" => true,
         _ => false,
     }
 }
@@ -172,7 +178,7 @@ fn string_literal_arg(name: &str, i: usize) -> bool {
 /// "requires a string").
 fn takes_ident_args(name: &str) -> bool {
     matches!(
-        name.trim_start_matches("__").trim_end_matches("__"),
+        kiln_ast::attr::normalize_attr_name(name),
         "callback" | "zero_call_used_regs" | "function_return"
     )
 }
@@ -180,13 +186,13 @@ fn takes_ident_args(name: &str) -> bool {
 /// True for the attributes whose argument is a type-id (clang
 /// `attributeIsTypeArgAttr`).
 fn takes_type_arg(name: &str) -> bool {
-    name.trim_start_matches("__").trim_end_matches("__") == "preferred_name"
+    kiln_ast::attr::normalize_attr_name(name) == "preferred_name"
 }
 
 /// True for the attributes whose first argument is an identifier when
 /// one is written (clang `attributeHasIdentifierArg`).
 fn takes_ident_arg(name: &str) -> bool {
-    let n = name.trim_start_matches("__").trim_end_matches("__");
+    let n = kiln_ast::attr::normalize_attr_name(name);
     // `weakref` / `alias` / `ifunc` take a string literal; clang parses
     // an identifier there as one (and then rejects it).
     matches!(
@@ -197,7 +203,7 @@ fn takes_ident_arg(name: &str) -> bool {
             | "weakref"
             | "alias"
             | "ifunc"
-            | "clang_arm_builtin_alias"
+            | "__clang_arm_builtin_alias"
             | "clang_builtin_alias"
             | "builtin_alias"
     )
@@ -526,6 +532,10 @@ impl Parser<'_, '_> {
     }
 
     /// `[[ attribute-list ]]` ([dcl.attr.grammar]).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one arm per attribute argument grammar, as clang's ParseCXX11AttributeArgs"
+    )]
     fn parse_cxx11_attributes(&mut self, out: &mut Vec<AttrId>) {
         let before = self.prev_lo();
         let open = self.bump().span.lo;
@@ -572,8 +582,9 @@ impl Parser<'_, '_> {
                 self.skip_until(&[Punct::RSquare], false, false);
                 break;
             };
-            let loc = self.bump().span.lo;
+            let mut loc = self.bump().span.lo;
             let mut scope = default_scope;
+            let mut name_loc = loc;
             if self.at(Punct::ColonColon) {
                 self.bump();
                 let Some(n) = self.attr_name() else {
@@ -583,14 +594,21 @@ impl Parser<'_, '_> {
                 };
                 scope = Some(name);
                 name = n;
-                self.bump();
+                name_loc = self.bump().span.lo;
             }
             let text = self.s.ast.symbols().as_str(name).to_owned();
             // clang 19 `Clang<"assume">` is the same statement attribute.
             let clang_assume =
                 scope.is_some_and(|s| matches!(self.s.ast.symbols().as_str(s), "clang" | "_Clang"));
+            let gsl = scope.is_some_and(|s| self.s.ast.symbols().as_str(s) == "gsl")
+                && matches!(text.as_str(), "Owner" | "Pointer");
             let args = if (scope.is_none() || clang_assume) && text == "assume" {
                 self.parse_assume_arg(name)
+            } else if gsl && self.at(Punct::LParen) {
+                // clang `ParseAttributeWithTypeArg`: the attribute starts
+                // at its name when it has an argument list.
+                loc = name_loc;
+                self.parse_gsl_type_arg()
             } else if scope.is_none()
                 && self.at(Punct::LParen)
                 && ((forbids_args(&text)
@@ -723,7 +741,23 @@ impl Parser<'_, '_> {
     /// function's parameters.
     fn sees_params(&self, name: Symbol) -> bool {
         let n = self.s.ast.symbols().as_str(name);
-        matches!(n.trim_start_matches("__").trim_end_matches("__"), "enable_if" | "diagnose_if")
+        matches!(kiln_ast::attr::normalize_attr_name(n), "enable_if" | "diagnose_if")
+    }
+
+    /// `( type-id opt )` of `gsl::Owner` / `gsl::Pointer`, at the `(`
+    /// (clang `ParseAttributeWithTypeArg`): a missing `)` is reported
+    /// without skipping, so the attribute list resumes at the next token.
+    fn parse_gsl_type_arg(&mut self) -> Option<Vec<AttrArg>> {
+        self.bump();
+        if self.eat(Punct::RParen).is_some() {
+            return Some(Vec::new());
+        }
+        let Some(t) = self.parse_type_id() else {
+            self.skip_until(&[Punct::RParen], false, true);
+            return None;
+        };
+        self.expect(Punct::RParen)?;
+        Some(vec![AttrArg::Type(t)])
     }
 
     /// The arguments of attribute `name`, if any: `Some(args)`, or `None`

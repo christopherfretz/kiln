@@ -195,7 +195,14 @@ fn lib_name(b: u32) -> Option<&'static str> {
         | id::WMEMMOVE
         | id::SNPRINTF
         | id::SPRINTF
-        | id::VSNPRINTF => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
+        | id::VSNPRINTF
+        | id::PRINTF
+        | id::VPRINTF
+        | id::VSPRINTF
+        | id::SCANF
+        | id::SSCANF
+        | id::VSCANF
+        | id::VSSCANF => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         // WP-803: `__builtin___memcpy_chk` calls `__memcpy_chk`.
         _ if id::is_chk(b) => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         _ if id::is_libm(b) => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
@@ -1399,6 +1406,9 @@ impl Cg<'_> {
             }
             id::UNREACHABLE => {
                 // clang `EmitUnreachable`, then an insertion point.
+                if self.ub_on(kiln_ast::sanitize::SanitizerSet::UNREACHABLE) {
+                    self.ub_unreachable(Some(self.ast.begin_loc(e)))?;
+                }
                 self.f.fir.push(Op::Unreachable, LTy::VOID);
                 self.f.fir.set_cur(None);
                 let cont = self.f.fir.create_block();

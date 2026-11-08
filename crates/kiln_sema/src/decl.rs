@@ -3485,6 +3485,8 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let td = self.builder().typedef(h, kind, underlying, prev_ok);
+        // gsl Pointer inference (spec/sema-class.md §5.6).
+        self.infer_gsl_declared_typedef(td, prev_ok.is_none());
         if underlying.quals().is_empty()
             && matches!(
                 self.ast.types.view(underlying.ty()),
@@ -6051,7 +6053,7 @@ impl Sema<'_, '_> {
         // long as it does (spec/sema-class.md §5.4).
         if !self.is_err_expr(e) {
             self.extend_temporaries(v, e);
-            self.check_dangling_pointer_var(v, e);
+            self.check_var_lifetime(v, e);
             // [class.dtor]/15 (spec/sema-class.md §4.8).
             let vty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
             self.check_var_destructor(v, vty, loc);
@@ -10288,7 +10290,13 @@ impl Sema<'_, '_> {
     ) -> Option<AttrId> {
         let raw = sym_str(self, name);
         let scope_s = scope.map(|s| norm_attr_scope(&sym_str(self, s)).to_owned());
-        let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
+        // clang `normalizeAttrName` (WP-678): `__x__` is `x` for a GNU,
+        // unscoped, `gnu::` or `clang::` attribute.
+        let n = if kiln_ast::attr::attr_name_normalizes(syntax, scope_s.as_deref()) {
+            kiln_ast::attr::normalize_attr_name(&raw).to_owned()
+        } else {
+            raw.clone()
+        };
         let shown = self.attr_shown_parts(syntax, scope, name);
         let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
         let x86 = self.abi.triple.arch == kiln_abi::target::Arch::X86_64;
@@ -10313,7 +10321,7 @@ impl Sema<'_, '_> {
         // affixes are removed: `clang_arm_builtin_alias` is unknown) and
         // `BuiltinAlias` (`GNU<"clang_builtin_alias">`,
         // `CXX11<"clang", "builtin_alias">`).
-        let alias = match (raw.as_str(), scope_s.as_deref()) {
+        let alias = match (n.as_str(), scope_s.as_deref()) {
             ("__clang_arm_builtin_alias", None) if syntax == AttrSyntax::Gnu => Some(true),
             ("__clang_arm_builtin_alias", Some("clang")) => Some(true),
             ("clang_builtin_alias", None) if syntax == AttrSyntax::Gnu => Some(false),
@@ -11442,7 +11450,8 @@ pub(crate) fn attr_kind_of(
         ("section", _, true) => AttrKind::SECTION,
         // clang `GNU<"analyzer_noreturn">`: no `[[...]]` spelling.
         ("analyzer_noreturn", _, _) if gnu_syntax => AttrKind::ANALYZER_NORETURN,
-        ("const", _, true) => AttrKind::CONST,
+        // clang `GCC<"const">, GCC<"__const">`.
+        ("const" | "__const", _, true) => AttrKind::CONST,
         ("pure", _, true) => AttrKind::PURE,
         ("cold", _, true) => AttrKind::COLD,
         ("hot", _, true) => AttrKind::HOT,

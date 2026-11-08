@@ -633,10 +633,6 @@ const M5_TRIAGED: &[(&str, &str)] = &[
         "constraint note prints the substituted 'is_signed_v<unsigned int>' where clang prints the written 'is_signed_v<__iterator_difference_type<…>>'; no WP yet",
     ),
     (
-        "libcxx/algorithms/lifetimebound.verify.cpp",
-        "missing [[clang::lifetimebound]] 'temporary bound to local reference … will be destroyed at the end of the full-expression'; no WP yet",
-    ),
-    (
         "libcxx/algorithms/specialized.algorithms/nonnull.verify.cpp",
         "missing -Wnonnull 'null passed to a callee that requires a non-null argument'; WP-433",
     ),
@@ -657,10 +653,6 @@ const M5_TRIAGED: &[(&str, &str)] = &[
         "missing -Wnonnull 'null passed to a callee that requires a non-null argument'; WP-433",
     ),
     (
-        "libcxx/ranges/range.adaptors/range.adaptor.helpers/as-lvalue.lifetimebound.verify.cpp",
-        "missing [[clang::lifetimebound]] 'temporary bound to local reference … will be destroyed at the end of the full-expression'; no WP yet",
-    ),
-    (
         "libcxx/strings/basic.string/nonnull.verify.cpp",
         "missing -Wnonnull 'null passed to a callee that requires a non-null argument'; WP-433",
     ),
@@ -675,14 +667,6 @@ const M5_TRIAGED: &[(&str, &str)] = &[
     (
         "libcxx/thread/thread.shared_timed_mutex/thread_safety.verify.cpp",
         "missing -Wthread-safety 'writing variable … requires holding shared_timed_mutex … exclusively'; no WP yet",
-    ),
-    (
-        "libcxx/utilities/function.objects/lifetimebound.verify.cpp",
-        "missing [[clang::lifetimebound]] 'temporary bound to local reference … will be destroyed at the end of the full-expression'; no WP yet",
-    ),
-    (
-        "libcxx/utilities/utility/forward/lifetimebound.verify.cpp",
-        "missing [[clang::lifetimebound]] 'temporary bound to local reference … will be destroyed at the end of the full-expression'; no WP yet",
     ),
     (
         "libcxx/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/allocate_vocabulary.attributes.verify.cpp",

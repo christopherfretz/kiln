@@ -59,6 +59,7 @@ mod target_features;
 mod tbaa;
 mod tls;
 mod try_catch;
+mod ubsan;
 mod va_arg;
 mod visibility;
 mod vla;
@@ -283,6 +284,42 @@ pub struct CodegenOptions {
     pub debug: DebugOptions,
     /// The hardening and instrumentation flags (WP-813).
     pub hardening: Hardening,
+    /// The `-fsanitize=` set (WP-675, spec/codegen.md "Sanitizers").
+    pub sanitize: SanitizeOptions,
+}
+
+/// The resolved sanitizer options (WP-675, docs/design/sanitizers.md).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SanitizeOptions {
+    /// The enabled sanitizers.
+    pub kinds: kiln_ast::sanitize::SanitizerSet,
+    /// The UB checks that report and continue (`-fsanitize-recover=`).
+    pub recover: kiln_ast::sanitize::SanitizerSet,
+    /// The UB checks that trap (`-fsanitize-trap=`).
+    pub trap: kiln_ast::sanitize::SanitizerSet,
+    /// clang `SanitizeAddressUseAfterScope`: an address sanitizer with
+    /// `-fsanitize-address-use-after-scope` (the default) wants lifetime
+    /// markers.
+    pub use_after_scope: bool,
+    /// The unit is C++ (`UBSan` `shift-base` tolerates a shift into the
+    /// sign bit there).
+    pub cplusplus: bool,
+    /// The unit is C++20 or later (signed `<<` is defined: no
+    /// `shift-base` check of signed shifts).
+    pub cxx20: bool,
+}
+
+impl SanitizeOptions {
+    /// Whether any sanitizer is on.
+    #[must_use]
+    pub fn any(&self) -> bool {
+        !self.kinds.is_empty()
+    }
+    /// Whether `k` is on.
+    #[must_use]
+    pub fn has(&self, k: kiln_ast::sanitize::SanitizerSet) -> bool {
+        self.kinds.has_any(k)
+    }
 }
 
 /// The hardening and instrumentation driver flags behind the class B
@@ -643,6 +680,7 @@ impl Default for CodegenOptions {
             cxx_modules: true,
             debug: DebugOptions::default(),
             hardening: Hardening::default(),
+            sanitize: SanitizeOptions::default(),
         }
     }
 }
@@ -720,6 +758,7 @@ pub fn emit_with_debug(
     }
     let void_ptr = ast.types.pointer_to(kiln_ast::QualType::VOID);
     let mut cg = module::Cg::new(&*ast, &folds, target, opts, void_ptr);
+    cg.sm = sm;
     if let Some(sm) = sm {
         cg.start_debug_info(sm);
     }

@@ -1,6 +1,6 @@
 // [dcl.type.splice] P2996R13: `typename [: r :]` designates the type a
-// constant reflection r reflects; in a template argument list a splice
-// is a type template argument ([temp.arg.general]). The operand is a
+// constant reflection r reflects; in a template argument list it must be
+// written `typename [: r :]` ([temp.names]/1). The operand is a
 // converted constant expression of type std::meta::info
 // ([basic.splice]/2), so any constant expression producing one works.
 //@ args: -freflection -I tests/support
@@ -17,9 +17,9 @@ template <class T>
 struct Box {
   T v;
 };
-Box<[: ^^long :]> b;
+Box<typename [: ^^long :]> b;
 static_assert(__is_same(decltype(b.v), long));
-static_assert(__is_same(Box<[: ri :]>, Box<int>));
+static_assert(__is_same(Box<typename [: ri :]>, Box<int>));
 
 struct S {
   int a;

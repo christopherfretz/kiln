@@ -104,9 +104,18 @@ pub trait PpCallbacks {
     }
 
     /// An `#include`-like directive was processed (`result` is `None` if
-    /// the file was not found or was skipped by `#pragma once`).
+    /// the file was not found). [`PpCallbacks::file_changed`] follows when
+    /// the file is entered, [`PpCallbacks::file_skipped`] when it is not.
     fn inclusion_directive(&mut self, req: &IncludeRequest, result: Option<&ResolvedInclude>) {
         let _ = (req, result);
+    }
+
+    /// An `#include` found `result` but did not enter it: `#pragma once`,
+    /// `#import`, or the multiple-include optimization (clang
+    /// `FileSkipped`). `system` is the characteristic the file would have
+    /// been entered with (its directory's or its includer's).
+    fn file_skipped(&mut self, result: &ResolvedInclude, system: bool) {
+        let _ = (result, system);
     }
 
     /// A macro was defined (also called for predefines and `-D`).

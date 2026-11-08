@@ -72,7 +72,13 @@ impl AttrKind {
     /// `InternalLinkageAttr`): the entity, and a class's members, have
     /// internal linkage as if declared `static` (WP-807).
     pub const INTERNAL_LINKAGE: AttrKind = AttrKind(83);
+    /// clang `lifetimebound` (WP-674): on a parameter; on a member
+    /// function (written in its function type) with `a` = 1, for the
+    /// implicit object parameter.
     pub const LIFETIMEBOUND: AttrKind = AttrKind(84);
+    /// The `no_sanitize*` family (clang `NoSanitizeAttr`, WP-675): `a`
+    /// and `b` hold the excluded set and the spelling
+    /// (`kiln_ast::sanitize::no_sanitize_words`).
     pub const NO_SANITIZE: AttrKind = AttrKind(85);
     /// GNU `mode(M)` (clang `ModeAttr`), consumed into the declared type
     /// like the vector attributes: `a` = the mode's width in bits, `| 1
@@ -436,6 +442,12 @@ impl AttrKind {
     pub const CORO_AWAIT_ELIDABLE: AttrKind = AttrKind(272);
     /// clang 22 `coro_await_elidable_argument` on a parameter.
     pub const CORO_AWAIT_ELIDABLE_ARGUMENT: AttrKind = AttrKind(273);
+    /// `[[gsl::Owner(T)]]` on a class (WP-674): `b` is the raw `QualType`
+    /// of `T` when [`AttrNode::GSL_HAS_TYPE`] is set.
+    pub const GSL_OWNER: AttrKind = AttrKind(274);
+    /// `[[gsl::Pointer(T)]]` on a class (WP-674), encoded as
+    /// [`AttrKind::GSL_OWNER`].
+    pub const GSL_POINTER: AttrKind = AttrKind(275);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
@@ -456,9 +468,14 @@ impl AttrKind {
 
     /// Whether this is one of WP-813's class B attributes
     /// ([`AttrKind::NO_STACK_PROTECTOR`] ..=
-    /// [`AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT`]).
+    /// [`AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT`]), WP-675's
+    /// [`AttrKind::NO_SANITIZE`], or one of WP-674's lifetime attributes
+    /// spelled and checked the same way ([`AttrKind::LIFETIMEBOUND`],
+    /// [`AttrKind::GSL_OWNER`], [`AttrKind::GSL_POINTER`]).
     pub fn is_class_b(self) -> bool {
-        (240..=273).contains(&self.0)
+        (240..=275).contains(&self.0)
+            || self == AttrKind::LIFETIMEBOUND
+            || self == AttrKind::NO_SANITIZE
     }
 }
 
@@ -655,6 +672,29 @@ impl LoopHint {
     }
 }
 
+/// An attribute name with its `__x__` affixes removed, as clang's
+/// `normalizeAttrName` does (WP-678): exactly one leading and one trailing
+/// `__`, and only when both are present on a name of at least four
+/// characters, so `__noinline__` is `noinline` while `__noinline`,
+/// `noinline__` and `____noinline____` stay as written (and are unknown),
+/// and the spellings `__const` and `__clang_arm_builtin_alias` are kept.
+pub fn normalize_attr_name(name: &str) -> &str {
+    if name.len() >= 4 && name.starts_with("__") && name.ends_with("__") {
+        &name[2..name.len() - 2]
+    } else {
+        name
+    }
+}
+
+/// Whether an attribute written with `syntax` and the (normalized, see
+/// clang `normalizeAttrScopeName`) `scope` has its name normalized by
+/// [`normalize_attr_name`]: a GNU attribute, or a `[[...]]` one with no
+/// scope or the `gnu` or `clang` scope (clang `normalizeAttrName`).
+pub fn attr_name_normalizes(syntax: AttrSyntax, scope: Option<&str>) -> bool {
+    syntax == AttrSyntax::Gnu
+        || (syntax == AttrSyntax::Cxx11 && matches!(scope, None | Some("gnu" | "clang")))
+}
+
 /// Attribute syntax.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 #[repr(u8)]
@@ -710,6 +750,13 @@ impl AttrNode {
     /// on the declaration and applies at instantiation (clang
     /// `instantiateDependentModeAttr`).
     pub const MODE_DEFERRED: u8 = 4;
+    /// `gsl::Owner` / `gsl::Pointer` flag (bit 2): a type argument was
+    /// written; `b` holds it.
+    pub const GSL_HAS_TYPE: u8 = 4;
+    /// `lifetimebound` flag (bit 2): an argument list was written, an
+    /// error on a parameter but unchecked in the type position (clang
+    /// does not count the arguments of a type attribute).
+    pub const LIFETIMEBOUND_ARGS: u8 = 4;
     /// Flag (bit 3, any kind): written with the `gnu::` attribute scope
     /// (`[[gnu::noreturn]]`). With `AttrSyntax::Gnu` it selects the GNU
     /// spelling of `NODISCARD` (`warn_unused_result`) and `NORETURN`, and

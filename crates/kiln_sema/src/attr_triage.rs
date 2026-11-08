@@ -102,7 +102,6 @@ const fn rt(name: &'static str, spellings: [u8; 4], class: Class, why: &'static 
 use Class::{A, B, C};
 
 const TSA: &str = "thread-safety analysis (-Wthread-safety), which kiln does not run";
-const SAN: &str = "sanitizer instrumentation, which kiln does not emit";
 const LIFETIME: &str = "lifetime analysis (-Wdangling), which kiln does not run";
 const ANALYSIS: &str = "diagnostics or static analysis only";
 const OBJC: &str = "Objective-C / CoreFoundation only; no effect on C++ code generation";
@@ -119,8 +118,6 @@ const MULTIVERSION: &str =
 /// The rows, sorted by name.
 pub static TABLE: &[Row] = &[
     r("NSObject", G | CL, C, OBJC),
-    r("Owner", GSL, C, LIFETIME),
-    r("Pointer", GSL, C, LIFETIME),
     r("acquire_capability", G | CL, C, TSA),
     r("acquire_handle", G | CL, C, ANALYSIS),
     r("acquire_shared_capability", G | CL, C, TSA),
@@ -205,7 +202,6 @@ pub static TABLE: &[Row] = &[
     rt("kernel", [G, 0, G, 0], C, OFFLOAD),
     r("launch_bounds", G, C, OFFLOAD),
     r22("lifetime_capture_by", G | CL, C, LIFETIME),
-    r("lifetimebound", G | CL, C, LIFETIME),
     r("lock_returned", G, C, TSA),
     r("lockable", G, C, TSA),
     r("locks_excluded", G, C, TSA),
@@ -215,13 +211,8 @@ pub static TABLE: &[Row] = &[
     r("mig_server_routine", G | CL, C, ANALYSIS),
     rt("model", [0, 0, 0, G | GS], A, "x86-64 code model of the variable's section"),
     r22("modular_format", G | CL, B, HINT),
-    r("no_address_safety_analysis", G | GS, B, SAN),
     r22("no_cluster", G, C, OFFLOAD),
     r("no_randomize_layout", G | GS, B, HINT),
-    rt("no_sanitize", [G | CL, G | GS | CL, G | CL, G | GS | CL], B, SAN),
-    r("no_sanitize_address", G | GS, B, SAN),
-    r("no_sanitize_memory", G | CL, B, SAN),
-    r("no_sanitize_thread", G | GS, B, SAN),
     r22("no_specializations", G | CL, C, ANALYSIS),
     r("no_thread_safety_analysis", G | CL, C, TSA),
     r("nocommon", G | GS, C, "a no-op in C++, whose variables are never common symbols"),
@@ -458,7 +449,7 @@ pub fn attribute_support(
     let wp810 = match name {
         "builtin_alias" if sp == CL => Some(AttrKind::BUILTIN_ALIAS),
         "clang_builtin_alias" if sp == G => Some(AttrKind::BUILTIN_ALIAS),
-        "clang_arm_builtin_alias" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::BUILTIN_ALIAS),
+        "__clang_arm_builtin_alias" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::BUILTIN_ALIAS),
         "target_version" if !x86 && sp & (G | GS) != 0 => Some(AttrKind::TARGET_VERSION),
         "target_clones" if !x86 && sp & (G | GS) != 0 => Some(AttrKind::TARGET_CLONES),
         "cpu_dispatch" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::CPU_DISPATCH),
@@ -508,14 +499,22 @@ mod tests {
         assert_eq!(s("reentrant_capability", g, None, 19), Support::Unknown);
         assert_eq!(s("reentrant_capability", g, None, 22), Support::Ignored(C));
         // Sanitizer and lifetime attributes (formerly WP-667's table).
-        assert_eq!(s("no_sanitize", g, None, 19), Support::Ignored(B));
-        assert_eq!(s("no_sanitize", x, Some("clang"), 19), Support::Ignored(B));
+        // WP-675 implements the sanitizer family (`class_b_attrs.rs`).
+        let ns = Support::Implemented(AttrKind::NO_SANITIZE);
+        assert_eq!(s("no_sanitize", g, None, 19), ns);
+        assert_eq!(s("no_sanitize", x, Some("clang"), 19), ns);
         assert_eq!(s("no_sanitize", x, Some("gnu"), 19), Support::Unknown);
-        assert_eq!(s("no_sanitize", x, Some("gnu"), 22), Support::Ignored(B));
+        assert_eq!(s("no_sanitize", x, Some("gnu"), 22), ns);
         assert_eq!(s("lifetimebound", x, None, 22), Support::Unknown);
         assert_eq!(s("lifetimebound", x, Some("gnu"), 22), Support::Unknown);
-        assert_eq!(s("lifetimebound", x, Some("clang"), 22), Support::Ignored(C));
-        assert_eq!(s("no_sanitize_address", x, Some("gnu"), 19), Support::Ignored(B));
+        assert_eq!(
+            s("lifetimebound", x, Some("clang"), 22),
+            Support::Implemented(AttrKind::LIFETIMEBOUND)
+        );
+        assert_eq!(s("Owner", x, Some("gsl"), 19), Support::Implemented(AttrKind::GSL_OWNER));
+        assert_eq!(s("Pointer", x, None, 19), Support::Unknown);
+        assert_eq!(s("Owner", g, None, 19), Support::Unknown);
+        assert_eq!(s("no_sanitize_address", x, Some("gnu"), 19), ns);
         assert_eq!(s("no_sanitize_address", x, Some("clang"), 22), Support::Unknown);
         // Class A: rejected.
         assert_eq!(s("address_space", g, None, 22), Support::Unsupported);
@@ -570,7 +569,7 @@ mod tests {
         // WP-810: implemented on AArch64; multiversioning is class A on x86-64.
         assert!(matches!(s("arm_sve_vector_bits", g, None, 22), Support::Implemented(_)));
         assert!(matches!(
-            s("clang_arm_builtin_alias", x, Some("clang"), 19),
+            s("__clang_arm_builtin_alias", x, Some("clang"), 19),
             Support::Implemented(_)
         ));
         assert!(matches!(s("target_version", x, Some("gnu"), 22), Support::Implemented(_)));
@@ -579,7 +578,7 @@ mod tests {
         assert_eq!(x86("target_version", g, None, 19), Support::Unsupported);
         assert_eq!(x86("target_version", g, None, 22), Support::Unknown);
         assert_eq!(x86("cpu_dispatch", x, Some("clang"), 19), Support::Unsupported);
-        assert_eq!(x86("clang_arm_builtin_alias", g, None, 19), Support::Unknown);
+        assert_eq!(x86("__clang_arm_builtin_alias", g, None, 19), Support::Unknown);
         assert!(matches!(x86("clang_builtin_alias", g, None, 19), Support::Implemented(_)));
     }
 

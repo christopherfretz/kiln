@@ -170,9 +170,9 @@ do not add a diagnostic): `-f[no-]stack-clash-protection`,
 
 **3. Rejected** with `drv_unsupported_flag`, the error `'<flag>' is not
 supported by kiln` (exit 1, no job runs; not the generic `unknown argument`):
-`-ftrapv`, `-fshort-enums`, every `-fsanitize*` and `-fno-sanitize*`
-(`-fsanitize=address`, `-fno-sanitize-recover=all`, ...),
-`-fcoverage-mapping`, `-fprofile-arcs`, `-ftest-coverage`, `--coverage`,
+`-ftrapv`, `-fshort-enums`, the `-fsanitize*` and `-fno-sanitize*`
+options "Sanitizers" below does not list (`-fsanitize-coverage=`,
+`-fsanitize-cfi-*`, ...), `-fcoverage-mapping`, `-fprofile-arcs`, `-ftest-coverage`, `--coverage`,
 `-fprofile-instr-generate[=...]`, `-fprofile-generate[=...]`,
 `-fprofile-instr-use[=...]`, `-fprofile-use[=...]`, and under
 `-fxray-instrument` every `-fxray-*` option but the threshold and
@@ -309,6 +309,51 @@ implemented or an error; none is accepted and ignored.
   - `tests/driver.rs` `fast_math_x86_64_crtfastmath_keeps_ieee_denormals`;
   - `tests/codegen.rs` `fp_environment_flags_rejected`;
   - `tests/codegen/fp_*.cpp`.
+
+### Sanitizers (WP-675)
+
+`SanitizeFlags` (`crates/kiln_driver/src/sanitize.rs`; design:
+docs/design/sanitizers.md) reads the sanitizer options as clang 19's
+`SanitizerArgs` does on Linux and gives codegen a `SanitizeOptions`
+(enabled, recover and trap sets, plus the per-sanitizer options):
+
+- `-f[no-]sanitize=`, `-f[no-]sanitize-recover[=]`,
+  `-f[no-]sanitize-trap[=]`, `-f[no-]sanitize-undefined-trap-on-error`:
+  comma lists read left to right, with clang's groups (`undefined`,
+  `integer`, `shift`, `bounds`, `all`), its silent drops (vptr under
+  `-fno-rtti`, object-size at `-O0`), its default recover set and its
+  errors: `unsupported argument '<v>' to option '<opt>'` for an unknown
+  name or one the list may not take, `invalid argument '<a>' not allowed
+  with '<b>'` for an incompatible pair (each side the last argument that
+  enabled it), `unsupported option '<opt><v>' for target '<triple>'`.
+- Sanitizers kiln implements: address, hwaddress, thread, memory, leak,
+  fuzzer, fuzzer-no-link, the `undefined` group, unsigned-integer-overflow
+  and unsigned-shift-base. Any other clang sanitizer (cfi, dataflow,
+  safe-stack, kcfi, memtag, the kernel variants, ...) is
+  `drv_unsupported_flag` (`'-fsanitize=<x>' is not supported by kiln`).
+  Of `undefined`, codegen emits signed-integer-overflow,
+  integer-divide-by-zero, shift-base, shift-exponent, return, unreachable
+  and vla-bound checks (spec/codegen.md "Sanitizers"); the other members
+  are accepted and emit no check yet (spec/landed/codegen/WP-675.md).
+- `-fsanitize-ignorelist=`/`-fsanitize-blacklist=` (the file must exist:
+  `no such file or directory: '<f>'`; not applied yet),
+  `-fno-sanitize-ignorelist`, `-f[no-]sanitize-address-use-after-scope`,
+  `-fsanitize-address-use-after-return=never|runtime|always`,
+  `-f[no-]sanitize-memory-track-origins[=0|1|2]`, `-shared-libsan`,
+  `-static-libsan`.
+- The pass sanitizers (address, hwaddress, thread, memory) run clang's
+  `opt` pipeline extension points at every `-O` level, with clang's
+  `cl::opt` flags. The link passes the final set on to the linking
+  `clang++` (`-fsanitize=<enabled>`, plus `-shared-libsan`/`-static-libsan`),
+  so the runtime is the one in its resource directory; with every
+  enabled UB check in trap mode and no pass sanitizer, nothing is passed
+  on and no runtime is linked.
+- `__has_feature(address_sanitizer)` and friends follow the enabled set;
+  `__SANITIZE_ADDRESS__`, `__SANITIZE_THREAD__` and
+  `__SANITIZE_HWADDRESS__` are predefined from `-fclang-compat=22`.
+
+Tests: `sanitize.rs` unit tests; `crates/kiln_driver/tests/codegen.rs`
+`sanitizer_frontend_attributes`; `tests/conformance/driver.sanitize/`.
 
 ## Driver modes
 
@@ -832,8 +877,15 @@ This is clang's `DependencyCollector` and `DependencyFileGenerator`.
 - Files are listed in first-seen order:
   - the main file;
   - every entered header;
+  - every header an `#include` found but skipped (`#pragma once`,
+    `#import`, the guard optimization; clang's `FileSkipped`);
   - every header found by `__has_include`;
   - every `#embed` resource.
+  A header is listed by the path the lookup found it by
+  (`ResolvedInclude::path`, spec/pp.md "Header search"), once per
+  distinct path: a file reached as `real/x.h`, `lnk/x.h` (a symlinked
+  directory) and `sub/../real/x.h` is listed three times, even though it
+  is entered once and `__FILE__` names it `real/x.h` (WP-820).
   `<built-in>`, `<command line>` and `<stdin>` are left out, and `./` is
   removed.
 - The target is `-MT` (verbatim) or `-MQ` (Make-quoted), in order. Without
@@ -1014,9 +1066,9 @@ Each deviation is covered by a test or a test note.
     at all for `wildcatlake` / `novalake` (spec/landed/driver/WP-630.md);
     `-march=native` emits no `"target-cpu"` and `-mtune=native` no
     `"tune-cpu"` (clang resolves the host); `-fwrapv-pointer` is accepted at `-fclang-compat=19`
-    (clang 19 has no such flag); the sanitizer, coverage,
-    profile, `-ftrapv` and `-fshort-enums` flags are errors; and the Oven
-    ignores `-fwrapv`.
+    (clang 19 has no such flag); the coverage, profile, `-ftrapv` and
+    `-fshort-enums` flags, and the sanitizers "Sanitizers" does not
+    list, are errors; and the Oven ignores `-fwrapv`.
 20. **`-fmacro-prefix-map=` keeps `.` components and repeated `/`.** Once
     any `-fmacro-prefix-map=`/`-ffile-prefix-map=` is given, clang also
     applies `llvm::sys::path::remove_dots` (no `..` folding) to every
