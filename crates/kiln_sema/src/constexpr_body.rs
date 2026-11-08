@@ -132,10 +132,14 @@ impl Sema<'_, '_> {
         let pre23 = self.std < kiln_lex::Std::Cxx23;
         // clang `CheckConstexprFunctionBody`: a function-try-block before
         // C++20, ahead of the statement walk (WP-891).
-        if self.std < kiln_lex::Std::Cxx20 && self.ast.stmts.get(body).kind() == StmtKind::CXXTryStmt
+        if self.std < kiln_lex::Std::Cxx20
+            && self.ast.stmts.get(body).kind() == StmtKind::CXXTryStmt
         {
             let msg = self
-                .diag(DiagId::sema_constexpr_function_try_block_cxx20, self.ast.stmts.get(body).loc())
+                .diag(
+                    DiagId::sema_constexpr_function_try_block_cxx20,
+                    self.ast.stmts.get(body).loc(),
+                )
                 .arg(u8::from(ctor));
             self.emit(msg);
         }

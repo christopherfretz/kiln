@@ -1176,13 +1176,7 @@ impl Sema<'_, '_> {
 
     /// clang `warn_dangling_variable` for a temporary bound to variable
     /// `v` (or a subobject of it); an implicit variable is not named.
-    fn dangling_variable_diag(
-        &self,
-        cx: &Cx,
-        v: DeclId,
-        rk: Rk,
-        at: Loc,
-    ) -> kiln_diag::Diag {
+    fn dangling_variable_diag(&self, cx: &Cx, v: DeclId, rk: Rk, at: Loc) -> kiln_diag::Diag {
         let implicit = self.ast.decls.get(v).flags().contains(DeclFlags::IMPLICIT);
         let id = match (rk, cx.has_parent, implicit) {
             (Rk::Ref, true, false) => DiagId::sema_dangling_variable_member,
