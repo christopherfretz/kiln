@@ -314,7 +314,24 @@ fn aarch64_illegal_vector(t: &mut IrTypes<'_>, q: QualType) -> Option<ArgKind> {
     })
 }
 
+/// clang `ABIInfo::useFirstFieldIfTransparentUnion`: an argument of a
+/// union that kept `transparent_union` (WP-809) is classified as its
+/// first field.
+fn first_field_if_transparent(ast: &Ast, q: QualType) -> QualType {
+    let TypeView::Record(d) = ast.types.canonical_view(q) else { return q };
+    let def = ast.definition(d).unwrap_or(d);
+    if !props::has_attr(ast, def, kiln_ast::attr::AttrKind::TRANSPARENT_UNION) {
+        return q;
+    }
+    ast.decls
+        .members(def)
+        .find(|&m| ast.decls.get(m).kind() == kiln_ast::decl::DeclKind::Field)
+        .and_then(|f| ast.decls.get(f).ty())
+        .unwrap_or(q)
+}
+
 fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
+    let q = first_field_if_transparent(t.ast(), q);
     if let Some(k) = aarch64_illegal_vector(t, q) {
         return k;
     }
@@ -916,6 +933,7 @@ fn x86_64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType], _n_required: us
 }
 
 fn x86_indirect(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> ArgKind {
+    let q = first_field_if_transparent(t.ast(), q);
     if is_indirect_record(t.ast(), q) {
         return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
     }
@@ -940,6 +958,7 @@ fn x86_indirect(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> ArgKind {
 
 fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u32) {
     use Class::{ComplexX87, Integer, Memory, NoClass, Sse, SseUp, X87, X87Up};
+    let q = first_field_if_transparent(t.ast(), q);
     let (lo, hi) = classify(t, q, 0);
     let mut ni = 0;
     let mut ns = 0;

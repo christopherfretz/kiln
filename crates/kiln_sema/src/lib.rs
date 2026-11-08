@@ -112,6 +112,7 @@ pub mod target;
 pub mod templ;
 mod template_id_typo;
 mod tls_model;
+mod transparent_union;
 mod trivial_abi;
 mod try_stmt;
 mod type_diff;

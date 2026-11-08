@@ -284,6 +284,13 @@ impl AttrKind {
     /// `musttail call` followed by `ret`. Kept on the `AttributedStmt`
     /// only once `Sema::check_musttail` accepts it.
     pub const MUSTTAIL: AttrKind = AttrKind(196);
+    /// GNU `transparent_union` (clang `TransparentUnionAttr`, a C-only
+    /// attribute; WP-809). In C++ every occurrence is ignored with a
+    /// warning, but clang's delayed check of a class-head occurrence on a
+    /// union definition still keeps it when the fields qualify: such a
+    /// union is then passed by value as its first field (clang
+    /// `useFirstFieldIfTransparentUnion`). Kept on the union only then.
+    pub const TRANSPARENT_UNION: AttrKind = AttrKind(197);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

@@ -82,6 +82,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::TLS_MODEL => "tls_model",
         AttrKind::RETURNS_TWICE => "returns_twice",
         AttrKind::MUSTTAIL => "musttail",
+        AttrKind::TRANSPARENT_UNION => "transparent_union",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -475,6 +476,15 @@ impl Sema<'_, '_> {
             | AttrKind::MUSTTAIL => {
                 let name = self.attr_shown(&node, attr_name(&node).unwrap_or_default());
                 let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg(name);
+                self.emit(msg);
+                false
+            }
+            // clang `TransparentUnion` is C-only: ignored in C++ (a
+            // class-head one also gets the delayed check,
+            // `Sema::transparent_union_head`).
+            AttrKind::TRANSPARENT_UNION => {
+                let shown = self.attr_shown(&node, "transparent_union");
+                let msg = self.diag(DiagId::parse_attribute_ignored, node.loc).arg(shown);
                 self.emit(msg);
                 false
             }

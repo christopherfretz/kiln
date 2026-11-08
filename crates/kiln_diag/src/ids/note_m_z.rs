@@ -159,6 +159,7 @@ note_template_static_data_member_def_here = Note (1) "in instantiation of static
 note_template_type_alias_instantiation_here = Note (1) "in instantiation of template type alias '{0}' requested here";
 note_throw_in_dtor = Note (2) "{0:destructor|deallocator} has a {1:non-throwing|implicit non-throwing} exception specification";
 note_throw_in_function = Note (0) "function declared non-throwing here";
+note_transparent_union_first_field = Note (2) "{0:alignment|size} of first field is {1} bits";
 note_typename_member_refers_here = Note (1) "referenced member '{0}' is declared here";
 note_ucn_name_loose_match = Note (0) "characters names in Unicode escape sequences are sensitive to case and whitespaces";
 note_uninit_in_ctor = Note (1) "during field initialization in {0:this|the implicit default} constructor";

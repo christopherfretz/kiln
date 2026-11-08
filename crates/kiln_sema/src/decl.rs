@@ -8037,6 +8037,7 @@ impl Sema<'_, '_> {
         let bits = self.special_member_bits(r, bits);
         let bits = self.finish_special_members(r, bits);
         let bits = self.trivial_abi_bits(r, bits);
+        self.check_transparent_union(r);
         // [class.compare.default]/4: the implicit `operator==`s.
         let mut friends =
             build.as_mut().map(|b| std::mem::take(&mut b.friends)).unwrap_or_default();
@@ -10592,9 +10593,11 @@ impl Sema<'_, '_> {
     /// ([dcl.align]/6, [`Sema::merge_aligned_redecl`]).
     pub fn act_on_tag_attrs(&mut self, d: DeclId, attrs: &[AttrId], use_: TagUse) {
         let mut attrs = attrs.to_vec();
+        let transparent = self.transparent_union_head(d, &mut attrs, use_);
         if !attrs.is_empty() {
             self.check_decl_attrs(d, &mut attrs);
         }
+        attrs.extend(transparent);
         if matches!(use_, TagUse::Declaration | TagUse::Definition) {
             self.finish_visibility_attrs(d, &mut attrs, true);
         }
@@ -11103,6 +11106,8 @@ fn attr_kind_of(
         ("returns_twice", _, true) => AttrKind::RETURNS_TWICE,
         // clang `Clang<"musttail">` on a return statement (WP-809).
         ("musttail", _, _) if gnu_syntax || clang_scope => AttrKind::MUSTTAIL,
+        // clang `GCC<"transparent_union">`, C-only (WP-809).
+        ("transparent_union", _, true) => AttrKind::TRANSPARENT_UNION,
         // clang `GCC<"common">`, rejected in C++ (WP-807).
         ("common", _, true) => AttrKind::COMMON,
         // clang `Clang<"internal_linkage">` (WP-807).
