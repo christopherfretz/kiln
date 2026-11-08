@@ -810,7 +810,9 @@ impl Sema<'_, '_> {
         }
         // [except.throw]/5, [class.abstract]/3: an object of class type is
         // not abstract and its destructor is potentially invoked, so it is
-        // accessible and not deleted (clang `CheckCXXThrowOperand`).
+        // accessible and not deleted, and a non-trivial one is odr-used:
+        // an implicit one is defined here, since `__cxa_throw` is passed
+        // it (clang `CheckCXXThrowOperand`; WP-799).
         if !pointer {
             if let Some(c) = self.abstract_class(obj) {
                 let msg = self.diag(DiagId::sema_throw_abstract, loc).arg(self.ty_arg(obj));
@@ -831,27 +833,7 @@ impl Sema<'_, '_> {
         if self.is_err_expr(init) {
             return self.recover(QualType::VOID, &[init], loc);
         }
-        if !pointer {
-            self.use_exception_dtor(obj, loc);
-        }
         self.builder().throw_expr(Some(init), QualType::VOID, loc)
-    }
-
-    /// The destructor of a thrown class object of type `obj` is
-    /// odr-used ([except.throw]/5; clang `CheckCXXThrowOperand`
-    /// `MarkFunctionReferenced`) unless trivial, so an implicit one is
-    /// defined in this translation unit: `__cxa_throw` is passed it.
-    fn use_exception_dtor(&mut self, obj: QualType, loc: Loc) {
-        let Some(r) = self.ast.types.as_record(obj) else { return };
-        let Some(class) = self.ast.definition(r) else { return };
-        let flags = self.ast.decls.get(class).flags();
-        if flags.contains(DeclFlags::INVALID) || flags.contains(DeclFlags::DEPENDENT_CTX) {
-            return;
-        }
-        if self.defn_bits(class).contains(DefinitionBits::TRIVIAL_DTOR) {
-            return;
-        }
-        let _ = self.check_temporary_dtor(class, obj, loc);
     }
 
     /// True if `e` is a (possibly parenthesized) throw-expression

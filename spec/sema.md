@@ -4526,20 +4526,18 @@ function) elsewhere.
 - (WP-804) A class-type exception object (not a pointer) must not be
   abstract ("cannot throw an object of abstract type 'T'", with the
   pure virtual notes; [class.abstract]/3), and its destructor is
-  potentially invoked ([except.throw]/5): it is marked referenced, an
-  inaccessible one is "exception object of type 'T' has
-  protected/private destructor" at the operand, and a deleted one is
-  the deleted-use error (`mark_element_dtor_referenced`;
-  `expr.throw/abstract-and-inaccessible-dtor.cpp`).
+  potentially invoked ([except.throw]/5): an inaccessible one is
+  "exception object of type 'T' has protected/private destructor" at
+  the operand, and a deleted one is the deleted-use error
+  (`mark_element_dtor_referenced`;
+  `expr.throw/abstract-and-inaccessible-dtor.cpp`). A non-trivial one is
+  odr-used, so an implicit one is defined in the translation unit, since
+  `__cxa_throw` is passed its complete-object destructor (WP-799,
+  `except.throw/rethrow-copy-implicit-dtor-run.cpp`).
 - The operand is copy-initialized into it after the implicit move
   ([class.copy.elision]/3), which applies only when the named local's
   scope does not extend past the innermost enclosing try-block
   (`thrown_var_in_scope`, WP-100).
-- A non-trivial destructor of a class exception object is odr-used
-  ([except.throw]/5; `use_exception_dtor`, clang `CheckCXXThrowOperand`):
-  its access and deletion are checked as for a temporary, and an
-  implicit one is defined in the translation unit, since `__cxa_throw`
-  is passed its complete-object destructor (WP-799).
 - In `?:`, a throw operand gives the other operand's type and value
   category ([expr.cond]/2).
 - The Oven treats a `throw` it reaches as not a constant expression,
