@@ -877,8 +877,15 @@ This is clang's `DependencyCollector` and `DependencyFileGenerator`.
 - Files are listed in first-seen order:
   - the main file;
   - every entered header;
+  - every header an `#include` found but skipped (`#pragma once`,
+    `#import`, the guard optimization; clang's `FileSkipped`);
   - every header found by `__has_include`;
   - every `#embed` resource.
+  A header is listed by the path the lookup found it by
+  (`ResolvedInclude::path`, spec/pp.md "Header search"), once per
+  distinct path: a file reached as `real/x.h`, `lnk/x.h` (a symlinked
+  directory) and `sub/../real/x.h` is listed three times, even though it
+  is entered once and `__FILE__` names it `real/x.h` (WP-820).
   `<built-in>`, `<command line>` and `<stdin>` are left out, and `./` is
   removed.
 - The target is `-MT` (verbatim) or `-MQ` (Make-quoted), in order. Without

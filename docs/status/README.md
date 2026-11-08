@@ -17,3 +17,4 @@ Workspace: ~1,400 Rust tests across 12 crates, all `#![forbid(unsafe_code)]`.
 - `libcxx-m5.md` — libc++ 22 full suite (ROADMAP M5): failure clusters by class (correctness, diagnostic wording, harness, environment), fixes, proposed WPs; the run row is in `libcxx.md`.
 - `deviations.md` — deliberate deviations from the oracle where kiln follows the standard over a clang defect, with the spec paragraph and pinning test of each.
 - `reflection-spike.md` — WP-267 P2996 design spike behind `-freflection`: what the Oven/SemaBridge boundary absorbed, what had to bend, pre-M6 rows, full-P2996 cost.
+- `header-search-syscalls.md` — WP-820 file-system system calls per TU (header search, file loading) against clang 19: fmt, libc++, a 157 `-I` synthetic tree; exact commands to re-run.

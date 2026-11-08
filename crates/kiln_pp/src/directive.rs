@@ -1260,25 +1260,23 @@ impl Preprocessor<'_, '_> {
             self.emit(Diag::new(DiagId::pp_file_not_found, ft.tok.span).arg(&req.name));
             return;
         };
-        if self.once_files.contains(&r.file) {
-            return;
-        }
-        // The multiple-include optimization: re-including a guarded file
-        // whose guard macro is defined has no effect.
-        if let Some(&m) = self.guards.get(&r.file)
-            && self.macros.is_defined(m)
-        {
-            return;
-        }
-        if d == Dir::Import {
-            self.once_files.insert(r.file);
-        }
         // clang: the characteristic is the max of the directory's and the
         // includer's (user < system < extern "C" system).
         let (cur_sys, cur_c) =
             self.cur_file_ref().map_or((false, false), |f| (f.system, f.extern_c));
         let extern_c = r.extern_c || cur_c;
         let system = r.system || cur_sys || extern_c;
+        // The multiple-include optimization: re-including a guarded file
+        // whose guard macro is defined has no effect.
+        if self.once_files.contains(&r.file)
+            || self.guards.get(&r.file).is_some_and(|&m| self.macros.is_defined(m))
+        {
+            self.callbacks.file_skipped(&r, system);
+            return;
+        }
+        if d == Dir::Import {
+            self.once_files.insert(r.file);
+        }
         self.include_depth += 1;
         self.push_file(
             r.file,

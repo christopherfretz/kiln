@@ -292,3 +292,178 @@ fn embed_lookup() {
     assert_eq!(diags, ["#embed is a Clang extension", "#embed is a Clang extension"]);
     assert_eq!(out.split_whitespace().collect::<String>(), "65,66;67;no_angled");
 }
+
+// --- Lookup caching (WP-820): each test counts the queries a `RealFs`
+// would turn into system calls (`MemoryFs::queries`: open, stat, list).
+
+/// A header-search over `fs` with the angled directories `dirs`.
+fn searcher<F: HeaderFs>(mut fs: F, dirs: &[&str]) -> HeaderSearch<F> {
+    let specs: Vec<SearchDirSpec> =
+        dirs.iter().map(|d| SearchDirSpec::new(*d, DirGroup::Angled)).collect();
+    let list = SearchList::build(&specs, true, &mut fs);
+    HeaderSearch::new(fs, list)
+}
+
+/// `<name>` (`#include_next` from search position `next`, if given):
+/// the path it was found by.
+fn find<F: HeaderFs>(
+    hs: &mut HeaderSearch<F>,
+    sm: &SourceManager,
+    name: &str,
+    next: Option<u32>,
+) -> Option<String> {
+    use kiln_pp::{IncludeKind, IncludeRequest, IncludeResolver};
+    let req = IncludeRequest {
+        kind: if next.is_some() { IncludeKind::IncludeNext } else { IncludeKind::Include },
+        name: name.to_owned(),
+        angled: true,
+        includer: None,
+        lookup_from: next,
+        name_span: kiln_source::Span::default(),
+        directive_span: kiln_source::Span::default(),
+    };
+    hs.resolve(sm, &req).map(|r| r.path.expect("header search reports the path"))
+}
+
+/// The queries made since `before`.
+fn since(hs: &HeaderSearch<MemoryFs>, before: (u32, u32, u32)) -> (u32, u32, u32) {
+    let now = hs.fs().queries();
+    (now.0 - before.0, now.1 - before.1, now.2 - before.2)
+}
+
+#[test]
+fn a_repeated_lookup_makes_no_queries() {
+    let sm = SourceManager::new();
+    let fs = MemoryFs::new()
+        .with_dir("/d1")
+        .with_dir("/d2")
+        .with_dir("/d3")
+        .with_file("/d3/x.h", "")
+        .with_file("/d2/n.h", "")
+        .with_file("/d3/n.h", "");
+    let mut hs = searcher(fs, &["/d1", "/d2", "/d3"]);
+    let q = hs.fs().queries();
+    assert_eq!(find(&mut hs, &sm, "x.h", None).as_deref(), Some("/d3/x.h"));
+    assert_eq!(since(&hs, q), (3, 0, 0), "one open per directory");
+    let q = hs.fs().queries();
+    assert_eq!(find(&mut hs, &sm, "x.h", None).as_deref(), Some("/d3/x.h"));
+    assert_eq!(find(&mut hs, &sm, "absent.h", None), None);
+    assert_eq!(find(&mut hs, &sm, "absent.h", None), None);
+    assert_eq!(since(&hs, q), (3, 0, 0), "only the first absent.h lookup opens");
+    // `#include_next` from /d2 starts after it, whatever `n.h` found first.
+    assert_eq!(find(&mut hs, &sm, "n.h", None).as_deref(), Some("/d2/n.h"));
+    assert_eq!(find(&mut hs, &sm, "n.h", Some(1)).as_deref(), Some("/d3/n.h"));
+    assert_eq!(find(&mut hs, &sm, "n.h", Some(2)), None);
+    assert_eq!(find(&mut hs, &sm, "n.h", None).as_deref(), Some("/d2/n.h"));
+}
+
+#[test]
+fn a_missing_subdirectory_rules_out_its_headers_with_one_stat() {
+    let sm = SourceManager::new();
+    let fs = MemoryFs::new()
+        .with_dir("/d1")
+        .with_file("/d2/sub/a.h", "")
+        .with_file("/d2/sub/b.h", "")
+        .with_file("/d2/sub/deep/c.h", "");
+    let mut hs = searcher(fs, &["/d1", "/d2"]);
+    let q = hs.fs().queries();
+    assert_eq!(find(&mut hs, &sm, "sub/a.h", None).as_deref(), Some("/d2/sub/a.h"));
+    assert_eq!(since(&hs, q), (1, 2, 0), "stat /d1/sub, stat /d2/sub, open");
+    let q = hs.fs().queries();
+    assert_eq!(find(&mut hs, &sm, "sub/b.h", None).as_deref(), Some("/d2/sub/b.h"));
+    assert_eq!(since(&hs, q), (1, 0, 0), "both directories known");
+    let q = hs.fs().queries();
+    assert_eq!(find(&mut hs, &sm, "sub/deep/c.h", None).as_deref(), Some("/d2/sub/deep/c.h"));
+    assert_eq!(since(&hs, q), (1, 1, 0), "stat /d2/sub/deep, open");
+}
+
+#[test]
+fn a_directory_listing_answers_misses_after_four() {
+    let sm = SourceManager::new();
+    let mut fs = MemoryFs::new().with_file("/d1/hit.h", "");
+    for i in 0..8 {
+        fs = fs.with_file(&format!("/d2/m{i}.h"), "");
+    }
+    let mut hs = searcher(fs, &["/d1", "/d2"]);
+    let q = hs.fs().queries();
+    for i in 0..4 {
+        assert_eq!(find(&mut hs, &sm, &format!("m{i}.h"), None), Some(format!("/d2/m{i}.h")));
+    }
+    assert_eq!(since(&hs, q), (8, 0, 1), "four misses in /d1 read its listing");
+    let q = hs.fs().queries();
+    for i in 4..8 {
+        assert_eq!(find(&mut hs, &sm, &format!("m{i}.h"), None), Some(format!("/d2/m{i}.h")));
+    }
+    assert_eq!(since(&hs, q), (4, 0, 0), "/d1 misses come from the listing");
+    // A name the listing has is opened; one neither directory has is a
+    // miss in /d1 without a query.
+    let q = hs.fs().queries();
+    assert_eq!(find(&mut hs, &sm, "hit.h", None).as_deref(), Some("/d1/hit.h"));
+    assert_eq!(find(&mut hs, &sm, "none.h", None), None);
+    assert_eq!(since(&hs, q), (2, 0, 0), "open /d1/hit.h, open /d2/none.h");
+    // A missing subdirectory of a listed directory needs no stat either.
+    let q = hs.fs().queries();
+    assert_eq!(find(&mut hs, &sm, "sub/x.h", None), None);
+    assert_eq!(since(&hs, q), (0, 1, 0), "stat /d2/sub only");
+}
+
+/// A file system whose listings spell names in upper case, as a
+/// case-insensitive one may: a listing never hides `hit.h` stored as
+/// `HIT.H` (names are compared ignoring ASCII case).
+struct UpperListing(MemoryFs);
+
+impl HeaderFs for UpperListing {
+    fn dir_identity(&mut self, path: &str) -> Option<String> {
+        self.0.dir_identity(path)
+    }
+    fn list_dir(&mut self, path: &str) -> Option<Vec<String>> {
+        Some(self.0.list_dir(path)?.iter().map(|n| n.to_ascii_uppercase()).collect())
+    }
+    fn open(&mut self, sm: &SourceManager, path: &str) -> Option<kiln_source::FileId> {
+        self.0.open(sm, path)
+    }
+    fn read(&mut self, path: &str) -> Option<Vec<u8>> {
+        self.0.read(path)
+    }
+}
+
+#[test]
+fn a_listing_compares_names_ignoring_ascii_case() {
+    let sm = SourceManager::new();
+    let mut fs = MemoryFs::new().with_file("/d1/hit.h", "");
+    for i in 0..5 {
+        fs = fs.with_file(&format!("/d2/m{i}.h"), "");
+    }
+    let mut hs = searcher(UpperListing(fs), &["/d1", "/d2"]);
+    for i in 0..5 {
+        assert!(find(&mut hs, &sm, &format!("m{i}.h"), None).is_some());
+    }
+    // Listed (after four misses) as `HIT.H`, still found.
+    assert_eq!(hs.fs().0.queries(), (9, 2, 1));
+    assert_eq!(find(&mut hs, &sm, "hit.h", None).as_deref(), Some("/d1/hit.h"));
+}
+
+#[test]
+fn a_directory_with_a_non_ascii_name_is_not_answered_from_its_listing() {
+    let sm = SourceManager::new();
+    let mut fs = MemoryFs::new().with_file("/d1/\u{dc}n\u{ef}.h", "");
+    for i in 0..6 {
+        fs = fs.with_file(&format!("/d2/m{i}.h"), "");
+    }
+    let mut hs = searcher(fs, &["/d1", "/d2"]);
+    let q = hs.fs().queries();
+    for i in 0..6 {
+        assert!(find(&mut hs, &sm, &format!("m{i}.h"), None).is_some());
+    }
+    assert_eq!(since(&hs, q), (12, 0, 1), "read once, then /d1 is still opened");
+    assert_eq!(find(&mut hs, &sm, "\u{dc}n\u{ef}.h", None).as_deref(), Some("/d1/\u{dc}n\u{ef}.h"));
+}
+
+#[test]
+fn a_header_is_found_by_its_spelled_path() {
+    let sm = SourceManager::new();
+    let fs = MemoryFs::new().with_file("/d/once.h", "").with_dir("/d/sub");
+    let mut hs = searcher(fs, &["/d"]);
+    assert_eq!(find(&mut hs, &sm, "sub/../once.h", None).as_deref(), Some("/d/sub/../once.h"));
+    assert_eq!(find(&mut hs, &sm, "once.h", None).as_deref(), Some("/d/once.h"));
+}
