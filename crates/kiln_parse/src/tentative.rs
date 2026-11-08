@@ -309,7 +309,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                         Some(j)
                             if k == Kw::Decltype && self.punct_at(j) == Some(Punct::ColonColon) =>
                         {
-                            self.unparsed_decltype_scope(j)
+                            self.unparsed_decltype_scope(self.i, j, braced)
                         }
                         Some(j) => self.after_simple_type(j, braced),
                         None => Tpr::Error,
@@ -469,9 +469,16 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     /// A `decltype(e)::name` whose qualifier was not parsed ahead (a
     /// position other than the current token, e.g. after the `(` of a
     /// possible cast): its scope is unknown, so the name is classified
-    /// by what follows it (WP-119, spec/parse.md §2.1). `cc` is the
-    /// index of the `::`.
-    fn unparsed_decltype_scope(&self, cc: usize) -> Tpr {
+    /// by what follows it (WP-119, spec/parse.md §2.1), unless the
+    /// operand is a variable whose class is known without parsing it
+    /// ([`Parser::peek_decltype_scope_name`], WP-843). `kw` is the index
+    /// of `decltype`, `cc` that of the `::`.
+    fn unparsed_decltype_scope(&self, kw: usize, cc: usize, braced: Tpr) -> Tpr {
+        match self.p.peek_decltype_scope_name(kw, cc) {
+            Some((end, NameClass::Type(..))) => return self.after_simple_type(end, braced),
+            Some((_, NameClass::Value(_))) => return Tpr::False,
+            _ => {}
+        }
         let Some(end) = self.p.skip_qualified_rest(cc) else { return Tpr::Error };
         let after = |n: usize| self.punct_at(end + n);
         match self.punct_at(end) {

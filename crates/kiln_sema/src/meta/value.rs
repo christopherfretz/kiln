@@ -149,7 +149,7 @@ impl Sema<'_, '_> {
     /// Why frozen value `cv` is no template argument ([temp.arg.nontype]/6):
     /// a pointer or reference into a string literal, a temporary, a
     /// `typeid` result or a label, at the top level or in a subobject.
-    fn bad_tparg_base(&self, cv: ConstValueId) -> Option<&'static str> {
+    pub(crate) fn bad_tparg_base(&self, cv: ConstValueId) -> Option<&'static str> {
         let mut todo = vec![cv];
         let mut seen = 0usize;
         while let Some(cv) = todo.pop() {

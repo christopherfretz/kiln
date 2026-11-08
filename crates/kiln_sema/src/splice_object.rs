@@ -48,8 +48,8 @@ impl Sema<'_, '_> {
 
     /// `[: r :]` of object reflection `p` (its interned pointer to the
     /// object; [expr.prim.splice]/2): an lvalue designating the object,
-    /// of the object's type. `None` for an object with no declaration
-    /// to name it through (the caller diagnoses).
+    /// of the object's type. `None` for an object kiln cannot name (a
+    /// string literal or `std::type_info` object; the caller diagnoses).
     ///
     /// The object is not a variable, so a contract predicate does not
     /// make the splice `const` (P3598R0, [expr.prim.splice]/2.3: "the
@@ -63,10 +63,51 @@ impl Sema<'_, '_> {
             return None;
         };
         let target = self.ast.types.pointee(ty)?;
+        // A string literal object ([lex.string]/9) and a `std::type_info`
+        // object ([expr.typeid]/1) are, like a template parameter object,
+        // `const` static-storage objects no declaration names: the splice
+        // designates them the same way ([expr.prim.splice]/2.4).
+        if let PtrBase::Const(_)
+        | PtrBase::StringLit { .. }
+        | PtrBase::TypeInfo(_)
+        | PtrBase::Temporary(_) = base
+        {
+            return self.const_object_lvalue(base, offset, target, loc);
+        }
         let contracts = std::mem::take(&mut self.contract_ctx);
         let r = self.object_lvalue(base, offset, target, loc);
         self.contract_ctx = contracts;
         r
+    }
+
+    /// An lvalue designating an object (or subobject) of type `target` at
+    /// byte `offset` of `base`, a static-storage object no declaration
+    /// names (`PtrBase::Const`: a `reflect_constant_string` /
+    /// `reflect_constant_array` result or a `define_static_array`
+    /// element; P3491R3 [meta.reflection.array]). It is a template
+    /// parameter object, so `const` ([temp.param]/8). No expression of
+    /// the program spells it: the splice is `*p` of the constant pointer
+    /// `p` to it (as a pointer template argument into it is substituted,
+    /// `templ/nttp.rs`), which the Oven and codegen read as any constant
+    /// pointer.
+    pub(crate) fn const_object_lvalue(
+        &mut self,
+        base: PtrBase,
+        offset: u64,
+        target: QualType,
+        loc: Loc,
+    ) -> Option<ExprId> {
+        let q = self.ast.types.qualify(target, kiln_ast::types::Quals::CONST);
+        let ty = self.ast.types.pointer_to(q);
+        let v = self
+            .ast
+            .consts
+            .push_scalar(Scalar::Pointer { ty, base, offset, designated: None })
+            .ok()?;
+        let o = self.builder().opaque_value_of(ty, kiln_ast::expr::ValueCategory::PRValue, loc);
+        let c = self.builder().constant_expr(o, Some(v));
+        let r = self.act_on_unary(UnaryOp::Deref, c, loc);
+        (!self.is_err_expr(r)).then_some(r)
     }
 
     /// What a splice of object reflection `p` that
@@ -74,17 +115,10 @@ impl Sema<'_, '_> {
     /// not-supported diagnostic.
     pub(crate) fn object_splice_unsupported(&self, p: ConstValueId) -> &'static str {
         match self.ast.consts.scalar(p) {
-            Some(Scalar::Pointer { base: PtrBase::Const(_), .. }) => {
-                "splice of a reflection of an object with no declaration \
-                 ('reflect_constant_string', 'reflect_constant_array')"
+            Some(Scalar::Pointer { base: PtrBase::Decl(_), .. }) => {
+                "splice of a reflection of this subobject"
             }
-            Some(Scalar::Pointer { base: PtrBase::StringLit { .. }, .. }) => {
-                "splice of a reflection of a string literal object"
-            }
-            Some(Scalar::Pointer { base: PtrBase::TypeInfo(_), .. }) => {
-                "splice of a reflection of a 'std::type_info' object"
-            }
-            _ => "splice of a reflection of this subobject",
+            _ => "splice of a reflection of this object",
         }
     }
 

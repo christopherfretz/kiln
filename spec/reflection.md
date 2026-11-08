@@ -98,7 +98,7 @@ Section references in brackets are to the C++26 IS.
 |---|---|---|---|
 | `Null` | — | the null reflection | implemented |
 | `Type(QualType)` | the type, alias sugar kept at the top (§2.3) | a type, or a type alias | implemented, dependent `^^typename T::type` included (WP-519) |
-| `Decl(DeclId)` | first declaration | variable, function, data member, enumerator, structured binding | implemented: operator, conversion and destructor functions and dependent qualified names (`^^T::x`) included (WP-519; spec/reflection-repr.md §2) |
+| `Decl(DeclId)` | first declaration | variable, function, data member, enumerator, structured binding | implemented: operator, literal operator, conversion and destructor functions and dependent qualified names (`^^T::x`) included (WP-519; spec/reflection-repr.md §2; literal operator pinned by `meta.reflection.queries/functions.cpp`, WP-830); a member name in `^^C::m` is access-checked ([class.access]/4; `expr.reflect/member-access*.cpp`, WP-830) |
 | `Namespace(DeclId)` | first declaration | a namespace (`^^::` is the TU) | implemented |
 | `NamespaceAlias(DeclId)` | the alias declaration | a namespace alias | implemented |
 | `Template(TemplateNameId)` | the template name | a class, function, variable or alias template, or a concept | implemented, dependent `^^T::template m<U>` included (WP-519) |
@@ -107,7 +107,7 @@ Section references in brackets are to the C++26 IS.
 | `BaseSpec(DeclId, u32)` | derived class's first declaration, base index | a direct base class relationship | implemented (WP-478) |
 | `DataMemberSpec(DmsId)` | an interned spec | a `data_member_spec` result | implemented (WP-480) |
 | `FnParam(DeclId, u32)` | function's first declaration, parameter index | a function parameter (`parameters_of`) | implemented (WP-478) |
-| `Annotation(AnnId)` | one annotation occurrence | an annotation (§7) | implemented (WP-481; queries WP-478) |
+| `Annotation(AnnId)` | one annotation occurrence | an annotation (§7) | implemented (WP-481; queries WP-478; on base-specifiers and per element of a function parameter pack, WP-830) |
 
 - Each variant's payload is at most 8 bytes: a compile-time assertion
   keeps `size_of::<Reflectee>()` at most 12 bytes
@@ -152,7 +152,7 @@ the IS equality ([expr.eq]):
 - `memcpy`/`memmove` between an `info` object and an object of another
   type is not a constant expression ("cannot constant evaluate 'memcpy'
   from object of type 'unsigned long' to object of type
-  'std::meta::info'"; implemented, no dedicated test yet), and
+  'std::meta::info'"; implemented: `reflection/typed-copy-memcpy-neg.cpp`), and
   `__builtin_bit_cast` to or from `info` is rejected by sema (not
   trivially copyable; implemented: `reflection/value-model-neg.cpp`).
 - The shadow therefore needs no reflection kind; it keeps only its init
@@ -549,7 +549,7 @@ answers as of that point.
   (`meta_calls`, `meta_cache_hits`, `injected_decls`,
   `instantiations_from_meta`) were not added: WP-483's bench gates on the
   existing counters (`steps`, `peak_bytes`, `peak_arena`, `evaluations`).
-- The reflection bench shapes (`bench/reflect/` S1–S9, spec/bench.md
+- The reflection bench shapes (`bench/reflect/` S1–S10, spec/bench.md
   "Reflection shapes") and the 4N scaling gate are WP-483's; their
   results are in docs/status/perf.md and
   docs/status/perf-reference-workload.md "kiln vs GCC 16.1".
@@ -747,8 +747,8 @@ position's operand).
 
   | Position | Syntax | Accepts | Status |
   |---|---|---|---|
-  | type | `typename [: r :]` [dcl.type.splice]; a bare `[: r :]` in a type-only context ([temp.res.general]/4: an alias-declaration, a namespace-scope or member decl-specifier, a member function's parameter, a trailing return type, a template parameter's default, a cast's or `new`'s type-id); `[: r :]` as a template type argument | a type or a type alias | implemented (`dcl.type.splice/`) |
-  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`); a value or object as below ("Value and object splices", WP-550: `expr.prim.splice/value-*.cpp`, `object-*.cpp`), except an object with no declaration |
+  | type | `typename [: r :]` [dcl.type.splice]; a bare `[: r :]` in a type-only context ([temp.res.general]/4: an alias-declaration, a namespace-scope or member decl-specifier, a member function's parameter, a trailing return type, a template parameter's default, a cast's or `new`'s type-id); in a template argument list only as `typename [: r :]` (a bare `[: r :]` forming a whole template-argument is ill-formed, [temp.names]/1: `parse_splice_template_arg_unparenthesized`, `temp.names/splice-template-argument-unparenthesized.cpp`; a splice that only starts an argument, `[: r :] + 1`, `([: r :])`, `[: r :]::type`, is an ordinary operand, `temp.names/splice-template-argument.cpp`; WP-830) | a type or a type alias | implemented (`dcl.type.splice/`) |
+  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`); a value or object as below ("Value and object splices", WP-550: `expr.prim.splice/value-*.cpp`, `object-*.cpp`), an object with no declaration included (WP-830) |
   | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category) | implemented; the base form is `basic.splice/p3293-base-subobject.cpp` |
   | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration (or an alias of one) | implemented (`basic.splice/splice-scope-specifier.cpp`, `namespace.udecl/splice-scope.cpp`) |
   | template | `template [: r :] < args >` [temp.names] in an expression, after `typename` or in a type-only context, and as a scope (`template [: r :] < args > ::`); `template [: r :]` alone before a call | a class or alias template in a type or scope; a variable template, concept or function template in an expression | implemented (`temp.names/splice-*.cpp`; spec/landed/reflection/WP-482.md) |
@@ -795,18 +795,39 @@ position's operand).
   is not assignable" / "cannot assign to variable ... with
   const-qualified type" for a const object, and `reflect_object` of an
   automatic variable is not a constant expression ("pointer to 'x' is not
-  a constant expression"). **Not supported yet** (`parse_unsupported`;
-  GCC 16.1 accepts them): an object with no declaration, i.e. a
-  `PtrBase::Const` object of `reflect_constant_string` /
-  `reflect_constant_array` (needs an expression form whose Oven and
-  codegen lvalue is that frozen object), a string literal object and a
-  `std::type_info` object.
+  a constant expression"). An object no declaration names (a
+  `PtrBase::Const` object: a `reflect_constant_string` /
+  `reflect_constant_array` result, a `define_static_array` element, or a
+  subobject of one) splices to `*p` of the constant pointer `p` to it
+  (`Sema::const_object_lvalue`; a `const` template parameter object,
+  [temp.param]/8), which the Oven and codegen read as any constant pointer
+  (`expr.prim.splice/object-no-declaration-run.cpp`; WP-830). An object
+  template argument of `substitute`/`reflection_template_arg` at a
+  non-zero offset of its complete object is the same subobject lvalue
+  (`meta.reflection.substitute/object-subobject-args-run.cpp`). A string
+  literal object ([lex.string]/9), a `std::type_info` object
+  ([expr.typeid]/1) and a lifetime-extended temporary splice the same
+  way. `reflect_object` cannot reach them ([temp.arg.nontype]/6), but
+  `object_of(^^R)` of a reference `R` usable in constant expressions is
+  the object `R` refers to: the pointer value of `R`'s initializer,
+  interned cv-unqualified like every object reflection, so
+  `object_of(^^r) == object_of(^^v)` for `r` bound to `v`. String literal
+  and type_info objects are const for `type_of`/`is_const`
+  (`expr.prim.splice/p2-unnamed-static-object-run.cpp`, compared with
+  GCC 16.1; WP-870 via WP-879). GCC gives the type_info object an
+  internal pseudo type not derived from `std::type_info`; kiln gives it
+  `const std::type_info`, the type [expr.typeid]/1 names.
 - **Member functions.** A member-function splice is not a qualified-id, so
   `e.[: ^^B::f :]()` of a virtual `f` is a virtual call ([expr.call]/2; the
   [dcl.contract.func] example). `&[: ^^B::f :]` is a pointer to member.
 - **Access.** Splices are not access-checked: a splice of a private member
   is valid from anywhere (P2996; GCC 16.1 agrees). Access is the business of
   the query that produced the reflection (`access_context`, WP-478).
+  The name in a reflect-expression is: `^^C::m` of a member inaccessible at
+  the `^^` is ill-formed ([class.access]/4; `expr.reflect/member-access*.cpp`,
+  WP-830). GCC 16.1 checks data members and nested types but accepts a
+  private member function's name; kiln follows the draft
+  (`member-access-function-neg.cpp` has no oracle).
 - **Dependent splices.** A value-dependent operand produces a `Splice`
   type node (a type splice), a `CXXSpliceExpr` (an expression or member
   splice; with the object expression when that or the operand is
@@ -1201,8 +1222,11 @@ the spelling; the default is `kiln`.
 - **GCC link compatibility.** In gcc mode, kiln objects and g++-16 objects
   link against each other for reflection-keyed symbols. `gcc_link_compat`
   requires every `Dm` symbol defined by both compilers to be equal, with at
-  least 25 of them. The remaining name differences are general ABI
-  divergences, not reflection ones (spec/abi.md §8):
+  least 25 of them. The corpus test
+  `tests/conformance/expr.reflect/reflection-mangle-gcc-run.cpp` prints the
+  `typeid(...).name()` of a class template keyed by every kind and is
+  compared with g++-16's output (WP-879). The remaining name differences
+  are general ABI divergences, not reflection ones (spec/abi.md §8):
   - GCC writes `L` before an anonymous namespace's members
     (`N12_GLOBAL__N_1L5anonvE`);
   - GCC writes an empty non-type pack as `JE` without `TpTnDm`;
@@ -1211,6 +1235,12 @@ the spelling; the default is `kiln`.
     clang write `…EEE1cfp_ES0_`);
   - GCC gives template static data members `STB_GNU_UNIQUE` (`nm` letter
     `u`, where kiln writes `V`).
+- **`type_info` of the info type.** The C++ runtime defines no `type_info`
+  for `std::meta::info`, so `typeid(info)` defines `_ZTI<info-type>` and
+  `_ZTS<info-type>` where used, `linkonce_odr` in a comdat with
+  `__fundamental_type_info`'s vtable, as g++-16 does for `_ZTIDm`, in every
+  form (WP-879; before it kiln referenced an undefined external one).
+  `kiln_codegen/tests/reflection_mangle.rs`, `expr.reflect/typeid-info-run.cpp`.
 - **Cost.** These numbers are for bench shape S9 (spec/bench.md):
   - N types `lib::Tnnnn`;
   - `f<^^Tnnnn>()` and `S<^^Tnnnn>::count` for each type;
@@ -1249,6 +1279,24 @@ the spelling; the default is `kiln`.
   compared against a TU-local form that could not link across TUs. Against
   a type-keyed template of the same linkage shape, codegen RSS is within
   3%.
+- **Cost on deep keys (WP-879).** Keys that are nested template-ids
+  (bench shape S10; the study's generator varies N, depth D and width W,
+  spec/landed/sema/WP-879.md has the command lines and every number):
+  - **Length.** The mangled name grows linearly in D × W, and the forms
+    differ by a constant: `Dm` is 6 bytes shorter than `u6__info` per
+    reflection literal, so the gcc form is 1-5% shorter on these keys.
+    kiln-hashed is fixed at 57 bytes.
+  - **Time.** Mangling costs about 30 ns per emitted byte in both forms
+    (measured in-process, best of 30), linear in N, D and W. Neither form
+    is superlinear. At N=500, D=6, W=6 it is 12.7 ms (kiln) and 12.8 ms
+    (gcc) of about 200 ms for `-c`. kiln-hashed costs the same, because it
+    hashes the full name.
+  - **Substitutions.** A key whose arguments repeat the previous level
+    (the source doubles per level) grows its name by only 16 bytes per
+    level, and mangling time grows with the name, not with the source.
+  - **Whole compile.** Wall time, CPU time and peak RSS of `kiln` and
+    `gcc` mode agree within run-to-run noise, at every size measured.
+    The objects differ only by the symbol bytes.
 - A consteval-only value reaching codegen stays the error of §4.1, not a
   mangling question: a non-template `info` variable with static storage
   that is not `constexpr` is rejected before any symbol exists
@@ -1282,7 +1330,7 @@ the spelling; the default is `kiln`.
 - **WP-470 tests.** `reflection/dispatch-inline-ns.cpp` covers §3.1.
   `reflection/memo-purity.cpp` covers §3.3 and §3.6.
 - **Bench.** The `bench/reflect/` shapes and the scaling gate are WP-483's
-  (S1–S6; S7/S8 WP-551, S9 WP-501; spec/bench.md).
+  (S1–S6; S7/S8 WP-551, S9 WP-501, S10 WP-879; spec/bench.md).
 - **Status.** `docs/STANDARD_SUPPORT.md` "C++26 reflection" has one
   row per WP-470..485. The spike's findings are frozen in
   docs/status/reflection-spike.md.

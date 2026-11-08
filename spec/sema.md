@@ -96,7 +96,7 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   operator`.
 - **Attributes and `nodiscard`** (WP-377). A `[[scope::name]]`
   attribute is named in diagnostics as written, with its scope
-  normalized and `__x__` stripped (`'gnu::aligned'`, `'clang::x'`;
+  normalized and `__x__` stripped as below (`'gnu::aligned'`, `'clang::x'`;
   `attr_shown`, `decl_attrs.rs`); clang 19 prints the bare name. An
   unused call whose *type* (not the callee) is `[[nodiscard]]`, or an
   unused temporary of such a type built by a constructor without its own
@@ -2152,8 +2152,32 @@ and returns the scope it names:
   [-Wignored-attributes]; clang's subject warnings apply. Tests:
   `tests/conformance/dcl.attr.grammar/sanitizer-*.cpp`,
   `gnu-no-sanitize-clang{19,22}.cpp`.
-- **Known and ignored, no diagnostic: `lifetimebound`** (WP-667; until
-  WP-674): attaches nothing; no `-Wdangling` analysis.
+- **Lifetime attributes** (WP-674; `class_b_attrs.rs`,
+  `decl_attrs.rs`; the analysis is spec/sema-class.md §5.4 "Lifetime
+  analysis"):
+  - `[[clang::lifetimebound]]` / `__attribute__((lifetimebound))`
+    (`AttrKind::LIFETIMEBOUND`) on a parameter (`a == 0`) or, written
+    after a member function's declarator, on its implicit object
+    parameter (`a == 1`). clang 19's subject checks: `'lifetimebound'
+    attribute only applies to parameters and implicit object
+    parameters` (an error) elsewhere, `'lifetimebound' attribute
+    cannot be applied to types` in a type position, and the errors
+    `'lifetimebound' attribute cannot be applied to a
+    {constructor|destructor}` and `'lifetimebound' attribute cannot be
+    applied; {static |non-}member function has no implicit object
+    parameter`. Builtin `__builtin_addressof`'s parameter carries it
+    implicitly.
+  - `[[gsl::Owner]]` / `[[gsl::Pointer]]` (`GSL_OWNER`, `GSL_POINTER`)
+    with an optional type argument (the owned / pointed-to type): only
+    on classes and class templates (`'Owner' attribute only applies to
+    structs` [-Wignored-attributes] on a union, enum or variable); `a reference type|an array type ... is an
+    invalid argument to attribute` for a reference or array argument;
+    `'Owner' and 'Pointer' attributes are not compatible` (with a note at
+    the other) when a class has both, and the same error for a repeat
+    naming a different type (as written) across the class's
+    redeclarations. The implicit `std` annotations (clang
+    `inferGslOwnerPointerAttribute`) are computed on demand by
+    `Sema::gsl_kind` (`class/temporary/gsl.rs`).
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
@@ -2209,6 +2233,19 @@ and returns the scope it names:
   `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
   `always_inline` with the GNU flag. Test:
   `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
+- **Attribute names** (WP-678; clang `normalizeAttrName`,
+  `kiln_ast::attr::normalize_attr_name` / `attr_name_normalizes`): for
+  every attribute, in GNU syntax and in `[[...]]` with no scope or the
+  (normalized) `gnu` or `clang` scope, a name written `__x__` is looked
+  up as `x`: exactly one leading and one trailing `__`, removed only when
+  both are present on a name of at least four characters. `__noinline`,
+  `noinline__` and `____noinline____` are unknown attributes (named as
+  written), `[[msvc::__noinline__]]` keeps its name, and clang's own
+  one-sided spellings `__const` (`GCC<"__const">`) and
+  `__clang_arm_builtin_alias` are matched as such. The parser's
+  argument-shape tables, `__has_attribute` / `__has_cpp_attribute` and
+  the diagnostic name (`attr_shown`) use the same rule. Test:
+  `tests/conformance/dcl.attr.grammar/gnu-attribute-name-normalization.cpp`.
   - GNU `section("name")` (WP-716, clang `handleSectionAttr`): exactly
     one string literal (`expected string literal as argument of
     'section' attribute`, `'section' attribute takes one argument`), on
@@ -4213,6 +4250,54 @@ Names there are not odr-used.
   capture; WP-336).
 - The dump reads `used` and `referenced` from the first declaration.
 
+**Undefined but used entities** (WP-840, `undefined_used.rs`; clang
+`Sema::checkUndefinedButUsed`, [basic.def.odr]/11, [basic.link]/8):
+- Every odr-use outside a template and outside an unevaluated operand
+  (`mark_used_at`, and the variables `act_on_full_expr` marks used)
+  records the first declaration and the location of its first use, when
+  the function or variable has no definition yet (a defaulted or deleted
+  function counts as defined).
+- A default argument is potentially evaluated only where a call uses it
+  ([dcl.fct.default]/5; clang's `PotentiallyEvaluatedIfUsed`): the uses
+  recorded while one is parsed (in place or replayed,
+  `begin_default_arg_uses` / `end_default_arg_uses`) move to the stored
+  argument and are recorded again at each call that uses it
+  (`queue_default_arg_uses`).
+- At the end of the translation unit (`act_on_end_of_translation_unit`,
+  after the pending instantiations and the delegating-constructor
+  cycles, before the unused-file-scope warnings), and only when no
+  error was emitted, each recorded entity still undefined is diagnosed
+  at its first declaration, in first-use order, with a `note: used here`
+  at the use. Skipped: deduction guides, invalid declarations, `weakref`
+  and `alias` entities, variables with an initializer on any
+  redeclaration (an in-class static member initializer), builtins,
+  pure virtual functions (kiln does not tell a virtual call from a
+  qualified one), and anything in namespace `std` or nested in it (the
+  evaluator supplies the `std::meta` metafunctions and a `constexpr`
+  `std::uncaught_exceptions` without a definition).
+- The classification, in order:
+  - external formal linkage, not `extern "C"`, and a type that is not
+    externally visible (a lambda, local class or unnamed-namespace class
+    in the function type or the variable type): an error,
+    "{function|variable} 'N' is used but not defined in this translation
+    unit, and cannot be defined in any other translation unit because
+    its type does not have linkage";
+  - not externally visible (internal linkage, an unnamed namespace, a
+    specialization or member taking internal linkage from a template
+    argument or its class): `-Wundefined-internal`, "{function|variable}
+    'N' has internal linkage but is not defined";
+  - an inline function (`inline`, implicitly inline or `constexpr`, no
+    `gnu_inline`): `-Wundefined-inline`, "inline function 'N' is not
+    defined"; an inline variable: the error "inline variable 'N' is not
+    defined".
+- A function template specialization is named with its template
+  arguments (`g<(lambda at f.cpp:3:5)>`); each specialization of one
+  template is reported, all at the template's location.
+- Not implemented: clang's vtable-use marking (an undefined virtual
+  member of an unnamed-namespace class whose vtable is used is not
+  reported).
+- Tests: `tests/conformance/basic.def.odr/undefined-but-used-*.cpp`.
+
 ### 5.3 The `noexcept` operator (`except.rs`)
 `act_on_noexcept_expr(e, loc, rparen)` ([expr.unary.noexcept]) builds
 a `CXXNoexceptExpr`: a `bool` prvalue whose operand is unevaluated
@@ -5215,7 +5300,14 @@ for them.
     expansion; after taking both locations out of macro arguments, it is
     dropped when that location and the conversion's context are in
     different files or macro expansions (`#define MYNULL __null` does
-    not warn).
+    not warn). The same check covers an operand of type
+    `std::nullptr_t` (`!nullptr`, `nullptr && b`, `if (nullptr)`, a
+    `std::nullptr_t` variable), as `implicit conversion of nullptr
+    constant to 'T'`, reported at the operand with no `NULL` macro step;
+    a conditional operator source is checked arm by arm (clang's
+    `CheckConditionalOperator`; WP-851,
+    `conv.bool/nullptr-null-conversion.cpp`). kiln prints no `false`
+    fix-it.
   - [-Wnull-arithmetic] (clang's `checkArithmeticNull`), at the operator
     of a built-in `+ - * / % << >> & ^ |`, compound assignment, or
     comparison with a `__null` operand (implicit casts and parentheses
@@ -5826,6 +5918,10 @@ and `DiagnoseMisalignedMembers`:
 - **Discard.** A conversion of the recorded `&m` drops it when the
   target is an integer, a dependent type, or a pointer to an incomplete
   type or to a type aligned no more than the culprit:
+  - an explicit cast (C-style, named other than `dynamic_cast`,
+    functional), when it is built (`act_on_cast`; clang
+    `BuildCStyleCastExpr` / `BuildCXXNamedCast`), before the rest of the
+    enclosing expression is parsed (WP-659);
   - every cast node in the full-expression (implicit and explicit);
   - `implicit_convert` in any context except simple assignment (clang's
     `InitializationSequence::Perform` step, even for an identity
@@ -5838,12 +5934,21 @@ and `DiagnoseMisalignedMembers`:
   the `MemberExpr`'s begin location: `taking address of packed member
   'm' of class or structure 'C' may result in an unaligned pointer
   value`. An anonymous class is named by its typedef.
+  Every full-expression reports every pending candidate, including one
+  that a nested full-expression (a template argument, a lambda body, a
+  function body instantiated mid-expression) finds pending from its
+  enclosing expression. Neither kiln nor clang sets the candidates aside
+  in `in_inst_context`: in `fv(&p.i, A<3>::w)` with `fv(void *, int)`
+  the `&p.i` is reported, by clang too, because the argument conversion
+  that would drop it comes after `3`'s full-expression. An explicit cast
+  is dropped earlier, so `f((char *)&p.i, A<3>::w)` is not reported.
 - **Deviations:**
   - A non-dependent `&m` in a template is reported once, at the
     definition. clang repeats it in every instantiation.
   - An anonymous union or struct member as the culprit prints as `''`.
     clang prints `C::(anonymous union at ...)`.
-- Test: `tests/conformance/expr.unary.op/address-of-packed-member.cpp`.
+- Tests: `tests/conformance/expr.unary.op/address-of-packed-member.cpp`,
+  `address-of-packed-member-nested-full-expression.cpp`.
 
 ### 5.15 `-Wnull-dereference` (`null_deref.rs`, WP-191)
 The two syntactic `*null` checks of clang 19
@@ -8070,14 +8175,18 @@ from `stmt_flow` / `dead_scan`. The AST walks they replace
   skipped; an instantiation of another templated entity (a member of a
   class template, a lambda in a template) inherits its pattern's
   inference without a second warning, while a function template
-  specialization is inferred, and warned, afresh. An inferred function
+  specialization is inferred, and warned, afresh. A lambda's call
+  operator below C++23 is inferred without the warning (clang 22 warns
+  for one only from C++23; WP-841, range-v3 `chunk_by.cpp`
+  `[](int, int) -> bool { throw 0; }` under `-std=c++20`). An inferred function
   is not suggested again by the graph form. In a value-returning
   caller, a body whose last statement is a throw-expression, or a call
   whose direct callee is inferred noreturn, has no -Wreturn-type
   (clang's syntactic check ahead of `CheckFallThroughForBody`).
 - Tests: `expr.call/infinite-recursion*.cpp`,
   `dcl.attr.noreturn/missing-noreturn*.cpp` (the `-inferred` pair under
-  `requires: clang>=22` / `clang<22`),
+  `requires: clang>=22` / `clang<22`; `-lambda-cxx20` and
+  `-lambda-cxx23`),
   `stmt.pre/cfg-analysis-skipped.cpp` (the size cap remark).
 
 ### 7.6 Landed (WP-089): range-based `for` (`range_for.rs`)

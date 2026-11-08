@@ -10,7 +10,7 @@
 //! `-Wimplicit-int-float-conversion` and
 //! `-Wimplicit-const-int-float-conversion`, an integer whose likely range
 //! (`int_range.rs`) does not fit a floating type's significand;
-//! and `-Wnull-conversion` for GNU `__null` (`gnu_null.rs`).
+//! and `-Wnull-conversion` for GNU `__null` and `nullptr` (`gnu_null.rs`).
 
 use kiln_ast::consts::FloatKind;
 use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, UnaryOp};
@@ -132,9 +132,7 @@ impl Sema<'_, '_> {
     fn check_conversion(&mut self, e: ExprId, src: ExprId, cc: Loc, list: bool) {
         let to = self.ast.exprs.get(e).ty();
         let from = self.ast.exprs.get(src).ty();
-        if self.ast.exprs.get(src).kind() == ExprKind::GNUNullExpr {
-            self.check_null_conversion(src, to, cc);
-        }
+        self.null_conversion(src, to, cc, 0);
         if self.ast.types.builtin(to) == Some(BuiltinType::Bool) {
             let from = self.ast.types.canonical(from);
             if self.ast.types.is_pointer(from)
@@ -173,6 +171,23 @@ impl Sema<'_, '_> {
             return;
         }
         self.integer_constant_imp_cast(src, to, shown, cc);
+    }
+
+    /// `-Wnull-conversion` for `src` (implicit casts stripped) converted
+    /// to `to`: `__null` or a `std::nullptr_t` operand, or, as clang's
+    /// `CheckConditionalOperator`, each such arm of a conditional.
+    fn null_conversion(&mut self, src: ExprId, to: QualType, cc: Loc, depth: u32) {
+        let n = *self.ast.exprs.get(src);
+        if n.kind() == ExprKind::ConditionalOperator && depth < 64 {
+            for arm in self.ast.exprs.cond_arms(src) {
+                let a = self.strip_impcast(arm);
+                self.null_conversion(a, to, cc, depth + 1);
+            }
+        } else if n.kind() == ExprKind::GNUNullExpr
+            || self.is_nullptr_type(self.ast.types.canonical(n.ty()))
+        {
+            self.check_null_conversion(src, to, cc);
+        }
     }
 
     /// clang's `DiagnoseAlwaysNonNullPointer` for the conversion `cast`

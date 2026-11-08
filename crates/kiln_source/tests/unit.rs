@@ -155,7 +155,7 @@ fn lex_phases_invalid_utf8_replacement_positions() {
 // [cpp.include]: file identity is by canonical path; the name is the path
 // as first given.
 #[test]
-fn cpp_include_file_identity_by_canonical_path() {
+fn cpp_include_file_identity_by_device_and_inode() {
     let dir = TempDir::new("identity");
     let a = dir.0.join("a.h");
     let b = dir.0.join("b.h");
@@ -173,6 +173,10 @@ fn cpp_include_file_identity_by_canonical_path() {
         let link = dir.0.join("link.h");
         std::os::unix::fs::symlink(&a, &link).unwrap();
         assert_eq!(sm.load_file(&link).unwrap(), fa);
+        // A hard link is the same file too (WP-820: no canonicalization).
+        let hard = dir.0.join("hard.h");
+        fs::hard_link(&a, &hard).unwrap();
+        assert_eq!(sm.load_regular_file(&hard).unwrap(), fa);
     }
     let fb = sm.load_file(&b).unwrap();
     assert_ne!(fa, fb);
@@ -185,6 +189,7 @@ fn cpp_include_file_identity_by_canonical_path() {
         other => panic!("expected NotFound, got {other:?}"),
     }
     assert!(matches!(sm.load_file(&dir.0.join("sub")), Err(LoadError::Io(_))));
+    assert!(matches!(sm.load_regular_file(&dir.0.join("sub")), Err(LoadError::Io(_))));
 }
 
 // [cpp.predefined]: virtual buffers (<built-in>, <command line>) are never

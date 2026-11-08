@@ -239,17 +239,8 @@ impl Sema<'_, '_> {
     /// makes the class invalid (spec/sema-class.md §2.3), a duplicate or
     /// unresolved base name does not.
     pub fn act_on_base_specifiers(&mut self, r: DeclId, specs: &[BaseSpecInfo]) {
-        // [dcl.attr.annotation]/1 allows annotations on a base-specifier;
-        // kiln has no key for one in the annotation table yet
-        // (spec/annotations.md §9).
-        for b in specs {
-            for &a in &b.attrs {
-                let n = *self.ast.attrs.get(a);
-                if n.kind == kiln_ast::attr::AttrKind::ANNOTATION {
-                    self.unsupported("annotations on a base-specifier", n.loc);
-                }
-            }
-        }
+        // Annotations on a base-specifier ([dcl.attr.annotation]/1) are
+        // recorded by `attach_bases` for each specifier it keeps.
         let _ = self.attach_bases(r, specs);
     }
 

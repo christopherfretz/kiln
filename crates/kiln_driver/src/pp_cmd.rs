@@ -131,6 +131,12 @@ impl Job<'_> {
                 arch: f.arch,
                 features: f.enabled(),
                 sve_vector_bits: f.sve_vector_bits,
+                branch_protection: (self.args.codegen.branch_protection(true))
+                    .unwrap_or_default()
+                    .macros()
+                    .into_iter()
+                    .map(|(n, v)| (n.to_owned(), v))
+                    .collect(),
             };
         } else if let Some(cpu) = crate::features::resolve(self.args, &self.toolchain.target).0.cpu
         {
@@ -283,7 +289,7 @@ impl Job<'_> {
         let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));
         if let Some(d) = &deps {
             let d2 = Rc::clone(d);
-            search.set_observer(Box::new(move |sm, e| on_search_event(&d2, sm, e)));
+            search.set_observer(Box::new(move |_, e| on_search_event(&d2, e)));
         }
         let mut opts = self.pp_options(predefines);
         opts.parser_pragmas = staged;
@@ -358,7 +364,7 @@ impl Job<'_> {
             pp.set_feature_queries(Box::new(features));
         }
         if let Some(d) = &deps {
-            pp.set_callbacks(Box::new(DepCallbacks { list: Rc::clone(d), sm }));
+            pp.set_callbacks(Box::new(DepCallbacks::new(Rc::clone(d), sm)));
         }
         pp.enter_main_file(main);
         Some((pp, deps))
@@ -487,9 +493,14 @@ impl StagedFeatures {
             "_Clang" => "clang",
             s => s,
         });
-        // Trimmed as `Sema::act_on_attribute` trims it (clang's
-        // `__clang_arm_builtin_alias` has a leading `__` only).
-        let name = name.trim_start_matches("__").trim_end_matches("__");
+        // Normalized as `Sema::act_on_attribute` normalizes it (clang
+        // `normalizeAttrName`: `__clang_arm_builtin_alias` and `__const`
+        // keep their leading `__`).
+        let name = if kiln_ast::attr::attr_name_normalizes(syntax, scope) {
+            kiln_ast::attr::normalize_attr_name(name)
+        } else {
+            name
+        };
         kiln_sema::attr_triage::attribute_support(
             name,
             syntax,

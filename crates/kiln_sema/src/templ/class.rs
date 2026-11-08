@@ -11,7 +11,7 @@ use kiln_ast::ids::{ArgListId, TemplateNameId};
 use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TemplateName, TypeFlags, TypeView};
-use kiln_ast::{DeclId, QualType};
+use kiln_ast::{AnnId, DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -23,7 +23,7 @@ use crate::init::Initializer;
 use crate::scope::{Scope, ScopeKind};
 use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::stack::FrameKind;
-use crate::templ::subst::{LocalMethod, SubstFail, Substituter};
+use crate::templ::subst::{LocalMethod, SubstFail, SubstResult, Substituter};
 
 /// The parse state set aside while an instantiation runs in the context
 /// of its template (§4.5): an instantiation can be triggered from deep
@@ -914,6 +914,46 @@ impl Sema<'_, '_> {
         out
     }
 
+    /// Whether the definition of class `def` is being parsed, here or in
+    /// a context an enclosing instantiation set aside (clang
+    /// `TagDecl::isBeingDefined`).
+    pub(crate) fn class_being_defined(&self, def: DeclId) -> bool {
+        self.defining.contains(&def)
+            || self.classes.iter().any(|b| b.record == def)
+            || self.suspended_classes.iter().flatten().any(|b| b.record == def)
+    }
+
+    /// Whether specialization `spec` needs instantiating while its
+    /// pattern `def` is being defined, diagnosed as in
+    /// [`Sema::instantiate_class_as`].
+    fn instantiation_within_definition(
+        &mut self,
+        spec: DeclId,
+        def: DeclId,
+        poi: Loc,
+        diagnose: bool,
+        implicit: bool,
+    ) -> bool {
+        if !self.class_being_defined(def) {
+            return false;
+        }
+        let quiet =
+            self.invalid_defining.contains(&def) || self.ast.decls.get(def).has(DeclFlags::INVALID);
+        if diagnose && !quiet {
+            let t = self.tag_type(spec);
+            let d = self
+                .diag(DiagId::sema_template_instantiate_within_definition, poi)
+                .arg(u8::from(!implicit))
+                .arg(self.decl_ty_str(t));
+            self.emit(d);
+            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            self.inst.undefined_diagnosed.set(Some(spec));
+        } else {
+            self.inst.undefined_diagnosed.set(None);
+        }
+        true
+    }
+
     /// Instantiates the definition of class template specialization
     /// `spec` ([temp.inst]/2-3, §4.3): the member declarations are
     /// substituted, the member definitions are not (§4.4). `poi` is the
@@ -1021,7 +1061,15 @@ impl Sema<'_, '_> {
             }
             return false;
         };
-        if !self.push_inst_frame(FrameKind::ClassInstantiation, spec, tmpl, poi) {
+        // The pattern is still being defined (`basic<long>::m` inside
+        // `template<class S> struct basic`, [temp.inst]/2 needs the class
+        // complete, [class.mem.general]/8): clang
+        // `DiagnoseUninstantiableTemplate`, no note (we are lexically
+        // inside the template), the specialization made invalid; quiet
+        // once a member of incomplete type made the pattern invalid.
+        if self.instantiation_within_definition(spec, def, poi, diagnose, implicit)
+            || !self.push_inst_frame(FrameKind::ClassInstantiation, spec, tmpl, poi)
+        {
             return false;
         }
         if let Some((i, _)) = self.ast.spec_info(spec) {
@@ -1802,8 +1850,9 @@ impl Sema<'_, '_> {
     pub(crate) fn queue_default_arg_uses(&mut self, p: DeclId, loc: Loc) {
         let Some(d) = self.ast.decls.param(p).and_then(|x| x.default_arg) else { return };
         let Some(uses) = self.inst.deferred_default_uses.get(&d) else { return };
-        for (f, _) in uses.clone() {
+        for (f, at) in uses.clone() {
             self.note_used_for_instantiation(f, loc);
+            self.note_undefined_use(f, at);
         }
     }
 }
@@ -1884,18 +1933,62 @@ impl Substituter<'_, '_, '_> {
     /// ([temp.inst]/3: the base-clause is instantiated with the class;
     /// [temp.variadic]/5: a pack expansion gives one base per element).
     /// The flag is set when a base failed to substitute (clang
-    /// `InstantiateClass`: the specialization is then invalid).
-    fn class_bases(&mut self, def: DeclId) -> (Vec<BaseSpecInfo>, bool) {
+    /// `InstantiateClass`: the specialization is then invalid). With each
+    /// specifier, its annotations substituted for `spec`
+    /// ([dcl.attr.annotation]/3: new annotations; each element of a pack
+    /// expansion gets its own copies).
+    #[allow(clippy::type_complexity)]
+    fn class_bases(
+        &mut self,
+        spec: DeclId,
+        def: DeclId,
+    ) -> (Vec<BaseSpecInfo>, Vec<Vec<AnnId>>, bool) {
         // Base classes ([temp.inst]/3: the base-clause is instantiated
         // with the class).
         let bases: Vec<kiln_ast::decl::BaseSpec> =
             self.sema.ast.decls.bases(def, &self.sema.ast.lists).copied().collect();
         let mut specs = Vec::with_capacity(bases.len());
+        let mut anns: Vec<Vec<AnnId>> = Vec::new();
         let mut failed = false;
-        for b in bases {
+        let def_first = self.sema.ast.first(def);
+        for (bi, b) in bases.into_iter().enumerate() {
+            let ast = &self.sema.ast;
+            let pat: Vec<AnnId> =
+                ast.lists.iter::<AnnId>(ast.annots.of_base(def_first, bi as u32)).collect();
+            // [temp.variadic]/5.4: the pattern of `B...` is the whole
+            // base-specifier, so an annotation operand naming the pack is
+            // substituted per element (WP-867); the others once, copied.
+            let in_pattern = |a: AnnId| {
+                let n = ast.annots.get(a);
+                n.value.is_none()
+                    && ast
+                        .exprs
+                        .get(n.expr)
+                        .deps()
+                        .contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK)
+            };
+            let per_elem: Vec<AnnId> = if b.pack_expansion {
+                pat.iter().copied().filter(|&a| in_pattern(a)).collect()
+            } else {
+                Vec::new()
+            };
+            let once: Vec<AnnId> = if per_elem.is_empty() {
+                pat.clone()
+            } else {
+                pat.iter().copied().filter(|a| !per_elem.contains(a)).collect()
+            };
+            let mine =
+                if once.is_empty() { Vec::new() } else { self.subst_annotations(spec, &once) };
             if b.pack_expansion {
                 // [temp.variadic]/5: one base per element.
-                let tys = match self.expand_pattern(|s| s.element_ty(b.ty, b.loc)) {
+                let exprs: Vec<kiln_ast::ExprId> =
+                    per_elem.iter().map(|&a| self.sema.ast.annots.get(a).expr).collect();
+                let elems = self.expand_pattern(|s| {
+                    let ty = s.element_ty(b.ty, b.loc)?;
+                    let es = exprs.iter().map(|&e| s.expr(e)).collect::<SubstResult<Vec<_>>>()?;
+                    Ok((ty, es))
+                });
+                let elems = match elems {
                     Ok(crate::templ::pack::Expansion::Elements(v)) => v,
                     Ok(crate::templ::pack::Expansion::Unexpanded(_)) => {
                         let _ = self.unimplemented::<()>("base pack expansion", b.loc);
@@ -1906,7 +1999,7 @@ impl Substituter<'_, '_, '_> {
                         continue;
                     }
                 };
-                for ty in tys {
+                for (k, (ty, es)) in elems.into_iter().enumerate() {
                     specs.push(BaseSpecInfo {
                         ty,
                         loc: b.loc,
@@ -1915,22 +2008,47 @@ impl Substituter<'_, '_, '_> {
                         pack_expansion: false,
                         attrs: Vec::new(),
                     });
+                    let copies = if k == 0 { mine.clone() } else { self.sema.copy_annots(&mine) };
+                    if es.is_empty() {
+                        anns.push(copies);
+                        continue;
+                    }
+                    // Source order: the pattern's list, each operand
+                    // naming the pack taken from this element.
+                    let (mut copies, mut es) = (copies.into_iter(), es.into_iter());
+                    let mut list = Vec::with_capacity(pat.len());
+                    for &a in &pat {
+                        if per_elem.contains(&a) {
+                            let loc = self.sema.ast.annots.get(a).loc;
+                            if let Some(e) = es.next()
+                                && let Some(id) = self.sema.annotate(spec, e, loc)
+                            {
+                                list.push(id);
+                            }
+                        } else if let Some(id) = copies.next() {
+                            list.push(id);
+                        }
+                    }
+                    anns.push(list);
                 }
                 continue;
             }
             match self.ty(b.ty, b.loc) {
-                Ok(ty) => specs.push(BaseSpecInfo {
-                    ty,
-                    loc: b.loc,
-                    is_virtual: b.is_virtual,
-                    access: b.access,
-                    pack_expansion: false,
-                    attrs: Vec::new(),
-                }),
+                Ok(ty) => {
+                    specs.push(BaseSpecInfo {
+                        ty,
+                        loc: b.loc,
+                        is_virtual: b.is_virtual,
+                        access: b.access,
+                        pack_expansion: false,
+                        attrs: Vec::new(),
+                    });
+                    anns.push(mine);
+                }
                 Err(_) => failed = true,
             }
         }
-        (specs, failed)
+        (specs, anns, failed)
     }
 
     /// Defines `spec` from pattern definition `def` (bases, members,
@@ -2013,8 +2131,8 @@ impl Substituter<'_, '_, '_> {
         self.class_final_and_attrs(spec, def);
         self.map_contexts(&[(def, spec)]);
         let sub = self;
-        let (specs, mut invalid) = sub.class_bases(def);
-        invalid |= !sub.sema.attach_bases(spec, &specs);
+        let (specs, anns, mut invalid) = sub.class_bases(spec, def);
+        invalid |= !sub.sema.attach_bases_annotated(spec, &specs, &anns);
         // clang `CheckBaseSpecifier`: "if the base class is invalid the
         // derived class is as well" (`underlying_type<E>` deriving from an
         // `__underlying_type_impl<E>` whose `type` failed: a later

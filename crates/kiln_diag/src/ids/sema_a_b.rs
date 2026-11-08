@@ -46,6 +46,9 @@ sema_ambiguous_reference = Error (1) "reference to '{0}' is ambiguous";
 sema_ambiguous_suitable_delete = Warning [AmbiguousDelete] (2) "multiple suitable {0} functions for {1}; no 'operator delete' function will be invoked if initialization throws an exception";
 // WP-509 (spec/sema.md §7.5.1): kiln-only, no clang counterpart.
 sema_analysis_skipped = Remark [KilnAnalysisSkipped] (2) "flow-sensitive warnings for '{0}' skipped: its control-flow graph exceeds -fkiln-cfg-max-elems={1}";
+// [dcl.attr.annotation]/2, [temp.arg.nontype]/6 (WP-830): the value must be
+// a valid constant template argument, as for `reflect_constant`.
+sema_annotation_invalid_value = Error (1) "annotation value refers to {0}, which is not a valid constant template argument";
 sema_annotation_non_declaration = Error (0) "an annotation can appertain only to a declaration";
 sema_annotation_not_allowed = Error (1) "an annotation cannot appertain to {0}";
 sema_annotation_not_structural = Error (1) "annotation has non-structural type {0}";
@@ -71,6 +74,7 @@ sema_arith_void_pointer = Extension [GnuPointerArith] (1) "arithmetic on{0: a po
 // [expr.add]/1: in C++ a `void` or function pointee is an error, not
 // the GNU extension of C (WP-219)
 sema_arith_void_pointer_cxx = Error (1) "arithmetic on{0: a|} pointer{0:|s} to void";
+sema_arm_invalid_specialreg = Error (0) "invalid special register for builtin";
 sema_array_comparison = Warning [ArrayCompare] (0) "comparison between two arrays compare their addresses and will be deprecated in c++20; to compare array addresses, use unary '+' to decay operands to pointers";
 sema_array_comparison_cxx26 = WarningError [ArrayCompareCxx26] (0) "comparison between two arrays is ill-formed in C++26; to compare array addresses, use unary '+' to decay operands to pointers";
 sema_array_designator_empty_range = Error (2) "array designator range [{0}, {1}] is empty";
@@ -158,6 +162,7 @@ sema_attribute_const_pointer_args_only = Error (1) "{0} attribute only applies t
 sema_attribute_ignored_on_type = Warning [IgnoredAttributes] (1) "attribute {0} ignored, because it cannot be applied to a type";
 sema_attribute_ignored_parsing_type = Warning [IgnoredAttributes] (1) "{0} attribute ignored when parsing type";
 sema_attribute_implicit_this_arg = Error (1) "{0} attribute is invalid for the implicit this argument";
+sema_attribute_invalid_argument = Error (2) "{0:a reference type|an array type|a non-vector or non-vectorizable scalar type} is an invalid argument to attribute {1}";
 sema_attribute_missing_on_first_decl = Error (1) "{0} attribute does not appear on the first declaration";
 sema_attribute_no_calls_in_stmt = Warning [IgnoredAttributes] (1) "{0} attribute is ignored because there exists no call expression inside the statement";
 sema_attribute_no_effect_on_using = Warning [IgnoredAttributes] (1) "{0} currently has no effect on a using declaration";

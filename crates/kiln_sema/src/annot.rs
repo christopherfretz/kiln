@@ -28,7 +28,9 @@ impl Sema<'_, '_> {
     /// One parsed annotation `= e` (or `= e...`) at the `=` `loc`: an
     /// `ANNOTATION` attribute node whose `a` is the operand. An `...`
     /// makes the operand a pack expansion ([dcl.attr.grammar]/6); without
-    /// one an unexpanded pack is an error ([temp.variadic]/12).
+    /// one an unexpanded pack is an error ([temp.variadic]/12), except on
+    /// a base-specifier, which checks it once its own `...` is known
+    /// ([`Sema::check_base_annotation_packs`]).
     pub fn act_on_annotation(
         &mut self,
         e: ExprId,
@@ -38,6 +40,8 @@ impl Sema<'_, '_> {
         use crate::templ::pack::PackOperand;
         let e = if let Some(l) = ellipsis {
             self.act_pack_expansion(e, l)
+        } else if self.base_annotation_packs {
+            e
         } else if self.diagnose_unexpanded_pack(PackOperand::Expr(e), "expression", loc) {
             return None;
         } else {
@@ -55,6 +59,36 @@ impl Sema<'_, '_> {
             b: 0,
         };
         Some(self.ast.attrs.push(node))
+    }
+
+    /// Starts (`on`) or ends the attribute-specifier-seq of a
+    /// base-specifier, whose annotation operands may name a pack
+    /// ([`Sema::check_base_annotation_packs`]). Returns the previous
+    /// state, to restore.
+    pub fn set_base_annotation_packs(&mut self, on: bool) -> bool {
+        std::mem::replace(&mut self.base_annotation_packs, on)
+    }
+
+    /// The annotations of a parsed base-specifier, once whether it is a
+    /// pack expansion is known: the pattern of `B...` is the whole
+    /// base-specifier, its attribute-specifier-seq included
+    /// ([temp.variadic]/5.4), so `[[=sizeof(Bs)]] Bs...` gives each base
+    /// its own value (WP-867). Without the `...`, an operand naming a
+    /// pack is the unexpanded-pack error ([temp.variadic]/12) and the
+    /// annotation is dropped.
+    pub fn check_base_annotation_packs(&mut self, attrs: &mut Vec<AttrId>, pack_expansion: bool) {
+        use crate::templ::pack::PackOperand;
+        if pack_expansion || !self.has_annotations(attrs) {
+            return;
+        }
+        attrs.retain(|&a| {
+            let n = *self.ast.attrs.get(a);
+            if n.kind != AttrKind::ANNOTATION {
+                return true;
+            }
+            let Some(e) = ExprId::from_raw(n.a) else { return true };
+            !self.diagnose_unexpanded_pack(PackOperand::Expr(e), "expression", n.loc)
+        });
     }
 
     /// Whether `attrs` holds an annotation.
@@ -206,7 +240,7 @@ impl Sema<'_, '_> {
 
     /// One annotation of `d` with operand `e` at `loc`, appended to the
     /// table (not yet to `d`'s list).
-    fn annotate(&mut self, d: DeclId, e: ExprId, loc: Loc) -> Option<AnnId> {
+    pub(crate) fn annotate(&mut self, d: DeclId, e: ExprId, loc: Loc) -> Option<AnnId> {
         let (value, ty, expr) = self.annotation_value(e, loc)?;
         Some(self.ast.annots.push(Annotation { decl: d, value, loc, written_type: ty, expr }))
     }
@@ -254,6 +288,17 @@ impl Sema<'_, '_> {
         let c = self.act_on_constant_full_expr(c);
         match self.eval_const(c, EvalContext::new(EvalKind::TemplateArg, loc)) {
             Ok(v) => {
+                // [dcl.attr.annotation]/2: the annotation's value is
+                // `reflect_constant(V)`, so V must be a valid constant
+                // template argument: no pointer or reference into a string
+                // literal (`[[="abc"]]`), a temporary, a `typeid` result or
+                // a label ([temp.arg.nontype]/6). GCC 16.1 accepts
+                // `[[="abc"]]`; kiln follows the draft (WP-830).
+                if let Some(why) = self.bad_tparg_base(v) {
+                    let d = self.diag(DiagId::sema_annotation_invalid_value, loc).arg(why);
+                    self.emit(d);
+                    return None;
+                }
                 if self.ast.types.as_record(canon).is_some() {
                     self.builder().template_param_object(cty, v);
                 }
@@ -266,6 +311,17 @@ impl Sema<'_, '_> {
                 None
             }
         }
+    }
+
+    /// New annotations with the values of `anns` ([dcl.attr.annotation]/3:
+    /// each instantiation of an annotation is a distinct annotation).
+    pub(crate) fn copy_annots(&mut self, anns: &[AnnId]) -> Vec<AnnId> {
+        anns.iter()
+            .map(|&a| {
+                let n = *self.ast.annots.get(a);
+                self.ast.annots.push(n)
+            })
+            .collect()
     }
 
     /// `T` of an annotation must be structural ([dcl.attr.annotation]/2,
@@ -348,36 +404,80 @@ impl Sema<'_, '_> {
             .filter(|&c| self.kind_of(c) == DeclKind::CXXRecord)
             .or_else(|| self.ast.decls.get(f).ctx())
             .unwrap_or(self.ast.tu);
-        let params = self.annotated_param_pairs(f, pattern);
         self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(f);
             sub.map_contexts(&pairs);
+            let params = sub.annotated_param_pairs(f, pattern);
             sub.subst_entity_annotations(f, &anns, &params);
         });
         self.pop_inst_frame();
     }
-
-    /// The parameters of function `spec` paired with those of its pattern
-    /// `def` that carry annotations (a parameter's own, not merged across
-    /// redeclarations; spec/annotations.md §4). Empty when a pattern pack
-    /// expanded to a different count (spec/annotations.md §9).
-    fn annotated_param_pairs(&self, spec: DeclId, def: DeclId) -> Vec<(DeclId, DeclId)> {
-        if self.ast.decls.function(def).is_none() {
-            return Vec::new();
-        }
-        let (ps, qs) = (self.param_decls(spec), self.param_decls(def));
-        if ps.len() != qs.len() {
-            return Vec::new();
-        }
-        ps.into_iter()
-            .zip(qs)
-            .filter(|&(p, q)| p != q && self.ast.annots.has_list(q) && !self.ast.annots.has_list(p))
-            .collect()
-    }
 }
 
 impl Substituter<'_, '_, '_> {
+    /// The parameters of function `spec` paired with those of its pattern
+    /// `def` that carry annotations (a parameter's own, not merged across
+    /// redeclarations; spec/annotations.md §4). A pattern function
+    /// parameter pack pairs with each parameter it expanded to
+    /// ([temp.variadic]/5: each element is its own parameter, with its own
+    /// annotations; WP-830). An annotation operand cannot name the pack
+    /// (it is not a pack expansion pattern), so every element substitutes
+    /// the same operands. With one pack its length is what the other
+    /// parameters leave; with several (`L<A...>, A..., L<B...>, B...`),
+    /// each takes the length of its own expansion under the current
+    /// arguments, as [`Self::map_params`] does for the body (WP-866). A
+    /// pack that stays a pack (a member template's own, substituted with
+    /// its class) pairs one to one.
+    pub(crate) fn annotated_param_pairs(
+        &mut self,
+        spec: DeclId,
+        def: DeclId,
+    ) -> Vec<(DeclId, DeclId)> {
+        if self.sema.ast.decls.function(def).is_none() {
+            return Vec::new();
+        }
+        let (ps, qs) = (self.sema.param_decls(spec), self.sema.param_decls(def));
+        if !qs.iter().any(|&q| self.sema.ast.annots.has_list(q)) {
+            return Vec::new();
+        }
+        let is_pack = |s: &Self, q: DeclId| {
+            s.sema
+                .ast
+                .decls
+                .param(q)
+                .is_some_and(|x| x.flags & kiln_ast::decl::ParamData::PACK != 0)
+        };
+        let packs = qs.iter().filter(|&&q| is_pack(self, q)).count();
+        let lens: Vec<usize> = match packs {
+            0 => vec![1; qs.len()],
+            1 => {
+                let Some(n) = (ps.len() + 1).checked_sub(qs.len()) else { return Vec::new() };
+                qs.iter().map(|&q| if is_pack(self, q) { n } else { 1 }).collect()
+            }
+            _ => {
+                let mut v = Vec::with_capacity(qs.len());
+                for &q in &qs {
+                    v.push(if is_pack(self, q) { self.param_pack_len(q).unwrap_or(1) } else { 1 });
+                }
+                v
+            }
+        };
+        if lens.iter().sum::<usize>() != ps.len() {
+            return Vec::new();
+        }
+        let ast = &self.sema.ast;
+        let wanted = |&(p, q): &(DeclId, DeclId)| {
+            p != q && ast.annots.has_list(q) && !ast.annots.has_list(p)
+        };
+        let mut out = Vec::new();
+        let mut it = ps.into_iter();
+        for (q, n) in qs.into_iter().zip(lens) {
+            out.extend(it.by_ref().take(n).map(|p| (p, q)).filter(wanted));
+        }
+        out
+    }
+
     /// The annotations of pattern `def` (every declaration's, in order) on
     /// its instantiation `spec` ([dcl.attr.annotation]/3: each is a new
     /// annotation). A function template specialization's dependent ones
@@ -388,7 +488,7 @@ impl Substituter<'_, '_, '_> {
         if self.sema.ast.annots.is_empty() || spec == def {
             return;
         }
-        let params = self.sema.annotated_param_pairs(spec, def);
+        let params = self.annotated_param_pairs(spec, def);
         let ast = &self.sema.ast;
         let anns =
             if ast.annots.has_list(spec) { Vec::new() } else { ast.annots.of_entity(ast, def) };
@@ -435,7 +535,7 @@ impl Substituter<'_, '_, '_> {
     /// annotation with the same underlying constant), a dependent operand
     /// is substituted and evaluated. A failure is diagnosed and drops the
     /// annotation ([dcl.attr.annotation]/4: not a deduction failure).
-    fn subst_annotations(&mut self, spec: DeclId, anns: &[AnnId]) -> Vec<AnnId> {
+    pub(crate) fn subst_annotations(&mut self, spec: DeclId, anns: &[AnnId]) -> Vec<AnnId> {
         let mut out = Vec::with_capacity(anns.len());
         for &a in anns {
             let n = *self.sema.ast.annots.get(a);

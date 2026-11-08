@@ -542,7 +542,10 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `__BIGGEST_ALIGNMENT__` (16); `__builtin_alloca_with_align(n, a)`
       to `a / 8` (`tests/codegen/builtins_alloca.cpp`);
     - `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf`
-      are library builtins (`tests/codegen/builtins_printf_lib.cpp`).
+      are library builtins (`tests/codegen/builtins_printf_lib.cpp`), as
+      are `__builtin_printf`, `__builtin_vprintf`, `__builtin_vsprintf`
+      and the `scanf`, `sscanf`, `vscanf`, `vsscanf` forms (WP-841,
+      `tests/conformance/ext.gnu.builtins/printf-scanf-family-run.cpp`).
     - recognized C library functions (WP-419, clang `EmitBuiltinExpr`
       for a library builtin; spec/sema.md §5.4): a direct call of a
       declaration with a `lib_builtin` twin whose `__builtin_` form is an
@@ -967,7 +970,7 @@ Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
   pragma that needs another (FENV_ACCESS ON, FENV_ROUND other than
   FE_TONEAREST, trapping, rounding, a wider eval method) is an error.
 
-### 3.3 Pointer alignment (WP-819, WP-829, `builtins.rs` `pointer_with_alignment`)
+### 3.3 Pointer alignment (WP-819, WP-829, WP-847, `builtins.rs` `pointer_with_alignment`)
 clang `CodeGenFunction::EmitPointerWithAlignment`, mirrored case by case,
 gives a pointer operand's value, its known alignment, and whether that
 alignment is a declaration's (`AlignmentSource::Decl`). Its users:
@@ -984,7 +987,14 @@ alignment is a declaration's (`AlignmentSource::Decl`). Its users:
 - every `__atomic_*`/`__c11_atomic_*` pointer (`atomic.rs`), memcpy/
   memmove/memset-like builtins, `__builtin_clear_padding`, `va_arg`, NEON
   loads and stores, checked arithmetic results, and the placement
-  argument of a new-expression (§3.1).
+  argument of a new-expression (§3.1);
+- the operand of a delete-expression (`EmitCXXDeleteExpr`, WP-847): the
+  vtable pointer load of a virtual (deleting or destroying-delete)
+  destructor call and of `::delete`'s offset-to-top read the object at
+  that alignment, and `delete[]`'s array cookie load at
+  `min_align(min_align(align, cookie size), cookie offset)`. The null
+  test of a constant operand (`delete &g`) folds as LLVM's constant
+  folder does: `false` for a global that is not `extern_weak`.
 
 After skipping parentheses:
 - **No-op/bitcast** from a non-`void` pointer keeps the operand's
@@ -1062,6 +1072,80 @@ Not mirrored: a `delete` expression's operand still has the natural
 pointee alignment (clang `EmitCXXDeleteExpr` uses
 `EmitPointerWithAlignment`); it only affects the array-cookie and vtable
 loads.
+
+### 3.4 Target builtins (`arm.rs`; WP-724, WP-846)
+
+The `AArch64` ACLE builtins (`__builtin_arm_*`, `kiln_ast::decl::
+builtin::arm`, declared per spec/landed/sema/WP-724.md) lower as clang 19
+`EmitAArch64BuiltinExpr`; every one listed here is lowered (none stays in
+`UNLOWERED_BUILTINS`). Intrinsic attribute shapes are `kiln_llvm::
+intrinsics` (`target_nomem`, `target_intrinsic` with a `TargetMem`,
+`aarch64_prefetch`, `aarch64_break`).
+- **Hints, barriers, CRC32, bit counts** (WP-724): `llvm.aarch64.hint`
+  with clang's `HintID`, `llvm.aarch64.{dmb,dsb,isb}`, `clrex`, the
+  `crc32*` intrinsics (8/16-bit data zero-extended to `i32`; `crc32d` is
+  `crc32x`), `llvm.bitreverse`, `llvm.ctlz` (`i1 false`), `llvm.aarch64.cls`.
+- **Exclusive accesses** (`ldrex`/`ldaex`, `strex`/`stlex`): a 128-bit
+  value uses `llvm.aarch64.ld[a]xp` / `st[l]xp` as two `i64` halves
+  (the store goes through a temporary); anything else uses
+  `llvm.aarch64.ld[a]xr.p0` / `st[l]xr.p0`, whose address operand carries
+  `elementtype(iN)` (`N` the value's size), with the value truncated /
+  zero-extended to `i64`, bit-cast for floating types and converted for
+  pointers. A floating constant bit-cast to an integer folds
+  (`func.rs` `fold_cast`, as LLVM's `ConstantFoldCastInstruction`). At
+  `-O0` a load/store-exclusive retry loop can spin forever on real
+  hardware, under clang too (the spills between them clear the
+  reservation); the run test is `-O2`.
+- **System registers** (`rsr`, `rsr64`, `rsrp`, `rsr128`, `wsr`, `wsr64`,
+  `wsrp`, `wsr128`; clang `EmitSpecialRegisterBuiltin`): the string
+  literal as written becomes `!{!"name"}`, read with
+  `llvm.read_volatile_register.i64` (`.i128` for the 128-bit forms) or
+  written with `llvm.write_register`; `rsr`/`wsr` truncate / zero-extend
+  32 bits and `rsrp`/`wsrp` convert a pointer. The 128-bit forms need
+  `d128` (`-march=armv9.4-a+d128`).
+- **Conversions and random numbers**: `rint{32,64}{x,z}[f]` are
+  `llvm.aarch64.frint{32,64}{x,z}.{f32,f64}`, `jcvt` is
+  `llvm.aarch64.fjcvtzs`; `rndr`/`rndrrs` call the `{ i64, i1 }`
+  intrinsic, store the value through the operand (evaluated after the
+  call, as clang) and return the status zero-extended.
+- **64-byte loads and stores** (`ld64b`, `st64b`, `st64bv`, `st64bv0`):
+  the eight words go through `getelementptr i64, ptr v, i32 i`, stored
+  after `llvm.aarch64.ld64b` or loaded before the store intrinsic.
+- **GCS, `chkfeat`, `prefetch`, `trap`**: `llvm.aarch64.gcspopm` /
+  `gcsss` (side effects; clang 19's `gcsss` takes and returns `ptr`),
+  `llvm.aarch64.chkfeat` (no memory), `llvm.aarch64.prefetch` with the
+  five operands, and `trap(n)` as `llvm.aarch64.break(i32 n)` with no
+  `unreachable` after it.
+
+**Operand checks** (`kiln_sema` `arm_builtins.rs`, clang 19
+`SemaARM::CheckAArch64BuiltinFunctionCall`), after the arguments are
+converted and skipped while value-dependent; every error is at the
+callee's begin location:
+- The register operand of the system-register builtins must be a string
+  literal (through parentheses and implicit casts; "expression is not a
+  string literal"). With colons it must be exactly five base-10 fields
+  `o0:op1:CRn:CRm:op2` within `[0, max_o0]`, `[0, 7]`, `[0, 15]`,
+  `[0, 15]`, `[0, 7]` ("invalid special register for builtin"); `max_o0`
+  is 1 at `-fclang-compat=19` and 3 at 22 (clang 22 allows the full
+  `op0`). clang 19 accepts `1:...` and encodes it as `op0` 1, a `sysl`
+  that traps; kiln emits the same IR. A plain name is not checked,
+  except that a two-operand write of a PSTATE field (`spsel`, `daifclr`,
+  `daifset`, `pan`, `uao`, `dit`, `ssbs`, `tco`: `[0, 15]`; `allint`,
+  `pm`: `[0, 1]`) checks the value's range; the 128-bit forms never do.
+- `prefetch` operands 1–4 are in `[0, 1]`, `[0, 3]`, `[0, 1]`, `[0, 1]`
+  and `dmb`/`dsb`/`isb` take `[0, 15]` ("argument value V is outside the
+  valid range [lo, hi]"); a non-constant or non-integral one is
+  "argument to '<builtin>' must be a constant integer".
+- The exclusive accesses warn "passing T to parameter of type U discards
+  qualifiers" (`-Wincompatible-pointer-types-discards-qualifiers`, an
+  ExtWarn) when the pointee's qualifiers are dropped, before the pointee
+  type check. clang's size check (wider than 16 bytes) cannot fire on
+  `AArch64`: every integer, floating and pointer type is at most 16
+  bytes.
+
+Tests: `conformance/target.acle/` (`ir-*-19.cpp` exact under oracle 19,
+`exclusive-sysreg-run.cpp`, `operand-checks.cpp`,
+`special-register-o0{,-19}.cpp`), `kiln_sema` `arm_builtins::tests`.
 
 ## 4. Statements
 - `stmt.rs` covers compound, declaration, expression, null, if (with

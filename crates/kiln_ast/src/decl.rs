@@ -4974,6 +4974,24 @@ pub mod builtin {
     pub const SNPRINTF: u32 = 1113;
     /// `__builtin_sprintf` (`ic*RcC*R.`; lowered to `sprintf`).
     pub const SPRINTF: u32 = 1057;
+    /// WP-841: the rest of clang 19's `printf` / `scanf` family
+    /// (`Builtins.td`; clang 19 declares no `__builtin_fprintf`,
+    /// `__builtin_vfprintf`, `__builtin_fscanf` or `__builtin_vfscanf`).
+    /// Each is lowered to the library function. The ids are kiln-private.
+    /// `__builtin_printf` (`icC*R.`; `format(printf, 1, 2)`).
+    pub const PRINTF: u32 = 2380;
+    /// `__builtin_vprintf` (`icC*Ra`; `format(printf, 1, 0)`).
+    pub const VPRINTF: u32 = 2381;
+    /// `__builtin_vsprintf` (`ic*RcC*Ra`; `format(printf, 2, 0)`).
+    pub const VSPRINTF: u32 = 2382;
+    /// `__builtin_scanf` (`icC*R.`; not `NoThrow`).
+    pub const SCANF: u32 = 2383;
+    /// `__builtin_sscanf` (`icC*RcC*R.`; not `NoThrow`).
+    pub const SSCANF: u32 = 2384;
+    /// `__builtin_vscanf` (`icC*Ra`; not `NoThrow`).
+    pub const VSCANF: u32 = 2385;
+    /// `__builtin_vsscanf` (`icC*RcC*Ra`; not `NoThrow`).
+    pub const VSSCANF: u32 = 2386;
 
     /// WP-270: the checked-arithmetic builtins (clang 19 `Builtins.td`
     /// `__builtin_*_overflow`; all constant-evaluated), WP-557's carry
@@ -5017,6 +5035,13 @@ pub mod builtin {
         row(VSNPRINTF, "__builtin_vsnprintf", "ic*RzcC*Ra", N | F),
         row(SNPRINTF, "__builtin_snprintf", "ic*RzcC*R.", N | F),
         row(SPRINTF, "__builtin_sprintf", "ic*RcC*R.", N | F),
+        row(PRINTF, "__builtin_printf", "icC*R.", N | F),
+        row(VPRINTF, "__builtin_vprintf", "icC*Ra", N | F),
+        row(VSPRINTF, "__builtin_vsprintf", "ic*RcC*Ra", N | F),
+        row(SCANF, "__builtin_scanf", "icC*R.", F),
+        row(SSCANF, "__builtin_sscanf", "icC*RcC*R.", F),
+        row(VSCANF, "__builtin_vscanf", "icC*Ra", F),
+        row(VSSCANF, "__builtin_vsscanf", "icC*RcC*Ra", F),
     ];
 
     /// The operation and signedness of a checked-arithmetic builtin:
@@ -5057,6 +5082,8 @@ pub mod builtin {
         Some(match id {
             // WP-803: the `__*_chk` rows are clang `PrintfFormat` /
             // `VPrintfFormat` indices + 1.
+            PRINTF => (1, 2),
+            VPRINTF => (1, 0),
             SPRINTF | PRINTF_CHK => (2, 3),
             SNPRINTF | FPRINTF_CHK => (3, 4),
             VSNPRINTF | VFPRINTF_CHK => (3, 0),
@@ -5064,7 +5091,7 @@ pub mod builtin {
             SNPRINTF_CHK => (5, 6),
             VSPRINTF_CHK => (4, 0),
             VSNPRINTF_CHK => (5, 0),
-            VPRINTF_CHK => (2, 0),
+            VSPRINTF | VPRINTF_CHK => (2, 0),
             _ => return None,
         })
     }
@@ -6091,6 +6118,7 @@ pub mod builtin {
             ("__builtin_arm_rndr", "iWUi*", N, "rand"),
             ("__builtin_arm_rndrrs", "iWUi*", N, "rand"),
             ("__builtin_arm_rsr", "UicC*", NC, ""),
+            ("__builtin_arm_rsr128", "LLLUicC*", NC, "d128"),
             ("__builtin_arm_rsr64", "WUicC*", NC, ""),
             ("__builtin_arm_rsrp", "v*cC*", NC, ""),
             ("__builtin_arm_sev", "v", NONE, ""),
@@ -6104,6 +6132,7 @@ pub mod builtin {
             ("__builtin_arm_wfe", "v", NONE, ""),
             ("__builtin_arm_wfi", "v", NONE, ""),
             ("__builtin_arm_wsr", "vcC*Ui", NC, ""),
+            ("__builtin_arm_wsr128", "vcC*LLLUi", NC, "d128"),
             ("__builtin_arm_wsr64", "vcC*WUi", NC, ""),
             ("__builtin_arm_wsrp", "vcC*vC*", NC, ""),
             ("__builtin_arm_yield", "v", NONE, ""),
