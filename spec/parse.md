@@ -633,9 +633,16 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp
   hashes what name classification reads: the declaration count, the
   lookup tables' generation (bumped on every insertion), the semantic
-  context, the scope stack (kind, entity, local and using-directive
-  counts) and the prototype-parameter scopes. A different stamp empties
-  the memo before the lookup.
+  context, the scope stack (per scope: kind, entity, the local count and
+  the last local, the local using-declarator and using-directive counts)
+  and the prototype-parameter scopes. A different stamp empties the memo
+  before the lookup.
+  - The last local matters when two scope stacks of the same shape are
+    reinstated in turn with no declaration in between. The deferred
+    exception specifications of two member function templates with alike
+    parameter lists are an example: by counts alone their `_Tp` would
+    share a memo entry (WP-919; libc++ 19 `tuple`'s
+    `noexcept(_And<is_nothrow_constructible<_Tp, _Up>...>::value)`).
 - The token stream changing also empties it: `begin_replay`,
   `end_replay`, `inject_semi` (and the pop of an inject frame in `bump`)
   re-number the indices, and `split_greater` rewrites the current token.

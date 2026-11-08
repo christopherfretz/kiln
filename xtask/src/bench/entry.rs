@@ -182,16 +182,8 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
                 Err(e) => err(e),
             },
             k @ ("threshold-time" | "threshold-mem" | "threshold-steps" | "threshold-bytes") => {
-                let slot = match k {
-                    "threshold-time" => &mut thresholds.time_pct,
-                    "threshold-mem" => &mut thresholds.mem_pct,
-                    "threshold-steps" => &mut thresholds.steps_pct,
-                    _ => &mut thresholds.bytes_pct,
-                };
-                match parse_pct(value) {
-                    Some(_) if slot.is_some() => err(format!("duplicate `{k}`")),
-                    Some(p) => *slot = Some(p),
-                    None => err(format!("bad `{k}` value `{value}` (a non-negative percentage)")),
+                if let Err(e) = set_threshold(&mut thresholds, k, value) {
+                    err(e);
                 }
             }
             "budget-time" => match value.parse::<f64>() {
@@ -223,6 +215,24 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
         budget_time_ms,
         generate,
     })
+}
+
+/// One `threshold-*:` directive into its slot of `t`.
+fn set_threshold(t: &mut ThresholdOverrides, k: &str, value: &str) -> Result<(), String> {
+    let slot = match k {
+        "threshold-time" => &mut t.time_pct,
+        "threshold-mem" => &mut t.mem_pct,
+        "threshold-steps" => &mut t.steps_pct,
+        _ => &mut t.bytes_pct,
+    };
+    match parse_pct(value) {
+        Some(_) if slot.is_some() => Err(format!("duplicate `{k}`")),
+        Some(p) => {
+            *slot = Some(p);
+            Ok(())
+        }
+        None => Err(format!("bad `{k}` value `{value}` (a non-negative percentage)")),
+    }
 }
 
 /// `oven:` budgets mean nothing in `mode: pp` and `mode: run`: one error per

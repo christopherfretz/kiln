@@ -704,3 +704,11 @@ the rest are within noise (0.96-1.04x). Above 1.1x are only the noisy
 not touch the changed code paths (`oven/churn-mixed` moved the other way,
 0.27x). Results file: `bench/results/2026-11-08T225947.json` (not
 committed).
+
+**Stamp fix.** The libc++ M3 gate caught a stale classification: two
+function templates of alike shape whose scopes are reinstated in turn
+shared memo entries (spec/parse.md §2.5). `Sema::lookup_stamp` now also
+hashes each scope's last local and its using-declarator count. Re-timed
+after it, same protocol: dup6 0.12 s (0.86x g++-16), dup8 0.44 s
+(**1.19x**), fmt 0.76x, json 0.86x, range-v3 0.85x, hana 0.73x, with RSS
+unchanged.

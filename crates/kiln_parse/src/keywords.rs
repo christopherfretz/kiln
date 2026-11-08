@@ -211,7 +211,6 @@ impl Keywords {
 
     /// [`Keywords::new`], with `cxx26` enabling the C++26 keywords.
     pub fn with_std(interner: &Interner, gnu: bool, cxx11: bool, cxx26: bool, compat: u32) -> Self {
-        let mut table: Vec<Entry> = Vec::new();
         fn slot(table: &mut Vec<Entry>, sym: Symbol) -> &mut Entry {
             let i = sym.index() as usize;
             if table.len() <= i {
@@ -219,6 +218,7 @@ impl Keywords {
             }
             &mut table[i]
         }
+        let mut table: Vec<Entry> = Vec::new();
         for (k, spellings) in Kw::TABLE {
             for s in *spellings {
                 if (!gnu && *s == "typeof")
