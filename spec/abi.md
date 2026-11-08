@@ -1058,10 +1058,13 @@ or the function's own when only its type is substituted for deduction
 against a target type): `Subst::nested_prototype_param` makes a fresh
 parameter keeping index and scope depth, as clang's
 `TransformFunctionTypeParams` does (`tests/mangle/function_param_depth.cpp`).
-An unsupported expression
-(non-dependent `sizeof` whose value would be needed, ...) mangles as
-`XLi0EE` in a template argument and `u7unknown` as a `decltype`
-operand. The
+An expression with no encoding yet mangles as `XLi0EE` in a template
+argument and `u7unknown` as a `decltype` operand; in a requires-clause
+it is an error (§8.16). WP-818's rules (§8.29) cover the cases the
+standard-library sweep found: non-dependent `sizeof`, substituted
+`sizeof...` and enumeration parameters, dependent CTAD, alias templates
+and template template parameters in qualifiers, the injected-class-name
+in constraints, and abi_tag ordering. The
 template-parameter-declaration prefixes `Tn`/`Tp` are §8.14's (WP-117);
 the dependent template-specialization types there are the ones above
 (`dependent_tst`, with a pack's arguments grouped by `converted_args`).
@@ -1143,8 +1146,11 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   il <braced-expression>* E` (nested braced lists recurse as `il ... E`,
   packs as `sp`); an array new `new T[2]{...}` is `na _ <element type>
   il ... E` without the bound, as clang 19. A constraint expression kiln
-  still cannot mangle falls back to `Qu7unknown`, so the symbol stays
-  unique but differs from clang.
+  cannot mangle is the error `cg_cannot_mangle_expression` at the
+  expression, and the TU produces no output (WP-818; it used to mangle
+  as `Qu7unknown`, a name that differs from clang's).
+  An expression splice (P2996) is GCC 16's `DS <expression>
+  [<template-args>] E`.
 - **Not implemented:** a generic lambda's explicit template-head in its
   closure type name (`[]<class T>(){}` is clang's `UlTyvE_`, kiln's
   `UlvE_`, which also shifts later discriminators); clang 19's
@@ -1553,6 +1559,44 @@ appends the vendor qualifier `U17pass_object_size<t>`
 `<bare-function-type>` (clang `mangleBareFunctionType`; `mangle.rs`
 `bare_function_type`), e.g. `_Z5namedPKcU17pass_object_size0i`. The
 hidden `size_t` arguments are not part of the mangled type.
+
+### 8.29 Landed (WP-818): standard-library mangling parity and the sweep
+`scripts/mangle-sweep.sh` (docs/VALIDATION.md "Mangling sweep") compiles
+each TU in `tests/mangle-sweep/` with kiln++ and clang++-19, against
+libc++ and libstdc++, with `-std=c++26 -O0 -S -emit-llvm -fno-exceptions
+-w -U__cpp_explicit_this_parameter` (clang 19 leaves that macro undefined,
+kiln defines it as clang 22 does, and libstdc++ selects overloads on it).
+Both IRs then go through `opt-19 -passes=always-inline`: clang runs the
+always-inliner itself even at -O0 and kiln leaves it to LLVM, so without
+the pass the `always_inline` functions that survive differ. Every `_Z`
+symbol defined, declared or referenced must appear in both;
+internal-linkage closure names `$_N` are compared without their number.
+
+The rules the sweep found are listed in `spec/landed/abi/WP-818.md`:
+non-dependent `sizeof`/`alignof` as literals, substituted `sizeof...` and
+enumeration parameters, dependent CTAD names (untagged, with the
+expression profile keyed on the template name), alias templates and
+template template parameter specializations in qualifiers, the
+injected-class-name as a substitution in constraints, `J...E` grouping of
+a template template parameter's pack, abominable function types, closure
+numbering in pack expansions, abi_tag ordering for out-of-line members,
+and the inheritance of `always_inline`/`noinline` across redeclarations.
+
+The sweep went from 988 mismatches (libc++ 840, libstdc++ 148) to
+17 (libc++ 16, libstdc++ 1). What remains is clang-only: calls clang 19 emits that kiln does
+not, none of them a different name for the same entity.
+
+- libc++ `__introsort<..., false>` (`sort` with `greater<>` and a
+  projection): clang emits the dead arm of `_UseBitSetPartition ?
+  __bitset_partition(...) : __partition_with_equals_on_right(...)`, an
+  aggregate-valued conditional it does not fold at -O0, and with it the
+  `__bitset_partition` helpers (`__populate_left_bitset`,
+  `__swap_bitmap_pos`, `__libcpp_ctz`, `ranges::iter_swap`, ...). kiln
+  folds the constant condition.
+- libstdc++ `std::visit`: kiln folds `__as(v).valueless_by_exception()`
+  for a never-valueless variant to `false` (a constant expression under
+  P2280, which clang 19 does not implement), so it does not call
+  `__variant::__as`.
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386

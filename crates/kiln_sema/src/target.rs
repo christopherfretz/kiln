@@ -3,7 +3,7 @@
 //! implementation (spec/abi.md); this module only picks the target.
 
 pub use kiln_abi::{Arch, Target};
-use kiln_ast::types::{FloatFormat, TargetTypes, TypeView};
+use kiln_ast::types::{TargetTypes, TypeView};
 use kiln_ast::{Ast, QualType};
 
 /// The M2 default target triple (docs/ARCHITECTURE.md).
@@ -25,12 +25,7 @@ pub fn target_of(ast: &Ast) -> Target {
 /// targets differ in their `long double` format); its builtin table is
 /// `types` itself.
 pub fn target_for_types(types: &TargetTypes) -> Target {
-    let mut t = match types.long_double {
-        FloatFormat::X87Extended => Target::for_arch(Arch::X86_64),
-        _ => Target::for_arch(Arch::AArch64),
-    };
-    t.types = types.clone();
-    t
+    Target::for_types(types)
 }
 
 /// `(sizeof, alignof)` of `ty` in bytes, or `None` for incomplete,

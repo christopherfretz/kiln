@@ -35,7 +35,7 @@ use kiln_ast::expr::{CastKind, ExprKind, ObjectKind, ValueCategory};
 use kiln_ast::types::{Quals, TypeView};
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
-use kiln_source::Loc;
+use kiln_source::{Loc, Span};
 
 use crate::Sema;
 use crate::overload::ics::IcsOptions;
@@ -103,11 +103,14 @@ pub struct ConvError {
     /// Where the diagnostic goes regardless of the caller's choice (a
     /// conversion step clang diagnoses at the converted expression).
     pub at: Option<Loc>,
+    /// A source range underlined with `~` (clang streams the
+    /// initializer's range into the reference-binding diagnostics).
+    pub range: Option<Span>,
 }
 
 impl ConvError {
     pub(crate) fn new(id: DiagId, args: Vec<String>) -> ConvError {
-        ConvError { id, args, notes: Vec::new(), at: None }
+        ConvError { id, args, notes: Vec::new(), at: None, range: None }
     }
 
     /// The diagnostic, with its caret at `e`'s location.
@@ -123,6 +126,10 @@ impl ConvError {
             Some(sel) if i == 0 && a == "0" => d.arg(sel),
             _ => d.arg(a.as_str()),
         });
+        let d = match self.range {
+            Some(r) => d.range(r),
+            None => d,
+        };
         self.notes.iter().cloned().fold(d, kiln_diag::Diag::with_note)
     }
 }
@@ -807,7 +814,7 @@ fn bind_reference(
             // qualifiers, and an rvalue reference binds no lvalue (clang
             // checks both after forming the temporary's conversion).
             if !rq.contains(fq) {
-                return Err(drops_quals_error(fq - rq, strs(s)));
+                return Err(drops_quals_error(fq - rq, strs(s), s.expr_range(e)));
             }
             if rvalue_ref && vk == ValueCategory::LValue {
                 let (to_str, from_str) = strs(s);
@@ -957,7 +964,7 @@ fn bind_reference(
         return Ok(s.materialize_temporary(x, target, !rvalue_ref));
     }
     if !rq.contains(fq) {
-        return Err(drops_quals_error(fq - rq, strs(s)));
+        return Err(drops_quals_error(fq - rq, strs(s), s.expr_range(e)));
     }
     if incompatible_similar {
         // A non-const lvalue reference to a similar lvalue whose nested
@@ -1024,8 +1031,9 @@ fn bind_reference(
 
 /// "binding reference of type T1 to value of type T2 drops Q
 /// qualifier(s)" for the top-level qualifiers `dropped`, with the
-/// (to, from) type strings `strs`.
-fn drops_quals_error(dropped: Quals, strs: (String, String)) -> ConvError {
+/// (to, from) type strings `strs`, underlining the initializer's
+/// `range` as clang does.
+fn drops_quals_error(dropped: Quals, strs: (String, String), range: Span) -> ConvError {
     let names: Vec<&str> =
         [(Quals::CONST, "const"), (Quals::VOLATILE, "volatile"), (Quals::RESTRICT, "restrict")]
             .iter()
@@ -1035,10 +1043,13 @@ fn drops_quals_error(dropped: Quals, strs: (String, String)) -> ConvError {
     let plural = if names.len() > 1 { "1" } else { "0" };
     let quoted = format!("'{}'", names.join(" "));
     let (to_str, from_str) = strs;
-    ConvError::new(
-        DiagId::sema_reference_bind_drops_quals,
-        vec![to_str, from_str, quoted, plural.into()],
-    )
+    ConvError {
+        range: Some(range),
+        ..ConvError::new(
+            DiagId::sema_reference_bind_drops_quals,
+            vec![to_str, from_str, quoted, plural.into()],
+        )
+    }
 }
 
 /// Binds a reference to the temporary materialized from the
