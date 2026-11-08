@@ -27,6 +27,7 @@ mod life;
 mod meta;
 #[cfg(feature = "op-stats")]
 mod opstats;
+pub(crate) mod umemo;
 mod virt;
 mod wide;
 
@@ -981,9 +982,12 @@ impl Oven {
                     let elem = OTy(arg!(3) as u32);
                     let p = match self.ptr_add_step(raw, v, aux, elem) {
                         Some(p) => p,
-                        None => match self.ptr_add_op(raw, v, aux, elem) {
-                            Ok(p) => p,
-                            Err(f) => fail!(f),
+                        None => match self.ptr_add_member(raw, v, aux, elem) {
+                            Some(p) => p,
+                            None => match self.ptr_add_op(raw, v, aux, elem) {
+                                Ok(p) => p,
+                                Err(f) => fail!(f),
+                            },
                         },
                     };
                     reg!(0) = u128::from(p);
@@ -1106,7 +1110,7 @@ impl Oven {
                         }
                         continue;
                     }
-                    if self.mem.life_frame
+                    if self.mem.life_above(m as u64)
                         && let Err(f) = self.scope_life(b.ast(), m as u64, life::Objs::All)
                     {
                         fail!(f);
@@ -1180,9 +1184,9 @@ impl Oven {
                         }
                         continue;
                     }
-                    if self.mem.life_frame
-                        && let Some(fr) = self.stack.last()
+                    if let Some(fr) = self.stack.last()
                         && fr.mark != BOTTOM
+                        && self.mem.life_above(fr.mark)
                         && let Err(f) = self.scope_life(b.ast(), fr.mark, life::Objs::Locals)
                     {
                         fail!(f);
@@ -1192,7 +1196,7 @@ impl Oven {
                     let Some(fr) = self.stack.pop() else { return Ok(()) };
                     if fr.mark != BOTTOM {
                         // The caller destroys the parameters ([expr.call]/6).
-                        if self.mem.life_frame
+                        if self.mem.life_above(fr.mark)
                             && let Err(f) = self.scope_life(b.ast(), fr.mark, life::Objs::Params)
                         {
                             return Err((f, fr.ret_pc as usize));
@@ -2281,8 +2285,31 @@ impl Oven {
     pub(crate) fn ptr_add(&self, raw: u64, i: i128, elem: OTy) -> Result<u64, Fault> {
         match self.ptr_add_array(raw, i, false, elem, None) {
             Some(p) => Ok(p),
-            None => self.ptr_add_slow(raw, i, elem),
+            None => match self.ptr_add_front(raw, i, elem) {
+                Some(p) => Ok(p),
+                None => self.ptr_add_slow(raw, i, elem),
+            },
         }
+    }
+
+    /// [`Oven::ptr_add_slow`]'s step when the type table's whole-array
+    /// table already holds the extent `raw` lies in ([`Types::extent_hit`]:
+    /// an element of an array member, such as an `inplace_vector`'s
+    /// `union { T data[N]; }`) and the new index stays in `[0, n]`
+    /// (WP-760). `None` for anything else, the slow path then deciding.
+    #[inline]
+    fn ptr_add_front(&self, raw: u64, i: i128, elem: OTy) -> Option<u64> {
+        let a = self.mem.alloc_raw(raw)?;
+        let p = Ptr::decode(raw);
+        let off = u64::from(p.off);
+        let (start, n) = self.types.extent_hit(a.ty, off, p.past, elem)?;
+        let es = self.types.size(elem).max(1);
+        let new = i128::from((off - start) / es).checked_add(i)?;
+        if new < 0 || new > i128::from(n) {
+            return None;
+        }
+        let new = new as u64;
+        Some(Ptr::with_off(raw, start + new * es, new == n))
     }
 
     /// The `PtrAdd` op's inline step: `raw + v` within an array allocation
@@ -2298,6 +2325,22 @@ impl Oven {
             return None;
         }
         self.ptr_add_array(raw, v as i128, aux >> 9 & 1 != 0, elem, Some(field - 1))
+    }
+
+    /// The `PtrAdd` op's step within an array member the type table's
+    /// whole-array table holds ([`Oven::ptr_add_front`]: an
+    /// `inplace_vector`'s `&data[n]`), when its aux says the register
+    /// value is the index ([`ptr_add_aux`]), off [`Oven::ptr_add_step`]
+    /// (WP-760). Out of line and not cold: the hot loop keeps one call.
+    /// `None` sends the op to [`Oven::ptr_add_op`].
+    #[inline(never)]
+    fn ptr_add_member(&self, raw: u64, v: u128, aux: u32, elem: OTy) -> Option<u64> {
+        if aux >> ptr_add_aux::SHIFT & ptr_add_aux::MASK == 0 {
+            return None;
+        }
+        let i = v as i128;
+        let i = if aux >> 9 & 1 != 0 { i.checked_neg()? } else { i };
+        self.ptr_add_front(raw, i, elem)
     }
 
     /// The `PtrAdd` op off its array step: the index `v` read as its
@@ -2864,21 +2907,103 @@ impl Oven {
 
     /// Checks the active members of the unions on the path from the
     /// allocation root to the `len`-byte object of type `ty` at `raw`.
+    /// `Ok` answers are remembered ([`umemo`], WP-760).
     fn union_path(&self, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
-        let p = Ptr::decode(raw);
-        let Some(a) = self.alloc_any(p) else { return Ok(()) };
-        let (mut t, mut base) = (a.ty, 0u64);
-        let target = u64::from(p.off);
+        let Some(a) = self.alloc_any(Ptr::decode(raw)) else { return Ok(()) };
+        self.union_path_in(a.ty, raw, ty, k)
+    }
+
+    /// [`Oven::union_path`] in an allocation of type `aty`: nothing to
+    /// check when no union overlaps the accessed object.
+    #[inline]
+    fn union_path_in(&self, aty: OTy, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+        if !self.union_overlaps(aty, Ptr::decode(raw).off, ty) {
+            return Ok(());
+        }
+        self.union_path_memo(aty, raw, ty, k)
+    }
+
+    /// [`Oven::union_path_in`] past its overlap test: the memo, else the
+    /// walk.
+    #[inline(never)]
+    fn union_path_memo(&self, aty: OTy, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+        if self.union_memo_hit(aty, raw, ty) {
+            return Ok(());
+        }
+        self.union_path_miss(aty, raw, ty, k)
+    }
+
+    /// Whether the union-path memo holds the `Ok` answer of the access to
+    /// the object of type `ty` at `raw` in an allocation of type `aty`.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn union_memo_hit(&self, aty: OTy, raw: u64, ty: OTy) -> bool {
+        let stamp = umemo::Stamp { epoch: self.mem.union_epoch, rebuilt: self.types.rebuilt() };
+        let (akey, off) = (Ptr::alloc_key(raw), Ptr::decode(raw).off);
+        self.umemo.hit(umemo::Walk::Access, akey, aty, ty, off, stamp)
+    }
+
+    /// [`Oven::union_path_memo`] on a memo miss: the walk, whose `Ok`
+    /// answer is remembered when it may be.
+    #[inline(never)]
+    fn union_path_miss(&self, aty: OTy, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+        let stamp = umemo::Stamp { epoch: self.mem.union_epoch, rebuilt: self.types.rebuilt() };
+        if let Some(cover) = self.union_walk(aty, raw, ty, k)? {
+            self.umemo.put(umemo::Walk::Access, Ptr::alloc_key(raw), aty, ty, cover, stamp);
+        }
+        Ok(())
+    }
+
+    /// Whether a union subobject of an object of type `aty` may overlap
+    /// the object of type `ty` at offset `off`: `false` when the object
+    /// lies outside the bytes spanning them ([`crate::ty::TyInfo::uhull`]), so no
+    /// union is on the path to it and [`Oven::union_walk`] has nothing to
+    /// check; and for the object of type `aty` itself, the walk's first
+    /// step.
+    #[inline]
+    fn union_overlaps(&self, aty: OTy, off: u32, ty: OTy) -> bool {
+        let (ulo, uhi) = self.types.info(aty).uhull;
+        let lo = u64::from(off);
+        let hi = lo + self.types.size(ty).max(1);
+        lo < u64::from(uhi) && u64::from(ulo) < hi && !(off == 0 && ty == aty)
+    }
+
+    /// [`Oven::union_path`]'s walk from `root` (the type of `raw`'s
+    /// allocation): on success, the offsets the same answer covers, or
+    /// `None` when the answer depends on the access kind `k` (a fault
+    /// path that lets the access through) and must not be remembered.
+    #[inline(never)]
+    fn union_walk(
+        &self,
+        root: OTy,
+        raw: u64,
+        ty: OTy,
+        k: u32,
+    ) -> Result<Option<umemo::Cover>, Fault> {
+        let target = u64::from(Ptr::decode(raw).off);
+        let exact = Some(umemo::Cover::At(target as u32));
+        let (mut t, mut base) = (root, 0u64);
+        // Every union so far was resolved by its active member.
+        let mut by_active = true;
         loop {
             if t == ty && base == target {
-                return Ok(());
+                return Ok(exact);
             }
-            match self.types.kind(t) {
+            let info = self.types.info(t);
+            if !info.has_union {
+                // No union below: the rest of the walk cannot fail.
+                return Ok(if by_active {
+                    Some(self.union_free_cover(t, base, target, ty))
+                } else {
+                    exact
+                });
+            }
+            match info.kind {
                 TyKind::Array { elem, n } => {
                     let es = self.types.size(elem).max(1);
                     let i = (target - base) / es;
                     if i >= n {
-                        return Ok(());
+                        return Ok(exact);
                     }
                     base += i * es;
                     t = elem;
@@ -2886,7 +3011,7 @@ impl Oven {
                 // The member choices are cached per (record, offset,
                 // type) (WP-644); the active members are read here.
                 TyKind::Record { .. } => match self.types.hop(Walk::Union, t, target - base, ty) {
-                    Hop::Reached | Hop::Stop | Hop::Mutable(_) => return Ok(()),
+                    Hop::Reached | Hop::Stop | Hop::Mutable(_) => return Ok(exact),
                     Hop::Array { at, t: arr } => {
                         base += at;
                         t = arr;
@@ -2904,18 +3029,49 @@ impl Oven {
                             .chain(alt)
                             .find(|&i| self.types.reaches(Walk::Union, u, rel, ty, reach, i))
                         else {
-                            return self.union_fault(u, rel, ty, k, active);
+                            self.union_fault(u, rel, ty, k, active)?;
+                            return Ok(None);
                         };
+                        by_active &= active == Some(i);
                         let f = fields[i as usize];
                         base += f.offset;
                         t = f.ty;
                         if f.width.is_some() {
-                            return Ok(());
+                            return Ok(exact);
                         }
                     }
                 },
-                _ => return Ok(()),
+                _ => return Ok(exact),
             }
+        }
+    }
+
+    /// The offsets [`Oven::union_walk`]'s answer covers once it reaches
+    /// `t`, a type without unions, at byte `base`, having resolved every
+    /// union above by its active member: when `t` is an array and the
+    /// accessed object of type `ty` at `target` is a subobject of its
+    /// element, the same position in every element (the walk toward any of
+    /// them makes the same choices: no two subobjects of one type share an
+    /// address, [intro.object]/9, so a non-union class has one member
+    /// toward it, and the active member holding this one holds those
+    /// too); else `target` alone.
+    fn union_free_cover(&self, t: OTy, base: u64, target: u64, ty: OTy) -> umemo::Cover {
+        let exact = umemo::Cover::At(target as u32);
+        let TyKind::Array { elem, n } = self.types.kind(t) else { return exact };
+        let es = self.types.size(elem);
+        let len = es.saturating_mul(n);
+        if es == 0 || target < base || target - base >= len || base + len > u64::from(u32::MAX) {
+            return exact;
+        }
+        let phase = (target - base) % es;
+        if !self.types.has_subobject(elem, phase, ty) {
+            return exact;
+        }
+        umemo::Cover::Region {
+            lo: base as u32,
+            len: len as u32,
+            stride: es as u32,
+            phase: phase as u32,
         }
     }
 
@@ -2951,17 +3107,23 @@ impl Oven {
     }
 
     /// The checks of a load from an allocation with unions or with
-    /// `mutable` members it may not read (outlined from the hot path).
-    #[cold]
-    fn slow_access(&self, fl: u8, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+    /// `mutable` members it may not read (outlined from the hot path; not
+    /// `#[cold]`, since union-backed storage takes it on every access).
+    #[inline(never)]
+    fn slow_access(&self, a: &Alloc, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+        let fl = a.flags;
         // A write is checked in an object that is not `const`: the one
         // `Oven::has_constant_destruction` destroys, whose `mutable`
         // members are outside their lifetime.
         if fl & flags::MUTABLE_OUTSIDE != 0 && (k == ak::READ || fl & flags::CONST == 0) {
             self.mutable_path(raw, ty, k)?;
         }
-        if fl & flags::HAS_UNION != 0 {
-            self.union_path(raw, ty, k)?;
+        // The memo probe inlined: a load of union storage hits it.
+        if fl & flags::HAS_UNION != 0
+            && self.union_overlaps(a.ty, Ptr::decode(raw).off, ty)
+            && !self.union_memo_hit(a.ty, raw, ty)
+        {
+            self.union_path_miss(a.ty, raw, ty, k)?;
         }
         Ok(())
     }
@@ -2995,7 +3157,7 @@ impl Oven {
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) = self.rmw_check(raw, len, ty, k)?;
         if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
-            self.slow_access(a.flags, raw, ty, k)?;
+            self.slow_access(a, raw, ty, k)?;
         }
         let sp = self.mem.space(st);
         if !sp.is_init(abs, len) {
@@ -3032,13 +3194,14 @@ impl Oven {
             return Err(fault(f));
         }
         let has_union = a.flags & flags::HAS_UNION != 0;
+        let aty = a.ty;
         let mutable = a.flags & (flags::MUTABLE_OUTSIDE | flags::CONST) == flags::MUTABLE_OUTSIDE;
         if mutable && !init {
             self.mutable_path(raw, ty, k)?;
         }
         self.mem.trial_write(raw, len).map_err(fault)?;
         if has_union {
-            self.union_path(raw, ty, k)?;
+            self.union_path_in(aty, raw, ty, k)?;
         }
         // A pointer keeps its `void *` tag in its mark (`kbc::VOID_TAG`).
         let mark = if !is_ptr {
@@ -3060,7 +3223,7 @@ impl Oven {
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) = self.rmw_check(raw, n, ty, k)?;
         if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
-            self.slow_access(a.flags, raw, ty, k)?;
+            self.slow_access(a, raw, ty, k)?;
         }
         let sp = self.mem.space(st);
         if !sp.is_init(abs, n) {
@@ -3117,13 +3280,14 @@ impl Oven {
             return Err(fault(f));
         }
         let has_union = a.flags & flags::HAS_UNION != 0;
+        let aty = a.ty;
         let mutable = a.flags & (flags::MUTABLE_OUTSIDE | flags::CONST) == flags::MUTABLE_OUTSIDE;
         if mutable && !init {
             self.mutable_path(raw, ty, k)?;
         }
         self.mem.trial_write(raw, n).map_err(fault)?;
         if has_union {
-            self.union_path(raw, ty, k)?;
+            self.union_path_in(aty, raw, ty, k)?;
         }
         if width == 0 {
             return Ok(());
@@ -3416,6 +3580,20 @@ impl Oven {
         Ok(())
     }
 
+    /// `__builtin_clear_padding(raw)` for an object of type `ty` (WP-774;
+    /// spec/oven.md "Clearing padding"): the storage must exist, be in
+    /// bounds and be modifiable by this evaluation. Padding bits are not
+    /// modelled (they read as indeterminate), so nothing is written.
+    pub(super) fn clear_padding(&mut self, raw: u64, ty: OTy) -> Result<(), Fault> {
+        let fault = |f| Fault::Mem { f, ak: ak::ASSIGN, ty, p: raw };
+        let size = self.types.size(ty);
+        let (sp, _, a) = self.mem.check_storage(raw, size, true).map_err(fault)?;
+        if let Some(f) = write_fault(sp, a, ty) {
+            return Err(fault(f));
+        }
+        Ok(())
+    }
+
     fn placement(&mut self, raw: u64, ty: OTy, stat: Option<OTy>, aux: u32) -> Result<(), Fault> {
         let fault = |f| Fault::Mem { f, ak: ak::INIT, ty, p: raw };
         let (sp, _, a) = self.mem.check_storage(raw, 0, true).map_err(fault)?;
@@ -3538,6 +3716,10 @@ impl Oven {
     /// activates the array (below); `__builtin_start_lifetime` passes
     /// false, the array then being a containing object outside its
     /// lifetime ("construction of subobject of member").
+    ///
+    /// A walk that succeeds and changes nothing is remembered ([`umemo`],
+    /// WP-760): while the active members stay as they are, the same
+    /// construction again would do nothing.
     fn place_in_unions(
         &mut self,
         raw: u64,
@@ -3545,25 +3727,63 @@ impl Oven {
         ty: OTy,
         implicit: bool,
     ) -> Result<(), Fault> {
+        let p = Ptr::decode(raw);
+        let akey = Ptr::alloc_key(raw);
+        let stamp = umemo::Stamp { epoch: self.mem.union_epoch, rebuilt: self.types.rebuilt() };
+        if self.umemo.hit(umemo::Walk::Place, akey, root, ty, p.off, stamp) {
+            return Ok(());
+        }
+        if let Some(cover) = self.place_walk(raw, root, ty, implicit)? {
+            self.umemo.put(umemo::Walk::Place, akey, root, ty, cover, stamp);
+        }
+        Ok(())
+    }
+
+    /// [`Oven::place_in_unions`]'s walk: on success, the offsets the same
+    /// answer covers, or `None` when the walk changed an active member
+    /// (or recorded possibly active ones), which is not remembered. The
+    /// region is the elements of the active array member of the only
+    /// union on the way, when the object is one of them: the walk toward
+    /// any of them makes the same choices (no two objects of one type
+    /// share an address, [intro.object]/9, so each non-union record
+    /// leads toward that union; at it, the active array member holds
+    /// every element).
+    fn place_walk(
+        &mut self,
+        raw: u64,
+        root: OTy,
+        ty: OTy,
+        implicit: bool,
+    ) -> Result<Option<umemo::Cover>, Fault> {
         let target = u64::from(Ptr::decode(raw).off);
+        let exact = Some(umemo::Cover::At(target as u32));
         let (mut t, mut base) = (root, 0u64);
+        let (mut clean, mut unions, mut region) = (true, 0u32, None);
         loop {
             if t == ty && base == target {
-                return Ok(());
+                return Ok(if !clean {
+                    None
+                } else if unions == 1 && region.is_some() {
+                    region
+                } else {
+                    exact
+                });
             }
             match self.types.kind(t) {
                 TyKind::Array { elem, n } => {
                     let es = self.types.size(elem).max(1);
                     let i = (target - base) / es;
                     if i >= n {
-                        return Ok(());
+                        return Ok(exact.filter(|_| clean));
                     }
                     base += i * es;
                     t = elem;
                 }
                 TyKind::Record { .. } => {
                     let (at, u, reach) = match self.types.hop(Walk::Place, t, target - base, ty) {
-                        Hop::Reached | Hop::Stop | Hop::Mutable(_) => return Ok(()),
+                        Hop::Reached | Hop::Stop | Hop::Mutable(_) => {
+                            return Ok(exact.filter(|_| clean));
+                        }
                         Hop::Array { at, t: arr } => {
                             base += at;
                             t = arr;
@@ -3573,6 +3793,7 @@ impl Oven {
                     };
                     base += at;
                     t = u;
+                    unions += 1;
                     let rel = target - base;
                     let fields = self.types.fields(t);
                     let reach = |i: u32| self.types.reaches(Walk::Place, u, rel, ty, reach, i);
@@ -3623,6 +3844,7 @@ impl Oven {
                             })?;
                             let i = arrs.trailing_zeros();
                             let (fo, ft) = (fields[i as usize].offset, fields[i as usize].ty);
+                            clean = false;
                             self.activate(raw, base, t, i);
                             if arrs.count_ones() > 1 {
                                 self.mem.union_alts_put(key, Some(arrs));
@@ -3636,7 +3858,7 @@ impl Oven {
                                 .near(t, rel)
                                 .find(|f| self.types.union_member_reaches(Walk::Place, rel, ty, f))
                             else {
-                                return Ok(());
+                                return Ok(exact.filter(|_| clean));
                             };
                             return Err(Fault::Union {
                                 ak: ak::CONSTRUCT,
@@ -3657,18 +3879,20 @@ impl Oven {
                             if (direct | arrs).count_ones() > 1 {
                                 self.mem.union_alts_put(key, Some(direct | arrs));
                             }
-                            return Ok(());
+                            return Ok(None);
                         }
                         Some(i) if arrs & 1 << i != 0 => {
                             // An element of the active array member: the
                             // array is the member (a possibly active one
                             // becomes the active one).
                             if active != Some(i) {
+                                clean = false;
                                 self.mem.union_put(key, Some(i));
                             }
                             let f = fields[i as usize];
                             base += f.offset;
                             t = f.ty;
+                            region = self.place_region(base, t, ty);
                         }
                         Some(i) if (direct | arrs) & !(1 << i) == 0 => {
                             let f = fields[i as usize];
@@ -3677,13 +3901,27 @@ impl Oven {
                         }
                         Some(i) => {
                             self.mem.union_alts_put(key, Some(alts | direct | arrs | 1 << i));
-                            return Ok(());
+                            return Ok(None);
                         }
                     }
                 }
-                _ => return Ok(()),
+                _ => return Ok(exact.filter(|_| clean)),
             }
         }
+    }
+
+    /// The elements of type `ty` of the array member of type `t` at byte
+    /// `base`, as a [`umemo::Cover`] ([`Oven::place_walk`]).
+    fn place_region(&self, base: u64, t: OTy, ty: OTy) -> Option<umemo::Cover> {
+        let (len, stride) = (self.types.size(t), self.types.size(ty));
+        (stride > 0 && len.is_multiple_of(stride) && u32::try_from(base + len).is_ok()).then_some(
+            umemo::Cover::Region {
+                lo: base as u32,
+                len: len as u32,
+                stride: stride as u32,
+                phase: 0,
+            },
+        )
     }
 
     /// Whether the byte at `off` of an object of type `t` begins an element
@@ -3730,7 +3968,7 @@ impl Oven {
                 return Err(Fault::Mem { f: MemFault::Lifetime, ak: ak::MEMBER_CALL, ty, p: raw });
             }
             if a.flags & flags::HAS_UNION != 0 {
-                self.union_path(raw, ty, ak::MEMBER_CALL)?;
+                self.union_path_in(a.ty, raw, ty, ak::MEMBER_CALL)?;
             }
             return self.member_call_life(raw, ty);
         }
@@ -3755,9 +3993,10 @@ impl Oven {
             // is not active is checked as an access ("destruction of
             // member 's' of union with no active member").
             if self.cxx_year >= 2026
-                && self.alloc_any(Ptr::decode(raw)).is_some_and(|a| a.flags & flags::HAS_UNION != 0)
+                && let Some(a) = self.alloc_any(Ptr::decode(raw))
+                && a.flags & flags::HAS_UNION != 0
             {
-                self.union_path(raw, ty, ak::DESTROY)?;
+                self.union_path_in(a.ty, raw, ty, ak::DESTROY)?;
             }
         }
         if aux & 2 != 0 {
@@ -4252,7 +4491,10 @@ mod tests {
                         for aux in steps.iter().map(|s| base | s << ptr_add_aux::SHIFT) {
                             let got = match o.ptr_add_step(raw, v, aux, scalars[4]) {
                                 Some(p) => Ok(p),
-                                None => o.ptr_add_op(raw, v, aux, scalars[4]),
+                                None => match o.ptr_add_member(raw, v, aux, scalars[4]) {
+                                    Some(p) => Ok(p),
+                                    None => o.ptr_add_op(raw, v, aux, scalars[4]),
+                                },
                             };
                             assert_eq!(ident(&got), ident(&want), "{v} {aux:#x}");
                         }

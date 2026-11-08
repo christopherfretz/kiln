@@ -9,7 +9,9 @@ contract in spec/landed/harness/WP-666.md.
 
 Environment: KILN_OSS_CXX, KILN_OSS_LOG, KILN_OSS_PHASE (configure | build |
 test, recorded as `phase`), KILN_OSS_VMEM_KB (default 3000000, the
-`ulimit -v`), KILN_OSS_TIMEOUT (seconds, default 600).
+`ulimit -v`), KILN_OSS_TIMEOUT (seconds, default 600), KILN_OSS_STDLIB
+(`libc++` puts `-stdlib=libc++` before the argv, WP-694; unset or
+`libstdc++` adds nothing).
 """
 
 import fcntl
@@ -110,7 +112,13 @@ def classify(rc, timed_out, text, source):
 def main():
     args = sys.argv[1:]
     cxx = os.environ.get("KILN_OSS_CXX") or "clang++-19"
-    cmd = [cxx] + args
+    stdlib = os.environ.get("KILN_OSS_STDLIB") or "libstdc++"
+    if stdlib not in ("libstdc++", "libc++"):
+        sys.stderr.write(f"kiln-cxx: KILN_OSS_STDLIB must be libstdc++ or libc++, not '{stdlib}'\n")
+        return 2
+    # libc++ mode (WP-694): the flag goes first so a project's own
+    # `-stdlib=` (the last one wins) still decides.
+    cmd = [cxx] + (["-stdlib=libc++"] if stdlib == "libc++" else []) + args
     log = os.environ.get("KILN_OSS_LOG")
     vmem_kb = int(os.environ.get("KILN_OSS_VMEM_KB") or 3000000)
     limit_s = float(os.environ.get("KILN_OSS_TIMEOUT") or 600)

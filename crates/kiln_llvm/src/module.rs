@@ -8,7 +8,7 @@ use crate::constant::{ConstData, ConstTable, IntValue, mask128};
 use crate::error::{IrError, IrErrorKind, IrResult};
 use crate::function::Function;
 use crate::inst::{BinOp, CastOp, Flags, GepFlags, SyncScope};
-use crate::metadata::{MdField, MdNode};
+use crate::metadata::{MdField, MdNode, md_hash};
 use crate::types::{TypeData, TypeId, TypeTable};
 use crate::value::{
     AliasId, AsmId, AttrSetId, BlockId, ComdatId, ConstId, FuncId, GlobalId, MdKindId, MetadataId,
@@ -337,7 +337,9 @@ pub struct Module {
     asm_map: FxHashMap<InlineAsm, AsmId>,
     pub(crate) attrs: AttrTable,
     pub(crate) md: Vec<MdNode>,
-    md_map: FxHashMap<MdNode, MetadataId>,
+    /// The uniqued nodes of `md` by [`md_hash`] (the hash is kept so a
+    /// resize does not rehash nodes; the nodes are not copied).
+    md_map: hashbrown::HashTable<(u64, MetadataId)>,
     pub(crate) named_md: Vec<(Box<str>, Vec<MetadataId>)>,
     pub(crate) md_kinds: Vec<Box<str>>,
     pub(crate) sync_scopes: Vec<Box<str>>,
@@ -378,7 +380,7 @@ impl Module {
             asm_map: FxHashMap::default(),
             attrs: AttrTable::new(),
             md: Vec::new(),
-            md_map: FxHashMap::default(),
+            md_map: hashbrown::HashTable::new(),
             named_md: Vec::new(),
             md_kinds: FIXED_MD_KINDS.iter().map(|&k| Box::from(k)).collect(),
             sync_scopes: vec![Box::from(""), Box::from("singlethread")],
@@ -1416,12 +1418,14 @@ impl Module {
             self.md.push(n);
             return id;
         }
-        if let Some(&id) = self.md_map.get(&n) {
+        let h = md_hash(&n);
+        let md = &self.md;
+        if let Some(&(_, id)) = self.md_map.find(h, |&(eh, id)| eh == h && md[id.index()] == n) {
             return id;
         }
         let id = MetadataId(self.md.len() as u32);
-        self.md.push(n.clone());
-        self.md_map.insert(n, id);
+        self.md.push(n);
+        self.md_map.insert_unique(h, (h, id), |&(eh, _)| eh);
         id
     }
 
@@ -1458,11 +1462,11 @@ impl Module {
     /// A specialized node `![distinct ]!Name(fields)`.
     pub fn md_specialized(
         &mut self,
-        name: &str,
+        name: &'static str,
         distinct: bool,
-        fields: Vec<(Box<str>, MdField)>,
+        fields: Vec<(&'static str, MdField)>,
     ) -> MetadataId {
-        self.md_intern(MdNode::Specialized { distinct, name: name.into(), fields: fields.into() })
+        self.md_intern(MdNode::Specialized { distinct, name, fields: fields.into() })
     }
 
     /// A metadata node by id.
@@ -1511,14 +1515,19 @@ impl Module {
     /// Sets field `key` of a `distinct` specialized node, replacing it or
     /// appending it (a placeholder completed once its operands exist, as
     /// a debug-info composite type's `elements` or a compile unit's lists).
-    pub fn md_set_field(&mut self, node: MetadataId, key: &str, v: MdField) -> IrResult<()> {
+    pub fn md_set_field(
+        &mut self,
+        node: MetadataId,
+        key: &'static str,
+        v: MdField,
+    ) -> IrResult<()> {
         match &mut self.md[node.index()] {
             MdNode::Specialized { distinct: true, fields, .. } => {
-                if let Some(f) = fields.iter_mut().find(|f| &*f.0 == key) {
+                if let Some(f) = fields.iter_mut().find(|f| f.0 == key) {
                     f.1 = v;
                 } else {
                     let mut all = std::mem::take(fields).into_vec();
-                    all.push((key.into(), v));
+                    all.push((key, v));
                     *fields = all.into_boxed_slice();
                 }
                 Ok(())
@@ -1539,7 +1548,11 @@ impl Module {
             return Err(IrError::new(IrErrorKind::BadMetadata, "md_replace needs a distinct node"));
         }
         if !new.is_distinct() {
-            self.md_map.entry(new.clone()).or_insert(node);
+            let h = md_hash(&new);
+            let md = &self.md;
+            if self.md_map.find(h, |&(eh, id)| eh == h && md[id.index()] == new).is_none() {
+                self.md_map.insert_unique(h, (h, node), |&(eh, _)| eh);
+            }
         }
         self.md[node.index()] = new;
         Ok(())

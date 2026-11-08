@@ -802,8 +802,8 @@ impl Sema<'_, '_> {
 
     /// [`Sema::lambda_unexpanded`] also in the innermost lambda's
     /// declarator (before its body opens): a default argument of its
-    /// parameters. The lambda's own packs there are those of its
-    /// *template-parameter-list*.
+    /// parameters, its requires-clauses. The lambda's own packs there are
+    /// those of its *template-parameter-list* and its parameters.
     pub(crate) fn split_lambda_packs(
         &mut self,
         op: crate::templ::pack::PackOperand,
@@ -811,10 +811,15 @@ impl Sema<'_, '_> {
         let Some(top) = self.lambdas.last() else { return Vec::new() };
         let base = top.scope_base;
         let packs = self.unexpanded_packs(op);
+        // Its scopes, and its parameter-declaration-clause while the
+        // declarator (a trailing requires-clause) is parsed.
         let own = |s: &Self, d: DeclId| {
             s.scopes
                 .get(base..)
                 .is_some_and(|sc| sc.iter().any(|x| x.locals.iter().any(|&(_, l, _)| l == d)))
+                || s.prototype_params
+                    .iter()
+                    .any(|f| f.depth >= base && f.params.iter().any(|&(_, p)| p == d))
         };
         let (local, outer): (Vec<DeclId>, Vec<DeclId>) =
             packs.iter().copied().partition(|&d| own(self, d));

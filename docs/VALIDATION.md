@@ -12,6 +12,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | Conformance | `tests/conformance/<section>/` | Standard behavior by section ([lex], [cpp], [expr.const], ...) |
 | Stress | `tests/stress/` | Deep nesting, huge packs, the stack guard, runaway-allocation regressions, under `mem<=N` budgets |
 | Differential | `tests/differential/` | Same result as clang (-E tokens, program stdout, AST/layout facts) |
+| Debugger | `tests/debuginfo/` (`expect: debugger`, spec/harness.md "Debugger tests"); a default root, SKIP without gdb/lldb-19, ERROR under `KILN_REQUIRE_DEBUGGERS=1` (GitHub CI) | A `-O0 -g` binary debugs under gdb and lldb-19 as clang's does: breakpoints, backtraces, variables, stepping |
 | Goldens | alongside the above, `*.expected` | AST dumps, diagnostics, IR shapes (FileCheck-style) |
 | libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh [<tag>]`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md`, whole-suite status and the 10% sample procedure in `docs/status/libcxx.md` (M3b) | The real world |
 | libstdc++ headers | every public header of the system libstdc++ (`/usr/include/c++/14`) as a one-line TU, driven by `cargo xtask libstdcxx` (`spec/libstdcxx.md`); informational, not part of `ci`; status in `docs/status/libstdcxx.md` | The other real world (GCC's library) |
@@ -27,7 +28,9 @@ budgets the corpus carries, and every `oracle: gcc` comparison against
 GCC 16.1, the reflection oracle: the jobs run in the `gcc:16.1.0-trixie`
 image with `KILN_GCC=/usr/local/bin/g++` and `KILN_REQUIRE_GCC=1`, so a
 missing GCC fails CI instead of skipping (WP-502; spec/harness.md "GCC
-oracle"). On the dev host, where `scripts/env.sh` sets `KILN_GCC`,
+oracle"). The same jobs install gdb and lldb-19 and set
+`KILN_REQUIRE_DEBUGGERS=1`, so the debugger tests (`tests/debuginfo`)
+run in CI and a missing debugger fails it (WP-816). On the dev host, where `scripts/env.sh` sets `KILN_GCC`,
 `cargo xtask ci` and `cargo xtask test` run the same comparisons. Off the queue, by hand or nightly on the dev
 host: `cargo xtask bench` (including `bench/reflect` and the vs-GCC table
 via `--compiler $KILN_GCC`), `--scaling` sweeps, `--external` corpora,
@@ -349,6 +352,17 @@ above ("The defects found so far"): the corpus self-check and the kiln run pass
 with it (the GH111477 probes skip), but it is not what CI runs.
 `KILN_REQUIRE_LLVM=1` turns a missing LLVM tool into a failure instead of a
 skip.
+
+**Debuggers** (WP-816). The corpus jobs (`self-check`, `kiln-22`,
+`kiln-19`) and `unit xtask` pass `debuggers: "true"` to the setup
+action, which then also installs `gdb lldb-19` (Debian trixie's gdb 16.3
+and lldb 19.1.7; a few seconds of apt per job, cheaper than a dedicated
+job that would rebuild kiln). Those jobs run their container with
+`--cap-add=SYS_PTRACE`. The lane env sets `KILN_REQUIRE_DEBUGGERS=1`, so
+an `expect: debugger` test whose debugger is missing is an ERROR there,
+never a SKIP; `ci_tests::workflow_installs_the_debuggers` checks that
+every corpus job installs them. Each debugger session gets at least 60 s
+(spec/harness.md "Debugger tests").
 
 The `x86_64` lane runs the same jobs in the same container on the
 x86-64 `ubuntu-24.04` runner (WP-228), so the host-dependent paths
