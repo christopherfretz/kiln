@@ -566,6 +566,28 @@ fn filter_and_no_tests() {
     assert!(execute(&o).unwrap_err().contains("cannot run compiler"));
 }
 
+/// `expect: debugger` (WP-814): gdb and lldb scripts against clang 19's
+/// `-O0 -g` binaries, one fixture per outcome.
+#[test]
+fn debugger_fixtures_with_clang() {
+    let on_path = |n: &str| {
+        std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(n).is_file()))
+    };
+    if !have_clang() || !on_path("gdb") || !on_path("lldb-19") {
+        return;
+    }
+    let results = execute(&clang_opts(&[repo_root().join("xtask/fixtures/debugger")])).unwrap();
+    check_fixture_statuses(&results, 4);
+    let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
+    let d = &by_name("fail-gdb-wrong-value.cpp").details;
+    assert!(d.contains("gdb: no line contains `$1 = 43`"), "{d}");
+    let d = &by_name("fail-gdb-out-of-order.cpp").details;
+    assert!(d.contains("gdb: no line contains `$1 = 1`"), "{d}");
+    let d = &by_name("error-debugger-no-check.cpp").details;
+    assert!(d.contains("`gdb:` commands without a `gdb-check`"), "{d}");
+}
+
 /// `expect: ast` with clang as the compiler under test: its JSON dump is
 /// normalized in-process and compared with the golden.
 #[test]

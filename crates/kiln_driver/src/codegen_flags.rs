@@ -16,7 +16,7 @@
 //!    `-fxray-instruction-threshold=`, `-fxray-ignore-loops`);
 //! 2. accepted and ignored: no observable effect in kiln
 //!    (`-f[no-]stack-clash-protection`,
-//!    `-f[no-]common`, `-fstack-usage`, `-gz[=…]`, the defaults `-fno-trapv`,
+//!    `-f[no-]common`, `-fstack-usage`, the defaults `-fno-trapv`,
 //!    `-fno-short-enums` and `-m64`, and `-pipe`);
 //! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
 //!    `-fshort-enums`, `-fsanitize*`, `-fno-sanitize*`, coverage and
@@ -123,7 +123,6 @@ const IGNORED: &[&str] = &[
     "-fcommon",
     "-fno-common",
     "-fstack-usage",
-    "-gz",
     "-fno-trapv",
     "-fno-short-enums",
     // Every target kiln has is 64-bit (`-m32` stays unknown).
@@ -306,11 +305,6 @@ impl CodegenFlags {
             }
             _ if flag.starts_with("-fxray-") || flag.starts_with("-fno-xray-") => {
                 self.xray_other.push(arg.to_owned());
-            }
-            "-gz" => {
-                if !matches!(v, "none" | "zlib" | "zstd") {
-                    return unsupported();
-                }
             }
             _ => return None,
         }
@@ -570,8 +564,6 @@ mod tests {
             "-fcf-protection=full",
             "-fno-common",
             "-fstack-usage",
-            "-gz",
-            "-gz=zlib",
             "-mtune=native",
             "-ffunction-sections",
             "-fdata-sections",
@@ -594,10 +586,6 @@ mod tests {
         ] {
             assert_eq!(parse(&[a]).1, [Some(Err(ArgError::UnsupportedByKiln(a.into())))], "{a}");
         }
-        assert_eq!(
-            parse(&["-gz=lzma"]).1,
-            [Some(Err(ArgError::UnsupportedValue("-gz=".into(), "lzma".into())))]
-        );
         assert_eq!(parse(&["-fbogus"]).1, [None]);
         assert_eq!(parse(&["-mtune=x86-64"]).0.mtune.as_deref(), Some("x86-64"));
     }
