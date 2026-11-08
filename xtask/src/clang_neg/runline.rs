@@ -7,7 +7,7 @@
 /// (lit's `std_cxx` expansion; an open upper end runs to the newest).
 pub const STD_STEPS: &[&str] = &["98", "11", "14", "17", "20", "23", "26"];
 
-/// The `REQUIRES:` features kiln's runs satisfy: an x86-64 or AArch64
+/// The `REQUIRES:` features kiln's runs satisfy: an x86-64 or `aarch64`
 /// Linux target, LP64, a POSIX shell and threads.
 pub const FEATURES: &[&str] = &[
     "x86-registered-target",
@@ -127,7 +127,7 @@ pub enum RunPlan {
     /// A `-verify` run kiln does not attempt, with the reason; counts once
     /// per configuration it stands for.
     Skip { reason: String, configs: usize },
-    /// Not a `-verify` run of `%clang_cc1` (FileCheck, `split-file`, ...).
+    /// Not a `-verify` run of `%clang_cc1` (`FileCheck`, `split-file`, ...).
     NotVerify,
 }
 
@@ -172,7 +172,6 @@ pub fn tokenize(cmd: &str) -> Vec<String> {
     for c in cmd.chars() {
         match quote {
             Some(q) if c == q => quote = None,
-            Some(_) => cur.push(c),
             None if c == '\'' || c == '"' => {
                 quote = Some(c);
                 any = true;
@@ -183,7 +182,7 @@ pub fn tokenize(cmd: &str) -> Vec<String> {
                 }
                 any = false;
             }
-            None => cur.push(c),
+            Some(_) | None => cur.push(c),
         }
     }
     if any || !cur.is_empty() {
@@ -197,11 +196,15 @@ fn std_range(sub: &str) -> Option<Vec<String>> {
     let range = sub.strip_prefix("%std_cxx")?;
     let (from, to) = range.split_once('-')?;
     let lo = STD_STEPS.iter().position(|s| *s == from)?;
-    let hi = if to.is_empty() { STD_STEPS.len() - 1 } else { STD_STEPS.iter().position(|s| *s == to)? };
+    let hi = if to.is_empty() {
+        STD_STEPS.len() - 1
+    } else {
+        STD_STEPS.iter().position(|s| *s == to)?
+    };
     (lo <= hi).then(|| STD_STEPS[lo..=hi].iter().map(|s| format!("c++{s}")).collect())
 }
 
-/// Whether `-triple <t>` is one kiln runs: x86-64 or AArch64, Linux or
+/// Whether `-triple <t>` is one kiln runs: x86-64 or `aarch64`, Linux or
 /// the generic `unknown-unknown` ELF target. `Ok(driver triple)`, else
 /// the skip reason.
 pub fn map_triple(t: &str) -> Result<String, String> {
@@ -221,7 +224,8 @@ pub fn map_triple(t: &str) -> Result<String, String> {
         return Err(format!("-triple {arch}-*"));
     }
     let linux = rest.iter().any(|p| p.starts_with("linux"));
-    let generic = rest.is_empty() || rest.iter().all(|p| matches!(*p, "unknown" | "pc" | "none" | "elf"));
+    let generic =
+        rest.is_empty() || rest.iter().all(|p| matches!(*p, "unknown" | "pc" | "none" | "elf"));
     if linux {
         Ok(std::iter::once(arch).chain(rest.iter().copied()).collect::<Vec<_>>().join("-"))
     } else if generic {
@@ -265,7 +269,11 @@ pub fn plan(cmd: &str, run: usize, dir: &str) -> RunPlan {
         head = it.next().unwrap_or("");
     }
     if head != "%clang_cc1" {
-        let what = if head.starts_with("%clang") { "driver RUN (%clang)" } else { "RUN is not %clang_cc1" };
+        let what = if head.starts_with("%clang") {
+            "driver RUN (%clang)"
+        } else {
+            "RUN is not %clang_cc1"
+        };
         return skip(what, 1);
     }
     let mut stds: Option<Vec<String>> = None;
@@ -276,7 +284,11 @@ pub fn plan(cmd: &str, run: usize, dir: &str) -> RunPlan {
     let mut saw_input = false;
     let mut pending_skip: Option<String> = None;
     while let Some(tok) = it.next() {
-        if matches!(tok, "|" | "||" | "&&" | ";") || tok.starts_with('>') || tok.contains(">&") || tok.starts_with("2>") {
+        if matches!(tok, "|" | "||" | "&&" | ";")
+            || tok.starts_with('>')
+            || tok.contains(">&")
+            || tok.starts_with("2>")
+        {
             return skip("pipe, redirection or compound RUN", stds.as_ref().map_or(1, Vec::len));
         }
         if tok.contains("%t") || tok.contains("%T") || tok.contains("%{") {
@@ -341,7 +353,17 @@ pub fn plan(cmd: &str, run: usize, dir: &str) -> RunPlan {
             None => {}
         }
         // Flags that take the next token as their value.
-        if matches!(tok, "-D" | "-U" | "-I" | "-isystem" | "-iquote" | "-idirafter" | "-include" | "-target-feature" | "-target-cpu") {
+        if matches!(
+            tok,
+            "-D" | "-U"
+                | "-I"
+                | "-isystem"
+                | "-iquote"
+                | "-idirafter"
+                | "-include"
+                | "-target-feature"
+                | "-target-cpu"
+        ) {
             let v = it.next().unwrap_or("");
             let v = v.replace("%S", dir);
             if tok == "-target-cpu" {
@@ -470,15 +492,21 @@ mod tests {
     /// spec/clang-neg.md "Flag mapping".
     #[test]
     fn flags_map_to_the_driver() {
-        let c = cases("%clang_cc1 -fsyntax-only -verify=expected,cxx11 -std=c++11 -Wno-unused -DX=1 -I %S/Inputs %s");
+        let c = cases(
+            "%clang_cc1 -fsyntax-only -verify=expected,cxx11 -std=c++11 -Wno-unused -DX=1 -I %S/Inputs %s",
+        );
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].std, "c++11");
         assert_eq!(c[0].prefixes, ["expected", "cxx11"]);
         assert_eq!(c[0].args, ["-fno-exceptions", "-Wno-unused", "-DX=1", "-I", "/t/Inputs"]);
-        let c = cases("%clang_cc1 -triple x86_64-unknown-unknown -fcxx-exceptions -fexceptions -verify %s");
+        let c = cases(
+            "%clang_cc1 -triple x86_64-unknown-unknown -fcxx-exceptions -fexceptions -verify %s",
+        );
         assert_eq!(c[0].args, ["--target=x86_64-unknown-linux-gnu"]);
         assert_eq!(c[0].std, "gnu++17");
-        let c = cases("not %clang_cc1 -verify -ferror-limit 3 -fno-caret-diagnostics -pedantic-errors %s");
+        let c = cases(
+            "not %clang_cc1 -verify -ferror-limit 3 -fno-caret-diagnostics -pedantic-errors %s",
+        );
         assert_eq!(c[0].args, ["-fno-exceptions", "-pedantic-errors"]);
     }
 
@@ -486,41 +514,64 @@ mod tests {
     /// standard.
     #[test]
     fn std_ranges_expand() {
-        let s: Vec<String> = cases("%clang_cc1 -verify %std_cxx98-14 %s").into_iter().map(|c| c.std).collect();
+        let s: Vec<String> =
+            cases("%clang_cc1 -verify %std_cxx98-14 %s").into_iter().map(|c| c.std).collect();
         assert_eq!(s, ["c++98", "c++11", "c++14"]);
-        let s: Vec<String> = cases("%clang_cc1 -verify %std_cxx20- %s").into_iter().map(|c| c.std).collect();
+        let s: Vec<String> =
+            cases("%clang_cc1 -verify %std_cxx20- %s").into_iter().map(|c| c.std).collect();
         assert_eq!(s, ["c++20", "c++23", "c++26"]);
-        assert_eq!(plan("%clang_cc1 -fblocks -verify %std_cxx17- %s", 1, "/t"), RunPlan::Skip { reason: "-fblocks".into(), configs: 4 });
+        assert_eq!(
+            plan("%clang_cc1 -fblocks -verify %std_cxx17- %s", 1, "/t"),
+            RunPlan::Skip { reason: "-fblocks".into(), configs: 4 }
+        );
     }
 
     /// spec/clang-neg.md "Skips".
     #[test]
     fn skip_reasons() {
-        assert_eq!(plan("%clang_cc1 -emit-llvm %s -o - | FileCheck %s", 1, "/t"), RunPlan::NotVerify);
+        assert_eq!(
+            plan("%clang_cc1 -emit-llvm %s -o - | FileCheck %s", 1, "/t"),
+            RunPlan::NotVerify
+        );
         assert_eq!(skipped("%clang_cc1 -fms-extensions -verify %s"), "-fms-extensions");
         assert_eq!(skipped("%clang_cc1 -triple i686-linux-gnu -verify %s"), "-triple i686-*");
         assert_eq!(skipped("%clang_cc1 -triple x86_64-apple-darwin -verify %s"), "-triple *-apple");
         assert_eq!(skipped("%clang_cc1 -triple arm64-apple-ios -verify %s"), "-triple *-apple");
         assert_eq!(map_triple("arm64-linux-gnu"), Ok("aarch64-linux-gnu".to_owned()));
         assert_eq!(map_triple("%itanium_abi_triple"), Ok(String::new()));
-        assert_eq!(cases("%clang_cc1 -triple %itanium_abi_triple -verify %s")[0].args, ["-fno-exceptions"]);
+        assert_eq!(
+            cases("%clang_cc1 -triple %itanium_abi_triple -verify %s")[0].args,
+            ["-fno-exceptions"]
+        );
         assert_eq!(cases("%clang_cc1 -verify --std=c++17 %s")[0].std, "c++17");
-        assert_eq!(skipped("%clang_cc1 -triple x86_64-pc-windows-msvc -verify %s"), "-triple *-windows");
-        assert_eq!(skipped("%clang_cc1 -verify -fmodules-ts %t/a.cpp"), "uses %t or %{...} (multi-step RUN)");
+        assert_eq!(
+            skipped("%clang_cc1 -triple x86_64-pc-windows-msvc -verify %s"),
+            "-triple *-windows"
+        );
+        assert_eq!(
+            skipped("%clang_cc1 -verify -fmodules-ts %t/a.cpp"),
+            "uses %t or %{...} (multi-step RUN)"
+        );
         assert_eq!(skipped("%clang -fsyntax-only -Xclang -verify %s"), "driver RUN (%clang)");
         assert_eq!(skipped("%clang_cc1 -x objective-c++ -verify %s"), "-x objective-c++");
         assert_eq!(skipped("%clang_cc1 -verify %s 2>&1"), "pipe, redirection or compound RUN");
-        assert_eq!(skipped("%clang_cc1 -fexperimental-new-constant-interpreter -verify %s"), "-fexperimental-new-constant-interpreter");
+        assert_eq!(
+            skipped("%clang_cc1 -fexperimental-new-constant-interpreter -verify %s"),
+            "-fexperimental-new-constant-interpreter"
+        );
     }
 
     /// spec/clang-neg.md "Skips": REQUIRES / UNSUPPORTED / XFAIL.
     #[test]
     fn requirement_lines() {
         assert_eq!(requirements("// REQUIRES: x86-registered-target\n"), None);
-        assert_eq!(requirements("// REQUIRES: aarch64-registered-target || arm-registered-target\n"), None);
+        assert_eq!(
+            requirements("// REQUIRES: aarch64-registered-target || arm-registered-target\n"),
+            None
+        );
         assert_eq!(requirements("// REQUIRES: asserts\n"), Some("REQUIRES: asserts".into()));
         assert_eq!(requirements("// UNSUPPORTED: system-netbsd\n"), None);
-        assert_eq!(requirements("// UNSUPPORTED: target={{.*}}-linux{{.*}}\n").is_some(), true);
+        assert!(requirements("// UNSUPPORTED: target={{.*}}-linux{{.*}}\n").is_some());
         assert_eq!(requirements("// XFAIL: *\n"), Some("XFAIL: *".into()));
     }
 }

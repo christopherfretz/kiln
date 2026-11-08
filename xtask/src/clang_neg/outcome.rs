@@ -267,9 +267,17 @@ mod tests {
         );
         assert_eq!(r.expected_errors[2], Entry { file: None, line: None, text: "any".into() });
         assert_eq!(r.seen_errors.len(), 3);
-        assert_eq!(r.seen_errors[1], Entry { file: None, line: Some(7), text: "use of undeclared identifier 'zz'".into() });
+        assert_eq!(
+            r.seen_errors[1],
+            Entry { file: None, line: Some(7), text: "use of undeclared identifier 'zz'".into() }
+        );
         assert!(!r.no_directives);
-        assert!(parse_report("error: no expected directives found: consider use of 'expected-no-diagnostics'\n").no_directives);
+        assert!(
+            parse_report(
+                "error: no expected directives found: consider use of 'expected-no-diagnostics'\n"
+            )
+            .no_directives
+        );
     }
 
     /// spec/clang-neg.md "Classification": line-level hits, verifier

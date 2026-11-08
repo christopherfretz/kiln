@@ -228,7 +228,9 @@ pub fn missed_clusters(results: &[CaseResult]) -> Vec<(String, Cluster)> {
         }
     }
     let mut v: Vec<_> = m.into_iter().collect();
-    v.sort_by(|a, b| b.1.files.len().cmp(&a.1.files.len()).then(b.1.count.cmp(&a.1.count)).then(a.0.cmp(&b.0)));
+    v.sort_by(|a, b| {
+        b.1.files.len().cmp(&a.1.files.len()).then(b.1.count.cmp(&a.1.count)).then(a.0.cmp(&b.0))
+    });
     v
 }
 
@@ -237,8 +239,12 @@ pub fn unsupported_clusters(results: &[CaseResult]) -> Vec<(String, usize, usize
     let mut m: BTreeMap<String, (usize, BTreeSet<&str>)> = BTreeMap::new();
     for r in results {
         let Some(c) = r.classified() else { continue };
-        let keys: BTreeSet<String> =
-            c.kiln_errors.iter().filter(|e| is_unsupported(&e.text)).map(|e| normalize(&e.text)).collect();
+        let keys: BTreeSet<String> = c
+            .kiln_errors
+            .iter()
+            .filter(|e| is_unsupported(&e.text))
+            .map(|e| normalize(&e.text))
+            .collect();
         for k in keys {
             let e = m.entry(k).or_default();
             e.0 += 1;
@@ -266,17 +272,17 @@ pub fn accepts_invalid_files(results: &[CaseResult]) -> Vec<(String, usize, usiz
             e.2 = e.2.max(c.expected.len());
         }
     }
-    let mut v: Vec<_> =
-        m.into_iter().filter(|(_, c)| c.0 > 0).map(|(f, c)| (f.to_owned(), c.0, c.1, c.2)).collect();
+    let mut v: Vec<_> = m
+        .into_iter()
+        .filter(|(_, c)| c.0 > 0)
+        .map(|(f, c)| (f.to_owned(), c.0, c.1, c.2))
+        .collect();
     v.sort_by(|a, b| b.3.cmp(&a.3).then(a.0.cmp(&b.0)));
     v
 }
 
 fn entry_json(e: &super::outcome::Entry) -> Json {
-    Json::obj([
-        ("line", Json::opt_num(e.line.map(f64::from))),
-        ("text", Json::str(e.text.clone())),
-    ])
+    Json::obj([("line", Json::opt_num(e.line.map(f64::from))), ("text", Json::str(e.text.clone()))])
 }
 
 /// The whole report as JSON: run info, totals, per-directory totals,
@@ -349,7 +355,11 @@ pub const END: &str = "<!-- clang-neg:end -->";
 
 fn cell(s: &str) -> String {
     let s = s.replace('|', "\\|").replace('\n', " ");
-    if s.chars().count() > 110 { format!("{}…", s.chars().take(110).collect::<String>()) } else { s }
+    if s.chars().count() > 110 {
+        format!("{}…", s.chars().take(110).collect::<String>())
+    } else {
+        s
+    }
 }
 
 /// The generated region of the status page.
@@ -358,7 +368,8 @@ pub fn render(info: &RunInfo, results: &[CaseResult], skips: &Skips) -> String {
     let mut o = String::new();
     let _ = writeln!(o, "{BEGIN}\n");
     let _ = writeln!(o, "## Run\n");
-    let _ = writeln!(o, "- clang tests: `{}` (`{}`), `clang/test`", info.clang_tag, info.clang_commit);
+    let _ =
+        writeln!(o, "- clang tests: `{}` (`{}`), `clang/test`", info.clang_tag, info.clang_commit);
     let _ = writeln!(o, "- kiln: {} at `{}`", info.kiln_version, info.kiln_commit);
     let _ = writeln!(o, "- command: `{}`", info.command);
     let _ = writeln!(o, "- limits: {}", info.limits);
@@ -370,7 +381,8 @@ pub fn render(info: &RunInfo, results: &[CaseResult], skips: &Skips) -> String {
         s.cases - s.flag_rejected,
         skips.total()
     );
-    let peak = s.peak_rss_kb.map_or_else(|| "unavailable".to_owned(), |k| format!("{} MiB", k / 1024));
+    let peak =
+        s.peak_rss_kb.map_or_else(|| "unavailable".to_owned(), |k| format!("{} MiB", k / 1024));
     let _ = writeln!(
         o,
         "- wall time {:.0} s; peak RSS of one case {peak} ({})\n",
@@ -380,10 +392,26 @@ pub fn render(info: &RunInfo, results: &[CaseResult], skips: &Skips) -> String {
     let _ = writeln!(o, "## Totals\n");
     let _ = writeln!(o, "| measure | count | of | rate |\n|---|---:|---:|---:|");
     let rows = [
-        ("ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration)", s.accepts_invalid_files, s.negative_files),
-        ("ACCEPTS-INVALID cases (per RUN configuration)", s.accepts_invalid_cases, s.negative_cases),
-        ("MISSED-ERROR lines (expected-error with no kiln error on its line)", s.missed, s.expected),
-        ("REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file)", s.rejects_valid_cases, s.no_diag_cases),
+        (
+            "ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration)",
+            s.accepts_invalid_files,
+            s.negative_files,
+        ),
+        (
+            "ACCEPTS-INVALID cases (per RUN configuration)",
+            s.accepts_invalid_cases,
+            s.negative_cases,
+        ),
+        (
+            "MISSED-ERROR lines (expected-error with no kiln error on its line)",
+            s.missed,
+            s.expected,
+        ),
+        (
+            "REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file)",
+            s.rejects_valid_cases,
+            s.no_diag_cases,
+        ),
         ("crashes", s.crashes, s.cases),
         ("timeouts", s.timeouts, s.cases),
         ("out of memory", s.ooms, s.cases),
@@ -396,6 +424,14 @@ pub fn render(info: &RunInfo, results: &[CaseResult], skips: &Skips) -> String {
         "\n{} cases had a directive kiln's verifier could not parse (counted as they ran). {} cases had a kiln \"not supported yet\" error, which counts as an error here although it is no verdict on the program (see the last table).\n",
         s.verify_complaints, s.unsupported_cases
     );
+    render_tables(&mut o, results, skips);
+    let _ = writeln!(o, "\n{END}");
+    o
+}
+
+/// The per-directory, per-file, per-cluster and per-outcome tables of
+/// [`render`].
+fn render_tables(o: &mut String, results: &[CaseResult], skips: &Skips) {
     let _ = writeln!(o, "## By directory\n");
     let _ = writeln!(
         o,
@@ -436,7 +472,8 @@ pub fn render(info: &RunInfo, results: &[CaseResult], skips: &Skips) -> String {
     } else {
         let _ = writeln!(o, "| file | configuration | first kiln error |\n|---|---|---|");
         for r in rv {
-            let first = r.classified().and_then(|c| c.kiln_errors.first()).map_or("", |e| e.text.as_str());
+            let first =
+                r.classified().and_then(|c| c.kiln_errors.first()).map_or("", |e| e.text.as_str());
             let _ = writeln!(o, "| `{}` | {} | {} |", r.file, r.cfg.label(), cell(first));
         }
     }
@@ -468,8 +505,6 @@ pub fn render(info: &RunInfo, results: &[CaseResult], skips: &Skips) -> String {
     for (r, c) in skips.ranked() {
         let _ = writeln!(o, "| {} | {} | {} |", cell(r), c.configs, c.files.len());
     }
-    let _ = writeln!(o, "\n{END}");
-    o
 }
 
 /// `existing` with its generated region replaced by `region` (appended
@@ -493,7 +528,12 @@ mod tests {
     fn case(file: &str, status: Status, no_diag: bool) -> CaseResult {
         CaseResult {
             file: file.into(),
-            cfg: CaseCfg { run: 1, std: "c++20".into(), prefixes: vec!["expected".into()], args: vec![] },
+            cfg: CaseCfg {
+                run: 1,
+                std: "c++20".into(),
+                prefixes: vec!["expected".into()],
+                args: vec![],
+            },
             status,
             no_diagnostics: no_diag,
             wall: Duration::from_millis(5),
@@ -521,8 +561,16 @@ mod tests {
         let y = e(5, "no member named 'b' in 'T'");
         let results = vec![
             case("CXX/a/p1.cpp", ran(&[x.clone(), y.clone()], &[x.clone(), y.clone()], &[]), false),
-            case("CXX/a/p1.cpp", ran(&[x.clone()], &[], &[x.clone()]), false),
-            case("CXX/b/p2.cpp", ran(&[x.clone(), y.clone()], &[y.clone()], &[x.clone()]), false),
+            case(
+                "CXX/a/p1.cpp",
+                ran(std::slice::from_ref(&x), &[], std::slice::from_ref(&x)),
+                false,
+            ),
+            case(
+                "CXX/b/p2.cpp",
+                ran(&[x.clone(), y.clone()], std::slice::from_ref(&y), std::slice::from_ref(&x)),
+                false,
+            ),
             case("SemaCXX/v.cpp", ran(&[], &[], &[e(1, "bad")]), true),
             case("SemaCXX/w.cpp", Status::Timeout, false),
         ];
@@ -555,7 +603,9 @@ mod tests {
             &Skips::default(),
         );
         assert!(page.contains("| `CXX/a/p1.cpp` | 1 / 2 | 2 |"));
-        assert!(page.contains("| MISSED-ERROR lines (expected-error with no kiln error on its line) | 3 | 5 | 60.0% |"));
+        assert!(page.contains(
+            "| MISSED-ERROR lines (expected-error with no kiln error on its line) | 3 | 5 | 60.0% |"
+        ));
         let spliced = splice(&format!("# T\n\n{BEGIN}\nold\n{END}\n\ntail\n"), &page);
         assert!(spliced.starts_with("# T\n\n") && spliced.ends_with("\n\ntail\n"));
         assert!(!spliced.contains("old"));

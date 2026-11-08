@@ -302,7 +302,9 @@ impl CaseResult {
                 format!("ACCEPTS-INVALID ({} expected errors)", c.expected.len())
             }
             _ if self.rejects_valid() => "REJECTS-VALID".to_owned(),
-            Status::Ran(c) => format!("{}/{} expected errors missed", c.missed.len(), c.expected.len()),
+            Status::Ran(c) => {
+                format!("{}/{} expected errors missed", c.missed.len(), c.expected.len())
+            }
             Status::Crash(k) => format!("CRASH {k}"),
             Status::Timeout => "TIMEOUT".to_owned(),
             Status::Oom => "OOM".to_owned(),
@@ -339,7 +341,9 @@ pub fn kiln_args(cfg: &CaseCfg, orig_dir: &Path, copy: &Path) -> Vec<String> {
         "-iquote".to_owned(),
         orig_dir.display().to_string(),
     ];
-    a.extend(cfg.args.iter().map(|x| if x == "%s" { copy.display().to_string() } else { x.clone() }));
+    a.extend(
+        cfg.args.iter().map(|x| if x == "%s" { copy.display().to_string() } else { x.clone() }),
+    );
     a
 }
 
@@ -368,15 +372,15 @@ fn run_case(cfg: &Config, job: &Job<'_>, idx: usize) -> CaseResult {
     let limit = cfg.mem.map(|m| m.plus(process::kiln_stack_reservation_mib(&args)));
     let mut cmd = Command::new(&cfg.kiln);
     cmd.args(&args).arg(&copy).current_dir(&dir);
-    r.status = match process::run_measured(&cmd, &cfg.probe, &dir.join("rss.txt"), cfg.timeout, limit)
-    {
-        Ok(m) => {
-            r.wall = m.wall;
-            r.max_rss_kb = m.max_rss_kb;
-            judge(m.status, &String::from_utf8_lossy(&m.stderr))
-        }
-        Err(e) => Status::ToolError(format!("cannot run {}: {e}", cfg.kiln.display())),
-    };
+    r.status =
+        match process::run_measured(&cmd, &cfg.probe, &dir.join("rss.txt"), cfg.timeout, limit) {
+            Ok(m) => {
+                r.wall = m.wall;
+                r.max_rss_kb = m.max_rss_kb;
+                judge(m.status, &String::from_utf8_lossy(&m.stderr))
+            }
+            Err(e) => Status::ToolError(format!("cannot run {}: {e}", cfg.kiln.display())),
+        };
     if r.wall.is_zero() {
         r.wall = start.elapsed();
     }
@@ -396,7 +400,9 @@ pub fn judge(status: Option<std::process::ExitStatus>, stderr: &str) -> Status {
     if st.code().is_none_or(|c| c >= 128) {
         return Status::Crash(format!("crash: {st}"));
     }
-    if let Some(line) = stderr.lines().find(|l| l.starts_with("kiln++: error: ") || l.starts_with("kiln: error: ")) {
+    if let Some(line) =
+        stderr.lines().find(|l| l.starts_with("kiln++: error: ") || l.starts_with("kiln: error: "))
+    {
         let msg = line.split_once("error: ").map_or(line, |(_, m)| m);
         return Status::FlagRejected(format!("kiln: {msg}"));
     }
@@ -404,7 +410,10 @@ pub fn judge(status: Option<std::process::ExitStatus>, stderr: &str) -> Status {
 }
 
 /// The scheduled jobs and the skips, from the selected files.
-fn plan_all<'a>(base: &Path, files: &'a [(String, String)]) -> (Vec<Job<'a>>, report::Skips, usize) {
+fn plan_all<'a>(
+    base: &Path,
+    files: &'a [(String, String)],
+) -> (Vec<Job<'a>>, report::Skips, usize) {
     let mut jobs = Vec::new();
     let mut skips = report::Skips::default();
     let mut verify_files = 0;
@@ -456,7 +465,11 @@ fn execute(opts: &Options) -> Result<(), String> {
         for (reason, s) in skips.ranked() {
             println!("skip {:>5} configs / {:>4} files  {reason}", s.configs, s.files.len());
         }
-        println!("{} files, {verify_files} with -verify RUN lines, {} cases", files.len(), jobs.len());
+        println!(
+            "{} files, {verify_files} with -verify RUN lines, {} cases",
+            files.len(),
+            jobs.len()
+        );
         return Ok(());
     }
 
@@ -494,13 +507,12 @@ fn execute(opts: &Options) -> Result<(), String> {
             skips.add(reason, &r.file, 1);
         }
     }
-    let info = run_info(opts, &cfg, &root, &tests, &paths, files.len(), verify_files, start.elapsed());
+    let info =
+        run_info(opts, &cfg, &root, &tests, &paths, files.len(), verify_files, start.elapsed());
     let summary = report::Summary::of(&results);
     println!("\n{}", summary.line());
-    let json_path = opts
-        .json
-        .clone()
-        .unwrap_or_else(|| target.join("xtask-clang-neg").join("report.json"));
+    let json_path =
+        opts.json.clone().unwrap_or_else(|| target.join("xtask-clang-neg").join("report.json"));
     if let Some(d) = json_path.parent() {
         let _ = std::fs::create_dir_all(d);
     }
@@ -535,7 +547,7 @@ fn run_all(cfg: &Config, jobs: &[Job<'_>], n: usize, verbose: bool) -> Vec<CaseR
                     let notable = !matches!(r.status, Status::Ran(_)) || r.rejects_valid();
                     if verbose || notable {
                         println!("[{finished}/{}] {}", jobs.len(), r.console_line());
-                    } else if finished % 500 == 0 {
+                    } else if finished.is_multiple_of(500) {
                         println!("[{finished}/{}]", jobs.len());
                     }
                     slots.lock().expect("no worker panics while holding the lock")[i] = Some(r);
@@ -599,7 +611,10 @@ fn run_info(
         command,
         limits: format!(
             "{} per case (plus kiln's stack reservation); timeout {} s; -j {}",
-            cfg.mem.map_or_else(|| "no memory cap".to_owned(), |m| format!("{} MiB address space", m.mib)),
+            cfg.mem.map_or_else(
+                || "no memory cap".to_owned(),
+                |m| format!("{} MiB address space", m.mib)
+            ),
             cfg.timeout.as_secs_f64(),
             opts.jobs
         ),
@@ -679,8 +694,14 @@ mod tests {
             judge(code(101), "thread 'main' panicked at crates/a.rs:1:2:\nboom\n"),
             Status::Crash(_)
         ));
-        assert!(matches!(judge(Some(std::process::ExitStatus::from_raw(11)), ""), Status::Crash(_)));
-        let ok = judge(code(1), "error: 'expected-error' diagnostics expected but not seen: \n  File a.cpp Line 3: KILN-NEG x\n");
+        assert!(matches!(
+            judge(Some(std::process::ExitStatus::from_raw(11)), ""),
+            Status::Crash(_)
+        ));
+        let ok = judge(
+            code(1),
+            "error: 'expected-error' diagnostics expected but not seen: \n  File a.cpp Line 3: KILN-NEG x\n",
+        );
         assert!(matches!(ok, Status::Ran(ref c) if c.accepts_invalid()));
         assert_eq!(judge(code(0), ""), Status::Ran(Classified::default()));
     }
