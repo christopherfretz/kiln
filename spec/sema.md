@@ -5192,7 +5192,14 @@ for them.
     expansion; after taking both locations out of macro arguments, it is
     dropped when that location and the conversion's context are in
     different files or macro expansions (`#define MYNULL __null` does
-    not warn).
+    not warn). The same check covers an operand of type
+    `std::nullptr_t` (`!nullptr`, `nullptr && b`, `if (nullptr)`, a
+    `std::nullptr_t` variable), as `implicit conversion of nullptr
+    constant to 'T'`, reported at the operand with no `NULL` macro step;
+    a conditional operator source is checked arm by arm (clang's
+    `CheckConditionalOperator`; WP-851,
+    `conv.bool/nullptr-null-conversion.cpp`). kiln prints no `false`
+    fix-it.
   - [-Wnull-arithmetic] (clang's `checkArithmeticNull`), at the operator
     of a built-in `+ - * / % << >> & ^ |`, compound assignment, or
     comparison with a `__null` operand (implicit casts and parentheses
