@@ -523,7 +523,35 @@ impl Parser<'_, '_> {
         self.parse_attributes(&mut v);
     }
 
-    /// The name of an attribute: an identifier or keyword.
+    /// The name or scope of a `[[...]]` attribute: an identifier or
+    /// keyword (clang `TryParseCXX11AttributeIdentifier`). A numeric
+    /// constant produced by expanding the predefined `__clang__` macro (the
+    /// expansion is spelled `__clang__`) is read as `_Clang`, with "'__clang__'
+    /// is a predefined macro name, not an attribute scope specifier"
+    /// [-Wignored-attributes] and a fix-it to `_Clang`; it is still the
+    /// clang scope (spec/parse.md, attribute scopes; WP-891). The caller
+    /// consumes the token.
+    fn cxx11_attr_ident(&mut self) -> Option<Symbol> {
+        let t = self.tok();
+        match t.kind {
+            TokKind::Identifier(s) => Some(s),
+            TokKind::PpNumber if self.sm.is_macro_loc(t.span.lo) => {
+                let at = self.sm.expansion_span(t.span.lo);
+                if self.sm.span_text(at) != Some("__clang__") {
+                    return None;
+                }
+                let d = self
+                    .s
+                    .diag(DiagId::parse_wrong_clang_attr_namespace, t.span.lo)
+                    .fixit(kiln_diag::FixIt::replace(at, "_Clang"));
+                self.emit(d);
+                Some(self.s.intern("_Clang"))
+            }
+            _ => None,
+        }
+    }
+
+    /// The name of a GNU attribute: an identifier or keyword.
     fn attr_name(&self) -> Option<Symbol> {
         match self.tok().kind {
             TokKind::Identifier(s) => Some(s),
@@ -543,7 +571,7 @@ impl Parser<'_, '_> {
         let mut default_scope = None;
         if self.at_kw(Kw::Using) {
             self.bump();
-            default_scope = self.attr_name();
+            default_scope = self.cxx11_attr_ident();
             if default_scope.is_some() {
                 self.bump();
             } else {
@@ -577,7 +605,7 @@ impl Parser<'_, '_> {
                 mix.reported = true;
                 self.error_here(DiagId::parse_annotation_mixed);
             }
-            let Some(mut name) = self.attr_name() else {
+            let Some(mut name) = self.cxx11_attr_ident() else {
                 self.error_here(DiagId::parse_expected_unqualified_id);
                 self.skip_until(&[Punct::RSquare], false, false);
                 break;
@@ -587,7 +615,7 @@ impl Parser<'_, '_> {
             let mut name_loc = loc;
             if self.at(Punct::ColonColon) {
                 self.bump();
-                let Some(n) = self.attr_name() else {
+                let Some(n) = self.cxx11_attr_ident() else {
                     self.error_here(DiagId::parse_expected_unqualified_id);
                     self.skip_until(&[Punct::RSquare], false, false);
                     break;
@@ -693,23 +721,20 @@ impl Parser<'_, '_> {
     /// [`Parser::parse_gnu_attributes`] after declarator `decl`, if any.
     fn parse_gnu_attributes_in(&mut self, out: &mut Vec<AttrId>, decl: Option<&Declarator>) {
         self.bump();
-        let Some(l1) = self.expect(Punct::LParen) else { return };
-        let Some(l2) = self.expect(Punct::LParen) else {
+        if self.expect(Punct::LParen).is_none() {
+            return;
+        }
+        if self.expect(Punct::LParen).is_none() {
             self.skip_until(&[Punct::RParen], false, true);
             return;
-        };
+        }
         loop {
-            if self.at(Punct::RParen) || self.at_eof() {
-                break;
-            }
             if self.eat(Punct::Comma).is_some() {
                 continue;
             }
-            let Some(name) = self.attr_name() else {
-                self.error_here(DiagId::parse_expected_unqualified_id);
-                self.skip_until(&[Punct::RParen], false, false);
-                break;
-            };
+            // clang `ParseGNUAttributes`: anything but a name ends the
+            // list, and the closing `))` below report what follows.
+            let Some(name) = self.attr_name() else { break };
             let loc = self.bump().span.lo;
             let args = match decl {
                 Some(d) if d.is_function_declarator() && self.sees_params(name) => {
@@ -731,8 +756,21 @@ impl Parser<'_, '_> {
                 break;
             }
         }
-        self.expect_closing(Punct::RParen, Punct::LParen, l2);
-        self.expect_closing(Punct::RParen, Punct::LParen, l1);
+        // clang `ExpectAndConsume(tok::r_paren)` then `SkipUntil(r_paren,
+        // StopAtSemi)`, once per `)`: "expected ')'" after the previous
+        // token, without a "to match this '('" note (WP-878); both are
+        // reported when both are missing, even at one location.
+        for _ in 0..2 {
+            if self.eat(Punct::RParen).is_none() {
+                let d = self
+                    .s
+                    .diag(DiagId::parse_expected, self.expected_loc())
+                    .arg(crate::parser::quote(Punct::RParen))
+                    .allow_duplicate();
+                self.emit(d);
+                self.skip_until(&[Punct::RParen], true, true);
+            }
+        }
         self.gnu_attr_end = self.prev_lo();
     }
 

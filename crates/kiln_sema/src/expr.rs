@@ -2195,8 +2195,11 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return self.recover_err(&[], loc);
             }
-            DeclKind::Var
-            | DeclKind::ParmVar
+            // A local variable named before it has an initializer (in its
+            // own initializer, or declared without one) arms the
+            // uninitialized-values analysis of the body.
+            DeclKind::Var => self.note_uninit_var(d),
+            DeclKind::ParmVar
             | DeclKind::Binding
             | DeclKind::Function
             | DeclKind::EnumConstant

@@ -466,7 +466,9 @@ impl Sema<'_, '_> {
                     && i > start
                     && matches!(text[i - 1], b'e' | b'E' | b'p' | b'P')
                     && (text[start].is_ascii_digit() || text[start] == b'.');
-                if !(word(c) || exp_sign) {
+                // `.` continues a number (`1.5`), not a name (`a.b`).
+                let ident_dot = c == b'.' && !(text[start].is_ascii_digit() || text[start] == b'.');
+                if !(word(c) || exp_sign) || ident_dot {
                     break;
                 }
                 i += 1;

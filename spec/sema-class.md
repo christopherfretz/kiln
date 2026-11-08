@@ -1736,17 +1736,43 @@ collected, and only the temporary bound directly to `__range` is extended.
 Templates collect again when the range is substituted (`templ/subst/stmts.rs`
 `range_for`).
 
-**Lifetime analysis (WP-204, WP-227, WP-674; `class/temporary/lifetime.rs`,
+**Lifetime analysis (WP-204, WP-227, WP-674, WP-891; `class/temporary/lifetime.rs`,
 `class/temporary/gsl.rs`; clang 19 `CheckExprLifetime.cpp`).** One walk
-serves four entities, run after the initializer is built (and, for a
+serves six entities, run after the initializer is built (and, for a
 variable, after lifetime extension):
 
-- `check_var_lifetime(v, init)`: a non-implicit variable (`LK_Extended`),
-  and each element of its braced aggregate initializer as a subobject
-  (an array element, a base, a field, the active union member; braces
-  around one scalar or a same-type initializer are the variable itself);
+- `check_var_lifetime(v, init)`: a variable (`LK_Extended`), and each
+  element of its braced aggregate initializer as a subobject (an array
+  element including the array filler, a base, a field, the active union
+  member; braces around one scalar or a same-type initializer are the
+  variable itself). Implicit variables are checked too (WP-875): the
+  range-for `__range` and a structured binding's tuple-like holding
+  variable; their diagnostics use the implicit wording (`temporary
+  implicitly bound to local reference`, no name; `array backing local
+  initializer list`) and the note `in implicit initialization of binding
+  declaration 'b'` / `binding reference variable here`. Under P2718
+  (C++23 and later, `range_lifetime_extension`) with
+  `-fclang-compat>=22` the `__range` variable is not checked, as clang 22
+  extends every range-initializer temporary; clang 19 still warns;
 - `check_member_init_lifetime(field, init)`: a mem-initializer
-  (`LK_MemInitializer`);
+  (`LK_MemInitializer`), and a default member initializer used by a
+  user-provided or implicit constructor (`collect_field_init`), which
+  binding a temporary makes the error below at the constructor (the
+  member's mem-initializer for a subobject), with `initializing field
+  'f' with default member initializer` and, for an implicit constructor,
+  `in implicit default constructor for 'T' first required here`;
+- `check_base_init_lifetime(init, ty)` (WP-875): a base-class
+  mem-initializer, as clang's `EK_Base` entity: the base itself has no
+  lifetime, each member of an aggregate-initialized base is judged as a
+  mem-initialized field (`B() : A{0}`, `Q(int x) : P{&x}`). A delegating
+  mem-initializer is not checked (clang's `EK_Delegating` FIXME);
+- `check_new_lifetime(init, ty)` (WP-874): a new-initializer (`LK_New`):
+  a temporary bound to a reference member of the allocated object is
+  `temporary bound to reference member of allocated object will be
+  destroyed at the end of the full-expression` [-Wdangling-field], a
+  backing array `array backing {initializer list subobject of the
+  allocated object|the allocated initializer list} will be destroyed
+  ...` [-Wdangling-initializer-list]; non-temporaries are not diagnosed;
 - `check_return_lifetime(c, ret)`: a converted `return` operand,
   including a braced `return {...}` (`LK_Return`);
 - `check_assignment_lifetime(lhs, rhs)`: a built-in assignment or
@@ -1770,7 +1796,10 @@ templates are checked again at instantiation. A glvalue initializer is walked as
   stops at a temporary (then walks the temporary's initializer), an
   automatic variable or parameter of non-reference type, the
   initializer of a local reference (not a reference parameter), `*p`
-  (walks `p`), both `?:` arms and a call (below).
+  (walks `p`), both `?:` arms and a call (below). For the GNU binary
+  conditional `a ?: b` (WP-876) the arms are the opaque common operand
+  and `b`; as in clang only `b` reaches a local, the common operand is
+  never followed. A C++ compound literal is a prvalue temporary.
 - *initializer*: through `&` and array decay (a temporary's address),
   object-preserving casts (no-op, bit, base/derived, dynamic, to-union,
   user-defined and constructor conversions, integral/pointer casts,
@@ -1837,7 +1866,15 @@ field 'f' with default member initializer`, and the capture notes:
   destroyed ...` [-Wdangling-initializer-list]; a gsl Owner temporary
   reached only through gsl steps is `object backing the pointer will be
   destroyed at the end of the full-expression` [-Wdangling-gsl]. A path
-  through another variable's initializer is not diagnosed.
+  through another variable's initializer is not diagnosed. A temporary
+  created by a default member initializer that an aggregate initializer
+  uses (`A a{};` with `const int &r = 1;`, CWG1815) would be extended:
+  under `-fclang-compat=19` it is `lifetime extension of
+  {temporary|backing array of initializer list} created by aggregate
+  initialization using a default member initializer is not yet
+  supported; ...` [-Wdangling] at the closing brace once per member (and
+  once for an array filler), with the default-member-initializer note;
+  with `-fclang-compat>=20` it is extended and not diagnosed (WP-874).
 - *mem-initializer*: a temporary is `{reference|backing array for
   'std::initializer_list'} {|subobject of }member 'f' binds to a
   temporary object whose lifetime is shorter than the lifetime of the
@@ -1870,13 +1907,12 @@ Groups: `-Wdangling` contains `-Wdangling-assignment`,
 `-Wdangling-assignment-gsl`, `-Wdangling-field`, `-Wdangling-gsl`,
 `-Wdangling-initializer-list` and `-Wreturn-stack-address` (clang 19).
 
-Not yet (follow-ups): temporaries reached through a default member
-initializer used by an aggregate initializer (clang's
-`ShouldExtend`/`warn_unsupported_lifetime_extension`); `new`-initializers
-(`LK_New`); base and delegating mem-initializers; implicit variables
-(range-for `__range`) and structured bindings; `coro_lifetimebound`; GNU
-`?:`, compound literals and parenthesized aggregate initialization in the
-walk; clang 20+ additions (`lifetime_capture_by`, `-Wdangling-capture`,
+Parenthesized aggregate initialization (`A pa(id(3))`) is walked as
+clang 19 walks it (WP-876); clang 22's handling of it is WP-877.
+
+Not yet (follow-ups): `coro_lifetimebound` (needs the coroutine
+attributes promoted from the ignored class, `attr_triage.rs`); clang 20+
+additions (`lifetime_capture_by`, `-Wdangling-capture`,
 the `-Wdangling-gsl` extensions to more `std` members and the
 `-Wreturn-stack-address` cases of clang 22).
 

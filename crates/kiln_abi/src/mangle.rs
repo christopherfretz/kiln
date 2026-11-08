@@ -1104,6 +1104,21 @@ pub fn mangle_rtti(ast: &Ast, anon: &mut AnonIds, q: QualType, prefix: &str) -> 
     m.out
 }
 
+/// `prefix` followed by the pointer to member type `M <class> <pointee>`
+/// (WP-873: clang `CreateMetadataIdentifierForVirtualMemPtrType`'s
+/// `_ZTS` name of a virtual function's member pointer type).
+pub fn mangle_member_pointer_rtti(
+    ast: &Ast,
+    anon: &mut AnonIds,
+    pointee: QualType,
+    class: kiln_ast::ids::TypeId,
+    prefix: &str,
+) -> String {
+    let mut m = Mangler::new(ast, anon, prefix);
+    m.member_pointer(pointee, class);
+    m.out
+}
+
 /// `<special-name>` of a class: `prefix` followed by the class's <type>
 /// (`_ZTV` vtable, `_ZTT` VTT, `_ZTI` `type_info`, `_ZTS` `type_info` name;
 /// WP-080).

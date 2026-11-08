@@ -185,6 +185,7 @@ note_lambda_this_capture_fixit = Note (0) "explicitly capture 'this'";
 note_local_decl_close_match = Note (0) "local declaration nearly matches";
 note_local_decl_close_param_match = Note (3) "type of {0} parameter of local declaration does not match definition ({1} vs {2})";
 note_local_var_init = Note (2) "{0:via initialization of|binding reference} variable {1} here";
+note_local_var_init_implicit = Note (1) "{0:via initialization of|binding reference} variable here";
 note_logical_instead_of_bitwise_change_operator = Note (1) "use '{0}' for a bitwise operation";
 note_logical_instead_of_bitwise_remove_constant = Note (0) "remove constant to silence this warning";
 note_loop_iteration_here = Note (1) "{0:decremented|incremented} here";
