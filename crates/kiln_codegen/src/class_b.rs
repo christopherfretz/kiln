@@ -13,12 +13,12 @@
 //! - [`Cg::class_b_prolog_params`]: `EmitFunctionProlog`'s parameter
 //!   facts.
 
+use kiln_abi::call::ArgKind;
+use kiln_abi::irtype::IrType;
 use kiln_ast::DeclId;
 use kiln_ast::attr::{AttrKind as K, AttrNode};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::RawId;
-use kiln_abi::call::ArgKind;
-use kiln_abi::irtype::IrType;
 use kiln_llvm::{Attr, AttrKind, AttrSetId, TypeId as LTy};
 
 use crate::module::{Cg, Sig};
@@ -261,7 +261,8 @@ impl Cg<'_> {
     /// `EmitFunctionProlog`'s `ABIArgInfo::Direct` case with a pointer
     /// coercion at offset 0).
     fn arg_slots(sig: &Sig) -> Vec<(Option<usize>, bool)> {
-        let mut at = usize::from(sig.sret()) + usize::from(sig.this.is_some()) + usize::from(sig.vtt);
+        let mut at =
+            usize::from(sig.sret()) + usize::from(sig.this.is_some()) + usize::from(sig.vtt);
         let mut out = Vec::with_capacity(sig.info.args.len());
         for a in &sig.info.args {
             match &a.kind {
@@ -370,8 +371,7 @@ impl Cg<'_> {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    idx.is_empty()
-                        || idx.iter().any(|&v| v.checked_sub(1 + this) == Some(i as u32))
+                    idx.is_empty() || idx.iter().any(|&v| v.checked_sub(1 + this) == Some(i as u32))
                 });
             if (fn_nn || self.has_fn_attr(p, K::NONNULL)) && !self.opts.null_pointer_is_valid {
                 self.add_param_attr(params, at, Attr::Flag(AttrKind::NonNull));

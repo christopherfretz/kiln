@@ -900,12 +900,19 @@ fn codegen_flags_classes() {
         &["-fdelete-null-pointer-checks"],
         &["-Wp,-D_FORTIFY_SOURCE=2"],
         &["-Xpreprocessor", "-DX=1"],
-        // Class 2: accepted and ignored.
-        &["-fstack-clash-protection"],
-        &["-fno-stack-clash-protection"],
+        // WP-813: `-fcf-protection` other than `none` is x86-only.
         &["-fcf-protection"],
         &["-fcf-protection=full"],
         &["-fcf-protection=none"],
+        &["-fpatchable-function-entry=2,1"],
+        &["-fzero-call-used-regs=used-gpr"],
+        &["-mspeculative-load-hardening"],
+        &["-fsplit-stack"],
+        &["-finstrument-functions"],
+        &["-fxray-instrument"],
+        // Class 2: accepted and ignored.
+        &["-fstack-clash-protection"],
+        &["-fno-stack-clash-protection"],
         &["-fno-common"],
         &["-fcommon"],
         &["-fexcess-precision=standard"],
@@ -935,6 +942,13 @@ fn codegen_flags_classes() {
         // as clang ("Target features"), so the host target decides.
         if flags.contains(&"-mcpu=native") && !cfg!(target_arch = "aarch64") {
             continue;
+        }
+        let mut flags = flags.to_vec();
+        if cfg!(target_arch = "aarch64") {
+            flags.retain(|f| !matches!(*f, "-fcf-protection" | "-fcf-protection=full"));
+            if flags.is_empty() {
+                continue;
+            }
         }
         let mut args = flags.to_vec();
         args.extend(["-c", "m.cpp", "-o", "m.o"]);
@@ -977,9 +991,14 @@ fn codegen_flags_rejected() {
         );
         assert!(!d.join("r.o").exists(), "{f}");
     }
-    // Values outside clang's sets are clang's errors.
+    // Values outside clang's sets are clang's errors (`-fcf-protection=`'s
+    // is `-cc1`'s, with no program name; WP-813).
+    let o = kiln_in(&d, &["-fcf-protection=bogus", "-c", "m.cpp", "-o", "r.o"]);
+    assert_eq!(
+        (o.status.code(), text(&o.stderr).as_str()),
+        (Some(1), "error: invalid value 'bogus' in '-fcf-protection=bogus'\n")
+    );
     for (f, want) in [
-        ("-fcf-protection=bogus", "invalid value 'bogus' in '-fcf-protection=bogus'"),
         ("-gz=lzma", "unsupported argument 'lzma' to option '-gz='"),
         ("-fexcess-precision=none", "unsupported argument 'none' to option '-fexcess-precision='"),
         ("-mtune=", "unsupported argument '' to option '-mtune='"),

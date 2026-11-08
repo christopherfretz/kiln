@@ -86,7 +86,8 @@ impl Cg<'_> {
         // The command-line features that are no CPU's (WP-813: the
         // retpoline thunks of `-mspeculative-load-hardening`).
         const OPTION_FEATURES: [&str; 1] = ["+retpoline-indirect-calls"];
-        let cpu_features = self.opts.target_features.iter().any(|e| !OPTION_FEATURES.contains(&&**e));
+        let cpu_features =
+            self.opts.target_features.iter().any(|e| !OPTION_FEATURES.contains(&&**e));
         if !cpu_features && !own_cpu {
             f.extend(X86_64.iter().map(|n| ((*n).to_owned(), true)));
         }

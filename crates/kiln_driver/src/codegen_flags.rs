@@ -581,12 +581,98 @@ mod tests {
             parse(&["-gz=lzma"]).1,
             [Some(Err(ArgError::UnsupportedValue("-gz=".into(), "lzma".into())))]
         );
-        assert_eq!(
-            parse(&["-fcf-protection=bogus"]).1,
-            [Some(Err(ArgError::InvalidFlagValue("-fcf-protection=bogus".into(), "bogus".into())))]
-        );
         assert_eq!(parse(&["-fbogus"]).1, [None]);
         assert_eq!(parse(&["-mtune=x86-64"]).0.mtune.as_deref(), Some("x86-64"));
+    }
+
+    /// WP-813: the hardening and instrumentation flags.
+    #[test]
+    fn hardening() {
+        let (f, r) = parse(&[
+            "-fcf-protection",
+            "-fpatchable-function-entry=3,1",
+            "-fzero-call-used-regs=used-gpr",
+            "-mfunction-return=thunk-extern",
+            "-mspeculative-load-hardening",
+            "-fsplit-stack",
+            "-finstrument-functions",
+            "-finstrument-function-entry-bare",
+            "-fxray-instrument",
+            "-fxray-instruction-threshold=7",
+            "-fxray-ignore-loops",
+        ]);
+        assert!(r.iter().all(|r| *r == Some(Ok(()))), "{r:?}");
+        let h = f.hardening(true);
+        assert!(h.cf_protection_branch && h.cf_protection_return && h.fn_return_thunk_extern);
+        assert_eq!(h.patchable_function_entry, Some((3, 1)));
+        assert_eq!(h.zero_call_used_regs, Some("used-gpr"));
+        assert!(h.speculative_load_hardening && h.split_stack && h.instrument_functions);
+        assert!(h.instrument_function_entry_bare && !h.instrument_functions_after_inlining);
+        let x = h.xray.expect("xray");
+        assert_eq!((x.threshold, x.ignore_loops), (7, true));
+        // Off x86 the x86-only options are dropped and reported.
+        let a = f.hardening(false);
+        assert!(!a.cf_protection_branch && !a.cf_protection_return && !a.fn_return_thunk_extern);
+        assert_eq!(f.target_errors(false).len(), 2);
+        assert!(f.target_errors(true).is_empty());
+        let t = "aarch64-unknown-linux-gnu";
+        assert_eq!(
+            f.invocation_errors(false, t),
+            [TargetError::NotAllowedWith("-mfunction-return=", t.into())]
+        );
+        assert!(f.invocation_errors(true, t).is_empty());
+        // XRay with patchable entries is the driver's error.
+        assert_eq!(f.xray_errors().len(), 1);
+        assert!(!f.cf_protection_branch(false) && f.cf_protection_branch(true));
+    }
+
+    #[test]
+    fn hardening_errors() {
+        let bad = |a: &str, v: &str| TargetError::InvalidValue(a.into(), v.into());
+        let (f, r) =
+            parse(&["-fcf-protection=bogus", "-mfunction-return=x", "-fzero-call-used-regs=y"]);
+        assert!(r.iter().all(|r| *r == Some(Ok(()))), "{r:?}");
+        // clang's order, not the command line's; x86 repeats the
+        // `-mfunction-return=` one.
+        let t = "x86_64-unknown-linux-gnu";
+        assert_eq!(
+            f.invocation_errors(true, t),
+            [
+                bad("-mfunction-return=x", "x"),
+                bad("-fzero-call-used-regs=y", "y"),
+                bad("-fcf-protection=bogus", "bogus"),
+                bad("-mfunction-return=x", "x"),
+            ]
+        );
+        // A later valid value replaces an invalid one.
+        assert!(
+            parse(&["-fcf-protection=bogus", "-fcf-protection=none"])
+                .0
+                .invocation_errors(true, t)
+                .is_empty()
+        );
+        let inv = |v: &str| {
+            ArgError::InvalidArgumentToOption(v.into(), "fpatchable-function-entry=".into())
+        };
+        assert_eq!(parse(&["-fpatchable-function-entry=x"]).1, [Some(Err(inv("x")))]);
+        assert_eq!(parse(&["-fpatchable-function-entry=1,"]).1, [Some(Err(inv("1,")))]);
+        assert_eq!(
+            parse(&["-fpatchable-function-entry=1,2"]).1,
+            [Some(Err(ArgError::PatchableEntryOffset))]
+        );
+        assert_eq!(
+            parse(&["-fpatchable-function-entry=2,2"]).0.patchable_function_entry,
+            Some((2, 2))
+        );
+        // XRay's options: unused without `-fxray-instrument`, checked with it.
+        let (f, _) = parse(&["-fxray-instruction-threshold=abc", "-fxray-modes=none"]);
+        assert_eq!(f.unused_xray_args(), ["-fxray-instruction-threshold=abc", "-fxray-modes=none"]);
+        assert!(f.xray_errors().is_empty());
+        let (f, _) =
+            parse(&["-fxray-instruction-threshold=abc", "-fxray-modes=none", "-fxray-instrument"]);
+        assert!(f.unused_xray_args().is_empty());
+        assert_eq!(f.xray_errors().len(), 2);
+        assert_eq!(parse(&["-finstrument-functions-exclude-file-list=a"]).1, [None]);
     }
 
     #[test]

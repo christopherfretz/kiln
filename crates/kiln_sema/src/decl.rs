@@ -10228,12 +10228,12 @@ impl Sema<'_, '_> {
         if let Some((kind, preset)) =
             crate::class_b_attrs::kind_of(&n, syntax, scope_s.as_deref(), x86, self.clang_compat)
         {
-            let arg_name = if syntax == AttrSyntax::Cxx11 && scope.is_some() && self.clang_compat >= 22
-            {
-                shown.clone()
-            } else {
-                n.clone()
-            };
+            let arg_name =
+                if syntax == AttrSyntax::Cxx11 && scope.is_some() && self.clang_compat >= 22 {
+                    shown.clone()
+                } else {
+                    n.clone()
+                };
             return self.class_b_attribute(kind, preset, syntax, &arg_name, &shown, args, loc);
         }
         // clang 19 names only the attribute, not its scope.

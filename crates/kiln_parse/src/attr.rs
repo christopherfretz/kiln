@@ -528,8 +528,8 @@ impl Parser<'_, '_> {
             }
             let text = self.s.ast.symbols().as_str(name).to_owned();
             // clang 19 `Clang<"assume">` is the same statement attribute.
-            let clang_assume = scope
-                .is_some_and(|s| matches!(self.s.ast.symbols().as_str(s), "clang" | "_Clang"));
+            let clang_assume =
+                scope.is_some_and(|s| matches!(self.s.ast.symbols().as_str(s), "clang" | "_Clang"));
             let args = if (scope.is_none() || clang_assume) && text == "assume" {
                 self.parse_assume_arg(name)
             } else if scope.is_none()

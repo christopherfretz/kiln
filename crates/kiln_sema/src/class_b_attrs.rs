@@ -237,10 +237,8 @@ impl Sema<'_, '_> {
                     return None;
                 }
                 if args.len() > 2 {
-                    let msg = self
-                        .diag(DiagId::sema_attribute_too_many_arguments, loc)
-                        .arg(q)
-                        .arg("2");
+                    let msg =
+                        self.diag(DiagId::sema_attribute_too_many_arguments, loc).arg(q).arg("2");
                     self.emit(msg);
                     return None;
                 }
@@ -358,9 +356,7 @@ impl Sema<'_, '_> {
                     Err(true) if kind == AttrKind::CODE_ALIGN && self.is_dependent_arg(arg) => 0,
                     Err(true) => {
                         let msg = if kind == AttrKind::XRAY_LOG_ARGS {
-                            self.diag(DiagId::sema_attribute_param_not_ice, loc)
-                                .arg(q)
-                                .arg("1")
+                            self.diag(DiagId::sema_attribute_param_not_ice, loc).arg(q).arg("1")
                         } else {
                             self.diag(DiagId::sema_attribute_requires_integer_constant, loc).arg(q)
                         };
@@ -509,7 +505,8 @@ impl Sema<'_, '_> {
                 false
             }
             AttrKind::NOCF_CHECK => {
-                func || self.is_fn_pointer_decl(d) || wrong(self, false, "functions and function pointers")
+                func || self.is_fn_pointer_decl(d)
+                    || wrong(self, false, "functions and function pointers")
             }
             AttrKind::NO_STACK_PROTECTOR
             | AttrKind::NO_PROFILE_INSTRUMENT_FUNCTION
@@ -739,8 +736,7 @@ impl Sema<'_, '_> {
                 }) {
                     i64::try_from(p).unwrap_or(0) + 1 + i64::from(this)
                 } else {
-                    let msg =
-                        self.diag(DiagId::sema_callback_argument_unknown, node.loc).arg(text);
+                    let msg = self.diag(DiagId::sema_callback_argument_unknown, node.loc).arg(text);
                     self.emit(msg);
                     return false;
                 }
@@ -763,9 +759,8 @@ impl Sema<'_, '_> {
         let callee = enc[0];
         let cty = usize::try_from(callee - i32::from(this)).ok().and_then(|k| ptys.get(k).copied());
         let t = &self.ast.types;
-        let fproto = cty
-            .and_then(|c| t.pointee(c).filter(|_| t.is_pointer(c)))
-            .and_then(|p| t.proto(p));
+        let fproto =
+            cty.and_then(|c| t.pointee(c).filter(|_| t.is_pointer(c))).and_then(|p| t.proto(p));
         let Some(fproto) = fproto else {
             self.error(DiagId::sema_callback_callee_no_function_type, node.loc);
             return false;
@@ -867,11 +862,8 @@ impl Sema<'_, '_> {
             AttrKind::NOINLINE | AttrKind::ALWAYS_INLINE => {
                 let canonical =
                     if node.kind == AttrKind::NOINLINE { "noinline" } else { "always_inline" };
-                let clang = self
-                    .attr_spellings
-                    .get(&node.loc)
-                    .and_then(|&(s, _)| s)
-                    .is_some_and(|s| {
+                let clang =
+                    self.attr_spellings.get(&node.loc).and_then(|&(s, _)| s).is_some_and(|s| {
                         crate::decl::norm_attr_scope(self.ast.symbols().as_str(s)) == "clang"
                     });
                 if !clang || node.syntax != AttrSyntax::Cxx11 {
@@ -881,8 +873,11 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                     return Some(false);
                 }
-                let other =
-                    if node.kind == AttrKind::NOINLINE { AttrKind::ALWAYS_INLINE } else { AttrKind::NOINLINE };
+                let other = if node.kind == AttrKind::NOINLINE {
+                    AttrKind::ALWAYS_INLINE
+                } else {
+                    AttrKind::NOINLINE
+                };
                 Some(self.check_stmt_calls(sub, node, canonical, Some(other)))
             }
             AttrKind::NOMERGE => {
@@ -895,7 +890,10 @@ impl Sema<'_, '_> {
                 let shown = self.attr_shown(&node, "code_align");
                 if !matches!(
                     sub_kind,
-                    StmtKind::ForStmt | StmtKind::WhileStmt | StmtKind::DoStmt | StmtKind::CXXForRangeStmt
+                    StmtKind::ForStmt
+                        | StmtKind::WhileStmt
+                        | StmtKind::DoStmt
+                        | StmtKind::CXXForRangeStmt
                 ) {
                     let msg = self
                         .diag(DiagId::sema_attribute_wrong_stmt_type, node.loc)
@@ -904,7 +902,9 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                     return Some(false);
                 }
-                if let Some(&prev) = kept.iter().find(|&&k| self.ast.attrs.get(k).kind == AttrKind::CODE_ALIGN) {
+                if let Some(&prev) =
+                    kept.iter().find(|&&k| self.ast.attrs.get(k).kind == AttrKind::CODE_ALIGN)
+                {
                     let prev = *self.ast.attrs.get(prev);
                     if prev.a != node.a {
                         let msg = self
@@ -1027,7 +1027,9 @@ impl Sema<'_, '_> {
         let mut stack = vec![e];
         while let Some(x) = stack.pop() {
             match exprs.get(x).kind() {
-                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
+                ExprKind::CallExpr
+                | ExprKind::CXXMemberCallExpr
+                | ExprKind::CXXOperatorCallExpr => {
                     out.push(x);
                 }
                 ExprKind::UnaryExprOrTypeTraitExpr
