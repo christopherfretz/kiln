@@ -524,7 +524,7 @@ configure = [
   "-DKILN_BOOST_JAMFILE_LINK_math=Boost::unit_test_framework",
   "-DKILN_BOOST_JAMFILE_INCLUDE_math=.;../include_private",
   "-DKILN_BOOST_JAMFILE_DEFINES_math=BOOST_ALL_NO_LIB=1;BOOST_UBLAS_UNSUPPORTED_COMPILER=0",
-  "-DKILN_BOOST_JAMFILE_LIBS_math=test_instances//test_instances=test_instances/*.cpp",
+  "-DKILN_BOOST_JAMFILE_LIBS_math=test_instances//test_instances=test_instances/*.cpp;compile_test_main=compile_test/main.cpp",
   "-DKILN_BOOST_JAMFILE_DEFINES_asio=BOOST_ALL_NO_LIB=1;BOOST_ASIO_DISABLE_DEPRECATED_MSG=1;_XOPEN_SOURCE=600;_GNU_SOURCE=1",
   "-DKILN_BOOST_JAMFILE_LINK_asio=Boost::context;Boost::chrono",
   "-DKILN_BOOST_SUBSET_TARGETS=^boost_geometry_|4|",
