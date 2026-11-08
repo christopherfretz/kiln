@@ -80,6 +80,9 @@ environment:
   KILN_GCC            the GCC oracle (default g++-16; spec/harness.md \"GCC oracle\")
   KILN_REQUIRE_GCC    1: no usable GCC oracle is an error (exit 2), not dropped
                       comparisons (GitHub CI sets it; --no-gcc/--no-oracle then too)
+  KILN_REQUIRE_DEBUGGERS
+                      1: an `expect: debugger` test whose gdb or lldb-19 is not on
+                      PATH is an ERROR, not a SKIP (GitHub CI sets it)
 
 exit status: 0 all passed (xfail/skip allowed), 1 a test failed/xpassed/errored/was killed,
 2 usage or infrastructure error.
@@ -144,6 +147,10 @@ pub struct Options {
     /// entry points ([`main`], `xtask ci`) set it from the environment, so
     /// the harness's own tests are unaffected by CI's.
     pub require_gcc: bool,
+    /// `KILN_REQUIRE_DEBUGGERS=1`: a `debugger` test whose debugger is
+    /// missing is an ERROR, not a SKIP. Set by the entry points from the
+    /// environment, as [`Options::require_gcc`].
+    pub require_debuggers: bool,
     pub no_oracle: bool,
     /// `--meta-header`: the header-differential mode.
     pub meta_header: bool,
@@ -177,6 +184,7 @@ impl Default for Options {
             gcc: None,
             no_gcc: false,
             require_gcc: false,
+            require_debuggers: false,
             no_oracle: false,
             meta_header: false,
             external: None,
@@ -281,6 +289,7 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
         return external::main(&opts);
     }
     opts.require_gcc = crate::oracle::require_gcc_from_env();
+    opts.require_debuggers = require_debuggers_from_env();
     match execute(&opts) {
         Ok(results) if results.iter().any(|r| r.status.is_failure()) => ExitCode::from(1),
         Ok(_) => ExitCode::SUCCESS,
@@ -387,6 +396,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         run_timeout: opts.run_timeout,
         pp_compare: opts.pp_compare,
         mem_limit: process::MemLimit::from_mib(opts.mem_limit_mib),
+        require_debuggers: opts.require_debuggers,
     };
     let jobs = opts
         .jobs
@@ -435,6 +445,22 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         println!("wrote parity report to {}", path.display());
     }
     Ok(results)
+}
+
+/// The environment variable that makes the debuggers of `expect: debugger`
+/// tests mandatory (`spec/harness.md` "Debugger tests").
+pub const REQUIRE_DEBUGGERS_ENV: &str = "KILN_REQUIRE_DEBUGGERS";
+
+/// Whether a `KILN_REQUIRE_DEBUGGERS` value requires the debuggers: exactly
+/// `1`, as `KILN_REQUIRE_GCC`.
+pub fn require_debuggers_from(value: Option<&str>) -> bool {
+    value.map(str::trim) == Some("1")
+}
+
+/// [`require_debuggers_from`] of the environment. Only the entry points
+/// read it, so the harness's own tests never see CI's.
+pub fn require_debuggers_from_env() -> bool {
+    require_debuggers_from(std::env::var(REQUIRE_DEBUGGERS_ENV).ok().as_deref())
 }
 
 /// The GCC oracle of this run and its `--version` line: [`resolve_gcc`],
