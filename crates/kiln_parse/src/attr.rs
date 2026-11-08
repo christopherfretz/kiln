@@ -51,6 +51,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "preferred_name"
             | "coro_only_destroy_when_complete"
             | "optnone"
+            | "musttail"
             | "minsize"
             | "disable_tail_calls"
             | "trivial_abi"
@@ -247,13 +248,18 @@ impl Parser<'_, '_> {
     /// attributed null statement, `__attribute__((fallthrough));` (clang
     /// `ParseStatementOrDeclarationAfterAttributes`, `kw___attribute`; a
     /// `[[` after them starts an expression there, so it is not taken).
+    /// Likewise before `return` or `{`, which cannot start a declaration
+    /// (`__attribute__((musttail)) return f(x);`, WP-809).
     pub(crate) fn at_gnu_attr_null_stmt(&self) -> bool {
         let mut i = self.pos();
         while self.kw_of(self.tok_at(i)) == Some(Kw::Attribute) {
             let Some(j) = self.skip_balanced(i + 1) else { return false };
             i = j;
         }
-        i != self.pos() && Self::punct_of(self.tok_at(i)) == Some(Punct::Semi)
+        let t = self.tok_at(i);
+        i != self.pos()
+            && (matches!(Self::punct_of(t), Some(Punct::Semi | Punct::LBrace))
+                || self.kw_of(t) == Some(Kw::Return))
     }
 
     /// A C++11 attribute-specifier-seq at namespace scope before a

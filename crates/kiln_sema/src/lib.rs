@@ -77,6 +77,7 @@ mod macro_fixit;
 mod meta;
 mod missing_noreturn;
 pub mod modules;
+mod musttail;
 pub mod names;
 pub mod new_delete;
 mod nonnull;

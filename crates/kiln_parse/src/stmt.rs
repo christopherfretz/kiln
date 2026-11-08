@@ -127,6 +127,7 @@ impl Parser<'_, '_> {
                         | AttrKind::LIKELY
                         | AttrKind::UNLIKELY
                         | AttrKind::FALLTHROUGH
+                        | AttrKind::MUSTTAIL
                 )
             }) {
                 let sub = self.parse_statement_after_attrs()?;

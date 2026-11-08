@@ -386,6 +386,23 @@ impl Substituter<'_, '_, '_> {
                 if kept.is_empty() {
                     return Ok(sub);
                 }
+                // `musttail` is checked again on the instantiated return
+                // (clang `checkAndRewriteMustTailAttr` from
+                // `BuildAttributedStmt`; WP-809).
+                for &a in &kept {
+                    let node = *self.sema.ast.attrs.get(a);
+                    if node.kind != kiln_ast::attr::AttrKind::MUSTTAIL
+                        || self.sema.ast.stmts.get(sub).kind() != StmtKind::ReturnStmt
+                    {
+                        continue;
+                    }
+                    if !self.sema.check_musttail(sub, &node) {
+                        return Ok(sub);
+                    }
+                    if let Some(f) = self.sema.func.as_mut() {
+                        f.has_musttail = true;
+                    }
+                }
                 Ok(self.sema.builder().attributed_stmt(&kept, sub, loc))
             }
             StmtKind::CXXTryStmt => self.try_stmt(s),

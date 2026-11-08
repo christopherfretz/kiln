@@ -279,6 +279,11 @@ impl AttrKind {
     /// its name is mangled as C++'s even with C language linkage, and it
     /// may overload a function with C language linkage.
     pub const OVERLOADABLE: AttrKind = AttrKind(187);
+    /// clang `[[clang::musttail]]` / GNU `musttail` on a return statement
+    /// (clang `MustTailAttr`; WP-809): the returned call is emitted as a
+    /// `musttail call` followed by `ret`. Kept on the `AttributedStmt`
+    /// only once `Sema::check_musttail` accepts it.
+    pub const MUSTTAIL: AttrKind = AttrKind(196);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

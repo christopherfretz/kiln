@@ -10058,6 +10058,7 @@ impl Sema<'_, '_> {
                         | "pass_object_size"
                         | "pass_dynamic_object_size"
                         | "overloadable"
+                        | "musttail"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
@@ -11100,6 +11101,8 @@ fn attr_kind_of(
         ("cleanup", _, true) => AttrKind::CLEANUP,
         ("tls_model", _, true) => AttrKind::TLS_MODEL,
         ("returns_twice", _, true) => AttrKind::RETURNS_TWICE,
+        // clang `Clang<"musttail">` on a return statement (WP-809).
+        ("musttail", _, _) if gnu_syntax || clang_scope => AttrKind::MUSTTAIL,
         // clang `GCC<"common">`, rejected in C++ (WP-807).
         ("common", _, true) => AttrKind::COMMON,
         // clang `Clang<"internal_linkage">` (WP-807).

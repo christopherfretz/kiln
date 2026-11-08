@@ -3391,6 +3391,7 @@ impl Cg<'_> {
             sig = self.with_object_sizes(sig, fty, &ps, extern_c);
         }
         let (cv, ca) = if ps.is_empty() { (&vals, &args) } else { (&cvals, &cargs) };
+        self.arm_musttail(e);
         let r = self.call_vals_ret(&sig, callee, fid, None, cv, ca, dest, &extra, &ret_extra)?;
         if let (Some(d), Some(p)) = (direct, r) {
             self.alloc_align_assume(d, &vals, p);
@@ -3426,6 +3427,56 @@ impl Cg<'_> {
         (ty_nr || gnu || !virt, true)
     }
 
+    /// The returned call `e` of a `[[clang::musttail]]` return is about
+    /// to be emitted, its arguments evaluated (clang `EmitCall`'s
+    /// `IsMustTail`).
+    pub(crate) fn arm_musttail(&mut self, e: ExprId) {
+        if self.f.musttail == Some(e) {
+            self.f.musttail = None;
+            self.f.musttail_armed = true;
+        }
+    }
+
+    /// clang `EmitCall` of a `musttail` call `r` (WP-809): the call is
+    /// marked `musttail` and returned at once (`ret` of its raw result,
+    /// or `ret void`), and what follows goes to a fresh unreachable block
+    /// with an undefined result of type `rq` (`GetUndefRValue`; an
+    /// aggregate gets its unused temporary). A call that became an
+    /// `invoke` skips over cleanups, which LLVM cannot tail-call.
+    fn finish_musttail(
+        &mut self,
+        r: V,
+        rq: QualType,
+        rty: LTy,
+        loc: Option<kiln_source::Loc>,
+    ) -> R<Option<V>> {
+        let i = Fir::last_inst(r);
+        if !matches!(self.f.fir.op(i), Op::Call { .. }) {
+            return err(loc, "cannot compile this tail call skipping over cleanups yet");
+        }
+        self.f.fir.set_musttail(i);
+        let v = (rty != LTy::VOID).then_some(r);
+        self.f.fir.push(Op::Ret { v }, LTy::VOID);
+        self.f.fir.set_cur(None);
+        let cont = self.f.fir.create_block();
+        self.emit_block(cont, false);
+        if self.ast.types.is_void(rq) {
+            return Ok(None);
+        }
+        if self.is_aggregate(rq) || self.is_atomic_aggregate(rq) {
+            self.temp(rq);
+            return Ok(None);
+        }
+        if let Some(eq) = self.cx_elem(rq) {
+            let et = self.lty(eq);
+            let u = V::C(self.m.const_undef(et));
+            self.f.cx_ret = Some((u, u));
+            return Ok(None);
+        }
+        let t = self.lty(rq);
+        Ok(Some(V::C(self.m.const_undef(t))))
+    }
+
     /// clang `EmitCall` of a call that does not return: `unreachable`,
     /// then a dummy block for the unreachable code that follows.
     pub(crate) fn finish_noreturn_call(&mut self) {
@@ -3436,24 +3487,6 @@ impl Cg<'_> {
         self.f.fir.set_cur(None);
         let cont = self.f.fir.create_block();
         self.emit_block(cont, false);
-    }
-
-    /// clang `EmitCallArgs` + `EmitCall`: evaluates `args` and calls
-    /// `callee` with signature `sig` (`this`: the implicit object
-    /// argument; `extra`: call-site attributes of a library builtin).
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn call_with(
-        &mut self,
-        sig: &Sig,
-        callee: V,
-        fid: Option<FuncId>,
-        this: Option<V>,
-        args: &[ExprId],
-        dest: Option<Addr>,
-        extra: &[Attr],
-    ) -> R<Option<V>> {
-        let vals = self.emit_call_args(sig, args)?;
-        self.call_vals(sig, callee, fid, this, &vals, args, dest, extra)
     }
 
     /// clang `EmitCallArgs`: evaluates every argument, aggregates into
@@ -3542,6 +3575,7 @@ impl Cg<'_> {
         extra: &[Attr],
         ret_extra: &[Attr],
     ) -> R<Option<V>> {
+        let musttail = std::mem::take(&mut self.f.musttail_armed);
         self.f.vector_width = self.f.vector_width.max(sig.info.max_vector_width);
         let rq = sig.ret;
         let mut ir_args = Vec::new();
@@ -3604,6 +3638,10 @@ impl Cg<'_> {
         let func = if fa.is_empty() { AttrList::default().func } else { self.m.attr_set(&fa) };
         let opts = CallOpts { attrs: AttrList { func, ret, params }, ..CallOpts::default() };
         let r = self.emit_call_op(sig.fn_ty, callee, ir_args, opts, rty, fid, sig.nothrow);
+        if musttail {
+            let loc = args.first().and_then(|&a| self.loc_of(a));
+            return self.finish_musttail(r, rq, rty, loc);
+        }
         if let Some(a) = sret_addr {
             // clang `convertTempToRValue`: a scalar returned indirectly
             // (a vector wider than the registers) is loaded back.

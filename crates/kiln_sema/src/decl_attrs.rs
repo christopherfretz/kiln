@@ -81,6 +81,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::COMMON => "common",
         AttrKind::TLS_MODEL => "tls_model",
         AttrKind::RETURNS_TWICE => "returns_twice",
+        AttrKind::MUSTTAIL => "musttail",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -345,7 +346,11 @@ impl Sema<'_, '_> {
             let node = *self.ast.attrs.get(a);
             if matches!(
                 node.kind,
-                AttrKind::ASSUME | AttrKind::LIKELY | AttrKind::UNLIKELY | AttrKind::FALLTHROUGH
+                AttrKind::ASSUME
+                    | AttrKind::LIKELY
+                    | AttrKind::UNLIKELY
+                    | AttrKind::FALLTHROUGH
+                    | AttrKind::MUSTTAIL
             ) {
                 continue;
             }
@@ -461,8 +466,13 @@ impl Sema<'_, '_> {
         };
         match node.kind {
             // [dcl.attr.assume]/1, [dcl.attr.fallthrough]/1,
-            // [dcl.attr.likelihood]/1: statement attributes.
-            AttrKind::ASSUME | AttrKind::FALLTHROUGH | AttrKind::LIKELY | AttrKind::UNLIKELY => {
+            // [dcl.attr.likelihood]/1: statement attributes (and clang's
+            // `musttail`, WP-809).
+            AttrKind::ASSUME
+            | AttrKind::FALLTHROUGH
+            | AttrKind::LIKELY
+            | AttrKind::UNLIKELY
+            | AttrKind::MUSTTAIL => {
                 let name = self.attr_shown(&node, attr_name(&node).unwrap_or_default());
                 let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg(name);
                 self.emit(msg);

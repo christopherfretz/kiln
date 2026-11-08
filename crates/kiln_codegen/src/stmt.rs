@@ -341,7 +341,14 @@ impl Cg<'_> {
                 self.emit_assumptions(s)?;
                 let sub = StmtId::new(n.b());
                 self.f.loop_hints = Some((sub, s));
-                self.emit_stmt(sub)
+                // clang `EmitAttributedStmt`: the returned call of a
+                // `musttail` return (`MustTailCall`).
+                let mt = self.musttail_call(s, sub);
+                let mt = mt.or(self.f.musttail);
+                let saved = std::mem::replace(&mut self.f.musttail, mt);
+                let r = self.emit_stmt(sub);
+                self.f.musttail = saved;
+                r
             }
             StmtKind::LabelStmt => {
                 self.emit_label(DeclId::new(n.a()));
@@ -387,6 +394,32 @@ impl Cg<'_> {
                 err(Some(n.loc()), format!("statement {k:?} is not supported yet"))
             }
         }
+    }
+
+    /// The call returned by `sub` when the `AttributedStmt` `s` carries
+    /// `[[clang::musttail]]`: through parentheses and the implicit nodes
+    /// sema's `check_musttail` looks through.
+    fn musttail_call(&self, s: StmtId, sub: StmtId) -> Option<ExprId> {
+        let ast = self.ast;
+        let has = ast
+            .lists
+            .iter::<kiln_ast::AttrId>(ast.stmts.stmt_attrs(s))
+            .any(|a| ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::MUSTTAIL);
+        if !has || ast.stmts.get(sub).kind() != StmtKind::ReturnStmt {
+            return None;
+        }
+        let mut e = ast.stmts.return_value(sub)?;
+        for _ in 0..64 {
+            match ast.exprs.get(e).kind() {
+                ExprKind::ParenExpr
+                | ExprKind::ImplicitCastExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr => e = self.sub(e),
+                _ => break,
+            }
+        }
+        Some(e)
     }
 
     fn emit_return(&mut self, s: StmtId) -> R<()> {

@@ -1922,8 +1922,10 @@ impl Cg<'_> {
             let f = self.get_fn(md)?;
             let mut sig = self.call_sig(fty, false, &arg_tys);
             let (extra, nr) = self.call_extra(md, fty, &mut sig);
-            let r =
-                self.call_with(&sig, V::C(Value::func(f)), Some(f), None, args, dest, &extra)?;
+            let vals = self.emit_call_args(&sig, args)?;
+            self.arm_musttail(e);
+            let callee = V::C(Value::func(f));
+            let r = self.call_vals(&sig, callee, Some(f), None, &vals, args, dest, &extra)?;
             if nr {
                 self.finish_noreturn_call();
             }
@@ -2016,6 +2018,7 @@ impl Cg<'_> {
             self.alloc_call_attrs(md, &vals, &mut extra, &mut ret_extra);
             let fp = crate::expr::Callee::Virtual { md, this: this.v, align: this.align };
             let this = Some(this.v);
+            self.arm_musttail(e);
             let r =
                 self.call_vals_to(&sig, fp, None, this, &vals, args, dest, &extra, &ret_extra)?;
             if let Some(p) = r {
@@ -2036,6 +2039,7 @@ impl Cg<'_> {
         self.alloc_call_attrs(callee_md, &vals, &mut extra, &mut ret_extra);
         let callee = V::C(Value::func(f));
         let this = Some(this.v);
+        self.arm_musttail(e);
         let r =
             self.call_vals_ret(&sig, callee, Some(f), this, &vals, args, dest, &extra, &ret_extra)?;
         if let Some(p) = r {
