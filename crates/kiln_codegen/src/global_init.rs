@@ -15,6 +15,7 @@
 //! globals ([class.temporary]/6).
 
 use kiln_abi::mangle::{self, Structor};
+use kiln_ast::attr::{AttrKind as AstAttr, AttrNode};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{CastKind, ExprFlags, ExprKind};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -48,8 +49,13 @@ pub(crate) struct GlobalInits {
     /// clang `GlobalCtors`: (lexical order, priority, function, comdat
     /// key).
     ctors: Vec<(u32, u32, FuncId, Option<GlobalId>)>,
+    /// clang `GlobalDtors`: (priority, function), the GNU `destructor`
+    /// functions in emission order (WP-807).
+    dtors: Vec<(u32, FuncId)>,
     /// clang `LLVMUsed`.
-    used: Vec<GlobalId>,
+    used: Vec<Value>,
+    /// clang `LLVMCompilerUsed`.
+    compiler_used: Vec<Value>,
     /// Guard variables by first declaration (clang
     /// `StaticLocalDeclGuardMap`).
     guards: FxHashMap<DeclId, GlobalId>,
@@ -103,6 +109,10 @@ impl Cg<'_> {
     /// it).
     pub(crate) fn var_must_emit(&self, d: DeclId) -> bool {
         let ast = self.ast;
+        // clang `DeclMustBeEmitted`: a `used` variable is emitted.
+        if self.has_fn_attr(d, kiln_ast::attr::AttrKind::USED) {
+            return true;
+        }
         let Some(ty) = ast.decls.get(d).ty() else { return false };
         if !ast.types.is_reference(ty) && self.var_destructed_class(d, ty).is_some() {
             return true;
@@ -225,6 +235,7 @@ impl Cg<'_> {
     fn start_init_fn(&mut self, f: FuncId) {
         self.f = Fx::empty();
         self.f.fir = Fir::new(Vec::new());
+        self.start_fp();
         self.f.func = Some(f);
         self.f.mustprogress = false;
         let ret_block = self.f.fir.create_block();
@@ -320,7 +331,7 @@ impl Cg<'_> {
             };
             self.gi.ctors.push((lex, 65535, f, key));
             if let Some(k) = key {
-                self.gi.used.push(k);
+                self.gi.used.push(gval(k));
                 if let Some(c) = self.m.global(g).comdat {
                     self.m.func_mut(f).comdat = Some(c);
                 }
@@ -343,10 +354,45 @@ impl Cg<'_> {
             ast.lists
                 .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
                 .map(|a| ast.attrs.get(a))
-                .find(|a| a.kind == kiln_ast::attr::AttrKind::INIT_PRIORITY)
+                .find(|a| a.kind == AstAttr::INIT_PRIORITY)
                 .map(|a| a.a)
         };
         of(d).or_else(|| ast.redecls_of(d).find_map(of))
+    }
+
+    /// The priority of GNU attribute `k` (`CONSTRUCTOR` / `DESTRUCTOR`)
+    /// on function `d`: `d`'s own first, then an earlier declaration's
+    /// (clang `getAttr` on the merged declaration).
+    pub(crate) fn ctor_dtor_priority(&self, d: DeclId, k: AstAttr) -> Option<u32> {
+        let ast = self.ast;
+        let of = |r: DeclId| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .map(|a| ast.attrs.get(a))
+                .find(|a| a.kind == k && a.flags & AttrNode::PRIORITY_DEPENDENT == 0)
+                .map(|a| a.a)
+        };
+        of(d).or_else(|| ast.redecls_of(d).find_map(of))
+    }
+
+    /// Whether function `d` is a GNU `constructor` or `destructor`, which
+    /// clang's `DeclMustBeEmitted` emits even when unused.
+    pub(crate) fn is_ctor_dtor_fn(&self, d: DeclId) -> bool {
+        self.ctor_dtor_priority(d, AstAttr::CONSTRUCTOR).is_some()
+            || self.ctor_dtor_priority(d, AstAttr::DESTRUCTOR).is_some()
+    }
+
+    /// clang `EmitGlobalFunctionDefinition`: the `@llvm.global_ctors` /
+    /// `@llvm.global_dtors` entries of GNU `constructor` / `destructor`
+    /// function `d`, defined as `f` (`AttrDocs` "constructor, destructor";
+    /// WP-807).
+    pub(crate) fn add_ctor_dtor_entries(&mut self, d: DeclId, f: FuncId) {
+        if let Some(p) = self.ctor_dtor_priority(d, AstAttr::CONSTRUCTOR) {
+            self.gi.ctors.push((DONE, p, f, None));
+        }
+        if let Some(p) = self.ctor_dtor_priority(d, AstAttr::DESTRUCTOR) {
+            self.gi.dtors.push((p, f));
+        }
     }
 
     /// clang `EmitCXXGlobalVarDeclInit`: initializes global `g` of
@@ -644,8 +690,9 @@ impl Cg<'_> {
         let g = self.m.add_global(&name, lt);
         self.gi.temps.insert(t, g);
         if self.var_is_tls(vfirst) {
-            // [basic.stc.thread]: one temporary per thread.
-            self.m.global_mut(g).thread_local = Some(kiln_llvm::TlsModel::GeneralDynamic);
+            // [basic.stc.thread]: one temporary per thread, with the
+            // variable's model (clang `GetAddrOfGlobalTemporary`).
+            self.m.global_mut(g).thread_local = Some(self.tls_model(vfirst));
         }
         let value = match init {
             Some(k) => k,
@@ -848,14 +895,32 @@ impl Cg<'_> {
             self.gi.ctors.push((DONE, 65535, f, None));
         }
         self.emit_tls_trailer()?;
-        if self.gi.ctors.is_empty() {
-            return Ok(());
-        }
+        // clang `EmitCtorList`: stably sorted by lexical order (the
+        // entries without one, `DONE`, last in insertion order).
         let mut ctors = std::mem::take(&mut self.gi.ctors);
         ctors.sort_by_key(|&(lex, _, _, _)| lex);
+        self.emit_ctor_list("llvm.global_ctors", &ctors)?;
+        let dtors: Vec<_> = std::mem::take(&mut self.gi.dtors)
+            .into_iter()
+            .map(|(p, f)| (DONE, p, f, None))
+            .collect();
+        self.emit_ctor_list("llvm.global_dtors", &dtors)?;
+        self.emit_used_lists()
+    }
+
+    /// clang `EmitCtorList`: the appending global `name` of `{ i32, ptr,
+    /// ptr }` (priority, function, comdat key) entries; none when empty.
+    fn emit_ctor_list(
+        &mut self,
+        name: &str,
+        list: &[(u32, u32, FuncId, Option<GlobalId>)],
+    ) -> R<()> {
+        if list.is_empty() {
+            return Ok(());
+        }
         let sty = self.m.types.struct_literal(&[LTy::I32, LTy::PTR, LTy::PTR], false);
-        let mut elems = Vec::with_capacity(ctors.len());
-        for (_, p, f, key) in ctors {
+        let mut elems = Vec::with_capacity(list.len());
+        for &(_, p, f, key) in list {
             let prio = self.m.const_int(LTy::I32, i128::from(p));
             let data = match key {
                 Some(k) => gval(k),
@@ -863,16 +928,38 @@ impl Cg<'_> {
             };
             match self.m.const_struct(sty, &[prio, Value::func(f), data]) {
                 Ok(c) => elems.push(c),
-                Err(e) => return err(None, format!("bad llvm.global_ctors entry: {e:?}")),
+                Err(e) => return err(None, format!("bad {name} entry: {e:?}")),
             }
         }
-        self.appending_global("llvm.global_ctors", sty, &elems, None)?;
-        let used = std::mem::take(&mut self.gi.used);
-        if !used.is_empty() {
-            let elems: Vec<Value> = used.into_iter().map(gval).collect();
-            self.appending_global("llvm.used", LTy::PTR, &elems, Some("llvm.metadata"))?;
+        self.appending_global(name, sty, &elems, None)
+    }
+
+    /// clang `emitLLVMUsed`: `@llvm.used` and `@llvm.compiler.used`, each
+    /// once and without duplicates, after `@llvm.global_ctors` and
+    /// `@llvm.global_dtors`.
+    fn emit_used_lists(&mut self) -> R<()> {
+        for (list, name) in [(false, "llvm.used"), (true, "llvm.compiler.used")] {
+            let vals =
+                std::mem::take(if list { &mut self.gi.compiler_used } else { &mut self.gi.used });
+            let mut seen = kiln_source::fx::FxHashSet::default();
+            let elems: Vec<Value> = vals.into_iter().filter(|v| seen.insert(*v)).collect();
+            if !elems.is_empty() {
+                self.appending_global(name, LTy::PTR, &elems, Some("llvm.metadata"))?;
+            }
         }
         Ok(())
+    }
+
+    /// clang `SetCommonAttributes`: a `used` entity goes into
+    /// `@llvm.compiler.used` (ELF), a `retain` one into `@llvm.used`
+    /// (WP-805).
+    pub(crate) fn note_used_attrs(&mut self, d: DeclId, v: Value) {
+        if self.has_fn_attr(d, kiln_ast::attr::AttrKind::USED) {
+            self.gi.compiler_used.push(v);
+        }
+        if self.has_fn_attr(d, kiln_ast::attr::AttrKind::RETAIN) {
+            self.gi.used.push(v);
+        }
     }
 
     /// Plain calls of the `void()` functions `fns`, in order.

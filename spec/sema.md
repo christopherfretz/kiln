@@ -1745,8 +1745,22 @@ and returns the scope it names:
   `set_typedef_for_anon` ([dcl.typedef]/9).
 
 ### 4.5 Attributes
+- **Policy: kiln never accepts a semantics-changing construct without
+  implementing it** (WP-805). An attribute clang knows that kiln does not
+  implement is triaged by `attr_triage::TABLE`: class A (semantics, ABI,
+  layout) is the error `'X' attribute is not supported by kiln yet`,
+  which system headers and `-w` do not suppress; class B (optimization,
+  instrumentation, debug, hardening) and class C (diagnostics or
+  analyses only) are accepted silently. A name clang does not know keeps
+  the `unknown attribute` warning. spec/landed/sema/WP-805.md.
+- **Truthful feature tests** (WP-805): in compile modes
+  `__has_attribute` / `__has_cpp_attribute` answer 0 for a class-A
+  name, and `__has_builtin` answers 0 for a builtin codegen cannot lower
+  (`kiln_codegen::UNLOWERED_BUILTINS`); a header that tests for a feature
+  takes the path kiln implements. `-E` keeps clang's answers.
 - `act_on_attribute(syntax, scope, name, args, loc)` maps a parsed
-  attribute to an `AttrKind`, or warns and returns `None`.
+  attribute to an `AttrKind`, or diagnoses it as above and returns
+  `None`.
 - **Recognised kinds:**
   - `nodiscard`/`warn_unused_result`
   - `maybe_unused`/`unused`
@@ -1953,6 +1967,13 @@ and returns the scope it names:
       elements) and is then `initialization of non-aggregate type T with
       a designated initializer list` (a vector is not an aggregate), at
       the variable or at a nested list's brace.
+    - A list whose leading element is an unbraced vector copy-initializes
+      the whole vector from it (clang `CheckVectorType`, non-OpenCL), so
+      `v4{v2, v2}` with a 2-lane `v2` is `cannot initialize a value of
+      type 'v4' ... with an lvalue of type 'v2'` in clang 19 and 22 alike;
+      kiln does not split a shorter vector into lanes (the OpenCL rule).
+      Test: `tests/conformance/ext.vector/list-init-shorter-vector-element-rejected.cpp`
+      (WP-802).
   - GNU `malloc` (function with a pointer result, else `'malloc'
     attribute only applies to return values that are pointers`; on a
     non-function `... only applies to functions`), `alloc_size(n[, m])`
@@ -2072,7 +2093,13 @@ and returns the scope it names:
   visibility attribute starts here`, and a push still open at its `}` is
   `#pragma visibility push with no matching #pragma visibility pop` (at
   the innermost push) with `surrounding namespace with visibility
-  attribute ends here`, and is popped. The attributes of an explicit
+  attribute ends here`, and is popped. `#pragma weak name` (clang
+  `ActOnPragmaWeakID`, `ProcessPragmaWeak`) gives an implicit `weak`
+  attribute to the function or variable `name` found by ordinary lookup
+  in the translation unit's scope; when there is none it is recorded
+  (`Sema::weak_pending`) and applied to the first `extern "C"` function
+  or variable later declared with that name (WP-803;
+  `tests/conformance/cpp.pragma/weak-run.cpp`). The attributes of an explicit
   instantiation of a function, variable or class template
   specialization ([temp.explicit]) are checked the same way and become
   the specialization's own (clang `ActOnExplicitInstantiation`); one that
@@ -2458,6 +2485,23 @@ and returns the scope it names:
     Not yet: parameters (`act_on_param_declarator` only checks
     `alignas`) and namespace-definitions are not run through the table.
     Test: `tests/conformance/dcl.attr.grammar/attribute-subjects.cpp`.
+  - **`pass_object_size(t)`** / **`pass_dynamic_object_size(t)`** and
+    **`overloadable`** (clang extensions; WP-803, `decl.rs`
+    `pass_object_size_attribute`, `decl_attrs.rs`
+    `check_param_pass_object_size`; glibc's clang `_FORTIFY_SOURCE`
+    headers): one argument, an integer constant 0..=3 ("requires integer
+    constant between 0 and 3 inclusive" at the argument, "takes one
+    argument"); subject a pointer parameter ("'pass_object_size'
+    attribute only applies to constant pointer arguments" at the
+    parameter's start, the attribute dropped), a `const` one in a
+    definition (the same error, at the parameter's name, the name
+    unquoted, as clang); on a non-parameter a -Wignored-attributes
+    warning. `overloadable` on a non-function is an error. A function
+    declared `overloadable` is mangled even inside `extern "C"` and has
+    no builtin or known-library identity (clang `getBuiltinID`). Overload
+    rules: spec/sema-overload.md §4.3a; calls: spec/codegen.md
+    (`__builtin_object_size`). Tests:
+    `ext.clang.pass.object.size/pass-object-size-{run,errors}.cpp`.
   - **`enable_if`** (clang extension, `__attribute__((enable_if(cond,
     "message")))` only; WP-460, `enable_if.rs`; clang AttrDocs
     "enable_if", `Sema::CheckEnableIf`):
@@ -4092,7 +4136,14 @@ constant and never look at the operand.
 
 The operands of nested `sizeof`, `alignof` and `noexcept` are not
 looked at (they are unevaluated). An erroneous operand gives an error
-expression.
+expression. Before `can_throw` reads them, the exception specifications of the
+constructors, bound temporaries' destructors and direct callees in the
+operand are resolved ([except.spec]/13, `resolve_operand_exc_specs`,
+WP-802): an operand kept unchanged from a template pattern (`V()` in
+`noexcept(noexcept(V().f(0, x)))` of a function template, with `V`'s
+implicit default constructor) was built without resolving them, and
+the instantiation must not count them as potentially-throwing
+(`tests/conformance/except.spec/p13-noexcept-operand-from-pattern-resolves-specs-run.cpp`).
 
 ### 5.4 Builtin functions (`builtins.rs`)
 clang's `LazilyCreateBuiltin`. kiln knows one builtin,
@@ -8465,6 +8516,13 @@ two `member '<m>' first declared here` notes. Flowing off the end
 has `return_void`; otherwise `-Wreturn-type` warns `non-void coroutine
 does not return a value` (`... in all control paths` when only some
 paths fall off).
+Immediate invocations in the operand are evaluated at the end of the
+full-expression holding it ([expr.const]/16, WP-802): the promise
+variable and the suspend points a first `co_return` builds are their
+own full-expressions and do not take them (`coro_isolated`), and in a
+template pattern the operand is finished as a full-expression, so an
+instantiation keeps the non-dependent values (`co_return sq(3) + t;`,
+`tests/conformance/stmt.return.coroutine/immediate-invocation-in-template-operand-run.cpp`).
 
 **The body (`complete_coroutine_body`, clang
 `CheckCompletedCoroutineBody`).** At the end of a non-template

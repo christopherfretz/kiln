@@ -57,10 +57,10 @@ impl Mangler<'_, '_> {
         let std = self.parent(concept).is_some_and(|p| self.is_std(p));
         if !args.is_empty() {
             if at_top {
-                self.unscoped_template(concept, std);
+                self.unscoped_template(concept, std, None);
             } else {
                 self.out.push('N');
-                self.template_prefix(concept, None, Structor::Complete);
+                self.template_prefix(concept, None, Structor::Complete, None);
             }
             self.arg_views(args);
             if !at_top {

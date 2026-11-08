@@ -1767,6 +1767,16 @@ impl Sema<'_, '_> {
         // [dcl.align]/1: not on a function parameter.
         self.reject_alignas(&mut attrs, 0);
         ty = self.apply_vector_attrs(ty, &mut attrs, false);
+        // A parameter's type is substituted with its function's.
+        attrs.retain(|&a| {
+            let n = *self.ast.attrs.get(a);
+            if n.kind != AttrKind::MODE {
+                return true;
+            }
+            let what = "a 'mode' attribute on a parameter of dependent type";
+            self.emit(self.diag(DiagId::parse_unsupported, n.loc).arg(what));
+            false
+        });
         ty = self.apply_noreturn_attrs(ty, &attrs);
         let declared = ty;
         ty = self.adjust_param_type(ty);
@@ -2907,10 +2917,15 @@ impl Sema<'_, '_> {
         self.check_optnone_conflicts(decl, &mut attrs);
         self.check_naked_conflicts(decl, &mut attrs);
         self.finish_visibility_attrs(decl, &mut attrs, false);
+        self.apply_pragma_weak(decl, &mut attrs);
         self.finish_decl_alignment(decl, &mut attrs);
-        self.add_known_function_attrs(decl, &mut attrs);
-        self.recognize_builtin_decl(decl, &mut attrs);
-        self.record_gnu_lib_twin(decl);
+        // WP-803: an `overloadable` function is never the C library
+        // function of its name (clang `FunctionDecl::getBuiltinID`).
+        if !attrs.iter().any(|&a| self.ast.attrs.get(a).kind == AttrKind::OVERLOADABLE) {
+            self.add_known_function_attrs(decl, &mut attrs);
+            self.recognize_builtin_decl(decl, &mut attrs);
+            self.record_gnu_lib_twin(decl);
+        }
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
@@ -3769,6 +3784,11 @@ impl Sema<'_, '_> {
             requires: d.trailing_requires,
             enable_if: self.new_fn_enable_if(&d.attrs),
             member_using: false,
+            pass_object_size: d.function_params().is_some_and(|ps| {
+                ps.iter()
+                    .flat_map(|p| &p.attrs)
+                    .any(|&a| self.ast.attrs.get(a).kind == AttrKind::PASS_OBJECT_SIZE)
+            }),
         };
         let dname = d.fn_decl_name(name);
         let fname = match d.op_name {
@@ -3894,7 +3914,10 @@ impl Sema<'_, '_> {
                 && self.templ.cur.is_none()
                 && dname.as_ident().is_some() =>
             {
-                let p = self.extern_c_prev(name, false, new_fn.is_static, d.name_loc());
+                // WP-803: a `pass_object_size` overload is never the C
+                // entity of its name (clang `IsOverload`).
+                let own = new_fn.is_static || new_fn.pass_object_size;
+                let p = self.extern_c_prev(name, false, own, d.name_loc());
                 extern_c_redecl = p.is_some();
                 p
             }
@@ -4636,6 +4659,22 @@ impl Sema<'_, '_> {
                 self.take_annotations(pd, &mut attrs);
                 let range = Span::new(p.range.0, p.range.1);
                 self.check_param_nonnull_attrs(p.ty, range, &mut attrs);
+                // `cleanup` / `internal_linkage` / `returns_twice` on a
+                // parameter: ignored with a warning; `tls_model`: an error.
+                self.check_cleanup_attrs(pd, &mut attrs);
+                self.check_internal_linkage_attrs(pd, &mut attrs);
+                self.check_tls_model_attrs(pd, &mut attrs);
+                attrs.retain(|&a| {
+                    let node = *self.ast.attrs.get(a);
+                    if node.kind != AttrKind::RETURNS_TWICE {
+                        return true;
+                    }
+                    let shown = format!("'{}'", self.attr_shown(&node, "returns_twice"));
+                    let msg = self.diag(DiagId::sema_attribute_wrong_decl_type, node.loc);
+                    self.emit(msg.arg(shown).arg("functions"));
+                    false
+                });
+                self.check_param_pass_object_size(p.ty, p.range.0, &mut attrs);
                 let _ = self.builder().attach_attrs(pd, &attrs);
             }
             match p.default_arg {
@@ -5626,6 +5665,7 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         self.act_on_init_inner(v, init);
+        self.check_cleanup_deduced(v);
         self.check_static_tls(v, paren);
         let constinit_ok = self.check_constinit(v);
         self.report_deferred_immediates(v, constinit_ok);
@@ -6444,6 +6484,7 @@ impl Sema<'_, '_> {
 
     /// A variable declared without an initializer ([dcl.init]/7).
     pub fn act_on_uninit(&mut self, v: DeclId) {
+        self.check_cleanup_deduced(v);
         self.act_on_uninit_inner(v);
         if self.is_var_definition(v) {
             self.check_static_tls(v, None);
@@ -6795,6 +6836,27 @@ impl Sema<'_, '_> {
                 self.push_local(sym, p);
             }
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+            // clang `CheckParmsForFunctionDef`: a definition's
+            // `pass_object_size` parameter must be `const` (reported at
+            // the parameter's name, the attribute unquoted, as clang).
+            if !pty.quals().is_const()
+                && !self.ast.types.is_dependent(pty)
+                && let Some(a) = self
+                    .ast
+                    .lists
+                    .iter::<AttrId>(self.ast.attrs.of_decl(p))
+                    .find(|&a| self.ast.attrs.get(a).kind == AttrKind::PASS_OBJECT_SIZE)
+            {
+                let node = *self.ast.attrs.get(a);
+                let shown = self.attr_shown(&node, "pass_object_size");
+                let msg = self
+                    .diag(
+                        DiagId::sema_attribute_const_pointer_args_only,
+                        self.ast.decls.get(p).loc(),
+                    )
+                    .arg(shown);
+                self.emit(msg);
+            }
             // clang `CheckParmsForFunctionDef`: a parameter whose class
             // template specialization fails to instantiate is invalid.
             if self.invalid_by_failed_spec(p, pty, self.ast.decls.get(p).loc()) {
@@ -6831,6 +6893,7 @@ impl Sema<'_, '_> {
     pub fn act_on_finish_function_def(&mut self, f: DeclId, body: StmtId, rbrace: Loc) {
         self.check_function_try_block(f, body);
         self.check_naked_body(f, body);
+        self.check_vector_pcs_definition(f);
         let body = self.end_function_body(body, rbrace);
         // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`.
         if let Some(fty) = self.ast.decls.get(f).ty() {
@@ -7660,6 +7723,23 @@ impl Sema<'_, '_> {
             .into_iter()
             .rev()
             .find(|&d| is_tag_kind(self.kind_of(d)) || self.kind_of(d) == DeclKind::ClassTemplate);
+        // Else a class template that ordinary lookup finds in a namespace
+        // nested in `ns` (an unnamed namespace's, through its implicit
+        // using-directive) is the one redeclared, in its own namespace
+        // (clang `CheckClassTemplate`: `OutermostContext->Encloses`).
+        let (prev, ns) = if let Some(d) = prev {
+            (Some(d), ns)
+        } else {
+            let nested = self.lookup_name(n, LookupKind::All).decls.last().and_then(|&d| {
+                let c = self.ast.decls.get(d).ctx()?;
+                (self.kind_of(d) == DeclKind::ClassTemplate
+                    && self.kind_of(c) == DeclKind::Namespace
+                    && self.ast.first(c) != self.ast.first(ns)
+                    && self.encloses(ns, c))
+                .then_some((d, c))
+            });
+            nested.map_or((None, ns), |(d, c)| (Some(d), c))
+        };
         let prev = prev.map(|d| self.pattern_of(d).unwrap_or(d));
         if let Some(p) = prev {
             if self.ast.described_template(p).is_some() {
@@ -9078,7 +9158,17 @@ impl Sema<'_, '_> {
     /// struct at_impl;` with `template<> struct at_impl<map_tag> {
     /// template<class M, class K> struct apply ...; }`, named as
     /// `at_impl<map_tag>::apply<M, K>` inside another template).
+    ///
+    /// A name not found in the primary pattern is classified in the
+    /// primary patterns of its dependent bases (`H<int>::type` with
+    /// `template<class S> struct H : B<S> {}`): clang annotates `H<int>::`
+    /// by instantiating `H<int>`, whose base `B<int>` declares `type`;
+    /// the lookahead cannot instantiate (WP-802).
     fn classify_template_member(&self, tmpl: DeclId, name: Symbol) -> NameClass {
+        self.classify_template_member_in(tmpl, name, 0)
+    }
+
+    fn classify_template_member_in(&self, tmpl: DeclId, name: Symbol, depth: u32) -> NameClass {
         let Some(p) = self.ast.template_info(tmpl).and_then(|i| i.pattern) else {
             return NameClass::Dependent;
         };
@@ -9087,6 +9177,7 @@ impl Sema<'_, '_> {
         });
         let d = match in_primary {
             Some(d) => d,
+            None if let Some(c) = self.classify_in_dependent_bases(p, name, depth) => return c,
             None => match self.specialization_member(tmpl, name) {
                 Some(d) => d,
                 // A member template of a class template specialization
@@ -9101,7 +9192,7 @@ impl Sema<'_, '_> {
                             && self.ast.definition(p).is_none()
                             && self.kind_of(from) == DeclKind::ClassTemplate =>
                     {
-                        return self.classify_template_member(from, name);
+                        return self.classify_template_member_in(from, name, depth);
                     }
                     _ => return NameClass::Dependent,
                 },
@@ -9115,6 +9206,140 @@ impl Sema<'_, '_> {
             _ if is_type_kind(k) => NameClass::Type(QualType::DEPENDENT, d),
             _ => NameClass::Value(d),
         }
+    }
+
+    /// [`Sema::classify_template_member`] of `name` in the class
+    /// templates named by the dependent bases of pattern `p` (`B<S>` of
+    /// `H<S> : B<S>`), in declaration order; the first base whose pattern
+    /// declares `name` decides. `None` when none does (or past a depth of
+    /// 16, for a base chain such as `A<T> : A<T*>`).
+    fn classify_in_dependent_bases(
+        &self,
+        p: DeclId,
+        name: Symbol,
+        depth: u32,
+    ) -> Option<NameClass> {
+        if depth >= 16 {
+            return None;
+        }
+        let def = self.ast.definition(p)?;
+        let bases: Vec<QualType> =
+            self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
+        bases.into_iter().filter(|&t| self.is_dependent_type(t)).find_map(|ty| {
+            let t = self.base_class_template(ty, depth)?;
+            match self.classify_template_member_in(t, name, depth + 1) {
+                NameClass::Dependent | NameClass::Undeclared => None,
+                c => Some(c),
+            }
+        })
+    }
+
+    /// The class template whose primary pattern the lookahead classifies
+    /// a member of dependent base `ty` in: `B<S>` names `B`; the
+    /// injected-class-name of `B` names `B`; `Q<A>::template apply<S, K>`
+    /// names the member template `apply` of `Q` (boost.mpl's `has_key<S,
+    /// K> : has_key_impl<typename sequence_tag<S>::type>::template
+    /// apply<S, K>`); `typename Q<A>::type` names what the member typedef
+    /// `type` of `Q` names (boost.fusion's `has_key_impl<Tag>::apply :
+    /// mpl::not_<...>::type`). `None` past a depth of 16.
+    fn base_class_template(&self, ty: QualType, depth: u32) -> Option<DeclId> {
+        if depth >= 16 {
+            return None;
+        }
+        let t = match self.ast.types.view(self.strip_sugar_for_classify(ty).ty()) {
+            TypeView::TemplateSpecialization { name: tn, .. } => {
+                self.ast.types.template_decl(tn)?
+            }
+            TypeView::InjectedClassName { pattern, .. } => self.ast.described_template(pattern)?,
+            TypeView::DependentTemplateSpecialization { nns, name: m, .. } => {
+                let kiln_ast::types::Nns::Type { ty: q, .. } = self.ast.types.nns_view(nns) else {
+                    return None;
+                };
+                let q = self.base_class_template(q, depth + 1)?;
+                self.member_of_class_template(q, m, true)?
+            }
+            TypeView::DependentName { nns, name: m, .. } => {
+                let kiln_ast::types::Nns::Type { ty: q, .. } = self.ast.types.nns_view(nns) else {
+                    return None;
+                };
+                let q = self.base_class_template(q, depth + 1)?;
+                let td = self
+                    .member_of_class_template(q, m, false)
+                    .or_else(|| self.typedef_in_dependent_bases(q, m, depth + 1))?;
+                let under = self.ast.decls.get(td).ty()?;
+                return self.base_class_template(under, depth + 1);
+            }
+            _ => return None,
+        };
+        (self.kind_of(t) == DeclKind::ClassTemplate).then_some(t)
+    }
+
+    /// `ty` without typedef and elaborated sugar (bounded).
+    fn strip_sugar_for_classify(&self, mut ty: QualType) -> QualType {
+        for _ in 0..64 {
+            ty = match self.ast.types.view(ty.ty()) {
+                TypeView::Typedef { underlying, .. } => underlying,
+                TypeView::Elaborated { named, .. } => named,
+                _ => break,
+            };
+        }
+        ty
+    }
+
+    /// The typedef `m` that class template `q` inherits through the
+    /// dependent bases of its primary pattern (boost.mpl's `not_<T>` gets
+    /// `type` from `bool_<!C>` through `not_impl<C>`). `None` past a
+    /// depth of 16.
+    fn typedef_in_dependent_bases(&self, q: DeclId, m: Symbol, depth: u32) -> Option<DeclId> {
+        if depth >= 16 {
+            return None;
+        }
+        let pattern = self.ast.template_info(q).and_then(|i| i.pattern)?;
+        let def = self.ast.definition(pattern)?;
+        let bases: Vec<QualType> =
+            self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
+        bases.into_iter().filter(|&t| self.is_dependent_type(t)).find_map(|ty| {
+            let b = self.base_class_template(ty, depth + 1)?;
+            self.member_of_class_template(b, m, false)
+                .or_else(|| self.typedef_in_dependent_bases(b, m, depth + 1))
+        })
+    }
+
+    /// The member `m` of class template `q` the lookahead follows, from
+    /// `q`'s primary pattern, then its explicit, then its partial
+    /// specializations (as [`Sema::specialization_member`]): a class
+    /// template whose pattern is defined when `template_member` (the
+    /// primary of boost.mpl's `has_key_impl<Tag>` only declares `apply`,
+    /// which `has_key_impl<map_tag>` defines), else a typedef or alias.
+    fn member_of_class_template(
+        &self,
+        q: DeclId,
+        m: Symbol,
+        template_member: bool,
+    ) -> Option<DeclId> {
+        use kiln_ast::templates::SpecKind;
+        let first = self.ast.first(q);
+        let t = &self.ast.templates;
+        let primary = self.ast.template_info(q).and_then(|i| i.pattern);
+        let explicit = t.specs_of(first).iter().copied().filter(|&s| {
+            self.ast.spec_info(s).is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization)
+        });
+        let partial = t.partials_of(first).iter().filter_map(|&i| t.partial(i).map(|p| p.partial));
+        primary.into_iter().chain(explicit).chain(partial).find_map(|s| {
+            let def = self.ast.definition(s)?;
+            let found = self.lookup_qualified(def, m, LookupKind::Ordinary);
+            found.decls.iter().copied().map(|d| self.ast.strip_shadow(d)).find(|&d| {
+                match self.kind_of(d) {
+                    DeclKind::ClassTemplate if template_member => self
+                        .ast
+                        .template_info(d)
+                        .and_then(|i| i.pattern)
+                        .is_some_and(|p| self.ast.definition(p).is_some()),
+                    DeclKind::Typedef | DeclKind::TypeAlias => !template_member,
+                    _ => false,
+                }
+            })
+        })
     }
 
     /// [`Sema::classify_name`] of `name` in `q`, a member class of a class
@@ -9241,6 +9466,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The class template of `q` (after [`Self::type_name_qualifier`])
+    /// when `q` is a specialization that is not instantiated yet, so a
+    /// lookahead classifies its members by the template's pattern
+    /// (WP-276); `None` otherwise.
+    pub fn uninstantiated_spec_template(&self, q: DeclId) -> Option<DeclId> {
+        let q = self.type_name_qualifier(q);
+        if self.kind_of(q) != DeclKind::CXXRecord || self.ast.definition(q).is_some() {
+            return None;
+        }
+        let (_, spec) = self.ast.spec_info(q)?;
+        (spec.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization)
+            .then_some(spec.template)
+    }
+
     /// What an identifier names here (for parser decisions,
     /// [basic.lookup.unqual]); `qualifier` is the context named by a
     /// preceding nested-name-specifier.
@@ -9256,12 +9495,9 @@ impl Sema<'_, '_> {
         // lookahead cannot instantiate, so classify by the template as
         // for `X<int>::name` (WP-276).
         if let Some(q) = qualifier
-            && self.kind_of(q) == DeclKind::CXXRecord
-            && self.ast.definition(q).is_none()
-            && let Some((_, spec)) = self.ast.spec_info(q)
-            && spec.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization
+            && let Some(t) = self.uninstantiated_spec_template(q)
         {
-            return self.classify_template_member(spec.template, name);
+            return self.classify_template_member(t, name);
         }
         if let Some(q) = qualifier
             && self.kind_of(q) == DeclKind::TypeAliasTemplate
@@ -9963,62 +10199,38 @@ impl Sema<'_, '_> {
         let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
         let shown = self.attr_shown_parts(syntax, scope, name);
         let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
-        let std = scope_s.is_none() && syntax != AttrSyntax::Gnu;
-        let clang_scope = scope_s.as_deref() == Some("clang");
-        // The thread-safety family: known, ignored, no diagnostic (WP-606).
-        if crate::decl_attrs::is_thread_safety_attr(&n, syntax, clang_scope, self.clang_compat) {
-            return None;
-        }
-        // Sanitizer and lifetime-analysis attributes: likewise (WP-667).
-        if crate::decl_attrs::is_ignored_clang_attr(
+        // The triage (spec/sema.md §4.5, WP-805): an implemented
+        // spelling, a clang attribute kiln ignores (class B/C: no
+        // diagnostic, nothing attached), one it rejects (class A), or one
+        // clang does not know either.
+        let x86 = self.abi.triple.arch == kiln_abi::target::Arch::X86_64;
+        let cxx26 = self.std >= kiln_lex::Std::Cxx26;
+        let support = crate::attr_triage::attribute_support(
             &n,
             syntax,
             scope_s.as_deref(),
             self.clang_compat,
-        ) {
-            return None;
-        }
-        // clang 19 names only the attribute, not its scope.
-        if scope_s.as_deref().is_some_and(|s| s != "gnu")
-            && !(clang_scope
-                && matches!(
-                    n.as_str(),
-                    "using_if_exists"
-                        | "fallthrough"
-                        | "exclude_from_explicit_instantiation"
-                        | "flag_enum"
-                        | "enum_extensibility"
-                        | "preferred_name"
-                        | "coro_only_destroy_when_complete"
-                        | "optnone"
-                        | "minsize"
-                        | "disable_tail_calls"
-                        | "uninitialized"
-                        | "trivial_abi"
-                        | "type_visibility"
-                        | "min_vector_width"
-                ))
-        {
-            let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
-            self.emit(msg);
-            return None;
-        }
-        // [dcl.attr.indet] is C++26 (clang trunk's `LangOpts<"CPlusPlus26">`
-        // spelling): below it, `indeterminate` is an unknown attribute.
-        // P3475R2 removes `[[carries_dependency]]` from C++26 (WP-743): an
-        // unknown attribute there, warned as clang warns any unknown one.
-        let cxx26 = self.std >= kiln_lex::Std::Cxx26;
-        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax).filter(|&k| {
-            (k != AttrKind::INDETERMINATE || cxx26) && (k != AttrKind::CARRIES_DEPENDENCY || !cxx26)
-        }) else {
-            let id = if gnu && n == "format" {
-                DiagId::parse_attribute_ignored
-            } else {
-                DiagId::parse_unknown_attribute
-            };
-            let msg = self.diag(id, loc).arg(shown);
-            self.emit(msg);
-            return None;
+            cxx26,
+            x86,
+        );
+        let kind = match support {
+            crate::attr_triage::Support::Implemented(k) => k,
+            crate::attr_triage::Support::Ignored(_) => return None,
+            crate::attr_triage::Support::Unsupported => {
+                let msg = self.diag(DiagId::sema_attribute_unsupported_by_kiln, loc).arg(shown);
+                self.emit(msg);
+                return None;
+            }
+            crate::attr_triage::Support::Unknown => {
+                let id = if gnu && n == "format" {
+                    DiagId::parse_attribute_ignored
+                } else {
+                    DiagId::parse_unknown_attribute
+                };
+                let msg = self.diag(id, loc).arg(shown);
+                self.emit(msg);
+                return None;
+            }
         };
         if let std::ops::ControlFlow::Break(r) =
             self.attribute_with_args(kind, syntax, &raw, args, loc)
@@ -10041,11 +10253,17 @@ impl Sema<'_, '_> {
         if kind == AttrKind::MIN_VECTOR_WIDTH {
             return self.min_vector_width_attribute(syntax, args, loc);
         }
+        if kind == AttrKind::PASS_OBJECT_SIZE {
+            return self.pass_object_size_attribute(syntax, &n, args, loc);
+        }
         if kind == AttrKind::ENABLE_IF {
             return self.enable_if_attribute(syntax, args, loc);
         }
         if kind == AttrKind::ENUM_EXTENSIBILITY {
             return self.enum_extensibility_attribute(syntax, args, loc);
+        }
+        if kind == AttrKind::TLS_MODEL {
+            return self.tls_model_attribute(syntax, &n, args, loc);
         }
         if kind == AttrKind::INIT_PRIORITY {
             return self.init_priority_attribute(syntax, &shown, args, loc);
@@ -10374,6 +10592,46 @@ impl Sema<'_, '_> {
         };
         let a = u32::try_from(v.max(0)).unwrap_or(u32::MAX);
         let node = AttrNode { kind: AttrKind::MIN_VECTOR_WIDTH, syntax, flags: 0, loc, a, b: 0 };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// clang `handlePassObjectSizeAttr`: exactly one integer constant in
+    /// [0, 3], kept in `a`; `b` = 1 for `pass_dynamic_object_size`.
+    fn pass_object_size_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        n: &str,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        let shown = format!("'{n}'");
+        let [arg] = args else {
+            let msg =
+                self.diag(DiagId::parse_attribute_wrong_arg_count, loc).arg(n.to_owned()).arg("1");
+            self.emit(msg);
+            return None;
+        };
+        // clang reports at the argument.
+        let (v, at) = match arg {
+            AttrArg::Expr(e) => (self.fold_int(*e), self.begin_loc(*e)),
+            AttrArg::Type(_) | AttrArg::Ident(..) => (None, loc),
+        };
+        let Some(v) = v else {
+            let msg = self.diag(DiagId::sema_attribute_requires_integer_constant, at).arg(shown);
+            self.emit(msg);
+            return None;
+        };
+        let Ok(a @ 0..=3) = u32::try_from(v) else {
+            let msg = self
+                .diag(DiagId::sema_attribute_argument_out_of_range, at)
+                .arg(shown)
+                .arg("0")
+                .arg("3");
+            self.emit(msg);
+            return None;
+        };
+        let b = u32::from(n.contains("dynamic"));
+        let node = AttrNode { kind: AttrKind::PASS_OBJECT_SIZE, syntax, flags: 0, loc, a, b };
         Some(self.ast.attrs.push(node))
     }
 
@@ -10936,7 +11194,7 @@ pub(crate) fn norm_attr_scope(s: &str) -> &str {
     }
 }
 
-fn attr_kind_of(
+pub(crate) fn attr_kind_of(
     n: &str,
     std: bool,
     gnu: bool,
@@ -10969,6 +11227,12 @@ fn attr_kind_of(
         ("weakref", _, true) => AttrKind::WEAKREF,
         ("alias", _, true) => AttrKind::ALIAS,
         ("ifunc", _, true) => AttrKind::IFUNC,
+        // WP-803: clang `pass_object_size` / `pass_dynamic_object_size`
+        // and `overloadable` (GNU and `clang::`).
+        ("pass_object_size" | "pass_dynamic_object_size", _, _) if gnu_syntax || clang_scope => {
+            AttrKind::PASS_OBJECT_SIZE
+        }
+        ("overloadable", _, _) if gnu_syntax || clang_scope => AttrKind::OVERLOADABLE,
         // clang `GCC<"section">`.
         ("section", _, true) => AttrKind::SECTION,
         // clang `GNU<"analyzer_noreturn">`: no `[[...]]` spelling.
@@ -10980,6 +11244,17 @@ fn attr_kind_of(
         ("naked", _, true) => AttrKind::NAKED,
         ("may_alias", _, true) => AttrKind::MAY_ALIAS,
         ("init_priority", _, true) => AttrKind::INIT_PRIORITY,
+        // clang `GCC<"constructor">` / `GCC<"destructor">` (WP-807).
+        ("constructor", _, true) => AttrKind::CONSTRUCTOR,
+        ("destructor", _, true) => AttrKind::DESTRUCTOR,
+        // clang `GCC<"cleanup">` (WP-807).
+        ("cleanup", _, true) => AttrKind::CLEANUP,
+        ("tls_model", _, true) => AttrKind::TLS_MODEL,
+        ("returns_twice", _, true) => AttrKind::RETURNS_TWICE,
+        // clang `GCC<"common">`, rejected in C++ (WP-807).
+        ("common", _, true) => AttrKind::COMMON,
+        // clang `Clang<"internal_linkage">` (WP-807).
+        ("internal_linkage", _, _) if gnu_syntax || clang_scope => AttrKind::INTERNAL_LINKAGE,
         ("visibility", _, true) => AttrKind::VISIBILITY,
         // clang `Clang<"type_visibility">`.
         ("type_visibility", _, _) if gnu_syntax || clang_scope => AttrKind::TYPE_VISIBILITY,
@@ -11029,6 +11304,11 @@ fn attr_kind_of(
         ("nodebug", _, true) => AttrKind::NODEBUG,
         // clang `GCC<"artificial">` (WP-789).
         ("artificial", _, true) => AttrKind::ARTIFICIAL,
+        // clang `GCC<"retain">` (WP-805).
+        ("retain", _, true) => AttrKind::RETAIN,
+        // clang `Clang<"no_destroy">` / `Clang<"always_destroy">` (WP-805).
+        ("no_destroy", _, _) if gnu_syntax || clang_scope => AttrKind::NO_DESTROY,
+        ("always_destroy", _, _) if gnu_syntax || clang_scope => AttrKind::ALWAYS_DESTROY,
         ("min_vector_width", _, _) if gnu_syntax || clang_scope => AttrKind::MIN_VECTOR_WIDTH,
         _ => return None,
     })

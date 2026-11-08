@@ -2052,7 +2052,7 @@ impl Parser<'_, '_> {
         };
         let nl = self.bump().span.lo;
         if let Some(q) = qual
-            && self.s.is_dependent_ctx(q.ctx)
+            && let Some(nns) = self.s.dep_member_nns(q, name, template_kw && self.at(Punct::Less))
         {
             let targs = if template_kw && self.at(Punct::Less) {
                 let (args, _, _) = self.parse_template_arg_list()?;
@@ -2060,7 +2060,7 @@ impl Parser<'_, '_> {
             } else {
                 None
             };
-            let e = self.s.act_dependent_scope_ref(q.nns, DeclName::ident(name), targs, begin, nl);
+            let e = self.s.act_dependent_scope_ref(nns, DeclName::ident(name), targs, begin, nl);
             self.s.set_template_kw(e, template_loc);
             return Some(e);
         }

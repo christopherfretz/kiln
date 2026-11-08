@@ -94,6 +94,9 @@ pub(crate) struct Fx {
     pub decl: Option<DeclId>,
     pub func: Option<FuncId>,
     pub locals: FxHashMap<DeclId, Addr>,
+    /// WP-803: each `pass_object_size(N)` parameter's `N` and the slot of
+    /// its hidden `size_t` argument (clang `SizeArguments`).
+    pub object_sizes: FxHashMap<DeclId, (u32, Addr)>,
     pub ret_block: Option<Blk>,
     pub ret_slot: Option<Addr>,
     pub ret_kind: RetKind,
@@ -218,6 +221,12 @@ pub(crate) struct Fx {
     /// (`crate::outline`, spec/landed/codegen/WP-641.md): the next one's
     /// number.
     pub outlined: u32,
+    /// The FP semantics of the scope being emitted (WP-806, `crate::fp`).
+    pub fp: kiln_ast::fp::FpOptions,
+    /// The pragma override [`Fx::fp`] is the command line's with.
+    pub fp_ovr: kiln_ast::fp::FpOverride,
+    /// The `*-fp-math` attributes an FP scope turned off (`crate::fp`).
+    pub fp_attrs_off: u8,
 }
 
 impl Fx {
@@ -227,6 +236,7 @@ impl Fx {
             decl: None,
             func: None,
             locals: FxHashMap::default(),
+            object_sizes: FxHashMap::default(),
             ret_block: None,
             ret_slot: None,
             ret_kind: RetKind::Void,
@@ -273,6 +283,9 @@ impl Fx {
             lifetime_markers: false,
             bypasses: None,
             outlined: 0,
+            fp: kiln_ast::fp::FpOptions::default(),
+            fp_ovr: kiln_ast::fp::FpOverride::NONE,
+            fp_attrs_off: 0,
         }
     }
 }
@@ -291,6 +304,7 @@ impl Cg<'_> {
         let f = self.get_fn(d)?;
         let f = self.fn_for_definition(d, f)?;
         self.gen_code(d, f, None)?;
+        self.add_ctor_dtor_entries(d, f);
         self.emit_thunks(d, None)
     }
 
@@ -362,6 +376,7 @@ impl Cg<'_> {
         };
         self.f = Fx::empty();
         self.f.fir = Fir::new(params);
+        self.start_fp();
         self.f.decl = Some(d);
         self.f.func = Some(f);
         self.f.is_main = is_main;
@@ -406,6 +421,18 @@ impl Cg<'_> {
             )
         {
             self.m.func_mut(f).align = Some(2);
+        }
+        // clang `SetLLVMFunctionAttributesForDefinition`: an `aligned(N)`
+        // / `alignas` function is `align N` (`Decl::getMaxAlignment`).
+        if thunk.is_none() {
+            let bits = kiln_abi::layout::decl_max_align(ast, d, self.target);
+            if bits >= 8 {
+                let func = self.m.func_mut(f);
+                func.align = Some(func.align.unwrap_or(1).max(bits / 8));
+            }
+        }
+        if thunk.is_none() {
+            self.note_used_attrs(d, Value::func(f));
         }
         if structor.is_some() || thunk.is_some() {
             self.m.func_mut(f).unnamed_addr = kiln_llvm::UnnamedAddr::Global;
@@ -484,12 +511,30 @@ impl Cg<'_> {
             } else {
                 ast.lists.iter(fd.params).collect()
             };
+        // WP-803: a `pass_object_size` parameter's hidden `size_t`
+        // argument follows it (clang `GenerateCode` adds an implicit
+        // parameter after each).
+        let object_sizes =
+            if param_decls.is_empty() { Vec::new() } else { ast.pass_object_size_params(d) };
+        let size_q = QualType::unqual(ast.types.target().size_t);
         let mut vals = Vec::with_capacity(param_decls.len());
+        let mut hidden = Vec::with_capacity(object_sizes.len());
+        let mut si = 0;
         for (i, &p) in param_decls.iter().enumerate() {
             let pq = ast.decls.get(p).ty().expect("param type");
-            let info = sig.info.args[i].clone();
+            let info = sig.info.args[si].clone();
+            si += 1;
             let loc = Some(ast.decls.get(p).loc());
             vals.push(self.prolog_arg(&info.kind, pq, &mut arg_no, loc)?);
+            if let Some(&(_, t, _)) = object_sizes.iter().find(|o| o.0 == i) {
+                let info = sig.info.args[si].clone();
+                si += 1;
+                if let ParamVal::Direct(v) =
+                    self.prolog_arg(&info.kind, size_q, &mut arg_no, loc)?
+                {
+                    hidden.push((p, t, v));
+                }
+            }
         }
         let this_class = ast.decls.get(d).ctx();
         let this_addr = this_arg.filter(|_| !self.f.naked).map(|v| {
@@ -526,6 +571,14 @@ impl Cg<'_> {
                 }
             };
             self.f.locals.insert(p, addr);
+            if let Some(&(_, t, v)) = hidden.iter().find(|h| h.0 == p) {
+                let mt = self.mty(size_q);
+                let (_, align) = self.size_align(size_q);
+                let a = self.f.fir.alloca(mt, align);
+                let addr = Addr { v: a, ty: mt, align };
+                self.store_scalar(v, addr, size_q);
+                self.f.object_sizes.insert(p, (t, addr));
+            }
             // clang `EmitParmDecl`: a parameter destroyed in the callee
             // (`isParamDestroyedInCallee`, not in a thunk) gets its
             // destructor cleanup here, run at the end of the function.

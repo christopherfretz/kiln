@@ -46,6 +46,8 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::WEAKREF => "weakref",
         AttrKind::ALIAS => "alias",
         AttrKind::IFUNC => "ifunc",
+        AttrKind::PASS_OBJECT_SIZE => "pass_object_size",
+        AttrKind::OVERLOADABLE => "overloadable",
         AttrKind::SECTION => "section",
         AttrKind::ANALYZER_NORETURN => "analyzer_noreturn",
         AttrKind::DISABLE_TAIL_CALLS => "disable_tail_calls",
@@ -72,6 +74,13 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::NAKED => "naked",
         AttrKind::MAY_ALIAS => "may_alias",
         AttrKind::INIT_PRIORITY => "init_priority",
+        AttrKind::CONSTRUCTOR => "constructor",
+        AttrKind::DESTRUCTOR => "destructor",
+        AttrKind::CLEANUP => "cleanup",
+        AttrKind::INTERNAL_LINKAGE => "internal_linkage",
+        AttrKind::COMMON => "common",
+        AttrKind::TLS_MODEL => "tls_model",
+        AttrKind::RETURNS_TWICE => "returns_twice",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -79,105 +88,12 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::NOTHROW => "nothrow",
         AttrKind::NODEBUG => "nodebug",
         AttrKind::ARTIFICIAL => "artificial",
+        AttrKind::RETAIN => "retain",
+        AttrKind::NO_DESTROY => "no_destroy",
+        AttrKind::ALWAYS_DESTROY => "always_destroy",
+        AttrKind::AARCH64_VECTOR_PCS_DECL => "aarch64_vector_pcs",
         AttrKind::MIN_VECTOR_WIDTH => "min_vector_width",
         _ => return None,
-    })
-}
-
-/// clang's thread-safety-analysis attributes (`Attr.td`, the
-/// `-Wthread-safety` family; spec/sema.md §4.5): known and ignored, with
-/// their arguments skipped as balanced tokens by the parser (they may
-/// name members declared later). Each entry is the name, whether clang
-/// spells it `Clang<"x">` (`__attribute__((x))` and `[[clang::x]]`)
-/// rather than only `GNU<"x">`, and the first clang release that knows
-/// it (`reentrant_capability` is new in clang 22).
-const THREAD_SAFETY_ATTRS: &[(&str, bool, u32)] = &[
-    ("acquire_capability", true, 0),
-    ("acquire_shared_capability", true, 0),
-    ("acquired_after", false, 0),
-    ("acquired_before", false, 0),
-    ("assert_capability", true, 0),
-    ("assert_exclusive_lock", false, 0),
-    ("assert_shared_capability", true, 0),
-    ("assert_shared_lock", false, 0),
-    ("capability", true, 0),
-    ("exclusive_lock_function", false, 0),
-    ("exclusive_locks_required", true, 0),
-    ("exclusive_trylock_function", false, 0),
-    ("guarded_by", false, 0),
-    ("guarded_var", true, 0),
-    ("lock_returned", false, 0),
-    ("lockable", false, 0),
-    ("locks_excluded", false, 0),
-    ("no_thread_safety_analysis", true, 0),
-    ("pt_guarded_by", false, 0),
-    ("pt_guarded_var", true, 0),
-    ("reentrant_capability", true, 22),
-    ("release_capability", true, 0),
-    ("release_generic_capability", true, 0),
-    ("release_shared_capability", true, 0),
-    ("requires_capability", true, 0),
-    ("requires_shared_capability", true, 0),
-    ("scoped_lockable", true, 0),
-    ("shared_capability", true, 0),
-    ("shared_lock_function", false, 0),
-    ("shared_locks_required", true, 0),
-    ("shared_trylock_function", false, 0),
-    ("try_acquire_capability", true, 0),
-    ("try_acquire_shared_capability", true, 0),
-    ("unlock_function", true, 0),
-];
-
-/// Whether `n` (its `__` affixes removed), written with `syntax` (and
-/// the `clang::` scope when `clang_scope`), is a thread-safety attribute
-/// clang `compat` knows: such an attribute is accepted silently and
-/// attaches nothing.
-pub(crate) fn is_thread_safety_attr(
-    n: &str,
-    syntax: AttrSyntax,
-    clang_scope: bool,
-    compat: u32,
-) -> bool {
-    THREAD_SAFETY_ATTRS.binary_search_by(|&(name, ..)| name.cmp(n)).is_ok_and(|i| {
-        let (_, clang, since) = THREAD_SAFETY_ATTRS[i];
-        compat >= since && (syntax == AttrSyntax::Gnu || (clang && clang_scope))
-    })
-}
-
-/// clang attributes kiln accepts silently because they only steer
-/// sanitizers or `-Wdangling` analysis, which kiln does not implement
-/// (spec/sema.md §4.5, WP-667). Each entry is the name, whether clang
-/// spells it `[[clang::x]]`, and the first clang release that spells it
-/// `[[gnu::x]]` (`u32::MAX`: none). Every entry has the
-/// `__attribute__((x))` spelling. `no_sanitize` gained `gnu::` in clang
-/// 22 (clang 19 warns that it is unknown).
-const IGNORED_CLANG_ATTRS: &[(&str, bool, u32)] = &[
-    ("lifetimebound", true, u32::MAX),
-    ("no_address_safety_analysis", false, 0),
-    ("no_sanitize", true, 22),
-    ("no_sanitize_address", false, 0),
-    ("no_sanitize_memory", true, u32::MAX),
-    ("no_sanitize_thread", false, 0),
-];
-
-/// Whether `n` (its `__` affixes removed), written with `syntax` and
-/// scope `scope` (normalized; `None` for none), is one of
-/// [`IGNORED_CLANG_ATTRS`] in a spelling clang `compat` knows: such an
-/// attribute is accepted without a diagnostic and attaches nothing.
-pub(crate) fn is_ignored_clang_attr(
-    n: &str,
-    syntax: AttrSyntax,
-    scope: Option<&str>,
-    compat: u32,
-) -> bool {
-    IGNORED_CLANG_ATTRS.binary_search_by(|&(name, ..)| name.cmp(n)).is_ok_and(|i| {
-        let (_, clang, gnu_since) = IGNORED_CLANG_ATTRS[i];
-        match scope {
-            None => syntax == AttrSyntax::Gnu,
-            Some("clang") => clang,
-            Some("gnu") => compat >= gnu_since,
-            Some(_) => false,
-        }
     })
 }
 
@@ -201,6 +117,38 @@ const fn is_var_kind(kind: DeclKind) -> bool {
 }
 
 impl Sema<'_, '_> {
+    /// WP-803: a `pass_object_size` parameter must have a pointer type
+    /// (clang `handlePassObjectSizeAttr`, `err_attribute_pointers_only`,
+    /// at the parameter's start `begin`); the attribute is dropped
+    /// otherwise. The `const` is only required of a definition's
+    /// parameter (see `act_on_start_function_def`).
+    pub(crate) fn check_param_pass_object_size(
+        &mut self,
+        ty: QualType,
+        begin: kiln_source::Loc,
+        attrs: &mut Vec<AttrId>,
+    ) {
+        let t = &self.ast.types;
+        if t.is_dependent(ty) || t.is_pointer(ty) {
+            return;
+        }
+        let mut reported = false;
+        attrs.retain(|&a| {
+            let node = *self.ast.attrs.get(a);
+            if node.kind != AttrKind::PASS_OBJECT_SIZE {
+                return true;
+            }
+            if !reported {
+                let shown = format!("'{}'", self.attr_shown(&node, "pass_object_size"));
+                let msg =
+                    self.diag(DiagId::sema_attribute_const_pointer_args_only, begin).arg(shown);
+                self.emit(msg);
+                reported = true;
+            }
+            false
+        });
+    }
+
     /// Attributes written where only type attributes may appear: at the
     /// end of a decl-specifier-seq (`int [[deprecated]] x;`,
     /// [dcl.spec.general]/1), after a ptr-operator or array declarator
@@ -388,6 +336,10 @@ impl Sema<'_, '_> {
         self.take_annotations(d, attrs);
         self.check_alignas_subject(d, attrs);
         self.check_init_priority(d, attrs);
+        self.check_ctor_dtor_attrs(d, attrs);
+        self.check_cleanup_attrs(d, attrs);
+        self.check_internal_linkage_attrs(d, attrs);
+        self.check_tls_model_attrs(d, attrs);
         self.check_visibility_attrs(d, attrs);
         self.check_weak_attrs(d, attrs);
         let kind = self.ast.decls.get(d).kind();
@@ -479,6 +431,22 @@ impl Sema<'_, '_> {
                 "functions, Objective-C methods, and Objective-C properties",
             ),
             AttrKind::ENABLE_IF | AttrKind::DIAGNOSE_IF => self.check_attr_cond_potential(d, node),
+            // clang `PassObjectSize`: `SubjectList<[ParmVar]>` (WP-803; the
+            // parameter's type is checked by
+            // [`Sema::check_param_pass_object_size`]).
+            AttrKind::PASS_OBJECT_SIZE if kind != DeclKind::ParmVar => wrong(
+                self,
+                DiagId::sema_attribute_wrong_decl_type,
+                "pass_object_size",
+                "parameters",
+            ),
+            // clang `Overloadable`: `SubjectList<[Function], ErrorDiag>`.
+            AttrKind::OVERLOADABLE if !kind.is_function() => wrong(
+                self,
+                DiagId::sema_attribute_wrong_decl_type_error,
+                "overloadable",
+                "functions",
+            ),
             // [dcl.attr.nouniqueaddr]/1.
             AttrKind::NO_UNIQUE_ADDRESS => {
                 (kind == DeclKind::Field
@@ -531,8 +499,18 @@ impl Sema<'_, '_> {
             }
             // clang `NakedAttr` / `OptimizeNoneAttr` subjects (ignored
             // with a warning); `MinSizeAttr`'s is an error.
+            AttrKind::AARCH64_VECTOR_PCS_DECL if !kind.is_function() => {
+                let msg = self
+                    .diag(DiagId::sema_attribute_unsupported_by_kiln, node.loc)
+                    .arg("aarch64_vector_pcs");
+                self.emit(msg);
+                false
+            }
             AttrKind::NAKED if !kind.is_function() => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "naked", "functions")
+            }
+            AttrKind::RETURNS_TWICE if !kind.is_function() => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, "returns_twice", "functions")
             }
             AttrKind::MIN_VECTOR_WIDTH if !kind.is_function() => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "min_vector_width", "functions")
@@ -778,7 +756,8 @@ impl Sema<'_, '_> {
             self.emit(msg);
             out.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::WEAKREF);
         }
-        let internal = kiln_abi::mangle::has_internal_linkage(&self.ast, d);
+        let internal = kiln_abi::mangle::has_internal_linkage(&self.ast, d)
+            || has(self, &out, AttrKind::INTERNAL_LINKAGE);
         if let Some(w) = out.iter().copied().find(|&a| self.ast.attrs.get(a).kind == AttrKind::WEAK)
             && internal
         {
@@ -1378,39 +1357,5 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The table is searched by name, so it must stay sorted.
-    #[test]
-    fn thread_safety_table_sorted() {
-        assert!(THREAD_SAFETY_ATTRS.windows(2).all(|w| w[0].0 < w[1].0));
-        assert_eq!(THREAD_SAFETY_ATTRS.len(), 34);
-        assert!(is_thread_safety_attr("guarded_by", AttrSyntax::Gnu, false, 19));
-        assert!(!is_thread_safety_attr("guarded_by", AttrSyntax::Cxx11, true, 22));
-        assert!(is_thread_safety_attr("capability", AttrSyntax::Cxx11, true, 19));
-        assert!(!is_thread_safety_attr("capability", AttrSyntax::Cxx11, false, 22));
-        assert!(!is_thread_safety_attr("reentrant_capability", AttrSyntax::Gnu, false, 19));
-        assert!(is_thread_safety_attr("reentrant_capability", AttrSyntax::Gnu, false, 22));
-    }
-
-    #[test]
-    fn ignored_clang_attrs_sorted_and_spelled() {
-        // [dcl.attr.grammar]/5: an unrecognized attribute-token is
-        // implementation-defined; clang's spellings are the contract.
-        assert!(IGNORED_CLANG_ATTRS.windows(2).all(|w| w[0].0 < w[1].0));
-        let ig = is_ignored_clang_attr;
-        assert!(ig("no_sanitize", AttrSyntax::Gnu, None, 19));
-        assert!(ig("no_sanitize", AttrSyntax::Cxx11, Some("clang"), 19));
-        assert!(!ig("no_sanitize", AttrSyntax::Cxx11, Some("gnu"), 19));
-        assert!(ig("no_sanitize", AttrSyntax::Cxx11, Some("gnu"), 22));
-        assert!(!ig("lifetimebound", AttrSyntax::Cxx11, None, 22));
-        assert!(!ig("lifetimebound", AttrSyntax::Cxx11, Some("gnu"), 22));
-        assert!(ig("no_sanitize_address", AttrSyntax::Cxx11, Some("gnu"), 19));
-        assert!(!ig("no_sanitize_address", AttrSyntax::Cxx11, Some("clang"), 22));
     }
 }

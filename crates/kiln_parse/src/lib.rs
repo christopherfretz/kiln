@@ -13,6 +13,7 @@ mod consteval_block;
 mod contracts;
 mod decl;
 mod expr;
+mod fp_pragma;
 pub mod keywords;
 mod lambda;
 mod loop_hint;
@@ -79,6 +80,8 @@ pub struct ParseOptions {
     /// GCC's implicit library builtins (`-stdlib=libstdc++`;
     /// [`kiln_sema::Sema::gnu_lib_builtins`]).
     pub gnu_lib_builtins: bool,
+    /// `-f[no-]math-errno` ([`kiln_sema::Sema::math_errno`]).
+    pub math_errno: bool,
     /// The `AArch64` `sve` target feature (`-march=armv8-a+sve`;
     /// [`kiln_sema::Sema::sve`]).
     pub sve: bool,
@@ -118,6 +121,7 @@ impl Default for ParseOptions {
             lax_vector_conversions: kiln_sema::LaxVectorConversions::All,
             clang_compat: 22,
             gnu_lib_builtins: false,
+            math_errno: true,
             sve: false,
             cfg_dump: false,
             cfg_stats: false,
@@ -283,6 +287,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.clang_compat = opts.clang_compat;
     s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
     s.gnu_lib_builtins = opts.gnu_lib_builtins;
+    s.math_errno = opts.math_errno;
     s.sve = opts.sve;
     s.cfg_dump = opts.cfg_dump;
     s.cfg_stats = opts.cfg_stats;

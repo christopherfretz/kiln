@@ -220,6 +220,7 @@ sema_integer_constants_in_conditional_always_true = Warning [TautologicalConstan
 sema_integer_seq_integral_element_type = Error (0) "integer sequences must have integral element type";
 sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";
 sema_integer_seq_too_long = Error (2) "integer sequence length {0} exceeds the implementation limit of {1}";
+sema_internal_linkage_local_storage = Warning [IgnoredAttributes] (0) "'internal_linkage' attribute on a non-static local variable is ignored";
 sema_invalid_asm_value_for_constraint = Error (2) "value '{0}' out of range for constraint '{1}'";
 sema_invalid_complex_spec = Error (1) "'_Complex {0}' is invalid";
 sema_invalid_decl_spec_in_nontype_parm = Error (0) "invalid declaration specifier in template non-type parameter";

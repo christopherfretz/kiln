@@ -1442,9 +1442,10 @@ impl<'a> Printer<'a> {
                 w.write_str(pred.name())?;
                 self.same_typed(w, &[lhs, rhs])?;
             }
-            InstKind::Cast { op, flags, val } => {
+            InstKind::Cast { op, flags, fmf, val } => {
                 w.write_str(op.name())?;
                 write_flags(w, flags)?;
+                write_fmf(w, fmf)?;
                 w.write_char(' ')?;
                 self.typed(w, val)?;
                 w.write_str(" to ")?;

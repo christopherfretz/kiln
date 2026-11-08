@@ -1834,6 +1834,14 @@ member templates):
    class instantiation and `spec_args`). Test:
    `temp.expl.spec/member-partial-spec-of-implicit-spec-run.cpp`.
 
+**Constructors and destructors of an implicit instantiation**
+(`template<> A<int>::A(int) {...}`, [temp.expl.spec]/1): the out-of-line
+redeclaration marks the member specialization explicit
+(`mark_member_explicit_spec`) and consumes the `template<>` head, so the
+block-scope declarations of its body are not under it (`int i(n);` there is
+a local, not an extraneous variable specialization; WP-803,
+`temp.expl.spec/special-member-spec-body-locals-run.cpp`).
+
 **Member classes and member enumerations of an implicit instantiation**
 ([temp.expl.spec]/1, /5, /7; WP-206), such as `template<> struct
 A<int>::N {...}`, `template<> enum class A<int>::E : int {...}` and the
@@ -4842,6 +4850,23 @@ the class is instantiated and only `Ts` is known, stays one partially
 substituted expansion until the member template's `Us` is supplied
 (`tests/conformance/temp.variadic/p5-partial-expr-expansion-member-template.cpp`).
 
+**An empty first pack** ([temp.variadic]/7, WP-802). The probe stops at
+the first pack it reaches, so when that pack is empty no element is ever
+substituted and the expansion's other packs would go unchecked. Instead
+the pattern is substituted once more in keep mode (the *length sweep*,
+`PackState::sweep`, diagnostics captured and discarded): every
+substituted pack it reaches is kept, and a non-empty one is the length
+mismatch of step 3 (reported once the sweep ends, SFINAE-able as
+always), so `all<is_convertible(U, T)...>` with `T` = {} and `U` =
+{int} is a deduction failure and `is_constructible<tuple<>, int>` is
+false. A sweep element (`element_ty` / `element_expr`) that still names
+a pack by declaration names one of a retained level, and the expansion is
+rebuilt partially substituted as above instead of becoming empty. A sweep
+that fails for another reason (a lambda body, a pack it cannot keep)
+leaves the expansion empty, as before
+(`tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp`,
+`p7-empty-first-pack-length-mismatch.cpp`).
+
 A converted argument pack inside an argument list being substituted is
 rebuilt element by element. This happens for a partial
 specialization's `<U>` against `class... Up`, which is stored as the
@@ -5833,6 +5858,15 @@ return type deduction, as clang's instantiated declaration name does:
 `'G::operator int<int>'`, `'operator auto (*)(int)<int>'` for a generic
 lambda (`ColdDeclData::conversion_spec_target`, read by
 `AstNames::write_name`; WP-170).
+
+A class member access that names a conversion function explicitly
+(`e.operator Matx<double,3,3>()`, `this->X::operator T*()`) and finds no
+member of that name deduces each conversion function template of the
+object's class against the named type ([temp.mem]/6, [temp.deduct.conv])
+and takes the specializations that deduce as the lookup result; the
+bases' conversion templates are not searched, as clang 19's
+`LookupDirect` (`Sema::conversion_template_specs`, WP-803,
+`tests/conformance/temp.mem/conversion-template-named-explicitly-run.cpp`).
 
 The texts are taken from clang 19's `DiagnosticSemaKinds.td`. The goldens
 are authoritative: WP-070 checks each of them in `templates/diag/`.

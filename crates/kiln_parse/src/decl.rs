@@ -21,6 +21,7 @@ use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
 
 use crate::class::LateToks;
+use crate::fp_pragma::FpAt;
 use crate::keywords::Kw;
 use crate::parser::{ParamTypename, Parser};
 use crate::templ::TemplateDeclKind;
@@ -123,6 +124,8 @@ impl Parser<'_, '_> {
             let tu = self.s.ast.tu;
             self.s.ast.decls.end_top_level_decl(tu);
         }
+        self.take_fp_pragmas(FpAt::File);
+        self.flush_fp_pragmas();
         self.module_flush();
         // [temp.point]/7: the end of the translation unit is a point of
         // instantiation of every pending definition.
@@ -185,6 +188,9 @@ impl Parser<'_, '_> {
         // At namespace scope also before an asm-declaration (libstdc++
         // `__extension__ asm(...)`); not in a class or block, as clang.
         self.skip_extension_before(&[Kw::Using, Kw::Template, Kw::Asm]);
+        if self.take_fp_pragmas(FpAt::File) && (self.at(Punct::RBrace) || self.at_eof()) {
+            return;
+        }
         self.discard_attrs_before_unattributed_decl();
         let loc = self.loc();
         // A loop-hint pragma at namespace scope (clang's annotation token
@@ -373,6 +379,7 @@ impl Parser<'_, '_> {
         while !self.at(Punct::RBrace) && !self.at_eof() {
             self.parse_external_declaration();
         }
+        self.take_fp_pragmas(FpAt::File);
         // The namespace's visibility scope ends at its `}`, before a
         // `#pragma GCC visibility` right after it is lexed.
         let end = self.loc();
@@ -419,6 +426,7 @@ impl Parser<'_, '_> {
             while !self.at(Punct::RBrace) && !self.at_eof() {
                 self.parse_external_declaration();
             }
+            self.take_fp_pragmas(FpAt::File);
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
         } else {
             self.s.act_on_linkage_spec_braceless(ls);
