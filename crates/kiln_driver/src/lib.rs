@@ -131,12 +131,12 @@ kiln++ compiles every input as C++. kiln picks by extension: .c, .h and
 .i are C (preprocessing only so far), everything else is C++. -x <lang>
 overrides both.
 
-Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
+Implemented: -E -P -C -CC -dM -dD -dI -o -x -std= -D -U -I -isystem -iquote
 -idirafter -cxx-isystem -nostdinc -nostdinc++ -nostdlibinc -nobuiltininc
 -isysroot --sysroot -resource-dir -stdlib= -f[no-]experimental-library
 --gcc-toolchain= --gcc-install-dir=
 --target= -march= -mcpu= -target-feature --embed-dir= -M -MM
--MD -MMD -MF -MT -MQ -MP -W... -w -pedantic -ferror-limit=
+-MD -MMD -MF -MT -MQ -MP -MG -MJ -W... -w -pedantic -ferror-limit=
 -fdiagnostics-format= -f[no-]color-diagnostics -fkiln-reproducible-time
 -fkiln-source-path-style=<clang|gcc> -fkiln-reflection-mangling=<kiln|gcc>
 -fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -verify[=<prefixes>]
@@ -147,7 +147,9 @@ Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -fkiln-cfg-stats -fkiln-cfg-max-elems= -fkiln-outline-expansions=
 -fkiln-memory-report -c -S -emit-llvm
 -O<n> -g (ignored) -l -L -Wl, -fuse-ld= -static -nostdlib -shared -rdynamic -pie -no-pie -pthread -###
--v --version.
+-f[no-]reflection -v --version -dumpversion -dumpmachine -print-search-dirs
+-print-libgcc-file-name -print-file-name= -print-prog-name=
+-print-target-triple -print-multiarch -print-sysroot -print-resource-dir.
 See spec/driver.md.
 ";
 

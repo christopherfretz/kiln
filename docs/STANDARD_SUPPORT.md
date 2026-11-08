@@ -24,7 +24,7 @@ one, and the library picture is [status/libstdcxx.md](status/libstdcxx.md)
 | [C++20](#c20) | `-std=c++20` (`c++2a`) | `202002L` | 54 | 0 | 0 | 0 |
 | [C++23](#c23) | `-std=c++23` (`c++2b`) | `202302L` | 35 | 0 | 0 | 0 |
 | [C++26](#c26) | `-std=c++26` (`c++2c`) | `202400L` | 32 | 3 | 0 | 0 |
-| [C++26 reflection](#c26-reflection) | `-std=c++26` plus `-freflection` | `202400L` | 16 | 0 | 0 | 0 |
+| [C++26 reflection](#c26-reflection) | `-std=c++26` (on by default; `-fno-reflection` opts out, WP-920) | `202400L` | 16 | 0 | 0 | 0 |
 | [DR-level papers](#dr-level-papers) | every `-std=` | — | 19 | 0 | 0 | 0 |
 | [kiln extensions](#kiln-extensions) | every `-std=` | — | 5 | 0 | 0 | 0 |
 
@@ -345,7 +345,7 @@ observable beyond constant evaluation, which follows [expr.const].
 
 One row per M6 work package (docs/ROADMAP.md M6). The contract is
 [spec/reflection.md](../spec/reflection.md), and the papers are listed in
-its §1. All rows need `-freflection` (§1.4). The reference compiler is GCC 16.1.
+its §1. All rows need C++26, where reflection is on unless `-fno-reflection` (§1.4; before WP-920 they needed `-freflection`). The reference compiler is GCC 16.1.
 This table is per work package, not per paper, so `cargo xtask features` does
 not check it: its first header cell is not `Paper`.
 

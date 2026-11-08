@@ -503,8 +503,9 @@ of an unpacked GCC 16.1 image: headers under
 `$KILN_GCC16_ROOT/usr/local/include/c++/16.1.0`, the installation under
 `$KILN_GCC16_ROOT/usr/local/lib/gcc/<triple>/16.1.0` (with `crtbegin.o`).
 The driver finds it with clang's `--gcc-toolchain=` (spec/driver.md
-"Toolchain"); `-freflection` predefines `__cpp_impl_reflection`, which
-`<meta>` keys on.
+"Toolchain"); reflection, on by default at C++26 since WP-920 (the
+`-freflection` below is now a no-op kept for history), predefines
+`__cpp_impl_reflection`, which `<meta>` keys on.
 
 ```sh
 GCC16=--gcc-toolchain=$KILN_GCC16_ROOT/usr/local
