@@ -2010,9 +2010,10 @@ impl Cg<'_> {
             rtl_vals = Some(self.emit_call_args(&sig, args)?);
         }
         let this = if arrow {
-            let p = self.emit_scalar(base)?;
+            // clang `EmitCXXMemberOrOperatorMemberCallExpr`:
+            // `EmitPointerWithAlignment` of the object pointer.
             let pq = ast.types.pointee(ast.exprs.get(base).ty()).expect("pointee");
-            let (_, align) = self.pointee_layout(pq);
+            let (p, align) = self.ptr_align(base)?;
             let ty = self.mty(pq);
             Addr { v: p, ty, align }
         } else {
