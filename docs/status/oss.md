@@ -50,14 +50,14 @@ The loop:
 | `catch2` | 1 | `v3.16.1` | tests at parity |
 | `cli11` | 1 | `v2.6.1` | tests at parity |
 | `doctest` | 1 | `v2.5.3` | tests at parity |
-| `fmt` | 1 | `12.1.0` | not started |
+| `fmt` | 1 | `12.1.0` | tests at parity |
 | `googletest` | 1 | `v1.17.0` | tests at parity |
 | `magic_enum` | 1 | `v0.9.7` | tests at parity |
-| `nlohmann_json` | 1 | `v3.12.0` | not started |
-| `range_v3` | 1 | `0.12.0` | not started |
+| `nlohmann_json` | 1 | `v3.12.0` | tests at parity |
+| `range_v3` | 1 | `0.12.0` | tests at parity |
 | `spdlog` | 1 | `v1.17.0` | tests at parity |
 | `tl_expected` | 1 | `v1.3.1` | tests at parity |
-| `abseil` | 2 | `20260107.1` | not started |
+| `abseil` | 2 | `20260107.1` | tests at parity |
 | `benchmark` | 2 | `v1.9.5` | tests at parity |
 | `cereal` | 2 | `v1.3.2` | tests at parity |
 | `eigen` | 2 | `3.4.1` | tests at parity (132-target subset) |
@@ -67,24 +67,24 @@ The loop:
 | `simdjson` | 2 | `v4.2.4` | blocked (tests 116/117 vs clang 117/117) |
 | `taskflow` | 2 | `v3.10.0` | tests at parity |
 | `yaml_cpp` | 2 | `yaml-cpp-0.9.0` | tests at parity |
-| `folly` | 3 | `v2026.10.26.00` | not started |
+| `folly` | 3 | `v2026.10.26.00` | blocked (tests 3767/3773 vs clang 3773; `[[gnu::ifunc]]`/alias codegen) |
 | `leveldb` | 3 | `1.23` | tests at parity |
 | `llvm_project` | 3 | `llvmorg-19.1.7` | tests at parity |
 | `protobuf` | 3 | `v33.1` | tests at parity |
 | `rocksdb` | 3 | `v10.7.5` | tests at parity |
-| `boost_meta` | 4 | `boost-1.90.0` | blocked (13 clusters) |
+| `boost_meta` | 4 | `boost-1.90.0` | blocked (tests 2059/2087 of control-passing; 8 follow-ups in WP-802) |
 | `ctre` | 4 | `v3.11.0` | tests at parity |
 | `daw_json_link` | 4 | `v3.38.1` | tests at parity |
+| `duckdb` | 4 | `v1.5.6` | tests at parity |
 | `folly_coro` | 4 | `v2026.10.26.00` | blocked (1 cluster) |
 | `glaze` | 4 | `v9.1.0` | tests at parity |
 | `libunifex` | 4 | `v0.4.0` | tests at parity |
-| `llvm_full` | 4 | `llvmorg-19.1.7` | not started |
+| `llvm_full` | 4 | `llvmorg-19.1.7` | tests at parity (check-llvm) |
 | `mp_units` | 4 | `v2.5.0` | tests at parity |
-| `onetbb` | 4 | `v2022.3.0` | tests at parity |
-| `opencv` | 4 | `4.12.0` | tests at parity |
 | `reflect_cpp` | 4 | `v0.27.1` | tests at parity |
 | `scnlib` | 4 | `v4.0.1` | tests at parity |
 | `stdexec` | 4 | `nvhpc-26.05` | tests at parity |
+| `z3` | 4 | `z3-4.15.8` | tests at parity |
 <!-- /oss:projects -->
 
 ## Constexpr performance (WP-792)
@@ -789,34 +789,36 @@ kiln test run: `97% tests passed, 3 tests failed out of 94`
 Failure clusters (kiln): none.
 <!-- /oss:stdexec -->
 
-<!-- oss:onetbb -->
-### onetbb (v2022.3.0)
+<!-- oss:duckdb -->
+### duckdb (v1.5.6)
 
 | | kiln | clang-19 |
 |---|---|---|
 | configure | ok | ok |
 | build | ok | ok |
-| TUs ok / failed | 184 / 0 | 184 / 0 |
-| links ok / failed | 145 / 0 | 145 / 0 |
-| tests passed / total | 139 / 139 | 139 / 139 |
-| wall | 1077 s | 1011 s |
-| peak TU RSS | 835 MB | 915 MB |
+| TUs ok / failed | 421 / 0 | 421 / 0 |
+| links ok / failed | 2 / 0 | 2 / 0 |
+| tests passed / total | 4615 / 4628 | 4615 / 4628 |
+| wall | 1511 s | 1880 s |
+| peak TU RSS | 484 MB | 798 MB |
 
 Failure clusters (kiln): none.
-<!-- /oss:onetbb -->
 
-<!-- oss:opencv -->
-### opencv (4.12.0)
+kiln test run: `test cases:   4628 |   4615 passed | 13 failed | 372 skipped`
+<!-- /oss:duckdb -->
+
+<!-- oss:z3 -->
+### z3 (z3-4.15.8)
 
 | | kiln | clang-19 |
 |---|---|---|
 | configure | ok | ok |
 | build | ok | ok |
-| TUs ok / failed | 635 / 0 | 635 / 0 |
-| links ok / failed | 19 / 0 | 19 / 0 |
-| tests passed / total | 7 / 7 | 7 / 7 |
-| wall | 997 s | 1091 s |
-| peak TU RSS | 272 MB | 356 MB |
+| TUs ok / failed | 972 / 0 | 972 / 0 |
+| links ok / failed | 2 / 0 | 2 / 0 |
+| tests passed / total | ok | ok |
+| wall | 337 s | 1530 s |
+| peak TU RSS | 317 MB | 415 MB |
 
 Failure clusters (kiln): none.
-<!-- /oss:opencv -->
+<!-- /oss:z3 -->

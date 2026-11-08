@@ -87,10 +87,10 @@ compiled, so there is no miscompile cluster.
 
 | # | Signature | TUs | Status | Repro |
 |---|---|---|---|---|
-| O1 | a GNU statement expression whose result is a class lvalue (`CV_Assert` and friends) | 26 | fixed, `663537856` (sema, codegen) | `ext.gnu.stmt.expr/class-lvalue-result-run.cpp` |
-| O2 | NEON `vld2`/`vst2`, `vshll_n`, `vrshrn_n`, `vqmovun`, `vpadal`, `vqneg`, `vqabs` not supported | 12 | fixed, `4fe89e875` (codegen) | `target.neon/ld2-st2-widen-run.cpp`, `target.neon/ir-ld2-widen-19.cpp` |
+| O1 | a GNU statement expression whose result is a class lvalue (`CV_Assert` and friends) | 26 | fixed on main, `6ad563ead` (WP-799); WP-803's own fix was dropped in the merge | `ext.gnu.stmt.expr/class-lvalue-result-run.cpp` |
+| O2 | NEON `vld2`/`vst2`, `vshll_n`, `vrshrn_n`, `vqmovun`, `vpadal`, `vqneg`, `vqabs` not supported | 12 | fixed, `4fe89e875` (codegen); `vld2`/`vst2` are main's `b0b8aba45` since the merge | `target.neon/ld2-st2-widen-run.cpp`, `target.neon/ir-ld2-widen-19.cpp` |
 | O3 | invalid UTF-8 inside a comment rejected | 1 | fixed, `2e5a0fd97` (pp) | `lex.phases/invalid-utf8-in-comment-run.cpp` |
-| O4 | NEON `vld3`/`vld4`/`vst3`/`vst4`, `vcvt{n,a,m,p}`, `vhadd`/`vrhadd`/`vhsub`, `vq{r,}shr{u,}n_n`, `vqshl_n`, `vrshr_n`, `vtbl1`/`vtbl2` not supported | 21 (exposed by O1, O2) | fixed, `0510845a0` (codegen) | `target.neon/ld34-cvt-qshrn-tbl-run.cpp`, `target.neon/ir-ld34-cvt-qshrn-tbl-19.cpp` |
+| O4 | NEON `vld3`/`vld4`/`vst3`/`vst4`, `vcvt{n,a,m,p}`, `vhadd`/`vrhadd`/`vhsub`, `vq{r,}shr{u,}n_n`, `vqshl_n`, `vrshr_n`, `vtbl1`/`vtbl2` not supported | 21 (exposed by O1, O2) | fixed, `0510845a0` (codegen); `vld3`/`vld4`/`vst3`/`vst4` are main's `b0b8aba45` since the merge | `target.neon/ld34-cvt-qshrn-tbl-run.cpp`, `target.neon/ir-ld34-cvt-qshrn-tbl-19.cpp` |
 | O5 | `'nlanes' is a private member of 'v_uint8x16'`: `friend struct VTraits<V>` not honoured while `VTraits<V>` is instantiated inside `V`'s definition | 89 | fixed, `1b4b3e24b` (sema) | `temp.friend/specialization-instantiated-in-befriending-class-run.cpp` |
 | O6 | NEON `vaddlv` not supported | 1 | fixed, `e03b318c5` (codegen) | `target.neon/ld34-cvt-qshrn-tbl-run.cpp` |
 | O7 | NEON `vshl`/`vrshl`/`vqshl`/`vqrshl` (register count) not supported | 9 | fixed, `846be5b3b` (codegen) | `target.neon/ld34-cvt-qshrn-tbl-run.cpp`, `target.neon/ir-ld34-cvt-qshrn-tbl-19.cpp` |

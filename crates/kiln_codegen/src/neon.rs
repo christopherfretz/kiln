@@ -170,6 +170,13 @@ enum Shape {
     /// `vst1[q]_lane_v`: `store (extractelement (bitcast v to VTy), lane),
     /// ptr p, align A`.
     St1Lane,
+    /// `vld{2,3,4}[q]_v` (operands `r`, `p`): `store (call {VTy x N}
+    /// @llvm.aarch64.neon.ldN.VTy.p0(p)), ptr r` at the struct's ABI
+    /// alignment (clang 19 `EmitAArch64BuiltinExpr` `vld2_v`...).
+    LdN(u32),
+    /// `vst{2,3,4}[q]_v` (operands `p`, `v1`..`vN`): `call
+    /// @llvm.aarch64.neon.stN.VTy.p0(bitcast v1 to VTy, ..., p)`.
+    StN(u32),
     /// `vld1[q]_dup_v`: the loaded element inserted at lane 0 of `poison`,
     /// then `shufflevector` with a zero splat mask.
     Ld1Dup,
@@ -235,6 +242,9 @@ enum Shape {
     /// `vsri[q]_n_v` (operands `a`, `b`, `n`): `vsri.VTy(a, b, i32 n)`
     /// over the two bitcast to `VTy`, `n` in `1..=width`.
     Sri,
+    /// `vsli[q]_n_v` (operands `a`, `b`, `n`): `vsli.VTy(a, b, i32 n)`
+    /// over the two bitcast to `VTy`, `n` in `0..width`.
+    Sli,
     /// `vmovl_v` (operand `v`): `sext`/`zext` (signed/unsigned type code)
     /// of `bitcast v to N`, `N` the vector of `VTy`'s lanes at half the
     /// width.
@@ -257,13 +267,6 @@ enum Shape {
     /// `vcvt_f16_f32`, `vcvt_f32_f16`, `vcvt_f32_f64`, `vcvt_f64_f32`
     /// (operand `v`): the [`Fp`] conversion.
     CvtFp(Fp),
-    /// `vld{2,3,4}[q]_v` (operands `r`, `p`; WP-803): `store
-    /// (ldN.VTy.p0(p)), r` at the `{VTy, ...}` ABI alignment (clang 19
-    /// `EmitAArch64BuiltinExpr`).
-    LdN(u8),
-    /// `vst{2,3,4}[q]_v` (operands `p`, `a`, `b`, ...; WP-803):
-    /// `stN.VTy.p0(a, b, ..., p)`, each vector bitcast to `VTy`.
-    StN(u8),
     /// `vshll_n_v` (operands `v`, `n`; WP-803): `shl ({s,z}ext (bitcast v
     /// to the half-width lanes) to VTy), splat(n)` (clang
     /// `EmitCommonNeonBuiltinExpr`).
@@ -450,8 +453,10 @@ impl Shape {
     const fn arity(self) -> usize {
         match self {
             Shape::LdrQ | Shape::Reduce(..) => 1,
+            Shape::LdN(_) => 3,
+            Shape::StN(k) => k as usize + 2,
             Shape::Call(c) => c.arity + 1,
-            Shape::Bsl | Shape::Sra | Shape::Sri => 4,
+            Shape::Bsl | Shape::Sra | Shape::Sri | Shape::Sli => 4,
             Shape::FmaLane { .. } => 5,
             Shape::Ld1
             | Shape::Ld1Dup
@@ -467,11 +472,10 @@ impl Shape {
             | Shape::CvtFp(_) => 2,
             Shape::St1 | Shape::SetLane(_) | Shape::Splat { .. } | Shape::ShrN | Shape::Tst => 3,
             Shape::ShlN | Shape::ShrnN | Shape::Mull => 3,
-            Shape::LdN(_) | Shape::ShllN | Shape::RshrnN | Shape::Padal => 3,
+            Shape::ShllN | Shape::RshrnN | Shape::Padal => 3,
             Shape::QShrnN { .. } | Shape::ShlCall { .. } => 3,
             Shape::CvtR(_) => 2,
             Shape::Ld1Lane | Shape::St1Lane | Shape::Ext | Shape::Perm(_) => 4,
-            Shape::StN(k) => k as usize + 2,
             Shape::Tbl(k) => k as usize + 2,
         }
     }
@@ -503,13 +507,15 @@ impl Shape {
             Shape::ShllN | Shape::RshrnN | Shape::QShrnN { .. } => &[1, 2],
             Shape::ShlCall { .. } => &[1, 2],
             Shape::CvtR(_) => &[1],
-            Shape::LdN(_) | Shape::Padal | Shape::Tbl(1) => &[2],
-            Shape::StN(2) | Shape::Tbl(_) => &[3],
-            Shape::StN(3) => &[4],
-            Shape::StN(_) => &[5],
-            Shape::Sra | Shape::Sri => &[2, 3],
+            Shape::Padal | Shape::Tbl(1) => &[2],
+            Shape::Tbl(_) => &[3],
+            Shape::Sra | Shape::Sri | Shape::Sli => &[2, 3],
             Shape::FmaLane { .. } => &[3, 4],
             Shape::Perm(_) => &[3],
+            Shape::LdN(_) => &[2],
+            Shape::StN(2) => &[3],
+            Shape::StN(3) => &[4],
+            Shape::StN(_) => &[5],
             Shape::LdrQ | Shape::StrQ | Shape::Reduce(..) => &[],
         }
     }
@@ -550,6 +556,12 @@ fn shape(name: &str) -> Option<Shape> {
             "vld1_lane" | "vld1q_lane" => Some(Shape::Ld1Lane),
             "vst1_lane" | "vst1q_lane" => Some(Shape::St1Lane),
             "vld1_dup" | "vld1q_dup" => Some(Shape::Ld1Dup),
+            "vld2" | "vld2q" => Some(Shape::LdN(2)),
+            "vld3" | "vld3q" => Some(Shape::LdN(3)),
+            "vld4" | "vld4q" => Some(Shape::LdN(4)),
+            "vst2" | "vst2q" => Some(Shape::StN(2)),
+            "vst3" | "vst3q" => Some(Shape::StN(3)),
+            "vst4" | "vst4q" => Some(Shape::StN(4)),
             "splat_lane" | "splatq_laneq" => Some(Shape::Splat { mul: 1, div: 1 }),
             "splatq_lane" => Some(Shape::Splat { mul: 2, div: 1 }),
             "splat_laneq" => Some(Shape::Splat { mul: 1, div: 2 }),
@@ -565,16 +577,11 @@ fn shape(name: &str) -> Option<Shape> {
             "vshrn_n" if n.ends_with("_v") => Some(Shape::ShrnN),
             "vsra_n" | "vsraq_n" if n.ends_with("_v") => Some(Shape::Sra),
             "vsri_n" | "vsriq_n" if n.ends_with("_v") => Some(Shape::Sri),
+            "vsli_n" | "vsliq_n" if n.ends_with("_v") => Some(Shape::Sli),
             "vmovl" if n.ends_with("_v") => Some(Shape::Movl),
             "vpaddl" | "vpaddlq" if n.ends_with("_v") => Some(Shape::Paddl),
             "vqmovn" if n.ends_with("_v") => Some(Shape::QMovn),
             "vmull" if n.ends_with("_v") => Some(Shape::Mull),
-            "vld2" | "vld2q" if n.ends_with("_v") => Some(Shape::LdN(2)),
-            "vld3" | "vld3q" if n.ends_with("_v") => Some(Shape::LdN(3)),
-            "vld4" | "vld4q" if n.ends_with("_v") => Some(Shape::LdN(4)),
-            "vst2" | "vst2q" if n.ends_with("_v") => Some(Shape::StN(2)),
-            "vst3" | "vst3q" if n.ends_with("_v") => Some(Shape::StN(3)),
-            "vst4" | "vst4q" if n.ends_with("_v") => Some(Shape::StN(4)),
             "vtbl1" if n.ends_with("_v") => Some(Shape::Tbl(1)),
             "vtbl2" if n.ends_with("_v") => Some(Shape::Tbl(2)),
             "vqrshrn_n" if n.ends_with("_v") => Some(Shape::QShrnN {
@@ -902,6 +909,47 @@ impl Cg<'_> {
                 self.store(x, p, a, false);
                 None
             }
+            Shape::LdN(k) => {
+                // `Ops[1] = call(F, Ops[1]); CreateDefaultAlignedStore(Ops[1], Ops[0])`.
+                let r = self.emit_scalar(args[0])?;
+                let p = self.emit_scalar(args[1])?;
+                let pt = self.m.types.ptr(0);
+                let st = self.m.types.struct_literal(&vec![vt; k as usize], false);
+                let base = format!("llvm.aarch64.neon.ld{k}");
+                let full = intrinsics::overloaded_name(&self.m, &base, &[vt, pt]);
+                let f = intrinsics::target_intrinsic(
+                    &mut self.m,
+                    &full,
+                    st,
+                    &[(pt, false)],
+                    intrinsics::TargetMem::ArgRead,
+                );
+                let v = self.intrinsic_call(f, vec![p]);
+                // The struct's ABI alignment is its 64- or 128-bit vector's.
+                self.store(v, r, u64::from(elt.bits() * n / 8), false);
+                None
+            }
+            Shape::StN(k) => {
+                // `std::rotate(Ops, Ops + 1)`: the vectors, then the pointer.
+                // Every operand is emitted before the vectors are bitcast.
+                let p = self.emit_scalar(args[0])?;
+                let vs = &args[1..=k as usize];
+                let mut raw = Vec::with_capacity(vs.len());
+                for &a in vs {
+                    raw.push(self.emit_scalar(a)?);
+                }
+                let mut vals = Vec::with_capacity(vs.len() + 1);
+                for (v, &a) in raw.into_iter().zip(vs) {
+                    vals.push(self.neon_as(v, vt, a)?);
+                }
+                vals.push(p);
+                let pt = self.m.types.ptr(0);
+                let base = format!("llvm.aarch64.neon.st{k}");
+                let full = intrinsics::overloaded_name(&self.m, &base, &[vt, pt]);
+                let f = intrinsics::neon_store_n(&mut self.m, &full, vt, k as usize);
+                self.intrinsic_call(f, vals);
+                None
+            }
             Shape::Ld1Dup => {
                 let (p, a) = self.pointer_and_align(args[0])?;
                 let x = self.load(et, p, a, false);
@@ -1110,16 +1158,22 @@ impl Cg<'_> {
                 let r = self.neon_rshift(b, k, code, (elt, n), args[2], name)?;
                 Some(self.bin(BinOp::Add, Flags::NONE, a, r))
             }
-            Shape::Sri => {
+            Shape::Sri | Shape::Sli => {
                 let a = self.emit_scalar(args[0])?;
                 let b = self.emit_scalar(args[1])?;
                 let k = self.neon_imm(args[2], name)?;
-                if !is_int(elt) || !(1..=i128::from(elt.bits())).contains(&k) {
+                let bits = i128::from(elt.bits());
+                let (range, base) = if s == Shape::Sri {
+                    (1..=bits, "llvm.aarch64.neon.vsri")
+                } else {
+                    (0..=bits - 1, "llvm.aarch64.neon.vsli")
+                };
+                if !is_int(elt) || !range.contains(&k) {
                     return err(self.loc_of(args[2]), format!("invalid shift for {name}"));
                 }
                 let a = self.neon_as(a, vt, args[0])?;
                 let b = self.neon_as(b, vt, args[1])?;
-                let full = intrinsics::overloaded_name(&self.m, "llvm.aarch64.neon.vsri", &[vt]);
+                let full = intrinsics::overloaded_name(&self.m, base, &[vt]);
                 let f = intrinsics::target_nomem(&mut self.m, &full, vt, &[vt, vt, LTy::I32]);
                 let k = i32c(self, k);
                 Some(self.intrinsic_call(f, vec![a, b, k]))
@@ -1171,51 +1225,6 @@ impl Cg<'_> {
                 let r = self.intrinsic_call(f, vec![v]);
                 let rty = self.lty(ast.exprs.get(e).ty());
                 Some(self.neon_bitcast(r, vt, rty, e)?)
-            }
-            Shape::LdN(k) => {
-                let r = self.emit_scalar(args[0])?;
-                let p = self.emit_scalar(args[1])?;
-                let st = self.m.types.struct_literal(&vec![vt; usize::from(k)], false);
-                let base = format!("llvm.aarch64.neon.ld{k}");
-                let full = intrinsics::overloaded_name(&self.m, &base, &[vt, LTy::PTR]);
-                let f = intrinsics::target_intrinsic(
-                    &mut self.m,
-                    &full,
-                    st,
-                    &[(LTy::PTR, false)],
-                    intrinsics::TargetMem::ArgRead,
-                );
-                let v = self.intrinsic_call(f, vec![p]);
-                let align = u64::from(elt.bits() * n / 8);
-                self.store(v, r, align, false);
-                None
-            }
-            Shape::StN(k) => {
-                let p = self.emit_scalar(args[0])?;
-                // Every operand is emitted before any is bitcast, as clang does.
-                let ops = &args[1..=usize::from(k)];
-                let mut raw = Vec::with_capacity(ops.len());
-                for &a in ops {
-                    raw.push(self.emit_scalar(a)?);
-                }
-                let mut vals = Vec::with_capacity(ops.len() + 1);
-                for (v, &a) in raw.into_iter().zip(ops) {
-                    vals.push(self.neon_as(v, vt, a)?);
-                }
-                vals.push(p);
-                let base = format!("llvm.aarch64.neon.st{k}");
-                let full = intrinsics::overloaded_name(&self.m, &base, &[vt, LTy::PTR]);
-                let mut params = vec![(vt, false); usize::from(k)];
-                params.push((LTy::PTR, false));
-                let f = intrinsics::target_intrinsic(
-                    &mut self.m,
-                    &full,
-                    LTy::VOID,
-                    &params,
-                    intrinsics::TargetMem::ArgReadWrite,
-                );
-                self.intrinsic_call(f, vals);
-                None
             }
             Shape::Tbl(k) => {
                 if elt != E::I8 || n != 8 {
@@ -1526,14 +1535,15 @@ mod tests {
         assert_eq!(s("vshrn_n_v"), Some(Shape::ShrnN));
         assert_eq!(s("vsraq_n_v"), Some(Shape::Sra));
         assert_eq!(s("vsri_n_v"), Some(Shape::Sri));
+        assert_eq!(s("vsliq_n_v"), Some(Shape::Sli));
+        assert_eq!(s("vld2q_v"), Some(Shape::LdN(2)));
+        assert_eq!(s("vst4_v"), Some(Shape::StN(4)));
         assert_eq!(s("vmovl_v"), Some(Shape::Movl));
         assert_eq!(s("vpaddlq_v"), Some(Shape::Paddl));
         assert!(matches!(s("vqdmulhq_v"), Some(Shape::Call(c)) if c.s.ends_with("sqdmulh")));
         assert_eq!(s("vqmovn_v"), Some(Shape::QMovn));
         assert_eq!(s("vmull_v"), Some(Shape::Mull));
-        assert_eq!(s("vld2q_v"), Some(Shape::LdN(2)));
         assert_eq!(s("vld4_v"), Some(Shape::LdN(4)));
-        assert_eq!(s("vst2_v"), Some(Shape::StN(2)));
         assert_eq!(s("vst3q_v"), Some(Shape::StN(3)));
         assert_eq!(s("vtbl2_v"), Some(Shape::Tbl(2)));
         assert_eq!(s("vcvtnq_u32_v"), Some(Shape::CvtR(b'n')));

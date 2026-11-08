@@ -3135,19 +3135,21 @@ impl Cg<'_> {
         Ok(Some(self.load_scalar(tmp, q)))
     }
 
-    /// clang `AggExprEmitter::VisitStmtExpr`: the result (a class
-    /// prvalue) initializes `dest` inside the statement expression's
-    /// scope, before its cleanups run (WP-803).
+    /// clang `AggExprEmitter::VisitStmtExpr`: a statement expression of
+    /// class (or array) type initializes `dest` from its result
+    /// expression inside the compound statement's scope, so the copy of a
+    /// local is made before the scope's cleanups destroy it.
     fn agg_stmt_expr(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
         let (scope, r) = self.stmt_expr_prefix(e)?;
-        self.agg_visit(r, dest, zeroed)?;
+        self.emit_agg(r, dest, zeroed)?;
         self.end_scope(scope);
         Ok(())
     }
 
-    /// Opens the lexical scope of non-`void` statement expression `e`,
-    /// emits its statements before the result and returns the scope and
-    /// the result expression.
+    /// `EmitCompoundStmt(GetLast)` up to the result: opens the lexical
+    /// scope, emits every statement before the last one that is not a
+    /// null statement, and its labels; returns the scope (for the caller
+    /// to end once the result is stored) and the result expression.
     fn stmt_expr_prefix(&mut self, e: ExprId) -> R<(crate::stmt::Scope, ExprId)> {
         let ast = self.ast;
         let body = ast.exprs.stmt_expr_body(e);
@@ -3157,8 +3159,6 @@ impl Cg<'_> {
         else {
             return err(self.loc_of(e), "statement expression without a result");
         };
-        // `EmitCompoundStmt(GetLast)`: a lexical scope, the result stored
-        // to a `tmp` so the scope's cleanups can run before it is read.
         let scope = self.begin_scope(true);
         for &c in &children[..result] {
             self.emit_stmt(c)?;
@@ -4067,7 +4067,6 @@ impl Cg<'_> {
                 Ok(())
             }
             ExprKind::ArrayInitLoopExpr => self.array_init_loop(e, dest, None),
-            ExprKind::StmtExpr => self.agg_stmt_expr(e, dest, zeroed),
             // clang `AggExprEmitter::VisitLambdaExpr`: each capture
             // initializes its field; a captureless closure has nothing to
             // initialize.
@@ -4108,6 +4107,7 @@ impl Cg<'_> {
             ExprKind::BinaryOperator if ast.exprs.binary_op(e) == BinaryOp::Cmp => {
                 self.agg_three_way(e, dest)
             }
+            ExprKind::StmtExpr => self.agg_stmt_expr(e, dest, zeroed),
             k => err(self.loc_of(e), format!("aggregate expression {k:?} is not supported yet")),
         }
     }

@@ -259,6 +259,13 @@ constraint naming it is a constant after substitution ([temp.constr.atomic]/3;
 libc++ `__bit_iterator::operator=`, probed by `std::formattable<vector<bool>>`;
 tests/conformance/temp.constr.atomic/elaborated-tag-in-template.cpp, WP-298).
 A local class (an enclosing block) keeps the template's dependence.
+A plain reference `class X` that finds no visible `X` but whose namespace
+holds a class only `friend class X;` declared (hidden, [namespace.memdef]/3)
+redeclares that class: the new declaration joins its chain and is visible
+(clang `ActOnTag`'s redeclaration lookup in the namespace; `decl.rs`
+`hidden_friend_tag`), so `friend class X; class X *p;` and a later
+definition of `X` are one class and the friendship holds
+(tests/conformance/class.friend/friend-then-elaborated-member.cpp, WP-799).
 
 **Rule** (`class/access.rs`, clang `SemaAccess`). Member `m` found in naming
 class `N` ([class.access.base]/5) is accessible at context `R` iff: (a) `m` as
@@ -1789,7 +1796,9 @@ members with an NSDMI.
   cleared (`AstBuilder::clear_return_nrvo`, clang `computeNRVO`). Probes (all
   clang 19, golden `ast/class.copy.elision/nrvo.cpp`): `if (b) { S x; return
   x; } S y; return y;` → both `nrvo`; `S x, y; if (b) return x; return y;` →
-  neither; `S x; if (b) return S(); return x;` → neither; `return p;`
+  neither; `S x; if (b) return S(); return x;` → neither; `S x; if (b) return x; return {1};` → neither
+  (a braced-init-list return has no candidate, so it disables every slot
+  as any other non-candidate return does; WP-799); `return p;`
   (param) → not a candidate. Alignment (`alignas` on the variable) is not
   yet considered (clang `isCopyElisionCandidate` checks it).
 

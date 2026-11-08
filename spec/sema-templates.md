@@ -7831,7 +7831,12 @@ declarator scopes.**
   constructor, so `c ? B() : D()` with `D(B)` is a `B` (WP-669,
   tests/conformance/expr.cond/p4-base-not-converted-to-derived.cpp);
   /4.3.3, implicit conversion to the other's prvalue type. If both directions succeed, the result is
-  `sema_conditional_ambiguous`; if one does, it is applied.
+  `sema_conditional_ambiguous`; if one does, it is applied. An arm converted
+  to a class type (not a reference) has exactly that type, cv included
+  (clang's `NoOp` cast): `b ? V() : cref` with `const V &cref` has two
+  `const V` arms and is a `const V` prvalue, so `auto &r = b ? V() :
+  cref;` binds `const V &` (WP-799,
+  tests/conformance/expr.cond/class-prvalue-unified-const-run.cpp).
 - *[expr.cond]/6 built-in `operator?:` candidates* (clang
   `FindConditionalOverload`; WP-787): when the arms still differ in type
   after /4 and /5 and either is a class, overload resolution runs over the
