@@ -2317,6 +2317,7 @@ impl Sema<'_, '_> {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("find_prev_function");
         let mut found = self.prev_candidates_dn(dname, qualifier);
+        let visible = if qualifier.is_some() { found.clone() } else { Vec::new() };
         // A friend of a templated class is not visible to redeclaration
         // lookup until instantiated: a later namespace-scope declaration
         // declares a new function, matched by the friend's
@@ -2350,7 +2351,10 @@ impl Sema<'_, '_> {
             if !matches!(self.kind_of(q), DeclKind::Namespace | DeclKind::TranslationUnit) {
                 return None;
             }
-            let hidden = self.hidden_friend_redecl_set(q, dname, &new);
+            // Only the hidden ones: a declaration qualified lookup found
+            // was already considered (and filtered) above.
+            let mut hidden = self.hidden_friend_redecl_set(q, dname, &new);
+            hidden.retain(|x| !visible.contains(x));
             return self.pick_prev_function(&hidden, new);
         }
         let ns = self.enclosing_namespace()?;
