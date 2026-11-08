@@ -118,6 +118,14 @@ pub(crate) enum Tck {
     DynamicOperation = 11,
 }
 
+/// The canonical view of `q` with `_Atomic` looked through.
+fn ast_types_tag_view(types: &kiln_ast::types::TypeContext, q: QualType) -> TypeView {
+    match types.canonical_view(q) {
+        TypeView::Atomic(v) => types.canonical_view(v),
+        v => v,
+    }
+}
+
 /// Which `QualType` clang names in a type check's descriptor; its
 /// `TypeDescriptorMap` is keyed by the `QualType` object, so a class
 /// type it builds with `getRecordType` and the written (elaborated) one
@@ -126,7 +134,8 @@ pub(crate) enum Tck {
 pub(crate) enum UbDesc {
     /// The type as written (an expression's type).
     Written,
-    /// `getRecordType(class)`.
+    /// `getRecordType(class)`, or any canonical type (clang's
+    /// `getCanonicalType`): tags print with their full scope.
     Record,
     /// `MD->getThisType()` (`cv C *`, these `Quals` bits) of the class
     /// type checked: the `this` check of a member function's prologue.
@@ -270,8 +279,19 @@ impl Cg<'_> {
 
     /// [`Cg::ub_type`] of the `QualType` `desc` names for `q`.
     pub(crate) fn ub_type_keyed(&mut self, q: QualType, desc: UbDesc) -> R<Value> {
+        let q = if desc == UbDesc::Record { self.ast.types.canonical(q) } else { q };
         let key = match desc {
             UbDesc::Written => 0,
+            // Only a tag has written sugar distinct from its canonical
+            // type: any other canonical type is the written one's object.
+            UbDesc::Record
+                if !matches!(
+                    ast_types_tag_view(&self.ast.types, q),
+                    TypeView::Record(_) | TypeView::Enum(_)
+                ) =>
+            {
+                0
+            }
             UbDesc::Record => 1,
             UbDesc::ThisPtr(cv) => 2 + cv,
         };
@@ -316,7 +336,15 @@ impl Cg<'_> {
             Some(sm) => AstNames::with_sources(ast, sm),
             None => AstNames::new(ast),
         };
-        let s = print_type(&ast.types, &names, q, PrintOptions::SUGARED);
+        // A canonical type (`getRecordType`, `getThisType`, the
+        // canonicalized types of `EmitScalarConversion`) has no written
+        // qualifier or elaboration: clang prints its tags with full scope.
+        let opts = if desc != UbDesc::Written {
+            PrintOptions { full_scope: true, ..PrintOptions::SUGARED }
+        } else {
+            PrintOptions::SUGARED
+        };
+        let s = print_type(&ast.types, &names, q, opts);
         let name = match (desc, aka(&ast.types, &names, q)) {
             (UbDesc::ThisPtr(cv), _) => {
                 let cv = Quals::from_bits(cv);
@@ -1239,8 +1267,9 @@ impl Cg<'_> {
         let le = self.fcmp(FloatPredicate::Olt, src, maxc);
         let ok = self.ub_and(ge, le);
         let sl = self.ub_loc(loc)?;
-        let fd = self.ub_type(from)?;
-        let td = self.ub_type(to)?;
+        // `EmitScalarConversion` canonicalizes both types first.
+        let fd = self.ub_type_keyed(from, UbDesc::Record)?;
+        let td = self.ub_type_keyed(to, UbDesc::Record)?;
         self.ub_check(
             &[(ok, San::FLOAT_CAST_OVERFLOW)],
             UbHandler::FloatCastOverflow,
