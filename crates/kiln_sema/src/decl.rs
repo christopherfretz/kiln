@@ -2586,7 +2586,7 @@ impl Sema<'_, '_> {
 
     /// clang's `getFixItZeroInitializerForType`: ` = 0`, ` = nullptr`,
     /// `{}`, ... ("" when there is none).
-    fn zero_initializer_fixit(&self, t: QualType, defn: Option<DefinitionBits>) -> String {
+    pub(crate) fn zero_initializer_fixit(&self, t: QualType, defn: Option<DefinitionBits>) -> String {
         let types = &self.ast.types;
         if let Some(bits) = defn {
             if !bits.contains(DefinitionBits::COMPLETE) {

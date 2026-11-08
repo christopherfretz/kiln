@@ -3,8 +3,8 @@
 //! `SemaDecl.cpp`; spec/sema.md §6).
 //!
 //! clang leaves most local variables to its CFG-based uninitialized-values
-//! analysis, which kiln does not have. This walk covers what clang's
-//! syntactic checker covers: variables without automatic storage
+//! analysis (kiln's is [`crate::uninit`], spec/sema.md §7.14). This walk
+//! covers what clang's syntactic checker covers: variables without automatic storage
 //! duration, and local variables of class or reference type.
 
 use kiln_ast::decl::{DeclKind, TlsKind, VarStorage};
@@ -391,7 +391,7 @@ impl Sema<'_, '_> {
 
     /// clang `CallExpr::isCallToStdMove`: a one-argument call of
     /// `std::move`.
-    fn self_ref_is_std_move(&self, call: ExprId) -> bool {
+    pub(crate) fn self_ref_is_std_move(&self, call: ExprId) -> bool {
         if self.ast.lists.iter::<ExprId>(self.ast.exprs.call_args(call)).count() != 1 {
             return false;
         }
