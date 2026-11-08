@@ -286,6 +286,22 @@ pub trait HeaderFs {
     /// the same directory), or `None` if it does not exist.
     fn dir_identity(&mut self, path: &str) -> Option<String>;
 
+    /// Whether `path` names a directory. [`HeaderSearch`](crate::HeaderSearch)
+    /// asks once per directory and caches the answer (clang
+    /// `FileManager::getDirectoryRef`).
+    fn is_dir(&mut self, path: &str) -> bool {
+        self.dir_identity(path).is_some()
+    }
+
+    /// The names of the entries of the directory `path` (not `.` and
+    /// `..`), or `None` if it cannot be read. Header search reads a
+    /// directory after repeated misses in it and answers further misses
+    /// from the listing. The default lists nothing.
+    fn list_dir(&mut self, path: &str) -> Option<Vec<String>> {
+        let _ = path;
+        None
+    }
+
     /// Loads the regular file at `path` into `sm` (the buffer is named
     /// `path`; the same file reached by another path is the same buffer),
     /// or `None` if there is no such file.
@@ -297,33 +313,57 @@ pub trait HeaderFs {
 
 /// The real file system. Relative paths are relative to the process's
 /// working directory.
+///
+/// Every query is one system call or a short fixed sequence (clang's
+/// `FileManager`): a directory is one `stat`; a header is one `open`
+/// (a miss stops there), one `fstat` of the descriptor (identity by
+/// device and inode) and its reads; a directory listing is one `open`,
+/// its `getdents` and a `close`. Nothing is canonicalized.
 #[derive(Clone, Debug, Default)]
 pub struct RealFs;
 
 impl HeaderFs for RealFs {
     fn dir_identity(&mut self, path: &str) -> Option<String> {
-        let p = Path::new(path);
-        if !p.is_dir() {
-            return None;
+        let m = std::fs::metadata(path).ok().filter(std::fs::Metadata::is_dir)?;
+        dir_key(path, &m)
+    }
+
+    fn is_dir(&mut self, path: &str) -> bool {
+        std::fs::metadata(path).is_ok_and(|m| m.is_dir())
+    }
+
+    fn list_dir(&mut self, path: &str) -> Option<Vec<String>> {
+        let mut names = Vec::new();
+        for e in std::fs::read_dir(path).ok()? {
+            names.push(e.ok()?.file_name().to_string_lossy().into_owned());
         }
-        std::fs::canonicalize(p).ok().map(|c| c.to_string_lossy().into_owned())
+        Some(names)
     }
 
     fn open(&mut self, sm: &SourceManager, path: &str) -> Option<FileId> {
-        let p = Path::new(path);
-        if !std::fs::metadata(p).is_ok_and(|m| m.is_file()) {
-            return None;
-        }
-        sm.load_file(p).ok()
+        sm.load_regular_file(Path::new(path)).ok()
     }
 
     fn read(&mut self, path: &str) -> Option<Vec<u8>> {
-        let p = Path::new(path);
-        if !std::fs::metadata(p).is_ok_and(|m| m.is_file()) {
-            return None;
-        }
-        std::fs::read(p).ok()
+        let mut f = std::fs::File::open(path).ok()?;
+        let m = f.metadata().ok().filter(std::fs::Metadata::is_file)?;
+        kiln_source::read_open_file(&mut f, &m).ok()
     }
+}
+
+/// A directory's identity: its device and inode number (clang compares
+/// `DirectoryEntry`s, which `FileManager` unifies by `UniqueID`).
+#[cfg(unix)]
+#[allow(clippy::unnecessary_wraps)] // the non-Unix twin can fail
+fn dir_key(_path: &str, m: &std::fs::Metadata) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    Some(format!("{}:{}", m.dev(), m.ino()))
+}
+
+/// A directory's identity: its canonical path, where there is no inode.
+#[cfg(not(unix))]
+fn dir_key(path: &str, _m: &std::fs::Metadata) -> Option<String> {
+    std::fs::canonicalize(path).ok().map(|c| c.to_string_lossy().into_owned())
 }
 
 /// An in-memory file tree for tests. Paths are normalized lexically
@@ -334,6 +374,12 @@ pub struct MemoryFs {
     files: HashMap<String, Vec<u8>>,
     dirs: HashSet<String>,
     loaded: HashMap<String, FileId>,
+    /// Calls of [`HeaderFs::open`], [`HeaderFs::is_dir`] /
+    /// [`HeaderFs::dir_identity`] and [`HeaderFs::list_dir`] (the system
+    /// calls a [`RealFs`] would make).
+    opens: u32,
+    stats: u32,
+    lists: u32,
 }
 
 impl MemoryFs {
@@ -363,6 +409,12 @@ impl MemoryFs {
         }
         self.dirs.insert(".".to_owned());
         self
+    }
+
+    /// How many `(open, stat, list)` queries were made: the system calls
+    /// a [`RealFs`] would make for the same lookups.
+    pub fn queries(&self) -> (u32, u32, u32) {
+        (self.opens, self.stats, self.lists)
     }
 
     /// Adds a file (and its ancestor directories).
@@ -403,11 +455,13 @@ fn normalize(path: &str) -> String {
 
 impl HeaderFs for MemoryFs {
     fn dir_identity(&mut self, path: &str) -> Option<String> {
+        self.stats += 1;
         let n = normalize(path);
         self.dirs.contains(&n).then_some(n)
     }
 
     fn open(&mut self, sm: &SourceManager, path: &str) -> Option<FileId> {
+        self.opens += 1;
         let n = normalize(path);
         if let Some(&f) = self.loaded.get(&n) {
             return Some(f);
@@ -417,6 +471,21 @@ impl HeaderFs for MemoryFs {
         let f = sm.add_virtual(path, text).ok()?;
         self.loaded.insert(n, f);
         Some(f)
+    }
+
+    fn list_dir(&mut self, path: &str) -> Option<Vec<String>> {
+        let d = normalize(path);
+        if !self.dirs.contains(&d) {
+            return None;
+        }
+        self.lists += 1;
+        let names = self
+            .files
+            .keys()
+            .chain(self.dirs.iter())
+            .filter(|p| **p != d && parent_dir(p) == d)
+            .map(|p| p.rsplit('/').next().unwrap_or(p).to_owned());
+        Some(names.collect())
     }
 
     fn read(&mut self, path: &str) -> Option<Vec<u8>> {

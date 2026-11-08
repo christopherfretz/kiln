@@ -166,6 +166,26 @@ Where clang 22's output differs and kiln has not followed it yet, the
 test pins clang 19 with `requires: clang<22` and the comment `WP-355
 residual` (docs/status/wp-184-oracle-switch.md).
 
+### 1.2 Error recovery (WP-826)
+
+After an error, kiln bounds its work the way clang 19 does, so a
+translation unit that fails costs about what it costs clang:
+- **A fatal error stops instantiation** for the rest of the TU: the
+  error limit's "too many errors emitted" (spec/diag.md §7.3), a missing
+  `#include`, `-Wfatal-errors`, the depth limit. clang's
+  `InstantiatingTemplate` refuses every instantiation once
+  `hasFatalErrorOccurred()`; kiln's `Sema::instantiation_stopped` is
+  asked by `push_inst_frame`, `instantiate_function_definition` and the
+  end-of-TU drain (spec/sema-templates.md §10.3). The parser already
+  stops at a fatal error (spec/parse.md).
+- **A failed specialization is not redone**: an invalid class or
+  function template specialization stays `INVALID` and a later use is
+  no new error (spec/sema-templates.md §5.5, §5.6).
+- **Erroneous expressions do not cascade**: a use of a failed local is
+  an erroneous expression, and a statement built over it keeps its
+  sub-statements, which are still diagnosed as in clang
+  (spec/sema-templates.md §5.5).
+
 ## 2. Scopes (`scope.rs`)
 - **Kinds:** `ScopeKind` is one of TranslationUnit, Namespace,
   LinkageSpec, Record, Enum, Prototype, Function, Block or Control.
@@ -2115,22 +2135,25 @@ and returns the scope it names:
   cannot be applied to types` for `[[clang::x]]` after a function
   declarator are not diagnosed. Tests:
   `tests/conformance/dcl.attr.grammar/thread-safety-*.cpp`.
-- **Known and ignored, no diagnostic: sanitizer and lifetime
-  attributes** (WP-667; table `IGNORED_CLANG_ATTRS` in `decl_attrs.rs`,
-  checked right after the thread-safety family). kiln has no sanitizers
-  and no `-Wdangling` analysis, so these attach nothing and get no
-  subject or argument check. `__attribute__((x))` (and `__x__`) for
-  every name; `[[clang::x]]` for `no_sanitize`, `no_sanitize_memory` and
-  `lifetimebound` (clang `Clang<"x">`); `[[gnu::x]]` for
-  `no_sanitize_address`, `no_sanitize_thread` and
-  `no_address_safety_analysis` (clang `GCC<"x">`), and for `no_sanitize`
-  from `-fclang-compat=22` (clang 22's spelling; unknown at 19). Any other
-  scope, and unscoped `[[x]]`, is an unknown attribute. Not yet: clang's
-  subject warnings (`'lifetimebound' attribute only applies to
-  parameters and implicit object parameters`), its `-Wdangling` warnings
-  and the unknown-sanitizer warning. Tests:
+- **Sanitizer attributes** (WP-675; `class_b_attrs.rs`, triage in
+  `attr_triage.rs`): `no_sanitize("<name>", ...)`, `no_sanitize_address`
+  (and `no_address_safety_analysis`), `no_sanitize_thread`,
+  `no_sanitize_memory` and `disable_sanitizer_instrumentation`, in
+  clang's spellings (`__attribute__((x))` for every name;
+  `[[clang::x]]` for `no_sanitize` and `no_sanitize_memory`;
+  `[[gnu::x]]` for `no_sanitize_address`, `no_sanitize_thread`,
+  `no_address_safety_analysis`, and `no_sanitize` from
+  `-fclang-compat=22`), attach a sanitizer mask that codegen reads
+  (spec/codegen.md §5.2). Names expand with the driver's groups
+  (`kiln_ast::sanitize`); an unknown name is `unknown sanitizer '<x>'
+  ignored` [-Wunknown-sanitizers]; on a global variable a name other
+  than the address/hwaddress/memtag family is `'no_sanitize' attribute
+  argument '<x>' not supported on a global variable`
+  [-Wignored-attributes]; clang's subject warnings apply. Tests:
   `tests/conformance/dcl.attr.grammar/sanitizer-*.cpp`,
   `gnu-no-sanitize-clang{19,22}.cpp`.
+- **Known and ignored, no diagnostic: `lifetimebound`** (WP-667; until
+  WP-674): attaches nothing; no `-Wdangling` analysis.
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.

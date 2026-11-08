@@ -486,6 +486,19 @@ impl Sema<'_, '_> {
     /// `AttachBaseSpecifiers`). False when a specifier was dropped (an
     /// instantiated class is then invalid, clang `SubstBaseSpecifiers`).
     pub(crate) fn attach_bases(&mut self, r: DeclId, specs: &[BaseSpecInfo]) -> bool {
+        self.attach_bases_annotated(r, specs, &[])
+    }
+
+    /// [`Sema::attach_bases`]; `inst[i]` are annotations of `specs[i]`
+    /// already made (an instantiated base-specifier's, substituted from
+    /// its pattern's), after those its own attributes give
+    /// ([dcl.attr.annotation]/1; spec/annotations.md §3).
+    pub(crate) fn attach_bases_annotated(
+        &mut self,
+        r: DeclId,
+        specs: &[BaseSpecInfo],
+        inst: &[Vec<kiln_ast::AnnId>],
+    ) -> bool {
         if specs.is_empty() {
             return true;
         }
@@ -496,8 +509,10 @@ impl Sema<'_, '_> {
         }
         let mut dropped = false;
         let mut out: Vec<BaseSpec> = Vec::new();
+        // (index in `out`, index in `specs`) of the kept specifiers.
+        let mut kept: Vec<(u32, usize)> = Vec::new();
         let mut seen: Vec<DeclId> = Vec::new();
-        for s in specs {
+        for (si, s) in specs.iter().enumerate() {
             if self.is_error_type(s.ty) {
                 dropped = true;
                 continue;
@@ -506,6 +521,7 @@ impl Sema<'_, '_> {
             // instantiation (WP-070a); lookup does not look into it
             // ([temp.dep.general]/4).
             if self.is_dependent_type(s.ty) {
+                kept.push((out.len() as u32, si));
                 out.push(BaseSpec {
                     ty: s.ty,
                     loc: s.loc,
@@ -577,6 +593,7 @@ impl Sema<'_, '_> {
                 continue;
             }
             seen.push(def);
+            kept.push((out.len() as u32, si));
             out.push(BaseSpec {
                 ty: s.ty,
                 loc: s.loc,
@@ -590,7 +607,38 @@ impl Sema<'_, '_> {
             let _ = ast.decls.set_bases(r, &out, &mut ast.lists);
             self.check_inaccessible_bases(r, &out);
         }
+        self.annotate_bases(r, specs, inst, &kept);
         !dropped
+    }
+
+    /// The annotations of the kept base-specifiers of `r` (`kept`: index
+    /// in the base list, index in `specs`), recorded under `r`'s first
+    /// declaration ([dcl.attr.annotation]/1).
+    fn annotate_bases(
+        &mut self,
+        r: DeclId,
+        specs: &[BaseSpecInfo],
+        inst: &[Vec<kiln_ast::AnnId>],
+        kept: &[(u32, usize)],
+    ) {
+        let first = self.ast.first(r);
+        for &(i, si) in kept {
+            let mut anns: Vec<kiln_ast::AnnId> = Vec::new();
+            for &a in &specs[si].attrs {
+                let n = *self.ast.attrs.get(a);
+                if n.kind == kiln_ast::attr::AttrKind::ANNOTATION
+                    && let Some(e) = <kiln_ast::ExprId as kiln_ast::ids::RawId>::from_raw(n.a)
+                    && let Some(id) = self.annotate(r, e, n.loc)
+                {
+                    anns.push(id);
+                }
+            }
+            anns.extend(inst.get(si).into_iter().flatten().copied());
+            if !anns.is_empty() {
+                let l = self.ast.lists.push(&anns);
+                self.ast.annots.attach_base(first, i, l);
+            }
+        }
     }
 
     /// The access a base-specifier of `r` grants ([class.access.base]/2):

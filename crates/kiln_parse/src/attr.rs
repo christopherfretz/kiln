@@ -138,6 +138,11 @@ fn class_b_takes_expr_args(n: &str) -> bool {
             | "loader_uninitialized"
             | "lto_visibility_public"
             | "standalone_debug"
+            | "no_sanitize"
+            | "no_sanitize_address"
+            | "no_address_safety_analysis"
+            | "no_sanitize_memory"
+            | "no_sanitize_thread"
             | "coro_await_elidable"
             | "coro_await_elidable_argument"
             // `[[omp::assume("s")]]` (the others parse their own).
@@ -160,7 +165,7 @@ fn takes_ident_list(name: &str) -> bool {
 fn string_literal_arg(name: &str, i: usize) -> bool {
     match kiln_ast::attr::normalize_attr_name(name) {
         "target" | "target_version" => i == 0,
-        "target_clones" => true,
+        "target_clones" | "no_sanitize" => true,
         _ => false,
     }
 }

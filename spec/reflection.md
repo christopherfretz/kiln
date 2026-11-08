@@ -98,7 +98,7 @@ Section references in brackets are to the C++26 IS.
 |---|---|---|---|
 | `Null` | — | the null reflection | implemented |
 | `Type(QualType)` | the type, alias sugar kept at the top (§2.3) | a type, or a type alias | implemented, dependent `^^typename T::type` included (WP-519) |
-| `Decl(DeclId)` | first declaration | variable, function, data member, enumerator, structured binding | implemented: operator, conversion and destructor functions and dependent qualified names (`^^T::x`) included (WP-519; spec/reflection-repr.md §2) |
+| `Decl(DeclId)` | first declaration | variable, function, data member, enumerator, structured binding | implemented: operator, literal operator, conversion and destructor functions and dependent qualified names (`^^T::x`) included (WP-519; spec/reflection-repr.md §2; literal operator pinned by `meta.reflection.queries/functions.cpp`, WP-830); a member name in `^^C::m` is access-checked ([class.access]/4; `expr.reflect/member-access*.cpp`, WP-830) |
 | `Namespace(DeclId)` | first declaration | a namespace (`^^::` is the TU) | implemented |
 | `NamespaceAlias(DeclId)` | the alias declaration | a namespace alias | implemented |
 | `Template(TemplateNameId)` | the template name | a class, function, variable or alias template, or a concept | implemented, dependent `^^T::template m<U>` included (WP-519) |
@@ -107,7 +107,7 @@ Section references in brackets are to the C++26 IS.
 | `BaseSpec(DeclId, u32)` | derived class's first declaration, base index | a direct base class relationship | implemented (WP-478) |
 | `DataMemberSpec(DmsId)` | an interned spec | a `data_member_spec` result | implemented (WP-480) |
 | `FnParam(DeclId, u32)` | function's first declaration, parameter index | a function parameter (`parameters_of`) | implemented (WP-478) |
-| `Annotation(AnnId)` | one annotation occurrence | an annotation (§7) | implemented (WP-481; queries WP-478) |
+| `Annotation(AnnId)` | one annotation occurrence | an annotation (§7) | implemented (WP-481; queries WP-478; on base-specifiers and per element of a function parameter pack, WP-830) |
 
 - Each variant's payload is at most 8 bytes: a compile-time assertion
   keeps `size_of::<Reflectee>()` at most 12 bytes
@@ -152,7 +152,7 @@ the IS equality ([expr.eq]):
 - `memcpy`/`memmove` between an `info` object and an object of another
   type is not a constant expression ("cannot constant evaluate 'memcpy'
   from object of type 'unsigned long' to object of type
-  'std::meta::info'"; implemented, no dedicated test yet), and
+  'std::meta::info'"; implemented: `reflection/typed-copy-memcpy-neg.cpp`), and
   `__builtin_bit_cast` to or from `info` is rejected by sema (not
   trivially copyable; implemented: `reflection/value-model-neg.cpp`).
 - The shadow therefore needs no reflection kind; it keeps only its init
@@ -747,8 +747,8 @@ position's operand).
 
   | Position | Syntax | Accepts | Status |
   |---|---|---|---|
-  | type | `typename [: r :]` [dcl.type.splice]; a bare `[: r :]` in a type-only context ([temp.res.general]/4: an alias-declaration, a namespace-scope or member decl-specifier, a member function's parameter, a trailing return type, a template parameter's default, a cast's or `new`'s type-id); `[: r :]` as a template type argument | a type or a type alias | implemented (`dcl.type.splice/`) |
-  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`); a value or object as below ("Value and object splices", WP-550: `expr.prim.splice/value-*.cpp`, `object-*.cpp`), except an object with no declaration |
+  | type | `typename [: r :]` [dcl.type.splice]; a bare `[: r :]` in a type-only context ([temp.res.general]/4: an alias-declaration, a namespace-scope or member decl-specifier, a member function's parameter, a trailing return type, a template parameter's default, a cast's or `new`'s type-id); in a template argument list only as `typename [: r :]` (a bare `[: r :]` forming a whole template-argument is ill-formed, [temp.names]/1: `parse_splice_template_arg_unparenthesized`, `temp.names/splice-template-argument-unparenthesized.cpp`; a splice that only starts an argument, `[: r :] + 1`, `([: r :])`, `[: r :]::type`, is an ordinary operand, `temp.names/splice-template-argument.cpp`; WP-830) | a type or a type alias | implemented (`dcl.type.splice/`) |
+  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`); a value or object as below ("Value and object splices", WP-550: `expr.prim.splice/value-*.cpp`, `object-*.cpp`), an object with no declaration included (WP-830) |
   | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category) | implemented; the base form is `basic.splice/p3293-base-subobject.cpp` |
   | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration (or an alias of one) | implemented (`basic.splice/splice-scope-specifier.cpp`, `namespace.udecl/splice-scope.cpp`) |
   | template | `template [: r :] < args >` [temp.names] in an expression, after `typename` or in a type-only context, and as a scope (`template [: r :] < args > ::`); `template [: r :]` alone before a call | a class or alias template in a type or scope; a variable template, concept or function template in an expression | implemented (`temp.names/splice-*.cpp`; spec/landed/reflection/WP-482.md) |
@@ -795,18 +795,30 @@ position's operand).
   is not assignable" / "cannot assign to variable ... with
   const-qualified type" for a const object, and `reflect_object` of an
   automatic variable is not a constant expression ("pointer to 'x' is not
-  a constant expression"). **Not supported yet** (`parse_unsupported`;
-  GCC 16.1 accepts them): an object with no declaration, i.e. a
-  `PtrBase::Const` object of `reflect_constant_string` /
-  `reflect_constant_array` (needs an expression form whose Oven and
-  codegen lvalue is that frozen object), a string literal object and a
-  `std::type_info` object.
+  a constant expression"). An object no declaration names (a
+  `PtrBase::Const` object: a `reflect_constant_string` /
+  `reflect_constant_array` result, a `define_static_array` element, or a
+  subobject of one) splices to `*p` of the constant pointer `p` to it
+  (`Sema::const_object_lvalue`; a `const` template parameter object,
+  [temp.param]/8), which the Oven and codegen read as any constant pointer
+  (`expr.prim.splice/object-no-declaration-run.cpp`; WP-830). An object
+  template argument of `substitute`/`reflection_template_arg` at a
+  non-zero offset of its complete object is the same subobject lvalue
+  (`meta.reflection.substitute/object-subobject-args-run.cpp`). **Not
+  supported yet** (`parse_unsupported`): a string literal object and a
+  `std::type_info` object (neither is reachable through `reflect_object`
+  of a constant, [temp.arg.nontype]/6).
 - **Member functions.** A member-function splice is not a qualified-id, so
   `e.[: ^^B::f :]()` of a virtual `f` is a virtual call ([expr.call]/2; the
   [dcl.contract.func] example). `&[: ^^B::f :]` is a pointer to member.
 - **Access.** Splices are not access-checked: a splice of a private member
   is valid from anywhere (P2996; GCC 16.1 agrees). Access is the business of
   the query that produced the reflection (`access_context`, WP-478).
+  The name in a reflect-expression is: `^^C::m` of a member inaccessible at
+  the `^^` is ill-formed ([class.access]/4; `expr.reflect/member-access*.cpp`,
+  WP-830). GCC 16.1 checks data members and nested types but accepts a
+  private member function's name; kiln follows the draft
+  (`member-access-function-neg.cpp` has no oracle).
 - **Dependent splices.** A value-dependent operand produces a `Splice`
   type node (a type splice), a `CXXSpliceExpr` (an expression or member
   splice; with the object expression when that or the operand is
