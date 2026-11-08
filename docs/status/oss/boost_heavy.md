@@ -204,7 +204,8 @@ it with kiln++ or clang++-19 and the row's flags, `-std=gnu++20 -O3
    `libs/geometry/index/test/rtree/generated/b2d`): kiln 67.2 s wall /
    36.5 s CPU / 426 MB, clang 22.7 s wall / 820 MB.
 3. **Math reverse-mode autodiff compile-fail tests: ~3x CPU, and 3 exceed
-   the 3 GB address-space limit after their first error.** 53 Math
+   the 3 GB address-space limit after their first error** (fixed by
+   WP-826, below). 53 Math
    `compile-fail-math-test_reverse_mode_autodiff_*` tests compile at ctest
    time. Kiln rejects all 53 with the same first diagnostic as clang, so
    all pass, but they take 689 s CPU (3407 s wall at load ~25) against
@@ -226,6 +227,49 @@ it with kiln++ or clang++-19 and the row's flags, `-std=gnu++20 -O3
    both compilers; clang is done 4 to 5 s of CPU later, kiln keeps
    instantiating.
 
+   **Fixed by WP-826** (spec/landed/sema/WP-826.md): the error limit's
+   fatal now stops all instantiation, as in clang, and a failed `return`
+   or `then` branch ends the statement instead of instantiating what
+   follows. Re-run by hand, one TU at a time, at load ~23 (wall time is
+   mostly file-system waits, so user CPU and peak RSS are the figures to
+   compare). Command, from `libs/math/test` in a `boost-1.90.0` checkout
+   (`.oss/src/boost`), with `TU` one of the paths below:
+
+   ```sh
+   INC="-I$PWD -I$PWD/../include_private $(for d in ../../*/include ../../numeric/*/include; do printf -- '-I%s ' "$(realpath $d)"; done)"
+   FLAGS="-std=gnu++20 -O3 -DNDEBUG -DBOOST_ALL_NO_LIB=1 -DBOOST_UBLAS_UNSUPPORTED_COMPILER=0"
+   /usr/bin/time -f '%e s wall %U s user %M KB' \
+     kiln++ -resource-dir <kiln>/resource $FLAGS $INC -c $TU -o /dev/null
+   /usr/bin/time -f '%e s wall %U s user %M KB' \
+     clang++-19 $FLAGS $INC -c $TU -o /dev/null
+   ```
+
+   The three TUs plus six other autodiff compile-fail tests
+   (`test_reverse_mode_autodiff_special_functions_compile/<dir>/test_reverse_mode_autodiff_<name>_compile_test_<ET>_multiprecision_float_types.cpp`),
+   user s / peak RSS MB. "Before" is `f150c57c7` with no address-space
+   limit, stopped by an RSS watchdog at ~3 GB (so lower bounds); the
+   WP-812 figures above are the same TUs under `ulimit -v 3000000`.
+
+   | dir / name / ET | kiln before | kiln after | clang-19 | errors (kiln / clang) |
+   |---|---|---|---|---|
+   | factorial / rising_factorial / ON | >= 87.4 / >= 3220 (killed) | 7.2 / 222 | 4.0 / 452 | 19 + fatal / 19 + fatal |
+   | beta / ibeta_inv / ON | >= 34.1 / >= 2910 (killed) | 8.7 / 375 | 5.3 / 604 | 19 + fatal / 19 + fatal |
+   | beta / ibetac_inv / ON | >= 34.0 / >= 2960 (killed) | 8.7 / 377 | 5.3 / 604 | 19 + fatal / 19 + fatal |
+   | gamma / tgamma / ON | | 7.9 / 237 | 4.6 / 490 | 4 / 5 |
+   | beta / ibeta / OFF | | 7.9 / 238 | 4.8 / 505 | 10 / 11 |
+   | legendre / legendre_p / OFF | | 7.7 / 230 | 4.3 / 466 | 3 / 3 |
+   | bessel / cyl_neumann / ON | 9.1 / 260 | 7.0 / 246 | 4.4 / 479 | 19 + fatal / 19 + fatal |
+   | elliptic_integrals / ellint_rj / OFF | | 7.1 / 249 | 4.6 / 489 | 10 / 11 |
+   | riemann_zeta / zeta / ON | | 7.8 / 235 | 4.4 / 480 | 19 + fatal / 19 + fatal |
+
+   The first error is the same as clang's in all nine, and all 19
+   locations match on `rising_factorial`. The remaining differences after
+   the first error are clang recovering an invalid typedef as `int`
+   (an extra `converter_lexical.hpp:452:66` in clang) and a few branches
+   one compiler skips and the other diagnoses; none changes the verdict.
+   Kiln is now at 0.4x to 0.6x clang's RSS on these TUs; the remaining
+   ~1.7x CPU is ordinary front-end speed, not error recovery.
+
 ### Heaviest TUs
 
 The 10 build-phase TUs with the highest peak RSS under either compiler
@@ -246,8 +290,8 @@ The 10 build-phase TUs with the highest peak RSS under either compiler
 
 The top 10 by clang CPU time, and the 10 worst time ratios, are in the
 `boost_heavy` section of docs/status/oss.md (`oss-report.py --perf --top
-10`). The Math compile-fail TUs (perf cluster 3) reach 1.8 GB under kiln
-but are test-phase compiles, not in this table.
+10`). The Math compile-fail TUs (perf cluster 3) reached 1.8 GB under kiln
+before WP-826 but are test-phase compiles, not in this table.
 
 ## Clusters
 
