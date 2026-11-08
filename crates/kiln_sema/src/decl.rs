@@ -35,6 +35,7 @@ use crate::overload::redecl::NewFn;
 use crate::qualified_decl::QualifiedDecl;
 use crate::scope::{Ns, Scope, ScopeKind};
 use crate::type_diff::DiffArgs as _;
+use crate::vector::VectorAttrPos;
 use crate::{Sema, target};
 use kiln_ast::templates::is_template_kind;
 use kiln_oven::{EvalContext, EvalKind};
@@ -1766,7 +1767,7 @@ impl Sema<'_, '_> {
         attrs.extend(d.attrs.iter().copied());
         // [dcl.align]/1: not on a function parameter.
         self.reject_alignas(&mut attrs, 0);
-        ty = self.apply_vector_attrs(ty, &mut attrs, false);
+        ty = self.apply_vector_attrs(ty, &mut attrs, false, VectorAttrPos::Decl);
         // A parameter's type is substituted with its function's.
         attrs.retain(|&a| {
             let n = *self.ast.attrs.get(a);
@@ -2831,7 +2832,8 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_noreturn_non_function, l);
             }
         }
-        let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef());
+        let pos = if ds.is_typedef() { VectorAttrPos::Typedef } else { VectorAttrPos::Decl };
+        let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef(), pos);
         let ty = self.apply_nothrow_attrs(ty, &mut attrs);
         let ty = self.apply_noreturn_attrs(ty, &attrs);
         // [dcl.spec.general]/3: a function or member declared with no
@@ -3539,13 +3541,15 @@ impl Sema<'_, '_> {
     }
 
     /// `using name = type-id;` ([dcl.typedef]/2); `type_loc` is where
-    /// the type-id starts (invalid when not written).
+    /// the type-id starts (invalid when not written). The first `own` of
+    /// `attrs` follow the name; the rest are the type-id's.
     pub fn act_on_alias_decl(
         &mut self,
         name: Symbol,
         name_loc: Loc,
         ty: QualType,
         attrs: &[AttrId],
+        own: usize,
         type_loc: Loc,
     ) -> DeclId {
         if let Some(id) = self.pending_alias_vla.take() {
@@ -3556,8 +3560,14 @@ impl Sema<'_, '_> {
         let ds = DeclSpec::new(name_loc);
         let _ = self.take_template_head(None);
         let _ = self.check_template_in_local_class(false, Loc::INVALID);
-        let mut attrs = attrs.to_vec();
-        let ty = self.apply_vector_attrs(ty, &mut attrs, true);
+        // The type-id's attributes modify its type; then those after the
+        // name, which appertain to the alias.
+        let (own, of_type) = attrs.split_at(own.min(attrs.len()));
+        let mut type_attrs = of_type.to_vec();
+        let ty = self.apply_vector_attrs(ty, &mut type_attrs, true, VectorAttrPos::Type(None));
+        let mut attrs = own.to_vec();
+        let ty = self.apply_vector_attrs(ty, &mut attrs, true, VectorAttrPos::Decl);
+        attrs.extend(type_attrs);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
         // [temp.variadic]/12: `using U = Ts;`.
         if self.diagnose_unexpanded_declarator(ty, "declaration type", name_loc) {
@@ -10068,7 +10078,10 @@ impl Sema<'_, '_> {
                         | "pass_dynamic_object_size"
                         | "overloadable"
                         | "musttail"
+                        | "neon_vector_type"
+                        | "neon_polyvector_type"
                 ))
+            && !(clang_scope && n == "ext_vector_type" && self.clang_compat >= 22)
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
             self.emit(msg);
@@ -11148,7 +11161,9 @@ fn attr_kind_of(
         ("malloc", _, true) => AttrKind::MALLOC,
         ("alloc_size", _, true) => AttrKind::ALLOC_SIZE,
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,
-        ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
+        // clang `Clang<"ext_vector_type">` from clang 22 (the caller
+        // filters the `clang::` spelling below it); `GNU` before.
+        ("ext_vector_type", _, _) if gnu_syntax || clang_scope => AttrKind::EXT_VECTOR_TYPE,
         ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
         ("mode", _, true) => AttrKind::MODE,
         // clang `Clang<"neon_vector_type">` / `Clang<"neon_polyvector_type">`.

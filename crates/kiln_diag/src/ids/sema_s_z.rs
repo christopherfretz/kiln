@@ -181,6 +181,7 @@ sema_transparent_union_floating = Warning [IgnoredAttributes] (2) "first field o
 sema_transparent_union_not_definition = Warning [IgnoredAttributes] (0) "transparent_union attribute can only be applied to a union definition; attribute ignored";
 sema_transparent_union_zero_fields = Warning [IgnoredAttributes] (0) "transparent union definition must contain at least one field; transparent_union attribute ignored";
 sema_try_disabled = Error (0) "cannot use 'try' with exceptions disabled";
+sema_type_attribute_deprecated_on_decl = Warning [DeprecatedAttributes] (1) "applying attribute '{0}' to a declaration is deprecated; apply it to the type instead";
 sema_type_attribute_wrong_type = Warning [IgnoredAttributes] (2) "{0} only applies to function types; type here is {1}";
 sema_type_defined_in_for_range = Error (0) "types may not be defined in a for range declaration";
 sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";

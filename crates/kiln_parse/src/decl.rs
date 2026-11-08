@@ -510,11 +510,12 @@ impl Parser<'_, '_> {
             }
             let tl = self.loc();
             self.typename_pack_index = None;
+            let own = attrs.len();
             let Some(ty) = self.parse_type_id_into(Some(&mut attrs), DeclSite::Alias) else {
                 self.skip_to_semi();
                 return Vec::new();
             };
-            let d = self.s.act_on_alias_decl(name, nl, ty, &attrs, tl);
+            let d = self.s.act_on_alias_decl(name, nl, ty, &attrs, own, tl);
             self.s.note_alias_decl_loc(d, loc);
             // clang reports a `typename T...[i]` type-id as unterminated
             // (spec/parse.md, typename-specifiers).

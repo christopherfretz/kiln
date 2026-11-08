@@ -40,6 +40,23 @@ const MODE_FLOAT: u32 = 1;
 const MODE_FLOAT128: u32 = 2;
 const MODE_IBM128: u32 = 3;
 
+/// Where the attributes given to [`Sema::apply_vector_attrs`] were
+/// written: among a type's specifiers, or after a declarator (where a
+/// `[[clang::]]` NEON vector attribute appertains to the declaration,
+/// not the type: clang slides it onto the declared type).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VectorAttrPos {
+    /// Among the decl-specifiers; those before the `Loc`, when given, are
+    /// a leading attribute-specifier-seq, which appertains to the
+    /// declaration ([dcl.pre]/5): as for `Decl`.
+    Type(Option<Loc>),
+    /// A variable, parameter, field or alias-declaration: clang's
+    /// `warn_type_attribute_deprecated_on_decl`.
+    Decl,
+    /// A typedef: clang's `err_attribute_invalid_on_decl`.
+    Typedef,
+}
+
 impl Sema<'_, '_> {
     /// `ext_vector_type(N)` / `vector_size(N)` as written: exactly one
     /// expression argument, kept unevaluated until the attribute is
@@ -458,12 +475,14 @@ impl Sema<'_, '_> {
     /// alias-declaration, the only declarations `ext_vector_type` applies
     /// to at clang 19 (clang 22 takes any); `vector_size` also applies to
     /// the type of a variable, field or parameter (on a function clang applies it to the return type: not
-    /// supported yet). Returns the declared type.
+    /// supported yet). `pos` says where `attrs` were written. Returns the
+    /// declared type.
     pub(crate) fn apply_vector_attrs(
         &mut self,
         ty: QualType,
         attrs: &mut Vec<AttrId>,
         typedef: bool,
+        pos: VectorAttrPos,
     ) -> QualType {
         let mut ty = ty;
         let mut i = 0;
@@ -491,9 +510,17 @@ impl Sema<'_, '_> {
                 }
                 let poly = node.kind == AttrKind::NEON_POLYVECTOR_TYPE;
                 let Some(count) = ExprId::from_raw(node.a) else { continue };
-                let v = self.build_neon_vector_type(ty, count, poly, node.loc);
+                let shown = self.attr_shown(&node, neon_attr_name(poly));
+                let v = self.build_neon_vector_type(ty, count, &shown, poly, node.loc);
                 if v != QualType::ERROR {
                     ty = v;
+                    let pos = match pos {
+                        VectorAttrPos::Type(Some(end)) if node.loc < end => VectorAttrPos::Decl,
+                        p => p,
+                    };
+                    if node.syntax == AttrSyntax::Cxx11 && !matches!(pos, VectorAttrPos::Type(_)) {
+                        self.neon_attr_on_decl(node, pos);
+                    }
                 }
                 continue;
             }
@@ -517,6 +544,22 @@ impl Sema<'_, '_> {
             }
         }
         ty
+    }
+
+    /// A `[[clang::neon_vector_type(N)]]` (or `neon_polyvector_type`)
+    /// `node` after a declarator, applied to its type: an error on a
+    /// typedef, deprecated elsewhere (clang `ProcessDeclAttributeList`'s
+    /// legacy slide of a type attribute to the decl-specifiers).
+    fn neon_attr_on_decl(&mut self, node: AttrNode, pos: VectorAttrPos) {
+        let poly = node.kind == AttrKind::NEON_POLYVECTOR_TYPE;
+        let shown = self.attr_shown(&node, neon_attr_name(poly));
+        let id = if pos == VectorAttrPos::Typedef {
+            DiagId::sema_stmt_attribute_on_decl
+        } else {
+            DiagId::sema_type_attribute_deprecated_on_decl
+        };
+        let msg = self.diag(id, node.loc).arg(shown);
+        self.emit(msg);
     }
 
     /// `ty`, the substituted type of pattern declaration `d`, with the
@@ -565,7 +608,8 @@ impl Sema<'_, '_> {
         }
         let cv = ds.cv.bits() & base.quals_bits();
         let elem = QualType::new(base.ty(), base.quals_bits() & !cv);
-        let v = self.apply_vector_attrs(elem, &mut attrs, typedef);
+        let lead = ds.lead_cxx11.map(|_| ds.loc);
+        let v = self.apply_vector_attrs(elem, &mut attrs, typedef, VectorAttrPos::Type(lead));
         if v == elem {
             return base;
         }
@@ -664,10 +708,12 @@ impl Sema<'_, '_> {
         &mut self,
         elem: QualType,
         count: ExprId,
+        name: &str,
         poly: bool,
         loc: Loc,
     ) -> QualType {
-        let name = if poly { "neon_polyvector_type" } else { "neon_vector_type" };
+        // clang quotes the NEON attributes' names here, not the others'.
+        let name = &format!("'{name}'");
         if self.expr_is_value_dependent(count) {
             let msg = self.diag(DiagId::sema_attribute_requires_integer_constant, loc).arg(name);
             self.emit(msg);
@@ -763,3 +809,9 @@ pub(crate) const FORMAT_PRINTF: u32 = 0;
 pub(crate) const FORMAT_OTHER: u32 = 1;
 /// [`AttrKind::FORMAT`]'s `a`: `strftime` (no data arguments).
 pub(crate) const FORMAT_STRFTIME: u32 = 2;
+
+/// The name of the NEON vector attribute (`neon_polyvector_type` when
+/// `poly`).
+fn neon_attr_name(poly: bool) -> &'static str {
+    if poly { "neon_polyvector_type" } else { "neon_vector_type" }
+}

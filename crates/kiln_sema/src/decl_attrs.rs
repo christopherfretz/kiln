@@ -301,6 +301,23 @@ impl Sema<'_, '_> {
             if matches!(node.syntax, AttrSyntax::Gnu | AttrSyntax::Declspec) {
                 return true;
             }
+            // `[[clang::neon_vector_type(N)]]` and the like after the
+            // type-specifiers: type attributes (WP-809), applied with the
+            // GNU spellings by `Sema::apply_declspec_vector_attrs`.
+            if is_cxx11_vector_type_attr(node.kind) {
+                if !in_chunk {
+                    return true;
+                }
+                // After a ptr-operator, an array or a function declarator
+                // it would make a vector of that compound type, which no
+                // vector kind permits (clang `err_attribute_invalid_vector_type`).
+                let shown = self.attr_shown(&node, vector_attr_name(node.kind));
+                let msg = self
+                    .diag(DiagId::sema_attribute_not_type_attr, node.loc)
+                    .arg(format!("'{shown}'"));
+                self.emit(msg);
+                return false;
+            }
             let Some(name) = attr_name(&node) else {
                 return true;
             };
@@ -1479,6 +1496,26 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+    }
+}
+
+/// The vector type attributes with a `[[clang::...]]` spelling (WP-809):
+/// clang `Clang<"neon_vector_type">`, `Clang<"neon_polyvector_type">`
+/// and, from clang 22, `Clang<"ext_vector_type">` (an unknown attribute
+/// below it).
+fn is_cxx11_vector_type_attr(k: AttrKind) -> bool {
+    matches!(
+        k,
+        AttrKind::NEON_VECTOR_TYPE | AttrKind::NEON_POLYVECTOR_TYPE | AttrKind::EXT_VECTOR_TYPE
+    )
+}
+
+/// The name of vector type attribute `k`.
+fn vector_attr_name(k: AttrKind) -> &'static str {
+    match k {
+        AttrKind::NEON_VECTOR_TYPE => "neon_vector_type",
+        AttrKind::NEON_POLYVECTOR_TYPE => "neon_polyvector_type",
+        _ => "ext_vector_type",
     }
 }
 

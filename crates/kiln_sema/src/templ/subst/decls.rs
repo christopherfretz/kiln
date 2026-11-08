@@ -1379,7 +1379,7 @@ impl Substituter<'_, '_, '_> {
         let ty = self.sema.apply_pattern_mode(d, ty);
         if n.kind() == DeclKind::TypeAlias {
             let name = n.name().as_ident().ok_or(SubstFail)?;
-            let a = self.sema.act_on_alias_decl(name, loc, ty, &[], Loc::INVALID);
+            let a = self.sema.act_on_alias_decl(name, loc, ty, &[], 0, Loc::INVALID);
             if failed {
                 self.sema.ast.decls.set_flags(a, DeclFlags::INVALID);
             }
