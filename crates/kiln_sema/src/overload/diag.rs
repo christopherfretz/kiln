@@ -388,7 +388,13 @@ impl Sema<'_, '_> {
                 out.extend(self.builtin_notes(set, c, ambiguities));
                 ambiguities = false;
             } else if set.cand(c).kind == CandidateKind::Surrogate {
-                out.push(self.surrogate_note(set.cand(c).func()));
+                // A surrogate whose conversion function's constraints are
+                // not satisfied (a templated lambda's) is not shown, as in
+                // clang 19.
+                if !matches!(set.cand(c).failure, CandidateFailure::ConstraintsNotSatisfied { .. })
+                {
+                    out.push(self.surrogate_note(set.cand(c).func()));
+                }
             } else {
                 out.push(self.ovl_note(set, c));
                 // clang `MaybeEmitInheritedConstructorNote` (not after a

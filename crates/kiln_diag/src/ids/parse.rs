@@ -147,6 +147,9 @@ parse_pragma_stdc_expected_eod = ExtWarn [UnknownPragmas] (0) "expected end of d
 parse_pragma_stdc_on_off = ExtWarn [UnknownPragmas] (0) "expected 'ON' or 'OFF' or 'DEFAULT' in pragma";
 parse_pragma_stdc_unknown = ExtWarn [UnknownPragmas] (0) "unknown pragma in STDC namespace";
 parse_requires_clause_needs_parens = Error (0) "parentheses are required around this expression in a requires clause";
+// [temp.names]/1, [expr.prim.splice] (WP-830): a splice used as a whole
+// template-argument must be parenthesized or prefixed with `typename`/`template`.
+parse_splice_template_arg_unparenthesized = Error (0) "unparenthesized splice expression cannot be used as a template argument";
 parse_static_lambda_captures = Error (0) "a static lambda cannot have any captures";
 parse_static_mutable_lambda = Error (0) "lambda cannot be both mutable and static";
 parse_stmt_expr_in_default_arg = Error (0) "default argument may not use a GNU statement expression";

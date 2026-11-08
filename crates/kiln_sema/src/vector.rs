@@ -69,7 +69,7 @@ impl Sema<'_, '_> {
         args: &[AttrArg],
         loc: Loc,
     ) -> Option<AttrId> {
-        let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
+        let n = kiln_ast::attr::normalize_attr_name(raw).to_owned();
         let e = match args {
             [AttrArg::Expr(e)] => *e,
             [AttrArg::Type(_)] => {

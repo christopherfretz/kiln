@@ -682,19 +682,38 @@ Encoding (prefix-free, so equal word sequences mean equal trees):
   lookup result is not part of the profile;
 - literals are their value plus canonical type;
 - a reflect-expression (`^^x`) is its value (an interned reflection id)
-  once known; a dependent `^^T` of a template type parameter is
-  `T`'s canonical type, so `C<^^T>` written in two templates is
-  equivalent; any other dependent reflection is unique (a type
-  reflection keeps a top-level alias, which the canonical type would
-  lose; WP-776);
+  once known. A dependent one profiles its operand structurally, so
+  `C<^^T*>` written in two templates is equivalent (WP-776 for `^^T`,
+  WP-821 for the rest; GCC 16.1 agrees):
+  - a dependent qualified name (`^^T::x`, `^^A<T>::x`) is that name's
+    profile (an unresolved name, below);
+  - a type is its canonical type, except that a top-level alias (a
+    typedef-name or an alias template specialization, under
+    elaboration, `using` and paren sugar only, with no qualifiers of
+    its own) is the alias: its first declaration, or its canonical
+    template name and canonical arguments. A type reflection keeps that
+    alias ([meta.reflection], `Ast::reflection_type`), so `^^AT<T>` and
+    `^^A<T>` stay distinct;
+  - a template (`^^TT` of a template template parameter, a dependent
+    template name) is its canonical template name plus the qualifier;
+  - a declaration follows the declaration rules above, plus its written
+    template arguments by the `DeclRefExpr` rule;
+- a splice expression (`[: R :]`, `[: R :]<A...>`, `b.[: R :]`,
+  `p->[: R :]`) is `(form, explicit args)` then the operand's profile,
+  then the object expression's for a member splice; the form tells the
+  plain, `.` and `->` spellings apart. So the same dependent splice
+  written in two declarations or two atoms is equivalent (WP-869; GCC
+  16.1 agrees on redeclarations and subsumption). A type splice
+  (`typename [: R :]`) is a type canonicalized by its operand's profile
+  (`splice_type`), so it needs no rule here;
 - transparent nodes: `ImplicitCastExpr`, `ConstantExpr`,
   `MaterializeTemporaryExpr`, `CXXBindTemporaryExpr`, `ExprWithCleanups`.
   `SubstNonTypeTemplateParmExpr` profiles as its replacement. `ParenExpr`
   is kept;
 - *unique* kinds are `[UNIQUE | kind, expr id]` and equal only
   themselves. They cover lambdas, statement-expressions, recovery
-  expressions, coroutine operators, splices, the dependent reflections
-  above, and any kind with no equivalence rule. The match is
+  expressions, coroutine operators, and any kind with no
+  equivalence rule. The match is
   exhaustive, so a new `ExprKind` must choose a rule.
 
 The walk runs on an explicit work stack with no recursion (tested at 200k

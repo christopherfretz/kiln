@@ -36,7 +36,8 @@ impl Sema<'_, '_> {
     /// virtual is inferred `noreturn` and gets `-Wmissing-noreturn` at its
     /// name. Not for the pattern of a function template; an
     /// instantiation of any other templated function inherits the
-    /// pattern's inference silently. Runs when `-Wreturn-type` or
+    /// pattern's inference silently, and so does a lambda's call
+    /// operator below C++23. Runs when `-Wreturn-type` or
     /// `-Wmissing-noreturn` is enabled.
     pub(crate) fn infer_noreturn(&mut self, f: DeclId, body: StmtId) {
         if self.clang_compat < 22
@@ -62,7 +63,13 @@ impl Sema<'_, '_> {
             return;
         }
         let first = self.ast.first(f);
-        if !self.inferred_noreturn.insert(first) || inherits {
+        // A lambda's call operator below C++23 is inferred silently: clang
+        // 22 neither warns there nor at a later caller (`-Wreturn-type`
+        // stays quiet), at namespace or block scope alike (range-v3
+        // `chunk_by.cpp`, `[](int, int) -> bool { throw 0; }` under
+        // `-std=c++20`).
+        let silent = self.std < kiln_lex::Std::Cxx23 && self.is_lambda_call_op(f);
+        if !self.inferred_noreturn.insert(first) || inherits || silent {
             return;
         }
         let loc = self.ast.decls.get(f).loc();

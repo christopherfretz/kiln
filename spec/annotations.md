@@ -102,8 +102,23 @@ target scope" or (1.2) X is a non-defining friend declaration.
   can appertain only to a declaration"): a statement, a type
   (type-specifier-seq or declarator-chunk position), anything else that
   is not a declaration. Test: `non-declaration.cpp`.
-- **Base-specifiers** are allowed by /1 but kiln has no table key for a
-  base-specifier yet: `unsupported` (§9).
+- **Base-specifiers** (/1): the annotations of a base-specifier (its
+  leading attribute-specifier-seq, before any `virtual` or access
+  keyword, [class.derived.general]/1) are kept in `AnnotArena::of_base`,
+  keyed by the derived class's first declaration and the base's index in
+  its definition's base list; `annotations_of` of a `bases_of` reflection
+  reads them, and a class template specialization substitutes them with
+  its bases (each element of a base pack expansion gets its own copy).
+  The pattern of a base pack expansion is the whole base-specifier,
+  attribute-specifier-seq included ([temp.variadic]/5.4), so an operand
+  naming the pack (`[[=sizeof(Bs)]] Bs...`) is substituted per element,
+  in source order with the operands substituted once
+  (`Substituter::class_bases`). The parser keeps such an operand
+  (`Sema::set_base_annotation_packs`) until the `...` is known; on a
+  base-specifier without one it is the unexpanded-pack error
+  (`Sema::check_base_annotation_packs`). GCC 16.1 crashes on both forms
+  (docs/status/deviations.md).
+  Tests: `meta.reflection.annotation/base-specifier*.cpp` (WP-830, WP-867).
 - A structured binding declaration's leading annotations appertain to the
   declaration, i.e. the unnamed variable `e` ([dcl.struct.bind]/1): kiln
   accepts them there (open question §9).
@@ -161,6 +176,15 @@ target scope" or (1.2) X is a non-defining friend declaration.
   its member templates' patterns, a variable template specialization,
   partial and explicit specializations (their own annotations only) and
   function parameters (paired with the pattern's) all follow this.
+  A function parameter pack (`[[=1]] Ts... xs`) gives each expanded
+  parameter its own copy of the pattern's annotations, substituted per
+  element (`annotated_param_pairs`; `meta.reflection.annotation/parameter-pack.cpp`,
+  WP-830). With more than one function parameter pack each pack pairs
+  with the parameters of its own expansion, its length probed under the
+  current arguments as the body's parameter map does
+  (`Substituter::param_pack_len`); a pack that stays a pack (a member
+  template's own, substituted with its class) pairs one to one
+  (`parameter-packs-several.cpp`, WP-866).
 - **Function template specializations are lazy.** "Substituting into an
   annotation is not in the immediate context" ([dcl.attr.annotation]/4):
   a failure is a hard error, never a deduction failure, and Example 4
@@ -185,6 +209,7 @@ target scope" or (1.2) X is a non-defining friend declaration.
 | `sema_annotation_non_declaration` | on a statement, type or other non-declaration |
 | `sema_annotation_not_allowed` | on a declaration /1 excludes (§3) |
 | `sema_annotation_not_structural` | `T` not structural |
+| `sema_annotation_invalid_value` | the value is, or points into, a string literal, a temporary, a `typeid` result or a label: not a valid constant template argument ([temp.arg.nontype]/6; WP-830) |
 | `sema_expr_not_cce` ("annotation") | the operand is not a constant expression |
 | `note_template_annotation_here` | instantiation note for a lazy substitution |
 
@@ -210,22 +235,20 @@ pins `evaluations`, `steps`, `calls`, `allocs`, `peak_bytes`,
 
 ## 9. Open questions and follow-ups
 
-1. Base-specifier annotations: `unsupported` at
-   `crates/kiln_sema/src/class/mod.rs:243`; needs a `(class, base index)`
-   key in `AnnotArena`.
+1. *Resolved (WP-830, WP-867).* Base-specifier annotations (§3),
+   including an operand naming the base pack (`[[=sizeof(Bs)]] Bs...`),
+   substituted per element.
 2. *Resolved (WP-478).* Parameter annotations across redeclarations
    (Note 1, Example 1): `annotations_of` of a parameter lists the
    parameter's annotations in every declaration of the function
    (spec/reflection-members.md §5).
-3. A pattern parameter pack (`Ts... xs`) whose annotations would expand
-   to several parameters is not substituted
-   (`annotated_param_pairs`, `crates/kiln_sema/src/annot.rs`: counts must
-   match).
-4. A pointer to a string literal (`[[="abc"]]`) is accepted; it is not a
-   valid template argument ([temp.arg.nontype]/6.2), so
-   `reflect_constant` throws and the annotation should be ill-formed
-   (GCC 16.1 accepts it too). The same gap exists for NTTPs (`X<"abc">` is accepted); fix both in the
-   template-argument check.
+3. *Resolved (WP-830, WP-866).* A pattern parameter pack gives each
+   expanded parameter the pattern's annotations (§5), with any number of
+   function parameter packs.
+4. *Resolved (WP-830).* A value that is, or points into, a string literal
+   (`[[="abc"]]`) is `sema_annotation_invalid_value`
+   ([temp.arg.nontype]/6.2; `dcl.attr.annotation/string-literal-neg.cpp`,
+   no oracle: GCC 16.1 accepts it). `X<"abc">` was already rejected.
 5. Annotations on a parameter of a function-pointer or function-type
    declarator chunk, and on a lambda's parameters, are accepted and kept
    on the parameter; whether a lambda parameter is a "function parameter"
@@ -233,9 +256,12 @@ pins `evaluations`, `steps`, `calls`, `allocs`, `peak_bytes`,
 6. *Resolved (WP-478).* Pending lazy annotations are never flushed: a
    specialization that is never referenced shows none, so the queries
    call `require_annotations` first (spec/reflection-members.md §5).
-7. Attributes after a label's colon are skipped by `skip_attributes`
-   (`crates/kiln_parse/src/attr.rs:363`), so annotations there are
-   dropped without a diagnostic.
+7. *Resolved (WP-830).* After a label's colon the parser takes only GNU
+   attributes for the label; a C++11 attribute-specifier-seq there
+   belongs to the sub-statement (as clang parses it), so `lbl: [[=4]] int
+   x;` annotates `x` and `lbl: [[=4]];` is `sema_annotation_non_declaration`
+   (`dcl.attr.annotation/label-colon*.cpp`; GCC 16.1 only warns, so the
+   negative test has no oracle).
 8. `[[=1]] struct S {};` is the existing "misplaced attributes" error (a
    leading attribute-specifier-seq on a declaration with no declarator is
    ill-formed, [dcl.pre]/5) and namespace-scope `[[=1]] asm("")` the

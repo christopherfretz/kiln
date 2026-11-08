@@ -158,13 +158,25 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 | `-fwrapv`, `-fno-wrapv`, `-f[no-]wrapv-pointer`, `-fno-strict-overflow`, `-fstrict-overflow` | signed overflow wraps (`CodegenOptions::wrapv`): the last of `-f[no-]wrapv`, else `-fno-strict-overflow`; no `nsw` on signed arithmetic, increments, negation, shifts or VLA sizes. Pointer overflow wraps (`wrapv_pointer`): at `-fclang-compat=19` exactly when `wrapv`; at 22 the last of `-f[no-]wrapv-pointer`, else `-fno-strict-overflow`; no `inbounds` on pointer arithmetic and subscripts, and at 22 none on field GEPs either. The Oven is unchanged: signed overflow in a constant expression stays non-constant ([expr.const]/5), unlike GCC, which folds it as wrapping under `-fwrapv` (deliberate divergence, deferred) |
 | `-fno-delete-null-pointer-checks`, `-fdelete-null-pointer-checks` | `CodegenOptions::null_pointer_is_valid`: every definition gets `null_pointer_is_valid`; reference parameters, returns and `this` lose `nonnull` (`this` gets `dereferenceable_or_null`), `nonnull`/`returns_nonnull` attributes, the `operator new` result and loaded references lose `nonnull` (and `!nonnull` metadata), as clang |
 | `-fpatchable-function-entry=N[,M]`, `-fzero-call-used-regs=<kind>`, `-mfunction-return=keep\|thunk-extern` (x86), `-fcf-protection[=full\|branch\|return\|none]` (x86), `-mspeculative-load-hardening`, `-fsplit-stack`, `-finstrument-functions`, `-finstrument-functions-after-inlining`, `-finstrument-function-entry-bare`, `-fxray-instrument`, `-fxray-instruction-threshold=N`, `-fxray-ignore-loops` (WP-813) | `CodegenOptions::hardening` (`kiln_codegen::Hardening`): the function attributes and module flags clang 19 emits for each, with the class B attributes overriding them per function (spec/landed/codegen/WP-813.md). `-mspeculative-load-hardening` on x86 also adds `+retpoline-indirect-calls` to the target features; `-finstrument-functions*` at `-O0` runs `default<O0>` so ee-instrument emits the calls; `-fxray-instrument` is passed on to the link. Errors as clang: a bad `-fpatchable-function-entry=` (`invalid argument 'x' to -fpatchable-function-entry=`, or the offset larger than the count), `-fxray-instrument` with `-fpatchable-function-entry=`, a bad `-fxray-instruction-threshold=` under `-fxray-instrument` are driver errors; a bad `-mfunction-return=` / `-fzero-call-used-regs=` / `-fcf-protection=` value (the last of each wins), `-mfunction-return=` off x86 and (when generating code) `-fcf-protection` off x86 are clang's `-cc1` errors, printed without the `kiln++:` prefix and in cc1's order (an invalid `-mfunction-return=` on x86 is reported twice, as clang 19 does). Without `-fxray-instrument` the other `-fxray-*` options are `argument unused during compilation` |
+| `-flto`, `-flto=full\|thin\|auto\|jobserver`, `-fno-lto`, `-f[no-]split-lto-unit` (WP-873) | the last of `-flto[=...]` / `-fno-lto` decides (clang `getLTOMode`: `auto` and `jobserver` are full LTO; another value is `unsupported argument`). The module is an LTO unit (spec/codegen.md "LTO": the `ThinLTO` / `EnableSplitLTOUnit` module flags and vtable `!type` metadata); `opt` runs the level's pre-link pipeline (`lto-pre-link<Ox>` / `thinlto-pre-link<Ox>`, at `-O0` too) instead of `default<Ox>`. `-c` (and each compile before a link) writes a bitcode-only `.o` through `opt`: full LTO with `-module-summary`, thin LTO with `--thinlto-bc` (plus `--thinlto-split-lto-unit` under `-fsplit-lto-unit`, default off for thin, always on for full), as clang; `-S -emit-llvm` carries the summary too; `-S` alone writes textual IR as clang does. `-flto[=thin]` is passed on to the link (lld or the system linker with the LLVM gold plugin). `-disable-llvm-passes` runs no pipeline and writes no summary. `-ffat-lto-objects` is accepted and ignored (the object stays bitcode only; follow-up), `-fno-fat-lto-objects` is the default |
+| `-mbranch-protection=<spec>`, `-msign-return-address=none\|non-leaf\|all` (AArch64; WP-846) | `CodegenOptions::branch_protection` (`kiln_abi::BranchProtection`, clang 19 `CollectARMPACBTIOptions` and `ARM::parseBranchProtection`): the last of the two wins. `<spec>` is `none`, `standard` (`pac-ret+bti+gcs`) or a `+`-separated list of `bti`, `gcs` and `pac-ret` followed by any of `leaf`, `b-key`, `pc`; `-msign-return-address=` signs with the A key only. Every definition, declaration and call site gets clang's `"sign-return-address"`/`"sign-return-address-key"`, `"branch-target-enforcement"`, `"branch-protection-pauth-lr"` and `"guarded-control-stack"` attributes, the module gets the matching `Min` flags (value 1; 2 at `-fclang-compat=22`, as clang 22), and the predefines gain `__ARM_FEATURE_PAC_DEFAULT` (bit 0 A key, 1 B key, 2 leaf, 3 PAuth-LR), `__ARM_FEATURE_BTI_DEFAULT` and `__ARM_FEATURE_GCS_DEFAULT` (spec/pp.md "AArch64 target macros"). `__attribute__((target("branch-protection=<spec>")))` replaces the function's attributes (an invalid spec is `invalid or misplaced branch protection specification '<item>'`; off AArch64 the attribute is ignored with `unsupported 'branch-protection' in the 'target' attribute string`). An invalid spec is `unsupported argument '<item>' to option '-mbranch-protection='`; off AArch64 `-mbranch-protection=` is `unsupported option '-mbranch-protection=' for target '<triple>'` and `-msign-return-address=` is unused. kiln models no `-march=` extension enabling PAuth-LR, so `standard` never adds `pc` (spec/landed/codegen/WP-846.md) |
 | `-Wp,<a>,<b>,...`, `-Xpreprocessor <arg>` | spliced into the argument list before parsing (`codegen_flags::splice_preprocessor_args`), as GCC: `-Wp,-MD,<f>` / `-Wp,-MMD,<f>` become `-MD -MF <f>` / `-MMD -MF <f>`, any other list is split at commas (empty pieces dropped), so `-Wp,-D_FORTIFY_SOURCE=2` is `-D_FORTIFY_SOURCE=2`; `-Xpreprocessor <arg>` is `<arg>` |
 
 **2. Accepted and ignored silently** (no observable effect in kiln today;
 do not add a diagnostic): `-f[no-]stack-clash-protection`,
 `-f[no-]common`, `-fstack-usage`,
 `-fno-trapv`, `-fno-short-enums`, `-m64` (every kiln target is 64-bit;
-`-m32` stays unknown) and `-pipe`. An empty `-mtune=` is `unsupported argument '<v>' to option '<opt>'`.
+`-m32` stays unknown) and `-pipe`.
+WP-677 (configure scripts and CMake probe them; clang 19 accepts them):
+`-fdiagnostics-show-template-tree` (kiln prints template diffs inline,
+as clang without it), `-f[no-]vectorize`, `-f[no-]slp-vectorize`,
+`-f[no-]tree-vectorize`, `-f[no-]tree-slp-vectorize` (clang turns the loop
+and SLP vectorizers on or off in its pass pipeline; kiln runs `opt`'s
+default pipeline, which decides itself by `-O` level) and
+`-f[no-]strict-vtable-pointers` (clang adds `invariant.group` loads and
+`launder.invariant.group` barriers; deliberately ignored: the IR without
+them is valid, only less optimized). Each is a deviation from clang's IR
+for that flag (WP-873 follow-ups). An empty `-mtune=` is `unsupported argument '<v>' to option '<opt>'`.
 (`-fexcess-precision=`, `-f[no-]math-errno` and `-ffp-model=` are in
 "Floating-point flags", WP-806.)
 
@@ -877,8 +889,15 @@ This is clang's `DependencyCollector` and `DependencyFileGenerator`.
 - Files are listed in first-seen order:
   - the main file;
   - every entered header;
+  - every header an `#include` found but skipped (`#pragma once`,
+    `#import`, the guard optimization; clang's `FileSkipped`);
   - every header found by `__has_include`;
   - every `#embed` resource.
+  A header is listed by the path the lookup found it by
+  (`ResolvedInclude::path`, spec/pp.md "Header search"), once per
+  distinct path: a file reached as `real/x.h`, `lnk/x.h` (a symlinked
+  directory) and `sub/../real/x.h` is listed three times, even though it
+  is entered once and `__FILE__` names it `real/x.h` (WP-820).
   `<built-in>`, `<command line>` and `<stdin>` are left out, and `./` is
   removed.
 - The target is `-MT` (verbatim) or `-MQ` (Make-quoted), in order. Without
@@ -1069,6 +1088,18 @@ Each deviation is covered by a test or a test note.
     `UseTargetPathSeparator`; `-fno-file-reproducible` turns it off);
     kiln replaces the prefix only, so `-I /p//inc/./` with a map that does
     not swallow the `//` and `/./` keeps them where clang drops them.
+21. **No MS extensions mode, no PAuth-LR from `-march=`** (WP-846).
+    `-fms-extensions` (and `-fms-compatibility`) is `unknown argument`:
+    clang's mode adds MS keywords, `__declspec` attributes and language
+    builtins such as `__dmb`/`__dsb`/`__isb`/`__yield` on AArch64, and
+    accepting the flag without them would hide the gaps (spec/pp.md
+    "Feature queries"). `-mbranch-protection=standard` never adds
+    PAuth-LR (`pc`), because kiln models no `-march=` extension that
+    enables it; `pac-ret+pc` does. A function's
+    `target("arch=...")` changes no target features (only its
+    `branch-protection=` and the WP-459 `+feature` items are read).
+    Tests: `conformance/target.acle/ms-barrier-builtins-*.cpp`,
+    `ir-branch-protection-*.cpp`.
 
 ## Tests
 

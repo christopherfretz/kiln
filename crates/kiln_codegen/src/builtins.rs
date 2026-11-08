@@ -195,7 +195,14 @@ fn lib_name(b: u32) -> Option<&'static str> {
         | id::WMEMMOVE
         | id::SNPRINTF
         | id::SPRINTF
-        | id::VSNPRINTF => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
+        | id::VSNPRINTF
+        | id::PRINTF
+        | id::VPRINTF
+        | id::VSPRINTF
+        | id::SCANF
+        | id::SSCANF
+        | id::VSCANF
+        | id::VSSCANF => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         // WP-803: `__builtin___memcpy_chk` calls `__memcpy_chk`.
         _ if id::is_chk(b) => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         _ if id::is_libm(b) => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
@@ -413,12 +420,10 @@ pub(crate) fn is_complete(ast: &Ast, q: QualType) -> bool {
 /// The builtins kiln declares but whose calls are still the error
 /// "code generation for X is not supported yet", sorted and separated by
 /// spaces (mostly the scalar and polymorphic `__builtin_neon_*` forms
-/// `arm_neon.h` wraps, and the ACLE system-register builtins): the
+/// `arm_neon.h` wraps): the
 /// driver's `__has_builtin` answers 0 for them (WP-805), and
 /// `kiln_driver/tests/builtin_lowering.rs` checks the list is exact.
-pub static UNLOWERED_BUILTINS: &str = "__builtin_arm_chkfeat __builtin_arm_prefetch \
-    __builtin_arm_rsr __builtin_arm_rsr64 __builtin_arm_rsrp __builtin_arm_trap __builtin_arm_wsr \
-    __builtin_arm_wsr64 __builtin_arm_wsrp __builtin_ia32_maskmovq __builtin_neon_vabdd_f64 \
+pub static UNLOWERED_BUILTINS: &str = "__builtin_ia32_maskmovq __builtin_neon_vabdd_f64 \
     __builtin_neon_vabds_f32 __builtin_neon_vabsd_s64 __builtin_neon_vadd_v \
     __builtin_neon_vaddd_s64 __builtin_neon_vaddd_u64 __builtin_neon_vaddhn_v \
     __builtin_neon_vaddq_p128 __builtin_neon_vaddq_v __builtin_neon_vcage_v \

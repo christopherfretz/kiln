@@ -152,7 +152,41 @@ order.
   last found with (clang `HeaderFileInfo::DirInfo`).
 - The name is the `FileManager` name, so `__FILE__`, line markers,
   diagnostics and `-M` output all spell it as clang does.
+  `ResolvedInclude::path` carries the path the lookup found the file by.
+  A file is one file (`kiln_source` identity: device and inode), so
+  `#pragma once`, `#import` and the guard optimization see it through any
+  path, and `__FILE__`, line markers and diagnostics keep the name it was
+  first loaded by (clang's `ContentCache::OrigEntry`). The `-M` output
+  lists every distinct path an `#include` reached it by, skipped or
+  entered (clang's per-`FileID` name and `FileSkipped`; `spec/driver.md`
+  "Dependency output").
+
+**Lookup caching (WP-820).** Every query below is a system call on
+`RealFs`, which costs most on a slow mount, so header search asks each
+question once per run:
+
 - Opened paths are cached, and so is the absence of a path.
+- Directory existence is cached (`HeaderFs::is_dir`). A name with
+  directory components (`boost/x/y.hpp`) checks each intermediate
+  directory under the search directory, outermost first, before opening:
+  one missing `dir/boost` rules out every `boost/...` header there with a
+  single `stat` (clang checks only the parent directory, through its
+  `SeenDirEntries` cache).
+- A lookup's result is cached per (name, start index), clang's
+  `LookupFileCache`: a repeated `#include` or `#include_next` of a name
+  makes no query.
+- After the fourth failed lookup in one directory
+  (`LIST_AFTER_MISSES`), its listing is read once (`HeaderFs::list_dir`)
+  and later names it does not hold are misses without a query. Names
+  compare ignoring ASCII case, so a case-insensitive file system never
+  gets a false miss. A directory holding a non-ASCII name is never
+  answered from its listing, nor is a component that is non-ASCII, `.`,
+  `..` or empty. A file created during the run in a listed directory is
+  not seen (as with clang's caches).
+
+On a tree with 157 `-I` directories (the WP-824 shape) this cut `-E` from
+about 204,000 system calls to about 12,400; `docs/status/header-search-syscalls.md`
+has the measurements against clang 19.
 
 **`#embed`.** This is clang `LookupEmbedFile`:
 
@@ -163,7 +197,7 @@ order.
 **Observer.** `set_observer(SearchObserver)` reports what the `-M` output
 needs but the `FileChange` callbacks do not see:
 
-- `SearchEvent::HasInclude { file, characteristic }` for each successful
+- `SearchEvent::HasInclude { file, path, characteristic }` for each successful
   `__has_include` / `__has_include_next`;
 - `SearchEvent::Embed { path }` for each `#embed` / `__has_embed` that
   finds a resource.
@@ -417,6 +451,13 @@ clang 22 declares as header builtins (`__dmb`, `__dsb`, `__isb`,
 `__has_builtin` answers clang 19's table at either level (0 outside the
 MS modes): kiln ships clang 19's `arm_acle.h`, which defines them only
 when `__has_builtin` is 0 (spec/landed/sema/WP-724.md "ACLE builtins").
+clang 19 answers 1 for them only under `-fms-extensions`, where they
+are MS language builtins; kiln++ rejects that flag (it has no MS mode,
+spec/driver.md), so the 1 is reachable only through a library
+`ClangFeatures` built with it, and in every mode kiln++ accepts
+`__has_builtin` agrees with what is declared: without `arm_acle.h` the
+names are undeclared, with it they are its inline functions
+(`target.acle/ms-barrier-builtins-*`, WP-846).
 `-ffreestanding` / `-fno-builtin` select the `NoBuiltin` overlay
 (library builtins such as `memcpy` answer 0; `-fhosted` and, for
 `-fno-builtin` only, `-fbuiltin` cancel it), and `-fno-builtin-<name>`
@@ -428,8 +469,12 @@ Where kiln implements a feature that clang 19 lacks,
 `__cpp_structured_bindings` is `202411L` wherever it is defined (C++17
 on; P1061 structured binding packs) and `__cpp_variadic_friend` is
 `202403L` in every C++ mode (P2893), and `__cpp_explicit_this_parameter`
-is `202110L` from C++23 (P0847 with lambdas, WP-356). `predef.rs` unit
-tests check all three.
+is `202110L` from C++23 (P0847 with lambdas, WP-356). Likewise
+`__cpp_static_assert` is `202306L` wherever it is defined (C++11 on; P2741
+user-generated messages, accepted in every mode with a C++26 extension
+warning) and `__cpp_constexpr` is `202002L` at C++20 (P1330; clang 19 has
+P1331's `201907L`), both clang 22's values (WP-851). `predef.rs` unit
+tests check all five.
 
 **`-dM` differences, clang 19.1.7 to 22.1.8** (`-std=c++26 -dM -E -x c++
 /dev/null`; identical for every standard and flag probed; applied by
@@ -776,6 +821,19 @@ belong to WP-017, which builds them on `macro_defined` and
     v9, `sve2` and `fullfp16` from the level whatever the extensions say
     (its `setArchFeatures`), and defines `__ARM_NEON_SVE_BRIDGE 1` only in
     SVE mode; clang 22 follows the features and always defines it.
+  - Branch protection (WP-846; `ArmTarget::branch_protection`, filled
+    from `kiln_abi::branch_protection::BranchProtection::macros` of the
+    driver's `-mbranch-protection=` / `-msign-return-address=`, spec/
+    driver.md "Codegen flags"): `__ARM_FEATURE_PAC_DEFAULT` when return
+    addresses are signed (bit 0 the A key, bit 1 the B key, bit 2 every
+    function i.e. `leaf` / `all`, bit 3 PAuth-LR i.e. `pc`),
+    `__ARM_FEATURE_BTI_DEFAULT 1` with `bti` and
+    `__ARM_FEATURE_GCS_DEFAULT 1` with `gcs`; `standard` gives
+    `PAC_DEFAULT 1`, `BTI_DEFAULT 1` and `GCS_DEFAULT 1`. A function's
+    `target("branch-protection=...")` changes only its codegen, never the
+    macros. Tests: `conformance/target.acle/branch-protection-
+    predefines.cpp`, `-sign-all.cpp`, and `kiln_abi` `branch_protection`
+    `derived`.
   Tests: `conformance/cpp.predefined/arm-feature-macros-*.cpp` (pp tests
   of `arm-feature-macros.h` against both oracles: baseline, `+sve`,
   `+sve2`, `+fp16`, `+sve2+fp16`, levels, `-msve-vector-bits=`), and

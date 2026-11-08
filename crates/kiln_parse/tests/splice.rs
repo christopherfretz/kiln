@@ -1,6 +1,6 @@
 //! The splice fast path (spec/reflection.md §5): a splice whose operand
 //! is already a frozen reflection reads it without an Oven run, and each
-//! such read is counted in `ParsedTu::splice_fast`.
+//! such read is counted in the Oven report's `splice_fast` total.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -23,7 +23,8 @@ fn run(src: &str) -> (u64, u64, usize) {
     let target = Target::for_arch(Arch::X86_64);
     let tu = parse_tu(&sm, &interner, file, &engine, target, &opts, ConstexprLimits::default());
     let errors = sink.take().iter().filter(|d| d.level >= Level::Error).count();
-    (tu.splice_fast, tu.oven.stats().totals().evaluations, errors)
+    let t = tu.oven.stats().totals();
+    (t.splice_fast, t.evaluations, errors)
 }
 
 #[test]

@@ -37,64 +37,15 @@ impl Sema<'_, '_> {
     pub(crate) fn check_constexpr_body_vars(&mut self, f: DeclId, body: StmtId) {
         if !self.is_lambda_call_op(f) {
             self.constexpr_body_vars(f, body);
-            self.check_never_constant(f);
+            self.check_never_constant(f, body);
         }
-    }
-
-    /// [dcl.constexpr]/6 (no diagnostic required): "constexpr function
-    /// never produces a constant expression" at the name of `f`, a
-    /// `constexpr` or `consteval` function just defined, when no call of
-    /// it is a constant expression (clang `Expr::isPotentialConstantExpr`
-    /// under `CheckConstexprFunctionBodies`: on before C++23, else only
-    /// with `-Winvalid-constexpr`; an error by default). Narrowly: a
-    /// non-member or static member function without parameters, outside
-    /// templates and instantiations, whose call fails in its own body on
-    /// a signed integer overflow (the note "value N is outside the range
-    /// of representable values of type 'T'"); any other failure is not
-    /// reported (spec/sema.md §5.28).
-    pub(crate) fn check_never_constant(&mut self, f: DeclId) {
-        let kind = self.fn_spec(f).constexpr_kind();
-        if kind == ConstexprKind::None
-            || self.ast.decls.get(f).has(DeclFlags::INVALID)
-            || !self.inst.stack.frames.is_empty()
-            || self.in_template()
-            || !self
-                .diags
-                .group_flag("invalid-constexpr")
-                .unwrap_or(self.std < kiln_lex::Std::Cxx23)
-        {
-            return;
-        }
-        match self.kind_of(f) {
-            DeclKind::Function => {}
-            DeclKind::CXXMethod if self.is_static_method(f) => {}
-            _ => return,
-        }
-        let loc = self.ast.decls.get(f).loc();
-        let Err(mut fail) = self.evaluate_call(f, loc) else { return };
-        // The call's own "in call to" note; any other is a failure in a
-        // callee, which clang does not report.
-        if !fail.notes.last().is_some_and(|n| n.loc == loc && n.msg.starts_with("in call to ")) {
-            return;
-        }
-        fail.notes.pop();
-        if fail.notes.len() != 1
-            || !fail.notes[0].msg.contains(" is outside the range of representable values of type ")
-        {
-            return;
-        }
-        let msg = self
-            .diag(DiagId::sema_constexpr_never_constant, loc)
-            .arg(0u8)
-            .arg(u8::from(kind == ConstexprKind::Consteval));
-        let msg = Self::with_failure_notes(msg, fail);
-        self.emit(msg);
     }
 
     /// The same rule for the call operator `f` of a lambda declared
     /// `constexpr` or `consteval` explicitly, at the end of its `body`.
     pub(crate) fn check_constexpr_lambda_body_vars(&mut self, f: DeclId, body: StmtId) {
         self.constexpr_body_vars(f, body);
+        self.check_never_constant(f, body);
     }
 
     /// The call operator `f` of a lambda not declared `constexpr`, at the

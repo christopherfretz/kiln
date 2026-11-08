@@ -1,7 +1,8 @@
 //! GNU `__null` (spec/sema.md §5.8): the integer null pointer constant
 //! glibc's and clang's `<stddef.h>` define `NULL` as, with clang's two
 //! warnings about using it as an integer: `-Wnull-conversion` (an
-//! implicit conversion to a non-pointer scalar type) and
+//! implicit conversion to a non-pointer scalar type, which also covers
+//! `nullptr`) and
 //! `-Wnull-arithmetic` (an operand of an arithmetic or comparison
 //! operator).
 
@@ -30,11 +31,13 @@ impl Sema<'_, '_> {
         self.builder().gnu_null(ty, loc)
     }
 
-    /// clang's `DiagnoseNullConversion` for `__null` (`src`, implicit
-    /// casts and parentheses stripped) implicitly converted to `to`: a
+    /// clang's `DiagnoseNullConversion` for `__null` or an expression of
+    /// type `std::nullptr_t` (`src`, implicit casts and parentheses
+    /// stripped; `!nullptr`, `nullptr && b`, WP-851) implicitly converted
+    /// to `to`: a
     /// warning unless `to` is `__null`'s own type, a pointer, a pointer to
     /// member, `std::nullptr_t` or not a scalar type. Reported at
-    /// `__null`, or at the `NULL` that expanded to it; nothing when that
+    /// `src`, or at the `NULL` that expanded to `__null`; nothing when that
     /// location and the context `cc` (both taken out of macro arguments)
     /// are in different files or macro expansions.
     pub(crate) fn check_null_conversion(&mut self, src: ExprId, to: QualType, cc: Loc) {
@@ -52,7 +55,9 @@ impl Sema<'_, '_> {
         let sm = self.diags.sm();
         let mut loc = self.top_macro_caller_loc(self.ast.exprs.get(src).loc());
         let cc = self.top_macro_caller_loc(cc);
-        if let Some(x) = sm.expansion_info(loc)
+        let gnu = self.ast.exprs.get(src).kind() == ExprKind::GNUNullExpr;
+        if gnu
+            && let Some(x) = sm.expansion_info(loc)
             && let ExpansionKind::Macro { name } = x.kind
             && sm.span_text(name) == Some("NULL")
         {
@@ -61,7 +66,8 @@ impl Sema<'_, '_> {
         if sm.entry_bounds(loc) != sm.entry_bounds(cc) {
             return;
         }
-        let d = self.diag(DiagId::sema_null_conversion, loc).arg(self.ty_arg(to));
+        let what = if gnu { "NULL" } else { "nullptr" };
+        let d = self.diag(DiagId::sema_null_conversion, loc).arg(what).arg(self.ty_arg(to));
         self.emit(d);
     }
 

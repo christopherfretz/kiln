@@ -2470,6 +2470,14 @@ impl Cg<'_> {
         if let Some(r) = self.fold_wide_cast(op, v, to) {
             return Some(r);
         }
+        // A floating constant reinterpreted as an integer of its width
+        // (`ConstantFoldCastInstruction`; WP-846's `strex` of a `__fp16`).
+        if op == CastOp::BitCast
+            && let Some((_, _, bits)) = self.cfloat_bits(v)
+            && self.m.types.int_width(to).is_some_and(|w| w <= 128)
+        {
+            return Some(V::C(self.m.const_int(to, bits as i128)));
+        }
         if let Some((_, a, w)) = self.cint(v) {
             let tw = self.m.types.int_width(to);
             let r = match (op, tw) {

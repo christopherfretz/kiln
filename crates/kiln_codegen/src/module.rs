@@ -171,6 +171,10 @@ pub(crate) struct Cg<'a> {
     /// `-fsanitize=unreachable` (clang `EmitCall` removes `noreturn`
     /// from the called `llvm::Function`, WP-871).
     pub ub_returning: FxHashSet<FuncId>,
+    /// The `distinct !{}` type identifier of each type without linkage
+    /// in vtable `!type` metadata, by `_ZTS` name (WP-873; clang
+    /// `MetadataIdMap` / `VirtualMetadataIdMap`).
+    pub type_md_ids: FxHashMap<String, kiln_llvm::MetadataId>,
     /// The source manager, for `UBSan` source locations (WP-675).
     pub sm: Option<&'a kiln_source::SourceManager>,
     /// Named struct types by record.
@@ -429,6 +433,7 @@ impl<'a> Cg<'a> {
             ub_types: FxHashMap::default(),
             ub_type_names: FxHashMap::default(),
             ub_returning: FxHashSet::default(),
+            type_md_ids: FxHashMap::default(),
             sm: None,
             named: FxHashMap::default(),
             named_base: FxHashMap::default(),
@@ -2206,6 +2211,7 @@ impl<'a> Cg<'a> {
         // A thunk's call has no target declaration ([`Fx::thunk`]).
         let nba = fid.filter(|_| !self.f.thunk).and_then(|f| self.nba_fns.get(&f).copied());
         self.no_builtin_attrs(out, nba);
+        self.branch_protection_attrs(out, None);
         self.default_fn_attrs(out);
     }
 
@@ -2216,6 +2222,29 @@ impl<'a> Cg<'a> {
     pub(crate) fn default_fn_attrs(&self, out: &mut Vec<Attr>) {
         if self.opts.sanitize.has(kiln_ast::sanitize::SanitizerSet::HWADDRESS) {
             out.push(Attr::string("hwasan-abi", "interceptor"));
+        }
+    }
+
+    /// The branch protection function attributes (clang
+    /// `initBranchProtectionFnAttributes`, on a declaration, a definition
+    /// and a call site alike) of function `d` (`None`: a helper or a call
+    /// site): `-mbranch-protection=`'s, which on `AArch64` a
+    /// `target("branch-protection=...")` of `d` replaces (clang
+    /// `AArch64TargetCodeGenInfo::setTargetAttributes`; WP-846).
+    pub(crate) fn branch_protection_attrs(&self, out: &mut Vec<Attr>, d: Option<DeclId>) {
+        if self.is_x86() {
+            return;
+        }
+        let mut bp = self.opts.hardening.branch_protection;
+        if let Some(spec) = d.and_then(|d| self.target_attr_str(d))
+            && let Some(p) = kiln_abi::BranchProtection::of_target_attr(&spec)
+                .filter(|p| !p.is_empty())
+                .and_then(|p| kiln_abi::BranchProtection::parse(p, false).ok())
+        {
+            bp = p;
+        }
+        for (k, v) in bp.fn_attrs() {
+            out.push(Attr::string(k, v));
         }
     }
 
@@ -2291,6 +2320,7 @@ impl<'a> Cg<'a> {
         self.size_attrs(out);
         self.class_b_default_attrs(out, d);
         self.no_builtin_attrs(out, d);
+        self.branch_protection_attrs(out, d);
         self.default_fn_attrs(out);
         if let Some(d) = d
             && self.has_fn_attr(d, kiln_ast::attr::AttrKind::DISABLE_TAIL_CALLS)
@@ -3313,6 +3343,12 @@ impl<'a> Cg<'a> {
         if h.fn_return_thunk_extern && x86 {
             m.add_module_flag_i32(4, "function_return_thunk_extern", 1);
         }
+        // WP-846: the branch protection flags (`Min`; clang 22 gives them
+        // the value 2).
+        let bp_value = if self.opts.clang_compat >= 22 { 2 } else { 1 };
+        for f in h.branch_protection.module_flags().into_iter().filter(|_| !x86) {
+            m.add_module_flag_i32(8, f, bp_value);
+        }
         match self.opts.reloc {
             RelocModel::Static => {}
             RelocModel::Pic(l) => m.add_module_flag_i32(8, "PIC Level", i32::from(l)),
@@ -3345,6 +3381,18 @@ impl<'a> Cg<'a> {
         }
         if let Some(v) = fp {
             m.add_module_flag_i32(7, "frame-pointer", v);
+        }
+        // clang `EmitAssemblyHelper::RunOptimizationPipeline`'s LTO flags,
+        // after the frontend's (WP-873).
+        match self.opts.lto.filter(|_| self.opts.lto_module_flags) {
+            Some(crate::Lto::Full) => {
+                m.add_module_flag_i32(1, "ThinLTO", 0);
+                m.add_module_flag_i32(1, "EnableSplitLTOUnit", 1);
+            }
+            Some(crate::Lto::Thin { split }) => {
+                m.add_module_flag_i32(1, "EnableSplitLTOUnit", i32::from(split));
+            }
+            None => {}
         }
         m.add_ident(&self.opts.ident);
         self.tbaa_errno();

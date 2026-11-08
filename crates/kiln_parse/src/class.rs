@@ -747,6 +747,7 @@ impl Parser<'_, '_> {
             if let Some(&p) = params.get(i) {
                 self.s.act_on_start_delayed_default_arg(p);
             }
+            let mark = self.s.begin_default_arg_uses();
             if self.at(Punct::LBrace) {
                 // `= { ... }` ([dcl.fct.default]/1: an initializer-clause).
                 if let Ok(l) = self.parse_init_list() {
@@ -776,6 +777,12 @@ impl Parser<'_, '_> {
                     }
                 }
             }
+            let arg = params
+                .get(i)
+                .filter(|&&p| !self.s.ast.decls.get(p).has(DeclFlags::INVALID))
+                .and_then(|&p| self.s.ast.decls.param(p))
+                .and_then(|x| x.default_arg);
+            self.s.end_default_arg_uses(mark, arg);
             self.s.act_on_end_delayed_default_arg();
             self.finish_replay();
         }
@@ -2224,7 +2231,10 @@ impl Parser<'_, '_> {
         self.bump();
         loop {
             match self.parse_base_specifier() {
-                Some(b) => bases.push(b),
+                Some(mut b) => {
+                    self.s.check_base_annotation_packs(&mut b.attrs, b.pack_expansion);
+                    bases.push(b);
+                }
                 None => {
                     self.skip_until(&[Punct::Comma, Punct::LBrace], true, false);
                 }
@@ -2240,7 +2250,11 @@ impl Parser<'_, '_> {
         let loc = self.loc();
         let mut attrs = Vec::new();
         if self.at_cxx11_attr() {
+            // An annotation operand may name the pack of a `B...`
+            // (checked by the caller once the `...` is read; WP-867).
+            let saved = self.s.set_base_annotation_packs(true);
             self.parse_attributes(&mut attrs);
+            self.s.set_base_annotation_packs(saved);
         }
         let mut is_virtual = self.eat_kw(Kw::Virtual).is_some();
         let access = match self.kw() {

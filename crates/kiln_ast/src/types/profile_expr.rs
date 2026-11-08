@@ -27,8 +27,7 @@
 //!   parentheses are kept.
 //! - Literals are their value and canonical type (not their spelling).
 //! - Kinds with no equivalence rule (lambdas, statement-expressions,
-//!   recovery expressions, coroutine operators, splices, dependent
-//!   reflections other than `^^T` of a template type parameter, ...) are
+//!   recovery expressions, coroutine operators, ...) are
 //!   *unique*: `[tag | UNIQUE, expr id]`, equal only to themselves. The
 //!   match below is exhaustive so a new `ExprKind` must pick a rule.
 //!
@@ -174,6 +173,38 @@ impl Ast {
 
     fn canon_word(&self, q: QualType) -> u32 {
         self.types.canonical(q).raw()
+    }
+
+    /// The words of the type a dependent `^^type-id` reflects: a
+    /// top-level alias (a typedef-name or an alias template
+    /// specialization, under elaboration, `using` and parentheses only) is the
+    /// alias, not its type ([meta.reflection], as
+    /// [`Ast::reflection_type`] keeps it once substituted), so `^^AT<T>`
+    /// and `^^A<T>` differ; any other type is its canonical type.
+    fn reflected_type_words(&self, q: QualType, out: &mut Vec<u32>) {
+        use super::TypeView;
+        let mut cur = q;
+        while cur.quals_bits() == 0 {
+            match self.types.view(cur.ty()) {
+                TypeView::Elaborated { named, .. } => cur = named,
+                TypeView::Using { underlying, .. } => cur = underlying,
+                TypeView::Paren(inner) => cur = inner,
+                TypeView::Typedef { decl, .. } => {
+                    out.extend([1, self.first(decl).raw()]);
+                    return;
+                }
+                TypeView::TemplateSpecialization { name, args, alias: true, .. } => {
+                    out.extend([
+                        2,
+                        self.types.canonical_template_name(name).raw(),
+                        self.types.canonical_args(args).raw(),
+                    ]);
+                    return;
+                }
+                _ => break,
+            }
+        }
+        out.extend([0, self.canon_word(q)]);
     }
 
     /// The template of a class template name to deduce (`view(r, f)`):
@@ -622,28 +653,59 @@ impl Ast {
             }
 
             // ----- a reflection: its value (interned, so equal values
-            // are one id) once known; `^^T` of a template type parameter
-            // its canonical type (`(depth, index, pack)` and qualifiers),
-            // so the reflection operands of `C<^^T>` in two templates are
-            // equivalent ([temp.over.link]/5). Every other dependent
-            // reflection is unique: a type keeps a top-level alias
-            // ([meta.reflection]), which the canonical type would lose.
-            K::CXXReflectExpr => match self.reflect_operand(e) {
-                _ if x.reflect_value(e).is_some() => {
-                    out.extend([tag(k, 2), x.reflect_value(e).map_or(NONE, RawId::raw)]);
+            // are one id) once known. A dependent one profiles its
+            // operand structurally, so the reflection operands of
+            // `C<^^T*>` in two templates are equivalent
+            // ([temp.over.link]/5): a dependent qualified name (`^^T::x`)
+            // as that name, a type as [`Self::reflected_type_words`]
+            // (its top-level alias kept, [meta.reflection]), a template
+            // by its canonical name, a declaration by the declaration
+            // rules above.
+            K::CXXReflectExpr => {
+                use crate::reflect::Reflectee;
+                if let Some(v) = x.reflect_value(e) {
+                    out.extend([tag(k, 2), v.raw()]);
+                } else if let Some(name) = x.reflect_dependent_name(e) {
+                    out.push(tag(k, 3));
+                    stack.push(Work::Expr(name));
+                } else {
+                    match self.reflect_operand(e) {
+                        Reflectee::Type(q) => {
+                            out.push(tag(k, 1));
+                            self.reflected_type_words(q, out);
+                        }
+                        Reflectee::Template(t) => out.extend([
+                            tag(k, 4),
+                            self.types.canonical_template_name(t).raw(),
+                            self.nns_word(self.templates.expr_nns.get(e).copied()),
+                        ]),
+                        Reflectee::Decl(d) => {
+                            out.push(tag(k, 5));
+                            self.decl_words(d, out);
+                            out.push(
+                                self.ref_args_word(d, self.templates.expr_targs.get(e).copied()),
+                            );
+                        }
+                        _ => out.extend([tag(k, 0) | UNIQUE, e.raw()]),
+                    }
                 }
-                crate::reflect::Reflectee::Type(q)
-                    if x.reflect_dependent_name(e).is_none()
-                        && matches!(
-                            self.types.view(q.ty()),
-                            super::TypeView::TemplateTypeParm(_)
-                                | super::TypeView::CanonTemplateTypeParm { .. }
-                        ) =>
-                {
-                    out.extend([tag(k, 1), self.canon_word(q)]);
-                }
-                _ => out.extend([tag(k, 0) | UNIQUE, e.raw()]),
-            },
+            }
+
+            // ----- a dependent splice `[: r :]`, `template [: r :] < args >`
+            // or a member splice `x.[: r :]` / `p->[: r :]`: its operand
+            // (and object expression) structurally, and the template
+            // arguments as written, so the same splice written in two
+            // templates is equivalent ([temp.over.link]/5, P2996
+            // [temp.type]: dependent splice-specifiers are equivalent
+            // when their constant-expressions are). The detail tells the
+            // three forms apart (WP-884).
+            K::CXXSpliceExpr => {
+                let base = x.splice_base(e);
+                let form = base.map_or(0, |(_, arrow)| 1 + u32::from(arrow));
+                out.extend([tag(k, form), self.args_word(x.splice_template_args(e))]);
+                stack.push(Work::Expr(x.splice_operand(e)));
+                stack.push(Work::Opt(base.map(|(b, _)| b)));
+            }
 
             // ----- no equivalence rule: equal only to itself
             K::UserDefinedLiteral
@@ -666,7 +728,6 @@ impl Ast {
             | K::ShuffleVectorExpr
             | K::ConvertVectorExpr
             | K::ExtVectorElementExpr
-            | K::CXXSpliceExpr
             | K::RecoveryExpr
             | K::CXXExpansionSelectExpr => out.extend([tag(k, 0) | UNIQUE, e.raw()]),
         }

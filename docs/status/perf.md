@@ -496,3 +496,63 @@ jobs per step of `S`.
   70-100 s of serial test binaries). It could split again, but its
   build cost repeats in every split, so a split would cut at most 30-40 s
   and only on aarch64.
+
+### WP-879: frontend throughput on repeated nested template-ids (2026-11-08)
+
+Found during the WP-879 reflection-mangling scaling study
+(spec/landed/sema/WP-879.md). It is not a mangling cost: mangling is
+3.4 ms of the compile. The TU is generated, since no project has it: 200
+reflection-keyed specializations whose keys are template-ids 8 levels
+deep, and each level repeats the previous level twice, so the source is
+5.1 MB of mostly repeated text. clang has no reflection, so g++-16 is the
+comparator. Release kiln++ (WP-879 branch), 5 runs, `/usr/bin/time`,
+median.
+
+```
+python3 gen.py 200 8 4 1 > dup8.cpp     # the generator below
+kiln++ -std=c++26 -freflection -fsyntax-only dup8.cpp
+g++-16 -std=c++26 -freflection -fsyntax-only dup8.cpp
+kiln++ -std=c++26 -freflection -c dup8.cpp -o k.o
+g++-16 -std=c++26 -freflection -c dup8.cpp -o g.o
+```
+
+| Compiler | Mode | Wall | User | Max RSS |
+|---|---|--:|--:|--:|
+| kiln | `-fsyntax-only` | 1.28 s | 1.23 s | 17824 KB |
+| g++-16 | `-fsyntax-only` | 0.44 s | 0.31 s | 174324 KB |
+| kiln | `-c` | 1.38 s | 1.31 s | 64932 KB |
+| g++-16 | `-c` | 0.59 s | 0.38 s | 189492 KB |
+
+kiln time is linear in the source size (0.12 / 0.37 / 1.33 s of CPU for
+`-c` at 0.3 / 1.3 / 5.1 MB, with D = 4 / 6 / 8), but its slope is about 3x
+g++-16's, while it uses a tenth of the memory. Almost all of it is
+already in `-fsyntax-only`; it was not profiled further. Follow-up row in
+the WP-879 handback.
+
+```python
+# gen.py N DEPTH WIDTH [1]
+import sys
+n, depth, width = map(int, sys.argv[1:4])
+dup = len(sys.argv) > 4 and sys.argv[4] == '1'
+o = ["using info = decltype(^^int);",
+     "template <info R> int f() { static int n = 0; return ++n; }",
+     "template <info R> struct S { static int count; };",
+     "template <info R> int S<R>::count = 0;", "namespace lib {"]
+o += [f"template <class... Ts> struct Node{k} {{}};" for k in range(4)]
+o += [f"struct T{i:05} {{}};" for i in range(n)] + ["}"]
+def ty(i, d):
+    if d == 0:
+        return f"lib::T{i:05}"
+    prev = ty(i, d - 1)
+    args = [prev]
+    for a in range(1, width - (1 if dup else 0)):
+        j = (i * 7 + d * 13 + a) % n
+        args.append([f"lib::T{j:05}", "int", f"const lib::T{i:05}*", "long",
+                     f"lib::T{j:05}&"][a % 5])
+    if dup:
+        args.append(prev)
+    return f"lib::Node{d % 4}<{', '.join(args)}>"
+o += ["int (*fs[])() = {"] + [f"  &f<^^{ty(i, depth)}>," for i in range(n)] + ["};"]
+o += ["int* counts[] = {"] + [f"  &S<^^{ty(i, depth)}>::count," for i in range(n)] + ["};"]
+print("\n".join(o))
+```
