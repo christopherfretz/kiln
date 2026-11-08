@@ -54,8 +54,12 @@ cast_sign_loss = "allow"
 # measured against `harness`, fat LTO and one codegen unit on the
 # libcxx-slice and bench/frontend, it is as fast as either alternative
 # (within 2%) and 7-9% faster than `harness`, for a 51 s clean build where
-# fat LTO takes 119 s and one unit 71 s. `panic = "abort"` is not an option:
-# the driver joins the compiler thread and reports a panic as exit 70.
+# fat LTO takes 119 s and one unit 71 s. Every profile keeps the default
+# `panic = "unwind"` (WP-911): the driver's internal-compiler-error handler
+# (spec/driver.md "Internal compiler errors") lets a panic unwind to `main`,
+# where it prints the banner and writes the crash reproducer; under
+# `panic = "abort"` the hook would print the banner but nothing could run
+# after it (no reproducer, no exit code of our choosing).
 [profile.release]
 debug = 1
 lto = "thin"
