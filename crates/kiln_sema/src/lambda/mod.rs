@@ -963,14 +963,19 @@ impl Sema<'_, '_> {
         }
         let at = self.ast.decls.get(conv).loc();
         // clang marks the call operator referenced: the invoker forwards
-        // to it.
-        let call_op = self
-            .ast
-            .decls
-            .get(conv)
-            .ctx()
-            .and_then(|c| self.ast.decls.record(c).and_then(|r| r.lambda))
-            .and_then(|id| self.ast.exprs.lambdas.get(id).call_op);
+        // to it. Of a generic lambda, that is the call operator's
+        // specialization for the invoker's arguments, not its pattern
+        // (clang `DefineImplicitLambdaToFunctionPointerConversion`).
+        let call_op = match self.ast.closure_thunk(target) {
+            Some(ClosureThunk::Invoker { call_op }) => Some(call_op),
+            _ => self
+                .ast
+                .decls
+                .get(conv)
+                .ctx()
+                .and_then(|c| self.ast.decls.record(c).and_then(|r| r.lambda))
+                .and_then(|id| self.ast.exprs.lambdas.get(id).call_op),
+        };
         if let Some(op) = call_op
             && op != target
         {

@@ -4288,13 +4288,13 @@ impl Sema<'_, '_> {
             }
             (Ok(Some(ty)), Ok(None)) => {
                 match conv::implicit_convert(self, t, ty, ConvCtx::Initialization) {
-                    Ok(x) => (x, f),
+                    Ok(x) => (self.unified_class_prvalue(x, ty), f),
                     Err(err) => return Err(self.conv_failed(&err, t, f, loc)),
                 }
             }
             (Ok(None), Ok(Some(ty))) => {
                 match conv::implicit_convert(self, f, ty, ConvCtx::Initialization) {
-                    Ok(x) => (t, x),
+                    Ok(x) => (t, self.unified_class_prvalue(x, ty)),
                     Err(err) => return Err(self.conv_failed(&err, t, f, loc)),
                 }
             }
@@ -4348,6 +4348,21 @@ impl Sema<'_, '_> {
         };
         self.end_set(set);
         res
+    }
+
+    /// [expr.cond]/4.3: an arm converted to a class type `ty` (not a
+    /// reference) is a prvalue of exactly `ty`, cv-qualifiers included: a
+    /// `V` prvalue unified with a `const V` lvalue becomes `const V`, so
+    /// the arms then have the same type and the result is a `const V`
+    /// prvalue (clang's `NoOp` cast in `TryClassUnification`).
+    fn unified_class_prvalue(&mut self, x: ExprId, ty: QualType) -> ExprId {
+        if self.is_err_expr(x)
+            || self.ast.types.is_reference(ty)
+            || self.ast.types.same_type(self.ety(x), ty)
+        {
+            return x;
+        }
+        conv::raw_cast(self, CastKind::NoOp, x, ty, ValueCategory::PRValue, None)
     }
 
     /// [expr.cond]/4 and /5: glvalues of the same type and value category
@@ -4450,7 +4465,16 @@ impl Sema<'_, '_> {
         if (same_info || self.ast.types.as_record(tt).is_some())
             && self.ast.types.same_unqualified(tt, ft)
         {
-            let ty = conv::strip_cv(self, tt);
+            // Class arms of the same type, cv-qualifiers included (after
+            // the /4 unification, `c ? V() : cref` has two `const V`
+            // arms), give that type: the result is a `const V` prvalue
+            // (clang `hasSameType(LTy, RTy)`; duckdb binds `auto &` to
+            // one, WP-799).
+            let ty = if !same_info && self.ast.types.same_type(tt, ft) {
+                tt
+            } else {
+                conv::strip_cv(self, tt)
+            };
             if same_info {
                 return self.builder().conditional(c2, t2, f2, ty, loc);
             }

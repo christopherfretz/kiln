@@ -171,7 +171,11 @@ of a static lambda) and `ClosureThunk::Invoker { call_op }`; the Oven
 (§7) and codegen (§8) synthesize their behaviour. For a generic lambda
 both are function templates sharing the call operator's template
 parameter list (§5.2). The conversion's definition is marked when it is
-odr-used (`define_lambda_conversion`).
+odr-used (`define_lambda_conversion`), and then the call operator the
+invoker forwards to is odr-used: of a generic lambda, the call
+operator's specialization for the conversion's template arguments, so
+it is instantiated even when its return type is written rather than
+deduced (WP-799).
 
 ### 3.3 Special members
 
