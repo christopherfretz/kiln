@@ -646,7 +646,7 @@ impl Sema<'_, '_> {
         });
         if let Some(loc) = loc {
             let msg = self
-                .diag(kiln_diag::DiagId::sema_attribute_unsupported_by_kiln, loc)
+                .diag(DiagId::sema_attribute_unsupported_by_kiln, loc)
                 .arg("aarch64_vector_pcs");
             self.emit(msg);
         }

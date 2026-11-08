@@ -121,7 +121,7 @@ pub static TABLE: &[Row] = &[
     r("Owner", GSL, C, LIFETIME),
     r("Pointer", GSL, C, LIFETIME),
     r("aarch64_sve_pcs", G | CL, A, "calling convention: changes the call ABI (WP-808)"),
-    r("aarch64_vector_pcs", G | CL, A, "calling convention: changes the call ABI (WP-808)"),
+    r("aarch64_vector_pcs", G | CL, A, "calling convention (WP-808); an AArch64 declaration is accepted"),
     r("acquire_capability", G | CL, C, TSA),
     r("acquire_handle", G | CL, C, ANALYSIS),
     r("acquire_shared_capability", G | CL, C, TSA),
@@ -247,7 +247,6 @@ pub static TABLE: &[Row] = &[
     r("matrix_type", G | CL, A, "defines a vector or matrix type"),
     r("maybe_undef", G | CL, B, HINT),
     r("mig_server_routine", G | CL, C, ANALYSIS),
-    r("mode", G | GS, A, "changes the declared type's width (WP-799)"),
     rt("model", [0, 0, 0, G | GS], A, "x86-64 code model of the variable's section"),
     r22("modular_format", G | CL, B, HINT),
     r("ms_abi", G | GS, A, "calling convention: changes the call ABI (WP-808)"),
@@ -553,8 +552,14 @@ mod tests {
         assert_eq!(s("no_sanitize_address", x, Some("clang"), 22), Support::Unknown);
         // Class A: rejected.
         assert_eq!(s("cleanup", g, None, 22), Support::Unsupported);
-        assert_eq!(s("mode", x, Some("gnu"), 19), Support::Unsupported);
+        assert!(matches!(s("mode", x, Some("gnu"), 19), Support::Implemented(_)));
         assert_eq!(s("swiftcall", x, Some("clang"), 22), Support::Unsupported);
+        // Declaration-only on AArch64 (AttrKind::AARCH64_VECTOR_PCS_DECL).
+        assert!(matches!(s("aarch64_vector_pcs", g, None, 19), Support::Implemented(_)));
+        assert_eq!(
+            attribute_support("aarch64_vector_pcs", g, None, 19, true, true),
+            Support::Unsupported
+        );
         // Target- and release-dependent rows.
         assert_eq!(s("interrupt", g, None, 22), Support::Unknown);
         assert_eq!(attribute_support("interrupt", g, None, 22, true, true), Support::Unsupported);
@@ -588,7 +593,6 @@ mod tests {
             "returns_twice",
             "no_builtin",
             "pass_object_size",
-            "mode",
             "vectorcall",
             "ms_abi",
             "preserve_most",
