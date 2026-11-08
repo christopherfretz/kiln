@@ -153,6 +153,24 @@ impl Cg<'_> {
                 }
                 ExprKind::ExprWithCleanups if exprs.cleanups_have_side_effects(x) => return true,
                 ExprKind::CXXTypeidExpr if exprs.typeid_potentially_evaluated(x) => return true,
+                // A volatile read is a side effect ([intro.execution]/7):
+                // `static int d = src;` with `extern volatile int src;`
+                // is emitted (LLVM's anchor idiom pulls in an archive
+                // member through it).
+                ExprKind::ImplicitCastExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::CXXFunctionalCastExpr
+                | ExprKind::CXXStaticCastExpr
+                | ExprKind::CXXConstCastExpr
+                | ExprKind::CXXReinterpretCastExpr
+                    if exprs.cast_kind(x) == CastKind::LValueToRValue
+                        && ast
+                            .types
+                            .effective_quals(exprs.get(exprs.operand(x)).ty())
+                            .is_volatile() =>
+                {
+                    return true;
+                }
                 ExprKind::UnaryExprOrTypeTraitExpr
                 | ExprKind::CXXNoexceptExpr
                 | ExprKind::LambdaExpr
