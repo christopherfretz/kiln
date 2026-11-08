@@ -1911,6 +1911,13 @@ impl Printer<'_> {
         if info.noreturn() {
             self.push(" __attribute__((noreturn))");
         }
+        // clang `printFunctionAfter`: `regparm(0)` is not printed.
+        if let Some(n) = info.regparm().filter(|&n| n != 0) {
+            self.push(&format!(" __attribute__((regparm ({n})))"));
+        }
+        if info.no_caller_saved_regs() {
+            self.push(" __attribute__((no_caller_saved_registers))");
+        }
         let mq = info.this_quals();
         if !mq.is_empty() {
             self.push(" ");

@@ -172,6 +172,9 @@ pub struct Parser<'a, 'sm> {
     /// trailing return types), for the enclosing declarator's
     /// [`Declarator::trailing_constraint`]; invalid when none.
     pub(crate) type_id_constraint: Loc,
+    /// The type-id about to be parsed is a named cast's (clang builds it
+    /// without `ActOnTypeName`: no ignored-`mode` warning).
+    pub(crate) named_cast_type_id: bool,
     /// The decl-specifier-seq of a parameter-declaration being parsed is
     /// not one where a dependent qualified name is implicitly a type
     /// ([temp.res.general]/4: a parameter of a function declared at
@@ -308,7 +311,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         let std = lex_opts.std;
         let cxx11 = std >= Std::Cxx11;
         let cxx26 = std >= Std::Cxx26;
-        let kw = Keywords::with_std(s.ast.symbols(), s.gnu, cxx11, cxx26, s.clang_compat);
+        let mut kw = Keywords::with_std(s.ast.symbols(), s.gnu, cxx11, cxx26, s.clang_compat);
+        if !lit_opts.char8() {
+            kw.remove(s.ast.symbols(), "char8_t");
+        }
         s.set_std(std);
         let sm = src.source_manager();
         let cur = src.get(0);
@@ -346,6 +352,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             addr_operand_at: None,
             catch_declarator: false,
             type_id_constraint: Loc::INVALID,
+            named_cast_type_id: false,
             param_typename: ParamTypename::Implicit,
             param_recovery: None,
             param_abort: false,

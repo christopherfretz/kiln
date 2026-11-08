@@ -136,6 +136,8 @@ struct Ev<'c> {
     tok: Token,
     params: EncodingParams,
     std: Std,
+    /// `u8` literals are `char8_t` ([`IfContext::char8`]).
+    char8: bool,
     /// The symbol of `defined`, once seen (symbols are equal exactly when
     /// their strings are, so later checks compare symbols).
     defined: Option<Symbol>,
@@ -163,9 +165,9 @@ fn op_punct(name: &str) -> Option<Punct> {
 
 impl<'c> Ev<'c> {
     fn new(cx: &'c mut dyn IfContext, params: EncodingParams) -> Self {
-        let std = cx.std();
+        let (std, char8) = (cx.std(), cx.char8());
         let tok = cx.next();
-        Ev { cx, tok, params, std, defined: None }
+        Ev { cx, tok, params, std, char8, defined: None }
     }
 
     fn bump(&mut self) {
@@ -420,7 +422,13 @@ impl<'c> Ev<'c> {
     fn char_lit(&mut self) -> R<Val> {
         let tok = self.tok;
         let spelling = self.cx.spelling(&tok);
-        let lit = decode_char(&spelling, LiteralOptions::new(self.std, self.params));
+        let lit = decode_char(
+            &spelling,
+            LiteralOptions {
+                char8: Some(self.char8),
+                ..LiteralOptions::new(self.std, self.params)
+            },
+        );
         if lit.ud_suffix.is_some() {
             self.cx.emit(Diag::new(DiagId::pp_invalid_udl, tok.span).arg(0));
         }

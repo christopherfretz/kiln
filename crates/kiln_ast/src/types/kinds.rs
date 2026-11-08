@@ -989,7 +989,9 @@ unary_transforms! {
 }
 
 /// Calling conventions (4 bits in `FuncInfo`). Only non-default
-/// conventions written through attributes produce anything but `Default`.
+/// conventions written through attributes produce anything but `Default`;
+/// conventions a target ignores (clang's "calling convention is not
+/// supported for this target" warning) stay `Default` (spec/types.md §5.4).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 #[repr(u8)]
 pub enum CallConv {
@@ -998,12 +1000,12 @@ pub enum CallConv {
     Default = 0,
     /// `cdecl` written explicitly.
     C,
-    /// x86 `stdcall`.
-    StdCall,
-    /// x86 `fastcall`.
-    FastCall,
-    /// x86 `thiscall`.
-    ThisCall,
+    /// x86-64 `intel_ocl_bicc`.
+    IntelOclBicc,
+    /// `swiftcall`.
+    Swift,
+    /// `swiftasynccall`.
+    SwiftAsync,
     /// `vectorcall`.
     VectorCall,
     /// `regcall`.
@@ -1034,9 +1036,9 @@ impl CallConv {
         const ALL: [CallConv; 16] = [
             CallConv::Default,
             CallConv::C,
-            CallConv::StdCall,
-            CallConv::FastCall,
-            CallConv::ThisCall,
+            CallConv::IntelOclBicc,
+            CallConv::Swift,
+            CallConv::SwiftAsync,
             CallConv::VectorCall,
             CallConv::RegCall,
             CallConv::PreserveMost,
@@ -1057,9 +1059,9 @@ impl CallConv {
     pub const fn attribute(self) -> Option<&'static str> {
         match self {
             CallConv::Default | CallConv::C => None,
-            CallConv::StdCall => Some("stdcall"),
-            CallConv::FastCall => Some("fastcall"),
-            CallConv::ThisCall => Some("thiscall"),
+            CallConv::IntelOclBicc => Some("intel_ocl_bicc"),
+            CallConv::Swift => Some("swiftcall"),
+            CallConv::SwiftAsync => Some("swiftasynccall"),
             CallConv::VectorCall => Some("vectorcall"),
             CallConv::RegCall => Some("regcall"),
             CallConv::PreserveMost => Some("preserve_most"),

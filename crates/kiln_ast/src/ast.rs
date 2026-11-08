@@ -698,6 +698,20 @@ impl Ast {
         })
     }
 
+    /// WP-809: some declaration of variable `d` is `selectany` (clang
+    /// `SelectAnyAttr`, inherited by its redeclarations).
+    pub fn is_selectany(&self, d: DeclId) -> bool {
+        self.any_redecl_has(d, crate::attr::AttrKind::SELECTANY)
+    }
+
+    /// WP-809: class `d` uses the Microsoft bit-field layout: some
+    /// declaration of it is `ms_struct` (written, or implied by `#pragma
+    /// ms_struct on`) and none is clang 22 `gcc_struct`.
+    pub fn is_ms_struct(&self, d: DeclId) -> bool {
+        self.any_redecl_has(d, crate::attr::AttrKind::MS_STRUCT)
+            && !self.any_redecl_has(d, crate::attr::AttrKind::GCC_STRUCT)
+    }
+
     /// Whether some declaration of `d` carries `attr`.
     fn any_redecl_has(&self, d: DeclId, attr: crate::attr::AttrKind) -> bool {
         self.redecls_of(d).any(|r| {

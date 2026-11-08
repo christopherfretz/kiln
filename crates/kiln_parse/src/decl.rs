@@ -493,7 +493,13 @@ impl Parser<'_, '_> {
                 return Vec::new();
             };
             let nl = self.bump().span.lo;
-            let NameClass::Namespace(ns) = self.s.classify_name(n, qual) else {
+            // [namespace.udir]/1: only namespace names are considered, so
+            // a function of the same name does not hide the namespace.
+            let ns = match self.s.classify_name(n, qual) {
+                NameClass::Namespace(ns) => Some(ns),
+                _ => self.s.lookup_namespace_name(qual, n).map(|d| self.s.ast.resolve_alias(d)),
+            };
+            let Some(ns) = ns else {
                 self.s.error(DiagId::parse_expected_namespace_name, nl);
                 self.skip_to_semi();
                 return Vec::new();
@@ -518,11 +524,12 @@ impl Parser<'_, '_> {
             }
             let tl = self.loc();
             self.typename_pack_index = None;
+            let own = attrs.len();
             let Some(ty) = self.parse_type_id_into(Some(&mut attrs), DeclSite::Alias) else {
                 self.skip_to_semi();
                 return Vec::new();
             };
-            let d = self.s.act_on_alias_decl(name, nl, ty, &attrs, tl);
+            let d = self.s.act_on_alias_decl(name, nl, ty, &attrs, own, tl);
             self.s.note_alias_decl_loc(d, loc);
             // clang reports a `typename T...[i]` type-id as unterminated
             // (spec/parse.md, typename-specifiers).
@@ -3528,6 +3535,7 @@ impl Parser<'_, '_> {
         out: Option<&mut Vec<AttrId>>,
         site: DeclSite,
     ) -> Option<QualType> {
+        let warn_mode = !std::mem::take(&mut self.named_cast_type_id);
         let mut ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
         let vec_out = out.is_some();
         if let Some(out) = out {
@@ -3557,7 +3565,7 @@ impl Parser<'_, '_> {
         self.parse_declarator(&mut d);
         let mut base = self.s.type_from_declspec(&ds);
         if !vec_out {
-            base = self.s.apply_type_id_vector_attrs(base, &ds);
+            base = self.s.apply_type_id_vector_attrs(base, &ds, warn_mode);
         }
         self.type_id_constraint = if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
             ds.constraint_loc

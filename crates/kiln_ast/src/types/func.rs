@@ -6,7 +6,9 @@ use super::kinds::{CallConv, Quals, RefQual};
 use crate::ids::{DeclId, ExprId, ProfileId, QualType};
 
 /// The packed per-function bits: `variadic | ref_qual(2) | this_quals(3) |
-/// cc(4) | noreturn | trailing_return` (spec/types.md §5.4). Built with the
+/// cc(4) | noreturn | trailing_return | no_caller_saved_registers |
+/// regparm(3)`
+/// (spec/types.md §5.4). Built with the
 /// `with_*` methods.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct FuncInfo(u16);
@@ -18,6 +20,8 @@ impl FuncInfo {
     const CC_SHIFT: u16 = 6;
     const NORETURN: u16 = 1 << 10;
     const TRAILING: u16 = 1 << 11;
+    const NO_CSR: u16 = 1 << 12;
+    const REGPARM_SHIFT: u16 = 13;
 
     /// No bits set: a non-variadic, non-member function with the default
     /// calling convention.
@@ -31,10 +35,10 @@ impl FuncInfo {
         self.0
     }
 
-    /// The info with raw bits `bits` (bits 12..=15 are dropped).
+    /// The info with raw bits `bits`.
     #[inline]
     pub const fn from_bits(bits: u16) -> FuncInfo {
-        FuncInfo(bits & 0x0fff)
+        FuncInfo(bits)
     }
 
     /// True for `(..., ...)`.
@@ -76,6 +80,41 @@ impl FuncInfo {
     #[inline]
     pub const fn trailing_return(self) -> bool {
         self.0 & Self::TRAILING != 0
+    }
+
+    /// True for an x86 `no_caller_saved_registers` function type (clang
+    /// `FunctionType::ExtInfo::getNoCallerSavedRegs`; WP-808).
+    #[inline]
+    pub const fn no_caller_saved_regs(self) -> bool {
+        self.0 & Self::NO_CSR != 0
+    }
+
+    /// With the `no_caller_saved_registers` bit set to `v`.
+    #[must_use]
+    pub const fn with_no_caller_saved_regs(self, v: bool) -> FuncInfo {
+        FuncInfo(if v { self.0 | Self::NO_CSR } else { self.0 & !Self::NO_CSR })
+    }
+
+    /// The GNU `regparm(N)` of an x86 function type (clang
+    /// `FunctionType::ExtInfo::getHasRegParm` / `getRegParm`; N is 0..=6,
+    /// WP-808): None when not written.
+    #[inline]
+    pub const fn regparm(self) -> Option<u8> {
+        match (self.0 >> Self::REGPARM_SHIFT) & 7 {
+            0 => None,
+            #[allow(clippy::cast_possible_truncation, reason = "masked to 3 bits")]
+            n => Some(n as u8 - 1),
+        }
+    }
+
+    /// With `regparm` set to `v` (N at most 6).
+    #[must_use]
+    pub const fn with_regparm(self, v: Option<u8>) -> FuncInfo {
+        let n = match v {
+            Some(n) if n < 7 => n as u16 + 1,
+            _ => 0,
+        };
+        FuncInfo((self.0 & !(7 << Self::REGPARM_SHIFT)) | (n << Self::REGPARM_SHIFT))
     }
 
     /// With the variadic bit set to `v`.
@@ -124,6 +163,8 @@ impl fmt::Debug for FuncInfo {
             .field("cc", &self.cc())
             .field("noreturn", &self.noreturn())
             .field("trailing_return", &self.trailing_return())
+            .field("no_caller_saved_regs", &self.no_caller_saved_regs())
+            .field("regparm", &self.regparm())
             .finish()
     }
 }

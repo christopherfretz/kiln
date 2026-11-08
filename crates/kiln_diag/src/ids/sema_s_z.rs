@@ -3,6 +3,7 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 sema_section_conflict = Error (2) "{0} causes a section type conflict with {1}";
+sema_selectany_non_extern_data = Error (0) "'selectany' can only be applied to data items with external linkage";
 sema_shift_gt_typewidth = Warning [ShiftCountOverflow] (0) "shift count >= width of type";
 sema_shift_negative = Warning [ShiftCountNegative] (0) "shift count is negative";
 sema_shufflevector_argument_too_large = Error (0) "index for __builtin_shufflevector must be less than the total number of vector elements";
@@ -180,7 +181,12 @@ sema_too_many_reflections = Fatal (1) "too many reflections in one translation u
 sema_trailing_requires_non_function = Error (0) "trailing requires clause can only be used when declaring a function";
 sema_trailing_requires_non_template = Error (0) "non-templated function cannot have a requires clause";
 sema_trailing_return_without_auto = Error (1) "function with trailing return type must specify return type 'auto', not {0}";
+sema_transparent_union_field_mismatch = Warning [IgnoredAttributes] (3) "{0:alignment|size} of field '{1}' ({2} bits) does not match the {0:alignment|size} of the first field in transparent union; transparent_union attribute ignored";
+sema_transparent_union_floating = Warning [IgnoredAttributes] (2) "first field of a transparent union cannot have {0:floating point|vector} type {1}; transparent_union attribute ignored";
+sema_transparent_union_not_definition = Warning [IgnoredAttributes] (0) "transparent_union attribute can only be applied to a union definition; attribute ignored";
+sema_transparent_union_zero_fields = Warning [IgnoredAttributes] (0) "transparent union definition must contain at least one field; transparent_union attribute ignored";
 sema_try_disabled = Error (0) "cannot use 'try' with exceptions disabled";
+sema_type_attribute_deprecated_on_decl = Warning [DeprecatedAttributes] (1) "applying attribute '{0}' to a declaration is deprecated; apply it to the type instead";
 sema_type_attribute_wrong_type = Warning [IgnoredAttributes] (2) "{0} only applies to function types; type here is {1}";
 sema_type_defined_in_for_range = Error (0) "types may not be defined in a for range declaration";
 sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
@@ -277,6 +283,8 @@ sema_va_start_not_last_named_param = Warning [Varargs] (0) "second argument to '
 sema_va_start_not_last_named_param_19 = Warning [Varargs] (0) "second argument to 'va_start' is not the last named parameter";
 sema_va_start_outside_function = Error (0) "'va_start' cannot be used outside a function";
 sema_va_start_type_is_undefined = Warning [Varargs] (1) "passing {0:an object that undergoes default argument promotion|an object of reference type|a parameter declared with the 'register' keyword} to 'va_start' has undefined behavior";
+// clang `err_va_start_used_in_wrong_abi_function` on a non-Windows target (WP-808)
+sema_va_start_wrong_abi = Error (0) "'va_start' used in Win64 ABI function";
 sema_var_instantiates_to_function = Error (2) "{0:variable|static data member} instantiated with function type {1}";
 sema_var_partial_spec_redecl_scope = Error (2) "variable template partial specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_var_spec_not_in_enclosing_ns = Error (2) "variable template specialization of '{0}' not in a namespace enclosing '{1}'";

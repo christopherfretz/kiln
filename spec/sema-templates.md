@@ -2897,7 +2897,14 @@ recomputed exactly as for non-template code (clang's
   - a list-initializing `CXXConstructExpr` operand is formed again
     through `init_from_list_at` of the substituted type
     ([dcl.init.list]/3.7). A single-argument non-list construct is its
-    substituted argument;
+    substituted argument. The list of an initializer-list constructor's
+    construct (`ConstructInfo::std_init_list`, `construct_list`) is the
+    braced list its one `std::initializer_list` argument was built from,
+    not a list holding that argument (clang `TransformInitializer`
+    unwraps `isStdInitListInitialization`). Rebuilt as `{{...}}`, a
+    one-element list would be chosen by [over.match.list]/1.1, so
+    `V<P> v = {{"a", "b"}, {"c", "d"}}` stays two elements (WP-801;
+    `dcl.init.list/initializer-list-ctor-in-template-keeps-list-run.cpp`);
   - a compound literal `(T){...}` (C99 extension) is rebuilt from its
     peeled initializer as a list, and `act_on_compound_literal` runs
     again;
@@ -7235,7 +7242,14 @@ explicit specialization errors remain. The blockers are:
   templates ([over.match.oper]/3.4, `add_rewritten_template`,
   `more_specialized_operator`), `&f` deduction notes (`address.rs`), and
   dependent member template-ids (`act_on_template_member`,
-  `act_on_member_template_args`).
+  `act_on_member_template_args`). A member template-id with dependent
+  arguments is a dependent member access again at instantiation. It keeps
+  the access's nested-name-specifier, so `this->Base::g<T>()` looks `g`
+  up in `Base` even when the derived class declares a non-template `g`
+  (WP-801,
+  `tests/conformance/temp.names/p3-qualified-member-template-id-dependent-args-run.cpp`).
+  Gap: `(*this).Base::g<T>()` does not parse `<` as a template argument
+  list, because the dereferenced `this` is a dependent type.
 - **`std::initializer_list`** ([dcl.init.list]/5): `CXXStdInitializerListExpr`
   over a `MaterializeTemporaryExpr 'const E[N]'`; `init.rs`
   `std_initializer_list_init`, `init_list_ctor_init` ([over.match.list]
@@ -7838,6 +7852,11 @@ declarator scopes.**
   qualified set, resolved at instantiation against the target type
   ([over.over]; WP-715,
   `expr.unary.op/p3-qualified-overload-set-dependent-base-run.cpp`).
+  A member function template specialization the pattern resolved,
+  `&C::f<A>` or `&Self::f<A>`, keeps its instantiated qualifier when
+  `respecialized_member_template` names it again, so it stays a pointer
+  to member, not `&this->f<A>` (WP-801;
+  `expr.unary.op/p3-member-template-specialization-pointer-to-member-in-template-run.cpp`).
 - *Dependent `noexcept(expr)` in a type*: the canonical
   `ExcSpec::DependentNoexcept(profile)` of a function type (as written
   under a pointer, member pointer, reference or GNU `noreturn`) is
@@ -7876,6 +7895,12 @@ declarator scopes.**
   which reports them incompatible
   (tests/conformance/expr.cond/p6-class-arms-builtin-overload-run.cpp,
   `-errors.cpp`).
+- *[expr.cond]/6 cv-only differing class arms*: arms of one class type
+  that differ only in cv-qualification (a `const B` lvalue and a `B`
+  prvalue) do not reach the /6 step: /4.3.1 unified them, and the result
+  stays a class prvalue even when `B` has `operator bool` (WP-801,
+  tests/conformance/expr.cond/p4-cv-differing-class-arms-not-builtin-run.cpp,
+  clang's `Parser.cpp` `c ? Diag(..) << x : Diag(..)`).
 - *[expr.cond]/7 class prvalue result*: when the arms are a class type
   (after /4) and not glvalues of the same category, each glvalue arm
   copy-initializes the prvalue result (clang `PerformCopyInitialization`

@@ -384,6 +384,8 @@ impl Cg<'_> {
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
         let sig = self.call_sig_this(fty, false, &arg_tys, Some(rd));
-        self.call_with(&sig, callee, None, Some(this_v), &args, dest, &[])
+        let vals = self.emit_call_args(&sig, &args)?;
+        self.arm_musttail(e);
+        self.call_vals(&sig, callee, None, Some(this_v), &vals, &args, dest, &[])
     }
 }

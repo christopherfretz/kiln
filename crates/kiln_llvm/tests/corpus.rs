@@ -842,9 +842,15 @@ fn calling_conventions() {
         (CallConv::SWIFT, "declare swiftcc void @cc16()\n"),
         (CallConv::CXX_FAST_TLS, "declare cxx_fast_tlscc void @cc17()\n"),
         (CallConv::TAIL, "declare tailcc void @cc18()\n"),
+        (CallConv::SWIFT_TAIL, "declare swifttailcc void @cc20()\n"),
+        (CallConv::PRESERVE_NONE, "declare preserve_nonecc void @cc21()\n"),
+        (CallConv::INTEL_OCL_BI, "declare intel_ocl_bicc void @cc77()\n"),
         (CallConv::X86_64_SYSV, "declare x86_64_sysvcc void @cc78()\n"),
         (CallConv::WIN64, "declare win64cc void @cc79()\n"),
+        (CallConv::X86_VECTORCALL, "declare x86_vectorcallcc void @cc80()\n"),
+        (CallConv::X86_REGCALL, "declare x86_regcallcc void @cc92()\n"),
         (CallConv::AARCH64_VECTOR_PCS, "declare aarch64_vector_pcs void @cc97()\n"),
+        (CallConv::AARCH64_SVE_VECTOR_PCS, "declare aarch64_sve_vector_pcs void @cc98()\n"),
         (CallConv(200), "declare cc200 void @cc200()\n"),
     ];
     for (cc, _) in ccs {

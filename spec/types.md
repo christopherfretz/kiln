@@ -444,6 +444,12 @@ struct FuncProto {      // 16 bytes
     n_params: u16,
     info: FuncInfo,     // u16: variadic | ref_qual(2: none,&,&&) | this_quals(3: cvr)
                         //      | cc(4: default, preserve_most, vectorcall, ...) | noreturn | trailing_return
+                        //      | no_caller_saved_registers (x86-64 only; clang ExtInfo bit)
+                        // cc is canonical: a convention the target ignores (or that is the
+                        // target default, e.g. sysv_abi/cdecl on Linux) is stored as default,
+                        // so `void(*)()` and `void(*)() __attribute__((sysv_abi))` are one type
+                        // (WP-808, spec/landed/codegen/WP-808.md).
+                        //      | regparm(3: 0 = none, else N+1; x86-64 only)
     exc: ExcSpec,       // u32: 3-bit tag + 29-bit operand
 }
 enum ExcSpec /* tag */ {
@@ -459,6 +465,22 @@ enum ExcSpec /* tag */ {
                              // (specializations, [temp.inst]/14), told apart by the decl
 }
 ```
+- Calling conventions (WP-808, clang `SemaDeclAttr` / `SemaType`): a
+  convention attribute applies to the function type, in declarator
+  position or on the declaration (the declaration form rewrites the
+  declared type). Overload resolution ignores the convention
+  (`IsOverload`), so a redeclaration differing only in it is the same
+  function: a different explicit convention is an error naming the first
+  declaration's convention with the note at the first declaration; an
+  implicit (default) later declaration inherits it. `regparm(N)` and
+  `no_caller_saved_registers` merge the same way. A virtual override
+  with a different convention is an error. Unsupported-on-target
+  conventions warn (`-Wignored-attributes`) and are dropped; `swiftcall`,
+  `swiftasynccall` and x86 `interrupt` are hard errors (lowering not
+  implemented). Mangling follows clang: only `ms_abi` is mangled
+  (`U6ms_abi`); `regcall` prefixes the name with `__regcall3__`.
+  `va_start` in an `ms_abi` function on a SysV target is an error
+  (clang `checkVAStartABI`; `__builtin_ms_va_list` is not provided).
 - Canonicalization: params and return canonical; `trailing_return` cleared;
   `exc` canonical: from C++17 `Nothrow`/`None`/`DependentNoexcept`/
   `Deferred`; before C++17 the exception specification is not part of the

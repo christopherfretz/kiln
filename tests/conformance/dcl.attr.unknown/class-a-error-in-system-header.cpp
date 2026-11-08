@@ -3,14 +3,15 @@
 // an error, also in a system header (the lines after the line marker
 // with flag 3, [cpp.line] GNU extension), where warnings are suppressed:
 // kiln never accepts a construct whose meaning it would change
-// (spec/sema.md §4.5). clang implements all three. WP-805.
+// (spec/sema.md §4.5). clang implements all three. WP-805; WP-809
+// implemented the `selectany` and `ms_struct` this test first used.
 //@ skip(clang): kiln-only error for attributes kiln does not implement yet
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 12:30 error "'weak_import' attribute is not supported by kiln yet"
-//@ diag: 13:23 error "'selectany' attribute is not supported by kiln yet"
-//@ diag: 14:23 error "'ms_struct' attribute is not supported by kiln yet"
-# 12 "tests/conformance/dcl.attr.unknown/class-a-error-in-system-header.cpp" 3
+//@ diag: 13:30 error "'weak_import' attribute is not supported by kiln yet"
+//@ diag: 14:20 error "'address_space' attribute is not supported by kiln yet"
+//@ diag: 15:35 error "'matrix_type' attribute is not supported by kiln yet"
+# 13 "tests/conformance/dcl.attr.unknown/class-a-error-in-system-header.cpp" 3
 extern int wi __attribute__((weak_import));
-int sa __attribute__((selectany)) = 1;
-struct __attribute__((ms_struct)) S { char c : 4; int i : 4; };
+int __attribute__((address_space(1))) *as;
+typedef float m2x2 __attribute__((matrix_type(2, 2)));

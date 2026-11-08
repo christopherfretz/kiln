@@ -131,6 +131,8 @@ sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match
 sema_friend_invalid_in_context = Error (0) "'friend' used outside of class";
 sema_friend_not_class_or_fn = Error (0) "friends can only be classes or functions";
 sema_func_returning_array_function = Error (2) "function cannot return {0:array|function} type {1}";
+// clang `err_function_attribute_mismatch` (WP-808)
+sema_function_attribute_mismatch = Error (1) "function declared with '{0}' attribute was previously declared without the '{0}' attribute";
 sema_function_partial_spec = Error (0) "function template partial specialization is not allowed";
 sema_function_spec_not_in_enclosing_ns = Error (2) "function template specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_gcc_requires_variadic = Warning [GccCompat] (1) "GCC requires a function with the {0} attribute to be variadic";
@@ -232,6 +234,7 @@ sema_invalid_float_suffix = Error (1) "invalid suffix '{0}' on floating constant
 sema_invalid_member_in_static = Error (1) "invalid use of member '{0}' in static member function";
 sema_invalid_nonstatic_member_use = Error (1) "invalid use of non-static data member '{0}'";
 sema_invalid_operands = Error (2) "invalid operands to binary expression ({0} and {1})";
+sema_invalid_pcs = Error (0) "invalid PCS type";
 sema_invalid_storage_class_in_func_decl = Error (0) "invalid storage class specifier in function declarator";
 sema_invalid_unary_operand = Error (1) "invalid argument type {0} to unary expression";
 sema_invalid_use_of_function_type = Error (0) "a function type is not allowed here";
@@ -323,6 +326,16 @@ sema_mptr_to_void = Error (1) "'{0}' declared as a member pointer to void";
 sema_multiple_default_labels = Error (0) "multiple default labels in one switch";
 sema_multiple_final_overriders = Error (2) "virtual function '{0}' has more than one final overrider in {1}";
 sema_multiversion_not_supported = Error (1) "function multiversioning with '{0}' is not supported yet";
+sema_musttail_callconv_mismatch = Error (1) "cannot perform a tail call to function{0} because it uses an incompatible calling convention";
+sema_musttail_member_mismatch = Error (3) "{0:non-member|static member|non-static member|pointer-to-member} function cannot perform a tail call to {1:non-member|static member|non-static member|pointer-to-member} function{2}";
+sema_musttail_mismatch = Error (1) "cannot perform a tail call to function{0} because its signature is incompatible with the calling function";
+// clang `[[clang::musttail]]` (WP-809)
+sema_musttail_needs_call = Error (1) "'{0}' attribute requires that the return value is the result of a function call";
+sema_musttail_needs_trivial_args = Error (0) "tail call requires that the return value, all parameters, and any temporaries created by the expression are trivially destructible";
+sema_musttail_no_return = Error (1) "'{0}' attribute may not be used with no-return-attribute functions";
+sema_musttail_no_variadic = Error (1) "'{0}' attribute may not be used with variadic functions";
+sema_musttail_scope = Error (0) "cannot perform a tail call from this return statement";
+sema_musttail_structors_forbidden = Error (2) "cannot perform a tail call {0:from|to} a {1:constructor|destructor}";
 sema_mutable_const = Error (0) "'mutable' and 'const' cannot be mixed";
 sema_mutable_function = Error (0) "'mutable' cannot be applied to functions";
 // [dcl.stc]/9 (WP-327)

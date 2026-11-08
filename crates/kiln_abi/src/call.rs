@@ -9,7 +9,7 @@
 
 use kiln_ast::Ast;
 use kiln_ast::ids::{DeclId, QualType};
-use kiln_ast::types::{BuiltinType, TypeView, VectorKind};
+use kiln_ast::types::{BuiltinType, CallConv, TypeView, VectorKind};
 
 use crate::irtype::{IrType, IrTypes};
 use crate::layout::props;
@@ -76,18 +76,26 @@ pub struct CallInfo {
 }
 
 /// Classify a call returning `ret` with argument types `args`, of which
-/// the first `n_required` are named parameters. `strict_return` is
-/// clang's `HasStrictReturn` (false for `extern "C"` callees).
+/// the first `n_required` are named parameters, to a function type of
+/// calling convention `cc` (`variadic`: the prototype has an ellipsis).
+/// `strict_return` is clang's `HasStrictReturn` (false for `extern "C"`
+/// callees).
 pub fn classify_call(
     t: &mut IrTypes<'_>,
     ret: QualType,
     args: &[QualType],
     n_required: usize,
     strict_return: bool,
+    cc: CallConv,
+    variadic: bool,
 ) -> CallInfo {
+    let _ = n_required;
     let mut info = match t.target().arch() {
-        Arch::AArch64 => aarch64(t, ret, args),
-        Arch::X86_64 => x86_64(t, ret, args, n_required),
+        Arch::AArch64 => aarch64(t, ret, args, cc == CallConv::Win64 && variadic),
+        // clang `X86_64ABIInfo::computeInfo` delegates `ms_abi` to
+        // `WinX86_64ABIInfo` (spec/abi.md §5.3).
+        Arch::X86_64 if cc == CallConv::Win64 => win64(t, ret, args),
+        Arch::X86_64 => x86_64(t, ret, args, cc == CallConv::RegCall),
     };
     let ast = t.ast();
     let ret_void = matches!(ast.types.canonical_view(ret), TypeView::Builtin(BuiltinType::Void));
@@ -125,7 +133,7 @@ pub struct VaArgInfo {
 /// Classify `q` as an unnamed (variadic) argument read by `va_arg`.
 pub fn classify_va_arg(t: &mut IrTypes<'_>, q: QualType) -> VaArgInfo {
     match t.target().arch() {
-        Arch::AArch64 => VaArgInfo { kind: aarch64_arg(t, q), needed_int: 0, needed_sse: 0 },
+        Arch::AArch64 => VaArgInfo { kind: aarch64_arg(t, q, false), needed_int: 0, needed_sse: 0 },
         Arch::X86_64 => {
             let (kind, needed_int, needed_sse) = x86_arg(t, q, 0);
             VaArgInfo { kind, needed_int, needed_sse }
@@ -290,9 +298,11 @@ fn ir_bits(t: &mut IrTypes<'_>, ty: &IrType) -> u64 {
 
 // ---------------------------------------------------------------- AAPCS64
 
-fn aarch64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType]) -> CallInfo {
+/// AAPCS64; `win_variadic` is clang's `IsWinVariadic` (an `ms_abi`
+/// variadic prototype), under which no argument is an HFA/HVA.
+fn aarch64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType], win_variadic: bool) -> CallInfo {
     let r = aarch64_ret(t, ret);
-    let a = args.iter().map(|q| arg(aarch64_arg(t, *q))).collect();
+    let a = args.iter().map(|q| arg(aarch64_arg(t, *q, win_variadic))).collect();
     CallInfo { ret: arg(r), args: a, max_vector_width: 0 }
 }
 
@@ -337,7 +347,24 @@ fn aarch64_sve_fixed(t: &mut IrTypes<'_>, q: QualType) -> Option<ArgKind> {
     }
 }
 
-fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
+/// clang `ABIInfo::useFirstFieldIfTransparentUnion`: an argument of a
+/// union that kept `transparent_union` (WP-809) is classified as its
+/// first field.
+fn first_field_if_transparent(ast: &Ast, q: QualType) -> QualType {
+    let TypeView::Record(d) = ast.types.canonical_view(q) else { return q };
+    let def = ast.definition(d).unwrap_or(d);
+    if !props::has_attr(ast, def, kiln_ast::attr::AttrKind::TRANSPARENT_UNION) {
+        return q;
+    }
+    ast.decls
+        .members(def)
+        .find(|&m| ast.decls.get(m).kind() == kiln_ast::decl::DeclKind::Field)
+        .and_then(|f| ast.decls.get(f).ty())
+        .unwrap_or(q)
+}
+
+fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType, win_variadic: bool) -> ArgKind {
+    let q = first_field_if_transparent(t.ast(), q);
     if let Some(k) = aarch64_sve_fixed(t, q) {
         return k;
     }
@@ -373,7 +400,7 @@ fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
             return ArgKind::Ignore;
         }
     }
-    if let Some((base, members)) = homogeneous(t, q) {
+    if let Some((base, members)) = homogeneous(t, q).filter(|_| !win_variadic) {
         // AAPCS64 C.4: the stack slot of an HFA/HVA is 16-byte aligned
         // only for a naturally 16-byte-aligned type (clang
         // `getTypeUnadjustedAlignInChars`; an `alignas` on the class
@@ -969,16 +996,45 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
     (lo, hi)
 }
 
-fn x86_64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType], _n_required: usize) -> CallInfo {
-    let mut free_int = 6u32;
-    let mut free_sse = 8u32;
-    let r = x86_ret(t, ret);
+/// `SysV` x86-64; `regcall` is clang's `IsRegCall` (Intel `regcall`:
+/// 11 integer and 16 SSE registers, classes classified by
+/// [`regcall_struct`]).
+fn x86_64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType], regcall: bool) -> CallInfo {
+    let mut free_int = if regcall { 11u32 } else { 6 };
+    let mut free_sse = if regcall { 16u32 } else { 8 };
+    let natural_indirect = |t: &mut IrTypes<'_>, q| ArgKind::Indirect {
+        byval: true,
+        align: t.layouter().type_layout(q).align,
+    };
+    let r = if regcall && !is_indirect_record(t.ast(), ret) && is_struct_or_class(t, ret) {
+        match regcall_struct(t, ret, false) {
+            Some((k, ni, ns)) if free_int >= ni && free_sse >= ns => {
+                free_int -= ni;
+                free_sse -= ns;
+                k
+            }
+            _ => natural_indirect(t, ret),
+        }
+    } else if regcall
+        && let TypeView::Complex(e) = view(t, ret)
+        && matches!(view(t, e), TypeView::Builtin(BuiltinType::LongDouble))
+    {
+        // clang: "Complex Long Double Type is passed in Memory when
+        // Regcall calling convention is used."
+        natural_indirect(t, ret)
+    } else {
+        x86_ret(t, ret)
+    };
     if matches!(r, ArgKind::Indirect { .. }) {
         free_int -= 1;
     }
     let mut out = Vec::with_capacity(args.len());
     for &q in args {
-        let (mut k, ni, ns) = x86_arg(t, q, free_int);
+        let (mut k, ni, ns) = if regcall && is_struct_or_class(t, q) {
+            regcall_struct(t, q, true).unwrap_or_else(|| (natural_indirect(t, q), 0, 0))
+        } else {
+            x86_arg(t, q, free_int)
+        };
         if free_int >= ni && free_sse >= ns {
             free_int -= ni;
             free_sse -= ns;
@@ -990,7 +1046,137 @@ fn x86_64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType], _n_required: us
     CallInfo { ret: arg(r), args: out, max_vector_width: 0 }
 }
 
+/// clang `isStructureOrClassType`.
+fn is_struct_or_class(t: &IrTypes<'_>, q: QualType) -> bool {
+    let TypeView::Record(d) = view(t, q) else { return false };
+    let ast = t.ast();
+    let def = ast.definition(d).unwrap_or(d);
+    ast.decls.record(def).is_some_and(|r| r.tag != kiln_ast::decl::TagKind::Union)
+}
+
+/// clang `X86_64ABIInfo::classifyRegCallStructType`: the class `q`
+/// passed (`arg`) or returned directly as its natural struct, one IR
+/// argument per element, with the integer and SSE registers its fields
+/// need; None (indirect at its natural alignment) for a class with a
+/// flexible array member, a dynamic class, or one with a base or field
+/// that is indirect.
+fn regcall_struct(t: &mut IrTypes<'_>, q: QualType, arg: bool) -> Option<(ArgKind, u32, u32)> {
+    let (mut ni, mut ns) = (0, 0);
+    if !regcall_struct_impl(t, q, &mut ni, &mut ns) {
+        return None;
+    }
+    let natural = t.convert(q);
+    let kind = match (&natural, arg) {
+        // The class's own named struct, flattened (clang leaves the
+        // coerce type null, so the prologue's GEPs name `%struct.S`).
+        (IrType::Record(_), true) => {
+            ArgKind::Direct { coerce: natural.clone(), offset: 0, flatten: true, align: None }
+        }
+        _ => direct(natural),
+    };
+    Some((kind, ni, ns))
+}
+
+/// clang `classifyRegCallStructTypeImpl`: false when `q` is indirect,
+/// else the registers its bases and fields need added to `ni`/`ns`.
+fn regcall_struct_impl(t: &mut IrTypes<'_>, q: QualType, ni: &mut u32, ns: &mut u32) -> bool {
+    use kiln_ast::decl::DefinitionBits as B;
+    let ast = t.ast();
+    let TypeView::Record(d) = view(t, q) else { return false };
+    let Some(def) = ast.definition(d) else { return false };
+    let Some(r) = ast.decls.record(def) else { return false };
+    if r.defn.contains(B::HAS_FLEXIBLE_ARRAY_MEMBER) || r.defn.is_dynamic() {
+        return false;
+    }
+    let bases: Vec<QualType> = ast.decls.bases(def, &ast.lists).map(|b| b.ty).collect();
+    for b in bases {
+        if !regcall_struct_impl(t, b, ni, ns) {
+            return false;
+        }
+    }
+    for f in props::fields(ast, def) {
+        if is_struct_or_class(t, f.ty) {
+            if !regcall_struct_impl(t, f.ty, ni, ns) {
+                return false;
+            }
+            continue;
+        }
+        let (k, li, ls) = x86_arg(t, f.ty, u32::MAX);
+        if matches!(k, ArgKind::Indirect { .. }) {
+            return false;
+        }
+        *ni += li;
+        *ns += ls;
+    }
+    true
+}
+
+/// clang `WinX86_64ABIInfo::computeInfo` (no `vectorcall`/`regcall`),
+/// as `ms_abi` forces on an x86-64 `SysV` target.
+fn win64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType]) -> CallInfo {
+    let r = if is_indirect_record(t.ast(), ret) {
+        ArgKind::Indirect { byval: false, align: t.layouter().type_layout(ret).align }
+    } else {
+        win64_classify(t, ret, true)
+    };
+    let a = args.iter().map(|&q| arg(win64_classify(t, q, false))).collect();
+    CallInfo { ret: arg(r), args: a, max_vector_width: 0 }
+}
+
+/// clang `WinX86_64ABIInfo::classify`: "Any argument that doesn't fit in
+/// 8 bytes, or is not 1, 2, 4, or 8 bytes, must be passed by reference."
+fn win64_classify(t: &mut IrTypes<'_>, q: QualType, is_ret: bool) -> ArgKind {
+    if matches!(view(t, q), TypeView::Builtin(BuiltinType::Void)) {
+        return ArgKind::Ignore;
+    }
+    let q = strip_enum(t, q);
+    let width = type_bits(t, q);
+    let align = t.layouter().type_layout(q).align;
+    let by_ref = ArgKind::Indirect { byval: false, align };
+    let rec = match view(t, q) {
+        TypeView::Record(d) => Some(d),
+        _ => None,
+    };
+    if let Some(d) = rec {
+        use kiln_ast::decl::DefinitionBits as B;
+        if !is_ret && is_indirect_record(t.ast(), q) {
+            return by_ref;
+        }
+        let ast = t.ast();
+        let def = ast.definition(d).unwrap_or(d);
+        if ast.decls.record(def).is_some_and(|r| r.defn.contains(B::HAS_FLEXIBLE_ARRAY_MEMBER)) {
+            return by_ref;
+        }
+    }
+    let member_ptr = matches!(view(t, q), TypeView::MemberPointer { .. });
+    if member_ptr {
+        let ir = t.convert(q);
+        if matches!(ir, IrType::Ptr | IrType::Int(_)) {
+            return direct(ir);
+        }
+    }
+    if rec.is_some() || member_ptr || matches!(view(t, q), TypeView::Complex(_)) {
+        if width > 64 || !width.is_power_of_two() {
+            return by_ref;
+        }
+        return direct(IrType::Int(u32::try_from(width).unwrap_or(64)));
+    }
+    match view(t, q) {
+        TypeView::Builtin(BuiltinType::Bool) => extend(t, q),
+        TypeView::Builtin(BuiltinType::Int128 | BuiltinType::UInt128) => {
+            if is_ret {
+                direct(IrType::Vector(Box::new(IrType::Int(64)), 2))
+            } else {
+                by_ref
+            }
+        }
+        TypeView::BitInt { .. } if width > 64 => by_ref,
+        _ => direct(t.convert(q)),
+    }
+}
+
 fn x86_indirect(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> ArgKind {
+    let q = first_field_if_transparent(t.ast(), q);
     if is_indirect_record(t.ast(), q) {
         return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
     }
@@ -1015,6 +1201,7 @@ fn x86_indirect(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> ArgKind {
 
 fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u32) {
     use Class::{ComplexX87, Integer, Memory, NoClass, Sse, SseUp, X87, X87Up};
+    let q = first_field_if_transparent(t.ast(), q);
     let (lo, hi) = classify(t, q, 0);
     let mut ni = 0;
     let mut ns = 0;
