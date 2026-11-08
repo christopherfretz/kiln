@@ -50,13 +50,15 @@ J2="$TMP/jam2"; mkdir -p "$J2/libs/dm2/test"; cp -r "$JB/cm" "$J2/cm"
 printf 'cmake_minimum_required(VERSION 3.20)\nproject(Boost NONE)\nset(BUILD_TESTING ON)\nlist(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cm")\nadd_subdirectory(libs/dm2)\n' > "$J2/CMakeLists.txt"
 printf 'add_library(boost_dm2 INTERFACE)\nadd_library(Boost::dm2 ALIAS boost_dm2)\nadd_subdirectory(test)\n' > "$J2/libs/dm2/CMakeLists.txt"
 : > "$J2/libs/dm2/test/CMakeLists.txt"
-printf '  [ run a.cpp : : : [ requires x y ] <define>T=1 <toolset>intel:<debug-symbols>off <target-os>linux:<define>L=1 : a_1 ]\n  [ run a.cpp : : : $(SEL) : a_select ]\n  [ run b.cpp ]\n  [ run c.cpp ]\n  [ run d.cpp ]\n  [ run lanczos.cpp ]\n' > "$J2/libs/dm2/test/Jamfile"
-for f in a b c d lanczos; do : > "$J2/libs/dm2/test/$f.cpp"; done
+printf '  [ run a.cpp : : : [ requires x y ] <define>T=1 <toolset>intel:<debug-symbols>off <target-os>linux:<define>L=1 : a_1 ]\n  [ run a.cpp : : : $(SEL) : a_select ]\n  [ run b.cpp ]\n  [ run c.cpp ]\n  [ run d.cpp ]\n  [ run lanczos.cpp ]\n  [ run e.cpp inst//inst : : : : e_i ]\n' > "$J2/libs/dm2/test/Jamfile"
+mkdir -p "$J2/libs/dm2/test/inst"; for f in a b c d lanczos e inst/x; do : > "$J2/libs/dm2/test/$f.cpp"; done
 j2() { cmake -S "$J2" -B "$J2/b$1" -G "Unix Makefiles" -DCMAKE_PROJECT_Boost_INCLUDE="$HERE/shims/boost-jamfile-tests.cmake" \
   -DKILN_BOOST_JAMFILE_LIBRARIES=dm2 "${@:2}" 2>&1 | sed -n 's/^-- T //p'; }
 j2 1 -DKILN_BOOST_JAMFILE_FORCE_dm2=ON '-DKILN_BOOST_JAMFILE_SKIP_dm2=_select$' '-DKILN_BOOST_JAMFILE_SUBSET_dm2=3|lanczos' > "$J2/got.txt"
 printf '%s\n' 'run dm2-a_1 [a.cpp] [Boost::dm2] [T=1;L=1]' 'run dm2-d [d.cpp] [Boost::dm2] []' 'run dm2-lanczos [lanczos.cpp] [Boost::dm2] []' > "$J2/want.txt"
 check "boost shim: nested requires, conditionals, skip, subset, force" "diff -u '$J2/want.txt' '$J2/got.txt'"
+check "boost shim: a Jam library target links a static library from its glob" \
+  "[ \"\$(j2 3 -DKILN_BOOST_JAMFILE_FORCE_dm2=ON '-DKILN_BOOST_JAMFILE_SKIP_dm2=^[^e]' '-DKILN_BOOST_JAMFILE_LIBS_dm2=inst//inst=inst/*.cpp')\" = 'run dm2-e_i [e.cpp] [kiln_dm2_inst__inst;Boost::dm2] []' ]"
 check "boost shim: a library with CMake tests is skipped without FORCE" "[ -z \"\$(j2 2)\" ]"
 
 # A deterministic subset of a `tests` target's dependencies (WP-812).

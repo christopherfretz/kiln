@@ -62,6 +62,12 @@
 #   - KILN_BOOST_JAMFILE_FORCE_<lib> ON registers the b2 tests even when the
 #     library's CMakeLists.txt added test/ (Boost.Math's CMake tests are its
 #     header compile tests only; WP-812).
+#   - KILN_BOOST_JAMFILE_LIBS_<lib>: items `<jam target>=<glob relative to
+#     test/>`. A statement whose sources field names <jam target> (Boost.
+#     Math's `test_instances//test_instances`, the explicit instantiations
+#     its tests link) links a static library built from the glob, with the
+#     tests' includes and defines; it is built only when a registered test
+#     needs it (WP-812).
 # Test names are `<lib>-<subdir>_<name>`; a second statement with the same
 # name (one source built twice with other requirements) is skipped. Every
 # test sees every library's include/ directory, like b2's unified boost/
@@ -97,8 +103,22 @@ function(_kiln_boost_jam_add lib type src name defs)
     return()
   endif()
   set_property(DIRECTORY "${CMAKE_SOURCE_DIR}" APPEND PROPERTY _KILN_BOOST_JAM_SEEN "${lib}-${name}")
+  set(jamlibs "")
+  foreach(spec IN LISTS _kiln_jam_extra)
+    string(REGEX REPLACE "=.*$" "" word "${spec}")
+    string(REGEX REPLACE "^[^=]*=" "" glob "${spec}")
+    string(MAKE_C_IDENTIFIER "kiln_${lib}_${word}" t)
+    if(NOT TARGET ${t})
+      file(GLOB jsrcs "${CMAKE_SOURCE_DIR}/libs/${lib}/test/${glob}")
+      add_library(${t} STATIC EXCLUDE_FROM_ALL ${jsrcs})
+      target_include_directories(${t} PRIVATE ${incs})
+      target_compile_definitions(${t} PRIVATE ${KILN_BOOST_JAMFILE_DEFINES_${lib}})
+      target_link_libraries(${t} PRIVATE ${_KILN_BOOST_JAM_TARGET} ${KILN_BOOST_JAMFILE_LINK_${lib}})
+    endif()
+    list(APPEND jamlibs ${t})
+  endforeach()
   boost_test(PREFIX "${lib}" NAME "${name}" TYPE "${type}" SOURCES ${src}
-    LINK_LIBRARIES ${_KILN_BOOST_JAM_TARGET} ${KILN_BOOST_JAMFILE_LINK_${lib}}
+    LINK_LIBRARIES ${jamlibs} ${_KILN_BOOST_JAM_TARGET} ${KILN_BOOST_JAMFILE_LINK_${lib}}
     COMPILE_DEFINITIONS ${defs} ${KILN_BOOST_JAMFILE_DEFINES_${lib}}
     INCLUDE_DIRECTORIES ${incs})
 endfunction()
@@ -230,6 +250,15 @@ function(_kiln_boost_jam_file lib testdir jam)
     if(NOT sub STREQUAL "")
       set(name "${sub}_${name}")
     endif()
+    set(_kiln_jam_extra "")
+    foreach(spec IN LISTS KILN_BOOST_JAMFILE_LIBS_${lib})
+      string(REGEX REPLACE "=.*$" "" word "${spec}")
+      list(GET fields 0 f0)
+      string(REGEX MATCHALL "[^ \t]+" f0 "${f0}")
+      if(word IN_LIST f0)
+        list(APPEND _kiln_jam_extra "${spec}")
+      endif()
+    endforeach()
     set(variants "")
     foreach(v IN LISTS KILN_BOOST_JAMFILE_VARIANTS_${lib})
       string(FIND "${v}" "${jamrule}|" at)
