@@ -8,6 +8,31 @@ use crate::module::{DllStorage, Linkage, UnnamedAddr, Visibility};
 use crate::types::TypeId;
 use crate::value::{BlockId, ComdatId, InstId, MdKindId, MetadataId, Value};
 
+/// The kind of a debug variable record.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DbgRecordKind {
+    /// `#dbg_declare`: `addr` is the variable's storage.
+    Declare,
+    /// `#dbg_value`: `addr` is the variable's value.
+    Value,
+}
+
+/// A debug variable record (LLVM 19 `DbgVariableRecord`), printed as
+/// `#dbg_declare(T v, !var, !DIExpression(...), !loc)`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct DbgRecord {
+    /// Declare or value.
+    pub kind: DbgRecordKind,
+    /// The location operand (typed value).
+    pub addr: Value,
+    /// The `DILocalVariable`.
+    pub var: MetadataId,
+    /// The `DIExpression` (printed inline).
+    pub expr: MetadataId,
+    /// The `DILocation`.
+    pub loc: MetadataId,
+}
+
 /// Sentinel for "no name" in [`Function::inst_names`].
 pub(crate) const NO_NAME: u32 = u32::MAX;
 
@@ -68,6 +93,9 @@ pub struct Function {
     pub(crate) calls: Vec<CallData>,
     pub(crate) pads: Vec<LandingPadData>,
     pub(crate) inst_md: Vec<(InstId, MdKindId, MetadataId)>,
+    /// Debug records, sorted by the instruction they precede (stable for
+    /// records on the same instruction).
+    pub(crate) dbg_records: Vec<(InstId, DbgRecord)>,
     symtab: FxHashSet<Box<str>>,
     last_unique: u32,
 }
@@ -112,6 +140,7 @@ impl Function {
             calls: Vec::new(),
             pads: Vec::new(),
             inst_md: Vec::new(),
+            dbg_records: Vec::new(),
             symtab: FxHashSet::default(),
             last_unique: 0,
         }
@@ -312,6 +341,21 @@ impl Function {
         } else {
             self.inst_md.insert(pos, (inst, kind, md));
         }
+    }
+
+    /// Attach a debug record (`#dbg_declare(...)` / `#dbg_value(...)`)
+    /// printed on its own line before `before`. Records on one instruction
+    /// keep their insertion order.
+    pub fn add_debug_record(&mut self, before: InstId, rec: DbgRecord) {
+        let pos = self.dbg_records.partition_point(|e| e.0 <= before);
+        self.dbg_records.insert(pos, (before, rec));
+    }
+
+    /// The debug records attached before `inst`.
+    pub fn debug_records(&self, inst: InstId) -> impl Iterator<Item = &DbgRecord> {
+        let lo = self.dbg_records.partition_point(|e| e.0 < inst);
+        let hi = self.dbg_records.partition_point(|e| e.0 <= inst);
+        self.dbg_records[lo..hi].iter().map(|e| &e.1)
     }
 
     pub(crate) fn inst_metadata(&self, inst: InstId) -> &[(InstId, MdKindId, MetadataId)] {

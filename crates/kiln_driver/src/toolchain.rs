@@ -488,6 +488,8 @@ pub enum Tool {
     Opt,
     /// `clang++`: the link step.
     Linker,
+    /// `llvm-objcopy`: `-gz` compresses an object's debug sections.
+    Objcopy,
 }
 
 impl Tool {
@@ -498,6 +500,7 @@ impl Tool {
             Tool::LlvmAs => "llvm-as-19",
             Tool::Opt => "opt-19",
             Tool::Linker => "clang++-19",
+            Tool::Objcopy => "llvm-objcopy-19",
         }
     }
 
@@ -508,13 +511,14 @@ impl Tool {
             Tool::LlvmAs => "llvm-as",
             Tool::Opt => "opt",
             Tool::Linker => "clang++",
+            Tool::Objcopy => "llvm-objcopy",
         }
     }
 
     /// The failure wording's stage: `<stage> command failed ...`.
     pub fn stage(self) -> &'static str {
         match self {
-            Tool::Llc | Tool::LlvmAs | Tool::Opt => "backend",
+            Tool::Llc | Tool::LlvmAs | Tool::Opt | Tool::Objcopy => "backend",
             Tool::Linker => "linker",
         }
     }

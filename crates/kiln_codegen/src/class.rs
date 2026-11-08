@@ -1042,7 +1042,7 @@ impl Cg<'_> {
                         continue;
                     }
                     self.flush_memcpy_run(d, &mut run)?;
-                    self.emit_field_init(ci.kind, field, ci.init)?;
+                    self.emit_field_init(ci.kind, field, ci.init, ci.loc)?;
                 }
             }
         }
@@ -1175,7 +1175,7 @@ impl Cg<'_> {
                 .find(|c| c.kind == CtorInitKind::Field && DeclId::new(c.target) == field)
                 .copied()
                 .expect("field initializer");
-            return self.emit_field_init(ci.kind, field, ci.init);
+            return self.emit_field_init(ci.kind, field, ci.init, ci.loc);
         }
         // clang `addInitialField` / `addNextField`.
         let mut first: Option<(DeclId, u64)> = None;
@@ -1229,7 +1229,21 @@ impl Cg<'_> {
     }
 
     /// clang `EmitMemberInitializer` / `EmitInitializerForField`.
-    fn emit_field_init(&mut self, kind: CtorInitKind, field: DeclId, init: ExprId) -> R<()> {
+    /// clang `EmitMemberInitializer` (at the mem-initializer's location).
+    fn emit_field_init(
+        &mut self,
+        kind: CtorInitKind,
+        field: DeclId,
+        init: ExprId,
+        loc: kiln_source::Loc,
+    ) -> R<()> {
+        let dl = self.dbg_apply(loc);
+        let r = self.emit_field_init_x(kind, field, init);
+        self.dbg_restore(dl);
+        r
+    }
+
+    fn emit_field_init_x(&mut self, kind: CtorInitKind, field: DeclId, init: ExprId) -> R<()> {
         let ast = self.ast;
         let this = self.this_addr();
         let lv = if kind == CtorInitKind::IndirectField {
