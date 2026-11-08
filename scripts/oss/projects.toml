@@ -522,9 +522,11 @@ configure = [
   "-DKILN_BOOST_JAMFILE_FORCE_math=ON",
   "-DKILN_BOOST_JAMFILE_SUBSET_math=8|constexpr|float128|lanczos|ccmath",
   "-DKILN_BOOST_JAMFILE_LINK_math=Boost::unit_test_framework",
+  "-DKILN_BOOST_SUBSET_TARGETS=^boost_geometry_|4|",
 ]
-build_targets = ["tests"]
-test = "ctest -j 4 --output-on-failure --timeout 300"
+build_targets = ["kiln_tests"]
+test = "ctest -j 4 --output-on-failure --timeout 300 --exclude-from-file kiln-subset-excluded.txt"
+test_timeout = 7200
 c_compiler = "clang-19"
 wave = 4
 verified = false

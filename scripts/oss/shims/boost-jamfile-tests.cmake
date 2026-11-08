@@ -339,3 +339,55 @@ function(_kiln_boost_jamfile_tests)
 endfunction()
 
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _kiln_boost_jamfile_tests)
+
+# KILN_BOOST_SUBSET_TARGETS `<regex>|<N>|<keep>` (WP-812): a deterministic
+# subset of a suite too large to build whole (Boost.Geometry's ~400 test
+# executables). Of the `tests` target's dependencies, those whose name
+# matches <regex> are sorted and every N-th (the 1st, the N+1-th, ...) is
+# kept, plus every one matching <keep>; all others are kept. The kept ones
+# are the dependencies of the target `kiln_tests` (build it instead of
+# `tests`), and the names of the dropped ones go to
+# `<build>/kiln-subset-excluded.txt`, one per line, for `ctest
+# --exclude-from-file` (a dropped target's test has the target's name).
+function(_kiln_boost_subset_targets)
+  if(NOT DEFINED KILN_BOOST_SUBSET_TARGETS OR NOT TARGET tests)
+    return()
+  endif()
+  string(REPLACE "|" ";" parts "${KILN_BOOST_SUBSET_TARGETS}")
+  list(APPEND parts "" "" "")
+  list(GET parts 0 re)
+  list(GET parts 1 every)
+  list(GET parts 2 keepre)
+  get_property(deps TARGET tests PROPERTY MANUALLY_ADDED_DEPENDENCIES)
+  list(REMOVE_DUPLICATES deps)
+  list(SORT deps)
+  set(kept "")
+  set(dropped "")
+  set(i 0)
+  set(nsub 0)
+  foreach(t IN LISTS deps)
+    if(NOT t MATCHES "${re}")
+      list(APPEND kept "${t}")
+      continue()
+    endif()
+    math(EXPR nsub "${nsub} + 1")
+    math(EXPR r "${i} % ${every}")
+    math(EXPR i "${i} + 1")
+    if(r EQUAL 0 OR (NOT keepre STREQUAL "" AND t MATCHES "${keepre}"))
+      list(APPEND kept "${t}")
+    else()
+      list(APPEND dropped "${t}")
+    endif()
+  endforeach()
+  add_custom_target(kiln_tests)
+  if(kept)
+    add_dependencies(kiln_tests ${kept})
+  endif()
+  string(REPLACE ";" "\n" text "${dropped}")
+  file(WRITE "${CMAKE_BINARY_DIR}/kiln-subset-excluded.txt" "${text}\n")
+  list(LENGTH dropped ndrop)
+  math(EXPR nkeep "${nsub} - ${ndrop}")
+  message(STATUS "kiln: subset /${re}/: ${nkeep} of ${nsub} test targets kept (every ${every}, plus /${keepre}/)")
+endfunction()
+
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _kiln_boost_subset_targets)

@@ -59,6 +59,14 @@ printf '%s\n' 'run dm2-a_1 [a.cpp] [Boost::dm2] [T=1;L=1]' 'run dm2-d [d.cpp] [B
 check "boost shim: nested requires, conditionals, skip, subset, force" "diff -u '$J2/want.txt' '$J2/got.txt'"
 check "boost shim: a library with CMake tests is skipped without FORCE" "[ -z \"\$(j2 2)\" ]"
 
+# A deterministic subset of a `tests` target's dependencies (WP-812).
+J3="$TMP/sub"; mkdir -p "$J3"
+printf 'cmake_minimum_required(VERSION 3.20)\nproject(Boost NONE)\nadd_custom_target(tests)\nforeach(t g_e g_a g_d other g_c g_b)\n  add_custom_target(${t})\n  add_dependencies(tests ${t})\nendforeach()\n' > "$J3/CMakeLists.txt"
+cmake -S "$J3" -B "$J3/b" -G "Unix Makefiles" -DCMAKE_PROJECT_Boost_INCLUDE="$HERE/shims/boost-jamfile-tests.cmake" \
+  '-DKILN_BOOST_SUBSET_TARGETS=^g_|3|_e$' > "$J3/conf.txt" 2>&1
+printf '%s\n' g_b g_c > "$J3/want.txt"
+check "boost shim: target subset (every N-th plus keep regex)" "diff -u '$J3/want.txt' '$J3/b/kiln-subset-excluded.txt' && grep -q 'kiln: subset /^g_/: 3 of 5 test targets kept' '$J3/conf.txt' && make -s -C '$J3/b' -n kiln_tests > /dev/null"
+
 printf '#include <cstdio>\nint main() { std::puts("hello"); }\n' > "$TMP/hello.cpp"
 printf 'int main() { return x; }\n' > "$TMP/bad.cpp"
 
