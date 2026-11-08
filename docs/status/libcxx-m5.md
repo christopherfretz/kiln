@@ -73,12 +73,20 @@ an XPASS is the cue to drop its row.
 | cause | count | WP | tests |
 |---|---:|---|---|
 | `-Wnonnull` "null passed to a callee that requires a non-null argument" | 5 | WP-433 | `nonnull.verify` in specialized.algorithms, mem.res, print.fun, basic.string, string.view |
-| `lifetimebound` "temporary bound to local reference … will be destroyed" | 4 | none yet | `lifetimebound.verify` in algorithms, as-lvalue, function.objects, utility/forward |
 | `-Wthread-safety` | 2 | none yet | `thread_safety.verify` in thread.shared_mutex, thread.shared_timed_mutex |
 | "'…' is deprecated" on `rel_ops` and the C++17 adaptor typedefs | 2 | none yet | `rel_ops.depr_in_cxx20`, `typedefs.depr_in_cxx17` |
 | `alloc_align` "requested alignment is not a power of 2" | 1 | none yet | `allocate_vocabulary.attributes.verify` |
 | wording: the constraint note prints the substituted expression | 1 | none yet | `libcxx/algorithms/cpp17_iterator_concepts.verify` |
 | wording: `std::hash<std::monostate>` printed qualified | 1 | WP-432 | `variant.hash/hash.depr.verify` |
+
+## Fixed in WP-674
+
+The `M5_TRIAGED` rows this fixes are gone from the ledger (each test was
+XPASS under kiln with libc++ 22.1.8, and passes with libc++ 19.1.7).
+
+| class | count | construct / first error | fix | test |
+|---|---:|---|---|---|
+| (b) | 4 | `[[clang::lifetimebound]]` ignored: "temporary bound to local reference … will be destroyed at the end of the full-expression" never warned (`lifetimebound.verify` in algorithms, as-lvalue, function.objects, utility/forward) | clang 19's lifetime analysis with `lifetimebound` and gsl Owner/Pointer (spec/landed/sema/WP-674.md) | `class.temporary/lifetimebound.cpp`, `dangling-gsl-libcxx.cpp` |
 
 ## Fixed in WP-491
 

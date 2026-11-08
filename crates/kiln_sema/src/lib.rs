@@ -123,6 +123,7 @@ mod transparent_union;
 mod trivial_abi;
 mod try_stmt;
 mod type_diff;
+mod undefined_used;
 mod unreachable_code;
 mod unused_file_scope;
 mod unused_var;
@@ -390,6 +391,14 @@ pub struct Sema<'a, 'sm> {
     /// The functions (first declarations) clang 22 infers `noreturn`
     /// (`InferredNoReturnAttr`, [`Sema::infer_noreturn`]).
     pub(crate) inferred_noreturn: kiln_source::fx::FxHashSet<DeclId>,
+    /// The classes (first declarations) clang infers `[[gsl::Pointer]]`
+    /// on from a `std` container's `iterator` typedef naming them
+    /// (`Sema::inferGslPointerAttribute`, spec/sema-class.md §5.6).
+    pub(crate) gsl_inferred_pointers: kiln_source::fx::FxHashSet<DeclId>,
+    /// Set while a typedef is instantiated: its gsl inference runs only
+    /// for a pattern naming a dependent type (clang
+    /// `TemplateDeclInstantiator::InstantiateTypedefNameDecl`).
+    pub(crate) in_typedef_instantiation: bool,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -876,6 +885,13 @@ pub struct Sema<'a, 'sm> {
     /// Delegating constructors and their targets, checked for cycles at
     /// the end of the translation unit ([class.base.init]/6).
     pub(crate) delegating: Vec<(DeclId, DeclId, Loc)>,
+    /// Functions and variables odr-used while undefined, as first
+    /// declarations with their first such use, in use order (clang
+    /// `UndefinedButUsed`), checked at the end of the translation unit
+    /// (`undefined_used.rs`).
+    pub(crate) undefined_used: Vec<(DeclId, Loc)>,
+    /// The first declarations in [`Sema::undefined_used`].
+    pub(crate) undefined_used_seen: kiln_source::fx::FxHashSet<DeclId>,
     /// The subobject the next constructor call initializes, set by a
     /// mem-initializer and consumed by the outermost constructor call it
     /// builds (clang's `InitializedEntity` for bases, members and
@@ -1203,6 +1219,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
             cfg_body: cfg::BodyCfg::default(),
             inferred_noreturn: kiln_source::fx::FxHashSet::default(),
+            gsl_inferred_pointers: kiln_source::fx::FxHashSet::default(),
+            in_typedef_instantiation: false,
             pack: (0, Vec::new()),
             ms_struct_pragma: false,
             fp_pragma: (kiln_ast::fp::FpOverride::NONE, Vec::new()),
@@ -1329,6 +1347,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cand_scratch: Vec::new(),
             deduce_scratch: Vec::new(),
             delegating: Vec::new(),
+            undefined_used: Vec::new(),
+            undefined_used_seen: kiln_source::fx::FxHashSet::default(),
             ctor_entity: None,
             ctor_diag_ty: None,
             list_param_note: None,

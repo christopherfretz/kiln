@@ -22,7 +22,7 @@ const TARGETS: [(&str, bool); 2] =
 
 /// The name as `Sema::act_on_attribute` looks it up.
 fn strip(name: &str) -> &str {
-    name.trim_start_matches("__").trim_end_matches("__")
+    kiln_ast::attr::normalize_attr_name(name)
 }
 
 /// The `__has_cpp_attribute` scope of a spelling bit.

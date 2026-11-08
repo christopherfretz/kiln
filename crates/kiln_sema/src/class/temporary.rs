@@ -24,17 +24,8 @@ use kiln_source::Loc;
 use super::special::SpecialKind;
 use crate::Sema;
 
-mod stack_addr;
-
-/// Where a reference is bound, for the diagnostics of a temporary that
-/// would not live long enough (clang `checkExprLifetime`'s entity kinds).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BindingSite {
-    /// A `return` operand of a function returning a reference.
-    Return,
-    /// A mem-initializer of reference member `field`.
-    Member(DeclId),
-}
+mod gsl;
+mod lifetime;
 
 impl Sema<'_, '_> {
     /// Temporary materialization ([conv.rval]) of the prvalue `e` as a
@@ -376,38 +367,6 @@ impl Sema<'_, '_> {
             DiagId::sema_temp_return_local
         } else {
             DiagId::sema_return_local_temp_ref
-        }
-    }
-
-    /// The diagnostics of a reference bound at `site` to a temporary that
-    /// would be destroyed first ([class.temporary]/6.2, 6.11;
-    /// [stmt.return]/6): `returning reference to local temporary object`
-    /// and the reference-member error. `init` is the reference's
-    /// initializer.
-    pub(crate) fn check_dangling_temporary(&mut self, site: BindingSite, init: ExprId) {
-        let mut found = Vec::new();
-        self.temporaries_bound_by(init, &mut found, 0);
-        let Some(&mte) = found.first() else { return };
-        let loc = self.begin_loc(mte);
-        match site {
-            BindingSite::Return => {
-                // [stmt.return]/6 (P2748): ill-formed; clang points at the
-                // temporary (`checkExprLifetime`'s `DiagRange` is the
-                // local's range): the operand of `static_cast<const int&>(c)`.
-                // Before C++26 it is `-Wreturn-stack-address`.
-                let msg = self.diag(self.return_temp_ref_id(), loc);
-                self.emit(msg);
-            }
-            BindingSite::Member(field) => {
-                let msg =
-                    self.diag(DiagId::sema_temp_member_ref, loc)
-                        .arg(self.decl_arg(field))
-                        .with_note(self.diag(
-                            DiagId::note_temp_member_ref_here,
-                            self.ast.decls.get(field).loc(),
-                        ));
-                self.emit(msg);
-            }
         }
     }
 

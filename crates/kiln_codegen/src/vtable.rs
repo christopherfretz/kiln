@@ -1684,7 +1684,7 @@ impl Cg<'_> {
     /// Whether the pointer constant `p` is null, where LLVM's constant
     /// folder knows: `null`, or a global that is not `extern_weak` (or an
     /// `inbounds` GEP of one).
-    fn const_ptr_is_null(&self, p: V) -> Option<bool> {
+    pub(crate) fn const_ptr_is_null(&self, p: V) -> Option<bool> {
         let V::C(c) = p else { return None };
         if matches!(self.m.const_of(c), Some(kiln_llvm::ConstData::Null(_))) {
             return Some(true);

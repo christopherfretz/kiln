@@ -347,11 +347,9 @@ the target:
    of a converted constant expression (WP-465;
    `conv.integral/constant-conversion-same-width.cpp`). A constant truncated by the bit-field it
    is assigned to reports -Wbitfield-constant-conversion instead and its
-   conversions are skipped (spec/sema.md §7.12). Not implemented:
-   `-Wnull-conversion` (it waits on `__null`, which glibc's and the
-   resource headers' `NULL` expands to and kiln does not parse yet; its
-   check belongs in `impcast.rs` `check_conversion`, keyed on a
-   `GNUNullExpr`/`nullptr_t` source converted to a non-pointer),
+   conversions are skipped (spec/sema.md §7.12). `-Wnull-conversion`
+   (`__null` and `std::nullptr_t` sources) is spec/sema.md's `__null`
+   entry. Not implemented:
    `-Wimplicit-int-conversion` and the other conversion warnings; non-dependent full-expressions are not
    re-checked per instantiation.
    A pointer, array or function converted to `bool` (WP-408, clang

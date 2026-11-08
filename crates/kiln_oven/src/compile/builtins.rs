@@ -836,6 +836,13 @@ impl Compiler<'_> {
             | id::VSNPRINTF
             | id::SNPRINTF
             | id::SPRINTF
+            | id::PRINTF
+            | id::VPRINTF
+            | id::VSPRINTF
+            | id::SCANF
+            | id::SSCANF
+            | id::VSCANF
+            | id::VSSCANF
             // clang evaluates no `va_list` operation.
             | id::VA_START
             | id::VA_END
