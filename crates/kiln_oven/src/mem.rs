@@ -27,6 +27,7 @@
 //! generation is never reached: it marks a pointer that points at
 //! nothing ([`NOWHERE`]).
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType, StringLitId};
@@ -729,6 +730,10 @@ pub(crate) struct Memory {
     /// trusts an answer only while the epoch it was computed at is
     /// current.
     pub union_epoch: u64,
+    /// The last `true` answer of [`Memory::may_be_active`], with the
+    /// [`Memory::union_epoch`] it holds at (`u64::MAX`: none): a member
+    /// access checks the same union's member again and again (WP-760).
+    active_memo: Cell<(UKey, u32, u64)>,
     /// The designated types of the `void *` values stored to memory
     /// (`kbc::VOID_TAG`), interned: pointer mark `PTR_TAGGED + i` is
     /// `vtags[i]`. Append-only for the translation unit (a rolled-back or
@@ -819,6 +824,7 @@ impl Memory {
             unions: FxHashMap::default(),
             union_alts: FxHashMap::default(),
             union_epoch: 0,
+            active_memo: Cell::new((UKey { at: 0, ty: OTy(0) }, 0, u64::MAX)),
             vtags: Vec::new(),
             vtag_ix: FxHashMap::default(),
             vspill: FxHashMap::default(),
@@ -1328,25 +1334,36 @@ impl Memory {
     /// Checks an access of `len` bytes at `p` and returns its absolute
     /// address in the pointer's space.
     ///
-    /// The access that passes every check and whose storage is not
-    /// [`flags::TRACKED`] takes [`Memory::check_plain`], inlined into
-    /// every caller (the `Load` and `Store` arms above all); any other
-    /// runs [`Memory::check_slow`].
+    /// The access that passes every check takes [`Memory::check_plain`],
+    /// inlined into every caller (the `Load` and `Store` arms above all),
+    /// and, in [`flags::TRACKED`] storage, [`Memory::live_at`]'s lifetime
+    /// test (WP-760: a frame object whose lifetimes an explicit
+    /// destruction ended, such as an `inplace_vector`'s, is tracked for
+    /// every access to it); any other runs [`Memory::check_slow`].
     // Always inlined: the plain predicate is a few compares, while the
     // call and the `Result` returned through memory cost more than it.
     #[allow(clippy::inline_always)]
     #[inline(always)]
     pub fn check(&self, raw: u64, len: u64, write: bool) -> Result<(Sp, u64, &Alloc), MemFault> {
-        match self.check_plain(raw, len, flags::EXTERNAL | flags::TRACKED) {
-            Some(r) => Ok(r),
-            None => self.check_slow(raw, len, write),
+        match self.check_plain(raw, len, flags::EXTERNAL) {
+            Some(r) if r.2.flags & flags::TRACKED == 0 || self.live_at(r.0, r.1, len) => Ok(r),
+            _ => self.check_slow(raw, len, write),
         }
     }
 
-    /// [`Memory::check`] of an access the plain predicate refused: the
-    /// plain access to tracked storage then tests its lifetime alone
-    /// (the common case of `std::allocator` storage); any other runs the
-    /// checks in their order, then the lifetime test. Cold for the
+    /// Whether every byte of `[abs, abs + len)` in space `sp` is within
+    /// an object's lifetime: [`Memory::check`]'s test of tracked storage,
+    /// out of line (a `bool` in a register, not the `Result` of
+    /// [`Memory::check_slow`]).
+    #[inline(never)]
+    fn live_at(&self, sp: Sp, abs: u64, len: u64) -> bool {
+        self.space(sp).is_live(abs, len)
+    }
+
+    /// [`Memory::check`] of an access the plain predicate or the lifetime
+    /// test refused: the plain access to tracked storage outside its
+    /// lifetime faults; any other runs the checks in their order, then
+    /// the lifetime test. Cold for the
     /// callers' code layout: marked otherwise, the `Load` arm grows.
     #[cold]
     #[inline(never)]
@@ -2194,10 +2211,17 @@ impl Memory {
     /// Whether field `idx` is (or may be, [`Memory::union_alts`]) the
     /// active member of union `key`.
     pub fn may_be_active(&self, key: UKey, idx: u32) -> bool {
-        self.unions.get(&key) == Some(&idx)
+        if self.active_memo.get() == (key, idx, self.union_epoch) {
+            return true;
+        }
+        let r = self.unions.get(&key) == Some(&idx)
             || idx < 64
                 && !self.union_alts.is_empty()
-                && self.union_alts.get(&key).is_some_and(|m| m & 1 << idx != 0)
+                && self.union_alts.get(&key).is_some_and(|m| m & 1 << idx != 0);
+        if r {
+            self.active_memo.set((key, idx, self.union_epoch));
+        }
+        r
     }
 
     #[inline(never)]

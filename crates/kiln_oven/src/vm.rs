@@ -982,9 +982,12 @@ impl Oven {
                     let elem = OTy(arg!(3) as u32);
                     let p = match self.ptr_add_step(raw, v, aux, elem) {
                         Some(p) => p,
-                        None => match self.ptr_add_op(raw, v, aux, elem) {
-                            Ok(p) => p,
-                            Err(f) => fail!(f),
+                        None => match self.ptr_add_member(raw, v, aux, elem) {
+                            Some(p) => p,
+                            None => match self.ptr_add_op(raw, v, aux, elem) {
+                                Ok(p) => p,
+                                Err(f) => fail!(f),
+                            },
                         },
                     };
                     reg!(0) = u128::from(p);
@@ -2322,6 +2325,22 @@ impl Oven {
             return None;
         }
         self.ptr_add_array(raw, v as i128, aux >> 9 & 1 != 0, elem, Some(field - 1))
+    }
+
+    /// The `PtrAdd` op's step within an array member the type table's
+    /// whole-array table holds ([`Oven::ptr_add_front`]: an
+    /// `inplace_vector`'s `&data[n]`), when its aux says the register
+    /// value is the index ([`ptr_add_aux`]), off [`Oven::ptr_add_step`]
+    /// (WP-760). Out of line and not cold: the hot loop keeps one call.
+    /// `None` sends the op to [`Oven::ptr_add_op`].
+    #[inline(never)]
+    fn ptr_add_member(&self, raw: u64, v: u128, aux: u32, elem: OTy) -> Option<u64> {
+        if aux >> ptr_add_aux::SHIFT & ptr_add_aux::MASK == 0 {
+            return None;
+        }
+        let i = v as i128;
+        let i = if aux >> 9 & 1 != 0 { i.checked_neg()? } else { i };
+        self.ptr_add_front(raw, i, elem)
     }
 
     /// The `PtrAdd` op off its array step: the index `v` read as its
@@ -4432,7 +4451,10 @@ mod tests {
                         for aux in steps.iter().map(|s| base | s << ptr_add_aux::SHIFT) {
                             let got = match o.ptr_add_step(raw, v, aux, scalars[4]) {
                                 Some(p) => Ok(p),
-                                None => o.ptr_add_op(raw, v, aux, scalars[4]),
+                                None => match o.ptr_add_member(raw, v, aux, scalars[4]) {
+                                    Some(p) => Ok(p),
+                                    None => o.ptr_add_op(raw, v, aux, scalars[4]),
+                                },
                             };
                             assert_eq!(ident(&got), ident(&want), "{v} {aux:#x}");
                         }

@@ -462,8 +462,10 @@ impl Types {
     /// so zero-initializing it writes no byte ([dcl.init.general]/6.2).
     pub fn holds_no_data(&self, t: OTy) -> bool {
         let i = self.info(t);
+        // A pointer or union subobject holds data: the common class
+        // answers without the walk over its members (WP-760).
         matches!(i.kind, TyKind::Record { union: false, .. })
-            && !i.has_vptr
+            && !(i.has_vptr || i.has_ptr || i.has_union)
             && self.fields(t).iter().all(|f| f.width.is_none() && self.holds_no_data(f.ty))
     }
 
@@ -1319,7 +1321,17 @@ impl Types {
                     off %= es;
                     root = elem;
                 }
-                TyKind::Record { .. } => return self.subobject_cached(root, off, p),
+                TyKind::Record { .. } => {
+                    // An element of an array of `p` the whole-array table
+                    // holds (an `inplace_vector`'s `construct_at(&data[n])`,
+                    // WP-760).
+                    if let Some((lo, _)) = self.extent_hit(root, off, false, p)
+                        && (off - lo) % self.size(p).max(1) == 0
+                    {
+                        return true;
+                    }
+                    return self.subobject_cached(root, off, p);
+                }
                 _ => return false,
             }
         }
