@@ -982,6 +982,13 @@ pub struct Sema<'a, 'sm> {
     /// needed (spec/annotations.md §5): the specialization maps to its
     /// pattern.
     pub(crate) uninstantiated_annots: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// Set while the parser reads a base-specifier's
+    /// attribute-specifier-seq: an annotation operand naming a pack is
+    /// kept, since the base-specifier may turn out to be a pack expansion
+    /// whose pattern includes it ([temp.variadic]/5.4; WP-867). The
+    /// parser checks it once the `...` is known
+    /// ([`Sema::check_base_annotation_packs`]).
+    pub(crate) base_annotation_packs: bool,
     /// The annotation each annotation attribute already produced: one
     /// written on a declaration's leading attribute-specifier-seq
     /// appertains to every declarator's entity and is one annotation
@@ -1353,6 +1360,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             unparsed_default_args: kiln_source::fx::FxHashMap::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
             uninstantiated_annots: kiln_source::fx::FxHashMap::default(),
+            base_annotation_packs: false,
             annot_of_attr: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),

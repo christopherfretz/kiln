@@ -28,7 +28,9 @@ impl Sema<'_, '_> {
     /// One parsed annotation `= e` (or `= e...`) at the `=` `loc`: an
     /// `ANNOTATION` attribute node whose `a` is the operand. An `...`
     /// makes the operand a pack expansion ([dcl.attr.grammar]/6); without
-    /// one an unexpanded pack is an error ([temp.variadic]/12).
+    /// one an unexpanded pack is an error ([temp.variadic]/12), except on
+    /// a base-specifier, which checks it once its own `...` is known
+    /// ([`Sema::check_base_annotation_packs`]).
     pub fn act_on_annotation(
         &mut self,
         e: ExprId,
@@ -38,6 +40,8 @@ impl Sema<'_, '_> {
         use crate::templ::pack::PackOperand;
         let e = if let Some(l) = ellipsis {
             self.act_pack_expansion(e, l)
+        } else if self.base_annotation_packs {
+            e
         } else if self.diagnose_unexpanded_pack(PackOperand::Expr(e), "expression", loc) {
             return None;
         } else {
@@ -55,6 +59,36 @@ impl Sema<'_, '_> {
             b: 0,
         };
         Some(self.ast.attrs.push(node))
+    }
+
+    /// Starts (`on`) or ends the attribute-specifier-seq of a
+    /// base-specifier, whose annotation operands may name a pack
+    /// ([`Sema::check_base_annotation_packs`]). Returns the previous
+    /// state, to restore.
+    pub fn set_base_annotation_packs(&mut self, on: bool) -> bool {
+        std::mem::replace(&mut self.base_annotation_packs, on)
+    }
+
+    /// The annotations of a parsed base-specifier, once whether it is a
+    /// pack expansion is known: the pattern of `B...` is the whole
+    /// base-specifier, its attribute-specifier-seq included
+    /// ([temp.variadic]/5.4), so `[[=sizeof(Bs)]] Bs...` gives each base
+    /// its own value (WP-867). Without the `...`, an operand naming a
+    /// pack is the unexpanded-pack error ([temp.variadic]/12) and the
+    /// annotation is dropped.
+    pub fn check_base_annotation_packs(&mut self, attrs: &mut Vec<AttrId>, pack_expansion: bool) {
+        use crate::templ::pack::PackOperand;
+        if pack_expansion || !self.has_annotations(attrs) {
+            return;
+        }
+        attrs.retain(|&a| {
+            let n = *self.ast.attrs.get(a);
+            if n.kind != AttrKind::ANNOTATION {
+                return true;
+            }
+            let Some(e) = ExprId::from_raw(n.a) else { return true };
+            !self.diagnose_unexpanded_pack(PackOperand::Expr(e), "expression", n.loc)
+        });
     }
 
     /// Whether `attrs` holds an annotation.

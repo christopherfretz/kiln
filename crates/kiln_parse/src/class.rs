@@ -2224,7 +2224,10 @@ impl Parser<'_, '_> {
         self.bump();
         loop {
             match self.parse_base_specifier() {
-                Some(b) => bases.push(b),
+                Some(mut b) => {
+                    self.s.check_base_annotation_packs(&mut b.attrs, b.pack_expansion);
+                    bases.push(b);
+                }
                 None => {
                     self.skip_until(&[Punct::Comma, Punct::LBrace], true, false);
                 }
@@ -2240,7 +2243,11 @@ impl Parser<'_, '_> {
         let loc = self.loc();
         let mut attrs = Vec::new();
         if self.at_cxx11_attr() {
+            // An annotation operand may name the pack of a `B...`
+            // (checked by the caller once the `...` is read; WP-867).
+            let saved = self.s.set_base_annotation_packs(true);
             self.parse_attributes(&mut attrs);
+            self.s.set_base_annotation_packs(saved);
         }
         let mut is_virtual = self.eat_kw(Kw::Virtual).is_some();
         let access = match self.kw() {
