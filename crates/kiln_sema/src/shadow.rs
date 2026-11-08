@@ -302,15 +302,17 @@ impl Sema<'_, '_> {
     /// The `-Wshadow` warning `id` at `loc` for a declaration hiding `old`
     /// (clang `computeShadowedDeclKind`), without its notes.
     fn shadow_diag(&self, id: DiagId, loc: Loc, old: DeclId, old_dc: DeclId) -> Diag {
+        // The select of the id's template: clang's order, but with the
+        // structured binding (the one kind without a context) first.
         let kind: u32 = match self.kind_of(old) {
-            DeclKind::TypeAlias => 5,
-            DeclKind::Typedef => 4,
-            DeclKind::Binding => 6,
+            DeclKind::TypeAlias => 6,
+            DeclKind::Typedef => 5,
+            DeclKind::Binding => 0,
             k if self.kind_of(old_dc) == DeclKind::CXXRecord => {
                 if k == DeclKind::Field {
-                    3
+                    4
                 } else {
-                    2
+                    3
                 }
             }
             _ if matches!(
@@ -318,9 +320,9 @@ impl Sema<'_, '_> {
                 DeclKind::TranslationUnit | DeclKind::Namespace
             ) =>
             {
-                1
+                2
             }
-            _ => 0,
+            _ => 1,
         };
         self.diag(id, loc).arg(kind).arg(self.shadow_ctx_desc(old_dc))
     }
