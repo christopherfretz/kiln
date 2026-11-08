@@ -949,6 +949,16 @@ pub fn mangle_structor(ast: &Ast, anon: &mut AnonIds, d: DeclId, v: Structor) ->
     m.out
 }
 
+/// The <lambda-sig> of a lambda with call operator `call_op` (clang
+/// `mangleLambdaSig`), mangled afresh: the key that numbers closure types
+/// within a context (clang `ItaniumNumberingContext::getManglingNumber`).
+pub fn lambda_sig(ast: &Ast, call_op: DeclId) -> String {
+    let mut anon = AnonIds::default();
+    let mut m = Mangler::new(ast, &mut anon, "");
+    m.lambda_sig(Some(call_op));
+    m.out
+}
+
 /// The name of the comdat shared by the variants of structor `d`
 /// (Itanium 5.1.4.4 `C5`/`D5`, clang `mangleCXXCtorComdat` /
 /// `mangleCXXDtorComdat`): the base-object mangling with `5` for `2`.
@@ -2140,11 +2150,23 @@ impl<'a, 'b> Mangler<'a, 'b> {
             return;
         }
         self.out.push_str("Ul");
+        self.lambda_sig(data.call_op);
+        self.out.push('E');
+        if number > 1 {
+            self.out.push_str(&(number - 2).to_string());
+        }
+        self.out.push('_');
+    }
+
+    /// <lambda-sig> (clang `mangleLambdaSig`) of a lambda with call
+    /// operator `call_op`.
+    fn lambda_sig(&mut self, call_op: Option<DeclId>) {
+        let ast = self.ast;
         // The explicit template parameters (not those invented for
         // `auto` parameters) and the template-head's requires-clause
         // (clang `mangleLambdaSig`, cxx-abi issues 31 and 24).
         if let Some(info) =
-            data.call_op.and_then(|f| ast.described_template(f)).and_then(|t| ast.template_info(t))
+            call_op.and_then(|f| ast.described_template(f)).and_then(|t| ast.template_info(t))
         {
             let list = *ast.templates.param_list(info.params);
             let params: Vec<DeclId> = ast.lists.iter::<DeclId>(list.params).collect();
@@ -2161,8 +2183,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         // type deeper for the `fp`/`fL` nesting.
         let saved = self.fn_depth;
         self.fn_depth = (saved.0 + 1, false);
-        let proto = data
-            .call_op
+        let proto = call_op
             .and_then(|f| ast.decls.get(f).ty())
             .and_then(|t| ast.types.proto(ast.types.canonical(t)).copied());
         if let Some(p) = proto {
@@ -2180,11 +2201,6 @@ impl<'a, 'b> Mangler<'a, 'b> {
             self.out.push('v');
         }
         self.fn_depth = saved;
-        self.out.push('E');
-        if number > 1 {
-            self.out.push_str(&(number - 2).to_string());
-        }
-        self.out.push('_');
     }
 
     fn source_name(&mut self, s: &str) {

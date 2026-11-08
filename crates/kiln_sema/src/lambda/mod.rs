@@ -95,8 +95,9 @@ pub(crate) struct ManglingState {
     pub(crate) default_arg: Option<DeclId>,
     /// The last number given per numbering context (a function, or the
     /// variable, data member or parameter whose initializer holds the
-    /// lambda) and call-operator parameter list.
-    numbers: kiln_source::fx::FxHashMap<(DeclId, Vec<QualType>, bool), u32>,
+    /// lambda) and <lambda-sig> (the explicit template parameters, the
+    /// template-head's requires-clause and the parameter types).
+    numbers: kiln_source::fx::FxHashMap<(DeclId, String), u32>,
 }
 
 /// A lambda whose body is being analysed: what [`Sema`] saved on entry.
@@ -470,22 +471,14 @@ impl Sema<'_, '_> {
     /// template definition or being instantiated), in a default argument
     /// in a class definition, in a default member initializer or in the
     /// initializer of an inline variable are numbered per context and
-    /// call-operator parameter list; any other has internal linkage and
+    /// <lambda-sig>; any other has internal linkage and
     /// no number.
     fn number_lambda(&mut self, id: LambdaId, closure: DeclId, f: DeclId) {
         let Some((key, context)) = self.lambda_numbering_context(closure) else { return };
-        let Some(fty) = self.ast.decls.get(f).ty() else { return };
-        let Some(p) = self.ast.types.proto(self.ast.types.canonical(fty)).copied() else {
-            return;
-        };
-        let params: Vec<QualType> = self
-            .ast
-            .types
-            .params(&p)
-            .iter()
-            .map(|&q| self.ast.types.canonical(q).without_quals())
-            .collect();
-        let n = self.lambda_mangle.numbers.entry((key, params, p.variadic())).or_insert(0);
+        // clang `ItaniumNumberingContext::getManglingNumber` keys on the
+        // mangled <lambda-sig>.
+        let sig = kiln_abi::mangle::lambda_sig(&self.ast, f);
+        let n = self.lambda_mangle.numbers.entry((key, sig)).or_insert(0);
         *n += 1;
         let number = *n;
         let m = &mut self.ast.exprs.lambdas.get_mut(id).mangling;
