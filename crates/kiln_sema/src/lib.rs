@@ -24,6 +24,7 @@ mod bitfield_constant;
 mod builtins;
 pub mod cfg;
 pub mod class;
+mod cleanup_attr;
 mod complex;
 mod consteval;
 mod consteval_block;

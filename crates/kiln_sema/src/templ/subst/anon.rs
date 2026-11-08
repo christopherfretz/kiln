@@ -191,7 +191,9 @@ impl Substituter<'_, '_, '_> {
             .lists
             .iter::<AttrId>(list)
             .map(|a| *ast.attrs.get(a))
-            .filter(|n| !only_aligned || n.kind == AttrKind::ALIGNED)
+            // A local variable's `cleanup` names a function, not a dependent
+            // entity (WP-807).
+            .filter(|n| !only_aligned || matches!(n.kind, AttrKind::ALIGNED | AttrKind::CLEANUP))
             // clang does not clone a visibility attribute (`Clone = 0`):
             // codegen reads the pattern's (spec/codegen.md "Symbol
             // visibility").

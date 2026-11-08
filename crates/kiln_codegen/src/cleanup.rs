@@ -106,6 +106,9 @@ pub(crate) enum Cleanup {
     /// `CallLifetimeEnd`, pushed as `NormalEHLifetimeMarker`;
     /// spec/codegen.md §7p).
     LifetimeEnd { addr: V, size: u64 },
+    /// Calls the GNU `cleanup` function `func` with the address `addr`
+    /// of a local variable (clang `CallCleanupFunction`, WP-807).
+    CleanupFn { func: DeclId, addr: V },
 }
 
 /// A value a cleanup uses: directly, or reloaded from the
@@ -1226,6 +1229,11 @@ impl Cg<'_> {
                 self.emit_block(skip, false);
             }
             Cleanup::LifetimeEnd { addr, size } => self.emit_lifetime_end(addr, size),
+            Cleanup::CleanupFn { func, addr } => {
+                if let Err(e) = self.emit_cleanup_fn_call(func, addr) {
+                    self.f.error.get_or_insert(e);
+                }
+            }
         }
     }
 

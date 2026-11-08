@@ -97,6 +97,7 @@ impl Sema<'_, '_> {
             AttrKind::CONSTRUCTOR | AttrKind::DESTRUCTOR => {
                 ControlFlow::Break(self.ctor_dtor_attribute(kind, syntax, args, loc))
             }
+            AttrKind::CLEANUP => ControlFlow::Break(self.cleanup_attribute(syntax, args, loc)),
             _ => ControlFlow::Continue(()),
         }
     }

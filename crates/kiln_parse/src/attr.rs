@@ -72,6 +72,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "analyzer_noreturn"
             | "constructor"
             | "destructor"
+            | "cleanup"
     )
 }
 

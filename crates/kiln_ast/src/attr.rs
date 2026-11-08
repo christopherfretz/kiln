@@ -237,6 +237,13 @@ impl AttrKind {
     /// [`AttrKind::CONSTRUCTOR`], through `@llvm.global_dtors`, after
     /// `main` returns or `exit` is called (WP-807).
     pub const DESTRUCTOR: AttrKind = AttrKind(191);
+    /// GNU `cleanup(f)` on a local variable (clang `CleanupAttr`): `f(&v)`
+    /// runs when the variable goes out of scope, before its destructor.
+    /// As written `a` is the raw `ExprId` of the first argument (0: none)
+    /// and `b` the argument count; once checked (`check_decl_attrs`) `a`
+    /// is the raw `DeclId` of `f` and `b` the raw `Loc` of the argument
+    /// (WP-807).
+    pub const CLEANUP: AttrKind = AttrKind(192);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

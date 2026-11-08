@@ -4623,6 +4623,8 @@ impl Sema<'_, '_> {
                 self.take_annotations(pd, &mut attrs);
                 let range = Span::new(p.range.0, p.range.1);
                 self.check_param_nonnull_attrs(p.ty, range, &mut attrs);
+                // `cleanup` on a parameter: ignored with a warning.
+                self.check_cleanup_attrs(pd, &mut attrs);
                 let _ = self.builder().attach_attrs(pd, &attrs);
             }
             match p.default_arg {
@@ -5613,6 +5615,7 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         self.act_on_init_inner(v, init);
+        self.check_cleanup_deduced(v);
         self.check_static_tls(v, paren);
         let constinit_ok = self.check_constinit(v);
         self.report_deferred_immediates(v, constinit_ok);
@@ -6431,6 +6434,7 @@ impl Sema<'_, '_> {
 
     /// A variable declared without an initializer ([dcl.init]/7).
     pub fn act_on_uninit(&mut self, v: DeclId) {
+        self.check_cleanup_deduced(v);
         self.act_on_uninit_inner(v);
         if self.is_var_definition(v) {
             self.check_static_tls(v, None);
@@ -10925,6 +10929,8 @@ fn attr_kind_of(
         // clang `GCC<"constructor">` / `GCC<"destructor">` (WP-807).
         ("constructor", _, true) => AttrKind::CONSTRUCTOR,
         ("destructor", _, true) => AttrKind::DESTRUCTOR,
+        // clang `GCC<"cleanup">` (WP-807).
+        ("cleanup", _, true) => AttrKind::CLEANUP,
         ("visibility", _, true) => AttrKind::VISIBILITY,
         // clang `Clang<"type_visibility">`.
         ("type_visibility", _, _) if gnu_syntax || clang_scope => AttrKind::TYPE_VISIBILITY,
