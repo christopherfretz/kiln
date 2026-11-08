@@ -777,7 +777,9 @@ impl Sema<'_, '_> {
             // assumed to introduce functions that overload with this one;
             // a conflict is found at instantiation (clang `CheckOverload`,
             // `UnresolvedUsingValueDecl`; Boost.Cobalt's promises, WP-812).
-            if in_class && self.kind_of(es) == DeclKind::UnresolvedUsingValue && fnlike(self, target)
+            if in_class
+                && self.kind_of(es) == DeclKind::UnresolvedUsingValue
+                && fnlike(self, target)
             {
                 continue;
             }
