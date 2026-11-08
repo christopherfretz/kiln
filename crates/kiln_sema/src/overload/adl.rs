@@ -200,27 +200,26 @@ impl Sema<'_, '_> {
     /// [`Self::assoc_type`] of `std::meta::info`: `std::meta::operators`
     /// and namespace `std::meta`, once `<meta>` declared them.
     fn assoc_meta_info(&self, out: &mut AssocSet) {
-        let ns = match self.std_meta_ns.get() {
-            Some(ns) => ns,
-            None => {
-                let std = self.intern("std");
-                let found = self.lookup_qualified(self.ast.tu, std, LookupKind::Nested);
-                let Some(std) =
-                    found.decls.iter().copied().find(|&d| self.kind_of(d) == DeclKind::Namespace)
-                else {
-                    return;
-                };
-                let meta = self.intern("meta");
-                let found = self.lookup_qualified(std, meta, LookupKind::Nested);
-                let Some(ns) =
-                    found.decls.iter().copied().find(|&d| self.kind_of(d) == DeclKind::Namespace)
-                else {
-                    return;
-                };
-                let ns = self.ast.primary_context(ns);
-                self.std_meta_ns.set(Some(ns));
-                ns
-            }
+        let ns = if let Some(ns) = self.std_meta_ns.get() {
+            ns
+        } else {
+            let std = self.intern("std");
+            let found = self.lookup_qualified(self.ast.tu, std, LookupKind::Nested);
+            let Some(std) =
+                found.decls.iter().copied().find(|&d| self.kind_of(d) == DeclKind::Namespace)
+            else {
+                return;
+            };
+            let meta = self.intern("meta");
+            let found = self.lookup_qualified(std, meta, LookupKind::Nested);
+            let Some(ns) =
+                found.decls.iter().copied().find(|&d| self.kind_of(d) == DeclKind::Namespace)
+            else {
+                return;
+            };
+            let ns = self.ast.primary_context(ns);
+            self.std_meta_ns.set(Some(ns));
+            ns
         };
         let operators = self.intern("operators");
         let found = self.lookup_qualified(ns, operators, LookupKind::Ordinary);

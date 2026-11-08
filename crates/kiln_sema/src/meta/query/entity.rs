@@ -317,7 +317,7 @@ impl Sema<'_, '_> {
 
     /// `object_of(^^R)` for a reference `R`: the object `R` refers to,
     /// when `R` is usable in constant expressions ([meta.reflection.queries]
-    /// object_of; [expr.const]/3). Its value is the pointer to that
+    /// `object_of`; [expr.const]/3). Its value is the pointer to that
     /// object: a variable, a template parameter object, a string literal
     /// object or a `std::type_info` object, all static storage (a
     /// permitted result, [expr.const]/22).
