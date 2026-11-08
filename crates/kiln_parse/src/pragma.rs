@@ -21,7 +21,7 @@ use crate::tokens::{Event, LoopHintInfo};
 
 /// Pragmas clang knows and kiln accepts without effect on the
 /// translation unit (codegen hints and `#pragma comment`).
-const IGNORED: &[&str] = &["comment", "float_control", "unused", "omp"];
+const IGNORED: &[&str] = &["comment", "unused", "omp"];
 
 /// Pragmas clang knows that change the meaning of the translation unit
 /// and that kiln does not implement yet.
@@ -29,7 +29,7 @@ const UNSUPPORTED: &[&str] = &["align", "options", "ms_struct", "redefine_extnam
 
 /// `#pragma clang ...` pragmas accepted without effect.
 const CLANG_IGNORED: &[&str] =
-    &["diagnostic", "fp", "optimize", "max_tokens_here", "max_tokens_total", "__debug"];
+    &["diagnostic", "optimize", "max_tokens_here", "max_tokens_total", "__debug"];
 
 /// `#pragma clang ...` pragmas kiln does not implement yet.
 const CLANG_UNSUPPORTED: &[&str] = &["attribute", "section"];
@@ -47,23 +47,25 @@ pub(crate) struct PragmaCx<'x, 'sm> {
     pub interner: &'x Interner,
     pub sm: &'sm SourceManager,
     pub lex_opts: &'x LexOptions,
+    /// The macros defined where the pragma is (a macro-expanded operand).
+    pub macros: &'x kiln_pp::MacroTable,
 }
 
 impl PragmaCx<'_, '_> {
     /// The identifier spelling of `t`, if it is an identifier (keywords
     /// included).
-    fn word(&self, t: Option<&Token>) -> Option<&str> {
+    pub(crate) fn word(&self, t: Option<&Token>) -> Option<&str> {
         match t?.kind {
             TokKind::Identifier(s) => Some(self.interner.as_str(s)),
             _ => None,
         }
     }
 
-    fn report(&self, id: DiagId, loc: Loc) {
+    pub(crate) fn report(&self, id: DiagId, loc: Loc) {
         Diag::new(id, Span::empty(loc)).emit(self.diags);
     }
 
-    fn report_what(&self, id: DiagId, what: &str, loc: Loc) {
+    pub(crate) fn report_what(&self, id: DiagId, what: &str, loc: Loc) {
         Diag::new(id, Span::empty(loc)).arg(what).emit(self.diags);
     }
 }
@@ -102,6 +104,7 @@ pub(crate) fn classify(
                 ("GCC", "unroll") => unroll_hint(cx, "unroll", start, loc, &rest[1..], end),
                 ("GCC", "nounroll") => unroll_hint(cx, "nounroll", start, loc, &rest[1..], end),
                 ("clang", "loop") => clang_loop(cx, start, loc, &rest[1..], end),
+                ("clang", "fp") => crate::fp_pragma::clang_fp(cx, loc, &rest[1..], end),
                 // Validated and applied by the preprocessor, which records
                 // the warning state per location in the diagnostic engine.
                 ("GCC", "diagnostic") => None,
@@ -115,13 +118,17 @@ pub(crate) fn classify(
                 }
             }
         }
-        "STDC" => {
-            if !cx.word(rest.first()).is_some_and(|s| STDC.contains(&s)) {
+        "STDC" => match cx.word(rest.first()) {
+            Some(s) if STDC.contains(&s) => {
+                crate::fp_pragma::stdc(cx, s, rest[0].span.lo, &rest[1..], end)
+            }
+            _ => {
                 let at = rest.first().map_or(end, |t| t.span.lo);
                 cx.report(DiagId::parse_pragma_stdc_unknown, at);
+                None
             }
-            None
-        }
+        },
+        "float_control" => crate::fp_pragma::float_control(cx, loc, rest, end),
         "weak" => weak(cx, loc, rest, end),
         "unroll" => unroll_hint(cx, "unroll", start, loc, rest, end),
         "nounroll" => unroll_hint(cx, "nounroll", start, loc, rest, end),
@@ -374,6 +381,7 @@ impl Parser<'_, '_> {
                     self.loop_hints.push((before, hints));
                 }
             }
+            Event::FpPragma { before, pragma } => self.queue_fp_pragma(before, pragma),
             Event::UnsupportedPragma { what, loc } => self.s.act_on_unsupported_pragma(&what, loc),
             // clang's `ActOnPragmaVisibility`; sema applies the pushed
             // visibility to the declarations that follow.

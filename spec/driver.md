@@ -71,7 +71,7 @@ starting with `-` are inputs.
 | `-f[no-]dollars-in-identifiers` | `$` in identifiers (default on) |
 | `-O*` | also selects `llc`'s level and the `opt` pipeline, and is passed to the link (see "Code generation") |
 | `-disable-llvm-passes` (usually after `-Xclang`) | no `opt` run: `-emit-llvm` writes the frontend's IR (see "IR optimization") |
-| `-O*`, `-f[no-]exceptions`, `-f[no-]cxx-exceptions`, `-f[no-]rtti`, `-f[no-]char8_t`, `-f[no-]fast-math`, `-ffreestanding`, `-fhosted`, `-pthread`, `-f[no-]threadsafe-statics`, `-f[no-]sized-deallocation` | change predefined macros only (see "Predefines"); `-fno-rtti` also makes sema reject `typeid` and `dynamic_cast` to a class, and codegen leave vtables' RTTI slots null (`CodegenOptions::rtti`, spec/codegen.md "RTTI", WP-720) |
+| `-O*`, `-f[no-]exceptions`, `-f[no-]cxx-exceptions`, `-f[no-]rtti`, `-f[no-]char8_t`, `-ffreestanding`, `-fhosted`, `-pthread`, `-f[no-]threadsafe-statics`, `-f[no-]sized-deallocation` | change predefined macros only (see "Predefines"); `-fno-rtti` also makes sema reject `typeid` and `dynamic_cast` to a class, and codegen leave vtables' RTTI slots null (`CodegenOptions::rtti`, spec/codegen.md "RTTI", WP-720) |
 | `-fsigned-char`, `-funsigned-char` (`-fno-unsigned-char`, `-fno-signed-char` are their synonyms; the last one wins) | the signedness of plain `char` ([basic.fundamental]/7), overriding the target's (signed on x86-64, unsigned on AArch64): it sets `TargetTypes::char_signed` of the `kiln_abi::Target` the parser, sema, the Oven and codegen use, the `#if` evaluator's character type ([cpp.cond]), and adds or removes `__CHAR_UNSIGNED__` as clang 19 does (see "Predefines") |
 | `-finput-charset=<v>`, `-fexec-charset=<v>` | the source and execution character sets ([lex.charset]/1, [lex.phases]/1.1): kiln reads source as UTF-8 and encodes ordinary literals as UTF-8, so, as clang's driver, it accepts only `UTF-8` (any letter case) and changes nothing; another value is the driver error `invalid value '<v>' in '-finput-charset=<v>'` (WP-726; folly passes `-finput-charset=UTF-8`) |
 | `-fclang-compat=<major>` | kiln: which clang release's observable output to reproduce, `19` or `22` (default since WP-394, the oracle switch; the library-level defaults, `ClangCompat::default()` and every crate's `clang_compat`, follow it since WP-413): predefined macros and `__has_*` answers (spec/pp.md "clang compatibility level"), diagnostic text and names, AST dump types and deprecation warnings (spec/sema.md §1.1, spec/ast-dump.md §2, spec/codegen.md); any other value is an error |
@@ -109,7 +109,7 @@ starting with `-` are inputs.
 | `-fomit-frame-pointer`, `-fno-omit-frame-pointer`, `-momit-leaf-frame-pointer`, `-mno-omit-leaf-frame-pointer` | the frame-pointer kind of every function and the `frame-pointer` module flag (spec/codegen.md "Frame pointer"); the last of each pair wins (WP-405) |
 | `-fstrict-aliasing`, `-fno-strict-aliasing` | whether loads and stores carry `!tbaa` above `-O0` (`CodegenOptions::strict_aliasing`, spec/codegen.md "TBAA"); the last wins, strict by default (WP-412) |
 | `-flax-vector-conversions[=none\|integer\|all]`, `-fno-lax-vector-conversions` | which same-size vector bitcasts are implicit conversions (`Sema::lax_vector_conversions`, spec/types.md `Vector`): `all` without a flag, `integer` for the bare flag, `none` for the negative; the last wins. An unknown value is `invalid value '<v>' in '-flax-vector-conversions=<v>'` (WP-445) |
-| `-fcx-limited-range`, `-fno-cx-limited-range`, `-fcx-fortran-rules`, `-fno-cx-fortran-rules`, `-fcomplex-arithmetic=full\|improved\|basic` | the `_Complex` multiply/divide algorithm (`CodegenOptions::complex_range`, spec/codegen.md §7n): basic, full, improved, full, or the named one; the last of these and `-ffast-math` (basic) wins, and without any it is full, or basic under `-Ofast` unless `-fno-fast-math`. `-fno-fast-math` leaves it alone (clang 19 likewise). `-fcomplex-arithmetic=promoted` and unknown values are `unsupported argument '<v>' to option '-fcomplex-arithmetic='`. clang's `-Woverriding-option` between these flags is not issued (WP-237) |
+| `-fcx-limited-range`, `-fno-cx-limited-range`, `-fcx-fortran-rules`, `-fno-cx-fortran-rules`, `-fcomplex-arithmetic=full\|improved\|basic` | the `_Complex` multiply/divide algorithm (`CodegenOptions::complex_range`, spec/codegen.md §7n): basic, full, improved, full, or the named one; the last of these and the fast-math flags (basic; "Floating-point flags") wins, and without any it is full. At `-fclang-compat=19`, `-fno-fast-math` leaves it alone; at 22 it clears it, and `-ffp-model=precise\|strict` set full. `-fcomplex-arithmetic=promoted` and unknown values are `unsupported argument '<v>' to option '-fcomplex-arithmetic='`. clang's `-Woverriding-option` between these flags is not issued (WP-237) |
 | `-ftrivial-auto-var-init=uninitialized\|zero\|pattern`, `-ftrivial-auto-var-init-max-size=N` | the erroneous value of an uninitialized automatic variable (`CodegenOptions::auto_var_init` / `auto_var_init_max_size`, spec/codegen.md §7r, §7y, WP-448, WP-452): `zero` fills with zero bytes, `pattern` with clang's pattern (`0xAA` bytes, all-ones floating point), `uninitialized` does not; the last wins, and without either it is `zero` under C++26 and later, `uninitialized` before. `N` bytes is the largest variable filled (default 4096, 0 = no limit); a non-integer is `invalid integral value '<v>' in '<arg>'`. An unknown value is `unsupported argument '<v>' to option '-ftrivial-auto-var-init='` |
 | `-fpic`, `-fPIC`, `-fpie`, `-fPIE`, `-fno-pic` (and `-fno-PIC`/`-fno-pie`/`-fno-PIE`) | the relocation model, the last one winning (default `-fPIE`, as clang on Linux): the `__pic__`/`__pie__` predefines, `llc`'s `-relocation-model=`, the `PIC Level`/`PIE Level` module flags and which globals are `dso_local` (spec/codegen.md "Symbol visibility and `dso_local`", WP-544) |
 | `-f[no-]semantic-interposition`, `-f[no-]direct-access-external-data` | the `dso_local` inputs of clang's `shouldAssumeDSOLocal` (spec/codegen.md "Symbol visibility and `dso_local`"): under `-fPIC`, `-fno-semantic-interposition` makes external non-COMDAT function definitions `dso_local` and `-fsemantic-interposition` adds the `SemanticInterposition` module flag; `-fdirect-access-external-data` (default only with `-fno-pic`) makes non-TLS variable declarations (and, under `-fno-pic`, function declarations) `dso_local` under `-fPIE`/`-fno-pic`, and a value other than the relocation model's default adds the `direct-access-external-data` module flag. The last of each pair wins |
@@ -118,6 +118,7 @@ starting with `-` are inputs.
 | `-l<lib>`, `-L<dir>`, `-B<dir>`, `-Wl,<args>`, `-Xlinker <arg>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs |
 | `-dD`, `-dI` | parsed; "not implemented yet" (WP-017) |
 | `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name is accepted and ignored |
+| `-f[no-]fast-math`, its parts, `-ffp-model=`, `-ffp-contract=`, `-fdenormal-fp-math=`, the FP environment flags | see "Floating-point flags" (WP-806) |
 | `-fstack-protector*`, `-f[no-]unwind-tables`, `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-ffunction-sections`, `-fdata-sections`, `-mtune=`, `-f[no-]wrapv`, `-f[no-]strict-overflow`, `-f[no-]delete-null-pointer-checks`, `-Wp,<list>`, `-Xpreprocessor <arg>`, and the ignored and rejected sets | see "Codegen flags" (WP-605) |
 
 ### Response files (WP-799)
@@ -161,22 +162,94 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 do not add a diagnostic): `-f[no-]stack-clash-protection`,
 `-fcf-protection`, `-fcf-protection=full|branch|return|none` (another value
 is `invalid value '<v>' in '-fcf-protection=<v>'`; accepted on AArch64 too,
-where clang errors), `-f[no-]common`, `-fexcess-precision=fast|standard|16`,
-`-f[no-]math-errno`, `-fstack-usage`, `-gz`, `-gz=none|zlib|zstd`,
-`-fno-trapv`, `-fno-short-enums`, `-ffp-model=precise` (clang's default
-model; WP-803), `-m64` (every kiln target is 64-bit;
-`-m32` stays unknown) and `-pipe`. Other
-`-fexcess-precision=`/`-gz=` values
+where clang errors), `-f[no-]common`, `-fstack-usage`, `-gz`, `-gz=none|zlib|zstd`,
+`-fno-trapv`, `-fno-short-enums`, `-m64` (every kiln target is 64-bit;
+`-m32` stays unknown) and `-pipe`. Other `-gz=` values
 (and an empty `-mtune=`) are `unsupported argument '<v>' to option '<opt>'`.
+(`-fexcess-precision=`, `-f[no-]math-errno` and `-ffp-model=` are in
+"Floating-point flags", WP-806.)
 
 **3. Rejected** with `drv_unsupported_flag`, the error `'<flag>' is not
 supported by kiln` (exit 1, no job runs; not the generic `unknown argument`):
-`-ftrapv`, `-fshort-enums`, `-ffp-model=fast|strict|aggressive` (another
-`-ffp-model=` value is `unsupported argument`), every `-fsanitize*` and `-fno-sanitize*`
+`-ftrapv`, `-fshort-enums`, every `-fsanitize*` and `-fno-sanitize*`
 (`-fsanitize=address`, `-fno-sanitize-recover=all`, ...),
 `-fcoverage-mapping`, `-fprofile-arcs`, `-ftest-coverage`, `--coverage`,
 `-fprofile-instr-generate[=...]`, `-fprofile-generate[=...]`,
 `-fprofile-instr-use[=...]`, `-fprofile-use[=...]`.
+
+### Floating-point flags (WP-806)
+
+`FpFlags` (`crates/kiln_driver/src/fp_flags.rs`) records the FP flags in
+command-line order and runs clang's `RenderFloatingPointOptions` state
+machine over them (clang 19's, or clang 22's at `-fclang-compat=22`).
+The result, `FpModel`, gives codegen its `FpOptions`
+(spec/codegen.md §3.2, spec/landed/codegen/WP-806.md), the predefined
+macros, the `llc` flags and the link's `crtfastmath.o`. Every flag is
+implemented or an error; none is accepted and ignored.
+
+- **Implemented:** `-f[no-]fast-math`, `-f[no-]unsafe-math-optimizations`,
+  `-f[no-]finite-math-only`, `-f[no-]honor-infinities`,
+  `-f[no-]honor-nans`, `-f[no-]approx-func`, `-f[no-]math-errno`,
+  `-f[no-]associative-math`, `-f[no-]reciprocal-math`,
+  `-f[no-]signed-zeros`, `-fno-trapping-math`, `-fno-rounding-math`,
+  `-ffp-contract=on|off|fast|fast-honor-pragmas`,
+  `-ffp-model=precise|fast` (and `aggressive` at compat 22),
+  `-ffp-exception-behavior=ignore`, `-ffp-eval-method=source`,
+  `-fexcess-precision=fast|standard`, `-fdenormal-fp-math=<m>[,<m>]`
+  (`ieee`, `preserve-sign`, `positive-zero`, `dynamic`: the
+  `denormal-fp-math` attribute), and `-Ofast` when it is the last `-O`
+  (`-ffast-math`). Another value is `unsupported argument '<v>' to
+  option '<opt>'` (`-fdenormal-fp-math=`: `invalid value`).
+- **The state machine.** `-ffast-math` (and `-Ofast`) sets every
+  value-changing flag, no `errno`, `contract` fast and the basic complex
+  range. Each part sets its own field. `-fno-fast-math` /
+  `-fno-unsafe-math-optimizations` restore the defaults and the last
+  `-ffp-contract=` (else `on` after a fast-math flag). Every
+  `-ffp-model=` starts from the defaults (rounding and trapping stay):
+  `precise` is them, `fast` is `-ffast-math`, `strict` adds trapping,
+  rounding and `contract` off.
+- **clang 22 (`-fclang-compat=22`).** `-ffp-model=fast` keeps NaNs and
+  infinities (no `__FAST_MATH__`, no `__FINITE_MATH_ONLY__`) and selects
+  promoted complex division. `-ffp-model=aggressive` is clang 19's
+  `fast`; at compat 19 it is `unsupported argument 'aggressive' to option
+  '-ffp-model='`. Promoted division is not implemented. When it is the
+  final complex range, it is the error `'-ffp-model=fast (promoted
+  complex arithmetic; add -fcomplex-arithmetic=basic)' is not supported
+  by kiln`. Any later complex-range flag avoids it.
+- **The floating-point environment.** Each flag whose final effect needs
+  it is the error `'<flag>' is not supported by kiln`
+  (`drv_unsupported_flag`, one per flag, exit 1):
+  - `-ftrapping-math`, `-ffp-exception-behavior=maytrap|strict`;
+  - `-frounding-math`;
+  - `-ffp-model=strict`;
+  - `-ffp-eval-method=double|extended`;
+  - `-fexcess-precision=16`.
+  A later flag that undoes the effect avoids the error: `-frounding-math
+  -fno-rounding-math` is accepted, and so is `-ffp-model=strict
+  -fno-rounding-math -ffp-exception-behavior=ignore`. A later
+  `-ffp-model=precise` does not undo it, as in clang.
+- **Macros.**
+  - `__FAST_MATH__`: every fast-math flag (finite, no `errno`, unsafe).
+  - `__FINITE_MATH_ONLY__ 1`: no infinities and no NaNs.
+  - `__NO_MATH_ERRNO__`: `-fno-math-errno`.
+  - AArch64 `__ARM_FP_FAST`: unsafe math.
+  - `__FLT_EVAL_METHOD__` stays 0.
+- **Backend.** Function attributes carry the semantics. `llc` gets
+  `-fp-contract=fast` only for exactly `-ffp-contract=fast` (clang's
+  `AllowFPOpFusion`; `fast-honor-pragmas` does not).
+- **Link and denormals.** The link passes the last of `-ffast-math`,
+  `-funsafe-math-optimizations` and `-ffp-model=fast|aggressive` (unless
+  a negation follows) to `clang++`, which adds GCC's `crtfastmath.o`.
+  The denormal mode comes only from the last `-fdenormal-fp-math=`; no
+  other flag changes it, and every target defaults to IEEE (no
+  attribute). This holds on x86-64 too when `crtfastmath.o` is linked:
+  clang 19 and 22 then emit no `denormal-fp-math` (checked with a fake
+  GCC installation).
+- **Tests:**
+  - `kiln_driver` `fp_flags` unit tests;
+  - `tests/driver.rs` `fast_math_x86_64_crtfastmath_keeps_ieee_denormals`;
+  - `tests/codegen.rs` `fp_environment_flags_rejected`;
+  - `tests/codegen/fp_*.cpp`.
 
 ## Driver modes
 
@@ -876,8 +949,7 @@ Each deviation is covered by a test or a test note.
     `-march=native` emits no `"target-cpu"` and `-mtune=native` no
     `"tune-cpu"` (clang resolves the host); `-fcf-protection` is accepted
     on AArch64; `-fwrapv-pointer` is accepted at `-fclang-compat=19`
-    (clang 19 has no such flag); `-fno-math-errno` is ignored (clang
-    then treats the libm builtins as not setting `errno`); the sanitizer, coverage,
+    (clang 19 has no such flag); the sanitizer, coverage,
     profile, `-ftrapv` and `-fshort-enums` flags are errors; and the Oven
     ignores `-fwrapv`.
 20. **`-fmacro-prefix-map=` keeps `.` components and repeated `/`.** Once

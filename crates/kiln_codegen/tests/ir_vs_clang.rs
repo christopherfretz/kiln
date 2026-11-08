@@ -107,6 +107,27 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // LLVM overloads it as `llvm.thread.pointer.p0` (WP-782).
     ("builtins_thread_pointer", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("builtins_thread_pointer", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
+    // LLVM 20+ fast-math flags on `fpext`/`fptrunc` and on calls returning
+    // a homogeneous FP struct (`__muldc3`): the LLVM 19 IR kiln emits for
+    // its backend (`llvm_major`) cannot carry them (WP-806).
+    ("fp_contract_fast", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_contract_fast", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_contract_honor", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_contract_honor", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_fast_math", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_fast_math", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_finite_math", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_finite_math", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_unsafe_math", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_unsafe_math", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_parts", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_parts", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_fast_math_undo", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_fast_math_undo", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_math_errno_O1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_math_errno_O1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_model_fast", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("fp_model_fast", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     // clang 22 instruction-selection changes that kiln has not followed:
     // `alloca` of the atomic flag / order temporaries, `i1` (19: `i8`) overflow-result
     // truncation, `select` for vector `?:`, and the block order of

@@ -1163,7 +1163,9 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   (clang `AddPotentialArgAccess`). `tests/codegen/complex_math_builtins.cpp`.
 - **Deviations.** `-fcomplex-arithmetic=promoted` (clang widens a
   division's operands to the next type with twice the exponent range,
-  warning when none exists) is rejected with "unsupported argument";
+  warning when none exists) is rejected with "unsupported argument", and
+  clang 22's `-ffp-model=fast`, which selects it, with
+  `drv_unsupported_flag` (spec/driver.md "Floating-point flags");
   clang's `-Woverriding-option` warnings between complex-range flags are
   not issued. `_Complex _Float16` is supported (`ext.complex/complex-half.cpp`).
   `_Complex __bf16` (spelled directly or through a type-name, as

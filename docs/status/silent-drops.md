@@ -56,7 +56,7 @@ there (and under `-w` / `-Wno-unknown-attributes`).
 ### Systemic causes (fixing these removes most of the A list at once)
 
 Causes 1 to 3 are fixed in WP-805, and so is the class A half of cause 4 (`used`, `aligned` on
-functions). The class B half of cause 4 is open. Cause 5 is WP-806.
+functions). The class B half of cause 4 is open. Cause 5 is fixed in WP-806 (#364).
 
 1. **`__has_attribute`/`__has_cpp_attribute`/`__has_builtin` claim everything clang has**
    (crates/kiln_pp/src/features.rs:391-440 answer from the clang-generated features_table.rs).
@@ -74,13 +74,14 @@ functions). The class B half of cause 4 is open. Cause 5 is WP-806.
 4. **Known attribute kinds with no codegen consumer**: `used`, `aligned` on functions (A); `nonnull`
    IR, `likely`/`unlikely`, debug attributes (B). No diagnostic because sema thinks they are handled.
 5. **FP pragmas/flags**: contraction is always on, `-ffp-contract=off` is rejected, and every FP
-   pragma that would turn it off or make FP strict is accepted silently.
+   pragma that would turn it off or make FP strict is accepted silently. **Fixed in WP-806 (#364):
+   implemented, or an error for the non-default FP environment.**
 
 ### Class A, all categories, ordered by likely real-world impact
 
 1. attr `constructor`/`destructor` (+priority) — function never runs. warn / silent in sys hdr. (§1.3 A1) **Fixed in WP-807.**
 2. pragma `STDC FP_CONTRACT OFF` / `clang fp contract(off)` — always fused to FMA, and the
-   `-ffp-contract=off` escape is rejected. **No diagnostic.** (§3 P-A1) **Owner: WP-806.**
+   `-ffp-contract=off` escape is rejected. **No diagnostic.** (§3 P-A1) **Implemented in WP-806 (#364).**
 3. attr `cleanup(fn)` — scope-exit cleanup never runs. warn / silent in sys hdr. (A2) **Fixed in WP-807.**
 4. attr `used` — unreferenced static/inline entity not emitted, not in `llvm.used`. **No diagnostic.** (A3) **Owner: fixed in WP-805.**
 5. builtin `__builtin_assume(expr)` — side effects of `expr` are executed (clang discards them and
@@ -94,7 +95,7 @@ functions). The class B half of cause 4 is open. Cause 5 is WP-806.
 10. attr `internal_linkage` — linkage/ODR differs; silent in libc++ configs that use it. (A8) **Fixed in WP-807.**
 11. attr `returns_twice` on user functions. (A7) **Fixed in WP-807.**
 12. pragma `STDC FENV_ACCESS ON` / `float_control(except)` / `clang fp exceptions` — no
-    constrained FP. **No diagnostic.** (P-A2) **Owner: WP-806.**
+    constrained FP. **No diagnostic.** (P-A2) **An error since WP-806 (#364); `float_control(except, off)` and `clang fp exceptions(ignore)` accepted.**
 13. attr `tls_model`. (A10) **Fixed in WP-807.**
 14. attr `pass_object_size` / `pass_dynamic_object_size` — hidden-parameter ABI + mangling. (A16) **Fixed in WP-803.**
 15. attr `retain` (gc-sections). (A11) **Owner: fixed in WP-805.**
@@ -105,7 +106,7 @@ functions). The class B half of cause 4 is open. Cause 5 is WP-806.
     multiversioning (`target_clones`, `target_version`, `cpu_specific`/`cpu_dispatch`),
     `aligned` on functions (**no diagnostic**), `x86 interrupt`. (A13-A22) **Owner: `aligned` on functions fixed in WP-805; `transparent_union` is class C (clang ignores it in C++); the others are an error since WP-805, unowned.**
 19. attr `__clang_arm_builtin_alias` / `clang_builtin_alias`, `selectany` — break at link (loud). (A12, A17) **Owner: error since WP-805, unowned.**
-20. pragma `STDC FENV_ROUND`, flag `-fexcess-precision=16`, pragma `clang fp eval_method`. (P-A3, F-A4, P-A4) **Owner: WP-806.**
+20. pragma `STDC FENV_ROUND`, flag `-fexcess-precision=16`, pragma `clang fp eval_method`. (P-A3, F-A4, P-A4) **An error since WP-806 (#364), except `FENV_ROUND FE_TONEAREST` and `eval_method(source)`.**
 
 Fully silent A items before WP-805 (no diagnostic anywhere): #2, #4, #5, #8 (flag), #12, #16, #17,
 aligned-on-function, P-A3, P-A4, F-A4 — plus every attribute row when it appears in a system header.
@@ -299,14 +300,15 @@ source-location builtins, ARM/x86 hint/barrier/crc builtins (kept memory-unknown
 
 ### Class B
 
-Owner: open (fast-math items WP-806).
+Owner: open (the fast-math item is fixed in WP-806, #364).
 
 - `__builtin_constant_p` not foldable in sema -> always 0 at runtime (builtins.rs:436, verified);
   clang emits `llvm.is.constant.*` at -O1+, which can become 1 after inlining. Fast paths lost.
 - `__builtin_verbose_trap(cat, msg)` -> plain `llvm.trap` (builtins.rs:969-973); clang encodes
   the message in debug info.
 - fast-math never reaches IR (`FastMath::NONE`, crates/kiln_codegen/src/fir.rs:1108-1110):
-  `isnan`/`isinf`/`fpclassify` not folded, no reassociation. Same item as F-B2 below.
+  `isnan`/`isinf`/`fpclassify` not folded, no reassociation. Same item as F-B2 below. **Fixed in
+  WP-806 (#364).**
 - `__builtin_alloca`/`alloca_with_align` memory is not pattern/zero-initialized under
   trivial-auto-var-init (crates/kiln_codegen/src/checked.rs:250-268); clang `initializeAlloca`
   does. Hardening only (reading it is UB).
@@ -344,14 +346,14 @@ templ/class.rs:1993), `GCC visibility push/pop` (sema visibility.rs:312), loop p
 
 | # | pragma | where | kiln | clang | owner |
 |---|---|---|---|---|---|
-| P-A1 | `#pragma STDC FP_CONTRACT OFF`, `#pragma clang fp contract(off)` | pragma.rs:118 (STDC accepted, no event); `fp` in CLANG_IGNORED pragma.rs:31 | always fuses `a*b+c` into `llvm.fmuladd` (codegen expr.rs:1392-1509) -> real FMA on AArch64; and `-ffp-contract=off` is rejected as unknown, so there is no way out | stops contraction in scope | WP-806 |
-| P-A2 | `#pragma STDC FENV_ACCESS ON`, `float_control(except, on)`, `clang fp exceptions(strict/maytrap)` | :118, :24, :31 | plain FP ops; LLVM may move/fold across `fesetround`/`fetestexcept` | constrained FP intrinsics | WP-806 |
-| P-A3 | `#pragma STDC FENV_ROUND <mode>` | :118 | round-to-nearest | static rounding mode for ops and folding | WP-806 |
-| P-A4 | `#pragma clang fp eval_method(...)` | :31 | none | evaluation precision + `FLT_EVAL_METHOD` | WP-806 |
+| P-A1 | `#pragma STDC FP_CONTRACT OFF`, `#pragma clang fp contract(off)` | pragma.rs:118 (STDC accepted, no event); `fp` in CLANG_IGNORED pragma.rs:31 | always fuses `a*b+c` into `llvm.fmuladd` (codegen expr.rs:1392-1509) -> real FMA on AArch64; and `-ffp-contract=off` is rejected as unknown, so there is no way out | stops contraction in scope | implemented in WP-806 (#364) |
+| P-A2 | `#pragma STDC FENV_ACCESS ON`, `float_control(except, on)`, `clang fp exceptions(strict/maytrap)` | :118, :24, :31 | plain FP ops; LLVM may move/fold across `fesetround`/`fetestexcept` | constrained FP intrinsics | an error since WP-806 (#364) |
+| P-A3 | `#pragma STDC FENV_ROUND <mode>` | :118 | round-to-nearest | static rounding mode for ops and folding | an error since WP-806 (#364) |
+| P-A4 | `#pragma clang fp eval_method(...)` | :31 | none | evaluation precision + `FLT_EVAL_METHOD` | an error since WP-806 (#364) |
 
 ### Class B
 
-Owner: `clang fp` / `float_control` / `CX_LIMITED_RANGE` WP-806; the rest open.
+Owner: `clang fp` / `float_control` / `CX_LIMITED_RANGE` implemented in WP-806 (#364); the rest open.
 
 - `#pragma clang optimize off` (:31): no `optnone` on following functions.
 - `clang fp reassociate(on)`, `clang fp contract(fast)`, `float_control(precise, off)` (:31, :24):
@@ -397,11 +399,11 @@ etc. are rejected as unknown (loud; fine by policy).
 | F-A1 | `-ffreestanding` | args.rs:1117 -> only predefined macros (pp_cmd.rs:148) + unwind default (codegen_cmd.rs:181) | no `no-builtins` fn attribute anywhere in kiln_codegen (verified: grep finds only the `nobuiltin` call-site attr for operator new/delete, new_delete.rs:307); library builtins still recognized | implies `-fno-builtin`: `"no-builtins"` on every function -> no loop-idiom self-recursion in `memcpy`/`memset` implementations | WP-808 |
 | F-A2 | `-fno-sized-deallocation` | args.rs:1123 -> only pp_cmd.rs:151 / `__cpp_sized_deallocation` (predef.rs:561) | still emits sized `operator delete(void*, size_t)` (codegen new_delete.rs:1509) | unsized delete | WP-808 |
 | F-A3 | `-fno-char8_t` | args.rs:1107 -> macros only (predef.rs:541) | `char8_t` stays a keyword; `u8""` stays `const char8_t[]` (parse decl.rs:883) | `u8""` is `const char[]`, `char8_t` not a keyword (mostly loud errors; some overloads/mangling silently differ) | WP-808 |
-| F-A4 | `-fexcess-precision=16` | codegen_flags.rs:165 | validated, dropped; always "standard" `_Float16`/`__bf16` (codegen expr.rs:1283) | no excess precision for `_Float16` | WP-806 |
+| F-A4 | `-fexcess-precision=16` | codegen_flags.rs:165 | validated, dropped; always "standard" `_Float16`/`__bf16` (codegen expr.rs:1283) | no excess precision for `_Float16` | an error since WP-806 (#364) |
 
 ### Class B
 
-Owner: fast-math and `-fno-math-errno` WP-806; the rest open.
+Owner: fast-math and `-fno-math-errno` implemented in WP-806 (#364); the rest open.
 
 - `-g`, `-g1..3`, `-ggdb*` (args.rs:762): no debug info at all, no diagnostic.
 - `-ffast-math`/`-Ofast`: macros (`__FAST_MATH__`, predef.rs:582) + basic complex range only; no
