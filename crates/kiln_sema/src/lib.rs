@@ -68,6 +68,7 @@ mod init_dtor;
 mod init_priority;
 mod int_in_bool;
 mod int_overflow;
+mod int_range;
 mod internal_linkage;
 mod jump_scope;
 mod kind_conflict;
@@ -869,7 +870,7 @@ pub struct Sema<'a, 'sm> {
     pub(crate) walk_stack: std::cell::RefCell<Vec<ExprId>>,
     /// [`Sema::walk_stack`] for the implicit-conversion walk, whose work
     /// items carry the context location.
-    pub(crate) conv_walk_stack: Vec<(ExprId, Loc)>,
+    pub(crate) conv_walk_stack: Vec<(ExprId, Loc, bool)>,
     /// The reused buffers of [`Sema::exprs_equivalent`] (WP-645).
     pub(crate) equiv_scratch: std::cell::RefCell<kiln_ast::types::EquivScratch>,
     /// The reused argument and option buffers of call-candidate

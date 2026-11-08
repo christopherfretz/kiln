@@ -562,7 +562,12 @@ pub(crate) fn is_zero_value(kind: FloatKind, bits: u128) -> bool {
 /// `p`-bit significand): `1.5`, `123456789.5`, `1.5E+15`, `1.0E-5`.
 pub(crate) fn apfloat_diag_string(kind: FloatKind, bits: u128) -> String {
     let p = params(kind).0;
-    let prec = (p * 59).div_ceil(196);
+    apfloat_string(kind, bits, (p * 59).div_ceil(196))
+}
+
+/// `llvm::APFloat::toString(Str, prec)` with its default padding (3) and
+/// zero truncation (`prec` significant digits at most).
+pub(crate) fn apfloat_string(kind: FloatKind, bits: u128, prec: u32) -> String {
     let Some((neg, mut digits, k)) = sig_digits(kind, bits, prec.min(37)) else {
         return match decode(kind, bits) {
             Decoded::NaN => "NaN".into(),
