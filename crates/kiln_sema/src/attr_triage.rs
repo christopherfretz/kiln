@@ -113,6 +113,8 @@ const INSTR: &str = "instrumentation or hardening only; dropping it changes no s
 const HINT: &str = "optimization hint; dropping it is a valid refinement";
 const INLINE: &str = "inlining or call-optimization hint; dropping it changes no semantics";
 const DIAG_REJECT: &str = "only makes clang diagnose a use; no code generation effect";
+const MULTIVERSION: &str =
+    "function multiversioning, which needs resolvers and ifuncs on x86-64 (AArch64: WP-810)";
 
 /// The rows, sorted by name.
 pub static TABLE: &[Row] = &[
@@ -137,7 +139,6 @@ pub static TABLE: &[Row] = &[
     r("annotate", G | CL, C, ANALYSIS),
     r("annotate_type", CL, C, ANALYSIS),
     r("argument_with_type_tag", G | CL, C, ANALYSIS),
-    r("arm_sve_vector_bits", G, A, "defines a vector or matrix type"),
     r("assert_capability", G | CL, C, TSA),
     r("assert_exclusive_lock", G, C, TSA),
     r("assert_shared_capability", G | CL, C, TSA),
@@ -152,7 +153,6 @@ pub static TABLE: &[Row] = &[
     r("bounded", G, C, OFFLOAD),
     r("btf_decl_tag", G | CL, B, DEBUG),
     r("btf_type_tag", G | CL, B, DEBUG),
-    r("builtin_alias", CL, A, "maps the declaration to a builtin"),
     r("callable_when", G | CL, C, ANALYSIS),
     r("callback", G | CL, B, HINT),
     r("called_once", G | CL, C, ANALYSIS),
@@ -166,10 +166,6 @@ pub static TABLE: &[Row] = &[
     r("cfi_canonical_jump_table", G | CL, B, INSTR),
     r22("cfi_salt", G | CL, B, INSTR),
     r22("cfi_unchecked_callee", G | CL, B, INSTR),
-    // clang spells it `__clang_arm_builtin_alias` (the name, its leading
-    // `__` trimmed as sema trims it).
-    rt("clang_arm_builtin_alias", [G | CL, G | CL, 0, 0], A, "maps the declaration to a builtin"),
-    r("clang_builtin_alias", G, A, "maps the declaration to a builtin"),
     r("clspv_libclc_builtin", G | CL, C, OFFLOAD),
     r22("cluster_dims", G, C, OFFLOAD),
     r("code_align", G | CL, B, HINT),
@@ -187,8 +183,8 @@ pub static TABLE: &[Row] = &[
     r("coro_wrapper", G | CL, C, ANALYSIS),
     r("counted_by", G | CL, C, ANALYSIS),
     r("counted_by_or_null", G | CL, C, ANALYSIS),
-    r("cpu_dispatch", G | CL, A, "function multiversioning"),
-    r("cpu_specific", G | CL, A, "function multiversioning"),
+    rt("cpu_dispatch", [0, 0, G | CL, G | CL], A, MULTIVERSION),
+    rt("cpu_specific", [0, 0, G | CL, G | CL], A, MULTIVERSION),
     r("cudart_builtin", G, C, OFFLOAD),
     r("device", G, C, OFFLOAD),
     r("device_builtin", G, C, OFFLOAD),
@@ -372,8 +368,8 @@ pub static TABLE: &[Row] = &[
     r("sycl_kernel", G | CL, C, OFFLOAD),
     r22("sycl_kernel_entry_point", CL, C, OFFLOAD),
     r("sycl_special_class", G | CL, C, OFFLOAD),
-    r("target_clones", G | GS, A, "function multiversioning"),
-    rt("target_version", [G | GS, G | GS, G | GS, 0], A, "function multiversioning"),
+    rt("target_clones", [0, 0, G | GS, G | GS], A, MULTIVERSION),
+    rt("target_version", [0, 0, G | GS, 0], A, MULTIVERSION),
     r("test_typestate", G | CL, C, ANALYSIS),
     r("try_acquire_capability", G | CL, C, TSA),
     r("try_acquire_shared_capability", G | CL, C, TSA),
@@ -489,6 +485,22 @@ pub fn attribute_support(
     if name == "interrupt" && x86 && sp & (G | GS) != 0 {
         return Support::Unsupported;
     }
+    // WP-810: dispatched before the triage (`Sema::builtin_alias_attribute`,
+    // `Sema::fmv_attribute`); the x86-64 multiversioning spellings are
+    // class-A rows.
+    let wp810 = match name {
+        "builtin_alias" if sp == CL => Some(AttrKind::BUILTIN_ALIAS),
+        "clang_builtin_alias" if sp == G => Some(AttrKind::BUILTIN_ALIAS),
+        "clang_arm_builtin_alias" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::BUILTIN_ALIAS),
+        "target_version" if !x86 && sp & (G | GS) != 0 => Some(AttrKind::TARGET_VERSION),
+        "target_clones" if !x86 && sp & (G | GS) != 0 => Some(AttrKind::TARGET_CLONES),
+        "cpu_dispatch" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::CPU_DISPATCH),
+        "cpu_specific" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::CPU_SPECIFIC),
+        _ => None,
+    };
+    if let Some(k) = wp810 {
+        return Support::Implemented(k);
+    }
     match row(name) {
         Some(r) if sp != 0 && r.spellings_at(compat, x86) & sp != 0 => match r.class {
             A => Support::Unsupported,
@@ -584,6 +596,20 @@ mod tests {
             Support::Implemented(_)
         ));
         assert_eq!(s("not_an_attribute", g, None, 22), Support::Unknown);
+        // WP-810: implemented on AArch64; multiversioning is class A on x86-64.
+        assert!(matches!(s("arm_sve_vector_bits", g, None, 22), Support::Implemented(_)));
+        assert!(matches!(
+            s("clang_arm_builtin_alias", x, Some("clang"), 19),
+            Support::Implemented(_)
+        ));
+        assert!(matches!(s("target_version", x, Some("gnu"), 22), Support::Implemented(_)));
+        let x86 = |n, syn, sc, c| attribute_support(n, syn, sc, c, true, true);
+        assert_eq!(x86("target_clones", g, None, 22), Support::Unsupported);
+        assert_eq!(x86("target_version", g, None, 19), Support::Unsupported);
+        assert_eq!(x86("target_version", g, None, 22), Support::Unknown);
+        assert_eq!(x86("cpu_dispatch", x, Some("clang"), 19), Support::Unsupported);
+        assert_eq!(x86("clang_arm_builtin_alias", g, None, 19), Support::Unknown);
+        assert!(matches!(x86("clang_builtin_alias", g, None, 19), Support::Implemented(_)));
     }
 
     /// The conventions kiln does not lower yet stay class A (WP-808

@@ -278,6 +278,7 @@ impl CodegenJob<'_> {
             char8: a.predef.char8_t,
             math_errno: a.fp_model().opts.math_errno,
             sve: feats.sve,
+            sve_vector_bits: feats.sve_vector_bits,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
             contract_semantic: a.contract_semantic.unwrap_or_default(),

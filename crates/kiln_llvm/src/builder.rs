@@ -1329,7 +1329,15 @@ pub(crate) fn check_cast(t: &TypeTable, op: CastOp, from: TypeId, to: TypeId) ->
                     && t.ptr_addrspace(fs).is_some()
                     && t.ptr_addrspace(fs) == t.ptr_addrspace(ts)
             } else {
-                match (primitive_bits(t, from), primitive_bits(t, to)) {
+                // LLVM compares `TypeSize`s: a scalable vector only casts
+                // to a scalable vector of the same minimum size.
+                let scalable_bits = |ty| match t.data(ty) {
+                    TypeData::Vector { len, elem, scalable: true } => {
+                        primitive_bits(t, *elem).map(|b| (b * u64::from(*len), true))
+                    }
+                    _ => primitive_bits(t, ty).map(|b| (b, false)),
+                };
+                match (scalable_bits(from), scalable_bits(to)) {
                     (Some(a), Some(b)) => a == b,
                     _ => false,
                 }

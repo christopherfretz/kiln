@@ -689,6 +689,11 @@ impl<'a> AstNames<'a> {
                 Some(stride) => Shape::Array { elem: a.elem, stride, len: a.size },
                 None => Shape::Unknown,
             },
+            // `_Complex T` is stored as `T[2]`, real part first (WP-810).
+            TypeView::Complex(e) => match self.size_of(e) {
+                Some(stride) => Shape::Array { elem: e, stride, len: 2 },
+                None => Shape::Unknown,
+            },
             TypeView::Record(d) => self.record_shape(d),
             TypeView::Enum(d) => {
                 let Some(int) = self.ast.decls.enumeration(d).and_then(|e| e.int_type) else {

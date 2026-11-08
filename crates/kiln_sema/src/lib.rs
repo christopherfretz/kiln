@@ -52,6 +52,7 @@ pub mod expr;
 mod extern_c;
 mod fallthrough;
 mod flex_array;
+mod fmv;
 mod for_loop_analysis;
 mod format_string;
 mod forms;
@@ -292,6 +293,9 @@ pub struct Sema<'a, 'sm> {
     /// `-target-feature +sve`): the SVE vector types are usable in
     /// expressions and as automatic variables (spec/sema.md "SVE").
     pub sve: bool,
+    /// `-msve-vector-bits=N` (clang's `VScaleMin` = `VScaleMax` = N/128):
+    /// the one size `arm_sve_vector_bits` accepts (spec/sema.md "SVE").
+    pub sve_vector_bits: Option<u32>,
     /// The begin of the nested-name-specifier whose component the parser
     /// is acting on (set around each `act_on_nested_name_*` call): clang
     /// 22's point of instantiation for a class or enumeration completed
@@ -1162,6 +1166,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             gnu: false,
             clang_compat: 22,
             sve: false,
+            sve_vector_bits: None,
             nns_start: None,
             gnu_lib_builtins: false,
             no_builtin: false,

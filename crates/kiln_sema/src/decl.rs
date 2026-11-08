@@ -2718,6 +2718,24 @@ impl Sema<'_, '_> {
         if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
             self.check_explicit_inst_specifiers(ds, ty);
         }
+        // WP-810: a non-default `target_version` version is hidden, as
+        // clang hides it without the `fmv` target feature (src/fmv.rs).
+        if !ds.is_typedef() && self.ast.types.is_function(ty) {
+            let attrs: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+            if let Some(at) = self.fmv_hidden_version(&attrs) {
+                if d.ctx == DeclaratorContext::Member {
+                    // clang crashes on this (a friend: `act_on_friend`).
+                    let msg = self
+                        .diag(DiagId::sema_multiversion_not_supported, at)
+                        .arg("target_version");
+                    self.emit(msg);
+                } else {
+                    self.fmv_attached(true, &attrs, true);
+                    self.templ.cur = None;
+                    return None;
+                }
+            }
+        }
         if special {
             // [temp.variadic]/12: `S(Ts);`, `operator Ts();`.
             if !invalid && ds.friend.is_none() {
@@ -6843,6 +6861,13 @@ impl Sema<'_, '_> {
             let loc = self.ast.decls.get(f).loc();
             self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(info.name));
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        } else if self.ast.builtin_alias(f).is_some() {
+            // clang `ActOnStartOfFunctionDef`: an alias of a builtin
+            // (`__clang_arm_builtin_alias`, WP-810) is itself a builtin.
+            let loc = self.ast.decls.get(f).loc();
+            let name = self.decl_name_str(self.ast.decls.get(f).name());
+            self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(name));
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         // clang `ActOnStartOfFunctionDef` resolves the exception
         // specification of every definition: a destructor or defaulted
@@ -10238,6 +10263,23 @@ impl Sema<'_, '_> {
         let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
         let shown = self.attr_shown_parts(syntax, scope, name);
         let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
+        // WP-810: clang `Clang<"__clang_arm_builtin_alias">` (no `__`
+        // affixes are removed: `clang_arm_builtin_alias` is unknown) and
+        // `BuiltinAlias` (`GNU<"clang_builtin_alias">`,
+        // `CXX11<"clang", "builtin_alias">`).
+        let alias = match (raw.as_str(), scope_s.as_deref()) {
+            ("__clang_arm_builtin_alias", None) if syntax == AttrSyntax::Gnu => Some(true),
+            ("__clang_arm_builtin_alias", Some("clang")) => Some(true),
+            ("clang_builtin_alias", None) if syntax == AttrSyntax::Gnu => Some(false),
+            ("builtin_alias", Some("clang")) => Some(false),
+            _ => None,
+        };
+        if let Some(arm) = alias {
+            return self.builtin_alias_attribute(arm, syntax, &shown, args, loc);
+        }
+        if let Some(r) = self.fmv_attribute(&n, scope_s.as_deref(), syntax, args, loc) {
+            return r;
+        }
         // The triage (spec/sema.md §4.5, WP-805): an implemented
         // spelling, a clang attribute kiln ignores (class B/C: no
         // diagnostic, nothing attached), one it rejects (class A), or one
@@ -10499,12 +10541,13 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         };
-        let lit = match arg {
-            AttrArg::Expr(e) => self.string_lit_of(*e),
-            AttrArg::Type(_) | AttrArg::Ident(..) => None,
+        let (lit, at) = match arg {
+            AttrArg::Expr(e) => (self.string_lit_of(*e), self.ast.exprs.get(*e).loc()),
+            AttrArg::Ident(_, at) => (None, *at),
+            AttrArg::Type(_) => (None, loc),
         };
         let Some(lit) = lit else {
-            let msg = self.diag(DiagId::parse_attribute_requires_string, loc).arg(n.to_owned());
+            let msg = self.diag(DiagId::parse_attribute_requires_string, at).arg(n.to_owned());
             self.emit(msg);
             return None;
         };
@@ -11411,6 +11454,8 @@ pub(crate) fn attr_kind_of(
         ("neon_polyvector_type", _, _) if gnu_syntax || clang_scope => {
             AttrKind::NEON_POLYVECTOR_TYPE
         }
+        // clang `GNU<"arm_sve_vector_bits">` (WP-810).
+        ("arm_sve_vector_bits", _, _) if gnu_syntax => AttrKind::ARM_SVE_VECTOR_BITS,
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
         ("abi_tag", _, true) => AttrKind::ABI_TAG,
         // clang `GNU<"enable_if">`: no `[[...]]` spelling.

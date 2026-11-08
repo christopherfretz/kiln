@@ -301,6 +301,10 @@ pub struct TestSpec {
     /// target (its `--target`, else the host) must have; otherwise the test
     /// is a SKIP.
     pub requires_target: Option<String>,
+    /// `requires: host-<feature>` (WP-810): a CPU feature of
+    /// [`HOST_FEATURES`] the host the harness runs on must have, the test
+    /// targeting the host's architecture; otherwise the test is a SKIP.
+    pub requires_host: Option<String>,
     /// `verify`: the outcome is clang's `-verify` check of the test's
     /// `expected-*` comments, under the compiler and the oracle.
     pub verify: bool,
@@ -393,6 +397,18 @@ impl TestSpec {
         clangs: &[ClangRun<'_>],
         llvms: &[LlvmRun<'_>],
     ) -> Option<String> {
+        if let Some(want) = self.requires_host.as_deref() {
+            let arch = self.target_arch(host);
+            let feats = host_features();
+            if arch != host {
+                return Some(format!(
+                    "requires host-{want}; the test targets {arch}, not the host"
+                ));
+            }
+            if !feats.iter().any(|f| f == want) {
+                return Some(format!("requires host-{want}; the host CPU lacks {want}"));
+            }
+        }
         if let Some(want) = self.requires_target.as_deref() {
             let arch = self.target_arch(host);
             if want != arch {
@@ -497,6 +513,7 @@ struct Parser {
     ast_implicit: bool,
     mem_mib: Option<u64>,
     requires_target: Option<String>,
+    requires_host: Option<String>,
     /// Line of `verify` (0: absent).
     verify_line: usize,
     /// Line of the first `diag:` / `strict-diags` (0: none).
@@ -557,6 +574,7 @@ impl Parser {
             ast_implicit: false,
             mem_mib: None,
             requires_target: None,
+            requires_host: None,
             verify_line: 0,
             diag_line: 0,
             requires_clang: None,
@@ -922,6 +940,7 @@ impl Parser {
     }
 
     /// `requires: target-<arch>` (`<arch>` one of [`TARGET_ARCHES`]),
+    /// `requires: host-<feature>` (one of [`HOST_FEATURES`]),
     /// `requires: clang>=X[.Y[.Z]]`, `requires: clang<X[.Y[.Z]]`,
     /// `requires: llvm>=N` or `requires: llvm<N`; each kind at most once.
     fn requires_directive(&mut self, line: usize, value: &str) {
@@ -930,7 +949,18 @@ impl Parser {
              `requires: clang<X[.Y[.Z]]`, `requires: llvm>=N` or `requires: llvm<N`",
             TARGET_ARCHES.join(" ")
         );
-        if let Some(a) = value.strip_prefix("target-") {
+        if let Some(f) = value.strip_prefix("host-") {
+            if !HOST_FEATURES.contains(&f) {
+                self.err(
+                    line,
+                    format!("unknown host feature `{f}` (one of {})", HOST_FEATURES.join(" ")),
+                );
+            } else if self.requires_host.is_some() {
+                self.err(line, "duplicate `requires: host-`");
+            } else {
+                self.requires_host = Some(f.to_owned());
+            }
+        } else if let Some(a) = value.strip_prefix("target-") {
             if !TARGET_ARCHES.contains(&a) {
                 self.err(line, usage);
             } else if self.requires_target.is_some() {
@@ -1190,6 +1220,7 @@ impl Parser {
             ast_implicit: self.ast_implicit,
             mem_mib: self.mem_mib,
             requires_target: self.requires_target,
+            requires_host: self.requires_host,
             verify,
             requires_clang: self.requires_clang,
             requires_clang_below: self.requires_clang_below,
@@ -1205,6 +1236,33 @@ impl Parser {
 /// The architectures `requires: target-<arch>` accepts, spelled as
 /// `std::env::consts::ARCH` (a typo would otherwise skip the test forever).
 pub const TARGET_ARCHES: &[&str] = &["aarch64", "x86_64"];
+
+/// The CPU features `requires: host-<feature>` may name (WP-810).
+pub const HOST_FEATURES: &[&str] = &["sve"];
+
+/// The harness host's CPU features (of [`HOST_FEATURES`]): the `Features`
+/// line of Linux's `/proc/cpuinfo`, read once; empty elsewhere. `sve` is
+/// the kernel's name of the `AArch64` Scalable Vector Extension. The
+/// `KILN_HOST_FEATURES` environment variable (space-separated) overrides
+/// it, so the skip path is testable.
+pub fn host_features() -> &'static [String] {
+    static FEATS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    FEATS.get_or_init(|| {
+        let text = match std::env::var("KILN_HOST_FEATURES") {
+            Ok(v) => v,
+            Err(_) => std::fs::read_to_string("/proc/cpuinfo")
+                .ok()
+                .and_then(|c| {
+                    c.lines()
+                        .find(|l| l.starts_with("Features") || l.starts_with("flags"))
+                        .and_then(|l| l.split_once(':'))
+                        .map(|(_, v)| v.to_owned())
+                })
+                .unwrap_or_default(),
+        };
+        text.split_whitespace().filter(|f| HOST_FEATURES.contains(f)).map(str::to_owned).collect()
+    })
+}
 
 /// The architecture of a target triple, in `std::env::consts::ARCH`
 /// spelling (clang's `arm64` and `amd64` aliases normalized).
@@ -1491,6 +1549,23 @@ mod tests {
         assert!(e.iter().any(|e| e.contains("expected `requires: target-<arch>`")), "{e:?}");
         let e = errs("//@ requires: target-x86_64\n//@ requires: target-x86_64\n");
         assert!(e.iter().any(|e| e.contains("duplicate `requires: target-`")), "{e:?}");
+    }
+
+    /// WP-810: `requires: host-sve` parses, rejects unknown features and
+    /// skips a test that targets another architecture than the host.
+    #[test]
+    fn requires_host_directive() {
+        let s = ok("//@ expect: run\n//@ requires: host-sve\n");
+        assert_eq!(s.requires_host.as_deref(), Some("sve"));
+        let s = ok("//@ requires: host-sve\n//@ args: --target=x86_64-unknown-linux-gnu\n");
+        assert_eq!(
+            s.unmet_requirement("aarch64", &[], &[]).as_deref(),
+            Some("requires host-sve; the test targets x86_64, not the host")
+        );
+        let e = errs("//@ requires: host-avx9\n");
+        assert!(e.iter().any(|e| e.contains("unknown host feature `avx9`")), "{e:?}");
+        let e = errs("//@ requires: host-sve\n//@ requires: host-sve\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `requires: host-`")), "{e:?}");
     }
 
     /// WP-239: `requires: target-` compares against the test's effective

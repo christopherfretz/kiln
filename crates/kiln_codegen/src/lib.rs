@@ -51,6 +51,7 @@ mod outline;
 mod psabi;
 mod recursion;
 mod stmt;
+mod sve;
 mod target_features;
 mod tbaa;
 mod tls;

@@ -84,11 +84,39 @@ fn takes_expr_args(name: &str) -> bool {
             | "tls_model"
             | "returns_twice"
             | "mode"
+            | "arm_sve_vector_bits"
+            | "clang_arm_builtin_alias"
+            | "clang_builtin_alias"
+            | "builtin_alias"
+            | "target_version"
+            | "target_clones"
+            | "cpu_dispatch"
+            | "cpu_specific"
             | "regparm"
             | "no_caller_saved_registers"
             | "no_builtin"
             | "interrupt"
     ) || kiln_ast::attr::CC_ATTR_SPELLINGS.contains(&n)
+}
+
+/// True for the attributes whose arguments are all identifiers when
+/// written as one (clang `VariadicIdentifierArgument`: `cpu_dispatch`,
+/// `cpu_specific`).
+fn takes_ident_list(name: &str) -> bool {
+    matches!(name.trim_start_matches("__").trim_end_matches("__"), "cpu_dispatch" | "cpu_specific")
+}
+
+/// True when argument `i` of attribute `name` must be written as a string
+/// literal (clang `attributeStringLiteralListArg`, for the attributes kiln
+/// checks this way): another token there is "expected string literal as
+/// argument of 'name' attribute" at that token and the attribute is
+/// dropped, without parsing the argument as an expression.
+fn string_literal_arg(name: &str, i: usize) -> bool {
+    match name.trim_start_matches("__").trim_end_matches("__") {
+        "target" | "target_version" => i == 0,
+        "target_clones" => true,
+        _ => false,
+    }
 }
 
 /// True for the attributes whose argument is a type-id (clang
@@ -103,7 +131,18 @@ fn takes_ident_arg(name: &str) -> bool {
     let n = name.trim_start_matches("__").trim_end_matches("__");
     // `weakref` / `alias` / `ifunc` take a string literal; clang parses
     // an identifier there as one (and then rejects it).
-    matches!(n, "enum_extensibility" | "format" | "mode" | "weakref" | "alias" | "ifunc")
+    matches!(
+        n,
+        "enum_extensibility"
+            | "format"
+            | "mode"
+            | "weakref"
+            | "alias"
+            | "ifunc"
+            | "clang_arm_builtin_alias"
+            | "clang_builtin_alias"
+            | "builtin_alias"
+    )
 }
 
 /// True for the standard attributes that take no argument list
@@ -653,7 +692,23 @@ impl Parser<'_, '_> {
                 return Some(args);
             }
         }
+        let idents = takes_ident_list(&text);
         while !self.at(Punct::RParen) && !self.at_eof() {
+            if idents && let Some(id) = self.ident() {
+                let at = self.bump().span.lo;
+                args.push(AttrArg::Ident(id, at));
+                if self.eat(Punct::Comma).is_none() {
+                    break;
+                }
+                continue;
+            }
+            if !self.at_string() && string_literal_arg(&text, args.len()) {
+                let at = self.tok().span.lo;
+                let d = self.s.diag(DiagId::parse_attribute_requires_string, at).arg(text);
+                self.emit(d);
+                self.skip_until(&[Punct::RParen], false, true);
+                return None;
+            }
             let e = if self.at_string() {
                 self.parse_string_literal(true)
             } else {
@@ -664,6 +719,11 @@ impl Parser<'_, '_> {
                 self.skip_until(&[Punct::RParen], false, false);
                 break;
             };
+            // clang drops an attribute whose argument is invalid; kiln
+            // does so for the string-literal attributes above.
+            if string_literal_arg(&text, 0) && self.s.contains_errors(e) {
+                ok = false;
+            }
             args.push(AttrArg::Expr(e));
             if self.eat(Punct::Comma).is_none() {
                 break;

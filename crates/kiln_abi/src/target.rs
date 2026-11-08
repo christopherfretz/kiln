@@ -202,7 +202,7 @@ impl Target {
 fn target_types(arch: Arch) -> TargetTypes {
     use BuiltinType as B;
     let x86 = arch == Arch::X86_64;
-    let mut size_align = [(0u16, 0u16); 53];
+    let mut size_align = [(0u16, 0u16); BuiltinType::COUNT + 1];
     let table: [(B, u16, u16); 33] = [
         (B::Void, 0, 1),
         (B::Bool, 1, 1),
@@ -245,7 +245,8 @@ fn target_types(arch: Arch) -> TargetTypes {
     // `getTypeInfo`: 128 bits for a data vector, 16 for `svbool_t` and
     // `svcount_t`) is that of their allocas.
     for b in BuiltinType::ALL.iter().copied().filter(|b| b.is_sizeless()) {
-        let a = if matches!(b, B::SvBool | B::SvCount) { 2 } else { 16 };
+        let a =
+            if matches!(b, B::SvBool | B::SvCount | B::SvBoolx2 | B::SvBoolx4) { 2 } else { 16 };
         size_align[b as usize] = (0, a);
     }
     TargetTypes {

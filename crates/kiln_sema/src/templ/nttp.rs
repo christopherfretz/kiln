@@ -513,6 +513,14 @@ impl Sema<'_, '_> {
                 ExprFlags::NONE,
             ));
         }
+        if self.ast.types.as_complex(ty).is_some() {
+            // A `_Complex` argument (a structural type, [temp.param]/7;
+            // clang `BuildExpressionFromNonTypeTemplateArgument`'s
+            // `StructuralValue`): the constant itself, as no literal of
+            // the language spells a complex value (WP-810).
+            let o = self.builder().opaque_value_of(ty, ValueCategory::PRValue, loc);
+            return Some(self.builder().constant_expr(o, Some(v)));
+        }
         match self.ast.consts.scalar(v)? {
             // A `std::meta::info` argument (-freflection spike): the
             // reflect-expression designating the same entity.

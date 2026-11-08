@@ -98,12 +98,82 @@ impl Sema<'_, '_> {
         None
     }
 
-    /// clang's `areCompatibleVectorTypes`: same element type and count.
+    /// clang's `areCompatibleVectorTypes`: same element type and count; a
+    /// fixed-length SVE vector only with itself.
     pub(crate) fn compatible_vectors(&self, a: QualType, b: QualType) -> bool {
         match (self.vector_parts(a), self.vector_parts(b)) {
+            (Some(x), Some(y)) if x.kind.is_sve_fixed() || y.kind.is_sve_fixed() => {
+                x.kind == y.kind && x.elem == y.elem && x.count == y.count
+            }
             (Some(x), Some(y)) => x.elem == y.elem && x.count == y.count,
             _ => false,
         }
+    }
+
+    /// clang's `getSveEltType`: a sizeless SVE vector's element type,
+    /// `unsigned char` for `svbool_t`.
+    fn sve_elt(&self, q: QualType) -> Option<QualType> {
+        let (e, _) = self.sve_parts(q)?;
+        Some(if e == QualType::BOOL { QualType::UCHAR } else { e })
+    }
+
+    /// clang's `getSVETypeSize`: `-msve-vector-bits` (0 without it), an
+    /// eighth of that for `svbool_t`.
+    fn sve_type_bits(&self, q: QualType) -> u64 {
+        let bits = u64::from(self.sve_vector_bits.unwrap_or(0));
+        if self.ast.types.builtin(q) == Some(BuiltinType::SvBool) { bits / 8 } else { bits }
+    }
+
+    /// clang's `areCompatibleSveTypes`: a sizeless SVE vector and the
+    /// fixed-length vector made from it, or a GNU vector of its element
+    /// type and `-msve-vector-bits` size.
+    pub(crate) fn sve_compatible(&self, a: QualType, b: QualType) -> bool {
+        let one = |x: QualType, y: QualType| {
+            let (Some((elem, _)), Some(v)) = (self.sve_parts(x), self.vector_parts(y)) else {
+                return false;
+            };
+            match v.kind {
+                VectorKind::SveFixedPredicate => {
+                    self.ast.types.builtin(x) == Some(BuiltinType::SvBool)
+                }
+                VectorKind::SveFixedData => self.sve_elt(x) == Some(v.elem),
+                VectorKind::Generic => {
+                    self.lax_size(y) == Some(self.sve_type_bits(x)) && v.elem == elem
+                }
+                _ => false,
+            }
+        };
+        one(a, b) || one(b, a)
+    }
+
+    /// clang's `areLaxCompatibleSveTypes`: a sizeless SVE vector and a
+    /// fixed-length SVE data vector or a GNU vector of the
+    /// `-msve-vector-bits` size, as `-flax-vector-conversions` allows (not
+    /// `svbool_t` with a data vector).
+    pub(crate) fn sve_lax_compatible(&self, a: QualType, b: QualType) -> bool {
+        let one = |x: QualType, y: QualType| {
+            let (Some(xe), Some(v)) = (self.sve_elt(x), self.vector_parts(y)) else {
+                return false;
+            };
+            if !matches!(v.kind, VectorKind::SveFixedData | VectorKind::Generic) {
+                return false;
+            }
+            let bool_x = self.ast.types.builtin(x) == Some(BuiltinType::SvBool);
+            if bool_x && v.kind == VectorKind::SveFixedData {
+                return false;
+            }
+            if v.kind == VectorKind::Generic && self.lax_size(y) != Some(self.sve_type_bits(x)) {
+                return false;
+            }
+            match self.lax_vector_conversions {
+                LaxVectorConversions::All => true,
+                LaxVectorConversions::Integer => {
+                    self.ast.types.is_integral(v.elem) && self.ast.types.is_integral(xe)
+                }
+                LaxVectorConversions::None => false,
+            }
+        };
+        one(a, b) || one(b, a)
     }
 
     /// clang's `isLaxVectorConversion`: same data size, never between a
@@ -410,6 +480,26 @@ impl Sema<'_, '_> {
                 *l = conv::cast_to(self, CastKind::BitCast, *l, rt, None);
             }
             return Some(rt);
+        }
+        // clang: an expression mixing fixed-length and sizeless SVE
+        // vectors, or GNU and SVE ones, is ambiguous (it affects the ABI).
+        let fixed = |v: Option<VecParts>| v.is_some_and(|p| p.kind.is_sve_fixed());
+        let generic = |v: Option<VecParts>| v.is_some_and(|p| p.kind == VectorKind::Generic);
+        let (ls, rs) = (self.is_sve_vector(lt), self.is_sve_vector(rt));
+        let id = if (ls && fixed(rv)) || (rs && fixed(lv)) {
+            Some(DiagId::sema_sve_fixed_sizeless_ambiguous)
+        } else if (generic(lv) && (fixed(rv) || rs)) || (generic(rv) && (fixed(lv) || ls)) {
+            Some(DiagId::sema_sve_gnu_ambiguous)
+        } else {
+            None
+        };
+        if let Some(id) = id {
+            if report {
+                let (x, y) = self.ty_arg_pair(lt, rt);
+                let msg = self.diag(id, loc).arg(x).arg(y);
+                self.emit(msg);
+            }
+            return None;
         }
         if let (Some(v), None) = (lv, rv) {
             let ok = if v.is_ext() {

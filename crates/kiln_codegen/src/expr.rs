@@ -784,6 +784,29 @@ impl Cg<'_> {
         if ft == to { v } else { self.cast(CastOp::ZExt, v, to) }
     }
 
+    /// clang `CK_BitCast` of a vector `v` to `t`: a plain
+    /// bitcast, except between fixed-length and scalable vectors (WP-810):
+    /// a vector insert or extract when the elements pair up, else through
+    /// a `saved-value` temporary.
+    fn vector_bitcast(&mut self, v: V, t: LTy) -> V {
+        let from = self.f.fir.ty(&self.m, v);
+        let scal = |m: &kiln_llvm::Module, x: LTy| m.types.vector_info(x).is_some_and(|i| i.2);
+        let (fs, ts) = (scal(&self.m, from), scal(&self.m, t));
+        if fs == ts {
+            return self.cast(CastOp::BitCast, v, t);
+        }
+        let r = if ts { self.sve_to_scalable(v, t) } else { self.sve_to_fixed(v, t) };
+        if let Some(r) = r {
+            return r;
+        }
+        // `CreateDefaultAlignTempAlloca`: the preferred alignment, natural
+        // (the size) for a fixed vector, 16 for a scalable one.
+        let align = if fs { 16 } else { self.alloc_size(from).next_power_of_two() };
+        let a = self.f.fir.alloca(from, align);
+        self.store(v, a, align, false);
+        self.load(t, a, align, false)
+    }
+
     fn emit_cast(&mut self, e: ExprId) -> R<Option<V>> {
         let ast = self.ast;
         let n = *ast.exprs.get(e);
@@ -800,7 +823,7 @@ impl Cg<'_> {
             CastKind::BitCast if self.vec_of(q).is_some() || self.vec_of(sq).is_some() => {
                 let v = self.emit_scalar(s)?;
                 let t = self.lty(q);
-                self.cast(CastOp::BitCast, v, t)
+                self.vector_bitcast(v, t)
             }
             // clang `CK_VectorSplat`: `CreateVectorSplat`.
             CastKind::VectorSplat => {
@@ -3253,6 +3276,13 @@ impl Cg<'_> {
 
     /// clang `EmitCallExpr`; an aggregate result is written to `dest`.
     pub(crate) fn emit_call(&mut self, e: ExprId, dest: Option<Addr>) -> R<Option<V>> {
+        let outer = self.f.call_loc.replace(self.ast.begin_loc(e));
+        let r = self.emit_call_inner(e, dest);
+        self.f.call_loc = outer;
+        r
+    }
+
+    fn emit_call_inner(&mut self, e: ExprId, dest: Option<Addr>) -> R<Option<V>> {
         let ast = self.ast;
         let callee_e = ast.exprs.callee(e);
         let mut direct = None;
@@ -3310,6 +3340,13 @@ impl Cg<'_> {
                     _ => break,
                 }
             }
+        }
+        // WP-810: a call of a builtin alias (`arm_sve.h`'s intrinsics) lowers
+        // as the builtin it names, or is a hard error; never an external call.
+        if let Some(d) = direct
+            && let Some((b, _)) = ast.builtin_alias(d)
+        {
+            return self.emit_sve_alias(d, b, e);
         }
         // A builtin is never emitted as a function (spec/codegen.md §3, "Calls"):
         // it folds, lowers inline, or calls the library function it names.
@@ -3626,6 +3663,7 @@ impl Cg<'_> {
     ) -> R<Option<V>> {
         let musttail = std::mem::take(&mut self.f.musttail_armed);
         self.f.vector_width = self.f.vector_width.max(sig.info.max_vector_width);
+        self.check_pure_scalable(sig, self.f.call_loc)?;
         let rq = sig.ret;
         let mut ir_args = Vec::new();
         let mut sret_addr = None;
@@ -3773,6 +3811,17 @@ impl Cg<'_> {
             else {
                 unreachable!()
             };
+            // clang `EmitCall`: a fixed-length SVE result of the scalable
+            // type's element type is extracted (WP-810); a predicate goes
+            // through memory.
+            let lt = self.lty(rq);
+            if matches!(coerce, kiln_abi::irtype::IrType::ScalableVector(..))
+                && self.m.types.vector_info(rty).map(|x| x.0)
+                    == self.m.types.vector_info(lt).map(|x| x.0)
+                && let Some(v) = self.sve_to_fixed(r, lt)
+            {
+                return Ok(Some(v));
+            }
             let t = self.temp(rq);
             let (size, _) = self.size_align(rq);
             self.coerced_store_sized(r, &coerce, t, size);
