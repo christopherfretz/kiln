@@ -561,6 +561,10 @@ impl Sema<'_, '_> {
             }
             return None;
         }
+        if !matches!(out, OvlOutcome::Success(_)) {
+            let ty = self.recovery_type(set, out);
+            self.note_call_recovery(ty);
+        }
         let (id, ambiguous) = match out {
             OvlOutcome::Success(b) => return Some(b),
             OvlOutcome::Deleted(b) => {
@@ -590,6 +594,43 @@ impl Sema<'_, '_> {
         let msg = self.with_ovl_notes(msg, set, ambiguous);
         self.emit(msg);
         None
+    }
+
+    /// The type of clang's `RecoveryExpr` for the failed call of `set`
+    /// (`chooseRecoveryType`): the return type of the best candidate,
+    /// else the one return type of the viable candidates, else of all
+    /// candidates; `None` when they differ (a type-dependent recovery).
+    fn recovery_type(&self, set: &OverloadCandidateSet, out: OvlOutcome) -> Option<QualType> {
+        let ret = |c: &super::Candidate| -> Option<QualType> {
+            let d = c.decl?;
+            if self.ast.decls.get(d).has(DeclFlags::INVALID) {
+                return None;
+            }
+            let t = self.ast.decls.get(d).ty()?;
+            self.ast.types.proto_of(self.ast.types.canonical(t).ty()).map(|p| p.ret())
+        };
+        // `None`: no candidate seen; `Some(None)`: they differ.
+        let pick = |cands: &mut dyn Iterator<Item = &super::Candidate>| {
+            let mut r: Option<Option<QualType>> = None;
+            for t in cands.filter_map(|c| ret(c)) {
+                let t = self.ast.types.canonical(t);
+                r = match r {
+                    None => Some(Some(t)),
+                    Some(Some(u)) if u == t => Some(Some(t)),
+                    Some(_) => Some(None),
+                };
+            }
+            r
+        };
+        let best = match out {
+            OvlOutcome::Deleted(b) => ret(set.cand(b)).map(|t| Some(self.ast.types.canonical(t))),
+            _ => None,
+        };
+        let r = best
+            .or_else(|| pick(&mut set.cands.iter().filter(|c| c.viable)))
+            .or_else(|| pick(&mut set.cands.iter()))
+            .flatten()?;
+        (!self.is_dependent_type(r) && self.contained_placeholder(r).is_none()).then_some(r)
     }
 
     /// The `DeclRefExpr` naming the selected function `d` (found as

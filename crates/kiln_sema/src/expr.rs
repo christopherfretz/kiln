@@ -245,6 +245,17 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// Records that a failed call is one clang recovers with a
+    /// `RecoveryExpr` (`FinishOverloadedCallExpr`,
+    /// `BuildCallToMemberFunction`): never under SFINAE, where clang
+    /// builds none (spec/sema.md §1.2).
+    /// `ty`: the recovery's type, `None` when it is type-dependent.
+    pub(crate) fn note_call_recovery(&mut self, ty: Option<QualType>) {
+        if !self.inst.stack.is_sfinae() {
+            self.call_recovery = Some((self.inst.stack.len(), ty));
+        }
+    }
+
     /// A `RecoveryExpr` of error type over `kids`.
     pub(crate) fn recover_err(&mut self, kids: &[ExprId], loc: Loc) -> ExprId {
         self.recover(QualType::ERROR, kids, loc)
@@ -5106,6 +5117,10 @@ impl Sema<'_, '_> {
         let Some(conv_args) =
             self.convert_call_args(callee_info, callee, args, &mut braced, &proto, loc, rparen)
         else {
+            // A one-candidate overload set: clang resolved it as a set.
+            if adl_single == Some(callee) {
+                self.note_call_recovery(Some(proto.ret()));
+            }
             return self.recover_err(&kids, loc);
         };
         if named.and_then(|d| self.ast.decls.builtin_id(d))

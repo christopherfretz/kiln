@@ -271,6 +271,12 @@ pub struct Sema<'a, 'sm> {
     /// Depth of expressions being rebuilt by substitution (their
     /// consteval-only leaves follow the pattern's, not the builders').
     pub(crate) subst_expr_depth: u32,
+    /// The instantiation-stack length at which the last call that clang
+    /// recovers with a `RecoveryExpr` failed (a call resolved by overload
+    /// resolution, or a member function call whose arguments do not
+    /// convert; spec/sema.md §1.2), with the recovery's type: a variable
+    /// initialized by it stays valid ([`Sema::note_call_recovery`]).
+    pub(crate) call_recovery: Option<(usize, Option<QualType>)>,
     /// A template-id is being formed by substituting into a dependent
     /// one: a class template specialization it creates records all its
     /// arguments as written, as GCC's (spec/reflection.md §3.9).
@@ -1181,6 +1187,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             consteval_only_records: kiln_source::fx::FxHashMap::default(),
             consteval_only_pattern: kiln_source::fx::FxHashSet::default(),
             subst_expr_depth: 0,
+            call_recovery: None,
             subst_template_id: false,
             coro_aligned_allocation: false,
             lax_vector_conversions: LaxVectorConversions::All,

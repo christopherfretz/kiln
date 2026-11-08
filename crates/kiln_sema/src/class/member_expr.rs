@@ -1686,6 +1686,9 @@ impl Sema<'_, '_> {
         let Some(conv_args) =
             self.convert_call_args(named, callee, args, braced, &proto, loc, rparen)
         else {
+            if method.is_some() {
+                self.note_call_recovery(Some(proto.ret()));
+            }
             return Some(self.recover_err(&kids, loc));
         };
         if let Some(m) = method {
@@ -1798,6 +1801,7 @@ impl Sema<'_, '_> {
         let named = Some(CallCallee { decl: m, overloadable: false, enable_if: !resolved });
         let conv_args = self.convert_call_args(named, r, kids, all_braced, &proto, loc, rparen);
         let Some(conv_args) = conv_args else {
+            self.note_call_recovery(Some(proto.ret()));
             return self.recover_err(kids, loc);
         };
         if !self.check_lambda_explicit_object_call(m, self.begin_loc(obj)) {
