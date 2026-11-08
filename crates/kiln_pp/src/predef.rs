@@ -911,9 +911,8 @@ mod tests {
         let s = build_predefines(&cxx17, &PredefConfig::new(false), &[]);
         assert!(!s.contains("__cpp_variadic_friend"), "{s}");
         // P2741 and P1330 (WP-851): clang 22's values in clang 19's modes.
-        let old = format!(
-            "{BASE}#define __cpp_static_assert 200410\n#define __cpp_constexpr 201907L\n"
-        );
+        let old =
+            format!("{BASE}#define __cpp_static_assert 200410\n#define __cpp_constexpr 201907L\n");
         let s = build_predefines(&old, &cfg, &[]);
         assert!(s.contains("#define __cpp_static_assert 202306L\n"), "{s}");
         assert!(s.contains("#define __cpp_constexpr 202002L\n"), "{s}");
