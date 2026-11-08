@@ -69,9 +69,11 @@ impl Cg<'_> {
         };
         let callee = V::C(Value::func(f));
         let vals = [CallArg::Scalar(arg)];
+        let from = self.f.calls.len();
         self.call_vals(&sig, callee, Some(f), None, &vals, &[], None, &extra)?;
         if unreachable {
-            self.finish_noreturn_call();
+            // clang `EmitCall` without a location.
+            self.finish_noreturn_call(from, Some(f), None)?;
         }
         Ok(())
     }

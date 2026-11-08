@@ -205,6 +205,7 @@ impl Parser<'_, '_> {
                 kind: CaptureKind::ByCopy,
                 name: None,
                 loc,
+                end: loc,
                 ellipsis: None,
                 init: None,
                 var: None,
@@ -245,6 +246,7 @@ impl Parser<'_, '_> {
                 cap.ellipsis = ellipsis;
                 cap.init = self.parse_init_capture_initializer();
             }
+            cap.end = self.prev_lo();
             intro.captures.push(cap);
         }
         intro.rbracket = self.bump().span.lo;

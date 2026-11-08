@@ -375,7 +375,7 @@ impl Cg<'_> {
         let prologue = self.f.cl.prologue;
         self.pop_cleanup_blocks(prologue);
         self.emit_return_block();
-        self.emit_epilog();
+        self.emit_epilog()?;
         self.outlined_finish(f, decl, noreturn)
     }
 
