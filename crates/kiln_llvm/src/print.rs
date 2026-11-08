@@ -2191,7 +2191,10 @@ impl<'a> TypeFinder<'a> {
                     }
                 }
                 MdNode::Specialized { .. } => md_children(node, |c| kids.push(c)),
-                _ => {}
+                // A debug node's constant operand (a template argument's
+                // `value: %struct.S { ... }`), reached in operand order.
+                MdNode::Value(_, v) => self.value(*v),
+                MdNode::String(_) => {}
             }
             for k in kids.into_iter().rev() {
                 stack.push(k);

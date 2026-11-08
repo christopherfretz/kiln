@@ -155,7 +155,7 @@ aligned-on-function, P-A3, P-A4, F-A4 — plus every attribute row when it appea
 | `aligned(N)` on a function | accepted (no subject error); layout reads only types/vars/fields (crates/kiln_abi/src/layout/props.rs:78). Function `align` is set only to 2 for x86 methods (crates/kiln_codegen/src/func.rs:398-409) | `align N` on the `llvm::Function` | A-low (code relying on function-address alignment / low-bit tagging) | none | fixed in WP-805 |
 | `[[likely]]` / `[[unlikely]]` | checked in sema (crates/kiln_sema/src/stmt.rs:484-534); no codegen reader | branch weights / `llvm.expect` at -O1+ | B | none | open (class B; WP-805 follow-up) |
 | `nonnull` / `returns_nonnull` | sema warnings only (crates/kiln_sema/src/nonnull.rs, null_compare.rs) | `nonnull` param / return IR attribute | B | none | open (class B; WP-805 follow-up) |
-| `nodebug`, `artificial`, `standalone_debug` | sema subject checks only | debug-info shaping | B (kiln emits no debug info at all) | none | open (class B; no debug info) |
+| `nodebug`, `artificial`, `standalone_debug` | `nodebug` and `artificial` shape debug info as clang (crates/kiln_codegen/src/debuginfo/func.rs `has_fn_attr(.., NODEBUG)`); `standalone_debug` is not read | debug-info shaping | B | none | `nodebug`/`artificial` fixed in WP-814; `standalone_debug` open (WP-814 follow-up, spec/landed/codegen/WP-814.md) |
 | `carries_dependency` | stored, unused | no codegen either | none (matches clang) | — | none (matches clang) |
 | thread-safety (34), `lifetimebound`, `no_sanitize*` (6) | dropped at decl.rs:9911/9915 | analysis (`-Wthread-safety`, `-Wdangling`) / sanitizer instrumentation | C (sanitizers: moot unless `-fsanitize` is accepted — see §4) | none | WP-805: rows in the triage table (C; `no_sanitize*` B) |
 | `AttrKind::MODE`, `INTERNAL_LINKAGE`, `NO_SANITIZE` | defined in crates/kiln_ast/src/attr.rs:71-74 but never produced (only the AST dumper names them) | — | see `mode`, `internal_linkage` below | — | `mode` fixed in WP-799; `internal_linkage` WP-807 |
@@ -222,8 +222,10 @@ open as a WP-805 follow-up.
   `nonnull`/`returns_nonnull` IR (1.2), `[[likely]]`/`[[unlikely]]` (1.2), `[[omp::assume]]`.
 - layout-free codegen hints: `code_align`, `loader_uninitialized`, `force_align_arg_pointer`,
   `randomize_layout`/`no_randomize_layout` (only meaningful with a randomizing plugin).
-- debug: `standalone_debug`, `nodebug`, `artificial`, `btf_decl_tag`, `btf_type_tag`,
-  `lto_visibility_public` (kiln emits no debug info at all).
+- debug: `standalone_debug`, `btf_decl_tag`, `btf_type_tag`, `lto_visibility_public`
+  (`-g` is implemented since WP-814; `nodebug` and `artificial` are honoured, these are not).
+  What `-g` leaves out (structured bindings, VLA locals, labels, `using` imports,
+  global-initializer subprograms) is listed in docs/status/debuginfo.md "Gaps".
 - instrumentation / hardening: `patchable_function_entry`, `xray_always_instrument`,
   `xray_never_instrument`, `xray_log_args`, `no_instrument_function`,
   `no_profile_instrument_function`, `no_stack_protector`, `no_split_stack`, `nocf_check`,
@@ -386,7 +388,8 @@ Code: crates/kiln_driver/src/args.rs, codegen_flags.rs. Unknown flags are a hard
 (`ArgError::Unknown`, args.rs:658; also for `-Xclang` args). Explicit ignore table
 codegen_flags.rs:60 (`-f[no-]stack-clash-protection`, `-fcf-protection[=]`, `-f[no-]common`,
 `-f[no-]math-errno`, `-fstack-usage`, `-gz[=]`, `-fno-trapv`, `-fno-short-enums`, `-m64`, `-pipe`)
-+ `-fexcess-precision=` (:165) + `-g*` (args.rs:762-764). Explicit reject tables
++ `-fexcess-precision=` (:165). `-g*` and `-gz[=]` are implemented since WP-814
+(crates/kiln_driver/src/debug_flags.rs; each unimplemented debug flag is an error). Explicit reject tables
 codegen_flags.rs:79/94 (`-ftrapv`, `-fshort-enums`, `-fsanitize*`, `-fprofile-*`, coverage).
 All the strictness-relevant FP flags (`-ffp-contract=`, `-ffp-model=`, `-frounding-math`, ...),
 `-fms-extensions`, `-fno-builtin*`, `-fno-elide-constructors`, `-fopenmp`, `-flto`, `-m<feature>`

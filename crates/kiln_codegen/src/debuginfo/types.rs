@@ -1149,7 +1149,24 @@ impl<'a> Cg<'a> {
                 ))
             }
             ArgView::Value { ty, value } => {
-                let Some(c) = self.di_int(value) else {
+                let t = self.di_type(ty);
+                if let Some(c) = self.di_int(value) {
+                    let f = f.n("type", t).raw("value", &Self::di_int_raw(c));
+                    return Some(self.m.md_specialized("DITemplateValueParameter", false, f.0));
+                }
+                // clang: the address of a variable or function, a member
+                // pointer, or `emitAbstract` of a floating-point or
+                // class-type value.
+                let record = matches!(
+                    self.ast.types.view(self.ast.types.canonical(ty).ty()),
+                    TypeView::Record(_)
+                );
+                let v = if record {
+                    self.const_value(value, ty, None, true)
+                } else {
+                    self.const_scalar_value(value, ty)
+                };
+                let Some(v) = v.ok().and_then(|v| self.m.md_const(v).ok()) else {
                     self.di_fail(
                         None,
                         "debug information for a non-integral template argument is not supported"
@@ -1157,8 +1174,7 @@ impl<'a> Cg<'a> {
                     );
                     return None;
                 };
-                let t = self.di_type(ty);
-                let f = f.n("type", t).raw("value", &Self::di_int_raw(c));
+                let f = f.n("type", t).n("value", Some(v));
                 Some(self.m.md_specialized("DITemplateValueParameter", false, f.0))
             }
             ArgView::Pack(l) => {

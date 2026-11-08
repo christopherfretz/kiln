@@ -262,7 +262,8 @@ impl Test<'_> {
             return (Status::Skip, Some(reason), String::new());
         }
         if spec.expect == Expect::Debugger
-            && let Some(r) = debugger_skip(spec.gdb.commands.is_empty(), spec.lldb.commands.is_empty())
+            && let Some(r) =
+                debugger_skip(spec.gdb.commands.is_empty(), spec.lldb.commands.is_empty())
         {
             return (Status::Skip, Some(r), String::new());
         }
@@ -986,9 +987,8 @@ impl Test<'_> {
             let script = self.dir.join(format!("{name}.cmd"));
             let mut text = sc.commands.join("\n");
             text.push('\n');
-            fs::write(&script, text).map_err(|e| {
-                Problem::Broken(format!("cannot write {}: {e}", script.display()))
-            })?;
+            fs::write(&script, text)
+                .map_err(|e| Problem::Broken(format!("cannot write {}: {e}", script.display())))?;
             let mut cmd = Command::new(&prog);
             cmd.current_dir(&self.dir);
             if name == "gdb" {
@@ -1453,9 +1453,7 @@ fn ir_target_flag(kind: DumpKind, spec: &TestSpec, host: &str) -> Option<String>
 fn debugger_program(name: &str) -> Option<PathBuf> {
     let names: &[&str] = if name == "gdb" { &["gdb"] } else { &["lldb-19", "lldb"] };
     let path = std::env::var_os("PATH")?;
-    names
-        .iter()
-        .find_map(|n| std::env::split_paths(&path).map(|d| d.join(n)).find(|p| p.is_file()))
+    names.iter().find_map(|n| std::env::split_paths(&path).map(|d| d.join(n)).find(|p| p.is_file()))
 }
 
 /// Why a `debugger` test cannot run here: a debugger it drives is missing.

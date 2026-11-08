@@ -1074,8 +1074,39 @@ The normative description is spec/driver.md "Code generation". In short:
 - Tools come from `$KILN_LLVM_DIR/bin` (default `/usr/lib/llvm-19`), else
   the versioned name on `PATH`.
 - `-O<n>` selects `llc`'s level and is passed to the link; the IR is
-  always the `-O0` IR. `-g` is ignored. `-###` and `-v` print the steps.
+  always the `-O0` IR. `-g` adds DWARF debug information (§5.1).
+  `-###` and `-v` print the steps.
 - Every job calls `ConstexprOpts::write_report`.
+
+### 5.1 Debug information (WP-814; `debuginfo/`)
+`CodegenOptions::debug` (`DebugOptions`, set from the flags in
+spec/driver.md "Debug information flags") selects clang 19's
+`codegenoptions::DebugInfoKind`. At `None` (the default) the IR is
+unchanged, byte for byte. Otherwise kiln emits what clang 19's
+`CGDebugInfo` emits for the same program, in clang's node creation
+order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
+(producer string aside):
+- a `DICompileUnit` (`!llvm.dbg.cu`) whose file carries the main
+  buffer's MD5, the `"Dwarf Version"` and `"Debug Info Version"` module
+  flags, and `DIFile`s split against the compilation directory after
+  `-fdebug-prefix-map=`;
+- under line tables only, a `DISubprogram` per definition with
+  `DILocation`s on instructions;
+- under `-g`, also types (basic, pointer/reference, arrays, enums,
+  typedefs, classes with members, bases, methods, vtable holders and
+  template parameters; class definitions homed as clang's
+  `-fno-standalone-debug` does), namespaces, global and static member
+  variables (`DIGlobalVariableExpression`), parameters and locals
+  (`#dbg_declare`), and lexical blocks;
+- statement and expression locations with clang's `EmitStopPoint`,
+  `ApplyDebugLocation` and cleanup/landing-pad rules, so a debugger
+  steps, breaks and finishes where it does in a clang build.
+
+A construct that debug information cannot describe yet is a hard error,
+`debug information for <what> is not supported`, never a silent drop.
+The normative detail, the gaps and the tests are in
+spec/landed/codegen/WP-814.md; the status, statistics and performance
+are in docs/status/debuginfo.md.
 
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90
