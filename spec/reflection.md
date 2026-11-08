@@ -1222,7 +1222,16 @@ the spelling; the default is `kiln`.
 - **GCC link compatibility.** In gcc mode, kiln objects and g++-16 objects
   link against each other for reflection-keyed symbols. `gcc_link_compat`
   requires every `Dm` symbol defined by both compilers to be equal, with at
-  least 25 of them. The remaining name differences are general ABI
+  least 25 of them. The corpus test
+  `tests/conformance/expr.reflect/reflection-mangle-gcc-run.cpp` prints the
+  `typeid(...).name()` of a class template keyed by every kind and is
+  compared with g++-16's output (WP-879).
+- **`type_info` of the info type.** The C++ runtime defines no `type_info`
+  for `std::meta::info`, so `typeid(info)` defines `_ZTI<info-type>` and
+  `_ZTS<info-type>` where used, `linkonce_odr` in a comdat with
+  `__fundamental_type_info`'s vtable, as g++-16 does for `_ZTIDm`, in every
+  form (WP-879; before it kiln referenced an undefined external one).
+  `kiln_codegen/tests/reflection_mangle.rs`, `expr.reflect/typeid-info-run.cpp`. The remaining name differences are general ABI
   divergences, not reflection ones (spec/abi.md §8):
   - GCC writes `L` before an anonymous namespace's members
     (`N12_GLOBAL__N_1L5anonvE`);

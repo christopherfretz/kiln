@@ -1943,7 +1943,11 @@ impl Cg<'_> {
             // clang `BuildTypeInfo`: vector and complex types are not
             // in the C++ runtime, so their `__fundamental_type_info` is
             // emitted where used, like a class's.
-            TypeView::Vector { .. } | TypeView::Complex(_) => {
+            // GCC 16.1 likewise emits `std::meta::info`'s (`_ZTIDm`)
+            // where used: libstdc++ does not define it (WP-879).
+            TypeView::Vector { .. }
+            | TypeView::Complex(_)
+            | TypeView::Builtin(BuiltinType::MetaInfo) => {
                 "_ZTVN10__cxxabiv123__fundamental_type_infoE"
             }
             _ => return err(None, format!("RTTI for type `{name}` is not supported yet")),
@@ -2134,11 +2138,13 @@ impl Cg<'_> {
     }
 
     /// clang `IsStandardLibraryRTTIDescriptor`: fundamental types and
-    /// (const) pointers to them.
+    /// (const) pointers to them. `std::meta::info` is not one: the C++
+    /// runtime has no `_ZTIDm` (nor `_ZTIu6__info`), so its descriptor is
+    /// a weak definition where used, as g++-16 emits it (WP-879).
     fn is_std_lib_rtti(&self, q: QualType) -> bool {
         let ast = self.ast;
         let fund = |q: QualType| match ast.types.canonical_view(q) {
-            TypeView::Builtin(b) => !matches!(b, BuiltinType::Dependent),
+            TypeView::Builtin(b) => !matches!(b, BuiltinType::Dependent | BuiltinType::MetaInfo),
             _ => false,
         };
         if fund(q) {

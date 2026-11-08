@@ -252,3 +252,35 @@ fn two_thousand_specializations() {
     assert_eq!(defs.iter().filter(|(_, l)| l == "linkonce_odr").count(), N);
     assert!(first.iter().all(|s| s.starts_with("_Z4specILu6__infoty")), "{:?}", &first[..2]);
 }
+
+/// [expr.typeid]/1 (WP-879): the C++ runtime defines no `type_info` for
+/// `std::meta::info`, so `typeid(info)` defines it where used, a weak
+/// `linkonce_odr` `__fundamental_type_info` in a comdat, as g++-16 does
+/// for `_ZTIDm`. In the default (kiln) form it is `_ZTIu6__info`; nothing
+/// else in the module names the info type.
+#[test]
+fn info_type_info_is_a_local_weak_definition() {
+    let src = r"namespace std { class type_info { public: const char* name() const; }; }
+using info = decltype(^^int);
+const std::type_info& ti() { return typeid(info); }
+";
+    for (mode, m) in [(ReflectionMangling::Kiln, "u6__info"), (ReflectionMangling::Gcc, "Dm")] {
+        let (ir, ..) = lower_as(src, "ti", mode);
+        let lines: Vec<&str> = ir.lines().filter(|l| l.contains(m)).collect();
+        let n = m.len() + 1;
+        let want = [
+            format!("$_ZTI{m} = comdat any"),
+            format!("$_ZTS{m} = comdat any"),
+            format!(
+                "@_ZTI{m} = linkonce_odr dso_local constant {{ ptr, ptr }} {{ ptr getelementptr \
+                 inbounds (ptr, ptr @_ZTVN10__cxxabiv123__fundamental_type_infoE, i64 2), ptr \
+                 @_ZTS{m} }}, comdat, align 8"
+            ),
+            format!(
+                "@_ZTS{m} = linkonce_odr dso_local constant [{n} x i8] c\"{m}\\00\", comdat, align 1"
+            ),
+            format!("  ret ptr @_ZTI{m}"),
+        ];
+        assert_eq!(lines, want.iter().map(String::as_str).collect::<Vec<_>>(), "{mode:?}: {ir}");
+    }
+}
