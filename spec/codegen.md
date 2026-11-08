@@ -1136,7 +1136,8 @@ A construct that debug information cannot describe yet is a hard error,
 `debug information for <what> is not supported`, never a silent drop.
 The normative detail, the gaps and the tests are in
 spec/landed/codegen/WP-814.md; the status, statistics and performance
-are in docs/status/debuginfo.md.
+are in docs/status/debuginfo.md. WP-817 (spec/landed/codegen/WP-817.md)
+cut the front-end cost of `-g` without changing a byte of the IR.
 
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90

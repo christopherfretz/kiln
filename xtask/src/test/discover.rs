@@ -18,9 +18,11 @@ pub struct TestCase {
     pub is_header: bool,
 }
 
-/// The default test roots that exist under `root`.
+/// The default test roots that exist under `root`. `tests/debuginfo`
+/// needs gdb and lldb-19: without them its tests are SKIPs (ERRORs under
+/// `KILN_REQUIRE_DEBUGGERS=1`), so it is a default root everywhere.
 pub fn default_roots(root: &Path) -> Vec<PathBuf> {
-    ["tests/conformance", "tests/differential", "tests/stress"]
+    ["tests/conformance", "tests/debuginfo", "tests/differential", "tests/stress"]
         .iter()
         .map(|d| root.join(d))
         .filter(|p| p.is_dir())
