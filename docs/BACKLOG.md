@@ -902,5 +902,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-881 | concepts accepts-invalid: an instantiated closure call operator trailing requires-clause is not checked at the call (requires-expression or function body); xfail expr.prim.lambda.closure/trailing-requires-call.cpp | WP-821 | open |
 | WP-882 | sema accepts-invalid: `typeid` of an incomplete local class in a template (`crates/kiln_sema/src/rtti.rs:48` act_on_typeid) | WP-821 | open |
 | WP-883 | concepts: dependent member class/enum in `used_in_tag` still keeps the whole parameter mapping (`crates/kiln_sema/src/templ/concepts/used.rs:573`) | WP-821 | open |
+| WP-884 | concepts and reflection correctness follow-ups: WP-880, WP-881, WP-882, WP-883, WP-869 | WP-821 | in progress |
 WP-511
 WP-512
