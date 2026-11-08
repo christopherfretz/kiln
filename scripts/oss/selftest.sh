@@ -15,7 +15,7 @@ trap cleanup EXIT
 FAILS=0
 check() { if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; FAILS=$((FAILS + 1)); fi; }
 
-for f in projects.py oss-report.py kiln-cxx; do
+for f in projects.py oss-report.py kiln-cxx stage-diff.py; do
   check "py_compile $f" "python3 -c 'import py_compile,sys; py_compile.compile(sys.argv[1], cfile=sys.argv[2], doraise=True)' '$HERE/$f' '$TMP/$f.pyc' >/dev/null 2>&1"
 done
 check "projects.toml loads" "python3 '$HERE/projects.py' list >/dev/null"
@@ -37,6 +37,12 @@ ln -s "$(command -v clang++-19)" "$SO/build/llvm_clang/kiln/bin/clang++"; ln -s 
 check "staged row: --which takes the stage row's compilers" "[ \"\$(KILN_OSS_ROOT='$SO' KILN_OSS_CXX=/nonexistent '$HERE/oss-build.sh' llvm_selfhost --which 2>/dev/null | tr '\n' ' ')\" = 'CXX=$SO/build/llvm_clang/kiln/bin/clang++ CC=$SO/build/llvm_clang/kiln/bin/clang ' ]"
 KILN_OSS_ROOT="$SO" "$HERE/oss-build.sh" llvm_selfhost --compiler clang --which > /dev/null 2> "$TMP/stage.err"
 check "staged row: an unbuilt stage exits 2 and says so" "[ $? -eq 2 ] && grep -q 'which is not built' '$TMP/stage.err'"
+# stage-diff.py (WP-815): two TUs under two spellings of clang 19.
+SD="$TMP/sd"; mkdir -p "$SD"
+printf 'int f(int x) { return x * 3 + 1; }\n' > "$SD/a.cpp"; printf 'struct S { int v; int g() const { return v << 2; } };\nint h(S s) { return s.g(); }\n' > "$SD/b.cpp"
+for s in a b; do printf '{"phase":"build","kind":"ok","source":"%s.cpp","cwd":"%s","argv":["kiln++","-O3","-MD","-MT","x","-MF","x.d","-c","%s.cpp","-o","%s.o"]}\n' "$s" "$SD" "$s" "$s"; done > "$SD/c.jsonl"
+python3 "$HERE/stage-diff.py" make --log "$SD/c.jsonl" --sample 200 --out "$SD/out" "A=$(command -v clang++-19)" "B=$(readlink -f "$(command -v clang++-19)")" >/dev/null && make -s -k -f "$SD/out/Makefile" >/dev/null 2>&1
+check "stage-diff: two TUs identical under two clang 19 spellings" "python3 '$HERE/stage-diff.py' compare --out '$SD/out' A B | grep -q '^stage-diff: 2 identical, 0 differ, 0 missing, of 2'"
 
 # The Boost Jamfile shim's library rules, variants, defines and links
 # (WP-804): a stub superproject whose boost_test() prints what it is given.
