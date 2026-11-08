@@ -330,6 +330,68 @@
         "recorded": "2026-11-06T181326"
       }
     },
+    "inplace-alloc": {
+      "kiln": {
+        "mode": "syntax",
+        "flags": "-std=c++26 -fsyntax-only -stdlib=libc++ -fconstexpr-steps=100000000",
+        "source_hash": "fnv1a64:ee351e9f07cef025",
+        "runs": 5,
+        "wall_ms_median": 323.859,
+        "wall_ms_min": 284.969,
+        "wall_ms_max": 336.548,
+        "spread_pct": 13.65,
+        "max_rss_kb": 19220,
+        "oven": {
+          "steps": 2500540,
+          "bytes": 1608688,
+          "peak_bytes": 16416,
+          "calls": 800125,
+          "allocs": 100001,
+          "peak_arena": 16416,
+          "frozen_bytes": 3379,
+          "static_bytes": 2320,
+          "evaluations": 888
+        },
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-760/release/kiln++",
+        "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
+        "host": {
+          "arch": "aarch64",
+          "cpus": 24
+        },
+        "recorded": "2026-11-08T161433"
+      }
+    },
+    "inplace-union": {
+      "kiln": {
+        "mode": "syntax",
+        "flags": "-std=c++26 -fsyntax-only -stdlib=libc++ -fconstexpr-steps=100000000",
+        "source_hash": "fnv1a64:83af97251539db56",
+        "runs": 5,
+        "wall_ms_median": 296.065,
+        "wall_ms_min": 288.626,
+        "wall_ms_max": 325.407,
+        "spread_pct": 2.58,
+        "max_rss_kb": 19456,
+        "oven": {
+          "steps": 2500518,
+          "bytes": 1608672,
+          "peak_bytes": 16400,
+          "calls": 800116,
+          "allocs": 100000,
+          "peak_arena": 16400,
+          "frozen_bytes": 3379,
+          "static_bytes": 2248,
+          "evaluations": 855
+        },
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-760/release/kiln++",
+        "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
+        "host": {
+          "arch": "aarch64",
+          "cpus": 24
+        },
+        "recorded": "2026-11-08T161433"
+      }
+    },
     "sieve": {
       "clang": {
         "mode": "syntax",
