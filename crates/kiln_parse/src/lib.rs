@@ -196,9 +196,6 @@ pub struct ParsedTu {
     /// unless [`ParseOptions::cfg_dump`] or [`ParseOptions::cfg_stats`]
     /// asked for them.
     pub cfg_dump: String,
-    /// Splices whose operand was read as a frozen reflection without an
-    /// Oven run (spec/reflection.md §5, the fast path).
-    pub splice_fast: u64,
     /// Sema's memory rows at the end of the translation unit
     /// ([`kiln_sema::Sema::memory`]; sema itself is gone).
     pub sema_memory: MemReport,
@@ -336,13 +333,12 @@ pub fn parse_preprocessed<'a, 'sm>(
     let (s, src) = p.finish();
     let name = main.rsplit('/').next().unwrap_or(&main);
     let inst_report = s.instantiation_report(name);
-    let splice_fast = s.splice_fast_count();
     let mut s = s;
     let cfg_dump = std::mem::take(&mut s.cfg_out);
     let sema_memory = s.memory();
     let (ast, oven) = s.into_parts();
     (
-        ParsedTu { ast, oven, inst_report, cfg_dump, splice_fast, sema_memory },
+        ParsedTu { ast, oven, inst_report, cfg_dump, sema_memory },
         src.into_preprocessor(),
     )
 }

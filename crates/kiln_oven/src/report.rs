@@ -37,7 +37,7 @@ pub fn render(stats: &EvalStats, loc: &dyn Fn(Loc) -> Option<String>) -> String 
     let t = stats.totals();
     let _ = writeln!(
         s,
-        "{{\"total\":{{\"steps\":{},\"bytes\":{},\"peak_bytes\":{},\"calls\":{},\"allocs\":{},\"peak_arena\":{},\"frozen_bytes\":{},\"static_bytes\":{},\"memo_hits\":{},\"refl_bytes\":{},\"wall_us\":{},\"evaluations\":{}}}}}",
+        "{{\"total\":{{\"steps\":{},\"bytes\":{},\"peak_bytes\":{},\"calls\":{},\"allocs\":{},\"peak_arena\":{},\"frozen_bytes\":{},\"static_bytes\":{},\"memo_hits\":{},\"refl_bytes\":{},\"wall_us\":{},\"evaluations\":{},\"splice_fast\":{}}}}}",
         t.steps,
         t.bytes,
         t.peak_bytes,
@@ -49,7 +49,8 @@ pub fn render(stats: &EvalStats, loc: &dyn Fn(Loc) -> Option<String>) -> String 
         t.memo_hits,
         t.refl_bytes,
         t.wall_us,
-        t.evaluations
+        t.evaluations,
+        t.splice_fast
     );
     s
 }

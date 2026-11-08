@@ -434,6 +434,7 @@ mod tests {
             static_bytes: 0,
             memo_hits: 0,
             refl_bytes: 0,
+            splice_fast: 0,
             wall_us: 0,
             evaluations: 2,
         };

@@ -73,6 +73,10 @@ pub struct EvalTotals {
     pub wall_us: u64,
     /// Number of evaluations.
     pub evaluations: u64,
+    /// Splices whose operand sema read as a frozen reflection without an
+    /// evaluation (the splice fast path, spec/reflection.md §5): work the
+    /// Oven was spared, so no record carries it.
+    pub splice_fast: u64,
 }
 
 /// Every top-level evaluation of a translation unit, in finishing order.
@@ -105,6 +109,11 @@ impl EvalStats {
     /// mark `n`.
     pub fn note_static_peak(&mut self, n: u64) {
         self.totals.static_bytes = self.totals.static_bytes.max(n);
+    }
+
+    /// Adds `n` splices read through the fast path (no evaluation).
+    pub fn note_splice_fast(&mut self, n: u64) {
+        self.totals.splice_fast = self.totals.splice_fast.saturating_add(n);
     }
 
     /// The evaluations.

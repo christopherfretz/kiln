@@ -56,6 +56,9 @@ pub struct Counters {
     pub memo_hits: u64,
     /// Reflection bytes made (0 in a report predating it; WP-479).
     pub refl_bytes: u64,
+    /// Splices read without an evaluation: on the `total` line only (0
+    /// on an evaluation line and in a report predating it; WP-884).
+    pub splice_fast: u64,
     pub wall_us: u64,
     /// How many evaluations these counters cover.
     pub evaluations: u64,
@@ -75,6 +78,7 @@ impl Counters {
             Counter::Evaluations => self.evaluations,
             Counter::MemoHits => self.memo_hits,
             Counter::ReflBytes => self.refl_bytes,
+            Counter::SpliceFast => self.splice_fast,
         }
     }
 
@@ -96,6 +100,7 @@ impl Counters {
             static_bytes: self.static_bytes.max(o.static_bytes),
             memo_hits: self.memo_hits.saturating_add(o.memo_hits),
             refl_bytes: self.refl_bytes.saturating_add(o.refl_bytes),
+            splice_fast: self.splice_fast.saturating_add(o.splice_fast),
             wall_us: self.wall_us.saturating_add(o.wall_us),
             evaluations: self.evaluations.saturating_add(o.evaluations),
         }
@@ -272,6 +277,7 @@ fn counters(j: &Json, total: bool) -> Result<Counters, String> {
         static_bytes: if j.get("static_bytes").is_some() { n("static_bytes")? } else { 0 },
         memo_hits: if j.get("memo_hits").is_some() { n("memo_hits")? } else { 0 },
         refl_bytes: if j.get("refl_bytes").is_some() { n("refl_bytes")? } else { 0 },
+        splice_fast: if total && j.get("splice_fast").is_some() { n("splice_fast")? } else { 0 },
         wall_us: n("wall_us")?,
         evaluations: if total { n("evaluations")? } else { 0 },
     })
