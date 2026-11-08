@@ -4,7 +4,7 @@
 // own descriptor though they print like an earlier one; kiln has no
 // ParenType node and keys deduced types by their name. (`S` needs a second
 // member: a trailing `a[4]` is a flexible array and is not checked.)
-// spec/codegen.md "Sanitizers", docs/design/sanitizers.md §2, WP-871.
+// spec/codegen.md "Sanitizers", docs/design/sanitizers.md §1.5, WP-871.
 //@ expect: ir
 //@ std: c++20
 //@ args: -fsanitize=array-bounds,signed-integer-overflow -Xclang -disable-llvm-passes

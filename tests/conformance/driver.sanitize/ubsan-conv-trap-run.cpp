@@ -1,7 +1,7 @@
 // `-fsanitize=implicit-conversion,float-cast-overflow -fsanitize-trap=all`:
 // value-preserving conversions run unchanged; an implicit truncation that
 // changes the value ([conv.integral]/3) traps with no runtime linked.
-// spec/codegen.md "Sanitizers", docs/design/sanitizers.md §2.7, WP-871.
+// spec/codegen.md "Sanitizers", docs/design/sanitizers.md §1.5.7, WP-871.
 //@ expect: run
 //@ exit: 3
 //@ args: -fsanitize=implicit-conversion,float-cast-overflow -fsanitize-trap=all

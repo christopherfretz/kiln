@@ -1238,7 +1238,7 @@ spec/landed/codegen/WP-814.md; the status, statistics and performance
 are in docs/status/debuginfo.md. WP-817 (spec/landed/codegen/WP-817.md)
 cut the front-end cost of `-g` without changing a byte of the IR.
 
-### 5.2 Sanitizers (WP-675; `ubsan.rs`, `class_b.rs`)
+### 5.2 Sanitizers (WP-675, WP-871; `ubsan.rs`, `class_b.rs`)
 `CodegenOptions::sanitize` (`SanitizeOptions`, set from spec/driver.md
 "Sanitizers") marks the IR as clang 19's frontend does
 (docs/design/sanitizers.md §1); with no sanitizer the IR is unchanged.
@@ -1268,8 +1268,43 @@ cut the front-end cost of `-g` without changing a byte of the IR.
   the default merge set (the unsigned checks), and `@llvm.ubsantrap` is
   `memory(inaccessiblemem: write)` from LLVM 22.
 
-The checks kiln does not emit yet, and the other gaps, are listed with
-their BACKLOG rows in spec/landed/codegen/WP-675.md.
+- **UBSan type and value checks** (WP-871; docs/design/sanitizers.md
+  §1.5 has the coverage table). Each is clang 19's function of the
+  same name, with its handler, static data and location
+  (`getExprLoc`; an overloaded `()`, `[]`, `->`, `++`, `--`, `new`,
+  `delete` or `co_await` call is located at its begin):
+  - null, alignment and object-size (`EmitTypeCheck`) on every
+    glvalue access, reference binding, constructor and member call,
+    up/downcast, `this` prologue, `new` and `delete`, with clang's
+    skips. Alignment is folded for a global or alloca aligned enough.
+    The `memcpy` family checks its pointer arguments' alignment.
+  - array-bounds (`EmitBoundsCheck`), except on flexible-array-like
+    members (`-fstrict-flex-arrays=0`).
+  - bool and enum on scalar loads (`EmitScalarRangeCheck`).
+  - float-cast-overflow (`EmitFloatConversionCheck`), including
+    complex parts and `_Atomic` destinations (signed bounds).
+  - pointer-overflow (`EmitCheckedInBoundsGEP`).
+  - nonnull-attribute, returns-nonnull-attribute (through
+    `return.sloc.ptr`) and builtin (`__builtin_ctz`/`clz` of zero).
+  - the implicit integer truncation and sign-change checks
+    (`EmitScalarConversion`) and implicit-bitfield-conversion. The
+    `integer` group excludes the bit-field check.
+  - `_Atomic` `++`/`--`/`op=`: an unsigned operand under
+    unsigned-integer-overflow, and any operator `atomicrmw` cannot
+    do, take the compare-exchange loop with the checked operation.
+  - Type descriptors name the written type, or the canonical type
+    (`getRecordType`, `getThisType`, the float-cast operands). A
+    canonical tag prints with its full scope.
+
+  At `-fclang-compat=22`:
+  - a signed `_BitInt` descriptor is kind 2 with its width appended;
+  - a range check passes the raw value;
+  - a bounds check compares in the wider of the index type and
+    `size_t`.
+
+The checks kiln does not emit yet (vptr, function, nullability-*,
+local-bounds) and the other gaps are listed with their BACKLOG rows in
+spec/landed/codegen/WP-675.md and spec/landed/codegen/WP-871.md.
 
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90

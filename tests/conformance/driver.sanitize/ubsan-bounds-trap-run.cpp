@@ -2,7 +2,7 @@
 // subscripts and valid accesses run unchanged; the first out-of-bounds
 // subscript of a constant-bound array ([expr.sub]/2, [expr.add]/4) traps
 // with no sanitizer runtime linked.
-// spec/codegen.md "Sanitizers", docs/design/sanitizers.md §2.2, WP-871.
+// spec/codegen.md "Sanitizers", docs/design/sanitizers.md §1.5.2, WP-871.
 //@ expect: run
 //@ exit: 3
 //@ args: -fsanitize=array-bounds,null,alignment -fsanitize-trap=all
