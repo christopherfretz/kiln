@@ -22,7 +22,7 @@ sema_sizeof_incomplete = Error (2) "invalid application of '{0}' to an incomplet
 sema_sizeof_pack_no_pack = Error (1) "{0} does not refer to the name of a parameter pack";
 sema_sizeof_sizeless = Error (2) "invalid application of '{0}' to sizeless type {1}";
 sema_sizeof_void = Extension [PointerArith] (1) "invalid application of '{0}' to a void type";
-sema_sometimes_uninit_var = WarningOff [SometimesUninitialized] (5) "variable {0} is {1:used|captured} uninitialized whenever {2:'{3}' condition is {4}|'{3}' loop {4}|'{3}' loop {4}|switch {3} is taken|its declaration is reached|{3} is called}";
+sema_sometimes_uninit_var = WarningOff [SometimesUninitialized] (5) "variable {0} is {1:used|captured} uninitialized whenever {2:'{3}' loop {4}|'{3}' loop {4}|switch {3} is taken|its declaration is reached|{3} is called|'{3}' condition is {4}}";
 sema_spaceship_narrowing_const = Error (2) "argument to 'operator<=>' evaluates to {0}, which cannot be narrowed to type {1}";
 sema_spaceship_narrowing_var = Error (2) "argument to 'operator<=>' cannot be narrowed from type {0} to {1}";
 sema_spec_after_instantiation = Error (1) "explicit specialization of '{0}' after instantiation";

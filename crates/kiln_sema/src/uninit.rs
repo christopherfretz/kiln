@@ -615,7 +615,7 @@ impl Sema<'_, '_> {
                     .diag(DiagId::sema_sometimes_uninit_var, at)
                     .arg(name)
                     .arg(0)
-                    .arg(which)
+                    .arg(sometimes_select(which))
                     .arg(dc)
                     .arg("")
                     .range(range)
@@ -638,7 +638,7 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_sometimes_uninit_var, b.range.lo)
                 .arg(name)
                 .arg(0)
-                .arg(b.kind)
+                .arg(sometimes_select(b.kind))
                 .arg(b.str)
                 .arg(text4)
                 .range(b.range)
@@ -708,7 +708,7 @@ impl Sema<'_, '_> {
                 let (cond, then) = (d.cond?, d.then?);
                 b.str = "if";
                 b.range = self.expr_range(cond);
-                b.remove = Some(0);
+                b.remove = Some(1);
                 let if_at = st.get(s).loc();
                 let then_at = self.stmt_begin_loc(then);
                 let els = d.els.map(|e| (self.stmt_begin_loc(e), self.uninit_stmt_end(e)));
@@ -728,7 +728,7 @@ impl Sema<'_, '_> {
                 let [t, f] = ex.cond_arms(e);
                 b.str = "?:";
                 b.range = self.expr_range(cond);
-                b.remove = Some(0);
+                b.remove = Some(1);
                 let els = Some((self.begin_loc(f), self.expr_end_loc(f)));
                 self.uninit_if_fixit(
                     &mut b,
@@ -748,7 +748,7 @@ impl Sema<'_, '_> {
                 let [l, _] = ex.operands(e);
                 b.str = op.spelling();
                 b.range = self.expr_range(l);
-                b.remove = Some(0);
+                b.remove = Some(1);
                 b.fixit1 =
                     Some(if (op == BinaryOp::LAnd && out) || (op == BinaryOp::LOr && !out) {
                         FixIt::remove(self.uninit_tok_span(self.begin_loc(e), ex.get(e).loc()))
@@ -761,14 +761,14 @@ impl Sema<'_, '_> {
                     b.kind = 1;
                     b.str = "while";
                     b.range = self.expr_range(st.loop_data(s).cond?);
-                    b.remove = Some(1);
+                    b.remove = Some(0);
                     b.fixit1 = Some(FixIt::replace(b.range, fixit_str));
                 }
                 StmtKind::ForStmt => {
                     b.kind = 1;
                     b.str = "for";
                     b.range = self.expr_range(st.loop_data(s).cond?);
-                    b.remove = Some(1);
+                    b.remove = Some(0);
                     b.fixit1 = Some(if out {
                         FixIt::remove(b.range)
                     } else {
@@ -788,7 +788,7 @@ impl Sema<'_, '_> {
                     b.kind = 2;
                     b.str = "do";
                     b.range = self.expr_range(st.loop_data(s).cond?);
-                    b.remove = Some(1);
+                    b.remove = Some(0);
                     b.fixit1 = Some(FixIt::replace(b.range, fixit_str));
                 }
                 _ => return None,
@@ -825,11 +825,22 @@ impl Sema<'_, '_> {
     }
 }
 
+/// The `sema_sometimes_uninit_var` select index of clang's branch kind
+/// (0 `if`/`?:`/logical condition, 1 loop, 2 loop entry, 3 switch case,
+/// 4 after the declaration, 5 after a call). kiln's template lists the
+/// condition alternative last (kiln_diag requires every argument to show in
+/// the fallback alternative), so the other kinds shift down by one.
+fn sometimes_select(kind: u32) -> u32 {
+    (kind + 5) % 6
+}
+
 /// One branch's description in `DiagUninitUse`.
 struct BranchDiag {
     kind: u32,
     str: &'static str,
     range: Span,
+    /// The `note_uninit_fixit_remove_cond` select: 0 removes the condition,
+    /// 1 removes the operator `str` (clang's select, in reverse order).
     remove: Option<u32>,
     fixit1: Option<FixIt>,
     fixit2: Option<FixIt>,
