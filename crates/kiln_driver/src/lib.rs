@@ -17,6 +17,7 @@ pub mod features;
 pub mod fp_flags;
 pub mod link;
 pub mod pp_cmd;
+pub mod rsp;
 pub mod syntax_cmd;
 pub mod templ_opts;
 pub mod time;
@@ -429,7 +430,8 @@ pub fn run(command_line: &[String], io: Io) -> i32 {
 /// modes"). Returns the exit code as [`run`].
 #[allow(clippy::too_many_lines, reason = "the driver's phases in order, one dispatch per action")]
 pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
-    let args = Args::parse_as(argv0, command_line);
+    let command_line = rsp::expand(command_line);
+    let args = Args::parse_as(argv0, &command_line);
     let mut diag_opts = DiagOptions::from_args(&args.diag_args);
     diag_opts.clang_compat = args.predef.clang_compat.major();
     let dsm = SourceManager::new();
