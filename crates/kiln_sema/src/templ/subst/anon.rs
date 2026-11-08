@@ -191,11 +191,15 @@ impl Substituter<'_, '_, '_> {
             .lists
             .iter::<AttrId>(list)
             .map(|a| *ast.attrs.get(a))
-            .filter(|n| !only_aligned || n.kind == AttrKind::ALIGNED)
+            // A local variable's `cleanup` names a function, not a dependent
+            // entity (WP-807).
+            .filter(|n| !only_aligned || matches!(n.kind, AttrKind::ALIGNED | AttrKind::CLEANUP))
             // clang does not clone a visibility attribute (`Clone = 0`):
             // codegen reads the pattern's (spec/codegen.md "Symbol
-            // visibility").
-            .filter(|n| !matches!(n.kind, AttrKind::VISIBILITY | AttrKind::TYPE_VISIBILITY))
+            // visibility"); a `mode` is applied to the substituted type.
+            .filter(|n| {
+                !matches!(n.kind, AttrKind::VISIBILITY | AttrKind::TYPE_VISIBILITY | AttrKind::MODE)
+            })
             .collect();
         if nodes.is_empty() || ast.attrs.of_decl(spec) != kiln_ast::ids::ListId::EMPTY {
             return;
@@ -224,6 +228,19 @@ impl Substituter<'_, '_, '_> {
                     }
                     continue;
                 }
+            }
+            if node.flags & AttrNode::PRIORITY_DEPENDENT != 0
+                && matches!(node.kind, AttrKind::CONSTRUCTOR | AttrKind::DESTRUCTOR)
+            {
+                // clang 22 `instantiateDependentConstructorAttr` (WP-807).
+                let Some(e) = ExprId::from_raw(node.a) else { continue };
+                let Ok(es) = self.expand_exprs(&[e]) else { continue };
+                if let [e] = es[..]
+                    && let Some(n) = self.sema.instantiate_ctor_dtor_priority(node, e)
+                {
+                    out.push(self.sema.ast.attrs.push(n));
+                }
+                continue;
             }
             if matches!(node.kind, AttrKind::ENABLE_IF | AttrKind::DIAGNOSE_IF) {
                 // Its condition names the instantiation's parameters.

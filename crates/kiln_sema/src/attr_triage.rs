@@ -179,19 +179,11 @@ pub static TABLE: &[Row] = &[
     // `__` trimmed as sema trims it).
     rt("clang_arm_builtin_alias", [G | CL, G | CL, 0, 0], A, "maps the declaration to a builtin"),
     r("clang_builtin_alias", G, A, "maps the declaration to a builtin"),
-    r("cleanup", G | GS, A, "runs a cleanup function at scope exit (WP-807)"),
     r("clspv_libclc_builtin", G | CL, C, OFFLOAD),
     r22("cluster_dims", G, C, OFFLOAD),
     r("code_align", G | CL, B, HINT),
-    r("common", G | GS, A, "common-symbol linkage (clang rejects it in C++)"),
     r("constant", G, C, OFFLOAD),
     r("constexpr", MS, C, OFFLOAD),
-    r(
-        "constructor",
-        G | GS,
-        A,
-        "registers the function in `llvm.global_ctors` / `llvm.global_dtors` (WP-807)",
-    ),
     r("consumable", G | CL, C, ANALYSIS),
     r("consumable_auto_cast_state", G | CL, C, ANALYSIS),
     r("consumable_set_state_on_read", G | CL, C, ANALYSIS),
@@ -207,12 +199,6 @@ pub static TABLE: &[Row] = &[
     r("cpu_dispatch", G | CL, A, "function multiversioning"),
     r("cpu_specific", G | CL, A, "function multiversioning"),
     r("cudart_builtin", G, C, OFFLOAD),
-    r(
-        "destructor",
-        G | GS,
-        A,
-        "registers the function in `llvm.global_ctors` / `llvm.global_dtors` (WP-807)",
-    ),
     r("device", G, C, OFFLOAD),
     r("device_builtin", G, C, OFFLOAD),
     r("device_builtin_surface_type", G, C, OFFLOAD),
@@ -246,7 +232,6 @@ pub static TABLE: &[Row] = &[
     r("iboutletcollection", G | CL, C, OBJC),
     r("intel_ocl_bicc", G | CL, A, "calling convention: changes the call ABI (WP-808)"),
     r("intel_reqd_sub_group_size", G, C, OFFLOAD),
-    r("internal_linkage", G | CL, A, "gives the entity internal linkage (WP-807)"),
     rt("interrupt", [0, 0, 0, G | GS], A, "calling convention: changes the call ABI (WP-808)"),
     rt("kernel", [G, 0, G, 0], C, OFFLOAD),
     r("launch_bounds", G, C, OFFLOAD),
@@ -389,7 +374,6 @@ pub static TABLE: &[Row] = &[
     r("requires_capability", G | CL, C, TSA),
     r("requires_shared_capability", G | CL, C, TSA),
     r("return_typestate", G | CL, C, ANALYSIS),
-    r("returns_twice", G | GS, A, "marks calls `returns_twice` (WP-807)"),
     r("riscv_rvv_vector_bits", G, A, "defines a vector or matrix type"),
     r("scoped_lockable", G | CL, C, TSA),
     r("selectany", G | GS, A, "COMDAT / linkonce linkage for the variable"),
@@ -433,7 +417,6 @@ pub static TABLE: &[Row] = &[
     rt("target_version", [G | GS, G | GS, G | GS, 0], A, "function multiversioning"),
     r("test_typestate", G | CL, C, ANALYSIS),
     r("thiscall", G | GS, C, NOCC),
-    r("tls_model", G | GS, A, "selects the TLS access model (WP-807)"),
     r("transparent_union", G | GS, C, "clang ignores it in C++ (-Wignored-attributes)"),
     r("try_acquire_capability", G | CL, C, TSA),
     r("try_acquire_shared_capability", G | CL, C, TSA),
@@ -466,6 +449,7 @@ const CLANG_SCOPED: &[&str] = &[
     "exclude_from_explicit_instantiation",
     "fallthrough",
     "flag_enum",
+    "internal_linkage",
     "min_vector_width",
     "minsize",
     "no_destroy",
@@ -581,7 +565,8 @@ mod tests {
         assert_eq!(s("no_sanitize_address", x, Some("gnu"), 19), Support::Ignored(B));
         assert_eq!(s("no_sanitize_address", x, Some("clang"), 22), Support::Unknown);
         // Class A: rejected.
-        assert_eq!(s("cleanup", g, None, 22), Support::Unsupported);
+        assert_eq!(s("selectany", g, None, 22), Support::Unsupported);
+        assert!(matches!(s("cleanup", g, None, 22), Support::Implemented(_)));
         assert!(matches!(s("mode", x, Some("gnu"), 19), Support::Implemented(_)));
         assert_eq!(s("swiftcall", x, Some("clang"), 22), Support::Unsupported);
         // Declaration-only on AArch64 (AttrKind::AARCH64_VECTOR_PCS_DECL).
@@ -614,18 +599,7 @@ mod tests {
     /// The names sibling work packages own stay class A until they land.
     #[test]
     fn owned_names_are_class_a() {
-        for n in [
-            "constructor",
-            "destructor",
-            "cleanup",
-            "internal_linkage",
-            "tls_model",
-            "returns_twice",
-            "no_builtin",
-            "vectorcall",
-            "ms_abi",
-            "preserve_most",
-        ] {
+        for n in ["no_builtin", "vectorcall", "ms_abi", "preserve_most"] {
             assert_eq!(row(n).map(|r| r.class), Some(A), "{n}");
         }
     }

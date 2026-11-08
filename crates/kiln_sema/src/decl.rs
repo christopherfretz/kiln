@@ -1767,6 +1767,16 @@ impl Sema<'_, '_> {
         // [dcl.align]/1: not on a function parameter.
         self.reject_alignas(&mut attrs, 0);
         ty = self.apply_vector_attrs(ty, &mut attrs, false);
+        // A parameter's type is substituted with its function's.
+        attrs.retain(|&a| {
+            let n = *self.ast.attrs.get(a);
+            if n.kind != AttrKind::MODE {
+                return true;
+            }
+            let what = "a 'mode' attribute on a parameter of dependent type";
+            self.emit(self.diag(DiagId::parse_unsupported, n.loc).arg(what));
+            false
+        });
         ty = self.apply_noreturn_attrs(ty, &attrs);
         let declared = ty;
         ty = self.adjust_param_type(ty);
@@ -4636,6 +4646,21 @@ impl Sema<'_, '_> {
                 self.take_annotations(pd, &mut attrs);
                 let range = Span::new(p.range.0, p.range.1);
                 self.check_param_nonnull_attrs(p.ty, range, &mut attrs);
+                // `cleanup` / `internal_linkage` / `returns_twice` on a
+                // parameter: ignored with a warning; `tls_model`: an error.
+                self.check_cleanup_attrs(pd, &mut attrs);
+                self.check_internal_linkage_attrs(pd, &mut attrs);
+                self.check_tls_model_attrs(pd, &mut attrs);
+                attrs.retain(|&a| {
+                    let node = *self.ast.attrs.get(a);
+                    if node.kind != AttrKind::RETURNS_TWICE {
+                        return true;
+                    }
+                    let shown = format!("'{}'", self.attr_shown(&node, "returns_twice"));
+                    let msg = self.diag(DiagId::sema_attribute_wrong_decl_type, node.loc);
+                    self.emit(msg.arg(shown).arg("functions"));
+                    false
+                });
                 self.check_param_pass_object_size(p.ty, p.range.0, &mut attrs);
                 let _ = self.builder().attach_attrs(pd, &attrs);
             }
@@ -5627,6 +5652,7 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         self.act_on_init_inner(v, init);
+        self.check_cleanup_deduced(v);
         self.check_static_tls(v, paren);
         let constinit_ok = self.check_constinit(v);
         self.report_deferred_immediates(v, constinit_ok);
@@ -6445,6 +6471,7 @@ impl Sema<'_, '_> {
 
     /// A variable declared without an initializer ([dcl.init]/7).
     pub fn act_on_uninit(&mut self, v: DeclId) {
+        self.check_cleanup_deduced(v);
         self.act_on_uninit_inner(v);
         if self.is_var_definition(v) {
             self.check_static_tls(v, None);
@@ -10057,6 +10084,9 @@ impl Sema<'_, '_> {
         if kind == AttrKind::ENUM_EXTENSIBILITY {
             return self.enum_extensibility_attribute(syntax, args, loc);
         }
+        if kind == AttrKind::TLS_MODEL {
+            return self.tls_model_attribute(syntax, &n, args, loc);
+        }
         if kind == AttrKind::INIT_PRIORITY {
             return self.init_priority_attribute(syntax, &shown, args, loc);
         }
@@ -11036,6 +11066,17 @@ pub(crate) fn attr_kind_of(
         ("naked", _, true) => AttrKind::NAKED,
         ("may_alias", _, true) => AttrKind::MAY_ALIAS,
         ("init_priority", _, true) => AttrKind::INIT_PRIORITY,
+        // clang `GCC<"constructor">` / `GCC<"destructor">` (WP-807).
+        ("constructor", _, true) => AttrKind::CONSTRUCTOR,
+        ("destructor", _, true) => AttrKind::DESTRUCTOR,
+        // clang `GCC<"cleanup">` (WP-807).
+        ("cleanup", _, true) => AttrKind::CLEANUP,
+        ("tls_model", _, true) => AttrKind::TLS_MODEL,
+        ("returns_twice", _, true) => AttrKind::RETURNS_TWICE,
+        // clang `GCC<"common">`, rejected in C++ (WP-807).
+        ("common", _, true) => AttrKind::COMMON,
+        // clang `Clang<"internal_linkage">` (WP-807).
+        ("internal_linkage", _, _) if gnu_syntax || clang_scope => AttrKind::INTERNAL_LINKAGE,
         ("visibility", _, true) => AttrKind::VISIBILITY,
         // clang `Clang<"type_visibility">`.
         ("type_visibility", _, _) if gnu_syntax || clang_scope => AttrKind::TYPE_VISIBILITY,

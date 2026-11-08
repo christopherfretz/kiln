@@ -277,6 +277,9 @@ pub(crate) fn const_pure_attrs(
     sig: &crate::module::Sig,
     out: &mut Vec<Attr>,
 ) -> bool {
+    if returns_twice(ast, d) {
+        out.push(Attr::Flag(AttrKind::ReturnsTwice));
+    }
     if ast.decls.builtin_id(d).is_some() {
         return false;
     }
@@ -302,6 +305,21 @@ pub(crate) fn const_pure_attrs(
     out.push(Attr::Flag(AttrKind::WillReturn));
     out.push(Attr::Memory(effects));
     true
+}
+
+/// The C library functions clang's builtins mark `ReturnsTwice`
+/// (`Builtins.td`; GCC `special_function_p`).
+const RETURNS_TWICE: &[&str] =
+    &["setjmp", "_setjmp", "sigsetjmp", "__sigsetjmp", "savectx", "vfork", "getcontext"];
+
+/// Whether a call of function `d` may return twice (clang
+/// `ReturnsTwiceAttr`): GNU `returns_twice`, or an `extern "C"` C library
+/// function clang knows to (`Sema::AddKnownFunctionAttributes`).
+pub(crate) fn returns_twice(ast: &Ast, d: DeclId) -> bool {
+    let first = ast.first(d);
+    ast.inherited_attr(first, kiln_ast::attr::AttrKind::RETURNS_TWICE).is_some()
+        || (kiln_abi::mangle::is_extern_c(ast, first)
+            && RETURNS_TWICE.contains(&kiln_abi::mangle::decl_name(ast, first).as_ref()))
 }
 
 /// The `cold` / `hot` function attributes a GNU `cold` / `hot` attribute

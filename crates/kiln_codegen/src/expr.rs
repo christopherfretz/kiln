@@ -4740,7 +4740,9 @@ impl Cg<'_> {
         let q = ast.decls.get(d).ty().expect("var type");
         if self.is_vla(q) {
             let init = v.init.filter(|&i| !ast.is_trivial_default_construction(i));
-            return self.emit_vla_var(d, q, init);
+            self.emit_vla_var(d, q, init)?;
+            self.push_cleanup_attr(d);
+            return Ok(());
         }
         // clang `EmitAutoVarAlloca`: `EmitVariablyModifiedType` (a pointer
         // or reference to a variable length array).
@@ -4803,6 +4805,7 @@ impl Cg<'_> {
             };
             self.push_cleanup(c);
         }
+        self.push_cleanup_attr(d);
         Ok(())
     }
 

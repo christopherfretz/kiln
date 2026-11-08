@@ -25,6 +25,7 @@ mod builtins;
 mod checked;
 mod class;
 mod cleanup;
+mod cleanup_attr;
 mod complex;
 mod consts;
 mod contracts;

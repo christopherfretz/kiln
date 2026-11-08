@@ -78,10 +78,10 @@ functions). The class B half of cause 4 is open. Cause 5 is WP-806.
 
 ### Class A, all categories, ordered by likely real-world impact
 
-1. attr `constructor`/`destructor` (+priority) — function never runs. warn / silent in sys hdr. (§1.3 A1) **Owner: WP-807.**
+1. attr `constructor`/`destructor` (+priority) — function never runs. warn / silent in sys hdr. (§1.3 A1) **Fixed in WP-807.**
 2. pragma `STDC FP_CONTRACT OFF` / `clang fp contract(off)` — always fused to FMA, and the
    `-ffp-contract=off` escape is rejected. **No diagnostic.** (§3 P-A1) **Owner: WP-806.**
-3. attr `cleanup(fn)` — scope-exit cleanup never runs. warn / silent in sys hdr. (A2) **Owner: WP-807.**
+3. attr `cleanup(fn)` — scope-exit cleanup never runs. warn / silent in sys hdr. (A2) **Fixed in WP-807.**
 4. attr `used` — unreferenced static/inline entity not emitted, not in `llvm.used`. **No diagnostic.** (A3) **Owner: fixed in WP-805.**
 5. builtin `__builtin_assume(expr)` — side effects of `expr` are executed (clang discards them and
    warns). **No diagnostic.** (§2 B-A1) **Owner: fixed in WP-805.**
@@ -91,11 +91,11 @@ functions). The class B half of cause 4 is open. Cause 5 is WP-806.
 8. flag `-ffreestanding` with no `no-builtins` + attr `no_builtin` dropped — memcpy/memset
    implementations can be turned into self-recursion. **No diagnostic** for the flag. (F-A1, A9) **Owner: WP-808; `no_builtin` is an error since WP-805.**
 9. attr `mode(...)` — wrong integer/vector width. (A4) **Owner: fixed in WP-799.**
-10. attr `internal_linkage` — linkage/ODR differs; silent in libc++ configs that use it. (A8) **Owner: WP-807.**
-11. attr `returns_twice` on user functions. (A7) **Owner: WP-807.**
+10. attr `internal_linkage` — linkage/ODR differs; silent in libc++ configs that use it. (A8) **Fixed in WP-807.**
+11. attr `returns_twice` on user functions. (A7) **Fixed in WP-807.**
 12. pragma `STDC FENV_ACCESS ON` / `float_control(except)` / `clang fp exceptions` — no
     constrained FP. **No diagnostic.** (P-A2) **Owner: WP-806.**
-13. attr `tls_model`. (A10) **Owner: WP-807.**
+13. attr `tls_model`. (A10) **Fixed in WP-807.**
 14. attr `pass_object_size` / `pass_dynamic_object_size` — hidden-parameter ABI + mangling. (A16) **Fixed in WP-803.**
 15. attr `retain` (gc-sections). (A11) **Owner: fixed in WP-805.**
 16. flag `-fno-sized-deallocation` — still emits sized delete. **No diagnostic.** (F-A2) **Owner: WP-808.**
@@ -183,16 +183,16 @@ system headers / with default warnings".
 
 | # | attribute | what kiln does | what clang does | diag | owner |
 |---|---|---|---|---|---|
-| A1 | `constructor`, `constructor(prio)`, `destructor`, `destructor(prio)` | dropped; no consumer (global_init.rs builds `llvm.global_ctors` only from dynamic initializers) | entry in `@llvm.global_ctors`/`global_dtors` with priority | warn (silent in sys hdr) — **the function never runs** | WP-807 |
-| A2 | `cleanup(fn)` | dropped | calls `fn(&var)` at scope exit (incl. EH) | warn — RAII-in-C idioms (g_autoptr, systemd `_cleanup_`, lock guards in C-style headers) leak/never unlock | WP-807 |
+| A1 | `constructor`, `constructor(prio)`, `destructor`, `destructor(prio)` | dropped; no consumer (global_init.rs builds `llvm.global_ctors` only from dynamic initializers) | entry in `@llvm.global_ctors`/`global_dtors` with priority | warn (silent in sys hdr) — **the function never runs** | fixed in WP-807 |
+| A2 | `cleanup(fn)` | dropped | calls `fn(&var)` at scope exit (incl. EH) | warn — RAII-in-C idioms (g_autoptr, systemd `_cleanup_`, lock guards in C-style headers) leak/never unlock | fixed in WP-807 |
 | A3 | `used` | see 1.2 (known kind, not lowered) | always emitted + `llvm.used` | **none** | fixed in WP-805 |
 | A4 | `mode(QI/HI/SI/DI/TI/word/pointer/V4SI...)` | dropped; `AttrKind::MODE` exists but is never produced | changes the typedef's type (e.g. `typedef int ti __attribute__((mode(TI)))` is 128-bit) | warn — wrong type width/ABI (libgcc-style, glibc `<sys/types.h>` `__intN_t` uses it under some configs, softfloat, compiler-rt style code) | fixed in WP-799 |
 | A5 | `no_destroy` / `[[clang::no_destroy]]` | dropped | no `__cxa_atexit` registration for the variable | warn; **silent in libc++ headers** (`_LIBCPP_NO_DESTROY`) — destructor runs at exit -> static-destruction-order bugs/use-after-destroy at shutdown | fixed in WP-805 |
 | A6 | calling conventions: `ms_abi`, `regcall`, `vectorcall`, `preserve_most`, `preserve_all`, `preserve_none`, `aarch64_vector_pcs`, `aarch64_sve_pcs`, `intel_ocl_bicc`, `no_caller_saved_registers`, `interrupt` (x86) | dropped (crates/kiln_llvm/src/inst.rs:412-463 can print these CCs but no codegen path sets them from an attribute) | function and call sites use that CC | warn — **ABI mismatch** at every call across the boundary (Wine/EFI-style `ms_abi`, AArch64 vector-math library declarations that use `aarch64_vector_pcs` — silent when they sit in a system header) | WP-808 (error since WP-805; `aarch64_vector_pcs` declarations accepted) |
-| A7 | `returns_twice` | dropped; codegen applies `returns_twice` only by callee name (crates/kiln_codegen/src/outline.rs:71) | `returns_twice` on decl/calls | warn — custom setjmp-like/vfork wrappers miscompile at -O | WP-807 |
-| A8 | `internal_linkage` / `[[clang::internal_linkage]]` | dropped (`AttrKind::INTERNAL_LINKAGE` never produced) | entity gets internal linkage | warn; **silent in libc++** (`_LIBCPP_HIDE_FROM_ABI` under some configs, `_LIBCPP_INTERNAL_LINKAGE`) — static locals in inline functions merge across TUs instead of per-TU, ODR/ABI differences | WP-807 |
+| A7 | `returns_twice` | dropped; codegen applies `returns_twice` only by callee name (crates/kiln_codegen/src/outline.rs:71) | `returns_twice` on decl/calls | warn — custom setjmp-like/vfork wrappers miscompile at -O | fixed in WP-807 |
+| A8 | `internal_linkage` / `[[clang::internal_linkage]]` | dropped (`AttrKind::INTERNAL_LINKAGE` never produced) | entity gets internal linkage | warn; **silent in libc++** (`_LIBCPP_HIDE_FROM_ABI` under some configs, `_LIBCPP_INTERNAL_LINKAGE`) — static locals in inline functions merge across TUs instead of per-TU, ODR/ABI differences | fixed in WP-807 |
 | A9 | `no_builtin` / `no_builtin("memcpy")` | dropped | `no-builtins` / `no-builtin-memcpy` fn attr | warn — memcpy/memset implementations get loop-idiom-recognized into self-calls (infinite recursion) | WP-808 (error since WP-805) |
-| A10 | `tls_model("initial-exec"/"local-exec"/...)` | dropped | `thread_local(initialexec)` etc. | warn — default general-dynamic TLS in malloc implementations/`dlopen`ed libs: recursion into allocator, or perf; wrong model can break preload libs | WP-807 |
+| A10 | `tls_model("initial-exec"/"local-exec"/...)` | dropped | `thread_local(initialexec)` etc. | warn — default general-dynamic TLS in malloc implementations/`dlopen`ed libs: recursion into allocator, or perf; wrong model can break preload libs | fixed in WP-807 |
 | A11 | `retain` | dropped | `llvm.used` + `SHF_GNU_RETAIN` | warn — section-registered entries stripped by `--gc-sections` | fixed in WP-805 |
 | A12 | `selectany` (GNU spelling) | dropped | linkonce/COMDAT for the variable | warn — duplicate-symbol link errors (loud) | error since WP-805, unowned |
 | A13 | `ms_struct` / `gcc_struct` | dropped | MS bitfield layout | warn — layout/ABI | error since WP-805, unowned |
@@ -236,7 +236,7 @@ open as a WP-805 follow-up.
 
 **Owner: WP-805 (accepted silently as class C rows of the triage table).** The "rejection lost"
 names (`error`, `warning`, `unavailable`, `diagnose_if`) stay open: kiln does not give clang's
-error at a use. `common` is a class A row, an error since WP-805 (clang rejects it in C++);
+error at a use. `common` is rejected in C++ as clang does (WP-807);
 `nocommon` is a class C row (a no-op in C++).
 
 - thread-safety analysis (34 names, decl_attrs.rs:94) and `lifetimebound`/`no_sanitize*`
@@ -257,7 +257,7 @@ error at a use. `common` is a class A row, an error since WP-805 (clang rejects 
 - **Rejection lost** (clang errors, kiln warns and continues): `error("msg")`/`warning("msg")`
   (clang: error/warning when a call survives to codegen), `unavailable` (clang rejects uses),
   `overloadable` (implemented by WP-803),
-  `common` (clang: error in C++), `matrix_type`/`riscv_rvv_vector_bits` (clang errors
+  `common` (an error in C++ since WP-807, as clang), `matrix_type`/`riscv_rvv_vector_bits` (clang errors
   without the enabling flag), `diagnose_if(..., "error")` (clang errors at matching calls).
 - target-irrelevant calling conventions on x86_64/aarch64 (`stdcall`, `fastcall`, `thiscall`,
   `cdecl`, `pascal`, `regparm`, `pcs`, `m68k_rtd`, `sysv_abi`): clang ignores them with a

@@ -162,7 +162,7 @@ impl Sema<'_, '_> {
 
     /// The candidates of `ule` (function, found declaration), in
     /// candidate order, without invalid declarations.
-    fn ule_candidates(&self, ule: ExprId) -> Vec<(DeclId, DeclId)> {
+    pub(crate) fn ule_candidates(&self, ule: ExprId) -> Vec<(DeclId, DeclId)> {
         let extra = self.ovl.ule_found.get(&ule);
         self.ast
             .unresolved_decls(ule)
@@ -821,7 +821,7 @@ impl Sema<'_, '_> {
     }
 
     /// "candidate function" at `d`.
-    fn plain_candidate_note(&self, d: DeclId) -> Diag {
+    pub(crate) fn plain_candidate_note(&self, d: DeclId) -> Diag {
         let loc = self.ast.decls.get(d).loc();
         let kind = if self.kind_of(d) == DeclKind::FunctionTemplate {
             "function template"
