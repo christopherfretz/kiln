@@ -5223,7 +5223,12 @@ dependent profile (spec/types.md §7.2, WP-821), so the same reflection
 written in two templates maps alike. Tests
 `temp.constr.atomic/p2-non-dependent-argument-identity.cpp` (clang 19,
 22 and GCC 16.1 agree), `p2-non-integral-argument-identity.cpp` (clang
-19 agrees), `p2-dependent-reflection-identity.cpp` and its `-neg`
+19 and 22 agree) and its `-neg` sibling (different values are two atoms
+and the call is ambiguous: GCC 16.1 and clang 19 agree, `skip(clang)`;
+clang 22 treats atoms of a dependent concept-id whose mappings differ
+only in a non-type argument as identical, even `C<T, 1>` and `C<T, 2>`
+of an `int` parameter, against [temp.constr.atomic]/2's "the same
+type" rule), `p2-dependent-reflection-identity.cpp` and its `-neg`
 sibling (GCC 16.1 agrees, `skip(clang)`) (WP-821).
 
 Hash-consing therefore makes identical atoms the **same `NormId`**.
