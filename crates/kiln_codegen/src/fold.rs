@@ -33,6 +33,10 @@ pub(crate) struct Folds {
     /// they need no destructor call (clang `VarDecl::needsDestruction`
     /// is `DK_none` once `evaluateDestruction` succeeded).
     pub const_destroyed: FxHashSet<DeclId>,
+    /// WP-808: the object sizes of the `pass_object_size(t)` arguments
+    /// that fold (clang `Expr::tryEvaluateObjectSize`), by (argument,
+    /// `t`).
+    pub obj_size: FxHashMap<(ExprId, u32), u64>,
 }
 
 impl Folds {
@@ -118,7 +122,7 @@ impl SemaBridge for Bridge<'_> {
 
 /// Folds every candidate expression of the translation unit.
 pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds {
-    let (cands, inits, imm, statics, dtors) = {
+    let (cands, inits, imm, statics, dtors, ps_args) = {
         let mut c = Collect {
             ast,
             compat: oven.clang_compat(),
@@ -128,9 +132,10 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             defaults: FxHashSet::default(),
             statics: Vec::new(),
             dtors: FxHashMap::default(),
+            ps_args: Vec::new(),
         };
         c.tu();
-        (c.out, c.inits, c.imm, c.statics, c.dtors)
+        (c.out, c.inits, c.imm, c.statics, c.dtors, c.ps_args)
     };
     let mut b = Bridge { ast, abi: target, cxx_year: oven.cxx_year() };
     let mut folds = Folds::default();
@@ -198,6 +203,15 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         let op = b.ast.exprs.operand(e);
         if let Some(v) = oven.fold_immediate_in(&mut b, op, at) {
             folds.imm.insert(key, v);
+        }
+    }
+    // clang `evaluateOrEmitBuiltinObjectSize` of each `pass_object_size`
+    // argument (WP-808).
+    for key @ (a, t) in ps_args {
+        if !folds.obj_size.contains_key(&key)
+            && let Some(n) = oven.fold_object_size(&mut b, a, t)
+        {
+            folds.obj_size.insert(key, n);
         }
     }
     // clang `Sema::FinalizeVarWithDestructor`: `evaluateValue`, then
@@ -285,6 +299,8 @@ struct Collect<'a> {
     /// declaration: the declaration with the initializer (if any), its
     /// initializer, and whether it has static storage.
     dtors: FxHashMap<DeclId, (DeclId, Option<ExprId>, bool)>,
+    /// The `pass_object_size(t)` arguments with their `t` ([`Folds::obj_size`]).
+    ps_args: Vec<(ExprId, u32)>,
 }
 
 impl Collect<'_> {
@@ -649,6 +665,13 @@ impl Collect<'_> {
                     self.out.push(e);
                 }
                 self.out.extend(crate::builtins::folded_args(ast, e));
+                self.ps_args.extend(crate::builtins::object_size_args(ast, e));
+            }
+            ExprKind::CXXMemberCallExpr
+            | ExprKind::CXXOperatorCallExpr
+            | ExprKind::CXXConstructExpr
+            | ExprKind::CXXTemporaryObjectExpr => {
+                self.ps_args.extend(crate::builtins::object_size_args(ast, e));
             }
             // clang `EmitCXXNewAllocSize` tries the array bound as a constant.
             ExprKind::CXXNewExpr => self.out.extend(ast.exprs.new_extra(e).array_size),

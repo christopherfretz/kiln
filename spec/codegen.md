@@ -603,18 +603,26 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       A `pass_object_size(t)` parameter (spec/sema.md §4) adds a hidden
       `size_t` argument right after it in the IR signature
       (`module::with_object_sizes`, applied by `decl_sig` and at direct
-      calls); the caller passes, in order: the constant size of a named
-      complete object (`p`, `&p`, `p + k`, a member only for odd `t`),
-      minus the offset, unless the spelling is dynamic; the caller's own
-      hidden value when the argument is a compatible `pass_object_size`
-      parameter (types equal, 0 serving 1, 3 serving 2); 0 for type 3;
-      else `llvm.objectsize` as above. In the callee
+      calls, member, operator and constructor calls included); the caller
+      passes, in order (clang `MaybeEmitImplicitObjectSize`): the Oven's
+      fold of `__builtin_object_size(arg, t)` at the call site
+      (`Oven::fold_object_size`, run by the fold prepass
+      `Collect::ps_args` -> `Folds::obj_size`; no side-effect default, a
+      failure is not an error), for `pass_dynamic_object_size` too; the
+      caller's own hidden value when the argument is a compatible
+      `pass_object_size` parameter (types equal, 0 serving 1, 3 serving
+      2); 0 for type 3; else `llvm.objectsize(arg, t & 2, true, dynamic)`.
+      In the callee
       `__builtin_object_size(param, t)` of a compatible type loads the
       hidden value (`Fx::object_sizes`; clang `emitBuiltinObjectSize` /
-      `EmitCallArgs`; WP-803,
-      `ext.clang.pass.object.size/pass-object-size-run.cpp`). Not yet:
-      the full Oven fold of the caller's argument (other shapes take the
-      `llvm.objectsize` of the whole object, which only weakens a check).
+      `EmitCallArgs`; WP-803, WP-808,
+      `ext.clang.pass.object.size/pass-object-size-run.cpp`,
+      `ir-pass-object-size-fold.cpp`). Not yet (WP-808 follow-up,
+      `pass-object-size-lenient-xfail.cpp`): clang's lenient designator
+      (an out-of-bounds or negative offset gives 0, a reinterpreting
+      cast keeps the byte offset, a member of an unknown base keeps its
+      designator); those arguments take `llvm.objectsize`, which only
+      weakens a check at -O0.
       `__builtin_powi*` is
       `llvm.powi.fT.i32`; `__builtin_copysignf16` truncates to `half`,
       calls `llvm.copysign.f16` and extends back;

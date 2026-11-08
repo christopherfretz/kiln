@@ -90,6 +90,48 @@ fn clang19_unevaluated(b: u32) -> bool {
                 | id::FABSF16
         )
 }
+/// WP-808: the `pass_object_size(t)` arguments of call or construction
+/// `e`, with their `t`, for the fold prepass ([`Cg::pass_object_size_arg`]
+/// asks by the same key). The callee is found as codegen finds it: the
+/// function a call names through parentheses and decays, a member call's
+/// method, or the constructor; an operator call of a member function
+/// passes the object first.
+pub(crate) fn object_size_args(ast: &Ast, e: ExprId) -> Vec<(ExprId, u32)> {
+    let (d, args) = match ast.exprs.get(e).kind() {
+        ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+            (Some(ast.exprs.constructor(e)), ast.exprs.construct_args(e))
+        }
+        _ => {
+            let mut c = ast.exprs.callee(e);
+            let d = loop {
+                match ast.exprs.get(c).kind() {
+                    ExprKind::ParenExpr | ExprKind::ImplicitCastExpr => c = ast.exprs.operand(c),
+                    ExprKind::SubstNonTypeTemplateParmExpr => c = ast.exprs.subst_replacement(c),
+                    ExprKind::DeclRefExpr | ExprKind::MemberExpr => break Some(ast.exprs.decl(c)),
+                    _ => break None,
+                }
+            };
+            (d, ast.exprs.call_args(e))
+        }
+    };
+    let Some(d) = d.filter(|&d| ast.decls.function(d).is_some()) else {
+        return Vec::new();
+    };
+    let ps = ast.pass_object_size_params(d);
+    if ps.is_empty() {
+        return Vec::new();
+    }
+    let args: Vec<ExprId> = ast.lists.iter(args).collect();
+    let skip = usize::from(
+        ast.exprs.get(e).kind() == ExprKind::CXXOperatorCallExpr
+            && ast.decls.get(d).kind() == DeclKind::CXXMethod
+            && ast.decls.function(d).is_some_and(|f| {
+                f.spec.storage() != kiln_ast::decl::FnStorage::Static
+                    && !f.spec.has_explicit_object()
+            }),
+    );
+    ps.iter().filter_map(|&(i, t, _)| Some((*args.get(i + skip)?, t))).collect()
+}
 
 /// The arguments of the builtin call `e` codegen folds rather than emits
 /// (the `__builtin_isfpclass` mask, the `__builtin_object_size` type,
@@ -1342,82 +1384,6 @@ impl Cg<'_> {
         Some(self.load(a.ty, a.v, a.align, false))
     }
 
-    /// The part of clang's `tryEvaluateObjectSize` codegen needs for a
-    /// `pass_object_size(t)` argument `a`: the address of a complete
-    /// variable (`buf`, `&x`), or for a subobject type (1, 3) of a member
-    /// (`s.a`, `&s.m`), plus a constant element offset within it; the
-    /// size from that offset to the end. Anything else is not folded
-    /// (the whole-object `llvm.objectsize` serves types 0 and 2).
-    fn const_object_size(&mut self, a: ExprId, t: u32) -> Option<u64> {
-        let ast = self.ast;
-        let mut e = a;
-        let mut off: u64 = 0;
-        let mut addr = false;
-        loop {
-            match ast.exprs.get(e).kind() {
-                ExprKind::ParenExpr => e = ast.exprs.operand(e),
-                ExprKind::ImplicitCastExpr
-                    if matches!(ast.exprs.cast_kind(e), CastKind::NoOp | CastKind::BitCast) =>
-                {
-                    e = ast.exprs.operand(e);
-                }
-                ExprKind::ImplicitCastExpr
-                    if !addr && ast.exprs.cast_kind(e) == CastKind::ArrayToPointerDecay =>
-                {
-                    (e, addr) = (ast.exprs.operand(e), true);
-                }
-                ExprKind::UnaryOperator if !addr && ast.exprs.unary_op(e) == UnaryOp::AddrOf => {
-                    (e, addr) = (ast.exprs.operand(e), true);
-                }
-                ExprKind::BinaryOperator
-                    if !addr && ast.exprs.binary_op(e) == kiln_ast::expr::BinaryOp::Add =>
-                {
-                    let [l, r] = ast.exprs.operands(e);
-                    let elem = ast.types.pointee(ast.exprs.get(l).ty())?;
-                    if !is_complete(ast, elem) {
-                        return None;
-                    }
-                    let mut lit = r;
-                    while ast.exprs.get(lit).kind() == ExprKind::ImplicitCastExpr {
-                        lit = ast.exprs.operand(lit);
-                    }
-                    let k = match self.fold_int(r) {
-                        Some(k) => u64::try_from(k).ok()?,
-                        None if ast.exprs.get(lit).kind() == ExprKind::IntegerLiteral => {
-                            ast.exprs.int_value(lit)?
-                        }
-                        None => return None,
-                    };
-                    off = off.checked_add(k.checked_mul(self.size_align(elem).0)?)?;
-                    e = l;
-                }
-                _ => break,
-            }
-        }
-        if !addr {
-            return None;
-        }
-        let k = ast.exprs.get(e).kind();
-        let d = match k {
-            ExprKind::DeclRefExpr => ast.exprs.decl(e),
-            ExprKind::MemberExpr if t & 1 != 0 => ast.exprs.decl(e),
-            _ => return None,
-        };
-        if !matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar | DeclKind::Field) {
-            return None;
-        }
-        let q = ast.decls.get(d).ty()?;
-        if ast.types.is_reference(q) || !is_complete(ast, q) {
-            return None;
-        }
-        // An array of unknown bound has size 0 here: not a constant.
-        let size = self.size_align(q).0;
-        if size == 0 {
-            return None;
-        }
-        size.checked_sub(off)
-    }
-
     /// The `pass_object_size` parameter `p` names, ignoring parentheses
     /// and implicit casts.
     fn ps_param_ref(&self, mut p: ExprId) -> Option<DeclId> {
@@ -1435,15 +1401,16 @@ impl Cg<'_> {
     }
 
     /// WP-803: the hidden `size_t` argument for argument `a` (emitted as
-    /// `v`) of a `pass_object_size(t)` parameter (clang
-    /// `evaluateOrEmitBuiltinObjectSize`): unless `dynamic`, the
-    /// constant object size ([`Cg::const_object_size`]); the caller's own
-    /// hidden argument when `a` names a compatible `pass_object_size`
-    /// parameter; the default for type 3 (`0`); else `llvm.objectsize(v,
-    /// min, nullunknown=true, dynamic)`.
+    /// `v`) of a `pass_object_size(t)` or `pass_dynamic_object_size(t)`
+    /// parameter (clang `evaluateOrEmitBuiltinObjectSize`): the object
+    /// size the fold prepass found (`Expr::tryEvaluateObjectSize`, the
+    /// Oven's `__builtin_object_size` evaluation, WP-808); else the
+    /// caller's own hidden argument when `a` names a compatible
+    /// `pass_object_size` parameter; the default for type 3 (`0`); else
+    /// `llvm.objectsize(v, min, nullunknown=true, dynamic)`.
     pub(crate) fn pass_object_size_arg(&mut self, a: ExprId, v: V, t: u32, dynamic: bool) -> V {
         let rt = self.lty(QualType::unqual(self.ast.types.target().size_t));
-        if !dynamic && let Some(n) = self.const_object_size(a, t) {
+        if let Some(&n) = self.folds.obj_size.get(&(a, t)) {
             return V::C(self.m.const_int(rt, i128::from(n)));
         }
         if let Some(d) = self.ps_param_ref(a)

@@ -3392,20 +3392,16 @@ impl Cg<'_> {
         }
         // WP-803: a hidden `size_t` argument after each `pass_object_size`
         // argument (clang `EmitCallArgs`).
-        let ps = direct.map(|d| ast.pass_object_size_params(d)).unwrap_or_default();
-        let (mut cvals, mut cargs) = (Vec::new(), Vec::new());
-        if !ps.is_empty() {
-            (cvals, cargs) = (vals.clone(), args.clone());
-            for &(i, t, dynamic) in ps.iter().rev() {
-                if let (Some(&a), Some(&CallArg::Scalar(v))) = (args.get(i), vals.get(i)) {
-                    let s = self.pass_object_size_arg(a, v, t, dynamic);
-                    cvals.insert(i + 1, CallArg::Scalar(s));
-                    cargs.insert(i + 1, a);
-                }
+        let sized =
+            direct.and_then(|d| self.object_size_args(d, fty, &sig, &vals, &args, extern_c));
+        let (cvals, cargs);
+        let (cv, ca) = match sized {
+            Some((s, v, a)) => {
+                (sig, cvals, cargs) = (s, v, a);
+                (&cvals, &cargs)
             }
-            sig = self.with_object_sizes(sig, fty, &ps, extern_c);
-        }
-        let (cv, ca) = if ps.is_empty() { (&vals, &args) } else { (&cvals, &cargs) };
+            None => (&vals, &args),
+        };
         let mark = self.f.fir.inst_count();
         let r = self.call_vals_ret(&sig, callee, fid, None, cv, ca, dest, &extra, &ret_extra)?;
         // WP-806: a library builtin's call takes the FP scope's fast-math
@@ -3459,6 +3455,36 @@ impl Cg<'_> {
         self.f.fir.set_cur(None);
         let cont = self.f.fir.create_block();
         self.emit_block(cont, false);
+    }
+
+    /// WP-803: a call of `d` (type `fty`, signature `sig`) with a hidden
+    /// `size_t` argument after each `pass_object_size` argument (clang
+    /// `EmitCallArgs`, `MaybeEmitImplicitObjectSize`): the signature, the
+    /// values and the argument expressions with them; `None` if `d` has
+    /// no such parameter. `vals` are `args` emitted (no object argument).
+    pub(crate) fn object_size_args(
+        &mut self,
+        d: DeclId,
+        fty: QualType,
+        sig: &Sig,
+        vals: &[CallArg],
+        args: &[ExprId],
+        extern_c: bool,
+    ) -> Option<(Sig, Vec<CallArg>, Vec<ExprId>)> {
+        let ps = self.ast.pass_object_size_params(d);
+        if ps.is_empty() {
+            return None;
+        }
+        let (mut cvals, mut cargs) = (vals.to_vec(), args.to_vec());
+        for &(i, t, dynamic) in ps.iter().rev() {
+            if let (Some(&a), Some(&CallArg::Scalar(v))) = (args.get(i), vals.get(i)) {
+                let s = self.pass_object_size_arg(a, v, t, dynamic);
+                cvals.insert(i + 1, CallArg::Scalar(s));
+                cargs.insert(i + 1, a);
+            }
+        }
+        let sig = self.with_object_sizes(sig.clone(), fty, &ps, extern_c);
+        Some((sig, cvals, cargs))
     }
 
     /// clang `EmitCallArgs` + `EmitCall`: evaluates `args` and calls
