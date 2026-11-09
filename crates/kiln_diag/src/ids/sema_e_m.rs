@@ -226,6 +226,10 @@ sema_inline_declaration_block_scope = Error (1) "inline declaration of '{0}' not
 sema_inline_main = Error (0) "'main' is not allowed to be declared inline";
 sema_inline_namespace_mismatch = Error (0) "non-inline namespace cannot be reopened as inline";
 sema_inline_namespace_reopened_noninline = Warning [InlineNamespaceReopenedNoninline] (0) "inline namespace reopened as a non-inline namespace";
+// A pattern member that failed to instantiate with no error reported
+// (WP-1054; spec/sema-templates.md §4.6): an internal error, never a
+// silent drop.
+sema_inst_member_dropped = Error (2) "kiln: internal error: member '{0}' of {1} was not instantiated and no diagnostic says why";
 sema_int_literal_implicitly_unsigned = ExtWarn [ImplicitlyUnsignedLiteral] (0) "integer literal is too large to be represented in a signed integer type, interpreting as unsigned";
 sema_int_literal_too_large = Error (0) "integer literal is too large to be represented in any integer type";
 sema_integer_constant_overflow = Warning [IntegerOverflow] (2) "overflow in expression; result is {0} with type {1}";

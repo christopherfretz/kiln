@@ -1158,6 +1158,11 @@ Tests: `conformance/target.acle/` (`ir-*-19.cpp` exact under oracle 19,
 - Block layout, forwarding-block removal and the dead-block cleanup
   follow clang -O0. A statement with no insertion point is skipped unless
   it contains a label (`ContainsLabel`).
+- A declaration in unreachable code is still emitted. A local variable's
+  alloca and NRVO flag, and a VLA's bound computation, first reopen a
+  block with `ensure_insert_point` (clang `EnsureInsertPoint` in
+  `EmitAutoVarAlloca` and `EmitVariablyModifiedType`). Every
+  `fir.cur().expect(fir::OPEN_BLOCK)` depends on this (WP-971).
 - Each loop gets a distinct `!llvm.loop` node with
   `llvm.loop.mustprogress`. A loop with a constant-true or absent
   condition and an empty body clears `mustprogress` on the function and

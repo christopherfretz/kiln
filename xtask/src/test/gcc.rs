@@ -23,13 +23,14 @@ pub(super) enum Verdict {
 impl Test<'_> {
     /// The GCC `spec` is compared with in this run: it says `oracle: gcc`,
     /// kiln is the compiler under test, a GCC is configured, and the test
-    /// has no `module:`/`unit:`/`pch:` lines (GCC's module and PCH flags
-    /// differ).
+    /// has no `module:`/`unit:`/`header-unit:`/`pch:` lines (GCC's module
+    /// and PCH flags differ).
     pub(super) fn gcc_applies(&self, spec: &TestSpec) -> Option<PathBuf> {
         if spec.gcc
             && self.cfg.compiler_kind == CompilerKind::Kiln
             && spec.modules.is_empty()
             && spec.units.is_empty()
+            && spec.header_units.is_empty()
             && spec.pch.is_none()
         {
             self.cfg.gcc.clone()
