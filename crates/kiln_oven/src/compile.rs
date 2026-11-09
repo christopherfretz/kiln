@@ -11,7 +11,7 @@
 
 use kiln_ast::consts::{FloatKind, Scalar};
 use kiln_ast::decl::{ConstexprKind, DeclKind, VarStorage};
-use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, TraitKind, UnaryOp};
+use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, StorageDuration, TraitKind, UnaryOp};
 use kiln_ast::lambda::ClosureThunk;
 use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::types::{TypeKind, TypeView};
@@ -139,6 +139,13 @@ pub(crate) enum GState {
     /// placeholder of a variable being initialized (flag `RESOLVING`), or
     /// an external object (reads and writes are diagnosed).
     Resolved(u64),
+    /// The result object of the evaluation of this variable's own
+    /// initializer (`Op::BindObject`, WP-1100): the object under
+    /// construction its name designates while the initializer runs
+    /// ([basic.life]/1, clang's `EvaluatingDecl`). Naming it makes the
+    /// running calls impure (not memoized): its value changes as it is
+    /// initialized.
+    Bound(u64),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -471,6 +478,14 @@ impl Oven {
                 let p = c.lv_mem(e, Access::Read);
                 c.emit_at(Op::Copy, 1, &[r, p, ty.0], e);
             } else {
+                if let Some(d) = object {
+                    // While its initializer runs, the variable names the
+                    // object under construction (WP-1100, [basic.life]/1):
+                    // its members initialized so far can be read
+                    // (`constexpr P p{1, p.x + 1};`).
+                    let g = c.o.global_index(c.b.ast(), d);
+                    c.emit(Op::BindObject, 0, &[r, g]);
+                }
                 c.init(e, r, ty);
             }
             c.emit(Op::Ret, 0, &[r]);
@@ -1995,7 +2010,9 @@ impl Compiler<'_> {
             }
             // A reference may extend the lifetime of a temporary to the
             // end of this scope ([class.temporary]/6).
-            force |= self.has_temps && is_reference_var(ast, d);
+            // So may a non-reference one: an enumerating expansion
+            // statement's element ([class.temporary]/8, CWG3043).
+            force |= self.has_temps && (is_reference_var(ast, d) || extends_temporaries(ast, d));
             let q = ast.decls.get(d).ty().unwrap_or(QualType::INT);
             let mut is_const = const_object(ast, q);
             let ty = self.ty(q);
@@ -2927,7 +2944,12 @@ impl Compiler<'_> {
                     let r = self.reg();
                     if let Some(init) = v.init {
                         let m = self.next;
+                        // A scalar's initializer extends temporaries only
+                        // in an enumerating expansion statement's element
+                        // ([class.temporary]/8, CWG3043).
+                        let ext = self.begin_extended(init);
                         self.rv_into(init, r);
+                        self.end_extended(&ext);
                         self.next = m;
                     }
                     self.locals.insert(d, Local::Reg(r));
@@ -6143,6 +6165,30 @@ pub(crate) fn is_std_function(ast: &kiln_ast::Ast, d: DeclId, name: &str) -> boo
 }
 
 /// Whether `d` is a variable of reference type.
+/// Whether the initializer of non-reference variable `d` extends a
+/// temporary to `d`'s lifetime ([class.temporary]/8, CWG3043: only an
+/// enumerating expansion statement's element does). Its temporaries
+/// sit under an `ExprWithCleanups`; any other initializer is not walked.
+fn extends_temporaries(ast: &kiln_ast::Ast, d: DeclId) -> bool {
+    let Some(init) = ast.decls.var(d).and_then(|v| v.init) else { return false };
+    if ast.exprs.get(init).kind() != ExprKind::ExprWithCleanups {
+        return false;
+    }
+    let mut work = vec![ast.exprs.operand(init)];
+    while let Some(e) = work.pop() {
+        match ast.exprs.get(e).kind() {
+            ExprKind::MaterializeTemporaryExpr
+                if ast.exprs.temporary_storage(e) == StorageDuration::Automatic =>
+            {
+                return true;
+            }
+            ExprKind::LambdaExpr | ExprKind::StmtExpr | ExprKind::ExprWithCleanups => {}
+            _ => ast.exprs.children_into(e, &ast.lists, &mut work),
+        }
+    }
+    false
+}
+
 fn is_reference_var(ast: &kiln_ast::Ast, d: DeclId) -> bool {
     is_reference_decl(ast, d)
 }

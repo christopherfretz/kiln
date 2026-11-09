@@ -216,6 +216,13 @@ fn lib_name(b: u32) -> Option<&'static str> {
         | id::SSCANF
         | id::VSCANF
         | id::VSSCANF => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
+        // WP-1104: the library forwards (`__builtin_malloc` calls
+        // `malloc`), but the two `alloca` forms.
+        _ if id::is_libc_fwd(b)
+            && !matches!(b, id::ALLOCA_UNINITIALIZED | id::ALLOCA_WITH_ALIGN_UNINITIALIZED) =>
+        {
+            id::info(b).and_then(|i| i.name.strip_prefix("__builtin_"))
+        }
         // WP-803: `__builtin___memcpy_chk` calls `__memcpy_chk`.
         _ if id::is_chk(b) => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         _ if id::is_libm(b) => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
@@ -1551,7 +1558,10 @@ impl Cg<'_> {
             }
             _ if id::checked_op(b).is_some() => self.emit_checked(b, e, &args)?,
             _ if id::carry_op(b).is_some() => self.emit_carry(b, e, &args)?,
-            id::ALLOCA | id::ALLOCA_WITH_ALIGN => self.emit_alloca(b, e, &args)?,
+            id::ALLOCA
+            | id::ALLOCA_WITH_ALIGN
+            | id::ALLOCA_UNINITIALIZED
+            | id::ALLOCA_WITH_ALIGN_UNINITIALIZED => self.emit_alloca(b, e, &args)?,
             _ if lib_name(b).is_some() => return Ok(BuiltinCall::Library),
             _ => {
                 let name = id::info(b).map_or("?", |i| i.name);

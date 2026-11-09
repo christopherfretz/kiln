@@ -1563,6 +1563,30 @@ impl Oven {
         }
     }
 
+    /// Whether uninitialized bytes read at `p` in allocation `a` are of a
+    /// subobject whose lifetime has not begun because it is not yet
+    /// initialized: `a` is the object under construction of the variable
+    /// whose initializer is evaluated (its name designates it, WP-1100),
+    /// and no constructor or destructor of an object in it is running (in
+    /// one, a member left default-initialized is "uninitialized"). clang
+    /// gives a subobject its value as it is initialized, in order, so one
+    /// not reached yet is absent: "outside its lifetime" (`constexpr P
+    /// p{p.y, 1};`).
+    fn unbegun_init_object(&self, a: &crate::mem::Alloc, p: u64) -> bool {
+        let Origin::Var(d) = a.origin else { return false };
+        if self.run.object != Some(d) {
+            return false;
+        }
+        let key = Ptr::alloc_key(p);
+        !self.stack.iter().any(|fr| {
+            let f = &self.funcs[fr.func as usize];
+            f.this_reg.filter(|_| f.structor).is_some_and(|r| {
+                let this = self.regs.get((fr.fb + r) as usize).map_or(0, |&v| v as u64);
+                this != 0 && Ptr::alloc_key(this) == key
+            })
+        })
+    }
+
     /// Whether the call that created dead frame object `p` is running.
     fn frame_alive(&self, p: u64) -> bool {
         let p = Ptr::decode(p);
@@ -1659,8 +1683,9 @@ impl Oven {
                 )
             }
             MemFault::Uninit => {
-                let resolving =
-                    self.alloc_any(Ptr::decode(p)).is_some_and(|a| a.flags & flags::RESOLVING != 0);
+                let resolving = self.alloc_any(Ptr::decode(p)).is_some_and(|a| {
+                    a.flags & flags::RESOLVING != 0 || self.unbegun_init_object(a, p)
+                });
                 if resolving {
                     format!(
                         "{verb} object outside its lifetime is not allowed in a constant expression"

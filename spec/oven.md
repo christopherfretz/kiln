@@ -379,6 +379,30 @@ fault counts and trap ids unchanged.
   EvalFailure>`: a manifestly constant-evaluated context; recorded in the
   stats and the report. `EvalContext::init(var, loc)` marks a variable's
   initializer (its object is under construction, `RESOLVING`).
+  - **A variable's own name in its initializer** (WP-1100): while a class
+    or array variable's initializer runs into its object (`eval_at` with
+    an object: a static, constexpr or constexpr-local variable, through
+    `eval_var_init`), the name designates that object under construction
+    ([basic.life]/7, [class.cdtor]/2; clang's `EvaluatingDecl`), not the
+    static placeholder. The thunk emits `Op::BindObject [p, global]`
+    before it initializes its frame allocation `p` (`Origin::Var(d)`):
+    the global's state becomes `GState::Bound(p)`, and `Op::GlobalAddr`
+    of a bound global yields `p` and bumps `run.impure`, so no call that
+    names the object is memoized across its changes. `eval_at` restores
+    the previous state when the run ends (`Oven::unbind_object`), and a
+    nested evaluation (`run_job`, another variable's initializer) lifts
+    the binding while it runs (`Oven::unbound`), so only the initializer's
+    own run sees it. Freezing maps `p` to `PtrBase::Decl` as before;
+    thawing a `Decl` of a bound global reads `p`. An element not yet
+    initialized has no value, so reading it through the name is "read of
+    object outside its lifetime" (`notes.rs` `unbegun_init_object`:
+    uninitialized bytes of `run.object`'s allocation while no constructor
+    or destructor of an object in it is on the stack; inside one, a
+    default-initialized member stays "uninitialized"), as clang, where
+    the subobject is absent. A scalar variable's self-reference still
+    reads the `RESOLVING` placeholder. Corpus:
+    `expr.const/initializer-reads-own-member{,-local,-calls}.cpp`,
+    `expr.const/initializer-reads-unbegun-member.cpp`.
 - `Oven::try_fold(bridge, e) -> Option<ConstValueId>`: silent, not
   recorded.
   - **Trial-fold fast path** (WP-656, `leaf.rs`): an outermost
@@ -1042,6 +1066,15 @@ literal is one instruction and one step, not an interpreted loop.
   (`__builtin_constant_p`, a GNU-folded array bound, codegen's
   `fold_rvalue` and constant initializers) continues, so `strlen("abc")`
   folds to 3 as in clang 19 and 22.
+- **`__builtin_` library aliases (WP-1104):** `__builtin_malloc`,
+  `calloc`, `realloc`, `free`, `fprintf`, `vfprintf`, `fscanf`,
+  `vfscanf`, the string aliases (`__builtin_strcpy`, ...) and the
+  `_uninitialized` allocas (`builtin::is_libc_fwd`) are never
+  evaluated: a call traps with clang's note "subexpression not valid
+  in a constant expression" (plus "in call to" inside a function), so
+  `constexpr void *p = __builtin_malloc(4);` is "constexpr variable 'p'
+  must be initialized by a constant expression", as in clang 19 and 22
+  (`ext.gnu.builtins/library-fwd-constexpr.cpp`).
 - **Atomics (WP-154):** `__atomic_always_lock_free`, `__atomic_is_lock_free`
   and `__c11_atomic_is_lock_free` fold through `bi::LOCK_FREE` as clang
   19's `IntExprEvaluator`: a power-of-two size within the target's inline
@@ -3746,7 +3779,7 @@ location clang 22 gives it.
 | member call through a past-the-end pointer | `EndLife` aux 4 (`ak::MEMBER_CALL`): a past-end, dead or stale `this` faults as a member-call access | "member call on dereferenced one-past-the-end pointer is not allowed in a constant expression" |
 | member call on an object outside its lifetime (after an explicit destructor call, after its scope ended) | same check | "member call on object outside its lifetime is not allowed in a constant expression" |
 | read of a volatile object through a non-volatile glvalue (`const_cast`) | `value::var_info`: a volatile variable is never usable, so its object is `EXTERNAL`; a volatile-qualified glvalue read stays a compile-time trap (`compile.rs` `LValueToRValue`) | "read of volatile object 'v' is not allowed in a constant expression" + "volatile object declared here" |
-| access to a volatile local, temporary, heap object or volatile member, or a subobject of one (WP-1019) | a frame or heap allocation whose type is volatile or holds a volatile member gets `flags::VOLATILE` (the static-only `MUTABLE_OUTSIDE` bit, so loads and stores already take `slow_access`); `vm::volatile_path` walks from the root to the accessed object (a union through its active member): only the accessed object's volatility counts, the last volatile member on the path names it, and an object whose constructor or destructor is running (a structor frame's `this` in the same allocation, at that offset) is not volatile ([class.ctor.general]/5, [class.dtor]/16). The complete object's own volatility is `Oven::volatile_decls`/`volatile_exprs` (interned types are cv-stripped); a trivial copy of a class with a volatile member is not an access to it (clang) | "{read of\|assignment to\|increment of\|decrement of} volatile {object 'v'\|member 'v'\|temporary} is not allowed in a constant expression" + "volatile {object\|member} declared here" / "volatile temporary created here" (none for a heap object) |
+| access to a volatile local, temporary, heap object or volatile member, or a subobject of one (WP-1019) | a frame or heap allocation whose type is volatile or holds a volatile member gets `flags::VOLATILE` (the static-only `MUTABLE_OUTSIDE` bit, so loads and stores already take `slow_access`); `vm::volatile_path` walks from the root to the accessed object (a union through its active member): only the accessed object's volatility counts, the last volatile member on the path names it, and an object whose constructor or destructor is running is not volatile ([class.ctor.general]/5, [class.dtor]/16): a structor frame's `this` in the same allocation names it by offset and class (`Func::this_ty`), and the walk exempts the record at that offset of that class only, so a base subobject at offset 0 does not exempt its complete object (no two live subobjects of one class share an address, [intro.object]/9; WP-1101). An empty base is not in `Types::fields`, so the walk never enters one and its structor exempts nothing else. The complete object's own volatility is `Oven::volatile_decls`/`volatile_exprs` (interned types are cv-stripped); a trivial copy of a class with a volatile member is not an access to it (clang) | "{read of\|assignment to\|increment of\|decrement of} volatile {object 'v'\|member 'v'\|temporary} is not allowed in a constant expression" + "volatile {object\|member} declared here" / "volatile temporary created here" (none for a heap object) |
 | a write, compound assignment, increment or decrement through a volatile-qualified glvalue | compile-time trap (`Compiler::volatile_glvalue`, clang `findCompleteObject`), at the operator, or at the left operand when its member path names a union member (clang `HandleUnionActiveMemberChange`; parentheses stop the walk) | "assignment to volatile-qualified type 'volatile int' is not allowed in a constant expression" |
 | a parameter object used after its call returned (WP-1018) | the caller keeps each by-value class argument's address below the call window and runs `Op::EndParam` after the call: a registered destructor runs then (last constructed first), and `Memory::kill` ends the allocation's lifetime (`Undo::Kill` on rollback) while its storage stays until the full-expression's scope releases it ([expr.call]/7 is implementation-defined; clang's `CallScope`) | "read of object outside its lifetime is not allowed in a constant expression" (no declared-here note) |
 | subtraction of pointers into a zero-size array | `PtrSub` aux 1 (set when the pointee array type has size 0): same allocation faults `Fault::ZeroSizeSub` | "subtraction of pointers to type 'int[0]' of zero size" |
@@ -3765,14 +3798,10 @@ tests, so it costs nothing on an allocation without a volatile object;
 
 Known gaps: a pointer to a parameter object that escapes two call levels
 may be noted "outside its lifetime" where clang says "variable whose
-lifetime has ended"; the structor exemption of the volatile check
-matches the `this` offset only, so a base-class constructor at offset 0
-also exempts the complete object; at `-fclang-compat=19` a
+lifetime has ended"; at `-fclang-compat=19` a
 new-expression of a class with a volatile member is not rejected as
 non-literal (clang 19 `CheckLiteralType`), it fails at the member access
-instead. xfail repro: a constexpr variable's initializer reading its own
-already-initialized member through the variable's name
-(`expr.const/initializer-reads-own-member.cpp`). Corpus:
+instead. Corpus:
 `tests/conformance/expr.const/{member-of-past-end-base,call-on-past-end,
 read-volatile-via-cast,zero-size-pointer-subtraction,
 virtual-member-pointer-compare,reference-past-end-clang22,
@@ -3781,6 +3810,7 @@ read-volatile-local-and-heap,volatile-object-access{,-ok},
 volatile-member-access{-clang22,-ok-clang22,-19},
 ref-member-past-end{-clang22,-19,-ok},ref-past-end-result}.cpp`,
 `expr.call/param-object-{lifetime-ends,destroyed}-at-return.cpp`,
+`class.ctor/constexpr-structor-volatile-{subobject{,-ok},empty-base}.cpp`,
 their `*-siblings*.cpp`,
 `ub-checks-valid-near-misses.cpp`,
 `dcl.constexpr/extern-constexpr-declaration.cpp`.

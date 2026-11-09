@@ -563,6 +563,9 @@ pub struct Oven {
     /// (`reclaim.rs`).
     pub(crate) last_thunk: Option<reclaim::LastThunk>,
     pub(crate) globals: Vec<Global>,
+    /// The global bound to the running initializer's object under
+    /// construction, with its state before (`Oven::bind_object`, WP-1100).
+    pub(crate) bound_obj: Option<(u32, compile::GState)>,
     pub(crate) global_map: FxHashMap<DeclId, u32>,
     /// Globals resolved to an unknown value because they had no
     /// initializer yet: re-resolved by the next evaluation.
@@ -670,6 +673,7 @@ impl Oven {
             srcloc_root: None,
             last_thunk: None,
             globals: Vec::new(),
+            bound_obj: None,
             global_map: FxHashMap::default(),
             provisional: Vec::new(),
             provisional_objs: FxHashMap::default(),
@@ -1521,13 +1525,13 @@ impl Oven {
         object: Option<DeclId>,
         fb: u32,
     ) -> Result<ConstValueId, EvalFailure> {
-        match job {
-            Job::Expr(e) => self.eval_inner(b, e, object, fb),
-            Job::Chars { size, data } => self.eval_chars(b, size, data, fb),
-            Job::Subst { cond, at } => self.eval_subst(b, cond, at, fb),
-            Job::Call { f, at } => self.eval_call(b, f, at, fb),
-            Job::ObjectSize { p, ty } => self.eval_object_size(b, p, ty, fb),
-        }
+        self.unbound(|o| match job {
+            Job::Expr(e) => o.eval_inner(b, e, object, fb),
+            Job::Chars { size, data } => o.eval_chars(b, size, data, fb),
+            Job::Subst { cond, at } => o.eval_subst(b, cond, at, fb),
+            Job::Call { f, at } => o.eval_call(b, f, at, fb),
+            Job::ObjectSize { p, ty } => o.eval_object_size(b, p, ty, fb),
+        })
     }
 
     /// The outermost context: owns the frame and heap spaces, reset at its

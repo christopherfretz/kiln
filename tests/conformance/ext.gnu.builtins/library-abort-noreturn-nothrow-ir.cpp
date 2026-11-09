@@ -6,6 +6,7 @@
 // a first declaration with GNU `noreturn` matches and gets `nounwind`; the
 // call is then a `call`, not an `invoke`, even with a cleanup pending.
 //@ expect: ir
+//@ min-oracle: 22
 //@ std: c++20
 extern "C" void abort() __attribute__((noreturn));
 

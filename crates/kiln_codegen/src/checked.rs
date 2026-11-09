@@ -252,7 +252,7 @@ impl Cg<'_> {
             return err(self.loc_of(e), "__builtin_alloca needs a size");
         };
         let count = self.emit_scalar(n)?;
-        let align = if b == id::ALLOCA_WITH_ALIGN {
+        let align = if matches!(b, id::ALLOCA_WITH_ALIGN | id::ALLOCA_WITH_ALIGN_UNINITIALIZED) {
             let Some(&a) = args.get(1) else {
                 return err(self.loc_of(e), "__builtin_alloca_with_align needs an alignment");
             };

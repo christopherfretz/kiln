@@ -545,6 +545,11 @@ impl Sema<'_, '_> {
         if self.ast.decls.get(v).has(DeclFlags::INVALID) {
             return None;
         }
+        // [class.temporary]/9 (CWG3043): the expansion-initializer's
+        // temporaries persist for the lifetime of the reference (an
+        // automatic one; a `static constexpr` one's are part of its
+        // constant initialization).
+        self.extend_init_temporaries(v);
         let prelude = vec![self.act_on_decl_stmt(&[v], colon)];
         let elems = self
             .decomp_binding_list(v)
@@ -659,7 +664,14 @@ impl Substituter<'_, '_, '_> {
         let n = *self.sema.ast.exprs.get(e);
         let depth = u16::try_from(n.a()).map_err(|_| SubstFail)?;
         if let Some(x) = self.expansions.iter().rev().find(|x| x.depth == depth) {
-            return Ok(x.elem);
+            // The element was built before its declaration: its
+            // temporaries and immediate invocations belong to the
+            // declaration's full-expression (the temporaries then
+            // extended to the declared variable, CWG3043).
+            let elem = x.elem;
+            self.sema.note_shared_temporaries(elem);
+            self.sema.note_deferred_invocations(elem);
+            return Ok(elem);
         }
         let form = ExpansionForm::from_aux(u16::from(n.aux()));
         let d = self.args.retained_depth(depth);
@@ -743,7 +755,13 @@ impl Substituter<'_, '_, '_> {
         child.expansions.push(ExpansionElem { depth, elem });
         child.sema.push_scope(ScopeKind::Block);
         let mut stmts: Vec<StmtId> = prefix.into_iter().collect();
-        if let Ok(v) = child.expansion_decl(data.decl) {
+        let outer = std::mem::replace(&mut child.sema.expansion_element_init, true);
+        let decl = child.expansion_decl(data.decl);
+        child.sema.expansion_element_init = outer;
+        if let Ok(v) = decl {
+            // [class.temporary]/8 (CWG3043): the element's temporaries
+            // persist for the lifetime of the for-range-declaration.
+            child.sema.extend_init_temporaries(v);
             let vloc = child.sema.ast.decls.get(v).loc();
             stmts.push(child.sema.act_on_decl_stmt(&[v], vloc));
             child.sema.act_on_start_loop();

@@ -4,6 +4,7 @@
 // calls are `call`s under a pending cleanup (clang's
 // `AddKnownFunctionAttributes`). See library-gnu-string-strict-ir.cpp.
 //@ expect: ir
+//@ min-oracle: 22
 //@ args: -std=gnu++20
 extern "C" char *stpcpy(char *, const char *);
 extern "C" char *stpncpy(char *, const char *, __SIZE_TYPE__);
