@@ -515,8 +515,11 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
 <prefix>/lib/kiln/<major>/include/       resource/include: clang 19's builtin
                                          headers, contracts, module.modulemap
 <prefix>/lib/kiln/<major>/predefines/    resource/predefines/*.txt
-<prefix>/share/doc/kiln/                 README.md, LICENSE-MIT, LICENSE-APACHE,
-                                         COMPATIBILITY.md, STABILITY.md
+<prefix>/share/doc/kiln/                 README.md, CHANGELOG.md, CONTRIBUTING.md,
+                                         SECURITY.md, LICENSE-MIT, LICENSE-APACHE,
+                                         COMPATIBILITY.md, KNOWN_ISSUES.md,
+                                         STABILITY.md, USER_GUIDE.md (flat; links
+                                         rewritten, spec/harness.md "Dist")
 ```
 
 - `<major>` is the major version ("Version"): two major versions install

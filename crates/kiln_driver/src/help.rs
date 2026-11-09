@@ -199,7 +199,8 @@ DIAGNOSTICS:
   -Xclang <option>        Pass <option> to the frontend (same as the driver)
 
 COMPILE-TIME EVALUATION:
-  -fconstexpr-steps=<n>   Constant evaluation step limit (default 1048576)
+  -fconstexpr-steps=<n>, -fconstexpr-ops-limit=<n>
+                          Constant evaluation step limit (default 1048576)
   -fconstexpr-depth=<n>   Constant evaluation call depth limit (default 512)
   -fconstexpr-memory=<size>
                           [kiln] Memory limit per constant evaluation, in
