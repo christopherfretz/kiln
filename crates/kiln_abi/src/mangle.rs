@@ -223,6 +223,9 @@ fn effective_ctx(ast: &Ast, d: DeclId) -> Option<DeclId> {
     if let Some(p) = closure_param_ctx(ast, d) {
         return ast.decls.get(p).ctx();
     }
+    if let Some(f) = closure_signature_fn(ast, d) {
+        return Some(f);
+    }
     if let Some(c) = constrained_friend_class(ast, d) {
         return Some(c);
     }
@@ -247,6 +250,17 @@ fn closure_param_ctx(ast: &Ast, d: DeclId) -> Option<DeclId> {
     let l = ast.closure_lambda(d)?;
     let c = ast.exprs.lambdas.get(l).mangling.context?;
     (ast.decls.get(c).kind() == DeclKind::ParmVar).then_some(c)
+}
+
+/// The function template pattern in whose specialization's signature
+/// closure type `d` was created (its context declaration is the function;
+/// clang creates it with the templated declaration as its context,
+/// spec/sema-lambda.md §3.5): it mangles as that function's local entity
+/// (`_ZZ3retT_ENKUlvE_clEv`; WP-1077).
+fn closure_signature_fn(ast: &Ast, d: DeclId) -> Option<DeclId> {
+    let l = ast.closure_lambda(d)?;
+    let c = ast.exprs.lambdas.get(l).mangling.context?;
+    is_function_kind(ast.decls.get(c).kind()).then_some(c)
 }
 
 /// True if `r` is a closure type without a mangling number: it has no
@@ -606,6 +620,14 @@ fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
         {
             return false;
         }
+        // A closure created in a function template specialization's
+        // signature is externally visible if the template's pattern, its
+        // owner, is (clang `getLVForClosureType` takes the owner's
+        // linkage; the pattern is no inline function or instantiation,
+        // so `fn_shares_local_linkage` does not apply; WP-1077).
+        if let Some(f) = closure_signature_fn(ast, d) {
+            return !is_internal_symbol(ast, f);
+        }
         // A numbered closure with no context declaration takes its
         // owner's linkage, its semantic context's; at file scope (a
         // default template argument there) it has none (clang
@@ -707,6 +729,10 @@ pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
         }
         if !tag_externally_visible(ast, ast.first(ctx)) {
             return true;
+        }
+        // Its owner's linkage is the closure's own (above).
+        if closure_signature_fn(ast, ctx).is_some() {
+            return false;
         }
         c = effective_ctx(ast, ctx);
     }
