@@ -653,8 +653,8 @@ fn probe_cases(cc: &Path, pre: &[&str], name: &str) -> Vec<(String, i32, String,
 /// with clang++-19 where installed.
 #[test]
 fn include_probes_for_pch() {
-    let k = probe_cases(&kilnpp(), &["-fclang-compat=19"], "probe-kiln");
-    let get = |c: &str| k.iter().find(|r| r.0 == c).unwrap_or_else(|| panic!("{c}"));
+    let kiln_res = probe_cases(&kilnpp(), &["-fclang-compat=19"], "probe-kiln");
+    let get = |c: &str| kiln_res.iter().find(|r| r.0 == c).unwrap_or_else(|| panic!("{c}"));
     let used = get("-include foo.h");
     assert_eq!((used.1, used.3.as_str()), (0, ""));
     assert!(used.2.starts_with("pch=1 h=1 b=FROM_B"), "{}", used.2);
@@ -668,13 +668,13 @@ fn include_probes_for_pch() {
     assert!(nf.2.starts_with("pch=FROM_PCH h=1 b=1"), "{}", nf.2);
     assert!(get("-include foo.h -include-pch x.pch").2.starts_with("pch=FROM_PCH h=FROM_H b=1"));
     assert!(get("-include g.h").2.contains(" g=FROM_G gch=1 "));
-    let j = get("-include j.h");
+    let ign = get("-include j.h");
     assert_eq!(
-        j.3,
+        ign.3,
         "<cc>: warning: precompiled header 'j.h.gch' was ignored because it is not a clang PCH \
          file [-Wignored-gch]\n"
     );
-    assert!(j.2.contains(" j=1 "));
+    assert!(ign.2.contains(" j=1 "));
     assert_eq!(get("-include j.h -Werror").1, 1);
     assert!(get("-include e.h").3.contains("'e.h.gch' was ignored because it contains no clang"));
     assert!(get("-DV=2 -include v.h").2.ends_with("v=FROM_V v1=FROM_V1 v2=1"));
@@ -733,7 +733,7 @@ fn include_probes_for_pch() {
     assert_eq!(two.3, gone.3.repeat(2));
     if have("clang++-19") {
         let c = probe_cases(Path::new("clang++-19"), &[], "probe-clang");
-        for (kr, cr) in k.iter().zip(&c) {
+        for (kr, cr) in kiln_res.iter().zip(&c) {
             assert_eq!(kr, cr, "kiln++ (left) and clang++-19 (right) differ");
         }
     }

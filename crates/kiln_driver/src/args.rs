@@ -948,7 +948,7 @@ impl Args {
                         a.valued("-include", &argv[i - 1], &mut x);
                     }
                     Valued::Missing => {
-                        a.errors.push(ArgError::MissingValue("--include".to_owned()))
+                        a.errors.push(ArgError::MissingValue("--include".to_owned()));
                     }
                 }
                 if given && !xclang {
