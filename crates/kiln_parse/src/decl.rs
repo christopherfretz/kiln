@@ -2070,11 +2070,19 @@ impl Parser<'_, '_> {
         ds.tag_rejected = true;
     }
 
+    /// Parses the declarator `d` of a decl-specifier-seq `ds`, then makes
+    /// the [dcl.fct]/17 result-type check on it
+    /// ([`Parser::check_tag_defined_in_result`]).
+    pub(crate) fn parse_declarator_in_group(&mut self, ds: &DeclSpec, d: &mut Declarator) {
+        self.parse_declarator(d);
+        self.check_tag_defined_in_result(ds, d);
+    }
+
     /// [dcl.fct]/17: "cannot be defined in the result type of a function",
     /// once per function declarator chunk of `d` when its
     /// decl-specifier-seq defines a valid tag (clang's
     /// `GetFullTypeForDeclarator`).
-    pub(crate) fn check_tag_defined_in_result(&mut self, ds: &DeclSpec, d: &Declarator) {
+    fn check_tag_defined_in_result(&mut self, ds: &DeclSpec, d: &Declarator) {
         let Some(t) = ds.tag.filter(|_| ds.tag_defined) else { return };
         for c in &d.chunks {
             if matches!(c, Chunk::Function { .. }) {
@@ -2083,6 +2091,7 @@ impl Parser<'_, '_> {
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "the class-head and enum-head forms in one place")]
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
         let kw_loc = self.bump().span.lo;
         let (keyword, scoped, scoped_loc) = self.parse_tag_key(ds, k);
@@ -2167,12 +2176,7 @@ impl Parser<'_, '_> {
         // A class inside another declaration (a parameter, a type-id, a
         // condition) takes none of the template heads that declaration
         // will consume, and neither do its members ([temp.pre]/1).
-        let nested = matches!(
-            ctx,
-            DeclaratorContext::Prototype
-                | DeclaratorContext::TypeName
-                | DeclaratorContext::Condition
-        );
+        let nested = Self::nested_tag_context(ctx);
         self.s.nested_tag = nested;
         // [temp.pre]/5: a class defined by a template-declaration (a class
         // template, a partial or explicit specialization, or a member of a
@@ -2195,15 +2199,7 @@ impl Parser<'_, '_> {
             return;
         }
         if use_ == TagUse::Definition {
-            // `struct A::B { ... }`: names in the body are looked up in
-            // `A` too ([basic.lookup.unqual]/2, [class.nest]/3).
-            let entered = qualifier.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
-            if keyword == TagKeyword::Enum {
-                self.parse_enum_body(d);
-            } else {
-                self.parse_record_body(d, final_loc, ctx == DeclaratorContext::TypeName);
-            }
-            self.s.act_on_exit_declarator_scope(entered);
+            self.parse_tag_body(d, keyword, qualifier, final_loc, ctx);
             if let Some(h) = heads {
                 self.s.restore_template_decl_state(&h);
             }
@@ -2221,14 +2217,52 @@ impl Parser<'_, '_> {
         if use_ == TagUse::Definition {
             // `keyword` is a class-key or `enum` here, never `None`.
             let could_be_bitfield = keyword == TagKeyword::Enum && ctx == DeclaratorContext::Member;
-            // [temp.pre]/5: a template-declaration that defines a class
-            // has no declarator, so only `;` may follow the body (clang's
-            // `ParseClassSpecifier` with a template head).
-            if templated && !self.at(Punct::Semi) {
-                self.expected_semi_after_tag(keyword.spelling());
-            } else {
-                self.check_after_tag_definition(keyword.spelling(), could_be_bitfield);
-            }
+            self.end_tag_definition(keyword.spelling(), templated, could_be_bitfield);
+        }
+    }
+
+    /// Whether a class or enumeration defined in a decl-specifier-seq of
+    /// context `ctx` is nested in another declaration (a parameter, a
+    /// type-id, a condition): it takes none of the template heads that
+    /// declaration will consume ([temp.pre]/1).
+    fn nested_tag_context(ctx: DeclaratorContext) -> bool {
+        matches!(
+            ctx,
+            DeclaratorContext::Prototype
+                | DeclaratorContext::TypeName
+                | DeclaratorContext::Condition
+        )
+    }
+
+    /// The body of the class or enumeration `d` being defined.
+    fn parse_tag_body(
+        &mut self,
+        d: DeclId,
+        keyword: TagKeyword,
+        qualifier: Option<DeclId>,
+        final_loc: Option<Loc>,
+        ctx: DeclaratorContext,
+    ) {
+        // `struct A::B { ... }`: names in the body are looked up in `A`
+        // too ([basic.lookup.unqual]/2, [class.nest]/3).
+        let entered = qualifier.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
+        if keyword == TagKeyword::Enum {
+            self.parse_enum_body(d);
+        } else {
+            self.parse_record_body(d, final_loc, ctx == DeclaratorContext::TypeName);
+        }
+        self.s.act_on_exit_declarator_scope(entered);
+    }
+
+    /// What may follow the `}` of a class or enumeration definition.
+    /// [temp.pre]/5: a template-declaration (`templated`) that defines a
+    /// class has no declarator, so only `;` may follow the body (clang's
+    /// `ParseClassSpecifier` with a template head).
+    fn end_tag_definition(&mut self, spelling: &str, templated: bool, could_be_bitfield: bool) {
+        if templated && !self.at(Punct::Semi) {
+            self.expected_semi_after_tag(spelling);
+        } else {
+            self.check_after_tag_definition(spelling, could_be_bitfield);
         }
     }
 
@@ -2348,12 +2382,7 @@ impl Parser<'_, '_> {
         // specialization's definition takes no declarator. One nested in
         // another declaration takes none of its template heads ([temp.pre]/1;
         // clang then requires `template<>`).
-        let nested = matches!(
-            ctx,
-            DeclaratorContext::Prototype
-                | DeclaratorContext::TypeName
-                | DeclaratorContext::Condition
-        );
+        let nested = Self::nested_tag_context(ctx);
         let templated = !nested && self.s.in_template_declaration();
         let heads = (nested && use_ == TagUse::Definition).then(|| self.s.hide_open_heads());
         let r = self.s.act_on_class_template_id_tag(
@@ -2417,11 +2446,7 @@ impl Parser<'_, '_> {
                 TagKeyword::Class => "class",
                 _ => "union",
             };
-            if templated && !self.at(Punct::Semi) {
-                self.expected_semi_after_tag(spelling);
-            } else {
-                self.check_after_tag_definition(spelling, false);
-            }
+            self.end_tag_definition(spelling, templated, false);
         }
     }
 
@@ -3346,8 +3371,7 @@ impl Parser<'_, '_> {
                 || (ds.base == TypeSpecKind::Named
                     && ds.named.is_some_and(|t| self.s.has_unexpanded_pack(t)));
             let saved = std::mem::replace(&mut self.pack_hint, hint);
-            self.parse_declarator(&mut pd);
-            self.check_tag_defined_in_result(&ds, &pd);
+            self.parse_declarator_in_group(&ds, &mut pd);
             self.pack_hint = saved;
             self.set_abstract_loc(&mut pd);
             self.param_placeholders(&mut ds, &mut pd, start, fn_decl, site, d.qualifier);
@@ -3813,8 +3837,7 @@ impl Parser<'_, '_> {
         }
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
         d.site = site;
-        self.parse_declarator(&mut d);
-        self.check_tag_defined_in_result(&ds, &d);
+        self.parse_declarator_in_group(&ds, &mut d);
         let mut base = self.s.type_from_declspec(&ds);
         if !vec_out {
             base = self.s.apply_type_id_vector_attrs(base, &ds, warn_mode);
@@ -4151,8 +4174,7 @@ impl Parser<'_, '_> {
         let mut semi_at = None;
         loop {
             let mut d = self.group_declarator(ctx, &ds);
-            self.parse_declarator(&mut d);
-            self.check_tag_defined_in_result(&ds, &d);
+            self.parse_declarator_in_group(&ds, &mut d);
             let contracts = self.parse_requires_and_contract_specs(&mut d);
             self.set_declarator_end(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);

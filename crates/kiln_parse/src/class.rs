@@ -1577,8 +1577,7 @@ impl Parser<'_, '_> {
                 ..LateFnParts::default()
             };
             if !self.at(Punct::Colon) {
-                self.parse_declarator(&mut d);
-                self.check_tag_defined_in_result(&ds, &d);
+                self.parse_declarator_in_group(&ds, &mut d);
                 self.parse_trailing_requires(&mut d);
                 self.set_declarator_end(&mut d);
             }

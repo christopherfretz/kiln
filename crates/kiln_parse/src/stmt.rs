@@ -566,8 +566,7 @@ impl Parser<'_, '_> {
         }
         let mut d = Declarator::new(ctx, self.loc());
         d.direct_init = true;
-        self.parse_declarator(&mut d);
-        self.check_tag_defined_in_result(&ds, &d);
+        self.parse_declarator_in_group(&ds, &mut d);
         let base = self.s.type_from_declspec_at(&ds, d.name_loc());
         if self.at_attr() {
             self.parse_attributes(&mut d.attrs);
@@ -703,8 +702,7 @@ impl Parser<'_, '_> {
             let mut d = Declarator::new(ctx, self.loc());
             self.catch_declarator = true;
             self.in_exception_decl = true;
-            self.parse_declarator(&mut d);
-            self.check_tag_defined_in_result(&ds, &d);
+            self.parse_declarator_in_group(&ds, &mut d);
             self.catch_declarator = false;
             self.in_exception_decl = false;
             self.set_abstract_loc(&mut d);

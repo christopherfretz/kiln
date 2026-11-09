@@ -232,8 +232,7 @@ impl Parser<'_, '_> {
         }
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
         d.site = DeclSite::New;
-        self.parse_declarator(&mut d);
-        self.check_tag_defined_in_result(&ds, &d);
+        self.parse_declarator_in_group(&ds, &mut d);
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         let base = if ds.tag_rejected { QualType::ERROR } else { self.s.type_from_declspec(&ds) };
         let base = self.s.apply_type_id_vector_attrs(base, &ds, false);

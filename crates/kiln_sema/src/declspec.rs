@@ -177,6 +177,7 @@ impl SpecError {
 
 /// The decl-specifier-seq of one declaration.
 #[derive(Clone, Debug, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts of one decl-specifier-seq")]
 pub struct DeclSpec {
     /// Storage class (or `typedef`) and where it was written.
     pub storage: Option<(StorageSpec, Loc)>,
