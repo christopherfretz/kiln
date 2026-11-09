@@ -2802,8 +2802,10 @@ access, out-of-line declarator scope.**
   Qualified destructor names (WP-223, [basic.lookup.qual.general]/4):
   `act_on_member_destructor_q(base, qual, first, name, ..)`. On a class
   object (`x.N::~Q`; `first` is `None`, `qual` the whole
-  nested-name-specifier) `Q` is looked up in `N`, then in the object's
-  class, then here, and the destructor of the class it names is accessed
+  nested-name-specifier) `Q` is looked up in `N`, then in the prefix of
+  `N` (`nns_prefix_ctx`: `p->N::TT::~TT()` and `p->N::T::~TT()` with `TT`
+  a typedef in namespace `N`, as clang's `getDestructorName`; WP-1152),
+  then in the object's class, then here, and the destructor of the class it names is accessed
   as a qualified member of `N` through `member_access` (so `N` must be
   the object's class or a base, the call is not virtual, and the errors
   are clang's "no member named '~X' in 'W'" / "'X::~X' is not a member of
@@ -2818,7 +2820,22 @@ access, out-of-line declarator scope.**
   makes `rebuild_member_destructor(.., qualified, ..)` name a class
   type's destructor as a qualified member of that class (non-virtual,
   and a base class's destructor is allowed: `this->B::~B()`). A
-  qualified destructor template-id (`p->N::~X<T>()`) is a gap.
+  destructor template-id (`c->N::C<int>::~C<int>()`, `c->~C<int>()`,
+  also on a dependent `N::C<X>*`; WP-1152) names its template through
+  `classify_member_destructor_template`: the qualifier's class, its
+  prefix, then the object's class (non-dependent, or the dependent
+  object type's own template, [temp.local]/1), then here. A name found
+  that is no template is `sema_dtor_name_not_template` ("destructor name
+  'v' does not refer to a template") when qualified, else clang's
+  "'v' does not refer to a template" with the non-template note; a name
+  found nowhere is "no member named 'Nope' in 'N::C<int>'"
+  (`diagnose_destructor_non_template`). The template-id is then formed
+  as a type and `act_on_member_destructor_type_q` accesses the
+  destroyed class's destructor: unqualified, as a member of the object
+  (`c->~C<long>()` is "no member named '~C' in 'N::C<int>'"), qualified,
+  through `finish_member_destructor` as above (non-virtual). Tests:
+  `expr.prim.id.dtor/run-qualified-destructor-template-id.cpp`,
+  `expr.prim.id.dtor/qualified-destructor-template-id-errors.cpp`.
   Inside a class template (its pattern, a partial specialization, or an
   out-of-line member), a destructor name found as the pattern's
   injected-class-name names the injected-class-name type
@@ -2846,8 +2863,10 @@ access, out-of-line declarator scope.**
   dependent object is
   a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
-  expression only, and the Oven does not end the object's lifetime (as
-  for an explicit destructor call; a gap). A pointer to a class is a
+  expression only; the Oven ends the object's lifetime, as for an
+  explicit destructor call (WP-222; a later read, an assignment, or a
+  second destruction is not a constant expression, clang's
+  `HandleDestruction`: `class.dtor/explicit-destructor-call-lifetime-constexpr.cpp`). A pointer to a class is a
   scalar object too ([expr.prim.id.dtor]/2): `p.~P()` with `P` naming
   `S*` is a pseudo-destructor call (libc++'s `__cpp17_destructible` on
   iterator types; WP-339); only when the destructor name denotes the
@@ -2915,14 +2934,23 @@ access, out-of-line declarator scope.**
   `this` in such a declarator names the qualifier's class.
   `rebuild_in_current_instantiation(type, declarator)` resolves a
   top-level decl-spec `typename C<X>::m` to the member of the current
-  instantiation (clang `RebuildDeclaratorInCurrentInstantiation`); nested
-  positions are not rebuilt (a gap).
+  instantiation (clang `RebuildDeclaratorInCurrentInstantiation`), also
+  nested in `*`, `&`, `&&`, a function type (return and parameters), a
+  member pointer, an array, declarator parentheses and the type arguments
+  of a template-id (`W<void(typename C<X>::T)>`, `W<typename C<X>::T[2]>`,
+  `rebuild_ci_compound`; WP-1152). A `decltype` operand is not rebuilt (a
+  gap: clang's `RebuildExprInCurrentInstantiation`; xfail
+  `temp.dep.type/out-of-line-current-instantiation-decltype.cpp`). After a
+  parenthesized declarator holding the qualified declarator-id
+  (`X (*C<X>::f())(T)`), the parser enters the declarator scope again for
+  the outer suffixes, so `T` there is found in `C<X>` (WP-1152,
+  `temp.dep.type/out-of-line-current-instantiation-nested-declarator-run.cpp`).
 - *Diagnostics*: the destructor and pseudo-destructor errors
   (`sema_dtor_type_mismatch`, `note_dtor_type_found`,
   `sema_dtor_name_undeclared`, `sema_pseudo_dtor_*`) and
   `sema_qualified_member_of_unrelated`, with clang 19's text.
-- *Gaps*: qualified destructor template-ids (`p->N::~X<T>()`); a
-  pseudo-destructor qualifier in a dependent scope; dependent
+- *Gaps*: a pseudo-destructor qualifier in a dependent scope
+  (`p->T::Inner::~Inner()`); dependent
   `operator T()` printing in dumps; the "member has the same name as its
   class" error.
 - Tests: `tests/conformance/expr.ref/`, `dcl.meaning/`,

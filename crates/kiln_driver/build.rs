@@ -8,8 +8,9 @@
 //!   `kiln` is linked it dangles. xtask's `build_kiln` makes it again if
 //!   it is missing, and `cargo xtask dist` makes it in the install layout.
 //!   The dependency scanner's names (`kiln-scan-deps` and the
-//!   `clang-scan-deps-22` / `clang-scan-deps` aliases `CMake` looks for
-//!   beside the compiler, spec/modules.md §11.9) are made the same way.
+//!   `clang-scan-deps-22` / `clang-scan-deps-19` (`-fclang-compat=19`) /
+//!   `clang-scan-deps` aliases `CMake` looks for beside the compiler,
+//!   spec/modules.md §11.9) are made the same way.
 //! - Records the git commit kiln is built from as `KILN_BUILD_GIT_SHA`
 //!   (`kiln_driver::version::GIT_SHA`, also named by the
 //!   internal-compiler-error report, spec/driver.md "Internal compiler
@@ -41,7 +42,9 @@ fn link_kilnpp() {
         return;
     }
     // `SCAN_DEPS_NAMES` in xtask/src/dist.rs lists the same scanner names.
-    for name in ["kiln++", "kiln-scan-deps", "clang-scan-deps-22", "clang-scan-deps"] {
+    for name in
+        ["kiln++", "kiln-scan-deps", "clang-scan-deps-22", "clang-scan-deps-19", "clang-scan-deps"]
+    {
         let link = profile.join(name);
         if std::fs::symlink_metadata(&link).is_err() {
             // A parallel build may have made it first; either way it exists.

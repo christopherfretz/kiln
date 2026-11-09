@@ -101,12 +101,13 @@ pub(crate) enum TraitOperand {
 }
 
 /// True for a simple-type-specifier keyword that can begin a functional
-/// cast (`int(x)`; not `__typeof_unqual`, as clang).
+/// cast (`int(x)`; not `__typeof_unqual` or `__auto_type`, as clang).
 fn is_simple_type_kw(k: Kw) -> bool {
     is_type_specifier_kw(k)
         && !matches!(
             k,
             Kw::Const
+                | Kw::GnuAutoType
                 | Kw::TypeofUnqual
                 | Kw::Volatile
                 | Kw::Restrict
@@ -1463,10 +1464,21 @@ impl Parser<'_, '_> {
         if self.at(Punct::Less) {
             // `p->~X<T>()`: the simple-template-id names the destroyed
             // class type.
-            let class = self.s.classify_name(name, None);
+            let class = self.s.classify_member_destructor_template(e, arrow, None, name);
+            if matches!(
+                class,
+                NameClass::Type(..)
+                    | NameClass::Value(_)
+                    | NameClass::Namespace(_)
+                    | NameClass::Undeclared
+            ) {
+                let _ = self.parse_template_arg_list();
+                self.s.diagnose_destructor_non_template(e, arrow, false, class, name, nl);
+                return None;
+            }
             return match self.parse_template_id_rest(class, name, nl) {
                 Ok(TemplateIdRef::Type(t)) => {
-                    Some(self.s.rebuild_member_destructor(e, t, false, nl, loc, arrow))
+                    Some(self.s.act_on_member_destructor_type_q(e, None, t, tl, nl, loc, arrow))
                 }
                 _ => None,
             };
@@ -1538,8 +1550,32 @@ impl Parser<'_, '_> {
             };
             let nl = self.bump().span.lo;
             if self.at(Punct::Less) {
-                self.unsupported("a qualified destructor name with a template-id", nl);
-                return None;
+                // `p->N::C<int>::~C<int>()`: the simple-template-id names
+                // the destroyed class type.
+                let class = self.s.classify_member_destructor_template(e, arrow, Some(q), name);
+                if matches!(
+                    class,
+                    NameClass::Type(..)
+                        | NameClass::Value(_)
+                        | NameClass::Namespace(_)
+                        | NameClass::Undeclared
+                ) {
+                    let _ = self.parse_template_arg_list();
+                    self.s.diagnose_destructor_non_template(e, arrow, true, class, name, nl);
+                    return None;
+                }
+                return match self.parse_template_id_rest(class, name, nl) {
+                    Ok(TemplateIdRef::Type(t)) => Some(self.s.act_on_member_destructor_type_q(
+                        e,
+                        Some(q),
+                        t,
+                        tl,
+                        nl,
+                        loc,
+                        arrow,
+                    )),
+                    _ => None,
+                };
             }
             return Some(self.s.act_on_member_destructor_q(
                 e,

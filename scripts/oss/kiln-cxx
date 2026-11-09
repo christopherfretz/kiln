@@ -28,7 +28,9 @@ import sys
 import threading
 import time
 
-SOURCE_EXT = (".cpp", ".cc", ".cxx", ".c++", ".cp", ".C", ".CPP")
+# Module interface units (.cppm and the other names CMake and the compilers
+# accept) are TUs too (WP-1148).
+SOURCE_EXT = (".cpp", ".cc", ".cxx", ".c++", ".cp", ".C", ".CPP", ".cppm", ".ccm", ".cxxm", ".c++m", ".ixx", ".mpp")
 LINK_EXT = (".o", ".a", ".so", ".obj", ".lo")
 DIAG_RE = re.compile(
     r"error:|panicked|internal compiler error|fatal|undefined reference|multiple definition|memory allocation of|LLVM ERROR"

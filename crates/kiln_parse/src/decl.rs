@@ -5,7 +5,9 @@ use kiln_ast::decl::{EnumData, InitStyle};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::names::DeclName;
 use kiln_ast::strings::StringEncoding;
-use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, TypeAttrKind, UnaryTransformKind};
+use kiln_ast::types::{
+    AutoKeyword, ExcSpec, Quals, RefQual, TagKeyword, TypeAttrKind, UnaryTransformKind,
+};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::{DiagId, FixIt};
 use kiln_lex::{Punct, Std, TokFlags, TokKind};
@@ -58,6 +60,7 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Fp16
             | Kw::Complex
             | Kw::Auto
+            | Kw::GnuAutoType
             | Kw::Const
             | Kw::Volatile
             | Kw::Restrict
@@ -965,6 +968,11 @@ impl Parser<'_, '_> {
                     ds.set_complex(loc)
                 }
                 Kw::Auto => ds.set_base(TypeSpecKind::Auto, None, loc),
+                Kw::GnuAutoType => {
+                    // clang `ext_auto_type` (`-Wgnu-auto-type`).
+                    self.s.error(DiagId::parse_gnu_auto_type, loc);
+                    ds.set_base(TypeSpecKind::GnuAutoType, None, loc)
+                }
                 Kw::Struct | Kw::Class | Kw::Union | Kw::Enum => {
                     self.parse_tag_specifier(&mut ds, k, ctx);
                     continue;
@@ -1264,8 +1272,12 @@ impl Parser<'_, '_> {
             return (TypeSpecKind::Named, None);
         };
         if self.at_kw(Kw::Auto) && self.peek_is(1, Punct::RParen) {
+            let auto_loc = self.bump().span.lo;
             self.bump();
-            self.bump();
+            if self.std < Std::Cxx14 {
+                // clang `ext_decltype_auto_type_specifier`: at the `auto`.
+                self.s.error(DiagId::parse_decltype_auto_ext, auto_loc);
+            }
             return (TypeSpecKind::DecltypeAuto, None);
         }
         self.s.enter_decltype();
@@ -3004,6 +3016,15 @@ impl Parser<'_, '_> {
             d.outer_paren = Some((d.chunks.len(), open));
             d.parens.push((d.chunks.len(), open, close));
             self.discard_prohibited_cxx11_attrs();
+            // The inner declarator entered and left the scope of its
+            // qualified declarator-id; the suffixes after the parentheses
+            // (`X (*C<X>::f())(T)`) are still in it ([basic.lookup.unqual]/1,
+            // [dcl.meaning]; clang's `ParseDirectDeclarator` re-enters it).
+            if !d.invalid
+                && let Some(q) = d.qualifier
+            {
+                entered = self.s.act_on_enter_declarator_scope(q);
+            }
         } else if self.at_kw(Kw::Operator)
             && d.ctx != DeclaratorContext::TypeName
             && matches!(self.kw_of(self.peek(1)), Some(Kw::New | Kw::Delete))
@@ -3563,6 +3584,9 @@ impl Parser<'_, '_> {
         qualifier: Option<DeclId>,
     ) {
         let decltype_auto = ds.base == TypeSpecKind::DecltypeAuto;
+        // GNU `__auto_type` invents no template parameter: as
+        // `decltype(auto)`, it is never a parameter's type.
+        let gnu = ds.base == TypeSpecKind::GnuAutoType;
         let placeholder = ds.base == TypeSpecKind::Auto;
         // A decl-specifier `auto` of a declarator with a trailing
         // return type is that function type's `auto`, not a
@@ -3570,10 +3594,14 @@ impl Parser<'_, '_> {
         let trailing =
             pd.chunks.iter().any(|c| matches!(c, Chunk::Function { trailing: Some(_), .. }));
         let at = ds.type_loc.unwrap_or(start);
-        if (placeholder || decltype_auto) && !ds.invalid && !trailing {
-            if let Some(why) = kiln_sema::Sema::param_placeholder_site(decltype_auto, fn_decl, site)
-            {
-                let int = self.s.act_on_misplaced_param_placeholder(at, decltype_auto, why);
+        if (placeholder || decltype_auto || gnu) && !ds.invalid && !trailing {
+            if let Some(why) = self.s.param_placeholder_site(decltype_auto || gnu, fn_decl, site) {
+                let kw = match ds.base {
+                    TypeSpecKind::Auto => AutoKeyword::Auto,
+                    TypeSpecKind::DecltypeAuto => AutoKeyword::DecltypeAuto,
+                    _ => AutoKeyword::GnuAutoType,
+                };
+                let int = self.s.act_on_misplaced_param_placeholder(at, kw, why);
                 ds.auto_constraint = None;
                 ds.base = TypeSpecKind::Named;
                 ds.named = Some(int);
@@ -3623,9 +3651,10 @@ impl Parser<'_, '_> {
                 continue;
             };
             let with = if let Some(why) =
-                kiln_sema::Sema::param_placeholder_site(decltype_auto, fn_decl, site)
+                self.s.param_placeholder_site(decltype_auto, fn_decl, site)
             {
-                self.s.act_on_misplaced_param_placeholder(at, decltype_auto, why)
+                let kw = if decltype_auto { AutoKeyword::DecltypeAuto } else { AutoKeyword::Auto };
+                self.s.act_on_misplaced_param_placeholder(at, kw, why)
             } else {
                 let constraint = constraint.map(|(c, a)| (c, a, cloc));
                 let loc = if tloc.is_valid() { *tloc } else { at };
@@ -3779,7 +3808,11 @@ impl Parser<'_, '_> {
                             .act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
                     self.type_id_constraint = Loc::INVALID;
                     let mark = self.s.lambda_mark();
-                    let ty = self.parse_type_id_no_ctad().unwrap_or(QualType::ERROR);
+                    let tloc = self.loc();
+                    let mut ty = self.parse_type_id_no_ctad().unwrap_or(QualType::ERROR);
+                    if self.s.gnu_auto_type_return_check(ty, tloc) {
+                        ty = QualType::ERROR;
+                    }
                     self.s.act_on_trailing_return_type(ty, mark);
                     if !d.trailing_constraint.is_valid() {
                         d.trailing_constraint = self.type_id_constraint;
