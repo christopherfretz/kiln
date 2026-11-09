@@ -407,22 +407,69 @@ fn kind2_declaration_image() {
     assert_eq!(o.code, 1, "replaying a blank source fails: {}", o.stderr);
 }
 
+/// Stage S2 (§11.11 "Part 2a", WP-1064): inline, constexpr and consteval
+/// bodies and variable initializers come from the image alone. With the
+/// unit's source blanked in the capsule, an importer still evaluates
+/// and calls them.
+#[test]
+fn kind2_declaration_image_bodies() {
+    use kiln_pp::bmi;
+    let d = scratch("image-bodies");
+    let src = "export module b;\n\
+               export constexpr int fact(int n) { int r = 1; for (int i = 2; i <= n; ++i) r *= i; return r; }\n\
+               export consteval int sq(int x) { return x * x; }\n\
+               export inline int pick(int x, int d = 4) { switch (x) { case 0: return d; default: return x; } }\n\
+               export constexpr int kFact = fact(4);\n\
+               export const int kBound = 3;\n\
+               export inline int counter = sq(2);\n";
+    std::fs::write(d.join("b.cppm"), src).unwrap();
+    std::fs::write(
+        d.join("u.cpp"),
+        "import b;\n\
+         static_assert(fact(5) == 120 && sq(3) == 9 && kFact == 24 && kBound == 3);\n\
+         int arr[kBound];\n\
+         int main() { return pick(0) + pick(2) + counter + fact(3) - (int)sizeof(arr) / (int)sizeof(int) == 13 ? 0 : 1; }\n",
+    )
+    .unwrap();
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "b.cppm", "-o", "b.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
+    let good = std::fs::read(d.join("b.pcm")).unwrap();
+    ok(&d, &["-c", "b.pcm", "-o", "b.o"]);
+    let mut c = bmi::read(&good).unwrap();
+    let text = &mut c.files[0].text;
+    *text = text.chars().map(|ch| if ch == '\n' { '\n' } else { ' ' }).collect();
+    std::fs::write(d.join("blank.pcm"), bmi::write(&c)).unwrap();
+    ok(&d, &["-fkiln-bmi-image", "-fmodule-file=b=blank.pcm", "u.cpp", "b.o", "-o", "u"]);
+    assert!(Command::new(d.join("u")).status().unwrap().success(), "program from the image");
+}
+
 /// A unit with a node the image does not carry is written without one,
 /// and `-v` names the first such node (§11.11 "Part 2a", "Fallback").
 #[test]
 fn kind2_declaration_image_fallback() {
     let d = scratch("image-fallback");
     for (src, why) in [
-        ("export module f;\nexport inline int g() { return 1; }\n", "an inline, constexpr"),
+        (
+            "export module f;\nexport inline int g() { return [] { return 1; }(); }\n",
+            "a local declaration the image does not carry",
+        ),
+        (
+            "export module f;\nexport inline int g() { try { return 1; } catch (...) { return 0; } }\n",
+            "a try block",
+        ),
+        (
+            "export module f;\n#define ONE 1\nexport constexpr int g() { return ONE; }\n",
+            "in a macro expansion",
+        ),
         ("export module f;\nexport struct S { int x; };\n", "a class"),
         ("export module f;\nexport template <class T> T id(T t) { return t; }\n", "a template"),
         (
             "export module f;\nexport namespace n { using I = int; }\nexport using n::I;\n",
             "a using-declaration",
         ),
-        ("export module f;\nstatic_assert(true);\n", "a static_assert"),
         ("module;\nint h();\nexport module f;\nexport int g();\n", "a global module fragment"),
-        ("export module f;\nexport int v = 3;\n", "a variable with an initializer"),
+        ("export module f;\nstruct S { int x; };\nexport constexpr S v{3};\n", "a class"),
     ] {
         std::fs::write(d.join("f.cppm"), src).unwrap();
         let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "f.cppm", "-o", "f.pcm"]);
