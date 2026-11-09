@@ -160,9 +160,9 @@ pub(crate) struct LambdaScope {
     saved_imm: crate::consteval::SavedImm,
     saved_extend: Option<Vec<ExprId>>,
     saved_ctor_entity: Option<(crate::class::InitEntity, kiln_ast::expr::ConstructionKind)>,
-    saved_mangle_var: Option<DeclId>,
-    saved_default_arg: Option<DeclId>,
-    saved_template_default: bool,
+    /// The enclosing [`ManglingState`] numbering site: `var`,
+    /// `default_arg`, `template_default`.
+    saved_mangle_site: (Option<DeclId>, Option<DeclId>, bool),
     pub(crate) body_open: bool,
     /// The body names a parameter pack of an enclosing template that it
     /// does not expand: the lambda-expression contains an unexpanded
@@ -237,9 +237,7 @@ impl Sema<'_, '_> {
             saved_imm: crate::consteval::SavedImm::default(),
             saved_extend: None,
             saved_ctor_entity: None,
-            saved_mangle_var: None,
-            saved_default_arg: None,
-            saved_template_default: false,
+            saved_mangle_site: (None, None, false),
             body_open: false,
             has_packs: false,
             packs: Vec::new(),
@@ -688,9 +686,7 @@ impl Sema<'_, '_> {
         let default_arg = self.lambda_mangle.default_arg.take();
         let template_default = std::mem::take(&mut self.lambda_mangle.template_default);
         if let Some(top) = self.lambdas.last_mut() {
-            top.saved_mangle_var = mangle_var;
-            top.saved_default_arg = default_arg;
-            top.saved_template_default = template_default;
+            top.saved_mangle_site = (mangle_var, default_arg, template_default);
             top.call_op = Some(f);
             top.depth = depth;
             top.saved_ctx = saved_ctx;
@@ -797,9 +793,11 @@ impl Sema<'_, '_> {
         }
         self.ctx = top.saved_ctx;
         if top.body_open {
-            self.lambda_mangle.var = top.saved_mangle_var;
-            self.lambda_mangle.default_arg = top.saved_default_arg;
-            self.lambda_mangle.template_default = top.saved_template_default;
+            (
+                self.lambda_mangle.var,
+                self.lambda_mangle.default_arg,
+                self.lambda_mangle.template_default,
+            ) = top.saved_mangle_site;
         }
         Some(top)
     }
