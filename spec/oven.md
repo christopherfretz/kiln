@@ -676,7 +676,13 @@ fault counts and trap ids unchanged.
   `run.object`, not at resolve time. `automatic_referent(ast, value)`
   finds such a pointer anywhere in a frozen value (scalars, relocations,
   pointer-to-constant chains), which sema uses for usability
-  (spec/sema.md §4.9) and codegen to skip the fold. Left: a lambda body
+  (spec/sema.md §4.9) and codegen to skip the fold. A temporary
+  lifetime-extended by such a `constexpr` local reference (WP-1122) is an
+  automatic object too: `begin_static_extended` allocates the variable's
+  `StorageDuration::Automatic` extended temporaries as `Origin::Let`
+  objects as well as its static ones, the pointer freezes as
+  `PtrBase::Temporary(t)`, and `automatic_referent` reports a temporary
+  whose extending variable is a local. Left: a lambda body
   reading through such a pointer in its own `static_assert` is accepted
   (the evaluation point is not known to the Oven).
 - Freezing a pointer or reference to an object with thread storage
@@ -971,6 +977,76 @@ list, a missing or repeated `total`, text after it, or a `total` that does not
 match the evaluations (sums, maximum for `peak_bytes` and `peak_arena`, count for
 `evaluations`, at least the maximum for `static_bytes`; `wall_us` is not cross-checked, since rounding makes its sum
 inexact). They ignore unknown keys (so the format can grow) and blank lines.
+
+### Trace hook — Landed (WP-1115)
+Every Oven event of `-ftime-trace` (spec/driver.md "Time trace") goes
+through the `hook_*` methods of `crates/kiln_oven/src/hooks.rs`; the rest
+of the Oven only calls them. `-fconstexpr-stats` / `-fconstexpr-profile`
+(WP-1116) aggregate the same begin/end pairs per call site by adding a
+sink inside these methods, not a second set of call sites.
+
+**Events** (all on the compiling thread, nested as the evaluation runs):
+
+| Event | When | Detail | `-ftime-trace-verbose` args |
+|---|---|---|---|
+| `EvaluateAsInitializer` | a top-level evaluation with `EvalKind::Init` and an object | the variable's qualified name | `kind`, `steps` |
+| `EvaluateAsRValue` | a top-level `EvalKind::StaticAssert` evaluation (clang's `VerifyIntegerConstantExpression`) | the condition's range | `kind`, `steps` |
+| `EvaluateAsConstantExpr` | any other top-level evaluation (an immediate invocation, a template argument, `if constexpr`, ...; `evaluate_chars`) | the expression's range, `<file:line:col[, col:c]>` (`evaluate_chars`: `ctx.loc`) | `kind`, `steps` |
+| `OvenCompile` | a function compiled to VM code (first call) | its qualified name | — |
+| `ConstevalCall` / `ConstexprCall` | verbose only: a VM call of an immediate / other function, until its frame is popped | the callee's qualified name | — |
+| `OvenMetaOp` | a reflection meta operation (`SemaBridge::meta`) | the operation (`members_of`) | — |
+
+Execution is not a separate event: the VM compiles lazily, so compile and
+execute interleave; an evaluation's self time minus its `OvenCompile`
+children is its execution. Nested evaluations (a bridge callback that
+evaluates, `ctx_depth > 0`) are events of their own, inside the outer one.
+
+**Call sites** (the only Oven lines that know of the hook; WP-1100 and
+WP-455 edit the Oven in parallel, so they stay thin):
+- `lib.rs` `Oven::evaluate` and `Oven::evaluate_chars`: `let hook =
+  self.hook_eval_begin(&ctx);` first, and `if let Some(m) = hook {
+  self.hook_eval_end(bridge, m, e, &ctx, c.steps) }` after the evaluation;
+- `vm.rs` `enter`: `self.hook_compile(b, callee)` instead of
+  `compile_func`, and `if self.hooks.calls { self.hook_call_enter(b,
+  callee) }` after the frame is pushed;
+- `vm.rs` `Op::Ret`: `if self.hooks.calls { self.hook_call_ret(b) }` after
+  the frame is popped;
+- `vm/meta.rs`: `hook_meta_begin()` / `Oven::hook_meta_end(t, op)` around
+  `SemaBridge::meta`.
+
+A frame unwound by an exception (`vm/exc.rs`) or a failure is not hooked:
+its call event ends at the first of: the next call entered at its depth
+or above it (`hook_call_enter`), the next `Ret` that pops below it, and
+`hook_eval_end` (a call that throws is charged the handler search; a
+loop of failed `__builtin_constant_p` trials holds at most one open call,
+not one per trial).
+
+**API for a sink** (`pub(crate)`; WP-1116 extends it):
+- `Hooks { on, calls, marks }`, the field `Oven::hooks`: `on` is read from
+  the recorder (`kiln_source::trace::enabled`) at each top-level
+  evaluation (`ctx_depth == 0`) and gates every hook; `calls`
+  (`on && verbose`) gates the per-call ones. A second sink ORs its own
+  switch into both in `Hooks::refresh`.
+- `hook_eval_begin(&mut self, &EvalContext) -> Option<EvalMark>` /
+  `hook_eval_end(&mut self, &dyn SemaBridge, EvalMark, Option<ExprId>,
+  &EvalContext, steps)`: one pair per evaluation; the end closes the
+  calls the evaluation left open.
+- `hook_call_enter(&mut self, &dyn SemaBridge, func)` /
+  `hook_call_ret(&mut self, &dyn SemaBridge)`: `marks` is the stack of
+  open calls (`CallMark { depth, func, span }`, `depth` the VM frame
+  depth with the callee's frame pushed); a sink that aggregates per call
+  site reads `func` (`Oven::funcs[func].decl`) and the caller's
+  `Frame::call_pc` (`Oven::site`) there.
+- `hook_compile(&mut self, &mut dyn SemaBridge, func)`,
+  `hook_meta_begin(&self) -> Option<Span>` / `hook_meta_end(Span, MetaOp)`.
+
+**Off cost.** With no sink, `hook_eval_begin` reads one thread-local bool
+per top-level evaluation and the VM tests the plain bool `hooks.calls`
+once per call and per return (the hook bodies are `#[cold]`, out of
+line); no clock read, no allocation. `Frame` does not grow. A/B on
+`cargo xtask bench --filter oven/` against the parent commit: within
+noise (WP-1115 landing note). The bench entry `oven/time-trace` measures
+the traced cost.
 
 ### Builtins — normative (WP-088)
 The §9.5 builtin functions of spec/sema-templates.md, with clang 19's

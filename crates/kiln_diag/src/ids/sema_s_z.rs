@@ -266,6 +266,7 @@ sema_unknown_typename = Error (1) "unknown type name '{0}'";
 sema_unknown_visibility = Warning [IgnoredAttributes] (1) "unknown visibility '{0}'";
 sema_unknown_warning_group = Error (1) "unknown warning group '{0}'";
 sema_unneeded_internal_decl = WarningOff [UnneededInternalDeclaration] (2) "{0:function|variable} {1} is not needed and will not be emitted";
+sema_unreachable_association = Warning [UnreachableCodeGenericAssoc] (2) "due to lvalue conversion of the controlling expression, association of type {0} will never be selected because it is {1:of array type|qualified}";
 sema_unreachable_code = WarningOff [UnreachableCode] (0) "code will never be executed";
 sema_unreachable_code_break = WarningOff [UnreachableCodeBreak] (0) "'break' will never be executed";
 sema_unreachable_code_return = WarningOff [UnreachableCodeReturn] (0) "'return' will never be executed";

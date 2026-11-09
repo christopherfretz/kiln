@@ -76,6 +76,14 @@ impl SpecialKind {
         self as u8
     }
 
+    /// Whether the definition of a class with `bits` declares some
+    /// implicit special member eagerly to resolve overloads (clang
+    /// `needsOverloadResolutionFor*`); a module's declaration image does
+    /// not carry such a class yet (spec/modules.md §11.11 "Classes").
+    pub(crate) fn any_needs_overload(bits: DefinitionBits) -> bool {
+        SpecialKind::ALL.into_iter().any(|k| implicit::needs_ovl_from(bits, k))
+    }
+
     /// The `select` argument of a diagnostic.
     pub(crate) fn sel(self) -> String {
         self.index().to_string()

@@ -1272,6 +1272,11 @@ impl DefinitionBits {
     pub const fn bits(self) -> u64 {
         self.0
     }
+    /// The bits from [`DefinitionBits::bits`] (a module's declaration
+    /// image carries them, spec/modules.md §11.11 "Classes").
+    pub const fn from_bits(bits: u64) -> Self {
+        DefinitionBits(bits)
+    }
     /// True if every bit of `f` is set.
     pub const fn contains(self, f: DefinitionBits) -> bool {
         self.0 & f.0 == f.0
@@ -2994,6 +2999,13 @@ impl DeclArena {
     /// Sets a field's default member initializer (write-once).
     pub fn set_field_init(&mut self, f: DeclId, init: ExprId) -> Result<(), AlreadySet> {
         set_once(&mut self.field_mut(f).init, init, "FieldData.init", RawId::raw)
+    }
+
+    /// Sets a bit-field's width expression (write-once; a module's
+    /// declaration image builds it after the field, spec/modules.md
+    /// §11.11 "Classes").
+    pub fn set_field_bit_width(&mut self, f: DeclId, width: ExprId) -> Result<(), AlreadySet> {
+        set_once(&mut self.field_mut(f).bit_width, width, "FieldData.bit_width", RawId::raw)
     }
 
     /// `{` of an enumeration definition.

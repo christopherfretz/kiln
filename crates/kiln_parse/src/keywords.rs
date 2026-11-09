@@ -145,6 +145,7 @@ keywords! {
     Imag = "__imag__" | "__imag";
     BuiltinOffsetof = "__builtin_offsetof";
     BuiltinChooseExpr = "__builtin_choose_expr";
+    Generic = "_Generic";
     BuiltinBitCast = "__builtin_bit_cast";
     BuiltinVaArg = "__builtin_va_arg";
     BuiltinConvertVector = "__builtin_convertvector";
