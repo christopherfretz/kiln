@@ -169,10 +169,20 @@ impl Sema<'_, '_> {
         let (template, args, path) = self.member_friend_shape(nns)?;
         let (depth, params, inner_head) = self.member_friend_head(&args)?;
         self.take_open_heads();
-        let fd = self.builder().friend(record, loc, FriendTarget::Type { ty: base, owned_tag: None });
+        let fd =
+            self.builder().friend(record, loc, FriendTarget::Type { ty: base, owned_tag: None });
         let name = DeclName::ident(name);
-        let mf =
-            MemberFriend { nns, depth, params, inner_head, name, fn_ty: None, template, args, path };
+        let mf = MemberFriend {
+            nns,
+            depth,
+            params,
+            inner_head,
+            name,
+            fn_ty: None,
+            template,
+            args,
+            path,
+        };
         self.warn_unsupported_friend(nns, record, ds.dependent_tag_name.unwrap_or(loc));
         self.register_member_friend(fd, mf);
         Some(fd)
@@ -244,10 +254,8 @@ impl Sema<'_, '_> {
     /// trailing `::`.
     fn warn_unsupported_friend(&mut self, nns: NnsId, record: DeclId, at: Loc) {
         let mut spec = self.nns_str(nns);
-        if self.clang_compat >= 22
-            && let Some(s) = spec.strip_suffix("::")
-        {
-            spec = s.to_owned();
+        if self.clang_compat >= 22 && spec.ends_with("::") {
+            spec.truncate(spec.len() - 2);
         }
         let class = self.decl_name(record);
         let e = self.diag(DiagId::sema_unsupported_friend, at).arg(spec).arg(class);
