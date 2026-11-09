@@ -144,8 +144,15 @@ impl<'s> SemaNames<'s> {
         let mut chain = Vec::new();
         let mut name_in_scope = self.ast.decls.get(d).name();
         let mut cur = self.ast.decls.get(d).ctx();
+        // clang `TypePrinter::AppendScope` stops at the first function
+        // scope: a local type prints without the scope of the function
+        // that holds it (`(unnamed enum at …)` in `A::k`, not `A::…`).
+        let is_type = matches!(self.ast.decls.get(d).kind(), DeclKind::CXXRecord | DeclKind::Enum);
         while let Some(c) = cur {
             let n = self.ast.decls.get(c);
+            if is_type && (n.kind().is_function() || n.kind() == DeclKind::FunctionTemplate) {
+                break;
+            }
             match n.kind() {
                 DeclKind::Namespace if self.redundant_inline(c, name_in_scope) => {}
                 DeclKind::Namespace => {

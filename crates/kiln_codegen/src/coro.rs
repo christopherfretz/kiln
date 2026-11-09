@@ -467,7 +467,14 @@ impl Cg<'_> {
             let t = V::C(self.m.const_bool(true));
             self.store(t, flag, 1, false);
             self.enter_catch_all();
-            self.emit_ignored(p.resume)?;
+            // clang emits the call as the statement of the `try` body
+            // (`EmitStmt(TryBody)`): its full-expression cleanups (the
+            // destructor of a class-type result) end inside the handler's
+            // scope, before the flag store ([class.temporary]/4).
+            let sc = self.begin_scope(false);
+            let r = self.emit_ignored(p.resume);
+            self.end_scope(sc);
+            r?;
             if self.f.fir.cur().is_some() {
                 let f = V::C(self.m.const_bool(false));
                 self.store(f, flag, 1, false);

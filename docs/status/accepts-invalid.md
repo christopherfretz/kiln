@@ -26,11 +26,11 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `5762b13ef`
+- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `d31c8ae3e`
 - command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 124 s; peak RSS of one case 22 MiB (gnu-time)
+- wall time 222 s; peak RSS of one case 20 MiB (gnu-time)
 
 ## Totals
 
@@ -38,7 +38,7 @@ written by hand (WP-912). The run is informational and never part of
 |---|---:|---:|---:|
 | ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 67 | 1250 | 5.4% |
 | ACCEPTS-INVALID cases (per RUN configuration) | 79 | 1946 | 4.1% |
-| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4221 | 28065 | 15.0% |
+| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4072 | 28065 | 14.5% |
 | REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 28 | 418 | 6.7% |
 | crashes | 0 | 2850 | 0.0% |
 | timeouts | 0 | 2850 | 0.0% |
@@ -51,15 +51,15 @@ written by hand (WP-912). The run is informational and never part of
 | directory | accepts-invalid files | rate | missed lines | rate | rejects-valid | crash / timeout |
 |---|---:|---:|---:|---:|---:|---:|
 | CXX/basic | 6 / 37 | 16.2% | 76 / 311 | 24.4% | 0 | 0 / 0 |
-| CXX/class | 1 / 46 | 2.2% | 128 / 634 | 20.2% | 1 | 0 / 0 |
+| CXX/class | 1 / 46 | 2.2% | 112 / 634 | 17.7% | 1 | 0 / 0 |
 | CXX/class.access | 0 / 12 | 0.0% | 47 / 573 | 8.2% | 0 | 0 / 0 |
 | CXX/class.derived | 0 / 15 | 0.0% | 10 / 96 | 10.4% | 0 | 0 / 0 |
 | CXX/conv | 0 / 2 | 0.0% | 2 / 16 | 12.5% | 0 | 0 / 0 |
 | CXX/cpp | 0 / 0 | - | 0 / 0 | - | 0 | 0 / 0 |
 | CXX/dcl | 0 / 4 | 0.0% | 0 / 81 | 0.0% | 0 | 0 / 0 |
-| CXX/dcl.dcl | 4 / 77 | 5.2% | 281 / 1141 | 24.6% | 0 | 0 / 0 |
-| CXX/dcl.decl | 2 / 54 | 3.7% | 87 / 788 | 11.0% | 1 | 0 / 0 |
-| CXX/drs | 1 / 33 | 3.0% | 1465 / 8682 | 16.9% | 0 | 0 / 0 |
+| CXX/dcl.dcl | 4 / 77 | 5.2% | 262 / 1141 | 23.0% | 0 | 0 / 0 |
+| CXX/dcl.decl | 1 / 54 | 1.9% | 86 / 788 | 10.9% | 1 | 0 / 0 |
+| CXX/drs | 1 / 33 | 3.0% | 1376 / 8682 | 15.8% | 0 | 0 / 0 |
 | CXX/except | 3 / 15 | 20.0% | 26 / 104 | 25.0% | 0 | 0 / 0 |
 | CXX/expr | 2 / 78 | 2.6% | 74 / 644 | 11.5% | 0 | 0 / 0 |
 | CXX/lex | 0 / 14 | 0.0% | 1 / 78 | 1.3% | 0 | 0 / 0 |
@@ -67,8 +67,8 @@ written by hand (WP-912). The run is informational and never part of
 | CXX/over | 1 / 42 | 2.4% | 7 / 313 | 2.2% | 0 | 0 / 0 |
 | CXX/special | 2 / 31 | 6.5% | 12 / 224 | 5.4% | 3 | 0 / 0 |
 | CXX/stmt.stmt | 0 / 9 | 0.0% | 3 / 255 | 1.2% | 0 | 0 / 0 |
-| CXX/temp | 8 / 147 | 5.4% | 323 / 1644 | 19.6% | 2 | 0 / 0 |
-| SemaCXX | 37 / 628 | 5.9% | 1673 / 12406 | 13.5% | 21 | 0 / 0 |
+| CXX/temp | 9 / 147 | 6.1% | 346 / 1644 | 21.0% | 2 | 0 / 0 |
+| SemaCXX | 37 / 628 | 5.9% | 1626 / 12406 | 13.1% | 21 | 0 / 0 |
 
 ## Top 50 accepts-invalid files
 
@@ -116,13 +116,13 @@ Ranked by the expected errors of their worst configuration.
 | `CXX/basic/basic.link/p9.cpp` | 1 / 1 | 1 |
 | `CXX/basic/basic.lookup/basic.lookup.unqual/p7.cpp` | 1 / 1 | 1 |
 | `CXX/dcl.dcl/dcl.spec/dcl.type/dcl.spec.auto/p3-1z.cpp` | 1 / 1 | 1 |
-| `CXX/dcl.decl/dcl.meaning/dcl.fct/p9-0x.cpp` | 1 / 1 | 1 |
 | `CXX/except/except.spec/p13-friend.cpp` | 1 / 1 | 1 |
 | `CXX/except/except.spec/p15.cpp` | 2 / 2 | 1 |
 | `CXX/expr/expr.prim/expr.prim.lambda/p2-template-parameter.cpp` | 1 / 1 | 1 |
 | `CXX/over/over.match/over.match.best/over.best.ics/over.ics.user/p3-0x.cpp` | 1 / 1 | 1 |
 | `CXX/special/class.dtor/p3.cpp` | 1 / 1 | 1 |
 | `CXX/temp/temp.arg/temp.arg.nontype/p1.cpp` | 1 / 8 | 1 |
+| `CXX/temp/temp.decls/temp.class.spec/p9-0x.cpp` | 1 / 1 | 1 |
 | `CXX/temp/temp.decls/temp.friend/p3.cpp` | 1 / 1 | 1 |
 | `CXX/temp/temp.res/temp.dep/temp.dep.constexpr/p2.cpp` | 1 / 1 | 1 |
 | `CXX/temp/temp.spec/temp.expl.spec/p20-2.cpp` | 1 / 1 | 1 |
@@ -150,7 +150,6 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | '…' is a private member of '…' | 6 | 14 | `CXX/class.access/p4.cpp:591` |
 | never produces a constant expression | 6 | 14 | `CXX/dcl.dcl/dcl.spec/dcl.constexpr/p3.cpp:275` |
 | no matching function | 6 | 9 | `CXX/temp/temp.param/p8-cxx20.cpp:47` |
-| '…' cannot be defined in a type specifier | 5 | 98 | `CXX/dcl.dcl/dcl.spec/dcl.type/p3-0x.cpp:10` |
 | '…' attribute takes at least N argument | 5 | 33 | `SemaCXX/annotate-type.cpp:43` |
 | deleted | 5 | 18 | `CXX/basic/basic.stc/basic.stc.dynamic/basic.stc.dynamic.deallocation/p2.cpp:15` |
 | must be initialized by a constant expression | 5 | 11 | `SemaCXX/attr-weak.cpp:50` |
@@ -158,6 +157,7 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | not an integral constant expression | 5 | 8 | `CXX/temp/temp.res/temp.dep/temp.dep.constexpr/p2.cpp:21` |
 | expected '…' | 5 | 6 | `CXX/basic/basic.lookup/basic.lookup.unqual/p3.cpp:61` |
 | use '…' keyword to treat '…' as a dependent template name | 4 | 42 | `CXX/drs/cwg17xx.cpp:14` |
+| class template partial specialization is not more specialized than the primary template | 4 | 24 | `CXX/drs/cwg14xx.cpp:712` |
 | call to '…' is ambiguous | 4 | 18 | `CXX/drs/cwg10xx.cpp:30` |
 | call to consteval function '…' is not a constant expression | 4 | 14 | `CXX/basic/basic.def.odr/p2-typeid.cpp:59` |
 | explicit instantiation declaration of '…' with internal linkage | 4 | 14 | `CXX/drs/cwg0xx.cpp:1137` |
@@ -363,7 +363,7 @@ against clang 19 and clang 22) and one follow-up row in
 The generated tables above are from a later run (WP-1017, after items 2-6
 and 9-12 were fixed; WP-1015 fixed 2-6): accepts-invalid fell from 89 to 68
 files and from 110 to 80 cases; missed `expected-error` lines fell from
-4930 to 4276. Rejects-valid fell from 47 to 28 cases through fixes from
+4930 to 4276 (4072 after WP-946 and WP-1054). Rejects-valid fell from 47 to 28 cases through fixes from
 other work packages (WP-958 and earlier); the driver now skips 83 cases
 with clang flags it does not know, so 418 no-diagnostics cases run.
 
@@ -378,9 +378,16 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
    `enum {}` in the parameter list of an out-of-line member definition no
    longer panics (the former `CXX/dcl.decl` crash);
    `dcl.fct/type-defined-in-{parameter,parameter-kinds,member-parameter-crash}.cpp`
-   pass. Still open (WP-946): a non-type template parameter's type ("cannot
-   be defined in a type specifier"), `sizeof(struct S {})` in a default
-   argument, and `class.conv.fct/type-defined-in-conversion-type.cpp`.
+   pass. Fixed in WP-946: the rest of clang's "cannot be defined in"
+   family (type specifiers of `typeid`, casts, `sizeof`/`alignof`,
+   template arguments, non-type template parameters, conversion types,
+   handlers and exception specifications; result types, conditions, alias
+   templates, enumerators, new type-ids; spec/sema.md §4.4.1), with
+   `dcl.type/type-defined-in-type-specifier.cpp` and the valid
+   `dcl.type/type-definition-allowed-contexts-run.cpp`;
+   `class.conv.fct/type-defined-in-conversion-type.cpp` passes.
+   `dcl.fct/p9-0x.cpp`, `dcl.type/p3-0x.cpp` and
+   `type-definition-in-specifier.cpp` no longer miss an error.
 2. **Member with the name of its class** (74 / 8; [class.mem]/22,
    [class.ctor] "ISO C++ forbids ... constructor name"). Fixed in WP-1015:
    static data members, member types and templates, unscoped enumerators,
@@ -486,10 +493,10 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
     `U<Ts..., T>` and `X1<0, N + 1 ...>` non-deducible), `_Complex`,
     vector, `void` and `_Atomic` NTTPs, and conversion function template
     rules (dependent `operator T()`, ordering in explicit instantiations,
-    specializations and calls). Its share: accepts-invalid 68 to 67 files,
-    80 to 79 cases; missed errors 4276 to 4221 lines; no new
-    accepts-invalid or rejects-valid case. Constrained and member-template
-    partial specializations remain (WP-1053).
+    specializations and calls). Its share (against its base run):
+    accepts-invalid 68 to 67 files, 80 to 79 cases; missed errors 4276 to
+    4221 lines; no new accepts-invalid or rejects-valid case. Constrained
+    and member-template partial specializations remain (WP-1053).
 11. **Lookup and type checks** (enum must use `enum` 31, elaborated enum
     friend 30, ambiguous qualified elaborated specifier, `alignas` of an
     incomplete type, differing user-defined-literal suffixes;
@@ -498,10 +505,21 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
     `lex.ext/differing-ud-suffixes.cpp`.
     **Fixed in WP-1017**, plus `dcl.type.elab/wrong-tag-kind.cpp`,
     `dcl.type.elab/elaborated-enum-class.cpp` and `class.friend/friend-enum.cpp`.
-    Partial: members of a class template whose declaration fails at
-    instantiation are dropped without a diagnostic, so instantiation-time
-    wrong-tag errors are missed; a qualified ambiguity between plain types
-    lists its candidates in discovery order.
+    Partial: a qualified ambiguity between plain types lists its
+    candidates in discovery order.
+    **Fixed in WP-1054** (spec/landed/sema/WP-1054.md): members of a class
+    template whose `class-key B<T>::M` names another template's explicit
+    or partial specialization are no longer dropped silently, so
+    instantiation-time "no class named" and wrong-tag errors are reported
+    (`CXX/dcl.dcl/dcl.spec/dcl.type/dcl.type.elab/p3.cpp` line 60), and a
+    member dropped with no diagnostic is now an internal error
+    (`temp.inst/member-elaborated-qualifier-*.cpp`). Its share: missed
+    errors 4276 to 4270 lines (accepts-invalid files and cases
+    unchanged), and six spurious "redefinition of 'X' as different kind
+    of symbol" errors on `template<class T> friend class A<T>::X;` are
+    gone (`CXX/drs/cwg6xx.cpp`, `cwg18xx.cpp`, `cwg19xx.cpp`,
+    `class.friend/p3-cxx0x.cpp`, `temp.friend/p5.cpp`); no new
+    accepts-invalid or rejects-valid case.
 12. **Exception specifications more lax than the base** (29;
     [except.spec]/8). Repros: `class.virtual/exception-spec-dynamic.cpp`,
     `class.virtual/exception-spec-dynamic-pack-nested.cpp`. **Fixed in

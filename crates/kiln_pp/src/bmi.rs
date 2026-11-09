@@ -37,9 +37,12 @@ pub const KIND_SECTIONS: u8 = 2;
 /// The section of carried constant-evaluation results (spec/modules.md
 /// §11.11, "Constant state"; encoded by `kiln_sema::bmi_ast`).
 pub const SECTION_CONSTS: u32 = 1;
+/// The declaration and type image (spec/modules.md §11.11 "Part 2a";
+/// encoded by `kiln_sema::bmi_image`).
+pub const SECTION_IMAGE: u32 = 2;
 /// The highest section tag this reader knows. Tags above it are reserved
-/// for the serialised AST of part 2 (§11.11, "Sections").
-pub const SECTION_MAX: u32 = SECTION_CONSTS;
+/// for later parts of the serialised AST (§11.11, "Sections").
+pub const SECTION_MAX: u32 = SECTION_IMAGE;
 /// The includer index of the predefines buffer (`<built-in>`).
 pub const INCLUDER_BUILTIN: u32 = u32::MAX;
 /// The includer index of a request without an includer.
@@ -205,6 +208,20 @@ pub struct CarriedSection {
     pub path: String,
     /// The [`SECTION_CONSTS`] bytes.
     pub bytes: Vec<u8>,
+}
+
+/// The declaration image of an imported kind-2 module file, handed to the
+/// parser with the unit's [`crate::Marker::UnitBegin`] in place of the
+/// unit's tokens (spec/modules.md §11.11 "Part 2a").
+#[derive(Debug, PartialEq, Eq)]
+pub struct ImageSection {
+    /// The module file's path, as shown in diagnostics.
+    pub path: String,
+    /// The [`SECTION_IMAGE`] bytes (moved out of the capsule).
+    pub bytes: Vec<u8>,
+    /// The unit's main file, loaded as the replay loads it (§11.2): the
+    /// image's locations are offsets into it.
+    pub main_file: kiln_source::FileId,
 }
 
 /// One kind-2 section: a tag and its bytes, which this crate does not
@@ -387,6 +404,37 @@ pub enum Sniffed {
     Source,
     /// The file cannot be read.
     Missing,
+}
+
+/// The main file path and the declared names an image section lists up
+/// front (spec/modules.md §11.11 "Part 2a", "Encoding"), which the
+/// importer's preprocessor checks
+/// against its interner before it uses the image; `None` when the header
+/// does not decode (the reader then reports the file as corrupt).
+pub fn image_header(bytes: &[u8]) -> Option<(&str, Vec<&str>)> {
+    let mut at = 0usize;
+    let u32_at = |at: &mut usize| -> Option<u32> {
+        let b = bytes.get(*at..at.checked_add(4)?)?;
+        *at += 4;
+        Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let str_at = |at: &mut usize| -> Option<&str> {
+        let n = u32_at(at)? as usize;
+        let b = bytes.get(*at..at.checked_add(n)?)?;
+        *at += n;
+        std::str::from_utf8(b).ok()
+    };
+    let _version = u32_at(&mut at)?;
+    let main = str_at(&mut at)?;
+    let _module = str_at(&mut at)?;
+    let _kw = u32_at(&mut at)?;
+    let _name_loc = u32_at(&mut at)?;
+    let n = u32_at(&mut at)? as usize;
+    if n.saturating_mul(4) > bytes.len() - at {
+        return None;
+    }
+    let names = (0..n).map(|_| str_at(&mut at)).collect::<Option<Vec<_>>>()?;
+    Some((main, names))
 }
 
 /// Sniffs the file at `path`, reading at most 8 bytes.

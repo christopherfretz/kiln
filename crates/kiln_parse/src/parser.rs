@@ -191,10 +191,13 @@ pub struct Parser<'a, 'sm> {
     /// Selects clang's recovery for an unqualified `typename T`
     /// (spec/parse.md, typename-specifiers).
     pub(crate) param_recovery: Option<bool>,
-    /// Set while a non-type template parameter's decl-specifier-seq is
-    /// parsed (a `Prototype` context that is not a parameter type for
-    /// "cannot be defined in a parameter type", WP-962).
-    pub(crate) nttp_specs: bool,
+    /// The [`kiln_sema::TagSite`] of the next decl-specifier-seq, when its
+    /// caller knows more than its [`kiln_sema::DeclaratorContext`] (a
+    /// non-type template parameter, `sizeof`, a template argument, an
+    /// alias-declaration...): taken by
+    /// [`Parser::parse_decl_specifiers_from`], so nested ones get their own
+    /// (spec/sema.md §4.4.1).
+    pub(crate) next_tag_site: Option<kiln_sema::TagSite>,
     /// Set when an unqualified `typename` ended a parameter's
     /// decl-specifier-seq without consuming its name: the parameter list
     /// stops there (clang's "expected ')'").
@@ -376,7 +379,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             named_cast_type_id: false,
             param_typename: ParamTypename::Implicit,
             param_recovery: None,
-            nttp_specs: false,
+            next_tag_site: None,
             param_abort: false,
             typename_failed: false,
             typename_pack_index: None,

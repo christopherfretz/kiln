@@ -78,17 +78,6 @@ impl Sema<'_, '_> {
             && !self.in_declarator_scope_of(c)
     }
 
-    /// Whether `class-key c::name` names a member of an unknown
-    /// specialization ([temp.dep.type]/6): `c` is a class template's
-    /// pattern named by a dependent specifier outside its definition
-    /// (`struct A<T>::K` in another template) and has no tag `name`, which
-    /// an explicit or partial specialization may declare (clang builds a
-    /// `DependentNameType` without looking).
-    pub fn is_unknown_specialization_tag(&self, c: DeclId, name: Symbol) -> bool {
-        self.is_unentered_dependent_class(c)
-            && self.lookup_qualified(c, name, LookupKind::Tag).decls.is_empty()
-    }
-
     /// The type `q::name` names when qualified lookup did not find a type
     /// in `q` and `q` can name an unknown specialization ([temp.dep.type]/6,
     /// clang `CheckTypenameType` / `isDependentScopeSpecifier`): a
@@ -1407,6 +1396,14 @@ impl Sema<'_, '_> {
     }
 
     // -- concepts and requires ------------------------------------------------------
+
+    /// After `concept name =`: the concept consumes its head before its
+    /// constraint-expression, so a class defined there
+    /// (`requires (struct S {} x)`) takes none ([temp.pre]/1).
+    pub fn act_on_concept_head(&mut self) {
+        let _ = self.take_template_head(None);
+        self.templ.cur = None;
+    }
 
     /// `template<params> concept name = e;` ([temp.concept]/1); the head
     /// was consumed by [`Sema::take_template_head`].
