@@ -32,9 +32,14 @@ The tree is relocatable, so you can unpack it anywhere:
 ```
 bin/kiln
 bin/kiln++ -> kiln            kiln++ compiles every input as C++
+bin/kiln-scan-deps -> kiln    the dependency scanner, also linked as
+                              clang-scan-deps-22 and clang-scan-deps
 lib/kiln/<major>/include/     clang's builtin headers, <contracts>
 lib/kiln/<major>/predefines/  predefined macro sets
-share/doc/kiln/               README, licenses, COMPATIBILITY, STABILITY
+lib/kiln/<major>/share/       default sanitizer ignorelists
+share/doc/kiln/               README, CHANGELOG, CONTRIBUTING, SECURITY,
+                              licenses, COMPATIBILITY, KNOWN_ISSUES,
+                              STABILITY, USER_GUIDE
 ```
 
 kiln finds `lib/kiln/<major>` next to the binary on its own.
@@ -190,8 +195,11 @@ clang's module files with a diagnostic, and clang refuses kiln's.
   content, not by extension.
 - `-fprebuilt-module-path=<dir>` searches `<dir>` for `<name>.pcm`, then
   `<name>.cppm`, `.ixx` or `.cpp` (a partition `M:P` as `M-P.*`).
-- `import std;` and `import std.compat;` are found in the LLVM
-  directory's `share/libc++/v1/`.
+- `import std;` and `import std.compat;` (with `-stdlib=libc++`) are
+  built from libc++'s `std.cppm` and `std.compat.cppm` in
+  `<prefix>/share/libc++/v1/`, beside the libc++ headers kiln uses (else
+  in the LLVM directory's), and cached (see
+  [The `std` module cache](#the-std-module-cache)).
 - Header units (`import <h>;`) are found like `#include`.
 
 To link, compile every module unit whose definitions you use, either as
@@ -223,9 +231,71 @@ where CMake looks first. CMake 3.28 or newer with Ninja therefore builds
 name the scanner explicitly, for example behind a compiler wrapper, pass
 `-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=<prefix>/bin/kiln-scan-deps`.
 
-`-fmodule-header`, header-unit module files and `import std;` through
-CMake (`CXX_MODULE_STD`) are not supported yet. See
-[KNOWN_ISSUES.md](KNOWN_ISSUES.md#modules).
+CMake's `import std;` support (`CXX_MODULE_STD`, 3.30+) also works: kiln
+answers `-print-file-name=libc++.modules.json`, and CMake builds
+`std.cppm` with kiln like any other module. It needs CMake's
+experimental gate, `-stdlib=libc++` and `CXX_STANDARD 23`; the gate
+values per CMake version are in
+[COMPATIBILITY.md](COMPATIBILITY.md#c20-modules).
+
+`-fmodule-header` and header-unit module files are not supported yet.
+See [KNOWN_ISSUES.md](KNOWN_ISSUES.md#modules).
+
+#### The `std` module cache
+
+`import std;` and `import std.compat;` need no flags. The first compile
+builds libc++'s module into a per-user cache, and later compiles with the
+same configuration import it from there (spec/driver.md, "Module cache";
+spec/modules.md §11.12).
+
+- **Location.** `-fmodules-cache-path=<dir>`, else
+  `$XDG_CACHE_HOME/kiln/modules` if `XDG_CACHE_HOME` is an absolute
+  path, else `$HOME/.cache/kiln/modules`. Each configuration has its own
+  entry, `<root>/<32 hex digits>/std.pcm` plus `std.stamp`.
+- **Configuration.** `-std=`, `-fno-exceptions`, `-O` levels, `-D`/`-U`,
+  the target, the libc++ headers and the kiln build each select a
+  separate entry. `-g`, `-fPIC` and warning flags do not.
+- **Turning it off.** `-fno-kiln-module-cache` (`-fkiln-module-cache`
+  turns it back on; the last one wins) or an empty
+  `-fmodules-cache-path=`. Without a home directory there is no cache.
+  With the cache off, kiln builds the module from its source in every
+  compile, as it does on a miss.
+- **Precedence.** `-fmodule-file=std=<file>` or a `std.pcm` in a
+  `-fprebuilt-module-path` directory wins over the cache.
+- **Staleness.** An edited libc++ header or a damaged module file is a
+  miss, and the entry is rebuilt.
+- **Failure is not an error.** An unwritable cache directory or a failed
+  build falls back to building the module from its source.
+- **Parallel builds** share the cache. One compile builds a missing
+  entry and the others wait for it, for at most 120 seconds, then build
+  the module themselves.
+- **`-v`** prints one line per lookup on standard error:
+
+  ```
+  kiln++: module cache: using '<entry>/std.pcm' for 'std'
+  kiln++: module cache: building 'std' into '<entry>/std.pcm'
+  kiln++: module cache: cannot create '<dir>': <reason>; building 'std' from its source
+  kiln++: module cache: waiting for another compile building 'std'
+  kiln++: module cache: pruning '<root>'
+  kiln++: module cache: removed unused '<entry>'
+  ```
+
+- **`-MD`/`-MMD`** list the entry's `std.pcm`, and `-MD` also lists the
+  libc++ files it was built from.
+- **Pruning.** Each entry is about 9 MiB. As clang does with its module
+  cache, kiln prunes the cache: at most once per
+  `-fmodules-prune-interval=<seconds>` (default 604800, 7 days), a
+  compile removes every entry unused for
+  `-fmodules-prune-after=<seconds>` (default 2678400, 31 days), such as
+  those of an older kiln. 0 for either turns pruning off. Deleting the
+  directory by hand (`rm -r ~/.cache/kiln/modules`) is safe when no
+  compile is running.
+
+A cached `std` costs about what building it in the compile costs, 1.5 s
+and about 96 MiB for `import std;` plus a small `main`. The compile that
+fills the cache takes about 2.5 s and 140 MiB (aarch64, spec/modules.md
+§11.12 "Cost"). Module files hold sources, so importing one re-parses
+them ([KNOWN_ISSUES.md](KNOWN_ISSUES.md#modules)).
 
 ## The Oven: compile-time evaluation
 
@@ -411,6 +481,7 @@ The full list is spec/driver.md, "Options".
 | `-fkiln-reflection-mangling=gcc\|kiln\|kiln-hashed` | mangling of reflection template arguments (default `gcc`, link-compatible with GCC 16.1) |
 | `-fkiln-instantiation-report[=all\|json\|text]`, `-fkiln-memory-report` | reports (above) |
 | `-fconstexpr-stats`, `-fconstexpr-profile[=text\|json\|<file>]`, `-fconstexpr-profile-limit=N` | constexpr profile (above) |
+| `-f[no-]kiln-module-cache` | use the `std` module cache (default on; see [The `std` module cache](#the-std-module-cache)) |
 | `-fkiln-source-path-style=clang\|gcc` | how `__builtin_FILE()` and `std::source_location` spell a file name: as clang does (default) or as GCC does |
 | `-fkiln-reproducible-time` | fixed `__DATE__`/`__TIME__`/`__TIMESTAMP__` (see [Environment variables](#environment-variables)) |
 | `-fkiln-outline-expansions=N`, `-fkiln-dump-cfg`, `-fkiln-cfg-stats`, `-fkiln-cfg-max-elems=N` | internal tuning and debugging of the codegen CFG |
@@ -436,6 +507,7 @@ All `-fkiln-*` flags are experimental.
 | `KILN_LLVM_DIR` | LLVM installation to use, if `--llvm-dir` is not given; otherwise kiln searches (see [Run-time dependencies](#run-time-dependencies)) |
 | `KILN_RESOURCE_DIR` | resource directory (builtin headers, predefines), if `-resource-dir` is not given |
 | `KILN_REPRODUCIBLE_TIME`, `SOURCE_DATE_EPOCH` | fixed values for `__DATE__`, `__TIME__`, `__TIMESTAMP__` (spec/driver.md, "Reproducible time") |
+| `XDG_CACHE_HOME`, `HOME` | where the `std` module cache lives when `-fmodules-cache-path=` is not given (see [The `std` module cache](#the-std-module-cache)) |
 | `TMPDIR` | where crash reproducers go when `-fcrash-diagnostics-dir` is not given (default `/tmp`) |
 | `KILN_BACKTRACE=1` (or `RUST_BACKTRACE=1`) | add kiln's own backtrace to a crash report |
 | `LLVM_PROFILE_FILE` | at run time, where an `-fprofile-instr-generate` program writes its profile (LLVM's runtime) |
@@ -463,9 +535,9 @@ are in spec/driver.md, "Debug information flags", and
 `unsigned-integer-overflow` and `unsigned-shift-base`, with clang's
 groups and the `-fsanitize-recover`/`-fsanitize-trap` options. The
 runtime is the linking `clang++`'s. Other sanitizers (cfi, dataflow,
-safe-stack, kcfi, memtag, ...) are rejected. A few `undefined` checks and
-the ignorelist are not done yet; see
-[KNOWN_ISSUES.md](KNOWN_ISSUES.md#sanitizers-and-coverage).
+safe-stack, kcfi, memtag, ...) are rejected. `-fsanitize-ignorelist=`,
+`-ftrapv` and `-fsanitize-merge=` work. A few `undefined` checks are not
+done yet; see [KNOWN_ISSUES.md](KNOWN_ISSUES.md#sanitizers-and-coverage).
 
 ### Coverage
 
@@ -500,9 +572,10 @@ See [COMPATIBILITY.md](COMPATIBILITY.md#coverage-and-profiling).
 
 - **Targets:** `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`
   (and their clang aliases). The default is the host. Any other `--target`
-  is `unsupported target`. `-march=`, `-mcpu=` and AArch64's feature
-  flags work. x86 `-m<feature>` flags such as `-mavx2` are not accepted
-  yet; see [KNOWN_ISSUES.md](KNOWN_ISSUES.md#platforms).
+  is `unsupported target`. `-march=`, `-mcpu=`, AArch64's feature flags
+  and x86 `-m<feature>` flags such as `-mavx2` work. x86 function
+  multiversioning and a few x86 code-generation flags do not yet; see
+  [KNOWN_ISSUES.md](KNOWN_ISSUES.md#platforms).
 - **LLVM:** 22 (preferred when both are installed) and 19, chosen as in
   [Run-time dependencies](#run-time-dependencies). The LLVM major version
   selects the IR dialect kiln writes. It does not change the language:

@@ -268,6 +268,9 @@ pub fn end_at(
 ) {
     // Decide under the borrow, format outside it: a detail may read the
     // recorder's state (`enabled`) but must never find it borrowed.
+    // Both ends are rounded on the recorder's clock (not the start and
+    // the length apart), so an event that ends within another still
+    // does once rounded.
     let keep = REC.with(|r| {
         let mut r = r.borrow_mut();
         let r = r.as_mut()?;
