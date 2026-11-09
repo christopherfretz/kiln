@@ -273,8 +273,8 @@ impl Sema<'_, '_> {
 
     /// GNU `__auto_type` as the return type `ret` of a function
     /// declarator, never a deduced return type (clang
-    /// `GetFullTypeForDeclarator`): "'__auto_type' not allowed in function
-    /// return type" at `loc`, and true.
+    /// `GetFullTypeForDeclarator`): "'`__auto_type`' not allowed in
+    /// function return type" at `loc`, and true.
     pub fn gnu_auto_type_return_check(&mut self, ret: QualType, loc: Loc) -> bool {
         if self.placeholder_keyword(ret) != Some(AutoKeyword::GnuAutoType) {
             return false;

@@ -256,6 +256,9 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 | Kw::Complex
                 | Kw::Alignas
                 | Kw::Attribute
+                // `__auto_type(x)` is never an expression (clang: "expected
+                // expression").
+                | Kw::GnuAutoType
                 | Kw::Declspec => Tpr::True,
                 // GNU `__extension__` is a unary operator as well as a
                 // decl-specifier prefix (clang's `ParseCastExpression`):
@@ -292,9 +295,6 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 | Kw::Float64x
                 | Kw::Bf16
                 | Kw::Fp16 => self.after_simple_type(self.i + 1, braced),
-                // Never an expression (`__auto_type(x)` is "expected
-                // expression" in clang).
-                Kw::GnuAutoType => Tpr::True,
                 // [dcl.type.auto.deduct]: `auto(x)` and `auto{x}` are
                 // expressions in C++23.
                 Kw::Auto => match self.punct_at(self.i + 1) {

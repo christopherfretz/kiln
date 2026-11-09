@@ -130,6 +130,11 @@ pub enum TypeSpecKind {
 }
 
 impl TypeSpecKind {
+    /// `auto`, `decltype(auto)` or GNU `__auto_type`.
+    pub fn is_placeholder(self) -> bool {
+        matches!(self, TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto | TypeSpecKind::GnuAutoType)
+    }
+
     /// The keyword (for "cannot combine" diagnostics).
     pub fn spelling(self) -> &'static str {
         match self {
