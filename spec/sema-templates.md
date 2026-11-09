@@ -702,7 +702,7 @@ All of these are built by sema actions, which compute dependence as in
 | `obj.f(args)` that names an overload set of members | `UnresolvedMemberExpr` |
 | `a op b` with a type-dependent operand | `CXXOperatorCallExpr` whose callee is an `UnresolvedLookupExpr` holding the operator functions found by unqualified lookup at definition ([temp.dep.candidate]); if none are found, a `BinaryOperator`/`UnaryOperator` of dependent type (clang) |
 | `typename T::type` | `DependentName` type (canonical keyword `typename`, types.md §18) |
-| `class-key T::X` (`struct`/`class`/`union`/`enum`) with a dependent qualifier, as a reference or in `friend class-key T::X;` ([dcl.type.elab]/1-3, [class.friend]/3; WP-332) | `DependentName` type with the class-key as its keyword (parser `parse_tag_specifier`, clang `ActOnDependentTag`); with `friend`, a friend type. Instantiation (`dependent_tag_name`) looks up a tag of the substituted class: none gives `no struct named 'X' in 'Q'`, a tag of the other kind `use of 'X' with tag type that does not match previous declaration`. Gap: a found typedef reports the first (clang: `type alias 'X' cannot be referenced with the 'struct' specifier`) |
+| `class-key T::X` (`struct`/`class`/`union`/`enum`) with a dependent qualifier, as a reference or in `friend class-key T::X;` ([dcl.type.elab]/1-3, [class.friend]/3; WP-332) | `DependentName` type with the class-key as its keyword (parser `parse_tag_specifier`, clang `ActOnDependentTag`); with `friend`, a friend type. A qualifier naming a class template specialization that the context does not enter (`class B<T>::M` in another template, whose `B<T>` is not the current instantiation: `is_unentered_dependent_class`) is dependent too, as clang's `computeDeclContext(SS, false)`; it used to resolve to `B`'s pattern member, so an explicit or partial specialization's `M` was silently dropped (WP-1054). Instantiation (`dependent_tag_name`) looks up a tag of the substituted class: none gives `no struct named 'X' in 'Q'`, a tag of the other kind `use of 'X' with tag type that does not match previous declaration` at the class-key (`tag_keyword_loc`). Gap: a found typedef reports the first (clang: `type alias 'X' cannot be referenced with the 'struct' specifier`) |
 | `typename T::template X<U>` | `DependentTemplateSpecialization` type |
 | `X<T>` where `X` is a class template | dependent `TemplateSpecialization` type |
 | `T(args)` / `T{args}` with dependent `T` | `CXXUnresolvedConstructExpr` (list flag) |
@@ -2131,6 +2131,24 @@ class name" at `B`
 (`temp.inst/invalid-specialization-invalid-members.cpp`,
 `temp.inst/invalid-specialization-base.cpp`).
 
+**No silent drop (WP-1054).** A member that `class_body_with` does not
+instantiate must leave a diagnostic behind. Each member's instantiation
+returns `Err` only after an error, a SFINAE failure or a not-yet-implemented
+note was emitted, or when it is silent because an earlier error (in the
+same instantiation or anywhere in the TU) already covers it. The guard
+checks that contract at the one place every member goes through: it takes
+`Sema::failure_mark()` (a count of every error-class emission, SFINAE
+failures and suppressed ones included) before the member and, when the
+member fails, `failed_silently_since(mark)` (no failure emitted since, and
+no error in the TU, clang's `hasUncompilableErrorOccurred` rule) emits
+`kiln: internal error: member 'x' of 'A<int>' was not instantiated and no
+diagnostic says why` at the member (`member_dropped`, also for an unnamed
+member class). It is an error, not a panic or a `debug_assert!`: the
+program would otherwise compile with a member missing, and a release build
+must not do that either. A substitution failure in a member *declaration*
+is never SFINAE here: SFINAE applies only to deduction, and a class
+instantiated inside a SFINAE context is a hard error there (§5.7).
+
 **Points of instantiation.**
 - `SpecInfo.point_of_instantiation` is the location of the use that first
   required the definition, as clang records it. It is used only in
@@ -2838,7 +2856,7 @@ like clang's.
 | `UnaryTransform` | substitute the operand, then apply the builtin (§9.2) |
 | `PackExpansion`, `PackIndexing` | §7 |
 | `InjectedClassName` | §4.7 |
-| `Record`/`Enum`/`Typedef` of a decl in a dependent context | `find_instantiated_decl(d)`: a local goes through `locals`, and a local in `failed_locals` (its declaration statement failed: the declarator and the rest of its statement) is a silent substitution failure, already diagnosed ([temp.inst]/3; WP-316); a member goes through `member_map` of the enclosing specialization (of the instantiated parent, else of its defined redeclaration: a member class declared before its definition has two instantiated declarations and only the defined one records members; WP-582), and the member class is instantiated if completeness is needed |
+| `Record`/`Enum`/`Typedef` of a decl in a dependent context | `find_instantiated_decl(d)`: a local goes through `locals`, and a local in `failed_locals` (its declaration statement failed: the declarator and the rest of its statement) is a silent substitution failure, already diagnosed ([temp.inst]/3; WP-316); a member goes through `member_map` of the enclosing specialization (of the instantiated parent, else of its defined redeclaration: a member class declared before its definition has two instantiated declarations and only the defined one records members; WP-582), and the member class is instantiated if completeness is needed. A member whose instantiated parent was not instantiated from its parent (a nested `In::Deep` reached through `B<T>` that selected an explicit or partial specialization) is looked up by name in that parent (`relookup_member`): none is `no member named 'In' in 'B<int>'` at the written qualifier, one tag of the same kind is used, anything else is "not yet implemented"; it is never a silent failure (WP-1054) |
 | `Auto` | a deduced `Auto` substitutes its deduced type; an undeduced one stays and is deduced in the instantiation |
 | `QualifiedArray{quals, base}` | cv applied to array sugar (`const A` with `using A = T[3]`): substitute `base`, then `qualify` pushes `quals` into the new element type ([dcl.array]/6; WP-301) |
 

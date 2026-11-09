@@ -1836,6 +1836,7 @@ impl Parser<'_, '_> {
         kw_loc: Loc,
     ) {
         let ty = self.s.act_dependent_name_at(nns, name, None, keyword, name_loc);
+        self.s.note_tag_keyword_loc(name_loc, kw_loc);
         if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
             ds.invalid = true;
             self.spec_error(&e, kw_loc);
@@ -2158,8 +2159,16 @@ impl Parser<'_, '_> {
         if use_ == TagUse::Declaration && qualifier.is_some() {
             self.s.check_standalone_tag_qualifier(keyword, qual_loc);
         }
+        // A reference or friend is not entering the qualifier's scope
+        // (clang `ActOnTag`: `computeDeclContext(SS, false)`): a class
+        // template pattern reached only because the qualifier was parsed
+        // entering context (`class B<T>::M` in another template, where
+        // `B<T>`'s arguments happen to be `B`'s own parameters) is an
+        // unknown specialization whose tag is looked up, and its kind
+        // checked, at instantiation ([temp.dep.type]/6; else an explicit
+        // or partial specialization's member is silently missed, WP-1054).
         if let (Some(q), Some((n, nloc)), TagUse::Reference | TagUse::Friend) = (qual, name, use_)
-            && (self.s.is_dependent_ctx(q.ctx) || self.s.is_unknown_specialization_tag(q.ctx, n))
+            && (self.s.is_dependent_ctx(q.ctx) || self.s.is_unentered_dependent_class(q.ctx))
         {
             self.dependent_tag_reference(ds, q.nns, (n, nloc), keyword, kw_loc);
             return;
