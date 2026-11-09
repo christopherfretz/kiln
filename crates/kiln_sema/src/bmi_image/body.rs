@@ -23,7 +23,7 @@ use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::consts::{FloatKind, IntBits, NullKind, Scalar};
 use kiln_ast::decl::{DeclMisc, NewDecl, Payload as AstPayload, VarEvalState};
 use kiln_ast::expr::{
-    BinaryOp, CastKind, CharKind, CompoundAssignExtra, DeclRefExtra, ExprDeps, ExprKind, ExprNode,
+    BinaryOp, CastKind, CharKind, CompoundAssignExtra, ConstructionKind, DeclRefExtra, ExprDeps, ExprKind, ExprNode,
     InitListExtra, NonOdrUse, Radix, StorageDuration, StringKind, TraitKind, TypeTrait, UnaryOp,
 };
 use kiln_ast::names::OverloadedOperator;
@@ -125,9 +125,19 @@ pub(super) enum Dc {
     Label,
     Let,
     Param,
-    /// A function, or the translation unit.
+    /// A function (an implicit special member too), or the translation
+    /// unit.
     Ctx,
     Namespace,
+    /// A class member: a field, member function, static data member or
+    /// enumerator.
+    Member,
+    /// A field.
+    Field,
+    /// A constructor (an implicit one too).
+    Ctor,
+    /// A destructor (an implicit one too).
+    Dtor,
 }
 
 /// A field: how one or more words are read.
@@ -154,7 +164,8 @@ pub(super) enum F {
     SL,
     DL(Dc),
     QL,
-    /// A cast's base path: 0 none, 1 empty.
+    /// A cast's base path: 0 none, else 1 + the number of steps, then
+    /// each step's (class record, base position) pair.
     Path,
     /// A nested-name-specifier: a count, then its components outermost
     /// first (0 `::`; 1 namespace + record; 2 type + [`QRef`] + bool).
@@ -231,7 +242,7 @@ fn side_fields(s: Side) -> &'static [F] {
 
 /// The expression kinds the image carries; the record's kind byte indexes
 /// this table (append only).
-pub(super) const EXPR_KINDS: [ExprKind; 40] = {
+pub(super) const EXPR_KINDS: [ExprKind; 47] = {
     use ExprKind as X;
     [
         X::IntegerLiteral,
@@ -274,6 +285,13 @@ pub(super) const EXPR_KINDS: [ExprKind; 40] = {
         X::AddrLabelExpr,
         X::ArrayInitLoopExpr,
         X::ArrayInitIndexExpr,
+        X::MemberExpr,
+        X::CXXThisExpr,
+        X::CXXMemberCallExpr,
+        X::CXXConstructExpr,
+        X::CXXTemporaryObjectExpr,
+        X::CXXDefaultInitExpr,
+        X::CXXBindTemporaryExpr,
     ]
 };
 
@@ -340,6 +358,11 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::StmtExpr => [f(F::S), Z],
         X::CXXDefaultArgExpr => [f(F::D(Dc::Param)), f(F::D(Dc::Ctx))],
         X::AddrLabelExpr => [f(F::D(Dc::Label)), Z],
+        X::MemberExpr => [f(F::E), f(F::D(Dc::Member))],
+        X::CXXMemberCallExpr => [f(F::E), f(F::EL)],
+        X::CXXConstructExpr | X::CXXTemporaryObjectExpr => [f(F::D(Dc::Ctor)), f(F::EL)],
+        X::CXXDefaultInitExpr => [f(F::D(Dc::Field)), f(F::D(Dc::Ctx))],
+        X::CXXBindTemporaryExpr => [f(F::E), f(F::D(Dc::Dtor))],
         _ => [Z, Z],
     }
 }
@@ -350,7 +373,12 @@ fn expr_aux_ok(k: ExprKind, aux: u8) -> bool {
         X::IntegerLiteral => Radix::from_u8(aux).is_some(),
         X::CharacterLiteral => CharKind::from_u8(aux).is_some(),
         X::StringLiteral => StringKind::from_u8(aux).is_some(),
-        X::DeclRefExpr => NonOdrUse::from_u8(aux).is_some(),
+        X::DeclRefExpr | X::MemberExpr => NonOdrUse::from_u8(aux).is_some(),
+        X::CXXThisExpr => aux <= 1,
+        X::CXXConstructExpr | X::CXXTemporaryObjectExpr => {
+            ConstructionKind::from_u8(aux & 3).is_some() && aux >> 6 == 0
+        }
+        X::CXXDefaultInitExpr => aux == 1,
         X::PredefinedExpr => usize::from(aux) < kiln_ast::expr::PredefinedKind::ALL.len(),
         X::UnaryOperator => UnaryOp::from_u8(aux).is_some(),
         X::BinaryOperator | X::CompoundAssignOperator => BinaryOp::from_u8(aux).is_some(),
@@ -432,6 +460,10 @@ fn tokens<'w>(fields: &[F], words: &'w [u32]) -> Option<Vec<(F, &'w [u32])>> {
             F::Qt => 2,
             F::EL | F::SL | F::DL(_) => 1 + *words.get(p)? as usize,
             F::QL | F::AL => 1 + 2 * (*words.get(p)? as usize),
+            F::Path => match *words.get(p)? as usize {
+                0 => 1,
+                n => 1 + 2 * (n - 1),
+            },
             F::Nns => {
                 let n = *words.get(p)? as usize;
                 let mut q = p + 1;
@@ -691,19 +723,42 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         return matches!(dc, Dc::Value | Dc::Param) && ((w & !PARAM) as usize) < nparams;
     }
     let Some(d) = img.decls.get(w as usize) else { return false };
+    let in_class = || {
+        img.decls.get(d.ctx as usize).is_some_and(|c| matches!(c.payload, Payload::Record { .. }))
+    };
     match dc {
         Dc::Value => {
             matches!(
                 d.payload,
-                Payload::Function { .. } | Payload::Var { .. } | Payload::Enumerator { .. }
+                Payload::Function { .. }
+                    | Payload::Var { .. }
+                    | Payload::Enumerator { .. }
+                    | Payload::Implicit { .. }
             )
+        }
+        Dc::Member => {
+            matches!(
+                d.payload,
+                Payload::Function { .. }
+                    | Payload::Var { .. }
+                    | Payload::Enumerator { .. }
+                    | Payload::Implicit { .. }
+                    | Payload::Field { .. }
+            ) && in_class()
+        }
+        Dc::Field => matches!(d.payload, Payload::Field { .. }),
+        Dc::Ctor => {
+            matches!(d.payload, Payload::Function { kind: 2, .. } | Payload::Implicit { kind: 0..=2 })
+        }
+        Dc::Dtor => {
+            matches!(d.payload, Payload::Function { kind: 3, .. } | Payload::Implicit { kind: 5 })
         }
         Dc::Var => matches!(d.payload, Payload::Var { .. }),
         Dc::Local => matches!(d.payload, Payload::Var { .. }) && is_local(img, d),
         Dc::Label => matches!(d.payload, Payload::Label),
         Dc::Let => matches!(d.payload, Payload::Let { .. }),
         Dc::Param => false,
-        Dc::Ctx => matches!(d.payload, Payload::Function { .. }),
+        Dc::Ctx => matches!(d.payload, Payload::Function { .. } | Payload::Implicit { .. }),
         Dc::Namespace => matches!(d.payload, Payload::Namespace),
     }
 }
@@ -725,7 +780,13 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
         let opt = |x: u32, lim: usize| x == NONE || (x as usize) < lim;
         match f {
             F::Raw | F::Loc => true,
-            F::Bool | F::Path => w[0] <= 1,
+            F::Bool => w[0] <= 1,
+            F::Path => w[1..].chunks(2).all(|p| {
+                img.decls.get(p[0] as usize).is_some_and(|r| match &r.payload {
+                    Payload::Record { def: Some(df), .. } => (p[1] as usize) < df.bases.len(),
+                    _ => false,
+                })
+            }),
             F::E => (w[0] as usize) < e_lim,
             F::OE => opt(w[0], e_lim),
             F::S => (w[0] as usize) < s_lim,
@@ -827,17 +888,22 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
     // The declaration fields that point into the bodies.
     for d in &img.decls {
         match &d.payload {
-            Payload::Function { body: FnBody::Stmt(s), params, .. } => {
-                if b.stmts.get(*s as usize).is_none_or(|r| r.kind != 0) {
+            Payload::Function { body, params, inits, .. } => {
+                if let FnBody::Stmt(s) = body
+                    && b.stmts.get(*s as usize).is_none_or(|r| r.kind != 0)
+                {
                     return bad("bad function body");
                 }
                 if params.iter().any(|p| p.default != NONE && p.default as usize >= ne) {
                     return bad("bad default argument");
                 }
+                if inits.iter().any(|x| x.init as usize >= ne) {
+                    return bad("bad ctor-initializer");
+                }
             }
-            Payload::Function { params, .. } => {
-                if params.iter().any(|p| p.default != NONE && p.default as usize >= ne) {
-                    return bad("bad default argument");
+            Payload::Field { width, init, .. } => {
+                if [*width, *init].iter().any(|&x| x != NONE && x as usize >= ne) {
+                    return bad("bad field initializer");
                 }
             }
             Payload::Var { init, eval, .. } => {
@@ -932,6 +998,7 @@ enum Fv {
     QL(ListId),
     Nns(Option<NnsId>),
     AL(ListId),
+    Path(Option<ListId>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -978,9 +1045,7 @@ impl Writer<'_, '_, '_> {
             F::SL => Fv::SL(ListId::from_raw(raw).ok_or(BAD)?),
             F::DL(dc) => Fv::DL(ListId::from_raw(raw).ok_or(BAD)?, dc),
             F::QL => Fv::QL(ListId::from_raw(raw).ok_or(BAD)?),
-            F::Path if raw == 0 => Fv::Raw(0),
-            F::Path if raw == ListId::EMPTY.raw() => Fv::Raw(1),
-            F::Path => return Err("a derived-to-base conversion"),
+            F::Path => Fv::Path(ListId::from_raw(raw)),
             F::Nns => Fv::Nns(NnsId::from_raw(raw)),
             F::AL => Fv::AL(ListId::from_raw(raw).ok_or(BAD)?),
         })
@@ -1301,6 +1366,15 @@ impl Writer<'_, '_, '_> {
                 }
             }
             Fv::Nns(n) => self.nns(n, out)?,
+            Fv::Path(None) => out.push(0),
+            Fv::Path(Some(l)) => {
+                let items: Vec<u32> = lists.get(l).to_vec();
+                out.push(items.len() as u32 + 1);
+                for g in items {
+                    let (rec, pos) = *self.bs.bspec.get(&g).ok_or(OUTSIDE)?;
+                    out.extend([rec, pos]);
+                }
+            }
             Fv::AL(l) => {
                 let items: Vec<u32> = lists.get(l).to_vec();
                 out.push(items.len() as u32);
@@ -1573,14 +1647,7 @@ pub(super) const LOCAL_FLAGS: u8 =
 fn expr_reason(k: ExprKind) -> &'static str {
     use ExprKind as X;
     match k {
-        X::MemberExpr
-        | X::CXXThisExpr
-        | X::CXXMemberCallExpr
-        | X::CXXConstructExpr
-        | X::CXXTemporaryObjectExpr
-        | X::CXXInheritedCtorInitExpr
-        | X::CXXDefaultInitExpr
-        | X::CXXBindTemporaryExpr
+        X::CXXInheritedCtorInitExpr
         | X::CXXStdInitializerListExpr
         | X::CXXNewExpr
         | X::CXXDeleteExpr
@@ -1781,7 +1848,17 @@ impl Sema<'_, '_> {
                 if w[0] == 0 {
                     0
                 } else {
-                    ListId::EMPTY.raw()
+                    let v: Vec<u32> = w[1..]
+                        .chunks(2)
+                        .map(|p| {
+                            let bases = ids
+                                .get(p[0] as usize)
+                                .and_then(|&c| self.ast.decls.record(c))
+                                .map_or(ListId::EMPTY, |r| r.bases);
+                            self.ast.lists.get(bases).get(p[1] as usize).copied().unwrap_or(0)
+                        })
+                        .collect();
+                    self.ast.lists.push_raw(&v).raw()
                 }
             }
             F::E | F::OE => opt(w[0], built.ebase),

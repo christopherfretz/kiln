@@ -1197,7 +1197,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 return bad("bad declaration context");
             }
         }
-        if (in_class && d.access > 3) || (!in_class && d.access != 0) {
+        // Members carry their access; so do the enumerators of a member
+        // enumeration (which share its access).
+        let member_enum = is_enumerator && kind_of(d.ctx).is_some_and(|e| e.access != 0);
+        if d.access > 3 || (!in_class && !member_enum && d.access != 0) {
             return bad("bad member access");
         }
         if d.lexical != NONE && d.lexical != LEX_TU && !scope(d.lexical) {
@@ -1825,14 +1828,18 @@ impl Writer<'_, '_, '_> {
                     }
                     FnBody::None
                 } else {
-                    if kind != 0 {
-                        return Err("an out-of-line member function definition");
-                    }
+                    // A non-inline body (a member defined in a named
+                    // module's class is not implicitly inline,
+                    // [class.mfct]/1) is emitted by the module's own object;
+                    // importers only need to know it is defined.
                     FnBody::Braces(self.loc(st.get(b).loc())?, self.loc(st.rbrace(b))?)
                 }
             }
         };
-        if inits.is_empty() && !defaulted && ast.decls.ctor_inits(d, &ast.lists).len() != 0 {
+        if inits.is_empty()
+            && !defaulted
+            && !matches!(body, FnBody::Braces(..))
+            && ast.decls.ctor_inits(d, &ast.lists).len() != 0 {
             return Err("ctor-initializers of a constructor without a carried body");
         }
         Ok(Payload::Function { kind: kind as u8, ty, spec: bits, deferred, params, body, inits })
@@ -2236,7 +2243,8 @@ impl Sema<'_, '_> {
         // The writer's own output must pass the reader's checks (a body
         // shape the schema and the AST disagree on is a fallback, never
         // a corrupt module file).
-        if decode(&bytes).is_err() {
+        if let Err(e) = decode(&bytes) {
+            eprintln!("DEBUG1065 {e:?}");
             return none("an internal image inconsistency");
         }
         Some(ModuleImage { bytes, decls, fallback: None })
@@ -2339,6 +2347,8 @@ impl Sema<'_, '_> {
                 NONE => DeclName::EMPTY,
                 // Locals name `pnames` (they are not gated, "ODR merging").
                 n if body::is_local(img, r) => pnames[n as usize],
+                // A special member's name: recomputed below.
+                n if n >= N_OP => DeclName::EMPTY,
                 n => names[n as usize],
             };
             let mut h = DeclHead::new(ctx, name, lo(self, r.loc));
