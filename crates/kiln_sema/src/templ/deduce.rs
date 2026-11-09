@@ -155,6 +155,13 @@ pub struct DeducedArgs {
     /// parameter type, so a template template parameter's template-id
     /// takes `A`'s extra arguments as its defaults (`deduce_ttp_id_args`).
     pub ordering: bool,
+    /// A non-type parameter typed by another template parameter
+    /// (`template<class T, T N>`) does not deduce its type from the
+    /// argument's (`deduce_nttp_type`): clang 19's check that a partial
+    /// specialization is more specialized than its primary saw the
+    /// argument already converted to that type (`-fclang-compat=19`;
+    /// `not_more_specialized_than_primary`).
+    pub converted_values: bool,
     /// Where the deduction was requested (the call, the declaration, the
     /// alias template): the location of a diagnostic issued from a step
     /// that has none of its own.
@@ -173,6 +180,7 @@ impl DeducedArgs {
             pack_elem: None,
             empty_expanded: Vec::new(),
             ordering: false,
+            converted_values: false,
             loc: Loc::INVALID,
         }
     }
@@ -746,7 +754,9 @@ impl Sema<'_, '_> {
         }
         let Some(decl) = e.and_then(|e| self.nttp_decl_of_expr(e)) else { return Tdk::Success };
         let Some(pt) = self.ast.decls.get(decl).ty() else { return Tdk::Success };
-        if !self.ast.types.is_dependent(pt) {
+        if !self.ast.types.is_dependent(pt)
+            || (d.converted_values && !self.nttp_type_has_placeholder(pt))
+        {
             return Tdk::Success;
         }
         let at = match a.view() {
