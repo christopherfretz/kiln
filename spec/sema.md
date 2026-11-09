@@ -8344,7 +8344,12 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
       quietly, notes a side effect (clang `EvaluateIgnoredValue`,
       `noteSideEffect`) and the walk goes on: past a call with unknown
       arguments and past a callee's quiet failure alike, as clang refuses
-      every nested call in this mode;
+      every nested call in this mode. A discarded glvalue is evaluated
+      as an lvalue only (clang `EvaluateIgnoredValue`), so naming a
+      by-value parameter or a local, its member (not through `->`), its
+      address, or a comma, parentheses or a `void` cast of these notes
+      nothing (WP-1150); a reference parameter, `this`, or a read of a
+      parameter's value notes a side effect;
     - destroying an object fails quietly (clang `HandleDestruction`)
       when its class has a non-trivial destructor, and, once a side
       effect has been noted, for a block's local variables and a
@@ -8355,9 +8360,14 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
       member access, or discarded by a cast) it only notes a side
       effect;
     - an `if`, `while`, `for` or `do` condition must be known (an unknown
-      one, a condition variable, a structured binding or a range-based
-      `for` stops the walk); a loop runs while it is true, `break` leaves
-      it and `continue` goes to its increment and condition. Each
+      one, a structured binding or a range-based `for` stops the walk).
+      A condition variable is defined like a local below, and an unknown
+      one stops the walk (clang `EvaluateCond`, `ESR_Failed`). A loop
+      runs while its condition is true, `break` leaves it and `continue`
+      goes to its increment and condition. Each `while` iteration, and
+      each `for` iteration's condition variable, condition, body and
+      increment, is a scope for its locals (clang `BlockScopeRAII`,
+      `IterScope`). Each
       statement evaluated takes a step: a walk that runs out (clang
       `-fconstexpr-steps`, default 1048576) fails with "constexpr
       evaluation hit maximum step limit; possible infinite loop?" at the
@@ -8367,13 +8377,32 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
       `case` or `default` label, searched as clang does (into blocks,
       `if` branches, loop bodies and labelled statements; a skipped
       static variable still fails), and `break` leaves it; no matching
-      label skips the body;
+      label skips the body. The search does not enter a try-block or a
+      statement expression, so a label found only there (clang
+      `ESR_CaseNotFound` from `EvaluateSwitch`) fails with "this use of
+      statement expressions is not supported in a constant expression"
+      at the label (WP-1150);
     - a `try` statement (and a function-try-block's body) runs its try
       block only; a label is its sub-statement; a `goto` (forward,
       backward or computed) fails with "subexpression not valid in a
       constant expression" at the statement;
-    - the walk stops at a `return`, an `[[assume]]`, and an unknown
-      value naming a local variable;
+    - the walk stops at a `return` and an `[[assume]]`;
+    - locals (WP-1150). clang keeps a body's locals in the call frame
+      while the parameters stay unknown. Likewise the walk tracks each
+      block-scope variable and condition variable the Oven can hold in a
+      potential-constant frame (spec/oven.md, `Oven::frame_local`: no
+      pointer, reference, union, `mutable` or volatile subobject, no
+      destructor). A full-expression, condition or initializer that
+      names no parameter, `this` or untracked local is evaluated in
+      that frame (`Oven::evaluate_in_frame`): modifications stay, and a
+      failure is reported with its notes. A reference local bound to a
+      tracked local designates it. A local whose initializer is unknown,
+      or that is not tracked, is unknown: reading it notes a side
+      effect. Once a side effect has been noted, every local is unknown
+      (clang fails quietly on any local access after `noteSideEffect`).
+      A loop's cycle test also compares the frame's bytes. After 4096
+      frame evaluations in one body, the walk treats its locals as
+      unknown;
   - the walk also fails, as clang's `EvaluateStmt` (WP-1123), at the
     definition of a static or `thread_local` local variable not usable in
     constant expressions ("control flows through the definition of a
@@ -8429,12 +8458,10 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   - a function declared in a system header is never checked, even under
     `-Wsystem-headers` (clang skips `CheckConstexprFunctionBody` there;
     libstdc++'s `<cmath>` overloads call `__builtin_acosf`);
-  Kiln never reports a function clang accepts; it misses some clang
-  reports because clang tracks the values of local and condition
-  variables (`int z = 0; if (z) ...`, `for (int k = 0; k < 3; ++k)`)
-  and evaluates a discarded parameter (`(void)x;`) without noting a
-  side effect (WP-873 and WP-1133 follow-ups;
-  `never-constant-local-values-cxx20.cpp` is their xfail). Under the default `-fclang-compat=22` a local of
+  Kiln never reports a function clang accepts. It misses some clang
+  reports: a local holding a pointer is not tracked (`int *p = nullptr;
+  *p;`), and an expression naming both a parameter and a tracked local
+  is not evaluated in clang's order (WP-1150 follow-ups). Under the default `-fclang-compat=22` a local of
   non-literal type is not itself a failure from C++23 (P2448R2), as in
   clang 22.
 - Tests: `expr.add/integer-overflow-folded.cpp`,
@@ -8449,7 +8476,8 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `dcl.constexpr/never-constant-{call,temporaries,loop-break,switch,try-goto}-cxx20.cpp`,
   `dcl.constexpr/never-constant-infinite-loop{,-steps}-cxx20.cpp`,
   `dcl.constexpr/never-constant-walk-end-cxx23.cpp`,
-  `dcl.constexpr/never-constant-local-values-cxx20.cpp` (xfail),
+  `dcl.constexpr/never-constant-local-values-cxx20.cpp`,
+  `dcl.constexpr/never-constant-{local-tracking,discarded-parameter,switch-search}-cxx20.cpp`,
   `dcl.constexpr/never-constant-default-cxx23.cpp`,
   `dcl.constexpr/never-constant-no-error-cxx20.cpp`,
   `dcl.constexpr/potential-constant-builtin-{fabs,strcmp,not-constexpr}.cpp`,
@@ -9725,11 +9753,27 @@ not supported yet`.
     other (WP-1117; spec/sema-class.md §5.4;
     `element-discarded-temporary{,-constexpr}-run.cpp`). In an ordinary
     declaration it is only bound and dies with the full-expression.
-    *Left*: a default argument's temporaries stay with the call's
-    full-expression; a destructuring statement's expansion-initializer
-    (`auto&& [u...] = ((void)D{1}, t)`) is not a lifetime-extending
-    context at parse time, so its discarded class prvalues are not
-    materialized.
+    *Default arguments* (WP-1149; [intro.execution]/5): a default
+    argument's temporaries are created in the full-expression of the
+    call that uses it, so one used in an element is extended with the
+    element's (`{dv(), 8}` with `int dv(const D& = D{7})` prints
+    `w7 ~D7 w8`), including a default argument's own default argument.
+    The parameter's default argument is one expression shared by every
+    call, so, as clang does in a lifetime-extending context, each use
+    (`CXXDefaultArgExpr`) is given its own copy with fresh
+    `MaterializeTemporaryExpr`s (`fresh_temporaries`, a structural copy
+    of the path from the root to each `FullExpression` temporary,
+    `ExprArena::clone_with_children`), recorded in the cold map
+    `default_arg_rewritten`; `Ast::default_arg_expr` returns the copy, so
+    codegen and the Oven evaluate and destroy it as the use's own, and
+    the Oven's `extended_temps`/`extends_temporaries` walks enter it.
+    `extend_init_temporaries` then extends the copy's temporaries like the
+    initializer's own. The same rewrite serves a destructuring
+    expansion-initializer and the P2718 for-range-initializer
+    (`extend_range_default_args`, `range_for.rs`; spec/sema-class.md).
+    GCC 16.1 extends no element temporaries and rejects reading one in
+    constant evaluation, so the tests carry kiln goldens
+    (`element-default-argument-temporaries-run.cpp`, `oracle: none`).
   - *Element immediate invocations* (WP-1106; [expr.const]/16): an
     immediate invocation in an element is evaluated at the end of its
     declaration's full-expression. The element's `ConstantExpr` was built
@@ -9787,10 +9831,36 @@ not supported yet`.
     unless bound by automatic reference, below). The
     initializer's temporaries persist for the lifetime of that reference,
     to the end of the whole statement ([class.temporary]/9, CWG3043;
-    `expansion_decomp` calls `extend_init_temporaries`, a no-op for the
-    `static constexpr` form, whose temporaries are part of its constant
-    initialization). GCC 16.1 agrees
-    (`tests/conformance/stmt.expand/destructuring-temporaries-run.cpp`).
+    `expansion_destructuring` calls `extend_init_temporaries` on the
+    declaration that won, after `expansion_decomp` or the constexpr
+    `expansion_fallback` attempts, so a discarded attempt marks nothing;
+    a no-op for the `static constexpr` form, whose temporaries are part
+    of its constant initialization). The expansion-initializer is a
+    lifetime-extending context (WP-1149): the parser, and
+    `Substituter::expansion_stmt` when it substitutes a pattern's
+    initializer, open an `extend_collector`, so a discarded class prvalue
+    (`((void)D{1}, f())`, a comma's left operand) is materialized and
+    extended, and so are the temporaries of the default arguments it uses
+    (above). `expansion_decomp` re-marks the initializer's temporaries for
+    the declaration's full-expression (`note_shared_temporaries`), so an
+    lvalue initializer (`id(T2{...})`) gets its `ExprWithCleanups`.
+    GCC 16.1 agrees, including default arguments
+    (`tests/conformance/stmt.expand/destructuring-temporaries-run.cpp`,
+    `destructuring-initializer-temporaries-run.cpp`).
+    *Shared pattern nodes* (WP-1149): `extend_init_temporaries` sets a
+    `MaterializeTemporaryExpr`'s storage in place (`extend_temporary`,
+    write-once). The Substituter reuses a non-dependent subtree of a
+    pattern in every instantiation, and a nested statement's elements
+    reuse its initializer, so one node can be marked by several
+    declarations. That is safe: the node is at the same syntactic
+    position in each, so the mark is the same decision every time, and
+    codegen and the Oven create a temporary per evaluation keyed on its
+    storage duration, not on the extending declaration; the first
+    declaration's `LifetimeExtendedTemporaryDecl` is only a dump label.
+    A rewritten default-argument use shared the same way reuses its
+    copy. A dependent temporary is rebuilt per instantiation
+    (`shared-pattern-temporaries-run.cpp`, GCC oracle, run time and
+    constant evaluation).
     The iterating form's `__range` is `static constexpr` or a
     `constexpr` reference to a glvalue (Automatic, below), so its
     temporaries are part of its constant initialization and never

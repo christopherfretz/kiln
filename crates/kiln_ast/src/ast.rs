@@ -438,8 +438,13 @@ impl Ast {
     /// parameter's default argument without the `ExprWithCleanups` of its
     /// own full-expression (clang `ParmVarDecl::getDefaultArg`). Its
     /// temporaries are destroyed with the full-expression containing the
-    /// call ([intro.execution]/5, [class.temporary]/6.9).
+    /// call ([intro.execution]/5, [class.temporary]/6.9), unless sema
+    /// rebuilt it for this use in a lifetime-extending context
+    /// ([`ExprArena::default_arg_rewritten`]).
     pub fn default_arg_expr(&self, e: ExprId) -> Option<ExprId> {
+        if let Some(r) = self.exprs.default_arg_rewritten(e) {
+            return Some(r);
+        }
         let p = self.exprs.default_arg_param(e);
         let d = self.decls.param(p)?.default_arg?;
         Some(match self.exprs.get(d).kind() {

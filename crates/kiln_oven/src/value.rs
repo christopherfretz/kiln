@@ -567,7 +567,7 @@ impl Oven {
 
     /// clang's `note_constexpr_memory_leak` for the allocations of the
     /// running context still live: the first made, and how many others.
-    fn leak_notes(&self, b: &dyn SemaBridge) -> Option<Vec<Note>> {
+    pub(crate) fn leak_notes(&self, b: &dyn SemaBridge) -> Option<Vec<Note>> {
         if self.mem.heap_count == 0 {
             return None;
         }
@@ -1972,7 +1972,7 @@ pub(crate) fn let_mte(ast: &Ast, t: DeclId) -> Option<ExprId> {
 /// differs from kiln's node location: wrappers are looked through, a
 /// `CallExpr` is at its callee's start and a `CXXMemberCallExpr` at the
 /// member name.
-fn expr_loc(ast: &Ast, mut e: ExprId) -> Loc {
+pub(crate) fn expr_loc(ast: &Ast, mut e: ExprId) -> Loc {
     let x = &ast.exprs;
     loop {
         let k = x.get(e).kind();

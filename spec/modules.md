@@ -1703,6 +1703,52 @@ templates of five namespaces in a `static_assert` and in `main`.
   [-fkiln-bmi-image] --precompile th.cppm` and `kiln++ -std=c++26
   [-fkiln-bmi-image] -fmodule-file=th=th.pcm {-fsyntax-only | -c} u.cpp`.
 
+**Part 2a, stage S4 second slice: class templates (WP-1139).** Same
+method (harness profile, aarch64, `/usr/bin/time`, median of 3, load
+~20, `-std=c++26`). Two workloads: the corpus module
+`module.interface/Inputs/img-class-template.cppm` (73 image records),
+imported by `image-class-template-run.cpp`; and a class-template-heavy
+synthetic interface: 200 exported namespaces each holding `Box`, `Arr`
+(a nested class, an out-of-line member, a static data member defined
+out of line), `Fixed<int N>`, `Base`/`Derived` (a dependent base),
+`W`, `Def` (type defaults), `Acc` and the function templates `boxed`
+and `unbox` as in the corpus module (7401 lines, 13,800 image
+records), whose importer uses five namespaces in a `static_assert` and
+in `main`.
+
+| run | corpus module | class-template-heavy module |
+|---|---|---|
+| kiln `--precompile`, image off | 0.04 s, 11.3 MiB, 25,088 B | 0.12 s, 14.7 MiB, 303,307 B |
+| kiln `--precompile`, image on | 0.06 s, 11.4 MiB, 33,981 B | 0.15 s, 24.0 MiB, 1,746,634 B |
+| kiln import, image off, `-fsyntax-only` | 0.05 s, 11.4 MiB | 0.12 s, 15.4 MiB |
+| kiln import, image on, `-fsyntax-only` | 0.04 s, 11.5 MiB | **0.06 s**, 16.2 MiB |
+| kiln import, image off, `-c` | 0.09 s, 60.2 MiB | 0.14 s, 60.5 MiB |
+| kiln import, image on, `-c` | 0.09 s, 60.2 MiB | 0.09 s, 60.5 MiB |
+| clang 19 `--precompile` | 0.05 s, 85.9 MiB | 0.10 s, 96.6 MiB |
+| clang 19 import, `-fsyntax-only` | 0.01 s, 85.8 MiB | 0.01 s, 87.7 MiB |
+
+- The class-template-heavy import halves (`-fsyntax-only` 0.12 s to
+  0.06 s; `-c` 0.14 s to 0.09 s), for 0.8 MiB more peak RSS (the eager
+  decode of 13,800 records). The image grows the file 5.8x (about
+  105 B per record) and precompile's peak RSS from 14.7 to 24.0 MiB.
+- On/off equivalence: identical LLVM IR, identical member-instantiation
+  diagnostics and the interface's carried constants reused
+  (`kind2_declaration_image_class_templates`); both programs print the
+  same output.
+- `import std;` (libc++ 19 `std.cppm`): still 0 image records; the unit
+  falls back at its first node, "a global module fragment" (S5), and
+  its purview is using-declarations (S6). Inside the headers the next
+  class-template gaps are the "Still falling back" list above (packs,
+  member templates, partial specializations and non-type arguments
+  are on nearly every libc++ class template).
+- Re-run: the synthetic interface is `export module cth;` and 200
+  copies of `export namespace n<i> { ... }` holding the class templates
+  above plus `template <class T> struct Acc { T s; constexpr Acc
+  &add(T x); constexpr T sum_to(int n) const; }` (a loop); the commands
+  are `kiln++ -std=c++26 [-fkiln-bmi-image] --precompile cth.cppm` and
+  `kiln++ -std=c++26 {-fkiln-bmi-image | -fno-kiln-bmi-image}
+  -fmodule-file=cth=cth.pcm {-fsyntax-only | -c} u.cpp`.
+
 **Part 2 item 1, results inside instantiations (WP-1046).** Same method
 (harness profile, aarch64, `/usr/bin/time`, load ~20; precompile median of
 3, imports median of 5, interleaved). "Part 1" is the base commit's binary
@@ -2043,9 +2089,135 @@ reference records (bodies that call a template), unresolved-lookup and
 dependent-member expression kinds, defaults and packs, then explicit
 and partial specializations.
 
+*Second slice (WP-1139): specialization references.* A carried body,
+type or initializer may name a specialization of a carried template
+that the unit made implicitly. The writer still skips the
+specialization itself (and every member, parameter and local of it),
+and writes in its place a *specialization reference record* (kind 18)
+the first time something names it: the template record (an earlier
+kind-17 record), a byte that is 1 when the unit completed the
+specialization (a class specialization whose definition was
+instantiated), and the template arguments in the converted, sugared
+form the specialization keeps (`SpecInfo.args`), one per parameter: `0
+qref` a type, `1 qref value:i128` an integral or `bool` value of that
+type (an enumeration value, a pointer, a member pointer, a template,
+a pack or any other argument falls back with "a template argument the
+image does not carry"). The record has no name, context, lexical
+context or previous declaration, so it is in no member list and no
+lookup table; its location is the point of instantiation and its
+flags the specialization's `USED` / `REFERENCED`. It is written where
+it is first needed, so it may lie inside a class definition (it is not
+a member: the validator and the class nesting skip it), and always
+after its template and the types of its arguments. A *member
+reference record* (kind 19) names a member of a class specialization:
+the kind-18 record of the specialization and the pattern's member
+record (`instantiated_from` for a templatable member, the
+`instantiated_from_map` entry for a field or nested type); an
+implicitly declared special member of a specialization (the default
+constructor `A<int> a;` declares) has no pattern member and falls back
+("an implicit member of a class template specialization"). A type naming a specialization is
+type tag 16, `tst(template:u32, n, targ*, under:qref)`: the
+`TemplateSpecializationType` as written (the template record, the
+written arguments, and the underlying type (a written non-type
+argument is an expression, not a value, so it falls back with "a
+template argument the image does not carry"), a record type naming a
+kind-18 record, or 0 for a dependent one written in a pattern, `X<T>`),
+and type tag 17, `injected(template:u32)`, is the injected-class-name
+type of a class template's pattern (`X<T>` inside `X`, the pointee of
+`this`), and type tag 18, `subst(repl:qref, template:u32, index:u32,
+pack:u32)`, is a substituted template type parameter in a
+specialization's signature or member type: the replacement, the
+template record whose parameter it replaced, the parameter index and
+the pack element plus one (0 when not a pack element). A template name other than the template itself (qualified,
+dependent, a template template parameter) falls back.
+
+The importer rebuilds a reference by the entry points a use in source
+would call, so it either finds the specialization (its own use, or the
+instantiation another reference already made: `find_spec` keyed on the
+canonical arguments, which an image-built template shares with a
+replayed one) or makes it exactly as replay does: a function
+specialization through `get_function_spec` (signature only), a class
+specialization through `get_class_spec`, completed with
+`require_complete` at the record when its byte says so (the unit
+required it complete there or later; replay instantiates it at the
+first such use, which the record precedes). A member reference is the
+specialization's member made from the pattern member (`find_member`,
+the specialization's `member_map`). Definitions are not carried: once
+the bodies are built, each referenced function specialization or
+member function marked `USED` is marked used again at its location
+(`mark_used_at`), which instantiates a `constexpr` definition at once
+and queues any other for the end of the importer's translation unit,
+as replay's own use does. Constants the unit computed for
+specializations stay in the constant section (WP-1046), so
+initializers evaluated in the interface are not evaluated again.
+
+*Second slice (WP-1139): class templates.* Template kind 1 is a class
+template. The parser's order is kept: the template parameters, the
+pattern (a class record with `DEPENDENT_CTX`, rebuilt after
+`mark_pattern_next` as a function pattern is), then the template
+record *immediately after the pattern record* (the class head creates
+the template before the members are parsed, so the injected-class-name
+and `X<T>` resolve inside the body), then the members up to the
+pattern's end. The template record is the one record inside a class
+definition that is not its member: its context is the pattern's.
+Members of the pattern (fields, member functions defined in the class
+or declared there and defined out of line, static data members and
+their out-of-line definitions, typedefs and alias declarations, nested
+classes and enumerations) are ordinary records carrying
+`DEPENDENT_CTX`; a member function's body is always carried, as a
+function pattern's is (it is instantiated, never emitted, so the
+"non-inline body is braces only" rule does not apply). The validator
+claims them through their class: a dependent record whose context is a
+dependent class is claimed by that class, which must itself be claimed
+(as a template's pattern, or as a member of a claimed class). An
+out-of-line member definition (`template<class T> int X<T>::f() {}`)
+carries the parameters of its own template-head as dependent
+parameter records immediately before it, at depth 0 in index order;
+the run's context is the definition's lexical context (the namespace
+the definition is written in, or none at file scope), and the
+definition claims it (there is no template record: sema
+keeps no list for an out-of-line head, the body names the parameters
+directly, and substitution maps them by depth and index). Dependent
+base specifiers (a type parameter, `B<T>`) are base records whose
+type is dependent; the validator accepts them in a dependent class
+only. The injected-class-name is not a record: lookup finds it through
+the pattern (`injected_class_for`), and type tag 17 rebuilds its type
+with `injected_type_of`. A default type template argument (`class U =
+W<T>`) is carried in the type parameter's record and rebuilt with the
+parameter, before the pattern.
+
+Two dependent expression kinds are carried (appended to the schema's
+kind table): a dependent construction `T(a, b)`
+(`CXXUnresolvedConstructExpr`; its written type and argument list, aux
+1 for a list-initialization; a braced argument `T(a, {b})` falls
+back) and a dependent member access `this->x`, `t.f`
+(`CXXDependentScopeMemberExpr`; the base expression and the member
+name, an index into `pnames` since a dependent member name is no
+declaration of the image and is not gated; bits 1 for `->`, and the
+operator location as cold annotation 16). Mem-initializers of a
+constructor of a class template live in sema side tables
+(`pattern_mem_inits`), which the image does not carry: such a
+constructor falls back ("mem-initializers of a constructor in a class
+template"), since instantiating it without them would silently
+default-initialize its bases and members. A non-template class's
+`Base` ctor-initializer names its base by the type as written (`B<int>`,
+an alias), which the writer matches canonically against the base list.
+
+Still falling back after the second slice: member templates and
+templates nested in templates (depth above 0), explicit and partial
+specializations (of a class or a member), friend declarations in a
+class template, dependent array bounds and other types holding an
+expression, non-type template arguments written in a type, default
+non-type template arguments, packs, mem-initializers of class
+template constructors, implicit special members of specializations,
+variable templates, unresolved-lookup expressions (a dependent call
+`g(t)`), a qualified or `template`-keyword dependent member access
+(`B<T>::x`, `t.T::f()`, `t.template get<int>()`), pseudo-destructor
+calls, and every construct the first slice lists.
+
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 4` since S4, 3 for S3, 2 for S2; rejected if
-different). The file
+format word (`IMAGE_VERSION = 5` since WP-1139, 4 for the first S4
+slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
 not part of the fingerprint: a file with an image can be used by an
@@ -2089,6 +2261,12 @@ type    := tag:u8 payload            1 pointer(qref), 2 lref(qref),
                                      14 elabq(keyword:u8, n:u32,
                                        step*n, qref),
                                      15 ttp(decl:u32)   S4
+                                     16 tst(template:u32, n:u32,
+                                       targ*n, under:qref)   S4b
+                                     17 injected(template:u32)   S4b
+                                     18 subst(repl:qref, template:u32,
+                                       index:u32, pack:u32)   S4b
+targ    := 0 qref | 1 qref value:i128   a type, an integral value
 step    := 0 | 1 decl:u32 | 2 qref template:u8   `::`, namespace, type
 decl    := kind:u8 flags:u8 owner:u8 access:u8 name:u32 ctx:u32
            lexical:u32 loc:u32 prev:u32 payload
@@ -2119,8 +2297,10 @@ importer recomputes the name from the class or type. The kind byte is
 enumerator, 7 typedef, 8 alias, 9 label, 10 lifetime-extended
 temporary, 11 class, 12 field, 13 access specifier, 14 implicit
 special member, 15 template type parameter, 16 non-type template
-parameter, 17 template (S4). The flags byte may hold `DEPENDENT_CTX`
-(64) on parameters and patterns of templates (S4). The payloads are:
+parameter, 17 template (S4), 18 specialization reference and 19 member
+reference (S4b, WP-1139). The flags byte may hold `DEPENDENT_CTX`
+(64) on parameters and patterns of templates and on the members of a
+class template's pattern (S4). The payloads are:
 
 - function: the declaration kind (0 function, 1 member function, 2
   constructor, 3 destructor, 4 conversion function; 0 exactly when the
@@ -2165,12 +2345,17 @@ parameter, 17 template (S4). The flags byte may hold `DEPENDENT_CTX`
   assignment, 5 destructor); its context is a complete class that
   precedes it, and the record lies after that class's end;
 - template type parameter (S4): depth u16, index u16, a byte that is 1
-  for `typename` (0 for `class`), and the location of that keyword
-  (`u32::MAX` when none); its name is a `pnames` index or none;
+  for `typename` (0 for `class`), the location of that keyword
+  (`u32::MAX` when none) and the default argument, a `qref` (type 0
+  for none, S4b); its name is a `pnames` index or none;
 - non-type template parameter (S4): type, depth u16, index u16;
-- template (S4): the template kind (0 a function template), the pattern
-  record, the `template`, `<` and `>` locations, the depth u16 and the
-  parameter records (n, then each).
+- template (S4): the template kind (0 a function template, 1 a class
+  template, S4b), the pattern record, the `template`, `<` and `>`
+  locations, the depth u16 and the parameter records (n, then each);
+- specialization reference (S4b): the template record, the completed
+  byte and the arguments (n, then `targ`s);
+- member reference (S4b): the specialization reference record and the
+  pattern member record.
 
 **Bodies (S2, WP-1064).** The four body sections follow the lookup
 table. Every expression and statement record is the AST node's header
@@ -2190,7 +2375,8 @@ statement's attribute list. A declaration reference is a record index,
 parameters of the function records in order), or `u32::MAX - 1` for the
 translation unit. The expression record's `cold` byte says which cold
 annotations follow the slots: 1 end location, 2 written type, 4
-operator location, 8 begin location.
+operator location, 8 begin location, 16 member-access operator
+location (S4b).
 
 The carried kinds (`EXPR_KINDS`, `STMT_KINDS`; append-only tables, the
 record's kind byte is the index):
@@ -2368,8 +2554,9 @@ classes and templates). The follow-ups, in priority order:
    functions), `typeid`/`dynamic_cast`, `std::initializer_list` and
    lambdas;
 3. S4: templates as patterns. **First slice landed: namespace-scope
-   function templates (WP-1066)**, see "Templates as patterns" and its
-   follow-ups;
+   function templates (WP-1066)**; **second slice landed:
+   specialization references and class templates (WP-1139)**, see
+   "Templates as patterns" and its follow-ups;
 4. S5: global module fragments with ODR merging (replacing the name
    gate);
 5. S6: imports, re-exports and partitions;
