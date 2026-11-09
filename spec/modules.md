@@ -1001,13 +1001,19 @@ evaluation happens, which the replay reproduces exactly:
 
 The value's type is not stored. It is the canonical, unqualified type of
 the evaluated expression; the writer checks that it is, and the reader
-takes it from its own replayed copy of the expression. A result is used
-only while the importer reads the unit the file holds
-(`module_current_unit` is that unit's), so the same header text read by
-the importer itself never matches. Outside any instantiation the two
-positions are the whole key (instantiation index 0). Inside one they
-are positions within the pattern, shared by every instantiation of it,
-so the key also names the instantiation.
+takes it from its own replayed copy of the expression. Outside any instantiation the two positions are the whole key
+(instantiation index 0), and a result is used only while the importer
+reads the unit the file holds (`module_current_unit` is that unit's), so
+the same header text read by the importer itself never matches. Inside
+an instantiation the positions are within the pattern, shared by every
+instantiation of it, so the key also names the instantiation (see
+"Instantiation keys"). Such a result is used whenever the importer makes
+that evaluation in that instantiation, first from the table of the unit
+being read and then from any other: a unit's pending instantiations
+(function bodies used outside a constant context, [temp.point]/7) run at
+the importer's end of TU, after the replay. That the importer's
+instantiation gives the same result as the writer's is [temp.point]/7's
+rule, whose violation is ill-formed, no diagnostic required.
 
 #### Instantiation keys (Part 2 item 1, WP-1046)
 

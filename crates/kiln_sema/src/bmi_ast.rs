@@ -48,8 +48,8 @@
 mod inst;
 
 use kiln_ast::consts::{ByteImage, ByteRange, ConstStore, FloatKind, IntBits, NullKind, Scalar};
-use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::ids::ArgListId;
+use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
 use kiln_oven::{EvalContext, EvalFailure, EvalKind};
 use kiln_source::fx::FxHashMap;
@@ -206,7 +206,12 @@ fn loc_key(
 /// The section path index of file `f` (the table's when `table` is set,
 /// else the recorder's, which adds it), or `None` for a file whose
 /// positions a replay does not reproduce.
-fn file_index(bmi: &mut BmiState, table: Option<usize>, sm: &SourceManager, f: FileId) -> Option<u32> {
+fn file_index(
+    bmi: &mut BmiState,
+    table: Option<usize>,
+    sm: &SourceManager,
+    f: FileId,
+) -> Option<u32> {
     if let Some(t) = table {
         let t = &mut bmi.tables[t];
         *t.file_ix.entry(f).or_insert_with(|| {
@@ -415,8 +420,36 @@ impl Sema<'_, '_> {
             return None;
         }
         let unit = self.module_current_unit();
-        let t = self.bmi.tables.iter().position(|t| t.unit == unit)?;
+        let own = self.bmi.tables.iter().position(|t| t.unit == unit);
+        if let Some(t) = own
+            && let Some(v) = self.carried_lookup_in(t, e, ctx, true)
+        {
+            return Some(v);
+        }
+        // Inside an instantiation the key names it, so another unit's
+        // table may hold the result: a unit's pending instantiations run
+        // at the importer's end of TU, after the replay.
+        if !matches!(self.frame_sig(), Ok(Some(_))) {
+            return None;
+        }
+        (0..self.bmi.tables.len())
+            .filter(|&t| Some(t) != own)
+            .find_map(|t| self.carried_lookup_in(t, e, ctx, false))
+    }
+
+    /// The result table `t` carries for evaluating `e` in `ctx`; outside
+    /// the table's own unit (`own` false) only inside an instantiation.
+    fn carried_lookup_in(
+        &mut self,
+        t: usize,
+        e: ExprId,
+        ctx: &EvalContext,
+        own: bool,
+    ) -> Option<ConstValueId> {
         let inst = self.table_inst(t)?;
+        if inst == 0 && !own {
+            return None;
+        }
         let key = self.eval_key(e, ctx, Some(t), inst)?;
         let v = self.bmi.tables[t].map.get(&key)?.clone();
         let id = self.intern_carried(e, &v)?;
@@ -984,7 +1017,8 @@ mod tests {
         put_value(&mut b, &Carried::Bool(true));
         let d = decode(&b).unwrap();
         assert!(d.insts.is_empty());
-        let key = EvalKey { inst: 0, kind: 4, at: LocKey([0, 10, 0, 10]), expr: LocKey([0, 12, 0, 12]) };
+        let key =
+            EvalKey { inst: 0, kind: 4, at: LocKey([0, 10, 0, 10]), expr: LocKey([0, 12, 0, 12]) };
         assert_eq!(d.map.get(&key), Some(&Carried::Bool(true)));
     }
 
@@ -1067,7 +1101,10 @@ mod tests {
         let b = encode(&sample()).bytes;
         let mut trailing = b.clone();
         trailing.push(0);
-        assert_eq!(decode(&trailing), Err(SectionError("carried constants: trailing bytes".into())));
+        assert_eq!(
+            decode(&trailing),
+            Err(SectionError("carried constants: trailing bytes".into()))
+        );
         let mut v3 = b.clone();
         v3[4..8].copy_from_slice(&3u32.to_le_bytes());
         assert_eq!(decode(&v3).unwrap_err(), bad::<()>("unsupported section version").unwrap_err());

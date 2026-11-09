@@ -29,3 +29,10 @@ export template <int N> using FibTag = Tag<Fib<N>::value>;
 export constexpr long use = Fib<20>::value + Fib<18>::value + twice<17>() + Arr<int, 19>::size;
 export constexpr long use2 = vt<16> + twice<3>() + FibTag<15>::value;
 export constexpr bool big20 = Fib<20>::big;
+// Instantiated at the end of the unit (a use outside a constant
+// context), so an importer performs it after the replay.
+template <int N> long runtime_twice() {
+  constexpr long v = fib(N) * 2;
+  return v;
+}
+export inline long rt() { return runtime_twice<18>(); }

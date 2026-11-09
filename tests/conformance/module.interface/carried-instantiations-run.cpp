@@ -7,7 +7,7 @@
 //@ expect: run
 //@ std: c++20
 //@ module: ct=Inputs/ct.cppm
-//@ stdout: 6765 4181 3194 3 988 -4 610 1 | 6765 3 610 55
+//@ stdout: 6765 4181 3194 3 988 -4 610 1 | 6765 3 610 55 5168
 import ct;
 extern "C" int printf(const char *, ...);
 
@@ -24,5 +24,6 @@ int main() {
   if constexpr (Fib<19>::big)
     printf("%ld %ld %ld %d %ld %ld %ld %d | ", Fib<20>::value, Fib<19>::value, twice<17>(),
            Arr<int, 19>::size, vt<16>, twice<3>(), FibTag<15>::value, arr.first());
-  printf("%ld %d %ld %ld\n", n, int(sizeof(arr.data)), decltype(tag15)::value, Fib<10>::value);
+  printf("%ld %d %ld %ld %ld\n", n, int(sizeof(arr.data)), decltype(tag15)::value,
+         Fib<10>::value, rt());
 }

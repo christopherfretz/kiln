@@ -360,8 +360,9 @@ const CT_ERR: &str =
 /// Kind 2 carries the results of evaluations inside the module's own
 /// template instantiations (static data members, static_asserts, local
 /// constexpr variables, `if constexpr`, array bounds, non-type
-/// arguments): a kind-2 importer re-runs none of the expensive ones,
-/// and its diagnostics and IR are those of kind 1.
+/// arguments, and a body instantiated at the unit's end): a kind-2
+/// importer re-runs none of the expensive ones, and its diagnostics and
+/// IR are those of kind 1.
 #[test]
 fn kind2_carries_instantiation_results() {
     let d = scratch("kind2-inst");
@@ -392,9 +393,14 @@ fn kind2_carries_instantiation_results() {
             // Left: the importer's own instantiations (`Fib<5>`, `big`
             // of `Fib<19>`/`Fib<20>`, `Fib<10>`), a few steps each.
             assert!(steps < 1_000, "kind 2 re-evaluated: {lines:?}");
+            // Neither `twice`'s local constexpr variable nor that of
+            // `runtime_twice`, which the importer instantiates at its own
+            // end of TU, after the replay.
             assert!(
-                !module.iter().any(|(l, _)| l.starts_with("ct.cppm:13:")),
-                "twice's local constexpr variable re-evaluated: {lines:?}"
+                !module
+                    .iter()
+                    .any(|(l, _)| l.starts_with("ct.cppm:13:") || l.starts_with("ct.cppm:35:")),
+                "a local constexpr variable re-evaluated: {lines:?}"
             );
         }
         let e = kiln(&d, &["-fsyntax-only", "-fmodule-file=ct=ct.pcm", "err.cpp"]);
