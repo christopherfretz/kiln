@@ -11,8 +11,9 @@ from `__PRETTY_FUNCTION__` of a function template whose template argument
 is a pointer to the member of a fake object. Member counts come from
 structured bindings and aggregate-initialization probes. Only the JSON
 backend is built, using the bundled yyjson. googletest is a dependency
-built with the same compiler. Precompiled headers are off for both
-compilers. The tests' `-ggdb -Werror` are overridden by
+built with the same compiler. Precompiled headers are on for both
+compilers since WP-1023 (below); the tables under Results are from the
+2026-11-07 build with them off. The tests' `-ggdb -Werror` are overridden by
 `-g0 -Wno-error` in `CMAKE_CXX_FLAGS_RELEASE`.
 
 Host: aarch64 Linux, libstdc++ 14, default `-fclang-compat`.
@@ -23,7 +24,9 @@ Date: 2026-11-07.
 under both: `tests/json/test_json_schema{5,7,8}.cpp` and
 `tests/json/test_json_schema_default_vals.cpp`. They use a name `json`
 that the TU does not declare. Because of them,
-`reflect-cpp-json-tests_NOT_BUILT` is the one failing test.
+`reflect-cpp-json-tests_NOT_BUILT` is the one failing test. With
+precompiled headers on (WP-1023), all of them compile and all 484 tests
+pass under both compilers.
 
 ## Commands
 
@@ -40,11 +43,27 @@ cmake --fresh -S .oss/src/reflect_cpp -B . -G "Unix Makefiles" \
   -DCMAKE_CXX_COMPILER=scripts/oss/kiln-cxx -DCMAKE_C_COMPILER=clang-19 \
   -DCMAKE_CXX_STANDARD=20 -DCMAKE_BUILD_TYPE=Release \
   -DREFLECTCPP_BUILD_TESTS=ON -DREFLECTCPP_USE_VCPKG=OFF \
-  -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
   "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g0 -Wno-error"
 nice -n 10 make -k
 ctest --output-on-failure -j 4 --timeout 300
 ```
+
+## Precompiled headers (WP-1023)
+
+The row no longer passes `-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON`, so
+reflect-cpp's `target_precompile_headers` are used. A rebuild of both
+compilers on 2026-11-09, with the harness's kiln++ at the WP-1023 head,
+ran 332 compiler invocations under each: 5 PCH producers
+(`-Xclang -emit-pch`), 266 consumers (`-Xclang -include-pch`) and 61
+plain TUs. All of them succeed under both compilers. The four
+`test_json_schema` TUs of row 4 now compile, since the precompiled
+header declares the `json` they use, so all 5 executables link.
+
+ctest then ran 484 tests. clang++-19 passed all of them. kiln failed
+`json.test_reflector_schema` (row 5), which was fixed. After the fix,
+kiln also passes 484 of 484. The rebuild's wall time was 270 s for kiln
+and 140 s for clang, taken at different host loads. Peak TU RSS was
+256 MB for kiln and 505 MB for clang, both on `src/reflectcpp_json.cpp`.
 
 ## Results
 
@@ -81,11 +100,12 @@ it, by first diagnostic. Later rows were exposed by fixing earlier ones.
 | 1 | `T::template contains<…>()` was rejected as not naming a template when the overload set of `contains` put a non-template overload before the function template (`rfl::Literal`) | 32 | fixed, `e511f3693` (sema) | `tests/conformance/temp.names/template-kw-mixed-overload-set.cpp` |
 | 2 | `make_field<"name">(…)` was ambiguous. A pointer to a string literal was accepted as the argument of the `template <auto p>` overload, so that overload was not dropped beside the class-type NTTP one ([temp.arg.nontype]/6) | 19 | fixed, `b92557498` (sema) | `tests/conformance/temp.arg.nontype/string-literal-typeid-argument.cpp`, `…/string-literal-argument-sfinae-run.cpp` |
 | 3 | **static_assert failure on valid code**: the field name of a 2-D C-array member came out as `c[0][0]`, because `__PRETTY_FUNCTION__` printed `&fake.c` of a const fake object as `&fake.c[0][0]` (`tests/json_c_arrays_and_inheritance/test_c_array_class5.cpp`) | 1 | fixed, `0819b92ef` (ast) | `tests/conformance/dcl.fct.def.general/predefined-pointer-to-array-member-arg-run.cpp` |
-| 4 | `json` is not declared in the TU (an upstream test bug) | 4 | fails under clang too | — |
+| 4 | `json` is not declared in the TU (an upstream test bug) | 4 | fails under clang too; compiles with PCH on, which declares it (WP-1023) | — |
+| 5 | **Wrong output**: `json.test_reflector_schema` got a schema name `rfl__Reflector_Parent___ReflType`, because `__PRETTY_FUNCTION__` printed a member class of a specialization as `rfl::Reflector<Parent>::ReflType`. clang prints the scope's arguments canonical, so fully scoped (`rfl::Reflector<test_reflector_schema::Parent>::ReflType`). The test was first built with PCH on | 1 test | fixed, WP-1023 (ast) | `tests/conformance/dcl.fct.def.general/predefined-nested-class-of-specialization-run.cpp` |
 
-Row 3 is a miscompile of a constant expression. The program was valid
+Rows 3 and 5 are wrong compile-time strings. Row 3 is a miscompile of a constant expression. The program was valid
 and kiln rejected it through the program's own `static_assert`.
 
 ## What remains
 
-Nothing that is kiln's. Row 4 is upstream.
+Nothing that is kiln's. Row 4 is upstream, and PCH hides it.
