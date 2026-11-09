@@ -488,7 +488,17 @@ impl Sema<'_, '_> {
             && params
                 .iter()
                 .zip(&conv_args)
-                .all(|(&p, &a)| self.arg_names_param(p, a) && self.same_nttp_type(p, a))
+                .all(|(&p, &a)| {
+                    // A parameter pack's argument is converted to a pack
+                    // of one expansion (`G<Ts...>`).
+                    let a = match a.view() {
+                        ArgView::Pack(l) if self.ast.types.args(l).len() == 1 => {
+                            self.ast.types.args(l)[0]
+                        }
+                        _ => a,
+                    };
+                    self.arg_names_param(p, a) && self.same_nttp_type(p, a)
+                })
         {
             let d = self
                 .diag(DiagId::sema_partial_spec_args_match_primary, name_loc)
@@ -544,7 +554,7 @@ impl Sema<'_, '_> {
         let loc = range.lo;
         let Some((_, info)) = self.ast.partial_spec_info(p) else { return };
         let tmpl = info.template;
-        if !self.primary_at_least_as_specialized(p, loc) {
+        if !self.not_more_specialized_than_primary(p, loc) {
             return;
         }
         let var = self.kind_of(p) == DeclKind::Var;
@@ -560,22 +570,28 @@ impl Sema<'_, '_> {
     /// [temp.spec.partial.general]/8 (clang's
     /// `checkTemplatePartialSpecialization`): every parameter of partial
     /// specialization `p` is deducible from its arguments, else it can
-    /// never match (`-Wunusable-partial-specialization`).
+    /// never match (`-Wunusable-partial-specialization`). Clang checks a
+    /// member template's partial specialization at its definition and
+    /// again in each instantiation of the enclosing class, so the
+    /// diagnostic is `per_instantiation` (spec/diag.md §7.4).
     pub(crate) fn check_partial_deducible(&mut self, p: DeclId, range: Span) {
         let loc = range.lo;
         let Some((_, info)) = self.ast.partial_spec_info(p) else { return };
         let info = *info;
-        if info.has_pack {
-            return;
-        }
         let list = *self.ast.templates.param_list(info.params);
         let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
         let args: Vec<TemplateArg> = self.ast.types.args(info.canonical).to_vec();
-        if args.iter().any(|&a| self.is_pack_arg(a)) {
-            return;
-        }
+        // Deducing the arguments from themselves leaves exactly the
+        // parameters of no deduced context undeduced. A pack expansion
+        // of `A` is deduced as a whole (`Ts *...` from `Ts *...`), and one
+        // that is not last makes the whole list non-deduced
+        // ([temp.deduct.type]/9: `F<T..., int>` deduces no `T`).
         let mut d = DeducedArgs::new(list.depth, params.len());
-        if self.deduce_args(&args, &args, true, &mut d, loc) != Tdk::Success {
+        d.expansions = true;
+        self.inst.sfinae.borrow_mut().push(crate::templ::stack::SfinaeState::default());
+        let r = self.deduce_args(&args, &args, true, &mut d, loc);
+        let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+        if r != Tdk::Success || failed {
             return;
         }
         let missing: Vec<DeclId> = params
@@ -590,6 +606,7 @@ impl Sema<'_, '_> {
         let var = self.kind_of(p) == DeclKind::Var;
         let mut msg = self
             .diag(DiagId::sema_partial_spec_not_deducible, loc)
+            .per_instantiation()
             .range(range)
             .arg(u32::from(var))
             .arg(u32::from(missing.len() > 1));

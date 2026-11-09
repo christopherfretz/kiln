@@ -266,13 +266,17 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Tdk {
         let ps = self.flatten_args(ps);
+        // [temp.deduct.type]/9: a pack expansion that is not the last
+        // argument makes the entire list a non-deduced context, so nothing
+        // is deduced from it, not even the arguments before it (clang
+        // `hasPackExpansionBeforeEnd`): `template<class T, class... U>
+        // X<T, U..., int>` deduces neither `T` nor `U`.
+        if ps.iter().rev().skip(1).any(|&p| self.is_pack_arg(p)) {
+            return Tdk::Success;
+        }
         let as_ = self.flatten_args(as_);
         for (k, &p) in ps.iter().enumerate() {
             if let Some(pat) = self.arg_expansion_pattern(p) {
-                if k + 1 != ps.len() {
-                    // Not the last: a non-deduced context ([temp.deduct.type]/9).
-                    return Tdk::Success;
-                }
                 let rest = as_.get(k..).unwrap_or(&[]);
                 if !d.expansions && rest.iter().any(|&a| self.is_pack_arg(a)) {
                     // `A` has an expansion too: equal only as written.
