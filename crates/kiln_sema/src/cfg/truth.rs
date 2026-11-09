@@ -58,6 +58,11 @@ impl Sema<'_, '_> {
                 };
             }
         }
+        // clang `evaluateAsBooleanConditionNoCache`'s
+        // `EvaluateAsBooleanCondition`, which calls `EvaluateAsRValue`:
+        // both are time-trace events (spec/driver.md "Time trace").
+        let _cond = self.trace_fold("EvaluateAsBooleanCondition", e);
+        let _rvalue = self.trace_fold("EvaluateAsRValue", e);
         self.try_fold(e).and_then(|v| self.const_truth(v))
     }
 

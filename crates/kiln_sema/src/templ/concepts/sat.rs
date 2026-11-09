@@ -77,6 +77,7 @@ impl Sema<'_, '_> {
     /// Checks the satisfaction of concept-id `c<args>` (`args` converted,
     /// sugared), memoized on the canonical arguments (§8.3).
     pub(crate) fn check_concept(&mut self, c: DeclId, args: ArgListId, loc: Loc) -> SatId {
+        let _t = self.trace_satisfaction(loc);
         let c = self.ast.first(c);
         let key = (c, self.ast.types.canonical_args(args));
         if let Some(&id) = self.inst.concepts.sat_cache.get(&key) {
@@ -122,6 +123,7 @@ impl Sema<'_, '_> {
         if exprs.is_empty() {
             return self.satisfied_id();
         }
+        let _t = self.trace_satisfaction(loc);
         // A redeclared member template: the pattern's constraints with
         // the specialization's levels outside the template's own.
         let remapped;
@@ -166,6 +168,30 @@ impl Sema<'_, '_> {
             self.inst.concepts.sat_cache.insert(key, id);
         }
         id
+    }
+
+    /// clang's `CheckConstraintSatisfaction` time-trace event (spec/driver.md
+    /// "Time trace"; the detail is the template-id's location, cache hits
+    /// included). A concept-id met while the enclosing check substitutes
+    /// its atoms (the innermost frame past atom substitutions is that
+    /// check's) records none:
+    /// clang 22 normalizes it into the enclosing check.
+    fn trace_satisfaction(&self, loc: Loc) -> Option<kiln_source::trace::Scope> {
+        if !kiln_source::trace::enabled()
+            || self
+                .inst
+                .stack
+                .frames
+                .iter()
+                .rev()
+                .find(|f| f.kind != FrameKind::ConstraintSubstitution)
+                .is_some_and(|f| matches!(f.kind, FrameKind::ConstraintsCheck | FrameKind::ConceptCheck))
+        {
+            return None;
+        }
+        Some(kiln_source::trace::Scope::with_detail("CheckConstraintSatisfaction", || {
+            kiln_source::trace::range_detail(self.diags.sm(), loc, loc)
+        }))
     }
 
     /// The satisfaction of the trailing requires-clause of non-template

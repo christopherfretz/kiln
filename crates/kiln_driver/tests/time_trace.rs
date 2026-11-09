@@ -305,6 +305,72 @@ fn no_flag_no_trace() {
     assert!(traces(&d).is_empty());
 }
 
+/// Linking with `-ftime-trace=<dir>` names each input's trace after its
+/// temporary object, as clang (`handleTimeTrace` on the job's result):
+/// `<dir>/<stem>-XXXXXX.json`, six hex digits that differ per input and
+/// per run, so neither two inputs nor two runs overwrite one another.
+#[test]
+fn link_dir_names_each_input() {
+    if !tools() {
+        return;
+    }
+    let d = setup("linkdir");
+    std::fs::write(d.join("u.cpp"), "int u() { return 1; }\n").unwrap();
+    let a = ["-std=c++20", "-ftime-trace=tr", "t.cpp", "u.cpp", "-o", "out/app"];
+    let shape = |n: &str, stem: &str| {
+        let Some(hex) = n.strip_prefix(&format!("tr/{stem}-")).and_then(|r| r.strip_suffix(".json"))
+        else {
+            return false;
+        };
+        hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit())
+    };
+    let clang = have("clang++-19");
+    for cc in [Some(kilnpp()), clang.then(|| PathBuf::from("clang++-19"))].into_iter().flatten() {
+        clear(&d);
+        run(&cc, &d, &a);
+        let first = traces(&d);
+        assert_eq!(first.len(), 2, "{}: {first:?}", cc.display());
+        assert!(first.iter().any(|n| shape(n, "t")), "{}: {first:?}", cc.display());
+        assert!(first.iter().any(|n| shape(n, "u")), "{}: {first:?}", cc.display());
+        for t in &first {
+            check_structure(&Json::parse(&std::fs::read_to_string(d.join(t)).unwrap()).unwrap());
+        }
+        run(&cc, &d, &a);
+        assert_eq!(traces(&d).len(), 4, "{}: a second run kept the names", cc.display());
+    }
+}
+
+/// A trace that cannot be written is clang's `unable to open output
+/// file` error, and the compile still succeeds: the object is written
+/// and the exit status is 0 (clang 19 and 22 `cc1_main` report the
+/// failure after the compile). Also for `-E`.
+#[test]
+fn unwritable_trace_exits_zero() {
+    if !tools() {
+        return;
+    }
+    let d = setup("unwritable");
+    let clang = have("clang++-19");
+    for args in [
+        &["-std=c++20", "-c", "-ftime-trace=nodir/x.json", "t.cpp"][..],
+        &["-std=c++20", "-E", "-ftime-trace=nodir/x.json", "t.cpp", "-o", "out/t.ii"][..],
+    ] {
+        for cc in [Some(kilnpp()), clang.then(|| PathBuf::from("clang++-19"))].into_iter().flatten()
+        {
+            let _ = std::fs::remove_file(d.join("t.o"));
+            let o = run(&cc, &d, args);
+            let err = String::from_utf8_lossy(&o.stderr);
+            assert!(
+                err.contains("error: unable to open output file 'nodir/x.json': "),
+                "{} {args:?}: {err}",
+                cc.display()
+            );
+            let out = if args[1] == "-c" { "t.o" } else { "out/t.ii" };
+            assert!(d.join(out).is_file(), "{} {args:?}: no {out}", cc.display());
+        }
+    }
+}
+
 /// A call the VM unwinds without returning (a failed
 /// `__builtin_constant_p` trial) ends when the next call at its depth
 /// begins, not when its caller returns: the trials' events are disjoint

@@ -421,7 +421,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             "fold_rvalue_int",
             std::panic::Location::caller(),
         );
-        let v = self.fold_rvalue(e)?;
+        // spec/driver.md "Time trace": clang's `EvaluateAsInt` event
+        // (its inner evaluation records no `EvaluateAsRValue`).
+        let _t = self.trace_fold("EvaluateAsInt", e);
+        let v = self.fold_rvalue_untraced(e)?;
         self.const_int(v)
     }
 
@@ -432,6 +435,29 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         #[cfg(feature = "op-stats")]
         let _caller =
             kiln_oven::trial_stats::CallerGuard::new("fold_rvalue", std::panic::Location::caller());
+        let _t = self.trace_fold("EvaluateAsRValue", e);
+        self.fold_rvalue_untraced(e)
+    }
+
+    /// The time-trace span of a fold of `e` that clang traces as `name`
+    /// (`ExprTimeTraceScope`: the detail is `e`'s range,
+    /// `<t.cpp:3:7, col:12>`); one thread-local read when no trace runs
+    /// (spec/driver.md "Time trace").
+    #[inline]
+    pub(crate) fn trace_fold(&self, name: &'static str, e: ExprId) -> kiln_source::trace::Scope {
+        kiln_source::trace::Scope::with_detail(name, || {
+            kiln_source::trace::range_detail(
+                self.diags.sm(),
+                self.ast.begin_loc(e),
+                self.ast.end_loc(e),
+            )
+        })
+    }
+
+    /// [`Sema::fold_rvalue`] without its time-trace event: for a fold
+    /// that is part of a traced evaluation (clang `EvaluateForOverflow`'s
+    /// walk, `EvaluateAsInt`).
+    pub(crate) fn fold_rvalue_untraced(&mut self, e: ExprId) -> Option<ConstValueId> {
         if let Some(v) = self.early_immediate_value(e) {
             return Some(v);
         }

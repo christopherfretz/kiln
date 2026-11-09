@@ -950,8 +950,8 @@ The format is NDJSON (UTF-8, one JSON object per `\n`-terminated line), one
 line per **top-level evaluation** in the order the evaluations finished,
 then exactly one `total` line, which is the last line:
 ```
-{"loc":"a.cpp:12:1","kind":"static_assert","steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"memo_hits":0,"refl_bytes":0,"wall_us":4}
-{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"memo_hits":0,"refl_bytes":0,"wall_us":4,"evaluations":1,"splice_fast":0}}
+{"loc":"a.cpp:12:1","kind":"static_assert","steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"memo_hits":0,"refl_bytes":0,"reclaimed_bytes":24,"wall_us":4}
+{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"memo_hits":0,"refl_bytes":0,"reclaimed_bytes":24,"wall_us":4,"evaluations":1,"splice_fast":0}}
 ```
 A top-level evaluation is one call of an evaluation entry point that the
 language requires (a manifestly constant-evaluated context): it includes
@@ -979,6 +979,7 @@ choice and must not move a budget.
 | `static_bytes` | Bytes of the static space held when the evaluation ended (`Memory::static_top`: live static objects plus the free ranges below the top; "Abstract memory", static reclamation). The space persists across evaluations, so this is the TU's so far. Optional for consumers (absent in reports before WP-322: read as 0). |
 | `memo_hits` | Calls answered from the memo table ("Memoization"); a nested evaluation's hits are its own line's. The one counter that differs with the cache on or off: it observes the cache, it is not a cost. Optional for consumers (absent in reports before WP-470: read as 0). |
 | `refl_bytes` | Bytes this evaluation added to the translation unit's reflection table and content-interned constants ("Reflection bytes" below). Already part of `peak_bytes` and `peak_arena`; reported separately so reflection growth is visible. Optional for consumers (absent in reports before WP-479: read as 0). |
+| `reclaimed_bytes` | Of `bytes`, those freed before the evaluation ended (`delete`, `std::allocator<T>::deallocate`, a returning call's frame objects) and so reusable within it, rather than released with the evaluation ("Transient allocation"; `EvalRecord::reclaimed_bytes`, the `-fconstexpr-profile` `reclaimed`). `reclaimed_bytes <= bytes`. Optional for consumers (absent in reports before WP-1147: read as 0). |
 | `wall_us` | Wall-clock microseconds, rounded down. |
 
 The `total` object has the same counters summed over the evaluations, except

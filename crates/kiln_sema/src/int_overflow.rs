@@ -96,6 +96,10 @@ impl Sema<'_, '_> {
                     | ExprKind::CompoundAssignOperator
                     | ExprKind::UnaryOperator
             ) {
+                // spec/driver.md "Time trace": one `EvaluateForOverflow`
+                // per operator, as clang's (the walk's own folds are
+                // part of it and record nothing).
+                let _t = self.trace_fold("EvaluateForOverflow", e);
                 let _ = self.overflow_value(e, &mut w, false);
                 continue;
             }
@@ -408,7 +412,7 @@ impl Sema<'_, '_> {
             ExprKind::ConditionalOperator => {
                 let c = self.ast.exprs.children(e, &self.ast.lists);
                 let arms = self.ast.exprs.cond_arms(e);
-                if let Some(t) = self.fold_rvalue(c[0]).and_then(|v| self.const_truth(v)) {
+                if let Some(t) = self.fold_rvalue_untraced(c[0]).and_then(|v| self.const_truth(v)) {
                     return self.overflow_value(if t { arms[0] } else { arms[1] }, w, need);
                 }
                 let _ = self.overflow_value(c[0], w, false);
@@ -436,7 +440,8 @@ impl Sema<'_, '_> {
             && !calls
             && !self.overflow_fold_fails(e)
         {
-            return self.fold_rvalue_int(e);
+            let v = self.fold_rvalue_untraced(e)?;
+            return self.const_int(v);
         }
         None
     }
@@ -508,7 +513,7 @@ impl Sema<'_, '_> {
                 }
                 // The right operand is evaluated unless the left one
                 // decides the result.
-                if self.fold_rvalue(l).and_then(|v| self.const_truth(v)) != Some(or) {
+                if self.fold_rvalue_untraced(l).and_then(|v| self.const_truth(v)) != Some(or) {
                     stack.push(r);
                 }
                 continue;

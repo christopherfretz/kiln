@@ -829,8 +829,8 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         if let Some(mut t) = trace {
             t.failed = r.errors > 0;
             if let Err((path, e)) = t.finish(&args.program) {
+                // clang: reported, the exit status unchanged.
                 report_output_error(&diag_opts, &io.stderr, &path, &e);
-                errors += 1;
             }
         }
         output.push_str(&r.output);

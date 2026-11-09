@@ -392,9 +392,12 @@ impl StdCache {
         a.dump_cfg = false;
         a.cfg_stats = false;
         a.memory_report = false;
-        // The importer's profile covers its own evaluations only.
+        // The importer's profile and report cover its own translation
+        // unit only: a BMI's evaluations belong to its build
+        // (spec/driver.md "Constexpr profile").
         a.constexpr.stats = false;
         a.constexpr.profile = None;
+        a.constexpr.report = None;
         a.crash_for_testing = None;
         a.verbose = false;
         let source_text = source.display().to_string();
