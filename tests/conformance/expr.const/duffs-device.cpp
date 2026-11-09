@@ -1,9 +1,8 @@
 // [stmt.switch], [expr.const]: a switch that jumps into a do-while body
 // (Duff's device) is valid in a constant expression since C++14. From
 // clang's SemaCXX/constexpr-duffs-device.cpp. Found by the clang negative-
-// test run (WP-912).
+// test run (WP-912); the Oven support is WP-1144.
 //@ std: c++14
-//@ xfail(kiln): WP-912 follow-up, the evaluator does not support a case label inside a nested loop
 //@ expect: compile-ok
 constexpr void copy(const char *from, unsigned long count, char *to) {
         unsigned long n = (count + 7) / 8;

@@ -228,6 +228,13 @@ COMPILE-TIME EVALUATION:
                           Notes per constant evaluation backtrace (default 10)
   -fconstexpr-report=<file>
                           [kiln] Write a constant evaluation report to <file>
+  -fconstexpr-stats       [kiln] Summarize constant evaluation on stderr
+  -fconstexpr-profile[=<format>|<file>]
+                          [kiln] Profile constant evaluation per function and
+                          evaluation site: text (default) or json on stderr,
+                          or to <file> (json if it ends in .json)
+  -fconstexpr-profile-limit=<n>
+                          [kiln] Rows per profile table (default 20; 0: all)
   -ftemplate-depth=<n>    Template instantiation depth limit (default 1024)
   -ftemplate-backtrace-limit=<n>
                           Notes per instantiation backtrace (default 10)
@@ -429,6 +436,9 @@ mod tests {
             "--llvm-dir=<dir>",
             "-fconstexpr-memory=<size>",
             "-fkiln-instantiation-report[=<format>]",
+            "-fconstexpr-stats",
+            "-fconstexpr-profile[=<format>|<file>]",
+            "-fconstexpr-profile-limit=<n>",
         ] {
             assert!(all.contains(&want), "--help does not list {want}");
         }
@@ -440,6 +450,8 @@ mod tests {
                         "-fclang-compat=",
                         "-fconstexpr-memory=",
                         "-fconstexpr-report=",
+                        "-fconstexpr-stats",
+                        "-fconstexpr-profile",
                     ]
                     .iter()
                     .any(|p| f.starts_with(p))

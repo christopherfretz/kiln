@@ -257,6 +257,33 @@ declaration; one created in a class template specialization while it is
 instantiated (no numbering variable of that class) is numbered in the
 class (clang `Normal` with `inTemplateInstantiation()`; WP-1077,
 `tests/codegen/lambda_in_function_signature.cpp`).
+How many numbers a call takes follows clang's substitutions (clang 19
+and 22 agree; WP-1086). A non-empty explicit template argument list
+(`f<int>(…)`, a partial list, a wholly or partially explicit pack; not
+`f<>`) runs the explicit-argument step on every call, even one that finds
+an existing specialization (clang `SubstituteExplicitTemplateArguments`):
+it substitutes the parameter types and the return type, a leading one
+before the parameters and a trailing one after them, and numbers every
+lambda there. Forming a new specialization substitutes the signature
+once more (`FinishTemplateArgumentDeduction`); a repeat numbers nothing
+in that step. So `ret2<int>()` twice, then `ret2<char>()`, numbers 1-2,
+3, 4-5: the specializations' closures are `UlvE0_` and `UlvE2_`. Kiln's
+step (`templ/deduce_call.rs` `subst_explicit_param_types`) substitutes a
+trailing return type only when the parser recorded a lambda-expression in
+it (`Sema::act_on_trailing_return_type`, `ManglingState.trailing_lambdas`),
+so calls whose signature has none do no extra work; the substitution's
+type is discarded (the trailing return type is a non-deduced context and
+deduction substitutes it again). A partially explicit pack is left
+unsubstituted there (it stays open to deduction). The address of a
+template-id is resolved once per use (one explicit step), where clang
+resolves it again in some conversions (copy-initialization, assignment,
+`static_cast`, argument passing, `auto`), and a non-template that
+matches an address's target stops kiln from deducing the templates,
+which clang still deduces; both are xfail repros (WP-1086 follow-ups,
+`lambda-in-signature-explicit-args-address-two-units-run.cpp`,
+`lambda-in-signature-address-nontemplate-match-two-units-run.cpp`).
+`tests/mangle/lambda_in_signature_explicit_args.cpp` covers every shape
+checked.
 
 ## 4. Captures
 
