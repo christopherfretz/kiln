@@ -236,6 +236,7 @@ impl SyntaxJob<'_> {
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
+        let main_id = pp.main_file();
         let (tu, mut pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
         job.note_image_imports(&pp);
@@ -253,6 +254,12 @@ impl SyntaxJob<'_> {
         drop(pp);
         result.dep_list = deps;
         a.constexpr.write_report(&tu.oven, sm, engine);
+        if a.constexpr.profiling() {
+            engine.flush();
+            let main = main_id.map_or("", |f| sm.file_name(f));
+            let mut err = job.stderr.clone();
+            a.constexpr.write_profile(&tu.oven, &tu.ast, sm, main, engine, &mut err);
+        }
         if !tu.inst_report.is_empty() {
             engine.flush();
             let mut err = job.stderr.clone();

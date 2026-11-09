@@ -47,6 +47,7 @@ mod memptr;
 mod meta;
 mod notes;
 mod reclaim;
+pub mod profile;
 pub mod report;
 mod softfloat;
 mod stats;
@@ -76,7 +77,7 @@ pub use meta::{
     MetaErrorKind, MetaOp, MetaOut, OptionsPlan, OvenFault, Purity, QueryOp, RawOptions, TemplOp,
     TraitOp, ValueOp, info_arg,
 };
-pub use stats::{EvalRecord, EvalStats, EvalTotals};
+pub use stats::{EvalRecord, EvalStats, EvalTotals, JobTotals};
 
 /// Whether this build checks every trial-fold walk against the full path
 /// (the `leaf-check` feature; then the walk saves no thunk compile).
@@ -110,7 +111,7 @@ impl Default for Budget {
 }
 
 /// Why an expression is being evaluated (the `kind` of a report line).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EvalKind {
     /// The condition of a `static_assert`.
     StaticAssert,
@@ -842,7 +843,7 @@ impl Oven {
         self.void_next = false;
         self.addr_next = false;
         if let Some(m) = hook {
-            self.hook_eval_end(bridge, m, Some(e), &ctx, c.steps);
+            self.hook_eval_end(bridge, m, Some(e), &ctx, &c, r.is_ok());
         }
         self.stats.push(EvalRecord {
             loc: ctx.loc,
@@ -857,6 +858,7 @@ impl Oven {
             static_bytes: self.mem.static_top(),
             memo_hits: c.memo_hits,
             refl_bytes: c.refl,
+            reclaimed_bytes: c.reclaimed,
             wall_us: c.wall_us,
             ok: r.is_ok(),
         });
@@ -885,7 +887,7 @@ impl Oven {
         let job = Job::Chars { size, data };
         let (r, c) = self.eval_job(bridge, job, None, false, false, true);
         if let Some(m) = hook {
-            self.hook_eval_end(bridge, m, None, &ctx, c.steps);
+            self.hook_eval_end(bridge, m, None, &ctx, &c, r.is_ok());
         }
         self.stats.push(EvalRecord {
             loc: ctx.loc,
@@ -900,6 +902,7 @@ impl Oven {
             static_bytes: self.mem.static_top(),
             memo_hits: c.memo_hits,
             refl_bytes: c.refl,
+            reclaimed_bytes: c.reclaimed,
             wall_us: c.wall_us,
             ok: r.is_ok(),
         });
@@ -1527,10 +1530,13 @@ impl Oven {
             calls: c.calls,
             allocs: c.allocs,
             refl: c.refl,
+            reclaimed: c.reclaimed,
             frozen: frozen.saturating_sub(inner.frozen),
             memo_hits: memo_hits.saturating_sub(inner.memo_hits),
             wall_us: wall_us.saturating_sub(inner.wall_us),
         };
+        // Every context, recorded or not (`-fconstexpr-stats`' trials).
+        self.stats.note_job(cost.steps, cost.wall_us, r.is_ok());
         (r, cost)
     }
 
@@ -1606,6 +1612,7 @@ impl Oven {
         c.peak = self.mem.peak;
         c.arena = self.mem.arena_peak;
         c.allocs = self.mem.heap_allocs;
+        c.reclaimed = self.mem.allocated.saturating_sub(self.mem.held());
         self.stats.note_static_peak(self.mem.static_peak());
         self.mem.reset();
         self.stack.clear();
@@ -1672,8 +1679,8 @@ impl Oven {
         );
         let sp = self.stack.len();
         let mark = self.mem.mark();
-        let (live0, arena0, steps0) =
-            (self.mem.live_bytes(), self.mem.arena(), self.run.counters.steps);
+        let (live0, arena0, steps0, held0) =
+            (self.mem.live_bytes(), self.mem.arena(), self.run.counters.steps, self.mem.held());
         // Registers above every live frame's.
         let fb = self
             .stack
@@ -1708,6 +1715,10 @@ impl Oven {
             arena: self.mem.arena_peak.saturating_sub(arena0),
             allocs: self.mem.heap_allocs,
             refl: self.run.counters.refl,
+            reclaimed: self
+                .mem
+                .allocated
+                .saturating_sub(self.mem.held().saturating_sub(held0)),
         };
         self.mem.free_heap_of(ctx, &self.types);
         self.mem.release(mark, &self.types);
@@ -1750,6 +1761,7 @@ struct Cost {
     calls: u64,
     allocs: u64,
     refl: u64,
+    reclaimed: u64,
     frozen: u64,
     memo_hits: u64,
     wall_us: u64,

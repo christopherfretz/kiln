@@ -52,6 +52,9 @@ pub(crate) struct Counters {
     pub allocs: u64,
     /// Reflection bytes made (`refl_bytes`; [`crate::mem::Memory::refl`]).
     pub refl: u64,
+    /// Bytes allocated and freed before the context ended
+    /// (`reclaimed_bytes`).
+    pub reclaimed: u64,
 }
 
 /// A memoizable call in progress: what it will be charged.
@@ -544,6 +547,9 @@ impl Oven {
         let exc_base = std::mem::replace(&mut self.exc.base, excs);
         let entry_pc = self.funcs[func as usize].entry as usize;
         let r = self.run_loop(b, func, entry_pc, fb);
+        if self.hooks.calls {
+            self.hook_call_unwind(b, entry);
+        }
         self.cleanups.truncate(clean);
         self.exc.truncate(excs);
         self.exc.base = exc_base;
@@ -719,6 +725,9 @@ impl Oven {
         self.run.cev_warn = false;
         self.mem.checkpoint(mode);
         let r = self.run_loop(b, func, pc0, fb as u32);
+        if self.hooks.calls {
+            self.hook_call_unwind(b, entry);
+        }
         if r.is_ok() {
             self.mem.commit();
         } else {
@@ -2184,6 +2193,9 @@ impl Oven {
                     && active + v.depth <= self.budget.depth
                     && arena + v.arena <= self.mem.limit
                 {
+                    if self.hooks.calls {
+                        self.hook_memo_hit(callee, v.steps, v.peak);
+                    }
                     self.run.counters.steps += v.steps;
                     self.run.counters.calls += v.calls;
                     self.mem.allocated += v.bytes;

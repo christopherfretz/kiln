@@ -11,10 +11,18 @@
 //!   (clang's, 10; 0 shows all);
 //! - `-fconstexpr-report=<path>`: the per-TU NDJSON report (`spec/oven.md`
 //!   "Reporting protocol"), written at the end of each translation unit,
-//!   even when it has errors.
+//!   even when it has errors;
+//! - `-fconstexpr-stats`: the per-TU summary on stderr (`constexpr: ...`
+//!   lines; `spec/oven.md` "Profile counters");
+//! - `-fconstexpr-profile[=json|text|<file>]`: the per-function and
+//!   per-evaluation-site profile, as text or NDJSON (`=json`, or a file
+//!   name ending in `.json`), on stderr or to `<file>`;
+//!   `-fconstexpr-profile-limit=N` rows per table (20; 0: all).
 
+use kiln_ast::Ast;
 use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_oven::Oven;
+use kiln_oven::profile::{Level, RenderOptions};
 use kiln_parse::ConstexprLimits;
 use kiln_source::{Loc, SourceManager, Span};
 
@@ -33,14 +41,55 @@ pub struct ConstexprOpts {
     pub backtrace_limit: Option<usize>,
     /// `-fconstexpr-report=`.
     pub report: Option<String>,
+    /// `-fconstexpr-stats`.
+    pub stats: bool,
+    /// `-fconstexpr-profile[=...]`.
+    pub profile: Option<ProfileOut>,
+    /// `-fconstexpr-profile-limit=`.
+    pub profile_limit: Option<usize>,
 }
+
+/// Where and how `-fconstexpr-profile` writes the profile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProfileOut {
+    /// Text on stderr (no value, `=text`).
+    Text,
+    /// NDJSON on stderr (`=json`).
+    Json,
+    /// To a file (created or truncated per translation unit): NDJSON if
+    /// its name ends in `.json`, else text.
+    File(String),
+}
+
+/// Rows per profile table without `-fconstexpr-profile-limit=`.
+pub const DEFAULT_PROFILE_LIMIT: usize = 20;
 
 impl ConstexprOpts {
     /// Takes `arg` if it is one of the flags: `None` if it is not, else
     /// whether its value was valid.
     pub fn parse_arg(&mut self, arg: &str) -> Option<Result<(), ArgError>> {
+        match arg {
+            "-fconstexpr-stats" => self.stats = true,
+            "-fconstexpr-profile" => self.profile = Some(ProfileOut::Text),
+            _ => {}
+        }
+        if matches!(arg, "-fconstexpr-stats" | "-fconstexpr-profile") {
+            return Some(Ok(()));
+        }
         let (flag, v) = arg.split_once('=')?;
         let ok = match flag {
+            "-fconstexpr-profile" if v.is_empty() => {
+                return Some(Err(ArgError::MissingValue("-fconstexpr-profile=".to_owned())));
+            }
+            "-fconstexpr-profile" => {
+                self.profile = Some(match v {
+                    "text" => ProfileOut::Text,
+                    "json" => ProfileOut::Json,
+                    _ => ProfileOut::File(v.to_owned()),
+                });
+                true
+            }
+            "-fconstexpr-profile-limit" => set(&mut self.profile_limit, v.parse().ok()),
             "-fconstexpr-steps" | "-fconstexpr-ops-limit" => set(&mut self.steps, v.parse().ok()),
             "-fconstexpr-depth" => set(&mut self.depth, v.parse().ok()),
             "-fconstexpr-memory" => set(&mut self.memory, parse_bytes(v)),
@@ -69,7 +118,67 @@ impl ConstexprOpts {
         if let Some(n) = self.backtrace_limit {
             l.backtrace_limit = n;
         }
+        l.profile = if self.profile.is_some() {
+            Level::Calls
+        } else if self.stats {
+            Level::Stats
+        } else {
+            Level::Off
+        };
         l
+    }
+
+    /// Writes the `-fconstexpr-profile` report and the
+    /// `-fconstexpr-stats` summary of `oven` (the end of a translation
+    /// unit whose main file is `main`), in that order, to `err` (the
+    /// profile to its file if it names one; a write failure is an error
+    /// diagnostic).
+    pub fn write_profile(
+        &self,
+        oven: &Oven,
+        ast: &Ast,
+        sm: &SourceManager,
+        main: &str,
+        engine: &DiagEngine<'_>,
+        err: &mut dyn std::io::Write,
+    ) {
+        if let Some(out) = &self.profile
+            && let Some(rows) = oven.profile_rows(ast)
+        {
+            let json = match out {
+                ProfileOut::Text => false,
+                ProfileOut::Json => true,
+                ProfileOut::File(f) => f.ends_with(".json"),
+            };
+            let limit = self.profile_limit.unwrap_or(DEFAULT_PROFILE_LIMIT);
+            let loc = |l: Loc| {
+                let p = sm.presumed_line_col(l)?;
+                Some((p.file_name.to_owned(), p.line, p.col))
+            };
+            let name = main.rsplit('/').next().unwrap_or(main);
+            let text = rows.render(name, RenderOptions { json, limit }, &loc);
+            match out {
+                ProfileOut::File(path) => {
+                    if let Err(e) = std::fs::write(path, text) {
+                        Diag::new(DiagId::drv_cannot_open_output, Span::INVALID)
+                            .arg(path)
+                            .arg(e.to_string())
+                            .emit(engine);
+                    }
+                }
+                _ => {
+                    let _ = err.write_all(text.as_bytes());
+                }
+            }
+        }
+        if self.stats {
+            let _ = err.write_all(oven.stats_summary().as_bytes());
+        }
+    }
+
+    /// Whether [`ConstexprOpts::write_profile`] writes anything.
+    pub fn profiling(&self) -> bool {
+        self.stats || self.profile.is_some()
     }
 
     /// Writes the report of `oven` (the end of a translation unit) if one
