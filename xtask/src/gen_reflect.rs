@@ -905,8 +905,8 @@ fn s8(n: usize, out: &mut String) {
 }
 
 /// S9: N reflection-keyed instantiations, so the cost is template
-/// instantiation, codegen and the mangling of `L u6__info <kind> <entity>
-/// E` (spec/reflection.md §8.3). The types sit in a namespace (the
+/// instantiation, codegen and the mangling of `L Dm <kind> <entity> E`
+/// (the default gcc form; spec/reflection.md §8.3). The types sit in a namespace (the
 /// entity is a nested name) and every fourth also keys a template-id
 /// three deep. Address tables odr-use every specialization.
 fn s9(n: usize, out: &mut String) {

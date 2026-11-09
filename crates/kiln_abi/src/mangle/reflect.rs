@@ -32,10 +32,11 @@ use super::{
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ReflectionMangling {
     /// `L u6__info <reflection> E`: GCC's `<reflection>` under kiln's
-    /// vendor type.
-    #[default]
+    /// vendor type (opt-in, experimental).
     Kiln,
-    /// `L Dm <reflection> E`, link-compatible with g++ 16.
+    /// `L Dm <reflection> E`, link-compatible with g++ 16 (the default,
+    /// WP-909).
+    #[default]
     Gcc,
     /// Prototype (hidden): `L u6__info h <32 hex digits> E`, a 128-bit
     /// hash of the `kiln` form's `<reflection>`.

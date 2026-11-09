@@ -3,7 +3,8 @@
 // (spec/reflection-traits.md): strcmp of the types' Itanium manglings
 // (gcc/cp/method.cc type_order_value), so `int` (i) orders before
 // `unsigned` (j) and `long` (l), a global class `Z` (1Z) before `int`, and
-// `ns::B` (N2ns1BE) before `ns::Aa` (N2ns2AaE) though it spells after it.
+// `ns::B` (N2ns1BE) before `ns::Aa` (N2ns2AaE) though it spells after it,
+// and `std::meta::info` (Dm) before `int`.
 // A binding generator keeps its type sets sorted by type_order, so the
 // order of what it emits follows it.
 //@ expect: compile-ok
@@ -33,5 +34,9 @@ static_assert(type_order(^^ns::Aa, ^^ns::B) > 0);
 static_assert(type_order(^^ns::T1<int>, ^^ns::T1<char>) > 0);
 static_assert(type_order(^^const int, ^^int) < 0);  // Ki < i
 static_assert(type_order(^^int*, ^^int&) < 0);
+// std::meta::info mangles as GCC's Dm (WP-909; it was kiln's u6__info, after
+// i), whatever -fkiln-reflection-mangling says.
+static_assert(type_order(^^info, ^^int) < 0);
+static_assert(type_order(^^info, ^^Z) > 0);
 
 int main() {}
