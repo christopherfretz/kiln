@@ -2603,7 +2603,9 @@ reports a dropped statement or part.
   the enclosing class's. A friend member template whose specifier names
   none of its head's parameters keeps that head as its own
   (`Sema::friend_head_is_own`, class/member_friend.rs) instead of giving
-  it to the qualifier's class template. The deferred friend
+  it to the qualifier's class template; so does an abbreviated friend
+  with no written head (`friend int B<T>::g(C auto, W<T>&);`): its
+  invented head is its own (WP-1145). The deferred friend
   redeclares nothing in the pattern, without a diagnostic, and records
   its qualifier (`friend_qualifiers`), plus the written specifier when
   that is dependent (`friend_qualifier_nns`). Each instantiation declares
@@ -2622,6 +2624,24 @@ reports a dropped statement or part.
   `friend-member-template-of-specialization-run.cpp`,
   `friend-member-deferred-variants-run.cpp`,
   `friend-member-dependent-mismatch-at-instantiation.cpp`).
+  A deferred friend member template matches a member template of the
+  specialization with equivalent constraints ([temp.over.link]/6-7,
+  WP-1145): the member keeps its pattern's constraints, the friend's are
+  substituted, so `fn_corresponds_in` (overload/redecl.rs) compares them
+  through `member_cmp_constraints` while the friend template is
+  instantiated (`instantiating_friend_template`), as it does for an
+  out-of-line member of a specialization. A type-constraint, head or
+  trailing requires-clause, `auto` or `C auto` parameter, and the choice
+  among overloads that differ only in constraints are matched
+  (`temp.friend/qualified-member-template-friend-constrained-run.cpp`).
+  A friend template matching none is diagnosed as above, as g++ does;
+  clang 19 and 22 drop such a friend template at instantiation without a
+  diagnostic (a non-template one they diagnose), so the test is
+  `skip(clang)`
+  (`qualified-member-template-friend-mismatch-at-instantiation.cpp`).
+  Gap: [temp.friend]/9 ("friend declaration with a constraint that
+  depends on an enclosing template parameter must be a definition") is
+  not diagnosed; clang and g++ reject such a non-defining friend.
 - A friend class (`friend class B<T>;`) is substituted and grants access
   (S3C). A dependent friend specialization (`friend struct X<T>;`,
   `friend class Y<T*>;`, `friend class ns::Z<T...>;`) is kept in the
@@ -2707,10 +2727,14 @@ reports a dropped statement or part.
     `f(U)` / `f(U) requires C<U>` the friend names only the member whose
     constraints match, and `template<C U>` does not name `template<class
     U> requires C<U>` (only functionally equivalent). A friend whose
-    levels outside its own head are not all known (the pattern in a class
-    template; a friend instantiated twice, from a member class template)
-    keeps WP-1098's unconstrained comparison
-    (`member_friend_constraints_match`). The abbreviated friend
+    levels outside its own head are not all known (still in a class
+    template's pattern, `MemberFriend::enclosing` unset) keeps WP-1098's
+    unconstrained comparison (`member_friend_constraints_match`); each
+    instantiation of its class registers it again with every level known,
+    and that one is compared, so a friend in a member class template
+    `O<X>::B<Y>` is compared in `O<int>::B<int>` and `O<int>::B<long>`
+    alike (WP-1145, `member-friend-of-member-class-template-run.cpp`;
+    g++ rejects each such friend). The abbreviated friend
     `template<class T> friend int A<T>::f(C auto);` has the invented head
     as its member template head (`open_invented_head_list`).
     The answer is cached per (friend, member). A member of a class
@@ -2768,9 +2792,16 @@ reports a dropped statement or part.
     `dependent-member-friend-{variants,class-template}-run.cpp`,
     `dependent-member-friend-warning{,-clang19}.cpp`,
     `dependent-member-friend-denied.cpp`. A precompiled header or a module
-    replays its source, so its member friends are declared again. Gap:
-    the side table is not recorded in the module declaration image
-    (`-fkiln-bmi-image`, off by default).
+    replays its source, so its member friends are declared again. The
+    module declaration image (`-fkiln-bmi-image`) also replays the source
+    of any unit with a friend declaration ("a friend declaration",
+    bmi_image.rs), so the side table (`requires`, `enclosing`) needs no
+    image record (WP-1145, `member-friend-module-run.cpp`).
+  - Gap (WP-1145 follow-up): a speculative grant also decides a
+    non-dependent requires-expression in the pattern (`requires { x.n; }`
+    in `A<T>::b`), which the replay then reports as a hard access error
+    in the specialization the friend does not name
+    (`member-friend-speculative-requires-expression.cpp`, `xfail(kiln)`).
 - `template<class U> friend struct Y<U*>;` is "partial specialization
   cannot be declared as a friend" ([temp.friend]/9).
 

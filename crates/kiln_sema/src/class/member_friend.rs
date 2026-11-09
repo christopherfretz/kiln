@@ -595,12 +595,12 @@ impl Sema<'_, '_> {
     /// deduced, its member template level kept), the member's with its
     /// class's (`member_constraints`), so both name the member template's
     /// parameters at the same depth. A friend whose levels outside its
-    /// head are not all known is still in its class-template pattern
-    /// (`enclosing` is `None`): it is not compared, and that is final
-    /// because a pattern's grant is only speculative (checks it allows
-    /// are replayed in each specialization, where the friend is matched
-    /// again with every level known, so a member class template
-    /// instantiated twice compares each time, WP-1145).
+    /// head are not all known is still in a class template's pattern
+    /// (`enclosing` is `None`) and is not compared: each instantiation of
+    /// that class registers it again with every level known
+    /// (`instantiate_member_friend`), and that friend is compared, so a
+    /// friend of a member class template instantiated for two arguments
+    /// is compared in each (WP-1145).
     fn member_friend_constraints_match(
         &mut self,
         mf: &MemberFriend,
