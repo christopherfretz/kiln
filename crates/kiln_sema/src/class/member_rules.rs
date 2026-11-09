@@ -201,4 +201,53 @@ impl Sema<'_, '_> {
             && ra != rb
             && (ra == RefQual::None || rb == RefQual::None)
     }
+
+    /// [class.mem.general]/5: a member is not declared twice in the
+    /// member-specification, except that a nested class can be declared
+    /// and later defined. A class or enumeration redeclared without a
+    /// definition in the class that declared it is diagnosed at the name
+    /// with a note at the latest declaration (clang `ext_member_redeclared`
+    /// in `ActOnTag`, an extension warning, `-Wredeclared-class-member`;
+    /// not again at instantiation).
+    pub(crate) fn check_member_tag_redeclared(&mut self, prev: DeclId, loc: Loc) {
+        if !self.inst.stack.is_empty()
+            || self.kind_of(self.ctx) != DeclKind::CXXRecord
+            || self.ast.decls.get(prev).ctx() != Some(self.ctx)
+        {
+            return;
+        }
+        let latest = self.ast.latest(prev);
+        let m = self.diag(DiagId::sema_member_redeclared_tag, loc);
+        let m = self.note_prev(m, latest, false);
+        self.emit(m);
+    }
+
+    /// [dcl.meaning.general]/2, [class.mem.general]/7: a class or
+    /// enumeration declared in a member-specification with a qualified
+    /// name. A qualifier naming the class itself is "extra qualification"
+    /// (clang `err_member_extra_qualification`), any other is
+    /// `err_member_qualification` (clang `diagnoseQualifiedDeclaration`
+    /// from `ActOnTag` / `CheckClassTemplate`), at the name; the
+    /// declaration is still made (clang's recovery). A friend never comes
+    /// here, nor a member explicit specialization.
+    pub(crate) fn check_qualified_member_tag(
+        &mut self,
+        qual: DeclId,
+        name: kiln_source::symbol::Symbol,
+        loc: Loc,
+    ) {
+        if !self.inst.stack.is_empty()
+            || self.templ.member_spec.is_some()
+            || self.kind_of(self.ctx) != DeclKind::CXXRecord
+        {
+            return;
+        }
+        let id = if self.ast.first(qual) == self.ast.first(self.ctx) {
+            DiagId::sema_member_extra_qualification
+        } else {
+            DiagId::sema_member_qualification
+        };
+        let m = self.diag(id, loc).arg(self.ast.symbols().as_str(name).to_owned());
+        self.emit(m);
+    }
 }

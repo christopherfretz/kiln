@@ -302,6 +302,7 @@ sema_member_name_of_class = Error (1) "member '{0}' has the same name as its cla
 sema_member_pointer_conv_via_virtual = Error (3) "conversion from pointer to member of class {0} to pointer to member of class {1} via virtual base {2} is not allowed";
 sema_member_qualification = Error (1) "non-friend class member '{0}' cannot have a qualified name";
 sema_member_redeclared = Error (0) "class member cannot be redeclared";
+sema_member_redeclared_tag = ExtWarn [RedeclaredClassMember] (0) "class member cannot be redeclared";
 sema_member_reference_incomplete = Error (1) "member access into incomplete type {0}";
 sema_member_reference_needs_call = Error (0) "base of member reference is a function; perhaps you meant to call it with no arguments?";
 sema_member_reference_struct_union = Error (1) "member reference base type {0} is not a structure or union";

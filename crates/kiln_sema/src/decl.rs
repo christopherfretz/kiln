@@ -7698,6 +7698,10 @@ impl Sema<'_, '_> {
             if let (Some(p), true) = (prev, is_enum) {
                 self.check_enum_redecl(p, scoped, fixed, nloc, use_);
             }
+            let qualified_member = prev.is_some()
+                && !member_class_spec
+                && !extraneous_head
+                && matches!(use_, TagUse::Definition | TagUse::Declaration);
             if let Some(p) = prev {
                 if member_class_spec && !self.check_member_tag_spec(p, nloc) {
                     // [temp.expl.spec]/7, diagnosed: a definition is
@@ -7744,6 +7748,9 @@ impl Sema<'_, '_> {
                     // instantiates a member class ([temp.explicit]/3).
                     let inst =
                         qualifier.is_some() && self.act_on_explicit_member_class_inst(p, nloc);
+                    if head.is_none() {
+                        self.check_member_tag_redeclared(p, nloc);
+                    }
                     // A class template redeclaration is a new decl with a
                     // `ClassTemplateDecl` of its own (clang
                     // `CheckClassTemplate`; `finish_template_pattern`
@@ -7763,6 +7770,9 @@ impl Sema<'_, '_> {
                 if !self.diagnose_tag_reference_non_tag(keyword, n, &o, nloc) {
                     self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_, head.is_some());
                 }
+            }
+            if qualified_member && let Some(q) = qualifier {
+                self.check_qualified_member_tag(q, n, nloc);
             }
         }
         let ctx = qualifier.unwrap_or_else(|| self.tag_home(self.tag_decl_context(use_)));
