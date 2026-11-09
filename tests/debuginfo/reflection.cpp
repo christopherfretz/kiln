@@ -4,17 +4,19 @@
 // `std::meta::info` value ([temp.arg.nontype], [basic.fundamental]/17)
 // debugs like any other, its `std::meta::info` parameter a pointer-sized
 // base type of that name with no value; a consteval-only variable emits
-// nothing.
+// nothing. In the default gcc reflection mangling (WP-909) gdb demangles
+// `use`'s symbol (`_Z3use5point6HolderILDmtyiEE`) and names the frame
+// `use (`; the kiln form's `u6__info` left it a raw signature.
 //@ expect: debugger
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
-//@ gdb: break reflection.cpp:49
+//@ gdb: break reflection.cpp:51
 //@ gdb: run
 //@ gdb: print p
 //@ gdb: print h
 //@ gdb: ptype p
 //@ gdb: ptype h
-//@ gdb-check: Breakpoint 1, use(
+//@ gdb-check: Breakpoint 1, use (
 //@ gdb-check: $1 = {x = 3, y = 4}
 //@ gdb-check: $2 = {value = 5}
 //@ gdb-check: type = struct point {
@@ -23,7 +25,7 @@
 //@ gdb-check: type = struct Holder<^^int> {
 //@ gdb-check:     int value;
 //@ lldb: settings set target.disable-aslr false
-//@ lldb: breakpoint set --file reflection.cpp --line 49
+//@ lldb: breakpoint set --file reflection.cpp --line 51
 //@ lldb: run
 //@ lldb: frame variable p h sum
 //@ lldb-check: stop reason = breakpoint 1.1

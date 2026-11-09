@@ -440,6 +440,7 @@ impl Cg<'_> {
                 let sig = self.structor_sig(first, Some(v))?;
                 let f = self.declare_fn(&name, first, &sig)?;
                 self.m.func_mut(f).unnamed_addr = UnnamedAddr::Global;
+                self.ann_note_fn(&name, first);
                 f
             }
         };

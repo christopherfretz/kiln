@@ -176,6 +176,12 @@ MODULES:
   -fkiln-module-cache, -fno-kiln-module-cache
                           [kiln] Cache the std and std.compat modules for
                           import std (default on)
+  -fmodules-prune-interval=<seconds>
+                          Check the module cache for unused entries at
+                          most this often (default 7 days; 0: never)
+  -fmodules-prune-after=<seconds>
+                          Remove module cache entries unused this long
+                          (default 31 days; 0: never)
 
 LINKING:
   -fuse-ld=<linker>       Link with <linker> (bfd, gold, lld, ...)
@@ -248,7 +254,7 @@ KILN DEVELOPMENT:
                           [kiln] Expansion statement outlining threshold
   -fkiln-reflection-mangling=<scheme>
                           [kiln] Mangling of reflection template arguments:
-                          kiln (default), gcc or kiln-hashed
+                          gcc (default), kiln or kiln-hashed
   -fkiln-reproducible-time
                           [kiln] Fixed __DATE__, __TIME__ and __TIMESTAMP__
   -fkiln-source-path-style=<style>
@@ -346,6 +352,7 @@ mod tests {
             "style" => "gcc",
             "text" => "main",
             "name" => "ld",
+            "seconds" => "604800",
             _ => panic!("{form}: no sample value for <{ph}>; add one to `sample`"),
         }
     }
@@ -415,6 +422,8 @@ mod tests {
             "-fprebuilt-module-path=<dir>",
             "-fmodules-cache-path=<dir>",
             "-fno-kiln-module-cache",
+            "-fmodules-prune-interval=<seconds>",
+            "-fmodules-prune-after=<seconds>",
             "-fcontract-evaluation-semantic=<semantic>",
             "-fclang-compat=<major>",
             "--llvm-dir=<dir>",

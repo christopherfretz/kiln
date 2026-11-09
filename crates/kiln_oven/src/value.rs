@@ -133,6 +133,9 @@ pub(crate) enum Freeze {
 /// a constant only within its variable's function (P2686R5
 /// [expr.const.init]/2, "constexpr-referenceable"), so it is not
 /// constexpr-representable elsewhere and has no constant form in IR.
+/// A temporary whose lifetime an automatic variable extends is such an
+/// object too; its `LifetimeExtendedTemporary` is returned (it lives in
+/// the extending variable's function).
 pub fn automatic_referent(ast: &Ast, v: ConstValueId) -> Option<DeclId> {
     fn walk(ast: &Ast, v: ConstValueId, depth: u32) -> Option<DeclId> {
         if depth > 64 {
@@ -145,6 +148,13 @@ pub fn automatic_referent(ast: &Ast, v: ConstValueId) -> Option<DeclId> {
                 (is_local_var(ast, d) && !tls).then_some(d)
             }
             Some(Scalar::Pointer { base: PtrBase::Const(c), .. }) => walk(ast, c, depth + 1),
+            Some(Scalar::Pointer { base: PtrBase::Temporary(t), .. }) => {
+                let l = ast.decls.lifetime_extended(t)?;
+                if is_local_var(ast, l.extending) {
+                    return Some(t);
+                }
+                walk(ast, l.value?, depth + 1)
+            }
             Some(_) => None,
             None => ast.consts.relocs(v).iter().find_map(|r| walk(ast, r.value, depth + 1)),
         }
@@ -298,10 +308,13 @@ impl Oven {
             RetKind::Sret(ty) => self.freeze_aggregate(b, ty, v as u64, loc),
         };
         // [expr.const]/5.20: every allocation is deallocated within the
-        // evaluation (checked after the result, as clang).
+        // evaluation (checked after the result, as clang). Codegen's folds
+        // outside a constant context only note it
+        // ([`crate::Oven::set_fold_leaks`]).
+        let leaks_ok = self.fold_leaks && self.run.fold && !self.run.const_context;
         let r = r.and_then(|cv| match self.leak_notes(b) {
-            None => Ok(cv),
-            Some(n) => Err(Freeze::Notes(n)),
+            Some(n) if !leaks_ok => Err(Freeze::Notes(n)),
+            _ => Ok(cv),
         });
         let cv = r.map_err(|f| match f {
             Freeze::Fault(k) => EvalFailure::silent(k),

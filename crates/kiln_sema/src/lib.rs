@@ -734,6 +734,12 @@ pub struct Sema<'a, 'sm> {
     /// clang's `err_typecheck_field_variable_size` there
     /// ([`Sema::type_for_declarator_at`]).
     pub(crate) declarator_field: bool,
+    /// The last [`Sema::type_for_declarator_at`] built its type but left
+    /// the declaration invalid (clang `D.setInvalidType(true)` with "build
+    /// the type anyway": `exception specifications are not allowed beyond
+    /// a single level of indirection`). Taken by the declaration and
+    /// parameter actions right after the call.
+    pub(crate) declarator_distant_exc: bool,
     /// The diagnostic an alias-declaration's type-id left for its name: a
     /// variable length array bound at namespace or class scope folded
     /// (`-Wgnu-folding-constant`) or rejected (clang
@@ -1391,6 +1397,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             deferring_call_ref: false,
             declarator_int_recovery: false,
             declarator_field: false,
+            declarator_distant_exc: false,
             pending_alias_vla: None,
             reverse_using_shadows: false,
             va_list_type: None,

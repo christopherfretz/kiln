@@ -92,7 +92,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fcontract-evaluation-semantic=<ignore\|observe\|enforce\|quick_enforce>` | the contract evaluation semantic of the translation unit (GCC's spelling; `quick-enforce` also accepted; default `enforce`; `ParseOptions::contract_semantic`, `Ast::contract_semantic`); any other value is `unsupported argument`. All four semantics compile to IR and are evaluated in the Oven (spec/contracts.md §6, WP-707) |
 | `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
 | `-f[no-]reflection` | P2996 reflection (WP-267; on by default at C++26 since WP-920, operator decision Q7; the last one wins; below C++26 off whatever the flag, an explicit `-freflection` accepted and ignored; spec/reflection.md §1.4): `^^`, `[:`, `:]` are lexed, and `^^`, type splices and the kiln intrinsics are accepted (spec/sema.md §8a, spec/parse.md §5.2). `__cpp_reflection` is not predefined. Passed to the preprocessor, the parser and sema for `-E`, `-fsyntax-only` and codegen jobs |
-| `-fkiln-reflection-mangling=<kiln\|gcc\|kiln-hashed>` | kiln: how a `std::meta::info` template argument is spelled in a symbol (`kiln_abi::ReflectionMangling`, `CodegenOptions::reflection_mangling`; WP-501). `kiln` (the default): `L u6__info <kind> <operand> E`; `gcc`: GCC 16.1's `L Dm <kind> <operand> E` with `info` itself `Dm`, link-compatible with `g++-16`; `kiln-hashed`: `L u6__info h<32 hex> E`, a prototype. All three give the reflection its reflectee's linkage (spec/reflection.md §8.3). Any other value is `invalid value`; the last one wins. Codegen jobs only |
+| `-fkiln-reflection-mangling=<gcc\|kiln\|kiln-hashed>` | kiln: how a `std::meta::info` template argument is spelled in a symbol (`kiln_abi::ReflectionMangling`, `CodegenOptions::reflection_mangling`; WP-501). `gcc` (the default, WP-909): GCC 16.1's `L Dm <kind> <operand> E` with `info` itself `Dm`, link-compatible with `g++-16`; `kiln`: `L u6__info <kind> <operand> E`; `kiln-hashed`: `L u6__info h<32 hex> E`, a prototype. All three give the reflection its reflectee's linkage (spec/reflection.md §8.3). Any other value is `invalid value`; the last one wins. Codegen jobs only |
 | `-f[no-]coro-aligned-allocation` | aligned coroutine frame allocation (default off, as clang; the last one wins): sema looks up the `std::align_val_t` forms of the frame's `operator new`/`delete` first (spec/sema.md §7.13). Passed to sema for `-fsyntax-only` and codegen jobs |
 | `-fconstexpr-report=<path>` | kiln: write the per-TU NDJSON constant-evaluation report (spec/oven.md "Reporting protocol"); `-fsyntax-only` and every codegen job |
 | `-ftemplate-depth=N`, `-ftemplate-backtrace-limit=N`, `-fkiln-instantiation-report[=all\|json\|text]` | template limits and the instantiation report (spec/sema-templates.md §10.3, §11.3) |
@@ -129,6 +129,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-dI` | with `-E`: the text, plus every `#include`/`#include_next`/`#import` directive as `#include "x.h" /* clang -E -dI */` before the header's text (clang's spelling, WP-920) |
 | `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name names a module file whose header gives the module (spec/modules.md §11.6) |
 | `-fmodules-cache-path=<dir>`, `-f[no-]kiln-module-cache` | where the `std` / `std.compat` module cache lives, and turning it off (see "Module cache") |
+| `-fmodules-prune-interval=<seconds>`, `-fmodules-prune-after=<seconds>` | how often the module cache is pruned, and after how long unused an entry is removed (clang's flags and defaults; 0 turns pruning off; see "Module cache") |
 | `-f[no-]fast-math`, its parts, `-ffp-model=`, `-ffp-contract=`, `-fdenormal-fp-math=`, the FP environment flags | see "Floating-point flags" (WP-806) |
 | `-fstack-protector*`, `-f[no-]unwind-tables`, `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-ffunction-sections`, `-fdata-sections`, `-mtune=`, `-f[no-]wrapv`, `-f[no-]strict-overflow`, `-f[no-]delete-null-pointer-checks`, `-Wp,<list>`, `-Xpreprocessor <arg>`, and the ignored and rejected sets | see "Codegen flags" (WP-605) |
 | `-fcrash-diagnostics[=compiler\|all\|off]`, `-fno-crash-diagnostics` | whether an internal compiler error writes the crash reproducer (default on; `=off` and the negative turn it off, the last wins); see "Internal compiler errors" (WP-911) |
@@ -647,6 +648,8 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
   `--gcc-toolchain=<dir>` (a trailing `/` dropped) if given, else
   `<sysroot>/usr`. Under it, for `lib64` then `lib` and the target's
   candidate triples in clang's order, every `<prefix>/<lib>/gcc/<triple>/<version>`
+  and then `<prefix>/<lib>/gcc-cross/<triple>/<version>` (Debian's cross
+  compilers, such as `libstdc++-14-dev-amd64-cross`; WP-1002)
   whose name parses as a GCC version is a candidate (`-v`: `Found
   candidate GCC installation: <path>` for each, sorted, as clang's
   `CandidateGCCInstallPaths` set); the newest with a `crtbegin.o` and a
@@ -654,8 +657,9 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
   `Selected GCC installation: <path>`). `--gcc-install-dir=<dir>` skips
   the search and names the installation (triple and version are the
   names of `<dir>`'s parent and of `<dir>`). Test:
-  `crates/kiln_driver/tests/driver.rs` `gcc_toolchain_matches_clang` (a
-  fake tree; `-v` compared with clang 19). A build with
+  `crates/kiln_driver/tests/driver.rs` `gcc_toolchain_matches_clang` and
+  `gcc_cross_toolchain_matches_clang` (fake trees; `-v` compared with
+  clang 19). A build with
   `KILN_DEFAULT_GCC=<driver>` in its environment (`toolchain::DEFAULT_GCC`;
   for a distribution whose C++ compiler is a GCC outside `/usr` behind a
   wrapper, such as RHEL's gcc-toolset) instead takes, when there is no
@@ -670,7 +674,10 @@ toolchain's (clang 19 `Linux::AddClangCXXStdlibIncludeArgs` followed by
 `AddClangSystemIncludeArgs`):
 
 1. C++ only, unless `-nostdinc++` or `-nostdlibinc`:
-   - **libstdc++:** `<gcc>/../../../../include/c++/<v>`, then
+   - **libstdc++:** if `<gcc>/../../../../<triple>/include/c++/<v>`
+     exists (a cross GCC's), it, `.../<v>/<triple>` and `.../backward`
+     (clang `addGCCLibStdCxxIncludePaths`'s first form; WP-1002). Else
+     `<gcc>/../../../../include/c++/<v>`, then
      `.../<v>/<triple>` if it exists (Debian multiarch), else
      `.../<v>/<triple>/<multilib>` (listed even when missing, as clang
      `addLibStdCXXIncludePaths`), and `.../backward`. With
@@ -1311,8 +1318,31 @@ files in a per-user cache, built there on first use (spec/modules.md
 - **Dependency output.** An importer's `-MD`/`-MMD` rule lists the
   entry's module file (absolute), the same on a hit and a miss, and
   under `-MD` the entry's stamped inputs ("Dependency output", WP-1051).
-- **No eviction.** Entries for configurations no longer used stay until
-  removed by hand (`rm -r ~/.cache/kiln/modules`; each is about 9 MiB).
+- **Pruning** (WP-1050), as clang prunes its module cache. Every
+  configuration, and every rebuilt kiln, has its own entry of about
+  9 MiB. A compile using the cache checks `<root>/modules.timestamp`
+  after its first lookup: created when missing, else, once older than
+  the interval, updated, and every other entry unused for longer than
+  prune-after is removed (spec/modules.md §11.12 "Pruning" has the
+  rules, and how they differ from clang's).
+
+  | flag | default | meaning |
+  |---|---|---|
+  | `-fmodules-prune-interval=<seconds>` | 604800 (7 days) | at most how often the cache is pruned; 0 never |
+  | `-fmodules-prune-after=<seconds>` | 2678400 (31 days) | an entry unused this long is removed; 0 never |
+
+  The values are clang's `unsigned` (decimal, `0x` hex, `0` octal, at
+  most 4294967295); anything else is clang's `invalid integral value
+  '<v>' in '<arg>'`. An entry's last use is the newest modification time
+  of its files; a hit sets its stamp's to now when it is a day old or
+  older (never the module file's, which dependency files list), where
+  clang reads access times. An entry whose lock another compile holds is
+  kept, as is anything in the root that is not an entry directory (32 hex
+  digits), and links are not followed. Removal failures are silent;
+  under `-v` the cache says `pruning '<root>'`, `removed unused
+  '<entry>'` and `cannot remove '<path>': <reason>`. Removing the cache
+  by hand (`rm -r ~/.cache/kiln/modules`) is always safe when no compile
+  runs.
 - `-print-file-name=libc++.modules.json` prints libc++'s module
   manifest for the libc++ that `-stdlib=libc++` selects
   (`<prefix>/lib/<triple>/` then `<prefix>/lib/`, where
