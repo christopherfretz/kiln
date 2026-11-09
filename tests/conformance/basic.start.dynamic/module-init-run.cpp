@@ -5,14 +5,16 @@
 // `_ZGIW<module>` initializer that runs its imports' initializers first,
 // so every variable is initialized exactly once even though a's
 // initializer is reached from b's, from main's and from its own
-// llvm.global_ctors entry.
+// llvm.global_ctors entry. Each unit is compiled separately (spec/
+// modules.md §11.5), so each object owns its unit's initializer and the
+// importer's object calls those of its imports.
 //@ expect: run
 //@ std: c++20
-//@ args: %{test_dir}/Inputs/mi-seq.cppm %{test_dir}/Inputs/mi-a.cppm %{test_dir}/Inputs/mi-c.cppm %{test_dir}/Inputs/mi-b.cppm
-//@ args: -fmodule-file=seq=%{test_dir}/Inputs/mi-seq.cppm -fmodule-file=a=%{test_dir}/Inputs/mi-a.cppm
-//@ args: -fmodule-file=c=%{test_dir}/Inputs/mi-c.cppm -fmodule-file=b=%{test_dir}/Inputs/mi-b.cppm
+//@ module: seq=Inputs/mi-seq.cppm
+//@ module: a=Inputs/mi-a.cppm
+//@ module: c=Inputs/mi-c.cppm
+//@ module: b=Inputs/mi-b.cppm
 //@ stdout: a<b 1 c<b 1 b<main 1 once 1
-//@ skip(clang): clang needs a two-step --precompile build of the Inputs modules that the harness cannot drive
 import b;
 import a;
 import seq;

@@ -125,6 +125,9 @@ pub(crate) struct BmiState {
     tables: Vec<Table>,
     /// Evaluations answered from a table.
     hits: u64,
+    /// The main unit's declaration image is wanted
+    /// ([`Sema::record_module_image`], spec/modules.md §11.11 "Part 2a").
+    pub(crate) record_image: bool,
 }
 
 impl std::fmt::Debug for BmiState {
@@ -133,6 +136,7 @@ impl std::fmt::Debug for BmiState {
             .field("recording", &self.recorder.as_ref().map(|r| r.entries.len()))
             .field("tables", &self.tables.iter().map(|t| (t.unit, t.map.len())).collect::<Vec<_>>())
             .field("hits", &self.hits)
+            .field("record_image", &self.record_image)
             .finish()
     }
 }
@@ -171,7 +175,7 @@ fn loc_key(
 
 /// A file whose positions are not reproduced by a replay: the predefines,
 /// scratch buffers and other `<...>` buffers.
-fn unstable_file(name: &str) -> bool {
+pub(crate) fn unstable_file(name: &str) -> bool {
     name.is_empty() || name.starts_with('<')
 }
 

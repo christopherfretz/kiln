@@ -23,6 +23,7 @@ mod gcc;
 
 /// Everything a worker needs; shared read-only between threads.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // independent command-line switches
 pub struct Config {
     /// Repository root; compilers run with this as their working directory.
     pub root: PathBuf,
@@ -81,6 +82,9 @@ pub struct Config {
     /// `--bmi-kind`: the module-file variant (`spec/harness.md`
     /// "Module-file kinds"); `None` outside it.
     pub bmi_kind: Option<u8>,
+    /// `--bmi-image`: kiln's two-step module builds and their importers
+    /// also pass `-fkiln-bmi-image`.
+    pub bmi_image: bool,
 }
 
 /// The debug-info sweep's configuration.
@@ -579,11 +583,14 @@ impl Test<'_> {
     }
 
     /// Separate compilation of the module units (spec/modules.md §11.7):
-    /// `run` tests with `module:` or `unit:` lines, and `two-step`; under
-    /// `--bmi-kind`, every test with `module:` lines.
+    /// `run` tests with `module:`, `unit:` or `header-unit:` lines, and
+    /// `two-step`; under `--bmi-kind`, every test with `module:` lines.
     fn two_step(&self, spec: &TestSpec) -> bool {
         spec.two_step
-            || (spec.expect == Expect::Run && (!spec.modules.is_empty() || !spec.units.is_empty()))
+            || (spec.expect == Expect::Run
+                && (!spec.modules.is_empty()
+                    || !spec.units.is_empty()
+                    || !spec.header_units.is_empty()))
             || (self.cfg.bmi_kind.is_some() && !spec.modules.is_empty())
     }
 
@@ -591,18 +598,86 @@ impl Test<'_> {
     /// lines for `program`: kiln builds each from its source unless the
     /// test is [two-step](Self::two_step); otherwise `program` reads the
     /// module file [`Self::build_modules`] wrote.
+    /// A clang also gets `-fmodule-file=<file>` for each `header-unit:`
+    /// first ([`Self::build_header_units`]); kiln builds header units
+    /// in-process and gets nothing for them.
     fn module_flags(&self, program: &Path, spec: &TestSpec, n: usize) -> Vec<std::ffi::OsString> {
-        let source = self.is_kiln(program) && !self.two_step(spec);
+        let kiln = self.is_kiln(program);
+        let source = kiln && !self.two_step(spec);
         let oracle = program != self.cfg.compiler;
-        spec.modules[..n]
-            .iter()
-            .map(|(name, path)| {
+        let header_units = if kiln { 0 } else { spec.header_units.len() };
+        let hu = (0..header_units).map(|i| {
+            let mut f = std::ffi::OsString::from("-fmodule-file=");
+            f.push(self.header_unit_bmi(i, oracle));
+            f
+        });
+        let mut flags: Vec<std::ffi::OsString> = hu
+            .chain(spec.modules[..n].iter().map(|(name, path)| {
                 let file = if source { self.module_source(path) } else { self.bmi(name, oracle) };
                 let mut f = std::ffi::OsString::from(format!("-fmodule-file={name}="));
                 f.push(file);
                 f
-            })
-            .collect()
+            }))
+            .collect();
+        if self.cfg.bmi_image && !oracle && !source && kiln {
+            flags.push("-fkiln-bmi-image".into());
+        }
+        flags
+    }
+
+    /// The module file of `header-unit:` line `i` (the oracle's apart).
+    fn header_unit_bmi(&self, i: usize, oracle: bool) -> PathBuf {
+        self.dir.join(if oracle { format!("oracle-hu{i}.pcm") } else { format!("hu{i}.pcm") })
+    }
+
+    /// Builds each `header-unit:` into a module file for a clang
+    /// `program`: `<program> -std=<std> <args...> -fmodule-header=user -x
+    /// c++-user-header <path> -o <file>` (a quoted path, relative to the
+    /// test's directory), or `-fmodule-header=system -x c++-system-header
+    /// <name>` (an angled name). Kiln builds nothing: it builds a header
+    /// unit in-process at its import (spec/modules.md §3; header-unit
+    /// module files are §11.10). A header unit the compiler under test
+    /// rejects fails the test; one the oracle rejects makes it broken.
+    fn build_header_units(&mut self, program: &Path, spec: &TestSpec) -> Result<(), Problem> {
+        if spec.header_units.is_empty() || self.is_kiln(program) {
+            return Ok(());
+        }
+        self.scratch()?;
+        let oracle = program != self.cfg.compiler;
+        let who = if oracle { "the oracle" } else { "the compiler" };
+        for (i, hu) in spec.header_units.iter().enumerate() {
+            let mut c = Command::new(program);
+            crate::util::isolate_caches(&mut c);
+            c.current_dir(&self.cfg.root);
+            c.arg(format!("-std={}", spec.std));
+            c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+            if hu.system {
+                c.args(["-fmodule-header=system", "-x", "c++-system-header", &hu.name]);
+            } else {
+                let src = self.module_source(Path::new(&hu.name));
+                if !src.is_file() {
+                    return Err(Problem::Broken(format!(
+                        "`header-unit: \"{}\"`: no such file {}",
+                        hu.name,
+                        src.display()
+                    )));
+                }
+                c.args(["-fmodule-header=user", "-x", "c++-user-header"]).arg(&src);
+            }
+            c.arg("-o").arg(self.header_unit_bmi(i, oracle));
+            let o = self.exec(who, &c, self.cfg.compile_timeout)?;
+            if !o.success() {
+                let (open, close) = if hu.system { ('<', '>') } else { ('"', '"') };
+                let msg = format!(
+                    "{who} could not build header unit {open}{}{close} ({})\n{}",
+                    hu.name,
+                    o.describe_end(),
+                    indent(&o.stderr_str())
+                );
+                return Err(if oracle { Problem::Broken(msg) } else { Problem::Fail(msg) });
+            }
+        }
+        Ok(())
     }
 
     /// The module file of unit `name` (the oracle's apart).
@@ -630,6 +705,7 @@ impl Test<'_> {
         spec: &TestSpec,
         objects: bool,
     ) -> Result<Vec<PathBuf>, Problem> {
+        self.build_header_units(program, spec)?;
         if spec.modules.is_empty() || (self.is_kiln(program) && !self.two_step(spec)) {
             return Ok(Vec::new());
         }
@@ -1959,6 +2035,9 @@ fn unsupported_by(spec: &TestSpec, kind: CompilerKind) -> Option<String> {
     };
     if (!spec.modules.is_empty() || !spec.units.is_empty()) && !kind.speaks_clang() {
         return needs("module:", "kiln or clang");
+    }
+    if !spec.header_units.is_empty() && !kind.speaks_clang() {
+        return needs("header-unit:", "kiln or clang");
     }
     if spec.pch.is_some() && !kind.speaks_clang() {
         return needs("pch:", "kiln or clang");

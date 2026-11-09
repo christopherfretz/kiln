@@ -8,8 +8,8 @@
 // (module.reach/missing-import.cpp).
 //@ expect: compile-fail
 //@ std: c++20
-//@ args: -fmodule-file=m=%{test_dir}/Inputs/m.cppm
-//@ skip(clang): clang needs a two-step --precompile build of Inputs/m.cppm that the harness cannot drive
+//@ module: m=Inputs/m.cppm
+//@ requires: clang>=22
 //@ strict-diags
 //@ diag: 22:9 error "use of undeclared identifier 'secret'"
 //@ diag: 23:9 error "declaration of 'Hidden' must be imported from module 'm' before it is required"

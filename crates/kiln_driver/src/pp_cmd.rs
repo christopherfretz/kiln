@@ -355,6 +355,7 @@ impl Job<'_> {
             fingerprint,
             record: !a.scan_deps && (a.precompile || a.module_output.is_some()),
             scan: a.scan_deps,
+            image: a.bmi_image,
         })
     }
 
@@ -565,6 +566,7 @@ impl Job<'_> {
         pp: &mut Preprocessor<'_, '_>,
         engine: &DiagEngine<'_>,
         carried: Option<&kiln_sema::CarriedConstants>,
+        image: Option<&kiln_sema::ModuleImage>,
     ) -> bool {
         let a = self.args;
         let Some(out) = self.module_output_path() else { return true };
@@ -589,19 +591,45 @@ impl Job<'_> {
             }
             return true;
         };
-        let kind = match carried {
-            Some(c) if !c.bytes.is_empty() => {
-                capsule
-                    .sections
-                    .push(bmi::Section { tag: bmi::SECTION_CONSTS, bytes: c.bytes.clone() });
+        let consts = carried.filter(|c| !c.bytes.is_empty());
+        let decl_image = image.filter(|i| i.fallback.is_none() && !i.bytes.is_empty());
+        if let Some(c) = consts {
+            capsule
+                .sections
+                .push(bmi::Section { tag: bmi::SECTION_CONSTS, bytes: c.bytes.clone() });
+        }
+        if let Some(i) = decl_image {
+            capsule.sections.push(bmi::Section { tag: bmi::SECTION_IMAGE, bytes: i.bytes.clone() });
+        }
+        let skip = |c: &kiln_sema::CarriedConstants| {
+            c.first_skip.map(|w| format!(" (first not carried: {w})")).unwrap_or_default()
+        };
+        let mut kind = match carried {
+            None => "kind 1, as -fkiln-bmi-kind=1 requests".to_owned(),
+            Some(c) if consts.is_some() => {
                 format!("kind 2, carrying {} constant results", c.carried)
             }
-            Some(c) => format!(
-                "kind 1: no constant result to carry{}",
-                c.first_skip.map(|w| format!(" (first not carried: {w})")).unwrap_or_default()
-            ),
-            None => "kind 1, as -fkiln-bmi-kind=1 requests".to_owned(),
+            Some(c) if decl_image.is_some() => {
+                format!("kind 2, carrying no constant result{}", skip(c))
+            }
+            Some(c) => format!("kind 1: no constant result to carry{}", skip(c)),
         };
+        // spec/modules.md §11.11 "Part 2a": the image, or why there is none.
+        match image {
+            Some(i) if i.fallback.is_none() => {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut kind,
+                    format_args!(", with a declaration image of {} declarations", i.decls),
+                );
+            }
+            Some(i) => {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut kind,
+                    format_args!(" (no declaration image: {})", i.fallback.unwrap_or("empty")),
+                );
+            }
+            None => {}
+        }
         if a.verbose {
             // A `-v` line, never a warning (spec/modules.md §11.11
             // "Fallback").
@@ -709,7 +737,7 @@ pub(crate) fn finish_deps(
 /// `__sigsetjmp`, `__finite`, `__exp10`, Apple libm's `__sinpi` family,
 /// `std::__addressof`, `<ia32intrin.h>`'s `__rdtsc`). Kiln calls the
 /// declared function, so they keep clang's answer. Sorted.
-const RESERVED_LIBRARY_BUILTINS: &[&str] = &[
+pub const RESERVED_LIBRARY_BUILTINS: &[&str] = &[
     "__addressof",
     "__cospi",
     "__cospif",
@@ -724,6 +752,16 @@ const RESERVED_LIBRARY_BUILTINS: &[&str] = &[
     "__sinpif",
     "__tanpi",
     "__tanpif",
+];
+
+/// WP-1057: the `__builtin_` keywords of clang's `__has_builtin` table
+/// kiln's parser does not implement, so a use is a "use of undeclared
+/// identifier": `__has_builtin` answers 0 for them. Sorted.
+pub const UNPARSED_KEYWORD_BUILTINS: &[&str] = &[
+    "__builtin_available",
+    "__builtin_omp_required_simd_align",
+    "__builtin_ptrauth_type_discriminator",
+    "__builtin_vectorelements",
 ];
 
 /// clang 19's feature answers with kiln's builtin staging applied
@@ -756,12 +794,16 @@ impl StagedFeatures {
     }
 
     /// Whether `name`, which clang answers `__has_builtin` for, is a
-    /// builtin kiln neither handles (a keyword, a preprocessor builtin, a
-    /// staged sema builtin, a declared function) nor lowers. A library
+    /// builtin kiln neither handles (a keyword other than
+    /// [`UNPARSED_KEYWORD_BUILTINS`], a preprocessor builtin, a staged
+    /// sema builtin, a declared function) nor lowers. A library
     /// builtin outside the reserved `__` namespace (`malloc`,
     /// `std::move`, `_Exit`) is a call to the function its header
     /// declares, so it keeps clang's answer.
     fn unavailable_builtin(&self, name: &str) -> bool {
+        if UNPARSED_KEYWORD_BUILTINS.binary_search(&name).is_ok() {
+            return true;
+        }
         let compat = self.0.compat().major();
         let declared = kiln_ast::decl::builtin::by_name_at(name, compat).is_some()
             || kiln_ast::decl::builtin::lib_by_name(name).is_some();

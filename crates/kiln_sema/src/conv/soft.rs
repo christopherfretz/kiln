@@ -323,7 +323,8 @@ pub(crate) fn round_rational(
     #[allow(clippy::cast_possible_wrap, reason = "bit lengths are small")]
     let (ln, ld) = (num.bit_len() as i64, den.bit_len() as i64);
     // value in [2^(ln-ld-1+scale), 2^(ln-ld+1+scale)).
-    let top = ln - ld + scale; // the leading bit's exponent is top - 1 or top
+    // `scale` saturates for a huge literal exponent (`0x1p99999999999999999999`).
+    let top = (ln - ld).saturating_add(scale); // the leading bit's exponent is top - 1 or top
     if top - 1 > emax + 1 {
         return Rounded {
             bits: infinity(kind, neg),

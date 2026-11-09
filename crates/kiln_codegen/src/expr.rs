@@ -113,7 +113,9 @@ impl Cg<'_> {
     /// A floating constant `x` (±1.0 and 0.0 only) of type `ty`.
     pub(crate) fn fconst(&mut self, ty: LTy, x: f64) -> V {
         if let Some((et, _, _)) = self.m.types.vector_info(ty) {
-            let V::C(c) = self.fconst(et, x) else { unreachable!("constant") };
+            let V::C(c) = self.fconst(et, x) else {
+                unreachable!("fconst of a scalar is a constant")
+            };
             return self.const_splat_of(ty, c);
         }
         V::C(self.m.const_float(ty, x))
@@ -125,9 +127,9 @@ impl Cg<'_> {
     pub(crate) fn const_splat_of(&mut self, ty: LTy, c: Value) -> V {
         let Some((_, n, scalable)) = self.m.types.vector_info(ty) else { return V::C(c) };
         V::C(if scalable {
-            self.m.const_splat(ty, c).expect("scalable splat of its element type")
+            self.m.const_splat(ty, c).expect("lane of the element type")
         } else {
-            self.m.const_vector(&vec![c; n as usize]).expect("vector of its element type")
+            self.m.const_vector(&vec![c; n as usize]).expect("lanes of the element type")
         })
     }
 
@@ -198,9 +200,15 @@ impl Cg<'_> {
         let q = n.ty();
         Ok(Some(match n.kind() {
             ExprKind::ParenExpr => return self.emit_scalar_opt(ast.exprs.operand(e)),
+            // GNU `__extension__` of a possibly `void` operand (arm_neon.h
+            // `__extension__ ({ ... })` statement macros).
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Extension => {
+                return self.emit_scalar_opt(ast.exprs.operand(e));
+            }
             // clang `getChosenSubExpr`: only the chosen operand is emitted.
             ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
-                return self.emit_scalar_opt(ast.exprs.choose_chosen(e).expect("guarded"));
+                return self
+                    .emit_scalar_opt(ast.exprs.choose_chosen(e).expect("match guard checked it"));
             }
             // clang `ScalarExprEmitter::VisitCompoundLiteralExpr`: a load
             // of the literal's temporary.
@@ -265,12 +273,12 @@ impl Cg<'_> {
                     let t = self.lty(q);
                     self.icn(t, i128::from(v))
                 } else {
-                    let c = ast.exprs.literal_const(e).expect("wide literal");
+                    let c = ast.exprs.literal_const(e).expect("Sema stored the value");
                     V::C(self.const_scalar_value(c, q)?)
                 }
             }
             ExprKind::FloatingLiteral => {
-                let c = ast.exprs.literal_const(e).expect("float literal");
+                let c = ast.exprs.literal_const(e).expect("Sema stored the value");
                 V::C(self.const_scalar_value(c, q)?)
             }
             ExprKind::CharacterLiteral => {
@@ -411,7 +419,7 @@ impl Cg<'_> {
                 if inits.is_empty() {
                     return Ok(Some(V::C(self.m.const_zero(t))));
                 }
-                let (et, n, _) = self.m.types.vector_info(t).expect("vector");
+                let (et, n, _) = self.m.types.vector_info(t).expect("match checked: vector type");
                 let mut v = V::C(self.m.const_poison(t));
                 let mut cur = 0u32;
                 for x in inits {
@@ -464,7 +472,7 @@ impl Cg<'_> {
             // clang `ScalarExprEmitter::VisitArraySubscriptExpr`: a vector
             // subscript is the vector's value and `extractelement`.
             ExprKind::ArraySubscriptExpr if self.vec_subscript(e).is_some() => {
-                let (base, idx) = self.vec_subscript(e).expect("checked");
+                let (base, idx) = self.vec_subscript(e).expect("match guard checked it");
                 // A `const` vector variable folds (`tryEmitAsConstant`,
                 // WP-453): no load, the lane is extracted from the constant.
                 let v = match self.folds.get(base) {
@@ -1093,7 +1101,7 @@ impl Cg<'_> {
             // [expr.static.cast]/11: the object is of the derived type.
             if self.ub_type_check_on() {
                 let loc = self.ub_expr_loc(e);
-                let dq = ast.types.pointee(q).expect("checked");
+                let dq = ast.types.pointee(q).expect("Sema: pointer type");
                 self.ub_type_check(v, TypeCheck::new(Tck::DowncastPointer, loc, dq))?;
             }
             return Ok(v);
@@ -1303,7 +1311,7 @@ impl Cg<'_> {
         Ok(if self.is_bool(q) && inc {
             V::C(self.m.const_bool(true))
         } else if ast.types.is_pointer(q) {
-            let pq = ast.types.pointee(q).expect("pointee");
+            let pq = ast.types.pointee(q).expect("Sema: pointer type");
             if let Some((n, et)) = self.vla_inc_step(pq, inc)? {
                 let loc = self.ub_expr_loc(e);
                 return self.gep_checked(et, old, vec![n], inc, false, !inc, loc);
@@ -1477,7 +1485,7 @@ impl Cg<'_> {
                 let a = self.cast(CastOp::PtrToInt, l, LTy::I64);
                 let b = self.cast(CastOp::PtrToInt, r, LTy::I64);
                 let d = self.bin(BinOp::Sub, Flags::NONE, a, b);
-                let pq = ast.types.pointee(lq).expect("pointee");
+                let pq = ast.types.pointee(lq).expect("Sema: pointer type");
                 if self.is_vla(pq) {
                     let c = self.vla_bytes(pq)?;
                     return Ok(self.bin(BinOp::SDiv, Flags::EXACT, d, c));
@@ -1507,7 +1515,7 @@ impl Cg<'_> {
                     let (pe, ie) = if lp || sub { (le, re) } else { (re, le) };
                     self.ub_bounds(e, pe, idx, ast.exprs.get(ie).ty(), false)?;
                 }
-                let et = ast.types.pointee(pq).expect("pointee");
+                let et = ast.types.pointee(pq).expect("Sema: pointer type");
                 if let Some((idx, ety)) = self.vla_pointer_step(et, idx)? {
                     let loc = self.ub_expr_loc(e);
                     return self.gep_checked(ety, p, vec![idx], !is && !sub, is, sub, loc);
@@ -1667,14 +1675,16 @@ impl Cg<'_> {
 
     fn build_fmuladd(&mut self, mul: V, addend: V, neg_mul: bool, neg_add: bool) -> V {
         let mi = Fir::last_inst(mul);
-        let Op::Bin { l: a, r: b, .. } = *self.f.fir.op(mi) else { unreachable!("fmul") };
+        let Op::Bin { l: a, r: b, .. } = *self.f.fir.op(mi) else {
+            unreachable!("try_fmuladd checked: an fmul")
+        };
         let a = if neg_mul { self.fneg(a) } else { a };
         let addend = if neg_add { self.fneg(addend) } else { addend };
         let ty = self.f.fir.ty(&self.m, addend);
         let name = kiln_llvm::intrinsics::overloaded_name(&self.m, "llvm.fmuladd", &[ty]);
         let fn_ty = self.m.types.function(ty, &[ty, ty, ty], false);
-        let f = kiln_llvm::intrinsics::intrinsic(&mut self.m, &name, fn_ty)
-            .expect("fmuladd declaration");
+        let f =
+            kiln_llvm::intrinsics::intrinsic(&mut self.m, &name, fn_ty).expect("known intrinsic");
         let mut attrs = vec![
             Attr::Flag(AttrKind::NoCallback),
             Attr::Flag(AttrKind::NoFree),
@@ -1765,7 +1775,7 @@ impl Cg<'_> {
         self.emit_block(rhs, false);
         self.prof_inc(Key::Expr(e));
         let v = self.cond_eval(start, |cg| cg.eval_bool(r))?;
-        let rb = self.f.fir.cur().expect("insert point");
+        let rb = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         if self.instr_regions() && pgo::is_instrumented_condition(ast, r) {
             let cnt = self.f.fir.create_block();
             if and {
@@ -2035,7 +2045,7 @@ impl Cg<'_> {
         self.emit_block(lb, false);
         self.prof_inc(Key::Expr(e));
         let x = self.cond_eval(start, |cg| cg.emit_arm(a))?;
-        let lb = self.f.fir.cur().expect("insert point");
+        let lb = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.br(cont);
         self.emit_block(rb, false);
         let mut y = self.cond_eval(start, |cg| cg.emit_arm(b))?;
@@ -2051,7 +2061,7 @@ impl Cg<'_> {
                 y = Some(self.cast(op, yv, xt));
             }
         }
-        let rb = self.f.fir.cur().expect("insert point");
+        let rb = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.emit_block(cont, false);
         Ok(match (x, y) {
             (Some(x), Some(y)) => {
@@ -2430,7 +2440,9 @@ impl Cg<'_> {
             let (_, a) = self.pointee_layout(referee);
             if a > 1 {
                 let c = self.m.const_int(LTy::I64, i128::from(a));
-                let Ok(m) = self.m.md_const(c) else { unreachable!("integer metadata") };
+                let Ok(m) = self.m.md_const(c) else {
+                    unreachable!("an integer is valid metadata")
+                };
                 let md = self.m.md_tuple(&[Some(m)]);
                 let k = self.m.md_kind("align");
                 self.f.fir.add_md(i, k, md);
@@ -2461,7 +2473,7 @@ impl Cg<'_> {
         match n.kind() {
             ExprKind::ParenExpr => self.emit_lvalue(ast.exprs.operand(e)),
             ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
-                self.emit_lvalue(ast.exprs.choose_chosen(e).expect("guarded"))
+                self.emit_lvalue(ast.exprs.choose_chosen(e).expect("match guard checked it"))
             }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
                 Some(d) => {
@@ -2853,13 +2865,13 @@ impl Cg<'_> {
         self.emit_block(lb, false);
         self.prof_inc(Key::Expr(e));
         let x = self.cond_eval(start, |cg| cg.lvalue_or_throw(a))?;
-        let lb = self.f.fir.cur().expect("insert point");
+        let lb = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         if x.is_some() {
             self.br(cont);
         }
         self.emit_block(rb, false);
         let y = self.cond_eval(start, |cg| cg.lvalue_or_throw(b))?;
-        let rb = self.f.fir.cur().expect("insert point");
+        let rb = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.emit_block(cont, false);
         let (x, y) = match (x, y) {
             (Some(x), Some(y)) => (x, y),
@@ -2940,7 +2952,7 @@ impl Cg<'_> {
         let (base_addr, btb) = if n.has(ExprFlags::ARROW) {
             // clang `EmitMemberExpr`: `EmitPointerWithAlignment` of the
             // base (`this` included: a class's pointer alignment).
-            let pq = ast.types.pointee(ast.exprs.get(base).ty()).expect("pointee");
+            let pq = ast.types.pointee(ast.exprs.get(base).ty()).expect("Sema: pointer type");
             let (p, align) = self.ptr_align(base)?;
             if self.ub_type_check_on() {
                 let skip = self.ub_member_skips(base);
@@ -2978,7 +2990,7 @@ impl Cg<'_> {
         q: QualType,
     ) -> R<LV> {
         let ast = self.ast;
-        let rd = ast.decls.get(field).ctx().expect("field parent");
+        let rd = ast.decls.get(field).ctx().expect("Sema: a field is a member");
         let rty = self.record_ty(rd);
         let (is_union, idx, bf) = {
             let r = self.tys.record(rd);
@@ -3064,7 +3076,7 @@ impl Cg<'_> {
     /// member's own slot), with the default access path.
     fn field_slot(&mut self, base: Addr, field: DeclId, q: QualType) -> R<LV> {
         let ast = self.ast;
-        let rd = ast.decls.get(field).ctx().expect("field parent");
+        let rd = ast.decls.get(field).ctx().expect("Sema: a field is a member");
         let rty = self.record_ty(rd);
         let (is_union, idx) = {
             let r = self.tys.record(rd);
@@ -3386,7 +3398,7 @@ impl Cg<'_> {
             let iv = self.int_cast(iv, LTy::I64, self.is_signed(iq));
             (Addr { v: p, ty: ety, align }, vec![iv])
         };
-        let last = *indices.last().expect("index");
+        let last = *indices.last().expect("a GEP has an index");
         let align = match self.cint(last) {
             Some((_, x, _)) => min_align(addr.align, (x as u64).wrapping_mul(esz)),
             None => min_align(addr.align, esz),
@@ -3488,6 +3500,13 @@ impl Cg<'_> {
         if matches!(ast.exprs.get(e).kind(), ExprKind::CoawaitExpr | ExprKind::CoyieldExpr) {
             self.emit_coawait(e, crate::coro::Want::Ignored)?;
             return Ok(());
+        }
+        // GNU `__extension__` is transparent: its operand is the ignored
+        // expression (`__extension__ ({ ... });`, arm_neon.h store macros).
+        if ast.exprs.get(e).kind() == ExprKind::UnaryOperator
+            && ast.exprs.unary_op(e) == UnaryOp::Extension
+        {
+            return self.emit_ignored(ast.exprs.operand(e));
         }
         if !self.is_glvalue(e) {
             if self.is_aggregate(q) {
@@ -3656,14 +3675,14 @@ impl Cg<'_> {
                 Some((f, _)) => *f,
                 None => self.get_fn(d)?,
             };
-            let fty = ast.decls.get(d).ty().expect("function type");
+            let fty = ast.decls.get(d).ty().expect("Sema: a function has a type");
             (V::C(Value::func(f)), fty, mangle::is_extern_c(ast, ast.first(d)), Some(f))
         } else {
             let p = self.emit_scalar(callee_e)?;
             let pq = ast.exprs.get(callee_e).ty();
             // The pointee as written: before C++17 it alone keeps the
             // exception specification (spec/types.md §5.4).
-            let fty = ast.types.exc_pointee(pq).expect("function pointer");
+            let fty = ast.types.exc_pointee(pq).expect("Sema: function pointer");
             // A callee that folded to a function (a constant `int (&)(int)`
             // naming one) is that function, as clang's `CalleePtr` is
             // (`EmitCall` / `TryMarkNoThrow` consult its `nounwind`).
@@ -4124,7 +4143,7 @@ impl Cg<'_> {
             let (coerce, offset) = match &kind {
                 ArgKind::Direct { coerce, offset, .. } => (coerce.clone(), *offset),
                 ArgKind::Extend { coerce, .. } => (coerce.clone(), 0),
-                _ => unreachable!(),
+                _ => unreachable!("sret, Ignore handled above"),
             };
             if offset != 0 {
                 // clang `EmitCall`: the result's bytes start past the
@@ -4147,7 +4166,7 @@ impl Cg<'_> {
             let (ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. }) =
                 sig.info.ret.kind.clone()
             else {
-                unreachable!()
+                unreachable!("sret, Ignore handled above")
             };
             // clang `EmitCall`: a fixed-length SVE result of the scalable
             // type's element type is extracted (WP-810); a predicate goes
@@ -4344,7 +4363,7 @@ impl Cg<'_> {
                 // The destination size is `AggValueSlot::getPreferredSize`:
                 // the data size when the slot may overlap.
                 let overlap = std::mem::take(&mut self.f.overlap);
-                let c = self.immediate_value(e).expect("guarded");
+                let c = self.immediate_value(e).expect("match guard checked it");
                 let k = self.const_value(c, q, Some(e), true)?;
                 let size = match ast.types.as_record(q) {
                     Some(rd) if overlap && self.array_elem(q).is_none() => {
@@ -4358,13 +4377,19 @@ impl Cg<'_> {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
             }
+            // GNU `__extension__` (clang `AggExprEmitter::VisitUnaryExtension`).
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Extension => {
+                self.agg_visit(ast.exprs.operand(e), dest, zeroed)
+            }
             ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
                 self.emit_coawait(e, crate::coro::Want::Agg(dest, zeroed))?;
                 Ok(())
             }
-            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
-                self.agg_visit(ast.exprs.choose_chosen(e).expect("guarded"), dest, zeroed)
-            }
+            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => self.agg_visit(
+                ast.exprs.choose_chosen(e).expect("match guard checked it"),
+                dest,
+                zeroed,
+            ),
             // clang `AggExprEmitter::VisitCXXRewrittenBinaryOperator`: the
             // semantic form (`(y <=> x)` reversed, or `0 <=> (y <=> x)`).
             ExprKind::CXXRewrittenBinaryOperator => {
@@ -4588,7 +4613,7 @@ impl Cg<'_> {
                 // later one throws (`pushDestroyAndDeferDeactivation`).
                 let deferred = self.f.cl.deferred.len();
                 for (f, init) in fields.into_iter().zip(inits) {
-                    let fq = ast.decls.get(f).ty().expect("capture type");
+                    let fq = ast.decls.get(f).ty().expect("Sema: a capture has a type");
                     let lv = self.field_lvalue_init(base, f, fq)?;
                     if self.referee(fq).is_some() {
                         // clang `EmitInitializationToLValue` on a
@@ -4777,10 +4802,10 @@ impl Cg<'_> {
         let a = self.emit_lvalue(arr)?.addr.v;
         let rty = self.record_ty(rd);
         let base = Addr { v: dest.v, ty: rty, align: dest.align };
-        let q0 = ast.decls.get(f0).ty().expect("field type");
+        let q0 = ast.decls.get(f0).ty().expect("Sema: a field has a type");
         let lv0 = self.field_lvalue(base, f0, q0)?;
         self.store_scalar(a, lv0.addr, q0);
-        let q1 = ast.decls.get(f1).ty().expect("field type");
+        let q1 = ast.decls.get(f1).ty().expect("Sema: a field has a type");
         let lv1 = self.field_lvalue(base, f1, q1)?;
         let len = i128::from(n);
         let v = if ast.types.is_pointer(q1) {
@@ -4815,7 +4840,7 @@ impl Cg<'_> {
         let base = Addr { v: dest.v, ty: rty, align: dest.align };
         if is_union {
             let Some(f) = union_field else { return Ok(()) };
-            let fq = ast.decls.get(f).ty().expect("field type");
+            let fq = ast.decls.get(f).ty().expect("Sema: a field has a type");
             let lv = self.init_field_lvalue(base, f, fq)?;
             return match inits.first() {
                 Some(&i) => self.init_to_lvalue(i, lv, zeroed),
@@ -4869,7 +4894,7 @@ impl Cg<'_> {
             if k >= inits.len() && zeroed {
                 break;
             }
-            let fq = ast.decls.get(f).ty().expect("field type");
+            let fq = ast.decls.get(f).ty().expect("Sema: a field has a type");
             let lv = self.init_field_lvalue(base, f, fq)?;
             if k < inits.len() {
                 self.init_to_lvalue(inits[k], lv, zeroed)?;
@@ -4914,13 +4939,13 @@ impl Cg<'_> {
             }
             return Ok(());
         }
-        let eq = ast.types.element(q).expect("element type");
+        let eq = ast.types.element(q).expect("caller checked: array type");
         let esz = self.size_align(eq).0;
         let ety = self.mty(eq);
         let ealign = min_align(dest.align, esz);
         let zero = self.i64c(0);
         let begin = self.gep(dest.ty, dest.v, vec![zero, zero], true);
-        let entry = self.f.fir.cur().expect("insertion point");
+        let entry = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         let body = self.f.fir.create_block();
         self.emit_block(body, false);
         let phi = self.f.fir.push(Op::Phi { ty: LTy::I64, inc: vec![(zero, entry)] }, LTy::I64);
@@ -4958,7 +4983,7 @@ impl Cg<'_> {
         r?;
         let one = self.i64c(1);
         let next = self.bin(BinOp::Add, Flags::NUW, phi, one);
-        let cur = self.f.fir.cur().expect("insertion point");
+        let cur = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.f.fir.add_incoming(Fir::last_inst(phi), next, cur);
         let nn = self.i64c(i128::from(n));
         let done = self.icmp(IntPredicate::Eq, next, nn);
@@ -5057,7 +5082,7 @@ impl Cg<'_> {
     fn array_init(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
-        let eq = ast.types.element(q).expect("element type");
+        let eq = ast.types.element(q).expect("caller checked: array type");
         let n_elems = ast.types.array_size(q).unwrap_or(0);
         let (inits, filler, _) = agg_init_parts(ast, e);
         let esz = self.size_align(eq).0;
@@ -5134,7 +5159,7 @@ impl Cg<'_> {
             }
             let c = self.i64c(i128::from(n_elems));
             let end = self.gep(ety, begin, vec![c], true);
-            let entry = self.f.fir.cur().expect("insert point");
+            let entry = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
             let body = self.f.fir.create_block();
             self.emit_block(body, false);
             let cur = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(el, entry)] }, LTy::PTR);
@@ -5165,7 +5190,7 @@ impl Cg<'_> {
             let done = self.icmp(IntPredicate::Eq, next, end);
             let endb = self.f.fir.create_block();
             self.cond_br(done, endb, body);
-            let here = self.f.fir.cur().expect("insert point");
+            let here = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
             self.f.fir.add_incoming(Fir::last_inst(cur), next, here);
             self.emit_block(endb, false);
         }
@@ -5246,7 +5271,7 @@ impl Cg<'_> {
             VarStorage::Extern => return Ok(()),
             _ => {}
         }
-        let q = ast.decls.get(d).ty().expect("var type");
+        let q = ast.decls.get(d).ty().expect("Sema: a variable has a type");
         if self.is_vla(q) {
             let init = v.init.filter(|&i| !ast.is_trivial_default_construction(i));
             self.emit_vla_var(d, q, init)?;
@@ -5268,6 +5293,11 @@ impl Cg<'_> {
             let addr = Addr { v: slot.v, ty, align: slot.align };
             let flag = if dtor_class.is_some() {
                 let f = self.f.fir.alloca(LTy::I1, 1);
+                // clang `EmitAutoVarAlloca` calls `EnsureInsertPoint`
+                // before the flag store: the variable may follow a
+                // `noreturn` call or a `return` ([stmt.return]/1,
+                // [class.copy.elision]/1).
+                self.ensure_insert_point();
                 let fls = V::C(self.m.const_bool(false));
                 self.store(fls, f, 1, false);
                 self.f.nrvo_flags.insert(d, f);

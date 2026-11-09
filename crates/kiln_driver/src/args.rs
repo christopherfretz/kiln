@@ -567,6 +567,9 @@ pub struct Args {
     /// The hidden `-fkiln-bmi-kind=1|2`: the module file kind written
     /// (spec/modules.md §11.11; `None` is kind 2 when it applies).
     pub bmi_kind: Option<u8>,
+    /// The hidden `-fkiln-bmi-image`: write (and use) the kind-2
+    /// declaration image section (spec/modules.md §11.11 "Part 2a").
+    pub bmi_image: bool,
     /// Errors, in order.
     pub errors: Vec<ArgError>,
     /// The `-fconstexpr-*` options.
@@ -1056,6 +1059,8 @@ impl Args {
             "-fkiln-dump-cfg" => self.dump_cfg = true,
             "-fkiln-cfg-stats" => self.cfg_stats = true,
             "-fkiln-memory-report" => self.memory_report = true,
+            "-fkiln-bmi-image" => self.bmi_image = true,
+            "-fno-kiln-bmi-image" => self.bmi_image = false,
             "-fcrash-diagnostics" | "-fcrash-diagnostics=compiler" | "-fcrash-diagnostics=all" => {
                 self.no_crash_diagnostics = false;
             }

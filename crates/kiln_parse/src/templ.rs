@@ -663,6 +663,7 @@ impl Parser<'_, '_> {
             self.skip_unsupported_declaration();
             return;
         }
+        self.s.act_on_concept_head();
         let Some(e) = self.parse_expr_prec(prec::LOR) else {
             self.skip_to_semi();
             return;
@@ -1054,9 +1055,9 @@ impl Parser<'_, '_> {
     /// ([temp.param]/2).
     fn parse_non_type_param(&mut self) -> bool {
         let start = self.loc();
-        let saved = std::mem::replace(&mut self.nttp_specs, true);
+        // [dcl.type.general]/3: clang's `IsTemplateParamOrArg`.
+        self.next_tag_site = Some(kiln_sema::TagSite::TypeSpecifier);
         let ds = self.parse_decl_specifiers(DeclaratorContext::Prototype);
-        self.nttp_specs = saved;
         if ds.is_empty() {
             self.error_here(DiagId::parse_expected_template_param);
             return false;
@@ -1229,6 +1230,8 @@ impl Parser<'_, '_> {
             let e = self.s.act_on_error_expr(&[], loc);
             self.s.builder().template_arg_expr(e)
         } else if self.is_cxx_type_id_at(self.pos(), TypeIdContext::AsTemplateArgument).0 {
+            // A template argument admits no class-specifier.
+            self.next_tag_site = Some(kiln_sema::TagSite::NoDefinition);
             TemplateArg::ty(
                 self.with_greater_op(false, |p| p.parse_type_id_into(None, DeclSite::TemplateArg))?,
             )

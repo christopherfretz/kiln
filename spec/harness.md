@@ -21,6 +21,7 @@ cargo xtask test [options] [paths...]
 | `--meta-header` | The header-differential mode: the reflection tests compile against GCC 16.1's real `<meta>` instead of kiln's `tests/support/kiln_meta.h` (see "Header-differential mode"). Needs kiln as the compiler under test and a GCC oracle whose install prefix can be found (a usage error, exit 2, otherwise). |
 | `--debug-sweep` | The debug-info sweep: compile each positive test with and without `-g` instead of checking its expectations (see "Debug-info sweep"). Not with `--meta-header` (usage error). |
 | `--bmi-kind 1\|2` | The module-file kind variant: only the tests with `module:` lines, every one two-step, with kiln writing kind-`N` module files (see "Module-file kinds"). Needs kiln as the compiler (otherwise a usage error). WP-985. |
+| `--bmi-image` | With `--bmi-kind 2` (implied when no kind is given; with `--bmi-kind 1` a usage error): kiln's module-file builds and its importing compiles also get `-fkiln-bmi-image`, so units that qualify are imported through the declaration image (see "Module-file kinds"). WP-1048. |
 | `--external <dir>` | Instead of the corpus, the never-crash run of a directory outside the repository (see "External corpora"). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
 | `--shard K/N` | Run only shard `K` of `N` (`1 <= K <= N`, else a usage error): of the sorted test list (after `--filter`), test `i` (0-based) runs iff `i % N == K - 1`. Round-robin, so a slow directory is spread over every shard, and shards `1..N` of one `N` are exactly the unsharded run, each test in one shard. A shard of a list shorter than `N` may be empty, which is not an error (an empty selection before sharding still is). The run's first line says `(shard K/N of M)`. Not with `--external` (usage error). `ci --shard` passes it to both corpus runs (WP-692, "CI"). |
@@ -103,6 +104,7 @@ directives are also ERRORs.
 | `min-oracle: N` | Run only when every clang the test runs (the same clangs as `requires: clang>=`) is release `N` or later (`N` a positive major version); otherwise **SKIP** with the reason `min-oracle N; the compiler is clang <version>`. The line `crates/kiln_codegen/tests/ir_vs_clang.rs` reads for an IR case that follows a newer clang where an older one differs (that test compares such a case only under oracle `N` or later); kiln alone (no clang run) still runs the test, at its usual `-fclang-compat`. WP-405. |
 | `module: <name>=<path>` | A module interface (or partition) unit the test imports, `<path>` relative to the test's directory (an absolute path is an ERROR; placeholders apply, so `std=%{libcxx_modules}/std.cppm` names libc++'s module source, WP-984); repeatable, each `<name>` once (a partition as `M:P`), listed in dependency order. Only for `compile-ok` (not `verify`), `compile-fail`, `no-crash` and `run` tests. Single-step (the default for compile kinds): kiln gets `-fmodule-file=<name>=<source>` (it builds the unit in-process, spec/modules.md part A); clang first precompiles each unit, in order, with `<clang> -std=<std> <args> <earlier units' -fmodule-file=...> --precompile -x c++-module <source> -o <scratch>/oracle-<name>.pcm` and then gets `-fmodule-file=<name>=<bmi>`. Two-step (`two-step`, and always for `run`; WP-917): kiln, too, writes module files, with `-fmodule-output=<scratch>/<name>.pcm -c -x c++-module <source> -o <scratch>/<name>.o` (`--precompile` alone when no object is needed), and gets `-fmodule-file=<name>=<scratch>/<name>.pcm`; clang compiles each `.pcm` with `-c` for its object. `:` in a name is `-` in the file name. Either way the flags follow `args` and precede the test file. A missing unit or one clang rejects is **ERROR**, one kiln rejects or crashes on **FAIL**; a compiler that is neither kiln nor clang **SKIP**s, and the GCC oracle is not run. The same lines `ir_vs_clang` reads (spec/codegen.md §6, "IR-diff corpus"). WP-405, WP-917. |
 | `unit: <path>` | A further translation unit of a `run` test (an implementation unit, or a plain unit that imports the modules), `<path>` relative to the test's directory; repeatable. Each is compiled with `-c` after the test file, with the `module:` flags, to `<scratch>/[oracle-]unit<N>.o`; the program links the modules' objects, the units' and the test's (`-Qunused-arguments <args> <objects> -o ...`). The diags compared are the test file's compile's; a failing module, unit or link step fails the test (kiln) or makes it ERROR (oracle). WP-917. |
+| `header-unit: "<path>"` / `header-unit: <name>` | A header unit the test imports (`import "<path>";` / `import <name>;`), for the same kinds as `module:`; repeatable, each spelling once; a quoted path is relative to the test's directory (absolute is an ERROR). Kiln gets nothing: it builds a header unit in-process at its import (spec/modules.md §3; header-unit module files are §11.10). A clang (the compiler under test or the oracle) first builds each, in order, with `<clang> -std=<std> <args> -fmodule-header=user -x c++-user-header <test dir>/<path> -o <scratch>/[oracle-]hu<N>.pcm` (an angled name: `-fmodule-header=system -x c++-system-header <name>`, found on the include path), before any `module:` unit, and every later compile of the test (module units, the test file, `unit:` files) gets `-fmodule-file=<that file>` ahead of the `module:` flags. A `run` test with a `header-unit:` line is two-step (its test file is compiled with `-c`, then linked). A header unit the compiler under test rejects fails the test, one the oracle rejects or a missing file makes it ERROR; a compiler that is neither kiln nor clang SKIPs, and the GCC oracle is not run. clang warns `-Wexperimental-header-units` at the import, so tests pass `-Wno-experimental-header-units` in `args:` (kiln accepts and ignores it). WP-986. |
 | `two-step` | No value. Compile kinds with `module:` lines only (a `run` test is always two-step; anything else is an ERROR): kiln compiles the units to module files and imports those instead of the sources, so the test exercises the module file reader (spec/modules.md §11). WP-917. |
 | `pch: <path>` | A precompiled-header test (WP-1023): `compile-ok`, `compile-fail` and `run` only (anything else is an ERROR), at most once, `<path>` relative to the test's directory. Before anything else the compiler under test, and a clang (or kiln) oracle, each build `<program> -std=<std> [-fclang-compat=N] <args> -x c++-header <path> -o <scratch>/[oracle-]test.pch` (`-x c-header` for C); the test file's compile then adds `-include-pch <that file>` after the `module:` flags (`unit:` files do not get it). A producer the compiler under test rejects FAILs the test (so `xfail` applies); one the oracle rejects, or a missing header, is an ERROR. Needs kiln or clang as the compiler (else SKIP); no GCC comparison. The two steps are clang's own PCH workflow, so the oracle checks the same build shape kiln does. |
 | `requires: llvm>=N` / `requires: llvm<N` | Run only when every LLVM backend that consumes the test's IR has major version at least `N` (`>=`) or below `N` (`<`); `N` is a bare major (`llvm>=22.1` is an ERROR), each form at most once. The backends are kiln's when kiln is the compiler under test or the compared oracle (the major of the oracle release whose `/usr/lib/llvm-N` kiln gets as `KILN_LLVM_DIR`, "Oracle toolchain") and every clang the test runs (as for `clang>=`; a clang's LLVM major is its own major, an unreadable version never meets it). Otherwise **SKIP** with the reason `requires llvm>=N; kiln's backend is LLVM <M>` (or `the compiler`/`the oracle`; `... has no known LLVM`). Checked after the `clang` requirements. For IR goldens whose syntax an older LLVM rejects (clang 22's `dead_on_return`, AArch64 `"frame-pointer"="non-leaf-no-reserve"`; spec/codegen.md §6a) and for a workaround only an older backend needs. Unlike `clang>=`, it is never met vacuously by kiln: kiln's backend always counts. WP-386. |
@@ -111,7 +113,7 @@ directives are also ERRORs.
 | `meta-header: skip <reason>` | **SKIP** the test in the header-differential mode (`--meta-header`), with the reason `meta-header mode: <reason>`; no effect otherwise. For a test whose answer through GCC's library code is known to differ from kiln's built-in one (a step budget the real `std::vector` exceeds, wording that names a `kiln_meta.h` signature). A missing reason, or any other value, is an ERROR. WP-484. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
-`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, `meta-header`, each `requires` kind (`target-`, `host-`, `clang>=`, `clang<`, `sanitizer-runtime`), `min-oracle`, `verify`, `two-step`, each `module` name and `unit` path, and each `skip`/`xfail` qualifier may appear
+`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, `meta-header`, each `requires` kind (`target-`, `host-`, `clang>=`, `clang<`, `sanitizer-runtime`), `min-oracle`, `verify`, `two-step`, each `module` name, `unit` path and `header-unit` spelling, and each `skip`/`xfail` qualifier may appear
 at most once; `oven` at most once per
 location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
@@ -737,6 +739,15 @@ both kinds read back to the same diagnostics, program output and IR as the
 single-step run. `ci` runs it twice (below). The IR goldens of
 `tests/codegen` with `module:` lines are already two-step through
 `ir_vs_clang` (spec/codegen.md §6), and they run under the default kind.
+
+`--bmi-image` adds `-fkiln-bmi-image` to the same kind-2 run: each of
+kiln's module-file builds and each kiln compile that is given
+`-fmodule-file=` gets it (never the oracle, never a single-step source
+build), so a unit inside the image's coverage (spec/modules.md §11.11
+"Part 2a") is written with an image and imported from it, and every other
+unit falls back to replay as before. The run therefore checks that
+image-built imports give the same diagnostics, program output and IR as
+replay. `ci` does not run it while the flag is off by default.
 
 ### Parity report
 
@@ -1408,9 +1419,15 @@ or infrastructure error. Parse errors name their line.
 - `pch:` (WP-1023): `pch_directive` (directives.rs); the `pch-*`
   tests of `tests/conformance/cpp.include` under kiln and clang 19.
 - `unit:` / `two-step` (WP-917): `module_and_min_oracle_directives`
-  (directives.rs); the `two-step-*` conformance tests (module.interface,
-  module.unit, module.global.frag, basic.start.dynamic) under kiln and
-  under clang 19 and 22 as the compiler.
+  (directives.rs); the `module:`/`unit:` conformance tests
+  (module.interface, module.unit, module.import, module.private.frag,
+  module.global.frag, module.reach, basic.start.dynamic,
+  basic.lookup.argdep; WP-986 converted the single-command ones) under
+  kiln and under clang 19 and 22 as the compiler.
+- `header-unit:` (WP-986): `header_unit_directive` (directives.rs);
+  `module.import/header-unit.cpp` (a quoted header) and
+  `header-unit-angled.cpp` (`<cstddef>`) under kiln and under clang 19
+  and 22 as the compiler.
 - `skip(clang)` (WP-258): `skip_clang_implies_oracle_none` and
   `skip_clang_rejected_without_golden` (directives.rs; the ERROR for
   `layout`/`vtables`/`ir`).
