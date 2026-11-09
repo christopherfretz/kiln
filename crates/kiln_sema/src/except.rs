@@ -196,7 +196,8 @@ impl Sema<'_, '_> {
     ) -> ExcSpec {
         // clang `ParseDynamicExceptionSpecification` keeps only the valid
         // type-ids: `throw(struct S {})` is `throw()`.
-        let types: Vec<QualType> = types.iter().copied().filter(|&t| !self.is_error_type(t)).collect();
+        let types: Vec<QualType> =
+            types.iter().copied().filter(|&t| !self.is_error_type(t)).collect();
         if types.is_empty() && ok {
             return ExcSpec::DynamicNone;
         }

@@ -2169,7 +2169,9 @@ impl Parser<'_, '_> {
         // will consume, and neither do its members ([temp.pre]/1).
         let nested = matches!(
             ctx,
-            DeclaratorContext::Prototype | DeclaratorContext::TypeName | DeclaratorContext::Condition
+            DeclaratorContext::Prototype
+                | DeclaratorContext::TypeName
+                | DeclaratorContext::Condition
         );
         self.s.nested_tag = nested;
         // [temp.pre]/5: a class defined by a template-declaration (a class
@@ -2278,7 +2280,9 @@ impl Parser<'_, '_> {
         // an initializer (clang's `isDefiningTypeSpecifierContext`).
         let can_define = Self::tag_site(ds, ctx) != TagSite::NoDefinition;
         let use_ = if can_define
-            && (self.at(Punct::LBrace) || (is_class && self.at(Punct::Colon)) || final_loc.is_some())
+            && (self.at(Punct::LBrace)
+                || (is_class && self.at(Punct::Colon))
+                || final_loc.is_some())
         {
             TagUse::Definition
         } else if self.at(Punct::Semi) && ds.storage.is_none() && ctx != DeclaratorContext::TypeName
@@ -2346,7 +2350,9 @@ impl Parser<'_, '_> {
         // clang then requires `template<>`).
         let nested = matches!(
             ctx,
-            DeclaratorContext::Prototype | DeclaratorContext::TypeName | DeclaratorContext::Condition
+            DeclaratorContext::Prototype
+                | DeclaratorContext::TypeName
+                | DeclaratorContext::Condition
         );
         let templated = !nested && self.s.in_template_declaration();
         let heads = (nested && use_ == TagUse::Definition).then(|| self.s.hide_open_heads());
