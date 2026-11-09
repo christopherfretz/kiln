@@ -6589,6 +6589,24 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   every full-expression (`act_on_full_expr`): nested candidates lose
   their wrapper, the outermost are evaluated with `eval_const`
   (`EvalKind::Consteval`) and the value stored in the `ConstantExpr`.
+  Each is evaluated once ([expr.const]/16, WP-1129): the completion
+  checks that fold the full-expression before that point (clang's
+  `CheckCompletedExpr`: the implicit-conversion and integer-overflow
+  warnings) run after `evaluate_immediates_early`, which evaluates the
+  outermost invocations, stores each successful value and keeps every
+  result in `ImmState::early` for `finish_immediate_invocations` to
+  report (in the same place and order as before; nothing is reported
+  early). Those folds read a valued wrapper as a leaf, and a scalar
+  prvalue call reached through a stripped wrapper (`strip_impcast`)
+  from `ImmState::early_values` (`early_immediate_value`, checked by
+  `try_fold`, `fold_rvalue` and `fold_for_overflow`). A default
+  argument's or default member initializer's invocation is evaluated at
+  each use (below); its first successful value is stored in the
+  wrapper's `default_immediate_value`, which codegen's fold prepass
+  reads for a use without source-location values instead of evaluating
+  the call again. Not covered: the shift-count check of `<<`/`>>`
+  (`diagnose_shift_count`) folds its operand when the operator is
+  built, before the full-expression ends.
   The initializer of a variable that is constant-initialized keeps its
   wrappers unvalued (clang's deferred mode). A failure reports `call to
   consteval|immediate function 'f' is not a constant expression` with

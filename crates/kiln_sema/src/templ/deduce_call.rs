@@ -1662,6 +1662,13 @@ impl Sema<'_, '_> {
                 Some(t) => at = t,
                 None => return Tdk::Success,
             }
+        } else if let Some(set) = a.expr.and_then(|e| self.template_id_ref_set(e)) {
+            // A function template-id resolved early: clang keeps it a
+            // set and resolves it for the deduction (its result is the
+            // one already made; spec/sema-lambda.md §3.5).
+            self.holding_pending_uses(|s| {
+                let _ = s.resolve_overload_for_deduction(p, &set, d);
+            });
         }
         let t = &mut self.ast.types;
         let mut at = t.canonical(at);
@@ -2084,6 +2091,24 @@ impl Sema<'_, '_> {
             return OverloadArg::NotASet;
         }
         OverloadArg::Set(OverloadSetArg { ule: e, addr, member_form })
+    }
+
+    /// The overload set a function template-id resolved early
+    /// ([`Sema::resolve_single_template_id`]) still is for clang, possibly
+    /// parenthesized and under `&`.
+    fn template_id_ref_set(&self, e: ExprId) -> Option<OverloadSetArg> {
+        if self.ovl.template_id_refs.is_empty() {
+            return None;
+        }
+        let x = self.ignore_parens(e);
+        let addr = self.ast.exprs.get(x).kind() == ExprKind::UnaryOperator
+            && self.ast.exprs.unary_op(x) == kiln_ast::expr::UnaryOp::AddrOf;
+        let r = if addr { self.ignore_parens(self.ast.exprs.operand(x)) } else { x };
+        let &ule = self.ovl.template_id_refs.get(&r)?;
+        let member_form = addr
+            && self.ast.exprs.operand(x) == r
+            && self.ast.templates.expr_nns.get(ule).is_some();
+        Some(OverloadSetArg { ule, addr, member_form })
     }
 
     /// The argument type `A` the overload set `set` gives call parameter

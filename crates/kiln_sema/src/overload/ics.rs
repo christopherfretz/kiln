@@ -334,6 +334,15 @@ impl Sema<'_, '_> {
         {
             return self.overload_set_ics(a, to, opts);
         }
+        // A function template-id resolved early to a specialization the
+        // target does not ask for: still an overload set to clang, so
+        // the target deduces among its templates ([over.over]/1).
+        if let Some(e) = a.expr
+            && let Some(ule) = self.mismatched_template_id(e, to)
+        {
+            let set = ArgInfo { ty: QualType::OVERLOAD, expr: Some(ule), ..*a };
+            return self.overload_set_ics(&set, to, opts);
+        }
         if self.ast.types.is_reference(to) {
             return self.ref_ics(a, to, opts);
         }

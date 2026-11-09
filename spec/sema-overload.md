@@ -459,8 +459,11 @@ a constructor template cannot deduce from a multi-function set
 ([temp.deduct.call]/6), and an `explicit` one is no copy-init candidate. A non-template matches when its type equals
 the target's function type after function-pointer conversion; non-static
 members only through `&X::f` to a member pointer; templates via
-`deduce_address_candidate`. Then: if any non-template matches, drop
-templates; else keep the most specialized (`PartialOrderKind::Address`);
+`deduce_address_candidate`, deduced even when a non-template matches
+(clang `FindAllFunctionsThatMatchTargetTypeExactly`; the deduction numbers
+the lambdas of their signatures, spec/sema-lambda.md §3.5, WP-1143), and
+only those whose kind of member the target can point to. Then: if any
+non-template matches, drop templates (`prefer_non_templates`); else keep the most specialized (`PartialOrderKind::Address`);
 then the most constrained (WP-073). Still tied: "address of overloaded
 function 'a' is ambiguous" + "candidate function [with T = int]" each. No
 match: "address of overloaded function 'u' does not match required type
@@ -521,7 +524,17 @@ set count (`single_template_spec`): a non-template function found by the
 same lookup is skipped, as clang's template-name lookup drops it
 (`FilterAcceptableTemplateNames`), so `int rm(const char *)` beside
 `template<class T> void rm(T &, int)` leaves `&rm<M>` one specialization
-(WP-690, `over.over/template-id-with-non-template.cpp`).
+(WP-690, `over.over/template-id-with-non-template.cpp`). When a target
+type deduces a different specialization than the explicit arguments
+complete, the target's is used ([over.over]/1) not only by an
+initialization and a return but by a `static_cast`, a C-style or
+functional cast (`retarget_cast_operand`), an assignment and an argument,
+in its conversion sequence (`mismatched_template_id` in
+`try_implicit_conversion`) and its conversion (`retarget_template_id`);
+a cast used to reinterpret the early specialization (WP-1142,
+`over.over/template-id-retarget-cast-assign-argument-run.cpp`). The
+template-id is re-resolved, for its side effects only, where clang
+resolves it again (spec/sema-lambda.md §3.5).
 
 A called function template-id is not resolved so, parenthesized or not:
 `(f<A>)(x)` and `((N::f<A>))(x)` are the overload set of `f<A>(x)`

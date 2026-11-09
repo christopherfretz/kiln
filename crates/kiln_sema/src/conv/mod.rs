@@ -712,7 +712,14 @@ fn retarget_template_id(
     to: QualType,
     ctx: ConvCtx,
 ) -> Option<ExprId> {
-    if !matches!(ctx, ConvCtx::Initialization | ConvCtx::DirectInitialization | ConvCtx::Return) {
+    if !matches!(
+        ctx,
+        ConvCtx::Initialization
+            | ConvCtx::DirectInitialization
+            | ConvCtx::Return
+            | ConvCtx::Assignment
+            | ConvCtx::Argument
+    ) {
         return None;
     }
     s.retarget_template_id(e, to)
@@ -1251,6 +1258,12 @@ pub fn implicit_convert(
         let r = bind_reference(s, e, to, ctx)?;
         exc_spec_compat(s, e, from, to, ctx)?;
         return Ok(r);
+    }
+    // A function template-id resolved early: clang's perform step
+    // resolves it again (`PerformImplicitConversion`; a reference binding
+    // reuses the resolution of its check, a condition resolved it before).
+    if ctx != ConvCtx::Condition {
+        s.rerun_template_id_resolution(e, to);
     }
     let (fr, tr) = (s.ast.types.as_record(from), s.ast.types.as_record(to));
     if tr.is_some() {
