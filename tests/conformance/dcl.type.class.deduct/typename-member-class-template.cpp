@@ -2,7 +2,6 @@
 // with X a member class template deduces its arguments (CTAD). From clang's
 // SemaCXX/cxx14-compat.cpp. Found by the clang negative-test run (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, a typename-specifier naming a member class template is rejected
 //@ expect: compile-ok
 template <typename T> void g(T t) { typename T::X x = t; }
 struct A {

@@ -171,7 +171,7 @@ impl Sema<'_, '_> {
         }
         match (old_head, new.head) {
             (None, None) => {}
-            (Some(a), Some(b)) => {
+            (Some(_), Some(_)) => {
                 if !new.member_using {
                     let oret = self
                         .declared_fn_type(old)
@@ -181,16 +181,77 @@ impl Sema<'_, '_> {
                         return false;
                     }
                 }
-                if !self.heads_equivalent(a, b) {
-                    return false;
-                }
             }
             _ => return false,
         }
         let old_req = self.ast.templates.trailing_requires.get(old).copied();
-        self.opt_exprs_equivalent(old_req, new.requires)
-            && self.same_enable_if(old, new.enable_if)
+        let constraints_match = |s: &Self| {
+            old_head.zip(new.head).is_none_or(|(a, b)| s.heads_equivalent(a, b))
+                && s.opt_exprs_equivalent(old_req, new.requires)
+        };
+        if !constraints_match(self) {
+            // A member template of a class template specialization keeps
+            // its pattern's constraints, whose own parameters are deeper
+            // than an out-of-line redeclaration's (`template<> template<
+            // class U> void A<short>::f(U) requires C<U>;`,
+            // [temp.expl.spec]/16): compare them substituted.
+            let Some(x) = old_head.and_then(|_| self.template_of(old)) else { return false };
+            if !self.inst.stack.is_empty()
+                || !self.inst.concepts.member_constraints.contains_key(&x)
+            {
+                return false;
+            }
+            let mut cmp = self.member_cmp_constraints(x);
+            if cmp.is_empty() {
+                return false;
+            }
+            for (&k, &v) in &self.friend_cmp_constraints {
+                cmp.entry(k).or_insert(v);
+            }
+            let saved = std::mem::replace(&mut self.friend_cmp_constraints, cmp);
+            let ok = constraints_match(self);
+            self.friend_cmp_constraints = saved;
+            if !ok {
+                return false;
+            }
+        }
+        self.same_enable_if(old, new.enable_if)
             && self.ast.pass_object_size_params(old).is_empty() != new.pass_object_size
+    }
+
+    /// The constraints of member template `x` of a class template
+    /// specialization (its pattern's, `member_constraints`) mapped to
+    /// their substitution with the specialization's arguments, `x`'s own
+    /// parameters retained at their depth there: what an out-of-line
+    /// redeclaration of `x` is compared with (clang's
+    /// `AreConstraintExpressionsEqual` substituting each side's
+    /// enclosing arguments). A constraint that fails to substitute is
+    /// left out.
+    fn member_cmp_constraints(&mut self, x: DeclId) -> kiln_source::fx::FxHashMap<ExprId, ExprId> {
+        use crate::templ::args::LevelMode;
+        let mut m = kiln_source::fx::FxHashMap::default();
+        let Some((pt, outer)) = self.inst.concepts.member_constraints.get(&x).cloned() else {
+            return m;
+        };
+        let Some(ctx) = self.ast.decls.get(x).ctx() else { return m };
+        let cs = self.associated_constraints(pt);
+        let mut levels = outer;
+        levels.push(kiln_ast::ids::ArgListId::EMPTY, pt, LevelMode::Retain);
+        let pairs = self.inst_context_pairs(ctx);
+        let loc = self.ast.decls.get(x).loc();
+        let kind = crate::templ::stack::FrameKind::ConstraintSubstitution;
+        let _ = self.in_sfinae(kind, x, None, loc, |s| {
+            s.in_inst_context(ctx, |s| {
+                let mut sub = crate::templ::subst::Substituter::new(s, &levels);
+                sub.map_contexts(&pairs);
+                for c in cs {
+                    if let Ok(e) = sub.expr(c) {
+                        m.insert(c, e);
+                    }
+                }
+            });
+        });
+        m
     }
 
     /// [temp.over.link]/6: equivalent template heads (same kinds, packs,

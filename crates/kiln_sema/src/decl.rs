@@ -2407,6 +2407,12 @@ impl Sema<'_, '_> {
     ) -> (Option<DeclId>, Option<DeclId>) {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("member_redecl_prev");
+        // Redeclaration lookup in the class declares the implicit members
+        // it can find (`friend F &F::operator=(const F &);`, clang
+        // `DeclareImplicitMemberFunctionsWithName`).
+        if let Some(q) = qualifier {
+            self.declare_implicit_named(q, dname);
+        }
         let found = self.prev_candidates_dn(dname, qualifier);
         let p = self.pick_prev_function(&found, new);
         let other = if other_kind { self.non_function_member(&found) } else { None };
@@ -8763,6 +8769,15 @@ impl Sema<'_, '_> {
                     .into_iter()
                     .find(|&p| self.ast.decls.get(p).kind() == DeclKind::Namespace);
             }
+            if prev.is_none()
+                && self.ast.primary_context(self.ast.redecl_context(self.ctx)) == self.ast.tu
+                && sym_str(self, n) == "std"
+            {
+                // The implicit `namespace std` around an implicit
+                // `std::align_val_t` is hidden from lookup but extended by
+                // the program's first `namespace std {`.
+                prev = self.global_ops.implicit_std;
+            }
         } else {
             // [namespace.unnamed]/1: every unnamed namespace of a scope is
             // the same namespace, across the scope's redeclarations and
@@ -9937,6 +9952,23 @@ impl Sema<'_, '_> {
             return class;
         }
         self.classify_found(&found)
+    }
+
+    /// The [`NameClass`] of the class-name of a base-specifier: a
+    /// type-only lookup ([class.derived.general]/2), so a namespace of an
+    /// inner scope does not hide a class of an outer one (clang 22; clang
+    /// 19 looks it up as a nested-name-specifier name).
+    pub fn classify_base_class_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        let class = self.classify_nested_name(name, qualifier);
+        if self.clang_compat < 22 || !matches!(class, NameClass::Namespace(_)) {
+            return class;
+        }
+        let q = qualifier.map(|q| self.type_name_qualifier(q));
+        let found = match q {
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Type),
+            None => self.lookup_name(name, LookupKind::Type),
+        };
+        if found.decls.is_empty() { class } else { self.classify_found(&found) }
     }
 
     /// The [`NameClass`] of a non-empty ordinary (or nested-name) lookup

@@ -427,9 +427,20 @@ impl Sema<'_, '_> {
         tys: &[QualType],
         whole: Option<QualType>,
         ret: Option<QualType>,
-        name_loc: Loc,
-        loc: Loc,
+        partial: Option<(u16, u16)>,
+        (name_loc, loc): (Loc, Loc),
     ) -> Result<(Vec<QualType>, Option<QualType>, usize), crate::templ::subst::SubstFail> {
+        // A parameter whose type deduces the explicitly given pack `Ts`
+        // keeps it unsubstituted, so deduction may extend it: clang
+        // retains the expansion, `tuple<Ts...>` with `Ts = {int}` given
+        // being `tuple<int, Ts...>` (`f<int>(tuple<int, float>)`).
+        let names_partial = |s: &Self, t: QualType| {
+            partial.is_some_and(|(depth, i)| {
+                let mut used = vec![false; usize::from(i) + 1];
+                s.mark_used_type(t, u32::from(depth), &mut used, 0);
+                used[usize::from(i)]
+            })
+        };
         self.in_template_context(ft, |s| {
             let mut sub = Substituter::new(s, levels);
             sub.final_subst = true;
@@ -446,6 +457,10 @@ impl Sema<'_, '_> {
             let mut kept = 0usize;
             for (j, &t) in tys.iter().enumerate() {
                 let Some(pat) = crate::templ::pack::type_pattern(sub.sema, t) else {
+                    if names_partial(sub.sema, t) {
+                        v.push(t);
+                        continue;
+                    }
                     let t = sub.ty(t, loc)?;
                     v.push(sub.param_type(t, loc)?);
                     continue;
@@ -745,6 +760,9 @@ impl Sema<'_, '_> {
                 self.diags.warning_count(),
             );
             let mut answered = false;
+            // [temp.arg.explicit]/9: the explicitly given pack deduction
+            // may extend (clang's partially substituted pack).
+            let partial = self.explicit_pack(params, &d).map(|(i, _)| (d.depth, i));
             let r = self.in_sfinae_held(
                 FrameKind::ExplicitArgSubstitution,
                 ft,
@@ -762,8 +780,8 @@ impl Sema<'_, '_> {
                         &tys,
                         whole.then_some(pfn),
                         ret,
-                        name_loc,
-                        loc,
+                        partial,
+                        (name_loc, loc),
                     )
                 },
             );

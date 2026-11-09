@@ -291,7 +291,10 @@ impl Sema<'_, '_> {
                     }
                 }
                 return self.deduce_pack_elements(rest.len(), d, |s, i, d| {
-                    s.deduce_arg(pat, rest[i], d, level, loc)
+                    match s.type_expansion_parts(pat, rest[i], d) {
+                        Some((ap, n)) => s.deduce_pattern_from_expansion(pat, ap, n, d, level, loc),
+                        None => s.deduce_arg(pat, rest[i], d, level, loc),
+                    }
                 });
             }
             let Some(&a) = as_.get(k) else { return Tdk::MiscellaneousDeductionFailure };
@@ -305,6 +308,54 @@ impl Sema<'_, '_> {
         }
         if as_.len() != ps.len() && (must_match || as_.len() < ps.len()) {
             return Tdk::MiscellaneousDeductionFailure;
+        }
+        Tdk::Success
+    }
+
+    /// With [`DeducedArgs::expansions`], a type pattern `pat` of `P`
+    /// against an `A` element that is a type pack expansion: that
+    /// expansion's pattern and expansion count.
+    fn type_expansion_parts(
+        &self,
+        pat: TemplateArg,
+        a: TemplateArg,
+        d: &DeducedArgs,
+    ) -> Option<(QualType, Option<u32>)> {
+        if !d.expansions || !matches!(pat.view(), ArgView::Type(_)) {
+            return None;
+        }
+        let ArgView::Type(q) = a.view() else { return None };
+        match self.ast.types.canonical_view(q) {
+            TypeView::PackExpansion { pattern, num_expansions } => Some((pattern, num_expansions)),
+            _ => None,
+        }
+    }
+
+    /// [temp.deduct.type]/9 in partial ordering ([temp.deduct.partial]/8;
+    /// clang deduces the pattern of `P` from the pattern of `A`): the
+    /// pattern `pat` of a `P` expansion against an `A` element that is a
+    /// pack expansion of pattern `ap`. Each pack element deduced from it
+    /// is that expansion again (`Tail` from `Tail'*...` against `Tail*...`
+    /// is `Tail'...`), so substituting `P` gives `A` back.
+    fn deduce_pattern_from_expansion(
+        &mut self,
+        pat: TemplateArg,
+        ap: QualType,
+        n: Option<u32>,
+        d: &mut DeducedArgs,
+        level: u32,
+        loc: Loc,
+    ) -> Tdk {
+        let r = self.deduce_arg(pat, TemplateArg::ty(ap), d, level, loc);
+        if r != Tdk::Success {
+            return r;
+        }
+        if let Some(cur) = d.pack_cur.as_mut() {
+            for e in cur.iter_mut() {
+                if let ArgView::Type(t) = e.1.view() {
+                    e.1 = TemplateArg::ty(self.ast.types.pack_expansion(t, n));
+                }
+            }
         }
         Tdk::Success
     }
