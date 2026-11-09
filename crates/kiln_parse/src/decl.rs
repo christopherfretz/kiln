@@ -1955,6 +1955,16 @@ impl Parser<'_, '_> {
         attrs
     }
 
+    /// [dcl.fct]/17: types shall not be defined in parameter types (clang
+    /// `GetFullTypeForDeclarator`, after the body); the parameter is
+    /// invalid. A non-type template parameter is left to WP-946.
+    fn check_tag_defined_in_param(&mut self, ds: &mut DeclSpec, d: DeclId, ctx: DeclaratorContext) {
+        if ctx == DeclaratorContext::Prototype && !self.nttp_specs {
+            self.s.diag_type_defined_in_param(d);
+            ds.invalid = true;
+        }
+    }
+
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
         let kw_loc = self.bump().span.lo;
         let (keyword, scoped) = self.parse_tag_key(ds, k);
@@ -2051,6 +2061,7 @@ impl Parser<'_, '_> {
                 self.parse_record_body(d, final_loc, ctx == DeclaratorContext::TypeName);
             }
             self.s.act_on_exit_declarator_scope(entered);
+            self.check_tag_defined_in_param(ds, d, ctx);
         }
         ds.tag = Some(d);
         ds.tag_declares = use_ != TagUse::Reference;
