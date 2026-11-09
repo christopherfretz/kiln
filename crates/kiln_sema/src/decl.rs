@@ -675,6 +675,9 @@ impl Sema<'_, '_> {
             let t = self.ast.types.elaborated(keyword, nns, r);
             return Some(self.ast.types.qualify(t, base.quals()));
         }
+        if let Some(t) = self.rebuild_ci_compound(base, view, qual, loc, depth) {
+            return Some(t);
+        }
         let (TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p)) = view else {
             return None;
         };
@@ -686,6 +689,64 @@ impl Sema<'_, '_> {
             TypeView::Pointer(_) => self.ast.types.pointer_to(r),
             TypeView::LValueRef(_) => self.ast.types.lvalue_ref_to(r),
             _ => self.ast.types.rvalue_ref_to(r),
+        };
+        Some(self.ast.types.qualify(t, base.quals()))
+    }
+
+    /// [`Sema::rebuild_ci_type`] through a function type (return and
+    /// parameter types), a member pointer, an array and declarator
+    /// parentheses (`W<void(typename X<T>::m)>`, `W<typename X<T>::m[2]>`,
+    /// `W<typename X<T>::m X<T>::*>` before the declarator-id of a member
+    /// of `X`, [temp.dep.type]/6); `None` when `view` is none of those.
+    fn rebuild_ci_compound(
+        &mut self,
+        base: QualType,
+        view: TypeView,
+        qual: DeclId,
+        loc: Loc,
+        depth: u32,
+    ) -> Option<QualType> {
+        let t = match view {
+            TypeView::Function(f) => {
+                let ret = self.rebuild_ci_type(f.ret(), qual, loc, depth + 1);
+                let params = self.ast.types.params(&f).to_vec();
+                let out: Vec<QualType> =
+                    params.iter().map(|&p| self.rebuild_ci_type(p, qual, loc, depth + 1)).collect();
+                if ret == f.ret() && out == params {
+                    return Some(base);
+                }
+                let exc = self.ast.types.exc_spec(&f);
+                self.ast.types.function(ret, &out, f.info(), exc)
+            }
+            TypeView::MemberPointer { pointee, class } => {
+                let r = self.rebuild_ci_type(pointee, qual, loc, depth + 1);
+                if r == pointee {
+                    return Some(base);
+                }
+                self.ast.types.member_pointer(r, class)
+            }
+            TypeView::ConstantArray(a) => {
+                let r = self.rebuild_ci_type(a.elem, qual, loc, depth + 1);
+                if r == a.elem {
+                    return Some(base);
+                }
+                self.ast.types.constant_array(r, a.size, a.size_expr)
+            }
+            TypeView::IncompleteArray(e) => {
+                let r = self.rebuild_ci_type(e, qual, loc, depth + 1);
+                if r == e {
+                    return Some(base);
+                }
+                self.ast.types.incomplete_array(r)
+            }
+            TypeView::Paren(i) => {
+                let r = self.rebuild_ci_type(i, qual, loc, depth + 1);
+                if r == i {
+                    return Some(base);
+                }
+                self.ast.types.paren_type(r)
+            }
+            _ => return None,
         };
         Some(self.ast.types.qualify(t, base.quals()))
     }
