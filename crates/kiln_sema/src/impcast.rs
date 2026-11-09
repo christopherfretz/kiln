@@ -563,8 +563,13 @@ impl Sema<'_, '_> {
         let (file, pos) = sm.offset_of(at)?;
         let text = sm.text(file).as_bytes();
         let start = pos as usize;
+        // The end-of-file location (a `)` missing at EOF, `alignof(int`)
+        // starts no token (WP-972: measuring one stepped past the buffer).
+        if start >= text.len() {
+            return None;
+        }
         let mut i = start;
-        let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'.' || c == b'\'';
+        let word =|c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'.' || c == b'\'';
         if text.get(i).is_some_and(|&c| word(c)) {
             while let Some(&c) = text.get(i) {
                 // An exponent sign continues a number (`1.5e+3`).
