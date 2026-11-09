@@ -44,6 +44,17 @@ use crate::types::TypeFlags;
 /// Builtin `TypeId` of the `Dependent` placeholder (spec/types.md §5).
 pub const BUILTIN_DEPENDENT: u32 = 29;
 
+/// The invariant behind every side-table insert keyed by an expression
+/// the builder has just pushed: arena ids are never reused, so a fresh
+/// id has no entry yet (spec/ast.md §2.1; WP-972 audit, class (a)).
+pub(crate) const FRESH_EXPR: &str =
+    "invariant: a just-pushed ExprId has no side-table entry (arena ids are never reused)";
+
+/// [`FRESH_EXPR`] for declarations: a just-pushed declaration has no
+/// lexical context and no side-table entry yet.
+pub(crate) const FRESH_DECL: &str =
+    "invariant: a just-pushed DeclId has no lexical context or side-table entry yet";
+
 /// The header fields shared by every declaration constructor.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct DeclHead {
@@ -179,10 +190,7 @@ impl<'a> AstBuilder<'a> {
             payload,
         );
         if let Some(lex) = h.lexical.filter(|&l| l != h.ctx) {
-            self.ast
-                .decls
-                .set_lexical_ctx(d, lex)
-                .expect("fresh declaration has no lexical context");
+            self.ast.decls.set_lexical_ctx(d, lex).expect(FRESH_DECL);
         }
         let lexical = h.lexical.unwrap_or(h.ctx);
         if self.ast.decls.member_list(lexical).is_some() {
@@ -216,10 +224,7 @@ impl<'a> AstBuilder<'a> {
             payload,
         );
         if let Some(lex) = h.lexical.filter(|&l| l != h.ctx) {
-            self.ast
-                .decls
-                .set_lexical_ctx(d, lex)
-                .expect("fresh declaration has no lexical context");
+            self.ast.decls.set_lexical_ctx(d, lex).expect(FRESH_DECL);
         }
         let lexical = h.lexical.unwrap_or(h.ctx);
         if member && self.ast.decls.member_list(lexical).is_some() {
@@ -447,7 +452,12 @@ impl<'a> AstBuilder<'a> {
         let d = self.ast.decls.next_id();
         match prev {
             Some(p) => {
-                let group = self.ast.decls.redecl(p).expect("prev is not redeclarable").group;
+                let group = self
+                    .ast
+                    .decls
+                    .redecl(p)
+                    .expect("invariant: Sema passes a redeclarable `prev` (lookup filters by kind)")
+                    .group;
                 let latest = self.ast.redecls.get(group).latest;
                 self.ast.redecls.push_redecl(group, d);
                 if self.ast.modules.active {
@@ -1403,7 +1413,7 @@ impl<'a> AstBuilder<'a> {
             label.raw(),
             0,
         );
-        self.ast.exprs.cold.end_loc.insert(e, label_loc).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, label_loc).expect(FRESH_EXPR);
         e
     }
 
@@ -1461,7 +1471,7 @@ impl<'a> AstBuilder<'a> {
             ctx.raw(),
             0,
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -1718,7 +1728,7 @@ impl<'a> AstBuilder<'a> {
             m.raw(),
         );
         if let Some(x) = extra {
-            self.ast.exprs.cold.member_extra.insert(e, x).expect("fresh expression");
+            self.ast.exprs.cold.member_extra.insert(e, x).expect(FRESH_EXPR);
         }
         e
     }
@@ -2045,7 +2055,7 @@ impl<'a> AstBuilder<'a> {
             src.raw(),
             0,
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -2102,7 +2112,7 @@ impl<'a> AstBuilder<'a> {
             callee.raw(),
             list.raw(),
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -2140,7 +2150,7 @@ impl<'a> AstBuilder<'a> {
             list.raw(),
         );
         if end.is_valid() {
-            self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+            self.ast.exprs.cold.end_loc.insert(e, end).expect(FRESH_EXPR);
         }
         e
     }
@@ -2281,7 +2291,7 @@ impl<'a> AstBuilder<'a> {
             arg.to_raw(),
             0,
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -2370,8 +2380,8 @@ impl<'a> AstBuilder<'a> {
             list.raw(),
             written.to_raw(),
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
-        self.ast.exprs.cold.trait_rhs_loc.insert(e, ty_loc).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
+        self.ast.exprs.cold.trait_rhs_loc.insert(e, ty_loc).expect(FRESH_EXPR);
         e
     }
 
@@ -2402,7 +2412,7 @@ impl<'a> AstBuilder<'a> {
             operand.raw(),
             u32::from(value),
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -2440,9 +2450,9 @@ impl<'a> AstBuilder<'a> {
             list.raw(),
             u32::from(value),
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         if let Some(l) = rhs_loc {
-            self.ast.exprs.cold.trait_rhs_loc.insert(e, l).expect("fresh expression");
+            self.ast.exprs.cold.trait_rhs_loc.insert(e, l).expect(FRESH_EXPR);
         }
         e
     }
@@ -2509,7 +2519,7 @@ impl<'a> AstBuilder<'a> {
         let (aux, a) = (operand.tag(), operand.payload());
         let e =
             self.simple(ExprKind::CXXReflectExpr, ValueCategory::PRValue, deps, aux, ty, loc, a, b);
-        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, end).expect(FRESH_EXPR);
         e
     }
 
@@ -2559,7 +2569,7 @@ impl<'a> AstBuilder<'a> {
             name.raw(),
             0,
         );
-        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, end).expect(FRESH_EXPR);
         e
     }
 
@@ -2607,7 +2617,7 @@ impl<'a> AstBuilder<'a> {
             operand.raw(),
             b,
         );
-        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, end).expect(FRESH_EXPR);
         e
     }
 
@@ -2624,7 +2634,7 @@ impl<'a> AstBuilder<'a> {
     ) -> ExprId {
         let unexpanded = self.ast.types.arg_list_flags(args).contains(TypeFlags::UNEXPANDED_PACK);
         let e = self.splice_node(operand, None, unexpanded, loc, end);
-        self.ast.exprs.cold.splice_args.insert(e, args).expect("fresh expression");
+        self.ast.exprs.cold.splice_args.insert(e, args).expect(FRESH_EXPR);
         e
     }
 
@@ -2663,13 +2673,13 @@ impl<'a> AstBuilder<'a> {
             arg.to_raw(),
             0,
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         self.ast
             .exprs
             .cold
             .array_trait
             .insert(e, ArrayTraitExtra { dim, value })
-            .expect("fresh expression");
+            .expect(FRESH_EXPR);
         e
     }
 
@@ -2699,7 +2709,7 @@ impl<'a> AstBuilder<'a> {
             operand.raw(),
             u32::from(value),
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -2833,7 +2843,7 @@ impl<'a> AstBuilder<'a> {
             side,
             0,
         );
-        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, end).expect(FRESH_EXPR);
         e
     }
 
@@ -2946,7 +2956,7 @@ impl<'a> AstBuilder<'a> {
             list.raw(),
             0,
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -2982,7 +2992,7 @@ impl<'a> AstBuilder<'a> {
             list.raw(),
             m,
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -3003,7 +3013,7 @@ impl<'a> AstBuilder<'a> {
             0,
             0,
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -3078,7 +3088,8 @@ impl<'a> AstBuilder<'a> {
         all.push(syntactic);
         all.extend_from_slice(semantics);
         let list = self.ast.lists.push(&all);
-        let idx = u32::try_from(result).expect("result index");
+        let idx = u32::try_from(result)
+            .expect("invariant: a PseudoObjectExpr has fewer than 2^32 semantic expressions");
         self.push_expr(
             ExprKind::PseudoObjectExpr,
             r.value_category(),
@@ -3211,7 +3222,7 @@ impl<'a> AstBuilder<'a> {
             body.raw(),
             0,
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -3262,7 +3273,7 @@ impl<'a> AstBuilder<'a> {
             id.raw(),
             0,
         );
-        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, end).expect(FRESH_EXPR);
         e
     }
 
@@ -3296,7 +3307,7 @@ impl<'a> AstBuilder<'a> {
             list.raw(),
             offset,
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -3336,13 +3347,8 @@ impl<'a> AstBuilder<'a> {
             list.raw(),
             0,
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
-        self.ast
-            .exprs
-            .cold
-            .offsetof_pattern
-            .insert(e, (operand, comps.into()))
-            .expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
+        self.ast.exprs.cold.offsetof_pattern.insert(e, (operand, comps.into())).expect(FRESH_EXPR);
         e
     }
 
@@ -3405,7 +3411,7 @@ impl<'a> AstBuilder<'a> {
             init.raw(),
             var.raw(),
         );
-        self.ast.decls.cold.compound_literal.insert(var, e).expect("fresh variable");
+        self.ast.decls.cold.compound_literal.insert(var, e).expect(FRESH_DECL);
         (e, var)
     }
 
@@ -3443,7 +3449,7 @@ impl<'a> AstBuilder<'a> {
             list.raw(),
         );
         if let Some(end) = end {
-            self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+            self.ast.exprs.cold.end_loc.insert(e, end).expect(FRESH_EXPR);
         }
         e
     }
@@ -3533,7 +3539,7 @@ impl<'a> AstBuilder<'a> {
         flags: ExprFlags,
     ) -> ExprId {
         let e = self.cast(ExprKind::CXXFunctionalCastExpr, ck, sub, ty, vk, path, loc, flags);
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -3560,7 +3566,7 @@ impl<'a> AstBuilder<'a> {
     ) -> ExprId {
         let e =
             self.cast(ExprKind::CXXDynamicCastExpr, ck, sub, ty, vk, path, loc, ExprFlags::NONE);
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -3729,7 +3735,7 @@ impl<'a> AstBuilder<'a> {
             callee.raw(),
             list.raw(),
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -3759,7 +3765,7 @@ impl<'a> AstBuilder<'a> {
             list.raw(),
             filler.map_or(0, RawId::raw),
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
@@ -3774,7 +3780,7 @@ impl<'a> AstBuilder<'a> {
         rparen: Loc,
     ) -> ExprId {
         let e = self.paren_list_init(ty, &[init], None, loc, rparen);
-        self.ast.exprs.cold.union_field.insert(e, field).expect("fresh expression");
+        self.ast.exprs.cold.union_field.insert(e, field).expect(FRESH_EXPR);
         e
     }
 
@@ -3903,7 +3909,7 @@ impl<'a> AstBuilder<'a> {
             raw,
             0,
         );
-        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         e
     }
 
