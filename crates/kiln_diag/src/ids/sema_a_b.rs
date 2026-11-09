@@ -175,6 +175,8 @@ sema_attribute_not_function_pointer = Warning [IgnoredAttributes] (2) "{0} attri
 sema_attribute_not_supported_in_cxx = Error (1) "{0} attribute is not supported in C++";
 sema_attribute_not_type_attr = Error (1) "{0} attribute cannot be applied to types";
 sema_attribute_param_integers_only = Error (1) "{0} attribute argument may only refer to a function parameter of integer type";
+// WP-954: clang `err_attribute_argument_n_type` (constant) for `annotate`.
+sema_attribute_param_not_constant_expr = Error (2) "{0} attribute requires parameter {1} to be a constant expression";
 sema_attribute_param_not_ice = Error (2) "{0} attribute requires parameter {1} to be an integer constant";
 sema_attribute_param_not_ident = Error (2) "{0} attribute requires parameter {1} to be an identifier";
 sema_attribute_param_out_of_bounds = Error (2) "{0} attribute parameter {1} is out of bounds";

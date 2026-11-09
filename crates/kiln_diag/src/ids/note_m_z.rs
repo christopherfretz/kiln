@@ -5,6 +5,7 @@
 note_macro_expansion_here = Note (1) "expansion of macro '{0}' requested here";
 note_macro_here = Note (1) "macro '{0}' defined here";
 note_marked_deprecated = Note (1) "'{0}' has been explicitly marked deprecated here";
+note_marked_unavailable = Note (1) "'{0}' has been explicitly marked unavailable here";
 note_matching = Note (1) "to match this {0}";
 note_member_declared_at = Note (0) "member is declared here";
 note_member_declared_named = Note (1) "member '{0}' declared here";
@@ -123,6 +124,11 @@ note_remove_enum_friend = Note (1) "remove '{0}' to befriend an enum";
 note_remove_parens_for_variable_declaration = Note (0) "remove parentheses to silence this warning";
 note_reorder_ctor = Note (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
 note_replace_default_with_delete = Note (0) "replace 'default' with 'delete'";
+// WP-954: clang `note_declared_required_constant_init_here`,
+// `warn_require_const_init_added_too_late`, `note_constinit_missing_here`
+// (attribute form).
+note_require_constant_init_here = Note (0) "required by 'require_constant_initialization' attribute here";
+note_require_constant_init_missing_here = Note (0) "add the 'require_constant_initialization' attribute to the initializing declaration here";
 note_requirement_may_throw = Note (2) "{0:and|because} '{1}' may throw an exception";
 note_requirement_type_constraint = Note (2) "{0:and|because} '{1}' evaluated to false";
 note_requirement_type_constraint_19 = Note (2) "{0:and|because} type constraint '{1}' was not satisfied:";

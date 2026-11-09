@@ -26,6 +26,11 @@ sema_capture_class_member = Error (1) "class member '{0}' cannot appear in captu
 sema_capture_more_than_once = Error (1) "'{0}' can appear only once in a capture list";
 sema_capture_not_automatic = Error (1) "'{0}' cannot be captured because it does not have automatic storage duration";
 sema_capture_not_variable = Error (1) "'{0}' in capture list does not name a variable";
+sema_carries_dependency_missing_on_first_decl = Error (1) "{0:function|parameter} declared '[[carries_dependency]]' after its first declaration";
+// WP-954: [dcl.attr.depend]: clang `err_carries_dependency_param_not_function_decl`,
+// `err_carries_dependency_missing_on_first_decl`,
+// `note_carries_dependency_missing_first_decl`.
+sema_carries_dependency_param_not_function_decl = Error (0) "'[[carries_dependency]]' attribute only allowed on parameter in a function declaration or lambda";
 sema_case_empty_range = Warning (0) "empty case range specified";
 sema_case_not_in_switch = Error (0) "'case' statement not in switch statement";
 sema_cast_nonnull_to_bool = Warning [PointerBoolConversion] (2) "nonnull {0:function call|parameter} '{1}' will evaluate to 'true' on first encounter";
