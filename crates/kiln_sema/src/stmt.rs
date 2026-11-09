@@ -68,8 +68,15 @@ pub struct FnState {
     pub(crate) deduced: bool,
     pub(crate) labels: Vec<LabelInfo>,
     pub(crate) switches: Vec<SwitchState>,
-    /// Enclosing loops and switches (innermost last; `true` = loop).
+    /// Enclosing loops and switches (innermost last; `true` = loop). A
+    /// loop is open from the start of its condition (`while`, `for`) or
+    /// body (`do`, range-based `for`) to the end of the statement (clang
+    /// `BreakScope`/`ContinueScope`; spec/sema.md §7.4a).
     pub(crate) breakables: Vec<bool>,
+    /// The index in `breakables` of the `for` loop whose condition
+    /// variable's declaration is being parsed: a `continue` to it is an
+    /// error (clang `isConditionVarScope`).
+    pub(crate) for_cond_var: Option<usize>,
     /// The type of `this` in this function (`cv C*`), `None` outside a
     /// non-static member function (spec/sema-class.md §2.5).
     pub(crate) this_ty: Option<QualType>,
@@ -152,6 +159,7 @@ impl FnState {
             labels: Vec::new(),
             switches: Vec::new(),
             breakables: Vec::new(),
+            for_cond_var: None,
             this_ty: None,
             this_override: None,
             returns: Vec::new(),
@@ -894,14 +902,18 @@ impl Sema<'_, '_> {
         self.immediate > 0
     }
 
-    /// Marks the start of a loop body (for `break`/`continue`).
+    /// Opens a loop for `break`/`continue` ([stmt.break], [stmt.cont]):
+    /// before the condition of a `while` and a `for` (after its
+    /// init-statement), before the body of a `do` and a range-based `for`
+    /// (clang's `BreakScope | ContinueScope`; spec/sema.md §7.4a). A jump
+    /// in a GNU statement expression in the header then targets the loop.
     pub fn act_on_start_loop(&mut self) {
         if let Some(f) = self.func.as_mut() {
             f.breakables.push(true);
         }
     }
 
-    /// Marks the end of a loop body.
+    /// Closes the loop opened by [`Sema::act_on_start_loop`].
     pub fn act_on_end_loop(&mut self) {
         if let Some(f) = self.func.as_mut() {
             f.breakables.pop();
@@ -1352,12 +1364,36 @@ impl Sema<'_, '_> {
         self.builder().break_stmt(loc)
     }
 
-    /// `continue;` ([stmt.cont]).
+    /// `continue;` ([stmt.cont]). A `continue` in the initializer of a
+    /// `for` loop's condition variable (in a GNU statement expression)
+    /// would jump to the increment past that variable's initialization
+    /// (clang `err_continue_from_cond_var_init`).
     pub fn act_on_continue(&mut self, loc: Loc) -> StmtId {
-        if self.func.as_ref().is_none_or(|f| !f.breakables.contains(&true)) {
-            self.error(DiagId::sema_continue_not_in_loop, loc);
+        let target = self.func.as_ref().map(|f| (f.breakables.iter().rposition(|&b| b), f.for_cond_var));
+        match target {
+            Some((Some(i), cv)) if cv == Some(i) => {
+                self.error(DiagId::sema_continue_from_cond_var_init, loc);
+            }
+            Some((Some(_), _)) => {}
+            _ => self.error(DiagId::sema_continue_not_in_loop, loc),
         }
         self.builder().continue_stmt(loc)
+    }
+
+    /// Starts the declaration of a `for` loop's condition variable (the
+    /// loop is the innermost open one); returns the state to restore
+    /// with [`Sema::end_for_cond_var`].
+    pub fn begin_for_cond_var(&mut self) -> Option<usize> {
+        let f = self.func.as_mut()?;
+        let i = f.breakables.len().checked_sub(1);
+        std::mem::replace(&mut f.for_cond_var, i)
+    }
+
+    /// Ends what [`Sema::begin_for_cond_var`] started.
+    pub fn end_for_cond_var(&mut self, saved: Option<usize>) {
+        if let Some(f) = self.func.as_mut() {
+            f.for_cond_var = saved;
+        }
     }
 
     fn label_decl(&mut self, name: Symbol, loc: Loc) -> DeclId {

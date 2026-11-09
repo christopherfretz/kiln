@@ -500,6 +500,10 @@ impl Sema<'_, '_> {
                     b.jumps.iter().rposition(|j| j.is_loop)
                 };
                 let Some(fi) = frame else {
+                    // clang `badCFG`: a jump in a loop header with no
+                    // target in the graph (spec/sema.md §7.4a) leaves the
+                    // body without one.
+                    b.cfg.status = Status::NoCfg;
                     b.terminate(Term::Jump(s));
                     return;
                 };
@@ -793,9 +797,17 @@ impl Sema<'_, '_> {
         self.cfg_scope_end(mark, b);
     }
 
+    /// A `while` or `for` loop. clang's graph (not its codegen) targets
+    /// a `break` in a `for` loop's header at the loop's exit and a
+    /// `continue` there at the enclosing loop; in a `while` condition
+    /// both target the enclosing statement (spec/sema.md §7.4a).
     fn cfg_loop(&mut self, s: StmtId, b: &mut Builder) {
         let d = *self.ast.stmts.loop_data(s);
         let mark = b.dtors.len();
+        let is_for = self.ast.stmts.get(s).kind() == StmtKind::ForStmt;
+        if is_for {
+            b.jumps.push(Jump { is_loop: false, brk: Vec::new(), cont: Vec::new(), dtor_mark: mark });
+        }
         if let Some(i) = d.init {
             self.cfg_stmt(i, b);
         }
@@ -819,6 +831,10 @@ impl Sema<'_, '_> {
         b.resolve(&back, head);
         b.set_pos(xe);
         b.dangling.extend(j.brk);
+        if is_for {
+            let h = b.jumps.pop().expect("loop header frame");
+            b.dangling.extend(h.brk);
+        }
         self.cfg_scope_end(mark, b);
     }
 
@@ -894,9 +910,13 @@ impl Sema<'_, '_> {
         self.cfg_scope_end(mark, b);
     }
 
+    /// A range-based `for`: as in clang's graph, a `break` in its
+    /// init-statement or range targets the loop's exit (spec/sema.md
+    /// §7.4a).
     fn cfg_range_for(&mut self, s: StmtId, b: &mut Builder) {
         let d = *self.ast.stmts.range_for_data(s);
         let mark = b.dtors.len();
+        b.jumps.push(Jump { is_loop: false, brk: Vec::new(), cont: Vec::new(), dtor_mark: mark });
         if let Some(i) = d.init {
             self.cfg_stmt(i, b);
         }
@@ -929,6 +949,8 @@ impl Sema<'_, '_> {
         b.resolve(&back, head);
         b.set_pos(vec![xe]);
         b.dangling.extend(j.brk);
+        let h = b.jumps.pop().expect("loop header frame");
+        b.dangling.extend(h.brk);
         self.cfg_scope_end(mark, b);
     }
 
@@ -986,9 +1008,12 @@ impl Sema<'_, '_> {
         self.cfg_scope_end(mark, b);
     }
 
+    /// A `switch`: as in clang's graph, a `break` in its header targets
+    /// the switch's exit (spec/sema.md §7.4a).
     fn cfg_switch(&mut self, s: StmtId, b: &mut Builder) {
         let d = *self.ast.stmts.switch_data(s);
         let mark = b.dtors.len();
+        b.jumps.push(Jump { is_loop: false, brk: Vec::new(), cont: Vec::new(), dtor_mark: mark });
         if let Some(i) = d.init {
             self.cfg_stmt(i, b);
         }
@@ -1013,7 +1038,6 @@ impl Sema<'_, '_> {
         let default_live = !matched && !self.switch_covers_enum(d.cond, &cases, has_default);
         let src = b.terminate(Term::Switch(s));
         b.switches.push(SwitchFrame { src, value, default_block: None });
-        b.jumps.push(Jump { is_loop: false, brk: Vec::new(), cont: Vec::new(), dtor_mark: mark });
         self.cfg_stmt(d.body, b);
         let j = b.jumps.pop().expect("switch frame");
         let f = b.switches.pop().expect("switch frame");
