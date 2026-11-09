@@ -59,7 +59,12 @@ drv_pch_config_value_19 = Error (2) "{0} differs in PCH file{1:} vs. current fil
 drv_pch_corrupt = Fatal (1) "malformed or corrupted precompiled file: '{0}'";
 drv_pch_corrupt_19 = Fatal (1) "malformed or corrupted AST file: '{0}'";
 drv_pch_different_branch = Error (2) "PCH file built from a different branch ({0}) than the compiler ({1})";
+// WP-1037: clang's `-include-pch <dir>` finds no acceptable PCH in it.
+drv_pch_dir_no_pch = Error (1) "no suitable precompiled header file found in directory '{0}'";
 drv_pch_file_modified = Fatal (3) "file '{0}' has been modified since the precompiled header '{1}' was built: {2}";
+// WP-1037: clang's driver probe of `-include <h>` for `<h>.gch`.
+drv_pch_ignoring_gch_dir = Warning [IgnoredGch] (1) "precompiled header directory '{0}' was ignored because it contains no clang PCH files";
+drv_pch_ignoring_gch_file = Warning [IgnoredGch] (1) "precompiled header '{0}' was ignored because it is not a clang PCH file";
 drv_pch_invalid = Fatal (1) "file '{0}' is not a valid PCH file: file doesn't start with precompiled file magic";
 drv_pch_invalid_19 = Fatal (1) "file '{0}' is not a valid precompiled PCH file: file doesn't start with AST file magic";
 drv_pch_macro_def_differs = Error (4) "definition of macro '{0}' differs between the precompiled file '{1}' ('{2}') and the command line ('{3}')";
@@ -67,6 +72,8 @@ drv_pch_macro_def_differs_19 = Error (4) "definition of macro '{0}' differs betw
 drv_pch_macro_def_undef = Error (3) "macro '{0}' was {1:defined|undef'd} in the precompiled file '{2}' but {1:undef'd|defined} on the command line";
 drv_pch_macro_def_undef_19 = Error (3) "macro '{0}' was {1:defined|undef'd} in the precompiled header{2:} but {1:undef'd|defined} on the command line";
 drv_pch_newer = Error (0) "PCH file uses a newer PCH format that cannot be read";
+// WP-1037: a probed PCH for an `-include` that is not the first.
+drv_pch_not_first_include = Warning (2) "precompiled header '{0}' was ignored because '{1}' is not first '-include'";
 drv_pch_not_found = Fatal (1) "PCH file '{0}' not found: module file not found";
 drv_pch_not_pch = Error (1) "input is not a PCH file: '{0}'";
 drv_pch_older = Error (1) "PCH file '{0}' uses an older format that is no longer supported";
@@ -74,8 +81,6 @@ drv_pch_target = Error (3) "precompiled file '{0}' was compiled for the target '
 drv_pch_target_19 = Error (3) "PCH file{0:} was compiled for the target '{1}' but the current translation unit is being compiled for target '{2}'";
 drv_pch_unreadable = Error (2) "unable to read PCH file {0}: '{1}'";
 drv_precompile_not_module = Error (0) "--precompile requires a module interface or partition unit";
-// WP-1032: a `#!special-case-list-v1` ignorelist (POSIX regular expressions).
-drv_regex_sanitizer_ignorelist = Error (1) "sanitizer ignorelist '{0}' uses regular expressions ('#!special-case-list-v1'), which kiln does not support; use glob patterns";
 // WP-982: kiln-scan-deps (spec/modules.md §11.9).
 drv_scan_one_job = Error (1) "unable to handle compilation, expected exactly one compiler job in '{0}'";
 // WP-1138: clang `SanitizerArgs::addArgs`, `-fsanitize=memtag-stack` on

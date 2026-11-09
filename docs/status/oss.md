@@ -49,8 +49,10 @@ The loop:
 |---|---|---|---|---|
 | `catch2` | 1 | `v3.16.1` | tests at parity | tests at parity |
 | `cli11` | 1 | `v2.6.1` | tests at parity | tests at parity |
+| `cmake_modules` | 1 | `local` | tests at parity | tests at parity |
 | `doctest` | 1 | `v2.5.3` | tests at parity | tests at parity |
 | `fmt` | 1 | `12.1.0` | tests at parity | tests at parity |
+| `fmt_module` | 1 | `12.1.0` | blocked (1 cluster) | tests at parity |
 | `googletest` | 1 | `v1.17.0` | tests at parity | tests at parity |
 | `hunspell_autotools` | 1 | `v1.7.2` | tests at parity | not run |
 | `jsoncpp_meson` | 1 | `1.9.6` | tests at parity | not run |
@@ -1085,6 +1087,65 @@ TUs over 1.2x on time or RSS: 953 of the 1025 that take clang-19 at least 0.5 s.
 - `$KILN/.oss/src/boost/libs/graph/test/read_propmap.cpp`: time 7.3 / 2.0 s = 3.56x, RSS 154 / 256 MB = 0.60x
 <!-- /oss:boost_heavy -->
 
+<!-- oss:fmt_module -->
+### fmt_module (12.1.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | rc 1 | ok |
+| TUs ok / failed | 1 / 1 | 2 / 0 |
+| links ok / failed | 0 / 0 | 1 / 0 |
+| tests passed / total | 0 / 1 | 1 / 1 |
+| wall | 6 s | 7 s |
+| peak TU RSS | 96 MB | 248 MB |
+
+Failure clusters (kiln): 1.
+
+1. **1x** `reject: error: redefinition of Q`
+   - e.g. `$KILN/scripts/oss/shims/fmt-module-smoke.cc`: `/usr/lib/gcc/aarch64-linux-gnu/14/../../../../include/c++/14/limits:1989:1: error: redefinition of 'numeric_limits<_Float32>'`
+   - repro: `cd $KILN/.oss/build/fmt_module/kiln && kiln++ -fno-crash-diagnostics -I$KILN/.oss/src/fmt/include -O3 -DNDEBUG -std=gnu++20 -fvisibility=hidden -fvisibility-inlines-hidden -MD -MT CMakeFiles/fmt-module-smoke.dir$KILN/scripts/oss/shims/fmt-module-smoke.cc.o -MF CMakeFiles/fmt-module-smoke.dir$KILN/scripts/oss/shims/fmt-module-smoke.cc.o.d @CMakeFiles/fmt-module-smoke.dir$KILN/scripts/oss/shims/fmt-module-smoke.cc.o.modmap -o CMakeFiles/fmt-module-smoke.dir$KILN/scripts/oss/shims/fmt-module-smoke.cc.o -c $KILN/scripts/oss/shims/fmt-module-smoke.cc`
+
+kiln test run: `0% tests passed, 1 tests failed out of 1`
+
+Performance over the 1 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **0.89x**, RSS **0.39x**; total 3 s vs 3 s; peak TU RSS 96 MB vs 248 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/fmt/src/fmt.cc` | 3.1 | 2.8 | 0.89 | 248 | 96 | 0.39 |
+
+TUs over 1.2x on time or RSS: 0 of the 1 that take clang-19 at least 0.5 s.
+<!-- /oss:fmt_module -->
+
+<!-- oss:cmake_modules -->
+### cmake_modules (local)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 4 / 0 | 4 / 0 |
+| links ok / failed | 1 / 0 | 1 / 0 |
+| tests passed / total | ok | ok |
+| wall | 1 s | 1 s |
+| peak TU RSS | 55 MB | 93 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 4 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **0.80x**, RSS **0.62x**; total 0 s vs 0 s; peak TU RSS 55 MB vs 93 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/scripts/oss/fixtures/modules/greet-part.cppm` | 0.1 | 0.0 | 0.48 | 85 | 54 | 0.64 |
+| `$KILN/scripts/oss/fixtures/modules/greet.cppm` | 0.1 | 0.0 | 0.56 | 85 | 55 | 0.64 |
+| `$KILN/scripts/oss/fixtures/modules/main.cpp` | 0.0 | 0.0 | 1.14 | 93 | 55 | 0.60 |
+| `$KILN/scripts/oss/fixtures/modules/greet-impl.cpp` | 0.0 | 0.0 | 1.31 | 89 | 55 | 0.61 |
+
+TUs over 1.2x on time or RSS: 0 of the 0 that take clang-19 at least 0.5 s.
+<!-- /oss:cmake_modules -->
+
 ## libc++ results (WP-694)
 
 The wave-1 projects built with `oss-build.sh <project> --stdlib libc++`
@@ -1399,3 +1460,60 @@ Failure clusters (kiln): none.
 
 Failure clusters (kiln): none.
 <!-- /oss:hunspell_autotools -->
+
+<!-- oss:fmt_module:libcxx -->
+### fmt_module (12.1.0), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 2 / 0 | 2 / 0 |
+| links ok / failed | 1 / 0 | 1 / 0 |
+| tests passed / total | 1 / 1 | 1 / 1 |
+| wall | 7 s | 6 s |
+| peak TU RSS | 120 MB | 240 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 2 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **1.19x**, RSS **0.47x**; total 5 s vs 4 s; peak TU RSS 120 MB vs 240 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/fmt/src/fmt.cc` | 3.0 | 2.7 | 0.92 | 240 | 100 | 0.42 |
+| `$KILN/scripts/oss/shims/fmt-module-smoke.cc` | 1.4 | 2.2 | 1.53 | 225 | 120 | 0.53 |
+
+TUs over 1.2x on time or RSS: 1 of the 2 that take clang-19 at least 0.5 s.
+- `$KILN/scripts/oss/shims/fmt-module-smoke.cc`: time 2.2 / 1.4 s = 1.53x, RSS 120 / 225 MB = 0.53x
+<!-- /oss:fmt_module:libcxx -->
+
+<!-- oss:cmake_modules:libcxx -->
+### cmake_modules (local), libc++
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 7 / 0 | 7 / 0 |
+| links ok / failed | 2 / 0 | 2 / 0 |
+| tests passed / total | ok | ok |
+| wall | 5 s | 4 s |
+| peak TU RSS | 102 MB | 261 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 7 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **1.49x**, RSS **0.59x**; total 5 s vs 3 s; peak TU RSS 102 MB vs 261 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `/usr/lib/llvm-19/share/libc++/v1/std.cppm` | 1.7 | 1.4 | 0.82 | 261 | 102 | 0.39 |
+| `$KILN/scripts/oss/fixtures/modules/stdmain.cpp` | 0.9 | 2.3 | 2.55 | 150 | 96 | 0.64 |
+| `/usr/lib/llvm-19/share/libc++/v1/std.compat.cppm` | 0.3 | 1.4 | 5.17 | 143 | 94 | 0.66 |
+| `$KILN/scripts/oss/fixtures/modules/greet-part.cppm` | 0.1 | 0.0 | 0.64 | 85 | 55 | 0.64 |
+| `$KILN/scripts/oss/fixtures/modules/greet.cppm` | 0.1 | 0.0 | 0.67 | 85 | 55 | 0.64 |
+
+TUs over 1.2x on time or RSS: 1 of the 2 that take clang-19 at least 0.5 s.
+- `$KILN/scripts/oss/fixtures/modules/stdmain.cpp`: time 2.3 / 0.9 s = 2.55x, RSS 96 / 150 MB = 0.64x
+<!-- /oss:cmake_modules:libcxx -->

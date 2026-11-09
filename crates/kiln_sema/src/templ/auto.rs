@@ -370,7 +370,7 @@ impl Sema<'_, '_> {
             }
             let msg = self
                 .diag(DiagId::sema_auto_var_different_deductions, at)
-                .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
+                .arg(kw as u8)
                 .arg(self.ty_arg(t0))
                 .arg(self.decl_name(d0))
                 .arg(self.ty_arg(deduced))
