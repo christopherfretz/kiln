@@ -230,8 +230,8 @@ const FIB: &str = "consteval int fib(int n) { return n < 2 ? n : fib(n - 1) + fi
 /// An immediate invocation ([expr.const]/16) of a memoized recursion:
 /// memo hits are calls, charged the steps they stand for, so the
 /// function's inclusive steps are the evaluation's. In a variable's
-/// initializer the whole initializer is then folded again as a trial
-/// (WP-1129): the function row carries both, the site only the first.
+/// initializer the whole-initializer fold reads the stored value
+/// (WP-1140, WP-1129): no trial runs the call again.
 #[test]
 fn consteval_memo_and_trial_rows() {
     let d = tu("fib", &format!("{FIB}int f() {{ return fib(10); }}\n"));
@@ -248,6 +248,38 @@ fn consteval_memo_and_trial_rows() {
     let p = profile(&d);
     let (f, t) = (func(&p, "fib"), total(&p));
     assert_eq!(n(f, "incl_steps"), n(t, "steps") + n(t, "trial_steps"));
+    assert_eq!(n(t, "trial_steps"), 0);
+}
+
+const CSUM: &str = "consteval int csum(int n) { int r = 0; for (int i = 0; i < n; ++i) r += i; return r; }\n";
+
+/// The trial folds of a full-expression's completion checks (the
+/// overflow and implicit-conversion warnings) read the values of its
+/// immediate invocations evaluated first ([expr.const]/16: each is
+/// evaluated once, WP-1129), so the trials cost no steps; and codegen
+/// reuses a default argument's value: one evaluation per use. (The
+/// overflow trial of `def() + def()` would still evaluate the default
+/// argument before failing on the non-constexpr `def`.)
+#[test]
+fn immediate_invocations_are_not_folded_again() {
+    let one = tu("imm-one", &format!("{CSUM}int f(int x) {{ return x + csum(50); }}\n"));
+    let one = ok(&one, &["-S", "-emit-llvm", "-o", "t.ll", "-fconstexpr-stats", "t.cpp"]);
+    let cost = stat_n(&one, "steps", "count");
+    assert!(cost > 50, "{one}");
+    assert_eq!(stat_n(&one, "trials", "steps"), 0, "{one}");
+    let src = format!(
+        "{CSUM}int add(int x) {{ return x + csum(50); }}\n\
+         short narrow() {{ return csum(50); }}\n\
+         bool cmp(int x) {{ return x < csum(50); }}\n\
+         int cond() {{ return csum(50) ? 1 : 2; }}\n\
+         int def(int x = csum(50)) {{ return x; }}\n\
+         int uses() {{ def(); return def(); }}\n"
+    );
+    let d = tu("imm-trials", &src);
+    let err = ok(&d, &["-S", "-emit-llvm", "-o", "t.ll", "-fconstexpr-stats", "t.cpp"]);
+    assert_eq!(stat_n(&err, "evaluations", "immediate"), 6, "{err}");
+    assert_eq!(stat_n(&err, "steps", "count"), 6 * cost, "{err}");
+    assert_eq!(stat_n(&err, "trials", "steps"), 0, "{err}");
 }
 
 /// Ties are broken by count, then location, then name; the report is
