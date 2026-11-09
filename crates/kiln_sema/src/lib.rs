@@ -379,6 +379,15 @@ pub struct Sema<'a, 'sm> {
     /// The never-constant walk looks only at calls of builtins clang
     /// does not constant-evaluate (`never_constant.rs`).
     nc_strict_only: bool,
+    /// The never-constant walk passed a statement or initializer whose
+    /// unknown value may hide a failure in a callee (clang then stops
+    /// quietly): a later static variable or the end of the body decides
+    /// nothing (WP-1123).
+    nc_unknown_call: bool,
+    /// The never-constant walk defined a local variable in the current
+    /// block whose value it does not know (or which a destructor ends):
+    /// clang fails quietly at the end of the block (WP-1123).
+    nc_unknown_local: bool,
     /// The functions whose `no_builtin` attribute waits for their
     /// definition (clang checks the declarator's definition kind), with the
     /// attribute's location: a `{` body clears one, `= default` / `=
@@ -1293,6 +1302,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             lib_builtin_name: |n, _| kiln_ast::decl::builtin::lib_by_name(n).is_some(),
             clang_constexpr_builtin: |_, _| None,
             nc_strict_only: false,
+            nc_unknown_call: false,
+            nc_unknown_local: false,
             no_builtin_pending: Vec::new(),
             math_errno: true,
             cfg_dump: false,

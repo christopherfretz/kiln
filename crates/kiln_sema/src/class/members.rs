@@ -414,13 +414,18 @@ impl Sema<'_, '_> {
                 .function(dtor)
                 .is_some_and(|f| f.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None)
         {
-            msg = msg.with_note(
-                self.diag(
-                    DiagId::note_non_literal_non_constexpr_dtor,
-                    self.ast.decls.get(dtor).loc(),
-                )
-                .arg(rd),
-            );
+            // Before C++20 the rule is a trivial destructor and clang
+            // names a user-provided one (`RequireLiteralType`). WP-1123.
+            let id = if self.std >= kiln_lex::Std::Cxx20 {
+                Some(DiagId::note_non_literal_non_constexpr_dtor)
+            } else if self.is_user_provided(dtor) {
+                Some(DiagId::note_non_literal_user_provided_dtor)
+            } else {
+                None
+            };
+            if let Some(id) = id {
+                msg = msg.with_note(self.diag(id, self.ast.decls.get(dtor).loc()).arg(rd));
+            }
         }
         msg
     }
