@@ -9,6 +9,7 @@
 // fmt smoke: gtest's `strlen(prefix)` on a static const array gets a
 // nonnull-attribute check under kiln but is the constant 7 under clang.
 //@ expect: ir
+//@ min-oracle: 22
 //@ std: c++20
 extern "C" {
 __SIZE_TYPE__ strlen(const char *);

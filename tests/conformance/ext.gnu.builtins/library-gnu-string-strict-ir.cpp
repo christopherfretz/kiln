@@ -3,6 +3,7 @@
 // a user declaration is an ordinary function, so the calls may throw and
 // are `invoke`s under a pending cleanup. See library-gnu-string-nothrow-ir.cpp.
 //@ expect: ir
+//@ min-oracle: 22
 //@ std: c++20
 extern "C" char *stpcpy(char *, const char *);
 extern "C" char *stpncpy(char *, const char *, __SIZE_TYPE__);
