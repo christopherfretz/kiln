@@ -1363,10 +1363,7 @@ impl AstBuilder<'_> {
             payload,
         );
         if let Some(lex) = h.lexical.filter(|&l| l != h.ctx) {
-            self.ast
-                .decls
-                .set_lexical_ctx(d, lex)
-                .expect("fresh declaration has no lexical context");
+            self.ast.decls.set_lexical_ctx(d, lex).expect(crate::builder::FRESH_DECL);
         }
         d
     }

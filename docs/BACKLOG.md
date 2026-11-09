@@ -997,7 +997,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-969 | debug info: subprogram for the global-init function; local variables for structured bindings (kiln_codegen debuginfo/func.rs) | WP-910 | open |
 | WP-970 | codegen: lower SVE tuple locals as a struct of vectors under clang-compat 22 | WP-910 | open |
 | WP-971 | ICE (WP-911): codegen kind-mismatch expect/unreachable sites (class.rs 45, expr.rs 37, stmt.rs, complex.rs, cleanup.rs, fir.rs) become "unsupported construct" diagnostics | WP-911 | open |
-| WP-972 | ICE (WP-911): audit kiln_ast builder.rs (41) / expr.rs (23) node-shape expects for user-reachable ones | WP-911 | open |
+| WP-972 | ICE (WP-911): audit kiln_ast builder.rs (41) / expr.rs (23) node-shape expects for user-reachable ones | WP-911 | in progress |
 | WP-973 | ICE (WP-911): kiln_pp preprocessor.rs (8) / ifeval.rs (3) token-state unreachable!: which can malformed directives reach | WP-911 | open |
 | WP-974 | driver (WP-911): test the `.i` crash reproducer once C -fsyntax-only works (git sha in --version is WP-942) | WP-911 | open |
 | WP-987 | parameter-type tags: NTTP "cannot be defined in a type specifier", sizeof(struct{}) in a default arg, conversion-type tag, lambda inside NTTP type (kiln_parse decl.rs check_tag_defined_in_param) | WP-962 | open |
