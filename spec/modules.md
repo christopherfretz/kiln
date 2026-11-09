@@ -1829,15 +1829,24 @@ a member: the validator and the class nesting skip it), and always
 after its template and the types of its arguments. A *member
 reference record* (kind 19) names a member of a class specialization:
 the kind-18 record of the specialization and the pattern's member
-record (`instantiated_from`); an implicitly declared special member
-of a specialization falls back. A type naming a specialization is
+record (`instantiated_from` for a templatable member, the
+`instantiated_from_map` entry for a field or nested type); an
+implicitly declared special member of a specialization (the default
+constructor `A<int> a;` declares) has no pattern member and falls back
+("an implicit member of a class template specialization"). A type naming a specialization is
 type tag 16, `tst(template:u32, n, targ*, under:qref)`: the
 `TemplateSpecializationType` as written (the template record, the
-written arguments, and the underlying type, a record type naming a
+written arguments, and the underlying type (a written non-type
+argument is an expression, not a value, so it falls back with "a
+template argument the image does not carry"), a record type naming a
 kind-18 record, or 0 for a dependent one written in a pattern, `X<T>`),
 and type tag 17, `injected(template:u32)`, is the injected-class-name
 type of a class template's pattern (`X<T>` inside `X`, the pointee of
-`this`). A template name other than the template itself (qualified,
+`this`), and type tag 18, `subst(repl:qref, template:u32, index:u32,
+pack:u32)`, is a substituted template type parameter in a
+specialization's signature or member type: the replacement, the
+template record whose parameter it replaced, the parameter index and
+the pack element plus one (0 when not a pack element). A template name other than the template itself (qualified,
 dependent, a template template parameter) falls back.
 
 The importer rebuilds a reference by the entry points a use in source
@@ -1882,22 +1891,47 @@ dependent class is claimed by that class, which must itself be claimed
 out-of-line member definition (`template<class T> int X<T>::f() {}`)
 carries the parameters of its own template-head as dependent
 parameter records immediately before it, at depth 0 in index order;
-the definition claims that run (there is no template record: sema
+the run's context is the definition's lexical context (the namespace
+the definition is written in, or none at file scope), and the
+definition claims it (there is no template record: sema
 keeps no list for an out-of-line head, the body names the parameters
 directly, and substitution maps them by depth and index). Dependent
 base specifiers (a type parameter, `B<T>`) are base records whose
 type is dependent; the validator accepts them in a dependent class
 only. The injected-class-name is not a record: lookup finds it through
 the pattern (`injected_class_for`), and type tag 17 rebuilds its type
-with `injected_type_of`.
+with `injected_type_of`. A default type template argument (`class U =
+W<T>`) is carried in the type parameter's record and rebuilt with the
+parameter, before the pattern.
+
+Two dependent expression kinds are carried (appended to the schema's
+kind table): a dependent construction `T(a, b)`
+(`CXXUnresolvedConstructExpr`; its written type and argument list, aux
+1 for a list-initialization; a braced argument `T(a, {b})` falls
+back) and a dependent member access `this->x`, `t.f`
+(`CXXDependentScopeMemberExpr`; the base expression and the member
+name, an index into `pnames` since a dependent member name is no
+declaration of the image and is not gated; bits 1 for `->`, and the
+operator location as cold annotation 16). Mem-initializers of a
+constructor of a class template live in sema side tables
+(`pattern_mem_inits`), which the image does not carry: such a
+constructor falls back ("mem-initializers of a constructor in a class
+template"), since instantiating it without them would silently
+default-initialize its bases and members. A non-template class's
+`Base` ctor-initializer names its base by the type as written (`B<int>`,
+an alias), which the writer matches canonically against the base list.
 
 Still falling back after the second slice: member templates and
 templates nested in templates (depth above 0), explicit and partial
 specializations (of a class or a member), friend declarations in a
 class template, dependent array bounds and other types holding an
-expression, unresolved-lookup and dependent-scope expression kinds,
-packs, default template arguments, and every construct the first
-slice lists.
+expression, non-type template arguments written in a type, default
+non-type template arguments, packs, mem-initializers of class
+template constructors, implicit special members of specializations,
+variable templates, unresolved-lookup expressions (a dependent call
+`g(t)`), a qualified or `template`-keyword dependent member access
+(`B<T>::x`, `t.T::f()`, `t.template get<int>()`), pseudo-destructor
+calls, and every construct the first slice lists.
 
 **Versioning and the fingerprint.** The section starts with its own
 format word (`IMAGE_VERSION = 5` since WP-1139, 4 for the first S4
@@ -1948,6 +1982,8 @@ type    := tag:u8 payload            1 pointer(qref), 2 lref(qref),
                                      16 tst(template:u32, n:u32,
                                        targ*n, under:qref)   S4b
                                      17 injected(template:u32)   S4b
+                                     18 subst(repl:qref, template:u32,
+                                       index:u32, pack:u32)   S4b
 targ    := 0 qref | 1 qref value:i128   a type, an integral value
 step    := 0 | 1 decl:u32 | 2 qref template:u8   `::`, namespace, type
 decl    := kind:u8 flags:u8 owner:u8 access:u8 name:u32 ctx:u32
@@ -2027,8 +2063,9 @@ class template's pattern (S4). The payloads are:
   assignment, 5 destructor); its context is a complete class that
   precedes it, and the record lies after that class's end;
 - template type parameter (S4): depth u16, index u16, a byte that is 1
-  for `typename` (0 for `class`), and the location of that keyword
-  (`u32::MAX` when none); its name is a `pnames` index or none;
+  for `typename` (0 for `class`), the location of that keyword
+  (`u32::MAX` when none) and the default argument, a `qref` (type 0
+  for none, S4b); its name is a `pnames` index or none;
 - non-type template parameter (S4): type, depth u16, index u16;
 - template (S4): the template kind (0 a function template, 1 a class
   template, S4b), the pattern record, the `template`, `<` and `>`
@@ -2056,7 +2093,8 @@ statement's attribute list. A declaration reference is a record index,
 parameters of the function records in order), or `u32::MAX - 1` for the
 translation unit. The expression record's `cold` byte says which cold
 annotations follow the slots: 1 end location, 2 written type, 4
-operator location, 8 begin location.
+operator location, 8 begin location, 16 member-access operator
+location (S4b).
 
 The carried kinds (`EXPR_KINDS`, `STMT_KINDS`; append-only tables, the
 record's kind byte is the index):
@@ -2234,8 +2272,9 @@ classes and templates). The follow-ups, in priority order:
    functions), `typeid`/`dynamic_cast`, `std::initializer_list` and
    lambdas;
 3. S4: templates as patterns. **First slice landed: namespace-scope
-   function templates (WP-1066)**, see "Templates as patterns" and its
-   follow-ups;
+   function templates (WP-1066)**; **second slice landed:
+   specialization references and class templates (WP-1139)**, see
+   "Templates as patterns" and its follow-ups;
 4. S5: global module fragments with ODR merging (replacing the name
    gate);
 5. S6: imports, re-exports and partitions;
