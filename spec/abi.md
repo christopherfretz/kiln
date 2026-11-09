@@ -948,11 +948,13 @@ unadjusted alignment, as the classification does (WP-583).
   `Sub::TemplateParm`, the same one used when it is a template argument)
   followed by its arguments. `tests/mangle/dependent_spec.cpp`.
 - Constrained parameters, requires-clauses and `Dk` placeholders: §8.16.
-- **Reflection arguments** (`std::meta::info` values): the vendor literal
-  `L u6__info <kind> <entity> E` (GCC 16.1's kind letters and entity
-  encodings; the same in every TU, the reflectee's linkage), or GCC's
-  `L Dm <kind> <entity> E` under `-fkiln-reflection-mangling=gcc`, where
-  the info type itself is `Dm`. The grammar, the per-kind table and the
+- **Reflection arguments** (`std::meta::info` values): by default
+  (`-fkiln-reflection-mangling=gcc`, WP-909) GCC 16.1's
+  `L Dm <kind> <entity> E`, where the info type itself is `Dm`, the same
+  in every TU with the reflectee's linkage and link-compatible with
+  g++-16; under `-fkiln-reflection-mangling=kiln` the vendor literal
+  `L u6__info <kind> <entity> E` (the same kind letters and entity
+  encodings). The grammar, the per-kind table and the
   linkage rule are spec/reflection.md §8.3; `spec/landed/abi/WP-501.md`
   (superseding the TU-local `L u6__info <id> E` of WP-485).
 - **Known divergences from GCC 16.1** (not reflection-specific, found by

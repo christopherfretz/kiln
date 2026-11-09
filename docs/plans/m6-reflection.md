@@ -137,7 +137,7 @@ Normative target: the C++26 IS wording of P2996R13 plus the papers adopted with 
 8. **Error model and ABI.**
    - Every bridge failure is a `MetaError { notes, kind }`. With P3560 the Oven throws `std::meta::exception(what, from = ^^fn, where)` through the P3068 path. A silent failure stays silent for trials.
    - Diagnostics follow GCC 16.1's shape where kiln has no clang wording.
-   - **Mangling placeholder:** a reflection inside a template argument of an emitted symbol mangles as a kiln-vendor form, deterministic within the TU and cached per `ReflectionId`, until WP-102 picks GCC's Itanium form. It is flagged in spec/abi-mangle as "not link-compatible". *Superseded (WP-501):* the mangling is structural, `L u6__info <kind> <entity> E` by default or GCC 16.1's `L Dm … E` under `-fkiln-reflection-mangling=gcc`, with the reflectee's linkage, so equal reflections link across TUs (spec/reflection.md §8.3).
+   - **Mangling placeholder:** a reflection inside a template argument of an emitted symbol mangles as a kiln-vendor form, deterministic within the TU and cached per `ReflectionId`, until WP-102 picks GCC's Itanium form. It is flagged in spec/abi-mangle as "not link-compatible". *Superseded (WP-501):* the mangling is structural, GCC 16.1's `L Dm <kind> <entity> E` by default (WP-909) or `L u6__info … E` under `-fkiln-reflection-mangling=kiln`, with the reflectee's linkage, so equal reflections link across TUs (spec/reflection.md §8.3).
 9. **Tests and status.** Directory map: `tests/conformance/{expr.reflect, basic.splice, meta.reflection.*, dcl.attr.annotation, dcl.pre.consteval-block}/`. Plus the `docs/STANDARD_SUPPORT.md` reflection rows and the open questions.
 
 ## 3. Performance and memory design (Oven)

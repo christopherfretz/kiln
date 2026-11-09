@@ -29,7 +29,6 @@ If you hit something not listed here, please
     build. kiln keeps `_Float128` and `__float128` distinct, as GCC 13+
     does; making glibc's `*f128` functions usable as `__float128` ones
     is [WP-1058](BACKLOG.md).
-  - gRPC's full x86_64 results are pending: [WP-1002](BACKLOG.md).
 - **LLVM 19 and 22 only.** LLVM 20 and 21 are not supported.
 - **Identification.** `--version` prints `kiln version <v>` without the
   git commit ([WP-942](BACKLOG.md)). The `-v` output of a link step

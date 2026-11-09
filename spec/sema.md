@@ -2588,9 +2588,9 @@ instantiation unless stated.
       is `expression contains unexpanded parameter pack` ([temp.variadic]/12,
       the attribute is dropped). On a statement clang 22 accepts it
       and kiln ignores it; clang 19 (`-fclang-compat=19`) keeps `cannot
-      be applied to a statement`. Not yet: codegen
-      (`llvm.global.annotations`, `llvm.var.annotation`,
-      `llvm.ptr.annotation`).
+      be applied to a statement`. An instantiated variable, local or
+      static, keeps it (`var_align_attrs`). Codegen: spec/codegen.md
+      "clang `annotate`" (WP-1113).
   - **Class B attributes** (WP-813, `class_b_attrs.rs`, `AttrKind` 240
     to 273): the hardening, instrumentation, inlining and pointer-fact
     attributes (`no_stack_protector`, `patchable_function_entry`,
@@ -3697,6 +3697,29 @@ specification as written (`TypeNames` prints ` noexcept`,
   emits a nested declarator's outer chunk first. From C++17 the
   specification is part of the type and is allowed. Tests:
   `tests/conformance/except.spec/exception-spec-in-typedef-*.cpp`.
+- **Beyond one level of indirection** before C++17 (C++14
+  [except.spec]/2, WP-1102; clang `CheckDistantExceptionSpec`):
+  `type_for_declarator_at` checks each pointer, reference, array and
+  pointer-to-member chunk it applies (`is_distant_exception_spec`): when
+  the type built so far is a pointer or pointer to member (through
+  sugar, `exc_pointee`) to a function type with a written specification,
+  `exception specifications are not allowed beyond a single level of
+  indirection` (`sema_distant_exception_spec`). It is at the
+  declarator-id, at the place an abstract declarator's name would go
+  (`abstract_at`), and for a pointer to member at its
+  nested-name-specifier. The type is still built (no pointer to member
+  is formed: `int`) and the declaration is invalid
+  (`declarator_distant_exc`, taken by `act_on_declarator` and
+  `act_on_param_declarator`); like clang's `Declarator::InvalidType` it
+  sticks for the rest of the declaration group
+  (`declarator_type_invalid`), whose later declarators are not declared.
+  So `void (**j)() throw(int);`, `void (**(*h())())() noexcept;`, an
+  array of such pointers, a parameter, a template argument, a
+  `new`/`sizeof`/cast type-id are errors, and `void (*fp)() noexcept`,
+  `void (*h())() noexcept`, `void (**k)(void pfa() throw(int))` are
+  not. From C++17 the specification is part of the type and allowed
+  anywhere. Tests: `except.spec/p2-distant-exception-spec-cxx14.cpp`,
+  `except.spec/p2-distant-exception-spec-ok-cxx{14,17}.cpp`.
 - **`noexcept`** is `ExcSpec::BasicNoexcept`.
 - **`act_on_noexcept_spec(e, loc, start)`** ([except.spec]/2): `e` is
   a contextually converted constant expression of type `bool`
@@ -3850,10 +3873,14 @@ specification as written (`TypeNames` prints ` noexcept`,
   (`implicit_thrown_types`: the union of the implicit callees' dynamic
   lists, any type when one is noexcept(false)) is compared type by type
   (`list_allows_more`). An implicit overrider is also held to the
-  `final` and return-type rules ([class.virtual]/4, /8; WP-1078,
-  `check_implicit_overrider`): clang's `declaration of 'operator=' overrides
-  a 'final' function` and `virtual function 'operator=' has a different
-  return type`, at the class name, once per overridden function. They run
+  calling-convention, `final` and return-type rules ([class.virtual]/4,
+  /8; WP-1078, WP-1103, `check_implicit_overrider`): clang's `virtual
+  function '~D' has different calling convention attributes`
+  (`check_override_cc`, clang `CheckOverridingFunctionAttributes`; test
+  `dcl.attr.cconv/override-cc-implicit-dtor.cpp`), `declaration of
+  'operator=' overrides a 'final' function` and `virtual function
+  'operator=' has a different return type`, at the class name, once per
+  overridden function, in that order. They run
   inside a `SynthKind::Declaring` context, so the first error of each
   implicit declaration carries `while declaring the implicit copy
   assignment operator for 'D'` (clang `DeclaringSpecialMember`); in a
@@ -3871,9 +3898,14 @@ specification as written (`TypeNames` prints ` noexcept`,
   19 and 22 (whose loop indexes the source with a constant), each of the
   base's parameter types is compared with the overrider's FIRST
   parameter type; [conv.fctptr] conversions share the helper
-  (`param_exc_specs_error`) and the quirk. Tests:
+  (`param_exc_specs_error`) and the quirk. The specifications compared
+  are the written ones (`underlying_fn_proto` walks sugar,
+  `sugared_pointee`): from C++17 `void (*)() noexcept(false)` and
+  `void (*)()` are one type, so the overrider overrides, yet the two
+  differ (WP-1102). Tests:
   `class.virtual/implicit-overrider{,-ok}.cpp`,
   `except.spec/override-nested-exception-spec-{cxx14,cxx17,ok}.cpp`,
+  `except.spec/override-nested-exception-spec-noexcept-false-cxx{17,26}.cpp`,
   `class.virtual/exception-spec-dynamic.cpp`,
   `class.virtual/exception-spec-dynamic-pack-nested.cpp`,
   `class.virtual/exception-spec-implicit{,-dynamic}{,-ok}.cpp`,
@@ -4572,6 +4604,33 @@ diagnostics and IR.
   automatic object (spec/codegen.md `fold.rs`). Before C++26 the freeze
   rejects as before. Validation: `tests/conformance/expr.const/constexpr-ref-automatic{,-errors,-run}.cpp`,
   `tests/conformance/dcl.struct.bind/constexpr-ref-automatic.cpp`.
+- **Lifetime-extended temporaries of a constexpr local reference (C++26,
+  P2686R5, WP-1122).** A temporary bound to a `constexpr` reference (or
+  `constexpr` structured binding, or a member of an aggregate initializer)
+  declared in a function body is an automatic object whose lifetime is that
+  of the reference ([class.temporary]/6), and it is constexpr-referenceable
+  from the reference's own scope, so `constexpr const int& r = 42;`,
+  `constexpr const S& s = S{1, 2};`, `constexpr const auto& [x, y] = S{3,
+  4};` and `constexpr const int (&a)[2] = {5, 6};` in a function are
+  constant-initialized. The Oven allocates the variable's automatic
+  lifetime-extended temporaries as `Origin::Let` objects alongside its
+  static ones (`begin_static_extended`, `compile/class.rs`), so the frozen
+  reference is a `PtrBase::Temporary`; `automatic_referent` counts a
+  temporary whose extending variable is a local (`value.rs`), so the same
+  scoping as above applies (a lambda naming `r` captures it) and codegen
+  emits the temporary on the stack, not as a `_ZGR` global. A value read
+  through the reference is usable only when the temporary is
+  const-qualified ([expr.const]/4: `constexpr int&& m = 3;` is
+  constant-initialized, but reading `m` in a constant expression is
+  "read of temporary is not allowed in a constant expression outside the
+  expression that created the temporary", as clang says at namespace
+  scope). A non-`constexpr` `const int& a = 1;` stays not
+  constant-initialized (the §4.9 narrowing), and before C++26 the freeze
+  rejects as before (`reference to temporary is not a constant
+  expression`). Validation:
+  `tests/conformance/expr.const/constexpr-ref-automatic-temporary{,-errors,-run,-cxx23}.cpp`
+  (all but `-cxx23` are `skip(clang)`: neither clang 22 nor GCC 16
+  implements it).
 - **Fixed on the way.**
   - A reference that cannot bind (to `void`, or to a non-class type
     with no conversion) is `reference to type 'int' could not bind to
@@ -4581,9 +4640,6 @@ diagnostics and IR.
     specialization fully qualified (`Sema::decl_ty_str`, clang's
     printing of `getTypeDeclType`).
 - **Left.**
-  - Lifetime-extended temporaries of an automatic `constexpr` reference
-    (`constexpr const int& r = 42;` in a function) are still rejected
-    (spec/oven.md "Freezing"); clang 22 and GCC 16 reject them too.
   - Instantiating binding attributes.
   - The NoOp `'const M'` cast clang adds when a const class `e` is
     copy-initialized from a prvalue.
@@ -7065,6 +7121,47 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `tests/conformance/dcl.constexpr/constexpr-asm-{try-cxx17,evaluated,never-constant}.cpp`
   (the last an xfail: the never-constant check only tries parameterless
   functions).
+  In C++11 an iteration statement or `continue` is not allowed in the
+  body at all (clang does not take them as C++14 extensions): "statement
+  not allowed in constexpr function", the function made invalid (WP-455).
+- **Missing return statement (WP-455, WP-1056; clang
+  `CheckConstexprMissingReturn`).** The same walk notes whether the body
+  holds a `return` statement (one in a discarded `if constexpr` branch
+  counts; one in a lambda or a statement expression does not, the walk
+  not entering expressions). When none is found in a constexpr or
+  consteval function other than a constructor, and the body broke no
+  rule above: before C++14 it is an error whatever the return type;
+  from C++14 an error unless the return type is `void` or dependent (a
+  templated function's undeduced `auto` or `decltype(auto)` counts as
+  dependent; a non-template's was deduced `void` by then); from C++23
+  (P2448R2) never. The error is "no return statement in
+  {constexpr|consteval} function" (`sema_constexpr_body_no_return`) at
+  the function's name, or at the `[` of a lambda, and the function is
+  made invalid as above, so the never-constant check skips it: ending
+  the body with `__builtin_unreachable()`, `__builtin_trap()`, a
+  `[[noreturn]]` call, `std::unreachable()` or an infinite loop is this
+  error in C++11 to C++20 (C++11: the loops are the statement error
+  above), not "never produces a constant expression"; from C++23 those
+  are accepted, and only `-Winvalid-constexpr` reports them as never
+  constant. A destructor is not checked (it returns `void`). clang's
+  `-Wc++98-c++11-compat` warning for the accepted C++14 case is not
+  implemented.
+- **When the rules run (WP-455).** As clang's
+  `CheckConstexprFunctionDefinition`, which `ActOnFinishFunctionBody`
+  runs after `DiagnoseInvalidJumps` and before the analysis-based
+  warnings, kiln checks the virtual-base rule (`check_constexpr_virtual_base`),
+  the statement and variable rules and the missing return in
+  `end_function_body` (`check_constexpr_definition`), right after the
+  jump-scope check: an error there suppresses `-Wreturn-type` and the
+  other flow warnings (`hasUncompilableErrorOccurred`), where kiln used
+  to emit them first. The never-constant check needs the attached body
+  (it runs the Oven) and stays after it. A lambda's call operator gets
+  the rules when the lambda is declared `constexpr` or `consteval`
+  explicitly (`consteval` alone included, which kiln used to skip).
+  Tests: `tests/conformance/dcl.constexpr/no-return-cxx{11,14,20,23}.cpp`,
+  `no-return-invalid-constexpr-cxx26.cpp`,
+  `no-return-type-warning-after-{error,goto}-cxx20.cpp`,
+  `tests/conformance/dcl.fct.def.coroutine/consteval-lambda-coroutine.cpp`.
   Tests of the variable rule:
   `tests/conformance/dcl.constexpr/non-literal-local-cxx{20,23,23-19}.cpp`,
   `tests/conformance/dcl.constexpr/non-literal-local-template-cxx{20,23}.cpp`,
@@ -7991,8 +8088,9 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   not turn it on). Kiln (`never_constant.rs` `check_never_constant`,
   called from `constexpr_body.rs` after the body's own warnings, for
   functions, members, constructors, destructors, conversions and
-  explicitly `constexpr` lambdas; not in a template or an
-  instantiation, not invalid) reports `{constexpr|consteval}
+  explicitly `constexpr` or `consteval` lambdas; not in a template or an
+  instantiation, not invalid, so not after a missing-return error, §5.20
+  "Missing return statement") reports `{constexpr|consteval}
   {function|constructor} never produces a constant expression`
   (`sema_constexpr_never_constant`, an error by default, group
   `invalid-constexpr`, so `-Wno-error=invalid-constexpr` makes it a
@@ -8805,6 +8903,25 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   label" there. A `&&l` in a template's body is instantiation-dependent
   (spec/sema-templates.md). Tests:
   `tests/conformance/stmt.goto/computed-goto-{jump-scope,lambda,dispatch-run,reachability}.cpp`.
+- **Landed (WP-455): the walk enters lambda bodies.** As clang's
+  `JumpScopeChecker`, whose walk reaches a lambda's body through
+  `LambdaExpr::children`, the jump-scope check of a function also walks
+  the body of every lambda in it (nested ones included), as a scope
+  nested where the lambda expression appears: the lambda's labels,
+  `&&l` operands, `goto`s, indirect gotos and `asm goto`s join the
+  enclosing function's check. So an indirect goto of the function sees
+  the labels whose address a lambda takes ("cannot jump from this
+  indirect goto statement to one of its possible targets", with the
+  notes for the scopes of the lambda's declarations and of the variable
+  it initializes), and one in a lambda sees the function's. A lambda's
+  own body is still checked when it ends, so an error within the lambda
+  is reported twice by clang and once by kiln (identical diagnostics are
+  merged, spec/diag.md §7.4.1; the test uses `dup(clang)`). The bodies
+  of default arguments and of local classes' member functions are not
+  walked (clang does not either: an indirect goto there with no `&&l`
+  of its own is "indirect goto in function with no address-of-label
+  expressions"). Test
+  `tests/conformance/stmt.goto/computed-goto-jump-scope-lambda.cpp`.
 - `[[noreturn]]`: the fall-off analysis (§4.3) treats a call as not
   returning when any redeclaration of the callee is `[[noreturn]]`,
   including member calls.
@@ -9346,8 +9463,10 @@ not supported yet`.
     (GCC oracle).
   - *iterating* (`range_for.rs` `expansion_iterable`): not an array, and
     member `begin`/`end` are found or ADL finds viable candidates;
-    `static constexpr` `__range`, `__begin`; element i is `*(__begin + i)`
-    through a per-element `static constexpr auto __iter = __begin + i`.
+    `constexpr` `__range`, `__begin`; element i is `*(__begin + i)`
+    through a per-element `constexpr auto __iter = __begin + i`. All three
+    are `static` unless the range is bound by automatic reference (see
+    "Binding a constexpr range" below), when they are automatic.
     N is the first i for which `__begin + i != __end` is false
     ([stmt.expand]/5.2 counts with `++` in a consteval lambda; `__begin +
     i` is what each element uses). *Fast path* (WP-454,
@@ -9384,28 +9503,46 @@ not supported yet`.
     evaluations and steps).
   - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`
     (`struct_bind.rs`); element i is `__u_i`. With a `constexpr`
-    for-range-declaration the declaration is `static constexpr`. The
+    for-range-declaration the declaration is `constexpr` (`static`
+    unless bound by automatic reference, below). The
     initializer's temporaries persist for the lifetime of that reference,
     to the end of the whole statement ([class.temporary]/9, CWG3043;
     `expansion_decomp` calls `extend_init_temporaries`, a no-op for the
     `static constexpr` form, whose temporaries are part of its constant
     initialization). GCC 16.1 agrees
     (`tests/conformance/stmt.expand/destructuring-temporaries-run.cpp`).
-    The iterating form's `__range` is `static constexpr`, so its
+    The iterating form's `__range` is `static constexpr` or a
+    `constexpr` reference to a glvalue (Automatic, below), so its
     temporaries are part of its constant initialization and never
     observable at run time.
-- **Binding a constexpr range** (`expansion_fallback`). A prvalue
-  initializer is bound by value (`static constexpr auto`, const, so its
-  value is usable in constant expressions; a lifetime-extended temporary
-  would not be). A glvalue is first bound with `auto&&`; when that
-  initialization fails to be a constant expression (decided by the
-  captured diagnostics, `stash_has_error`: a failed constant
-  initialization does not mark the variable INVALID), it is retried by
-  value, a copy, each attempt in a block scope of its own. The copy stands
-  in for P2686's constexpr-referenceable automatic objects for the range
-  (§4.9 implements them for user-written declarations; the range variable
-  is `static constexpr`, which [expr.const.init]/4 excludes): the paper's
-  `constexpr std::array` local example works. When both fail, the first attempt's diagnostics are emitted.
+- **Binding a constexpr range** (`expansion_fallback`, `RangeBind`).
+  A prvalue initializer is bound by value (`RangeBind::Copy`, `static
+  constexpr auto`, const, so its value is usable in constant expressions;
+  a lifetime-extended temporary would not be). A glvalue is bound by
+  reference, trying in order, each attempt in a block scope of its own
+  with its diagnostics captured (a failed constant initialization does not
+  mark the variable INVALID, so failure is `stash_has_error`):
+  1. `RangeBind::Static`, `static constexpr auto&&`: a range designating
+     an object of static storage duration;
+  2. `RangeBind::Automatic` (C++26, and only when the
+     for-range-declaration is `constexpr`; P2686R5, WP-1122): a non-static
+     `constexpr auto&&` (the draft's [stmt.expand]/5 wording, `constexpr`
+     only when the for-range-declaration is), with `__begin`, `__end` and
+     each `__iter` automatic too, so a range naming a `constexpr` local
+     (or a parameter-scope automatic object constexpr-referenceable from
+     the statement, §4.9) is bound by reference, not copied: element
+     addresses are the local's, and a non-copyable range works;
+  3. `RangeBind::Copy`, `static constexpr auto`: the fallback for a
+     glvalue that is not constexpr-referenceable but whose value is
+     constant (before C++26, or a non-`constexpr` for-range-declaration).
+  A non-`constexpr` for-range-declaration never tries Automatic: by the
+  wording its `__range` is then not `constexpr` at all, and kiln keeps
+  rejecting a `__range` that is not a constant expression
+  (`iterating-neg.cpp`). When all attempts fail, the first attempt's
+  diagnostics are emitted. Tests:
+  `tests/conformance/stmt.expand/constexpr-range-automatic{,-run,-neg}.cpp`
+  (`skip(clang)`: clang 22 has no expansion statements and neither it nor
+  GCC 16 implements P2686's automatic references).
 - **Holding variables.** The holding variables of a `constexpr` structured
   binding declaration are `constexpr` (P2686 [dcl.struct.bind]/4), so the
   Oven sees initialized constants rather than a static variable's

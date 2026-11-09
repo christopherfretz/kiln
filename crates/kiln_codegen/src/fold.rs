@@ -147,6 +147,10 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
     // floating arithmetic yielding a NaN or dividing by zero
     // (`keepEvaluatingAfterUndefinedBehavior`).
     oven.set_fold_float_ub(true);
+    // clang's folds outside a constant context let allocations leak
+    // (`CheckMemoryLeaks` is a `CCEDiag`): `(bool)new int(4)` is `true`
+    // (WP-1108).
+    oven.set_fold_leaks(true);
     for e in cands {
         if !tried.insert(e) {
             continue;
@@ -223,6 +227,7 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
     // any other's is outside its lifetime), manifestly constant-evaluated
     // when the variable is constant-initialized.
     oven.set_fold_float_ub(false);
+    oven.set_fold_leaks(false);
     let mut dtors: Vec<_> = dtors.into_iter().collect();
     dtors.sort_unstable_by_key(|&(first, _)| first);
     for (first, (d, init, is_static)) in dtors {
