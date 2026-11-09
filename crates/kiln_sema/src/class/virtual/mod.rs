@@ -26,6 +26,7 @@ use kiln_source::Loc;
 use kiln_source::fx::FxHashSet;
 
 use crate::Sema;
+use crate::class::special::ImplicitThrows;
 use crate::conv::bases::{self, BaseSearch};
 use crate::declspec::{DeclSpec, Declarator};
 use crate::type_diff::DiffArgs as _;
@@ -808,7 +809,17 @@ impl Sema<'_, '_> {
             if mexc.is_nothrow() {
                 return;
             }
-            if self.override_exc_spec_lax(oexc, mexc, computed) {
+            let lax = match oexc {
+                // An implicit or defaulted overrider allows the union of
+                // its callees' lists (C++14 [except.spec]/15).
+                ExcSpec::Dynamic(list) if computed => match self.implicit_thrown_types(m) {
+                    ImplicitThrows::Unknown => false,
+                    ImplicitThrows::Any => true,
+                    ImplicitThrows::List(v) => self.list_allows_more(list, &v),
+                },
+                _ => self.override_exc_spec_lax(oexc, mexc, computed),
+            };
+            if lax {
                 // clang: overriding a GNU `nothrow` one is the
                 // `-Wmicrosoft-exception-spec` extension (WP-186).
                 let gnu = self.ast.decls.get(o).ty().map(|t| self.written_exc_spec(t))
@@ -818,9 +829,10 @@ impl Sema<'_, '_> {
                 } else {
                     DiagId::sema_override_exception_spec
                 };
-                let msg = self.diag(id, mloc).with_note(self.overridden_note(o));
+                // clang checks each overridden function: one error per
+                // base, all at the overrider (spec/diag.md §7.4 opt-out).
+                let msg = self.diag(id, mloc).with_note(self.overridden_note(o)).allow_duplicate();
                 self.emit(msg);
-                return;
             }
         }
     }

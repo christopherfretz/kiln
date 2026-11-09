@@ -4,7 +4,7 @@
 
 use kiln_ast::decl::{DeclFlags, DefinitionBits};
 use kiln_ast::expr::{CastKind, ExprKind};
-use kiln_ast::types::{BuiltinType, ExcSpec, FuncProto, NoexceptValue, Quals, TypeKind};
+use kiln_ast::types::{BuiltinType, ExcSpec, FuncProto, NoexceptValue, Quals, TypeKind, TypeList};
 use kiln_ast::{DeclId, ExprId};
 use kiln_ast::{QualType, expr::ValueCategory};
 use kiln_diag::{DiagId, FixIt};
@@ -1104,8 +1104,9 @@ impl Sema<'_, '_> {
         if base_bound == ExcBound::Unknown || over_bound == ExcBound::Unknown {
             return false;
         }
-        // kiln computes an implicit specification as non-throwing or
-        // throwing anything, never as clang's union of type lists.
+        // kiln resolves an implicit specification as non-throwing or
+        // throwing anything; against a list the caller compares clang's
+        // union of type lists (`Sema::implicit_thrown_types`) instead.
         if computed && base_bound == ExcBound::Listed {
             return false;
         }
@@ -1118,16 +1119,25 @@ impl Sema<'_, '_> {
         let (ExcSpec::Dynamic(base_list), ExcSpec::Dynamic(over_list)) = (sup, sub) else {
             return false;
         };
+        let thrown: Vec<QualType> = self.ast.types.type_list_types(over_list).to_vec();
+        self.list_allows_more(base_list, &thrown)
+    }
+
+    /// Whether `thrown` names an exception the dynamic list `base_list`
+    /// does not allow (clang `CheckExceptionSpecSubset`, each type
+    /// matched with [`Self::handler_can_catch`]). False when either side
+    /// has a dependent type or a pack expansion (checked at
+    /// instantiation).
+    pub(crate) fn list_allows_more(&self, base_list: TypeList, thrown: &[QualType]) -> bool {
         let t = &self.ast.types;
         let handlers: Vec<QualType> = t.type_list_types(base_list).to_vec();
-        let thrown: Vec<QualType> = t.type_list_types(over_list).to_vec();
         let unknown = |q: &QualType| {
             self.is_dependent_type(*q) || t.canonical_kind(*q) == TypeKind::PackExpansion
         };
-        if handlers.iter().chain(&thrown).any(unknown) {
+        if handlers.iter().chain(thrown).any(unknown) {
             return false;
         }
-        thrown.into_iter().any(|e| {
+        thrown.iter().any(|&e| {
             let e = self.non_reference(e);
             !handlers.iter().any(|&h| self.handler_can_catch(h, e))
         })
