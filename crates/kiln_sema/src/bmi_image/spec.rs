@@ -179,6 +179,11 @@ impl Writer<'_, '_, '_> {
             {
                 match ast.templates.instantiated_from_map(d) {
                     Some(p) => p,
+                    // An implicit special member of the specialization
+                    // has no pattern to name (WP-1139 follow-up).
+                    None if ast.decls.get(d).has(DeclFlags::IMPLICIT) => {
+                        return Err("an implicit member of a class template specialization");
+                    }
                     None => return Ok(None),
                 }
             }
