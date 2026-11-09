@@ -678,6 +678,16 @@ impl Mangler<'_, '_> {
                 self.out.push_str(if ast.exprs.bool_value(e) { "Lb1E" } else { "Lb0E" });
             }
             ExprKind::CXXNullPtrLiteralExpr => self.out.push_str("LDnE"),
+            // A lambda-expression (clang `mangleExpression`,
+            // `LambdaExprClass`): the ABI has no production, clang writes a
+            // literal of the closure type, `L <type> E`. A closure in a
+            // template parameter's type has no mangling number, so it is
+            // clang's `$_N` (`DTclL3$_0EEE`; WP-1062).
+            ExprKind::LambdaExpr => {
+                self.out.push('L');
+                self.ty(n.ty());
+                self.out.push('E');
+            }
             // `L <type> <hex bits> E` (clang `mangleFloat`: the encoding,
             // most significant nibble first, zero-padded to its width).
             ExprKind::FloatingLiteral => {

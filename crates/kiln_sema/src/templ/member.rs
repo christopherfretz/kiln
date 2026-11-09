@@ -462,7 +462,10 @@ impl Substituter<'_, '_, '_> {
             if let Some(a) = self.sema.template_default(p) {
                 // Substituted now (clang's `SubstDefaultArgument` when
                 // the member template is redeclared).
-                let a = self.template_arg(a, n.loc())?;
+                let saved = self.sema.act_on_start_template_param_default();
+                let a = self.template_arg(a, n.loc());
+                self.sema.act_on_end_template_param_default(saved);
+                let a = a?;
                 let _ = self.sema.builder().set_template_default(np, a);
                 if let Some(&dl) = self.sema.templ.default_locs.get(&p) {
                     self.sema.templ.default_locs.insert(np, dl);
