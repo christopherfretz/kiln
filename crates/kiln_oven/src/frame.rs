@@ -289,8 +289,7 @@ impl Oven {
     /// evaluation ([`Oven::frame_escapes`]).
     fn frame_trackable(&self, ty: OTy, depth: u32) -> bool {
         let info = self.types.info(ty);
-        if depth > 32 || info.has_vptr || info.has_union || info.has_mutable || info.has_volatile
-        {
+        if depth > 32 || info.has_vptr || info.has_union || info.has_mutable || info.has_volatile {
             return false;
         }
         match info.kind {
@@ -302,7 +301,8 @@ impl Oven {
             | TyKind::NullPtr => true,
             TyKind::Array { elem, .. } => self.frame_trackable(elem, depth + 1),
             TyKind::Record { union, .. } => {
-                !union && self.types.fields(ty).iter().all(|f| self.frame_trackable(f.ty, depth + 1))
+                !union
+                    && self.types.fields(ty).iter().all(|f| self.frame_trackable(f.ty, depth + 1))
             }
             _ => false,
         }

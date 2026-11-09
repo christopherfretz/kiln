@@ -1577,7 +1577,8 @@ impl Sema<'_, '_> {
         match st.get(s).kind() {
             StmtKind::NullStmt | StmtKind::BreakStmt | StmtKind::ContinueStmt => true,
             StmtKind::CompoundStmt => {
-                let subs: Vec<StmtId> = self.ast.lists.iter::<StmtId>(st.compound_body(s)).collect();
+                let subs: Vec<StmtId> =
+                    self.ast.lists.iter::<StmtId>(st.compound_body(s)).collect();
                 subs.into_iter().all(|c| self.nc_loop_pure(w, c, locals, depth + 1))
             }
             StmtKind::ExprStmt => {
