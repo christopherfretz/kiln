@@ -54,6 +54,10 @@ relative to libcxx/test (default: --gate m3). Contract: spec/libcxx.md.
                          compile/link step timeout (default 120; --profile debug: 300)
   --mem-limit <MiB>      address-space cap per process (default 8192; 0: none)
   --report <file.md>     write the status page's generated region to <file.md>
+  --results <file.tsv>   write one tab-separated line per test (outcome, path,
+                         detail, first cluster key, wall seconds)
+  --shard <K/N>          run only every N-th selected test, starting at the K-th
+                         (1-based; the N shards are disjoint and cover the selection)
   --keep                 keep the scratch directories
   --no-fail              exit 0 even on FAIL, XPASS, KILLED, TIMEOUT or ERROR
   -v, --verbose          print every result and failure details
@@ -163,6 +167,10 @@ pub struct Options {
     pub compile_timeout: Option<Duration>,
     pub mem_limit_mib: u64,
     pub report: Option<PathBuf>,
+    /// `--shard K/N`: (K, N), 1-based; keep every N-th selected test.
+    pub shard: Option<(usize, usize)>,
+    /// `--results <file.tsv>`: one line per test (spec/libcxx.md "Results file").
+    pub results: Option<PathBuf>,
     pub keep: bool,
     pub no_fail: bool,
     pub verbose: bool,
@@ -185,6 +193,8 @@ impl Default for Options {
             compile_timeout: None,
             mem_limit_mib: process::DEFAULT_MEM_LIMIT_MIB,
             report: None,
+            shard: None,
+            results: None,
             keep: false,
             no_fail: false,
             verbose: false,
@@ -206,6 +216,53 @@ fn parse_secs(flag: &str, v: &str) -> Result<Duration, String> {
         .filter(|s: &f64| s.is_finite() && *s > 0.0)
         .map(Duration::from_secs_f64)
         .ok_or_else(|| format!("bad {flag} `{v}`"))
+}
+
+/// `K/N` with 1 <= K <= N.
+fn parse_shard(v: &str) -> Result<(usize, usize), String> {
+    v.split_once('/')
+        .and_then(|(k, n)| Some((k.parse::<usize>().ok()?, n.parse::<usize>().ok()?)))
+        .filter(|&(k, n)| k >= 1 && k <= n)
+        .ok_or_else(|| format!("bad --shard `{v}` (K/N with 1 <= K <= N)"))
+}
+
+/// Shard `k` of `n` (1-based) of the sorted selection: the tests whose
+/// index is `k - 1` modulo `n`. Round robin, so neighbouring directories
+/// (which cost alike) spread over every shard, and the shards of one
+/// selection are disjoint and cover it.
+fn shard_of<T>(tests: Vec<T>, (k, n): (usize, usize)) -> Vec<T> {
+    tests.into_iter().enumerate().filter(|(i, _)| i % n == k - 1).map(|(_, t)| t).collect()
+}
+
+/// The `--results` file (spec/libcxx.md "Results file"): a header, then
+/// one tab-separated line per test in selection order: outcome tag, path
+/// relative to `libcxx/test`, the outcome's detail (failing stage or
+/// reason, `-` when none), the first cluster key (`-` when none) and the
+/// wall time in seconds. Tabs and newlines in a field become spaces.
+fn results_tsv(results: &[TestResult]) -> String {
+    let clean = |s: &str| {
+        let s = s.replace(['\t', '\n', '\r'], " ");
+        if s.is_empty() { "-".to_owned() } else { s }
+    };
+    let mut out = String::from("# outcome\ttest\tdetail\tfirst-key\twall-s\n");
+    for r in results {
+        let detail = match &r.outcome {
+            Outcome::Fail(s) | Outcome::Killed(s) | Outcome::Timeout(s) => s.label().to_owned(),
+            Outcome::Unsupported(w) | Outcome::Error(w) => w.clone(),
+            _ => String::new(),
+        };
+        let key = r.keys.first().map_or("", |k| k.0.as_str());
+        let _ = writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{:.2}",
+            r.outcome.tag(),
+            clean(&r.rel),
+            clean(&detail),
+            clean(key),
+            r.wall.as_secs_f64()
+        );
+    }
+    out
 }
 
 /// `Ok(None)` means `--help`.
@@ -239,6 +296,8 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             }
             "--filter" => o.filter = Some(value("--filter")?),
             "--report" => o.report = Some(PathBuf::from(value("--report")?)),
+            "--results" => o.results = Some(PathBuf::from(value("--results")?)),
+            "--shard" => o.shard = Some(parse_shard(&value("--shard")?)?),
             "-j" | "--jobs" => {
                 let v = value("--jobs")?;
                 o.jobs =
@@ -687,9 +746,17 @@ fn execute(opts: &Options) -> Result<bool, String> {
     } else {
         opts.dirs.clone()
     };
-    let tests = discover(&test_root, &roots, opts.filter.as_deref())?;
+    let mut tests = discover(&test_root, &roots, opts.filter.as_deref())?;
     if tests.is_empty() {
         return Err("no tests selected".into());
+    }
+    if let Some(shard) = opts.shard {
+        let all = tests.len();
+        tests = shard_of(tests, shard);
+        println!("xtask libcxx: shard {}/{}: {} of {all} tests", shard.0, shard.1, tests.len());
+        if tests.is_empty() {
+            return Err("no tests selected".into());
+        }
     }
     let cfg_cache = load_local_cfgs(&test_root, &tests);
     let (features, libcxx_version) = (setup.features.clone(), setup.libcxx_version);
@@ -802,6 +869,11 @@ fn execute(opts: &Options) -> Result<bool, String> {
     let compiler = if clang { "clang".to_owned() } else { format!("{} kiln", profile_text(opts)) };
     println!("\n{}; wall {:.1} s; {compiler}", total.summary_line(), wall.as_secs_f64());
 
+    if let Some(path) = &opts.results {
+        std::fs::write(path, results_tsv(&results))
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        println!("xtask libcxx: wrote {}", path.display());
+    }
     if let Some(path) = &opts.report {
         let info = run_info(opts, &cfg, &root, wall);
         let region = report::render(&info, &roots, &results, 40);
@@ -999,6 +1071,55 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Option<Options>, String> {
         parse_args(args.iter().map(|s| (*s).to_owned()))
+    }
+
+    /// `--shard K/N` (spec/libcxx.md "Command line"): the shards of a
+    /// selection are disjoint, cover it, and round-robin over its order.
+    #[test]
+    fn shards_partition_the_selection() {
+        assert_eq!(parse(&["--shard", "2/3"]).unwrap().unwrap().shard, Some((2, 3)));
+        assert_eq!(parse(&["--shard=1/1"]).unwrap().unwrap().shard, Some((1, 1)));
+        for bad in ["0/3", "4/3", "1/0", "x/2", "3", "1/2/3", ""] {
+            assert!(parse(&["--shard", bad]).is_err(), "{bad:?}");
+        }
+        let all: Vec<usize> = (0..10).collect();
+        let parts: Vec<Vec<usize>> = (1..=3).map(|k| shard_of(all.clone(), (k, 3))).collect();
+        assert_eq!(parts, [vec![0, 3, 6, 9], vec![1, 4, 7], vec![2, 5, 8]]);
+        let mut joined: Vec<usize> = parts.concat();
+        joined.sort_unstable();
+        assert_eq!(joined, all);
+    }
+
+    /// `--results` (spec/libcxx.md "Results file"): one tab-separated line
+    /// per test after a `#` header, `-` for an empty field.
+    #[test]
+    fn results_file_lines() {
+        let r = |rel: &str, outcome: Outcome, keys: Vec<(String, String)>| TestResult {
+            rel: rel.to_owned(),
+            outcome,
+            keys,
+            crashed: false,
+            detail: String::new(),
+            wall: Duration::from_millis(1500),
+            max_rss_kb: None,
+            compile_rss_kb: None,
+            first_error: None,
+        };
+        let tsv = results_tsv(&[
+            r("std/a.pass.cpp", Outcome::Pass, vec![]),
+            r(
+                "std/b.pass.cpp",
+                Outcome::Fail(run::Stage::Run),
+                vec![("run: assert\tx".to_owned(), "e".to_owned())],
+            ),
+            r("std/c.verify.cpp", Outcome::Unsupported("no locale".to_owned()), vec![]),
+        ]);
+        let lines: Vec<&str> = tsv.lines().collect();
+        assert_eq!(lines[0], "# outcome\ttest\tdetail\tfirst-key\twall-s");
+        assert_eq!(lines[1], "PASS\tstd/a.pass.cpp\t-\t-\t1.50");
+        assert_eq!(lines[2], "FAIL\tstd/b.pass.cpp\trun\trun: assert x\t1.50");
+        assert_eq!(lines[3], "UNSUPPORTED\tstd/c.verify.cpp\tno locale\t-\t1.50");
+        assert_eq!(lines.len(), 4);
     }
 
     #[test]

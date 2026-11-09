@@ -3,7 +3,6 @@
 // From clang's SemaCXX/consteval-operators.cpp. Found by the clang negative-
 // test run (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, WP-873 never-constant check fails on a call to a consteval function template specialization
 //@ expect: compile-ok
 template <typename DataT> struct B { DataT D; };
 template <typename DataT> consteval B<DataT> operator+(B<DataT> lhs, B<DataT> rhs) {

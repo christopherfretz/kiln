@@ -511,6 +511,14 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
     if let Err(e) = args.codegen.branch_protection(true) {
         errors.push(e);
     }
+    // WP-961: clang's x86-only `-mbranches-within-32B-boundaries`.
+    if args.codegen.branches_within_32b {
+        let t = args.target.as_deref().unwrap_or(target.triple);
+        errors.push(ArgError::UnsupportedForTarget(
+            "-mbranches-within-32B-boundaries".to_owned(),
+            t.into(),
+        ));
+    }
     (f, errors)
 }
 
