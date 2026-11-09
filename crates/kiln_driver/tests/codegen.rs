@@ -1880,6 +1880,82 @@ fn sanitizer_frontend_attributes() {
     assert!(!ll.contains("no_sanitize_address"), "{ll}");
 }
 
+/// spec/driver.md "Sanitizers", spec/codegen.md (WP-1043): the address
+/// sanitizer's ignorelist on string-literal globals, as clang's
+/// `GetAddrOfConstantStringFromLiteral` reports them: `global:` matches
+/// the global's name (`.str.N`, `__func__.<mangled>`), `src:` the file of
+/// the literal's expansion (a macro's literal is the file using it), and
+/// only the literal that creates a global is checked (`f`'s `"first"`
+/// reuses `.str`). A version 1 list is regular expressions, and a version
+/// 3 list (clang 22) strips a leading `./` from the `src:` query, which
+/// clang 19 does not. Each case was checked against clang 19 and 22.
+#[test]
+fn sanitizer_ignorelist_string_literals() {
+    let d = scratch("ignorelist-strings");
+    std::fs::write(
+        d.join("h.h"),
+        "#define LIT \"in macro\"\ninline const char *hs() { return \"from header\"; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("s.cpp"),
+        "#include \"h.h\"\nconst char *a() { return \"first\"; }\n\
+         const char *b() { return \"second\"; }\nconst char *c() { return LIT; }\n\
+         const char *d() { return __func__; }\nconst char *e() { return hs(); }\n\
+         const char *f() { return \"first\"; }\n",
+    )
+    .unwrap();
+    let lists = [
+        ("names.txt", "global:.str.1\nglobal:__func__*\n"),
+        ("header.txt", "src:*h.h\n"),
+        ("v1.txt", "#!special-case-list-v1\nglobal:\\.str\\.[0-9]\n"),
+        ("v3.txt", "#!special-case-list-v3\nsrc:s.cpp\n"),
+        ("v2.txt", "src:s.cpp\n"),
+    ];
+    for (name, body) in lists {
+        std::fs::write(d.join(name), body).unwrap();
+    }
+    let skipped = |list: &str, compat: &str| -> Vec<String> {
+        let eq = format!("-fsanitize-ignorelist={list}");
+        let o = kiln_in(
+            &d,
+            &[
+                "-fsanitize=address",
+                compat,
+                &eq,
+                "-Xclang",
+                "-disable-llvm-passes",
+                "-S",
+                "-emit-llvm",
+                "-o",
+                "-",
+                "./s.cpp",
+            ],
+        );
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{list}");
+        let ll = text(&o.stdout);
+        let globals: Vec<&str> =
+            ll.lines().filter(|l| l.starts_with("@.str") || l.starts_with("@__func__")).collect();
+        assert_eq!(globals.len(), 5, "{ll}");
+        globals
+            .iter()
+            .filter(|l| l.contains(", no_sanitize_address,"))
+            .map(|l| l.split(' ').next().unwrap().to_owned())
+            .collect()
+    };
+    for compat in ["-fclang-compat=19", "-fclang-compat=22"] {
+        assert_eq!(skipped("names.txt", compat), ["@.str.1", "@__func__._Z1dv"], "{compat}");
+        assert_eq!(skipped("header.txt", compat), ["@.str.3"], "{compat}");
+        assert_eq!(skipped("v1.txt", compat), ["@.str.1", "@.str.2", "@.str.3"], "{compat}");
+        assert!(skipped("v2.txt", compat).is_empty(), "{compat}");
+    }
+    assert!(skipped("v3.txt", "-fclang-compat=19").is_empty());
+    assert_eq!(
+        skipped("v3.txt", "-fclang-compat=22"),
+        ["@.str", "@.str.1", "@.str.2", "@__func__._Z1dv"]
+    );
+}
+
 /// spec/driver.md "Sanitizers" (WP-1032): `-fsanitize-ignorelist=` under
 /// the address sanitizer. A function named by `fun:` or defined in a `src:` file loses
 /// `sanitize_address`; a global named by `global:`, of a class named by
