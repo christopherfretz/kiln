@@ -745,7 +745,6 @@ impl Sema<'_, '_> {
     fn scan_declared(&mut self, r: DeclId, class_trivial: DefinitionBits) -> Declared {
         let mut out = Declared::default();
         let members: Vec<DeclId> = self.ast.members(r).collect();
-        let vbases = class_trivial.contains(DefinitionBits::HAS_VIRTUAL_BASES);
         // An in-class defaulted destructor is constexpr unless virtual
         // bases forbid it (before C++26, P3533R2); an in-class defaulted
         // default constructor when its subobjects allow it
@@ -848,30 +847,10 @@ impl Sema<'_, '_> {
                 }
                 _ => {}
             }
-            // A copy/move whose subobject members need overload resolution
-            // is trivial when every selected member is (clang
-            // `SpecialMemberIsTrivial` from `CheckCompletedCXXClass`).
-            let ovl = k != SpecialKind::Dtor
-                && k.needs_ovl_bit().is_some_and(|n| class_trivial.contains(n))
-                && !class_trivial.contains(DefinitionBits::POLYMORPHIC)
-                && !vbases;
             // The member's own triviality is decided for an ineligible one
             // too (clang marks it `trivial` all the same); only an
             // eligible one counts for the class.
-            let trivial = if self.is_user_provided(f) {
-                false
-            } else if ovl {
-                let const_arg = self.special_params(f).first().is_some_and(|&p| {
-                    let t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-                    match self.ast.types.canonical_view(t) {
-                        TypeView::LValueRef(t) => self.ast.types.effective_quals(t).is_const(),
-                        _ => false,
-                    }
-                });
-                self.defaulted_is_trivial(f, k, true) && self.selected_all_trivial(r, k, const_arg)
-            } else {
-                self.defaulted_is_trivial(f, k, class_trivial.contains(k.trivial_bit()))
-            };
+            let trivial = self.declared_member_trivial(r, f, k, class_trivial);
             if trivial {
                 self.ast.decls.mark_function(f, FnSpec::new().with_trivial(true));
             }
@@ -884,6 +863,39 @@ impl Sema<'_, '_> {
             }
         }
         out
+    }
+
+    /// Whether the user-declared special member `f` (of kind `k`) of
+    /// class `r` is trivial ([class.default.ctor]/3, [class.copy.ctor]/11,
+    /// [class.copy.assign]/9, [class.dtor]/8), from the class's
+    /// subobject bits `class_trivial`. A copy/move whose subobject members
+    /// need overload resolution is trivial when every selected member is
+    /// (clang `SpecialMemberIsTrivial` from `CheckCompletedCXXClass`).
+    fn declared_member_trivial(
+        &mut self,
+        r: DeclId,
+        f: DeclId,
+        k: SpecialKind,
+        class_trivial: DefinitionBits,
+    ) -> bool {
+        let ovl = k != SpecialKind::Dtor
+            && k.needs_ovl_bit().is_some_and(|n| class_trivial.contains(n))
+            && !class_trivial.contains(DefinitionBits::POLYMORPHIC)
+            && !class_trivial.contains(DefinitionBits::HAS_VIRTUAL_BASES);
+        if self.is_user_provided(f) {
+            false
+        } else if ovl {
+            let const_arg = self.special_params(f).first().is_some_and(|&p| {
+                let t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                match self.ast.types.canonical_view(t) {
+                    TypeView::LValueRef(t) => self.ast.types.effective_quals(t).is_const(),
+                    _ => false,
+                }
+            });
+            self.defaulted_is_trivial(f, k, true) && self.selected_all_trivial(r, k, const_arg)
+        } else {
+            self.defaulted_is_trivial(f, k, class_trivial.contains(k.trivial_bit()))
+        }
     }
 
     /// The special-member definition bits of class `r` at its `}`, on top
