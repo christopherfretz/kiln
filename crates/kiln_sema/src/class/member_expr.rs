@@ -832,6 +832,17 @@ impl Sema<'_, '_> {
         self.ast.types.is_dependent(obj) || self.ast.types.as_record(obj).is_none()
     }
 
+    /// True if the object of a member access on `base` (its pointee for
+    /// `arrow`) has a dependent type.
+    pub fn is_dependent_member_object(&self, base: ExprId, arrow: bool) -> bool {
+        if self.is_err_expr(base) {
+            return false;
+        }
+        let bt = self.ety(base);
+        let obj = if arrow { self.ast.types.pointee(bt) } else { Some(bt) };
+        obj.map_or_else(|| self.ast.types.is_dependent(bt), |o| self.ast.types.is_dependent(o))
+    }
+
     /// A qualified destructor name in a member access
     /// ([expr.prim.id.dtor], [basic.lookup.qual.general]/4):
     ///
@@ -869,7 +880,7 @@ impl Sema<'_, '_> {
         self.pseudo_destructor_named(
             base,
             qual,
-            first,
+            (first.0, first.1, None),
             PseudoDtorName::Ident(name),
             tilde,
             loc,
@@ -878,29 +889,34 @@ impl Sema<'_, '_> {
         )
     }
 
-    /// `p->S::F::~Q<args>()` / `p->F::~Q<args>()` on a scalar or dependent
-    /// object ([expr.prim.id.dtor]/2, [basic.lookup.qual.general]/4): the
-    /// simple-template-id `Q<args>` (formed by the parser after
-    /// [`Sema::classify_pseudo_destructor_template`]) is the destroyed
-    /// type; `F` must name the object's type as in
-    /// [`Sema::act_on_member_destructor_q`] (WP-1155).
+    /// `p->S::F::~Q()` / `p->F::~Q<args>()` / `p->F<args>::~Q()` on a
+    /// scalar or dependent object ([expr.prim.id.dtor]/2,
+    /// [basic.lookup.qual.general]/4) where `F` (`first_ty`) or `Q`
+    /// (`destroyed`, else the identifier `name`) is a
+    /// simple-template-id formed by the parser after
+    /// [`Sema::classify_pseudo_destructor_template`]; both must name the
+    /// object's type as in [`Sema::act_on_member_destructor_q`]
+    /// (WP-1155). `first` is `F`'s template-name and location.
     #[allow(clippy::too_many_arguments, reason = "the parts of a member access")]
     pub fn act_on_pseudo_destructor_type_q(
         &mut self,
         base: ExprId,
         qual: Option<crate::using::Qualifier>,
         first: (kiln_source::symbol::Symbol, Loc),
-        destroyed: QualType,
+        first_ty: Option<QualType>,
+        name: kiln_source::symbol::Symbol,
+        destroyed: Option<QualType>,
         tilde: Loc,
         loc: Loc,
         op_loc: Loc,
         arrow: bool,
     ) -> ExprId {
+        let q = destroyed.map_or(PseudoDtorName::Ident(name), PseudoDtorName::Type);
         self.pseudo_destructor_named(
             base,
             qual,
-            first,
-            PseudoDtorName::Type(destroyed),
+            (first.0, first.1, first_ty),
+            q,
             tilde,
             loc,
             op_loc,
@@ -916,12 +932,11 @@ impl Sema<'_, '_> {
     /// is then `S::template name<args>`). A template found only where the
     /// expression is, not in `S`, is clang's typo correction "no template
     /// named 'A' in namespace 'N'; did you mean simply 'A'?" and is used
-    /// (`p->N::I::~A<int>()`). `loc` is the name.
+    /// (`p->N::I::~A<int>()`), diagnosed at the qualifier.
     pub fn classify_pseudo_destructor_template(
         &mut self,
         qual: Option<crate::using::Qualifier>,
         name: kiln_source::symbol::Symbol,
-        loc: Loc,
     ) -> crate::decl::NameClass {
         use crate::decl::NameClass;
         let class = self.classify_name(name, qual.map(|q| q.ctx));
@@ -932,11 +947,13 @@ impl Sema<'_, '_> {
         let here = self.classify_name(name, None);
         let NameClass::TypeTemplate(t) = here else { return class };
         let text = self.ast.symbols().as_str(name).to_owned();
+        // clang reports at the qualifier and notes an alias template at
+        // its `using`.
         let note = self
-            .diag(DiagId::note_entity_declared_here, self.ast.decls.get(t).loc())
+            .diag(DiagId::note_entity_declared_here, self.typo_note_loc(t))
             .arg(format!("'{text}'"));
         let msg = self
-            .diag(DiagId::sema_no_member_template_suggest, loc)
+            .diag(DiagId::sema_no_member_template_suggest, q.loc)
             .arg(text.clone())
             .arg(self.qualifier_desc(q.ctx))
             .arg(text)
@@ -980,7 +997,7 @@ impl Sema<'_, '_> {
         &mut self,
         base: ExprId,
         qual: Option<crate::using::Qualifier>,
-        (fname, floc): (kiln_source::symbol::Symbol, Loc),
+        (fname, floc, fty): (kiln_source::symbol::Symbol, Loc, Option<QualType>),
         q: PseudoDtorName,
         tilde: Loc,
         loc: Loc,
@@ -998,7 +1015,8 @@ impl Sema<'_, '_> {
             // `p->T::Inner::~Inner()`: `F` and `Q` are both looked up in
             // the dependent `S` at instantiation (4.2), as the
             // typename-specifiers `S::F` and `S::Q` (WP-1155).
-            let first = self.ast.types.dependent_name(TagKeyword::None, sq.nns, fname);
+            let first =
+                fty.unwrap_or_else(|| self.ast.types.dependent_name(TagKeyword::None, sq.nns, fname));
             let destroyed = match q {
                 PseudoDtorName::Ident(n) => {
                     self.ast.types.dependent_name(TagKeyword::None, sq.nns, n)
@@ -1009,9 +1027,7 @@ impl Sema<'_, '_> {
             if op_loc != loc {
                 let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
             }
-            if first != destroyed {
-                let _ = self.ast.templates.pseudo_dtor_first.insert(e, (first, floc));
-            }
+            let _ = self.ast.templates.pseudo_dtor_first.insert(e, (first, floc));
             return e;
         }
         let look = |s: &Self, n| {
@@ -1022,8 +1038,13 @@ impl Sema<'_, '_> {
             s.type_named_by(&found)
         };
         let dependent = self.ast.types.is_dependent(obj.ty);
-        let t1 = look(self, fname);
-        let t1 = self.injected_named(t1).map(|(t, d)| (t, Some(d)));
+        let t1 = match fty {
+            Some(t) => Some((t, None)),
+            None => {
+                let t1 = look(self, fname);
+                self.injected_named(t1).map(|(t, d)| (t, Some(d)))
+            }
+        };
         // `Q` where the destructor name appears; then in the class `F`
         // names (`p->T::~T` where only `T`'s scope declares `T`).
         let named: Option<(QualType, Option<DeclId>)> = match q {
@@ -1162,15 +1183,27 @@ impl Sema<'_, '_> {
             // names the class the qualifier denotes ([basic.lookup.qual]/
             // 4 — the injected-class-name of the same class template),
             // rebuilt as a qualified destructor member at instantiation.
+            // An alias template has no injected-class-name: `p->A<T>::~A()`
+            // goes on as `p->~A()` below (WP-1155).
             if self.is_dependent_ctx(q.ctx)
                 && let kiln_ast::types::Nns::Type { ty, .. } = self.ast.types.nns_view(q.nns)
                 && self.nns_last_name(q.nns) == Some(name)
+                && !self.is_alias_specialization(ty)
             {
                 let e = self.builder().pseudo_destructor_q(obj.b, obj.arrow, true, ty, loc);
                 if op_loc != loc {
                     let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
                 }
                 return e;
+            }
+            // `p->C<T>::~D()` with no prefix: `C<T>` is the terminal
+            // member-qualified name, so `~D` is looked up as in `p->~D()`
+            // (4.3) — in the object's class at instantiation (WP-1155).
+            if self.ast.types.is_dependent(obj.ty)
+                && self.ast.types.nns_prefix(q.nns).is_none()
+                && matches!(self.ast.types.nns_view(q.nns), kiln_ast::types::Nns::Type { .. })
+            {
+                return self.dependent_destructor_name(obj, name, loc, op_loc);
             }
             if self.ast.types.is_dependent(obj.ty) || self.is_dependent_ctx(q.ctx) {
                 self.templ_unimplemented("a dependent destructor name", loc);
@@ -1190,6 +1223,14 @@ impl Sema<'_, '_> {
             loc,
             name_loc,
             op_loc,
+        )
+    }
+
+    /// True if `ty` is written as a specialization of an alias template.
+    fn is_alias_specialization(&self, ty: QualType) -> bool {
+        matches!(
+            self.ast.types.view(ty.ty()),
+            TypeView::TemplateSpecialization { alias: true, .. }
         )
     }
 
@@ -1335,7 +1376,13 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return;
         }
-        let msg = self.diag(DiagId::sema_no_template_named, loc).arg(text);
+        // `p->~Nope<int>()` on a scalar: clang's "use of undeclared".
+        let id = if matches!(class, NameClass::Undeclared | NameClass::UndeclaredTemplate) {
+            DiagId::sema_undeclared_use
+        } else {
+            DiagId::sema_no_template_named
+        };
+        let msg = self.diag(id, loc).arg(text);
         self.emit(msg);
     }
 
@@ -1410,6 +1457,42 @@ impl Sema<'_, '_> {
             Ok(obj) => self.finish_member_destructor(obj, destroyed, None, qual, loc, loc, op_loc),
             Err(e) => e,
         }
+    }
+
+    /// The instantiation of `p->S::F::~Q()` with a dependent `S`
+    /// ([`kiln_ast::templates::TemplateTables::pseudo_dtor_first`]): as
+    /// [`Sema::rebuild_member_destructor`], and on a scalar object the
+    /// substituted `F` (`first`, at `floc`) must also name the object's
+    /// type ([expr.prim.id.dtor]/2; WP-1155).
+    #[allow(clippy::too_many_arguments, reason = "the parts of a member access")]
+    pub(crate) fn rebuild_pseudo_destructor_first(
+        &mut self,
+        base: ExprId,
+        (first, floc): (QualType, Loc),
+        destroyed: QualType,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        let obj = match self.destructor_object(base, loc, op_loc, arrow) {
+            Ok(o) => o,
+            Err(e) => return e,
+        };
+        let ty = obj.ty;
+        let bad = obj.def.is_none()
+            && !self.ast.types.is_dependent(ty)
+            && !self.is_dependent_type(first)
+            && self.is_scalar(ty)
+            && !self.same_unqual(ty, first);
+        // clang checks the destroyed type first.
+        let r =
+            self.finish_member_destructor(obj, destroyed, None, DtorQual::Implied, loc, loc, op_loc);
+        if !bad {
+            return r;
+        }
+        let msg = self.diag(DiagId::sema_pseudo_dtor_type_mismatch, floc).diff_args(self, ty, first);
+        self.emit(msg);
+        if self.is_err_expr(r) { r } else { self.recover_err(&[r], loc) }
     }
 
     /// The object of a destructor member access: `->` through

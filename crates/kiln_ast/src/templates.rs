@@ -320,10 +320,9 @@ pub struct TemplateTables {
     /// identifier `N`, looked up in the object's class at instantiation
     /// (clang's identifier-only `PseudoDestructorTypeStorage`; WP-457).
     pub pseudo_dtor_name: ColdMap<ExprId, kiln_source::symbol::Symbol>,
-    /// A `CXXPseudoDestructorExpr` `p->S::F::~Q()` with a dependent `S`
-    /// whose first type-name `S::F` is not the destroyed type `S::Q` as
-    /// written: that type and where `F` is, checked against the object's
-    /// type at instantiation (clang's `ScopeType`; WP-1155).
+    /// A `CXXPseudoDestructorExpr` `p->S::F::~Q()` with a dependent `S`:
+    /// the first type-name `S::F` and where `F` is, checked against the
+    /// object's type at instantiation (clang's `ScopeType`; WP-1155).
     pub pseudo_dtor_first: ColdMap<ExprId, (QualType, Loc)>,
     /// The `template` keyword after the qualifier of a qualified name
     /// (`N::template v<T>`; clang's `TemplateKWLoc`), which the printer
