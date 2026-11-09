@@ -740,6 +740,39 @@ impl Sema<'_, '_> {
         ExcSpec::Dynamic(self.ast.types.type_list(&out))
     }
 
+    /// Runs `f` with the innermost deduction frame (deduced or explicit
+    /// argument substitution) turned into the instantiation of function
+    /// template specialization `spec`, as clang's
+    /// `InitFunctionInstantiation` does before it substitutes a C++98
+    /// specialization's dynamic exception specification: what `f`
+    /// reports is a hard error with `in instantiation of function template
+    /// specialization 'h<Inc>' requested here`, not a deduction failure.
+    /// `None` (and `f` not run) when the innermost SFINAE frame is not a
+    /// deduction.
+    pub(crate) fn as_spec_instantiation<R>(
+        &mut self,
+        spec: DeclId,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        use crate::templ::stack::FrameKind;
+        let i = self.inst.stack.frames.iter().rposition(|x| x.sfinae.is_some())?;
+        let frame = &mut self.inst.stack.frames[i];
+        if !matches!(
+            frame.kind,
+            FrameKind::DeducedArgSubstitution | FrameKind::ExplicitArgSubstitution
+        ) {
+            return None;
+        }
+        // Both kinds count toward the depth, as the instantiation does.
+        let saved = (frame.kind, frame.entity, frame.sfinae, frame.args);
+        (frame.kind, frame.entity, frame.sfinae, frame.args) =
+            (FrameKind::FunctionSpec, spec, Some(false), None);
+        let r = f(self);
+        let frame = &mut self.inst.stack.frames[i];
+        (frame.kind, frame.entity, frame.sfinae, frame.args) = saved;
+        Some(r)
+    }
+
     /// The `)` of the dynamic exception specification `l` of `pattern`,
     /// naming a dependent type ([`Sema::act_on_dynamic_exception_spec`]):
     /// of the specifications written with these types (function types
