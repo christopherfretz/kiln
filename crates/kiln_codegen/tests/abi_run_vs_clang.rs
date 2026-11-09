@@ -15,7 +15,8 @@
 //! The comparison needs structured-binding packs (P1061R10), which clang
 //! has since 21, so the oracle is always clang 22, whichever oracle release
 //! the harness selects; the compat-19 ABI is covered by `ir_vs_clang`. Without
-//! `clang++-22` the test is skipped.
+//! `clang++-22` the test is skipped, unless `KILN_REQUIRE_LLVM=1` (GitHub
+//! CI), which makes that a failure (WP-1034).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -79,6 +80,10 @@ fn link_and_run(from: &Path, to: &Path, exe: &Path) -> Result<(), String> {
 #[test]
 fn kiln_and_clang_objects_agree_at_run_time() {
     if Command::new(CLANG).arg("--version").output().is_err() {
+        assert!(
+            std::env::var("KILN_REQUIRE_LLVM").as_deref() != Ok("1"),
+            "{CLANG} not found and KILN_REQUIRE_LLVM=1"
+        );
         eprintln!("abi_run_vs_clang: skipped (no {CLANG})");
         return;
     }

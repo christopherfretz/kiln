@@ -8,7 +8,13 @@
 //! same file (every function in each constructor/destructor variant,
 //! every variable, its guard and static-local form). The test fails
 //! below [`MIN_SYMBOLS`] checked symbols per triple. Without `clang++-19`
-//! it is skipped.
+//! it is skipped, unless `KILN_REQUIRE_LLVM=1` (GitHub CI), which makes a
+//! missing `clang++-19` a failure.
+//!
+//! `cargo xtask ci` runs it as its own step,
+//! `cargo test -p kiln_codegen --test mangle_vs_clang -- --nocapture`, so
+//! the per-triple counts reach the log; `cargo xtask test tests/mangle` runs
+//! it too (WP-1034, spec/harness.md "The mangling differential").
 //!
 //! `KILN_MANGLE_DUMP=1` prints kiln's names for each file.
 
@@ -143,6 +149,10 @@ fn mangling_matches_clang() {
         for f in &files {
             let stem = f.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
             let Some(c) = clang_names(f, triple) else {
+                assert!(
+                    std::env::var("KILN_REQUIRE_LLVM").as_deref() != Ok("1"),
+                    "clang++-19 not found and KILN_REQUIRE_LLVM=1"
+                );
                 eprintln!("clang++-19 not found; skipping the mangling differential");
                 return;
             };
@@ -174,7 +184,10 @@ fn mangling_matches_clang() {
             }
             checked += theirs.len();
         }
-        eprintln!("mangle_vs_clang [{triple}]: {checked} clang symbols checked");
+        eprintln!(
+            "mangle_vs_clang [{triple}]: {} files, {checked} clang symbols checked",
+            files.len()
+        );
         if checked < MIN_SYMBOLS {
             failures.push(format!("{triple}: only {checked} symbols (< {MIN_SYMBOLS})"));
         }
