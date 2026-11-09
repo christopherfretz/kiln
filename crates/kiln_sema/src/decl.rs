@@ -248,11 +248,11 @@ impl Sema<'_, '_> {
                 );
                 return QualType::ERROR;
             }
-            TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto => {
-                let kw = if ds.base == TypeSpecKind::Auto {
-                    AutoKeyword::Auto
-                } else {
-                    AutoKeyword::DecltypeAuto
+            TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto | TypeSpecKind::GnuAutoType => {
+                let kw = match ds.base {
+                    TypeSpecKind::Auto => AutoKeyword::Auto,
+                    TypeSpecKind::DecltypeAuto => AutoKeyword::DecltypeAuto,
+                    _ => AutoKeyword::GnuAutoType,
                 };
                 let (c, args) = match &ds.auto_constraint {
                     Some((c, a)) if a.is_empty() => (Some(*c), None),
@@ -1427,6 +1427,10 @@ impl Sema<'_, '_> {
                         }
                         ty = ret;
                         info = info.with_trailing_return(true);
+                    } else if self.gnu_auto_type_return_check(ty, spec_loc)
+                        || (i == 0 && !d.lambda && self.cxx11_deduced_return_check(base, spec_loc))
+                    {
+                        fail!();
                     }
                     let t = &self.ast.types;
                     if t.is_array(ty) || t.is_function(ty) {
@@ -3283,7 +3287,7 @@ impl Sema<'_, '_> {
             // has no deduced return type (clang `ActOnConversionDeclarator`).
             let m = self
                 .diag(DiagId::sema_auto_not_allowed, d.conv_type_loc)
-                .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
+                .arg(kw as u8)
                 .arg(crate::templ::ctad_site::site::CONVERSION_TEMPLATE);
             self.emit(m);
         }
@@ -5399,7 +5403,7 @@ impl Sema<'_, '_> {
                 };
                 let msg = self
                     .diag(DiagId::sema_auto_not_allowed, ds.type_loc.unwrap_or(ds.loc))
-                    .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
+                    .arg(kw as u8)
                     .arg(s);
                 // Once per declarator of a group (as clang).
                 self.emit(msg.allow_duplicate());

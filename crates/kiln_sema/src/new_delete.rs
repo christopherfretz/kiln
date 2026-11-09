@@ -360,7 +360,7 @@ impl Sema<'_, '_> {
             for p in d.parens.iter_mut().filter(|p| p.0 > 0) {
                 p.0 += later;
             }
-            let elem = self.type_for_declarator(tid.base, &d);
+            let elem = self.type_for_declarator_at(tid.base, tid.loc, &d);
             if self.is_error_type(elem) {
                 return self.recover_err(&kids, loc);
             }
@@ -390,7 +390,7 @@ impl Sema<'_, '_> {
         if d.invalid || self.is_error_type(tid.base) {
             return self.recover_err(&kids, loc);
         }
-        let mut elem = self.type_for_declarator(tid.base, &d);
+        let mut elem = self.type_for_declarator_at(tid.base, tid.loc, &d);
         // [dcl.fct]/6: `new F` of a qualified function typedef `F`.
         elem = self.check_qualified_fn_type(elem, &DeclSpec::new(tid.loc), &d);
         if self.is_error_type(elem) {

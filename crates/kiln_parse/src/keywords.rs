@@ -38,6 +38,7 @@ keywords! {
     Asm = "asm" | "__asm" | "__asm__";
     Atomic = "_Atomic";
     Auto = "auto";
+    GnuAutoType = "__auto_type";
     BitInt = "_BitInt";
     Bool = "bool";
     Break = "break";
@@ -252,7 +253,8 @@ impl Keywords {
 
     /// Makes `spelling` an ordinary identifier: `char8_t` without
     /// `-fchar8_t` semantics (clang `KEYCHAR8`: C++20 and later unless
-    /// `-fno-char8_t`, or `-fchar8_t`; WP-808).
+    /// `-fno-char8_t`, or `-fchar8_t`; WP-808), and the
+    /// [`CXX20_KEYWORDS`] before C++20.
     pub fn remove(&mut self, interner: &Interner, spelling: &str) {
         let i = interner.intern(spelling).index() as usize;
         if let Some(e) = self.table.get_mut(i) {
@@ -270,6 +272,12 @@ impl Keywords {
         self.table.get(sym.index() as usize).and_then(|e| e.kw)
     }
 }
+
+/// The keywords new in C++20 other than `char8_t`: before C++20 they are
+/// ordinary identifiers (clang's `CXX20_KEYWORD` and `COROUTINES_KEYWORD`
+/// in TokenKinds.def, `KEYCXX20` / `KEYCOROUTINES`; spec/parse.md §1).
+pub const CXX20_KEYWORDS: [&str; 7] =
+    ["concept", "consteval", "constinit", "co_await", "co_return", "co_yield", "requires"];
 
 /// The alternative tokens ([lex.digraph]/2) other than the digraphs (which
 /// the lexer maps itself), with the punctuators they stand for.

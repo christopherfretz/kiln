@@ -81,6 +81,7 @@ impl Parser<'_, '_> {
         self.parse_cxx11_attr_seq(&mut specs.attrs);
         let mut d = Declarator::new(DeclaratorContext::Member, lbracket);
         d.op_name = Some(kiln_ast::names::OverloadedOperator::Call);
+        d.lambda = true;
         let mut params = Vec::new();
         let mut variadic = false;
         let mut open = lbracket;
@@ -125,7 +126,11 @@ impl Parser<'_, '_> {
         specs.attrs.extend(lb);
         let mut trailing = None;
         if let Some(arrow) = self.eat(Punct::Arrow) {
-            let ty = self.parse_type_id_no_ctad().unwrap_or(kiln_ast::QualType::ERROR);
+            let tloc = self.loc();
+            let mut ty = self.parse_type_id_no_ctad().unwrap_or(kiln_ast::QualType::ERROR);
+            if self.s.gnu_auto_type_return_check(ty, tloc) {
+                ty = kiln_ast::QualType::ERROR;
+            }
             trailing = Some((ty, arrow));
         }
         if specs.explicit_params && self.eat_kw(Kw::Requires).is_some() {

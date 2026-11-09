@@ -121,6 +121,9 @@ pub enum TypeSpecKind {
     Auto,
     /// `decltype(auto)` ([dcl.type.auto.deduct]/5).
     DecltypeAuto,
+    /// GNU `__auto_type` (a placeholder deduced as by `auto`, but never a
+    /// deduced return type or an invented template parameter).
+    GnuAutoType,
     /// A type-name, class/enum specifier or elaborated-type-specifier:
     /// the type is in [`DeclSpec::named`].
     Named,
@@ -156,6 +159,7 @@ impl TypeSpecKind {
             TypeSpecKind::Fp16 => "__fp16",
             TypeSpecKind::Auto => "auto",
             TypeSpecKind::DecltypeAuto => "decltype(auto)",
+            TypeSpecKind::GnuAutoType => "__auto_type",
         }
     }
 }
@@ -844,6 +848,10 @@ pub struct Declarator {
     /// whether a placeholder for a deduced class type may appear
     /// ([dcl.type.class.deduct]/2; clang's finer `DeclaratorContext`s).
     pub site: DeclSite,
+    /// A lambda's call operator declarator, whose return type is an
+    /// implied `auto` rather than a written decl-specifier
+    /// ([expr.prim.lambda.closure]/3).
+    pub lambda: bool,
     /// The outermost grouping parentheses and the number of chunks inside
     /// them (`B (x)`: `(0, loc of '(')`; [dcl.type.class.deduct]/2).
     pub outer_paren: Option<(usize, Loc)>,
@@ -969,6 +977,7 @@ impl Declarator {
             special: None,
             conv_type_loc: Loc::INVALID,
             site: DeclSite::Plain,
+            lambda: false,
             outer_paren: None,
             parens: Vec::new(),
             after_comma: false,

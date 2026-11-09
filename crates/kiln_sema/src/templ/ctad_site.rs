@@ -26,6 +26,7 @@ pub(crate) mod site {
     pub(crate) const UNION_MEMBER: u8 = 3;
     pub(crate) const CLASS_MEMBER: u8 = 5;
     pub(crate) const CATCH: u8 = 7;
+    pub(crate) const TEMPLATE_PARAM_17: u8 = 8;
     pub(crate) const TEMPLATE_ARG: u8 = 10;
     pub(crate) const TYPEDEF: u8 = 11;
     pub(crate) const ALIAS: u8 = 12;
@@ -33,10 +34,12 @@ pub(crate) mod site {
     pub(crate) const CONVERSION_ID: u8 = 14;
     pub(crate) const HERE: u8 = 15;
     pub(crate) const LAMBDA_PARAM: u8 = 16;
+    pub(crate) const NEW: u8 = 17;
     pub(crate) const FRIEND: u8 = 20;
     pub(crate) const NOT_FUNCTION_DECLARATION: u8 = 21;
     pub(crate) const REQUIRES_PARAM: u8 = 22;
     pub(crate) const CONVERSION_TEMPLATE: u8 = 24;
+    pub(crate) const LAMBDA_PARAM_14: u8 = 25;
 }
 
 /// The verdict on a placeholder in a declarator's context.
@@ -247,9 +250,40 @@ impl Sema<'_, '_> {
     pub(crate) fn auto_not_allowed(&mut self, loc: Loc, kw: AutoKeyword, site: u8) {
         let msg = self
             .diag(DiagId::sema_auto_not_allowed, loc)
-            .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
+            .arg(kw as u8)
             .arg(site);
         self.emit(msg);
+    }
+
+    /// Before C++14 a function declarator directly declaring a name
+    /// with decl-specifier type `base` a placeholder and no trailing
+    /// return type is ill-formed ([dcl.spec.auto] C++14; clang
+    /// `GetFullTypeForDeclarator`: `err_auto_missing_trailing_return` for
+    /// `auto`, `err_deduced_return_type` otherwise), reported at the
+    /// type-specifier `loc`. True if reported.
+    pub(crate) fn cxx11_deduced_return_check(&mut self, base: QualType, loc: Loc) -> bool {
+        if self.std >= kiln_lex::Std::Cxx14 {
+            return false;
+        }
+        let id = match self.placeholder_keyword(base) {
+            Some(AutoKeyword::Auto) => DiagId::sema_auto_missing_trailing_return,
+            Some(AutoKeyword::DecltypeAuto) => DiagId::sema_deduced_return_type,
+            _ => return false,
+        };
+        self.error(id, loc);
+        true
+    }
+
+    /// GNU `__auto_type` as the return type `ret` of a function
+    /// declarator, never a deduced return type (clang
+    /// `GetFullTypeForDeclarator`): "'__auto_type' not allowed in function
+    /// return type" at `loc`, and true.
+    pub fn gnu_auto_type_return_check(&mut self, ret: QualType, loc: Loc) -> bool {
+        if self.placeholder_keyword(ret) != Some(AutoKeyword::GnuAutoType) {
+            return false;
+        }
+        self.auto_not_allowed(loc, AutoKeyword::GnuAutoType, site::RETURN_TYPE);
+        true
     }
 
     /// The `auto`/`decltype(auto)` whose position declarator `d` with
@@ -257,8 +291,8 @@ impl Sema<'_, '_> {
     /// `GetDeclSpecTypeForDeclarator`): `base`'s own, or, when `d` has a
     /// trailing return type, the one contained in the trailing return
     /// type of its outermost function declarator (`using F =
-    /// auto (*)(int) -> int;` names none). GNU `__auto_type` is not
-    /// checked here.
+    /// auto (*)(int) -> int;` names none). GNU `__auto_type` too (clang's
+    /// selector 2).
     pub(crate) fn declarator_placeholder(
         &self,
         base: QualType,
@@ -272,11 +306,10 @@ impl Sema<'_, '_> {
             Chunk::Function { trailing: Some((t, _)), .. } => Some(*t),
             _ => None,
         });
-        let kw = match trailing {
-            Some(t) => self.placeholder_keyword(t)?,
-            None => keyword,
-        };
-        (kw != AutoKeyword::GnuAutoType).then_some(kw)
+        match trailing {
+            Some(t) => self.placeholder_keyword(t),
+            None => Some(keyword),
+        }
     }
 
     /// The position selector of a placeholder `auto` that declarator `d`
@@ -318,8 +351,27 @@ impl Sema<'_, '_> {
         spec_loc: Loc,
         d: &Declarator,
     ) -> QualType {
-        let Some(s) = Self::auto_declarator_site(d) else { return base };
         let Some(kw) = self.declarator_placeholder(base, d) else { return base };
+        // GNU `__auto_type` is no deduced return type and no allocated
+        // type; a conversion-type-id's `auto` is a deduced return type,
+        // so C++14 on ([class.conv.fct]/9; clang
+        // `GetDeclSpecTypeForDeclarator`'s `IsCXXAutoType`).
+        let gnu = kw == AutoKeyword::GnuAutoType;
+        let Some(s) = Self::auto_declarator_site(d).or(match d.site {
+            DeclSite::ConversionId if gnu || self.std < kiln_lex::Std::Cxx14 => {
+                Some(site::CONVERSION_ID)
+            }
+            DeclSite::New if gnu => Some(site::NEW),
+            // A trailing return type's `auto` is deduced from C++14.
+            DeclSite::NoDeduction if self.std < kiln_lex::Std::Cxx14 => Some(site::RETURN_TYPE),
+            // [temp.param]/4: a placeholder parameter type is C++17.
+            DeclSite::TemplateParam if self.std < kiln_lex::Std::Cxx17 => {
+                Some(site::TEMPLATE_PARAM_17)
+            }
+            _ => None,
+        }) else {
+            return base;
+        };
         self.auto_not_allowed(spec_loc, kw, s);
         QualType::ERROR
     }
@@ -329,9 +381,7 @@ impl Sema<'_, '_> {
     /// error type.
     pub fn type_specifier_placeholder_check(&mut self, ty: QualType, loc: Loc) -> QualType {
         match self.ast.types.canonical_view(ty) {
-            TypeView::Auto { keyword, deduced: None, .. }
-                if keyword != AutoKeyword::GnuAutoType =>
-            {
+            TypeView::Auto { keyword, deduced: None, .. } => {
                 self.auto_not_allowed(loc, keyword, site::HERE);
                 QualType::ERROR
             }
@@ -339,17 +389,26 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Why a parameter's placeholder `auto` (`decltype(auto)` when
-    /// `decltype_auto`) is ill-formed, as clang's position selector:
+    /// Why a parameter's placeholder `auto` (`decltype(auto)` or
+    /// `__auto_type` when `decltype_auto`) is ill-formed, as clang's
+    /// position selector (`GetDeclSpecTypeForDeclarator`):
     /// `decltype(auto)` is never a parameter's type
     /// ([dcl.spec.auto.general]/2-3: "in function prototype", "in lambda
-    /// parameter"), and `auto` invents a template parameter only in the
-    /// clause of a function declaration or a lambda (`fn_decl`,
-    /// [dcl.fct]/22: else "in function prototype that is not a function
-    /// declaration"). `None` when it invents one.
-    pub fn param_placeholder_site(decltype_auto: bool, fn_decl: bool, s: DeclSite) -> Option<u8> {
+    /// parameter"); `auto` invents a template parameter of a lambda from
+    /// C++14 (else "in lambda parameter before C++14") and of a function
+    /// from C++20 (else "in function prototype"), and only in the clause
+    /// of a function declaration or a lambda (`fn_decl`, [dcl.fct]/22:
+    /// else "in function prototype that is not a function declaration").
+    /// `None` when it invents one.
+    pub fn param_placeholder_site(&self, decltype_auto: bool, fn_decl: bool, s: DeclSite) -> Option<u8> {
+        use kiln_lex::Std;
+        let lambda = s == DeclSite::LambdaParam;
         if decltype_auto {
-            Some(if s == DeclSite::LambdaParam { site::LAMBDA_PARAM } else { site::PROTOTYPE })
+            Some(if lambda { site::LAMBDA_PARAM } else { site::PROTOTYPE })
+        } else if lambda && self.std < Std::Cxx14 {
+            Some(site::LAMBDA_PARAM_14)
+        } else if !lambda && self.std < Std::Cxx20 {
+            Some(site::PROTOTYPE)
         } else if !fn_decl {
             Some(site::NOT_FUNCTION_DECLARATION)
         } else {
