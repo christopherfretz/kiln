@@ -26,15 +26,16 @@
 
 use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{
-    Access, ConstexprKind, DeclFlags, DeclKind, EnumData, FnSpec, FnStorage, FriendKind, InitStyle,
-    ModuleOwnership, ParamData, VarSpec, VarStorage,
+    Access, ConstexprKind, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, EnumData,
+    FnSpec, FnStorage, FriendKind, InitStyle, ModuleOwnership, ParamData, TagKind, VarSpec,
+    VarStorage,
 };
 use kiln_ast::modules::Owner;
-use kiln_ast::names::DeclName;
+use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Quals, TagKeyword, TypeView};
 use kiln_ast::{DeclHead, DeclId, QualType, TypeId};
-use kiln_source::fx::FxHashMap;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 use kiln_source::{FileId, Loc};
 
 use crate::Sema;
@@ -45,7 +46,7 @@ mod body;
 use body::{Bodies, BodyState, Root};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 2;
+pub(crate) const IMAGE_VERSION: u32 = 3;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -54,6 +55,14 @@ const LEX_TU: u32 = u32::MAX - 1;
 /// Type references `1..=BUILTINS` are the builtins; `BUILTINS + 1 + i`
 /// is the image's type `i`.
 const BUILTINS: u32 = BuiltinType::ALL.len() as u32;
+/// Special-name words in a record's name field: the constructors and the
+/// destructor of the enclosing class, a conversion function (to its
+/// return type), `operator@` (`N_OP + op`). The importer recomputes the
+/// name.
+const N_CTOR: u32 = 0xFFFF_FF00;
+const N_DTOR: u32 = 0xFFFF_FF01;
+const N_CONV: u32 = 0xFFFF_FF02;
+const N_OP: u32 = 0xFFFF_FE00;
 
 /// What the writer hands the driver.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,6 +112,8 @@ enum TyRec {
     /// the types of `sizeof` and pointer subtraction); the importer
     /// names its own.
     Sugar(u8),
+    /// The class declared by a record.
+    Record(u32),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -131,16 +142,63 @@ enum FnBody {
     Stmt(u32),
 }
 
+/// A base-specifier of a class definition (never virtual).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct BaseRec {
+    ty: QRef,
+    loc: u32,
+    /// [`Access`] as written (0 when defaulted).
+    access: u8,
+}
+
+/// A class definition: its frozen `DefinitionBits` (without
+/// `BEING_DEFINED` / `COMPLETE`), the first record after its members, and
+/// its bases.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct RecDef {
+    bits: u64,
+    end: u32,
+    bases: Vec<BaseRec>,
+}
+
+/// A ctor-initializer: `kind` is `CtorInitKind` (`Base` 0: `target` a
+/// type reference; `Field` 2: a field record; `Delegating` 4: 0).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct InitRec {
+    kind: u8,
+    target: u32,
+    written: u8,
+    /// The initializer's expression record.
+    init: u32,
+    loc: u32,
+}
+
+/// `Function.kind`: the declaration kind of a function record.
+const FN_KINDS: [DeclKind; 5] = [
+    DeclKind::Function,
+    DeclKind::CXXMethod,
+    DeclKind::CXXConstructor,
+    DeclKind::CXXDestructor,
+    DeclKind::CXXConversion,
+];
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Payload {
     Namespace,
     Export,
     Function {
+        /// Index into [`FN_KINDS`].
+        kind: u8,
         ty: QRef,
         /// `FnSpec` bits (the subset [`fn_spec`] accepts).
         spec: u32,
+        /// The type's exception specification is deferred to the
+        /// function itself (`ExcSpec::Deferred`; `ty` is built with none).
+        deferred: bool,
         params: Vec<ParamRec>,
         body: FnBody,
+        /// A constructor's ctor-initializers, in initialization order.
+        inits: Vec<InitRec>,
     },
     Var {
         ty: QRef,
@@ -182,6 +240,28 @@ enum Payload {
         alias: bool,
         underlying: QRef,
     },
+    /// A class: `tag` is `TagKind`; `def` is present for a definition.
+    Record {
+        tag: u8,
+        def: Option<RecDef>,
+    },
+    /// A non-static data member: `FieldData.flags` (the subset
+    /// [`FIELD_FLAGS`]), the bit-field width and default member
+    /// initializer expression records (or [`NONE`]).
+    Field {
+        ty: QRef,
+        flags: u32,
+        width: u32,
+        init: u32,
+    },
+    /// An access specifier (its access is the header's).
+    Access,
+    /// An implicitly declared special member (`SpecialKind`) of the
+    /// complete class `ctx`: the importer declares it the way sema does
+    /// lazily (spec/modules.md §11.11 "Classes").
+    Implicit {
+        kind: u8,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -190,6 +270,8 @@ struct DeclRec {
     flags: u8,
     /// Bit 0 purview, bit 1 exported.
     owner: u8,
+    /// [`Access`] of a class member (0 elsewhere).
+    access: u8,
     /// Index into the names, or [`NONE`].
     name: u32,
     /// Record index, or [`NONE`] for the translation unit.
@@ -227,6 +309,10 @@ const K_TYPEDEF: u8 = 7;
 const K_ALIAS: u8 = 8;
 const K_LABEL: u8 = 9;
 const K_LET: u8 = 10;
+const K_RECORD: u8 = 11;
+const K_FIELD: u8 = 12;
+const K_ACCESS: u8 = 13;
+const K_IMPLICIT: u8 = 14;
 
 impl Payload {
     fn code(&self) -> u8 {
@@ -241,16 +327,46 @@ impl Payload {
             Payload::Typedef { alias: true, .. } => K_ALIAS,
             Payload::Label => K_LABEL,
             Payload::Let { .. } => K_LET,
+            Payload::Record { .. } => K_RECORD,
+            Payload::Field { .. } => K_FIELD,
+            Payload::Access => K_ACCESS,
+            Payload::Implicit { .. } => K_IMPLICIT,
         }
     }
 }
 
 const DECL_FLAGS: u8 = DeclFlags::USED.bits() | DeclFlags::REFERENCED.bits();
 
+/// `FieldData.flags` carried: `mutable`, the initializer style, a
+/// default member initializer (`[[no_unique_address]]` is an attribute).
+const FIELD_FLAGS: u32 = kiln_ast::decl::FieldData::MUTABLE
+    | (3 << 2)
+    | kiln_ast::decl::FieldData::HAS_DEFAULT_INIT;
+
+/// `DefinitionBits` a carried class may have: not a lambda, polymorphic,
+/// abstract, anonymous, with virtual or inherited members, or
+/// `trivial_abi` (spec/modules.md §11.11 "Classes").
+const DEF_BITS: u64 = {
+    use kiln_ast::decl::DefinitionBits as B;
+    ((1u64 << 57) - 1)
+        & !(B::BEING_DEFINED.bits()
+            | B::COMPLETE.bits()
+            | B::ANONYMOUS.bits()
+            | B::LAMBDA.bits()
+            | B::POLYMORPHIC.bits()
+            | B::ABSTRACT.bits()
+            | B::HAS_VIRTUAL_BASES.bits()
+            | B::HAS_INHERITED_CTOR.bits()
+            | B::HAS_INHERITED_ASSIGN.bits()
+            | B::LAMBDA_CAPTURES.bits()
+            | B::TRIVIAL_ABI.bits())
+};
+
 /// Function specifier bits carried: storage, inline (written and
-/// implicit), `constexpr`/`consteval`, immediate-escalating, escalated,
-/// `...`, inherited storage, deduced return type. Anything else (virtual,
-/// deleted, defaulted, coroutine, contracts, ...) is not carried yet.
+/// implicit), `constexpr`/`consteval`, explicitly defaulted, deleted,
+/// `explicit`, trivial, immediate-escalating, escalated, `...`, inherited
+/// storage, deduced return type. Anything else (virtual, implicitly
+/// defaulted, coroutine, contracts, ...) is not carried yet.
 fn fn_spec(bits: u32) -> Option<FnSpec> {
     let storage = match bits & 3 {
         0 => FnStorage::None,
@@ -270,6 +386,10 @@ fn fn_spec(bits: u32) -> Option<FnSpec> {
         .with_inline(bit(2))
         .with_implicit_inline(bit(3))
         .with_constexpr_kind(ck)
+        .with_defaulted(if bit(8) { Defaulted::Explicit } else { Defaulted::No })
+        .with_deleted(bit(10))
+        .with_explicit(bit(11))
+        .with_trivial(bit(12))
         .with_immediate_escalating(bit(13))
         .with_escalated(bit(16))
         .with_variadic(bit(17))
@@ -345,6 +465,9 @@ impl Wr {
     fn u32(&mut self, v: u32) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
+    fn u64(&mut self, v: u64) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
     fn len(&mut self, n: usize) {
         self.u32(u32::try_from(n).unwrap_or(u32::MAX));
     }
@@ -372,14 +495,17 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
     w.u8(d.payload.code());
     w.u8(d.flags);
     w.u8(d.owner);
+    w.u8(d.access);
     for v in [d.name, d.ctx, d.lexical, d.loc, d.prev] {
         w.u32(v);
     }
     match &d.payload {
-        Payload::Namespace | Payload::Export | Payload::Label => {}
-        Payload::Function { ty, spec, params, body } => {
+        Payload::Namespace | Payload::Export | Payload::Label | Payload::Access => {}
+        Payload::Function { kind, ty, spec, deferred, params, body, inits } => {
+            w.u8(*kind);
             w.q(*ty);
             w.u32(*spec);
+            w.u8(u8::from(*deferred));
             w.len(params.len());
             for p in params {
                 w.u32(p.name);
@@ -400,6 +526,14 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
                     w.u8(2);
                     w.u32(*s);
                 }
+            }
+            w.len(inits.len());
+            for i in inits {
+                w.u8(i.kind);
+                w.u32(i.target);
+                w.u8(i.written);
+                w.u32(i.init);
+                w.u32(i.loc);
             }
         }
         Payload::Var { ty, spec, init, eval } => {
@@ -429,6 +563,30 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.0.extend_from_slice(&value.to_le_bytes());
         }
         Payload::Typedef { underlying, .. } => w.q(*underlying),
+        Payload::Record { tag, def } => {
+            w.u8(*tag);
+            match def {
+                None => w.u8(0),
+                Some(d) => {
+                    w.u8(1);
+                    w.u64(d.bits);
+                    w.u32(d.end);
+                    w.len(d.bases.len());
+                    for b in &d.bases {
+                        w.q(b.ty);
+                        w.u32(b.loc);
+                        w.u8(b.access);
+                    }
+                }
+            }
+        }
+        Payload::Field { ty, flags, width, init } => {
+            w.q(*ty);
+            w.u32(*flags);
+            w.u32(*width);
+            w.u32(*init);
+        }
+        Payload::Implicit { kind } => w.u8(*kind),
     }
 }
 
@@ -481,6 +639,7 @@ fn encode(img: &Image) -> Vec<u8> {
                 w.q(*q);
             }
             TyRec::Sugar(k) => (w.u8(12), w.u8(*k)).1,
+            TyRec::Record(d) => (w.u8(13), w.u32(*d)).1,
         }
     }
     // Declarations: an offset table into the record blob, so a reader
@@ -597,19 +756,26 @@ impl<'a> Rd<'a> {
 
 /// The smallest encoded type and declaration record.
 const MIN_TYPE: usize = 5;
-const MIN_DECL: usize = 3 + 20;
+const MIN_DECL: usize = 4 + 20;
 
 fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
     let code = r.u8()?;
     let flags = r.u8()?;
     let owner = r.u8()?;
+    let access = r.u8()?;
     let (name, ctx, lexical, loc, prev) = (r.u32()?, r.u32()?, r.u32()?, r.u32()?, r.u32()?);
     let payload = match code {
         K_NAMESPACE => Payload::Namespace,
         K_EXPORT => Payload::Export,
         K_FUNCTION => {
+            let kind = r.u8()?;
             let ty = r.q()?;
             let spec = r.u32()?;
+            let deferred = match r.u8()? {
+                0 => false,
+                1 => true,
+                _ => return bad("bad flag byte"),
+            };
             let n = r.count(20)?;
             let mut params = Vec::with_capacity(n);
             for _ in 0..n {
@@ -628,7 +794,18 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
                 2 => FnBody::Stmt(r.u32()?),
                 _ => return bad("bad flag byte"),
             };
-            Payload::Function { ty, spec, params, body }
+            let n = r.count(14)?;
+            let mut inits = Vec::with_capacity(n);
+            for _ in 0..n {
+                inits.push(InitRec {
+                    kind: r.u8()?,
+                    target: r.u32()?,
+                    written: r.u8()?,
+                    init: r.u32()?,
+                    loc: r.u32()?,
+                });
+            }
+            Payload::Function { kind, ty, spec, deferred, params, body, inits }
         }
         K_VAR => Payload::Var { ty: r.q()?, spec: r.u32()?, init: r.u32()?, eval: r.u32()? },
         K_LABEL => Payload::Label,
@@ -645,9 +822,32 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
         }
         K_ENUMERATOR => Payload::Enumerator { ty: r.q()?, value: r.i128()? },
         K_TYPEDEF | K_ALIAS => Payload::Typedef { alias: code == K_ALIAS, underlying: r.q()? },
+        K_RECORD => {
+            let tag = r.u8()?;
+            let def = match r.u8()? {
+                0 => None,
+                1 => {
+                    let bits = r.u64()?;
+                    let end = r.u32()?;
+                    let n = r.count(10)?;
+                    let mut bases = Vec::with_capacity(n);
+                    for _ in 0..n {
+                        bases.push(BaseRec { ty: r.q()?, loc: r.u32()?, access: r.u8()? });
+                    }
+                    Some(RecDef { bits, end, bases })
+                }
+                _ => return bad("bad flag byte"),
+            };
+            Payload::Record { tag, def }
+        }
+        K_FIELD => {
+            Payload::Field { ty: r.q()?, flags: r.u32()?, width: r.u32()?, init: r.u32()? }
+        }
+        K_ACCESS => Payload::Access,
+        K_IMPLICIT => Payload::Implicit { kind: r.u8()? },
         _ => return bad("unknown declaration kind"),
     };
-    Ok(DeclRec { flags, owner, name, ctx, lexical, loc, prev, payload })
+    Ok(DeclRec { flags, owner, access, name, ctx, lexical, loc, prev, payload })
 }
 
 /// The type references a type record uses, and the record it names.
@@ -667,7 +867,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Option<u32>) {
             v.extend_from_slice(params);
             (v, None)
         }
-        TyRec::Enum(d) | TyRec::Typedef(d) => (Vec::new(), Some(*d)),
+        TyRec::Enum(d) | TyRec::Typedef(d) | TyRec::Record(d) => (Vec::new(), Some(*d)),
         TyRec::Sugar(_) => (Vec::new(), None),
     }
 }
@@ -675,7 +875,14 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Option<u32>) {
 /// The type references a declaration record uses.
 fn decl_refs(d: &DeclRec) -> Vec<QRef> {
     match &d.payload {
-        Payload::Namespace | Payload::Export | Payload::Label => Vec::new(),
+        Payload::Namespace
+        | Payload::Export
+        | Payload::Label
+        | Payload::Access
+        | Payload::Implicit { .. }
+        | Payload::Record { def: None, .. } => Vec::new(),
+        Payload::Record { def: Some(d), .. } => d.bases.iter().map(|b| b.ty).collect(),
+        Payload::Field { ty, .. } => vec![*ty],
         Payload::Function { ty, params, .. } => {
             std::iter::once(*ty).chain(params.iter().map(|p| p.ty)).collect()
         }
@@ -695,7 +902,13 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
 }
 
 fn same_kind(a: &Payload, b: &Payload) -> bool {
-    a.code() == b.code()
+    match (a, b) {
+        (Payload::Function { kind: x, .. }, Payload::Function { kind: y, .. }) => x == y,
+        (Payload::Field { .. } | Payload::Access | Payload::Implicit { .. } | Payload::Export, _) => {
+            false
+        }
+        _ => a.code() == b.code(),
+    }
 }
 
 /// Decodes and validates an image. Total: any malformed input is an
@@ -762,6 +975,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 k @ 0..=2 => TyRec::Sugar(k),
                 _ => return bad("unknown builtin typedef"),
             },
+            13 => TyRec::Record(r.u32()?),
             _ => return bad("unknown type kind"),
         };
         img.types.push(t);
@@ -797,6 +1011,29 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     Ok(img)
 }
 
+/// The class a base-specifier's type `q` names: a class definition
+/// `complete` accepts, through elaborated, parenthesized and
+/// typedef sugar.
+fn base_class(img: &Image, q: QRef, complete: &dyn Fn(u32) -> bool) -> Option<u32> {
+    let mut t = q.ty;
+    for _ in 0..64 {
+        let j = t.checked_sub(BUILTINS + 1)? as usize;
+        t = match img.types.get(j)? {
+            TyRec::Elab(_, q) | TyRec::Paren(q) => q.ty,
+            TyRec::Typedef(d) => match img.decls.get(*d as usize)?.payload {
+                Payload::Typedef { underlying, .. } => underlying.ty,
+                _ => return None,
+            },
+            TyRec::Record(d) => {
+                let ok = matches!(img.decls.get(*d as usize)?.payload, Payload::Record { .. });
+                return (ok && complete(*d)).then_some(*d);
+            }
+            _ => return None,
+        };
+    }
+    None
+}
+
 /// The structural checks of [`decode`].
 #[allow(clippy::too_many_lines)] // one arm per record or type kind, kept together with the format
 fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
@@ -823,7 +1060,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     (t, &r.payload),
                     (TyRec::Enum(_), Payload::Enum { .. })
                         | (TyRec::Typedef(_), Payload::Typedef { .. })
-                )
+                        | (TyRec::Record(_), Payload::Record { .. })
             });
             if !ok {
                 return bad("bad declaration reference in a type");
@@ -845,13 +1082,26 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         t <= u64::from(BUILTINS) || pdep[(t - u64::from(BUILTINS) - 1) as usize] <= i
     };
     let mut open_enum: Option<usize> = None;
+    // The open class definitions (record, end), innermost last; per
+    // record, the first declaration of its entity; per entity, whether
+    // a definition was seen; the implicit members declared.
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    let mut chain: Vec<usize> = Vec::with_capacity(nd);
+    // Per entity (its first record), the end of its definition.
+    let mut def_end = vec![usize::MAX; nd];
+    let mut implicit: FxHashSet<(u32, u8)> = FxHashSet::default();
     for (i, d) in img.decls.iter().enumerate() {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
+        while stack.last().is_some_and(|&(_, end)| end <= i) {
+            stack.pop();
+        }
+        chain.push(if (d.prev as usize) < i { chain[d.prev as usize] } else { i });
         // A local declaration (a body's variable or label): its context
         // is an earlier function record; it is never looked up by name.
         if kind_of(d.ctx).is_some_and(|c| matches!(c.payload, Payload::Function { .. })) {
             if d.flags & !body::LOCAL_FLAGS != 0
                 || d.owner > 3
+                || d.access != 0
                 || d.lexical != NONE
                 || d.prev != NONE
                 || (d.name != NONE && d.name as usize >= img.pnames.len())
@@ -891,6 +1141,13 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 || kind_of(x)
                     .is_some_and(|r| matches!(r.payload, Payload::Namespace | Payload::Export))
         };
+        let closed = |x: u32| {
+            kind_of(x).is_some_and(|r| {
+                matches!(&r.payload, Payload::Record { def: Some(df), .. } if df.end as usize <= i)
+            })
+        };
+        let in_class = kind_of(d.ctx).is_some_and(|r| matches!(r.payload, Payload::Record { .. }));
+        let top = stack.last().map(|&(r, _)| r as u32);
         let is_enumerator = matches!(d.payload, Payload::Enumerator { .. });
         if is_enumerator {
             if open_enum.is_none() || d.ctx as usize != open_enum.unwrap_or(usize::MAX) {
@@ -898,9 +1155,21 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             }
         } else {
             open_enum = None;
-            if !scope(d.ctx) {
+            // Class members follow their class's definition record and
+            // precede its end; an out-of-line member definition names a
+            // complete class and a previous declaration; an implicit
+            // member names a complete class.
+            let ok = match (&d.payload, d.lexical) {
+                (Payload::Implicit { .. }, _) => top.is_none() && closed(d.ctx) && d.lexical == NONE,
+                (_, NONE) => top.map_or_else(|| scope(d.ctx), |t| d.ctx == t),
+                _ => top.is_none() && (scope(d.ctx) || (closed(d.ctx) && d.prev != NONE)),
+            };
+            if !ok || (matches!(d.payload, Payload::Field { .. } | Payload::Access) && !in_class) {
                 return bad("bad declaration context");
             }
+        }
+        if (in_class && d.access > 3) || (!in_class && d.access != 0) {
+            return bad("bad member access");
         }
         if d.lexical != NONE && d.lexical != LEX_TU && !scope(d.lexical) {
             return bad("bad lexical context");
@@ -908,15 +1177,52 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         if d.prev != NONE && !kind_of(d.prev).is_some_and(|p| same_kind(&p.payload, &d.payload)) {
             return bad("bad previous declaration");
         }
-        let named = !matches!(d.payload, Payload::Export);
-        if named != (d.name != NONE) || (named && d.name as usize >= img.names.len()) {
+        let ident = |n: u32| (n as usize) < img.names.len();
+        let name_ok = match &d.payload {
+            Payload::Export | Payload::Access | Payload::Implicit { .. } => d.name == NONE,
+            Payload::Field { .. } => d.name == NONE || ident(d.name),
+            Payload::Function { kind, .. } => match d.name {
+                N_CTOR => *kind == 2,
+                N_DTOR => *kind == 3,
+                N_CONV => *kind == 4,
+                n if (N_OP..N_CTOR).contains(&n) => {
+                    *kind < 2 && u8::try_from(n - N_OP).ok().and_then(OverloadedOperator::from_u8).is_some()
+                }
+                n => *kind < 2 && ident(n),
+            },
+            _ => ident(d.name),
+        };
+        if !name_ok {
             return bad("bad declaration name");
         }
         if decl_refs(d).into_iter().any(|q| !qref_at(q, i)) {
             return bad("bad type reference");
         }
         match &d.payload {
-            Payload::Function { ty, spec, params, .. } => {
+            Payload::Function { kind, ty, spec, params, inits, .. } => {
+                if *kind as usize >= FN_KINDS.len() || (*kind == 0) == in_class {
+                    return bad("bad function kind");
+                }
+                if !inits.is_empty() && *kind != 2 {
+                    return bad("ctor-initializers of a function that is not a constructor");
+                }
+                let nbases = kind_of(d.ctx).map_or(0, |r| match &r.payload {
+                    Payload::Record { def: Some(df), .. } => df.bases.len(),
+                    _ => 0,
+                });
+                for x in inits {
+                    let ok = match x.kind {
+                        0 => (x.target as usize) < nbases,
+                        2 => kind_of(x.target).is_some_and(|f| {
+                            matches!(f.payload, Payload::Field { .. }) && f.ctx == d.ctx
+                        }),
+                        4 => x.target == 0,
+                        _ => false,
+                    };
+                    if !ok {
+                        return bad("bad ctor-initializer");
+                    }
+                }
                 let proto = (ty.ty > BUILTINS)
                     .then(|| img.types.get((ty.ty - BUILTINS - 1) as usize))
                     .flatten();
@@ -957,9 +1263,45 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     return bad("bad enumerator type");
                 }
             }
+            Payload::Record { tag, def } => {
+                if *tag > TagKind::Union as u8 {
+                    return bad("bad class tag");
+                }
+                if let Some(df) = def {
+                    let parent_end = stack.last().map_or(nd, |&(_, e)| e);
+                    let end = df.end as usize;
+                    if end <= i || end > parent_end || df.bits & !DEF_BITS != 0 {
+                        return bad("bad class definition");
+                    }
+                    if def_end[chain[i]] != usize::MAX {
+                        return bad("a class defined twice");
+                    }
+                    def_end[chain[i]] = end;
+                    let complete = |x: u32| {
+                        chain.get(x as usize).is_some_and(|&c| def_end[c] <= i)
+                    };
+                    for b in &df.bases {
+                        if b.access > 3 || base_class(img, b.ty, &complete).is_none() {
+                            return bad("bad base class");
+                        }
+                    }
+                    stack.push((i, end));
+                }
+            }
+            Payload::Field { flags, .. } => {
+                if flags & !FIELD_FLAGS != 0 {
+                    return bad("bad field flags");
+                }
+            }
+            Payload::Implicit { kind } => {
+                if *kind > 5 || d.prev != NONE || !implicit.insert((d.ctx, *kind)) {
+                    return bad("bad implicit member");
+                }
+            }
             Payload::Namespace
             | Payload::Export
             | Payload::Typedef { .. }
+            | Payload::Access
             | Payload::Label
             | Payload::Let { .. } => {}
         }
@@ -1812,7 +2154,7 @@ impl Sema<'_, '_> {
                 let exc = exc_spec(*exc).unwrap_or_default();
                 self.ast.types.function(r, &ps, FuncInfo::from_bits(*info), exc)
             }
-            TyRec::Enum(d) | TyRec::Typedef(d) => decl_ty(self, *d),
+            TyRec::Enum(d) | TyRec::Typedef(d) | TyRec::Record(d) => decl_ty(self, *d),
             TyRec::QArray(c, q) => {
                 let q = qt(self, *q);
                 self.ast.types.qualify(q, Quals::from_bits(*c))
