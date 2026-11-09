@@ -1425,6 +1425,48 @@ namespaces in a `static_assert` and runs members of two others.
   status at run time; the blank-source check (as for S2) shows the
   image was used.
 
+**Part 2a, stage S4 first slice: function templates (WP-1066).** Same
+method (harness profile, aarch64, `/usr/bin/time`, median of 3, load
+~20, `-std=c++26`). Two workloads: the corpus module
+`module.interface/Inputs/img-template.cppm` (43 image records), imported
+by `image-template-run.cpp`; and a template-heavy synthetic interface:
+200 exported namespaces of ten function templates each (type and
+non-type parameters, locals, loops, compound assignments, casts,
+`sizeof`; 2401 lines, 8000 image records), whose importer instantiates
+templates of five namespaces in a `static_assert` and in `main`.
+
+| run | corpus module | template-heavy module |
+|---|---|---|
+| kiln `--precompile`, image off | 0.08 s, 10.7 MiB, 24,170 B | 0.14 s, 11.3 MiB, 184,460 B |
+| kiln `--precompile`, image on | 0.10 s, 10.8 MiB, 30,458 B | 0.13 s, 18.3 MiB, 1,258,218 B |
+| kiln import, image off, `-fsyntax-only` | 0.29 s, 11.0 MiB | 0.13 s, 12.9 MiB |
+| kiln import, image on, `-fsyntax-only` | 0.07 s, 11.2 MiB | **0.06 s**, 13.9 MiB |
+| kiln import, image off, `-c` | 0.11 s, 54.6 MiB | 0.19 s, 54.0 MiB |
+| kiln import, image on, `-c` | 0.11 s, 54.6 MiB | 0.16 s, 54.0 MiB |
+| clang 19 `--precompile` | 0.08 s, 82.4 MiB | 0.11 s, 85.4 MiB |
+| clang 19 import, `-fsyntax-only` | 0.02 s, 82.7 MiB | 0.03 s, 82.9 MiB |
+| clang 19 import, `-c` | 0.02 s, 90.9 MiB | 0.03 s, 90.4 MiB |
+
+- The template-heavy import halves (`-fsyntax-only` 0.13 s to 0.06 s),
+  for 1.0 MiB more peak RSS (the eager decode of 8000 records); `-c`
+  gains 0.03 s. The corpus module's 0.29 s image-off `-fsyntax-only`
+  is load noise (its `-c` is 0.11 s); it is too small to separate.
+- The image grows the file 6.8x (about 135 B per record), the same
+  ratio as S3, and precompile's peak RSS from 11.3 to 18.3 MiB
+  (compact encoding: WP-1095).
+- On/off equivalence: identical LLVM IR for both importers, identical
+  instantiation diagnostics (`kind2_declaration_image_templates`), and
+  the importer's `heavy<int>` reuses the interface's carried constant
+  (no module evaluation in either mode).
+- Re-run: the synthetic interface is `export module th;` and 200
+  copies of `export namespace n<i> { ... }` holding `add`, `scale<T,
+  N>`, `square<N>`, `addr`, `twice`, `width`, `narrow`, `pick` and
+  `sum_to` as in `img-template.cppm` (all `constexpr` but `addr`,
+  `twice`, `narrow`) plus `template <class T, int K> constexpr T
+  poly(T x)` (a K-step loop); the commands are `kiln++ -std=c++26
+  [-fkiln-bmi-image] --precompile th.cppm` and `kiln++ -std=c++26
+  [-fkiln-bmi-image] -fmodule-file=th=th.pcm {-fsyntax-only | -c} u.cpp`.
+
 **Part 2 item 1, results inside instantiations (WP-1046).** Same method
 (harness profile, aarch64, `/usr/bin/time`, load ~20; precompile median of
 3, imports median of 5, interleaved). "Part 1" is the base commit's binary
