@@ -1570,10 +1570,23 @@ silently (`diag = None`) at those sites. S3O lists them.
    element, it is that partial. Otherwise the pattern is the most
    specialized partial, found by function-template partial ordering of
    the rewritten `template<p.params> void f(X<p.args>)` (§6.7), with
-   constraints as the tie-breaker. In each direction a pack expansion
+   constraints as the tie-breaker. The tie-breaker applies only when the
+   two are equally specialized by deduction, their template parameter
+   lists are equivalent ignoring constraints ([temp.over.link]/6, same
+   length, kinds, packness and non-type parameter types) and their
+   canonical arguments are the same, packs flattened ([temp.func.order]/6.2,
+   clang `getMoreSpecialized`); the more constrained one
+   ([temp.constr.order], §8.4) wins, type-constraints and requires-clauses
+   alike (`partial_constraints`: a redeclared member partial's are the
+   original's). So `requires C<T> Y<T*, U*>` and `requires D<T> Y<U*, T*>`
+   are ambiguous for `Y<int*, int*>` even though `D` subsumes `C` (WP-1053,
+   `tests/conformance/temp.spec.partial.order/constrained-partial-ordering-ambiguous.cpp`,
+   `.../constrained-partial-selection-run.cpp`). In each direction a pack expansion
    among the synthesized arguments is deduced as a whole by a pack
    expansion of the other partial ([temp.deduct.type]/9,
-   `DeducedArgs::expansions`), so `template <class... P> X<0, T<P...>>`
+   `DeducedArgs::expansions`; a type or template template pattern from
+   the pattern of the other's expansion, a non-type one as the
+   expansion itself), so `template <class... P> X<0, T<P...>>`
    is more specialized than `template <int R, class... P> X<R, T<P...>>`
    whatever the indices of the two `P`s (WP-292; test
    `templates/spec/temp.spec.partial.order-pack-expansion.cpp`). Each
@@ -1697,22 +1710,48 @@ Out-of-class partial specializations of a member template (WP-150):
   One declared after `Outer<X>` was instantiated is not part of it, as
   with clang.
 
-**Landed (WP-1017).** Declaration checks on a partial specialization:
+**Landed (WP-1017, WP-1053).** Declaration checks on a partial specialization:
 - *More specialized than the primary* ([temp.spec.partial.general]/9.2;
   `check_partial_more_specialized`, `templ/order.rs`
-  `primary_at_least_as_specialized`). A class or variable partial
-  specialization whose primary is at least as specialized as it gets
-  `{class|variable} template partial specialization is not more
-  specialized than the primary template` + `template is declared here`
-  on the primary. The check is conservative and skips four cases, which
-  pass unchecked:
-  - packs;
-  - constraints on either side;
-  - member templates of a class template;
-  - a primary non-type parameter whose type is a placeholder or
-    dependent (`template<auto V>`, `template<class T, T V>`).
+  `not_more_specialized_than_primary`, clang
+  `isMoreSpecializedThanPrimary`). The primary's own parameters as
+  arguments are deduced from the partial's arguments and the reverse,
+  with the rules of §4.4 step 4 (packs deduced as a whole, the
+  deduction finished). A class or variable partial specialization the
+  primary is at least as specialized as gets `{class|variable} template
+  partial specialization is not more specialized than the primary
+  template` + `template is declared here` on the primary, unless it is
+  equally specialized and, from C++20, more constrained under the
+  conditions of the step-4 tie-breaker (`template <D T> struct K; template
+  <C T> struct K<T>` is invalid, `template <class T> requires C<T> struct
+  A<T>` valid); then clang's "similar constraint expressions" note pair
+  when textually identical atoms would have decided it (§8.4). Not
+  checked at the definition: a partial specialization of a member template
+  of a class template, whose arguments are dependent; it is checked when
+  the enclosing class is instantiated (`Substituter::member_partial_spec`
+  runs both checks on the redeclared one, with the instantiation note), as
+  clang does. Still skipped: a primary non-type parameter whose type is a
+  placeholder or dependent (`template<auto V>`, `template<class T, T V>`).
+- *Deducible* ([temp.spec.partial.general]/8, `check_partial_deducible`):
+  the arguments are deduced from themselves; a parameter left undeduced
+  gets `contains a template parameter that cannot be deduced`
+  (`-Wunusable-partial-specialization`), at the definition and again in
+  each instantiation of an enclosing class template (`per_instantiation`).
+  A pack expansion that is not the last argument of a list makes the
+  whole list non-deduced ([temp.deduct.type]/9, clang
+  `hasPackExpansionBeforeEnd`, `deduce_arg_list_packs`), so
+  `template <class... T> F<T..., int>` and `template <class T, class...
+  Us> Z<T, Us..., int, T>` deduce nothing; `F<T..., int>` still matches
+  `F<int>` with `T` empty, as with clang. The primary's own arguments
+  with a pack (`G<Ts...>`, `H<T, Ts...>`) "do not specialize any template
+  argument" (`check_partial_args` looks through the pack wrapping one
+  expansion).
 
-  Test: `tests/conformance/temp.spec.partial.general/not-more-specialized.cpp`.
+  Tests: `tests/conformance/temp.spec.partial.general/not-more-specialized.cpp`,
+  `.../constrained-not-more-specialized.cpp`,
+  `.../pack-expansion-partial-spec-checks.cpp`,
+  `temp.spec.partial.member/member-partial-checked-per-instantiation.cpp`,
+  `temp.constr.order/class-template-partial-specializations.cpp`.
 - *Non-deducible arguments* (CWG526, [temp.deduct.type]/5.3). A non-type
   argument that is not just the parameter's name, such as `(N)`, is a
   non-deduced context. A call cannot deduce it, and a partial
@@ -2404,6 +2443,70 @@ reports a dropped statement or part.
   `R<int>` (the implicit access records `*this`'s class as its object;
   `class.protected/dependent-base-current-object.cpp`, WP-680).
   Type names are checked as other names (spec/sema-class.md §2.4).
+- **A member of every specialization ([temp.friend]/5; WP-1072).**
+  `template<class T> friend class A<T>::Member;` (any class-key) and
+  `template<class T> friend R A<T>::f(P);` — a friend with its own
+  template head whose nested-name-specifier names a specialization of a
+  class template `A` (through member classes, `A<T>::X::Y`), with the
+  head's parameters among that template-id's arguments — befriend the
+  named member of each specialization of `A` the template-id deduces
+  from. `Sema::declare_member_friend_{class,fn}` (class/member_friend.rs)
+  recognises the form before the ordinary friend paths, consumes the
+  head(s) (a member function template's second head is allowed), and
+  records a `MemberFriend` keyed by its `FriendDecl`: the template-id's
+  template (first declaration) and written arguments, the member class
+  path, the member's name, and a function's declared type.
+  - Access: `effective_context` collects, for each class of the context
+    (records and functions, walking outward) that is a member of a class
+    `S`, the member friends registered against the class template of
+    `S` (`member_friend_grants`). A member `e` of `S` reached through
+    the member classes `X…` is befriended when the friend's kind (class
+    or function), name and path match and the friend's head deduces
+    from its written arguments against `S`'s canonical arguments
+    ([temp.deduct.type], every parameter deduced; an explicit
+    specialization is a specialization of `A` like any other, a partial
+    specialization matches as its arguments do: `A<T *>::Member` names
+    `A<int *>::Member`, not `A<int>::Member`). For a function the
+    deduced arguments are substituted into the declared type, which must
+    be `e`'s type ([temp.over.link]); a member function template's type
+    is not compared (its own head would have to be matched too). The
+    answer is cached per (friend, member). A member of a class
+    template's pattern or of a partial specialization (no specialization
+    arguments yet) is a speculative friend: the check is recorded and
+    replayed in each instantiation (`dependent_access`, above), so
+    `A<int>::Member::get`'s error is reported with its instantiation
+    note.
+  - In a class template, each instantiation substitutes the specifier
+    and the declared type (the friend's own parameters at their retained
+    depth) and registers a new member friend (`instantiate_member_friend`).
+  - clang does not model the rule: it turns off access control for the
+    befriending class (clang `Sema::ActOnTemplatedFriendTag` /
+    `ActOnFriendFunctionDecl`, `FriendDecl` marked unsupported). kiln
+    keeps the precise rule, so kiln rejects what clang accepts only where
+    the program reads a member clang should have denied: a sibling member
+    (`A<T>::Other`), another class's `Member`, a non-matching
+    specialization or function type (g++ denies these too;
+    `temp.friend/dependent-member-friend-denied.cpp`, `skip(clang)`).
+    Where clang accepts a declaration form, kiln follows it: the nested
+    path `A<T>::X::Y`, a member function template, and any class-key
+    (the befriended member's tag kind is not checked).
+  - Diagnostic: clang's `-Wunsupported-friend` (`sema_unsupported_friend`)
+    once per declaration in its pattern, never per instantiation, at the
+    befriended name: "dependent nested name specifier 'A<T>' for friend
+    class declaration is not supported; turning off access control for
+    'B'", also for a function. Under `-fclang-compat=19` the specifier is
+    spelled with its trailing `::` (`'A<T>::'`, `'A<T>::X::'`). The text
+    is clang's although kiln does not turn off access control (spec
+    note: kept for diagnostic parity). A friend without its own head
+    (`friend class C<U>::Member;`, `friend class A<int>::Member;`) is an
+    ordinary dependent friend type (above) and is not warned about.
+  - Tests: `temp.friend/dependent-member-class-friend-run.cpp`,
+    `dependent-member-friend-{variants,class-template}-run.cpp`,
+    `dependent-member-friend-warning{,-clang19}.cpp`,
+    `dependent-member-friend-denied.cpp`. A precompiled header or a module
+    replays its source, so its member friends are declared again. Gap:
+    the side table is not recorded in the module declaration image
+    (`-fkiln-bmi-image`, off by default).
 - `template<class U> friend struct Y<U*>;` is "partial specialization
   cannot be declared as a friend" ([temp.friend]/9).
 

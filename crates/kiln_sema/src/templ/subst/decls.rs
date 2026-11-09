@@ -1750,6 +1750,16 @@ impl Substituter<'_, '_, '_> {
             let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
             return Ok(self.sema.instantiate_friend_spec(record, &fs, ty, &args));
         }
+        if let Some(mf) = self.sema.member_friends.by_friend.get(&d).cloned()
+            && let FriendTarget::Type { ty, .. } = self.sema.ast.decls.friend_target(d)
+        {
+            // `template<class T> friend class A<T>::Member;`
+            // ([temp.friend]/5): its own parameters stay.
+            let nns = self.nns(mf.nns, loc)?;
+            let ty = self.ty(ty, loc)?;
+            let depth = self.args.retained_depth(mf.depth());
+            return Ok(self.sema.instantiate_member_friend(&mf, nns, ty, depth, loc));
+        }
         match self.sema.ast.decls.friend_target(d) {
             FriendTarget::Type { ty, owned_tag } => {
                 // `friend struct Z;` that first declared `Z` in the

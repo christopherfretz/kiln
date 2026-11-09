@@ -266,7 +266,25 @@ impl Sema<'_, '_> {
         constrained.sort_by_key(|(d, _)| std::cmp::Reverse(*d));
         let (d1, ac1) = constrained.swap_remove(0);
         let (d2, ac2) = constrained.swap_remove(0);
-        let (Some(n1), Some(n2)) = (self.normal_form(d1, &ac1), self.normal_form(d2, &ac2)) else {
+        self.similar_atom_notes(d1, &ac1, d2, &ac2)
+    }
+
+    /// clang's `MaybeEmitAmbiguousAtomicConstraintsDiagnostic`: when
+    /// treating textually identical atoms of constraints `ac1` (keyed by
+    /// `d1`) and `ac2` (keyed by `d2`) as identical would change either
+    /// subsumption direction, the "similar constraint" note pair naming the
+    /// last such pair of atoms; otherwise none.
+    pub(crate) fn similar_atom_notes(
+        &mut self,
+        d1: DeclId,
+        ac1: &[ExprId],
+        d2: DeclId,
+        ac2: &[ExprId],
+    ) -> Vec<Diag> {
+        if ac1.is_empty() || ac2.is_empty() {
+            return Vec::new();
+        }
+        let (Some(n1), Some(n2)) = (self.normal_form(d1, ac1), self.normal_form(d2, ac2)) else {
             return Vec::new();
         };
         let (Some(dnf1), Some(cnf1), Some(dnf2), Some(cnf2)) = (
