@@ -20,6 +20,7 @@ pub mod deps;
 pub mod features;
 pub mod fp_flags;
 pub mod link;
+mod pch;
 pub mod pp_cmd;
 pub mod rsp;
 pub mod sanitize;
@@ -433,7 +434,7 @@ fn read_stdin(stdin: &mut dyn Read) -> String {
 
 /// One `-fsyntax-only` input (C is not implemented yet).
 #[allow(clippy::too_many_arguments)]
-fn syntax_only(
+pub(crate) fn syntax_only(
     args: &Args,
     tc: &Toolchain,
     std: LangStd,
@@ -644,6 +645,12 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     if driver_warnings(&args, &tc, &inputs, &diag_opts, &io.stderr) {
         return 1;
     }
+    // `-include-pch` (spec/driver.md "Precompiled headers", WP-1023): the
+    // checked PCH replays as `-include`s.
+    let Ok(pch_args) = pch::consumer(&args, &tc, &inputs, &diag_opts, &io.stderr) else {
+        return 1;
+    };
+    let args: &Args = pch_args.as_ref().unwrap_or(&args);
 
     if args.action == Action::Precompile && inputs.len() > 1 && args.output.is_some() {
         let sm = SourceManager::new();
@@ -656,6 +663,17 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         Diag::new(DiagId::drv_out_file_multiple, Span::INVALID).emit(&e);
         e.flush();
         return 1;
+    }
+    // Headers (and every input with `-emit-pch`) are precompiled; the
+    // other inputs go on (WP-1023).
+    let all_inputs = inputs.len();
+    let (producers, inputs): (Vec<&args::Input>, Vec<&args::Input>) =
+        inputs.into_iter().partition(|i| pch::is_producer(args, i));
+    if !producers.is_empty() {
+        let errors = pch::produce(args, &tc, &producers, all_inputs, &diag_opts, &mut io);
+        if errors > 0 || inputs.is_empty() {
+            return i32::from(errors > 0);
+        }
     }
     let stdin_text = inputs.iter().any(|i| i.path == "-").then(|| read_stdin(&mut io.stdin));
     if matches!(args.action, Action::Compile | Action::Link) && args.deps.only.is_none() {

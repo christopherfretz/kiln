@@ -1,0 +1,736 @@
+//! Precompiled headers (WP-1023, spec/driver.md "Precompiled headers").
+//!
+//! A kiln PCH is a *textual* record: the header's path, the files it
+//! read with their sizes and content hashes, and the options that change
+//! what preprocessing it produces. The consumer (`-include-pch`) checks
+//! the record the way clang checks a PCH, with clang's diagnostics, and
+//! then processes the header again as if it were `-include`d. Replaying
+//! the header text under the consumer's own options is always sound; the
+//! checks exist so builds that rely on clang rejecting a stale or
+//! mismatched PCH see the same errors. In 1.0 a PCH buys correctness and
+//! build-system compatibility, not speed.
+
+use std::path::{Path, PathBuf};
+
+use kiln_diag::{Diag, DiagId, DiagOptions};
+use kiln_pp::CmdMacro;
+use kiln_pp::bmi;
+use kiln_source::{SourceManager, Span};
+
+use crate::args::{Action, Args, DepHeaders, Input};
+use crate::codegen_cmd::{self, Phase};
+use crate::deps::DepList;
+use crate::toolchain::{LangStd, Toolchain};
+use crate::{Io, SharedWriter, input_std, make_engine, report_output_error, syntax_only};
+
+/// The record's first word.
+pub(crate) const MAGIC: &str = "KILNPCH";
+/// The record format version this kiln writes and reads.
+pub(crate) const FORMAT_VERSION: u32 = 1;
+
+/// One recorded option value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum OptVal {
+    /// clang's boolean language options ("X was enabled in PCH file...").
+    Bool(bool),
+    /// clang's valued options ("X differs in PCH file vs. current file").
+    Value(String),
+}
+
+/// Which clang wording an option check belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Compat {
+    /// Both.
+    All,
+    /// `-fclang-compat=19` (clang 19 checks `__OPTIMIZE__`).
+    Below22,
+    /// `-fclang-compat=22` (clang 22 checks `OptimizationLevel`).
+    From22,
+}
+
+/// One file the header read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileEntry {
+    /// Size in bytes when the PCH was built.
+    pub size: u64,
+    /// `bmi::checksum` of the contents.
+    pub hash: u64,
+    /// Found as a system header (not checked, as clang does not check
+    /// system input files by default).
+    pub system: bool,
+    /// The name as the dependency output spells it.
+    pub spelled: String,
+    /// The absolute path checked.
+    pub abs: String,
+}
+
+/// A parsed PCH record (the format is spec/driver.md "Precompiled
+/// headers").
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Record {
+    /// `kiln <version> <sha> <clang-compat>`, compared as a whole.
+    pub kiln: String,
+    /// The producer's working directory.
+    pub cwd: String,
+    /// The precompiled input, as spelled.
+    pub main: String,
+    /// The producer's `-include` files, as spelled, in order.
+    pub includes: Vec<String>,
+    /// The checked options, in clang's check order.
+    pub opts: Vec<(String, OptVal)>,
+    /// The target triple.
+    pub target: String,
+    /// The command-line macros' final state, in first-appearance order
+    /// (`None`: undefined).
+    pub macros: Vec<(String, Option<String>)>,
+    /// The files read, in dependency order.
+    pub files: Vec<FileEntry>,
+}
+
+/// Why a file is not a readable PCH record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReadError {
+    /// No kiln magic.
+    NotPch,
+    /// A clang PCH (`CPCH` magic).
+    Clang,
+    /// An older format version.
+    Older,
+    /// A newer format version.
+    Newer,
+    /// Kiln magic, but malformed (the detail says where).
+    Corrupt(String),
+}
+
+fn esc(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => o.push_str("\\\\"),
+            '\t' => o.push_str("\\t"),
+            '\n' => o.push_str("\\n"),
+            '\r' => o.push_str("\\r"),
+            c => o.push(c),
+        }
+    }
+    o
+}
+
+fn unesc(s: &str) -> Option<String> {
+    let mut o = String::with_capacity(s.len());
+    let mut it = s.chars();
+    while let Some(c) = it.next() {
+        if c == '\\' {
+            o.push(match it.next()? {
+                '\\' => '\\',
+                't' => '\t',
+                'n' => '\n',
+                'r' => '\r',
+                _ => return None,
+            });
+        } else {
+            o.push(c);
+        }
+    }
+    Some(o)
+}
+
+/// This kiln's identity line (a PCH from another one is rejected).
+pub(crate) fn kiln_line(args: &Args) -> String {
+    let sha = bmi::kiln_sha();
+    let sha = if sha.is_empty() { "-" } else { sha };
+    format!("{} {sha} -fclang-compat={}", bmi::KILN_VERSION, args.predef.clang_compat.major())
+}
+
+impl Record {
+    /// The record's text.
+    pub(crate) fn write(&self) -> String {
+        use std::fmt::Write as _;
+        let mut s = format!("{MAGIC} {FORMAT_VERSION}\n");
+        let _ = writeln!(s, "kiln {}", esc(&self.kiln));
+        let _ = writeln!(s, "cwd {}", esc(&self.cwd));
+        let _ = writeln!(s, "main {}", esc(&self.main));
+        for i in &self.includes {
+            let _ = writeln!(s, "include {}", esc(i));
+        }
+        for (d, v) in &self.opts {
+            let _ = match v {
+                OptVal::Bool(b) => writeln!(s, "opt b\t{}\t{}", esc(d), u8::from(*b)),
+                OptVal::Value(v) => writeln!(s, "opt v\t{}\t{}", esc(d), esc(v)),
+            };
+        }
+        let _ = writeln!(s, "target {}", esc(&self.target));
+        for (n, d) in &self.macros {
+            let _ = match d {
+                Some(d) => writeln!(s, "macro D\t{}\t{}", esc(n), esc(d)),
+                None => writeln!(s, "macro U\t{}", esc(n)),
+            };
+        }
+        for f in &self.files {
+            let _ = writeln!(
+                s,
+                "file {}\t{:016x}\t{}\t{}\t{}",
+                f.size,
+                f.hash,
+                u8::from(f.system),
+                esc(&f.spelled),
+                esc(&f.abs)
+            );
+        }
+        let sum = bmi::checksum(s.as_bytes());
+        let _ = writeln!(s, "end {sum:016x}");
+        s
+    }
+
+    /// Parses a record.
+    pub(crate) fn parse(bytes: &[u8]) -> Result<Record, ReadError> {
+        if bytes.starts_with(&bmi::CLANG_MAGIC) {
+            return Err(ReadError::Clang);
+        }
+        let head = format!("{MAGIC} ");
+        if !bytes.starts_with(head.as_bytes()) {
+            return Err(ReadError::NotPch);
+        }
+        let corrupt = |what: &str| ReadError::Corrupt(what.to_owned());
+        let text = std::str::from_utf8(bytes).map_err(|_| corrupt("not UTF-8"))?;
+        let first = text.lines().next().unwrap_or("");
+        let ver: u32 = first[head.len()..].parse().map_err(|_| corrupt("bad format version"))?;
+        if ver < FORMAT_VERSION {
+            return Err(ReadError::Older);
+        }
+        if ver > FORMAT_VERSION {
+            return Err(ReadError::Newer);
+        }
+        let body = text.strip_suffix('\n').ok_or_else(|| corrupt("truncated"))?;
+        let end_at = body.rfind('\n').ok_or_else(|| corrupt("truncated"))? + 1;
+        let sum = body[end_at..].strip_prefix("end ").ok_or_else(|| corrupt("truncated"))?;
+        if u64::from_str_radix(sum, 16).ok() != Some(bmi::checksum(&bytes[..end_at])) {
+            return Err(corrupt("checksum mismatch"));
+        }
+        let mut r = Record::default();
+        let mut seen_kiln = false;
+        for line in body[..end_at].lines().skip(1) {
+            let bad = || corrupt(&format!("bad line '{line}'"));
+            let (key, rest) = line.split_once(' ').ok_or_else(bad)?;
+            let f: Vec<&str> = rest.split('\t').collect();
+            let u = |i: usize| f.get(i).and_then(|s| unesc(s)).ok_or_else(bad);
+            match (key, f.len()) {
+                ("kiln", 1) => (r.kiln, seen_kiln) = (u(0)?, true),
+                ("cwd", 1) => r.cwd = u(0)?,
+                ("main", 1) => r.main = u(0)?,
+                ("include", 1) => r.includes.push(u(0)?),
+                ("target", 1) => r.target = u(0)?,
+                ("opt", 3) => {
+                    let v = match f[0] {
+                        "b" => OptVal::Bool(f[2] == "1"),
+                        "v" => OptVal::Value(u(2)?),
+                        _ => return Err(bad()),
+                    };
+                    r.opts.push((u(1)?, v));
+                }
+                ("macro", 3) if f[0] == "D" => r.macros.push((u(1)?, Some(u(2)?))),
+                ("macro", 2) if f[0] == "U" => r.macros.push((u(1)?, None)),
+                ("file", 5) => r.files.push(FileEntry {
+                    size: f[0].parse().map_err(|_| bad())?,
+                    hash: u64::from_str_radix(f[1], 16).map_err(|_| bad())?,
+                    system: f[2] == "1",
+                    spelled: u(3)?,
+                    abs: u(4)?,
+                }),
+                _ => return Err(bad()),
+            }
+        }
+        if !seen_kiln || r.main.is_empty() {
+            return Err(corrupt("missing fields"));
+        }
+        Ok(r)
+    }
+}
+
+/// The checked options of a compile, in clang's order (clang
+/// `checkLanguageOptions`: the language options in `LangOptions.def`
+/// order, the first mismatch reported), each with the wording it
+/// belongs to. Kiln's own reflection options follow clang's.
+fn options(args: &Args, tc: &Toolchain, std: LangStd) -> Vec<(&'static str, OptVal, Compat)> {
+    use kiln_lex::Std as S;
+    let sink = SharedWriter::new(std::io::sink());
+    let diag_opts = DiagOptions::default();
+    let job = crate::pp_cmd::Job {
+        args,
+        toolchain: tc,
+        std,
+        path: "",
+        stdin_text: None,
+        diag_opts: &diag_opts,
+        stderr: sink,
+    };
+    let fp = job.fingerprint();
+    let get = |k: &str| fp.iter().find(|(key, _)| key == k).map_or("", |(_, v)| v.as_str());
+    let p = &args.predef;
+    let b = |v: bool| OptVal::Bool(v);
+    let mut v = Vec::new();
+    for (d, lvl) in [
+        ("C++", S::Cxx98),
+        ("C++11", S::Cxx11),
+        ("C++14", S::Cxx14),
+        ("C++17", S::Cxx17),
+        ("C++20", S::Cxx20),
+        ("C++23", S::Cxx23),
+        ("C++26", S::Cxx26),
+    ] {
+        v.push((d, b(std.cplusplus && std.lex >= lvl), Compat::All));
+    }
+    v.push(("char8_t keyword", b(get("char8_t") == "-fchar8_t"), Compat::All));
+    v.push(("GNU extensions", b(std.gnu), Compat::All));
+    v.push(("exception handling", b(get("exceptions") == "-fexceptions"), Compat::All));
+    v.push(("run-time type information", b(get("rtti") == "-frtti"), Compat::All));
+    v.push(("freestanding implementation", b(get("freestanding") == "-ffreestanding"), Compat::All));
+    v.push((
+        "__OPTIMIZE__ predefined macro",
+        b(p.opt != kiln_pp::OptLevel::None),
+        Compat::Below22,
+    ));
+    v.push((
+        "__OPTIMIZE_SIZE__ predefined macro",
+        b(p.opt == kiln_pp::OptLevel::Size),
+        Compat::Below22,
+    ));
+    v.push(("signed char", b(get("char") == "-fsigned-char"), Compat::All));
+    v.push(("sized deallocation", b(get("sized-deallocation") == "-fsized-deallocation"), Compat::All));
+    v.push(("C++26 reflection", b(get("reflection") == "-freflection"), Compat::All));
+    v.push((
+        "reflection mangling",
+        OptVal::Value(get("reflection-mangling").to_owned()),
+        Compat::All,
+    ));
+    let flag = args.opt_flag.as_deref();
+    v.push((
+        "OptimizationLevel",
+        OptVal::Value(codegen_cmd::opt_level(flag).to_string()),
+        Compat::From22,
+    ));
+    v.push((
+        "OptimizeSize",
+        OptVal::Value(codegen_cmd::opt_size(flag).to_string()),
+        Compat::From22,
+    ));
+    v
+}
+
+/// clang `collectMacroDefinitions`: the command line's macros, each
+/// with its final state, in first-appearance order. A definition is the
+/// text after the first `=` up to a line break, else `1`.
+pub(crate) fn macros(args: &Args) -> Vec<(String, Option<String>)> {
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    for m in &args.macros {
+        let (name, def) = match m {
+            CmdMacro::Undef(n) => (n.as_str(), None),
+            CmdMacro::Define(d) => match d.split_once('=') {
+                None => (d.as_str(), Some("1".to_owned())),
+                Some((n, body)) => {
+                    (n, Some(body.split(['\n', '\r']).next().unwrap_or("").to_owned()))
+                }
+            },
+        };
+        match out.iter_mut().find(|(n, _)| n == name) {
+            Some(e) => e.1 = def,
+            None => out.push((name.to_owned(), def)),
+        }
+    }
+    out
+}
+
+fn cwd() -> PathBuf {
+    std::env::current_dir().unwrap_or_default()
+}
+
+/// What `-include-pch` changes in a compile: the arguments with the
+/// header replayed as `-include`s and its input files seeded into the
+/// dependency output. `Ok(None)` without `-include-pch`; `Err(())` after
+/// reporting a rejected PCH (the compile stops, as clang's does).
+pub(crate) fn consumer(
+    args: &Args,
+    tc: &Toolchain,
+    inputs: &[&Input],
+    diag_opts: &DiagOptions,
+    stderr: &SharedWriter,
+) -> Result<Option<Args>, ()> {
+    let Some(pch) = args.pch.include.as_deref() else { return Ok(None) };
+    let sm = SourceManager::new();
+    let e = make_engine(&sm, diag_opts, stderr.clone(), None);
+    let finish = |e: kiln_diag::DiagEngine<'_>| {
+        e.flush();
+        if let Some(s) = e.summary()
+            && diag_opts.format == kiln_diag::Format::Text
+        {
+            let mut err = stderr.clone();
+            let _ = std::io::Write::write_fmt(&mut err, format_args!("{s}\n"));
+        }
+    };
+    let rec = match read(pch, &e) {
+        Some(r) => r,
+        None => {
+            finish(e);
+            return Err(());
+        }
+    };
+    let preprocess = args.action == Action::Preprocess || args.deps.only.is_some();
+    let here = cwd();
+    let resolve = |spelled: &str| {
+        if Path::new(spelled).is_absolute() || here == Path::new(&rec.cwd) {
+            spelled.to_owned()
+        } else {
+            Path::new(&rec.cwd).join(spelled).display().to_string()
+        }
+    };
+    let mut out = args.clone();
+    if preprocess {
+        // clang `-E` does not load the PCH: it preprocesses the header the
+        // PCH was built from, then the `-include`s (no checks).
+        out.includes = std::iter::once(resolve(&rec.main)).chain(args.includes.clone()).collect();
+        return Ok(Some(out));
+    }
+    if !args.pch.no_validate {
+        let std = inputs
+            .first()
+            .and_then(|i| input_std(args, args.input_lang(i)).ok())
+            .unwrap_or_else(|| LangStd::default_for(true));
+        if !check(args, tc, std, pch, &rec, &e) {
+            finish(e);
+            return Err(());
+        }
+    }
+    drop(e);
+    let mut includes: Vec<String> = rec.includes.iter().map(|i| resolve(i)).collect();
+    includes.push(resolve(&rec.main));
+    includes.extend(args.includes.iter().filter(|i| !rec.includes.contains(i)).cloned());
+    out.includes = includes;
+    out.pch.deps = rec.files.iter().map(|f| (resolve(&f.spelled), f.system)).collect();
+    Ok(Some(out))
+}
+
+/// Reads and parses `pch`, reporting clang's errors for an unreadable or
+/// foreign file.
+fn read(pch: &str, e: &kiln_diag::DiagEngine<'_>) -> Option<Record> {
+    let bytes = match std::fs::read(pch) {
+        Ok(b) => b,
+        Err(err) => {
+            let why = if err.kind() == std::io::ErrorKind::NotFound {
+                "No such file or directory".to_owned()
+            } else {
+                err.to_string()
+            };
+            Diag::new(DiagId::drv_pch_unreadable, Span::INVALID).arg(pch).arg(why).emit(e);
+            Diag::new(DiagId::drv_pch_not_found, Span::INVALID).arg(pch).emit(e);
+            return None;
+        }
+    };
+    match Record::parse(&bytes) {
+        Ok(r) => Some(r),
+        Err(ReadError::NotPch) => {
+            Diag::new(DiagId::drv_pch_not_pch, Span::INVALID).arg(pch).emit(e);
+            Diag::new(DiagId::drv_pch_invalid, Span::INVALID).arg(pch).emit(e);
+            None
+        }
+        Err(ReadError::Clang) => {
+            Diag::new(DiagId::drv_pch_clang, Span::INVALID).arg(pch).emit(e);
+            None
+        }
+        Err(ReadError::Older) => {
+            Diag::new(DiagId::drv_pch_older, Span::INVALID).arg(pch).emit(e);
+            None
+        }
+        Err(ReadError::Newer) => {
+            Diag::new(DiagId::drv_pch_newer, Span::INVALID).emit(e);
+            None
+        }
+        Err(ReadError::Corrupt(why)) => {
+            Diag::new(DiagId::drv_pch_corrupt, Span::INVALID)
+                .arg(format!("{why} in kiln PCH record '{pch}'"))
+                .emit(e);
+            None
+        }
+    }
+}
+
+/// clang's PCH checks, in clang's order: the compiler, the language
+/// options (first mismatch), the target, the macros (first mismatch);
+/// then, when those pass, the input files (first stale one).
+fn check(
+    args: &Args,
+    tc: &Toolchain,
+    std: LangStd,
+    pch: &str,
+    rec: &Record,
+    e: &kiln_diag::DiagEngine<'_>,
+) -> bool {
+    let me = kiln_line(args);
+    if rec.kiln != me {
+        Diag::new(DiagId::drv_pch_different_branch, Span::INVALID).arg(&rec.kiln).arg(me).emit(e);
+        return false;
+    }
+    let mut ok = true;
+    let compat22 = args.predef.clang_compat.major() >= 22;
+    for (desc, cur, compat) in options(args, tc, std) {
+        let applies = match compat {
+            Compat::All => true,
+            Compat::Below22 => !compat22,
+            Compat::From22 => compat22,
+        };
+        let Some((_, old)) = rec.opts.iter().find(|(d, _)| d == desc) else { continue };
+        if !applies || *old == cur {
+            continue;
+        }
+        let d = match (old, &cur) {
+            (OptVal::Bool(o), OptVal::Bool(c)) => Diag::new(DiagId::drv_pch_config_bool, Span::INVALID)
+                .arg(desc)
+                .arg(u8::from(*o))
+                .arg(pch)
+                .arg(u8::from(*c)),
+            _ => Diag::new(DiagId::drv_pch_config_value, Span::INVALID).arg(desc).arg(pch),
+        };
+        d.emit(e);
+        ok = false;
+        break;
+    }
+    if rec.target != tc.target.triple {
+        Diag::new(DiagId::drv_pch_target, Span::INVALID)
+            .arg(pch)
+            .arg(&rec.target)
+            .arg(tc.target.triple)
+            .emit(e);
+        ok = false;
+    }
+    // clang `checkPreprocessorOptions`: the current command line's macros
+    // in order; one the PCH does not mention is fine.
+    for (name, cur) in macros(args) {
+        let Some((_, old)) = rec.macros.iter().find(|(n, _)| *n == name) else { continue };
+        match (old, &cur) {
+            (None, None) => continue,
+            (Some(o), Some(c)) if o == c => continue,
+            (Some(o), Some(c)) => {
+                Diag::new(DiagId::drv_pch_macro_def_differs, Span::INVALID)
+                    .arg(&name)
+                    .arg(pch)
+                    .arg(o)
+                    .arg(c)
+                    .emit(e);
+            }
+            _ => {
+                Diag::new(DiagId::drv_pch_macro_def_undef, Span::INVALID)
+                    .arg(&name)
+                    .arg(u8::from(old.is_none()))
+                    .arg(pch)
+                    .emit(e);
+            }
+        }
+        ok = false;
+        break;
+    }
+    if !ok {
+        return false;
+    }
+    for f in rec.files.iter().filter(|f| !f.system) {
+        let Ok(bytes) = std::fs::read(&f.abs) else {
+            Diag::new(DiagId::drv_pch_corrupt, Span::INVALID)
+                .arg(format!("could not find file '{}' referenced by AST file '{pch}'", f.abs))
+                .emit(e);
+            return false;
+        };
+        let why = if bytes.len() as u64 != f.size {
+            format!("size changed (was {}, now {})", f.size, bytes.len())
+        } else if bmi::checksum(&bytes) != f.hash {
+            "content changed".to_owned()
+        } else {
+            continue;
+        };
+        Diag::new(DiagId::drv_pch_file_modified, Span::INVALID)
+            .arg(&f.abs)
+            .arg(pch)
+            .arg(why)
+            .with_note(Diag::new(DiagId::note_pch_rebuild, Span::INVALID).arg(pch))
+            .emit(e);
+        return false;
+    }
+    true
+}
+
+/// Whether the compile precompiles `input` (a header with `-c`, `-S` or
+/// no action; every input with `-emit-pch`).
+pub(crate) fn is_producer(args: &Args, input: &Input) -> bool {
+    matches!(args.action, Action::Compile | Action::Link)
+        && args.deps.only.is_none()
+        && (args.pch.emit || args.is_header_input(input))
+}
+
+/// Precompiles each of `inputs` (all producers, see [`is_producer`]):
+/// checks the header as `-fsyntax-only` does, writes its record and its
+/// `-MD` dependency file. Returns the errors.
+pub(crate) fn produce(
+    args: &Args,
+    tc: &Toolchain,
+    inputs: &[&Input],
+    all_inputs: usize,
+    diag_opts: &DiagOptions,
+    io: &mut Io,
+) -> u32 {
+    let phase = Phase::of(args);
+    // `-o` names the PCH unless a link follows (clang: `-o` is the final
+    // output, a PCH when only headers are given).
+    let link_follows = phase == Phase::Link && all_inputs > inputs.len();
+    if !link_follows && args.output.is_some() && all_inputs > 1 {
+        let sm = SourceManager::new();
+        let e = make_engine(
+            &sm,
+            &codegen_cmd::driver_diag_options(diag_opts),
+            io.stderr.clone(),
+            Some(&args.program),
+        );
+        Diag::new(DiagId::drv_out_file_multiple, Span::INVALID).emit(&e);
+        e.flush();
+        return 1;
+    }
+    let mut errors = 0;
+    for input in inputs {
+        errors += produce_one(args, tc, input, phase, link_follows, diag_opts, io);
+    }
+    errors
+}
+
+fn produce_one(
+    args: &Args,
+    tc: &Toolchain,
+    input: &Input,
+    phase: Phase,
+    link_follows: bool,
+    diag_opts: &DiagOptions,
+    io: &mut Io,
+) -> u32 {
+    let lang = args.input_lang(input);
+    let std = match input_std(args, lang) {
+        Ok(s) => s,
+        Err(d) => {
+            let sm = SourceManager::new();
+            let e = make_engine(&sm, diag_opts, io.stderr.clone(), None);
+            (*d).emit(&e);
+            e.flush();
+            return 1;
+        }
+    };
+    let mut check_args = args.clone();
+    check_args.action = Action::SyntaxOnly;
+    check_args.deps.only = None;
+    check_args.deps.side = Some(DepHeaders::All);
+    check_args.deps.cdb_fragment = None;
+    check_args.output = None;
+    check_args.pch.header_main = args.is_header_input(input);
+    let stdin = None;
+    let r = syntax_only(&check_args, tc, std, lang, &input.path, stdin, diag_opts, io);
+    if r.errors > 0 {
+        return r.errors;
+    }
+    let Some(list) = r.dep_list else { return 0 };
+    let list = list.borrow();
+    let here = cwd();
+    let files = list
+        .files()
+        .iter()
+        .filter_map(|name| {
+            let abs = here.join(name);
+            let bytes = std::fs::read(&abs).ok()?;
+            Some(FileEntry {
+                size: bytes.len() as u64,
+                hash: bmi::checksum(&bytes),
+                system: list.is_system(name),
+                spelled: name.clone(),
+                abs: abs.display().to_string(),
+            })
+        })
+        .collect();
+    let rec = Record {
+        kiln: kiln_line(args),
+        cwd: here.display().to_string(),
+        main: input.path.clone(),
+        includes: args.includes.clone(),
+        opts: options(args, tc, std)
+            .into_iter()
+            .map(|(d, v, _)| (d.to_owned(), v))
+            .collect(),
+        target: tc.target.triple.to_owned(),
+        macros: macros(args),
+        files,
+    };
+    let out = match &args.output {
+        Some(o) if !link_follows => o.clone(),
+        _ if args.is_header_input(input) || phase == Phase::Link => format!("{}.pch", input.path),
+        _ => codegen_cmd::default_output(&input.path, phase),
+    };
+    if let Err(err) = bmi::write_file(Path::new(&out), rec.write().as_bytes()) {
+        let why = if err.kind() == std::io::ErrorKind::NotFound {
+            "No such file or directory".to_owned()
+        } else {
+            err.to_string()
+        };
+        report_output_error(diag_opts, &io.stderr, &out, &why);
+        return 1;
+    }
+    // The user's `-MD` / `-MMD` file: the same list, filtered.
+    if let Some(h) = args.deps.headers() {
+        let mut user = DepList::new(h == DepHeaders::All);
+        for f in list.files() {
+            user.add(f, list.is_system(f));
+        }
+        if !crate::deps::write_side_file(args, &input.path, &user, diag_opts, io) {
+            return 1;
+        }
+    }
+    0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> Record {
+        Record {
+            kiln: "1.0 - -fclang-compat=19".into(),
+            cwd: "/w d".into(),
+            main: "p\th.hpp".into(),
+            includes: vec!["a\\b.h".into()],
+            opts: vec![("C++".into(), OptVal::Bool(true)), ("O".into(), OptVal::Value("2".into()))],
+            target: "aarch64-unknown-linux-gnu".into(),
+            macros: vec![("A".into(), Some("1".into())), ("B".into(), None)],
+            files: vec![FileEntry {
+                size: 3,
+                hash: 0xabc,
+                system: false,
+                spelled: "p\nh.hpp".into(),
+                abs: "/w d/p.hpp".into(),
+            }],
+        }
+    }
+
+    /// The record round-trips, and damage is detected (WP-1023).
+    #[test]
+    fn record_round_trip() {
+        let r = sample();
+        let text = r.write();
+        assert_eq!(Record::parse(text.as_bytes()), Ok(r));
+        let broken = text.replace("C++", "C+-");
+        assert!(matches!(Record::parse(broken.as_bytes()), Err(ReadError::Corrupt(_))));
+        assert_eq!(Record::parse(b"CPCH...."), Err(ReadError::Clang));
+        assert_eq!(Record::parse(b"hello"), Err(ReadError::NotPch));
+        assert_eq!(Record::parse(b"KILNPCH 2\n"), Err(ReadError::Newer));
+        assert_eq!(Record::parse(b"KILNPCH 0\n"), Err(ReadError::Older));
+    }
+
+    /// clang `collectMacroDefinitions` (WP-1023).
+    #[test]
+    fn macro_states() {
+        let a = Args::parse_as("kiln++", &["-DA", "-DB=2", "-UA", "-DC=x\ny", "-DB=3"].map(String::from));
+        assert_eq!(
+            macros(&a),
+            [("A".into(), None), ("B".into(), Some("3".into())), ("C".into(), Some("x".into()))]
+        );
+    }
+}
