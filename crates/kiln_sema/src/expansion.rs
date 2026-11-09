@@ -553,27 +553,36 @@ impl Sema<'_, '_> {
         constexpr: bool,
         colon: Loc,
     ) -> Option<(Vec<StmtId>, Vec<Element>)> {
-        if constexpr {
+        let (v, prelude, elems) = if constexpr {
             // Each attempt's bindings stay out of the enclosing scope.
-            return self.expansion_fallback(e, true, |s, bind| {
+            self.expansion_fallback(e, true, |s, bind| {
                 s.push_scope(ScopeKind::Block);
                 let r = s.expansion_decomp(e, Some(bind), colon);
                 s.pop_scope();
                 r
-            });
-        }
-        self.expansion_decomp(e, None, colon)
+            })?
+        } else {
+            self.expansion_decomp(e, None, colon)?
+        };
+        // [class.temporary]/9 (CWG3043): the expansion-initializer's
+        // temporaries persist for the lifetime of the reference (an
+        // automatic one; a `static constexpr` one's are part of its
+        // constant initialization). Extended only once the binding that
+        // wins is known: `e` is shared by every attempt, and an
+        // abandoned attempt must not claim its temporaries.
+        self.extend_init_temporaries(v);
+        Some((prelude, elems))
     }
 
     /// `auto&& [__u...] = e;`, or for a `constexpr` one (`bind` given)
-    /// `[static] constexpr auto[&&] [__u...] = e;` as `bind` says, and
-    /// its bindings.
+    /// `[static] constexpr auto[&&] [__u...] = e;` as `bind` says: the
+    /// decomposition, its declaration and its bindings.
     fn expansion_decomp(
         &mut self,
         e: ExprId,
         bind: Option<RangeBind>,
         colon: Loc,
-    ) -> Option<(Vec<StmtId>, Vec<Element>)> {
+    ) -> Option<(DeclId, Vec<StmtId>, Vec<Element>)> {
         let by_ref = bind.is_none_or(RangeBind::by_ref);
         let mut ds = DeclSpec::new(colon);
         let _ = ds.set_base(TypeSpecKind::Auto, None, colon);
@@ -599,22 +608,21 @@ impl Sema<'_, '_> {
         let auto = self.type_from_declspec_at(&ds, colon);
         let ty = if by_ref { self.ast.types.rvalue_ref_to(auto) } else { auto };
         let v = self.declare_decomposition(&ds, ty, &d, &dc, false);
+        // `e` was parsed (or substituted) long before this declaration,
+        // whose full-expression it ends: its temporaries are this
+        // initializer's cleanups, as for a shared subexpression.
+        self.note_shared_temporaries(e);
         self.act_on_init(v, Initializer::Expr(e));
         if self.ast.decls.get(v).has(DeclFlags::INVALID) {
             return None;
         }
-        // [class.temporary]/9 (CWG3043): the expansion-initializer's
-        // temporaries persist for the lifetime of the reference (an
-        // automatic one; a `static constexpr` one's are part of its
-        // constant initialization).
-        self.extend_init_temporaries(v);
         let prelude = vec![self.act_on_decl_stmt(&[v], colon)];
         let elems = self
             .decomp_binding_list(v)
             .into_iter()
             .map(|b| (None, self.build_decl_ref(b, colon)))
             .collect();
-        Some((prelude, elems))
+        Some((v, prelude, elems))
     }
 }
 
@@ -636,7 +644,12 @@ impl Substituter<'_, '_, '_> {
             let init = data.init.map(|x| self.stmt(x));
             let exprs: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(data.exprs).collect();
             let src = if let Some(e) = data.range_init {
-                ExpansionSource::Expr(self.expr(e)?)
+                // [class.temporary]/9: a lifetime-extending context, as
+                // when parsed.
+                let collect = self.sema.begin_for_range_init(true);
+                let r = self.expr(e);
+                let _ = self.sema.end_for_range_init(collect);
+                ExpansionSource::Expr(r?)
             } else {
                 // A lifetime-extending context, as when parsed
                 // (`materialize_discarded`).

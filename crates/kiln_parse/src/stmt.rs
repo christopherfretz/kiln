@@ -1423,7 +1423,16 @@ impl Parser<'_, '_> {
             let _ = self.s.end_for_range_init(collect);
             l
         } else {
-            self.parse_expression().map(ExpansionInit::Expr)
+            // [class.temporary]/9: an iterating or destructuring
+            // statement's expansion-initializer is a lifetime-extending
+            // context too (its temporaries persist with the reference
+            // it initializes), so a discarded class prvalue is
+            // materialized here as well; `extend_init_temporaries`
+            // extends them once the form is known.
+            let collect = self.s.begin_for_range_init(true);
+            let e = self.parse_expression().map(ExpansionInit::Expr);
+            let _ = self.s.end_for_range_init(collect);
+            e
         };
         let Some(range) = range else {
             self.skip_until(&[Punct::RParen], false, true);
