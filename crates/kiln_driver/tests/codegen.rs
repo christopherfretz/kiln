@@ -1182,7 +1182,7 @@ fn fp_environment_flags_rejected() {
 /// `-ffp-contract=fast` fuses across statements with either backend, but
 /// LLVM 22's `llc` warns that the X86 backend ignores `-fp-contract` (it
 /// reads the IR's `contract` flags), so kiln passes it only to the others
-/// (WP-1016). Pinned to x86_64 so an AArch64 host checks it too.
+/// (WP-1016). Pinned to `x86_64` so an `AArch64` host checks it too.
 #[test]
 fn fp_contract_fast_backend_flag() {
     let (l19, l22) = ("/usr/lib/llvm-19", "/usr/lib/llvm-22");
