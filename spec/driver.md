@@ -184,12 +184,10 @@ for that flag (WP-873 follow-ups). An empty `-mtune=` is `unsupported argument '
 supported by kiln` (exit 1, no job runs; not the generic `unknown argument`):
 `-ftrapv`, `-fshort-enums`, the `-fsanitize*` and `-fno-sanitize*`
 options "Sanitizers" below does not list (`-fsanitize-coverage=`,
-`-fsanitize-cfi-*`, ...), `-fcoverage-mapping`, `-fprofile-arcs`, `-ftest-coverage`, `--coverage`,
-`-fprofile-instr-generate[=...]`, `-fprofile-generate[=...]`,
-`-fprofile-instr-use[=...]`, `-fprofile-use[=...]`, and under
+`-fsanitize-cfi-*`, ...), and under
 `-fxray-instrument` every `-fxray-*` option but the threshold and
 `-fxray-ignore-loops` (`-fxray-modes=`, `-fxray-always-instrument=`, ...;
-WP-813).
+WP-813). The coverage and profile flags are in "Coverage flags" (WP-941).
 
 ### Debug information flags (WP-814)
 
@@ -366,6 +364,62 @@ docs/design/sanitizers.md) reads the sanitizer options as clang 19's
 
 Tests: `sanitize.rs` unit tests; `crates/kiln_driver/tests/codegen.rs`
 `sanitizer_frontend_attributes`; `tests/conformance/driver.sanitize/`.
+
+### Coverage flags (WP-941)
+
+`CoverageFlags` (`crates/kiln_driver/src/coverage_flags.rs`) reads the
+coverage flags as clang 19's driver does (`addPGOAndCoverageFlags`) and
+gives codegen its `CoverageOptions` (spec/codegen.md "Instrumentation",
+spec/landed/codegen/WP-941.md). Each flag below is implemented or an
+error; none is ignored.
+
+| flag | kiln |
+|---|---|
+| `--coverage` (`-coverage`) | gcov notes and counters: `-fprofile-arcs -ftest-coverage` |
+| `-f[no-]profile-arcs` | gcov counters (`.gcda`); `opt`'s pass writes the notes too |
+| `-f[no-]test-coverage` | gcov notes (`.gcno`); without counters, `drv_unsupported_flag` (`opt`'s gcov pass always writes both) |
+| `-fprofile-dir=<dir>` | the `.gcda` file goes under `<dir>` (clang's absolute-path join) |
+| `-fprofile-update=single\|atomic\|prefer-atomic` | atomic counter updates (`--gcov-atomic-counter`, `--instrprof-atomic-counter-update-all`); another value: `unsupported argument '<v>' to option '-fprofile-update='` |
+| `-f[no-]profile-instr-generate[=<path>]` | source-based coverage counters (`llvm.instrprof.increment`), written at exit to `default.profraw`, `<path>`, or `LLVM_PROFILE_FILE` (which wins) |
+| `-f[no-]coverage-mapping` | with `-fprofile-instr-generate`: `drv_unsupported_flag`, "source-based coverage mapping is not yet implemented, a WP-941 follow-up"; without it: `'-fcoverage-mapping' only allowed with '-fprofile-instr-generate'` |
+| `-fcoverage-compilation-dir=`, `-fcoverage-prefix-map=<old>=<new>` | accepted for the mapping (no effect until it lands); `-fcoverage-prefix-map=` without `=`: `invalid argument '<v>' to -fcoverage-prefix-map=` |
+| `-fprofile-filter-files=`, `-fprofile-exclude-files=` | with `--coverage`: `drv_unsupported_flag` (the `opt` pass takes no filter); without: `only allowed with '--coverage'` |
+| `-fprofile-generate[=<dir>]`, `-fcs-profile-generate[=<dir>]` | `drv_unsupported_flag`: "IR profile-guided optimization instrumentation is a known kiln 1.0 limitation" |
+| `-fprofile-use[=]`, `-fprofile-instr-use[=]`, `-fprofile-sample-use[=]`, `-fauto-profile[=]`, `-fprofile-remapping-file=` | `drv_unsupported_flag`: "profile-guided optimization is a known kiln 1.0 limitation" |
+
+A rejected profile-guided optimization flag reads
+`'<flag> (<what> is a known kiln 1.0 limitation; for coverage use
+--coverage or -fprofile-instr-generate)' is not supported by kiln`.
+`-fprofile-generate` is classified with PGO, not coverage: clang turns it
+into IR-level PGO instrumentation (`PGOInstrumentationGen`), whose
+`.profraw` feeds `-fprofile-use` and that `llvm-cov` does not read.
+
+- **gcov.** The `.gcno`/`.gcda` names are clang's: `${dumpdir}${base}`
+  under `-dumpdir` (a compile-and-link defaults it to `<output>-`, `a-`
+  without `-o`), else the `-o` output, else the input's base name; made
+  absolute against the working directory, extension replaced. Codegen
+  names them in `!llvm.gcov` and, with no `-g`, emits clang's
+  location-tracking-only debug information (`emissionKind: NoDebug`), which
+  `GCOVProfiling` needs; with `-g` the debug information is the `-g`
+  one.
+- **Passes.** `opt` runs `insert-gcov-profiling` (gcov) and `instrprof`
+  (counters) at `--passes-ep-pipeline-start`, as clang's
+  `GCOVProfilerPass` and `InstrProfilingLoweringPass`, at every `-O`
+  level (`-O0` runs `default<O0>`). Under `-Xclang -disable-llvm-passes`
+  no pass runs: gcov leaves only `!llvm.gcov`, and InstrProf the
+  unlowered `llvm.instrprof.increment` calls (without
+  `@__llvm_profile_filename`, which the lowering creates).
+- **Link.** The linking `clang++` gets `--coverage` and/or
+  `-fprofile-instr-generate`, so it adds the profile runtime
+  `<resource-dir>/lib/linux/libclang_rt.profile-<arch>.a` (from the
+  LLVM 19 compiler-rt package, `libclang-rt-19-dev` on Debian; without it
+  the link fails with clang's "cannot find" error). Both gcov and InstrProf
+  use the same runtime.
+
+Tests: `coverage_flags.rs` unit tests; `crates/kiln_driver/tests/codegen.rs`
+`coverage_flags_rejected`; `tests/codegen/{gcov,instrprof}_*.cpp` (IR
+against clang, `ir_vs_clang`); `scripts/coverage-compare.py` (end-to-end
+`.gcov` and `llvm-profdata` equality with clang).
 
 ## Driver modes
 
@@ -1078,8 +1132,9 @@ Each deviation is covered by a test or a test note.
     at all for `wildcatlake` / `novalake` (spec/landed/driver/WP-630.md);
     `-march=native` emits no `"target-cpu"` and `-mtune=native` no
     `"tune-cpu"` (clang resolves the host); `-fwrapv-pointer` is accepted at `-fclang-compat=19`
-    (clang 19 has no such flag); the coverage, profile, `-ftrapv` and
-    `-fshort-enums` flags, and the sanitizers "Sanitizers" does not
+    (clang 19 has no such flag); `-fcoverage-mapping`, the
+    profile-guided optimization flags ("Coverage flags"), `-ftrapv` and
+    `-fshort-enums`, and the sanitizers "Sanitizers" does not
     list, are errors; and the Oven ignores `-fwrapv`.
 20. **`-fmacro-prefix-map=` keeps `.` components and repeated `/`.** Once
     any `-fmacro-prefix-map=`/`-ffile-prefix-map=` is given, clang also

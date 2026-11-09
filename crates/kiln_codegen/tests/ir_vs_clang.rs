@@ -265,10 +265,10 @@ fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
     if code != 0 {
         return Err(format!("kiln exited {code}:\n{}", err.contents()));
     }
-    // kiln writes its backend's lifetime-marker form (WP-783); compare in
-    // the oracle's.
+    // kiln writes its backend's lifetime-marker (WP-783) and unlowered
+    // `llvm.coro.end` (WP-941) forms; compare in the oracle's.
     if oracle_version() == "22" {
-        return Ok(ir_norm::lifetime_markers_llvm22(&out.contents()));
+        return Ok(ir_norm::coro_end_llvm22(&ir_norm::lifetime_markers_llvm22(&out.contents())));
     }
     Ok(out.contents())
 }

@@ -146,6 +146,46 @@ impl Cg<'_> {
         self.f.fir.dbg = Some(Box::new(fd));
     }
 
+    /// clang `StartFunction(GlobalDecl(), ...)` of a coroutine's private
+    /// `await_suspend` wrapper `f` (CGCoroutine.cpp): an artificial
+    /// `DISubprogram` with only a linkage name, in the main file. gcov
+    /// instruments only functions that have one.
+    pub(crate) fn di_wrapper_start(&mut self, f: FuncId) {
+        let Some(di) = self.di.as_deref() else { return };
+        let (dbg, cu) = (di.dbg, di.cu);
+        let file = self.di_file(Loc::INVALID);
+        let fname = self.m.func(f).name().to_owned();
+        let types = self.m.md_tuple(&[]);
+        let ty = self.m.md_specialized(
+            "DISubroutineType",
+            false,
+            Fields::default().n("types", Some(types)).0,
+        );
+        let mut fl = vec!["DIFlagArtificial"];
+        if self.opts.opt_level > 0
+            && self.opts.debug.kind != DebugInfoKind::LocTrackingOnly
+            && self.opts.debug.dwarf_version.unwrap_or(5) >= 5
+        {
+            fl.push("DIFlagAllCallsDescribed");
+        }
+        let mut sp = vec!["DISPFlagLocalToUnit"];
+        if self.opts.opt_level > 0 {
+            sp.push("DISPFlagOptimized");
+        }
+        sp.push("DISPFlagDefinition");
+        let f_ = Fields::default()
+            .s("linkageName", &fname)
+            .n("scope", Some(file))
+            .n("file", Some(file))
+            .n("type", Some(ty))
+            .flags("flags", &fl)
+            .sp_flags(&sp)
+            .n("unit", Some(cu));
+        let s = self.m.md_specialized("DISubprogram", true, f_.0);
+        self.m.func_mut(f).add_metadata(dbg, s);
+        self.f.fir.dbg = Some(Box::new(FirDbg::new(dbg, s)));
+    }
+
     /// The end of the prologue (clang `StartFunction`'s
     /// `EmitLocation(StartLoc)`); a thunk's body is artificial.
     pub(crate) fn di_prologue_end(&mut self, start: Loc, thunk: bool) {

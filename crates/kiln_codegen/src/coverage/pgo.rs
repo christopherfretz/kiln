@@ -512,10 +512,7 @@ impl Cg<'_> {
         let n = ast.decls.get(d);
         if n.has(kiln_ast::decl::DeclFlags::IMPLICIT)
             || ast.decls.function(d).is_none_or(|x| x.body.is_none())
-            || matches!(
-                ast.closure_thunk(d),
-                Some(kiln_ast::lambda::ClosureThunk::Invoker { .. })
-            )
+            || matches!(ast.closure_thunk(d), Some(kiln_ast::lambda::ClosureThunk::Invoker { .. }))
             || n.kind() == DeclKind::CXXDestructor
                 && structor != Some(kiln_abi::mangle::Structor::Base)
             || self.has_fn_attr(d, kiln_ast::attr::AttrKind::NO_PROFILE_INSTRUMENT_FUNCTION)
@@ -542,10 +539,7 @@ impl Cg<'_> {
         let local = matches!(linkage, Linkage::Internal | Linkage::Private);
         let mut var = format!("__profn_{name}");
         if local {
-            var = var
-                .chars()
-                .map(|c| if "-:;<>/\"'".contains(c) { '_' } else { c })
-                .collect();
+            var = var.chars().map(|c| if "-:;<>/\"'".contains(c) { '_' } else { c }).collect();
         }
         let init = self.m.const_bytes(name.as_bytes());
         let ty = self.m.const_type(init);

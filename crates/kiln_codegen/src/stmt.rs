@@ -7,8 +7,8 @@ use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_llvm::{BinOp, Flags, IntPredicate, TypeId as LTy};
 
-use crate::coverage::pgo::Key;
 use crate::cleanup::{Depth, JumpDest};
+use crate::coverage::pgo::Key;
 use crate::fir::{Blk, Op, V};
 use crate::func::{Jump, RetKind, SwitchCtx};
 use crate::module::{Cg, R, err};

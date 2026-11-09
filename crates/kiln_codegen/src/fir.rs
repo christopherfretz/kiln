@@ -473,6 +473,10 @@ pub(crate) struct FirDbg {
     /// The function's variables (the subprogram's `retainedNodes` when
     /// optimizing).
     pub vars: Vec<MetadataId>,
+    /// Nesting of clang `DisableDebugLocationUpdates` (a default
+    /// argument): while nonzero no location or scope changes and no
+    /// variable is described; the builder keeps its location.
+    pub disabled: u32,
     /// Records declared at the end of a block, adopted by the next
     /// instruction appended to it (`DIBuilder::insertDeclare(.., BB)`).
     trailing: Vec<(Blk, DbgRec)>,
@@ -497,6 +501,7 @@ impl FirDbg {
             ret_ptr: None,
             ret_dbg: true,
             vars: Vec::new(),
+            disabled: 0,
             trailing: Vec::new(),
             recs: Vec::new(),
         }

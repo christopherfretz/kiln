@@ -15,8 +15,8 @@ use kiln_llvm::{
     IntPredicate, TypeId as LTy, Value,
 };
 
-use crate::coverage::pgo::{self, Key};
 use crate::cleanup::{Cleanup, IrregularPartialArray};
+use crate::coverage::pgo::{self, Key};
 use crate::debuginfo::func::VarSlot;
 use crate::fir::{Fir, Op, V};
 use crate::fold::{is_local, is_static_local};
@@ -1637,10 +1637,7 @@ impl Cg<'_> {
             let t = self.f.fir.ty(&self.m, x);
             let zero = V::C(self.m.const_zero(t));
             let (x, y) = if self.is_float_ty(t) {
-                (
-                    self.fcmp(FloatPredicate::Une, x, zero),
-                    self.fcmp(FloatPredicate::Une, y, zero),
-                )
+                (self.fcmp(FloatPredicate::Une, x, zero), self.fcmp(FloatPredicate::Une, y, zero))
             } else {
                 (self.icmp(IntPredicate::Ne, x, zero), self.icmp(IntPredicate::Ne, y, zero))
             };
@@ -3726,32 +3723,41 @@ impl Cg<'_> {
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
         let mut vals = Vec::with_capacity(args.len());
         for (i, &a) in args.iter().enumerate() {
-            let v = if self.referee(sig.params[i]).is_some() {
-                // A reference parameter binds the argument glvalue.
-                CallArg::Scalar(self.emit_lvalue(a)?.addr.v)
-            } else if self.is_aggregate(arg_tys[i]) || self.is_atomic_aggregate(arg_tys[i]) {
-                let t = self.temp(arg_tys[i]);
-                // clang `EmitCallArg`: an argument the callee destroys is
-                // externally destructed, with an EH-only cleanup until
-                // the call (`DestroyUnpassedArg`).
-                let callee_destroyed = kiln_abi::call::is_destroyed_in_callee(ast, arg_tys[i]);
-                let saved = std::mem::replace(&mut self.f.dest_destructed, callee_destroyed);
-                let r = self.emit_agg(a, t, false);
-                self.f.dest_destructed = saved;
-                r?;
-                if callee_destroyed && let Some(rd) = self.destructed_class(arg_tys[i]) {
-                    self.push_arg_cleanup(t.v, rd);
-                }
-                CallArg::Agg(t)
-            } else if self.is_complex(arg_tys[i]) {
-                let (re, im) = self.emit_complex(a)?;
-                CallArg::Complex(re, im)
-            } else {
-                CallArg::Scalar(self.emit_scalar(a)?)
-            };
-            vals.push(v);
+            let off = self.dbg_disable(ast.exprs.get(a).kind() == ExprKind::CXXDefaultArgExpr);
+            let v = self.emit_call_arg(sig.params[i], a, arg_tys[i]);
+            self.dbg_enable(off);
+            vals.push(v?);
         }
         Ok(vals)
+    }
+
+    /// clang `EmitCallArg` of `a` (of type `ty`) for parameter type
+    /// `param`.
+    fn emit_call_arg(&mut self, param: QualType, a: ExprId, ty: QualType) -> R<CallArg> {
+        if self.referee(param).is_some() {
+            // A reference parameter binds the argument glvalue.
+            return Ok(CallArg::Scalar(self.emit_lvalue(a)?.addr.v));
+        }
+        if self.is_aggregate(ty) || self.is_atomic_aggregate(ty) {
+            let t = self.temp(ty);
+            // clang `EmitCallArg`: an argument the callee destroys is
+            // externally destructed, with an EH-only cleanup until
+            // the call (`DestroyUnpassedArg`).
+            let callee_destroyed = kiln_abi::call::is_destroyed_in_callee(self.ast, ty);
+            let saved = std::mem::replace(&mut self.f.dest_destructed, callee_destroyed);
+            let r = self.emit_agg(a, t, false);
+            self.f.dest_destructed = saved;
+            r?;
+            if callee_destroyed && let Some(rd) = self.destructed_class(ty) {
+                self.push_arg_cleanup(t.v, rd);
+            }
+            return Ok(CallArg::Agg(t));
+        }
+        if self.is_complex(ty) {
+            let (re, im) = self.emit_complex(a)?;
+            return Ok(CallArg::Complex(re, im));
+        }
+        Ok(CallArg::Scalar(self.emit_scalar(a)?))
     }
 
     /// clang `EmitCall` with evaluated arguments `vals` (of the

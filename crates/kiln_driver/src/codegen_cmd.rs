@@ -467,7 +467,13 @@ fn coverage_options(a: &Args, input: &str) -> kiln_codegen::CoverageOptions {
     kiln_codegen::CoverageOptions {
         gcov,
         instr: c.instr_generate.is_some(),
-        instr_path: c.instr_generate.clone().flatten().filter(|p| !p.is_empty()),
+        // clang's InstrProfiling pass creates the filename variable, so
+        // `-disable-llvm-passes` IR has none.
+        instr_path: c
+            .instr_generate
+            .clone()
+            .flatten()
+            .filter(|p| !p.is_empty() && !a.disable_llvm_passes),
         mapping: c.mapping(),
         comp_dir: c.comp_dir.clone().unwrap_or(cwd),
         prefix_map: c.prefix_map.clone(),

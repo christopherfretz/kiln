@@ -31,6 +31,8 @@
 //!   optimization"), so with an LLVM 21 or older backend its lifetime
 //!   markers keep the size operand. `opt-22` would upgrade the calls but
 //!   leave the old declarations in a different place.
+//! - [`coro_end_llvm22`] likewise gives an unlowered coroutine's
+//!   `llvm.coro.end` LLVM 22's form (a `-disable-llvm-passes` case).
 
 use std::fmt::Write as _;
 
@@ -549,6 +551,66 @@ fn lifetime_line_llvm22(line: &str) -> std::borrow::Cow<'_, str> {
     line.into()
 }
 
+/// The textual IR `ir` with LLVM 22's `llvm.coro.end`, as kiln writes it
+/// for an LLVM 22 backend (`Cg::call_coro_end`): the call returns `void`,
+/// and a use of LLVM 19's `i1` result (whether the code runs in a resume
+/// part) reads `llvm.coro.is_in_ramp()` instead, declared after
+/// `llvm.coro.end`; the EH cleanup's branch on it that follows the call
+/// swaps its targets. An unused result's number is left out (the parser
+/// takes increasing, not consecutive, numbers). Text that is already in
+/// LLVM 22's form is unchanged.
+pub fn coro_end_llvm22(ir: &str) -> String {
+    const CALL: &str = " = call i1 @llvm.coro.end(";
+    const DECL: &str = "declare i1 @llvm.coro.end(";
+    if !ir.contains(CALL) && !ir.contains(DECL) {
+        return ir.to_owned();
+    }
+    let mut out = String::with_capacity(ir.len() + 128);
+    let mut swap: Option<String> = None;
+    for line in ir.split_inclusive('\n') {
+        if let Some(cond) = swap.take()
+            && let Some(targets) = line.trim_start().strip_prefix(&cond)
+            && let Some((a, rest)) = targets.trim_end().split_once(", ")
+        {
+            // `label %A, label %B[, !dbg !N]`
+            let (b, md) = rest.split_once(", ").map_or((rest, ""), |(b, m)| (b, m));
+            let indent = &line[..line.len() - line.trim_start().len()];
+            let md = if md.is_empty() { String::new() } else { format!(", {md}") };
+            let _ = writeln!(out, "{indent}{cond}{b}, {a}{md}");
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix(DECL) {
+            // `(ptr, i1, token) #N`: `nounwind`, as `is_in_ramp`'s own group.
+            let attrs = rest.find(") ").map_or("\n", |i| &rest[i + 1..]);
+            let _ = write!(out, "declare void @llvm.coro.end({rest}");
+            let _ = write!(out, "declare i1 @llvm.coro.is_in_ramp(){attrs}");
+            continue;
+        }
+        let Some(at) = line.find(CALL) else {
+            out.push_str(line);
+            continue;
+        };
+        let (indent_val, args) = (&line[..at], &line[at + CALL.len()..]);
+        let val = indent_val.trim_start();
+        let indent = &indent_val[..indent_val.len() - val.len()];
+        let _ = write!(out, "{indent}call void @llvm.coro.end({args}");
+        // A use: `%N` not followed by more of a name, nor by ` =`.
+        let used = ir.match_indices(val).any(|(i, _)| {
+            let tail = &ir[i + val.len()..];
+            let more = tail
+                .bytes()
+                .next()
+                .is_some_and(|b| b.is_ascii_alphanumeric() || b"._$-".contains(&b));
+            !more && !tail.starts_with(" =")
+        });
+        if used {
+            let _ = writeln!(out, "{indent}{val} = call i1 @llvm.coro.is_in_ramp()");
+            swap = Some(format!("br i1 {val}, "));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,6 +626,25 @@ mod tests {
              declare void @llvm.lifetime.end.p0(ptr captures(none)) #1\n"
         );
         assert_eq!(lifetime_markers_llvm22(&up), up);
+    }
+
+    #[test]
+    fn coro_end_upgrade() {
+        let ir = "  %3 = call i1 @llvm.coro.end(ptr null, i1 false, token none)\n\
+                  %4 = call i1 @llvm.coro.end(ptr null, i1 true, token none)\n  \
+                  br i1 %4, label %6, label %5, !dbg !7\n\
+                  declare i1 @llvm.coro.end(ptr, i1, token) #2\n";
+        let up = coro_end_llvm22(ir);
+        assert_eq!(
+            up,
+            "  call void @llvm.coro.end(ptr null, i1 false, token none)\n\
+             call void @llvm.coro.end(ptr null, i1 true, token none)\n\
+             %4 = call i1 @llvm.coro.is_in_ramp()\n  \
+             br i1 %4, label %5, label %6, !dbg !7\n\
+             declare void @llvm.coro.end(ptr, i1, token) #2\n\
+             declare i1 @llvm.coro.is_in_ramp() #2\n"
+        );
+        assert_eq!(coro_end_llvm22(&up), up);
     }
 
     #[test]

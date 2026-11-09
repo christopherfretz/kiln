@@ -65,8 +65,8 @@ fn pgo_error(arg: &str) -> ArgError {
         "profile-guided optimization"
     };
     ArgError::UnsupportedByKiln(format!(
-        "{arg} ({what} is a known kiln 1.0 limitation; coverage uses \
-         -fprofile-instr-generate -fcoverage-mapping or --coverage)"
+        "{arg} ({what} is a known kiln 1.0 limitation; for coverage use \
+         --coverage or -fprofile-instr-generate)"
     ))
 }
 
@@ -298,7 +298,8 @@ mod tests {
         assert!(f.mapping());
         assert!(matches!(&f.errors()[..], [ArgError::UnsupportedByKiln(m)]
             if m.contains("not yet implemented")));
-        let (f, _) = parse(&["-fprofile-instr-generate", "-fcoverage-mapping", "-fno-coverage-mapping"]);
+        let (f, _) =
+            parse(&["-fprofile-instr-generate", "-fcoverage-mapping", "-fno-coverage-mapping"]);
         assert!(!f.mapping() && f.errors().is_empty());
         assert_eq!(f.link_flags(), ["-fprofile-instr-generate"]);
         let (f, _) = parse(&["-fcoverage-mapping"]);

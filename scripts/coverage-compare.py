@@ -39,10 +39,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 # (program, mode) -> why kiln differs today; reported, not failed.
-KNOWN = {
-    ("coroutines.cpp", "gcov"): "the await_suspend wrappers get no artificial DISubprogram, "
-    "so gcov does not count their lines (WP-941 follow-up)",
-}
+# Empty: every program compares equal (an entry that becomes equal fails).
+KNOWN: dict = {}
 
 
 def norm_name(fn):

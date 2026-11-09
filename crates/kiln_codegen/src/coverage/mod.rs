@@ -1,8 +1,9 @@
 //! Coverage instrumentation (WP-941, spec/codegen.md "Instrumentation"):
 //! gcov's `!llvm.gcov` files (the counters themselves are `opt`'s
 //! `insert-gcov-profiling`), and clang's source-based coverage: the
-//! `llvm.instrprof.increment` counters of `CodeGenPGO` and the
-//! `__llvm_covmap` / `__llvm_covfun` mapping of `CoverageMappingGen`.
+//! `llvm.instrprof.increment` counters of `CodeGenPGO`. The
+//! `__llvm_covmap` / `__llvm_covfun` mapping of `CoverageMappingGen` is a
+//! WP-941 follow-up (the driver rejects `-fcoverage-mapping`).
 
 pub(crate) mod pgo;
 
@@ -17,9 +18,12 @@ pub struct CoverageOptions {
     /// `-fprofile-instr-generate`: InstrProf counters.
     pub instr: bool,
     /// `-fprofile-instr-generate=<path>`: the runtime's output file
-    /// (`@__llvm_profile_filename`).
+    /// (`@__llvm_profile_filename`, which clang's InstrProfiling lowering
+    /// creates; kiln emits it with the module, and not under
+    /// `-disable-llvm-passes`).
     pub instr_path: Option<String>,
-    /// `-fcoverage-mapping`: the coverage mapping records.
+    /// `-fcoverage-mapping`: the coverage mapping records (not emitted
+    /// yet; the driver rejects the flag).
     pub mapping: bool,
     /// The coverage compilation directory (the first filename of the
     /// mapping; clang `-fcoverage-compilation-dir=`, the working directory
