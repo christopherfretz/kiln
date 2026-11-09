@@ -1035,7 +1035,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1012 | debuginfo: DIFlag order vs clang (debuginfo/func.rs:97) | WP-941 | open |
 | WP-1013 | debuginfo: `.str` constants carry `!dbg` where clang has none | WP-941 | open |
 | WP-1014 | llvm: coro.done intrinsic attributes (kiln_llvm intrinsics.rs:987) | WP-941 | open |
-| WP-1018 | oven: by-value parameter object lifetime ends at callee return ([expr.call]/7 impl-defined; match clang); flips expr.const/call-out-of-lifetime.cpp | WP-948 | open |
+| WP-1018 | oven: by-value parameter object lifetime ends at callee return ([expr.call]/7 impl-defined; match clang); flips expr.const/call-out-of-lifetime.cpp | WP-948 | in progress |
 | WP-1019 | oven: mark volatile locals, heap objects and volatile members (Alloc flag bit); flips expr.const/read-volatile-local-and-heap.cpp | WP-948 | open |
 | WP-1020 | oven: `qb[3].x` at member offset 0 skips the Field op (compile.rs ~4843), so past-end note wording differs (wording only) | WP-948 | open |
 | WP-1021 | oven: RefChk for reference parameters/members and clang-compat 19 mode | WP-948 | open |
