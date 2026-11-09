@@ -192,9 +192,9 @@ impl StdCache {
         let dir = self.entry_dir(source);
         let pcm = dir.join(format!("{name}.pcm"));
         let stamp = dir.join(format!("{name}.stamp"));
+        let lock_path = dir.join(format!("{name}.lock"));
         // A hit takes no lock: the stamp first, then the module file it
         // vouches for.
-        let lock_path = dir.join(format!("{name}.lock"));
         if entry_valid(&stamp, &pcm) {
             // A lock file here was left by a compile killed while it held
             // it; it is removed when free (never waiting for it).
