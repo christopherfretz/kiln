@@ -1888,15 +1888,31 @@ instantiation unless stated.
   least two parameters; the first parameter is `std::size_t` (`void *`)
   and not dependent; an allocation function's first parameter has no
   default argument. The first violation in clang's order is reported at
-  the name. Destroying and type-aware (`std::type_identity`) forms and
-  undeduced return types are not checked. Tests: basic.stc.dynamic/.
+  the name. A destroying operator delete (WP-1040,
+  [basic.stc.dynamic.deallocation]/5) is a class member whose first
+  parameter is `C *` (cv-unqualified pointee; in a class template the
+  injected-class-name's type, other dependent types checked at
+  instantiation), followed only by `std::destroying_delete_t`, an
+  optional `std::size_t` and an optional `std::align_val_t`, and is not a
+  template. A delete-expression that finds one considers only destroying
+  candidates, rejects a deleted selection, accepts a cv-qualified operand
+  and (CWG2889, clang 20+) does not need a non-virtual destructor to be
+  accessible. Type-aware (`std::type_identity`, P2719) forms and
+  undeduced return types are not checked. Tests: basic.stc.dynamic/,
+  expr.delete/destroying-delete-*.cpp.
 - **The main function** ([basic.start.main], `main_decl.rs`): the
   parameter forms `()`, `(int, char**)`, `(int, char**, char**)` (with
   clang's `const` extension) and no more than three; not a template; not
   deleted; not overloaded (another signature redeclares it, so the merge
   reports conflicting types); a variable named `main` at global scope, or
-  a block-scope `extern` one in a global function, is ill-formed. All off
-  under `-ffreestanding`. `-Wmain` warnings are not issued. Tests:
+  a block-scope `extern` one in a global function, is ill-formed, and so
+  (WP-1040) is a C-linkage variable named `main` in any namespace (clang 22
+  at its decl-specifiers; clang 19 only the global one); a variable
+  template named `main` stays valid, as in clang. A C-linkage function named `main` in a namespace
+  is `main` for clang 22. clang's `-Wmain` warnings: `extern "C"` on
+  `main` (clang 22, P3618R0), a single parameter, a variadic `main`, a
+  `bool` literal returned from `main`, and (under `-pedantic`) a use of
+  `main` in an expression. All off under `-ffreestanding`. Tests:
   basic.start.main/.
 - **Union, bit-field and static data member rules** (`class/member_rules.rs`):
   - [class.static.data]/4: an initializer on the namespace-scope
@@ -1914,9 +1930,17 @@ instantiation unless stated.
   of them having none, is an error at the name with a note; both stay
   declared. From C++23 the two correspond when their cv-qualifiers agree,
   which makes the later one a member redeclaration. The virtual-override
-  form (clang 19 before C++23) reports once per base function and neither
-  overrides. Tests: over.load/ref-qualifier-*.cpp,
-  class.virtual/override-ref-qualifier-*.cpp.
+  form reports once per base function and neither overrides; clang 22
+  checks it in every language mode, clang 19 (`-fclang-compat=19`) only
+  before C++23. Conversion functions and copy assignment operators are
+  checked too (WP-1041; a conversion to a dependent type at
+  instantiation; a conversion function template is not checked, as
+  clang). CWG2553: a function with an explicit object parameter cannot
+  override (at `this`, with a note at the overridden function; the
+  declaration is invalid), and an allocation or deallocation function
+  cannot take one. Tests: over.load/ref-qualifier-*.cpp,
+  class.virtual/override-ref-qualifier-*.cpp,
+  class.conv.fct/ref-qualifier-*.cpp, class.virtual/explicit-object-override*.cpp.
 - **Member redeclarations**: a member class or enumeration redeclared
   without a definition is `-Wredeclared-class-member` (an extension
   warning) with a note; a qualified member tag is "extra qualification"
@@ -1937,7 +1961,8 @@ instantiation unless stated.
   - /8: `this` does not appear, even unevaluated; a lambda-expression
     captures nothing (the first written or implicit capture is reported
     at its location; init-capture initializers are searched, lambda
-    bodies are not) (`check_default_arg_refs`).
+    bodies are not) (`check_default_arg_refs`). A braced default
+    argument and its nested lists are searched too (WP-1041).
   - /9: a local variable (any block-scope variable, `static`, `extern`
     and `thread_local` included, or a structured binding of one) is not
     odr-used. The check runs on the converted full-expression, so a
@@ -1963,6 +1988,44 @@ instantiation unless stated.
   or the `=` when unnamed); the default no longer counts for the
   redeclaration rules. A friend class template in a dependent context is
   not checked (clang's `CheckClassTemplate`).
+- **Template declaration scope** ([temp.pre]/2, [temp.mem]/2; WP-1063,
+  WP-1041): `template<...> enum E` is "enumeration cannot be a template"
+  after the name and enum-base, with "declaration does not declare
+  anything" at `enum`; a template-declaration in a block is clang 22's
+  "templates can only be declared in namespace or class scope" at
+  `template` and is dropped (clang 19: "expected expression"); a friend
+  class template declared in a local class is "templates cannot be
+  declared inside of a local class". Tests: temp.pre/, temp.mem/p2-*.cpp.
+- **inline after definition** ([dcl.inline]/6, `Sema::inline_after_definition`,
+  WP-1042): a redeclaration declared `inline` after a non-inline function
+  definition (not implicitly inline, deleted or defaulted) is "inline
+  declaration of 'f' follows non-inline definition" at the name with a
+  note at the definition; also for friends, function templates, qualified
+  and block-scope redeclarations. Tests: dcl.fct.spec/inline-after-definition*.cpp.
+- **Template parameter shadowing** ([temp.local]/6, `check_template_param_shadow`,
+  WP-1042): besides the declarations checked before, an alias-declaration
+  or alias template, a nested template head's parameter, a function
+  parameter, a handler's exception-declaration, a namespace alias and a
+  friend class template or class named like an enclosing template
+  parameter is "declaration of 'T' shadows template parameter". A
+  `friend struct T` does not find a non-type template parameter (tag
+  lookup). Not re-checked at instantiation; an elaborated `struct T *`
+  in a function body is not checked. Tests: temp.local/p6-shadow-alias-params*.cpp.
+- **C++03 union members** ([class.union]/1 in C++03, `cxx03_nontrivial_member`,
+  WP-1042): before C++11 a union member, or a member of an anonymous
+  struct, of (an array of) a class type with a non-trivial copy
+  constructor, default constructor (or none), copy assignment operator
+  or destructor, checked in that order, is "union member 'm' has a
+  non-trivial ..." ("anonymous struct member ...") at the name; a union's
+  field becomes invalid. Checked again at instantiation. clang's
+  explanatory "because ..." notes are not produced. Tests:
+  class.union/cxx03-nontrivial-member*.cpp.
+- **Using-declaration conflicts** ([namespace.udecl]/11 per CWG101,
+  `using_conflicts`, WP-1042): a function and a using-declared function
+  conflict when their parameter-type-lists correspond, whatever their
+  return types, in either order. As clang and gcc, a block scope's
+  declarations are not compared again at its instantiation. Tests:
+  namespace.udecl/p11-return-type-conflict*.cpp.
 
 ### 4.5 Attributes
 - **Policy: kiln never accepts a semantics-changing construct without
