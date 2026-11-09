@@ -418,6 +418,13 @@ pub struct Sema<'a, 'sm> {
     /// (P2864, ill-formed) is diagnosed with the C++20/23 deprecation
     /// warning, so GCC-built code still compiles (spec/driver.md).
     pub permissive: bool,
+    /// glibc's x86-64 `<bits/floatn.h>` declared `typedef __float128
+    /// _Float128;` in a system header (the parser drops it, spec/types.md
+    /// §5.1). From then on, as in clang (where that typedef makes the two
+    /// one type), function types that differ only in `_Float128` against
+    /// `__float128` convert by a function pointer conversion
+    /// (`conv::qual::is_function_conversion`; WP-1058).
+    pub glibc_float128_alias: bool,
     /// The dumps of `-fkiln-dump-cfg` and lines of `-fkiln-cfg-stats`.
     pub cfg_out: String,
     /// `-fkiln-cfg-max-elems`: a body whose graph would hold more
@@ -1308,6 +1315,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             redecl_index: overload::redecl_index::RedeclIndex::default(),
             explicit_memo: templ::explicit_memo::ExplicitMemo::default(),
             permissive: false,
+            glibc_float128_alias: false,
             cfg_out: String::new(),
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
             cfg_body: cfg::BodyCfg::default(),
