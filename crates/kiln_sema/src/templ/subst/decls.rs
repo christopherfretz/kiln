@@ -1643,8 +1643,14 @@ impl Substituter<'_, '_, '_> {
         // A member enumeration defined out of line before the class is
         // instantiated (`template<class T> enum class A<T>::E { ... }`,
         // [temp.mem.enum]) is defined from that definition.
+        // An opaque-enum-declaration redeclared by a later enum-specifier
+        // of the same class ([class.mem.general]/6) is only declared here:
+        // that member defines it when its turn comes, so its enumerators
+        // are declared once, in member order.
         let src = self.sema.ast.definition(d).filter(|&x| {
-            x == d || self.sema.ast.decls.get(x).ctx() == self.sema.ast.decls.get(d).ctx()
+            (x == d || self.sema.ast.decls.get(x).ctx() == self.sema.ast.decls.get(d).ctx())
+                && (x == d
+                    || !n.ctx().is_some_and(|c| self.sema.ast.decls.members(c).any(|m| m == x)))
         });
         // A scoped member enumeration is defined on demand ([temp.inst]/3),
         // but one inside a function is defined with it (CWG1484; clang

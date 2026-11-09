@@ -973,7 +973,18 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             return self.relookup_member(d, inst_parent, loc);
         }
         // A member not instantiated (an invalid member of the
-        // specialization): already diagnosed.
+        // specialization): already diagnosed. With no error in the TU it is
+        // a kiln bug, and the use that names it would be dropped silently:
+        // an internal error instead (§4.6 "No silent drop", WP-600).
+        if self.sema.diags.error_count() == 0 {
+            let name = self.sema.decl_name_str(node.name());
+            let d = self
+                .sema
+                .diag(kiln_diag::DiagId::sema_inst_member_dropped, loc)
+                .arg(name)
+                .arg(self.ctx_arg(inst_parent));
+            self.sema.emit(d);
+        }
         Err(SubstFail)
     }
 
