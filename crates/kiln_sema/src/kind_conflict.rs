@@ -16,6 +16,7 @@ use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::decl::sym_str;
+use crate::lookup::LookupKind;
 
 /// What a new declaration whose name may conflict is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -113,6 +114,43 @@ impl Sema<'_, '_> {
             .with_note(note);
         self.emit(msg);
         true
+    }
+
+    /// An unqualified elaborated-type-specifier `keyword name` whose tag
+    /// lookup found `tag` in an outer scope while a nearer scope declares
+    /// `name` as a typedef, type alias or class template
+    /// ([basic.lookup.elab]/1 ignores only non-type names, so that one is
+    /// found; [dcl.type.elab]/2 then makes the reference ill-formed).
+    /// clang `LookupTagName` sees type names too, then
+    /// `err_tag_reference_non_tag`. A typedef of the same name in the
+    /// same scope naming a tag (`typedef struct A A;`) is looked through,
+    /// as clang's `ActOnTag` does. True when diagnosed.
+    pub(crate) fn diagnose_tag_hidden_by_type_name(
+        &mut self,
+        keyword: TagKeyword,
+        name: Symbol,
+        tag: DeclId,
+        loc: Loc,
+    ) -> bool {
+        let found = self.lookup_name(name, LookupKind::Type).decls;
+        let first = self.ast.first(tag);
+        if found.is_empty() || found.iter().any(|&d| self.ast.first(d) == first) {
+            return false;
+        }
+        let names_tag = |s: &Self, td: DeclId| {
+            let Some(u) = s.ast.decls.typedef(td).map(|t| t.underlying) else { return false };
+            let t = s.ast.types.canonical(u);
+            let Some(x) = s.ast.types.as_record(t).or_else(|| s.ast.types.as_enum(t)) else {
+                return false;
+            };
+            s.ast.decls.get(x).name() == DeclName::ident(name)
+                && s.ast.decls.get(x).ctx().map(|c| s.ast.redecl_context(c))
+                    == s.ast.decls.get(td).ctx().map(|c| s.ast.redecl_context(c))
+        };
+        if found.iter().any(|&d| names_tag(self, d)) {
+            return false;
+        }
+        self.diagnose_tag_reference_non_tag(keyword, name, &found, loc)
     }
 
     /// An elaborated-type-specifier `keyword name` whose tag lookup found

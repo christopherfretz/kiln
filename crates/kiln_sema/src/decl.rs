@@ -7921,6 +7921,14 @@ impl Sema<'_, '_> {
                     nloc,
                 );
             }
+            if let Some(&p) = found.last()
+                && use_ == TagUse::Reference
+                && qualifier.is_none()
+                && self.diagnose_tag_hidden_by_type_name(keyword, n, p, nloc)
+            {
+                // clang's recovery: the elaborated name still denotes the tag.
+                return p;
+            }
             if let Some(&p) = found.last() {
                 if self.tag_matches(p, keyword) {
                     prev = Some(p);
