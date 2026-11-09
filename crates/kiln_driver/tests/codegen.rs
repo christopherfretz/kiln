@@ -1384,11 +1384,7 @@ fn coverage_mapping_end_to_end() {
     std::fs::write(d.join("cov.h"), COV_H).unwrap();
     std::fs::write(d.join("m.cpp"), COV_MAIN).unwrap();
     // regions missed, functions missed, lines missed, branches missed.
-    let want = [
-        "cov.h 5 2 2 1 2 1 2 1",
-        "m.cpp 31 5 11 2 33 3 14 3",
-        "TOTAL 36 7 13 3 35 4 16 4",
-    ];
+    let want = ["cov.h 5 2 2 1 2 1 2 1", "m.cpp 31 5 11 2 33 3 14 3", "TOTAL 36 7 13 3 35 4 16 4"];
     for compat in ["19", "22"] {
         let (profdata, cov) = (format!("llvm-profdata-{compat}"), format!("llvm-cov-{compat}"));
         if !have(&profdata) || !have(&cov) {
@@ -1425,7 +1421,8 @@ fn coverage_mapping_end_to_end() {
         let ip = format!("-instr-profile={pd}");
         let rep = run(&cov, &["report", &exe, &ip]);
         assert_eq!(cov_rows(&rep), want, "compat {compat}:\n{rep}");
-        let show = run(&cov, &["show", &exe, &ip, "-use-color=false", "-show-instantiations=false"]);
+        let show =
+            run(&cov, &["show", &exe, &ip, "-use-color=false", "-show-instantiations=false"]);
         for line in [
             "   24|      5|  for (int i = 0; i < 4; ++i) {",
             "   26|      2|      s += TWICE(i);",

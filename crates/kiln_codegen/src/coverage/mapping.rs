@@ -192,8 +192,14 @@ impl<'a> Locs<'a> {
     fn scan(self, from: Loc, mut pick: impl FnMut(TokKind, u32, usize) -> bool) -> Loc {
         let Some((file, off, base)) = self.spelled(from) else { return Loc::INVALID };
         let len = self.sm.text(file).len() as u32;
-        let mut lx =
-            Lexer::new_in_range(self.sm, self.interner, file, off..len, base, LexOptions::default());
+        let mut lx = Lexer::new_in_range(
+            self.sm,
+            self.interner,
+            file,
+            off..len,
+            base,
+            LexOptions::default(),
+        );
         let sp = base.with_offset(off);
         let mut depth = 0u32;
         for i in 0..1_000_000usize {
@@ -224,8 +230,14 @@ impl<'a> Locs<'a> {
     fn eq_default(self, from: Loc) -> Option<(Loc, Loc)> {
         let (file, off, base) = self.spelled(from)?;
         let len = self.sm.text(file).len() as u32;
-        let mut lx =
-            Lexer::new_in_range(self.sm, self.interner, file, off..len, base, LexOptions::default());
+        let mut lx = Lexer::new_in_range(
+            self.sm,
+            self.interner,
+            file,
+            off..len,
+            base,
+            LexOptions::default(),
+        );
         let sp = base.with_offset(off);
         let at = |l: Loc| from.with_offset(l.to_raw().saturating_sub(sp.to_raw()));
         let (mut depth, mut prev, mut before_eq) = (0u32, None, None);
@@ -361,7 +373,9 @@ impl Shape<'_> {
                 StmtKind::WhileStmt | StmtKind::ForStmt => st.loop_data(s).body,
                 StmtKind::CXXForRangeStmt => Some(st.range_for_data(s).body),
                 StmtKind::DoStmt => return st.do_rparen(s),
-                StmtKind::ReturnStmt => return st.return_value(s).map_or(loc, |e| self.ast.end_loc(e)),
+                StmtKind::ReturnStmt => {
+                    return st.return_value(s).map_or(loc, |e| self.ast.end_loc(e));
+                }
                 StmtKind::CoreturnStmt => {
                     return st.coreturn_operand(s).map_or(loc, |e| self.ast.end_loc(e));
                 }
@@ -509,7 +523,13 @@ impl<'a, 'f> Builder<'a, 'f> {
     }
 
     /// `pushRegion`.
-    fn push(&mut self, count: Counter, start: Option<Loc>, end: Option<Loc>, f: Option<Counter>) -> usize {
+    fn push(
+        &mut self,
+        count: Counter,
+        start: Option<Loc>,
+        end: Option<Loc>,
+        f: Option<Counter>,
+    ) -> usize {
         if let Some(s) = start
             && f.is_none()
         {
@@ -1034,7 +1054,9 @@ impl<'a, 'f> Builder<'a, 'f> {
                 }
             }
             ExprKind::ConditionalOperator | ExprKind::BinaryConditionalOperator => self.cond_op(e),
-            ExprKind::BinaryOperator if matches!(ex.binary_op(e), BinaryOp::LAnd | BinaryOp::LOr) => {
+            ExprKind::BinaryOperator
+                if matches!(ex.binary_op(e), BinaryOp::LAnd | BinaryOp::LOr) =>
+            {
                 self.logical(e, ex.binary_op(e) == BinaryOp::LAnd);
             }
             ExprKind::LambdaExpr => {}
@@ -1699,7 +1721,10 @@ pub(crate) fn finish(
                 if sk.kind == SkipKind::Comment {
                     a.1 = 1;
                     let tok_line = |t: Option<super::skipped::Tok>, at: Loc| {
-                        t.and_then(|t| t.loc).filter(|&x| l.same(at, x)).and_then(|x| l.lc(x)).map(|x| x.0)
+                        t.and_then(|t| t.loc)
+                            .filter(|&x| l.same(at, x))
+                            .and_then(|x| l.lc(x))
+                            .map(|x| x.0)
                     };
                     if tok_line(sk.prev, sk.lo) == Some(a.0) {
                         a.0 += 1;

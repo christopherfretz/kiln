@@ -6280,7 +6280,9 @@ impl Sema<'_, '_> {
         // getEndLoc`; coverage regions measure it, WP-1003).
         if matches!(
             self.ast.exprs.get(r).kind(),
-            ExprKind::CXXStaticCastExpr | ExprKind::CXXConstCastExpr | ExprKind::CXXReinterpretCastExpr
+            ExprKind::CXXStaticCastExpr
+                | ExprKind::CXXConstCastExpr
+                | ExprKind::CXXReinterpretCastExpr
         ) && self.ast.exprs.get(r).loc() == loc
             && rparen != Loc::INVALID
             && self.ast.exprs.end_loc(r).is_none()

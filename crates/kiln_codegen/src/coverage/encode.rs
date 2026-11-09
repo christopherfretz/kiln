@@ -310,11 +310,14 @@ mod tests {
         assert_eq!(b.sub(s, Counter::Ref(1)), Counter::Ref(0));
         let t = b.sub(Counter::Ref(2), Counter::Ref(1));
         let u = b.add(t, Counter::Ref(0));
-        assert_eq!(b.exprs[match u {
-            Counter::Expr(i) => i as usize,
-            _ => unreachable!(),
-        }]
-        .op, Op::Sub);
+        assert_eq!(
+            b.exprs[match u {
+                Counter::Expr(i) => i as usize,
+                _ => unreachable!(),
+            }]
+            .op,
+            Op::Sub
+        );
         assert_eq!(b.sub(Counter::Ref(3), Counter::Ref(3)), Counter::Zero);
         let again = b.add(Counter::Ref(0), Counter::Ref(1));
         assert_eq!(again, s);

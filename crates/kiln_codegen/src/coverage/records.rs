@@ -148,7 +148,9 @@ impl Cg<'_> {
         let members: Vec<DeclId> = ast.decls.members(rd).collect();
         for m in members {
             let n = ast.decls.get(m);
-            if n.has(DeclFlags::INVALID) || n.has(DeclFlags::DEPENDENT_CTX) || n.has(DeclFlags::IMPLICIT)
+            if n.has(DeclFlags::INVALID)
+                || n.has(DeclFlags::DEPENDENT_CTX)
+                || n.has(DeclFlags::IMPLICIT)
             {
                 continue;
             }
@@ -160,7 +162,9 @@ impl Cg<'_> {
                 | DeclKind::CXXConstructor
                 | DeclKind::CXXDestructor => {
                     let Some(f) = ast.decls.function(m) else { continue };
-                    if f.body.is_some() && f.spec.defaulted() == Defaulted::No && !self.is_templated(m)
+                    if f.body.is_some()
+                        && f.spec.defaulted() == Defaulted::No
+                        && !self.is_templated(m)
                     {
                         self.cov_defer_unused(m);
                     }
@@ -243,7 +247,12 @@ impl Cg<'_> {
         mapping: Vec<u8>,
         used: bool,
     ) {
-        self.cov.records.push(Rec { name_hash: md5_hash(name.as_bytes()), func_hash, mapping, used });
+        self.cov.records.push(Rec {
+            name_hash: md5_hash(name.as_bytes()),
+            func_hash,
+            mapping,
+            used,
+        });
         if !used {
             self.cov.unused.push(name_var);
         }
@@ -264,12 +273,14 @@ impl Cg<'_> {
             let ast = self.ast;
             let first = ast.first(d);
             let name = match ast.decls.get(d).kind() {
-                DeclKind::CXXConstructor | DeclKind::CXXDestructor => kiln_abi::mangle::mangle_structor(
-                    ast,
-                    &mut self.anon,
-                    first,
-                    kiln_abi::mangle::Structor::Base,
-                ),
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
+                    kiln_abi::mangle::mangle_structor(
+                        ast,
+                        &mut self.anon,
+                        first,
+                        kiln_abi::mangle::Structor::Base,
+                    )
+                }
                 _ => kiln_abi::mangle::mangle_decl(ast, &mut self.anon, first),
             };
             let linkage = self.fn_def_linkage(d);
@@ -297,7 +308,8 @@ impl Cg<'_> {
             }
             let bytes = self.m.const_bytes(&r.mapping);
             let bty = self.m.const_type(bytes);
-            let sty = self.m.types.struct_literal(&[LTy::I64, LTy::I32, LTy::I64, LTy::I64, bty], true);
+            let sty =
+                self.m.types.struct_literal(&[LTy::I64, LTy::I32, LTy::I64, LTy::I64, bty], true);
             let vals = [
                 self.m.const_int(LTy::I64, i128::from(r.name_hash as i64)),
                 self.m.const_int(LTy::I32, r.mapping.len() as i128),

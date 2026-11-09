@@ -142,9 +142,11 @@ impl Ast {
                 // braces, the last argument not defaulted.
                 ExprKind::CXXConstructExpr => {
                     let args = self.lists.get(self.exprs.construct_args(e));
-                    let last = args.iter().rev().map(|&a| ExprId::new(a)).find(|&a| {
-                        self.exprs.get(a).kind() != ExprKind::CXXDefaultArgExpr
-                    });
+                    let last = args
+                        .iter()
+                        .rev()
+                        .map(|&a| ExprId::new(a))
+                        .find(|&a| self.exprs.get(a).kind() != ExprKind::CXXDefaultArgExpr);
                     match last {
                         Some(a) => {
                             e = a;
