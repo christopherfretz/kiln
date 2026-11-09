@@ -3785,7 +3785,9 @@ pub mod builtin {
     /// attributes (clang `ActOnFunctionDeclarator` +
     /// `AddKnownFunctionAttributes`). `P` is the type the file-scope
     /// `FILE` typedef names. clang's library builtins without any of these
-    /// attributes (`malloc`, `printf`, `strtol`, ...) are left out.
+    /// attributes (`malloc`, `printf`, `strtol`, ...) are left out, but
+    /// for `memcmp` and `bcmp`, whose calls codegen folds through their
+    /// `__builtin_` twin (WP-940).
     pub static LIB: &[Info] = &[
         row(93, "abs", "ii", N | C),
         row(95, "labs", "LiLi", N | C),
@@ -4094,6 +4096,11 @@ pub mod builtin {
         row(2121, "strndup", "c*cC*z", N),
         row(2122, "index", "c*cC*i", N),
         row(2123, "rindex", "c*cC*i", N),
+        // WP-940: `memcmp` and the GNU `bcmp` have no implicit attributes
+        // but clang's evaluator folds a call (`EvaluateAsRValue` in
+        // `EmitBuiltinExpr`): they are recognized for their twin only.
+        row(2124, "memcmp", "ivC*vC*z", 0),
+        row(2125, "bcmp", "ivC*vC*z", 0),
     ];
 
     /// The [`LIB`] row of the C library function spelled `name`.
@@ -4127,9 +4134,36 @@ pub mod builtin {
 
     /// WP-419: whether the [`LIB`] function `id` is recognized in the GNU
     /// dialects only (clang `ALL_GNU_LANGUAGES`: `sincos`; WP-902: `stpcpy`,
-    /// `stpncpy`, `strdup`, `strndup`, `index`, `rindex`).
+    /// `stpncpy`, `strdup`, `strndup`, `index`, `rindex`; WP-940: `bcmp`).
     pub fn lib_gnu_only(id: u32) -> bool {
-        (2057..=2059).contains(&id) || (2118..=2123).contains(&id)
+        (2057..=2059).contains(&id) || (2118..=2123).contains(&id) || id == 2125
+    }
+
+    /// WP-940: whether a call of a C library function whose `__builtin_` twin
+    /// is `b` is evaluated (after a note that keeps it from being a constant
+    /// expression): clang `VisitBuiltinCallExpr`'s `BIstrlen` / `BIwcslen`,
+    /// `BIstrcmp` family, `BIstrchr` family and `BImemcpy` family cases.
+    pub fn lib_evaluated(b: u32) -> bool {
+        matches!(
+            b,
+            STRLEN
+                | WCSLEN
+                | STRCMP
+                | WCSCMP
+                | STRNCMP
+                | WCSNCMP
+                | MEMCMP
+                | BCMP
+                | WMEMCMP
+                | STRCHR
+                | WCSCHR
+                | MEMCHR
+                | WMEMCHR
+                | MEMCPY
+                | MEMMOVE
+                | WMEMCPY
+                | WMEMMOVE
+        )
     }
 
     /// WP-380: the `__builtin_` twin of the [`LIB`] function `name` when

@@ -3640,6 +3640,19 @@ impl Cg<'_> {
         {
             return Ok(Some(self.emit_lvalue(a)?.addr.v));
         }
+        // WP-940: clang `EmitBuiltinExpr` first folds a library builtin
+        // call its evaluator evaluates (`strlen("abc")` is `i64 3`); the
+        // arguments are not emitted. Not where `no_builtin` names it.
+        if let Some(d) = direct
+            && crate::builtins::lib_fold_callee(ast, e).is_some()
+            && let Some(c) = self.folds.get(e)
+            && !self.no_builtin_here(d)
+        {
+            let q = ast.exprs.get(e).ty();
+            if ast.types.is_integral(q) || ast.types.is_floating(q) {
+                return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
+            }
+        }
         let mut lib = None;
         // WP-419: a recognized C library function clang lowers as its
         // `__builtin_` twin (`ceil(x)` -> `llvm.ceil`).
