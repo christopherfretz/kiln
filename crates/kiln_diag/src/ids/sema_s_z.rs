@@ -227,6 +227,10 @@ sema_typename_nested_not_type = Error (2) "typename specifier refers to non-type
 sema_udl_no_operator = Error (2) "no matching literal operator for call to {0} with argument of type {1}";
 sema_udl_no_operator_raw = Error (3) "no matching literal operator for call to {0} with argument of type {1} or {2}, and no matching literal operator template";
 sema_udl_no_operator_string = Error (3) "no matching literal operator for call to {0} with arguments of types {1} and {2}, and no matching literal operator template";
+// WP-954: clang `err_unavailable`, `err_unavailable_message`,
+// `note_availability_specified_here` (unavailable).
+sema_unavailable = Error (1) "'{0}' is unavailable";
+sema_unavailable_msg = Error (2) "'{0}' is unavailable: {1}";
 sema_undeclared_label = Error (1) "use of undeclared label '{0}'";
 sema_undeclared_use = Error (1) "use of undeclared '{0}'";
 sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";

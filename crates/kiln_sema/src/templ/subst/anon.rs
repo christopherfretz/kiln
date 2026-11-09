@@ -209,7 +209,7 @@ impl Substituter<'_, '_, '_> {
                 | AttrKind::VISIBILITY
                 | AttrKind::TYPE_VISIBILITY
                 | AttrKind::MODE
-        );
+        ) || (n.kind == AttrKind::ANNOTATE && n.b != 0);
         let dependent_priority = n.flags & AttrNode::PRIORITY_DEPENDENT != 0
             && matches!(n.kind, AttrKind::CONSTRUCTOR | AttrKind::DESTRUCTOR);
         !substituted && !dependent_priority
@@ -302,6 +302,19 @@ impl Substituter<'_, '_, '_> {
                     out.push(self.sema.ast.attrs.push(n));
                 }
                 continue;
+            }
+            if node.kind == AttrKind::ANNOTATE && node.b != 0 {
+                // clang `instantiateDependentAnnotationAttr`: the other
+                // arguments are substituted, then constant-folded (WP-954).
+                let args = self.sema.annotate_args(&node);
+                if args.iter().any(|&e| self.sema.expr_is_value_dependent(e)) {
+                    let Ok(es) = self.expand_exprs(&args) else { continue };
+                    let shown = self.sema.attr_shown(&node, "annotate");
+                    let Some(es) = self.sema.check_annotate_args(&shown, &es) else { continue };
+                    let b = self.sema.ast.lists.push(&es).raw();
+                    out.push(self.sema.ast.attrs.push(AttrNode { b, ..node }));
+                    continue;
+                }
             }
             out.push(self.sema.ast.attrs.push(node));
         }

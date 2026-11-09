@@ -37,6 +37,7 @@ note_building_deduction_guide_here = Note (0) "while building implicit deduction
 note_builtin_non_usual_declared_here = Note (1) "non-usual {0} declared here";
 note_candidate_deleted = Note (1) "candidate function has been {0:explicitly|implicitly} deleted";
 note_cannot_use_trivial_abi_reason = Note (2) "'trivial_abi' is disallowed on {0} because {1:its copy constructors and move constructors are all deleted|it is polymorphic|it has a base of a non-trivial class type|it has a virtual base|it has a __weak field|it has a field of a non-trivial class type}";
+note_carries_dependency_missing_first_decl = Note (0) "declaration missing '[[carries_dependency]]' attribute is here";
 note_checking_concept_here = Note (1) "while checking the satisfaction of concept '{0}' requested here";
 note_checking_constraints_here = Note (1) "while checking constraint satisfaction for template '{0}' required here";
 note_conflicting_attribute = Note (0) "conflicting attribute is here";

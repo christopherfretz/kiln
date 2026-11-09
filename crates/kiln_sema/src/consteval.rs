@@ -728,6 +728,7 @@ impl Sema<'_, '_> {
     fn checked_var(&self, v: DeclId) -> bool {
         self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
             || self.constinit_of(v).is_some()
+            || self.require_constant_init_of(v).is_some()
     }
 
     /// The end of full-expression `e` (from [`Sema::act_on_full_expr`]):

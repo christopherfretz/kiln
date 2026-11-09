@@ -30,6 +30,9 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::INDETERMINATE => "indeterminate",
         AttrKind::UNINITIALIZED => "uninitialized",
         AttrKind::DEPRECATED => "deprecated",
+        AttrKind::UNAVAILABLE => "unavailable",
+        AttrKind::REQUIRE_CONSTANT_INIT => "require_constant_initialization",
+        AttrKind::ANNOTATE => "annotate",
         AttrKind::FALLTHROUGH => "fallthrough",
         AttrKind::LIKELY => "likely",
         AttrKind::UNLIKELY => "unlikely",
@@ -315,6 +318,8 @@ impl Sema<'_, '_> {
                         | AttrKind::NOMERGE
                         | AttrKind::CODE_ALIGN
                 ))
+                // clang 22 `AnnotateAttr` is a `DeclOrStmtAttr` (WP-954).
+                || (!asm && node.kind == AttrKind::ANNOTATE && self.clang_compat >= 22)
             {
                 continue;
             }
@@ -639,6 +644,7 @@ impl Sema<'_, '_> {
                         "non-bit-field non-static data members",
                     )
             }
+            AttrKind::REQUIRE_CONSTANT_INIT => self.check_require_constant_init_attr(d, kind, node),
             // [dcl.attr.depend]/1.
             AttrKind::CARRIES_DEPENDENCY => {
                 kind.is_function()
