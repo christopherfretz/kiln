@@ -33,7 +33,11 @@ use kiln_ast::types::Nns;
 use kiln_ast::{AttrId, ConstValueId, ExprId, ListId, NnsId, RawId, StmtId, StringLitId};
 use kiln_source::fx::FxHashSet;
 
-use super::*;
+use super::{
+    Access, ConstexprKind, DeclFlags, DeclId, DeclKind, DeclName, DeclRec, FileId, FnBody, FnSpec,
+    FxHashMap, Image, LEX_TU, Loc, NONE, Payload, QRef, QualType, Rd, Res, Sema, W, Wr, Writer,
+    bad, var_spec,
+};
 
 /// A parameter reference in a declaration field: `PARAM | i` names the
 /// image's `i`-th parameter, counting the parameters of the function
@@ -211,7 +215,7 @@ enum Slot {
 }
 
 fn side_fields(s: Side) -> &'static [F] {
-    use F::*;
+    use F::{D, E, Loc, Nns, OD, OE, OS, Qt, S, SL};
     match s {
         Side::Arms => &[E, E],
         Side::CompoundAssign => &[E, Qt, Qt],
@@ -315,7 +319,6 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::CXXBoolLiteralExpr => [f(F::Bool), Z],
         X::DeclRefExpr => [f(F::D(Dc::Value)), Sd(Side::DeclRef)],
         X::PredefinedExpr | X::OpaqueValueExpr | X::CXXThrowExpr => [f(F::OE), Z],
-        X::UnaryOperator | X::ExprWithCleanups => [f(F::E), Z],
         X::BinaryOperator | X::ArraySubscriptExpr | X::ArrayInitLoopExpr => [f(F::E), f(F::E)],
         X::CompoundAssignOperator => [f(F::E), Sd(Side::CompoundAssign)],
         X::ConditionalOperator | X::ChooseExpr => [f(F::E), Sd(Side::Arms)],
@@ -329,7 +332,7 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         | X::CXXReinterpretCastExpr => [f(F::E), f(F::Path)],
         X::InitListExpr => [f(F::EL), Sd(Side::InitList)],
         X::UnaryExprOrTypeTraitExpr if flag4 => [f(F::Qt), Z],
-        X::UnaryExprOrTypeTraitExpr => [f(F::E), Z],
+        X::UnaryOperator | X::ExprWithCleanups | X::UnaryExprOrTypeTraitExpr => [f(F::E), Z],
         X::TypeTraitExpr => [f(F::QL), f(F::Bool)],
         X::CXXNoexceptExpr => [f(F::E), f(F::Bool)],
         X::ConstantExpr => [f(F::E), f(F::OCv)],
@@ -706,6 +709,7 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
 }
 
 /// The body sections' structural checks (after the declarations').
+#[allow(clippy::too_many_lines)] // one check per section, in order
 pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<()> {
     let b = &img.bodies;
     let nparams = param_count(img);
@@ -721,7 +725,7 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
         let opt = |x: u32, lim: usize| x == NONE || (x as usize) < lim;
         match f {
             F::Raw | F::Loc => true,
-            F::Bool => w[0] <= 1,
+            F::Bool | F::Path => w[0] <= 1,
             F::E => (w[0] as usize) < e_lim,
             F::OE => opt(w[0], e_lim),
             F::S => (w[0] as usize) < s_lim,
@@ -738,7 +742,6 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             F::QL => {
                 w[1..].chunks(2).all(|q| q[1] <= 7 && qref_ok(QRef { ty: q[0], quals: q[1] as u8 }))
             }
-            F::Path => w[0] <= 1,
             F::AL => w[1..].chunks(2).all(|a| word_attr(a[0], Loc::INVALID).is_some()),
             F::Nns => {
                 let mut p = 1;
@@ -815,7 +818,9 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                 return bad("a statement expression reaching itself");
             }
         }
-        if k == ExprKind::MaterializeTemporaryExpr && (e.aux & 3 == 0) != (toks[1].1[0] == NONE) {
+        if k == ExprKind::MaterializeTemporaryExpr
+            && matches!(e.aux & 3, 0) != (toks[1].1[0] == NONE)
+        {
             return bad("bad temporary");
         }
     }
@@ -823,7 +828,7 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
     for d in &img.decls {
         match &d.payload {
             Payload::Function { body: FnBody::Stmt(s), params, .. } => {
-                if !b.stmts.get(*s as usize).is_some_and(|r| r.kind == 0) {
+                if b.stmts.get(*s as usize).is_none_or(|r| r.kind != 0) {
                     return bad("bad function body");
                 }
                 if params.iter().any(|p| p.default != NONE && p.default as usize >= ne) {
@@ -1138,10 +1143,10 @@ impl Writer<'_, '_, '_> {
                 Fv::E(Some(e)) => v.push(Node::E(e)),
                 Fv::S(Some(s)) => v.push(Node::S(s)),
                 Fv::EL(l) => {
-                    v.extend(lists.get(l).iter().filter_map(|&w| ExprId::from_raw(w)).map(Node::E))
+                    v.extend(lists.get(l).iter().filter_map(|&w| ExprId::from_raw(w)).map(Node::E));
                 }
                 Fv::SL(l) => {
-                    v.extend(lists.get(l).iter().filter_map(|&w| StmtId::from_raw(w)).map(Node::S))
+                    v.extend(lists.get(l).iter().filter_map(|&w| StmtId::from_raw(w)).map(Node::S));
                 }
                 _ => {}
             }
@@ -1672,10 +1677,10 @@ impl Sema<'_, '_> {
             if e.cold & COLD_END != 0 {
                 let _ = self.ast.exprs.cold.end_loc.insert(id, Loc::from_raw(next()));
             }
-            if e.cold & COLD_WRITTEN != 0 {
-                if let Some(q) = QualType::from_raw(next()) {
-                    let _ = self.ast.exprs.cold.cast_written.insert(id, q);
-                }
+            if e.cold & COLD_WRITTEN != 0
+                && let Some(q) = QualType::from_raw(next())
+            {
+                let _ = self.ast.exprs.cold.cast_written.insert(id, q);
             }
             if e.cold & COLD_RHS != 0 {
                 let _ = self.ast.exprs.cold.trait_rhs_loc.insert(id, Loc::from_raw(next()));
@@ -1703,7 +1708,7 @@ impl Sema<'_, '_> {
     }
 
     /// One token's slot value.
-    #[allow(clippy::too_many_arguments)] // the importer's tables
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // the importer's tables
     fn image_val(
         &mut self,
         img: &Image,
@@ -1848,9 +1853,7 @@ impl Sema<'_, '_> {
                 Slot::Side(sd) => {
                     let n = side_fields(sd).len();
                     let v = take(&mut p, n).to_vec();
-                    if v.len() != n {
-                        0
-                    } else {
+                    if v.len() == n {
                         let ex = &mut self.ast.exprs;
                         let st = &mut self.ast.stmts;
                         let req_e =
@@ -1920,6 +1923,8 @@ impl Sema<'_, '_> {
                                 colon: Loc::from_raw(v[8]),
                             }),
                         }
+                    } else {
+                        0
                     }
                 }
             };

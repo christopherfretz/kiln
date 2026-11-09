@@ -376,7 +376,7 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
         w.u32(v);
     }
     match &d.payload {
-        Payload::Namespace | Payload::Export => {}
+        Payload::Namespace | Payload::Export | Payload::Label => {}
         Payload::Function { ty, spec, params, body } => {
             w.q(*ty);
             w.u32(*spec);
@@ -408,7 +408,6 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.u32(*init);
             w.u32(*eval);
         }
-        Payload::Label => {}
         Payload::Let { ty, extending, index } => {
             w.q(*ty);
             w.u32(*extending);
