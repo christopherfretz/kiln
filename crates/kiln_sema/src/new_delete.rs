@@ -508,17 +508,26 @@ impl Sema<'_, '_> {
         // <T>{}` prepended (and the alignment, then without it), and only
         // when none is viable the others as usual (clang
         // `resolveAllocationOverload`).
+        // `std::type_identity<T>` is built and required complete at the
+        // expression's start; an incomplete one makes the expression
+        // invalid, a malformed one falls back to the untyped functions
+        // (clang `FindAllocationFunctions`).
         let ti = if self.global_ops.seen_type_aware {
-            self.std_type_identity(elem, tid.loc)
+            self.std_type_identity(elem, loc)
         } else {
             None
         };
+        if let Some(t) = ti
+            && !self.require_complete(t, loc)
+        {
+            return self.recover_err(&kids, loc);
+        }
         let (typed_fns, untyped_fns): (Vec<DeclId>, Vec<DeclId>) = alloc
             .fns
             .iter()
             .chain(&alloc.templates)
             .partition(|&&d| self.is_type_aware_alloc_fn(d));
-        let mut found = None;
+        let mut found = Ok(None);
         if ti.is_some() && !typed_fns.is_empty() {
             found = self.find_operator_new_template(
                 &typed_fns,
@@ -528,12 +537,12 @@ impl Sema<'_, '_> {
                 &mut tmpl_notes,
             );
         }
-        if found.is_none() {
+        if matches!(found, Ok(None)) {
             tmpl_notes = None;
             found = if alloc.templates.is_empty() {
-                self.find_operator_new(&untyped_fns, &place_args, pass_align)
+                Ok(self.find_operator_new(&untyped_fns, &place_args, pass_align))
             } else if untyped_fns.is_empty() {
-                None
+                Ok(None)
             } else {
                 self.find_operator_new_template(
                     &untyped_fns,
@@ -544,6 +553,19 @@ impl Sema<'_, '_> {
                 )
             };
         }
+        // An ambiguous best candidate (typed or not) is clang's
+        // `err_ovl_ambiguous_call` with the tied candidates; the
+        // expression is invalid, with no fallback to the untyped set
+        // (P2719, clang `resolveAllocationOverload`).
+        let found = match found {
+            Ok(f) => f,
+            Err(amb) => {
+                let msg = self.diag(DiagId::sema_ovl_ambiguous_call, loc).arg(op_spelling(op));
+                let msg = amb.into_iter().fold(msg, kiln_diag::Diag::with_note);
+                self.emit(msg);
+                return self.recover_err(&kids, loc);
+            }
+        };
         let Some((op_new, with_align)) = found else {
             let ptr_like = place_args.len() == 1 && {
                 let t = self.ast.exprs.get(place_args[0]).ty();
@@ -1253,11 +1275,11 @@ impl Sema<'_, '_> {
         pass_align: bool,
         (ti, loc): (Option<QualType>, Loc),
         notes: &mut Option<Vec<kiln_diag::Diag>>,
-    ) -> Option<(DeclId, bool)> {
+    ) -> Result<Option<(DeclId, bool)>, Vec<kiln_diag::Diag>> {
         use crate::overload::{ArgInfo, CandidateKind, IcsOptions, OvlOutcome, SetKind};
         use kiln_ast::expr::ValueCategory;
         if tmpls.is_empty() {
-            return None;
+            return Ok(None);
         }
         let size_t = self.size_type();
         let al = self.global_ops.align_val_t;
@@ -1315,14 +1337,21 @@ impl Sema<'_, '_> {
                     *notes = Some(self.ovl_notes(&set, false));
                     None
                 }
-                OvlOutcome::Ambiguous => None,
+                OvlOutcome::Ambiguous => {
+                    // An ambiguity is an error at once: clang
+                    // `resolveAllocationOverload` retries without the
+                    // alignment only when nothing is viable.
+                    let amb = self.ovl_notes(&set, true);
+                    self.end_set(set);
+                    return Err(amb);
+                }
             };
             self.end_set(set);
             if let Some(f) = f {
-                return Some((f, with_align));
+                return Ok(Some((f, with_align)));
             }
         }
-        None
+        Ok(None)
     }
 
     /// clang's candidate notes for a failed `operator new` lookup: the
@@ -1672,6 +1701,22 @@ impl Sema<'_, '_> {
             sized: !found.in_class && sized && self.sized_deallocation,
         };
         let best = self.resolve_usual_dealloc(&all, want, destroying, loc);
+        // The selected function's `std::type_identity<T>` must be complete
+        // (clang `CheckDeleteOperator`, at the expression's start); if
+        // not, the expression is invalid.
+        if let [u, ..] = best[..]
+            && (found.in_class && best.len() == 1 || !found.in_class)
+            && let Some(p0) = self.fn_params(u.f).and_then(|(ps, _)| ps.first().copied())
+        {
+            let complete = if diagnose {
+                self.require_complete(p0, loc)
+            } else {
+                self.require_complete_silent(p0, loc)
+            };
+            if !complete {
+                return Err(());
+            }
+        }
         if !found.in_class {
             return Ok(best.first().map(|u| (u.f, u.sized)));
         }
