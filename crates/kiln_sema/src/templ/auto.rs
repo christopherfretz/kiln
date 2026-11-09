@@ -403,7 +403,11 @@ impl Sema<'_, '_> {
                 }
                 (TypeView::Pointer(p), TypeView::Pointer(x))
                 | (TypeView::LValueRef(p), TypeView::LValueRef(x))
-                | (TypeView::RValueRef(p), TypeView::RValueRef(x)) => (d, a) = (p, x),
+                | (TypeView::RValueRef(p), TypeView::RValueRef(x))
+                | (
+                    TypeView::MemberPointer { pointee: p, .. },
+                    TypeView::MemberPointer { pointee: x, .. },
+                ) => (d, a) = (p, x),
                 (TypeView::Function(p), TypeView::Function(x)) => (d, a) = (p.ret(), x.ret()),
                 (TypeView::RValueRef(p), TypeView::LValueRef(_)) => {
                     let TypeView::Auto { keyword, deduced: None, .. } =
@@ -468,13 +472,15 @@ impl Sema<'_, '_> {
     /// The type one declarator further toward the placeholder of a
     /// declared type `t` (clang's `GetContainedDeducedTypeVisitor`,
     /// restricted to the declarators a placeholder appears under in
-    /// kiln): a pointer's or reference's pointee, a function type's
+    /// kiln): a pointer's, member pointer's or reference's pointee
+    /// (`auto Q::* p = &Q::m;`, [dcl.type.auto.deduct]/4), a function type's
     /// return type (`auto (*p)(int) -> auto (*)(int) -> auto`,
     /// [dcl.spec.auto.general]/3, [dcl.fct]/22). Spec:
     /// sema-templates.md §6.3.
     pub(crate) fn placeholder_step(&self, t: QualType) -> Option<QualType> {
         match self.ast.types.canonical_view(t) {
             TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => Some(p),
+            TypeView::MemberPointer { pointee, .. } => Some(pointee),
             TypeView::Function(f) => Some(f.ret()),
             _ => None,
         }
@@ -562,6 +568,7 @@ impl Sema<'_, '_> {
             v @ (TypeView::Pointer(_)
             | TypeView::LValueRef(_)
             | TypeView::RValueRef(_)
+            | TypeView::MemberPointer { .. }
             | TypeView::Function(_)
             | TypeView::Paren(_)) => (v, declared.quals()),
             _ => (t.canonical_view(declared), t.canonical(declared).quals()),
@@ -581,6 +588,10 @@ impl Sema<'_, '_> {
             TypeView::Pointer(p) => {
                 let inner = self.replace_placeholder(p, with);
                 self.ast.types.pointer_to(inner)
+            }
+            TypeView::MemberPointer { pointee, class } => {
+                let inner = self.replace_placeholder(pointee, with);
+                self.ast.types.member_pointer(inner, class)
             }
             TypeView::LValueRef(p) => {
                 let inner = self.replace_placeholder(p, with);

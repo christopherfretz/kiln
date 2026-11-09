@@ -206,6 +206,8 @@ sema_decl_shadow_uncaptured_local = WarningOff [ShadowUncapturedLocal] (2) "decl
 sema_declspec_attribute_ignored = Warning [IgnoredAttributes] (2) "attribute {0} is ignored, place it after \"{1}\" to apply attribute to type declaration";
 sema_decltype_auto_cannot_be_combined = Error (0) "'decltype(auto)' cannot be combined with other type specifiers";
 sema_decltype_auto_compound = Error (1) "cannot form {0:pointer to|reference to|array of} 'decltype(auto)'";
+// ----- WP-1135 (clang `err_decltype_auto_function_declarator_not_declaration`)
+sema_decltype_auto_function_declarator = Error (0) "'decltype(auto)' can only be used as a return type in a function declaration";
 sema_decltype_auto_initializer_list = Error (0) "cannot deduce 'decltype(auto)' from initializer list";
 sema_decomp_decl_ambiguous_base = Error (2) "cannot bind members of ambiguous base class {1} of {0}";
 sema_decomp_decl_ambiguous_base_19 = Error (2) "cannot decompose members of ambiguous base class {1} of {0}";
