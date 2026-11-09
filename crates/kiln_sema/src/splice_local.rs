@@ -142,7 +142,7 @@ impl Sema<'_, '_> {
             }
         }
         let mut found = Vec::new();
-        self.potential_results(e, &mut found);
+        self.l2r_potential_results(e, &mut found);
         for r in found {
             let d = self.ast.exprs.decl(r);
             if !self.usable_in_constant_expressions(d) {

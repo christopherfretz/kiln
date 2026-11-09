@@ -194,6 +194,10 @@ pub(crate) struct Cg<'a> {
     pub srcloc: Option<kiln_ast::ExprId>,
     /// Static locals already emitted.
     pub static_locals: FxHashMap<DeclId, GlobalId>,
+    /// The `__const.<function>.<variable>` global last made for each
+    /// local variable (clang `InitializerConstants`;
+    /// [`Cg::unnamed_global_from`]).
+    pub unnamed_consts: FxHashMap<DeclId, GlobalId>,
     /// Whether each class definition asked about is consteval-only
     /// ([`Cg::is_consteval_only`]).
     pub consteval_only: FxHashMap<DeclId, bool>,
@@ -446,6 +450,7 @@ impl<'a> Cg<'a> {
             contract_checked: false,
             srcloc: None,
             static_locals: FxHashMap::default(),
+            unnamed_consts: FxHashMap::default(),
             consteval_only: FxHashMap::default(),
             static_local_names: FxHashMap::default(),
             void_ptr,
@@ -3296,6 +3301,48 @@ impl<'a> Cg<'a> {
         gv.unnamed_addr = UnnamedAddr::Global;
         gv.is_constant = true;
         gv.align = Some(align);
+        g
+    }
+
+    /// clang `createUnnamedGlobalFrom` for the local variable `d`: the
+    /// private `__const.<function>.<variable>` constant holding `k`, where
+    /// `<function>` is the mangled name of the function declaring `d`
+    /// (clang `getParentFunctionOrMethod`; a constructor or destructor is
+    /// spelled by its plain name). One global per variable is cached and
+    /// reused while its initializer is `k` (raising its alignment to
+    /// `align`), so the memcpy that initializes `d` and a lambda naming
+    /// `d` without odr-using it ([basic.def.odr]/5) share one global.
+    pub(crate) fn unnamed_global_from(&mut self, d: DeclId, k: Value, align: u64) -> GlobalId {
+        let ast = self.ast;
+        let first = ast.first(d);
+        if let Some(&g) = self.unnamed_consts.get(&first)
+            && self.m.global(g).initializer() == Some(k)
+        {
+            let gv = self.m.global_mut(g);
+            if gv.align.is_some_and(|a| a < align) {
+                gv.align = Some(align);
+            }
+            return g;
+        }
+        let parent = mangle::enclosing_function(ast, d);
+        let fname = match parent.map(|p| (p, ast.decls.get(p).kind())) {
+            // clang `getNameAsString`: the class name, without template
+            // arguments.
+            Some((p, k @ (DeclKind::CXXConstructor | DeclKind::CXXDestructor))) => {
+                let class = ast.decls.get(p).ctx().map(|c| mangle::decl_name(ast, c));
+                let tilde = if k == DeclKind::CXXDestructor { "~" } else { "" };
+                format!("{tilde}{}", class.unwrap_or_default())
+            }
+            // The function being emitted: its symbol.
+            Some((p, _)) if self.f.decl.is_some_and(|c| ast.first(c) == ast.first(p)) => {
+                self.f.func.map(|f| self.m.func(f).name().to_owned()).unwrap_or_default()
+            }
+            Some((p, _)) => mangle::mangle_decl(ast, &mut self.anon, ast.first(p)),
+            None => self.f.func.map(|f| self.m.func(f).name().to_owned()).unwrap_or_default(),
+        };
+        let name = format!("__const.{fname}.{}", mangle::decl_name(ast, d));
+        let g = self.private_const(&name, k, align);
+        self.unnamed_consts.insert(first, g);
         g
     }
 

@@ -712,3 +712,62 @@ hashes each scope's last local and its using-declarator count. Re-timed
 after it, same protocol: dup6 0.12 s (0.86x g++-16), dup8 0.44 s
 (**1.19x**), fmt 0.76x, json 0.86x, range-v3 0.85x, hana 0.73x, with RSS
 unchanged.
+
+### WP-1140: an immediate invocation evaluated once (2026-11-09)
+
+An immediate invocation in a variable initializer was evaluated two to
+four times: once as the invocation, again by the whole-initializer
+`try_fold` of a constant-initialized variable, again by
+`check_constexpr_init` / `check_constinit`, and again by codegen's
+`fold_constant_init` (the Oven's `init_inner` compiled the wrapper's
+operand instead of its stored value). Now each is evaluated once
+(spec/oven.md "Valued immediate invocations").
+
+TU: `common.h` below with `#define N 4096` before it, and one context
+per TU:
+
+```c++
+consteval long fib(int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }
+struct Table { int v[N]; };
+consteval Table build() {
+  Table t{};
+  for (int i = 0; i < N; ++i) {
+    int a = i;
+    for (int j = 0; j < 300; ++j) a = (a * 31 + j) % 9973;
+    t.v[i] = a;
+  }
+  return t;
+}
+// local:     int main() { long x = fib(27); Table t = build(); return (int)(x + t.v[N-1]) & 1; }
+// constexpr: constexpr long x = fib(27); constexpr Table t = build(); (main reads them)
+// constinit: constinit long x = fib(27); constinit Table t = build();
+// dyn:       long id(long); Table idt(Table); long x = id(fib(27)); Table t = idt(build());
+// nsdmi:     struct S { long x = fib(27); Table t = build(); }; (main: S s;)
+// defarg:    long f(long x = fib(27)); int h(Table t = build()); (main: f(); h();)
+// escal:     template<class T> constexpr long g(T) { Table t = build(); return fib(27) + t.v[N-1]; }
+```
+
+Commands: `kiln++ -std=c++2c -fconstexpr-steps=1000000000 -c -o /dev/null
+<ctx>.cpp` and the same with `clang++-19`; `/usr/bin/time -f "%e %M"`;
+evaluation counts from `-ftime-trace -ftime-trace-verbose
+-ftime-trace-granularity=0` (`ConstevalCall` events named `build`; `fib`
+is memoized, 28 calls per evaluation, and went from 56 to 28 calls in the
+constexpr, constinit and dyn contexts). Harness profile, same host.
+
+| context | `build` evaluations before → after | kiln before | kiln after | clang++-19 |
+|---|---|---|---|---|
+| local | 2 → 1 | 0.17 s / 55.5 MB | 0.10 s / 55.5 MB | 3.92 s / 91.9 MB |
+| constexpr | 3 → 1 | 0.28 s / 55.1 MB | 0.11 s / 55.1 MB | 2.51 s / 90.9 MB |
+| constinit | 4 → 1 | 0.32 s / 55.1 MB | 0.10 s / 55.1 MB | 2.53 s / 91.2 MB |
+| dyn | 3 → 1 | 0.34 s / 60.4 MB | 0.19 s / 60.4 MB | 4.47 s / 97.2 MB |
+| nsdmi | 2 → 2 | 0.29 s / 61.0 MB | 0.29 s / 60.9 MB | 2.35 s / 97.1 MB |
+| defarg | 2 → 2 | 0.27 s / 60.3 MB | 0.28 s / 60.3 MB | 2.48 s / 97.3 MB |
+| escal | 3 → 1 | 0.24 s / 55.7 MB | 0.09 s / 55.7 MB | 5.72 s / 93.1 MB |
+
+One `build` evaluation is about 75 ms. Still open: a default member
+initializer's or default argument's invocation is evaluated by sema's
+check at each use and again by codegen's fold of the use
+(`kiln_codegen` `folds.imm`, keyed by use); a full-expression's
+`-Winteger-overflow` trial fold (`int_overflow.rs`
+`overflow_value_inner`) runs before the invocations are valued and is
+not memoized (`return fib(27) + g();` runs about 635k `fib` calls).

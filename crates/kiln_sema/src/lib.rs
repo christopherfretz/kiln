@@ -165,6 +165,7 @@ pub use expansion::{ExpansionHead, ExpansionInit};
 pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use implicit_fallthrough::AttrMacro;
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
+pub use kiln_oven::profile::Level as ProfileLevel;
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use never_constant::BuiltinQuery;
 pub use range_for::{RangeCollect, RangeForHead, RangeInit};
