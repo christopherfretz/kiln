@@ -2781,7 +2781,14 @@ instantiation unless stated.
     inherits the strictest. A class redeclaration that names an existing
     class (`struct alignas(8) S;`) is checked against it
     (`merge_aligned_folded_redecl`). A dependent request skips the
-    check. Test: `tests/conformance/dcl.align/redecl-alignment-diag.cpp`.
+    check. The earlier definition (`definition_before`, a walk back
+    along the chain) is looked up only when the new declaration has an
+    `alignas` of its own, the one case it matters (WP-1076). Test:
+    `tests/conformance/dcl.align/redecl-alignment-diag.cpp`;
+    `tests/stress/redecl-chain-65536.cpp` pins that merging 65,536
+    redeclarations stays linear (visibility attributes and the
+    out-of-class static data member check also skip the chain walk when
+    the declaration has nothing to merge or is not a member).
   - Under-alignment ([dcl.align]/5, `check_alignas_underalignment`,
     clang `CheckAlignasUnderalignment`; WP-324): when a declaration has
     an `alignas` (own or inherited) and the largest requested alignment
