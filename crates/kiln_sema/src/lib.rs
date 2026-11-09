@@ -927,6 +927,12 @@ pub struct Sema<'a, 'sm> {
     /// taken by the outermost list constructor call, whose explicit or
     /// deleted constructor error carries it (clang `PrintInitLocationNote`).
     pub(crate) list_param_note: Option<Diag>,
+    /// The (class, `{` of the list) pairs whose initializer-list
+    /// constructor call is being built (`init_list_ctor_init`): the
+    /// visited guard that stops a list re-entering the same class's
+    /// initializer-list constructor selection through a reference
+    /// parameter's temporary (WP-962, an unbounded recursion).
+    pub(crate) list_ctor_active: Vec<(DeclId, Loc)>,
     /// The aggregate temporary (and the reference's location) being
     /// list-initialized for a reference: the first `excess elements`
     /// error inside it takes clang's reference note (spec/sema.md).
@@ -1384,6 +1390,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             ctor_entity: None,
             ctor_diag_ty: None,
             list_param_note: None,
+            list_ctor_active: Vec::new(),
             ref_temp_note: std::cell::Cell::new(None),
             mem_inits: class::MemInitState::default(),
             extend_collector: None,

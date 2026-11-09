@@ -2048,6 +2048,13 @@ impl Parser<'_, '_> {
                 self.parse_record_body(d, final_loc, ctx == DeclaratorContext::TypeName);
             }
             self.s.act_on_exit_declarator_scope(entered);
+            if ctx == DeclaratorContext::Prototype && !self.nttp_specs {
+                // [dcl.fct]/17: types shall not be defined in parameter
+                // types (clang `GetFullTypeForDeclarator`, after the
+                // body); the parameter is invalid.
+                self.s.diag_type_defined_in_param(d);
+                ds.invalid = true;
+            }
         }
         ds.tag = Some(d);
         ds.tag_declares = use_ != TagUse::Reference;

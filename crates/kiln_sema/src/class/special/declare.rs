@@ -498,6 +498,12 @@ impl Sema<'_, '_> {
                         }
                     }
                 }
+                // A declarator with an invalid parameter (a type defined in
+                // the parameter clause, [dcl.fct]/17) was diagnosed already
+                // and matches nothing (clang's `D.isInvalidType()`).
+                None if d.function_params().is_some_and(|ps| ps.iter().any(|p| p.invalid)) => {
+                    redecl_invalid = true;
+                }
                 None => {
                     let what = if templ { None } else { Some(self.decl_name_str(name)) };
                     let what = what.unwrap_or_else(|| self.decl_name_str(name));
