@@ -504,21 +504,16 @@ impl Sema<'_, '_> {
                     prev_ok = Some(p);
                     let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
                     ty = self.merge_cc(ty, pty, p, sloc);
-                    if !self.ast.types.same_type(pty, ty) {
-                        let (pe, ne) = (self.written_exc_spec(pty), self.written_exc_spec(ty));
-                        if ne == ExcSpec::None || matches!(pe, ExcSpec::Deferred(_)) {
-                            // An unwritten specification is inherited
-                            // ([except.spec]/5, the implicit one of a
-                            // destructor, [except.spec]/8).
-                            if ne == ExcSpec::None {
-                                ty = pty;
-                            }
-                        } else {
-                            let m = self.diag(DiagId::sema_exception_spec_mismatch, sloc);
-                            let m = self.note_prev(m, p, false);
-                            self.emit(m);
-                        }
-                    }
+                    // [except.spec]/5, the implicit specification of a
+                    // destructor, [except.spec]/8; an unwritten one is
+                    // inherited.
+                    let fname = self.decl_name_str(name);
+                    let fix_at = crate::except::missing_exc_spec_fixit_loc(d);
+                    ty = self.check_special_redecl_exc(
+                        (p, pty, ty),
+                        shape == Shape::Dtor,
+                        (sloc, &fname, fix_at),
+                    );
                 }
                 // A declarator with an invalid parameter (a type defined in
                 // the parameter clause, [dcl.fct]/17) was diagnosed already
@@ -676,6 +671,7 @@ impl Sema<'_, '_> {
         {
             let t = self.with_exc_spec(ty, ExcSpec::Deferred(f));
             self.ast.decls.set_ty(f, t);
+            self.implicit_exc_dtors.insert(f);
         }
         if shape == Shape::Ctor && !*invalid && !redecl_invalid {
             self.check_copy_ctor_by_value(f, class, &fparams);

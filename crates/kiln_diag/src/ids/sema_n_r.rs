@@ -268,4 +268,5 @@ sema_return_init_list = Error (1) "void function '{0}' must not return a value";
 sema_return_local_temp_addr = Warning [ReturnStackAddress] (0) "returning address of local temporary object";
 sema_return_local_temp_ref = Warning [ReturnStackAddress] (0) "returning reference to local temporary object";
 sema_return_missing_expr = Error (1) "non-void function '{0}' should return a value";
+sema_rref_in_exception_spec = Error (1) "rvalue reference type {0} is not allowed in exception specification";
 sema_rvalue_ref_bind_to_lvalue = Error (2) "rvalue reference to type {0} cannot bind to lvalue of type {1}";
