@@ -416,9 +416,50 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_overrides_final, at)
                 .arg(self.decl_name_str(name))
-                .with_note(self.overridden_note(o));
+                .with_note(self.overridden_note(o))
+                // One error per overridden function, as clang
+                // (spec/diag.md §7.4 opt-out).
+                .allow_duplicate();
             self.emit(msg);
         }
+    }
+
+    /// The checks on an implicitly declared destructor or copy or move
+    /// assignment operator `f` (of kind `kind`, type `ty`, declared at
+    /// its class's location `at`) that overrides `overridden`
+    /// ([class.virtual]/4, /8): the return type of each overridden
+    /// function and its `final`, as for a declared overrider, under
+    /// clang's `while declaring the implicit ... for 'C'` context note
+    /// (clang `DeclareImplicitCopyAssignment` → `CheckFunctionDeclaration`
+    /// → `AddOverriddenMethods`, under `DeclaringSpecialMember`).
+    pub(crate) fn check_implicit_overrider(
+        &mut self,
+        f: DeclId,
+        kind: crate::class::special::SpecialKind,
+        ty: QualType,
+        at: Loc,
+        overridden: &[DeclId],
+    ) {
+        use crate::class::special::{SynthContext, SynthKind};
+        if overridden.is_empty() {
+            return;
+        }
+        let name = self.ast.decls.get(f).name();
+        let inst_depth = self.inst.stack.len();
+        self.synth.push(SynthContext {
+            member: f,
+            kind: SynthKind::Declaring(kind),
+            loc: at,
+            inst_depth,
+        });
+        for &o in overridden {
+            self.check_override_return(name, at, ty, o);
+            self.check_overrides_final(name, at, o);
+        }
+        if self.synth_noted.get() == self.synth.len() {
+            self.synth_noted.set(0);
+        }
+        self.synth.pop();
     }
 
     /// clang `CheckOverridingFunctionAttributes`: an overrider has the
@@ -482,7 +523,8 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_override_return_differs, at)
                 .arg(nm)
                 .diff_args(self, nr, or)
-                .with_note(self.overridden_note(o));
+                .with_note(self.overridden_note(o))
+                .allow_duplicate();
             self.emit(msg);
             return false;
         };
@@ -806,19 +848,19 @@ impl Sema<'_, '_> {
             let (Some(oexc), Some(mexc)) = (self.resolved_exc(o), self.resolved_exc(m)) else {
                 continue;
             };
-            if mexc.is_nothrow() {
-                return;
-            }
-            let lax = match oexc {
-                // An implicit or defaulted overrider allows the union of
-                // its callees' lists (C++14 [except.spec]/15).
-                ExcSpec::Dynamic(list) if computed => match self.implicit_thrown_types(m) {
-                    ImplicitThrows::Unknown => false,
-                    ImplicitThrows::Any => true,
-                    ImplicitThrows::List(v) => self.list_allows_more(list, &v),
-                },
-                _ => self.override_exc_spec_lax(oexc, mexc, computed),
-            };
+            // clang `CheckExceptionSpecSubset`: a non-throwing overrider
+            // passes the subset check, and only the nested rule is left.
+            let lax = !mexc.is_nothrow()
+                && match oexc {
+                    // An implicit or defaulted overrider allows the union of
+                    // its callees' lists (C++14 [except.spec]/15).
+                    ExcSpec::Dynamic(list) if computed => match self.implicit_thrown_types(m) {
+                        ImplicitThrows::Unknown => false,
+                        ImplicitThrows::Any => true,
+                        ImplicitThrows::List(v) => self.list_allows_more(list, &v),
+                    },
+                    _ => self.override_exc_spec_lax(oexc, mexc, computed),
+                };
             if lax {
                 // clang: overriding a GNU `nothrow` one is the
                 // `-Wmicrosoft-exception-spec` extension (WP-186).
@@ -832,6 +874,15 @@ impl Sema<'_, '_> {
                 // clang checks each overridden function: one error per
                 // base, all at the overrider (spec/diag.md §7.4 opt-out).
                 let msg = self.diag(id, mloc).with_note(self.overridden_note(o)).allow_duplicate();
+                self.emit(msg);
+            } else if let Some(e) = self.override_nested_exc_spec_error(o, m) {
+                // clang `CheckParamExceptionSpec`: once the subset check
+                // passes, function types among the return and parameter
+                // types have equivalent specifications (no note).
+                let mut msg = self.diag(e.id, mloc).allow_duplicate();
+                for a in e.args {
+                    msg = msg.arg(a);
+                }
                 self.emit(msg);
             }
         }
