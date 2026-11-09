@@ -3,7 +3,6 @@
 // trivial. From clang's CXX/special/class.copy/p12-0x.cpp. Found by the
 // clang negative-test run (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, triviality of the copy ignores the constructor actually selected for a mutable member
 //@ expect: compile-ok
 struct TemplateCtor {
   template <typename T> TemplateCtor(T &);

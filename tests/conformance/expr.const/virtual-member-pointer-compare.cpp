@@ -2,9 +2,9 @@
 // functions is unspecified, so not a constant expression. Found by the clang
 // negative-test run (WP-912).
 //@ std: c++23
-//@ xfail(kiln): WP-912 follow-up, pointer-to-virtual-member comparison is folded
 //@ expect: compile-fail
 //@ diag: 12:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 12:18 note "comparison of pointer to virtual member function 'g' has unspecified value"
 struct S {
   virtual void g();
 };

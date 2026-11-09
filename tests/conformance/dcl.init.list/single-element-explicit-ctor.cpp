@@ -2,7 +2,6 @@
 // over B(std::vector<A>). From clang's SemaCXX/single-element-init-list.cpp.
 // Found by the clang negative-test run (WP-912).
 //@ std: c++17
-//@ xfail(kiln): WP-912 follow-up, a single-element list for an explicit constructor parameter is ambiguous
 //@ expect: compile-ok
 namespace std {
 typedef decltype(sizeof(int)) size_t;

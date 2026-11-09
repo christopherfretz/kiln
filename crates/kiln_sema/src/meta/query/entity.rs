@@ -309,6 +309,7 @@ impl Sema<'_, '_> {
             base,
             offset: 0,
             designated: None,
+            past: false,
         }) {
             Ok(cv) => Ok(self.intern_reflection(Reflectee::Object(cv), loc)?),
             Err(_) => fail(loc, "kiln: constant store exhausted"),
@@ -357,7 +358,13 @@ impl Sema<'_, '_> {
             PtrBase::Decl(x) => PtrBase::Decl(self.ast.first(x)),
             b => b,
         };
-        match self.ast.consts.push_scalar(Scalar::Pointer { ty, base, offset, designated: None }) {
+        match self.ast.consts.push_scalar(Scalar::Pointer {
+            ty,
+            base,
+            offset,
+            designated: None,
+            past: false,
+        }) {
             Ok(cv) => Ok(self.intern_reflection(Reflectee::Object(cv), loc)?),
             Err(_) => fail(loc, "kiln: constant store exhausted"),
         }

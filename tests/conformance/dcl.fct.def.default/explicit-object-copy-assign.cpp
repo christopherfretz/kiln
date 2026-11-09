@@ -4,7 +4,6 @@
 // Found by the clang negative-test run (WP-912).
 //@ std: c++23
 //@ requires: clang>=22
-//@ xfail(kiln): WP-912 follow-up, a defaulted explicit-object copy assignment is not a special member
 //@ expect: compile-ok
 struct S {
   S &operator=(this S &, const S &) = default;

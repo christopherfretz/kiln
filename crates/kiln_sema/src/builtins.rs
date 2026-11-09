@@ -2899,7 +2899,10 @@ impl Sema<'_, '_> {
         let ty = self.const_char_ptr(elem);
         let ty = self.ast.types.canonical(ty);
         let base = PtrBase::StringLit { lit, origin };
-        self.ast.consts.push_scalar(Scalar::Pointer { ty, base, offset: 0, designated: None }).ok()
+        self.ast
+            .consts
+            .push_scalar(Scalar::Pointer { ty, base, offset: 0, designated: None, past: false })
+            .ok()
     }
 
     /// The `const std::source_location::__impl *` value of a
@@ -3010,6 +3013,7 @@ impl Sema<'_, '_> {
                 base: PtrBase::Const(obj),
                 offset: 0,
                 designated: None,
+                past: false,
             })
             .ok()
     }

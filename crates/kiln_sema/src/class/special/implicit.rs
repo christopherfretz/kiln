@@ -196,7 +196,7 @@ impl Sema<'_, '_> {
     /// Whether the first parameter of copy constructor / assignment `m`
     /// accepts a `const` argument (a reference to `const`, or by value).
     pub(crate) fn copy_param_is_const(&self, m: DeclId) -> bool {
-        let Some(&p) = self.param_decls(m).first() else { return false };
+        let Some(&p) = self.special_params(m).first() else { return false };
         let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         match self.ast.types.canonical_view(ty) {
             TypeView::LValueRef(t) | TypeView::RValueRef(t) => {
@@ -634,7 +634,7 @@ impl Sema<'_, '_> {
         if !class_trivial {
             return false;
         }
-        let params = self.param_decls(m);
+        let params = self.special_params(m);
         match k {
             SpecialKind::DefaultCtor => {
                 if !params.is_empty() {
@@ -783,7 +783,7 @@ impl Sema<'_, '_> {
             if self.is_user_provided(f) {
                 out.non_trivial |= k.bit();
             } else if ovl {
-                let const_arg = self.param_decls(f).first().is_some_and(|&p| {
+                let const_arg = self.special_params(f).first().is_some_and(|&p| {
                     let t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
                     match self.ast.types.canonical_view(t) {
                         TypeView::LValueRef(t) => self.ast.types.effective_quals(t).is_const(),
@@ -924,6 +924,14 @@ impl Sema<'_, '_> {
                 }
                 continue;
             };
+            if mutable {
+                // A mutable member is copied from a non-const lvalue, which
+                // may select another constructor or assignment operator
+                // than its copy one (clang `addedMember`).
+                bits = bits
+                    .with(DefinitionBits::NEEDS_OVL_COPY_CTOR)
+                    .with(DefinitionBits::NEEDS_OVL_COPY_ASSIGN);
+            }
             if quals.contains(Quals::CONST) || quals.contains(Quals::VOLATILE) {
                 bits = bits
                     .with(DefinitionBits::NEEDS_OVL_COPY_CTOR)

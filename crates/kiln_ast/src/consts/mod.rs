@@ -95,6 +95,8 @@ const F_AUX: u32 = 2;
 /// base's second id when `F_AUX` is set, then the designated type
 /// ([`Scalar::Pointer`] `designated`).
 const F_DESIG: u32 = 4;
+/// `PTR`: one past the end of its object ([`Scalar::Pointer`] `past`).
+const F_PAST: u32 = 8;
 /// `MEMPTR`: member function.
 const F_FUNCTION: u32 = 1;
 /// `MEMPTR`: `derived` path.
@@ -474,7 +476,7 @@ impl Pools {
                     None
                 };
                 let base = base.expect("ConstStore: pointer base");
-                Scalar::Pointer { ty, base, offset, designated }
+                Scalar::Pointer { ty, base, offset, designated, past: f & F_PAST != 0 }
             }
             kind::MEMPTR => {
                 let start = n.b as usize;
@@ -592,7 +594,7 @@ impl Pools {
             Scalar::Null { ty, kind: k } => {
                 Node { ty, tag: tag(kind::NULL, 0, k as u32), a: 0, b: 0 }
             }
-            Scalar::Pointer { ty, base, offset, designated } => {
+            Scalar::Pointer { ty, base, offset, designated, past } => {
                 let d = designated.map(|q| u64::from(q.to_raw()));
                 let (flags, b) = match (base.aux(), d, u32::try_from(offset)) {
                     (Some(aux), None, _) => (F_AUX, self.push_words(&[offset, u64::from(aux)])?),
@@ -603,6 +605,7 @@ impl Pools {
                     (None, None, Ok(b)) => (0, b),
                     (None, None, Err(_)) => (F_WIDE, self.push_words(&[offset])?),
                 };
+                let flags = flags | if past { F_PAST } else { 0 };
                 Node { ty, tag: tag(kind::PTR, flags, base.code()), a: base.raw(), b }
             }
             Scalar::MemberPtr { ty, member, kind: k, derived, path } => {
@@ -726,8 +729,8 @@ fn hash_scalar(s: &Scalar<'_>) -> u64 {
             h.write_u64((bits >> 64) as u64);
         }
         Scalar::Null { kind: k, .. } => h.write_u32(tag(kind::NULL, 0, k as u32)),
-        Scalar::Pointer { base, offset, designated, .. } => {
-            h.write_u32(tag(kind::PTR, 0, base.code()));
+        Scalar::Pointer { base, offset, designated, past, .. } => {
+            h.write_u32(tag(kind::PTR, if past { F_PAST } else { 0 }, base.code()));
             h.write_u32(base.raw());
             if let Some(aux) = base.aux() {
                 h.write_u32(aux);

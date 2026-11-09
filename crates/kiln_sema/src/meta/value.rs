@@ -143,7 +143,7 @@ impl Sema<'_, '_> {
     ) -> Result<ConstValueId, MetaError> {
         let obj = self.unqual(obj);
         let ty = self.ast.types.pointer_to(obj);
-        self.push_const(Scalar::Pointer { ty, base, offset, designated: None })
+        self.push_const(Scalar::Pointer { ty, base, offset, designated: None, past: false })
     }
 
     /// Why frozen value `cv` is no template argument ([temp.arg.nontype]/6):
@@ -699,6 +699,7 @@ impl Sema<'_, '_> {
             base: PtrBase::Function(first),
             offset: 0,
             designated: None,
+            past: false,
         })?;
         Ok(MetaOut::Frozen(cv))
     }

@@ -3128,6 +3128,11 @@ recomputed exactly as for non-template code (clang's
 - **Order.** The function signature is substituted in lexical order
   ([temp.deduct.general]/7): a leading return type, then the parameters,
   then a trailing return type, then the trailing requires-clause (§8.3).
+  Substitution stops at the first failure, so a leading return type that
+  fails keeps a parameter type whose instantiation would be a hard error
+  from being substituted (`function_spec_signature`, clang
+  `TransformFunctionProtoType`; WP-958, tests
+  `temp.deduct/{substitution-stops-at-first-failure,return-type-failure-before-parameters,trailing-return-substituted-after-parameters}.cpp`).
   The exception spec and `explicit(bool)` come later, when needed
   ([temp.inst]/14).
 - **Parameters.** `ParmVar`s are substituted. A function parameter pack
@@ -5195,6 +5200,12 @@ pub enum NormNode {                         // 16 B, hash-consed in NormTable
   tests/conformance/temp.constr.order/concept-default-argument-parameter-mapping.cpp.
 - Anything else gives an `Atomic` node.
 
+A concept expansion deeper than 64 concept-ids or fold expansions is left
+an atom (`MAX_EXPANSION`). Parentheses and the operands of `&&`/`||` do
+not count as depth, so an 80-operand disjunction normalizes fully
+(WP-958; before, operands past the 64th became one atom and identical
+constraints compared as different).
+
 **Identity** ([temp.constr.atomic]/2). Two atomic constraints are
 identical iff:
 - they are the *same expression in the source*, i.e. the same `ExprId`;
@@ -5537,6 +5548,16 @@ the notes, and they are metered as `templ.satisfaction`.
 every conjunctive clause of CNF(Q). A clause is a sorted
 `SmallVec<[NormId; 4]>` of atoms. Clause sets are built lazily, with a
 cap of 65,536 clauses (D5).
+
+Only one of the two forms is built (`subsumes_by`, WP-958). Normal-form
+leaves are never negated, so the check is monotone: with DNF(P), P ⊒ Q
+iff, for each clause Pi, Q evaluates true when exactly the leaves b with
+some a ∈ Pi, a ⊑ b, are true; dually with CNF(Q), Q's clauses each
+against P evaluated false. The evaluation is memoized per node. DNF(P)
+is tried first, then CNF(Q); the comparison fails (D5's error) only when
+both exceed the cap. So a wide disjunction against a narrow conjunction
+(`temp.constr.order/{large-normal-form-subsumption,wide-normal-form-other-side}.cpp`)
+no longer needs the exploding form.
 - `subsume_cache: (NormId, NormId) → bool`.
 - It is used by:
   - the overload tie-breaker ([over.match.best]/2.6 via

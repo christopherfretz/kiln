@@ -3,10 +3,12 @@
 // clang 22 diagnoses it). Found by the clang negative-test run (WP-912).
 //@ std: c++20
 //@ requires: clang>=22
-//@ xfail(kiln): WP-912 follow-up, out-of-bounds reference binding is not detected by the evaluator
 //@ expect: compile-fail
-//@ diag: 11:16 error "constexpr function never produces a constant expression"
-//@ diag: 15:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 13:16 error "constexpr function never produces a constant expression"
+//@ diag: 14:12 note "read of dereferenced one-past-the-end pointer is not allowed in a constant expression"
+//@ diag: 17:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 14:12 note "read of dereferenced one-past-the-end pointer is not allowed in a constant expression"
+//@ diag: 17:15 note "in call to 'f()'"
 int arr[3];
 constexpr bool f() {
   int &r = arr[3];
