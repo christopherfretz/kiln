@@ -263,14 +263,18 @@ fn array_lists(
         let ty = b.ast.exprs.get(e).ty();
         let Some(elem) = b.ast.types.element(ty) else { continue };
         let n = match b.ast.exprs.get(e).kind() {
-            ExprKind::CXXParenListInitExpr => b.ast.lists.get(b.ast.exprs.paren_list_inits(e)).len(),
+            ExprKind::CXXParenListInitExpr => {
+                b.ast.lists.get(b.ast.exprs.paren_list_inits(e)).len()
+            }
             _ => b.ast.lists.get(b.ast.exprs.init_list_inits(e)).len(),
         };
         let size = kiln_abi::type_size_align(b.ast, elem, b.abi).size;
         if (n as u64).saturating_mul(size) <= 16 {
             continue;
         }
-        if let Some(v) = oven.fold_rvalue(b, e).filter(|&v| kiln_oven::automatic_referent(b.ast, v).is_none()) {
+        if let Some(v) =
+            oven.fold_rvalue(b, e).filter(|&v| kiln_oven::automatic_referent(b.ast, v).is_none())
+        {
             folds.expr.insert(e, v);
         }
     }
