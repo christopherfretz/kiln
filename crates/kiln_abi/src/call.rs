@@ -1645,8 +1645,11 @@ pub fn can_pass_in_registers(ast: &Ast, record: DeclId) -> bool {
     {
         return false;
     }
+    // clang skips a deleted constructor and one that is not eligible
+    // ([special]/6, `isIneligibleOrNotSelected`): overload resolution
+    // never selects it (WP-1109).
     for &(c, spec, b) in &declared {
-        if spec.is_deleted() {
+        if spec.is_deleted() || spec.not_selected() {
             continue;
         }
         has_copy_or_move = true;

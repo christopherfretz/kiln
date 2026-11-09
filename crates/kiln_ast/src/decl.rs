@@ -873,8 +873,12 @@ bit_accessors!(FnSpec:
     storage_inherited / with_storage_inherited = 22;
     /// A prospective destructor that is not the destructor: overload
     /// resolution at the end of the class definition selected another
-    /// ([class.dtor]/4; clang `isIneligibleOrNotSelected`). Set at class
-    /// completion; [`crate::Ast::destructor`] skips it.
+    /// ([class.dtor]/4); or another special member that is not eligible
+    /// ([special]/6: its constraints are not satisfied, or another of
+    /// its kind is at least as constrained). clang
+    /// `isIneligibleOrNotSelected`. Set at class completion;
+    /// [`crate::Ast::destructor`] skips it, and it does not count for the
+    /// class's triviality.
     not_selected / with_not_selected = 23;
     /// The return type was deduced from a placeholder (`auto`,
     /// `decltype(auto)`; [dcl.spec.auto]): the declared type's return
@@ -1132,7 +1136,12 @@ impl DefinitionBits {
     pub const STANDARD_LAYOUT: DefinitionBits = DefinitionBits(1 << 8);
     /// Trivially copyable ([class.prop]).
     pub const TRIVIALLY_COPYABLE: DefinitionBits = DefinitionBits(1 << 9);
-    /// Trivial default constructor.
+    /// Trivial default constructor: the class has a default constructor
+    /// and an eligible one ([special]/6) is trivial, or the implicit one
+    /// would be (clang `hasTrivialDefaultConstructor`). The `TRIVIAL_*`
+    /// bits are clang's `HasTrivialSpecialMembers`: they do not say that
+    /// every eligible member of the kind is trivial; that also needs the
+    /// matching `NONTRIVIAL_*` bit clear (`Sema::all_trivial`).
     pub const TRIVIAL_DEFAULT_CTOR: DefinitionBits = DefinitionBits(1 << 10);
     /// Trivial copy constructor.
     pub const TRIVIAL_COPY_CTOR: DefinitionBits = DefinitionBits(1 << 11);
@@ -1238,6 +1247,22 @@ impl DefinitionBits {
     pub const MOVE_CTOR_FOR_CALL: DefinitionBits = DefinitionBits(1 << 55);
     /// The destructor analogue of `COPY_CTOR_FOR_CALL`.
     pub const DTOR_FOR_CALL: DefinitionBits = DefinitionBits(1 << 56);
+    /// The class has a non-trivial default constructor: an eligible
+    /// declared one is non-trivial, or the implicit one still to be
+    /// declared would be (clang `hasNonTrivialDefaultConstructor`). With
+    /// `TRIVIAL_DEFAULT_CTOR` (clang `hasTrivialDefaultConstructor`: some
+    /// eligible one is trivial) both can hold, as for
+    /// `struct N { N(...) = delete; N() = default; };` ([special]/6;
+    /// spec/sema-class.md §4.2.1, WP-1109).
+    pub const NONTRIVIAL_DEFAULT_CTOR: DefinitionBits = DefinitionBits(1 << 57);
+    /// clang `hasNonTrivialCopyConstructor`; see `NONTRIVIAL_DEFAULT_CTOR`.
+    pub const NONTRIVIAL_COPY_CTOR: DefinitionBits = DefinitionBits(1 << 58);
+    /// clang `hasNonTrivialMoveConstructor`; see `NONTRIVIAL_DEFAULT_CTOR`.
+    pub const NONTRIVIAL_MOVE_CTOR: DefinitionBits = DefinitionBits(1 << 59);
+    /// clang `hasNonTrivialCopyAssignment`; see `NONTRIVIAL_DEFAULT_CTOR`.
+    pub const NONTRIVIAL_COPY_ASSIGN: DefinitionBits = DefinitionBits(1 << 60);
+    /// clang `hasNonTrivialMoveAssignment`; see `NONTRIVIAL_DEFAULT_CTOR`.
+    pub const NONTRIVIAL_MOVE_ASSIGN: DefinitionBits = DefinitionBits(1 << 61);
 
     /// No bits.
     pub const fn empty() -> Self {
