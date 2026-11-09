@@ -1009,6 +1009,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1059 | x86-64 function multiversioning: `target_clones` / multiple `target("...")` versions are sema_multiversion_not_supported on x86-64 (WP-810 covers AArch64 only); needs clang's `.resolver` + ifunc + `__cpu_indicator_init`/`__cpu_model` dispatch and the `.default`/`.avx2.0` manglings; xfail ext.multiversion/target-clones-x86.cpp | WP-1000 | open |
 | WP-1001 | glibc x86-64 `typedef __float128 _Float128` must make the two the same type as under clang (LLVM IRTests); xfail basic.extended.fp/float128-glibc-typedef-x86.cpp | WP-961 | done (#431, WP-1000; decision B keeps the types distinct, residue is WP-1058) |
 | WP-1002 | fill gRPC x86_64 results into docs/status/x86_64-sweep.md + COMPATIBILITY.md from the `oss-grpc-*` artifacts of sweep runs 42545156708 / 42543199768 (may have hit the 355-min timeout → shard gRPC) | WP-961 | in progress |
+| WP-1126 | dependent conversion-function-id (`operator T()` with dependent T) looked up at instantiation ([temp.dep.expr]/3) | WP-1002 | in progress |
 | WP-975 | driver: Meson identity, implement the operator's choice of (a) native file / (b) clang-compatible banner / (c) opt-in banner in kiln_driver::version (spec/driver.md Identity) | WP-920 | open |
 | WP-976 | driver: link -v relays "Debian clang version" from the backing driver; filter or relabel (kiln_driver lib.rs link path, Q3) | WP-920 | open |
 | WP-977 | driver: -rtlib= unsupported (libtool/compiler-rt probes) | WP-920 | open |
