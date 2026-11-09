@@ -1023,7 +1023,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-997 | codegen: subobject NTTP constant uses typed GEP vs clang `getelementptr (i8, …)` (ABI slice equal) | WP-933 | open |
 | WP-998 | codegen: `deref<&cg>` loads a const global clang folds (`static const int cg = 3`) | WP-933 | done (#438, WP-902; real gap was ref<cg>() through a reference NTTP, deref<&cg>() is a load in clang too) |
 | WP-999 | WP-126 remainder: oven pseudo/explicit-destructor lifetime, `p->N::~T()`, member-same-name-as-class diag, out-of-class friend templates, owned friend classes in class templates, dependent friend specializations in dump, `typename C<X>::T` rebuilt only at top level, `typename` error locations/recovery | WP-126 | open |
-| WP-1003 | codegen: `-fcoverage-mapping`, emit the coverage mapping section (driver coverage_flags.rs:187 errors today) | WP-941 | open |
+| WP-1003 | codegen: `-fcoverage-mapping`, emit the coverage mapping section (driver coverage_flags.rs:187 errors today) | WP-941 | in progress |
 | WP-1004 | driver: gcov filters `-fprofile-filter-files`/`-fprofile-exclude-files` (coverage_flags.rs:131) | WP-941 | open |
 | WP-1005 | abi: lambda `$_N` numbering order differs from clang (kiln_abi mangle.rs:41) | WP-941 | open |
 | WP-1006 | abi: non-visible unnamed enum mangles `Ut_` vs clang `$_N` (mangle.rs:2339; xfail basic.link/unnamed-enum-internal-name-run.cpp) | WP-941 | open |
