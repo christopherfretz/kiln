@@ -1038,12 +1038,11 @@ impl Sema<'_, '_> {
             s.type_named_by(&found)
         };
         let dependent = self.ast.types.is_dependent(obj.ty);
-        let t1 = match fty {
-            Some(t) => Some((t, None)),
-            None => {
-                let t1 = look(self, fname);
-                self.injected_named(t1).map(|(t, d)| (t, Some(d)))
-            }
+        let t1 = if let Some(t) = fty {
+            Some((t, None))
+        } else {
+            let t1 = look(self, fname);
+            self.injected_named(t1).map(|(t, d)| (t, Some(d)))
         };
         // `Q` where the destructor name appears; then in the class `F`
         // names (`p->T::~T` where only `T`'s scope declares `T`).
