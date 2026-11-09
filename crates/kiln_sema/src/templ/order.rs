@@ -456,6 +456,17 @@ impl Sema<'_, '_> {
         if !self.partial_at_least_as_specialized(b, a, loc) {
             return true;
         }
+        // CWG1432 (open; clang's speculative fix in `getMoreSpecialized`,
+        // the class analogue of CWG1395): when both deductions succeed and
+        // exactly one side's trailing primary pack ends in an expansion,
+        // the side with the shorter pack and no expansion wins, so
+        // `C<T>` beats `C<T, U...>`. kiln's list deduction already fails
+        // an expansion against a non-pack parameter and a longer argument
+        // list ([temp.deduct.type]/9), so this is a backstop that keeps
+        // the two orders in step with clang if that deduction relaxes.
+        if let Some(r) = self.cwg1432_tie_break(a, b) {
+            return r;
+        }
         // [temp.spec.partial.order]/1, [temp.func.order]/6: equally
         // specialized, the more constrained, provided /6.2.2 makes the
         // constraints comparable: equivalent template-parameter-lists and
@@ -486,6 +497,38 @@ impl Sema<'_, '_> {
         }
         let (kb, cb) = self.partial_constraints(pb.partial);
         self.more_constrained(ka, &ca, kb, &cb)
+    }
+
+    /// The CWG1432 tie-break between equally specialized partial
+    /// specializations `a` and `b` (see `partial_more_specialized`):
+    /// `Some(true)` when `a` wins, `Some(false)` when `b` does, `None` when
+    /// the rule does not apply.
+    fn cwg1432_tie_break(&self, a: u32, b: u32) -> Option<bool> {
+        let t = &self.ast.templates;
+        let (pa, pb) = (t.partial(a)?, t.partial(b)?);
+        let (sa, ea) = self.trailing_pack_shape(pa.canonical)?;
+        let (sb, eb) = self.trailing_pack_shape(pb.canonical)?;
+        if sa == sb || ea == eb {
+            return None;
+        }
+        // The side whose pack is longer and ends in an expansion loses.
+        if sa > sb && ea {
+            return Some(false);
+        }
+        if sb > sa && eb {
+            return Some(true);
+        }
+        None
+    }
+
+    /// The size of the trailing argument pack of canonical argument list
+    /// `l` (the primary's trailing parameter pack), and whether its last
+    /// element is a pack expansion.
+    fn trailing_pack_shape(&self, l: ArgListId) -> Option<(usize, bool)> {
+        let args = self.ast.types.args(l);
+        let ArgView::Pack(p) = args.last()?.view() else { return None };
+        let es = self.ast.types.args(p);
+        Some((es.len(), es.last().is_some_and(|&e| self.is_pack_expansion_arg(e))))
     }
 
     /// Whether partial specialization row `a` is at least as specialized
