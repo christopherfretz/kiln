@@ -26,11 +26,11 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `66c5cc7f6`
+- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `ea8fbf127`
 - command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 120 s; peak RSS of one case 21 MiB (gnu-time)
+- wall time 108 s; peak RSS of one case 22 MiB (gnu-time)
 
 ## Totals
 
