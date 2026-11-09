@@ -29,6 +29,18 @@
 //! The walk treats every local variable as unknown, where clang tracks
 //! their values, so it misses some functions clang reports; it never
 //! reports one clang accepts (WP-873).
+//!
+//! Builtin calls follow clang's table, never the Oven, which folds more
+//! (the P0533 `<cmath>` builtins and their library twins) and notes some
+//! calls its own way (WP-945; [`Sema::builtin_call_kind`] asks
+//! `Sema::clang_constexpr_builtin`, `kiln_pp`'s `__has_constexpr_builtin`
+//! for the target, `-std` and compat): a builtin clang does not evaluate
+//! fails at its callee, another is opaque (its arguments walked), a
+//! library builtin clang evaluates (`strlen`) always fails, any other
+//! library builtin (`fabs`) fails once its arguments are known. A
+//! function evaluated as a call first gets a walk in which only those
+//! calls can fail. An `asm` statement fails; a function declared in a
+//! system header is not checked.
 
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind};
 use kiln_ast::expr::{BinaryOp, ExprKind};
@@ -353,15 +365,7 @@ impl Sema<'_, '_> {
         // does (WP-945): the operands decide, never the Oven's value.
         let calls = self.builtin_calls(e, 0);
         if self.nc_strict_only && !calls.strict {
-            // The strict pass: only a builtin call may fail; anything else
-            // contributes its value when the Oven has one (`fabs(-2.0)`).
-            return match evaluable && !self.names_unknown(e, 0) {
-                true => match self.nc_eval(e) {
-                    v @ Value::Known(_) => v,
-                    _ => Value::Unknown,
-                },
-                false => Value::Unknown,
-            };
+            return self.nc_strict_value(e, evaluable);
         }
         if calls.strict {
             // Taken apart below.
@@ -432,26 +436,8 @@ impl Sema<'_, '_> {
                     // builtin or a consteval function named there is
                     // no failure); the arguments are evaluated.
                     ops.retain(|&c| c != callee);
-                    match self.builtin_call_kind(f) {
-                        BuiltinCall::None => {}
-                        BuiltinCall::Invalid => {
-                            return Value::Fails(Self::not_valid(self.begin_loc(callee)));
-                        }
-                        BuiltinCall::LibEvaluated(name) => {
-                            return Value::Fails(EvalFailure {
-                                kind: FailKind::NotConstant,
-                                notes: vec![Self::non_constexpr_note(self.begin_loc(e), name)],
-                            });
-                        }
-                        BuiltinCall::LibPlain => return self.nc_lib_call(e, f, ops, depth),
-                        BuiltinCall::Opaque => {
-                            for c in self.opaque_builtin_operands(f, ops) {
-                                if let p @ Value::Fails(_) = self.nc_expr(c, depth + 1) {
-                                    return p;
-                                }
-                            }
-                            return Value::Unknown;
-                        }
+                    if let Some(v) = self.nc_builtin_call(e, callee, f, &ops, depth) {
+                        return v;
                     }
                 }
                 // Every operand, the first never-constant one deciding.
@@ -648,6 +634,50 @@ impl Sema<'_, '_> {
             out.strict |= sub.strict;
         }
         out
+    }
+
+    /// The call `e` of `f` through `callee` with arguments `ops`, when `f`
+    /// is a builtin ([`Sema::builtin_call_kind`]); `None` for any other
+    /// function.
+    fn nc_builtin_call(
+        &mut self,
+        e: ExprId,
+        callee: ExprId,
+        f: DeclId,
+        ops: &[ExprId],
+        depth: u32,
+    ) -> Option<Value> {
+        Some(match self.builtin_call_kind(f) {
+            BuiltinCall::None => return None,
+            BuiltinCall::Invalid => Value::Fails(Self::not_valid(self.begin_loc(callee))),
+            BuiltinCall::LibEvaluated(name) => Value::Fails(EvalFailure {
+                kind: FailKind::NotConstant,
+                notes: vec![Self::non_constexpr_note(self.begin_loc(e), name)],
+            }),
+            BuiltinCall::LibPlain => self.nc_lib_call(e, f, ops.to_vec(), depth),
+            BuiltinCall::Opaque => {
+                for c in self.opaque_builtin_operands(f, ops.to_vec()) {
+                    if let p @ Value::Fails(_) = self.nc_expr(c, depth + 1) {
+                        return Some(p);
+                    }
+                }
+                Value::Unknown
+            }
+        })
+    }
+
+    /// `e`, calling no builtin of [`BuiltinCalls::strict`] kind, in the
+    /// strict pass: only such a call may fail there, so `e` contributes
+    /// its value when the Oven has one (`fabs(-2.0)`) and is otherwise
+    /// unknown.
+    fn nc_strict_value(&mut self, e: ExprId, evaluable: bool) -> Value {
+        if !evaluable || self.names_unknown(e, 0) {
+            return Value::Unknown;
+        }
+        match self.nc_eval(e) {
+            v @ Value::Known(_) => v,
+            _ => Value::Unknown,
+        }
     }
 
     /// `e`, which names an unknown, evaluated on its own: only a success
