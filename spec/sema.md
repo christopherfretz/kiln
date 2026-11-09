@@ -5829,6 +5829,56 @@ for them.
   operand, as clang's `IgnoreParens`; codegen and the Oven emit and
   evaluate only the chosen operand
   (`ext.gnu.builtins/choose-expr*.cpp`).
+- **`_Generic` selection** (`act_on_generic_selection` in
+  `generic_sel.rs`; clang `CreateGenericSelectionExpr`; C11 6.5.1.1, a
+  clang extension in C++; WP-1114).
+  - **Controlling operand.**
+    - An expression operand is unevaluated. It gets the lvalue,
+      array-to-pointer and function-to-pointer conversions
+      (`conv::decay`): qualifiers are dropped, except that a class
+      prvalue keeps its cv-qualifiers.
+    - A side effect in that operand is warned, unless the operand is
+      dependent (-Wunevaluated-expression).
+    - A type operand is matched as written.
+  - **Association types**, checked in clang's order:
+    - The incomplete-type check applies to an expression operand only.
+      It is an error under `-fclang-compat=19`, and the C2y extension
+      `incomplete type 'T' in a '_Generic' association is a C2y
+      extension` at 22: two ids, because a `_19` compat row must keep
+      its kind.
+    - `not an object type` (a function, a reference or `void`) also
+      applies to an expression operand only.
+    - A variably modified type is an error.
+    - With an expression operand, an array type or a qualified
+      non-class type `will never be selected`
+      [-Wunreachable-code-generic-assoc, under -Wunreachable-code]. That
+      warning never invalidates the selection, even as an error.
+    - Two associations of the same type are an error: `type 'U' in
+      generic association compatible with previously specified type
+      'T'`, with the note `compatible type 'T' specified here`. In C++,
+      "compatible" means the same type.
+  - **Selection.** The association whose type is the controlling type
+    is selected, else `default`.
+    - More than one match is an error: `controlling expression type 'T'
+      compatible with N generic association types`, with one note per
+      match.
+    - No match and no `default` is an error: `controlling expression
+      type 'T' not compatible with any generic association type`.
+    - Both errors are reported at the operand's begin.
+  - **Result.** The `GenericSelectionExpr` (`Builder::generic_selection`)
+    takes the selected expression's type, value category and object
+    kind with no conversion, and its type/value dependence, as
+    `ChooseExpr` does.
+  - **Dependent selections.** A type-dependent operand, or any dependent
+    association type, leaves a result-dependent `<dependent type>`
+    prvalue. Substitution rebuilds it through `act_on_generic_selection`,
+    so every check runs at instantiation.
+  - **Looking through the selection.** `ExprArena::selected_operand` is
+    the selected expression. These all look through it, as clang's
+    `IgnoreParens` does: `ignore_parens`, the null pointer constant
+    test, bit-field references, the static_assert "evaluates to" note,
+    the Oven and codegen. Only the selected association is evaluated
+    and emitted (`ext.c11.generic/`).
 - **Binary conditional** `x ?: y` (`act_on_binary_conditional`, in
   `forms.rs`): a `BinaryConditionalOperator` with `x` shared through an
   `OpaqueValueExpr`. Unless both operands are glvalues of the same
