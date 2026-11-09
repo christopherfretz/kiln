@@ -79,10 +79,14 @@ Ninja) through `kiln-scan-deps`. What is missing (spec/modules.md
 
 ## Sanitizers and coverage
 
-- **Source-based coverage mapping.** `-fcoverage-mapping` (what
-  `llvm-cov show` and `llvm-cov report` need) is rejected.
-  `-fprofile-instr-generate` counters and `--coverage` work:
-  [WP-1003](BACKLOG.md).
+- **Source-based coverage mapping** (`-fcoverage-mapping`) writes
+  clang 19's mapping in every `-fclang-compat` mode, so against clang 20+
+  `llvm-cov` shows fewer regions around `&&`/`||` and constant
+  conditions. A function template specialization used only in constant
+  evaluation is missing from the report instead of showing as 0%; a few
+  generic-lambda and macro `#x` regions differ. Line and function
+  counts match clang 19's on the comparison programs. Details and rows:
+  [spec/landed/codegen/WP-1003.md](../spec/landed/codegen/WP-1003.md).
 - **gcov filters** `-fprofile-filter-files` and `-fprofile-exclude-files`
   are rejected: [WP-1004](BACKLOG.md).
 - **Profile-guided optimization is not part of 1.0.**

@@ -958,6 +958,18 @@ literal is one instruction and one step, not an interpreted loop.
   lowered as a call of the twin `__builtin_` function, so it folds with
   the twin's rules; under `-stdlib=libc++` such a call is a call of a
   non-constexpr function, as in clang.
+- **C library functions clang evaluates (WP-940):** a direct call of a
+  function whose recorded library twin (`Decls::lib_builtin`, spec/sema.md
+  §5.4) is one of `builtin::lib_evaluated` (`strlen`, `wcslen`, `strcmp`,
+  `wcscmp`, `strncmp`, `wcsncmp`, `memcmp`, `bcmp`, `wmemcmp`, `strchr`,
+  `wcschr`, `memchr`, `wmemchr`, `memcpy`, `memmove`, `wmemcpy`,
+  `wmemmove`: clang `VisitBuiltinCallExpr`'s `BIstrlen`-style cases) is an
+  `Op::Cce` check with clang's note "non-constexpr function 'strlen'
+  cannot be used in a constant expression" (no "declared here"), then the
+  twin `__builtin_` call. A constant expression fails at the note; a fold
+  (`__builtin_constant_p`, a GNU-folded array bound, codegen's
+  `fold_rvalue` and constant initializers) continues, so `strlen("abc")`
+  folds to 3 as in clang 19 and 22.
 - **Atomics (WP-154):** `__atomic_always_lock_free`, `__atomic_is_lock_free`
   and `__c11_atomic_is_lock_free` fold through `bi::LOCK_FREE` as clang
   19's `IntExprEvaluator`: a power-of-two size within the target's inline

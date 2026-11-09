@@ -3788,7 +3788,8 @@ pub mod builtin {
     /// attributes (`malloc`, `printf`, `strtol`, ...) are left out, except
     /// the ones clang constant-evaluates (`memcmp`, `bcmp`; WP-1055), which
     /// the never-constant check recognizes (spec/sema.md "Never
-    /// constant").
+    /// constant") and whose calls codegen folds through their `__builtin_`
+    /// twin (WP-940).
     pub static LIB: &[Info] = &[
         row(93, "abs", "ii", N | C),
         row(95, "labs", "LiLi", N | C),
@@ -4042,6 +4043,70 @@ pub mod builtin {
         row(2057, "sincos", "vdd*d*", N),
         row(2058, "sincosf", "vff*f*", N),
         row(2059, "sincosl", "vLdLd*Ld*", N),
+        // WP-902: `abort` (`NoThrow`, `NoReturn`: only a declaration whose
+        // type is `noreturn`, `__attribute__((noreturn))`, matches), the
+        // `<complex.h>` functions (`cproj` is `Const`; `creal` / `cimag` /
+        // `conj` are lowered inline by clang and are left out). The ids are
+        // kiln-private. The GNU `string.h` / `strings.h` rows are above
+        // (WP-1055).
+        row(2060, "abort", "v", N | R),
+        row(2061, "cabs", "dXd", N),
+        row(2062, "cabsf", "fXf", N),
+        row(2063, "cabsl", "LdXLd", N),
+        row(2064, "cacos", "XdXd", N),
+        row(2065, "cacosf", "XfXf", N),
+        row(2066, "cacosl", "XLdXLd", N),
+        row(2067, "cacosh", "XdXd", N),
+        row(2068, "cacoshf", "XfXf", N),
+        row(2069, "cacoshl", "XLdXLd", N),
+        row(2070, "carg", "dXd", N),
+        row(2071, "cargf", "fXf", N),
+        row(2072, "cargl", "LdXLd", N),
+        row(2073, "casin", "XdXd", N),
+        row(2074, "casinf", "XfXf", N),
+        row(2075, "casinl", "XLdXLd", N),
+        row(2076, "casinh", "XdXd", N),
+        row(2077, "casinhf", "XfXf", N),
+        row(2078, "casinhl", "XLdXLd", N),
+        row(2079, "catan", "XdXd", N),
+        row(2080, "catanf", "XfXf", N),
+        row(2081, "catanl", "XLdXLd", N),
+        row(2082, "catanh", "XdXd", N),
+        row(2083, "catanhf", "XfXf", N),
+        row(2084, "catanhl", "XLdXLd", N),
+        row(2085, "ccos", "XdXd", N),
+        row(2086, "ccosf", "XfXf", N),
+        row(2087, "ccosl", "XLdXLd", N),
+        row(2088, "ccosh", "XdXd", N),
+        row(2089, "ccoshf", "XfXf", N),
+        row(2090, "ccoshl", "XLdXLd", N),
+        row(2091, "cexp", "XdXd", N),
+        row(2092, "cexpf", "XfXf", N),
+        row(2093, "cexpl", "XLdXLd", N),
+        row(2094, "clog", "XdXd", N),
+        row(2095, "clogf", "XfXf", N),
+        row(2096, "clogl", "XLdXLd", N),
+        row(2097, "cpow", "XdXdXd", N),
+        row(2098, "cpowf", "XfXfXf", N),
+        row(2099, "cpowl", "XLdXLdXLd", N),
+        row(2100, "cproj", "XdXd", N | C),
+        row(2101, "cprojf", "XfXf", N | C),
+        row(2102, "cprojl", "XLdXLd", N | C),
+        row(2103, "csin", "XdXd", N),
+        row(2104, "csinf", "XfXf", N),
+        row(2105, "csinl", "XLdXLd", N),
+        row(2106, "csinh", "XdXd", N),
+        row(2107, "csinhf", "XfXf", N),
+        row(2108, "csinhl", "XLdXLd", N),
+        row(2109, "csqrt", "XdXd", N),
+        row(2110, "csqrtf", "XfXf", N),
+        row(2111, "csqrtl", "XLdXLd", N),
+        row(2112, "ctan", "XdXd", N),
+        row(2113, "ctanf", "XfXf", N),
+        row(2114, "ctanl", "XLdXLd", N),
+        row(2115, "ctanh", "XdXd", N),
+        row(2116, "ctanhf", "XfXf", N),
+        row(2117, "ctanhl", "XLdXLd", N),
     ];
 
     /// The [`LIB`] row of the C library function spelled `name`.
@@ -4080,6 +4145,33 @@ pub mod builtin {
     pub fn lib_gnu_only(id: u32) -> bool {
         (2057..=2059).contains(&id)
             || matches!(id, 178 | 183 | 185 | 671 | 1015 | 1129 | 1132 | 1145 | 1175)
+    }
+
+    /// WP-940: whether a call of a C library function whose `__builtin_` twin
+    /// is `b` is evaluated (after a note that keeps it from being a constant
+    /// expression): clang `VisitBuiltinCallExpr`'s `BIstrlen` / `BIwcslen`,
+    /// `BIstrcmp` family, `BIstrchr` family and `BImemcpy` family cases.
+    pub fn lib_evaluated(b: u32) -> bool {
+        matches!(
+            b,
+            STRLEN
+                | WCSLEN
+                | STRCMP
+                | WCSCMP
+                | STRNCMP
+                | WCSNCMP
+                | MEMCMP
+                | BCMP
+                | WMEMCMP
+                | STRCHR
+                | WCSCHR
+                | MEMCHR
+                | WMEMCHR
+                | MEMCPY
+                | MEMMOVE
+                | WMEMCPY
+                | WMEMMOVE
+        )
     }
 
     /// WP-380: the `__builtin_` twin of the [`LIB`] function `name` when

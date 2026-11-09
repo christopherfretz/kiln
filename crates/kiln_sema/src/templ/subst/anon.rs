@@ -254,6 +254,19 @@ impl Substituter<'_, '_, '_> {
                 if let Some(t) = QualType::from_raw(node.b) {
                     let Ok(ts) = self.expand_types(&[t], node.loc) else { continue };
                     for t in ts {
+                        // [dcl.align]/3: each substituted type-id is an
+                        // `alignof` operand, so it is complete; reported
+                        // at the attribute (clang `CheckAlignasTypeArgument`
+                        // from `instantiateDependentAlignedAttr`).
+                        if !self.sema.check_trait_operand_named(
+                            kiln_ast::expr::TraitKind::AlignOf,
+                            "alignas",
+                            t,
+                            node.loc,
+                            None,
+                        ) {
+                            continue;
+                        }
                         let n = AttrNode { b: t.to_raw(), ..node };
                         out.push(self.sema.ast.attrs.push(n));
                     }
