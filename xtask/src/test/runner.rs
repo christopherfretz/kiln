@@ -67,6 +67,17 @@ pub struct Config {
     /// on `PATH` is an ERROR rather than a SKIP (`spec/harness.md`
     /// "Debugger tests").
     pub require_debuggers: bool,
+    /// `--debug-sweep`: the debug-info sweep (`spec/harness.md` "Debug-info
+    /// sweep"); `None` outside it.
+    pub debug_sweep: Option<DebugSweep>,
+}
+
+/// The debug-info sweep's configuration.
+#[derive(Debug)]
+pub struct DebugSweep {
+    /// `llvm-dwarfdump`, which checks each `-g` object (`--verify`);
+    /// `None` when there is none, and the sweep only compiles.
+    pub dwarfdump: Option<PathBuf>,
 }
 
 /// Outcome of one test.
@@ -213,6 +224,9 @@ impl Test<'_> {
         if self.cfg.meta_header.is_some() {
             return meta_header_skip(spec, source);
         }
+        if self.cfg.debug_sweep.is_some() {
+            return debug_sweep_skip(spec);
+        }
         None
     }
 
@@ -232,20 +246,28 @@ impl Test<'_> {
         })
     }
 
-    fn evaluate(&mut self) -> (Status, Option<String>, String) {
+    /// The test's source and its parsed directives, or the ERROR result.
+    fn read_spec(&self) -> Result<(String, TestSpec), (Status, Option<String>, String)> {
         let source = match fs::read(&self.case.path) {
             Ok(b) => String::from_utf8_lossy(&b).into_owned(),
-            Err(e) => return (Status::Error, None, format!("cannot read test: {e}")),
+            Err(e) => return Err((Status::Error, None, format!("cannot read test: {e}"))),
         };
-        let spec = match directives::parse(&source, self.case.lang) {
-            Ok(s) => s,
+        match directives::parse(&source, self.case.lang) {
+            Ok(s) => Ok((source, s)),
             Err(errs) => {
                 let mut d = String::from("malformed directives:\n");
                 for e in errs {
                     let _ = writeln!(d, "  {e}");
                 }
-                return (Status::Error, None, d);
+                Err((Status::Error, None, d))
             }
+        }
+    }
+
+    fn evaluate(&mut self) -> (Status, Option<String>, String) {
+        let (source, spec) = match self.read_spec() {
+            Ok(r) => r,
+            Err(e) => return e,
         };
         if let Some(n) = spec.mem_mib {
             let budget = MemLimit { mib: n };
@@ -298,6 +320,9 @@ impl Test<'_> {
         }
         if let Some(verdict) = self.prebuild_modules(&spec) {
             return verdict;
+        }
+        if let Some(sweep) = &self.cfg.debug_sweep {
+            return self.debug_sweep(&spec, sweep.dwarfdump.as_deref());
         }
         let outcome = match spec.expect {
             Expect::CompileOk => self.compile_ok(&spec),
@@ -892,6 +917,65 @@ impl Test<'_> {
             )));
         }
         self.check_diags(spec, &diag_parse::parse(&stderr))
+    }
+
+    /// The debug-info sweep of one test (`--debug-sweep`): the compiler
+    /// builds an object without `-g`, and, when it can, again with `-g`,
+    /// which must succeed with an object that `dwarfdump --verify` accepts.
+    /// A test that does not compile to an object without `-g` (an xfail, a
+    /// `-fsyntax-only` in its `args:`) is a SKIP; `xfail` does not apply,
+    /// nor do the diags, the oracles or the budgets.
+    fn debug_sweep(
+        &mut self,
+        spec: &TestSpec,
+        dwarfdump: Option<&Path>,
+    ) -> (Status, Option<String>, String) {
+        match self.debug_sweep_check(spec, dwarfdump) {
+            Ok(None) => (Status::Pass, None, String::new()),
+            Ok(Some(why)) => (Status::Skip, Some(why), String::new()),
+            Err(Problem::Fail(d)) => (Status::Fail, None, d),
+            Err(Problem::Broken(d)) => (Status::Error, None, d),
+            Err(Problem::Killed { mib, details }) => {
+                (Status::Killed, Some(format!("memory limit {mib} MiB")), details)
+            }
+        }
+    }
+
+    /// [`Self::debug_sweep`]: `Ok(Some(reason))` skips the test.
+    fn debug_sweep_check(
+        &mut self,
+        spec: &TestSpec,
+        dwarfdump: Option<&Path>,
+    ) -> Result<Option<String>, Problem> {
+        let dir = self.scratch()?.to_path_buf();
+        let plain = dir.join("plain.o");
+        let o = self.compile(spec, &["-c"], Some(&plain))?;
+        if !o.success() || !plain.is_file() {
+            let why = format!("does not compile to an object without -g ({})", o.describe_end());
+            return Ok(Some(why));
+        }
+        let with_g = dir.join("g.o");
+        let o = self.compile(spec, &["-c", "-g"], Some(&with_g))?;
+        if !o.success() || !with_g.is_file() {
+            return Err(Problem::Fail(format!(
+                "compiles without -g, but the compiler failed with -g ({})\n{}",
+                o.describe_end(),
+                indent(&o.stderr_str())
+            )));
+        }
+        let Some(dwarfdump) = dwarfdump else { return Ok(None) };
+        let mut c = Command::new(dwarfdump);
+        c.arg("--verify").arg(&with_g);
+        let shown = Shown(&c).to_string();
+        let o = self.exec("llvm-dwarfdump", &c, self.cfg.compile_timeout)?;
+        if !o.success() {
+            return Err(Problem::Fail(format!(
+                "the -g object fails `{shown}` ({})\n{}",
+                o.describe_end(),
+                indent(&String::from_utf8_lossy(&o.stdout))
+            )));
+        }
+        Ok(None)
     }
 
     fn scratch(&self) -> Result<&Path, Problem> {
@@ -1856,6 +1940,22 @@ const META_HEADER_HELPERS: &[&str] = &["__kiln_data_members", "__kiln_info_array
 /// Functions `tests/support/kiln_meta.h` declares in `std::meta` that the
 /// standard does not (kiln extensions without the `__kiln_` prefix).
 const META_HEADER_EXTENSIONS: &[&str] = &["name_of"];
+
+/// Why the debug-info sweep (`--debug-sweep`) leaves a test out: only the
+/// kinds that compile valid code to an object (compile-ok, run, ir,
+/// layout, vtables, debugger) are swept.
+pub(super) fn debug_sweep_skip(spec: &TestSpec) -> Option<String> {
+    let swept = matches!(
+        spec.expect,
+        Expect::CompileOk
+            | Expect::Run
+            | Expect::Ir
+            | Expect::Layout
+            | Expect::Vtables
+            | Expect::Debugger
+    );
+    (!swept).then(|| format!("not swept (`expect: {}`, `--debug-sweep`)", spec.expect.as_str()))
+}
 
 /// Why the header-differential mode (`--meta-header`) leaves a test out,
 /// or `None` when it runs it: it must include a `kiln_meta*.h`, not say
