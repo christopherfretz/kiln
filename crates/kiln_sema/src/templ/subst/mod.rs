@@ -366,6 +366,17 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             if let ArgView::Expr { expr, .. } = a.view() {
                 self.sema.mark_shared_expr_referenced(expr);
             }
+            // A canonical non-dependent expression argument (the `2` of a
+            // dependent `Arr<T, 2>` in a conversion-function-id's
+            // canonical type, [temp.dep.expr]/3): its first expression
+            // stands for it, to be converted against the parameter when
+            // the specialization is formed again (WP-1126).
+            if let ArgView::Profile(p) = a.view()
+                && let Some(e) = self.sema.ast.types.profile_expr(p)
+            {
+                self.sema.mark_shared_expr_referenced(e);
+                return Ok(self.sema.ast.builder().template_arg_expr(e));
+            }
             return Ok(a);
         }
         match a.view() {

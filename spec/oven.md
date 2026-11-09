@@ -1938,7 +1938,10 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
 
 - *Which calls allocate.* A call of a replaceable global
   `operator new`/`operator new[]` (written `::operator new(n)` or as
-  `__builtin_operator_new(n)`) is constant only when the function being
+  `__builtin_operator_new(n)`), or of a global type-aware one usable in
+  constant evaluation (P2719, `::operator new(std::type_identity<T>{}, n,
+  al)`, whose `type_identity` argument is evaluated for effect and whose
+  size or pointer is the next argument; WP-1112), is constant only when the function being
   evaluated is `allocate` of a specialization of the `std::allocator`
   primary template whose first template argument is a type (clang's
   `getStdAllocatorCaller`; `new_delete::std_allocator_elem`), and likewise
