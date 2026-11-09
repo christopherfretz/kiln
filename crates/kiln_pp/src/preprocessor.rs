@@ -228,6 +228,9 @@ pub(crate) struct FileFrame<'a> {
     /// Locations of the U+FFFD replacing invalid UTF-8 (ascending; empty
     /// for a valid file): reported when a token covers one.
     pub(crate) bad_utf8: Vec<Loc>,
+    /// An `#include`d file whose `-ftime-trace` `Source` span is open
+    /// (ended when the frame pops; spec/driver.md "Time trace").
+    pub(crate) traced: bool,
 }
 
 /// A macro expansion or a token stream being read.
@@ -605,6 +608,13 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             .iter()
             .map(|r| base.with_offset(r.offset))
             .collect();
+        // `-ftime-trace`: clang's `Source` span covers each `#include`d
+        // file, the parse of its declarations included (the parser pulls
+        // tokens as it goes).
+        let traced = inc.is_some() && kiln_source::trace::enabled();
+        if traced {
+            kiln_source::trace::source_begin(|| self.sm.file_name(file).to_owned());
+        }
         let mut lx = Lexer::new(self.sm, self.interner, file, base, self.lex_opts);
         if self.comment_handler.is_some() {
             lx.set_record_comments(true);
@@ -623,6 +633,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             mi: MiOpt::default(),
             unit: None,
             bad_utf8,
+            traced,
         })));
         self.file_change(FileChange::Enter { file, from, system, extern_c });
     }
@@ -1078,6 +1089,9 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             return true;
         }
         let Some(Frame::File(mut f)) = self.frames.pop() else { unreachable!("top is a file") };
+        if f.traced {
+            kiln_source::trace::source_end();
+        }
         let exited = f.file;
         if let Some(save) = f.unit.take() {
             self.end_unit(save);

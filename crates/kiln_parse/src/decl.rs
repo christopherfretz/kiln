@@ -130,7 +130,9 @@ impl Parser<'_, '_> {
         // [temp.point]/7: the end of the translation unit is a point of
         // instantiation of every pending definition.
         let phase = activity::enter(activity::Phase::Sema, Loc::INVALID);
+        let pending = kiln_source::trace::Scope::new("PerformPendingInstantiations");
         self.s.end_of_tu_instantiations();
+        drop(pending);
         // Then clang's `ActOnEndOfTranslationUnit` checks (delegating
         // constructor cycles), after the pending instantiations as there.
         self.s.act_on_end_of_translation_unit();
@@ -205,6 +207,7 @@ impl Parser<'_, '_> {
             return;
         }
         if self.at_gnu_attrs_before_linkage_spec(0) {
+            let _trace = self.trace_decl();
             // `__attribute__((section("s"))) extern "C" int f(int);`: clang
             // parses the GNU attributes as decl-specifiers, then the
             // linkage specification with that `DeclSpec` (`ParseLinkage`).
@@ -253,6 +256,7 @@ impl Parser<'_, '_> {
                     TokKind::StringLit(_) | TokKind::RawStringLit(_)
                 ) =>
             {
+                let _trace = self.trace_decl();
                 self.parse_linkage_spec_with(Vec::new());
             }
             // `template [: r :] < args > :: name x;` declares `x` (a
@@ -275,9 +279,20 @@ impl Parser<'_, '_> {
                 self.parse_attributed_using();
             }
             _ => {
+                let _trace = self.trace_decl();
                 self.parse_simple_declaration(DeclaratorContext::File, true);
             }
         }
+    }
+
+    /// `-ftime-trace` (spec/driver.md "Time trace"): clang's
+    /// `ParseDeclarationOrFunctionDefinition` span, for the namespace-scope
+    /// declarations clang parses there (not a `template`, `namespace`,
+    /// `using`, `static_assert` or `export` declaration).
+    fn trace_decl(&self) -> kiln_source::trace::Scope {
+        kiln_source::trace::Scope::with_detail("ParseDeclarationOrFunctionDefinition", || {
+            kiln_source::trace::loc_detail(self.sm, self.loc())
+        })
     }
 
     /// Skips a declaration kiln does not parse: to a `;`, or past a
@@ -4539,6 +4554,11 @@ impl Parser<'_, '_> {
         match f {
             Some(f) => {
                 let ctor = matches!(d.special, Some((SpecialName::Constructor(_), _)));
+                // `-ftime-trace`: clang's `ParseFunctionDefinition` (not
+                // for the late-parsed member bodies, as clang).
+                let _trace = kiln_source::trace::Scope::with_detail("ParseFunctionDefinition", || {
+                    self.decl_name(f)
+                });
                 self.parse_function_definition(f, ctor);
             }
             None => self.skip_function_body(),

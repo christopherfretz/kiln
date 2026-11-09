@@ -361,6 +361,7 @@ impl Cg<'_> {
 
     /// clang `GenerateCode` for the function definition `d`.
     pub fn emit_fn_def(&mut self, d: DeclId) -> R<()> {
+        let _trace = kiln_source::trace::Scope::with_detail("CodeGen Function", || self.qualified_name(d));
         let f = self.get_fn(d)?;
         let f = self.fn_for_definition(d, f)?;
         self.gen_code(d, f, None)?;

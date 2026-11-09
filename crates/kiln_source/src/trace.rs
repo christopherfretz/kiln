@@ -343,6 +343,38 @@ pub fn source_end() {
     });
 }
 
+/// `loc` as clang's `SourceLocation::printToString` writes it in a
+/// trace detail: `file:line:col` at the presumed position (`<invalid
+/// loc>` when it has none).
+pub fn loc_detail(sm: &crate::SourceManager, loc: crate::Loc) -> String {
+    match sm.presumed_line_col(loc) {
+        Some(p) => format!("{}:{}:{}", p.file_name, p.line, p.col),
+        None => "<invalid loc>".to_owned(),
+    }
+}
+
+/// The range `begin`..`end` (`end` the last token's location) as clang's
+/// `SourceRange::printToString` writes it in a trace detail:
+/// `<file:line:col>` for one location, `<file:line:col, col:c>` on one
+/// line, `<file:line:col, line:l:c>` across lines.
+pub fn range_detail(sm: &crate::SourceManager, begin: crate::Loc, end: crate::Loc) -> String {
+    let Some(b) = sm.presumed_line_col(begin) else { return "<<invalid sloc>>".to_owned() };
+    let mut s = format!("<{}:{}:{}", b.file_name, b.line, b.col);
+    if end != begin {
+        match sm.presumed_line_col(end) {
+            Some(e) if e.file_name != b.file_name => {
+                s.push_str(&format!(", {}:{}:{}", e.file_name, e.line, e.col));
+            }
+            Some(e) if e.line != b.line => s.push_str(&format!(", line:{}:{}", e.line, e.col)),
+            Some(e) if e.col != b.col => s.push_str(&format!(", col:{}", e.col)),
+            Some(_) => {}
+            None => s.push_str(", <invalid sloc>"),
+        }
+    }
+    s.push('>');
+    s
+}
+
 /// A scoped span: begun by [`Scope::new`], ended when dropped.
 #[derive(Debug)]
 #[must_use = "the span ends when the scope is dropped"]
