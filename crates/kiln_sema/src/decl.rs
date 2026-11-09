@@ -6045,7 +6045,18 @@ impl Sema<'_, '_> {
             // `'extern' variable has an initializer`).
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
-        let init = self.reject_objectless_method_init(init);
+        let mut init = self.reject_objectless_method_init(init);
+        // A reference bound to, or a placeholder deduced from, a variable
+        // template specialization or static data member of unknown bound
+        // sees the bound its definition gives (clang `getCompletedType`
+        // in `TryReferenceInitialization` and deduction; WP-907).
+        if let Initializer::Expr(e) = init
+            && self.ast.decls.get(v).ty().is_some_and(|t| {
+                self.ast.types.is_reference(t) || self.contains_undeduced_auto(t)
+            })
+        {
+            init = Initializer::Expr(self.complete_expr_array_bound(e));
+        }
         self.act_on_init_inner(v, init);
         self.check_cleanup_deduced(v);
         self.check_static_tls(v, paren);
