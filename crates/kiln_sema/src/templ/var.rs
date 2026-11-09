@@ -286,7 +286,7 @@ impl Sema<'_, '_> {
     /// with arguments `args` prints (its qualified name).
     pub(crate) fn spec_name(&self, tmpl: DeclId, args: ArgListId) -> String {
         let mut s = self.qualified_decl_name(tmpl);
-        let names = crate::names::SemaNames::new(self);
+        let names = crate::names::sema_names(self);
         kiln_ast::types::write_arg_list(&self.ast.types, &names, args, &mut s);
         s
     }
@@ -297,7 +297,7 @@ impl Sema<'_, '_> {
     /// typedef `v<_Del>` the arguments were written with).
     pub(crate) fn spec_decl_name(&self, tmpl: DeclId, args: ArgListId) -> String {
         let mut s = self.qualified_decl_name(tmpl);
-        let names = crate::names::SemaNames::new(self);
+        let names = crate::names::sema_names(self);
         let canon = self.ast.types.canonical_args(args);
         kiln_ast::types::write_arg_list_scoped(&self.ast.types, &names, canon, &mut s);
         s
@@ -323,7 +323,7 @@ impl Sema<'_, '_> {
     /// own-initializer diagnostics: `ap<T *>`, `m<int>`).
     fn unscoped_spec_name(&self, v: DeclId, args: ArgListId) -> String {
         let mut s = self.decl_name(v);
-        let names = crate::names::SemaNames::new(self);
+        let names = crate::names::sema_names(self);
         kiln_ast::types::write_arg_list(&self.ast.types, &names, args, &mut s);
         s
     }

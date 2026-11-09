@@ -146,7 +146,7 @@ mod vexing;
 mod visibility;
 
 use kiln_abi::Target;
-use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type, vector_diag_arg};
+use kiln_ast::types::{PrintOptions, TargetTypes, print_type};
 use kiln_ast::{Ast, AstBuilder, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
@@ -2158,32 +2158,18 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// does not desugar `__builtin_va_list`, so a difference only there
     /// gives no `aka`.
     pub fn ty_arg(&self, q: QualType) -> String {
-        let names = names::SemaNames::new(self);
-        if let Some(v) = vector_diag_arg(&self.ast.types, &names, q, self.clang_compat >= 22) {
-            return v;
-        }
-        let s = print_type(&self.ast.types, &names, q, PrintOptions::SUGARED);
-        let a = aka(&self.ast.types, &names, q).filter(|a| {
-            self.va_list_type.is_none_or(|v| {
-                let vc = print_type(&self.ast.types, &names, v, PrintOptions::CANONICAL);
-                s.replace("__builtin_va_list", &vc) != *a
-            })
-        });
-        match a {
-            Some(a) => format!("'{s}' (aka '{a}')"),
-            None => format!("'{s}'"),
-        }
+        names::sema_names(self).type_arg(q, self.va_list_type)
     }
 
     /// `q` printed canonically (fully qualified) without quotes.
     pub fn ty_canonical_str(&self, q: QualType) -> String {
-        let names = names::SemaNames::new(self);
+        let names = names::sema_names(self);
         print_type(&self.ast.types, &names, q, PrintOptions::CANONICAL)
     }
 
     /// `q` printed without quotes.
     pub fn ty_str(&self, q: QualType) -> String {
-        let names = names::SemaNames::new(self);
+        let names = names::sema_names(self);
         print_type(&self.ast.types, &names, q, PrintOptions::SUGARED)
     }
 
@@ -2191,7 +2177,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// prints a declaration's own type (`Context.getTypeDeclType(D)`, a
     /// bare `RecordType`), e.g. `N::X<int>`.
     pub fn decl_ty_str(&self, q: QualType) -> String {
-        let names = names::SemaNames::new(self);
+        let names = names::sema_names(self);
         print_type(&self.ast.types, &names, q, PrintOptions::CANONICAL)
     }
 
@@ -2199,7 +2185,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     pub fn qualified_decl_name(&self, d: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
-        names::SemaNames::new(self).write_decl_name(d, true, &mut s);
+        names::sema_names(self).write_decl_name(d, true, &mut s);
         s
     }
 
@@ -2208,14 +2194,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     pub fn unqualified_decl_name(&self, d: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
-        names::SemaNames::new(self).write_decl_name(d, false, &mut s);
+        names::sema_names(self).write_decl_name(d, false, &mut s);
         s
     }
 
     /// A nested-name-specifier as written (`N::M::`, `::`).
     pub fn nns_str(&self, n: kiln_ast::ids::NnsId) -> String {
         let mut s = String::new();
-        kiln_ast::types::write_nns(&self.ast.types, &names::SemaNames::new(self), n, &mut s);
+        kiln_ast::types::write_nns(&self.ast.types, &names::sema_names(self), n, &mut s);
         s
     }
 

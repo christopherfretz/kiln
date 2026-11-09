@@ -24,7 +24,7 @@ impl Sema<'_, '_> {
         if let Some((_, info)) = self.ast.spec_info(f)
             && self.kind_of(info.template) == DeclKind::FunctionTemplate
         {
-            let names = crate::names::SemaNames::new(self);
+            let names = crate::names::sema_names(self);
             kiln_ast::types::write_arg_list(&self.ast.types, &names, info.args, &mut name);
         }
         name

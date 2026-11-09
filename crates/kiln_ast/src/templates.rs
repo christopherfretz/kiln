@@ -374,6 +374,12 @@ pub struct TemplateTables {
     /// GCC-style names (`display_string_of`) print up to, explicitly
     /// written defaults included (spec/reflection.md §3.9).
     written_args: FxHashMap<DeclId, u32>,
+    /// The template arguments written on an explicit specialization or
+    /// explicit instantiation of a class template, as written (sugar and
+    /// trailing defaults kept): clang's `getTemplateArgsAsWritten`, which
+    /// the type printer prints in place of the converted arguments
+    /// (`TypePrinter::printTag`; spec/codegen.md "Sanitizers").
+    args_as_written: FxHashMap<DeclId, ArgListId>,
     /// Functions explicitly instantiated by a definition before their
     /// template's definition was seen, in order: instantiated at the end
     /// of the TU, where codegen defines them (clang
@@ -462,6 +468,7 @@ impl Default for TemplateTables {
             ref_var_insts: Vec::new(),
             moved_class_insts: FxHashSet::default(),
             written_args: FxHashMap::default(),
+            args_as_written: FxHashMap::default(),
             late_explicit_insts: Vec::new(),
             late_explicit_set: FxHashSet::default(),
             preferred_named: FxHashSet::default(),
@@ -626,6 +633,24 @@ impl TemplateTables {
         self.written_args.get(&spec).copied()
     }
 
+    /// Records the template arguments written on an explicit
+    /// specialization or instantiation `spec`
+    /// ([`Self::args_as_written`]); with `replace`, over a previous
+    /// record.
+    pub fn set_args_as_written(&mut self, spec: DeclId, args: ArgListId, replace: bool) {
+        if replace {
+            self.args_as_written.insert(spec, args);
+        } else {
+            self.args_as_written.entry(spec).or_insert(args);
+        }
+    }
+
+    /// The template arguments written on explicit specialization or
+    /// instantiation `spec`, if any.
+    pub fn args_as_written(&self, spec: DeclId) -> Option<ArgListId> {
+        self.args_as_written.get(&spec).copied()
+    }
+
     /// The members explicitly instantiated right after `after`, in order.
     pub fn explicit_member_insts_after(&self, after: DeclId) -> &[DeclId] {
         self.explicit_member_insts.get(&after).map_or(&[], Vec::as_slice)
@@ -761,6 +786,7 @@ impl HeapSize for TemplateTables {
         r.push(MemRow::of_map("templ.param_objects", &self.param_objects));
         r.push(MemRow::of_map("templ.param_object_values", &self.param_object_values));
         r.push(MemRow::of_map("templ.written_args", &self.written_args));
+        r.push(MemRow::of_map("templ.args_as_written", &self.args_as_written));
         r
     }
 }

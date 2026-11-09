@@ -963,6 +963,28 @@ impl TypeContext {
         }
     }
 
+    /// The pointee of a pointer or reference type with its sugar (clang's
+    /// `getPointeeType` on the written type: through the first pointer or
+    /// reference node in `q`'s sugar); [`Self::pointee`] (canonical) for
+    /// any other type.
+    pub fn pointee_sugared(&self, q: QualType) -> Option<QualType> {
+        let mut cur = q;
+        loop {
+            match self.view(cur.ty()) {
+                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => {
+                    return Some(p);
+                }
+                _ => {
+                    let next = self.desugar_once(cur);
+                    if next == cur {
+                        return self.pointee(q);
+                    }
+                    cur = next;
+                }
+            }
+        }
+    }
+
     /// The element type of a (canonical) array, vector or complex type.
     #[inline]
     pub fn element(&self, q: QualType) -> Option<QualType> {

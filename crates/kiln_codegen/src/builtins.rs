@@ -2065,27 +2065,10 @@ impl Cg<'_> {
     /// getMaxAlignment()`, e.g. libc++ `atomic_ref`'s `_Aligned_Tp*`).
     pub(crate) fn natural_pointee_align(&mut self, pq: QualType) -> u64 {
         let Some(p) = self.ast.types.pointee(pq) else { return 1 };
-        if let Some(a) = self.sugared_pointee(pq).and_then(|s| self.typedef_align_attr(s)) {
+        if let Some(a) = self.ast.types.pointee_sugared(pq).and_then(|s| self.typedef_align_attr(s)) {
             return a;
         }
         self.pointee_layout(p).1
-    }
-
-    /// The pointee of the pointer type `q` with its sugar (clang
-    /// `getPointeeType`, through the first `PointerType` in `q`'s sugar).
-    fn sugared_pointee(&self, q: QualType) -> Option<QualType> {
-        let types = &self.ast.types;
-        let mut q = q;
-        loop {
-            if let kiln_ast::types::TypeView::Pointer(p) = types.view(q.ty()) {
-                return Some(p);
-            }
-            let d = types.desugar_once(q);
-            if d.ty() == q.ty() {
-                return None;
-            }
-            q = d;
-        }
     }
 
     /// The alignment of the first typedef in the sugar of `q` (clang
