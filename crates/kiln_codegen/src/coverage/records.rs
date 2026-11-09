@@ -208,7 +208,7 @@ impl Cg<'_> {
         let opts = self.opts;
         let out = if let Some(rc) = rc {
             let mut fold = |e| self.fold_int(e);
-            let mut b = mapping::Builder::new(ast, l, rc, &mut fold);
+            let mut b = mapping::Builder::new(ast, l, rc, &mut fold, opts.clang_compat);
             b.function(d);
             let mut parts = b.into_parts();
             let mut t = Table {
