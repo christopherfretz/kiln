@@ -21,6 +21,7 @@
 //! `MultipleIncludeOpt`) are in the core.
 #![forbid(unsafe_code)]
 
+pub mod bmi;
 mod builtin;
 mod callbacks;
 mod cond;
