@@ -88,7 +88,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fkiln-source-path-style=<clang\|gcc>` | kiln: how `__builtin_FILE()`, `__builtin_FILE_NAME()`, `std::source_location::current()` (also as a default argument) and `std::meta::source_location_of` spell a file (`SourcePathStyle`, `SourceManager::presumed_file_name`; WP-636). `clang` (the default): the presumed name as written, as clang 19 and 22 (`SourceLocExpr::EvaluateInContext`), so `-I /p//inc/./` gives `/p//inc/./x.h`; `gcc`: GCC 16.1's, an included file's absolute path with empty and `.` components dropped and `dir/..` folded through a real directory (`/p/inc/x.h`; spec/reflection.md §3.9). `-fmacro-prefix-map=` applies after either; `__FILE__` and `__BASE_FILE__` keep clang's spelling under both. Any other value is `invalid value`; the last one wins |
 | `-fconstexpr-steps=N`, `-fconstexpr-depth=N`, `-fconstexpr-backtrace-limit=N` | constant-evaluation limits, as clang's (defaults 1048576, 512, 10; a backtrace limit of 0 shows every frame); `constexpr_opts`, spec/oven.md "Integration". GCC's `-fconstexpr-ops-limit=N` (passed by the reference workload's generator compile) sets the step budget too |
 | `-ffile-prefix-map=<old>=<new>`, `-fmacro-prefix-map=<old>=<new>` | `__FILE__`, `__BASE_FILE__`, `__builtin_FILE()`, `std::source_location` and `std::meta::source_location_of` spell a path starting with `<old>` with `<new>` instead (`SourceManager::remap_macro_path`; clang `processPathForFileMacro`). Entries are tried in descending order of `<old>`, the first match wins, and the match is a plain string prefix. A value without `=` is `invalid value` (deviation 20). `-ffile-prefix-map=` also remaps debug information file names, as `-fdebug-prefix-map=` does ("Debug information flags") |
-| `-fcontract-evaluation-semantic=<ignore\|observe\|enforce\|quick_enforce>` | the contract evaluation semantic of the translation unit (GCC's spelling; `quick-enforce` also accepted; default `enforce`; `ParseOptions::contract_semantic`, `Ast::contract_semantic`); any other value is `unsupported argument`. Until WP-707 only `ignore` compiles a program with contracts to IR; the others are `unsupported: contract evaluation (WP-707)` (spec/contracts.md §6) |
+| `-fcontract-evaluation-semantic=<ignore\|observe\|enforce\|quick_enforce>` | the contract evaluation semantic of the translation unit (GCC's spelling; `quick-enforce` also accepted; default `enforce`; `ParseOptions::contract_semantic`, `Ast::contract_semantic`); any other value is `unsupported argument`. All four semantics compile to IR and are evaluated in the Oven (spec/contracts.md §6, WP-707) |
 | `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
 | `-f[no-]reflection` | P2996 reflection (WP-267; on by default at C++26 since WP-920, operator decision Q7; the last one wins; below C++26 off whatever the flag, an explicit `-freflection` accepted and ignored; spec/reflection.md §1.4): `^^`, `[:`, `:]` are lexed, and `^^`, type splices and the kiln intrinsics are accepted (spec/sema.md §8a, spec/parse.md §5.2). `__cpp_reflection` is not predefined. Passed to the preprocessor, the parser and sema for `-E`, `-fsyntax-only` and codegen jobs |
 | `-fkiln-reflection-mangling=<kiln\|gcc\|kiln-hashed>` | kiln: how a `std::meta::info` template argument is spelled in a symbol (`kiln_abi::ReflectionMangling`, `CodegenOptions::reflection_mangling`; WP-501). `kiln` (the default): `L u6__info <kind> <operand> E`; `gcc`: GCC 16.1's `L Dm <kind> <operand> E` with `info` itself `Dm`, link-compatible with `g++-16`; `kiln-hashed`: `L u6__info h<32 hex> E`, a prototype. All three give the reflection its reflectee's linkage (spec/reflection.md §8.3). Any other value is `invalid value`; the last one wins. Codegen jobs only |
@@ -361,9 +361,13 @@ docs/design/sanitizers.md) reads the sanitizer options as clang 19's
   safe-stack, kcfi, memtag, the kernel variants, ...) is
   `drv_unsupported_flag` (`'-fsanitize=<x>' is not supported by kiln`).
   Of `undefined`, codegen emits signed-integer-overflow,
-  integer-divide-by-zero, shift-base, shift-exponent, return, unreachable
-  and vla-bound checks (spec/codegen.md "Sanitizers"); the other members
-  are accepted and emit no check yet (spec/landed/codegen/WP-675.md).
+  integer-divide-by-zero, shift-base, shift-exponent, return,
+  unreachable, vla-bound, null, alignment, object-size, array-bounds,
+  bool, enum, float-cast-overflow, pointer-overflow, nonnull-attribute,
+  returns-nonnull-attribute and builtin checks, and the implicit
+  conversion checks (spec/codegen.md §5.2; WP-675, WP-871). vptr,
+  function, the nullability checks and local-bounds are accepted and
+  emit no check yet (spec/landed/codegen/WP-871.md).
 - `-fsanitize-ignorelist=`/`-fsanitize-blacklist=` (the file must exist:
   `no such file or directory: '<f>'`; not applied yet),
   `-fno-sanitize-ignorelist`, `-f[no-]sanitize-address-use-after-scope`,
@@ -1050,7 +1054,8 @@ the current directory (standard input is `-`). `-o -` is standard output.
   then 1.
 
 Not implemented: `-###` with `-E` or `-fsyntax-only` ("not implemented
-yet") and debug information.
+yet"). Debug information (`-g` and its levels, `-gdwarf-N`) is
+implemented; see "Debug information flags" (WP-814).
 
 ## Modules
 
@@ -1146,6 +1151,176 @@ whatever its name (`clang++`, a path to `kiln++`); its flags are kiln's.
 Exit status 0 after a clean scan, 1 otherwise (diagnostics under
 `Diagnostics while scanning dependencies for '<src>':`, the empty
 document on stdout). Warnings are not printed.
+
+## Precompiled headers (WP-1023)
+
+kiln accepts clang's precompiled-header (PCH) driver interface, so build
+systems that precompile headers work unchanged. The main one is CMake's
+`target_precompile_headers`, which uses `Compiler/Clang.cmake`'s flags.
+**In 1.0 a kiln PCH is about correctness, not speed.** It is a *textual*
+record. The consumer checks that the record is still valid and then
+processes the header again, as if `-include`d. A PCH build is therefore
+never faster than the same build without one. The CMake end-to-end check
+(`scripts/oss/selftest.sh`) times both. A serialized-AST PCH, which would
+store Oven state, is a follow-up; it would share the module-file format
+(spec/modules.md §11).
+
+### Flags
+
+- **Producing a PCH.** These are the producers:
+  - `-x c++-header <h>`, `-x c-header <h>`, or a header by extension
+    (`.h` in C++ mode, `.hh`, `.hpp`, `.hxx`, `.H`), with `-c`, `-S` or no
+    action;
+  - any input with `-emit-pch`. This is a cc1 option, also accepted as
+    `-Xclang -emit-pch`; CMake spells it that way, with input
+    `cmake_pch.hxx.cxx` and `-x c++-header`.
+
+  The header is checked exactly as `-fsyntax-only` checks it. Any error
+  means no PCH is written and the exit status is 1. Where the PCH goes:
+  - with `-o`, at that path, unless a link follows (non-header inputs on
+    the same line);
+  - otherwise `<input>.pch` for a header (clang's name);
+  - otherwise, for `-emit-pch` on a non-header, the object's default name.
+
+  `-o` with more than one output is clang's `cannot specify -o when
+  generating multiple output files`. `-fsyntax-only`, `-E` and `-M`/`-MM`
+  treat a header as an ordinary input, and produce nothing. A header is
+  its own main file, so `#pragma once` in it gets no warning. C headers
+  are recorded, but compiling C is "not implemented yet" (WP-243).
+- **`-include-pch <file>`.** This is separate-only, as in clang:
+  `-include-pchX` is `-include` with the value `-pchX`. It is also
+  accepted as `-Xclang -include-pch -Xclang <file>`, and the last one
+  wins. The record is validated (see Diagnostics) and its header is then
+  processed as if `-include`d ([Replay](#replay)).
+- **`-Xclang -include -Xclang <h>`** is `-include <h>`, which CMake uses.
+- **`-fno-validate-pch`** (cc1; `-Xclang`) skips validation.
+- **`-Winvalid-pch`** is accepted and is a known warning group. In clang
+  it is an empty group: no diagnostic belongs to it. Every PCH problem
+  is an error whatever `-W` options are given, as in clang.
+- **Accepted, no effect:**
+  - `-f[no-]pch-instantiate-templates`: instantiation happens on replay
+    in any case.
+  - `-f[no-]pch-codegen` and `-f[no-]pch-debuginfo`: there is no PCH
+    object to share code or debug info from.
+  - `-f[no-]pch-validate-input-files-content`: kiln always compares
+    content, never mtime.
+- **The longest option wins.** When an argument could be read as more
+  than one option, the longest spelling is taken, as in clang's option
+  table. So `-include-pch` is not `-include` with `-pch`, `-isystem` is not
+  `-I` with `system`, `-cxx-isystem` is not `-c…`, `-target-feature` is
+  not `-target` with `-feature`, and `-MT`/`-MQ` are not `-M`. `args.rs`
+  `longest_option_wins` tests each such collision.
+
+### Format (`KILNPCH 1`)
+
+The record is UTF-8 text, one field per line. Values are tab-separated,
+with `\\`, `\t`, `\n` and `\r` escaped. It is written atomically (a
+temporary file, then a rename). Lines, in order:
+
+```
+KILNPCH 1                               magic and format version
+kiln <version> <commit|-> -fclang-compat=<N>
+cwd <producer's working directory>
+main <the header, as spelled>
+include <a -include of the producer>    (0 or more, in order)
+opt b\t<option>\t0|1                    a language option (bool)
+opt v\t<option>\t<value>                a language option (value)
+target <triple>
+macro D\t<name>\t<definition>           -D/-U of the producer, in order
+macro U\t<name>
+file <size>\t<fnv1a64 hex>\t<0|1 system>\t<spelled>\t<absolute>
+end <fnv1a64 hex of every byte before this line>
+```
+
+The `file` lines list every file the producer read (the dependency list
+`-MD` writes), with each file's size and content hash. An unknown line, a
+missing field or a bad checksum makes the record corrupt. A different
+version is "older" or "newer". A different `kiln` line is "built from a
+different branch". The language options are those of the module-file
+fingerprint (spec/modules.md §11.4), named as clang names them: the
+standard levels, `char8_t keyword`, GNU extensions, exceptions, RTTI,
+freestanding, signed char, sized deallocation, C++26 reflection, the
+reflection mangling, and the optimization level.
+
+### Diagnostics
+
+The consumer validates in clang's order and with clang's wording, at the
+`-fclang-compat` level's version (19 says "PCH file" and "AST file"; 22
+says "precompiled file"):
+
+1. **Unreadable record.**
+   - A missing file: `fatal error: PCH file 'p.pch' not found: module file
+     not found`.
+   - Not a PCH: `fatal error: file 'p.pch' is not a valid precompiled PCH
+     file: file doesn't start with AST file magic`.
+   - A clang PCH (`CPCH`): `fatal error: file 'p.pch' is a precompiled
+     header built by clang; kiln reads only its own precompiled headers`.
+   - A corrupt record: `fatal error: malformed or corrupted AST file:
+     '<why> in kiln PCH record 'p.pch''`.
+2. **Language options.** For the first option that differs: `error: C++20
+   was enabled in PCH file but is currently disabled` (a bool), or
+   `error: OptimizationLevel differs in precompiled file 'p.pch' vs.
+   current file` (a value). In clang 19, `-O` shows up as
+   `__OPTIMIZE__ predefined macro`.
+3. **Target.** `error: PCH file was compiled for the target '<a>' but the
+   current translation unit is being compiled for target '<b>'`.
+4. **Macros.** The consumer's `-D`/`-U` are checked against the
+   producer's with clang's `checkPreprocessorOptions`, and the first
+   mismatch is reported:
+   - `error: definition of macro 'X' differs between the precompiled
+     header ('1') and the command line ('2')`;
+   - `error: macro 'X' was defined in the precompiled header but undef'd
+     on the command line`.
+
+   A macro that one side defines and the other never mentions is
+   accepted, as in clang.
+5. **Files.** Any error in steps 2–4 stops the compile before this step.
+   Every non-system file is then compared with its recorded size and
+   hash, and the first one that changed is fatal:
+   - `fatal error: file '/abs/h.hpp' has been modified since the
+     precompiled header 'p.pch' was built: size changed (was 41, now 47)`,
+     or `content changed`;
+   - with `note: please rebuild precompiled header 'p.pch'`.
+
+   A deleted file is `fatal error: malformed or corrupted AST file:
+   'could not find file '/abs/h.hpp' referenced by AST file 'p.pch''`.
+
+   System files are not checked, as in clang. This includes CMake's
+   prefix header, because `cmake_pch.hxx` says `#pragma clang
+   system_header`.
+
+### Replay
+
+A valid PCH makes the compile behave like:
+
+```
+<consumer args> -include <producer's -include>... -include <producer's
+main> -include <consumer's -include>...
+```
+
+A consumer `-include` that the producer already had is dropped. Without
+this, CMake's `-include-pch p.pch -include cmake_pch.hxx` would enter its
+unguarded `cmake_pch.hxx` twice. A relative path is resolved against the
+producer's working directory when the consumer's is different. `-E` and
+`-M*` replay the producer's main and the consumer's includes without
+validating.
+
+**Dependency files.** As in clang, the producer's depfile lists the
+producer input and every file it read. The consumer's depfile lists the
+PCH's inputs first and then its own files. `-MMD` drops the system files
+from both.
+
+### Deviations
+
+- A touch that leaves the content unchanged is accepted. A same-size edit
+  is reported as `content changed`. Clang compares mtimes: it reports
+  `mtime changed (was N, now M)`, or misses an edit made within the same
+  second.
+- `-include foo.h` does not probe for `foo.h.pch` or `foo.h.gch`. Only
+  `-include-pch` reads a PCH.
+- A `.gch` directory is not supported, and `-fpch-preprocess` is an
+  unknown argument.
+- A PCH is not an object: `-fpch-codegen` emits nothing.
 
 ## Dependency output
 
@@ -1666,6 +1841,16 @@ Each deviation is covered by a test or a test note.
   names (`kiln` and `kiln++`): the report pinned against clang 19, and
   compared live with `clang++-19 -Xclang -verify` when it is installed.
   `args.rs` unit tests cover the option semantics.
+- `crates/kiln_driver/tests/pch.rs` (WP-1023): CMake's producer and
+  consumer command lines, with their depfiles byte-compared with clang 19
+  when it is installed; object and link; output naming; include order and
+  the producer's working directory; each option, target and macro mismatch
+  under both compat levels; stale, deleted, missing and foreign PCH files;
+  `-MMD`. `args.rs` `longest_option_wins` and `pch_flags`, `pch.rs`
+  `record_round_trip`. The harness's `pch:` tests are
+  `tests/conformance/cpp.include/pch-*.cpp`, and
+  `scripts/oss/selftest.sh` builds a CMake `target_precompile_headers`
+  project.
 - `crates/kiln_driver/tests/codegen.rs`: the codegen path end to end
   (`.ll`, `.s`, `.o`, linking and running, output naming, `-###`, `-v`,
   unused-input warnings, missing tools; `kiln_and_kilnpp`: both names as

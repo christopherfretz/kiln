@@ -347,6 +347,11 @@ pub struct TestSpec {
     /// (the test then imports those) instead of reading their sources.
     /// Implied for `run` tests.
     pub two_step: bool,
+    /// `pch: <path>`: a header (relative to the test's directory) each
+    /// compiler first builds into a precompiled header (`-x c++-header`)
+    /// that the test file's compile then reads with `-include-pch`
+    /// (`spec/harness.md` "Precompiled headers"; WP-1023).
+    pub pch: Option<PathBuf>,
     /// `min-oracle: N`: every clang the test runs must be release N or
     /// later; otherwise a SKIP (`ir_vs_clang` compares the case only under
     /// such an oracle).
@@ -563,6 +568,9 @@ struct Parser {
     unit_line: usize,
     /// Line of `two-step` (0: absent).
     two_step_line: usize,
+    pch: Option<PathBuf>,
+    /// Line of `pch:` (0: absent).
+    pch_line: usize,
     min_oracle: Option<u32>,
     requires_llvm: Option<u32>,
     requires_llvm_below: Option<u32>,
@@ -630,6 +638,8 @@ impl Parser {
             units: Vec::new(),
             unit_line: 0,
             two_step_line: 0,
+            pch: None,
+            pch_line: 0,
             min_oracle: None,
             requires_llvm: None,
             requires_llvm_below: None,
@@ -824,6 +834,18 @@ impl Parser {
                         self.unit_line = line;
                     }
                     self.units.push(PathBuf::from(value));
+                }
+            }
+            "pch" => {
+                if value.is_empty() || value.contains(char::is_whitespace) {
+                    self.err(line, "expected `pch: <path>`");
+                } else if Path::new(value).is_absolute() {
+                    self.err(line, "a `pch` path is relative to the test's directory");
+                } else if self.pch_line != 0 {
+                    self.err(line, "duplicate `pch`");
+                } else {
+                    self.pch_line = line;
+                    self.pch = Some(PathBuf::from(value));
                 }
             }
             "min-oracle" => match value.parse::<u32>() {
@@ -1317,6 +1339,12 @@ impl Parser {
             let line = self.unit_line;
             self.err(line, "`unit` only applies to `run` tests");
         }
+        if self.pch_line != 0
+            && !matches!(expect, Expect::CompileOk | Expect::CompileFail | Expect::Run)
+        {
+            let line = self.pch_line;
+            self.err(line, "`pch` only applies to `compile-ok`, `compile-fail` and `run` tests");
+        }
         if self.two_step_line != 0 && (self.module_line == 0 || expect == Expect::Run) {
             let line = self.two_step_line;
             self.err(line, "`two-step` needs `module:` lines and is implied for `run` tests");
@@ -1373,6 +1401,7 @@ impl Parser {
             modules: self.modules,
             units: self.units,
             two_step: self.two_step_line != 0,
+            pch: self.pch,
             min_oracle: self.min_oracle,
             requires_llvm: self.requires_llvm,
             requires_llvm_below: self.requires_llvm_below,
@@ -1454,6 +1483,7 @@ fn is_known_key(k: &str) -> bool {
             | "requires"
             | "module"
             | "unit"
+            | "pch"
             | "min-oracle"
             | "meta-header"
             | "gdb"
@@ -1859,6 +1889,21 @@ mod tests {
         }
         let e = errs("//@ min-oracle: 22\n//@ min-oracle: 23\n");
         assert!(e.iter().any(|e| e.contains("duplicate `min-oracle`")), "{e:?}");
+    }
+
+    /// WP-1023: `pch: <header>` (`spec/harness.md` "Precompiled headers").
+    #[test]
+    fn pch_directive() {
+        assert_eq!(ok("int x;\n").pch, None);
+        assert_eq!(ok("//@ pch: p.h\n").pch, Some(PathBuf::from("p.h")));
+        assert_eq!(ok("//@ expect: run\n//@ pch: d/p.h\n").pch, Some(PathBuf::from("d/p.h")));
+        let e = errs("//@ pch: a.h\n//@ pch: b.h\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `pch`")), "{e:?}");
+        for bad in ["", "a b.h", "/abs.h"] {
+            assert!(!errs(&format!("//@ pch: {bad}\n")).is_empty(), "{bad:?}");
+        }
+        let e = errs("//@ expect: pp\n//@ pch: p.h\n");
+        assert!(e.iter().any(|e| e.contains("`pch` only applies")), "{e:?}");
     }
 
     /// WP-386: `requires: llvm>=N` / `llvm<N` against the backends that
