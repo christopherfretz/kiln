@@ -2279,7 +2279,7 @@ impl Sema<'_, '_> {
                 ExprKind::ImplicitCastExpr
                     if templ && self.ast.exprs.cast_kind(x) == CastKind::LValueToRValue =>
                 {
-                    self.potential_results(self.ast.exprs.operand(x), &mut constant);
+                    self.l2r_potential_results(self.ast.exprs.operand(x), &mut constant);
                 }
                 ExprKind::LambdaExpr => {
                     let caps = self.ast.exprs.lambda(x).captures.clone();
