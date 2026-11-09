@@ -139,6 +139,13 @@ pub(crate) enum GState {
     /// placeholder of a variable being initialized (flag `RESOLVING`), or
     /// an external object (reads and writes are diagnosed).
     Resolved(u64),
+    /// The result object of the evaluation of this variable's own
+    /// initializer (`Op::BindObject`, WP-1100): the object under
+    /// construction its name designates while the initializer runs
+    /// ([basic.life]/1, clang's `EvaluatingDecl`). Naming it makes the
+    /// running calls impure (not memoized): its value changes as it is
+    /// initialized.
+    Bound(u64),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -471,6 +478,14 @@ impl Oven {
                 let p = c.lv_mem(e, Access::Read);
                 c.emit_at(Op::Copy, 1, &[r, p, ty.0], e);
             } else {
+                if let Some(d) = object {
+                    // While its initializer runs, the variable names the
+                    // object under construction (WP-1100, [basic.life]/1):
+                    // its members initialized so far can be read
+                    // (`constexpr P p{1, p.x + 1};`).
+                    let g = c.o.global_index(c.b.ast(), d);
+                    c.emit(Op::BindObject, 0, &[r, g]);
+                }
                 c.init(e, r, ty);
             }
             c.emit(Op::Ret, 0, &[r]);

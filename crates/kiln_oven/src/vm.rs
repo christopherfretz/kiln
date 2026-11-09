@@ -1248,6 +1248,12 @@ impl Oven {
                     let (d, g) = (fb + arg!(0), arg!(1));
                     let p = match self.globals[g].state {
                         GState::Resolved(p) => p,
+                        GState::Bound(p) => {
+                            // The object under construction: a call that
+                            // names it is not memoized (WP-1100).
+                            self.run.impure += 1;
+                            p
+                        }
                         GState::Unresolved => {
                             let cur = self.stack[self.stack.len() - 1].func;
                             let top = fb + self.funcs[cur as usize].nregs as usize + 1;
@@ -1313,7 +1319,8 @@ impl Oven {
                 | Op::ContractSkip
                 | Op::ContractFail
                 | Op::ContractTrial
-                | Op::Fold => {
+                | Op::Fold
+                | Op::BindObject => {
                     (pc, fb) = self.run_cold(b, op, pc, fb)?;
                 }
             }
@@ -1730,6 +1737,11 @@ impl Oven {
                         fail!(Fault::MpVirtCmp { member: e.member });
                     }
                 }
+                pc += 3;
+            }
+            Op::BindObject => {
+                let (p, g) = (reg!(0) as u64, arg!(1) as u32);
+                self.bind_object(g, p);
                 pc += 3;
             }
             Op::RefChk => {
