@@ -208,6 +208,14 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         if folds.imm.contains_key(&key) {
             continue;
         }
+        // Sema's value at a use without source-location values: the same
+        // evaluation, not run again (WP-1129).
+        if at.is_none()
+            && let Some(v) = b.ast.exprs.default_immediate_value(e)
+        {
+            folds.imm.insert(key, v);
+            continue;
+        }
         let op = b.ast.exprs.operand(e);
         if let Some(v) = oven.fold_immediate_in(&mut b, op, at) {
             folds.imm.insert(key, v);
