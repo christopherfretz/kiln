@@ -512,11 +512,8 @@ impl Sema<'_, '_> {
         // expression's start; an incomplete one makes the expression
         // invalid, a malformed one falls back to the untyped functions
         // (clang `FindAllocationFunctions`).
-        let ti = if self.global_ops.seen_type_aware {
-            self.std_type_identity(elem, loc)
-        } else {
-            None
-        };
+        let ti =
+            if self.global_ops.seen_type_aware { self.std_type_identity(elem, loc) } else { None };
         if let Some(t) = ti
             && !self.require_complete(t, loc)
         {
@@ -1705,7 +1702,7 @@ impl Sema<'_, '_> {
         // (clang `CheckDeleteOperator`, at the expression's start); if
         // not, the expression is invalid.
         if let [u, ..] = best[..]
-            && (found.in_class && best.len() == 1 || !found.in_class)
+            && (!found.in_class || best.len() == 1)
             && let Some(p0) = self.fn_params(u.f).and_then(|(ps, _)| ps.first().copied())
         {
             let complete = if diagnose {

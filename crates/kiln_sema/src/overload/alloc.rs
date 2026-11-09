@@ -326,7 +326,12 @@ impl Sema<'_, '_> {
             // diagnostic a class member's use gives.
             if self.is_type_aware_alloc_fn(d)
                 && matches!(self.lookup_std_type_identity(), StdTypeIdentity::Malformed(_))
-                && !self.ast.decls.get(d).ctx().is_some_and(|c| self.kind_of(c) == DeclKind::CXXRecord)
+                && !self
+                    .ast
+                    .decls
+                    .get(d)
+                    .ctx()
+                    .is_some_and(|c| self.kind_of(c) == DeclKind::CXXRecord)
             {
                 continue;
             }
