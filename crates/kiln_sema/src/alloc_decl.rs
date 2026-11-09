@@ -229,6 +229,7 @@ impl Sema<'_, '_> {
         }
         let m = self.diag(DiagId::ext_cxx_type_aware_allocators, loc);
         self.emit(m);
+        self.global_ops.seen_type_aware = true;
         let destroying =
             !new && class.is_some() && ptys.get(2).is_some_and(|&t| self.is_destroying_delete_t(t));
         let d = usize::from(destroying);

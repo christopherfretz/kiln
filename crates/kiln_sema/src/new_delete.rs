@@ -22,6 +22,7 @@ use crate::conv::{self, ConvCtx};
 use crate::declspec::{Chunk, DeclSpec, Declarator};
 use crate::init::{InitList, InitValue, Initializer};
 use crate::switch_conv::ContextualConv;
+use crate::overload::alloc::{AllocFns, DeallocWant};
 use crate::templ::ctad::CtadInit;
 use crate::{EvalContext, Sema};
 
@@ -74,6 +75,10 @@ pub(crate) struct GlobalOps {
     /// std;` stays valid, clang's `getOrCreateStdNamespace`), but a later
     /// `namespace std {` reopens it.
     pub(crate) implicit_std: Option<DeclId>,
+    /// A type-aware allocation or deallocation function (P2719) has
+    /// been declared: new- and delete-expressions then consider them
+    /// (clang `hasSeenTypeAwareOperatorNewOrDelete`).
+    pub(crate) seen_type_aware: bool,
 }
 
 impl Sema<'_, '_> {
@@ -494,12 +499,43 @@ impl Sema<'_, '_> {
         // (`template <class A> void* operator new(size_t, A*)` over the
         // library's `operator new(size_t, void*)`).
         let mut tmpl_notes: Option<Vec<kiln_diag::Diag>> = None;
-        let found = if alloc.templates.is_empty() {
-            self.find_operator_new(&alloc.fns, &place_args, pass_align)
+        // P2719: once a type-aware allocation function is declared, the
+        // type-aware candidates are tried first with `std::type_identity
+        // <T>{}` prepended (and the alignment, then without it), and only
+        // when none is viable the others as usual (clang
+        // `resolveAllocationOverload`).
+        let ti = if self.global_ops.seen_type_aware {
+            self.std_type_identity(elem, tid.loc)
         } else {
-            let all: Vec<DeclId> = alloc.fns.iter().chain(&alloc.templates).copied().collect();
-            self.find_operator_new_template(&all, &place_args, pass_align, loc, &mut tmpl_notes)
+            None
         };
+        let (typed_fns, untyped_fns): (Vec<DeclId>, Vec<DeclId>) =
+            alloc.fns.iter().chain(&alloc.templates).partition(|&&d| self.is_type_aware_alloc_fn(d));
+        let mut found = None;
+        if ti.is_some() && !typed_fns.is_empty() {
+            found = self.find_operator_new_template(
+                &typed_fns,
+                &place_args,
+                true,
+                (ti, loc),
+                &mut None,
+            );
+        }
+        if found.is_none() {
+            found = if alloc.templates.is_empty() {
+                self.find_operator_new(&untyped_fns, &place_args, pass_align)
+            } else if untyped_fns.is_empty() {
+                None
+            } else {
+                self.find_operator_new_template(
+                    &untyped_fns,
+                    &place_args,
+                    pass_align,
+                    (None, loc),
+                    &mut tmpl_notes,
+                )
+            };
+        }
         let Some((op_new, with_align)) = found else {
             let ptr_like = place_args.len() == 1 && {
                 let t = self.ast.exprs.get(place_args[0]).ty();
@@ -518,7 +554,7 @@ impl Sema<'_, '_> {
                     // With templates, the notes are overload resolution's own
                     // (a template's deduced specialization included).
                     Some(notes) => notes.into_iter().fold(msg, kiln_diag::Diag::with_note),
-                    None => self.operator_new_candidate_notes(msg, &alloc.fns, &place_args),
+                    None => self.operator_new_candidate_notes(msg, &untyped_fns, &place_args),
                 };
                 self.emit(msg);
             }
@@ -547,7 +583,8 @@ impl Sema<'_, '_> {
         }
         self.mark_used_at(op_new, loc);
         let (params, variadic) = self.fn_params(op_new).unwrap_or_default();
-        let skip = 1 + usize::from(pass_align);
+        let typed = self.is_type_aware_alloc_fn(op_new);
+        let skip = 1 + usize::from(typed) + usize::from(pass_align);
         let mut conv_place = Vec::with_capacity(place_args.len());
         for (i, &a) in place_args.iter().enumerate() {
             let c = match params.get(skip + i) {
@@ -578,16 +615,20 @@ impl Sema<'_, '_> {
         // clang treats any allocation function other than `(size_t)` as a
         // placement one here, so an aligned `operator new` is matched by
         // the unsized aligned `operator delete` (`isPlacementNew`).
-        let op_delete = self.matching_operator_delete(
+        let non_placement = if typed { 3 } else { 1 };
+        let Ok(op_delete) = self.matching_operator_delete(
             elem,
             global,
             array_form,
-            placement.is_some() || params.len() != 1 || variadic,
+            placement.is_some() || params.len() != non_placement || variadic,
             placement.is_some(),
             &params,
             pass_align,
+            (op_new, ti),
             (tid.loc, loc),
-        );
+        ) else {
+            return self.recover_err(&kids, loc);
+        };
         if let Some((od, naming)) = op_delete {
             // The deallocation function is access-checked at the
             // new-expression too ([expr.new]/28, [class.access]/1), and
@@ -1173,7 +1214,7 @@ impl Sema<'_, '_> {
         tmpls: &[DeclId],
         place: &[ExprId],
         pass_align: bool,
-        loc: Loc,
+        (ti, loc): (Option<QualType>, Loc),
         notes: &mut Option<Vec<kiln_diag::Diag>>,
     ) -> Option<(DeclId, bool)> {
         use crate::overload::{ArgInfo, CandidateKind, IcsOptions, OvlOutcome, SetKind};
@@ -1183,9 +1224,15 @@ impl Sema<'_, '_> {
         }
         let size_t = self.size_type();
         let al = self.global_ops.align_val_t;
+        // A type-aware allocation is always tried with the alignment
+        // first (P2719, clang `resolveAllocationOverload`).
+        let pass_align = pass_align || ti.is_some();
         let tries: &[bool] = if pass_align && al.is_some() { &[true, false] } else { &[false] };
         for &with_align in tries {
             let mut set = self.begin_set(SetKind::Normal, loc);
+            if let Some(ti) = ti {
+                set.args.push(ArgInfo::of_type(ti, ValueCategory::PRValue));
+            }
             set.args.push(ArgInfo::of_type(size_t, ValueCategory::PRValue));
             if with_align && let Some(al) = al {
                 set.args.push(ArgInfo::of_type(al, ValueCategory::PRValue));
@@ -1383,63 +1430,129 @@ impl Sema<'_, '_> {
         placement_args: bool,
         new_params: &[QualType],
         pass_align: bool,
+        (op_new, ti): (DeclId, Option<QualType>),
         (loc, new_loc): (Loc, Loc),
-    ) -> Option<(DeclId, Option<DeclId>)> {
+    ) -> Result<Option<(DeclId, Option<DeclId>)>, ()> {
         let op = if array { OverloadedOperator::ArrayDelete } else { OverloadedOperator::Delete };
-        let found = self.alloc_fns(elem, op, global, loc);
-        let naming = found.naming;
-        if !placement {
-            return self
-                .usual_delete(&found.fns, found.in_class, pass_align, true, false)
-                .map(|u| (u.0, naming));
-        }
-        let vp = self.ast.types.pointer_to(QualType::VOID);
-        let mut params = vec![vp];
-        params.extend(new_params.iter().skip(1));
-        let matches = |s: &Self, f: DeclId| {
-            s.fn_params(f).is_some_and(|(ps, variadic)| {
-                !variadic
-                    && ps.len() == params.len()
-                    && ps.iter().zip(&params).all(|(a, b)| s.ast.types.same_type(*a, *b))
-            })
-        };
-        // [expr.new]/28 as clarified by P3769R1 (a DR): each function
-        // template is replaced by the specialization deduced against the
-        // expected type `void(void*, P2, ..., Pn)` (the allocation
-        // function's parameters after the first; WP-713), the candidates
-        // whose parameter-type-list differs are dropped, then those whose
-        // constraints are not satisfied; the one remaining is selected,
-        // and with several none is (clang `FindAllocationFunctions`).
-        // Each candidate with the declaration it was found as, for
-        // clang's lookup (declaration) order in the notes.
-        let mut selected: Vec<(DeclId, DeclId)> =
-            found.fns.iter().copied().filter(|&f| matches(self, f)).map(|f| (f, f)).collect();
-        if !found.templates.is_empty() {
-            let info = FuncInfo::default();
-            let expected = self.ast.types.function(QualType::VOID, &params, info, ExcSpec::None);
-            for &ft in &found.templates {
-                if let Ok(f) = self.deduce_decl(ft, None, expected, loc)
-                    && matches(self, f)
-                    && !selected.iter().any(|s| s.1 == f)
-                {
-                    selected.push((ft, f));
+        let mut found = self.alloc_fns(elem, op, global, loc);
+        let new_typed = self.is_type_aware_alloc_fn(op_new);
+        let typed_mode = self.global_ops.seen_type_aware;
+        if typed_mode {
+            // A destroying operator delete cannot clean up an object that
+            // was never constructed: clang drops them, and an empty
+            // class-scope result falls back to the global functions.
+            found.fns.retain(|&f| !self.ast.is_destroying_operator_delete(f));
+            let new_in_class = self.redecl_record(op_new).is_some();
+            if found.in_class && found.fns.is_empty() && found.templates.is_empty() {
+                if new_typed && new_in_class {
+                    self.missing_type_aware_cleanup(op_new, op, false, new_loc);
+                    return Err(());
                 }
+                found = self.alloc_fns(elem, op, true, loc);
+            } else if !found.in_class && new_typed && new_in_class {
+                self.missing_type_aware_cleanup(op_new, op, false, new_loc);
+                return Err(());
             }
-            selected.sort_by_key(|s| s.0);
+            // The global lookup keeps the type-aware functions only when
+            // the allocation could have been type-aware (clang
+            // `DeallocLookupMode::OptionallyTyped`).
+            if !found.in_class && ti.is_none() {
+                found.fns.retain(|&f| !self.is_type_aware_alloc_fn(f));
+                found.templates.retain(|&f| !self.is_type_aware_alloc_fn(f));
+            }
         }
-        if selected.len() > 1 {
-            selected.retain(|&(_, f)| {
-                self.check_function_constraints(f, loc).is_none_or(|sat| self.sat_ok(sat))
-            });
-        }
+        let naming = found.naming;
+        let selected: Vec<DeclId> = if !placement {
+            if typed_mode {
+                // [expr.new]/28: the usual deallocation function, sized
+                // when found in the global scope (clang `FindAllocationFunctions`).
+                let all: Vec<DeclId> = found.fns.iter().chain(&found.templates).copied().collect();
+                let over = pass_align || self.over_aligned(elem);
+                let want = DeallocWant {
+                    ty: elem,
+                    typed: ti.is_some(),
+                    aligned: over,
+                    sized: !found.in_class && self.sized_deallocation,
+                };
+                self.resolve_usual_dealloc(&all, want, false, loc).iter().map(|u| u.f).collect()
+            } else {
+                self.usual_delete(&found.fns, found.in_class, pass_align, true, false)
+                    .map(|u| u.0)
+                    .into_iter()
+                    .collect()
+            }
+        } else {
+            let vp = self.ast.types.pointer_to(QualType::VOID);
+            // P2719: a type-aware placement allocation function is
+            // matched by `operator delete(std::type_identity<T>, void*,
+            // std::size_t, std::align_val_t, P...)`.
+            let mut params = Vec::new();
+            if new_typed && let Some(&t) = new_params.first() {
+                params.push(ti.unwrap_or(t));
+            }
+            params.push(vp);
+            params.extend(new_params.iter().skip(1));
+            let matches = |s: &Self, f: DeclId| {
+                s.fn_params(f).is_some_and(|(ps, variadic)| {
+                    !variadic
+                        && ps.len() == params.len()
+                        && ps.iter().zip(&params).all(|(a, b)| s.ast.types.same_type(*a, *b))
+                })
+            };
+            // [expr.new]/28 as clarified by P3769R1 (a DR): each function
+            // template is replaced by the specialization deduced against the
+            // expected type `void(void*, P2, ..., Pn)` (the allocation
+            // function's parameters after the first; WP-713), the candidates
+            // whose parameter-type-list differs are dropped, then those whose
+            // constraints are not satisfied; the one remaining is selected,
+            // and with several none is (clang `FindAllocationFunctions`).
+            // Each candidate with the declaration it was found as, for
+            // clang's lookup (declaration) order in the notes.
+            let mut selected: Vec<(DeclId, DeclId)> =
+                found.fns.iter().copied().filter(|&f| matches(self, f)).map(|f| (f, f)).collect();
+            if !found.templates.is_empty() {
+                let info = FuncInfo::default();
+                let expected =
+                    self.ast.types.function(QualType::VOID, &params, info, ExcSpec::None);
+                for &ft in &found.templates {
+                    if let Ok(f) = self.deduce_decl(ft, None, expected, loc)
+                        && matches(self, f)
+                        && !selected.iter().any(|s| s.1 == f)
+                    {
+                        selected.push((ft, f));
+                    }
+                }
+                selected.sort_by_key(|s| s.0);
+            }
+            if selected.len() > 1 {
+                selected.retain(|&(_, f)| {
+                    self.check_function_constraints(f, loc).is_none_or(|sat| self.sat_ok(sat))
+                });
+            }
+            if selected.is_empty() && new_typed {
+                if self.exceptions {
+                    self.missing_type_aware_cleanup(op_new, op, true, new_loc);
+                    return Err(());
+                }
+                return Ok(None);
+            }
+            selected.into_iter().map(|s| s.1).collect()
+        };
         match selected[..] {
-            [(_, f)] => {
-                if self.exceptions && placement_args {
+            [f] => {
+                let del_typed = self.is_type_aware_alloc_fn(f);
+                if self.exceptions && (new_typed || del_typed) {
+                    let (nc, dc) = (self.redecl_ctx(op_new), self.redecl_ctx(f));
+                    if new_typed != del_typed || nc != dc {
+                        self.mismatched_type_aware_cleanup(op_new, f, placement, new_loc);
+                    }
+                }
+                if self.exceptions && placement_args && !new_typed {
                     self.placement_selects_sized_delete(f, &found.fns, found.in_class, new_loc);
                 }
-                Some((f, naming))
+                Ok(Some((f, naming)))
             }
-            [] => None,
+            [] => Ok(None),
             _ => {
                 // No deallocation function is called; clang warns.
                 if self.exceptions {
@@ -1448,7 +1561,7 @@ impl Sema<'_, '_> {
                         .diag(DiagId::sema_ambiguous_suitable_delete, new_loc)
                         .arg(format!("'{name}'"))
                         .arg(self.ty_arg(elem));
-                    for &(_, f) in &selected {
+                    for &f in &selected {
                         let note = self
                             .diag(DiagId::note_member_declared_named, self.ast.decls.get(f).loc())
                             .arg(name.clone());
@@ -1456,9 +1569,182 @@ impl Sema<'_, '_> {
                     }
                     self.emit(msg);
                 }
-                None
+                Ok(None)
             }
         }
+    }
+
+    /// The usual deallocation function of a delete-expression or a
+    /// deleting destructor once a type-aware one is declared (P2719,
+    /// [expr.delete]/10; clang `FindDeallocationFunction` and
+    /// `FindUsualDeallocationFunction`): type-aware ones for `std::
+    /// type_identity<ty>` are preferred, and a class scope that finds
+    /// several equally good ones, or none, is an error. Returns the
+    /// function and whether it takes the size.
+    pub(crate) fn typed_usual_delete(
+        &mut self,
+        found: &AllocFns,
+        ty: QualType,
+        aligned: bool,
+        sized: bool,
+        destroying: bool,
+        (loc, diagnose): (Loc, bool),
+    ) -> Result<Option<(DeclId, bool)>, ()> {
+        let all: Vec<DeclId> = found.fns.iter().chain(&found.templates).copied().collect();
+        let want = DeallocWant {
+            ty,
+            typed: true,
+            aligned,
+            sized: !found.in_class && sized && self.sized_deallocation,
+        };
+        let best = self.resolve_usual_dealloc(&all, want, destroying, loc);
+        if !found.in_class {
+            return Ok(best.first().map(|u| (u.f, u.sized)));
+        }
+        let op = self.ast.decls.get(all[0]).name().as_operator().unwrap_or(OverloadedOperator::Delete);
+        let name = format!("operator {}", op.spelling());
+        let class = self.tag_type(found.naming.unwrap_or(self.ast.tu));
+        match best[..] {
+            [u] => Ok(Some((u.f, u.sized))),
+            _ if !diagnose => Err(()),
+            [] => {
+                if !all.iter().any(|&f| {
+                    self.kind_of(f) != DeclKind::FunctionTemplate
+                        && self.ast.decls.get(f).has(DeclFlags::INVALID)
+                }) {
+                    let elem = self.ast.types.unqualified(class);
+                    let fns: Vec<DeclId> = all
+                        .iter()
+                        .map(|&f| self.templated_function(f).unwrap_or(f))
+                        .collect();
+                    self.no_suitable_delete(op, elem, &fns, loc);
+                }
+                Err(())
+            }
+            _ => {
+                let mut msg = self
+                    .diag(DiagId::sema_ambiguous_suitable_delete_member, loc)
+                    .arg(format!("'{name}'"))
+                    .arg(self.ty_arg(class));
+                for u in &best {
+                    let at = self.templated_function(u.found).unwrap_or(u.f);
+                    let note = self
+                        .diag(DiagId::note_member_declared_named, self.ast.decls.get(at).loc())
+                        .arg(name.clone());
+                    msg = msg.with_note(note);
+                }
+                self.emit(msg);
+                Err(())
+            }
+        }
+    }
+
+    /// The class `f` is a member of, if any (its redeclaration context).
+    fn redecl_record(&self, f: DeclId) -> Option<DeclId> {
+        let c = self.redecl_ctx(f);
+        (self.kind_of(c) == DeclKind::CXXRecord).then_some(c)
+    }
+
+    /// The scope `f` is declared in (clang `getRedeclContext`): its class
+    /// or the translation unit.
+    fn redecl_ctx(&self, f: DeclId) -> DeclId {
+        let f = self.ast.spec_info(f).map_or(f, |(_, i)| i.template);
+        let f = self.templated_function(f).unwrap_or(f);
+        let mut c = self.ast.decls.get(f).ctx().unwrap_or(self.ast.tu);
+        while matches!(self.kind_of(c), DeclKind::LinkageSpec | DeclKind::Export)
+            || self.ast.decls.namespace(c).is_some_and(kiln_ast::decl::NamespaceData::is_inline)
+        {
+            c = self.ast.decls.get(c).ctx().unwrap_or(self.ast.tu);
+        }
+        self.ast.first(c)
+    }
+
+    /// `the global namespace`, `'S'` or `namespace 'N'`: a declaration
+    /// context as clang prints a `DeclContext*` argument.
+    fn decl_ctx_arg(&self, c: DeclId) -> String {
+        if c == self.ast.first(self.ast.tu) || c == self.ast.tu {
+            return "the global namespace".to_owned();
+        }
+        if self.kind_of(c) == DeclKind::Namespace {
+            return format!("namespace {}", self.decl_arg(c));
+        }
+        let t = self.tag_type(c);
+        self.ty_arg(t)
+    }
+
+    /// `type aware 'operator new' declared here in 'S'` (clang
+    /// `note_type_aware_operator_declared`).
+    fn type_aware_operator_note(&mut self, f: DeclId) -> kiln_diag::Diag {
+        let typed = self.is_type_aware_alloc_fn(f);
+        let name = self.ast.decls.get(f).name();
+        let name = self.decl_name_str(name);
+        let ctx = self.decl_ctx_arg(self.redecl_ctx(f));
+        let at = self.ast.spec_info(f).map_or(f, |(_, i)| i.template);
+        let at = self.templated_function(at).unwrap_or(at);
+        self.diag(DiagId::note_type_aware_operator_declared, self.ast.decls.get(at).loc())
+            .arg(usize::from(typed))
+            .arg(name)
+            .arg(ctx)
+    }
+
+    /// A type-aware `operator new` without a matching type-aware
+    /// `operator delete` in its scope to clean up after a throwing
+    /// initialization (P2719 [expr.new]/28, clang
+    /// `err_mismatching_type_aware_cleanup_deallocator`).
+    fn missing_type_aware_cleanup(
+        &mut self,
+        op_new: DeclId,
+        del: OverloadedOperator,
+        placement: bool,
+        loc: Loc,
+    ) {
+        let name = self.ast.decls.get(op_new).name();
+        let name = self.decl_name_str(name);
+        let note = self.type_aware_operator_note(op_new);
+        let m = self
+            .diag(DiagId::sema_mismatching_type_aware_cleanup_deallocator, loc)
+            .arg(name)
+            .arg(usize::from(placement))
+            .arg(format!("operator {}", del.spelling()))
+            .with_note(note);
+        self.emit(m);
+    }
+
+    /// The cleanup deallocation function of a new-expression differs
+    /// from its allocation function in type-awareness or scope (P2719,
+    /// clang `FindAllocationFunctions`).
+    fn mismatched_type_aware_cleanup(
+        &mut self,
+        op_new: DeclId,
+        op_delete: DeclId,
+        placement: bool,
+        loc: Loc,
+    ) {
+        let (aware, other) = if self.is_type_aware_alloc_fn(op_new) {
+            (op_new, op_delete)
+        } else {
+            (op_delete, op_new)
+        };
+        let an = self.ast.decls.get(aware).name();
+        let an = self.decl_name_str(an);
+        let on = self.ast.decls.get(other).name();
+        let on = self.decl_name_str(on);
+        let n1 = self.type_aware_operator_note(op_new);
+        let n2 = self.type_aware_operator_note(op_delete);
+        let m = self
+            .diag(DiagId::sema_mismatching_type_aware_cleanup_deallocator, loc)
+            .arg(an)
+            .arg(usize::from(placement))
+            .arg(on)
+            .with_note(n1)
+            .with_note(n2);
+        self.emit(m);
+    }
+
+    /// The type is over-aligned for `operator new` ([basic.align]/3).
+    fn over_aligned(&self, ty: QualType) -> bool {
+        crate::target::size_align(&self.ast, ty, &self.abi)
+            .is_some_and(|(_, a)| a > self.abi.default_new_align)
     }
 
     /// [expr.new]/28: a placement new-expression whose matching
@@ -1810,7 +2096,14 @@ impl Sema<'_, '_> {
         // Unless `::delete`, the class's own `operator delete` is looked
         // up first ([expr.delete]/9).
         let found = self.alloc_fns(elem, op, global || !complete, loc);
-        let usual = self.usual_delete(&found.fns, found.in_class, aligned, want_sized, !array);
+        let usual = if self.global_ops.seen_type_aware {
+            match self.typed_usual_delete(&found, pointee, aligned, want_sized, !array, (loc, true)) {
+                Ok(u) => u,
+                Err(()) => return self.recover_err(&[operand], loc),
+            }
+        } else {
+            self.usual_delete(&found.fns, found.in_class, aligned, want_sized, !array)
+        };
         if usual.is_none() && found.in_class {
             // A class whose `operator delete` was already diagnosed.
             if !found.fns.iter().any(|&f| self.ast.decls.get(f).has(DeclFlags::INVALID)) {
@@ -1990,7 +2283,7 @@ impl Sema<'_, '_> {
             return;
         }
         let loc = self.ast.decls.get(dtor).loc();
-        let Some((op, naming)) = self.dtor_dealloc_fn(class, loc) else { return };
+        let Some((op, naming)) = self.dtor_dealloc_fn(class, (loc, true)) else { return };
         // The deallocation function is access-checked at the destructor,
         // from the destructor ([class.dtor]/16, clang `CheckDestructor` →
         // `FindDeallocationFunction`).
@@ -2026,13 +2319,21 @@ impl Sema<'_, '_> {
     /// `class` calls and the class naming it (`None` for a global one),
     /// looked up from the class scope ([class.dtor]/16). `None` when
     /// class-scope lookup finds no usual deallocation function.
-    fn dtor_dealloc_fn(&mut self, class: DeclId, loc: Loc) -> Option<(DeclId, Option<DeclId>)> {
+    fn dtor_dealloc_fn(
+        &mut self,
+        class: DeclId,
+        (loc, diagnose): (Loc, bool),
+    ) -> Option<(DeclId, Option<DeclId>)> {
         self.declare_global_new_delete();
         let ty = self.tag_type(class);
         let align = self.complete_class_align(ty);
         let aligned = align > self.abi.default_new_align;
         let found = self.alloc_fns(ty, OverloadedOperator::Delete, false, loc);
-        let usual = self.usual_delete(&found.fns, found.in_class, aligned, true, true)?;
+        let usual = if self.global_ops.seen_type_aware {
+            self.typed_usual_delete(&found, ty, aligned, true, true, (loc, diagnose)).ok()??
+        } else {
+            self.usual_delete(&found.fns, found.in_class, aligned, true, true)?
+        };
         Some((usual.0, found.naming))
     }
 
@@ -2041,7 +2342,7 @@ impl Sema<'_, '_> {
     /// deleted ([class.dtor]/7.3).
     pub(crate) fn virtual_dtor_delete_usable(&mut self, class: DeclId) -> bool {
         let loc = self.ast.decls.get(class).loc();
-        match self.dtor_dealloc_fn(class, loc) {
+        match self.dtor_dealloc_fn(class, (loc, false)) {
             None => false,
             Some((op, _)) if self.is_deleted_fn(op) => false,
             Some((op, Some(naming))) => self.member_accessible_from(op, naming, class),

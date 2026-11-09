@@ -1329,7 +1329,7 @@ impl Sema<'_, '_> {
             self.find_operator_new(&fns.fns, place, pass_align)
         } else {
             let all: Vec<DeclId> = fns.fns.iter().chain(&fns.templates).copied().collect();
-            self.find_operator_new_template(&all, place, pass_align, loc, &mut None)
+            self.find_operator_new_template(&all, place, pass_align, (None, loc), &mut None)
         };
         match found {
             Some((n, a)) => (Some(n), a),
