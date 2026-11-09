@@ -54,6 +54,10 @@ pub(crate) enum FrameHow {
     Init(DeclId, OTy),
 }
 
+/// The stubs compiled for one expression and evaluation: each with the
+/// variables of the frame it was compiled for, in order.
+type FrameStubs = Vec<(Vec<DeclId>, u32)>;
+
 /// The state of the potential-constant frame evaluations.
 #[derive(Debug, Default)]
 pub(crate) struct FrameState {
@@ -67,7 +71,7 @@ pub(crate) struct FrameState {
     bytes: u64,
     /// The stubs compiled so far, by expression and evaluation: each for
     /// the variables of a frame, in order.
-    stubs: FxHashMap<(ExprId, FrameHow), Vec<(Vec<DeclId>, u32)>>,
+    stubs: FxHashMap<(ExprId, FrameHow), FrameStubs>,
 }
 
 impl Oven {

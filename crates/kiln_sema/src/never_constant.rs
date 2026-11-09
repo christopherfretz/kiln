@@ -1998,6 +1998,26 @@ impl Sema<'_, '_> {
         Some(Flow::Next)
     }
 
+    /// A `return` statement `s`: its value is evaluated (a scalar for
+    /// its value, anything else for its side effects) and the walk stops.
+    fn nc_return(&mut self, w: &mut Walk, s: StmtId, depth: u32) -> Flow {
+        let Some(v) = self.ast.stmts.return_value(s) else { return Flow::Stop };
+        let n = self.ast.exprs.get(v);
+        let types = &self.ast.types;
+        let how = if !n.value_category().is_glvalue()
+            && (types.is_arithmetic(n.ty())
+                || matches!(types.canonical_view(n.ty()), TypeView::Enum(_)))
+        {
+            FrameEval::Value
+        } else {
+            FrameEval::Discard
+        };
+        match self.nc_full(w, v, depth, how).v {
+            Value::Fails(fail) => Flow::Fails(fail),
+            _ => Flow::Stop,
+        }
+    }
+
     /// Statement `s` executed with the parameters, locals and `this`
     /// unknown (clang `EvaluateStmt`), searching for `case` label
     /// `case` when it is set.
@@ -2080,23 +2100,7 @@ impl Sema<'_, '_> {
                 }
             }
             StmtKind::ExprStmt => self.nc_ignored(w, st.expr_stmt_expr(s), depth),
-            StmtKind::ReturnStmt => {
-                let Some(v) = st.return_value(s) else { return Flow::Stop };
-                let n = self.ast.exprs.get(v);
-                let types = &self.ast.types;
-                let how = if !n.value_category().is_glvalue()
-                    && (types.is_arithmetic(n.ty())
-                        || matches!(types.canonical_view(n.ty()), TypeView::Enum(_)))
-                {
-                    FrameEval::Value
-                } else {
-                    FrameEval::Discard
-                };
-                match self.nc_full(w, v, depth, how).v {
-                    Value::Fails(fail) => Flow::Fails(fail),
-                    _ => Flow::Stop,
-                }
-            }
+            StmtKind::ReturnStmt => self.nc_return(w, s, depth),
             StmtKind::DeclStmt => self.nc_decl_stmt(w, s, depth),
             StmtKind::IfStmt => self.nc_if(w, s, depth),
             StmtKind::WhileStmt => self.nc_while(w, s, depth),
