@@ -4,6 +4,7 @@
 #   resource/include/         clang 19 builtin headers (filtered copy)
 #   resource/predefines/      `-E -dM` predefined-macro sets per (target, std)
 #   resource/include-paths/   clang's C++ system include search order per target
+#   resource/share/           the default sanitizer ignorelists kiln applies
 #
 # Idempotent: running it twice yields no diff. resource/include/LICENSE.TXT and
 # resource/include/README.md are hand-maintained and are left untouched.
@@ -217,6 +218,19 @@ for t in "${TARGETS[@]}"; do
         awk '/^-internal-(externc-)?isystem$/ { f = $0; next } f { print "#   " f " " $0; f = "" }'
     } > "$out"
   done
+done
+
+# ---- 4. Default sanitizer ignorelists (WP-1032) ---------------------------------
+# clang's addDefaultIgnorelists reads <resource-dir>/share/<sanitizer>_ignorelist.txt;
+# kiln reads the same files from its resource dir. cfi_ignorelist.txt is left out
+# (kiln has no CFI) and dfsan_abilist.txt too (no DataFlowSanitizer).
+DST_SHARE="$RES/share"
+mkdir -p "$DST_SHARE"
+find "$DST_SHARE" -mindepth 1 -maxdepth 1 -type f -name '*_ignorelist.txt' -delete
+for f in asan_ignorelist.txt hwasan_ignorelist.txt msan_ignorelist.txt; do
+  if [[ -f "$("$CLANG" -print-resource-dir)/share/$f" ]]; then
+    cp -p "$("$CLANG" -print-resource-dir)/share/$f" "$DST_SHARE/$f"
+  fi
 done
 
 echo "gen-resource: done ($(du -sk "$RES" | cut -f1) KiB in resource/)"

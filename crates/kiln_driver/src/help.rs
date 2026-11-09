@@ -149,6 +149,13 @@ SANITIZERS AND COVERAGE:
                           Continue after a failed check
   -fsanitize-trap=<checks>
                           Trap on a failed check instead of reporting it
+  -fsanitize-merge[=<checks>]
+                          Let failed checks share one handler call
+  -fsanitize-ignorelist=<file>
+                          Do not instrument what <file> lists
+  -fno-sanitize-ignorelist
+                          Drop the default ignorelists
+  -ftrapv                 Trap on signed integer overflow
   --coverage              gcov coverage notes and counters
   -fprofile-instr-generate[=<file>]
                           Source-based coverage counters, written to <file>

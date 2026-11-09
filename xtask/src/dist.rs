@@ -419,6 +419,7 @@ pub fn rewrite_links(root: &Path, src: &str, text: &str, version: &str) -> Resul
 /// bin/kiln-scan-deps, bin/clang-scan-deps-22, bin/clang-scan-deps -> kiln
 /// lib/kiln/<major>/include/      resource/include (builtin headers)
 /// lib/kiln/<major>/predefines/   resource/predefines/*.txt
+/// lib/kiln/<major>/share/        resource/share/*.txt (default ignorelists)
 /// share/doc/kiln/                DOCS, links rewritten (install_doc)
 /// ```
 ///
@@ -447,6 +448,21 @@ pub fn assemble(root: &Path, prefix: &Path, major: &str) -> Result<(), String> {
     files.sort();
     for f in files {
         copy_file(&f, &pre.join(f.file_name().unwrap_or_default()), 0o644)?;
+    }
+    // WP-1032: the default sanitizer ignorelists clang reads from
+    // `<resource-dir>/share/`.
+    let share = resdir.join("share");
+    mkdir(&share)?;
+    let src = res.join("share");
+    let mut lists: Vec<PathBuf> = std::fs::read_dir(&src)
+        .map_err(io_err("read", &src))?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "txt"))
+        .collect();
+    lists.sort();
+    for f in lists {
+        copy_file(&f, &share.join(f.file_name().unwrap_or_default()), 0o644)?;
     }
     let doc = prefix.join("share").join("doc").join("kiln");
     mkdir(&doc)?;
@@ -933,6 +949,7 @@ mod tests {
             "lib/kiln/7/include/LICENSE.TXT",
             "lib/kiln/7/predefines/aarch64-unknown-linux-gnu.c++26.txt",
             "lib/kiln/7/predefines/x86_64-unknown-linux-gnu.c17.txt",
+            "lib/kiln/7/share/asan_ignorelist.txt",
             "share/doc/kiln/README.md",
             "share/doc/kiln/LICENSE-MIT",
             "share/doc/kiln/LICENSE-APACHE",

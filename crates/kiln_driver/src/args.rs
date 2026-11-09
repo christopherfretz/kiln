@@ -357,7 +357,7 @@ pub enum ArgError {
     /// ("unsupported option '{opt}' for target '{triple}'").
     UnsupportedForTarget(String, String),
     /// A GCC/clang flag kiln recognises but deliberately does not
-    /// implement (`-ftrapv`, profile-guided optimization,
+    /// implement (`-fshort-enums`, profile-guided optimization,
     /// spec/driver.md "Codegen flags"): "'{arg}' is not supported by kiln".
     UnsupportedByKiln(String),
     /// "invalid argument '{0}' only allowed with '{1}'"
@@ -372,6 +372,12 @@ pub enum ArgError {
     NotAllowedWith(String, String),
     /// "no such file or directory: '{0}'" (`-fsanitize-ignorelist=`).
     NoSuchFile(String),
+    /// "malformed sanitizer ignorelist: '{0}'": LLVM `SpecialCaseList`'s
+    /// message (WP-1032).
+    MalformedIgnorelist(String),
+    /// A `#!special-case-list-v1` (regular expression) ignorelist: its
+    /// path (WP-1032).
+    RegexIgnorelist(String),
 }
 
 /// The parsed command line.

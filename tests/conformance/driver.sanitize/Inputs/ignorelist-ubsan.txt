@@ -1,0 +1,6 @@
+# The UBSan checks ignorelist-ubsan-run.cpp turns off (WP-1032).
+[undefined]
+fun:_Z11skipped_addii
+src:*Inputs/ignorelist-src-ubsan.h
+[signed-integer-overflow]
+fun:*skipped_mul*

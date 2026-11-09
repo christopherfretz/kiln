@@ -445,8 +445,12 @@ The diagnostics (clang 19 wording):
 Other options:
 
 - `-fsanitize-ignorelist=` (and the old `-fsanitize-blacklist=`): the
-  file must exist (`no such file or directory: '<f>'`). kiln accepts it
-  but does not apply it yet (§5).
+  file must exist (`no such file or directory: '<f>'`). WP-1032 applies
+  it, and the resource directory's default `share/*_ignorelist.txt`,
+  as clang's `NoSanitizeList` (spec/driver.md "Sanitizers" has the
+  prefixes and categories); `-fno-sanitize-ignorelist` drops both.
+- `-f[no-]sanitize-merge[=]` (clang 20+; WP-1032) and `-ftrapv`,
+  `-ftrapv-handler=` (spec/driver.md "Codegen flags").
 - `-fsanitize-address-use-after-scope` and its `-fno-` form.
 - `-fsanitize-address-use-after-return=never|runtime|always`.
 - `-fsanitize-memory-track-origins[=N]`.
@@ -507,9 +511,10 @@ UBSan is pure frontend IR, so it can be compared line by line against
   `sanitizer_frontend_attributes`) checks their attributes, global
   markers and lifetime markers instead.
 - Driver unit tests for the grammar and its diagnostics.
-- A trap-mode run test (no runtime). Recover-mode run tests need
-  compiler-rt and a `requires: sanitizer-runtime` harness capability;
-  that is a follow-up (§5).
+- A trap-mode run test (no runtime), and run tests under the UBSan and
+  ASan runtimes (`*-run.cpp`, WP-1032) behind the `requires:
+  sanitizer-runtime` harness capability: they skip where the linking
+  clang has no compiler-rt (spec/harness.md).
 
 ## 5. Not covered
 
@@ -520,10 +525,8 @@ and spec/landed/codegen/WP-871.md:
   other gaps listed in §1.5. WP-871 emits the rest.
 - Local value names under ASan/MSan (clang keeps them for the stack
   frame descriptors), and clang 22's alloca annotations there.
-- `-ftrapv` and `-fsanitize-merge=`.
-- The `requires: sanitizer-runtime` harness capability and
-  recover-mode run tests.
-- Ignorelist contents. Files are checked for existence but not applied.
+- Version 1 (regular expression) ignorelists, and ignorelist entries
+  for string literal globals (spec/landed/codegen/WP-1032.md).
 - The memory sanitizer's use-after-dtor callbacks.
 - dataflow, cfi, kcfi, safe-stack, shadow-call-stack, scudo, memtag,
   numerical and the kernel variants. These are rejected with `kiln does
