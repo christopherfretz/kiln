@@ -1778,8 +1778,22 @@ impl Cg<'_> {
             self.emit_branch(end);
             self.f.fir.add_incoming(Fir::last_inst(phi), v, cnt);
         }
+        // clang `VisitBinLAnd`: the fall-through branch into the merge
+        // block has no line (gcov would count the operator's line again per
+        // right-hand evaluation) and the phi an artificial line-0 location.
+        // `VisitBinLOr` keeps the branch's location and leaves the phi
+        // (created outside the builder) without one.
+        let saved = if and { self.dbg_apply_empty() } else { None };
         self.emit_block(end, false);
+        self.dbg_restore(saved);
         self.f.fir.add_incoming(Fir::last_inst(phi), v, rb);
+        if self.dbg_on() {
+            let l = match self.f.fir.dbg.as_deref().map(|d| d.scope()) {
+                Some(scope) if and => Some(self.di_location_at(0, 0, scope)),
+                _ => None,
+            };
+            self.f.fir.set_inst_dbg(Fir::last_inst(phi), l);
+        }
         Ok(self.zext_or_same(phi, rt))
     }
 

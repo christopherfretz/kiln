@@ -1487,7 +1487,12 @@ with no coverage flag the IR is unchanged, byte for byte.
   `co_await`/`co_yield`'s end location is its operand's; and a default
   argument is emitted with debug locations off (clang `EmitCallArg`'s
   `DisableDebugLocationUpdates`), so its expressions keep the call's
-  location instead of the parameter declaration's.
+  location instead of the parameter declaration's. A value `&&` (clang
+  `VisitBinLAnd`) branches from its right-hand side into the merge block
+  with no location and gives the phi an artificial line-0 location; a
+  value `||` (`VisitBinLOr`) keeps the branch's location and leaves the
+  phi without one (otherwise gcov counts a multi-line `&&`'s first line
+  once more per right-hand evaluation).
 - **clang 22** (`-fclang-compat=22`): coroutine `coro.id` takes the
   promise without the `bitcast` and the wrapper is `internal`; the
   comparison normalizes LLVM 19's `i1 @llvm.coro.end` to LLVM 22's
@@ -1495,8 +1500,9 @@ with no coverage flag the IR is unchanged, byte for byte.
 - Tests: `tests/codegen/{gcov,instrprof}_*.cpp` (IR against clang 19 and
   22, `ir_vs_clang`), `scripts/coverage-compare.py` (builds and runs
   `scripts/coverage/*.cpp` with both compilers and requires equal
-  `llvm-profdata show --counts` records and `llvm-cov gcov` line counts).
-  Results and the compile-time overhead: spec/landed/codegen/WP-941.md.
+  `llvm-profdata show --counts` records and `llvm-cov gcov` line counts,
+  except the differences its `KNOWN` table names, which must stay
+  different). Results and the compile-time overhead: spec/landed/codegen/WP-941.md.
 
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90

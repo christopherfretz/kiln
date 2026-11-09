@@ -3317,6 +3317,12 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.out.push_str(&width.to_string());
                 self.out.push('_');
             }
+            // `DB <expression> _` / `DU <expression> _`: `_BitInt(N)` of a
+            // template parameter (clang `mangleType(const
+            // DependentBitIntType *)`).
+            TypeView::DependentBitInt { signed, width } => {
+                self.dependent_bitint(signed, ast.types.expr_origin(q.ty(), width));
+            }
             TypeView::TemplateTypeParm(d) => {
                 let (depth, idx) = ast
                     .template_parm(d)

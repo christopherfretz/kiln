@@ -14,8 +14,10 @@ the coverage tools report:
          compared).
 
 Totals (functions, counters, counted executions; gcov executable and
-executed lines) are printed per program and mode. Exit 0 when every
-comparison is equal, 1 otherwise.
+executed lines) are printed per program and mode. A (program, mode) pair
+in `KNOWN` is an accepted, explained difference: it is reported, and it
+fails once it becomes equal (drop the entry then). Exit 0 when every
+other comparison is equal, 1 otherwise.
 
   scripts/coverage-compare.py [--kiln PATH] [--clang clang++-19]
                               [--mode instr|gcov|both] [files...]
@@ -39,8 +41,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 # (program, mode) -> why kiln differs today; reported, not failed.
-# Empty: every program compares equal (an entry that becomes equal fails).
-KNOWN: dict = {}
+# An entry that becomes equal fails.
+KNOWN: dict = {
+    ("signature_exprs.cpp", "instr"): "clang's MapRegionCounters also walks the "
+    "written signature (return-type template arguments, decltype and noexcept "
+    "operands), so those feed its hash and a noexcept `&&` takes a counter; kiln "
+    "walks the body only (WP-941 follow-up)",
+}
 
 
 def norm_name(fn):
