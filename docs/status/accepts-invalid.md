@@ -534,6 +534,12 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
     limitation is never proof, and only builtins clang 19 does not evaluate
     (`Oven::No` rows) are reported. The three repros pass, with
     `dcl.constexpr/potential-constant-{builtins-spread,builtin-bswap-cxx17,unsupported-node-cxx17,builtin-not-constexpr}.cpp`.
+    WP-945 replaced the `Oven::No` rule with clang's own
+    `__has_constexpr_builtin` table per `-std` and compat (so
+    `__builtin_floor(2.5) + x` is reported, as in clang), split library
+    builtins (`strlen` always fails, `fabs` once its arguments are known),
+    and skips functions declared in system headers, as clang does
+    (spec/landed/sema/WP-945.md).
 15. **Templates and deduction**: all fixed in WP-958
     (spec/landed/sema/WP-958.md):
     - `temp.spec.partial.order/pack-of-references-more-specialized.cpp`:

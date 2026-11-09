@@ -26,6 +26,7 @@ use kiln_pp::ClangCompat;
 
 use crate::args::{ArgError, Args};
 use crate::toolchain::Target;
+use crate::x86_features;
 
 /// The resolved target features beyond the target's base set.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -41,9 +42,15 @@ pub struct TargetFeatures {
     /// The architecture version `(major, minor)`: `(8, 0)` for `armv8-a`,
     /// `generic` and no option.
     pub arch: (u8, u8),
-    /// On x86-64, `extra` is instead the `-march=<cpu>` CPU's features as
-    /// `+name`, sorted (empty without `-march=`, for `native`, or for a
-    /// CPU clang 21 does not know: the default `x86-64`'s; WP-630).
+    /// x86-64: the `-march=` CPU's features (empty: the default
+    /// `x86-64`'s), before the `-m<feature>` items (WP-1000). On x86-64
+    /// `extra` is instead the whole feature map as `+name`/`-name`,
+    /// sorted (empty: the default `x86-64`'s; WP-630, WP-1000).
+    pub x86_cpu_features: Vec<String>,
+    /// x86-64: the command line's feature items as written, clang's
+    /// `FeaturesAsWritten` (the deduplicated `-m<feature>` items, then
+    /// `+retpoline-indirect-calls`).
+    pub x86_written: Vec<String>,
     /// `-msve-vector-bits=N` (128 .. 2048, a power of two); `None` for
     /// `scalable` or no option.
     pub sve_vector_bits: Option<u32>,
@@ -77,10 +84,27 @@ impl TargetFeatures {
     /// The x86-64 features finally enabled, sorted ([`TargetFeatures::extra`],
     /// or the default `x86-64` CPU's).
     pub fn x86_enabled(&self) -> Vec<String> {
-        if self.extra.is_empty() {
-            return X86_64_FEATURES.iter().map(|&f| f.to_owned()).collect();
+        match self.x86_map() {
+            Some(m) => m.into_iter().filter(|e| e.1).map(|e| e.0).collect(),
+            None => X86_64_FEATURES.iter().map(|&f| f.to_owned()).collect(),
         }
-        self.extra.iter().filter_map(|e| e.strip_prefix('+')).map(str::to_owned).collect()
+    }
+
+    /// The x86-64 feature map [`TargetFeatures::extra`] lists, if it lists
+    /// one (a `-march=` CPU or feature flags; not only the
+    /// `-mspeculative-load-hardening` retpoline feature).
+    pub fn x86_map(&self) -> Option<BTreeMap<String, bool>> {
+        let option = |e: &String| e == "+retpoline-indirect-calls";
+        if self.extra.iter().all(option) {
+            return None;
+        }
+        let entries = self.extra.iter().filter(|e| !option(e));
+        Some(
+            entries
+                .filter_map(|e| e.split_at_checked(1))
+                .map(|(s, n)| (n.to_owned(), s == "+"))
+                .collect(),
+        )
     }
 
     /// The finally enabled feature names: the base `fp-armv8` and `neon`
@@ -410,6 +434,75 @@ impl ExtensionSet {
     }
 }
 
+/// [`resolve`] on x86-64 (spec/driver.md "x86-64 target features").
+fn resolve_x86(args: &Args, target: &Target, f: &mut TargetFeatures, errors: &mut Vec<ArgError>) {
+    let unsupported = |opt: &str, v: &str| ArgError::UnsupportedValue(opt.to_owned(), v.to_owned());
+    // x86: `-march=<cpu>` names one of clang's CPUs (`getX86TargetCPU`)
+    // or `native`. A CPU clang 21 knows has its features
+    // (`x86_targets::CPUS`, with clang 19's / 22's differences);
+    // `native` on a Linux x86-64 host has the host's `/proc/cpuinfo`
+    // features, elsewhere none (spec/driver.md "x86-64 target
+    // features"). Any other value stays unsupported.
+    let v22 = args.predef.clang_compat == ClangCompat::Clang22;
+    let mut cpu_features: Option<Vec<&'static str>> = None;
+    match args.march.as_deref() {
+        Some("native") => {
+            f.cpu = Some("native".to_owned());
+            if std::env::consts::ARCH == "x86_64" {
+                cpu_features = std::fs::read_to_string("/proc/cpuinfo")
+                    .ok()
+                    .map(|c| x86_features::native_features(&c, v22));
+            }
+        }
+        Some(v) if is_x86_cpu(v, v22) => {
+            f.cpu = Some(v.to_owned());
+            cpu_features = x86_cpu(v).map(|c| x86_features::cpu_features(c, v22));
+        }
+        Some(v) => errors.push(unsupported("-march=", v)),
+        None => {}
+    }
+    // WP-1000: the `-m[no-]<feature>` flags this clang lacks are
+    // unknown arguments; the others, deduplicated as clang's driver
+    // does, build clang's `initFeatureMap` over the CPU's features
+    // (spec/driver.md "x86-64 target features"). `-Xclang
+    // -target-feature` stays ignored on x86-64.
+    for a in &args.x86_feature_flags {
+        if x86_features::unknown_at(a, v22) {
+            errors.push(ArgError::Unknown(a.clone()));
+        } else if let Some((opt, v)) = x86_features::bad_value(a) {
+            errors.push(unsupported(&opt, &v));
+        }
+    }
+    let items = x86_features::driver_items(&args.x86_feature_flags, v22);
+    f.x86_cpu_features = cpu_features.iter().flatten().map(|&c| c.to_owned()).collect();
+    if cpu_features.is_some() || !items.is_empty() {
+        let cpu = cpu_features.unwrap_or_else(|| X86_64_FEATURES.to_vec());
+        let map = x86_features::feature_map(&cpu, &items, v22);
+        f.extra =
+            map.into_iter().map(|(n, on)| format!("{}{n}", if on { '+' } else { '-' })).collect();
+    }
+    f.x86_written = items;
+    // WP-813: clang's `getX86TargetFeatures` adds the retpoline call
+    // thunks for `-mspeculative-load-hardening`.
+    if args.codegen.speculative_load_hardening {
+        f.extra.push("+retpoline-indirect-calls".to_owned());
+        f.x86_written.push("+retpoline-indirect-calls".to_owned());
+    }
+    if args.mcpu.is_some() {
+        let t = args.target.as_deref().unwrap_or(target.triple);
+        errors.push(ArgError::UnsupportedForTarget("-mcpu=".to_owned(), t.into()));
+    }
+    if args.sve_vector_bits.is_some() {
+        let t = args.target.as_deref().unwrap_or(target.triple);
+        errors.push(ArgError::UnsupportedForTarget("-msve-vector-bits=".to_owned(), t.into()));
+    }
+    // WP-846: clang's target-specific `-mbranch-protection=`.
+    if args.codegen.mbranch_protection_given {
+        let t = args.target.as_deref().unwrap_or(target.triple);
+        errors.push(ArgError::UnsupportedForTarget("-mbranch-protection=".to_owned(), t.into()));
+    }
+}
+
 /// Resolves the target features of `args` for `target`. Off `AArch64`,
 /// `-march=`/`-mcpu=` are unsupported values, `-msve-vector-bits=` is an
 /// unsupported option and `-target-feature` is ignored. Every error is
@@ -420,39 +513,7 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
     let unsupported = |opt: &str, v: &str| ArgError::UnsupportedValue(opt.to_owned(), v.to_owned());
     let native = |v: &Option<String>| v.as_deref() == Some("native");
     if !target.is_aarch64() {
-        // x86: `-march=<cpu>` names one of clang's CPUs (`getX86TargetCPU`)
-        // or `native`. A CPU clang 21 knows has its features
-        // (`x86_targets::CPUS`); `native` and the others are not expanded
-        // (spec/driver.md deviations). Any other value stays unsupported.
-        let v22 = args.predef.clang_compat == ClangCompat::Clang22;
-        match args.march.as_deref() {
-            Some(v) if v == "native" || is_x86_cpu(v, v22) => {
-                f.cpu = Some(v.to_owned());
-                if let Some(c) = x86_cpu(v) {
-                    f.extra = c.features.iter().map(|n| format!("+{n}")).collect();
-                }
-            }
-            Some(v) => errors.push(unsupported("-march=", v)),
-            None => {}
-        }
-        // WP-813: clang's `getX86TargetFeatures` adds the retpoline call
-        // thunks for `-mspeculative-load-hardening`.
-        if args.codegen.speculative_load_hardening {
-            f.extra.push("+retpoline-indirect-calls".to_owned());
-        }
-        if let Some(v) = &args.mcpu {
-            errors.push(unsupported("-mcpu=", v));
-        }
-        if args.sve_vector_bits.is_some() {
-            let t = args.target.as_deref().unwrap_or(target.triple);
-            errors.push(ArgError::UnsupportedForTarget("-msve-vector-bits=".to_owned(), t.into()));
-        }
-        // WP-846: clang's target-specific `-mbranch-protection=`.
-        if args.codegen.mbranch_protection_given {
-            let t = args.target.as_deref().unwrap_or(target.triple);
-            errors
-                .push(ArgError::UnsupportedForTarget("-mbranch-protection=".to_owned(), t.into()));
-        }
+        resolve_x86(args, target, &mut f, &mut errors);
         return (f, errors);
     }
     let v22 = args.predef.clang_compat == ClangCompat::Clang22;
@@ -518,6 +579,18 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
             "-mbranches-within-32B-boundaries".to_owned(),
             t.into(),
         ));
+    }
+    // WP-1000: clang's x86 feature flags are target-specific options
+    // (named as clang's driver spells them), unknown when this clang
+    // lacks them; `-msse4`, `-msse4.2` and `-m[no-]3dnow[a]` are only
+    // unused ([`x86_features::non_x86_spelling`]; the driver warns).
+    for a in &args.x86_feature_flags {
+        if x86_features::unknown_at(a, v22) {
+            errors.push(ArgError::Unknown(a.clone()));
+        } else if let Some(o) = x86_features::non_x86_spelling(a, v22) {
+            let t = args.target.as_deref().unwrap_or(target.triple);
+            errors.push(ArgError::UnsupportedForTarget(o, t.into()));
+        }
     }
     (f, errors)
 }
@@ -607,60 +680,81 @@ fn is_x86_cpu(v: &str, v22: bool) -> bool {
 }
 
 /// The default `x86-64` CPU's features.
-const X86_64_FEATURES: [&str; 7] = ["cmov", "cx8", "fxsr", "mmx", "sse", "sse2", "x87"];
+const X86_64_FEATURES: [&str; 7] = x86_features::X86_64;
 
 /// The generated row of x86-64 CPU `name`, if clang 21 knows it.
 fn x86_cpu(name: &str) -> Option<crate::x86_targets::Cpu> {
     crate::x86_targets::cpu(name)
 }
 
-/// How the predefined macros of `-march=<cpu>` differ from the default
-/// x86-64 ones: each macro it defines or redefines with its value, then
-/// each default one it does not define with `None` (clang 21's `-dM -E`;
-/// spec/landed/driver/WP-630.md). Empty for `native` and an unknown CPU.
-pub fn x86_cpu_macros(cpu: &str) -> Vec<(String, Option<String>)> {
-    let Some(c) = x86_cpu(cpu) else { return Vec::new() };
-    let def = c.define.iter().map(|(n, v)| (n.to_owned(), Some(v.to_owned())));
-    def.chain(c.undef.iter().map(|n| (n.to_owned(), None))).collect()
-}
-
-/// The features x86 feature `f` enables: itself and what it implies
-/// (`x86_targets::IMPLIES`; nothing for a name the table lacks, whose
-/// caller enables just the name itself).
-fn x86_implies(f: &str) -> impl Iterator<Item = &'static str> {
-    crate::x86_targets::implies(f).into_iter().flat_map(crate::x86_targets::List::iter)
+/// How the predefined macros of the x86-64 features `f` differ from the
+/// default x86-64 ones: each macro defined or redefined with its value,
+/// then each default one no longer defined with `None`. The CPU's own
+/// macros (`__corei7__`, `__tune_corei7__`; the lowercase ones) come from
+/// the `-march=` CPU's row (clang 21's `-dM -E`;
+/// spec/landed/driver/WP-630.md), the feature macros from the final
+/// feature map ([`x86_features::feature_macros`], WP-1000). Empty without
+/// a feature map (no `-march=` CPU kiln expands and no feature flag).
+pub fn x86_macros(f: &TargetFeatures, v22: bool) -> Vec<(String, Option<String>)> {
+    let Some(map) = f.x86_map() else { return Vec::new() };
+    let cpu = f.cpu.as_deref().and_then(x86_cpu);
+    let own = |n: &&str| n.bytes().any(|b| b.is_ascii_lowercase());
+    let base =
+        x86_features::feature_macros(&x86_features::feature_map(&X86_64_FEATURES, &[], v22), v22);
+    let new = x86_features::feature_macros(&map, v22);
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    if let Some(c) = &cpu {
+        out.extend(
+            c.define
+                .iter()
+                .filter(|(n, _)| own(n))
+                .map(|(n, v)| (n.to_owned(), Some(v.to_owned()))),
+        );
+    }
+    out.extend(
+        new.iter()
+            .filter(|(n, v)| base.get(*n) != Some(v))
+            .map(|(n, v)| (n.clone(), Some(v.clone()))),
+    );
+    if let Some(c) = &cpu {
+        out.extend(c.undef.iter().filter(own).map(|n| (n.to_owned(), None)));
+    }
+    out.extend(base.keys().filter(|n| !new.contains_key(*n)).map(|n| (n.clone(), None)));
+    out
 }
 
 /// The features of a GNU `target("...")` attribute string on x86-64 over
-/// the module's features `module` (`+name`/`-name`), as clang 19 to 21's
-/// `X86TargetInfo::initFeatureMap` computes a function's map
-/// (spec/landed/driver/WP-630.md "target"):
+/// the module `m` (its CPU's features, else the default `x86-64`'s), as clang's
+/// `getFunctionFeatureMap` and `X86TargetInfo::initFeatureMap` compute a
+/// function's map (spec/landed/driver/WP-630.md "target", WP-1000):
 ///
 /// - Each comma-separated item is a feature, `no-<f>` disabling it;
 ///   `fpmath=` items and empty ones are skipped. `arch=<cpu>` starts from
-///   that CPU's features instead of the module's and makes it the
-///   function's CPU; `tune=<cpu>` its tune CPU. An `arch=` or `tune=`
-///   naming no x86-64 CPU makes clang ignore the attribute (with a warning
-///   kiln does not give): the result is then the module's features.
-/// - The `evex512` items are held back. With an AVX-512 feature in the
-///   map or among the items (and no `avx10.1-512` in the map),
-///   `+evex512` is applied last, or `-evex512` when an item disabled it;
-///   otherwise with an AVX10 feature, `evex512` follows `avx10.1-512`.
-///   The AVX10 items are applied after the others.
-/// - Enabling a feature enables what it implies; disabling one disables
-///   every feature that implies it.
-/// - Then `sse` enables `mmx`, `sse4.2` enables `popcnt` and `crc32`, and
-///   `avx` enables `xsave`, unless an item disabled that feature.
+///   that CPU's features (as `-march=<cpu>` at this compat level) instead
+///   of the module's and makes it the function's CPU; `tune=<cpu>` its
+///   tune CPU. An `arch=` or `tune=` naming no x86-64 CPU makes clang
+///   ignore the attribute (with a warning kiln does not give): the result
+///   is then the module's features.
+/// - The command line's items as written (`m.written`, clang
+///   `FeaturesAsWritten`) come before the attribute's, with or without
+///   `arch=`.
+/// - The items are applied as the `-m<feature>` items of `-march=`
+///   ([`x86_features::feature_map`]): clang 19 holds the `evex512` items
+///   back and reorders the AVX10 ones; enabling a feature enables what it
+///   implies and disabling one disables every feature that implies it;
+///   then `sse` enables `mmx`, `sse4.2` `popcnt` and `crc32`, and `avx`
+///   `xsave`, unless an item disabled that feature.
+/// - At `-fclang-compat=22` the `evex512` / `no-evex512` items are
+///   dropped: clang 22 has no such feature, and kiln's builtin headers
+///   (clang 19's) name it.
 ///
 /// The result is the items' `+` features in order (an `always_inline`
 /// callee requires those first), then every feature of the final map.
-/// `_v22` is unused: clang 19 and 22 agree here as far as kiln measured.
 pub fn x86_target_attr_features(
     attr: &str,
-    module: &[String],
-    _v22: bool,
+    m: &kiln_codegen::TargetAttrModule<'_>,
 ) -> kiln_codegen::TargetAttrFeatures {
-    let mut map: BTreeMap<String, bool> = BTreeMap::new();
+    let (module, v22) = (m.features, m.v22);
     let (mut cpu, mut tune) = (None, None);
     for item in attr.split(',').map(str::trim) {
         let (slot, v) = match (item.strip_prefix("arch="), item.strip_prefix("tune=")) {
@@ -674,83 +768,35 @@ pub fn x86_target_attr_features(
         }
         *slot = Some(v.to_owned());
     }
-    match cpu.as_deref() {
+    let mut map: BTreeMap<String, bool> = match cpu.as_deref() {
         Some(c) => match x86_cpu(c) {
-            Some(c) => map.extend(c.features.iter().map(|f| (f.to_owned(), true))),
-            None => map.extend(X86_64_FEATURES.iter().map(|&f| (f.to_owned(), true))),
+            Some(c) => x86_features::cpu_map(&x86_features::cpu_features(c, v22), v22),
+            None => x86_features::cpu_map(&X86_64_FEATURES, v22),
         },
+        None if m.cpu_features.is_empty() => x86_features::cpu_map(&X86_64_FEATURES, v22),
         None => {
-            for m in module {
-                if let Some((sign, name)) = m.split_at_checked(1) {
-                    map.insert(name.to_owned(), sign == "+");
-                }
-            }
+            let c: Vec<&str> = m.cpu_features.iter().map(String::as_str).collect();
+            x86_features::cpu_map(&c, v22)
         }
-    }
-    let on = |map: &BTreeMap<String, bool>, f: &str| map.get(f) == Some(&true);
-    let mut avx512 = on(&map, "avx512f");
-    let (mut avx10, mut avx10_512) = (on(&map, "avx10.1-256"), on(&map, "avx10.1-512"));
-    let mut evex512 = None;
-    let (mut items, mut avx10_items): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
-    for item in attr.split(',').map(str::trim) {
-        if item.is_empty() || ["arch=", "tune=", "fpmath="].iter().any(|p| item.starts_with(p)) {
-            continue;
-        }
-        let f = match item.strip_prefix("no-") {
+    };
+    let own: Vec<String> = attr
+        .split(',')
+        .map(str::trim)
+        .filter(|i| {
+            !i.is_empty() && !["arch=", "tune=", "fpmath="].iter().any(|p| i.starts_with(p))
+        })
+        .map(|i| match i.strip_prefix("no-") {
             Some(f) => format!("-{f}"),
-            None => format!("+{item}"),
-        };
-        if f.get(1..7) == Some("avx10.") {
-            if f.starts_with('+') {
-                avx10 = true;
-                avx10_512 |= f.ends_with("512");
-            } else if f == "-avx10.1-256" {
-                (avx10, avx10_512) = (false, false);
-            } else if f == "-avx10.1-512" {
-                avx10_512 = false;
-            }
-            avx10_items.push(f);
-            continue;
-        }
-        if f.starts_with("+avx512") {
-            avx512 = true;
-        }
-        match f.as_str() {
-            "+evex512" => evex512 = Some(true),
-            "-evex512" => evex512 = Some(false),
-            _ => items.push(f),
-        }
-    }
-    items.append(&mut avx10_items);
-    if avx512 && !avx10_512 {
-        items.push(if evex512 == Some(false) { "-evex512" } else { "+evex512" }.to_owned());
-    } else if avx10 {
-        items.push(if avx10_512 { "+evex512" } else { "-evex512" }.to_owned());
-    }
-    for f in &items {
-        let Some((sign, name)) = f.split_at_checked(1) else { continue };
-        if sign == "+" {
-            map.insert(name.to_owned(), true);
-            for g in x86_implies(name) {
-                map.insert(g.to_owned(), true);
-            }
-        } else {
-            map.insert(name.to_owned(), false);
-            for (g, imp) in crate::x86_targets::implications() {
-                if imp.contains(name) {
-                    map.insert(g.to_owned(), false);
-                }
-            }
-        }
-    }
-    let disabled = |n: &str| items.iter().any(|f| f.strip_prefix('-') == Some(n));
-    let adds = [("sse4.2", "popcnt"), ("sse", "mmx"), ("avx", "xsave"), ("sse4.2", "crc32")];
-    for (cond, add) in adds {
-        if on(&map, cond) && !disabled(add) {
-            map.insert(add.to_owned(), true);
-        }
-    }
-    let own = items.iter().filter(|f| f.starts_with('+')).cloned();
+            None => format!("+{i}"),
+        })
+        // kiln's builtin headers are clang 19's, whose SSE functions say
+        // `target("sse2,no-evex512")`; clang 22 has no `evex512` (its
+        // headers do not name it), so its items are dropped there.
+        .filter(|f: &String| !(v22 && f[1..] == *"evex512"))
+        .collect();
+    let items: Vec<String> = m.written.iter().chain(&own).cloned().collect();
+    x86_features::apply_items(&mut map, &items, v22);
+    let own = own.into_iter().filter(|f| f.starts_with('+'));
     let all = map.into_iter().map(|(n, v)| format!("{}{n}", if v { '+' } else { '-' }));
     kiln_codegen::TargetAttrFeatures { features: own.chain(all).collect(), cpu, tune }
 }
@@ -771,6 +817,14 @@ fn attr_extension(name: &str, v22: bool) -> Option<&'static str> {
 fn is_extension_feature(f: &str, v22: bool) -> bool {
     ["fp-armv8", "neon", "fullfp16", "jsconv", "complxnum", "mte", "rand", "fmv"].contains(&f)
         || extension(f, v22) == Some(f)
+}
+
+/// [`target_attr_features`] as a [`kiln_codegen::TargetAttrParser`].
+pub fn target_attr_parser(
+    attr: &str,
+    m: &kiln_codegen::TargetAttrModule<'_>,
+) -> kiln_codegen::TargetAttrFeatures {
+    target_attr_features(attr, m.features, m.v22)
 }
 
 /// The features of a GNU `target("...")` attribute string on `AArch64`
@@ -969,6 +1023,8 @@ mod tests {
         let t =
             ArgError::UnsupportedForTarget("-msve-vector-bits=".into(), "x86_64-linux-gnu".into());
         assert_eq!(res("--target=x86_64-linux-gnu -msve-vector-bits=256 a.cpp", false).1, [t]);
+        let t = ArgError::UnsupportedForTarget("-mcpu=".into(), "x86_64-linux-gnu".into());
+        assert_eq!(res("--target=x86_64-linux-gnu -mcpu=cortex-a57 a.cpp", false).1, [t]);
     }
 
     #[test]
@@ -1019,8 +1075,9 @@ mod tests {
         assert_eq!(cpu("-march=novalake a.cpp", false).as_deref(), Some("novalake"));
     }
 
-    /// WP-630: an x86-64 `-march=<cpu>` has clang 21's features and
-    /// predefined macros; `native` and the default keep `x86-64`'s.
+    /// WP-630: an x86-64 `-march=<cpu>` has clang's features and
+    /// predefined macros; the default keeps `x86-64`'s, as `native` does
+    /// off an x86-64 host.
     #[test]
     fn x86_cpu_features() {
         let f = res("-march=westmere a.cpp", false).0;
@@ -1032,32 +1089,63 @@ mod tests {
         assert_eq!(f.x86_enabled().len(), 16);
         let base = ["cmov", "cx8", "fxsr", "mmx", "sse", "sse2", "x87"];
         assert_eq!(res("a.cpp", false).0.x86_enabled(), base);
-        assert_eq!(res("-march=native a.cpp", false).0.x86_enabled(), base);
-        let m = x86_cpu_macros("westmere");
+        if std::env::consts::ARCH != "x86_64" {
+            // Off an x86-64 host `native` has no features to detect.
+            assert_eq!(res("-march=native a.cpp", false).0.x86_enabled(), base);
+            assert_eq!(x86_macros(&res("-march=native a.cpp", false).0, true), []);
+        }
+        let m = x86_macros(&res("-march=westmere a.cpp", false).0, true);
         assert!(m.contains(&("__SSE4_2__".to_owned(), Some("1".to_owned()))));
         assert!(m.contains(&("__tune_corei7__".to_owned(), Some("1".to_owned()))));
         assert!(m.contains(&("__k8".to_owned(), None)));
         assert!(!m.iter().any(|(n, _)| n == "__AES__"));
-        assert_eq!(x86_cpu_macros("x86-64"), []);
-        assert_eq!(x86_cpu_macros("native"), []);
+        assert_eq!(x86_macros(&res("-march=x86-64 a.cpp", false).0, true), []);
     }
 
-    /// WP-630: x86 `target("...")` strings over the default module
-    /// features: the function's map as clang 21's `target-features`
-    /// prints it (enabled features sorted, then disabled ones).
+    /// WP-1000: the feature-derived macros of every CPU reproduce its
+    /// generated row (clang 21's `-dM -E`, which still has `evex512`, as
+    /// clang 19), as a set. The CPUs whose clang 19 features differ from
+    /// clang 21's are skipped (the corpus pins them against clang 19).
+    #[test]
+    fn x86_cpu_macros_from_features() {
+        // clang 22's further CPUs are no `-fclang-compat=19` CPU.
+        let same = |c: &crate::x86_targets::Cpu| {
+            x86_features::cpu_features(*c, false) == c.features.iter().collect::<Vec<_>>()
+        };
+        for c in crate::x86_targets::cpus().filter(|c| !X86_CPUS_22.contains(&c.name) && same(c)) {
+            let f = res(&format!("-march={} -fclang-compat=19 a.cpp", c.name), false).0;
+            let mut got: Vec<_> = x86_macros(&f, false);
+            let mut want: Vec<(String, Option<String>)> =
+                c.define.iter().map(|(n, v)| (n.to_owned(), Some(v.to_owned()))).collect();
+            want.extend(c.undef.iter().map(|n| (n.to_owned(), None)));
+            got.sort();
+            want.sort();
+            assert_eq!(got, want, "{}", c.name);
+        }
+    }
+
+    /// WP-630, WP-1000: x86 `target("...")` strings over the default
+    /// module features: the function's map as clang 19's (and clang 22's)
+    /// `target-features` prints it (enabled features sorted, then disabled
+    /// ones).
+    fn md(module: &[String], v22: bool) -> kiln_codegen::TargetAttrModule<'_> {
+        kiln_codegen::TargetAttrModule { features: module, cpu_features: &[], written: &[], v22 }
+    }
+
     #[test]
     fn x86_target_attribute() {
         let module: Vec<String> =
             ["+cmov", "+cx8", "+fxsr", "+mmx", "+sse", "+sse2", "+x87"].map(String::from).into();
-        let t = |s: &str| {
+        let tv = |s: &str, v22: bool| {
             let mut m = BTreeMap::new();
-            for e in x86_target_attr_features(s, &module, true).features {
+            for e in x86_target_attr_features(s, &md(&module, v22)).features {
                 m.insert(e[1..].to_owned(), e.starts_with('+'));
             }
             let on = m.iter().filter(|e| *e.1).map(|e| format!("+{}", e.0));
             let off = m.iter().filter(|e| !*e.1).map(|e| format!("-{}", e.0));
             on.chain(off).collect::<Vec<_>>().join(",")
         };
+        let t = |s: &str| tv(s, false);
         let base = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87";
         assert_eq!(
             t("sse4.2"),
@@ -1068,17 +1156,44 @@ mod tests {
         assert_eq!(
             t("avx512f,no-evex512"),
             "+avx,+avx2,+avx512f,+cmov,+crc32,+cx8,+f16c,+fma,+fxsr,+mmx,+popcnt,+sse,+sse2,\
-             +sse3,+sse4.1,+sse4.2,+ssse3,+x87,+xsave,-amx-avx512,-avx10.1-512,-avx10.2-512,\
-             -evex512"
+             +sse3,+sse4.1,+sse4.2,+ssse3,+x87,+xsave,-avx10.1-512,-evex512"
+        );
+        // clang 22: no `evex512` (WP-1000); its headers do not name it.
+        assert_eq!(tv("sse2,no-evex512", true), base);
+        assert_eq!(
+            tv("avx512f,no-evex512", true),
+            "+avx,+avx2,+avx512f,+cmov,+crc32,+cx8,+f16c,+fma,+fxsr,+mmx,+popcnt,+sse,+sse2,\
+             +sse3,+sse4.1,+sse4.2,+ssse3,+x87,+xsave"
         );
         assert_eq!(t("aes,pclmul"), "+aes,+cmov,+cx8,+fxsr,+mmx,+pclmul,+sse,+sse2,+x87");
         assert_eq!(t("tune=generic,ssse3"), base);
-        let a = x86_target_attr_features("arch=haswell,tune=znver4", &module, true);
+        let a = x86_target_attr_features("arch=haswell,tune=znver4", &md(&module, true));
         assert_eq!((a.cpu.as_deref(), a.tune.as_deref()), (Some("haswell"), Some("znver4")));
         assert!(a.features.iter().any(|f| f == "+avx2"));
         // The attribute's own features come first.
-        let own = x86_target_attr_features("popcnt,crc32", &module, true).features;
+        let own = x86_target_attr_features("popcnt,crc32", &md(&module, true)).features;
         assert_eq!(own[..2], ["+popcnt", "+crc32"]);
+        // clang's `FeaturesAsWritten` come first: `-march=x86-64-v3
+        // -mno-crc32` keeps crc32 off in a `target("sha")` function, and
+        // an `arch=` CPU still gets them.
+        let v3 = x86_features::cpu_features(x86_cpu("x86-64-v3").unwrap(), true);
+        let cpu: Vec<String> = v3.iter().map(|&c| c.to_owned()).collect();
+        let written = vec!["-crc32".to_owned()];
+        let m = kiln_codegen::TargetAttrModule {
+            features: &module,
+            cpu_features: &cpu,
+            written: &written,
+            v22: true,
+        };
+        let has = |a: &str, f: &str| {
+            x86_target_attr_features(a, &m)
+                .features
+                .iter()
+                .rev()
+                .any(|e| e[1..] == *f && e.starts_with('+'))
+        };
+        assert!(has("sha", "sha") && has("sha", "avx2") && !has("sha", "crc32"));
+        assert!(!has("arch=haswell", "crc32") && has("arch=haswell", "movbe"));
     }
 
     /// `target("...")` strings over the default module features (clang

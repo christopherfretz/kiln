@@ -2,7 +2,9 @@ name: kiln-ci
 description: >
   The setup every job of .github/workflows/ci-lane.yml shares
   (docs/VALIDATION.md "GitHub Actions"): the Debian toolchain packages (plus
-  gdb and lldb-19 where the job runs the debugger tests), a
+  gdb and lldb-19 where the job runs the debugger tests, compiler-rt's
+  sanitizer runtimes where it runs the corpus, and cmake and ninja where it
+  runs the CMake modules end-to-end), a
   check that the image's GCC 16.1 (the reflection oracle, `KILN_GCC` from the
   job env) compiles a `<meta>` TU, the pinned Rust toolchain and the cargo
   cache. The job then runs its slice of `cargo xtask ci`. A local action is
@@ -21,6 +23,22 @@ inputs:
       install gdb and lldb-19 for the `expect: debugger` tests in
       tests/debuginfo (WP-816, spec/harness.md "Debugger tests"). The job
       env's KILN_REQUIRE_DEBUGGERS=1 makes a missing debugger an ERROR.
+    required: false
+    default: "false"
+  sanitizer-runtimes:
+    description: >
+      "true" in the jobs that run the corpus: install compiler-rt for both
+      clangs (libclang-rt-19-dev, libclang-rt-22-dev), which the
+      `requires: sanitizer-runtime` run tests link (WP-1032, WP-1034;
+      spec/harness.md "Directives"). The job env's
+      KILN_REQUIRE_SANITIZER_RUNTIME=1 makes a missing runtime an ERROR.
+    required: false
+    default: "false"
+  cmake:
+    description: >
+      "true" in the one job per lane that runs `scripts/oss/selftest.sh
+      --cmake-modules` (WP-982, WP-1034): install cmake (Debian trixie's
+      3.31, the e2e needs 3.28) and ninja-build.
     required: false
     default: "false"
 runs:
@@ -43,6 +61,16 @@ runs:
           apt-get install -y -qq --no-install-recommends gdb lldb-19 >/dev/null
           gdb --version | head -1
           lldb-19 --version | head -1
+        fi
+        if [ "${{ inputs.sanitizer-runtimes }}" = true ]; then
+          apt-get install -y -qq --no-install-recommends \
+            libclang-rt-19-dev libclang-rt-22-dev >/dev/null
+          echo "compiler-rt: $(clang++-19 --print-runtime-dir) $(clang++-22 --print-runtime-dir)"
+        fi
+        if [ "${{ inputs.cmake }}" = true ]; then
+          apt-get install -y -qq --no-install-recommends cmake ninja-build >/dev/null
+          cmake --version | head -1
+          echo "ninja $(ninja --version)"
         fi
         # The GCC oracle (spec/harness.md "GCC oracle"): the job's KILN_GCC
         # must be GCC 16.1 and compile libstdc++'s <meta> with reflection.
