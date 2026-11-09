@@ -306,6 +306,11 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) pushed: SymMap<Vec<Option<Rc<MacroDef>>>>,
     pub(crate) entered: HashSet<FileId>,
     pub(crate) include_depth: u32,
+    /// An `#include` hit the depth limit (clang
+    /// `HasReachedMaxIncludeDepth`): from then on a file already entered
+    /// is not re-entered, so an include cycle with two back edges ends
+    /// instead of walking every path to the limit.
+    pub(crate) include_limit_reached: bool,
     /// The first directive's `#` in the current unit's own file, and
     /// whether a directive that P3868R1 does not allow before a module
     /// directive was seen there (`note_unit_directive`).
@@ -407,6 +412,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             pushed: SymMap::default(),
             entered: HashSet::new(),
             include_depth: 0,
+            include_limit_reached: false,
             unit_first_hash: None,
             unit_pre_directive: false,
             main_file: None,

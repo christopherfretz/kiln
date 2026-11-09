@@ -483,7 +483,7 @@ impl<'a> IrTypes<'a> {
             if f.bit_width.is_some() && discrete {
                 i = self.accumulate_discrete_bitfields(fields, i, layout, &mut members, &mut seq);
             } else if f.bit_width.is_some() {
-                i = self.accumulate_bitfields(fields, i, layout, &mut members, &mut seq);
+                i = self.accumulate_bitfields(fields, i, def, layout, nv_base, &mut members, &mut seq);
             } else if self.is_empty_field(&f) {
                 i += 1;
             } else {
@@ -622,8 +622,11 @@ impl<'a> IrTypes<'a> {
             // members with storage are disjoint and sorted -- an empty
             // `[[no_unique_address]]` member has none, a potentially
             // overlapping one is stored as its base-subobject type, a
-            // bit-field run as its access units. No user input reaches a
-            // violation; it would only drop the padding, never wrap.
+            // bit-field run as its access units, clipped below a virtual
+            // base in the tail padding (`tail_clipping_offset`; reached
+            // before WP-971 by tests/conformance/class.bit/
+            // bitfield-access-unit-vbase-tail-run.cpp). A violation would only
+            // drop the padding, never wrap.
             let gap = m.offset.checked_sub(cur);
             debug_assert!(gap.is_some(), "overlapping IR members at {} < {cur}", m.offset);
             if let Some(gap) = gap
@@ -1015,14 +1018,45 @@ impl<'a> IrTypes<'a> {
         field
     }
 
+    /// clang `calculateTailClippingOffset`: a bit-field access unit
+    /// ending the fields may not reach past the non-virtual size, nor (for
+    /// the complete type, Itanium's overlapping-vbase ABI) into a virtual
+    /// base placed in the tail padding below it.
+    fn tail_clipping_offset(
+        &mut self,
+        def: DeclId,
+        layout: &kiln_ast::types::RecordLayout,
+        nv_base: bool,
+    ) -> u64 {
+        let mut scissor = layout.nv_size;
+        if nv_base {
+            return scissor;
+        }
+        let ast = self.ast();
+        for &(vb, off) in &layout.vbases {
+            let vb = ast.first(vb);
+            if self.is_empty_class(vb) {
+                continue;
+            }
+            if self.is_nearly_empty(vb) && !self.has_own_storage(def, vb) {
+                continue;
+            }
+            scissor = scissor.min(off);
+        }
+        scissor
+    }
+
     /// clang 19 `accumulateBitFields` (access units, non-discrete ABI,
     /// cheap unaligned access). Returns the index of the first field
     /// after the run.
+    #[allow(clippy::too_many_arguments)]
     fn accumulate_bitfields(
         &mut self,
         fields: &[FieldDesc],
         start: usize,
+        def: DeclId,
         layout: &kiln_ast::types::RecordLayout,
+        nv_base: bool,
         members: &mut Vec<Member>,
         seq: &mut u32,
     ) -> usize {
@@ -1087,7 +1121,7 @@ impl<'a> IrTypes<'a> {
                         l
                     } else {
                         if scissor == 0 {
-                            scissor = layout.nv_size;
+                            scissor = self.tail_clipping_offset(def, layout, nv_base);
                         }
                         scissor
                     };

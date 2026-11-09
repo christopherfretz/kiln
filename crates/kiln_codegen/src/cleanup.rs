@@ -614,8 +614,11 @@ impl Cg<'_> {
 
     /// `EHScopeStack::popCatch`.
     pub(crate) fn pop_catch(&mut self) -> Scope {
-        let s = self.f.cl.stack.pop().expect("catch scope");
-        debug_assert!(matches!(s.kind, Kind::Catch(_)));
+        let s = self.f.cl.stack.pop().expect("pop_catch: the scope stack holds the catch scope");
+        assert!(
+            matches!(s.kind, Kind::Catch(_)),
+            "pop_catch: every cleanup pushed inside the handler's scope was popped first"
+        );
         s
     }
 

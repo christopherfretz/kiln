@@ -5268,6 +5268,11 @@ impl Cg<'_> {
             let addr = Addr { v: slot.v, ty, align: slot.align };
             let flag = if dtor_class.is_some() {
                 let f = self.f.fir.alloca(LTy::I1, 1);
+                // clang `EmitAutoVarAlloca` calls `EnsureInsertPoint`
+                // before the flag store: the variable may follow a
+                // `noreturn` call or a `return` ([stmt.return]/1,
+                // [class.copy.elision]/1).
+                self.ensure_insert_point();
                 let fls = V::C(self.m.const_bool(false));
                 self.store(fls, f, 1, false);
                 self.f.nrvo_flags.insert(d, f);

@@ -35,6 +35,12 @@ impl Cg<'_> {
     /// evaluates each variable length array bound not evaluated yet,
     /// converted to `size_t` as unsigned (`VLASizeMap`).
     pub(crate) fn emit_vla_bounds(&mut self, q: QualType) -> R<()> {
+        if !self.ast.types.qflags(q).contains(TypeFlags::VARIABLY_MODIFIED) {
+            return Ok(());
+        }
+        // clang `EmitVariablyModifiedType` starts with `EnsureInsertPoint`:
+        // the declaration may follow a `noreturn` call or a `return`.
+        self.ensure_insert_point();
         let mut q = q;
         loop {
             if !self.ast.types.qflags(q).contains(TypeFlags::VARIABLY_MODIFIED) {
