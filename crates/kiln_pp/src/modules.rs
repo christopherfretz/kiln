@@ -17,6 +17,7 @@ use crate::bmi::{
     self, BmiError, Capsule, CapsuleFile, EmbedEntry, EmbedKey, IncludeEntry, IncludeHit,
     IncludeKey, UnitKind,
 };
+use crate::callbacks::ModuleFileRead;
 use crate::directive::Dir;
 use crate::include::{EmbedData, EmbedRequest, IncludeKind, IncludeRequest, ResolvedInclude};
 use crate::macros::{MacroDef, MacroTable, SymMap};
@@ -63,7 +64,31 @@ pub struct StdModuleCache(pub Rc<StdModuleLookup>);
 
 /// The function behind a [`StdModuleCache`]: module name and libc++
 /// source to the module file to read.
-pub type StdModuleLookup = dyn Fn(&str, &Path) -> Option<PathBuf>;
+pub type StdModuleLookup = dyn Fn(&str, &Path) -> Option<StdModuleFile>;
+
+/// A module file the [`StdModuleCache`] gives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StdModuleFile {
+    /// The module file (absolute).
+    pub path: PathBuf,
+    /// The files its build read, its libc++ source first: the cache
+    /// entry's stamp, so the same on a hit and on a miss (spec/driver.md
+    /// "Dependency output").
+    pub inputs: Vec<String>,
+}
+
+/// Where [`Preprocessor::find_module`] found a module.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Found {
+    /// `-fmodule-file=<name>=<path>`.
+    ModuleFile,
+    /// A `-fprebuilt-module-path` directory.
+    Prebuilt,
+    /// The path a module file read so far recorded for its import.
+    Recorded,
+    /// libc++'s module directory (`std`, `std.compat`).
+    StdDir,
+}
 
 impl std::fmt::Debug for StdModuleCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -140,6 +165,9 @@ pub(crate) struct UnitSave {
     first_hash: Option<Loc>,
     pre_directive: bool,
     module: Option<String>,
+    /// The unit is read from a module file's record
+    /// ([`PpCallbacks::module_unit`](crate::PpCallbacks::module_unit)).
+    from_module_file: bool,
 }
 
 /// Per-invocation module state.
@@ -540,17 +568,22 @@ impl Preprocessor<'_, '_> {
     /// The module file or interface source of module `name`
     /// (spec/modules.md §2, §11.6).
     fn find_module(&self, name: &str) -> Option<PathBuf> {
+        self.find_module_where(name).map(|(p, _)| p)
+    }
+
+    /// [`find_module`](Self::find_module), with where it was found.
+    fn find_module_where(&self, name: &str) -> Option<(PathBuf, Found)> {
         let m = self.modules.as_ref()?;
         let o = &m.opts;
         if let Some((_, p)) = o.module_files.iter().rev().find(|(n, _)| n == name) {
-            return Some(p.clone());
+            return Some((p.clone(), Found::ModuleFile));
         }
         let stem = name.replace(':', "-");
         for dir in &o.prebuilt_paths {
             for ext in ["pcm", "cppm", "ixx", "cpp"] {
                 let p = dir.join(format!("{stem}.{ext}"));
                 if p.is_file() {
-                    return Some(p);
+                    return Some((p, Found::Prebuilt));
                 }
             }
         }
@@ -558,7 +591,7 @@ impl Preprocessor<'_, '_> {
         // imports (clang reads the module files a BMI names).
         for r in m.replays.iter().rev() {
             if let Some((_, p)) = r.imports.iter().find(|(n, _)| n == name) {
-                return Some(PathBuf::from(p));
+                return Some((PathBuf::from(p), Found::Recorded));
             }
         }
         if matches!(name, "std" | "std.compat")
@@ -566,7 +599,7 @@ impl Preprocessor<'_, '_> {
         {
             let p = d.join(format!("{name}.cppm"));
             if p.is_file() {
-                return Some(p);
+                return Some((p, Found::StdDir));
             }
         }
         None
@@ -576,18 +609,18 @@ impl Preprocessor<'_, '_> {
     /// `std.compat` when `path` is libc++'s own source of it
     /// (spec/modules.md §11.12), else `path`. `std.compat` imports `std`,
     /// so it is taken from the cache only when `std` is libc++'s too.
-    fn cached_std(&self, key: &str, path: PathBuf) -> PathBuf {
-        let Some(m) = &self.modules else { return path };
-        let (Some(cache), Some(dir)) = (&m.opts.std_cache, &m.opts.std_dir) else { return path };
+    fn cached_std(&self, key: &str, path: &Path) -> Option<StdModuleFile> {
+        let m = self.modules.as_ref()?;
+        let (Some(cache), Some(dir)) = (&m.opts.std_cache, &m.opts.std_dir) else { return None };
         let source = |name: &str| dir.join(format!("{name}.cppm"));
         if !matches!(key, "std" | "std.compat") || path != source(key) {
-            return path;
+            return None;
         }
         if key == "std.compat" && self.find_module("std") != Some(source("std")) {
-            return path;
+            return None;
         }
         let cache = Rc::clone(&cache.0);
-        cache(key, &path).unwrap_or(path)
+        cache(key, path)
     }
 
     /// Imports named module (or partition) `key`: from a module file
@@ -596,7 +629,7 @@ impl Preprocessor<'_, '_> {
         if self.already_built(key, span) {
             return;
         }
-        let Some(source) = self.find_module(key) else {
+        let Some((source, found)) = self.find_module_where(key) else {
             self.emit(Diag::new(DiagId::pp_module_not_found, span).arg(key));
             return;
         };
@@ -608,10 +641,26 @@ impl Preprocessor<'_, '_> {
         {
             rec.imports.push((key.to_owned(), source.display().to_string()));
         }
-        let path = self.cached_std(key, source);
+        let cached = self.cached_std(key, &source);
+        let path = cached.as_ref().map_or(source, |c| c.path.clone());
         let shown = path.display().to_string();
         match bmi::sniff(&path) {
             bmi::Sniffed::Kiln => {
+                // Named in a dependency file as clang names it: a
+                // prebuilt-path find joined onto the working directory
+                // as spelled, `./` kept (clang `getPrebuiltModuleFileName`
+                // then `makeAbsolute`), the cache's already absolute.
+                let dep_path = match found {
+                    Found::Prebuilt if path.is_relative() => {
+                        std::env::current_dir().map_or_else(|_| path.clone(), |cwd| cwd.join(&path))
+                    }
+                    _ => path.clone(),
+                };
+                self.callbacks.module_file_read(&ModuleFileRead {
+                    path: &dep_path.display().to_string(),
+                    module: key,
+                    cache_inputs: cached.as_ref().map(|c| c.inputs.as_slice()),
+                });
                 let read = bmi::read_file(&path);
                 let Some(c) = self.load_capsule(&shown, read, Some(key), span) else { return };
                 self.begin_capsule_unit(key.to_owned(), shown, c, span);
@@ -1074,6 +1123,11 @@ impl Preprocessor<'_, '_> {
         m.building.push(key.clone());
         m.unit_replay.push(replay);
         let module = m.module.take();
+        // A header unit imported by a unit read from an imported module
+        // file is found through that file's record too (a `.pcm` main
+        // input's own files stay its inputs).
+        let from_module_file = replay.is_some()
+            || (header && matches!(ctx, Ctx::Replay(i) if m.main_replay != Some(i)));
         let save = UnitSave {
             key: key.clone(),
             header,
@@ -1087,7 +1141,9 @@ impl Preprocessor<'_, '_> {
             first_hash: self.unit_first_hash.take(),
             pre_directive: std::mem::take(&mut self.unit_pre_directive),
             module,
+            from_module_file,
         };
+        self.callbacks.module_unit(true, from_module_file);
         self.define_builtins();
         self.queue(Marker::UnitBegin { key, header, span, carried: None, image: None });
         self.push_file(file, Some(span.lo), None, None, system, false);
@@ -1138,6 +1194,7 @@ impl Preprocessor<'_, '_> {
             m.built.insert(save.key.clone(), exported.clone());
         }
         self.apply_header_macros(&exported);
+        self.callbacks.module_unit(false, save.from_module_file);
         self.queue(Marker::UnitEnd { key: save.key });
     }
 

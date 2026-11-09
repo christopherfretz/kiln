@@ -45,7 +45,8 @@ mod tok;
 
 pub use builtin::{Builtin, FeatureQueries, NoFeatures, TargetQuery};
 pub use callbacks::{
-    FileChange, NoCallbacks, PpCallbacks, PragmaInfo, PragmaIntroducer, PragmaMessageKind,
+    FileChange, ModuleFileRead, NoCallbacks, PpCallbacks, PragmaInfo, PragmaIntroducer,
+    PragmaMessageKind,
 };
 pub use cond::{IfContext, IfEvaluator, StubIfEvaluator};
 pub use diag_map::literal_diags;
@@ -59,7 +60,7 @@ pub use include::{
 };
 pub use macros::{AttrMacro, MacroDef, MacroTable};
 pub use modules::{
-    DirectiveKind, ModuleDirective, ModuleOptions, StdModuleCache, has_module_lines,
+    DirectiveKind, ModuleDirective, ModuleOptions, StdModuleCache, StdModuleFile, has_module_lines,
 };
 pub use options::{ClangCompat, PpOptions};
 pub use predef::{ArmTarget, CmdMacro, OptLevel, PicModel, PredefConfig, build_predefines};

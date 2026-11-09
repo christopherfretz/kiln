@@ -96,6 +96,18 @@ impl kiln_pp::PpCallbacks for SkipCallbacks<'_> {
         }
     }
 
+    fn module_file_read(&mut self, read: &kiln_pp::ModuleFileRead<'_>) {
+        if let Some(d) = &mut self.deps {
+            d.module_file_read(read);
+        }
+    }
+
+    fn module_unit(&mut self, begin: bool, from_module_file: bool) {
+        if let Some(d) = &mut self.deps {
+            d.module_unit(begin, from_module_file);
+        }
+    }
+
     fn source_range_skipped(&mut self, range: Span) {
         self.skipped.borrow_mut().skipped.push(range);
     }
