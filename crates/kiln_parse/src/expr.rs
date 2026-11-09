@@ -6,7 +6,8 @@
 //! and the caller must recover; semantic errors yield an error expression.
 
 use kiln_ast::expr::{
-    BinaryOp, ExprKind, PredefinedKind, SourceLocKind, TraitKind, TypeTrait, UnaryOp,
+    BinaryOp, ExprKind, GenericAssoc, GenericControl, PredefinedKind, SourceLocKind, TraitKind,
+    TypeTrait, UnaryOp,
 };
 use kiln_ast::names::DeclName;
 use kiln_ast::{ExprId, QualType};
@@ -683,6 +684,7 @@ impl Parser<'_, '_> {
                         | Kw::Extension
                         | Kw::BuiltinOffsetof
                         | Kw::BuiltinChooseExpr
+                        | Kw::Generic
                         | Kw::BuiltinBitCast
                         | Kw::BuiltinVaArg
                         | Kw::BuiltinConvertVector
@@ -1113,6 +1115,102 @@ impl Parser<'_, '_> {
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         let [Some(c), Some(l), Some(r)] = ops else { return None };
         Some(self.s.act_on_choose_expr(loc, c, l, r, rparen))
+    }
+
+    /// `_Generic ( assignment-expression , generic-assoc-list )`, or with a
+    /// type-name operand (clang's C2y extension), in C++ as a C11
+    /// extension (clang `ParseGenericSelectionExpression`). Each
+    /// association is `type-name : assignment-expression` or
+    /// `default : assignment-expression`. The controlling expression is
+    /// parsed unevaluated; the associations are not.
+    fn parse_generic_selection(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let d = self.s.diag(DiagId::parse_c11_generic, loc);
+        self.emit(d);
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'_Generic'")
+                .arg("'('");
+            self.emit(d);
+            return None;
+        };
+        let ctrl = if self.is_cxx_type_id(TypeIdContext::AsGenericSelectionArgument).0 {
+            let at = self.type_loc_begin();
+            let Some(t) = self.parse_type_id() else {
+                self.skip_until(&[Punct::RParen], true, true);
+                return None;
+            };
+            let d = self.s.diag(DiagId::parse_c2y_generic_with_type_arg, at);
+            self.emit(d);
+            GenericControl::Type(t, at)
+        } else {
+            self.s.enter_unevaluated();
+            let e = self.parse_assignment_expr();
+            self.s.exit_unevaluated();
+            let Some(e) = e else {
+                self.skip_until(&[Punct::RParen], true, true);
+                return None;
+            };
+            GenericControl::Expr(e)
+        };
+        let mut assocs: Vec<GenericAssoc> = Vec::new();
+        let mut default_loc: Option<Loc> = None;
+        while self.eat(Punct::Comma).is_some() {
+            let at = if self.at_kw(Kw::Default) { self.loc() } else { self.type_loc_begin() };
+            let ty = if self.at_kw(Kw::Default) {
+                if let Some(prev) = default_loc {
+                    let note = self.s.diag(DiagId::note_previous_default_assoc, prev);
+                    let d = self.s.diag(DiagId::parse_duplicate_default_assoc, at).with_note(note);
+                    self.emit(d);
+                    self.skip_until(&[Punct::RParen], true, true);
+                    return None;
+                }
+                self.bump();
+                default_loc = Some(at);
+                None
+            } else {
+                let Some(t) = self.parse_type_id() else {
+                    self.skip_until(&[Punct::RParen], true, true);
+                    return None;
+                };
+                Some(t)
+            };
+            if self.eat(Punct::Colon).is_none() {
+                let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("':'");
+                self.emit(d);
+                self.skip_until(&[Punct::RParen], true, true);
+                return None;
+            }
+            let Some(e) = self.parse_assignment_expr() else {
+                self.skip_until(&[Punct::RParen], true, true);
+                return None;
+            };
+            assocs.push(GenericAssoc { ty, ty_loc: at, expr: e });
+        }
+        if assocs.is_empty() {
+            // clang `ExpectAndConsume(tok::comma)` after the operand.
+            let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("','");
+            self.emit(d);
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(self.s.act_on_generic_selection(loc, ctrl, &assocs, rparen))
+    }
+
+    /// Where clang's `TypeLoc` of the type-id starting here begins: a
+    /// `QualifiedTypeLoc` carries no location for its leading
+    /// cv-qualifiers, so `const int` begins at `int`.
+    fn type_loc_begin(&self) -> Loc {
+        let mut i = 0;
+        while i < 8
+            && matches!(self.kw_of(self.peek(i)), Some(Kw::Const | Kw::Volatile | Kw::Restrict))
+        {
+            i += 1;
+        }
+        self.peek(i).span.lo
     }
 
     /// `__builtin_offsetof ( type-id , offsetof-member-designator )`
@@ -1796,6 +1894,7 @@ impl Parser<'_, '_> {
                 Kw::Typeid => self.parse_typeid(),
                 Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
                 Kw::BuiltinChooseExpr => self.parse_builtin_choose_expr(),
+                Kw::Generic => self.parse_generic_selection(),
                 Kw::BuiltinBitCast => self.parse_builtin_bit_cast(),
                 Kw::BuiltinVaArg => self.parse_builtin_va_arg(),
                 Kw::BuiltinConvertVector => self.parse_builtin_convert_vector(),

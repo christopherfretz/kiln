@@ -1468,6 +1468,28 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
       to `act_on_va_arg` with the type's begin location and the `)`.
       Errors as clang: `expected '(' after '__builtin_va_arg'`,
       `expected ','`, a missing `)`.
+- **`_Generic ( operand , association-list )`** (WP-1114; clang
+  `ParseGenericSelectionExpression`, a C11 extension in C++):
+  - The keyword draws `'_Generic' is a C11 extension`
+    [-Wc11-extensions], which is silent unless `-pedantic` is given.
+  - The operand is a type-id when `is_cxx_type_id` (the
+    `AsGenericSelectionArgument` context) says so. That form also
+    draws `passing a type argument as the first operand to '_Generic'
+    is a C2y extension` [-Wc2y-extensions]. Otherwise the operand is an
+    assignment-expression, parsed unevaluated.
+  - Each association is `default` or a type-id, then `:`, then an
+    assignment-expression. Its location is the type's begin after
+    leading cv-qualifiers, which is clang's TypeLoc begin
+    (`type_loc_begin`).
+  - Errors, as in clang:
+    - `expected '(' after '_Generic'`;
+    - `expected ','` when there is no association;
+    - `expected ':'`;
+    - `duplicate default generic association`, with the note `previous
+      default generic association is here`; the association is skipped;
+    - a missing `)` (`expect_closing`).
+  - The result goes to `act_on_generic_selection` (spec/sema.md
+    "`_Generic` selection").
 - **The GNU `x ?: y`** goes to `act_on_binary_conditional`; the middle
   operand of an ordinary `?:` is a full expression.
 - **Missing closers** (`expect_closing`) are reported at the current

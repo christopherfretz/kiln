@@ -23,6 +23,7 @@ use kiln_sema::{
 };
 use kiln_sema::{ContractDeclKind, DeclSite};
 use kiln_source::symbol::Symbol;
+use kiln_source::trace;
 use kiln_source::{Loc, Span};
 
 use crate::decl::{is_deduction_guide, is_untyped_special};
@@ -549,7 +550,7 @@ impl Parser<'_, '_> {
     }
 
     /// The spelling of a declaration's name, for traces.
-    fn decl_name(&self, d: DeclId) -> String {
+    pub(crate) fn decl_name(&self, d: DeclId) -> String {
         self.s
             .ast
             .decls
@@ -573,6 +574,9 @@ impl Parser<'_, '_> {
         final_loc: Option<Loc>,
         in_type_id: bool,
     ) {
+        // `-ftime-trace` (spec/driver.md "Time trace"): clang's
+        // `ParseClass`, the late-parsed member bodies included.
+        let _trace = trace::Scope::with_detail("ParseClass", || self.decl_name(r));
         let saved = mem::take(&mut self.late_fn);
         let nested = !self.late.is_empty();
         self.late.push(LateClass { record: r, items: Vec::new() });

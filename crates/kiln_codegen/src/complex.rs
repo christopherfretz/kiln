@@ -127,8 +127,10 @@ impl Cg<'_> {
         let q = n.ty();
         match n.kind() {
             ExprKind::ParenExpr => self.emit_cx(ast.exprs.operand(e), ign),
-            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
-                self.emit_cx(ast.exprs.choose_chosen(e).expect("match guard checked it"), ign)
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr
+                if ast.exprs.selected_operand(e).is_some() =>
+            {
+                self.emit_cx(ast.exprs.selected_operand(e).expect("match guard checked it"), ign)
             }
             ExprKind::ExprWithCleanups => {
                 let sc = self.begin_scope(false);

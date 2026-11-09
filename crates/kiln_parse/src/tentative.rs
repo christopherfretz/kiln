@@ -33,7 +33,6 @@ pub(crate) enum Tpr {
 /// Where a type-id is being disambiguated from an expression
 /// ([dcl.ambig.res]/2-3, clang's `TentativeCXXTypeIdContext`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // template arguments and _Generic arrive later
 pub enum TypeIdContext {
     /// Inside parentheses: `sizeof(T(x))`, `(T())x`; a `)` after an
     /// ambiguous abstract declarator makes it a type-id.

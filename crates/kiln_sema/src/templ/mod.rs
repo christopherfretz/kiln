@@ -1298,6 +1298,14 @@ impl Sema<'_, '_> {
         open
     }
 
+    /// The parameter list of the innermost untaken written head (a
+    /// [temp.friend]/5 friend's member template head, WP-1098).
+    pub(crate) fn innermost_open_head_list(&self) -> Option<TemplateParamListId> {
+        let floor = self.lambda_head_floor();
+        let (i, h) = self.templ.heads.iter().enumerate().rev().find(|(_, h)| !h.invented)?;
+        (!h.taken && i >= floor).then_some(h.list).flatten()
+    }
+
     /// Takes every untaken head around the declaration being declared,
     /// matching none to a class: a [temp.friend]/5 friend's heads are its
     /// own (`template<class T> friend class A<T>::B;`).
