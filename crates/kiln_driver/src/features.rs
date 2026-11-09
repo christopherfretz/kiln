@@ -26,6 +26,7 @@ use kiln_pp::ClangCompat;
 
 use crate::args::{ArgError, Args};
 use crate::toolchain::Target;
+use crate::x86_features;
 
 /// The resolved target features beyond the target's base set.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -77,10 +78,22 @@ impl TargetFeatures {
     /// The x86-64 features finally enabled, sorted ([`TargetFeatures::extra`],
     /// or the default `x86-64` CPU's).
     pub fn x86_enabled(&self) -> Vec<String> {
-        if self.extra.is_empty() {
-            return X86_64_FEATURES.iter().map(|&f| f.to_owned()).collect();
+        match self.x86_map() {
+            Some(m) => m.into_iter().filter(|e| e.1).map(|e| e.0).collect(),
+            None => X86_64_FEATURES.iter().map(|&f| f.to_owned()).collect(),
         }
-        self.extra.iter().filter_map(|e| e.strip_prefix('+')).map(str::to_owned).collect()
+    }
+
+    /// The x86-64 feature map [`TargetFeatures::extra`] lists, if it lists
+    /// one (a `-march=` CPU or feature flags; not only the
+    /// `-mspeculative-load-hardening` retpoline feature).
+    pub fn x86_map(&self) -> Option<BTreeMap<String, bool>> {
+        let option = |e: &String| e == "+retpoline-indirect-calls";
+        if self.extra.iter().all(option) {
+            return None;
+        }
+        let entries = self.extra.iter().filter(|e| !option(e));
+        Some(entries.filter_map(|e| e.split_at_checked(1)).map(|(s, n)| (n.to_owned(), s == "+")).collect())
     }
 
     /// The finally enabled feature names: the base `fp-armv8` and `neon`
@@ -425,15 +438,28 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
         // (`x86_targets::CPUS`); `native` and the others are not expanded
         // (spec/driver.md deviations). Any other value stays unsupported.
         let v22 = args.predef.clang_compat == ClangCompat::Clang22;
+        let mut cpu_features: Option<Vec<&'static str>> = None;
         match args.march.as_deref() {
             Some(v) if v == "native" || is_x86_cpu(v, v22) => {
                 f.cpu = Some(v.to_owned());
-                if let Some(c) = x86_cpu(v) {
-                    f.extra = c.features.iter().map(|n| format!("+{n}")).collect();
-                }
+                cpu_features = x86_cpu(v).map(|c| c.features.iter().collect());
             }
             Some(v) => errors.push(unsupported("-march=", v)),
             None => {}
+        }
+        // WP-1000: the `-m[no-]<feature>` flags this clang lacks are
+        // unknown arguments; the others, deduplicated as clang's driver
+        // does, build clang's `initFeatureMap` over the CPU's features
+        // (spec/driver.md "x86-64 target features"). `-Xclang
+        // -target-feature` stays ignored on x86-64.
+        for a in args.x86_feature_flags.iter().filter(|a| x86_features::unknown_at(a, v22)) {
+            errors.push(ArgError::Unknown(a.clone()));
+        }
+        let items = x86_features::driver_items(&args.x86_feature_flags, v22);
+        if cpu_features.is_some() || !items.is_empty() {
+            let cpu = cpu_features.unwrap_or_else(|| X86_64_FEATURES.to_vec());
+            let map = x86_features::feature_map(&cpu, &items, v22);
+            f.extra = map.into_iter().map(|(n, on)| format!("{}{n}", if on { '+' } else { '-' })).collect();
         }
         // WP-813: clang's `getX86TargetFeatures` adds the retpoline call
         // thunks for `-mspeculative-load-hardening`.
@@ -518,6 +544,18 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
             "-mbranches-within-32B-boundaries".to_owned(),
             t.into(),
         ));
+    }
+    // WP-1000: clang's x86 feature flags are target-specific options
+    // (named as clang's driver spells them), unknown when this clang
+    // lacks them; `-msse4`, `-msse4.2` and `-m[no-]3dnow[a]` are only
+    // unused ([`x86_features::non_x86_spelling`]; the driver warns).
+    for a in &args.x86_feature_flags {
+        if x86_features::unknown_at(a, v22) {
+            errors.push(ArgError::Unknown(a.clone()));
+        } else if let Some(o) = x86_features::non_x86_spelling(a, v22) {
+            let t = args.target.as_deref().unwrap_or(target.triple);
+            errors.push(ArgError::UnsupportedForTarget(o, t.into()));
+        }
     }
     (f, errors)
 }
@@ -607,21 +645,37 @@ fn is_x86_cpu(v: &str, v22: bool) -> bool {
 }
 
 /// The default `x86-64` CPU's features.
-const X86_64_FEATURES: [&str; 7] = ["cmov", "cx8", "fxsr", "mmx", "sse", "sse2", "x87"];
+const X86_64_FEATURES: [&str; 7] = x86_features::X86_64;
 
 /// The generated row of x86-64 CPU `name`, if clang 21 knows it.
 fn x86_cpu(name: &str) -> Option<crate::x86_targets::Cpu> {
     crate::x86_targets::cpu(name)
 }
 
-/// How the predefined macros of `-march=<cpu>` differ from the default
-/// x86-64 ones: each macro it defines or redefines with its value, then
-/// each default one it does not define with `None` (clang 21's `-dM -E`;
-/// spec/landed/driver/WP-630.md). Empty for `native` and an unknown CPU.
-pub fn x86_cpu_macros(cpu: &str) -> Vec<(String, Option<String>)> {
-    let Some(c) = x86_cpu(cpu) else { return Vec::new() };
-    let def = c.define.iter().map(|(n, v)| (n.to_owned(), Some(v.to_owned())));
-    def.chain(c.undef.iter().map(|n| (n.to_owned(), None))).collect()
+/// How the predefined macros of the x86-64 features `f` differ from the
+/// default x86-64 ones: each macro defined or redefined with its value,
+/// then each default one no longer defined with `None`. The CPU's own
+/// macros (`__corei7__`, `__tune_corei7__`; the lowercase ones) come from
+/// the `-march=` CPU's row (clang 21's `-dM -E`;
+/// spec/landed/driver/WP-630.md), the feature macros from the final
+/// feature map ([`x86_features::feature_macros`], WP-1000). Empty without
+/// a feature map (no `-march=` CPU kiln expands and no feature flag).
+pub fn x86_macros(f: &TargetFeatures, v22: bool) -> Vec<(String, Option<String>)> {
+    let Some(map) = f.x86_map() else { return Vec::new() };
+    let cpu = f.cpu.as_deref().and_then(x86_cpu);
+    let own = |n: &&str| n.bytes().any(|b| b.is_ascii_lowercase());
+    let base = x86_features::feature_macros(&x86_features::feature_map(&X86_64_FEATURES, &[], v22), v22);
+    let new = x86_features::feature_macros(&map, v22);
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    for c in cpu.iter() {
+        out.extend(c.define.iter().filter(|(n, _)| own(n)).map(|(n, v)| (n.to_owned(), Some(v.to_owned()))));
+    }
+    out.extend(new.iter().filter(|(n, v)| base.get(*n) != Some(v)).map(|(n, v)| (n.clone(), Some(v.clone()))));
+    for c in cpu.iter() {
+        out.extend(c.undef.iter().filter(own).map(|n| (n.to_owned(), None)));
+    }
+    out.extend(base.keys().filter(|n| !new.contains_key(*n)).map(|n| (n.clone(), None)));
+    out
 }
 
 /// The features x86 feature `f` enables: itself and what it implies
@@ -1033,13 +1087,31 @@ mod tests {
         let base = ["cmov", "cx8", "fxsr", "mmx", "sse", "sse2", "x87"];
         assert_eq!(res("a.cpp", false).0.x86_enabled(), base);
         assert_eq!(res("-march=native a.cpp", false).0.x86_enabled(), base);
-        let m = x86_cpu_macros("westmere");
+        let m = x86_macros(&res("-march=westmere a.cpp", false).0, true);
         assert!(m.contains(&("__SSE4_2__".to_owned(), Some("1".to_owned()))));
         assert!(m.contains(&("__tune_corei7__".to_owned(), Some("1".to_owned()))));
         assert!(m.contains(&("__k8".to_owned(), None)));
         assert!(!m.iter().any(|(n, _)| n == "__AES__"));
-        assert_eq!(x86_cpu_macros("x86-64"), []);
-        assert_eq!(x86_cpu_macros("native"), []);
+        assert_eq!(x86_macros(&res("-march=x86-64 a.cpp", false).0, true), []);
+        assert_eq!(x86_macros(&res("-march=native a.cpp", false).0, true), []);
+    }
+
+    /// WP-1000: the feature-derived macros of every CPU reproduce its
+    /// generated row (clang 21's `-dM -E`, which still has `evex512`, as
+    /// clang 19), as a set.
+    #[test]
+    fn x86_cpu_macros_from_features() {
+        // clang 22's further CPUs are no `-fclang-compat=19` CPU.
+        for c in crate::x86_targets::cpus().filter(|c| !X86_CPUS_22.contains(&c.name)) {
+            let f = res(&format!("-march={} -fclang-compat=19 a.cpp", c.name), false).0;
+            let mut got: Vec<_> = x86_macros(&f, false);
+            let mut want: Vec<(String, Option<String>)> =
+                c.define.iter().map(|(n, v)| (n.to_owned(), Some(v.to_owned()))).collect();
+            want.extend(c.undef.iter().map(|n| (n.to_owned(), None)));
+            got.sort();
+            want.sort();
+            assert_eq!(got, want, "{}", c.name);
+        }
     }
 
     /// WP-630: x86 `target("...")` strings over the default module

@@ -31,6 +31,7 @@ pub mod templ_opts;
 pub mod time;
 pub mod toolchain;
 pub mod version;
+pub mod x86_features;
 pub mod x86_targets;
 
 use std::io::{self, Read, Write};
@@ -487,7 +488,21 @@ fn driver_warnings(
     if !args.quiet_unused_arguments && !tc.target.is_aarch64() {
         unused_xray.extend(args.codegen.sign_return_address_written.iter().cloned());
     }
-    if promoted.is_empty() && ignored.is_none() && unused_xray.is_empty() {
+    // WP-1000: the x86 feature flags clang claims on `AArch64` without an
+    // error (`-msse4`, `-msse4.2`, `-m[no-]3dnow[a]`), and on x86 its
+    // warning for the dropped `-m3dnow` / `-m3dnowa`.
+    let v22 = args.predef.clang_compat == kiln_pp::ClangCompat::Clang22;
+    let mut no_3dnow: Vec<&String> = Vec::new();
+    for a in args.x86_feature_flags.iter().filter(|a| !x86_features::unknown_at(a, v22)) {
+        if tc.target.is_aarch64() {
+            if !args.quiet_unused_arguments && x86_features::non_x86_spelling(a, v22).is_none() {
+                unused_xray.push(a.clone());
+            }
+        } else if x86_features::is_3dnow(a) && !a.starts_with("-mno-") {
+            no_3dnow.push(a);
+        }
+    }
+    if promoted.is_empty() && ignored.is_none() && unused_xray.is_empty() && no_3dnow.is_empty() {
         return false;
     }
     let sm = SourceManager::new();
@@ -511,6 +526,11 @@ fn driver_warnings(
     }
     for x in unused_xray {
         Diag::new(DiagId::drv_argument_unused, Span::INVALID).arg(x).emit(&e);
+    }
+    for _ in inputs.iter().filter(|i| codegen_cmd::is_source(i)) {
+        for a in &no_3dnow {
+            Diag::new(DiagId::drv_clang_unsupported, Span::INVALID).arg(*a).emit(&e);
+        }
     }
     e.flush();
     e.error_count() > 0

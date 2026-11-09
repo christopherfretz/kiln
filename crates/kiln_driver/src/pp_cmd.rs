@@ -159,10 +159,11 @@ impl Job<'_> {
                     .map(|(n, v)| (n.to_owned(), v))
                     .collect(),
             };
-        } else if let Some(cpu) = crate::features::resolve(self.args, &self.toolchain.target).0.cpu
-        {
-            // WP-630: the `-march=<cpu>` macros.
-            cfg.x86_macros = crate::features::x86_cpu_macros(&cpu);
+        } else {
+            // WP-630 / WP-1000: the `-march=<cpu>` and feature-flag macros.
+            let f = crate::features::resolve(self.args, &self.toolchain.target).0;
+            let v22 = self.args.predef.clang_compat == kiln_pp::ClangCompat::Clang22;
+            cfg.x86_macros = crate::features::x86_macros(&f, v22);
         }
         // Errors were reported by the driver's own `resolve` pass.
         cfg.sanitize_macros = self
