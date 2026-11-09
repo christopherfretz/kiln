@@ -1090,7 +1090,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1094 | modules image S2 follow-up: lambdas (closure classes, after WP-1065), lifetime-extended temporaries with a constant value, coroutines, asm, contract assertions, computed goto, expansion statements in carried bodies (kiln_sema bmi_image/body.rs:1412, :1458, :1550, :1575) | WP-1064 | open |
 | WP-1095 | modules image: compact body encoding (varints, delta locations) and building from the bytes without the Vec-per-record model: S2 costs ~2 KB per small body (13k-line constexpr module 670 KB -> 4.6 MB) and importer peak RSS 16.0 -> 25.8 MiB (kiln_sema bmi_image/body.rs:511 encode_bodies, :538 decode_arena) | WP-1064 | open |
 | WP-1096 | modules image gate: a namespace named like its module (export module m; namespace m) always replays because import m interned the name (kiln_pp modules.rs:739) | WP-1064 | done (#460) |
-| WP-1065 | modules image S3: classes (kiln_sema bmi_image.rs:1314 kind_gate) | WP-1048 | open |
+| WP-1065 | modules image S3: classes (kiln_sema bmi_image.rs:1314 kind_gate) | WP-1048 | in progress |
+| WP-1119 | modules image: carry WP-1109 NONTRIVIAL_* bits 57-61 and FnSpec::not_selected | WP-1065 | done |
 | WP-1066 | modules image S4: templates as patterns (kiln_sema bmi_image.rs:1293) | WP-1048 | open |
 | WP-1067 | modules image S5: global module fragment with ODR merging (WP-460 semantics) replacing the name gate (bmi_image.rs:1251, kiln_pp modules.rs:739) | WP-1048 | open |
 | WP-1068 | modules image S6: imports, re-exports and partitions (bmi_image.rs:1224) | WP-1048 | open |
