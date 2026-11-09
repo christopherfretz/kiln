@@ -81,6 +81,7 @@ DEPENDENCY OUTPUT:
   -MG                     Treat missing headers as generated files
   -MJ <file>              Write a compilation database entry to <file>
   -MP                     Add a phony target for each dependency
+  -fmodule-file-deps      List the module files imports read as dependencies
   -MQ <target>, -MT <target>
                           The dependency target (-MQ: quoted for make)
 

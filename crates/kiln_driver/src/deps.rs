@@ -10,7 +10,9 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use kiln_diag::DiagOptions;
-use kiln_pp::{FileChange, IncludeRequest, PpCallbacks, ResolvedInclude, SearchEvent};
+use kiln_pp::{
+    FileChange, IncludeRequest, ModuleFileRead, PpCallbacks, ResolvedInclude, SearchEvent,
+};
 use kiln_source::{FileId, SourceManager};
 
 use crate::args::{Args, DepHeaders};
@@ -35,6 +37,22 @@ pub struct DepList {
     /// `-MG`: a missing header is listed by its spelled name instead
     /// (clang `AddMissingHeaderDeps`).
     pub generated: bool,
+    /// Which module files imports read are listed (WP-1051).
+    pub module_files: ModuleFileDeps,
+}
+
+/// Which module files an import reads [`DepList`] lists (WP-1051).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ModuleFileDeps {
+    /// None (`-fno-module-file-deps`).
+    Off,
+    /// Only an entry of the toolchain's `std` module cache (the default
+    /// without `--precompile`).
+    #[default]
+    Cache,
+    /// Every one (clang `IncludeModuleFiles`: `-fmodule-file-deps`, the
+    /// default for `--precompile`).
+    All,
 }
 
 impl DepList {
@@ -44,19 +62,51 @@ impl DepList {
     }
 
     /// The list `args` asks for (`-M`, `-MM`, `-MD`, `-MMD`), if any.
-    /// An `-include-pch` file's input files come first, as clang lists
-    /// them when it reads the PCH (WP-1023).
+    /// The module files of `-fmodule-file=<path>` (no name) come first,
+    /// as spelled (clang's `ExtraDeps`, listed whether or not they are
+    /// imported), then an `-include-pch` file's input files, as clang
+    /// lists them when it reads the PCH (WP-1023, WP-1051).
     pub fn for_args(args: &Args) -> Option<DepList> {
         args.deps.headers().map(|h| {
             let mut list = DepList {
                 generated: args.deps.missing_generated,
+                module_files: match args.deps.module_files {
+                    Some(false) => ModuleFileDeps::Off,
+                    Some(true) => ModuleFileDeps::All,
+                    None if args.precompile => ModuleFileDeps::All,
+                    None => ModuleFileDeps::Cache,
+                },
                 ..DepList::new(h == DepHeaders::All)
             };
+            for f in &args.nameless_module_files {
+                list.add_as_spelled(f);
+            }
             for (f, system) in &args.pch.deps {
                 list.add(f, *system);
             }
             list
         })
+    }
+
+    /// An import read the module file `read` (clang `visitModuleFile`,
+    /// WP-1051): the module file is listed when asked for
+    /// ([`DepList::module_files`]), and
+    /// a cache entry's inputs as system files (under `-MD`, so that a
+    /// libc++ edited in place recompiles the importer, as the headers
+    /// of an `#include <vector>` do).
+    pub fn module_file_read(&mut self, read: &ModuleFileRead<'_>) {
+        let listed = match self.module_files {
+            ModuleFileDeps::Off => false,
+            ModuleFileDeps::Cache => read.cache_inputs.is_some(),
+            ModuleFileDeps::All => true,
+        };
+        if !listed {
+            return;
+        }
+        self.add_as_spelled(read.path);
+        for f in read.cache_inputs.unwrap_or_default() {
+            self.add(f, true);
+        }
     }
 
     /// Whether an `#include` failed to find its file.
@@ -75,6 +125,14 @@ impl DepList {
                 self.system_files.insert(name.clone());
             }
             self.files.push(name);
+        }
+    }
+
+    /// Adds a module file as clang adds one (`DepCollectorASTListener`,
+    /// a nameless `-fmodule-file=`): as spelled, its `./` kept.
+    fn add_as_spelled(&mut self, name: &str) {
+        if self.seen.insert(name.to_owned()) {
+            self.files.push(name.to_owned());
         }
     }
 
@@ -120,17 +178,43 @@ pub struct DepCallbacks<'a> {
     /// The file the last `#include` found and the path it found it by,
     /// until the file is entered.
     pending: Option<(FileId, String)>,
+    /// The imported units being read, innermost last: whether each is
+    /// read from a module file's record (its files are not listed).
+    units: Vec<bool>,
 }
 
 impl<'a> DepCallbacks<'a> {
     /// Callbacks recording into `list`.
     pub fn new(list: Rc<RefCell<DepList>>, sm: &'a SourceManager) -> Self {
-        DepCallbacks { list, sm, pending: None }
+        DepCallbacks { list, sm, pending: None, units: Vec::new() }
+    }
+
+    /// Whether lexing is in a unit read from a module file, whose
+    /// inputs are not this compile's (clang lists no input file of an
+    /// explicitly loaded module, `DepCollectorASTListener`).
+    fn in_module_file(&self) -> bool {
+        self.units.last() == Some(&true)
     }
 }
 
 impl PpCallbacks for DepCallbacks<'_> {
+    fn module_file_read(&mut self, read: &ModuleFileRead<'_>) {
+        self.list.borrow_mut().module_file_read(read);
+    }
+
+    fn module_unit(&mut self, begin: bool, from_module_file: bool) {
+        if begin {
+            self.units.push(from_module_file);
+        } else {
+            self.units.pop();
+        }
+    }
+
     fn file_changed(&mut self, change: FileChange) {
+        if self.in_module_file() {
+            self.pending = None;
+            return;
+        }
         if let FileChange::Enter { file, system, .. } = change {
             let path = match self.pending.take() {
                 Some((f, path)) if f == file => path,
@@ -141,6 +225,9 @@ impl PpCallbacks for DepCallbacks<'_> {
     }
 
     fn inclusion_directive(&mut self, req: &IncludeRequest, result: Option<&ResolvedInclude>) {
+        if self.in_module_file() {
+            return;
+        }
         match result {
             None => {
                 let mut list = self.list.borrow_mut();
@@ -158,6 +245,9 @@ impl PpCallbacks for DepCallbacks<'_> {
 
     fn file_skipped(&mut self, r: &ResolvedInclude, system: bool) {
         self.pending = None;
+        if self.in_module_file() {
+            return;
+        }
         let path = r.path.as_deref().unwrap_or_else(|| self.sm.file_name(r.file));
         self.list.borrow_mut().add(path, system);
     }
@@ -383,6 +473,31 @@ mod tests {
         l.add("a.h", false);
         l.add("/usr/include/s.h", true);
         assert_eq!(l.files(), ["a.h"]);
+    }
+
+    /// WP-1051: module files as spelled (no dot removal), when asked
+    /// for; a cache entry's inputs as system files, only with the entry.
+    #[test]
+    fn module_files() {
+        let inputs = ["/sys/std.cppm".to_owned(), "/sys/./v1/a.h".to_owned()];
+        let read = |path: &'static str, cache: bool| ModuleFileRead {
+            path,
+            module: "m",
+            cache_inputs: cache.then_some(&inputs[..]),
+        };
+        let mut l = DepList { module_files: ModuleFileDeps::Cache, ..DepList::new(true) };
+        l.module_file_read(&read("./m.pcm", false));
+        l.module_file_read(&read("/c/std.pcm", true));
+        l.module_file_read(&read("/c/std.pcm", true));
+        assert_eq!(l.files(), ["/c/std.pcm", "/sys/std.cppm", "/sys/v1/a.h"]);
+        let mut l = DepList { module_files: ModuleFileDeps::All, ..DepList::new(false) };
+        l.module_file_read(&read("./m.pcm", false));
+        l.module_file_read(&read("/c/std.pcm", true));
+        assert_eq!(l.files(), ["./m.pcm", "/c/std.pcm"]);
+        let mut l = DepList { module_files: ModuleFileDeps::Off, ..DepList::new(true) };
+        l.module_file_read(&read("./m.pcm", false));
+        l.module_file_read(&read("/c/std.pcm", true));
+        assert!(l.files().is_empty());
     }
 
     #[test]

@@ -9067,6 +9067,8 @@ impl Sema<'_, '_> {
         let bits = self.trivial_abi_bits(r, bits);
         self.check_transparent_union(r);
         self.check_ms_struct_class(r, bits);
+        // P2719: type-aware `operator new`/`delete` come in pairs (`alloc_decl`).
+        self.check_type_aware_allocator_pairs(r);
         // [class.compare.default]/4: the implicit `operator==`s.
         let mut friends =
             build.as_mut().map(|b| std::mem::take(&mut b.friends)).unwrap_or_default();

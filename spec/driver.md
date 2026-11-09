@@ -72,6 +72,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-march=<arch>[+ext...]`, `-mcpu=<cpu>[+ext...]`, `-msve-vector-bits=<N\|scalable>`, `-target-feature <±feat>` (usually via `-Xclang`) | AArch64 target features and the `__ARM_*` predefines ("Target features" below, WP-459, WP-469) |
 | `--embed-dir=<dir>` | `#embed` search directory |
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP`, `-MG` | dependency output (see below) |
+| `-fmodule-file-deps`, `-fno-module-file-deps` | list the module files imports read in the dependency output (on by default for `--precompile`; "Dependency output", WP-1051); the last wins |
 | `-MJ <file>` | the JSON compilation-database fragment (see "`-MJ`", WP-920) |
 | `-dumpversion`, `-dumpmachine`, `-print-*` | toolchain probes (see "Toolchain probes", WP-920) |
 | `-trigraphs`, `-ftrigraphs`, `-fno-trigraphs` | trigraphs (default: on only for strict C and C++ before 17) |
@@ -1307,6 +1308,9 @@ files in a per-user cache, built there on first use (spec/modules.md
   'std'` and, then, `gave up waiting for '<lock>'; building 'std' from
   its source`, or `cannot lock '<lock>': <reason>; ...` (spec/modules.md
   §11.12 "Concurrency", WP-1074).
+- **Dependency output.** An importer's `-MD`/`-MMD` rule lists the
+  entry's module file (absolute), the same on a hit and a miss, and
+  under `-MD` the entry's stamped inputs ("Dependency output", WP-1051).
 - **No eviction.** Entries for configurations no longer used stay until
   removed by hand (`rm -r ~/.cache/kiln/modules`; each is about 9 MiB).
 - `-print-file-name=libc++.modules.json` prints libc++'s module
@@ -1543,6 +1547,49 @@ This is clang's `DependencyCollector` and `DependencyFileGenerator`.
   is entered once and `__FILE__` names it `real/x.h` (WP-820).
   `<built-in>`, `<command line>` and `<stdin>` are left out, and `./` is
   removed.
+- Module files (WP-1051), as clang 22 lists them:
+  - Nothing an import reads is listed from inside its module file: no
+    header of its global module fragment, no file of a capsule replay
+    (§11.8), whatever kind of module file it is (spec/modules.md).
+    The TU's own `#include`s are listed as usual.
+  - With `-fmodule-file-deps` (clang `IncludeModuleFiles`) every module
+    file an import reads, the named module's and transitively the ones
+    it imports, is listed after the files seen so far, in import order.
+    An `-fmodule-file=<name>=<path>` file is listed as spelled (`./`
+    kept), a `-fprebuilt-module-path` one joined onto the working
+    directory (absolute, `./` kept), as clang's
+    `getPrebuiltModuleFileName`. `-MM`/`-MMD` keep them; `-MP` gives them
+    phony rules. It is on by default for `--precompile` (the clang
+    driver passes `-module-file-deps` then); `-fno-module-file-deps`
+    turns it off.
+  - A nameless `-fmodule-file=<path>` is listed first, as spelled,
+    whether or not it is imported and whatever the switches (clang's
+    `ExtraDeps`); then an `-include-pch` file's inputs, then the main
+    file.
+  - `import std;` / `import std.compat;` from the module cache ("Module
+    cache") list the entry's module file (absolute) unless
+    `-fno-module-file-deps`, so a rebuilt entry recompiles the importer.
+    Under `-M`/`-MD` the entry's stamped inputs (`std.cppm`, then every
+    libc++ header the build read) follow as system files, so a libc++
+    edited in place does too. Both come from the stamp, so the rule is
+    byte-identical on a hit and a miss, and with either kind of module
+    file. clang has no cache: with `-fmodule-file=std=std.pcm` it lists
+    `hello.o: hello.cpp` (or `hello.cpp std.pcm` with
+    `-fmodule-file-deps`).
+  - Without the cache (off, or fallen back to part A) `std` is built from
+    its source in-process and its files are listed as for any header.
+  - Shapes checked against clang 19 and 22 (kiln_driver tests
+    `depfiles` `module_imports_list_module_files_as_clang_does`,
+    `module_cache` `depfile_same_on_miss_and_hit`):
+    `-MMD -fmodule-file=m=m.pcm`: `u.o: u.cpp user.h`; with
+    `-fmodule-file-deps -MP`: `u.o: u.cpp user.h m.pcm`, `user.h:`,
+    `m.pcm:`; `--precompile m2.cppm -o m2.pcm -fmodule-file=b=b.pcm
+    -MMD`: `m2.pcm: m2.cppm mhdr.h b.pcm`; `-fmodule-file=m.pcm`:
+    `u.o: m.pcm u.cpp user.h`.
+  - Deviations: clang lists a module file's imports before it (`b.pcm
+    m.pcm`), kiln in the order it reads them (`m.pcm b.pcm`). clang 19
+    lists module files under `-c m.cppm` by default; kiln follows
+    clang 22, which does not.
 - The target is `-MT` (verbatim) or `-MQ` (Make-quoted), in order. Without
   either it is the `-o` value (for `-MD`/`-MMD`, whatever the action) or
   `<input stem>.o`, Make-quoted.

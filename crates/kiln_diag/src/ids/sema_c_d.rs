@@ -152,6 +152,7 @@ sema_coroutine_promise_incompatible_return_functions = Error (1) "the coroutine 
 sema_coroutine_promise_new_requires_nothrow = Error (1) "{0} is required to have a non-throwing noexcept specification when the promise type declares 'get_return_object_on_allocation_failure()'";
 sema_coroutine_promise_type_incomplete = Error (1) "this function cannot be a coroutine: {0} is an incomplete type";
 sema_coroutine_promise_unhandled_exception_required = Error (1) "{0} is required to declare the member 'unhandled_exception()'";
+sema_coroutine_type_aware_allocator_ignored = Warning [CoroTypeAwareAllocationFunction] (1) "type aware {0} will not be used for coroutine allocation";
 sema_coroutine_type_missing_specialization = Error (1) "this function cannot be a coroutine: missing definition of specialization {0}";
 sema_coroutine_unevaluated_context = Error (1) "'{0}' cannot be used in an unevaluated context";
 sema_coroutine_unfound_nothrow_new = Error (2) "unable to find {1:'::operator new(size_t, nothrow_t)'|'::operator new(size_t, align_val_t, nothrow_t)'} for {0}";

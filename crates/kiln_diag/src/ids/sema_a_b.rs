@@ -46,6 +46,7 @@ sema_ambiguous_member_subobjects = Error (3) "non-static member '{0}' found in m
 sema_ambiguous_member_types = Error (1) "member '{0}' found in multiple base classes of different types";
 sema_ambiguous_reference = Error (1) "reference to '{0}' is ambiguous";
 sema_ambiguous_suitable_delete = Warning [AmbiguousDelete] (2) "multiple suitable {0} functions for {1}; no 'operator delete' function will be invoked if initialization throws an exception";
+sema_ambiguous_suitable_delete_member = Error (2) "multiple suitable {0} functions in {1}";
 // WP-509 (spec/sema.md §7.5.1): kiln-only, no clang counterpart.
 sema_analysis_skipped = Remark [KilnAnalysisSkipped] (2) "flow-sensitive warnings for '{0}' skipped: its control-flow graph exceeds -fkiln-cfg-max-elems={1}";
 // [dcl.attr.annotation]/2, [temp.arg.nontype]/6 (WP-830): the value must be

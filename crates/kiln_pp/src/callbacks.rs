@@ -96,6 +96,22 @@ pub struct PragmaInfo<'t> {
     pub tokens: &'t [Token],
 }
 
+/// A module file read for an import ([`PpCallbacks::module_file_read`]).
+#[derive(Clone, Copy, Debug)]
+pub struct ModuleFileRead<'a> {
+    /// The module file as clang names it in a dependency file: as given
+    /// by `-fmodule-file=<name>=<path>` (or recorded by the module file
+    /// that imports it), absolute when found in a
+    /// `-fprebuilt-module-path` or the toolchain's module cache.
+    pub path: &'a str,
+    /// The module (`M`, `M:P`).
+    pub module: &'a str,
+    /// For a module file from the toolchain's `std` module cache
+    /// (spec/modules.md §11.12): the files its build read (its libc++
+    /// source first), the same on a hit and on a miss. `None` otherwise.
+    pub cache_inputs: Option<&'a [String]>,
+}
+
 /// Observer hooks. All default to no-ops.
 pub trait PpCallbacks {
     /// Lexing moved to another file.
@@ -116,6 +132,21 @@ pub trait PpCallbacks {
     /// been entered with (its directory's or its includer's).
     fn file_skipped(&mut self, result: &ResolvedInclude, system: bool) {
         let _ = (result, system);
+    }
+
+    /// A module file was read for an import, before its unit is read
+    /// (clang's `visitModuleFile`; spec/driver.md "Dependency output").
+    fn module_file_read(&mut self, read: &ModuleFileRead<'_>) {
+        let _ = read;
+    }
+
+    /// An imported unit begins (`begin`) or ended. `from_module_file`:
+    /// its text comes from a module file's record (spec/modules.md
+    /// §11.2), so the files entered, skipped or not found until it ends
+    /// are the module file's inputs, not this compile's (clang lists no
+    /// input file of an explicitly loaded module). Units nest.
+    fn module_unit(&mut self, begin: bool, from_module_file: bool) {
+        let _ = (begin, from_module_file);
     }
 
     /// A macro was defined (also called for predefines and `-D`).
