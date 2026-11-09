@@ -88,21 +88,17 @@ impl Sema<'_, '_> {
         };
         let mut rest = Vec::with_capacity(args.len() - 1);
         for arg in &args[1..] {
-            match arg {
-                // [temp.variadic]/12: a pack is named only in an
-                // expansion (`args...`, clang `AcceptsExprPack`).
-                AttrArg::Expr(e) => {
-                    let at = self.begin_loc(*e);
-                    if self.diagnose_unexpanded_pack(PackOperand::Expr(*e), "expression", at) {
-                        return None;
-                    }
-                    rest.push(*e);
-                }
-                _ => {
-                    self.error(DiagId::parse_expected_expression, loc);
-                    return None;
-                }
+            let AttrArg::Expr(e) = *arg else {
+                self.error(DiagId::parse_expected_expression, loc);
+                return None;
+            };
+            // [temp.variadic]/12: a pack is named only in an expansion
+            // (`args...`, clang `AcceptsExprPack`).
+            let at = self.begin_loc(e);
+            if self.diagnose_unexpanded_pack(PackOperand::Expr(e), "expression", at) {
+                return None;
             }
+            rest.push(e);
         }
         let rest = self.check_annotate_args(shown, &rest)?;
         let b = if rest.is_empty() { 0 } else { self.ast.lists.push(&rest).raw() };

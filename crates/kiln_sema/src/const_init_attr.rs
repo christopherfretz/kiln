@@ -74,10 +74,10 @@ impl Sema<'_, '_> {
         else {
             return true;
         };
-        let note = self
+        let here = self
             .diag(DiagId::note_require_constant_init_missing_here, self.ast.decls.get(init).loc());
         let msg =
-            self.diag(DiagId::sema_require_const_init_added_too_late, node.loc).with_note(note);
+            self.diag(DiagId::sema_require_const_init_added_too_late, node.loc).with_note(here);
         self.emit(msg);
         false
     }

@@ -168,11 +168,10 @@ fn takes_ident_list(name: &str) -> bool {
 /// dropped, without parsing the argument as an expression.
 fn string_literal_arg(name: &str, i: usize) -> bool {
     match kiln_ast::attr::normalize_attr_name(name) {
-        "target" | "target_version" => i == 0,
+        // WP-954: clang's `StringArgument` first also for `unavailable`'s
+        // optional message and `annotate`'s annotation.
+        "target" | "target_version" | "unavailable" | "annotate" => i == 0,
         "target_clones" | "no_sanitize" => true,
-        // WP-954: clang's `StringArgument` first (`unavailable`'s optional
-        // message, `annotate`'s annotation).
-        "unavailable" | "annotate" => i == 0,
         _ => false,
     }
 }

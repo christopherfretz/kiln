@@ -19,10 +19,14 @@ use crate::Sema;
 use crate::declspec::ParamInfo;
 
 impl Sema<'_, '_> {
-    /// [dcl.attr.depend]/1 for parameter `p` of a function declarator that
-    /// declares no function: each `carries_dependency` is an error and is
-    /// dropped.
-    pub fn act_on_nonfunc_param_attrs(&mut self, p: &mut ParamInfo) {
+    /// [dcl.attr.depend]/1 for parameter `p`: unless its function
+    /// declarator declares a function or lambda (`in_function_decl`, also
+    /// set for an exception declaration), each `carries_dependency` is an
+    /// error and is dropped.
+    pub fn act_on_param_decl_attrs(&mut self, p: &mut ParamInfo, in_function_decl: bool) {
+        if in_function_decl {
+            return;
+        }
         p.attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);
             if node.kind != AttrKind::CARRIES_DEPENDENCY {
