@@ -308,7 +308,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         let probe = self.carried_probe(e, &ctx);
         let r = self.with_oven(Some(ctx.loc), |oven, b| oven.evaluate(b, e, ctx));
         if let Some(p) = probe {
-            self.carried_record(p, e, &r);
+            self.carried_record(&p, e, &r);
         }
         r
     }

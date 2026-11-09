@@ -221,25 +221,22 @@ impl Sema<'_, '_> {
         let sm = self.diags.sm();
         let begin = self.ast.begin_loc(e);
         let mut file = |f: FileId| -> Option<u32> {
-            match table {
-                Some(t) => {
-                    let t = &mut self.bmi.tables[t];
-                    *t.file_ix.entry(f).or_insert_with(|| {
-                        let name = sm.file_name(f);
-                        if unstable_file(name) { None } else { t.paths.get(name).copied() }
-                    })
-                }
-                None => {
-                    let r = self.bmi.recorder.as_mut()?;
-                    *r.path_ix.entry(f).or_insert_with(|| {
-                        let name = sm.file_name(f);
-                        if unstable_file(name) {
-                            return None;
-                        }
-                        r.paths.push(name.to_owned());
-                        Some(r.paths.len() as u32 - 1)
-                    })
-                }
+            if let Some(t) = table {
+                let t = &mut self.bmi.tables[t];
+                *t.file_ix.entry(f).or_insert_with(|| {
+                    let name = sm.file_name(f);
+                    if unstable_file(name) { None } else { t.paths.get(name).copied() }
+                })
+            } else {
+                let r = self.bmi.recorder.as_mut()?;
+                *r.path_ix.entry(f).or_insert_with(|| {
+                    let name = sm.file_name(f);
+                    if unstable_file(name) {
+                        return None;
+                    }
+                    r.paths.push(name.to_owned());
+                    Some(r.paths.len() as u32 - 1)
+                })
             }
         };
         let at = loc_key(sm, ctx.loc, &mut file)?;
@@ -356,7 +353,7 @@ impl Sema<'_, '_> {
     /// Records the result `r` of the evaluation `p` describes.
     pub(crate) fn carried_record(
         &mut self,
-        p: Probe,
+        p: &Probe,
         e: ExprId,
         r: &Result<ConstValueId, EvalFailure>,
     ) {
@@ -463,7 +460,7 @@ fn encode(rec: &Recorder) -> CarriedSection {
                 out.push(TAG_INT);
                 out.push(u8::from(*signed));
                 put_u32(&mut out, *width);
-                for w in words.iter() {
+                for w in words {
                     out.extend_from_slice(&w.to_le_bytes());
                 }
             }
@@ -481,7 +478,7 @@ fn encode(rec: &Recorder) -> CarriedSection {
                 out.push(TAG_AGGREGATE);
                 put_bytes(&mut out, bytes);
                 put_u32(&mut out, padding.len() as u32);
-                for r in padding.iter() {
+                for r in padding {
                     put_u32(&mut out, r.start);
                     put_u32(&mut out, r.len);
                 }
