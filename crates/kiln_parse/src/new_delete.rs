@@ -2,7 +2,7 @@
 //! spec/parse.md §5.1): clang's `ParseCXXNewExpression`,
 //! `ParseDirectNewDeclarator` and `ParseCXXDeleteExpression`.
 
-use kiln_ast::ExprId;
+use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, Std, TokFlags, TokKind};
 use kiln_sema::DeclSite;
@@ -221,6 +221,9 @@ impl Parser<'_, '_> {
     /// first array bound, if any, is still the allocated array's bound).
     fn parse_paren_new_type_id(&mut self, open: Loc) -> Option<NewTypeId> {
         let loc = self.loc();
+        // A class definition here is parsed, then rejected by the
+        // declarator (clang's `CXXNew` context, [dcl.type.general]/3).
+        self.next_tag_site = Some(kiln_sema::TagSite::TypeId);
         let ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
         if !ds.has_type_specifier() {
             self.error_here(DiagId::parse_expected_type);
@@ -229,9 +232,9 @@ impl Parser<'_, '_> {
         }
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
         d.site = DeclSite::New;
-        self.parse_declarator(&mut d);
+        self.parse_declarator_in_group(&ds, &mut d);
         self.expect_closing(Punct::RParen, Punct::LParen, open);
-        let base = self.s.type_from_declspec(&ds);
+        let base = if ds.tag_rejected { QualType::ERROR } else { self.s.type_from_declspec(&ds) };
         let base = self.s.apply_type_id_vector_attrs(base, &ds, false);
         let loc = ds.type_loc.unwrap_or(loc);
         Some(NewTypeId { base, declarator: d, loc, parenthesized: true })
@@ -240,6 +243,9 @@ impl Parser<'_, '_> {
     /// new-type-id: type-specifier-seq new-declarator(opt).
     fn parse_new_type_id(&mut self) -> Option<NewTypeId> {
         let loc = self.loc();
+        // A type-specifier-seq here admits no class-specifier: `new
+        // struct S {}` allocates `S` with an initializer.
+        self.next_tag_site = Some(kiln_sema::TagSite::NoDefinition);
         let ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
         if !ds.has_type_specifier() {
             self.error_here(DiagId::parse_expected_type);

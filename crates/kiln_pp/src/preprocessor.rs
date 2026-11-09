@@ -93,6 +93,9 @@ pub enum Marker {
         /// The carried constant results of a kind-2 module file
         /// (spec/modules.md §11.11).
         carried: Option<Rc<crate::bmi::CarriedSection>>,
+        /// The unit's declaration image (spec/modules.md §11.11 "Part
+        /// 2a"): the unit has no tokens, and [`Marker::UnitEnd`] follows.
+        image: Option<Rc<crate::bmi::ImageSection>>,
     },
     /// The tokens of imported unit `key` ended.
     UnitEnd {

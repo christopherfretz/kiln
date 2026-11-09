@@ -122,6 +122,9 @@ pub struct ParseOptions {
     /// Record the main unit's constant results for a kind-2 module file
     /// ([`ParsedTu::carried`], spec/modules.md §11.11).
     pub record_carried: bool,
+    /// Record the main unit's declaration image for a kind-2 module file
+    /// ([`ParsedTu::image`], spec/modules.md §11.11 "Part 2a").
+    pub record_image: bool,
 }
 
 impl Default for ParseOptions {
@@ -130,6 +133,7 @@ impl Default for ParseOptions {
             std: Std::Cxx26,
             keep_tokens: false,
             record_carried: false,
+            record_image: false,
             exceptions: true,
             rtti: true,
             gnu: false,
@@ -229,6 +233,9 @@ pub struct ParsedTu {
     /// Constant evaluations answered from a kind-2 module file's carried
     /// results instead of being run.
     pub carried_hits: u64,
+    /// The main unit's declaration image, when
+    /// [`ParseOptions::record_image`] (spec/modules.md §11.11 "Part 2a").
+    pub image: Option<kiln_sema::ModuleImage>,
 }
 
 impl ParsedTu {
@@ -357,6 +364,9 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;
+    if opts.record_image {
+        s.record_module_image();
+    }
     if opts.record_carried {
         s.record_carried_constants();
     }
@@ -379,8 +389,10 @@ pub fn parse_preprocessed<'a, 'sm>(
     let cfg_dump = std::mem::take(&mut s.cfg_out);
     let sema_memory = s.memory();
     let carried = s.take_carried_section();
+    let image = s.take_module_image();
     let carried_hits = s.carried_hits();
     let (ast, oven) = s.into_parts();
-    let tu = ParsedTu { ast, oven, inst_report, cfg_dump, sema_memory, carried, carried_hits };
+    let tu =
+        ParsedTu { ast, oven, inst_report, cfg_dump, sema_memory, carried, carried_hits, image };
     (tu, src.into_preprocessor())
 }
