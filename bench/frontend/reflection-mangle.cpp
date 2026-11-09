@@ -4,7 +4,7 @@
 // std::meta::info template argument (spec/reflection.md §8.3; WP-485,
 // WP-501): spec<^^C0000> ... spec<^^C1999>, each with a function-local
 // static, so every specialization writes the reflection literal
-// `L u6__info ty <type> E` into its function symbol and its static's
+// `L Dm ty <type> E` (the default gcc form) into its function symbol and its static's
 // symbol. The literal is the reflectee's encoding (one type name here),
 // so the cost is the instantiation and the IR, linear in the count. The table of addresses
 // odr-uses every specialization. kiln only: clang 19/22 lack `^^`.

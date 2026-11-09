@@ -356,8 +356,20 @@ impl Compiler<'_> {
     /// ([class.temporary]/6): objects of their own, outliving the
     /// initializer's full-expression, which `d`'s constant value may
     /// point to (frozen into their `LetData.value`s).
+    ///
+    /// P2686R5 [expr.const.init]/2 (C++26): the automatic temporaries a
+    /// `constexpr` local variable extends are constexpr-referenceable
+    /// from its initializing declaration, so its value may designate
+    /// them too (`constexpr const int &r = 42;` in a function); like the
+    /// automatic variables of WP-467, narrowed to `constexpr` variables.
     pub(super) fn begin_static_extended(&mut self, init: ExprId, d: DeclId) {
-        let temps = self.extended_temps(init, StorageDuration::Static);
+        let mut temps = self.extended_temps(init, StorageDuration::Static);
+        if self.b.cxx26()
+            && crate::compile::is_local_var(self.ast(), d)
+            && self.ast().decls.var(d).is_some_and(|v| v.spec.is_constexpr())
+        {
+            temps.extend(self.extended_temps(init, StorageDuration::Automatic));
+        }
         for (mte, x) in temps {
             let ast = self.ast();
             let Some(t) = ast.exprs.lifetime_extended_temporary(mte) else { continue };
