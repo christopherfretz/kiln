@@ -1106,11 +1106,11 @@ impl<'a, 'f> Builder<'a, 'f> {
             }
             None => body,
         };
-        let (brk, cont) = self.bc.pop().unwrap_or_default();
+        let (brk, continues) = self.bc.pop().unwrap_or_default();
         let body_term = self.has_term;
         self.has_term = false;
         let c1 = self.add(parent, backedge);
-        let cond = self.add(c1, cont);
+        let cond = self.add(c1, continues);
         if let Some(c) = d.cond {
             self.propagate(cond, N::E(c), true);
         }
@@ -1144,10 +1144,10 @@ impl<'a, 'f> Builder<'a, 'f> {
             Some(b) => self.propagate(top, b, true),
             None => top,
         };
-        let (brk, cont) = self.bc.pop().unwrap_or_default();
+        let (brk, continues) = self.bc.pop().unwrap_or_default();
         let body_term = self.has_term;
         self.has_term = false;
-        let cond = self.add(backedge, cont);
+        let cond = self.add(backedge, continues);
         if let Some(c) = d.cond {
             self.propagate(cond, N::E(c), true);
         }
@@ -1417,7 +1417,7 @@ impl<'a, 'f> Builder<'a, 'f> {
                 }
                 return;
             }
-            _ => {}
+            IfKind::Ordinary => {}
         }
         self.extend(n);
         self.visit_opt(d.init);

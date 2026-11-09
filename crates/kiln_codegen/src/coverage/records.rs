@@ -49,7 +49,7 @@ pub(crate) struct CovModule {
 
 impl std::fmt::Debug for CovModule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CovModule").field("records", &self.records.len()).finish()
+        f.debug_struct("CovModule").field("records", &self.records.len()).finish_non_exhaustive()
     }
 }
 
@@ -131,8 +131,8 @@ impl Cg<'_> {
         {
             return;
         }
-        if !self.cov.deferred.contains_key(&d) {
-            self.cov.deferred.insert(d, true);
+        if let std::collections::hash_map::Entry::Vacant(v) = self.cov.deferred.entry(d) {
+            v.insert(true);
             self.cov.deferred_order.push(d);
         }
     }
@@ -206,33 +206,30 @@ impl Cg<'_> {
         let interner = self.cov.interner.take().unwrap_or_else(|| Box::new(Interner::new()));
         let l = Locs { sm, interner: &interner };
         let opts = self.opts;
-        let out = match rc {
-            Some(rc) => {
-                let mut fold = |e| self.fold_int(e);
-                let mut b = mapping::Builder::new(ast, l, rc, &mut fold);
-                b.function(d);
-                let mut parts = b.into_parts();
-                let mut t = Table {
-                    files: &mut self.cov.files,
-                    names: &mut self.cov.names,
-                    skipped: &mut self.cov.skipped,
-                    sm,
-                    pp: &opts.coverage.skipped,
-                    macros: &opts.coverage.expanded,
-                };
-                mapping::finish(l, &mut parts.regions, &parts.exprs, true, &mut t)
-            }
-            None => {
-                let mut t = Table {
-                    files: &mut self.cov.files,
-                    names: &mut self.cov.names,
-                    skipped: &mut self.cov.skipped,
-                    sm,
-                    pp: &opts.coverage.skipped,
-                    macros: &opts.coverage.expanded,
-                };
-                mapping::empty(ast, l, d, &mut t)
-            }
+        let out = if let Some(rc) = rc {
+            let mut fold = |e| self.fold_int(e);
+            let mut b = mapping::Builder::new(ast, l, rc, &mut fold);
+            b.function(d);
+            let mut parts = b.into_parts();
+            let mut t = Table {
+                files: &mut self.cov.files,
+                names: &mut self.cov.names,
+                skipped: &mut self.cov.skipped,
+                sm,
+                pp: &opts.coverage.skipped,
+                macros: &opts.coverage.expanded,
+            };
+            mapping::finish(l, &mut parts.regions, &parts.exprs, true, &mut t)
+        } else {
+            let mut t = Table {
+                files: &mut self.cov.files,
+                names: &mut self.cov.names,
+                skipped: &mut self.cov.skipped,
+                sm,
+                pp: &opts.coverage.skipped,
+                macros: &opts.coverage.expanded,
+            };
+            mapping::empty(ast, l, d, &mut t)
         };
         self.cov.interner = Some(interner);
         out
