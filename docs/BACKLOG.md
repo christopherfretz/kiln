@@ -938,10 +938,10 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-899 | driver: `-ffat-lto-objects` emits real fat objects (machine code + bitcode); now bitcode-only (crates/kiln_driver/src/codegen_flags.rs:28) | WP-873 | open |
 | WP-900 | codegen: `-fstrict-vtable-pointers` invariant.group metadata and `-f[no-]vectorize`/`-fslp-vectorize` pipeline toggles (codegen_flags.rs:146) | WP-873 | deferred |
 | WP-901 | diag: `-fdiagnostics-show-template-tree` output (codegen_flags.rs:145) | WP-873 | deferred |
-| WP-902 | codegen: C++26 constant init of a shared virtual base (consts.rs:569 record_elems); xfail class.mi/shared-virtual-base-constant-init-run.cpp | WP-873 | open |
+| WP-902 | codegen: C++26 constant init of a shared virtual base (consts.rs:569 record_elems); xfail class.mi/shared-virtual-base-constant-init-run.cpp | WP-873 | done (#438) |
 | WP-903 | sema: never-constant check tracks locals (never_constant.rs:280); oven potential mode stops after a quiet nested call (vm.rs:2058) | WP-873 | deferred |
 | WP-904 | sema accepts-invalid: `sizeof(L::N)` without `typename` for a dependent member class of a local class (clang 19 rejects) | WP-884 | open |
-| WP-905 | sema SILENT DROP: a failed instantiated-decl lookup in a local class member body drops the statement silently (templ/subst/decls.rs near enum_decl ~1503) | WP-884 | open |
+| WP-905 | sema SILENT DROP: a failed instantiated-decl lookup in a local class member body drops the statement silently (templ/subst/decls.rs near enum_decl ~1503) | WP-884 | done (#446) |
 | WP-906 | bench: reflect s7/s8 baselines stale vs current host load; re-baseline on a quiet host | WP-884 | deferred |
 | WP-913 | sema: promote coro_lifetimebound/coro_disable_lifetimebound out of class C into the dangling walk (crates/kiln_sema/src/attr_triage.rs:167-170) | WP-891 | open |
 | WP-914 | sema rejects-valid (compat 19): structured-binding tuple_element index is an unconverted size_t value, so `template<unsigned I, class T> struct tuple_element` misses its explicit specialization (struct_bind.rs:673); xfail dcl.struct.bind/tuple-element-unsigned-index-19.cpp | WP-891 | done (#437) |
@@ -963,9 +963,9 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-935 | UBSan: nullability-arg/-assign/-return checks | WP-871 | open |
 | WP-936 | UBSan: -fsanitize=local-bounds accepted (crates/kiln_ast/src/sanitize.rs:52) but the LLVM pass is not scheduled | WP-871 | open |
 | WP-937 | UBSan tails: pass_object_size in object-size (ubsan.rs:1401); range checks at non-scalar load sites (ubsan.rs:1217 ub_range_check); odd-width _BitInt bounds at compat 22 (ubsan.rs:~302); descriptors keyed by sugared type (ubsan.rs:285); nonnull through member-pointer calls (memptr.rs); lambda trailing returns_nonnull lands on operator() (sema); ASan value names + clang 22 alloca annotation; unreduced __distance load_invalid_value in fmt format-test.cc | WP-871 | open |
-| WP-938 | codegen: user-declared abort() without throw() is emitted as an invoke; clang emits a nothrow call | WP-871 | open |
+| WP-938 | codegen: user-declared abort() without throw() is emitted as an invoke; clang emits a nothrow call | WP-871 | done (#438, WP-902) |
 | WP-939 | abi: unnamed enum mangled as $_3 where clang uses Ut_ (seen in fmt IR diff) | WP-871 | open |
-| WP-940 | codegen: library builtins (strlen) not folded to constants; member access to a constexpr static data member is a load not a constant (xfails ext.gnu.builtins/library-strlen-fold-ir.cpp, expr.ref/ir-constexpr-static-member-fold.cpp) | WP-871 | open |
+| WP-940 | codegen: library builtins (strlen) not folded to constants; member access to a constexpr static data member is a load not a constant (xfails ext.gnu.builtins/library-strlen-fold-ir.cpp, expr.ref/ir-constexpr-static-member-fold.cpp) | WP-871 | done (#438, WP-902) |
 | WP-942 | Show `version::long_version()` (git sha) in `--version`/`-v` identity; crates/kiln_driver/src/version.rs:39 + lib.rs print_version (coordinate WP-920) | WP-927 | open |
 | WP-943 | Portable release binaries: build dist on an older-glibc image to lower the GLIBC_2.39 floor (pidfd_spawnp); .github/workflows/release.yml:31 | WP-927 | open |
 | WP-944 | actionlint clean on ci-lane.yml YAML anchors (`*debugger-container`, `*kiln-shards`) or pin a version that supports them; .github/workflows/ci-lane.yml:79 | WP-927 | open |
@@ -984,7 +984,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-955 | accepts-invalid (WP-912): access/abstract/deleted checks (friend private, abstract temporary, deleted operator delete, virtual base with private dtor) | WP-912 | done (#428, WP-1017) |
 | WP-1017 | accepts-invalid part 3: access/abstract/deleted checks, template declaration rules, lookup and exception specs (WP-955–957) | WP-955 | done (#428) |
 | WP-956 | accepts-invalid (WP-912): template declaration rules (partial spec more specialized, CWG526, pre-C++20 float NTTP, conversion function template) + constraint self-dependency hard error in SFINAE; crates/kiln_sema/src/templ/concepts/sat.rs:148 | WP-912 | open |
-| WP-957 | accepts-invalid (WP-912): lookup/type checks (ambiguous elaborated, enum keyword, alignas incomplete, differing UDL suffixes) + exception specs laxer than base | WP-912 | open |
+| WP-957 | accepts-invalid (WP-912): lookup/type checks (ambiguous elaborated, enum keyword, alignas incomplete, differing UDL suffixes) + exception specs laxer than base | WP-912 | done (#444) |
 | WP-958 | accepts-invalid (WP-912): rejects-valid: templates and deduction (12 xfails, docs/status/accepts-invalid.md cluster 15) | WP-912 | done (#416) |
 | WP-959 | accepts-invalid (WP-912): rejects-valid: classes, special members, initialization, misc (9 xfails, cluster 16) | WP-912 | done (WP-958, #416) |
 | WP-960 | accepts-invalid (WP-912): low: `-pedantic-errors` extension diagnostics; unsupported GNU extensions and driver flags | WP-912 | open |
@@ -1021,9 +1021,9 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-995 | abi: `_Generic` in C++ template arguments (mangle/dep.rs) | WP-933 | open |
 | WP-996 | oven: "ImplicitCastExpr of builtin callee not supported" makes the never-constant check skip (kiln_oven compile.rs:1401) | WP-933 | done (#430, WP-945) |
 | WP-997 | codegen: subobject NTTP constant uses typed GEP vs clang `getelementptr (i8, …)` (ABI slice equal) | WP-933 | open |
-| WP-998 | codegen: `deref<&cg>` loads a const global clang folds (`static const int cg = 3`) | WP-933 | open |
+| WP-998 | codegen: `deref<&cg>` loads a const global clang folds (`static const int cg = 3`) | WP-933 | done (#438, WP-902; real gap was ref<cg>() through a reference NTTP, deref<&cg>() is a load in clang too) |
 | WP-999 | WP-126 remainder: oven pseudo/explicit-destructor lifetime, `p->N::~T()`, member-same-name-as-class diag, out-of-class friend templates, owned friend classes in class templates, dependent friend specializations in dump, `typename C<X>::T` rebuilt only at top level, `typename` error locations/recovery | WP-126 | open |
-| WP-1003 | codegen: `-fcoverage-mapping`, emit the coverage mapping section (driver coverage_flags.rs:187 errors today) | WP-941 | open |
+| WP-1003 | codegen: `-fcoverage-mapping`, emit the coverage mapping section (driver coverage_flags.rs:187 errors today) | WP-941 | done (#445) |
 | WP-1004 | driver: gcov filters `-fprofile-filter-files`/`-fprofile-exclude-files` (coverage_flags.rs:131) | WP-941 | open |
 | WP-1005 | abi: lambda `$_N` numbering order differs from clang (kiln_abi mangle.rs:41) | WP-941 | open |
 | WP-1006 | abi: non-visible unnamed enum mangles `Ut_` vs clang `$_N` (mangle.rs:2339; xfail basic.link/unnamed-enum-internal-name-run.cpp) | WP-941 | open |
@@ -1089,10 +1089,17 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1068 | modules image S6: imports, re-exports and partitions (bmi_image.rs:1224) | WP-1048 | open |
 | WP-1069 | modules image S-lazy: lazy top-level lookup instead of eager build; needs mutable lookup path (kiln_parse modules.rs:121, bmi_image.rs:1383) | WP-1048 | open |
 | WP-1070 | modules image S7: locations in other files and macro expansions (bmi_image.rs:868); then flip -fkiln-bmi-image on once std is covered | WP-1048 | open |
-| WP-1075 | rejects-valid: break/continue inside a statement-expression in a loop condition, for(;({break;1;});) (kiln_sema stmt.rs:1350, :1358) | WP-971 | open |
-| WP-1076 | hang: kiln times out (>20 s) on clang CodeGenCXX/mangle-ms-back-references-pr13207.cpp, CodeGenCXX/pr29160.cpp, Preprocessor/bigoutput.c | WP-971 | open |
+| WP-1075 | rejects-valid: break/continue inside a statement-expression in a loop condition, for(;({break;1;});) (kiln_sema stmt.rs:1350, :1358) | WP-971 | done (#443) |
+| WP-1076 | hang: kiln times out (>20 s) on clang CodeGenCXX/mangle-ms-back-references-pr13207.cpp, CodeGenCXX/pr29160.cpp, Preprocessor/bigoutput.c | WP-971 | in progress |
 | WP-1071 | sema: relookup_member handles overload sets and using-declarations of a specialization member (kiln_sema templ/subst/mod.rs:971, today not yet implemented) | WP-1054 | open |
 | WP-1072 | rejects-valid: dependent friend class A<T>::Member gets no access to private members (xfail temp.friend/dependent-member-class-friend-run.cpp) | WP-1054 | open |
 | WP-1073 | builtins: model returns_twice (setjmp, vfork, getcontext), allocsize (malloc family), scanf format on library builtins, and clang inline lowering of abort/alloca/bzero/bcopy/mempcpy/conj/creal/cimag/finite (kiln_ast decl.rs:3792, kiln_codegen builtins.rs) | WP-914 | open |
 | WP-1074 | tests: flaky kiln_driver module_cache racing_misses_all_succeed under load (tests/module_cache.rs:193) | WP-914 | open |
 | WP-1077 | linkage: closure type in a function template signature (decltype of a lambda) is emitted internal where clang uses linkonce_odr (kiln_abi mangle.rs ~600 tag_externally_visible) | WP-1060 | open |
+| WP-1081 | expansion statements: break/continue in template for headers (statement expressions in the init/range) not modelled or tested against clang (kiln_parse stmt.rs parse_for_rest) | WP-1075 | open |
+| WP-1078 | accepts-invalid: implicit copy/move assignment overriding a final function and the implicit overrider return-type check are not diagnosed (kiln_sema class/special/implicit.rs:1368, class/virtual/mod.rs:414; needs note while declaring the implicit copy assignment operator) | WP-957 | open |
+| WP-1079 | accepts-invalid: overrider nested function-type exception-spec rule (exception specifications of argument types differ) (kiln_sema except.rs:1172, class/virtual/mod.rs:785) | WP-957 | open |
+| WP-1080 | accepts-invalid: enum F; with no fixed underlying type is not diagnosed (ISO C++ forbids forward references to enum types) (kiln_sema decl.rs:7911) | WP-957 | open |
+| WP-1082 | coverage: port clang 20+ mapping for compat 22 (gaps between logical-operator operands, counters on folded branches, branch counter order, do-while(0) macro region) (kiln_codegen coverage/mapping.rs:1472, :598) | WP-1003 | open |
+| WP-1083 | coverage fidelity tail: zero records for constant-evaluation-only instantiations (coverage/records.rs:116, module.rs:735), extra records for generic lambdas (records.rs:238), duplicate zero-length regions (mapping.rs:1659), stringizing as nested expansion (mapping.rs:60), skipped-range end after init-capture (skipped.rs:113), qualified base-init start (ctorinit.rs:92), compound literal end (ast.rs:107) | WP-1003 | open |
+| WP-1084 | accepts-invalid: a local class inside a template is not a dependent type, so unqualified lookup into a dependent local base and O::In2() without typename are accepted (kiln_sema templ/actions.rs:160 is_dependent_type, class/access.rs:311 has_dependent_bases_in) | WP-905 | open |

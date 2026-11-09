@@ -783,6 +783,9 @@ impl AttrNode {
 #[derive(Debug)]
 pub struct AttrArena {
     nodes: Vec<AttrNode>,
+    /// The kinds among `nodes`, one bit per [`AttrKind`] (a node's kind
+    /// never changes once pushed), for [`AttrArena::has_kind`].
+    kinds: Vec<u64>,
     /// Attributes of declarations that have any (`HAS_ATTRS`).
     pub decl_attrs: ColdMap<DeclId, ListId>,
 }
@@ -798,6 +801,7 @@ impl Default for AttrArena {
                 a: 0,
                 b: 0,
             }],
+            kinds: Vec::new(),
             decl_attrs: ColdMap::new("decl_attrs"),
         }
     }
@@ -812,6 +816,11 @@ impl AttrArena {
     /// Appends an attribute.
     pub fn push(&mut self, a: AttrNode) -> AttrId {
         let id = AttrId::new(self.nodes.len() as u32);
+        let (word, bit) = (usize::from(a.kind.0 / 64), a.kind.0 % 64);
+        if self.kinds.len() <= word {
+            self.kinds.resize(word + 1, 0);
+        }
+        self.kinds[word] |= 1 << bit;
         self.nodes.push(a);
         id
     }
@@ -845,9 +854,9 @@ impl AttrArena {
         self.len() == 0
     }
 
-    /// Whether any attribute of kind `kind` exists (a linear scan).
+    /// Whether any attribute of kind `kind` exists.
     pub fn has_kind(&self, kind: AttrKind) -> bool {
-        self.nodes[1..].iter().any(|a| a.kind == kind)
+        self.kinds.get(usize::from(kind.0 / 64)).is_some_and(|w| w & (1 << (kind.0 % 64)) != 0)
     }
 
     /// The attribute list of `d` ([`ListId::EMPTY`] if none).
@@ -856,7 +865,9 @@ impl AttrArena {
     }
 
     pub(crate) fn live_bytes(&self) -> u64 {
-        crate::mem::VecDims::of("nodes", &self.nodes).live_bytes() + self.decl_attrs.live_bytes()
+        crate::mem::VecDims::of("nodes", &self.nodes).live_bytes()
+            + crate::mem::VecDims::of("kinds", &self.kinds).live_bytes()
+            + self.decl_attrs.live_bytes()
     }
 }
 
@@ -864,6 +875,7 @@ impl HeapSize for AttrArena {
     fn heap_bytes(&self) -> MemReport {
         let mut r = MemReport::new();
         r.push(MemRow::of_vec("nodes", &self.nodes));
+        r.push(MemRow::of_vec("kinds", &self.kinds));
         r.push(self.decl_attrs.mem_row());
         r
     }

@@ -360,6 +360,10 @@ Types and template keys refer to `first` (spec/types.md: `Record(first)`),
 lookup returns `latest`, codegen emits from `definition`. A redeclaration
 merges into its predecessor's group (sema checks compatibility). The
 `ODR`-checked "is this the same entity" question is group identity.
+Walking a chain (`redecls_of`, `prev` repeatedly) is O(length), so
+merging a redeclaration walks it only when the walk can change the
+result; otherwise a file of N redeclarations of one entity is O(N²)
+(spec/landed/abi/WP-1076.md).
 
 ## 5. Expressions
 ### 5.1 Header
@@ -660,7 +664,10 @@ struct StmtNode { kind: StmtKind /*u8*/, flags: u8, aux: u16, loc: Loc, a: u32, 
 `AttrNode { kind: AttrKind /*u16*/, syntax: u8 /*[[ ]], GNU, keyword, declspec*/, flags: u8, loc, a, b }`
 (16 B). Arguments: `ExprId`s, a `Symbol`, or a side record. Declarations
 with attributes have `HAS_ATTRS` and an entry in `decl_attrs: FxHashMap<
-DeclId, ListId>`. Unknown attributes are diagnosed and dropped (not
+DeclId, ListId>`. `AttrArena::has_kind(k)` (whether any node of kind
+`k` was ever pushed) is O(1), from a per-kind presence bitset set by
+`push`; `Ast::inherited_attr` answers `None` from it without walking the
+redeclaration chain (WP-1076). Unknown attributes are diagnosed and dropped (not
 stored). Annotations (P3394, `[[=e]]`, WP-481) are not stored as
 attributes: an `AttrKind::ANNOTATION` node (`a` = the operand `ExprId`)
 lives only between the parser and sema, which moves each into the cold

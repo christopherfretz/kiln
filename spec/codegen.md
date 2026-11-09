@@ -70,7 +70,30 @@ panic and never silently wrong IR.
   Calls of builtins with an integral or floating
   result are candidates too (clang `EmitBuiltinExpr` tries
   `EvaluateAsRValue` first), except `__builtin_is_constant_evaluated()`
-  (WP-088). A `CXXDefaultArgExpr` has no children, so the pre-pass walks
+  (WP-088). A direct call of a C library function clang's evaluator
+  evaluates (`builtin::lib_evaluated`: `strlen`, `strcmp`, `memcmp`,
+  `wcslen`, ...; `builtins::lib_fold_callee`) is a candidate too, unless
+  the caller is `no_builtin`: a folded integral or floating result is
+  emitted as the constant and the arguments are not emitted, so
+  `strlen("abc")` is `i32 3`/`i64 3` and `memcmp(a, b, 2)` with
+  constant arrays folds (clang `EmitBuiltinExpr` folds the
+  `BIstrlen`-style calls the same way; a pointer result such as
+  `strchr` stays a call; WP-940,
+  `ext.gnu.builtins/library-strlen-fold-ir.cpp`). Member access names
+  a constant the same way a `DeclRefExpr` does (clang `tryEmitAsConstant`
+  via `tryToConvertMemberExprToDeclRefExpr`, then `EvaluateAsInt`):
+  `a.n`, `p->n` and `A::n` of a const non-volatile static data member
+  with a constant initializer of scalar type (integral, enum, floating,
+  pointer, member pointer, `nullptr_t`) fold, and so does an integral or
+  enum non-static member whose whole access is a constant; the base
+  object is still emitted when it has side effects (`get().n` calls
+  `get`; WP-940, `expr.ref/ir-constexpr-static-member-fold.cpp`).
+  Constant-reference loads look through a substituted non-type template
+  parameter (clang `VisitSubstNonTypeTemplateParmExpr` visits the
+  replacement): `template <const int &R> int ref() { return R; }` with
+  `ref<cg>()` and `static const int cg = 3` is `ret i32 3` (WP-998,
+  `temp.arg.nontype/reference-arg-const-fold-ir.cpp`); `*P` with
+  `P = &cg` stays a load, as in clang. A `CXXDefaultArgExpr` has no children, so the pre-pass walks
   its parameter's default argument once, at the first use (WP-136).
   The pre-pass walks every statement codegen emits, including try blocks
   and their handlers (WP-214: a default argument naming a non-inline
@@ -1455,16 +1478,13 @@ unit as clang 19's `-flto` does (`CodeGenOpts.PrepareForLTO` /
 - The module summary, the pre-link pipeline and the bitcode writer are
   the driver's (`opt`, spec/driver.md).
 - Not yet: `-ffat-lto-objects` (bitcode only), whole-program
-  devirtualization options, and C++26 constant initialization of a class
-  with a shared virtual base (`consts.rs` `record_elems`, xfail
-  `tests/conformance/class.mi/shared-virtual-base-constant-init-run.cpp`),
-  a gap with or without LTO that the LTO tests avoid by using C++23.
+  devirtualization options.
 - Tests: `tests/codegen/lto_{full,full_o2,thin,thin_split}.cpp` (exact IR
   against clang 19, `ir_vs_clang`), `tests/conformance/lex.phases/
   lto-two-tu-*-run.cpp` (two TUs built, linked and run, with the default
   linker and `-fuse-ld=lld`).
 
-### 5.4 Instrumentation (WP-941; `coverage/`)
+### 5.4 Instrumentation (WP-941, WP-1003; `coverage/`)
 `CodegenOptions::coverage` (`CoverageOptions`, set from spec/driver.md
 "Coverage flags") instruments the module as clang 19's frontend does;
 with no coverage flag the IR is unchanged, byte for byte.
@@ -1500,10 +1520,57 @@ with no coverage flag the IR is unchanged, byte for byte.
   `@__llvm_profile_filename` (`hidden`, `comdat`) unless
   `-disable-llvm-passes` is given (clang's lowering creates it, so
   without the pass there is none).
-- **Not yet:** `-fcoverage-mapping` (the `__llvm_covmap`/`__llvm_covfun`
-  records of clang `CoverageMappingGen`; `llvm-cov show`/`report` need
-  them), a WP-941 follow-up the driver rejects. `llvm-profdata merge` /
-  `show` of kiln's `.profraw` work and equal clang's.
+- **Coverage mapping** (`-fcoverage-mapping` with the counters,
+  `coverage/{mapping,records,encode,skipped}.rs`, WP-1003): clang 19
+  `CoverageMappingGen`, in every `-fclang-compat` mode.
+  - *Regions.* `mapping.rs` ports `CounterCoverageMappingBuilder`
+    statement for statement over the `pgo.rs` counters: code regions
+    for bodies, statements, conditions and `?:`/`&&`/`||` operands; gap
+    regions after `)` of a condition and between a statement and what
+    follows a jump; branch regions for every instrumented condition
+    (`if`/loops/`?:`/`&&`/`||`, with clang's folded-constant zero
+    counters); expansion regions for macro expansions, nested as clang
+    nests them; and clang's region order. Locations are clang's: an end
+    is the start of the last token plus its length
+    (`getPreciseTokenLocEnd`), a `= default` body is one region (in a
+    class at the `default` keyword, out of class at the declarator's
+    last token), and a constructor call ends at its `)`/`}` or its last
+    written argument. Locations the AST does not keep (a condition's
+    `)`, a `;`, a case's `:`) are re-lexed from the spelling.
+  - *Skipped regions* (`skipped.rs`, clang `CoverageSourceInfo`): the
+    groups the preprocessor skipped (`kiln_pp::PpCallbacks::
+    source_range_skipped`), comments and empty-line runs, each with
+    clang's previous/next watched token, so a range on a line with code
+    is trimmed or dropped as clang's.
+  - *Records* (`records.rs`): each emitted function's `__covrec_<NameHash
+    hex>` in `__llvm_covfun` (`{ i64 NameHash, i32 size, i64 FuncHash,
+    i64 FilenamesRef, <mapping> }`, `linkonce_odr hidden` with a comdat of
+    its own name, the NameHash being MD5 of the PGO name, FuncHash the
+    pgo.rs hash, FilenamesRef the TU hash); the TU's
+    `__llvm_coverage_mapping` in `__llvm_covmap` (version 6 header and
+    the filenames: the compilation directory, then each file, normalized
+    as clang `normalizeFilename`). Filenames are written uncompressed;
+    clang compresses them by default, so the TU hash (MD5 of the
+    filenames blob) differs from clang's unless clang is run with
+    `-mllvm -enable-name-compression=false`, when the section is the
+    same, byte for byte. `llvm-cov` reads both forms.
+  - *Unused functions* (clang `AddDeferredUnusedCoverageMapping`): a
+    function defined in the TU and never emitted (an unused `inline` or
+    `static` function, an unused member of a class or of an
+    instantiated class template; templates themselves get none) gets a
+    zero record
+    (`FuncHash` 0, one zero code region over its body) and its PGO name
+    in `__llvm_coverage_names`, so `llvm-cov` reports it at 0%.
+  - Without `-fcoverage-mapping` none of this is emitted, and the
+    counters are WP-941's, byte for byte.
+  - *Differences from clang* (spec/landed/codegen/WP-1003.md): clang
+    20+ (the `-fclang-compat=22` oracle) adds gap regions between
+    `&&`/`||` operands and real counters on folded branch regions,
+    which kiln does not write; a function template specialization or
+    class-template member instantiated only for constant evaluation gets
+    no zero record (clang gives it one); the string literal from `#x`
+    in a macro body maps no nested expansion region; generic lambdas'
+    and some immediate-invocation helpers' records differ.
 - **Runtime.** Both modes link `libclang_rt.profile-<arch>.a` from the
   LLVM 19 compiler-rt (`/usr/lib/llvm-19/lib/clang/19/lib/linux/` on
   Debian, package `libclang-rt-19-dev`); the linking `clang++` adds it.
@@ -2349,11 +2416,20 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   vtable), as clang's `ConstantEmitter` does. A class with virtual bases
   (constant only through P3533, kiln alone) emits its virtual-base
   members of the complete-object type the same way, at their layout
-  offsets. An array whose elements all have one constant type uses it as
+  offsets. A base laid out with a primary virtual base (nearly empty,
+  Itanium C++ ABI 2.4: clang's `accumulateBases` makes it slot 0 of the
+  base's type, with no separate vptr slot) holds just the vptr there: the
+  address point of the base subobject, which the virtual base shares
+  when it is the complete object's indirect primary base and which is
+  the base's own otherwise (a shared virtual base reached through two
+  bases, WP-902). clang 19 and 22 initialize such objects dynamically
+  (`zeroinitializer` and a `__cxx_global_var_init`); kiln's constant is
+  the object those constructors build. An array whose elements all have one constant type uses it as
   the element type (clang `CommonElementType`), so an array of a dynamic
   class is `[N x %struct.P]` and not a literal struct. Validation:
   `tests/codegen/polymorphic_const_global.cpp` (exact IR),
-  `tests/conformance/dcl.constinit/constinit-virtual-base-run-cxx26.cpp`.
+  `tests/conformance/dcl.constinit/constinit-virtual-base-run-cxx26.cpp`,
+  `tests/conformance/class.mi/shared-virtual-base-constant-init-run.cpp`.
 - **vptr stores**: constructors store the address point of every vptr
   after the base initializers and before the member initializers;
   destructors re-store them on entry unless clang's

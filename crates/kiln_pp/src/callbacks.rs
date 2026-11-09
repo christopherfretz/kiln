@@ -167,9 +167,11 @@ pub trait PpCallbacks {
         let _ = (span, text);
     }
 
-    /// A group skipped by a conditional directive: from the end of the
-    /// directive line that started skipping to the `#` of the directive
-    /// that ended it.
+    /// A group skipped by a conditional directive (clang
+    /// `SourceRangeSkipped`): from the `#` of the directive that started
+    /// skipping to the end of the directive line that ended it (just
+    /// past its last character, before the newline; for a group ended
+    /// by an entered `#elif`, wherever lexing resumed after it).
     fn source_range_skipped(&mut self, range: Span) {
         let _ = range;
     }
