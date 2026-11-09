@@ -2588,9 +2588,9 @@ instantiation unless stated.
       is `expression contains unexpanded parameter pack` ([temp.variadic]/12,
       the attribute is dropped). On a statement clang 22 accepts it
       and kiln ignores it; clang 19 (`-fclang-compat=19`) keeps `cannot
-      be applied to a statement`. Not yet: codegen
-      (`llvm.global.annotations`, `llvm.var.annotation`,
-      `llvm.ptr.annotation`).
+      be applied to a statement`. An instantiated variable, local or
+      static, keeps it (`var_align_attrs`). Codegen: spec/codegen.md
+      "clang `annotate`" (WP-1113).
   - **Class B attributes** (WP-813, `class_b_attrs.rs`, `AttrKind` 240
     to 273): the hardening, instrumentation, inlining and pointer-fact
     attributes (`no_stack_protector`, `patchable_function_entry`,
