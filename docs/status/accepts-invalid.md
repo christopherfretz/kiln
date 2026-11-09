@@ -408,8 +408,9 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
    22; [class.union]/2, [class.static.data]/4, [class.bit]). Fixed in
    WP-1015 (`class.union/*.cpp`, `class.union.anon/two-default-member-initializers.cpp`,
    `class.static.data/initializer-*.cpp`,
-   `class.bit/anonymous-bit-field-qualifiers*.cpp`). Still open: C++03
-   non-trivial union members (`CXX/class/class.union/p1.cpp`).
+   `class.bit/anonymous-bit-field-qualifiers*.cpp`). C++03 non-trivial
+   union members (`CXX/class/class.union/p1.cpp`) were fixed in WP-1042 and
+   WP-1090 (the variadic `s8(...) = delete` member).
 5. **Redeclarations and overloadable declarations** (redeclaration of a
    using-declaration 37, non-friend qualified member 37, class member
    redeclared 34, ref-qualified and unqualified overloads; [over.load]/2,
