@@ -298,7 +298,7 @@ impl Sema<'_, '_> {
                     if let Some((ap, n)) = s.type_expansion_parts(pat, rest[i], d) {
                         return s.deduce_pattern_from_expansion(pat, ap, n, d, level, loc);
                     }
-                    if let Some((an, n)) = s.template_expansion_parts(pat, rest[i], d) {
+                    if let Some((an, n)) = Self::template_expansion_parts(pat, rest[i], d) {
                         return s.deduce_template_from_expansion(pat, an, n, d, level, loc);
                     }
                     s.deduce_arg(pat, rest[i], d, level, loc)
@@ -342,7 +342,6 @@ impl Sema<'_, '_> {
     /// `pat` against a template pack expansion `B'...`: its template and
     /// expansion count.
     fn template_expansion_parts(
-        &self,
         pat: TemplateArg,
         a: TemplateArg,
         d: &DeducedArgs,
