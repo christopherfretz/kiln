@@ -4706,7 +4706,9 @@ under its own name, the same signature, gating and codegen
   codegen lowers a direct call of the errno-free `<math.h>` functions
   and (WP-186) of `memcpy` / `memmove` / `memset` / `abs` / `labs` /
   `llabs` as the twin (spec/codegen.md §3, "library builtins"); sema
-  and the Oven do not read it. WP-419 adds
+  does not read it, and the Oven reads it only for the functions clang's
+  evaluator evaluates (WP-940, spec/oven.md "Builtins": `strlen`,
+  `memcmp`, ... evaluate behind a constant-expression note). WP-419 adds
   C23's `roundeven{,f,l}` (clang 19 and 22), clang 22's
   `fmaximum_num` / `fminimum_num` `{,f,l}` (`builtin::lib_min_compat`:
   not recognized at `-fclang-compat=19`) and the GNU `sincos{,f,l}`
@@ -4716,9 +4718,13 @@ under its own name, the same signature, gating and codegen
   ... `ctanh`, `cpow`, `cproj` `{,f,l}`; `NoThrow`, `cproj` also
   `Const`) and the GNU-only `stpcpy`, `stpncpy`, `strdup`, `strndup`,
   `index`, `rindex` (`NoThrow`), clang 19 and 22's rows; a call under a
-  pending cleanup is then a `call`, not an `invoke`. A call in
+  pending cleanup is then a `call`, not an `invoke`. WP-940 adds `memcmp`
+  and the GNU-only `bcmp` with no implicit attributes (clang gives them
+  none), so their twin is recorded for the fold. A call in
   a constant expression is still a call of a non-constexpr function
-  (clang 19 and 22 reject `constexpr double d = ceil(1.5);`). The printf
+  (clang 19 and 22 reject `constexpr double d = ceil(1.5);` and
+  `constexpr auto n = strlen("ab");`); only a fold (`__builtin_constant_p`,
+  a GNU-folded array bound, codegen) evaluates the `lib_evaluated` set. The printf
   family (`printf`, `fprintf`, `sprintf`, `snprintf`, `vprintf`,
   `vfprintf`, `vsprintf`, `vsnprintf`; `builtin::lib_printf_format`,
   WP-186) gets clang's implicit `format(printf, F, A)` first, unless a

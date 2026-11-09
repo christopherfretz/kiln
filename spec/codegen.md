@@ -70,7 +70,30 @@ panic and never silently wrong IR.
   Calls of builtins with an integral or floating
   result are candidates too (clang `EmitBuiltinExpr` tries
   `EvaluateAsRValue` first), except `__builtin_is_constant_evaluated()`
-  (WP-088). A `CXXDefaultArgExpr` has no children, so the pre-pass walks
+  (WP-088). A direct call of a C library function clang's evaluator
+  evaluates (`builtin::lib_evaluated`: `strlen`, `strcmp`, `memcmp`,
+  `wcslen`, ...; `builtins::lib_fold_callee`) is a candidate too, unless
+  the caller is `no_builtin`: a folded integral or floating result is
+  emitted as the constant and the arguments are not emitted, so
+  `strlen("abc")` is `i32 3`/`i64 3` and `memcmp(a, b, 2)` with
+  constant arrays folds (clang `EmitBuiltinExpr` folds the
+  `BIstrlen`-style calls the same way; a pointer result such as
+  `strchr` stays a call; WP-940,
+  `ext.gnu.builtins/library-strlen-fold-ir.cpp`). Member access names
+  a constant the same way a `DeclRefExpr` does (clang `tryEmitAsConstant`
+  via `tryToConvertMemberExprToDeclRefExpr`, then `EvaluateAsInt`):
+  `a.n`, `p->n` and `A::n` of a const non-volatile static data member
+  with a constant initializer of scalar type (integral, enum, floating,
+  pointer, member pointer, `nullptr_t`) fold, and so does an integral or
+  enum non-static member whose whole access is a constant; the base
+  object is still emitted when it has side effects (`get().n` calls
+  `get`; WP-940, `expr.ref/ir-constexpr-static-member-fold.cpp`).
+  Constant-reference loads look through a substituted non-type template
+  parameter (clang `VisitSubstNonTypeTemplateParmExpr` visits the
+  replacement): `template <const int &R> int ref() { return R; }` with
+  `ref<cg>()` and `static const int cg = 3` is `ret i32 3` (WP-998,
+  `temp.arg.nontype/reference-arg-const-fold-ir.cpp`); `*P` with
+  `P = &cg` stays a load, as in clang. A `CXXDefaultArgExpr` has no children, so the pre-pass walks
   its parameter's default argument once, at the first use (WP-136).
   The pre-pass walks every statement codegen emits, including try blocks
   and their handlers (WP-214: a default argument naming a non-inline
