@@ -64,6 +64,7 @@ mod fmv;
 mod for_loop_analysis;
 mod format_string;
 mod forms;
+mod generic_sel;
 mod gnu;
 mod gnu_null;
 mod gnu_typeof;
@@ -656,6 +657,11 @@ pub struct Sema<'a, 'sm> {
     /// declared with the same qualifier, so it redeclares `N::f`
     /// ([dcl.meaning.general]/2.3, [temp.friend]/1; WP-273).
     pub(crate) friend_qualifiers: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// The dependent nested-name-specifier of each method friend whose
+    /// match waits for instantiation (`template<class U> friend int
+    /// B<T>::g(U, W<T>&);`): substituted, it names the class whose member
+    /// the instantiated friend redeclares ([temp.friend]/1; WP-1110).
+    pub(crate) friend_qualifier_nns: kiln_source::fx::FxHashMap<DeclId, kiln_ast::ids::NnsId>,
     /// Where `override` / `final` were written on each member function
     /// whose override control is deferred to instantiation (a dependent
     /// class or type; `check_override_control`): the instantiation is
@@ -1385,6 +1391,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             pending_chunk_loc: Loc::INVALID,
             constexpr_begin_locs: kiln_source::fx::FxHashMap::default(),
             friend_qualifiers: kiln_source::fx::FxHashMap::default(),
+            friend_qualifier_nns: kiln_source::fx::FxHashMap::default(),
             virt_spec_locs: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
             delayed_bodies: kiln_source::fx::FxHashSet::default(),

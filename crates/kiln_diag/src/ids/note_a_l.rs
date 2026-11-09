@@ -40,6 +40,7 @@ note_cannot_use_trivial_abi_reason = Note (2) "'trivial_abi' is disallowed on {0
 note_carries_dependency_missing_first_decl = Note (0) "declaration missing '[[carries_dependency]]' attribute is here";
 note_checking_concept_here = Note (1) "while checking the satisfaction of concept '{0}' requested here";
 note_checking_constraints_here = Note (1) "while checking constraint satisfaction for template '{0}' required here";
+note_compat_assoc = Note (1) "compatible type {0} specified here";
 note_conflicting_attribute = Note (0) "conflicting attribute is here";
 note_constexpr_array_index = Note (2) "cannot refer to element {0} of array of {1} elements in a constant expression";
 note_constexpr_function_param_value_unknown = Note (1) "function parameter '{0}' with unknown value cannot be used in a constant expression";

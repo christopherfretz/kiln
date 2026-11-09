@@ -142,6 +142,8 @@ sema_function_attribute_mismatch = Error (1) "function declared with '{0}' attri
 sema_function_partial_spec = Error (0) "function template partial specialization is not allowed";
 sema_function_spec_not_in_enclosing_ns = Error (2) "function template specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_gcc_requires_variadic = Warning [GccCompat] (1) "GCC requires a function with the {0} attribute to be variadic";
+sema_generic_sel_multi_match = Error (2) "controlling expression type {0} compatible with {1} generic association types";
+sema_generic_sel_no_match = Error (1) "controlling expression type {0} not compatible with any generic association type";
 sema_gnu_array_range = Extension [GnuDesignator] (0) "use of GNU array range extension";
 // clang `warn_gnu_inline_cplusplus_without_extern` (WP-585).
 sema_gnu_inline_cpp_without_extern = Warning [GnuInlineCppWithoutExtern] (0) "'gnu_inline' attribute without 'extern' in C++ treated as externally available, this changed in Clang 10";
@@ -310,6 +312,7 @@ sema_main_template = Error (0) "'main' cannot be a template";
 sema_main_used = Extension [Main] (0) "referring to 'main' within an expression is a Clang extension";
 sema_main_variadic = ExtWarn [Main] (0) "'main' is not allowed to be declared variadic";
 sema_make_signed_bad_type = Error (2) "'{0:make_signed|make_unsigned}' is only compatible with non-bool integers and enum types, but was given {1}";
+sema_malformed_std_class_template = Error (1) "std::{0} must be a class template with a single type parameter";
 sema_malformed_std_coroutine_handle = Error (0) "std::coroutine_handle isn't a class template";
 sema_malformed_std_coroutine_traits = Error (0) "std::coroutine_traits isn't a class template";
 sema_many_braces_around_scalar = Warning [ManyBracesAroundScalarInit] (0) "too many braces around scalar initializer";

@@ -6,7 +6,8 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{
-    BinaryOp, CastKind, ExprDeps, ExprFlags, ExprKind, ExprNode, TypeidOperand, ValueCategory,
+    BinaryOp, CastKind, ExprDeps, ExprFlags, ExprKind, ExprNode, GenericAssoc, GenericControl,
+    TypeidOperand, ValueCategory,
 };
 use kiln_ast::ids::{ArgListId, NnsId, RawId};
 use kiln_ast::names::{DeclName, DeclNameView};
@@ -832,6 +833,27 @@ impl Substituter<'_, '_, '_> {
                 let l = self.expr(l)?;
                 let r = self.expr(r)?;
                 Ok(self.sema.act_on_choose_expr(loc, c, l, r, loc))
+            }
+            // clang `TransformGenericSelectionExpr`: the controlling
+            // operand (unevaluated), each association type and
+            // expression, then `CreateGenericSelectionExpr` again.
+            ExprKind::GenericSelectionExpr => {
+                let lists = &self.sema.ast.lists;
+                let ctrl = ex(self).generic_control(e, lists);
+                let assocs = ex(self).generic_assocs(e, lists);
+                let ctrl = match ctrl {
+                    GenericControl::Expr(c) => GenericControl::Expr(self.unevaluated_operand(c)?),
+                    GenericControl::Type(t, l) => GenericControl::Type(self.ty(t, l)?, l),
+                };
+                let mut out = Vec::with_capacity(assocs.len());
+                for a in assocs {
+                    let ty = match a.ty {
+                        Some(t) => Some(self.ty(t, a.ty_loc)?),
+                        None => None,
+                    };
+                    out.push(GenericAssoc { ty, ty_loc: a.ty_loc, expr: self.expr(a.expr)? });
+                }
+                Ok(self.sema.act_on_generic_selection(loc, ctrl, &out, end))
             }
             // clang `TransformExtVectorElementExpr`: the base, then the
             // member access again (`RebuildExtVectorElementExpr`).
