@@ -268,7 +268,7 @@ impl Sema<'_, '_> {
         // substituted with (`A = mx<L>::value` after `L = sizeof(member)`
         // names `mx<32>::value`, not a dependent `mx<sizeof(member)>`).
         let mut canon: Option<Vec<TemplateArg>> = None;
-        for (pi, &p) in params.iter().enumerate() {
+        for &p in &params {
             if let Some(tys) = self.expanded_pack_types(p) {
                 // An expanded parameter pack takes one argument per
                 // element type ([temp.variadic]/5); a pack expansion
@@ -322,6 +322,9 @@ impl Sema<'_, '_> {
                 continue;
             }
             if wi < written.len() {
+                // An expansion for a non-pack parameter also covers the
+                // later ones: no defaults (clang `PackExpansionIntoNonPack`).
+                open_expansion |= self.is_pack_expansion_arg(written[wi]);
                 let a = self.check_template_arg(tmpl, depth, p, written[wi], arg_loc(wi), &out)?;
                 if let (true, ArgView::Expr { expr, .. }) =
                     (self.inst_dependent_nttp_arg(p, a), a.view())
@@ -336,7 +339,6 @@ impl Sema<'_, '_> {
                 wi += 1;
                 continue;
             }
-            let _ = pi;
             // After a pack expansion argument the remaining parameters'
             // arguments are known only once it is substituted.
             if open_expansion {

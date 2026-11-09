@@ -155,6 +155,12 @@ pub struct DeducedArgs {
     /// parameter type, so a template template parameter's template-id
     /// takes `A`'s extra arguments as its defaults (`deduce_ttp_id_args`).
     pub ordering: bool,
+    /// Deducing a partial specialization's arguments against themselves
+    /// ([temp.spec.partial.general]/8, `check_partial_deducible`): a
+    /// function parameter pack that is not last is skipped (a non-deduced
+    /// context, [temp.deduct.type]/5.7) and the parameters after it are
+    /// still deduced (clang `MarkUsedTemplateParameters`, `OnlyDeduced`).
+    pub self_deduce: bool,
     /// Where the deduction was requested (the call, the declaration, the
     /// alias template): the location of a diagnostic issued from a step
     /// that has none of its own.
@@ -173,6 +179,7 @@ impl DeducedArgs {
             pack_elem: None,
             empty_expanded: Vec::new(),
             ordering: false,
+            self_deduce: false,
             loc: Loc::INVALID,
         }
     }
@@ -422,6 +429,10 @@ impl Sema<'_, '_> {
         for (k, &p) in ps.iter().enumerate() {
             if let TypeView::PackExpansion { pattern, .. } = self.ast.types.view(p.ty()) {
                 if k + 1 != ps.len() {
+                    if d.self_deduce {
+                        // `A` is `P`: its element `k` is the same pack.
+                        continue;
+                    }
                     return Tdk::Success;
                 }
                 let rest = as_.get(k..).unwrap_or(&[]).to_vec();

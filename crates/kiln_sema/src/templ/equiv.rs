@@ -247,7 +247,12 @@ impl Sema<'_, '_> {
         match kx {
             DeclKind::NonTypeTemplateParm => {
                 let (tx, ty) = (self.ast.decls.get(x).ty(), self.ast.decls.get(y).ty());
+                // An invalid parameter (its type was rejected) matches any
+                // (clang skips `isInvalidDecl` parameters).
+                let invalid = self.ast.decls.get(x).has(kiln_ast::decl::DeclFlags::INVALID)
+                    || self.ast.decls.get(y).has(kiln_ast::decl::DeclFlags::INVALID);
                 if let (Some(tx), Some(ty)) = (tx, ty)
+                    && !invalid
                     && !self.ast.types.same_type(tx, ty)
                 {
                     let d = self
