@@ -308,6 +308,11 @@ pub struct Sema<'a, 'sm> {
     /// The temporaries of a for-range-initializer are extended to the
     /// whole loop (C++23, P2718R0; spec/sema-class.md §5.4).
     pub range_lifetime_extension: bool,
+    /// Instantiating an enumerating expansion statement's
+    /// for-range-declaration, whose element temporaries persist for its
+    /// lifetime ([class.temporary]/8, CWG3043): the lifetime check
+    /// (`check_var_lifetime`) has nothing to diagnose.
+    pub(crate) expansion_element_init: bool,
     /// A GNU dialect (`-std=gnu++NN`): some extension warnings are
     /// off by default (clang's `*_in_gnu_mode` diagnostics, WP-183).
     pub gnu: bool,
@@ -1272,6 +1277,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             coro_aligned_allocation: false,
             lax_vector_conversions: LaxVectorConversions::All,
             range_lifetime_extension: false,
+            expansion_element_init: false,
             gnu: false,
             clang_compat: 22,
             cf_protection_branch: false,

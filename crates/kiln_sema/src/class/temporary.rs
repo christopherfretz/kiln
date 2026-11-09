@@ -365,6 +365,71 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [class.temporary]/8-9 (CWG3043): every temporary materialized in
+    /// the initializer of the automatic variable `v` that would be
+    /// destroyed at the end of its full-expression persists for `v`'s
+    /// lifetime instead (an enumerating expansion statement's
+    /// for-range-declaration and the element it is initialized from, a
+    /// destructuring expansion statement's `auto&& [u...]` and its
+    /// expansion-initializer; spec/sema.md §7.6a). Nested
+    /// full-expressions (statement expressions, lambda bodies),
+    /// immediate invocations and unevaluated operands keep theirs. A default argument's
+    /// temporaries are left to the call's full-expression (its
+    /// initializer is shared by every call), and so is an object that is
+    /// only bound (`CXXBindTemporaryExpr`) and never materialized: a
+    /// by-value argument, or a discarded class prvalue (clang does not
+    /// materialize those either; spec/sema.md §7.6a "Left").
+    pub(crate) fn extend_init_temporaries(&mut self, v: DeclId) {
+        if self.var_storage(v) != StorageDuration::Automatic {
+            return;
+        }
+        let Some(init) = self.ast.decls.var(v).and_then(|x| x.init) else { return };
+        let ex = &self.ast.exprs;
+        let mut root = init;
+        while matches!(ex.get(root).kind(), ExprKind::ExprWithCleanups | ExprKind::ConstantExpr) {
+            root = ex.operand(root);
+        }
+        let mut found = Vec::new();
+        let mut index = 0u32;
+        let mut stack = self.take_walk_stack(root);
+        while let Some(x) = stack.pop() {
+            match ex.get(x).kind() {
+                ExprKind::MaterializeTemporaryExpr => {
+                    if ex.temporary_storage(x) == StorageDuration::FullExpression {
+                        found.push(x);
+                    } else if ex.lifetime_extended_temporary(x).is_some() {
+                        index += 1;
+                    }
+                    ex.children_into(x, &self.ast.lists, &mut stack);
+                }
+                // An immediate invocation's temporaries end within its
+                // own constant evaluation ([expr.const]/16).
+                ExprKind::ExprWithCleanups
+                | ExprKind::ConstantExpr
+                | ExprKind::LambdaExpr
+                | ExprKind::StmtExpr
+                | ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::CXXNoexceptExpr
+                | ExprKind::ExpressionTraitExpr
+                | ExprKind::RequiresExpr
+                | ExprKind::ConceptSpecializationExpr => {}
+                ExprKind::CXXTypeidExpr if !ex.typeid_potentially_evaluated(x) => {}
+                _ => ex.children_into(x, &self.ast.lists, &mut stack),
+            }
+        }
+        self.put_walk_stack(stack);
+        // Codegen and the Oven destroy them in reverse order of
+        // construction, after `v`, as they do the temporaries `v` binds;
+        // the index only numbers them (an automatic temporary is never
+        // mangled).
+        for mte in found {
+            let n = *self.ast.exprs.get(mte);
+            let let_decl = self.builder().lifetime_extended_temporary(v, index, n.ty(), n.loc());
+            let _ = self.ast.exprs.extend_temporary(mte, let_decl, StorageDuration::Automatic);
+            index = index.saturating_add(1);
+        }
+    }
+
     /// The returned-reference-to-temporary diagnostic: P2748R5 made it
     /// ill-formed in C++26 ([stmt.return]/6); clang warns
     /// (`-Wreturn-stack-address`) in earlier modes.
