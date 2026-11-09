@@ -1265,6 +1265,22 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 fail!();
             }
+            // [dcl.spec.auto.general]/5 (clang
+            // `err_decltype_auto_function_declarator_not_declaration`): a
+            // `decltype(auto)` return type belongs only to the function
+            // declarator next to the declarator-id, not to a nested one
+            // (`decltype(auto) (Q::*p)(int)`, `decltype(auto) (*f())(int)`).
+            // A non-static data member is "not allowed" instead, reported
+            // by the field (`act_on_field`), as clang checks it first.
+            if i != 0
+                && (!self.declarator_field
+                    || matches!(d.chunks.first(), Some(Chunk::Function { .. })))
+                && matches!(chunk, Chunk::Function { trailing: None, .. })
+                && self.is_written_decltype_auto(ty)
+            {
+                self.error(DiagId::sema_decltype_auto_function_declarator, Self::chunk_loc(chunk));
+                fail!();
+            }
             // C++14 [except.spec]/2 (clang `CheckDistantExceptionSpec`, at
             // the identifier): the type is built anyway, the declaration
             // is invalid; a pointer to member is not formed.
@@ -2324,7 +2340,7 @@ impl Sema<'_, '_> {
                 ExprKind::ImplicitCastExpr
                     if templ && self.ast.exprs.cast_kind(x) == CastKind::LValueToRValue =>
                 {
-                    self.potential_results(self.ast.exprs.operand(x), &mut constant);
+                    self.l2r_potential_results(self.ast.exprs.operand(x), &mut constant);
                 }
                 ExprKind::LambdaExpr => {
                     let caps = self.ast.exprs.lambda(x).captures.clone();
@@ -2482,6 +2498,15 @@ impl Sema<'_, '_> {
             )
     }
 
+    /// Whether `ty` is the undeduced `decltype(auto)` placeholder itself
+    /// (the decl-specifier's type before a declarator chunk applies).
+    fn is_written_decltype_auto(&self, ty: QualType) -> bool {
+        matches!(
+            self.ast.types.view(ty.ty()),
+            TypeView::Auto { keyword: AutoKeyword::DecltypeAuto, deduced: None, .. }
+        )
+    }
+
     /// The C++11 error for a function declarator without a trailing
     /// return type whose decl-specifier type `base` is a placeholder
     /// (clang `err_auto_missing_trailing_retty` for `auto`,
@@ -2502,10 +2527,7 @@ impl Sema<'_, '_> {
     /// ([dcl.type.auto.deduct]/5): clang's selector (`pointer to`,
     /// `reference to`, `array of`).
     fn decltype_auto_compound(&self, ty: QualType, chunk: &Chunk) -> Option<u8> {
-        if !matches!(
-            self.ast.types.view(ty.ty()),
-            TypeView::Auto { keyword: AutoKeyword::DecltypeAuto, deduced: None, .. }
-        ) {
+        if !self.is_written_decltype_auto(ty) {
             return None;
         }
         match chunk {

@@ -52,6 +52,9 @@ pub(crate) struct Counters {
     pub allocs: u64,
     /// Reflection bytes made (`refl_bytes`; [`crate::mem::Memory::refl`]).
     pub refl: u64,
+    /// Bytes allocated and freed before the context ended
+    /// (`reclaimed_bytes`).
+    pub reclaimed: u64,
 }
 
 /// A memoizable call in progress: what it will be charged.
@@ -544,6 +547,9 @@ impl Oven {
         let exc_base = std::mem::replace(&mut self.exc.base, excs);
         let entry_pc = self.funcs[func as usize].entry as usize;
         let r = self.run_loop(b, func, entry_pc, fb);
+        if self.hooks.calls {
+            self.hook_call_unwind(b, entry);
+        }
         self.cleanups.truncate(clean);
         self.exc.truncate(excs);
         self.exc.base = exc_base;
@@ -628,6 +634,14 @@ impl Oven {
                 None => 0,
             };
             Ok(p)
+        } else if aux & 0xff == crate::kbc::bi::THAW_OBJ {
+            let cur = self.stack[self.stack.len() - 1].func;
+            let top = fb + self.funcs[cur as usize].nregs as usize + 1;
+            let p = match <kiln_ast::ConstValueId as kiln_ast::RawId>::from_raw(t1) {
+                Some(cv) => self.thaw(b, cv, top as u32),
+                None => 0,
+            };
+            Ok(u128::from(p))
         } else if aux & 0xff == crate::kbc::bi::ASSUME_ALIGNED {
             self.bi_assume_aligned(b, aux >> 8 != 0, a as u64, bb, c).map(|()| a)
         } else if aux & 0xff == crate::kbc::bi::PTR_ALIGN {
@@ -719,6 +733,9 @@ impl Oven {
         self.run.cev_warn = false;
         self.mem.checkpoint(mode);
         let r = self.run_loop(b, func, pc0, fb as u32);
+        if self.hooks.calls {
+            self.hook_call_unwind(b, entry);
+        }
         if r.is_ok() {
             self.mem.commit();
         } else {
@@ -2184,6 +2201,9 @@ impl Oven {
                     && active + v.depth <= self.budget.depth
                     && arena + v.arena <= self.mem.limit
                 {
+                    if self.hooks.calls {
+                        self.hook_memo_hit(callee, v.steps, v.peak);
+                    }
                     self.run.counters.steps += v.steps;
                     self.run.counters.calls += v.calls;
                     self.mem.allocated += v.bytes;

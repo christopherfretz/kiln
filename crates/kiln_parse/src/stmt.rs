@@ -1414,7 +1414,14 @@ impl Parser<'_, '_> {
         // An expansion-init-list `{ a, b }` is not a braced-init-list
         // ([stmt.expand]/1): its expressions are the elements.
         let range = if self.at(Punct::LBrace) {
-            self.parse_init_list().ok().map(ExpansionInit::List)
+            // [class.temporary]/8 (CWG3043): the elements are a
+            // lifetime-extending context (a discarded class prvalue is
+            // materialized, to be extended with the element's
+            // declaration); the collected temporaries are not needed.
+            let collect = self.s.begin_for_range_init(true);
+            let l = self.parse_init_list().ok().map(ExpansionInit::List);
+            let _ = self.s.end_for_range_init(collect);
+            l
         } else {
             self.parse_expression().map(ExpansionInit::Expr)
         };
