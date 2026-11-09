@@ -47,7 +47,7 @@ impl Sema<'_, '_> {
                     return true;
                 }
                 let Some(r) = self.defined_record(q) else { return false };
-                self.bits_of(r).contains(DefinitionBits::TRIVIAL_COPY_ASSIGN)
+                self.all_trivial(r, K::CopyAssign)
                     || self.nothrow_members(r, K::CopyAssign, None, loc)
             }
             TypeTrait::HasNothrowMoveAssign => {
@@ -55,8 +55,7 @@ impl Sema<'_, '_> {
                     return true;
                 }
                 let Some(r) = self.element_record(q) else { return false };
-                (self.has_special(r, K::MoveAssign)
-                    && self.bits_of(r).contains(DefinitionBits::TRIVIAL_MOVE_ASSIGN))
+                self.all_trivial(r, K::MoveAssign)
                     || self.nothrow_members(r, K::MoveAssign, None, loc)
             }
             TypeTrait::HasNothrowCopy => {
@@ -64,7 +63,7 @@ impl Sema<'_, '_> {
                     return true;
                 }
                 let Some(r) = self.defined_record(q) else { return false };
-                self.bits_of(r).contains(DefinitionBits::TRIVIAL_COPY_CTOR)
+                self.all_trivial(r, K::CopyCtor)
                     || self.nothrow_members(r, K::CopyCtor, Some(1), loc)
             }
             TypeTrait::HasNothrowConstructor => {
@@ -72,7 +71,7 @@ impl Sema<'_, '_> {
                     return true;
                 }
                 let Some(r) = self.element_record(q) else { return false };
-                (self.has_special(r, K::DefaultCtor) && self.trivial_default_ctor(r))
+                self.all_trivial(r, K::DefaultCtor)
                     || self.nothrow_members(r, K::DefaultCtor, Some(0), loc)
             }
             _ => false,
@@ -304,8 +303,12 @@ impl Sema<'_, '_> {
         }
         for m in self.ast.members(d) {
             let kind = self.ast.decls.get(m).kind();
+            // clang skips a deleted member and one that is not eligible
+            // ([special]/6) or not the selected destructor
+            // (`isIneligibleOrNotSelected`).
             if !matches!(kind, DeclKind::CXXConstructor | DeclKind::CXXDestructor)
                 || self.is_deleted_fn(m)
+                || self.fn_spec(m).not_selected()
             {
                 continue;
             }

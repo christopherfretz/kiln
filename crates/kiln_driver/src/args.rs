@@ -539,6 +539,15 @@ pub struct Args {
     /// `-fno-kiln-module-cache` (false) / `-fkiln-module-cache` (true), the
     /// last one: whether `import std;` uses the module-file cache.
     pub module_cache: Option<bool>,
+    /// `-fmodules-prune-interval=<seconds>` (the last one): how often the
+    /// module cache is checked for unused entries (clang's default, 7
+    /// days, when absent; 0 disables pruning; spec/driver.md "Module
+    /// cache", WP-1050).
+    pub modules_prune_interval: Option<u32>,
+    /// `-fmodules-prune-after=<seconds>` (the last one): how long an
+    /// entry may go unused before pruning removes it (clang's default, 31
+    /// days, when absent; 0 disables pruning).
+    pub modules_prune_after: Option<u32>,
     /// Set by `kiln-scan-deps` (not an option): the preprocessor records
     /// module directives instead of importing (spec/modules.md §11.9).
     pub scan_deps: bool,
@@ -1208,6 +1217,20 @@ impl Args {
                     self.prebuilt_module_paths.push(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fmodules-cache-path=") {
                     self.modules_cache_path = Some(v.to_owned());
+                } else if let Some((opt, v)) =
+                    ["-fmodules-prune-interval=", "-fmodules-prune-after="]
+                        .iter()
+                        .find_map(|p| arg.strip_prefix(p).map(|v| (*p, v)))
+                {
+                    match parse_clang_unsigned(v) {
+                        Some(n) if opt == "-fmodules-prune-interval=" => {
+                            self.modules_prune_interval = Some(n);
+                        }
+                        Some(n) => self.modules_prune_after = Some(n),
+                        None => {
+                            self.errors.push(ArgError::InvalidInt(arg.to_owned(), v.to_owned()));
+                        }
+                    }
                 } else if let Some(v) = arg.strip_prefix("-fdump-ast-filter=") {
                     self.dump_ast_filter = Some(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fdump-ast=") {
@@ -1613,6 +1636,30 @@ pub(crate) fn split_valued<'a>(
     best
 }
 
+/// `v` as clang's `-cc1` reads an `unsigned` option value
+/// (`StringRef::getAsInteger` with radix 0): decimal, `0x`/`0X` hex,
+/// `0b`/`0B` binary, `0o` or a leading `0` octal; no sign, no blanks, and
+/// at most `u32::MAX` (`-fmodules-prune-interval=`).
+pub(crate) fn parse_clang_unsigned(v: &str) -> Option<u32> {
+    let (digits, radix) = if let Some(r) = v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")) {
+        (r, 16)
+    } else if let Some(r) = v.strip_prefix("0b").or_else(|| v.strip_prefix("0B")) {
+        (r, 2)
+    } else if let Some(r) = v.strip_prefix("0o") {
+        (r, 8)
+    } else if v.len() > 1
+        && let Some(r) = v.strip_prefix('0')
+    {
+        (r, 8)
+    } else {
+        (v, 10)
+    };
+    if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+        return None;
+    }
+    u32::from_str_radix(digits, radix).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1852,6 +1899,41 @@ mod tests {
         assert_eq!(
             parse("-fkiln-outline-expansions=x a.cpp").errors,
             [ArgError::InvalidInt("-fkiln-outline-expansions=x".into(), "x".into())]
+        );
+    }
+
+    /// WP-1050: clang's module-cache pruning flags, `unsigned` values as
+    /// `-cc1` reads them (an invalid one is clang's "invalid integral
+    /// value").
+    #[test]
+    fn module_prune_flags() {
+        let a = parse("a.cpp");
+        assert_eq!((a.modules_prune_interval, a.modules_prune_after), (None, None));
+        let a = parse("-fmodules-prune-interval=10 -fmodules-prune-after=0x10 a.cpp");
+        assert_eq!(a.errors, []);
+        assert_eq!((a.modules_prune_interval, a.modules_prune_after), (Some(10), Some(16)));
+        let a = parse("-fmodules-prune-interval=5 -fmodules-prune-interval=0 a.cpp");
+        assert_eq!(a.modules_prune_interval, Some(0));
+        for (v, want) in [
+            ("0", Some(0)),
+            ("010", Some(8)),
+            ("0o17", Some(15)),
+            ("0b101", Some(5)),
+            ("4294967295", Some(u32::MAX)),
+            ("4294967296", None),
+            ("-1", None),
+            ("+5", None),
+            ("08", None),
+            ("0x", None),
+            (" 5", None),
+            ("", None),
+            ("abc", None),
+        ] {
+            assert_eq!(parse_clang_unsigned(v), want, "{v:?}");
+        }
+        assert_eq!(
+            parse("-fmodules-prune-after=-1 a.cpp").errors,
+            [ArgError::InvalidInt("-fmodules-prune-after=-1".into(), "-1".into())]
         );
     }
 

@@ -665,6 +665,7 @@ impl Cg<'_> {
             if declare {
                 self.di_declare_var(p, slot);
             }
+            self.emit_var_annotations(p, addr.v)?;
             self.f.locals.insert(p, addr);
             if let Some(&(_, t, v)) = hidden.iter().find(|h| h.0 == p) {
                 let mt = self.mty(size_q);

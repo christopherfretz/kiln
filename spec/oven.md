@@ -80,7 +80,15 @@ the evaluator's flattened type table.
   yields a NaN or divides by zero go on with the IEEE result, as clang's
   `ConstantEmitter` folds such an initializer; a call evaluated so is
   never memoized (`tests/conformance/expr.const/nan-payload.cpp`,
-  `tests/codegen/nan_global_init.cpp`).
+  `tests/codegen/nan_global_init.cpp`). `Oven::set_fold_leaks(true)`
+  (codegen's fold prepass only, WP-1108) lets a fold outside a constant
+  context (`fold_rvalue`, not a constant expression) end with
+  allocations still live, as long as its value does not point at one:
+  clang's `CheckMemoryLeaks` is only a `CCEDiag` there, so
+  `(bool)new int(4)` folds to `true`. Only the outermost evaluation's
+  check is relaxed (a call's memoized result still needs every
+  allocation freed); [expr.const]/5.20 is unchanged for constant
+  expressions and for every evaluation sema runs.
   binary32/binary64 use the host's IEEE arithmetic (round to nearest even);
   x87 `long double`, `__float128` / `_Float128`, `_Float16` and `__bf16`
   use the bit-exact soft-float in `softfloat.rs` (each operation rounded
