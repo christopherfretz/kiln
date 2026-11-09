@@ -9,6 +9,7 @@
 // std: c++20 keeps the C++26 erroneous-value fill out of the IR.
 //@ expect: ir
 //@ std: c++20
+//@ min-oracle: 22
 struct A { int v; int arr[2]; };
 struct B { int big[10]; };
 int f(int i) {
