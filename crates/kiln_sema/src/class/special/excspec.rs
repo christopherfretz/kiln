@@ -114,9 +114,14 @@ impl Sema<'_, '_> {
         nothrow
     }
 
+    /// The specification of `f` as written on its type: from C++17 the
+    /// canonical type keeps only whether it is non-throwing, so a callee's
+    /// `throw(E1)` (accepted under `-Wno-dynamic-exception-spec`) is read
+    /// from the sugar, as clang's `ImplicitExceptionSpecification` reads
+    /// the callee's `FunctionProtoType` (WP-1137).
     fn exc_of(&self, f: DeclId) -> ExcSpec {
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        self.ast.types.proto(ty).map_or(ExcSpec::None, |p| self.ast.types.exc_spec(p))
+        self.written_exc_spec(ty)
     }
 
     /// The shared `false` of `noexcept(false)`.
