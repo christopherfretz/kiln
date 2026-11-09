@@ -174,6 +174,12 @@ libc++ `iterator_robust_against_adl`); an overload-set (ULE) argument adds every
 cached in `Sema::std_meta_ns`), so unqualified `type_of(r)` finds
 `std::meta::type_of` (WP-796 via WP-879,
 `basic.lookup.argdep/p3-meta-info-std-meta*.cpp`, compared with GCC 16.1).
+That holds for every argument of type `info`: an object or value reflection, a dependent `^^T`, an
+`info` template parameter, a `const info&` parameter and an `info` data
+member (`is_object(r)`, WP-562, `basic.lookup.argdep/p3-meta-info-is-object.cpp`).
+A using-directive for `std` that lets ordinary lookup find the class
+template `std::is_object` suppresses ADL (/1) and the call is ill-formed,
+as in GCC 16.1.
 An associated class that is an undefined class template specialization (or
 member class of one) is instantiated first, silently, from the call's
 location, and the set recomputed until nothing new is instantiated (clang

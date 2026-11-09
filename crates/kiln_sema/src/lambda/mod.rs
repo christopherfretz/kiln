@@ -10,9 +10,7 @@
 //! closure and returns the `LambdaExpr`. [`Sema::act_on_lambda_error`]
 //! abandons a lambda whose body could not be parsed.
 
-use kiln_ast::decl::{
-    Access, ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, ParamData, TagKind,
-};
+use kiln_ast::decl::{Access, ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, ParamData};
 use kiln_ast::ids::{AttrId, ExprId, LambdaId, StmtId};
 use kiln_ast::lambda::{CaptureDefault, CaptureKind, ClosureThunk, LambdaData};
 use kiln_ast::names::{DeclName, OverloadedOperator};
@@ -234,6 +232,10 @@ pub(crate) struct LambdaScope {
     /// with it, for a lambda with a capture-default: diagnosed once the
     /// captures are known (clang `LambdaScopeInfo::ShadowingDecls`).
     pub(crate) shadowing: Vec<(DeclId, DeclId)>,
+    /// A never-dependent closure ([`Sema::substituted_lambda_never_dependent`])
+    /// is built outside any template: the dependent depth at its
+    /// introducer, restored at its end.
+    saved_dependent_depth: Option<u32>,
 }
 
 impl Sema<'_, '_> {
@@ -241,8 +243,24 @@ impl Sema<'_, '_> {
     /// unnamed class in the innermost enclosing context
     /// ([expr.prim.lambda.closure]/1-2), and starts its definition.
     pub fn act_on_lambda_start(&mut self, intro: &LambdaIntroducer) -> LambdaId {
+        self.act_on_lambda_start_in(intro, false)
+    }
+
+    /// [`Sema::act_on_lambda_start`]; `never_dependent` for a lambda
+    /// substituted where its closure type is not dependent
+    /// ([`Sema::substituted_lambda_never_dependent`]).
+    pub(crate) fn act_on_lambda_start_in(
+        &mut self,
+        intro: &LambdaIntroducer,
+        never_dependent: bool,
+    ) -> LambdaId {
+        // A never-dependent closure type is not a declaration in a
+        // dependent context, nor are its members (clang: its
+        // `DeclContext` is not dependent).
+        let saved_dependent_depth =
+            never_dependent.then(|| std::mem::take(&mut self.ast.templates.dependent_depth));
         let h = DeclHead::new(self.ctx, DeclName::EMPTY, intro.lbracket).flags(DeclFlags::IMPLICIT);
-        let closure = self.builder().record(h, TagKind::Class, None);
+        let closure = self.builder().closure_record(h, never_dependent);
         let _ = self.builder().begin_record_definition(closure);
         let mut data = LambdaData::new(closure, intro.lbracket);
         data.default = intro.default;
@@ -279,10 +297,69 @@ impl Sema<'_, '_> {
             cap_use: Vec::new(),
             cap_ranges: Vec::new(),
             shadowing: Vec::new(),
+            saved_dependent_depth,
         });
         self.act_on_explicit_captures(id, intro);
         self.create_init_capture_vars(id);
         id
+    }
+
+    /// Whether a lambda-expression substituted here gets a closure type
+    /// that is never dependent (clang `TransformLambdaExpr`'s
+    /// `LDK_NeverDependent`; spec/sema-lambda.md §9): in an unevaluated
+    /// operand or a constant-evaluated context, in a namespace or a
+    /// context whose parent is not dependent. Instantiating `S<int>`
+    /// substitutes the signature of its member template
+    /// `template<class U> auto f(U) -> decltype([]{})` in `S<int>`, so
+    /// that closure type is not dependent although `U` is open, and
+    /// `decltype` of it is the closure type ([temp.dep.expr]/3,
+    /// [expr.prim.lambda.closure]/2). Clang 22 also excludes a context
+    /// in a generic lambda's closure.
+    pub(crate) fn substituted_lambda_never_dependent(&self) -> bool {
+        if self.unevaluated == 0 && !self.in_constant_evaluated() {
+            return false;
+        }
+        // A requires-expression's body does not count.
+        let mut dc = self.ctx;
+        while self.ast.decls.get(dc).kind() == DeclKind::RequiresExprBody {
+            match self.ast.decls.get(dc).ctx() {
+                Some(p) => dc = p,
+                None => return false,
+            }
+        }
+        if matches!(
+            self.ast.decls.get(dc).kind(),
+            DeclKind::TranslationUnit
+                | DeclKind::Namespace
+                | DeclKind::LinkageSpec
+                | DeclKind::Export
+        ) {
+            return true;
+        }
+        let Some(parent) = self.ast.decls.get(dc).ctx() else { return true };
+        if self.clang_compat >= 22
+            && self
+                .ast
+                .closure_lambda(parent)
+                .and_then(|l| self.ast.exprs.lambdas.get(l).call_op)
+                .is_some_and(|op| self.ast.described_template(op).is_some())
+        {
+            return false;
+        }
+        !self.is_dependent_decl_context(parent)
+    }
+
+    /// Whether declaration context `d` is dependent (clang
+    /// `DeclContext::isDependentContext`): a template's pattern, a
+    /// declaration in one, or a dependent closure type.
+    fn is_dependent_decl_context(&self, d: DeclId) -> bool {
+        let decl = self.ast.decls.get(d);
+        if self.ast.closure_lambda(d).is_some() {
+            return decl.ty().is_some_and(|t| self.is_dependent_type(t));
+        }
+        decl.has(DeclFlags::DEPENDENT_CTX)
+            || self.ast.described_template(d).is_some()
+            || decl.kind() == DeclKind::ClassTemplatePartialSpecialization
     }
 
     /// The number of template heads outside the innermost lambda whose
@@ -960,6 +1037,9 @@ impl Sema<'_, '_> {
         {
             self.mark_function_referenced(dtor, lbracket);
         }
+        if let Some(depth) = top.saved_dependent_depth {
+            self.ast.templates.dependent_depth = depth;
+        }
         self.maybe_bind_temporary(e)
     }
 
@@ -1058,6 +1138,9 @@ impl Sema<'_, '_> {
         self.pop_lambda_heads(top.heads, top.scope_base);
         self.ast.decls.set_flags(top.closure, DeclFlags::INVALID);
         self.finish_closure(top.closure);
+        if let Some(depth) = top.saved_dependent_depth {
+            self.ast.templates.dependent_depth = depth;
+        }
     }
 
     /// Completes the closure class's definition at the lambda's `}`.
