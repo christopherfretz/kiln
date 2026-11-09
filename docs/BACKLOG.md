@@ -938,7 +938,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-899 | driver: `-ffat-lto-objects` emits real fat objects (machine code + bitcode); now bitcode-only (crates/kiln_driver/src/codegen_flags.rs:28) | WP-873 | open |
 | WP-900 | codegen: `-fstrict-vtable-pointers` invariant.group metadata and `-f[no-]vectorize`/`-fslp-vectorize` pipeline toggles (codegen_flags.rs:146) | WP-873 | deferred |
 | WP-901 | diag: `-fdiagnostics-show-template-tree` output (codegen_flags.rs:145) | WP-873 | deferred |
-| WP-902 | codegen: C++26 constant init of a shared virtual base (consts.rs:569 record_elems); xfail class.mi/shared-virtual-base-constant-init-run.cpp | WP-873 | open |
+| WP-902 | codegen: C++26 constant init of a shared virtual base (consts.rs:569 record_elems); xfail class.mi/shared-virtual-base-constant-init-run.cpp | WP-873 | in progress |
 | WP-903 | sema: never-constant check tracks locals (never_constant.rs:280); oven potential mode stops after a quiet nested call (vm.rs:2058) | WP-873 | deferred |
 | WP-904 | sema accepts-invalid: `sizeof(L::N)` without `typename` for a dependent member class of a local class (clang 19 rejects) | WP-884 | open |
 | WP-905 | sema SILENT DROP: a failed instantiated-decl lookup in a local class member body drops the statement silently (templ/subst/decls.rs near enum_decl ~1503) | WP-884 | open |
