@@ -940,7 +940,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-901 | diag: `-fdiagnostics-show-template-tree` output (codegen_flags.rs:145) | WP-873 | deferred |
 | WP-902 | codegen: C++26 constant init of a shared virtual base (consts.rs:569 record_elems); xfail class.mi/shared-virtual-base-constant-init-run.cpp | WP-873 | done (#438) |
 | WP-903 | sema: never-constant check tracks locals (never_constant.rs:280); oven potential mode stops after a quiet nested call (vm.rs:2058) | WP-873 | deferred |
-| WP-904 | sema accepts-invalid: `sizeof(L::N)` without `typename` for a dependent member class of a local class (clang 19 rejects) | WP-884 | open |
+| WP-904 | sema accepts-invalid: `sizeof(L::N)` without `typename` for a dependent member class of a local class (clang 19 rejects) | WP-884 | in progress |
 | WP-905 | sema SILENT DROP: a failed instantiated-decl lookup in a local class member body drops the statement silently (templ/subst/decls.rs near enum_decl ~1503) | WP-884 | done (#446) |
 | WP-906 | bench: reflect s7/s8 baselines stale vs current host load; re-baseline on a quiet host | WP-884 | deferred |
 | WP-913 | sema: promote coro_lifetimebound/coro_disable_lifetimebound out of class C into the dangling walk (crates/kiln_sema/src/attr_triage.rs:167-170) | WP-891 | open |
@@ -1107,7 +1107,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1080 | accepts-invalid: enum F; with no fixed underlying type is not diagnosed (ISO C++ forbids forward references to enum types) (kiln_sema decl.rs:7911) | WP-957 | open |
 | WP-1082 | coverage: port clang 20+ mapping for compat 22 (gaps between logical-operator operands, counters on folded branches, branch counter order, do-while(0) macro region) (kiln_codegen coverage/mapping.rs:1472, :598) | WP-1003 | open |
 | WP-1083 | coverage fidelity tail: zero records for constant-evaluation-only instantiations (coverage/records.rs:116, module.rs:735), extra records for generic lambdas (records.rs:238), duplicate zero-length regions (mapping.rs:1659), stringizing as nested expansion (mapping.rs:60), skipped-range end after init-capture (skipped.rs:113), qualified base-init start (ctorinit.rs:92), compound literal end (ast.rs:107) | WP-1003 | open |
-| WP-1084 | accepts-invalid: a local class inside a template is not a dependent type, so unqualified lookup into a dependent local base and O::In2() without typename are accepted (kiln_sema templ/actions.rs:160 is_dependent_type, class/access.rs:311 has_dependent_bases_in) | WP-905 | open |
+| WP-1084 | accepts-invalid: a local class inside a template is not a dependent type, so unqualified lookup into a dependent local base and O::In2() without typename are accepted (kiln_sema templ/actions.rs:160 is_dependent_type, class/access.rs:311 has_dependent_bases_in) | WP-905 | in progress |
 | WP-1088 | C++26 P2719 type-aware operator new/delete: declaration rules and selection (kiln_sema alloc_decl.rs:52, new_delete.rs) | WP-1040 | open |
 | WP-1089 | accepts-invalid: access to a destroying operator delete brought in by a using-declaration is not checked (kiln_sema new_delete.rs; clang cxx2a-destroying-delete.cpp:40,45,48) | WP-1040 | open |
 | WP-1090 | sema: a deleted variadic default constructor s8(...) = delete is counted as trivial (special-member triviality bits; clang class.union/p1.cpp m8) | WP-1040 | open |
