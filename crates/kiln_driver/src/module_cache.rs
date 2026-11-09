@@ -71,7 +71,7 @@ const STAMP_MAGIC: &str = "kiln-module-cache-stamp 2";
 
 /// How long a miss waits for another compile building the same module
 /// before it builds the module from its source instead.
-pub const DEFAULT_WAIT: Duration = Duration::from_secs(120);
+pub const DEFAULT_WAIT: Duration = Duration::from_mins(2);
 
 /// The environment variable that replaces [`DEFAULT_WAIT`], in
 /// milliseconds (kiln's tests).
