@@ -10,8 +10,8 @@ the exact commands to reproduce each run, is in
 **Language support** is tracked separately. The standards support matrix
 is in [STANDARD_SUPPORT.md](STANDARD_SUPPORT.md): one row per paper, from
 C++98 to C++26 plus reflection, in the style of clang's `cxx_status`. Its
-summary table counts 257 rows done, 3 partial (all three in C++26: P2686,
-P2786 and P3394) and 0 todo or untested, over C++98/03, C++11, C++14,
+summary table counts 260 rows done, 1 partial (P2786, in C++26) and 0
+todo or untested, over C++98/03, C++11, C++14,
 C++17, C++20, C++23, C++26, C++26 reflection, the DR-level papers and the
 kiln extensions.
 

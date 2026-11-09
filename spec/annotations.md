@@ -235,6 +235,9 @@ pins `evaluations`, `steps`, `calls`, `allocs`, `peak_bytes`,
 
 ## 9. Open questions and follow-ups
 
+Items 1, 3, 4 and 7 were re-checked against GCC 16.1 on 2026-11-09
+(WP-1122) and hold; P3394R4 is `done` in docs/STANDARD_SUPPORT.md.
+
 1. *Resolved (WP-830, WP-867).* Base-specifier annotations (§3),
    including an operand naming the base pack (`[[=sizeof(Bs)]] Bs...`),
    substituted per element.
