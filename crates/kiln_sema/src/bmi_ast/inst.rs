@@ -401,17 +401,16 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
                     u8::from(past) | u8::from(designated.is_some()) << 1,
                 ]);
                 match base {
-                    PtrBase::Decl(x) => match ast.templates.param_object_value(x) {
-                        Some(pv) => {
+                    PtrBase::Decl(x) => {
+                        if let Some(pv) = ast.templates.param_object_value(x) {
                             self.out.push(BASE_PARAM_OBJECT);
                             self.vty(store.ty(pv), d)?;
                             self.value(pv, d)?;
-                        }
-                        None => {
+                        } else {
                             self.out.push(BASE_DECL);
                             self.ent(x, d)?;
                         }
-                    },
+                    }
                     PtrBase::Function(x) => {
                         self.out.push(BASE_FUNCTION);
                         self.ent(x, d)?;
