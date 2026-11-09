@@ -19,6 +19,18 @@ use kiln_source::Loc;
 use crate::Sema;
 use crate::lookup::LookupKind;
 
+/// What `std::type_identity` names ([`Sema::lookup_std_type_identity`]).
+#[derive(Clone, Copy)]
+pub(crate) enum StdTypeIdentity {
+    /// No `std::type_identity`.
+    Absent,
+    /// Not a class template with a single type parameter: the first
+    /// declaration found.
+    Malformed(DeclId),
+    /// The class template.
+    Template(DeclId),
+}
+
 /// The allocation or deallocation functions a new- or delete-expression
 /// considers.
 pub(crate) struct AllocFns {
@@ -302,6 +314,27 @@ impl Sema<'_, '_> {
             {
                 continue;
             }
+            // A type-aware one is not looked at for an untyped want (its
+            // `std::type_identity<T>` is never built, clang
+            // `UsualDeallocFnInfo` under `PassTypeIdentity::No`).
+            if !want.typed && self.is_type_aware_alloc_fn(d) {
+                continue;
+            }
+            // With a malformed `std::type_identity`, clang marks every
+            // type-aware declaration invalid; a namespace-scope one is
+            // then not found at all, so is skipped without the malformed
+            // diagnostic a class member's use gives.
+            if self.is_type_aware_alloc_fn(d)
+                && matches!(self.lookup_std_type_identity(), StdTypeIdentity::Malformed(_))
+                && !self
+                    .ast
+                    .decls
+                    .get(d)
+                    .ctx()
+                    .is_some_and(|c| self.kind_of(c) == DeclKind::CXXRecord)
+            {
+                continue;
+            }
             let Some(u) = self.usual_dealloc_info(d, want.ty, loc) else { continue };
             if (u.typed && !want.typed) || (u.destroying && !destroying) {
                 continue;
@@ -337,12 +370,66 @@ impl Sema<'_, '_> {
         infos
     }
 
-    /// `std::type_identity<T>` for the unqualified `ty`, complete (P2719,
-    /// clang `tryBuildStdTypeIdentity`); `None` without the template.
+    /// What ordinary lookup of `std::type_identity` finds (clang
+    /// `LookupStdClassTemplate`, P2719): nothing, a usable class
+    /// template (one whose only required parameter is a type parameter),
+    /// or something else, the declaration a diagnostic names.
+    pub(crate) fn lookup_std_type_identity(&self) -> StdTypeIdentity {
+        let std = self.intern("std");
+        let ns = self.lookup_qualified(self.ast.tu, std, LookupKind::Nested);
+        let Some(ns) = ns.decls.iter().copied().find(|&d| self.kind_of(d) == DeclKind::Namespace)
+        else {
+            return StdTypeIdentity::Absent;
+        };
+        let n = self.intern("type_identity");
+        let found = self.lookup_qualified(ns, n, LookupKind::Ordinary);
+        let Some(&first) = found.decls.first() else { return StdTypeIdentity::Absent };
+        let single = found.decls.iter().all(|&d| self.ast.first(d) == self.ast.first(first));
+        if !single || self.kind_of(first) != DeclKind::ClassTemplate {
+            return StdTypeIdentity::Malformed(first);
+        }
+        // `getMinRequiredArguments() == 1` and a type parameter first.
+        let params = self.template_params(first);
+        let required = params
+            .iter()
+            .take_while(|&&p| {
+                !self.ast.template_parm(p).is_some_and(|x| x.pack)
+                    && self.template_default(p).is_none()
+            })
+            .count();
+        let type_first = params.first().is_some_and(|&p| {
+            self.kind_of(p) == DeclKind::TemplateTypeParm
+                && !self.ast.template_parm(p).is_some_and(|x| x.pack)
+        });
+        if required != 1 || !type_first {
+            return StdTypeIdentity::Malformed(first);
+        }
+        StdTypeIdentity::Template(first)
+    }
+
+    /// `std::type_identity<T>` for the unqualified `ty` (P2719, clang
+    /// `tryBuildStdTypeIdentity`), not required to be complete: the
+    /// new-expression requires that at its start, a delete-expression of
+    /// the selected deallocation function. `None` without a usable
+    /// template; a malformed one is diagnosed at its declaration on every
+    /// use, as clang does not remember it (`err_malformed_std_class_
+    /// template`).
     pub(crate) fn std_type_identity(&mut self, ty: QualType, loc: Loc) -> Option<QualType> {
         use crate::templ::actions::TemplateIdRef;
         use kiln_ast::types::TemplateArg;
-        let (_, tmpl) = self.std_class_template("type_identity")?;
+        let tmpl = match self.lookup_std_type_identity() {
+            StdTypeIdentity::Absent => return None,
+            StdTypeIdentity::Malformed(d) => {
+                let at = self.ast.decls.get(d).loc();
+                let msg = self
+                    .diag(DiagId::sema_malformed_std_class_template, at)
+                    .arg("type_identity")
+                    .allow_duplicate();
+                self.emit(msg);
+                return None;
+            }
+            StdTypeIdentity::Template(t) => t,
+        };
         let name = self.template_name_for(tmpl);
         let ty = self.ast.types.unqualified(ty);
         let Ok(TemplateIdRef::Type(t)) =
@@ -350,7 +437,7 @@ impl Sema<'_, '_> {
         else {
             return None;
         };
-        self.require_complete(t, loc).then_some(t)
+        Some(t)
     }
 
     /// `no suitable member 'operator delete' in 'X'` with a note per

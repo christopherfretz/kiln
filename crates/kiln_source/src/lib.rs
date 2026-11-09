@@ -18,6 +18,8 @@
 //!   hasher used by every compiler-internal hash table.
 //! - [`activity`]: the per-thread "current activity" breadcrumb that
 //!   internal-compiler-error reports read.
+//! - [`trace`]: the per-thread `-ftime-trace` recorder (Chrome trace
+//!   events in clang's format).
 #![forbid(unsafe_code)]
 
 pub mod activity;
@@ -26,6 +28,7 @@ pub mod fx;
 mod loc;
 mod manager;
 pub mod symbol;
+pub mod trace;
 
 pub use loc::{FileId, Loc, Span};
 pub use manager::{

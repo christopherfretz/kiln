@@ -423,6 +423,11 @@ pub fn source_bit_field(s: &Sema<'_, '_>, e: ExprId) -> Option<kiln_ast::DeclId>
         let n = s.ast.exprs.get(cur);
         match n.kind() {
             ExprKind::ParenExpr => cur = s.ast.exprs.operand(cur),
+            // clang `IgnoreParens`: a resolved `__builtin_choose_expr` or
+            // `_Generic` is its chosen operand.
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr => {
+                cur = s.ast.exprs.selected_operand(cur)?;
+            }
             ExprKind::ImplicitCastExpr
                 if matches!(
                     s.ast.exprs.cast_kind(cur),
@@ -500,7 +505,8 @@ pub fn usual_unary_conversions(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
 
 /// True if `e` is a null pointer constant ([conv.ptr]/1): an integer
 /// literal with value zero, GNU `__null`, or a prvalue of type
-/// `std::nullptr_t` (through parentheses and `ConstantExpr`).
+/// `std::nullptr_t` (through parentheses, `ConstantExpr` and a resolved
+/// `__builtin_choose_expr` or `_Generic`).
 pub fn is_null_pointer_constant(s: &Sema<'_, '_>, e: ExprId) -> bool {
     if s.ast.types.builtin(ty(s, e)) == Some(kiln_ast::types::BuiltinType::NullPtr) {
         return true;
@@ -510,6 +516,12 @@ pub fn is_null_pointer_constant(s: &Sema<'_, '_>, e: ExprId) -> bool {
         let n = s.ast.exprs.get(cur);
         match n.kind() {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => cur = s.ast.exprs.operand(cur),
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr => {
+                match s.ast.exprs.selected_operand(cur) {
+                    Some(c) => cur = c,
+                    None => return false,
+                }
+            }
             ExprKind::GNUNullExpr => return true,
             ExprKind::IntegerLiteral => {
                 return match s.ast.exprs.int_value(cur) {

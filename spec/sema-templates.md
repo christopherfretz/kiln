@@ -127,7 +127,7 @@ These are owned elsewhere:
 | # | clang 19 | kiln | Why |
 |---|---|---|---|
 | D1 | `runWithSufficientStackSpace` switches to a new stack, and warns "stack nearly exhausted" | the dedicated sema thread has a large stack; when `StackGuard` trips, kiln emits the fatal `kiln: stack exhausted during template instantiation; …` (or `parsing`, `constant evaluation`; §10.3) | safe Rust; no stack switching |
-| D2 | `-ftime-trace` | also `-fkiln-instantiation-report[=json]` (§11.3) | accounting principle |
+| D2 | `-ftime-trace` | the same `InstantiateClass` / `InstantiateFunction` events (spec/driver.md "Time trace", WP-1115), and also `-fkiln-instantiation-report[=json]` (§11.3) | accounting principle |
 | D3 | always keeps `SubstTemplateTypeParmType` | the same by default; `-fno-subst-sugar` drops it (T3) | memory experiments |
 | D4 | rebuilds every pattern subtree | can share non-dependent, non-local expression subtrees (§3.3, Q3) | memory; dumps stay byte-identical |
 | D5 | no limit on subsumption | more than 65,536 DNF/CNF clauses is the error `constraints too complex to compare` (Q14) | bounded time |
@@ -1657,6 +1657,18 @@ silently (`diag = None`) at those sites. S3O lists them.
      arguments are checked the same way after deduction, a failure being
      a substitution failure shown without the deduced arguments (WP-669,
      `tests/conformance/temp.arg.template/p3-deduced-argument-checked.cpp`);
+   - check each deduced value against its parameter's type
+     ([temp.deduct.type]/17, /20, [temp.arg.nontype]/1;
+     `deduced_value_fits`, clang `ConvertDeducedTemplateArgument`): a
+     non-enumeration integral type takes an integral or unscoped
+     enumeration value that fits it, any other fixed type only a value of
+     that type, a dependent type anything (its deduction checked it), and
+     a placeholder type a value whose type it deduces from (`auto *P`
+     takes `&x` but not `0` or `nullptr`; `auto Q::*M` takes `&Q::m`;
+     `nttp_placeholder_matches`); a deduced pack element by element. So
+     `nullptr`, `&x`, `1.0` or a scoped enumerator of a `template<auto V>`
+     primary does not bind `template<int N> A<N>` (WP-1105,
+     `tests/conformance/temp.spec.partial.match/nttp-deduced-value-type-run.cpp`);
    - finish the deduction: substitute the deduced args into `p.args` and
      require canonical equality with `A`;
    - check `p`'s associated constraints (§8). For a class template, their
@@ -1671,7 +1683,19 @@ silently (`diag = None`) at those sites. S3O lists them.
    element, it is that partial. Otherwise the pattern is the most
    specialized partial, found by function-template partial ordering of
    the rewritten `template<p.params> void f(X<p.args>)` (§6.7), with
-   constraints as the tie-breaker. The tie-breaker applies only when the
+   constraints as the tie-breaker. Before it, two partials that each
+   deduce from the other are ordered by CWG1432 (no resolution; clang's
+   speculative fix in `getMoreSpecialized`, `cwg1432_tie_break`): when the
+   trailing argument pack (the primary's trailing parameter pack) differs
+   in size between them and ends in a pack expansion in exactly one, the
+   one with the longer pack ending in the expansion is less specialized.
+   kiln's list deduction already fails a pack expansion against a
+   non-pack parameter and an argument list longer than the parameters
+   (§6.2), so `C<T>` is more specialized than `C<T, U...>` by deduction
+   alone; the rule is a backstop that keeps the order clang's (WP-1105,
+   `tests/conformance/temp.spec.partial.order/cwg1432-trailing-pack-run.cpp`,
+   `tests/conformance/temp.func.order/cwg1432-trailing-pack-run.cpp`).
+   The tie-breaker applies only when the
    two are equally specialized by deduction, their template parameter
    lists are equivalent ignoring constraints ([temp.over.link]/6, same
    length, kinds, packness and non-type parameter types) and their
@@ -1831,8 +1855,36 @@ Out-of-class partial specializations of a member template (WP-150):
   of a class template, whose arguments are dependent; it is checked when
   the enclosing class is instantiated (`Substituter::member_partial_spec`
   runs both checks on the redeclared one, with the instantiation note), as
-  clang does. Still skipped: a primary non-type parameter whose type is a
-  placeholder or dependent (`template<auto V>`, `template<class T, T V>`).
+  clang does. A non-type parameter whose type is a placeholder or another
+  parameter (`template<auto V>`, `template<class T, T V>`), on either
+  side, has that type deduced from the synthesized argument's type
+  ([temp.deduct.type]/20; `deduce_nttp_type`, then
+  `deduced_nttp_type_mismatch` substitutes the deduced arguments into it
+  and compares): a synthesized `auto` is a unique type only a placeholder
+  or a type parameter matches, so `template<int N> A<N>` of
+  `template<auto N> A` is more specialized while `template<class T, T N>
+  A<N>`, `template<auto N> F<N>` of `template<int N> F`, `template<class T,
+  int N> B<T, N>` of `template<class T, T N> B` and `template<bool B> V<int,
+  B>` of `template<class T, T> V` are not (WP-1105,
+  `tests/conformance/temp.spec.partial.general/placeholder-typed-primary-not-more-specialized.cpp`,
+  `.../param-typed-primary-converted-arg-not-more-specialized.cpp`). Under
+  `-fclang-compat=19` the partial's arguments for a primary parameter
+  typed by another one are first converted to that type, as clang 19
+  converted them (`DeducedArgs::converted_values`, `converted_values_fit`:
+  the same type, an integral or unscoped enumeration value to a
+  non-enumeration integral type, a pointer qualification conversion), so
+  `V<int, B>` is accepted there; a non-convertible one is still rejected,
+  with kiln's wording rather than clang 19's `value of type 'int*' is not
+  implicitly convertible to 'int'`.
+  A primary non-type pack (`template<auto... Vs>`) is checked element-wise
+  (`pack_nttp_type_mismatch`; an expansion element has its pattern's
+  type): a placeholder-typed partial pack (`auto *...Ps`) must match each
+  synthesized element's type, so it is more specialized; a fixed-type one
+  (`int...`, `int *...`) is not more specialized than an `auto...` primary
+  (clang 22), while `-fclang-compat=19` accepts it as clang 19 did
+  (`.../placeholder-pack-partial-run.cpp`,
+  `.../placeholder-pack-fixed-type-not-more-specialized.cpp`,
+  `.../placeholder-pack-fixed-type-clang19.cpp`).
   **Packs (WP-956, with WP-1053).** Further pack cases:
   - A pack expansion that is the argument for a non-pack parameter stops
     default arguments for the remaining parameters (`args.rs`
@@ -2538,11 +2590,38 @@ reports a dropped statement or part.
   from a static member ([class.friend]/6), and it is not recorded as a
   member instantiated from the friend pattern, so the member keeps its
   own pattern and definition (WP-1071;
-  `class.friend/friend-member-of-specialization-run.cpp`). Gap: a
-  non-template class's member befriended with a dependent type
-  (`friend int B::f(W<T>&);`) is rejected at definition ("does not match
-  any declaration in 'B'"; xfail
-  `class.friend/friend-member-dependent-signature-run.cpp`).
+  `class.friend/friend-member-of-specialization-run.cpp`).
+- A method friend whose declarator depends on the enclosing templates
+  (its own template head, its type, or its nested-name-specifier:
+  `friend int B::f(W<T>&);`, `template<class U> friend int
+  B<T>::g(U, W<T>&);`, `friend int C<T>::f(V<X, T>&);` in `V<X, T>`) and
+  that no member found at definition matches is matched when the class is
+  instantiated (WP-1110; `Sema::defers_method_friend`, decl.rs). A
+  dependent nested-name-specifier (`B<T>::`, or `C<T>::` resolving to the
+  class template itself) always defers: the primary pattern's members are
+  not those of every specialization it names, and its parameters alias
+  the enclosing class's. A friend member template whose specifier names
+  none of its head's parameters keeps that head as its own
+  (`Sema::friend_head_is_own`, class/member_friend.rs) instead of giving
+  it to the qualifier's class template. The deferred friend
+  redeclares nothing in the pattern, without a diagnostic, and records
+  its qualifier (`friend_qualifiers`), plus the written specifier when
+  that is dependent (`friend_qualifier_nns`). Each instantiation declares
+  it with the class the substituted specifier names
+  (`Substituter::nns_context`, templ/subst/decls.rs `function_decl`), so
+  it is matched there against the members with the substituted signature
+  ([temp.friend]/1, [class.friend]/10, [temp.res.general]/3), and a
+  specialization matching none is diagnosed with its instantiation note
+  ("friend declaration of 'f' does not match any declaration in 'B'";
+  clang adds a candidate note kiln does not). A member of the current
+  instantiation (the qualifier encloses the class), a name that finds
+  nothing or finds something other than functions, and a friend whose
+  declarator is not dependent are still matched (and diagnosed) at
+  definition, as clang does; a friend matched at definition keeps the
+  WP-1071 path above (`class.friend/friend-member-dependent-signature-run.cpp`,
+  `friend-member-template-of-specialization-run.cpp`,
+  `friend-member-deferred-variants-run.cpp`,
+  `friend-member-dependent-mismatch-at-instantiation.cpp`).
 - A friend class (`friend class B<T>;`) is substituted and grants access
   (S3C). A dependent friend specialization (`friend struct X<T>;`,
   `friend class Y<T*>;`, `friend class ns::Z<T...>;`) is kept in the
@@ -2599,8 +2678,17 @@ reports a dropped statement or part.
     specialization matches as its arguments do: `A<T *>::Member` names
     `A<int *>::Member`, not `A<int>::Member`). For a function the
     deduced arguments are substituted into the declared type, which must
-    be `e`'s type ([temp.over.link]); a member function template's type
-    is not compared (its own head would have to be matched too). The
+    be `e`'s type ([temp.over.link]). A friend with a member template
+    head (`template<class T> template<class V> friend int A<T>::h(const
+    B&);`) befriends only a member function template, and a friend
+    without one only a non-template member ([temp.over.link]/4). The
+    member template's head must be equivalent to the friend's
+    ([temp.over.link]/6: same length, parameter kinds and packs,
+    non-type parameter types after the outer substitution, template
+    template parameter heads; requires-clauses and type-constraints are
+    not compared), and the friend's type, with its head's parameters
+    renamed to the member template's, must be the member template
+    pattern's type (`member_friend_heads_match`; WP-1098). The
     answer is cached per (friend, member). A member of a class
     template's pattern or of a partial specialization (no specialization
     arguments yet) is a speculative friend: the check is recorded and
@@ -2617,10 +2705,25 @@ reports a dropped statement or part.
     the program reads a member clang should have denied: a sibling member
     (`A<T>::Other`), another class's `Member`, a non-matching
     specialization or function type (g++ denies these too;
-    `temp.friend/dependent-member-friend-denied.cpp`, `skip(clang)`).
+    `temp.friend/dependent-member-friend-denied.cpp`, and a member
+    template whose head or type differs,
+    `dependent-member-friend-template-head-denied.cpp`, `skip(clang)`).
     Where clang accepts a declaration form, kiln follows it: the nested
     path `A<T>::X::Y`, a member function template, and any class-key
     (the befriended member's tag kind is not checked).
+  - Kind (WP-1099): when the template's primary pattern is defined and
+    declares the befriended name (directly, no member-class path) only as
+    an entity of another kind — a function or variable for a class
+    friend, a class or variable for a function friend — the friend is
+    ill-formed: "redefinition of 'Member' as different kind of symbol"
+    with "previous definition is here" at the member, clang's wording for
+    a member of the current instantiation
+    (`member_friend_kind_mismatch`). clang accepts the form with
+    `-Wunsupported-friend`; g++ rejects it. The friend declaration is
+    invalid and registered nowhere (no `-Wunsupported-friend` warning).
+    Explicit and partial specializations are not consulted
+    (`temp.friend/dependent-member-friend-kind-mismatch.cpp`,
+    `skip(clang)`).
   - Diagnostic: clang's `-Wunsupported-friend` (`sema_unsupported_friend`)
     once per declaration in its pattern, never per instantiation, at the
     befriended name: "dependent nested name specifier 'A<T>' for friend
@@ -6608,9 +6711,25 @@ WP-956 makes several changes to conversion function templates.
   `this` access; this matches clang's `ActOnDependentIdExpression`. The
   code paths are `is_dependent_conversion_name`,
   `try_dependent_member_q`, `act_on_id_expression_dn` and
-  `implicit_dependent_member`.
-- **Tests.** `tests/conformance/temp.mem/conversion-template-dependent-ordering.cpp`
-  and `conversion-template-ambiguous.cpp`.
+  `implicit_dependent_member`. A qualified `Base<T>::operator T()` or
+  `D::operator T()`, `x.operator T()`, `p->operator T()` and
+  `&C<T>::operator T` take the same path through their dependent
+  qualifier or object.
+- **Substituting the name.** The `DeclName` holds the canonical
+  conversion type, and `member_name` substitutes that type (clang's
+  `TransformDeclarationNameInfo` transforms the written type instead;
+  the result is canonicalized in both). A canonical dependent type keeps
+  each expression as its profile. Substitution therefore treats a
+  profile as its first expression: a non-dependent profiled template
+  argument (the `2` of `Arr<T, 2>` or `V_t<T, 2>`) in `template_arg`, and a canonical `decltype(e)` or `typeof(e)` in
+  `ty_node`, as for a canonical array bound (WP-1126). Lookup that finds
+  nothing at instantiation is clang's `no member named 'operator int *'
+  in 'S<int>'`. clang prints a template-id target type by its template
+  name alone (`'operator Arr'`), and kiln prints the arguments too
+  (`'operator Arr<int, 2>'`).
+- **Tests.** `tests/conformance/temp.mem/conversion-template-dependent-ordering.cpp`,
+  `conversion-template-ambiguous.cpp`, and
+  `tests/conformance/temp.dep.expr/conversion-function-id-dependent-{run,forms-run,nttp-run,not-found}.cpp`.
 
 The texts are taken from clang 19's `DiagnosticSemaKinds.td`. The goldens
 are authoritative: WP-070 checks each of them in `templates/diag/`.

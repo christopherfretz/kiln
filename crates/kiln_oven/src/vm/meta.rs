@@ -105,7 +105,11 @@ impl Oven {
         }
         let mut out = MetaOut::Unset;
         let mark = self.refl_mark(b);
+        let t = self.hook_meta_begin();
         let r = b.meta(op, &args[..n], &mut out, &ctx, self);
+        if let Some(t) = t {
+            Oven::hook_meta_end(t, op);
+        }
         self.charge_refl(b, mark, matches!(op, MetaOp::Value(_) | MetaOp::Query(_)))?;
         if let Err(e) = r {
             return Err(match e.kind {

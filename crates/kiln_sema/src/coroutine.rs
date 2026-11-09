@@ -1334,6 +1334,8 @@ impl Sema<'_, '_> {
         } else {
             let all: Vec<DeclId> = fns.fns.iter().chain(&fns.templates).copied().collect();
             self.find_operator_new_template(&all, place, pass_align, (None, loc), &mut None)
+                .ok()
+                .flatten()
         };
         match found {
             Some((n, a)) => (Some(n), a),
