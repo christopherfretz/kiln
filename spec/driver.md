@@ -387,7 +387,7 @@ docs/design/sanitizers.md) reads the sanitizer options as clang 19's
 Tests: `sanitize.rs` unit tests; `crates/kiln_driver/tests/codegen.rs`
 `sanitizer_frontend_attributes`; `tests/conformance/driver.sanitize/`.
 
-### Coverage flags (WP-941)
+### Coverage flags (WP-941, WP-1003)
 
 `CoverageFlags` (`crates/kiln_driver/src/coverage_flags.rs`) reads the
 coverage flags as clang 19's driver does (`addPGOAndCoverageFlags`) and
@@ -403,8 +403,9 @@ error; none is ignored.
 | `-fprofile-dir=<dir>` | the `.gcda` file goes under `<dir>` (clang's absolute-path join) |
 | `-fprofile-update=single\|atomic\|prefer-atomic` | atomic counter updates (`--gcov-atomic-counter`, `--instrprof-atomic-counter-update-all`); another value: `unsupported argument '<v>' to option '-fprofile-update='` |
 | `-f[no-]profile-instr-generate[=<path>]` | source-based coverage counters (`llvm.instrprof.increment`), written at exit to `default.profraw`, `<path>`, or `LLVM_PROFILE_FILE` (which wins) |
-| `-f[no-]coverage-mapping` | with `-fprofile-instr-generate`: `drv_unsupported_flag`, "source-based coverage mapping is not yet implemented, a WP-941 follow-up"; without it: `'-fcoverage-mapping' only allowed with '-fprofile-instr-generate'` |
-| `-fcoverage-compilation-dir=`, `-fcoverage-prefix-map=<old>=<new>` | accepted for the mapping (no effect until it lands); `-fcoverage-prefix-map=` without `=`: `invalid argument '<v>' to -fcoverage-prefix-map=` |
+| `-f[no-]coverage-mapping` | with `-fprofile-instr-generate`: the coverage mapping (`__llvm_covmap` / `__llvm_covfun`, read by `llvm-cov show` / `report` / `export`; spec/codegen.md §5.4); without it: `'-fcoverage-mapping' only allowed with '-fprofile-instr-generate'` |
+| `-fcoverage-compilation-dir=<dir>` (also `-ffile-compilation-dir=`) | the mapping's compilation directory, its first filename (default: the working directory) |
+| `-fcoverage-prefix-map=<old>=<new>` (also `-ffile-prefix-map=`) | rewrites the mapping's filenames after `.`/`..` removal; the last matching pair wins (clang `normalizeFilename`); without `=`: `invalid argument '<v>' to -fcoverage-prefix-map=` |
 | `-fprofile-filter-files=`, `-fprofile-exclude-files=` | with `--coverage`: `drv_unsupported_flag` (the `opt` pass takes no filter); without: `only allowed with '--coverage'` |
 | `-fprofile-generate[=<dir>]`, `-fcs-profile-generate[=<dir>]` | `drv_unsupported_flag`: "IR profile-guided optimization instrumentation is a known kiln 1.0 limitation" |
 | `-fprofile-use[=]`, `-fprofile-instr-use[=]`, `-fprofile-sample-use[=]`, `-fauto-profile[=]`, `-fprofile-remapping-file=` | `drv_unsupported_flag`: "profile-guided optimization is a known kiln 1.0 limitation" |
@@ -431,6 +432,11 @@ into IR-level PGO instrumentation (`PGOInstrumentationGen`), whose
   no pass runs: gcov leaves only `!llvm.gcov`, and InstrProf the
   unlowered `llvm.instrprof.increment` calls (without
   `@__llvm_profile_filename`, which the lowering creates).
+- **Mapping.** `-fcoverage-mapping` sets `CoverageOptions::mapping`
+  and collects, through `kiln_pp::PpCallbacks`, the skipped groups and
+  the macro invocations the mapping needs; codegen does the rest. The
+  flag changes nothing but the mapping globals: without it the IR is
+  the same, byte for byte.
 - **Link.** The linking `clang++` gets `--coverage` and/or
   `-fprofile-instr-generate`, so it adds the profile runtime
   `<resource-dir>/lib/linux/libclang_rt.profile-<arch>.a` (from the
@@ -439,9 +445,12 @@ into IR-level PGO instrumentation (`PGOInstrumentationGen`), whose
   use the same runtime.
 
 Tests: `coverage_flags.rs` unit tests; `crates/kiln_driver/tests/codegen.rs`
-`coverage_flags_rejected`; `tests/codegen/{gcov,instrprof}_*.cpp` (IR
-against clang, `ir_vs_clang`); `scripts/coverage-compare.py` (end-to-end
-`.gcov` and `llvm-profdata` equality with clang).
+`coverage_flags_rejected`, `coverage_mapping_end_to_end` (compile, run,
+`llvm-profdata merge`, `llvm-cov report/show` at `-fclang-compat=19` and
+`22` with that LLVM's tools); `tests/codegen/{gcov,instrprof,coverage}_*.cpp`
+(IR against clang, `ir_vs_clang`); `scripts/coverage-compare.py`
+(end-to-end `.gcov`, `llvm-profdata` and `llvm-cov export` equality with
+clang).
 
 ## Driver modes
 
@@ -1622,7 +1631,7 @@ Each deviation is covered by a test or a test note.
     at all for `wildcatlake` / `novalake` (spec/landed/driver/WP-630.md);
     `-march=native` emits no `"target-cpu"` and `-mtune=native` no
     `"tune-cpu"` (clang resolves the host); `-fwrapv-pointer` is accepted at `-fclang-compat=19`
-    (clang 19 has no such flag); `-fcoverage-mapping`, the
+    (clang 19 has no such flag); the
     profile-guided optimization flags ("Coverage flags"), `-ftrapv` and
     `-fshort-enums`, and the sanitizers "Sanitizers" does not
     list, are errors; and the Oven ignores `-fwrapv`.

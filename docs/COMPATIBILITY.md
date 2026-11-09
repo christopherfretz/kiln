@@ -345,17 +345,18 @@ are in [status/accepts-invalid.md](status/accepts-invalid.md).
 |---|---|---|
 | gcov line coverage | `--coverage` (`-fprofile-arcs -ftest-coverage`, `-fprofile-dir=`, `-fprofile-update=`) | **Works**: `llvm-cov gcov` line counts equal clang 19's on every comparison program |
 | Source-based coverage counters | `-fprofile-instr-generate[=<file>]` | **Works**: `llvm-profdata show --counts` records (names, hashes, counters) equal clang 19's |
-| Source-based coverage mapping | `-fcoverage-mapping` (`llvm-cov show` / `report`) | **Not yet** (rejected with an error; follow-up of WP-941) |
+| Source-based coverage mapping | `-fcoverage-mapping` (`llvm-cov show` / `report` / `export`), `-fcoverage-compilation-dir=`, `-fcoverage-prefix-map=` | **Works**: clang 19's mapping; `llvm-cov report` equals clang 19's on the comparison programs except `macros.cpp` (3 of 33 regions); against clang 20+ fewer regions around `&&`/`||` (see KNOWN_ISSUES.md) |
 | Profile-guided optimization | `-fprofile-generate`, `-fcs-profile-generate`, `-fprofile-use`, `-fprofile-instr-use`, `-fprofile-sample-use` | **Not in 1.0** (a known limitation, rejected with an error) |
 
 Both coverage modes link LLVM 19's profile runtime
 (`libclang_rt.profile-<arch>.a`, Debian package `libclang-rt-19-dev`),
 which the linking `clang++` adds. `scripts/coverage-compare.py` builds
 `scripts/coverage/*.cpp` (control flow, classes and templates, lambdas,
-coroutines, macros, and a libstdc++-heavy program) with kiln and with
-clang++-19 and compares the reports. Detail, and the compile-time cost of
-each mode, in
-[spec/landed/codegen/WP-941.md](../spec/landed/codegen/WP-941.md).
+coroutines, macros, header functions, and a libstdc++-heavy program)
+with kiln and with clang++-19 and compares the reports. Detail, and the
+compile-time cost of each mode, in
+[spec/landed/codegen/WP-941.md](../spec/landed/codegen/WP-941.md) and
+[spec/landed/codegen/WP-1003.md](../spec/landed/codegen/WP-1003.md).
 
 ## Constexpr and compile-time performance
 

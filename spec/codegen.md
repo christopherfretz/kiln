@@ -1441,7 +1441,7 @@ unit as clang 19's `-flto` does (`CodeGenOpts.PrepareForLTO` /
   lto-two-tu-*-run.cpp` (two TUs built, linked and run, with the default
   linker and `-fuse-ld=lld`).
 
-### 5.4 Instrumentation (WP-941; `coverage/`)
+### 5.4 Instrumentation (WP-941, WP-1003; `coverage/`)
 `CodegenOptions::coverage` (`CoverageOptions`, set from spec/driver.md
 "Coverage flags") instruments the module as clang 19's frontend does;
 with no coverage flag the IR is unchanged, byte for byte.
@@ -1477,10 +1477,57 @@ with no coverage flag the IR is unchanged, byte for byte.
   `@__llvm_profile_filename` (`hidden`, `comdat`) unless
   `-disable-llvm-passes` is given (clang's lowering creates it, so
   without the pass there is none).
-- **Not yet:** `-fcoverage-mapping` (the `__llvm_covmap`/`__llvm_covfun`
-  records of clang `CoverageMappingGen`; `llvm-cov show`/`report` need
-  them), a WP-941 follow-up the driver rejects. `llvm-profdata merge` /
-  `show` of kiln's `.profraw` work and equal clang's.
+- **Coverage mapping** (`-fcoverage-mapping` with the counters,
+  `coverage/{mapping,records,encode,skipped}.rs`, WP-1003): clang 19
+  `CoverageMappingGen`, in every `-fclang-compat` mode.
+  - *Regions.* `mapping.rs` ports `CounterCoverageMappingBuilder`
+    statement for statement over the `pgo.rs` counters: code regions
+    for bodies, statements, conditions and `?:`/`&&`/`||` operands; gap
+    regions after `)` of a condition and between a statement and what
+    follows a jump; branch regions for every instrumented condition
+    (`if`/loops/`?:`/`&&`/`||`, with clang's folded-constant zero
+    counters); expansion regions for macro expansions, nested as clang
+    nests them; and clang's region order. Locations are clang's: an end
+    is the start of the last token plus its length
+    (`getPreciseTokenLocEnd`), a `= default` body is one region (in a
+    class at the `default` keyword, out of class at the declarator's
+    last token), and a constructor call ends at its `)`/`}` or its last
+    written argument. Locations the AST does not keep (a condition's
+    `)`, a `;`, a case's `:`) are re-lexed from the spelling.
+  - *Skipped regions* (`skipped.rs`, clang `CoverageSourceInfo`): the
+    groups the preprocessor skipped (`kiln_pp::PpCallbacks::
+    source_range_skipped`), comments and empty-line runs, each with
+    clang's previous/next watched token, so a range on a line with code
+    is trimmed or dropped as clang's.
+  - *Records* (`records.rs`): each emitted function's `__covrec_<NameHash
+    hex>` in `__llvm_covfun` (`{ i64 NameHash, i32 size, i64 FuncHash,
+    i64 FilenamesRef, <mapping> }`, `linkonce_odr hidden` with a comdat of
+    its own name, the NameHash being MD5 of the PGO name, FuncHash the
+    pgo.rs hash, FilenamesRef the TU hash); the TU's
+    `__llvm_coverage_mapping` in `__llvm_covmap` (version 6 header and
+    the filenames: the compilation directory, then each file, normalized
+    as clang `normalizeFilename`). Filenames are written uncompressed;
+    clang compresses them by default, so the TU hash (MD5 of the
+    filenames blob) differs from clang's unless clang is run with
+    `-mllvm -enable-name-compression=false`, when the section is the
+    same, byte for byte. `llvm-cov` reads both forms.
+  - *Unused functions* (clang `AddDeferredUnusedCoverageMapping`): a
+    function defined in the TU and never emitted (an unused `inline` or
+    `static` function, an unused member of a class or of an
+    instantiated class template; templates themselves get none) gets a
+    zero record
+    (`FuncHash` 0, one zero code region over its body) and its PGO name
+    in `__llvm_coverage_names`, so `llvm-cov` reports it at 0%.
+  - Without `-fcoverage-mapping` none of this is emitted, and the
+    counters are WP-941's, byte for byte.
+  - *Differences from clang* (spec/landed/codegen/WP-1003.md): clang
+    20+ (the `-fclang-compat=22` oracle) adds gap regions between
+    `&&`/`||` operands and real counters on folded branch regions,
+    which kiln does not write; a function template specialization or
+    class-template member instantiated only for constant evaluation gets
+    no zero record (clang gives it one); the string literal from `#x`
+    in a macro body maps no nested expansion region; generic lambdas'
+    and some immediate-invocation helpers' records differ.
 - **Runtime.** Both modes link `libclang_rt.profile-<arch>.a` from the
   LLVM 19 compiler-rt (`/usr/lib/llvm-19/lib/clang/19/lib/linux/` on
   Debian, package `libclang-rt-19-dev`); the linking `clang++` adds it.
