@@ -8,7 +8,7 @@
 //!   `kiln` is linked it dangles. xtask's `build_kiln` makes it again if
 //!   it is missing, and `cargo xtask dist` makes it in the install layout.
 //!   The dependency scanner's names (`kiln-scan-deps` and the
-//!   `clang-scan-deps-22` / `clang-scan-deps` aliases CMake looks for
+//!   `clang-scan-deps-22` / `clang-scan-deps` aliases `CMake` looks for
 //!   beside the compiler, spec/modules.md §11.9) are made the same way.
 //! - Records the git commit kiln is built from as `KILN_BUILD_GIT_SHA`
 //!   (`kiln_driver::version::GIT_SHA`, also named by the

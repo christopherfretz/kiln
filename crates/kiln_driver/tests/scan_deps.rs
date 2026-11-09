@@ -1,5 +1,5 @@
 //! WP-982: `kiln-scan-deps`, the P1689r5 dependency scanner (spec/modules.md
-//! §11.9, spec/driver.md "Dependency scanning"), run the way CMake runs it:
+//! §11.9, spec/driver.md "Dependency scanning"), run the way `CMake` runs it:
 //! `<scanner> -format=p1689 -- <compiler> <flags> -c <src> -o <obj> -MT
 //! <ddi> -MD -MF <dep>`. Every expected document below is byte for byte
 //! what clang-scan-deps 22 prints for the same input ([module.unit],

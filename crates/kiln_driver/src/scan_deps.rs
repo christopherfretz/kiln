@@ -1,5 +1,5 @@
 //! `kiln-scan-deps`: the module dependency scanner build systems run
-//! before compiling (CMake's `FILE_SET CXX_MODULES`), a mode of the
+//! before compiling (`CMake`'s `FILE_SET CXX_MODULES`), a mode of the
 //! `kiln` binary picked by the program name, as `clang-scan-deps`
 //! behaves (spec/modules.md §11.9, spec/driver.md "Dependency
 //! scanning").
@@ -25,7 +25,7 @@ use crate::pp_cmd::Job;
 use crate::{Io, SharedWriter, deps, make_engine};
 
 /// The program names that run the scanner: `kiln-scan-deps`, and the
-/// aliases CMake's `find_program` looks for beside the compiler
+/// aliases `CMake`'s `find_program` looks for beside the compiler
 /// (`clang-scan-deps`, `clang-scan-deps-<major>[.<minor>]`).
 #[must_use]
 pub fn is_scanner_name(prog: &str) -> bool {
@@ -53,14 +53,14 @@ struct ScanOpts {
 
 /// Parses the options before `--`; `Err` is the message to print.
 fn parse_opts(prog: &str, opts: &[String]) -> Result<ScanOpts, String> {
-    let mut o = ScanOpts { format: Format::Make, output: None };
+    let mut parsed = ScanOpts { format: Format::Make, output: None };
     let mut i = 0;
     while i < opts.len() {
-        let a = opts[i].as_str();
+        let arg = opts[i].as_str();
         i += 1;
-        let flag = a.strip_prefix("--").map_or(a, |r| &a[a.len() - r.len() - 1..]);
+        let flag = arg.strip_prefix("--").map_or(arg, |r| &arg[arg.len() - r.len() - 1..]);
         let (name, inline) = match flag.split_once('=') {
-            Some((n, v)) => (n, Some(v)),
+            Some((key, val)) => (key, Some(val)),
             None => (flag, None),
         };
         let value = |i: &mut usize| -> Result<String, String> {
@@ -76,7 +76,7 @@ fn parse_opts(prog: &str, opts: &[String]) -> Result<ScanOpts, String> {
         };
         match name {
             "-format" => {
-                o.format = match value(&mut i)?.as_str() {
+                parsed.format = match value(&mut i)?.as_str() {
                     "make" => Format::Make,
                     "p1689" => Format::P1689,
                     v @ "experimental-full" => {
@@ -89,7 +89,7 @@ fn parse_opts(prog: &str, opts: &[String]) -> Result<ScanOpts, String> {
                     }
                 }
             }
-            "-o" => o.output = Some(value(&mut i)?),
+            "-o" => parsed.output = Some(value(&mut i)?),
             // Scheduling and caching knobs of clang's scanner: kiln scans
             // one command on one thread (documented no-ops).
             "-j" | "-mode" | "-resource-dir-recipe" => drop(value(&mut i)?),
@@ -104,17 +104,17 @@ fn parse_opts(prog: &str, opts: &[String]) -> Result<ScanOpts, String> {
                     "{prog}: -compilation-database is not supported; pass the command after '--'"
                 ));
             }
-            _ if a.starts_with("-o") && a.len() > 2 && inline.is_none() => {
-                o.output = Some(a[2..].to_owned());
+            _ if arg.starts_with("-o") && arg.len() > 2 && inline.is_none() => {
+                parsed.output = Some(arg[2..].to_owned());
             }
             _ => {
                 return Err(format!(
-                    "{prog}: Unknown command line argument '{a}'.  Try: '{prog} --help'"
+                    "{prog}: Unknown command line argument '{arg}'.  Try: '{prog} --help'"
                 ));
             }
         }
     }
-    Ok(o)
+    Ok(parsed)
 }
 
 const HELP: &str = "\
@@ -155,13 +155,14 @@ struct Scanned {
     deps: Option<crate::pp_cmd::SharedDeps>,
 }
 
-/// Runs the scanner: `argv` without the program name. Returns the exit
-/// code: 0, or 1 after any error (clang-scan-deps's convention).
-pub(crate) fn run(argv0: &str, argv: &[String], mut io: Io) -> i32 {
+/// Runs the scanner: `words` is its argv without the program name.
+/// Returns the exit code: 0, or 1 after any error (clang-scan-deps's
+/// convention).
+pub(crate) fn run(argv0: &str, words: &[String], mut io: Io) -> i32 {
     let prog = crate::args::program_basename(argv0);
-    let (opts, cmd) = match argv.iter().position(|a| a == "--") {
-        Some(i) => (&argv[..i], &argv[i + 1..]),
-        None => (argv, &[][..]),
+    let (opts, cmd) = match words.iter().position(|a| a == "--") {
+        Some(i) => (&words[..i], &words[i + 1..]),
+        None => (words, &[][..]),
     };
     if opts.iter().any(|a| a == "-help" || a == "--help") {
         let _ = io.stdout.write_all(HELP.as_bytes());
@@ -332,7 +333,7 @@ fn drain<'a>(
 }
 
 /// The P1689r5 document of the input, exactly as clang-scan-deps prints
-/// it (llvm::json, two-space indent, keys sorted); an empty rule list
+/// it (`llvm::json`, two-space indent, keys sorted); an empty rule list
 /// after an error.
 fn p1689(args: &Args, input: &str, scanned: Option<&Scanned>) -> String {
     let mut s = String::from("{\n  \"revision\": 0,\n  \"rules\": [");
@@ -380,7 +381,9 @@ fn json_quote(v: &str) -> String {
             '\t' => s.push_str("\\t"),
             '\n' => s.push_str("\\n"),
             '\r' => s.push_str("\\r"),
-            c if (c as u32) < 0x20 => s.push_str(&format!("\\u{:04x}", c as u32)),
+            c if (c as u32) < 0x20 => {
+                let _ = std::fmt::Write::write_fmt(&mut s, format_args!("\\u{:04x}", c as u32));
+            }
             c => s.push(c),
         }
     }

@@ -102,8 +102,8 @@ const MAJOR: &str = env!("CARGO_PKG_VERSION_MAJOR");
 /// The dependency scanner's names beside `kiln` (symlinks to it; the
 /// program name picks the mode): `kiln-scan-deps`, and the
 /// `clang-scan-deps-<clang-compat major>` / `clang-scan-deps` names
-/// CMake's `find_program` looks for in the compiler's directory
-/// (spec/modules.md §11.9). crates/kiln_driver/build.rs makes the same
+/// `CMake`'s `find_program` looks for in the compiler's directory
+/// (spec/modules.md §11.9). `crates/kiln_driver/build.rs` makes the same
 /// links in the cargo profile directory.
 pub const SCAN_DEPS_NAMES: &[&str] = &["kiln-scan-deps", "clang-scan-deps-22", "clang-scan-deps"];
 
