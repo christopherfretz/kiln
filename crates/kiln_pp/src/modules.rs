@@ -125,6 +125,18 @@ pub enum DirectiveKind {
     Invalid,
 }
 
+/// How an imported module file that holds a declaration image was read,
+/// with the image enabled (spec/modules.md §11.11 "Part 2a"): the
+/// driver's `-v` notes ([`Preprocessor::image_imports`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageImport {
+    /// The unit's key (`M`, `M:P`).
+    pub key: String,
+    /// `None` when the unit was built from its image; else why it was
+    /// replayed.
+    pub replayed: Option<String>,
+}
+
 /// The importer's preprocessor state, saved while an imported unit is
 /// read (a unit starts with only the predefined macros).
 pub(crate) struct UnitSave {
@@ -175,6 +187,8 @@ pub(crate) struct ModState {
     /// With [`ModuleOptions::scan`]: the main unit's named-module imports
     /// (`M`, `M:P`), in order, without duplicates.
     scanned: Vec<String>,
+    /// The imports that met the image gate, in order.
+    image_log: Vec<ImageImport>,
 }
 
 impl ModState {
@@ -298,12 +312,13 @@ impl Preprocessor<'_, '_> {
     /// With modules enabled, reads a module or import directive whose
     /// first token `t` (`export`, `module`, `import`) was just lexed and
     /// whose next token is `kw` (`module` / `import`) if `t` is `export`;
-    /// queues its marker and performs the import.
-    pub(crate) fn module_directive(&mut self, t: Token, export: bool, import: bool) {
+    /// queues its marker and performs the import. Symbols with an index
+    /// of at least `mark` were first interned by this directive.
+    pub(crate) fn module_directive(&mut self, t: Token, export: bool, import: bool, mark: u32) {
         self.start_directive();
         let kw_span = if export { self.lex_unexpanded().tok.span } else { t.span };
         let kw = if import { "import" } else { "module" };
-        let kind = self.read_directive_body(import, kw);
+        let kind = self.read_directive_body(import, kw, mark);
         let after_directive = if self.unit_pre_directive { self.unit_first_hash } else { None };
         let d = ModuleDirective { span: t.span, export, kw: kw_span, kind, after_directive };
         self.finish_directive();
@@ -384,7 +399,7 @@ impl Preprocessor<'_, '_> {
     }
 
     /// The directive after `module` / `import`, through the `;`.
-    fn read_directive_body(&mut self, import: bool, kw: &str) -> DirectiveKind {
+    fn read_directive_body(&mut self, import: bool, kw: &str, mark: u32) -> DirectiveKind {
         let mut t = self.lex_unexpanded().tok;
         let kind = match t.kind {
             TokKind::Punct(Punct::Semi) if !import => return DirectiveKind::GlobalFragment,
@@ -404,7 +419,7 @@ impl Preprocessor<'_, '_> {
                     DirectiveKind::Private { span: c.span }
                 } else {
                     t = c;
-                    let Some((p, _)) = self.read_module_name(&mut t, kw) else {
+                    let Some((p, _)) = self.read_module_name(&mut t, kw, mark) else {
                         return DirectiveKind::Invalid;
                     };
                     self.unlex_file_tok(t);
@@ -430,13 +445,13 @@ impl Preprocessor<'_, '_> {
             }
             _ => {
                 let at = t.span;
-                let Some((name, _)) = self.read_module_name(&mut t, kw) else {
+                let Some((name, _)) = self.read_module_name(&mut t, kw, mark) else {
                     return DirectiveKind::Invalid;
                 };
                 let mut partition = None;
                 if t.kind == TokKind::Punct(Punct::Colon) {
                     t = self.lex_unexpanded().tok;
-                    let Some((p, _)) = self.read_module_name(&mut t, kw) else {
+                    let Some((p, _)) = self.read_module_name(&mut t, kw, mark) else {
                         return DirectiveKind::Invalid;
                     };
                     partition = Some(p);
@@ -462,8 +477,17 @@ impl Preprocessor<'_, '_> {
         kind
     }
 
-    /// `M.N` starting at `t`; leaves the token after it in `t`.
-    fn read_module_name(&mut self, t: &mut Token, kw: &str) -> Option<(String, Span)> {
+    /// `M.N` starting at `t`; leaves the token after it in `t`. A
+    /// component first interned by this directive (index `mark` or
+    /// above), other than `std`, names no entity yet: it joins
+    /// [`Preprocessor::unseen_names`], so that it does not count as
+    /// seen for the image gate (spec/modules.md §11.11, "ODR merging").
+    fn read_module_name(
+        &mut self,
+        t: &mut Token,
+        kw: &str,
+        mark: u32,
+    ) -> Option<(String, Span)> {
         let start = t.span;
         let mut name = String::new();
         loop {
@@ -476,6 +500,14 @@ impl Preprocessor<'_, '_> {
             if self.macros.get(s).is_some_and(|d| !d.function_like) {
                 let sp = self.interner.as_str(s).to_string();
                 self.emit(Diag::new(DiagId::pp_module_name_is_macro, t.span).arg(sp));
+            }
+            // `std` stays seen: sema declares namespace `std` implicitly
+            // (for `new`, `typeid`, structured bindings), with no token.
+            if s.index() >= mark
+                && !self.unseen_names.contains(&s)
+                && self.interner.as_str(s) != "std"
+            {
+                self.unseen_names.push(s);
             }
             name.push_str(self.interner.as_str(s));
             *t = self.lex_unexpanded().tok;
@@ -709,10 +741,10 @@ impl Preprocessor<'_, '_> {
 
     /// Builds unit `key` from its module file's declaration image when
     /// `-fkiln-bmi-image` is on, the capsule has one and none of its
-    /// declared names is interned yet (spec/modules.md §11.11 "Part 2a",
-    /// "ODR merging"): queues [`Marker::UnitBegin`] carrying the image and
-    /// [`Marker::UnitEnd`], lexes nothing, and returns `None`. Otherwise
-    /// returns the capsule to replay, without its image section.
+    /// declared names has been seen yet (spec/modules.md §11.11 "Part
+    /// 2a", "ODR merging"): queues [`Marker::UnitBegin`] carrying the
+    /// image and [`Marker::UnitEnd`], lexes nothing, and returns `None`.
+    /// Otherwise returns the capsule to replay, without its image section.
     fn try_image_unit(
         &mut self,
         key: &str,
@@ -725,27 +757,35 @@ impl Preprocessor<'_, '_> {
             Some(c.sections.remove(i).bytes)
         };
         let on = self.modules.as_ref().is_some_and(|m| m.opts.image);
-        let Some(bytes) =
-            take(&mut c).filter(|_| on && c.imports.is_empty() && !c.files.is_empty())
-        else {
+        let Some(bytes) = take(&mut c).filter(|_| on) else {
             return Some(c);
         };
+        if !c.imports.is_empty() || c.files.is_empty() {
+            self.log_image(key, Some("it imports other units".to_owned()));
+            return Some(c);
+        }
         // An image names its unit's main file; one that is not the
         // capsule's first file, or that declares a name the importer has
         // already seen (§11.11 "Part 2a", ODR merging), replays. A header
         // that does not decode is used anyway: sema then reports the file
         // as corrupt ("The reader").
         if let Some((main_path, names)) = bmi::image_header(&bytes) {
-            if c.files[0].path != main_path || names.iter().any(|n| self.interner.get(n).is_some())
-            {
+            if c.files[0].path != main_path {
+                self.log_image(key, Some("its image names another main file".to_owned()));
                 return Some(c);
             }
-            // Interned now, so that a later import in the same lookahead
-            // whose image declares one of them replays instead.
+            if let Some(n) = names.iter().find(|n| self.name_seen(n)) {
+                self.log_image(key, Some(format!("its image declares '{n}', already seen")));
+                return Some(c);
+            }
+            // Seen from now on, so that a later import in the same
+            // lookahead whose image declares one of them replays instead.
             for n in names {
-                self.interner.intern(n);
+                let s = self.interner.intern(n);
+                self.seen_name(s);
             }
         }
+        self.log_image(key, None);
         let carried = take_carried(path, &mut c);
         let main = c.files.swap_remove(0);
         drop(c);
@@ -765,6 +805,26 @@ impl Preprocessor<'_, '_> {
         });
         self.queue(Marker::UnitEnd { key: key.to_owned() });
         None
+    }
+
+    /// Whether the importer has seen the name `n` (spec/modules.md
+    /// §11.11, "ODR merging"): it is interned, and not only as a
+    /// component of a module name ([`Preprocessor::unseen_names`]).
+    fn name_seen(&self, n: &str) -> bool {
+        self.interner.get(n).is_some_and(|s| !self.unseen_names.contains(&s))
+    }
+
+    fn log_image(&mut self, key: &str, replayed: Option<String>) {
+        if let Some(m) = &mut self.modules {
+            m.image_log.push(ImageImport { key: key.to_owned(), replayed });
+        }
+    }
+
+    /// The imports so far whose module file holds a declaration image,
+    /// read with the image enabled: built from it, or replayed and why
+    /// (spec/modules.md §11.11 "Part 2a").
+    pub fn image_imports(&self) -> &[ImageImport] {
+        self.modules.as_ref().map_or(&[], |m| &m.image_log)
     }
 
     /// Starts replaying unit `key` from the capsule `c` of module file
