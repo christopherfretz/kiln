@@ -39,7 +39,10 @@ use crate::ast::Ast;
 use crate::decl::{DeclKind, ParamData};
 use crate::expr::{ExprDeps, ExprFlags, ExprKind as K, TypeidOperand};
 use crate::ids::{ArgListId, DeclId, ExprId, ListId, NnsId, ProfileId, QualType, RawId};
+use crate::names::DeclNameView;
 use crate::templates::Requirement;
+use crate::types::{Nns, TagKeyword, TypeView};
+use kiln_source::symbol::Symbol;
 
 /// An absent optional operand.
 const NONE: u32 = 0;
@@ -134,6 +137,89 @@ impl Ast {
         p
     }
 
+    /// The identifier a member access on an object of dependent type
+    /// keeps for the first level of its qualifier `nns` (clang's
+    /// identifier nested-name-specifier: that name cannot be looked up in
+    /// the object's class yet, [basic.lookup.qual.general]/2): the name
+    /// of a template type parameter, a typedef or alias, or a
+    /// non-template class or enumeration, written with no prefix and no
+    /// `template`. `t.T::f()` mangles `sr1TE1f` and is not equivalent to
+    /// `t.P::f()` for `T` = `P` (spec/abi.md "Mangling", WP-1029).
+    pub fn spelled_member_qualifier(&self, nns: NnsId) -> Option<Symbol> {
+        let Nns::Type { prefix: None, ty, template_kw: false } = self.types.nns_view(nns) else {
+            return None;
+        };
+        self.spelled_type_name(ty)
+    }
+
+    /// The name `ty` is written with, when it is one identifier: a
+    /// template type parameter, a typedef or alias, a using-declaration,
+    /// or a non-template class or enumeration.
+    fn spelled_type_name(&self, mut ty: QualType) -> Option<Symbol> {
+        let d = loop {
+            match self.types.view(ty.ty()) {
+                TypeView::TemplateTypeParm(d) | TypeView::Record(d) | TypeView::Enum(d) => break d,
+                TypeView::Typedef { decl, .. } => break decl,
+                TypeView::Using { shadow, .. } => break shadow,
+                TypeView::Elaborated { keyword: TagKeyword::None, nns: None, named } => ty = named,
+                _ => return None,
+            }
+        };
+        let node = self.decls.get(d);
+        if matches!(
+            node.kind(),
+            DeclKind::ClassTemplateSpecialization | DeclKind::ClassTemplatePartialSpecialization
+        ) {
+            return None;
+        }
+        match self.names.view(node.name()) {
+            DeclNameView::Identifier(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The words of qualifier `nns` as spelled, for a member access on an
+    /// object of dependent type: clang keeps every level by name there,
+    /// so `t.A::Self::f()`, `t.P::Self::f()` and `t.ns2::P::f()` are not
+    /// equivalent to `t.P::f()` even when they name the same class
+    /// (spec/abi.md "Mangling", WP-1029). A level that is not one
+    /// identifier (a template-id, a splice) keeps its canonical word.
+    fn spelled_nns_words(&self, nns: NnsId, out: &mut Vec<u32>) {
+        let mut chain = Vec::new();
+        let mut cur = Some(nns);
+        while let Some(n) = cur {
+            chain.push(n);
+            cur = match self.types.nns_view(n) {
+                Nns::Namespace { prefix, .. }
+                | Nns::NamespaceAlias { prefix, .. }
+                | Nns::Type { prefix, .. }
+                | Nns::Identifier { prefix, .. } => prefix,
+                Nns::Global | Nns::Splice(_) => None,
+            };
+        }
+        out.push(chain.len() as u32);
+        let name = |d: DeclId| match self.names.view(self.decls.get(d).name()) {
+            DeclNameView::Identifier(s) => s.index(),
+            _ => d.raw(),
+        };
+        for &n in chain.iter().rev() {
+            match self.types.nns_view(n) {
+                Nns::Global => out.extend([1, 0]),
+                Nns::Namespace { ns, .. } => out.extend([2, name(ns)]),
+                Nns::NamespaceAlias { alias, .. } => out.extend([3, name(alias)]),
+                Nns::Type { ty, template_kw: false, .. }
+                    if let Some(s) = self.spelled_type_name(ty) =>
+                {
+                    out.extend([4, s.index()]);
+                }
+                Nns::Identifier { name, .. } => out.extend([5, name.index()]),
+                Nns::Type { .. } | Nns::Splice(_) => {
+                    out.extend([6, self.types.canonical_nns(n).raw()]);
+                }
+            }
+        }
+    }
+
     /// The profile words of `e`, without interning them.
     pub fn expr_profile_words(&self, e: ExprId) -> Vec<u32> {
         let mut words = Vec::new();
@@ -213,7 +299,7 @@ impl Ast {
     /// the `DeducedTemplateSpecializationType`'s template name).
     fn ctad_word(&self, q: QualType) -> u32 {
         match self.types.view(q.ty()) {
-            super::TypeView::DeducedTemplateSpecialization { name, deduced }
+            TypeView::DeducedTemplateSpecialization { name, deduced }
                 if deduced.is_none_or(|d| d == QualType::DEPENDENT) =>
             {
                 self.types.canonical_template_name(name).raw().wrapping_add(1)
@@ -286,9 +372,7 @@ impl Ast {
     fn nttp_type_words(&self, q: Option<QualType>, out: &mut Vec<u32>) {
         if let Some(q) = q {
             let c = self.types.canonical(q);
-            if let super::TypeView::Auto { keyword, deduced: None, pack, .. } =
-                self.types.view(c.ty())
-            {
+            if let TypeView::Auto { keyword, deduced: None, pack, .. } = self.types.view(c.ty()) {
                 let w = keyword as u32 | (u32::from(pack) << 4) | (u32::from(c.quals_bits()) << 8);
                 out.extend([1, w]);
                 return;
@@ -422,12 +506,25 @@ impl Ast {
                 let base = id(n.a());
                 // The arrow only matters with an explicit object.
                 let arrow = u32::from(base.is_some() && aux & 1 != 0);
+                let nns = self.templates.expr_nns.get(e).copied();
+                // Behind an explicit object of dependent type the qualifier
+                // is kept as spelled (`spelled_nns_words`).
+                let spelled = base
+                    .filter(|&b| {
+                        self.exprs.get(b).is_type_dependent()
+                            && !(self.exprs.get(b).kind() == K::CXXThisExpr
+                                && self.exprs.this_is_implicit(b))
+                    })
+                    .and(nns);
                 out.extend([
-                    tag(k, arrow),
+                    tag(k, arrow | u32::from(spelled.is_some()) << 1),
                     n.b(),
-                    self.nns_word(self.templates.expr_nns.get(e).copied()),
+                    if spelled.is_some() { NONE } else { self.nns_word(nns) },
                     self.args_word(self.templates.expr_targs.get(e).copied()),
                 ]);
+                if let Some(q) = spelled {
+                    self.spelled_nns_words(q, out);
+                }
                 stack.push(Work::Opt(base));
             }
             K::SizeOfPackExpr => {

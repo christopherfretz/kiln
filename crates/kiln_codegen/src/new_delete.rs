@@ -537,9 +537,7 @@ impl Cg<'_> {
         loop {
             match self.ast.exprs.get(e).kind() {
                 ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
-                ExprKind::UnaryOperator
-                    if self.ast.exprs.unary_op(e) == UnaryOp::Extension =>
-                {
+                ExprKind::UnaryOperator if self.ast.exprs.unary_op(e) == UnaryOp::Extension => {
                     e = self.ast.exprs.operand(e);
                 }
                 _ => return e,

@@ -1126,12 +1126,19 @@ impl Mangler<'_, '_> {
                 ast.templates.expr_targs.get(expr).copied(),
             )
         };
+        // Behind an explicit object of dependent type, the qualifier's
+        // first name cannot be looked up in the object's class yet
+        // ([basic.lookup.qual.general]/2), so clang keeps it as the
+        // identifier written: `t.T::f()` is `dtfp_sr1TE1f`, not
+        // `dtfp_srT_1f` (spec/landed/abi/WP-1029.md).
+        let mut spelled = false;
         if let Some(b) = base {
             let b = self.skip_transparent(b);
             let bn = ast.exprs.get(b);
             if bn.kind() == ExprKind::CXXThisExpr && ast.exprs.this_is_implicit(b) {
                 self.out.push_str("dtdefpT");
             } else {
+                spelled = bn.is_type_dependent();
                 self.out.push_str(if arrow { "pt" } else { "dt" });
                 if !self.expression(b) {
                     return false;
@@ -1139,7 +1146,7 @@ impl Mangler<'_, '_> {
             }
         }
         if let Some(nns) = nns
-            && !self.unresolved_prefix(nns, false)
+            && !self.unresolved_prefix_in(nns, false, spelled)
         {
             return false;
         }
@@ -1327,10 +1334,25 @@ impl Mangler<'_, '_> {
     /// qualifier as written, closed by `E` unless the innermost level is
     /// an unresolved type (a template parameter or `decltype`).
     pub(super) fn unresolved_prefix(&mut self, nns: NnsId, recursive: bool) -> bool {
+        self.unresolved_prefix_in(nns, recursive, false)
+    }
+
+    /// [`Self::unresolved_prefix`]; with `spelled`, a first level that
+    /// names a type by a plain identifier is that identifier (the
+    /// qualifier of a member access on a dependent object).
+    fn unresolved_prefix_in(&mut self, nns: NnsId, recursive: bool, spelled: bool) -> bool {
         let ast = self.ast;
+        if spelled && let Some(s) = ast.spelled_member_qualifier(nns) {
+            self.out.push_str("sr");
+            self.symbol(s);
+            if !recursive {
+                self.out.push('E');
+            }
+            return true;
+        }
         let lead = |m: &mut Self, prefix: Option<NnsId>| {
             if let Some(p) = prefix {
-                m.unresolved_prefix(p, true)
+                m.unresolved_prefix_in(p, true, spelled)
             } else {
                 m.out.push_str("sr");
                 true
@@ -1344,7 +1366,9 @@ impl Mangler<'_, '_> {
                 }
                 return true;
             }
-            Nns::Namespace { prefix, ns } | Nns::NamespaceAlias { prefix, ns, .. } => {
+            // A namespace alias keeps its own name, as clang's
+            // `mangleUnresolvedPrefix` does: `na::P::` is `sr2na1PE`.
+            Nns::Namespace { prefix, ns } | Nns::NamespaceAlias { prefix, alias: ns, .. } => {
                 if !lead(self, prefix) {
                     return false;
                 }
@@ -1408,9 +1432,44 @@ impl Mangler<'_, '_> {
             return Some(false);
         }
         let q = ast.types.canonical(ty);
+        // clang mangles a substituted template parameter (`T::m` in a
+        // member of `C<P>`) as the type it became: an unresolved type
+        // (`srS0_1m`), not the simple-id `1P` (WP-1029).
+        let mut written = ty;
+        while let TypeView::Elaborated { named, .. } = ast.types.view(written.ty()) {
+            written = named;
+        }
+        // A typedef qualifier keeps its own name, as clang's
+        // `case Type::Typedef` does: `P::Self::f` is `sr1P4SelfE1f`, not
+        // the class it names (WP-1029). A using-declaration's type is its
+        // target's.
+        match ast.types.view(written.ty()) {
+            TypeView::Typedef { decl, .. } => {
+                let DeclNameView::Identifier(s) = ast.names.view(ast.decls.get(decl).name()) else {
+                    return None;
+                };
+                self.symbol(s);
+                return Some(false);
+            }
+            TypeView::Using { .. } => {
+                return self
+                    .unresolved_type_or_simple_id(ast.types.desugar_once(written), recursive);
+            }
+            _ => {}
+        }
+        let substituted =
+            matches!(ast.types.view(written.ty()), TypeView::SubstTemplateTypeParm { .. });
         match ast.types.canonical_view(q) {
+            _ if substituted => {
+                if recursive {
+                    self.out.push('N');
+                }
+                self.ty(q);
+                Some(true)
+            }
             TypeView::TemplateTypeParm(_)
             | TypeView::CanonTemplateTypeParm { .. }
+            | TypeView::PackIndexing { .. }
             | TypeView::DependentDecltype(_) => {
                 if recursive {
                     self.out.push('N');
@@ -1462,6 +1521,10 @@ impl Mangler<'_, '_> {
                     return None;
                 };
                 self.symbol(s);
+                // A specialization is its template-id: `sr1BIiEE1f`.
+                if let Some((_, args)) = self.spec_of(d) {
+                    self.template_args(self.written_args(ty).unwrap_or(args));
+                }
                 Some(false)
             }
             _ => None,

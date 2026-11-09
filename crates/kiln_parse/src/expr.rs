@@ -1848,8 +1848,21 @@ impl Parser<'_, '_> {
             // An unqualified type name not followed by `(` or `{` is
             // not looked at as a type (clang only annotates it before
             // those), so the id-expression names a type.
+            // A pack-index-specifier `T...[i]` ([dcl.type.pack.index]) is
+            // part of the type: `T...[0]{}` is a functional cast.
+            let after = if end == self.pos() + 1
+                && self.peek_is(1, Punct::Ellipsis)
+                && self.peek_is(2, Punct::LSquare)
+            {
+                self.skip_balanced(end + 1).unwrap_or(end)
+            } else {
+                end
+            };
             if end == self.pos() + 1
-                && !matches!(Self::punct_of(self.tok_at(end)), Some(Punct::LParen | Punct::LBrace))
+                && !matches!(
+                    Self::punct_of(self.tok_at(after)),
+                    Some(Punct::LParen | Punct::LBrace)
+                )
             {
                 let text = self.s.ast.symbols().as_str(name).to_owned();
                 let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, loc).arg(text);

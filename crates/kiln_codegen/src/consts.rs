@@ -877,9 +877,7 @@ impl Cg<'_> {
             let n = self.ast.exprs.get(e);
             match n.kind() {
                 ExprKind::ParenExpr | ExprKind::ConstantExpr => e = self.ast.exprs.operand(e),
-                ExprKind::UnaryOperator
-                    if self.ast.exprs.unary_op(e) == UnaryOp::Extension =>
-                {
+                ExprKind::UnaryOperator if self.ast.exprs.unary_op(e) == UnaryOp::Extension => {
                     e = self.ast.exprs.operand(e);
                 }
                 ExprKind::ExprWithCleanups => e = ExprId::new(n.a()),
