@@ -1100,27 +1100,27 @@ impl Sema<'_, '_> {
     /// or instantiated) `sub` against a list. The nested function-type
     /// check (`CheckParamExceptionSpec`) is not done.
     pub(crate) fn override_exc_spec_lax(&self, sup: ExcSpec, sub: ExcSpec, computed: bool) -> bool {
-        let (sup_bound, sub_bound) = (exc_bound(sup), exc_bound(sub));
-        if sup_bound == ExcBound::Unknown || sub_bound == ExcBound::Unknown {
+        let (base_bound, over_bound) = (exc_bound(sup), exc_bound(sub));
+        if base_bound == ExcBound::Unknown || over_bound == ExcBound::Unknown {
             return false;
         }
         // kiln computes an implicit specification as non-throwing or
         // throwing anything, never as clang's union of type lists.
-        if computed && sup_bound == ExcBound::Listed {
+        if computed && base_bound == ExcBound::Listed {
             return false;
         }
-        if sup_bound == ExcBound::Any || sub_bound == ExcBound::Cannot {
+        if base_bound == ExcBound::Any || over_bound == ExcBound::Cannot {
             return false;
         }
-        if sub_bound == ExcBound::Any || sup_bound == ExcBound::Cannot {
+        if over_bound == ExcBound::Any || base_bound == ExcBound::Cannot {
             return true;
         }
-        let (ExcSpec::Dynamic(sup_list), ExcSpec::Dynamic(sub_list)) = (sup, sub) else {
+        let (ExcSpec::Dynamic(base_list), ExcSpec::Dynamic(over_list)) = (sup, sub) else {
             return false;
         };
         let t = &self.ast.types;
-        let handlers: Vec<QualType> = t.type_list_types(sup_list).to_vec();
-        let thrown: Vec<QualType> = t.type_list_types(sub_list).to_vec();
+        let handlers: Vec<QualType> = t.type_list_types(base_list).to_vec();
+        let thrown: Vec<QualType> = t.type_list_types(over_list).to_vec();
         let unknown = |q: &QualType| {
             self.is_dependent_type(*q) || t.canonical_kind(*q) == TypeKind::PackExpansion
         };

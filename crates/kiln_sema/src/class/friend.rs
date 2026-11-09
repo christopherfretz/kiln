@@ -72,6 +72,33 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [class.friend]/10: befriending a member function of another class
+    /// names it, so it must be accessible from the befriending class
+    /// (clang `CheckFriendAccess`, only for a qualified declaration that
+    /// redeclares a member of a class). A member of a dependent class is
+    /// checked in each instantiation (`TemplateDeclInstantiator`), as is
+    /// one only a befriended specialization may name.
+    fn friend_needs_access_check(&self, target: DeclId) -> bool {
+        self.ast.first(target) != target
+            && !self.ast.decls.get(target).has(kiln_ast::decl::DeclFlags::INVALID)
+            && self.inst.stack.is_empty()
+            && self.declaring_class(target).is_some_and(|c| !self.in_dependent_class(c))
+    }
+
+    /// [`Sema::declare_friend`]: true (after reporting it) if a friend
+    /// declarator's type is not a function type, or contains an
+    /// unexpanded pack ([temp.variadic]/12: `friend void f(Ts);`, which
+    /// clang reports at the declarator-id).
+    fn friend_fn_type_invalid(&mut self, ty: QualType, d: &Declarator) -> bool {
+        if !self.ast.types.is_function(ty) {
+            if !self.is_error_type(ty) {
+                self.error(DiagId::sema_friend_not_class_or_fn, d.name_loc());
+            }
+            return true;
+        }
+        self.diagnose_unexpanded_pack(PackOperand::Type(ty), "friend declaration", d.name_loc())
+    }
+
     /// [`Sema::act_on_friend`]: the befriended function or type, recorded
     /// in the class being defined (`RecordCold.friends` at `}`).
     pub(crate) fn declare_friend(
@@ -114,17 +141,7 @@ impl Sema<'_, '_> {
             self.error(DiagId::parse_expected_unqualified_id, d.loc);
             return None;
         };
-        if !self.ast.types.is_function(ty) {
-            self.templ.cur = None;
-            if !self.is_error_type(ty) {
-                self.error(DiagId::sema_friend_not_class_or_fn, d.name_loc());
-            }
-            return None;
-        }
-        // [temp.variadic]/12: `friend void f(Ts);` (clang reports it at
-        // the declarator-id).
-        if self.diagnose_unexpanded_pack(PackOperand::Type(ty), "friend declaration", d.name_loc())
-        {
+        if self.friend_fn_type_invalid(ty, d) {
             self.templ.cur = None;
             return None;
         }
@@ -193,21 +210,7 @@ impl Sema<'_, '_> {
             let _ = self.builder().attach_attrs(f, &attrs);
         }
         let target = self.finish_template_pattern(f).unwrap_or(f);
-        // [class.friend]/10: befriending a member function of another
-        // class names it, so it must be accessible here (clang
-        // `CheckFriendAccess`, only for a declaration that redeclares a
-        // member of a class it found through its qualifier).
-        if d.qualifier.is_some()
-            && !local
-            && self.ast.first(target) != target
-            && self.declaring_class(target).is_some()
-            && !self.ast.decls.get(target).has(kiln_ast::decl::DeclFlags::INVALID)
-            && self.inst.stack.is_empty()
-            && self.declaring_class(target).is_some_and(|c| !self.in_dependent_class(c))
-        {
-            // A member of a dependent class is checked in each
-            // instantiation (`TemplateDeclInstantiator`), as is one only
-            // a befriended specialization may name.
+        if d.qualifier.is_some() && !local && self.friend_needs_access_check(target) {
             self.check_friend_access(target, d.name_loc());
         }
         let fd = self.builder().friend(record, d.name_loc(), FriendTarget::Decl(target));

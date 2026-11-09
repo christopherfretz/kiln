@@ -1943,6 +1943,34 @@ impl Parser<'_, '_> {
         (keyword, scoped, scoped_loc)
     }
 
+    /// [`Self::parse_tag_specifier`]'s enum-key checks once the tag's use
+    /// is known: an elaborated-type-specifier uses `enum`, not
+    /// `enum class` ([dcl.type.elab]/1, clang `ext_elaborated_enum_class`),
+    /// and `friend enum E;` befriends nothing. Returns the scoped bits to
+    /// declare with: 0 when recovering as a plain `enum` reference (not
+    /// an opaque-enum-declaration).
+    fn enum_key_use(
+        &mut self,
+        (keyword, kw_loc): (TagKeyword, Loc),
+        (scoped, scoped_loc): (u32, Loc),
+        fixed: Option<QualType>,
+        use_: TagUse,
+    ) -> u32 {
+        let elaborated_scoped =
+            scoped != 0 && fixed.is_none() && matches!(use_, TagUse::Reference | TagUse::Friend);
+        if elaborated_scoped {
+            let e = self
+                .s
+                .diag(DiagId::sema_elaborated_enum_class, scoped_loc)
+                .arg(u8::from(scoped & EnumData::SCOPED_STRUCT != 0));
+            self.emit(e);
+        }
+        if keyword == TagKeyword::Enum && use_ == TagUse::Friend {
+            self.diag_friend_enum(kw_loc, scoped);
+        }
+        if elaborated_scoped { 0 } else { scoped }
+    }
+
     /// [dcl.type.elab]/4 (clang `warn_friend_enum`): `friend enum E;`
     /// befriends nothing; the note offers to drop the enum-key.
     fn diag_friend_enum(&mut self, kw_loc: Loc, scoped: u32) {
@@ -2022,20 +2050,7 @@ impl Parser<'_, '_> {
             final_loc = self.parse_class_virt_specifiers();
         }
         let use_ = self.tag_use(ds, is_class, final_loc, ctx);
-        let elaborated_scoped =
-            scoped != 0 && fixed.is_none() && matches!(use_, TagUse::Reference | TagUse::Friend);
-        if elaborated_scoped {
-            // [dcl.type.elab]/1: an elaborated-type-specifier uses `enum`,
-            // not `enum class` (clang `ext_elaborated_enum_class`).
-            let e = self
-                .s
-                .diag(DiagId::sema_elaborated_enum_class, scoped_loc)
-                .arg(u8::from(scoped & EnumData::SCOPED_STRUCT != 0));
-            self.emit(e);
-        }
-        if keyword == TagKeyword::Enum && use_ == TagUse::Friend {
-            self.diag_friend_enum(kw_loc, scoped);
-        }
+        let scoped = self.enum_key_use((keyword, kw_loc), (scoped, scoped_loc), fixed, use_);
         // [expr.prim.id.qual]/3: the nested-name-specifier of a
         // class-head-name or enum-head-name is declarative and cannot
         // contain a splice-scope-specifier; the definition declares
@@ -2075,9 +2090,6 @@ impl Parser<'_, '_> {
         // A definition after a failed qualifier is parsed as an unnamed
         // class, declaring nothing.
         let name = if qual_failed { None } else { name };
-        // Recovering as plain `enum`: a reference, not an
-        // opaque-enum-declaration.
-        let scoped = if elaborated_scoped { 0 } else { scoped };
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs, use_);
         if use_ == TagUse::Definition && self.s.tag_body_skipped(d) {

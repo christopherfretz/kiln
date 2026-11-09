@@ -461,6 +461,12 @@ against clang 19 and clang 22) and one follow-up row in
    `class.friend/friend-private-member.cpp`,
    `class.abstract/abstract-temporary-for-param.cpp`,
    `class.dtor/virtual-dtor-deleted-operator-delete.cpp`.
+   **Fixed in WP-1017** (spec/landed/sema/WP-1017.md): friend member
+   access, virtual base destructor access (also
+   `class.dtor/virtual-base-dtor-access.cpp`), a deleted `operator delete`
+   for a virtual destructor, and abstract temporaries (braced lists,
+   explicit conversions, by-value parameters of deduced specializations,
+   variables of specializations found abstract once instantiated).
 10. **Template declaration rules** (partial specialization not more
     specialized 30, not allowed in a conversion function template 47, CWG526
     non-deduced parenthesized NTTP, floating-point NTTP before C++20;
@@ -468,15 +474,38 @@ against clang 19 and clang 22) and one follow-up row in
     Repros: `temp.spec.partial.general/not-more-specialized.cpp`,
     `temp.deduct.type/parenthesized-nttp-non-deduced.cpp`,
     `temp.param/float-nttp-cxx17.cpp`.
+    **Fixed in WP-1017**, plus `class.conv.fct/conversion-template-deduced-type.cpp`
+    (CWG1878). Partial: constrained partial specializations and partial
+    specializations of member templates skip the more-specialized check,
+    and `F<T..., int>` is not diagnosed as non-deducible.
 11. **Lookup and type checks** (enum must use `enum` 31, elaborated enum
     friend 30, ambiguous qualified elaborated specifier, `alignas` of an
     incomplete type, differing user-defined-literal suffixes;
     [dcl.type.elab], [dcl.align]/3, [lex.ext]/8). Repros:
     `dcl.type.elab/ambiguous-qualified-elab.cpp`, `dcl.align/alignas-void.cpp`,
     `lex.ext/differing-ud-suffixes.cpp`.
+    **Fixed in WP-1017**, plus `dcl.type.elab/wrong-tag-kind.cpp`,
+    `dcl.type.elab/elaborated-enum-class.cpp` and `class.friend/friend-enum.cpp`.
+    Partial: members of a class template whose declaration fails at
+    instantiation are dropped without a diagnostic, so instantiation-time
+    wrong-tag errors are missed; a qualified ambiguity between plain types
+    lists its candidates in discovery order.
 12. **Exception specifications more lax than the base** (29;
-    [except.spec]/8). No reduced repro yet (the clang tests need several
-    hierarchies at once).
+    [except.spec]/8). Repros: `class.virtual/exception-spec-dynamic.cpp`,
+    `class.virtual/exception-spec-dynamic-pack-nested.cpp`. **Fixed in
+    WP-1017**: dynamic `throw(T...)` lists are compared type by type with
+    [except.handle]/3 matching, in clang's order. Partial: an implicit
+    member whose computed specification is a type list is not compared
+    with the base, dependent lists in a template definition wait for
+    instantiation, and the nested function-type rule for parameters is not
+    checked.
+    Full run after WP-1017 (main merged, so WP-958 and WP-962 count too):
+    accepts-invalid 89 to 84 of 1250 files (7.1% to 6.7%), 110 to 104 of
+    1946 cases (5.7% to 5.3%); missed errors 4930 to 4624 of 28065 lines
+    (17.6% to 16.5%); rejects-valid 47 to 28 cases (the driver now skips
+    83 cases with unknown clang flags, so 418 no-diagnostics cases instead
+    of 433); no new accepts-invalid or rejects-valid case. The generated
+    region above is from the earlier run.
 13. **Extension diagnostics under `-pedantic-errors`** (missing `typename`
     as a C++20 extension 52, variadic templates as a C++11 extension 26 and
     similar). kiln does not emit the extension warnings that these tests
@@ -562,8 +591,8 @@ forever (the two former timeouts); kiln now treats the cycle as
 unsatisfied ([temp.constr.atomic]/3) and the case finishes. Pinned by
 `temp.constr.atomic/self-dependent-constraint.cpp`. clang's "satisfaction of
 constraint depends on itself" is a hard error even inside overload
-resolution; kiln's diagnostic for the cycle is still swallowed there as a
-substitution failure (part of cluster 10's row).
+resolution. Fixed in WP-1017: kiln's diagnostic for the cycle is a hard
+error inside SFINAE as well.
 
 ### Not kiln defects
 
