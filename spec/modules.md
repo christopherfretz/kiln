@@ -59,8 +59,9 @@ Module sources are found in this order (spec/driver.md, "Modules"):
    directory `-stdlib=libc++` resolved to (spec/driver.md; symlinks
    resolved, so Debian's `/usr/include/c++/v1` yields
    `/usr/lib/llvm-19/share/libc++/v1`); when no `share/libc++/v1` sits
-   beside those headers, `<llvm>/share/libc++/v1` of `KILN_LLVM_DIR`
-   (default `/usr/lib/llvm-19`; the llvm-22 layout is the same).
+   beside those headers, `<llvm>/share/libc++/v1` of the selected LLVM
+   installation (spec/driver.md "LLVM discovery"; the llvm-19 and llvm-22
+   layouts are the same).
 
 A module that is not found is `fatal error: module 'M' not found`. A file
 that cannot be read is the include "file not found" error.

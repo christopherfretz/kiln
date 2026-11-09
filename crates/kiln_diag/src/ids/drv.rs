@@ -26,6 +26,13 @@ drv_invalid_stdlib_name = Error (1) "invalid library name in argument '{0}'";
 drv_invalid_value = Error (2) "invalid value '{1}' in '{0}'";
 drv_language_not_recognized = Error (1) "language not recognized: '{0}'";
 drv_linker_input_unused = Warning [UnusedCommandLineArgument] (1) "{0}: 'linker' input unused";
+// WP-1016: LLVM discovery (spec/driver.md "LLVM discovery").
+drv_llvm_dir_invalid = Error (3) "'{0}' (from {1}) is not a usable LLVM installation: {2}";
+drv_llvm_install_hint = Note (1) "install LLVM {0} with clang (docs/COMPATIBILITY.md \"Runtime dependencies\"), or name an installation with --llvm-dir=<dir> or KILN_LLVM_DIR";
+drv_llvm_not_found = Error (1) "no supported LLVM installation found (kiln supports LLVM {0})";
+drv_llvm_not_on_path = Note (1) "not found on PATH: {0}";
+drv_llvm_tried = Note (2) "skipped '{0}': {1}";
+drv_llvm_unsupported = Error (4) "unsupported LLVM major {0} at '{1}' (from {2}); kiln supports LLVM {3}";
 // WP-920: `-MG` lists missing headers only for `-M`/`-MM`.
 drv_mg_requires_m_or_mm = Error (0) "option '-MG' requires '-M' or '-MM'";
 drv_missing_argument = Error (2) "argument to '{0}' is missing (expected {1} value)";

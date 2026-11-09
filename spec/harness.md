@@ -235,7 +235,11 @@ and, when it is kiln, `KILN_LLVM_DIR=/usr/lib/llvm-N`; the oracle is
 `clang++-N` with the same flags (an explicit `--oracle` replaces the
 compiler, not N: kiln still gets release N's directory). Clang ignores
 `KILN_LLVM_DIR`, so a clang under test or a clang oracle runs as before.
-kiln_driver's own default (no `KILN_LLVM_DIR`) is still `/usr/lib/llvm-19`.
+kiln_driver's own default (no `KILN_LLVM_DIR`) is the discovered
+installation, LLVM 22 when installed (spec/driver.md "LLVM discovery",
+WP-1016), so the harness's export only matters for oracle 19, and a
+crate test that compares kiln with clang 19's IR or objects names
+`--llvm-dir=/usr/lib/llvm-19` itself (`ir_vs_clang`'s `KILN_LLVM_DIR`).
 `requires: clang>=N` compares with the oracle's `--version`, so it follows
 the release without further configuration.
 
@@ -1103,7 +1107,7 @@ on `KILN_ORACLE` (today `kiln_codegen`'s `ir_vs_clang`); steps 2–4 are as
 above. Everything else in the workspace either pins clang 19 itself or
 uses no oracle, so it already ran, with the same result, in the
 default-oracle pass: the crates' tests name `clang++-19` and
-`/usr/lib/llvm-19`, and the harness's own end-to-end tests
+`/usr/lib/llvm-19` (kiln's backend through `--llvm-dir=`), and the harness's own end-to-end tests
 (`xtask/src/test/tests.rs` `clang_opts`) pin release 19 as compiler,
 oracle and toolchain (`Options::toolchain`, so `requires: llvm` does not
 follow `KILN_ORACLE` there either). A test target that reads `KILN_ORACLE` must be
