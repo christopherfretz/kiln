@@ -434,12 +434,11 @@ cost of including every standard header once; link and run are instant, so
 neither libc++ test needs the long run limit (`slow_tests.txt` governs only
 the run step, spec/libcxx.md). libc++'s own modules tests (`std/modules/`,
 `libcxx/selftest/modules/`, 6 tests) went from 6 UNSUPPORTED to 2 PASS
-and 4 UNSUPPORTED. The 4 are `.sh.cpp` self-tests of lit's module plumbing:
-`libcxx/lit.local.cfg` (a `%{python}` substitution) makes the whole
-`libcxx/` subtree `driver: lit.local.cfg`, and behind that their RUN lines
-grep `%{compile_flags}` for the `-fmodule-file=std=%T/std.pcm %T/std.pcm`
-that libc++'s `format.py` adds after a `--precompile` step, which needs
-part B (§9).
+and 4 UNSUPPORTED, and since WP-984 all 6 PASS: the 4 `.sh.cpp`
+self-tests of lit's module plumbing grep `%{compile_flags}` for the
+`-fmodule-file=std=%T/std.pcm %T/std.pcm` that libc++'s `format.py` adds
+after its `--precompile` step, which the libc++ driver now reproduces
+(spec/libcxx.md "RUN lines"; under clang++-22 too).
 
 ## 9. Part B hooks
 
@@ -916,16 +915,11 @@ built through `FILE_SET CXX_MODULES` with Ninja and `kiln++` as the
 compiler; the program runs, the scanner CMake found must be kiln's link,
 and touching the interface recompiles it, the implementation unit and the
 consumer but not the partition. `import std;` through CMake
-(`CXX_MODULE_STD`) is WP-984.
+(`CXX_MODULE_STD`) is §11.11.
 
 ### 11.10 Step 2 (follow-up work packages)
 
-- **`import std;` module file.** `kiln++ --precompile -std=c++23
-  <llvm>/share/libc++/v1/std.cppm -o std.pcm` already works through this
-  section's driver; step 2 adds the toolchain-level cache (where a build
-  system or `-fmodules` finds a prebuilt `std.pcm`, keyed by fingerprint),
-  CMake's `CXX_MODULE_STD` support, and the libc++ `format.py`
-  self-tests (§8).
+- **`import std;` module file.** Landed as §11.11 (WP-984).
 - **Header units as files.** `-fmodule-header[=user|system]` writes a
   capsule of kind "header unit" (its exported macros are those of its
   replay, §3), `-fmodule-file=<hdr.pcm>` imports it, and `import "h";`
@@ -937,6 +931,132 @@ consumer but not the partition. `import std;` through CMake
   values, consteval results, template instantiations with their oven
   costs), so importers do not redo compile-time work: kiln's main reason
   to build it.
+
+### 11.11 `import std;` module files: the cache and CMake (WP-984)
+
+`import std;` and `import std.compat;` worked from the start (§8): with
+nothing on the command line naming the module, kiln builds libc++'s
+`std.cppm` in-process. WP-984 gives that path a module file. It is the
+same file `kiln++ --precompile std.cppm` writes, cached per toolchain
+configuration. The two-step and build-system routes are also covered:
+`-fmodule-file=std=` with a kiln-built `std.pcm`, and CMake's
+`CXX_MODULE_STD`.
+
+**Where the cache applies.** Only at lookup step 4 (spec/driver.md
+"Modules"): `std` or `std.compat` not supplied by `-fmodule-file=`, a
+prebuilt path or a replayed module file. `kiln_pp` asks the hook
+`ModuleOptions::std_cache` (`StdModuleCache`, a closure the driver
+builds in `module_cache::for_job`) with the module's name and libc++
+source. A returned path is imported as a module file; `None` means
+building from source, unchanged (part A). A module file records the
+source path of `std` it imports, never the cache path. So an importer of
+a cached `std.compat` looks `std` up in the cache again and does not
+depend on where an earlier compile put it. The cache is off during
+dependency scanning, which imports nothing.
+
+**Key.** The entry directory is a 128-bit hash, as 32 hex digits. It is
+two FNV-1a-64 variants, and it covers everything that decides the
+module file's bytes:
+
+- kiln's identity: version, commit, and the executable's path, size and
+  mtime, so a rebuilt kiln never reads an older one's files;
+- the §11.4 fingerprint pairs;
+- the predefines text (every `-D`, `-U`, `-include` and target macro);
+- the header search list (the `-v` text);
+- the libc++ module directory and the bytes of `std.cppm` and
+  `std.compat.cppm`.
+
+Every write ends with a separator, and the variable-length fields are
+length-prefixed, so no two configurations collide by concatenation.
+`-std=` and `-fno-exceptions` change the key through the fingerprint.
+`-O` changes it through the predefines (`__OPTIMIZE__`), so `-O0` and
+`-O2` builds have separate entries. `-g`, `-fPIC` and warnings do not
+change it.
+
+**Stamp.** Beside `<name>.pcm`, `<name>.stamp` holds a magic line, the
+module file's name, and one `<size> <mtime> <path>` line for every file
+the build read. These are the dependency list of an `-MD` with system
+headers, plus the source. A hit needs the stamp valid, every file
+unchanged, and the module file's first bytes kiln's magic. So a libc++
+header edited in place, or a damaged module file, is a miss. This is
+clang's module-cache validation (size and mtime, not content).
+
+**Miss.** The driver runs `--precompile` of the libc++ source in-process
+on its own thread, with the importer's stack size and stack guard. The
+nested job copies the importer's arguments and changes only these:
+
+- the action becomes `--precompile`, writing to `<name>.pcm` in the
+  entry;
+- inputs, module files and prebuilt paths are cleared;
+- dependency output, `-verify`, dumps, statistics and `-v` are off.
+
+`std.compat` imports `std` through the same hook, so the first
+`import std.compat;` fills both entries. Diagnostics of the nested
+build go to a buffer. A build with errors removes its empty entry and
+falls back to part A, which reports the module's errors in the
+importer's context, as before WP-984.
+
+**Concurrency.** The module file goes to a unique temporary file
+(`.tmp.<pid>.<thread>.<nanos>`) and is renamed into place, then the
+stamp the same way. A reader reads the stamp first and the module file
+second, so it never sees a torn file. Compiles that miss together all
+build, all rename, and all succeed. The builds are deterministic, so
+any of the files is right. No lock is taken, so a stuck compile cannot
+block others.
+
+**Fallback.** An unwritable root (a read-only directory, a path through
+a regular file), a failed build, or a failed stamp write is never an
+error. The compile builds the module in-process (part A) and says so in
+one `-v` line (spec/driver.md "Module cache").
+
+**Cost** (aarch64, `harness` profile, `/usr/bin/time -v`, median of
+three). The program is `import std;` plus a `main` using `vector`,
+`accumulate` and `println`, compiled with `-std=c++23 -stdlib=libc++ -c`:
+
+| route | wall | peak RSS |
+|---|---|---|
+| cold cache (builds `std.pcm`, 8.6 MiB, then imports it) | 2.45 s | 139 MB |
+| warm cache | 1.49 s | 98 MB |
+| part A (`-fno-kiln-module-cache`) | 1.52 s | 95 MB |
+| kiln two-step: `--precompile std.cppm` / importer `-c` | 1.02 s / 1.49 s | 102 / 98 MB |
+| clang++-22 two-step: `--precompile std.cppm` / importer `-c` | 1.62 s / 0.47 s | 302 / 178 MB |
+
+A warm hit costs what part A costs, because a source capsule is replayed
+(§11.8). The cache becomes a speed-up with the serialised-AST format
+(kind 2, §11.10), which the cache stores unchanged since it stores
+whatever `--precompile` writes. Its value today is the build-system
+surface: one `std.pcm` per configuration, and the hook kind 2 needs.
+
+**CMake.** `CXX_MODULE_STD` (CMake 3.30+) reads
+`<compiler> -print-file-name=libc++.modules.json`. kiln answers with the
+manifest of the libc++ that `-stdlib=libc++` selects. It takes
+`<prefix>/include/c++/v1`, then looks for
+`<prefix>/lib/<triple>/libc++.modules.json`, then
+`<prefix>/lib/libc++.modules.json`. libc++ 19 here is
+`/usr/lib/llvm-19/lib/libc++.modules.json`, whose `source-path` entries
+are relative to it (`../share/libc++/v1/std.cppm`). CMake then builds
+`std.cppm` as a module of a synthesized target, scanned by
+`kiln-scan-deps` and compiled by kiln like any other interface.
+
+Three things are needed:
+
+- CMake's experimental gate, set before `project()`, a per-release UUID:
+  - 3.30 and 3.31: `0e5b6991-d74f-4b3d-a41c-cf096e0b2508`
+  - 4.0: `a9e1cf81-9932-4810-974b-6eccaf14e457`
+  - 4.1 and 4.2: `d0edc3af-4c50-42ea-a356-e2862fe7a444`
+- `-stdlib=libc++`;
+- `CXX_STANDARD 23` or later.
+
+Tested with CMake 3.31.6 and Ninja 1.12.1:
+`scripts/oss/fixtures/modules` `stdapp` runs, and touching the
+interface or `stdapp`'s source never rebuilds the std module.
+
+**Not done.**
+
+- No eviction: dead entries stay until removed by hand. Each entry is
+  about 9 MiB, and every kiln rebuild changes the key.
+- `-MD` on a hit still lists the libc++ headers the module read, as
+  part A does. This is correct for make, and a capsule replays them.
 
 ## Tests
 
@@ -966,7 +1086,27 @@ consumer but not the partition. `import std;` through CMake
 - `module.import/header-unit*.cpp`: header units (macros visible).
 - `module.import/import-std-{vector,format,ranges,compat,hidden}.cpp`:
   `import std;` / `import std.compat;` under C++20, 23 and 26
-  (self-checking `run` tests; `skip(clang)` for the same reason).
+  (self-checking `run` tests). Since WP-984, all but `vector` name
+  libc++'s sources with `module: std=%{libcxx_modules}/std.cppm` (and
+  `std.compat`), so they run two-step under clang too (spec/harness.md
+  "Modules"). `vector` stays the test of kiln's implicit lookup (§11.11)
+  and is `skip(clang)`.
+- `module.import/import-std-two-step.cpp` (WP-984): `import std;` with
+  `std.pcm` built by a separate `--precompile`, under kiln and clang 22.
+- `crates/kiln_driver/tests/module_cache.rs` (WP-984): the cache of
+  §11.11 against a miniature libc++ sysroot. It covers:
+  - a miss then a hit;
+  - `std.compat` filling both entries;
+  - invalidation by a header edit, a damaged module file, a new
+    `std.cppm`, `-D` and `-fno-exceptions`;
+  - four racing misses;
+  - an unwritable root;
+  - location and switches;
+  - `-print-file-name=libc++.modules.json`.
+- `scripts/oss/selftest.sh` `cmake_modules`: `CXX_MODULE_STD` through
+  CMake (§11.11).
+- libc++'s `libcxx/selftest/modules/*.sh.cpp`: `format.py`'s module
+  build (§8).
 - `module.import/import-identifier*.cpp`, `import-not-found.cpp`,
   `import-order.cpp`: [cpp.pre] tokenisation and import rules.
 - `tests/mangle/modules.cpp`, `module_partition.cpp`: `_ZW` names,

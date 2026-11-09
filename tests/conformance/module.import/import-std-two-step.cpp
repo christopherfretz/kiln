@@ -1,4 +1,4 @@
-// [std.modules], [module.import] (spec/modules.md §11.10): the two-step
+// [std.modules], [module.import] (spec/modules.md §11.11): the two-step
 // build of `import std;`. libc++'s std.cppm is precompiled to a module
 // file (and its object), then the importer reads that file through
 // `-fmodule-file=std=` and links the object; the same commands drive kiln

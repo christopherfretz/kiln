@@ -45,13 +45,13 @@ pub struct ModuleOptions {
     /// and no import is performed; a header-unit import is an error.
     pub scan: bool,
     /// The toolchain's module-file cache for libc++'s `std` and
-    /// `std.compat` (spec/modules.md §11.10): asked wherever one of them
+    /// `std.compat` (spec/modules.md §11.11): asked wherever one of them
     /// would otherwise be built from its source in `std_dir`.
     pub std_cache: Option<StdModuleCache>,
 }
 
 /// A lookup in the toolchain's module-file cache (spec/modules.md
-/// §11.10): given `std` or `std.compat` and its libc++ source, the module
+/// §11.11): given `std` or `std.compat` and its libc++ source, the module
 /// file to read instead (built and stored on a miss), or `None` to build
 /// the unit from its source in-process (part A).
 #[derive(Clone)]
@@ -563,7 +563,7 @@ impl Preprocessor<'_, '_> {
 
     /// The module file the toolchain cache gives for `std` or
     /// `std.compat` when `path` is libc++'s own source of it
-    /// (spec/modules.md §11.10), else `path`. `std.compat` imports `std`,
+    /// (spec/modules.md §11.11), else `path`. `std.compat` imports `std`,
     /// so it is taken from the cache only when `std` is libc++'s too.
     fn cached_std(&self, key: &str, path: PathBuf) -> PathBuf {
         let Some(m) = &self.modules else { return path };
@@ -590,7 +590,7 @@ impl Preprocessor<'_, '_> {
             return;
         };
         // A module file records the path it found, never the cache's: an
-        // importer of it looks the cache up again (§11.10).
+        // importer of it looks the cache up again (§11.11).
         if self.unit_ctx() == Ctx::Main
             && let Some(rec) = self.modules.as_mut().and_then(|m| m.record.as_mut())
             && !rec.imports.iter().any(|(k, _)| k == key)

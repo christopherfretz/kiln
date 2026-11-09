@@ -1,5 +1,5 @@
 //! WP-984: the toolchain's module-file cache for `import std;` and
-//! `import std.compat;` (spec/modules.md §11.10, spec/driver.md "Module
+//! `import std.compat;` (spec/modules.md §11.11, spec/driver.md "Module
 //! cache") end to end through `kiln++`: a miss builds and stores, a hit
 //! reuses, a changed input rebuilds, compiles racing on a miss all
 //! succeed, an unwritable cache falls back to the in-process build, and

@@ -64,11 +64,6 @@ Ninja) through `kiln-scan-deps`. What is missing (spec/modules.md
   ([WP-983](BACKLOG.md)). Header units work from their headers in a
   direct compile, but the scanner rejects `import "h";` and
   `import <h>;`, so a CMake build cannot use them.
-- **`import std;` through CMake** (`CXX_MODULE_STD`) and an `import std;`
-  module-file cache ([WP-984](BACKLOG.md)). Outside CMake, `import std;`
-  compiles libc++'s `std.cppm` in every importing translation unit unless
-  you precompile it yourself (`--precompile std.cppm`, then
-  `-fmodule-file=std=std.pcm`, and link `std.o`).
 - **Module files hold sources, not a serialised AST**, so an importer
   re-parses the module's text. Importing libc++'s `std` module file costs
   about what compiling `std.cppm` in-process costs

@@ -1,5 +1,5 @@
 //! The toolchain's module-file cache for libc++'s `std` and `std.compat`
-//! (spec/modules.md §11.10, spec/driver.md "Module cache").
+//! (spec/modules.md §11.11, spec/driver.md "Module cache").
 //!
 //! When a translation unit imports `std` or `std.compat` and nothing on
 //! the command line supplies it, the preprocessor asks this cache

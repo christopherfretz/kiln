@@ -343,7 +343,7 @@ impl Job<'_> {
         let a = self.args;
         let PpInputs { list, main, predefines } = inputs;
         // The module cache's key takes the predefines and the search list
-        // (spec/modules.md §11.10); `-E`/`-M` import nothing.
+        // (spec/modules.md §11.11); `-E`/`-M` import nothing.
         let cache_key = staged.then(|| (predefines.clone(), list.verbose_text()));
         let mut search = HeaderSearch::new(RealFs, list).with_embed_dirs(a.embed_dirs.clone());
         let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));

@@ -494,7 +494,7 @@ pub struct Args {
     pub prebuilt_module_paths: Vec<String>,
     /// `-fmodules-cache-path=<dir>` (the last one): the toolchain's
     /// module-file cache for `std` and `std.compat` (spec/modules.md
-    /// §11.10, spec/driver.md "Module cache"); an empty value disables it.
+    /// §11.11, spec/driver.md "Module cache"); an empty value disables it.
     pub modules_cache_path: Option<String>,
     /// `-fno-kiln-module-cache` (false) / `-fkiln-module-cache` (true), the
     /// last one: whether `import std;` uses the module-file cache.
