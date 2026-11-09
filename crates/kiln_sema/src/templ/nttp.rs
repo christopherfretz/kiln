@@ -55,6 +55,15 @@ impl Sema<'_, '_> {
             self.emit(here(d));
             return false;
         }
+        let pre20 = self.std < kiln_lex::Std::Cxx20;
+        // [temp.param]/4 (C++17): a floating-point type is structural
+        // only from C++20 on (clang `err_template_nontype_parm_bad_
+        // structural_type`).
+        if pre20 && t.is_floating(ty) {
+            let d = self.diag(DiagId::sema_nttp_bad_type_before_cxx20, loc).arg(self.ty_arg(ty));
+            self.emit(here(d));
+            return false;
+        }
         let Some(r) = t.as_record(ty) else { return true };
         // clang `RequireStructuralType`: the type must be complete
         // ([temp.param]/6 via [basic.types.general]/5), in every language
@@ -69,6 +78,19 @@ impl Sema<'_, '_> {
         let bits = self.record_bits(def);
         if !bits.contains(DefinitionBits::COMPLETE) {
             return true;
+        }
+        // Before C++20 no class type is allowed: a structural one "before
+        // C++20", any other plainly (clang `RequireStructuralType`'s
+        // `err_template_nontype_parm_bad_type`).
+        if pre20 {
+            let id = if bits.contains(DefinitionBits::LITERAL) && self.is_structural(ty) {
+                DiagId::sema_nttp_bad_type_before_cxx20
+            } else {
+                DiagId::sema_nttp_bad_type
+            };
+            let d = self.diag(id, loc).arg(self.ty_arg(ty));
+            self.emit(here(d));
+            return false;
         }
         if !bits.contains(DefinitionBits::LITERAL) {
             let d = self.diag(DiagId::sema_nttp_non_literal, loc).arg(self.ty_arg(ty));
