@@ -1753,6 +1753,21 @@ and returns the scope it names:
     latest in its chain; clang `isThisDeclarationReferenced`). An
     elaborated-type-specifier that finds a tag (`struct N *a`) marks
     nothing (clang `ActOnTag`).
+  - A tag defined in a parameter type ([dcl.fct]/17: a function or
+    lambda parameter, a requires-expression parameter) is "'S' cannot be
+    defined in a parameter type" at its name, or "(null) cannot be
+    defined…" at the keyword of an unnamed one (clang streams the empty
+    name), and the declaration specifiers are invalid, so the parameter,
+    and with it the function, is invalid: no follow-on "out-of-line
+    definition does not match" for a member or a constructor. The parser
+    reports it after the tag's definition (`diag_type_defined_in_param`,
+    for `DeclaratorContext::Prototype` except a non-type template
+    parameter, whose "cannot be defined in a type specifier" is WP-946's).
+    The tag itself is declared in the current context, except that a
+    complete class's member list is frozen (spec/ast.md §2.4): in the
+    parameter clause of an out-of-line member definition it goes to the
+    nearest enclosing context that is not a complete class (`tag_home`). Tests:
+    `tests/conformance/dcl.fct/type-defined-in-{parameter,parameter-kinds,member-parameter-crash}.cpp`.
 - **Enumerations** ([dcl.enum]):
   - enumerators are typed as clang types them
   - a fixed underlying type gets converted-constant-expression checks
@@ -4423,7 +4438,11 @@ headers use, `__builtin_ia32_pause` (WP-610), and the header builtins
 declared only when the target is x86-64 (`lazily_create_builtin` /
 `is_builtin_name` / `recognize_builtin_decl` via `target_has_builtin`),
 an undeclared identifier (or, for a header builtin, an ordinary
-function) elsewhere.
+function) elsewhere. WP-961: clang's plain `__rdtsc` (`BUILTIN(__rdtsc,
+"UOi", "")`, the target of <ia32intrin.h>'s `_rdtsc()` macro) is an
+alias of the `__builtin_ia32_rdtsc` row (`builtin::by_name`): declared
+under its own name, the same signature, gating and codegen
+(`target.x86/rdtsc-ir.cpp`, `rdtsc-not-aarch64.cpp`).
 - **Declaration:** when an unqualified id-expression's lookup finds
   nothing and the name is a builtin (`lazily_create_builtin`), Sema
   declares it in the translation unit: an implicit `LinkageSpecDecl`
@@ -7313,7 +7332,19 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     `?:` as in `enable_if` conditions); a known `if` condition picks the
     branch, a loop with an absent or known-true condition has its first
     iteration walked, and the walk stops at an unknown condition, a
-    `switch`, a `try`, a label or a `return`.
+    `switch`, a `try`, a label or a `return`;
+  - the callee of a direct call (a decayed reference to a function, in a
+    `CallExpr` or `CXXOperatorCallExpr`) is not evaluated as a value:
+    naming a builtin or a consteval function there is no failure, only
+    the arguments (and a member call's object) are walked (WP-962);
+  - conservative on builtins (WP-962): a failure in a call of a builtin
+    is reportable only for the builtin table's `Oven::No` rows (each
+    checked against clang 19's `__has_constexpr_builtin`: clang's
+    evaluator rejects them as "subexpression not valid in a constant
+    expression"); any other builtin, in the table or not, is opaque: a
+    subexpression calling one that fails is taken apart and the call
+    itself is unknown. A failure noted as a kiln limitation (`kiln: ...
+    not supported yet`) is never reported.
   Kiln never reports a function clang accepts; it misses some clang
   reports because clang tracks local variables (`int z = 0; if (z)
   ...`) and keeps evaluating past a quiet nested call (WP-873
@@ -7327,7 +7358,11 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `dcl.constexpr/never-constant-overflow-cxx{20,23,26}.cpp`,
   `dcl.constexpr/never-constant-body-cxx{20,23}.cpp`,
   `dcl.constexpr/never-constant-default-cxx23.cpp`,
-  `dcl.constexpr/never-constant-no-error-cxx20.cpp`.
+  `dcl.constexpr/never-constant-no-error-cxx20.cpp`,
+  `dcl.constexpr/potential-constant-builtin-{fabs,strcmp,not-constexpr}.cpp`,
+  `dcl.constexpr/potential-constant-builtins-spread.cpp`,
+  `dcl.constexpr/potential-constant-consteval-operator-template.cpp`,
+  `dcl.constexpr/never-constant-direct-callee-cxx20.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
@@ -7645,6 +7680,13 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     (`S a(1);`) is rejected at instantiation ("array initializer must
     be an initializer list or string literal", with no location); GCC
     16.1 accepts it.
+- **`std::initializer_list<E>` from a list** (`std_initializer_list_init`,
+  [dcl.init.list]/3.6, /5): a `CXXStdInitializerListExpr` over the
+  materialized backing array `const E[N]`. An empty list takes this path
+  only when the specialization has no default constructor (CWG1070; with
+  one, /3.5 value-initializes it first, as clang does): the backing array
+  is `const E[0]` and `size()` is 0 in a run and in a constant expression.
+  Tests: `tests/conformance/dcl.init.list/empty-initializer-list-no-default-ctor{,-run}.cpp`.
 - **References** (`reference_list_init`, [dcl.init.list]/3.10): when
   the single element is not reference-related, a temporary of the
   referenced type is list-initialized with the reference's own kind

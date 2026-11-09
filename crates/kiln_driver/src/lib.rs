@@ -9,9 +9,12 @@
 #![forbid(unsafe_code)]
 
 pub mod args;
+mod cdb;
 pub mod codegen_cmd;
 pub mod codegen_flags;
 pub mod constexpr_opts;
+pub mod coverage_flags;
+pub mod crash;
 pub mod debug_flags;
 pub mod deps;
 pub mod features;
@@ -33,7 +36,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, Format, JsonSink, TextSink};
 use kiln_source::{SourceManager, Span};
 
-use crate::args::{Action, ArgError, Args, Lang};
+use crate::args::{Action, ArgError, Args, Lang, LinkOptKind};
 use crate::pp_cmd::{Job, JobResult};
 use crate::syntax_cmd::SyntaxJob;
 use crate::toolchain::{GccSearch, LangStd, Target, Toolchain};
@@ -118,12 +121,12 @@ kiln++ compiles every input as C++. kiln picks by extension: .c, .h and
 .i are C (preprocessing only so far), everything else is C++. -x <lang>
 overrides both.
 
-Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
+Implemented: -E -P -C -CC -dM -dD -dI -o -x -std= -D -U -I -isystem -iquote
 -idirafter -cxx-isystem -nostdinc -nostdinc++ -nostdlibinc -nobuiltininc
 -isysroot --sysroot -resource-dir -stdlib= -f[no-]experimental-library
 --gcc-toolchain= --gcc-install-dir=
 --target= -march= -mcpu= -target-feature --embed-dir= -M -MM
--MD -MMD -MF -MT -MQ -MP -W... -w -pedantic -ferror-limit=
+-MD -MMD -MF -MT -MQ -MP -MG -MJ -W... -w -pedantic -ferror-limit=
 -fdiagnostics-format= -f[no-]color-diagnostics -fkiln-reproducible-time
 -fkiln-source-path-style=<clang|gcc> -fkiln-reflection-mangling=<kiln|gcc>
 -fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -verify[=<prefixes>]
@@ -134,7 +137,9 @@ Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -fkiln-cfg-stats -fkiln-cfg-max-elems= -fkiln-outline-expansions=
 -fkiln-memory-report -c -S -emit-llvm
 -O<n> -g (ignored) -l -L -Wl, -fuse-ld= -static -nostdlib -shared -rdynamic -pie -no-pie -pthread -###
--v --version.
+-f[no-]reflection -v --version -dumpversion -dumpmachine -print-search-dirs
+-print-libgcc-file-name -print-file-name= -print-prog-name=
+-print-target-triple -print-multiarch -print-sysroot -print-resource-dir.
 See spec/driver.md.
 ";
 
@@ -191,6 +196,9 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         ArgError::InvalidArgumentToOption(v, o) => {
             Diag::new(DiagId::drv_invalid_argument_to_option, Span::INVALID).arg(v).arg(o)
         }
+        ArgError::OnlyAllowedWith(a, b) => {
+            Diag::new(DiagId::drv_argument_only_allowed_with, Span::INVALID).arg(a).arg(b)
+        }
         ArgError::NotAllowedWith(a, b) => {
             Diag::new(DiagId::drv_argument_not_allowed_with, Span::INVALID).arg(a).arg(b)
         }
@@ -202,6 +210,80 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
     d.emit(engine);
 }
 
+/// clang's `HandleImmediateArgs`: a toolchain probe prints its answer
+/// and stops, whatever else is given; the first in clang's order wins
+/// (spec/driver.md "Toolchain probes"). `None` when no probe was given.
+fn immediate(args: &Args, tc: &Toolchain, io: &mut Io, drv: &DiagEngine<'_>) -> Option<i32> {
+    let p = &args.probe;
+    if !p.any() && !args.print_resource_dir {
+        return None;
+    }
+    let mut line = |s: &str| {
+        let _ = writeln!(io.stdout, "{s}");
+        let _ = io.stdout.flush();
+        Some(0)
+    };
+    if p.dumpmachine {
+        return line(tc.target.triple);
+    }
+    if p.dumpversion {
+        // The clang compatibility version, as `__clang_major__` says:
+        // probes compare it with clang/GCC thresholds.
+        return line(args.predef.clang_compat.version());
+    }
+    if p.search_dirs {
+        return Some(delegate(args, tc, io, drv, &["-print-search-dirs".to_owned()]));
+    }
+    if args.print_resource_dir {
+        return line(&tc.resource_dir);
+    }
+    if let Some(name) = &p.file_name {
+        // kiln's own resource directory first (`include`, ...), then
+        // what the linking clang++ finds (`libc.so`, `crtbegin.o`).
+        let own = std::path::Path::new(&tc.resource_dir).join(name);
+        if !name.is_empty() && own.exists() {
+            return line(&own.display().to_string());
+        }
+        return Some(delegate(args, tc, io, drv, &[format!("-print-file-name={name}")]));
+    }
+    if let Some(name) = &p.prog_name {
+        return Some(delegate(args, tc, io, drv, &[format!("-print-prog-name={name}")]));
+    }
+    if p.libgcc_file_name {
+        return Some(delegate(args, tc, io, drv, &["-print-libgcc-file-name".to_owned()]));
+    }
+    if p.target_triple {
+        return line(tc.target.triple);
+    }
+    if p.multiarch {
+        return line(tc.target.multiarch);
+    }
+    // `-print-sysroot` (GCC's): the `--sysroot`, else an empty line.
+    line(args.sysroot.as_deref().unwrap_or(""))
+}
+
+/// Asks the linking clang++ (with the toolchain flags a link passes it)
+/// and relays its answer: the honest one for the libraries and programs
+/// a kiln link uses.
+fn delegate(
+    args: &Args,
+    tc: &Toolchain,
+    io: &mut Io,
+    drv: &DiagEngine<'_>,
+    probe: &[String],
+) -> i32 {
+    let mut cmd = link::Command::new(tc, toolchain::Tool::Linker);
+    for a in codegen_cmd::toolchain_link_args(args, tc) {
+        cmd.arg(a);
+    }
+    for a in probe {
+        cmd.arg(a.clone());
+    }
+    let ok = cmd.run(None, &mut io.stdout, &io.stderr, drv);
+    drv.flush();
+    i32::from(!ok)
+}
+
 pub(crate) fn print_version(w: &mut dyn Write, tc: &Toolchain, verbose: bool) {
     let dir = std::env::current_exe()
         .ok()
@@ -211,7 +293,7 @@ pub(crate) fn print_version(w: &mut dyn Write, tc: &Toolchain, verbose: bool) {
         w,
         "kiln version {} (C++26 frontend, LLVM IR backend)\nTarget: {}\nThread model: posix\n\
          InstalledDir: {dir}\n",
-        env!("CARGO_PKG_VERSION"),
+        version::VERSION,
         tc.target.triple
     );
     if verbose && let Some(g) = &tc.gcc {
@@ -281,8 +363,6 @@ fn check_action(args: &Args, drv: &DiagEngine<'_>) {
     let not_impl = (args.print_commands
         && matches!(action, Action::Preprocess | Action::SyntaxOnly))
     .then_some("-### with -E or -fsyntax-only")
-    .or(args.print.defines_too.then_some("-dD"))
-    .or(args.print.includes_too.then_some("-dI"))
     .or((action != Action::SyntaxOnly
         && (args.dump_ast.is_some() || args.dump_ast_filter.is_some()))
     .then_some("-fdump-ast without -fsyntax-only"))
@@ -442,6 +522,31 @@ fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::In
         .collect()
 }
 
+/// The toolchain of `args` (`--target`, `--sysroot`, `-resource-dir`,
+/// `--gcc-install-dir` / `--gcc-toolchain`), reporting a bad target or GCC
+/// directory to `drv`. Shared with the crash reproducer ([`crash`]).
+pub(crate) fn toolchain_of(args: &Args, drv: &DiagEngine<'_>) -> Toolchain {
+    let target = match &args.target {
+        None => Target::host(),
+        Some(t) => Target::parse(t).unwrap_or_else(|| {
+            Diag::new(DiagId::drv_unsupported_target, Span::INVALID).arg(t).emit(drv);
+            Target::host()
+        }),
+    };
+    let mut tc = Toolchain::new(target, args.sysroot.as_deref(), args.resource_dir.as_deref());
+    let gcc_search = match (&args.gcc_install_dir, &args.gcc_toolchain) {
+        (Some(d), _) => GccSearch::InstallDir(d),
+        (None, Some(d)) => GccSearch::Toolchain(d),
+        (None, None) => GccSearch::Default,
+    };
+    if gcc_search != GccSearch::Default
+        && let Err(dir) = tc.select_gcc(gcc_search)
+    {
+        Diag::new(DiagId::drv_invalid_gcc_install_dir, Span::INVALID).arg(dir).emit(drv);
+    }
+    tc
+}
+
 /// Runs the driver on `argv` (without the program name) as `kiln++`: every
 /// input is C++ unless `-x` or `--driver-mode=gcc` says otherwise. Returns
 /// the exit code: 0 on success, 1 on any error (clang's convention).
@@ -457,6 +562,16 @@ pub fn run(command_line: &[String], io: Io) -> i32 {
 pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     let command_line = rsp::expand(command_line);
     let args = Args::parse_as(argv0, &command_line);
+    // The hidden `-fkiln-crash-for-testing=` (spec/driver.md "Internal
+    // compiler errors"); per thread, so set (or cleared) on every run.
+    kiln_source::activity::set_crash_for_testing(args.crash_for_testing);
+    if args.crash_for_testing == Some(kiln_source::activity::Phase::Driver) {
+        // Entering the requested phase panics: a crash outside any input.
+        drop(kiln_source::activity::enter(
+            kiln_source::activity::Phase::Driver,
+            kiln_source::Loc::INVALID,
+        ));
+    }
     let mut diag_opts = DiagOptions::from_args(&args.diag_args);
     diag_opts.clang_compat = args.predef.clang_compat.major();
     let dsm = SourceManager::new();
@@ -475,24 +590,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             Diag::new(DiagId::drv_time_trace_ignored, Span::INVALID).arg(f).emit(&drv);
         }
     }
-    let target = match &args.target {
-        None => Target::host(),
-        Some(t) => Target::parse(t).unwrap_or_else(|| {
-            Diag::new(DiagId::drv_unsupported_target, Span::INVALID).arg(t).emit(&drv);
-            Target::host()
-        }),
-    };
-    let mut tc = Toolchain::new(target, args.sysroot.as_deref(), args.resource_dir.as_deref());
-    let gcc_search = match (&args.gcc_install_dir, &args.gcc_toolchain) {
-        (Some(d), _) => GccSearch::InstallDir(d),
-        (None, Some(d)) => GccSearch::Toolchain(d),
-        (None, None) => GccSearch::Default,
-    };
-    if gcc_search != GccSearch::Default
-        && let Err(dir) = tc.select_gcc(gcc_search)
-    {
-        Diag::new(DiagId::drv_invalid_gcc_install_dir, Span::INVALID).arg(dir).emit(&drv);
-    }
+    let tc = toolchain_of(&args, &drv);
     for e in &features::resolve(&args, &tc.target).1 {
         emit_arg_error(e, &drv);
     }
@@ -509,10 +607,8 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         let _ = io.stdout.write_all(HELP.as_bytes());
         return 0;
     }
-    if args.print_resource_dir {
-        // clang prints the directory and stops, whatever else is given.
-        let _ = writeln!(io.stdout, "{}", tc.resource_dir);
-        return 0;
+    if let Some(rc) = immediate(&args, &tc, &mut io, &drv) {
+        return rc;
     }
     if args.version {
         print_version(&mut io.stdout, &tc, false);
@@ -522,7 +618,12 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         print_version(&mut io.stderr, &tc, true);
     }
     let inputs = existing_inputs(&args, &drv);
-    if inputs.is_empty() {
+    // clang counts linker inputs (`-l`, `-Wl,`, `-Xlinker`) as inputs:
+    // `clang++ -Wl,--version` runs the linker alone (Meson's linker probe,
+    // WP-920).
+    let linker_inputs =
+        args.link.iter().any(|l| matches!(l.kind, LinkOptKind::Input | LinkOptKind::Xlinker));
+    if inputs.is_empty() && !(linker_inputs && args.inputs.is_empty()) {
         if (args.version || args.verbose) && args.inputs.is_empty() && drv.error_count() == 0 {
             return 0;
         }
@@ -530,6 +631,10 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     }
     if drv.error_count() == 0 {
         check_action(&args, &drv);
+    }
+    if drv.error_count() == 0 && args.deps.missing_generated && args.deps.only.is_none() {
+        // clang `Clang::ConstructJob`: `-MG` only lists headers for `-M`/`-MM`.
+        Diag::new(DiagId::drv_mg_requires_m_or_mm, Span::INVALID).emit(&drv);
     }
     drv.flush();
     if drv.error_count() > 0 {
@@ -567,6 +672,20 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     let mut output = String::new();
     let mut errors = 0u32;
     let mut side_deps: Vec<(String, String)> = Vec::new();
+    if args.deps.cdb_fragment.is_some() {
+        // `-E`/`-M` write to `-o` or standard output; `-fsyntax-only`
+        // has no output.
+        let out = (args.action != Action::SyntaxOnly)
+            .then(|| args.output.clone().unwrap_or_else(|| "-".to_owned()));
+        let jobs: Vec<_> =
+            inputs.iter().map(|&input| cdb::CdbJob { input, output: out.clone() }).collect();
+        let sm = SourceManager::new();
+        let e = make_engine(&sm, &diag_opts, io.stderr.clone(), Some(&args.program));
+        if !cdb::write(&args, &tc, &jobs, &e) {
+            errors += 1;
+        }
+        e.flush();
+    }
     for input in inputs {
         let lang = args.input_lang(input);
         let std = match input_std(&args, lang) {

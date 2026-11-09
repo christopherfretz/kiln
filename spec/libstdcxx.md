@@ -68,7 +68,7 @@ Each compile ends in one of:
 |---|---|
 | `ok` | Exit status 0. |
 | `fail` | A non-zero exit with diagnostics. Recorded: the number of lines carrying an `error:` (or `fatal error:`) message and the first such line, with the include directory's and the scratch directory's path prefixes removed. With no `error:` line, the first non-empty stderr line stands in. |
-| `crash` | A panic (`panicked at`, keyed as in `spec/libcxx.md` "Clusters"), LLVM's crash banner, or death by a signal (exit code ≥ 128). |
+| `crash` | A panic (kiln's `internal compiler error:` banner or `panicked at`, keyed as in `spec/libcxx.md` "Clusters"), LLVM's crash banner, or death by a signal (exit code ≥ 128). kiln runs with `-fno-crash-diagnostics`, so a crash writes no reproducer. |
 | `timeout` | Ran past `--timeout`; the process group is killed. |
 | `killed` | Hit the memory cap (`out_of_memory`, `spec/harness.md`). |
 | `error` | The compiler could not be started. |

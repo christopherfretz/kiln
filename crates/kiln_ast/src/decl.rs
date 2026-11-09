@@ -5791,6 +5791,12 @@ pub mod builtin {
         if name.starts_with(x86::PREFIX) || name.starts_with(x86::HEADER_PREFIX) {
             return x86::by_name(name);
         }
+        // WP-961: clang's plain x86 target builtin `__rdtsc` (`ULLi`, the
+        // `__builtin_ia32_rdtsc` row's signature and codegen); ia32intrin.h's
+        // `_rdtsc()` expands to it. Target-gated like every x86 row.
+        if name == "__rdtsc" {
+            return x86::by_name("__builtin_ia32_rdtsc");
+        }
         if name.starts_with(arm::PREFIX) {
             return arm::by_name(name);
         }

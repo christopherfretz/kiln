@@ -241,6 +241,9 @@ pub(crate) struct Fx {
     /// The coroutine being emitted (clang `CurCoro`, spec/codegen.md
     /// §7o).
     pub coro: Option<Box<crate::coro::CoroData>>,
+    /// The function's `InstrProf` region counters (clang `CodeGenPGO`,
+    /// WP-941): set when `-fprofile-instr-generate` instruments it.
+    pub prof: Option<Box<crate::coverage::pgo::ProfState>>,
     /// In an `await_suspend` wrapper: the frame pointer parameter, the
     /// value of `__builtin_coro_frame()` (clang
     /// `CurAwaitSuspendWrapper.FramePtr`).
@@ -329,6 +332,7 @@ impl Fx {
             vla_sizes: FxHashMap::default(),
             did_stack_save: false,
             coro: None,
+            prof: None,
             await_frame: None,
             lifetime_markers: false,
             bypasses: None,
@@ -730,6 +734,9 @@ impl Cg<'_> {
                 ast.closure_thunk(d),
                 Some(kiln_ast::lambda::ClosureThunk::Invoker { .. })
             );
+        if thunk.is_none() {
+            self.prof_begin(d, f, structor);
+        }
         if contracts_here {
             self.emit_preconditions(d)?;
         }
@@ -756,7 +763,11 @@ impl Cg<'_> {
                 self.emit_complete_dtor_body()?;
             }
             (DeclKind::CXXDestructor, Some(body)) => self.emit_dtor_body(d, body)?,
-            (_, Some(body)) => self.emit_body(body)?,
+            (_, Some(body)) => {
+                // clang `EmitFunctionBody`.
+                self.prof_inc(crate::coverage::pgo::Key::Stmt(body));
+                self.emit_body(body)?;
+            }
         }
 
         // GenerateCode: falling off the end of a value-returning function

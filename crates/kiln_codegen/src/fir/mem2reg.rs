@@ -10,7 +10,7 @@
 //! successor order decides each phi's incoming order) and the trivial-phi
 //! simplification — so the emitted IR matches clang's.
 
-use kiln_llvm::{Module, TypeId};
+use kiln_llvm::{MdField, MdNode, MetadataId, Module, TypeId};
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use super::{Blk, Fir, Op, V};
@@ -329,12 +329,27 @@ impl Fir {
             phis.push(n);
         }
 
-        // The renaming walk (`RenamePass`).
+        // The renaming walk (`RenamePass`). `loc` is `IncomingLocs`: the
+        // debug location of the store that defined `inc` (none at entry).
+        let dbg_kind = self.dbg.as_deref().map(|d| d.kind);
+        let mut phi_loc: FxHashMap<u32, Option<MetadataId>> = FxHashMap::default();
         let mut visited: FxHashSet<Blk> = FxHashSet::default();
-        let mut rename: Vec<(Blk, Option<Blk>, V)> = vec![(self.entry(), None, undef)];
-        while let Some((mut bb, mut pred, mut inc)) = rename.pop() {
+        let mut rename: Vec<(Blk, Option<Blk>, V, Option<MetadataId>)> =
+            vec![(self.entry(), None, undef, None)];
+        while let Some((mut bb, mut pred, mut inc, mut loc)) = rename.pop() {
             loop {
                 if let (Some(&p), Some(pr)) = (phi_of.get(&bb), pred) {
+                    // `updateForIncomingValueLocation`.
+                    if dbg_kind.is_some() {
+                        let first = matches!(&self.insts[p as usize].op, Op::Phi { inc, .. } if inc.is_empty());
+                        let l = if first {
+                            loc
+                        } else {
+                            let cur = phi_loc.get(&p).copied().flatten();
+                            merged_location(m, cur, loc)
+                        };
+                        phi_loc.insert(p, l);
+                    }
                     let edges = self.succs(pr).iter().filter(|&&s| s == bb).count();
                     for _ in 0..edges {
                         self.add_incoming(p, inc, pr);
@@ -350,6 +365,9 @@ impl Fir {
                         self.erase(i);
                     } else if self.is_alloca_store(i, a) {
                         inc = self.stored(i);
+                        loc = dbg_kind.and_then(|k| {
+                            self.insts[i as usize].md.iter().find(|x| x.0 == k).map(|x| x.1)
+                        });
                         self.erase(i);
                     }
                 }
@@ -359,11 +377,18 @@ impl Fir {
                 for &s in &succ[1..] {
                     if !seen.contains(&s) {
                         seen.push(s);
-                        rename.push((s, Some(bb), inc));
+                        rename.push((s, Some(bb), inc, loc));
                     }
                 }
                 pred = Some(bb);
                 bb = first;
+            }
+        }
+        if let Some(k) = dbg_kind {
+            for (&p, &l) in &phi_loc {
+                if let Some(l) = l {
+                    self.insts[p as usize].md.push((k, l));
+                }
             }
         }
         // Uses left in unreachable blocks.
@@ -556,4 +581,70 @@ impl Fir {
         }
         Some(c)
     }
+}
+
+/// `DILocation::getMergedLocation` (LLVM 19) of two locations of one
+/// function without inlining: none when either is none; else the nearest
+/// common scope, the line when both share it (otherwise 0) and the column
+/// when both share that too (otherwise 0).
+fn merged_location(
+    m: &mut Module,
+    a: Option<MetadataId>,
+    b: Option<MetadataId>,
+) -> Option<MetadataId> {
+    let (a, b) = (a?, b?);
+    if a == b {
+        return Some(a);
+    }
+    let (la, ca, sa) = location_fields(m, a)?;
+    let (lb, cb, sb) = location_fields(m, b)?;
+    // `GetNearestCommonScope`: the first ancestor of `sb` that is `sa` or
+    // one of its ancestors.
+    let chain = |m: &Module, mut s: MetadataId| {
+        let mut v = vec![s];
+        while let Some(p) = parent_scope(m, s) {
+            v.push(p);
+            s = p;
+        }
+        v
+    };
+    let ancestors = chain(m, sa);
+    let scope = chain(m, sb).into_iter().find(|s| ancestors.contains(s))?;
+    let (line, col) = if la == lb { (la, if ca == cb { ca } else { 0 }) } else { (0, 0) };
+    let mut fields = vec![("line", MdField::UInt(line))];
+    if col != 0 {
+        fields.push(("column", MdField::UInt(col)));
+    }
+    fields.push(("scope", MdField::Node(Some(scope))));
+    Some(m.md_specialized("DILocation", false, fields))
+}
+
+/// `(line, column, scope)` of a `DILocation` without `inlinedAt`.
+fn location_fields(m: &Module, l: MetadataId) -> Option<(u64, u64, MetadataId)> {
+    let MdNode::Specialized { name: "DILocation", fields, .. } = m.md_node(l) else { return None };
+    let (mut line, mut col, mut scope) = (0, 0, None);
+    for (k, v) in fields.as_ref() {
+        match (*k, v) {
+            ("line", MdField::UInt(x)) => line = *x,
+            ("column", MdField::UInt(x)) => col = *x,
+            ("scope", MdField::Node(s)) => scope = *s,
+            ("inlinedAt", _) => return None,
+            _ => {}
+        }
+    }
+    Some((line, col, scope?))
+}
+
+/// The enclosing scope of a lexical block (`DILexicalBlock[File]`); none
+/// for a subprogram.
+fn parent_scope(m: &Module, s: MetadataId) -> Option<MetadataId> {
+    let MdNode::Specialized { name: "DILexicalBlock" | "DILexicalBlockFile", fields, .. } =
+        m.md_node(s)
+    else {
+        return None;
+    };
+    fields.iter().find_map(|(k, v)| match (*k, v) {
+        ("scope", MdField::Node(p)) => *p,
+        _ => None,
+    })
 }

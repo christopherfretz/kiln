@@ -289,18 +289,7 @@ impl Test<'_> {
         if let Some(reason) = self.mode_skip(&spec, &source) {
             return (Status::Skip, Some(reason), String::new());
         }
-        if (!spec.modules.is_empty() || !spec.units.is_empty()) && !kind.speaks_clang() {
-            let reason = "not supported by this compiler (`module:` needs kiln or clang)";
-            return (Status::Skip, Some(reason.to_owned()), String::new());
-        }
-        if spec.verify && !kind.speaks_clang() {
-            let reason = "not supported by this compiler (`verify` needs kiln or clang)";
-            return (Status::Skip, Some(reason.to_owned()), String::new());
-        }
-        if matches!(spec.expect, Expect::Cfg | Expect::Ast) && !kind.speaks_clang() {
-            let name = if spec.expect == Expect::Cfg { "cfg" } else { "ast" };
-            let reason =
-                format!("not supported by this compiler (`expect: {name}` needs kiln or clang)");
+        if let Some(reason) = unsupported_by(&spec, kind) {
             return (Status::Skip, Some(reason), String::new());
         }
         if let Some((status, why)) = debugger_gate(&spec, self.cfg.require_debuggers) {
@@ -336,6 +325,7 @@ impl Test<'_> {
             Expect::NoCrash => self.no_crash(&spec),
             Expect::Cfg => self.cfg_dump(&spec),
             Expect::Debugger => self.debugger(&spec),
+            Expect::Ice => self.ice(&spec),
         };
         let outcome = self.with_gcc_verdict(&spec, outcome);
         // Budgets are checked once the kind's own checks pass.
@@ -418,6 +408,12 @@ impl Test<'_> {
             (Lang::Cxx, false) => {}
         }
         c.arg(format!("-std={}", spec.std));
+        if self.is_kiln(program) {
+            // A crashing test must not leave a reproducer in $TMPDIR
+            // (spec/harness.md "Crashes"); `expect: ice` turns it back on in
+            // `mode`, and a test's own `args:` come last and win.
+            c.arg("-fno-crash-diagnostics");
+        }
         c.args(mode);
         if let Some(n) = self.clang_compat(program, spec) {
             c.arg(format!("-fclang-compat={n}"));
@@ -772,6 +768,7 @@ impl Test<'_> {
         }
         let crashed = o.code().is_none()
             || stderr.contains("panicked at")
+            || stderr.contains("internal compiler error: ")
             || stderr.contains("PLEASE submit a bug report");
         if crashed {
             let what = if o.timed_out() { "hung" } else { "crashed" };
@@ -917,6 +914,81 @@ impl Test<'_> {
             )));
         }
         self.check_diags(spec, &diag_parse::parse(&stderr))
+    }
+
+    /// `expect: ice` (spec/harness.md "ice tests"): the compile crashes
+    /// with kiln's internal-compiler-error banner and exit code (1, or 70
+    /// under `-fno-crash-diagnostics`); the `ice:` substrings appear on
+    /// stderr in order; and the reproducer files the
+    /// banner lists are exactly the files in `<scratch>/crash`, the
+    /// `-fcrash-diagnostics-dir=` the harness passes (none when crash
+    /// diagnostics are off).
+    fn ice(&mut self, spec: &TestSpec) -> Check {
+        let dir = self.scratch()?.join("crash");
+        if dir.exists() {
+            fs::remove_dir_all(&dir)
+                .map_err(|e| Problem::Broken(format!("cannot remove {}: {e}", dir.display())))?;
+        }
+        let mut dir_flag = String::from("-fcrash-diagnostics-dir=");
+        dir_flag.push_str(&dir.to_string_lossy());
+        let object = spec.args.iter().any(|a| a == "-c" || a == "-S");
+        let out = if object { Some(self.scratch()?.join("ice.out")) } else { None };
+        let mode: Vec<&str> = if object {
+            vec!["-fcrash-diagnostics", &dir_flag]
+        } else {
+            vec!["-fsyntax-only", "-fcrash-diagnostics", &dir_flag]
+        };
+        let cmd = self.command(&self.cfg.compiler.clone(), spec, &mode, out.as_deref());
+        let o = self.exec("the compiler", &cmd, self.cfg.compile_timeout)?;
+        let stderr = o.stderr_str();
+        let fail = |what: String| {
+            Err(Problem::Fail(format!(
+                "{what}\ncompiler stderr ({}):\n{}",
+                o.describe_end(),
+                indent(&stderr)
+            )))
+        };
+        if !stderr.contains("error: internal compiler error: ") {
+            return fail("expected an internal compiler error banner".to_owned());
+        }
+        let off = crash_diagnostics_off(&spec.args);
+        let want = if off { 70 } else { 1 };
+        if o.code() != Some(want) {
+            return fail(format!("expected exit code {want} after the crash"));
+        }
+        let mut rest: &str = &stderr;
+        for want in &spec.ice {
+            let Some(i) = rest.find(want.as_str()) else {
+                return fail(format!("`ice: {want}` not found (in order)"));
+            };
+            rest = &rest[i + want.len()..];
+        }
+        let listed: Vec<PathBuf> = stderr
+            .lines()
+            .filter_map(|l| l.split_once("note: diagnostic msg: ").map(|(_, p)| PathBuf::from(p)))
+            // The other `diagnostic msg:` lines are messages, as clang's.
+            .filter(|p| p.is_absolute())
+            .collect();
+        let mut written: Vec<PathBuf> = match fs::read_dir(&dir) {
+            Ok(rd) => rd.filter_map(Result::ok).map(|e| e.path()).collect(),
+            Err(_) => Vec::new(),
+        };
+        written.sort();
+        let mut sorted = listed.clone();
+        sorted.sort();
+        if sorted != written {
+            return fail(format!(
+                "the reproducer files listed ({}) are not the files written to {} ({})",
+                shown_paths(&listed),
+                dir.display(),
+                shown_paths(&written)
+            ));
+        }
+        if off != listed.is_empty() {
+            let what = if off { "no reproducer" } else { "a reproducer" };
+            return fail(format!("expected {what} under {}", dir.display()));
+        }
+        Ok(())
     }
 
     /// The debug-info sweep of one test (`--debug-sweep`): the compiler
@@ -1724,6 +1796,49 @@ fn debugger_program_in(name: &str, path: Option<&std::ffi::OsStr>) -> Option<Pat
 /// runner. A hung session still ends, and fails, deterministically.
 const DEBUGGER_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Why a compiler of `kind` cannot run `spec` at all (a skip), if it
+/// cannot.
+fn unsupported_by(spec: &TestSpec, kind: CompilerKind) -> Option<String> {
+    let needs = |what: &str, who: &str| {
+        Some(format!("not supported by this compiler (`{what}` needs {who})"))
+    };
+    if (!spec.modules.is_empty() || !spec.units.is_empty()) && !kind.speaks_clang() {
+        return needs("module:", "kiln or clang");
+    }
+    if spec.verify && !kind.speaks_clang() {
+        return needs("verify", "kiln or clang");
+    }
+    if matches!(spec.expect, Expect::Cfg | Expect::Ast) && !kind.speaks_clang() {
+        let name = if spec.expect == Expect::Cfg { "expect: cfg" } else { "expect: ast" };
+        return needs(name, "kiln or clang");
+    }
+    if spec.expect == Expect::Ice && kind != CompilerKind::Kiln {
+        return needs("expect: ice", "kiln");
+    }
+    None
+}
+
+/// Whether the last `-f[no-]crash-diagnostics[=…]` of `args` turns crash
+/// diagnostics off (spec/driver.md "Internal compiler errors").
+fn crash_diagnostics_off(args: &[String]) -> bool {
+    args.iter()
+        .rev()
+        .find(|a| {
+            *a == "-fno-crash-diagnostics"
+                || a.starts_with("-fcrash-diagnostics")
+                    && !a.starts_with("-fcrash-diagnostics-dir=")
+        })
+        .is_some_and(|a| a == "-fno-crash-diagnostics" || a == "-fcrash-diagnostics=off")
+}
+
+/// `a, b` (or `none`), for messages.
+fn shown_paths(paths: &[PathBuf]) -> String {
+    if paths.is_empty() {
+        return "none".to_owned();
+    }
+    paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+}
+
 /// A `debugger` test that drives a debugger not on `PATH` cannot run: a
 /// SKIP, or under `require` (`KILN_REQUIRE_DEBUGGERS=1`) an ERROR, with
 /// the reason.
@@ -2014,8 +2129,8 @@ pub(super) fn meta_header_skip(spec: &TestSpec, source: &str) -> Option<String> 
 #[cfg(test)]
 mod compat_tests {
     use super::{
-        DumpKind, Status, compat_for, debugger_gate_in, first_missing_check, ir_diff, ir_normalize,
-        ir_target_flag,
+        DumpKind, Status, compat_for, crash_diagnostics_off, debugger_gate_in, first_missing_check,
+        ir_diff, ir_normalize, ir_target_flag,
     };
     use crate::test::directives::{Lang, parse};
 
@@ -2030,6 +2145,18 @@ mod compat_tests {
         assert_eq!(compat_for(19, Some([20, 0, 0]), None), 22);
         assert_eq!(compat_for(22, None, Some([22, 0, 0])), 19);
         assert_eq!(compat_for(19, None, Some([22, 0, 0])), 19);
+    }
+
+    #[test]
+    fn crash_diagnostics_off_takes_the_last_flag() {
+        let v = |a: &[&str]| {
+            crash_diagnostics_off(&a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+        };
+        assert!(!v(&[]));
+        assert!(v(&["-fno-crash-diagnostics"]));
+        assert!(v(&["-fcrash-diagnostics", "-fcrash-diagnostics=off"]));
+        assert!(!v(&["-fno-crash-diagnostics", "-fcrash-diagnostics=all"]));
+        assert!(v(&["-fno-crash-diagnostics", "-fcrash-diagnostics-dir=/x"]));
     }
 
     #[test]

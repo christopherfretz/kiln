@@ -61,6 +61,9 @@ impl Cg<'_> {
 
     /// clang `ApplyDebugLocation::CreateEmpty`.
     pub(crate) fn dbg_apply_empty(&mut self) -> Option<DbgSaved> {
+        if !self.dbg_on() {
+            return None;
+        }
         let orig = self.f.fir.dbg.as_deref()?.loc;
         self.f.fir.set_dbg_loc(None);
         Some(DbgSaved(orig))
@@ -71,6 +74,8 @@ impl Cg<'_> {
         let ast = self.ast;
         match ast.stmts.get(s).kind() {
             StmtKind::ExprStmt => ast.begin_loc(ast.stmts.expr_stmt_expr(s)),
+            // `CoroutineBodyStmt::getBeginLoc`: its body's.
+            StmtKind::CoroutineBodyStmt => self.di_stmt_begin(ast.stmts.coroutine_body(s).body),
             _ => ast.stmts.get(s).loc(),
         }
     }
@@ -120,6 +125,10 @@ impl Cg<'_> {
                 | ExprKind::ExprWithCleanups
                 | ExprKind::MaterializeTemporaryExpr
                 | ExprKind::CXXBindTemporaryExpr => exprs.children(e, &ast.lists)[0],
+                // `CoroutineSuspendExpr::getEndLoc`: the operand's.
+                ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                    exprs.coawait_operand(e, &ast.lists)
+                }
                 _ => return exprs.get(e).loc(),
             };
         }

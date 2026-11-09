@@ -69,7 +69,7 @@ directives are also ERRORs.
 
 | Directive | Semantics |
 |---|---|
-| `expect: compile-ok \| compile-fail \| run \| pp \| ast \| cfg \| layout \| vtables \| ir \| debugger \| no-crash` | Test kind. Default `compile-ok`. |
+| `expect: compile-ok \| compile-fail \| run \| pp \| ast \| cfg \| layout \| vtables \| ir \| debugger \| no-crash \| ice` | Test kind. Default `compile-ok`. |
 | `std: <std>` | `c++98 c++03 c++11 c++14 c++17 c++20 c++23 c++26` (C++), `c89 c99 c11 c17 c23` (C). Default `c++26` / `c17`. Passed as `-std=<std>`. |
 | `args: <flags>` | Extra compiler flags, split shell-style (quotes, backslash). It may be repeated, and the flags accumulate. Placeholders are substituted in each flag (below). |
 | `diag: <line>[:<col>] <sev> "<substring>" [dup(clang)]` | Expected diagnostic. `<sev>` is one of `error fatal warning note remark`. If the column is omitted, any column matches. `dup(clang)`, after the substring and only on a primary (non-note) directive, says clang prints this group twice where kiln's engine prints it once (spec/diag.md §7.4.1); see "Diagnostics". |
@@ -79,6 +79,7 @@ directives are also ERRORs.
 | `stdout-file: <path>` | `run` only. The expected stdout is the file's exact contents. The path is relative to the test's directory. It cannot be combined with `stdout:`. |
 | `exit: <code>` | `run` only. Expected exit code. Default 0. |
 | `gdb: <command>` / `lldb: <command>` | `debugger` only. One line of the gdb (lldb) command script, in order; repeatable. See "Debugger tests". |
+| `ice: <text>` | `ice` only. A substring the crash report's stderr must contain, each after the end of the previous one's match (so two may sit on one line); repeatable. `diag:` and `strict-diags` do not apply to `ice` tests (an ERROR). See "ice tests". |
 | `gdb-check: <text>` / `lldb-check: <text>` | `debugger` only. A substring that must appear in the debugger's output, each check on a line after the previous check's line; repeatable. Commands without checks, checks without commands, and a `debugger` test with neither debugger are ERRORs. |
 | `run-args: <args>` | `run` only. Program arguments, split shell-style as for `args:`. It may be repeated, and the arguments accumulate. |
 | `run-stdin: <text>` | `run` only. Each line contributes its value, trimmed, plus `\n`, to the program's stdin, as for `stdout:`. Repeated lines concatenate in order. |
@@ -182,10 +183,14 @@ last (see "kiln-specific tests").
 Any compile ends as a **FAIL** ("compiler crashed" / "compiler hung") if:
 
 - the compile is killed by a signal or times out, or
-- stderr contains `panicked at` or `PLEASE submit a bug report`.
+- stderr contains `internal compiler error: ` (kiln's crash banner,
+  spec/driver.md "Internal compiler errors"), `panicked at` or `PLEASE
+  submit a bug report`.
 
-This holds whatever the expectation is. An internal compiler error never
-satisfies `compile-fail`.
+This holds whatever the expectation is, except under `expect: ice`. An
+internal compiler error never satisfies `compile-fail`. kiln gets
+`-fno-crash-diagnostics` right after `-std=`, so a crashing test writes no
+reproducer into `$TMPDIR`.
 
 | Kind | Mode | Pass condition |
 |---|---|---|
@@ -200,6 +205,7 @@ satisfies `compile-fail`.
 | `vtables` | kiln: `-fsyntax-only -fdump-vtable-layouts`; clang: `-S -emit-llvm -o <scratch>/test.ll -Xclang -fdump-vtable-layouts` | exit 0; the diags match; the dump has at least one vtable block; the oracle's dump has the same set of blocks. See "Layout and vtable tests". |
 | `ir` | `-S -emit-llvm -O0 -o <scratch>/test.ll` (the oracle: `<scratch>/oracle.ll`) | exit 0; the diags match; the module defines at least one function; it equals the oracle's after normalization. See "IR tests". |
 | `debugger` | compile and link with `-O0 -g` to `<scratch>/test.out`, then run gdb and/or lldb over it | the compile succeeds and the diags match; each debugger's output contains its checks in order. See "Debugger tests". |
+| `ice` | kiln only: `-fsyntax-only` (none when `args:` hold `-c` or `-S`; then `-o <scratch>/ice.out`), `-fcrash-diagnostics -fcrash-diagnostics-dir=<scratch>/crash` | the compile crashes with kiln's internal-compiler-error banner and exits 1 (70 under `-fno-crash-diagnostics`); the `ice:` texts appear in order; the reproducer files the banner lists are exactly the files in `<scratch>/crash` (none under `-fno-crash-diagnostics`). See "ice tests". |
 | `no-crash` | `-fsyntax-only -ferror-limit=0` (before the test's `args:`, so an explicit `-ferror-limit=N` there wins; a crash must not hide behind the error limit, WP-145) | exit 0 or 1 (errors anywhere are fine, in the test file or not), and the diags match; any other exit code (an internal-error exit such as 70 or 101) is a FAIL, as is a crash or hang (above). For robustness tests over input the compiler cannot fully handle yet, e.g. whole headers with `-ferror-limit=0` (WP-141). |
 
 The `run` binary runs with cwd = its scratch dir, the `run-args:` arguments,
@@ -630,6 +636,30 @@ blocked), so lldb scripts start with `settings set target.disable-aslr
 false`; prefer `frame variable` / `target variable` to `expression`,
 which needs a JIT. gdb `-batch` does not print `finish`'s "Run till
 exit" banner. The corpus is `tests/debuginfo/`.
+
+### ice tests
+
+`expect: ice` checks kiln's crash path (spec/driver.md "Internal compiler
+errors"; WP-911): the test's `args:` name the hidden
+`-fkiln-crash-for-testing=<phase>`, which makes kiln panic on purpose in
+that phase. The harness removes `<scratch>/crash`, compiles with
+`-fcrash-diagnostics -fcrash-diagnostics-dir=<scratch>/crash` (after the
+default `-fno-crash-diagnostics`, before the test's `args:`, so a test's own
+`-fno-crash-diagnostics` wins), and the test PASSes when:
+
+- stderr contains `error: internal compiler error: ` (the crash checks
+  of "Test kinds" do not apply);
+- the exit code is 1, or 70 when the last `-f[no-]crash-diagnostics[=…]`
+  of `args:` turns crash diagnostics off;
+- each `ice:` text is found after the previous one's match;
+- the absolute paths on the banner's `note: diagnostic msg: ` lines (its
+  other `diagnostic msg:` lines are messages, as clang's) are exactly the
+  files in `<scratch>/crash`: at least one normally, none when crash
+  diagnostics are off.
+
+Any other compiler is a SKIP with the reason "not supported by this
+compiler (`expect: ice` needs kiln)". The corpus is
+`tests/conformance/driver.crash/`.
 
 ### kiln-specific tests
 
@@ -1354,6 +1384,9 @@ or infrastructure error. Parse errors name their line.
     lldb-19);
   - `--filter`;
   - `--update` (pp and ast goldens).
+- WP-911: `ice_directives` (directives.rs) and
+  `crash_diagnostics_off_takes_the_last_flag` (runner.rs);
+  `tests/conformance/driver.crash/` runs `expect: ice` end to end.
 - `debugger_directives` (directives.rs) and
   `debugger_checks_match_successive_lines_in_order` (runner.rs): the
   `gdb:`/`lldb:` directive errors and the in-order check matcher;
