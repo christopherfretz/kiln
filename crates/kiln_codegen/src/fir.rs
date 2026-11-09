@@ -15,6 +15,12 @@ use kiln_llvm::{
     Module, OperandBundle, Ordering, RmwOp, SyncScope, TypeId, Value, ValueRef,
 };
 
+/// The invariant behind every `fir.cur().expect(..)`: an expression is
+/// emitted only into an open block. `emit_stmt` skips a statement in
+/// unreachable code, and declarations, `noreturn` calls and throw-expressions
+/// reopen one (`ensure_insert_point`, clang `EnsureInsertPoint`).
+pub(crate) const OPEN_BLOCK: &str = "insertion point: codegen emits only into an open block (emit_stmt skips unreachable statements; ensure_insert_point reopens one)";
+
 /// A block of the buffer.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Blk(pub u32);
@@ -600,14 +606,14 @@ impl Fir {
 
     /// Appends `b` to the layout.
     pub fn place_at_end(&mut self, b: Blk) {
-        debug_assert!(!self.is_placed(b));
+        debug_assert!(!self.is_placed(b), "placed once");
         self.blocks[b.0 as usize].placed = true;
         self.layout.push(b);
     }
 
     /// Inserts `b` into the layout after `after`.
     pub fn place_after(&mut self, after: Blk, b: Blk) {
-        debug_assert!(!self.is_placed(b));
+        debug_assert!(!self.is_placed(b), "placed once");
         self.blocks[b.0 as usize].placed = true;
         let i = self.layout.iter().position(|&x| x == after).map_or(self.layout.len(), |i| i + 1);
         self.layout.insert(i, b);
@@ -801,12 +807,12 @@ impl Fir {
         let V::I(phi) =
             self.push_in(blk, Op::Phi { ty: TypeId::PTR, inc: Vec::new() }, TypeId::PTR)
         else {
-            unreachable!()
+            unreachable!("a phi or branch is an instruction")
         };
         let V::I(br) =
             self.push_in(blk, Op::IndirectBr { addr: V::I(phi), dests: Vec::new() }, TypeId::VOID)
         else {
-            unreachable!()
+            unreachable!("a phi or branch is an instruction")
         };
         let g = IndirectGoto { blk, phi, br };
         self.igoto = Some(g);
@@ -961,7 +967,7 @@ impl Fir {
     /// `mayReadOrWriteMemory`) gets the loop's access group; a call does
     /// unless its callee is `memory(none)` (checked by [`Fir::lower`]).
     pub fn push(&mut self, op: Op, ty: TypeId) -> V {
-        let b = self.cur.unwrap_or_else(|| panic!("kiln_codegen: no insertion point for {op:?}"));
+        let b = self.cur.unwrap_or_else(|| panic!("kiln_codegen: {OPEN_BLOCK}: {op:?}"));
         let n = self.insts.len() as u32;
         for s in op.successors() {
             self.blocks[s.0 as usize].uses += 1;
@@ -1112,9 +1118,9 @@ impl Fir {
                 .unwrap_or(insts.len());
             (normal, pos)
         } else {
-            let b = self.insts[at as usize].block.expect("insertion after a live instruction");
+            let b = self.insts[at as usize].block.expect("anchor is placed");
             let insts = &self.blocks[b.0 as usize].insts;
-            (b, insts.iter().position(|&x| x == at).expect("instruction in its block") + 1)
+            (b, insts.iter().position(|&x| x == at).expect("placed inst is in its block") + 1)
         };
         let n = self.insts.len() as u32;
         for s in op.successors() {
@@ -1129,14 +1135,14 @@ impl Fir {
     /// Inserts `op` immediately before instruction `at` (LLVM
     /// `new X(.., InsertBefore)`).
     pub fn insert_before(&mut self, at: u32, op: Op, ty: TypeId) -> V {
-        let b = self.insts[at as usize].block.expect("insertion before a live instruction");
+        let b = self.insts[at as usize].block.expect("anchor is placed");
         let n = self.insts.len() as u32;
         for s in op.successors() {
             self.blocks[s.0 as usize].uses += 1;
         }
         self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new(), fmf: self.fmf });
         let insts = &mut self.blocks[b.0 as usize].insts;
-        let pos = insts.iter().position(|&x| x == at).expect("instruction in its block");
+        let pos = insts.iter().position(|&x| x == at).expect("placed inst is in its block");
         insts.insert(pos, n);
         self.note_refs(n);
         V::I(n)
@@ -1201,9 +1207,9 @@ impl Fir {
         if let Some(b) = self.insts[i as usize].block {
             self.blocks[b.0 as usize].insts.retain(|&x| x != i);
         }
-        let b = self.insts[at as usize].block.expect("move before a live instruction");
+        let b = self.insts[at as usize].block.expect("anchor is placed");
         let insts = &mut self.blocks[b.0 as usize].insts;
-        let pos = insts.iter().position(|&x| x == at).expect("instruction in its block");
+        let pos = insts.iter().position(|&x| x == at).expect("placed inst is in its block");
         insts.insert(pos, i);
         self.insts[i as usize].block = Some(b);
     }
@@ -1320,7 +1326,7 @@ impl Fir {
     pub fn last_inst(v: V) -> u32 {
         match v {
             V::I(i) => i,
-            _ => unreachable!("not an instruction"),
+            _ => unreachable!("value of a push"),
         }
     }
 
@@ -1329,7 +1335,8 @@ impl Fir {
     /// Lowers the buffer into the (empty) body of `f`; `ph` resolves the
     /// [`V::P`] placeholders.
     pub fn lower(&self, m: &mut Module, f: FuncId, ph: &[Option<Value>]) -> IrResult<()> {
-        let phv = |n: u32| ph[n as usize].unwrap_or_else(|| panic!("unresolved placeholder {n}"));
+        let phv =
+            |n: u32| ph[n as usize].unwrap_or_else(|| panic!("placeholder {n} resolved by finish"));
         // A call to a `memory(none)` function accesses no memory, so it
         // gets no access group.
         let no_group: Vec<u32> = match self.access_kind {
@@ -1355,15 +1362,16 @@ impl Fir {
         let mut vmap: Vec<Option<Value>> = vec![None; self.insts.len()];
         let mut phis: Vec<(Value, u32)> = Vec::new();
         let blk =
-            |x: Blk| bmap[x.0 as usize].unwrap_or_else(|| panic!("branch to unplaced block {x:?}"));
+            |x: Blk| bmap[x.0 as usize].unwrap_or_else(|| panic!("branch target {x:?} is placed"));
         for &bb in &self.layout {
             b.position_at_end(blk(bb));
             for &i in &self.blocks[bb.0 as usize].insts {
                 let inst = &self.insts[i as usize];
                 let val = |v: V| -> Value {
                     match v {
-                        V::I(n) => vmap[n as usize]
-                            .unwrap_or_else(|| panic!("use of %{n} before definition")),
+                        V::I(n) => {
+                            vmap[n as usize].unwrap_or_else(|| panic!("%{n} defined before use"))
+                        }
                         V::Arg(n) => Value::arg(n),
                         V::C(c) => c,
                         V::P(n) => phv(n),
@@ -1528,9 +1536,8 @@ impl Fir {
             if let Op::Phi { inc, .. } = &self.insts[i as usize].op {
                 for &(v, bb) in inc {
                     let v = match v {
-                        V::I(n) => {
-                            vmap[n as usize].unwrap_or_else(|| panic!("phi operand %{n} undefined"))
-                        }
+                        V::I(n) => vmap[n as usize]
+                            .unwrap_or_else(|| panic!("phi operand %{n} is defined")),
                         V::Arg(n) => Value::arg(n),
                         V::C(c) => c,
                         V::P(n) => phv(n),
