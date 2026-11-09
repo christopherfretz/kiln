@@ -1048,6 +1048,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-982 | modules step 2: kiln-scan-deps (P1689r5, clang-scan-deps-<major> name), CMake FILE_SET CXX_MODULES end-to-end test | WP-917 | done (#420) |
 | WP-983 | modules: header units as BMIs (-fmodule-header[=user|system], header-unit capsule kind, import "h" finds the .pcm) | WP-917 | open |
 | WP-984 | modules: import std; BMI cache keyed by fingerprint, CMake CXX_MODULE_STD, two-step import std harness test | WP-917 | done (#429) |
+| WP-1125 | docs: 1.0 truth-up of README, USER_GUIDE, KNOWN_ISSUES, COMPATIBILITY, STABILITY against main (std module cache section, stale limitations, link check) | WP-984 | in progress |
 | WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | done (#425) |
 | WP-986 | modules: convert skip(clang) module tests (export-run, visibility, partitions-run, private-run, export-import-run, import-std-*) to module:/unit: | WP-917 | done (#436) |
 | WP-981 | oven: narrow signed `++`/`--` must promote and wrap (WP-961 x86_64 stable_sort xfail) | WP-961 | done (#419, fixed in WP-980) |
