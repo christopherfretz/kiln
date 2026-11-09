@@ -588,8 +588,22 @@ pub fn type_externally_visible(ast: &Ast, q: QualType) -> bool {
 }
 
 fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
-    if ast.closure_lambda(d).is_some() {
+    if let Some(l) = ast.closure_lambda(d) {
         if is_unnumbered_closure(ast, d) {
+            return false;
+        }
+        // clang `getLVForClosureType`: a closure initializing a variable
+        // (a `static` variable template's specialization) is externally
+        // visible only if that variable is. The variable's own type is
+        // the closure, so only its declared linkage is consulted
+        // (`IgnoreVarTypeLinkage`).
+        if let Some(c) = ast.exprs.lambdas.get(l).mangling.context
+            && matches!(
+                ast.decls.get(c).kind(),
+                DeclKind::Var | DeclKind::VarTemplateSpecialization
+            )
+            && has_internal_linkage(ast, c)
+        {
             return false;
         }
     } else if decl_name(ast, d).is_empty()
@@ -1955,7 +1969,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if let Some((t, args)) = self.spec_of(c) {
             // A variable template specialization: <template-prefix>
             // <template-args> (clang `mangleClosurePrefix`).
-            self.template_prefix(t, stop, Structor::Complete, None);
+            self.template_prefix(t, stop, Structor::Complete);
             self.template_args(args);
         } else {
             if let Some(p) = self.parent(c) {
@@ -1987,7 +2001,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             // <unscoped-name> / <unscoped-template-name> <template-args>
             let std = !at_top;
             if let Some((t, args)) = spec {
-                self.unscoped_template(t, std, Some(d));
+                self.unscoped_template(t, std);
                 self.template_args_of(t, args);
             } else {
                 if std {
@@ -2003,7 +2017,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.method_quals(d);
         let p = parent.expect("nested name has a parent");
         if let Some((t, args)) = spec {
-            self.template_prefix(t, stop, v, Some(d));
+            self.template_prefix(t, stop, v);
             self.template_args_of(t, args);
         } else {
             self.prefix(p, stop);
@@ -2083,7 +2097,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             return;
         }
         if let Some((t, args)) = self.spec_of(dc) {
-            self.template_prefix(t, stop, Structor::Complete, Some(dc));
+            self.template_prefix(t, stop, Structor::Complete);
             self.template_args(args);
         } else {
             if let Some(c) = self.closure_prefix_decl(dc) {
@@ -2100,15 +2114,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
 
     /// <template-prefix> of template `t` within a nested name.
     /// `v` is the structor variant of a constructor template
-    /// specialization (`C1`/`C2`); `spec` the specialization named,
-    /// whose internal linkage at namespace scope gives the name its `L`.
-    fn template_prefix(
-        &mut self,
-        t: DeclId,
-        stop: Option<DeclId>,
-        v: Structor,
-        spec: Option<DeclId>,
-    ) {
+    /// specialization (`C1`/`C2`). The template's own internal linkage at
+    /// namespace scope gives the name its `L` ([`Self::template_l_prefix`]).
+    fn template_prefix(&mut self, t: DeclId, stop: Option<DeclId>, v: Structor) {
         if self.try_std_abbrev(t) {
             return;
         }
@@ -2122,18 +2130,16 @@ impl<'a, 'b> Mangler<'a, 'b> {
         // A nested template name takes no implicit tags (clang's
         // `mangleTemplatePrefix` is not passed them; an unscoped one is).
         let extra = self.extra_tags.take();
-        if let Some(spec) = spec {
-            self.l_prefix(spec);
-        }
+        self.template_l_prefix(t);
         self.unqualified(t, v);
         self.extra_tags = extra;
         self.subs.push(key);
     }
 
     /// <unscoped-template-name> of template `t` (`St`-prefixed in `std`;
-    /// `L`-prefixed when `spec`, the specialization named, has internal
-    /// linkage, clang `isInternalLinkageDecl`).
-    fn unscoped_template(&mut self, t: DeclId, std: bool, spec: Option<DeclId>) {
+    /// `L`-prefixed when the template has internal linkage,
+    /// [`Self::template_l_prefix`]).
+    fn unscoped_template(&mut self, t: DeclId, std: bool) {
         if self.try_std_abbrev(t) {
             return;
         }
@@ -2144,11 +2150,34 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if std {
             self.out.push_str("St");
         }
-        if let Some(spec) = spec {
-            self.l_prefix(spec);
-        }
+        self.template_l_prefix(t);
         self.unqualified(t, Structor::Complete);
         self.subs.push(key);
+    }
+
+    /// `L` for template `t` when its templated declaration has internal
+    /// linkage at namespace scope outside an unnamed namespace (clang
+    /// `mangleTemplatePrefix` passes the template itself to
+    /// `isInternalLinkageDecl`, WP-603): every specialization of a
+    /// `static` (or `internal_linkage`) template is `L`, an explicit
+    /// specialization (`_ZL2vtIlE`) and a closure in a variable
+    /// template's initializer (`_ZNKL2laIiEMUliE_clEi`) included. A
+    /// `const` variable template keeps external linkage (CWG2387; clang
+    /// `getLVForNamespaceScopeDecl` skips the `const` rule for templates):
+    /// `_Z3cvtIlE`.
+    fn template_l_prefix(&mut self, t: DeclId) {
+        let Some(p) = self.ast.template_info(t).and_then(|i| i.pattern) else { return };
+        let ast = self.ast;
+        let first = ast.first(p);
+        if ast.decls.get(first).kind() == DeclKind::Var {
+            let internal = ast.has_internal_linkage_attr(first)
+                || ast.decls.var(first).is_some_and(|v| v.spec.storage() == VarStorage::Static);
+            if internal && is_file_context(ast, first) && !in_anon_ns(ast, first) {
+                self.out.push('L');
+            }
+            return;
+        }
+        self.l_prefix(p);
     }
 
     /// <unqualified-name>: operator, constructor, destructor, conversion
@@ -2722,7 +2751,8 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// A `void *` that designates an object of type `designated` mangles
     /// as clang does: the address of that object, converted to the
     /// pointer type (`X cv <type> ad ... E`) when it is the whole
-    /// argument.
+    /// argument. So does a whole object of another type than the
+    /// pointee (`_Z5derefIXcvPKiadL_Z1gEEEiv`, `_Z2r1IXcvRKiL_Z1gEEEiv`).
     fn pointer_value(
         &mut self,
         ty: QualType,
@@ -2755,9 +2785,21 @@ impl<'a, 'b> Mangler<'a, 'b> {
             PtrBase::Decl(_) => self.lvalue_path(ast.decls.get(d).ty(), offset, pointee),
             _ => LvaluePath::default(),
         };
+        // A whole object whose type is not the parameter's pointee (a
+        // qualification or function-pointer conversion: `const int *`
+        // to `int g`) is converted to the parameter type, as clang's
+        // `mangleValueInTemplateArg` does when the designated type is
+        // not the same type; a subobject's `so` names its type instead.
         // Inside a class value the member's type is known: no conversion.
-        let conv = top && designated.is_some() && !is_ref;
-        let wrap = top && (!is_ref || path.nonempty || path.past_end);
+        let whole = !path.nonempty && !path.past_end;
+        let converted = whole
+            && designated.is_none()
+            && match (ast.decls.get(d).ty(), ast.types.pointee(ty)) {
+                (Some(dt), Some(pt)) => !ast.types.same_type(dt, pt),
+                _ => false,
+            };
+        let conv = top && ((designated.is_some() && !is_ref) || converted);
+        let wrap = top && (!is_ref || !whole || conv);
         if wrap {
             self.out.push('X');
         }

@@ -515,7 +515,9 @@ impl<'a> Cg<'a> {
     /// reported on the way (even when emission fails).
     pub fn run(mut self) -> (R<Module>, Vec<Diag>) {
         let r = self.run_tu();
-        // A requires-clause in a symbol with no encoding (WP-818).
+        // An expression in a symbol with no encoding: a requires-clause
+        // (WP-818), a template argument, `decltype` operand or array
+        // bound (WP-593).
         let mut seen = FxHashSet::default();
         for e in self.anon.take_unmangleable() {
             if seen.insert(e) {
