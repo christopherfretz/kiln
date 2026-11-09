@@ -571,6 +571,7 @@ impl Wr {
     }
 }
 
+#[allow(clippy::too_many_lines)] // one arm per record kind, kept together with the format
 fn encode_decl(w: &mut Wr, d: &DeclRec) {
     w.u8(d.payload.code());
     w.u8(d.flags);
@@ -878,6 +879,7 @@ impl<'a> Rd<'a> {
 const MIN_TYPE: usize = 5;
 const MIN_DECL: usize = 4 + 20;
 
+#[allow(clippy::too_many_lines)] // one arm per record kind, kept together with the format
 fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
     let code = r.u8()?;
     let flags = r.u8()?;
@@ -1036,11 +1038,11 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
         | Payload::Template { .. }
         | Payload::Record { def: None, .. } => Vec::new(),
         Payload::Record { def: Some(d), .. } => d.bases.iter().map(|b| b.ty).collect(),
-        Payload::Field { ty, .. } => vec![*ty],
         Payload::Function { ty, params, .. } => {
             std::iter::once(*ty).chain(params.iter().map(|p| p.ty)).collect()
         }
-        Payload::Var { ty, .. }
+        Payload::Field { ty, .. }
+        | Payload::Var { ty, .. }
         | Payload::Enumerator { ty, .. }
         | Payload::Let { ty, .. }
         | Payload::Nttp { ty, .. } => vec![*ty],
@@ -1224,14 +1226,14 @@ fn base_class(img: &Image, q: QRef, complete: &dyn Fn(u32) -> bool) -> Option<u3
     None
 }
 
-/// The structural checks of [`decode`].
-#[allow(clippy::too_many_lines)] // one arm per record or type kind, kept together with the format
 /// Whether record `d` stays out of the lookup table: a local, a template
 /// parameter, or a pattern (its template is looked up in its place).
 fn unlisted(img: &Image, d: &DeclRec) -> bool {
     body::is_local(img, d) || d.flags & DEP != 0
 }
 
+/// The structural checks of [`decode`].
+#[allow(clippy::too_many_lines)] // one arm per record or type kind, kept together with the format
 fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     let nt = img.types.len() as u64;
     let nd = img.decls.len();
