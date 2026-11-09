@@ -260,6 +260,11 @@ impl<'a> Preprocessor<'a, '_> {
     /// `#error` / `#warning` ([cpp.error]).
     fn do_error_warning(&mut self, name: PpTok, error: bool) {
         let msg = self.rest_of_line_text(&name);
+        if self.modules.as_ref().is_some_and(|m| m.opts.scan) {
+            // As clang-scan-deps, whose source minimizer drops `#error`
+            // and `#warning` (spec/modules.md §11.9).
+            return;
+        }
         let id = if error { DiagId::pp_error_directive } else { DiagId::pp_warning_directive };
         self.emit(Diag::new(id, name.tok.span).arg(msg));
     }

@@ -99,6 +99,14 @@ pub fn main(args: impl Iterator<Item = String>) -> ExitCode {
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAJOR: &str = env!("CARGO_PKG_VERSION_MAJOR");
 
+/// The dependency scanner's names beside `kiln` (symlinks to it; the
+/// program name picks the mode): `kiln-scan-deps`, and the
+/// `clang-scan-deps-<clang-compat major>` / `clang-scan-deps` names
+/// `CMake`'s `find_program` looks for in the compiler's directory
+/// (spec/modules.md §11.9). `crates/kiln_driver/build.rs` makes the same
+/// links in the cargo profile directory.
+pub const SCAN_DEPS_NAMES: &[&str] = &["kiln-scan-deps", "clang-scan-deps-22", "clang-scan-deps"];
+
 /// What one dist run produced.
 #[derive(Debug)]
 struct Built {
@@ -333,6 +341,7 @@ pub const DOCS: &[&str] =
 ///
 /// ```text
 /// bin/kiln++ -> kiln
+/// bin/kiln-scan-deps, bin/clang-scan-deps-22, bin/clang-scan-deps -> kiln
 /// lib/kiln/<major>/include/      resource/include (builtin headers)
 /// lib/kiln/<major>/predefines/   resource/predefines/*.txt
 /// share/doc/kiln/                DOCS
@@ -345,7 +354,9 @@ pub fn assemble(root: &Path, prefix: &Path, major: &str) -> Result<(), String> {
     let bin = prefix.join("bin");
     mkdir(&bin)?;
     #[cfg(unix)]
-    std::os::unix::fs::symlink("kiln", bin.join("kiln++")).map_err(io_err("link", &bin))?;
+    for name in std::iter::once(&"kiln++").chain(SCAN_DEPS_NAMES) {
+        std::os::unix::fs::symlink("kiln", bin.join(name)).map_err(io_err("link", &bin))?;
+    }
     let resdir = prefix.join("lib").join("kiln").join(major);
     mkdir(&prefix.join("lib").join("kiln"))?;
     copy_tree(&res.join("include"), &resdir.join("include"))?;
@@ -647,9 +658,11 @@ fn check_layout(prefix: &Path, triple: &str) -> Result<(), String> {
             return Err(format!("the archive has no {}", p.display()));
         }
     }
-    let link = std::fs::read_link(bin.join("kiln++")).map_err(io_err("read link", &bin))?;
-    if link != Path::new("kiln") {
-        return Err(format!("bin/kiln++ points to {}, not kiln", link.display()));
+    for name in std::iter::once(&"kiln++").chain(SCAN_DEPS_NAMES) {
+        let link = std::fs::read_link(bin.join(name)).map_err(io_err("read link", &bin))?;
+        if link != Path::new("kiln") {
+            return Err(format!("bin/{name} points to {}, not kiln", link.display()));
+        }
     }
     Ok(())
 }
@@ -717,6 +730,26 @@ fn smoke(prefix: &Path, cwd: &Path) -> Result<Vec<u8>, String> {
         ]),
     )?;
     step("run constexpr", &mut smoke_cmd(&cwd.join("constexpr"), cwd, &bin))?;
+    // The scanner alias CMake finds beside the compiler (spec/modules.md
+    // §11.9).
+    let m = cwd.join("m.cppm");
+    std::fs::write(&m, "export module m;\nimport n;\n").map_err(io_err("write", &m))?;
+    let scan = step(
+        "clang-scan-deps-22 -format=p1689",
+        smoke_cmd(Path::new("clang-scan-deps-22"), cwd, &bin).args([
+            "-format=p1689",
+            "--",
+            "kiln++",
+            "-std=c++20",
+            "-c",
+            "m.cppm",
+            "-o",
+            "m.o",
+        ]),
+    )?;
+    if !scan.contains("\"logical-name\": \"m\"") || !scan.contains("\"logical-name\": \"n\"") {
+        return Err(format!("the scan of m.cppm printed {scan:?}"));
+    }
     let (gcc, _) = crate::oracle::gcc_from(std::env::var(crate::oracle::GCC_ENV).ok().as_deref());
     match crate::oracle::gcc_toolchain_of(&gcc) {
         Some(tc) => {
@@ -828,7 +861,10 @@ mod tests {
         assert!(!prefix.join("lib/kiln/7/predefines/structure.diff").exists());
         assert!(!prefix.join("lib/kiln/7/include-paths").exists());
         #[cfg(unix)]
-        assert_eq!(std::fs::read_link(prefix.join("bin/kiln++")).unwrap(), Path::new("kiln"));
+        for name in ["kiln++", "kiln-scan-deps", "clang-scan-deps-22", "clang-scan-deps"] {
+            let link = prefix.join("bin").join(name);
+            assert_eq!(std::fs::read_link(link).unwrap(), Path::new("kiln"), "{name}");
+        }
         std::fs::write(prefix.join("bin/kiln"), "#!/bin/sh\n").unwrap();
         let (a, b) = (d.join("a.tar.xz"), d.join("b.tar.xz"));
         tar_xz(&d, "kiln-x", &a, 1_700_000_000).unwrap();

@@ -4,9 +4,10 @@
 //! toolchain builds from them (`spec/driver.md` "Toolchain").
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use kiln_pp::{DirGroup, SearchDirSpec, join_path};
+
+use crate::llvm::{DEFAULT_LLVM_MAJOR, LlvmSelection, Search};
 
 /// A supported target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,9 +208,9 @@ pub struct Toolchain {
     /// kiln's own data directory (`predefines/`), normally the same as the
     /// resource directory.
     pub data_dir: PathBuf,
-    /// The LLVM installation whose libc++ headers are used
-    /// (`KILN_LLVM_DIR`, default [`DEFAULT_LLVM_DIR`]).
-    pub llvm_dir: String,
+    /// The LLVM installation whose tools run and whose libc++ headers are
+    /// used, or why there is none ([`crate::llvm`]).
+    pub llvm: LlvmSelection,
     /// The GCC installation, if one was found.
     pub gcc: Option<GccInstall>,
     /// The installations the search saw, in its order (`-v`'s `Found
@@ -233,15 +234,6 @@ pub enum GccSearch<'a> {
     /// (`.../<triple>/<version>`), if it has a `crtbegin.o`.
     InstallDir(&'a str),
 }
-
-/// The LLVM installation used when `KILN_LLVM_DIR` is unset or empty: the
-/// `KILN_DEFAULT_LLVM_DIR` kiln was built with, if set and non-empty (a
-/// distribution package whose LLVM lives elsewhere sets it), else
-/// `/usr/lib/llvm-19`.
-pub const DEFAULT_LLVM_DIR: &str = match option_env!("KILN_DEFAULT_LLVM_DIR") {
-    Some(d) if !d.is_empty() => d,
-    _ => "/usr/lib/llvm-19",
-};
 
 /// The GCC driver whose installation is used when there is no `--sysroot`,
 /// `--gcc-toolchain` or `--gcc-install-dir`: the `KILN_DEFAULT_GCC` kiln
@@ -328,8 +320,14 @@ fn fallback_resource_dir(installed: Option<PathBuf>) -> PathBuf {
 }
 
 impl Toolchain {
-    /// Locates the toolchain for `target`.
-    pub fn new(target: Target, sysroot: Option<&str>, resource_dir: Option<&str>) -> Toolchain {
+    /// Locates the toolchain for `target`; `llvm_dir` is `--llvm-dir=`
+    /// (spec/driver.md "LLVM discovery").
+    pub fn new(
+        target: Target,
+        sysroot: Option<&str>,
+        resource_dir: Option<&str>,
+        llvm_dir: Option<&str>,
+    ) -> Toolchain {
         let default_res = default_resource_dir();
         let resource_dir =
             resource_dir.map_or_else(|| default_res.to_string_lossy().into_owned(), str::to_owned);
@@ -339,10 +337,7 @@ impl Toolchain {
             default_res
         };
         let sysroot = sysroot.unwrap_or("").to_owned();
-        let llvm_dir = std::env::var("KILN_LLVM_DIR")
-            .ok()
-            .filter(|d| !d.is_empty())
-            .unwrap_or_else(|| DEFAULT_LLVM_DIR.to_owned());
+        let llvm = Search::from_env(llvm_dir).run();
         let driver_gcc = DEFAULT_GCC
             .filter(|_| sysroot.is_empty())
             .and_then(driver_gcc_install)
@@ -357,7 +352,7 @@ impl Toolchain {
             sysroot,
             resource_dir,
             data_dir,
-            llvm_dir,
+            llvm,
             gcc,
             gcc_candidates,
             gcc_from_driver,
@@ -474,13 +469,13 @@ impl Toolchain {
     /// the first of `<llvm>/bin/../include`, `<sysroot>/usr/local/include`,
     /// `<sysroot>/usr/include` that has one, as [`Self::libcxx_dirs`].
     fn libcxx_include_base(&self) -> Option<String> {
-        [
-            format!("{}/bin/../include", self.llvm_dir),
-            format!("{}/usr/local/include", self.sysroot),
-            format!("{}/usr/include", self.sysroot),
-        ]
-        .into_iter()
-        .find(|base| Path::new(&format!("{base}/c++/v1")).is_dir())
+        let llvm = self.llvm_dir().map(|d| format!("{}/bin/../include", d.display()));
+        llvm.into_iter()
+            .chain([
+                format!("{}/usr/local/include", self.sysroot),
+                format!("{}/usr/include", self.sysroot),
+            ])
+            .find(|base| Path::new(&format!("{base}/c++/v1")).is_dir())
     }
 
     /// Where libc++'s module interface sources (`std.cppm`,
@@ -489,7 +484,12 @@ impl Toolchain {
     /// symlinks resolved (Debian's `/usr/include/c++/v1` points into
     /// `/usr/lib/llvm-N`), else `<llvm>/share/libc++/v1`.
     pub fn libcxx_module_dir(&self) -> PathBuf {
-        let fallback = Path::new(&self.llvm_dir).join("share").join("libc++").join("v1");
+        let fallback = self
+            .llvm_dir()
+            .unwrap_or_else(|| Path::new("/usr"))
+            .join("share")
+            .join("libc++")
+            .join("v1");
         let Some(base) = self.libcxx_include_base() else { return fallback };
         let v1 = Path::new(&base).join("c++").join("v1");
         let v1 = std::fs::canonicalize(&v1).unwrap_or(v1);
@@ -543,19 +543,9 @@ pub enum Tool {
 }
 
 impl Tool {
-    /// The versioned name on `PATH` (`llc-19`), as diagnostics name it.
+    /// The name in an LLVM installation's `bin/` directory, as
+    /// diagnostics and `-###` name a tool that was not found.
     pub fn name(self) -> &'static str {
-        match self {
-            Tool::Llc => "llc-19",
-            Tool::LlvmAs => "llvm-as-19",
-            Tool::Opt => "opt-19",
-            Tool::Linker => "clang++-19",
-            Tool::Objcopy => "llvm-objcopy-19",
-        }
-    }
-
-    /// The name in an LLVM installation's `bin/` directory.
-    fn llvm_bin_name(self) -> &'static str {
         match self {
             Tool::Llc => "llc",
             Tool::LlvmAs => "llvm-as",
@@ -575,30 +565,24 @@ impl Tool {
 }
 
 impl Toolchain {
-    /// The major version of the LLVM installation (`KILN_LLVM_DIR`) that
-    /// consumes kiln's IR: the major of `<llvm_dir>/bin/llvm-config
-    /// --version` (probed once per directory per process), else the `N` of
-    /// a directory named `llvm-N` (after resolving symlinks), else 19, the
-    /// version of the unversioned default and of the `-19` tool names
-    /// (spec/driver.md "Toolchain").
-    pub fn llvm_major(&self) -> u32 {
-        let dir = Path::new(&self.llvm_dir);
-        probe_llvm_config_major(dir)
-            .or_else(|| llvm_dir_major(dir))
-            .or_else(|| std::fs::canonicalize(dir).ok().and_then(|d| llvm_dir_major(&d)))
-            .unwrap_or(19)
+    /// The selected LLVM installation's prefix, if one was found.
+    pub fn llvm_dir(&self) -> Option<&Path> {
+        self.llvm.as_ref().ok().map(|i| i.dir.as_path())
     }
 
-    /// Where `tool` is: `<llvm_dir>/bin/<tool>` (`KILN_LLVM_DIR`, default
-    /// [`DEFAULT_LLVM_DIR`]), else the versioned name (`llc-19`) on `PATH`.
-    /// `None` if neither exists.
+    /// The major version of the LLVM installation that consumes kiln's IR
+    /// ([`crate::llvm::dir_major`]), else [`DEFAULT_LLVM_MAJOR`] when none
+    /// was found (`-S -emit-llvm` runs no tool; spec/driver.md "LLVM
+    /// discovery").
+    pub fn llvm_major(&self) -> u32 {
+        self.llvm.as_ref().map_or(DEFAULT_LLVM_MAJOR, |i| i.major)
+    }
+
+    /// Where `tool` is: `<llvm>/bin/<tool>` of the selected installation.
+    /// `None` without one, or if it has no such file.
     pub fn find_tool(&self, tool: Tool) -> Option<PathBuf> {
-        let in_llvm = Path::new(&self.llvm_dir).join("bin").join(tool.llvm_bin_name());
-        if in_llvm.is_file() {
-            return Some(in_llvm);
-        }
-        let path = std::env::var_os("PATH")?;
-        std::env::split_paths(&path).map(|d| d.join(tool.name())).find(|p| p.is_file())
+        let p = self.llvm_dir()?.join("bin").join(tool.name());
+        p.is_file().then_some(p)
     }
 }
 
@@ -683,49 +667,6 @@ fn gcc_install_dir(dir: &str) -> Option<GccInstall> {
     Some(GccInstall { path: path.to_owned(), triple, version })
 }
 
-/// The major of `<dir>/bin/llvm-config --version`, cached per directory
-/// for the life of the process (the driver asks once per compile job; a
-/// process normally sees one installation). `None` when the tool is
-/// missing, fails, or prints something that is not `N.M.P...`.
-fn probe_llvm_config_major(dir: &Path) -> Option<u32> {
-    static CACHE: Mutex<Vec<(PathBuf, Option<u32>)>> = Mutex::new(Vec::new());
-    let mut cache = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((_, m)) = cache.iter().find(|(d, _)| d == dir) {
-        return *m;
-    }
-    let tool = dir.join("bin").join("llvm-config");
-    let m = if tool.is_file() {
-        std::process::Command::new(&tool)
-            .arg("--version")
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| llvm_config_version_major(&String::from_utf8_lossy(&o.stdout)))
-    } else {
-        None
-    };
-    cache.push((dir.to_path_buf(), m));
-    m
-}
-
-/// `22.1.8`, `19.1.7git` -> 22, 19: the leading integer of
-/// `llvm-config --version`'s output.
-fn llvm_config_version_major(out: &str) -> Option<u32> {
-    let major = out.trim().split('.').next()?;
-    if major.is_empty() || !major.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    major.parse().ok()
-}
-
-/// `/usr/lib/llvm-22` -> `22`; `None` unless the last component is
-/// `llvm-N`.
-fn llvm_dir_major(dir: &Path) -> Option<u32> {
-    dir.file_name()?.to_str()?.strip_prefix("llvm-")?.parse().ok()
-}
-
 /// `14`, `13.2.0` -> `[14]`, `[13, 2, 0]`; `None` if not a version.
 fn gcc_version_key(s: &str) -> Option<Vec<u32>> {
     s.split('.').map(|p| p.parse::<u32>().ok()).collect()
@@ -758,39 +699,6 @@ mod tests {
         assert_eq!(LangStd::parse("iso9899:2017").map(|s| s.base), Some("c17"));
         for bad in ["c++27", "gnu", "c", "gnuc11", "99", "gnu++", "c++"] {
             assert_eq!(LangStd::parse(bad), None, "{bad}");
-        }
-    }
-
-    #[test]
-    fn llvm_dir_majors() {
-        assert_eq!(llvm_dir_major(Path::new("/usr/lib/llvm-22")), Some(22));
-        assert_eq!(llvm_dir_major(Path::new("/usr/lib/llvm-19/")), Some(19));
-        assert_eq!(llvm_dir_major(Path::new("/opt/llvm")), None);
-        assert_eq!(llvm_dir_major(Path::new("/opt/llvm-main")), None);
-    }
-
-    #[test]
-    fn llvm_config_versions() {
-        assert_eq!(llvm_config_version_major("22.1.8\n"), Some(22));
-        assert_eq!(llvm_config_version_major("19.1.7"), Some(19));
-        assert_eq!(llvm_config_version_major("23.0.0git\n"), Some(23));
-        assert_eq!(llvm_config_version_major(""), None);
-        assert_eq!(llvm_config_version_major("x.1"), None);
-    }
-
-    /// The probe keys on the installed tool, not the directory name; a
-    /// directory without one falls back to the name, then 19.
-    #[test]
-    fn llvm_major_probe() {
-        let tc =
-            |d: &str| Toolchain { llvm_dir: d.to_owned(), ..Toolchain::new(AARCH64, None, None) };
-        assert_eq!(tc("/nonexistent/llvm-22").llvm_major(), 22);
-        assert_eq!(tc("/nonexistent/llvm").llvm_major(), 19);
-        for n in [19, 22] {
-            let d = format!("/usr/lib/llvm-{n}");
-            if Path::new(&d).join("bin/llvm-config").is_file() {
-                assert_eq!(tc(&d).llvm_major(), n);
-            }
         }
     }
 

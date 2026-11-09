@@ -6,8 +6,9 @@
 # oss-report.py on the two-cluster fixture under fixtures/, plain, with
 # --perf (WP-792) and with --update, and the libc++ mode (WP-694): the
 # wrapper's `-stdlib=libc++` and oss-report.py --stdlib libc++, and a CMake
-# target_precompile_headers project (WP-1023). Prints one
-# PASS/FAIL line per check and exits 1 on any FAIL.
+# target_precompile_headers project (WP-1023). Prints one PASS/FAIL line
+# per check and exits 1 on any FAIL. With a kiln++, it also builds
+# fixtures/modules with CMake and Ninja (WP-982, cmake_modules).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIX="$HERE/fixtures"
@@ -125,6 +126,37 @@ stdlib_one() { # <label> <compiler or empty>
   check "$label: libc++ argv starts with -fno-crash-diagnostics -stdlib=libc++" "field '$log' 0 'r[\"kind\"]==\"ok\" and r[\"argv\"][1:3]==[\"-fno-crash-diagnostics\",\"-stdlib=libc++\"]'"
   check "$label: libc++ binary needs libc++.so" "readelf -d '$TMP/hello-$label-libcxx' | grep -q 'libc++.so' && ! readelf -d '$TMP/hello-$label-libcxx' | grep -q 'libstdc++'"
 }
+# C++20 modules through CMake (WP-982, spec/modules.md §11.9): the
+# fixtures/modules project with kiln++ as CMAKE_CXX_COMPILER and Ninja.
+# CMake finds the scanner by the same alias mechanism as an installed tree
+# (`clang-scan-deps-22` beside kiln++, a link to the kiln binary); the
+# check refuses a system clang-scan-deps. Then an incremental rebuild:
+# touching the interface recompiles it, the implementation unit and the
+# consumer, but not the partition. Skipped without cmake >= 3.28 or ninja.
+cmake_modules() {
+  local M="$TMP/modules" v
+  v="$(cmake --version 2>/dev/null | sed -n 's/^cmake version \([0-9]*\)\.\([0-9]*\).*/\1 \2/p')"
+  if ! command -v ninja > /dev/null || [ -z "$v" ] || [ "$(echo "$v" | awk '{print ($1 > 3 || ($1 == 3 && $2 >= 28))}')" != 1 ]; then
+    echo "SKIP cmake modules: needs cmake >= 3.28 and ninja"; return
+  fi
+  mkdir -p "$M" && cp -R "$FIX/modules" "$M/src"
+  cmake -S "$M/src" -B "$M/b" -G Ninja -DCMAKE_CXX_COMPILER="$KILN_CXX" > "$M/configure.log" 2>&1
+  check "cmake modules: configure" "[ $? -eq 0 ]"
+  local scanner; scanner="$(sed -n 's/^CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS:FILEPATH=//p' "$M/b/CMakeCache.txt" 2>/dev/null)"
+  check "cmake modules: the scanner is kiln's alias" "[ -n '$scanner' ] && [ \"\$(readlink -f '$scanner')\" = \"\$(readlink -f '$KILN_CXX')\" ]"
+  ninja -C "$M/b" > "$M/build.log" 2>&1
+  check "cmake modules: build" "[ $? -eq 0 ]"
+  check "cmake modules: app prints hello 42" "[ \"\$('$M/b/app')\" = 'hello 42' ]"
+  sleep 1 && touch "$M/src/greet.cppm"
+  ninja -C "$M/b" -v > "$M/rebuild.log" 2>&1
+  check "cmake modules: rebuild after touching the interface" "[ $? -eq 0 ]"
+  local o
+  for o in greet.dir/greet.cppm.o greet.dir/greet-impl.cpp.o app.dir/main.cpp.o; do
+    check "cmake modules: touch greet.cppm recompiles $o" "grep -qF -- '-o CMakeFiles/$o -c ' '$M/rebuild.log'"
+  done
+  check "cmake modules: touch greet.cppm leaves the partition" "! grep -qF -- '-o CMakeFiles/greet.dir/greet-part.cppm.o -c ' '$M/rebuild.log'"
+  check "cmake modules: then nothing to do" "ninja -C '$M/b' | grep -q 'no work to do'"
+}
 run_one clang ""
 check "clang: default compiler is clang++-19" "field '$TMP/clang.jsonl' 0 'r[\"argv\"][0]==\"clang++-19\"'"
 stdlib_one clang ""
@@ -136,6 +168,7 @@ if [ -n "$KILN_CXX" ]; then
   stdlib_one kiln "$KILN_CXX"
   (cd "$TMP" && KILN_OSS_CXX="$KILN_CXX" KILN_OSS_LOG="$TMP/oom.jsonl" KILN_OSS_VMEM_KB=30000 "$HERE/kiln-cxx" -c hello.cpp -o o.o >/dev/null 2>&1)
   check "kiln: 30 MB address-space cap is kind oom" "field '$TMP/oom.jsonl' 0 'r[\"kind\"]==\"oom\" and r[\"rc\"]!=0 and r[\"diag\"]!=\"\"'"
+  cmake_modules
 else
   echo "SKIP kiln: no kiln++ (set KILN_OSS_CXX or build --profile harness)"
 fi
