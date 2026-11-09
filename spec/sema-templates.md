@@ -2149,6 +2149,25 @@ must not do that either. A substitution failure in a member *declaration*
 is never SFINAE here: SFINAE applies only to deduction, and a class
 instantiated inside a SFINAE context is a hard error there (§5.7).
 
+The same guard covers function bodies and local classes (WP-905), with
+`kiln: internal error: {part} in {context} was not instantiated and no
+diagnostic says why` (`sema_inst_part_dropped`):
+- *Statements.* `Substituter::stmt` takes the mark before each statement;
+  a statement that fails with nothing emitted since (and no error in the
+  TU) reports `a statement in 'f'` at the statement before it becomes a
+  null statement. A pack probe that stopped once it found its length
+  (`probe_done`) fails quietly by design and is exempt. Every member
+  function body of a class template or local class, every function
+  template body and every lambda body goes through it.
+- *Local class complete-class contexts.* A local class member's default
+  arguments, *noexcept-specifier* and default member initializer are
+  checked as they are substituted after the outermost local class
+  (§5.6 "Local classes", `local_late_parts`): `the default argument of
+  parameter 'x' of 'g'`, `the exception specification of 'g'`, `the
+  default member initializer of 'a'`, each in the local class.
+With the guard on, neither the conformance corpus nor the libc++ m3 gate
+reports a dropped statement or part.
+
 **Points of instantiation.**
 - `SpecInfo.point_of_instantiation` is the location of the use that first
   required the definition, as clang records it. It is used only in
@@ -2436,7 +2455,9 @@ and the §6.2 tests.
   way: `sizeof(V<P>)` does not instantiate `P a = nullptr;` inside an
   anonymous struct (WP-446; libc++ 22's `_LIBCPP_COMPRESSED_PAIR`,
   `tests/conformance/temp.inst/nsdmi-anonymous-member-deferred.cpp`).
-  Only a local class's initializers are instantiated with the class.
+  Only a local class's initializers (its anonymous members' included) are
+  instantiated with the class, after the outermost local class is
+  complete (§5.6 "Local classes", WP-905).
 - A recursive use while the enclosing class is being instantiated is
   clang's error: "default member initializer for 'x' needed within
   definition of enclosing class 'A<int>' outside of member functions".
@@ -3219,7 +3240,34 @@ recomputed exactly as for non-template code (clang's
   and immediately ([temp.inst]/3), by the body's own substituter
   (`subst/local.rs`, WP-131): so their members see the function's
   template arguments and its local declarations. Member classes are
-  defined with the outermost local class. Member function bodies are
+  defined with the outermost local class. Every complete-class context
+  ([class.mem.general]/7) of its members and of its member classes'
+  members is substituted after the outermost local class is complete,
+  in the re-entered class scopes, in the parser's replay order (clang
+  `ParseLexedMethodDeclarations`, `ParseLexedMemberInitializers`,
+  `ParseLexedMethodDefs`), so it names members declared later and the
+  function's locals (WP-905, `subst/local.rs` `LocalLate`):
+  1. the default arguments and the dependent *noexcept-specifier* of each
+     member function, in member order. Until then a default argument is
+     pending (`unparsed_default_args`) and the specification is
+     `ExcSpec::Deferred(f)` in `unparsed_exc`, as for a class the parser
+     is still defining. The specification is substituted by the body's
+     substituter, with the member's parameters and `this` (it used to be
+     instantiated on demand by a fresh substituter without the function's
+     locals, so `noexcept(E)` naming a local enumerator silently became
+     potentially throwing);
+  2. the default member initializers, of member classes and anonymous
+     members included (a nested class's used to be substituted at its own
+     `}`, silently dropping a reference to a later member of the
+     enclosing local class: the field was 0);
+  3. the member function bodies.
+  A closure type's members are not deferred (its call operator's default
+  arguments are substituted with it). clang 19 and 22 reject a default
+  argument or *noexcept-specifier* naming a later enumerator ("no member
+  '' in 'O'; it has not yet been instantiated"), a clang bug; g++ 14
+  accepts it, as kiln
+  (`tests/conformance/class.local/template-local-class-*.cpp`).
+  Member function bodies are
   defined after it is complete, in the re-entered class scopes, as the
   parser replays them. Each body is a function of its own: the enclosing
   function's references still waiting for the end of their
