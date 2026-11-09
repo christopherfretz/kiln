@@ -11,6 +11,7 @@ use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{Quals, RefQual, TypeView};
 use kiln_ast::{DeclHead, DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
+use kiln_source::Loc;
 use kiln_source::fx::FxHashSet;
 use kiln_source::symbol::Symbol;
 
@@ -91,11 +92,17 @@ impl Sema<'_, '_> {
     /// [class.static.mfct]/2: a static member function has no
     /// cv-qualifier or ref-qualifier. clang reports them in one
     /// diagnostic and drops them from the type.
-    pub(crate) fn check_static_method_quals(&mut self, ty: QualType, d: &Declarator) -> QualType {
+    pub(crate) fn check_static_method_quals(
+        &mut self,
+        ty: QualType,
+        d: &Declarator,
+        begin: Loc,
+    ) -> QualType {
         let Some(p) = self.ast.types.proto(ty).copied() else { return ty };
         let info = p.info();
         let (q, r) = (info.this_quals(), info.ref_qual());
         if q.is_empty() && r == RefQual::None {
+            self.diag_nullability_only_fn_quals(DiagId::sema_static_member_fn_quals, d, begin);
             return ty;
         }
         let s = method_quals_spelling(q, r);
@@ -822,8 +829,18 @@ impl Sema<'_, '_> {
         let fty = self.ast.decls.get(f).ty()?;
         let q = self.ast.types.proto(fty).map_or(Quals::NONE, |p| p.info().this_quals());
         let t = self.this_class_type(class);
-        let t = if q.is_empty() { t } else { self.ast.types.qualify(t, q) };
-        Some(self.ast.types.pointer_to(t))
+        Some(self.this_pointer_type(t, q))
+    }
+
+    /// The type of `this` in a member function of class type `t` with
+    /// method qualifiers `q` ([expr.prim.this]/2): pointer to cv `t`; a
+    /// GNU `__restrict` method qualifier makes the pointer itself
+    /// restrict-qualified (clang `getThisType`'s `X * __restrict`).
+    pub(crate) fn this_pointer_type(&mut self, t: QualType, q: Quals) -> QualType {
+        let cv = q - Quals::RESTRICT;
+        let t = if cv.is_empty() { t } else { self.ast.types.qualify(t, cv) };
+        let p = self.ast.types.pointer_to(t);
+        if q.is_restrict() { self.ast.types.qualify(p, Quals::RESTRICT) } else { p }
     }
 
     /// The definition bits of class `r` at its `}` that depend on its
@@ -1115,7 +1132,7 @@ pub(crate) fn method_quals_spelling(q: Quals, r: RefQual) -> String {
         if !s.is_empty() {
             s.push(' ');
         }
-        s.push_str("restrict");
+        s.push_str("__restrict");
     }
     let rs = match r {
         RefQual::None => "",

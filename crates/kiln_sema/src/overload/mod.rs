@@ -702,12 +702,13 @@ impl Sema<'_, '_> {
     }
 
     /// The object binding of method `m`: its cv-qualifiers and
-    /// ref-qualifier.
+    /// ref-qualifier (a GNU `__restrict` method qualifier qualifies
+    /// `this`, not the object).
     pub(crate) fn method_object_quals(&self, m: DeclId) -> (kiln_ast::types::Quals, RefQual) {
         let ty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
         let info =
             self.ast.types.proto(ty).map(kiln_ast::types::FuncProto::info).unwrap_or_default();
-        (info.this_quals(), info.ref_qual())
+        (info.this_quals() - kiln_ast::types::Quals::RESTRICT, info.ref_qual())
     }
 
     /// Whether `m` is a member function with an explicit object
