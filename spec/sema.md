@@ -8371,8 +8371,16 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
       statement evaluated takes a step: a walk that runs out (clang
       `-fconstexpr-steps`, default 1048576) fails with "constexpr
       evaluation hit maximum step limit; possible infinite loop?" at the
-      statement clang would be about to evaluate, found from the
-      repeating cycle of statements rather than by running every step;
+      statement clang would be about to evaluate. A loop whose
+      statements name only known locals (no `return`, label, `goto`,
+      `try`, range-based `for`, `[[assume]]` or `this`/parameter in it)
+      runs in one Oven evaluation however many iterations it takes
+      (`Oven::evaluate_loop_in_frame`, WP-1163), counting steps as clang
+      does, with the remaining step budget; it reports its failure at
+      the statement it fails at, step limit included. Any other loop
+      runs iteration by iteration; when an iteration leaves the frame's
+      bytes as it found them and takes steps, the walk jumps to the step
+      limit instead of running every step;
     - a `switch` with a known condition runs its body from the matching
       `case` or `default` label, searched as clang does (into blocks,
       `if` branches, loop bodies and labelled statements; a skipped
@@ -8391,18 +8399,32 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
       while the parameters stay unknown. Likewise the walk tracks each
       block-scope variable and condition variable the Oven can hold in a
       potential-constant frame (spec/oven.md, `Oven::frame_local`: no
-      pointer, reference, union, `mutable` or volatile subobject, no
-      destructor). A full-expression, condition or initializer that
+      reference, pointer to member, union, `mutable` or volatile
+      subobject, no destructor). Pointer locals are tracked (WP-1163):
+      null, the address of a local, a global or a string literal, and
+      pointer arithmetic on those, so `int *p = nullptr; return *p;`
+      fails with clang's null-dereference note. A pointer that would
+      dangle once its evaluation ends (into the heap, a temporary, a
+      block-scope object of that evaluation) makes the evaluation fail
+      quietly. A full-expression, condition or initializer that
       names no parameter, `this` or untracked local is evaluated in
       that frame (`Oven::evaluate_in_frame`): modifications stay, and a
-      failure is reported with its notes. A reference local bound to a
+      failure is reported with its notes. One that names both is also
+      evaluated in that frame first, in clang's order (WP-1163): a
+      failure before its first unknown read is reported, and that read
+      fails quietly (clang's potential mode); the walk then takes it
+      apart, still reporting an operand that names no local. An
+      assignment evaluates its right operand first. A local's value is
+      never checked as a constant result (clang does not in potential
+      mode), and the read of an object whose lifetime ended in an
+      earlier evaluation fails quietly. A reference local bound to a
       tracked local designates it. A local whose initializer is unknown,
       or that is not tracked, is unknown: reading it notes a side
       effect. Once a side effect has been noted, every local is unknown
       (clang fails quietly on any local access after `noteSideEffect`).
-      A loop's cycle test also compares the frame's bytes. After 4096
-      frame evaluations in one body, the walk treats its locals as
-      unknown;
+      After 4096 frame evaluations in one body (only a loop the walk
+      runs iteration by iteration reaches it), the walk treats its
+      locals as unknown;
   - the walk also fails, as clang's `EvaluateStmt` (WP-1123), at the
     definition of a static or `thread_local` local variable not usable in
     constant expressions ("control flows through the definition of a
@@ -8459,9 +8481,10 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     `-Wsystem-headers` (clang skips `CheckConstexprFunctionBody` there;
     libstdc++'s `<cmath>` overloads call `__builtin_acosf`);
   Kiln never reports a function clang accepts. It misses some clang
-  reports: a local holding a pointer is not tracked (`int *p = nullptr;
-  *p;`), and an expression naming both a parameter and a tracked local
-  is not evaluated in clang's order (WP-1150 follow-ups). Under the default `-fclang-compat=22` a local of
+  reports: a pointer local holding a heap allocation is not kept between
+  evaluations (clang's "read of heap allocated object that has been
+  deleted"), and a range-based `for` stops the walk (WP-1163
+  follow-ups). Under the default `-fclang-compat=22` a local of
   non-literal type is not itself a failure from C++23 (P2448R2), as in
   clang 22.
 - Tests: `expr.add/integer-overflow-folded.cpp`,
@@ -8478,6 +8501,8 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `dcl.constexpr/never-constant-walk-end-cxx23.cpp`,
   `dcl.constexpr/never-constant-local-values-cxx20.cpp`,
   `dcl.constexpr/never-constant-{local-tracking,discarded-parameter,switch-search}-cxx20.cpp`,
+  `dcl.constexpr/never-constant-{pointer-locals,evaluation-order,long-loop,potential-result}-cxx20.cpp`,
+  `dcl.constexpr/never-constant-pointer-null-{cxx20,clang19}.cpp`,
   `dcl.constexpr/never-constant-default-cxx23.cpp`,
   `dcl.constexpr/never-constant-no-error-cxx20.cpp`,
   `dcl.constexpr/potential-constant-builtin-{fabs,strcmp,not-constexpr}.cpp`,

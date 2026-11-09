@@ -9,10 +9,19 @@
 //! initializes it ([`Oven::frame_local`]), later ones read and modify it
 //! ([`Oven::evaluate_in_frame`]) with each tracked variable's name
 //! designating its object, and the walk frees it when its scope ends
-//! ([`Oven::frame_free`]). Only an object no evaluation can leave a
-//! pointer in is tracked (no pointer, reference, virtual pointer, union,
-//! `mutable` or volatile subobject, no destructor): a pointer into the
-//! frame or heap space of one evaluation dangles once it ends.
+//! ([`Oven::frame_free`]). A tracked object is a scalar (a pointer
+//! included, WP-1163), or an array or class of them with no virtual
+//! pointer, union, `mutable` or volatile subobject and no destructor. A
+//! pointer one evaluation leaves in it must outlive that evaluation: an
+//! evaluation that stores one into its own frame or heap space (which
+//! dangles once it ends) fails quietly ([`Oven::frame_escapes`]).
+//!
+//! In a frame job, as in clang's potential mode, reading a parameter,
+//! `this`, an untracked local or an object whose lifetime ended in an
+//! earlier job fails quietly, and a potential result is not checked as
+//! a constant result. A loop over tracked objects runs as one job
+//! ([`Oven::evaluate_loop_in_frame`]) within a step budget; a failed
+//! loop job leaves the frame as it found it.
 
 use kiln_ast::{ConstValueId, DeclId, ExprId, StmtId};
 use kiln_source::fx::FxHashMap;

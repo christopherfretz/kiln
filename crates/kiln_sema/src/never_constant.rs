@@ -49,17 +49,36 @@
 //! initializers included) is known.
 //!
 //! Local variables and condition variables have values, as in clang's
-//! call frame (WP-1150): until the first side effect (after which clang
-//! fails quietly to access any of them), a local variable of a type no
-//! evaluation can leave a pointer in (arithmetic, enumeration, and arrays
-//! and classes of those without a destructor) is a frame object
-//! ([`kiln_oven::Oven::frame_local`]), initialized and later read and
-//! modified by the Oven ([`Sema::eval_in_frame`]) with the parameters
-//! still unknown; a reference variable bound to one names it. Any other
-//! local variable is unknown, so the walk misses some functions clang
-//! reports; it never reports one clang accepts. A loop whose iteration
-//! leaves the frame as it found it repeats forever; any other runs
-//! iteration by iteration.
+//! call frame (WP-1150, WP-1163): until the first side effect (after
+//! which clang fails quietly to access any of them), a local variable of
+//! a type the Oven can keep between evaluations (scalars, pointers
+//! included, and arrays and classes of those without a destructor) is a
+//! frame object ([`kiln_oven::Oven::frame_local`]), initialized and later
+//! read and modified by the Oven ([`Sema::eval_in_frame`]) with the
+//! parameters still unknown; a reference variable bound to one names it.
+//! A pointer local whose value would dangle once its evaluation ends (one
+//! to a temporary, a block-scope object of the evaluation, the heap) is
+//! not kept: the evaluation fails quietly. Any other local variable is
+//! unknown, so the walk misses some functions clang reports; it never
+//! reports one clang accepts.
+//!
+//! An expression naming both is evaluated in clang's order (WP-1163):
+//! the Oven runs it whole in the frame, and its first read of a
+//! parameter, `this` or an untracked local fails the evaluation quietly
+//! ([`kiln_oven::Oven::evaluate_in_frame`]); the walk then takes the
+//! expression apart, and an operand that names no local is still
+//! checked, as clang's `keepEvaluatingAfterFailure` does. An assignment
+//! evaluates its right operand first; a potential result is never
+//! checked as a constant result (clang `CheckPotentialConstantExpression`
+//! does not).
+//!
+//! A loop whose statements name only known locals (no `return`, label,
+//! `goto`, `try` or range-based `for` in it) runs in one Oven evaluation,
+//! however many iterations it takes ([`Sema::eval_loop_in_frame`],
+//! `-fconstexpr-steps` its budget, counting clang's steps); any other
+//! loop runs iteration by iteration, and one whose iteration leaves the
+//! frame and the steps as it found it repeats until the step limit,
+//! which the walk jumps to.
 //!
 //! Builtin calls follow clang's table, never the Oven, which folds more
 //! (the P0533 `<cmath>` builtins and their library twins) and notes some
@@ -163,12 +182,17 @@ enum Flow {
     CaseNotFound,
 }
 
-/// The most statements the walk executes before it gives up quietly
-/// (its own budget: clang's `-fconstexpr-steps` limit is far larger).
+/// The most statements the walk executes itself before it gives up
+/// quietly (its own budget: clang's `-fconstexpr-steps` limit is far
+/// larger). A loop run as one Oven evaluation, and the iterations a
+/// repeating loop skips, count once (WP-1163).
 const MAX_WORK: usize = 1 << 16;
 
 /// The most Oven evaluations in the walk's frame; past them the walk
-/// knows no local variable's value (as after a side effect).
+/// knows no local variable's value (as after a side effect). A loop over
+/// known locals takes one ([`Sema::nc_loop_job`], WP-1163), so only a
+/// loop the walk runs iteration by iteration (one with a `return` in it)
+/// can reach the cap.
 const MAX_FRAME_EVALS: u32 = 1 << 12;
 
 /// What a full-expression names ([`Sema::nc_names`]).
