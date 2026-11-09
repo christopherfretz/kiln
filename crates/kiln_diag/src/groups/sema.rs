@@ -25,6 +25,7 @@ ClassConversion = "class-conversion" [];
 ConditionalUninitialized = "conditional-uninitialized" [];
 ConstantLogicalOperand = "constant-logical-operand" [];
 CoroNonAlignedAllocationFunction = "coro-non-aligned-allocation-function" [];
+CoroTypeAwareAllocationFunction = "coro-type-aware-allocation-function" [];
 CoveredSwitchDefault = "covered-switch-default" [];
 Cxx11NarrowingConstReference = "c++11-narrowing-const-reference" [];
 CxxPre20Compat = "pre-c++20-compat" [];

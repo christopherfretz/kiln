@@ -518,10 +518,11 @@ impl Sema<'_, '_> {
                 &place_args,
                 true,
                 (ti, loc),
-                &mut None,
+                &mut tmpl_notes,
             );
         }
         if found.is_none() {
+            tmpl_notes = None;
             found = if alloc.templates.is_empty() {
                 self.find_operator_new(&untyped_fns, &place_args, pass_align)
             } else if untyped_fns.is_empty() {
@@ -567,6 +568,19 @@ impl Sema<'_, '_> {
         // matching deallocation function is still checked below.
         if let Some(naming) = alloc.naming {
             self.check_member_access(op_new, naming, None, loc);
+        }
+        if self.is_deleted_fn(op_new)
+            && let Some(notes) = tmpl_notes.take()
+        {
+            // Chosen by overload resolution: clang's `err_ovl_deleted_call`
+            // names the operator and lists every candidate.
+            let msg = self
+                .diag(DiagId::sema_call_deleted_function, loc)
+                .arg(format!("'{}'", op_spelling(op)))
+                .arg(self.delete_message_suffix(op_new));
+            let msg = notes.into_iter().fold(msg, kiln_diag::Diag::with_note);
+            self.emit(msg);
+            return self.recover_err(&kids, loc);
         }
         if self.is_deleted_fn(op_new) {
             let own = self.ast.decls.function(op_new).is_some_and(|x| x.spec.is_deleted());
@@ -637,6 +651,12 @@ impl Sema<'_, '_> {
             if self.exceptions {
                 if let Some(naming) = naming {
                     self.check_member_access_distinct(od, naming, loc);
+                }
+                // A deleted one makes the new-expression invalid (clang
+                // `BuildCXXNew`: `DiagnoseUseOfDecl` returns an error).
+                if self.is_deleted_fn(od) {
+                    self.diagnose_deleted_use(od, loc);
+                    return self.recover_err(&kids, loc);
                 }
                 self.diagnose_deleted_use(od, loc);
             }
@@ -1269,7 +1289,11 @@ impl Sema<'_, '_> {
             }
             let out = self.resolve_set(&mut set);
             let f = match out {
-                OvlOutcome::Success(b) | OvlOutcome::Deleted(b) => Some(set.cand(b).func()),
+                OvlOutcome::Success(b) => Some(set.cand(b).func()),
+                OvlOutcome::Deleted(b) => {
+                    *notes = Some(self.ovl_notes(&set, false));
+                    Some(set.cand(b).func())
+                }
                 OvlOutcome::NoViable => {
                     *notes = Some(self.ovl_notes(&set, false));
                     None
@@ -1669,12 +1693,12 @@ impl Sema<'_, '_> {
             return format!("namespace {}", self.decl_arg(c));
         }
         let t = self.tag_type(c);
-        self.ty_arg(t)
+        self.scoped_ty_arg(t)
     }
 
     /// `type aware 'operator new' declared here in 'S'` (clang
     /// `note_type_aware_operator_declared`).
-    fn type_aware_operator_note(&mut self, f: DeclId) -> kiln_diag::Diag {
+    pub(crate) fn type_aware_operator_note(&mut self, f: DeclId) -> kiln_diag::Diag {
         let typed = self.is_type_aware_alloc_fn(f);
         let name = self.ast.decls.get(f).name();
         let name = self.decl_name_str(name);

@@ -83,6 +83,10 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> AllocFns {
         let name = DeclName::operator(op);
+        // An array of class type looks in the element class
+        // ([expr.new]/12 "the allocated type is a class type T or array
+        // thereof"; clang `getBaseElementType`).
+        let elem = self.base_element(elem);
         if !global
             && let Some(rec) = self.ast.types.as_record(elem)
             && (self.ast.definition(rec).is_some() || self.require_complete(elem, loc))

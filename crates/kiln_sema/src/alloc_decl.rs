@@ -362,7 +362,7 @@ impl Sema<'_, '_> {
             None => None,
         };
         let ct = ct.unwrap_or_else(|| self.tag_type(r));
-        let class = self.ty_arg(ct);
+        let class = self.scoped_ty_arg(ct);
         let rloc = self.ast.decls.get(r).loc();
         for (n, d, new_op, delete_op) in [(0, 1, O::New, O::Delete), (2, 3, O::ArrayNew, O::ArrayDelete)]
         {
@@ -418,6 +418,15 @@ impl Sema<'_, '_> {
             .into_iter()
             .find(|&d| self.kind_of(d) == DeclKind::Enum)?;
         Some(self.std_qualified(ns, e))
+    }
+
+    /// A class type as clang prints a bare `RecordType` in a diagnostic
+    /// argument: fully scoped (`'resumable3::promise_type'`).
+    pub(crate) fn scoped_ty_arg(&self, q: QualType) -> String {
+        let names = crate::names::SemaNames::new(self);
+        let opts =
+            kiln_ast::types::PrintOptions { full_scope: true, ..kiln_ast::types::PrintOptions::SUGARED };
+        format!("'{}'", kiln_ast::types::print_type(&self.ast.types, &names, q, opts))
     }
 
     /// Whether `t` is a specialization of `std::type_identity` (the

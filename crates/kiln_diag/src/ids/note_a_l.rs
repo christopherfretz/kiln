@@ -60,6 +60,7 @@ note_coroutine_function_declare_noexcept = Note (0) "must be declared with 'noex
 note_coroutine_promise_call_implicitly_required = Note (1) "call to {0} implicitly required by coroutine function here";
 note_coroutine_promise_implicit_await_transform_required_here = Note (0) "call to 'await_transform' implicitly required by 'co_await' here";
 note_coroutine_promise_suspend_implicitly_required = Note (1) "call to '{0:initial_suspend|final_suspend}' implicitly required by the {0:initial suspend point|final suspend point}";
+note_coroutine_unusable_type_aware_allocators = Note (1) "type aware {0} will not be used for coroutine allocation";
 note_ctad_explicit_here = Note (1) "explicit {0:constructor|deduction guide} declared here";
 note_ctor_candidate_deleted = Note (2) "candidate constructor{0:| (the implicit default constructor)| (the implicit copy constructor)| (the implicit move constructor)} has been {1:explicitly|implicitly} deleted";
 note_declared_at = Note (0) "declared here";
