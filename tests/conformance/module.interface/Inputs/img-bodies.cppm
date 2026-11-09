@@ -4,7 +4,10 @@
 // which the declaration image carries, so under `-fkiln-bmi-image` an
 // importer evaluates and inlines them from the image alone.
 export module imgb;
-namespace imgb {
+// The namespace is not named `imgb`: the importer has interned the module
+// name, and the image is used only when none of its names is (spec
+// "ODR merging").
+namespace ib {
 export constexpr int fact(int n) {
   int r = 1;
   for (int i = 2; i <= n; ++i)
@@ -94,4 +97,4 @@ export const int kLimit = 7;
 export constexpr int kArr[3] = {4, 5, 6};
 export constexpr double kHalf = 0.5;
 export constexpr bool kOn = kAnswer > 100;
-} // namespace imgb
+} // namespace ib

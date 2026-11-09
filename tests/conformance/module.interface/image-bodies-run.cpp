@@ -10,7 +10,7 @@
 //@ stdout: 120 49 0 10 5 | 100 24 26 -1 | 11 4 30 | 10 fname 13 10 1 | 3 7 5 0.5 1 | 245 A
 import imgb;
 extern "C" int printf(const char *, ...);
-using namespace imgb;
+using namespace ib;
 static_assert(fact(5) == 120 && kAnswer == 120 && sq(7) == 49);
 static_assert(classify(0) == 100 && classify(1) == 22 && classify(3) == 6 && classify(9) == -1);
 static_assert(loops(5) == 11 && length(kName) == 4 && length("") == 0);

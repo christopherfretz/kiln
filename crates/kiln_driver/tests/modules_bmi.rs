@@ -425,7 +425,8 @@ fn kind2_declaration_image_bodies() {
     std::fs::write(d.join("b.cppm"), src).unwrap();
     std::fs::write(
         d.join("u.cpp"),
-        "import b;\n\
+        "int r = 0, i = 0; // names of `fact`'s locals: not gated\n\
+         import b;\n\
          static_assert(fact(5) == 120 && sq(3) == 9 && kFact == 24 && kBound == 3);\n\
          int arr[kBound];\n\
          int main() { return pick(0) + pick(2) + counter + fact(3) - (int)sizeof(arr) / (int)sizeof(int) == 13 ? 0 : 1; }\n",

@@ -3,7 +3,10 @@
 // bodies with static locals and further literal and operator kinds,
 // imported by two translation units, which share one static local.
 export module imgc;
-export namespace imgc {
+// The namespace is not named `imgc`: the importer has interned the module
+// name, and the image is used only when none of its names is (spec
+// "ODR merging").
+export namespace ic {
 inline int next() {
   static int calls = 0;
   return ++calls;
@@ -41,4 +44,4 @@ constexpr int ptrs() {
 }
 const int kBound = 4;
 constexpr const char *kWords = "abc" "def";
-} // namespace imgc
+} // namespace ic

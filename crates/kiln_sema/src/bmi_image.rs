@@ -208,7 +208,9 @@ struct Image {
     module: String,
     kw: u32,
     name_loc: u32,
+    /// The unit's declared names (the preprocessor's gate).
     names: Vec<String>,
+    /// Parameter and local names (not gated).
     pnames: Vec<String>,
     types: Vec<TyRec>,
     decls: Vec<DeclRec>,
@@ -853,7 +855,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 || d.owner > 3
                 || d.lexical != NONE
                 || d.prev != NONE
-                || (d.name != NONE && d.name as usize >= img.names.len())
+                || (d.name != NONE && d.name as usize >= img.pnames.len())
             {
                 return bad("bad local declaration");
             }
@@ -1602,7 +1604,12 @@ impl Sema<'_, '_> {
             self.ast.modules.set_owner_from(next, owner);
             let at = |x: u32| if x == NONE { None } else { ids.get(x as usize).copied() };
             let ctx = at(r.ctx).unwrap_or(self.ast.tu);
-            let name = if r.name == NONE { DeclName::EMPTY } else { names[r.name as usize] };
+            let name = match r.name {
+                NONE => DeclName::EMPTY,
+                // Locals name `pnames` (they are not gated, "ODR merging").
+                n if body::is_local(img, r) => pnames[n as usize],
+                n => names[n as usize],
+            };
             let mut h = DeclHead::new(ctx, name, lo(self, r.loc));
             if r.flags & DeclFlags::IMPLICIT.bits() != 0 {
                 h.flags = DeclFlags::IMPLICIT;
@@ -1832,8 +1839,8 @@ mod tests {
             module: "m".into(),
             kw: 0,
             name_loc: 7,
-            names: ["ns", "f", "E", "a", "T", "v", "g", "y", "L"].map(String::from).to_vec(),
-            pnames: vec!["x".into(), "p".into()],
+            names: ["ns", "f", "E", "a", "T", "v", "g"].map(String::from).to_vec(),
+            pnames: ["x", "p", "y", "L"].map(String::from).to_vec(),
             types: vec![
                 TyRec::Func { ret: q(int), params: vec![q(int)], info: 0, exc: 0 },
                 TyRec::Enum(3),
@@ -1952,7 +1959,7 @@ mod tests {
                 DeclRec {
                     flags: 4,
                     owner: 3,
-                    name: 7,
+                    name: 2,
                     ctx: 7,
                     lexical: NONE,
                     loc: 106,
@@ -1962,7 +1969,7 @@ mod tests {
                 DeclRec {
                     flags: 0,
                     owner: 3,
-                    name: 8,
+                    name: 3,
                     ctx: 7,
                     lexical: NONE,
                     loc: 130,

@@ -1422,8 +1422,10 @@ impl Writer<'_, '_, '_> {
         let name = match n.name() {
             x if x == DeclName::EMPTY => NONE,
             x => {
+                // Not a declared name of the unit: a local never meets an
+                // importer's declaration, so it is not gated ("ODR merging").
                 let s = self.ident(x).ok_or("a local declaration not named by an identifier")?;
-                Self::name_ix(&mut self.names, &mut self.img.names, &s)
+                Self::name_ix(&mut self.pnames, &mut self.img.pnames, &s)
             }
         };
         let loc = self.loc(n.loc())?;
