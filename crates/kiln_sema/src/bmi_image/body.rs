@@ -106,12 +106,13 @@ pub(super) struct Bodies {
 }
 
 /// Cold annotations carried: `end_loc`, `cast_written`, `trait_rhs_loc`,
-/// `expr_begin`, in this order after the slots.
+/// `expr_begin`, `member_op_loc`, in this order after the slots.
 const COLD_END: u8 = 1;
 const COLD_WRITTEN: u8 = 2;
 const COLD_RHS: u8 = 4;
 const COLD_BEGIN: u8 = 8;
-const COLD_ALL: u8 = 15;
+const COLD_OP: u8 = 16;
+const COLD_ALL: u8 = 31;
 
 // ---------------------------------------------------------------------------
 // The schema
@@ -142,6 +143,9 @@ pub(super) enum Dc {
     Ctor,
     /// A destructor (an implicit one too).
     Dtor,
+    /// A declaration reference's found declaration: a [`Dc::Value`] or
+    /// the function template a specialization was named through.
+    Found,
 }
 
 /// A field: how one or more words are read.
@@ -178,6 +182,9 @@ pub(super) enum F {
     /// argument-free kind, syntax and flags ([`attr_word`]) and the
     /// location.
     AL,
+    /// A member name of a dependent member access (S4): an identifier,
+    /// as an index into the image's undeclared names (`pnames`).
+    Name,
 }
 
 /// The statement attributes the image carries: argument-free ones.
@@ -235,7 +242,7 @@ fn side_fields(s: Side) -> &'static [F] {
         Side::Arms => &[E, E],
         Side::CompoundAssign => &[E, Qt, Qt],
         Side::InitList => &[OE, Loc],
-        Side::DeclRef => &[Nns, OD(Dc::Value)],
+        Side::DeclRef => &[Nns, OD(Dc::Found)],
         Side::If => &[OS, OD(Dc::Var), OE, OS, OS],
         Side::Switch => &[OS, OD(Dc::Var), E, S, SL],
         Side::Case => &[E, OE, S],
@@ -246,7 +253,7 @@ fn side_fields(s: Side) -> &'static [F] {
 
 /// The expression kinds the image carries; the record's kind byte indexes
 /// this table (append only).
-pub(super) const EXPR_KINDS: [ExprKind; 47] = {
+pub(super) const EXPR_KINDS: [ExprKind; 49] = {
     use ExprKind as X;
     [
         X::IntegerLiteral,
@@ -296,6 +303,10 @@ pub(super) const EXPR_KINDS: [ExprKind; 47] = {
         X::CXXTemporaryObjectExpr,
         X::CXXDefaultInitExpr,
         X::CXXBindTemporaryExpr,
+        // S4 (WP-1139): `T(args)` / `T{args}` and `x.m` / `x->m` with a
+        // type-dependent object, in a pattern.
+        X::CXXUnresolvedConstructExpr,
+        X::CXXDependentScopeMemberExpr,
     ]
 };
 
@@ -346,6 +357,8 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::ConditionalOperator | X::ChooseExpr => [f(F::E), Sd(Side::Arms)],
         X::ParenExpr => [f(F::E), f(F::Loc)],
         X::CallExpr | X::CXXOperatorCallExpr | X::CXXMemberCallExpr => [f(F::E), f(F::EL)],
+        X::CXXUnresolvedConstructExpr => [f(F::EL), Z],
+        X::CXXDependentScopeMemberExpr => [f(F::E), f(F::Name)],
         X::ImplicitCastExpr
         | X::CStyleCastExpr
         | X::CXXFunctionalCastExpr
@@ -396,7 +409,10 @@ fn expr_aux_ok(k: ExprKind, aux: u8) -> bool {
         X::TypeTraitExpr => usize::from(aux) < TypeTrait::all().len(),
         X::ConstantExpr => aux <= 3,
         X::MaterializeTemporaryExpr => StorageDuration::from_u8(aux & 3).is_some() && aux >> 3 == 0,
-        X::CXXThisExpr | X::ExprWithCleanups => aux <= 1,
+        X::CXXThisExpr
+        | X::ExprWithCleanups
+        | X::CXXUnresolvedConstructExpr
+        | X::CXXDependentScopeMemberExpr => aux <= 1,
         _ => aux == 0,
     }
 }
@@ -442,9 +458,13 @@ fn layout(shape: [Slot; 2], cold: u8) -> Vec<F> {
             Slot::Side(sd) => v.extend_from_slice(side_fields(sd)),
         }
     }
-    for (bit, f) in
-        [(COLD_END, F::Loc), (COLD_WRITTEN, F::Qt), (COLD_RHS, F::Loc), (COLD_BEGIN, F::Loc)]
-    {
+    for (bit, f) in [
+        (COLD_END, F::Loc),
+        (COLD_WRITTEN, F::Qt),
+        (COLD_RHS, F::Loc),
+        (COLD_BEGIN, F::Loc),
+        (COLD_OP, F::Loc),
+    ] {
         if cold & bit != 0 {
             v.push(f);
         }
@@ -726,11 +746,31 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         return matches!(dc, Dc::Value | Dc::Param) && ((w & !PARAM) as usize) < nparams;
     }
     let Some(d) = img.decls.get(w as usize) else { return false };
+    if dc == Dc::Found && matches!(d.payload, Payload::Template { kind: 0, .. }) {
+        return true;
+    }
+    // A specialization or member reference (S4b) names what its pattern
+    // declares: a function template's pattern function, a class
+    // template's pattern member.
+    let d = match d.payload {
+        Payload::Spec { template, .. } => match img.decls.get(template as usize) {
+            Some(DeclRec { payload: Payload::Template { pattern, .. }, .. }) => {
+                let Some(p) = img.decls.get(*pattern as usize) else { return false };
+                p
+            }
+            _ => return false,
+        },
+        Payload::Member { pattern, .. } => {
+            let Some(p) = img.decls.get(pattern as usize) else { return false };
+            p
+        }
+        _ => d,
+    };
     let in_class = || {
         img.decls.get(d.ctx as usize).is_some_and(|c| matches!(c.payload, Payload::Record { .. }))
     };
     match dc {
-        Dc::Value => {
+        Dc::Value | Dc::Found => {
             matches!(
                 d.payload,
                 Payload::Function { .. }
@@ -820,6 +860,7 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                 w[1..].chunks(2).all(|q| q[1] <= 7 && qref_ok(QRef { ty: q[0], quals: q[1] as u8 }))
             }
             F::AL => w[1..].chunks(2).all(|a| word_attr(a[0], Loc::INVALID).is_some()),
+            F::Name => (w[0] as usize) < img.pnames.len(),
             F::Nns => {
                 let mut p = 1;
                 while p < w.len() {
@@ -1019,6 +1060,7 @@ enum Fv {
     Nns(Option<NnsId>),
     AL(ListId),
     Path(Option<ListId>),
+    Name(DeclName),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -1068,6 +1110,7 @@ impl Writer<'_, '_, '_> {
             F::Path => Fv::Path(ListId::from_raw(raw)),
             F::Nns => Fv::Nns(NnsId::from_raw(raw)),
             F::AL => Fv::AL(ListId::from_raw(raw).ok_or(BAD)?),
+            F::Name => Fv::Name(DeclName::from_raw(raw).ok_or(BAD)?),
         })
     }
 
@@ -1108,7 +1151,7 @@ impl Writer<'_, '_, '_> {
                     if x.template_args.is_some() {
                         return Err("a template argument list");
                     }
-                    vec![Fv::Nns(x.qualifier), Fv::D(x.found_decl, Dc::Value)]
+                    vec![Fv::Nns(x.qualifier), Fv::D(x.found_decl, Dc::Found)]
                 }
             },
             (Side::If, _, Some(s)) => {
@@ -1174,6 +1217,15 @@ impl Writer<'_, '_, '_> {
                     return Err("an expression the image does not carry");
                 }
                 let mut v = self.slots_fv(node, expr_shape(k, n.raw_bits()), [n.a(), n.b()])?;
+                // A braced argument placeholder (`T(a, {b})`) lives in a
+                // Sema side table the image does not carry.
+                if k == ExprKind::CXXUnresolvedConstructExpr
+                    && ListId::from_raw(n.a()).is_some_and(|l| {
+                        ast.lists.iter::<ExprId>(l).any(|x| self.s.is_braced_arg(x))
+                    })
+                {
+                    return Err("a braced argument of a dependent construction");
+                }
                 let c = &ast.exprs.cold;
                 let t = &ast.templates;
                 if c.member_extra.contains(e)
@@ -1187,7 +1239,6 @@ impl Writer<'_, '_, '_> {
                     || t.expr_targs.contains(e)
                     || t.expr_nns.contains(e)
                     || t.size_of_pack_origin.contains(e)
-                    || t.member_op_loc.contains(e)
                     || t.pseudo_dtor_name.contains(e)
                     || t.template_kw.contains(e)
                 {
@@ -1208,6 +1259,10 @@ impl Writer<'_, '_, '_> {
                 }
                 if let Some(&l) = t.expr_begin.get(e) {
                     cold |= COLD_BEGIN;
+                    v.push(Fv::Loc(l));
+                }
+                if let Some(&l) = t.member_op_loc.get(e) {
+                    cold |= COLD_OP;
                     v.push(Fv::Loc(l));
                 }
                 Ok((ki as u8, n.raw_bits(), u16::from(n.aux()), cold, v))
@@ -1352,6 +1407,12 @@ impl Writer<'_, '_, '_> {
                 Some(c) => self.cnst(c)?.ok_or("a constant the image does not carry")?,
             }),
             Fv::Str(s) => out.push(self.string(s)),
+            Fv::Name(n) => {
+                // Not a declared name of the unit (a member found at
+                // instantiation): not gated, like a local's.
+                let s = self.ident(n).ok_or("a dependent member not named by an identifier")?;
+                out.push(Self::name_ix(&mut self.pnames, &mut self.img.pnames, &s));
+            }
             Fv::Loc(l) => out.push(self.loc(l)?),
             Fv::Qt(q) => {
                 let q = self.qref(q)?;
@@ -1493,6 +1554,12 @@ impl Writer<'_, '_, '_> {
             LEX_TU
         } else if self.local(d) {
             self.local_rec(d)?
+        } else if let Some(r) = self.spec_rec(d)? {
+            // S4b: a function template specialization.
+            r
+        } else if let Some(r) = self.member_rec(d)? {
+            // S4b: a member of a class template specialization.
+            r
         } else {
             return Err(OUTSIDE);
         };
@@ -1553,6 +1620,10 @@ impl Writer<'_, '_, '_> {
         let flags = n.flags().bits() & (LOCAL_FLAGS | DEP);
         let o = ast.modules.owner(d);
         let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
+        // The type first: naming a specialization may add its record.
+        if let Some(t) = n.ty() {
+            self.qref(t)?;
+        }
         let i = u32::try_from(self.img.decls.len()).map_err(|_| "a body too large")?;
         let payload = match kind {
             DeclKind::Label => Payload::Label,
@@ -1567,6 +1638,9 @@ impl Writer<'_, '_, '_> {
             }
             _ => self.var_payload(d, i)?,
         };
+        if self.img.decls.len() != i as usize {
+            return Err("a specialization named while its user is recorded");
+        }
         self.img.decls.push(DeclRec {
             flags,
             owner,
@@ -1820,6 +1894,9 @@ impl Sema<'_, '_> {
             if e.cold & COLD_BEGIN != 0 {
                 let _ = self.ast.templates.expr_begin.insert(id, Loc::from_raw(next()));
             }
+            if e.cold & COLD_OP != 0 {
+                let _ = self.ast.templates.member_op_loc.insert(id, Loc::from_raw(next()));
+            }
         }
         for (i, s) in b.stmts.iter().enumerate() {
             let k = STMT_KINDS[usize::from(s.kind)];
@@ -1897,6 +1974,10 @@ impl Sema<'_, '_> {
                 }
             }
             F::Str => strs[w[0] as usize].raw(),
+            F::Name => {
+                let n = img.pnames.get(w[0] as usize).map_or("", String::as_str);
+                DeclName::ident(self.intern(n)).to_raw()
+            }
             F::Loc => {
                 if w[0] == NONE {
                     Loc::INVALID.to_raw()
