@@ -251,7 +251,8 @@ fn consteval_memo_and_trial_rows() {
     assert_eq!(n(t, "trial_steps"), 0);
 }
 
-const CSUM: &str = "consteval int csum(int n) { int r = 0; for (int i = 0; i < n; ++i) r += i; return r; }\n";
+const CSUM: &str =
+    "consteval int csum(int n) { int r = 0; for (int i = 0; i < n; ++i) r += i; return r; }\n";
 
 /// The trial folds of a full-expression's completion checks (the
 /// overflow and implicit-conversion warnings) read the values of its
