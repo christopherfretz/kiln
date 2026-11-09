@@ -4423,7 +4423,11 @@ headers use, `__builtin_ia32_pause` (WP-610), and the header builtins
 declared only when the target is x86-64 (`lazily_create_builtin` /
 `is_builtin_name` / `recognize_builtin_decl` via `target_has_builtin`),
 an undeclared identifier (or, for a header builtin, an ordinary
-function) elsewhere.
+function) elsewhere. WP-961: clang's plain `__rdtsc` (`BUILTIN(__rdtsc,
+"UOi", "")`, the target of <ia32intrin.h>'s `_rdtsc()` macro) is an
+alias of the `__builtin_ia32_rdtsc` row (`builtin::by_name`): declared
+under its own name, the same signature, gating and codegen
+(`target.x86/rdtsc-ir.cpp`, `rdtsc-not-aarch64.cpp`).
 - **Declaration:** when an unqualified id-expression's lookup finds
   nothing and the name is a builtin (`lazily_create_builtin`), Sema
   declares it in the translation unit: an implicit `LinkageSpecDecl`
