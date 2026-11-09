@@ -126,6 +126,49 @@ fn patchable_nop_sled() {
     }
 }
 
+/// WP-961: `-mbranches-within-32B-boundaries` (x86; projects add it for
+/// Intel's JCC erratum, daw_json_link among them) pads the object's
+/// branches as clang 19's does: `llc -x86-branches-within-32B-boundaries`.
+#[test]
+fn branches_within_32b_boundaries() {
+    if !tools(&["llvm-objdump-19"]) {
+        return;
+    }
+    let d = scratch("jcc");
+    std::fs::write(
+        d.join("b.cpp"),
+        "int classify(const int *p, int n) {\n\
+           int r = 0;\n\
+           for (int i = 0; i < n; ++i) {\n\
+             if (p[i] > 7) r += 3;\n\
+             else if (p[i] < -5) r -= 2;\n\
+             else if (p[i] == 2) r ^= 9;\n\
+             else if (p[i] & 1) r += p[i];\n\
+             else r -= 1;\n\
+           }\n\
+           return r;\n\
+         }\n",
+    )
+    .unwrap();
+    let objdump = |o: &Path| {
+        let r = run(
+            Path::new("llvm-objdump-19"),
+            &d,
+            &["-d", "--no-show-raw-insn", o.to_str().unwrap()],
+        );
+        text(&r.stdout).lines().skip(2).collect::<Vec<_>>().join("\n")
+    };
+    let x86 = "--target=x86_64-unknown-linux-gnu";
+    let (plain, _) = both(&d, "b.cpp", "plain.o", &[x86, "-O2", "-c"]);
+    let (k, c) =
+        both(&d, "b.cpp", "jcc.o", &[x86, "-O2", "-c", "-mbranches-within-32B-boundaries"]);
+    let dis = objdump(&k);
+    assert_eq!(dis, objdump(&c));
+    // The padding is there: the same function, longer.
+    assert_ne!(dis, objdump(&plain));
+    assert!(dis.matches("nop").count() > objdump(&plain).matches("nop").count(), "{dis}");
+}
+
 /// `no_stack_protector` under `-fstack-protector-all`: the guarded
 /// function checks the canary, the opted-out ones do not; each body is
 /// clang 19's.
@@ -244,6 +287,10 @@ fn flag_errors() {
              error: invalid value 'bad' in '-fzero-call-used-regs=bad'\n\
              error: invalid value 'bogus' in '-fcf-protection=bogus'\n\
              error: invalid argument '-mfunction-return=' not allowed with 'aarch64-unknown-linux-gnu'\n",
+        ),
+        (
+            &[a64, "-mbranches-within-32B-boundaries"],
+            "kiln++: error: unsupported option '-mbranches-within-32B-boundaries' for target 'aarch64-unknown-linux-gnu'\n",
         ),
         (
             &["-fpatchable-function-entry=x"],
