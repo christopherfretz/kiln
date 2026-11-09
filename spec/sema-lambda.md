@@ -246,6 +246,17 @@ per <lambda-sig> in that scope, with no context declaration (clang 19
 and 22: `f() + f()` calls `f<UlvE_>` and `f<UlvE0_>`; WP-1062,
 `tests/conformance/temp.param/lambda-default-arg-mangling-two-units-run.cpp`).
 The closure parsed in the default itself gets no number.
+A function template specialization's signature is substituted with
+`ManglingState.signature` set to (pattern, the template's semantic
+context) (`Sema::begin_signature_mangling`, around `deduce_spec`'s steps
+and `get_function_spec_signature`'s substitution; the variable, default
+argument and default template argument state is cleared for the
+duration). A closure created there in the template's context is
+numbered per <lambda-sig> in the pattern, which is also its context
+declaration; one created in a class template specialization while it is
+instantiated (no numbering variable of that class) is numbered in the
+class (clang `Normal` with `inTemplateInstantiation()`; WP-1077,
+`tests/codegen/lambda_in_function_signature.cpp`).
 
 ## 4. Captures
 

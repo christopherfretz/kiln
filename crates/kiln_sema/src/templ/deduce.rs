@@ -273,13 +273,17 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Tdk {
         let ps = self.flatten_args(ps);
+        // [temp.deduct.type]/9: a pack expansion that is not the last
+        // argument makes the entire list a non-deduced context, so nothing
+        // is deduced from it, not even the arguments before it (clang
+        // `hasPackExpansionBeforeEnd`): `template<class T, class... U>
+        // X<T, U..., int>` deduces neither `T` nor `U`.
+        if ps.iter().rev().skip(1).any(|&p| self.is_pack_arg(p)) {
+            return Tdk::Success;
+        }
         let as_ = self.flatten_args(as_);
         for (k, &p) in ps.iter().enumerate() {
             if let Some(pat) = self.arg_expansion_pattern(p) {
-                if k + 1 != ps.len() {
-                    // Not the last: a non-deduced context ([temp.deduct.type]/9).
-                    return Tdk::Success;
-                }
                 let rest = as_.get(k..).unwrap_or(&[]);
                 if !d.expansions && rest.iter().any(|&a| self.is_pack_arg(a)) {
                     // `A` has an expansion too: equal only as written.
@@ -298,10 +302,13 @@ impl Sema<'_, '_> {
                     }
                 }
                 return self.deduce_pack_elements(rest.len(), d, |s, i, d| {
-                    match s.type_expansion_parts(pat, rest[i], d) {
-                        Some((ap, n)) => s.deduce_pattern_from_expansion(pat, ap, n, d, level, loc),
-                        None => s.deduce_arg(pat, rest[i], d, level, loc),
+                    if let Some((ap, n)) = s.type_expansion_parts(pat, rest[i], d) {
+                        return s.deduce_pattern_from_expansion(pat, ap, n, d, level, loc);
                     }
+                    if let Some((an, n)) = Self::template_expansion_parts(pat, rest[i], d) {
+                        return s.deduce_template_from_expansion(pat, an, n, d, level, loc);
+                    }
+                    s.deduce_arg(pat, rest[i], d, level, loc)
                 });
             }
             let Some(&a) = as_.get(k) else { return Tdk::MiscellaneousDeductionFailure };
@@ -336,6 +343,48 @@ impl Sema<'_, '_> {
             TypeView::PackExpansion { pattern, num_expansions } => Some((pattern, num_expansions)),
             _ => None,
         }
+    }
+
+    /// [`Self::type_expansion_parts`] for a template template pattern
+    /// `pat` against a template pack expansion `B'...`: its template and
+    /// expansion count.
+    fn template_expansion_parts(
+        pat: TemplateArg,
+        a: TemplateArg,
+        d: &DeducedArgs,
+    ) -> Option<(kiln_ast::ids::TemplateNameId, Option<u32>)> {
+        if !d.expansions || !matches!(pat.view(), ArgView::Template(_)) {
+            return None;
+        }
+        match a.view() {
+            ArgView::TemplateExpansion { name, num_expansions } => Some((name, num_expansions)),
+            _ => None,
+        }
+    }
+
+    /// [`Self::deduce_pattern_from_expansion`] for a template template
+    /// pattern: `B` from `B'...` is `B'...`.
+    fn deduce_template_from_expansion(
+        &mut self,
+        pat: TemplateArg,
+        an: kiln_ast::ids::TemplateNameId,
+        n: Option<u32>,
+        d: &mut DeducedArgs,
+        level: u32,
+        loc: Loc,
+    ) -> Tdk {
+        let r = self.deduce_arg(pat, TemplateArg::template(an), d, level, loc);
+        if r != Tdk::Success {
+            return r;
+        }
+        if let Some(cur) = d.pack_cur.as_mut() {
+            for e in cur.iter_mut() {
+                if let ArgView::Template(t) = e.1.view() {
+                    e.1 = TemplateArg::template_expansion(t, n);
+                }
+            }
+        }
+        Tdk::Success
     }
 
     /// [temp.deduct.type]/9 in partial ordering ([temp.deduct.partial]/8;

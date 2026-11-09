@@ -106,6 +106,10 @@ impl Sema<'_, '_> {
         let trapped = self.sfinae_errors();
         let held = self.sfinae_warnings();
         let access = self.friend_template_access_ctx(spec);
+        // A member template of a class template specialization numbers
+        // in its own templated function (`S<int>::f`), not the pattern's.
+        let own = self.templated_function(tmpl).unwrap_or(pattern);
+        let site = self.begin_signature_mangling(tmpl, own);
         let r = self.in_inst_context(ctx, |s| {
             s.access_ctx = access;
             let mut sub = Substituter::new(s, &margs);
@@ -113,6 +117,7 @@ impl Sema<'_, '_> {
             sub.map_contexts(&pairs);
             sub.function_spec_signature(pattern, spec)
         });
+        self.end_signature_mangling(site);
         let captured = self.sfinae_errors() > trapped;
         let warnings = self.take_sfinae_warnings(held);
         if !warnings.is_empty() && r.is_ok() && !captured {

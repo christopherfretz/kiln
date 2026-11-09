@@ -1712,13 +1712,18 @@ length-prefixed, so no two configurations collide by concatenation.
 `-O2` builds have separate entries. `-g`, `-fPIC` and warnings do not
 change it.
 
-**Stamp.** Beside `<name>.pcm`, `<name>.stamp` holds a magic line, the
-module file's name, and one `<size> <mtime> <path>` line for every file
-the build read. These are the dependency list of an `-MD` with system
-headers, plus the source. A hit needs the stamp valid, every file
-unchanged, and the module file's first bytes kiln's magic. So a libc++
-header edited in place, or a damaged module file, is a miss. This is
-clang's module-cache validation (size and mtime, not content).
+**Stamp.** Beside `<name>.pcm`, `<name>.stamp` holds a magic line
+(`kiln-module-cache-stamp 2`), then `<size> <checksum> <path>` for the
+module file, where `<checksum>` is its trailing §11.3 checksum in hex,
+then one `<size> <mtime> <path>` line for every file the build read.
+These are the dependency list of an `-MD` with system headers, plus the
+source. A hit needs the stamp valid, the module file's size and checksum
+the stamp's, every other file unchanged, and the module file's first
+bytes kiln's magic. So a libc++ header edited in place, or a damaged
+module file, is a miss. This is clang's module-cache validation (size
+and mtime, not content) for the inputs; the module file itself is named
+by its content, because racing compiles each rename their own copy of
+it into place (see "Concurrency").
 
 **Miss.** The driver runs `--precompile` of the libc++ source in-process
 on its own thread, with the importer's stack size and stack guard. The
@@ -1735,13 +1740,59 @@ build go to a buffer. A build with errors removes its empty entry and
 falls back to part A, which reports the module's errors in the
 importer's context, as before WP-984.
 
-**Concurrency.** The module file goes to a unique temporary file
-(`.tmp.<pid>.<thread>.<nanos>`) and is renamed into place, then the
-stamp the same way. A reader reads the stamp first and the module file
-second, so it never sees a torn file. Compiles that miss together all
-build, all rename, and all succeed. The builds are deterministic, so
-any of the files is right. No lock is taken, so a stuck compile cannot
-block others.
+**Concurrency** (WP-1074). Parallel builds (`make -j`, ninja) start
+many compiles that miss the same entry at once. The rules:
+
+- **A hit takes no lock.** It reads the stamp, then the module file.
+  Each is replaced only by a rename of a complete temporary file, so
+  neither is ever torn, and the stamp names the module file by its
+  content. A module file renamed into place after the stamp was read
+  either has the same bytes (the writer is deterministic: every compile
+  of one key writes the same file) or fails the stamp and is a miss.
+- **A miss takes the entry lock.** `<name>.lock` in the entry, an
+  advisory exclusive lock (`flock`, `File::try_lock`, polled with a
+  back-off of 1 to 50 ms). The kernel releases it when its holder exits,
+  a SIGKILL included. Holding it, the compile checks the entry again: a
+  compile that waited finds what the holder published and uses it. So
+  one compile per entry builds and the others wait, instead of every one
+  of them building.
+- **The holder clears and publishes.** Only a holder writes the
+  temporary files of `<name>` (`<name>.pcm.tmp.*`, written by
+  `--precompile`, and `<name>.stamp.tmp.*`), so any it finds were left by
+  a killed holder, and it removes them. It then builds into
+  `<name>.pcm` (renamed into place) and writes the stamp (renamed into
+  place) last. A failed build removes the entry directory when nothing
+  else is in it.
+- **The lock file does not outlive its holder.** The holder removes
+  `<name>.lock` while it still holds the lock, then releases it. A
+  waiter that then gets the lock checks that the file it locked is still
+  the one at the path (device and inode); if not, it opens the path
+  again. A lock file left by a killed holder is removed by the next
+  compile that takes it, or by the next hit when no one holds it. A
+  settled entry holds exactly `<name>.pcm` and `<name>.stamp`.
+- **Waiting is bounded.** A waiter gives up after 120 seconds
+  (`KILN_MODULE_CACHE_WAIT_MS` replaces the limit, in milliseconds; for
+  kiln's tests) and builds the module from its source (part A), leaving
+  the entry alone. So a stuck compile delays the others, never fails
+  them. An error taking the lock (a file system without locks, an
+  unwritable entry) also falls back to part A.
+- **Where locks do not exclude.** Some file systems accept `flock` but
+  do not enforce it between processes (a macOS directory mounted into a
+  Linux container). There every racer builds, renames and writes its
+  stamp, as before WP-1074. The content-named stamp keeps that correct:
+  whichever module file and stamp are renamed last, they match. A
+  temporary file removed by another racer's clean-up only fails that
+  racer's build, which falls back to part A.
+- `std.compat` is built under its own lock and imports `std` through
+  the cache, taking `std`'s lock inside it. Locks are always taken in
+  that order and held only for one lookup, so two compiles cannot
+  deadlock.
+
+Before WP-1074 there was no lock and the stamp named the module file by
+its modification time. The module file and the stamp renamed into place
+last could then come from different racers, and the entry left behind
+was a miss, rebuilt by the next compile (1 in 100 races of 4 compiles,
+about 1 in 12 of 16).
 
 **Fallback.** An unwritable root (a read-only directory, a path through
 a regular file), a failed build, or a failed stamp write is never an
@@ -1856,7 +1907,12 @@ interface or `stdapp`'s source never rebuilds the std module.
   - `std.compat` filling both entries;
   - invalidation by a header edit, a damaged module file, a new
     `std.cppm`, `-D` and `-fno-exceptions`;
-  - four racing misses;
+  - four racing misses, and (WP-1074) sixteen that build once, racers
+    with one killed (SIGKILL) at three points, a miss waiting on a held
+    entry lock and clearing a killed holder's temporary files, a stuck
+    holder's waiter falling back to part A, and a hit removing a stale
+    lock file (the lock tests skip where `flock` does not exclude, after
+    trying the system's temporary directory);
   - an unwritable root;
   - location and switches;
   - `-print-file-name=libc++.modules.json`.

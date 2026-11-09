@@ -1036,6 +1036,24 @@ impl Compiler<'_> {
             Callee::Virtual(d, _) if self.returns_class_ref(d) => Some(self.reg()),
             _ => None,
         };
+        // The parameter objects' addresses, kept below the call window
+        // (the result overwrites its first register): their lifetime ends
+        // when the call returns (`EndParam` below).
+        let by_value = args
+            .iter()
+            .enumerate()
+            .filter(|&(i, &a)| {
+                !refs.get(i).copied().unwrap_or(false) && {
+                    let aty = self.ety(a);
+                    self.o.types.is_aggregate(aty)
+                }
+            })
+            .count() as u32;
+        let keep = self.next;
+        for _ in 0..by_value {
+            self.reg();
+        }
+        let mut kept: Vec<(u32, bool)> = Vec::new();
         let base = self.next;
         let first = u32::from(is_sret) + u32::from(this.is_some());
         let window = args.len() as u32 + first;
@@ -1091,6 +1109,9 @@ impl Compiler<'_> {
                     None => (Origin::Temp(a), self.begin(a)),
                 };
                 self.alloc(slot, aty, origin, false, a);
+                let k = keep + kept.len() as u32;
+                self.emit(Op::Mov, 0, &[k, slot]);
+                kept.push((k, self.dtor_of(aty).is_some()));
                 self.init(a, slot, aty);
                 self.push_cleanup(slot, aty, 0, at);
             } else {
@@ -1120,6 +1141,13 @@ impl Compiler<'_> {
             && let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32)
         {
             site.loc = loc;
+        }
+        // [expr.call]/7: the parameter objects are destroyed when the
+        // function returns (implementation-defined; clang's `CallScope`),
+        // last constructed first, and a pointer to one dangles from then
+        // on.
+        for &(k, dtor) in kept.iter().rev() {
+            self.emit_at(Op::EndParam, u32::from(dtor), &[k], e);
         }
         self.next = base + 1;
         base
