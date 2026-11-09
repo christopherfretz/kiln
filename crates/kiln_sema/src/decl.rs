@@ -8108,7 +8108,8 @@ impl Sema<'_, '_> {
         let name = self.ast.decls.get(d).name();
         // clang prints the tag's own type (`getTagDeclType`), fully scoped
         // (`'C::S'`). A tag inside an enumeration is scoped by it at 19
-        // (`'E::S'`); clang 22 leaves the enumeration out (`'S'`).
+        // (`'E::S'`); clang 22 leaves an unscoped enumeration out (`'S'`),
+        // since its scope is transparent, but keeps a scoped one.
         let in_enum = self.tag_in_enum(d);
         let what = if by_name {
             if name.is_empty() {
@@ -8119,6 +8120,7 @@ impl Sema<'_, '_> {
         } else if in_enum
             && self.clang_compat >= 22
             && let Some(e) = self.ast.decls.get(d).ctx()
+            && !self.is_scoped_enum(e)
         {
             let full = self.decl_ty_str(self.tag_type(d));
             let en = self.decl_ty_str(self.tag_type(e));
