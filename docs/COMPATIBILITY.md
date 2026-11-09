@@ -448,4 +448,4 @@ time and 0.63x its peak TU RSS ([status/oss/llvm_full.md](status/oss/llvm_full.m
 
 ---
 
-Last updated 2026-11-08, reflecting kiln `main` at `6b8b36f03`.
+Last updated 2026-11-09, reflecting kiln `main` at `5d27b9444`.
