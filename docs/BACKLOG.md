@@ -890,6 +890,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-855 | UBSan: reuse an identical .str for .src strings like clang (`ubsan.rs:117` ub_loc) | WP-675 | open |
 | WP-856 | driver: -ftrapv and -fsanitize-merge= (`kiln_driver/src/codegen_flags.rs:135`) | WP-675 | open |
 | WP-857 | driver: apply -fsanitize-ignorelist files, not just check them (`kiln_driver/src/sanitize.rs:38`) | WP-675 | open |
+| WP-1032 | UBSan completion: .src string reuse, -ftrapv/-fsanitize-merge=, applied -fsanitize-ignorelist (bundles WP-855/856/857) | WP-675 | in progress |
 | WP-858 | codegen: local value names and clang 22 alloca !annotation under ASan/MSan so they can be exact-IR tests (`kiln_driver/src/codegen_cmd.rs:697`) | WP-675 | open |
 | WP-859 | codegen: ASan module name is <stdin> (should be the source file); ASan/TSan module ctors lack target-cpu/target-features (`codegen_cmd.rs:738` sanitizer_passes) | WP-675 | open |
 | WP-860 | harness: `requires: sanitizer-runtime` capability + recover-mode run tests; CI apt libclang-rt-19-dev libclang-rt-22-dev (`.github/actions/kiln-ci/action.yml:36`) | WP-675 | open |
