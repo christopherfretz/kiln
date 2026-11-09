@@ -404,6 +404,12 @@ impl Sema<'_, '_> {
             if use_ == TagUse::Definition
                 && let Some(def) = self.ast.definition(p)
             {
+                // The same partial specialization defined in a global
+                // module fragment the current unit does not see: merged,
+                // its body skipped silently (spec/modules.md §6).
+                if self.module_merge_hidden_definition(def) {
+                    return Err(());
+                }
                 let d = self
                     .diag(DiagId::sema_redefinition, name_loc)
                     .range(range)
@@ -714,6 +720,13 @@ impl Sema<'_, '_> {
                 if use_ == TagUse::Definition
                     && let Some(def) = self.ast.definition(spec)
                 {
+                    // [basic.def.odr]/15: the same explicit specialization
+                    // defined in a global module fragment the current
+                    // unit does not see is merged, not redefined; the
+                    // body is skipped silently (spec/modules.md §6).
+                    if self.module_merge_hidden_definition(def) {
+                        return Err(());
+                    }
                     let t = self.tag_type(spec);
                     let d = self
                         .diag(DiagId::sema_redefinition, name_loc)
