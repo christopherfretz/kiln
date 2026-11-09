@@ -35,9 +35,12 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The operand type: converts to any type sema asks for.
-const ANY: &str =
-    "struct Any { template <class T> constexpr operator T() const { return T(); } };\n";
+/// The operand type: converts to any type sema asks for. The same line
+/// declares `FILE`: as in clang, a builtin whose type names `FILE`
+/// (`__builtin_fprintf`, `__builtin_fscanf`, ...) is not declared
+/// without one (WP-1104).
+const ANY: &str = "typedef struct _IO_FILE FILE; \
+    struct Any { template <class T> constexpr operator T() const { return T(); } };\n";
 
 /// Codegen errors that mean a builtin does not lower.
 const UNLOWERED: [&str; 3] = ["not supported yet", "IR lowering failed", "not a library builtin"];

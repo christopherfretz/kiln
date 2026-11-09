@@ -5,6 +5,7 @@
 // pending cleanup. The same holds for `[[noreturn]]`, a declaration
 // attribute that does not change the type.
 //@ expect: ir
+//@ min-oracle: 22
 //@ std: c++20
 extern "C" void abort();
 extern "C" [[noreturn]] void exit(int);

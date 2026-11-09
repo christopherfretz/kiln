@@ -1994,9 +1994,9 @@ instantiation unless stated.
   template. A delete-expression that finds one considers only destroying
   candidates, rejects a deleted selection, accepts a cv-qualified operand
   and (CWG2889, clang 20+) does not need a non-virtual destructor to be
-  accessible. Type-aware (`std::type_identity`, P2719) forms and
-  undeduced return types are not checked. Tests: basic.stc.dynamic/,
-  expr.delete/destroying-delete-*.cpp.
+  accessible. Type-aware forms (P2719, WP-1088; §5.9) are checked by
+  `check_type_aware_signature`. Undeduced return types are not checked.
+  Tests: basic.stc.dynamic/, expr.delete/destroying-delete-*.cpp.
 - **The main function** ([basic.start.main], `main_decl.rs`): the
   parameter forms `()`, `(int, char**)`, `(int, char**, char**)` (with
   clang's `const` extension) and no more than three; not a template; not
@@ -2535,6 +2535,62 @@ instantiation unless stated.
     attribute only applies to classes` [-Wignored-attributes]; takes no
     arguments. A coroutine whose return type's class carries it gets the
     LLVM function attribute of that name (spec/codegen.md §7o).
+  - **`unavailable`, `require_constant_initialization`, `annotate`**
+    (GNU syntax or `clang::`, `AttrKind` 276 to 278, WP-954;
+    spec/landed/sema/WP-954.md):
+    - `unavailable` / `unavailable("msg")` (`annotate_attr.rs`, clang
+      `handleAttrWithMessage`): at most one argument (`'X' attribute
+      takes no more than 1 argument`), a string literal (`expected
+      string literal as argument of 'unavailable' attribute`, the
+      unscoped name, at the argument). A use of the entity is `'f' is
+      unavailable` (`: msg` appended) with the note `'f' has been
+      explicitly marked unavailable here` at the redeclaration that
+      carries it, through the `deprecated` machinery (`deprecated.rs`):
+      the same uses (names, members, types, enumerators), inherited by
+      later redeclarations, delayed with the deprecations of a
+      declaration. A use inside an unavailable function or class is no
+      error (clang `isDeclUnavailable` on the context).
+    - `require_constant_initialization` (`const_init_attr.rs`, clang
+      `ConstInitAttr`): only a variable with static or thread storage
+      duration (`only applies to global variables`, an error, and the
+      attribute is dropped). Its initializing declaration has a
+      constant initializer ([basic.start.static]/2), checked as for
+      `constinit` (`check_constinit` falls back to it, and its
+      immediate invocations are checked with the whole initializer,
+      `consteval.rs` `checked_var`, WP-465);
+      else `variable does not have a constant initializer` at the
+      variable, the note `required by 'require_constant_initialization'
+      attribute here` at the attribute, then the evaluation's notes
+      (a destruction failure is not one). Before C++11 the initializer
+      is checked as clang's `Expr::isConstantInitializer`: aggregates,
+      trivial default, copy and move construction and the no-op casts
+      are walked, any other subexpression must fold, and the one that
+      does not gets the single note `subexpression not valid in a
+      constant expression`. Added on a redeclaration after the
+      initializing declaration (or the definition) that lacks it: the
+      warning `'require_constant_initialization' attribute added after
+      initialization of variable` [-Wignored-attributes], the note `add
+      the 'require_constant_initialization' attribute to the
+      initializing declaration here`, and it is dropped. A constexpr
+      variable is not checked again.
+    - `annotate("str", args...)` (`annotate_attr.rs`, clang
+      `handleAnnotateAttr` / `ConstantFoldAttrArgs`): at least one
+      argument (`takes at least 1 argument`), the first a string
+      literal (`expected string literal as argument of 'annotate'
+      attribute`). The others are decayed (arrays kept) and each must
+      be a constant expression, evaluated by the Oven (a `void` one as
+      `e, true`): else `'X' attribute requires parameter N to be a
+      constant expression` (N 1-based among them) with the
+      evaluation's notes, and the attribute is dropped. If one is
+      value-dependent all are checked when the declaration is
+      instantiated (`copy_attrs`); an argument may be a pack expansion
+      (`args...`, clang `AcceptsExprPack`), and a pack named outside one
+      is `expression contains unexpanded parameter pack` ([temp.variadic]/12,
+      the attribute is dropped). On a statement clang 22 accepts it
+      and kiln ignores it; clang 19 (`-fclang-compat=19`) keeps `cannot
+      be applied to a statement`. Not yet: codegen
+      (`llvm.global.annotations`, `llvm.var.annotation`,
+      `llvm.ptr.annotation`).
   - **Class B attributes** (WP-813, `class_b_attrs.rs`, `AttrKind` 240
     to 273): the hardening, instrumentation, inlining and pointer-fact
     attributes (`no_stack_protector`, `patchable_function_entry`,
@@ -2791,6 +2847,8 @@ instantiation unless stated.
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
   | ENUM_EXTENSIBILITY | 1 for `open`, 0 for `closed` | — |
   | INIT_PRIORITY | the checked priority (`u32`; the raw `ExprId` before `check_decl_attrs`) | — |
+  | UNAVAILABLE | `ExprId` of the string-literal message, or 0 | — |
+  | ANNOTATE | `ExprId` of the string literal | `ListId` of the other arguments (`ExprId`s, decayed), or 0 |
   | ENABLE_IF | `ExprId` of the condition (contextually converted to `bool` unless type-dependent) | `ExprId` of the string-literal message |
 
 - **Semantics:**
@@ -3058,7 +3116,18 @@ instantiation unless stated.
       non-bit-field non-static data member (error `... only applies to
       non-bit-field non-static data members`). `carries_dependency`:
       only a function or parameter (error `... only applies to
-      parameters, Objective-C methods, and functions`); from C++26
+      parameters, Objective-C methods, and functions`); on a parameter
+      of a function declarator that declares no function or lambda (a
+      pointer to function, a typedef, an alias; [dcl.attr.depend]/1)
+      the error `'[[carries_dependency]]' attribute only allowed on
+      parameter in a function declaration or lambda` and it is dropped
+      (`carries_dep_attr.rs`, from the parser's parameter clause). On a
+      redeclaration of a function (or its parameter i) when no earlier
+      one has it ([dcl.attr.depend]/2): `function declared
+      '[[carries_dependency]]' after its first declaration` (`parameter
+      declared ...`) with the note `declaration missing
+      '[[carries_dependency]]' attribute is here` at the first
+      declaration (or its parameter i) (WP-954); from C++26
       (P3475R2, WP-743) it is no standard attribute:
       `__has_cpp_attribute(carries_dependency)` is 0 and
       `[[carries_dependency]]` (arguments too, skipped) warns `unknown
@@ -5072,6 +5141,39 @@ under its own name, the same signature, gating and codegen
   (`Sema::no_builtin_fns`) not `<name>` (`lib_builtin_info`; clang
   `Builtin::Context::initializeBuiltins` skips them): no implicit
   attributes, no twin, an ordinary call (WP-808).
+  WP-1104 (clang 19.1.7 and 22.1.8 `Builtins.td` diffed against kiln's
+  table) adds the `__builtin_` aliases of C library functions that kiln
+  lacked (`builtin::LIBC_FWD`, `builtin::is_libc_fwd`; clang's
+  `LibBuiltin` rows with `AddBuiltinPrefixedAlias` and plain `Builtin`
+  rows): `__builtin_malloc`, `calloc`, `realloc`, `free`, `fprintf`,
+  `vfprintf`, `fscanf`, `vfscanf`, `index`, `rindex`, `stpcpy`,
+  `stpncpy`, `strcasecmp`, `strncasecmp`, `strcat`, `strcpy`,
+  `strncat`, `strncpy`, `strcspn`, `strspn`, `strdup`, `strndup`
+  (declared lazily in every dialect; `NoThrow` except `strcasecmp`,
+  `strncasecmp`, `fscanf`, `vfscanf`; no `alloc_size`, which clang
+  attaches only to the library names), and
+  `__builtin_alloca_uninitialized` /
+  `__builtin_alloca_with_align_uninitialized`, whose alignment
+  argument is checked as `__builtin_alloca_with_align`'s. A
+  `__builtin_` row whose type names `FILE` (`P`) is not declared while
+  lookup finds no `FILE` (clang `GetBuiltinType`'s `GE_Missing_stdio`,
+  for which `LazilyCreateBuiltin` declares nothing): the use is "use of
+  undeclared identifier", and a use after a `FILE` declaration finds
+  the builtin (this also covers `__builtin___fprintf_chk` /
+  `__builtin___vfprintf_chk`). The `__builtin_` scanf forms
+  (`__builtin_scanf`, `sscanf`, `vscanf`, `vsscanf`, `fscanf`,
+  `vfscanf`; `builtin::scanf_format`) get the implicit
+  `format(scanf, F, A)` and `__builtin_fprintf` / `__builtin_vfprintf`
+  `format(printf, 2, 3)` / `(2, 0)` (`builtin::printf_format`), checked
+  by `-Wformat` as the library names are
+  (`ext.gnu.builtins/format-scanf-builtins.cpp`). With the new rows the
+  library names `malloc`, `strcpy`, ... also record a `__builtin_` twin
+  (`builtin::lib_twin`); codegen and the Oven act on a twin only for
+  their listed ids, so nothing else changes. Not added (outside the
+  supported language): the SafeStack `__builtin___get_unsafe_stack_*`,
+  the matrix-type `__builtin_matrix_*`, the Objective-C
+  `__builtin_objc_memmove_collectable` and clang 22's
+  `__builtin_trivially_relocate` (P2786, out of scope).
 - **GCC's implicit library builtins** (WP-380, `record_gnu_lib_twin`;
   `Sema::gnu_lib_builtins`, set by the driver for `-stdlib=libstdc++`,
   the default): libstdc++'s `<cmath>` double overloads are `using
@@ -6056,6 +6158,15 @@ and aggregate element types.
   `CAN_CONST_DEFAULT_INIT` once the class is complete), so `new const
   A[n]` with `A() {}` is accepted and `new const P[n]` for an aggregate
   `P { int x; }` is the error above (WP-336).
+  A class element's default- or value-initialization
+  (`new_class_default`) always selects the default constructor, so a
+  deleted, implicitly deleted, ambiguous or inaccessible one is
+  diagnosed; no `CXXConstructExpr` is built only when the selected one
+  is trivial (then `()` is an `ImplicitValueInitExpr`). A class-wide
+  "has a trivial default constructor" bit is not enough: since
+  [special]/6 triviality is per eligible member, a class can have a
+  trivial and a non-trivial or deleted one (spec/sema-class.md §4.3,
+  §4.7.2; WP-1109).
   Class element types report "not supported yet" for default- and
   parenthesized initialization (they need `CXXConstructExpr`,
   WP-067b); braced aggregate initialization works.
@@ -6095,6 +6206,79 @@ and aggregate element types.
   the destructor (`dtor_dealloc_fn`) and, for a destroying one, stores
   `this` converted to its first parameter in `Ast::dtor_delete_this`
   for codegen (spec/codegen.md §7u).
+- **Type-aware allocation** (P2719, C++26 DIS; WP-1088). The oracle is
+  clang 22, which implements the paper (clang 19 rejects it), and clang's
+  `type-aware-*.cpp` tests are ported. There is no feature-test macro.
+  - *Declarations* (`alloc_decl.rs`). An allocation or deallocation
+    function whose first parameter is a specialization of
+    `std::type_identity` (`is_type_identity`) is type-aware. It needs at
+    least 3 (new) or 4 (delete) parameters: `type_identity<T>`, then
+    `std::size_t` (new) or `void *, std::size_t` (delete), then
+    `std::align_val_t`, each non-dependent. A template's `T` may be
+    deduced only through the first parameter. A destroying form is an
+    error. Every such declaration warns
+    `ext_cxx_type_aware_allocators` (`-Wext-cxx-type-aware-allocators`,
+    as clang 22). The first one sets `GlobalOps::seen_type_aware`, which
+    enables the typed lookups below. At class completion, a class that
+    declares a type-aware `operator new` (or `new[]`) without a
+    type-aware `operator delete` of the same form, or the reverse, is
+    an error at the class with an `unmatched` note
+    (`check_type_aware_allocator_pairs`).
+  - *Selection* (`new_delete.rs`, `overload/alloc.rs`; clang
+    `resolveAllocationOverload`). In typed mode a new-expression first
+    tries `(std::type_identity<T>{}, size[, align], placement...)`. A
+    failed aligned attempt is retried without the alignment. Only then is
+    the untyped call tried. A deleted typed best candidate is
+    `call to deleted function 'operator new'`, with every candidate's
+    note. The lookup for an array of class type is in the element class.
+    A delete-expression, a deleting destructor and a new-expression's
+    cleanup choose among typed usual deallocation functions first
+    (`typed_usual_delete`). The cleanup must be typed exactly when the
+    `operator new` is, with the same placement form
+    (`sema_mismatching_type_aware_cleanup_deallocator`). A global cleanup
+    prefers the sized form, and the aligned form only for an over-aligned
+    type, even though a typed `operator new` always takes the alignment
+    (clang `FindAllocationFunctions`). The check applies only with
+    exceptions enabled; clang's cc1 tests run without them, so the
+    ports that depend on it pass `-fno-exceptions`. Under exceptions,
+    a deleted cleanup delete makes the new-expression invalid.
+  - *Codegen* (`kiln_codegen/src/new_delete.rs`). The calls pass an
+    empty `std::type_identity<T>` temporary first. The cleanup on a
+    throwing initialization passes it too, plus the saved size for a
+    placement form. The cleanup reuses the new-expression's
+    `type_identity` temporary. A typed `operator new[]` always gets an
+    array cookie, as clang does. With a cookie, the alignment that is
+    passed is at least `size_t`'s (clang `cookieAlign`).
+  - *Constant evaluation* ([expr.const]/10.18.1 as P2719R5 amends it). A
+    namespace-scope type-aware function that is not variadic and, apart
+    from the `type_identity` parameter, has the signature of a replaceable
+    one (3 or 4 parameters, optionally plus `std::nothrow_t`) is usable
+    in constant evaluation. The Oven treats it like the replaceable
+    function: the storage is its own, and the function is never called
+    (`is_type_aware_global_alloc` in `kiln_oven/src/compile/new_delete.rs`).
+    A class-scope typed function is not usable (`call to class-specific
+    'operator new'`), the same as an untyped one. This follows the DIS and
+    clang 22 (`type-aware-new-constexpr.cpp`).
+  - *Coroutines* ([dcl.fct.def.coroutine]/10-12, `coroutine.rs`). The
+    frame's `operator new` and `operator delete` lookups skip type-aware
+    functions. When typed ones exist, it warns
+    `type aware 'operator new' will not be used for coroutine allocation`
+    (`-Wcoro-type-aware-allocation-function`), or adds a note to the
+    unusable-new error, with a note per declaration.
+  - *Access through a using-declaration* (WP-1089, [namespace.udecl]/19).
+    `AllocFns::via` records the using-shadow a class-scope function was
+    found through. The access checks of the new- and delete-expression,
+    the cleanup and the deleting destructor check the shadow
+    (`found_decl`), not its target. For a destroying delete,
+    `check_destructor_delete` forms `this` at the first parameter. A
+    failed conversion (a private base) gets the note `while checking
+    implicit 'delete this' for virtual destructor` at the destructor.
+  - Tests: `basic.stc.dynamic/type-aware-*.cpp`,
+    `class.free/type-aware-mismatched-constraints.cpp`,
+    `expr.new/type-aware-*.cpp`, `expr.new/ir-type-aware.cpp`,
+    `expr.const/type-aware-new.cpp`,
+    `dcl.fct.def.coroutine/type-aware-allocators.cpp`,
+    `expr.delete/destroying-delete-using-access.cpp`.
 - **Access to class allocation functions** ([class.access]/4,
   [expr.new]/28, [class.dtor]/7.3; WP-457): a class-specific `operator
   new` / `operator delete` (usual or destroying) selected by a
@@ -9112,9 +9296,54 @@ not supported yet`.
     [dcl.init.list]/3; designated lists against an aggregate per
     [dcl.init.list]/3.1, `auto` deducing `std::initializer_list` per
     element, a structured binding of it ill-formed as for `auto [a, b] =
-    {1, 2};`). Each element's temporaries belong to its own block
-    `{ decl = {...}; body }`, so codegen and the Oven destroy them at that
-    block's end like any block-scope declaration's.
+    {1, 2};`).
+  - *Element temporaries* (WP-1106; [class.temporary]/8 as amended by
+    CWG3043 in the C++26 DIS). A temporary created in element E persists
+    for the lifetime of the for-range-declaration E initializes, whatever
+    its type (`auto x : {D{2}.v}` prints `x2 ~D2`), and is destroyed after
+    it, in reverse order of construction ([class.temporary]/11), at the
+    end of the element's block `{ decl = E_i; body }`. Sema: the element
+    expression is built before its declaration, so `expansion_select`
+    re-marks its temporaries for the declaration's full-expression
+    (`note_shared_temporaries`, which gives the initializer its
+    `ExprWithCleanups`), and `expansion_element` then calls
+    `extend_init_temporaries` (`class/temporary.rs`), which marks every
+    `MaterializeTemporaryExpr` of storage `FullExpression` in the
+    initializer `Automatic`, extended by the variable (a
+    `LifetimeExtendedTemporaryDecl` each), not entering nested
+    full-expressions (statement expressions, lambda bodies) or
+    unevaluated operands. Codegen's `push_temporary_cleanup` and the
+    Oven's `begin_extended`/`end_extended` then handle them as a
+    reference's ¶6 temporaries: destroyed after the variable, on every
+    path out of the block. In the Oven a non-reference local's
+    initializer may now extend temporaries, so its block opens a cleanup
+    scope (`open_scope`, `extends_temporaries`) and a scalar register
+    local preallocates them too. Evaluated from outside (codegen's
+    constant-folding prepass of a POD or `const` initializer), such a
+    temporary is destroyed at the end of the evaluated initializer, so
+    a non-constexpr destructor makes it non-constant as in clang
+    (`discardCleanups`) and is not folded away. The lifetime check
+    (`check_var_lifetime`) is skipped for the declaration
+    (`expansion_element_init`): nothing in it dangles. **GCC 16.1**
+    implements the earlier resolution (no extension: `~D2 x2`), and
+    upstream clang implements the DIS (llvm#218710; clang 22 has no
+    P1306), so the run tests carry kiln goldens (`oracle: none`).
+    *Left* (`element-discarded-temporary-run.cpp`, `xfail(kiln)`): a
+    discarded class prvalue (`(void)D{1}`, a comma's left operand) is
+    bound (`CXXBindTemporaryExpr`) but never materialized, so it still
+    dies with the declaration's full-expression; and a default
+    argument's temporaries stay with the call's full-expression.
+  - *Element immediate invocations* (WP-1106; [expr.const]/16): an
+    immediate invocation in an element is evaluated at the end of its
+    declaration's full-expression. The element's `ConstantExpr` was built
+    with the list, before any full-expression that uses it, so
+    `expansion_select` hands its unevaluated invocations to the
+    declaration's full-expression (`note_deferred_invocations`,
+    `consteval.rs`); previously they were never evaluated and the program
+    called the consteval function at run time. A temporary inside an
+    immediate invocation ends within it: `extend_init_temporaries` does
+    not enter a `ConstantExpr`. Test: `element-immediate-invocation-run.cpp`
+    (GCC oracle).
   - *iterating* (`range_for.rs` `expansion_iterable`): not an array, and
     member `begin`/`end` are found or ADL finds viable candidates;
     `static constexpr` `__range`, `__begin`; element i is `*(__begin + i)`
@@ -9155,7 +9384,16 @@ not supported yet`.
     evaluations and steps).
   - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`
     (`struct_bind.rs`); element i is `__u_i`. With a `constexpr`
-    for-range-declaration the declaration is `static constexpr`.
+    for-range-declaration the declaration is `static constexpr`. The
+    initializer's temporaries persist for the lifetime of that reference,
+    to the end of the whole statement ([class.temporary]/9, CWG3043;
+    `expansion_decomp` calls `extend_init_temporaries`, a no-op for the
+    `static constexpr` form, whose temporaries are part of its constant
+    initialization). GCC 16.1 agrees
+    (`tests/conformance/stmt.expand/destructuring-temporaries-run.cpp`).
+    The iterating form's `__range` is `static constexpr`, so its
+    temporaries are part of its constant initialization and never
+    observable at run time.
 - **Binding a constexpr range** (`expansion_fallback`). A prvalue
   initializer is bound by value (`static constexpr auto`, const, so its
   value is usable in constant expressions; a lifetime-extended temporary

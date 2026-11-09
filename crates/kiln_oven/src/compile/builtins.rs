@@ -1195,6 +1195,8 @@ impl Compiler<'_> {
             _ if id::is_coro(bid) => self.trap_loc(begin, INVALID.into()),
             // WP-803: clang evaluates no `_FORTIFY_SOURCE` checking builtin.
             _ if id::is_chk(bid) => self.trap_loc(begin, INVALID.into()),
+            // WP-1104: nor a library forward (`__builtin_malloc`, ...).
+            _ if id::is_libc_fwd(bid) => self.trap_loc(begin, INVALID.into()),
             id::STRLEN | id::WCSLEN => {
                 let x = arg(0)?;
                 let q = self.ast().exprs.get(x).ty();

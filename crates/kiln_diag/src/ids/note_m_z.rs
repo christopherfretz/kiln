@@ -5,6 +5,7 @@
 note_macro_expansion_here = Note (1) "expansion of macro '{0}' requested here";
 note_macro_here = Note (1) "macro '{0}' defined here";
 note_marked_deprecated = Note (1) "'{0}' has been explicitly marked deprecated here";
+note_marked_unavailable = Note (1) "'{0}' has been explicitly marked unavailable here";
 note_matching = Note (1) "to match this {0}";
 note_member_declared_at = Note (0) "member is declared here";
 note_member_declared_named = Note (1) "member '{0}' declared here";
@@ -123,6 +124,11 @@ note_remove_enum_friend = Note (1) "remove '{0}' to befriend an enum";
 note_remove_parens_for_variable_declaration = Note (0) "remove parentheses to silence this warning";
 note_reorder_ctor = Note (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
 note_replace_default_with_delete = Note (0) "replace 'default' with 'delete'";
+// WP-954: clang `note_declared_required_constant_init_here`,
+// `warn_require_const_init_added_too_late`, `note_constinit_missing_here`
+// (attribute form).
+note_require_constant_init_here = Note (0) "required by 'require_constant_initialization' attribute here";
+note_require_constant_init_missing_here = Note (0) "add the 'require_constant_initialization' attribute to the initializing declaration here";
 note_requirement_may_throw = Note (2) "{0:and|because} '{1}' may throw an exception";
 note_requirement_type_constraint = Note (2) "{0:and|because} '{1}' evaluated to false";
 note_requirement_type_constraint_19 = Note (2) "{0:and|because} type constraint '{1}' was not satisfied:";
@@ -164,12 +170,14 @@ note_template_type_alias_instantiation_here = Note (1) "in instantiation of temp
 note_throw_in_dtor = Note (2) "{0:destructor|deallocator} has a {1:non-throwing|implicit non-throwing} exception specification";
 note_throw_in_function = Note (0) "function declared non-throwing here";
 note_transparent_union_first_field = Note (2) "{0:alignment|size} of first field is {1} bits";
+note_type_aware_operator_declared = Note (3) "{0:non-|}type aware '{1}' declared here in {2}";
 note_typename_member_refers_here = Note (1) "referenced member '{0}' is declared here";
 note_ucn_name_loose_match = Note (0) "characters names in Unicode escape sequences are sensitive to case and whitespaces";
 note_uninit_fixit_remove_cond = Note (3) "remove the {0:condition if it|'{1}' if its condition} is always {2:false|true}";
 note_uninit_in_ctor = Note (1) "during field initialization in {0:this|the implicit default} constructor";
 note_uninit_reference_member = Note (0) "uninitialized reference member is here";
 note_uninit_var_use = Note (1) "{0:uninitialized use occurs|variable is captured by block} here";
+note_unmatched_type_aware_allocator_declared = Note (1) "unmatched type aware '{0}' declared here";
 note_unreachable_silence = Note (0) "silence by adding parentheses to mark code as explicitly dead";
 note_unsatisfied_trait = Note (2) "{0} is not {1}";
 note_unsatisfied_trait_ntc_base = Note (1) "because it has a non-trivially-copyable base {0}";

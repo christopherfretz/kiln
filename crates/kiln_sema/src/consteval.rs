@@ -464,6 +464,26 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The immediate invocations of `e`, an expression built before the
+    /// full-expression that uses it (an enumerating expansion element,
+    /// built with its expansion-init-list before its declaration,
+    /// [stmt.expand]/5.1): those not yet evaluated are evaluated at the
+    /// end of the current full-expression ([expr.const]/16).
+    pub(crate) fn note_deferred_invocations(&mut self, e: ExprId) {
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            if self.ast.exprs.get(x).kind() == ExprKind::ConstantExpr
+                && self.ast.exprs.constant_value(x).is_none()
+                && !self.ast.exprs.constant_elided(x)
+                && !self.imm.pending.candidates.iter().any(|&(c, _)| c == x)
+                && let Some(f) = self.invocation_callee(x).filter(|&f| self.is_immediate_fn(f))
+            {
+                self.imm.pending.candidates.push((x, f));
+            }
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
+        }
+    }
+
     /// An immediate invocation `c` of a template definition that the
     /// instantiation being performed shares with it
     /// (`templ/subst/shared.rs`): one that failed at the definition is
@@ -728,6 +748,7 @@ impl Sema<'_, '_> {
     fn checked_var(&self, v: DeclId) -> bool {
         self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
             || self.constinit_of(v).is_some()
+            || self.require_constant_init_of(v).is_some()
     }
 
     /// The end of full-expression `e` (from [`Sema::act_on_full_expr`]):

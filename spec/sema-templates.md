@@ -1179,6 +1179,107 @@ asks exactly one of:
 template named `N<Ts...>`) is the value-dependent `k + sizeof...(P1) +
 ...` (`pack.rs` `size_of_expansions`), so `N<Ts...>` stays dependent.
 
+#### 3.1.1 Classes declared in a dependent context (WP-1084, WP-904)
+
+**Which classes.** A class declared in a dependent context is a templated
+entity ([temp.pre]/8). Such a class carries `DeclFlags::DEPENDENT_CTX`,
+and its `Record` type is dependent (the table above). This covers:
+- a local class of a function template, of a generic lambda's call
+  operator, or of a member function of a class template;
+- a local class of a member function of such a local class;
+- a member class of a class template.
+
+Such a class is the current instantiation ([temp.dep.type]/1) only where
+the lookup context is nested in it, i.e. inside its own definition and
+its members' definitions. This is clang's `isCurrentInstantiation`.
+Everywhere else in the template it is a dependent type that is not the
+current instantiation. `Sema::is_unentered_dependent_class` (in
+`templ/actions.rs`) answers that question for a nested-name-specifier.
+It is never true during instantiation, because the instantiated classes
+are not dependent, and never inside the declarator of an out-of-line
+member of the class. `is_unentered_dependent_qualifier` also accepts a
+typedef of such a class.
+
+Lookup into the class still happens at definition time: kiln finds the
+member, and it decides only *how the name is treated*. Three rules
+follow.
+
+1. **Types named through it are dependent qualified names**
+   ([temp.res.general]/4). Take `L::N`, where `N` is a type member of
+   such a class `L` and the name is outside `L`:
+   - The parser's lookahead scans it as a dependent name
+     (`scan_name_walk_in`, `NameClass::Dependent`).
+   - It is a type, with no `typename`, only where [temp.res.general]/4
+     implies one: a member declaration, a parameter, and so on.
+   - In a template argument, or in a declaration where a type is
+     required, the parser reports clang's "missing 'typename' prior to
+     dependent type name" at definition time (`parse_template_type_name`,
+     `check_missing_typename_in_class`).
+   - An expression (`L::N()`, `sizeof(L::N)`) builds a
+     `DependentScopeDeclRefExpr` (`dep_member_nns`). A statement such as
+     `L::N *p;` is a multiplication, and `p` is undeclared at definition
+     time.
+   - Values found in the class (static members, member functions,
+     enumerators) are still bound at definition time. Only a type
+     defers.
+   - The lookahead classifies a member of a specialization that is not
+     instantiated yet by the template's pattern (WP-276). Once a
+     qualifier component is a non-dependent class, or a class or alias
+     template with non-dependent arguments (`O<int>::M::N`), no class
+     below it is dependent, even though it is found in the pattern.
+   - `friend T::X;` and `friend Outer::value_type;` ([class.friend]/3),
+     where the name is the whole friend declaration, name a type without
+     `typename`. This is clang's implicit typename in a class member
+     declaration.
+
+   **Instantiation.** When a `DependentScopeDeclRefExpr` whose name now
+   finds a type is instantiated, kiln reports clang's `err_typename_missing`.
+   This applies to this case and also to `T::N()` with `T = S`:
+   - The message is "missing 'typename' prior to dependent type name
+     'L::N'", with the instantiated qualifier, at the start of the
+     qualifier (`subst/exprs.rs`).
+   - The expression is an error.
+   - If the template is never instantiated, nothing is reported, as in
+     clang.
+
+2. **A dependent base is not searched by unqualified lookup**
+   ([temp.dep.general]/3, clang `lookupInBases`).
+   - In a template definition (the instantiation stack is empty), the
+     class-scope step of unqualified lookup (`lookup_in_class_unqual` in
+     `lookup.rs`) skips each base, direct or indirect, that is
+     `DEPENDENT_CTX` and does not enclose the lookup context.
+   - So `struct B : A { int g() { return z; } };`, with `A` a local
+     class, reports "use of undeclared identifier 'z'" at definition
+     time, and a type name gives "unknown type name 'I'".
+   - If an enclosing scope declares the name, that declaration is found
+     instead: `::shadowed`, not `A::shadowed`.
+   - Qualified lookup (`A::z`, `B::z`), member access (`this->z`), and
+     kiln's own class lookups (special members, operators, allocation
+     functions) still search every base.
+   - Instantiation searches every base.
+   - A base that is not declared in a dependent context, such as a
+     namespace-scope class, is searched as before.
+
+3. **A dependent call whose name only a dependent base declares**
+   (`z(u)`, `u` of type `T`). The name is unresolved at definition time
+   and argument-dependent lookup finds nothing at instantiation. If the
+   name is found in a class enclosing the call, the instantiated call
+   gives clang's "explicit qualification required to use member 'z' from
+   dependent base class", with "member is declared here" notes
+   (`overload/call.rs`, through `diagnose_member_found_in_class`). It
+   does not give "use of undeclared identifier".
+
+Tests:
+- `tests/conformance/temp.res/local-class-missing-typename.cpp`;
+- `tests/conformance/temp.res/member-class-dependent-clang-ported.cpp`,
+  ported from clang's CWG108 and `typename-specifier.cpp`;
+- `tests/conformance/temp.dep/local-class-dependent-base.cpp`;
+- `tests/conformance/temp.dep/local-class-dependent-patterns-run.cpp`,
+  which covers the valid patterns: CTAD, a local class as a template
+  argument, `typename L::N`, qualified access into a dependent base, a
+  non-dependent base, and a local class of a member function template;
+- `tests/conformance/temp.dep/nondependent-spec-member-and-friend-type-run.cpp`.
+
 ### 3.2 Expression dependence (`ExprDeps`)
 
 Dependence is computed once by each `AstBuilder` constructor, from its
@@ -1732,6 +1833,26 @@ Out-of-class partial specializations of a member template (WP-150):
   runs both checks on the redeclared one, with the instantiation note), as
   clang does. Still skipped: a primary non-type parameter whose type is a
   placeholder or dependent (`template<auto V>`, `template<class T, T V>`).
+  **Packs (WP-956, with WP-1053).** Further pack cases:
+  - A pack expansion that is the argument for a non-pack parameter stops
+    default arguments for the remaining parameters (`args.rs`
+    `open_expansion`, clang `PackExpansionIntoNonPack`). So `X0<Ts...>`
+    for `template<class T, class U, class V = U>` is a complete list.
+  - A template template pack expansion is deduced as a whole
+    (`deduce_template_from_expansion`, WP-1053), so `Q<T, int, Cs...>`
+    stays more specialized.
+  - In /9.3 ("does not specialize any template argument"),
+    `arg_names_param` names a non-type or template template pack only by
+    its expansion (`Q<N...>`, `S<TT...>`), never by a single element
+    (`E<M>` of `template<int... N>`).
+  - For a variable template, the /9.3 error says "to define" when the
+    declaration is a definition (not `extern`, not in a class) and "to
+    declare" otherwise, as clang does.
+
+  Tests: `temp.spec.partial.general/pack-not-more-specialized.cpp`,
+  `pack-does-not-specialize.cpp`, `var-does-not-specialize-wording.cpp`
+  and `pack-partial-specializations-valid.cpp`.
+
 - *Deducible* ([temp.spec.partial.general]/8, `check_partial_deducible`):
   the arguments are deduced from themselves; a parameter left undeduced
   gets `contains a template parameter that cannot be deduced`
@@ -1758,6 +1879,16 @@ Out-of-class partial specializations of a member template (WP-150):
   specialization that uses it gets `contains a template parameter that
   cannot be deduced`. Test:
   `tests/conformance/temp.deduct.type/parenthesized-nttp-non-deduced.cpp`.
+  **Packs (WP-956).** Besides the [temp.deduct.type]/9 rule above
+  (`U<Types..., Tail>`, `Y<L<T..., V>>`, `X1<0, Values + 1 ...>`),
+  `check_partial_deducible` sets `DeducedArgs::self_deduce`:
+  - A function parameter pack that is not last is skipped, and the
+    parameters after it are still deduced ([temp.deduct.type]/5.7).
+    This is clang's `MarkUsedTemplateParameters` with `OnlyDeduced`. So
+    `Y<void(T..., V)>` reports only `T`, and `Y<void(T..., V, T...)>` is
+    valid.
+
+  Test: `temp.spec.partial.general/pack-not-deducible.cpp`.
 - *Wrong class-key*. An explicit or partial specialization whose class-key
   does not match the primary's, and a reference `union B<int>` to a class
   specialization, get `use of 'X' with tag type that does not match
@@ -4856,6 +4987,15 @@ The `SpecKind` transitions are those of §4.5.
     type gets `a non-type template parameter cannot have type 'T' before
     C++20`; any other non-structural type gets `... cannot have type 'T'`
     (WP-1017; `tests/conformance/temp.param/float-nttp-cxx{17,20}.cpp`).
+    The `_Complex` and vector types (clang extensions) get the same
+    "before C++20" error. In every mode, `void` gets `non-type template
+    parameter has incomplete type 'void'` and an `_Atomic` type gets
+    `... cannot have type '_Atomic(int)'` (WP-956;
+    `tests/conformance/temp.param/ext-scalar-nttp-cxx{17,20}.cpp`).
+    In C++20, an `_Atomic` subobject is not structural
+    (`is_structural_at`). A template redeclaration does not compare the
+    type of a parameter marked invalid (`templ/equiv.rs`). Test:
+    `temp.param/atomic-member-not-structural.cpp`.
   - Dependent types are checked when substituted (not yet: §11.2 gaps).
 - **Class arguments** (`convert_class_nttp_arg`, hooked from
   `args.rs::convert_nttp_arg`): copy-initialize a `const T` from the
@@ -6447,6 +6587,30 @@ and takes the specializations that deduce as the lookup result; the
 bases' conversion templates are not searched, as clang 19's
 `LookupDirect` (`Sema::conversion_template_specs`, WP-803,
 `tests/conformance/temp.mem/conversion-template-named-explicitly-run.cpp`).
+
+WP-956 makes several changes to conversion function templates.
+- **Overload resolution.** A specialization found by deduction like this
+  is still a template specialization (`Candidate::template`, set in
+  `overload/member.rs`). [over.match.best]/2.4-5 therefore prefers a
+  non-template over it, and orders two of them by
+  `more_specialized_conversion` (clang `TPOC_Conversion`).
+- **Explicit instantiations and specializations.** The same ordering
+  picks the target of an explicit instantiation or specialization of a
+  conversion function template (`match_function_spec_noted`). If the
+  templates are equally specialized, the result is ambiguous. In that
+  case the candidates are named by the specialization (`'X1::operator
+  char *<char>'`, `spec_decl_name_as`).
+- **Dependent names.** A conversion-function-id whose type is dependent
+  makes the name type-dependent ([temp.dep.expr]/3). Both
+  `this->operator T()` and an unqualified `operator T()` in a member
+  template become a dependent member access, and are looked up at
+  instantiation. The unqualified form is first built as an implicit
+  `this` access; this matches clang's `ActOnDependentIdExpression`. The
+  code paths are `is_dependent_conversion_name`,
+  `try_dependent_member_q`, `act_on_id_expression_dn` and
+  `implicit_dependent_member`.
+- **Tests.** `tests/conformance/temp.mem/conversion-template-dependent-ordering.cpp`
+  and `conversion-template-ambiguous.cpp`.
 
 The texts are taken from clang 19's `DiagnosticSemaKinds.td`. The goldens
 are authoritative: WP-070 checks each of them in `templates/diag/`.

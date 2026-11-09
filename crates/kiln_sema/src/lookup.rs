@@ -548,7 +548,7 @@ impl Sema<'_, '_> {
                 {
                     return self.filter(vec![d], kind);
                 }
-                let found = self.lookup_in_class_dn(entity, dname, kind);
+                let found = self.lookup_in_class_unqual(entity, dname, kind);
                 if !found.is_empty() || found.ambiguity.is_some() {
                     return found;
                 }
@@ -762,8 +762,41 @@ impl Sema<'_, '_> {
 
     /// [`Sema::lookup_in_class`] for any declaration name.
     pub(crate) fn lookup_in_class_dn(&self, c: DeclId, name: DeclName, kind: LookupKind) -> Found {
+        self.lookup_in_class_with(c, name, kind, false)
+    }
+
+    /// The class-scope step of unqualified lookup ([basic.lookup.unqual]/2,
+    /// [class.member.lookup]): as [`Sema::lookup_in_class_dn`], except that
+    /// in a template definition a dependent base class is not searched
+    /// ([temp.dep.general]/3): a base declared in a dependent context (a
+    /// local class of a function template, a member class of a class
+    /// template) that is not the current instantiation here (clang
+    /// `lookupInBases` skips such a base). The names it declares are
+    /// found by a qualified name (`this->m`, `A::m`) only
+    /// (spec/sema-templates.md §3.1.1, WP-1084).
+    fn lookup_in_class_unqual(&self, c: DeclId, name: DeclName, kind: LookupKind) -> Found {
+        self.lookup_in_class_with(c, name, kind, self.inst.stack.is_empty())
+    }
+
+    /// Whether base class `b` is a dependent base here: a class declared
+    /// in a dependent context ([temp.dep.type]/9) that is not the current
+    /// instantiation, i.e. the context of the lookup is not nested in it
+    /// ([temp.dep.type]/1, clang `isCurrentInstantiation`).
+    fn is_dependent_base(&self, b: DeclId) -> bool {
+        self.ast.decls.get(b).has(DeclFlags::DEPENDENT_CTX)
+            && self.kind_of(b) == DeclKind::CXXRecord
+            && !self.encloses(b, self.ctx)
+    }
+
+    fn lookup_in_class_with(
+        &self,
+        c: DeclId,
+        name: DeclName,
+        kind: LookupKind,
+        skip_dependent_bases: bool,
+    ) -> Found {
         let def = self.ast.definition(c).unwrap_or(c);
-        let Some(hit) = self.class_hit(def, name, kind, 0) else {
+        let Some(hit) = self.class_hit(def, name, kind, skip_dependent_bases) else {
             return Found { naming: Some(def), ..Found::default() };
         };
         let mut found = hit.found;
@@ -811,10 +844,10 @@ impl Sema<'_, '_> {
         def: DeclId,
         name: DeclName,
         kind: LookupKind,
-        depth: usize,
+        skip_dependent_bases: bool,
     ) -> Option<ClassHit> {
-        let mut leaves =
-            self.class_leaves(def, name, kind, depth, &mut (FxHashMap::default(), false));
+        let mut st = (FxHashMap::default(), false);
+        let mut leaves = self.class_leaves(def, name, kind, 0, skip_dependent_bases, &mut st);
         self.remove_dominated(&mut leaves);
         let mut it = leaves.into_iter();
         let (found, path, _) = it.next()?;
@@ -867,6 +900,7 @@ impl Sema<'_, '_> {
         name: DeclName,
         kind: LookupKind,
         depth: usize,
+        skip_dependent_bases: bool,
         barren: &mut (FxHashMap<DeclId, usize>, bool),
     ) -> Vec<Leaf> {
         if depth > 256 {
@@ -903,8 +937,13 @@ impl Sema<'_, '_> {
         let mut out = Vec::new();
         for (&i, spec) in idx.iter().zip(specs) {
             let Some(b) = self.ast.types.as_record(spec.ty) else { continue };
+            if skip_dependent_bases && self.is_dependent_base(b) {
+                continue;
+            }
             let Some(bdef) = self.ast.definition(b) else { continue };
-            for (f, mut p, mut vs) in self.class_leaves(bdef, name, kind, depth + 1, barren) {
+            for (f, mut p, mut vs) in
+                self.class_leaves(bdef, name, kind, depth + 1, skip_dependent_bases, barren)
+            {
                 p.specs.insert(0, i);
                 p.classes.insert(0, b);
                 p.written.insert(0, spec.ty);

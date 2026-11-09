@@ -78,6 +78,23 @@ impl Sema<'_, '_> {
             && !self.in_declarator_scope_of(c)
     }
 
+    /// [`Sema::is_unentered_dependent_class`] for a nested-name-specifier
+    /// context `q` that may be a typedef of the class (`typedef L LL;
+    /// LL::N`).
+    pub fn is_unentered_dependent_qualifier(&self, q: DeclId) -> bool {
+        self.is_unentered_dependent_class(self.type_name_qualifier(q))
+    }
+
+    /// Whether nested-name-specifier context `q` (or the class a typedef
+    /// `q` names) is a class not declared in a dependent context, such as
+    /// a specialization with non-dependent arguments (`O<int>`). Members
+    /// reached through it are never dependent (WP-1084).
+    pub fn is_nondependent_class_qualifier(&self, q: DeclId) -> bool {
+        let c = self.type_name_qualifier(q);
+        self.kind_of(c) == DeclKind::CXXRecord
+            && !self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX)
+    }
+
     /// The type `q::name` names when qualified lookup did not find a type
     /// in `q` and `q` can name an unknown specialization ([temp.dep.type]/6,
     /// clang `CheckTypenameType` / `isDependentScopeSpecifier`): a
@@ -111,6 +128,17 @@ impl Sema<'_, '_> {
         template_id: bool,
     ) -> Option<NnsId> {
         if self.is_dependent_ctx(q.ctx) {
+            Some(q.nns)
+        } else if !template_id
+            && self.is_unentered_dependent_qualifier(q.ctx)
+            && matches!(self.classify_name(name, Some(q.ctx)), crate::decl::NameClass::Type(..))
+        {
+            // `L::N` naming a type of a dependent class that is not the
+            // current instantiation, in an expression: a member of an
+            // unknown specialization, looked up again (and diagnosed as
+            // a type without `typename`) at instantiation
+            // ([temp.res.general]/3, [temp.dep.type]/6; WP-1084). A value
+            // found there is bound now: it cannot change.
             Some(q.nns)
         } else if template_id
             && matches!(
@@ -159,6 +187,16 @@ impl Sema<'_, '_> {
     /// checks on it wait (spec/sema-templates.md §3.1).
     pub fn is_dependent_type(&self, t: QualType) -> bool {
         self.ast.types.is_dependent(t)
+    }
+
+    /// True if `name` is a conversion-function-id naming a dependent type
+    /// (`operator T`): the id-expression is type-dependent
+    /// ([temp.dep.expr]/3) and is looked up at instantiation.
+    pub(crate) fn is_dependent_conversion_name(&self, name: DeclName) -> bool {
+        matches!(
+            self.ast.names.view(name),
+            kiln_ast::names::DeclNameView::Conversion(t) if self.ast.types.is_dependent(t)
+        )
     }
 
     /// True if `t` is dependent or instantiation-dependent: it mentions a
@@ -593,6 +631,17 @@ impl Sema<'_, '_> {
     /// and index; a pack expanded).
     pub(crate) fn arg_names_param(&self, p: DeclId, a: TemplateArg) -> bool {
         let Some(info) = self.ast.template_parm(p).copied() else { return false };
+        // A converted argument for a parameter pack is a pack; it names
+        // the pack when it is the single expansion `P...`
+        // ([temp.spec.partial.general]/9.3, `template<class... T> struct
+        // R<T...>`).
+        let a = match a.view() {
+            ArgView::Pack(l) if info.pack => match self.ast.types.args(l) {
+                [one] => *one,
+                _ => return false,
+            },
+            _ => a,
+        };
         match (self.kind_of(p), a.view()) {
             (DeclKind::TemplateTypeParm, ArgView::Type(t)) => {
                 let t = match self.ast.types.view(t.ty()) {
@@ -605,7 +654,12 @@ impl Sema<'_, '_> {
             }
             (DeclKind::NonTypeTemplateParm, ArgView::Expr { expr, .. }) => {
                 let mut e = expr;
-                if info.pack && self.ast.exprs.get(e).kind() == ExprKind::PackExpansionExpr {
+                if info.pack {
+                    // A pack is named only by its expansion `N...`, not by
+                    // an element `M` at the same position.
+                    if self.ast.exprs.get(e).kind() != ExprKind::PackExpansionExpr {
+                        return false;
+                    }
                     e = self.ast.exprs.operand(e);
                 }
                 // The parameter at the same position: the out-of-line
@@ -617,7 +671,8 @@ impl Sema<'_, '_> {
                 DeclKind::TemplateTemplateParm,
                 ArgView::Template(n) | ArgView::TemplateExpansion { name: n, .. },
             ) => {
-                matches!(self.ast.types.template_name_view(n), TemplateName::TemplateTemplateParm { decl, .. } if self.same_template_parm(decl, p, info))
+                info.pack == matches!(a.view(), ArgView::TemplateExpansion { .. })
+                    && matches!(self.ast.types.template_name_view(n), TemplateName::TemplateTemplateParm { decl, .. } if self.same_template_parm(decl, p, info))
             }
             _ => false,
         }
@@ -2046,12 +2101,14 @@ impl Sema<'_, '_> {
     ) -> Option<ExprId> {
         let bt = self.ety(base);
         let dep_qual = qual.is_some_and(|q| self.is_dependent_ctx(q.ctx));
-        if !dep_qual && !self.ast.types.is_dependent(bt) {
+        // `this->operator T()` with `T` dependent ([temp.dep.expr]/3).
+        let dep_name = self.is_dependent_conversion_name(name);
+        if !dep_qual && !dep_name && !self.ast.types.is_dependent(bt) {
             return None;
         }
         // A member of the current instantiation found by lookup is an
         // ordinary member access ([temp.dep.expr]/5, clang's MemberExpr).
-        if targs.is_none() && !template_kw && !dep_qual {
+        if targs.is_none() && !template_kw && !dep_qual && !dep_name {
             let obj = if arrow {
                 self.pointee_sugared(bt).filter(|_| self.ast.types.is_pointer(bt))
             } else {

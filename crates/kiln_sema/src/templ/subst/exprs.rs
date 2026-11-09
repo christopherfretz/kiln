@@ -698,6 +698,23 @@ impl Substituter<'_, '_, '_> {
                     };
                 }
                 let ctx = self.nns_context(nns, begin)?;
+                // A dependent qualified-id written without `typename`
+                // that names a type once instantiated ([temp.res.general]/4:
+                // `T::N()`, `L::N()` for a local class `L` of a template;
+                // clang's err_typename_missing, at the qualifier).
+                if let Some(id) = name.as_ident()
+                    && matches!(
+                        self.sema.classify_name(id, Some(ctx)),
+                        crate::decl::NameClass::Type(..)
+                    )
+                {
+                    let text =
+                        format!("{}{}", self.sema.nns_str(nns), self.sema.ast.symbols().as_str(id));
+                    let d =
+                        self.sema.diag(kiln_diag::DiagId::parse_missing_typename, begin).arg(text);
+                    self.sema.emit(d);
+                    return Ok(self.sema.recover_err(&[], loc));
+                }
                 let q = crate::using::Qualifier { ctx, nns, loc: begin };
                 Ok(self.sema.act_on_id_expression_dn(name, loc, Some(q)))
             }
@@ -1429,6 +1446,16 @@ impl Substituter<'_, '_, '_> {
             }
             None => None,
         };
+        // `operator T()` in a member function ([temp.dep.expr]/3): an
+        // implicit `this->operator U`, whose conversion templates are
+        // found by deduction rather than by name ([temp.mem]/6).
+        if qual.is_none()
+            && matches!(self.sema.ast.names.view(name), DeclNameView::Conversion(_))
+            && self.sema.current_this().is_some()
+        {
+            let this = self.this_expr(true, loc);
+            return Ok(self.sema.act_on_member_q(this, None, name, loc, loc, true));
+        }
         Ok(self.sema.act_on_id_expression_dn(name, loc, qual))
     }
 

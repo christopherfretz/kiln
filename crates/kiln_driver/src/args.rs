@@ -149,6 +149,12 @@ pub struct DepArgs {
     /// `-MJ <file>`: write clang's JSON compilation-database fragment
     /// for each compile job (WP-920).
     pub cdb_fragment: Option<String>,
+    /// `-fmodule-file-deps` (true) / `-fno-module-file-deps` (false), the
+    /// last one: list the module files an import read (WP-1051). Unset,
+    /// `--precompile` lists them (clang's driver passes
+    /// `-module-file-deps` there) and so does an import of the toolchain's
+    /// `std` module cache; nothing else does.
+    pub module_files: Option<bool>,
 }
 
 impl DepArgs {
@@ -1045,6 +1051,8 @@ impl Args {
             "-MD" | "--write-dependencies" => self.deps.side = Some(DepHeaders::All),
             "-MMD" | "--write-user-dependencies" => self.deps.side = Some(DepHeaders::User),
             "-MP" => self.deps.phony = true,
+            "-fmodule-file-deps" => self.deps.module_files = Some(true),
+            "-fno-module-file-deps" => self.deps.module_files = Some(false),
             "-MG" => self.deps.missing_generated = true,
             "-trigraphs" | "--trigraphs" | "-ftrigraphs" => self.trigraphs = Some(true),
             "-fno-trigraphs" => self.trigraphs = Some(false),

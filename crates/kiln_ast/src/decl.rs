@@ -873,8 +873,12 @@ bit_accessors!(FnSpec:
     storage_inherited / with_storage_inherited = 22;
     /// A prospective destructor that is not the destructor: overload
     /// resolution at the end of the class definition selected another
-    /// ([class.dtor]/4; clang `isIneligibleOrNotSelected`). Set at class
-    /// completion; [`crate::Ast::destructor`] skips it.
+    /// ([class.dtor]/4); or another special member that is not eligible
+    /// ([special]/6: its constraints are not satisfied, or another of
+    /// its kind is at least as constrained). clang
+    /// `isIneligibleOrNotSelected`. Set at class completion;
+    /// [`crate::Ast::destructor`] skips it, and it does not count for the
+    /// class's triviality.
     not_selected / with_not_selected = 23;
     /// The return type was deduced from a placeholder (`auto`,
     /// `decltype(auto)`; [dcl.spec.auto]): the declared type's return
@@ -1132,7 +1136,12 @@ impl DefinitionBits {
     pub const STANDARD_LAYOUT: DefinitionBits = DefinitionBits(1 << 8);
     /// Trivially copyable ([class.prop]).
     pub const TRIVIALLY_COPYABLE: DefinitionBits = DefinitionBits(1 << 9);
-    /// Trivial default constructor.
+    /// Trivial default constructor: the class has a default constructor
+    /// and an eligible one ([special]/6) is trivial, or the implicit one
+    /// would be (clang `hasTrivialDefaultConstructor`). The `TRIVIAL_*`
+    /// bits are clang's `HasTrivialSpecialMembers`: they do not say that
+    /// every eligible member of the kind is trivial; that also needs the
+    /// matching `NONTRIVIAL_*` bit clear (`Sema::all_trivial`).
     pub const TRIVIAL_DEFAULT_CTOR: DefinitionBits = DefinitionBits(1 << 10);
     /// Trivial copy constructor.
     pub const TRIVIAL_COPY_CTOR: DefinitionBits = DefinitionBits(1 << 11);
@@ -1238,6 +1247,22 @@ impl DefinitionBits {
     pub const MOVE_CTOR_FOR_CALL: DefinitionBits = DefinitionBits(1 << 55);
     /// The destructor analogue of `COPY_CTOR_FOR_CALL`.
     pub const DTOR_FOR_CALL: DefinitionBits = DefinitionBits(1 << 56);
+    /// The class has a non-trivial default constructor: an eligible
+    /// declared one is non-trivial, or the implicit one still to be
+    /// declared would be (clang `hasNonTrivialDefaultConstructor`). With
+    /// `TRIVIAL_DEFAULT_CTOR` (clang `hasTrivialDefaultConstructor`: some
+    /// eligible one is trivial) both can hold, as for
+    /// `struct N { N(...) = delete; N() = default; };` ([special]/6;
+    /// spec/sema-class.md §4.7.2, WP-1109).
+    pub const NONTRIVIAL_DEFAULT_CTOR: DefinitionBits = DefinitionBits(1 << 57);
+    /// clang `hasNonTrivialCopyConstructor`; see `NONTRIVIAL_DEFAULT_CTOR`.
+    pub const NONTRIVIAL_COPY_CTOR: DefinitionBits = DefinitionBits(1 << 58);
+    /// clang `hasNonTrivialMoveConstructor`; see `NONTRIVIAL_DEFAULT_CTOR`.
+    pub const NONTRIVIAL_MOVE_CTOR: DefinitionBits = DefinitionBits(1 << 59);
+    /// clang `hasNonTrivialCopyAssignment`; see `NONTRIVIAL_DEFAULT_CTOR`.
+    pub const NONTRIVIAL_COPY_ASSIGN: DefinitionBits = DefinitionBits(1 << 60);
+    /// clang `hasNonTrivialMoveAssignment`; see `NONTRIVIAL_DEFAULT_CTOR`.
+    pub const NONTRIVIAL_MOVE_ASSIGN: DefinitionBits = DefinitionBits(1 << 61);
 
     /// No bits.
     pub const fn empty() -> Self {
@@ -5208,8 +5233,9 @@ pub mod builtin {
     /// `__builtin_sprintf` (`ic*RcC*R.`; lowered to `sprintf`).
     pub const SPRINTF: u32 = 1057;
     /// WP-841: the rest of clang 19's `printf` / `scanf` family
-    /// (`Builtins.td`; clang 19 declares no `__builtin_fprintf`,
-    /// `__builtin_vfprintf`, `__builtin_fscanf` or `__builtin_vfscanf`).
+    /// (`Builtins.td`; the `FILE` forms `__builtin_fprintf`,
+    /// `__builtin_vfprintf`, `__builtin_fscanf` and `__builtin_vfscanf`
+    /// are WP-1104's [`LIBC_FWD`] rows).
     /// Each is lowered to the library function. The ids are kiln-private.
     /// `__builtin_printf` (`icC*R.`; `format(printf, 1, 2)`).
     pub const PRINTF: u32 = 2380;
@@ -5321,14 +5347,14 @@ pub mod builtin {
             // `VPrintfFormat` indices + 1.
             PRINTF => (1, 2),
             VPRINTF => (1, 0),
-            SPRINTF | PRINTF_CHK => (2, 3),
+            SPRINTF | PRINTF_CHK | FPRINTF => (2, 3),
             SNPRINTF | FPRINTF_CHK => (3, 4),
             VSNPRINTF | VFPRINTF_CHK => (3, 0),
             SPRINTF_CHK => (4, 5),
             SNPRINTF_CHK => (5, 6),
             VSPRINTF_CHK => (4, 0),
             VSNPRINTF_CHK => (5, 0),
-            VSPRINTF | VPRINTF_CHK => (2, 0),
+            VSPRINTF | VPRINTF_CHK | VFPRINTF => (2, 0),
             _ => return None,
         })
     }
@@ -5703,6 +5729,118 @@ pub mod builtin {
     pub const CONJF: u32 = 2409;
     /// `__builtin_conjl`.
     pub const CONJL: u32 = 2410;
+
+    // WP-1104: the `__builtin_`-prefixed C library functions clang 19 and
+    // 22 declare that kiln lacked: `Builtins.td` `Builtin` rows with
+    // `FunctionWithBuiltinPrefix` and `LibBuiltin` rows with
+    // `AddBuiltinPrefixedAlias`, diffed against kiln's tables. Each is a
+    // call of the library function it names (clang `emitLibraryCall`),
+    // except the two `alloca` forms, which lower as `__builtin_alloca` /
+    // `__builtin_alloca_with_align` (kiln has no `-ftrivial-auto-var-init`,
+    // so "uninitialized" changes nothing). None is constant-evaluated.
+    // The ids are kiln-private.
+    /// `void *__builtin_malloc(size_t) noexcept` (`v*z`).
+    pub const MALLOC: u32 = 2420;
+    /// `void *__builtin_calloc(size_t, size_t) noexcept` (`v*zz`).
+    pub const CALLOC: u32 = 2421;
+    /// `void *__builtin_realloc(void *, size_t) noexcept` (`v*v*z`).
+    pub const REALLOC: u32 = 2422;
+    /// `void __builtin_free(void *) noexcept` (`vv*`).
+    pub const FREE: u32 = 2423;
+    /// `__builtin_fprintf` (`iP*RcC*R.`; `format(printf, 2, 3)`).
+    pub const FPRINTF: u32 = 2424;
+    /// `__builtin_vfprintf` (`iP*RcC*Ra`; `format(printf, 2, 0)`).
+    pub const VFPRINTF: u32 = 2425;
+    /// `__builtin_fscanf` (`iP*RcC*R.`; `format(scanf, 2, 3)`; not
+    /// `NoThrow`).
+    pub const FSCANF: u32 = 2426;
+    /// `__builtin_vfscanf` (`iP*RcC*Ra`; `format(scanf, 2, 0)`; not
+    /// `NoThrow`).
+    pub const VFSCANF: u32 = 2427;
+    /// `__builtin_index` (`c*cC*i`).
+    pub const INDEX: u32 = 2428;
+    /// `__builtin_rindex` (`c*cC*i`).
+    pub const RINDEX: u32 = 2429;
+    /// `__builtin_stpcpy` (`c*c*cC*`).
+    pub const STPCPY: u32 = 2430;
+    /// `__builtin_stpncpy` (`c*c*cC*z`).
+    pub const STPNCPY: u32 = 2431;
+    /// `__builtin_strcasecmp` (`icC*cC*`; not `NoThrow`).
+    pub const STRCASECMP: u32 = 2432;
+    /// `__builtin_strncasecmp` (`icC*cC*z`; not `NoThrow`).
+    pub const STRNCASECMP: u32 = 2433;
+    /// `__builtin_strcat` (`c*c*cC*`).
+    pub const STRCAT: u32 = 2434;
+    /// `__builtin_strcpy` (`c*c*cC*`).
+    pub const STRCPY: u32 = 2435;
+    /// `__builtin_strncat` (`c*c*cC*z`).
+    pub const STRNCAT: u32 = 2436;
+    /// `__builtin_strncpy` (`c*c*cC*z`).
+    pub const STRNCPY: u32 = 2437;
+    /// `__builtin_strcspn` (`zcC*cC*`).
+    pub const STRCSPN: u32 = 2438;
+    /// `__builtin_strspn` (`zcC*cC*`).
+    pub const STRSPN: u32 = 2439;
+    /// `__builtin_strdup` (`c*cC*`).
+    pub const STRDUP: u32 = 2440;
+    /// `__builtin_strndup` (`c*cC*z`).
+    pub const STRNDUP: u32 = 2441;
+    /// `__builtin_alloca_uninitialized` (`v*z`; as [`ALLOCA`]).
+    pub const ALLOCA_UNINITIALIZED: u32 = 2442;
+    /// `__builtin_alloca_with_align_uninitialized` (`v*zIz`; as
+    /// [`ALLOCA_WITH_ALIGN`]).
+    pub const ALLOCA_WITH_ALIGN_UNINITIALIZED: u32 = 2443;
+
+    /// WP-1104: the `__builtin_` library forwards ([`MALLOC`] ...).
+    pub static LIBC_FWD: &[Info] = &[
+        row(MALLOC, "__builtin_malloc", "v*z", N | F),
+        row(CALLOC, "__builtin_calloc", "v*zz", N | F),
+        row(REALLOC, "__builtin_realloc", "v*v*z", N | F),
+        row(FREE, "__builtin_free", "vv*", N | F),
+        row(FPRINTF, "__builtin_fprintf", "iP*RcC*R.", N | F),
+        row(VFPRINTF, "__builtin_vfprintf", "iP*RcC*Ra", N | F),
+        row(FSCANF, "__builtin_fscanf", "iP*RcC*R.", F),
+        row(VFSCANF, "__builtin_vfscanf", "iP*RcC*Ra", F),
+        row(INDEX, "__builtin_index", "c*cC*i", N | F),
+        row(RINDEX, "__builtin_rindex", "c*cC*i", N | F),
+        row(STPCPY, "__builtin_stpcpy", "c*c*cC*", N | F),
+        row(STPNCPY, "__builtin_stpncpy", "c*c*cC*z", N | F),
+        row(STRCASECMP, "__builtin_strcasecmp", "icC*cC*", F),
+        row(STRNCASECMP, "__builtin_strncasecmp", "icC*cC*z", F),
+        row(STRCAT, "__builtin_strcat", "c*c*cC*", N | F),
+        row(STRCPY, "__builtin_strcpy", "c*c*cC*", N | F),
+        row(STRNCAT, "__builtin_strncat", "c*c*cC*z", N | F),
+        row(STRNCPY, "__builtin_strncpy", "c*c*cC*z", N | F),
+        row(STRCSPN, "__builtin_strcspn", "zcC*cC*", N | F),
+        row(STRSPN, "__builtin_strspn", "zcC*cC*", N | F),
+        row(STRDUP, "__builtin_strdup", "c*cC*", N | F),
+        row(STRNDUP, "__builtin_strndup", "c*cC*z", N | F),
+        row(ALLOCA_UNINITIALIZED, "__builtin_alloca_uninitialized", "v*z", N | F),
+        row(
+            ALLOCA_WITH_ALIGN_UNINITIALIZED,
+            "__builtin_alloca_with_align_uninitialized",
+            "v*zIz",
+            N | F,
+        ),
+    ];
+
+    /// Whether `id` is a WP-1104 library forward ([`LIBC_FWD`]).
+    pub fn is_libc_fwd(id: u32) -> bool {
+        (MALLOC..=ALLOCA_WITH_ALIGN_UNINITIALIZED).contains(&id)
+    }
+
+    /// The `scanf` format-attribute indices of a builtin (clang
+    /// `Builtins.td` `ScanfFormat<N>` / `VScanfFormat<N>`), as
+    /// [`printf_format`].
+    pub fn scanf_format(id: u32) -> Option<(u16, u16)> {
+        Some(match id {
+            SCANF => (1, 2),
+            VSCANF => (1, 0),
+            SSCANF | FSCANF => (2, 3),
+            VSSCANF | VFSCANF => (2, 0),
+            _ => return None,
+        })
+    }
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19
     /// `Builtins.td` `F128` variants), one row each. The ones with a
@@ -6088,6 +6226,7 @@ pub mod builtin {
             .chain(F16_LIBM)
             .chain(C_MATH_INTR)
             .chain(C_MATH_LIB)
+            .chain(LIBC_FWD)
             .find(|e| e.name == name)
             .map(|e| e.id)
     }
@@ -6117,6 +6256,7 @@ pub mod builtin {
             .chain(F16_LIBM)
             .chain(C_MATH_INTR)
             .chain(C_MATH_LIB)
+            .chain(LIBC_FWD)
             .find(|e| e.id == id)
             .copied()
     }

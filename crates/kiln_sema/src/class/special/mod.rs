@@ -133,6 +133,20 @@ impl SpecialKind {
         }
     }
 
+    /// The `NONTRIVIAL_*` definition bit (clang `hasNonTrivial*`; none for
+    /// the destructor, which is non-trivial exactly when not
+    /// `TRIVIAL_DTOR`: a class has one destructor).
+    pub const fn nontrivial_bit(self) -> Option<DefinitionBits> {
+        match self {
+            SpecialKind::DefaultCtor => Some(DefinitionBits::NONTRIVIAL_DEFAULT_CTOR),
+            SpecialKind::CopyCtor => Some(DefinitionBits::NONTRIVIAL_COPY_CTOR),
+            SpecialKind::MoveCtor => Some(DefinitionBits::NONTRIVIAL_MOVE_CTOR),
+            SpecialKind::CopyAssign => Some(DefinitionBits::NONTRIVIAL_COPY_ASSIGN),
+            SpecialKind::MoveAssign => Some(DefinitionBits::NONTRIVIAL_MOVE_ASSIGN),
+            SpecialKind::Dtor => None,
+        }
+    }
+
     /// The `USER_DECLARED_*` definition bit (`USER_DECLARED_CTOR` for the
     /// default constructor: any user-declared constructor suppresses it,
     /// [class.default.ctor]/1).

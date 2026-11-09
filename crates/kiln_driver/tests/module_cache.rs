@@ -211,6 +211,76 @@ fn std_compat_caches_both_modules() {
     done(&d);
 }
 
+/// The rule in the dependency file `f` in `dir`, unwrapped, as its
+/// target and its prerequisites.
+fn rule(dir: &Path, f: &str) -> Vec<String> {
+    let text = std::fs::read_to_string(dir.join(f)).unwrap().replace(" \\\n  ", " ");
+    let first = text.lines().next().unwrap_or_default().to_owned();
+    first.split(' ').map(str::to_owned).collect()
+}
+
+/// WP-1051 (spec/driver.md "Dependency output", spec/modules.md §11.12):
+/// a TU that imports `std` from the cache lists the module file it read
+/// (absolute, the path `-v` reports) and not the headers inside it under
+/// `-MMD`; under `-MD` the entry's stamped inputs follow as system files.
+/// The file is the same on a miss and on a hit, and with either kind of
+/// module file; `-fno-module-file-deps` drops the cache entirely.
+#[test]
+fn depfile_same_on_miss_and_hit() {
+    let Some(d) = setup("deps") else { return };
+    let dep = ["-fmodules-cache-path=cache", "-c", "u.cpp", "-o", "u.o"];
+    let with = |extra: &[&str]| ok(&d, &[extra, &dep[..]].concat());
+    // -MMD: the source and the cache entry, on a miss and on a hit.
+    let miss = remarks(&with(&["-v", "-MMD", "-MF", "miss.d"]));
+    assert!(miss[0].starts_with("building 'std' into '"), "{miss:?}");
+    let hit = remarks(&with(&["-v", "-MMD", "-MF", "hit.d"]));
+    let pcm = entries(&d.join("cache"))[0].join("std.pcm");
+    assert_eq!(hit, [format!("using '{}' for 'std'", pcm.display())]);
+    assert!(pcm.is_absolute(), "{}", pcm.display());
+    let want = ["u.o:".to_owned(), "u.cpp".to_owned(), pcm.display().to_string()];
+    assert_eq!(rule(&d, "miss.d"), want);
+    assert_eq!(std::fs::read(d.join("miss.d")).unwrap(), std::fs::read(d.join("hit.d")).unwrap());
+    // The other kind of module file reads the same entry.
+    with(&["-fkiln-bmi-image", "-MMD", "-MF", "img.d"]);
+    assert_eq!(std::fs::read(d.join("img.d")).unwrap(), std::fs::read(d.join("hit.d")).unwrap());
+    // -MP: a phony rule for the entry too.
+    with(&["-MMD", "-MP", "-MF", "mp.d"]);
+    let mp = std::fs::read_to_string(d.join("mp.d")).unwrap();
+    assert!(mp.ends_with(&format!("\n{}:\n", pcm.display())), "{mp}");
+    // -fno-module-file-deps: neither the entry nor its inputs.
+    with(&["-fno-module-file-deps", "-MD", "-MF", "no.d"]);
+    assert_eq!(rule(&d, "no.d"), ["u.o:", "u.cpp"]);
+    // -MD on a miss (a fresh cache) and on a hit: the entry, then the
+    // stamped inputs (std.cppm first, then the header it includes).
+    let md = ["-fmodules-cache-path=cache2", "-c", "u.cpp", "-o", "u.o", "-MD"];
+    let miss = remarks(&ok(&d, &[&["-v", "-MF", "mdmiss.d"][..], &md].concat()));
+    assert!(miss[0].starts_with("building 'std' into '"), "{miss:?}");
+    let hit = remarks(&ok(&d, &[&["-v", "-MF", "mdhit.d"][..], &md].concat()));
+    assert!(hit[0].starts_with("using"), "{hit:?}");
+    assert_eq!(
+        std::fs::read(d.join("mdmiss.d")).unwrap(),
+        std::fs::read(d.join("mdhit.d")).unwrap()
+    );
+    let r = rule(&d, "mdmiss.d");
+    let pcm2 = entries(&d.join("cache2"))[0].join("std.pcm");
+    assert_eq!(r[..3], ["u.o:".to_owned(), "u.cpp".to_owned(), pcm2.display().to_string()]);
+    assert_eq!(r.len(), 5, "{r:?}");
+    assert!(r[3].ends_with("share/libc++/v1/std.cppm"), "{r:?}");
+    assert!(r[4].ends_with("include/c++/v1/answer.h"), "{r:?}");
+    // `import std.compat;` lists both entries it read.
+    ok(&d, &["-fmodules-cache-path=cache", "-fsyntax-only", "-MMD", "-MF", "c.d", "c.cpp"]);
+    let e = entries(&d.join("cache"))[0].clone();
+    let c = rule(&d, "c.d");
+    assert_eq!(c[..2], ["c.o:", "c.cpp"]);
+    let mut listed = c[2..].to_vec();
+    listed.sort();
+    assert_eq!(
+        listed,
+        [e.join("std.compat.pcm").display().to_string(), e.join("std.pcm").display().to_string()]
+    );
+    done(&d);
+}
+
 #[test]
 fn changed_inputs_rebuild() {
     let Some(d) = setup("stale") else { return };

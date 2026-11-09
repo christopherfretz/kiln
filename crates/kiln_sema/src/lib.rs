@@ -18,6 +18,7 @@ mod absolute_value;
 mod align_redecl;
 mod alloc_decl;
 mod annot;
+mod annotate_attr;
 mod arm_builtins;
 mod asm;
 mod attr_cond;
@@ -27,12 +28,14 @@ mod bitfield_constant;
 mod bmi_ast;
 mod bmi_image;
 mod builtins;
+mod carries_dep_attr;
 mod cconv;
 pub mod cfg;
 pub mod class;
 mod class_b_attrs;
 mod cleanup_attr;
 mod complex;
+mod const_init_attr;
 mod consteval;
 mod consteval_block;
 mod consteval_only;
@@ -305,6 +308,11 @@ pub struct Sema<'a, 'sm> {
     /// The temporaries of a for-range-initializer are extended to the
     /// whole loop (C++23, P2718R0; spec/sema-class.md §5.4).
     pub range_lifetime_extension: bool,
+    /// Instantiating an enumerating expansion statement's
+    /// for-range-declaration, whose element temporaries persist for its
+    /// lifetime ([class.temporary]/8, CWG3043): the lifetime check
+    /// (`check_var_lifetime`) has nothing to diagnose.
+    pub(crate) expansion_element_init: bool,
     /// A GNU dialect (`-std=gnu++NN`): some extension warnings are
     /// off by default (clang's `*_in_gnu_mode` diagnostics, WP-183).
     pub gnu: bool,
@@ -822,7 +830,7 @@ pub struct Sema<'a, 'sm> {
     /// 1-based depth of the point holding them), emitted when the
     /// declaration they belong to is formed and is not deprecated
     /// (spec/sema.md "Deprecation warnings").
-    pub(crate) delayed_deprecations: Vec<(usize, Diag)>,
+    pub(crate) delayed_deprecations: Vec<(usize, Diag, bool)>,
     /// The open deprecation delay points: the context each was opened in.
     pub(crate) depr_points: Vec<DeclId>,
     /// The declaration whose initializer is being parsed: a use in it is
@@ -1269,6 +1277,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             coro_aligned_allocation: false,
             lax_vector_conversions: LaxVectorConversions::All,
             range_lifetime_extension: false,
+            expansion_element_init: false,
             gnu: false,
             clang_compat: 22,
             cf_protection_branch: false,
