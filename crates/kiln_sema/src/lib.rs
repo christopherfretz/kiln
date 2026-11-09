@@ -22,8 +22,8 @@ mod asm;
 mod attr_cond;
 pub mod attr_triage;
 mod bit_int;
-mod bmi_ast;
 mod bitfield_constant;
+mod bmi_ast;
 mod builtins;
 mod cconv;
 pub mod cfg;
@@ -144,8 +144,8 @@ use kiln_ast::{Ast, AstBuilder, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
-pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use bmi_ast::CarriedSection as CarriedConstants;
+pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use contracts::{ContractDeclKind, ContractScope};
 pub use decl::{NameClass, TagUse};
 pub use declspec::{

@@ -200,8 +200,7 @@ impl Sema<'_, '_> {
     pub fn install_carried_constants(&mut self, path: &str, bytes: &[u8], at: Loc) {
         match decode(bytes) {
             Ok((paths, map)) => {
-                let paths =
-                    paths.into_iter().enumerate().map(|(i, p)| (p, i as u32)).collect();
+                let paths = paths.into_iter().enumerate().map(|(i, p)| (p, i as u32)).collect();
                 let unit = self.module_current_unit();
                 self.bmi.tables.push(Table { unit, paths, file_ix: FxHashMap::default(), map });
             }
@@ -401,11 +400,9 @@ impl Sema<'_, '_> {
         let store = &self.ast.consts;
         if let Some(s) = store.scalar(v) {
             return match s {
-                Scalar::Int { signed, bits, .. } => Ok(Carried::Int {
-                    signed,
-                    width: bits.width(),
-                    words: bits.words().into(),
-                }),
+                Scalar::Int { signed, bits, .. } => {
+                    Ok(Carried::Int { signed, width: bits.width(), words: bits.words().into() })
+                }
                 Scalar::Bool { value, .. } => Ok(Carried::Bool(value)),
                 Scalar::Float { kind, bits, .. } => Ok(Carried::Float { kind, bits }),
                 Scalar::Null { kind: NullKind::Pointer, .. } => Ok(Carried::NullPointer),
@@ -659,7 +656,8 @@ mod tests {
     use super::*;
 
     fn sample() -> Recorder {
-        let key = |n: u32| EvalKey { kind: 1, at: LocKey([0, n, 0, n]), expr: LocKey([1, n, 0, 7]) };
+        let key =
+            |n: u32| EvalKey { kind: 1, at: LocKey([0, n, 0, n]), expr: LocKey([1, n, 0, 7]) };
         let mut r = Recorder { paths: vec!["m.cppm".into(), "h.h".into()], ..Recorder::default() };
         let vals = [
             Carried::Int { signed: true, width: 32, words: vec![0xffff_fffe].into() },

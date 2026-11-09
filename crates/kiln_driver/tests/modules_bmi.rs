@@ -257,7 +257,8 @@ fn kind2_carries_constant_results() {
     let o = kiln(&d, &["-v", "-fkiln-bmi-kind=1", "--precompile", "cm.cppm", "-o", "cm1.pcm"]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(o.stderr.contains("as kind 1, as -fkiln-bmi-kind=1 requests"), "{}", o.stderr);
-    let (one, two) = (std::fs::read(d.join("cm1.pcm")).unwrap(), std::fs::read(d.join("cm2.pcm")).unwrap());
+    let (one, two) =
+        (std::fs::read(d.join("cm1.pcm")).unwrap(), std::fs::read(d.join("cm2.pcm")).unwrap());
     assert_eq!((one[12], two[12]), (1, 2), "kind bytes");
     ok(&d, &["--precompile", "cm.cppm", "-o", "cm2b.pcm"]);
     assert_eq!(two, std::fs::read(d.join("cm2b.pcm")).unwrap(), "kind 2 is deterministic");

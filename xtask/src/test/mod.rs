@@ -379,9 +379,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     if opts.bmi_kind.is_some() {
         // The module-file variant runs only tests with `module:` lines
         // (the runner skips any other, should one slip through).
-        cases.retain(|c| {
-            std::fs::read_to_string(&c.path).is_ok_and(|t| t.contains("//@ module:"))
-        });
+        cases.retain(|c| std::fs::read_to_string(&c.path).is_ok_and(|t| t.contains("//@ module:")));
     }
     if cases.is_empty() {
         return Err("no tests selected".into());
