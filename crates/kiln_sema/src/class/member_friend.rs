@@ -11,9 +11,10 @@
 //! text) and turns off access checking for the befriending class. kiln
 //! grants only the members the rule names.
 
-use kiln_ast::decl::{DeclKind, FriendTarget};
+use kiln_ast::decl::{DeclFlags, DeclKind, FriendTarget};
+use kiln_ast::ids::{ArgListId, TemplateParamListId};
 use kiln_ast::names::DeclName;
-use kiln_ast::types::{Nns, TemplateArg, TypeView};
+use kiln_ast::types::{Nns, TemplateArg, TypeFlags, TypeView};
 use kiln_ast::{DeclId, NnsId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -22,7 +23,7 @@ use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::declspec::{DeclSpec, Declarator};
-use crate::templ::args::LevelMode;
+use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::deduce::{DeducedArgs, Tdk};
 use crate::templ::stack::FrameKind;
 use crate::templ::subst::Substituter;
@@ -37,8 +38,10 @@ pub(crate) struct MemberFriend {
     depth: u16,
     params: u16,
     /// A member template is named (`template<class T> template<class U>
-    /// friend void A<T>::g(U);`): its type is not compared.
+    /// friend void A<T>::g(U);`), with this head: matched against the
+    /// member template's head and type ([temp.over.link]; WP-1098).
     inner_head: bool,
+    inner_list: Option<TemplateParamListId>,
     /// The befriended member's name, and a function's declared type.
     name: DeclName,
     fn_ty: Option<QualType>,
@@ -150,6 +153,21 @@ impl Sema<'_, '_> {
         used.contains(&true).then_some((depth, n, heads.len() > 1))
     }
 
+    /// `template<class U> friend int B<T>::g(U);` in a class template:
+    /// a dependent qualifier that names none of the innermost open head's
+    /// parameters leaves that head to the befriended member template
+    /// itself ([temp.friend]/1), not to the qualifier's class template
+    /// (WP-1110).
+    pub(crate) fn friend_head_is_own(&self, d: &Declarator) -> bool {
+        let Some(nns) = d.qualifier_nns else { return false };
+        if !self.ast.types.nns_flags(nns).intersects(TypeFlags::DEPENDENT) {
+            return false;
+        }
+        self.member_friend_shape(nns).is_some_and(|(_, args, _)| {
+            !self.open_written_heads().is_empty() && self.member_friend_head(&args).is_none()
+        })
+    }
+
     /// `template<class T> friend class A<T>::Member;` in class `record`
     /// (`base` the dependent elaborated type): `None` when the
     /// declaration is not of that form.
@@ -168,22 +186,29 @@ impl Sema<'_, '_> {
         };
         let (template, args, path) = self.member_friend_shape(nns)?;
         let (depth, params, inner_head) = self.member_friend_head(&args)?;
+        let inner_list = self.innermost_open_head_list().filter(|_| inner_head);
         self.take_open_heads();
         let fd =
             self.builder().friend(record, loc, FriendTarget::Type { ty: base, owned_tag: None });
         let name = DeclName::ident(name);
+        let at = ds.dependent_tag_name.unwrap_or(loc);
+        if path.is_empty() && self.member_friend_kind_mismatch(template, name, false, at) {
+            self.ast.decls.set_flags(fd, DeclFlags::INVALID);
+            return Some(fd);
+        }
         let mf = MemberFriend {
             nns,
             depth,
             params,
             inner_head,
+            inner_list,
             name,
             fn_ty: None,
             template,
             args,
             path,
         };
-        self.warn_unsupported_friend(nns, record, ds.dependent_tag_name.unwrap_or(loc));
+        self.warn_unsupported_friend(nns, record, at);
         self.register_member_friend(fd, mf);
         Some(fd)
     }
@@ -206,6 +231,7 @@ impl Sema<'_, '_> {
         }
         let (template, args, path) = self.member_friend_shape(nns)?;
         let (depth, params, inner_head) = self.member_friend_head(&args)?;
+        let inner_list = self.innermost_open_head_list().filter(|_| inner_head);
         self.take_open_heads();
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         self.templ.cur = None;
@@ -215,11 +241,82 @@ impl Sema<'_, '_> {
         let at = d.name_loc();
         let fd = self.builder().friend(record, at, FriendTarget::Type { ty, owned_tag: None });
         let name = d.fn_decl_name(name);
+        if path.is_empty() && self.member_friend_kind_mismatch(template, name, true, at) {
+            self.ast.decls.set_flags(fd, DeclFlags::INVALID);
+            return Some(fd);
+        }
         let fn_ty = Some(ty);
-        let mf = MemberFriend { nns, depth, params, inner_head, name, fn_ty, template, args, path };
+        let mf = MemberFriend {
+            nns,
+            depth,
+            params,
+            inner_head,
+            inner_list,
+            name,
+            fn_ty,
+            template,
+            args,
+            path,
+        };
         self.warn_unsupported_friend(nns, record, at);
         self.register_member_friend(fd, mf);
         Some(fd)
+    }
+
+    /// [temp.friend]/5, [dcl.type.elab]/5, [class.friend]/10: the member
+    /// a friend of every specialization of `template` names is a class
+    /// (`function` false) or a function. When the template's primary
+    /// pattern is defined and declares `name` as an entity of another
+    /// kind only (a function or variable for a class friend; a class,
+    /// variable or enumerator for a function friend), the friend is
+    /// ill-formed: diagnosed at `at` as clang does for a member of the
+    /// current instantiation, "redefinition of 'Member' as different
+    /// kind of symbol" (g++ also rejects; clang accepts it with
+    /// `-Wunsupported-friend`). Explicit and partial specializations are
+    /// not consulted (WP-1099).
+    fn member_friend_kind_mismatch(
+        &mut self,
+        template: DeclId,
+        name: DeclName,
+        function: bool,
+        at: Loc,
+    ) -> bool {
+        let Some(p) = self.pattern_of(template) else { return false };
+        let Some(p) = self.ast.definition(p) else { return false };
+        let found: Vec<DeclId> = self
+            .ast
+            .lookup_local(p, name)
+            .iter_with_inline()
+            .map(|(x, _)| self.ast.strip_shadow(x))
+            .collect();
+        let is_class = |s: &Self, x: DeclId| {
+            matches!(
+                s.kind_of(x),
+                DeclKind::CXXRecord | DeclKind::ClassTemplate
+            )
+        };
+        let is_fn = |s: &Self, x: DeclId| {
+            s.kind_of(x).is_function() || s.kind_of(x) == DeclKind::FunctionTemplate
+        };
+        let Some(&first) = found.first() else { return false };
+        let ok = found.iter().any(|&x| if function { is_fn(self, x) } else { is_class(self, x) });
+        // A typedef member is diagnosed elsewhere for a class friend (or
+        // names a class); an alias template likewise.
+        let other_kind = found.iter().all(|&x| {
+            let k = self.kind_of(x);
+            if function {
+                !is_fn(self, x) && k != DeclKind::UsingShadow
+            } else {
+                is_fn(self, x) || matches!(k, DeclKind::Var | DeclKind::Field | DeclKind::VarTemplate)
+            }
+        });
+        if ok || !other_kind {
+            return false;
+        }
+        let msg = self.diag(DiagId::sema_redefinition_different_kind, at).arg(self.decl_name_str(name));
+        let msg = self.note_prev(msg, first, true);
+        self.emit(msg);
+        true
     }
 
     /// The friend `pattern` of a class template, instantiated in the
@@ -335,6 +432,13 @@ impl Sema<'_, '_> {
             return Grant::No;
         }
         let e_ty = n.ty();
+        // A member template is befriended only by a friend with a
+        // template head of its own, and the other way round
+        // ([temp.over.link]/4; WP-1098).
+        let e_tmpl = self.member_friend_template_of(e);
+        if mf.fn_ty.is_some() && e_tmpl.is_some() != mf.inner_head {
+            return Grant::No;
+        }
         // A member of the pattern or of a partial specialization: some
         // instantiation may be befriended.
         let Some((_, si)) = self.ast.spec_info(s) else { return Grant::Speculative };
@@ -347,10 +451,25 @@ impl Sema<'_, '_> {
             {
                 return false;
             }
-            let Some(fty) = mf.fn_ty.filter(|_| !mf.inner_head) else { return true };
+            let Some(fty) = mf.fn_ty else { return true };
             let deduced = s.ast.types.arg_list(&d.args);
             let mut levels = Self::outer_levels(mf.template, mf.depth);
             levels.push(deduced, mf.template, LevelMode::Substitute);
+            let mut e_ty = e_ty;
+            if let Some(t) = e_tmpl {
+                // The friend's own head names the member template's
+                // parameters: equivalent heads, then equivalent types
+                // with the friend's parameters renamed to the member's.
+                let Some((inner, own)) = mf.inner_list.zip(s.ast.template_info(t).map(|i| i.params))
+                else {
+                    return false;
+                };
+                let Some(renamed) = s.member_friend_heads_match(inner, own, &levels, loc) else {
+                    return false;
+                };
+                levels.push(renamed, mf.template, LevelMode::Substitute);
+                e_ty = s.pattern_of(t).and_then(|p| s.ast.decls.get(p).ty());
+            }
             let Ok(t) = Substituter::new(s, &levels).ty(fty, loc) else { return false };
             e_ty.is_some_and(|et| s.ast.types.canonical(et) == s.ast.types.canonical(t))
         });
@@ -358,5 +477,75 @@ impl Sema<'_, '_> {
             Some((true, Ok(()))) => Grant::Yes,
             _ => Grant::No,
         }
+    }
+    /// The member function template `e` (its pattern, the template or a
+    /// specialization of it) belongs to.
+    fn member_friend_template_of(&self, e: DeclId) -> Option<DeclId> {
+        if self.kind_of(e) == DeclKind::FunctionTemplate {
+            return Some(e);
+        }
+        if let Some(t) = self.ast.described_template(self.ast.first(e)) {
+            return Some(t);
+        }
+        self.ast
+            .spec_info(e)
+            .map(|(_, si)| si.template)
+            .filter(|&t| self.kind_of(t) == DeclKind::FunctionTemplate)
+    }
+
+    /// [temp.over.link]/6: the friend's member template head `inner`
+    /// (its outer levels substituted by `levels`) and the member
+    /// template's head `own` are equivalent (same length, kinds, packs,
+    /// non-type parameter types and template template parameter heads).
+    /// The member's parameters as arguments for `inner`'s level when they
+    /// are; requires-clauses and type-constraints are not compared.
+    fn member_friend_heads_match(
+        &mut self,
+        inner: TemplateParamListId,
+        own: TemplateParamListId,
+        levels: &MultiLevelArgs,
+        loc: Loc,
+    ) -> Option<ArgListId> {
+        let (li, lo) = (*self.ast.templates.param_list(inner), *self.ast.templates.param_list(own));
+        let pi: Vec<DeclId> = self.ast.lists.iter::<DeclId>(li.params).collect();
+        let po: Vec<DeclId> = self.ast.lists.iter::<DeclId>(lo.params).collect();
+        if pi.len() != po.len() {
+            return None;
+        }
+        let mut args = Vec::with_capacity(po.len());
+        for (&x, &y) in pi.iter().zip(&po) {
+            let (kx, ky) = (self.kind_of(x), self.kind_of(y));
+            let (ix, iy) = (self.ast.template_parm(x).copied(), self.ast.template_parm(y).copied());
+            if kx != ky || ix.map(|i| i.pack) != iy.map(|i| i.pack) {
+                return None;
+            }
+            match kx {
+                DeclKind::NonTypeTemplateParm => {
+                    let tx = self.ast.decls.get(x).ty()?;
+                    let ty = self.ast.decls.get(y).ty()?;
+                    let tx = Substituter::new(self, levels).ty(tx, loc).ok()?;
+                    if self.ast.types.canonical(tx) != self.ast.types.canonical(ty) {
+                        return None;
+                    }
+                }
+                DeclKind::TemplateTemplateParm => {
+                    let (a, b) = (ix.and_then(|i| i.params), iy.and_then(|i| i.params));
+                    match (a, b) {
+                        (Some(a), Some(b)) if self.heads_equivalent(a, b) => {}
+                        (None, None) => {}
+                        _ => return None,
+                    }
+                }
+                _ => {}
+            }
+            let a = self.template_param_arg(y);
+            let pack = iy.is_some_and(|i| i.pack);
+            args.push(if pack {
+                TemplateArg::pack(self.ast.types.arg_list(&[a]))
+            } else {
+                a
+            });
+        }
+        Some(self.ast.types.arg_list(&args))
     }
 }

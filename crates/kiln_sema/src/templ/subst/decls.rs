@@ -770,9 +770,16 @@ impl Substituter<'_, '_, '_> {
         }
         let mut dr = self.pattern_declarator(d, ctx)?;
         if friend.is_some() {
-            dr.qualifier = match self.sema.friend_qualifiers.get(&d) {
-                Some(&q) => Some(q),
-                None => self.friend_member_class(d, loc),
+            dr.qualifier = if let Some(&n) = self.sema.friend_qualifier_nns.get(&d) {
+                // A method friend matched at instantiation (WP-1110): the
+                // class its substituted specifier names.
+                let n = self.nns(n, loc)?;
+                Some(self.nns_context(n, loc)?)
+            } else {
+                match self.sema.friend_qualifiers.get(&d) {
+                    Some(&q) => Some(q),
+                    None => self.friend_member_class(d, loc),
+                }
             };
         }
         if matches!(

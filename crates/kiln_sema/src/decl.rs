@@ -2623,6 +2623,68 @@ impl Sema<'_, '_> {
         self.pick_prev_function(&locals, new)
     }
 
+    /// Whether the friend `d` naming a member function of class `ctx`
+    /// from templated class `lexical` waits for instantiation to be
+    /// matched (WP-1110): its declarator depends on the enclosing
+    /// templates (its own template head, its type, or its
+    /// nested-name-specifier), it names no member of the current
+    /// instantiation, and no member found now matches it. The class's
+    /// functions are then matched with the substituted signature
+    /// ([temp.friend]/1, [class.friend]/10, [temp.res.general]/3). A name
+    /// that finds nothing, or something other than functions, is still
+    /// diagnosed now (clang).
+    fn defers_method_friend(
+        &mut self,
+        method_friend: bool,
+        d: &Declarator,
+        dname: DeclName,
+        (ctx, lexical): (DeclId, DeclId),
+        new_fn: NewFn,
+    ) -> bool {
+        if !method_friend || d.qualifier.is_none() || !self.in_templated_class(Some(lexical)) {
+            return false;
+        }
+        let dep_nns = d
+            .qualifier_nns
+            .filter(|&n| self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT));
+        if new_fn.head.is_none() && !self.ast.types.is_dependent(new_fn.ty) && dep_nns.is_none() {
+            return false;
+        }
+        // A member of the current instantiation is declared in the class
+        // itself (or an enclosing one): matched now.
+        if self.encloses(ctx, lexical) {
+            return false;
+        }
+        if self.kind_of(ctx) != DeclKind::CXXRecord {
+            return dep_nns.is_some();
+        }
+        self.declare_implicit_named(ctx, dname);
+        let found = self.prev_candidates_dn(dname, d.qualifier);
+        let functions = found.iter().all(|&x| {
+            let k = self.kind_of(self.ast.strip_shadow(x));
+            k.payload() == kiln_ast::decl::PayloadClass::Function || k == DeclKind::FunctionTemplate
+        });
+        if !functions {
+            return false;
+        }
+        // A dependent qualifier (`B<T>::`) names another specialization
+        // at each instantiation: the primary pattern's members are not
+        // what it names (an explicit specialization may differ), and the
+        // pattern's parameters alias the enclosing template's (`W<T>&` in
+        // `B<T>` vs in `W<T>`), so a match now would be spurious.
+        if dep_nns.is_some() {
+            return true;
+        }
+        if found.is_empty() {
+            return false;
+        }
+        let matched = self.pick_prev_function(&found, new_fn).is_some_and(|p| {
+            self.kind_of(p) == DeclKind::CXXMethod
+                && self.declared_fn_type(p).is_some_and(|pty| self.same_ignoring_exc_spec(pty, new_fn.ty))
+        });
+        !matched
+    }
+
     /// The previous declaration member function declaration `new`
     /// redeclares among the members of its class named `dname`
     /// (`qualifier`: the class of an out-of-line declaration), and, when
@@ -4205,6 +4267,26 @@ impl Sema<'_, '_> {
                             || k == DeclKind::FunctionTemplate
                     })
             };
+        // A qualified friend naming a member function of a class
+        // (`friend int B::f(W<T>&);`, `template<class U> friend int
+        // B<T>::g(U, W<T>&);`) in a templated class, whose declarator
+        // depends on the enclosing templates: matched against the
+        // member when the class is instantiated, with the substituted
+        // signature ([temp.friend]/1, [class.friend]/10, [temp.res.general]/3;
+        // WP-1110). A member of the dependent class matched now
+        // keeps that match (`friend_member_class`).
+        // A specifier that is neither the current instantiation nor one
+        // of its partial specializations (`C<T>::` inside `V<X, T>`)
+        // resolves to the class template itself: deferred the same way.
+        let template_qualifier = self.kind_of(ctx) == DeclKind::ClassTemplate;
+        let deferred_method_friend = !deferred_friend
+            && self.defers_method_friend(
+                friend && (method || template_qualifier),
+                d,
+                dname,
+                (ctx, lexical),
+                new_fn,
+            );
         // An invalid local-class friend redeclares nothing (clang returns
         // after `DiagnoseInvalidRedeclaration`).
         let local_friend = if friend && d.qualifier.is_none() {
@@ -4219,6 +4301,7 @@ impl Sema<'_, '_> {
         // previous declaration (`ActOnFunctionDeclarator`).
         let prev = if global_new_delete
             || deferred_friend
+            || deferred_method_friend
             || invalid_decl
             || bad_local_friend
             || main_invalid
@@ -4345,6 +4428,7 @@ impl Sema<'_, '_> {
         // An instantiated qualified friend template that matches no
         // template declares nothing visible, without a diagnostic (clang).
         let quiet_friend = deferred_friend
+            || deferred_method_friend
             || friend
                 && d.qualifier.is_some()
                 && !method
@@ -4431,7 +4515,7 @@ impl Sema<'_, '_> {
             let msg = self.note_prev(msg.arg(fname.clone()), o, true);
             self.emit(msg);
             invalid_redecl = true;
-        } else if method && !in_class && !matches_member
+        } else if method && !in_class && !matches_member && !deferred_method_friend
             || !method && !friend && d.qualifier.is_some() && prev.is_none()
         {
             // [dcl.meaning.general]/2: a qualified declarator-id names a
@@ -4830,8 +4914,14 @@ impl Sema<'_, '_> {
         }
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
-        } else if templated_friend {
+        } else if templated_friend || deferred_method_friend {
             self.friend_qualifiers.insert(f, ctx);
+            if deferred_method_friend
+                && let Some(n) = d.qualifier_nns
+                && self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT)
+            {
+                self.friend_qualifier_nns.insert(f, n);
+            }
         }
         if d.op_name.is_none() && d.lit_suffix.is_none() {
             self.note_local_extern(name, f);
