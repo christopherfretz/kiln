@@ -167,7 +167,7 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 | `-fno-plt`, `-fplt` | `nonlazybind` on every function declared but not defined in the TU, the `"RtLibUseGOT"` module flag, and under `-fno-pic` function declarations are not assumed `dso_local` (clang `shouldAssumeDSOLocal`) (`CodegenOptions::no_plt`) |
 | `-ffunction-sections`, `-fdata-sections` | `llc -function-sections` / `-data-sections` (see "Code generation") |
 | `-fc++-static-destructors[=all\|thread-local\|none]`, `-fno-c++-static-destructors` | which static and thread-local variables register their destructors (`CodegenOptions::static_destructors`, clang `RegisterStaticDestructorsKind`; WP-805): `all` (the default, and the bare flag), `thread-local` (only `thread_local` ones), `none` (= `-fno-`; `[[clang::always_destroy]]` variables still register); the last wins; another value is `invalid value '<v>' in '-fc++-static-destructors=<v>'`. spec/landed/sema/WP-805.md |
-| `-march=<cpu>` (x86-64), `-march=native`, `-mcpu=native` (AArch64, without `-march=`), `-mtune=<cpu>` | x86-64: `-march=` names one of clang's x86 CPUs (`x86-64`, `x86-64-v2`..`v4`, `skylake`, `znver4`, ...; clang 22 adds `wildcatlake`, `novalake`, `diamondrapids`) and sets `"target-cpu"` (the default `"tune-cpu"="generic"` is then omitted, as clang); a CPU clang 21 knows also sets clang 21's `"target-features"` and predefined macros for it (spec/landed/driver/WP-630.md, table layout spec/landed/codegen/WP-660.md; `wildcatlake` and `novalake` are not expanded, deviation). `native` on either target emits no `"target-cpu"` and passes `llc -mcpu=native` (the IR attribute would override `-mcpu`); kiln never inspects the host. `-mtune=<cpu>` sets `"tune-cpu"`; `-mtune=native` is accepted and adds nothing. The triple is unchanged |
+| `-march=<cpu>` (x86-64), `-march=native`, `-mcpu=native` (AArch64, without `-march=`), `-mtune=<cpu>` | x86-64: `-march=` names one of clang's x86 CPUs (`x86-64`, `x86-64-v2`..`v4`, `skylake`, `znver4`, ...; clang 22 adds `wildcatlake`, `novalake`, `diamondrapids`) and sets `"target-cpu"` (the default `"tune-cpu"="generic"` is then omitted, as clang); its features and predefined macros are clang 19's or clang 22's ("x86-64 target features"; spec/landed/driver/WP-630.md, WP-1000.md, table layout spec/landed/codegen/WP-660.md; `wildcatlake` and `novalake` are not expanded, deviation). `native` on either target emits no `"target-cpu"` and passes `llc -mcpu=native` (the IR attribute would override `-mcpu`); on a Linux x86-64 host x86 `-march=native` takes its features from `/proc/cpuinfo`, otherwise kiln does not inspect the host. `-mtune=<cpu>` sets `"tune-cpu"`; `-mtune=native` is accepted and adds nothing. The triple is unchanged |
 | `-fwrapv`, `-fno-wrapv`, `-f[no-]wrapv-pointer`, `-fno-strict-overflow`, `-fstrict-overflow` | signed overflow wraps (`CodegenOptions::wrapv`): the last of `-f[no-]wrapv`, else `-fno-strict-overflow`; no `nsw` on signed arithmetic, increments, negation, shifts or VLA sizes. Pointer overflow wraps (`wrapv_pointer`): at `-fclang-compat=19` exactly when `wrapv`; at 22 the last of `-f[no-]wrapv-pointer`, else `-fno-strict-overflow`; no `inbounds` on pointer arithmetic and subscripts, and at 22 none on field GEPs either. The Oven is unchanged: signed overflow in a constant expression stays non-constant ([expr.const]/5), unlike GCC, which folds it as wrapping under `-fwrapv` (deliberate divergence, deferred) |
 | `-ftrapv`, `-fno-trapv`, `-ftrapv-handler=<name>` (WP-1032) | `CodegenOptions::trapv` / `trapv_handler`, clang's `SOB_Trapping`: the last of `-ftrapv` / `-fno-trapv` (a kiln spelling; clang has none and GCC's cancels `-ftrapv`). Signed `+ - *`, unary `-` (checked as `0 - x`), `++`/`--` and compound assignment use `llvm.s{add,sub,mul}.with.overflow` and, on overflow, a bare `@llvm.ubsantrap(<id>)` (clang `EmitTrapCheck`: add 0, sub 21, mul 12), with no handler call and no `.src` data; `-ftrapv` beats `-fwrapv` and `-fno-strict-overflow`. Under `-fsanitize=signed-integer-overflow` the sanitizer's check wins for the signed operations it covers. An `_Atomic` signed operand takes the compare-exchange loop. `-ftrapv-handler=<name>`, with `-ftrapv` (alone it has no effect, as clang), replaces the trap or `__ubsan_handle_*` call of every overflow check, `-ftrapv`'s and signed/unsigned-integer-overflow's, by `<name>(i64 sext l, i64 sext r, i8 op, i8 width, ...)` in a block at the function's end whose `i64` result, truncated, is the operation's value (`op` is add 1, sub 2, mul 3, shifted left once, plus 1 when signed). Test: `tests/conformance/driver.sanitize/trapv-*.cpp`, `crates/kiln_driver/tests/codegen.rs` |
 | `-fno-delete-null-pointer-checks`, `-fdelete-null-pointer-checks` | `CodegenOptions::null_pointer_is_valid`: every definition gets `null_pointer_is_valid`; reference parameters, returns and `this` lose `nonnull` (`this` gets `dereferenceable_or_null`), `nonnull`/`returns_nonnull` attributes, the `operator new` result and loaded references lose `nonnull` (and `!nonnull` metadata), as clang |
@@ -806,14 +806,96 @@ modelled: clang 22 by default, clang 19 at `-fclang-compat=19`.
   option '-march='` (`-mcpu=` alike), and so is a `-msve-vector-bits=`
   value outside the list (`'<v>' to option '-msve-vector-bits='`).
   `native` is accepted (no features; "Codegen flags"). On
-  x86-64, `-march=` takes `native` or one of clang's x86 CPU names
-  ("Codegen flags") and any other value, and every `-mcpu=`, is the same
-  error, `-msve-vector-bits=` is
-  `unsupported option '-msve-vector-bits=' for target '<triple>'` (the
+  x86-64 ("x86-64 target features" below), `-march=` takes `native` or
+  one of clang's x86 CPU names and any other value is the same error;
+  `-mcpu=` and `-msve-vector-bits=` are
+  `unsupported option '<opt>' for target '<triple>'` (the
   `--target` as written; `drv_unsupported_opt_for_target`) and
   `-target-feature` is ignored. A `-target-feature` value without a sign
   is `unsupported argument`. An unknown `+name` is passed through to
   `"target-features"`.
+
+## x86-64 target features (WP-1000)
+
+On an x86-64 target `features::resolve` builds the feature map clang's
+x86 driver and `X86TargetInfo::initFeatureMap` build, modelling clang 22
+by default and clang 19 at `-fclang-compat=19`
+(`crates/kiln_driver/src/x86_features.rs`; implication graph: the
+generated clang 21 table `x86_targets` with the measured clang 19 / 22
+differences).
+
+- **Flags.** `-m<feature>` / `-mno-<feature>` for every name of clang's
+  `m_x86_Features_Group`: the 104 both versions accept
+  (`x86_features::FLAGS`: `sse`..`sse4.2`, `sse4a`, `ssse3`, `avx`,
+  `avx2`, the `avx512*` family, `avxvnni*`, `avxifma`, `fma`, `fma4`,
+  `f16c`, `bmi`, `bmi2`, `lzcnt`, `popcnt`, `pclmul`, `aes`, `sha`,
+  `sha512`, `sm3`, `sm4`, `rdrnd`, `rdseed`, `adx`, `movbe`, `xsave*`,
+  `cx16`, `crc32`, `gfni`, `vaes`, `vpclmulqdq`, `amx-*`, `apxf`, ...),
+  clang 19's `avx10.1-256`, `avx10.1-512`, `evex512` and clang 22's
+  `amx-avx512`, `amx-fp8`, `amx-movrs`, `amx-tf32`, `avx10.2`, `movrs`;
+  a name the selected clang lacks is `unknown argument`. Also
+  `-m[no-]apx-features=<list>` (`egpr`, `push2pop2`, `ppx`, `ndd`,
+  `ccmp`, `nf`, `cf`, `zu`; any other value is `unsupported argument
+  '<v>' to option '-m[no-]apx-features='`) and
+  `-mapx-inline-asm-use-gpr32` (`+inline-asm-use-gpr32`).
+- **Spellings.** As clang's driver: `-msse4` is `+sse4.2` and
+  `-mno-sse4` `-sse4.1`; `-m80387` is `x87`; `-mapxf` is the APX list
+  (clang 19: `egpr,push2pop2,ppx,ndd,ccmp,nf,cf,zu`; clang 22 without
+  `cf`); clang 19's `-mavx10.1` is `avx10.1-256`; `-m3dnow` / `-m3dnowa`
+  add nothing and warn `the clang compiler does not support '-m3dnow'`.
+  The items are deduplicated as clang's `unifyTargetFeatures`: the last
+  item naming a feature wins.
+- **CPU.** `-march=<cpu>` (clang 19's list, plus clang 22's
+  `wildcatlake`, `novalake`, `diamondrapids` at 22) gives the CPU's
+  features: the clang 21 row with clang 19's / clang 22's differences
+  (`x86_features::CPU_19` / `CPU_22`); `wildcatlake` and `novalake` are
+  not expanded (deviation). `-march=native` on a Linux x86-64 host takes
+  the features of `/proc/cpuinfo`'s first `flags` line clang knows, over
+  `x86-64`'s; on another host none. Without `-march=` the base is
+  `x86-64` (`cmov,cx8,fxsr,mmx,sse,sse2,x87`).
+- **Map.** clang's `initFeatureMap`: `sse2`, then the CPU's features
+  (each with what it implies), then each item (`+f` enables `f` and what
+  it implies; `-f` disables `f` and every feature implying it), then
+  `sse4.2` adds `popcnt` and `crc32`, `sse` `mmx` and `avx` `xsave`
+  unless an item disabled that feature. clang 19 applies the `evex512`
+  items after the others and adds `+evex512` when an AVX-512 feature is
+  on (clang 22 has no `evex512`). `-mspeculative-load-hardening` adds
+  `+retpoline-indirect-calls` ("Codegen flags").
+- **Effects.** The map's macros (`x86_features::feature_macros`, clang's
+  `getTargetDefines`: `__AVX2__`, `__SSE4_1__`, `__PCLMUL__`, `__SHA__`,
+  `__SSE_MATH__`/`__SSE2_MATH__`, the `_Float16` macros with `sse2`,
+  `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16` with `cx16`, `__LAHF_SAHF__`,
+  clang 19's `__EVEX256__`/`__EVEX512__`, `__AVX10_*__`, `__APX_F__`
+  with every APX feature) replace the default ones; the map is every
+  function's `"target-features"` and the `-march=` CPU its
+  `"target-cpu"`, as clang prints them (`CodegenOptions::target_features`,
+  `target_cpu_features`, `target_features_written`). The intrinsic and
+  builtin gating, `target("...")` attributes and the AVX calling
+  convention checks of spec/codegen.md read the same map; a `target`
+  attribute's map starts from the `arch=` CPU (else the `-march=` CPU),
+  then the command line's items as written, then the attribute's own
+  (clang `getFunctionFeatureMap`).
+- **Other targets.** On AArch64 every x86 feature flag is `unsupported
+  option '<flag>' for target '<triple>'` (`-mno-sse4` names
+  `-mno-sse4.1`, `-m80387` `-mx87`, clang 19's `-mapxf`
+  `-mapx-features=`), except `-msse4`, `-msse4.2` and `-m[no-]3dnow[a]`,
+  which clang claims: `argument unused during compilation`. A non-x86
+  `-march=` value on x86-64 (or an x86 CPU on AArch64) is `unsupported
+  argument`.
+- **Not modelled.** `-mgeneral-regs-only`, `-msoft-float`,
+  `-mfp-ret-in-387`, `-mretpoline`, `-mretpoline-external-thunk`,
+  `-mlvi-cfi`, `-mseses`, `-mx32` stay unknown arguments; `-Xclang
+  -target-feature` is ignored; clang's `-Winvalid-feature-combination`
+  is not emitted; a bad `-march=` / `-mtune=` CPU is the driver's
+  `unsupported argument` (clang: cc1 `unknown target CPU` with a note),
+  and a bad `-mtune=` is accepted.
+- Tests: `tests/conformance/cpp.predefined/x86-feature-macros-*.cpp`
+  (per CPU level and flag combination, `-19` siblings),
+  `tests/conformance/target.x86/ir-target-features-*.cpp`,
+  `target.x86/m-feature-flags.cpp`, `crates/kiln_driver/tests/codegen.rs`
+  `x86_target_feature_gating`, `x86_avx_calling_convention`,
+  `x86_flag_driver_diagnostics`, and the `features` / `x86_features`
+  unit tests.
 
 ## Predefines
 
@@ -1887,16 +1969,17 @@ Each deviation is covered by a test or a test note.
 18. **Target features** ("Target features" above): the CPU names other
     than `generic` and `native`, `-march=armv8-r`, and the extensions kiln does
     not model (`sme*`, `fp8*`, clang 19's `b16b16`/`sve-b16b16`, ...) are
-    errors where clang accepts them; on x86-64, `-mcpu=` is "unsupported
-    argument" (clang: "unsupported option") and `-target-feature` is
-    ignored (clang passes it on); a `-target-feature` value without
+    errors where clang accepts them; on x86-64 `-target-feature` is
+    ignored (clang passes it on), and the flags listed under "x86-64
+    target features", "Not modelled", differ; a `-target-feature` value without
     `+`/`-` is an error (clang warns).
 19. **Codegen flags** ("Codegen flags" above, WP-605): `-fno-plt` puts
     `nonlazybind` only on functions with no definition in the TU, where
     clang also marks a function used before its later definition and
-    template instantiations; x86-64 `-march=<cpu>` expands to clang
-    21's features and predefines (also at `-fclang-compat=19`), and not
-    at all for `wildcatlake` / `novalake` (spec/landed/driver/WP-630.md);
+    template instantiations; x86-64 `-march=<cpu>` is not expanded
+    for `wildcatlake` / `novalake` (spec/landed/driver/WP-630.md), and
+    `-march=native` has `/proc/cpuinfo`'s features but not clang's host
+    CPU name or tuning (WP-1000);
     `-march=native` emits no `"target-cpu"` and `-mtune=native` no
     `"tune-cpu"` (clang resolves the host); `-fwrapv-pointer` is accepted at `-fclang-compat=19`
     (clang 19 has no such flag); `-fcoverage-mapping`, the

@@ -1,0 +1,12 @@
+// [driver] x86-64 target features (spec/driver.md "x86-64 target
+// features", WP-1000): `-mapxf -mno-sse4.1`: APX's sub-features (clang 19 and 22
+// expand -mapxf differently), giving clang's
+// "target-cpu" / "target-features" (and "tune-cpu") function attributes.
+// The target is pinned; the features do not depend on the host.
+// The clang 19 output (clang 22 differs; sibling of the clang 22 test).
+//@ requires: clang<22
+//@ expect: ir
+//@ args: --target=x86_64-unknown-linux-gnu -mapxf -mno-sse4.1
+
+int f(int x) { return x + 1; }
+__attribute__((target("avx512f"))) int g(int x) { return x * 2; }
