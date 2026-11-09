@@ -308,6 +308,87 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// Whether `f` (a function, or a function template's pattern) is a
+    /// valid type-aware allocation or deallocation function: its first
+    /// parameter is a `std::type_identity` specialization and its
+    /// declaration passed `check_type_aware_signature` (clang
+    /// `isTypeAwareOperatorNewOrDelete`).
+    pub(crate) fn is_type_aware_alloc_fn(&self, f: DeclId) -> bool {
+        let f = if self.kind_of(f) == DeclKind::FunctionTemplate {
+            match self.templated_function(f) {
+                Some(p) => p,
+                None => return false,
+            }
+        } else {
+            f
+        };
+        if self.ast.decls.get(f).has(DeclFlags::INVALID) {
+            return false;
+        }
+        let Some(fd) = self.ast.decls.function(f) else { return false };
+        let Some(p0) = self.ast.lists.iter::<DeclId>(fd.params).next() else { return false };
+        self.ast.decls.get(p0).ty().is_some_and(|t| self.is_type_identity(t))
+    }
+
+    /// P2719 ([class.free]): a class that declares a type-aware
+    /// `operator new` (`operator new[]`) also declares a type-aware
+    /// `operator delete` (`operator delete[]`), and the converse;
+    /// reported at the class, with a note at each unmatched declaration
+    /// (clang 22 `CheckCompletedCXXClass`). Run on every completed class,
+    /// a template's pattern and each instantiation alike.
+    pub(crate) fn check_type_aware_allocator_pairs(&mut self, r: DeclId) {
+        use OverloadedOperator as O;
+        let mut found: [Vec<DeclId>; 4] = Default::default();
+        for m in self.ast.members(r).collect::<Vec<_>>() {
+            let Some(op) = self.ast.decls.get(m).name().as_operator() else { continue };
+            let slot = match op {
+                O::New => 0,
+                O::Delete => 1,
+                O::ArrayNew => 2,
+                O::ArrayDelete => 3,
+                _ => continue,
+            };
+            if self.is_type_aware_alloc_fn(m) {
+                found[slot].push(m);
+            }
+        }
+        if found.iter().all(Vec::is_empty) {
+            return;
+        }
+        // A template's pattern prints as `S<T>` (its injected type).
+        let ct = match self.ast.described_template(self.ast.first(r)) {
+            Some(t) => self.injected_type_of(t),
+            None => None,
+        };
+        let ct = ct.unwrap_or_else(|| self.tag_type(r));
+        let class = self.ty_arg(ct);
+        let rloc = self.ast.decls.get(r).loc();
+        for (n, d, new_op, delete_op) in [(0, 1, O::New, O::Delete), (2, 3, O::ArrayNew, O::ArrayDelete)]
+        {
+            if found[n].is_empty() == found[d].is_empty() {
+                continue;
+            }
+            let (have, missing) =
+                if found[n].is_empty() { (delete_op, new_op) } else { (new_op, delete_op) };
+            let mut m = self
+                .diag(DiagId::sema_type_aware_allocator_missing_matching_operator, rloc)
+                .arg(format!("operator {}", have.spelling()))
+                .arg(class.clone())
+                .arg(format!("operator {}", missing.spelling()));
+            for &f in found[n].iter().chain(&found[d]) {
+                let f = self.templated_function(f).unwrap_or(f);
+                let at = self.ast.decls.get(f).loc();
+                let fname = self.ast.decls.get(f).name().as_operator().map_or("", |o| o.spelling());
+                let note = self
+                    .diag(DiagId::note_unmatched_type_aware_allocator_declared, at)
+                    .arg(format!("operator {fname}"));
+                m = m.with_note(note);
+            }
+            // clang re-checks every instantiation of a class template.
+            self.emit(m.per_instantiation());
+        }
+    }
+
     /// `std::destroying_delete_t` ([new.syn]).
     fn is_destroying_delete_t(&self, t: QualType) -> bool {
         self.ast.types.as_record(t).is_some_and(|r| self.ast.is_std_named(r, "destroying_delete_t"))
