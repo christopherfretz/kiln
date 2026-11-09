@@ -3392,6 +3392,11 @@ impl Parser<'_, '_> {
             }
             self.misplaced_param_pack_ellipsis(&ds, &mut pd, site);
             let mut p = self.s.act_on_param_declarator(&ds, &pd);
+            // [dcl.attr.depend]/1: `carries_dependency` only on a parameter
+            // of a function declaration or lambda.
+            if !fn_decl && !self.in_exception_decl {
+                self.s.act_on_nonfunc_param_attrs(&mut p);
+            }
             // The point of declaration: before the default argument
             // ([basic.scope.pdecl]/1).
             self.s.act_on_prototype_param(&mut p);

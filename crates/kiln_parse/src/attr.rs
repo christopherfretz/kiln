@@ -36,6 +36,9 @@ fn takes_expr_args(name: &str) -> bool {
     matches!(
         n,
         "deprecated"
+            | "unavailable"
+            | "annotate"
+            | "require_constant_initialization"
             | "nodiscard"
             | "aligned"
             | "warn_unused_result"
@@ -167,6 +170,9 @@ fn string_literal_arg(name: &str, i: usize) -> bool {
     match kiln_ast::attr::normalize_attr_name(name) {
         "target" | "target_version" => i == 0,
         "target_clones" | "no_sanitize" => true,
+        // WP-954: clang's `StringArgument` first (`unavailable`'s optional
+        // message, `annotate`'s annotation).
+        "unavailable" | "annotate" => i == 0,
         _ => false,
     }
 }

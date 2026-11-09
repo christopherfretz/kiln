@@ -3149,6 +3149,9 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
         }
+        if self.kind_of(decl).is_function() {
+            self.check_carries_dependency_redecl(decl, &attrs);
+        }
         self.check_optnone_conflicts(decl, &mut attrs);
         self.check_naked_conflicts(decl, &mut attrs);
         self.finish_visibility_attrs(decl, &mut attrs, false);
@@ -3234,6 +3237,7 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
         }
+        self.check_carries_dependency_redecl(decl, &attrs);
         self.check_optnone_conflicts(decl, &mut attrs);
         self.check_naked_conflicts(decl, &mut attrs);
         self.finish_visibility_attrs(decl, &mut attrs, false);
@@ -5078,6 +5082,10 @@ impl Sema<'_, '_> {
                     if node.kind.is_class_b() {
                         return self.check_class_b_attr(pd, DeclKind::ParmVar, a, node);
                     }
+                    if node.kind == AttrKind::REQUIRE_CONSTANT_INIT {
+                        // Not a global variable (WP-954).
+                        return self.check_require_constant_init_attr(pd, DeclKind::ParmVar, node);
+                    }
                     if node.kind != AttrKind::RETURNS_TWICE {
                         return true;
                     }
@@ -6916,7 +6924,10 @@ impl Sema<'_, '_> {
         if vn.kind() != DeclKind::Var || vn.has(DeclFlags::INVALID) {
             return false;
         }
-        let Some((c, at)) = self.constinit_of(v) else { return false };
+        let Some((c, at)) = self.constinit_of(v) else {
+            // clang's attribute form (WP-954).
+            return self.check_require_constant_init(v);
+        };
         let loc = vn.loc();
         if c != v {
             let name = self.decl_name(v);
@@ -11345,6 +11356,13 @@ impl Sema<'_, '_> {
             let node = AttrNode { kind, syntax, flags: 0, loc, a: 0, b: t.to_raw() };
             return Some(self.ast.attrs.push(node));
         }
+        // WP-954: clang's `unavailable(message)` and `annotate("str", ...)`.
+        if kind == AttrKind::UNAVAILABLE {
+            return self.unavailable_attribute(syntax, &shown, args, loc);
+        }
+        if kind == AttrKind::ANNOTATE {
+            return self.annotate_attribute(syntax, &shown, args, loc);
+        }
         // clang `handleDeprecatedAttr`: `deprecated(message, replacement)`
         // takes an optional second string, the replacement a fix-it
         // offers, but only in the GNU spelling (LLVM's `LLVM_DEPRECATED`);
@@ -12365,6 +12383,13 @@ pub(crate) fn attr_kind_of(
         ("maybe_unused", true, _) => AttrKind::MAYBE_UNUSED,
         ("unused", _, true) => AttrKind::UNUSED,
         ("deprecated", _, _) => AttrKind::DEPRECATED,
+        // WP-954: clang `Clang<"unavailable">`,
+        // `Clang<"require_constant_initialization", 0>`, `Clang<"annotate">`.
+        ("unavailable", _, _) if gnu_syntax || clang_scope => AttrKind::UNAVAILABLE,
+        ("require_constant_initialization", _, _) if gnu_syntax || clang_scope => {
+            AttrKind::REQUIRE_CONSTANT_INIT
+        }
+        ("annotate", _, _) if gnu_syntax || clang_scope => AttrKind::ANNOTATE,
         ("noreturn", _, _) => AttrKind::NORETURN,
         ("fallthrough", _, _) => AttrKind::FALLTHROUGH,
         // clang `CXXAssume`: `CXX11<"", "assume">, Clang<"assume">`.

@@ -1,6 +1,8 @@
 //! Uses of deprecated entities ([dcl.attr.deprecated]/4; spec/sema.md
 //! "Deprecation warnings"): clang's `DiagnoseUseOfDecl` availability
-//! check, reduced to `[[deprecated]]` / `__attribute__((deprecated))`.
+//! check, reduced to `[[deprecated]]` / `__attribute__((deprecated))` and
+//! clang's `unavailable` (an error, WP-954; suppressed only in an
+//! unavailable context).
 //!
 //! A use is warned (`-Wdeprecated-declarations`) unless it occurs in a
 //! deprecated context: inside a deprecated declaration (or a declaration
@@ -26,37 +28,44 @@ use crate::Sema;
 use crate::declspec::ParamInfo;
 
 impl Sema<'_, '_> {
-    /// The deprecation governing a use of `d` and the declaration it was
-    /// found on (the one the note names): `d`'s own; an enumerator's
-    /// enumeration's; the class or enumeration a typedef or alias names,
-    /// when the typedef itself is not deprecated (clang
+    /// The availability attribute governing a use of `d` and the
+    /// declaration it was found on (the one the note names): `d`'s own
+    /// (`unavailable` before `deprecated`, clang `Decl::getAvailability`);
+    /// an enumerator's enumeration's; the class or enumeration a typedef
+    /// or alias names, when the typedef itself is available (clang
     /// `ShouldDiagnoseAvailabilityOfDecl`).
     fn deprecation_of(&self, d: DeclId) -> Option<(AttrId, DeclId)> {
-        if let Some(a) = self.own_deprecation(d) {
+        if let Some(a) = self.own_availability(d) {
             return Some((a, d));
         }
         match self.kind_of(d) {
             DeclKind::EnumConstant => {
                 let e = self.ast.decls.get(d).ctx()?;
                 (self.kind_of(e) == DeclKind::Enum)
-                    .then(|| self.own_deprecation(e).map(|a| (a, e)))
+                    .then(|| self.own_availability(e).map(|a| (a, e)))
                     .flatten()
             }
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 let u = self.ast.decls.typedef(d)?.underlying;
                 let tag = self.ast.types.as_record(u).or_else(|| self.ast.types.as_enum(u))?;
                 let tag = self.ast.latest(tag);
-                self.own_deprecation(tag).map(|a| (a, tag))
+                self.own_availability(tag).map(|a| (a, tag))
             }
             _ => None,
         }
     }
 
-    /// `d`'s own deprecation attribute (clang `Decl::isDeprecated`). A
-    /// class template specialization not yet instantiated has its
-    /// template pattern's: clang's `CheckTemplateIdType` instantiates the
-    /// pattern's attributes onto it before diagnosing the use.
-    fn own_deprecation(&self, d: DeclId) -> Option<AttrId> {
+    /// `d`'s own `unavailable` attribute, else its own `deprecated` one.
+    fn own_availability(&self, d: DeclId) -> Option<AttrId> {
+        self.own_avail(d, AttrKind::UNAVAILABLE).or_else(|| self.own_avail(d, AttrKind::DEPRECATED))
+    }
+
+    /// `d`'s own `kind` attribute (`deprecated` or `unavailable`; clang
+    /// `Decl::isDeprecated` / `isUnavailable`). A class template
+    /// specialization not yet instantiated has its template pattern's:
+    /// clang's `CheckTemplateIdType` instantiates the pattern's
+    /// attributes onto it before diagnosing the use.
+    fn own_avail(&self, d: DeclId, kind: AttrKind) -> Option<AttrId> {
         if self.kind_of(d) == DeclKind::Namespace {
             // Not inherited by a reopening (`act_on_namespace_attrs`).
             let l = self.ast.latest(d);
@@ -64,9 +73,9 @@ impl Sema<'_, '_> {
                 .ast
                 .lists
                 .iter::<AttrId>(self.ast.attrs.of_decl(l))
-                .find(|&a| self.ast.attrs.get(a).kind == AttrKind::DEPRECATED);
+                .find(|&a| self.ast.attrs.get(a).kind == kind);
         }
-        if let Some(a) = self.find_attr(self.ast.latest(d), AttrKind::DEPRECATED) {
+        if let Some(a) = self.find_attr(self.ast.latest(d), kind) {
             return Some(a);
         }
         if self.ast.decls.var(d).is_some() {
@@ -81,7 +90,7 @@ impl Sema<'_, '_> {
             {
                 return None;
             }
-            return self.find_attr(self.ast.latest(info.from), AttrKind::DEPRECATED);
+            return self.find_attr(self.ast.latest(info.from), kind);
         }
         self.ast.decls.record(d)?;
         let (_, info) = self.ast.spec_info(d)?;
@@ -89,17 +98,24 @@ impl Sema<'_, '_> {
             return None;
         }
         let pattern = self.pattern_of(info.template)?;
-        self.find_attr(self.ast.latest(pattern), AttrKind::DEPRECATED)
+        self.find_attr(self.ast.latest(pattern), kind)
     }
 
-    /// Whether `ctx` or a context enclosing it is deprecated: a use there
-    /// is not warned (clang `ShouldDiagnoseAvailabilityInContext`, which
-    /// walks the semantic contexts).
-    pub(crate) fn in_deprecated_context(&self, ctx: DeclId) -> bool {
+    /// Whether `ctx` or a context enclosing it is unavailable (`unavail`)
+    /// or either deprecated or unavailable: a deprecated use there is not
+    /// warned, an unavailable one only in an unavailable context (clang
+    /// `ShouldDiagnoseAvailabilityInContext`, which walks the semantic
+    /// contexts).
+    fn in_avail_context(&self, ctx: DeclId, unavail: bool) -> bool {
         let mut cur = Some(ctx);
         for _ in 0..256 {
             let Some(x) = cur else { return false };
-            if self.own_deprecation(x).is_some() {
+            let hit = if unavail {
+                self.own_avail(x, AttrKind::UNAVAILABLE).is_some()
+            } else {
+                self.own_availability(x).is_some()
+            };
+            if hit {
                 return true;
             }
             cur = self.ast.decls.get(x).ctx();
@@ -162,23 +178,35 @@ impl Sema<'_, '_> {
     pub(crate) fn warn_deprecated_use(&mut self, d: DeclId, loc: Loc) {
         let Some((a, owner)) = self.deprecation_of(d) else { return };
         let attr = *self.ast.attrs.get(a);
+        let unavail = attr.kind == AttrKind::UNAVAILABLE;
         let name = self.name_for_diagnostic(d);
         let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
-        let msg = match text {
-            Some(t) => self.diag(DiagId::sema_deprecated_msg, loc).arg(name).arg(t),
-            None => self.diag(DiagId::sema_deprecated, loc).arg(name),
+        let (plain, with_msg) = if unavail {
+            (DiagId::sema_unavailable, DiagId::sema_unavailable_msg)
+        } else {
+            (DiagId::sema_deprecated, DiagId::sema_deprecated_msg)
         };
-        let note = self
-            .diag(DiagId::note_marked_deprecated, attr.loc)
-            .arg(self.name_for_diagnostic(owner));
-        let msg = msg.with_note(note);
+        let msg = match text {
+            Some(t) => self.diag(with_msg, loc).arg(name).arg(t),
+            None => self.diag(plain, loc).arg(name),
+        };
+        // clang `DoEmitAvailabilityWarning`: a deprecation's note is at
+        // its attribute; an unavailable one's at the declaration the use
+        // found (its latest redeclaration).
+        let note = if unavail {
+            let at = self.ast.decls.get(self.ast.latest(owner)).loc();
+            self.diag(DiagId::note_marked_unavailable, at)
+        } else {
+            self.diag(DiagId::note_marked_deprecated, attr.loc)
+        };
+        let msg = msg.with_note(note.arg(self.name_for_diagnostic(owner)));
         if self.inst.stack.is_empty() && self.depr_points.last() == Some(&self.ctx) {
             let level = self.depr_points.len();
-            self.delayed_deprecations.push((level, msg));
+            self.delayed_deprecations.push((level, msg, unavail));
             return;
         }
-        if self.in_deprecated_context(self.ctx)
-            || self.depr_init.is_some_and(|v| self.in_deprecated_context(v))
+        if self.in_avail_context(self.ctx, unavail)
+            || self.depr_init.is_some_and(|v| self.in_avail_context(v, unavail))
         {
             return;
         }
@@ -312,12 +340,12 @@ impl Sema<'_, '_> {
         let level = self.depr_points.len().saturating_sub(n);
         self.depr_points.truncate(level);
         if drop {
-            let keep = self.delayed_deprecations.iter().take_while(|&&(l, _)| l <= level).count();
+            let keep = self.delayed_deprecations.iter().take_while(|&&(l, ..)| l <= level).count();
             self.delayed_deprecations.truncate(keep);
         } else if level == 0 {
             self.flush_delayed_deprecations(1, None);
         } else {
-            for (l, _) in &mut self.delayed_deprecations {
+            for (l, ..) in &mut self.delayed_deprecations {
                 *l = (*l).min(level);
             }
         }
@@ -327,18 +355,18 @@ impl Sema<'_, '_> {
     /// declaration `decl`, unless `decl` (or, with none, the current
     /// context) is deprecated or in a deprecated context.
     fn flush_delayed_deprecations(&mut self, level: usize, decl: Option<DeclId>) {
-        let Some(start) = self.delayed_deprecations.iter().position(|&(l, _)| l >= level) else {
+        let Some(start) = self.delayed_deprecations.iter().position(|&(l, ..)| l >= level) else {
             return;
         };
-        let held: Vec<Diag> = self.delayed_deprecations.drain(start..).map(|(_, d)| d).collect();
-        let quiet = match decl {
-            Some(d) => self.in_deprecated_context(d),
-            None => self.in_deprecated_context(self.ctx),
-        };
-        if quiet || self.depr_init.is_some_and(|v| self.in_deprecated_context(v)) {
-            return;
-        }
-        for d in held {
+        let held: Vec<(Diag, bool)> =
+            self.delayed_deprecations.drain(start..).map(|(_, d, u)| (d, u)).collect();
+        let at = decl.unwrap_or(self.ctx);
+        for (d, unavail) in held {
+            if self.in_avail_context(at, unavail)
+                || self.depr_init.is_some_and(|v| self.in_avail_context(v, unavail))
+            {
+                continue;
+            }
             self.emit(d);
         }
     }

@@ -448,6 +448,19 @@ impl AttrKind {
     /// `[[gsl::Pointer(T)]]` on a class (WP-674), encoded as
     /// [`AttrKind::GSL_OWNER`].
     pub const GSL_POINTER: AttrKind = AttrKind(275);
+    /// clang `unavailable` / `unavailable("message")` (WP-954): a use of
+    /// the declaration is an error. `a` is the message's string-literal
+    /// `ExprId`, or 0.
+    pub const UNAVAILABLE: AttrKind = AttrKind(276);
+    /// clang `require_constant_initialization` (WP-954), clang's
+    /// `ConstInitAttr` without the `constinit` keyword: the variable,
+    /// with static or thread storage duration, has constant
+    /// initialization ([basic.start.static]/2).
+    pub const REQUIRE_CONSTANT_INIT: AttrKind = AttrKind(277);
+    /// clang `annotate("str", args...)` (WP-954): `a` is the string
+    /// literal's `ExprId`, `b` the raw `ListId` of the extra arguments
+    /// (constant-evaluated, or still dependent in a template), or 0.
+    pub const ANNOTATE: AttrKind = AttrKind(278);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

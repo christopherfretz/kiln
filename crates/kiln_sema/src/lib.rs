@@ -18,6 +18,7 @@ mod absolute_value;
 mod align_redecl;
 mod alloc_decl;
 mod annot;
+mod annotate_attr;
 mod arm_builtins;
 mod asm;
 mod attr_cond;
@@ -33,6 +34,8 @@ pub mod class;
 mod class_b_attrs;
 mod cleanup_attr;
 mod complex;
+mod carries_dep_attr;
+mod const_init_attr;
 mod consteval;
 mod consteval_block;
 mod consteval_only;
@@ -822,7 +825,7 @@ pub struct Sema<'a, 'sm> {
     /// 1-based depth of the point holding them), emitted when the
     /// declaration they belong to is formed and is not deprecated
     /// (spec/sema.md "Deprecation warnings").
-    pub(crate) delayed_deprecations: Vec<(usize, Diag)>,
+    pub(crate) delayed_deprecations: Vec<(usize, Diag, bool)>,
     /// The open deprecation delay points: the context each was opened in.
     pub(crate) depr_points: Vec<DeclId>,
     /// The declaration whose initializer is being parsed: a use in it is
