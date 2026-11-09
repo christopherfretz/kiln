@@ -7,6 +7,10 @@ pub enum DebugInfoKind {
     /// No debug information (`-g0`, the default).
     #[default]
     None,
+    /// clang `LocTrackingOnly`: no debug information in the object
+    /// (`emissionKind: NoDebug`), but subprograms and locations for the
+    /// passes that need them: gcov's line tables (WP-941).
+    LocTrackingOnly,
     /// `-gline-directives-only`: `.loc` directives, no line table CU.
     LineDirectivesOnly,
     /// `-gline-tables-only` / `-g1` / `-gmlt`: line tables only.
@@ -108,7 +112,7 @@ impl DebugOptions {
 }
 
 pub(crate) mod func;
-mod md5;
+pub(crate) mod md5;
 mod stmt;
 mod types;
 
@@ -248,6 +252,7 @@ impl<'a> Cg<'a> {
         let checksum = o.main_id.map(|f| md5::hex(sm.text(f).as_bytes()));
         let cu_file = self.di_create_file(name, checksum.as_deref(), true);
         let kind = match o.kind {
+            DebugInfoKind::LocTrackingOnly => "NoDebug",
             DebugInfoKind::LineDirectivesOnly => "DebugDirectivesOnly",
             DebugInfoKind::LineTablesOnly => "LineTablesOnly",
             _ => "FullDebug",
@@ -303,7 +308,10 @@ impl<'a> Cg<'a> {
         let (dir, file) =
             if cu { (cur, file) } else { split_against(&file, &cur, name.starts_with('/')) };
         let mut f = Fields::default().s("filename", &file).s("directory", &dir);
-        if let Some(c) = checksum.filter(|_| o.dwarf_version.unwrap_or(5) >= 5) {
+        // clang computes no checksum without a DWARF version (location
+        // tracking only).
+        let dwarf = if o.kind == DebugInfoKind::LocTrackingOnly { 0 } else { 5 };
+        if let Some(c) = checksum.filter(|_| o.dwarf_version.unwrap_or(dwarf) >= 5) {
             f = f.raw("checksumkind", "CSK_MD5").s("checksum", c);
         }
         self.m.md_specialized("DIFile", false, f.0)
@@ -431,13 +439,38 @@ impl<'a> Cg<'a> {
     /// Whether the current function has debug locations.
     #[inline]
     pub(crate) fn dbg_on(&self) -> bool {
-        self.f.fir.dbg.is_some()
+        self.f.fir.dbg.as_deref().is_some_and(|d| d.disabled == 0)
+    }
+
+    /// clang `EmitCallArg`'s `DisableDebugLocationUpdates`: a default
+    /// argument (`off`) is emitted with the function's debug information
+    /// off (`CGF.disableDebugInfo()`), so its expressions, which carry
+    /// the parameter's locations, keep the call's location. Returns
+    /// whether it was disabled, for [`Self::dbg_enable`].
+    pub(crate) fn dbg_disable(&mut self, off: bool) -> bool {
+        match self.f.fir.dbg.as_deref_mut() {
+            Some(d) if off => {
+                d.disabled += 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Ends [`Self::dbg_disable`].
+    pub(crate) fn dbg_enable(&mut self, was: bool) {
+        if was && let Some(d) = self.f.fir.dbg.as_deref_mut() {
+            d.disabled -= 1;
+        }
     }
 
     /// clang `CGDebugInfo::setLocation` + `EmitLocation`: a valid `loc`
     /// becomes `CurLoc`; the builder location becomes `CurLoc` in the
     /// innermost scope (nothing while `CurLoc` is invalid).
     pub(crate) fn dbg_emit_location(&mut self, loc: Loc) {
+        if !self.dbg_on() {
+            return;
+        }
         let Some(d) = self.f.fir.dbg.as_deref_mut() else { return };
         if loc != Loc::INVALID {
             d.cur_loc = loc;
@@ -465,6 +498,9 @@ impl<'a> Cg<'a> {
     /// `getExpressionLocationsEnabled` without `CodeView`).
     #[inline]
     pub(crate) fn dbg_apply(&mut self, loc: Loc) -> Option<DbgSaved> {
+        if !self.dbg_on() {
+            return None;
+        }
         let d = self.f.fir.dbg.as_deref()?;
         let orig = d.loc;
         if loc == Loc::INVALID {
@@ -480,6 +516,9 @@ impl<'a> Cg<'a> {
     /// clang `ApplyDebugLocation::CreateDefaultArtificial(CGF, Loc)`:
     /// only when the builder has a location.
     pub(crate) fn dbg_apply_default_artificial(&mut self, loc: Loc) -> Option<DbgSaved> {
+        if !self.dbg_on() {
+            return None;
+        }
         let d = self.f.fir.dbg.as_deref()?;
         if d.loc.is_none() {
             return Some(DbgSaved(None));
@@ -500,6 +539,9 @@ impl<'a> Cg<'a> {
     /// starting there is pushed (not with line tables only). Returns
     /// whether a scope was entered (to pass to [`Self::dbg_block_end`]).
     pub(crate) fn dbg_block_start(&mut self, begin: Loc) -> bool {
+        if !self.dbg_on() {
+            return false;
+        }
         let Some(d) = self.f.fir.dbg.as_deref_mut() else { return false };
         if begin != Loc::INVALID {
             d.cur_loc = begin;

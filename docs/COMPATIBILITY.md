@@ -138,7 +138,7 @@ Per-run detail: [status/libcxx.md](status/libcxx.md),
 
 ## Libraries and applications
 
-47 projects: 43 **Flawless**, 3 **Near-perfect** (simdjson, folly, the Boost metaprogramming libraries), 1 **Partial** (folly::coro, fixed since and awaiting a re-run). The libc++ column is the WP-694 run against
+47 projects: 43 **Flawless**, 3 **Near-perfect** (simdjson, folly, the Boost metaprogramming libraries), 1 **Partial** (folly::coro: its known failures are fixed (WP-802, WP-933), and the re-run is deferred for lack of disk). The libc++ column is the WP-694 run against
 libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 "kiln passed / total"; the clang count is the same unless it is given.
 
@@ -168,7 +168,7 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [EnTT](status/oss/entt.md) | `v3.15.0` | full ctest suite | libstdc++ 14 | **Flawless**: 68/68 | WP-690 |
 | [glog](status/oss/glog.md) | `v0.7.1` | full CTest suite | libstdc++ 14 | **Flawless**: 23/24 under both (`symbolize` fails under both: environment) | WP-700 |
 | [RE2](status/oss/re2.md) | `2025-11-05` | full test suite; Abseil, googletest and Benchmark built by the same compiler | libstdc++ 14 | **Flawless**: 20/20 | WP-710 |
-| [simdjson](status/oss/simdjson.md) | `v4.2.4` | developer-mode CTest suite (without `checkperf` and `fuzz`) | libstdc++ 14 | **Near-perfect**: 116/117 (clang 117/117) | the failing test is a negative compile test that needs `-Wuninitialized` under `-Werror`; **WP-696** (open). WP-691 |
+| [simdjson](status/oss/simdjson.md) | `v4.2.4` | developer-mode CTest suite (without `checkperf` and `fuzz`) | libstdc++ 14 | **Near-perfect**: 116/117 (clang 117/117) | the failing test is a negative compile test that needs `-Wuninitialized` under `-Werror`; **WP-696** (open). WP-933's re-run after WP-862 was deferred for lack of disk. WP-691 |
 | [Taskflow](status/oss/taskflow.md) | `v3.10.0` | full test suite | libstdc++ 14 | **Flawless**: 2462/2462 | WP-703 |
 | [yaml-cpp](status/oss/yaml_cpp.md) | `yaml-cpp-0.9.0` | full suite (1011 googletest tests), vendored googletest built by the same compiler | libstdc++ 14 | **Flawless**: 1/1 | WP-698 |
 
@@ -194,7 +194,7 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [ctre](status/oss/ctre.md) | `v3.11.0` | all 25 test TUs (`static_assert` tests) | libstdc++ 14 | **Flawless**: 25/25 TUs | WP-792 |
 | [daw_json_link](status/oss/daw_json_link.md) | `v3.38.1` | full ctest suite | libstdc++ 14 | **Flawless**: 147/147 | WP-792 |
 | [DuckDB](status/oss/duckdb.md) | `v1.5.6` | `unittest` (Catch2 and the default sqllogictest files) and the shell | libstdc++ 14 | **Flawless**: 4615/4628 under both | the same 13 fail under both because of the host. WP-799 |
-| [folly::coro](status/oss/folly_coro.md) | `v2026.10.26.00` | folly's coroutine tests | libstdc++ 14 | **Partial**: 583/618 (clang 616/618), 94.6% of clang's passes | one link failure (a consteval call in a `co_return` operand of a coroutine template) accounts for all 33 kiln-only failures. WP-802 fixed it (`cea9ab532`); the project was not re-run. WP-789 |
+| [folly::coro](status/oss/folly_coro.md) | `v2026.10.26.00` | folly's coroutine tests | libstdc++ 14 | **Partial**: 583/618 (clang 616/618), 94.6% of clang's passes | one link failure (a consteval call in a `co_return` operand of a coroutine template) accounts for all 33 kiln-only failures. WP-802 fixed it (`cea9ab532`). WP-933's partial re-run found two more kiln-only compile failures (an init-list mangling and an empty `auto...` pack); both are fixed, and the full re-run is deferred for lack of disk. WP-789, WP-933 |
 | [Glaze](status/oss/glaze.md) | `v9.1.0` | full ctest suite | libstdc++ 14 | **Flawless**: 100/102 under both | the same 2 TUs fail under both with libstdc++ 14. WP-792 |
 | [gRPC](status/oss/grpc.md) | `v1.85.1` | the C++ core and its submodule dependencies; kiln-built `protoc` and `grpc_cpp_plugin` | libstdc++ 14 | **Flawless**: 117/118 under both | `end2end_http2_test` hits the 300 s limit under both. WP-811 |
 | [libunifex](status/oss/libunifex.md) | `v0.4.0` | full test suite | libstdc++ 14 | **Flawless**: 91/94 under both | the 3 io_uring tests are not permitted in the container. WP-789 |
@@ -298,6 +298,24 @@ grammar forbids them, members named after their class, union and static
 member rules, redeclarations, and clang attribute checks. The breakdown,
 the triage clusters with their reduced tests, and the rejects-valid cases
 are in [status/accepts-invalid.md](status/accepts-invalid.md).
+
+## Coverage and profiling
+
+| feature | flags | status |
+|---|---|---|
+| gcov line coverage | `--coverage` (`-fprofile-arcs -ftest-coverage`, `-fprofile-dir=`, `-fprofile-update=`) | **Works**: `llvm-cov gcov` line counts equal clang 19's on every comparison program |
+| Source-based coverage counters | `-fprofile-instr-generate[=<file>]` | **Works**: `llvm-profdata show --counts` records (names, hashes, counters) equal clang 19's |
+| Source-based coverage mapping | `-fcoverage-mapping` (`llvm-cov show` / `report`) | **Not yet** (rejected with an error; follow-up of WP-941) |
+| Profile-guided optimization | `-fprofile-generate`, `-fcs-profile-generate`, `-fprofile-use`, `-fprofile-instr-use`, `-fprofile-sample-use` | **Not in 1.0** (a known limitation, rejected with an error) |
+
+Both coverage modes link LLVM 19's profile runtime
+(`libclang_rt.profile-<arch>.a`, Debian package `libclang-rt-19-dev`),
+which the linking `clang++` adds. `scripts/coverage-compare.py` builds
+`scripts/coverage/*.cpp` (control flow, classes and templates, lambdas,
+coroutines, macros, and a libstdc++-heavy program) with kiln and with
+clang++-19 and compares the reports. Detail, and the compile-time cost of
+each mode, in
+[spec/landed/codegen/WP-941.md](../spec/landed/codegen/WP-941.md).
 
 ## Constexpr and compile-time performance
 

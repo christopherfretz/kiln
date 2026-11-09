@@ -83,6 +83,11 @@ Notes on these numbers:
 
 Behaviours and rules: `spec/landed/parse/WP-691.md`.
 
+**WP-933 (2026-11-08):** the re-run after WP-862 was deferred for lack of
+disk (the shared volume was below its free-space floor). Cluster 4 stays
+open until a run confirms it. kiln now warns on the direct by-value use
+(`int x; g(x);`), but the iterate test's own pattern was not checked.
+
 ## What remains
 
 - **Cluster 4**, the `-Wuninitialized` flow analysis. It is a missing

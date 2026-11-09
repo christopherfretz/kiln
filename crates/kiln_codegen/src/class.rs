@@ -964,6 +964,7 @@ impl Cg<'_> {
         if fn_try {
             self.enter_try(body)?;
         }
+        self.prof_inc(crate::coverage::pgo::Key::Stmt(body));
         let sc = self.begin_scope(false);
         let inits: Vec<kiln_ast::decl::CtorInit> = ast.ctor_inits(d).copied().collect();
         let memcpyize = self.is_defaulted(d)
@@ -1240,6 +1241,15 @@ impl Cg<'_> {
         init: ExprId,
         loc: Loc,
     ) -> R<()> {
+        // clang `CXXCtorInitializer::getSourceLocation`: an initializer
+        // from a default member initializer is located at the member, not
+        // at the constructor (debug lines and gcov counts, WP-941).
+        let ast = self.ast;
+        let loc = if ast.exprs.get(init).kind() == ExprKind::CXXDefaultInitExpr {
+            ast.decls.get(ast.exprs.default_init_field(init)).loc()
+        } else {
+            loc
+        };
         let dl = self.dbg_apply(loc);
         let r = self.emit_field_init_x(kind, field, init);
         self.dbg_restore(dl);
@@ -1299,6 +1309,7 @@ impl Cg<'_> {
             self.emit_trap_unreachable();
             return Ok(());
         }
+        self.prof_inc(crate::coverage::pgo::Key::Stmt(body));
         if fn_try {
             self.enter_try(body)?;
         }

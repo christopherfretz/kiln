@@ -7361,7 +7361,8 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `dcl.constexpr/never-constant-no-error-cxx20.cpp`,
   `dcl.constexpr/potential-constant-builtin-{fabs,strcmp,not-constexpr}.cpp`,
   `dcl.constexpr/potential-constant-builtins-spread.cpp`,
-  `dcl.constexpr/potential-constant-consteval-operator-template.cpp`.
+  `dcl.constexpr/potential-constant-consteval-operator-template.cpp`,
+  `dcl.constexpr/never-constant-direct-callee-cxx20.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

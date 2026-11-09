@@ -24,9 +24,10 @@
 //!    `-f[no-]slp-vectorize`, `-f[no-]tree-[slp-]vectorize`,
 //!    `-fno-fat-lto-objects`; spec/driver.md "Codegen flags");
 //! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
-//!    `-fshort-enums`, coverage and profiling, the other `-fxray-*` options,
+//!    `-fshort-enums`, the other `-fxray-*` options,
 //!    `-finstrument-functions-exclude-*` and `-ffat-lto-objects`). The floating-point flags are
-//!    `crate::fp_flags`'s.
+//!    `crate::fp_flags`'s; the coverage and profiling flags
+//!    `crate::coverage_flags`'s (WP-941).
 //!
 //! `-Wp,<args>` and `-Xpreprocessor <arg>` are spliced into the command
 //! line before parsing ([`splice_preprocessor_args`]).
@@ -175,22 +176,9 @@ const IGNORED: &[&str] = &[
 const REJECTED: &[&str] = &[
     "-ftrapv",
     "-fshort-enums",
-    "-fcoverage-mapping",
-    "-fprofile-arcs",
-    "-ftest-coverage",
-    "--coverage",
-    "-fprofile-instr-generate",
-    "-fprofile-generate",
-    "-fprofile-instr-use",
-    "-fprofile-use",
     // Bitcode plus object code in one `.o` (WP-873 follow-up).
     "-ffat-lto-objects",
 ];
-
-/// Prefixes of flags rejected (class 3): every value of the profiling
-/// options.
-const REJECTED_PREFIXES: &[&str] =
-    &["-fprofile-instr-generate=", "-fprofile-generate=", "-fprofile-instr-use=", "-fprofile-use="];
 
 impl CodegenFlags {
     /// Takes `arg` if it is one of the flags: `None` if it is not, else
@@ -259,9 +247,7 @@ impl CodegenFlags {
                 }
                 return self.valued(arg);
             }
-            _ if REJECTED.contains(&arg)
-                || REJECTED_PREFIXES.iter().any(|p| arg.starts_with(p)) =>
-            {
+            _ if REJECTED.contains(&arg) => {
                 return Some(Err(ArgError::UnsupportedByKiln(arg.to_owned())));
             }
             _ => return self.valued(arg),
@@ -660,17 +646,7 @@ mod tests {
         ] {
             assert_eq!(parse(&[a]).1, [Some(Ok(()))], "{a}");
         }
-        for a in [
-            "-ftrapv",
-            "-fshort-enums",
-            "-fcoverage-mapping",
-            "-fprofile-arcs",
-            "-ftest-coverage",
-            "--coverage",
-            "-fprofile-instr-generate",
-            "-fprofile-instr-generate=x.profraw",
-            "-fprofile-use=x.prof",
-        ] {
+        for a in ["-ftrapv", "-fshort-enums"] {
             assert_eq!(parse(&[a]).1, [Some(Err(ArgError::UnsupportedByKiln(a.into())))], "{a}");
         }
         assert_eq!(parse(&["-fbogus"]).1, [None]);
