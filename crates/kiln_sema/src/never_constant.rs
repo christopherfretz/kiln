@@ -16,20 +16,31 @@
 //! - a non-member or static member function without parameters that
 //!   returns a scalar or `void` is evaluated as a call
 //!   ([`Sema::evaluate_call`]): every failure in its own body counts;
-//! - any other function's body is walked in execution order as far as
-//!   the path is known: a statement or initializer that names no
-//!   parameter, local variable or `this` is evaluated on its own
+//! - any other function's body is walked as clang's `EvaluateStmt`
+//!   executes it: a statement or initializer that names no parameter,
+//!   local variable or `this` is evaluated on its own
 //!   ([`Sema::eval_potential`]); one that does is taken apart operand by
-//!   operand, as `enable_if` conditions are (`attr_cond.rs`). A loop
-//!   whose condition is absent or known true has its first iteration
-//!   walked; the walk stops at an unknown condition, a `switch`, a `try`,
-//!   a label, an `[[assume]]` or a `return`; a constructor's body is walked
-//!   only if each of its mem-initializers (default member initializers
-//!   included) is known. It fails at the definition of a static or
-//!   thread-local variable not usable in constant expressions and at the
-//!   end of a non-`void` function's body, unless an unknown value
-//!   involving a call came first (clang may have stopped quietly there);
-//!   the end of a block defining an unknown local stops it (WP-1123).
+//!   operand, as `enable_if` conditions are (`attr_cond.rs`).
+//!
+//! The walk mirrors clang's statement rules (WP-1133): an expression
+//! statement (or `for` increment) whose value is unknown, or which may
+//! call a function, notes a side effect and the walk goes on; from then
+//! on destroying any local variable or temporary fails quietly
+//! (`HandleDestruction`), and so does destroying one with a non-trivial
+//! destructor at any time (the call is refused): the walk stops at the
+//! end of such a block or full-expression ([`Walk`]). Conditions must be
+//! known; loops run while theirs is (a `break` ends one, a loop whose
+//! iteration repeats ends at clang's step limit, `-fconstexpr-steps`,
+//! with clang's note at the statement clang would be on); a `switch`
+//! runs its body from the selected label, searching nested statements as
+//! clang does; a `try` runs its try-block; a `goto` fails ("not valid").
+//! The walk stops at a `return`, an `[[assume]]`, a condition variable, a
+//! range-based `for`, a structured binding and an unknown value naming a
+//! local variable. It fails at the definition of a static or thread-local
+//! variable not usable in constant expressions and at the end of a
+//! non-`void` function's body; a constructor's body is walked only if
+//! each of its mem-initializers (default member initializers included)
+//! is known.
 //!
 //! The walk treats every local variable as unknown, where clang tracks
 //! their values, so it misses some functions clang reports; it never
@@ -120,14 +131,124 @@ struct BuiltinCalls {
     strict: bool,
 }
 
-/// A statement's outcome.
+/// A statement's outcome (clang's `EvalStmtResult`).
 enum Flow {
-    /// Execution goes on with the next statement.
+    /// Execution goes on with the next statement (`ESR_Succeeded`).
     Next,
-    /// The rest of the path is not known (or the function returned).
+    /// The rest of the path is not known, or clang stops there quietly,
+    /// or the function returned (`ESR_Failed`, `ESR_Returned`).
     Stop,
     /// It is never a constant.
     Fails(EvalFailure),
+    /// A `break` (`ESR_Break`).
+    Break,
+    /// A `continue` (`ESR_Continue`).
+    Continue,
+    /// The `case` label sought was not found in it (`ESR_CaseNotFound`).
+    CaseNotFound,
+}
+
+/// The most statements the walk executes before it gives up quietly
+/// (its own budget: clang's `-fconstexpr-steps` limit is far larger).
+const MAX_WORK: usize = 1 << 16;
+
+/// The locals a block scope holds (clang `BlockScopeRAII`: every
+/// local variable and lifetime-extended temporary registers a cleanup).
+#[derive(Clone, Copy, Default)]
+struct Scope {
+    /// It holds one.
+    locals: bool,
+    /// One has a non-trivial destructor (whose call clang refuses).
+    dtor: bool,
+}
+
+/// The state of clang's evaluator along the walk.
+struct Walk {
+    /// clang's `EvalStatus.HasSideEffects`: a full-expression came out
+    /// unknown (clang `noteSideEffect`/`noteFailure` and goes on), or
+    /// may have done something clang does not model; from then on clang
+    /// fails quietly to destroy any object (`HandleDestruction`).
+    side: bool,
+    /// The block scopes, innermost last.
+    scopes: Vec<Scope>,
+    /// clang `nextStep` calls so far (one per statement executed).
+    steps: u64,
+    /// The step limit (`-fconstexpr-steps`).
+    limit: u64,
+    /// The statements executed, in order.
+    trace: Vec<StmtId>,
+    /// A statement expression ran, whose statements clang counts as
+    /// steps and the walk does not: no step-limit failure is reported.
+    no_steps: bool,
+}
+
+impl Walk {
+    /// Opens a block scope.
+    fn open(&mut self) {
+        self.scopes.push(Scope::default());
+    }
+
+    /// Closes the innermost block scope without destroying its locals
+    /// (clang `ScopeRAII::destroy(false)`).
+    fn discard(&mut self) {
+        self.scopes.pop();
+    }
+
+    /// Closes the innermost block scope, destroying its locals: whether
+    /// that succeeds (clang `ScopeRAII::destroy`).
+    fn destroy(&mut self) -> bool {
+        let s = self.scopes.pop().unwrap_or_default();
+        !(s.dtor || (self.side && s.locals))
+    }
+
+    /// Closes the innermost block scope after its statement ended with
+    /// `r`: clang destroys its locals unless it failed or a `case` label
+    /// was not found, and a failed destruction fails the statement.
+    fn close(&mut self, r: Flow) -> Flow {
+        match r {
+            Flow::Next | Flow::Break | Flow::Continue => {
+                if self.destroy() {
+                    r
+                } else {
+                    Flow::Stop
+                }
+            }
+            _ => {
+                self.discard();
+                r
+            }
+        }
+    }
+
+    /// Registers a local (`dtor`: with a non-trivial destructor) in the
+    /// innermost block scope.
+    fn local(&mut self, dtor: bool) {
+        if let Some(s) = self.scopes.last_mut() {
+            s.locals = true;
+            s.dtor |= dtor;
+        }
+    }
+}
+
+/// The temporaries of a full-expression clang registers cleanups for
+/// ([`Sema::nc_temps`]).
+#[derive(Clone, Copy, Default)]
+struct Temps {
+    /// One destroyed at the end of the full-expression (a failure there
+    /// fails the statement).
+    any: bool,
+    /// Such a one with a non-trivial destructor.
+    dtor: bool,
+    /// One destroyed at the end of an `ExprWithCleanups` (a failure
+    /// there fails the expression: clang notes a side effect and goes
+    /// on past an expression statement or initializer).
+    ewc: bool,
+    /// Such a one with a non-trivial destructor.
+    ewc_dtor: bool,
+    /// One lifetime-extended to the enclosing block.
+    extended: bool,
+    /// Such a one with a non-trivial destructor.
+    extended_dtor: bool,
 }
 
 impl Sema<'_, '_> {
@@ -256,9 +377,16 @@ impl Sema<'_, '_> {
                 return None;
             }
         }
-        self.nc_unknown_call = false;
-        self.nc_unknown_local = false;
-        match self.nc_stmt(body, 0) {
+        let limit = self.oven.as_ref().map_or(1_048_576, |o| o.budget().steps);
+        let mut w = Walk {
+            side: false,
+            scopes: Vec::new(),
+            steps: 0,
+            limit,
+            trace: Vec::new(),
+            no_steps: false,
+        };
+        match self.nc_stmt(&mut w, body, 0, None) {
             Flow::Fails(fail) => Some(fail),
             Flow::Next if self.nc_reaches_end_fails(f, body) => Some(EvalFailure {
                 kind: FailKind::NotConstant,
@@ -273,10 +401,9 @@ impl Sema<'_, '_> {
 
     /// Whether the walk reaching the `}` of `f`'s `body` is a failure
     /// clang reports: a function returning non-`void` (clang
-    /// `EvaluateStmt`'s end of a function body), past no unknown call.
+    /// `HandleFunctionCall` after its body succeeded).
     fn nc_reaches_end_fails(&self, f: DeclId, body: StmtId) -> bool {
         !self.nc_strict_only
-            && !self.nc_unknown_call
             && self.ast.stmts.get(body).kind() == StmtKind::CompoundStmt
             && !matches!(self.kind_of(f), DeclKind::CXXConstructor | DeclKind::CXXDestructor)
             && {
@@ -288,54 +415,278 @@ impl Sema<'_, '_> {
             }
     }
 
-    /// Whether `e` only reads and computes with built-in operators: an
-    /// unknown value of it stems from an unknown name, never from a
-    /// failure in a callee, so clang goes on past it.
-    fn nc_pure(&self, e: ExprId, depth: u32) -> bool {
-        if depth > MAX_DEPTH {
-            return false;
+    /// Whether evaluating `e` calls a function, or creates or destroys
+    /// an object, in a way clang may refuse or not model (a nested call
+    /// is never evaluated, clang `CheckCallLimit`): kinds outside a list
+    /// of built-in operations, a call of a non-builtin function, a
+    /// non-trivial constructor. Unevaluated operands do not count.
+    fn nc_impure(&self, e: ExprId, depth: u32) -> bool {
+        if depth > 256 {
+            return true;
         }
         let ex = &self.ast.exprs;
-        matches!(
-            ex.get(e).kind(),
-            ExprKind::DeclRefExpr
-                | ExprKind::IntegerLiteral
-                | ExprKind::FloatingLiteral
-                | ExprKind::CharacterLiteral
-                | ExprKind::CXXBoolLiteralExpr
-                | ExprKind::CXXNullPtrLiteralExpr
-                | ExprKind::ImplicitCastExpr
-                | ExprKind::CStyleCastExpr
-                | ExprKind::CXXStaticCastExpr
-                | ExprKind::ParenExpr
-                | ExprKind::UnaryOperator
-                | ExprKind::BinaryOperator
-                | ExprKind::CompoundAssignOperator
-                | ExprKind::ConditionalOperator
-                | ExprKind::MemberExpr
-                | ExprKind::ArraySubscriptExpr
-                | ExprKind::CXXThisExpr
-        ) && ex.children(e, &self.ast.lists).into_iter().all(|c| self.nc_pure(c, depth + 1))
+        let mut ops = ex.children(e, &self.ast.lists);
+        match ex.get(e).kind() {
+            // A default member initializer may call anything.
+            ExprKind::CXXDefaultInitExpr => return true,
+            ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::TypeTraitExpr
+            | ExprKind::ArrayTypeTraitExpr
+            | ExprKind::ExpressionTraitExpr
+            | ExprKind::OffsetOfExpr
+            | ExprKind::SizeOfPackExpr
+            | ExprKind::RequiresExpr
+            | ExprKind::ConceptSpecializationExpr
+            | ExprKind::IntegerLiteral
+            | ExprKind::FloatingLiteral
+            | ExprKind::CharacterLiteral
+            | ExprKind::StringLiteral
+            | ExprKind::CXXBoolLiteralExpr
+            | ExprKind::CXXNullPtrLiteralExpr
+            | ExprKind::ImaginaryLiteral
+            | ExprKind::GNUNullExpr
+            | ExprKind::PredefinedExpr
+            | ExprKind::SourceLocExpr
+            | ExprKind::DeclRefExpr
+            | ExprKind::CXXThisExpr
+            | ExprKind::ImplicitValueInitExpr
+            | ExprKind::CXXScalarValueInitExpr
+            | ExprKind::ArrayInitIndexExpr => return false,
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
+                let Some((callee, f)) = self.nc_direct_callee(e) else { return true };
+                if self.ast.decls.builtin_id(f).is_none() {
+                    return true;
+                }
+                ops.retain(|&c| c != callee);
+            }
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                if !self.fn_spec(ex.constructor(e)).is_trivial() {
+                    return true;
+                }
+            }
+            ExprKind::MemberExpr
+            | ExprKind::UnaryOperator
+            | ExprKind::BinaryOperator
+            | ExprKind::CompoundAssignOperator
+            | ExprKind::ConditionalOperator
+            | ExprKind::ArraySubscriptExpr
+            | ExprKind::ParenExpr
+            | ExprKind::ImplicitCastExpr
+            | ExprKind::CStyleCastExpr
+            | ExprKind::CXXFunctionalCastExpr
+            | ExprKind::CXXStaticCastExpr
+            | ExprKind::CXXConstCastExpr
+            | ExprKind::InitListExpr
+            | ExprKind::CXXParenListInitExpr
+            | ExprKind::ArrayInitLoopExpr
+            | ExprKind::OpaqueValueExpr
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::ExprWithCleanups
+            | ExprKind::ConstantExpr => {}
+            _ => return true,
+        }
+        ops.into_iter().any(|c| self.nc_impure(c, depth + 1))
     }
 
-    /// Notes that statement or initializer `e` of the walk came out
-    /// unknown.
-    fn nc_note_unknown(&mut self, e: ExprId) {
-        if !self.nc_pure(e, 0) {
-            self.nc_unknown_call = true;
+    /// Whether `e` contains a statement expression (outside lambda
+    /// bodies and unevaluated operands).
+    fn nc_has_stmt_expr(&self, e: ExprId, depth: u32) -> bool {
+        let ex = &self.ast.exprs;
+        match ex.get(e).kind() {
+            ExprKind::StmtExpr => true,
+            ExprKind::LambdaExpr
+            | ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::RequiresExpr => false,
+            _ if depth > 256 => true,
+            _ => ex
+                .children(e, &self.ast.lists)
+                .into_iter()
+                .any(|c| self.nc_has_stmt_expr(c, depth + 1)),
         }
+    }
+
+    /// Records the full-expression `e`, whose value came out `v`, in
+    /// `w`: whether the walk can go on past it. An unknown value (clang
+    /// fails, notes a side effect and goes on) or a possible side effect
+    /// ([`Sema::nc_impure`], an unknown name) sets [`Walk::side`]; kiln
+    /// sets it in more cases than clang, which only makes the walk stop
+    /// sooner. An unknown value naming a local variable, whose value
+    /// clang knows (and may fail on), ends the walk.
+    fn nc_full_expr(&self, w: &mut Walk, e: ExprId, v: &Value) -> bool {
+        if self.nc_has_stmt_expr(e, 0) {
+            w.no_steps = true;
+        }
+        let known = matches!(v, Value::Known(_));
+        if !known || self.names_unknown(e, 0) || self.nc_impure(e, 0) {
+            w.side = true;
+        }
+        known || !self.names_local(e, 0)
+    }
+
+    /// Whether `e` names a local variable other than a parameter.
+    fn names_local(&self, e: ExprId, depth: u32) -> bool {
+        if depth > 256 {
+            return true;
+        }
+        let ex = &self.ast.exprs;
+        match ex.get(e).kind() {
+            ExprKind::DeclRefExpr => {
+                let d = ex.decl(e);
+                self.kind_of(d) != DeclKind::ParmVar && self.has_local_storage(d)
+            }
+            _ => ex
+                .children(e, &self.ast.lists)
+                .into_iter()
+                .any(|c| self.names_local(c, depth + 1)),
+        }
+    }
+
+    /// The temporaries of `e` clang registers cleanups for, added to
+    /// `out`: a materialized temporary (one not lifetime-extended is
+    /// destroyed by the innermost enclosing `ExprWithCleanups`, if any:
+    /// `in_ewc`), and a class or array prvalue whose value is discarded
+    /// (`ignored`: the full-expression of an expression statement, the
+    /// operand of a cast to `void`, the left operand of a comma; clang's
+    /// `Evaluate` makes it a temporary before visiting it).
+    fn nc_temps(&self, e: ExprId, ignored: bool, in_ewc: bool, out: &mut Temps, depth: u32) {
+        if depth > 256 {
+            out.any = true;
+            out.dtor = true;
+            return;
+        }
+        let ex = &self.ast.exprs;
+        let n = ex.get(e);
+        let ty = n.ty();
+        let kind = n.kind();
+        let note = |out: &mut Temps, in_ewc: bool, dtor: bool| {
+            if in_ewc {
+                out.ewc = true;
+                out.ewc_dtor |= dtor;
+            } else {
+                out.any = true;
+                out.dtor |= dtor;
+            }
+        };
+        if ignored
+            && !n.value_category().is_glvalue()
+            && (self.ast.types.as_record(ty).is_some() || self.ast.types.is_array(ty))
+        {
+            note(out, in_ewc, self.nc_type_destroyed(ty));
+        }
+        let in_ewc = in_ewc || kind == ExprKind::ExprWithCleanups;
+        let ops = ex.children(e, &self.ast.lists);
+        match kind {
+            ExprKind::LambdaExpr
+            | ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::CXXTypeidExpr
+            | ExprKind::RequiresExpr => {}
+            ExprKind::MaterializeTemporaryExpr => {
+                let sub = ops.first().copied();
+                let dtor = self.nc_type_destroyed(sub.map_or(ty, |s| ex.get(s).ty()));
+                match ex.temporary_storage(e) {
+                    kiln_ast::expr::StorageDuration::FullExpression => note(out, in_ewc, dtor),
+                    kiln_ast::expr::StorageDuration::Automatic => {
+                        out.extended = true;
+                        out.extended_dtor |= dtor;
+                    }
+                    _ => {}
+                }
+                for c in ops {
+                    self.nc_temps(c, false, in_ewc, out, depth + 1);
+                }
+            }
+            ExprKind::ImplicitCastExpr
+            | ExprKind::CStyleCastExpr
+            | ExprKind::CXXStaticCastExpr
+            | ExprKind::CXXFunctionalCastExpr
+                if ex.cast_kind(e) == kiln_ast::expr::CastKind::ToVoid =>
+            {
+                for c in ops {
+                    self.nc_temps(c, true, in_ewc, out, depth + 1);
+                }
+            }
+            ExprKind::ParenExpr => {
+                for c in ops {
+                    self.nc_temps(c, ignored, in_ewc, out, depth + 1);
+                }
+            }
+            ExprKind::BinaryOperator if ex.binary_op(e) == BinaryOp::Comma => {
+                let [l, r] = ex.operands(e);
+                self.nc_temps(l, true, in_ewc, out, depth + 1);
+                self.nc_temps(r, ignored, in_ewc, out, depth + 1);
+            }
+            ExprKind::ConditionalOperator => {
+                let [t, f] = ex.cond_arms(e);
+                for c in ops {
+                    self.nc_temps(c, ignored && (c == t || c == f), in_ewc, out, depth + 1);
+                }
+            }
+            _ => {
+                for c in ops {
+                    self.nc_temps(c, false, in_ewc, out, depth + 1);
+                }
+            }
+        }
+    }
+
+    /// Records in `w` the temporaries `t` of a full-expression whose
+    /// failures clang notes as side effects and goes on past (an
+    /// expression statement, an initializer): whether destroying those
+    /// at its end succeeds.
+    fn nc_temps_destroyed(w: &mut Walk, t: &Temps) -> bool {
+        if t.ewc_dtor {
+            w.side = true;
+        }
+        !(t.dtor || (w.side && t.any))
+    }
+
+    /// The expression statement or `for` increment `e`, its value
+    /// discarded (clang `EvaluateIgnoredValue` in a full-expression
+    /// scope): it fails, or clang goes on unless destroying a temporary
+    /// fails ([`Walk::destroy`]).
+    fn nc_ignored(&mut self, w: &mut Walk, e: ExprId, depth: u32) -> Flow {
+        let v = self.nc_expr(e, depth + 1);
+        if let Value::Fails(fail) = v {
+            return Flow::Fails(fail);
+        }
+        if !self.nc_full_expr(w, e, &v) {
+            return Flow::Stop;
+        }
+        let mut t = Temps::default();
+        self.nc_temps(e, true, false, &mut t, 0);
+        if Self::nc_temps_destroyed(w, &t) { Flow::Next } else { Flow::Stop }
+    }
+
+    /// A condition (clang `EvaluateCond` or `EvaluateInteger` in a
+    /// full-expression scope): its value when known and its temporaries
+    /// are destroyed, else how the walk ends.
+    fn nc_cond(&mut self, w: &mut Walk, c: ExprId, depth: u32) -> Result<ConstValueId, Flow> {
+        let v = self.nc_expr(c, depth + 1);
+        // An unknown value stops the walk here anyway.
+        let _ = self.nc_full_expr(w, c, &v);
+        let v = match v {
+            Value::Fails(fail) => return Err(Flow::Fails(fail)),
+            Value::Unknown => return Err(Flow::Stop),
+            Value::Known(v) => v,
+        };
+        let mut t = Temps::default();
+        self.nc_temps(c, false, false, &mut t, 0);
+        if t.dtor || t.ewc_dtor || t.extended_dtor || (w.side && (t.any || t.ewc || t.extended)) {
+            return Err(Flow::Stop);
+        }
+        Ok(v)
     }
 
     /// clang's failure at the definition of static or thread-local local
-    /// variable `d` not usable in constant expressions (`EvaluateStmt`
-    /// on its `DeclStmt`), unless an unknown call may have stopped clang
-    /// first.
+    /// variable `d` not usable in constant expressions
+    /// (`CheckLocalVariableDeclaration`).
     fn nc_static_local(&mut self, d: DeclId) -> Option<EvalFailure> {
         let v = self.ast.decls.var(d)?;
         let tls = v.spec.tls() != kiln_ast::decl::TlsKind::None;
-        if self.nc_strict_only
-            || self.nc_unknown_call
-            || (!tls && v.spec.storage() != kiln_ast::decl::VarStorage::Static)
+        if (!tls && v.spec.storage() != kiln_ast::decl::VarStorage::Static)
             || self.usable_in_constant_expressions(d)
         {
             return None;
@@ -350,15 +701,20 @@ impl Sema<'_, '_> {
         })
     }
 
-    /// Whether local variable `d`'s lifetime ends in a destructor call
-    /// the walk does not evaluate.
-    fn nc_destroyed(&self, d: DeclId) -> bool {
-        let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+    /// Whether an object of type `ty` is destroyed by a non-trivial
+    /// destructor call (which clang refuses).
+    fn nc_type_destroyed(&self, ty: QualType) -> bool {
         let elem = self.base_element(ty);
         self.ast
             .types
             .as_record(elem)
             .is_some_and(|c| self.ast.destructor(c).is_some_and(|x| !self.fn_spec(x).is_trivial()))
+    }
+
+    /// Whether local variable `d`'s lifetime ends in a destructor call
+    /// the walk does not evaluate.
+    fn nc_destroyed(&self, d: DeclId) -> bool {
+        self.nc_type_destroyed(self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR))
     }
 
     /// Whether `e` reads a parameter, a local variable or `this`.
@@ -794,86 +1150,424 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// A `while`, `for` or `do` loop.
-    fn nc_loop(&mut self, s: StmtId, depth: u32) -> Flow {
-        // The first iteration's body, when it is known to run;
-        // what follows depends on how many iterations run.
-        let do_loop = self.ast.stmts.get(s).kind() == StmtKind::DoStmt;
-        let d = *self.ast.stmts.loop_data(s);
-        if d.cond_var.is_some() {
+    /// The failure at statement `s` once the walk has used up clang's
+    /// step budget (clang `nextStep`), unless the walk cannot count
+    /// clang's steps.
+    fn nc_step_fail(&self, w: &Walk, s: StmtId) -> Flow {
+        if self.nc_strict_only || w.no_steps {
             return Flow::Stop;
         }
-        if let Some(init) = d.init {
-            match self.nc_stmt(init, depth + 1) {
-                Flow::Next => {}
-                other => return other,
-            }
+        Flow::Fails(EvalFailure {
+            kind: FailKind::NotConstant,
+            notes: vec![Note::new(
+                self.stmt_begin_loc(s),
+                "constexpr evaluation hit maximum step limit; possible infinite loop?",
+            )],
+        })
+    }
+
+    /// A loop iteration that began at `w.trace[start]`, with
+    /// [`Walk::side`] the same at its end as at its start, has finished
+    /// and the loop goes on: every later iteration executes the same
+    /// statements (the walk's values do not depend on the iteration), so
+    /// clang runs out of steps at a statement of that sequence.
+    fn nc_cycle(&self, w: &Walk, start: usize) -> Flow {
+        let seq = &w.trace[start..];
+        if seq.is_empty() || self.nc_strict_only || w.no_steps {
+            return Flow::Stop;
         }
-        if !do_loop && let Some(cond) = d.cond {
-            match self.nc_expr(cond, depth + 1) {
-                Value::Fails(fail) => return Flow::Fails(fail),
-                Value::Known(v) if self.const_truth(v) == Some(true) => {}
-                _ => return Flow::Stop,
-            }
-        }
-        match d.body.map(|b| self.nc_stmt(b, depth + 1)) {
-            Some(Flow::Fails(fail)) => Flow::Fails(fail),
-            _ => Flow::Stop,
+        let k = (w.limit.saturating_sub(w.steps) % seq.len() as u64) as usize;
+        self.nc_step_fail(w, seq[k])
+    }
+
+    /// A loop body (clang `EvaluateLoopBody`): a block scope of its own;
+    /// `break` ends the loop ([`Flow::Next`]), the end of the body or a
+    /// `continue` goes on with it ([`Flow::Continue`]).
+    fn nc_loop_body(
+        &mut self,
+        w: &mut Walk,
+        body: StmtId,
+        depth: u32,
+        case: Option<StmtId>,
+    ) -> Flow {
+        w.open();
+        let r = self.nc_stmt(w, body, depth + 1, case);
+        match w.close(r) {
+            Flow::Break => Flow::Next,
+            Flow::Next | Flow::Continue => Flow::Continue,
+            r => r,
         }
     }
 
-    /// A declaration statement: each variable is defined in turn.
-    fn nc_decl_stmt(&mut self, s: StmtId, depth: u32) -> Flow {
+    /// A `while` loop from its condition.
+    fn nc_while(&mut self, w: &mut Walk, s: StmtId, depth: u32) -> Flow {
+        let d = *self.ast.stmts.loop_data(s);
+        let (None, Some(cond), Some(body)) = (d.cond_var, d.cond, d.body) else {
+            return Flow::Stop;
+        };
+        loop {
+            let (side, start) = (w.side, w.trace.len());
+            let v = match self.nc_cond(w, cond, depth) {
+                Ok(v) => v,
+                Err(r) => return r,
+            };
+            match self.const_truth(v) {
+                Some(true) => {}
+                Some(false) => return Flow::Next,
+                None => return Flow::Stop,
+            }
+            match self.nc_loop_body(w, body, depth, None) {
+                Flow::Continue => {}
+                r => return r,
+            }
+            if side == w.side {
+                return self.nc_cycle(w, start);
+            }
+        }
+    }
+
+    /// A `do` loop, entered looking for `case` label `case`.
+    fn nc_do(&mut self, w: &mut Walk, s: StmtId, depth: u32, mut case: Option<StmtId>) -> Flow {
+        let d = *self.ast.stmts.loop_data(s);
+        let (Some(cond), Some(body)) = (d.cond, d.body) else { return Flow::Stop };
+        loop {
+            let (side, start, whole) = (w.side, w.trace.len(), case.is_none());
+            match self.nc_loop_body(w, body, depth, case) {
+                Flow::Continue => {}
+                r => return r,
+            }
+            case = None;
+            let v = match self.nc_cond(w, cond, depth) {
+                Ok(v) => v,
+                Err(r) => return r,
+            };
+            match self.const_truth(v) {
+                Some(true) => {}
+                Some(false) => return Flow::Next,
+                None => return Flow::Stop,
+            }
+            if whole && side == w.side {
+                return self.nc_cycle(w, start);
+            }
+        }
+    }
+
+    /// A `for` loop (its init statement and condition run in a block
+    /// scope of their own).
+    fn nc_for(&mut self, w: &mut Walk, s: StmtId, depth: u32) -> Flow {
+        let d = *self.ast.stmts.loop_data(s);
+        let (None, Some(body)) = (d.cond_var, d.body) else { return Flow::Stop };
+        w.open();
+        if let Some(init) = d.init {
+            match self.nc_stmt(w, init, depth + 1, None) {
+                Flow::Next => {}
+                r => return w.close(r),
+            }
+        }
+        loop {
+            let (side, start) = (w.side, w.trace.len());
+            if let Some(cond) = d.cond {
+                let v = match self.nc_cond(w, cond, depth) {
+                    Ok(v) => v,
+                    Err(r) => return w.close(r),
+                };
+                match self.const_truth(v) {
+                    Some(true) => {}
+                    Some(false) => return w.close(Flow::Next),
+                    None => return w.close(Flow::Stop),
+                }
+            }
+            match self.nc_loop_body(w, body, depth, None) {
+                Flow::Continue => {}
+                r => return w.close(r),
+            }
+            if let Some(inc) = d.inc {
+                match self.nc_ignored(w, inc, depth) {
+                    Flow::Next => {}
+                    r => return w.close(r),
+                }
+            }
+            if side == w.side {
+                w.discard();
+                return self.nc_cycle(w, start);
+            }
+        }
+    }
+
+    /// A `for` loop searched for `case` label `case`: on finding it in
+    /// the body, the loop goes on from its increment (clang runs the
+    /// init statement again).
+    fn nc_for_case(&mut self, w: &mut Walk, s: StmtId, depth: u32, case: StmtId) -> Flow {
+        let d = *self.ast.stmts.loop_data(s);
+        let (None, Some(body)) = (d.cond_var, d.body) else { return Flow::Stop };
+        w.open();
+        if let Some(init) = d.init {
+            match self.nc_stmt(w, init, depth + 1, Some(case)) {
+                Flow::CaseNotFound => {}
+                r => {
+                    w.discard();
+                    return r;
+                }
+            }
+        }
+        match self.nc_loop_body(w, body, depth, Some(case)) {
+            Flow::Continue => {}
+            r => {
+                w.discard();
+                return r;
+            }
+        }
+        if let Some(inc) = d.inc {
+            match self.nc_ignored(w, inc, depth) {
+                Flow::Next => {}
+                r => {
+                    w.discard();
+                    return r;
+                }
+            }
+        }
+        w.discard();
+        self.nc_for(w, s, depth)
+    }
+
+    /// An `if` statement.
+    fn nc_if(&mut self, w: &mut Walk, s: StmtId, depth: u32) -> Flow {
+        let st = &self.ast.stmts;
+        if !matches!(st.if_kind(s), IfKind::Ordinary | IfKind::Constexpr) {
+            return Flow::Stop;
+        }
+        let d = *st.if_data(s);
+        let (None, Some(cond)) = (d.cond_var, d.cond) else { return Flow::Stop };
+        w.open();
+        if let Some(init) = d.init {
+            match self.nc_stmt(w, init, depth + 1, None) {
+                Flow::Next => {}
+                r => return w.close(r),
+            }
+        }
+        let v = match self.nc_cond(w, cond, depth) {
+            Ok(v) => v,
+            Err(r) => return w.close(r),
+        };
+        let Some(b) = self.const_truth(v) else { return w.close(Flow::Stop) };
+        let r = match if b { d.then } else { d.els } {
+            Some(branch) => self.nc_stmt(w, branch, depth + 1, None),
+            None => Flow::Next,
+        };
+        w.close(r)
+    }
+
+    /// An `if` statement searched for `case` label `case` (in its init
+    /// statement, then its branches in turn).
+    fn nc_if_case(&mut self, w: &mut Walk, s: StmtId, depth: u32, case: StmtId) -> Flow {
+        let st = &self.ast.stmts;
+        if !matches!(st.if_kind(s), IfKind::Ordinary | IfKind::Constexpr) {
+            return Flow::Stop;
+        }
+        let d = *st.if_data(s);
+        w.open();
+        if let Some(init) = d.init {
+            match self.nc_stmt(w, init, depth + 1, Some(case)) {
+                Flow::CaseNotFound => {}
+                r => {
+                    w.discard();
+                    return r;
+                }
+            }
+        }
+        for branch in [d.then, d.els].into_iter().flatten() {
+            match self.nc_stmt(w, branch, depth + 1, Some(case)) {
+                Flow::CaseNotFound => {}
+                r => return w.close(r),
+            }
+        }
+        w.discard();
+        Flow::CaseNotFound
+    }
+
+    /// A `switch` statement: the body runs from the `case` label its
+    /// condition selects.
+    fn nc_switch(&mut self, w: &mut Walk, s: StmtId, depth: u32) -> Flow {
+        let d = *self.ast.stmts.switch_data(s);
+        if d.cond_var.is_some() {
+            return Flow::Stop;
+        }
+        w.open();
+        if let Some(init) = d.init {
+            match self.nc_stmt(w, init, depth + 1, None) {
+                Flow::Next => {}
+                r => return w.close(r),
+            }
+        }
+        let v = match self.nc_cond(w, d.cond, depth) {
+            Ok(v) => v,
+            Err(r) => return w.close(r),
+        };
+        let Some(v) = self.const_int(v) else { return w.close(Flow::Stop) };
+        let cases: Vec<StmtId> = self.ast.lists.iter::<StmtId>(d.cases).collect();
+        let (mut default, mut found) = (None, None);
+        for c in cases {
+            if self.ast.stmts.get(c).kind() == StmtKind::DefaultStmt {
+                default = Some(c);
+                continue;
+            }
+            let cd = *self.ast.stmts.case_data(c);
+            let Some(lo) = self.nc_case_value(cd.lhs) else { return w.close(Flow::Stop) };
+            let hi = match cd.rhs {
+                Some(rhs) => match self.nc_case_value(rhs) {
+                    Some(hi) => hi,
+                    None => return w.close(Flow::Stop),
+                },
+                None => lo,
+            };
+            if lo <= v && v <= hi {
+                found = Some(c);
+                break;
+            }
+        }
+        let Some(found) = found.or(default) else { return w.close(Flow::Next) };
+        let r = self.nc_stmt(w, d.body, depth + 1, Some(found));
+        match w.close(r) {
+            Flow::Break => Flow::Next,
+            // clang fails ("statement expression not supported") at a
+            // label it cannot reach; kiln does not mirror that note.
+            Flow::CaseNotFound => Flow::Stop,
+            r => r,
+        }
+    }
+
+    /// The value of `case` label expression `e`.
+    fn nc_case_value(&mut self, e: ExprId) -> Option<i128> {
+        if self.ast.exprs.get(e).kind() != ExprKind::ConstantExpr {
+            return None;
+        }
+        self.fold_int(e)
+    }
+
+    /// A declaration statement: each variable is defined in turn (a
+    /// static or thread-local one is checked; a local one is registered
+    /// in the block scope, then initialized as a full-expression).
+    fn nc_decl_stmt(&mut self, w: &mut Walk, s: StmtId, depth: u32) -> Flow {
         let decls: Vec<DeclId> =
             self.ast.lists.iter::<DeclId>(self.ast.stmts.decl_stmt_decls(s)).collect();
         for d in decls {
-            match self.kind_of(d) {
-                DeclKind::Var => {}
-                _ => continue,
+            match self.nc_local_decl(w, d) {
+                Some(Flow::Next) => {}
+                Some(r) => return r,
+                None => continue,
             }
-            if self
-                .ast
-                .decls
-                .var(d)
-                .is_some_and(|v| v.spec.storage() == kiln_ast::decl::VarStorage::Extern)
-            {
-                // A block-scope `extern` declaration defines nothing.
-                continue;
+            let Some(init) = self.ast.decls.var(d).and_then(|v| v.init) else { continue };
+            let v = self.nc_expr(init, depth + 1);
+            if let Value::Fails(fail) = v {
+                return Flow::Fails(fail);
             }
-            if !self.has_local_storage(d) {
-                // A static or thread-local variable fails before
-                // its initializer runs (WP-1123).
-                return match self.nc_static_local(d) {
-                    Some(fail) => Flow::Fails(fail),
-                    None => Flow::Stop,
-                };
+            if !self.nc_full_expr(w, init, &v) {
+                return Flow::Stop;
             }
-            if self.nc_destroyed(d) {
-                self.nc_unknown_local = true;
+            let mut t = Temps::default();
+            self.nc_temps(init, false, false, &mut t, 0);
+            if t.extended {
+                w.local(t.extended_dtor);
             }
-            let init = self.ast.decls.var(d).and_then(|v| v.init);
-            if let Some(init) = init {
-                match self.nc_expr(init, depth + 1) {
-                    Value::Fails(fail) => return Flow::Fails(fail),
-                    Value::Unknown => {
-                        self.nc_unknown_local = true;
-                        self.nc_note_unknown(init);
-                    }
-                    Value::Known(_) => {}
-                }
+            if !Self::nc_temps_destroyed(w, &t) {
+                return Flow::Stop;
             }
         }
         Flow::Next
     }
 
+    /// A declaration statement searched for a `case` label: clang checks
+    /// each static variable and starts the lifetime of each local one
+    /// without an initializer.
+    fn nc_decl_case(&mut self, w: &mut Walk, s: StmtId) -> Flow {
+        let decls: Vec<DeclId> =
+            self.ast.lists.iter::<DeclId>(self.ast.stmts.decl_stmt_decls(s)).collect();
+        for d in decls {
+            let init = self.ast.decls.var(d).and_then(|v| v.init);
+            if init.is_some() && self.kind_of(d) == DeclKind::Var && self.has_local_storage(d) {
+                if self.ast.decls.decomp_bindings(d).is_some() {
+                    return Flow::Stop;
+                }
+                continue;
+            }
+            match self.nc_local_decl(w, d) {
+                Some(Flow::Next) | None => {}
+                Some(r) => return r,
+            }
+        }
+        Flow::CaseNotFound
+    }
+
+    /// The definition of `d` up to its initializer: `None` if it defines
+    /// nothing the walk tracks (not a variable, a block-scope `extern`, a
+    /// static variable usable in constant expressions), else how the
+    /// walk goes on ([`Flow::Next`]: a local variable, now registered).
+    fn nc_local_decl(&mut self, w: &mut Walk, d: DeclId) -> Option<Flow> {
+        if self.kind_of(d) != DeclKind::Var
+            || self
+                .ast
+                .decls
+                .var(d)
+                .is_some_and(|v| v.spec.storage() == kiln_ast::decl::VarStorage::Extern)
+        {
+            return None;
+        }
+        if self.ast.decls.decomp_bindings(d).is_some() {
+            return Some(Flow::Stop);
+        }
+        if !self.has_local_storage(d) {
+            // A static or thread-local variable fails before its
+            // initializer runs (clang `CheckLocalVariableDeclaration`).
+            if self.nc_strict_only {
+                return Some(Flow::Stop);
+            }
+            return self.nc_static_local(d).map(Flow::Fails);
+        }
+        w.local(self.nc_destroyed(d));
+        Some(Flow::Next)
+    }
+
     /// Statement `s` executed with the parameters, locals and `this`
-    /// unknown.
-    fn nc_stmt(&mut self, s: StmtId, depth: u32) -> Flow {
-        if depth > MAX_DEPTH {
+    /// unknown (clang `EvaluateStmt`), searching for `case` label
+    /// `case` when it is set.
+    fn nc_stmt(&mut self, w: &mut Walk, s: StmtId, depth: u32, case: Option<StmtId>) -> Flow {
+        if depth > MAX_DEPTH || w.trace.len() >= MAX_WORK {
             return Flow::Stop;
         }
+        if w.steps >= w.limit {
+            return self.nc_step_fail(w, s);
+        }
+        w.steps += 1;
+        w.trace.push(s);
+        let kind = self.ast.stmts.get(s).kind();
+        let mut case = case;
+        if let Some(c) = case {
+            match kind {
+                StmtKind::CompoundStmt
+                | StmtKind::LabelStmt
+                | StmtKind::AttributedStmt
+                | StmtKind::DoStmt => {}
+                StmtKind::CaseStmt | StmtKind::DefaultStmt => {
+                    if c == s {
+                        case = None;
+                    }
+                }
+                StmtKind::IfStmt => return self.nc_if_case(w, s, depth, c),
+                StmtKind::WhileStmt => {
+                    let d = *self.ast.stmts.loop_data(s);
+                    let (None, Some(body)) = (d.cond_var, d.body) else { return Flow::Stop };
+                    return match self.nc_loop_body(w, body, depth, Some(c)) {
+                        Flow::Continue => self.nc_while(w, s, depth),
+                        r => r,
+                    };
+                }
+                StmtKind::ForStmt => return self.nc_for_case(w, s, depth, c),
+                StmtKind::DeclStmt => return self.nc_decl_case(w, s),
+                _ => return Flow::CaseNotFound,
+            }
+        }
         let st = &self.ast.stmts;
-        match st.get(s).kind() {
+        match kind {
             StmtKind::NullStmt => Flow::Next,
             // An assumption is evaluated (and fails quietly when it
             // names an unknown); the walk stops there.
@@ -886,70 +1580,48 @@ impl Sema<'_, '_> {
             {
                 Flow::Stop
             }
-            StmtKind::AttributedStmt => self.nc_stmt(st.sub_stmt(s), depth + 1),
+            StmtKind::AttributedStmt | StmtKind::LabelStmt => {
+                self.nc_stmt(w, st.sub_stmt(s), depth + 1, case)
+            }
+            StmtKind::CaseStmt => self.nc_stmt(w, st.case_data(s).sub, depth + 1, case),
+            StmtKind::DefaultStmt => self.nc_stmt(w, st.default_sub(s), depth + 1, case),
+            // clang evaluates the try-block alone.
+            StmtKind::CXXTryStmt => self.nc_stmt(w, st.try_block(s), depth + 1, case),
             StmtKind::CompoundStmt => {
                 let subs: Vec<StmtId> =
                     self.ast.lists.iter::<StmtId>(st.compound_body(s)).collect();
-                // clang destroys the block's locals at its end, which
-                // fails (quietly) for one whose value it does not know.
-                let outer = std::mem::replace(&mut self.nc_unknown_local, false);
+                w.open();
                 for sub in subs {
-                    match self.nc_stmt(sub, depth + 1) {
-                        Flow::Next => {}
-                        other => {
-                            self.nc_unknown_local = outer;
-                            return other;
-                        }
+                    match self.nc_stmt(w, sub, depth + 1, case) {
+                        Flow::Next => case = None,
+                        Flow::CaseNotFound => {}
+                        r => return w.close(r),
                     }
                 }
-                let unknown = std::mem::replace(&mut self.nc_unknown_local, outer);
-                if unknown { Flow::Stop } else { Flow::Next }
-            }
-            StmtKind::ExprStmt => {
-                let e = st.expr_stmt_expr(s);
-                match self.nc_expr(e, depth + 1) {
-                    Value::Fails(fail) => Flow::Fails(fail),
-                    Value::Unknown => {
-                        self.nc_note_unknown(e);
-                        Flow::Next
-                    }
-                    Value::Known(_) => Flow::Next,
+                if case.is_some() {
+                    w.discard();
+                    Flow::CaseNotFound
+                } else {
+                    w.close(Flow::Next)
                 }
             }
+            StmtKind::ExprStmt => self.nc_ignored(w, st.expr_stmt_expr(s), depth),
             StmtKind::ReturnStmt => match st.return_value(s).map(|v| self.nc_expr(v, depth + 1)) {
                 Some(Value::Fails(fail)) => Flow::Fails(fail),
                 _ => Flow::Stop,
             },
-            StmtKind::DeclStmt => self.nc_decl_stmt(s, depth),
-            StmtKind::IfStmt => {
-                if !matches!(st.if_kind(s), IfKind::Ordinary | IfKind::Constexpr) {
-                    return Flow::Stop;
-                }
-                let d = *st.if_data(s);
-                if d.cond_var.is_some() {
-                    return Flow::Stop;
-                }
-                if let Some(init) = d.init {
-                    match self.nc_stmt(init, depth + 1) {
-                        Flow::Next => {}
-                        other => return other,
-                    }
-                }
-                let Some(cond) = d.cond else { return Flow::Stop };
-                match self.nc_expr(cond, depth + 1) {
-                    Value::Fails(fail) => Flow::Fails(fail),
-                    Value::Unknown => Flow::Stop,
-                    Value::Known(v) => match self.const_truth(v) {
-                        Some(b) => match if b { d.then } else { d.els } {
-                            Some(branch) => self.nc_stmt(branch, depth + 1),
-                            None => Flow::Next,
-                        },
-                        None => Flow::Stop,
-                    },
-                }
-            }
-            StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt => self.nc_loop(s, depth),
+            StmtKind::DeclStmt => self.nc_decl_stmt(w, s, depth),
+            StmtKind::IfStmt => self.nc_if(w, s, depth),
+            StmtKind::WhileStmt => self.nc_while(w, s, depth),
+            StmtKind::ForStmt => self.nc_for(w, s, depth),
+            StmtKind::DoStmt => self.nc_do(w, s, depth, case),
+            StmtKind::SwitchStmt => self.nc_switch(w, s, depth),
+            StmtKind::BreakStmt => Flow::Break,
+            StmtKind::ContinueStmt => Flow::Continue,
             // clang `EvaluateStmt`'s default: not valid (WP-915).
+            StmtKind::GotoStmt | StmtKind::IndirectGotoStmt => {
+                Flow::Fails(Self::not_valid(self.stmt_begin_loc(s)))
+            }
             StmtKind::GCCAsmStmt => Flow::Fails(Self::not_valid(st.get(s).loc())),
             _ => Flow::Stop,
         }
