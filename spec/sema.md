@@ -8160,10 +8160,44 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     default member initializers first) as far as the path is known: a
     subexpression that names nothing unknown is evaluated on its own,
     one that does is taken apart operand by operand (`&&`, `||` and
-    `?:` as in `enable_if` conditions); a known `if` condition picks the
-    branch, a loop with an absent or known-true condition has its first
-    iteration walked, and the walk stops at an unknown condition, a
-    `switch`, a `try`, a label, an `[[assume]]` or a `return`;
+    `?:` as in `enable_if` conditions); statements follow clang's
+    `EvaluateStmt` (WP-1133):
+    - an expression statement or `for` increment whose value is unknown,
+      or which may call a function (a call of anything but a builtin, a
+      non-trivial constructor), or a variable initializer that fails
+      quietly, notes a side effect (clang `EvaluateIgnoredValue`,
+      `noteSideEffect`) and the walk goes on: past a call with unknown
+      arguments and past a callee's quiet failure alike, as clang refuses
+      every nested call in this mode;
+    - destroying an object fails quietly (clang `HandleDestruction`)
+      when its class has a non-trivial destructor, and, once a side
+      effect has been noted, for a block's local variables and a
+      discarded class prvalue. The failure stops the walk at the end of
+      the statement (a discarded class prvalue's temporary, a
+      condition's temporaries) or block (its locals, a lifetime-extended
+      temporary); inside an `ExprWithCleanups` (a temporary bound by a
+      member access, or discarded by a cast) it only notes a side
+      effect;
+    - an `if`, `while`, `for` or `do` condition must be known (an unknown
+      one, a condition variable, a structured binding or a range-based
+      `for` stops the walk); a loop runs while it is true, `break` leaves
+      it and `continue` goes to its increment and condition. Each
+      statement evaluated takes a step: a walk that runs out (clang
+      `-fconstexpr-steps`, default 1048576) fails with "constexpr
+      evaluation hit maximum step limit; possible infinite loop?" at the
+      statement clang would be about to evaluate, found from the
+      repeating cycle of statements rather than by running every step;
+    - a `switch` with a known condition runs its body from the matching
+      `case` or `default` label, searched as clang does (into blocks,
+      `if` branches, loop bodies and labelled statements; a skipped
+      static variable still fails), and `break` leaves it; no matching
+      label skips the body;
+    - a `try` statement (and a function-try-block's body) runs its try
+      block only; a label is its sub-statement; a `goto` (forward,
+      backward or computed) fails with "subexpression not valid in a
+      constant expression" at the statement;
+    - the walk stops at a `return`, an `[[assume]]`, and an unknown
+      value naming a local variable;
   - the walk also fails, as clang's `EvaluateStmt` (WP-1123), at the
     definition of a static or `thread_local` local variable not usable in
     constant expressions ("control flows through the definition of a
@@ -8171,13 +8205,7 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     initializer; a block-scope `extern` declaration defines nothing), and
     at the `}` of a body that does not return when the function returns
     non-`void` ("control reached end of constexpr function"; not a
-    constructor, destructor or function-try-block). Both are skipped once
-    the walk has passed a statement or initializer whose unknown value
-    involves a call (clang goes on past a call with unknown arguments but
-    stops quietly after a callee's failure, which the walk cannot tell
-    apart; `nc_note_unknown`), and the end of a block that defines a local
-    whose value is unknown, or whose destructor is not trivial, stops the
-    walk (clang fails quietly destroying it). The Oven's `evaluate_call`
+    constructor, destructor or function-try-block). The Oven's `evaluate_call`
     applies the same static rule, `thread_local` and a `const` integral or
     enumeration static (taken as usable) included;
   - the callee of a direct call (a decayed reference to a function, in a
@@ -8226,9 +8254,11 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     `-Wsystem-headers` (clang skips `CheckConstexprFunctionBody` there;
     libstdc++'s `<cmath>` overloads call `__builtin_acosf`);
   Kiln never reports a function clang accepts; it misses some clang
-  reports because clang tracks local variables (`int z = 0; if (z)
-  ...`) and keeps evaluating past a quiet nested call (WP-873
-  follow-ups). Under the default `-fclang-compat=22` a local of
+  reports because clang tracks the values of local and condition
+  variables (`int z = 0; if (z) ...`, `for (int k = 0; k < 3; ++k)`)
+  and evaluates a discarded parameter (`(void)x;`) without noting a
+  side effect (WP-873 and WP-1133 follow-ups;
+  `never-constant-local-values-cxx20.cpp` is their xfail). Under the default `-fclang-compat=22` a local of
   non-literal type is not itself a failure from C++23 (P2448R2), as in
   clang 22.
 - Tests: `expr.add/integer-overflow-folded.cpp`,
@@ -8239,8 +8269,11 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `dcl.constexpr/never-constant-body-cxx{20,23}.cpp`,
   `dcl.constexpr/never-constant-lambda-member-cxx20.cpp`,
   `dcl.constexpr/never-constant-end-static-cxx23.cpp`,
-  `dcl.constexpr/never-constant-after-call-cxx20.cpp` (xfail, the
-  quiet-callee limit above),
+  `dcl.constexpr/never-constant-after-call-cxx20.cpp`,
+  `dcl.constexpr/never-constant-{call,temporaries,loop-break,switch,try-goto}-cxx20.cpp`,
+  `dcl.constexpr/never-constant-infinite-loop{,-steps}-cxx20.cpp`,
+  `dcl.constexpr/never-constant-walk-end-cxx23.cpp`,
+  `dcl.constexpr/never-constant-local-values-cxx20.cpp` (xfail),
   `dcl.constexpr/never-constant-default-cxx23.cpp`,
   `dcl.constexpr/never-constant-no-error-cxx20.cpp`,
   `dcl.constexpr/potential-constant-builtin-{fabs,strcmp,not-constexpr}.cpp`,
