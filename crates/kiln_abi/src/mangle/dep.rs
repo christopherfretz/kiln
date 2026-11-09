@@ -677,7 +677,9 @@ impl Mangler<'_, '_> {
                 self.out.push_str(code);
                 return self.expression(ast.exprs.operand(expr));
             }
-            ExprKind::BinaryOperator => {
+            // A compound assignment is clang's `CompoundAssignOperator`, a
+            // `BinaryOperator` to the mangler (`pL`, `mI`, ...; WP-980).
+            ExprKind::BinaryOperator | ExprKind::CompoundAssignOperator => {
                 let code = binary_code(ast.exprs.binary_op(expr));
                 self.out.push_str(code);
                 let [lhs, rhs] = ast.exprs.operands(expr);

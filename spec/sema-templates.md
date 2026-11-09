@@ -5023,8 +5023,15 @@ always), so `all<is_convertible(U, T)...>` with `T` = {} and `U` =
 {int} is a deduction failure and `is_constructible<tuple<>, int>` is
 false. A sweep element (`element_ty` / `element_expr`) that still names
 a pack by declaration names one of a retained level, and the expansion is
-rebuilt partially substituted as above instead of becoming empty. A sweep
-that fails for another reason (a lambda body, a pack it cannot keep)
+rebuilt partially substituted as above instead of becoming empty. A
+`FunctionParmPackExpr` is not such a name: like a
+`SubstNonTypeTemplateParmPackExpr` it names its substituted elements, and
+its type (the pattern parameter's) is not walked for packs, so an empty
+function parameter pack swept inside a generic lambda's fold (libc++ 22
+`<mdspan>`'s rank-0 `operator()`) leaves the fold empty, its init value,
+instead of a retained expansion the Oven cannot evaluate (WP-980,
+`tests/conformance/temp.variadic/p7-empty-function-parameter-pack-in-generic-lambda-fold.cpp`).
+A sweep that fails for another reason (a lambda body, a pack it cannot keep)
 leaves the expansion empty, as before
 (`tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp`,
 `p7-empty-first-pack-length-mismatch.cpp`).

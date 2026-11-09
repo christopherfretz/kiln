@@ -62,6 +62,14 @@ the evaluator's flattened type table.
 - Typed, checked arithmetic per width (1..128 bits, `_BitInt`-ready): signed
   overflow, division by zero, `INT_MIN / -1`, out-of-range shifts, negative
   shifts and float results that are NaN fault; unsigned arithmetic wraps.
+  `++`/`--` on a signed integer narrower than `int` (`signed char`,
+  `short`, a signed plain `char`) adds in `int` and wraps on the
+  conversion back, as clang's `UnaryOperator::canOverflow` is false for
+  it ([expr.pre.incr]/1 is `x += 1`, [conv.integral]/3): `compile.rs`
+  `inc_dec` emits the add at 32 bits and an `ICast` to the narrow width
+  (WP-980; `tests/conformance/expr.pre.incr/narrow-signed-wrap-*.cpp`).
+  `int`/`long` `++` at the maximum still faults
+  (`int-overflow-constexpr.cpp`).
   NaNs that are values (a `__builtin_nan` operand, a quiet library
   result) follow `APFloat`, not the host (WP-410): an operation with a
   NaN operand yields the first NaN operand quieted, sign and payload
