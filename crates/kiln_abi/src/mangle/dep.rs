@@ -722,6 +722,30 @@ impl Mangler<'_, '_> {
         }
     }
 
+    /// An expression splice `[: r :]` (`template [: r :]<args>`): GCC 16's
+    /// `DS <expression> [<template-args>] E` (P2996 has no Itanium
+    /// encoding yet). A member splice `s.[: r :]` / `p->[: r :]` is the
+    /// member access `dt` / `pt <expression>` with the splice as its
+    /// name (GCC 16: `dtfp_DST_E`).
+    fn splice_expression(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        if let Some((base, arrow)) = ast.exprs.splice_base(expr) {
+            self.out.push_str(if arrow { "pt" } else { "dt" });
+            if !self.expression(base) {
+                return false;
+            }
+        }
+        self.out.push_str("DS");
+        if !self.expression(ast.exprs.splice_operand(expr)) {
+            return false;
+        }
+        if let Some(args) = ast.exprs.splice_template_args(expr) {
+            self.template_args(args);
+        }
+        self.out.push('E');
+        true
+    }
+
     /// An operator, call, cast, `sizeof`/`alignof` or pack expansion.
     /// `converted` is the type `expr` is implicitly converted to.
     fn operator_expression(&mut self, expr: ExprId, converted: Option<QualType>) -> bool {
@@ -799,16 +823,7 @@ impl Mangler<'_, '_> {
             // An expression splice `[: r :]` (`template [: r :]<args>`):
             // GCC 16's `DS <expression> [<template-args>] E` (P2996 has no
             // Itanium encoding yet).
-            ExprKind::CXXSpliceExpr if ast.exprs.splice_base(expr).is_none() => {
-                self.out.push_str("DS");
-                if !self.expression(ast.exprs.splice_operand(expr)) {
-                    return false;
-                }
-                if let Some(args) = ast.exprs.splice_template_args(expr) {
-                    self.template_args(args);
-                }
-                self.out.push('E');
-            }
+            ExprKind::CXXSpliceExpr => return self.splice_expression(expr),
             ExprKind::PackExpansionExpr => {
                 self.out.push_str("sp");
                 return self.expression(ast.exprs.operand(expr));
