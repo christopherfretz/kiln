@@ -181,7 +181,7 @@ impl Sema<'_, '_> {
         self.ast.decls.function(f).map(|x| x.spec).unwrap_or_default()
     }
 
-    fn fn_info(&self, f: DeclId) -> kiln_ast::types::FuncInfo {
+    pub(super) fn fn_info(&self, f: DeclId) -> kiln_ast::types::FuncInfo {
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         self.ast.types.proto(ty).map(FuncProto::info).unwrap_or_default()
     }

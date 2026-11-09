@@ -7,7 +7,7 @@
 
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, TypeAttrKind};
-use kiln_ast::{AttrId, DeclId, ExprId, QualType};
+use kiln_ast::{AttrId, DeclId, ExprId, NnsId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
@@ -233,6 +233,9 @@ pub struct DeclSpec {
     pub type_loc: Option<Loc>,
     /// The type of a [`TypeSpecKind::Named`] specifier.
     pub named: Option<QualType>,
+    /// The name of a dependent elaborated-type-specifier (`Member` in
+    /// `class A<T>::Member`): where a [temp.friend]/5 friend is reported.
+    pub dependent_tag_name: Option<Loc>,
     /// The width operand of a [`TypeSpecKind::BitInt`] specifier and the
     /// `_BitInt` keyword's location.
     pub bit_int_width: Option<(ExprId, Loc)>,
@@ -704,6 +707,9 @@ pub struct Declarator {
     /// The context named by a nested-name-specifier on the declarator-id
     /// (`int N::x = 1;`).
     pub qualifier: Option<DeclId>,
+    /// That nested-name-specifier as written (`A<T>::` of a
+    /// [temp.friend]/5 friend `template<class T> friend void A<T>::f();`).
+    pub qualifier_nns: Option<NnsId>,
     /// That nested-name-specifier begins with the global `::`
     /// (`A (::N::x);`): clang's walk of its prefixes for a `Global`
     /// specifier.
@@ -767,10 +773,16 @@ pub struct Declarator {
     /// `this` before a parameter-declaration (an explicit object
     /// parameter, P0847 [dcl.fct]/6).
     pub explicit_object: Option<Loc>,
-    /// Where the innermost function declarator's `const`, `volatile` and
-    /// ref-qualifier are ("explicit object member function cannot have
-    /// '...' qualifier" points at the first and quotes them in order).
-    pub fn_qual_locs: [Option<Loc>; 3],
+    /// Where the innermost function declarator's `const`, `volatile`,
+    /// ref-qualifier and `__restrict` are ("explicit object member
+    /// function cannot have '...' qualifier" points at the first and
+    /// quotes them in order).
+    pub fn_qual_locs: [Option<Loc>; 4],
+    /// The first nullability keyword after the innermost function
+    /// declarator's parameter list (`void f() _Nonnull`): parsed and
+    /// dropped, it is a qualifier only to the "cannot have '' qualifier"
+    /// checks (spec/sema.md §4.1.1).
+    pub fn_nullability: Option<Loc>,
     /// The nullability qualifiers after a ptr-operator, with the index
     /// in `chunks` of the pointer, member-pointer or reference chunk
     /// they follow, in order (spec/sema.md §4.1.1).
@@ -941,6 +953,7 @@ impl Declarator {
             ctx,
             name: None,
             qualifier: None,
+            qualifier_nns: None,
             chunks: Vec::new(),
             bit_width: None,
             attrs: Vec::new(),
@@ -965,7 +978,8 @@ impl Declarator {
             pure: None,
             late_noexcept: None,
             explicit_object: None,
-            fn_qual_locs: [None; 3],
+            fn_qual_locs: [None; 4],
+            fn_nullability: None,
             nullability: Vec::new(),
             op_name: None,
             lit_suffix: None,

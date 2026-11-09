@@ -25,11 +25,13 @@ use crate::target;
 /// The state saved across a statement expression
 /// ([`Sema::act_on_start_stmt_expr`]): the enclosing full-expression's
 /// pending potential odr-uses, which the statements inside must not
-/// resolve.
+/// resolve, and its pending cleanups, which their full-expressions must
+/// not take.
 #[derive(Debug)]
 pub struct StmtExprScope {
-    outer_odr: Vec<ExprId>,
-    outer_imm: crate::consteval::SavedImm,
+    odr: Vec<ExprId>,
+    imm: crate::consteval::SavedImm,
+    cleanup: crate::class::CleanupState,
 }
 
 impl Sema<'_, '_> {
@@ -46,12 +48,18 @@ impl Sema<'_, '_> {
     }
 
     /// The `({` of a statement expression: its statements are separate
-    /// full-expressions, so the enclosing one's pending odr-uses are set
-    /// aside until [`Sema::act_on_stmt_expr`].
+    /// full-expressions, so the enclosing one's pending odr-uses and
+    /// cleanups are set aside until [`Sema::act_on_stmt_expr`]. Without
+    /// the cleanups, the first full-expression inside took the
+    /// `ExprWithCleanups` of a temporary created before the `({`
+    /// (`D{1}.v + ({ 0; })`), and that temporary lived to the end of the
+    /// block (clang's `PushExpressionEvaluationContext` saves `Cleanup` as
+    /// `ParentCleanup`; WP-1081).
     pub fn act_on_start_stmt_expr(&mut self) -> StmtExprScope {
         StmtExprScope {
-            outer_odr: std::mem::take(&mut self.pending_odr),
-            outer_imm: self.take_immediate_state(false),
+            odr: std::mem::take(&mut self.pending_odr),
+            imm: self.take_immediate_state(false),
+            cleanup: std::mem::take(&mut self.cleanup),
         }
     }
 
@@ -99,9 +107,15 @@ impl Sema<'_, '_> {
         lparen: Loc,
         rparen: Loc,
     ) -> ExprId {
-        let inner = std::mem::replace(&mut self.pending_odr, scope.outer_odr);
+        let inner = std::mem::replace(&mut self.pending_odr, scope.odr);
         self.pending_odr.extend(inner);
-        self.restore_immediate_state(scope.outer_imm);
+        self.restore_immediate_state(scope.imm);
+        // clang's `PopExpressionEvaluationContext`: `Cleanup.mergeFrom(
+        // ParentCleanup)` (the statements' own full-expressions have
+        // already consumed theirs).
+        let inner = std::mem::replace(&mut self.cleanup, scope.cleanup);
+        self.cleanup.needs |= inner.needs;
+        self.cleanup.side_effects |= inner.side_effects;
         let result = self.stmt_expr_result(body);
         let ty = result.map_or(QualType::VOID, |e| self.ast.exprs.get(e).ty());
         let dependent_ctx = self.in_template();
@@ -613,6 +627,7 @@ impl Sema<'_, '_> {
             return self.recover(ty, &[init], lparen);
         }
         let e = self.builder().compound_literal(ty, init, lparen);
+        self.builder().record_end_loc(e, l.rbrace);
         // A class literal is a temporary ([class.temporary]/4).
         if class { self.maybe_bind_temporary(e) } else { e }
     }

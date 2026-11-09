@@ -10,7 +10,7 @@ use kiln_ast::types::TypeView;
 use kiln_ast::{Ast, ExprId, QualType};
 use kiln_source::Loc;
 
-use super::{Compiler, float_code, int_of, skip_parens};
+use super::{Compiler, float_code, int_of, is_vla, skip_parens};
 use crate::kbc::{Op, ak, bi, cmp};
 use crate::softfloat;
 use crate::ty::TyKind;
@@ -493,7 +493,9 @@ impl Compiler<'_> {
     /// has side effects (calls included, clang `HasSideEffects`), else an
     /// invalid subexpression at the call; without it (codegen's
     /// `tryEvaluateObjectSize` of a `pass_object_size` argument, WP-808),
-    /// any failure fails.
+    /// any failure fails. First, a pointer into the result of an
+    /// `alloc_size` call folds to its size ([`Compiler::alloc_size_object`];
+    /// `kind`: the type, when it is a constant).
     pub(super) fn object_size(
         &mut self,
         site: ExprId,
@@ -502,7 +504,12 @@ impl Compiler<'_> {
         dst: u32,
         begin: Loc,
         default: bool,
+        kind: Option<u32>,
     ) {
+        if let Some(n) = self.alloc_size_object(p, kind) {
+            self.konst(dst, u128::from(n));
+            return;
+        }
         let ast = self.ast();
         let p = strip_pointer_casts(ast, p);
         let des = designator_type(ast, p);
@@ -528,6 +535,225 @@ impl Compiler<'_> {
         };
         let sub = bi::OBJECT_SIZE | (u32::from(side) * bi::SIDE) << 8;
         self.emit_site(Op::Builtin, sub, &[dst, a, b, ok, ty, 0], site, begin);
+    }
+
+    /// The object size of pointer `p` whose object is the result of a call
+    /// of an `alloc_size` function (clang `tryEvaluateBuiltinObjectSize`
+    /// with an invalid base, WP-1073): `p` is such a call with constant
+    /// size arguments (`getBytesReturnedByAllocSizeCall`: their product,
+    /// failing on overflow), an lvalue-to-rvalue read of a local `const`
+    /// pointer variable initialized by one (`evaluateLValueAsAllocSize`,
+    /// through a full-expression and one cast), or either plus or minus a
+    /// constant number of elements. The result is the allocated size less
+    /// the offset, 0 past the end or before the start, for every type (the
+    /// base is an unsized array, so it refers to the complete object).
+    /// `None` leaves `p` to the trial.
+    fn alloc_size_object(&mut self, p: ExprId, kind: Option<u32>) -> Option<u64> {
+        let p = strip_pointer_casts(self.ast(), p);
+        let (size, off, valid) = self.alloc_base(p, 0)?;
+        // clang `determineEndOffset`: type 3 wants a lower bound, which an
+        // invalid designator does not give.
+        if !valid && kind? == 3 {
+            return None;
+        }
+        Some(if off < 0 { 0 } else { size.saturating_sub(u64::try_from(off).ok()?) })
+    }
+
+    /// The allocated size, byte offset and designator validity of
+    /// [`Compiler::alloc_size_object`]. A cast to a non-`void` pointer
+    /// inside `p` invalidates the designator (clang's `CK_BitCast` of a
+    /// pointer with an invalid base).
+    fn alloc_base(&mut self, p: ExprId, depth: u32) -> Option<(u64, i128, bool)> {
+        use kiln_ast::expr::{CastKind, ValueCategory};
+        if depth > 32 {
+            return None;
+        }
+        let ast = self.ast();
+        let exprs = &ast.exprs;
+        let mut p = skip_parens(ast, p);
+        let mut valid = true;
+        while exprs.get(p).kind().is_cast()
+            && matches!(exprs.cast_kind(p), CastKind::NoOp | CastKind::BitCast)
+        {
+            let sub = exprs.operand(p);
+            let s = exprs.get(sub);
+            if ast.types.pointee(s.ty()).is_none() || s.value_category() != ValueCategory::PRValue {
+                break;
+            }
+            if exprs.cast_kind(p) == CastKind::BitCast
+                && !ast.types.pointee(exprs.get(p).ty()).is_some_and(|q| ast.types.is_void(q))
+            {
+                valid = false;
+            }
+            p = skip_parens(ast, sub);
+        }
+        match exprs.get(p).kind() {
+            ExprKind::CallExpr => Some((self.alloc_call_size(p)?, 0, valid)),
+            ExprKind::BinaryOperator
+                if matches!(exprs.binary_op(p), BinaryOp::Add | BinaryOp::Sub) =>
+            {
+                let op = exprs.binary_op(p);
+                let [l, r] = exprs.operands(p);
+                let (ptr, n) = if ast.types.pointee(exprs.get(l).ty()).is_some() {
+                    (l, r)
+                } else if op == BinaryOp::Add {
+                    (r, l)
+                } else {
+                    return None;
+                };
+                let elem = ast.types.pointee(exprs.get(p).ty())?;
+                if ast.types.is_void(elem) || is_vla(ast, elem) {
+                    return None;
+                }
+                let k = self.alloc_size_int(n, depth + 1)?;
+                let t = self.ty(elem);
+                let w = i128::from(self.o.types.size(t));
+                if w == 0 {
+                    return None;
+                }
+                let (size, off, inner) = self.alloc_base(ptr, depth + 1)?;
+                let d = k.checked_mul(w)?;
+                let off =
+                    if op == BinaryOp::Add { off.checked_add(d)? } else { off.checked_sub(d)? };
+                Some((size, off, valid && inner))
+            }
+            ExprKind::ImplicitCastExpr if exprs.cast_kind(p) == CastKind::LValueToRValue => {
+                let r = skip_parens(ast, exprs.operand(p));
+                if exprs.get(r).kind() != ExprKind::DeclRefExpr {
+                    return None;
+                }
+                let d = exprs.decl(r);
+                let n = ast.decls.get(d);
+                let local = n.kind() == kiln_ast::decl::DeclKind::Var
+                    && n.ctx().is_some_and(|c| ast.decls.get(c).kind().is_function());
+                let v = ast.decls.var(d)?;
+                let ty = n.ty()?;
+                if !local || !ast.types.effective_quals(ty).is_const() {
+                    return None;
+                }
+                // clang `tryUnwrapAllocSizeCall`.
+                let mut e = skip_parens(ast, v.init?);
+                if exprs.get(e).kind() == ExprKind::ExprWithCleanups {
+                    e = skip_parens(ast, exprs.operand(e));
+                }
+                if exprs.get(e).kind().is_cast() {
+                    e = skip_parens(ast, exprs.operand(e));
+                }
+                if exprs.get(e).kind() != ExprKind::CallExpr {
+                    return None;
+                }
+                Some((self.alloc_call_size(e)?, 0, valid))
+            }
+            _ => None,
+        }
+    }
+
+    /// The bytes a call `e` of a function with `alloc_size` returns, its
+    /// size arguments constant (clang `getBytesReturnedByAllocSizeCall`).
+    fn alloc_call_size(&mut self, e: ExprId) -> Option<u64> {
+        use kiln_ast::attr::AttrKind;
+        let ast = self.ast();
+        let exprs = &ast.exprs;
+        let mut c = exprs.callee(e);
+        loop {
+            c = skip_parens(ast, c);
+            if exprs.get(c).kind() != ExprKind::ImplicitCastExpr {
+                break;
+            }
+            c = exprs.operand(c);
+        }
+        if exprs.get(c).kind() != ExprKind::DeclRefExpr {
+            return None;
+        }
+        let d = exprs.decl(c);
+        if ast.decls.get(d).kind() != kiln_ast::decl::DeclKind::Function {
+            return None;
+        }
+        let attr = ast.redecls_of(d).find_map(|r| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .map(|a| *ast.attrs.get(a))
+                .find(|n| n.kind == AttrKind::ALLOC_SIZE)
+        })?;
+        let index = |raw: u32| {
+            let x = <ExprId as kiln_ast::ids::RawId>::from_raw(raw)?;
+            (exprs.get(x).kind() == ExprKind::IntegerLiteral)
+                .then(|| exprs.int_value(x))
+                .flatten()
+                .and_then(|v| usize::try_from(v).ok()?.checked_sub(1))
+        };
+        let args: Vec<ExprId> =
+            ast.lists.get(exprs.call_args(e)).iter().map(|&x| ExprId::new(x)).collect();
+        let first = *args.get(index(attr.a)?)?;
+        let second = if attr.b == 0 { None } else { Some(*args.get(index(attr.b)?)?) };
+        let size_t = QualType::unqual(ast.types.target().size_t);
+        let st = self.ty(size_t);
+        let size_bits = 8 * self.o.types.size(st);
+        let mut n = self.alloc_size_int(first, 0)?;
+        if let Some(s) = second {
+            n = n.checked_mul(self.alloc_size_int(s, 0)?)?;
+        }
+        // The arguments are `size_t`; a product past it fails.
+        let n = u64::try_from(n).ok()?;
+        (size_bits >= 64 || n >> size_bits == 0).then_some(n)
+    }
+
+    /// The value of the integer constant `e` of an `alloc_size` argument
+    /// or an offset: literals, integral conversions, `sizeof(type)`,
+    /// `+ - *` and `constexpr` variables; `None` for anything else (the
+    /// pointer is then left to the trial). Negative values fail.
+    fn alloc_size_int(&mut self, e: ExprId, depth: u32) -> Option<i128> {
+        use kiln_ast::expr::{CastKind, TraitKind};
+        if depth > 32 {
+            return None;
+        }
+        let ast = self.ast();
+        let exprs = &ast.exprs;
+        let e = skip_parens(ast, e);
+        let n = exprs.get(e);
+        let v = match n.kind() {
+            ExprKind::IntegerLiteral => i128::from(exprs.int_value(e)?),
+            k if k.is_cast() => {
+                if !matches!(
+                    exprs.cast_kind(e),
+                    CastKind::IntegralCast | CastKind::NoOp | CastKind::LValueToRValue
+                ) || !ast.types.is_integral(n.ty())
+                {
+                    return None;
+                }
+                self.alloc_size_int(exprs.operand(e), depth + 1)?
+            }
+            ExprKind::DeclRefExpr => {
+                let d = exprs.decl(e);
+                let v = ast.decls.var(d)?;
+                if !v.spec.is_constexpr() {
+                    return None;
+                }
+                self.alloc_size_int(v.init?, depth + 1)?
+            }
+            ExprKind::UnaryExprOrTypeTraitExpr if exprs.trait_kind(e) == TraitKind::SizeOf => {
+                let q = exprs.trait_type_arg(e)?;
+                if is_vla(ast, q) || ast.types.is_reference(q) || ast.types.is_void(q) {
+                    return None;
+                }
+                let t = self.ty(q);
+                i128::from(self.o.types.size(t))
+            }
+            ExprKind::BinaryOperator => {
+                let op = exprs.binary_op(e);
+                let [l, r] = exprs.operands(e);
+                let (a, b) =
+                    (self.alloc_size_int(l, depth + 1)?, self.alloc_size_int(r, depth + 1)?);
+                match op {
+                    BinaryOp::Add => a.checked_add(b)?,
+                    BinaryOp::Sub => a.checked_sub(b)?,
+                    BinaryOp::Mul => a.checked_mul(b)?,
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        (0..=i128::from(u64::MAX)).contains(&v).then_some(v)
     }
 
     /// Lowers call `e` of builtin `bid` into a fresh register; `None` for
@@ -813,7 +1039,8 @@ impl Compiler<'_> {
             id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE => {
                 let (p, t) = (arg(0)?, arg(1)?);
                 let b = self.rv(t);
-                self.object_size(e, p, b, dst, begin, true);
+                let kind = self.alloc_size_int(t, 0).and_then(|k| u32::try_from(k).ok());
+                self.object_size(e, p, b, dst, begin, true, kind);
             }
             // As `::operator new`/`delete` (spec/oven.md "Transient
             // allocation").

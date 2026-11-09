@@ -42,6 +42,8 @@ pub(crate) struct CovModule {
     /// the function still needs its zero record.
     deferred: FxHashMap<DeclId, bool>,
     deferred_order: Vec<DeclId>,
+    /// How many of `DeclArena::fn_def_insts` were deferred.
+    insts_seen: usize,
     /// The lexer's identifier table for the location queries (taken
     /// while a mapping is built).
     interner: Option<Box<Interner>>,
@@ -137,14 +139,52 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `HandleInlineFunctionDefinition`'s coverage part: the
-    /// member functions defined in class `rd` (and its nested classes)
-    /// get zero records unless emitted.
-    pub(crate) fn cov_defer_class(&mut self, rd: DeclId, depth: usize) {
-        if !self.opts.coverage.mapping || depth > 64 {
+    /// The function definitions Sema instantiated before top-level
+    /// declaration `upto` (all of them for `u32::MAX`): clang hands each
+    /// to `EmitTopLevelDecl` when it is instantiated, which defers its
+    /// zero record (`AddDeferredUnusedCoverageMapping`), so one used only
+    /// in constant evaluation still gets one (WP-1083).
+    pub(crate) fn cov_defer_insts(&mut self, upto: u32) {
+        if !self.opts.coverage.mapping {
             return;
         }
         let ast = self.ast;
+        let insts = ast.decls.fn_def_insts();
+        while let Some(&(f, k)) = insts.get(self.cov.insts_seen) {
+            if k > upto {
+                break;
+            }
+            self.cov.insts_seen += 1;
+            let n = ast.decls.get(f);
+            // `EmitTopLevelDecl` defers functions and methods only (a
+            // constructor or destructor gets one from
+            // `HandleInlineFunctionDefinition`, never instantiated). A
+            // std builtin (`std::move`, ...) is never referenced by its
+            // calls, so clang never instantiates it for them.
+            if !matches!(
+                n.kind(),
+                DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion
+            ) || n.has(DeclFlags::INVALID)
+                || n.has(DeclFlags::DEPENDENT_CTX)
+                || ast.decls.function(f).is_some_and(|x| x.spec.is_immediate())
+                || self.is_std_builtin(f)
+            {
+                continue;
+            }
+            self.cov_defer_unused(f);
+        }
+    }
+
+    /// clang `HandleInlineFunctionDefinition`'s coverage part: the
+    /// member functions defined in class `rd` (and its nested classes)
+    /// get zero records unless emitted. A closure type is not a
+    /// top-level declaration in clang, so an unused lambda gets none
+    /// (WP-1083).
+    pub(crate) fn cov_defer_class(&mut self, rd: DeclId, depth: usize) {
+        let ast = self.ast;
+        if !self.opts.coverage.mapping || depth > 64 || ast.closure_lambda(rd).is_some() {
+            return;
+        }
         let members: Vec<DeclId> = ast.decls.members(rd).collect();
         for m in members {
             let n = ast.decls.get(m);
@@ -208,7 +248,7 @@ impl Cg<'_> {
         let opts = self.opts;
         let out = if let Some(rc) = rc {
             let mut fold = |e| self.fold_int(e);
-            let mut b = mapping::Builder::new(ast, l, rc, &mut fold);
+            let mut b = mapping::Builder::new(ast, l, rc, &mut fold, opts.clang_compat);
             b.function(d);
             let mut parts = b.into_parts();
             let mut t = Table {
@@ -261,6 +301,7 @@ impl Cg<'_> {
         if !self.opts.coverage.mapping || !self.opts.coverage.instr {
             return;
         }
+        self.cov_defer_insts(u32::MAX);
         let order = std::mem::take(&mut self.cov.deferred_order);
         for d in order {
             if self.cov.deferred.get(&d) != Some(&true) {

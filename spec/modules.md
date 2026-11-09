@@ -960,7 +960,9 @@ is exactly part A's. It no longer runs the Oven for an evaluation whose
 result the file carries. That is the work kiln most wants to avoid
 repeating, and the constexpr report shows when it is avoided. Part 2
 replaces the replay with the image designed below, behind the same
-section framing.
+section framing. Its item 1 (WP-1046) is done: the section also carries
+results of evaluations inside template instantiations (see
+"Instantiation keys").
 
 #### Inventory
 
@@ -999,11 +1001,72 @@ evaluation happens, which the replay reproduces exactly:
 
 The value's type is not stored. It is the canonical, unqualified type of
 the evaluated expression; the writer checks that it is, and the reader
-takes it from its own replayed copy of the expression. A result is used
-only while the importer reads the unit the file holds
-(`module_current_unit` is that unit's and no instantiation is in
-progress), so the same header text read by the importer itself never
-matches.
+takes it from its own replayed copy of the expression. Outside any instantiation the two positions are the whole key
+(instantiation index 0), and a result is used only while the importer
+reads the unit the file holds (`module_current_unit` is that unit's), so
+the same header text read by the importer itself never matches. Inside
+an instantiation the positions are within the pattern, shared by every
+instantiation of it, so the key also names the instantiation (see
+"Instantiation keys"). Such a result is used whenever the importer makes
+that evaluation in that instantiation, first from the table of the unit
+being read and then from any other: a unit's pending instantiations
+(function bodies used outside a constant context, [temp.point]/7) run at
+the importer's end of TU, after the replay. That the importer's
+instantiation gives the same result as the writer's is [temp.point]/7's
+rule, whose violation is ill-formed, no diagnostic required.
+
+#### Instantiation keys (Part 2 item 1, WP-1046)
+
+An evaluation made while an instantiation is in progress is keyed by
+the innermost instantiation frame (spec/ast.md §8.4, `InstFrame`),
+written as a byte string that names no `DeclId`, so the
+producing compile and the importer's replay build the same bytes for
+the same specialization and compare them as they are:
+
+- **Entity frames** (class, member class, member function, function
+  specialization, static data member, variable template and its
+  initializer, enumeration, default member initializer, default function
+  argument, exception specification, lambda): the frame's entity.
+  - `S` template, canonical arguments: a specialization (a class,
+    function or variable template's).
+  - `M` context, pattern: a member of a specialization instantiated
+    from member `pattern`; `P` context, pattern: any other declaration
+    instantiated from a pattern (a local class, a closure type, a
+    local variable).
+  - `D` kind, name kind, name (identifier bytes or operator code),
+    position: a declaration that was not instantiated, inside nothing
+    that was (a template, the namespace scope). Its position is the
+    replay-stable (path index, offset) pair of "Identity". Implicit
+    declarations have no `D` key, and a top-level key is never `D`.
+- **Substitution frames** that record their arguments (concept check,
+  constraint check, deduced, explicit and prior argument substitution,
+  default template argument): `F`, a one-byte frame code, the template,
+  the entity (the template or the parameter), the canonical arguments.
+  Only a template whose parameters are its outermost level (depth 0) is
+  keyed; then the arguments are all the substitution uses.
+- **Arguments**: a count, then per argument `T` type, `V` type and value
+  (part 1's value encoding; a pointer, reference or reflection argument
+  has no key, WP-1047), `N` template (an entity), `K` pack (an argument
+  list).
+- **Types** structurally: the canonical type's cv byte, then a tag and
+  its operands (builtin, `_BitInt`, pointer, references, member pointer,
+  arrays, function with parameters, flags and a `noexcept` bit, record
+  and enumeration as entities, `_Complex`, `_Atomic`, vectors). A
+  dependent or other type gives no key.
+- Keys nest at most 48 levels and 16 KiB; deeper or longer keys are not
+  formed.
+
+The frames this leaves out are not keyed, and their evaluations stay
+uncarried: alias template substitution and default-argument checking
+(they record no arguments), and the other substitution frames
+(constraint substitution, partial specialization deduction).
+
+The writer interns each distinct key once and caches the key per frame
+(entity, template, arguments), so a frame's key is built once however
+many evaluations it makes. The reader does the same per table, and an
+unknown key costs one hash lookup per frame. The evaluation's two
+positions stay part of the key: within one instantiation they tell its
+evaluations apart.
 
 Part 2's remapping, one table per id space, built as the image loads:
 
@@ -1048,8 +1111,12 @@ crate that reads them: the carried constants are `kiln_sema::bmi_ast`.
 Section 1, little-endian:
 
 ```
+marker   u32 0xffffffff, then u32 version (2)
 paths    u32 count, then each path (u32 length, UTF-8)
+insts    u32 count, then each instantiation key (u32 length, bytes,
+         see "Instantiation keys"), numbered from 1 in first-use order
 entries  u32 count (at least 1), then each entry:
+  inst   u32     (0: outside any instantiation; else an index into insts)
   kind   u8      (see "Identity"; low nibble 0..6, bits 6-7 zero)
   at     4 x u32 (expansion path index, offset, spelling path index, offset)
   expr   4 x u32 (the same, for the expression's first token)
@@ -1063,6 +1130,12 @@ entries  u32 count (at least 1), then each entry:
                       not adjacent, within the bytes
 ```
 
+- **Versioned.** Version 1 (WP-985) had no marker, version or
+  instantiation table, and no `inst` field; its first word is the path
+  count, never `0xffffffff`. The reader reads version 1 as written (every
+  entry at index 0) and rejects any version but 1 and 2 (`unsupported
+  section version`). Only carried keys are written: an instantiation key
+  no kept entry uses is dropped and the rest renumbered.
 - **Deterministic.** Paths are in first-use order and entries in
   first-evaluation order (no hash-map iteration), so the same inputs give
   the same bytes, and the driver test checks this.
@@ -1070,7 +1143,9 @@ entries  u32 count (at least 1), then each entry:
   bytes left before sizing anything by it, validates UTF-8, flags,
   widths, words (`IntBits::from_words`: no bits above the width),
   float bits, padding ranges, path indices, duplicate keys and trailing
-  bytes. Any failure is a `SectionError`, turned into §11.4's
+  bytes. Each instantiation key is parsed in full against the grammar of
+  "Instantiation keys" (tags, nesting depth, path indices, values),
+  duplicate keys and out-of-range `inst` indices are rejected. Any failure is a `SectionError`, turned into §11.4's
   `fatal error: module file 'x.pcm' is corrupt: carried constants:
   <reason>`. The framing errors (`a kind-2 file without sections`,
   `unknown section`, `sections out of order`) are `BmiError`s with the
@@ -1121,7 +1196,8 @@ file and does not force kind 1. Sema then records every evaluation
 `eval_const` makes while it reads the main unit (`module_current_unit()
 == 0`), and keeps a result only if all of these hold:
 
-- no template instantiation is in progress (one position, many results);
+- no template instantiation is in progress, or the innermost one has an
+  instantiation key (see "Instantiation keys");
 - a key exists (see "Identity");
 - the evaluation is pure: it added no declaration, expression or
   statement and emitted no error or warning (a carried result would
@@ -1129,7 +1205,9 @@ file and does not force kind 1. Sema then records every evaluation
   instantiated a template must still instantiate it);
 - it succeeded, its value's type is its expression's, and the value is
   self-contained (see "Inventory");
-- no other evaluation had the same key.
+- no other evaluation with the same key gave a different result (the
+  same evaluation made again, a constraint checked twice, keeps its
+  result).
 
 The rest are evaluated again by the importer, as in kind 1.
 
@@ -1141,13 +1219,15 @@ is the default. The choice is never a warning. Under `-v` the driver
 prints one of:
 
 ```
-note: wrote module file 'm.pcm' as kind 2, carrying N constant results
+note: wrote module file 'm.pcm' as kind 2, carrying N constant results[, M inside template instantiations]
 note: wrote module file 'm.pcm' as kind 1: no constant result to carry (first not carried: <reason>)
 note: wrote module file 'm.pcm' as kind 1, as -fkiln-bmi-kind=1 requests
 ```
 
 The `<reason>` is the first evaluation that was not carried, one of: `an
-evaluation inside a template instantiation`, `a consteval block`, `an
+evaluation in a substitution that is not an instantiation` (a frame
+"Instantiation keys" leaves out), `an instantiation whose arguments have
+no key`, `a consteval block`, `an
 evaluation at a position a replay does not reproduce`, `an evaluation that
 changed the AST`, `an evaluation that emitted a diagnostic`, `an
 evaluation that failed`, `a value whose type is not its expression's`, `a
@@ -1157,8 +1237,11 @@ value`, `an aggregate holding a pointer`, `an aggregate holding a union`,
 all, the parenthesis is left out. The reader accepts both kinds, so
 mixing them in one build is fine.
 
-On libc++ 19's `std.cppm`, 2900 results are carried. Of the evaluations
-that are not carried, 10142 happen inside a template instantiation, 141
+On libc++ 19's `std.cppm`, part 1 carried 2900 results, and part 2
+item 1 carries 8774, 5744 of them inside template instantiations (most
+of the rest in alias template substitution and default-argument checking
+frames, which record no arguments). Before part 2, of the evaluations
+that were not carried, 10142 happened inside a template instantiation, 141
 are two evaluations at one position, 74 failed, 23
 are at positions a replay does not reproduce, 13 have a value whose type
 is not its expression's, 6 are aggregates holding a pointer, and one
@@ -1294,20 +1377,76 @@ calls two of the functions in a `static_assert` and at run time.
 - Use of the image was verified by blanking the capsule's source text
   (and recomputing the checksum): the importer still compiles, links and
   runs. Two pitfalls hid it at first: a namespace named like its module
-  (`import m;` interns `m`, so the gate in "ODR" always replays: a
-  follow-up), and pre-interned short names (`c`). The corpus inputs
-  therefore use namespaces `ib` and `ic`.
+  (`import m;` interned `m`, so the gate in "ODR merging" always
+  replayed; fixed by WP-1096's unseen names), and pre-interned short
+  names (`c`). The S2 corpus inputs therefore use namespaces `ib` and
+  `ic`.
 - Commands as for Part 2a; the textual runs compile the module's body
   as a header; clang adds `-fconstexpr-steps=100000000` for the
   constexpr module.
+
+**Part 2 item 1, results inside instantiations (WP-1046).** Same method
+(harness profile, aarch64, `/usr/bin/time`, load ~20; precompile median of
+3, imports median of 5, interleaved). "Part 1" is the base commit's binary
+(cfa635ab3), "Part 2" this one. The harness profile has 16 codegen units
+and no LTO, and the base binary happens to be about 15% faster than every
+other build of this period on a plain constexpr TU (0.17 s against 0.20 to
+0.21 s for five unrelated branches), so compare kind 1 with kind 2 within
+a binary. Workloads: the `import std;` program of Part 2a, `import std;`
+with an empty `main` (a use of the section that finds nothing), and a
+template-heavy constexpr interface: 64 instantiations `H<i>` of a class
+whose static member runs a 50,000-iteration loop, checked by a
+`static_assert`, a function template `pick<i>` with a local `constexpr`
+variable and `if constexpr`, and `Buf<i>` whose bound is `H<i>::slot`,
+imported by a program that names them in a `static_assert` and at run
+time.
+
+| run | `import std;` (libc++ 19) | `import std;`, empty `main` | template-heavy module |
+|---|---|---|---|
+| Part 1 `--precompile`, kind 1 | 1.13 s, 98.9 MiB, 8,993,259 B | | 0.17 s, 13.4 MiB, 25,990 B |
+| Part 1 `--precompile`, kind 2 | 1.06 s, 99.5 MiB, 9,131,988 B | | 0.17 s, 13.4 MiB, 32,087 B |
+| Part 2 `--precompile`, kind 1 | 1.16 s, 98.2 MiB, 8,990,956 B | | 0.22 s, 12.9 MiB, 25,990 B |
+| Part 2 `--precompile`, kind 2 | 1.15 s, 101.3 MiB, 9,840,073 B | | 0.23 s, 13.3 MiB, 70,695 B |
+| Part 1 import, kind 1, `-c` | 1.44 s, 97.4 MiB | 1.11 s, 91.7 MiB | 0.18 s, 60.9 MiB |
+| Part 1 import, kind 2, `-c` | 1.42 s, 96.6 MiB | 1.11 s, 91.2 MiB | 0.19 s, 60.9 MiB |
+| Part 2 import, kind 1, `-c` | 1.52 s, 96.5 MiB | 1.19 s, 91.8 MiB | 0.24 s, 60.9 MiB |
+| Part 2 import, kind 2, `-c` | 1.54 s, 98.4 MiB | 1.18 s, 92.1 MiB | **0.06 s**, 60.9 MiB |
+| Part 2 import, kind 1, `-fsyntax-only` | 1.20 s, 95.6 MiB | | 0.22 s, 12.0 MiB |
+| Part 2 import, kind 2, `-fsyntax-only` | 1.20 s, 98.2 MiB | | **0.04 s**, 11.7 MiB |
+| clang 19 `--precompile` | | | 3.50 s, 86.4 MiB |
+| clang 19 import, `-c` | 0.37 s, 160.4 MiB | | 0.01 s, 90.8 MiB |
+
+- Carried: `std` 8774 results (part 1: 2889 from this build), 5744 of
+  them inside instantiations: about 5744 of the 10,142 are now carried. The
+  importer's `-fconstexpr-report=` evaluations: 20,350 (kind 1), 17,464
+  (part 1), 9006 (part 2). The template-heavy module carries 513 (part 1:
+  129), 384 inside instantiations, and its importer drops from 578
+  evaluations and 3,329,216 steps (part 1: 449 and 3,264,640) to 65 and 0.
+- Section size: `std`'s grows from 138,729 B to 849,117 B (6.1x, about
+  97 B per result against 48 B: each instantiation's key is written once,
+  but every entry has a `u32` index and eight `u32` position fields); the
+  template-heavy module's from 6,097 B to 44,705 B. A compact encoding is
+  a follow-up.
+- Imports that find little in the section do not slow down: a second run
+  of `std`'s `-c` import over 9 interleaved rounds gives 1.54 s for kind 1
+  and 1.53 s for kind 2, and the empty `main` 1.19 s and 1.18 s. The
+  table costs about 1 to 2 MiB of RSS on `std`. `std`'s own constant work
+  is about 15 ms, so its import time is still the replay's. The eager
+  decode stays: a lazy table would save at most the decode, which is
+  within noise here.
+- Kind-1 files are byte-identical between the two binaries apart from the
+  resource directory's path (its length prefixes and the checksum).
+- Commands as for Part 2a, with `-fkiln-bmi-kind=1|2` at the precompile;
+  the report runs add `-fconstexpr-report=r.json` to the import, and the
+  `-v` note gives the carried counts.
 
 #### Part 2
 
 Next, in order:
 
-1. carried results for evaluations inside instantiations, keyed by the
-   instantiation (template, remapped arguments) rather than the position:
-   the 10,142 above, and the bulk of a template-heavy constexpr workload;
+1. **done (WP-1046)**: carried results for evaluations inside
+   instantiations, keyed by the instantiation (see "Instantiation keys");
+   measured under "Measurements", "Part 2 item 1";
 2. pointer, reference and reflection values (they need `DeclId`
    remapping);
 3. the declaration and type image with ODR merging (see "Identity"),
@@ -1422,12 +1561,45 @@ needs one, so it falls back). It could still collide with the importer's
 own declarations, or with another import's (for example, two modules
 that both open `namespace util`). 2a does not merge. Instead the image
 lists every declared name up front, and the preprocessor uses the image
-only if **none of those names is interned yet** (`Interner::get`). Any
-earlier declaration's name was a token, or a builtin's name, so it is
-interned. A fresh name cannot meet an earlier declaration, and later
-declarations and imports find the image's declarations through ordinary
-lookup, as they would find the replay's. Any overlap replays, so the
-semantics are part A's by construction. The names of a carried body's
+only if **none of those names has been seen yet**. A name is seen when
+it is interned (`Interner::get`) and is not one of the preprocessor's
+*unseen names* (WP-1096):
+
+- A component of a module or partition name (`m`, `a` and `b` of
+  `a.b`, `p` of `:p`) that the module or import directive interned for
+  the first time joins the unseen names: the directive is consumed by
+  the preprocessor, so the name is no token the parser sees, and it
+  declares nothing. The test is that the symbol's index is at least the
+  interner's length just after the directive's first keyword (`export`,
+  `import`, `module`) was read (symbols are dense, in interning
+  order); a name
+  interned before, by any token, macro, builtin or sema, stays seen.
+  `std` never joins: sema declares namespace `std` implicitly (`new`,
+  `typeid`, structured bindings), with no token.
+- An unseen name becomes seen when the preprocessor returns it as an
+  identifier token (`Preprocessor::next_item`), when it is among a
+  pragma's tokens (they reach the parser too), and when an image that is
+  used declares it.
+
+So `export module m; export namespace m { ... }` and the dotted
+`export module a.b; export namespace a { namespace b { ... } }` are
+built from their images, while an importer that declared `namespace m`
+or `int g;` before `import m;`, a global module fragment `#include` that
+declares `namespace m`, or an earlier image or replay that declared `m`,
+still replays. The rule tracks what reached the parser rather than what
+sema declared because the gate runs in the preprocessor, ahead of the
+parser's lookahead: sema may not yet have declared the tokens before
+the `import`. Any earlier declaration's name was such a token, or a
+builtin's or sema's own name interned before the directive, so it is
+seen. Other names that reach no parser (macro names, `#if` operands)
+still count as seen; that only costs a replay. A fresh name cannot meet
+an earlier declaration, and later declarations and imports find the
+image's declarations through ordinary lookup, as they would find the
+replay's. Any overlap replays, so the semantics are part A's by
+construction. With `-v` the driver notes each import whose module file
+holds an image: `imported 'm' from its declaration image`, or
+`replayed 'm': ` and why (the first seen name, an import of other
+units, or another main file). The names of a carried body's
 locals (S2) are not gated: they are in the parameter-name table, since
 no lookup outside the body can find them. Real merging needs WP-460
 semantics without a second parse: an ODR key per GMF entity, and a
@@ -1712,13 +1884,18 @@ length-prefixed, so no two configurations collide by concatenation.
 `-O2` builds have separate entries. `-g`, `-fPIC` and warnings do not
 change it.
 
-**Stamp.** Beside `<name>.pcm`, `<name>.stamp` holds a magic line, the
-module file's name, and one `<size> <mtime> <path>` line for every file
-the build read. These are the dependency list of an `-MD` with system
-headers, plus the source. A hit needs the stamp valid, every file
-unchanged, and the module file's first bytes kiln's magic. So a libc++
-header edited in place, or a damaged module file, is a miss. This is
-clang's module-cache validation (size and mtime, not content).
+**Stamp.** Beside `<name>.pcm`, `<name>.stamp` holds a magic line
+(`kiln-module-cache-stamp 2`), then `<size> <checksum> <path>` for the
+module file, where `<checksum>` is its trailing §11.3 checksum in hex,
+then one `<size> <mtime> <path>` line for every file the build read.
+These are the dependency list of an `-MD` with system headers, plus the
+source. A hit needs the stamp valid, the module file's size and checksum
+the stamp's, every other file unchanged, and the module file's first
+bytes kiln's magic. So a libc++ header edited in place, or a damaged
+module file, is a miss. This is clang's module-cache validation (size
+and mtime, not content) for the inputs; the module file itself is named
+by its content, because racing compiles each rename their own copy of
+it into place (see "Concurrency").
 
 **Miss.** The driver runs `--precompile` of the libc++ source in-process
 on its own thread, with the importer's stack size and stack guard. The
@@ -1735,13 +1912,59 @@ build go to a buffer. A build with errors removes its empty entry and
 falls back to part A, which reports the module's errors in the
 importer's context, as before WP-984.
 
-**Concurrency.** The module file goes to a unique temporary file
-(`.tmp.<pid>.<thread>.<nanos>`) and is renamed into place, then the
-stamp the same way. A reader reads the stamp first and the module file
-second, so it never sees a torn file. Compiles that miss together all
-build, all rename, and all succeed. The builds are deterministic, so
-any of the files is right. No lock is taken, so a stuck compile cannot
-block others.
+**Concurrency** (WP-1074). Parallel builds (`make -j`, ninja) start
+many compiles that miss the same entry at once. The rules:
+
+- **A hit takes no lock.** It reads the stamp, then the module file.
+  Each is replaced only by a rename of a complete temporary file, so
+  neither is ever torn, and the stamp names the module file by its
+  content. A module file renamed into place after the stamp was read
+  either has the same bytes (the writer is deterministic: every compile
+  of one key writes the same file) or fails the stamp and is a miss.
+- **A miss takes the entry lock.** `<name>.lock` in the entry, an
+  advisory exclusive lock (`flock`, `File::try_lock`, polled with a
+  back-off of 1 to 50 ms). The kernel releases it when its holder exits,
+  a SIGKILL included. Holding it, the compile checks the entry again: a
+  compile that waited finds what the holder published and uses it. So
+  one compile per entry builds and the others wait, instead of every one
+  of them building.
+- **The holder clears and publishes.** Only a holder writes the
+  temporary files of `<name>` (`<name>.pcm.tmp.*`, written by
+  `--precompile`, and `<name>.stamp.tmp.*`), so any it finds were left by
+  a killed holder, and it removes them. It then builds into
+  `<name>.pcm` (renamed into place) and writes the stamp (renamed into
+  place) last. A failed build removes the entry directory when nothing
+  else is in it.
+- **The lock file does not outlive its holder.** The holder removes
+  `<name>.lock` while it still holds the lock, then releases it. A
+  waiter that then gets the lock checks that the file it locked is still
+  the one at the path (device and inode); if not, it opens the path
+  again. A lock file left by a killed holder is removed by the next
+  compile that takes it, or by the next hit when no one holds it. A
+  settled entry holds exactly `<name>.pcm` and `<name>.stamp`.
+- **Waiting is bounded.** A waiter gives up after 120 seconds
+  (`KILN_MODULE_CACHE_WAIT_MS` replaces the limit, in milliseconds; for
+  kiln's tests) and builds the module from its source (part A), leaving
+  the entry alone. So a stuck compile delays the others, never fails
+  them. An error taking the lock (a file system without locks, an
+  unwritable entry) also falls back to part A.
+- **Where locks do not exclude.** Some file systems accept `flock` but
+  do not enforce it between processes (a macOS directory mounted into a
+  Linux container). There every racer builds, renames and writes its
+  stamp, as before WP-1074. The content-named stamp keeps that correct:
+  whichever module file and stamp are renamed last, they match. A
+  temporary file removed by another racer's clean-up only fails that
+  racer's build, which falls back to part A.
+- `std.compat` is built under its own lock and imports `std` through
+  the cache, taking `std`'s lock inside it. Locks are always taken in
+  that order and held only for one lookup, so two compiles cannot
+  deadlock.
+
+Before WP-1074 there was no lock and the stamp named the module file by
+its modification time. The module file and the stamp renamed into place
+last could then come from different racers, and the entry left behind
+was a miss, rebuilt by the next compile (1 in 100 races of 4 compiles,
+about 1 in 12 of 16).
 
 **Fallback.** An unwritable root (a read-only directory, a path through
 a regular file), a failed build, or a failed stamp write is never an
@@ -1856,7 +2079,12 @@ interface or `stdapp`'s source never rebuilds the std module.
   - `std.compat` filling both entries;
   - invalidation by a header edit, a damaged module file, a new
     `std.cppm`, `-D` and `-fno-exceptions`;
-  - four racing misses;
+  - four racing misses, and (WP-1074) sixteen that build once, racers
+    with one killed (SIGKILL) at three points, a miss waiting on a held
+    entry lock and clearing a killed holder's temporary files, a stuck
+    holder's waiter falling back to part A, and a hit removing a stale
+    lock file (the lock tests skip where `flock` does not exclude, after
+    trying the system's temporary directory);
   - an unwritable root;
   - location and switches;
   - `-print-file-name=libc++.modules.json`.

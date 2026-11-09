@@ -617,6 +617,22 @@ impl Job<'_> {
         }
     }
 
+    /// With `-v`, one note per imported module file that holds a
+    /// declaration image: built from it, or replayed and why
+    /// (spec/modules.md §11.11 "Part 2a", "ODR merging").
+    pub(crate) fn note_image_imports(&self, pp: &Preprocessor<'_, '_>) {
+        if !self.args.verbose {
+            return;
+        }
+        let mut err = self.stderr.clone();
+        for i in pp.image_imports() {
+            let _ = match &i.replayed {
+                None => writeln!(err, "note: imported '{}' from its declaration image", i.key),
+                Some(why) => writeln!(err, "note: replayed '{}': {why}", i.key),
+            };
+        }
+    }
+
     /// Writes the main unit's module file once `pp` has read it to its
     /// end without errors (spec/modules.md §11.2, §11.6). A unit that is
     /// not importable is `--precompile`'s error, or `-fmodule-output`'s
@@ -667,7 +683,12 @@ impl Job<'_> {
         let mut kind = match carried {
             None => "kind 1, as -fkiln-bmi-kind=1 requests".to_owned(),
             Some(c) if consts.is_some() => {
-                format!("kind 2, carrying {} constant results", c.carried)
+                let inst = if c.inst_carried > 0 {
+                    format!(", {} inside template instantiations", c.inst_carried)
+                } else {
+                    String::new()
+                };
+                format!("kind 2, carrying {} constant results{inst}", c.carried)
             }
             Some(c) if decl_image.is_some() => {
                 format!("kind 2, carrying no constant result{}", skip(c))

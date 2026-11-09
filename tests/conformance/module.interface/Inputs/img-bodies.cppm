@@ -4,9 +4,9 @@
 // which the declaration image carries, so under `-fkiln-bmi-image` an
 // importer evaluates and inlines them from the image alone.
 export module imgb;
-// The namespace is not named `imgb`: the importer has interned the module
-// name, and the image is used only when none of its names is (spec
-// "ODR merging").
+// The namespace is not named `imgb` only for history: before WP-1096 a
+// namespace named like its module always replayed (spec "ODR merging";
+// image-gate-module-name-run.cpp covers that layout now).
 namespace ib {
 export constexpr int fact(int n) {
   int r = 1;

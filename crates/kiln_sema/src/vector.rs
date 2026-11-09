@@ -356,8 +356,8 @@ impl Sema<'_, '_> {
     /// GNU `format(archetype, F, A)` as written (WP-186; clang
     /// `handleFormatAttr`): exactly three arguments, an identifier then
     /// two integer constants. The archetype (`__x__` normalized to `x`)
-    /// is stored in `a`: [`FORMAT_PRINTF`] (checked at calls),
-    /// [`FORMAT_STRFTIME`] or [`FORMAT_OTHER`] (a format clang supports
+    /// is stored in `a`: [`FORMAT_PRINTF`] or [`FORMAT_SCANF`] (checked
+    /// at calls), [`FORMAT_STRFTIME`] or [`FORMAT_OTHER`] (a format clang supports
     /// that kiln does not check); an unknown one is ignored with a
     /// warning, and GCC's internal `gcc_*diag` silently. `b` = `F | A <<
     /// 16`, each saturated at `0xfffe` (a negative value is out of
@@ -393,9 +393,10 @@ impl Sema<'_, '_> {
             "printf" => FORMAT_PRINTF,
             "gnu_printf" if gnu22 => FORMAT_PRINTF,
             "strftime" => FORMAT_STRFTIME,
-            "scanf" | "printf0" | "strfmon" | "cmn_err" | "vcmn_err" | "zcmn_err" | "kprintf"
+            "scanf" => FORMAT_SCANF,
+            "gnu_scanf" if gnu22 => FORMAT_SCANF,
+            "printf0" | "strfmon" | "cmn_err" | "vcmn_err" | "zcmn_err" | "kprintf"
             | "freebsd_kprintf" | "os_trace" | "os_log" | "NSString" | "CFString" => FORMAT_OTHER,
-            "gnu_scanf" if gnu22 => FORMAT_OTHER,
             "gcc_diag" | "gcc_cdiag" | "gcc_cxxdiag" | "gcc_tdiag" => return None,
             _ => {
                 let msg =
@@ -845,10 +846,12 @@ impl Sema<'_, '_> {
 /// [`AttrKind::FORMAT`]'s `a`: a `printf` format, checked at calls.
 pub(crate) const FORMAT_PRINTF: u32 = 0;
 /// [`AttrKind::FORMAT`]'s `a`: a format clang supports that kiln does not
-/// check (`scanf`, `strfmon`, ...).
+/// check (`strfmon`, `NSString`, ...).
 pub(crate) const FORMAT_OTHER: u32 = 1;
 /// [`AttrKind::FORMAT`]'s `a`: `strftime` (no data arguments).
 pub(crate) const FORMAT_STRFTIME: u32 = 2;
+/// [`AttrKind::FORMAT`]'s `a`: a `scanf` format, checked at calls (WP-1073).
+pub(crate) const FORMAT_SCANF: u32 = 3;
 
 /// The name of the NEON vector attribute (`neon_polyvector_type` when
 /// `poly`).

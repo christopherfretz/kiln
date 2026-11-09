@@ -59,7 +59,7 @@ pub use include::{
 };
 pub use macros::{AttrMacro, MacroDef, MacroTable};
 pub use modules::{
-    DirectiveKind, ModuleDirective, ModuleOptions, StdModuleCache, has_module_lines,
+    DirectiveKind, ImageImport, ModuleDirective, ModuleOptions, StdModuleCache, has_module_lines,
 };
 pub use options::{ClangCompat, PpOptions};
 pub use predef::{ArmTarget, CmdMacro, OptLevel, PicModel, PredefConfig, build_predefines};

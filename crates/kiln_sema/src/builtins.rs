@@ -15,6 +15,7 @@ use kiln_ast::consts::{PtrBase, Scalar};
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, LinkageLang, builtin};
 use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, ValueCategory};
 use kiln_ast::expr::{SourceLocKind, SourceLocValues};
+use kiln_ast::ids::RawId;
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TargetTypes;
 use kiln_ast::types::{BuiltinType, CallConv, ExcSpec, FuncInfo, NoexceptValue, Quals, VectorKind};
@@ -215,6 +216,12 @@ impl Sema<'_, '_> {
     /// does (the errno-free rounding, `fabs`, `copysign`, `fma`, `fmax` /
     /// `fmin`, `fmaximum_num` / `fminimum_num` functions); everywhere
     /// else the call stays an ordinary call.
+    ///
+    /// WP-1073: the printf rows get an implicit `format(printf)` and the
+    /// scanf rows `format(scanf)`; `malloc`, `calloc`, `realloc`,
+    /// `aligned_alloc` and `memalign` get `alloc_size` (and the last two
+    /// `alloc_align(1)`), each unless written. The `finite` family's twin
+    /// is `__builtin_isfinite`.
     pub(crate) fn add_known_function_attrs(&mut self, f: DeclId, attrs: &mut Vec<AttrId>) {
         if let Some(p) = self.ast.prev(f) {
             if self.kind_of(f) == DeclKind::Function
@@ -225,26 +232,25 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(info) = self.lib_builtin_info(f) else { return };
-        if let Some(id) =
-            builtin::by_name_at(&format!("__builtin_{}", info.name), self.clang_compat)
-        {
+        if let Some(id) = builtin::lib_twin(info.name, self.clang_compat) {
             let _ = self.ast.decls.cold.lib_builtin.insert(f, id);
         }
         let loc = self.ast.decls.get(f).loc();
-        // WP-186: the printf family's implicit `format`, first (clang
-        // order), unless one is written.
-        if let Some((fmt, first)) = builtin::lib_printf_format(info.name)
-            && !attrs.iter().any(|&a| self.ast.attrs.get(a).kind == AttrKind::FORMAT)
+        let written = |k: AttrKind| attrs.iter().any(|&a| self.ast.attrs.get(a).kind == k);
+        let [has_format, has_align, has_size] =
+            [AttrKind::FORMAT, AttrKind::ALLOC_ALIGN, AttrKind::ALLOC_SIZE].map(written);
+        // WP-186 / WP-1073: the printf and scanf families' implicit
+        // `format`, first (clang order), unless one is written.
+        let format = match builtin::lib_printf_format(info.name) {
+            Some(f) => Some((crate::vector::FORMAT_PRINTF, f)),
+            None => builtin::lib_scanf_format(info.name).map(|f| (crate::vector::FORMAT_SCANF, f)),
+        };
+        if let Some((a, (fmt, first))) = format
+            && !has_format
         {
             let b = u32::from(fmt) | u32::from(first) << 16;
-            let n = AttrNode {
-                kind: AttrKind::FORMAT,
-                syntax: AttrSyntax::Gnu,
-                flags: 1,
-                loc,
-                a: 0,
-                b,
-            };
+            let n =
+                AttrNode { kind: AttrKind::FORMAT, syntax: AttrSyntax::Gnu, flags: 1, loc, a, b };
             attrs.push(self.ast.attrs.push(n));
         }
         // WP-806: an errno-setting math function is `const` without
@@ -270,6 +276,46 @@ impl Sema<'_, '_> {
         ] {
             if info.attrs & bit != 0 {
                 let n = AttrNode { kind, syntax: AttrSyntax::Gnu, flags: 1, loc, a: 0, b: 0 };
+                attrs.push(self.ast.attrs.push(n));
+            }
+        }
+        // WP-1073: the allocation functions' implicit `alloc_align` and
+        // `alloc_size`, last (clang `AddKnownFunctionAttributes`), unless
+        // written; the one-based parameter indices are `IntegerLiteral`s,
+        // as a written attribute's are.
+        if let Some((size, align)) = builtin::lib_alloc(info.name) {
+            let ty = self.size_type();
+            let lit = |s: &mut Self, v: u32| {
+                if v == 0 {
+                    0
+                } else {
+                    s.builder()
+                        .int_literal(ty, u64::from(v), kiln_ast::expr::Radix::Decimal, loc)
+                        .raw()
+                }
+            };
+            if align != 0 && !has_align {
+                let a = lit(self, align);
+                let n = AttrNode {
+                    kind: AttrKind::ALLOC_ALIGN,
+                    syntax: AttrSyntax::Gnu,
+                    flags: 1,
+                    loc,
+                    a,
+                    b: 0,
+                };
+                attrs.push(self.ast.attrs.push(n));
+            }
+            if !has_size {
+                let (a, b) = (lit(self, size[0]), lit(self, size[1]));
+                let n = AttrNode {
+                    kind: AttrKind::ALLOC_SIZE,
+                    syntax: AttrSyntax::Gnu,
+                    flags: 1,
+                    loc,
+                    a,
+                    b,
+                };
                 attrs.push(self.ast.attrs.push(n));
             }
         }

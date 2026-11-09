@@ -1236,6 +1236,7 @@ impl Sema<'_, '_> {
     /// pattern ([temp.inst]/4-5, §4.4). Nothing happens if `f` is already
     /// defined or its pattern has no definition (a link-time reference).
     pub fn instantiate_function_definition(&mut self, f: DeclId, poi: Loc) {
+        let f = self.member_redecl_instance(f);
         if self.ast.definition(f).is_some() || self.instantiation_stopped() {
             return;
         }
@@ -1258,6 +1259,14 @@ impl Sema<'_, '_> {
         self.instantiate_function_definition_inner(f, poi);
         self.inst.body_errors = body_errors + self.diags.error_count().saturating_sub(errors);
         self.mem_inits = outer;
+        // clang `InstantiateFunctionDefinition` ends with
+        // `HandleTopLevelDecl` (coverage's zero record for an
+        // instantiation never emitted, WP-1083).
+        if let Some(def) = self.ast.definition(f)
+            && self.ast.decls.function(def).is_some_and(|x| x.body.is_some())
+        {
+            self.ast.decls.note_fn_def_inst(def);
+        }
     }
 
     fn instantiate_function_definition_inner(&mut self, f: DeclId, poi: Loc) {
@@ -1757,6 +1766,18 @@ impl Sema<'_, '_> {
 
     /// The class template specialization member `f` was instantiated
     /// with.
+    /// The declaration of `f` instantiated from a pattern: `f` itself,
+    /// or the first declaration when `f` is a redeclaration that is not
+    /// (a friend `friend R B<T>::f(W<T>&);` in an instantiated `W<A>`
+    /// redeclaring the member of `B<A>`, [class.friend]/10; WP-1071).
+    pub(crate) fn member_redecl_instance(&self, f: DeclId) -> DeclId {
+        if self.ast.instantiated_from(f).is_some() {
+            return f;
+        }
+        let first = self.ast.first(f);
+        if first != f && self.ast.instantiated_from(first).is_some() { first } else { f }
+    }
+
     pub(crate) fn inst_owner(&self, f: DeclId) -> Option<DeclId> {
         let mut c = self.ast.decls.lexical_ctx(f).or_else(|| self.ast.decls.get(f).ctx());
         while let Some(x) = c {
@@ -1773,6 +1794,7 @@ impl Sema<'_, '_> {
     /// is constexpr (constant evaluation may need it), else queued for
     /// the end of the translation unit ([temp.point]/7).
     pub(crate) fn note_used_for_instantiation(&mut self, f: DeclId, loc: Loc) {
+        let f = self.member_redecl_instance(f);
         if self.ast.definition(f).is_some() || self.ast.instantiated_from(f).is_none() {
             return;
         }

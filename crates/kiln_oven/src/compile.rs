@@ -21,7 +21,7 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::failure::Note;
 use crate::kbc::{Op, ak, cce, cmp, int_aux, ptr_add_aux};
-use crate::mem::{Origin, fn_ptr};
+use crate::mem::{Origin, flags, fn_ptr};
 use crate::ty::{OTy, Scal, TyKind, eval_int};
 use crate::{Oven, SemaBridge};
 
@@ -102,6 +102,10 @@ pub(crate) struct Func {
     /// with virtual bases, which leaves them alone (spec/oven.md
     /// "Virtual bases"; Itanium C2/D2).
     pub base_obj: bool,
+    /// A constructor or destructor: the object its `this` designates is
+    /// not volatile while it runs ([class.ctor.general]/5,
+    /// [class.dtor]/5; `Oven::volatile_path`).
+    pub structor: bool,
 }
 
 /// The source of a faulting instruction.
@@ -327,6 +331,7 @@ impl Oven {
             this_reg: None,
             this_ty: None,
             base_obj: false,
+            structor: false,
         });
         self.func_map.insert(d, i);
         i
@@ -353,6 +358,7 @@ impl Oven {
             this_reg: None,
             this_ty: None,
             base_obj: true,
+            structor: false,
         });
         self.base_funcs.insert(d, i);
         i
@@ -427,6 +433,7 @@ impl Oven {
             this_reg: None,
             this_ty: None,
             base_obj: false,
+            structor: false,
         });
         let glvalue = b.ast().exprs.get(e).value_category().is_glvalue();
         let ref_ty = match object.filter(|&d| is_reference_var(b.ast(), d)) {
@@ -527,6 +534,7 @@ impl Oven {
             this_reg: None,
             this_ty: None,
             base_obj: false,
+            structor: false,
         });
         let mut c = Compiler::new(self, b);
         let entry = c.here();
@@ -577,6 +585,7 @@ impl Oven {
             this_reg: None,
             this_ty: None,
             base_obj: false,
+            structor: false,
         });
         let size_t = QualType::unqual(b.ast().types.target().size_t);
         let mut c = Compiler::new(self, b);
@@ -587,7 +596,7 @@ impl Oven {
         c.konst(t, u128::from(ty & 3));
         let n = c.reg();
         let begin = c.begin(p);
-        c.object_size(p, p, t, n, begin, false);
+        c.object_size(p, p, t, n, begin, false, Some(ty & 3));
         c.close_scope();
         c.emit(Op::Ret, 1, &[n]);
         let nregs = c.end_unit();
@@ -621,6 +630,7 @@ impl Oven {
             this_reg: None,
             this_ty: None,
             base_obj: false,
+            structor: false,
         });
         let mut c = Compiler::new(self, b);
         let entry = c.here();
@@ -701,6 +711,7 @@ impl Oven {
             this_reg: None,
             this_ty: None,
             base_obj: false,
+            structor: false,
         });
         Some(idx)
     }
@@ -736,6 +747,7 @@ impl Oven {
             this_reg: None,
             this_ty: None,
             base_obj: false,
+            structor: false,
         });
         Some(idx)
     }
@@ -967,6 +979,10 @@ impl Oven {
         } else {
             self.ctor_steps.insert(idx, steps.into_boxed_slice());
         }
+        let structor = matches!(
+            b.ast().decls.get(def).kind(),
+            DeclKind::CXXConstructor | DeclKind::CXXDestructor
+        );
         let f = &mut self.funcs[idx as usize];
         f.entry = entry;
         f.state = FState::Ready;
@@ -976,6 +992,7 @@ impl Oven {
         f.memo = memo;
         f.this_reg = this_reg;
         f.this_ty = this_ty;
+        f.structor = structor;
     }
 }
 
@@ -1444,13 +1461,40 @@ impl<'a> Compiler<'a> {
 
     fn alloc(&mut self, dst: u32, ty: OTy, origin: Origin, is_const: bool, e: ExprId) {
         let oi = self.o.push_origin(origin);
-        self.emit_at(Op::Alloc, u32::from(is_const), &[dst, ty.0, oi], e);
+        let fl = u32::from(is_const) | self.volatile_flag(ty, origin);
+        self.emit_at(Op::Alloc, fl, &[dst, ty.0, oi], e);
     }
 
     fn alloc_var(&mut self, dst: u32, ty: OTy, d: DeclId, is_const: bool) {
         let oi = self.o.push_origin(Origin::Var(d));
         let loc = self.b.ast().decls.get(d).loc();
-        self.emit_loc(Op::Alloc, u32::from(is_const), &[dst, ty.0, oi], loc);
+        let fl = u32::from(is_const) | self.volatile_flag(ty, Origin::Var(d));
+        self.emit_loc(Op::Alloc, fl, &[dst, ty.0, oi], loc);
+    }
+
+    /// The [`flags::VOLATILE`] bit of a frame object of type `ty` made
+    /// for `origin`: a volatile variable or temporary (recorded as such
+    /// for `Oven::volatile_path`), or one holding a volatile member
+    /// (WP-1019).
+    fn volatile_flag(&mut self, ty: OTy, origin: Origin) -> u32 {
+        let ast = self.b.ast();
+        let whole = match origin {
+            Origin::Var(d) => {
+                ast.decls.get(d).ty().is_some_and(|q| ast.types.effective_quals(q).is_volatile())
+            }
+            Origin::Temp(e) => ast.types.effective_quals(ast.exprs.get(e).ty()).is_volatile(),
+            _ => false,
+        };
+        match origin {
+            Origin::Var(d) if whole => {
+                self.o.volatile_decls.insert(d);
+            }
+            Origin::Temp(e) if whole => {
+                self.o.volatile_exprs.insert(e);
+            }
+            _ => {}
+        }
+        if whole || self.o.types.info(ty).has_volatile { u32::from(flags::VOLATILE) } else { 0 }
     }
 }
 
@@ -1926,6 +1970,12 @@ impl Compiler<'_> {
             return false;
         }
         if self.o.types.is_aggregate(ty) || self.mem_vars.contains(&d) {
+            return true;
+        }
+        // A volatile variable's reads go to its allocation, which
+        // diagnoses them ([expr.const]/10.8, WP-1019).
+        let ast = self.b.ast();
+        if ast.decls.get(d).ty().is_some_and(|q| ast.types.effective_quals(q).is_volatile()) {
             return true;
         }
         self.b.ast().decls.var(d).is_some_and(|v| v.init.is_none())
@@ -2815,17 +2865,7 @@ impl Compiler<'_> {
                 let m = self.next;
                 let ext = self.begin_extended(init);
                 self.bind_ref(init, r);
-                if self.o.clang_compat >= 22 {
-                    // [expr.add]/4: clang 22 rejects a reference to the
-                    // object past the end (WP-948).
-                    let rq = n.ty().unwrap_or(QualType::INT);
-                    let pq = self.b.ast().types.pointee(rq).unwrap_or(rq);
-                    let ty = self.ty(pq);
-                    let pc = self.emit(Op::RefChk, 0, &[r, ty.0]);
-                    // clang notes the initializer's start (`arr[3]`).
-                    let loc = self.begin(init);
-                    self.o.sites.push(Site { pc: pc as u32, loc, e: Some(init) });
-                }
+                self.ref_chk(r, n.ty().unwrap_or(QualType::INT), init);
                 self.end_extended(&ext);
                 self.next = m;
             }
@@ -3514,6 +3554,8 @@ impl Compiler<'_> {
         }
         let inc = matches!(op, UnaryOp::PostInc | UnaryOp::PreInc);
         let akind = if inc { ak::INCREMENT } else { ak::DECREMENT };
+        let x = self.ast().exprs.operand(e);
+        self.volatile_glvalue(x, akind, e);
         let old = self.reg();
         self.load(place, ty, akind, e, old);
         let new = self.reg();
@@ -4933,8 +4975,70 @@ impl Compiler<'_> {
         let saved = self.rmw_loc.replace(self.node(e).loc());
         let place = self.lv(a, Access::Write);
         self.rmw_loc = saved;
+        self.volatile_glvalue(a, ak::ASSIGN, e);
         self.store(place, r, ty, ak::ASSIGN, e);
         place
+    }
+
+    /// A modification `k` (at `e`) through glvalue `x` of volatile-qualified
+    /// type traps, as a read does (`LValueToRValue`; clang
+    /// `note_constexpr_access_volatile_type`, [expr.const]/10.8).
+    /// An assignment whose left operand names a union member (clang
+    /// `HandleUnionActiveMemberChange`) is checked there first, at the left
+    /// operand's location.
+    fn volatile_glvalue(&mut self, x: ExprId, k: u32, e: ExprId) {
+        let q = self.node(x).ty();
+        if q.quals_bits() & 2 != 0 {
+            let msg = format!(
+                "{} volatile-qualified type '{}' is not allowed in a constant expression",
+                ak::verb(k),
+                Oven::type_name(self.ast(), q)
+            );
+            let at = if k == ak::ASSIGN && self.names_union_member(x) { x } else { e };
+            self.trap(at, &msg);
+        }
+    }
+
+    /// Whether the member-access path of glvalue `x` (through `.`/`->`,
+    /// array subscripts and derived-to-base conversions, but not
+    /// parentheses, as clang walks it) names a union member.
+    fn names_union_member(&mut self, x: ExprId) -> bool {
+        let mut e = x;
+        loop {
+            let ast = self.ast();
+            let n = *ast.exprs.get(e);
+            match n.kind() {
+                ExprKind::MemberExpr => {
+                    let fd = ast.decls.get(ast.exprs.decl(e));
+                    if fd.kind() != DeclKind::Field || is_reference_decl(ast, ast.exprs.decl(e)) {
+                        return false;
+                    }
+                    let base = ExprId::new(n.a());
+                    let bt = self.ty(ast.exprs.get(base).ty());
+                    let rt = match self.kind(bt) {
+                        TyKind::Ptr(p) if n.has(kiln_ast::expr::ExprFlags::ARROW) => p,
+                        _ => bt,
+                    };
+                    if matches!(self.kind(rt), TyKind::Record { union: true, .. }) {
+                        return true;
+                    }
+                    e = base;
+                }
+                ExprKind::ArraySubscriptExpr => e = ast.exprs.operands(e)[0],
+                ExprKind::ImplicitCastExpr
+                    if matches!(
+                        ast.exprs.cast_kind(e),
+                        CastKind::NoOp
+                            | CastKind::DerivedToBase
+                            | CastKind::UncheckedDerivedToBase
+                            | CastKind::ArrayToPointerDecay
+                    ) =>
+                {
+                    e = ast.exprs.operand(e);
+                }
+                _ => return false,
+            }
+        }
     }
 
     fn compound_assign(&mut self, e: ExprId) -> Place {
@@ -4967,6 +5071,7 @@ impl Compiler<'_> {
         let place = self.lv_rmw(lhs, e);
         let ty = self.ety(lhs);
         let rty = self.ety(x.rhs);
+        self.volatile_glvalue(lhs, ak::COMPOUND, e);
         let old = self.reg();
         self.load(place, ty, ak::COMPOUND, e, old);
         let new = self.reg();
@@ -5505,11 +5610,31 @@ impl Compiler<'_> {
         r
     }
 
+    /// [expr.add]/4: clang 22 rejects binding a reference of type `rq`
+    /// (in register `r`) to the object past the end (WP-948), for a
+    /// variable or a data member (WP-1021); clang 19 and a parameter do
+    /// not check. clang notes the initializer's start (`arr[3]`).
+    fn ref_chk(&mut self, r: u32, rq: QualType, init: ExprId) {
+        if self.o.clang_compat < 22 {
+            return;
+        }
+        let pq = self.b.ast().types.pointee(rq).unwrap_or(rq);
+        let ty = self.ty(pq);
+        let pc = self.emit(Op::RefChk, 0, &[r, ty.0]);
+        let loc = self.begin(init);
+        self.o.sites.push(Site { pc: pc as u32, loc, e: Some(init) });
+    }
+
     fn init_field(&mut self, x: ExprId, p: u32, fi: crate::ty::FieldInfo, e: ExprId) {
         let q = self.elem_ptr(p, fi.offset, e);
         if is_reference_decl(self.ast(), fi.decl) {
             let r = self.reg();
             self.bind_ref(x, r);
+            // A lambda's init-capture is not checked (clang 22).
+            if self.ast().exprs.get(e).kind() != ExprKind::LambdaExpr {
+                let rq = self.ast().decls.get(fi.decl).ty().unwrap_or(QualType::INT);
+                self.ref_chk(r, rq, x);
+            }
             self.emit_at(Op::InitStore, 0, &[q, r, fi.ty.0], x);
             return;
         }

@@ -3,9 +3,9 @@
 // bodies with static locals and further literal and operator kinds,
 // imported by two translation units, which share one static local.
 export module imgc;
-// The namespace is not named `imgc`: the importer has interned the module
-// name, and the image is used only when none of its names is (spec
-// "ODR merging").
+// The namespace is not named `imgc` only for history: before WP-1096 a
+// namespace named like its module always replayed (spec "ODR merging";
+// image-gate-module-name-run.cpp covers that layout now).
 export namespace ic {
 inline int next() {
   static int calls = 0;

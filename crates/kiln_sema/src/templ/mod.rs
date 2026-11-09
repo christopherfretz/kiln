@@ -96,6 +96,12 @@ impl Sema<'_, '_> {
             self.templ.cur = h.list;
         }
     }
+
+    /// The parameters of the template heads from index `base` on (a
+    /// generic lambda's own heads), in order.
+    pub(crate) fn head_params_from(&self, base: usize) -> Vec<DeclId> {
+        self.templ.heads.iter().skip(base).flat_map(|h| h.params.iter().copied()).collect()
+    }
 }
 
 /// The template-declaration state the first declarator of a group
@@ -693,6 +699,12 @@ impl Sema<'_, '_> {
         {
             return;
         }
+        self.diag_template_param_shadow(name, loc, p);
+    }
+
+    /// "declaration of 'name' shadows template parameter" at `loc`, with
+    /// a note at the template parameter `p` ([temp.local]/6).
+    pub(crate) fn diag_template_param_shadow(&self, name: Symbol, loc: Loc, p: DeclId) {
         let msg = self
             .diag(DiagId::sema_template_param_shadow, loc)
             .arg(format!("'{}'", self.ast.symbols().as_str(name)));
@@ -1265,6 +1277,39 @@ impl Sema<'_, '_> {
         let list = self.templ.heads[innermost].list;
         self.templ.cur = list;
         list
+    }
+
+    /// The untaken written heads directly around the declaration being
+    /// declared, outermost first: each one's depth and parameter count
+    /// (the heads [`Self::take_template_head`] would match).
+    pub(crate) fn open_written_heads(&self) -> Vec<(u16, u16)> {
+        let floor = self.lambda_head_floor();
+        let mut open = Vec::new();
+        for (i, h) in self.templ.heads.iter().enumerate().rev() {
+            if h.taken || i < floor {
+                break;
+            }
+            if !h.invented {
+                let n = u16::try_from(h.params.len()).unwrap_or(u16::MAX);
+                open.push((h.depth, n));
+            }
+        }
+        open.reverse();
+        open
+    }
+
+    /// Takes every untaken head around the declaration being declared,
+    /// matching none to a class: a [temp.friend]/5 friend's heads are its
+    /// own (`template<class T> friend class A<T>::B;`).
+    pub(crate) fn take_open_heads(&mut self) {
+        self.templ.cur = None;
+        let floor = self.lambda_head_floor();
+        for (i, h) in self.templ.heads.iter_mut().enumerate().rev() {
+            if h.taken || i < floor {
+                break;
+            }
+            h.taken = true;
+        }
     }
 
     /// Forgets the pending `template<>` headers after a qualifier that

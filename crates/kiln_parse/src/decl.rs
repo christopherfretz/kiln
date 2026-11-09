@@ -1837,6 +1837,7 @@ impl Parser<'_, '_> {
     ) {
         let ty = self.s.act_dependent_name_at(nns, name, None, keyword, name_loc);
         self.s.note_tag_keyword_loc(name_loc, kw_loc);
+        ds.dependent_tag_name = Some(name_loc);
         if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
             ds.invalid = true;
             self.spec_error(&e, kw_loc);
@@ -2901,7 +2902,7 @@ impl Parser<'_, '_> {
             let last_qual = self.last_qualifier_name();
             let global = self.at(Punct::ColonColon);
             let saved = self.s.set_entering_context(true);
-            let qual = self.parse_nested_name();
+            let qual = self.parse_nested_name_nns();
             self.s.set_entering_context(saved);
             let qual = qual.unwrap_or_else(|()| {
                 // An invalid qualifier declares nothing (clang's
@@ -2912,6 +2913,8 @@ impl Parser<'_, '_> {
                 self.skip_nested_name_rest();
                 None
             });
+            d.qualifier_nns = qual.map(|q| q.nns);
+            let qual = qual.map(|q| q.ctx);
             d.global_qualifier = global && qual.is_some();
             if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
                 d.qualifier = qual;
@@ -3542,6 +3545,7 @@ impl Parser<'_, '_> {
             } else {
                 // An abbreviated function template's invented
                 // parameter ([dcl.fct]/22).
+                self.s.reject_placeholder_restrict(ds);
                 let constraint = ds.auto_constraint.take().map(|(c, a)| (c, a, ds.constraint_loc));
                 let pname = pd.name.map(|(n, _)| n);
                 let ty = self.s.act_on_invented_template_param(
@@ -3653,23 +3657,40 @@ impl Parser<'_, '_> {
         loop {
             let loc = self.loc();
             match self.kw() {
-                Some(k @ (Kw::Const | Kw::Volatile))
+                // GNU `__restrict` is a method qualifier too: `this` is
+                // then a restrict pointer (clang `ParseTypeQualifierListOpt`
+                // in `ParseFunctionDeclarator`).
+                Some(k @ (Kw::Const | Kw::Volatile | Kw::Restrict))
                     if exc.is_none() && ref_qual == RefQual::None =>
                 {
-                    let (q, sp) = if k == Kw::Const {
-                        (Quals::CONST, "const")
-                    } else {
-                        (Quals::VOLATILE, "volatile")
+                    let (q, sp, slot) = match k {
+                        Kw::Const => (Quals::CONST, "const", 0),
+                        Kw::Volatile => (Quals::VOLATILE, "volatile", 1),
+                        _ => (Quals::RESTRICT, "restrict", 3),
                     };
                     self.bump();
                     if d.chunks.is_empty() {
-                        d.fn_qual_locs[usize::from(k == Kw::Volatile)].get_or_insert(loc);
+                        d.fn_qual_locs[slot].get_or_insert(loc);
                     }
                     if quals.contains(q) {
                         let diag = self.s.diag(DiagId::parse_duplicate_decl_spec, loc).arg(sp);
                         self.emit(diag);
                     }
                     quals |= q;
+                }
+                // A clang nullability keyword after the parameter list is
+                // parsed and dropped (clang keeps it on the declarator's
+                // method qualifiers, outside the type); only the
+                // "cannot have '' qualifier" checks see it.
+                Some(k)
+                    if exc.is_none()
+                        && ref_qual == RefQual::None
+                        && nullability_kw(k).is_some() =>
+                {
+                    self.bump();
+                    if d.chunks.is_empty() {
+                        d.fn_nullability.get_or_insert(loc);
+                    }
                 }
                 Some(Kw::Noexcept | Kw::Throw) if exc.is_none() => {
                     if delayable

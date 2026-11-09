@@ -992,7 +992,7 @@ pub(crate) fn missing_exc_spec_fixit_loc(d: &Declarator) -> Option<Loc> {
     })??;
     // The innermost function declarator's qualifiers ([`Declarator::
     // fn_qual_locs`]): a ref-qualifier follows any cv-qualifiers.
-    let [c, v, r] = d.fn_qual_locs;
+    let [c, v, r, _] = d.fn_qual_locs;
     let last = match (r, ref_qual) {
         (Some(r), kiln_ast::types::RefQual::LValue) => Some((r, 1)),
         (Some(r), kiln_ast::types::RefQual::RValue) => Some((r, 2)),
@@ -1102,7 +1102,8 @@ impl Sema<'_, '_> {
     /// and lists with a dependent type or a pack expansion (the
     /// instantiation checks them), and a `computed` (implicit, defaulted
     /// or instantiated) `sub` against a list. The nested function-type
-    /// check (`CheckParamExceptionSpec`) is not done.
+    /// check (`CheckParamExceptionSpec`) is the caller's, with
+    /// [`Self::override_nested_exc_spec_error`].
     pub(crate) fn override_exc_spec_lax(&self, sup: ExcSpec, sub: ExcSpec, computed: bool) -> bool {
         let (base_bound, over_bound) = (exc_bound(sup), exc_bound(sub));
         if base_bound == ExcBound::Unknown || over_bound == ExcBound::Unknown {
@@ -1169,8 +1170,38 @@ impl Sema<'_, '_> {
         t.proto(f).map(|p| (exc, *p))
     }
 
+    /// clang `CheckParamExceptionSpec` for an overrider `m` of the
+    /// virtual function `o` (C++14 [except.spec]/5, kept by clang in
+    /// every mode): a function type among the return and parameter types
+    /// of `m` has an exception specification equivalent to the one in
+    /// the same place in `o`. The specifications are read as written.
+    pub(crate) fn override_nested_exc_spec_error(
+        &self,
+        o: DeclId,
+        m: DeclId,
+    ) -> Option<conv::ConvError> {
+        let oty = self.ast.decls.get(o).ty()?;
+        let mty = self.ast.decls.get(m).ty()?;
+        let (_, sup) = self.underlying_fn_proto(oty)?;
+        let (_, sub) = self.underlying_fn_proto(mty)?;
+        let t = &self.ast.types;
+        if t.params(&sup).len() != t.params(&sub).len() {
+            return None;
+        }
+        self.param_exc_specs_error(&sup, &sub)
+    }
+
     /// clang `CheckParamExceptionSpec`: function types in the return and
     /// parameter types of `sup` and `sub` have equivalent specifications.
+    /// `sup` is clang's target (the overridden function, or the
+    /// conversion's target type) and `sub` its source. Clang 19 and 22
+    /// compare EVERY target parameter with the source's FIRST one (the
+    /// source index in its loop is constant), and kiln matches them: an
+    /// overrider `void(int, void (*)())` of `void(int, void (*)()
+    /// noexcept)` is accepted (each base parameter meets `int`, which is
+    /// no function), while one of `void(void (*)(), void (*)()
+    /// noexcept)` written `void(void (*)(), void (*)())` is an error
+    /// (the base's second parameter meets the overrider's first).
     fn param_exc_specs_error(&self, sup: &FuncProto, sub: &FuncProto) -> Option<conv::ConvError> {
         let deep = |which: &str| {
             Some(conv::ConvError::new(
@@ -1182,9 +1213,8 @@ impl Sema<'_, '_> {
             return deep("0");
         }
         let t = &self.ast.types;
-        let pairs: Vec<(QualType, QualType)> =
-            t.params(sup).iter().copied().zip(t.params(sub).iter().copied()).collect();
-        if pairs.into_iter().any(|(a, b)| !self.exc_specs_equivalent(a, b)) {
+        let first = t.params(sub).first().copied()?;
+        if t.params(sup).iter().any(|&a| !self.exc_specs_equivalent(a, first)) {
             return deep("1");
         }
         None
@@ -1194,6 +1224,9 @@ impl Sema<'_, '_> {
     /// are (pointers or references to) function types whose exception
     /// specifications are not equivalent ([except.spec]/3 before C++17:
     /// both non-throwing, both throw anything, or the same type list).
+    /// As in clang `CheckEquivalentExceptionSpecImpl` (without
+    /// `AllowNoexceptAllMatchWithNoSpec`), no specification and
+    /// `noexcept(false)` are not equivalent.
     fn exc_specs_equivalent(&self, a: QualType, b: QualType) -> bool {
         let (Some((ea, _)), Some((eb, _))) =
             (self.underlying_fn_proto(a), self.underlying_fn_proto(b))
@@ -1201,11 +1234,16 @@ impl Sema<'_, '_> {
             return true;
         };
         let t = &self.ast.types;
+        let noexcept_false =
+            |e| matches!(e, ExcSpec::NoexceptExpr { value: NoexceptValue::False, .. });
         match (exc_bound(ea), exc_bound(eb)) {
             (ExcBound::Unknown, _)
             | (_, ExcBound::Unknown)
-            | (ExcBound::Cannot, ExcBound::Cannot)
-            | (ExcBound::Any, ExcBound::Any) => true,
+            | (ExcBound::Cannot, ExcBound::Cannot) => true,
+            (ExcBound::Any, ExcBound::Any) => {
+                !(ea == ExcSpec::None && noexcept_false(eb)
+                    || eb == ExcSpec::None && noexcept_false(ea))
+            }
             (ExcBound::Listed, ExcBound::Listed) => {
                 let (ExcSpec::Dynamic(la), ExcSpec::Dynamic(lb)) = (ea, eb) else { return true };
                 let canon = |l| -> Vec<QualType> {

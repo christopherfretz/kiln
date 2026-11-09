@@ -162,6 +162,10 @@ impl Sema<'_, '_> {
         // `friend void f(auto);` is an abbreviated friend function
         // template ([dcl.fct]/22): its invented head is the friend's.
         self.finish_invented_head();
+        // `template<class T> friend void A<T>::f();` ([temp.friend]/5).
+        if let Some(fd) = self.declare_member_friend_fn(ds, base, d, record) {
+            return Some(fd);
+        }
         let head = self.take_template_head(d.qualifier);
         if self.check_template_in_local_class(true, ds.lead_cxx11.unwrap_or(ds.loc)) {
             return None;
@@ -301,6 +305,12 @@ impl Sema<'_, '_> {
             self.reject_qualified_fn_type(base, ds.loc, false)
         };
         let loc = ds.type_loc.unwrap_or(friend_loc);
+        // `template<class T> friend class A<T>::Member;` ([temp.friend]/5).
+        if owned.is_none()
+            && let Some(fd) = self.declare_member_friend_class(ds, base, record, loc)
+        {
+            return Some(fd);
+        }
         let target = FriendTarget::Type { ty: base, owned_tag: owned };
         let fd = self.builder().friend(record, loc, target);
         // `friend class X<T>;` naming the current instantiation

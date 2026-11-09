@@ -106,6 +106,16 @@ pub(crate) struct ManglingState {
     /// template argument's lambda substituted at a use (clang gives each
     /// use a new closure type that mangles as the default's).
     pub(crate) inherited: Option<kiln_ast::lambda::LambdaMangling>,
+    /// The function whose template's specialization is being deduced and
+    /// its signature substituted: the template's pattern (clang
+    /// `DeduceTemplateArguments` runs under `ContextRAII(getTemplatedDecl())`).
+    /// A lambda created there at namespace or class level (in a return,
+    /// parameter or non-type template parameter type) is numbered in
+    /// that function and mangles as its local entity (`_ZZ3retT_EUlvE_`;
+    /// WP-1077).
+    /// With the template's semantic context, where those closures are
+    /// created.
+    pub(crate) signature: Option<(DeclId, DeclId)>,
     /// The last number given per numbering context (a function, or the
     /// variable, data member or parameter whose initializer holds the
     /// lambda) and <lambda-sig> (the explicit template parameters, the
@@ -140,6 +150,16 @@ impl ManglingState {
             j.extend(mine);
         }
     }
+}
+
+/// The [`ManglingState`] numbering sites a function template
+/// specialization's signature replaced ([`Sema::begin_signature_mangling`]).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SignatureSite {
+    var: Option<DeclId>,
+    default_arg: Option<DeclId>,
+    template_default: bool,
+    signature: Option<(DeclId, DeclId)>,
 }
 
 /// A lambda whose body is being analysed: what [`Sema`] saved on entry.
@@ -376,9 +396,11 @@ impl Sema<'_, '_> {
         let closure = top.closure;
         // [expr.prim.lambda.general]/6: a *template-parameter-list* or an
         // `auto` parameter makes the call operator a member template.
-        let generic = self.templ.heads.len() > top.heads;
+        let base_heads = top.heads;
+        let generic = self.templ.heads.len() > base_heads;
         let lbracket = self.ast.exprs.lambdas.get(id).lbracket;
         if generic {
+            self.check_capture_shadows_template_param(id, base_heads);
             self.finish_invented_head();
             self.take_innermost_head();
         }
@@ -546,6 +568,36 @@ impl Sema<'_, '_> {
         self.lambda_mangle.template_default = saved;
     }
 
+    /// Before the signature of a specialization of function template
+    /// `tmpl`, whose pattern is `pattern`, is deduced or substituted: the
+    /// enclosing numbering sites (a variable or default argument being
+    /// parsed) do not apply to the closures created there
+    /// ([`ManglingState::signature`]). Returns them for
+    /// [`Self::end_signature_mangling`].
+    pub(crate) fn begin_signature_mangling(
+        &mut self,
+        tmpl: DeclId,
+        pattern: DeclId,
+    ) -> SignatureSite {
+        let ctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
+        let m = &mut self.lambda_mangle;
+        SignatureSite {
+            var: m.var.take(),
+            default_arg: m.default_arg.take(),
+            template_default: std::mem::take(&mut m.template_default),
+            signature: m.signature.replace((pattern, ctx)),
+        }
+    }
+
+    /// After a signature begun by [`Self::begin_signature_mangling`].
+    pub(crate) fn end_signature_mangling(&mut self, saved: SignatureSite) {
+        let m = &mut self.lambda_mangle;
+        m.var = saved.var;
+        m.default_arg = saved.default_arg;
+        m.template_default = saved.template_default;
+        m.signature = saved.signature;
+    }
+
     /// Gives closure type `closure` of lambda `id` with call operator `f`
     /// its mangling number and context (clang `handleLambdaNumbering`):
     /// lambdas in the body of an inline or templated function (one in a
@@ -617,6 +669,26 @@ impl Sema<'_, '_> {
         // linkage is its namespace's or class's, none at file scope).
         if self.lambda_mangle.template_default
             && matches!(kind, DeclKind::TranslationUnit | DeclKind::Namespace | DeclKind::CXXRecord)
+        {
+            return Some((ctx, None));
+        }
+        // A function template specialization's signature: numbered in
+        // the template's pattern, its context declaration.
+        if let Some((p, c)) = self.lambda_mangle.signature
+            && c == ctx
+            && self.lambda_mangle.var.is_none()
+        {
+            return Some((p, Some(p)));
+        }
+        // A member's signature substituted while its class template is
+        // instantiated (clang `getCurrentMangleNumberContext`, `Normal`
+        // with `inTemplateInstantiation()`: numbered in the class; WP-1077).
+        // A variable whose initializer triggered the instantiation is not
+        // the closure's context (`void *g = S<int>::f()();`); a static
+        // data member of the class is.
+        if kind == DeclKind::CXXRecord
+            && self.lambda_mangle.var.is_none_or(|v| self.ast.decls.get(v).ctx() != Some(ctx))
+            && self.inst.stack.depth() > 0
         {
             return Some((ctx, None));
         }
