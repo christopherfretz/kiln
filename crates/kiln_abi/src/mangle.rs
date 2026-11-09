@@ -2712,12 +2712,18 @@ impl<'a, 'b> Mangler<'a, 'b> {
     fn float_literal(&mut self, ty: QualType, width: u32, bits: u128) {
         self.out.push('L');
         self.ty(ty);
+        self.float_hex(width, bits);
+        self.out.push('E');
+    }
+
+    /// clang `mangleFloat`: `bits` as `width.div_ceil(4)` lowercase hex
+    /// digits, most significant first.
+    pub(crate) fn float_hex(&mut self, width: u32, bits: u128) {
         let n = width.div_ceil(4);
         for i in (0..n).rev() {
             let d = (bits >> (4 * i)) & 0xf;
             self.out.push(char::from_digit(d as u32, 16).unwrap_or('0'));
         }
-        self.out.push('E');
     }
 
     /// `L <type> 0 E` (clang `mangleNullPointer`).
@@ -3333,6 +3339,13 @@ impl<'a, 'b> Mangler<'a, 'b> {
             TypeView::Complex(e) => {
                 self.out.push('C');
                 self.ty(e);
+            }
+            // clang `mangleType(const PackIndexingType *)`: the selected
+            // type once substituted, else the pattern alone (the index is
+            // not encoded); the indexing type itself is still a candidate
+            // after its pattern (spec/landed/abi/WP-1029.md).
+            TypeView::PackIndexing { pattern, selected, .. } => {
+                self.ty(selected.unwrap_or(pattern));
             }
             TypeView::Atomic(e) => {
                 self.out.push_str("U7_Atomic");

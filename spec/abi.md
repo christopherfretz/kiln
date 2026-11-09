@@ -1095,6 +1095,19 @@ TUs the names agree whenever the TUs agree on the first spelling, which
 is the same hazard clang has (`tests/codegen/dependent_expr_first_spelling.cpp`
 for both orders in one TU, `tests/conformance/temp.over.link/dependent-expr-first-spelling-two-units-run.cpp`
 for two linked TUs).
+**Expression forms and member qualifiers (WP-1029).** `__extension__ e`
+mangles as `e`, but makes a `decltype` operand `DT`. An imaginary literal
+is `L <complex type> <zero real> _ <imaginary> E` (`LCd0000000000000000_4000000000000000E`).
+A pack-index expression `p...[i]` writes nothing, and a pack-index type
+is its pattern while dependent and its own substitution candidate. A
+member access on an explicit object of dependent type keeps its
+qualifier as spelled: the first level is its identifier with no
+substitution (`t.T::f()` is `sr1TE1f`). Elsewhere a typedef level is its
+own name (`sr1P4SelfE`), a namespace alias its alias name, a
+substituted template parameter an unresolved type (`srS0_1m`) and a
+class template specialization its template-id (`sr1BIiEE1f`). The
+expression profile keeps those spellings apart (spec/types.md §7.2).
+Details, before/after names and the sweep: `spec/landed/abi/WP-1029.md`.
 
 ### 8.16 Landed (WP-204): constrained templates (`mangle/constraint.rs`)
 clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by

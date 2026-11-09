@@ -1757,10 +1757,17 @@ impl<'a> AstBuilder<'a> {
             _ => ValueCategory::PRValue,
         };
         let deps = self.deps(operand) | self.type_deps(ty);
+        // `__extension__` keeps the operand's object kind too (clang
+        // `CreateBuiltinUnaryOp`): `&__extension__ s.bf` is ill-formed.
+        let ok = if op == UnaryOp::Extension {
+            self.ast.exprs.get(operand).object_kind()
+        } else {
+            ObjectKind::Ordinary
+        };
         self.push_expr(
             ExprKind::UnaryOperator,
             vk,
-            ObjectKind::Ordinary,
+            ok,
             flags,
             deps,
             op as u8,
