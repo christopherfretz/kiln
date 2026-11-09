@@ -1,13 +1,12 @@
 // [module.interface], [module.reach], [module.import]/2: an importer sees
 // m's exported declarations (functions, inline functions, templates,
 // classes, namespaces, constexpr variables) and can use a reachable but
-// non-exported type through an exported function. m's interface is built
-// in-process from its source (spec/modules.md §2) and compiled as a
-// second input so its non-inline definitions are linked.
+// non-exported type through an exported function. m's interface is
+// compiled separately to a module file and an object (spec/modules.md
+// §11.7), so its non-inline definitions link exactly once.
 //@ expect: run
 //@ std: c++20
-//@ args: %{test_dir}/Inputs/m.cppm -fmodule-file=m=%{test_dir}/Inputs/m.cppm
-//@ skip(clang): clang needs a two-step --precompile build of Inputs/m.cppm that the harness cannot drive
+//@ module: m=Inputs/m.cppm
 import m;
 
 static_assert(sq(3) == 9);

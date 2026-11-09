@@ -1,12 +1,11 @@
 // [module.import]/7, [module.interface]/2: `export import a;` in b's
 // interface makes a's exported declarations visible to b's importers; a's
-// non-exported declarations stay invisible. The interfaces are built
-// in-process and compiled as extra inputs for their definitions.
+// non-exported declarations stay invisible. Each interface is compiled
+// separately to a module file and an object, b against a's module file.
 //@ expect: run
 //@ std: c++20
-//@ args: %{test_dir}/Inputs/a.cppm %{test_dir}/Inputs/b.cppm
-//@ args: -fmodule-file=a=%{test_dir}/Inputs/a.cppm -fmodule-file=b=%{test_dir}/Inputs/b.cppm
-//@ skip(clang): clang needs a two-step --precompile build of the Inputs modules that the harness cannot drive
+//@ module: a=Inputs/a.cppm
+//@ module: b=Inputs/b.cppm
 import b;
 
 int main() { return fa() + fb() == 12 ? 0 : 1; }

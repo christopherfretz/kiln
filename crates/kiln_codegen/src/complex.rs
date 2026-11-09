@@ -50,7 +50,7 @@ impl Cg<'_> {
     /// address of part `i` of the complex object of type `q` at `a`.
     pub(crate) fn cx_part_addr(&mut self, a: Addr, q: QualType, i: u32) -> Addr {
         let st = self.mty(q);
-        let eq = self.cx_elem(q).expect("complex type");
+        let eq = self.cx_elem(q).expect("Sema typed it _Complex");
         let et = self.mty(eq);
         let v = self.struct_gep(st, a.v, i);
         let align = if i == 0 { a.align } else { min_align(a.align, self.alloc_size(et)) };
@@ -96,7 +96,7 @@ impl Cg<'_> {
 
     /// The zero pair of the complex type `q`.
     fn cx_zero(&mut self, q: QualType) -> (V, V) {
-        let eq = self.cx_elem(q).expect("complex type");
+        let eq = self.cx_elem(q).expect("Sema typed it _Complex");
         let t = self.lty(eq);
         let z = V::C(self.m.const_zero(t));
         (z, z)
@@ -128,7 +128,7 @@ impl Cg<'_> {
         match n.kind() {
             ExprKind::ParenExpr => self.emit_cx(ast.exprs.operand(e), ign),
             ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
-                self.emit_cx(ast.exprs.choose_chosen(e).expect("guarded"), ign)
+                self.emit_cx(ast.exprs.choose_chosen(e).expect("match guard checked it"), ign)
             }
             ExprKind::ExprWithCleanups => {
                 let sc = self.begin_scope(false);
@@ -282,7 +282,7 @@ impl Cg<'_> {
             }
             CastKind::FloatingRealToComplex | CastKind::IntegralRealToComplex => {
                 let v = self.emit_scalar(s)?;
-                let eq = self.cx_elem(q).expect("complex type");
+                let eq = self.cx_elem(q).expect("Sema typed it _Complex");
                 let v = self.conv(v, sq, eq);
                 let t = self.f.fir.ty(&self.m, v);
                 Ok((Some(v), Some(V::C(self.m.const_zero(t)))))
@@ -301,8 +301,8 @@ impl Cg<'_> {
     /// clang `EmitComplexToComplexCast`: each present part converted.
     /// `loc`: the float-cast-overflow check location.
     fn cx_convert(&mut self, (r, i): Cx, from: QualType, to: QualType, loc: Option<Loc>) -> R<Cx> {
-        let fe = self.cx_elem(from).expect("complex type");
-        let te = self.cx_elem(to).expect("complex type");
+        let fe = self.cx_elem(from).expect("Sema typed it _Complex");
+        let te = self.cx_elem(to).expect("Sema typed it _Complex");
         let r = r.map(|v| self.conv_at(v, fe, te, loc)).transpose()?;
         let i = i.map(|v| self.conv_at(v, fe, te, loc)).transpose()?;
         Ok((r, i))
@@ -352,7 +352,7 @@ impl Cg<'_> {
     /// old and new values.
     pub(crate) fn cx_inc_dec(&mut self, lv: LV, inc: bool) -> R<((V, V), (V, V))> {
         let old = self.cx_load(lv.addr, lv.q, ALL);
-        let (Some(r), Some(i)) = old else { unreachable!("both parts loaded") };
+        let (Some(r), Some(i)) = old else { unreachable!("cx_load(ALL) loads both parts") };
         let t = self.f.fir.ty(&self.m, r);
         let step = if inc { 1.0 } else { -1.0 };
         let next = if self.is_float_ty(t) {
@@ -374,7 +374,7 @@ impl Cg<'_> {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
                 let ty = ast.exprs.get(e).ty();
                 if let Some(fty) = self.cx_promotion(ty) {
-                    let eq = self.cx_elem(ty).expect("complex type");
+                    let eq = self.cx_elem(ty).expect("Sema typed it _Complex");
                     let (r, i) = self.emit_cx_promoted(e, fty)?;
                     let f = QualType::FLOAT;
                     return Ok((Some(self.conv(r, f, eq)), Some(self.conv(i, f, eq))));
@@ -440,7 +440,7 @@ impl Cg<'_> {
             _ => BinaryOp::Add,
         };
         let ty = ca.result_ty;
-        let ceq = self.cx_elem(ty).expect("complex computation type");
+        let ceq = self.cx_elem(ty).expect("Sema: _Complex computation type");
         let rq = ast.exprs.get(ca.rhs).ty();
         let pt = self.cx_promotion(ty);
         let rhs = if let Some(fty) = pt {
@@ -496,7 +496,7 @@ impl Cg<'_> {
         to: QualType,
         loc: Option<Loc>,
     ) -> R<V> {
-        let fe = self.cx_elem(from).expect("complex type");
+        let fe = self.cx_elem(from).expect("Sema typed it _Complex");
         if self.is_bool(to) {
             let r = self.conv(r, fe, to);
             let i = self.conv(i, fe, to);
@@ -556,14 +556,14 @@ impl Cg<'_> {
             return Ok((Some(r), Some(i)));
         }
         let v = self.emit_cx(x, ALL)?;
-        let eq = self.cx_elem(q).expect("complex type");
+        let eq = self.cx_elem(q).expect("Sema typed it _Complex");
         Ok(self.cx_ext(v, eq))
     }
 
     /// clang `EmitBinAdd`/`Sub`/`Mul`/`Div`.
     fn cx_arith(&mut self, op: BinaryOp, o: &Ops) -> R<(V, V)> {
-        let (Some(a), b) = o.lhs else { unreachable!("real part") };
-        let (Some(c), d) = o.rhs else { unreachable!("real part") };
+        let (Some(a), b) = o.lhs else { unreachable!("complex operand has a real part") };
+        let (Some(c), d) = o.rhs else { unreachable!("complex operand has a real part") };
         let t = self.f.fir.ty(&self.m, a);
         let float = self.is_float_ty(t);
         let missing = || err(None, "integer complex arithmetic on a real operand");
@@ -637,11 +637,11 @@ impl Cg<'_> {
         let cont = self.f.fir.create_block();
         let inan = self.f.fir.create_block();
         let lib_blk = self.f.fir.create_block();
-        let orig = self.f.fir.cur().expect("insert point");
+        let orig = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         let rnan = self.fcmp(FloatPredicate::Uno, re, re);
         self.unlikely_br(rnan, inan, cont)?;
         self.emit_block(inan, false);
-        let inan_b = self.f.fir.cur().expect("insert point");
+        let inan_b = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         let inanv = self.fcmp(FloatPredicate::Uno, im, im);
         self.unlikely_br(inanv, lib_blk, cont)?;
         self.emit_block(lib_blk, false);
@@ -653,7 +653,7 @@ impl Cg<'_> {
             _ => "__multc3",
         };
         let (lr, li) = self.cx_libcall(name, [a, b, c, d], o.ty)?;
-        let lib_end = self.f.fir.cur().expect("insert point");
+        let lib_end = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.br(cont);
         self.emit_block(cont, false);
         let rp = self
@@ -724,7 +724,7 @@ impl Cg<'_> {
         let (Some(b), Some(d)) = (b, d) else {
             return err(None, "integer complex arithmetic on a real operand");
         };
-        let eq = self.cx_elem(o.ty).expect("complex type");
+        let eq = self.cx_elem(o.ty).expect("Sema typed it _Complex");
         Ok(self.cx_div_algebraic(self.is_signed(eq), a, b, c, d))
     }
 
@@ -778,7 +778,7 @@ impl Cg<'_> {
         let ar = self.bin(BinOp::FMul, fl, a, r);
         let num = self.bin(BinOp::FSub, fl, b, ar);
         let ti = self.bin(BinOp::FDiv, fl, num, den);
-        let ge_end = self.f.fir.cur().expect("insert point");
+        let ge_end = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.br(cont);
         self.emit_block(lt, false);
         let r = self.bin(BinOp::FDiv, fl, c, d);
@@ -790,7 +790,7 @@ impl Cg<'_> {
         let br = self.bin(BinOp::FMul, fl, b, r);
         let num = self.bin(BinOp::FSub, fl, br, a);
         let fi = self.bin(BinOp::FDiv, fl, num, den);
-        let lt_end = self.f.fir.cur().expect("insert point");
+        let lt_end = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.br(cont);
         self.emit_block(cont, false);
         let re = self.f.fir.push(Op::Phi { ty: t, inc: vec![(tr, ge_end), (fr, lt_end)] }, t);
@@ -802,7 +802,7 @@ impl Cg<'_> {
     /// complex computation type `cq`, declared without attributes and
     /// called `nounwind`.
     fn cx_libcall(&mut self, name: &str, ops: [V; 4], cq: QualType) -> R<(V, V)> {
-        let eq = self.cx_elem(cq).expect("complex type");
+        let eq = self.cx_elem(cq).expect("Sema typed it _Complex");
         let sig = self.libcall_sig(cq, &[eq; 4]);
         let f = match self.m.get_function(name) {
             Some(f) => f,
@@ -831,11 +831,11 @@ impl Cg<'_> {
         self.emit_block(lb, false);
         self.prof_inc(Key::Expr(e));
         let x = self.cond_eval(start, |cg| cg.emit_complex(a))?;
-        let lb = self.f.fir.cur().expect("insert point");
+        let lb = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.emit_branch(cont);
         self.emit_block(rb, false);
         let y = self.cond_eval(start, |cg| cg.emit_complex(b))?;
-        let rb = self.f.fir.cur().expect("insert point");
+        let rb = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.emit_block(cont, false);
         let t = self.f.fir.ty(&self.m, x.0);
         let r = self.f.fir.push(Op::Phi { ty: t, inc: vec![(x.0, lb), (y.0, rb)] }, t);
@@ -849,11 +849,11 @@ impl Cg<'_> {
     pub(crate) fn cx_call_result(&mut self, sig_ret: &ArgKind, r: V, rq: QualType) -> (V, V) {
         let (ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. }) = sig_ret.clone()
         else {
-            unreachable!("direct return")
+            unreachable!("complex return is Direct or Extend")
         };
         let ct = self.ir(&coerce);
         if ct == self.mty(rq) {
-            let eq = self.cx_elem(rq).expect("complex type");
+            let eq = self.cx_elem(rq).expect("Sema typed it _Complex");
             let et = self.lty(eq);
             let re = self.f.fir.push(Op::ExtractValue { agg: r, idx: 0 }, et);
             let im = self.f.fir.push(Op::ExtractValue { agg: r, idx: 1 }, et);
@@ -864,7 +864,7 @@ impl Cg<'_> {
         self.coerced_store_sized(r, &coerce, t, size);
         match self.cx_load(t, rq, ALL) {
             (Some(re), Some(im)) => (re, im),
-            _ => unreachable!("both parts loaded"),
+            _ => unreachable!("cx_load(ALL) loads both parts"),
         }
     }
 
@@ -943,7 +943,7 @@ impl Cg<'_> {
         } else if self.is_complex(q) {
             match self.cx_load(a, q, ALL) {
                 (Some(re), Some(im)) => CallArg::Complex(re, im),
-                _ => unreachable!("both parts loaded"),
+                _ => unreachable!("cx_load(ALL) loads both parts"),
             }
         } else {
             CallArg::Scalar(self.load_scalar(a, q))

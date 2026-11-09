@@ -2244,16 +2244,20 @@ impl Compiler<'_> {
                 } else {
                     self.breakables.iter().rposition(|b| b.conts.is_some())
                 };
-                let Some(idx) = idx else {
-                    self.trap_loc(n.loc(), "kiln: 'break' or 'continue' outside a loop".into());
-                    return;
-                };
+                // A jump leaving a statement expression is unsupported
+                // (clang `note_constexpr_stmt_expr_unsupported`): one in
+                // a loop or switch header leaves it for the statement,
+                // whose breakable is not open yet (spec/sema.md §7.4a).
                 if let Some(&(at, outside)) = self.stmt_exprs.last()
-                    && idx < outside
+                    && idx.is_none_or(|i| i < outside)
                 {
                     self.trap_loc(at, STMT_EXPR_UNSUPPORTED.into());
                     return;
                 }
+                let Some(idx) = idx else {
+                    self.trap_loc(n.loc(), "kiln: 'break' or 'continue' outside a loop".into());
+                    return;
+                };
                 let depth =
                     if brk { self.breakables[idx].depth } else { self.breakables[idx].cont_depth };
                 self.exit_scopes(depth);

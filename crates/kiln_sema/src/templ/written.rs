@@ -65,6 +65,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Records the class-key `kw` of a dependent tag name written at
+    /// `name` (`class T::X`); nothing while instantiating.
+    pub fn note_tag_keyword_loc(&mut self, name: Loc, kw: Loc) {
+        if name.is_valid() && kw.is_valid() && self.inst.stack.is_empty() {
+            self.templ.tag_keyword_locs.insert(name, kw);
+        }
+    }
+
+    /// The class-key written before the dependent tag name at `name`, or
+    /// `name` when none was recorded.
+    pub(crate) fn tag_keyword_loc(&self, name: Loc) -> Loc {
+        self.templ.tag_keyword_locs.get(&name).copied().unwrap_or(name)
+    }
+
     /// The written location of `key` on `scope`'s side of its bound, or
     /// nearest to `anchor` when there is none there (or no scope applies
     /// to `anchor`).

@@ -391,12 +391,12 @@ impl Cg<'_> {
             }
             StmtKind::IndirectGotoStmt => self.emit_indirect_goto(s),
             StmtKind::BreakStmt => {
-                let j = self.f.jumps.last().expect("break outside a loop").brk;
+                let j = self.f.jumps.last().expect("Sema: break in a loop or switch").brk;
                 self.branch_through_cleanup(j);
                 Ok(())
             }
             StmtKind::ContinueStmt => {
-                let c = self.f.jumps.last().and_then(|j| j.cont).expect("continue outside a loop");
+                let c = self.f.jumps.last().and_then(|j| j.cont).expect("Sema: continue in a loop");
                 self.branch_through_cleanup(c);
                 Ok(())
             }
@@ -410,7 +410,7 @@ impl Cg<'_> {
             StmtKind::SwitchStmt => self.emit_switch(s),
             StmtKind::CaseStmt => self.emit_case(s),
             StmtKind::DefaultStmt => {
-                let sw = self.f.sw.expect("default outside a switch");
+                let sw = self.f.sw.expect("Sema: default in a switch");
                 self.emit_block_with_fallthrough(sw.default, Key::Stmt(s));
                 self.emit_stmt(ast.stmts.default_sub(s))
             }
@@ -476,7 +476,7 @@ impl Cg<'_> {
             self.store_return_value(e)?;
         }
         self.end_scope(sc);
-        let rd = self.f.ret_dest.expect("return destination");
+        let rd = self.f.ret_dest.expect("set by the prologue");
         self.branch_through_cleanup(rd);
         Ok(())
     }
@@ -491,18 +491,18 @@ impl Cg<'_> {
             self.emit_ignored(e)?;
         } else if ret_ref {
             let p = self.emit_ref_binding(e)?;
-            let slot = self.f.ret_slot.expect("return slot");
+            let slot = self.f.ret_slot.expect("is_none() returned above");
             self.store(p, slot.v, slot.align, false);
         } else if self.is_aggregate(q) || self.is_atomic_aggregate(q) {
-            let slot = self.f.ret_slot.expect("return slot");
+            let slot = self.f.ret_slot.expect("is_none() returned above");
             self.emit_agg_slot(e, slot, false, false)?;
         } else if self.is_complex(q) {
             let v = self.emit_complex(e)?;
-            let slot = self.f.ret_slot.expect("return slot");
+            let slot = self.f.ret_slot.expect("is_none() returned above");
             self.cx_store(v, slot, q);
         } else {
             let v = self.emit_scalar(e)?;
-            let slot = self.f.ret_slot.expect("return slot");
+            let slot = self.f.ret_slot.expect("is_none() returned above");
             if self.f.ret_kind == RetKind::Sret {
                 self.store_scalar(v, slot, q);
             } else {
@@ -525,7 +525,7 @@ impl Cg<'_> {
             }
             return Ok(());
         }
-        let cond = d.cond.expect("if condition");
+        let cond = d.cond.expect("Sema: if has a condition");
         let cond_end = self.di_expr_end(cond);
         let cond_scope = self.begin_lexical(ast.begin_loc(cond), cond_end);
         if let Some(i) = d.init {
@@ -658,7 +658,7 @@ impl Cg<'_> {
             Some(v) => self.emit_cond_var_decl(v)?.then_some(v),
             None => None,
         };
-        let cond = d.cond.expect("while condition");
+        let cond = d.cond.expect("Sema: while has a condition");
         let cv = self.eval_bool(cond)?;
         if let Some(v) = deferred {
             self.emit_binding_vars(v)?;
@@ -714,7 +714,7 @@ impl Cg<'_> {
             self.end_scope(sc);
         }
         self.emit_block(cond_d.blk, false);
-        let cond = d.cond.expect("do condition");
+        let cond = d.cond.expect("Sema: do has a condition");
         let cv = self.eval_bool(cond)?;
         self.f.jumps.pop();
         let const_false = matches!(self.cint(cv), Some((_, 0, _)));
@@ -764,7 +764,7 @@ impl Cg<'_> {
             };
             if d.cond_var.is_some() {
                 cont = Some(if d.inc.is_some() { self.jump_dest_here() } else { cond_d });
-                self.f.jumps.last_mut().expect("loop").cont = cont;
+                self.f.jumps.last_mut().expect("emit_for pushed its jump scope").cont = cont;
             }
             let cv = self.eval_bool(c)?;
             if let Some(v) = deferred {
@@ -790,7 +790,7 @@ impl Cg<'_> {
             self.end_scope(sc);
         }
         if let Some(inc) = d.inc {
-            let c = cont.expect("continue destination");
+            let c = cont.expect("set when there is an increment");
             self.emit_block(c.blk, false);
             self.dbg_expr_stmt(inc);
             self.emit_ignored(inc)?;
@@ -948,7 +948,7 @@ impl Cg<'_> {
         self.emit_stmt(d.body)?;
         self.f.jumps.pop();
         // `setDefaultDest(CaseRangeBlock)`.
-        let head = self.f.sw.expect("switch").range_head;
+        let head = self.f.sw.expect("emit_switch set f.sw").range_head;
         if head != default {
             self.f.fir.set_successor(inst, default, head);
         }
@@ -983,7 +983,7 @@ impl Cg<'_> {
                 }
                 return self.emit_case_range(b, cd.lhs, rhs, cd.sub);
             }
-            let sw = self.f.sw.expect("case outside a switch");
+            let sw = self.f.sw.expect("Sema: case in a switch");
             // clang `EmitCaseStmt`: with InstrProf counters, each of a
             // run of cases takes its own block.
             if !first && self.instr_regions() {
@@ -995,7 +995,7 @@ impl Cg<'_> {
                 V::C(self.m.const_int(sw.cond_ty, v))
             } else {
                 // A wide `_BitInt` value: its constant (WP-465).
-                let c = self.folds.get(cd.lhs).expect("case value folds");
+                let c = self.folds.get(cd.lhs).expect("Sema folded the case value");
                 let q = ast.exprs.get(cd.lhs).ty();
                 V::C(self.const_scalar_value(c, q)?)
             };
@@ -1017,9 +1017,9 @@ impl Cg<'_> {
     /// default.
     fn emit_case_range(&mut self, dest: Blk, lo: ExprId, hi: ExprId, sub: StmtId) -> R<()> {
         self.emit_stmt(sub)?;
-        let mut sw = self.f.sw.expect("case outside a switch");
-        let lo = self.fold_int(lo).expect("case value folds");
-        let hi = self.fold_int(hi).expect("case value folds");
+        let mut sw = self.f.sw.expect("Sema: case in a switch");
+        let lo = self.fold_int(lo).expect("Sema folded the case value");
+        let hi = self.fold_int(hi).expect("Sema folded the case value");
         if hi < lo {
             return Ok(());
         }

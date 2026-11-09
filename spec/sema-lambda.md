@@ -237,6 +237,15 @@ numbered per parameter (`d_` in the local name) when the function is a
 member defined in its class, and otherwise has no number and mangles as
 the function's local `$_N` (`_ZZ4dfltIiEiPFivEEN3$_0clEv`; WP-203,
 `tests/codegen/lambda_default_arg_template.cpp`).
+A default template argument ([temp.param]/10) is substituted at each use
+with `ManglingState.template_default` set (`templ/args.rs`
+`default_template_arg_in`; `templ/member.rs` when a class template
+specialization redeclares its member template). A closure created there
+at namespace or class scope is a new type at each use and is numbered
+per <lambda-sig> in that scope, with no context declaration (clang 19
+and 22: `f() + f()` calls `f<UlvE_>` and `f<UlvE0_>`; WP-1062,
+`tests/conformance/temp.param/lambda-default-arg-mangling-two-units-run.cpp`).
+The closure parsed in the default itself gets no number.
 
 ## 4. Captures
 

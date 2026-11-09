@@ -1108,6 +1108,23 @@ substituted template parameter an unresolved type (`srS0_1m`) and a
 class template specialization its template-id (`sr1BIiEE1f`). The
 expression profile keeps those spellings apart (spec/types.md §7.2).
 Details, before/after names and the sweep: `spec/landed/abi/WP-1029.md`.
+**Pack indexes, lambdas, unresolved qualifiers (WP-1060).** A
+`pack...[i]` that template substitution resolved still writes nothing:
+clang 19 and 22 keep a non-dependent `PackIndexingExpr` in the
+signature, so `Y<1, 2>::g` with `decltype(u + I...[1])` is `DTplfp_E`
+(`TemplateTables::pack_index_origin` maps the selected element to its
+pack-index expression). A lambda-expression in a dependent signature is
+`L <closure type> E` (clang `LambdaExprClass`): the closure of
+`decltype([]{ return 12; }())` in a template parameter type is
+unnumbered, `$_N`. A lambda in a default template argument is a new
+closure type at each use ([temp.param]/10, as clang), numbered then per
+<lambda-sig> in the template's namespace or class (clang
+`getCurrentMangleNumberContext` in an instantiation): two uses of
+`template<class T = decltype([]{})> int f()` call `f<UlvE_>` and
+`f<UlvE0_>`; the closure has its namespace's or class's linkage, none at
+file scope. Non-member unresolved names (`gs`, `sr`, `srN`) were audited
+against clang for global-, nested- and template-qualified names and need
+no change. Details: `spec/landed/abi/WP-1060.md`.
 
 ### 8.16 Landed (WP-204): constrained templates (`mangle/constraint.rs`)
 clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by

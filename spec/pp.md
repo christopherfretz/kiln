@@ -91,7 +91,12 @@ The core does the following itself:
 - passes the `lookup_index` of the includer as `lookup_from` for
   `#include_next`;
 - enforces `max_include_depth`, `#pragma once`, `#import` and the
-  include-guard optimization (below);
+  include-guard optimization (below). The depth check comes after the
+  guard and once skips, so a file that would be skipped is never
+  reported as too deep. After the first "#include nested too deeply"
+  error, a file that was already entered is not entered again (clang
+  `HasReachedMaxIncludeDepth`). This keeps an include cycle with several
+  back edges linear instead of exponential (WP-971);
 - enters the file and reports `FileChange`.
 
 The core marks a header `extern_c` (line-marker flags `3 4`) when the
