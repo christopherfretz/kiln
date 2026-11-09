@@ -1837,7 +1837,8 @@ impl Sema<'_, '_> {
     /// Whether the function declared by `d` with parameters `params` is an
     /// explicit object member function ([dcl.fct]/6, P0847): its first
     /// parameter is an explicit object parameter. Diagnoses one anywhere
-    /// else, in a static, virtual or non-member function (`Some(false)`:
+    /// else, in a static (`implicit_static`: an allocation function,
+    /// [class.free]/1), virtual or non-member function (`Some(false)`:
     /// the declaration is invalid, as clang's `setInvalidType`), with a
     /// default argument or as a pack. (Its cv- and ref-qualifiers are
     /// [`Sema::drop_invalid_fn_quals`]'.) `None`: no explicit object
@@ -1847,6 +1848,7 @@ impl Sema<'_, '_> {
         ds: &DeclSpec,
         params: &[ParamInfo],
         method: bool,
+        implicit_static: bool,
     ) -> Option<bool> {
         for p in params.iter().skip(1) {
             if p.explicit_object.is_some() {
@@ -1858,7 +1860,7 @@ impl Sema<'_, '_> {
         let this_loc = first.explicit_object?;
         let which = if !method {
             Some(2u8)
-        } else if ds.storage.is_some_and(|(s, _)| s == StorageSpec::Static) {
+        } else if implicit_static || ds.storage.is_some_and(|(s, _)| s == StorageSpec::Static) {
             Some(0)
         } else if ds.virtual_.is_some() {
             Some(1)
@@ -3951,7 +3953,7 @@ impl Sema<'_, '_> {
         // qualifiers (a friend's, in its class, after them).
         let early_explicit_object = (!method && !friend && explicit_object).then(|| {
             let params = d.function_params().unwrap_or_default();
-            self.explicit_object_member(ds, params, false)
+            self.explicit_object_member(ds, params, false, false)
         });
         let fn_chunk = matches!(d.chunks.first(), Some(Chunk::Function { .. }));
         let ty = if (!method || explicit_object) && fn_chunk {
@@ -4601,7 +4603,14 @@ impl Sema<'_, '_> {
         };
         let eo = match early_explicit_object {
             Some(r) => r,
-            None => self.explicit_object_member(ds, &params, method),
+            // [class.free]/1: a class-specific allocation or
+            // deallocation function is implicitly static.
+            None => self.explicit_object_member(
+                ds,
+                &params,
+                method,
+                method && spec.storage() == FnStorage::Static,
+            ),
         };
         match eo {
             Some(true) => spec = spec.with_explicit_object(true),

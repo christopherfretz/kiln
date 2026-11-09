@@ -167,6 +167,32 @@ impl Sema<'_, '_> {
                 self.check_overrides_final(site.name, d.name_loc(), o);
             }
         }
+        // CWG2553 ([class.virtual]/2, [dcl.fct]/6): an explicit object
+        // member function whose other parameters match a base's virtual
+        // function would override it, and a virtual function cannot have
+        // an explicit object parameter (clang `CheckExplicitObjectOverride`,
+        // at the object parameter, noting each overridden function; the
+        // declaration is invalid, so -Woverloaded-virtual skips it).
+        if let Some(this_loc) =
+            d.function_params().and_then(|ps| ps.first()).and_then(|p| p.explicit_object)
+            && site.method
+            && site.in_class
+            && !site.friend
+            && site.prev.is_none()
+            && self.templ.cur.is_none()
+            && !is_static
+            && ds.virtual_.is_none()
+        {
+            for o in self.explicit_object_overridden(site.class, site.name, ty) {
+                let msg = self
+                    .diag(DiagId::sema_explicit_object_param_nonmember, this_loc)
+                    .arg(1u8)
+                    .arg(0u8)
+                    .with_note(self.overridden_note(o));
+                self.emit(msg);
+                out.invalid = true;
+            }
+        }
         self.check_override_control(d, ty, site, spec, &mut out);
         // [class.abstract]/2: a pure-specifier on a virtual function.
         if let Some(_zero) = d.pure {
@@ -334,6 +360,52 @@ impl Sema<'_, '_> {
                 }
                 let mty = s.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
                 if s.is_method_overload(ty, mty) {
+                    continue;
+                }
+                if !out.contains(&m) {
+                    out.push(m);
+                }
+                return true;
+            }
+            false
+        });
+        out
+    }
+
+    /// [`Sema::overridden_methods`] for an explicit object member
+    /// function of type `ty` (CWG2553; clang `IsOverride`'s override
+    /// rules): its parameters after the object parameter and its
+    /// variadic-ness match, whatever the object parameter's type and the
+    /// base function's cv- and ref-qualifiers.
+    fn explicit_object_overridden(
+        &self,
+        class: DeclId,
+        name: DeclName,
+        ty: QualType,
+    ) -> Vec<DeclId> {
+        let t = &self.ast.types;
+        let Some(pa) = t.proto(ty) else { return Vec::new() };
+        let Some((_, xa)) = t.params(pa).split_first() else { return Vec::new() };
+        let va = pa.info().variadic();
+        let mut out = Vec::new();
+        let mut seen_v = FxHashSet::default();
+        self.overridden_walk(class, &mut seen_v, 0, &mut |s, b| {
+            for x in s.ast.lookup_local(b, name).iter() {
+                if !is_method_kind(s.kind_of(x)) {
+                    continue;
+                }
+                let m = s.ast.first(x);
+                if !is_virtual(&s.ast, m) {
+                    continue;
+                }
+                let mty = s.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
+                let t = &s.ast.types;
+                let Some(pb) = t.proto(mty) else { continue };
+                let xb = t.params(pb);
+                if xa.len() != xb.len()
+                    || !xa.iter().zip(xb).all(|(x, y)| t.same_type(*x, *y))
+                    || va != pb.info().variadic()
+                {
                     continue;
                 }
                 if !out.contains(&m) {

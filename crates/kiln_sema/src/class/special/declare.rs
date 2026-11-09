@@ -225,7 +225,7 @@ impl Sema<'_, '_> {
         // function makes the declaration invalid (clang
         // `CheckExplicitObjectMemberFunction` runs first).
         let eo = if !xobj || matches!(shape, Shape::Conv(_) | Shape::Assign) {
-            self.explicit_object_member(ds, &params, true)
+            self.explicit_object_member(ds, &params, true, false)
         } else {
             None
         };
