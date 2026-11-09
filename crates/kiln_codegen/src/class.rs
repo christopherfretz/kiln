@@ -2487,6 +2487,26 @@ pub(crate) fn is_pod(ast: &kiln_ast::Ast, q: QualType) -> bool {
     }
 }
 
+/// clang `QualType::isTriviallyCopyableType` ([basic.types.general]/9):
+/// scalar types, trivially copyable classes and arrays of either.
+pub(crate) fn is_trivially_copyable(ast: &kiln_ast::Ast, q: QualType) -> bool {
+    let mut q = q;
+    loop {
+        q = match ast.types.canonical_view(q) {
+            TypeView::ConstantArray(a) => a.elem,
+            TypeView::IncompleteArray(e) | TypeView::VariableArray { elem: e, .. } => e,
+            _ => break,
+        };
+    }
+    match ast.types.as_record(q) {
+        Some(r) => ast
+            .definition(r)
+            .and_then(|d| ast.decls.record(d))
+            .is_some_and(|r| r.defn.contains(DefinitionBits::TRIVIALLY_COPYABLE)),
+        None => !ast.types.is_reference(q),
+    }
+}
+
 /// clang `CXXOperatorCallExpr::isAssignmentOp`.
 fn is_assignment_operator(op: kiln_ast::names::OverloadedOperator) -> bool {
     use kiln_ast::names::OverloadedOperator as O;
