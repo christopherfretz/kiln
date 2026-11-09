@@ -1425,8 +1425,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         }
         for d in decl {
             let class_tmpl = |x: u32| {
-                matches!(img.decls.get(x as usize).map(|r| &r.payload),
-                    Some(Payload::Template { kind: 1, .. }))
+                matches!(
+                    img.decls.get(x as usize).map(|r| &r.payload),
+                    Some(Payload::Template { kind: 1, .. })
+                )
             };
             let ok = img.decls.get(d as usize).is_some_and(|r| {
                 matches!(
@@ -1436,7 +1438,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         | (TyRec::Record(_), Payload::Record { .. })
                         | (TyRec::ElabQ(..), Payload::Namespace)
                         | (TyRec::Ttp(_), Payload::Ttp { .. })
-                        | (TyRec::Injected(_) | TyRec::Tst { .. }, Payload::Template { kind: 1, .. })
+                        | (
+                            TyRec::Injected(_) | TyRec::Tst { .. },
+                            Payload::Template { kind: 1, .. }
+                        )
                         | (TyRec::Subst { .. }, Payload::Template { .. })
                 ) || matches!((t, &r.payload),
                     (TyRec::Record(_), Payload::Spec { template, .. }) if class_tmpl(*template))
@@ -1530,8 +1535,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     kind_of(*spec).is_some_and(|sr| match sr.payload {
                         Payload::Spec { template, complete: true, .. } => {
                             match img.decls[template as usize].payload {
-                                Payload::Template { kind: 1, pattern: p, .. } => {
-                                    kind_of(*pattern).is_some_and(|m| {
+                                Payload::Template { kind: 1, pattern: p, .. } => kind_of(*pattern)
+                                    .is_some_and(|m| {
                                         m.ctx == p
                                             && m.lexical == NONE
                                             && matches!(
@@ -1540,8 +1545,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                                                     | Payload::Var { .. }
                                                     | Payload::Field { .. }
                                             )
-                                    })
-                                }
+                                    }),
                                 _ => false,
                             }
                         }
@@ -1980,7 +1984,7 @@ impl Writer<'_, '_, '_> {
         let r = self.recs.get(&d).copied().ok_or("a type declared outside the image")?;
         match self.s.ast.decls.get(d).ty() {
             Some(q) if q.ty() == t && q.quals_bits() == 0 => Ok(r),
-            _ => { eprintln!("DBG1139 type_decl {:?}", self.s.ast.decls.get(d).kind()); Err("a type the image does not carry") },
+            _ => Err("a type the image does not carry"),
         }
     }
 
@@ -2083,7 +2087,7 @@ impl Writer<'_, '_, '_> {
                 }
                 TyRec::QArray(quals.bits(), self.qref(QualType::unqual(base))?)
             }
-            v => { eprintln!("DBG1139 ty {v:?}"); return Err("a type the image does not carry") },
+            _ => return Err("a type the image does not carry"),
         };
         let i = BUILTINS + 1 + self.img.types.len() as u32;
         self.img.types.push(rec);
@@ -3038,8 +3042,7 @@ impl Sema<'_, '_> {
         // The writer's own output must pass the reader's checks (a body
         // shape the schema and the AST disagree on is a fallback, never
         // a corrupt module file).
-        if let Err(e) = decode(&bytes) {
-            eprintln!("DBG1139 decode {e:?}");
+        if decode(&bytes).is_err() {
             return none("an internal image inconsistency");
         }
         Some(ModuleImage { bytes, decls, fallback: None })
@@ -3341,8 +3344,11 @@ impl Sema<'_, '_> {
                     let (t, l, rr) = (lo(self, *tloc), lo(self, *langle), lo(self, *rangle));
                     let list = self.builder().template_param_list(t, l, rr, *depth, &ps, None);
                     let pat = ids[*pattern as usize];
-                    let k =
-                        if *kind == 1 { DeclKind::ClassTemplate } else { DeclKind::FunctionTemplate };
+                    let k = if *kind == 1 {
+                        DeclKind::ClassTemplate
+                    } else {
+                        DeclKind::FunctionTemplate
+                    };
                     self.builder().template_decl(k, pat, list, None)
                 }
                 Payload::Spec { .. } => {
@@ -3587,8 +3593,13 @@ impl Sema<'_, '_> {
             }
             TyRec::Sugar(k) => self.builtin_sugar()[usize::from(*k).min(2)],
             TyRec::Tst { template, args, under } => {
-                let args: Vec<TemplateArg> =
-                    args.iter().map(|a| { let ty = qt(self, a.q()); self.image_arg(ty, a) }).collect();
+                let args: Vec<TemplateArg> = args
+                    .iter()
+                    .map(|a| {
+                        let ty = qt(self, a.q());
+                        self.image_arg(ty, a)
+                    })
+                    .collect();
                 let under = under.map(|u| qt(self, u));
                 let tmpl = ids.get(*template as usize).map_or(self.ast.tu, |&t| self.ast.first(t));
                 let name = self.ast.types.template_name_of(tmpl);
@@ -4168,6 +4179,184 @@ mod tests {
         ];
         for (what, f) in corrupt {
             let mut img = template_sample();
+            f(&mut img);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
+    }
+
+    /// Stage S4b: `template_sample` plus `namespace ns { template <class
+    /// T = int> struct Box { T v; T w; }; Box<int> bx; }` and a use of the
+    /// specialization's `v`: the pattern, the class template record
+    /// just after it, the specialization and member reference records,
+    /// and the specialization, injected-class-name and substituted
+    /// parameter types.
+    fn class_template_sample() -> Image {
+        let q = |ty| QRef { ty, quals: 0 };
+        let int = BuiltinType::Int as u32;
+        let mut img = template_sample();
+        let name = img.names.len() as u32;
+        img.names.extend(["Box", "v", "w", "bx"].map(String::from));
+        let pname = img.pnames.len() as u32;
+        img.pnames.push("T".into());
+        let t = BUILTINS + 1 + img.types.len() as u32;
+        img.types.extend([
+            TyRec::Ttp(14),
+            TyRec::Injected(16),
+            TyRec::Pointer(q(t + 1)),
+            TyRec::Record(19),
+            TyRec::Tst { template: 16, args: vec![ArgRec::Type(q(int))], under: Some(q(t + 3)) },
+            TyRec::Subst { repl: q(int), assoc: 16, index: 0, pack: 0 },
+        ]);
+        let head = |flags, name, ctx, access, loc, payload| DeclRec {
+            flags,
+            owner: 3,
+            access,
+            name,
+            ctx,
+            lexical: NONE,
+            loc,
+            prev: NONE,
+            payload,
+        };
+        let field = |ty| Payload::Field { ty, flags: 0, width: NONE, init: NONE };
+        img.decls.extend([
+            head(
+                DEP,
+                pname,
+                1,
+                0,
+                402,
+                Payload::Ttp {
+                    depth: 0,
+                    index: 0,
+                    typename_kw: false,
+                    begin: 396,
+                    default: Some(q(int)),
+                },
+            ),
+            head(
+                DEP,
+                name,
+                1,
+                0,
+                420,
+                Payload::Record { tag: 0, def: Some(RecDef { bits: 0, end: 19, bases: vec![] }) },
+            ),
+            head(
+                0,
+                name,
+                1,
+                0,
+                420,
+                Payload::Template {
+                    kind: 1,
+                    pattern: 15,
+                    tloc: 390,
+                    langle: 394,
+                    rangle: 410,
+                    depth: 0,
+                    params: vec![14],
+                },
+            ),
+            head(DEP, name + 1, 15, 1, 430, field(q(t))),
+            head(DEP, name + 2, 15, 1, 440, field(q(t + 2))),
+            head(
+                0,
+                NONE,
+                NONE,
+                0,
+                450,
+                Payload::Spec { template: 16, complete: true, args: vec![ArgRec::Type(q(int))] },
+            ),
+            head(0, NONE, NONE, 0, NONE, Payload::Member { spec: 19, pattern: 17 }),
+            head(
+                0,
+                name + 3,
+                1,
+                0,
+                450,
+                Payload::Var { ty: q(t + 4), spec: 0, init: NONE, eval: NONE },
+            ),
+            head(
+                0,
+                name + 3,
+                1,
+                0,
+                460,
+                Payload::Var { ty: q(t + 5), spec: 0, init: NONE, eval: NONE },
+            ),
+        ]);
+        img
+    }
+
+    #[test]
+    fn class_template_round_trip() {
+        let img = class_template_sample();
+        assert_eq!(decode(&encode(&img)), Ok(img.clone()));
+        fuzz(&encode(&img));
+    }
+
+    /// spec/modules.md §11.11 "Class templates" and "Specialization
+    /// references" (S4b): the class template follows its pattern, which
+    /// claims its members; a specialization names a carried class
+    /// template; a member reference names a specialization and a member
+    /// of its template's pattern; anything else is an error.
+    #[test]
+    fn rejects_corrupt_class_template_records() {
+        fn payload(i: &mut Image, r: usize, p: Payload) {
+            i.decls[r].payload = p;
+        }
+        type Corrupt = (&'static str, fn(&mut Image));
+        let corrupt: [Corrupt; 13] = [
+            ("template not after its pattern", |i| i.decls.swap(16, 17)),
+            ("independent member", |i| i.decls[17].flags = 0),
+            ("spec of a function template", |i| {
+                let p = Payload::Spec { template: 13, complete: true, args: vec![] };
+                payload(i, 19, p);
+            }),
+            ("spec of a non-template", |i| {
+                let p = Payload::Spec { template: 15, complete: false, args: vec![] };
+                payload(i, 19, p);
+            }),
+            ("spec after its use", |i| {
+                let p = Payload::Spec { template: 21, complete: false, args: vec![] };
+                payload(i, 19, p);
+            }),
+            ("member of a non-spec", |i| payload(i, 20, Payload::Member { spec: 16, pattern: 17 })),
+            ("member of a non-pattern", |i| {
+                payload(i, 20, Payload::Member { spec: 19, pattern: 12 });
+            }),
+            ("member pattern of another template", |i| {
+                payload(i, 20, Payload::Member { spec: 19, pattern: 11 });
+            }),
+            ("spec type naming a function template", |i| {
+                let n = i.types.len();
+                if let TyRec::Tst { template, .. } = &mut i.types[n - 2] {
+                    *template = 13;
+                }
+            }),
+            ("injected type of a function template", |i| {
+                let n = i.types.len();
+                i.types[n - 5] = TyRec::Injected(13);
+            }),
+            ("subst type naming a non-template", |i| {
+                let n = i.types.len();
+                i.types[n - 1] =
+                    TyRec::Subst { repl: QRef { ty: 1, quals: 0 }, assoc: 15, index: 0, pack: 0 };
+            }),
+            ("default argument above its parameter", |i| {
+                if let Payload::Ttp { default, .. } = &mut i.decls[14].payload {
+                    *default = Some(QRef { ty: BUILTINS + 1 + i.types.len() as u32 - 1, quals: 0 });
+                }
+            }),
+            ("spec argument out of range", |i| {
+                if let Payload::Spec { args, .. } = &mut i.decls[19].payload {
+                    args.push(ArgRec::Type(QRef { ty: u32::MAX - 1, quals: 0 }));
+                }
+            }),
+        ];
+        for (what, f) in corrupt {
+            let mut img = class_template_sample();
             f(&mut img);
             assert!(decode(&encode(&img)).is_err(), "{what}");
         }

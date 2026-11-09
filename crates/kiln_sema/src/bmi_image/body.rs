@@ -1527,7 +1527,6 @@ impl Writer<'_, '_, '_> {
         };
         let np = self.bs.param_pos.len();
         if !dc_ok(&self.img, np, w, dc) {
-            eprintln!("DBG1139 dc {dc:?} w {w} payload {:?}", self.img.decls.get(w as usize).map(|r| &r.payload));
             return Err(if dc == Dc::Local {
                 "a local declaration the image does not carry"
             } else {

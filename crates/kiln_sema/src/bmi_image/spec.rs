@@ -101,7 +101,8 @@ impl Writer<'_, '_, '_> {
     fn template_rec(&self, t: DeclId, kind: u8) -> W<u32> {
         let t = self.s.ast.first(t);
         match self.recs.get(&t) {
-            Some(&r) if matches!(self.img.decls[r as usize].payload,
+            Some(&r)
+                if matches!(self.img.decls[r as usize].payload,
                 Payload::Template { kind: k, .. } if k == kind) =>
             {
                 Ok(r)
@@ -137,8 +138,8 @@ impl Writer<'_, '_, '_> {
         }
         let template = self.template_rec(si.template, u8::from(class))?;
         let args = self.arg_recs(si.args)?;
-        let complete = class
-            && ast.decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE));
+        let complete =
+            class && ast.decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE));
         let loc = self.loc(si.point_of_instantiation)?;
         let o = ast.modules.owner(d);
         let i = self.img.decls.len() as u32;
