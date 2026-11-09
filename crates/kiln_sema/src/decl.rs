@@ -7015,10 +7015,25 @@ impl Sema<'_, '_> {
         if self.is_in_class_static(v) {
             return false;
         }
-        let in_class = self
-            .ast
-            .redecls_of(v)
-            .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x));
+        // Only a redeclaration of a static data member (semantically in
+        // its class) can find its in-class declaration; a namespace-scope
+        // variable's previous declarations are not walked for it
+        // (WP-1076).
+        let member = self.ast.decls.get(v).ctx().is_some_and(|c| {
+            matches!(
+                self.kind_of(c),
+                DeclKind::CXXRecord
+                    | DeclKind::ClassTemplateSpecialization
+                    | DeclKind::ClassTemplatePartialSpecialization
+            )
+        });
+        let in_class = member
+            .then(|| {
+                self.ast
+                    .redecls_of(v)
+                    .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x))
+            })
+            .flatten();
         if let Some(x) = in_class {
             if self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr()) {
                 let loc = self.ast.decls.get(v).loc();
@@ -7028,9 +7043,11 @@ impl Sema<'_, '_> {
         }
         // [class.static.data]/4: the definition of a `const` static data
         // member initialized in its class has no initializer.
-        self.ast
-            .redecls_of(v)
-            .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
+        member
+            && self
+                .ast
+                .redecls_of(v)
+                .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
     }
 
     fn default_init_var(&mut self, v: DeclId) {
@@ -7975,6 +7992,14 @@ impl Sema<'_, '_> {
                     nloc,
                 );
             }
+            if let Some(&p) = found.last()
+                && use_ == TagUse::Reference
+                && qualifier.is_none()
+                && self.diagnose_tag_hidden_by_type_name(keyword, n, p, nloc)
+            {
+                // clang's recovery: the elaborated name still denotes the tag.
+                return p;
+            }
             if let Some(&p) = found.last() {
                 if self.tag_matches(p, keyword) {
                     prev = Some(p);
@@ -8353,8 +8378,16 @@ impl Sema<'_, '_> {
             .copied()
             .filter(|&p| in_class || within(self, found_as.unwrap_or(p)))
             .or_else(hidden);
+        // A typedef, alias or template found first is not a class
+        // ([dcl.type.elab]/2); clang's recovery keeps the class found, else
+        // declares the friend.
+        let types = self.lookup_name(n, LookupKind::Type);
+        let types_in_scope = types.naming.is_some()
+            || types.found.last().or(types.decls.last()).is_some_and(|&d| within(self, d));
+        let non_tag =
+            self.diagnose_friend_tag_non_tag(keyword, n, prev, &types.decls, types_in_scope, nloc);
         if let Some(p) = prev {
-            if self.tag_matches(p, keyword) {
+            if non_tag || self.tag_matches(p, keyword) {
                 self.mark_type_referenced(p);
                 return p;
             }

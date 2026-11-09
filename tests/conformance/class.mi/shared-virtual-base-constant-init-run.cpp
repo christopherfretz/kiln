@@ -1,10 +1,11 @@
 // [class.mi]/4, [dcl.constexpr]/3 (P3533R2, C++26): a class whose two
 // direct bases share one virtual base has a constexpr implicit default
-// constructor in C++26, so `x` is constant-initialized. kiln's constant
-// image of such an object (one virtual-base subobject reached through two
-// paths) is not emitted yet; clang initializes it dynamically.
+// constructor in C++26, so `x` is constant-initialized. kiln emits its
+// constant image: `V` is nearly empty, so it is the primary virtual base
+// of `M1` and `M2` (slot 0 of their types, holding the vptr), allocated
+// once in `X` as its indirect primary base; `M2`'s slot holds `M2`'s own
+// address point (WP-902). clang initializes it dynamically.
 //@ expect: run
-//@ xfail(kiln): WP-873 follow-up, codegen of a constant-initialized object with a shared virtual base (consts.rs record_elems "class constants with this member")
 //@ stdout: 4 2 3
 #include <cstdio>
 struct V { virtual int v() { return 1; } };

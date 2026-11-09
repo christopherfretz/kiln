@@ -123,7 +123,7 @@ pub(crate) fn is_instrumented_condition(ast: &Ast, mut c: ExprId) -> bool {
 }
 
 /// clang `Expr::IgnoreParens` (parentheses and `__extension__`).
-fn ignore_parens(ast: &Ast, mut e: ExprId) -> ExprId {
+pub(crate) fn ignore_parens(ast: &Ast, mut e: ExprId) -> ExprId {
     let ex = &ast.exprs;
     loop {
         match ex.get(e).kind() {
@@ -492,6 +492,38 @@ fn pgo_func_name(raw: &str, linkage: Linkage, main_file: &str) -> String {
 }
 
 impl Cg<'_> {
+    /// LLVM `createPGOFuncNameVar`: the `__profn_` variable of the
+    /// function named `fname` with linkage `flink`, and its PGO name.
+    pub(crate) fn prof_name_var(&mut self, fname: &str, flink: Linkage) -> (GlobalId, String) {
+        let main_file = {
+            let s = &self.opts.source_filename;
+            s.rsplit('/').next().unwrap_or(s).to_owned()
+        };
+        let name = pgo_func_name(fname, flink, &main_file);
+        let linkage = match flink {
+            Linkage::ExternWeak => Linkage::LinkOnce,
+            Linkage::AvailableExternally => Linkage::LinkOnceOdr,
+            Linkage::Internal | Linkage::External => Linkage::Private,
+            l => l,
+        };
+        let local = matches!(linkage, Linkage::Internal | Linkage::Private);
+        let mut var = format!("__profn_{name}");
+        if local {
+            var = var.chars().map(|c| if "-:;<>/\"'".contains(c) { '_' } else { c }).collect();
+        }
+        let init = self.m.const_bytes(name.as_bytes());
+        let ty = self.m.const_type(init);
+        let g = self.m.add_global(&var, ty);
+        let _ = self.m.set_initializer(g, Some(init));
+        let gv = self.m.global_mut(g);
+        gv.linkage = linkage;
+        gv.is_constant = true;
+        if !local {
+            gv.visibility = Visibility::Hidden;
+        }
+        (g, name)
+    }
+
     /// clang `CodeGenPGO::assignRegionCounters` (WP-941): numbers the
     /// counters of the function `d` being emitted as `f` and creates its
     /// `__profn_` name. Not for implicit functions, a constructor or
@@ -515,42 +547,21 @@ impl Cg<'_> {
             || matches!(ast.closure_thunk(d), Some(kiln_ast::lambda::ClosureThunk::Invoker { .. }))
             || n.kind() == DeclKind::CXXDestructor
                 && structor != Some(kiln_abi::mangle::Structor::Base)
-            || self.has_fn_attr(d, kiln_ast::attr::AttrKind::NO_PROFILE_INSTRUMENT_FUNCTION)
+        {
+            return;
+        }
+        self.cov_clear_unused(d);
+        if self.has_fn_attr(d, kiln_ast::attr::AttrKind::NO_PROFILE_INSTRUMENT_FUNCTION)
             || self.sm.is_some_and(|sm| sm.is_in_system_header(n.loc()))
         {
             return;
         }
-        // `setFuncName` / `createPGOFuncNameVar`.
+        // `setFuncName`.
         let (fname, flink) = {
             let func = self.m.func(f);
             (func.name().to_owned(), func.linkage)
         };
-        let main_file = {
-            let s = &self.opts.source_filename;
-            s.rsplit('/').next().unwrap_or(s).to_owned()
-        };
-        let name = pgo_func_name(&fname, flink, &main_file);
-        let linkage = match flink {
-            Linkage::ExternWeak => Linkage::LinkOnce,
-            Linkage::AvailableExternally => Linkage::LinkOnceOdr,
-            Linkage::Internal | Linkage::External => Linkage::Private,
-            l => l,
-        };
-        let local = matches!(linkage, Linkage::Internal | Linkage::Private);
-        let mut var = format!("__profn_{name}");
-        if local {
-            var = var.chars().map(|c| if "-:;<>/\"'".contains(c) { '_' } else { c }).collect();
-        }
-        let init = self.m.const_bytes(name.as_bytes());
-        let ty = self.m.const_type(init);
-        let g = self.m.add_global(&var, ty);
-        let _ = self.m.set_initializer(g, Some(init));
-        let gv = self.m.global_mut(g);
-        gv.linkage = linkage;
-        gv.is_constant = true;
-        if !local {
-            gv.visibility = Visibility::Hidden;
-        }
+        let (g, name) = self.prof_name_var(&fname, flink);
         // `createPGOFuncNameMetadata`.
         if name != fname {
             let k = self.m.md_kind("PGOFuncName");
@@ -564,6 +575,12 @@ impl Cg<'_> {
         // the profile's flags); clang 19 keeps the full MD5 word.
         if self.opts.clang_compat >= 22 {
             rc.hash &= (1 << 60) - 1;
+        }
+        // `emitCounterRegionMapping` (WP-1003).
+        if self.opts.coverage.mapping
+            && let Some(m) = self.cov_mapping(d, Some(&rc))
+        {
+            self.cov_add_record(&name, g, rc.hash, m, true);
         }
         self.f.prof = Some(Box::new(ProfState { rc, name: g }));
     }

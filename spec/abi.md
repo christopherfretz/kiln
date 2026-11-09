@@ -1457,6 +1457,14 @@ std_substitutions.cpp`, `std_cxx11_abi_tag.cpp`, `std_libcxx_spelling.cpp`,
   `tests/codegen/linkage_internal_types.cpp`,
   `tests/codegen/linkage_internal_nttp.cpp` (IR diff against clang 19
   and 22).
+- **Cost** (WP-1076): one linkage query (`type_externally_visible` and
+  the functions above, `Vis` in `mangle.rs`) memoizes each canonical
+  class, enumeration, function and member-pointer type it visits, so a
+  type is walked once per query, not once per path through a template
+  argument DAG (`Fooob<A8, A8, …>` nested nine deep is 10^9 paths; clang
+  caches the linkage in the type). Tests:
+  `tests/stress/linkage-type-dag-10x10.cpp`,
+  `tests/stress/linkage-pack-dag-36x17.cpp`.
 
 ### 8.23 Landed (WP-386): clang 20+ call lowering at `-fclang-compat=22`
 `IrTypes::with_clang_compat` carries the codegen compat level (the
