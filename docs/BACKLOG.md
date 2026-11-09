@@ -971,7 +971,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-944 | actionlint clean on ci-lane.yml YAML anchors (`*debugger-container`, `*kiln-shards`) or pin a version that supports them; .github/workflows/ci-lane.yml:79 | WP-927 | open |
 | WP-945 | accepts-invalid (WP-912): HIGH: WP-873 never-constant false positives on builtins (fabs, strcmp) and a consteval operator template; crates/kiln_sema/src/never_constant.rs (3 xfails) | WP-912 | done (#430) |
 | WP-962 | accepts-invalid part 1: never-constant false positives (builtins, consteval operator template), out-of-line member parameter tag panic, empty initializer_list stack overflow | WP-945 | done (#410) |
-| WP-946 | accepts-invalid (WP-912): types defined where the grammar forbids (parameter, conversion type, type specifier) + out-of-line member enum-parameter panic; crates/kiln_sema/src/decl.rs:7586 act_on_tag, crates/kiln_ast/src/decl.rs:2477 | WP-912 | open |
+| WP-946 | accepts-invalid (WP-912): types defined where the grammar forbids (parameter, conversion type, type specifier) + out-of-line member enum-parameter panic; crates/kiln_sema/src/decl.rs:7586 act_on_tag, crates/kiln_ast/src/decl.rs:2477 | WP-912 | in progress |
 | WP-947 | accepts-invalid (WP-912): empty braced list for a user `initializer_list` type rejected, then stack overflow (cwg10xx crash); crates/kiln_sema/src/init.rs:686 std_initializer_list_init | WP-912 | open |
 | WP-948 | accepts-invalid (WP-912): Oven UB checks: past-end member access and calls, out-of-lifetime calls, volatile read via cast, zero-size array pointer subtraction, virtual member-pointer compare; not-yet-visible initializers | WP-912 | done (#417) |
 | WP-949 | accepts-invalid (WP-912): member with the name of its class [class.mem]/22 | WP-912 | done (#423, WP-1015) |
@@ -1045,7 +1045,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | done (#425) |
 | WP-986 | modules: convert skip(clang) module tests (export-run, visibility, partitions-run, private-run, export-import-run, import-std-*) to module:/unit: | WP-917 | open |
 | WP-981 | oven: narrow signed `++`/`--` must promote and wrap (WP-961 x86_64 stable_sort xfail) | WP-961 | done (#419, fixed in WP-980) |
-| WP-1029 | parser drops `__extension__`; `decltype(__extension__ t)` mangles `Dt` where clang writes `DT` | WP-980 | open |
+| WP-1029 | parser drops `__extension__`; `decltype(__extension__ t)` mangles `Dt` where clang writes `DT` | WP-980 | in progress |
 | WP-1030 | mangle ImaginaryLiteral (`LCi0_2E`) and PackIndexingExpr in dependent signatures | WP-980 | open |
 | WP-1031 | `cargo xtask test tests/mangle` does not run the mangle_vs_clang differential; make it run or document the right command | WP-980 | done (#427, WP-1034) |
 | WP-1024 | driver: list kiln-only `--llvm-dir=<dir>` in `--help` (lib.rs:116 HELP; WP-1016 kept help byte-identical) | WP-1016 | done (#426, WP-1027) |

@@ -133,6 +133,7 @@ sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match
 sema_friend_enum = Warning [FriendEnum] (0) "elaborated enum specifier cannot be declared as a friend";
 sema_friend_invalid_in_context = Error (0) "'friend' used outside of class";
 sema_friend_not_class_or_fn = Error (0) "friends can only be classes or functions";
+sema_func_def_incomplete_result = Error (1) "incomplete result type {0} in function definition";
 sema_func_returning_array_function = Error (2) "function cannot return {0:array|function} type {1}";
 sema_function_attribute_ignored_in_stmt = Warning [IgnoredAttributes] (1) "attribute is ignored on this statement as it only applies to functions; use '{0}' on statements";
 // clang `err_function_attribute_mismatch` (WP-808)

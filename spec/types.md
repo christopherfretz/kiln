@@ -679,7 +679,13 @@ Encoding (prefix-free, so equal word sequences mean equal trees):
     of a requires-clause is one specialization; WP-792);
 - unresolved names (`UnresolvedLookup`, `CXXDependentScopeMemberExpr`,
   `DependentScopeDeclRef`) are `(qualifier, name, explicit args)`. The
-  lookup result is not part of the profile;
+  lookup result is not part of the profile. A member access on an
+  explicit object of dependent type profiles its qualifier as spelled,
+  each level by name (`spelled_nns_words`; a template-id or splice level
+  keeps its canonical word), as clang keeps an identifier
+  nested-name-specifier there: `t.A::f()` with `using A = P`,
+  `t.P::f()` and `t.ns::P::f()` are not equivalent (WP-1029, spec/abi.md
+  §8.15);
 - literals are their value plus canonical type;
 - a reflect-expression (`^^x`) is its value (an interned reflection id)
   once known. A dependent one profiles its operand structurally, so

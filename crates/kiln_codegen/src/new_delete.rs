@@ -531,11 +531,18 @@ impl Cg<'_> {
         }
     }
 
+    /// `e` under parentheses and GNU `__extension__` (clang
+    /// `IgnoreParens`).
     pub(crate) fn skip_parens(&self, mut e: ExprId) -> ExprId {
-        while self.ast.exprs.get(e).kind() == ExprKind::ParenExpr {
-            e = self.ast.exprs.operand(e);
+        loop {
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
+                ExprKind::UnaryOperator if self.ast.exprs.unary_op(e) == UnaryOp::Extension => {
+                    e = self.ast.exprs.operand(e);
+                }
+                _ => return e,
+            }
         }
-        e
     }
 
     /// The preferred alignment of `ty` (`DataLayout::getPrefTypeAlign`):
