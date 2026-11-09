@@ -360,6 +360,11 @@ impl Test<'_> {
         ) {
             return (Status::Skip, Some(r), String::new());
         }
+        if spec.requires_sanitizer_runtime
+            && let Some(r) = self.missing_sanitizer_runtime(&spec)
+        {
+            return (Status::Skip, Some(r), String::new());
+        }
         if let Some(reason) = self.mode_skip(&spec, &source) {
             return (Status::Skip, Some(reason), String::new());
         }
@@ -439,6 +444,37 @@ impl Test<'_> {
             out.push(directives::ClangRun { role: "the oracle", version: self.cfg.oracle_clang });
         }
         out
+    }
+
+    /// `requires: sanitizer-runtime` (WP-1032): why the test cannot link
+    /// against the undefined-behaviour and address sanitizer runtimes,
+    /// if it cannot. The clangs that
+    /// link its program are kiln's linker driver (`<llvm_dir>/bin/clang++`)
+    /// when kiln compiles it, and every clang it runs; each must find
+    /// `libclang_rt.{ubsan_standalone,asan}` for the host (compiler-rt is
+    /// a separate package, `libclang-rt-N-dev`, on Debian).
+    fn missing_sanitizer_runtime(&self, spec: &TestSpec) -> Option<String> {
+        let mut linkers: Vec<(&str, PathBuf)> = Vec::new();
+        let kiln_oracle =
+            spec.oracle && self.cfg.oracle.is_some() && self.cfg.oracle_kind == CompilerKind::Kiln;
+        if self.cfg.compiler_kind == CompilerKind::Kiln || kiln_oracle {
+            linkers.push(("kiln's linker", self.cfg.llvm_dir.join("bin/clang++")));
+        }
+        if self.cfg.compiler_kind == CompilerKind::Clang {
+            linkers.push(("the compiler", self.cfg.compiler.clone()));
+        }
+        if let Some(o) = &self.cfg.oracle
+            && spec.oracle
+            && self.cfg.oracle_kind == CompilerKind::Clang
+        {
+            linkers.push(("the oracle", o.clone()));
+        }
+        linkers.into_iter().find(|(_, c)| !has_sanitizer_runtime(c)).map(|(role, c)| {
+            format!(
+                "requires sanitizer-runtime; {role} ({}) has no UBSan/ASan runtime",
+                c.display()
+            )
+        })
     }
 
     /// The LLVM backends that consume `spec`'s IR, for `requires: llvm>=`:
@@ -1238,7 +1274,10 @@ impl Test<'_> {
         if stdin.is_some() {
             shown.push_str(" < (stdin)");
         }
-        let cap = self.mem_limit;
+        // A sanitized program (`requires: sanitizer-runtime`) runs with no
+        // address-space cap: ASan reserves its shadow memory (gigabytes of
+        // address space, little of it resident) before `main`.
+        let cap = if spec.requires_sanitizer_runtime { None } else { self.mem_limit };
         let o = self.run_capped(&shown, &cmd, stdin, cap, self.cfg.run_timeout).map_err(|e| {
             let d = format!("could not run `{shown}`: {e}");
             if oracle { Problem::Broken(d) } else { Problem::Fail(d) }
@@ -2207,6 +2246,36 @@ pub(super) fn meta_header_skip(spec: &TestSpec, source: &str) -> Option<String> 
         }
     }
     None
+}
+
+/// Whether `clang` finds the host's undefined-behaviour and address
+/// sanitizer runtime archives, in
+/// either compiler-rt layout (`lib/linux/libclang_rt.<rt>-<arch>.a` or the
+/// per-target `lib/<triple>/libclang_rt.<rt>.a`). Probed once per clang.
+fn has_sanitizer_runtime(clang: &Path) -> bool {
+    static SEEN: std::sync::Mutex<Vec<(PathBuf, bool)>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, ok)) = seen.iter().find(|(c, _)| c == clang) {
+        return *ok;
+    }
+    let ask = |arg: &str| {
+        Command::new(clang)
+            .arg(arg)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
+    };
+    let arch = std::env::consts::ARCH;
+    let runtime_dir = ask("--print-runtime-dir");
+    let ok = ["ubsan_standalone", "asan"].iter().all(|rt| {
+        let old = ask(&format!("-print-file-name=libclang_rt.{rt}-{arch}.a"));
+        let new = runtime_dir.as_ref().map(|d| d.join(format!("libclang_rt.{rt}.a")));
+        [old, new].into_iter().flatten().any(|p| p.is_absolute() && p.is_file())
+    });
+    seen.push((clang.to_owned(), ok));
+    ok
 }
 
 #[cfg(test)]

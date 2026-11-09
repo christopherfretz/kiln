@@ -1,0 +1,10 @@
+# Types whose overflow and implicit-conversion checks clang 22 drops.
+[signed-integer-overflow]
+type:Wrapping
+[unsigned-integer-overflow]
+type:unsigned int
+[implicit-signed-integer-truncation]
+type:char
+type:short
+[implicit-unsigned-integer-truncation]
+type:unsigned char

@@ -267,6 +267,9 @@ pub(crate) struct Fx {
     pub fp_attrs_off: u8,
     /// clang's per-function `SanOpts` (WP-675, `crate::ubsan`).
     pub san: kiln_ast::sanitize::SanitizerSet,
+    /// The sanitizers an ignorelist removes from the function (WP-1032,
+    /// `Cg::ignored_sanitizers`), out of [`Fx::san`] and its attributes.
+    pub san_ignored: kiln_ast::sanitize::SanitizerSet,
     /// The trap block of each `UBSan` handler at `-O1` and up (clang
     /// `TrapBBs`, `crate::ubsan`).
     pub ub_traps: Vec<(u8, Blk)>,
@@ -341,6 +344,7 @@ impl Fx {
             fp_ovr: kiln_ast::fp::FpOverride::NONE,
             fp_attrs_off: 0,
             san: kiln_ast::sanitize::SanitizerSet::NONE,
+            san_ignored: kiln_ast::sanitize::SanitizerSet::NONE,
             ub_traps: Vec::new(),
         }
     }
@@ -442,6 +446,7 @@ impl Cg<'_> {
         } else {
             crate::class_b::StartDecl::Fn(d)
         });
+        self.ignore_sanitizers(f, Some(ast.decls.get(d).loc()));
         self.f.naked = thunk.is_none() && self.has_fn_attr(d, kiln_ast::attr::AttrKind::NAKED);
         self.f.flatten = thunk.is_none() && self.has_fn_attr(d, kiln_ast::attr::AttrKind::FLATTEN);
         self.f.sig = Some(sig.clone());

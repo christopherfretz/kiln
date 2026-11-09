@@ -5,9 +5,12 @@
 //! clang 19's `SanitizerArgs` does.
 
 use std::fmt::Write as _;
+use std::path::Path;
+use std::sync::Arc;
 
 use kiln_ast::sanitize::{SanitizerSet as S, parse_name};
 use kiln_codegen::SanitizeOptions;
+use kiln_codegen::ignorelist::{IgnorelistError, SanitizerIgnorelist};
 
 use crate::args::ArgError;
 
@@ -20,6 +23,8 @@ enum List {
     NoRecover,
     Trap,
     NoTrap,
+    Merge,
+    NoMerge,
 }
 
 /// One list option as written.
@@ -38,6 +43,10 @@ pub struct SanitizeFlags {
     /// `-fsanitize-ignorelist=` / `-fsanitize-blacklist=` files since the
     /// last `-fno-sanitize-ignorelist`.
     pub ignorelists: Vec<String>,
+    /// Some `-fno-sanitize-ignorelist` was given: no default ignorelist
+    /// from the resource directory (clang's `hasArgNoClaim`, wherever it
+    /// stands).
+    pub no_default_ignorelists: bool,
     /// The last of `-f[no-]sanitize-address-use-after-scope`.
     pub use_after_scope: Option<bool>,
     /// `-fsanitize-address-use-after-return=<mode>`.
@@ -93,13 +102,15 @@ impl SanitizeFlags {
         let mut list = |list: List, opt: &'static str, v: &str| {
             self.lists.push(ListArg { list, opt, values: split(v) });
         };
-        let lists: [(&'static str, List); 6] = [
+        let lists: [(&'static str, List); 8] = [
             ("-fsanitize=", List::Add),
             ("-fno-sanitize=", List::Remove),
             ("-fsanitize-recover=", List::Recover),
             ("-fno-sanitize-recover=", List::NoRecover),
             ("-fsanitize-trap=", List::Trap),
             ("-fno-sanitize-trap=", List::NoTrap),
+            ("-fsanitize-merge=", List::Merge),
+            ("-fno-sanitize-merge=", List::NoMerge),
         ];
         for (opt, l) in lists {
             if let Some(v) = arg.strip_prefix(opt) {
@@ -113,13 +124,18 @@ impl SanitizeFlags {
             "-fno-sanitize-recover" => list(List::NoRecover, "-fno-sanitize-recover=", "all"),
             "-fsanitize-trap" => list(List::Trap, "-fsanitize-trap=", "all"),
             "-fno-sanitize-trap" => list(List::NoTrap, "-fno-sanitize-trap=", "all"),
+            "-fsanitize-merge" => list(List::Merge, "-fsanitize-merge=", "all"),
+            "-fno-sanitize-merge" => list(List::NoMerge, "-fno-sanitize-merge=", "all"),
             "-fsanitize-undefined-trap-on-error" => {
                 list(List::Trap, "-fsanitize-trap=", "undefined");
             }
             "-fno-sanitize-undefined-trap-on-error" => {
                 list(List::NoTrap, "-fno-sanitize-trap=", "undefined");
             }
-            "-fno-sanitize-ignorelist" | "-fno-sanitize-blacklist" => self.ignorelists.clear(),
+            "-fno-sanitize-ignorelist" | "-fno-sanitize-blacklist" => {
+                self.ignorelists.clear();
+                self.no_default_ignorelists = true;
+            }
             "-fsanitize-address-use-after-scope" => self.use_after_scope = Some(true),
             "-fno-sanitize-address-use-after-scope" => self.use_after_scope = Some(false),
             "-fsanitize-memory-track-origins" => self.track_origins = Some(2),
@@ -273,6 +289,22 @@ impl SanitizeFlags {
                 _ => {}
             }
         }
+        // clang 20+ `parseSanitizeArgs` for the merge lists (default: the
+        // `undefined` group).
+        let mut merge = None;
+        for l in &self.lists {
+            match l.list {
+                List::Merge => {
+                    let add = parse_values(l, true, &mut errors).1;
+                    merge = Some(merge.unwrap_or(S::UNDEFINED).union(add));
+                }
+                List::NoMerge => {
+                    let remove = parse_values(l, true, &mut errors).1;
+                    merge = Some(merge.unwrap_or(S::UNDEFINED).without(remove));
+                }
+                _ => {}
+            }
+        }
         let trap = trap.intersect(kinds);
         let recover = recover.intersect(kinds).without(S::UNRECOVERABLE).without(trap);
         let use_after_scope = self.use_after_scope.unwrap_or(true);
@@ -281,6 +313,7 @@ impl SanitizeFlags {
                 kinds,
                 recover,
                 trap,
+                merge: merge.map(|m| m.intersect(kinds)),
                 use_after_scope: use_after_scope
                     && kinds.has_any(S::ADDRESS.union(S::KERNEL_ADDRESS)),
                 ..SanitizeOptions::default()
@@ -349,6 +382,91 @@ impl SanitizeFlags {
         }
         String::new()
     }
+}
+
+/// clang's `addDefaultIgnorelists`: the resource directory's
+/// `share/<file>` lists and the sanitizers each one is for (kiln has no
+/// CFI, whose missing list clang reports).
+const DEFAULT_IGNORELISTS: &[(&str, S)] = &[
+    ("asan_ignorelist.txt", S::ADDRESS),
+    ("hwasan_ignorelist.txt", S::HWADDRESS),
+    ("memtag_ignorelist.txt", S::MEMTAG),
+    ("msan_ignorelist.txt", S::MEMORY),
+    ("nsan_ignorelist.txt", S::NUMERICAL),
+    ("tsan_ignorelist.txt", S::THREAD),
+    ("dfsan_abilist.txt", S::DATAFLOW),
+    (
+        "ubsan_ignorelist.txt",
+        S(S::UNDEFINED.0 | S::VPTR.0 | S::INTEGER.0 | S::NULLABILITY.0 | S::FLOAT_DIVIDE_BY_ZERO.0),
+    ),
+];
+
+impl SanitizeFlags {
+    /// The ignorelists that apply (spec/driver.md "Sanitizers", WP-1032):
+    /// the existing `-fsanitize-ignorelist=` files, then the default
+    /// lists of the enabled `kinds` under `resource_dir`.
+    #[must_use]
+    pub fn ignorelist_paths(&self, kinds: S, resource_dir: &str) -> (Vec<String>, Vec<String>) {
+        let user = self.ignorelists.iter().filter(|f| Path::new(f).exists()).cloned().collect();
+        let mut system = Vec::new();
+        if !self.no_default_ignorelists {
+            for &(file, mask) in DEFAULT_IGNORELISTS {
+                let p = Path::new(resource_dir).join("share").join(file);
+                if kinds.has_any(mask) && p.exists() {
+                    system.push(p.display().to_string());
+                }
+            }
+        }
+        (user, system)
+    }
+
+    /// clang's `validateSpecialCaseListFormat`, of the user lists and of
+    /// the default lists apart: "malformed sanitizer ignorelist" with
+    /// LLVM's message.
+    #[must_use]
+    pub fn ignorelist_errors(&self, kinds: S, resource_dir: &str) -> Vec<ArgError> {
+        let (user, system) = self.ignorelist_paths(kinds, resource_dir);
+        [system, user]
+            .iter()
+            .filter(|l| !l.is_empty())
+            .filter_map(|l| read_ignorelists(l).and_then(|t| parse_ignorelists(&t)).err())
+            .collect()
+    }
+
+    /// The parsed ignorelists codegen applies, `None` when there is none
+    /// (or one is malformed: [`Self::ignorelist_errors`] reported it).
+    #[must_use]
+    pub fn ignorelist(&self, kinds: S, resource_dir: &str) -> Option<Arc<SanitizerIgnorelist>> {
+        let (mut paths, system) = self.ignorelist_paths(kinds, resource_dir);
+        paths.extend(system);
+        if paths.is_empty() {
+            return None;
+        }
+        let l = read_ignorelists(&paths).and_then(|t| parse_ignorelists(&t)).ok()?;
+        (!l.is_empty()).then(|| Arc::new(l))
+    }
+}
+
+/// The lists' text, or LLVM's `can't open file` message.
+fn read_ignorelists(paths: &[String]) -> Result<Vec<(String, String)>, ArgError> {
+    paths
+        .iter()
+        .map(|p| match std::fs::read(p) {
+            Ok(b) => Ok((p.clone(), String::from_utf8_lossy(&b).into_owned())),
+            Err(e) => {
+                let msg = e.to_string();
+                let msg = msg.split(" (os error").next().unwrap_or(&msg).to_owned();
+                Err(ArgError::MalformedIgnorelist(format!("can't open file '{p}': {msg}")))
+            }
+        })
+        .collect()
+}
+
+fn parse_ignorelists(files: &[(String, String)]) -> Result<SanitizerIgnorelist, ArgError> {
+    SanitizerIgnorelist::parse(files).map_err(|e| match e {
+        IgnorelistError::Malformed(m) => ArgError::MalformedIgnorelist(m),
+        IgnorelistError::Regex(p) => ArgError::RegexIgnorelist(p),
+    })
 }
 
 /// The values' union, unknown names ignored.
