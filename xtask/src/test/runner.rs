@@ -70,6 +70,9 @@ pub struct Config {
     /// `--debug-sweep`: the debug-info sweep (`spec/harness.md` "Debug-info
     /// sweep"); `None` outside it.
     pub debug_sweep: Option<DebugSweep>,
+    /// `--bmi-kind`: the module-file variant (`spec/harness.md`
+    /// "Module-file kinds"); `None` outside it.
+    pub bmi_kind: Option<u8>,
 }
 
 /// The debug-info sweep's configuration.
@@ -226,6 +229,9 @@ impl Test<'_> {
         }
         if self.cfg.debug_sweep.is_some() {
             return debug_sweep_skip(spec);
+        }
+        if self.cfg.bmi_kind.is_some() && spec.modules.is_empty() {
+            return Some("no `module:` lines (`--bmi-kind`)".to_owned());
         }
         None
     }
@@ -552,10 +558,12 @@ impl Test<'_> {
     }
 
     /// Separate compilation of the module units (spec/modules.md §11.7):
-    /// `run` tests with `module:` or `unit:` lines, and `two-step`.
-    fn two_step(spec: &TestSpec) -> bool {
+    /// `run` tests with `module:` or `unit:` lines, and `two-step`; under
+    /// `--bmi-kind`, every test with `module:` lines.
+    fn two_step(&self, spec: &TestSpec) -> bool {
         spec.two_step
             || (spec.expect == Expect::Run && (!spec.modules.is_empty() || !spec.units.is_empty()))
+            || (self.cfg.bmi_kind.is_some() && !spec.modules.is_empty())
     }
 
     /// The `-fmodule-file=<name>=<file>` flags of the first `n` `module:`
@@ -563,7 +571,7 @@ impl Test<'_> {
     /// test is [two-step](Self::two_step); otherwise `program` reads the
     /// module file [`Self::build_modules`] wrote.
     fn module_flags(&self, program: &Path, spec: &TestSpec, n: usize) -> Vec<std::ffi::OsString> {
-        let source = self.is_kiln(program) && !Self::two_step(spec);
+        let source = self.is_kiln(program) && !self.two_step(spec);
         let oracle = program != self.cfg.compiler;
         spec.modules[..n]
             .iter()
@@ -601,7 +609,7 @@ impl Test<'_> {
         spec: &TestSpec,
         objects: bool,
     ) -> Result<Vec<PathBuf>, Problem> {
-        if spec.modules.is_empty() || (self.is_kiln(program) && !Self::two_step(spec)) {
+        if spec.modules.is_empty() || (self.is_kiln(program) && !self.two_step(spec)) {
             return Ok(Vec::new());
         }
         self.scratch()?;
@@ -633,6 +641,9 @@ impl Test<'_> {
                     spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))),
                 );
                 c.args(self.module_flags(program, spec, i));
+                if let (true, Some(k)) = (kiln, self.cfg.bmi_kind) {
+                    c.arg(format!("-fkiln-bmi-kind={k}"));
+                }
             };
             let mut steps = Vec::new();
             let mut c = Command::new(program);
@@ -1291,7 +1302,7 @@ impl Test<'_> {
     /// in one command or [two steps](Self::two_step); the output returned
     /// is the test file's compile's.
     fn compile_run_test(&mut self, spec: &TestSpec, exe: &Path) -> Result<Output, Problem> {
-        if !Self::two_step(spec) {
+        if !self.two_step(spec) {
             return self.compile(spec, &[], Some(exe));
         }
         let o = self.build_two_step(&self.cfg.compiler.clone(), spec, exe)?;
@@ -1309,7 +1320,7 @@ impl Test<'_> {
     /// Builds a `run` test's binary `exe` with `oracle`; a rejection is
     /// [`Problem::Broken`].
     fn compile_run_oracle(&mut self, oracle: &Path, spec: &TestSpec, exe: &Path) -> Check {
-        if !Self::two_step(spec) {
+        if !self.two_step(spec) {
             return self.oracle_compile(oracle, spec, &[], Some(exe)).map(drop);
         }
         let o = self.build_two_step(oracle, spec, exe)?;

@@ -112,7 +112,12 @@ impl Parser<'_, '_> {
                     };
                     self.s.act_on_module_directive(lo, d.export, dir);
                 }
-                Event::UnitBegin { key, header, .. } => self.s.act_on_unit_begin(&key, header),
+                Event::UnitBegin { key, header, span, carried } => {
+                    self.s.act_on_unit_begin(&key, header);
+                    if let Some(c) = carried {
+                        self.s.install_carried_constants(&c.path, &c.bytes, span.lo);
+                    }
+                }
                 Event::UnitEnd { key } => self.s.act_on_unit_end(&key),
                 other => self.on_event(other),
             }
