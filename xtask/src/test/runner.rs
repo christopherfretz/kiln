@@ -238,12 +238,86 @@ impl Test<'_> {
             return None;
         }
         let p = self.build_modules(&self.cfg.compiler.clone(), spec, false).err()?;
-        Some(match p {
+        Some(Self::verdict(p))
+    }
+
+    /// The verdict of a failed prebuild step.
+    fn verdict(p: Problem) -> (Status, Option<String>, String) {
+        match p {
             Problem::Killed { mib, details } => {
                 (Status::Killed, Some(format!("memory limit {mib} MiB")), details)
             }
             Problem::Fail(d) | Problem::Broken(d) => (Status::Error, None, d),
-        })
+        }
+    }
+
+    /// Builds a `pch:` test's precompiled headers before anything else:
+    /// the compiler under test's (a rejection fails the test) and a clang
+    /// oracle's (a rejection makes it broken). `Some` is the verdict when
+    /// a build fails.
+    fn prebuild_pch(&mut self, spec: &TestSpec) -> Option<(Status, Option<String>, String)> {
+        spec.pch.as_ref()?;
+        if let Err(p) = self.build_pch(&self.cfg.compiler.clone(), spec) {
+            return Some(match p {
+                Problem::Fail(d) => (Status::Fail, None, d),
+                p => Self::verdict(p),
+            });
+        }
+        let oracle = self.cfg.oracle.clone().filter(|_| self.cfg.oracle_kind.speaks_clang())?;
+        self.build_pch(&oracle, spec).err().map(Self::verdict)
+    }
+
+    /// The precompiled header `program` builds from the `pch:` header
+    /// (the oracle's apart).
+    fn pch_file(&self, program: &Path) -> PathBuf {
+        let oracle = program != self.cfg.compiler;
+        self.dir.join(if oracle { "oracle-test.pch" } else { "test.pch" })
+    }
+
+    /// `<program> -std=<std> [-fclang-compat=N] <args...> -x c++-header
+    /// <pch header> -o <pch file>`: the producer step of a `pch:` test
+    /// (WP-1023); the test file's compile adds `-include-pch <pch file>`
+    /// ([`Self::command`]).
+    fn build_pch(&mut self, program: &Path, spec: &TestSpec) -> Result<(), Problem> {
+        let Some(header) = &spec.pch else { return Ok(()) };
+        self.scratch()?;
+        let oracle = program != self.cfg.compiler;
+        let who = if oracle { "the oracle" } else { "the compiler" };
+        let src = self.module_source(header);
+        if !src.is_file() {
+            return Err(Problem::Broken(format!(
+                "`pch: {}`: no such file {}",
+                header.display(),
+                src.display()
+            )));
+        }
+        let out = self.pch_file(program);
+        let mut c = Command::new(program);
+        c.current_dir(&self.cfg.root);
+        if self.is_kiln(program) {
+            c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
+        }
+        c.arg(format!("-std={}", spec.std));
+        if self.is_kiln(program) {
+            c.arg("-fno-crash-diagnostics");
+        }
+        if let Some(n) = self.clang_compat(program, spec) {
+            c.arg(format!("-fclang-compat={n}"));
+        }
+        c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+        let lang = if self.case.lang == Lang::C { "c-header" } else { "c++-header" };
+        c.args(["-x", lang]).arg(&src).arg("-o").arg(&out);
+        let o = self.exec(who, &c, self.cfg.compile_timeout)?;
+        if o.success() && !o.stderr_str().contains("panicked at") {
+            return Ok(());
+        }
+        let msg = format!(
+            "{who} could not build the precompiled header {} ({})\n{}",
+            header.display(),
+            o.describe_end(),
+            indent(&o.stderr_str())
+        );
+        Err(if oracle { Problem::Broken(msg) } else { Problem::Fail(msg) })
     }
 
     /// The test's source and its parsed directives, or the ERROR result.
@@ -313,6 +387,9 @@ impl Test<'_> {
             }
         }
         if let Some(verdict) = self.prebuild_modules(&spec) {
+            return verdict;
+        }
+        if let Some(verdict) = self.prebuild_pch(&spec) {
             return verdict;
         }
         if let Some(sweep) = &self.cfg.debug_sweep {
@@ -459,6 +536,9 @@ impl Test<'_> {
         }
         c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
         c.args(self.module_flags(program, spec, spec.modules.len()));
+        if spec.pch.is_some() {
+            c.arg("-include-pch").arg(self.pch_file(program));
+        }
         c.arg(&self.case.name);
         if let Some(o) = out {
             c.arg("-o").arg(o);
@@ -1843,6 +1923,9 @@ fn unsupported_by(spec: &TestSpec, kind: CompilerKind) -> Option<String> {
     };
     if (!spec.modules.is_empty() || !spec.units.is_empty()) && !kind.speaks_clang() {
         return needs("module:", "kiln or clang");
+    }
+    if spec.pch.is_some() && !kind.speaks_clang() {
+        return needs("pch:", "kiln or clang");
     }
     if spec.verify && !kind.speaks_clang() {
         return needs("verify", "kiln or clang");

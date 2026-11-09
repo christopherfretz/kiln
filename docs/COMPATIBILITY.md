@@ -175,6 +175,16 @@ Not yet supported:
 - header units as module files (`-fmodule-header`), so the scanner
   rejects `import "h";` with an error.
 
+## Precompiled headers
+
+clang's PCH interface works (WP-1023; spec/driver.md "Precompiled
+headers"). That includes CMake's `target_precompile_headers`, which
+passes `-Xclang -emit-pch`, `-Xclang -include-pch` and `-Xclang -include`.
+
+| feature | status | notes |
+|---|---|---|
+| PCH (`-x c++-header`, `-emit-pch`, `-include-pch`, `-fpch-*`, `-Winvalid-pch`) | **works; correctness, not speed** | kiln's PCH is a textual record: the header path, the hash of every file it read, and the options that change meaning. The consumer checks the record with clang's diagnostics (stale file, mismatched `-std`/target/macros) and then processes the header again as if `-include`d. **A PCH build is not faster than the same build without one in 1.0.** clang's `.pch` files are refused, and vice versa. Same-size edits are found by content, not mtime. `-include foo.h` does not look for `foo.h.pch` (use `-include-pch`). A serialized-AST PCH that shares the module-file format is a follow-up. |
+
 ## Libraries and applications
 
 47 projects: 43 **Flawless**, 3 **Near-perfect** (simdjson, folly, the Boost metaprogramming libraries), 1 **Partial** (folly::coro: its known failures are fixed (WP-802, WP-933), and the re-run is deferred for lack of disk). The libc++ column is the WP-694 run against
@@ -264,6 +274,12 @@ and what it concludes about kiln (WP-920):
   only for CUDA, HIP and assembler vendor detection, which kiln does not
   serve. Works unchanged. C++20 modules (`FILE_SET CXX_MODULES`, Ninja)
   find kiln's scanner beside the compiler ("C++20 modules" above).
+  Precompiled headers (`target_precompile_headers`) use CMake's Clang
+  flags and work unchanged ([above](#precompiled-headers); WP-1023). They
+  are checked by `scripts/oss/selftest.sh`, and glaze and reflect-cpp are
+  built with them on. They are correct but not faster, so
+  `-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON` remains a valid way to save the
+  extra parse.
 - **Autotools** (hunspell's configure: autoconf 2.69, automake, libtool): `AC_PROG_CXX` decides
   "GNU C++" from `__GNUC__` (kiln: 4.2.1, as clang). It runs `--version`,
   `-v`, `-V` and `-qversion` only to log them in `config.log`. libtool
@@ -324,14 +340,14 @@ tests of `clang/test/CXX` and `clang/test/SemaCXX` at `llvmorg-22.1.8`, run
 through kiln by `cargo xtask clang-neg` (WP-912,
 [spec/clang-neg.md](../spec/clang-neg.md)). Only lines are compared, never
 wording: an `expected-error` counts as reported when kiln has an error on
-its line. Run of 2026-11-08 on kiln `6c742784e`:
+its line. Run on kiln `321baa9de` (2026-11-08):
 
 | measure | result |
 |---|---|
-| Test files where clang expects an error and kiln reports none (in some configuration) | 7.2% (90 of 1249) |
-| `expected-error` lines with no kiln error on them | 17.9% (5015 of 28043) |
-| Configurations of `expected-no-diagnostics` tests where kiln reports an error (rejects valid) | 11.7% (49 of 418) |
-| Crashes, timeouts, out of memory | 7 crashes (2 root causes), 0, 0 of 2850 cases |
+| Test files where clang expects an error and kiln reports none (in some configuration) | 7.1% (89 of 1250) |
+| `expected-error` lines with no kiln error on them | 17.6% (4930 of 28065) |
+| Configurations of `expected-no-diagnostics` tests where kiln reports an error (rejects valid) | 11.2% (47 of 418) |
+| Crashes, timeouts, out of memory | 0, 0, 0 of 2850 cases |
 
 Most of the missed errors are declaration rules: types defined where the
 grammar forbids them, members named after their class, union and static

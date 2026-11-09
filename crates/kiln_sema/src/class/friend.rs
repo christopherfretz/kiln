@@ -3,6 +3,7 @@
 use kiln_ast::DeclId;
 use kiln_ast::QualType;
 use kiln_ast::decl::{DeclKind, FriendTarget};
+use kiln_ast::ids::TemplateParamListId;
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{TemplateArg, TypeView};
 use kiln_diag::DiagId;
@@ -51,6 +52,40 @@ impl Sema<'_, '_> {
         self.apply_cc_attrs(ty, &mut attrs, true)
     }
 
+    /// [temp.param]/12: a friend template declaration that is not a
+    /// function template definition specifies no default template
+    /// argument. Reported at each defaulted parameter of `head` (its
+    /// name, or the `=` when unnamed; clang
+    /// `err_template_parameter_default_friend_template`). Checked as
+    /// written, not on instantiation. The written default stays in the
+    /// AST (`TemplateTables::defaults` is write-once).
+    pub(crate) fn check_friend_template_defaults(&mut self, head: Option<TemplateParamListId>) {
+        let Some(list) = head.filter(|_| self.inst.stack.is_empty()) else { return };
+        let l = *self.ast.templates.param_list(list);
+        let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(l.params).collect();
+        for p in params {
+            // Recovery: the default no longer counts for the
+            // redeclaration rules (clang drops it).
+            if self.templ.default_locs.remove(&p).is_some() {
+                let loc = self.ast.decls.get(p).loc();
+                let m = self.diag(DiagId::sema_template_param_default_friend_template, loc);
+                self.emit(m.allow_duplicate());
+            }
+        }
+    }
+
+    /// [`Sema::check_friend_template_defaults`] for `template<...> friend
+    /// class X;`: not in a dependent context, where clang's
+    /// `CheckClassTemplate` does not check the head of a friend.
+    pub(crate) fn check_friend_class_template_defaults(
+        &mut self,
+        head: Option<TemplateParamListId>,
+    ) {
+        if head.is_some_and(|l| self.ast.templates.param_list(l).depth == 0) {
+            self.check_friend_template_defaults(head);
+        }
+    }
+
     /// [dcl.fct.default]/4: a friend declaration `f` that specifies a
     /// default argument is a definition and the only declaration of its
     /// function (clang `ActOnFriendFunctionDecl`; a later redeclaration
@@ -74,6 +109,10 @@ impl Sema<'_, '_> {
 
     /// [`Sema::act_on_friend`]: the befriended function or type, recorded
     /// in the class being defined (`RecordCold.friends` at `}`).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one step per friend rule, as clang's ActOnFriendFunctionDecl"
+    )]
     pub(crate) fn declare_friend(
         &mut self,
         ds: &DeclSpec,
@@ -191,6 +230,9 @@ impl Sema<'_, '_> {
             }
             self.check_decl_attrs(f, &mut attrs);
             let _ = self.builder().attach_attrs(f, &attrs);
+        }
+        if !def {
+            self.check_friend_template_defaults(head);
         }
         let target = self.finish_template_pattern(f).unwrap_or(f);
         let fd = self.builder().friend(record, d.name_loc(), FriendTarget::Decl(target));

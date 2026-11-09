@@ -87,6 +87,8 @@ pub struct ParseOptions {
     pub no_builtin: bool,
     /// The `-fno-builtin-<name>` names ([`kiln_sema::Sema::no_builtin_fns`]).
     pub no_builtin_fns: Vec<String>,
+    /// `-ffreestanding` ([`kiln_sema::Sema::freestanding`]).
+    pub freestanding: bool,
     /// `-f[no-]sized-deallocation` ([`kiln_sema::Sema::sized_deallocation`]).
     pub sized_deallocation: bool,
     /// `-f[no-]char8_t` ([`kiln_sema::Sema::char8`]; `None`: by `std`).
@@ -137,6 +139,7 @@ impl Default for ParseOptions {
             gnu_lib_builtins: false,
             no_builtin: false,
             no_builtin_fns: Vec::new(),
+            freestanding: false,
             sized_deallocation: true,
             char8: None,
             math_errno: true,
@@ -310,6 +313,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.gnu_lib_builtins = opts.gnu_lib_builtins;
     s.no_builtin = opts.no_builtin;
     s.no_builtin_fns.clone_from(&opts.no_builtin_fns);
+    s.freestanding = opts.freestanding;
     s.sized_deallocation = opts.sized_deallocation;
     s.char8 = opts.char8;
     s.lib_builtin_name = kiln_pp::is_library_builtin;

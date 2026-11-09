@@ -282,6 +282,17 @@ impl Sema<'_, '_> {
                     .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
                     && self.kind_of(q.ctx) != DeclKind::CXXRecord)
         {
+            if let Some(class) = self.member_spec_class()
+                && self.repeated_dependent_using(
+                    class,
+                    DeclKind::UnresolvedUsingTypename,
+                    q.nns,
+                    name,
+                    name_loc,
+                )
+            {
+                return None;
+            }
             let access = self.current_member_access();
             let h = DeclHead::new(self.ctx, name, name_loc).access(access);
             return Some(self.builder().unresolved_using_typename(h, q.nns));
@@ -328,6 +339,7 @@ impl Sema<'_, '_> {
     /// nominated class's own name (WP-724), the constructors of a direct
     /// base (WP-114). A dependent qualifier makes
     /// an `UnresolvedUsingValue` redone at instantiation.
+    #[allow(clippy::too_many_lines, reason = "one arm per using-declarator form")]
     fn class_using_declarator(
         &mut self,
         class: DeclId,
@@ -366,7 +378,7 @@ impl Sema<'_, '_> {
             // dependent base is not derived from itself: that waits too.
             || self.ast.first(q.ctx) == self.ast.first(class) && self.has_dependent_bases(class)
         {
-            return Some(self.dependent_class_using(class, q, name, name_loc, inheriting));
+            return self.dependent_class_using(class, q, name, name_loc, inheriting);
         }
         if self.ast.first(q.ctx) == self.ast.first(class) {
             self.error(DiagId::sema_using_decl_refers_to_own_class, q.loc);
@@ -391,7 +403,7 @@ impl Sema<'_, '_> {
             if self.has_dependent_bases(class) {
                 // The qualifier may name a member of a dependent base
                 // (clang: checked at instantiation).
-                return Some(self.dependent_class_using(class, q, name, name_loc, inheriting));
+                return self.dependent_class_using(class, q, name, name_loc, inheriting);
             }
             // clang: a qualifier naming an invalid class (one whose
             // instantiation failed, so it may have been dropped as a
@@ -431,6 +443,16 @@ impl Sema<'_, '_> {
                 .arg(self.decl_name_str(name))
                 .arg(self.qualifier_desc(q.ctx));
             self.emit(msg);
+            return None;
+        }
+        // [class.mem.general]/22: a member named by a using-declarator has
+        // a name different from the class; a non-static data member only
+        // when the class has a user-declared constructor, checked as the
+        // class completes (`check_field_named_as_class`).
+        if let Some(n) = name.as_ident()
+            && found.decls.iter().any(|&t| self.kind_of(t) != DeclKind::Field)
+            && self.diagnose_class_name_shadow(class, n, name_loc)
+        {
             return None;
         }
         // [namespace.udecl]/10 (clang `CheckUsingDeclRedeclaration`): a
@@ -549,7 +571,7 @@ impl Sema<'_, '_> {
     ) -> Option<DeclId> {
         let class = self.member_spec_class()?;
         let q = Qualifier { ctx: class, nns, loc: name_loc };
-        Some(self.dependent_class_using(class, q, name, name_loc, inheriting))
+        self.dependent_class_using(class, q, name, name_loc, inheriting)
     }
 
     /// `using typename N::name;` whose substituted qualifier is still
@@ -572,7 +594,18 @@ impl Sema<'_, '_> {
         name: DeclName,
         name_loc: Loc,
         inheriting: bool,
-    ) -> DeclId {
+    ) -> Option<DeclId> {
+        if !inheriting
+            && self.repeated_dependent_using(
+                class,
+                DeclKind::UnresolvedUsingValue,
+                q.nns,
+                name,
+                name_loc,
+            )
+        {
+            return None;
+        }
         let access = self.current_member_access();
         // An inheriting declarator is named by the constructor name of the
         // canonical nominated type (clang: `T::type-parameter-0-0`).
@@ -588,7 +621,36 @@ impl Sema<'_, '_> {
         if inheriting {
             self.note_inherited_ctor(class);
         }
-        d
+        Some(d)
+    }
+
+    /// [namespace.udecl]/10 for a dependent using-declarator in `class`
+    /// (clang `CheckUsingDeclRedeclaration`, WP-1015): an earlier one of
+    /// the same kind (`typename` or not) naming `name` through the same
+    /// canonical qualifier makes this one a redeclaration, reported at
+    /// the name with a note at the earlier one; true when it did.
+    fn repeated_dependent_using(
+        &mut self,
+        class: DeclId,
+        kind: DeclKind,
+        nns: NnsId,
+        name: DeclName,
+        name_loc: Loc,
+    ) -> bool {
+        let def = self.ast.definition(class).unwrap_or(class);
+        let prev = self
+            .ast
+            .decls
+            .members(def)
+            .filter(|&m| self.kind_of(m) == kind && self.ast.decls.get(m).name() == name)
+            .find(|&m| self.ast.using_qualifier(m).is_some_and(|p| self.ast.types.same_nns(p, nns)))
+            .map(|m| self.ast.decls.get(m).loc());
+        let Some(prev) = prev else { return false };
+        let msg = self
+            .diag(DiagId::sema_using_decl_redeclaration, name_loc)
+            .with_note(self.diag(DiagId::note_previous_using_decl, prev));
+        self.emit(msg);
+        true
     }
 
     /// Sets `HAS_INHERITED_CTOR` on the class being defined.
