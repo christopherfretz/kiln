@@ -1030,7 +1030,9 @@ impl Parser<'_, '_> {
     /// ([temp.param]/2).
     fn parse_non_type_param(&mut self) -> bool {
         let start = self.loc();
+        let saved = std::mem::replace(&mut self.nttp_specs, true);
         let ds = self.parse_decl_specifiers(DeclaratorContext::Prototype);
+        self.nttp_specs = saved;
         if ds.is_empty() {
             self.error_here(DiagId::parse_expected_template_param);
             return false;

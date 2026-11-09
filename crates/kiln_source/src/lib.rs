@@ -16,8 +16,11 @@
 //! - [`symbol`]: the shared identifier [`Interner`](symbol::Interner) and
 //!   its 4-byte [`Symbol`](symbol::Symbol) handles; [`fx`]: the `FxHash`
 //!   hasher used by every compiler-internal hash table.
+//! - [`activity`]: the per-thread "current activity" breadcrumb that
+//!   internal-compiler-error reports read.
 #![forbid(unsafe_code)]
 
+pub mod activity;
 mod arena;
 pub mod fx;
 mod loc;

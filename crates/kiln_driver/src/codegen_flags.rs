@@ -80,6 +80,11 @@ pub struct CodegenFlags {
     /// The last of `-mspeculative-load-hardening` /
     /// `-mno-speculative-load-hardening`.
     pub speculative_load_hardening: bool,
+    /// `-mbranches-within-32B-boundaries` (x86; WP-961): `llc
+    /// -x86-branches-within-32B-boundaries`, as clang's
+    /// `addX86AlignBranchArgs`. Off x86 an "unsupported option ... for
+    /// target" error. clang has no negative form.
+    pub branches_within_32b: bool,
     /// The last of `-fsplit-stack` / `-fno-split-stack`.
     pub split_stack: bool,
     /// `-finstrument-functions`.
@@ -230,6 +235,7 @@ impl CodegenFlags {
             }
             "-mspeculative-load-hardening" => self.speculative_load_hardening = true,
             "-mno-speculative-load-hardening" => self.speculative_load_hardening = false,
+            "-mbranches-within-32B-boundaries" => self.branches_within_32b = true,
             "-fsplit-stack" => self.split_stack = true,
             "-fno-split-stack" => self.split_stack = false,
             "-finstrument-functions" => self.instrument_functions = true,
