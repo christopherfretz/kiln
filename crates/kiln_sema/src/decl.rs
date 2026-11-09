@@ -6692,28 +6692,61 @@ impl Sema<'_, '_> {
         self.initializing = None;
     }
 
+    /// [dcl.constexpr]/1: a constexpr variable declaration shall be a
+    /// definition (`extern constexpr int m;`); clang
+    /// `ActOnUninitializedDecl` reports it first and stops. An in-class
+    /// static data member is inline, so a definition (C++17). Whether `v`
+    /// was diagnosed (and marked invalid).
+    fn constexpr_decl_not_definition(&mut self, v: DeclId) -> bool {
+        let vn = *self.ast.decls.get(v);
+        let bad = vn.kind() == DeclKind::Var
+            && !vn.has(DeclFlags::INVALID)
+            && self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
+            && !self.is_in_class_static(v)
+            && !self.ast.is_member_spec_declaration(v)
+            && !self.is_var_definition(v);
+        if bad {
+            self.error(DiagId::sema_constexpr_var_decl_not_definition, vn.loc());
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
+        bad
+    }
+
+    /// Whether `v`, outside its class, redeclares a static data member
+    /// whose in-class declaration has the initializer (nothing to
+    /// default-initialize). [depr.static.constexpr]: a redundant
+    /// out-of-class redeclaration of an inline static data member
+    /// initialized in its class is reported when it is `constexpr`.
+    fn out_of_class_static_redecl(&mut self, v: DeclId) -> bool {
+        if self.is_in_class_static(v) {
+            return false;
+        }
+        let in_class = self
+            .ast
+            .redecls_of(v)
+            .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x));
+        if let Some(x) = in_class {
+            if self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr()) {
+                let loc = self.ast.decls.get(v).loc();
+                self.error(DiagId::sema_redundant_constexpr_static_def, loc);
+            }
+            return true;
+        }
+        // [class.static.data]/4: the definition of a `const` static data
+        // member initialized in its class has no initializer.
+        self.ast
+            .redecls_of(v)
+            .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
+    }
+
     fn default_init_var(&mut self, v: DeclId) {
         if self.ast.decls.decomp_bindings(v).is_some() {
             self.decomposition_requires_init(v);
             return;
         }
         let vn = *self.ast.decls.get(v);
-        // [dcl.constexpr]/1: a constexpr variable declaration shall be a
-        // definition (`extern constexpr int m;`); clang
-        // `ActOnUninitializedDecl` reports it first and stops. An in-class
-        // static data member is inline, so a definition (C++17).
-        if vn.kind() == DeclKind::Var
-            && !vn.has(DeclFlags::INVALID)
-            && self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
-            && !self.is_in_class_static(v)
-            && !self.ast.is_member_spec_declaration(v)
-            && !self.is_var_definition(v)
-        {
-            self.error(DiagId::sema_constexpr_var_decl_not_definition, vn.loc());
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
-            return;
-        }
-        if vn.kind() != DeclKind::Var
+        if self.constexpr_decl_not_definition(v)
+            || vn.kind() != DeclKind::Var
             || self.uninit_array_or_reference(v)
             || vn.has(DeclFlags::INVALID)
             || self.is_member_spec_declaration(v)
@@ -6734,28 +6767,8 @@ impl Sema<'_, '_> {
             }
             return;
         }
-        // [depr.static.constexpr]: a redundant out-of-class redeclaration
-        // of an inline static data member initialized in its class.
-        if !self.is_in_class_static(v) {
-            let in_class = self
-                .ast
-                .redecls_of(v)
-                .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x));
-            if let Some(x) = in_class {
-                if self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr()) {
-                    self.error(DiagId::sema_redundant_constexpr_static_def, vn.loc());
-                }
-                return;
-            }
-            // [class.static.data]/4: the definition of a `const` static
-            // data member initialized in its class has no initializer.
-            if self
-                .ast
-                .redecls_of(v)
-                .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
-            {
-                return;
-            }
+        if self.out_of_class_static_redecl(v) {
+            return;
         }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let ty = vn.ty().unwrap_or(QualType::ERROR);
