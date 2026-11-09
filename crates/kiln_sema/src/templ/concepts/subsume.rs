@@ -144,6 +144,27 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether the entity with constraints `ca` (key `a`) is at least as
+    /// constrained as the one with `cb` (key `b`) ([temp.constr.order]/4;
+    /// clang `IsAtLeastAsConstrained`): its normal form is eligible for
+    /// subsumption and subsumes the other's. No constraints is the
+    /// weakest.
+    pub(crate) fn at_least_as_constrained(
+        &mut self,
+        a: DeclId,
+        ca: &[ExprId],
+        b: DeclId,
+        cb: &[ExprId],
+    ) -> bool {
+        let p = self.normal_form(a, ca);
+        let q = self.normal_form(b, cb);
+        match (p, q) {
+            (_, None) => true,
+            (None, Some(_)) => false,
+            (Some(p), Some(q)) => self.eligible_for_subsumption(p) && self.subsumes(p, q),
+        }
+    }
+
     /// [temp.func.order]/6.2.2: of two function templates equally
     /// specialized, the more constrained.
     pub(crate) fn template_more_constrained(&mut self, a: DeclId, b: DeclId) -> bool {
