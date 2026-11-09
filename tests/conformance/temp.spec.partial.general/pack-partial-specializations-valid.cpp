@@ -32,4 +32,11 @@ static_assert(Y<char>::type::k == 0);
 static_assert(b<int, char> == 1 && b<char> == 0);
 static_assert(Z<L<int, char> *>::k == 1 && Z<L<> *>::k == 0);
 static_assert(W<0, 1>::k == 1 && W<1, 0>::k == 0);
+// A single element at a pack's position is not the pack itself
+// ([temp.spec.partial.general]/9.3 does not apply).
+template <int... N> struct E { static constexpr int k = 0; };
+template <int M> struct E<M> { static constexpr int k = 1; };
+template <template <class> class... T> struct F { static constexpr int k = 0; };
+template <template <class> class U> struct F<U> { static constexpr int k = 1; };
+static_assert(E<1>::k == 1 && E<>::k == 0 && F<L>::k == 1 && F<>::k == 0);
 int main() {}

@@ -626,7 +626,12 @@ impl Sema<'_, '_> {
             }
             (DeclKind::NonTypeTemplateParm, ArgView::Expr { expr, .. }) => {
                 let mut e = expr;
-                if info.pack && self.ast.exprs.get(e).kind() == ExprKind::PackExpansionExpr {
+                if info.pack {
+                    // A pack is named only by its expansion `N...`, not by
+                    // an element `M` at the same position.
+                    if self.ast.exprs.get(e).kind() != ExprKind::PackExpansionExpr {
+                        return false;
+                    }
                     e = self.ast.exprs.operand(e);
                 }
                 // The parameter at the same position: the out-of-line
@@ -638,7 +643,8 @@ impl Sema<'_, '_> {
                 DeclKind::TemplateTemplateParm,
                 ArgView::Template(n) | ArgView::TemplateExpansion { name: n, .. },
             ) => {
-                matches!(self.ast.types.template_name_view(n), TemplateName::TemplateTemplateParm { decl, .. } if self.same_template_parm(decl, p, info))
+                info.pack == matches!(a.view(), ArgView::TemplateExpansion { .. })
+                    && matches!(self.ast.types.template_name_view(n), TemplateName::TemplateTemplateParm { decl, .. } if self.same_template_parm(decl, p, info))
             }
             _ => false,
         }
