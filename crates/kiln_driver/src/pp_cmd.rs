@@ -324,6 +324,38 @@ impl Job<'_> {
         Some(PpInputs { list, main: main?, predefines: predefines? })
     }
 
+    /// The module options of a compile that imports (spec/modules.md §2,
+    /// §11.6): the module files named on the command line, the prebuilt
+    /// paths, libc++'s module directory and the `std` module cache
+    /// (§11.11; `cache_key` is the predefines and the search list).
+    /// `None` after reporting an error.
+    fn module_options(
+        &self,
+        engine: &DiagEngine<'_>,
+        cache_key: Option<&(String, String)>,
+    ) -> Option<kiln_pp::ModuleOptions> {
+        let a = self.args;
+        let mut module_files: Vec<(String, std::path::PathBuf)> =
+            a.module_files.iter().map(|(n, p)| (n.clone(), std::path::PathBuf::from(p))).collect();
+        // A scan reads no module file (they may not exist yet).
+        for path in a.nameless_module_files.iter().filter(|_| !a.scan_deps) {
+            module_files.push((nameless_module_name(path, engine)?, path.into()));
+        }
+        let fingerprint = self.fingerprint();
+        let std_cache = cache_key.and_then(|(predefines, search)| {
+            crate::module_cache::for_job(self, predefines, search, &fingerprint)
+        });
+        Some(kiln_pp::ModuleOptions {
+            module_files,
+            prebuilt_paths: a.prebuilt_module_paths.iter().map(Into::into).collect(),
+            std_dir: Some(self.toolchain.libcxx_module_dir()),
+            std_cache,
+            fingerprint,
+            record: !a.scan_deps && (a.precompile || a.module_output.is_some()),
+            scan: a.scan_deps,
+        })
+    }
+
     /// The preprocessor of this input, exactly as `-E` configures it
     /// (header search, `#if` evaluation, `__has_feature` and friends,
     /// dependency collection), with the main file entered. Shared by
@@ -365,28 +397,7 @@ impl Job<'_> {
         // Modules for the modes that run sema, from C++20 (spec/modules.md
         // §2); `-E`/`-M` keep the directives as text.
         if staged && self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx20 {
-            let mut module_files: Vec<(String, std::path::PathBuf)> = a
-                .module_files
-                .iter()
-                .map(|(n, p)| (n.clone(), std::path::PathBuf::from(p)))
-                .collect();
-            // A scan reads no module file (they may not exist yet).
-            for path in a.nameless_module_files.iter().filter(|_| !a.scan_deps) {
-                module_files.push((nameless_module_name(path, engine)?, path.into()));
-            }
-            let fingerprint = self.fingerprint();
-            let std_cache = cache_key.as_ref().and_then(|(predefines, search)| {
-                crate::module_cache::for_job(self, predefines, search, &fingerprint)
-            });
-            opts.modules = Some(kiln_pp::ModuleOptions {
-                module_files,
-                prebuilt_paths: a.prebuilt_module_paths.iter().map(Into::into).collect(),
-                std_dir: Some(self.toolchain.libcxx_module_dir()),
-                std_cache,
-                fingerprint,
-                record: !a.scan_deps && (a.precompile || a.module_output.is_some()),
-                scan: a.scan_deps,
-            });
+            opts.modules = Some(self.module_options(engine, cache_key.as_ref())?);
         } else if let MainInput::Capsule(_) = &main {
             let what =
                 if staged { "a module file before C++20" } else { "preprocessing a module file" };

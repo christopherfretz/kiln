@@ -1438,7 +1438,9 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("%{cxx} %{flags} %{compile_flags} "));
         assert!(lines[0].ends_with(&format!("--precompile -o %T/std.pcm -c {}", src("std.cppm"))));
-        assert!(lines[1].contains(" -fmodule-file=std=%T/std.pcm --precompile -o %T/std.compat.pcm"));
+        assert!(
+            lines[1].contains(" -fmodule-file=std=%T/std.pcm --precompile -o %T/std.compat.pcm")
+        );
         assert!(lines[1].ends_with(&src("std.compat.cppm")));
         assert_eq!(
             flags,

@@ -416,7 +416,10 @@ mod tests {
         let a = args(&["-c", "x.cpp"]);
         assert_eq!(root_from(&a, env(Some("/x"), Some("/h"))), Some("/x/kiln/modules".into()));
         // A relative XDG_CACHE_HOME is ignored.
-        assert_eq!(root_from(&a, env(Some("x"), Some("/h"))), Some("/h/.cache/kiln/modules".into()));
+        assert_eq!(
+            root_from(&a, env(Some("x"), Some("/h"))),
+            Some("/h/.cache/kiln/modules".into())
+        );
         assert_eq!(root_from(&a, env(None, Some("/h"))), Some("/h/.cache/kiln/modules".into()));
         assert_eq!(root_from(&a, env(None, Some(""))), None);
         assert_eq!(root_from(&a, env(None, None)), None);

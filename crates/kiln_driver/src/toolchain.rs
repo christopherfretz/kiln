@@ -504,8 +504,8 @@ impl Toolchain {
     }
 
     /// libc++'s module manifest, `libc++.modules.json` (what
-    /// `-print-file-name=libc++.modules.json` prints, and CMake's
-    /// `CXX_MODULE_STD` reads): beside the libc++ whose module sources
+    /// `-print-file-name=libc++.modules.json` prints, and what `cmake`
+    /// reads for `CXX_MODULE_STD`): beside the libc++ whose module sources
     /// [`Self::libcxx_module_dir`] names, so its relative `source-path`
     /// entries resolve to those sources: `<prefix>/lib/<triple>/` or
     /// `<prefix>/lib/`, else the LLVM directory's `lib/`.

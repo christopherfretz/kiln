@@ -180,7 +180,8 @@ pub fn libcxx_module_dir_of(compiler: &Path, llvm_dir: &Path) -> Option<PathBuf>
     let text = std::fs::read_to_string(&json).ok()?;
     let doc = Json::parse(&text).ok()?;
     let modules = doc.get("modules")?.as_arr()?;
-    let std = modules.iter().find(|m| m.get("logical-name").and_then(Json::as_str) == Some("std"))?;
+    let std =
+        modules.iter().find(|m| m.get("logical-name").and_then(Json::as_str) == Some("std"))?;
     let source = std.get("source-path")?.as_str()?;
     let path = std::fs::canonicalize(json.parent()?.join(source)).ok()?;
     path.parent().map(Path::to_path_buf)

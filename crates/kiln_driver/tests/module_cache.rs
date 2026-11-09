@@ -255,7 +255,10 @@ fn location_and_switches() {
     ok(&d, &["-fno-kiln-module-cache", "-fmodules-cache-path=off", "-fsyntax-only", "u.cpp"]);
     assert!(!d.join("off").exists());
     // A module file given on the command line wins; no cache is consulted.
-    ok(&d, &["--precompile", "-x", "c++-module", "sys/usr/share/libc++/v1/std.cppm", "-o", "s.pcm"]);
+    ok(
+        &d,
+        &["--precompile", "-x", "c++-module", "sys/usr/share/libc++/v1/std.cppm", "-o", "s.pcm"],
+    );
     let r = remarks(&ok(
         &d,
         &["-v", "-fmodules-cache-path=given", "-fmodule-file=std=s.pcm", "-fsyntax-only", "u.cpp"],

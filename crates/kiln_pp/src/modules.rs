@@ -55,7 +55,11 @@ pub struct ModuleOptions {
 /// file to read instead (built and stored on a miss), or `None` to build
 /// the unit from its source in-process (part A).
 #[derive(Clone)]
-pub struct StdModuleCache(pub Rc<dyn Fn(&str, &Path) -> Option<PathBuf>>);
+pub struct StdModuleCache(pub Rc<StdModuleLookup>);
+
+/// The function behind a [`StdModuleCache`]: module name and libc++
+/// source to the module file to read.
+pub type StdModuleLookup = dyn Fn(&str, &Path) -> Option<PathBuf>;
 
 impl std::fmt::Debug for StdModuleCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
