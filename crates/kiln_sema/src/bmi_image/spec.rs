@@ -58,7 +58,7 @@ impl Writer<'_, '_, '_> {
         {
             qs.extend(ast.lists.get(r.bases).iter().map(|&g| ast.decls.base_spec(g).ty));
         }
-        if let Some(ArgView::Type(q)) = ast.templates.defaults.get(d).map(|a| a.view()) {
+        if let Some(ArgView::Type(q)) = ast.templates.defaults.get(d).map(TemplateArg::view) {
             qs.push(q);
         }
         for q in qs {

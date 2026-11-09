@@ -775,6 +775,7 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
     }
 }
 
+#[allow(clippy::too_many_lines)] // the sections in format order, kept together with the format
 fn encode(img: &Image) -> Vec<u8> {
     let mut w = Wr(Vec::new());
     w.u32(IMAGE_VERSION);
@@ -1365,12 +1366,14 @@ fn base_class(img: &Image, q: QRef, complete: &dyn Fn(u32) -> bool) -> Option<u3
     for _ in 0..64 {
         let j = t.checked_sub(BUILTINS + 1)? as usize;
         t = match img.types.get(j)? {
-            TyRec::Elab(_, q) | TyRec::ElabQ(_, _, q) | TyRec::Paren(q) => q.ty,
+            TyRec::Elab(_, q)
+            | TyRec::ElabQ(_, _, q)
+            | TyRec::Paren(q)
+            | TyRec::Tst { under: Some(q), .. } => q.ty,
             TyRec::Typedef(d) => match img.decls.get(*d as usize)?.payload {
                 Payload::Typedef { underlying, .. } => underlying.ty,
                 _ => return None,
             },
-            TyRec::Tst { under: Some(q), .. } => q.ty,
             TyRec::Record(d) => {
                 let ok = match img.decls.get(*d as usize)?.payload {
                     Payload::Record { .. } => complete(*d),
@@ -2333,7 +2336,7 @@ impl Writer<'_, '_, '_> {
         if p.params.is_some() {
             return Err("a template template parameter");
         }
-        let default = match t.defaults.get(d).map(|a| a.view()) {
+        let default = match t.defaults.get(d).map(TemplateArg::view) {
             None => None,
             Some(ArgView::Type(q)) if !t.inherited_defaults.contains(d) => Some(q),
             Some(_) if ast.decls.get(d).kind() == DeclKind::TemplateTypeParm => {
@@ -4192,6 +4195,7 @@ mod tests {
     /// just after it, the specialization and member reference records,
     /// and the specialization, injected-class-name and substituted
     /// parameter types.
+    #[allow(clippy::too_many_lines)] // one sample image, its records in format order
     fn class_template_sample() -> Image {
         let q = |ty| QRef { ty, quals: 0 };
         let int = BuiltinType::Int as u32;

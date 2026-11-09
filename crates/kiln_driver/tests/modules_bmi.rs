@@ -815,6 +815,7 @@ fn kind2_declaration_image_classes() {
 /// A unit with a node the image does not carry is written without one,
 /// and `-v` names the first such node (§11.11 "Part 2a", "Fallback").
 #[test]
+#[allow(clippy::too_many_lines)] // a table of (unit, reason) cases
 fn kind2_declaration_image_fallback() {
     let d = scratch("image-fallback");
     for (src, why) in [
