@@ -1955,8 +1955,18 @@ impl Sema<'_, '_> {
         let roots: Vec<ExprId> = match &init {
             Initializer::Expr(e) => vec![*e],
             Initializer::Paren(v, _, _) => v.clone(),
-            // (A braced default argument is not searched: a gap.)
             Initializer::List(_) => Vec::new(),
+        };
+        // [dcl.fct.default]/8-9: a braced default argument's clauses are
+        // searched for `this` and parameters too (clang visits the
+        // `InitListExpr`).
+        let list_refs_ok = match &init {
+            Initializer::List(l) if !p.invalid => {
+                let mut leaves = Vec::new();
+                Self::init_list_leaves(l, &mut leaves);
+                leaves.into_iter().fold(true, |ok, e| self.check_default_arg_refs(e) && ok)
+            }
+            _ => true,
         };
         // [temp.variadic]/12: `void f(int = sizeof(Ts));` (clang
         // reports at the argument's begin).
@@ -1974,7 +1984,10 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        if unexpanded || !roots.into_iter().all(|e| self.check_default_arg_refs(e)) {
+        if unexpanded
+            || !list_refs_ok
+            || !roots.into_iter().all(|e| self.check_default_arg_refs(e))
+        {
             p.invalid = true;
             if let Some(d) = p.decl {
                 self.ast.decls.set_flags(d, DeclFlags::INVALID);
@@ -2028,6 +2041,16 @@ impl Sema<'_, '_> {
             }
         }
         self.store_param_default(p, e);
+    }
+
+    /// The expressions of `l`'s clauses, nested lists flattened, in order.
+    fn init_list_leaves(l: &crate::init::InitList, out: &mut Vec<ExprId>) {
+        for i in &l.items {
+            match &i.value {
+                crate::init::InitValue::Expr(e) => out.push(*e),
+                crate::init::InitValue::List(n) => Self::init_list_leaves(n, out),
+            }
+        }
     }
 
     /// Stores converted default argument `e` in `p`.
