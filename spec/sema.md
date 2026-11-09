@@ -9063,9 +9063,54 @@ not supported yet`.
     [dcl.init.list]/3; designated lists against an aggregate per
     [dcl.init.list]/3.1, `auto` deducing `std::initializer_list` per
     element, a structured binding of it ill-formed as for `auto [a, b] =
-    {1, 2};`). Each element's temporaries belong to its own block
-    `{ decl = {...}; body }`, so codegen and the Oven destroy them at that
-    block's end like any block-scope declaration's.
+    {1, 2};`).
+  - *Element temporaries* (WP-1106; [class.temporary]/8 as amended by
+    CWG3043 in the C++26 DIS). A temporary created in element E persists
+    for the lifetime of the for-range-declaration E initializes, whatever
+    its type (`auto x : {D{2}.v}` prints `x2 ~D2`), and is destroyed after
+    it, in reverse order of construction ([class.temporary]/11), at the
+    end of the element's block `{ decl = E_i; body }`. Sema: the element
+    expression is built before its declaration, so `expansion_select`
+    re-marks its temporaries for the declaration's full-expression
+    (`note_shared_temporaries`, which gives the initializer its
+    `ExprWithCleanups`), and `expansion_element` then calls
+    `extend_init_temporaries` (`class/temporary.rs`), which marks every
+    `MaterializeTemporaryExpr` of storage `FullExpression` in the
+    initializer `Automatic`, extended by the variable (a
+    `LifetimeExtendedTemporaryDecl` each), not entering nested
+    full-expressions (statement expressions, lambda bodies) or
+    unevaluated operands. Codegen's `push_temporary_cleanup` and the
+    Oven's `begin_extended`/`end_extended` then handle them as a
+    reference's ¶6 temporaries: destroyed after the variable, on every
+    path out of the block. In the Oven a non-reference local's
+    initializer may now extend temporaries, so its block opens a cleanup
+    scope (`open_scope`, `extends_temporaries`) and a scalar register
+    local preallocates them too. Evaluated from outside (codegen's
+    constant-folding prepass of a POD or `const` initializer), such a
+    temporary is destroyed at the end of the evaluated initializer, so
+    a non-constexpr destructor makes it non-constant as in clang
+    (`discardCleanups`) and is not folded away. The lifetime check
+    (`check_var_lifetime`) is skipped for the declaration
+    (`expansion_element_init`): nothing in it dangles. **GCC 16.1**
+    implements the earlier resolution (no extension: `~D2 x2`), and
+    upstream clang implements the DIS (llvm#218710; clang 22 has no
+    P1306), so the run tests carry kiln goldens (`oracle: none`).
+    *Left* (`element-discarded-temporary-run.cpp`, `xfail(kiln)`): a
+    discarded class prvalue (`(void)D{1}`, a comma's left operand) is
+    bound (`CXXBindTemporaryExpr`) but never materialized, so it still
+    dies with the declaration's full-expression; and a default
+    argument's temporaries stay with the call's full-expression.
+  - *Element immediate invocations* (WP-1106; [expr.const]/16): an
+    immediate invocation in an element is evaluated at the end of its
+    declaration's full-expression. The element's `ConstantExpr` was built
+    with the list, before any full-expression that uses it, so
+    `expansion_select` hands its unevaluated invocations to the
+    declaration's full-expression (`note_deferred_invocations`,
+    `consteval.rs`); previously they were never evaluated and the program
+    called the consteval function at run time. A temporary inside an
+    immediate invocation ends within it: `extend_init_temporaries` does
+    not enter a `ConstantExpr`. Test: `element-immediate-invocation-run.cpp`
+    (GCC oracle).
   - *iterating* (`range_for.rs` `expansion_iterable`): not an array, and
     member `begin`/`end` are found or ADL finds viable candidates;
     `static constexpr` `__range`, `__begin`; element i is `*(__begin + i)`
@@ -9106,7 +9151,16 @@ not supported yet`.
     evaluations and steps).
   - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`
     (`struct_bind.rs`); element i is `__u_i`. With a `constexpr`
-    for-range-declaration the declaration is `static constexpr`.
+    for-range-declaration the declaration is `static constexpr`. The
+    initializer's temporaries persist for the lifetime of that reference,
+    to the end of the whole statement ([class.temporary]/9, CWG3043;
+    `expansion_decomp` calls `extend_init_temporaries`, a no-op for the
+    `static constexpr` form, whose temporaries are part of its constant
+    initialization). GCC 16.1 agrees
+    (`tests/conformance/stmt.expand/destructuring-temporaries-run.cpp`).
+    The iterating form's `__range` is `static constexpr`, so its
+    temporaries are part of its constant initialization and never
+    observable at run time.
 - **Binding a constexpr range** (`expansion_fallback`). A prvalue
   initializer is bound by value (`static constexpr auto`, const, so its
   value is usable in constant expressions; a lifetime-extended temporary
