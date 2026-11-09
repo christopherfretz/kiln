@@ -27,6 +27,12 @@
 //! extension", and a function-try-block "function try block in constexpr
 //! function is a C++20 extension" (clang `CheckConstexprFunctionBody`,
 //! WP-891).
+//!
+//! Before the body rules, the signature rule ([dcl.constexpr]/3 before
+//! C++23, clang `CheckConstexprReturnType` / `CheckConstexprParameterTypes`):
+//! a non-constructor's return type and each parameter type are literal
+//! (`void` is not before C++14), checked at the written definition only,
+//! never for a dependent or incomplete type (WP-1123).
 
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, VarStorage};
 use kiln_ast::stmt::StmtKind;
@@ -45,7 +51,84 @@ impl Sema<'_, '_> {
     /// `constexpr` or `consteval` explicitly.
     pub(crate) fn check_constexpr_definition(&mut self, f: DeclId, body: StmtId) {
         self.check_constexpr_virtual_base(f);
+        self.check_constexpr_signature(f);
         self.constexpr_body_vars(f, body);
+    }
+
+    /// clang `CheckConstexprReturnType` and `CheckConstexprParameterTypes`
+    /// ([dcl.constexpr]/3 before C++23, removed by P2448R2): the return
+    /// type of a constexpr function other than a constructor, then each
+    /// parameter type, must be a literal type (`void` is one from C++14).
+    /// The first that is not is an error with `RequireLiteralType`'s
+    /// notes, and the function is invalid. Checked at the definition,
+    /// skipping dependent types; an instantiation is not checked (clang
+    /// makes it silently non-constexpr, which no constant expression can
+    /// tell apart: it cannot pass or return the non-literal value).
+    /// WP-1123.
+    fn check_constexpr_signature(&mut self, f: DeclId) {
+        let kind = self.fn_spec(f).constexpr_kind();
+        if self.std >= kiln_lex::Std::Cxx23
+            || kind == ConstexprKind::None
+            || !self.inst.stack.frames.is_empty()
+            || self.ast.decls.get(f).has(DeclFlags::INVALID)
+        {
+            return;
+        }
+        let consteval = u8::from(kind == ConstexprKind::Consteval);
+        let ctor = self.kind_of(f) == DeclKind::CXXConstructor;
+        let ret = if ctor { kiln_ast::QualType::ERROR } else { self.fn_ret(f) };
+        let msg = if self.non_literal_signature_type(ret, true) {
+            let msg = self
+                .diag(DiagId::sema_constexpr_non_literal_return, self.ast.decls.get(f).loc())
+                .arg(consteval)
+                .arg(self.ty_arg(ret));
+            self.with_non_literal_notes(msg, ret)
+        } else {
+            let Some((i, p, ty)) = self.non_literal_param(f) else { return };
+            let msg = self
+                .diag(DiagId::sema_constexpr_non_literal_param, self.ast.decls.get(p).loc())
+                .arg(consteval)
+                .arg(u8::from(ctor))
+                .arg(crate::expr::ordinal(i + 1))
+                .arg(self.ty_arg(ty));
+            self.with_non_literal_notes(msg, ty)
+        };
+        self.emit(msg);
+        self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        self.templ.body_invalid.insert(f);
+    }
+
+    /// The first parameter of `f` (its index, declaration and type) whose
+    /// type is not literal, as [`Sema::check_constexpr_signature`] checks.
+    fn non_literal_param(&self, f: DeclId) -> Option<(usize, DeclId, kiln_ast::QualType)> {
+        let params = self.ast.decls.function(f)?.params;
+        self.ast.lists.iter::<DeclId>(params).enumerate().find_map(|(i, p)| {
+            let node = self.ast.decls.get(p);
+            let ty = node.ty()?;
+            (!node.has(DeclFlags::INVALID) && self.non_literal_signature_type(ty, false))
+                .then_some((i, p, ty))
+        })
+    }
+
+    /// Whether `ty`, a constexpr function's return type (`ret`) or a
+    /// parameter type, breaks [dcl.constexpr]/3 before C++23: a complete,
+    /// non-dependent type that is not literal (an incomplete one is
+    /// diagnosed by the definition itself).
+    fn non_literal_signature_type(&self, ty: kiln_ast::QualType, ret: bool) -> bool {
+        if self.is_error_type(ty) || self.is_dependent_type(ty) || self.contains_undeduced_auto(ty)
+        {
+            return false;
+        }
+        if self.ast.types.is_void(ty) {
+            return ret && self.std < kiln_lex::Std::Cxx14;
+        }
+        let elem = self.base_element(ty);
+        if let Some(r) = self.ast.types.as_record(elem)
+            && self.ast.definition(r).is_none()
+        {
+            return false;
+        }
+        !self.is_literal_type(ty)
     }
 
     /// The never-constant check of the definition of `f` with `body`
@@ -67,13 +150,17 @@ impl Sema<'_, '_> {
     /// template is instantiated): before C++23 it is constexpr only if no
     /// variable it defines has a non-literal type ([expr.prim.lambda.
     /// closure]/5 with [dcl.constexpr]/3; clang `CheckConstexprKind::
-    /// CheckValid`). A generic lambda's specializations follow its
+    /// CheckValid`), and its return and parameter types are literal
+    /// ([`Sema::check_constexpr_signature`]). A generic lambda's specializations follow its
     /// pattern.
     pub(crate) fn implicit_constexpr_lambda_body_vars(&mut self, f: DeclId, body: StmtId) {
         let spec = self.fn_spec(f);
         if spec.constexpr_kind() != ConstexprKind::Constexpr
             || (self.body_stmts(body).invalid.is_none()
-                && (self.std >= kiln_lex::Std::Cxx23 || self.first_non_literal_var(body).is_none()))
+                && (self.std >= kiln_lex::Std::Cxx23
+                    || (self.first_non_literal_var(body).is_none()
+                        && !self.non_literal_signature_type(self.fn_ret(f), true)
+                        && self.non_literal_param(f).is_none())))
         {
             return;
         }
