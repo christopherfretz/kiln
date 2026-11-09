@@ -100,6 +100,10 @@ pub(crate) struct RunState {
     pub impure: u64,
     /// Nested global initializations in progress.
     pub nesting: u32,
+    /// The parameter object whose destructor an `EndParam` entered: the
+    /// instruction executes again on its return and ends the object's
+    /// lifetime without looking for its registration (0: none).
+    pub end_param: u64,
     /// The evaluation is manifestly constant-evaluated ([expr.const]/20):
     /// `__builtin_is_constant_evaluated()` yields true. A trial fold
     /// ([`crate::Oven::try_fold`]) yields false.
@@ -1281,6 +1285,7 @@ impl Oven {
                 | Op::MpFn
                 | Op::MpCmp
                 | Op::RefChk
+                | Op::EndParam
                 | Op::SetVptr
                 | Op::CovAdj
                 | Op::DynCast
@@ -1733,6 +1738,36 @@ impl Oven {
                     fail!(Fault::Mem { f: MemFault::PastEnd, ak: ak::READ, ty, p: raw });
                 }
                 pc += 3;
+            }
+            Op::EndParam => {
+                let raw = reg!(0) as u64;
+                if aux & 1 != 0 && self.run.end_param != raw {
+                    let depth = self.stack.len() as u32;
+                    let n = self.cleanups.len();
+                    // The registration is near the top: below it only the
+                    // temporaries of the arguments after it.
+                    let at = self
+                        .cleanups
+                        .iter()
+                        .rev()
+                        .take_while(|c| c.depth == depth)
+                        .position(|c| c.this == raw);
+                    if let Some(i) = at {
+                        let c = self.cleanups.remove(n - 1 - i);
+                        self.cleanups.push(c);
+                        self.run.end_param = raw;
+                        match self.run_cleanup(b, pc, pc, fb, false) {
+                            Ok(Some(x)) => return Ok(x),
+                            Ok(None) => {}
+                            Err(e) => return Err(e),
+                        }
+                    }
+                }
+                self.run.end_param = 0;
+                if let Err(f) = self.end_param_life(raw, aux & 1 != 0) {
+                    fail!(f);
+                }
+                pc += 2;
             }
             Op::MpFn => match self.mp.get(reg!(1)) {
                 Some(e) if e.virt => {

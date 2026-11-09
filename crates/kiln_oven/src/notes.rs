@@ -1587,6 +1587,15 @@ impl Oven {
             MemFault::Stale if is_heap_ptr(p) => {
                 format!("{verb} heap allocated object that has been deleted")
             }
+            // clang makes a parameter object in the caller's frame and
+            // ends it on return ([expr.call]/7): "outside its lifetime",
+            // with no note on the declaration (WP-1018). Kiln makes a
+            // scalar one in the callee's.
+            MemFault::Dead(Origin::Var(d)) if ast.decls.get(d).kind() == DeclKind::ParmVar => {
+                format!(
+                    "{verb} object outside its lifetime is not allowed in a constant expression"
+                )
+            }
             MemFault::Dead(Origin::Var(d)) => {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
                 format!("{verb} variable whose lifetime has ended")

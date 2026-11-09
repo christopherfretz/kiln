@@ -226,6 +226,13 @@ ops! {
     // (clang 22 `EvaluateVarDecl`): a pointer past the end of its object
     // designates no object ([expr.add]/4, [dcl.ref]/5; WP-948)
     RefChk = 2,
+    // [p]: the lifetime of the parameter object at `p` (a by-value class
+    // argument, made by the caller) ends: the call that took it returned
+    // ([expr.call]/7, clang's `CallScope`; WP-1018). aux 1 = its
+    // destruction is registered (`PushCleanup`): it is moved from the
+    // enclosing scope's registrations and run first, then this
+    // instruction executes again
+    EndParam = 1,
     // [dst, a, b, c, t1, t2]: a library builtin evaluated natively
     // (spec/oven.md "Builtins"); aux = kind (`bi`) | sub << 8, `a`..`c`
     // registers, `t1`/`t2` types (`bi::DYN`: the designated object's).

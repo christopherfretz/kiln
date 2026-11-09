@@ -1568,6 +1568,8 @@ impl Oven {
         self.mem.reset();
         self.stack.clear();
         self.cleanups.clear();
+        // The next evaluation's objects reuse this one's encodings.
+        self.run.end_param = 0;
         self.exc.clear();
         c
     }
