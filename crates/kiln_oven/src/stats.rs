@@ -37,6 +37,11 @@ pub struct EvalRecord {
     /// interned content reflections designate (spec/oven.md "Reflection
     /// bytes"); part of `peak_bytes`.
     pub refl_bytes: u64,
+    /// Of `bytes`, those freed before the evaluation ended (`delete`,
+    /// a returning call's frame objects): reused during the evaluation
+    /// rather than released with it (spec/oven.md "Transient
+    /// allocation").
+    pub reclaimed_bytes: u64,
     /// Wall-clock microseconds (not deterministic).
     pub wall_us: u64,
     /// Whether the evaluation produced a value.
@@ -69,14 +74,34 @@ pub struct EvalTotals {
     pub memo_hits: u64,
     /// Sum of `refl_bytes`.
     pub refl_bytes: u64,
+    /// Sum of `reclaimed_bytes`.
+    pub reclaimed_bytes: u64,
     /// Sum of `wall_us`.
     pub wall_us: u64,
     /// Number of evaluations.
     pub evaluations: u64,
+    /// Number of evaluations that failed (`ok` false).
+    pub failed: u64,
     /// Splices whose operand sema read as a frozen reflection without an
     /// evaluation (the splice fast path, spec/reflection.md §5): work the
     /// Oven was spared, so no record carries it.
     pub splice_fast: u64,
+}
+
+/// Every evaluation context of a translation unit, recorded or not: the
+/// top-level evaluations plus the trials (folds, constant-initialization
+/// checks, potential constant expressions) no record covers
+/// (`-fconstexpr-stats`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JobTotals {
+    /// Contexts run (nested ones included).
+    pub jobs: u64,
+    /// Contexts that failed.
+    pub failed: u64,
+    /// Their steps (each context's own, as a record's).
+    pub steps: u64,
+    /// Their wall-clock microseconds (each context's own).
+    pub wall_us: u64,
 }
 
 /// Every top-level evaluation of a translation unit, in finishing order.
@@ -84,6 +109,7 @@ pub struct EvalTotals {
 pub struct EvalStats {
     records: Vec<EvalRecord>,
     totals: EvalTotals,
+    jobs: JobTotals,
 }
 
 impl EvalStats {
@@ -100,8 +126,10 @@ impl EvalStats {
         t.static_bytes = t.static_bytes.max(r.static_bytes);
         t.memo_hits += r.memo_hits;
         t.refl_bytes += r.refl_bytes;
+        t.reclaimed_bytes += r.reclaimed_bytes;
         t.wall_us += r.wall_us;
         t.evaluations += 1;
+        t.failed += u64::from(!r.ok);
         self.records.push(r);
     }
 
@@ -109,6 +137,21 @@ impl EvalStats {
     /// mark `n`.
     pub fn note_static_peak(&mut self, n: u64) {
         self.totals.static_bytes = self.totals.static_bytes.max(n);
+    }
+
+    /// Counts an evaluation context (recorded or not) that ran `steps`
+    /// steps in `wall_us` and succeeded if `ok`.
+    pub fn note_job(&mut self, steps: u64, wall_us: u64, ok: bool) {
+        let j = &mut self.jobs;
+        j.jobs += 1;
+        j.failed += u64::from(!ok);
+        j.steps += steps;
+        j.wall_us += wall_us;
+    }
+
+    /// Every context's totals.
+    pub fn jobs(&self) -> JobTotals {
+        self.jobs
     }
 
     /// Adds `n` splices read through the fast path (no evaluation).

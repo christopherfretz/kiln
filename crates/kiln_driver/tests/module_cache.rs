@@ -193,6 +193,23 @@ fn miss_builds_then_hit_reuses() {
     done(&d);
 }
 
+/// `-fconstexpr-stats` / `-fconstexpr-profile` describe the importer
+/// only: the in-process build of a cache miss prints neither (spec/driver.md
+/// "Constexpr profile"; [module.import]).
+#[test]
+fn constexpr_profile_is_the_importers_only() {
+    let Some(d) = setup("profile") else { return };
+    let args = ["-fmodules-cache-path=cache", "-fsyntax-only", "-fconstexpr-stats"];
+    let mut miss = args.to_vec();
+    miss.extend(["-fconstexpr-profile", "u.cpp"]);
+    let e = ok(&d, &miss);
+    assert_eq!(e.matches("constexpr: steps count=").count(), 1, "{e}");
+    assert_eq!(e.matches("===-- kiln constexpr profile:").count(), 1, "{e}");
+    assert!(e.contains("===-- kiln constexpr profile: u.cpp --==="), "{e}");
+    assert_eq!(entries(&d.join("cache")).len(), 1, "the miss built std");
+    done(&d);
+}
+
 #[test]
 fn std_compat_caches_both_modules() {
     let Some(d) = setup("compat") else { return };

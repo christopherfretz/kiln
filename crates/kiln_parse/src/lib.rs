@@ -37,7 +37,7 @@ use kiln_lex::Std;
 use kiln_lex::literal::{EncodingParams, LiteralOptions};
 use kiln_pp::{PpOptions, Preprocessor};
 use kiln_sema::target::Target;
-use kiln_sema::{Budget, Oven, Sema};
+use kiln_sema::{Budget, Oven, ProfileLevel, Sema};
 use kiln_source::activity::{self, Phase};
 use kiln_source::symbol::Interner;
 use kiln_source::{FileId, Loc, SourceManager};
@@ -190,21 +190,29 @@ fn encoding_params(target: &Target) -> EncodingParams {
 }
 
 /// Constant-evaluation settings of a translation unit: the driver's
-/// `-fconstexpr-steps=`, `-fconstexpr-depth=`, `-fconstexpr-memory=` and
-/// `-fconstexpr-backtrace-limit=` (`spec/oven.md` "Integration").
+/// `-fconstexpr-steps=`, `-fconstexpr-depth=`, `-fconstexpr-memory=`,
+/// `-fconstexpr-backtrace-limit=`, `-fconstexpr-stats` and
+/// `-fconstexpr-profile` (`spec/oven.md` "Integration", "Profile
+/// counters").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConstexprLimits {
     /// The budget of each top-level evaluation.
     pub budget: Budget,
     /// Call frames a failure's backtrace shows (0: all).
     pub backtrace_limit: usize,
+    /// What the Oven's profile records.
+    pub profile: ProfileLevel,
 }
 
 impl Default for ConstexprLimits {
     /// clang's defaults (steps 1048576, depth 512, backtrace 10) and
     /// kiln's 256 MiB memory budget.
     fn default() -> Self {
-        ConstexprLimits { budget: Budget::default(), backtrace_limit: 10 }
+        ConstexprLimits {
+            budget: Budget::default(),
+            backtrace_limit: 10,
+            profile: ProfileLevel::Off,
+        }
     }
 }
 
@@ -334,6 +342,9 @@ pub fn parse_preprocessed<'a, 'sm>(
     };
     let mut s = Sema::for_target(ast, diags, target);
     s.set_constexpr_limits(limits.budget, limits.backtrace_limit);
+    if limits.profile != ProfileLevel::Off {
+        s.set_constexpr_profile(limits.profile);
+    }
     s.exceptions = opts.exceptions;
     s.rtti = opts.rtti;
     s.reflection = opts.reflection;
