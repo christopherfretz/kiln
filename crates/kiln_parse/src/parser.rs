@@ -1116,6 +1116,20 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 i = end + 1;
                 continue;
             }
+            // A type found in a class that is dependent but not the
+            // current instantiation here (`L::N` for a local class `L` of
+            // a function template, outside `L`; `A::N` for a member class
+            // `A` of a class template, outside `A`) is a member of an
+            // unknown specialization ([temp.dep.type]/6): without
+            // `typename` it is a type only where [temp.res.general]/4
+            // makes it one, so `L::N()` and `sizeof(L::N)` are
+            // expressions (clang's `computeDeclContext` has no context
+            // for `L::`; spec/sema-templates.md §3.1.1, WP-1084).
+            if matches!(class, NameClass::Type(..))
+                && qual.is_some_and(|q| self.s.is_unentered_dependent_qualifier(q))
+            {
+                class = NameClass::Dependent;
+            }
             return Ok((end, false, class, name, qual));
         }
     }

@@ -78,6 +78,13 @@ impl Sema<'_, '_> {
             && !self.in_declarator_scope_of(c)
     }
 
+    /// [`Sema::is_unentered_dependent_class`] for a nested-name-specifier
+    /// context `q` that may be a typedef of the class (`typedef L LL;
+    /// LL::N`).
+    pub fn is_unentered_dependent_qualifier(&self, q: DeclId) -> bool {
+        self.is_unentered_dependent_class(self.type_name_qualifier(q))
+    }
+
     /// The type `q::name` names when qualified lookup did not find a type
     /// in `q` and `q` can name an unknown specialization ([temp.dep.type]/6,
     /// clang `CheckTypenameType` / `isDependentScopeSpecifier`): a
@@ -111,6 +118,17 @@ impl Sema<'_, '_> {
         template_id: bool,
     ) -> Option<NnsId> {
         if self.is_dependent_ctx(q.ctx) {
+            Some(q.nns)
+        } else if !template_id
+            && self.is_unentered_dependent_qualifier(q.ctx)
+            && matches!(self.classify_name(name, Some(q.ctx)), crate::decl::NameClass::Type(..))
+        {
+            // `L::N` naming a type of a dependent class that is not the
+            // current instantiation, in an expression: a member of an
+            // unknown specialization, looked up again (and diagnosed as
+            // a type without `typename`) at instantiation
+            // ([temp.res.general]/3, [temp.dep.type]/6; WP-1084). A value
+            // found there is bound now: it cannot change.
             Some(q.nns)
         } else if template_id
             && matches!(
