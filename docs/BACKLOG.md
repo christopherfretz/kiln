@@ -975,6 +975,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-953 | accepts-invalid (WP-912): default-argument, block-scope `inline`, lambda shadowing and friend-template default restrictions | WP-912 | open |
 | WP-954 | accepts-invalid (WP-912): clang attribute semantic/argument checks (unavailable, carries_dependency, require_constant_initialization, annotate); overlaps WP-674/675 | WP-912 | open |
 | WP-955 | accepts-invalid (WP-912): access/abstract/deleted checks (friend private, abstract temporary, deleted operator delete, virtual base with private dtor) | WP-912 | open |
+| WP-1017 | accepts-invalid part 3: access/abstract/deleted checks, template declaration rules, lookup and exception specs (WP-955–957) | WP-955 | in progress |
 | WP-956 | accepts-invalid (WP-912): template declaration rules (partial spec more specialized, CWG526, pre-C++20 float NTTP, conversion function template) + constraint self-dependency hard error in SFINAE; crates/kiln_sema/src/templ/concepts/sat.rs:148 | WP-912 | open |
 | WP-957 | accepts-invalid (WP-912): lookup/type checks (ambiguous elaborated, enum keyword, alignas incomplete, differing UDL suffixes) + exception specs laxer than base | WP-912 | open |
 | WP-958 | accepts-invalid (WP-912): rejects-valid: templates and deduction (12 xfails, docs/status/accepts-invalid.md cluster 15) | WP-912 | open |
