@@ -209,7 +209,7 @@ fn join(words: &[String]) -> String {
 }
 
 /// `w` as one shell word: unchanged when it has no shell metacharacter.
-fn quote(w: &str) -> String {
+pub fn quote(w: &str) -> String {
     let plain = !w.is_empty()
         && w.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_=+./:,@%^".contains(&b));
     if plain { w.to_owned() } else { format!("'{}'", w.replace('\'', r"'\''")) }
