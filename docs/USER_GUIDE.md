@@ -105,6 +105,9 @@ for each build system, with the projects that validate it, is in
   # or: cmake -DCMAKE_CXX_COMPILER=kiln++ ...
   ```
 
+  C++20 modules (`FILE_SET CXX_MODULES`) need CMake 3.28 or newer and
+  the Ninja generator, as with clang. See [Modules](#modules).
+
 - **Autotools** works unchanged: `./configure CXX=kiln++`. `AC_PROG_CXX`
   sees a GNU-compatible compiler through `__GNUC__`, and libtool
   queries the linker through `-print-prog-name=ld` and `-shared -v`, both
@@ -203,8 +206,18 @@ never a crash. Module files may only be read by the kiln build that wrote
 them ([STABILITY.md](STABILITY.md#not-covered-may-change-in-any-release)).
 Rebuild them when you upgrade kiln.
 
-Dependency scanning (P1689, so CMake's module support),
-`-fmodule-header` and header-unit module files are not supported yet. See
+**Dependency scanning.** `kiln-scan-deps` is kiln's clang-scan-deps:
+`kiln-scan-deps -format=p1689 -- kiln++ <flags> -c m.cppm` prints the
+module dependencies as P1689r5 JSON, the same output as clang-scan-deps
+22 (spec/driver.md, "Dependency scanning"). It is installed beside
+`kiln++`, also as `clang-scan-deps-22` and `clang-scan-deps`, which is
+where CMake looks first. CMake 3.28 or newer with Ninja therefore builds
+`FILE_SET CXX_MODULES` targets with kiln and no extra configuration. To
+name the scanner explicitly, for example behind a compiler wrapper, pass
+`-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=<prefix>/bin/kiln-scan-deps`.
+
+`-fmodule-header`, header-unit module files and `import std;` through
+CMake (`CXX_MODULE_STD`) are not supported yet. See
 [KNOWN_ISSUES.md](KNOWN_ISSUES.md#modules).
 
 ## The Oven: compile-time evaluation

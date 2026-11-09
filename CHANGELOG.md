@@ -26,6 +26,9 @@ limits are in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   clang's two-step build: `--precompile`, `-fmodule-output`,
   `-fmodule-file=`, `-fprebuilt-module-path=`. kiln's module files are
   its own format.
+- Dependency scanning: `kiln-scan-deps` (also installed as
+  `clang-scan-deps-22` and `clang-scan-deps`) writes P1689r5, so CMake
+  3.28+ with Ninja builds C++20 module targets unchanged.
 - Coroutines, exceptions, RTTI, `thread_local`, and clang's and GCC's
   common extensions and builtins.
 

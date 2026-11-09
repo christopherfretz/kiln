@@ -116,7 +116,7 @@ milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
 | C++26 (Croydon DIS draft), reflection, contracts | done except 3 partial papers | [STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md) |
 | libc++ 22 / libc++ 19 / libstdc++ 14 | 99.2% / 98.3% / every header | [COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries) |
 | Debug info, sanitizers, gcov and source coverage | supported; gaps listed | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) |
-| Modules | supported, with module files; no dependency scanning yet | [USER_GUIDE.md](docs/USER_GUIDE.md#modules) |
+| Modules | supported, with module files and CMake dependency scanning; no header-unit module files yet | [USER_GUIDE.md](docs/USER_GUIDE.md#modules) |
 | C | preprocessing only | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#c-mode) |
 | Platforms | Linux aarch64, Linux x86_64 | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#platforms) |
 
