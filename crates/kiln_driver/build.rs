@@ -8,7 +8,9 @@
 //!   `kiln` is linked it dangles. xtask's `build_kiln` makes it again if
 //!   it is missing, and `cargo xtask dist` makes it in the install layout.
 //! - Records the git commit kiln is built from as `KILN_BUILD_GIT_SHA`
-//!   (`kiln_driver::version::GIT_SHA`): `$KILN_GIT_SHA` when set (a
+//!   (`kiln_driver::version::GIT_SHA`, also named by the
+//!   internal-compiler-error report, spec/driver.md "Internal compiler
+//!   errors"): `$KILN_GIT_SHA` when set (a
 //!   release build from a source archive passes it), else `git rev-parse
 //!   --short=12 HEAD`, but only when this crate's workspace is the root of
 //!   the git work tree (a source archive unpacked inside some other

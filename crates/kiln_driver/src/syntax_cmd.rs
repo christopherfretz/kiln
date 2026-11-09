@@ -79,9 +79,11 @@ impl SyntaxJob<'_> {
             result.errors = engine.error_count();
             return result;
         }
-        if let Some(inputs) = job.pp_inputs(&sm, &engine) {
-            self.parse(&sm, &engine, &interner, inputs, None, &mut result);
-        }
+        crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
+            if let Some(inputs) = job.pp_inputs(&sm, &engine) {
+                self.parse(&sm, &engine, &interner, inputs, None, &mut result);
+            }
+        });
         engine.flush();
         if let Some(s) = engine.summary()
             && job.diag_opts.format == kiln_diag::Format::Text
@@ -104,13 +106,15 @@ impl SyntaxJob<'_> {
         let engine = DiagEngine::new(&sm, job.diag_opts, sink.clone());
         let mut result = JobResult::default();
         let mut verifier = None;
-        if let Some(inputs) = job.pp_inputs(&sm, &engine) {
-            let dirs: Vec<String> = inputs.list.dirs().iter().map(|d| d.path.clone()).collect();
-            let v = Verifier::new(&sm, opts.clone(), Some(inputs.main), quoted_lookup(dirs));
-            let v = Rc::new(RefCell::new(v));
-            self.parse(&sm, &engine, &interner, inputs, Some(&v), &mut result);
-            verifier = Some(v);
-        }
+        crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
+            if let Some(inputs) = job.pp_inputs(&sm, &engine) {
+                let dirs: Vec<String> = inputs.list.dirs().iter().map(|d| d.path.clone()).collect();
+                let v = Verifier::new(&sm, opts.clone(), Some(inputs.main), quoted_lookup(dirs));
+                let v = Rc::new(RefCell::new(v));
+                self.parse(&sm, &engine, &interner, inputs, Some(&v), &mut result);
+                verifier = Some(v);
+            }
+        });
         let verifier = verifier.unwrap_or_else(|| {
             Rc::new(RefCell::new(Verifier::new(&sm, opts, None, Box::new(|_, _, _| None))))
         });

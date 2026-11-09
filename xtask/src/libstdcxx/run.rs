@@ -162,7 +162,12 @@ pub fn run_header(cfg: &Config, header: &str, index: usize) -> HeaderResult {
         return HeaderResult { header: header.to_owned(), kiln: c.clone(), clang: Some(c) };
     }
     let mut kiln = Command::new(&cfg.kiln);
-    kiln.arg("-resource-dir").arg(&cfg.resource_dir).args(cfg.common_flags()).arg(&src);
+    // No crash reproducer per crashing header (spec/libstdcxx.md).
+    kiln.arg("-resource-dir")
+        .arg(&cfg.resource_dir)
+        .arg("-fno-crash-diagnostics")
+        .args(cfg.common_flags())
+        .arg(&src);
     let kiln_args: Vec<_> = kiln.get_args().map(std::ffi::OsStr::to_os_string).collect();
     let kiln_limit = cfg.mem.map(|m| m.plus(process::kiln_stack_reservation_mib(&kiln_args)));
     let k = compile(cfg, kiln, &dir, kiln_limit);
