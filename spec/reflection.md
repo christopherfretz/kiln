@@ -132,6 +132,12 @@ the IS equality ([expr.eq]):
   int == ^^int const` and `^^decltype(1) == ^^int`, but `^^Alias !=
   ^^int`, and `dealias(^^Alias) == ^^int` ([meta.reflection.queries];
   GCC 16.1 agrees; `expr.reflect/alias-vs-dealias-identity.cpp`).
+- **Namespace aliases** reflect the alias declaration
+  (`NamespaceAlias`), never the namespace it names: `^^M != ^^N` for
+  `namespace M = N;`, two aliases of one namespace (or an alias of an
+  alias) compare unequal, and only `^^M == ^^M` ([expr.eq]/7: neither the
+  same entity nor any other listed case; GCC 16.1 agrees; WP-505,
+  `expr.eq/reflection-namespace-alias.cpp`, `reflection/reflect-operator.cpp`).
 - **Values** are interned by type and content in `ConstStore`:
   `reflect_constant(3) == reflect_constant(3)` (GCC 16.1 agrees; WP-479).
 - **`data_member_spec`** results are interned by content: equal
@@ -690,7 +696,13 @@ answers as of that point.
 - No value of consteval-only type reaches codegen. Codegen's constant
   emitter stays as the backstop for the known gaps: it rejects such a
   value with "reflection values cannot be emitted"
-  (`kiln_codegen/src/consts.rs`).
+  (`kiln_codegen/src/consts.rs`). A namespace-scope variable whose
+  initializer compares or queries reflections but whose own type is not
+  consteval-only (`constexpr bool b = type_of(^^x) == ^^int;`, an array
+  of such bools, a `define_static_string` pointer) is emitted with its
+  folded value and may be odr-used at runtime; the reflection operands
+  never reach codegen (GCC 16.1 agrees; WP-505,
+  `basic.types.general/consteval-only-namespace-scope-bool-run.cpp`).
 
 ### 4.2 Plainly constant-evaluated
 - An evaluation is *plainly constant-evaluated* ([expr.const]) when it is

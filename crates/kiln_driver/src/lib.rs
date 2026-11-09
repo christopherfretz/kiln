@@ -703,12 +703,30 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     if driver_warnings(&args, &tc, &inputs, &diag_opts, &io.stderr) {
         return 1;
     }
-    // `-include-pch` (spec/driver.md "Precompiled headers", WP-1023): the
-    // checked PCH replays as `-include`s.
-    let Ok(pch_args) = pch::consumer(&args, &tc, &inputs, &diag_opts, &io.stderr) else {
+    // WP-1037: clang's driver turns the first `-include <h>` into
+    // `-include-pch <h>.pch` (or `.gch`) when there is one; it probes once
+    // per job that preprocesses (not for `.i`/`.ii`, objects, module files).
+    let jobs = inputs
+        .iter()
+        .filter(|i| codegen_cmd::is_source(i) || args.is_header_input(i))
+        .filter(|i| {
+            i.lang.is_some()
+                || !matches!(
+                    std::path::Path::new(&i.path).extension().and_then(|e| e.to_str()),
+                    Some("i" | "ii")
+                )
+        })
+        .count();
+    let Ok(probed) = pch::probe(&args, jobs, &diag_opts, &io.stderr) else {
         return 1;
     };
-    let args: &Args = pch_args.as_ref().unwrap_or(&args);
+    let args: &Args = probed.as_ref().unwrap_or(&args);
+    // `-include-pch` (spec/driver.md "Precompiled headers", WP-1023): the
+    // checked PCH replays as `-include`s.
+    let Ok(pch_args) = pch::consumer(args, &tc, &inputs, &diag_opts, &io.stderr) else {
+        return 1;
+    };
+    let args: &Args = pch_args.as_ref().unwrap_or(args);
 
     if args.action == Action::Precompile && inputs.len() > 1 && args.output.is_some() {
         let sm = SourceManager::new();

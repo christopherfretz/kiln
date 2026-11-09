@@ -101,11 +101,13 @@ const MAJOR: &str = env!("CARGO_PKG_VERSION_MAJOR");
 
 /// The dependency scanner's names beside `kiln` (symlinks to it; the
 /// program name picks the mode): `kiln-scan-deps`, and the
-/// `clang-scan-deps-<clang-compat major>` / `clang-scan-deps` names
-/// `CMake`'s `find_program` looks for in the compiler's directory
-/// (spec/modules.md §11.9). `crates/kiln_driver/build.rs` makes the same
+/// `clang-scan-deps-<clang-compat major>` (22, and 19 for
+/// `-fclang-compat=19`) / `clang-scan-deps` names `CMake`'s
+/// `find_program` looks for in the compiler's directory (spec/modules.md
+/// §11.9). `crates/kiln_driver/build.rs` makes the same
 /// links in the cargo profile directory.
-pub const SCAN_DEPS_NAMES: &[&str] = &["kiln-scan-deps", "clang-scan-deps-22", "clang-scan-deps"];
+pub const SCAN_DEPS_NAMES: &[&str] =
+    &["kiln-scan-deps", "clang-scan-deps-22", "clang-scan-deps-19", "clang-scan-deps"];
 
 /// What one dist run produced.
 #[derive(Debug)]
@@ -416,7 +418,7 @@ pub fn rewrite_links(root: &Path, src: &str, text: &str, version: &str) -> Resul
 ///
 /// ```text
 /// bin/kiln++ -> kiln
-/// bin/kiln-scan-deps, bin/clang-scan-deps-22, bin/clang-scan-deps -> kiln
+/// bin/kiln-scan-deps, bin/clang-scan-deps-{22,19}, bin/clang-scan-deps -> kiln
 /// lib/kiln/<major>/include/      resource/include (builtin headers)
 /// lib/kiln/<major>/predefines/   resource/predefines/*.txt
 /// lib/kiln/<major>/share/        resource/share/*.txt (default ignorelists)
@@ -973,7 +975,13 @@ mod tests {
         assert!(!prefix.join("lib/kiln/7/predefines/structure.diff").exists());
         assert!(!prefix.join("lib/kiln/7/include-paths").exists());
         #[cfg(unix)]
-        for name in ["kiln++", "kiln-scan-deps", "clang-scan-deps-22", "clang-scan-deps"] {
+        for name in [
+            "kiln++",
+            "kiln-scan-deps",
+            "clang-scan-deps-22",
+            "clang-scan-deps-19",
+            "clang-scan-deps",
+        ] {
             let link = prefix.join("bin").join(name);
             assert_eq!(std::fs::read_link(link).unwrap(), Path::new("kiln"), "{name}");
         }
