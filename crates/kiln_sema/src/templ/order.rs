@@ -139,7 +139,9 @@ impl Sema<'_, '_> {
             // [temp.arg.template]/3: a deduced template template argument
             // must match its parameter.
             ok = ok
-                && self.check_deduced_template_template_args(partial, list.depth, &params, &d.args, poi);
+                && self.check_deduced_template_template_args(
+                    partial, list.depth, &params, &d.args, poi,
+                );
         }
         let r = if ok {
             let deduced = self.ast.types.arg_list(&d.args);

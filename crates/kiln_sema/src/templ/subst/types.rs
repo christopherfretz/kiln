@@ -533,8 +533,7 @@ impl Substituter<'_, '_, '_> {
                     self.sema.emit(d);
                     return Err(SubstFail);
                 };
-                if self.sema.kind_of(d) == DeclKind::ClassTemplate
-                    && self.sema.is_ctad_template(d)
+                if self.sema.kind_of(d) == DeclKind::ClassTemplate && self.sema.is_ctad_template(d)
                 {
                     // `typename T::X x = e;` with `X` a member class
                     // template: a placeholder for a deduced class type

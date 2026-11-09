@@ -1475,16 +1475,7 @@ impl Sema<'_, '_> {
         // The object assigned to: `*this`, or an explicit object parameter
         // (`S &operator=(this S &, const S &) = default;`, [dcl.fct]/6).
         let explicit = self.has_explicit_object(f).then(|| self.param_decls(f)[0]);
-        let (this_ty, obj_ty) = match explicit {
-            Some(o) => {
-                let t = self.ast.decls.get(o).ty().unwrap_or(QualType::ERROR);
-                (QualType::ERROR, self.non_reference(t))
-            }
-            None => {
-                let Some(t) = self.func.as_ref().and_then(|s| s.this_ty) else { return false };
-                (t, self.ast.types.pointee(t).unwrap_or(QualType::ERROR))
-            }
-        };
+        let Some((this_ty, obj_ty)) = self.assign_object_types(explicit) else { return false };
         let obj_q = self.ast.types.effective_quals(obj_ty);
         let other_q = self.ast.types.effective_quals(other_ty);
         let mut stmts: Vec<StmtId> = Vec::new();
@@ -1557,15 +1548,12 @@ impl Sema<'_, '_> {
             }
             let fq = self.ast.types.effective_quals(self.ety(from));
             let from = self.field_access(from, m, fq, false, loc);
-            let to = match explicit {
-                Some(o) => {
-                    let obj = self.param_ref(o, obj_ty, loc);
-                    self.field_access(obj, m, obj_q, false, loc)
-                }
-                None => {
-                    let this = self.builder().this_expr(this_ty, false, loc);
-                    self.field_access(this, m, obj_q, true, loc)
-                }
+            let to = if let Some(o) = explicit {
+                let obj = self.param_ref(o, obj_ty, loc);
+                self.field_access(obj, m, obj_q, false, loc)
+            } else {
+                let this = self.builder().this_expr(this_ty, false, loc);
+                self.field_access(this, m, obj_q, true, loc)
             };
             match self.assign_subobject(fty, to, from, loc) {
                 Some(s) => stmts.push(s),
@@ -1580,6 +1568,18 @@ impl Sema<'_, '_> {
         let body = self.builder().compound(&stmts, loc, loc);
         let _ = self.builder().set_body(f, body);
         true
+    }
+
+    /// The `this` type (`ERROR` with an explicit object parameter) and the
+    /// type of the object a defaulted assignment operator assigns to: its
+    /// explicit object parameter `explicit`'s, else `*this`'s.
+    fn assign_object_types(&self, explicit: Option<DeclId>) -> Option<(QualType, QualType)> {
+        if let Some(o) = explicit {
+            let t = self.ast.decls.get(o).ty().unwrap_or(QualType::ERROR);
+            return Some((QualType::ERROR, self.non_reference(t)));
+        }
+        let t = self.func.as_ref().and_then(|s| s.this_ty)?;
+        Some((t, self.ast.types.pointee(t).unwrap_or(QualType::ERROR)))
     }
 
     /// The object a defaulted assignment operator assigns to, an lvalue of
