@@ -675,8 +675,8 @@ mod ci_tests {
         assert_eq!(listed, want, "{}", path.display());
     }
 
-    /// The x86_64 sweep never gates a merge (WP-961, docs/VALIDATION.md
-    /// "x86_64 sweep"): `.github/workflows/sweep.yml` triggers only on
+    /// The `x86_64` sweep never gates a merge (WP-961, docs/VALIDATION.md
+    /// "`x86_64` sweep"): `.github/workflows/sweep.yml` triggers only on
     /// `workflow_dispatch` and pushes to `sweep/**`, and every project of its
     /// OSS matrix is a row of `scripts/oss/projects.toml`.
     #[test]
@@ -688,8 +688,11 @@ mod ci_tests {
         let on: String = yml[yml.find("\non:\n").expect("an on: map") + 5..]
             .lines()
             .take_while(|l| l.is_empty() || l.starts_with([' ', '#']))
-            .map(|l| format!("{l}\n"))
-            .collect();
+            .fold(String::new(), |mut acc, l| {
+                acc.push_str(l);
+                acc.push('\n');
+                acc
+            });
         let triggers: Vec<&str> = on
             .lines()
             .filter(|l| l.len() > 2 && l.starts_with("  ") && !l[2..].starts_with([' ', '#']))

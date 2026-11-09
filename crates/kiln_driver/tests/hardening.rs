@@ -127,7 +127,7 @@ fn patchable_nop_sled() {
 }
 
 /// WP-961: `-mbranches-within-32B-boundaries` (x86; projects add it for
-/// Intel's JCC erratum, daw_json_link among them) pads the object's
+/// Intel's JCC erratum, `daw_json_link` among them) pads the object's
 /// branches as clang 19's does: `llc -x86-branches-within-32B-boundaries`.
 #[test]
 fn branches_within_32b_boundaries() {
