@@ -56,6 +56,7 @@ sema_annotation_not_allowed = Error (1) "an annotation cannot appertain to {0}";
 sema_annotation_not_structural = Error (1) "annotation has non-structural type {0}";
 sema_anon_bitfield_negative_width = Error (1) "anonymous bit-field has negative width ({0})";
 sema_anon_bitfield_non_integral = Error (1) "anonymous bit-field has non-integral type {0}";
+sema_anon_bitfield_qualifiers = Error (0) "anonymous bit-field cannot have qualifiers";
 sema_anon_bitfield_width_exceeds_size = Error (2) "width of anonymous bit-field ({0} bits) exceeds the size of its type ({1} bits)";
 sema_anon_record_member_redecl = Error (2) "member of anonymous {0} redeclares '{1}'";
 sema_anon_struct_not_member = Error (0) "anonymous structs and classes must be class members";

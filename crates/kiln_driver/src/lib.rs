@@ -21,6 +21,7 @@ pub mod features;
 pub mod fp_flags;
 pub mod link;
 pub mod llvm;
+mod pch;
 pub mod pp_cmd;
 pub mod rsp;
 pub mod sanitize;
@@ -440,7 +441,7 @@ fn read_stdin(stdin: &mut dyn Read) -> String {
 
 /// One `-fsyntax-only` input (C is not implemented yet).
 #[allow(clippy::too_many_arguments)]
-fn syntax_only(
+pub(crate) fn syntax_only(
     args: &Args,
     tc: &Toolchain,
     std: LangStd,
@@ -672,6 +673,12 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     if driver_warnings(&args, &tc, &inputs, &diag_opts, &io.stderr) {
         return 1;
     }
+    // `-include-pch` (spec/driver.md "Precompiled headers", WP-1023): the
+    // checked PCH replays as `-include`s.
+    let Ok(pch_args) = pch::consumer(&args, &tc, &inputs, &diag_opts, &io.stderr) else {
+        return 1;
+    };
+    let args: &Args = pch_args.as_ref().unwrap_or(&args);
 
     if args.action == Action::Precompile && inputs.len() > 1 && args.output.is_some() {
         let sm = SourceManager::new();
@@ -685,10 +692,21 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         e.flush();
         return 1;
     }
+    // Headers (and every input with `-emit-pch`) are precompiled; the
+    // other inputs go on (WP-1023).
+    let all_inputs = inputs.len();
+    let (producers, inputs): (Vec<&args::Input>, Vec<&args::Input>) =
+        inputs.into_iter().partition(|i| pch::is_producer(args, i));
+    if !producers.is_empty() {
+        let errors = pch::produce(args, &tc, &producers, all_inputs, &diag_opts, &mut io);
+        if errors > 0 || inputs.is_empty() {
+            return i32::from(errors > 0);
+        }
+    }
     let stdin_text = inputs.iter().any(|i| i.path == "-").then(|| read_stdin(&mut io.stdin));
     if matches!(args.action, Action::Compile | Action::Link) && args.deps.only.is_none() {
         return codegen_cmd::compile(
-            &args,
+            args,
             &tc,
             &inputs,
             stdin_text.as_deref(),
@@ -709,14 +727,14 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             inputs.iter().map(|&input| cdb::CdbJob { input, output: out.clone() }).collect();
         let sm = SourceManager::new();
         let e = make_engine(&sm, &diag_opts, io.stderr.clone(), Some(&args.program));
-        if !cdb::write(&args, &tc, &jobs, &e) {
+        if !cdb::write(args, &tc, &jobs, &e) {
             errors += 1;
         }
         e.flush();
     }
     for input in inputs {
         let lang = args.input_lang(input);
-        let std = match input_std(&args, lang) {
+        let std = match input_std(args, lang) {
             Ok(s) => s,
             Err(d) => {
                 let sm = SourceManager::new();
@@ -729,18 +747,18 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         };
         if matches!(args.action, Action::SyntaxOnly | Action::Precompile) {
             let stdin = if input.path == "-" { stdin_text.clone() } else { None };
-            let r = syntax_only(&args, &tc, std, lang, &input.path, stdin, &diag_opts, &io);
+            let r = syntax_only(args, &tc, std, lang, &input.path, stdin, &diag_opts, &io);
             errors += r.errors;
             output.push_str(&r.output);
             if let Some(list) = r.dep_list
-                && !deps::write_side_file(&args, &input.path, &list.borrow(), &diag_opts, &mut io)
+                && !deps::write_side_file(args, &input.path, &list.borrow(), &diag_opts, &mut io)
             {
                 errors += 1;
             }
             continue;
         }
         let job = Job {
-            args: &args,
+            args,
             toolchain: &tc,
             std,
             path: &input.path,
@@ -752,15 +770,15 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         errors += r.errors;
         output.push_str(&r.output);
         if let Some(files) = r.deps {
-            let text = deps::deps_text(&args, &input.path, &files);
-            match deps::dep_destination(&args, &input.path) {
+            let text = deps::deps_text(args, &input.path, &files);
+            match deps::dep_destination(args, &input.path) {
                 deps::DepDest::Main => output.push_str(&text),
                 deps::DepDest::File(f) => side_deps.push((f, text)),
             }
         }
     }
 
-    write_results(&args, &diag_opts, &mut io, &output, errors, side_deps)
+    write_results(args, &diag_opts, &mut io, &output, errors, side_deps)
 }
 
 pub(crate) fn report_output_error(opts: &DiagOptions, stderr: &SharedWriter, path: &str, e: &str) {

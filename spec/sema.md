@@ -1868,6 +1868,102 @@ and returns the scope it names:
     primary has no `K`. Test:
     `temp.dep.type/elaborated-unknown-specialization.cpp`.
 
+### 4.4.1 Declaration rules (WP-1015)
+Rules clang enforces at declaration time that kiln accepted (found by the
+clang negative-test run, docs/status/accepts-invalid.md). Each follows
+clang 19's wording, location and recovery. None is re-run on
+instantiation unless stated.
+- **Members named as their class** ([class.mem.general]/22,
+  `class/member_name.rs`): a static data member, member type, member
+  template, unscoped enumerator or using-declaration named as the class is
+  "member 'X' has the same name as its class" at the name
+  (`diagnose_class_name_shadow`). A non-static data member is reported only
+  when the class has a user-declared constructor, once, as the definition
+  completes (`check_field_named_as_class`). Tests:
+  class.mem/member-named-as-class{,-ok}.cpp.
+- **Allocation function declarations** ([basic.stc.dynamic.allocation]/1,
+  [basic.stc.dynamic.deallocation]/1-2, `alloc_decl.rs`): not in a
+  namespace other than the global one and not `static` at global scope; the
+  return type is `void *` (`void`) and not dependent; a template has at
+  least two parameters; the first parameter is `std::size_t` (`void *`)
+  and not dependent; an allocation function's first parameter has no
+  default argument. The first violation in clang's order is reported at
+  the name. Destroying and type-aware (`std::type_identity`) forms and
+  undeduced return types are not checked. Tests: basic.stc.dynamic/.
+- **The main function** ([basic.start.main], `main_decl.rs`): the
+  parameter forms `()`, `(int, char**)`, `(int, char**, char**)` (with
+  clang's `const` extension) and no more than three; not a template; not
+  deleted; not overloaded (another signature redeclares it, so the merge
+  reports conflicting types); a variable named `main` at global scope, or
+  a block-scope `extern` one in a global function, is ill-formed. All off
+  under `-ffreestanding`. `-Wmain` warnings are not issued. Tests:
+  basic.start.main/.
+- **Union, bit-field and static data member rules** (`class/member_rules.rs`):
+  - [class.static.data]/4: an initializer on the namespace-scope
+    definition of a member initialized in-class is reported at the new
+    initializer with a note at the first and dropped;
+  - [class.union.general]/6 (CWG1460): a second variant member with a
+    default member initializer (anonymous members searched), with a note
+    at the first;
+  - a union has no virtual functions; an anonymous bit-field takes no
+    qualifiers.
+  Tests: class.static.data/, class.union/, class.bit/.
+- **Ref-qualifier overloads** ([over.load]/2.3, CWG2496,
+  `overload/redecl.rs`): before C++23 a member function with the
+  parameter-type-list of an earlier one whose ref-qualifier differs, one
+  of them having none, is an error at the name with a note; both stay
+  declared. From C++23 the two correspond when their cv-qualifiers agree,
+  which makes the later one a member redeclaration. The virtual-override
+  form (clang 19 before C++23) reports once per base function and neither
+  overrides. Tests: over.load/ref-qualifier-*.cpp,
+  class.virtual/override-ref-qualifier-*.cpp.
+- **Member redeclarations**: a member class or enumeration redeclared
+  without a definition is `-Wredeclared-class-member` (an extension
+  warning) with a note; a qualified member tag is "extra qualification"
+  (qualifier naming the class) or an error otherwise; a dependent
+  using-declarator repeated with the same canonical qualifier and kind is
+  a redeclaration ([namespace.udecl]/10, `using.rs`). Tests:
+  class.mem.general/member-redeclared-tag*.cpp, dcl.meaning/qualified-member-tag*.cpp,
+  namespace.udecl/dependent-using-*.cpp.
+- **Default arguments** ([dcl.fct.default], `decl.rs`):
+  - /3: a default argument on a parameter of a function declarator that
+    is not the declaration's own clause (a function pointer, reference,
+    typedef or alias, a type-id, a nested parameter, a return type) is
+    "default arguments can only be specified for parameters in a function
+    declaration" at the parameter name, or where it would be; the
+    argument is dropped. The parser calls `act_on_nonfunc_default_arg`;
+    a lambda's own clause, a requires-expression parameter and an
+    exception-declaration (as clang) are not checked.
+  - /8: `this` does not appear, even unevaluated; a lambda-expression
+    captures nothing (the first written or implicit capture is reported
+    at its location; init-capture initializers are searched, lambda
+    bodies are not) (`check_default_arg_refs`).
+  - /9: a local variable (any block-scope variable, `static`, `extern`
+    and `thread_local` included, or a structured binding of one) is not
+    odr-used. The check runs on the converted full-expression, so a
+    constant read by value is accepted while `&c` or binding a reference
+    is not; in a template definition the constant non-odr-uses are
+    computed from the potential results (`check_default_arg_locals`).
+    Every use is reported and the parameter becomes invalid.
+- **Block-scope inline** ([dcl.inline]/5): `inline` on a block-scope
+  function declaration (also in a lambda body or a template) is "inline
+  declaration of 'g' not allowed in block scope" at `inline`; members of
+  local classes are unaffected.
+- **Lambda parameter shadowing a capture** ([expr.prim.lambda.capture]/5,
+  `lambda/capture.rs`): a parameter named as an explicit capture (simple,
+  init or pack capture) is "a lambda parameter cannot shadow an explicitly
+  captured entity" at the parameter with the note "variable 'x' is
+  explicitly captured here"; implicit captures do not count. clang's
+  follow-on "reference to 'w' is ambiguous" for an init-capture is not
+  reproduced.
+- **Friend template defaults** ([temp.param]/12, `class/friend.rs`): a
+  default template argument on a friend template declaration that is not
+  a function template definition is "default template argument not
+  permitted on a friend template" at each defaulted parameter (its name,
+  or the `=` when unnamed); the default no longer counts for the
+  redeclaration rules. A friend class template in a dependent context is
+  not checked (clang's `CheckClassTemplate`).
+
 ### 4.5 Attributes
 - **Policy: kiln never accepts a semantics-changing construct without
   implementing it** (WP-805). An attribute clang knows that kiln does not

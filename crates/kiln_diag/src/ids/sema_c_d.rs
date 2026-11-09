@@ -279,6 +279,7 @@ sema_delete_incomplete_warn = Warning [DeleteIncomplete] (1) "deleting pointer t
 sema_delete_operand = Error (1) "cannot delete expression of type {0}";
 sema_delete_void_ptr_warn = Warning [DeleteIncomplete] (1) "cannot delete expression with pointer-to-'void' type {0}";
 sema_deleted_inherited_ctor_use = Error (2) "constructor inherited by {0} from base class {1} is implicitly deleted";
+sema_deleted_main = Error (0) "'main' is not allowed to be deleted";
 sema_deleted_not_first = Error (0) "deleted definition must be first declaration";
 sema_deleted_overrides = Error (2) "{0:deleted|non-deleted} function '{1}' cannot override a {0:non-deleted|deleted} function";
 sema_dependent_friend_spec_no_candidate = Error (0) "no candidate function template was found for dependent friend function template specialization";

@@ -97,6 +97,13 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_virtual_not_member_fn, vloc);
             } else if !site.in_class {
                 self.error(DiagId::sema_virtual_out_of_class, vloc);
+            } else if self.is_union(site.class) {
+                // [class.union.general]/2: a union has no virtual
+                // functions (clang `err_virtual_in_union`, which wins
+                // over the template rule below); the function is
+                // declared non-virtual and invalid.
+                self.error(DiagId::sema_union_virtual, vloc);
+                out.invalid = true;
             } else if self.templ.cur.is_some() {
                 // [temp.mem]/3: a member function template is not virtual
                 // (clang `err_virtual_member_function_template`; the
@@ -145,6 +152,9 @@ impl Sema<'_, '_> {
             } else {
                 self.overridden_methods(site.class, site.name, ty)
             };
+            if !is_static && self.std < kiln_lex::Std::Cxx23 {
+                self.check_override_ref_mix(site.class, site.name, ty, d.name_loc());
+            }
             if !out.overridden.is_empty() && !is_static {
                 *spec = spec.with_virtual(true);
             }
@@ -361,7 +371,7 @@ impl Sema<'_, '_> {
     /// Visits the bases of `class` depth-first, left to right (a virtual
     /// base once), not descending below a base where `visit` returns
     /// true.
-    fn overridden_walk(
+    pub(crate) fn overridden_walk(
         &self,
         class: DeclId,
         seen_v: &mut FxHashSet<DeclId>,

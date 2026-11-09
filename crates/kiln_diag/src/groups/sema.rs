@@ -127,6 +127,7 @@ PointerBoolConversion = "pointer-bool-conversion" [];
 PotentiallyEvaluatedExpression = "potentially-evaluated-expression" [];
 PredefinedIdentifierOutsideFunction = "predefined-identifier-outside-function" [];
 // ----- WP-191 (vexing parse, null dereference, empty body)
+RedeclaredClassMember = "redeclared-class-member" [];
 RedundantParens = "redundant-parens" [];
 Register = "register" [];
 ReorderCtor = "reorder-ctor" [];
