@@ -957,6 +957,7 @@ fn execute(
     let exe = scratch.join("t.exe");
     let compile = |extra: &[&str]| {
         let mut c = Command::new(&cfg.kiln);
+        crate::util::isolate_caches(&mut c);
         c.args(cfg.base_compile_flags()).args(flags).args(extra).arg(src);
         c.env("KILN_LLVM_DIR", &cfg.llvm_dir);
         c
@@ -1104,6 +1105,7 @@ fn execute_script(
             LineKind::Run => (Stage::Run, Kind::Sh),
         };
         let mut cmd = Command::new("bash");
+        crate::util::isolate_caches(&mut cmd);
         cmd.arg("-c").arg(script::bash_program(&expanded));
         cmd.current_dir(scratch)
             .env("TMPDIR", test_tmpdir(cfg, scratch))

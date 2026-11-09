@@ -1,12 +1,13 @@
-// [std.modules], [module.import]: `import std;` under C++20 builds libc++'s
-// std.cppm (and its partitions) in-process; std::vector, std::string and
+// [std.modules], [module.import]: `import std;` with no module flags.
+// Kiln finds libc++'s std.cppm itself (spec/modules.md §11.10: its module
+// cache, else the in-process build); std::vector, std::string and
 // algorithms are usable, and the exported `using` declarations name the
-// library's entities.
+// library's entities. import-std-two-step.cpp is the portable form.
 //@ expect: run
 //@ std: c++20
 //@ args: -stdlib=libc++
 //@ stdout: 6 abc 3
-//@ skip(clang): clang needs a prebuilt std BMI (two-step --precompile of libc++'s std.cppm) that the harness cannot drive
+//@ skip(clang): clang finds no std module without -fmodule-file=std= (kiln's implicit lookup is what this tests)
 import std;
 
 int main() {

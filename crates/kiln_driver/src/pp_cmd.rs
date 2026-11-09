@@ -342,6 +342,9 @@ impl Job<'_> {
     ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>)> {
         let a = self.args;
         let PpInputs { list, main, predefines } = inputs;
+        // The module cache's key takes the predefines and the search list
+        // (spec/modules.md §11.10); `-E`/`-M` import nothing.
+        let cache_key = staged.then(|| (predefines.clone(), list.verbose_text()));
         let mut search = HeaderSearch::new(RealFs, list).with_embed_dirs(a.embed_dirs.clone());
         let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));
         if let Some(d) = &deps {
@@ -371,11 +374,16 @@ impl Job<'_> {
             for path in a.nameless_module_files.iter().filter(|_| !a.scan_deps) {
                 module_files.push((nameless_module_name(path, engine)?, path.into()));
             }
+            let fingerprint = self.fingerprint();
+            let std_cache = cache_key.as_ref().and_then(|(predefines, search)| {
+                crate::module_cache::for_job(self, predefines, search, &fingerprint)
+            });
             opts.modules = Some(kiln_pp::ModuleOptions {
                 module_files,
                 prebuilt_paths: a.prebuilt_module_paths.iter().map(Into::into).collect(),
                 std_dir: Some(self.toolchain.libcxx_module_dir()),
-                fingerprint: self.fingerprint(),
+                std_cache,
+                fingerprint,
                 record: !a.scan_deps && (a.precompile || a.module_output.is_some()),
                 scan: a.scan_deps,
             });
