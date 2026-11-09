@@ -88,6 +88,9 @@ pub enum Event {
         /// The carried constant results of a kind-2 module file
         /// (spec/modules.md §11.11).
         carried: Option<std::rc::Rc<kiln_pp::bmi::CarriedSection>>,
+        /// The unit's declaration image, built in place of its tokens
+        /// (spec/modules.md §11.11 "Part 2a").
+        image: Option<std::rc::Rc<kiln_pp::bmi::ImageSection>>,
     },
     /// The tokens of the imported unit `key` ended.
     UnitEnd {
@@ -386,8 +389,9 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
             Marker::Module { directive: Some(d), .. } => {
                 self.events.push_back((next, Event::ModuleDirective(d)));
             }
-            Marker::UnitBegin { key, header, span, carried } => {
-                self.events.push_back((next, Event::UnitBegin { key, header, span, carried }));
+            Marker::UnitBegin { key, header, span, carried, image } => {
+                let e = Event::UnitBegin { key, header, span, carried, image };
+                self.events.push_back((next, e));
             }
             Marker::UnitEnd { key } => self.events.push_back((next, Event::UnitEnd { key })),
             Marker::Module { span, import, directive: None, .. } => {

@@ -230,13 +230,16 @@ impl SyntaxJob<'_> {
             contract_semantic: a.contract_semantic.unwrap_or_default(),
             cf_protection_branch: a.codegen.cf_protection_branch(x86),
             record_carried: a.bmi_kind != Some(1) && job.module_output_path().is_some(),
+            record_image: a.bmi_image
+                && a.bmi_kind != Some(1)
+                && job.module_output_path().is_some(),
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
         let (tu, mut pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
         if engine.error_count() == 0 {
-            job.write_module_file(&mut pp, engine, tu.carried.as_ref());
+            job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());
         }
         if verify.is_some() || deps.is_some() {
             // The parser stops at a fatal error; clang's preprocessor lexes

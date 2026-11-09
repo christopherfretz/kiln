@@ -1777,9 +1777,8 @@ and returns the scope it names:
     name), and the declaration specifiers are invalid, so the parameter,
     and with it the function, is invalid: no follow-on "out-of-line
     definition does not match" for a member or a constructor. The parser
-    reports it after the tag's definition (`diag_type_defined_in_param`,
-    for `DeclaratorContext::Prototype` except a non-type template
-    parameter, whose "cannot be defined in a type specifier" is WP-946's).
+    reports it after the tag's definition (`diag_type_defined_in`; the
+    other forbidden contexts are §4.4.1 "Forbidden type definitions").
     The tag itself is declared in the current context, except that a
     complete class's member list is frozen (spec/ast.md §2.4): in the
     parameter clause of an out-of-line member definition it goes to the
@@ -1990,6 +1989,76 @@ instantiation unless stated.
   or the `=` when unnamed); the default no longer counts for the
   redeclaration rules. A friend class template in a dependent context is
   not checked (clang's `CheckClassTemplate`).
+- **Forbidden type definitions** ([dcl.type.general]/3, [dcl.fct]/17,
+  [stmt.pre]/2, [temp.alias]/2, [dcl.enum]/2; WP-946, clang's `ActOnTag`
+  and `GetDeclSpecTypeForDeclarator`). A class or enumeration may be
+  defined only in the decl-specifier-seq of a simple-declaration or
+  member-declaration (any declarators, `typedef` included), a
+  for-init-statement, or a non-template alias-declaration; a lambda body
+  is a fresh context anywhere. The parser classifies the site
+  (`DeclSpec::tag_site`, `TagSite`) and `diag_type_defined_in` reports, at
+  the tag's name (the keyword when unnamed), one of:
+  - "cannot be defined in a type specifier": a type-id (`sizeof`,
+    `alignof`, `typeid`, casts, `__builtin_offsetof`, `decltype`, `new
+    (T)`, template arguments, a type-parameter default), a non-type
+    template parameter type, an exception-declaration, a dynamic
+    exception specification (its rejected types are dropped, so `throw(S
+    {})` becomes `throw()` with no C++17 error) and a conversion-type-id;
+  - "in an enumeration": an enumerator's initializer;
+  - "in a parameter type": a tag declared in a function prototype scope
+    (a parameter, a default argument, a noexcept operand). clang streams
+    the identifier, so an unnamed enumeration prints `(null)`; an unnamed
+    class is not a prototype-scope declaration and is a type specifier;
+  - "in a condition": a condition declaration, including a for condition
+    (a range declaration is "types may not be defined in a for range
+    declaration");
+  - "in a type alias template";
+  - "in the result type of a function": once per function declarator
+    chunk, so `struct S {} f(), g();` reports twice at the same location
+    (`allow_duplicate`); a nested function type reports this after the
+    site's own error.
+  A rejected enumeration's body is skipped and a rejected class's is
+  parsed; either way the declaration specifiers become an error type and
+  no follow-on mismatch is reported. A tag nested in another declaration
+  (a parameter, a type-id, a condition) takes none of the open template
+  heads (`hide_open_heads`), so its members are ordinary members and a
+  nested template-id definition is "template specialization requires
+  'template<>'". A `new struct S {}` allocates the elaborated type (the
+  braces are the initializer). The name is the tag's type printed fully
+  scoped (`'C::S'`); a scope stops at the first enclosing function, as in
+  clang's `TypePrinter::AppendScope`, so local types print unqualified. A
+  tag inside an enumeration is scoped by it at 19 (`'E::S'`); clang 22
+  drops an unscoped enumeration's scope (`'S'`) and keeps a scoped one.
+  Not reproduced: clang's `type-id cannot have a name` and its "expected
+  '>'" recovery for `W<struct S {}>`, the class scope clang gives an
+  unnamed tag in an out-of-line static member initializer
+  (`'A::(unnamed struct …)'`), and clang 22's `struct (unnamed at …)`
+  printing. Tests: dcl.type/type-defined-in-type-specifier.cpp,
+  dcl.type/type-definition-allowed-contexts-run.cpp,
+  dcl.fct/type-defined-in-{default-argument,result-type}.cpp,
+  stmt.pre/type-defined-in-condition.cpp,
+  temp.alias/type-defined-in-alias-template.cpp,
+  except.handle/type-defined-in-handler.cpp,
+  class.conv.fct/type-defined-in-conversion-type.cpp,
+  expr.new/type-defined-in-new-type-id.cpp,
+  dcl.enum/type-defined-in-enumeration{,-19}.cpp,
+  temp.param/lambda-local-class-in-parameter-type.cpp.
+- **Template-declarations define no declarators** ([temp.pre]/5): when
+  any template head is open (a class template, a partial or explicit
+  specialization, an out-of-line member class, an explicit instantiation
+  recovered as a specialization; `in_template_declaration`), a class
+  definition must be followed by `;`: clang's "expected ';' after struct"
+  at the end of the body, after which the rest parses as a new
+  declaration. A concept definition consumes its head before its
+  constraint expression (`act_on_concept_head`), so a tag there is a
+  type specifier. Test: temp.pre/class-definition-takes-no-declarator.cpp.
+- **Incomplete result type** ([dcl.fct.def.general]/2): a function
+  definition whose return type is an incomplete class is "incomplete
+  result type 'X' in function definition" at the name with the forward
+  declaration note, checked before the parameters, and the function is
+  invalid. A dependent, `void`, reference, undeduced or error return type,
+  and a deleted or already invalid function, are skipped. Test:
+  dcl.fct.def.general/incomplete-result-type.cpp.
 
 ### 4.5 Attributes
 - **Policy: kiln never accepts a semantics-changing construct without

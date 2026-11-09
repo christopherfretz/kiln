@@ -1857,7 +1857,8 @@ impl ExprArena {
     /// prvalue ([dcl.init.string]; clang's `updateStringLiteralType`).
     ///
     /// # Panics
-    /// If `e` is not a `StringLiteral` inside zero or more `ParenExpr`s.
+    /// If `e` is not a `StringLiteral` inside zero or more `ParenExpr`s
+    /// and GNU `__extension__`s (clang `IgnoreParensSingleStep`).
     pub fn update_string_init_type(&mut self, e: ExprId, ty: QualType) {
         let mut e = e;
         loop {
@@ -1867,6 +1868,9 @@ impl ExprArena {
             match n.kind {
                 ExprKind::StringLiteral => return,
                 ExprKind::ParenExpr => e = ExprId::new(n.a),
+                ExprKind::UnaryOperator if n.aux == UnaryOp::Extension as u8 => {
+                    e = ExprId::new(n.a);
+                }
                 k => panic!("update_string_init_type on {k:?}"),
             }
         }
