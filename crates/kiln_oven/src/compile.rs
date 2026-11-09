@@ -5849,8 +5849,11 @@ impl Compiler<'_> {
         // past the note (`Op::Cce`), so codegen and `__builtin_constant_p`
         // fold `strlen("abc")` as clang does.
         if let Some(d) = direct
-            && let Some(bid) =
-                self.ast().decls.lib_builtin(d).filter(|&b| kiln_ast::decl::builtin::lib_evaluated(b))
+            && let Some(bid) = self
+                .ast()
+                .decls
+                .lib_builtin(d)
+                .filter(|&b| kiln_ast::decl::builtin::lib_evaluated(b))
         {
             let loc = self.begin(e);
             // clang `getQuotedName` of the library builtin.

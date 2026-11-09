@@ -32,9 +32,7 @@ pub(crate) fn builtin_callee(ast: &Ast, e: ExprId) -> Option<(DeclId, u32)> {
 /// ([`id::lib_evaluated`]: `strlen`, `memcmp`, ...), so `EmitBuiltinExpr`
 /// folds a call with constant arguments.
 pub(crate) fn lib_fold_callee(ast: &Ast, e: ExprId) -> Option<u32> {
-    direct_fn(ast, e)
-        .and_then(|d| ast.decls.lib_builtin(d))
-        .filter(|&b| id::lib_evaluated(b))
+    direct_fn(ast, e).and_then(|d| ast.decls.lib_builtin(d)).filter(|&b| id::lib_evaluated(b))
 }
 
 /// The function `e` calls directly, through parentheses and decays.
@@ -72,8 +70,9 @@ pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId, compat: u32) -> bool {
     // WP-365: the `<cmath>` builtins the Oven evaluates and clang 19 does
     // not are emitted as clang emits them.
     let lib = || lib_fold_callee(ast, e).is_some();
-    (lib() || builtin_callee(ast, e).is_some_and(|(_, b)| {
-        b != id::IS_CONSTANT_EVALUATED
+    (lib()
+        || builtin_callee(ast, e).is_some_and(|(_, b)| {
+            b != id::IS_CONSTANT_EVALUATED
             && b != id::KILN_PLAINLY_CONSTANT_EVALUATED
             && id::checked_op(b).is_none()
             && id::carry_op(b).is_none()
@@ -83,7 +82,8 @@ pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId, compat: u32) -> bool {
             && !clang19_unevaluated(b)
             // clang 20 made `abs`/`labs`/`llabs` constant (WP-432).
             && !(compat < 22 && matches!(b, id::ABS | id::LABS | id::LLABS))
-    })) && (ast.types.is_integral(q) || ast.types.is_floating(q))
+        }))
+        && (ast.types.is_integral(q) || ast.types.is_floating(q))
 }
 
 /// The builtins kiln constant-evaluates (WP-365, spec/oven.md
