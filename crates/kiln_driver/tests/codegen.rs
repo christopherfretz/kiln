@@ -1070,9 +1070,8 @@ fn codegen_flags_rejected() {
     }
 }
 
-/// spec/driver.md "Coverage flags" (WP-941): source-based coverage
-/// mapping is not implemented yet, and profile-guided optimization is a
-/// known 1.0 limitation; each is named in the error and no job runs.
+/// spec/driver.md "Coverage flags" (WP-941): profile-guided optimization
+/// is a known 1.0 limitation; it is named in the error and no job runs.
 #[test]
 fn coverage_flags_rejected() {
     let d = scratch("covflags-rej");
@@ -1112,6 +1111,142 @@ fn coverage_flags_rejected() {
     for f in ["--coverage", "-fprofile-instr-generate", "-fprofile-instr-generate=a.profraw"] {
         let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "m.o"]);
         assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{f}");
+    }
+}
+
+const COV_H: &str = "inline int clamp(int v) { return v < 0 ? 0 : v; }\n\
+                     inline int unused_inline(int v) { return v + 1; }\n";
+const COV_MAIN: &str = r#"#include <coroutine>
+#include "cov.h"
+#define TWICE(x) ((x) + (x))
+struct Gen {
+  struct promise_type {
+    int v = 0;
+    Gen get_return_object() { return {std::coroutine_handle<promise_type>::from_promise(*this)}; }
+    std::suspend_always initial_suspend() { return {}; }
+    std::suspend_always final_suspend() noexcept { return {}; }
+    std::suspend_always yield_value(int x) { v = x; return {}; }
+    void return_void() {}
+    void unhandled_exception() {}
+  };
+  std::coroutine_handle<promise_type> h;
+};
+Gen count(int n) {
+  for (int i = 0; i < n; ++i)
+    co_yield i;
+}
+template <class T> T sq(T x) { return x * x; }
+static int unused_static(int x) { return x; }
+int main(int argc, char **) {
+  int s = 0;
+  for (int i = 0; i < 4; ++i) {
+    if (i % 2)
+      s += TWICE(i);
+    else
+      s -= 1;
+  }
+  while (s > 100)
+    s /= 2;
+#if 0
+  s = 42;
+#endif
+  auto f = [&](int k) { return k > 1 ? sq(k) : sq(1.0) > 0; };
+  s += f(argc) + clamp(-s);
+  Gen g = count(3);
+  while (!g.h.done()) {
+    g.h.resume();
+    s += g.h.promise().v;
+  }
+  g.h.destroy();
+  return s == 1000 ? 1 : 0;
+}
+"#;
+
+/// The `llvm-cov report` rows (regions, functions, lines, branches as
+/// total/missed) of `cov.h`, `m.cpp` and TOTAL.
+fn cov_rows(report: &str) -> Vec<String> {
+    report
+        .lines()
+        .filter(|l| l.starts_with("cov.h") || l.starts_with("m.cpp") || l.starts_with("TOTAL"))
+        .map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let pick = [0, 1, 2, 4, 5, 7, 8, 10, 11];
+            pick.iter().filter_map(|&i| f.get(i).copied()).collect::<Vec<_>>().join(" ")
+        })
+        .collect()
+}
+
+/// spec/driver.md "Coverage flags", spec/codegen.md §5.4 (WP-1003): the
+/// source-based coverage workflow end to end. kiln compiles with
+/// `-fprofile-instr-generate -fcoverage-mapping` (branches, loops, a
+/// macro, an `#if 0` block, a template, a lambda, a header function, a
+/// coroutine, unused functions), the program runs, `llvm-profdata merge`
+/// and `llvm-cov report/show` read it, and the report is clang 19's, in
+/// both compat modes with that LLVM's tools. The link uses clang++-19
+/// (its profile runtime; the LLVM 22 one is not installed everywhere).
+#[test]
+fn coverage_mapping_end_to_end() {
+    let need = ["clang++-19", "llvm-profdata-19", "llvm-cov-19"];
+    if let Some(t) = need.iter().find(|t| !have(t)) {
+        eprintln!("skipping: {t} not found");
+        return;
+    }
+    let d = scratch("covmap-e2e");
+    std::fs::write(d.join("cov.h"), COV_H).unwrap();
+    std::fs::write(d.join("m.cpp"), COV_MAIN).unwrap();
+    // regions missed, functions missed, lines missed, branches missed.
+    let want = [
+        "cov.h 5 2 2 1 2 1 2 1",
+        "m.cpp 31 5 11 2 33 3 14 3",
+        "TOTAL 36 7 13 3 35 4 16 4",
+    ];
+    for compat in ["19", "22"] {
+        let (profdata, cov) = (format!("llvm-profdata-{compat}"), format!("llvm-cov-{compat}"));
+        if !have(&profdata) || !have(&cov) {
+            eprintln!("skipping compat {compat}: {profdata} / {cov} not found");
+            continue;
+        }
+        let exe = format!("k{compat}");
+        let obj = format!("{exe}.o");
+        let o = kiln_in(
+            &d,
+            &[
+                "-std=c++20",
+                &format!("-fclang-compat={compat}"),
+                "-fprofile-instr-generate",
+                "-fcoverage-mapping",
+                "-c",
+                "m.cpp",
+                "-o",
+                &obj,
+            ],
+        );
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "compat {compat}");
+        let run = |cmd: &str, args: &[&str]| {
+            let o = Command::new(cmd).args(args).current_dir(&d).output().unwrap();
+            assert!(o.status.success(), "{cmd} {args:?}: {}", text(&o.stderr));
+            text(&o.stdout)
+        };
+        run("clang++-19", &["-fprofile-instr-generate", &obj, "-o", &exe]);
+        let raw = format!("{exe}.profraw");
+        let r = Command::new(d.join(&exe)).env("LLVM_PROFILE_FILE", &raw).current_dir(&d).output();
+        assert_eq!(r.unwrap().status.code(), Some(0), "compat {compat}");
+        let pd = format!("{exe}.profdata");
+        run(&profdata, &["merge", "-o", &pd, &raw]);
+        let ip = format!("-instr-profile={pd}");
+        let rep = run(&cov, &["report", &exe, &ip]);
+        assert_eq!(cov_rows(&rep), want, "compat {compat}:\n{rep}");
+        let show = run(&cov, &["show", &exe, &ip, "-use-color=false", "-show-instantiations=false"]);
+        for line in [
+            "   24|      5|  for (int i = 0; i < 4; ++i) {",
+            "   26|      2|      s += TWICE(i);",
+            "   31|      0|    s /= 2;",
+            "   33|       |  s = 42;",
+            "   38|      5|  while (!g.h.done()) {",
+            "   18|      3|    co_yield i;",
+        ] {
+            assert!(show.contains(line), "compat {compat}: no `{line}` in\n{show}");
+        }
     }
 }
 
