@@ -203,6 +203,14 @@ included). The defects found so far, each with the test that records it:
   does in both ([dcl.init.general]/16.6.2.2 value-initializes `arr`). kiln
   accepts it. `dcl.init.general/paren-aggregate-array-of-class.cpp`
   carries `requires: clang>=22` (WP-316).
+- clang 19 and 22 resolve `class B<T>::In::Deep` (a nested tag named
+  through a dependent specialization, in another template) to the primary
+  template's `Deep`: they accept a `B<int>` without `In` and a `B<char>`
+  whose `Deep` is a union without a diagnostic, and crash in codegen
+  (`FindInstantiatedDecl`) when the selected specialization's `Deep` is
+  used. g++ 14 and kiln instantiate the specialization's member and reject
+  the invalid ones (WP-1054).
+  `temp.inst/member-elaborated-qualifier-nested{,-run}.cpp`.
 
 `cargo xtask libcxx` is deliberately outside `ci`. It runs libc++'s own
 tests (a pinned upstream release, fetched by `scripts/fetch-libcxx-tests.sh`)
