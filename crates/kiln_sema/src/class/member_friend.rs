@@ -290,10 +290,7 @@ impl Sema<'_, '_> {
             .map(|(x, _)| self.ast.strip_shadow(x))
             .collect();
         let is_class = |s: &Self, x: DeclId| {
-            matches!(
-                s.kind_of(x),
-                DeclKind::CXXRecord | DeclKind::ClassTemplate
-            )
+            matches!(s.kind_of(x), DeclKind::CXXRecord | DeclKind::ClassTemplate)
         };
         let is_fn = |s: &Self, x: DeclId| {
             s.kind_of(x).is_function() || s.kind_of(x) == DeclKind::FunctionTemplate
@@ -307,13 +304,15 @@ impl Sema<'_, '_> {
             if function {
                 !is_fn(self, x) && k != DeclKind::UsingShadow
             } else {
-                is_fn(self, x) || matches!(k, DeclKind::Var | DeclKind::Field | DeclKind::VarTemplate)
+                is_fn(self, x)
+                    || matches!(k, DeclKind::Var | DeclKind::Field | DeclKind::VarTemplate)
             }
         });
         if ok || !other_kind {
             return false;
         }
-        let msg = self.diag(DiagId::sema_redefinition_different_kind, at).arg(self.decl_name_str(name));
+        let msg =
+            self.diag(DiagId::sema_redefinition_different_kind, at).arg(self.decl_name_str(name));
         let msg = self.note_prev(msg, first, true);
         self.emit(msg);
         true
@@ -460,7 +459,8 @@ impl Sema<'_, '_> {
                 // The friend's own head names the member template's
                 // parameters: equivalent heads, then equivalent types
                 // with the friend's parameters renamed to the member's.
-                let Some((inner, own)) = mf.inner_list.zip(s.ast.template_info(t).map(|i| i.params))
+                let Some((inner, own)) =
+                    mf.inner_list.zip(s.ast.template_info(t).map(|i| i.params))
                 else {
                     return false;
                 };
@@ -540,11 +540,7 @@ impl Sema<'_, '_> {
             }
             let a = self.template_param_arg(y);
             let pack = iy.is_some_and(|i| i.pack);
-            args.push(if pack {
-                TemplateArg::pack(self.ast.types.arg_list(&[a]))
-            } else {
-                a
-            });
+            args.push(if pack { TemplateArg::pack(self.ast.types.arg_list(&[a])) } else { a });
         }
         Some(self.ast.types.arg_list(&args))
     }

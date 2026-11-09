@@ -2680,7 +2680,9 @@ impl Sema<'_, '_> {
         }
         let matched = self.pick_prev_function(&found, new_fn).is_some_and(|p| {
             self.kind_of(p) == DeclKind::CXXMethod
-                && self.declared_fn_type(p).is_some_and(|pty| self.same_ignoring_exc_spec(pty, new_fn.ty))
+                && self
+                    .declared_fn_type(p)
+                    .is_some_and(|pty| self.same_ignoring_exc_spec(pty, new_fn.ty))
         });
         !matched
     }
