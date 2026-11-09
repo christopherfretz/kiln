@@ -324,14 +324,14 @@ tests of `clang/test/CXX` and `clang/test/SemaCXX` at `llvmorg-22.1.8`, run
 through kiln by `cargo xtask clang-neg` (WP-912,
 [spec/clang-neg.md](../spec/clang-neg.md)). Only lines are compared, never
 wording: an `expected-error` counts as reported when kiln has an error on
-its line. Run of 2026-11-08 on kiln `6c742784e`:
+its line. Run on kiln `321baa9de` (2026-11-08):
 
 | measure | result |
 |---|---|
-| Test files where clang expects an error and kiln reports none (in some configuration) | 7.2% (90 of 1249) |
-| `expected-error` lines with no kiln error on them | 17.9% (5015 of 28043) |
-| Configurations of `expected-no-diagnostics` tests where kiln reports an error (rejects valid) | 11.7% (49 of 418) |
-| Crashes, timeouts, out of memory | 7 crashes (2 root causes), 0, 0 of 2850 cases |
+| Test files where clang expects an error and kiln reports none (in some configuration) | 7.1% (89 of 1250) |
+| `expected-error` lines with no kiln error on them | 17.6% (4930 of 28065) |
+| Configurations of `expected-no-diagnostics` tests where kiln reports an error (rejects valid) | 11.2% (47 of 418) |
+| Crashes, timeouts, out of memory | 0, 0, 0 of 2850 cases |
 
 Most of the missed errors are declaration rules: types defined where the
 grammar forbids them, members named after their class, union and static
