@@ -4476,6 +4476,35 @@ invented parameter (§2.6).
 Tests: `dcl.spec.auto/nested-return-placeholder-run.cpp`,
 `dcl.spec.auto/nested-return-placeholder-diags.cpp`.
 
+The walk also descends a pointer-to-member declarator's pointee
+([dcl.mptr], WP-1135): `auto Q::* p = &Q::m;` is `int Q::*`, `auto
+(Q::* g)(int) const & = &Q::f;`, `auto Q::* Q::*` and `C auto Q::*` deduce
+through it (`placeholder_step`, `deduce_match`, `replace_placeholder`,
+`placeholder_deduction`). The class matches exactly, as for a call
+(clang `DeduceTemplateArgumentsByTypeMatch` on a `MemberPointerType`): no
+derived-to-base adjustment (`auto D::*` from `&D::m` of a base member is
+`int B::*`, incompatible) and no null pointer constant (`0`, `nullptr`).
+The written class keeps its sugar. The same walk serves a deduced return
+type (`auto Q::* f()`), `template <auto Q::* P>` (clang's "non-type
+template parameter 'P' with type 'auto Q::*' has incompatible initializer
+of type 'int R::*'"), a class template's static data member (deferred
+like `auto *`, `defers_init`), and `new`: a placeholder under pointer and
+member-pointer declarators (`new auto Q::*(&Q::m)`, `new auto *(&x)`) is
+deduced as for a variable, a failure being clang's
+`err_auto_new_deduction_failure` ("new expression for type 'auto Q::*'
+has incompatible constructor argument of type 'int R::*'",
+`deduce_new_auto`). `decltype(auto)` stands alone: `decltype(auto) Q::*`
+is "cannot form pointer to 'decltype(auto)'", and a `decltype(auto)`
+return type of a function declarator that is not the one next to the
+declarator-id (`decltype(auto) (Q::* g)(int)`, `decltype(auto)
+(*f())(int)`) is clang's
+`err_decltype_auto_function_declarator_not_declaration`, "'decltype(auto)'
+can only be used as a return type in a function declaration", at the
+function declarator's `(` (a non-static data member gets "not allowed in
+non-static struct member" instead, which clang checks first).
+Tests: `dcl.spec.auto/member-pointer-placeholder-run.cpp`,
+`dcl.spec.auto/member-pointer-placeholder-diags.cpp`.
+
 **Positions that forbid a placeholder** ([dcl.spec.auto.general]/2-6,
 [expr.prim.req.general]/4; clang `err_auto_not_allowed` from
 `GetDeclSpecTypeForDeclarator`, `templ/ctad_site.rs`). One diagnostic,
