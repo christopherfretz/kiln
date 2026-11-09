@@ -3581,9 +3581,7 @@ impl Parser<'_, '_> {
             pd.chunks.iter().any(|c| matches!(c, Chunk::Function { trailing: Some(_), .. }));
         let at = ds.type_loc.unwrap_or(start);
         if (placeholder || decltype_auto || gnu) && !ds.invalid && !trailing {
-            if let Some(why) =
-                self.s.param_placeholder_site(decltype_auto || gnu, fn_decl, site)
-            {
+            if let Some(why) = self.s.param_placeholder_site(decltype_auto || gnu, fn_decl, site) {
                 let kw = match ds.base {
                     TypeSpecKind::Auto => AutoKeyword::Auto,
                     TypeSpecKind::DecltypeAuto => AutoKeyword::DecltypeAuto,

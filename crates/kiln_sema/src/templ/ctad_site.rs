@@ -248,10 +248,7 @@ impl Sema<'_, '_> {
     /// "'auto' not allowed <position>" at `loc` (clang's
     /// `err_auto_not_allowed`; `site` is its position selector).
     pub(crate) fn auto_not_allowed(&mut self, loc: Loc, kw: AutoKeyword, site: u8) {
-        let msg = self
-            .diag(DiagId::sema_auto_not_allowed, loc)
-            .arg(kw as u8)
-            .arg(site);
+        let msg = self.diag(DiagId::sema_auto_not_allowed, loc).arg(kw as u8).arg(site);
         self.emit(msg);
     }
 
@@ -400,7 +397,12 @@ impl Sema<'_, '_> {
     /// of a function declaration or a lambda (`fn_decl`, [dcl.fct]/22:
     /// else "in function prototype that is not a function declaration").
     /// `None` when it invents one.
-    pub fn param_placeholder_site(&self, decltype_auto: bool, fn_decl: bool, s: DeclSite) -> Option<u8> {
+    pub fn param_placeholder_site(
+        &self,
+        decltype_auto: bool,
+        fn_decl: bool,
+        s: DeclSite,
+    ) -> Option<u8> {
         use kiln_lex::Std;
         let lambda = s == DeclSite::LambdaParam;
         if decltype_auto {
