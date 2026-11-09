@@ -141,6 +141,11 @@ pub struct FnState {
     /// variable was named in its own initializer: the uninitialized-values
     /// analysis has something to look at (clang's fast path).
     pub(crate) uninit_vars: bool,
+    /// The body gets clang's `CheckConstexprFunctionDefinition` rules at
+    /// its end if the function is `constexpr`/`consteval`: not for the
+    /// call operator of a lambda that is not declared so explicitly
+    /// (constexpr_body.rs).
+    pub(crate) constexpr_rules: bool,
 }
 
 impl FnState {
@@ -176,6 +181,7 @@ impl FnState {
             volatile_assigns: Vec::new(),
             expr_start: 0,
             uninit_vars: false,
+            constexpr_rules: true,
         }
     }
 }
@@ -1857,6 +1863,12 @@ impl Sema<'_, '_> {
         // (clang `DiagnoseInvalidJumps`, ahead of the flow warnings).
         if state.needs_jump_scope_check() {
             self.check_jump_scopes(body);
+        }
+        // clang `CheckConstexprFunctionDefinition`'s rules on the
+        // declaration and the statements, ahead of the analysis-based
+        // warnings, which an error there suppresses (constexpr_body.rs).
+        if state.constexpr_rules {
+            self.check_constexpr_definition(state.decl, body);
         }
         // clang 22 `inferNoReturnAttr` (`PopFunctionScopeInfo`, ahead of
         // the analysis-based warnings; also in a dependent context).

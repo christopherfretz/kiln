@@ -36,19 +36,29 @@ use kiln_diag::DiagId;
 use crate::Sema;
 
 impl Sema<'_, '_> {
-    /// [dcl.constexpr]/3 before C++23 for the definition of `f` with
-    /// `body` (see the module docs).
+    /// clang `CheckConstexprFunctionDefinition` for the definition of `f`
+    /// with `body`, up to the never-constant check: the virtual-base
+    /// rule, then [dcl.constexpr]/3 before C++23 and the missing `return`
+    /// (see the module docs). Run at the end of the body, ahead of the
+    /// analysis-based warnings (an error here suppresses them, as in
+    /// clang); for a lambda's call operator only when it is declared
+    /// `constexpr` or `consteval` explicitly.
+    pub(crate) fn check_constexpr_definition(&mut self, f: DeclId, body: StmtId) {
+        self.check_constexpr_virtual_base(f);
+        self.constexpr_body_vars(f, body);
+    }
+
+    /// The never-constant check of the definition of `f` with `body`
+    /// (never_constant.rs), once the body is attached.
     pub(crate) fn check_constexpr_body_vars(&mut self, f: DeclId, body: StmtId) {
         if !self.is_lambda_call_op(f) {
-            self.constexpr_body_vars(f, body);
             self.check_never_constant(f, body);
         }
     }
 
-    /// The same rule for the call operator `f` of a lambda declared
+    /// The same for the call operator `f` of a lambda declared
     /// `constexpr` or `consteval` explicitly, at the end of its `body`.
     pub(crate) fn check_constexpr_lambda_body_vars(&mut self, f: DeclId, body: StmtId) {
-        self.constexpr_body_vars(f, body);
         self.check_never_constant(f, body);
     }
 
@@ -124,6 +134,9 @@ impl Sema<'_, '_> {
                 let msg = self.diag(id, loc).arg(u8::from(ctor));
                 self.emit(msg);
             }
+            if !ctor && !stmts.has_return {
+                self.check_constexpr_missing_return(f, kind);
+            }
             return;
         };
         let ty = self.ast.decls.get(v).ty().unwrap_or(kiln_ast::QualType::ERROR);
@@ -138,8 +151,41 @@ impl Sema<'_, '_> {
         self.templ.body_invalid.insert(f);
     }
 
+    /// clang `CheckConstexprMissingReturn` ([dcl.constexpr]/3 in C++11;
+    /// spec/sema.md §7.10): a constexpr function other than a constructor
+    /// whose body has no `return` statement is an error ("no return
+    /// statement in constexpr function", the function made invalid, so
+    /// the never-constant check and the flow warnings are skipped). Not
+    /// for a `void` or dependent return type from C++14, nor for any
+    /// return type from C++23 (P2448R2), where clang's remaining
+    /// diagnostic is the off-by-default `-Wpre-c++14-compat` one, which
+    /// kiln does not have. An undeduced placeholder (a templated
+    /// function's) counts as dependent; outside a template it was
+    /// deduced `void` by now.
+    fn check_constexpr_missing_return(&mut self, f: DeclId, kind: ConstexprKind) {
+        let ret = self.fn_ret(f);
+        if self.is_error_type(ret) {
+            return;
+        }
+        let void_or_dependent = self.ast.types.is_void(ret)
+            || self.is_dependent_type(ret)
+            || self.contains_undeduced_auto(ret);
+        if (self.std >= kiln_lex::Std::Cxx14 && void_or_dependent)
+            || self.std >= kiln_lex::Std::Cxx23
+        {
+            return;
+        }
+        let msg = self
+            .diag(DiagId::sema_constexpr_body_no_return, self.ast.decls.get(f).loc())
+            .arg(u8::from(kind == ConstexprKind::Consteval));
+        self.emit(msg);
+        self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        self.templ.body_invalid.insert(f);
+    }
+
     /// The statements of `body` that the constexpr rules look at, in
-    /// source order (clang's walk does not enter expressions).
+    /// source order (clang's walk does not enter expressions: a `return`
+    /// in a lambda or a statement expression does not count).
     fn body_stmts(&self, body: StmtId) -> BodyStmts {
         let st = &self.ast.stmts;
         let mut out = BodyStmts::default();
@@ -150,6 +196,19 @@ impl Sema<'_, '_> {
                     out.invalid = Some(s);
                     return out;
                 }
+                // C++11 allows no iteration statement (nor `continue`):
+                // clang does not take them as C++14 extensions.
+                StmtKind::WhileStmt
+                | StmtKind::DoStmt
+                | StmtKind::ForStmt
+                | StmtKind::CXXForRangeStmt
+                | StmtKind::ContinueStmt
+                    if self.std < kiln_lex::Std::Cxx14 =>
+                {
+                    out.invalid = Some(s);
+                    return out;
+                }
+                StmtKind::ReturnStmt => out.has_return = true,
                 StmtKind::LabelStmt | StmtKind::GotoStmt => {
                     out.cxx23.get_or_insert(st.get(s).loc());
                 }
@@ -244,4 +303,6 @@ struct BodyStmts {
     /// The first asm-declaration or try-block statement (allowed from
     /// C++20).
     cxx20: Option<kiln_source::Loc>,
+    /// A `return` statement was seen (clang's `ReturnStmts`).
+    has_return: bool,
 }

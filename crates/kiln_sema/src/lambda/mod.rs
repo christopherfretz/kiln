@@ -193,7 +193,8 @@ pub(crate) struct LambdaScope {
     /// (clang's `LambdaScopeInfo::LocalPacks` are the complement, which
     /// are diagnosed in the body; [`Sema::lambda_unexpanded`]).
     packs: Vec<DeclId>,
-    /// `constexpr` was written (the static invoker is then constexpr too).
+    /// `constexpr` or `consteval` was written (the static invoker is then
+    /// constexpr or consteval too; the body gets the constexpr rules).
     explicit_constexpr: bool,
     /// `templ.heads.len()` at the introducer: a deeper head after the
     /// parameters is a generic lambda's invented one.
@@ -502,7 +503,7 @@ impl Sema<'_, '_> {
             self.check_lambda_explicit_object_type(f, at);
         }
         self.number_lambda(id, closure, f);
-        self.begin_lambda_body(f, specs.constexpr.is_some());
+        self.begin_lambda_body(f, specs.constexpr.is_some() || specs.consteval.is_some());
     }
 
     /// Whether the call operator of a lambda with parameters `params` and
@@ -826,8 +827,12 @@ impl Sema<'_, '_> {
             self.declare_init_captures(id, f);
         }
         self.begin_function_body(f, ret);
+        // clang `CheckConstexprFunctionDefinition` for a call operator
+        // declared `constexpr` or `consteval` (not an implicitly
+        // constexpr one).
         if let Some(state) = self.func.as_mut() {
             state.this_ty = this_ty;
+            state.constexpr_rules = explicit_constexpr;
         }
     }
 
