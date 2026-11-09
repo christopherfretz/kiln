@@ -970,7 +970,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-955 | accepts-invalid (WP-912): access/abstract/deleted checks (friend private, abstract temporary, deleted operator delete, virtual base with private dtor) | WP-912 | open |
 | WP-956 | accepts-invalid (WP-912): template declaration rules (partial spec more specialized, CWG526, pre-C++20 float NTTP, conversion function template) + constraint self-dependency hard error in SFINAE; crates/kiln_sema/src/templ/concepts/sat.rs:148 | WP-912 | open |
 | WP-957 | accepts-invalid (WP-912): lookup/type checks (ambiguous elaborated, enum keyword, alignas incomplete, differing UDL suffixes) + exception specs laxer than base | WP-912 | open |
-| WP-958 | accepts-invalid (WP-912): rejects-valid: templates and deduction (12 xfails, docs/status/accepts-invalid.md cluster 15) | WP-912 | open |
+| WP-958 | accepts-invalid (WP-912): rejects-valid: templates and deduction (12 xfails, docs/status/accepts-invalid.md cluster 15) | WP-912 | in progress |
 | WP-959 | accepts-invalid (WP-912): rejects-valid: classes, special members, initialization, misc (9 xfails, cluster 16) | WP-912 | open |
 | WP-960 | accepts-invalid (WP-912): low: `-pedantic-errors` extension diagnostics; unsupported GNU extensions and driver flags | WP-912 | open |
 | WP-963 | perf (WP-919): `Sema::lookup_stamp` is 6% of dup6; cache it per scope change or pass it down a scan | WP-919 | open |

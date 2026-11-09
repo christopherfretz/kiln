@@ -8661,6 +8661,15 @@ impl Sema<'_, '_> {
                     .into_iter()
                     .find(|&p| self.ast.decls.get(p).kind() == DeclKind::Namespace);
             }
+            if prev.is_none()
+                && self.ast.primary_context(self.ast.redecl_context(self.ctx)) == self.ast.tu
+                && sym_str(self, n) == "std"
+            {
+                // The implicit `namespace std` around an implicit
+                // `std::align_val_t` is hidden from lookup but extended by
+                // the program's first `namespace std {`.
+                prev = self.global_ops.implicit_std;
+            }
         } else {
             // [namespace.unnamed]/1: every unnamed namespace of a scope is
             // the same namespace, across the scope's redeclarations and

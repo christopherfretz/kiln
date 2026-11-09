@@ -4,7 +4,6 @@
 // clang negative-test run (WP-912).
 //@ std: c++20
 //@ requires: clang>=22
-//@ xfail(kiln): WP-912 follow-up, a default-argument __builtin_LINE() uses the object expression's line
 //@ expect: compile-ok
 struct X {
   constexpr int foo(int l = __builtin_LINE()) { return l; }

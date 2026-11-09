@@ -437,6 +437,27 @@ pub fn source_bit_field(s: &Sema<'_, '_>, e: ExprId) -> Option<kiln_ast::DeclId>
             ExprKind::DeclRefExpr if n.object_kind() == ObjectKind::BitField => {
                 cur = s.ast.decls.binding_expr(s.ast.exprs.decl(cur))?;
             }
+            // [expr.assign]/3, [expr.pre.incr]/1, [expr.comma]/1: an
+            // assignment, a prefix increment or decrement and a comma whose
+            // right operand is one designate that bit-field, so their
+            // result promotes as it does ([conv.prom]/5).
+            ExprKind::CompoundAssignOperator => cur = s.ast.exprs.children(cur, &s.ast.lists)[0],
+            ExprKind::BinaryOperator => {
+                let [l, r] = s.ast.exprs.operands(cur);
+                match s.ast.exprs.binary_op(cur) {
+                    op if op.is_assignment() => cur = l,
+                    kiln_ast::expr::BinaryOp::Comma => cur = r,
+                    _ => return None,
+                }
+            }
+            ExprKind::UnaryOperator
+                if matches!(
+                    s.ast.exprs.unary_op(cur),
+                    kiln_ast::expr::UnaryOp::PreInc | kiln_ast::expr::UnaryOp::PreDec
+                ) =>
+            {
+                cur = s.ast.exprs.operand(cur);
+            }
             _ => return None,
         }
     }
