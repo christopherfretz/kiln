@@ -1382,7 +1382,13 @@ impl Parser<'_, '_> {
     fn parse_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext) -> bool {
         let start = self.pos();
         let loc = self.name_begin();
-        if self.at_template_type_name_checked(ctx, loc) {
+        // `friend T::X;` ([class.friend]/3): a dependent qualified name
+        // that is the whole friend type declaration is a type, as in
+        // clang's class-member implicit-typename context (WP-1084).
+        let friend_dep_type = ds.friend.is_some()
+            && matches!(self.scan_name(start), Some((end, NameClass::Dependent, _))
+                if end > start + 1 && Self::punct_of(self.tok_at(end)) == Some(Punct::Semi));
+        if friend_dep_type || self.at_template_type_name_checked(ctx, loc) {
             self.parse_template_type_name_spec(ds, ctx, start, loc);
             return true;
         }

@@ -85,6 +85,15 @@ impl Sema<'_, '_> {
         self.is_unentered_dependent_class(self.type_name_qualifier(q))
     }
 
+    /// Whether nested-name-specifier context `q` (or the class a typedef
+    /// `q` names) is a class not declared in a dependent context, such as
+    /// a specialization with non-dependent arguments (`O<int>`). Members
+    /// reached through it are never dependent (WP-1084).
+    pub fn is_nondependent_class_qualifier(&self, q: DeclId) -> bool {
+        let c = self.type_name_qualifier(q);
+        self.kind_of(c) == DeclKind::CXXRecord && !self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX)
+    }
+
     /// The type `q::name` names when qualified lookup did not find a type
     /// in `q` and `q` can name an unknown specialization ([temp.dep.type]/6,
     /// clang `CheckTypenameType` / `isDependentScopeSpecifier`): a

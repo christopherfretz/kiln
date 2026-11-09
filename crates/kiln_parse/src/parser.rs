@@ -1027,6 +1027,11 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             qual = Some(self.s.ast.tu);
             i += 1;
         }
+        // A qualifier component was a non-dependent class (`O<int>::`):
+        // a member class found below it is not dependent, even where the
+        // lookahead finds it in the template's pattern because `O<int>`
+        // is not instantiated yet (WP-276, WP-1084).
+        let mut nondep_class = qual.is_some_and(|q| self.s.is_nondependent_class_qualifier(q));
         loop {
             let template_kw = qual.is_some() && self.kw_of(self.tok_at(i)) == Some(Kw::Template);
             if template_kw {
@@ -1069,6 +1074,17 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     } else {
                         dep_tid = true;
                     }
+                }
+                if let NameClass::TypeTemplate(d) = class
+                    && !split
+                    && self.tok_at(close + 1).kind == TokKind::Punct(Punct::ColonColon)
+                    && matches!(
+                        self.s.ast.decls.get(d).kind(),
+                        DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate
+                    )
+                    && !self.template_args_dependent(end, close)
+                {
+                    nondep_class = true;
                 }
                 class = type_if_args(class);
                 if split {
@@ -1113,6 +1129,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     _ => return Err(ScanStop::NotAScope),
                 });
                 qual_cur_inst = cur_inst;
+                nondep_class |= qual.is_some_and(|q| self.s.is_nondependent_class_qualifier(q));
                 i = end + 1;
                 continue;
             }
@@ -1126,6 +1143,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             // expressions (clang's `computeDeclContext` has no context
             // for `L::`; spec/sema-templates.md §3.1.1, WP-1084).
             if matches!(class, NameClass::Type(..))
+                && !nondep_class
                 && qual.is_some_and(|q| self.s.is_unentered_dependent_qualifier(q))
             {
                 class = NameClass::Dependent;
