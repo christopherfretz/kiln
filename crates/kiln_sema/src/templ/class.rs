@@ -1258,6 +1258,14 @@ impl Sema<'_, '_> {
         self.instantiate_function_definition_inner(f, poi);
         self.inst.body_errors = body_errors + self.diags.error_count().saturating_sub(errors);
         self.mem_inits = outer;
+        // clang `InstantiateFunctionDefinition` ends with
+        // `HandleTopLevelDecl` (coverage's zero record for an
+        // instantiation never emitted, WP-1083).
+        if let Some(def) = self.ast.definition(f)
+            && self.ast.decls.function(def).is_some_and(|x| x.body.is_some())
+        {
+            self.ast.decls.note_fn_def_inst(def);
+        }
     }
 
     fn instantiate_function_definition_inner(&mut self, f: DeclId, poi: Loc) {

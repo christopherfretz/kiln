@@ -674,9 +674,14 @@ impl Substituter<'_, '_, '_> {
                     .and_then(|v| self.sema.const_int(v))
                     .map(|v| v != 0);
                 let Some(taken) = taken else { return Err(SubstFail) };
+                // clang keeps a discarded branch as an empty compound
+                // over the written branch's begin and end, which the
+                // coverage mapping's skipped region spans (WP-1083).
                 let empty = |me: &mut Self, at: Option<StmtId>| {
-                    let l = at.map_or(loc, |x| me.sema.ast.stmts.get(x).loc());
-                    me.sema.act_on_compound(&[], l, l)
+                    let (l, r) = at.map_or((loc, loc), |x| {
+                        (me.sema.ast.stmts.get(x).loc(), me.sema.uninit_stmt_end(x))
+                    });
+                    me.sema.act_on_compound(&[], l, r)
                 };
                 let then = match d.then {
                     Some(t) if taken => self.sub_stmt(t),

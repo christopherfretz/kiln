@@ -8219,6 +8219,9 @@ impl Sema<'_, '_> {
                     // class redeclaration `struct N; struct N;` (clang
                     // `ActOnTag`): both join `p`'s chain (below).
                     if inst || head.is_none() && is_enum {
+                        if is_enum && !inst && fixed.is_none() {
+                            self.check_forward_ref_enum(Some(p), nloc);
+                        }
                         self.module_merge_hidden_redecl(p);
                         return p;
                     }
@@ -8258,6 +8261,15 @@ impl Sema<'_, '_> {
             h.misc = h.misc.with_friend(FriendKind::Undeclared);
             h.flags = h.flags.with(DeclFlags::INVALID);
         }
+        if is_enum
+            && fixed.is_none()
+            && use_ != TagUse::Definition
+            && !conflict
+            && !redefined
+            && let Some((_, nloc)) = name
+        {
+            self.check_forward_ref_enum(prev, nloc);
+        }
         let d = self.new_tag_decl(h, keyword, (scoped, fixed), prev, plain_ref);
         self.finish_member_class_spec(member_class_spec, d);
         if qualifier.is_none() {
@@ -8291,6 +8303,25 @@ impl Sema<'_, '_> {
             self.check_using_shadow_conflict(d, DeclName::ident(n));
         }
         d
+    }
+
+    /// [dcl.enum]/2, [dcl.type.elab]/3: an `enum` declaration or
+    /// elaborated-type-specifier with no enum-base that declares an
+    /// unscoped enumeration not yet defined (`prev`, if any, is its
+    /// earlier declaration) is a forward reference, clang's
+    /// `err_forward_ref_enum` at the name. Naming an enumeration declared
+    /// earlier with a fixed underlying type is no forward reference (a
+    /// plain redeclaration of one was already diagnosed as a mismatch);
+    /// redeclaring a defined enumeration is clang's pedantic
+    /// `-Wgnu-redeclared-enum`, not reported.
+    fn check_forward_ref_enum(&mut self, prev: Option<DeclId>, at: Loc) {
+        if let Some(p) = prev
+            && (self.ast.definition(p).is_some()
+                || self.ast.decls.enumeration(p).is_some_and(EnumData::is_fixed))
+        {
+            return;
+        }
+        self.emit(self.diag(DiagId::sema_forward_ref_enum, at));
     }
 
     /// The declaration `act_on_tag` creates: an enumeration (`scoped`,

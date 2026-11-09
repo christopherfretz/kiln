@@ -81,6 +81,10 @@ struct Declared {
     provided_default_ctor: bool,
     /// Any user-declared constructor (template included).
     any_ctor: bool,
+    /// A user-declared constructor (template included) that is
+    /// user-provided or `explicit`: before C++20 only these make the class
+    /// a non-aggregate ([dcl.init.aggr]/1 in C++11-17, with DR1518).
+    provided_or_explicit_ctor: bool,
     /// The user-declared destructor is `constexpr` (or defaulted in
     /// class, decided by [`Sema::defaulted_is_constexpr`]).
     dtor_constexpr: Option<bool>,
@@ -634,6 +638,14 @@ impl Sema<'_, '_> {
         if !class_trivial {
             return false;
         }
+        // A variadic special member (`T(...) = delete`, a default
+        // constructor by [class.default.ctor]/1; `T(const T&, ...)`) has
+        // a parameter-type-list unlike the implicit one's, so it is never
+        // trivial (clang `SpecialMemberIsTrivial`'s
+        // `note_nontrivial_variadic`; WP-1090).
+        if self.fn_info(m).variadic() {
+            return false;
+        }
         let params = self.special_params(m);
         match k {
             SpecialKind::DefaultCtor => {
@@ -743,6 +755,9 @@ impl Sema<'_, '_> {
             }
             if fkind == DeclKind::CXXConstructor {
                 out.any_ctor = true;
+                if self.is_user_provided(f) || spec.is_explicit() {
+                    out.provided_or_explicit_ctor = true;
+                }
             }
             let kind = self.special_kind_of(f);
             let in_class_default = spec.defaulted() == Defaulted::Explicit;
@@ -1015,7 +1030,19 @@ impl Sema<'_, '_> {
             }
         }
         if decl.any_ctor {
-            bits = bits.with(DefinitionBits::USER_DECLARED_CTOR).without(DefinitionBits::AGGREGATE);
+            bits = bits.with(DefinitionBits::USER_DECLARED_CTOR);
+        }
+        // [dcl.init.aggr]/1: from C++20 any user-declared constructor
+        // makes the class a non-aggregate; before, only a user-provided or
+        // `explicit` one does (C++11-17 and DR1518; clang `addedMember`), so
+        // `struct E { E() = delete; };` is an aggregate there (WP-1090).
+        let non_aggregate_ctor = if self.std >= kiln_lex::Std::Cxx20 {
+            decl.any_ctor
+        } else {
+            decl.provided_or_explicit_ctor
+        };
+        if non_aggregate_ctor {
+            bits = bits.without(DefinitionBits::AGGREGATE);
         }
         if bits.contains(DefinitionBits::HAS_INHERITED_CTOR) {
             bits = bits.without(DefinitionBits::AGGREGATE);
@@ -1397,6 +1424,7 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_params(f, &ps);
         }
         let _ = self.builder().set_overrides(f, &overridden);
+        self.check_implicit_overrider(f, k, fty, loc, &overridden);
         let t = self.with_exc_spec(fty, ExcSpec::Deferred(f));
         self.ast.decls.set_ty(f, t);
         if self.should_delete(f, k, false) {
