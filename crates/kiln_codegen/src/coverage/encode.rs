@@ -113,12 +113,6 @@ impl ExprBuilder {
         let c = self.get(CExpr { op: Op::Sub, lhs: a, rhs: b });
         self.simplify(c)
     }
-
-    /// clang's three-operand `addCounters`.
-    pub(crate) fn add3(&mut self, a: Counter, b: Counter, c: Counter) -> Counter {
-        let ab = self.add(a, b);
-        self.add(ab, c)
-    }
 }
 
 /// LLVM `CounterMappingRegion::RegionKind`.

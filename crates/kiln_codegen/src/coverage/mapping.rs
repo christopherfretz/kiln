@@ -165,6 +165,11 @@ impl<'a> Locs<'a> {
             LexOptions::default(),
         );
         let t = lx.next();
+        // clang `Lexer::MeasureTokenLength`: zero at whitespace (or
+        // anything that does not start a token right here).
+        if t.span.lo.to_raw() != base.to_raw() + off {
+            return l;
+        }
         let n = t.span.hi.to_raw().saturating_sub(t.span.lo.to_raw());
         l.with_offset(n)
     }
@@ -210,6 +215,47 @@ impl<'a> Locs<'a> {
             }
         }
         Loc::INVALID
+    }
+
+    /// The `= default` of the function declared at `from`: the start of
+    /// the token before `=` and the last character of `default` (clang
+    /// gives an explicitly defaulted function a body at its declarator's
+    /// end, which is that last character in a class, `SetRangeEnd`).
+    fn eq_default(self, from: Loc) -> Option<(Loc, Loc)> {
+        let (file, off, base) = self.spelled(from)?;
+        let len = self.sm.text(file).len() as u32;
+        let mut lx =
+            Lexer::new_in_range(self.sm, self.interner, file, off..len, base, LexOptions::default());
+        let sp = base.with_offset(off);
+        let at = |l: Loc| from.with_offset(l.to_raw().saturating_sub(sp.to_raw()));
+        let (mut depth, mut prev, mut before_eq) = (0u32, None, None);
+        for _ in 0..100_000usize {
+            let t = lx.next();
+            match t.kind {
+                TokKind::Eof | TokKind::Punct(Punct::Semi | Punct::LBrace) if depth == 0 => {
+                    return None;
+                }
+                TokKind::Eof => return None,
+                TokKind::Punct(Punct::LParen | Punct::LBrace | Punct::LSquare) => depth += 1,
+                TokKind::Punct(Punct::RParen | Punct::RBrace | Punct::RSquare) => {
+                    depth = depth.saturating_sub(1);
+                }
+                TokKind::Punct(Punct::Equal) if depth == 0 => {
+                    before_eq = prev;
+                    prev = Some(t.span.lo);
+                    continue;
+                }
+                _ if before_eq.is_some() && self.sm.span_text(t.span) == Some("default") => {
+                    let last = t.span.hi.to_raw().saturating_sub(1);
+                    let (b, d) = (at(before_eq?), at(Loc::from_raw(last)));
+                    return (self.same(from, b) && self.same(from, d)).then_some((b, d));
+                }
+                _ => {}
+            }
+            before_eq = None;
+            prev = Some(t.span.lo);
+        }
+        None
     }
 
     /// The `)` closing the first `(` after `from`.
@@ -784,6 +830,15 @@ impl<'a, 'f> Builder<'a, 'f> {
                     self.propagate(bcount, n, true);
                 }
             }
+        }
+        if fd.spec.defaulted() == Defaulted::Explicit
+            && let Some((before_eq, kw)) = self.l.eq_default(ast.decls.get(d).loc())
+        {
+            let in_class = ast.decls.lexical_ctx(d) == ast.decls.get(d).ctx();
+            let s = if in_class { kw } else { before_eq };
+            let i = self.push(bcount, Some(s), Some(self.l.tok_end(s)), None);
+            self.pop(i);
+            return;
         }
         self.propagate(bcount, bn, !defaulted);
     }

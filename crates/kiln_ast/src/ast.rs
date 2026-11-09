@@ -126,6 +126,18 @@ impl Ast {
                     e = self.exprs.rewritten_semantic(e);
                     continue;
                 }
+                // clang: the operand's end, when there is one.
+                ExprKind::CXXThrowExpr => match self.exprs.throw_operand(e) {
+                    Some(o) => {
+                        e = o;
+                        continue;
+                    }
+                    None => return n.loc(),
+                },
+                ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                    e = self.exprs.coawait_operand(e, &self.lists);
+                    continue;
+                }
                 // clang: the base's range.
                 ExprKind::DesignatedInitUpdateExpr => {
                     e = self.exprs.designated_init_update(e)[0];
