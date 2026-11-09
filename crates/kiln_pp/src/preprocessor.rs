@@ -340,6 +340,9 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) dir_eod: Option<Token>,
     /// Lexer diagnostics are dropped (skipped groups).
     pub(crate) quiet_lex: bool,
+    /// The `#` of the directive being handled: where a group skipped
+    /// by it starts ([`crate::PpCallbacks::source_range_skipped`]).
+    pub(crate) dir_hash: Loc,
     /// Depth of `#pragma GCC/clang diagnostic push` (for "cannot pop").
     pub(crate) diag_pushes: u32,
     /// Scratch buffers holding `#embed` byte spellings.
@@ -429,6 +432,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             in_directive: false,
             dir_eod: None,
             quiet_lex: false,
+            dir_hash: Loc::default(),
             diag_pushes: 0,
             embed_bufs: HashSet::new(),
             attr_macros: Vec::new(),

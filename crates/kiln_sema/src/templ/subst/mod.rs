@@ -19,7 +19,7 @@ mod shared;
 mod stmts;
 mod types;
 
-pub(crate) use local::LocalMethod;
+pub(crate) use local::{LocalLate, LocalMethod};
 
 use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclFlags, DeclKind};
@@ -162,6 +162,12 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// construct names an enclosing template's parameter
     /// ([temp.friend]/9; clang's `ConstraintRefersToContainingTemplateChecker`).
     pub(crate) outer_used: std::cell::Cell<bool>,
+    /// While the members of an outermost local class (and of its member
+    /// classes) are declared: their complete-class contexts, default
+    /// arguments, *noexcept-specifiers* and default member initializers,
+    /// substituted once the outermost class is complete, as the parser
+    /// replays them (spec/sema-templates.md §4.4, WP-905).
+    pub(crate) local_late: Option<Vec<LocalLate>>,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -208,6 +214,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             written_used: std::cell::RefCell::default(),
             expansions: Vec::new(),
             outer_used: std::cell::Cell::new(false),
+            local_late: None,
         }
     }
 

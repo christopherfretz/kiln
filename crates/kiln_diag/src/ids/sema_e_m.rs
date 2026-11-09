@@ -230,6 +230,10 @@ sema_inline_namespace_reopened_noninline = Warning [InlineNamespaceReopenedNonin
 // (WP-1054; spec/sema-templates.md §4.6): an internal error, never a
 // silent drop.
 sema_inst_member_dropped = Error (2) "kiln: internal error: member '{0}' of {1} was not instantiated and no diagnostic says why";
+// A statement of an instantiated function body, or a complete-class
+// context part of a local class member, that failed to instantiate with
+// no error reported (WP-905; spec/sema-templates.md §4.6).
+sema_inst_part_dropped = Error (2) "kiln: internal error: {0} in {1} was not instantiated and no diagnostic says why";
 sema_int_literal_implicitly_unsigned = ExtWarn [ImplicitlyUnsignedLiteral] (0) "integer literal is too large to be represented in a signed integer type, interpreting as unsigned";
 sema_int_literal_too_large = Error (0) "integer literal is too large to be represented in any integer type";
 sema_integer_constant_overflow = Warning [IntegerOverflow] (2) "overflow in expression; result is {0} with type {1}";
