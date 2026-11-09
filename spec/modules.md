@@ -2089,8 +2089,9 @@ interface or `stdapp`'s source never rebuilds the std module.
 
 **Not done.**
 
-- No eviction: dead entries stay until removed by hand. Each entry is
-  about 9 MiB, and every kiln rebuild changes the key.
+- Pruning (WP-1050, above) runs only when some compile uses the cache,
+  as in clang: a cache no compile touches again is never pruned, and
+  its entries (about 9 MiB each) stay until removed by hand.
 
 ## Tests
 
