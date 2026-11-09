@@ -493,6 +493,7 @@ impl Substituter<'_, '_, '_> {
                     start_bytes: 0,
                     start_nodes: 0,
                     child_ns: 0,
+                    trace: None,
                 });
                 Some(saved)
             }
