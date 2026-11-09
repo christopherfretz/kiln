@@ -1837,6 +1837,7 @@ impl Parser<'_, '_> {
     ) {
         let ty = self.s.act_dependent_name_at(nns, name, None, keyword, name_loc);
         self.s.note_tag_keyword_loc(name_loc, kw_loc);
+        ds.dependent_tag_name = Some(name_loc);
         if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
             ds.invalid = true;
             self.spec_error(&e, kw_loc);
@@ -2901,7 +2902,7 @@ impl Parser<'_, '_> {
             let last_qual = self.last_qualifier_name();
             let global = self.at(Punct::ColonColon);
             let saved = self.s.set_entering_context(true);
-            let qual = self.parse_nested_name();
+            let qual = self.parse_nested_name_nns();
             self.s.set_entering_context(saved);
             let qual = qual.unwrap_or_else(|()| {
                 // An invalid qualifier declares nothing (clang's
@@ -2912,6 +2913,8 @@ impl Parser<'_, '_> {
                 self.skip_nested_name_rest();
                 None
             });
+            d.qualifier_nns = qual.map(|q| q.nns);
+            let qual = qual.map(|q| q.ctx);
             d.global_qualifier = global && qual.is_some();
             if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
                 d.qualifier = qual;
