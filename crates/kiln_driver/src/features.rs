@@ -435,14 +435,24 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
     if !target.is_aarch64() {
         // x86: `-march=<cpu>` names one of clang's CPUs (`getX86TargetCPU`)
         // or `native`. A CPU clang 21 knows has its features
-        // (`x86_targets::CPUS`); `native` and the others are not expanded
-        // (spec/driver.md deviations). Any other value stays unsupported.
+        // (`x86_targets::CPUS`, with clang 19's / 22's differences);
+        // `native` on a Linux x86-64 host has the host's `/proc/cpuinfo`
+        // features, elsewhere none (spec/driver.md "x86-64 target
+        // features"). Any other value stays unsupported.
         let v22 = args.predef.clang_compat == ClangCompat::Clang22;
         let mut cpu_features: Option<Vec<&'static str>> = None;
         match args.march.as_deref() {
-            Some(v) if v == "native" || is_x86_cpu(v, v22) => {
+            Some("native") => {
+                f.cpu = Some("native".to_owned());
+                if std::env::consts::ARCH == "x86_64" {
+                    cpu_features = std::fs::read_to_string("/proc/cpuinfo")
+                        .ok()
+                        .map(|c| x86_features::native_features(&c, v22));
+                }
+            }
+            Some(v) if is_x86_cpu(v, v22) => {
                 f.cpu = Some(v.to_owned());
-                cpu_features = x86_cpu(v).map(|c| c.features.iter().collect());
+                cpu_features = x86_cpu(v).map(|c| x86_features::cpu_features(c, v22));
             }
             Some(v) => errors.push(unsupported("-march=", v)),
             None => {}
@@ -452,8 +462,12 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
         // does, build clang's `initFeatureMap` over the CPU's features
         // (spec/driver.md "x86-64 target features"). `-Xclang
         // -target-feature` stays ignored on x86-64.
-        for a in args.x86_feature_flags.iter().filter(|a| x86_features::unknown_at(a, v22)) {
-            errors.push(ArgError::Unknown(a.clone()));
+        for a in &args.x86_feature_flags {
+            if x86_features::unknown_at(a, v22) {
+                errors.push(ArgError::Unknown(a.clone()));
+            } else if let Some((opt, v)) = x86_features::bad_value(a) {
+                errors.push(unsupported(&opt, &v));
+            }
         }
         let items = x86_features::driver_items(&args.x86_feature_flags, v22);
         if cpu_features.is_some() || !items.is_empty() {
@@ -466,8 +480,9 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
         if args.codegen.speculative_load_hardening {
             f.extra.push("+retpoline-indirect-calls".to_owned());
         }
-        if let Some(v) = &args.mcpu {
-            errors.push(unsupported("-mcpu=", v));
+        if args.mcpu.is_some() {
+            let t = args.target.as_deref().unwrap_or(target.triple);
+            errors.push(ArgError::UnsupportedForTarget("-mcpu=".to_owned(), t.into()));
         }
         if args.sve_vector_bits.is_some() {
             let t = args.target.as_deref().unwrap_or(target.triple);
@@ -1023,6 +1038,8 @@ mod tests {
         let t =
             ArgError::UnsupportedForTarget("-msve-vector-bits=".into(), "x86_64-linux-gnu".into());
         assert_eq!(res("--target=x86_64-linux-gnu -msve-vector-bits=256 a.cpp", false).1, [t]);
+        let t = ArgError::UnsupportedForTarget("-mcpu=".into(), "x86_64-linux-gnu".into());
+        assert_eq!(res("--target=x86_64-linux-gnu -mcpu=cortex-a57 a.cpp", false).1, [t]);
     }
 
     #[test]
@@ -1073,8 +1090,9 @@ mod tests {
         assert_eq!(cpu("-march=novalake a.cpp", false).as_deref(), Some("novalake"));
     }
 
-    /// WP-630: an x86-64 `-march=<cpu>` has clang 21's features and
-    /// predefined macros; `native` and the default keep `x86-64`'s.
+    /// WP-630: an x86-64 `-march=<cpu>` has clang's features and
+    /// predefined macros; the default keeps `x86-64`'s, as `native` does
+    /// off an x86-64 host.
     #[test]
     fn x86_cpu_features() {
         let f = res("-march=westmere a.cpp", false).0;
@@ -1086,23 +1104,30 @@ mod tests {
         assert_eq!(f.x86_enabled().len(), 16);
         let base = ["cmov", "cx8", "fxsr", "mmx", "sse", "sse2", "x87"];
         assert_eq!(res("a.cpp", false).0.x86_enabled(), base);
-        assert_eq!(res("-march=native a.cpp", false).0.x86_enabled(), base);
+        if std::env::consts::ARCH != "x86_64" {
+            // Off an x86-64 host `native` has no features to detect.
+            assert_eq!(res("-march=native a.cpp", false).0.x86_enabled(), base);
+            assert_eq!(x86_macros(&res("-march=native a.cpp", false).0, true), []);
+        }
         let m = x86_macros(&res("-march=westmere a.cpp", false).0, true);
         assert!(m.contains(&("__SSE4_2__".to_owned(), Some("1".to_owned()))));
         assert!(m.contains(&("__tune_corei7__".to_owned(), Some("1".to_owned()))));
         assert!(m.contains(&("__k8".to_owned(), None)));
         assert!(!m.iter().any(|(n, _)| n == "__AES__"));
         assert_eq!(x86_macros(&res("-march=x86-64 a.cpp", false).0, true), []);
-        assert_eq!(x86_macros(&res("-march=native a.cpp", false).0, true), []);
     }
 
     /// WP-1000: the feature-derived macros of every CPU reproduce its
     /// generated row (clang 21's `-dM -E`, which still has `evex512`, as
-    /// clang 19), as a set.
+    /// clang 19), as a set. The CPUs whose clang 19 features differ from
+    /// clang 21's are skipped (the corpus pins them against clang 19).
     #[test]
     fn x86_cpu_macros_from_features() {
         // clang 22's further CPUs are no `-fclang-compat=19` CPU.
-        for c in crate::x86_targets::cpus().filter(|c| !X86_CPUS_22.contains(&c.name)) {
+        let same = |c: &crate::x86_targets::Cpu| {
+            x86_features::cpu_features(*c, false) == c.features.iter().collect::<Vec<_>>()
+        };
+        for c in crate::x86_targets::cpus().filter(|c| !X86_CPUS_22.contains(&c.name) && same(c)) {
             let f = res(&format!("-march={} -fclang-compat=19 a.cpp", c.name), false).0;
             let mut got: Vec<_> = x86_macros(&f, false);
             let mut want: Vec<(String, Option<String>)> =

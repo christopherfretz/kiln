@@ -1013,8 +1013,8 @@ fn codegen_flags_classes() {
         ],
     ];
     for flags in accepted {
-        // `-mcpu=` is AArch64-only: on x86-64 it is "unsupported argument",
-        // as clang ("Target features"), so the host target decides.
+        // `-mcpu=` is AArch64-only: on x86-64 it is "unsupported option
+        // for target", as clang ("Target features"), so the host target decides.
         if flags.contains(&"-mcpu=native") && !cfg!(target_arch = "aarch64") {
             continue;
         }

@@ -1780,8 +1780,7 @@ Each deviation is covered by a test or a test note.
 18. **Target features** ("Target features" above): the CPU names other
     than `generic` and `native`, `-march=armv8-r`, and the extensions kiln does
     not model (`sme*`, `fp8*`, clang 19's `b16b16`/`sve-b16b16`, ...) are
-    errors where clang accepts them; on x86-64, `-mcpu=` is "unsupported
-    argument" (clang: "unsupported option") and `-target-feature` is
+    errors where clang accepts them; on x86-64 `-target-feature` is
     ignored (clang passes it on); a `-target-feature` value without
     `+`/`-` is an error (clang warns).
 19. **Codegen flags** ("Codegen flags" above, WP-605): `-fno-plt` puts

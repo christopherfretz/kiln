@@ -69,11 +69,33 @@ fn split(arg: &str) -> Option<(bool, &str)> {
     }
 }
 
-/// Whether `arg` is an x86 feature flag clang 19 or clang 22 knows.
+/// The values `-mapx-features=` / `-mno-apx-features=` take.
+const APX_VALUES: &[&str] = &["egpr", "push2pop2", "ppx", "ndd", "ccmp", "nf", "cf", "zu"];
+
+/// clang's `-mapx-inline-asm-use-gpr32` (no `-mno-` form): the
+/// `inline-asm-use-gpr32` feature.
+const GPR32: &str = "-mapx-inline-asm-use-gpr32";
+
+/// Whether `arg` is an x86 feature flag clang 19 or clang 22 knows,
+/// `-m[no-]apx-features=<list>` and `-mapx-inline-asm-use-gpr32` included.
 pub fn is_flag(arg: &str) -> bool {
-    split(arg).is_some_and(|(_, n)| {
-        FLAGS.binary_search(&n).is_ok() || FLAGS_19.contains(&n) || FLAGS_22.contains(&n)
-    })
+    arg == GPR32
+        || split(arg).is_some_and(|(_, n)| {
+            n.starts_with("apx-features=")
+                || FLAGS.binary_search(&n).is_ok()
+                || FLAGS_19.contains(&n)
+                || FLAGS_22.contains(&n)
+        })
+}
+
+/// The first value of `-m[no-]apx-features=<list>` flag `arg` that names
+/// no APX feature, as `(option, value)` for clang's "unsupported argument
+/// '…' to option '…'" error.
+pub fn bad_value(arg: &str) -> Option<(String, String)> {
+    let (on, name) = split(arg)?;
+    let list = name.strip_prefix("apx-features=")?;
+    let bad = list.split(',').filter(|v| !v.is_empty()).find(|v| !APX_VALUES.contains(v))?;
+    Some((format!("{}apx-features=", if on { "-m" } else { "-mno-" }), bad.to_owned()))
 }
 
 /// Whether flag `arg` ([`is_flag`]) is one the `-fclang-compat=` clang
@@ -91,9 +113,13 @@ pub fn is_3dnow(arg: &str) -> bool {
 
 /// The `-target-feature` items (`+name` / `-name`) clang's driver turns
 /// flag `arg` into: `-msse4` is `+sse4.2` and `-mno-sse4` `-sse4.1`,
-/// `-m80387` is `x87`, `-mapxf` the APX features, clang 19's `-mavx10.1`
+/// `-m80387` is `x87`, `-mapxf` the APX features (`-mapx-features=` the
+/// listed ones), clang 19's `-mavx10.1`
 /// `avx10.1-256`, `-m3dnow`/`-m3dnowa` nothing.
 fn flag_items(arg: &str, v22: bool) -> Vec<String> {
+    if arg == GPR32 {
+        return vec!["+inline-asm-use-gpr32".to_owned()];
+    }
     let Some((on, name)) = split(arg) else { return Vec::new() };
     let sign = if on { '+' } else { '-' };
     let names: Vec<&str> = match name {
@@ -101,6 +127,10 @@ fn flag_items(arg: &str, v22: bool) -> Vec<String> {
         "sse4" => vec![if on { "sse4.2" } else { "sse4.1" }],
         "80387" => vec!["x87"],
         "apxf" => (if v22 { APX_22 } else { APX_19 }).to_vec(),
+        n if n.starts_with("apx-features=") => {
+            let list = &n["apx-features=".len()..];
+            list.split(',').filter(|v| APX_VALUES.contains(v)).collect()
+        }
         "avx10.1" if !v22 => vec!["avx10.1-256"],
         n => vec![n],
     };
@@ -112,6 +142,9 @@ fn flag_items(arg: &str, v22: bool) -> Vec<String> {
 /// about there ("argument unused during compilation": `-msse4`,
 /// `-msse4.2`, `-m[no-]3dnow[a]`).
 pub fn non_x86_spelling(arg: &str, v22: bool) -> Option<String> {
+    if arg == GPR32 {
+        return Some(GPR32.to_owned());
+    }
     let (on, name) = split(arg)?;
     let prefix = if on { "-m" } else { "-mno-" };
     let name = match name {
@@ -120,6 +153,7 @@ pub fn non_x86_spelling(arg: &str, v22: bool) -> Option<String> {
         "sse4" => "sse4.1",
         "80387" => "x87",
         "apxf" if !v22 => "apx-features=",
+        n if n.starts_with("apx-features=") => "apx-features=",
         "avx10.1" if !v22 => "avx10.1-256",
         n => n,
     };
@@ -208,6 +242,83 @@ fn set_enabled(map: &mut BTreeMap<String, bool>, name: &str, on: bool, v22: bool
             }
         }
     }
+}
+
+/// How clang 19's and clang 22's `-march=` CPU features differ from the
+/// generated clang 21 rows ([`crate::x86_targets`]): (CPU, added, removed).
+const CPU_19: &[(&str, &[&str], &[&str])] = &[
+    ("alderlake", &["cldemote"], &[]),
+    ("arrowlake", &["cldemote"], &[]),
+    ("arrowlake-s", &["cldemote"], &[]),
+    ("clearwaterforest", &["kl", "widekl"], &[]),
+    ("gracemont", &["cldemote"], &[]),
+    ("lunarlake", &["cldemote"], &[]),
+    ("meteorlake", &["cldemote"], &[]),
+    ("pantherlake", &["cldemote", "kl", "widekl"], &[]),
+    ("raptorlake", &["cldemote"], &[]),
+];
+const CPU_22: &[(&str, &[&str], &[&str])] = &[("diamondrapids", &[], &["usermsr"]), ("pantherlake", &[], &["prefetchi"])];
+
+/// The features of `-march=` CPU `cpu` as clang 19 (`v22` false) or clang
+/// 22 has them: the clang 21 row with [`CPU_19`] / [`CPU_22`] applied.
+pub fn cpu_features(cpu: crate::x86_targets::Cpu, v22: bool) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = cpu.features.iter().collect();
+    let table = if v22 { CPU_22 } else { CPU_19 };
+    if let Some((_, add, remove)) = table.iter().find(|(n, ..)| *n == cpu.name) {
+        out.retain(|f| !remove.contains(f));
+        out.extend_from_slice(add);
+    }
+    out
+}
+
+/// Linux `/proc/cpuinfo` `flags` names whose clang feature name differs
+/// (the others are used as they are when they name a clang feature).
+const CPUINFO: &[(&str, &str)] = &[
+    ("abm", "lzcnt"),
+    ("amx_bf16", "amx-bf16"),
+    ("amx_complex", "amx-complex"),
+    ("amx_fp16", "amx-fp16"),
+    ("amx_int8", "amx-int8"),
+    ("amx_tile", "amx-tile"),
+    ("avx512_bf16", "avx512bf16"),
+    ("avx512_bitalg", "avx512bitalg"),
+    ("avx512_fp16", "avx512fp16"),
+    ("avx512_vbmi2", "avx512vbmi2"),
+    ("avx512_vnni", "avx512vnni"),
+    ("avx512_vp2intersect", "avx512vp2intersect"),
+    ("avx512_vpopcntdq", "avx512vpopcntdq"),
+    ("avx_vnni", "avxvnni"),
+    ("bmi1", "bmi"),
+    ("fpu", "x87"),
+    ("lahf_lm", "sahf"),
+    ("pclmulqdq", "pclmul"),
+    ("pni", "sse3"),
+    ("prefetchw", "prfchw"),
+    ("rdrand", "rdrnd"),
+    ("sha_ni", "sha"),
+    ("sse4_1", "sse4.1"),
+    ("sse4_2", "sse4.2"),
+    ("user_shstk", "shstk"),
+];
+
+/// The x86-64 features `-march=native` enables on a Linux x86-64 host
+/// whose `/proc/cpuinfo` is `cpuinfo`: [`X86_64`] plus each feature of the
+/// first `flags` line clang knows (spec/driver.md "x86-64 target
+/// features"). Unknown flags are skipped.
+pub fn native_features(cpuinfo: &str, v22: bool) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = X86_64.to_vec();
+    let Some(line) = cpuinfo.lines().find_map(|l| l.strip_prefix("flags")) else { return out };
+    let flags = line.trim_start().strip_prefix(':').unwrap_or("");
+    let g = graph(v22);
+    for flag in flags.split_whitespace() {
+        let name = CPUINFO.iter().find(|(c, _)| *c == flag).map_or(flag, |(_, n)| n);
+        if let Some((&n, _)) = g.get_key_value(name) {
+            if !out.contains(&n) {
+                out.push(n);
+            }
+        }
+    }
+    out
 }
 
 /// The feature map of x86-64 CPU features `cpu` (the `-march=` CPU's, or
@@ -312,7 +423,7 @@ const FLT16: &[(&str, &str)] = &[
 /// The features defining no macro.
 const NO_MACRO: &[&str] = &[
     "cmov", "cx8", "x87", "evex512", "vzeroupper", "retpoline-indirect-calls", "retpoline-indirect-branches",
-    "retpoline-external-thunk", "lvi-cfi", "seses",
+    "retpoline-external-thunk", "lvi-cfi", "seses", "inline-asm-use-gpr32",
 ];
 
 /// The feature macros (name, value) of feature map `map` at clang 19 or
@@ -434,6 +545,19 @@ mod tests {
         assert!(m(&["+cx16", "+sahf"], true).contains_key("__LAHF_SAHF__"));
         let a = m(&["+avx10.2"], true);
         assert!(a.contains_key("__AVX10_2_512__") && a.contains_key("__AVX10_1__"));
+    }
+
+    /// spec/driver.md "x86-64 target features": `-march=native` maps the
+    /// Linux `flags` names to clang's and skips the unknown ones.
+    #[test]
+    fn native() {
+        let info = "processor\t: 0\nflags\t\t: fpu cx8 sse4_1 sse4_2 pni abm bmi1 sha_ni avx2 lm nx_bogus\nflags : avx512f\n";
+        let f = native_features(info, true);
+        assert_eq!(f, ["cmov", "cx8", "fxsr", "mmx", "sse", "sse2", "x87", "sse4.1", "sse4.2", "sse3", "lzcnt", "bmi", "sha", "avx2"]);
+        let map = feature_map(&f, &[], true);
+        assert_eq!(map.get("avx"), Some(&true));
+        assert_eq!(map.get("avx512f"), None);
+        assert_eq!(native_features("", false), X86_64);
     }
 
     #[test]
