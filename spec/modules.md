@@ -2492,8 +2492,28 @@ interface or `stdapp`'s source never rebuilds the std module.
   the names, option parsing and JSON quoting. `xtask/src/dist.rs`
   checks the links in the install layout and scans a unit with the
   installed `clang-scan-deps-22` in its smoke test.
+- Compilation databases and the full format (WP-1148, §11.9):
+  `crates/kiln_driver/tests/scan_deps.rs` `compilation_database_p1689`
+  (per-entry `directory`, `arguments` over `command`, `output`, rule
+  order, an import naming another entry's source; the empty database),
+  `compilation_database_make` (database order, a failing entry beside
+  good ones, clang 19's header under `clang-scan-deps-19`),
+  `compilation_database_errors` (clang's messages for an unreadable,
+  malformed or ill-shaped database and for both `--` and a database),
+  `experimental_full_shapes` (the 22 and 19 shapes) and
+  `differential_against_clang_scan_deps`: one module graph across
+  directories through kiln and the real clang-scan-deps 19 and 22
+  (where installed), P1689, make and full compared after the documented
+  deviations; `kiln_driver::scan_deps_cdb` unit tests cover the database
+  parser and shell splitting.
 - CMake (WP-982): `scripts/oss/selftest.sh` `cmake_modules` builds
-  `scripts/oss/fixtures/modules` (§11.9).
+  `scripts/oss/fixtures/modules` (§11.9). WP-1148: the OSS harness rows
+  `cmake_modules` (that fixture, `import std` under libc++) and
+  `fmt_module` ({fmt} 12.1.0 with `FMT_MODULE=ON` and an importer) build
+  with Ninja through kiln-scan-deps against a clang 19 control
+  (docs/status/oss/{cmake_modules,fmt_module}.md);
+  `module.global.frag/gmf-floatn-limits.cpp` is the `fmt_module`
+  libstdc++ failure, xfail.
 - Kind 2 (WP-985, §11.11): `crates/kiln_sema/src/bmi_ast.rs` unit
   tests (the section's round trip, no bytes without a carried entry,
   trailing bytes and an out-of-range path index rejected, and a fuzz
