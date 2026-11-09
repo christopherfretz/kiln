@@ -23,7 +23,7 @@ use crate::init::Initializer;
 use crate::scope::{Scope, ScopeKind};
 use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::stack::FrameKind;
-use crate::templ::subst::{LocalMethod, SubstFail, SubstResult, Substituter};
+use crate::templ::subst::{LocalLate, LocalMethod, SubstFail, SubstResult, Substituter};
 
 /// The parse state set aside while an instantiation runs in the context
 /// of its template (§4.5): an instantiation can be triggered from deep
@@ -2226,31 +2226,8 @@ impl Substituter<'_, '_, '_> {
         if invalid {
             sub.sema.ast.decls.set_flags(spec, DeclFlags::INVALID);
         }
-        // Default member initializers ([temp.inst]/3): instantiated when
-        // a constructor or an aggregate initialization uses one
-        // ([`Sema::instantiate_nsdmi`], clang
-        // `InstantiateInClassInitializer`), an anonymous member's included.
-        // Those of a local class are instantiated now, in the complete-class
-        // context (the parser replays them so).
         if !nsdmis.is_empty() && !invalid {
-            if local.is_none() {
-                let ctx = (sub.args.clone(), sub.pairs.clone());
-                let _ = sub.sema.inst.nsdmi_ctx.insert(spec, ctx);
-                for (field, init) in nsdmis {
-                    if sub.sema.kind_of(field) == DeclKind::Field {
-                        sub.sema.special.nsdmi.insert(field);
-                        let _ = sub.sema.inst.deferred_nsdmis.insert(field, (spec, init));
-                    }
-                }
-            } else {
-                sub.sema.act_on_start_delayed_class(spec);
-                for (field, init) in nsdmis {
-                    if sub.sema.kind_of(field) == DeclKind::Field {
-                        sub.nsdmi(field, init);
-                    }
-                }
-                sub.sema.act_on_finish_delayed_class(spec);
-            }
+            sub.class_nsdmis(spec, local.is_some(), nsdmis);
         }
         if local.is_none() {
             sub.sema.act_on_finish_class_contexts(spec);
@@ -2258,11 +2235,42 @@ impl Substituter<'_, '_, '_> {
         sub.entity = saved_entity;
     }
 
+    /// The default member initializers `nsdmis` (instantiated field,
+    /// pattern initializer) of class `spec` ([temp.inst]/3): instantiated
+    /// when a constructor or an aggregate initialization uses one
+    /// ([`Sema::instantiate_nsdmi`], clang `InstantiateInClassInitializer`),
+    /// an anonymous member's included. Those of a local class (`local`,
+    /// and of its anonymous members) are instantiated with the outermost
+    /// local class's complete-class contexts, after the declaration parts
+    /// (the parser replays them so; `LocalLate::Nsdmi`, WP-905).
+    fn class_nsdmis(&mut self, spec: DeclId, local: bool, nsdmis: Vec<(DeclId, kiln_ast::ExprId)>) {
+        let fields: Vec<_> =
+            nsdmis.into_iter().filter(|&(f, _)| self.sema.kind_of(f) == DeclKind::Field).collect();
+        if self.local_late.is_some() && (local || self.sema.decl_in_local_scope(spec)) {
+            for (field, init) in fields {
+                self.push_local_late(LocalLate::Nsdmi { field, init });
+            }
+        } else if !local {
+            let ctx = (self.args.clone(), self.pairs.clone());
+            let _ = self.sema.inst.nsdmi_ctx.insert(spec, ctx);
+            for (field, init) in fields {
+                self.sema.special.nsdmi.insert(field);
+                let _ = self.sema.inst.deferred_nsdmis.insert(field, (spec, init));
+            }
+        } else {
+            self.sema.act_on_start_delayed_class(spec);
+            for (field, init) in fields {
+                self.nsdmi(field, init);
+            }
+            self.sema.act_on_finish_delayed_class(spec);
+        }
+    }
+
     /// Instantiates pattern initializer `init` as `field`'s default
     /// member initializer, in the class scope. On failure the field is
     /// invalid, so a constructor using it is quiet ([class.base.init]/9.1,
     /// clang `InstantiateInClassInitializer`).
-    fn nsdmi(&mut self, field: DeclId, init: kiln_ast::ExprId) {
+    pub(crate) fn nsdmi(&mut self, field: DeclId, init: kiln_ast::ExprId) {
         self.sema.act_on_start_field_init(field);
         let style = self
             .sema

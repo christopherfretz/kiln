@@ -941,7 +941,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-902 | codegen: C++26 constant init of a shared virtual base (consts.rs:569 record_elems); xfail class.mi/shared-virtual-base-constant-init-run.cpp | WP-873 | done (#438) |
 | WP-903 | sema: never-constant check tracks locals (never_constant.rs:280); oven potential mode stops after a quiet nested call (vm.rs:2058) | WP-873 | deferred |
 | WP-904 | sema accepts-invalid: `sizeof(L::N)` without `typename` for a dependent member class of a local class (clang 19 rejects) | WP-884 | open |
-| WP-905 | sema SILENT DROP: a failed instantiated-decl lookup in a local class member body drops the statement silently (templ/subst/decls.rs near enum_decl ~1503) | WP-884 | open |
+| WP-905 | sema SILENT DROP: a failed instantiated-decl lookup in a local class member body drops the statement silently (templ/subst/decls.rs near enum_decl ~1503) | WP-884 | in progress |
 | WP-906 | bench: reflect s7/s8 baselines stale vs current host load; re-baseline on a quiet host | WP-884 | deferred |
 | WP-913 | sema: promote coro_lifetimebound/coro_disable_lifetimebound out of class C into the dangling walk (crates/kiln_sema/src/attr_triage.rs:167-170) | WP-891 | open |
 | WP-914 | sema rejects-valid (compat 19): structured-binding tuple_element index is an unconverted size_t value, so `template<unsigned I, class T> struct tuple_element` misses its explicit specialization (struct_bind.rs:673); xfail dcl.struct.bind/tuple-element-unsigned-index-19.cpp | WP-891 | done (#437) |

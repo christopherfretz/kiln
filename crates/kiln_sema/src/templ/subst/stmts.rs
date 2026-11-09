@@ -8,6 +8,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprDeps, ExprKind};
 use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::{DeclId, ExprId, StmtId};
+use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use super::{SubstFail, SubstResult, Substituter};
@@ -25,6 +26,7 @@ impl Substituter<'_, '_, '_> {
         }
         let (init_failures, errors) = (self.init_failures, self.sema.diags.error_count());
         let body_errors = self.sema.inst.body_errors;
+        let mark = self.sema.failure_mark();
         match self.stmt_node(s) {
             // A `return` whose operand does not convert to the return type
             // (an error reported here, not in a nested instantiation) is
@@ -85,8 +87,25 @@ impl Substituter<'_, '_, '_> {
                 let e = self.sema.recover_err(&[], loc);
                 self.sema.builder().expr_stmt(e)
             }
-            Err(SubstFail) => self.sema.act_on_null_stmt(loc),
+            // Nothing diagnosed: a kiln bug, made an internal error rather
+            // than missing code (§4.6 "No silent drop", WP-905). A pack
+            // probe that stopped once it found its length fails quietly
+            // by design.
+            Err(SubstFail) => {
+                if self.sema.failed_silently_since(mark) && !self.probe_done() {
+                    self.stmt_dropped(loc);
+                }
+                self.sema.act_on_null_stmt(loc)
+            }
         }
+    }
+
+    /// The internal error for a statement at `loc` that failed to
+    /// instantiate with nothing diagnosed (§4.6).
+    fn stmt_dropped(&mut self, loc: Loc) {
+        let in_ = self.ctx_arg(self.sema.ctx);
+        let d = self.sema.diag(DiagId::sema_inst_part_dropped, loc).arg("a statement").arg(in_);
+        self.sema.emit(d);
     }
 
     /// Whether substituted statement `x` is a `return` whose operand
