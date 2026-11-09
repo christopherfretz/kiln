@@ -10977,6 +10977,11 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<(DeclId, DeclId)> {
         let prefix = written.map(|w| w.0);
+        // [class.member.lookup]/6: `In` found in two bases names no class
+        // (clang's `BuildCXXNestedNameSpecifier` reports the ambiguity).
+        if self.diagnose_member_ambiguity(found, DeclName::ident(name), loc) {
+            return None;
+        }
         let Some(&d) = found.decls.first() else {
             // [basic.lookup.qual]/1 ignores names that are not types,
             // templates or namespaces; one that ordinary lookup finds is
