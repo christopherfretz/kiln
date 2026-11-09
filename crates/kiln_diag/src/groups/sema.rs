@@ -85,6 +85,7 @@ GnuStringLiteralOperatorTemplate = "gnu-string-literal-operator-template" [];
 GnuVariableSizedTypeNotAtEnd = "gnu-variable-sized-type-not-at-end" [];
 IgnoredAttributes = "ignored-attributes" [];
 ImplicitConstIntFloatConversion = "implicit-const-int-float-conversion" [];
+ImplicitExceptionSpecMismatch = "implicit-exception-spec-mismatch" [];
 ImplicitFallthrough = "implicit-fallthrough" [];
 ImplicitFunctionDeclaration = "implicit-function-declaration" [];
 ImplicitlyUnsignedLiteral = "implicitly-unsigned-literal" [];

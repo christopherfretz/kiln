@@ -1043,7 +1043,173 @@ fn exc_bound(e: ExcSpec) -> ExcBound {
     }
 }
 
+/// How a redeclaration's exception specification compares with the
+/// previous declaration's ([except.spec]/5; clang
+/// `CheckEquivalentExceptionSpecImpl`), from
+/// [`Sema::redecl_exc_equiv`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ExcEquiv {
+    /// Equivalent.
+    Same,
+    /// The redeclaration has none and the previous one has one that is
+    /// not equivalent (clang's missing-specification path).
+    Missing,
+    /// Not equivalent.
+    Mismatch,
+    /// Dependent or not yet computed: compared later.
+    Unknown,
+}
+
 impl Sema<'_, '_> {
+    /// clang `CheckEquivalentExceptionSpecImpl` for a redeclaration with
+    /// specification `new` of a function previously declared with `old`
+    /// ([except.spec]/5 since C++11, with clang's
+    /// `AllowNoexceptAllMatchWithNoSpec`): two non-throwing ones match,
+    /// as do two potentially-throwing ones neither of which is a dynamic
+    /// list; two dynamic lists match when they name the same set of
+    /// types (cv-qualifiers and repetitions ignored). With
+    /// `operator_new`, `throw(std::bad_alloc)` matches no specification
+    /// (clang's C++11 replaceable `operator new` allowance).
+    pub(crate) fn redecl_exc_equiv(
+        &self,
+        old: ExcSpec,
+        new: ExcSpec,
+        operator_new: bool,
+    ) -> ExcEquiv {
+        let (ob, nb) = (exc_bound(old), exc_bound(new));
+        if ob == ExcBound::Unknown || nb == ExcBound::Unknown {
+            return ExcEquiv::Unknown;
+        }
+        if ob == ExcBound::Cannot && nb == ExcBound::Cannot
+            || ob == ExcBound::Any && nb == ExcBound::Any
+        {
+            return ExcEquiv::Same;
+        }
+        let t = &self.ast.types;
+        let set = |l: TypeList| -> Vec<QualType> {
+            let mut v: Vec<QualType> =
+                t.type_list_types(l).iter().map(|&x| t.canonical(x).without_quals()).collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        if let (ExcSpec::Dynamic(a), ExcSpec::Dynamic(b)) = (old, new)
+            && set(a) == set(b)
+        {
+            return ExcEquiv::Same;
+        }
+        if operator_new && self.std >= kiln_lex::Std::Cxx11 {
+            let with = match (old, new) {
+                (ExcSpec::None, ExcSpec::Dynamic(l)) | (ExcSpec::Dynamic(l), ExcSpec::None) => {
+                    Some(l)
+                }
+                _ => None,
+            };
+            if let Some(l) = with
+                && let [e] = t.type_list_types(l)
+                && let Some(r) = t.as_record(*e)
+                && self.ast.decls.get(r).name().as_ident() == Some(self.intern("bad_alloc"))
+                && self.is_in_std_namespace(r)
+            {
+                return ExcEquiv::Same;
+            }
+        }
+        if old != ExcSpec::None && new == ExcSpec::None {
+            return ExcEquiv::Missing;
+        }
+        ExcEquiv::Mismatch
+    }
+
+    /// [except.spec]/5 for the out-of-line redeclaration (type `ty`, at
+    /// `loc`) of the constructor, destructor, assignment or conversion
+    /// function `p` (type `pty`) (clang
+    /// `CheckEquivalentExceptionSpec` from `MergeFunctionDecl`): the
+    /// specifications are equivalent (see [`Sema::redecl_exc_equiv`]),
+    /// where a destructor declared without one has its implicit one
+    /// ([except.spec]/8; not in a dependent class, whose instantiation
+    /// gets its own); C++11 [except.spec]/4 (DR1492) then warns
+    /// (`-Wimplicit-exception-spec-mismatch`) when only one of the two
+    /// declarations has the implicit one. A redeclaration without a
+    /// specification of a function with one is `missing` it. Returns
+    /// the redeclaration's type: an unwritten specification is the
+    /// previous declaration's.
+    pub(crate) fn check_special_redecl_exc(
+        &mut self,
+        (p, pty, ty): (DeclId, QualType, QualType),
+        dtor: bool,
+        (loc, fname, fix_at): (Loc, &str, Option<Loc>),
+    ) -> QualType {
+        let (pe, ne) = (self.written_exc_spec(pty), self.written_exc_spec(ty));
+        let first = self.ast.first(p);
+        let computed = matches!(pe, ExcSpec::Deferred(_))
+            && !self.uninstantiated_exc.contains_key(&first)
+            && !self.unparsed_exc.contains(&first);
+        let dependent = self.ast.decls.get(p).has(DeclFlags::DEPENDENT_CTX);
+        let old_implicit = dtor && computed && !dependent;
+        let new_implicit = dtor && ne == ExcSpec::None && !dependent;
+        let checked = (self.exceptions || self.std >= kiln_lex::Std::Cxx17)
+            && self.same_ignoring_exc_spec(pty, ty)
+            && !(old_implicit && new_implicit)
+            && (!matches!(pe, ExcSpec::Deferred(_)) || old_implicit);
+        let implicit = if checked && (old_implicit || new_implicit) {
+            self.implicit_dtor_exc(first)
+        } else {
+            None
+        };
+        let verdict = match implicit {
+            _ if !checked => ExcEquiv::Unknown,
+            None if old_implicit || new_implicit => ExcEquiv::Unknown,
+            imp => {
+                let old = if old_implicit { imp.unwrap_or(pe) } else { pe };
+                let new = if new_implicit { imp.unwrap_or(ne) } else { ne };
+                match self.redecl_exc_equiv(old, new, false) {
+                    // A computed `noexcept(false)` is not a missing one.
+                    ExcEquiv::Missing if new_implicit => ExcEquiv::Mismatch,
+                    v => v,
+                }
+            }
+        };
+        match verdict {
+            ExcEquiv::Same => {
+                if old_implicit != new_implicit
+                    && self.exceptions
+                    && self.std >= kiln_lex::Std::Cxx11
+                {
+                    let m = self
+                        .diag(DiagId::sema_implicit_exception_spec_mismatch, loc)
+                        .arg(if old_implicit { "1" } else { "0" });
+                    let m = self.note_prev(m, p, false);
+                    self.emit(m);
+                }
+                if ne == ExcSpec::None { pty } else { ty }
+            }
+            ExcEquiv::Missing => {
+                self.merge_missing_exc_spec(p, pty, ty, (loc, fname, fix_at), false).0
+            }
+            ExcEquiv::Mismatch => {
+                let m = self.diag(DiagId::sema_exception_spec_mismatch, loc);
+                let m = self.note_prev(m, p, false);
+                self.emit(m);
+                if ne == ExcSpec::None { pty } else { ty }
+            }
+            // Not compared here (a specification that is dependent or not
+            // yet known, or `-fno-exceptions` before C++17): only the
+            // non-throwing-or-not identity of the types.
+            ExcEquiv::Unknown => {
+                if self.ast.types.same_type(pty, ty) {
+                    ty
+                } else if ne == ExcSpec::None || matches!(pe, ExcSpec::Deferred(_)) {
+                    if ne == ExcSpec::None { pty } else { ty }
+                } else {
+                    let m = self.diag(DiagId::sema_exception_spec_mismatch, loc);
+                    let m = self.note_prev(m, p, false);
+                    self.emit(m);
+                    ty
+                }
+            }
+        }
+    }
+
     /// Before C++17, [except.spec]/5 (C++14): when a pointer to function,
     /// reference to function or pointer to member function is assigned,
     /// initialized, passed or returned, the target's exception
