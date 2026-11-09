@@ -5035,6 +5035,13 @@ A sweep that fails for another reason (a lambda body, a pack it cannot keep)
 leaves the expansion empty, as before
 (`tests/conformance/temp.variadic/expansion-empty-first-pack-checks-other-packs-run.cpp`,
 `p7-empty-first-pack-length-mismatch.cpp`).
+An empty non-type pack the sweep keeps has the parameter's type
+substituted; a placeholder parameter (`auto... Vs`) has no element to
+deduce it from, so the kept expression's type is the dependent `auto`
+(`Sema::dependent_auto`), never the undeduced placeholder, and a call
+`f(Vs)...` in the swept pattern stays unresolved instead of deducing and
+instantiating `f<auto>` (WP-933,
+`temp.variadic/empty-auto-pack-call-in-expansion.cpp`).
 
 A converted argument pack inside an argument list being substituted is
 rebuilt element by element. This happens for a partial

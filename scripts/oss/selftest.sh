@@ -121,7 +121,7 @@ stdlib_one() { # <label> <compiler or empty>
   local label="$1" cxx="$2" log="$TMP/$1-libcxx.jsonl"
   (cd "$TMP" && KILN_OSS_CXX="$cxx" KILN_OSS_LOG="$log" KILN_OSS_STDLIB=libc++ "$HERE/kiln-cxx" -O1 hello.cpp -o "hello-$label-libcxx" >/dev/null 2>&1)
   check "$label: libc++ hello builds and runs" "[ \"\$('$TMP/hello-$label-libcxx')\" = hello ]"
-  check "$label: libc++ argv starts with -stdlib=libc++" "field '$log' 0 'r[\"kind\"]==\"ok\" and r[\"argv\"][1]==\"-stdlib=libc++\"'"
+  check "$label: libc++ argv starts with -fno-crash-diagnostics -stdlib=libc++" "field '$log' 0 'r[\"kind\"]==\"ok\" and r[\"argv\"][1:3]==[\"-fno-crash-diagnostics\",\"-stdlib=libc++\"]'"
   check "$label: libc++ binary needs libc++.so" "readelf -d '$TMP/hello-$label-libcxx' | grep -q 'libc++.so' && ! readelf -d '$TMP/hello-$label-libcxx' | grep -q 'libstdc++'"
 }
 run_one clang ""
@@ -144,6 +144,20 @@ check "timeout: rc 124 and kind timeout" "[ $? -eq 124 ] && field '$TMP/to.jsonl
 # A lit summary (LLVM check-*) gives `tests` (WP-782).
 printf 'Failed Tests (1):\n  LLVM :: a.ll\n\nTotal Discovered Tests: 10\n  Unsupported      : 2 (20.00%%)\n  Passed           : 6 (60.00%%)\n  Expectedly Failed: 1 (10.00%%)\n  Failed           : 1 (10.00%%)\nmake: *** [check-llvm] Error 1\n' > "$TMP/lit.log"
 check "lit summary counts" "python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import projects; s, c = projects.test_summary(sys.argv[2]); sys.exit(0 if c == {\"passed\": 9, \"failed\": 1, \"total\": 10} else 1)' '$HERE' '$TMP/lit.log'"
+
+# meson test's and automake's summaries give `tests` (WP-920).
+printf 'Summary of Failures:\n\n 3/4 a FAIL 0.01s\n\nOk:                3   \nExpected Fail:     0   \nFail:              1   \nUnexpected Pass:   0   \nSkipped:           1   \nTimeout:           0   \n\nFull log written to x\n' > "$TMP/meson.log"
+check "meson test summary counts" "python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import projects; s, c = projects.test_summary(sys.argv[2]); sys.exit(0 if c == {\"passed\": 4, \"failed\": 1, \"total\": 5} else 1)' '$HERE' '$TMP/meson.log'"
+printf '# TOTAL: 3\n# PASS:  2\n# SKIP:  0\n# XFAIL: 0\n# FAIL:  1\n# XPASS: 0\n# ERROR: 0\nmake: x\n# TOTAL: 2\n# PASS:  1\n# SKIP:  1\n# XFAIL: 0\n# FAIL:  0\n# XPASS: 0\n# ERROR: 0\n' > "$TMP/automake.log"
+check "automake summaries summed" "python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import projects; s, c = projects.test_summary(sys.argv[2]); sys.exit(0 if c == {\"passed\": 4, \"failed\": 1, \"total\": 5} else 1)' '$HERE' '$TMP/automake.log'"
+printf '[a]\nurl="u"\ntag="t"\nbuild="autotools"\ncxx_std=17\ntest="true"\nwave=1\narchive=true\n' > "$TMP/ar.toml"
+check "an archive row needs its sha256" "python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import projects; projects.load(sys.argv[2])' '$HERE' '$TMP/ar.toml' > '$TMP/ar.out' 2>&1; grep -q 'needs the tarball' '$TMP/ar.out'"
+# kiln-cxx's meson --version shim (WP-920): only for a compiler whose
+# banner lacks `clang`, and only with KILN_OSS_VERSION_SHIM.
+printf '#!/bin/sh\nfor a; do :; done\ncase "$a" in --version) echo "kiln version 9.9.9";; -dumpversion) echo 22.1.8;; esac\n' > "$TMP/fakecxx" && chmod +x "$TMP/fakecxx"
+check "version shim: a clang line first, then the banner" "[ \"\$(KILN_OSS_VERSION_SHIM=1 KILN_OSS_CXX='$TMP/fakecxx' '$HERE/kiln-cxx' --version | tr '\\n' '|')\" = 'clang-compatible 22.1.8 (kiln-cxx Meson shim, WP-920)|kiln version 9.9.9|' ]"
+check "version shim: off without the variable" "[ \"\$(KILN_OSS_CXX='$TMP/fakecxx' '$HERE/kiln-cxx' --version)\" = 'kiln version 9.9.9' ]"
+check "version shim: clang's banner untouched" "! KILN_OSS_VERSION_SHIM=1 KILN_OSS_CXX=clang++-19 '$HERE/kiln-cxx' --version | grep -q 'Meson shim'"
 
 # oss-report.py on the fixture: two clusters, the 3x reject first.
 python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" demo > "$TMP/report.md"

@@ -379,6 +379,24 @@ pub fn debugtrap(m: &mut Module) -> FuncId {
     declare(m, "llvm.debugtrap", TypeId::VOID, &[], &[], Shape::NoUnwind(false))
 }
 
+/// `void @llvm.instrprof.increment(ptr, i64, i32, i32)` (WP-941):
+/// `nounwind`, as LLVM 19 declares it.
+pub fn instrprof_increment(m: &mut Module) -> FuncId {
+    let p = ptr(m);
+    let n: &[Attr] = &[];
+    let params = [(p, n), (TypeId::I64, n), (TypeId::I32, n), (TypeId::I32, n)];
+    declare(m, "llvm.instrprof.increment", TypeId::VOID, &params, &[], Shape::NoUnwind(false))
+}
+
+/// `void @llvm.instrprof.increment.step(ptr, i64, i32, i32, i64)`
+/// (WP-941): `nounwind`.
+pub fn instrprof_increment_step(m: &mut Module) -> FuncId {
+    let p = ptr(m);
+    let n: &[Attr] = &[];
+    let params = [(p, n), (TypeId::I64, n), (TypeId::I32, n), (TypeId::I32, n), (TypeId::I64, n)];
+    declare(m, "llvm.instrprof.increment.step", TypeId::VOID, &params, &[], Shape::NoUnwind(false))
+}
+
 /// `void @llvm.prefetch.p0(ptr nocapture readonly, i32 immarg rw, i32
 /// immarg locality, i32 immarg cache)`: `nocallback nofree nosync nounwind
 /// willreturn memory(argmem: readwrite, inaccessiblemem: readwrite)`

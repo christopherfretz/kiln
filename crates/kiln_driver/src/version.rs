@@ -6,8 +6,10 @@
 //! `CARGO_PKG_VERSION*` is that version). `__KILN_MAJOR__`,
 //! `__KILN_MINOR__` and `__KILN_PATCH__` are its three components, the
 //! install layout's resource directory is `lib/kiln/<MAJOR>`
-//! ([`crate::toolchain::INSTALL_RESOURCE_SUBDIR`]), and `--version` /
-//! `-dumpversion` print [`VERSION`]. [`GIT_SHA`] is the short commit the
+//! ([`crate::toolchain::INSTALL_RESOURCE_SUBDIR`]), and `--version`, `-v`
+//! and `__VERSION__` print [`VERSION`] (`-dumpversion` prints the clang
+//! compatibility version instead; spec/driver.md "Identity"). [`GIT_SHA`]
+//! is the short commit the
 //! binary was built from, when the build script could tell
 //! (`crates/kiln_driver/build.rs`).
 

@@ -16,7 +16,8 @@ use kiln_pp::{
     PrintOptions, RealFs, SearchDirSpec, SearchList, build_predefines, print_macros,
     print_preprocessed,
 };
-use kiln_source::{FileId, SourceManager, Span};
+use kiln_source::activity::{self, Phase};
+use kiln_source::{FileId, Loc, SourceManager, Span};
 
 use crate::args::Args;
 use crate::deps::{DepCallbacks, DepList, on_search_event};
@@ -167,8 +168,9 @@ impl Job<'_> {
         cfg.threadsafe_statics = p.threadsafe_statics.unwrap_or(true);
         cfg.sized_deallocation = p.sized_deallocation.unwrap_or(true);
         cfg.kiln_version = crate::version::triple();
+        cfg.version_macro = Some(format!("kiln {}", crate::version::VERSION));
         cfg.clang_compat = p.clang_compat;
-        cfg.reflection = p.reflection;
+        cfg.reflection = p.reflection_for(&self.std);
         cfg.std_float_aliases =
             self.args.stdlib.unwrap_or_default() != crate::toolchain::StdLib::LibCxx;
         Some(build_predefines(&base, &cfg, &self.args.macros))
@@ -183,7 +185,7 @@ impl Job<'_> {
         o.dollar_in_identifiers = a.dollars.unwrap_or(true);
         o.keep_comments = a.print.comments || a.print.macro_comments;
         o.keep_macro_comments = a.print.macro_comments;
-        o.reflection = a.predef.reflection;
+        o.reflection = a.predef.reflection_for(&self.std);
         o.char8 = a.predef.char8_t;
         o.predefines = predefines;
         if let Some(epoch) = time::reproducible_epoch(a.reproducible_time) {
@@ -224,9 +226,12 @@ impl Job<'_> {
         }
         let engine = make_engine(&sm, &diag_opts, self.stderr.clone(), None);
         let mut result = JobResult::default();
-        if let Some(inputs) = self.pp_inputs(&sm, &engine) {
-            self.preprocess(&sm, &engine, &interner, inputs, &mut result);
-        }
+        crate::crash::catching(self.path, self.stdin_text.as_deref(), &sm, || {
+            if let Some(inputs) = self.pp_inputs(&sm, &engine) {
+                let _phase = activity::enter(Phase::Preprocess, Loc::INVALID);
+                self.preprocess(&sm, &engine, &interner, inputs, &mut result);
+            }
+        });
         engine.flush();
         if let Some(s) = engine.summary()
             && diag_opts.format == kiln_diag::Format::Text
@@ -245,6 +250,8 @@ impl Job<'_> {
         sm: &SourceManager,
         engine: &DiagEngine<'_>,
     ) -> Option<PpInputs> {
+        // The ICE breadcrumb (spec/driver.md "Internal compiler errors").
+        let _phase = activity::enter(Phase::Preprocess, Loc::INVALID);
         let cplusplus = self.std.cplusplus;
         let header_sysroot =
             self.args.isysroot.as_deref().or(self.args.sysroot.as_deref()).unwrap_or("");
@@ -293,6 +300,15 @@ impl Job<'_> {
         }
         let mut opts = self.pp_options(predefines);
         opts.parser_pragmas = staged;
+        if !staged {
+            // `-E -dD`/`-dI` print the directives in place (`-dM` and
+            // `-M` print no text); `-M -MG` lists a missing header
+            // instead of reporting it.
+            let printing = a.deps.only.is_none() && !a.print.macros_only;
+            opts.dump_defines = printing && a.print.defines_too;
+            opts.dump_includes = printing && a.print.includes_too;
+            opts.suppress_include_not_found = a.deps.missing_generated && a.deps.only.is_some();
+        }
         // Modules for the modes that run sema, from C++20 (spec/modules.md
         // §2); `-E`/`-M` keep the directives as text.
         if staged && self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx20 {

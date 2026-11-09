@@ -35,11 +35,11 @@ impl Mangler<'_, '_> {
                     parent.is_none_or(|p| ast.decls.get(p).kind() == DeclKind::TranslationUnit);
                 let std = parent.is_some_and(|p| self.is_std(p));
                 if top || std {
-                    self.unscoped_template(t, std, None);
+                    self.unscoped_template(t, std);
                     self.converted_args(t, args);
                 } else {
                     self.out.push('N');
-                    self.template_prefix(t, None, Structor::Complete, None);
+                    self.template_prefix(t, None, Structor::Complete);
                     self.converted_args(t, args);
                     self.out.push('E');
                 }
@@ -136,7 +136,7 @@ impl Mangler<'_, '_> {
                 let n = ast.types.canonical_template_name(name);
                 match ast.types.template_name_view(n) {
                     TemplateName::Template(t) => {
-                        self.template_prefix(t, None, Structor::Complete, None);
+                        self.template_prefix(t, None, Structor::Complete);
                         self.converted_args(t, args);
                         self.subs.push(key);
                         return;
@@ -235,10 +235,17 @@ impl Mangler<'_, '_> {
                     | ExprKind::UnresolvedMemberExpr
             );
             self.out.push_str(if id { "Dt" } else { "DT" });
+            let saved_failed = self.failed.take();
             if self.expression(e) {
                 self.out.push('E');
+                self.failed = saved_failed;
                 return;
             }
+            // As in a template argument: a hard error, never a shared
+            // placeholder name (WP-593).
+            let at = self.failed.unwrap_or(e);
+            self.anon.unmangleable.push(at);
+            self.failed = saved_failed;
         }
         self.out.truncate(len);
         self.subs.truncate(subs);
@@ -246,7 +253,8 @@ impl Mangler<'_, '_> {
     }
 
     /// The `A <expression>` head of a dependent-bound array type; an
-    /// unencodable bound is the vendor placeholder.
+    /// unencodable bound is a hard error (the vendor placeholder keeps the
+    /// name well formed).
     pub(super) fn dependent_array_bound(&mut self, size: ExprOperand) {
         let (len, subs) = (self.out.len(), self.subs.len());
         let e = match size {
@@ -254,26 +262,55 @@ impl Mangler<'_, '_> {
             ExprOperand::Profile(p) => self.ast.types.profile_expr(p),
         };
         self.out.push('A');
-        if e.is_some_and(|e| self.expression(e)) {
-            return;
+        if let Some(e) = e {
+            let saved_failed = self.failed.take();
+            if self.expression(e) {
+                self.failed = saved_failed;
+                return;
+            }
+            let at = self.failed.unwrap_or(e);
+            self.anon.unmangleable.push(at);
+            self.failed = saved_failed;
         }
         self.out.truncate(len);
         self.subs.truncate(subs);
         self.out.push_str("Au7unknown");
     }
 
+    /// `DB <expression> _` (`_BitInt(N)`) or `DU <expression> _`
+    /// (`unsigned _BitInt(N)`) of a dependent width. A width expression
+    /// the mangler cannot spell falls back to `u7unknown` in its place,
+    /// keeping the signed and unsigned forms apart.
+    pub(super) fn dependent_bitint(&mut self, signed: bool, width: Option<ExprId>) {
+        let (len, subs) = (self.out.len(), self.subs.len());
+        let tag = if signed { "DB" } else { "DU" };
+        self.out.push_str(tag);
+        if !width.is_some_and(|e| self.expression(e)) {
+            self.out.truncate(len);
+            self.subs.truncate(subs);
+            self.out.push_str(tag);
+            self.out.push_str("u7unknown");
+        }
+        self.out.push('_');
+    }
+
     // ---- template-argument expressions -----------------------------------
 
     /// A value-dependent template argument (clang `mangleExpression` with
     /// `AsTemplateArg`): a primary expression as is, anything else
-    /// wrapped in `X ... E`. Unsupported forms fall back to `XLi0EE`
-    /// (spec/abi.md §8.15).
+    /// wrapped in `X ... E`. An expression with no encoding is a hard
+    /// error at its innermost unsupported subexpression (clang's "cannot
+    /// yet mangle expression type", WP-593): two overloads differing only
+    /// in such an expression would otherwise share one name. The
+    /// placeholder `XLi0EE` keeps the name well formed (spec/abi.md
+    /// §8.15).
     pub(super) fn template_arg_expr(&mut self, e: Option<ExprId>) {
         let (len, subs) = (self.out.len(), self.subs.len());
         if let Some(e) = e {
             if self.substituted_value(e) {
                 return;
             }
+            let saved_failed = self.failed.take();
             let e = self.skip_transparent(e);
             let primary = self.is_primary(e);
             if !primary {
@@ -283,8 +320,12 @@ impl Mangler<'_, '_> {
                 if !primary {
                     self.out.push('E');
                 }
+                self.failed = saved_failed;
                 return;
             }
+            let at = self.failed.unwrap_or(e);
+            self.anon.unmangleable.push(at);
+            self.failed = saved_failed;
         }
         self.out.truncate(len);
         self.subs.truncate(subs);
@@ -392,15 +433,14 @@ impl Mangler<'_, '_> {
         true
     }
 
-    /// Parentheses, implicit casts, `ConstantExpr`, temporaries and
-    /// substituted parameters do not appear in the mangling.
+    /// Parentheses, implicit casts, `ConstantExpr`, temporaries (clang
+    /// `MaterializeTemporaryExpr`, `CXXBindTemporaryExpr`,
+    /// `ExprWithCleanups`) and substituted parameters do not appear in
+    /// the mangling.
     fn skip_transparent(&self, mut e: ExprId) -> ExprId {
         let ex = &self.ast.exprs;
         loop {
             e = match ex.get(e).kind() {
-                // clang `mangleExpression` mangles a temporary's
-                // materialization, binding and full-expression cleanups
-                // as their subexpression (WP-980).
                 ExprKind::ParenExpr
                 | ExprKind::ImplicitCastExpr
                 | ExprKind::ConstantExpr
@@ -420,6 +460,8 @@ impl Mangler<'_, '_> {
             ExprKind::IntegerLiteral => !ast.templates.size_of_pack_origin.contains(e),
             ExprKind::CXXBoolLiteralExpr
             | ExprKind::CharacterLiteral
+            | ExprKind::FloatingLiteral
+            | ExprKind::StringLiteral
             | ExprKind::CXXNullPtrLiteralExpr
             | ExprKind::GNUNullExpr
             // A reflection is a literal (`L <info-type> <reflection> E`).
@@ -470,10 +512,12 @@ impl Mangler<'_, '_> {
                 self.symbol(name);
                 self.out.push('E');
             }
-            // Any other named entity, a variable, function or static data
-            // member: `L <mangled-name> E` (clang `mangleDeclRefExpr`'s
-            // external name; the substitution table is shared).
-            DeclKind::Var
+            // Any other named entity, a variable, function, static data
+            // member or non-static data member (`&R<int>::m`): `L
+            // <mangled-name> E` (clang `mangleDeclRefExpr`'s external
+            // name, its `default` case; the substitution table is shared).
+            DeclKind::Field
+            | DeclKind::Var
             | DeclKind::VarTemplateSpecialization
             | DeclKind::Function
             | DeclKind::CXXMethod
@@ -545,6 +589,26 @@ impl Mangler<'_, '_> {
                 self.out.push_str(if ast.exprs.bool_value(e) { "Lb1E" } else { "Lb0E" });
             }
             ExprKind::CXXNullPtrLiteralExpr => self.out.push_str("LDnE"),
+            // `L <type> <hex bits> E` (clang `mangleFloat`: the encoding,
+            // most significant nibble first, zero-padded to its width).
+            ExprKind::FloatingLiteral => {
+                let Some(c) = ast.exprs.literal_const(e) else { return false };
+                let kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Float {
+                    kind,
+                    bits,
+                    ..
+                }) = ast.consts.get(c)
+                else {
+                    return false;
+                };
+                self.float_literal(n.ty(), kind.bits(), bits);
+            }
+            // `L <array type> E`: a string literal names only its type.
+            ExprKind::StringLiteral => {
+                self.out.push('L');
+                self.ty(n.ty());
+                self.out.push('E');
+            }
             ExprKind::CXXReflectExpr => return self.reflect_expr(e),
             // clang mangles `__null` as the integer literal 0 of its type.
             ExprKind::GNUNullExpr => {
@@ -652,6 +716,62 @@ impl Mangler<'_, '_> {
         true
     }
 
+    /// `noexcept(e)` (`nx <expression>`), `throw e` / `throw`
+    /// (`tw <expression>` / `tr`) and `typeid(type)` / `typeid(expr)`
+    /// (`ti <type>` / `te <expression>`).
+    fn keyword_expression(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        let node = ast.exprs.get(expr);
+        if node.kind() == ExprKind::CXXNoexceptExpr {
+            let Some(sub) = ExprId::try_new(node.a()) else { return false };
+            self.out.push_str("nx");
+            return self.expression(sub);
+        }
+        if node.kind() == ExprKind::CXXThrowExpr {
+            let Some(sub) = ast.exprs.throw_operand(expr) else {
+                self.out.push_str("tr");
+                return true;
+            };
+            self.out.push_str("tw");
+            return self.expression(sub);
+        }
+        match ast.exprs.typeid_operand(expr) {
+            kiln_ast::expr::TypeidOperand::Type(t) => {
+                self.out.push_str("ti");
+                self.ty(t);
+                true
+            }
+            kiln_ast::expr::TypeidOperand::Expr(sub) => {
+                self.out.push_str("te");
+                self.expression(sub)
+            }
+        }
+    }
+
+    /// An expression splice `[: r :]` (`template [: r :]<args>`): GCC 16's
+    /// `DS <expression> [<template-args>] E` (P2996 has no Itanium
+    /// encoding yet). A member splice `s.[: r :]` / `p->[: r :]` is the
+    /// member access `dt` / `pt <expression>` with the splice as its
+    /// name (GCC 16: `dtfp_DST_E`).
+    fn splice_expression(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        if let Some((base, arrow)) = ast.exprs.splice_base(expr) {
+            self.out.push_str(if arrow { "pt" } else { "dt" });
+            if !self.expression(base) {
+                return false;
+            }
+        }
+        self.out.push_str("DS");
+        if !self.expression(ast.exprs.splice_operand(expr)) {
+            return false;
+        }
+        if let Some(args) = ast.exprs.splice_template_args(expr) {
+            self.template_args(args);
+        }
+        self.out.push('E');
+        true
+    }
+
     /// An operator, call, cast, `sizeof`/`alignof` or pack expansion.
     /// `converted` is the type `expr` is implicitly converted to.
     fn operator_expression(&mut self, expr: ExprId, converted: Option<QualType>) -> bool {
@@ -693,10 +813,12 @@ impl Mangler<'_, '_> {
                     }
                 }
             }
-            ExprKind::CXXNoexceptExpr => {
-                let Some(sub) = ExprId::try_new(node.a()) else { return false };
-                self.out.push_str("nx");
-                return self.expression(sub);
+            // A braced-init-list as an operand (a call argument,
+            // `f({1, V...})`): `il <expression>* E` (clang
+            // `mangleExpression` `InitListExprClass`).
+            ExprKind::InitListExpr => return self.init_list(expr),
+            ExprKind::CXXThrowExpr | ExprKind::CXXTypeidExpr | ExprKind::CXXNoexceptExpr => {
+                return self.keyword_expression(expr);
             }
             ExprKind::CXXScalarValueInitExpr => {
                 self.out.push_str("cv");
@@ -709,16 +831,7 @@ impl Mangler<'_, '_> {
             // An expression splice `[: r :]` (`template [: r :]<args>`):
             // GCC 16's `DS <expression> [<template-args>] E` (P2996 has no
             // Itanium encoding yet).
-            ExprKind::CXXSpliceExpr if ast.exprs.splice_base(expr).is_none() => {
-                self.out.push_str("DS");
-                if !self.expression(ast.exprs.splice_operand(expr)) {
-                    return false;
-                }
-                if let Some(args) = ast.exprs.splice_template_args(expr) {
-                    self.template_args(args);
-                }
-                self.out.push('E');
-            }
+            ExprKind::CXXSpliceExpr => return self.splice_expression(expr),
             ExprKind::PackExpansionExpr => {
                 self.out.push_str("sp");
                 return self.expression(ast.exprs.operand(expr));

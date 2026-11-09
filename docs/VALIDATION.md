@@ -409,6 +409,42 @@ per-job floor are in docs/status/perf.md "WP-692: CI fan-out". Locally,
 it before pushing `main`, because Actions only reports after the push, and
 the local run is still the merge gate (docs/AGENTS.md rule 3).
 
+### x86_64 sweep
+
+The development container is aarch64 and cannot run x86-64 code, so the
+heavy suites (libc++, the OSS corpus) run on x86-64 only through
+`.github/workflows/sweep.yml` (WP-961) on the `ubuntu-24.04` runners, in
+the same `gcc:16.1.0-trixie` container as the gate. It is never a merge
+gate: it has no `pull_request` or `merge_group` trigger and is not a
+required check (`ci_tests::sweep_never_gates` checks the triggers). Its
+jobs:
+- `build`: `cargo xtask dist` once; every other job installs that kiln++
+  into `/opt/kiln`, so what runs is the release archive's binary.
+- `libcxx K/6`: the libc++ 22.1.8 suite (`std` + `libcxx`, 9247 tests) as
+  the aarch64 M5 run takes it (docs/status/libcxx.md "M5"), with libc++ 22
+  extracted into `.toolchain/libcxx-22-root` and the lit locales
+  generated, split by `cargo xtask libcxx --shard K/6`; each shard
+  uploads its `--results` file and its `--report` page.
+- `libcxx summary`: `scripts/libcxx-results.py` merges the shards into the
+  run's summary page (counts, pass rate, failing tests).
+- `oss <project> <compiler>`: `scripts/oss/oss-build.sh` for ten projects
+  of `scripts/oss/projects.toml`, with kiln and with the clang 19 control
+  on the same runner, trees on the runner's `/mnt`; each uploads its
+  `report.json`, `compile.jsonl`, `configure.log` and `test.log`.
+- `oss summary`: `scripts/oss/oss-report.py` over all of them.
+
+Run it before a release (docs/STABILITY.md), and after a change to ABI
+lowering, calling conventions or the driver's target defaults: push the
+release candidate's commit to a `sweep/<name>` branch (`git push origin
+<sha>:refs/heads/sweep/rc-<version>`), or start it from the Actions tab
+(workflow_dispatch, which can skip the libc++ part, the OSS part or the
+clang control). A newer push of the same branch cancels the older run.
+Wall time is about the slowest OSS job's. Compare the libc++ summary with
+the aarch64 numbers (`scripts/libcxx-results.py --baseline <aarch64
+results>` marks the x86_64-only failures), record the run in
+docs/status/x86_64-sweep.md, and delete the branch. The first run and its
+triage are in that page.
+
 ## Differential testing against clang
 
 `clang-22` is the oracle for everything that is not a kiln-specific feature,
@@ -525,8 +561,9 @@ of an unpacked GCC 16.1 image: headers under
 `$KILN_GCC16_ROOT/usr/local/include/c++/16.1.0`, the installation under
 `$KILN_GCC16_ROOT/usr/local/lib/gcc/<triple>/16.1.0` (with `crtbegin.o`).
 The driver finds it with clang's `--gcc-toolchain=` (spec/driver.md
-"Toolchain"); `-freflection` predefines `__cpp_impl_reflection`, which
-`<meta>` keys on.
+"Toolchain"); reflection, on by default at C++26 since WP-920 (the
+`-freflection` below is now a no-op kept for history), predefines
+`__cpp_impl_reflection`, which `<meta>` keys on.
 
 ```sh
 GCC16=--gcc-toolchain=$KILN_GCC16_ROOT/usr/local
@@ -645,4 +682,6 @@ contract is `spec/bench.md`.
 An RC is a tag on `main` where all of these are green in CI on a clean
 container: fmt, clippy (deny warnings), unit, conformance (no `xfail`
 regressions), differential, libc++ pass-rate not lower than the previous RC,
-bench within thresholds. The supervisor agent signs off in `docs/status/`.
+bench within thresholds, and the x86_64 sweep (`.github/workflows/sweep.yml`,
+"x86_64 sweep" above) on the RC commit shows no x86_64-only failure. The
+supervisor agent signs off in `docs/status/`.

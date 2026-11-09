@@ -95,6 +95,7 @@ impl Cg<'_> {
             self.emit_block_after_uses(h.blk);
             let sc = self.begin_scope(false);
             self.emit_begin_catch(c)?;
+            self.prof_inc(crate::coverage::pgo::Key::Stmt(c));
             self.emit_stmt(ast.stmts.catch_block(c))?;
             if implicit_rethrow && self.f.fir.cur().is_some() {
                 let f = self.rt_fn("__cxa_rethrow", LTy::VOID, &[], &[]);
@@ -108,6 +109,7 @@ impl Cg<'_> {
             }
         }
         self.emit_block(cont, false);
+        self.prof_inc(crate::coverage::pgo::Key::Stmt(s));
         Ok(())
     }
 

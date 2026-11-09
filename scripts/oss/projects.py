@@ -19,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TOML = os.path.join(HERE, "projects.toml")
 
 REQUIRED = ("url", "tag", "build", "cxx_std", "test", "wave")
-BUILDS = ("cmake", "meson", "make")
+BUILDS = ("cmake", "meson", "make", "autotools")
 KINDS = ("ok", "reject", "panic", "backend", "link", "timeout", "oom", "other")
 CTEST_RE = re.compile(r"(\d+)% tests passed, (\d+) tests? failed out of (\d+)")
 # Catch2's totals line (duckdb's unittest, WP-799).
@@ -29,6 +29,14 @@ CATCH_RE = re.compile(r"^test cases:\s*(\d+)\s*\|\s*(\d+) passed\s*\|\s*(\d+) fa
 LIT_TOTAL_RE = re.compile(r"^Total Discovered Tests: (\d+)")
 LIT_LINE_RE = re.compile(r"^  ([A-Za-z ]+?)\s*:\s*(\d+)")
 LIT_FAILED = ("Failed", "Unexpectedly Passed", "Timed Out")
+# `meson test`'s summary block (WP-920): `Ok:  N`, `Fail:  N`, ...
+MESON_LINE_RE = re.compile(r"^(Ok|Expected Fail|Fail|Unexpected Pass|Skipped|Timeout):\s+(\d+)\s*$")
+MESON_FAILED = ("Fail", "Unexpected Pass", "Timeout")
+# automake's parallel test harness (`make check`, WP-920): one
+# `# TOTAL: N` ... `# ERROR: N` block per tested directory.
+AUTOMAKE_LINE_RE = re.compile(r"^# (TOTAL|PASS|SKIP|XFAIL|FAIL|XPASS|ERROR):\s+(\d+)\s*$")
+AUTOMAKE_FAILED = ("FAIL", "XPASS", "ERROR")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 # The per-project address-space cap may be raised to at most 6 GB virt
 # (WP-782: a few tablegen'd LLVM TUs).
 VMEM_MAX_KB = 6000000
@@ -59,6 +67,10 @@ def load(path=TOML):
         p.setdefault("stage_of", "")
         p.setdefault("stage_cxx", "bin/clang++")
         p.setdefault("stage_cc", "bin/clang")
+        p.setdefault("archive", False)
+        p.setdefault("sha256", "")
+        if p["archive"] and not SHA256_RE.match(p["sha256"]):
+            raise SystemExit(f"{path}: [{name}] archive = true needs the tarball's sha256")
         if not (isinstance(p["vmem_kb"], int) and 0 < p["vmem_kb"] <= VMEM_MAX_KB):
             raise SystemExit(f"{path}: [{name}] vmem_kb must be an integer in 1..{VMEM_MAX_KB}")
         if not (isinstance(p["test_timeout"], int) and p["test_timeout"] > 0):
@@ -151,6 +163,10 @@ def test_summary(log_path):
     lit = lit_summary(lines)
     if lit:
         return lit
+    for summary in (meson_summary, automake_summary):
+        r = summary(lines)
+        if r:
+            return r
     last = next((l.strip() for l in reversed(lines) if l.strip()), "")
     return last, None
 
@@ -180,6 +196,45 @@ def lit_summary(lines):
         f"Total Discovered Tests: {total}, passed {passed}, failed {failed}",
         {"passed": passed, "failed": failed, "total": total},
     )
+
+
+def meson_summary(lines):
+    """The last `meson test` summary block: (`Ok: P, Fail: F, ...`,
+    counts); `passed` counts Ok, Expected Fail and Skipped."""
+    end = None
+    for i in range(len(lines) - 1, -1, -1):
+        if MESON_LINE_RE.match(lines[i]):
+            end = i
+            break
+    if end is None:
+        return None
+    start = end
+    while start > 0 and MESON_LINE_RE.match(lines[start - 1]):
+        start -= 1
+    got = {m.group(1): int(m.group(2)) for m in (MESON_LINE_RE.match(l) for l in lines[start : end + 1])}
+    if "Ok" not in got or "Fail" not in got:
+        return None
+    total = sum(got.values())
+    failed = sum(got.get(k, 0) for k in MESON_FAILED)
+    text = ", ".join(f"{k}: {v}" for k, v in got.items())
+    return text, {"passed": total - failed, "failed": failed, "total": total}
+
+
+def automake_summary(lines):
+    """automake's `# TOTAL:` blocks, summed over the tested directories:
+    (`TOTAL T, PASS P, ...`, counts); `passed` is TOTAL minus FAIL, XPASS
+    and ERROR (so SKIP and XFAIL count as passed, as lit's do)."""
+    got = {}
+    for line in lines:
+        m = AUTOMAKE_LINE_RE.match(line)
+        if m:
+            got[m.group(1)] = got.get(m.group(1), 0) + int(m.group(2))
+    if "TOTAL" not in got:
+        return None
+    total = got["TOTAL"]
+    failed = sum(got.get(k, 0) for k in AUTOMAKE_FAILED)
+    text = ", ".join(f"{k} {v}" for k, v in got.items())
+    return text, {"passed": total - failed, "failed": failed, "total": total}
 
 
 def cmd_report_json(a):
@@ -243,9 +298,10 @@ def main():
             sys.exit(f"projects.py: unknown project '{a.project}' (see {TOML})")
         p = data[a.project]
         q = shlex.quote
-        for k in ("url", "tag", "build", "cxx_std", "test", "c_compiler", "control_cxx", "source_subdir", "checkout", "test_timeout", "vmem_kb", "stage_of", "stage_cxx", "stage_cc"):
+        for k in ("url", "tag", "build", "cxx_std", "test", "c_compiler", "control_cxx", "source_subdir", "checkout", "test_timeout", "vmem_kb", "stage_of", "stage_cxx", "stage_cc", "sha256"):
             print(f"P_{k.upper()}={q(str(p[k]))}")
         print(f"P_SUBMODULES={'1' if p['submodules'] else ''}")
+        print(f"P_ARCHIVE={'1' if p['archive'] else ''}")
         print("P_CONFIGURE=(" + " ".join(q(x) for x in p["configure"]) + ")")
         print("P_BUILD_TARGETS=(" + " ".join(q(x) for x in p["build_targets"]) + ")")
         print("P_DEPS=(" + " ".join(q(x) for x in p["deps"]) + ")")

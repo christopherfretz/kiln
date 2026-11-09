@@ -91,6 +91,9 @@ impl Config {
         );
         if !self.clang {
             v.push(format!("-fclang-compat={}", self.clang_compat));
+            // A crash is classified from the banner; a reproducer per
+            // crashing test would only fill $TMPDIR (spec/libcxx.md).
+            v.push("-fno-crash-diagnostics".to_owned());
         }
         // A clang finds the system's libc++ headers, which need not be the
         // tag's (clang++-22 here finds libc++ 19's): pin them.

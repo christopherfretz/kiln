@@ -1058,9 +1058,12 @@ or the function's own when only its type is substituted for deduction
 against a target type): `Subst::nested_prototype_param` makes a fresh
 parameter keeping index and scope depth, as clang's
 `TransformFunctionTypeParams` does (`tests/mangle/function_param_depth.cpp`).
-An expression with no encoding yet mangles as `XLi0EE` in a template
-argument and `u7unknown` as a `decltype` operand; in a requires-clause
-it is an error (§8.16). WP-818's rules (§8.29) cover the cases the
+An expression with no encoding yet is an error, `cannot yet mangle
+expression type <kind>` at its innermost unencodable subexpression, as in
+clang, in a template argument, a `decltype` operand, a dependent array
+bound (WP-593, `spec/landed/abi/WP-933.md`) and a requires-clause
+(§8.16); the placeholder kiln writes into the name meanwhile (`XLi0EE`,
+`u7unknown`) is never emitted. WP-818's rules (§8.29) cover the cases the
 standard-library sweep found: non-dependent `sizeof`, substituted
 `sizeof...` and enumeration parameters, dependent CTAD, alias templates
 and template template parameters in qualifiers, the injected-class-name

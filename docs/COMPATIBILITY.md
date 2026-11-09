@@ -18,7 +18,8 @@ kiln extensions.
 ## Method
 
 Each project is built with kiln (`kiln++`) as the C++ compiler, through
-the project's own build system (CMake), at a pinned tag
+the project's own build system (CMake; Meson and autotools for the two
+rows under "Build systems"), at a pinned tag
 ([scripts/oss/projects.toml](../scripts/oss/projects.toml)). Then the
 project's own test suite runs. A control build of the same tree, with the
 same flags and test filter, uses clang++-19 (g++-16 for mp-units, which
@@ -32,7 +33,8 @@ A **kiln-only failure** is a test (or a TU, link or example the tests
 depend on) that passes with the control compiler and fails with kiln. A
 test that fails under both compilers (for example, a container limit or a
 test that clang also rejects) does not count against kiln. Host: aarch64
-Linux (Debian), in a container.
+Linux (Debian), in a container; the x86_64 results are in "x86_64"
+below.
 
 ## Ratings
 
@@ -74,7 +76,7 @@ Per-run detail: [status/libcxx.md](status/libcxx.md),
 
 ## Libraries and applications
 
-47 projects: 43 **Flawless**, 3 **Near-perfect** (simdjson, folly, the Boost metaprogramming libraries), 1 **Partial** (folly::coro, fixed since and awaiting a re-run). The libc++ column is the WP-694 run against
+47 projects: 43 **Flawless**, 3 **Near-perfect** (simdjson, folly, the Boost metaprogramming libraries), 1 **Partial** (folly::coro: its known failures are fixed (WP-802, WP-933), and the re-run is deferred for lack of disk). The libc++ column is the WP-694 run against
 libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 "kiln passed / total"; the clang count is the same unless it is given.
 
@@ -104,7 +106,7 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [EnTT](status/oss/entt.md) | `v3.15.0` | full ctest suite | libstdc++ 14 | **Flawless**: 68/68 | WP-690 |
 | [glog](status/oss/glog.md) | `v0.7.1` | full CTest suite | libstdc++ 14 | **Flawless**: 23/24 under both (`symbolize` fails under both: environment) | WP-700 |
 | [RE2](status/oss/re2.md) | `2025-11-05` | full test suite; Abseil, googletest and Benchmark built by the same compiler | libstdc++ 14 | **Flawless**: 20/20 | WP-710 |
-| [simdjson](status/oss/simdjson.md) | `v4.2.4` | developer-mode CTest suite (without `checkperf` and `fuzz`) | libstdc++ 14 | **Near-perfect**: 116/117 (clang 117/117) | the failing test is a negative compile test that needs `-Wuninitialized` under `-Werror`; **WP-696** (open). WP-691 |
+| [simdjson](status/oss/simdjson.md) | `v4.2.4` | developer-mode CTest suite (without `checkperf` and `fuzz`) | libstdc++ 14 | **Near-perfect**: 116/117 (clang 117/117) | the failing test is a negative compile test that needs `-Wuninitialized` under `-Werror`; **WP-696** (open). WP-933's re-run after WP-862 was deferred for lack of disk. WP-691 |
 | [Taskflow](status/oss/taskflow.md) | `v3.10.0` | full test suite | libstdc++ 14 | **Flawless**: 2462/2462 | WP-703 |
 | [yaml-cpp](status/oss/yaml_cpp.md) | `yaml-cpp-0.9.0` | full suite (1011 googletest tests), vendored googletest built by the same compiler | libstdc++ 14 | **Flawless**: 1/1 | WP-698 |
 
@@ -130,7 +132,7 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [ctre](status/oss/ctre.md) | `v3.11.0` | all 25 test TUs (`static_assert` tests) | libstdc++ 14 | **Flawless**: 25/25 TUs | WP-792 |
 | [daw_json_link](status/oss/daw_json_link.md) | `v3.38.1` | full ctest suite | libstdc++ 14 | **Flawless**: 147/147 | WP-792 |
 | [DuckDB](status/oss/duckdb.md) | `v1.5.6` | `unittest` (Catch2 and the default sqllogictest files) and the shell | libstdc++ 14 | **Flawless**: 4615/4628 under both | the same 13 fail under both because of the host. WP-799 |
-| [folly::coro](status/oss/folly_coro.md) | `v2026.10.26.00` | folly's coroutine tests | libstdc++ 14 | **Partial**: 583/618 (clang 616/618), 94.6% of clang's passes | one link failure (a consteval call in a `co_return` operand of a coroutine template) accounts for all 33 kiln-only failures. WP-802 fixed it (`cea9ab532`); the project was not re-run. WP-789 |
+| [folly::coro](status/oss/folly_coro.md) | `v2026.10.26.00` | folly's coroutine tests | libstdc++ 14 | **Partial**: 583/618 (clang 616/618), 94.6% of clang's passes | one link failure (a consteval call in a `co_return` operand of a coroutine template) accounts for all 33 kiln-only failures. WP-802 fixed it (`cea9ab532`). WP-933's partial re-run found two more kiln-only compile failures (an init-list mangling and an empty `auto...` pack); both are fixed, and the full re-run is deferred for lack of disk. WP-789, WP-933 |
 | [Glaze](status/oss/glaze.md) | `v9.1.0` | full ctest suite | libstdc++ 14 | **Flawless**: 100/102 under both | the same 2 TUs fail under both with libstdc++ 14. WP-792 |
 | [gRPC](status/oss/grpc.md) | `v1.85.1` | the C++ core and its submodule dependencies; kiln-built `protoc` and `grpc_cpp_plugin` | libstdc++ 14 | **Flawless**: 117/118 under both | `end2end_http2_test` hits the 300 s limit under both. WP-811 |
 | [libunifex](status/oss/libunifex.md) | `v0.4.0` | full test suite | libstdc++ 14 | **Flawless**: 91/94 under both | the 3 io_uring tests are not permitted in the container. WP-789 |
@@ -144,6 +146,73 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [scnlib](status/oss/scnlib.md) | `v4.0.1` | full ctest suite | libstdc++ 14 | **Flawless**: 25/25 | WP-792 |
 | [stdexec](status/oss/stdexec.md) | `nvhpc-26.05` | full test suite, including the `*_fail` tests that match error text | libstdc++ 14 | **Flawless**: 907/907 | WP-789 |
 | [Z3](status/oss/z3.md) | `z3-4.15.8` | `test-z3 /a`, and the shell on the SMT-LIB2 examples | libstdc++ 14 | **Flawless**: every test and example gives the control's output, apart from timings | WP-799 |
+
+## Build systems
+
+kiln defines clang's macros but names itself kiln in text (operator
+decision Q3; spec/driver.md "Identity"). What each build system reads,
+and what it concludes about kiln (WP-920):
+
+- **CMake** (3.31, every project above): the compiler ID comes from
+  compiling `CMakeCXXCompilerId.cpp`, which tests `__clang__` and reads
+  `__clang_major__`/`__clang_minor__`/`__clang_patchlevel__`. CMake reports
+  `The CXX compiler identification is Clang 22.1.8` (the compatibility
+  version, 19.1.7 under `-fclang-compat=19`) and uses its Clang rules. The
+  implicit link directories and libraries come from the `-v` link lines,
+  which the backing clang++ prints. CMake matches `clang version` text
+  only for CUDA, HIP and assembler vendor detection, which kiln does not
+  serve. Works unchanged.
+- **Autotools** (hunspell's configure: autoconf 2.69, automake, libtool): `AC_PROG_CXX` decides
+  "GNU C++" from `__GNUC__` (kiln: 4.2.1, as clang). It runs `--version`,
+  `-v`, `-V` and `-qversion` only to log them in `config.log`. libtool
+  asks `-print-prog-name=ld` for the linker and reads `-shared -v` for
+  the C++ runtime libraries (`postdeps`). Works unchanged:
+  [hunspell](status/oss.md) row below.
+- **Meson** (1.12.1, `mesonbuild/compilers/detect.py`): it runs
+  `--version` and requires the word `clang` or `Clang` somewhere in the
+  output; anything else is `Unknown compiler(s)` and configure stops
+  (`Free Software Foundation` would make it GCC). It then takes the first
+  `\d{1,2}(\.\d+)+` token as the version, and detects the linker with
+  `-Wl,--version` (which kiln now runs as a linker-only job, as clang).
+  kiln's `--version` (`kiln version 0.0.1 ...`) has no `clang`, so plain
+  Meson rejects kiln. This cannot be fixed without the word: the options
+  are (a) leave `--version` clean and have Meson users go through a
+  wrapper or a Meson native file that names kiln as clang (what the
+  harness does today, below); (b) a `--version` line that contains
+  `clang` without saying `clang version`, such as `clang-compatible
+  22.1.8 (kiln version 0.0.1)`, which Meson reads as Clang 22.1.8; or
+  (c) (b) behind an opt-in flag or environment variable. Choosing is an
+  operator decision; kiln ships (a). The OSS harness's compiler wrapper
+  (`scripts/oss/kiln-cxx`) prints `clang-compatible <-dumpversion>
+  (kiln-cxx Meson shim, WP-920)` before kiln's own banner, only under
+  `KILN_OSS_VERSION_SHIM` (set by `oss-build.sh` for Meson rows) and only
+  when the banner lacks `clang`.
+
+| project | build system | version / tag | scope validated | std lib(s) | rating and result vs clang | notes / WP |
+|---|---|---|---|---|---|---|
+| hunspell | autotools | `v1.7.2` (release tarball) | `make check`, 130 tests | libstdc++ 14 | **Flawless**: 130/130 | WP-920 |
+| jsoncpp | Meson | `1.9.6` | `meson test`, 3 tests (the unit test runs 68 cases) | libstdc++ 14 | **Flawless**: 3/3 | WP-920; through the harness's Meson shim |
+
+## x86_64
+
+Everything above runs on aarch64. The x86_64 sweep
+(`.github/workflows/sweep.yml`, docs/VALIDATION.md "x86_64 sweep") builds
+the libc++ 22 suite and ten of the projects above on GitHub's x86_64
+runners, with the clang 19 control on an identical runner. The first
+sweep (WP-961, 2026-11-09) and its triage are in
+[status/x86_64-sweep.md](status/x86_64-sweep.md). Main's WP-873
+never-constant regression (both arches, fixed by WP-962) was masked with
+`-Wno-invalid-constexpr` for the project results below; the
+x86_64-only gaps found are fixed or have a follow-up WP.
+
+| suite / project | result on x86_64 vs clang 19 | rating |
+|---|---|---|
+| libc++ 22.1.8 (9247 tests) | 99.0% (aarch64 99.2%); the 2 x86_64-only failures are a narrow signed `++` bug that signed `char` exposes (WP-981, fixed in WP-980) and a flaky timeout | **Near-perfect** |
+| fmt, nlohmann/json, Abseil, DuckDB, CMake, daw_json_link | every test as clang: 21/21, 97/97, 232/232, 4618/4628, 721/723, 147/147 | **Flawless** |
+| Bitcoin Core | 357/357; 475 TUs vs clang's 487: the `-m<feature>` flags are not accepted yet, so the SSE4.1/AVX2/SHA-NI code is configured out | **Flawless** (tests), follow-up for the flags |
+| OpenCV | 7/7; 473 TUs vs 537: the SSE3…AVX2 dispatch sources, the same `-m<feature>` gap | **Flawless** (tests), follow-up for the flags |
+| LLVM Support, ADT, IR | `SupportTests` 1337 and `ADTTests` 1576 as clang; `IRTests` does not build: `_Float128` is not glibc's x86-64 `__float128` typedef | **Broken** for `IRTests` (follow-up) |
+| gRPC | the missing `__rdtsc` (31 TUs) is fixed; the full x86_64 build was still running at the first sweep | **Not run** (pending) |
 
 ## Rejecting invalid code
 
@@ -167,6 +236,24 @@ grammar forbids them, members named after their class, union and static
 member rules, redeclarations, and clang attribute checks. The breakdown,
 the triage clusters with their reduced tests, and the rejects-valid cases
 are in [status/accepts-invalid.md](status/accepts-invalid.md).
+
+## Coverage and profiling
+
+| feature | flags | status |
+|---|---|---|
+| gcov line coverage | `--coverage` (`-fprofile-arcs -ftest-coverage`, `-fprofile-dir=`, `-fprofile-update=`) | **Works**: `llvm-cov gcov` line counts equal clang 19's on every comparison program |
+| Source-based coverage counters | `-fprofile-instr-generate[=<file>]` | **Works**: `llvm-profdata show --counts` records (names, hashes, counters) equal clang 19's |
+| Source-based coverage mapping | `-fcoverage-mapping` (`llvm-cov show` / `report`) | **Not yet** (rejected with an error; follow-up of WP-941) |
+| Profile-guided optimization | `-fprofile-generate`, `-fcs-profile-generate`, `-fprofile-use`, `-fprofile-instr-use`, `-fprofile-sample-use` | **Not in 1.0** (a known limitation, rejected with an error) |
+
+Both coverage modes link LLVM 19's profile runtime
+(`libclang_rt.profile-<arch>.a`, Debian package `libclang-rt-19-dev`),
+which the linking `clang++` adds. `scripts/coverage-compare.py` builds
+`scripts/coverage/*.cpp` (control flow, classes and templates, lambdas,
+coroutines, macros, and a libstdc++-heavy program) with kiln and with
+clang++-19 and compares the reports. Detail, and the compile-time cost of
+each mode, in
+[spec/landed/codegen/WP-941.md](../spec/landed/codegen/WP-941.md).
 
 ## Constexpr and compile-time performance
 

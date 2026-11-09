@@ -7655,7 +7655,7 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        let ctx = qualifier.unwrap_or_else(|| self.tag_decl_context(use_));
+        let ctx = qualifier.unwrap_or_else(|| self.tag_home(self.tag_decl_context(use_)));
         let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
         if plain_ref
             && !conflict
@@ -7737,6 +7737,48 @@ impl Sema<'_, '_> {
     /// invalid and kept out of lookup, so later uses find the first one
     /// (clang's `ActOnTag` makes it anonymous and invalid), and the parser
     /// skips its body ([`Sema::tag_body_skipped`]; spec/sema.md §4.4).
+    /// [dcl.fct]/17: "'X' cannot be defined in a parameter type" for tag
+    /// `d`, just defined in a parameter-declaration's decl-specifier-seq
+    /// (clang `GetFullTypeForDeclarator`, `err_type_defined_in_param_type`
+    /// at the tag's location).
+    pub fn diag_type_defined_in_param(&mut self, d: DeclId) {
+        let loc = self.ast.decls.get(d).loc();
+        // clang streams the tag's (empty) name, not its type: an unnamed
+        // tag prints as `(null)`.
+        let what = if self.ast.decls.get(d).name().is_empty() {
+            "(null)".to_string()
+        } else {
+            self.ty_arg(self.tag_type(d))
+        };
+        let msg = self.diag(DiagId::sema_type_defined_in_param_type, loc).arg(what);
+        self.emit(msg);
+    }
+
+    /// Where a tag defined while `ctx` is the current context goes: `ctx`
+    /// itself, unless it is a complete class, whose member list is frozen
+    /// (spec/ast.md §2.4). That happens only for an ill-formed tag (one
+    /// defined in the parameter clause of an out-of-line member function,
+    /// [dcl.fct]/17, diagnosed by the caller): it is declared in the
+    /// nearest enclosing context that is not a class instead (clang adds it
+    /// to the class, WP-962).
+    fn tag_home(&self, mut ctx: DeclId) -> DeclId {
+        for _ in 0..256 {
+            let complete = self
+                .ast
+                .decls
+                .record(ctx)
+                .is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE));
+            if !complete {
+                break;
+            }
+            match self.ast.decls.get(ctx).ctx() {
+                Some(c) => ctx = c,
+                None => break,
+            }
+        }
+        ctx
+    }
+
     fn diag_tag_redefinition(&mut self, p: DeclId, n: Symbol, nloc: Loc) -> bool {
         let Some(def) = self.ast.definition(p) else {
             return false;

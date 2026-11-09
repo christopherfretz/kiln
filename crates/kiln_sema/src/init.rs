@@ -304,7 +304,11 @@ impl Sema<'_, '_> {
             };
             return Some(self.init_from_expr(ty, *x, ctx, at));
         }
-        if !l.items.is_empty()
+        // [dcl.init.list]/3.5-3.6: an empty list value-initializes a class
+        // with a default constructor; only an `initializer_list<E>` without
+        // one is list-initialized from `{}` (an empty backing array, CWG1070).
+        if (!l.items.is_empty()
+            || self.initializer_list_element(ty).is_some() && !self.list_has_default_ctor(ty))
             && let Some(e) = self.std_initializer_list_init(ty, l, at)
         {
             return Some(e);
@@ -628,6 +632,17 @@ impl Sema<'_, '_> {
         let target = self.ast.types.as_record(ty)?;
         let class = self.ast.definition(target)?;
         let class = conv::bases::complete_class(self, class)?;
+        // A `std::initializer_list<E>` is list-initialized by
+        // [dcl.init.list]/3.6 (`std_initializer_list_init`) or
+        // value-initialized (3.5), never through [over.match.list]: its
+        // own copy constructor's parameter is a reference to
+        // `initializer_list<E>`, and selecting it would list-initialize
+        // the reference's temporary from the same list again.
+        if self.initializer_list_element(ty).is_some()
+            || self.list_ctor_active.contains(&(class, l.lbrace))
+        {
+            return None;
+        }
         if !self.has_init_list_ctor(class)
             || (l.items.is_empty() && self.has_default_ctor_cheap(class))
             || l.items.iter().any(|i| match i.value {
@@ -662,7 +677,12 @@ impl Sema<'_, '_> {
         let p = self.param_decls(f)[0];
         let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         let pty = if self.ast.types.is_reference(pty) { pty } else { conv::strip_cv(self, pty) };
+        // The visited guard: the argument's initialization re-entering
+        // this class with this list (above) takes the ordinary
+        // constructor path instead, which diagnoses.
+        self.list_ctor_active.push((class, l.lbrace));
         let arg = self.init_from_list_at(pty, l, Some(l.lbrace));
+        self.list_ctor_active.pop();
         if self.is_err_expr(arg) {
             return Some(self.recover(ty, &[arg], l.lbrace));
         }
@@ -684,8 +704,25 @@ impl Sema<'_, '_> {
         Some(built.unwrap_or_else(|| self.recover(ty, &[arg], ctor_at)))
     }
 
+    /// Whether class type `ty` has a default constructor, for the `{}` rule
+    /// of [dcl.init.list]/3.5 (true when that cannot be decided: the
+    /// value-initialization path then reports what is wrong).
+    fn list_has_default_ctor(&mut self, ty: QualType) -> bool {
+        let Some(class) = self
+            .ast
+            .types
+            .as_record(ty)
+            .and_then(|r| self.ast.definition(r))
+            .and_then(|c| conv::bases::complete_class(self, c))
+        else {
+            return true;
+        };
+        self.has_default_ctor_cheap(class)
+    }
+
     /// [dcl.init.list]/3.6, /5: list-initialization of
-    /// `std::initializer_list<E>` from a non-empty list: a backing array
+    /// `std::initializer_list<E>` from a list (an empty one only when the
+    /// specialization has no default constructor): a backing array
     /// `const E[N]` is copy-initialized from the elements and the object
     /// refers to it (`CXXStdInitializerListExpr` over the materialized
     /// array; the array's lifetime is extended with the object's,
@@ -704,6 +741,13 @@ impl Sema<'_, '_> {
         });
         if dependent || self.ast.types.is_dependent(elem) {
             return None;
+        }
+        if l.items.is_empty() && !self.require_complete(elem, at) {
+            // The backing array `const E[0]` needs a complete element
+            // type (clang `InitializationSequence::Perform`).
+            let msg = self.diag(DiagId::sema_init_incomplete_type, at).arg(self.ty_arg(elem));
+            self.emit(self.incomplete_note(msg, elem));
+            return Some(self.recover(ty, &[], at));
         }
         let n = u64::try_from(l.items.len()).unwrap_or(u64::MAX);
         let celem = self.ast.types.qualify(elem, kiln_ast::types::Quals::CONST);
