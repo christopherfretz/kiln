@@ -485,22 +485,19 @@ impl Sema<'_, '_> {
         let conv_args: Vec<TemplateArg> = self.ast.types.args(conv.sugared).to_vec();
         if !constrained
             && params.len() == conv_args.len()
-            && params
-                .iter()
-                .zip(&conv_args)
-                .all(|(&p, &a)| {
-                    // A parameter pack's argument is converted to a pack
-                    // of one expansion (`G<Ts...>`), not of one element
-                    // (`E<M>` for `template <int... N> struct E`).
-                    let a = match a.view() {
-                        ArgView::Pack(l) => match self.ast.types.args(l) {
-                            &[e] if self.is_pack_arg(e) => e,
-                            _ => return false,
-                        },
-                        _ => a,
-                    };
-                    self.arg_names_param(p, a) && self.same_nttp_type(p, a)
-                })
+            && params.iter().zip(&conv_args).all(|(&p, &a)| {
+                // A parameter pack's argument is converted to a pack
+                // of one expansion (`G<Ts...>`), not of one element
+                // (`E<M>` for `template <int... N> struct E`).
+                let a = match a.view() {
+                    ArgView::Pack(l) => match self.ast.types.args(l) {
+                        &[e] if self.is_pack_arg(e) => e,
+                        _ => return false,
+                    },
+                    _ => a,
+                };
+                self.arg_names_param(p, a) && self.same_nttp_type(p, a)
+            })
         {
             let d = self
                 .diag(DiagId::sema_partial_spec_args_match_primary, name_loc)

@@ -405,8 +405,10 @@ impl Sema<'_, '_> {
         if !self.same_template_heads(la.params, lb.params) {
             return false;
         }
-        let (xa, xb) =
-            (self.ast.types.args(pa.canonical).to_vec(), self.ast.types.args(pb.canonical).to_vec());
+        let (xa, xb) = (
+            self.ast.types.args(pa.canonical).to_vec(),
+            self.ast.types.args(pb.canonical).to_vec(),
+        );
         if self.flat_canonical(&xa) != self.flat_canonical(&xb) {
             return false;
         }
@@ -620,7 +622,8 @@ impl Sema<'_, '_> {
     fn same_template_heads(&self, a: ListId, b: ListId) -> bool {
         let pa: Vec<DeclId> = self.ast.lists.iter::<DeclId>(a).collect();
         let pb: Vec<DeclId> = self.ast.lists.iter::<DeclId>(b).collect();
-        pa.len() == pb.len() && pa.iter().zip(&pb).all(|(&x, &y)| self.template_params_equivalent(x, y))
+        pa.len() == pb.len()
+            && pa.iter().zip(&pb).all(|(&x, &y)| self.template_params_equivalent(x, y))
     }
 
     /// The associated constraints of partial specialization `p`, with the
