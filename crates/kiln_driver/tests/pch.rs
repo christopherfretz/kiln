@@ -1,7 +1,7 @@
 //! WP-1023: precompiled headers end to end through `kiln++`
 //! (spec/driver.md "Precompiled headers"). A kiln PCH is a textual
 //! record; `-include-pch` checks it with clang's diagnostics and then
-//! replays the header as an `-include` ([cpp.include]). Covered: CMake's
+//! replays the header as an `-include` ([cpp.include]). Covered: `CMake`'s
 //! `target_precompile_headers` command lines (producer and consumer), the
 //! double-include rule with a header that has no guard, the dependency
 //! files (byte-compared with clang++-19 where installed), stale, missing,
@@ -65,7 +65,7 @@ fn read(dir: &Path, f: &str) -> String {
 const PCH_HPP: &str = "int helper(int x) { return x + 1; }\nstruct S { int v; };\n";
 const MAIN: &str = "int main() { S s{helper(1)}; return s.v - 2; }\n";
 
-/// CMake 3.31's layout: `cmake_pch.hxx` (no guard) includes the user's
+/// `CMake` 3.31's layout: `cmake_pch.hxx` (no guard) includes the user's
 /// header; `cmake_pch.hxx.cxx` is the producer's (empty) main file.
 fn cmake_setup(name: &str) -> PathBuf {
     let d = scratch(name);
@@ -143,9 +143,9 @@ fn strs(v: &[String]) -> Vec<&str> {
     v.iter().map(String::as_str).collect()
 }
 
-/// CMake `target_precompile_headers`: the producer writes the record and
+/// `CMake` `target_precompile_headers`: the producer writes the record and
 /// a depfile listing its main file, `cmake_pch.hxx` and the header; the
-/// consumer compiles with the header seen once although CMake also passes
+/// consumer compiles with the header seen once although `CMake` also passes
 /// `-include cmake_pch.hxx`, and its depfile lists the PCH's input files
 /// first, as clang's does.
 #[test]
@@ -187,7 +187,7 @@ fn cmake_producer_and_consumer() {
     }
 }
 
-/// The CMake flow through `-c` and a link: the program runs.
+/// The `CMake` flow through `-c` and a link: the program runs.
 #[test]
 fn cmake_object_and_link() {
     if !(have("llc-19") && have("clang++-19")) {

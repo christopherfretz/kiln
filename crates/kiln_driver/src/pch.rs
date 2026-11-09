@@ -371,12 +371,9 @@ pub(crate) fn consumer(
             let _ = std::io::Write::write_fmt(&mut err, format_args!("{s}\n"));
         }
     };
-    let rec = match read(pch, &e) {
-        Some(r) => r,
-        None => {
-            finish(e);
-            return Err(());
-        }
+    let Some(rec) = read(pch, &e) else {
+        finish(e);
+        return Err(());
     };
     let preprocess = args.action == Action::Preprocess || args.deps.only.is_some();
     let here = cwd();

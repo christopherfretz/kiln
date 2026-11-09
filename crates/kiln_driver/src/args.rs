@@ -697,6 +697,14 @@ const SEPARATE_OR_EQ: &[&str] = &[
 /// `Separate` kind: `-include-pchfoo` is not this option).
 const SEPARATE: &[&str] = &["-include-pch"];
 
+impl Input {
+    /// The input `path` under the `-x` in force (its language, and
+    /// whether that is a `-header` type).
+    fn under_x(path: &str, x: Option<(Lang, bool)>) -> Input {
+        Input { path: path.to_owned(), lang: x.map(|(l, _)| l), header: x.is_some_and(|(_, h)| h) }
+    }
+}
+
 impl Args {
     /// Parses `argv` (without the program name) as `kiln++` would.
     pub fn parse(argv: &[String]) -> Args {
@@ -760,11 +768,7 @@ impl Args {
                 continue;
             }
             if arg == "-" || !arg.starts_with('-') {
-                a.inputs.push(Input {
-                    path: arg.to_owned(),
-                    lang: x.map(|(l, _)| l),
-                    header: x.is_some_and(|(_, h)| h),
-                });
+                a.inputs.push(Input::under_x(arg, x));
                 continue;
             }
             // Valued options.
@@ -2077,7 +2081,7 @@ mod tests {
         assert_eq!(a.deps.targets, [("t".to_owned(), false), ("q".to_owned(), true)]);
     }
 
-    /// WP-1023: CMake's PCH command lines (`-Xclang -include -Xclang X`
+    /// WP-1023: `CMake`'s PCH command lines (`-Xclang -include -Xclang X`
     /// is `-include X`).
     #[test]
     fn pch_flags() {

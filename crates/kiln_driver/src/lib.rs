@@ -678,7 +678,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     let stdin_text = inputs.iter().any(|i| i.path == "-").then(|| read_stdin(&mut io.stdin));
     if matches!(args.action, Action::Compile | Action::Link) && args.deps.only.is_none() {
         return codegen_cmd::compile(
-            &args,
+            args,
             &tc,
             &inputs,
             stdin_text.as_deref(),
@@ -699,14 +699,14 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             inputs.iter().map(|&input| cdb::CdbJob { input, output: out.clone() }).collect();
         let sm = SourceManager::new();
         let e = make_engine(&sm, &diag_opts, io.stderr.clone(), Some(&args.program));
-        if !cdb::write(&args, &tc, &jobs, &e) {
+        if !cdb::write(args, &tc, &jobs, &e) {
             errors += 1;
         }
         e.flush();
     }
     for input in inputs {
         let lang = args.input_lang(input);
-        let std = match input_std(&args, lang) {
+        let std = match input_std(args, lang) {
             Ok(s) => s,
             Err(d) => {
                 let sm = SourceManager::new();
@@ -719,18 +719,18 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         };
         if matches!(args.action, Action::SyntaxOnly | Action::Precompile) {
             let stdin = if input.path == "-" { stdin_text.clone() } else { None };
-            let r = syntax_only(&args, &tc, std, lang, &input.path, stdin, &diag_opts, &io);
+            let r = syntax_only(args, &tc, std, lang, &input.path, stdin, &diag_opts, &io);
             errors += r.errors;
             output.push_str(&r.output);
             if let Some(list) = r.dep_list
-                && !deps::write_side_file(&args, &input.path, &list.borrow(), &diag_opts, &mut io)
+                && !deps::write_side_file(args, &input.path, &list.borrow(), &diag_opts, &mut io)
             {
                 errors += 1;
             }
             continue;
         }
         let job = Job {
-            args: &args,
+            args,
             toolchain: &tc,
             std,
             path: &input.path,
@@ -742,15 +742,15 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         errors += r.errors;
         output.push_str(&r.output);
         if let Some(files) = r.deps {
-            let text = deps::deps_text(&args, &input.path, &files);
-            match deps::dep_destination(&args, &input.path) {
+            let text = deps::deps_text(args, &input.path, &files);
+            match deps::dep_destination(args, &input.path) {
                 deps::DepDest::Main => output.push_str(&text),
                 deps::DepDest::File(f) => side_deps.push((f, text)),
             }
         }
     }
 
-    write_results(&args, &diag_opts, &mut io, &output, errors, side_deps)
+    write_results(args, &diag_opts, &mut io, &output, errors, side_deps)
 }
 
 pub(crate) fn report_output_error(opts: &DiagOptions, stderr: &SharedWriter, path: &str, e: &str) {
