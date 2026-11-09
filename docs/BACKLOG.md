@@ -967,7 +967,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-962 | accepts-invalid part 1: never-constant false positives (builtins, consteval operator template), out-of-line member parameter tag panic, empty initializer_list stack overflow | WP-945 | done (#410) |
 | WP-946 | accepts-invalid (WP-912): types defined where the grammar forbids (parameter, conversion type, type specifier) + out-of-line member enum-parameter panic; crates/kiln_sema/src/decl.rs:7586 act_on_tag, crates/kiln_ast/src/decl.rs:2477 | WP-912 | open |
 | WP-947 | accepts-invalid (WP-912): empty braced list for a user `initializer_list` type rejected, then stack overflow (cwg10xx crash); crates/kiln_sema/src/init.rs:686 std_initializer_list_init | WP-912 | open |
-| WP-948 | accepts-invalid (WP-912): Oven UB checks: past-end member access and calls, out-of-lifetime calls, volatile read via cast, zero-size array pointer subtraction, virtual member-pointer compare; not-yet-visible initializers | WP-912 | in progress |
+| WP-948 | accepts-invalid (WP-912): Oven UB checks: past-end member access and calls, out-of-lifetime calls, volatile read via cast, zero-size array pointer subtraction, virtual member-pointer compare; not-yet-visible initializers | WP-912 | done (#417) |
 | WP-949 | accepts-invalid (WP-912): member with the name of its class [class.mem]/22 | WP-912 | open |
 | WP-950 | accepts-invalid (WP-912): allocation-function and `main` declaration rules | WP-912 | open |
 | WP-951 | accepts-invalid (WP-912): union, static data member and bit-field rules | WP-912 | open |
@@ -977,8 +977,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-955 | accepts-invalid (WP-912): access/abstract/deleted checks (friend private, abstract temporary, deleted operator delete, virtual base with private dtor) | WP-912 | open |
 | WP-956 | accepts-invalid (WP-912): template declaration rules (partial spec more specialized, CWG526, pre-C++20 float NTTP, conversion function template) + constraint self-dependency hard error in SFINAE; crates/kiln_sema/src/templ/concepts/sat.rs:148 | WP-912 | open |
 | WP-957 | accepts-invalid (WP-912): lookup/type checks (ambiguous elaborated, enum keyword, alignas incomplete, differing UDL suffixes) + exception specs laxer than base | WP-912 | open |
-| WP-958 | accepts-invalid (WP-912): rejects-valid: templates and deduction (12 xfails, docs/status/accepts-invalid.md cluster 15) | WP-912 | in progress |
-| WP-959 | accepts-invalid (WP-912): rejects-valid: classes, special members, initialization, misc (9 xfails, cluster 16) | WP-912 | open |
+| WP-958 | accepts-invalid (WP-912): rejects-valid: templates and deduction (12 xfails, docs/status/accepts-invalid.md cluster 15) | WP-912 | done (#416) |
+| WP-959 | accepts-invalid (WP-912): rejects-valid: classes, special members, initialization, misc (9 xfails, cluster 16) | WP-912 | done (WP-958, #416) |
 | WP-960 | accepts-invalid (WP-912): low: `-pedantic-errors` extension diagnostics; unsupported GNU extensions and driver flags | WP-912 | open |
 | WP-963 | perf (WP-919): `Sema::lookup_stamp` is 6% of dup6; cache it per scope change or pass it down a scan | WP-919 | open |
 | WP-964 | perf (WP-919): `tok_at` 11% of dup6; lookahead predicates re-walk tokens before a memo answers | WP-919 | open |
@@ -1025,3 +1025,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1012 | debuginfo: DIFlag order vs clang (debuginfo/func.rs:97) | WP-941 | open |
 | WP-1013 | debuginfo: `.str` constants carry `!dbg` where clang has none | WP-941 | open |
 | WP-1014 | llvm: coro.done intrinsic attributes (kiln_llvm intrinsics.rs:987) | WP-941 | open |
+| WP-1018 | oven: by-value parameter object lifetime ends at callee return ([expr.call]/7 impl-defined; match clang); flips expr.const/call-out-of-lifetime.cpp | WP-948 | open |
+| WP-1019 | oven: mark volatile locals, heap objects and volatile members (Alloc flag bit); flips expr.const/read-volatile-local-and-heap.cpp | WP-948 | open |
+| WP-1020 | oven: `qb[3].x` at member offset 0 skips the Field op (compile.rs ~4843), so past-end note wording differs (wording only) | WP-948 | open |
+| WP-1021 | oven: RefChk for reference parameters/members and clang-compat 19 mode | WP-948 | open |
