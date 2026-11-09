@@ -3,6 +3,7 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 sema_early_catch_all = Error (0) "catch-all handler must come last";
+sema_elaborated_enum_class = WarningError [ElaboratedEnumClass] (1) "reference to enumeration must use 'enum' not 'enum {0:class|struct}'";
 sema_ellipsis_in_declarator_not_parameter = Error (0) "only function and template parameters can be parameter packs";
 sema_empty_for_body = Warning [EmptyBody] (0) "for loop has empty body";
 sema_empty_if_body = Warning [EmptyBody] (0) "if statement has empty body";
@@ -129,6 +130,7 @@ sema_friend_decl_with_def_arg_must_be_def = Error (0) "friend declaration specif
 sema_friend_decl_with_def_arg_redeclared = Error (0) "friend declaration specifying a default argument must be the only declaration";
 sema_friend_def_in_local_class = Error (0) "friend function cannot be defined in a local class";
 sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match any declaration in {1}";
+sema_friend_enum = Warning [FriendEnum] (0) "elaborated enum specifier cannot be declared as a friend";
 sema_friend_invalid_in_context = Error (0) "'friend' used outside of class";
 sema_friend_not_class_or_fn = Error (0) "friends can only be classes or functions";
 sema_func_returning_array_function = Error (2) "function cannot return {0:array|function} type {1}";

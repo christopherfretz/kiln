@@ -48,6 +48,27 @@ pub struct ModuleOptions {
     /// module file's declaration image when it has one and the name gate
     /// passes (spec/modules.md §11.11 "Part 2a"); otherwise replay.
     pub image: bool,
+    /// The toolchain's module-file cache for libc++'s `std` and
+    /// `std.compat` (spec/modules.md §11.12): asked wherever one of them
+    /// would otherwise be built from its source in `std_dir`.
+    pub std_cache: Option<StdModuleCache>,
+}
+
+/// A lookup in the toolchain's module-file cache (spec/modules.md
+/// §11.12): given `std` or `std.compat` and its libc++ source, the module
+/// file to read instead (built and stored on a miss), or `None` to build
+/// the unit from its source in-process (part A).
+#[derive(Clone)]
+pub struct StdModuleCache(pub Rc<StdModuleLookup>);
+
+/// The function behind a [`StdModuleCache`]: module name and libc++
+/// source to the module file to read.
+pub type StdModuleLookup = dyn Fn(&str, &Path) -> Option<PathBuf>;
+
+impl std::fmt::Debug for StdModuleCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StdModuleCache")
+    }
 }
 
 /// A consumed module or import directive ([cpp.module], [cpp.import]).
@@ -551,23 +572,44 @@ impl Preprocessor<'_, '_> {
         None
     }
 
+    /// The module file the toolchain cache gives for `std` or
+    /// `std.compat` when `path` is libc++'s own source of it
+    /// (spec/modules.md §11.12), else `path`. `std.compat` imports `std`,
+    /// so it is taken from the cache only when `std` is libc++'s too.
+    fn cached_std(&self, key: &str, path: PathBuf) -> PathBuf {
+        let Some(m) = &self.modules else { return path };
+        let (Some(cache), Some(dir)) = (&m.opts.std_cache, &m.opts.std_dir) else { return path };
+        let source = |name: &str| dir.join(format!("{name}.cppm"));
+        if !matches!(key, "std" | "std.compat") || path != source(key) {
+            return path;
+        }
+        if key == "std.compat" && self.find_module("std") != Some(source("std")) {
+            return path;
+        }
+        let cache = Rc::clone(&cache.0);
+        cache(key, &path).unwrap_or(path)
+    }
+
     /// Imports named module (or partition) `key`: from a module file
     /// (spec/modules.md §11) or from its source (§1).
     fn import_module(&mut self, key: &str, span: Span) {
         if self.already_built(key, span) {
             return;
         }
-        let Some(path) = self.find_module(key) else {
+        let Some(source) = self.find_module(key) else {
             self.emit(Diag::new(DiagId::pp_module_not_found, span).arg(key));
             return;
         };
-        let shown = path.display().to_string();
+        // A module file records the path it found, never the cache's: an
+        // importer of it looks the cache up again (§11.12).
         if self.unit_ctx() == Ctx::Main
             && let Some(rec) = self.modules.as_mut().and_then(|m| m.record.as_mut())
             && !rec.imports.iter().any(|(k, _)| k == key)
         {
-            rec.imports.push((key.to_owned(), shown.clone()));
+            rec.imports.push((key.to_owned(), source.display().to_string()));
         }
+        let path = self.cached_std(key, source);
+        let shown = path.display().to_string();
         match bmi::sniff(&path) {
             bmi::Sniffed::Kiln => {
                 let read = bmi::read_file(&path);

@@ -143,6 +143,12 @@ impl Sema<'_, '_> {
         let Some(c) = built else {
             return Some(self.recover(to, &[e], at));
         };
+        // [class.abstract]/3: a by-value parameter of an abstract class
+        // (of a specialization deduced from the argument; clang's
+        // `checkAbstractType` at the argument).
+        if ctx == ConvCtx::Argument && self.require_non_abstract_alloc(at, to) {
+            return Some(self.recover(to, &[c], at));
+        }
         // A by-value argument is a temporary destroyed at the end of the
         // full-expression ([expr.call]/7, the Itanium ABI's caller-side
         // destruction).

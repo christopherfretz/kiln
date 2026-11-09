@@ -376,6 +376,15 @@ the enclosing delay point (`end_delayed_access_to_enclosing`). In
 template patterns: at instantiation (WP-070, §4.8 of sema-templates.md); in
 SFINAE contexts: substitution failure (S3T). No result cache in M3 (Q6).
 
+**Landed (WP-1017).** Two more access checks:
+- A friend declaration naming a member function of another class
+  (`friend void B::f();`, [class.friend]/10) needs access to it from the
+  befriending class. A dependently scoped one is checked again for each
+  instantiation. Test: `tests/conformance/class.friend/friend-private-member.cpp`.
+- A destructor's virtual bases, inherited ones included, need accessible
+  destructors ([class.dtor]/13): `inherited virtual base class 'V' has
+  private destructor`. Test: `tests/conformance/class.dtor/virtual-base-dtor-access.cpp`.
+
 ### 2.5 `this` and the implicit object parameter
 - `CXXThisExpr`: prvalue `cv C*` (`cv` = `this_quals`; `C*` in an NSDMI).
   `FnState.this_ty`, set by member functions and NSDMI replay; lambdas capture
@@ -753,6 +762,14 @@ virtual base 'A'`).
   object of abstract class type 'Abs'`), field, parameter/return of a
   definition or call, temporary; uses inside the class are rechecked at `}`
   (clang `AbstractUsageInfo`).
+  WP-1017 adds four more cases:
+  - a temporary bound to a reference from a braced list or by a converting
+    constructor;
+  - a by-value parameter of a deduced function template specialization;
+  - an explicit type conversion through a constructor;
+  - a variable of a class template specialization that is found abstract
+    once instantiated (`variable type 'S<int>' is an abstract class`).
+  Test: `tests/conformance/class.abstract/abstract-temporary-for-param.cpp`.
 - **Wrong kinds**: `'virtual' can only appear on non-static member functions`,
   `constructor cannot be declared 'virtual'`, `'virtual' cannot be specified on
   member function templates`.
@@ -761,6 +778,10 @@ virtual base 'A'`).
   destructor (WP-457); for a destroying `operator delete` the cold map
   `dtor_delete_this` holds `this` converted to its first parameter, the
   deleting destructor's argument (spec/codegen.md §7u).
+  A deleted `operator delete` found for a virtual destructor makes its
+  definition ill-formed. An implicit or defaulted virtual destructor whose
+  lookup finds a deleted one is itself deleted ([class.dtor]/7.3) (WP-1017;
+  `tests/conformance/class.dtor/virtual-dtor-deleted-operator-delete.cpp`).
 - **Key function** (Itanium §5.2.3): first non-pure virtual function not inline
   and not defined in the class, computed at `}` (cold map); codegen re-checks
   at TU end.
@@ -1143,6 +1164,13 @@ tag 4 on the canonical target; conversion to the class itself, a base or `void`
 warns [-Wclass-conversion]. `explicit` elsewhere: `'explicit' can only be
 applied to a constructor or conversion function`. Selection (converting ctors
 and conversion functions in user-defined conversion sequences) is S3O's.
+A conversion function template cannot have a deduced conversion type
+([class.conv.fct]/9, CWG1878). `auto`, `C auto` or `decltype(auto)`, alone or
+under declarators, gets `'auto' not allowed in declaration of conversion
+function template`. It is reported at `Declarator::conv_type_loc` (the
+concept name for `C auto`), once the template pattern is finished. A
+non-template conversion function may still use `auto` (WP-1017; test
+`class.conv.fct/conversion-template-deduced-type.cpp`).
 
 **Explicit object parameters** ([class.conv.fct]/1, [dcl.fct]/6, P0847;
 WP-459). A conversion function may declare an explicit object parameter

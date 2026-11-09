@@ -122,6 +122,7 @@ pub fn command(compiler: &Path, kind: CompilerKind, path: &Path, mode: &[&str]) 
         _ => ((if lang == Lang::C { "c17" } else { "c++26" }).to_owned(), Vec::new()),
     };
     let mut c = Command::new(compiler);
+    crate::util::isolate_caches(&mut c);
     if let Some(d) = path.parent() {
         c.current_dir(d);
     }

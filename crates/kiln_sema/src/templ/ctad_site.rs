@@ -36,6 +36,7 @@ pub(crate) mod site {
     pub(crate) const FRIEND: u8 = 20;
     pub(crate) const NOT_FUNCTION_DECLARATION: u8 = 21;
     pub(crate) const REQUIRES_PARAM: u8 = 22;
+    pub(crate) const CONVERSION_TEMPLATE: u8 = 24;
 }
 
 /// The verdict on a placeholder in a declarator's context.

@@ -42,6 +42,10 @@ pub struct Config {
     /// The GCC oracle's installation prefix (`%{gcc_toolchain}`, what
     /// `--gcc-toolchain=` takes); `None` without a GCC oracle.
     pub gcc_toolchain: Option<PathBuf>,
+    /// The directory of libc++'s module sources, `std.cppm` and
+    /// `std.compat.cppm` (`%{libcxx_modules}`): what the compiler under
+    /// test, else the oracle, reports (`util::libcxx_module_dir_of`).
+    pub libcxx_modules: Option<PathBuf>,
     /// `--meta-header`: the directory of the compatibility headers that
     /// stand in for `tests/support/kiln_meta*.h` (they include the real
     /// `<meta>`); `None` outside the header-differential mode.
@@ -67,6 +71,10 @@ pub struct Config {
     /// on `PATH` is an ERROR rather than a SKIP (`spec/harness.md`
     /// "Debugger tests").
     pub require_debuggers: bool,
+    /// `KILN_REQUIRE_SANITIZER_RUNTIME=1`: a `requires: sanitizer-runtime`
+    /// test whose clangs lack compiler-rt's runtimes is an ERROR rather
+    /// than a SKIP (`spec/harness.md` "Directives", WP-1034).
+    pub require_sanitizer_runtime: bool,
     /// `--debug-sweep`: the debug-info sweep (`spec/harness.md` "Debug-info
     /// sweep"); `None` outside it.
     pub debug_sweep: Option<DebugSweep>,
@@ -227,6 +235,15 @@ impl Test<'_> {
             let reason = "no GCC oracle, so no `%{gcc_toolchain}` (the test needs GCC's libstdc++)";
             return Some(reason.to_owned());
         }
+        let needs_modules = |s: &str| s.contains("%{libcxx_modules}");
+        if self.cfg.libcxx_modules.is_none()
+            && (spec.args.iter().any(|a| needs_modules(a))
+                || spec.modules.iter().any(|(_, p)| needs_modules(&p.to_string_lossy())))
+        {
+            let reason = "no libc++ module sources, so no `%{libcxx_modules}` (neither the \
+                          compiler nor the oracle has a libc++.modules.json)";
+            return Some(reason.to_owned());
+        }
         if self.cfg.meta_header.is_some() {
             return meta_header_skip(spec, source);
         }
@@ -372,7 +389,8 @@ impl Test<'_> {
         if spec.requires_sanitizer_runtime
             && let Some(r) = self.missing_sanitizer_runtime(&spec)
         {
-            return (Status::Skip, Some(r), String::new());
+            let (status, why) = sanitizer_runtime_gate(r, self.cfg.require_sanitizer_runtime);
+            return (status, Some(why), String::new());
         }
         if let Some(reason) = self.mode_skip(&spec, &source) {
             return (Status::Skip, Some(reason), String::new());
@@ -516,6 +534,7 @@ impl Test<'_> {
         out: Option<&Path>,
     ) -> Command {
         let mut c = Command::new(program);
+        crate::util::isolate_caches(&mut c);
         c.current_dir(&self.cfg.root);
         if self.is_kiln(program) {
             c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
@@ -557,6 +576,8 @@ impl Test<'_> {
 
     /// The `module:` source of `path` (relative to the test's directory).
     fn module_source(&self, path: &Path) -> PathBuf {
+        // A `%{libcxx_modules}` path is absolute once substituted.
+        let path = directives::substitute(&path.to_string_lossy(), |n| self.placeholder(n));
         self.case.path.parent().unwrap_or(&self.cfg.root).join(path)
     }
 
@@ -654,6 +675,7 @@ impl Test<'_> {
             };
             let mut steps = Vec::new();
             let mut c = Command::new(program);
+            crate::util::isolate_caches(&mut c);
             base(&mut c);
             if kiln && objects {
                 let mut f = std::ffi::OsString::from("-fmodule-output=");
@@ -665,6 +687,7 @@ impl Test<'_> {
                 steps.push(c);
                 if objects {
                     let mut c = Command::new(program);
+                    crate::util::isolate_caches(&mut c);
                     base(&mut c);
                     c.arg("-c").arg(&bmi).arg("-o").arg(&obj);
                     steps.push(c);
@@ -713,6 +736,7 @@ impl Test<'_> {
             let src = self.module_source(unit);
             let obj = self.unit_object(&format!("unit{i}"), oracle);
             let mut c = Command::new(program);
+            crate::util::isolate_caches(&mut c);
             c.current_dir(&self.cfg.root);
             if self.is_kiln(program) {
                 c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
@@ -781,6 +805,7 @@ impl Test<'_> {
     fn placeholder(&self, name: &str) -> Option<String> {
         let path = match name {
             "gcc_toolchain" => self.cfg.gcc_toolchain.clone()?,
+            "libcxx_modules" => self.cfg.libcxx_modules.clone()?,
             "repo_root" => self.cfg.root.clone(),
             "resource_dir" => self.cfg.root.join("resource"),
             "test_dir" => self.case.path.parent()?.to_path_buf(),
@@ -2006,6 +2031,19 @@ fn debugger_gate_in(
     })
 }
 
+/// A `requires: sanitizer-runtime` test whose runtime is `missing` (the
+/// SKIP reason of `Test::missing_sanitizer_runtime`): a SKIP, or under
+/// `require` (`KILN_REQUIRE_SANITIZER_RUNTIME=1`, GitHub CI) an ERROR, so
+/// CI never passes with the runtime tests silently skipped (WP-1034).
+fn sanitizer_runtime_gate(missing: String, require: bool) -> (Status, String) {
+    if require {
+        let env = super::REQUIRE_SANITIZER_RUNTIME_ENV;
+        (Status::Error, format!("{env}=1 and the test {missing}"))
+    } else {
+        (Status::Skip, missing)
+    }
+}
+
 /// The first of `checks` that no output line after the previous match
 /// contains (checks match successive lines, in order).
 fn first_missing_check<'c>(out: &str, checks: &'c [String]) -> Option<&'c str> {
@@ -2306,6 +2344,17 @@ mod compat_tests {
 
     /// spec/harness.md "Oracle toolchain": kiln imitates the oracle, or
     /// the clang a `requires:` names when the oracle does not meet it.
+    /// WP-1034: a missing sanitizer runtime is a SKIP, or an ERROR that
+    /// names `KILN_REQUIRE_SANITIZER_RUNTIME` when CI requires the runtimes.
+    #[test]
+    fn sanitizer_runtime_gate_skips_or_errors() {
+        let why = "requires sanitizer-runtime; the oracle (clang++-22) has no UBSan/ASan runtime";
+        assert_eq!(super::sanitizer_runtime_gate(why.into(), false), (Status::Skip, why.into()));
+        let (status, msg) = super::sanitizer_runtime_gate(why.into(), true);
+        assert_eq!(status, Status::Error);
+        assert_eq!(msg, format!("KILN_REQUIRE_SANITIZER_RUNTIME=1 and the test {why}"));
+    }
+
     #[test]
     fn compat_level() {
         assert_eq!(compat_for(22, None, None), 22);

@@ -19,8 +19,10 @@ pub mod debug_flags;
 pub mod deps;
 pub mod features;
 pub mod fp_flags;
+mod help;
 pub mod link;
 pub mod llvm;
+pub mod module_cache;
 mod pch;
 pub mod pp_cmd;
 pub mod rsp;
@@ -114,37 +116,6 @@ pub fn make_engine<'sm>(
         }
     }
 }
-
-const HELP: &str = "\
-OVERVIEW: kiln, a C++26 frontend emitting LLVM IR
-
-USAGE: kiln [options] file...
-
-kiln++ compiles every input as C++. kiln picks by extension: .c, .h and
-.i are C (preprocessing only so far), everything else is C++. -x <lang>
-overrides both.
-
-Implemented: -E -P -C -CC -dM -dD -dI -o -x -std= -D -U -I -isystem -iquote
--idirafter -cxx-isystem -nostdinc -nostdinc++ -nostdlibinc -nobuiltininc
--isysroot --sysroot -resource-dir -stdlib= -f[no-]experimental-library
---gcc-toolchain= --gcc-install-dir=
---target= -march= -mcpu= -target-feature --embed-dir= -M -MM
--MD -MMD -MF -MT -MQ -MP -MG -MJ -W... -w -pedantic -ferror-limit=
--fdiagnostics-format= -f[no-]color-diagnostics -fkiln-reproducible-time
--fkiln-source-path-style=<clang|gcc> -fkiln-reflection-mangling=<kiln|gcc>
--fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -verify[=<prefixes>]
--verify-ignore-unexpected[=<levels>] -Xclang <arg> -fconstexpr-steps=
--fconstexpr-depth= -fconstexpr-memory= -fconstexpr-backtrace-limit=
--fconstexpr-report= -ftemplate-depth= -ftemplate-backtrace-limit=
--fkiln-instantiation-report[=all|json] -fkiln-stack-size= -fkiln-dump-cfg
--fkiln-cfg-stats -fkiln-cfg-max-elems= -fkiln-outline-expansions=
--fkiln-memory-report -c -S -emit-llvm
--O<n> -g (ignored) -l -L -Wl, -fuse-ld= -static -nostdlib -shared -rdynamic -pie -no-pie -pthread -###
--f[no-]reflection -v --version -dumpversion -dumpmachine -print-search-dirs
--print-libgcc-file-name -print-file-name= -print-prog-name=
--print-target-triple -print-multiarch -print-sysroot -print-resource-dir.
-See spec/driver.md.
-";
 
 /// `-fkiln-memory-report` (spec/driver.md): one line per row of `r`,
 /// `memory: <name> count=N live=N reserved=N`, then `memory: total
@@ -252,6 +223,13 @@ fn immediate(args: &Args, tc: &Toolchain, io: &mut Io, drv: &DiagEngine<'_>) -> 
         let own = std::path::Path::new(&tc.resource_dir).join(name);
         if !name.is_empty() && own.exists() {
             return line(&own.display().to_string());
+        }
+        // libc++'s module manifest, for build systems' `import std;`
+        // (CMake's `CXX_MODULE_STD`; spec/driver.md "Module cache").
+        if name == "libc++.modules.json"
+            && let Some(json) = tc.libcxx_modules_json()
+        {
+            return line(&json.display().to_string());
         }
         return Some(delegate(args, tc, io, drv, &[format!("-print-file-name={name}")]));
     }
@@ -638,7 +616,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         emit_arg_error(e, &drv);
     }
     if args.help {
-        let _ = io.stdout.write_all(HELP.as_bytes());
+        let _ = io.stdout.write_all(help::HELP.as_bytes());
         return 0;
     }
     // An explicitly named LLVM that is not usable stops everything, before

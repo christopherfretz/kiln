@@ -1838,6 +1838,35 @@ and returns the scope it names:
     class.union.anon/alias-of-unnamed-class-is-not-anonymous-run.cpp.
 - **Unnamed tags named by a typedef** record their typedef with
   `set_typedef_for_anon` ([dcl.typedef]/9).
+- **Elaborated-type-specifier checks** (WP-1017, [dcl.type.elab]):
+  - *Wrong class-key or `enum`*. `use of 'X' with tag type that does not
+    match previous declaration` is reported at the class-key, with
+    `previous use is here` at the previous declaration
+    (`Sema::diag_wrong_tag`). This covers references, friends, friend
+    class templates, specializations and references to specializations
+    (named `'B<float>'`, as clang 19 does), and the instantiation of a
+    dependent `struct T::X`. A reference recovers to the declaration it
+    found. Test: `dcl.type.elab/wrong-tag-kind.cpp`.
+  - *`enum class E` as a reference or friend* (no enum-base). The error
+    `reference to enumeration must use 'enum' not 'enum class'`
+    (`-Welaborated-enum-class`, an error by default) is reported at the
+    `class`/`struct` keyword. Recovery is a plain `enum E` reference.
+    Test: `dcl.type.elab/elaborated-enum-class.cpp`.
+  - *`friend enum E;`* gets `elaborated enum specifier cannot be declared
+    as a friend` (`-Wfriend-enum`) + `remove 'enum' to befriend an enum`,
+    at `enum`. It also fires for a dependent `friend enum T::E;`. Test:
+    `class.friend/friend-enum.cpp`.
+  - *Ambiguous qualified lookup* (`struct N::x` with `x` found through
+    two using-directives) gets `reference to 'x' is ambiguous`. The
+    candidates are listed latest nominated first, as clang does. A
+    qualified reference that finds no tag declares a hidden, invalid
+    recovery tag, so later uses get no cascade. Test:
+    `dcl.type.elab/ambiguous-qualified-elab.cpp`.
+  - *Unknown specialization*. `struct A<T>::K` naming a member of another
+    class template's unknown specialization ([temp.dep.type]/6) is
+    dependent and is not looked up. It used to be rejected when the
+    primary has no `K`. Test:
+    `temp.dep.type/elaborated-unknown-specialization.cpp`.
 
 ### 4.4.1 Declaration rules (WP-1015)
 Rules clang enforces at declaration time that kiln accepted (found by the
@@ -1958,7 +1987,9 @@ instantiation unless stated.
   - `deprecated`, `noreturn`, `fallthrough`
   - `likely`/`unlikely`
   - `no_unique_address`
-  - `alignas`/`aligned`, `packed`
+  - `alignas`/`aligned`, `packed`. `alignas(type-id)` checks its operand as
+    `alignof` does: `invalid application of 'alignas' to an incomplete type
+    'T'` ([dcl.align]/3; WP-1017, `dcl.align/alignas-void.cpp`).
   - `used`, `noinline`, `always_inline`, `weak`, `const`, `pure`, `cold`,
     `hot` (`AttrKind::HOT`, WP-172)
   - `optnone` / `minsize` (GNU syntax or `clang::`; `gnu::` and
@@ -3459,6 +3490,21 @@ specification as written (`TypeNames` prints ` noexcept`,
 - *Redeclarations*, overriders more lax than the base, and
   [conv.fctptr] function-pointer conversions use clang's wording. The
   tests are in `tests/conformance/except.spec/`.
+- *Overriders* (WP-1017; clang `CheckOverridingFunctionExceptionSpec`).
+  A dynamic `throw(T...)` of an overrider is compared type by type with
+  the base's (`override_exc_spec_lax`). Each type must be caught by one
+  of the base's, by [except.handle]/3 (`handler_can_catch`): the same
+  type, an unambiguous public base, a pointer qualification or
+  derived-to-base conversion, `void *`, or `std::nullptr_t` for a pointer
+  handler. A reference handler to a pointer must be `const`. Lists with a
+  dependent type or a pack expansion are checked only at instantiation.
+  Clang also rejects some of those at definition time; kiln does not.
+  The checks clang runs when the overrider is declared (no written
+  specification) are reported before the delayed ones, across the whole
+  outermost class. Not checked: the nested function-type rule
+  (`CheckParamExceptionSpec`) and implicit members whose computed
+  specification is a type list. Tests: `class.virtual/exception-spec-dynamic.cpp`,
+  `class.virtual/exception-spec-dynamic-pack-nested.cpp`.
 - *Function references* ([dcl.init.ref]/4, [conv.fctptr]). A function
   type `T noexcept` is reference-compatible with `T`; the rule and its
   identity ranking are in spec/sema-conv.md (WP-290). More tests:
@@ -7391,7 +7437,7 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   operator with the right operand's range, through the runtime-behaviour
   deferral (clang `CheckShiftOperands` / `CheckMultiplyDivideOperands` /
   `CheckRemainderOperands` with `IsCompAssign`).
-- **Never constant (WP-468, WP-873).** A `constexpr` or `consteval`
+- **Never constant (WP-468, WP-873, WP-945).** A `constexpr` or `consteval`
   function that can never be constant is ill-formed, no diagnostic
   required ([dcl.constexpr]/6); clang runs `isPotentialConstantExpr` on
   each written definition when `CheckConstexprFunctionBodies` is on:
@@ -7438,14 +7484,46 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     `CallExpr` or `CXXOperatorCallExpr`) is not evaluated as a value:
     naming a builtin or a consteval function there is no failure, only
     the arguments (and a member call's object) are walked (WP-962);
-  - conservative on builtins (WP-962): a failure in a call of a builtin
-    is reportable only for the builtin table's `Oven::No` rows (each
-    checked against clang 19's `__has_constexpr_builtin`: clang's
-    evaluator rejects them as "subexpression not valid in a constant
-    expression"); any other builtin, in the table or not, is opaque: a
-    subexpression calling one that fails is taken apart and the call
-    itself is unknown. A failure noted as a kiln limitation (`kiln: ...
-    not supported yet`) is never reported.
+  - builtins follow clang's own table, not the Oven (WP-945): kiln's
+    Oven folds more than clang's evaluator (the P0533 `<cmath>` builtins
+    and their library twins, as GCC does) and notes some calls its own
+    way, so a builtin call never takes its result or failure from the
+    Oven. `Sema::clang_constexpr_builtin` (set by the parser) asks
+    kiln_pp's `__has_builtin` / `__has_constexpr_builtin` tables for the
+    target, `-std`, GNU mode and `-fclang-compat`
+    (`__builtin_abs` is constexpr from clang 22):
+    - a non-library builtin clang does not evaluate (`__builtin_floor`,
+      `__builtin_trap`, `__builtin_sqrt`, `__builtin_unreachable`) fails
+      at its callee, before its arguments: "subexpression not valid in a
+      constant expression" at the callee's start;
+    - any other non-library builtin (constexpr in clang, or unknown to
+      it) is opaque: its arguments are walked and its value is unknown;
+      `__builtin_constant_p`, `__builtin_object_size`,
+      `__builtin_dynamic_object_size`, `__builtin_classify_type`,
+      `__builtin_assume` and `__assume` walk no argument,
+      `__builtin_expect{,_with_probability}` only the first;
+    - a library builtin (C linkage, `lib_builtin_info`) that clang
+      constant-evaluates (`strlen`, `memcpy`, `strcmp`) always fails:
+      "non-constexpr function 'NAME' cannot be used in a constant
+      expression" at the call, without `declared here` (clang's
+      `isBuiltinCall` refusal outside a constant-evaluated context);
+    - any other library builtin (`fabs`, `abs`) is an ordinary
+      non-constexpr function: its arguments are evaluated first, so a
+      call fails only when they are all known, with `declared here` at
+      the latest declaration;
+    - a decayed builtin that reaches the Oven other than as a direct
+      callee (`BuiltinFnToFnPtr`) gets the generic "subexpression not
+      valid" note, as clang's `PointerExprEvaluator` has no case for it.
+    For a function evaluated as a call (below), a first walk in which
+    only such builtin calls can fail runs before the Oven call, so the
+    Oven never decides a builtin call. A failure noted as a kiln
+    limitation (`kiln: ... not supported yet`) is never reported;
+  - an `asm` statement fails ("subexpression not valid in a constant
+    expression" at the statement, clang `EvaluateStmt`'s default), with
+    or without parameters (WP-915);
+  - a function declared in a system header is never checked, even under
+    `-Wsystem-headers` (clang skips `CheckConstexprFunctionBody` there;
+    libstdc++'s `<cmath>` overloads call `__builtin_acosf`);
   Kiln never reports a function clang accepts; it misses some clang
   reports because clang tracks local variables (`int z = 0; if (z)
   ...`) and keeps evaluating past a quiet nested call (WP-873
@@ -7463,7 +7541,16 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `dcl.constexpr/potential-constant-builtin-{fabs,strcmp,not-constexpr}.cpp`,
   `dcl.constexpr/potential-constant-builtins-spread.cpp`,
   `dcl.constexpr/potential-constant-consteval-operator-template.cpp`,
-  `dcl.constexpr/never-constant-direct-callee-cxx20.cpp`.
+  `dcl.constexpr/never-constant-direct-callee-cxx20.cpp`,
+  `dcl.constexpr/never-constant-builtin-not-evaluated-cxx20.cpp`,
+  `dcl.constexpr/never-constant-library-builtin-cxx20.cpp`,
+  `dcl.constexpr/never-constant-builtin-abs-clang19.cpp`,
+  `dcl.constexpr/potential-constant-builtin-abs-clang22.cpp`,
+  `dcl.constexpr/never-constant-builtin-cxx23.cpp`,
+  `dcl.constexpr/potential-constant-builtin-cxx23.cpp`,
+  `dcl.constexpr/potential-constant-builtin-off-path-cxx20.cpp`,
+  `dcl.constexpr/potential-constant-system-header-cxx20.cpp`,
+  `dcl.constexpr/constexpr-asm-never-constant.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
