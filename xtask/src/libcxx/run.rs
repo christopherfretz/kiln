@@ -139,6 +139,17 @@ impl Config {
         vec![format!("-fprebuilt-module-path={}", share.display())]
     }
 
+    /// libc++'s module sources for the headers the tests compile against
+    /// (`%{module-dir}` of `format.py`): the package tree's, else those of
+    /// `libcxx_include`; `<prefix>/include/c++/v1` ->
+    /// `<prefix>/share/libc++/v1`, when it holds `std.cppm`.
+    pub fn module_dir(&self) -> Option<PathBuf> {
+        let include = self.libcxx.as_ref().map_or(&self.libcxx_include, |t| &t.include);
+        let prefix = include.parent()?.parent()?.parent()?;
+        let share = prefix.join("share").join("libc++").join("v1");
+        share.join("std.cppm").is_file().then_some(share)
+    }
+
     /// The flags of the link step, after the object. With a package tree,
     /// its archives are linked statically and `--as-needed` drops the
     /// driver's own trailing `-lc++`.
@@ -735,12 +746,8 @@ pub fn prepare(
             return Err(Outcome::Unsupported("driver: .sh test without RUN lines".to_owned()));
         }
         // `format.py` prefixes the commands with `--precompile` builds of
-        // the module dependencies; the driver does not reproduce them.
-        if !d.module_dependencies.is_empty() {
-            return Err(Outcome::Unsupported(
-                "driver: RUN lines with MODULE_DEPENDENCIES (format.py --precompile)".to_owned(),
-            ));
-        }
+        // the module dependencies, which `execute_script` reproduces
+        // (spec/libcxx.md "RUN lines").
         let subst: Vec<_> =
             local_cfgs.iter().flat_map(|c| c.substitutions.iter().cloned()).collect();
         script::check(&d.run, &subst).map_err(Outcome::Unsupported)?;
@@ -876,7 +883,8 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
             .flat_map(|c| c.substitutions.iter())
             .filter_map(|(n, v)| Some((n.clone(), v.clone()?)))
             .collect();
-        execute_script(cfg, &job.path, &scratch, &d.run, &flags, &subst, run, &mut r);
+        let script = Script { lines: &d.run, modules: &d.module_dependencies, cfg_subst: &subst };
+        execute_script(cfg, &job.path, &scratch, &script, &flags, run, &mut r);
     } else {
         execute(cfg, &job.path, &scratch, compile_fail_kind(kind, &text), &flags, run, &mut r);
     }
@@ -957,6 +965,7 @@ fn execute(
     let exe = scratch.join("t.exe");
     let compile = |extra: &[&str]| {
         let mut c = Command::new(&cfg.kiln);
+        crate::util::isolate_caches(&mut c);
         c.args(cfg.base_compile_flags()).args(flags).args(extra).arg(src);
         c.env("KILN_LLVM_DIR", &cfg.llvm_dir);
         c
@@ -1063,34 +1072,94 @@ fn record(
     }
 }
 
+/// A `.sh.cpp` test's commands: its `RUN:` lines, its
+/// `MODULE_DEPENDENCIES:` and the resolved `lit.local.cfg` substitutions.
+struct Script<'a> {
+    lines: &'a [String],
+    modules: &'a [String],
+    cfg_subst: &'a [(String, String)],
+}
+
+/// `format.py`'s module build (libc++ 19 lines 157-197): `std.compat`
+/// (when named) and then `std` are precompiled into `%T` with the flags
+/// before the module flags, and `%{compile_flags}` gains
+/// `-fmodule-file=<m>=%T/<m>.pcm %T/<m>.pcm` for each. The commands run
+/// first, `std` before `std.compat` (which imports it). `Err` when the
+/// toolchain has no libc++ module sources.
+fn module_build(cfg: &Config, modules: &[String]) -> Result<(Vec<String>, Vec<String>), String> {
+    if modules.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let Some(dir) = cfg.module_dir() else {
+        return Err("driver: MODULE_DEPENDENCIES without libc++ module sources".to_owned());
+    };
+    let precompile = |m: &str, extra: &str| {
+        let source = script::quote(&dir.join(format!("{m}.cppm")).display().to_string());
+        format!(
+            "%{{cxx}} %{{flags}} %{{compile_flags}} -Wno-reserved-module-identifier \
+             -Wno-reserved-user-defined-literal {extra}--precompile -o %T/{m}.pcm -c {source}"
+        )
+    };
+    let mut lines = vec![precompile("std", "")];
+    let mut flags = Vec::new();
+    if modules.iter().any(|m| m == "std.compat") {
+        lines.push(precompile("std.compat", "-fmodule-file=std=%T/std.pcm "));
+        flags.extend(["-fmodule-file=std.compat=%T/std.compat.pcm", "%T/std.compat.pcm"]);
+    }
+    flags.extend(["-fmodule-file=std=%T/std.pcm", "%T/std.pcm"]);
+    Ok((lines, flags.into_iter().map(str::to_owned).collect()))
+}
+
 /// Runs a `.sh.cpp` test's `RUN:` commands in order (spec/libcxx.md "RUN
-/// lines"); the first that fails decides the outcome. A compiler command
-/// is limited like a compile step, anything else like the run step (and
-/// retried under `ALLOW_RETRIES:`). Each command's stdout joins its
-/// stderr, so a `diff` or `grep` mismatch shows in the detail.
-#[allow(clippy::too_many_arguments)] // the test, its flags and limits, the result
+/// lines"), after the module build of its `MODULE_DEPENDENCIES:`
+/// ([`module_build`]); the first that fails decides the outcome. A
+/// compiler command is limited like a compile step, anything else like
+/// the run step (and retried under `ALLOW_RETRIES:`). Each command's
+/// stdout joins its stderr, so a `diff` or `grep` mismatch shows in the
+/// detail.
 fn execute_script(
     cfg: &Config,
     src: &Path,
     scratch: &Path,
-    lines: &[String],
+    script: &Script<'_>,
     flags: &[String],
-    cfg_subst: &[(String, String)],
     run: RunLimits,
     r: &mut TestResult,
 ) {
     let mut compile_flags = cfg.base_compile_flags();
     compile_flags.extend(flags.iter().cloned());
-    let subst = script::Substitutions::new(
-        &cfg.kiln,
-        &compile_flags,
-        &cfg.link_flags(),
-        cfg_subst,
-        src,
-        scratch,
-    );
-    for line in lines {
-        let expanded = match subst.expand(line) {
+    let (module_lines, module_flags) = match module_build(cfg, script.modules) {
+        Ok(m) => m,
+        Err(e) => {
+            r.outcome = Outcome::Unsupported(e);
+            return;
+        }
+    };
+    let link_flags = cfg.link_flags();
+    let substitutions = |compile_flags: &[String]| {
+        script::Substitutions::new(
+            &cfg.kiln,
+            compile_flags,
+            &link_flags,
+            script.cfg_subst,
+            src,
+            scratch,
+        )
+    };
+    let mut commands = Vec::with_capacity(module_lines.len() + script.lines.len());
+    {
+        let subst = substitutions(&compile_flags);
+        for line in &module_lines {
+            commands.push((line.as_str(), subst.expand(line)));
+        }
+    }
+    compile_flags.extend(module_flags);
+    let subst = substitutions(&compile_flags);
+    for line in script.lines {
+        commands.push((line.as_str(), subst.expand(line)));
+    }
+    for (line, expanded) in commands {
+        let expanded = match expanded {
             Ok(e) => e,
             Err(e) => {
                 r.outcome = Outcome::Error(e);
@@ -1104,6 +1173,7 @@ fn execute_script(
             LineKind::Run => (Stage::Run, Kind::Sh),
         };
         let mut cmd = Command::new("bash");
+        crate::util::isolate_caches(&mut cmd);
         cmd.arg("-c").arg(script::bash_program(&expanded));
         cmd.current_dir(scratch)
             .env("TMPDIR", test_tmpdir(cfg, scratch))
@@ -1359,6 +1429,36 @@ mod tests {
         );
         cfg.clang = true;
         assert_eq!(cfg.module_source_flags(), Vec::<String>::new());
+        // `format.py`'s module build: `std` first, the flags in its order
+        // (`std.compat`'s before `std`'s), the sources from `module_dir`.
+        assert_eq!(cfg.module_dir(), Some(share.clone()));
+        assert_eq!(module_build(&cfg, &[]), Ok((Vec::new(), Vec::new())));
+        let (lines, flags) = module_build(&cfg, &["std.compat".into(), "std".into()]).unwrap();
+        let src = |m: &str| share.join(m).display().to_string();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("%{cxx} %{flags} %{compile_flags} "));
+        assert!(lines[0].ends_with(&format!("--precompile -o %T/std.pcm -c {}", src("std.cppm"))));
+        assert!(
+            lines[1].contains(" -fmodule-file=std=%T/std.pcm --precompile -o %T/std.compat.pcm")
+        );
+        assert!(lines[1].ends_with(&src("std.compat.cppm")));
+        assert_eq!(
+            flags,
+            [
+                "-fmodule-file=std.compat=%T/std.compat.pcm",
+                "%T/std.compat.pcm",
+                "-fmodule-file=std=%T/std.pcm",
+                "%T/std.pcm"
+            ]
+        );
+        let (lines, flags) = module_build(&cfg, &["std".into()]).unwrap();
+        assert_eq!((lines.len(), flags.len()), (1, 2));
+        cfg.libcxx = None;
+        assert_eq!(cfg.module_dir(), None);
+        assert_eq!(
+            module_build(&cfg, &["std".into()]),
+            Err("driver: MODULE_DEPENDENCIES without libc++ module sources".into())
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1382,11 +1482,10 @@ mod tests {
             sh("// RUN: %{gdb} %t.exe"),
             Err(Outcome::Unsupported("driver: substitution %{gdb}".into()))
         );
+        assert_eq!(sh("// MODULE_DEPENDENCIES: std std.compat\n// RUN: %{build}"), Ok(()));
         assert_eq!(
-            sh("// MODULE_DEPENDENCIES: std\n// RUN: %{build}"),
-            Err(Outcome::Unsupported(
-                "driver: RUN lines with MODULE_DEPENDENCIES (format.py --precompile)".into()
-            ))
+            sh("// MODULE_DEPENDENCIES: other\n// RUN: %{build}"),
+            Err(Outcome::Unsupported("driver: modules".into()))
         );
         assert_eq!(sh(""), Err(Outcome::Unsupported("driver: .sh test without RUN lines".into())));
     }
@@ -1692,7 +1791,8 @@ mod tests {
         } else {
             let lines: Vec<String> = lines.iter().map(|l| (*l).to_owned()).collect();
             let flags = ["-DEXTRA".to_owned()];
-            execute_script(&cfg, &src, &scratch, &lines, &flags, &[], run, &mut r);
+            let script = Script { lines: &lines, modules: &[], cfg_subst: &[] };
+            execute_script(&cfg, &src, &scratch, &script, &flags, run, &mut r);
         }
         let _ = std::fs::remove_dir_all(&base);
         r

@@ -2013,6 +2013,13 @@ impl Sema<'_, '_> {
             self.ref_temp_note.set(saved);
             t
         };
+        // [class.abstract]/3: the temporary would be an object of an
+        // abstract class (clang's `checkAbstractType` when performing a
+        // valid sequence, at the initialization's location).
+        if !self.is_err_expr(tmp) && self.require_non_abstract_alloc(at, r) {
+            let flat = Self::list_exprs(l);
+            return self.recover(ty, &flat, l.lbrace);
+        }
         // The temporary is bound (clang `shouldBindAsTemporary` of
         // `EK_Temporary`): an aggregate or array of a class with a
         // non-trivial destructor is destroyed with its full-expression.

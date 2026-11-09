@@ -5983,7 +5983,20 @@ impl Sema<'_, '_> {
         loc: Loc,
         range: Option<kiln_source::Span>,
     ) -> bool {
-        let name = Self::trait_name(kind);
+        self.check_trait_operand_named(kind, Self::trait_name(kind), ty, loc, range)
+    }
+
+    /// [`Self::check_trait_operand`] with the operator spelled `name` in
+    /// the diagnostics (`alignas(type-id)`, [dcl.align]/3: as
+    /// `alignas(alignof(type-id))`; clang `CheckAlignasTypeArgument`).
+    pub(crate) fn check_trait_operand_named(
+        &mut self,
+        kind: TraitKind,
+        name: &'static str,
+        ty: QualType,
+        loc: Loc,
+        range: Option<kiln_source::Span>,
+    ) -> bool {
         if self.is_error_type(ty) {
             return false;
         }
@@ -6460,6 +6473,10 @@ impl Sema<'_, '_> {
             if x == e {
                 return self.explicit_cast(style, CastKind::NoOp, x, ty, loc, rparen);
             }
+            // [class.abstract]/3: a temporary of an abstract class.
+            if self.require_non_abstract_alloc(loc, ty) {
+                return self.recover(ty, &[x], loc);
+            }
             let x = self.maybe_bind_temporary(x);
             return self.explicit_cast(style, CastKind::ConstructorConversion, x, ty, loc, rparen);
         }
@@ -6502,6 +6519,12 @@ impl Sema<'_, '_> {
                 if self.ast.exprs.get(x).kind() == ExprKind::ImplicitCastExpr {
                     self.mark_explicit(x, e);
                     return self.explicit_cast(style, CastKind::NoOp, x, ty, loc, rparen);
+                }
+                // [class.abstract]/3: a temporary of an abstract class
+                // (clang's `checkAbstractType` for the constructor call,
+                // at the cast's location).
+                if self.require_non_abstract_alloc(loc, ty) {
+                    return self.recover(ty, &[x], loc);
                 }
                 let kind = if self.ast.exprs.get(x).kind() == ExprKind::CXXParenListInitExpr {
                     CastKind::NoOp

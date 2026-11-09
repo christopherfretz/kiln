@@ -1,9 +1,10 @@
 //! The `RUN:` lines of a `.sh.cpp` test (spec/libcxx.md "RUN lines"):
 //! libc++'s `format.py` substitutions expanded the way lit expands them,
 //! each command then run by `bash` with lit's `pipefail` and a `not`
-//! helper. The `MODULE_DEPENDENCIES` build (`--precompile`), `%{python}`
-//! and the install-layout substitutions (`%{lib-dir}`, `%{include-dir}`,
-//! `%{gdb}`) are out of scope: [`check`] names which one a test needs.
+//! helper. The `MODULE_DEPENDENCIES` build (`--precompile`) is the
+//! runner's (`run::module_build`). `%{python}` and the install-layout
+//! substitutions (`%{lib-dir}`, `%{include-dir}`, `%{gdb}`) are out of
+//! scope: [`check`] names which one a test needs.
 
 use std::path::Path;
 
@@ -209,7 +210,7 @@ fn join(words: &[String]) -> String {
 }
 
 /// `w` as one shell word: unchanged when it has no shell metacharacter.
-fn quote(w: &str) -> String {
+pub fn quote(w: &str) -> String {
     let plain = !w.is_empty()
         && w.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_=+./:,@%^".contains(&b));
     if plain { w.to_owned() } else { format!("'{}'", w.replace('\'', r"'\''")) }

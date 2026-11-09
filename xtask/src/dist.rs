@@ -332,9 +332,84 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The documents installed in `share/doc/kiln/`, relative to the checkout.
-pub const DOCS: &[&str] =
-    &["README.md", "LICENSE-APACHE", "LICENSE-MIT", "docs/COMPATIBILITY.md", "docs/STABILITY.md"];
+/// The documents installed flat in `share/doc/kiln/`, relative to the
+/// checkout. [`install_doc`] rewrites their links for that layout.
+pub const DOCS: &[&str] = &[
+    "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+    "docs/COMPATIBILITY.md",
+    "docs/KNOWN_ISSUES.md",
+    "docs/STABILITY.md",
+    "docs/USER_GUIDE.md",
+];
+
+/// The source repository, for links to files the archive does not ship.
+const REPO: &str = "https://github.com/christopherfretz/kiln";
+
+/// The checkout file `rel` (one of [`DOCS`]) as installed: a Markdown
+/// document gets [`rewrite_links`], anything else is copied as is.
+fn install_doc(root: &Path, rel: &str, doc: &Path) -> Result<(), String> {
+    let from = root.join(rel);
+    let to = doc.join(from.file_name().unwrap_or_default());
+    if Path::new(rel).extension().is_none_or(|e| e != "md") {
+        return copy_file(&from, &to, 0o644);
+    }
+    let text = std::fs::read_to_string(&from).map_err(io_err("read", &from))?;
+    let out = rewrite_links(root, rel, &text, VERSION)?;
+    std::fs::write(&to, out).map_err(io_err("write", &to))?;
+    set_mode(&to, 0o644)
+}
+
+/// `text`, the checkout document `src` (relative to `root`), with each
+/// relative link (`crate::doclinks::links`) retargeted for the flat
+/// `share/doc/kiln/` layout: a link to another of [`DOCS`] becomes its
+/// file name, a link to any other checkout file or directory becomes its
+/// [`REPO`] URL at the release tag `v<version>` (`raw/` for an HTML
+/// `src=`, `tree/` for a directory, `blob/` otherwise). Anchors are kept;
+/// URLs and `#anchor` links are left alone. A link to a path the checkout
+/// does not have is an error.
+pub fn rewrite_links(root: &Path, src: &str, text: &str, version: &str) -> Result<String, String> {
+    use crate::doclinks::{is_external, links, resolve, split_anchor};
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for r in links(text) {
+        let target = &text[r.clone()];
+        let (path, anchor) = split_anchor(target);
+        if is_external(target) || path.is_empty() {
+            continue;
+        }
+        let Some(abs) = resolve(src, path) else {
+            return Err(format!("{src}: link {target} leaves the checkout"));
+        };
+        let on_disk = root.join(&abs);
+        if !on_disk.exists() {
+            return Err(format!("{src}: link {target} names a missing {abs}"));
+        }
+        let anchor = anchor.map_or(String::new(), |a| format!("#{a}"));
+        let new = if DOCS.contains(&abs.as_str()) {
+            let base = abs.rsplit('/').next().unwrap_or(&abs);
+            format!("{base}{anchor}")
+        } else {
+            let kind = if text[..r.start].ends_with("src=\"") {
+                "raw"
+            } else if on_disk.is_dir() {
+                "tree"
+            } else {
+                "blob"
+            };
+            format!("{REPO}/{kind}/v{version}/{abs}{anchor}")
+        };
+        out.push_str(&text[last..r.start]);
+        out.push_str(&new);
+        last = r.end;
+    }
+    out.push_str(&text[last..]);
+    Ok(out)
+}
 
 /// Writes the install tree (spec/driver.md "Installation layout") without
 /// the `kiln` binary into `prefix`:
@@ -345,7 +420,7 @@ pub const DOCS: &[&str] =
 /// lib/kiln/<major>/include/      resource/include (builtin headers)
 /// lib/kiln/<major>/predefines/   resource/predefines/*.txt
 /// lib/kiln/<major>/share/        resource/share/*.txt (default ignorelists)
-/// share/doc/kiln/                DOCS
+/// share/doc/kiln/                DOCS, links rewritten (install_doc)
 /// ```
 ///
 /// `resource/include-paths/` and `predefines/structure.diff` are reference
@@ -392,8 +467,11 @@ pub fn assemble(root: &Path, prefix: &Path, major: &str) -> Result<(), String> {
     let doc = prefix.join("share").join("doc").join("kiln");
     mkdir(&doc)?;
     for d in DOCS {
-        let from = root.join(d);
-        copy_file(&from, &doc.join(from.file_name().unwrap_or_default()), 0o644)?;
+        install_doc(root, d, &doc)?;
+    }
+    let broken = crate::doclinks::check_tree(&doc);
+    if !broken.is_empty() {
+        return Err(format!("broken links in share/doc/kiln: {}", broken.join(", ")));
     }
     for d in [prefix, &prefix.join("lib"), &prefix.join("share"), &prefix.join("share").join("doc")]
     {
@@ -669,10 +747,15 @@ fn check_layout(prefix: &Path, triple: &str) -> Result<(), String> {
         resdir.join("include").join("stddef.h"),
         resdir.join("predefines").join(format!("{triple}.c++26.txt")),
         prefix.join("share").join("doc").join("kiln").join("STABILITY.md"),
+        prefix.join("share").join("doc").join("kiln").join("USER_GUIDE.md"),
     ] {
         if !p.is_file() {
             return Err(format!("the archive has no {}", p.display()));
         }
+    }
+    let broken = crate::doclinks::check_tree(&prefix.join("share").join("doc").join("kiln"));
+    if !broken.is_empty() {
+        return Err(format!("the archive has broken doc links: {}", broken.join(", ")));
     }
     for name in std::iter::once(&"kiln++").chain(SCAN_DEPS_NAMES) {
         let link = std::fs::read_link(bin.join(name)).map_err(io_err("read link", &bin))?;
@@ -872,9 +955,21 @@ mod tests {
             "share/doc/kiln/LICENSE-APACHE",
             "share/doc/kiln/COMPATIBILITY.md",
             "share/doc/kiln/STABILITY.md",
+            "share/doc/kiln/USER_GUIDE.md",
+            "share/doc/kiln/KNOWN_ISSUES.md",
+            "share/doc/kiln/CHANGELOG.md",
+            "share/doc/kiln/CONTRIBUTING.md",
+            "share/doc/kiln/SECURITY.md",
         ] {
             assert!(prefix.join(f).is_file(), "{f}");
         }
+        // The installed docs link only to each other or to absolute URLs
+        // (WP-1027): the README's docs/ links are flattened.
+        let doc = prefix.join("share/doc/kiln");
+        assert_eq!(crate::doclinks::check_tree(&doc), Vec::<String>::new());
+        let readme = std::fs::read_to_string(doc.join("README.md")).unwrap();
+        assert!(readme.contains("](USER_GUIDE.md"), "README links the guide flat");
+        assert!(!readme.contains("](docs/"), "README keeps a docs/ link");
         assert!(!prefix.join("lib/kiln/7/predefines/structure.diff").exists());
         assert!(!prefix.join("lib/kiln/7/include-paths").exists());
         #[cfg(unix)]
@@ -898,5 +993,26 @@ mod tests {
         sorted.sort_unstable();
         assert_eq!(names, sorted);
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn rewrites_links_for_the_flat_layout() {
+        let root = util::repo_root();
+        let t = "[g](docs/USER_GUIDE.md#c-mode) [s](spec/driver.md#x) [d](spec/) [a](#top) \
+                 [u](https://x.org) <img src=\"assets/logo/kiln-banner.svg\">";
+        let r = rewrite_links(&root, "README.md", t, "1.2.3").unwrap();
+        let base = "https://github.com/christopherfretz/kiln";
+        assert_eq!(
+            r,
+            format!(
+                "[g](USER_GUIDE.md#c-mode) [s]({base}/blob/v1.2.3/spec/driver.md#x) \
+                 [d]({base}/tree/v1.2.3/spec) [a](#top) [u](https://x.org) \
+                 <img src=\"{base}/raw/v1.2.3/assets/logo/kiln-banner.svg\">"
+            )
+        );
+        let r = rewrite_links(&root, "docs/USER_GUIDE.md", "[s](../SECURITY.md)", "1").unwrap();
+        assert_eq!(r, "[s](SECURITY.md)");
+        assert!(rewrite_links(&root, "README.md", "[m](docs/NOPE.md)", "1").is_err());
+        assert!(rewrite_links(&root, "README.md", "[m](../x.md)", "1").is_err());
     }
 }

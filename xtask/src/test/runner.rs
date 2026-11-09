@@ -42,6 +42,10 @@ pub struct Config {
     /// The GCC oracle's installation prefix (`%{gcc_toolchain}`, what
     /// `--gcc-toolchain=` takes); `None` without a GCC oracle.
     pub gcc_toolchain: Option<PathBuf>,
+    /// The directory of libc++'s module sources, `std.cppm` and
+    /// `std.compat.cppm` (`%{libcxx_modules}`): what the compiler under
+    /// test, else the oracle, reports (`util::libcxx_module_dir_of`).
+    pub libcxx_modules: Option<PathBuf>,
     /// `--meta-header`: the directory of the compatibility headers that
     /// stand in for `tests/support/kiln_meta*.h` (they include the real
     /// `<meta>`); `None` outside the header-differential mode.
@@ -222,6 +226,15 @@ impl Test<'_> {
             && spec.args.iter().any(|a| a.contains("%{gcc_toolchain}"))
         {
             let reason = "no GCC oracle, so no `%{gcc_toolchain}` (the test needs GCC's libstdc++)";
+            return Some(reason.to_owned());
+        }
+        let needs_modules = |s: &str| s.contains("%{libcxx_modules}");
+        if self.cfg.libcxx_modules.is_none()
+            && (spec.args.iter().any(|a| needs_modules(a))
+                || spec.modules.iter().any(|(_, p)| needs_modules(&p.to_string_lossy())))
+        {
+            let reason = "no libc++ module sources, so no `%{libcxx_modules}` (neither the \
+                          compiler nor the oracle has a libc++.modules.json)";
             return Some(reason.to_owned());
         }
         if self.cfg.meta_header.is_some() {
@@ -513,6 +526,7 @@ impl Test<'_> {
         out: Option<&Path>,
     ) -> Command {
         let mut c = Command::new(program);
+        crate::util::isolate_caches(&mut c);
         c.current_dir(&self.cfg.root);
         if self.is_kiln(program) {
             c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
@@ -554,6 +568,8 @@ impl Test<'_> {
 
     /// The `module:` source of `path` (relative to the test's directory).
     fn module_source(&self, path: &Path) -> PathBuf {
+        // A `%{libcxx_modules}` path is absolute once substituted.
+        let path = directives::substitute(&path.to_string_lossy(), |n| self.placeholder(n));
         self.case.path.parent().unwrap_or(&self.cfg.root).join(path)
     }
 
@@ -647,6 +663,7 @@ impl Test<'_> {
             };
             let mut steps = Vec::new();
             let mut c = Command::new(program);
+            crate::util::isolate_caches(&mut c);
             base(&mut c);
             if kiln && objects {
                 let mut f = std::ffi::OsString::from("-fmodule-output=");
@@ -658,6 +675,7 @@ impl Test<'_> {
                 steps.push(c);
                 if objects {
                     let mut c = Command::new(program);
+                    crate::util::isolate_caches(&mut c);
                     base(&mut c);
                     c.arg("-c").arg(&bmi).arg("-o").arg(&obj);
                     steps.push(c);
@@ -706,6 +724,7 @@ impl Test<'_> {
             let src = self.module_source(unit);
             let obj = self.unit_object(&format!("unit{i}"), oracle);
             let mut c = Command::new(program);
+            crate::util::isolate_caches(&mut c);
             c.current_dir(&self.cfg.root);
             if self.is_kiln(program) {
                 c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
@@ -774,6 +793,7 @@ impl Test<'_> {
     fn placeholder(&self, name: &str) -> Option<String> {
         let path = match name {
             "gcc_toolchain" => self.cfg.gcc_toolchain.clone()?,
+            "libcxx_modules" => self.cfg.libcxx_modules.clone()?,
             "repo_root" => self.cfg.root.clone(),
             "resource_dir" => self.cfg.root.join("resource"),
             "test_dir" => self.case.path.parent()?.to_path_buf(),

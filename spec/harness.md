@@ -101,7 +101,7 @@ directives are also ERRORs.
 | `requires: clang>=X[.Y[.Z]]` | Run only when every clang the test runs is at least version `X.Y.Z` (missing components are 0). The clangs the test runs are the compiler under test when its kind is clang, and the oracle when its kind is clang and the test compares with it (`oracle` in effect, or `layout`/`vtables`/`ir`, and an oracle configured). The version is the `X.Y.Z` after `clang version ` in the `--version` line; a clang whose version cannot be read never meets the requirement. Otherwise **SKIP** with the reason `requires clang>=X.Y.Z; the compiler is clang <version>` (or `the oracle is ...`; `... names no clang version` when it cannot be read). With no clang involved (kiln without an oracle, or a non-clang oracle) the requirement is met. For tests that a known defect of an older clang breaks (docs/VALIDATION.md, known oracle defects; WP-239). |
 | `requires: clang<X[.Y[.Z]]` | The complement: run only when every clang the test runs is OLDER than `X.Y.Z`; same clangs, same version reading (an unreadable version never meets it), and the SKIP reason `requires clang<X.Y.Z; the oracle is clang <version>`. Both bounds may appear (the lower is reported first). For an expectation a later clang release changed and kiln has not followed yet — the oracle-switch residual (docs/status/wp-184-oracle-switch.md); kiln alone (no clang run) still runs the test. WP-355. |
 | `min-oracle: N` | Run only when every clang the test runs (the same clangs as `requires: clang>=`) is release `N` or later (`N` a positive major version); otherwise **SKIP** with the reason `min-oracle N; the compiler is clang <version>`. The line `crates/kiln_codegen/tests/ir_vs_clang.rs` reads for an IR case that follows a newer clang where an older one differs (that test compares such a case only under oracle `N` or later); kiln alone (no clang run) still runs the test, at its usual `-fclang-compat`. WP-405. |
-| `module: <name>=<path>` | A module interface (or partition) unit the test imports, `<path>` relative to the test's directory (an absolute path is an ERROR); repeatable, each `<name>` once (a partition as `M:P`), listed in dependency order. Only for `compile-ok` (not `verify`), `compile-fail`, `no-crash` and `run` tests. Single-step (the default for compile kinds): kiln gets `-fmodule-file=<name>=<source>` (it builds the unit in-process, spec/modules.md part A); clang first precompiles each unit, in order, with `<clang> -std=<std> <args> <earlier units' -fmodule-file=...> --precompile -x c++-module <source> -o <scratch>/oracle-<name>.pcm` and then gets `-fmodule-file=<name>=<bmi>`. Two-step (`two-step`, and always for `run`; WP-917): kiln, too, writes module files, with `-fmodule-output=<scratch>/<name>.pcm -c -x c++-module <source> -o <scratch>/<name>.o` (`--precompile` alone when no object is needed), and gets `-fmodule-file=<name>=<scratch>/<name>.pcm`; clang compiles each `.pcm` with `-c` for its object. `:` in a name is `-` in the file name. Either way the flags follow `args` and precede the test file. A missing unit or one clang rejects is **ERROR**, one kiln rejects or crashes on **FAIL**; a compiler that is neither kiln nor clang **SKIP**s, and the GCC oracle is not run. The same lines `ir_vs_clang` reads (spec/codegen.md §6, "IR-diff corpus"). WP-405, WP-917. |
+| `module: <name>=<path>` | A module interface (or partition) unit the test imports, `<path>` relative to the test's directory (an absolute path is an ERROR; placeholders apply, so `std=%{libcxx_modules}/std.cppm` names libc++'s module source, WP-984); repeatable, each `<name>` once (a partition as `M:P`), listed in dependency order. Only for `compile-ok` (not `verify`), `compile-fail`, `no-crash` and `run` tests. Single-step (the default for compile kinds): kiln gets `-fmodule-file=<name>=<source>` (it builds the unit in-process, spec/modules.md part A); clang first precompiles each unit, in order, with `<clang> -std=<std> <args> <earlier units' -fmodule-file=...> --precompile -x c++-module <source> -o <scratch>/oracle-<name>.pcm` and then gets `-fmodule-file=<name>=<bmi>`. Two-step (`two-step`, and always for `run`; WP-917): kiln, too, writes module files, with `-fmodule-output=<scratch>/<name>.pcm -c -x c++-module <source> -o <scratch>/<name>.o` (`--precompile` alone when no object is needed), and gets `-fmodule-file=<name>=<scratch>/<name>.pcm`; clang compiles each `.pcm` with `-c` for its object. `:` in a name is `-` in the file name. Either way the flags follow `args` and precede the test file. A missing unit or one clang rejects is **ERROR**, one kiln rejects or crashes on **FAIL**; a compiler that is neither kiln nor clang **SKIP**s, and the GCC oracle is not run. The same lines `ir_vs_clang` reads (spec/codegen.md §6, "IR-diff corpus"). WP-405, WP-917. |
 | `unit: <path>` | A further translation unit of a `run` test (an implementation unit, or a plain unit that imports the modules), `<path>` relative to the test's directory; repeatable. Each is compiled with `-c` after the test file, with the `module:` flags, to `<scratch>/[oracle-]unit<N>.o`; the program links the modules' objects, the units' and the test's (`-Qunused-arguments <args> <objects> -o ...`). The diags compared are the test file's compile's; a failing module, unit or link step fails the test (kiln) or makes it ERROR (oracle). WP-917. |
 | `two-step` | No value. Compile kinds with `module:` lines only (a `run` test is always two-step; anything else is an ERROR): kiln compiles the units to module files and imports those instead of the sources, so the test exercises the module file reader (spec/modules.md §11). WP-917. |
 | `pch: <path>` | A precompiled-header test (WP-1023): `compile-ok`, `compile-fail` and `run` only (anything else is an ERROR), at most once, `<path>` relative to the test's directory. Before anything else the compiler under test, and a clang (or kiln) oracle, each build `<program> -std=<std> [-fclang-compat=N] <args> -x c++-header <path> -o <scratch>/[oracle-]test.pch` (`-x c-header` for C); the test file's compile then adds `-include-pch <that file>` after the `module:` flags (`unit:` files do not get it). A producer the compiler under test rejects FAILs the test (so `xfail` applies); one the oracle rejects, or a missing header, is an ERROR. Needs kiln or clang as the compiler (else SKIP); no GCC comparison. The two steps are clang's own PCH workflow, so the oracle checks the same build shape kiln does. |
@@ -116,17 +116,24 @@ at most once; `oven` at most once per
 location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
 
-**Placeholders.** An `args:` flag may contain `%{name}`, replaced when the
-command is built:
+**Placeholders.** An `args:` flag or a `module:` path may contain
+`%{name}`, replaced when the command is built:
 
 | Placeholder | Value |
 |---|---|
 | `%{gcc_toolchain}` | The GCC oracle's install prefix (absolute; what `--gcc-toolchain=` expects): `<gcc> -print-search-dirs`'s `install:` directory four components up (`<prefix>/lib/gcc/<triple>/<version>/`), when that is a directory. Without one (no GCC configured, or a GCC whose prefix cannot be found) a test whose `args` name it is a **SKIP** (`no GCC oracle, so no %{gcc_toolchain} (the test needs GCC's libstdc++)`). For tests that compile against libstdc++ 16.1's real `<meta>` (`args: -freflection --gcc-toolchain=%{gcc_toolchain}` with `oracle: gcc`; WP-484); CI's GCC image gives `/usr/local`. |
+| `%{libcxx_modules}` | The directory of libc++'s `std.cppm` and `std.compat.cppm` (absolute), from the `source-path` of the `libc++.modules.json` that `<compiler> -stdlib=libc++ -print-file-name=libc++.modules.json` prints. When that prints only the bare name, as clang++-22 without its own libc++ does, the fallback is the `*/c++/v1` directory of the `-stdlib=libc++ -E -v` search list, made canonical, then `<prefix>/lib/libc++.modules.json`. The tested compiler is asked first, then the oracle. Without one, a test that names it is a **SKIP** (`no libc++ module sources, so no %{libcxx_modules} ...`). For `import std;` tests that clang runs two-step (`module: std=%{libcxx_modules}/std.cppm`, WP-984); with libc++ 19 it is `/usr/lib/llvm-19/share/libc++/v1`. |
 | `%{repo_root}` | The repo root (absolute). |
 | `%{resource_dir}` | `<repo_root>/resource`, kiln's resource directory (the directory that contains `include/`, which is what `-resource-dir` expects). |
 | `%{test_dir}` | The directory containing the test (absolute). |
 
 An unknown name or a `%{` without a closing `}` is an ERROR at parse time.
+
+**Caches.** Every compiler the suites run (`cargo xtask test`,
+`external`, `libcxx`, and the commands of a libc++ `.sh.cpp` test) gets
+`XDG_CACHE_HOME=<target>/xdg-cache`. So kiln's `std` module cache
+(spec/driver.md "Module cache") is shared by the runs and never writes
+to the user's `~/.cache` (`util::isolate_caches`, WP-984).
 There is no escape for a literal `%{`. Values are absolute paths, so a
 `pp-linemarkers` test whose golden must not depend on the checkout location
 should name include directories repo-relative instead (cwd is the repo root).
@@ -1202,7 +1209,21 @@ release; a run of `cargo xtask dist --check` locally is the pre-tag check.
    `bin/kiln++ -> kiln`, `lib/kiln/<major>/include/` (all of
    `resource/include`), `lib/kiln/<major>/predefines/*.txt`,
    `share/doc/kiln/` (`dist::DOCS`); directories 0755, files 0644, the
-   binary 0755.
+   binary 0755. The docs install flat (WP-1027): `README.md`,
+   `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, the two licenses and
+   `docs/{COMPATIBILITY,KNOWN_ISSUES,STABILITY,USER_GUIDE}.md` all land in
+   `share/doc/kiln/`. Each Markdown file's relative links
+   (`[t](target)`, `![a](target)`, HTML `src="..."`/`href="..."`, outside
+   code; `xtask/src/doclinks.rs`) are rewritten by
+   `dist::rewrite_links`: a link to another shipped doc becomes its file
+   name (anchor kept), a link to any other checkout path becomes
+   `https://github.com/christopherfretz/kiln/{blob,tree,raw}/v<version>/<path>`
+   (`raw` for `src=`, `tree` for a directory), and a link to a path the
+   checkout lacks fails the step. Then `doclinks::check_tree` checks the
+   installed tree: every relative link names a file in it, and every
+   `#anchor` is a heading slug (GitHub's rule: lower case, punctuation
+   but `-`/`_` dropped, spaces as `-`, repeats numbered `-1`, `-2`, ...)
+   or an HTML `id`/`name` of the target; a broken link fails the step.
 4. **Archive** (`dist::tar_xz`), into `--out` (default
    `<target-dir>/kiln-dist`): `kiln-<version>-<triple>.tar.xz` with the
    stripped binary and `kiln-<version>-<triple>-symbols.tar.xz` with the
@@ -1217,7 +1238,8 @@ release; a run of `cargo xtask dist --check` locally is the pre-tag check.
    `<out>` is outside it, else the system temporary directory), with
    every `KILN_*` variable removed from the environment and the
    extracted `bin/` first on `PATH`:
-   - the layout (step 3) is there and `bin/kiln++` links to `kiln`;
+   - the layout (step 3) is there, `bin/kiln++` links to `kiln`, and
+     the doc link check (step 3) passes on the extracted tree;
    - `kiln++ --version` names the version;
    - `-print-resource-dir` through `PATH`, `bin/kiln` and a symlink to
      `bin/kiln++` from elsewhere prints `<prefix>/lib/kiln/<major>`;
@@ -1237,7 +1259,9 @@ release; a run of `cargo xtask dist --check` locally is the pre-tag check.
 
    The directories are removed afterwards unless `--keep`. Tests:
    `xtask/src/dist.rs` `tests` (options, the CRC, the path scan, the
-   layout and a byte-identical re-archive) run in `cargo test`; the build
+   layout with the installed docs' link check, the link rewriting, and a
+   byte-identical re-archive) and `xtask/src/doclinks.rs` `tests` run in
+   `cargo test`; the build
    and `--check` run in release.yml and by hand.
 
 ## Feature table

@@ -120,9 +120,10 @@ impl PpCompare {
     }
 }
 
-/// The `%{name}` placeholders `args:` may use, substituted by the runner
-/// (`spec/harness.md` "Placeholders").
-pub const PLACEHOLDERS: &[&str] = &["gcc_toolchain", "repo_root", "resource_dir", "test_dir"];
+/// The `%{name}` placeholders `args:` (and `module:` paths) may use,
+/// substituted by the runner (`spec/harness.md` "Placeholders").
+pub const PLACEHOLDERS: &[&str] =
+    &["gcc_toolchain", "libcxx_modules", "repo_root", "resource_dir", "test_dir"];
 
 /// Checks that every `%{...}` in `arg` names a known placeholder.
 fn check_placeholders(arg: &str) -> Result<(), String> {
@@ -979,6 +980,8 @@ impl Parser {
             self.err(line, "expected `module: <name>=<path>`");
         } else if Path::new(path).is_absolute() {
             self.err(line, "a `module` path is relative to the test's directory");
+        } else if let Err(e) = check_placeholders(path) {
+            self.err(line, e);
         } else if self.modules.iter().any(|(n, _)| n == name) {
             self.err(line, format!("duplicate `module` `{name}`"));
         } else {
