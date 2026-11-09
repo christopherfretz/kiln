@@ -1149,8 +1149,12 @@ structurally, by naming its reflectee (`kiln_abi/src/mangle/reflect.rs`). It
 follows GCC 16.1's `write_reflection` (the cxx-abi issue #208 proposal) kind
 for kind. Equal reflections in two TUs give the same string, so the
 specialization keeps its ordinary linkage. The driver flag
-`-fkiln-reflection-mangling=<kiln|gcc|kiln-hashed>` (spec/driver.md) picks
-the spelling; the default is `kiln`.
+`-fkiln-reflection-mangling=<gcc|kiln|kiln-hashed>` (spec/driver.md) picks
+the spelling; the default is `gcc` (WP-909, the operator's 1.0 decision
+on WP-879's study below), link-compatible with g++-16. `kiln` and
+`kiln-hashed` are experimental opt-ins (docs/STABILITY.md). The PCH and
+module-file option fingerprints record the effective form, so a unit
+built without the flag matches a consumer built without it.
 
 - **Grammar.**
 

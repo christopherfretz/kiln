@@ -744,7 +744,7 @@ impl Default for CodegenOptions {
             tune_cpu: None,
             no_inline: false,
             code_model: None,
-            reflection_mangling: kiln_abi::ReflectionMangling::Kiln,
+            reflection_mangling: kiln_abi::ReflectionMangling::Gcc,
             outline_expansions: OUTLINE_EXPANSIONS_DEFAULT,
             contract_default_handler: true,
             cxx_modules: true,
