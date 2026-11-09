@@ -170,7 +170,8 @@ pub struct StmtNode {
 }
 
 impl StmtNode {
-    pub(crate) const fn new(kind: StmtKind, aux: u16, loc: Loc, a: u32, b: u32) -> Self {
+    /// A header (the builder; the module image's loader).
+    pub const fn new(kind: StmtKind, aux: u16, loc: Loc, a: u32, b: u32) -> Self {
         StmtNode { kind, flags: 0, aux, loc, a, b }
     }
     /// The kind.
@@ -573,7 +574,8 @@ impl StmtArena {
         &self.nodes[s.index() as usize]
     }
 
-    pub(crate) fn push(&mut self, n: StmtNode) -> StmtId {
+    /// Appends a record (the builder; the module image's loader).
+    pub fn push(&mut self, n: StmtNode) -> StmtId {
         let id = StmtId::new(self.nodes.len() as u32);
         self.nodes.push(n);
         id
@@ -582,19 +584,24 @@ impl StmtArena {
         assert_eq!(self.get(s).kind, StmtKind::ReturnStmt, "not a ReturnStmt");
         self.nodes[s.index() as usize].b = 0;
     }
-    pub(crate) fn push_if(&mut self, x: IfData) -> u32 {
+    /// Appends a record (the builder; the module image's loader).
+    pub fn push_if(&mut self, x: IfData) -> u32 {
         push_side(&mut self.ifs, x)
     }
-    pub(crate) fn push_switch(&mut self, x: SwitchData) -> u32 {
+    /// Appends a record (the builder; the module image's loader).
+    pub fn push_switch(&mut self, x: SwitchData) -> u32 {
         push_side(&mut self.switches, x)
     }
-    pub(crate) fn push_case(&mut self, x: CaseData) -> u32 {
+    /// Appends a record (the builder; the module image's loader).
+    pub fn push_case(&mut self, x: CaseData) -> u32 {
         push_side(&mut self.cases, x)
     }
-    pub(crate) fn push_loop(&mut self, x: LoopData) -> u32 {
+    /// Appends a record (the builder; the module image's loader).
+    pub fn push_loop(&mut self, x: LoopData) -> u32 {
         push_side(&mut self.loops, x)
     }
-    pub(crate) fn push_range_for(&mut self, x: RangeForData) -> u32 {
+    /// Appends a record (the builder; the module image's loader).
+    pub fn push_range_for(&mut self, x: RangeForData) -> u32 {
         push_side(&mut self.range_fors, x)
     }
     pub(crate) fn push_expansion(&mut self, x: ExpansionData) -> u32 {
