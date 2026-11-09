@@ -667,7 +667,18 @@ impl Substituter<'_, '_, '_> {
             _ => self.param_infos(d),
         };
         let method = friend.is_none() && self.sema.kind_of(d) == DeclKind::CXXMethod;
-        let lazy_exc = self.sema.lazy_exc_spec(d, p);
+        // A local class member's waits for the outermost local class
+        // (`LocalLate::ExcSpec`, WP-905).
+        let lazy_exc = self.sema.lazy_exc_spec(d, p)
+            || (friend.is_none()
+                && self.defers_to_local_late(d)
+                && matches!(
+                    self.sema.ast.types.exc_spec(p),
+                    kiln_ast::types::ExcSpec::NoexceptExpr {
+                        value: kiln_ast::types::NoexceptValue::Dependent(_),
+                        ..
+                    }
+                ));
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
         let sig = params.and_then(|params| {
             let ret = match early_ret {
@@ -886,7 +897,17 @@ impl Substituter<'_, '_, '_> {
         {
             self.sema.check_this_in_static_exception_spec(expr);
         }
-        if lazy_exc {
+        // A local class member's is substituted with the outermost local
+        // class's complete-class contexts; meanwhile it is unparsed, as
+        // the parser leaves one (spec/sema-templates.md §4.4, WP-905).
+        let local_exc = lazy_exc && friend.is_none() && self.defers_to_local_late(f);
+        if local_exc {
+            if let Some(ty) = self.sema.ast.decls.get(f).ty() {
+                let t = self.sema.with_exc_spec(ty, kiln_ast::types::ExcSpec::Deferred(f));
+                self.sema.ast.decls.set_ty(f, t);
+                self.sema.unparsed_exc.insert(f);
+            }
+        } else if lazy_exc {
             let first = self.sema.ast.first(f);
             if first == f {
                 self.sema.uninstantiated_exc.insert(first, d);
@@ -924,6 +945,9 @@ impl Substituter<'_, '_, '_> {
                 .mark_function(f, kiln_ast::decl::FnSpec::new().with_implicit_inline(true));
         }
         self.defer_default_args(d, f);
+        if local_exc {
+            self.push_local_late(super::local::LocalLate::ExcSpec { pat: d, f });
+        }
         // `= delete` / `= default` on the pattern's declaration: declared
         // again on the instantiation, where its checks run with the class
         // (clang `InstantiateFunctionDeclaration` → `SetDeclDeleted` /
@@ -1176,7 +1200,11 @@ impl Substituter<'_, '_, '_> {
     /// [`Self::defer_default_args`] without the refresh.
     fn defer_default_args_to(&mut self, pat: DeclId, f: DeclId) {
         if self.sema.decl_in_local_scope(f) {
-            self.default_args(pat, f);
+            if self.defers_to_local_late(f) {
+                self.defer_local_default_args(pat, f);
+            } else {
+                self.default_args(pat, f);
+            }
             return;
         }
         let params = |s: &Self, x: DeclId| -> Vec<DeclId> {
@@ -1223,6 +1251,43 @@ impl Substituter<'_, '_, '_> {
             };
             self.sema.ast.decls.mark_default_arg_pending(b);
             self.sema.inst.lazy_defaults.insert(b, src);
+        }
+    }
+
+    /// The default arguments of local class member `f` (from pattern
+    /// `pat`) wait for the outermost local class's completion
+    /// (`LocalLate::DefaultArgs`): each parameter that will have one is
+    /// pending meanwhile, as the parser leaves an unparsed one, so a use
+    /// before is diagnosed ([class.mem.general]/7, WP-905).
+    fn defer_local_default_args(&mut self, pat: DeclId, f: DeclId) {
+        let params = |s: &Self, x: DeclId| -> Vec<DeclId> {
+            s.sema
+                .ast
+                .decls
+                .function(x)
+                .map(|fd| s.sema.ast.lists.iter::<DeclId>(fd.params).collect())
+                .unwrap_or_default()
+        };
+        let (pp, fp) = (params(self, pat), params(self, f));
+        if pp.len() != fp.len() {
+            self.default_args(pat, f);
+            return;
+        }
+        let mut any = false;
+        for (a, b) in pp.into_iter().zip(fp) {
+            let Some(def) = self.sema.ast.decls.param(a).and_then(|x| x.default_arg) else {
+                continue;
+            };
+            if self.sema.ast.exprs.get(def).kind() == kiln_ast::expr::ExprKind::CXXDefaultArgExpr {
+                continue;
+            }
+            let at = self.sema.ast.exprs.get(def).loc();
+            self.sema.ast.decls.mark_default_arg_pending(b);
+            self.sema.unparsed_default_args.insert(b, at);
+            any = true;
+        }
+        if any {
+            self.push_local_late(super::local::LocalLate::DefaultArgs { pat, f });
         }
     }
 
