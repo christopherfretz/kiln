@@ -1094,6 +1094,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1065 | modules image S3: classes (kiln_sema bmi_image.rs:1314 kind_gate) | WP-1048 | in progress |
 | WP-1119 | modules image: carry WP-1109 NONTRIVIAL_* bits 57-61 and FnSpec::not_selected | WP-1065 | done |
 | WP-1066 | modules image S4: templates as patterns (kiln_sema bmi_image.rs:1293) | WP-1048 | in progress |
+| WP-1139 | modules image S4 second slice: specialization reference records and class templates (kiln_sema bmi_image*) | WP-1066 | in progress |
 | WP-1067 | modules image S5: global module fragment with ODR merging (WP-460 semantics) replacing the name gate (bmi_image.rs:1251, kiln_pp modules.rs:739) | WP-1048 | open |
 | WP-1068 | modules image S6: imports, re-exports and partitions (bmi_image.rs:1224) | WP-1048 | open |
 | WP-1069 | modules image S-lazy: lazy top-level lookup instead of eager build; needs mutable lookup path (kiln_parse modules.rs:121, bmi_image.rs:1383) | WP-1048 | open |
