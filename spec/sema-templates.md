@@ -2538,11 +2538,38 @@ reports a dropped statement or part.
   from a static member ([class.friend]/6), and it is not recorded as a
   member instantiated from the friend pattern, so the member keeps its
   own pattern and definition (WP-1071;
-  `class.friend/friend-member-of-specialization-run.cpp`). Gap: a
-  non-template class's member befriended with a dependent type
-  (`friend int B::f(W<T>&);`) is rejected at definition ("does not match
-  any declaration in 'B'"; xfail
-  `class.friend/friend-member-dependent-signature-run.cpp`).
+  `class.friend/friend-member-of-specialization-run.cpp`).
+- A method friend whose declarator depends on the enclosing templates
+  (its own template head, its type, or its nested-name-specifier:
+  `friend int B::f(W<T>&);`, `template<class U> friend int
+  B<T>::g(U, W<T>&);`, `friend int C<T>::f(V<X, T>&);` in `V<X, T>`) and
+  that no member found at definition matches is matched when the class is
+  instantiated (WP-1110; `Sema::defers_method_friend`, decl.rs). A
+  dependent nested-name-specifier (`B<T>::`, or `C<T>::` resolving to the
+  class template itself) always defers: the primary pattern's members are
+  not those of every specialization it names, and its parameters alias
+  the enclosing class's. A friend member template whose specifier names
+  none of its head's parameters keeps that head as its own
+  (`Sema::friend_head_is_own`, class/member_friend.rs) instead of giving
+  it to the qualifier's class template. The deferred friend
+  redeclares nothing in the pattern, without a diagnostic, and records
+  its qualifier (`friend_qualifiers`), plus the written specifier when
+  that is dependent (`friend_qualifier_nns`). Each instantiation declares
+  it with the class the substituted specifier names
+  (`Substituter::nns_context`, templ/subst/decls.rs `function_decl`), so
+  it is matched there against the members with the substituted signature
+  ([temp.friend]/1, [class.friend]/10, [temp.res.general]/3), and a
+  specialization matching none is diagnosed with its instantiation note
+  ("friend declaration of 'f' does not match any declaration in 'B'";
+  clang adds a candidate note kiln does not). A member of the current
+  instantiation (the qualifier encloses the class), a name that finds
+  nothing or finds something other than functions, and a friend whose
+  declarator is not dependent are still matched (and diagnosed) at
+  definition, as clang does; a friend matched at definition keeps the
+  WP-1071 path above (`class.friend/friend-member-dependent-signature-run.cpp`,
+  `friend-member-template-of-specialization-run.cpp`,
+  `friend-member-deferred-variants-run.cpp`,
+  `friend-member-dependent-mismatch-at-instantiation.cpp`).
 - A friend class (`friend class B<T>;`) is substituted and grants access
   (S3C). A dependent friend specialization (`friend struct X<T>;`,
   `friend class Y<T*>;`, `friend class ns::Z<T...>;`) is kept in the
@@ -2599,8 +2626,17 @@ reports a dropped statement or part.
     specialization matches as its arguments do: `A<T *>::Member` names
     `A<int *>::Member`, not `A<int>::Member`). For a function the
     deduced arguments are substituted into the declared type, which must
-    be `e`'s type ([temp.over.link]); a member function template's type
-    is not compared (its own head would have to be matched too). The
+    be `e`'s type ([temp.over.link]). A friend with a member template
+    head (`template<class T> template<class V> friend int A<T>::h(const
+    B&);`) befriends only a member function template, and a friend
+    without one only a non-template member ([temp.over.link]/4). The
+    member template's head must be equivalent to the friend's
+    ([temp.over.link]/6: same length, parameter kinds and packs,
+    non-type parameter types after the outer substitution, template
+    template parameter heads; requires-clauses and type-constraints are
+    not compared), and the friend's type, with its head's parameters
+    renamed to the member template's, must be the member template
+    pattern's type (`member_friend_heads_match`; WP-1098). The
     answer is cached per (friend, member). A member of a class
     template's pattern or of a partial specialization (no specialization
     arguments yet) is a speculative friend: the check is recorded and
@@ -2617,10 +2653,25 @@ reports a dropped statement or part.
     the program reads a member clang should have denied: a sibling member
     (`A<T>::Other`), another class's `Member`, a non-matching
     specialization or function type (g++ denies these too;
-    `temp.friend/dependent-member-friend-denied.cpp`, `skip(clang)`).
+    `temp.friend/dependent-member-friend-denied.cpp`, and a member
+    template whose head or type differs,
+    `dependent-member-friend-template-head-denied.cpp`, `skip(clang)`).
     Where clang accepts a declaration form, kiln follows it: the nested
     path `A<T>::X::Y`, a member function template, and any class-key
     (the befriended member's tag kind is not checked).
+  - Kind (WP-1099): when the template's primary pattern is defined and
+    declares the befriended name (directly, no member-class path) only as
+    an entity of another kind — a function or variable for a class
+    friend, a class or variable for a function friend — the friend is
+    ill-formed: "redefinition of 'Member' as different kind of symbol"
+    with "previous definition is here" at the member, clang's wording for
+    a member of the current instantiation
+    (`member_friend_kind_mismatch`). clang accepts the form with
+    `-Wunsupported-friend`; g++ rejects it. The friend declaration is
+    invalid and registered nowhere (no `-Wunsupported-friend` warning).
+    Explicit and partial specializations are not consulted
+    (`temp.friend/dependent-member-friend-kind-mismatch.cpp`,
+    `skip(clang)`).
   - Diagnostic: clang's `-Wunsupported-friend` (`sema_unsupported_friend`)
     once per declaration in its pattern, never per instantiation, at the
     befriended name: "dependent nested name specifier 'A<T>' for friend

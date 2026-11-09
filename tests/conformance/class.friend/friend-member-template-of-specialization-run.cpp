@@ -1,9 +1,8 @@
 // [class.friend]/10, [temp.friend]/1: `template <class U> friend int
 // B<T>::g(U, W<T>&);` in a class template befriends the member template g
 // of whichever specialization `B<A>` names (primary or explicit). clang and
-// g++ print 42 43.
+// g++ print 42 43 (matched at instantiation, WP-1110).
 //@ expect: run
-//@ xfail(kiln): WP-1071 follow-up, a friend member template of a dependent specialization is matched at definition ("does not match any declaration in 'B<T>'")
 //@ stdout: 42 43
 #include <cstdio>
 template <class T> class W;
