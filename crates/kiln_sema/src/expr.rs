@@ -649,6 +649,9 @@ impl Sema<'_, '_> {
         // clang never completes an `ExprError` (a failed list
         // initialization, [`Sema::is_expr_error`]).
         if !self.is_expr_error(e) {
+            // [expr.const]/16: each immediate invocation is evaluated
+            // once, before the checks below fold `e` (WP-1129).
+            self.evaluate_immediates_early(e);
             self.check_implicit_conversions(e, cc);
             // clang `CheckCompletedExpr`: not for a `constexpr`
             // variable's initializer (its evaluation reports it).
