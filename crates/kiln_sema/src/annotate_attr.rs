@@ -108,10 +108,12 @@ impl Sema<'_, '_> {
 
     /// clang `ConstantFoldAttrArgs`: unless one of `args` is
     /// value-dependent (checked at instantiation), each is converted as
-    /// a function argument would be (decay, lvalue-to-rvalue; arrays are
-    /// kept) and is a constant expression, else `{shown} attribute
-    /// requires parameter N to be a constant expression` with the
-    /// evaluation's notes, and None (the attribute is dropped).
+    /// a function argument would be (array/function decay,
+    /// lvalue-to-rvalue) and is a constant expression, else `{shown}
+    /// attribute requires parameter N to be a constant expression` with
+    /// the evaluation's notes, and None (the attribute is dropped). Each
+    /// converted argument is wrapped in a `ConstantExpr` holding its
+    /// value, which codegen lowers into the `.args` struct (WP-1113).
     pub(crate) fn check_annotate_args(
         &mut self,
         shown: &str,
@@ -123,8 +125,7 @@ impl Sema<'_, '_> {
         }
         let mut out = Vec::with_capacity(args.len());
         for (i, &e) in args.iter().enumerate() {
-            let t = self.ast.exprs.get(e).ty();
-            let e = if self.ast.types.is_array(t) { e } else { crate::conv::decay(self, e) };
+            let e = crate::conv::decay(self, e);
             if self.is_err_expr(e) {
                 return None;
             }
@@ -137,15 +138,21 @@ impl Sema<'_, '_> {
             } else {
                 e
             };
-            if let Err(f) = self.eval_const(probe, EvalContext::new(EvalKind::Other, at)) {
-                let msg = self
-                    .diag(DiagId::sema_attribute_param_not_constant_expr, at)
-                    .arg(format!("'{shown}'"))
-                    .arg((i + 1).to_string());
-                let msg = Self::with_failure_notes(msg, f);
-                self.emit(msg);
-                return None;
-            }
+            let v = match self.eval_const(probe, EvalContext::new(EvalKind::Other, at)) {
+                Ok(v) => v,
+                Err(f) => {
+                    let msg = self
+                        .diag(DiagId::sema_attribute_param_not_constant_expr, at)
+                        .arg(format!("'{shown}'"))
+                        .arg((i + 1).to_string());
+                    let msg = Self::with_failure_notes(msg, f);
+                    self.emit(msg);
+                    return None;
+                }
+            };
+            // A `void` argument has no value to emit (clang drops it from
+            // the `.args` struct too); keep it unwrapped.
+            let e = if probe == e { self.builder().constant_expr(e, Some(v)) } else { e };
             out.push(e);
         }
         Some(out)
