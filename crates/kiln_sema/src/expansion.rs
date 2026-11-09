@@ -635,9 +635,15 @@ impl Substituter<'_, '_, '_> {
         let r = (|| {
             let init = data.init.map(|x| self.stmt(x));
             let exprs: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(data.exprs).collect();
-            let src = match data.range_init {
-                Some(e) => ExpansionSource::Expr(self.expr(e)?),
-                None => ExpansionSource::List(self.expansion_list(&exprs)?),
+            let src = if let Some(e) = data.range_init {
+                ExpansionSource::Expr(self.expr(e)?)
+            } else {
+                // A lifetime-extending context, as when parsed
+                // (`materialize_discarded`).
+                let collect = self.sema.begin_for_range_init(true);
+                let l = self.expansion_list(&exprs);
+                let _ = self.sema.end_for_range_init(collect);
+                ExpansionSource::List(l?)
             };
             if expand {
                 return self.expand_expansion(init, src, &data, depth, loc);

@@ -1797,3 +1797,81 @@ fn debug_info_flags_reach_the_ir() {
     assert_eq!(o.code, 1);
     assert_eq!(o.stderr, "kiln++: error: '-gcodeview' is not supported by kiln\n");
 }
+
+/// spec/driver.md "Debug information flags" (WP-1138): as clang 19/22's
+/// `getDwarfVersion`, the last `-fdebug-default-version=` counts, a
+/// `-gdwarf-N` wins over it in either order, and it is read (and checked)
+/// only when DWARF is emitted.
+#[test]
+fn debug_default_version_last_wins() {
+    let src = "int f(int a) { return a; }\n";
+    let run = |flags: &[&str]| {
+        let mut args = vec!["-S", "-emit-llvm", "-o", "-", "-x", "c++"];
+        args.extend_from_slice(flags);
+        args.push("-");
+        kiln(&args, src)
+    };
+    let version = |flags: &[&str]| {
+        let o = run(flags);
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{flags:?}");
+        (1..=7).find(|v| o.stdout.contains(&format!("!{{i32 7, !\"Dwarf Version\", i32 {v}}}")))
+    };
+    let dv = |v: u32| format!("-fdebug-default-version={v}");
+    assert_eq!(version(&[&dv(3), &dv(4), "-g"]), Some(4));
+    assert_eq!(version(&[&dv(4), &dv(3), "-g"]), Some(3));
+    assert_eq!(version(&["-gdwarf-3", &dv(4)]), Some(3));
+    assert_eq!(version(&[&dv(4), "-gdwarf-3"]), Some(3));
+    assert_eq!(version(&["-gdwarf", &dv(4)]), Some(4));
+    assert_eq!(version(&[&dv(4)]), None);
+    assert_eq!(version(&[&dv(4), "-g", "-g0"]), None);
+    // Unchecked without DWARF, and only the last one is checked.
+    assert_eq!(version(&["-fdebug-default-version=7"]), None);
+    assert_eq!(version(&["-fdebug-default-version=7", &dv(4), "-g"]), Some(4));
+    let o = run(&[&dv(4), "-fdebug-default-version=7", "-g"]);
+    assert_eq!(
+        (o.code, o.stderr.as_str()),
+        (1, "kiln++: error: invalid integral value '7' in '-fdebug-default-version=7'\n")
+    );
+}
+
+/// spec/driver.md "Sanitizers" (WP-1138): as clang 19/22's
+/// `SanitizerArgs`, the `memtag` sanitizers are "unsupported option ...
+/// for target" on x86-64, by group name too, and `memtag-stack` on
+/// `AArch64` needs `+memtag` (kiln implements none of them).
+#[test]
+fn memtag_sanitizers_by_target() {
+    let errors = |target: &str, flags: &[&str]| {
+        let mut args = vec!["-fsyntax-only", "-x", "c++"];
+        let t = format!("--target={target}");
+        args.push(&t);
+        args.extend_from_slice(flags);
+        args.push("-");
+        let o = kiln(&args, "int main() {}\n");
+        assert_eq!(o.code, 1, "{flags:?}");
+        o.stderr
+    };
+    for v in ["memtag", "memtag-stack", "memtag-heap", "memtag-globals"] {
+        let f = format!("-fsanitize={v}");
+        assert_eq!(
+            errors("x86_64-linux-gnu", &[&f]),
+            format!(
+                "kiln++: error: unsupported option '{f}' for target 'x86_64-unknown-linux-gnu'\n"
+            )
+        );
+    }
+    let hw = "kiln++: error: '-fsanitize=memtag-stack' requires hardware support (+memtag). \
+              For Armv8 or Armv9, try compiling with -march=armv8a+memtag or \
+              -march=armv9a+memtag\n";
+    assert_eq!(
+        errors("aarch64-linux-gnu", &["-fsanitize=memtag-stack"]),
+        format!("kiln++: error: '-fsanitize=memtag-stack' is not supported by kiln\n{hw}")
+    );
+    assert_eq!(
+        errors("aarch64-linux-gnu", &["-march=armv8.5-a+memtag", "-fsanitize=memtag-stack"]),
+        "kiln++: error: '-fsanitize=memtag-stack' is not supported by kiln\n"
+    );
+    assert_eq!(
+        errors("aarch64-linux-gnu", &["-march=armv8.5-a", "-fsanitize=memtag-heap"]),
+        "kiln++: error: '-fsanitize=memtag-heap' is not supported by kiln\n"
+    );
+}

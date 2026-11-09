@@ -15,7 +15,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind, FriendTarget};
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{Nns, TemplateArg, TypeFlags, TypeView};
-use kiln_ast::{DeclId, NnsId, QualType};
+use kiln_ast::{DeclId, ExprId, NnsId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
@@ -42,9 +42,16 @@ pub(crate) struct MemberFriend {
     /// member template's head and type ([temp.over.link]; WP-1098).
     inner_head: bool,
     inner_list: Option<TemplateParamListId>,
-    /// The befriended member's name, and a function's declared type.
+    /// The befriended member's name, a function's declared type and its
+    /// trailing requires-clause.
     name: DeclName,
     fn_ty: Option<QualType>,
+    requires: Option<ExprId>,
+    /// For a friend instantiated with its enclosing class template, that
+    /// instantiation's arguments: the levels outside the friend's own
+    /// head in `inner_list` and `requires`, which keep the pattern's
+    /// parameters (WP-1130).
+    enclosing: Option<MultiLevelArgs>,
     /// The class template the specifier names a specialization of (first
     /// declaration), that template-id's arguments, and the member class
     /// names after it (`X` of `A<T>::X::Y`), outermost first.
@@ -204,6 +211,8 @@ impl Sema<'_, '_> {
             inner_list,
             name,
             fn_ty: None,
+            requires: None,
+            enclosing: None,
             template,
             args,
             path,
@@ -230,8 +239,12 @@ impl Sema<'_, '_> {
             return None;
         }
         let (template, args, path) = self.member_friend_shape(nns)?;
-        let (depth, params, inner_head) = self.member_friend_head(&args)?;
-        let inner_list = self.innermost_open_head_list().filter(|_| inner_head);
+        let (depth, params, written) = self.member_friend_head(&args)?;
+        // `template<class T> friend void A<T>::f(C auto);`: the invented
+        // head of an abbreviated member template is the inner one.
+        let invented = self.open_invented_head_list();
+        let inner_head = written || invented.is_some();
+        let inner_list = invented.or_else(|| self.innermost_open_head_list().filter(|_| written));
         self.take_open_heads();
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         self.templ.cur = None;
@@ -254,6 +267,8 @@ impl Sema<'_, '_> {
             inner_list,
             name,
             fn_ty,
+            requires: d.trailing_requires,
+            enclosing: None,
             template,
             args,
             path,
@@ -320,20 +335,30 @@ impl Sema<'_, '_> {
 
     /// The friend `pattern` of a class template, instantiated in the
     /// class being defined (`record`) with the substituted specifier
-    /// `nns`, target type `ty` and the friend's parameters' new `depth`.
+    /// `nns`, target type `ty` and the friend's parameters' new `depth`;
+    /// `outer` the instantiation's arguments.
     pub(crate) fn instantiate_member_friend(
         &mut self,
         pattern: &MemberFriend,
         nns: NnsId,
         ty: QualType,
-        depth: u16,
+        (depth, outer): (u16, &MultiLevelArgs),
         loc: Loc,
     ) -> Option<DeclId> {
         let record = self.current_class()?.record;
         let (template, args, path) = self.member_friend_shape(nns)?;
         let fd = self.builder().friend(record, loc, FriendTarget::Type { ty, owned_tag: None });
         let fn_ty = pattern.fn_ty.map(|_| ty);
-        let mf = MemberFriend { nns, depth, fn_ty, template, args, path, ..pattern.clone() };
+        // The head and requires-clause keep the pattern's levels: the
+        // arguments of every level outside the friend's own head, when
+        // this instantiation substitutes them all (else the constraints
+        // are not compared, `member_friend_constraints_match`).
+        let enclosing = (pattern.enclosing.is_none()
+            && outer.depth() == usize::from(pattern.depth)
+            && outer.substituted() == outer.depth())
+        .then(|| outer.clone());
+        let mf =
+            MemberFriend { nns, depth, fn_ty, enclosing, template, args, path, ..pattern.clone() };
         self.register_member_friend(fd, mf);
         Some(fd)
     }
@@ -454,6 +479,11 @@ impl Sema<'_, '_> {
             let deduced = s.ast.types.arg_list(&d.args);
             let mut levels = Self::outer_levels(mf.template, mf.depth);
             levels.push(deduced, mf.template, LevelMode::Substitute);
+            // The levels outside the friend's member template head as
+            // written (an instantiated friend's keep its class's).
+            let mut head_levels =
+                mf.enclosing.clone().unwrap_or_else(|| Self::outer_levels(mf.template, mf.depth));
+            head_levels.push(deduced, mf.template, LevelMode::Substitute);
             let mut e_ty = e_ty;
             if let Some(t) = e_tmpl {
                 // The friend's own head names the member template's
@@ -464,11 +494,17 @@ impl Sema<'_, '_> {
                 else {
                     return false;
                 };
-                let Some(renamed) = s.member_friend_heads_match(inner, own, &levels, loc) else {
+                let Some(renamed) = s.member_friend_heads_match(inner, own, &head_levels, loc)
+                else {
                     return false;
                 };
+                if !s.member_friend_constraints_match(&mf, Some(t), e, &head_levels) {
+                    return false;
+                }
                 levels.push(renamed, mf.template, LevelMode::Substitute);
                 e_ty = s.pattern_of(t).and_then(|p| s.ast.decls.get(p).ty());
+            } else if !s.member_friend_constraints_match(&mf, None, e, &head_levels) {
+                return false;
             }
             let Ok(t) = Substituter::new(s, &levels).ty(fty, loc) else { return false };
             e_ty.is_some_and(|et| s.ast.types.canonical(et) == s.ast.types.canonical(t))
@@ -495,10 +531,11 @@ impl Sema<'_, '_> {
 
     /// [temp.over.link]/6: the friend's member template head `inner`
     /// (its outer levels substituted by `levels`) and the member
-    /// template's head `own` are equivalent (same length, kinds, packs,
-    /// non-type parameter types and template template parameter heads).
-    /// The member's parameters as arguments for `inner`'s level when they
-    /// are; requires-clauses and type-constraints are not compared.
+    /// template's head `own` are equivalent in their length, kinds,
+    /// packs, non-type parameter types and template template parameter
+    /// heads. The member's parameters as arguments for `inner`'s level
+    /// when they are. Type-constraints and requires-clauses are compared
+    /// by [`Sema::member_friend_constraints_match`].
     fn member_friend_heads_match(
         &mut self,
         inner: TemplateParamListId,
@@ -543,5 +580,82 @@ impl Sema<'_, '_> {
             args.push(if pack { TemplateArg::pack(self.ast.types.arg_list(&[a])) } else { a });
         }
         Some(self.ast.types.arg_list(&args))
+    }
+    /// [temp.over.link]/6-7, [basic.scope.scope]/4: the friend `mf`
+    /// names member function `e` (of member template `t`, whose head
+    /// matched the friend's inner one) only with equivalent constraints:
+    /// each template parameter's type-constraint, the head's
+    /// requires-clause and the trailing requires-clause (an overload set
+    /// `f(U)`, `f(U) requires C<U>` has two members, WP-1130). Each side
+    /// is compared substituted, as clang's `AreConstraintExpressionsEqual`
+    /// does: the friend's with `levels` (the arguments the friend's head
+    /// deduced, its member template level kept), the member's with its
+    /// class's (`member_constraints`), so both name the member template's
+    /// parameters at the same depth. A friend whose levels outside its
+    /// head are not all known (a pattern in a class template) is not
+    /// compared.
+    fn member_friend_constraints_match(
+        &mut self,
+        mf: &MemberFriend,
+        t: Option<DeclId>,
+        e: DeclId,
+        levels: &MultiLevelArgs,
+    ) -> bool {
+        if levels.substituted() != levels.depth() {
+            return true;
+        }
+        // The friend's: type-constraints, requires-clause, trailing one.
+        let mut ours: Vec<Option<ExprId>> = Vec::new();
+        if t.is_some() {
+            let Some(inner) = mf.inner_list else { return false };
+            let l = *self.ast.templates.param_list(inner);
+            let ps: Vec<DeclId> = self.ast.lists.iter::<DeclId>(l.params).collect();
+            ours.extend(ps.iter().map(|&p| self.ast.template_parm(p).and_then(|i| i.constraint)));
+            ours.push(l.requires);
+        }
+        ours.push(mf.requires);
+        // The member's, from its pattern's declaration when its class is
+        // a specialization (they stay the pattern's).
+        let (theirs, outer) = if let Some(t) = t {
+            let (src, map) = match self.inst.concepts.member_constraints.get(&t) {
+                Some(&(pt, _)) if pt != t => (pt, self.member_cmp_constraints(t)),
+                _ => (t, FxHashMap::default()),
+            };
+            let Some(info) = self.ast.template_info(src).copied() else { return false };
+            let l = *self.ast.templates.param_list(info.params);
+            let ps: Vec<DeclId> = self.ast.lists.iter::<DeclId>(l.params).collect();
+            let mut v: Vec<Option<ExprId>> =
+                ps.iter().map(|&p| self.ast.template_parm(p).and_then(|i| i.constraint)).collect();
+            v.push(l.requires);
+            let f = self.templated_function(src);
+            v.push(f.and_then(|f| self.ast.templates.trailing_requires.get(f).copied()));
+            let v = v.into_iter().map(|c| c.map(|c| map.get(&c).copied().unwrap_or(c))).collect();
+            (v, None)
+        } else {
+            let r = self.ast.templates.trailing_requires.get(e).copied();
+            let outer = self.inst.concepts.member_constraints.get(&e).map(|(_, o)| o.clone());
+            (vec![r], outer)
+        };
+        if ours.len() != theirs.len()
+            || ours.iter().zip(&theirs).any(|(a, b)| a.is_some() != b.is_some())
+        {
+            return false;
+        }
+        let mut inner = levels.clone();
+        if let Some(t) = t {
+            inner.push(ArgListId::EMPTY, t, LevelMode::Retain);
+        }
+        for (a, b) in ours.into_iter().zip(theirs) {
+            let (Some(a), Some(mut b)) = (a, b) else { continue };
+            let Ok(a) = Substituter::new(self, &inner).expr(a) else { return false };
+            if let Some(o) = &outer {
+                let Ok(x) = Substituter::new(self, o).expr(b) else { return false };
+                b = x;
+            }
+            if !self.exprs_equivalent(a, b) {
+                return false;
+            }
+        }
+        true
     }
 }

@@ -56,6 +56,37 @@ impl Sema<'_, '_> {
         m
     }
 
+    /// The discarded-value expression `e` (the operand of a cast to
+    /// `void`, the left operand of a comma) in a lifetime-extending
+    /// context: a class prvalue undergoes the temporary materialization
+    /// conversion ([expr.context]/2, [expr.static.cast]/6, C++17), so
+    /// the temporary is one the enclosing declaration extends (clang
+    /// `IgnoredValueConversions` under `isInLifetimeExtendingContext`).
+    /// The contexts are those with a collector
+    /// ([`Sema::begin_for_range_init`]): a for-range-initializer (P2718,
+    /// [class.temporary]/7) and an enumerating expansion-init-list
+    /// ([class.temporary]/8, CWG3043). Elsewhere the prvalue is only
+    /// bound: a discarded temporary is destroyed with its
+    /// full-expression ([class.temporary]/6 extends nothing it does not
+    /// bind), so materializing it changes nothing. Only class types:
+    /// a scalar temporary's lifetime is not observable.
+    pub(crate) fn materialize_discarded(&mut self, e: ExprId) -> ExprId {
+        if self.extend_collector.is_none()
+            || self.unevaluated > 0
+            || self.std < kiln_lex::Std::Cxx17
+        {
+            return e;
+        }
+        let n = *self.ast.exprs.get(e);
+        if n.value_category() != ValueCategory::PRValue
+            || n.deps().contains(ExprDeps::TYPE)
+            || self.ast.types.as_record(n.ty()).is_none()
+        {
+            return e;
+        }
+        self.materialize_temporary(e, n.ty(), false)
+    }
+
     /// clang `MaybeBindToTemporary`: a class (or array of class) prvalue
     /// `e` whose class has a non-trivial destructor is bound to a temporary destroyed at the end
     /// of the full-expression ([class.temporary]/4). The destructor must be
@@ -376,9 +407,11 @@ impl Sema<'_, '_> {
     /// immediate invocations and unevaluated operands keep theirs. A default argument's
     /// temporaries are left to the call's full-expression (its
     /// initializer is shared by every call), and so is an object that is
-    /// only bound (`CXXBindTemporaryExpr`) and never materialized: a
-    /// by-value argument, or a discarded class prvalue (clang does not
-    /// materialize those either; spec/sema.md §7.6a "Left").
+    /// only bound (`CXXBindTemporaryExpr`) and never materialized, such as
+    /// a by-value argument. A discarded class prvalue of an element is
+    /// materialized when built ([`Sema::materialize_discarded`]: the
+    /// expansion-init-list is a lifetime-extending context), so it is
+    /// extended here too.
     pub(crate) fn extend_init_temporaries(&mut self, v: DeclId) {
         if self.var_storage(v) != StorageDuration::Automatic {
             return;
