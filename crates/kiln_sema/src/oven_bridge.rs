@@ -526,6 +526,27 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.with_oven(Some(at), |oven, b| oven.evaluate_in_frame(b, e, frame, how))
     }
 
+    /// [`Oven::evaluate_loop_in_frame`] of loop statement `s` (anchored
+    /// at its expression `e`) in the never-constant walk's frame `frame`
+    /// with at most `steps` steps (WP-1163), reported at `at`.
+    pub(crate) fn eval_loop_in_frame(
+        &mut self,
+        s: StmtId,
+        e: ExprId,
+        frame: &[(DeclId, kiln_oven::FrameObject)],
+        steps: u64,
+        at: Loc,
+    ) -> Result<u64, EvalFailure> {
+        if !self.eval_stack_ok(e) || self.oven.is_none() {
+            return Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant));
+        }
+        self.flush_member_refs();
+        if self.special.has_pending() {
+            self.flush_pending_deleted();
+        }
+        self.with_oven(Some(at), |oven, b| oven.evaluate_loop_in_frame(b, s, e, frame, steps))
+    }
+
     /// [`Oven::frame_free`] of `o`; nothing without the Oven.
     pub(crate) fn frame_free(&mut self, o: kiln_oven::FrameObject) {
         if let Some(oven) = self.oven.as_mut() {

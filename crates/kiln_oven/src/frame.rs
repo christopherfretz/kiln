@@ -14,7 +14,7 @@
 //! `mutable` or volatile subobject, no destructor): a pointer into the
 //! frame or heap space of one evaluation dangles once it ends.
 
-use kiln_ast::{ConstValueId, DeclId, ExprId};
+use kiln_ast::{ConstValueId, DeclId, ExprId, StmtId};
 use kiln_source::fx::FxHashMap;
 
 use crate::compile::RetKind;
@@ -52,7 +52,14 @@ pub(crate) enum FrameHow {
     Discard,
     /// The initialization of local variable `d`'s object of type `ty`.
     Init(DeclId, OTy),
+    /// The execution of loop statement `s` (its expression only anchors
+    /// the job; [`Oven::evaluate_loop_in_frame`]).
+    Loop(StmtId),
 }
+
+/// The state of the objects of a frame ([`Oven::frame_save`]): each
+/// object's base, bytes, and initialized and pointer granule marks.
+type FrameSave = Vec<(usize, Vec<u8>, Vec<u8>, Vec<u8>)>;
 
 /// The stubs compiled for one expression and evaluation: each with the
 /// variables of the frame it was compiled for, in order.
@@ -115,7 +122,7 @@ impl Oven {
         }
         let p = self.mem.alloc_static(ty, size, 0, Origin::Var(d));
         if let Some(e) = init
-            && let Err(f) = self.frame_job(bridge, e, frame, FrameHow::Init(d, ty), p)
+            && let Err(f) = self.frame_job(bridge, e, frame, FrameHow::Init(d, ty), p).0
         {
             self.mem.free_static(p, &self.types);
             return Err(f);
@@ -158,7 +165,7 @@ impl Oven {
             FrameEval::Value => FrameHow::Value,
             FrameEval::Discard => FrameHow::Discard,
         };
-        let r = self.frame_job(bridge, e, frame, how, 0)?;
+        let r = self.frame_job(bridge, e, frame, how, 0).0?;
         if frame.iter().any(|&(_, o)| self.frame_escapes(o.0)) {
             // A tracked object now holds a pointer that dangles once the
             // evaluation ends ([`Oven::frame_escapes`]): its value is
@@ -166,6 +173,74 @@ impl Oven {
             return Err(EvalFailure::silent(FailKind::NotConstant));
         }
         Ok(r)
+    }
+
+    /// Executes loop statement `s` of a `constexpr` function body whole,
+    /// in one job (WP-1163), with each variable of `frame` designating
+    /// its object as in [`Oven::evaluate_in_frame`]; `at` is an
+    /// expression of the loop (the job's location). At most `steps`
+    /// statements are executed, `s` itself the first: the steps taken,
+    /// or the failure (the step limit's at the statement clang runs out
+    /// at). On a failure, or when a tracked object is left holding a
+    /// pointer that dangles ([`Oven::frame_escapes`], failing quietly),
+    /// the objects of `frame` are as they were before.
+    pub fn evaluate_loop_in_frame(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        s: StmtId,
+        at: ExprId,
+        frame: &[(DeclId, FrameObject)],
+        steps: u64,
+    ) -> Result<u64, EvalFailure> {
+        if self.ctx_depth != 0 || steps == 0 {
+            return Err(EvalFailure::silent(FailKind::NotConstant));
+        }
+        let saved = self.frame_save(frame);
+        let limit = self.budget.steps;
+        self.budget.steps = steps.min(limit);
+        let (r, used) = self.frame_job(bridge, at, frame, FrameHow::Loop(s), 0);
+        self.budget.steps = limit;
+        let r = match r {
+            Ok(_) if frame.iter().any(|&(_, o)| self.frame_escapes(o.0)) => {
+                Err(EvalFailure::silent(FailKind::NotConstant))
+            }
+            Ok(_) => return Ok(used),
+            Err(f) => Err(f),
+        };
+        self.frame_restore(&saved);
+        r
+    }
+
+    /// The state of the objects of `frame` ([`Oven::frame_restore`]).
+    fn frame_save(&self, frame: &[(DeclId, FrameObject)]) -> FrameSave {
+        let s = &self.mem.stat;
+        let mut out = Vec::with_capacity(frame.len());
+        for &(_, o) in frame {
+            let Ok(a) = self.mem.alloc_of(Ptr::decode(o.0)) else { continue };
+            let (base, size) = (u64::from(a.base) as usize, a.size as usize);
+            let (g, n) = (base / GRAN as usize, size.div_ceil(GRAN as usize));
+            let part = |v: &[u8], from: usize, len: usize| {
+                v.get(from..from + len).unwrap_or_default().to_vec()
+            };
+            out.push((base, part(&s.bytes, base, size), part(&s.init, g, n), part(&s.ptr, g, n)));
+        }
+        out
+    }
+
+    /// Puts the objects saved by [`Oven::frame_save`] back as they were.
+    fn frame_restore(&mut self, saved: &FrameSave) {
+        let s = &mut self.mem.stat;
+        for (base, bytes, init, ptr) in saved {
+            let g = base / GRAN as usize;
+            let put = |v: &mut [u8], from: usize, src: &[u8]| {
+                if let Some(d) = v.get_mut(from..from + src.len()) {
+                    d.copy_from_slice(src);
+                }
+            };
+            put(&mut s.bytes, *base, bytes);
+            put(&mut s.init, g, init);
+            put(&mut s.ptr, g, ptr);
+        }
     }
 
     /// Stops tracking the object `o` ([`Oven::frame_local`]): it is freed.
@@ -254,10 +329,20 @@ impl Oven {
     /// walk takes the expression apart ([`Oven::frame_job`]).
     pub(crate) fn frame_unknown_read(&self, b: &dyn SemaBridge, fault: &crate::vm::Fault) -> bool {
         use crate::mem::MemFault;
+        use crate::mem::Origin;
+        let crate::vm::Fault::Mem { f, .. } = fault else { return false };
         self.frame.how.is_some()
-            && matches!(fault, crate::vm::Fault::Mem {
-                f: MemFault::External(d, _) | MemFault::Unknown(d), ..
-            } if crate::compile::is_local_var(b.ast(), *d))
+            && match f {
+                MemFault::External(d, _) | MemFault::Unknown(d) => {
+                    crate::compile::is_local_var(b.ast(), *d)
+                }
+                // An object whose lifetime ended between jobs (a scoped
+                // local, a temporary): clang's potential mode does not
+                // report the access (WP-1163).
+                MemFault::Dead(Origin::Var(_) | Origin::Temp(_) | Origin::Let(_))
+                | MemFault::Stale => true,
+                _ => false,
+            }
     }
 
     /// Whether a frame job is running: `this` fails quietly in it
@@ -275,16 +360,19 @@ impl Oven {
         frame: &[(DeclId, FrameObject)],
         how: FrameHow,
         target: u64,
-    ) -> Result<ConstValueId, EvalFailure> {
+    ) -> (Result<ConstValueId, EvalFailure>, u64) {
         self.frame.binds = frame.iter().map(|&(d, o)| (d, o.0)).collect();
         self.frame.how = Some(how);
         self.frame.target = target;
         self.potential_next = Some(0);
         let r = self.eval_job(bridge, Job::Frame(e), None, false, false, true).0;
+        // The outermost context's count, nested contexts' steps included
+        // (they share its budget).
+        let steps = self.run.counters.steps;
         self.potential_next = None;
         self.frame.how = None;
         self.frame.binds.clear();
-        r
+        (r, steps)
     }
 
     /// The stub of the running frame job, for `e`.
