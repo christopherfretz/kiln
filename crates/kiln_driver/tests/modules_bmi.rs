@@ -613,7 +613,11 @@ fn kind2_declaration_image_templates() {
         assert_eq!(e.code, 1, "{}", e.stderr);
         errs.push(e.stderr);
     }
-    assert!(errs[0].contains("in instantiation of function template specialization"), "{}", errs[0]);
+    assert!(
+        errs[0].contains("in instantiation of function template specialization"),
+        "{}",
+        errs[0]
+    );
     assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
 }
 
@@ -782,7 +786,10 @@ fn kind2_declaration_image_fallback() {
             "export module f;\nexport inline int *g() { return new int(1); }\nexport constexpr int k = 1;\n",
             "a new or delete expression",
         ),
-        ("export module f;\nexport template <class T> struct B { T v; };\n", "a template or closure type"),
+        (
+            "export module f;\nexport template <class T> struct B { T v; };\n",
+            "a template or closure type",
+        ),
         ("export module f;\nexport template <class T> constexpr T v = T(1);\n", "a template"),
         (
             "export module f;\nexport template <class... T> int n(T...) { return sizeof...(T); }\n",

@@ -35,9 +35,9 @@ use kiln_ast::{AttrId, ConstValueId, ExprId, ListId, NnsId, RawId, StmtId, Strin
 use kiln_source::fx::FxHashSet;
 
 use super::{
-    Access, ConstexprKind, DEP, DeclFlags, DeclId, DeclKind, DeclName, DeclRec, FileId, FnBody, FnSpec,
-    FxHashMap, Image, LEX_TU, Loc, NONE, Payload, QRef, QualType, Rd, Res, Sema, W, Wr, Writer,
-    bad, var_spec,
+    Access, ConstexprKind, DEP, DeclFlags, DeclId, DeclKind, DeclName, DeclRec, FileId, FnBody,
+    FnSpec, FxHashMap, Image, LEX_TU, Loc, NONE, Payload, QRef, QualType, Rd, Res, Sema, W, Wr,
+    Writer, bad, var_spec,
 };
 
 /// A parameter reference in a declaration field: `PARAM | i` names the

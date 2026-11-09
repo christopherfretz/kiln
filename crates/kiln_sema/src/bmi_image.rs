@@ -23,8 +23,8 @@
 use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{
     Access, ConstexprKind, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, EnumData,
-    FnSpec, FnStorage, FriendKind, InitStyle, ModuleOwnership, ParamData, TagKind,
-    TemplLinkKind, VarSpec, VarStorage,
+    FnSpec, FnStorage, FriendKind, InitStyle, ModuleOwnership, ParamData, TagKind, TemplLinkKind,
+    VarSpec, VarStorage,
 };
 use kiln_ast::modules::Owner;
 use kiln_ast::names::{DeclName, OverloadedOperator};
@@ -1881,7 +1881,8 @@ impl Writer<'_, '_, '_> {
             match n.name() {
                 x if x == DeclName::EMPTY => NONE,
                 x => {
-                    let s = self.ident(x).ok_or("a template parameter not named by an identifier")?;
+                    let s =
+                        self.ident(x).ok_or("a template parameter not named by an identifier")?;
                     Self::name_ix(&mut self.pnames, &mut self.img.pnames, &s)
                 }
             }
@@ -2044,7 +2045,8 @@ impl Writer<'_, '_, '_> {
         if s.templ.body_invalid.contains(&pattern) {
             return Err("a template made invalid by its body");
         }
-        let pat = *self.recs.get(&pattern).ok_or("a template whose pattern is outside the image")?;
+        let pat =
+            *self.recs.get(&pattern).ok_or("a template whose pattern is outside the image")?;
         let list = *ast.templates.param_list(info.params);
         if list.requires.is_some() {
             return Err("a constrained template");
@@ -2054,9 +2056,7 @@ impl Writer<'_, '_, '_> {
         }
         let mut params = Vec::new();
         for p in ast.lists.iter::<DeclId>(list.params) {
-            params.push(
-                *self.recs.get(&p).ok_or("a template parameter the image does not carry")?,
-            );
+            params.push(*self.recs.get(&p).ok_or("a template parameter the image does not carry")?);
         }
         Ok(Payload::Template {
             kind: 0,
