@@ -30,7 +30,9 @@ use kiln_ast::modules::Owner;
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Nns, Quals, TagKeyword, TypeView};
+use kiln_ast::types::{
+    ArgView, BuiltinType, ExcSpec, FuncInfo, Nns, Quals, TagKeyword, TemplateArg, TypeView,
+};
 use kiln_ast::{DeclHead, DeclId, NnsId, QualType, TypeId};
 use kiln_source::fx::{FxHashMap, FxHashSet};
 use kiln_source::{FileId, Loc};
@@ -323,6 +325,8 @@ enum Payload {
         index: u16,
         typename_kw: bool,
         begin: u32,
+        /// Its default template argument, a type (S4b).
+        default: Option<QRef>,
     },
     /// A non-type template parameter (S4).
     Nttp {
@@ -735,11 +739,13 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.u32(*init);
         }
         Payload::Implicit { kind } => w.u8(*kind),
-        Payload::Ttp { depth, index, typename_kw, begin } => {
+        Payload::Ttp { depth, index, typename_kw, begin, default } => {
             w.u16(*depth);
             w.u16(*index);
             w.u8(u8::from(*typename_kw));
             w.u32(*begin);
+            w.u32(default.map_or(0, |q| q.ty));
+            w.u8(default.map_or(0, |q| q.quals));
         }
         Payload::Nttp { ty, depth, index } => {
             w.q(*ty);
@@ -1075,7 +1081,13 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
                 1 => true,
                 _ => return bad("bad flag byte"),
             };
-            Payload::Ttp { depth, index, typename_kw, begin: r.u32()? }
+            let begin = r.u32()?;
+            let default = match r.q()? {
+                QRef { ty: 0, quals: 0 } => None,
+                QRef { ty: 0, .. } => return bad("bad type reference"),
+                q => Some(q),
+            };
+            Payload::Ttp { depth, index, typename_kw, begin, default }
         }
         K_NTTP => Payload::Nttp { ty: r.q()?, depth: r.u16()?, index: r.u16()? },
         K_TEMPLATE => {
@@ -1153,10 +1165,10 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
         | Payload::Label
         | Payload::Access
         | Payload::Implicit { .. }
-        | Payload::Ttp { .. }
         | Payload::Template { .. }
         | Payload::Member { .. }
         | Payload::Record { def: None, .. } => Vec::new(),
+        Payload::Ttp { default, .. } => default.iter().copied().collect(),
         Payload::Spec { args, .. } => args.iter().map(|a| a.q()).collect(),
         Payload::Record { def: Some(d), .. } => d.bases.iter().map(|b| b.ty).collect(),
         Payload::Function { ty, params, .. } => {
@@ -2315,7 +2327,15 @@ impl Writer<'_, '_, '_> {
         if p.params.is_some() {
             return Err("a template template parameter");
         }
-        if t.defaults.contains(d) || t.inherited_defaults.contains(d) {
+        let default = match t.defaults.get(d).map(|a| a.view()) {
+            None => None,
+            Some(ArgView::Type(q)) if !t.inherited_defaults.contains(d) => Some(q),
+            Some(_) if ast.decls.get(d).kind() == DeclKind::TemplateTypeParm => {
+                return Err("a default template argument");
+            }
+            Some(_) => return Err("a default template argument of a non-type parameter"),
+        };
+        if t.inherited_defaults.contains(d) {
             return Err("a default template argument");
         }
         if p.depth != 0 {
@@ -2323,6 +2343,9 @@ impl Writer<'_, '_, '_> {
         }
         let n = ast.decls.get(d);
         if n.kind() == DeclKind::NonTypeTemplateParm {
+            if default.is_some() {
+                return Err("a default template argument of a non-type parameter");
+            }
             let ty = self.qref(n.ty().ok_or("a malformed template parameter")?)?;
             return Ok(Payload::Nttp { ty, depth: p.depth, index: p.index });
         }
@@ -2330,7 +2353,14 @@ impl Writer<'_, '_, '_> {
             Some(&l) => self.loc(l)?,
             None => NONE,
         };
-        Ok(Payload::Ttp { depth: p.depth, index: p.index, typename_kw: p.typename_kw, begin })
+        let default = default.map(|q| self.qref(q)).transpose()?;
+        Ok(Payload::Ttp {
+            depth: p.depth,
+            index: p.index,
+            typename_kw: p.typename_kw,
+            begin,
+            default,
+        })
     }
 
     /// A template record (S4): a function template at namespace scope.
@@ -3290,11 +3320,15 @@ impl Sema<'_, '_> {
                     defaulted.push((f, r.flags));
                     f
                 }
-                Payload::Ttp { depth, index, typename_kw, begin } => {
+                Payload::Ttp { depth, index, typename_kw, begin, default } => {
                     let t =
                         self.builder().template_type_parm(h, *depth, *index, false, *typename_kw);
                     if *begin != NONE {
                         let _ = self.ast.decls.cold.begin_loc.insert(t, lo(self, *begin));
+                    }
+                    if let Some(q) = default {
+                        let dq = self.image_ty(img, &mut tys, &ids, *q);
+                        let _ = self.builder().set_template_default(t, TemplateArg::ty(dq));
                     }
                     t
                 }
@@ -3553,7 +3587,7 @@ impl Sema<'_, '_> {
             }
             TyRec::Sugar(k) => self.builtin_sugar()[usize::from(*k).min(2)],
             TyRec::Tst { template, args, under } => {
-                let args: Vec<kiln_ast::types::TemplateArg> =
+                let args: Vec<TemplateArg> =
                     args.iter().map(|a| { let ty = qt(self, a.q()); self.image_arg(ty, a) }).collect();
                 let under = under.map(|u| qt(self, u));
                 let tmpl = ids.get(*template as usize).map_or(self.ast.tu, |&t| self.ast.first(t));
@@ -4047,7 +4081,7 @@ mod tests {
                 DEP,
                 pname,
                 302,
-                Payload::Ttp { depth: 0, index: 0, typename_kw: false, begin: 296 },
+                Payload::Ttp { depth: 0, index: 0, typename_kw: false, begin: 296, default: None },
             ),
             head(
                 DEP,
