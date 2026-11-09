@@ -47,7 +47,8 @@ impl Substituter<'_, '_, '_> {
             captures: Vec::new(),
         };
         let init_vars = self.lambda_captures(&data.captures, &mut intro)?;
-        let lambda = self.sema.act_on_lambda_start(&intro);
+        let never_dependent = self.sema.substituted_lambda_never_dependent();
+        let lambda = self.sema.act_on_lambda_start_in(&intro, never_dependent);
         // The init-capture variables, in order (several pattern
         // variables share a name after an earlier expansion of an
         // init-capture pack); an expanded pack maps to all its elements.

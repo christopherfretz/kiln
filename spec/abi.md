@@ -1153,13 +1153,15 @@ instantiated is numbered in the class specialization
 (`closure_signature_fn`: the pattern's, through `tag_externally_visible`
 and `has_internal_linkage`), so it and the specializations naming it are
 `linkonce_odr`. The specialization's own name keeps the pattern's
-unnumbered closure, `_Z3retIiEDTL3$_0EET_`, as clang. Two differences
-remain (xfail repros): kiln substitutes a trailing return type only once
+unnumbered closure, `_Z3retIiEDTL3$_0EET_`, as clang. One difference
+remains (xfail repro): kiln substitutes a trailing return type only once
 for a call with explicit template arguments, where clang substitutes it
 twice and the lambda takes two numbers (`ret2<int>` is `UlvE0_` in clang,
-`UlvE_` in kiln); and a member template's return type substituted during
-class instantiation stays instantiation-dependent, `DTLNS0_UlvE_EEE`
-where clang (`LDK_NeverDependent`) writes the closure, `NS0_UlvE_E`.
+`UlvE_` in kiln). A member template's signature substituted during class
+instantiation has a never-dependent closure (clang `LDK_NeverDependent`,
+spec/sema-lambda.md §9, WP-1141): `decltype` of it is the closure type,
+`_ZN1SIiE4mretIiEENS0_UlvE_ET_`, and a generic one's parameters keep
+their depth, `NS0_UlTL0__E_E` (`tests/mangle/lambda_in_member_template_signature.cpp`).
 Details: `spec/landed/abi/WP-1077.md`.
 
 ### 8.16 Landed (WP-204): constrained templates (`mangle/constraint.rs`)
