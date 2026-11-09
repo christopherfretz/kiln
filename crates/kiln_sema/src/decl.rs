@@ -6045,7 +6045,21 @@ impl Sema<'_, '_> {
             // `'extern' variable has an initializer`).
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
-        let init = self.reject_objectless_method_init(init);
+        let mut init = self.reject_objectless_method_init(init);
+        // A reference bound to, or a placeholder deduced from, a variable
+        // template specialization or static data member of unknown bound
+        // sees the bound its definition gives (clang `getCompletedType`
+        // in `TryReferenceInitialization` and deduction; WP-907).
+        if let Initializer::Expr(e) = init
+            && self
+                .ast
+                .decls
+                .get(v)
+                .ty()
+                .is_some_and(|t| self.ast.types.is_reference(t) || self.contains_undeduced_auto(t))
+        {
+            init = Initializer::Expr(self.complete_expr_array_bound(e));
+        }
         self.act_on_init_inner(v, init);
         self.check_cleanup_deduced(v);
         self.check_static_tls(v, paren);
@@ -9037,24 +9051,49 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The declaration an unscoped enumerator named `name` would redeclare
+    /// in the scope enclosing its enumeration ([basic.scope.scope]/4).
+    ///
+    /// clang `ActOnEnumConstant` asks `LookupSingleName`, whose
+    /// `getAsSingle` is null for an overload set: two or more functions or
+    /// function templates, or a single function template (`resolveKind`
+    /// marks those `FoundOverloaded`), and for an ambiguous result (those
+    /// functions and an enumerator declared after them). Such an enumerator is then declared
+    /// alongside the functions and every later lookup that finds both is
+    /// ambiguous ([basic.lookup.general]/4); only a qualified name into the
+    /// enumeration (`E::f`) names it (WP-929).
     fn lookup_current_scope_outside_enum(&self, name: Symbol) -> Option<DeclId> {
         let s =
             self.scopes.iter().rev().find(|s| !s.is_transparent() && s.kind != ScopeKind::Enum)?;
-        if s.is_local() {
-            return s
-                .locals
+        let found: Vec<DeclId> = if s.is_local() {
+            s.locals
                 .iter()
                 .rev()
-                .find(|e| {
+                .filter(|e| {
                     e.0 == name && e.2 == Ns::Ordinary && self.kind_of(e.1) != DeclKind::UsingShadow
                 })
-                .map(|e| e.1);
-        }
-        let ent = s.entity?;
-        self.ast.lookup_local(ent, DeclName::ident(name)).iter().find(|&d| {
-            let k = self.ast.decls.get(d).kind();
-            !is_tag_kind(k) && k != DeclKind::UsingShadow
-        })
+                .map(|e| e.1)
+                .collect()
+        } else {
+            let ent = s.entity?;
+            self.ast
+                .lookup_local(ent, DeclName::ident(name))
+                .iter()
+                .filter(|&d| {
+                    let k = self.ast.decls.get(d).kind();
+                    !is_tag_kind(k) && k != DeclKind::UsingShadow
+                })
+                .collect()
+        };
+        let first = *found.first()?;
+        // Redeclarations of one function are one entity (`void f(); void
+        // f();` is not a set). More than one entity is an overload set or,
+        // after an earlier such enumerator, an ambiguous result: neither
+        // is single.
+        let mut entities: Vec<DeclId> = found.iter().map(|&d| self.ast.first(d)).collect();
+        entities.sort_unstable();
+        entities.dedup();
+        (entities.len() == 1 && self.kind_of(first) != DeclKind::FunctionTemplate).then_some(first)
     }
 
     fn fits(&self, ty: QualType, v: i128) -> bool {

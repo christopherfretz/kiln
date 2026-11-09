@@ -931,7 +931,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-897 | clang 22 __builtin_arm_gcsss takes void* (crates/kiln_ast/src/decl.rs:6073 is clang 19 "vC*vC*") | WP-846 | open |
 | WP-898 | clang 22 frame-pointer "non-leaf-no-reserve": tests/conformance/target.acle/ir-clrex.cpp fails under --compiler clang++-19 against oracle 22 (pre-existing) | WP-846 | open |
 | WP-879 | reflection correctness bundle 4: WP-796, WP-838, WP-866, WP-867, WP-870 (GCC 16.1 parity) | WP-830 | done (#398) |
-| WP-907 | sema: complete a variable template specialization of unknown array bound for sizeof/type_of (xfail temp.inst/p4-var-template-unknown-bound.cpp) | WP-879 | open |
+| WP-907 | sema: complete a variable template specialization of unknown array bound for sizeof/type_of (xfail temp.inst/p4-var-template-unknown-bound.cpp) | WP-879 | done (#442) |
 | WP-908 | perf: frontend ~3x slower than g++-16 on large repeated nested template-ids (5.1 MB TU: 1.28 s vs 0.44 s -fsyntax-only; docs/status/perf.md WP-879) | WP-879 | done (#407, via WP-919) |
 | WP-919 | perf: frontend throughput on large nested template-id TUs (profile dup8 + real TUs, fix hotspots, dup bench entry) | WP-908 | done (#407) |
 | WP-909 | decision: default -fkiln-reflection-mangling form (WP-879 study recommends gcc; operator decides) | WP-879 | open |
@@ -944,7 +944,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-905 | sema SILENT DROP: a failed instantiated-decl lookup in a local class member body drops the statement silently (templ/subst/decls.rs near enum_decl ~1503) | WP-884 | in progress |
 | WP-906 | bench: reflect s7/s8 baselines stale vs current host load; re-baseline on a quiet host | WP-884 | deferred |
 | WP-913 | sema: promote coro_lifetimebound/coro_disable_lifetimebound out of class C into the dangling walk (crates/kiln_sema/src/attr_triage.rs:167-170) | WP-891 | open |
-| WP-914 | sema rejects-valid (compat 19): structured-binding tuple_element index is an unconverted size_t value, so `template<unsigned I, class T> struct tuple_element` misses its explicit specialization (struct_bind.rs:673); xfail dcl.struct.bind/tuple-element-unsigned-index-19.cpp | WP-891 | open |
+| WP-914 | sema rejects-valid (compat 19): structured-binding tuple_element index is an unconverted size_t value, so `template<unsigned I, class T> struct tuple_element` misses its explicit specialization (struct_bind.rs:673); xfail dcl.struct.bind/tuple-element-unsigned-index-19.cpp | WP-891 | done (#437) |
 | WP-915 | sema: constexpr never-constant check only tries parameterless functions (constexpr_body.rs:59); xfail dcl.constexpr/constexpr-asm-never-constant.cpp | WP-891 | done (#430, WP-945) |
 | WP-916 | sema wording/missing warnings: [[clang::warn_unused_result]] ignored (attr_triage.rs:343) and gnu spelling message says nodiscard (decl.rs:11409); noinline on a variable lacks clang message (class_b_attrs.rs:1127); `&k ?: nullptr` lacks -Wpointer-bool-conversion (null_compare.rs:218) | WP-891 | deferred |
 | WP-918 | sema warnings (WP-443 UNINIT remainder): -Wuninitialized-const-pointer (clang 21+; uninit.rs ~1170), uninitialized field use in ctor initializers incl. qualified base wording (self_ref.rs:41), `int x = x;` inside a statement-expression in a static-local initializer, bool-switch case-label note range (uninit.rs ~690), -Wunused-variable for a namespace-scope lambda variable | WP-862 | deferred |
@@ -955,7 +955,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-925 | sema: member template deprecated only on an early out-of-line definition: clang also warns for the template name, kiln only for g<int> (crates/kiln_sema/src/templ/subst/anon.rs function_spec_attrs) | WP-888 | open |
 | WP-926 | sema: WP-834 order: outside templates clang delays special-member access errors to declarator end, kiln emits at once (crates/kiln_sema/src/class/access.rs special_member_access); also check lambda-body pushUndelayed claim | WP-888 | open |
 | WP-928 | diag: -Wshadow misses the case where a using-declaration and a using-directive bring the same entity into one scope (crates/kiln_sema/src/shadow.rs shadow_lookup) | WP-865 | open |
-| WP-929 | sema: enumerator named like an overload set in the same scope is a redefinition error in kiln, clang accepts | WP-865 | open |
+| WP-929 | sema: enumerator named like an overload set in the same scope is a redefinition error in kiln, clang accepts | WP-865 | done (#437, WP-914) |
 | WP-930 | sema: lambda capture analysis does not look through member access, subscript or .* (crates/kiln_sema/src/expr.rs:735; xfail expr.prim.lambda.capture/constant-member-access-not-captured.cpp) | WP-865 | open |
 | WP-931 | diag: -Wunused-parameter and -Wimplicit-int-conversion missing | WP-865 | open |
 | WP-932 | diag wording tail from WP-865: narrowing prints signed char not const signed char for substituted const T (conv/narrow.rs narrowing_diag); vector vs std::vector (cereal helpers.hpp:247); enumerator redefinition note line; enum declaration-does-not-declare-anything; ctor-shadow vs unused ordering; -Wunused-lambda-capture declarator wording; var templates named template v; unused-variable range underline | WP-865 | open |
@@ -1043,7 +1043,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-983 | modules: header units as BMIs (-fmodule-header[=user|system], header-unit capsule kind, import "h" finds the .pcm) | WP-917 | open |
 | WP-984 | modules: import std; BMI cache keyed by fingerprint, CMake CXX_MODULE_STD, two-step import std harness test | WP-917 | done (#429) |
 | WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | done (#425) |
-| WP-986 | modules: convert skip(clang) module tests (export-run, visibility, partitions-run, private-run, export-import-run, import-std-*) to module:/unit: | WP-917 | in progress |
+| WP-986 | modules: convert skip(clang) module tests (export-run, visibility, partitions-run, private-run, export-import-run, import-std-*) to module:/unit: | WP-917 | done (#436) |
 | WP-981 | oven: narrow signed `++`/`--` must promote and wrap (WP-961 x86_64 stable_sort xfail) | WP-961 | done (#419, fixed in WP-980) |
 | WP-1029 | parser drops `__extension__`; `decltype(__extension__ t)` mangles `Dt` where clang writes `DT` | WP-980 | done (#432) |
 | WP-1030 | mangle ImaginaryLiteral (`LCi0_2E`) and PackIndexingExpr in dependent signatures | WP-980 | done (#432, WP-1029) |
@@ -1075,12 +1075,12 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1054 | SILENT DROP: class template members whose declaration fails at instantiation are dropped without a diagnostic, so instantiation-time wrong-tag errors are missed (clang dcl.type.elab/p3.cpp:60) | WP-1017 | done (#435) |
 | WP-1050 | module cache eviction: bound the std/std.compat module cache size and age (kiln_driver module_cache.rs) | WP-984 | open |
 | WP-1051 | -MD on a module cache hit lists every libc++ header the std module read; match clang dependency output for import std | WP-984 | open |
-| WP-1055 | never-constant: bcmp missing from the library-builtin rows (kiln_ast decl.rs:3821), so bcmp(p,p,1)+x in gnu++20 is not reported (accepts-invalid) | WP-945 | open |
+| WP-1055 | never-constant: bcmp missing from the library-builtin rows (kiln_ast decl.rs:3821), so bcmp(p,p,1)+x in gnu++20 is not reported (accepts-invalid) | WP-945 | done (#437, WP-914) |
 | WP-1056 | constexpr int f(){__builtin_unreachable();} reports never-constant where clang reports err_constexpr_body_no_return (never_constant.rs:177) | WP-945 | open |
-| WP-1057 | __has_builtin(__builtin_readcyclecounter) is 1 but Sema leaves the builtin undeclared on aarch64 (features_table.rs:2032; rejects-valid) | WP-945 | open |
-| WP-1060 | mangling: template substitution folds a pack-index expression inside a dependent decltype to its element (kiln_sema templ/pack.rs:687 pack_indexing_expr); xfail dcl.type.pack.index/substituted-expr-mangling-two-units-run.cpp | WP-1029 | open |
-| WP-1061 | abi: audit qualifier spelling in non-member unresolved names (kiln_abi mangle/dep.rs:1344 unresolved_prefix_in; WP-1029 fixed member access only) | WP-1029 | open |
-| WP-1062 | abi: mangle a lambda expression in a template parameter type (kiln_codegen module.rs:526); xfail temp.param/lambda-in-parameter-type-mangle-run.cpp | WP-946 | open |
+| WP-1057 | __has_builtin(__builtin_readcyclecounter) is 1 but Sema leaves the builtin undeclared on aarch64 (features_table.rs:2032; rejects-valid) | WP-945 | done (#437, WP-914) |
+| WP-1060 | mangling: template substitution folds a pack-index expression inside a dependent decltype to its element (kiln_sema templ/pack.rs:687 pack_indexing_expr); xfail dcl.type.pack.index/substituted-expr-mangling-two-units-run.cpp | WP-1029 | done (#441) |
+| WP-1061 | abi: audit qualifier spelling in non-member unresolved names (kiln_abi mangle/dep.rs:1344 unresolved_prefix_in; WP-1029 fixed member access only) | WP-1029 | done (#441, WP-1060; audit, no diffs) |
+| WP-1062 | abi: mangle a lambda expression in a template parameter type (kiln_codegen module.rs:526); xfail temp.param/lambda-in-parameter-type-mangle-run.cpp | WP-946 | done (#441, WP-1060) |
 | WP-1063 | accepts-invalid: `template<class T> enum E {}` lacks enumeration cannot be a template; nested template-id lacks templates can only be declared in namespace or class scope (kiln_sema decl.rs:7911 act_on_tag) | WP-946 | open |
 | WP-1064 | modules image S2: expression and statement records, inline/constexpr/consteval functions, variable initializers (kiln_sema bmi_image.rs:1054, :1094) | WP-1048 | open |
 | WP-1065 | modules image S3: classes (kiln_sema bmi_image.rs:1314 kind_gate) | WP-1048 | open |
@@ -1093,3 +1093,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1076 | hang: kiln times out (>20 s) on clang CodeGenCXX/mangle-ms-back-references-pr13207.cpp, CodeGenCXX/pr29160.cpp, Preprocessor/bigoutput.c | WP-971 | open |
 | WP-1071 | sema: relookup_member handles overload sets and using-declarations of a specialization member (kiln_sema templ/subst/mod.rs:971, today not yet implemented) | WP-1054 | open |
 | WP-1072 | rejects-valid: dependent friend class A<T>::Member gets no access to private members (xfail temp.friend/dependent-member-class-friend-run.cpp) | WP-1054 | open |
+| WP-1073 | builtins: model returns_twice (setjmp, vfork, getcontext), allocsize (malloc family), scanf format on library builtins, and clang inline lowering of abort/alloca/bzero/bcopy/mempcpy/conj/creal/cimag/finite (kiln_ast decl.rs:3792, kiln_codegen builtins.rs) | WP-914 | open |
+| WP-1074 | tests: flaky kiln_driver module_cache racing_misses_all_succeed under load (tests/module_cache.rs:193) | WP-914 | open |
+| WP-1077 | linkage: closure type in a function template signature (decltype of a lambda) is emitted internal where clang uses linkonce_odr (kiln_abi mangle.rs ~600 tag_externally_visible) | WP-1060 | open |

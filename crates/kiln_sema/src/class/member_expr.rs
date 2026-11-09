@@ -532,6 +532,15 @@ impl Sema<'_, '_> {
                 self.diagnose_placeholder_ambiguity(text, &found.decls, true, loc);
                 return self.recover_err(&[base], loc);
             }
+            if !self.is_member_overload_set(&found.decls)
+                && found.decls.iter().any(|&d| self.kind_of(d) == DeclKind::EnumConstant)
+            {
+                // An unscoped enumerator declared after member functions
+                // of its name ([basic.lookup.general]/4; clang's
+                // `AmbiguousReference`, WP-929).
+                self.diagnose_ambiguous_reference(name, &found.decls, false, loc);
+                return self.recover_err(&[base], loc);
+            }
             if !self.is_member_overload_set(&found.decls) {
                 self.unsupported("this kind of overloaded member access", loc);
                 return self.recover_err(&[base], loc);
