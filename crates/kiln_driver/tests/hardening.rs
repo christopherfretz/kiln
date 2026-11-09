@@ -43,14 +43,16 @@ fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
 
-/// Compiles `src` with kiln++ (`-fclang-compat=19`) and clang++-19 with
-/// `args`; returns both outputs' paths (kiln's, clang's).
+/// Compiles `src` with kiln++ (`-fclang-compat=19`, driving LLVM 19 as
+/// clang 19 does: kiln's default is LLVM 22, spec/driver.md "LLVM
+/// discovery") and clang++-19 with `args`; returns both outputs' paths
+/// (kiln's, clang's).
 fn both(d: &Path, src: &str, out: &str, args: &[&str]) -> (PathBuf, PathBuf) {
     let kiln_out = d.join(format!("k-{out}"));
     let clang_out = d.join(format!("c-{out}"));
     for (prog, path, compat) in [
-        (kilnpp(), &kiln_out, Some("-fclang-compat=19")),
-        (PathBuf::from("clang++-19"), &clang_out, None),
+        (kilnpp(), &kiln_out, &["-fclang-compat=19", "--llvm-dir=/usr/lib/llvm-19"][..]),
+        (PathBuf::from("clang++-19"), &clang_out, &[]),
     ] {
         let mut cmd: Vec<&str> = args.to_vec();
         cmd.extend(compat);

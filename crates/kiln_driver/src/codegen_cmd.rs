@@ -982,8 +982,13 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String, input: &str) -> C
     }
     // clang `AllowFPOpFusion`: `-ffp-contract=fast` (not
     // `fast-honor-pragmas`) fuses across statements in the backend too;
-    // the other fast-math options reach it as function attributes.
-    if args.fp_model().backend_fuse {
+    // the other fast-math options reach it as function attributes. LLVM
+    // 22's `llc` warns that the X86 backend ignores `-fp-contract` (it
+    // fuses on the IR's `contract` flags, which every FP operation carries
+    // under `-ffp-contract=fast`, as with clang), so it is not passed
+    // there; the object code is the same (WP-1016).
+    let x86_ignores_fusion = !tc.target.is_aarch64() && tc.llvm_major() >= 22;
+    if args.fp_model().backend_fuse && !x86_ignores_fusion {
         cmd.arg("-fp-contract=fast");
     }
     // The module's `Code Model` flag says the same; explicit, as clang
@@ -1388,7 +1393,7 @@ mod tests {
     fn searched_toolchain() -> Toolchain {
         Toolchain {
             gcc_from_driver: false,
-            ..Toolchain::new(crate::toolchain::Target::host(), None, None)
+            ..Toolchain::new(crate::toolchain::Target::host(), None, None, None)
         }
     }
 

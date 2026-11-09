@@ -26,6 +26,13 @@ drv_invalid_stdlib_name = Error (1) "invalid library name in argument '{0}'";
 drv_invalid_value = Error (2) "invalid value '{1}' in '{0}'";
 drv_language_not_recognized = Error (1) "language not recognized: '{0}'";
 drv_linker_input_unused = Warning [UnusedCommandLineArgument] (1) "{0}: 'linker' input unused";
+// WP-1016: LLVM discovery (spec/driver.md "LLVM discovery").
+drv_llvm_dir_invalid = Error (3) "'{0}' (from {1}) is not a usable LLVM installation: {2}";
+drv_llvm_install_hint = Note (1) "install LLVM {0} with clang (docs/COMPATIBILITY.md \"Runtime dependencies\"), or name an installation with --llvm-dir=<dir> or KILN_LLVM_DIR";
+drv_llvm_not_found = Error (1) "no supported LLVM installation found (kiln supports LLVM {0})";
+drv_llvm_not_on_path = Note (1) "not found on PATH: {0}";
+drv_llvm_tried = Note (2) "skipped '{0}': {1}";
+drv_llvm_unsupported = Error (4) "unsupported LLVM major {0} at '{1}' (from {2}); kiln supports LLVM {3}";
 // WP-1032: a sanitizer ignorelist LLVM's `SpecialCaseList` rejects.
 drv_malformed_sanitizer_ignorelist = Error (1) "malformed sanitizer ignorelist: '{0}'";
 // WP-920: `-MG` lists missing headers only for `-M`/`-MM`.
@@ -42,6 +49,8 @@ drv_out_file_multiple = Error (0) "cannot specify -o when generating multiple ou
 drv_precompile_not_module = Error (0) "--precompile requires a module interface or partition unit";
 // WP-1032: a `#!special-case-list-v1` ignorelist (POSIX regular expressions).
 drv_regex_sanitizer_ignorelist = Error (1) "sanitizer ignorelist '{0}' uses regular expressions ('#!special-case-list-v1'), which kiln does not support; use glob patterns";
+// WP-982: kiln-scan-deps (spec/modules.md §11.9).
+drv_scan_one_job = Error (1) "unable to handle compilation, expected exactly one compiler job in '{0}'";
 // WP-792: clang's `-ftime-trace` family, added by build systems for clang.
 drv_time_trace_ignored = Warning [UnusedCommandLineArgument] (1) "'{0}' ignored: kiln writes no time trace (see -fkiln-instantiation-report)";
 drv_treating_input_as_cxx = Warning [Deprecated] (2) "treating '{0}' input as '{1}' when in C++ mode, this behavior is deprecated";

@@ -1287,8 +1287,8 @@ The normative description is spec/driver.md "Code generation". In short:
   `clang++-19`, passing `-fuse-ld=`, `-l`, `-L`, `-Wl,`, `-static`,
   `-nostdlib`, `-shared`, `-rdynamic`, `-pie` and `-no-pie` through in
   command-line order.
-- Tools come from `$KILN_LLVM_DIR/bin` (default `/usr/lib/llvm-19`), else
-  the versioned name on `PATH`.
+- Tools come from `<llvm>/bin` of the LLVM installation spec/driver.md
+  "LLVM discovery" selects (LLVM 22 by default, or 19).
 - `-O<n>` selects `llc`'s level and is passed to the link; the IR is
   always the `-O0` IR. `-g` adds DWARF debug information (§5.1).
   `-###` and `-v` print the steps.
@@ -1979,8 +1979,8 @@ with no coverage flag the IR is unchanged, byte for byte.
 
 ## 6a. Landed (WP-386): clang 22 codegen at `-fclang-compat=22`
 `CodegenOptions` carries `clang_compat` (the driver's `-fclang-compat`)
-and `llvm_major` (`llvm-config --version` of `KILN_LLVM_DIR`, probed once
-per process; spec/driver.md "Toolchain"). What clang 20-22 changed is
+and `llvm_major` (the selected LLVM installation's major, spec/driver.md
+"LLVM discovery"). What clang 20-22 changed is
 keyed on the compat level, and additionally on the backend's major where
 LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 
@@ -3561,8 +3561,8 @@ visits the resume call; `Cg::emit_glvalue_load`; WP-789,
 **LLVM 22 `coro.end` (WP-355).** LLVM 22's `llvm.coro.end` returns
 `void`; whether code runs in the ramp function is
 `i1 @llvm.coro.is_in_ramp()`. The IR follows the backend's version
-(`CodegenOptions::llvm_major`: `llvm-config --version` of the driver's
-`KILN_LLVM_DIR`, spec/driver.md; not `-fclang-compat`), since each LLVM rejects the other's signature. With
+(`CodegenOptions::llvm_major`: the major of the driver's selected LLVM,
+spec/driver.md "LLVM discovery"; not `-fclang-compat`), since each LLVM rejects the other's signature. With
 LLVM 22 the `CoroEnd` cleanup is `call void @llvm.coro.end(...)`, then
 `%r = call i1 @llvm.coro.is_in_ramp()`, and the branch is inverted as
 clang 22's: the ramp function continues through the cleanups (freeing

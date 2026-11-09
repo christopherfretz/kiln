@@ -62,8 +62,11 @@ result against a control build (clang 19), are in
 
 ## Building
 
-Requires Rust (pinned in `rust-toolchain.toml`) and clang/LLVM 19 on PATH
-(`clang++-19`, `llc`, `opt`, `lld`) for the backend and as the test oracle.
+Requires Rust (pinned in `rust-toolchain.toml`), LLVM/clang 22 (kiln's
+default backend and the default test oracle) and LLVM/clang 19 (the
+second oracle, `KILN_ORACLE=19`), installed as `/usr/lib/llvm-22` and
+`/usr/lib/llvm-19` with `clang++-22`/`clang++-19`, `opt-N`, `llc-N` on
+PATH.
 
 ```
 cargo build
@@ -93,10 +96,12 @@ The tree is relocatable: `bin/kiln`, `bin/kiln++`, the builtin headers and
 predefines in `lib/kiln/<major>/`, and these documents in
 `share/doc/kiln/` (layout and resource lookup:
 [spec/driver.md](spec/driver.md) "Installation layout"). kiln writes LLVM
-IR and needs an LLVM 19 (or 22) installation at run time for `llc`,
-`llvm-as` and the `clang++` link step, plus the system's libstdc++ (or
-libc++); see spec/driver.md "Installation layout" for the run-time
-dependencies. `cargo xtask dist` builds the same archives from a checkout.
+IR and needs an LLVM 22 (or 19) installation with clang at run time for
+`opt`, `llc` and the `clang++` link step, plus the system's libstdc++ (or
+libc++). kiln finds it on its own in the usual places; `--llvm-dir=<dir>`
+or `KILN_LLVM_DIR` names one explicitly, and `kiln++ --version` shows the
+choice. What to install, per distribution:
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) "Runtime dependencies". `cargo xtask dist` builds the same archives from a checkout.
 
 What a version number promises (driver flags, diagnostic ids, predefined
 macros, ABI; not diagnostic wording or IR text) is in
