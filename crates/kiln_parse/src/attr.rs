@@ -856,8 +856,8 @@ impl Parser<'_, '_> {
             // clang parses only a `StringArgument` position as an
             // unevaluated string; `annotate`'s other arguments are
             // expressions (`u8"s"`, `L"w"`; WP-1113).
-            let annotate_expr = !args.is_empty()
-                && kiln_ast::attr::normalize_attr_name(&text) == "annotate";
+            let annotate_expr =
+                !args.is_empty() && kiln_ast::attr::normalize_attr_name(&text) == "annotate";
             let e = if self.at_string() && !annotate_expr {
                 self.parse_string_literal(true)
             } else {
