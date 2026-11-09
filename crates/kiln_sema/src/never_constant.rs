@@ -233,6 +233,7 @@ impl Walk {
 /// The temporaries of a full-expression clang registers cleanups for
 /// ([`Sema::nc_temps`]).
 #[derive(Clone, Copy, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts about one full-expression")]
 struct Temps {
     /// One destroyed at the end of the full-expression (a failure there
     /// fails the statement).
@@ -427,8 +428,6 @@ impl Sema<'_, '_> {
         let ex = &self.ast.exprs;
         let mut ops = ex.children(e, &self.ast.lists);
         match ex.get(e).kind() {
-            // A default member initializer may call anything.
-            ExprKind::CXXDefaultInitExpr => return true,
             ExprKind::UnaryExprOrTypeTraitExpr
             | ExprKind::CXXNoexceptExpr
             | ExprKind::TypeTraitExpr
@@ -484,6 +483,8 @@ impl Sema<'_, '_> {
             | ExprKind::MaterializeTemporaryExpr
             | ExprKind::ExprWithCleanups
             | ExprKind::ConstantExpr => {}
+            // Anything else may call a function or write memory (a
+            // default member initializer may call anything).
             _ => return true,
         }
         ops.into_iter().any(|c| self.nc_impure(c, depth + 1))
@@ -536,10 +537,9 @@ impl Sema<'_, '_> {
                 let d = ex.decl(e);
                 self.kind_of(d) != DeclKind::ParmVar && self.has_local_storage(d)
             }
-            _ => ex
-                .children(e, &self.ast.lists)
-                .into_iter()
-                .any(|c| self.names_local(c, depth + 1)),
+            _ => {
+                ex.children(e, &self.ast.lists).into_iter().any(|c| self.names_local(c, depth + 1))
+            }
         }
     }
 
@@ -636,7 +636,7 @@ impl Sema<'_, '_> {
     /// failures clang notes as side effects and goes on past (an
     /// expression statement, an initializer): whether destroying those
     /// at its end succeeds.
-    fn nc_temps_destroyed(w: &mut Walk, t: &Temps) -> bool {
+    fn nc_temps_destroyed(w: &mut Walk, t: Temps) -> bool {
         if t.ewc_dtor {
             w.side = true;
         }
@@ -657,7 +657,7 @@ impl Sema<'_, '_> {
         }
         let mut t = Temps::default();
         self.nc_temps(e, true, false, &mut t, 0);
-        if Self::nc_temps_destroyed(w, &t) { Flow::Next } else { Flow::Stop }
+        if Self::nc_temps_destroyed(w, t) { Flow::Next } else { Flow::Stop }
     }
 
     /// A condition (clang `EvaluateCond` or `EvaluateInteger` in a
@@ -1469,7 +1469,7 @@ impl Sema<'_, '_> {
             if t.extended {
                 w.local(t.extended_dtor);
             }
-            if !Self::nc_temps_destroyed(w, &t) {
+            if !Self::nc_temps_destroyed(w, t) {
                 return Flow::Stop;
             }
         }
