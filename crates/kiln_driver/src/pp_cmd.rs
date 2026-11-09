@@ -207,6 +207,7 @@ impl Job<'_> {
         o.keep_macro_comments = a.print.macro_comments;
         o.reflection = a.predef.reflection_for(&self.std);
         o.char8 = a.predef.char8_t;
+        o.main_is_header = a.pch.header_main;
         o.predefines = predefines;
         if let Some(epoch) = time::reproducible_epoch(a.reproducible_time) {
             let (date, t, stamp) = time::spellings(epoch);
@@ -456,7 +457,7 @@ impl Job<'_> {
 
     /// The options a module file records and checks (spec/modules.md
     /// §11.4), as (key, effective flag spelling).
-    fn fingerprint(&self) -> Vec<(String, String)> {
+    pub(crate) fn fingerprint(&self) -> Vec<(String, String)> {
         let a = self.args;
         let p = &a.predef;
         let on = |b: bool, yes: &str, no: &str| if b { yes.to_owned() } else { no.to_owned() };
