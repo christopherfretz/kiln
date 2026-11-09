@@ -550,6 +550,24 @@ impl Sema<'_, '_> {
                 let _ = self.ast.exprs.set_default_arg_rewritten(u, r);
                 return Some(u);
             }
+            // `a ?: b`: the condition and the true arm read the common
+            // expression through `OpaqueValueExpr`s bound to it, rebound
+            // to its copy.
+            ExprKind::BinaryConditionalOperator => {
+                let [common, cond, t, f] = ex.binary_conditional_operands(e, &self.ast.lists);
+                let c2 = self.fresh_temporaries(common, depth + 1);
+                let f2 = self.fresh_temporaries(f, depth + 1);
+                let (cond, t) = match c2 {
+                    Some(c2) => (
+                        self.rebind_opaque(cond, common, c2, depth + 1)?,
+                        self.rebind_opaque(t, common, c2, depth + 1)?,
+                    ),
+                    None if f2.is_some() => (cond, t),
+                    None => return None,
+                };
+                let kids = [c2.unwrap_or(common), cond, t, f2.unwrap_or(f)];
+                return self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &kids);
+            }
             _ => {}
         }
         let kids = ex.children(e, &self.ast.lists);
@@ -568,6 +586,32 @@ impl Sema<'_, '_> {
             return None;
         }
         self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &new)
+    }
+
+    /// `e` with the `OpaqueValueExpr`s bound to `old` bound to `new`
+    /// instead (the nodes above them copied); `None` when a node on the
+    /// way is of a kind [`kiln_ast::ExprArena::clone_with_children`] does
+    /// not copy.
+    fn rebind_opaque(&mut self, e: ExprId, old: ExprId, new: ExprId, depth: u32) -> Option<ExprId> {
+        if depth > 64 {
+            return None;
+        }
+        let ex = &self.ast.exprs;
+        if ex.get(e).kind() == ExprKind::OpaqueValueExpr {
+            return Some(match ex.opaque_source(e) {
+                Some(s) if s == old => self.ast.exprs.clone_opaque(e, new),
+                _ => e,
+            });
+        }
+        let kids = ex.children(e, &self.ast.lists);
+        let mut new_kids = Vec::with_capacity(kids.len());
+        for &k in &kids {
+            new_kids.push(self.rebind_opaque(k, old, new, depth + 1)?);
+        }
+        if new_kids == kids {
+            return Some(e);
+        }
+        self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &new_kids)
     }
 
     /// The returned-reference-to-temporary diagnostic: P2748R5 made it

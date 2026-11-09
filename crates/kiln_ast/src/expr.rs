@@ -2227,19 +2227,51 @@ impl ExprArena {
             | ExprKind::ParenExpr
             | ExprKind::MaterializeTemporaryExpr
             | ExprKind::CXXBindTemporaryExpr
-            | ExprKind::CXXStdInitializerListExpr => c.a = kids.first()?.raw(),
+            | ExprKind::CXXStdInitializerListExpr
+            | ExprKind::CXXRewrittenBinaryOperator
+            | ExprKind::CXXThrowExpr
+            | ExprKind::CXXDeleteExpr
+            | ExprKind::CXXTypeidExpr
+            | ExprKind::CompoundLiteralExpr
+            | ExprKind::ExtVectorElementExpr
+            | ExprKind::ConvertVectorExpr
+            | ExprKind::VAArgExpr => c.a = kids.first()?.raw(),
             k if k.is_cast() => c.a = kids.first()?.raw(),
+            ExprKind::SubstNonTypeTemplateParmExpr => c.b = kids.first()?.raw(),
             ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr => {
                 c.a = kids.first()?.raw();
                 c.b = kids.get(1)?.raw();
             }
-            ExprKind::ConditionalOperator => {
+            ExprKind::CompoundAssignOperator => {
+                c.a = kids.first()?.raw();
+                let x = self.compound_assigns[n.b as usize];
+                c.b = self.push_compound_assign(CompoundAssignExtra { rhs: *kids.get(1)?, ..x });
+            }
+            ExprKind::CXXNewExpr => {
+                let mut x = self.news[n.a as usize];
+                let mut k = kids.iter().copied();
+                if x.array_size.is_some() {
+                    x.array_size = k.next();
+                }
+                if x.init.is_some() {
+                    x.init = k.next();
+                }
+                if x.placement.is_some() {
+                    x.placement = Some(lists.push_iter(k));
+                }
+                c.a = self.push_new_extra(x);
+            }
+            ExprKind::ConditionalOperator | ExprKind::ChooseExpr => {
                 c.a = kids.first()?.raw();
                 c.b = self.push_cond_arms(*kids.get(1)?, *kids.get(2)?);
             }
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 c.b = lists.push(kids).raw();
             }
+            // The caller rebinds the `OpaqueValueExpr`s of the condition
+            // and the true arm to a new common expression
+            // ([`ExprArena::clone_opaque`]).
+            ExprKind::BinaryConditionalOperator => c.a = lists.push(kids).raw(),
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
                 let (args, callee) =
                     if n.a == 0 { (kids, None) } else { (&kids[1..], kids.first()) };
@@ -2289,6 +2321,16 @@ impl ExprArena {
             let _ = cold.trait_rhs_loc.insert(id, x);
         }
         Some(id)
+    }
+
+    /// A copy of the `OpaqueValueExpr` `e` bound to `source` instead: a
+    /// `BinaryConditionalOperator` copied by
+    /// [`ExprArena::clone_with_children`] with a new common expression
+    /// (codegen and the Oven bind an opaque value by its source).
+    pub fn clone_opaque(&mut self, e: ExprId, source: ExprId) -> ExprId {
+        let mut c = *self.expect_kind(e, ExprKind::OpaqueValueExpr);
+        c.a = source.raw();
+        self.push(c)
     }
 
     /// The identifier a `PredefinedExpr` names.
