@@ -2992,16 +2992,20 @@ impl Oven {
         let p = Ptr::decode(raw);
         let Some(a) = self.alloc_any(p) else { return Ok(()) };
         let key = Ptr::alloc_key(raw);
-        // The offsets of the objects in this allocation a constructor or
-        // destructor is running for.
-        let structors: Vec<u32> = self
+        // The objects in this allocation a constructor or destructor is
+        // running for, by offset and class: a base subobject at offset 0
+        // shares its complete object's offset but not its type, and no two
+        // live subobjects of one class share an address ([intro.object]/9),
+        // so the pair is the object's identity (WP-1101).
+        let structors: Vec<(u32, OTy)> = self
             .stack
             .iter()
             .filter_map(|fr| {
                 let f = &self.funcs[fr.func as usize];
                 let r = f.this_reg.filter(|_| f.structor)?;
+                let cls = f.this_ty?;
                 let this = self.regs.get((fr.fb + r) as usize).map(|&v| v as u64)?;
-                (this != 0 && Ptr::alloc_key(this) == key).then(|| Ptr::decode(this).off)
+                (this != 0 && Ptr::alloc_key(this) == key).then(|| (Ptr::decode(this).off, cls))
             })
             .collect();
         let mut vol = match a.origin {
@@ -3015,7 +3019,7 @@ impl Oven {
         loop {
             if vol
                 && matches!(self.types.kind(t), TyKind::Record { .. })
-                && u32::try_from(base).is_ok_and(|b| structors.contains(&b))
+                && u32::try_from(base).is_ok_and(|b| structors.contains(&(b, t)))
             {
                 vol = false;
             }
@@ -3037,13 +3041,19 @@ impl Oven {
                     let contains = |f: &&crate::ty::FieldInfo| {
                         rel >= f.offset && rel < f.offset + self.types.size(f.ty).max(1)
                     };
-                    // A union's active member, else the first holding the byte.
+                    // A union's active member, else the member toward the
+                    // object (not an empty base sharing its byte, whose
+                    // structor must not exempt it), else the first holding
+                    // the byte.
                     let active = union
                         .then(|| self.mem.unions.get(&Ptr::union_key(raw, base, t)).copied())
                         .flatten()
                         .and_then(|i| self.types.fields(t).get(i as usize))
-                        .filter(|f| contains(f));
-                    let Some(f) = active.or_else(|| self.types.near(t, rel).find(|f| contains(f)))
+                        .filter(|f| contains(f))
+                        .copied();
+                    let Some(f) = active
+                        .or_else(|| self.types.member_toward(t, rel, ty).filter(|f| contains(&f)))
+                        .or_else(|| self.types.near(t, rel).find(|f| contains(f)).copied())
                     else {
                         break;
                     };
