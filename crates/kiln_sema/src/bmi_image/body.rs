@@ -342,7 +342,7 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::CompoundAssignOperator => [f(F::E), Sd(Side::CompoundAssign)],
         X::ConditionalOperator | X::ChooseExpr => [f(F::E), Sd(Side::Arms)],
         X::ParenExpr => [f(F::E), f(F::Loc)],
-        X::CallExpr | X::CXXOperatorCallExpr => [f(F::E), f(F::EL)],
+        X::CallExpr | X::CXXOperatorCallExpr | X::CXXMemberCallExpr => [f(F::E), f(F::EL)],
         X::ImplicitCastExpr
         | X::CStyleCastExpr
         | X::CXXFunctionalCastExpr
@@ -360,7 +360,6 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::CXXDefaultArgExpr => [f(F::D(Dc::Param)), f(F::D(Dc::Ctx))],
         X::AddrLabelExpr => [f(F::D(Dc::Label)), Z],
         X::MemberExpr => [f(F::E), f(F::D(Dc::Member))],
-        X::CXXMemberCallExpr => [f(F::E), f(F::EL)],
         X::CXXConstructExpr | X::CXXTemporaryObjectExpr => [f(F::D(Dc::Ctor)), f(F::EL)],
         X::CXXDefaultInitExpr => [f(F::D(Dc::Field)), f(F::D(Dc::Ctx))],
         X::CXXBindTemporaryExpr => [f(F::E), f(F::D(Dc::Dtor))],
@@ -375,7 +374,6 @@ fn expr_aux_ok(k: ExprKind, aux: u8) -> bool {
         X::CharacterLiteral => CharKind::from_u8(aux).is_some(),
         X::StringLiteral => StringKind::from_u8(aux).is_some(),
         X::DeclRefExpr | X::MemberExpr => NonOdrUse::from_u8(aux).is_some(),
-        X::CXXThisExpr => aux <= 1,
         X::CXXConstructExpr | X::CXXTemporaryObjectExpr => {
             ConstructionKind::from_u8(aux & 3).is_some() && aux >> 6 == 0
         }
@@ -395,7 +393,7 @@ fn expr_aux_ok(k: ExprKind, aux: u8) -> bool {
         X::TypeTraitExpr => usize::from(aux) < TypeTrait::all().len(),
         X::ConstantExpr => aux <= 3,
         X::MaterializeTemporaryExpr => StorageDuration::from_u8(aux & 3).is_some() && aux >> 3 == 0,
-        X::ExprWithCleanups => aux <= 1,
+        X::CXXThisExpr | X::ExprWithCleanups => aux <= 1,
         _ => aux == 0,
     }
 }

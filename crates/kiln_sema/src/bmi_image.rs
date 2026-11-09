@@ -984,6 +984,7 @@ fn same_kind(a: &Payload, b: &Payload) -> bool {
 /// Decodes and validates an image. Total: any malformed input is an
 /// [`ImageError`]; an `Ok` image can be built without further checks
 /// other than its offsets against the main file's length.
+#[allow(clippy::too_many_lines)] // the sections in format order, kept together with the format
 fn decode(bytes: &[u8]) -> Res<Image> {
     let mut r = Rd(bytes);
     if r.u32()? != IMAGE_VERSION {
@@ -2127,6 +2128,7 @@ impl Writer<'_, '_, '_> {
         false
     }
 
+    #[allow(clippy::too_many_lines)] // one pass over the purview in id order, with the class nesting
     fn collect(&mut self) -> W<()> {
         let s = self.s;
         let ast = &s.ast;
@@ -2310,8 +2312,9 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::CXXConversion => Ok(()),
         K::IndirectField => Err("an anonymous union or struct member"),
         K::Friend => Err("a friend declaration"),
-        K::ClassTemplateSpecialization | K::ClassTemplatePartialSpecialization => Err("a template"),
-        K::ClassTemplate
+        K::ClassTemplateSpecialization
+        | K::ClassTemplatePartialSpecialization
+        | K::ClassTemplate
         | K::FunctionTemplate
         | K::VarTemplate
         | K::TypeAliasTemplate
@@ -3202,7 +3205,8 @@ mod tests {
     /// is malformed or inconsistent with its class is an error.
     #[test]
     fn rejects_corrupt_class_records() {
-        let corrupt: [(&str, fn(&mut Image)); 13] = [
+        type Corrupt = (&'static str, fn(&mut Image));
+        let corrupt: [Corrupt; 13] = [
             ("implicit kind", |i| i.decls[14].payload = Payload::Implicit { kind: 6 }),
             ("duplicate implicit", |i| {
                 let d = i.decls[14].clone();
