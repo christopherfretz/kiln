@@ -26,11 +26,11 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `f218cd816`
+- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `e5d30c1df`
 - command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 266 s; peak RSS of one case 22 MiB (gnu-time)
+- wall time 282 s; peak RSS of one case 21 MiB (gnu-time)
 
 ## Totals
 
@@ -38,7 +38,7 @@ written by hand (WP-912). The run is informational and never part of
 |---|---:|---:|---:|
 | ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 66 | 1250 | 5.3% |
 | ACCEPTS-INVALID cases (per RUN configuration) | 78 | 1946 | 4.0% |
-| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4066 | 28065 | 14.5% |
+| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4061 | 28065 | 14.5% |
 | REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 28 | 418 | 6.7% |
 | crashes | 0 | 2850 | 0.0% |
 | timeouts | 0 | 2850 | 0.0% |
@@ -59,7 +59,7 @@ written by hand (WP-912). The run is informational and never part of
 | CXX/dcl | 0 / 4 | 0.0% | 0 / 81 | 0.0% | 0 | 0 / 0 |
 | CXX/dcl.dcl | 4 / 77 | 5.2% | 262 / 1141 | 23.0% | 0 | 0 / 0 |
 | CXX/dcl.decl | 1 / 54 | 1.9% | 86 / 788 | 10.9% | 1 | 0 / 0 |
-| CXX/drs | 1 / 33 | 3.0% | 1376 / 8682 | 15.8% | 0 | 0 / 0 |
+| CXX/drs | 1 / 33 | 3.0% | 1371 / 8682 | 15.8% | 0 | 0 / 0 |
 | CXX/except | 3 / 15 | 20.0% | 24 / 104 | 23.1% | 0 | 0 / 0 |
 | CXX/expr | 2 / 78 | 2.6% | 74 / 644 | 11.5% | 0 | 0 / 0 |
 | CXX/lex | 0 / 14 | 0.0% | 1 / 78 | 1.3% | 0 | 0 / 0 |
@@ -363,7 +363,7 @@ against clang 19 and clang 22) and one follow-up row in
 The generated tables above are from a later run (WP-1017, after items 2-6
 and 9-12 were fixed; WP-1015 fixed 2-6): accepts-invalid fell from 89 to 68
 files and from 110 to 80 cases; missed `expected-error` lines fell from
-4930 to 4276 (4072 after WP-946 and WP-1054). Rejects-valid fell from 47 to 28 cases through fixes from
+4930 to 4276 (4072 after WP-946 and WP-1054; 4061 after WP-1078, whose run regenerated the tables). Rejects-valid fell from 47 to 28 cases through fixes from
 other work packages (WP-958 and earlier); the driver now skips 83 cases
 with clang flags it does not know, so 418 no-diagnostics cases run.
 
@@ -527,20 +527,40 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
     member whose computed specification is a type list is not compared
     with the base (fixed in WP-957), dependent lists in a template definition wait for
     instantiation, and the nested function-type rule for parameters is not
-    checked.
+    checked (fixed in WP-1078).
     **WP-957**: implicit destructors and assignment operators are checked
     against every overridden function, with their computed type lists
     before C++17, one error per base; the implicit assignment operators of
     a dynamic class now override (a dispatch miscompile)
     (`class.virtual/exception-spec-implicit*.cpp`,
-    `class.virtual/implicit-assignment-override-run.cpp`). Still partial:
-    the nested function-type rule, and `final`/return-type checks of an
-    implicit overrider. WP-957's own share (against main `a375213ce`):
+    `class.virtual/implicit-assignment-override-run.cpp`). The nested
+    function-type rule and the `final`/return-type checks of an implicit
+    overrider were left; WP-1078 fixed them. WP-957's own share (against main `a375213ce`):
     accepts-invalid 67 to 66 files, 79 to 78 cases; missed errors 4078 to
     4072 lines; no new accepts-invalid or rejects-valid case.
     WP-1017's own share (its run against WP-1015's): accepts-invalid 73
     to 68 files, 86 to 80 cases; missed errors 4582 to 4276 lines; no new
     accepts-invalid or rejects-valid case.
+    **WP-1078** (also WP-1079, WP-1080): an implicit destructor or
+    copy/move assignment operator that overrides a `final` function, or
+    whose return type is not covariant, is an error under "while declaring
+    the implicit copy assignment operator for 'D'"
+    (`class.virtual/implicit-overrider{,-ok}.cpp`); function types nested
+    in an overrider's return and parameter types need equivalent
+    specifications ("exception specifications of argument types differ",
+    with clang 19/22's comparison of every base parameter against the
+    overrider's first one;
+    `except.spec/override-nested-exception-spec-{cxx14,cxx17,ok}.cpp`);
+    and `enum F;` without an enum-base is "ISO C++ forbids forward
+    references to 'enum' types" (`dcl.enum/forward-ref-enum{,-ok}.cpp`).
+    Still open: "not allowed beyond a single level of indirection"
+    (`CXX/except/except.spec/p2-places.cpp`), and a C++17 nested
+    `noexcept(false)` parameter. WP-1078's share (doc at `f218cd816`
+    against the merged branch `e5d30c1df`; main moved in between):
+    accepts-invalid 66 to 66 files, 78 to 78 cases (the target lines sit
+    in files with other missed errors); missed errors 4066 to 4061 lines,
+    all in `CXX/drs`; rejects-valid 28 to 28; no new accepts-invalid or
+    rejects-valid case.
 13. **Extension diagnostics under `-pedantic-errors`** (missing `typename`
     as a C++20 extension 52, variadic templates as a C++11 extension 26 and
     similar). kiln does not emit the extension warnings that these tests
