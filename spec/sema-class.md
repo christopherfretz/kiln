@@ -2857,7 +2857,9 @@ access, out-of-line declarator scope.**
   are `sema_pseudo_dtor_not_type`, and `p->A<T>::~A()` on a dependent
   object is not the injected-class-name rule of `member_destructor_in`
   (`is_alias_specialization`) but `p->~A()`, failing at instantiation as
-  clang ("undeclared identifier 'A' in destructor name"). With a
+  clang ("undeclared identifier 'A' in destructor name"; on a
+  non-dependent scalar, `p->template A<T>::~A()` is
+  `sema_pseudo_dtor_not_type` at the definition). With a
   dependent prefix `S` (`p->T::Inner::~Inner()`, `p->T::I::~I()`,
   `p->T::template TI<int>::~TI()`) both type-names are the
   typename-specifiers `S::F` and `S::Q`; the expression is a qualified
@@ -2996,8 +2998,6 @@ access, out-of-line declarator scope.**
   `sema_qualified_member_of_unrelated`, with clang 19's text.
 - *Gaps*: the first type-name of a dependent-scope pseudo-destructor
   on a class object is not checked at instantiation (only on a scalar);
-  a dependent prefix on a non-dependent scalar object without a type
-  match (`p->template A<T>::~A()` on an `int*`) is `templ_unimplemented`;
   dependent
   `operator T()` printing in dumps; the "member has the same name as its
   class" error.

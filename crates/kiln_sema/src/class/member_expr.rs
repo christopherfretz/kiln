@@ -1015,8 +1015,8 @@ impl Sema<'_, '_> {
             // `p->T::Inner::~Inner()`: `F` and `Q` are both looked up in
             // the dependent `S` at instantiation (4.2), as the
             // typename-specifiers `S::F` and `S::Q` (WP-1155).
-            let first =
-                fty.unwrap_or_else(|| self.ast.types.dependent_name(TagKeyword::None, sq.nns, fname));
+            let first = fty
+                .unwrap_or_else(|| self.ast.types.dependent_name(TagKeyword::None, sq.nns, fname));
             let destroyed = match q {
                 PseudoDtorName::Ident(n) => {
                     self.ast.types.dependent_name(TagKeyword::None, sq.nns, n)
@@ -1125,15 +1125,7 @@ impl Sema<'_, '_> {
             self.mark_type_referenced(d);
         }
         let name_loc = if tilde.is_valid() { tilde } else { loc };
-        self.finish_member_destructor(
-            obj,
-            destroyed,
-            td,
-            DtorQual::Implied,
-            loc,
-            name_loc,
-            op_loc,
-        )
+        self.finish_member_destructor(obj, destroyed, td, DtorQual::Implied, loc, name_loc, op_loc)
     }
 
     /// `x.N::~Q` on a class object (see [`Sema::act_on_member_destructor_q`]).
@@ -1205,7 +1197,15 @@ impl Sema<'_, '_> {
             {
                 return self.dependent_destructor_name(obj, name, loc, op_loc);
             }
-            if self.ast.types.is_dependent(obj.ty) || self.is_dependent_ctx(q.ctx) {
+            if !self.ast.types.is_dependent(obj.ty) && obj.def.is_none() {
+                // `p->template A<T>::~A()` on an `int*`: no type-name.
+                let text = self.ast.symbols().as_str(name).to_owned();
+                let msg = self
+                    .diag(DiagId::sema_pseudo_dtor_not_type, loc)
+                    .arg(text)
+                    .arg(self.ty_arg(obj.ty));
+                self.emit(msg);
+            } else if self.ast.types.is_dependent(obj.ty) || self.is_dependent_ctx(q.ctx) {
                 self.templ_unimplemented("a dependent destructor name", loc);
             } else {
                 let text = self.ast.symbols().as_str(name).to_owned();
@@ -1228,10 +1228,7 @@ impl Sema<'_, '_> {
 
     /// True if `ty` is written as a specialization of an alias template.
     fn is_alias_specialization(&self, ty: QualType) -> bool {
-        matches!(
-            self.ast.types.view(ty.ty()),
-            TypeView::TemplateSpecialization { alias: true, .. }
-        )
+        matches!(self.ast.types.view(ty.ty()), TypeView::TemplateSpecialization { alias: true, .. })
     }
 
     /// The context the prefix `S` of a nested-name-specifier `S::C::`
@@ -1485,12 +1482,20 @@ impl Sema<'_, '_> {
             && self.is_scalar(ty)
             && !self.same_unqual(ty, first);
         // clang checks the destroyed type first.
-        let r =
-            self.finish_member_destructor(obj, destroyed, None, DtorQual::Implied, loc, loc, op_loc);
+        let r = self.finish_member_destructor(
+            obj,
+            destroyed,
+            None,
+            DtorQual::Implied,
+            loc,
+            loc,
+            op_loc,
+        );
         if !bad {
             return r;
         }
-        let msg = self.diag(DiagId::sema_pseudo_dtor_type_mismatch, floc).diff_args(self, ty, first);
+        let msg =
+            self.diag(DiagId::sema_pseudo_dtor_type_mismatch, floc).diff_args(self, ty, first);
         self.emit(msg);
         if self.is_err_expr(r) { r } else { self.recover_err(&[r], loc) }
     }
