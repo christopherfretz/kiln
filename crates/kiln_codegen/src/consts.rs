@@ -614,6 +614,10 @@ impl Cg<'_> {
                 }
             }
         }
+        // As a base, slot 0 may be the class's primary virtual base (clang
+        // `CGRecordLowering::accumulateBases`), laid out for the complete
+        // object only.
+        let primary_vbase = as_base && rec.vbase_index.values().any(|&i| i == 0);
         let e = e.map(|x| self.strip_init(x));
         let inits: Vec<ExprId> = match e {
             Some(x)
@@ -662,7 +666,16 @@ impl Cg<'_> {
                 self.record_elems(img, off, at, b, Some(vt_class), sub, out)?;
             } else if let Some(b) = virt_slot[i] {
                 self.record_elems(img, off, at, b, Some(vt_class), None, out)?;
-            } else if i == 0 && matches!(m, IrType::Ptr) && self.is_dynamic(first) {
+            } else if i == 0
+                && (matches!(m, IrType::Ptr) || primary_vbase)
+                && self.is_dynamic(first)
+            {
+                // The vptr, or (as a base) a primary virtual base's slot,
+                // which holds just the vptr shared with `d`: a primary
+                // base is nearly empty (Itanium C++ ABI 2.4), and the
+                // virtual base object itself lives elsewhere in the
+                // complete object, or here as its indirect primary base
+                // with the same address point.
                 out.push((at, self.vtable_address_point(vt_class, first, rel)?));
             } else if !matches!(m, IrType::Array(..) | IrType::Int(8)) {
                 return err(None, "class constants with this member are not supported yet");

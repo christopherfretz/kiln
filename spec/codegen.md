@@ -1448,10 +1448,7 @@ unit as clang 19's `-flto` does (`CodeGenOpts.PrepareForLTO` /
 - The module summary, the pre-link pipeline and the bitcode writer are
   the driver's (`opt`, spec/driver.md).
 - Not yet: `-ffat-lto-objects` (bitcode only), whole-program
-  devirtualization options, and C++26 constant initialization of a class
-  with a shared virtual base (`consts.rs` `record_elems`, xfail
-  `tests/conformance/class.mi/shared-virtual-base-constant-init-run.cpp`),
-  a gap with or without LTO that the LTO tests avoid by using C++23.
+  devirtualization options.
 - Tests: `tests/codegen/lto_{full,full_o2,thin,thin_split}.cpp` (exact IR
   against clang 19, `ir_vs_clang`), `tests/conformance/lex.phases/
   lto-two-tu-*-run.cpp` (two TUs built, linked and run, with the default
@@ -2342,11 +2339,20 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   vtable), as clang's `ConstantEmitter` does. A class with virtual bases
   (constant only through P3533, kiln alone) emits its virtual-base
   members of the complete-object type the same way, at their layout
-  offsets. An array whose elements all have one constant type uses it as
+  offsets. A base laid out with a primary virtual base (nearly empty,
+  Itanium C++ ABI 2.4: clang's `accumulateBases` makes it slot 0 of the
+  base's type, with no separate vptr slot) holds just the vptr there: the
+  address point of the base subobject, which the virtual base shares
+  when it is the complete object's indirect primary base and which is
+  the base's own otherwise (a shared virtual base reached through two
+  bases, WP-902). clang 19 and 22 initialize such objects dynamically
+  (`zeroinitializer` and a `__cxx_global_var_init`); kiln's constant is
+  the object those constructors build. An array whose elements all have one constant type uses it as
   the element type (clang `CommonElementType`), so an array of a dynamic
   class is `[N x %struct.P]` and not a literal struct. Validation:
   `tests/codegen/polymorphic_const_global.cpp` (exact IR),
-  `tests/conformance/dcl.constinit/constinit-virtual-base-run-cxx26.cpp`.
+  `tests/conformance/dcl.constinit/constinit-virtual-base-run-cxx26.cpp`,
+  `tests/conformance/class.mi/shared-virtual-base-constant-init-run.cpp`.
 - **vptr stores**: constructors store the address point of every vptr
   after the base initializers and before the member initializers;
   destructors re-store them on entry unless clang's
