@@ -1890,9 +1890,20 @@ impl Substituter<'_, '_, '_> {
                     })
                     .or_else(|| self.sema.ast.decls.get(p).ty());
                 // An empty pack (the length sweep, §7.1): the parameter's
-                // type substituted.
+                // type substituted. A placeholder parameter (`auto...`)
+                // has no element to deduce from, so the expression keeps
+                // the dependent `auto` (clang's dependent `AutoType`): a
+                // call `f(Vs)...` in the swept pattern must not deduce
+                // `f<auto>` and instantiate it.
                 let ty = match ty {
-                    Some(t) if self.sema.ast.types.args(l).is_empty() => self.ty(t, loc)?,
+                    Some(t) if self.sema.ast.types.args(l).is_empty() => {
+                        let t = self.ty(t, loc)?;
+                        if self.sema.contained_placeholder(t).is_some() {
+                            self.sema.dependent_auto(t)
+                        } else {
+                            t
+                        }
+                    }
                     Some(t) => t,
                     None => return Err(SubstFail),
                 };

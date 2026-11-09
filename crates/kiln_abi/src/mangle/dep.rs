@@ -754,6 +754,10 @@ impl Mangler<'_, '_> {
                 self.out.push_str("nx");
                 return self.expression(sub);
             }
+            // A braced-init-list as an operand (a call argument,
+            // `f({1, V...})`): `il <expression>* E` (clang
+            // `mangleExpression` `InitListExprClass`).
+            ExprKind::InitListExpr => return self.init_list(expr),
             // `tw <expression>`, `tr` for a rethrow.
             ExprKind::CXXThrowExpr => match ast.exprs.throw_operand(expr) {
                 Some(sub) => {
