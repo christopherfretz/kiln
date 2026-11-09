@@ -201,6 +201,8 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOpti
         no_plt: f.no_plt,
         static_destructors: f.static_destructors,
         wrapv: f.wrapv(),
+        trapv: f.trapv,
+        trapv_handler: f.trapv_handler.clone().filter(|h| f.trapv && !h.is_empty()),
         wrapv_pointer: f.wrapv_pointer(a.predef.clang_compat == ClangCompat::Clang22),
         null_pointer_is_valid: f.null_pointer_is_valid(),
         no_builtin: a.no_builtin(),
@@ -332,13 +334,14 @@ impl CodegenJob<'_> {
             permissive: a.permissive,
             contract_semantic: a.contract_semantic.unwrap_or_default(),
             cf_protection_branch: a.codegen.cf_protection_branch(x86),
+            record_carried: a.bmi_kind != Some(1) && job.module_output_path().is_some(),
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
         let (mut tu, mut pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
         if engine.error_count() == 0 {
-            job.write_module_file(&mut pp, engine);
+            job.write_module_file(&mut pp, engine, tu.carried.as_ref());
         }
         *deps_out = crate::pp_cmd::finish_deps(pp, deps);
         let mut module = None;
@@ -424,6 +427,9 @@ impl CodegenJob<'_> {
             // UBSan's `shift-base` depends on the language (WP-675).
             opts.sanitize.cplusplus = job.std.cplusplus;
             opts.sanitize.cxx20 = job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20;
+            // WP-1032: the ignorelists the driver validated.
+            opts.ignorelist =
+                a.sanitize.ignorelist(opts.sanitize.kinds, &job.toolchain.resource_dir);
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).
             tu.oven.set_clang_compat(opts.clang_compat);

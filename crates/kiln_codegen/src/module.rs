@@ -3055,7 +3055,7 @@ impl<'a> Cg<'a> {
         let vis = if internal { Visibility::Default } else { self.decl_visibility(d, true) };
         let weak_attr = !internal && ast.is_weak_decl(d);
         let section = self.decl_section(d);
-        let sanitizer = self.global_sanitizer(d, needs_init);
+        let sanitizer = self.global_sanitizer(d, g, needs_init);
         let gv = self.m.global_mut(g);
         gv.is_constant = constant;
         gv.align = Some(align);
@@ -3163,7 +3163,7 @@ impl<'a> Cg<'a> {
         let comdat = if inline_fn { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
         let vis = if inline_fn { self.decl_visibility(first, true) } else { Visibility::Default };
         let section = self.decl_section(d);
-        let sanitizer = self.global_sanitizer(d, false);
+        let sanitizer = self.global_sanitizer(d, g, false);
         let gv = self.m.global_mut(g);
         gv.is_constant = constant;
         gv.align = Some(align);

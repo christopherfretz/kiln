@@ -70,6 +70,9 @@ pub struct Config {
     /// `--debug-sweep`: the debug-info sweep (`spec/harness.md` "Debug-info
     /// sweep"); `None` outside it.
     pub debug_sweep: Option<DebugSweep>,
+    /// `--bmi-kind`: the module-file variant (`spec/harness.md`
+    /// "Module-file kinds"); `None` outside it.
+    pub bmi_kind: Option<u8>,
 }
 
 /// The debug-info sweep's configuration.
@@ -227,6 +230,9 @@ impl Test<'_> {
         if self.cfg.debug_sweep.is_some() {
             return debug_sweep_skip(spec);
         }
+        if self.cfg.bmi_kind.is_some() && spec.modules.is_empty() {
+            return Some("no `module:` lines (`--bmi-kind`)".to_owned());
+        }
         None
     }
 
@@ -360,6 +366,11 @@ impl Test<'_> {
         ) {
             return (Status::Skip, Some(r), String::new());
         }
+        if spec.requires_sanitizer_runtime
+            && let Some(r) = self.missing_sanitizer_runtime(&spec)
+        {
+            return (Status::Skip, Some(r), String::new());
+        }
         if let Some(reason) = self.mode_skip(&spec, &source) {
             return (Status::Skip, Some(reason), String::new());
         }
@@ -441,6 +452,37 @@ impl Test<'_> {
         out
     }
 
+    /// `requires: sanitizer-runtime` (WP-1032): why the test cannot link
+    /// against the undefined-behaviour and address sanitizer runtimes,
+    /// if it cannot. The clangs that
+    /// link its program are kiln's linker driver (`<llvm_dir>/bin/clang++`)
+    /// when kiln compiles it, and every clang it runs; each must find
+    /// `libclang_rt.{ubsan_standalone,asan}` for the host (compiler-rt is
+    /// a separate package, `libclang-rt-N-dev`, on Debian).
+    fn missing_sanitizer_runtime(&self, spec: &TestSpec) -> Option<String> {
+        let mut linkers: Vec<(&str, PathBuf)> = Vec::new();
+        let kiln_oracle =
+            spec.oracle && self.cfg.oracle.is_some() && self.cfg.oracle_kind == CompilerKind::Kiln;
+        if self.cfg.compiler_kind == CompilerKind::Kiln || kiln_oracle {
+            linkers.push(("kiln's linker", self.cfg.llvm_dir.join("bin/clang++")));
+        }
+        if self.cfg.compiler_kind == CompilerKind::Clang {
+            linkers.push(("the compiler", self.cfg.compiler.clone()));
+        }
+        if let Some(o) = &self.cfg.oracle
+            && spec.oracle
+            && self.cfg.oracle_kind == CompilerKind::Clang
+        {
+            linkers.push(("the oracle", o.clone()));
+        }
+        linkers.into_iter().find(|(_, c)| !has_sanitizer_runtime(c)).map(|(role, c)| {
+            format!(
+                "requires sanitizer-runtime; {role} ({}) has no UBSan/ASan runtime",
+                c.display()
+            )
+        })
+    }
+
     /// The LLVM backends that consume `spec`'s IR, for `requires: llvm>=`:
     /// kiln's (`llvm_dir`) when kiln compiles it, and every clang it runs
     /// (a clang's major is its LLVM's).
@@ -516,10 +558,12 @@ impl Test<'_> {
     }
 
     /// Separate compilation of the module units (spec/modules.md §11.7):
-    /// `run` tests with `module:` or `unit:` lines, and `two-step`.
-    fn two_step(spec: &TestSpec) -> bool {
+    /// `run` tests with `module:` or `unit:` lines, and `two-step`; under
+    /// `--bmi-kind`, every test with `module:` lines.
+    fn two_step(&self, spec: &TestSpec) -> bool {
         spec.two_step
             || (spec.expect == Expect::Run && (!spec.modules.is_empty() || !spec.units.is_empty()))
+            || (self.cfg.bmi_kind.is_some() && !spec.modules.is_empty())
     }
 
     /// The `-fmodule-file=<name>=<file>` flags of the first `n` `module:`
@@ -527,7 +571,7 @@ impl Test<'_> {
     /// test is [two-step](Self::two_step); otherwise `program` reads the
     /// module file [`Self::build_modules`] wrote.
     fn module_flags(&self, program: &Path, spec: &TestSpec, n: usize) -> Vec<std::ffi::OsString> {
-        let source = self.is_kiln(program) && !Self::two_step(spec);
+        let source = self.is_kiln(program) && !self.two_step(spec);
         let oracle = program != self.cfg.compiler;
         spec.modules[..n]
             .iter()
@@ -565,7 +609,7 @@ impl Test<'_> {
         spec: &TestSpec,
         objects: bool,
     ) -> Result<Vec<PathBuf>, Problem> {
-        if spec.modules.is_empty() || (self.is_kiln(program) && !Self::two_step(spec)) {
+        if spec.modules.is_empty() || (self.is_kiln(program) && !self.two_step(spec)) {
             return Ok(Vec::new());
         }
         self.scratch()?;
@@ -597,6 +641,9 @@ impl Test<'_> {
                     spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))),
                 );
                 c.args(self.module_flags(program, spec, i));
+                if let (true, Some(k)) = (kiln, self.cfg.bmi_kind) {
+                    c.arg(format!("-fkiln-bmi-kind={k}"));
+                }
             };
             let mut steps = Vec::new();
             let mut c = Command::new(program);
@@ -1238,7 +1285,10 @@ impl Test<'_> {
         if stdin.is_some() {
             shown.push_str(" < (stdin)");
         }
-        let cap = self.mem_limit;
+        // A sanitized program (`requires: sanitizer-runtime`) runs with no
+        // address-space cap: ASan reserves its shadow memory (gigabytes of
+        // address space, little of it resident) before `main`.
+        let cap = if spec.requires_sanitizer_runtime { None } else { self.mem_limit };
         let o = self.run_capped(&shown, &cmd, stdin, cap, self.cfg.run_timeout).map_err(|e| {
             let d = format!("could not run `{shown}`: {e}");
             if oracle { Problem::Broken(d) } else { Problem::Fail(d) }
@@ -1252,7 +1302,7 @@ impl Test<'_> {
     /// in one command or [two steps](Self::two_step); the output returned
     /// is the test file's compile's.
     fn compile_run_test(&mut self, spec: &TestSpec, exe: &Path) -> Result<Output, Problem> {
-        if !Self::two_step(spec) {
+        if !self.two_step(spec) {
             return self.compile(spec, &[], Some(exe));
         }
         let o = self.build_two_step(&self.cfg.compiler.clone(), spec, exe)?;
@@ -1270,7 +1320,7 @@ impl Test<'_> {
     /// Builds a `run` test's binary `exe` with `oracle`; a rejection is
     /// [`Problem::Broken`].
     fn compile_run_oracle(&mut self, oracle: &Path, spec: &TestSpec, exe: &Path) -> Check {
-        if !Self::two_step(spec) {
+        if !self.two_step(spec) {
             return self.oracle_compile(oracle, spec, &[], Some(exe)).map(drop);
         }
         let o = self.build_two_step(oracle, spec, exe)?;
@@ -2207,6 +2257,36 @@ pub(super) fn meta_header_skip(spec: &TestSpec, source: &str) -> Option<String> 
         }
     }
     None
+}
+
+/// Whether `clang` finds the host's undefined-behaviour and address
+/// sanitizer runtime archives, in
+/// either compiler-rt layout (`lib/linux/libclang_rt.<rt>-<arch>.a` or the
+/// per-target `lib/<triple>/libclang_rt.<rt>.a`). Probed once per clang.
+fn has_sanitizer_runtime(clang: &Path) -> bool {
+    static SEEN: std::sync::Mutex<Vec<(PathBuf, bool)>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, ok)) = seen.iter().find(|(c, _)| c == clang) {
+        return *ok;
+    }
+    let ask = |arg: &str| {
+        Command::new(clang)
+            .arg(arg)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
+    };
+    let arch = std::env::consts::ARCH;
+    let runtime_dir = ask("--print-runtime-dir");
+    let ok = ["ubsan_standalone", "asan"].iter().all(|rt| {
+        let old = ask(&format!("-print-file-name=libclang_rt.{rt}-{arch}.a"));
+        let new = runtime_dir.as_ref().map(|d| d.join(format!("libclang_rt.{rt}.a")));
+        [old, new].into_iter().flatten().any(|p| p.is_absolute() && p.is_file())
+    });
+    seen.push((clang.to_owned(), ok));
+    ok
 }
 
 #[cfg(test)]

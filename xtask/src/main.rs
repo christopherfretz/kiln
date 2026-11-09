@@ -11,6 +11,7 @@ mod clang_ast;
 mod clang_neg;
 mod diag_split;
 mod dist;
+mod doclinks;
 mod entity_lint;
 mod features;
 mod gen_pp;
@@ -404,25 +405,47 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
             Some(corpus_compiler.clone().into()),
             require_gcc,
             args.shard,
+            None,
         )
     };
     // kiln-mode always runs unless `--step` leaves it out: kiln as the
     // compiler, clang++-N as the oracle (and kiln's linker), so without
     // clang it fails rather than passing unchecked.
-    let kiln_mode = match kiln {
+    let kiln_mode = match &kiln {
         Some(kiln) => ci_corpus(
             &format!("--compiler {}", kiln.display()),
-            Some(kiln),
+            Some(kiln.clone()),
             require_gcc,
             args.shard,
+            None,
         ),
         None => test::CorpusOutcome::Skipped("--step".to_owned()),
     };
+    // The module-file kind variant (spec/harness.md "Module-file kinds"):
+    // every `module:` test again, kiln two-step, under each kind.
+    let bmi_kind = |k: u8| match &kiln {
+        Some(kiln) => ci_corpus(
+            &format!("--compiler {} --bmi-kind {k}", kiln.display()),
+            Some(kiln.clone()),
+            require_gcc,
+            args.shard,
+            Some(k),
+        ),
+        None => test::CorpusOutcome::Skipped("--step".to_owned()),
+    };
+    let (bmi1, bmi2) = (bmi_kind(1), bmi_kind(2));
 
     let shard = args.shard.map_or_else(String::new, |s| format!(", shard {s}"));
     let self_check_name = format!("{corpus_compiler} self-check{shard}");
     let kiln_name = format!("kiln{shard}");
-    let runs = [(self_check_name.as_str(), self_check), (kiln_name.as_str(), kiln_mode)];
+    let bmi1_name = format!("kiln --bmi-kind 1{shard}");
+    let bmi2_name = format!("kiln --bmi-kind 2{shard}");
+    let runs = [
+        (self_check_name.as_str(), self_check),
+        (kiln_name.as_str(), kiln_mode),
+        (bmi1_name.as_str(), bmi1),
+        (bmi2_name.as_str(), bmi2),
+    ];
     for (name, run) in &runs {
         eprintln!("xtask ci: corpus ({name}): {}", run.line());
     }
@@ -462,12 +485,14 @@ fn ci_lints(root: &std::path::Path) -> bool {
 }
 
 /// One `cargo xtask test` run over the default corpus, with `compiler`
-/// (`require_gcc`: `KILN_REQUIRE_GCC=1`; `shard`: `--shard K/N`).
+/// (`require_gcc`: `KILN_REQUIRE_GCC=1`; `shard`: `--shard K/N`;
+/// `bmi_kind`: `--bmi-kind`).
 fn ci_corpus(
     what: &str,
     compiler: Option<std::path::PathBuf>,
     require_gcc: bool,
     shard: Option<test::Shard>,
+    bmi_kind: Option<u8>,
 ) -> test::CorpusOutcome {
     let shard_flag = shard.map_or_else(String::new, |s| format!(" --shard {s}"));
     eprintln!("xtask ci: cargo xtask test {what}{shard_flag}");
@@ -476,6 +501,7 @@ fn ci_corpus(
         require_gcc,
         require_debuggers: test::require_debuggers_from_env(),
         shard,
+        bmi_kind,
         ..test::Options::default()
     };
     let start = std::time::Instant::now();

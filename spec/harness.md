@@ -20,6 +20,7 @@ cargo xtask test [options] [paths...]
 | `--no-gcc` | Drop the GCC comparisons only. |
 | `--meta-header` | The header-differential mode: the reflection tests compile against GCC 16.1's real `<meta>` instead of kiln's `tests/support/kiln_meta.h` (see "Header-differential mode"). Needs kiln as the compiler under test and a GCC oracle whose install prefix can be found (a usage error, exit 2, otherwise). |
 | `--debug-sweep` | The debug-info sweep: compile each positive test with and without `-g` instead of checking its expectations (see "Debug-info sweep"). Not with `--meta-header` (usage error). |
+| `--bmi-kind 1\|2` | The module-file kind variant: only the tests with `module:` lines, every one two-step, with kiln writing kind-`N` module files (see "Module-file kinds"). Needs kiln as the compiler (otherwise a usage error). WP-985. |
 | `--external <dir>` | Instead of the corpus, the never-crash run of a directory outside the repository (see "External corpora"). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
 | `--shard K/N` | Run only shard `K` of `N` (`1 <= K <= N`, else a usage error): of the sorted test list (after `--filter`), test `i` (0-based) runs iff `i % N == K - 1`. Round-robin, so a slow directory is spread over every shard, and shards `1..N` of one `N` are exactly the unsharded run, each test in one shard. A shard of a list shorter than `N` may be empty, which is not an error (an empty selection before sharding still is). The run's first line says `(shard K/N of M)`. Not with `--external` (usage error). `ci --shard` passes it to both corpus runs (WP-692, "CI"). |
@@ -96,6 +97,7 @@ directives are also ERRORs.
 | `mem<=N` | Address-space budget of every process the test runs, in MiB (a positive integer; written without a `:` value). It lowers `--mem-limit` for this test (the cap is the smaller of the two) and applies even under `--mem-limit 0`. See "Resource limits". |
 | `requires: target-<arch>` | Run only when the test's **effective target** has architecture `<arch>` (`aarch64` or `x86_64`; any other value is an ERROR). The effective target is the last `--target=<triple>`, `--target <triple>` or `-target <triple>` in the test's `args`; without one it is the compiler's default target, taken to be the host the harness runs on (`std::env::consts::ARCH`), as it is for kiln and clang. The triple's architecture is its first `-` component, with `arm64` read as `aarch64` and `amd64` as `x86_64`. Otherwise **SKIP** with the reason `requires target-<arch>; the test targets <arch> (`<triple>`)` or, without a `--target`, `requires target-<arch>; the default target is <host>`. For a `run` test whose expectations (diagnostic text, output) hold only on one target, since a run test cannot cross-run; a compile-only test pins `args: --target=<triple>` instead (WP-228), which then needs no `requires`. A `run` test that pins a `--target` other than the host's skips rather than failing to run its binary (WP-239). |
 | `requires: host-<feature>` | Run only when the CPU the harness runs on has `<feature>` (`sve`; any other value is an ERROR) and the test's effective target (as for `target-`) has the host's architecture. The features are read from the `Features` (or `flags`) line of Linux's `/proc/cpuinfo`, or from the space-separated `KILN_HOST_FEATURES` when set; elsewhere the host has none. Otherwise **SKIP** with the reason `requires host-<feature>; the host CPU lacks <feature>` or `requires host-<feature>; the test targets <arch>, not the host`. Checked before `target-`. For a `run` test whose binary executes instructions of an optional extension (SVE, WP-810); such a test also carries `requires: target-aarch64`. |
+| `requires: sanitizer-runtime` | Run only when every clang that links the test's program finds the UBSan and ASan runtimes (compiler-rt's `libclang_rt.ubsan_standalone` and `libclang_rt.asan` for the host, in either the `lib/linux/<name>-<arch>.a` or the per-target `lib/<triple>/<name>.a` layout; Debian ships them apart, as `libclang-rt-N-dev`). Those clangs are kiln's linker driver, `<llvm_dir>/bin/clang++` ("Oracle toolchain"), when kiln compiles the test, the compiler under test when it is clang, and the oracle when it is clang and the test compares with it; each is probed once per run. Otherwise **SKIP** with the reason `requires sanitizer-runtime; <role> (<path>) has no UBSan/ASan runtime`. The test's program runs with no address-space cap (`mem<=` and `--mem-limit` still bound the compiles): ASan reserves its shadow memory, gigabytes of address space, before `main`. For `run` tests that link a sanitizer runtime (WP-1032). |
 | `requires: clang>=X[.Y[.Z]]` | Run only when every clang the test runs is at least version `X.Y.Z` (missing components are 0). The clangs the test runs are the compiler under test when its kind is clang, and the oracle when its kind is clang and the test compares with it (`oracle` in effect, or `layout`/`vtables`/`ir`, and an oracle configured). The version is the `X.Y.Z` after `clang version ` in the `--version` line; a clang whose version cannot be read never meets the requirement. Otherwise **SKIP** with the reason `requires clang>=X.Y.Z; the compiler is clang <version>` (or `the oracle is ...`; `... names no clang version` when it cannot be read). With no clang involved (kiln without an oracle, or a non-clang oracle) the requirement is met. For tests that a known defect of an older clang breaks (docs/VALIDATION.md, known oracle defects; WP-239). |
 | `requires: clang<X[.Y[.Z]]` | The complement: run only when every clang the test runs is OLDER than `X.Y.Z`; same clangs, same version reading (an unreadable version never meets it), and the SKIP reason `requires clang<X.Y.Z; the oracle is clang <version>`. Both bounds may appear (the lower is reported first). For an expectation a later clang release changed and kiln has not followed yet — the oracle-switch residual (docs/status/wp-184-oracle-switch.md); kiln alone (no clang run) still runs the test. WP-355. |
 | `min-oracle: N` | Run only when every clang the test runs (the same clangs as `requires: clang>=`) is release `N` or later (`N` a positive major version); otherwise **SKIP** with the reason `min-oracle N; the compiler is clang <version>`. The line `crates/kiln_codegen/tests/ir_vs_clang.rs` reads for an IR case that follows a newer clang where an older one differs (that test compares such a case only under oracle `N` or later); kiln alone (no clang run) still runs the test, at its usual `-fclang-compat`. WP-405. |
@@ -109,7 +111,7 @@ directives are also ERRORs.
 | `meta-header: skip <reason>` | **SKIP** the test in the header-differential mode (`--meta-header`), with the reason `meta-header mode: <reason>`; no effect otherwise. For a test whose answer through GCC's library code is known to differ from kiln's built-in one (a step budget the real `std::vector` exceeds, wording that names a `kiln_meta.h` signature). A missing reason, or any other value, is an ERROR. WP-484. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
-`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, `meta-header`, each `requires` kind (`target-`, `host-`, `clang>=`, `clang<`), `min-oracle`, `verify`, `two-step`, each `module` name and `unit` path, and each `skip`/`xfail` qualifier may appear
+`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, `meta-header`, each `requires` kind (`target-`, `host-`, `clang>=`, `clang<`, `sanitizer-runtime`), `min-oracle`, `verify`, `two-step`, each `module` name and `unit` path, and each `skip`/`xfail` qualifier may appear
 at most once; `oven` at most once per
 location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
@@ -713,6 +715,22 @@ report. The check runs after the test kind's own checks pass. Row order is
 the report's own (bytes descending, then count, then first instantiated),
 so it is deterministic.
 
+### Module-file kinds
+
+`--bmi-kind N` (`N` = 1 or 2) checks the module file reader under each
+kind (spec/modules.md §11.11). The selection keeps only the test files that
+contain `//@ module:` (after `--filter`, before `--shard`; the runner also
+SKIPs any other test, with the reason "no `module:` lines
+(`--bmi-kind`)"). Every remaining test runs two-step, as if it said
+`two-step` ("Directives"), and each of kiln's module-file builds gets
+`-fkiln-bmi-kind=N` after the test's `args`. The oracle side is unchanged.
+A `module:` unit that carries no constant result is written as kind 1
+under either value (the `-v` note says so). The run therefore checks that
+both kinds read back to the same diagnostics, program output and IR as the
+single-step run. `ci` runs it twice (below). The IR goldens of
+`tests/codegen` with `module:` lines are already two-step through
+`ir_vs_clang` (spec/codegen.md §6), and they run under the default kind.
+
 ### Parity report
 
 `--report-parity <file>` writes, after the run, a markdown summary between
@@ -1046,12 +1064,12 @@ runs, stopping at the first failing step:
 2. `cargo build -p kiln_driver` (the binary the kiln-mode run tests, in the
    target dir as for `--compiler`'s default);
 
-then the two corpus runs, both over the default paths (`tests/conformance`,
+then the corpus runs, all over the default paths (`tests/conformance`,
 `tests/debuginfo`, `tests/differential` and `tests/stress`) with the default oracle
 `clang++-N` (N from `KILN_ORACLE`, default 22; "Oracle toolchain"), the
 default GCC oracle ("GCC oracle") and the
 default `--mem-limit` (8192 MiB). A bad `KILN_ORACLE` fails `ci` (exit 2)
-before step 0, and so does `KILN_REQUIRE_GCC=1` without a usable GCC. Both run even
+before step 0, and so does `KILN_REQUIRE_GCC=1` without a usable GCC. All run even
 if the first fails, so one cannot hide the other:
 
 3. **clang self-check**: `cargo xtask test --compiler clang++-N` (printed
@@ -1062,11 +1080,16 @@ if the first fails, so one cannot hide the other:
 4. **kiln mode**: `cargo xtask test --compiler <the kiln built in step 2>`.
    It is never skipped. It needs clang N (the oracle, and kiln's linker), so
    without clang it ends in an infrastructure error and `ci` fails.
+5. **module-file kinds** (WP-985): `cargo xtask test --compiler <that
+   kiln> --bmi-kind 1`, then `--bmi-kind 2` (printed as `corpus (kiln
+   --bmi-kind N)`; "Module-file kinds"). They run with run 4, are
+   selected by `--step kiln`, take the same `--shard`, and are judged like
+   it.
 
 `ci` then prints one line per corpus run, `xtask ci: corpus (<run>): <line>`,
 where `<line>` is the run's summary line ("Output"), `skipped (<reason>)`, or
 `error: <message>`. **`ci` passes only if** every step of 1–2 succeeds and
-neither corpus run has a FAIL, XPASS, ERROR or KILLED (XFAIL and SKIP are allowed)
+no corpus run has a FAIL, XPASS, ERROR or KILLED (XFAIL and SKIP are allowed)
 or an infrastructure error; otherwise it exits 1. The decision is
 `test::report::ci_corpus_passes`. A kiln gap is therefore recorded as
 `xfail(kiln):` (or `skip(kiln):`) with the reason, never left failing.
@@ -1179,7 +1202,21 @@ release; a run of `cargo xtask dist --check` locally is the pre-tag check.
    `bin/kiln++ -> kiln`, `lib/kiln/<major>/include/` (all of
    `resource/include`), `lib/kiln/<major>/predefines/*.txt`,
    `share/doc/kiln/` (`dist::DOCS`); directories 0755, files 0644, the
-   binary 0755.
+   binary 0755. The docs install flat (WP-1027): `README.md`,
+   `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, the two licenses and
+   `docs/{COMPATIBILITY,KNOWN_ISSUES,STABILITY,USER_GUIDE}.md` all land in
+   `share/doc/kiln/`. Each Markdown file's relative links
+   (`[t](target)`, `![a](target)`, HTML `src="..."`/`href="..."`, outside
+   code; `xtask/src/doclinks.rs`) are rewritten by
+   `dist::rewrite_links`: a link to another shipped doc becomes its file
+   name (anchor kept), a link to any other checkout path becomes
+   `https://github.com/christopherfretz/kiln/{blob,tree,raw}/v<version>/<path>`
+   (`raw` for `src=`, `tree` for a directory), and a link to a path the
+   checkout lacks fails the step. Then `doclinks::check_tree` checks the
+   installed tree: every relative link names a file in it, and every
+   `#anchor` is a heading slug (GitHub's rule: lower case, punctuation
+   but `-`/`_` dropped, spaces as `-`, repeats numbered `-1`, `-2`, ...)
+   or an HTML `id`/`name` of the target; a broken link fails the step.
 4. **Archive** (`dist::tar_xz`), into `--out` (default
    `<target-dir>/kiln-dist`): `kiln-<version>-<triple>.tar.xz` with the
    stripped binary and `kiln-<version>-<triple>-symbols.tar.xz` with the
@@ -1194,7 +1231,8 @@ release; a run of `cargo xtask dist --check` locally is the pre-tag check.
    `<out>` is outside it, else the system temporary directory), with
    every `KILN_*` variable removed from the environment and the
    extracted `bin/` first on `PATH`:
-   - the layout (step 3) is there and `bin/kiln++` links to `kiln`;
+   - the layout (step 3) is there, `bin/kiln++` links to `kiln`, and
+     the doc link check (step 3) passes on the extracted tree;
    - `kiln++ --version` names the version;
    - `-print-resource-dir` through `PATH`, `bin/kiln` and a symlink to
      `bin/kiln++` from elsewhere prints `<prefix>/lib/kiln/<major>`;
@@ -1214,7 +1252,9 @@ release; a run of `cargo xtask dist --check` locally is the pre-tag check.
 
    The directories are removed afterwards unless `--keep`. Tests:
    `xtask/src/dist.rs` `tests` (options, the CRC, the path scan, the
-   layout and a byte-identical re-archive) run in `cargo test`; the build
+   layout with the installed docs' link check, the link rewriting, and a
+   byte-identical re-archive) and `xtask/src/doclinks.rs` `tests` run in
+   `cargo test`; the build
    and `--check` run in release.yml and by hand.
 
 ## Feature table

@@ -894,6 +894,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-855 | UBSan: reuse an identical .str for .src strings like clang (`ubsan.rs:117` ub_loc) | WP-675 | open |
 | WP-856 | driver: -ftrapv and -fsanitize-merge= (`kiln_driver/src/codegen_flags.rs:135`) | WP-675 | open |
 | WP-857 | driver: apply -fsanitize-ignorelist files, not just check them (`kiln_driver/src/sanitize.rs:38`) | WP-675 | open |
+| WP-1032 | UBSan completion: .src string reuse, -ftrapv/-fsanitize-merge=, applied -fsanitize-ignorelist (bundles WP-855/856/857) | WP-675 | in progress |
 | WP-858 | codegen: local value names and clang 22 alloca !annotation under ASan/MSan so they can be exact-IR tests (`kiln_driver/src/codegen_cmd.rs:697`) | WP-675 | open |
 | WP-859 | codegen: ASan module name is <stdin> (should be the source file); ASan/TSan module ctors lack target-cpu/target-features (`codegen_cmd.rs:738` sanitizer_passes) | WP-675 | open |
 | WP-860 | harness: `requires: sanitizer-runtime` capability + recover-mode run tests; CI apt libclang-rt-19-dev libclang-rt-22-dev (`.github/actions/kiln-ci/action.yml:36`) | WP-675 | open |
@@ -1038,7 +1039,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-982 | modules step 2: kiln-scan-deps (P1689r5, clang-scan-deps-<major> name), CMake FILE_SET CXX_MODULES end-to-end test | WP-917 | done (#420) |
 | WP-983 | modules: header units as BMIs (-fmodule-header[=user|system], header-unit capsule kind, import "h" finds the .pcm) | WP-917 | open |
 | WP-984 | modules: import std; BMI cache keyed by fingerprint, CMake CXX_MODULE_STD, two-step import std harness test | WP-917 | open |
-| WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | open |
+| WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | in progress |
 | WP-986 | modules: convert skip(clang) module tests (export-run, visibility, partitions-run, private-run, export-import-run, import-std-*) to module:/unit: | WP-917 | open |
 | WP-981 | oven: narrow signed `++`/`--` must promote and wrap (WP-961 x86_64 stable_sort xfail) | WP-961 | done (#419, fixed in WP-980) |
 | WP-1029 | parser drops `__extension__`; `decltype(__extension__ t)` mangles `Dt` where clang writes `DT` | WP-980 | open |
@@ -1050,7 +1051,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1033 | oss harness: build module-using projects with `-G Ninja` (oss-build.sh:176 uses Unix Makefiles) and pass `-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=` when the compiler is the kiln-cxx wrapper | WP-982 | open |
 | WP-1034 | CI: install cmake 3.28+ and ninja in the CI image and run the selftest.sh `cmake_modules` modules e2e under CI | WP-982 | open |
 | WP-1035 | kiln-scan-deps: `-compilation-database` (scan_deps.rs:102), `-format=experimental-full` (scan_deps.rs:82), and a `clang-scan-deps-19` alias for `-fclang-compat=19` (build.rs:44, dist.rs:108) | WP-982 | open |
-| WP-1027 | driver: refresh `--help` (lib.rs:139 still says "-g (ignored)"; add -fclang-compat, -fcontract-evaluation-semantic, -fsanitize, --coverage/-fprofile-instr-generate, -fcrash-diagnostics*, -fconstexpr-ops-limit, -fcoro-aligned-allocation, -flto, -fmodule-file, -fprebuilt-module-path, --llvm-dir (WP-1024)) | WP-1022 | open |
+| WP-1027 | driver: refresh `--help` (lib.rs:139 still says "-g (ignored)"; add -fclang-compat, -fcontract-evaluation-semantic, -fsanitize, --coverage/-fprofile-instr-generate, -fcrash-diagnostics*, -fconstexpr-ops-limit, -fcoro-aligned-allocation, -flto, -fmodule-file, -fprebuilt-module-path, --llvm-dir (WP-1024)) | WP-1022 | in progress |
 | WP-1028 | dist: ship USER_GUIDE/KNOWN_ISSUES/CHANGELOG/CONTRIBUTING/SECURITY in share/doc/kiln and make README links resolve inside the release archive (xtask/src/dist.rs:329) | WP-1022 | open |
 | WP-1036 | PCH speed: serialised-AST/Oven-state PCH reusing the spec/modules.md §11 module-file format and the WP-985 kind-2 BMI; `KILNPCH 1` (spec/driver.md:1149) becomes its fingerprint/validation layer (crates/kiln_driver/src/pch.rs:460) | WP-1023 | open |
 | WP-1037 | driver: `-include foo.h` probes for `foo.h.pch` as clang's driver does (spec/driver.md:1313) | WP-1023 | open |
