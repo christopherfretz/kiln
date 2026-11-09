@@ -2190,10 +2190,7 @@ impl Substituter<'_, '_, '_> {
             // member functions of its own: it is instantiated as in a
             // class template, declaring its member object.
             if sub.is_unnamed_member_class(m) && (local.is_none() || sub.is_anonymous_record(m)) {
-                let mark = sub.sema.failure_mark();
-                if sub.unnamed_member_class(m).is_err() && sub.sema.failed_silently_since(mark) {
-                    sub.member_dropped(m, spec);
-                }
+                let _ = sub.guarded_member(m, spec, |s| s.unnamed_member_class(m));
                 continue;
             }
             let r = if local.is_some()
@@ -2203,16 +2200,8 @@ impl Substituter<'_, '_, '_> {
                 Ok(Some(sub.local_class(m, local.as_deref_mut())))
             } else {
                 let salt = std::mem::replace(&mut sub.sema.inst.stack.member_salt, m.index());
-                let mark = sub.sema.failure_mark();
-                let r = sub.member(m);
+                let r = sub.guarded_member(m, spec, |s| s.member(m));
                 sub.sema.inst.stack.member_salt = salt;
-                // A member whose declaration fails is diagnosed where it
-                // fails; one dropped with no error is a kiln bug, made an
-                // error here rather than a class silently missing a
-                // member (§4.6, WP-1054).
-                if r.is_err() && sub.sema.failed_silently_since(mark) {
-                    sub.member_dropped(m, spec);
-                }
                 r
             };
             let data = matches!(n.kind(), DeclKind::Field | DeclKind::Var);
@@ -2406,6 +2395,24 @@ impl Substituter<'_, '_, '_> {
             false,
             None,
         ))
+    }
+
+    /// Instantiates pattern member `m` of `spec` with `f`. A member whose
+    /// declaration fails is diagnosed where it fails; one dropped with no
+    /// error is a kiln bug, made an error here rather than a class
+    /// silently missing a member (§4.6 "No silent drop", WP-1054).
+    fn guarded_member<R>(
+        &mut self,
+        m: DeclId,
+        spec: DeclId,
+        f: impl FnOnce(&mut Self) -> Result<R, SubstFail>,
+    ) -> Result<R, SubstFail> {
+        let mark = self.sema.failure_mark();
+        let r = f(self);
+        if r.is_err() && self.sema.failed_silently_since(mark) {
+            self.member_dropped(m, spec);
+        }
+        r
     }
 
     /// The internal error for pattern member `m` of `spec` that failed to

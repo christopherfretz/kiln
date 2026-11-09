@@ -947,7 +947,10 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         let parent = ast.first(parent);
         [inst, ast.first(inst)].into_iter().any(|i| {
             ast.instantiated_from(i).is_some_and(|f| ast.first(f) == parent)
-                || ast.definition(i).and_then(|d| ast.instantiated_from(d)).is_some_and(|f| ast.first(f) == parent)
+                || ast
+                    .definition(i)
+                    .and_then(|d| ast.instantiated_from(d))
+                    .is_some_and(|f| ast.first(f) == parent)
         })
     }
 
