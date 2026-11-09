@@ -68,6 +68,7 @@ fn cli_parsing() {
             require_sanitizer_runtime: false,
             debug_sweep: false,
             bmi_kind: None,
+            bmi_image: false,
         }
     );
     assert_eq!(parse_args(strings(&["--help"])).unwrap(), None);
@@ -968,6 +969,9 @@ fn bmi_kind_option() {
     assert_eq!(parse_args(strings(&["--bmi-kind=2"])).unwrap().unwrap().bmi_kind, Some(2));
     assert!(parse_args(strings(&["--bmi-kind", "3"])).is_err());
     assert!(parse_args(strings(&["--bmi-kind"])).is_err());
+    let o = parse_args(strings(&["--bmi-image"])).unwrap().unwrap();
+    assert_eq!((o.bmi_kind, o.bmi_image), (Some(2), true));
+    assert!(parse_args(strings(&["--bmi-image", "--bmi-kind", "1"])).is_err());
 }
 
 #[test]

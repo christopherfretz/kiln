@@ -25,6 +25,7 @@ pub mod attr_triage;
 mod bit_int;
 mod bitfield_constant;
 mod bmi_ast;
+mod bmi_image;
 mod builtins;
 mod cconv;
 pub mod cfg;
@@ -147,12 +148,13 @@ use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
 pub use bmi_ast::CarriedSection as CarriedConstants;
+pub use bmi_image::ModuleImage;
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use contracts::{ContractDeclKind, ContractScope};
-pub use decl::{NameClass, TagUse};
+pub use decl::{NameClass, TagDefinedIn, TagUse};
 pub use declspec::{
     BindingId, Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
-    NullSpec, ParamInfo, Sign, SpecialName, StorageSpec, TypeSpecKind, Width,
+    NullSpec, ParamInfo, Sign, SpecialName, StorageSpec, TagSite, TypeSpecKind, Width,
 };
 pub use empty_body::EmptyBodyStmt;
 pub use expansion::{ExpansionHead, ExpansionInit};
@@ -1078,6 +1080,12 @@ pub struct Sema<'a, 'sm> {
     /// naming a non-template class is also clang's "specialization of
     /// member does not specialize an instantiated member".
     pub extraneous_tag_head: Option<Diag>,
+    /// Set by the parser for a class declared inside another declaration
+    /// (a parameter, a type-id, a condition): it consumes no template
+    /// head, which belongs to the enclosing declaration ([temp.pre]/1;
+    /// `template<class T> using A = struct S {};` declares no class
+    /// template). Read and cleared by [`Sema::act_on_tag`].
+    pub nested_tag: bool,
     /// Set when the last declarator's type was diagnosed invalid in a
     /// way clang records on its `Declarator` (an unexpanded pack,
     /// [temp.variadic]/12): clang's `ParseDeclGroup` reuses the
@@ -1447,6 +1455,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
             extraneous_tag_head: None,
+            nested_tag: false,
             declarator_type_invalid: false,
             lambda_packs: kiln_source::fx::FxHashMap::default(),
             declspec_restrict_error: None,
