@@ -2,7 +2,7 @@
 //! parts of clang's `CheckMain` beyond the specifier and return-type
 //! checks in `act_on_function`, the `main` variable rule of
 //! `ActOnVariableDeclarator`, and the deleted-`main` rule of
-//! `SetDeclDeleted` (spec/sema.md §4.4 "The main function"). A
+//! `SetDeclDeleted` (spec/sema.md §4.4.1 "The main function"). A
 //! freestanding implementation has no `main` rules ([basic.start.main]/1).
 
 use kiln_ast::decl::{DeclFlags, DeclKind};

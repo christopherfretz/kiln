@@ -1,6 +1,6 @@
 //! A member with the name of its class ([class.mem.general]/22, WP-1015):
 //! clang's `DiagnoseClassNameShadow` and the field check of
-//! `CheckCompletedCXXClass` (spec/sema.md §4.4 "Members named as their
+//! `CheckCompletedCXXClass` (spec/sema.md §4.4.1 "Members named as their
 //! class").
 
 use kiln_ast::DeclId;

@@ -2,7 +2,7 @@
 //! [class.bit] (WP-1015): clang's static-data-member reinitialization
 //! check of `AddInitializerToDecl`, the union rules of
 //! `ActOnFunctionDeclarator` and `CheckCompletedCXXClass`, and the
-//! anonymous bit-field rule of `CheckFieldDecl` (spec/sema.md §4.4
+//! anonymous bit-field rule of `CheckFieldDecl` (spec/sema.md §4.4.1
 //! "Union, bit-field and static data member rules").
 
 use kiln_ast::decl::{DeclKind, FieldData};

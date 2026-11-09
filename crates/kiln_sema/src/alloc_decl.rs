@@ -1,7 +1,7 @@
 //! Declaration rules for allocation and deallocation functions
 //! ([basic.stc.dynamic.allocation]/1, [basic.stc.dynamic.deallocation]/1-2;
 //! WP-1015): clang's `CheckOperatorNewDeclaration` /
-//! `CheckOperatorDeleteDeclaration` (spec/sema.md §4.4 "Allocation function
+//! `CheckOperatorDeleteDeclaration` (spec/sema.md §4.4.1 "Allocation function
 //! declarations").
 
 use kiln_ast::DeclId;
