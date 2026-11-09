@@ -145,9 +145,11 @@ probes"). For code that must tell kiln apart, test `__KILN__` and
 - **Reflection** (P2996, `^^`, splices, `<meta>`) is on by default at
   `-std=c++26`. Turn it off with `-fno-reflection`. Below C++26 it is
   always off, and an explicit `-freflection` is accepted and ignored.
-  `-fkiln-reflection-mangling=kiln|gcc|kiln-hashed` chooses how a
-  `std::meta::info` template argument is mangled. `gcc` is link-compatible
-  with GCC 16.1. The default is `kiln`. This flag is experimental (see
+  `-fkiln-reflection-mangling=gcc|kiln|kiln-hashed` chooses how a
+  `std::meta::info` template argument is mangled. The default is `gcc`,
+  GCC 16.1's `L Dm … E` form: objects that use reflections link with
+  objects built by GCC 16.1. `kiln` (kiln's vendor `L u6__info … E` form)
+  and `kiln-hashed` are experimental opt-ins (see
   [STABILITY.md](STABILITY.md)).
 - **Contracts** (P2900: `pre`, `post`, `contract_assert`) are supported
   at C++26. `-fcontract-evaluation-semantic=ignore|observe|enforce|quick_enforce`
@@ -327,7 +329,7 @@ The full list is spec/driver.md, "Options".
 | `-fkiln-stack-size=N[k\|m\|g]` | compiling thread's stack (above) |
 | `-fclang-compat=19\|22` | which clang release's behaviour to reproduce (default 22) |
 | `--llvm-dir=<dir>` | the LLVM installation to use (see [Run-time dependencies](#run-time-dependencies)) |
-| `-fkiln-reflection-mangling=kiln\|gcc\|kiln-hashed` | mangling of reflection template arguments |
+| `-fkiln-reflection-mangling=gcc\|kiln\|kiln-hashed` | mangling of reflection template arguments (default `gcc`, link-compatible with GCC 16.1) |
 | `-fkiln-instantiation-report[=all\|json\|text]`, `-fkiln-memory-report` | reports (above) |
 | `-fkiln-source-path-style=clang\|gcc` | how `__builtin_FILE()` and `std::source_location` spell a file name: as clang does (default) or as GCC does |
 | `-fkiln-reproducible-time` | fixed `__DATE__`/`__TIME__`/`__TIMESTAMP__` (see [Environment variables](#environment-variables)) |

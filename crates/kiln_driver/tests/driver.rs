@@ -669,6 +669,64 @@ fn gcc_toolchain_matches_clang() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
+// spec: driver.md "Toolchain" (WP-1002): Debian's cross GCCs live under
+// `<prefix>/<lib>/gcc-cross/<triple>/<version>` (clang 19/22
+// `ScanLibDirForGCCTriple`, after `gcc/<triple>`), and their libstdc++
+// under `<libdir>/../<triple>/include/c++/<v>` with the target directory
+// `.../<v>/<triple>` (clang `addGCCLibStdCxxIncludePaths`, first). A fake
+// tree per target: a native GCC 13 and a cross GCC 14 (the newer wins),
+// against clang++-19 run live; skipped without it.
+#[test]
+fn gcc_cross_toolchain_matches_clang() {
+    let clang_res = "/usr/lib/llvm-19/lib/clang/19";
+    if !Path::new(clang_res).join("include").is_dir() {
+        eprintln!("skipped: no {clang_res}");
+        return;
+    }
+    let d = scratch("gcc-cross");
+    let mut n = 0;
+    for triple in ["aarch64-linux-gnu", "x86_64-linux-gnu"] {
+        let tc = d.join(triple);
+        for (sub, v) in [("gcc", "13"), ("gcc-cross", "14")] {
+            let g = tc.join("lib").join(sub).join(triple).join(v);
+            std::fs::create_dir_all(&g).unwrap();
+            std::fs::write(g.join("crtbegin.o"), "").unwrap();
+        }
+        let inc = tc.join(triple).join("include/c++/14");
+        std::fs::create_dir_all(inc.join(triple).join("bits")).unwrap();
+        std::fs::create_dir_all(inc.join("backward")).unwrap();
+        std::fs::create_dir_all(tc.join("include/c++/13")).unwrap();
+        let tcs = tc.display().to_string();
+        let target = format!("--target={triple}");
+        let gcc = format!("--gcc-toolchain={tcs}");
+        let args =
+            [&target, &gcc, "-resource-dir", clang_res, "-E", "-v", "-x", "c++", "/dev/null"];
+        let Ok(clang) = std::process::Command::new("clang++-19").args(args).output() else {
+            eprintln!("skipped: no clang++-19");
+            return;
+        };
+        assert!(clang.status.success(), "clang++-19 {args:?} failed");
+        let cerr = String::from_utf8_lossy(&clang.stderr);
+        let o = kiln(&args, "");
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert!(
+            o.stderr
+                .contains(&format!("Selected GCC installation: {tcs}/lib/gcc-cross/{triple}/14")),
+            "{}",
+            o.stderr
+        );
+        assert_eq!(gcc_lines(&o.stderr), gcc_lines(&cerr), "{args:?}");
+        assert_eq!(
+            search_block(&o.stderr, "kiln -cc1 version"),
+            search_block(&cerr, "clang -cc1 version"),
+            "{args:?}"
+        );
+        n += 1;
+    }
+    assert_eq!(n, 2);
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 // spec: driver.md "Target features" (WP-808): `+outline-atomics` is the
 // AArch64 default only with a GCC installation of 9.3.1 or later (clang
 // 19/22 `Linux::IsAArch64OutlineAtomicsDefault`), so a cross compile with

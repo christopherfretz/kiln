@@ -4604,6 +4604,33 @@ diagnostics and IR.
   automatic object (spec/codegen.md `fold.rs`). Before C++26 the freeze
   rejects as before. Validation: `tests/conformance/expr.const/constexpr-ref-automatic{,-errors,-run}.cpp`,
   `tests/conformance/dcl.struct.bind/constexpr-ref-automatic.cpp`.
+- **Lifetime-extended temporaries of a constexpr local reference (C++26,
+  P2686R5, WP-1122).** A temporary bound to a `constexpr` reference (or
+  `constexpr` structured binding, or a member of an aggregate initializer)
+  declared in a function body is an automatic object whose lifetime is that
+  of the reference ([class.temporary]/6), and it is constexpr-referenceable
+  from the reference's own scope, so `constexpr const int& r = 42;`,
+  `constexpr const S& s = S{1, 2};`, `constexpr const auto& [x, y] = S{3,
+  4};` and `constexpr const int (&a)[2] = {5, 6};` in a function are
+  constant-initialized. The Oven allocates the variable's automatic
+  lifetime-extended temporaries as `Origin::Let` objects alongside its
+  static ones (`begin_static_extended`, `compile/class.rs`), so the frozen
+  reference is a `PtrBase::Temporary`; `automatic_referent` counts a
+  temporary whose extending variable is a local (`value.rs`), so the same
+  scoping as above applies (a lambda naming `r` captures it) and codegen
+  emits the temporary on the stack, not as a `_ZGR` global. A value read
+  through the reference is usable only when the temporary is
+  const-qualified ([expr.const]/4: `constexpr int&& m = 3;` is
+  constant-initialized, but reading `m` in a constant expression is
+  "read of temporary is not allowed in a constant expression outside the
+  expression that created the temporary", as clang says at namespace
+  scope). A non-`constexpr` `const int& a = 1;` stays not
+  constant-initialized (the §4.9 narrowing), and before C++26 the freeze
+  rejects as before (`reference to temporary is not a constant
+  expression`). Validation:
+  `tests/conformance/expr.const/constexpr-ref-automatic-temporary{,-errors,-run,-cxx23}.cpp`
+  (all but `-cxx23` are `skip(clang)`: neither clang 22 nor GCC 16
+  implements it).
 - **Fixed on the way.**
   - A reference that cannot bind (to `void`, or to a non-class type
     with no conversion) is `reference to type 'int' could not bind to
@@ -4613,9 +4640,6 @@ diagnostics and IR.
     specialization fully qualified (`Sema::decl_ty_str`, clang's
     printing of `getTypeDeclType`).
 - **Left.**
-  - Lifetime-extended temporaries of an automatic `constexpr` reference
-    (`constexpr const int& r = 42;` in a function) are still rejected
-    (spec/oven.md "Freezing"); clang 22 and GCC 16 reject them too.
   - Instantiating binding attributes.
   - The NoOp `'const M'` cast clang adds when a const class `e` is
     copy-initialized from a prvalue.
@@ -9439,8 +9463,10 @@ not supported yet`.
     (GCC oracle).
   - *iterating* (`range_for.rs` `expansion_iterable`): not an array, and
     member `begin`/`end` are found or ADL finds viable candidates;
-    `static constexpr` `__range`, `__begin`; element i is `*(__begin + i)`
-    through a per-element `static constexpr auto __iter = __begin + i`.
+    `constexpr` `__range`, `__begin`; element i is `*(__begin + i)`
+    through a per-element `constexpr auto __iter = __begin + i`. All three
+    are `static` unless the range is bound by automatic reference (see
+    "Binding a constexpr range" below), when they are automatic.
     N is the first i for which `__begin + i != __end` is false
     ([stmt.expand]/5.2 counts with `++` in a consteval lambda; `__begin +
     i` is what each element uses). *Fast path* (WP-454,
@@ -9477,28 +9503,46 @@ not supported yet`.
     evaluations and steps).
   - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`
     (`struct_bind.rs`); element i is `__u_i`. With a `constexpr`
-    for-range-declaration the declaration is `static constexpr`. The
+    for-range-declaration the declaration is `constexpr` (`static`
+    unless bound by automatic reference, below). The
     initializer's temporaries persist for the lifetime of that reference,
     to the end of the whole statement ([class.temporary]/9, CWG3043;
     `expansion_decomp` calls `extend_init_temporaries`, a no-op for the
     `static constexpr` form, whose temporaries are part of its constant
     initialization). GCC 16.1 agrees
     (`tests/conformance/stmt.expand/destructuring-temporaries-run.cpp`).
-    The iterating form's `__range` is `static constexpr`, so its
+    The iterating form's `__range` is `static constexpr` or a
+    `constexpr` reference to a glvalue (Automatic, below), so its
     temporaries are part of its constant initialization and never
     observable at run time.
-- **Binding a constexpr range** (`expansion_fallback`). A prvalue
-  initializer is bound by value (`static constexpr auto`, const, so its
-  value is usable in constant expressions; a lifetime-extended temporary
-  would not be). A glvalue is first bound with `auto&&`; when that
-  initialization fails to be a constant expression (decided by the
-  captured diagnostics, `stash_has_error`: a failed constant
-  initialization does not mark the variable INVALID), it is retried by
-  value, a copy, each attempt in a block scope of its own. The copy stands
-  in for P2686's constexpr-referenceable automatic objects for the range
-  (§4.9 implements them for user-written declarations; the range variable
-  is `static constexpr`, which [expr.const.init]/4 excludes): the paper's
-  `constexpr std::array` local example works. When both fail, the first attempt's diagnostics are emitted.
+- **Binding a constexpr range** (`expansion_fallback`, `RangeBind`).
+  A prvalue initializer is bound by value (`RangeBind::Copy`, `static
+  constexpr auto`, const, so its value is usable in constant expressions;
+  a lifetime-extended temporary would not be). A glvalue is bound by
+  reference, trying in order, each attempt in a block scope of its own
+  with its diagnostics captured (a failed constant initialization does not
+  mark the variable INVALID, so failure is `stash_has_error`):
+  1. `RangeBind::Static`, `static constexpr auto&&`: a range designating
+     an object of static storage duration;
+  2. `RangeBind::Automatic` (C++26, and only when the
+     for-range-declaration is `constexpr`; P2686R5, WP-1122): a non-static
+     `constexpr auto&&` (the draft's [stmt.expand]/5 wording, `constexpr`
+     only when the for-range-declaration is), with `__begin`, `__end` and
+     each `__iter` automatic too, so a range naming a `constexpr` local
+     (or a parameter-scope automatic object constexpr-referenceable from
+     the statement, §4.9) is bound by reference, not copied: element
+     addresses are the local's, and a non-copyable range works;
+  3. `RangeBind::Copy`, `static constexpr auto`: the fallback for a
+     glvalue that is not constexpr-referenceable but whose value is
+     constant (before C++26, or a non-`constexpr` for-range-declaration).
+  A non-`constexpr` for-range-declaration never tries Automatic: by the
+  wording its `__range` is then not `constexpr` at all, and kiln keeps
+  rejecting a `__range` that is not a constant expression
+  (`iterating-neg.cpp`). When all attempts fail, the first attempt's
+  diagnostics are emitted. Tests:
+  `tests/conformance/stmt.expand/constexpr-range-automatic{,-run,-neg}.cpp`
+  (`skip(clang)`: clang 22 has no expansion statements and neither it nor
+  GCC 16 implements P2686's automatic references).
 - **Holding variables.** The holding variables of a `constexpr` structured
   binding declaration are `constexpr` (P2686 [dcl.struct.bind]/4), so the
   Oven sees initialized constants rather than a static variable's
