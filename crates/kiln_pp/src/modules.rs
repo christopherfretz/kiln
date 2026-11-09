@@ -137,6 +137,9 @@ pub(crate) struct ModState {
     unit_replay: Vec<Option<usize>>,
     /// The replay of the main unit, when it is read from a module file.
     main_replay: Option<usize>,
+    /// The carried constants of the main unit's module file (a `.pcm`
+    /// input of kind 2), until the parser takes them.
+    main_carried: Option<Rc<bmi::CarriedSection>>,
     /// The main unit's module declaration: its key and, when it is
     /// importable, its kind.
     main_unit: Option<(String, Option<UnitKind>)>,
@@ -633,8 +636,9 @@ impl Preprocessor<'_, '_> {
     }
 
     /// Starts reading unit `key` from the module file `path`.
-    fn begin_capsule_unit(&mut self, key: String, path: String, c: Capsule, span: Span) {
+    fn begin_capsule_unit(&mut self, key: String, path: String, mut c: Capsule, span: Span) {
         let builtin = self.sm.add_virtual("<built-in>", c.predefines.clone()).ok();
+        let carried = take_carried(&path, &mut c);
         let Some(m) = &mut self.modules else { return };
         m.replays.push(Replay::new(path.clone(), c, builtin));
         let i = m.replays.len() - 1;
@@ -643,6 +647,23 @@ impl Preprocessor<'_, '_> {
             return;
         };
         self.begin_unit(key, false, file, false, span, Some(i));
+        if let Some(c) = carried {
+            self.set_unit_carried(c);
+        }
+    }
+
+    /// Attaches `c` to the [`Marker::UnitBegin`] just queued.
+    fn set_unit_carried(&mut self, c: Rc<bmi::CarriedSection>) {
+        let last = self.markers.iter_mut().rev().find(|m| matches!(m, Marker::UnitBegin { .. }));
+        if let Some(Marker::UnitBegin { carried, .. }) = last {
+            *carried = Some(c);
+        }
+    }
+
+    /// The carried constants of a `.pcm` main input of kind 2
+    /// (spec/modules.md §11.11), once.
+    pub fn take_main_carried(&mut self) -> Option<Rc<bmi::CarriedSection>> {
+        self.modules.as_mut()?.main_carried.take()
     }
 
     /// Enters the module file `path` (`bytes`) as the main unit: its main
@@ -656,11 +677,13 @@ impl Preprocessor<'_, '_> {
             self.emit(d);
             return false;
         }
-        let Some(c) = self.load_capsule(path, bmi::read(bytes), None, Span::INVALID) else {
+        let Some(mut c) = self.load_capsule(path, bmi::read(bytes), None, Span::INVALID) else {
             return false;
         };
         let builtin = self.sm.add_virtual("<built-in>", c.predefines.clone()).ok();
+        let carried = take_carried(path, &mut c);
         let Some(m) = &mut self.modules else { return false };
+        m.main_carried = carried;
         m.replays.push(Replay::new(path.to_owned(), c, builtin));
         let i = m.replays.len() - 1;
         m.main_replay = Some(i);
@@ -708,6 +731,7 @@ impl Preprocessor<'_, '_> {
             files,
             includes: rec.includes,
             embeds: rec.embeds,
+            sections: Vec::new(),
         })
     }
 
@@ -918,7 +942,7 @@ impl Preprocessor<'_, '_> {
             module,
         };
         self.define_builtins();
-        self.queue(Marker::UnitBegin { key, header, span });
+        self.queue(Marker::UnitBegin { key, header, span, carried: None });
         self.push_file(file, Some(span.lo), None, None, system, false);
         if let Some(Frame::File(f)) = self.frames.last_mut() {
             f.unit = Some(Box::new(save));
@@ -987,4 +1011,12 @@ fn embed_key(includer: u32, req: &EmbedRequest) -> EmbedKey {
         offset: req.offset,
         query_only: req.query_only,
     }
+}
+
+/// Moves the carried-constants section out of the kind-2 capsule `c`
+/// read from `path` (spec/modules.md §11.11).
+fn take_carried(path: &str, c: &mut Capsule) -> Option<Rc<bmi::CarriedSection>> {
+    let i = c.sections.iter().position(|s| s.tag == bmi::SECTION_CONSTS)?;
+    let s = c.sections.swap_remove(i);
+    Some(Rc::new(bmi::CarriedSection { path: path.to_owned(), bytes: s.bytes }))
 }

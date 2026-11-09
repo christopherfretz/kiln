@@ -22,6 +22,7 @@ mod asm;
 mod attr_cond;
 pub mod attr_triage;
 mod bit_int;
+mod bmi_ast;
 mod bitfield_constant;
 mod builtins;
 mod cconv;
@@ -144,6 +145,7 @@ use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
+pub use bmi_ast::CarriedSection as CarriedConstants;
 pub use contracts::{ContractDeclKind, ContractScope};
 pub use decl::{NameClass, TagUse};
 pub use declspec::{
@@ -1174,6 +1176,8 @@ pub struct Sema<'a, 'sm> {
     pub(crate) ptrdiff_t_sugar: QualType,
     /// C++20 modules: the units being read (spec/modules.md).
     pub(crate) modules: modules::ModSema,
+    /// Kind-2 module files: carried constant results (spec/modules.md §11.11).
+    pub(crate) bmi: bmi_ast::BmiState,
     /// The decl-specifier nullability markers awaiting their declarator
     /// and the qualifier each stands for (`nullability.rs`).
     pub(crate) declspec_nulls: Vec<(QualType, NullSpec)>,
@@ -1454,6 +1458,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             signed_size_t_sugar: ptrdiff_t,
             ptrdiff_t_sugar: ptrdiff_t,
             modules: modules::ModSema::default(),
+            bmi: bmi_ast::BmiState::default(),
             declspec_nulls: Vec::new(),
         };
         s.declare_size_t_sugar();
