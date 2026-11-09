@@ -137,6 +137,13 @@ impl Substituter<'_, '_, '_> {
             if !cs.is_empty() {
                 self.sema.inst.concepts.member_constraints.insert(p, (m, self.args.clone()));
             }
+            // [temp.spec.partial.member]: checked again with the enclosing
+            // class's arguments (clang `InstantiateClassTemplatePartial
+            // Specialization` / `CheckTemplatePartialSpecialization`); a
+            // dependent member partial is not checked at its definition.
+            let range = kiln_source::Span::new(n.loc(), n.loc());
+            self.sema.check_partial_more_specialized(p, range);
+            self.sema.check_partial_deducible(p, range);
             Ok(())
         })();
         self.sema.act_on_finish_template_decl();
