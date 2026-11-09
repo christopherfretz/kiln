@@ -703,14 +703,15 @@ impl Substituter<'_, '_, '_> {
                 // `T::N()`, `L::N()` for a local class `L` of a template;
                 // clang's err_typename_missing, at the qualifier).
                 if let Some(id) = name.as_ident()
-                    && matches!(self.sema.classify_name(id, Some(ctx)), crate::decl::NameClass::Type(..))
+                    && matches!(
+                        self.sema.classify_name(id, Some(ctx)),
+                        crate::decl::NameClass::Type(..)
+                    )
                 {
-                    let text = format!(
-                        "{}{}",
-                        self.sema.nns_str(nns),
-                        self.sema.ast.symbols().as_str(id)
-                    );
-                    let d = self.sema.diag(kiln_diag::DiagId::parse_missing_typename, begin).arg(text);
+                    let text =
+                        format!("{}{}", self.sema.nns_str(nns), self.sema.ast.symbols().as_str(id));
+                    let d =
+                        self.sema.diag(kiln_diag::DiagId::parse_missing_typename, begin).arg(text);
                     self.sema.emit(d);
                     return Ok(self.sema.recover_err(&[], loc));
                 }

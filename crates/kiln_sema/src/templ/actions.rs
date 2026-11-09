@@ -91,7 +91,8 @@ impl Sema<'_, '_> {
     /// reached through it are never dependent (WP-1084).
     pub fn is_nondependent_class_qualifier(&self, q: DeclId) -> bool {
         let c = self.type_name_qualifier(q);
-        self.kind_of(c) == DeclKind::CXXRecord && !self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX)
+        self.kind_of(c) == DeclKind::CXXRecord
+            && !self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX)
     }
 
     /// The type `q::name` names when qualified lookup did not find a type
