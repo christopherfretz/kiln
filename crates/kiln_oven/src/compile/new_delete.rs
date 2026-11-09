@@ -89,10 +89,17 @@ impl Compiler<'_> {
     /// within `std::allocator<T>::allocate` / `deallocate`, where it
     /// allocates `T[n / sizeof(T)]` (elements outside their lifetime) or
     /// frees such an allocation ([allocator.members], [expr.const]/5.20).
+    /// A type-aware one (P2719) takes the size or pointer after its
+    /// `std::type_identity<T>` argument; outside `std::allocator` it is
+    /// not constant either, with the same note.
     pub(super) fn global_alloc_call(&mut self, e: ExprId, alloc: bool, args: &[ExprId]) -> u32 {
         let begin = self.begin(e);
         let dst = self.reg();
         let ast = self.ast();
+        let typed = args
+            .first()
+            .is_some_and(|&a| is_std_record(ast, ast.exprs.get(a).ty(), "type_identity"));
+        let (tag, args) = if typed { (args.first().copied(), &args[1..]) } else { (None, args) };
         let name = if alloc { "allocate" } else { "deallocate" };
         let elem = self.cur_fn.and_then(|f| std_allocator_elem(ast, f, name));
         let (Some(elem), Some(&first)) = (elem, args.first()) else {
@@ -101,6 +108,9 @@ impl Compiler<'_> {
             return dst;
         };
         let elem = self.ty(elem);
+        if let Some(tag) = tag {
+            self.effect(tag);
+        }
         let v = self.rv(first);
         for &a in &args[1..] {
             self.effect(a);
@@ -579,9 +589,12 @@ pub(crate) fn is_type_aware_global_alloc(ast: &Ast, d: DeclId) -> bool {
 
 /// Whether `d` is a replaceable global allocation (`Some(true)`) or
 /// deallocation (`Some(false)`) function, called directly as
-/// `::operator new(n)` / `::operator delete(p)`.
+/// `::operator new(n)` / `::operator delete(p)`, or a global type-aware
+/// one usable as such (P2719, `::operator new(std::type_identity<T>{},
+/// n, al)`; clang `isUsableAsGlobalAllocationFunctionInConstantEvaluation`
+/// routes both to `HandleOperatorNewCall` / `HandleOperatorDeleteCall`).
 pub(crate) fn global_alloc_form(ast: &Ast, d: DeclId) -> Option<bool> {
-    if !is_replaceable_global_alloc(ast, d) {
+    if !is_replaceable_global_alloc(ast, d) && !is_type_aware_global_alloc(ast, d) {
         return None;
     }
     Some(matches!(

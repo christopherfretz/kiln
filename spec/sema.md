@@ -6330,11 +6330,40 @@ and aggregate element types.
     type-aware `operator delete` of the same form, or the reverse, is
     an error at the class with an `unmatched` note
     (`check_type_aware_allocator_pairs`).
+  - *Malformed `std::type_identity`* (WP-1112; clang
+    `LookupStdClassTemplate`, `IsPotentiallyTypeAwareOperatorNewOrDelete`).
+    A first parameter of a class or enumeration type named
+    `std::type_identity` makes a declaration type-aware even when it is
+    no class template (it gets the type-aware signature checks).
+    `lookup_std_type_identity` classifies what ordinary lookup of
+    `std::type_identity` finds: nothing, a usable class template (exactly
+    one required parameter, the first a type parameter, not a pack), or
+    something else. Each attempt to build `std::type_identity<T>`
+    (`std_type_identity`: once per typed new-expression, once per
+    class-scope typed deallocation candidate) with a malformed one is
+    `std::type_identity must be a class template with a single type
+    parameter` at the declaration lookup found, every time (clang does not
+    remember the lookup), and the expression falls back to the untyped
+    functions. clang marks the declarations invalid: a namespace-scope
+    one is then not found by lookup, so `resolve_usual_dealloc` skips it
+    without a diagnostic; a class member is found, so a class's delete
+    gets the malformed error and `no suitable member 'operator delete'`.
+    `std::type_identity<T>` is not required to be complete while
+    candidates are compared. A typed new-expression requires it at its
+    start and is invalid if it is incomplete. A delete-expression or
+    deleting destructor requires the selected function's at its location
+    (`typed_usual_delete`; clang `CheckDeleteOperator`), invalid likewise.
+    Divergence: kiln does not mark the declarations invalid, because
+    `is_type_aware_alloc_fn` treats invalid as "not type-aware".
   - *Selection* (`new_delete.rs`, `overload/alloc.rs`; clang
     `resolveAllocationOverload`). In typed mode a new-expression first
     tries `(std::type_identity<T>{}, size[, align], placement...)`. A
     failed aligned attempt is retried without the alignment. Only then is
-    the untyped call tried. A deleted typed best candidate is
+    the untyped call tried. An ambiguous best candidate, typed or not
+    (WP-1112), is `call to 'operator new' is ambiguous` at the
+    expression, with clang's ambiguous-candidate notes. It is an error at
+    once: there is no retry without the alignment and no untyped
+    fallback. A deleted typed best candidate is
     `call to deleted function 'operator new'`, with every candidate's
     note. The lookup for an array of class type is in the element class.
     A delete-expression, a deleting destructor and a new-expression's
@@ -6364,7 +6393,17 @@ and aggregate element types.
     (`is_type_aware_global_alloc` in `kiln_oven/src/compile/new_delete.rs`).
     A class-scope typed function is not usable (`call to class-specific
     'operator new'`), the same as an untyped one. This follows the DIS and
-    clang 22 (`type-aware-new-constexpr.cpp`).
+    clang 22 (`type-aware-new-constexpr.cpp`). A direct call of a usable
+    global typed function (`::operator new(std::type_identity<T>{}, n,
+    al)`) is treated as `::operator new(n)` (WP-1112; clang
+    `HandleOperatorNewCall` / `HandleOperatorDeleteCall`). It is constant
+    only within `std::allocator<T>::allocate` / `deallocate`. Elsewhere it
+    is `cannot allocate untyped memory in a constant expression; ...` for
+    `operator new`, and a bare `subexpression not valid in a constant
+    expression` for `operator delete` (`global_alloc_form`,
+    `global_alloc_call`). Within `allocate`, the size is the argument
+    after the `type_identity`. Divergence: clang 22 reads the size from
+    the first argument there, which gives a zero-sized allocation.
   - *Coroutines* ([dcl.fct.def.coroutine]/10-12, `coroutine.rs`). The
     frame's `operator new` and `operator delete` lookups skip type-aware
     functions. When typed ones exist, it warns
