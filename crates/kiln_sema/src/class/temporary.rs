@@ -404,51 +404,99 @@ impl Sema<'_, '_> {
     /// destructuring expansion statement's `auto&& [u...]` and its
     /// expansion-initializer; spec/sema.md §7.6a). Nested
     /// full-expressions (statement expressions, lambda bodies),
-    /// immediate invocations and unevaluated operands keep theirs. A default argument's
-    /// temporaries are left to the call's full-expression (its
-    /// initializer is shared by every call), and so is an object that is
-    /// only bound (`CXXBindTemporaryExpr`) and never materialized, such as
-    /// a by-value argument. A discarded class prvalue of an element is
-    /// materialized when built ([`Sema::materialize_discarded`]: the
-    /// expansion-init-list is a lifetime-extending context), so it is
-    /// extended here too.
+    /// immediate invocations and unevaluated operands keep theirs, and
+    /// so does an object that is only bound (`CXXBindTemporaryExpr`)
+    /// and never materialized, such as a by-value argument. A discarded
+    /// class prvalue is materialized when built
+    /// ([`Sema::materialize_discarded`]: the expansion-init-list and the
+    /// expansion-initializer are lifetime-extending contexts), so it is
+    /// extended here too. A default argument's temporaries are created
+    /// in the full-expression of its call ([intro.execution]/5) and are
+    /// extended as well, but its initializer is shared by every call:
+    /// the use gets a copy of its own with fresh temporaries
+    /// ([`Sema::fresh_temporaries`], clang's rewritten default argument
+    /// in a lifetime-extending context).
     pub(crate) fn extend_init_temporaries(&mut self, v: DeclId) {
         if self.var_storage(v) != StorageDuration::Automatic {
             return;
         }
         let Some(init) = self.ast.decls.var(v).and_then(|x| x.init) else { return };
-        let ex = &self.ast.exprs;
+        self.extend_walk(v, init, false, 0);
+    }
+
+    /// The default arguments used in `__range`'s for-range-initializer
+    /// `init` (P2718R0, [class.temporary]/7): their temporaries, rebuilt
+    /// for the use, persist with `__range` like the others (collected
+    /// while parsing; the first `index` of them are numbered).
+    pub(crate) fn extend_range_default_args(&mut self, range: DeclId, init: ExprId, index: u32) {
+        self.extend_walk(range, init, true, index);
+    }
+
+    /// The walk of [`Sema::extend_init_temporaries`]: extends the
+    /// full-expression temporaries of `init` to `v` (with `defaults_only`,
+    /// only those its default arguments create).
+    fn extend_walk(&mut self, v: DeclId, init: ExprId, defaults_only: bool, mut index: u32) {
         let mut root = init;
-        while matches!(ex.get(root).kind(), ExprKind::ExprWithCleanups | ExprKind::ConstantExpr) {
-            root = ex.operand(root);
+        {
+            let ex = &self.ast.exprs;
+            while matches!(ex.get(root).kind(), ExprKind::ExprWithCleanups | ExprKind::ConstantExpr)
+            {
+                root = ex.operand(root);
+            }
         }
         let mut found = Vec::new();
-        let mut index = 0u32;
+        let mut uses = Vec::new();
+        let mut defaults = Vec::new();
         let mut stack = self.take_walk_stack(root);
-        while let Some(x) = stack.pop() {
-            match ex.get(x).kind() {
-                ExprKind::MaterializeTemporaryExpr => {
-                    if ex.temporary_storage(x) == StorageDuration::FullExpression {
-                        found.push(x);
-                    } else if ex.lifetime_extended_temporary(x).is_some() {
-                        index += 1;
+        // Inside a default argument every temporary is extended.
+        let mut collect = !defaults_only;
+        loop {
+            let ex = &self.ast.exprs;
+            while let Some(x) = stack.pop() {
+                match ex.get(x).kind() {
+                    ExprKind::MaterializeTemporaryExpr => {
+                        if ex.temporary_storage(x) == StorageDuration::FullExpression {
+                            if collect {
+                                found.push(x);
+                            }
+                        } else if ex.lifetime_extended_temporary(x).is_some() {
+                            index += 1;
+                        }
+                        ex.children_into(x, &self.ast.lists, &mut stack);
                     }
-                    ex.children_into(x, &self.ast.lists, &mut stack);
+                    // A use rebuilt already (a shared pattern node, or a
+                    // nested default argument) holds its own temporaries.
+                    ExprKind::CXXDefaultArgExpr => match ex.default_arg_rewritten(x) {
+                        Some(r) => defaults.push(r),
+                        None => uses.push(x),
+                    },
+                    // An immediate invocation's temporaries end within its
+                    // own constant evaluation ([expr.const]/16).
+                    ExprKind::ExprWithCleanups
+                    | ExprKind::ConstantExpr
+                    | ExprKind::LambdaExpr
+                    | ExprKind::StmtExpr
+                    | ExprKind::UnaryExprOrTypeTraitExpr
+                    | ExprKind::CXXNoexceptExpr
+                    | ExprKind::ExpressionTraitExpr
+                    | ExprKind::RequiresExpr
+                    | ExprKind::ConceptSpecializationExpr => {}
+                    ExprKind::CXXTypeidExpr if !ex.typeid_potentially_evaluated(x) => {}
+                    _ => ex.children_into(x, &self.ast.lists, &mut stack),
                 }
-                // An immediate invocation's temporaries end within its
-                // own constant evaluation ([expr.const]/16).
-                ExprKind::ExprWithCleanups
-                | ExprKind::ConstantExpr
-                | ExprKind::LambdaExpr
-                | ExprKind::StmtExpr
-                | ExprKind::UnaryExprOrTypeTraitExpr
-                | ExprKind::CXXNoexceptExpr
-                | ExprKind::ExpressionTraitExpr
-                | ExprKind::RequiresExpr
-                | ExprKind::ConceptSpecializationExpr => {}
-                ExprKind::CXXTypeidExpr if !ex.typeid_potentially_evaluated(x) => {}
-                _ => ex.children_into(x, &self.ast.lists, &mut stack),
             }
+            for u in std::mem::take(&mut uses) {
+                let Some(d) = self.ast.default_arg_expr(u) else { continue };
+                let Some(r) = self.fresh_temporaries(d, 0) else { continue };
+                if self.ast.exprs.set_default_arg_rewritten(u, r).is_ok() {
+                    defaults.push(r);
+                }
+            }
+            if defaults.is_empty() {
+                break;
+            }
+            stack.append(&mut defaults);
+            collect = true;
         }
         self.put_walk_stack(stack);
         // Codegen and the Oven destroy them in reverse order of
@@ -461,6 +509,65 @@ impl Sema<'_, '_> {
             let _ = self.ast.exprs.extend_temporary(mte, let_decl, StorageDuration::Automatic);
             index = index.saturating_add(1);
         }
+    }
+
+    /// A copy of the expression `e` of a default argument, shared by
+    /// every call, whose full-expression temporaries are fresh
+    /// `MaterializeTemporaryExpr`s (and whose nested default arguments
+    /// are rebuilt too), the nodes above them copied and the rest shared;
+    /// `None` when it materializes none, or when a node on the way is of
+    /// a kind [`kiln_ast::ExprArena::clone_with_children`] does not copy
+    /// (its temporaries then stay with the call's full-expression).
+    /// Nested full-expressions and unevaluated operands are not entered,
+    /// as in [`Sema::extend_init_temporaries`].
+    fn fresh_temporaries(&mut self, e: ExprId, depth: u32) -> Option<ExprId> {
+        const MAX_DEPTH: u32 = 64;
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let ex = &self.ast.exprs;
+        let kind = ex.get(e).kind();
+        match kind {
+            ExprKind::ExprWithCleanups
+            | ExprKind::ConstantExpr
+            | ExprKind::LambdaExpr
+            | ExprKind::StmtExpr
+            | ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::ExpressionTraitExpr
+            | ExprKind::RequiresExpr
+            | ExprKind::ConceptSpecializationExpr => return None,
+            ExprKind::CXXTypeidExpr if !ex.typeid_potentially_evaluated(e) => return None,
+            ExprKind::MaterializeTemporaryExpr
+                if ex.temporary_storage(e) != StorageDuration::FullExpression =>
+            {
+                return None;
+            }
+            ExprKind::CXXDefaultArgExpr => {
+                let inner = self.ast.default_arg_expr(e)?;
+                let r = self.fresh_temporaries(inner, depth + 1)?;
+                let u = self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &[])?;
+                let _ = self.ast.exprs.set_default_arg_rewritten(u, r);
+                return Some(u);
+            }
+            _ => {}
+        }
+        let kids = ex.children(e, &self.ast.lists);
+        let mut changed = kind == ExprKind::MaterializeTemporaryExpr;
+        let mut new = Vec::with_capacity(kids.len());
+        for k in kids {
+            match self.fresh_temporaries(k, depth + 1) {
+                Some(r) => {
+                    changed = true;
+                    new.push(r);
+                }
+                None => new.push(k),
+            }
+        }
+        if !changed {
+            return None;
+        }
+        self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &new)
     }
 
     /// The returned-reference-to-temporary diagnostic: P2748R5 made it
