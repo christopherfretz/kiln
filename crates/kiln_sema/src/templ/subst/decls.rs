@@ -697,7 +697,7 @@ impl Substituter<'_, '_, '_> {
             let exc = if lazy_exc {
                 kiln_ast::types::ExcSpec::Deferred(d)
             } else {
-                self.exc_spec(p, loc)?
+                self.exc_spec(p, d, loc)?
             };
             Ok((params, ret, exc))
         });
@@ -1047,18 +1047,19 @@ impl Substituter<'_, '_, '_> {
             // `InitFunctionInstantiation` -> `EST_Uninstantiated`), from
             // the specialization's own context. A local-scope pattern's is
             // substituted now, as clang.
-            let exc = if matches!(
+            let exc = if (matches!(
                 self.sema.ast.types.exc_spec(&p),
                 kiln_ast::types::ExcSpec::NoexceptExpr {
                     value: kiln_ast::types::NoexceptValue::Dependent(_),
                     ..
                 }
-            ) && !self.sema.decl_in_local_scope(pat)
+            ) || self.sema.deferred_dynamic_exc_spec(&p))
+                && !self.sema.decl_in_local_scope(pat)
             {
                 self.sema.uninstantiated_exc.insert(spec, pat);
                 kiln_ast::types::ExcSpec::Deferred(spec)
             } else {
-                self.exc_spec(&p, loc)?
+                self.exc_spec(&p, pat, loc)?
             };
             Ok((params, ret, exc))
         });
@@ -1166,6 +1167,7 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn exc_spec(
         &mut self,
         p: &kiln_ast::types::FuncProto,
+        pat: DeclId,
         loc: Loc,
     ) -> SubstResult<kiln_ast::types::ExcSpec> {
         use kiln_ast::types::{ExcSpec, NoexceptValue};
@@ -1176,15 +1178,45 @@ impl Substituter<'_, '_, '_> {
             }
             // The type-id-list of a dynamic exception specification is
             // substituted.
+            // Each substituted type is checked ([except.spec]/2); an
+            // invalid one drops the specification (clang
+            // `SubstExceptionSpec`). While deducing (a C++98 function
+            // template specialization's, substituted with its declaration)
+            // the check is a hard error in the specialization's
+            // instantiation, not a deduction failure: clang's
+            // `InitFunctionInstantiation` turns the deduction context into
+            // one (WP-1137).
             ExcSpec::Dynamic(l) => {
                 let tys = self.sema.ast.types.type_list_types(l).to_vec();
                 let tys = self.expand_types(&tys, loc)?;
-                // `throw(Ts...)` with an empty pack is `throw()`, non-throwing
-                // ([except.spec]/12 as of C++14).
-                if tys.is_empty() {
-                    ExcSpec::DynamicNone
-                } else {
-                    ExcSpec::Dynamic(self.sema.ast.types.type_list(&tys))
+                let spec = self.entity.filter(|_| self.sema.inst.stack.is_sfinae());
+                // A member template of a class template specialization
+                // whose list was dropped there (a type failed when the
+                // class was instantiated) has none: clang substitutes the
+                // specialization from that member, kiln from the original
+                // pattern.
+                let own = spec
+                    .and_then(|s| self.sema.spec_args(s))
+                    .and_then(|(t, _)| self.sema.templated_function(t))
+                    .filter(|&own| own != pat);
+                if let Some(ty) = own.and_then(|o| self.sema.ast.decls.get(o).ty())
+                    && self.sema.written_exc_spec(ty) == ExcSpec::None
+                {
+                    return Ok(ExcSpec::None);
+                }
+                let checked = match spec {
+                    Some(spec) => self.sema.as_spec_instantiation(spec, |s| {
+                        s.finish_substituted_dynamic_exc(l, &tys, pat, loc)
+                    }),
+                    None if !self.sema.inst.stack.is_sfinae() => {
+                        Some(self.sema.finish_substituted_dynamic_exc(l, &tys, pat, loc))
+                    }
+                    None => None,
+                };
+                match checked {
+                    Some(e) => e,
+                    None if tys.is_empty() => ExcSpec::DynamicNone,
+                    None => ExcSpec::Dynamic(self.sema.ast.types.type_list(&tys)),
                 }
             }
             // The canonical form of a value-dependent `noexcept(expr)`:

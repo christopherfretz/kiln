@@ -912,10 +912,12 @@ impl Sema<'_, '_> {
         {
             return;
         }
+        // An implicit or defaulted one; not an instantiation's written
+        // one, substituted only now ([temp.inst]/14).
         let computed = matches!(
             self.ast.decls.get(m).ty().map(|t| self.written_exc_spec(t)),
             Some(ExcSpec::Deferred(_))
-        );
+        ) && !self.uninstantiated_exc.contains_key(&self.ast.first(m));
         let os: Vec<DeclId> = overridden(&self.ast, m).collect();
         for o in os {
             let oloc = self.ast.decls.get(o).loc();
@@ -965,11 +967,14 @@ impl Sema<'_, '_> {
     }
 
     /// The exception specification of function `f` when it is known and
-    /// not value-dependent (clang `EST_DependentNoexcept`).
+    /// not value-dependent (clang `EST_DependentNoexcept`), as written: from
+    /// C++17 the canonical type keeps only whether it is non-throwing, and
+    /// a dynamic list (an error there, `-Wdynamic-exception-spec`, but
+    /// kept) is compared type by type as before (WP-1137).
     fn resolved_exc(&self, f: DeclId) -> Option<ExcSpec> {
         let ty = self.ast.decls.get(f).ty()?;
-        let p = self.ast.types.proto(ty)?;
-        match self.ast.types.exc_spec(p) {
+        self.ast.types.proto(ty)?;
+        match self.written_exc_spec(ty) {
             ExcSpec::Deferred(_)
             | ExcSpec::DependentNoexcept(_)
             | ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. } => None,

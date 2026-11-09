@@ -1532,7 +1532,8 @@ unit as clang 19's `-flto` does (`CodeGenOpts.PrepareForLTO` /
   construction vtable carries its set twice, as clang 19 and 22 do.
 - The module summary, the pre-link pipeline and the bitcode writer are
   the driver's (`opt`, spec/driver.md).
-- Not yet: `-ffat-lto-objects` (bitcode only), whole-program
+- Not yet: `-ffat-lto-objects` (rejected by the driver, `'-ffat-lto-objects'
+  is not supported by kiln`; spec/driver.md "Codegen flags"), whole-program
   devirtualization options.
 - Tests: `tests/codegen/lto_{full,full_o2,thin,thin_split}.cpp` (exact IR
   against clang 19, `ir_vs_clang`), `tests/conformance/lex.phases/

@@ -114,9 +114,14 @@ impl Sema<'_, '_> {
         nothrow
     }
 
+    /// The specification of `f` as written on its type: from C++17 the
+    /// canonical type keeps only whether it is non-throwing, so a callee's
+    /// `throw(E1)` (accepted under `-Wno-dynamic-exception-spec`) is read
+    /// from the sugar, as clang's `ImplicitExceptionSpecification` reads
+    /// the callee's `FunctionProtoType` (WP-1137).
     fn exc_of(&self, f: DeclId) -> ExcSpec {
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        self.ast.types.proto(ty).map_or(ExcSpec::None, |p| self.ast.types.exc_spec(p))
+        self.written_exc_spec(ty)
     }
 
     /// The shared `false` of `noexcept(false)`.
@@ -199,6 +204,21 @@ impl Sema<'_, '_> {
             }
         });
         out
+    }
+
+    /// The exception specification the destructor `f` of a non-dependent
+    /// class gets when it is declared without one ([except.spec]/8; clang
+    /// `ImplicitExceptionSpecification`, `AdjustDestructorExceptionSpec`):
+    /// non-throwing, the union of its callees' dynamic lists, or
+    /// potentially-throwing (`None` here, clang's `noexcept(false)`).
+    /// `None` (the Option) when a callee's specification is not known.
+    pub(crate) fn implicit_dtor_exc(&mut self, f: DeclId) -> Option<ExcSpec> {
+        match self.implicit_thrown_types(f) {
+            ImplicitThrows::Unknown => None,
+            ImplicitThrows::Any => Some(ExcSpec::None),
+            ImplicitThrows::List(v) if v.is_empty() => Some(ExcSpec::BasicNoexcept),
+            ImplicitThrows::List(v) => Some(ExcSpec::Dynamic(self.ast.types.type_list(&v))),
+        }
     }
 
     /// The functions special member `f` of kind `k` of class `class`
