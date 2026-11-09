@@ -138,8 +138,8 @@ impl Sema<'_, '_> {
         None
     }
 
-    /// The virtual-override form of the ref-qualifier rule (CWG2496, clang
-    /// 19 before C++23): a non-static member function of `class` with the
+    /// The virtual-override form of the ref-qualifier rule (CWG2496; clang
+    /// 22 in every language mode, clang 19 only before C++23): a non-static member function of `class` with the
     /// parameter-type-list of a virtual function of a base whose ref-
     /// qualifier differs, one of them having none, whatever their
     /// cv-qualifiers (clang's `AddOverriddenMethods` runs `IsOverload`

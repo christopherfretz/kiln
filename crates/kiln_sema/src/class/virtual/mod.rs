@@ -152,7 +152,7 @@ impl Sema<'_, '_> {
             } else {
                 self.overridden_methods(site.class, site.name, ty)
             };
-            if !is_static && self.std < kiln_lex::Std::Cxx23 {
+            if !is_static && (self.std < kiln_lex::Std::Cxx23 || self.clang_compat >= 22) {
                 self.check_override_ref_mix(site.class, site.name, ty, d.name_loc());
             }
             if !out.overridden.is_empty() && !is_static {
