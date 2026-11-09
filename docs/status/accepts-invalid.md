@@ -26,11 +26,11 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `f855ffb2c`
+- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `fe3a8c2f6`
 - command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 193 s; peak RSS of one case 21 MiB (gnu-time)
+- wall time 157 s; peak RSS of one case 20 MiB (gnu-time)
 
 ## Totals
 
@@ -38,8 +38,8 @@ written by hand (WP-912). The run is informational and never part of
 |---|---:|---:|---:|
 | ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 64 | 1250 | 5.1% |
 | ACCEPTS-INVALID cases (per RUN configuration) | 75 | 1946 | 3.9% |
-| MISSED-ERROR lines (expected-error with no kiln error on its line) | 3905 | 28065 | 13.9% |
-| REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 28 | 418 | 6.7% |
+| MISSED-ERROR lines (expected-error with no kiln error on its line) | 3891 | 28065 | 13.9% |
+| REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 27 | 418 | 6.5% |
 | crashes | 0 | 2850 | 0.0% |
 | timeouts | 0 | 2850 | 0.0% |
 | out of memory | 0 | 2850 | 0.0% |
@@ -59,16 +59,16 @@ written by hand (WP-912). The run is informational and never part of
 | CXX/dcl | 0 / 4 | 0.0% | 0 / 81 | 0.0% | 0 | 0 / 0 |
 | CXX/dcl.dcl | 4 / 77 | 5.2% | 248 / 1141 | 21.7% | 0 | 0 / 0 |
 | CXX/dcl.decl | 1 / 54 | 1.9% | 86 / 788 | 10.9% | 1 | 0 / 0 |
-| CXX/drs | 1 / 33 | 3.0% | 1314 / 8682 | 15.1% | 0 | 0 / 0 |
+| CXX/drs | 1 / 33 | 3.0% | 1309 / 8682 | 15.1% | 0 | 0 / 0 |
 | CXX/except | 3 / 15 | 20.0% | 24 / 104 | 23.1% | 0 | 0 / 0 |
-| CXX/expr | 2 / 78 | 2.6% | 72 / 644 | 11.2% | 0 | 0 / 0 |
+| CXX/expr | 2 / 78 | 2.6% | 71 / 644 | 11.0% | 0 | 0 / 0 |
 | CXX/lex | 0 / 14 | 0.0% | 1 / 78 | 1.3% | 0 | 0 / 0 |
 | CXX/module | 0 / 6 | 0.0% | 6 / 75 | 8.0% | 0 | 0 / 0 |
 | CXX/over | 1 / 42 | 2.4% | 7 / 313 | 2.2% | 0 | 0 / 0 |
 | CXX/special | 2 / 31 | 6.5% | 12 / 224 | 5.4% | 3 | 0 / 0 |
 | CXX/stmt.stmt | 0 / 9 | 0.0% | 3 / 255 | 1.2% | 0 | 0 / 0 |
-| CXX/temp | 9 / 147 | 6.1% | 335 / 1644 | 20.4% | 2 | 0 / 0 |
-| SemaCXX | 37 / 628 | 5.9% | 1592 / 12406 | 12.8% | 21 | 0 / 0 |
+| CXX/temp | 9 / 147 | 6.1% | 334 / 1644 | 20.3% | 2 | 0 / 0 |
+| SemaCXX | 37 / 628 | 5.9% | 1585 / 12406 | 12.8% | 20 | 0 / 0 |
 
 ## Top 50 accepts-invalid files
 
@@ -197,7 +197,6 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | `SemaCXX/goto2.cpp` | RUN 1 -std=c++17 -verify=expected | unknown type name '__label__' |
 | `SemaCXX/libstdcxx_format_kind_hack.cpp` | RUN 1 -std=c++23 -verify=expected | variable template 'format_kind' declared with deduced type 'const auto' cannot appear in its own initializer |
 | `SemaCXX/nullptr-98.cpp` | RUN 1 -std=c++98 -verify=expected | use of undeclared identifier '__nullptr' |
-| `SemaCXX/restrict-this.cpp` | RUN 1 -std=gnu++17 -verify=expected | expected ';' at end of declaration list |
 | `SemaCXX/source_location.cpp` | RUN 1 -std=c++1z -verify=expected | static assertion failed due to requirement '__builtin_LINE() == 149 - 1':  |
 | `SemaCXX/source_location.cpp` | RUN 2 -std=c++2a -verify=expected | static assertion failed due to requirement '__builtin_LINE() == 149 - 1':  |
 | `SemaCXX/source_location.cpp` | RUN 3 -std=c++2b -verify=expected | static assertion failed due to requirement '__builtin_LINE() == 149 - 1':  |
@@ -433,6 +432,23 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
    class template in a local class; a braced default argument is not
    searched for `this` or parameters; template parameter shadowing in a
    typedef.
+   WP-1091 adds the remaining WP-1040 shadowing and declaration-context
+   checks. An elaborated `struct T *` naming a template parameter and a
+   lambda capture named like one of the lambda's own template parameters
+   now give "declaration of 'T' shadows template parameter"
+   (`temp.local/p6-elaborated-ref-shadows-template-param*.cpp`,
+   `expr.prim.lambda.capture/capture-shadows-template-param*.cpp`).
+   `__restrict` and nullability keywords after a parameter list now parse,
+   and are rejected on explicit-object, static and non-member functions
+   (`dcl.fct/*restrict-nullability-qualifier*.cpp`); GNU `__restrict` on
+   `this` is implemented (`class.this/restrict-method-*.cpp`). A block-scope
+   function template definition is "function definition is not allowed
+   here" under clang 22
+   (`dcl.fct.def.general/block-scope-function-template-definition*.cpp`).
+   `temp.local/p6.cpp`, `expr.prim.lambda.capture/p5.cpp` and
+   `SemaCXX/restrict-this.cpp` now have no missed errors and no
+   rejects-valid; on the enum line of `p6.cpp` kiln still gives a different
+   error from clang's "ISO C++ forbids forward references to 'enum' types".
 7. **Constant evaluation: undefined behaviour and not-yet-seen initializers**
    (constant expression 67 / 8, no constant initializer 54 / 2, constexpr
    variable must be initialized 27 / 9; [expr.const]/10, [dcl.constexpr]/6).
@@ -642,7 +658,7 @@ error inside SFINAE as well.
 - `SemaCXX/PR20110.cpp`: kiln rejects what clang's own FIXME says should be
   rejected.
 - GNU/clang extensions kiln does not implement (`__label__`, `__nullptr`,
-  `__restrict` on `this`, `unsigned wchar_t`, C++98 zero-length arrays, GNU
+  `unsigned wchar_t`, C++98 zero-length arrays, GNU
   `static const float` initializers, `-fno-builtin` `std::move`, the
   libstdc++ `__format_kind` hack) and driver flags kiln does not accept
   (the "unknown argument" table above): these show up as errors or skipped
