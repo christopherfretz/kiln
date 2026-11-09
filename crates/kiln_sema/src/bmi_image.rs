@@ -1617,11 +1617,13 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 if n == usize::MAX || n > i {
                     return bad("an out-of-line member of a nested dependent class");
                 }
+                // The parameters belong to the definition's own scope.
+                let scope = if d.lexical == LEX_TU { NONE } else { d.lexical };
                 for (k, j) in (i - n..i).enumerate() {
                     let ok = match img.decls[j].payload {
                         Payload::Ttp { depth: 0, index, .. }
                         | Payload::Nttp { depth: 0, index, .. } => {
-                            usize::from(index) == k && img.decls[j].ctx == NONE
+                            usize::from(index) == k && img.decls[j].ctx == scope
                         }
                         _ => false,
                     };
@@ -4286,6 +4288,33 @@ mod tests {
                 Payload::Var { ty: q(t + 5), spec: 0, init: NONE, eval: NONE },
             ),
         ]);
+        // A pattern body's `T{}.member`: a dependent construction and a
+        // dependent member access (its name in `pnames`, its operator's
+        // location a cold annotation).
+        let e = img.bodies.exprs.len() as u32;
+        img.pnames.push("member".into());
+        img.bodies.exprs.extend([
+            body::ExprRec {
+                kind: 47,
+                bits: 0,
+                aux: 1,
+                cold: 0,
+                deps: 7,
+                ty: q(t),
+                loc: 470,
+                words: vec![0],
+            },
+            body::ExprRec {
+                kind: 48,
+                bits: 1,
+                aux: 0,
+                cold: 16,
+                deps: 7,
+                ty: q(t),
+                loc: 474,
+                words: vec![e, pname + 1, 473],
+            },
+        ]);
         img
     }
 
@@ -4307,8 +4336,24 @@ mod tests {
             i.decls[r].payload = p;
         }
         type Corrupt = (&'static str, fn(&mut Image));
-        let corrupt: [Corrupt; 13] = [
+        let corrupt: [Corrupt; 17] = [
             ("template not after its pattern", |i| i.decls.swap(16, 17)),
+            ("member name out of range", |i| {
+                let n = i.bodies.exprs.len();
+                i.bodies.exprs[n - 1].words[1] = i.pnames.len() as u32;
+            }),
+            ("member access without its operator location", |i| {
+                let n = i.bodies.exprs.len();
+                i.bodies.exprs[n - 1].cold = 0;
+            }),
+            ("dependent member template keyword", |i| {
+                let n = i.bodies.exprs.len();
+                i.bodies.exprs[n - 1].aux = 2;
+            }),
+            ("construction argument out of range", |i| {
+                let n = i.bodies.exprs.len();
+                i.bodies.exprs[n - 2].words = vec![1, n as u32];
+            }),
             ("independent member", |i| i.decls[17].flags = 0),
             ("spec of a function template", |i| {
                 let p = Payload::Spec { template: 13, complete: true, args: vec![] };
