@@ -728,11 +728,41 @@ pub struct PchArgs {
     /// the ones clang's driver probes for `<file>.pch` / `<file>.gch`
     /// (WP-1037). An `-Xclang -include` goes to clang's frontend as is.
     pub probed: Vec<usize>,
-    /// The last `-include-pch` overrides a PCH the first probed
-    /// `-include` turns into: it follows that `-include`, or it is an
-    /// `-Xclang` one (clang's frontend sees those after the driver's
-    /// options, and its last `-include-pch` wins).
-    pub include_overrides_probe: bool,
+    /// Whether the last `-include-pch` overrides a PCH the first probed
+    /// `-include` turns into.
+    pub include_order: IncludePchOrder,
+}
+
+/// Where the last `-include-pch` sits against the probed `-include`s
+/// (WP-1037; clang's frontend uses the last `-include-pch` it sees).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IncludePchOrder {
+    /// None was given, or it precedes every probed `-include`: a probed
+    /// PCH replaces it.
+    #[default]
+    BeforeProbe,
+    /// It follows a probed `-include`, or it is an `-Xclang` one (clang's
+    /// frontend sees those after the driver's options): it wins.
+    OverridesProbe,
+}
+
+impl PchArgs {
+    /// Records which `-include`s clang's driver probes for a PCH, and
+    /// where the last `-include-pch` comes (WP-1037). `includes` is the
+    /// number of `-include`s parsed so far, this one included.
+    fn note_valued(&mut self, opt: &str, given: bool, xclang: bool, includes: usize) {
+        match opt {
+            "-include" if given && !xclang => self.probed.push(includes - 1),
+            "-include-pch" if given => {
+                self.include_order = if xclang || !self.probed.is_empty() {
+                    IncludePchOrder::OverridesProbe
+                } else {
+                    IncludePchOrder::BeforeProbe
+                };
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Options taking a value, joined (`-Ifoo`) or separate (`-I foo`).
@@ -791,6 +821,7 @@ impl Args {
 
     /// Parses `argv` (without the program name) for the program `argv0`,
     /// which sets [`Args::program`] and the default [`Args::mode`].
+    #[allow(clippy::too_many_lines, reason = "one pass over argv, in clang's order")]
     pub fn parse_as(argv0: &str, argv: &[String]) -> Args {
         let spliced = crate::codegen_flags::splice_preprocessor_args(argv);
         let argv = spliced.as_slice();
@@ -860,15 +891,7 @@ impl Args {
                     }
                     Valued::Missing => a.errors.push(ArgError::MissingValue(opt.to_owned())),
                 }
-                // WP-1037: which `-include`s clang's driver probes for a
-                // PCH, and whether the last `-include-pch` comes after.
-                match opt {
-                    "-include" if given && !xclang => a.pch.probed.push(a.includes.len() - 1),
-                    "-include-pch" if given => {
-                        a.pch.include_overrides_probe = xclang || !a.pch.probed.is_empty();
-                    }
-                    _ => {}
-                }
+                a.pch.note_valued(opt, given, xclang, a.includes.len());
                 continue;
             }
             if let Some(r) = a
@@ -1903,14 +1926,20 @@ mod tests {
         let a = parse("-Xclang -include -Xclang x.h -include a.h -includeb.h t.cpp");
         assert_eq!(a.includes, ["x.h", "a.h", "b.h"]);
         assert_eq!(a.pch.probed, [1, 2]);
-        assert!(!a.pch.include_overrides_probe);
-        assert!(!parse("-include-pch p.pch -include a.h t.cpp").pch.include_overrides_probe);
-        assert!(parse("-include a.h -include-pch p.pch t.cpp").pch.include_overrides_probe);
+        assert_eq!(a.pch.include_order, IncludePchOrder::BeforeProbe);
+        assert_eq!(
+            parse("-include-pch p.pch -include a.h t.cpp").pch.include_order,
+            IncludePchOrder::BeforeProbe
+        );
+        assert_eq!(
+            parse("-include a.h -include-pch p.pch t.cpp").pch.include_order,
+            IncludePchOrder::OverridesProbe
+        );
         let a = parse("-Xclang -include-pch -Xclang p.pch -include a.h t.cpp");
-        assert!(a.pch.include_overrides_probe);
+        assert_eq!(a.pch.include_order, IncludePchOrder::OverridesProbe);
         // The last `-include-pch` decides.
         let a = parse("-include a.h -include-pch p.pch -include-pch q.pch t.cpp");
-        assert!(a.pch.include_overrides_probe);
+        assert_eq!(a.pch.include_order, IncludePchOrder::OverridesProbe);
         assert_eq!(parse("t.cpp -include").pch.probed, [0usize; 0]);
     }
 

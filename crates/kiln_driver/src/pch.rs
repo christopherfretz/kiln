@@ -17,7 +17,7 @@ use kiln_pp::CmdMacro;
 use kiln_pp::bmi;
 use kiln_source::{SourceManager, Span};
 
-use crate::args::{Action, Args, DepHeaders, Input};
+use crate::args::{Action, Args, DepHeaders, IncludePchOrder, Input};
 use crate::codegen_cmd::{self, Phase};
 use crate::deps::DepList;
 use crate::toolchain::{LangStd, Toolchain};
@@ -575,7 +575,7 @@ pub(crate) fn probe(
     let mut out = args.clone();
     out.includes.remove(idx);
     out.pch.probed.clear();
-    if !args.pch.include_overrides_probe {
+    if args.pch.include_order == IncludePchOrder::BeforeProbe {
         out.pch.include = Some(p);
     }
     Ok(Some(out))
