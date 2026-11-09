@@ -652,6 +652,21 @@ impl<'a> Vis<'a> {
             {
                 return false;
             }
+            // A numbered closure with no context declaration takes its
+            // owner's linkage, its semantic context's; at file scope (a
+            // default template argument there) it has none (clang
+            // `getLVForClosureType`: the translation unit is not a
+            // `NamedDecl`; WP-1062).
+            if ast.exprs.lambdas.get(l).mangling.context.is_none()
+                && ast.decls.get(d).ctx().is_none_or(|c| {
+                    matches!(
+                        ast.decls.get(c).kind(),
+                        DeclKind::TranslationUnit | DeclKind::LinkageSpec | DeclKind::Export
+                    )
+                })
+            {
+                return false;
+            }
         } else if decl_name(ast, d).is_empty()
             && ast.decls.typedef_for_anon(d).is_none()
             && effective_ctx(ast, d).is_none_or(|c| {
