@@ -26,8 +26,8 @@
 
 use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{
-    Access, DeclFlags, DeclKind, EnumData, FnSpec, FnStorage, FriendKind, ModuleOwnership,
-    ParamData, VarSpec, VarStorage,
+    Access, ConstexprKind, DeclFlags, DeclKind, EnumData, FnSpec, FnStorage, FriendKind,
+    InitStyle, ModuleOwnership, ParamData, VarSpec, VarStorage,
 };
 use kiln_ast::modules::Owner;
 use kiln_ast::names::DeclName;
@@ -40,8 +40,12 @@ use kiln_source::{FileId, Loc};
 use crate::Sema;
 use crate::modules::Directive;
 
+mod body;
+
+use body::{Bodies, BodyState, Root};
+
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 1;
+pub(crate) const IMAGE_VERSION: u32 = 2;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -106,6 +110,20 @@ struct ParamRec {
     pflags: u16,
     /// `USED` / `REFERENCED`.
     flags: u8,
+    /// The default argument's expression record, or [`NONE`].
+    default: u32,
+}
+
+/// A function's body.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FnBody {
+    None,
+    /// The braces of a body the image does not carry (a non-inline
+    /// function: importers only need to know it is defined).
+    Braces(u32, u32),
+    /// The body's compound statement record (inline, `constexpr` and
+    /// `consteval` functions).
+    Stmt(u32),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -114,14 +132,23 @@ enum Payload {
     Export,
     Function {
         ty: QRef,
-        spec: u8,
+        /// `FnSpec` bits (the subset [`fn_spec`] accepts).
+        spec: u32,
         params: Vec<ParamRec>,
-        body: Option<(u32, u32)>,
+        body: FnBody,
     },
     Var {
         ty: QRef,
-        spec: u8,
+        /// `VarSpec` bits (the subset [`var_spec`] accepts).
+        spec: u32,
+        /// The initializer's expression record, or [`NONE`].
+        init: u32,
+        /// The evaluated value: [`NONE`] not evaluated (or a value the
+        /// image does not carry), [`body::NOT_CONST`], or a constant.
+        eval: u32,
     },
+    /// A label (a local declaration only).
+    Label,
     /// `scoped` is `EnumData` `SCOPED | SCOPED_STRUCT`; `def` is present
     /// for a definition, holding the computed (underlying, promotion)
     /// types of one without a fixed underlying type.
@@ -172,6 +199,7 @@ struct Image {
     pnames: Vec<String>,
     types: Vec<TyRec>,
     decls: Vec<DeclRec>,
+    bodies: Bodies,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -182,6 +210,7 @@ const K_ENUM: u8 = 5;
 const K_ENUMERATOR: u8 = 6;
 const K_TYPEDEF: u8 = 7;
 const K_ALIAS: u8 = 8;
+const K_LABEL: u8 = 9;
 
 impl Payload {
     fn code(&self) -> u8 {
@@ -194,39 +223,70 @@ impl Payload {
             Payload::Enumerator { .. } => K_ENUMERATOR,
             Payload::Typedef { alias: false, .. } => K_TYPEDEF,
             Payload::Typedef { alias: true, .. } => K_ALIAS,
+            Payload::Label => K_LABEL,
         }
     }
 }
 
 const DECL_FLAGS: u8 = DeclFlags::USED.bits() | DeclFlags::REFERENCED.bits();
 
-/// Function specifier bits carried: storage (2), inherited storage, `...`.
-fn fn_spec(bits: u8) -> Option<FnSpec> {
+/// Function specifier bits carried: storage, inline (written and
+/// implicit), `constexpr`/`consteval`, immediate-escalating, escalated,
+/// `...`, inherited storage, deduced return type. Anything else (virtual,
+/// deleted, defaulted, coroutine, contracts, ...) is not carried yet.
+fn fn_spec(bits: u32) -> Option<FnSpec> {
     let storage = match bits & 3 {
         0 => FnStorage::None,
         1 => FnStorage::Static,
         2 => FnStorage::Extern,
         _ => return None,
     };
-    if bits & !15 != 0 {
-        return None;
-    }
-    Some(
-        FnSpec::new()
-            .with_storage(storage)
-            .with_storage_inherited(bits & 4 != 0)
-            .with_variadic(bits & 8 != 0),
-    )
+    let ck = match (bits >> 4) & 3 {
+        0 => ConstexprKind::None,
+        1 => ConstexprKind::Constexpr,
+        2 => ConstexprKind::Consteval,
+        _ => return None,
+    };
+    let bit = |b: u32| bits & (1 << b) != 0;
+    let spec = FnSpec::new()
+        .with_storage(storage)
+        .with_inline(bit(2))
+        .with_implicit_inline(bit(3))
+        .with_constexpr_kind(ck)
+        .with_immediate_escalating(bit(13))
+        .with_escalated(bit(16))
+        .with_variadic(bit(17))
+        .with_storage_inherited(bit(22))
+        .with_return_deduced(bit(24));
+    (spec.bits() == bits).then_some(spec)
 }
 
-fn var_spec(bits: u8) -> Option<VarSpec> {
-    let storage = match bits {
+/// Variable specifier bits carried: storage (none, static, extern), the
+/// initialization style, `constexpr`, `constinit`, `inline`, NRVO and
+/// range-`for` variables. Thread-local storage is not carried yet.
+fn var_spec(bits: u32) -> Option<VarSpec> {
+    let storage = match bits & 7 {
         0 => VarStorage::None,
         1 => VarStorage::Static,
         2 => VarStorage::Extern,
         _ => return None,
     };
-    Some(VarSpec::new().with_storage(storage))
+    let style = match (bits >> 5) & 3 {
+        0 => InitStyle::C,
+        1 => InitStyle::Call,
+        2 => InitStyle::List,
+        _ => InitStyle::ParenList,
+    };
+    let bit = |b: u32| bits & (1 << b) != 0;
+    let spec = VarSpec::new()
+        .with_storage(storage)
+        .with_init_style(style)
+        .with_constexpr(bit(7))
+        .with_constinit(bit(8))
+        .with_inline(bit(9))
+        .with_nrvo(bit(10))
+        .with_cxx_for_range(bit(12));
+    (spec.bits() == bits).then_some(spec)
 }
 
 fn tag_keyword(k: u8) -> Option<TagKeyword> {
@@ -302,7 +362,7 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
         Payload::Namespace | Payload::Export => {}
         Payload::Function { ty, spec, params, body } => {
             w.q(*ty);
-            w.u8(*spec);
+            w.u32(*spec);
             w.len(params.len());
             for p in params {
                 w.u32(p.name);
@@ -310,20 +370,28 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
                 w.q(p.ty);
                 w.u16(p.pflags);
                 w.u8(p.flags);
+                w.u32(p.default);
             }
             match body {
-                None => w.u8(0),
-                Some((lb, rb)) => {
+                FnBody::None => w.u8(0),
+                FnBody::Braces(lb, rb) => {
                     w.u8(1);
                     w.u32(*lb);
                     w.u32(*rb);
                 }
+                FnBody::Stmt(s) => {
+                    w.u8(2);
+                    w.u32(*s);
+                }
             }
         }
-        Payload::Var { ty, spec } => {
+        Payload::Var { ty, spec, init, eval } => {
             w.q(*ty);
-            w.u8(*spec);
+            w.u32(*spec);
+            w.u32(*init);
+            w.u32(*eval);
         }
+        Payload::Label => {}
         Payload::Enum { scoped, fixed, def } => {
             w.u8(*scoped);
             w.pair(*fixed);
@@ -412,7 +480,7 @@ fn encode(img: &Image) -> Vec<u8> {
         .decls
         .iter()
         .enumerate()
-        .filter(|(_, d)| d.name != NONE)
+        .filter(|(_, d)| d.name != NONE && !body::is_local(img, d))
         .map(|(i, d)| (d.ctx, d.name, i as u32))
         .collect();
     lookup.sort_unstable();
@@ -422,6 +490,7 @@ fn encode(img: &Image) -> Vec<u8> {
         w.u32(n);
         w.u32(d);
     }
+    body::encode_bodies(&mut w, &img.bodies);
     w.0
 }
 
@@ -518,8 +587,8 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
         K_EXPORT => Payload::Export,
         K_FUNCTION => {
             let ty = r.q()?;
-            let spec = r.u8()?;
-            let n = r.count(16)?;
+            let spec = r.u32()?;
+            let n = r.count(20)?;
             let mut params = Vec::with_capacity(n);
             for _ in 0..n {
                 params.push(ParamRec {
@@ -528,16 +597,19 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
                     ty: r.q()?,
                     pflags: r.u16()?,
                     flags: r.u8()?,
+                    default: r.u32()?,
                 });
             }
             let body = match r.u8()? {
-                0 => None,
-                1 => Some((r.u32()?, r.u32()?)),
+                0 => FnBody::None,
+                1 => FnBody::Braces(r.u32()?, r.u32()?),
+                2 => FnBody::Stmt(r.u32()?),
                 _ => return bad("bad flag byte"),
             };
             Payload::Function { ty, spec, params, body }
         }
-        K_VAR => Payload::Var { ty: r.q()?, spec: r.u8()? },
+        K_VAR => Payload::Var { ty: r.q()?, spec: r.u32()?, init: r.u32()?, eval: r.u32()? },
+        K_LABEL => Payload::Label,
         K_ENUM => {
             let scoped = r.u8()?;
             let fixed = r.pair()?;
@@ -579,7 +651,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Option<u32>) {
 /// The type references a declaration record uses.
 fn decl_refs(d: &DeclRec) -> Vec<QRef> {
     match &d.payload {
-        Payload::Namespace | Payload::Export => Vec::new(),
+        Payload::Namespace | Payload::Export | Payload::Label => Vec::new(),
         Payload::Function { ty, params, .. } => {
             std::iter::once(*ty).chain(params.iter().map(|p| p.ty)).collect()
         }
@@ -687,6 +759,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     for _ in 0..nl {
         lookup.push((r.u32()?, r.u32()?, r.u32()?));
     }
+    img.bodies = body::decode_bodies(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -743,10 +816,33 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     };
     let mut open_enum: Option<usize> = None;
     for (i, d) in img.decls.iter().enumerate() {
-        if d.flags & !DECL_FLAGS != 0 || d.owner > 3 {
+        let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
+        // A local declaration (a body's variable or label): its context
+        // is an earlier function record; it is never looked up by name.
+        if kind_of(d.ctx).is_some_and(|c| matches!(c.payload, Payload::Function { .. })) {
+            if d.flags & !body::LOCAL_FLAGS != 0
+                || d.owner > 3
+                || d.lexical != NONE
+                || d.prev != NONE
+                || (d.name != NONE && d.name as usize >= img.names.len())
+            {
+                return bad("bad local declaration");
+            }
+            open_enum = None;
+            match &d.payload {
+                Payload::Label => {}
+                Payload::Var { ty, spec, .. } => {
+                    if !qref_at(*ty, i) || var_spec(*spec).is_none() {
+                        return bad("bad local variable");
+                    }
+                }
+                _ => return bad("bad local declaration"),
+            }
+            continue;
+        }
+        if d.flags & !DECL_FLAGS != 0 || d.owner > 3 || matches!(d.payload, Payload::Label) {
             return bad("bad declaration flags");
         }
-        let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         let scope = |x: u32| {
             x == NONE
                 || kind_of(x)
@@ -818,11 +914,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     return bad("bad enumerator type");
                 }
             }
-            Payload::Namespace | Payload::Export | Payload::Typedef { .. } => {}
+            Payload::Namespace | Payload::Export | Payload::Typedef { .. } | Payload::Label => {}
         }
     }
-    // The lookup table: exactly the named records, sorted.
-    let named = img.decls.iter().filter(|d| d.name != NONE).count();
+    // The lookup table: exactly the named non-local records, sorted.
+    let named = img.decls.iter().filter(|d| d.name != NONE && !body::is_local(img, d)).count();
     if lookup.len() != named || lookup.windows(2).any(|w| w[0] >= w[1]) {
         return bad("bad lookup table");
     }
@@ -832,7 +928,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         }
     }
     let _ = nd;
-    Ok(())
+    body::validate_bodies(img, &|q| qref_ok(q, nt))
 }
 
 // ---------------------------------------------------------------------------
@@ -849,6 +945,7 @@ struct Writer<'s, 'a, 'b> {
     pnames: FxHashMap<String, u32>,
     tmemo: FxHashMap<TypeId, u32>,
     img: Image,
+    bs: BodyState,
 }
 
 /// A reserved identifier ([lex.name]/3): `__x` or `_X`.
@@ -1024,7 +1121,8 @@ impl Writer<'_, '_, '_> {
     }
 
     #[allow(clippy::too_many_lines)] // one arm per record or type kind, kept together with the format
-    fn record(&mut self, d: DeclId) -> W<Payload> {
+    /// The payload of record `i`, declaration `d`.
+    fn record(&mut self, d: DeclId, i: u32) -> W<Payload> {
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
         Ok(match n.kind() {
@@ -1042,16 +1140,9 @@ impl Writer<'_, '_, '_> {
                     return Err("a template");
                 }
                 let s = fd.spec;
-                let storage = match s.storage() {
-                    FnStorage::None => 0,
-                    FnStorage::Static => 1,
-                    FnStorage::Extern => 2,
-                };
-                let bits = storage
-                    | (u8::from(s.storage_inherited()) << 2)
-                    | (u8::from(s.is_variadic()) << 3);
+                let bits = s.bits();
                 if fn_spec(bits) != Some(s) {
-                    return Err("an inline, constexpr, deleted or defaulted function");
+                    return Err("a deleted, defaulted, coroutine or contract-checked function");
                 }
                 if ast.decls.builtin_id(d).is_some() || ast.decls.lib_builtin(d).is_some() {
                     return Err("a builtin or library function");
@@ -1064,7 +1155,12 @@ impl Writer<'_, '_, '_> {
                 let plist: Vec<DeclId> = ast.lists.iter::<DeclId>(fd.params).collect();
                 let mut params = Vec::with_capacity(plist.len());
                 for p in plist {
-                    params.push(self.param(p)?);
+                    let g = self.bs.param_pos.len() as u32;
+                    self.bs.param_pos.push((i, params.len() as u32));
+                    if self.bs.params.insert(p, g).is_some() {
+                        return Err("a parameter shared between declarations");
+                    }
+                    params.push(self.param(p, g)?);
                 }
                 let nproto = match self.img.types.get((ty.ty - BUILTINS - 1) as usize) {
                     Some(TyRec::Func { params, .. }) => params.len(),
@@ -1074,36 +1170,24 @@ impl Writer<'_, '_, '_> {
                     return Err("a function whose parameters do not match its type");
                 }
                 let body = match fd.body {
-                    None => None,
+                    None => FnBody::None,
                     Some(b) => {
                         let st = &self.s.ast.stmts;
                         if st.get(b).kind() != StmtKind::CompoundStmt {
                             return Err("a function-try-block");
                         }
-                        Some((self.loc(st.get(b).loc())?, self.loc(st.rbrace(b))?))
+                        if Self::carries_body(s) {
+                            // Patched by `walk_roots`.
+                            self.bs.roots.push(Root::Body(i, b));
+                            FnBody::None
+                        } else {
+                            FnBody::Braces(self.loc(st.get(b).loc())?, self.loc(st.rbrace(b))?)
+                        }
                     }
                 };
                 Payload::Function { ty, spec: bits, params, body }
             }
-            DeclKind::Var => {
-                let vd = *ast.decls.var(d).ok_or("a malformed variable")?;
-                if !vd.templ.is_none() {
-                    return Err("a template");
-                }
-                if vd.init.is_some() {
-                    return Err("a variable with an initializer");
-                }
-                let bits = match vd.spec.storage() {
-                    VarStorage::None => 0,
-                    VarStorage::Static => 1,
-                    VarStorage::Extern => 2,
-                    VarStorage::Register => 3,
-                };
-                if var_spec(bits) != Some(vd.spec) {
-                    return Err("a variable with specifiers the image does not carry");
-                }
-                Payload::Var { ty: self.qref(n.ty().ok_or("a malformed variable")?)?, spec: bits }
-            }
+            DeclKind::Var => self.var_payload(d, i)?,
             DeclKind::Enum => {
                 let ed = *ast.decls.enumeration(d).ok_or("a malformed enumeration")?;
                 if !ed.templ.is_none() {
@@ -1168,15 +1252,17 @@ impl Writer<'_, '_, '_> {
         })
     }
 
-    fn param(&mut self, p: DeclId) -> W<ParamRec> {
+    /// Parameter `p`, the image's parameter `g`.
+    fn param(&mut self, p: DeclId, g: u32) -> W<ParamRec> {
         let ast = &self.s.ast;
         let pd = *ast.decls.param(p).ok_or("a malformed parameter")?;
         let n = ast.decls.get(p);
-        if pd.default_arg.is_some()
-            || pd.original_ty.is_some()
-            || pd.flags & !ParamData::SCOPE_DEPTH_MASK != 0
-        {
-            return Err("a parameter with a default argument, adjusted type or pack");
+        if pd.original_ty.is_some() || pd.flags & !ParamData::SCOPE_DEPTH_MASK != 0 {
+            return Err("a parameter with an adjusted type or a pack");
+        }
+        if let Some(e) = pd.default_arg {
+            // Patched by `walk_roots`.
+            self.bs.roots.push(Root::Default(g, e));
         }
         if n.flags().bits() & !(DECL_FLAGS | DeclFlags::HAS_LEXICAL_CTX.bits()) != 0
             || n.misc().name_independent()
@@ -1192,11 +1278,18 @@ impl Writer<'_, '_, '_> {
         };
         let loc = self.loc(n.loc())?;
         let ty = self.qref(n.ty().ok_or("a malformed parameter")?)?;
-        Ok(ParamRec { name, loc, ty, pflags: pd.flags, flags: n.flags().bits() & DECL_FLAGS })
+        Ok(ParamRec {
+            name,
+            loc,
+            ty,
+            pflags: pd.flags,
+            flags: n.flags().bits() & DECL_FLAGS,
+            default: NONE,
+        })
     }
 
-    /// Whether `d` lies inside a function (a local declaration, which an
-    /// importer never needs: bodies are not carried).
+    /// Whether `d` lies inside a function (a local declaration: it gets a
+    /// record only when a carried body names it).
     fn local(&self, d: DeclId) -> bool {
         let decls = &self.s.ast.decls;
         let mut c = decls.get(d).ctx();
@@ -1258,10 +1351,14 @@ impl Writer<'_, '_, '_> {
             if n.kind() == DeclKind::TranslationUnit {
                 continue;
             }
+            if n.kind() == DeclKind::StaticAssert {
+                // Checked when the module was compiled; nothing to import.
+                continue;
+            }
             kind_gate(n.kind())?;
             let (flags, name, ctx, lexical, loc, prev) = self.head(d)?;
-            let payload = self.record(d)?;
             let i = self.img.decls.len() as u32;
+            let payload = self.record(d, i)?;
             match &payload {
                 Payload::Enumerator { .. } => {
                     if open_enum != Some(ctx) {
@@ -1284,7 +1381,7 @@ impl Writer<'_, '_, '_> {
             self.img.decls.push(DeclRec { flags, owner, name, ctx, lexical, loc, prev, payload });
             self.recs.insert(d, i);
         }
-        Ok(())
+        self.walk_roots()
     }
 }
 
@@ -1332,7 +1429,6 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::ConstructorUsingShadow
         | K::UsingPack => Err("a using-declaration, using-directive or namespace alias"),
         K::LinkageSpec => Err("a linkage specification"),
-        K::StaticAssert => Err("a static_assert declaration"),
         _ => Err("a declaration the image does not carry yet"),
     }
 }
@@ -1367,12 +1463,20 @@ impl Sema<'_, '_> {
             pnames: FxHashMap::default(),
             tmemo: FxHashMap::default(),
             img: Image::default(),
+            bs: BodyState::default(),
         };
         if let Err(why) = w.collect() {
             return none(why);
         }
         let decls = w.img.decls.len();
-        Some(ModuleImage { bytes: encode(&w.img), decls, fallback: None })
+        let bytes = encode(&w.img);
+        // The writer's own output must pass the reader's checks (a body
+        // shape the schema and the AST disagree on is a fallback, never
+        // a corrupt module file).
+        if decode(&bytes).is_err() {
+            return none("an internal image inconsistency");
+        }
+        Some(ModuleImage { bytes, decls, fallback: None })
     }
 
     /// Builds the unit just begun from the declaration image `bytes` of
@@ -1389,11 +1493,12 @@ impl Sema<'_, '_> {
                 offs.push(d.loc);
                 if let Payload::Function { params, body, .. } = &d.payload {
                     offs.extend(params.iter().map(|p| p.loc));
-                    if let Some((l, r)) = body {
+                    if let FnBody::Braces(l, r) = body {
                         offs.extend([*l, *r]);
                     }
                 }
             }
+            body::body_locs(&img, &mut offs);
             if img.kw == NONE || img.name_loc == NONE || !offs.into_iter().all(off_ok) {
                 return bad("an offset past the end of the module's source");
             }
@@ -1431,6 +1536,11 @@ impl Sema<'_, '_> {
         let mut ids: Vec<DeclId> = Vec::with_capacity(img.decls.len());
         let mut tys: Vec<QualType> = Vec::with_capacity(img.types.len());
         let mut open: Option<(DeclId, Option<(QRef, QRef)>)> = None;
+        // Parameters in image order; what is attached once the bodies
+        // are built: function bodies, variable initializers and values.
+        let mut params_all: Vec<DeclId> = Vec::new();
+        let mut fbodies: Vec<(DeclId, u32)> = Vec::new();
+        let mut inits: Vec<(DeclId, u32, u32)> = Vec::new();
         for (i, r) in img.decls.iter().enumerate() {
             if !matches!(r.payload, Payload::Enumerator { .. })
                 && let Some((e, computed)) = open.take()
@@ -1444,6 +1554,9 @@ impl Sema<'_, '_> {
             let ctx = at(r.ctx).unwrap_or(self.ast.tu);
             let name = if r.name == NONE { DeclName::EMPTY } else { names[r.name as usize] };
             let mut h = DeclHead::new(ctx, name, lo(self, r.loc));
+            if r.flags & DeclFlags::IMPLICIT.bits() != 0 {
+                h.flags = DeclFlags::IMPLICIT;
+            }
             h.lexical = match r.lexical {
                 NONE => None,
                 LEX_TU => Some(self.ast.tu),
@@ -1471,18 +1584,26 @@ impl Sema<'_, '_> {
                     if !ps.is_empty() {
                         let _ = self.builder().set_params(f, &ps);
                     }
-                    if let Some((lb, rb)) = body {
-                        let (lb, rb) = (lo(self, *lb), lo(self, *rb));
-                        let b = self.builder().compound(&[], lb, rb);
-                        let _ = self.builder().set_body(f, b);
+                    params_all.extend_from_slice(&ps);
+                    match *body {
+                        FnBody::None => {}
+                        FnBody::Braces(lb, rb) => {
+                            let (lb, rb) = (lo(self, lb), lo(self, rb));
+                            let b = self.builder().compound(&[], lb, rb);
+                            let _ = self.builder().set_body(f, b);
+                        }
+                        FnBody::Stmt(s) => fbodies.push((f, s)),
                     }
                     f
                 }
-                Payload::Var { ty, spec } => {
+                Payload::Var { ty, spec, init, eval } => {
                     let vty = self.image_ty(img, &mut tys, &ids, *ty);
                     let spec = var_spec(*spec).unwrap_or_default();
-                    self.builder().var(h, vty, spec, prev)
+                    let v = self.builder().var(h, vty, spec, prev);
+                    inits.push((v, *init, *eval));
+                    v
                 }
+                Payload::Label => self.image_label(ctx, name, h.loc),
                 Payload::Enum { scoped, fixed, def } => {
                     let fixed = fixed.map(|(a, b)| {
                         (
@@ -1516,6 +1637,27 @@ impl Sema<'_, '_> {
         }
         if let Some((e, computed)) = open.take() {
             self.image_complete_enum(img, &mut tys, &ids, e, computed);
+        }
+        let built = self.image_bodies(img, &mut tys, &ids, &params_all, main);
+        for (f, s) in fbodies {
+            let _ = self.builder().set_body(f, built.stmt(s));
+        }
+        for (v, init, eval) in inits {
+            if init != NONE {
+                let _ = self.builder().set_var_init(v, built.expr(init));
+            }
+            if eval != NONE && self.ast.decls.begin_eval(v).is_ok() {
+                let value = (eval != body::NOT_CONST).then(|| built.consts[eval as usize]);
+                self.ast.decls.finish_eval(v, value);
+            }
+        }
+        for (g, p) in img.decls.iter().flat_map(|d| match &d.payload {
+            Payload::Function { params, .. } => params.as_slice(),
+            _ => &[],
+        }).enumerate() {
+            if p.default != NONE {
+                let _ = self.ast.decls.set_default_arg(params_all[g], built.expr(p.default));
+            }
         }
         self.module_owner_changed();
     }
