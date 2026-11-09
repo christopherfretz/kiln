@@ -654,6 +654,36 @@ rebuilt one is in `locals`, step 1) to itself, as clang's
 `addInstantiatedCapturesToScope` does (WP-286;
 `tests/conformance/expr.prim.lambda/run-generic-init-capture.cpp`).
 
+**Never-dependent closures (WP-1141).** A lambda substituted in an
+unevaluated operand or a constant-evaluated context, whose context (the
+current declaration context, skipping requires-expression bodies) is a
+namespace scope or has a non-dependent parent, gets a closure type that
+is not dependent (clang `TreeTransform::TransformLambdaExpr`,
+`LambdaDependencyKind::LDK_NeverDependent`; `Sema::substituted_lambda_never_dependent`).
+This is a member template's signature substituted while its class
+template is instantiated: in `template<class T> struct S { template<class
+U> auto f(U) -> decltype([]{ return 5; }); };`, `S<int>::f`'s return type
+is the closure of `S<int>` and `S<int>::f<int>` mangles it as a type,
+`_ZN1SIiE4fIiEENS0_UlvE_ET_`, not as `DTLNS0_UlvE_EEE`. The closure is
+built with `templates.dependent_depth` cleared
+(`Sema::act_on_lambda_start_in`, `AstBuilder::closure_record`; restored
+at `act_on_lambda_end`/`act_on_lambda_error`), so its members and call
+operator are ordinary (an `auto` return type is deduced). With
+`-fclang-compat>=22` a context whose parent is a generic lambda's closure
+is excluded (clang 22 adds `!(isa<CXXRecordDecl>(DC->getParent()) &&
+isGenericLambda())`). Its call operator's own template parameters keep
+their depth in the <lambda-sig>, `UlTL0__E_` (clang
+`mangleTemplateParameter`). A lambda's dependence comes from its closure
+type alone (clang `computeDependence(LambdaExpr *)`): an init-capture
+contributes only unexpanded packs and errors, so `decltype([u]{...})` is
+the closure as well. Deduction substitutes the specialization's
+(instantiation-dependent) function type again, and that closure, numbered
+in the member template, is the one whose call operator the program uses
+(`_ZZN1SIiE4fET_ENKUlvE_clEv`). A variable template member whose type is
+neither instantiation-dependent nor a placeholder keeps the type its class
+instantiation formed (`instantiate_var_spec_decl`), as clang does, so its
+closure is numbered in the class.
+
 ## 10. Tests
 
 - `tests/conformance/expr.prim.lambda/`: 79 tests (xfails are marked
