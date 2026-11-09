@@ -20,6 +20,7 @@ pub mod deps;
 pub mod features;
 pub mod fp_flags;
 pub mod link;
+pub mod llvm;
 pub mod pp_cmd;
 pub mod rsp;
 pub mod sanitize;
@@ -296,6 +297,11 @@ pub(crate) fn print_version(w: &mut dyn Write, tc: &Toolchain, verbose: bool) {
         version::VERSION,
         tc.target.triple
     );
+    // WP-1016: the selected LLVM (spec/driver.md "LLVM discovery").
+    let _ = match &tc.llvm {
+        Ok(i) => writeln!(w, "LLVM backend: {} ({})", i.major, i.dir.display()),
+        Err(_) => writeln!(w, "LLVM backend: none (kiln supports LLVM {})", llvm::supported_text()),
+    };
     if verbose && let Some(g) = &tc.gcc {
         for c in &tc.gcc_candidates {
             let _ = writeln!(w, "Found candidate GCC installation: {c}");
@@ -523,8 +529,8 @@ fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::In
 }
 
 /// The toolchain of `args` (`--target`, `--sysroot`, `-resource-dir`,
-/// `--gcc-install-dir` / `--gcc-toolchain`), reporting a bad target or GCC
-/// directory to `drv`. Shared with the crash reproducer ([`crash`]).
+/// `--gcc-install-dir` / `--gcc-toolchain`, `--llvm-dir`), reporting a bad
+/// target, GCC directory or explicitly named LLVM to `drv`. Shared with the crash reproducer ([`crash`]).
 pub(crate) fn toolchain_of(args: &Args, drv: &DiagEngine<'_>) -> Toolchain {
     let target = match &args.target {
         None => Target::host(),
@@ -533,7 +539,17 @@ pub(crate) fn toolchain_of(args: &Args, drv: &DiagEngine<'_>) -> Toolchain {
             Target::host()
         }),
     };
-    let mut tc = Toolchain::new(target, args.sysroot.as_deref(), args.resource_dir.as_deref());
+    let mut tc = Toolchain::new(
+        target,
+        args.sysroot.as_deref(),
+        args.resource_dir.as_deref(),
+        args.llvm_dir.as_deref(),
+    );
+    if let Err(e) = &tc.llvm
+        && e.is_explicit()
+    {
+        e.emit(drv);
+    }
     let gcc_search = match (&args.gcc_install_dir, &args.gcc_toolchain) {
         (Some(d), _) => GccSearch::InstallDir(d),
         (None, Some(d)) => GccSearch::Toolchain(d),
@@ -606,6 +622,12 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     if args.help {
         let _ = io.stdout.write_all(HELP.as_bytes());
         return 0;
+    }
+    // An explicitly named LLVM that is not usable stops everything, before
+    // any probe delegates to it (spec/driver.md "LLVM discovery").
+    if tc.llvm.as_ref().is_err_and(llvm::LlvmError::is_explicit) {
+        drv.flush();
+        return 1;
     }
     if let Some(rc) = immediate(&args, &tc, &mut io, &drv) {
         return rc;

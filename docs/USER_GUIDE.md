@@ -48,14 +48,29 @@ To build the same archives from a checkout, run `cargo xtask dist`. See
 
 kiln writes LLVM IR and runs LLVM's tools to finish the job, so you need:
 
-- **LLVM 19 or LLVM 22**, with `llc`, `llvm-as` and `clang++`. The
-  `clang++` performs the link, so its linker, crt files and runtime
-  libraries are the ones used. kiln looks for LLVM in `$KILN_LLVM_DIR`,
-  which defaults to `/usr/lib/llvm-19`. To use LLVM 22, point it there,
-  for example `KILN_LLVM_DIR=/usr/lib/llvm-22`. kiln detects the major
-  version and emits IR in that LLVM's dialect. LLVM 20 and 21 are not
-  supported.
-  <!-- update when WP-1016 lands: default 22, discovery order (--llvm-dir, KILN_LLVM_DIR, llvm-config, /usr/lib/llvm-22, /usr/lib/llvm-19, PATH), 20/21 refused, -v prints the LLVM, per-distro one-liners in COMPATIBILITY.md -->
+- **LLVM 22 or LLVM 19, with clang**: kiln runs `opt`, `llc`,
+  `llvm-as` and `clang++` from it. The `clang++` performs the link, so
+  its linker, crt files and runtime libraries are the ones used. kiln
+  writes IR in the selected LLVM's dialect. LLVM 20 and 21 are refused
+  (`unsupported LLVM major N; kiln supports LLVM 19 and 22`). kiln takes
+  the first usable installation of
+  ([spec/driver.md](../spec/driver.md), "LLVM discovery"):
+  1. `--llvm-dir=<dir>`;
+  2. `KILN_LLVM_DIR`;
+  3. a default compiled into the build by a packager
+     (`KILN_DEFAULT_LLVM_DIR`);
+  4. for LLVM 22, then LLVM 19: `llvm-config` or `llvm-config-<N>` on
+     `PATH`, `/usr/lib/llvm-<N>` (Debian, Ubuntu), `/usr/lib64/llvm<N>`
+     (Fedora), Homebrew on Linux's `llvm@<N>` and `llvm`, `/usr`, then
+     `opt-<N>` or `clang++-<N>` on `PATH`.
+
+  An installation is usable when it has `bin/opt`, `bin/llc` and
+  `bin/clang++` and is LLVM 19 or 22. A directory you name with
+  `--llvm-dir` or `KILN_LLVM_DIR` that is not usable is an error; kiln
+  does not fall back to another one. When nothing is found, kiln lists
+  the places it looked. `-fsyntax-only`, `-E` and `-S -emit-llvm` work
+  without LLVM. `kiln++ --version` and `-v` print the choice as
+  `LLVM backend: <major> (<dir>)`.
 - **A C++ standard library.** The default is the system libstdc++ from
   the GCC installation clang would pick (GCC 14 is what kiln is tested
   with). For libc++, pass `-stdlib=libc++`; it comes from the LLVM
@@ -64,10 +79,14 @@ kiln writes LLVM IR and runs LLVM's tools to finish the job, so you need:
   24.04). Lowering that floor is tracked as
   [WP-943](BACKLOG.md).
 - For coverage and sanitizers, also LLVM's compiler-rt runtimes (Debian:
-  `libclang-rt-19-dev`).
+  `libclang-rt-<N>-dev`).
 
-On Debian 13: `sudo apt install clang-19 llvm-19 g++` (add
-`libclang-rt-19-dev` for coverage or sanitizers).
+On Debian 13, LLVM 19 is in Debian's own archive:
+`sudo apt install clang-19 llvm-19 g++` (add `libclang-rt-19-dev` for
+coverage or sanitizers). LLVM 22 comes from
+[apt.llvm.org](https://apt.llvm.org). The packages for each
+distribution, Fedora included, are in
+[COMPATIBILITY.md](COMPATIBILITY.md#runtime-dependencies).
 
 ## Using kiln from a build system
 
@@ -253,6 +272,7 @@ gives a short list. The full list is spec/driver.md, "Options".
 | `-fconstexpr-memory=N[k\|m\|g]` | Oven memory budget (above) |
 | `-fkiln-stack-size=N[k\|m\|g]` | compiling thread's stack (above) |
 | `-fclang-compat=19\|22` | which clang release's behaviour to reproduce (default 22) |
+| `--llvm-dir=<dir>` | the LLVM installation to use (see [Run-time dependencies](#run-time-dependencies)) |
 | `-fkiln-reflection-mangling=kiln\|gcc\|kiln-hashed` | mangling of reflection template arguments |
 | `-fkiln-instantiation-report[=all\|json\|text]`, `-fkiln-memory-report` | reports (above) |
 | `-fkiln-source-path-style=clang\|gcc` | how `__builtin_FILE()` and `std::source_location` spell a file name: as clang does (default) or as GCC does |
@@ -280,7 +300,7 @@ All `-fkiln-*` flags are experimental.
 
 | Variable | Effect |
 |---|---|
-| `KILN_LLVM_DIR` | LLVM installation (default `/usr/lib/llvm-19`) <!-- update when WP-1016 lands --> |
+| `KILN_LLVM_DIR` | LLVM installation to use, if `--llvm-dir` is not given; otherwise kiln searches (see [Run-time dependencies](#run-time-dependencies)) |
 | `KILN_RESOURCE_DIR` | resource directory (builtin headers, predefines), if `-resource-dir` is not given |
 | `KILN_REPRODUCIBLE_TIME`, `SOURCE_DATE_EPOCH` | fixed values for `__DATE__`, `__TIME__`, `__TIMESTAMP__` (spec/driver.md, "Reproducible time") |
 | `TMPDIR` | where crash reproducers go when `-fcrash-diagnostics-dir` is not given (default `/tmp`) |
@@ -288,8 +308,9 @@ All `-fkiln-*` flags are experimental.
 | `LLVM_PROFILE_FILE` | at run time, where an `-fprofile-instr-generate` program writes its profile (LLVM's runtime) |
 
 Packagers can set `KILN_DEFAULT_LLVM_DIR` and `KILN_DEFAULT_GCC` when
-building kiln, to compile in a different default LLVM directory or a GCC
-driver outside `/usr` (spec/driver.md, "Toolchain").
+building kiln, to compile in an LLVM directory to try before the search
+or a GCC driver outside `/usr` (spec/driver.md, "LLVM discovery" and
+"Toolchain").
 
 ## Debugging, sanitizers and coverage
 
@@ -325,7 +346,8 @@ the ignorelist are not done yet; see
   `-fprofile-instr-use`, `-fprofile-sample-use`, `-fcs-profile-generate`)
   is not part of 1.0 and is rejected with an error that says so.
 
-Both coverage modes link LLVM's profile runtime (`libclang-rt-19-dev`).
+Both coverage modes link LLVM's profile runtime (Debian:
+`libclang-rt-<N>-dev`).
 See [COMPATIBILITY.md](COMPATIBILITY.md#coverage-and-profiling).
 
 ## Targets and LLVM versions
@@ -335,11 +357,12 @@ See [COMPATIBILITY.md](COMPATIBILITY.md#coverage-and-profiling).
   is `unsupported target`. `-march=`, `-mcpu=` and AArch64's feature
   flags work. x86 `-m<feature>` flags such as `-mavx2` are not accepted
   yet; see [KNOWN_ISSUES.md](KNOWN_ISSUES.md#platforms).
-- **LLVM:** 19 and 22. The LLVM major version selects the IR dialect
-  kiln writes. It does not change the language: language and macro
-  behaviour follow `-fclang-compat`. LTO (`-flto`, `-flto=thin`) works
-  with the selected LLVM.
-  <!-- update when WP-1016 lands: default 22 -->
+- **LLVM:** 22 (preferred when both are installed) and 19, chosen as in
+  [Run-time dependencies](#run-time-dependencies). The LLVM major version
+  selects the IR dialect kiln writes. It does not change the language:
+  language and macro behaviour follow `-fclang-compat`, which defaults to
+  22 whichever LLVM is used. LTO (`-flto`, `-flto=thin`) works with the
+  selected LLVM.
 
 ## Crashes
 

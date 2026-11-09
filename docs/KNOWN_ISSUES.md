@@ -25,8 +25,6 @@ If you hit something not listed here, please
   - glibc's x86-64 `typedef __float128 _Float128` does not make the two
     the same type as it does under clang, so LLVM's `IRTests` does not
     build: [WP-1001](BACKLOG.md).
-  - A narrow signed `++` bug exposed by signed `char` (2 libc++ tests);
-    see the sweep page.
   - gRPC's full x86_64 results are pending: [WP-1002](BACKLOG.md).
 - **LLVM 19 and 22 only.** LLVM 20 and 21 are not supported.
 - **Identification.** `--version` prints `kiln version <v>` without the

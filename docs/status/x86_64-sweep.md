@@ -119,7 +119,8 @@ Tests are "passed / total".
   type in the Oven (`kiln_oven` `compile.rs` `inc_dec`) instead of
   promoting and converting back, which wraps. x86_64 exposes it because
   plain `char` is signed there. **Filed** as WP-981, xfail
-  `tests/conformance/expr.pre.incr/narrow-signed-wrap-constexpr.cpp`.
+  `tests/conformance/expr.pre.incr/narrow-signed-wrap-constexpr.cpp`;
+  **fixed** in WP-980 (the test now passes).
 - `std/atomics/atomics.types.operations/atomics.types.operations.wait/lost_wakeup.pass.cpp`:
   TIMEOUT (run) in x86-2 and x86-4, passes on aarch64. A run-time stress
   test on a 4-vCPU runner under `-j 4`. **Flaky / load**.

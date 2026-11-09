@@ -57,14 +57,23 @@ tar -xJf kiln-<version>-<triple>.tar.xz
 export PATH=$PWD/kiln-<version>-<triple>/bin:$PATH
 ```
 
-kiln needs an LLVM installation at run time, for `llc`, `llvm-as` and the
-`clang++` that links. LLVM 19 and LLVM 22 are both supported. On Debian 13:
+The tree is relocatable: `bin/kiln`, `bin/kiln++`, the builtin headers
+and predefines in `lib/kiln/<major>/`, and the documentation in
+`share/doc/kiln/`.
 
-<!-- update when WP-1016 lands: default LLVM 22, discovery order, per-distro one-liners -->
+kiln needs an LLVM installation with clang at run time, for `opt`, `llc`,
+`llvm-as` and the `clang++` that links, plus libstdc++ (or libc++).
+LLVM 22 (preferred) and LLVM 19 are supported. kiln finds an installation
+in the usual places on its own. `--llvm-dir=<dir>` or `KILN_LLVM_DIR`
+names one, and `kiln++ --version` prints the choice. On Debian 13:
+
 ```sh
-sudo apt install clang-19 llvm-19 g++    # LLVM 19 (kiln's default today) and libstdc++
-export KILN_LLVM_DIR=/usr/lib/llvm-22    # only to use an LLVM 22 install (apt.llvm.org) instead
+sudo apt install clang-19 llvm-19 g++    # LLVM 19 from Debian's archive, and libstdc++
 ```
+
+LLVM 22 comes from [apt.llvm.org](https://apt.llvm.org). The packages
+for Ubuntu and Fedora are in
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#runtime-dependencies).
 
 Then compile:
 
@@ -81,8 +90,9 @@ language modes, Oven limits and flags.
 ## Building from source
 
 The Rust toolchain is pinned in `rust-toolchain.toml` (Rust 1.95.0, which
-is also the MSRV). The backend and the test oracle need clang and LLVM 19
-and 22 (`clang++-19`, `llc`, `opt`, `llvm-as`), which is what CI installs.
+is also the MSRV). The backend and the test oracles need clang and LLVM 22
+and 19 (`/usr/lib/llvm-22` and `/usr/lib/llvm-19`, with `clang++-22` and
+`clang++-19` on `PATH`), which is what CI installs.
 
 ```sh
 cargo build --release              # target/release/kiln and kiln++

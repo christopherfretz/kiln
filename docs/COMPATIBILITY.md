@@ -55,6 +55,68 @@ apply to the platform.
 A rating reflects the last measured run. When a fix has landed since, the
 notes say so, and the rating moves up at the next run.
 
+## Runtime dependencies
+
+kiln writes LLVM IR and hands it to LLVM's own tools, so it needs an LLVM
+installation at run time. kiln 1.0 supports **LLVM 22** (the default,
+preferred when both are installed) and **LLVM 19**; LLVM 20 and 21 are
+refused with `unsupported LLVM major N; kiln supports LLVM 19 and 22`.
+From that installation kiln uses:
+
+- `opt`, `llc` and `llvm-as`: optimization, code generation, `-emit-llvm
+  -c` bitcode;
+- the `clang++` driver: linking (kiln runs `<llvm>/bin/clang++` for the
+  link step and for the toolchain probes it delegates, such as
+  `-print-file-name=`), so a clang package is required, not only LLVM;
+- compiler-rt (clang's runtime libraries): only for `-fsanitize=` and
+  `-fprofile-instr-generate`/`--coverage`;
+- a C++ standard library's headers and libraries: libstdc++ (GCC's, the
+  default) or libc++ (`-stdlib=libc++`, from the LLVM installation).
+
+**How kiln finds LLVM** (spec/driver.md "LLVM discovery"; the first that
+qualifies wins, and `kiln++ --version` prints the choice as `LLVM
+backend: <major> (<dir>)`):
+
+1. `--llvm-dir=<dir>`;
+2. the `KILN_LLVM_DIR` environment variable;
+3. for LLVM 22, then LLVM 19: `llvm-config` / `llvm-config-<N>` on `PATH`,
+   then `/usr/lib/llvm-<N>` (Debian, Ubuntu), `/usr/lib64/llvm<N>`
+   (Fedora), Homebrew on Linux's `llvm@<N>` and `llvm`, `/usr`, then
+   `opt-<N>` / `clang++-<N>` on `PATH`.
+
+A directory qualifies when it has `bin/opt`, `bin/llc` and `bin/clang++`
+and is LLVM 19 or 22. A directory named with `--llvm-dir` or
+`KILN_LLVM_DIR` that does not qualify is an error, never silently
+replaced by another one; when nothing qualifies, kiln lists what it
+looked at. The `-fclang-compat` level (the clang version kiln emulates,
+22 by default) is independent of the LLVM it drives.
+
+**Installing.** Debian and Ubuntu, from [apt.llvm.org](https://apt.llvm.org)
+(the script adds the repository for the release):
+
+```
+wget https://apt.llvm.org/llvm.sh && sudo bash llvm.sh 22
+sudo apt install llvm-22 clang-22 libclang-rt-22-dev libc++-22-dev libc++abi-22-dev
+```
+
+Debian 13 (trixie) has LLVM 19 in its own archive:
+
+```
+sudo apt install llvm-19 clang-19 libclang-rt-19-dev libc++-19-dev libc++abi-19-dev
+```
+
+Fedora's main `llvm`/`clang` packages work when they are release 19 or 22
+(they install into `/usr`); otherwise the versioned compatibility
+packages install under `/usr/lib64/llvm<N>`:
+
+```
+sudo dnf install llvm22 clang22 compiler-rt22 libstdc++-devel
+```
+
+libstdc++'s headers come with `g++` (Debian, Ubuntu) or
+`libstdc++-devel` (Fedora). With LLVM somewhere else, point kiln at it:
+`kiln++ --llvm-dir=/opt/llvm-22 ...` or `export KILN_LLVM_DIR=/opt/llvm-22`.
+
 ## Standard libraries
 
 kiln does not ship a standard library. It compiles the platform's
@@ -234,7 +296,7 @@ x86_64-only gaps found are fixed or have a follow-up WP.
 
 | suite / project | result on x86_64 vs clang 19 | rating |
 |---|---|---|
-| libc++ 22.1.8 (9247 tests) | 99.0% (aarch64 99.2%); the 2 x86_64-only failures are a narrow signed `++` bug that signed `char` exposes (WP-981) and a flaky timeout | **Near-perfect** |
+| libc++ 22.1.8 (9247 tests) | 99.0% (aarch64 99.2%); the 2 x86_64-only failures are a narrow signed `++` bug that signed `char` exposes (WP-981, fixed in WP-980) and a flaky timeout | **Near-perfect** |
 | fmt, nlohmann/json, Abseil, DuckDB, CMake, daw_json_link | every test as clang: 21/21, 97/97, 232/232, 4618/4628, 721/723, 147/147 | **Flawless** |
 | Bitcoin Core | 357/357; 475 TUs vs clang's 487: the `-m<feature>` flags are not accepted yet, so the SSE4.1/AVX2/SHA-NI code is configured out | **Flawless** (tests), follow-up for the flags |
 | OpenCV | 7/7; 473 TUs vs 537: the SSE3…AVX2 dispatch sources, the same `-m<feature>` gap | **Flawless** (tests), follow-up for the flags |

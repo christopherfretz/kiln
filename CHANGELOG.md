@@ -58,8 +58,9 @@ limits are in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 ### Code generation and tools
 
 - Writes LLVM IR as text and drives LLVM's tools. It never links against
-  LLVM. Supports LLVM 19 and LLVM 22.
-  <!-- update when WP-1016 lands: LLVM discovery, default 22 -->
+  LLVM. Supports LLVM 22 (preferred) and LLVM 19, found on its own
+  (`--llvm-dir=` and `KILN_LLVM_DIR` name one); `--version` and `-v`
+  print the LLVM in use.
 - Itanium C++ ABI as clang implements it, on Linux aarch64 and x86_64.
 - `-O0` to `-O3`, `-Os`, `-Oz`; LTO (`-flto`, `-flto=thin`);
   floating-point model flags; AArch64 branch protection.
