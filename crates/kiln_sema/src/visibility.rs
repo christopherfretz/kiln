@@ -170,6 +170,12 @@ impl Sema<'_, '_> {
         tag: bool,
     ) {
         let own = attrs.iter().position(|&a| self.ast.attrs.get(a).kind == AttrKind::VISIBILITY);
+        // Without an attribute of its own and without a pragma in effect
+        // nothing below applies; the previous declarations are not walked
+        // (a run of redeclarations would be quadratic, WP-1076).
+        if own.is_none() && !matches!(self.vis_stack.last(), Some(Some(_))) {
+            return;
+        }
         let prior = self.prior_visibility_attr(decl);
         if let Some(i) = own {
             let node = *self.ast.attrs.get(attrs[i]);

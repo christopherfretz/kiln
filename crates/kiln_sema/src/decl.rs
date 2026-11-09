@@ -3,6 +3,7 @@
 //! enumerators, namespaces, linkage specifications, `static_assert` and
 //! attributes.
 
+use crate::class::SpecialKind;
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DeclMisc, DefinitionBits, EnumData, FieldData, FnSpec,
@@ -1793,6 +1794,14 @@ impl Sema<'_, '_> {
             let m = self.diag(DiagId::sema_param_constexpr_spec, l).arg(which);
             self.emit(m);
         }
+        // [temp.local]/6 (a template parameter's own list is checked at
+        // its end; WP-1042).
+        if !nttp
+            && self.inst.stack.is_empty()
+            && let Some((n, l)) = d.name
+        {
+            self.check_template_param_shadow(n, l);
+        }
         let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
         // [dcl.align]/1: not on a function parameter.
@@ -1855,7 +1864,8 @@ impl Sema<'_, '_> {
     /// Whether the function declared by `d` with parameters `params` is an
     /// explicit object member function ([dcl.fct]/6, P0847): its first
     /// parameter is an explicit object parameter. Diagnoses one anywhere
-    /// else, in a static, virtual or non-member function (`Some(false)`:
+    /// else, in a static (`implicit_static`: an allocation function,
+    /// [class.free]/1), virtual or non-member function (`Some(false)`:
     /// the declaration is invalid, as clang's `setInvalidType`), with a
     /// default argument or as a pack. (Its cv- and ref-qualifiers are
     /// [`Sema::drop_invalid_fn_quals`]'.) `None`: no explicit object
@@ -1865,6 +1875,7 @@ impl Sema<'_, '_> {
         ds: &DeclSpec,
         params: &[ParamInfo],
         method: bool,
+        implicit_static: bool,
     ) -> Option<bool> {
         for p in params.iter().skip(1) {
             if p.explicit_object.is_some() {
@@ -1876,7 +1887,7 @@ impl Sema<'_, '_> {
         let this_loc = first.explicit_object?;
         let which = if !method {
             Some(2u8)
-        } else if ds.storage.is_some_and(|(s, _)| s == StorageSpec::Static) {
+        } else if implicit_static || ds.storage.is_some_and(|(s, _)| s == StorageSpec::Static) {
             Some(0)
         } else if ds.virtual_.is_some() {
             Some(1)
@@ -1973,8 +1984,23 @@ impl Sema<'_, '_> {
         let roots: Vec<ExprId> = match &init {
             Initializer::Expr(e) => vec![*e],
             Initializer::Paren(v, _, _) => v.clone(),
-            // (A braced default argument is not searched: a gap.)
             Initializer::List(_) => Vec::new(),
+        };
+        // [dcl.fct.default]/8-9: a braced default argument's clauses are
+        // searched for `this` and parameters too (clang visits the
+        // `InitListExpr`).
+        let list_refs_ok = match &init {
+            Initializer::List(l) if !p.invalid => {
+                let mut leaves = Vec::new();
+                Self::init_list_leaves(l, &mut leaves);
+                // Every clause is checked, so no short-circuiting `all`.
+                let mut ok = true;
+                for e in leaves {
+                    ok &= self.check_default_arg_refs(e);
+                }
+                ok
+            }
+            _ => true,
         };
         // [temp.variadic]/12: `void f(int = sizeof(Ts));` (clang
         // reports at the argument's begin).
@@ -1992,7 +2018,8 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        if unexpanded || !roots.into_iter().all(|e| self.check_default_arg_refs(e)) {
+        if unexpanded || !list_refs_ok || !roots.into_iter().all(|e| self.check_default_arg_refs(e))
+        {
             p.invalid = true;
             if let Some(d) = p.decl {
                 self.ast.decls.set_flags(d, DeclFlags::INVALID);
@@ -2046,6 +2073,16 @@ impl Sema<'_, '_> {
             }
         }
         self.store_param_default(p, e);
+    }
+
+    /// The expressions of `l`'s clauses, nested lists flattened, in order.
+    fn init_list_leaves(l: &crate::init::InitList, out: &mut Vec<ExprId>) {
+        for i in &l.items {
+            match &i.value {
+                crate::init::InitValue::Expr(e) => out.push(*e),
+                crate::init::InitValue::List(n) => Self::init_list_leaves(n, out),
+            }
+        }
     }
 
     /// Stores converted default argument `e` in `p`.
@@ -3809,6 +3846,8 @@ impl Sema<'_, '_> {
         if let Some(id) = self.pending_alias_vla.take() {
             self.error(id, name_loc);
         }
+        // [temp.local]/6, as for a typedef (WP-1042).
+        self.check_template_param_shadow(name, name_loc);
         let mut d = Declarator::new(DeclaratorContext::File, name_loc);
         d.name = Some((name, name_loc));
         let ds = DeclSpec::new(name_loc);
@@ -3948,7 +3987,7 @@ impl Sema<'_, '_> {
         // qualifiers (a friend's, in its class, after them).
         let early_explicit_object = (!method && !friend && explicit_object).then(|| {
             let params = d.function_params().unwrap_or_default();
-            self.explicit_object_member(ds, params, false)
+            self.explicit_object_member(ds, params, false, false)
         });
         let fn_chunk = matches!(d.chunks.first(), Some(Chunk::Function { .. }));
         let ty = if (!method || explicit_object) && fn_chunk {
@@ -3989,9 +4028,13 @@ impl Sema<'_, '_> {
         // invalid: it redeclares nothing and is not reported as a
         // template.
         let mut main_invalid = false;
-        if self.is_global_main_name(ctx, name)
+        let fn_static = matches!(ds.storage, Some((StorageSpec::Static, _)));
+        let c_linkage_main =
+            !method && !friend && self.is_c_linkage_main_name(lexical, name, fn_static);
+        if (self.is_global_main_name(ctx, name) || c_linkage_main)
             && let Some(p) = self.ast.types.proto(ty).copied()
         {
+            self.warn_main_decl(&p, c_linkage_main, d.name_loc());
             // [basic.start.main]/3: `main` is not static or inline (clang's
             // `CheckMain` diagnoses and keeps the declaration).
             if let Some((StorageSpec::Static, l)) = ds.storage {
@@ -4024,6 +4067,9 @@ impl Sema<'_, '_> {
                 let m = self.diag(DiagId::sema_constexpr_main, l).arg(which);
                 self.emit(m);
                 spec = spec.with_constexpr_kind(ConstexprKind::None).with_implicit_inline(false);
+            }
+            if !main_invalid {
+                self.warn_main_one_arg(&p, d.name_loc());
             }
             if !main_invalid && self.templ.cur.is_some() {
                 self.diagnose_main_template(d.name_loc());
@@ -4149,6 +4195,14 @@ impl Sema<'_, '_> {
                     self.friend_befriends_using_target(&shadows, new_fn, d.name_loc());
                 if !invalid_redecl {
                     pattern_prev = self.pattern_friend_prev(ctx, dname, new_fn);
+                }
+                // [dcl.inline]/6 holds now too (clang `MergeFunctionDecl`).
+                if let Some(p) = pattern_prev
+                    && ds.inline.is_some()
+                    && self.inline_after_definition(p, &fname, d.name_loc())
+                {
+                    invalid_redecl = true;
+                    pattern_prev = None;
                 }
             }
             None
@@ -4516,7 +4570,13 @@ impl Sema<'_, '_> {
                     // (clang `err_constexpr_redecl_mismatch`).
                     // An invalid previous declaration is not checked.
                     let (ok, nk) = (pspec.constexpr_kind(), spec.constexpr_kind());
-                    if ok != nk && !self.ast.decls.get(p).flags().contains(DeclFlags::INVALID) {
+                    if ds.inline.is_some() && self.inline_after_definition(p, &fname, d.name_loc())
+                    {
+                        prev_ok = None;
+                        invalid_redecl = true;
+                    } else if ok != nk
+                        && !self.ast.decls.get(p).flags().contains(DeclFlags::INVALID)
+                    {
                         let msg = self
                             .diag(DiagId::sema_constexpr_redecl_mismatch, d.name_loc())
                             .arg(nk as u8)
@@ -4591,7 +4651,14 @@ impl Sema<'_, '_> {
         };
         let eo = match early_explicit_object {
             Some(r) => r,
-            None => self.explicit_object_member(ds, &params, method),
+            // [class.free]/1: a class-specific allocation or
+            // deallocation function is implicitly static.
+            None => self.explicit_object_member(
+                ds,
+                &params,
+                method,
+                method && spec.storage() == FnStorage::Static,
+            ),
         };
         match eo {
             Some(true) => spec = spec.with_explicit_object(true),
@@ -5290,7 +5357,9 @@ impl Sema<'_, '_> {
             QualType::ERROR
         } else if !invalid
             && (self.require_non_abstract(d.name_loc(), ty, crate::class::AbstractUse::Field)
-                || self.union_reference_member(ctx, ty, nm.as_deref(), d.name_loc()))
+                || self.union_reference_member(ctx, ty, nm.as_deref(), d.name_loc())
+                || (self.is_union(ctx)
+                    && self.cxx03_nontrivial_member(ty, nm.as_deref(), d.name_loc(), true)))
         {
             QualType::ERROR
         } else {
@@ -5364,6 +5433,55 @@ impl Sema<'_, '_> {
             .diag(DiagId::sema_union_member_reference, loc)
             .arg(name.unwrap_or_default().to_owned())
             .arg(self.ty_arg(ty));
+        self.emit(msg);
+        true
+    }
+
+    /// C++03 [class.union]/1: a member of a union, or of an anonymous
+    /// struct, may not be of (an array of) a class with a non-trivial
+    /// default constructor, copy constructor, copy assignment operator
+    /// or destructor (clang `CheckNontrivialField`, at the name, naming
+    /// the first of those, copy constructor first). C++11 lifted this
+    /// (unrestricted unions; clang only has a C++98-compat warning,
+    /// off by default). True when diagnosed.
+    pub(crate) fn cxx03_nontrivial_member(
+        &mut self,
+        ty: QualType,
+        name: Option<&str>,
+        loc: Loc,
+        union: bool,
+    ) -> bool {
+        if self.std >= kiln_lex::Std::Cxx11 || ty == QualType::ERROR {
+            return false;
+        }
+        let elem = self.base_element(ty);
+        if self.is_dependent_type(elem) {
+            return false;
+        }
+        let Some(r) = self.ast.types.as_record(elem) else {
+            return false;
+        };
+        if self.ast.definition(r).is_none() {
+            return false;
+        }
+        let k = if !self.has_trivial(r, SpecialKind::CopyCtor) {
+            SpecialKind::CopyCtor
+        } else if !(self.has_special(r, SpecialKind::DefaultCtor)
+            && self.has_trivial(r, SpecialKind::DefaultCtor))
+        {
+            SpecialKind::DefaultCtor
+        } else if !self.has_trivial(r, SpecialKind::CopyAssign) {
+            SpecialKind::CopyAssign
+        } else if !self.has_trivial(r, SpecialKind::Dtor) {
+            SpecialKind::Dtor
+        } else {
+            return false;
+        };
+        let msg = self
+            .diag(DiagId::sema_illegal_union_or_anon_struct_member, loc)
+            .arg(u8::from(union))
+            .arg(name.unwrap_or_default().to_owned())
+            .arg(k as u8);
         self.emit(msg);
         true
     }
@@ -5778,6 +5896,27 @@ impl Sema<'_, '_> {
         (independent, local)
     }
 
+    /// [dcl.inline]/6: a function declared `inline` (at `at`) after a
+    /// non-inline definition `p`'s entity has (clang
+    /// `err_inline_decl_follows_def`, with a note at the definition).
+    /// Whether it was reported.
+    pub(crate) fn inline_after_definition(&mut self, p: DeclId, n: &str, at: Loc) -> bool {
+        let Some(def) = self.ast.definition(p) else { return false };
+        let Some(f) = self.ast.decls.function(def) else { return false };
+        if f.body.is_none()
+            || f.spec.is_inline()
+            || f.spec.implicit_inline()
+            || f.spec.is_deleted()
+            || f.spec.defaulted() != kiln_ast::decl::Defaulted::No
+        {
+            return false;
+        }
+        let msg = self.diag(DiagId::sema_inline_decl_follows_def, at).arg(n);
+        let msg = self.note_prev(msg, def, true);
+        self.emit(msg);
+        true
+    }
+
     /// The previous declaration a variable redeclares when lookup finds
     /// `p`: an invalid variable declaration (a redefinition, another
     /// type, no type at all: `R::v;`) is not linked to the entity
@@ -5845,8 +5984,7 @@ impl Sema<'_, '_> {
         if self.kind_of(ctx) == DeclKind::CXXRecord {
             return self.act_on_static_member(ds, ty, d, name, spec);
         }
-        let local_extern = spec.storage() == VarStorage::Extern;
-        self.check_main_variable(ctx, name, local_extern, ds.loc);
+        self.check_main_variable(ctx, name, spec.storage(), ds.loc);
         let mut prev_ok = None;
         // A redefinition (or a redeclaration with another type) is invalid
         // (clang `setInvalidDecl`), so a later lookup that also finds the
@@ -7015,10 +7153,25 @@ impl Sema<'_, '_> {
         if self.is_in_class_static(v) {
             return false;
         }
-        let in_class = self
-            .ast
-            .redecls_of(v)
-            .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x));
+        // Only a redeclaration of a static data member (semantically in
+        // its class) can find its in-class declaration; a namespace-scope
+        // variable's previous declarations are not walked for it
+        // (WP-1076).
+        let member = self.ast.decls.get(v).ctx().is_some_and(|c| {
+            matches!(
+                self.kind_of(c),
+                DeclKind::CXXRecord
+                    | DeclKind::ClassTemplateSpecialization
+                    | DeclKind::ClassTemplatePartialSpecialization
+            )
+        });
+        let in_class = member
+            .then(|| {
+                self.ast
+                    .redecls_of(v)
+                    .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x))
+            })
+            .flatten();
         if let Some(x) = in_class {
             if self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr()) {
                 let loc = self.ast.decls.get(v).loc();
@@ -7028,9 +7181,11 @@ impl Sema<'_, '_> {
         }
         // [class.static.data]/4: the definition of a `const` static data
         // member initialized in its class has no initializer.
-        self.ast
-            .redecls_of(v)
-            .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
+        member
+            && self
+                .ast
+                .redecls_of(v)
+                .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
     }
 
     fn default_init_var(&mut self, v: DeclId) {
@@ -8358,8 +8513,9 @@ impl Sema<'_, '_> {
         // [temp.local]/6: `friend class T;` naming a template parameter
         // redeclares it (clang's `DiagnoseTemplateParameterShadow` in
         // `ActOnTag`); the friend then declares a new class `T`, so
-        // `friend class Ts...;` expands no pack.
-        self.check_template_param_shadow(n, nloc);
+        // `friend class Ts...;` expands no pack. Tag lookup does not find
+        // a non-type parameter: `friend struct T;` then declares `::T`.
+        self.check_template_param_shadow_in(n, nloc, true);
         let lookup = self.lookup_name(n, LookupKind::Tag);
         let found = lookup.decls;
         // The innermost enclosing namespace's own tag of that name, also
@@ -8428,6 +8584,12 @@ impl Sema<'_, '_> {
         ns: DeclId,
     ) -> DeclId {
         let head = self.take_template_head(None);
+        // [temp.mem]/2: no member templates in a local class, friend
+        // class templates included (clang `CheckClassTemplate`'s
+        // `CheckTemplateDeclScope`); the friend is still declared.
+        let _ = self.check_template_in_local_class(false, Loc::INVALID);
+        // [temp.local]/6 (clang `CheckClassTemplate`; WP-1042).
+        self.check_template_param_shadow(n, nloc);
         self.check_friend_class_template_defaults(head);
         // [namespace.memdef]/3 stops the search at the innermost enclosing
         // namespace, so a member class template of an enclosing class
@@ -9853,6 +10015,26 @@ impl Sema<'_, '_> {
                 None => d,
             };
             self.emit(d);
+        }
+        // C++03 [class.union]/1 for the members of an anonymous struct
+        // (a union's were checked as they were declared; clang
+        // `BuildAnonymousStructOrUnion`).
+        if !union && self.std < kiln_lex::Std::Cxx11 {
+            let fields: Vec<DeclId> = self
+                .ast
+                .decls
+                .members(rec)
+                .filter(|&m| self.kind_of(m) == DeclKind::Field)
+                .collect();
+            for f in fields {
+                let n = *self.ast.decls.get(f);
+                if n.flags().contains(DeclFlags::INVALID) {
+                    continue;
+                }
+                let nm = n.name().as_ident().map(|x| sym_str(self, x));
+                let fty = n.ty().unwrap_or(QualType::ERROR);
+                self.cxx03_nontrivial_member(fty, nm.as_deref(), n.loc(), false);
+            }
         }
         if in_class && let Some(x) = self.first_default_init(rec) {
             let loc = self.ast.decls.get(x).loc();
@@ -11961,7 +12143,7 @@ impl Sema<'_, '_> {
 
     /// clang `Type::isAlignValT`: `q` is (sugar for) an enumeration
     /// named `align_val_t` in namespace `std`.
-    fn is_align_val_t(&self, q: QualType) -> bool {
+    pub(crate) fn is_align_val_t(&self, q: QualType) -> bool {
         self.ast.types.as_enum(q).is_some_and(|d| {
             self.ast.decls.get(d).name().as_ident() == Some(self.intern("align_val_t"))
                 && self.is_in_std_namespace(d)

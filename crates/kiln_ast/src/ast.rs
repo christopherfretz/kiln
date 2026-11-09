@@ -821,6 +821,11 @@ impl Ast {
     /// order), else on one of the pattern it was instantiated from: an
     /// inheritable attribute (clang `mergeDeclAttributes`).
     pub fn inherited_attr(&self, d: DeclId, kind: crate::attr::AttrKind) -> Option<AttrNode> {
+        // Most kinds never occur in a translation unit: then no
+        // redeclaration chain is walked (WP-1076).
+        if !self.attrs.has_kind(kind) {
+            return None;
+        }
         let mut d = d;
         // Each step leaves one level of instantiation.
         for _ in 0..64 {
