@@ -36,6 +36,7 @@ sema_no_matching_local_friend_suggest = Error (2) "cannot define friend function
 sema_no_matching_local_friend_suggest_19 = Error (2) "no matching function '{0}' found in local scope; did you mean '{1}'?";
 sema_no_member = Error (2) "no member named '{0}' in {1}";
 sema_no_member_template = Error (2) "no template named '{0}' in {1}";
+sema_no_member_template_suggest = Error (3) "no template named '{0}' in {1}; did you mean simply '{2}'?";
 sema_no_subscript_operator = Error (1) "type {0} does not provide a subscript operator";
 sema_no_suitable_delete_member = Error (2) "no suitable member {0} in {1}";
 sema_no_template_named = Error (1) "no template named '{0}'";

@@ -1038,6 +1038,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-998 | codegen: `deref<&cg>` loads a const global clang folds (`static const int cg = 3`) | WP-933 | done (#438, WP-902; real gap was ref<cg>() through a reference NTTP, deref<&cg>() is a load in clang too) |
 | WP-999 | WP-126 remainder: oven pseudo/explicit-destructor lifetime, `p->N::~T()`, member-same-name-as-class diag, out-of-class friend templates, owned friend classes in class templates, dependent friend specializations in dump, `typename C<X>::T` rebuilt only at top level, `typename` error locations/recovery | WP-126 | open |
 | WP-1152 | WP-999 correctness subset: oven explicit/pseudo-destructor lifetime, qualified destructor names `p->N::~T()`, `typename C<X>::T` rebuild under nested type constructors | WP-999 | done (#512) |
+| WP-1155 | rejects-valid: template-ids on the pseudo-destructor path (`p->~A<int>()`, `p->N::I::~B<int>()`), `p->T::Inner::~Inner()` in a dependent scope | WP-1152 | in progress |
 | WP-1003 | codegen: `-fcoverage-mapping`, emit the coverage mapping section (driver coverage_flags.rs:187 errors today) | WP-941 | done (#445) |
 | WP-1004 | driver: gcov filters `-fprofile-filter-files`/`-fprofile-exclude-files` (coverage_flags.rs:131) | WP-941 | open |
 | WP-1005 | abi: lambda `$_N` numbering order differs from clang (kiln_abi mangle.rs:41) | WP-941 | open |
@@ -1076,6 +1077,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1028 | dist: ship USER_GUIDE/KNOWN_ISSUES/CHANGELOG/CONTRIBUTING/SECURITY in share/doc/kiln and make README links resolve inside the release archive (xtask/src/dist.rs:329) | WP-1022 | done (#426, WP-1027) |
 | WP-1036 | PCH speed: serialised-AST/Oven-state PCH reusing the spec/modules.md §11 module-file format and the WP-985 kind-2 BMI; `KILNPCH 1` (spec/driver.md:1149) becomes its fingerprint/validation layer (crates/kiln_driver/src/pch.rs:460) | WP-1023 | open |
 | WP-1037 | driver: `-include foo.h` probes for `foo.h.pch` as clang's driver does (spec/driver.md:1313) | WP-1023 | done (#510) |
+| WP-1153 | driver PCH tails: `-E` goes on past an unreadable `-include-pch`, `--include`/`--include=` alias `-include`, `-Xclang -include-pch` wins over a later driver one; WP-1157 oracle pin | WP-1037 | in progress |
 | WP-1038 | decision: PCH staleness by content hash (kiln) vs mtime (clang): keep or match (spec/driver.md:1309) | WP-1023 | decided: keep content hash (operator 11-09) |
 | WP-1039 | driver: `-fsyntax-only foo.hpp` warns "#pragma once in main file" where clang does not; only PCH producers treat the main file as a header (crates/kiln_driver/src/pch.rs:603) | WP-1023 | open |
 | WP-1040 | accepts-invalid tail (WP-1015) main/allocation: clang -Wmain warnings, C-linkage variable named main, variable template main (kiln_sema main_decl.rs:43); destroying and type-aware operator delete checks (alloc_decl.rs:52) | WP-1015 | done (#448) |
@@ -1137,6 +1139,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1098 | rejects/accepts: a member function template friend of A<T>::f has its own template head unmatched, so its type is not compared (member_friend.rs:322) | WP-1072 | done (#485, with WP-1110) |
 | WP-1130 | accepts-invalid: a member-template friend's head match ignores requires-clauses and type-constraints (member_friend.rs) | WP-1098 | done (#500) |
 | WP-1145 | rejects-valid?: a qualified member-template friend on the WP-1110 deferred path is reported as not matching (member_friend.rs, subst decls.rs) | WP-1130 | done (#519) |
+| WP-1165 | rejects-valid: a speculative friend grant (or dependent base) decides a requires-expression in a template pattern and is replayed as a hard error (class/access.rs, concepts/requires.rs) | WP-1145 | in progress |
 | WP-1099 | accepts-invalid: template friend struct A<U>::Member inside Outer<U> redeclares a different kind of symbol (clang: redefinition as different kind of symbol) | WP-1072 | done (#485, with WP-1110) |
 | WP-1086 | mangling: with explicit template arguments clang substitutes a trailing return type twice, so a lambda in it is UlvE0_ where kiln emits UlvE_ (kiln_sema templ/deduce_call.rs:708; xfail lambda-in-signature-explicit-args-numbering-two-units-run.cpp) | WP-1077 | done (#499) |
 | WP-1142 | mangling: re-run template-id address resolution in each context clang does; deduce templates when a non-template matches (WP-1143) | WP-1086 | in progress |
