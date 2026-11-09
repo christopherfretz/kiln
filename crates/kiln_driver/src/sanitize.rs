@@ -91,16 +91,17 @@ const RUNTIMES: S = S(S::ADDRESS.0
 /// The frontend-check sanitizers (the UB runtime).
 const UB_CHECKS: S = S(S::UNDEFINED.0 | S::UNSIGNED_INTEGER_OVERFLOW.0);
 
-/// clang's `IncompatibleGroups`, the ones kiln can reach.
+/// clang's `IncompatibleGroups`, in its order.
 const INCOMPATIBLE: &[(S, S)] = &[
     (S::ADDRESS, S(S::THREAD.0 | S::MEMORY.0)),
     (S::THREAD, S::MEMORY),
     (S::LEAK, S(S::THREAD.0 | S::MEMORY.0)),
     (S::KERNEL_ADDRESS, S(S::ADDRESS.0 | S::LEAK.0 | S::THREAD.0 | S::MEMORY.0)),
     (S::HWADDRESS, S(S::ADDRESS.0 | S::THREAD.0 | S::MEMORY.0 | S::KERNEL_ADDRESS.0)),
-    // WP-1151.
+    // WP-1151: the rest of clang's table, over [`CLANG_CHECKED`] (Linux:
+    // `safe-stack` with `leak` too, as off Fuchsia).
     (
-        S::KERNEL_HWADDRESS,
+        S::SCUDO,
         S(S::ADDRESS.0
             | S::HWADDRESS.0
             | S::LEAK.0
@@ -108,14 +109,51 @@ const INCOMPATIBLE: &[(S, S)] = &[
             | S::MEMORY.0
             | S::KERNEL_ADDRESS.0),
     ),
+    (
+        S::SAFE_STACK,
+        S(S::LEAK.0
+            | S::ADDRESS.0
+            | S::HWADDRESS.0
+            | S::THREAD.0
+            | S::MEMORY.0
+            | S::KERNEL_ADDRESS.0),
+    ),
+    (
+        S::KERNEL_HWADDRESS,
+        S(S::ADDRESS.0
+            | S::HWADDRESS.0
+            | S::LEAK.0
+            | S::THREAD.0
+            | S::MEMORY.0
+            | S::KERNEL_ADDRESS.0
+            | S::SAFE_STACK.0),
+    ),
+    (
+        S::KERNEL_MEMORY,
+        S(S::ADDRESS.0
+            | S::HWADDRESS.0
+            | S::LEAK.0
+            | S::THREAD.0
+            | S::MEMORY.0
+            | S::KERNEL_ADDRESS.0
+            | S::SCUDO.0
+            | S::SAFE_STACK.0),
+    ),
     (S::MEMTAG, S(S::ADDRESS.0 | S::KERNEL_ADDRESS.0 | S::HWADDRESS.0 | S::KERNEL_HWADDRESS.0)),
+    (S::KCFI, S::FUNCTION),
 ];
 
 /// The sanitizers kiln does not implement that clang's driver checks
 /// further (WP-1151): the [`INCOMPATIBLE`] pairs and the AArch64
 /// `shadow-call-stack` / `-ffixed-x18` rule.
-const CLANG_CHECKED: S =
-    S(S::MEMTAG.0 | S::SHADOW_CALL_STACK.0 | S::KERNEL_ADDRESS.0 | S::KERNEL_HWADDRESS.0);
+const CLANG_CHECKED: S = S(S::MEMTAG.0
+    | S::SHADOW_CALL_STACK.0
+    | S::KERNEL_ADDRESS.0
+    | S::KERNEL_HWADDRESS.0
+    | S::KERNEL_MEMORY.0
+    | S::SCUDO.0
+    | S::SAFE_STACK.0
+    | S::KCFI.0);
 
 /// LLVM's `AArch64::isX18ReservedByDefault` of a `--target=` triple (of
 /// those kiln accepts: Android and OpenHarmony; also Darwin, Fuchsia and

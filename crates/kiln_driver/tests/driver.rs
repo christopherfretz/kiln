@@ -1875,3 +1875,248 @@ fn memtag_sanitizers_by_target() {
         "kiln++: error: '-fsanitize=memtag-heap' is not supported by kiln\n"
     );
 }
+
+/// Runs `cxx` (an installed clang) on `args` with `stdin`: `None` when it
+/// is not installed, else (stdout, stderr).
+fn oracle(cxx: &str, args: &[&str], stdin: &str) -> Option<(String, String)> {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    let mut c = Command::new(cxx)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    c.stdin.take()?.write_all(stdin.as_bytes()).ok()?;
+    let o = c.wait_with_output().ok()?;
+    Some((String::from_utf8_lossy(&o.stdout).into(), String::from_utf8_lossy(&o.stderr).into()))
+}
+
+/// The `error: ...` texts of `stderr`, without kiln's own "not supported
+/// by kiln" (clang implements the sanitizers kiln does not).
+fn error_texts(stderr: &str) -> Vec<String> {
+    stderr
+        .lines()
+        .filter_map(|l| l.find("error: ").map(|i| l[i..].to_owned()))
+        .filter(|l| !l.ends_with("is not supported by kiln"))
+        .collect()
+}
+
+/// spec/driver.md "Sanitizers" (WP-1151): clang's `IncompatibleGroups`
+/// pairs of the memtag sanitizers with the address family come before the
+/// `+memtag` hardware error, and `-fsanitize=shadow-call-stack` on
+/// `AArch64` needs `-ffixed-x18` unless the target OS reserves x18
+/// (Android, OpenHarmony). Checked literally and against clang++-19/22
+/// where installed.
+#[test]
+fn memtag_pairs_and_shadow_call_stack() {
+    let hw = "error: '-fsanitize=memtag-stack' requires hardware support (+memtag). For Armv8 \
+              or Armv9, try compiling with -march=armv8a+memtag or -march=armv9a+memtag";
+    let na = |a: &str, b: &str| format!("error: invalid argument '{a}' not allowed with '{b}'");
+    let x18 = "error: invalid argument '-fsanitize=shadow-call-stack' only allowed with \
+               '-ffixed-x18'";
+    let x86 = "error: unsupported option '-ffixed-x18' for target 'x86_64-linux-gnu'";
+    let cases: Vec<(&str, &str, Vec<String>)> = vec![
+        (
+            "aarch64-linux-gnu",
+            "-fsanitize=memtag,address",
+            vec![na("-fsanitize=memtag", "-fsanitize=address"), hw.into()],
+        ),
+        (
+            "aarch64-linux-gnu",
+            "-march=armv8.5-a+memtag -fsanitize=address -fsanitize=memtag-stack",
+            vec![na("-fsanitize=memtag-stack", "-fsanitize=address")],
+        ),
+        (
+            "aarch64-linux-gnu",
+            "-mcpu=cortex-x2 -fsanitize=memtag-heap,hwaddress",
+            vec![na("-fsanitize=memtag-heap", "-fsanitize=hwaddress")],
+        ),
+        (
+            "aarch64-linux-gnu",
+            "-fsanitize=memtag,kernel-hwaddress,address",
+            vec![
+                na("-fsanitize=kernel-hwaddress", "-fsanitize=address"),
+                na("-fsanitize=memtag", "-fsanitize=kernel-hwaddress"),
+                hw.into(),
+            ],
+        ),
+        ("aarch64-linux-gnu", "-fsanitize=memtag,address -fno-sanitize=memtag", vec![]),
+        (
+            "x86_64-linux-gnu",
+            "-fsanitize=kernel-memory,scudo,safe-stack,memory",
+            vec![
+                na("-fsanitize=scudo", "-fsanitize=memory"),
+                na("-fsanitize=kernel-memory", "-fsanitize=scudo,safe-stack"),
+            ],
+        ),
+        (
+            "x86_64-linux-gnu",
+            "-fsanitize=kcfi -fsanitize=undefined",
+            vec![na("-fsanitize=kcfi", "-fsanitize=undefined")],
+        ),
+        ("aarch64-linux-gnu", "-mcpu=cortex-x2 -fsanitize=memtag", vec![]),
+        ("aarch64-linux-gnu", "-mcpu=cortex-x2+nomemtag -fsanitize=memtag", vec![hw.into()]),
+        ("aarch64-linux-gnu", "-mcpu=cortex-a76 -fsanitize=memtag-stack", vec![hw.into()]),
+        ("aarch64-linux-gnu", "-fsanitize=shadow-call-stack", vec![x18.into()]),
+        ("aarch64-linux-gnu", "-fsanitize=shadow-call-stack -ffixed-x18", vec![]),
+        ("aarch64-linux-android", "-fsanitize=shadow-call-stack", vec![]),
+        ("aarch64-linux-ohos", "-fsanitize=shadow-call-stack", vec![]),
+        (
+            "aarch64-linux-gnu",
+            "-fsanitize=address,thread,shadow-call-stack",
+            vec![x18.into(), na("-fsanitize=address", "-fsanitize=thread")],
+        ),
+        ("x86_64-linux-gnu", "-fsanitize=shadow-call-stack", vec![]),
+        ("x86_64-linux-gnu", "-fsanitize=shadow-call-stack -ffixed-x18", vec![x86.into()]),
+    ];
+    for (target, flags, want) in &cases {
+        let t = format!("--target={target}");
+        let mut args = vec![t.as_str(), "-fsyntax-only", "-x", "c++"];
+        args.extend(flags.split_whitespace());
+        args.push("-");
+        let o = kiln(&args, "int main() {}\n");
+        assert_eq!(error_texts(&o.stderr), *want, "{target} {flags}");
+        for v in ["19", "22"] {
+            let c = format!("-fclang-compat={v}");
+            let mut k = vec![c.as_str()];
+            k.extend(&args);
+            let o = kiln(&k, "int main() {}\n");
+            if let Some((_, e)) = oracle(&format!("clang++-{v}"), &args, "int main() {}\n") {
+                assert_eq!(error_texts(&o.stderr), error_texts(&e), "clang++-{v} {target} {flags}");
+            }
+        }
+    }
+}
+
+/// spec/driver.md "Target features" (WP-1151): `-Xclang -target-feature
+/// +mte` satisfies the memtag hardware check at `-fclang-compat=22` (clang
+/// 22's `hasTargetFeatureMTE` reads the `-Xclang` items), not at `=19`.
+#[test]
+fn xclang_target_feature_mte_by_compat() {
+    let hw = "error: '-fsanitize=memtag-stack' requires hardware support (+memtag). For Armv8 \
+              or Armv9, try compiling with -march=armv8a+memtag or -march=armv9a+memtag";
+    let base = ["--target=aarch64-linux-gnu", "-fsyntax-only", "-x", "c++"];
+    let x = ["-Xclang", "-target-feature", "-Xclang"];
+    for (v, flags, want) in [
+        ("19", vec!["+mte"], vec![hw]),
+        ("22", vec!["+mte"], vec![]),
+        ("22", vec!["+mte", "-mte"], vec![]),
+        ("19", vec!["-mte"], vec![hw]),
+    ] {
+        let mut args: Vec<&str> = base.to_vec();
+        for f in &flags {
+            args.extend(x);
+            args.push(f);
+        }
+        args.extend(["-fsanitize=memtag-stack", "-"]);
+        let c = format!("-fclang-compat={v}");
+        let mut k = vec![c.as_str()];
+        k.extend(&args);
+        let o = kiln(&k, "int main() {}\n");
+        assert_eq!(error_texts(&o.stderr), want, "{v} {flags:?}");
+        if let Some((_, e)) = oracle(&format!("clang++-{v}"), &args, "int main() {}\n") {
+            assert_eq!(error_texts(&e), want, "clang++-{v} {flags:?}");
+        }
+    }
+}
+
+/// spec/driver.md "Target features" (WP-1151): a `-mcpu=` CPU's
+/// `target-cpu` and `target-features`, with modifiers and under
+/// `-march=`, are clang 19's and clang 22's (where installed; literally
+/// for `cortex-x2`'s `+mte` and `-march=`'s override otherwise).
+#[test]
+fn mcpu_target_features_match_clang() {
+    let attrs = |ir: &str| {
+        let mut v: Vec<String> = ["\"target-cpu\"=\"", "\"target-features\"=\""]
+            .iter()
+            .filter_map(|k| {
+                let i = ir.find(k)? + k.len();
+                Some(format!("{k}{}", &ir[i..i + ir[i..].find('"')?]))
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    let cases = [
+        "-mcpu=generic",
+        "-mcpu=cortex-a53",
+        "-mcpu=cortex-a76+nocrypto",
+        "-mcpu=cortex-x2",
+        "-mcpu=cortex-x2+nomemtag",
+        "-mcpu=neoverse-v2+nosve",
+        "-mcpu=neoverse-n1+sve2",
+        "-mcpu=a64fx",
+        "-mcpu=apple-m1",
+        "-mcpu=apple-m4+nobf16",
+        "-mcpu=Cortex-A72",
+        "-march=armv8-a -mcpu=cortex-x2",
+        "-march=armv8.5-a+memtag -mcpu=cortex-a53",
+        "-ffixed-x18 -mcpu=cortex-a55",
+    ];
+    for v in ["19", "22"] {
+        for flags in cases {
+            let mut args = vec!["--target=aarch64-linux-gnu", "-S", "-emit-llvm", "-o", "-"];
+            args.extend(flags.split_whitespace());
+            args.extend(["-x", "c++", "-"]);
+            let c = format!("-fclang-compat={v}");
+            let mut k = vec![c.as_str()];
+            k.extend(&args);
+            let o = kiln(&k, "int f() { return 0; }\n");
+            assert_eq!(o.code, 0, "{flags}: {}", o.stderr);
+            let got = attrs(&o.stdout);
+            if flags == "-mcpu=cortex-x2" {
+                assert!(got[1].contains("+mte") && got[1].contains("+v9a"), "{got:?}");
+                assert_eq!(got[0], "\"target-cpu\"=\"cortex-x2");
+            }
+            if flags == "-march=armv8-a -mcpu=cortex-x2" {
+                assert!(!got[1].contains("+mte") && !got[1].contains("+v9a"), "{got:?}");
+                assert_eq!(got[0], "\"target-cpu\"=\"cortex-x2");
+            }
+            if let Some((out, _)) =
+                oracle(&format!("clang++-{v}"), &args, "int f() { return 0; }\n")
+            {
+                assert_eq!(got, attrs(&out), "clang++-{v} {flags}");
+            }
+        }
+    }
+}
+
+/// spec/driver.md "Target features" (WP-1151): kiln's CPU table has every
+/// A-profile CPU clang 19 / clang 22 lists (where installed), and its
+/// unknown-CPU error is theirs.
+#[test]
+fn mcpu_table_covers_clang() {
+    for v in ["19", "22"] {
+        let Some((out, err)) = oracle(
+            &format!("clang++-{v}"),
+            &["--target=aarch64-linux-gnu", "--print-supported-cpus"],
+            "",
+        ) else {
+            continue;
+        };
+        let text = format!("{out}{err}");
+        let Some(body) = text.split("Available CPUs for this target:").nth(1) else {
+            continue;
+        };
+        let body = body.split("Use -mcpu").next().unwrap_or("");
+        let c = format!("-fclang-compat={v}");
+        for cpu in body.split_whitespace().filter(|c| !c.starts_with("cortex-r82")) {
+            let m = format!("-mcpu={cpu}");
+            let o = kiln(
+                &[&c, "--target=aarch64-linux-gnu", &m, "-fsyntax-only", "-x", "c++", "-"],
+                "",
+            );
+            assert_eq!(o.code, 0, "clang++-{v} {m}: {}", o.stderr);
+        }
+    }
+    let o = kiln(
+        &["--target=aarch64-linux-gnu", "-mcpu=cortex-a1", "-fsyntax-only", "-x", "c++", "-"],
+        "",
+    );
+    assert_eq!(
+        error_texts(&o.stderr),
+        ["error: unsupported argument 'cortex-a1' to option '-mcpu='"]
+    );
+}

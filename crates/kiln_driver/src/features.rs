@@ -11,9 +11,11 @@
 //! enables what it depends on, disabling an enabled one disables what
 //! depends on it, and every feature the level or an extension touched is
 //! listed (`+name` when finally on, `-name` when off).
-//! `-mcpu=generic[+ext...]` is `armv8-a` plus the `ete` and `trbe`
-//! features. `-march=` wins over `-mcpu=` (whose extensions are then
-//! ignored, as clang's are); the `-target-feature` list applies after
+//! `-mcpu=<cpu>[+ext...]` names a CPU of clang's `AArch64TargetParser`
+//! ([`crate::aarch64_cpus`], by `-fclang-compat=`; WP-1151) whose
+//! extensions are on, the modifiers applying over them alike. `-march=`
+//! wins over `-mcpu=`'s features (the CPU stays the `target-cpu`, as
+//! clang's); the `-target-feature` list applies after
 //! both, the last naming a feature winning, with no dependency closure
 //! (as clang's `-cc1`). Any other architecture, CPU or extension is an
 //! unsupported value. The levels and the dependency graph are clang 19's
