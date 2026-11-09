@@ -1,0 +1,234 @@
+name: sweep
+# The x86_64 confidence sweep (WP-961; docs/VALIDATION.md "x86_64 sweep",
+# docs/status/x86_64-sweep.md). The aarch64 development container runs the
+# libc++ suites and the OSS corpus; this workflow runs them on GitHub's
+# x86_64 runners, in the CI reference container of ci-lane.yml
+# (gcc:16.1.0-trixie: Debian 13, clang 19 and 22, GCC 14's libstdc++):
+#   build          `cargo xtask dist`, uploaded once; every other job
+#                  installs that kiln++ into /opt/kiln
+#   libcxx K/N     the libc++ 22.1.8 suite (`std` + `libcxx`, 9247 tests),
+#                  `cargo xtask libcxx --shard K/N`, one results file each
+#   libcxx-summary merges the shards (scripts/libcxx-results.py)
+#   oss <p> <c>    scripts/oss/oss-build.sh <p> with kiln, and the clang 19
+#                  control on the same runner (a failure under both is the
+#                  project's or the runner's, not kiln's)
+#   oss-summary    scripts/oss/oss-report.py over every project's report
+# It never gates a merge: no pull_request or merge_group trigger, and it is
+# not a required check. Start it by pushing a `sweep/<name>` branch or with
+# workflow_dispatch (from main). A newer push of the same ref cancels the
+# older run.
+on:
+  workflow_dispatch:
+    inputs:
+      libcxx:
+        description: run the libc++ 22 suite
+        type: boolean
+        default: true
+      oss:
+        description: run the OSS projects
+        type: boolean
+        default: true
+      control:
+        description: also build the OSS projects with clang 19 (the control)
+        type: boolean
+        default: true
+  push:
+    branches: ["sweep/**"]
+permissions:
+  contents: read
+concurrency:
+  group: sweep-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  KILN_REQUIRE_LLVM: "1"
+  KILN_GCC: /usr/local/bin/g++
+  KILN_REQUIRE_GCC: "1"
+defaults:
+  run: { shell: bash }
+jobs:
+  build:
+    name: build (dist)
+    runs-on: ubuntu-24.04
+    container: gcc:16.1.0-trixie
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      # The container runs as root over a workspace the runner owns (see
+      # release.yml): the build script and xtask dist read the commit.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: ./.github/actions/kiln-ci
+        with: { cache-key: ci-x86_64 }
+      - name: cargo xtask dist
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          cargo xtask dist --out "$RUNNER_TEMP/dist"
+          ls -l "$RUNNER_TEMP/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiln-dist
+          path: |
+            ${{ runner.temp }}/dist/*.tar.xz
+            !${{ runner.temp }}/dist/*-symbols.tar.xz
+          if-no-files-found: error
+          retention-days: 7
+
+  # The libc++ 22 suite as the aarch64 M5 run takes it (docs/status/libcxx.md
+  # "M5", spec/libcxx.md "Toolchain"): libc++ 22's tests at llvmorg-22.1.8,
+  # libc++ 22 extracted into .toolchain/libcxx-22-root (libc++-22-dev
+  # conflicts with the action's libc++-19-dev), the lit locales generated,
+  # `-j 4 --timeout 20 --mem-limit 3072`. S shards; S is the list's length.
+  libcxx:
+    name: libcxx ${{ matrix.shard }}/${{ strategy.job-total }}
+    needs: [build]
+    if: ${{ github.event_name == 'push' || inputs.libcxx }}
+    runs-on: ubuntu-24.04
+    container: gcc:16.1.0-trixie
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: ./.github/actions/kiln-ci
+        with: { cache-key: ci-x86_64 }
+      - uses: actions/download-artifact@v4
+        with: { name: kiln-dist, path: "${{ runner.temp }}/dist" }
+      - name: install kiln, libc++ 22, the tests and the locales
+        run: |
+          mkdir -p /opt/kiln
+          tar -xJf "$RUNNER_TEMP"/dist/kiln-*.tar.xz -C /opt/kiln --strip-components=1
+          /opt/kiln/bin/kiln++ --version | head -1
+          root="$GITHUB_WORKSPACE/.toolchain/libcxx-22-root"
+          mkdir -p "$RUNNER_TEMP/debs" "$root"
+          (cd "$RUNNER_TEMP/debs" && apt-get download libc++-22-dev libc++abi-22-dev libunwind-22-dev)
+          for d in "$RUNNER_TEMP"/debs/*.deb; do dpkg-deb -x "$d" "$root"; done
+          grep -m1 '_LIBCPP_VERSION ' "$root/usr/lib/llvm-22/include/c++/v1/__config"
+          scripts/fetch-libcxx-tests.sh llvmorg-22.1.8
+          scripts/provision-locales.sh
+          locale -a
+      - name: cargo xtask libcxx std libcxx --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: |
+          cargo xtask libcxx std libcxx --tag llvmorg-22.1.8 --compiler /opt/kiln/bin/kiln++ \
+            --shard ${{ matrix.shard }}/${{ strategy.job-total }} --no-fail -j 4 --timeout 20 \
+            --mem-limit 3072 --results "$RUNNER_TEMP/libcxx-${{ matrix.shard }}.tsv" \
+            --report "$RUNNER_TEMP/libcxx-${{ matrix.shard }}.md"
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: libcxx-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/libcxx-${{ matrix.shard }}.tsv
+            ${{ runner.temp }}/libcxx-${{ matrix.shard }}.md
+          if-no-files-found: error
+
+  libcxx-summary:
+    name: libcxx summary
+    needs: [libcxx]
+    if: ${{ !cancelled() && needs.libcxx.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { pattern: libcxx-*, path: results, merge-multiple: true }
+      - name: merge the shards
+        run: |
+          ls results
+          python3 scripts/libcxx-results.py --label "libc++ 22.1.8 suite, x86_64" \
+            results/libcxx-*.tsv | tee libcxx-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with: { name: libcxx-summary, path: libcxx-summary.md }
+
+  # One job per project and compiler. The OSS trees live on the runner's
+  # /mnt (the larger temporary disk), mounted into the container. The
+  # project list is docs/status/x86_64-sweep.md's; each row's own test
+  # command and limits come from scripts/oss/projects.toml.
+  oss:
+    name: oss ${{ matrix.project }} ${{ matrix.compiler }}
+    needs: [build]
+    if: ${{ github.event_name == 'push' || inputs.oss }}
+    runs-on: ubuntu-24.04
+    container:
+      image: gcc:16.1.0-trixie
+      volumes: ["/mnt:/mnt"]
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [fmt, nlohmann_json, abseil, llvm_project, duckdb, grpc, bitcoin_core, cmake_app, opencv, daw_json_link]
+        compiler: ${{ fromJSON((github.event_name == 'push' || inputs.control) && '["kiln", "clang"]' || '["kiln"]') }}
+    env:
+      KILN_OSS_ROOT: /mnt/oss
+      KILN_OSS_CXX: /opt/kiln/bin/kiln++
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # The toolchain packages of the kiln-ci action, plus what the
+      # projects' builds and tests need (the development container's
+      # provisioning list): CMake, Python (harness, LLVM, the Bitcoin Core
+      # functional tests, gRPC's port server), Boost headers and libevent
+      # (Bitcoin Core), OpenSSL (CMake's curl). No Rust: kiln++ comes from
+      # the build job.
+      - name: install the packages
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+            ca-certificates curl git build-essential procps time xz-utils \
+            clang-19 llvm-19 lld-19 clang-22 llvm-22 lld-22 \
+            cmake python3 pkg-config libboost-dev libevent-dev libssl-dev zlib1g-dev >/dev/null
+          clang++-19 --version | head -1
+          cmake --version | head -1
+          nproc; free -g; df -h / /mnt
+      - if: ${{ matrix.compiler == 'kiln' }}
+        uses: actions/download-artifact@v4
+        with: { name: kiln-dist, path: "${{ runner.temp }}/dist" }
+      - if: ${{ matrix.compiler == 'kiln' }}
+        name: install kiln
+        run: |
+          mkdir -p /opt/kiln
+          tar -xJf "$RUNNER_TEMP"/dist/kiln-*.tar.xz -C /opt/kiln --strip-components=1
+          /opt/kiln/bin/kiln++ --version | head -1
+      - name: oss-build.sh ${{ matrix.project }} --compiler ${{ matrix.compiler }}
+        run: |
+          rc=0
+          scripts/oss/oss-build.sh ${{ matrix.project }} --compiler ${{ matrix.compiler }} --jobs 4 || rc=$?
+          b="$KILN_OSS_ROOT/build/${{ matrix.project }}/${{ matrix.compiler }}"
+          tail -n 60 "$b/test.log" 2>/dev/null || tail -n 60 "$b/build.log" 2>/dev/null || true
+          cat "$b/report.json" || true
+          df -h /mnt
+          echo "oss-build exit status $rc"
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: oss-${{ matrix.project }}-${{ matrix.compiler }}
+          path: |
+            /mnt/oss/build/${{ matrix.project }}/${{ matrix.compiler }}/report.json
+            /mnt/oss/build/${{ matrix.project }}/${{ matrix.compiler }}/compile.jsonl
+            /mnt/oss/build/${{ matrix.project }}/${{ matrix.compiler }}/configure.log
+            /mnt/oss/build/${{ matrix.project }}/${{ matrix.compiler }}/test.log
+          if-no-files-found: warn
+
+  oss-summary:
+    name: oss summary
+    needs: [oss]
+    if: ${{ !cancelled() && needs.oss.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { pattern: oss-*, path: raw }
+      - name: oss-report.py
+        run: |
+          projects=()
+          for d in raw/oss-*; do
+            [ -f "$d/report.json" ] || continue
+            name="${d#raw/oss-}"
+            p="${name%-*}" c="${name##*-}"
+            mkdir -p "oss/build/$p/$c"
+            cp "$d"/* "oss/build/$p/$c/"
+            [[ " ${projects[*]} " == *" $p "* ]] || projects+=("$p")
+          done
+          python3 scripts/oss/oss-report.py --root oss "${projects[@]}" | tee oss-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with: { name: oss-summary, path: oss-summary.md }
