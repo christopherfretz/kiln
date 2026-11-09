@@ -924,6 +924,14 @@ impl Sema<'_, '_> {
                 }
                 continue;
             };
+            if mutable {
+                // A mutable member is copied from a non-const lvalue, which
+                // may select another constructor or assignment operator
+                // than its copy one (clang `addedMember`).
+                bits = bits
+                    .with(DefinitionBits::NEEDS_OVL_COPY_CTOR)
+                    .with(DefinitionBits::NEEDS_OVL_COPY_ASSIGN);
+            }
             if quals.contains(Quals::CONST) || quals.contains(Quals::VOLATILE) {
                 bits = bits
                     .with(DefinitionBits::NEEDS_OVL_COPY_CTOR)

@@ -2407,6 +2407,12 @@ impl Sema<'_, '_> {
     ) -> (Option<DeclId>, Option<DeclId>) {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("member_redecl_prev");
+        // Redeclaration lookup in the class declares the implicit members
+        // it can find (`friend F &F::operator=(const F &);`, clang
+        // `DeclareImplicitMemberFunctionsWithName`).
+        if let Some(q) = qualifier {
+            self.declare_implicit_named(q, dname);
+        }
         let found = self.prev_candidates_dn(dname, qualifier);
         let p = self.pick_prev_function(&found, new);
         let other = if other_kind { self.non_function_member(&found) } else { None };
