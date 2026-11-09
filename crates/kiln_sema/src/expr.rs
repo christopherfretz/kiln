@@ -429,17 +429,19 @@ impl Sema<'_, '_> {
         let mut e = e;
         for _ in 0..256 {
             // clang `IgnoreParensSingleStep` also looks through a
-            // `__builtin_choose_expr` to its chosen operand and through
-            // GNU `__extension__`.
+            // `__builtin_choose_expr` or `_Generic` to its chosen operand
+            // and through GNU `__extension__`.
             match self.ast.exprs.get(e).kind() {
                 ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
                 ExprKind::UnaryOperator if self.ast.exprs.unary_op(e) == UnaryOp::Extension => {
                     e = self.ast.exprs.operand(e);
                 }
-                ExprKind::ChooseExpr => match self.ast.exprs.choose_chosen(e) {
-                    Some(c) => e = c,
-                    None => break,
-                },
+                ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr => {
+                    match self.ast.exprs.selected_operand(e) {
+                        Some(c) => e = c,
+                        None => break,
+                    }
+                }
                 _ => break,
             }
         }

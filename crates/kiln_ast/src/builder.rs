@@ -25,8 +25,9 @@ use crate::decl::{
 use crate::expr::{
     ArrayTraitExtra, BinaryOp, CastKind, CharKind, CoawaitParts, CompoundAssignExtra,
     ConstructInfo, ConstructionKind, DeclRefExtra, ExprDeps, ExprFlags, ExprKind, ExprNode,
-    InitListExtra, NewExtra, NewInitStyle, NonOdrUse, ObjectKind, Radix, StorageDuration,
-    StringKind, SuspendKind, TraitKind, TypeTrait, TypeidOperand, UnaryOp, ValueCategory,
+    GenericAssoc, GenericControl, InitListExtra, NewExtra, NewInitStyle, NonOdrUse, ObjectKind,
+    Radix, StorageDuration, StringKind, SuspendKind, TraitKind, TypeTrait, TypeidOperand, UnaryOp,
+    ValueCategory,
 };
 use crate::ids::{
     ArgListId, AttrId, ConstValueId, DeclId, ExprId, LambdaId, ListId, QualType, RawId, StmtId,
@@ -1963,6 +1964,74 @@ impl<'a> AstBuilder<'a> {
             base.raw(),
             idx.raw(),
         )
+    }
+
+    /// `_Generic(ctrl, T: e, ..., default: e)` (clang
+    /// `GenericSelectionExpr`, a C11 extension in C++): `selected` is the
+    /// index of the chosen association, `None` while the selection is
+    /// result-dependent. As [`AstBuilder::choose_expr`], the chosen
+    /// expression gives the type, value and object kind and the
+    /// type/value dependence; every other bit comes from all operands
+    /// (clang `computeDependence(GenericSelectionExpr*)`).
+    pub fn generic_selection(
+        &mut self,
+        ctrl: GenericControl,
+        assocs: &[GenericAssoc],
+        selected: Option<usize>,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let (mut all, flags, mut words) = match ctrl {
+            GenericControl::Expr(c) => {
+                (self.deps(c), ExprFlags::NONE, vec![c.raw(), Loc::INVALID.to_raw()])
+            }
+            GenericControl::Type(q, l) => {
+                (self.type_deps(q), ExprFlags::ARG_IS_TYPE, vec![q.raw(), l.to_raw()])
+            }
+        };
+        for a in assocs {
+            all = all | self.deps(a.expr);
+            if let Some(t) = a.ty {
+                all = all | self.type_deps(t);
+            }
+            words.extend([a.ty.map_or(0, |t| t.raw()), a.ty_loc.to_raw(), a.expr.raw()]);
+        }
+        let list = self.ast.lists.push_raw(&words).raw();
+        let picked = selected.and_then(|i| assocs.get(i)).map(|a| a.expr);
+        let e = match picked {
+            None => self.push_expr(
+                ExprKind::GenericSelectionExpr,
+                ValueCategory::PRValue,
+                ObjectKind::Ordinary,
+                flags,
+                all | ExprDeps::TYPE_VALUE_INST,
+                0,
+                QualType::DEPENDENT,
+                loc,
+                list,
+                0,
+            ),
+            Some(active) => {
+                let n = *self.ast.exprs.get(active);
+                let tv = ExprDeps::TYPE.with(ExprDeps::VALUE);
+                let d = n.deps();
+                let deps = d.without(d.without(tv)) | all.without(tv);
+                self.push_expr(
+                    ExprKind::GenericSelectionExpr,
+                    n.value_category(),
+                    n.object_kind(),
+                    flags,
+                    deps,
+                    0,
+                    n.ty(),
+                    loc,
+                    list,
+                    active.raw(),
+                )
+            }
+        };
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
+        e
     }
 
     /// `__builtin_choose_expr(cond, lhs, rhs)` (clang `ChooseExpr`):

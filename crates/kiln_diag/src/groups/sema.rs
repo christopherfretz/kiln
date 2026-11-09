@@ -165,6 +165,7 @@ UnknownSanitizers = "unknown-sanitizers" [];
 UnneededInternalDeclaration = "unneeded-internal-declaration" [];
 UnreachableCodeBreak = "unreachable-code-break" [];
 UnreachableCodeFallthrough = "unreachable-code-fallthrough" [];
+UnreachableCodeGenericAssoc = "unreachable-code-generic-assoc" [];
 UnreachableCodeLoopIncrement = "unreachable-code-loop-increment" [];
 UnreachableCodeReturn = "unreachable-code-return" [];
 UnsupportedFriend = "unsupported-friend" [];

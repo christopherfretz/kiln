@@ -161,6 +161,35 @@ pub enum ExprKind {
     /// (`OpaqueValueExpr`s bound before use, then the result); the
     /// synthesized three-way comparison ([class.spaceship]/1).
     PseudoObjectExpr,
+    /// C11 `_Generic(ctrl, T: e, ..., default: e)` in C++ (clang's
+    /// `GenericSelectionExpr`, an extension): `a` is a raw list (see
+    /// [`ExprArena::generic_control`] / [`ExprArena::generic_assocs`]),
+    /// `b` the raw id of the selected association expression (0 while
+    /// the selection is result-dependent). [`ExprFlags::ARG_IS_TYPE`]
+    /// marks the type-operand form (`_Generic(type-name, ...)`).
+    GenericSelectionExpr,
+}
+
+/// The controlling operand of a `GenericSelectionExpr`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenericControl {
+    /// An expression, as written (sema lvalue-converts a copy for the
+    /// match; the written operand is kept, unevaluated).
+    Expr(ExprId),
+    /// A type-name (clang's C2y extension), matched as written.
+    Type(QualType, Loc),
+}
+
+/// One association of a `GenericSelectionExpr`: `ty` is `None` for
+/// `default`; `ty_loc` is the type's (or the `default` keyword's) location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GenericAssoc {
+    /// The association type; `None` for `default`.
+    pub ty: Option<QualType>,
+    /// The location of the type-name or of `default`.
+    pub ty_loc: Loc,
+    /// The association expression.
+    pub expr: ExprId,
 }
 
 impl ExprKind {
@@ -1714,6 +1743,42 @@ impl ExprArena {
         }
     }
 
+    /// The operand a `ChooseExpr` or `GenericSelectionExpr` resolved to
+    /// (both are transparent once resolved); `None` for other kinds and
+    /// while the selection is dependent.
+    pub fn selected_operand(&self, e: ExprId) -> Option<ExprId> {
+        match self.get(e).kind {
+            ExprKind::ChooseExpr => self.choose_chosen(e),
+            ExprKind::GenericSelectionExpr => ExprId::from_raw(self.get(e).b),
+            _ => None,
+        }
+    }
+
+    /// The controlling operand of a `GenericSelectionExpr`.
+    pub fn generic_control(&self, e: ExprId, lists: &IdLists) -> GenericControl {
+        let n = self.expect_kind(e, ExprKind::GenericSelectionExpr);
+        let w = lists.get(ListId::new(n.a));
+        if n.has(ExprFlags::ARG_IS_TYPE) {
+            let q = QualType::from_raw(w[0]).unwrap_or(QualType::ERROR);
+            GenericControl::Type(q, Loc::from_raw(w[1]))
+        } else {
+            GenericControl::Expr(ExprId::new(w[0]))
+        }
+    }
+
+    /// The associations of a `GenericSelectionExpr`, in source order.
+    pub fn generic_assocs(&self, e: ExprId, lists: &IdLists) -> Vec<GenericAssoc> {
+        let n = self.expect_kind(e, ExprKind::GenericSelectionExpr);
+        lists.get(ListId::new(n.a))[2..]
+            .chunks_exact(3)
+            .map(|c| GenericAssoc {
+                ty: QualType::from_raw(c[0]),
+                ty_loc: Loc::from_raw(c[1]),
+                expr: ExprId::new(c[2]),
+            })
+            .collect()
+    }
+
     /// The side record of an `InitListExpr`.
     pub fn init_list(&self, e: ExprId) -> &InitListExtra {
         &self.init_lists[self.expect_kind(e, ExprKind::InitListExpr).b as usize]
@@ -2835,6 +2900,13 @@ impl ExprArena {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)).take(5));
             }
             ExprKind::PseudoObjectExpr => self.pseudo_children(n, lists, v),
+            ExprKind::GenericSelectionExpr => {
+                let w = lists.get(ListId::new(n.a));
+                if !n.has(ExprFlags::ARG_IS_TYPE) {
+                    v.extend(id(w[0]));
+                }
+                v.extend(w[2..].chunks_exact(3).filter_map(|c| id(c[2])));
+            }
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
             | ExprKind::AtomicExpr
