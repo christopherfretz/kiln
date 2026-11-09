@@ -712,11 +712,23 @@ impl Sema<'_, '_> {
                 let params = self.ast.types.params(&f).to_vec();
                 let out: Vec<QualType> =
                     params.iter().map(|&p| self.rebuild_ci_type(p, qual, loc, depth + 1)).collect();
-                if ret == f.ret() && out == params {
+                // `void() noexcept(C<X>::B)`: the operand rebuilt
+                // ([except.spec]/3, [temp.over.link]/5; WP-1154).
+                let exc = self.ast.types.exc_spec(&f);
+                let new_exc = match exc {
+                    ExcSpec::NoexceptExpr {
+                        expr,
+                        value: kiln_ast::types::NoexceptValue::Dependent(_),
+                    } => match self.rebuild_ci_expr(expr, qual) {
+                        r if r == expr => exc,
+                        r => self.act_on_noexcept_spec(r, loc, loc),
+                    },
+                    _ => exc,
+                };
+                if ret == f.ret() && out == params && new_exc == exc {
                     return Some(base);
                 }
-                let exc = self.ast.types.exc_spec(&f);
-                self.ast.types.function(ret, &out, f.info(), exc)
+                self.ast.types.function(ret, &out, f.info(), new_exc)
             }
             TypeView::MemberPointer { pointee, class } => {
                 let r = self.rebuild_ci_type(pointee, qual, loc, depth + 1);
