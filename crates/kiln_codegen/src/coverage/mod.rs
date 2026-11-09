@@ -15,10 +15,10 @@ pub struct CoverageOptions {
     /// `-coverage-data-file=`). Needs debug locations: the driver turns
     /// [`crate::DebugInfoKind::None`] into `LocTrackingOnly`.
     pub gcov: Option<(String, String)>,
-    /// `-fprofile-instr-generate`: InstrProf counters.
+    /// `-fprofile-instr-generate`: `InstrProf` counters.
     pub instr: bool,
     /// `-fprofile-instr-generate=<path>`: the runtime's output file
-    /// (`@__llvm_profile_filename`, which clang's InstrProfiling lowering
+    /// (`@__llvm_profile_filename`, which clang's `InstrProfiling` lowering
     /// creates; kiln emits it with the module, and not under
     /// `-disable-llvm-passes`).
     pub instr_path: Option<String>,

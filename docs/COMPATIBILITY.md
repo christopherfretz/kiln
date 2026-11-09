@@ -168,6 +168,24 @@ member rules, redeclarations, and clang attribute checks. The breakdown,
 the triage clusters with their reduced tests, and the rejects-valid cases
 are in [status/accepts-invalid.md](status/accepts-invalid.md).
 
+## Coverage and profiling
+
+| feature | flags | status |
+|---|---|---|
+| gcov line coverage | `--coverage` (`-fprofile-arcs -ftest-coverage`, `-fprofile-dir=`, `-fprofile-update=`) | **Works**: `llvm-cov gcov` line counts equal clang 19's on every comparison program |
+| Source-based coverage counters | `-fprofile-instr-generate[=<file>]` | **Works**: `llvm-profdata show --counts` records (names, hashes, counters) equal clang 19's |
+| Source-based coverage mapping | `-fcoverage-mapping` (`llvm-cov show` / `report`) | **Not yet** (rejected with an error; follow-up of WP-941) |
+| Profile-guided optimization | `-fprofile-generate`, `-fcs-profile-generate`, `-fprofile-use`, `-fprofile-instr-use`, `-fprofile-sample-use` | **Not in 1.0** (a known limitation, rejected with an error) |
+
+Both coverage modes link LLVM 19's profile runtime
+(`libclang_rt.profile-<arch>.a`, Debian package `libclang-rt-19-dev`),
+which the linking `clang++` adds. `scripts/coverage-compare.py` builds
+`scripts/coverage/*.cpp` (control flow, classes and templates, lambdas,
+coroutines, macros, and a libstdc++-heavy program) with kiln and with
+clang++-19 and compares the reports. Detail, and the compile-time cost of
+each mode, in
+[spec/landed/codegen/WP-941.md](../spec/landed/codegen/WP-941.md).
+
 ## Constexpr and compile-time performance
 
 The wave-4 constexpr-heavy projects were built once with kiln and once

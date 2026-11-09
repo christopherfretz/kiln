@@ -1876,7 +1876,7 @@ impl Cg<'_> {
 
     /// clang `EmitBranchToCounterBlock`: [`Self::branch_on_bool`] of the
     /// operand `c` of a `&&` (`and`) or `||`, through a block counting
-    /// its true (false) outcomes when InstrProf counters are on (the
+    /// its true (false) outcomes when `InstrProf` counters are on (the
     /// counter of `c`, or of `cntr`).
     fn branch_to_counter_block(
         &mut self,

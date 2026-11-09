@@ -86,7 +86,7 @@ struct PgoHash {
 
 impl PgoHash {
     fn combine(&mut self, t: H) {
-        if self.count != 0 && self.count % 10 == 0 {
+        if self.count != 0 && self.count.is_multiple_of(10) {
             self.words.extend_from_slice(&self.working.to_le_bytes());
             self.working = 0;
         }
@@ -470,7 +470,7 @@ impl Walker<'_> {
     }
 }
 
-/// The InstrProf state of the function being emitted (clang
+/// The `InstrProf` state of the function being emitted (clang
 /// `CodeGenPGO`'s `RegionCounterMap`, `FunctionHash` and `FuncNameVar`).
 #[derive(Debug)]
 pub(crate) struct ProfState {
@@ -568,7 +568,7 @@ impl Cg<'_> {
         self.f.prof = Some(Box::new(ProfState { rc, name: g }));
     }
 
-    /// The module-level InstrProf pieces (spec/codegen.md
+    /// The module-level `InstrProf` pieces (spec/codegen.md
     /// "Instrumentation"): clang `CodeGenModule::Release` puts the
     /// `EnableValueProfiling` flag first, and an explicit
     /// `-fprofile-instr-generate=<path>` becomes the hidden
@@ -594,7 +594,7 @@ impl Cg<'_> {
         self.m.add_module_flag_i32(2, "EnableValueProfiling", 0);
     }
 
-    /// clang `hasProfileClangInstr()`: InstrProf counters are on for the
+    /// clang `hasProfileClangInstr()`: `InstrProf` counters are on for the
     /// module (the extra blocks around counters are emitted even in a
     /// function that is not instrumented).
     #[inline]
@@ -662,9 +662,7 @@ mod tests {
     #[test]
     fn pgo_hash() {
         let mut h = PgoHash::default();
-        for t in [H::Return] {
-            h.combine(t);
-        }
+        h.combine(H::Return);
         assert_eq!(h.finalize(), 24);
         let h = PgoHash::default();
         assert_eq!(h.finalize(), 0);

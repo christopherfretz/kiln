@@ -241,7 +241,7 @@ pub(crate) struct Fx {
     /// The coroutine being emitted (clang `CurCoro`, spec/codegen.md
     /// §7o).
     pub coro: Option<Box<crate::coro::CoroData>>,
-    /// The function's InstrProf region counters (clang `CodeGenPGO`,
+    /// The function's `InstrProf` region counters (clang `CodeGenPGO`,
     /// WP-941): set when `-fprofile-instr-generate` instruments it.
     pub prof: Option<Box<crate::coverage::pgo::ProfState>>,
     /// In an `await_suspend` wrapper: the frame pointer parameter, the

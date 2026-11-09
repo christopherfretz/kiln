@@ -87,7 +87,7 @@ impl CoverageFlags {
             "-fno-coverage-mapping" => self.mapping = Some(false),
             "-fprofile-generate" => self.pgo_generate = true,
             "-fno-profile-generate" => self.pgo_generate = false,
-            _ if PGO.iter().any(|p| arg == *p) => return Some(Err(pgo_error(arg))),
+            _ if PGO.contains(&arg) => return Some(Err(pgo_error(arg))),
             _ => return self.valued(arg),
         }
         Some(Ok(()))

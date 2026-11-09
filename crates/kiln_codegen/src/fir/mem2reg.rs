@@ -610,7 +610,7 @@ fn merged_location(
     };
     let ancestors = chain(m, sa);
     let scope = chain(m, sb).into_iter().find(|s| ancestors.contains(s))?;
-    let (line, col) = if la != lb { (0, 0) } else { (la, if ca == cb { ca } else { 0 }) };
+    let (line, col) = if la == lb { (la, if ca == cb { ca } else { 0 }) } else { (0, 0) };
     let mut fields = vec![("line", MdField::UInt(line))];
     if col != 0 {
         fields.push(("column", MdField::UInt(col)));
@@ -623,7 +623,7 @@ fn merged_location(
 fn location_fields(m: &Module, l: MetadataId) -> Option<(u64, u64, MetadataId)> {
     let MdNode::Specialized { name: "DILocation", fields, .. } = m.md_node(l) else { return None };
     let (mut line, mut col, mut scope) = (0, 0, None);
-    for (k, v) in fields.iter() {
+    for (k, v) in fields.as_ref() {
         match (*k, v) {
             ("line", MdField::UInt(x)) => line = *x,
             ("column", MdField::UInt(x)) => col = *x,
