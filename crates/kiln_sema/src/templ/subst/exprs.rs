@@ -614,6 +614,18 @@ impl Substituter<'_, '_, '_> {
                     return Ok(self.sema.act_on_member_destructor_late(base, name, loc, op, arrow));
                 }
                 let destroyed = self.ty(destroyed, loc)?;
+                // `p->T::F::~Q()`: the first type-name `T::F` too (WP-1155).
+                if let Some(&(first, fl)) = self.sema.ast.templates.pseudo_dtor_first.get(e) {
+                    let first = self.ty(first, fl)?;
+                    return Ok(self.sema.rebuild_pseudo_destructor_first(
+                        base,
+                        (first, fl),
+                        destroyed,
+                        loc,
+                        op,
+                        arrow,
+                    ));
+                }
                 Ok(self.sema.rebuild_member_destructor(base, destroyed, qualified, loc, op, arrow))
             }
             ExprKind::CXXDependentScopeMemberExpr => {

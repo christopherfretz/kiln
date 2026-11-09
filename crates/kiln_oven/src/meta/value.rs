@@ -230,6 +230,40 @@ impl Oven {
         r.map_err(freeze_err)
     }
 
+    /// The value of the object stored pointer `p` designates, frozen as
+    /// [`Oven::meta_freeze`] freezes it: `constant_of` of an object
+    /// reflection, a subobject of a variable usable in constant
+    /// expressions or of a static constant ([meta.reflection.queries];
+    /// WP-503). `None`: no object of a type the Oven reads (a wide
+    /// integer subobject, a null pointer).
+    ///
+    /// # Errors
+    /// The notes of a value that is no constant; the evaluator's fault
+    /// reading it.
+    pub fn meta_freeze_at(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        p: ConstValueId,
+        ctx: &MetaCtx,
+    ) -> Result<Option<ConstValueId>, MetaError> {
+        let Some(Scalar::Pointer { ty, .. }) = b.consts().scalar(p) else {
+            return Ok(None);
+        };
+        let pt = self.types.intern(b, ty);
+        let TyKind::Ptr(o) = self.types.kind(pt) else { return Ok(None) };
+        let addr = self.thaw_ptr(b, p, pt, ctx.top) as u64;
+        if addr == 0 || self.types.wide(o).is_some() {
+            return Ok(None);
+        }
+        let r = if self.types.is_aggregate(o) {
+            self.freeze_aggregate(b, o, addr, ctx.loc)
+        } else {
+            let v = self.load(addr, o, ak::READ).map_err(fault)?;
+            self.freeze_scalar(b, o, v, ctx.loc)
+        };
+        r.map(Some).map_err(freeze_err)
+    }
+
     /// The number of elements [`Oven::meta_freeze_elems`] takes from
     /// range argument `r` (data | length << 64): its length, less the
     /// terminator when `string` and the range is a whole string literal

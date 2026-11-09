@@ -525,7 +525,7 @@ impl Sema<'_, '_> {
 
     /// Where clang's "declared here" note for `d` points: its name, or
     /// for an alias template its `using` keyword.
-    fn typo_note_loc(&self, d: DeclId) -> Loc {
+    pub(crate) fn typo_note_loc(&self, d: DeclId) -> Loc {
         let first = self.ast.first(self.ast.strip_shadow(d));
         (self.kind_of(first) == DeclKind::TypeAliasTemplate)
             .then(|| self.ast.template_info(first).and_then(|i| i.pattern))

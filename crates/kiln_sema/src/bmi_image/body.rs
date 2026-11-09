@@ -1246,6 +1246,7 @@ impl Writer<'_, '_, '_> {
                     || t.expr_nns.contains(e)
                     || t.size_of_pack_origin.contains(e)
                     || t.pseudo_dtor_name.contains(e)
+                    || t.pseudo_dtor_first.contains(e)
                     || t.template_kw.contains(e)
                 {
                     return Err("an expression annotation the image does not carry");

@@ -3,8 +3,11 @@
 // constant (clang `VisitSubstNonTypeTemplateParmExpr` folds the replacement
 // through `tryEmitAsConstant`), while a dereference of a pointer parameter
 // (`*p`) and of `&cg` stay loads in both clang 19 and 22. WP-998: kiln
-// loaded `r` from the global.
+// loaded `r` from the global. The folded bodies are the same in clang 19,
+// but its module header is not (datalayout, `"frame-pointer"`), so the IR
+// is compared with clang 22 only (WP-1157).
 //@ expect: ir
+//@ min-oracle: 22
 //@ std: c++20
 static const int cg = 3;
 const int eg = 4;

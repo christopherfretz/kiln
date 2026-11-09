@@ -299,7 +299,7 @@ impl Sema<'_, '_> {
                 Some(w as u32)
             }
         };
-        let annots = self.dms_annotations(oven, raw.annotations, loc)?;
+        let annots = self.dms_annotations(oven, raw.annotations, ctx)?;
         let id = oven.dms_intern(Dms { ty, name, alignment, bit_width, nua: raw.nua, annots });
         Ok(self.intern_reflection(Reflectee::DataMemberSpec(id), loc)?)
     }
@@ -309,7 +309,13 @@ impl Sema<'_, '_> {
     /// stands for its constant (`constant_of`: a variable or object is
     /// its value, an annotation its underlying constant). The constants'
     /// list, interned (0 when there are none).
-    fn dms_annotations(&mut self, oven: &mut Oven, n: u32, loc: Loc) -> Result<u32, MetaError> {
+    fn dms_annotations(
+        &mut self,
+        oven: &mut Oven,
+        n: u32,
+        ctx: &MetaCtx,
+    ) -> Result<u32, MetaError> {
+        let loc = ctx.loc;
         if n == 0 {
             return Ok(0);
         }
@@ -324,7 +330,7 @@ impl Sema<'_, '_> {
                 _ if self.type_of_reflectee(x).is_none() => {
                     return fail(loc, "reflection does not have a type");
                 }
-                _ => self.reflect_constant_of(r, loc, oven)?,
+                _ => self.reflect_constant_of(r, ctx, oven)?,
             };
             out.push(c);
         }
