@@ -662,9 +662,8 @@ mod tests {
         ] {
             assert_eq!(parse(&[a]).1, [Some(Ok(()))], "{a}");
         }
-        for a in ["-fshort-enums"] {
-            assert_eq!(parse(&[a]).1, [Some(Err(ArgError::UnsupportedByKiln(a.into())))], "{a}");
-        }
+        let a = "-fshort-enums";
+        assert_eq!(parse(&[a]).1, [Some(Err(ArgError::UnsupportedByKiln(a.into())))], "{a}");
         assert_eq!(parse(&["-fbogus"]).1, [None]);
         assert_eq!(parse(&["-mtune=x86-64"]).0.mtune.as_deref(), Some("x86-64"));
     }

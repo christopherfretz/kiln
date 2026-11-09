@@ -370,7 +370,8 @@ impl Test<'_> {
     }
 
     /// `requires: sanitizer-runtime` (WP-1032): why the test cannot link
-    /// against the UBSan and ASan runtimes, if it cannot. The clangs that
+    /// against the undefined-behaviour and address sanitizer runtimes,
+    /// if it cannot. The clangs that
     /// link its program are kiln's linker driver (`<llvm_dir>/bin/clang++`)
     /// when kiln compiles it, and every clang it runs; each must find
     /// `libclang_rt.{ubsan_standalone,asan}` for the host (compiler-rt is
@@ -2164,6 +2165,36 @@ pub(super) fn meta_header_skip(spec: &TestSpec, source: &str) -> Option<String> 
     None
 }
 
+/// Whether `clang` finds the host's undefined-behaviour and address
+/// sanitizer runtime archives, in
+/// either compiler-rt layout (`lib/linux/libclang_rt.<rt>-<arch>.a` or the
+/// per-target `lib/<triple>/libclang_rt.<rt>.a`). Probed once per clang.
+fn has_sanitizer_runtime(clang: &Path) -> bool {
+    static SEEN: std::sync::Mutex<Vec<(PathBuf, bool)>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, ok)) = seen.iter().find(|(c, _)| c == clang) {
+        return *ok;
+    }
+    let ask = |arg: &str| {
+        Command::new(clang)
+            .arg(arg)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
+    };
+    let arch = std::env::consts::ARCH;
+    let runtime_dir = ask("--print-runtime-dir");
+    let ok = ["ubsan_standalone", "asan"].iter().all(|rt| {
+        let old = ask(&format!("-print-file-name=libclang_rt.{rt}-{arch}.a"));
+        let new = runtime_dir.as_ref().map(|d| d.join(format!("libclang_rt.{rt}.a")));
+        [old, new].into_iter().flatten().any(|p| p.is_absolute() && p.is_file())
+    });
+    seen.push((clang.to_owned(), ok));
+    ok
+}
+
 #[cfg(test)]
 mod compat_tests {
     use super::{
@@ -2277,33 +2308,4 @@ mod compat_tests {
         let layout = parse("//@ expect: layout\n", Lang::Cxx).unwrap();
         assert_eq!(ir_target_flag(DumpKind::Layout, &layout, "x86_64"), None);
     }
-}
-
-/// Whether `clang` finds the host's UBSan and ASan runtime archives, in
-/// either compiler-rt layout (`lib/linux/libclang_rt.<rt>-<arch>.a` or the
-/// per-target `lib/<triple>/libclang_rt.<rt>.a`). Probed once per clang.
-fn has_sanitizer_runtime(clang: &Path) -> bool {
-    static SEEN: std::sync::Mutex<Vec<(PathBuf, bool)>> = std::sync::Mutex::new(Vec::new());
-    let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((_, ok)) = seen.iter().find(|(c, _)| c == clang) {
-        return *ok;
-    }
-    let ask = |arg: &str| {
-        Command::new(clang)
-            .arg(arg)
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
-    };
-    let arch = std::env::consts::ARCH;
-    let runtime_dir = ask("--print-runtime-dir");
-    let ok = ["ubsan_standalone", "asan"].iter().all(|rt| {
-        let old = ask(&format!("-print-file-name=libclang_rt.{rt}-{arch}.a"));
-        let new = runtime_dir.as_ref().map(|d| d.join(format!("libclang_rt.{rt}.a")));
-        [old, new].into_iter().flatten().any(|p| p.is_absolute() && p.is_file())
-    });
-    seen.push((clang.to_owned(), ok));
-    ok
 }

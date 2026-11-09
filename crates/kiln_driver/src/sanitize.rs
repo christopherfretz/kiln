@@ -429,10 +429,7 @@ impl SanitizeFlags {
         [system, user]
             .iter()
             .filter(|l| !l.is_empty())
-            .filter_map(|l| match read_ignorelists(l).and_then(|t| parse_ignorelists(&t)) {
-                Ok(_) => None,
-                Err(e) => Some(e),
-            })
+            .filter_map(|l| read_ignorelists(l).and_then(|t| parse_ignorelists(&t)).err())
             .collect()
     }
 

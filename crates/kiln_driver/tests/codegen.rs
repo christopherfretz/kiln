@@ -1563,14 +1563,14 @@ fn sanitizer_frontend_attributes() {
 }
 
 /// spec/driver.md "Sanitizers" (WP-1032): `-fsanitize-ignorelist=` under
-/// ASan. A function named by `fun:` or defined in a `src:` file loses
+/// the address sanitizer. A function named by `fun:` or defined in a `src:` file loses
 /// `sanitize_address`; a global named by `global:`, of a class named by
 /// `type:` (or an array of one) or defined in a `src:` file is
 /// `no_sanitize_address`; an `=init` entry drops only the
 /// dynamic-initialisation marker. The resource directory's default
 /// `share/asan_ignorelist.txt` applies (its `fun:*_Find_elem@*@std*`) until
 /// `-fno-sanitize-ignorelist`. Each line was checked against clang 19's
-/// output (ASan IR tests cannot be exact: clang keeps value names there).
+/// output (address sanitizer IR tests cannot be exact: clang keeps value names there).
 #[test]
 fn sanitizer_ignorelist_asan() {
     let d = scratch("ignorelist-asan");

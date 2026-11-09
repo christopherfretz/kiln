@@ -994,15 +994,14 @@ impl Cg<'_> {
         self.f.fir.place_at_end(ovf_bb);
         self.f.fir.push(Op::CondBr { c: ovf, t: ovf_bb, f: cont }, LTy::VOID);
         self.f.fir.set_cur(Some(ovf_bb));
-        let f = match self.m.get_function(name) {
-            Some(f) => f,
-            None => {
-                let params = [LTy::I64, LTy::I64, LTy::I8, LTy::I8];
-                let fty = self.m.types.function(LTy::I64, &params, true);
-                match self.m.add_function(name, fty) {
-                    Ok(f) => f,
-                    Err(e) => return err(None, format!("cannot declare `{name}`: {e:?}")),
-                }
+        let f = if let Some(f) = self.m.get_function(name) {
+            f
+        } else {
+            let params = [LTy::I64, LTy::I64, LTy::I8, LTy::I8];
+            let fty = self.m.types.function(LTy::I64, &params, true);
+            match self.m.add_function(name, fty) {
+                Ok(f) => f,
+                Err(e) => return err(None, format!("cannot declare `{name}`: {e:?}")),
             }
         };
         let w = self.m.types.int_width(ty).unwrap_or(64);

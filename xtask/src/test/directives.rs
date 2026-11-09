@@ -326,7 +326,7 @@ pub struct TestSpec {
     /// targeting the host's architecture; otherwise the test is a SKIP.
     pub requires_host: Option<String>,
     /// `requires: sanitizer-runtime` (WP-1032): every clang that links the
-    /// test's program must find the UBSan and ASan runtimes (compiler-rt);
+    /// test's program must find the undefined-behaviour and address sanitizer runtimes (compiler-rt);
     /// otherwise the test is a SKIP. The runner probes for them.
     pub requires_sanitizer_runtime: bool,
     /// `verify`: the outcome is clang's `-verify` check of the test's
@@ -522,6 +522,7 @@ pub fn parse(source: &str, lang: Lang) -> Result<TestSpec, Vec<DirectiveError>> 
     p.finish()
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct Parser {
     lang: Lang,
     errors: Vec<DirectiveError>,
