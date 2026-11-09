@@ -1157,6 +1157,7 @@ impl Sema<'_, '_> {
         }
         let mut prev_ref = false;
         let recover = std::mem::take(&mut self.declarator_int_recovery);
+        self.declarator_distant_exc = false;
         // A failed chunk: the declarator's type is the error type, or
         // `int` under recovery (checked at the next chunk and the end).
         macro_rules! fail {
@@ -1178,6 +1179,23 @@ impl Sema<'_, '_> {
                 let msg = self.diag(DiagId::sema_decltype_auto_compound, loc).arg(which);
                 self.emit(msg);
                 fail!();
+            }
+            // C++14 [except.spec]/2 (clang `CheckDistantExceptionSpec`, at
+            // the identifier): the type is built anyway, the declaration
+            // is invalid; a pointer to member is not formed.
+            if !matches!(chunk, Chunk::Function { .. }) && self.is_distant_exception_spec(ty) {
+                let at = match chunk {
+                    Chunk::MemberPointer { loc, .. } => *loc,
+                    _ if d.name.is_none() && d.special.is_none() && d.decomp.is_none() => {
+                        d.abstract_at.unwrap_or(d.loc)
+                    }
+                    _ => d.name_loc(),
+                };
+                self.error(DiagId::sema_distant_exception_spec, at);
+                self.declarator_distant_exc = true;
+                if matches!(chunk, Chunk::MemberPointer { .. }) {
+                    fail!();
+                }
             }
             let t = &self.ast.types;
             match chunk {
@@ -1782,6 +1800,7 @@ impl Sema<'_, '_> {
         let errs = self.diags.error_count();
         self.declarator_int_recovery = d.ellipsis.is_some();
         let mut ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
+        let distant_invalid = std::mem::take(&mut self.declarator_distant_exc);
         self.declarator_int_recovery = false;
         ty = self.check_qualified_fn_type(ty, ds, d);
         let recovered = d.ellipsis.is_some() && self.diags.error_count() != errs;
@@ -1843,7 +1862,7 @@ impl Sema<'_, '_> {
             original_ty,
             loc: d.name_loc(),
             attrs,
-            invalid: ds.invalid || d.invalid || recovered,
+            invalid: ds.invalid || d.invalid || recovered || distant_invalid,
             default_arg: DefaultArg::None,
             default_loc: Loc::INVALID,
             range: (ds.loc, d.name_loc()),
@@ -2899,6 +2918,9 @@ impl Sema<'_, '_> {
             && ds.friend.is_none()
             && !matches!(ds.storage, Some((StorageSpec::Static, _)));
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
+        let distant_invalid = std::mem::take(&mut self.declarator_distant_exc);
+        // clang's `Declarator::InvalidType` sticks for the rest of the group.
+        self.declarator_type_invalid |= distant_invalid;
         self.declarator_field = false;
         let ty = self.check_qualified_fn_type(ty, ds, d);
         if head.is_some() {
@@ -2915,7 +2937,7 @@ impl Sema<'_, '_> {
                 self.templ.cur = None;
             }
         }
-        let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        let mut invalid = ds.invalid || d.invalid || distant_invalid || self.is_error_type(ty);
         // [temp.mem]/2: a member function template of a local class is
         // diagnosed and invalid, so no call selects it (clang's "no
         // matching member function", without candidates).

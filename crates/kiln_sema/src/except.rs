@@ -4,7 +4,9 @@
 
 use kiln_ast::decl::{DeclFlags, DefinitionBits};
 use kiln_ast::expr::{CastKind, ExprKind};
-use kiln_ast::types::{BuiltinType, ExcSpec, FuncProto, NoexceptValue, Quals, TypeKind, TypeList};
+use kiln_ast::types::{
+    BuiltinType, ExcSpec, FuncProto, NoexceptValue, Quals, TypeKind, TypeList, TypeView,
+};
 use kiln_ast::{DeclId, ExprId};
 use kiln_ast::{QualType, expr::ValueCategory};
 use kiln_diag::{DiagId, FixIt};
@@ -1152,14 +1154,19 @@ impl Sema<'_, '_> {
     /// it points or refers to: its written exception specification, and
     /// the prototype of the first function node in its sugar chain, whose
     /// return and parameter types keep their own written specifications.
+    ///
+    /// From C++17 the canonical type keeps only whether the function is
+    /// non-throwing, so the specification is read from that sugar too
+    /// (`void (*)() noexcept(false)` against `void (*)()`: the same type,
+    /// but clang's check still tells them apart).
     fn underlying_fn_proto(&self, q: QualType) -> Option<(ExcSpec, FuncProto)> {
         let t = &self.ast.types;
-        let f = t.exc_pointee(q).unwrap_or(q);
+        let f = self.sugared_pointee(q).unwrap_or(q);
         let exc = t.exc_spec(t.proto(f)?);
         let mut w = f;
         for _ in 0..256 {
             if let Some(p) = t.proto_of(w.ty()) {
-                return Some((exc, *p));
+                return Some((t.exc_spec(p), *p));
             }
             let n = t.desugar_once(w);
             if t.is_canonical(w.ty()) || n.ty() == w.ty() {
@@ -1168,6 +1175,30 @@ impl Sema<'_, '_> {
             w = n;
         }
         t.proto(f).map(|p| (exc, *p))
+    }
+
+    /// The type `q` points or refers to (a pointer, reference or pointer
+    /// to member, possibly behind sugar), with its own sugar kept: clang's
+    /// `getAs<PointerType>()->getPointeeType()`. In every language mode,
+    /// unlike [`kiln_ast::types::TypeContext::exc_pointee`].
+    fn sugared_pointee(&self, q: QualType) -> Option<QualType> {
+        let t = &self.ast.types;
+        let mut w = q;
+        for _ in 0..256 {
+            match t.view(w.ty()) {
+                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => {
+                    return Some(p);
+                }
+                TypeView::MemberPointer { pointee, .. } => return Some(pointee),
+                _ => {}
+            }
+            let n = t.desugar_once(w);
+            if t.is_canonical(w.ty()) || n.ty() == w.ty() {
+                break;
+            }
+            w = n;
+        }
+        t.pointee(q)
     }
 
     /// clang `CheckParamExceptionSpec` for an overrider `m` of the
@@ -1325,5 +1356,28 @@ impl Sema<'_, '_> {
             from = c;
             ok
         })
+    }
+
+    /// clang `CheckDistantExceptionSpec` (C++14 [except.spec]/2): before
+    /// C++17 an exception specification may appear only on a function
+    /// declarator or on the function type a top-level pointer, reference
+    /// or pointer to member of a declaration denotes. True when `ty`, the
+    /// type a pointer, member-pointer, reference or array declarator
+    /// operator is about to be applied to, is itself a pointer or pointer
+    /// to member to a function type written with a specification (`void
+    /// (**p)() throw()`, `void (*a[2])() noexcept`). C++17 makes the
+    /// specification part of the type and drops the rule. The type is
+    /// read through its sugar (`decltype(&f) *p` counts); a GNU `nothrow`
+    /// attribute counts as a specification (clang `EST_NoThrow`).
+    pub(crate) fn is_distant_exception_spec(&self, ty: QualType) -> bool {
+        if self.std >= kiln_lex::Std::Cxx17 {
+            return false;
+        }
+        let t = &self.ast.types;
+        if !t.is_pointer(ty) && t.canonical_kind(ty) != TypeKind::MemberPointer {
+            return false;
+        }
+        let Some(f) = t.exc_pointee(ty) else { return false };
+        t.is_function(f) && self.written_exc_spec(f) != ExcSpec::None
     }
 }
