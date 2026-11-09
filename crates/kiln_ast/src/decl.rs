@@ -3785,7 +3785,10 @@ pub mod builtin {
     /// attributes (clang `ActOnFunctionDeclarator` +
     /// `AddKnownFunctionAttributes`). `P` is the type the file-scope
     /// `FILE` typedef names. clang's library builtins without any of these
-    /// attributes (`malloc`, `printf`, `strtol`, ...) are left out.
+    /// attributes (`malloc`, `printf`, `strtol`, ...) are left out, except
+    /// the ones clang constant-evaluates (`memcmp`, `bcmp`; WP-1055), which
+    /// the never-constant check recognizes (spec/sema.md "Never
+    /// constant").
     pub static LIB: &[Info] = &[
         row(93, "abs", "ii", N | C),
         row(95, "labs", "LiLi", N | C),
@@ -3821,6 +3824,21 @@ pub mod builtin {
         row(1380, "wmemcmp", "iwC*wC*z", N),
         row(1382, "wmemcpy", "w*w*wC*z", N),
         row(1384, "wmemmove", "w*w*wC*z", N),
+        // WP-1055: `memcmp` has no implicit attribute but clang
+        // constant-evaluates it (`__has_constexpr_builtin`), which the
+        // never-constant check needs to know; so does the GNU `bcmp`.
+        // The rest are the GNU `<string.h>` / `<strings.h>` builtins
+        // with `NoThrow` (clang `GNULibBuiltin`, [`lib_gnu_only`]).
+        row(864, "memcmp", "ivC*vC*z", 0),
+        row(178, "bcmp", "ivC*vC*z", 0),
+        row(185, "bcopy", "vvC*v*z", N),
+        row(183, "bzero", "vv*z", N),
+        row(671, "index", "c*cC*i", N),
+        row(1015, "rindex", "c*cC*i", N),
+        row(1129, "stpcpy", "c*c*cC*", N),
+        row(1132, "stpncpy", "c*c*cC*z", N),
+        row(1145, "strdup", "c*cC*", N),
+        row(1175, "strndup", "c*cC*z", N),
         row(717, "isalnum", "ii", N | P),
         row(719, "isalpha", "ii", N | P),
         row(720, "isblank", "ii", N | P),
@@ -4056,9 +4074,12 @@ pub mod builtin {
     }
 
     /// WP-419: whether the [`LIB`] function `id` is recognized in the GNU
-    /// dialects only (clang `ALL_GNU_LANGUAGES`: `sincos`).
+    /// dialects only (clang `ALL_GNU_LANGUAGES`: `sincos`; WP-1055: the
+    /// `GNULibBuiltin` string functions `bcmp`, `bcopy`, `bzero`, `index`,
+    /// `rindex`, `stpcpy`, `stpncpy`, `strdup` and `strndup`).
     pub fn lib_gnu_only(id: u32) -> bool {
         (2057..=2059).contains(&id)
+            || matches!(id, 178 | 183 | 185 | 671 | 1015 | 1129 | 1132 | 1145 | 1175)
     }
 
     /// WP-380: the `__builtin_` twin of the [`LIB`] function `name` when
@@ -4999,6 +5020,10 @@ pub mod builtin {
     pub const VSCANF: u32 = 2385;
     /// `__builtin_vsscanf` (`icC*RcC*Ra`; not `NoThrow`).
     pub const VSSCANF: u32 = 2386;
+    /// `unsigned long long __builtin_readcyclecounter()` (clang
+    /// `NoThrow`, every target; WP-1057): the processor's cycle counter,
+    /// `llvm.readcyclecounter`; never a constant. Kiln-private id.
+    pub const READCYCLECOUNTER: u32 = 2387;
 
     /// WP-270: the checked-arithmetic builtins (clang 19 `Builtins.td`
     /// `__builtin_*_overflow`; all constant-evaluated), WP-557's carry
@@ -5409,6 +5434,8 @@ pub mod builtin {
         row(START_LIFETIME, "__builtin_start_lifetime", "v.", N | T),
         // WP-782.
         row(THREAD_POINTER, "__builtin_thread_pointer", "v*", N),
+        // WP-1057.
+        row(READCYCLECOUNTER, "__builtin_readcyclecounter", "ULLi", N),
         // WP-774.
         row(CLEAR_PADDING, "__builtin_clear_padding", "v.", N | T),
         // WP-803.

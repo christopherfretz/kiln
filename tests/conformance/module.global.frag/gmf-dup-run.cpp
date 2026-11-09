@@ -3,15 +3,16 @@
 // (a function, a variable, the key function of G and with it G's vtable)
 // and the non-inline in-class member functions and vtables of its
 // purview classes are emitted by that unit only; two importers using
-// them link without duplicate definitions, and all three share the one
+// them, each compiled separately against gd's module file, link with
+// gd's object without duplicate definitions, and all three share the one
 // variable. (clang 22 instead emits G's vtable in every importer: spec/
 // modules.md §10 deviation 7.)
 //@ expect: run
 //@ std: c++20
-//@ args: %{test_dir}/Inputs/gd.cppm %{test_dir}/Inputs/gd-user.cpp
-//@ args: -fmodule-file=gd=%{test_dir}/Inputs/gd.cppm
+//@ module: gd=Inputs/gd.cppm
+//@ unit: Inputs/gd-user.cpp
 //@ stdout: 57 57 1 3 4 5 2
-//@ skip(clang): clang needs a two-step --precompile build of the Inputs module that the harness cannot drive
+//@ skip(clang): clang emits G's vtable in every importer, which then fails to link (spec/modules.md §10 deviation 7)
 import gd;
 extern "C" int printf(const char *, ...);
 int second_user();

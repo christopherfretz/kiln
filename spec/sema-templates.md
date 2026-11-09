@@ -1190,7 +1190,7 @@ never recomputed (ast.md §5). The rules follow [temp.dep.expr],
 |---|---|
 | any expression | the union of its children's deps, plus `deps_of_type_flags(type)` (gives TYPE when the type is dependent) |
 | `DeclRefExpr` to an NTTP | VALUE \| INST (plus TYPE if the parameter's type is dependent; plus UNEXPANDED_PACK if it is a pack) |
-| `DeclRefExpr` to a variable | TYPE if its type is dependent; VALUE if it is a const integral or `constexpr` variable whose initializer is value-dependent (ast.md §16.15); TYPE \| VALUE \| INST if it is a static data member of the current instantiation declared in its class as an array of unknown bound without an initializer there ([temp.dep.expr]/3, `static const Info Ops[];`). `sizeof`/`alignof` of such a type-dependent operand is checked at instantiation, where a (parenthesized) reference to a static data member of a specialization whose type is an array of unknown bound first instantiates the member's definition and names it with the bound its definition gives (clang `completeExprArrayBound`; [temp.inst]/4; WP-730, test `temp.dep.expr/static-member-array-unknown-bound.cpp`) |
+| `DeclRefExpr` to a variable | TYPE if its type is dependent; VALUE if it is a const integral or `constexpr` variable whose initializer is value-dependent (ast.md §16.15); TYPE \| VALUE \| INST if it is a static data member of the current instantiation declared in its class as an array of unknown bound without an initializer there ([temp.dep.expr]/3, `static const Info Ops[];`). `sizeof`/`alignof` of such a type-dependent operand is checked at instantiation, where a (parenthesized) reference to a static data member of a specialization whose type is an array of unknown bound first instantiates the member's definition and names it with the bound its definition gives (clang `completeExprArrayBound`; [temp.inst]/4; WP-730, test `temp.dep.expr/static-member-array-unknown-bound.cpp`; a variable template specialization likewise, §4.11, WP-907) |
 | `this` in a dependent context | TYPE |
 | `sizeof`, `alignof`, `noexcept`, `typeid(type)`, `__is_*` traits, `requires` | the operand's TYPE becomes VALUE (the result type is fixed); `alignof e` naming a variable or member whose `alignas` operand is dependent is VALUE-dependent too (`Builder::names_dependently_aligned_decl`, clang `computeDependence(UnaryExprOrTypeTraitExpr)`; WP-312) |
 | `noexcept(e)` with a can-throw result that is dependent | also VALUE \| INST |
@@ -2570,6 +2570,31 @@ with a `VarTemplateSpecialization` decl.
   the access again at instantiation, and none at all is "use of variable
   template 'v' requires template arguments" (WP-789,
   `tests/conformance/temp.names/member-access-variable-template-run.cpp`).
+- A specialization (implicit, partial or explicit) or static data
+  member template declared as an array of unknown bound takes the bound
+  its initializer gives once its definition is instantiated
+  ([temp.inst]/4, [dcl.array]/3; WP-907). Expressions are immutable, so
+  a reference made before that keeps `T[]`, and the sites where clang
+  calls `completeExprArrayBound` (`getCompletedType`) instantiate the
+  definition first and rebuild the reference with the completed type:
+  `sizeof`/`alignof` (the point of instantiation is the operand's
+  location, an outer parenthesis included), a call argument (deduction
+  of `T (&)[N]`), the initializer of a reference or placeholder variable
+  (`auto&`, `int (&r)[3] = v<int>`) and a range-for range. A variable
+  usable in constant expressions is instantiated when referenced
+  (below), so `decltype(v<int>)` and `v<int>[2]` in a constant
+  expression see the bound too. An explicit instantiation definition
+  instantiates the definition before comparing its declared type, as
+  clang's `ActOnExplicitInstantiation` does: `template short v<short>[2];`
+  is valid and `template char v<char>[];` is "type 'char[]' of explicit
+  instantiation of 'v' does not match expected type 'char[2]'". Tests:
+  `tests/conformance/temp.inst/p4-var-template-unknown-bound.cpp`,
+  `var-template-unknown-bound-completed.cpp`,
+  `var-template-unknown-bound-constexpr.cpp` (clang 19 rejects the
+  subscript reads), `var-template-unknown-bound-errors.cpp`,
+  `tests/conformance/temp.explicit/var-template-unknown-bound.cpp`,
+  `var-template-unknown-bound-errors.cpp`,
+  `tests/codegen/var_template_unknown_bound.cpp`.
 - The `inline constexpr bool xxx_v` family (142 declarations in the M3
   headers, §13.3) is the hottest path. One probe gives the decl and one
   `consts()` lookup gives its value.

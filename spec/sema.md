@@ -70,7 +70,8 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   pattern's type; a synthesized `<=>`/`==` converts each operand to the
   cv-qualified base ([class.compare.default]).
 - **Structured bindings** (§4.9): `std::tuple_element`'s index is a
-  `size_t` integer literal (`tuple_element<0UL, E>`); a binding
+  `size_t` integer literal (`tuple_element<0UL, E>`), converted to the
+  template parameter's type at both compat levels; a binding
   captured by a non-mutable lambda and named in its body is `const`
   ([expr.prim.id.unqual]/3).
 - **Statement expressions** (GNU): only the statement's own `;` may
@@ -294,7 +295,20 @@ translation unit that fails costs about what it costs clang:
     declaration created in the scope instance), then the namespace's
     lookup table, and duplicates are removed by moving the last entry
     into the duplicate's slot (`LookupResult::resolveKind`). A qualified
-    lookup lists table order.
+    lookup lists table order. An unscoped enumerator is ordered as a
+    member of the enumeration's parent, and a set found in one class's
+    table while the current context lies lexically within that class
+    (an in-class member body; clang's scope chain) is listed newest
+    first; from outside it (`S::m`, `s.m`, an out-of-line member body)
+    in table order (`lexically_within`, WP-929).
+  - **Unscoped enumeration scopes** ([dcl.enum]/11): an unscoped
+    enumeration's body is no lookup scope of its own; its enumerators
+    are found in the enclosing scope, together with whatever else that
+    scope declares under the name. Inside `enum { f = 1, g = f + 1 };`
+    after `void f(int); void f(double);`, `f` is ambiguous, as in clang
+    (WP-929). A block-scope enumerator found with block-scope functions
+    of the same name (`block_scope_set`) is ambiguous too; the
+    candidate notes' names differ from clang's (follow-up).
   - **Identity** ([basic.lookup.general]/1, [class.member.lookup]/3;
     WP-197): declarations of one entity, and type declarations that
     designate the same type (two typedefs of `int`, a typedef and the
@@ -1800,6 +1814,21 @@ and returns the scope it names:
     instantiation. Tests `dcl.enum/packed-underlying-type.cpp`,
     `tests/codegen/enum_packed.cpp`
   - `replace_enumerator_init` records the converted initializer
+  - **enumerator vs. overload set** (WP-929, clang `ActOnEnumConstant`
+    `LookupSingleName` + `getAsSingle`): an enumerator is a redefinition
+    only when the current scope's lookup of its name finds exactly one
+    non-template entity (redeclarations of one function count once;
+    `lookup_current_scope_outside_enum`). After two or more functions,
+    a function template, or functions plus an earlier enumerator of
+    another enumeration, the enumerator is declared with no error; a
+    later use that finds both is `reference to 'f' is ambiguous`
+    (§3), a qualified `S::m`, a member access `s.m` and a call
+    included. A scoped enumeration's enumerators never clash. Printed
+    names skip an unscoped enumeration (`N::f`, not `N::E::f`; clang
+    `printNestedNameSpecifier`): at compat 19 only an enumerator's own
+    enumeration (a type defined in an enumerator's initializer prints
+    `E::S`), at 22 every unscoped one (`S`). Tests:
+    `basic.scope.scope/enumerator-after-overload-set{,-ambiguous}.cpp`.
 - **Bit-fields** ([class.bit]; `bit_width`, clang `VerifyBitField`):
   - a named bit-field's type must be integral or an enumeration, checked
     even when the width is value-dependent (`bit-field 'f' has
@@ -2058,7 +2087,17 @@ instantiation unless stated.
   `__has_attribute` / `__has_cpp_attribute` answer 0 for a class-A
   name, and `__has_builtin` answers 0 for a builtin codegen cannot lower
   (`kiln_codegen::UNLOWERED_BUILTINS`); a header that tests for a feature
-  takes the path kiln implements. `-E` keeps clang's answers.
+  takes the path kiln implements. `-E` keeps clang's answers. A reported
+  builtin is declared on the target (WP-1057): `__builtin_readcyclecounter`
+  (`ULLi`, every target; not constant, lowered to `llvm.readcyclecounter`)
+  is declared, and the `__builtin_` keywords the parser lacks
+  (`kiln_driver::pp_cmd::UNPARSED_KEYWORD_BUILTINS`:
+  `__builtin_available`, `__builtin_omp_required_simd_align`,
+  `__builtin_ptrauth_type_discriminator`, `__builtin_vectorelements`)
+  answer 0. `kiln_driver/tests/builtin_lowering.rs` calls every reported
+  name in the reserved `__` namespace on aarch64 and x86_64 at compat 19
+  and 22 and requires none to be undeclared (header-declared library
+  builtins and non-`__builtin_` keywords excepted).
 - `act_on_attribute(syntax, scope, name, args, loc)` maps a parsed
   attribute to an `AttrKind`, or diagnoses it as above and returns
   `None`.
@@ -4164,7 +4203,13 @@ diagnostics and IR.
       E>::type&` (lvalue `e`) or `&&`, with the binding's name. The
       index `i` of `tuple_element` is a `size_t` value argument or, at
       `-fclang-compat=22`, a `size_t` integer literal written as an
-      expression argument (`tuple_element<0UL, E>`; §1.1). It is
+      expression argument (`tuple_element<0UL, E>`; §1.1). At both
+      levels it is converted to the type of the template's first
+      parameter ([temp.arg.nontype]/2; at compat 19 `tuple_element_type`
+      runs `check_template_args`, WP-914), so `template <unsigned I,
+      class T> struct tuple_element` with an explicit specialization for
+      `0` is matched (`dcl.struct.bind/tuple-element-unsigned-index-19.cpp`,
+      `tuple-element-unsigned-char-index{,-19}.cpp`). It is
       initialized with `e.get<i>()` when a member template `get` has a
       non-type first parameter, else with an ADL-only `get<i>(xvalue
       e)`, which prints `adl` and, being kiln's call rather than a
@@ -4788,7 +4833,16 @@ under its own name, the same signature, gating and codegen
   `fmaximum_num` / `fminimum_num` `{,f,l}` (`builtin::lib_min_compat`:
   not recognized at `-fclang-compat=19`) and the GNU `sincos{,f,l}`
   (clang 22, `ALL_GNU_LANGUAGES`: recognized under `-std=gnu++*` only,
-  `builtin::lib_gnu_only`; `NoThrow`, a call is `nounwind`). A call in
+  `builtin::lib_gnu_only`; `NoThrow`, a call is `nounwind`). WP-1055
+  (audit against clang 19/22 `Builtins.td`) adds `memcmp` and, GNU
+  modes only, `bcmp`, `bcopy`, `bzero`, `index`, `rindex`, `stpcpy`,
+  `stpncpy`, `strdup` and `strndup`; under `-std=c++*` `bcmp` is an
+  ordinary function. Still not modelled: rows whose only effect is
+  `AllocSize` (`malloc`, `calloc`, `realloc`, `aligned_alloc`,
+  `memalign`), `ReturnsTwice` (`setjmp`, `vfork`, `getcontext`), the
+  scanf-family `format`, and clang's special lowering of `abort`
+  (`invoke`), `alloca`, `bzero` / `bcopy` (memset / memmove intrinsics)
+  and `finite` (`llvm.is.fpclass`). A call in
   a constant expression is still a call of a non-constexpr function
   (clang 19 and 22 reject `constexpr double d = ceil(1.5);`). The printf
   family (`printf`, `fprintf`, `sprintf`, `snprintf`, `vprintf`,
@@ -7584,7 +7638,8 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
       `__builtin_assume` and `__assume` walk no argument,
       `__builtin_expect{,_with_probability}` only the first;
     - a library builtin (C linkage, `lib_builtin_info`) that clang
-      constant-evaluates (`strlen`, `memcpy`, `strcmp`) always fails:
+      constant-evaluates (`strlen`, `memcpy`, `strcmp`, `memcmp`, and
+      in GNU modes `bcmp`, WP-1055) always fails:
       "non-constexpr function 'NAME' cannot be used in a constant
       expression" at the call, without `declared here` (clang's
       `isBuiltinCall` refusal outside a constant-evaluated context);

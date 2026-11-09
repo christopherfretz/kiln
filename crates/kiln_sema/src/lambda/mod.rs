@@ -97,6 +97,15 @@ pub(crate) struct ManglingState {
     pub(crate) var: Option<DeclId>,
     /// The parameter whose delayed default argument is being parsed.
     pub(crate) default_arg: Option<DeclId>,
+    /// A default template argument is being parsed or substituted: a
+    /// lambda in it at namespace or class scope is numbered in that
+    /// scope (clang 19 and 22: `template<class T = decltype([]{})>` is
+    /// `UlvE_`, not `$_0`; WP-1062).
+    pub(crate) template_default: bool,
+    /// The mangling the next closure numbered takes as is: a default
+    /// template argument's lambda substituted at a use (clang gives each
+    /// use a new closure type that mangles as the default's).
+    pub(crate) inherited: Option<kiln_ast::lambda::LambdaMangling>,
     /// The last number given per numbering context (a function, or the
     /// variable, data member or parameter whose initializer holds the
     /// lambda) and <lambda-sig> (the explicit template parameters, the
@@ -151,8 +160,9 @@ pub(crate) struct LambdaScope {
     saved_imm: crate::consteval::SavedImm,
     saved_extend: Option<Vec<ExprId>>,
     saved_ctor_entity: Option<(crate::class::InitEntity, kiln_ast::expr::ConstructionKind)>,
-    saved_mangle_var: Option<DeclId>,
-    saved_default_arg: Option<DeclId>,
+    /// The enclosing [`ManglingState`] numbering site: `var`,
+    /// `default_arg`, `template_default`.
+    saved_mangle_site: (Option<DeclId>, Option<DeclId>, bool),
     pub(crate) body_open: bool,
     /// The body names a parameter pack of an enclosing template that it
     /// does not expand: the lambda-expression contains an unexpanded
@@ -227,8 +237,7 @@ impl Sema<'_, '_> {
             saved_imm: crate::consteval::SavedImm::default(),
             saved_extend: None,
             saved_ctor_entity: None,
-            saved_mangle_var: None,
-            saved_default_arg: None,
+            saved_mangle_site: (None, None, false),
             body_open: false,
             has_packs: false,
             packs: Vec::new(),
@@ -524,6 +533,19 @@ impl Sema<'_, '_> {
         self.lambda_mangle.default_arg = None;
     }
 
+    /// Before the default argument of a template parameter is parsed
+    /// ([temp.param]/10): a lambda in it is numbered in the template's
+    /// scope ([`ManglingState::template_default`]). Returns the previous
+    /// state for [`Self::act_on_end_template_param_default`].
+    pub fn act_on_start_template_param_default(&mut self) -> bool {
+        std::mem::replace(&mut self.lambda_mangle.template_default, true)
+    }
+
+    /// After the default argument of a template parameter.
+    pub fn act_on_end_template_param_default(&mut self, saved: bool) {
+        self.lambda_mangle.template_default = saved;
+    }
+
     /// Gives closure type `closure` of lambda `id` with call operator `f`
     /// its mangling number and context (clang `handleLambdaNumbering`):
     /// lambdas in the body of an inline or templated function (one in a
@@ -533,6 +555,10 @@ impl Sema<'_, '_> {
     /// <lambda-sig>; any other has internal linkage and
     /// no number.
     fn number_lambda(&mut self, id: LambdaId, closure: DeclId, f: DeclId) {
+        if let Some(m) = self.lambda_mangle.inherited.take() {
+            self.ast.exprs.lambdas.get_mut(id).mangling = m;
+            return;
+        }
         let Some((key, context)) = self.lambda_numbering_context(closure) else { return };
         // clang `ItaniumNumberingContext::getManglingNumber` keys on the
         // mangled <lambda-sig>.
@@ -585,6 +611,14 @@ impl Sema<'_, '_> {
             {
                 return Some((field, Some(field)));
             }
+        }
+        // A default template argument at namespace or class scope
+        // (clang numbers it in the template's context; the closure's
+        // linkage is its namespace's or class's, none at file scope).
+        if self.lambda_mangle.template_default
+            && matches!(kind, DeclKind::TranslationUnit | DeclKind::Namespace | DeclKind::CXXRecord)
+        {
+            return Some((ctx, None));
         }
         let v = self.lambda_mangle.var?;
         let inline = self
@@ -650,9 +684,9 @@ impl Sema<'_, '_> {
         let entity = self.ctor_entity.take();
         let mangle_var = self.lambda_mangle.var.take();
         let default_arg = self.lambda_mangle.default_arg.take();
+        let template_default = std::mem::take(&mut self.lambda_mangle.template_default);
         if let Some(top) = self.lambdas.last_mut() {
-            top.saved_mangle_var = mangle_var;
-            top.saved_default_arg = default_arg;
+            top.saved_mangle_site = (mangle_var, default_arg, template_default);
             top.call_op = Some(f);
             top.depth = depth;
             top.saved_ctx = saved_ctx;
@@ -759,8 +793,11 @@ impl Sema<'_, '_> {
         }
         self.ctx = top.saved_ctx;
         if top.body_open {
-            self.lambda_mangle.var = top.saved_mangle_var;
-            self.lambda_mangle.default_arg = top.saved_default_arg;
+            (
+                self.lambda_mangle.var,
+                self.lambda_mangle.default_arg,
+                self.lambda_mangle.template_default,
+            ) = top.saved_mangle_site;
         }
         Some(top)
     }
