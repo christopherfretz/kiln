@@ -2127,6 +2127,10 @@ impl Parser<'_, '_> {
             DeclaratorContext::Prototype | DeclaratorContext::TypeName | DeclaratorContext::Condition
         );
         self.s.nested_tag = nested;
+        // [temp.pre]/5: a class defined by a template-declaration (a class
+        // template, a partial or explicit specialization, or a member of a
+        // class template defined out of line) takes no declarator.
+        let templated = !nested && keyword != TagKeyword::Enum && self.s.in_template_declaration();
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs, use_);
         if use_ == TagUse::Definition && self.s.tag_body_skipped(d) {
@@ -2173,7 +2177,7 @@ impl Parser<'_, '_> {
             // [temp.pre]/5: a template-declaration that defines a class
             // has no declarator, so only `;` may follow the body (clang's
             // `ParseClassSpecifier` with a template head).
-            if self.s.ast.described_template(d).is_some() && !self.at(Punct::Semi) {
+            if templated && !self.at(Punct::Semi) {
                 self.expected_semi_after_tag(keyword.spelling());
             } else {
                 self.check_after_tag_definition(keyword.spelling(), could_be_bitfield);
@@ -2291,6 +2295,16 @@ impl Parser<'_, '_> {
             let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
             return;
         };
+        // [temp.pre]/5, as in `parse_tag_specifier`: a partial or explicit
+        // specialization's definition takes no declarator. One nested in
+        // another declaration takes none of its template heads ([temp.pre]/1;
+        // clang then requires `template<>`).
+        let nested = matches!(
+            ctx,
+            DeclaratorContext::Prototype | DeclaratorContext::TypeName | DeclaratorContext::Condition
+        );
+        let templated = !nested && self.s.in_template_declaration();
+        let heads = (nested && use_ == TagUse::Definition).then(|| self.s.hide_open_heads());
         let r = self.s.act_on_class_template_id_tag(
             keyword,
             tmpl,
@@ -2338,6 +2352,9 @@ impl Parser<'_, '_> {
             ds.invalid = true;
             QualType::ERROR
         };
+        if let Some(h) = heads {
+            self.s.restore_template_decl_state(&h);
+        }
         ds.keyword = keyword;
         if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
             ds.invalid = true;
@@ -2349,7 +2366,11 @@ impl Parser<'_, '_> {
                 TagKeyword::Class => "class",
                 _ => "union",
             };
-            self.check_after_tag_definition(spelling, false);
+            if templated && !self.at(Punct::Semi) {
+                self.expected_semi_after_tag(spelling);
+            } else {
+                self.check_after_tag_definition(spelling, false);
+            }
         }
     }
 

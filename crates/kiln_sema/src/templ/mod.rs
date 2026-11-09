@@ -1151,6 +1151,17 @@ impl Sema<'_, '_> {
             .any(|(_, h)| !h.invented)
     }
 
+    /// True if the declaration being parsed is a template-declaration in
+    /// clang's sense (`TemplateInfo.Kind != NonTemplate`): a written
+    /// template head awaits it, or it follows `template<>` or an explicit
+    /// instantiation's `template`. A class it defines takes no declarator
+    /// ([temp.pre]/5).
+    pub fn in_template_declaration(&self) -> bool {
+        self.has_open_template_head()
+            || self.templ.explicit_spec.is_some()
+            || self.templ.explicit_inst.is_some()
+    }
+
     /// The innermost untaken head the declaration being declared consumes
     /// ([temp.pre]/1), after matching the outer heads to the class
     /// templates named by its qualifier (`template<class T> void
