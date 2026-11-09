@@ -21,6 +21,9 @@ cg_auto_var_init_too_large = Remark [AutoVarInit] (3) "erroneous value of variab
 // clang `warn_avx_calling_convention`: {0} is 0 for a return, 1 for an
 // argument; {2} the target feature (`avx`, `avx512f`).
 cg_avx_calling_convention = Warning [Psabi] (3) "AVX vector {0:return|argument} of type {1} without '{2}' enabled changes the ABI";
+// clang `err_avx_calling_convention`: as `cg_avx_calling_convention`,
+// when only one of the caller and the callee has the feature; WP-1000.
+cg_avx_calling_convention_mismatch = Error (3) "AVX vector {0:return|argument} of type {1} without '{2}' enabled changes the ABI";
 // clang `err_builtin_needs_feature` (`checkTargetFeatures`): {0} the
 // builtin, {1} its required-feature expression; WP-558.
 cg_builtin_needs_feature = Error (2) "'{0}' needs target feature {1}";

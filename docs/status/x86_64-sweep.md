@@ -103,15 +103,25 @@ Tests are "passed / total".
   (spec/sema.md; `tests/conformance/target.x86/rdtsc-ir.cpp`,
   `rdtsc-not-aarch64.cpp`).
 - x86 `-m<feature>` / `-mno-<feature>` (`-msse4.2`, `-mavx2`, `-mpclmul`,
-  `-msha`, …) are unknown arguments; kiln takes only `-march=<cpu>`. No
-  test fails, but CMake probes turn off SIMD code: bitcoin_core 12 TUs,
-  opencv 64 TUs. **Filed** (follow-up), xfail
-  `tests/conformance/target.x86/m-feature-flags.cpp`.
+  `-msha`, …) were unknown arguments; kiln took only `-march=<cpu>`. No
+  test failed, but CMake probes turned off SIMD code: bitcoin_core 12 TUs,
+  opencv 64 TUs. **Fixed** (WP-1000): clang 19's and clang 22's x86 feature
+  flags with their implied-feature closure, feature macros,
+  `"target-features"`, intrinsic gating and `target("...")` maps
+  (spec/driver.md "x86-64 target features";
+  `tests/conformance/target.x86/m-feature-flags.cpp`,
+  `cpp.predefined/x86-feature-macros-*.cpp`,
+  `target.x86/ir-target-features-*.cpp`). The sweep has not been re-run
+  for the TU counts. x86 function multiversioning (`target_clones`) is
+  still rejected: WP-1059, xfail
+  `tests/conformance/ext.multiversion/target-clones-x86.cpp`.
 - glibc's x86-64 `bits/floatn.h` says `typedef __float128 _Float128;`.
   kiln makes `_Float128` its own P1467 type and drops that typedef, so a
   `_Float128` function (`logf128`) is not a `__float128` one, as it is
   under clang. llvm_project's `ConstantFolding.cpp`, and with it
-  `IRTests`. **Filed** (follow-up), xfail
+  `IRTests`. **Filed** (follow-up): decided in WP-1000 to keep the two
+  types distinct (as GCC 13+ and libstdc++, with `std::float128_t`);
+  the remaining fix is WP-1058, xfail
   `tests/conformance/basic.extended.fp/float128-glibc-typedef-x86.cpp`.
 - `std/algorithms/alg.sorting/alg.sort/stable.sort/stable_sort.pass.cpp`:
   `static_assert(test<char>())` fails. The cause is not x86_64: constexpr
