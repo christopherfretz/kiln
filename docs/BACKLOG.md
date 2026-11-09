@@ -891,10 +891,10 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-852 | UBSan: emit null/alignment/object-size/bounds/bool/enum/float-cast/pointer-overflow/vptr/function/nonnull/builtin/implicit-conversion checks (accepted, no instrumentation today; `kiln_ast/src/sanitize.rs:195`, `kiln_codegen/src/ubsan.rs`) | WP-675 | partial (#404, via WP-871; vptr/function -> WP-934, nullability -> WP-935) |
 | WP-853 | UBSan: checks on atomic ++/-- and atomic compound assignment (`ubsan.rs:638` ub_inc_dec) | WP-675 | done (#404, via WP-871) |
 | WP-854 | UBSan: _BitInt type descriptors (`ubsan.rs:152` ub_type) | WP-675 | done (#404, via WP-871) |
-| WP-855 | UBSan: reuse an identical .str for .src strings like clang (`ubsan.rs:117` ub_loc) | WP-675 | open |
-| WP-856 | driver: -ftrapv and -fsanitize-merge= (`kiln_driver/src/codegen_flags.rs:135`) | WP-675 | open |
-| WP-857 | driver: apply -fsanitize-ignorelist files, not just check them (`kiln_driver/src/sanitize.rs:38`) | WP-675 | open |
-| WP-1032 | UBSan completion: .src string reuse, -ftrapv/-fsanitize-merge=, applied -fsanitize-ignorelist (bundles WP-855/856/857) | WP-675 | in progress |
+| WP-855 | UBSan: reuse an identical .str for .src strings like clang (`ubsan.rs:117` ub_loc) | WP-675 | done (#424, WP-1032) |
+| WP-856 | driver: -ftrapv and -fsanitize-merge= (`kiln_driver/src/codegen_flags.rs:135`) | WP-675 | done (#424, WP-1032) |
+| WP-857 | driver: apply -fsanitize-ignorelist files, not just check them (`kiln_driver/src/sanitize.rs:38`) | WP-675 | done (#424, WP-1032) |
+| WP-1032 | UBSan completion: .src string reuse, -ftrapv/-fsanitize-merge=, applied -fsanitize-ignorelist (bundles WP-855/856/857) | WP-675 | done (#424) |
 | WP-858 | codegen: local value names and clang 22 alloca !annotation under ASan/MSan so they can be exact-IR tests (`kiln_driver/src/codegen_cmd.rs:697`) | WP-675 | open |
 | WP-859 | codegen: ASan module name is <stdin> (should be the source file); ASan/TSan module ctors lack target-cpu/target-features (`codegen_cmd.rs:738` sanitizer_passes) | WP-675 | open |
 | WP-860 | harness: `requires: sanitizer-runtime` capability + recover-mode run tests; CI apt libclang-rt-19-dev libclang-rt-22-dev (`.github/actions/kiln-ci/action.yml:36`) | WP-675 | open |
@@ -981,8 +981,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-952 | accepts-invalid (WP-912): redeclarations: ref-qualifier overloads, using-declaration redeclaration, qualified members | WP-912 | done (#423, WP-1015) |
 | WP-953 | accepts-invalid (WP-912): default-argument, block-scope `inline`, lambda shadowing and friend-template default restrictions | WP-912 | done (#423, WP-1015) |
 | WP-954 | accepts-invalid (WP-912): clang attribute semantic/argument checks (unavailable, carries_dependency, require_constant_initialization, annotate); overlaps WP-674/675 | WP-912 | open |
-| WP-955 | accepts-invalid (WP-912): access/abstract/deleted checks (friend private, abstract temporary, deleted operator delete, virtual base with private dtor) | WP-912 | open |
-| WP-1017 | accepts-invalid part 3: access/abstract/deleted checks, template declaration rules, lookup and exception specs (WP-955–957) | WP-955 | in progress |
+| WP-955 | accepts-invalid (WP-912): access/abstract/deleted checks (friend private, abstract temporary, deleted operator delete, virtual base with private dtor) | WP-912 | done (#428, WP-1017) |
+| WP-1017 | accepts-invalid part 3: access/abstract/deleted checks, template declaration rules, lookup and exception specs (WP-955–957) | WP-955 | done (#428) |
 | WP-956 | accepts-invalid (WP-912): template declaration rules (partial spec more specialized, CWG526, pre-C++20 float NTTP, conversion function template) + constraint self-dependency hard error in SFINAE; crates/kiln_sema/src/templ/concepts/sat.rs:148 | WP-912 | open |
 | WP-957 | accepts-invalid (WP-912): lookup/type checks (ambiguous elaborated, enum keyword, alignas incomplete, differing UDL suffixes) + exception specs laxer than base | WP-912 | open |
 | WP-958 | accepts-invalid (WP-912): rejects-valid: templates and deduction (12 xfails, docs/status/accepts-invalid.md cluster 15) | WP-912 | done (#416) |
@@ -1039,21 +1039,21 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1021 | oven: RefChk for reference parameters/members and clang-compat 19 mode | WP-948 | open |
 | WP-982 | modules step 2: kiln-scan-deps (P1689r5, clang-scan-deps-<major> name), CMake FILE_SET CXX_MODULES end-to-end test | WP-917 | done (#420) |
 | WP-983 | modules: header units as BMIs (-fmodule-header[=user|system], header-unit capsule kind, import "h" finds the .pcm) | WP-917 | open |
-| WP-984 | modules: import std; BMI cache keyed by fingerprint, CMake CXX_MODULE_STD, two-step import std harness test | WP-917 | open |
-| WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | in progress |
+| WP-984 | modules: import std; BMI cache keyed by fingerprint, CMake CXX_MODULE_STD, two-step import std harness test | WP-917 | done (#429) |
+| WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | done (#425) |
 | WP-986 | modules: convert skip(clang) module tests (export-run, visibility, partitions-run, private-run, export-import-run, import-std-*) to module:/unit: | WP-917 | open |
 | WP-981 | oven: narrow signed `++`/`--` must promote and wrap (WP-961 x86_64 stable_sort xfail) | WP-961 | done (#419, fixed in WP-980) |
 | WP-1029 | parser drops `__extension__`; `decltype(__extension__ t)` mangles `Dt` where clang writes `DT` | WP-980 | open |
 | WP-1030 | mangle ImaginaryLiteral (`LCi0_2E`) and PackIndexingExpr in dependent signatures | WP-980 | open |
 | WP-1031 | `cargo xtask test tests/mangle` does not run the mangle_vs_clang differential; make it run or document the right command | WP-980 | open |
-| WP-1024 | driver: list kiln-only `--llvm-dir=<dir>` in `--help` (lib.rs:116 HELP; WP-1016 kept help byte-identical) | WP-1016 | open |
+| WP-1024 | driver: list kiln-only `--llvm-dir=<dir>` in `--help` (lib.rs:116 HELP; WP-1016 kept help byte-identical) | WP-1016 | done (#426, WP-1027) |
 | WP-1025 | codegen tests: drive backend 22 under oracle 22 in ir_vs_clang (ir_vs_clang.rs:239), then prune the llvm_major DEVIATIONS entries (line 81) | WP-1016 | open |
 | WP-1026 | driver: verify the Fedora package names in COMPATIBILITY.md Runtime dependencies (llvm22 clang22 compiler-rt22); collapse the noisy nothing-found note list in llvm.rs Search::run | WP-1016 | open |
 | WP-1033 | oss harness: build module-using projects with `-G Ninja` (oss-build.sh:176 uses Unix Makefiles) and pass `-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=` when the compiler is the kiln-cxx wrapper | WP-982 | open |
 | WP-1034 | CI: install cmake 3.28+ and ninja in the CI image and run the selftest.sh `cmake_modules` modules e2e under CI | WP-982 | open |
 | WP-1035 | kiln-scan-deps: `-compilation-database` (scan_deps.rs:102), `-format=experimental-full` (scan_deps.rs:82), and a `clang-scan-deps-19` alias for `-fclang-compat=19` (build.rs:44, dist.rs:108) | WP-982 | open |
-| WP-1027 | driver: refresh `--help` (lib.rs:139 still says "-g (ignored)"; add -fclang-compat, -fcontract-evaluation-semantic, -fsanitize, --coverage/-fprofile-instr-generate, -fcrash-diagnostics*, -fconstexpr-ops-limit, -fcoro-aligned-allocation, -flto, -fmodule-file, -fprebuilt-module-path, --llvm-dir (WP-1024)) | WP-1022 | in progress |
-| WP-1028 | dist: ship USER_GUIDE/KNOWN_ISSUES/CHANGELOG/CONTRIBUTING/SECURITY in share/doc/kiln and make README links resolve inside the release archive (xtask/src/dist.rs:329) | WP-1022 | open |
+| WP-1027 | driver: refresh `--help` (lib.rs:139 still says "-g (ignored)"; add -fclang-compat, -fcontract-evaluation-semantic, -fsanitize, --coverage/-fprofile-instr-generate, -fcrash-diagnostics*, -fconstexpr-ops-limit, -fcoro-aligned-allocation, -flto, -fmodule-file, -fprebuilt-module-path, --llvm-dir (WP-1024)) | WP-1022 | done (#426) |
+| WP-1028 | dist: ship USER_GUIDE/KNOWN_ISSUES/CHANGELOG/CONTRIBUTING/SECURITY in share/doc/kiln and make README links resolve inside the release archive (xtask/src/dist.rs:329) | WP-1022 | done (#426, WP-1027) |
 | WP-1036 | PCH speed: serialised-AST/Oven-state PCH reusing the spec/modules.md §11 module-file format and the WP-985 kind-2 BMI; `KILNPCH 1` (spec/driver.md:1149) becomes its fingerprint/validation layer (crates/kiln_driver/src/pch.rs:460) | WP-1023 | open |
 | WP-1037 | driver: `-include foo.h` probes for `foo.h.pch` as clang's driver does (spec/driver.md:1313) | WP-1023 | open |
 | WP-1038 | decision: PCH staleness by content hash (kiln) vs mtime (clang): keep or match (spec/driver.md:1309) | WP-1023 | open |
@@ -1061,3 +1061,15 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1040 | accepts-invalid tail (WP-1015) main/allocation: clang -Wmain warnings, C-linkage variable named main, variable template main (kiln_sema main_decl.rs:43); destroying and type-aware operator delete checks (alloc_decl.rs:52) | WP-1015 | open |
 | WP-1041 | accepts-invalid tail (WP-1015) decls: braced default argument not searched for this/params (decl.rs:2052); friend class template in a local class (class/friend.rs:80); ref-qualifier mix in a class template at instantiation and explicit object parameter in a virtual function (overload/redecl.rs:143) | WP-1015 | open |
 | WP-1042 | accepts-invalid tail (WP-1015) clang tests still missed: C++03 non-trivial union members (class.union/p1.cpp), inline after a non-inline definition (dcl.fct.spec/p4.cpp), template-parameter shadowing in a typedef, namespace.udecl/p11.cpp | WP-1015 | open |
+| WP-1043 | sanitizer ignorelist tails (WP-1032): `#!special-case-list-v1` regex lists rejected where clang 19 reads them (kiln_codegen ignorelist.rs:32); not applied to string-literal globals (class_b.rs:199) or coroutine await_suspend wrappers (coro.rs:611); stale "`.src` strings are always new globals" line in spec/landed/codegen/WP-675.md | WP-1032 | open |
+| WP-1044 | -ftrapv tails (WP-1032): separate-argument `-ftrapv-handler <name>` (kiln_driver codegen_flags.rs:288); `-fno-trapv` accepted where clang rejects (codegen_flags.rs:221); sanitize-merge flags accepted at compat 19 (sanitize.rs:127); `-ftrapv-handler` on `__int128` truncates operands (kiln_codegen ubsan.rs:1009) | WP-1032 | open |
+| WP-1045 | CI: install libclang-rt-19-dev/libclang-rt-22-dev in .github/actions/kiln-ci/action.yml:38 so `requires: sanitizer-runtime` run tests (ASan/UBSan ignorelist runs) execute in CI instead of skipping | WP-1032 | open |
+| WP-1046 | modules kind 2: carry constant results of evaluations inside template instantiations (10,142 of the uncarried std results; spec/modules.md §11.11 Part 2) | WP-985 | open |
+| WP-1047 | modules kind 2: carry pointer, reference and reflection constant values | WP-985 | open |
+| WP-1048 | modules kind 2 part 2: serialised decl/type/expression image, fresh DeclIds, ODR merging, lazy loading (cuts import std time) | WP-985 | open |
+| WP-1049 | driver --help: reverse test that every option the argument parser accepts is listed in help.rs (or on an explicit hidden list), next to every_listed_option_is_accepted (crates/kiln_driver/src/help.rs:366) | WP-1027 | open |
+| WP-1052 | exception-spec tails: implicit member exception-spec type lists (except.rs:1109), dependent and pack throw lists in template definitions (except.rs:1127) incl. clang eager dependent throw(T) error, nested function-type rule (except.rs:1100) | WP-1017 | open |
+| WP-1053 | partial-spec ordering tails: constrained partial specs (order.rs:477), member-template partial specs (order.rs:465), non-deducible F<T..., int> | WP-1017 | open |
+| WP-1054 | SILENT DROP: class template members whose declaration fails at instantiation are dropped without a diagnostic, so instantiation-time wrong-tag errors are missed (clang dcl.type.elab/p3.cpp:60) | WP-1017 | open |
+| WP-1050 | module cache eviction: bound the std/std.compat module cache size and age (kiln_driver module_cache.rs) | WP-984 | open |
+| WP-1051 | -MD on a module cache hit lists every libc++ header the std module read; match clang dependency output for import std | WP-984 | open |
