@@ -1838,6 +1838,35 @@ and returns the scope it names:
     class.union.anon/alias-of-unnamed-class-is-not-anonymous-run.cpp.
 - **Unnamed tags named by a typedef** record their typedef with
   `set_typedef_for_anon` ([dcl.typedef]/9).
+- **Elaborated-type-specifier checks** (WP-1017, [dcl.type.elab]):
+  - *Wrong class-key or `enum`*. `use of 'X' with tag type that does not
+    match previous declaration` is reported at the class-key, with
+    `previous use is here` at the previous declaration
+    (`Sema::diag_wrong_tag`). This covers references, friends, friend
+    class templates, specializations and references to specializations
+    (named `'B<float>'`, as clang 19 does), and the instantiation of a
+    dependent `struct T::X`. A reference recovers to the declaration it
+    found. Test: `dcl.type.elab/wrong-tag-kind.cpp`.
+  - *`enum class E` as a reference or friend* (no enum-base). The error
+    `reference to enumeration must use 'enum' not 'enum class'`
+    (`-Welaborated-enum-class`, an error by default) is reported at the
+    `class`/`struct` keyword. Recovery is a plain `enum E` reference.
+    Test: `dcl.type.elab/elaborated-enum-class.cpp`.
+  - *`friend enum E;`* gets `elaborated enum specifier cannot be declared
+    as a friend` (`-Wfriend-enum`) + `remove 'enum' to befriend an enum`,
+    at `enum`. It also fires for a dependent `friend enum T::E;`. Test:
+    `class.friend/friend-enum.cpp`.
+  - *Ambiguous qualified lookup* (`struct N::x` with `x` found through
+    two using-directives) gets `reference to 'x' is ambiguous`. The
+    candidates are listed latest nominated first, as clang does. A
+    qualified reference that finds no tag declares a hidden, invalid
+    recovery tag, so later uses get no cascade. Test:
+    `dcl.type.elab/ambiguous-qualified-elab.cpp`.
+  - *Unknown specialization*. `struct A<T>::K` naming a member of another
+    class template's unknown specialization ([temp.dep.type]/6) is
+    dependent and is not looked up. It used to be rejected when the
+    primary has no `K`. Test:
+    `temp.dep.type/elaborated-unknown-specialization.cpp`.
 
 ### 4.4.1 Declaration rules (WP-1015)
 Rules clang enforces at declaration time that kiln accepted (found by the
@@ -1958,7 +1987,9 @@ instantiation unless stated.
   - `deprecated`, `noreturn`, `fallthrough`
   - `likely`/`unlikely`
   - `no_unique_address`
-  - `alignas`/`aligned`, `packed`
+  - `alignas`/`aligned`, `packed`. `alignas(type-id)` checks its operand as
+    `alignof` does: `invalid application of 'alignas' to an incomplete type
+    'T'` ([dcl.align]/3; WP-1017, `dcl.align/alignas-void.cpp`).
   - `used`, `noinline`, `always_inline`, `weak`, `const`, `pure`, `cold`,
     `hot` (`AttrKind::HOT`, WP-172)
   - `optnone` / `minsize` (GNU syntax or `clang::`; `gnu::` and
@@ -3459,6 +3490,21 @@ specification as written (`TypeNames` prints ` noexcept`,
 - *Redeclarations*, overriders more lax than the base, and
   [conv.fctptr] function-pointer conversions use clang's wording. The
   tests are in `tests/conformance/except.spec/`.
+- *Overriders* (WP-1017; clang `CheckOverridingFunctionExceptionSpec`).
+  A dynamic `throw(T...)` of an overrider is compared type by type with
+  the base's (`override_exc_spec_lax`). Each type must be caught by one
+  of the base's, by [except.handle]/3 (`handler_can_catch`): the same
+  type, an unambiguous public base, a pointer qualification or
+  derived-to-base conversion, `void *`, or `std::nullptr_t` for a pointer
+  handler. A reference handler to a pointer must be `const`. Lists with a
+  dependent type or a pack expansion are checked only at instantiation.
+  Clang also rejects some of those at definition time; kiln does not.
+  The checks clang runs when the overrider is declared (no written
+  specification) are reported before the delayed ones, across the whole
+  outermost class. Not checked: the nested function-type rule
+  (`CheckParamExceptionSpec`) and implicit members whose computed
+  specification is a type list. Tests: `class.virtual/exception-spec-dynamic.cpp`,
+  `class.virtual/exception-spec-dynamic-pack-nested.cpp`.
 - *Function references* ([dcl.init.ref]/4, [conv.fctptr]). A function
   type `T noexcept` is reference-compatible with `T`; the rule and its
   identity ranking are in spec/sema-conv.md (WP-290). More tests:
