@@ -767,10 +767,16 @@ pub struct Declarator {
     /// `this` before a parameter-declaration (an explicit object
     /// parameter, P0847 [dcl.fct]/6).
     pub explicit_object: Option<Loc>,
-    /// Where the innermost function declarator's `const`, `volatile` and
-    /// ref-qualifier are ("explicit object member function cannot have
-    /// '...' qualifier" points at the first and quotes them in order).
-    pub fn_qual_locs: [Option<Loc>; 3],
+    /// Where the innermost function declarator's `const`, `volatile`,
+    /// ref-qualifier and `__restrict` are ("explicit object member
+    /// function cannot have '...' qualifier" points at the first and
+    /// quotes them in order).
+    pub fn_qual_locs: [Option<Loc>; 4],
+    /// The first nullability keyword after the innermost function
+    /// declarator's parameter list (`void f() _Nonnull`): parsed and
+    /// dropped, it is a qualifier only to the "cannot have '' qualifier"
+    /// checks (spec/sema.md §4.1.1).
+    pub fn_nullability: Option<Loc>,
     /// The nullability qualifiers after a ptr-operator, with the index
     /// in `chunks` of the pointer, member-pointer or reference chunk
     /// they follow, in order (spec/sema.md §4.1.1).
@@ -965,7 +971,8 @@ impl Declarator {
             pure: None,
             late_noexcept: None,
             explicit_object: None,
-            fn_qual_locs: [None; 3],
+            fn_qual_locs: [None; 4],
+            fn_nullability: None,
             nullability: Vec::new(),
             op_name: None,
             lit_suffix: None,

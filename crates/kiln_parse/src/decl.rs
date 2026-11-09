@@ -3542,6 +3542,7 @@ impl Parser<'_, '_> {
             } else {
                 // An abbreviated function template's invented
                 // parameter ([dcl.fct]/22).
+                self.s.reject_placeholder_restrict(ds);
                 let constraint = ds.auto_constraint.take().map(|(c, a)| (c, a, ds.constraint_loc));
                 let pname = pd.name.map(|(n, _)| n);
                 let ty = self.s.act_on_invented_template_param(
@@ -3653,23 +3654,40 @@ impl Parser<'_, '_> {
         loop {
             let loc = self.loc();
             match self.kw() {
-                Some(k @ (Kw::Const | Kw::Volatile))
+                // GNU `__restrict` is a method qualifier too: `this` is
+                // then a restrict pointer (clang `ParseTypeQualifierListOpt`
+                // in `ParseFunctionDeclarator`).
+                Some(k @ (Kw::Const | Kw::Volatile | Kw::Restrict))
                     if exc.is_none() && ref_qual == RefQual::None =>
                 {
-                    let (q, sp) = if k == Kw::Const {
-                        (Quals::CONST, "const")
-                    } else {
-                        (Quals::VOLATILE, "volatile")
+                    let (q, sp, slot) = match k {
+                        Kw::Const => (Quals::CONST, "const", 0),
+                        Kw::Volatile => (Quals::VOLATILE, "volatile", 1),
+                        _ => (Quals::RESTRICT, "restrict", 3),
                     };
                     self.bump();
                     if d.chunks.is_empty() {
-                        d.fn_qual_locs[usize::from(k == Kw::Volatile)].get_or_insert(loc);
+                        d.fn_qual_locs[slot].get_or_insert(loc);
                     }
                     if quals.contains(q) {
                         let diag = self.s.diag(DiagId::parse_duplicate_decl_spec, loc).arg(sp);
                         self.emit(diag);
                     }
                     quals |= q;
+                }
+                // A clang nullability keyword after the parameter list is
+                // parsed and dropped (clang keeps it on the declarator's
+                // method qualifiers, outside the type); only the
+                // "cannot have '' qualifier" checks see it.
+                Some(k)
+                    if exc.is_none()
+                        && ref_qual == RefQual::None
+                        && nullability_kw(k).is_some() =>
+                {
+                    self.bump();
+                    if d.chunks.is_empty() {
+                        d.fn_nullability.get_or_insert(loc);
+                    }
                 }
                 Some(Kw::Noexcept | Kw::Throw) if exc.is_none() => {
                     if delayable
