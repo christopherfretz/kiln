@@ -994,6 +994,30 @@ An `= default` on first declaration gets it at `}` (`mark_function`, already
 copy is trivially move-constructible). Eligibility ([special]/6) of
 constrained special members is WP-073's;
 for non-template classes every non-deleted declared special member is eligible.
+A variadic special member is never trivial (clang `SpecialMemberIsTrivial`,
+`note_nontrivial_variadic`; WP-1090). That covers `T(...)`, which is a default
+constructor by [class.default.ctor]/1, deleted or not, and
+`T(const T&, ...) = delete`, which is a copy constructor, so `T` is not
+trivially copyable and not `__builtin_bit_cast`-able. A default constructor
+with parameters (`T(int = 0)`, deleted or not) or a constructor template is
+user-declared and non-trivial. `T() = delete` and `T() = default` stay
+trivial. A user-declared kind counts as trivial only if every declared member
+of that kind is trivial, so `N(...) = delete; N() = default;` has no trivial
+default constructor. clang ORs over the declared members and gives
+`__has_trivial_constructor(N)` = 1; that difference is a follow-up, because it
+needs [special]/6 eligibility first.
+
+Aggregate bit ([dcl.init.aggr]/1, `special_member_bits` and `class_bits`):
+- from C++20 (P1008), any user-declared constructor makes the class a
+  non-aggregate;
+- in C++11–17 (with DR1518, clang `addedMember`), only a user-provided or
+  `explicit` constructor does, so `struct E { E() = delete; int i; };` is an
+  aggregate and `constexpr E e{3};` is valid there;
+- before C++17 (P0017R1), any base class makes the class a non-aggregate.
+
+Tests: `class.default.ctor/variadic-and-default-arg-not-trivial.cpp`,
+`dcl.init.aggr/deleted-ctor-aggregate-cxx{14,17}.cpp`,
+`class.union/cxx03-deleted-default-ctor.cpp`.
 
 ### 4.4 `= default`, `= delete`, user-provided
 `act_on_defaulted(f, loc)` / `act_on_deleted(f, loc, msg)` (C++26 message in
