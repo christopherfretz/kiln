@@ -177,6 +177,16 @@ impl Sema<'_, '_> {
             // dependent (clang `computeDeclContext` has no context for
             // it), so the name is looked up at instantiation (WP-726).
             Some(q.nns)
+        } else if self.kind_of(q.ctx) == DeclKind::Enum
+            && self.ast.decls.get(q.ctx).has(DeclFlags::DEPENDENT_CTX)
+            && self.inst.stack.is_empty()
+            && self.ast.definition(q.ctx).is_none()
+        {
+            // Likewise an opaque member enumeration of the current
+            // instantiation (`enum class E : int;` defined out of line
+            // after the member functions that name `E::a`;
+            // [temp.dep.type]/6, clang `computeDeclContext`).
+            Some(q.nns)
         } else {
             None
         }

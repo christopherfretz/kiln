@@ -695,7 +695,7 @@ All of these are built by sema actions, which compute dependence as in
 
 | Syntax (in a dependent context) | Node |
 |---|---|
-| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression; also `D::x` / `D<T>::x` naming the current instantiation `D` when lookup finds nothing and `D` has a dependent base ([temp.dep.type]/6; `Sema::unknown_specialization_nns` rebuilds the specifier on the injected-class-name type, so instantiation looks `x` up in the specialization, an implicit member access in a member function; WP-309; the same for a nested-name-specifier component `D::N::` when `N` is found neither as a nested name nor as an ordinary name in `D`, e.g. `using G::F::F;` with a dependent base `F<U, T, int>`, WP-367); also `B::x` when `B` is a member class of the current instantiation named outside its own definition that is declared but not yet defined (`struct Block;` defined out of line after the member function naming `Block::get`), the specifier being dependent (clang `computeDeclContext` has no context for it), so `x` is looked up in the instantiated member class (WP-726, `temp.dep.type/incomplete-member-class-qualifier{,-missing}.cpp`) | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
+| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression; also `D::x` / `D<T>::x` naming the current instantiation `D` when lookup finds nothing and `D` has a dependent base ([temp.dep.type]/6; `Sema::unknown_specialization_nns` rebuilds the specifier on the injected-class-name type, so instantiation looks `x` up in the specialization, an implicit member access in a member function; WP-309; the same for a nested-name-specifier component `D::N::` when `N` is found neither as a nested name nor as an ordinary name in `D`, e.g. `using G::F::F;` with a dependent base `F<U, T, int>`, WP-367); also `B::x` when `B` is a member class of the current instantiation named outside its own definition that is declared but not yet defined (`struct Block;` defined out of line after the member function naming `Block::get`), the specifier being dependent (clang `computeDeclContext` has no context for it), so `x` is looked up in the instantiated member class (WP-726, `temp.dep.type/incomplete-member-class-qualifier{,-missing}.cpp`), and `E::x` when `E` is an opaque member enumeration of a class template not yet defined there (`enum class E : int;` defined out of line after the member function naming `E::a`; WP-600, `temp.mem.enum/opaque-member-enum-qualifier-run.cpp`) | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
 | `e.m` or `p->m` with a type-dependent object, or a member of the current instantiation that is not found when it has dependent bases | `CXXDependentScopeMemberExpr {base, arrow, nns?, name, targs?}` |
 | unqualified `f(args)` with type-dependent args, where lookup finds functions or templates (or nothing) | `UnresolvedLookupExpr {requires_adl, overloaded, decls, targs?}`, plus `CallExpr` of dependent type |
 | unqualified `operator@(args)` / `operator T(args)` (an operator- or conversion-function-id as the callee) whose lookup finds nothing ([temp.dep.general]/2, [basic.lookup.argdep]/1) | an empty `UnresolvedLookupExpr` with `requires_adl`, as for an undeclared `f(args)` (`Sema::act_on_id_expression_dn` while `deferring_call_ref`); ADL at the call or at instantiation, and no candidate is clang's `use of undeclared 'operator@'` (`sema_undeclared_use`) |
@@ -2172,7 +2172,13 @@ declaration-only `template<> struct A<int>::N;`:
    is not separately instantiable; clang `VisitEnumDecl`,
    `isDeclWithinFunction`), so `L::E::e` and `E::e` in a member function
    of `L` find their enumerators (WP-884,
-   `temp.inst/p3-local-scoped-enum-defined-with-class-run.cpp`).
+   `temp.inst/p3-local-scoped-enum-defined-with-class-run.cpp`). An
+   unscoped opaque-enum-declaration that a later enum-specifier of the same
+   class redeclares ([class.mem.general]/6) is only declared at its own
+   member and defined at the enum-specifier's, so its enumerators are
+   declared once (WP-600,
+   `class.mem.general/opaque-enum-redeclared-template-run.cpp`); one
+   defined out of line is defined with the class from that definition.
 5. `template enum ...`: a qualified name is "enumerations cannot be
    explicitly instantiated". An unqualified name, like `template<> enum
    E ...`, gives "enumeration cannot be a template" at the token after
@@ -2387,8 +2393,19 @@ diagnostic says why` (`sema_inst_part_dropped`):
   (§5.6 "Local classes", `local_late_parts`): `the default argument of
   parameter 'x' of 'g'`, `the exception specification of 'g'`, `the
   default member initializer of 'a'`, each in the local class.
+- *Declaration lookup.* `find_instantiated_decl` maps a pattern
+  declaration to its instantiation; when nothing finds it (not the
+  instantiated parent's members, not the local scope, not a re-instantiation
+  of the pattern) it returns `SubstFail`, and every caller drops the use
+  quietly. With no error in the TU that would silently drop a statement or
+  expression naming it, so the final path emits `member_dropped` (`member
+  'x' of 'A<int>' was not instantiated...`) at the use (WP-600). After an
+  error it stays silent, because the error explains the missing declaration.
+  Like the other guards, inside a SFINAE context it is a substitution
+  failure (the candidate is discarded rather than accepted with a use
+  missing).
 With the guard on, neither the conformance corpus nor the libc++ m3 gate
-reports a dropped statement or part.
+reports a dropped statement, part or declaration lookup.
 
 **Points of instantiation.**
 - `SpecInfo.point_of_instantiation` is the location of the use that first
@@ -2603,7 +2620,9 @@ reports a dropped statement or part.
   the enclosing class's. A friend member template whose specifier names
   none of its head's parameters keeps that head as its own
   (`Sema::friend_head_is_own`, class/member_friend.rs) instead of giving
-  it to the qualifier's class template. The deferred friend
+  it to the qualifier's class template; so does an abbreviated friend
+  with no written head (`friend int B<T>::g(C auto, W<T>&);`): its
+  invented head is its own (WP-1145). The deferred friend
   redeclares nothing in the pattern, without a diagnostic, and records
   its qualifier (`friend_qualifiers`), plus the written specifier when
   that is dependent (`friend_qualifier_nns`). Each instantiation declares
@@ -2622,6 +2641,24 @@ reports a dropped statement or part.
   `friend-member-template-of-specialization-run.cpp`,
   `friend-member-deferred-variants-run.cpp`,
   `friend-member-dependent-mismatch-at-instantiation.cpp`).
+  A deferred friend member template matches a member template of the
+  specialization with equivalent constraints ([temp.over.link]/6-7,
+  WP-1145): the member keeps its pattern's constraints, the friend's are
+  substituted, so `fn_corresponds_in` (overload/redecl.rs) compares them
+  through `member_cmp_constraints` while the friend template is
+  instantiated (`instantiating_friend_template`), as it does for an
+  out-of-line member of a specialization. A type-constraint, head or
+  trailing requires-clause, `auto` or `C auto` parameter, and the choice
+  among overloads that differ only in constraints are matched
+  (`temp.friend/qualified-member-template-friend-constrained-run.cpp`).
+  A friend template matching none is diagnosed as above, as g++ does;
+  clang 19 and 22 drop such a friend template at instantiation without a
+  diagnostic (a non-template one they diagnose), so the test is
+  `skip(clang)`
+  (`qualified-member-template-friend-mismatch-at-instantiation.cpp`).
+  Gap: [temp.friend]/9 ("friend declaration with a constraint that
+  depends on an enclosing template parameter must be a definition") is
+  not diagnosed; clang and g++ reject such a non-defining friend.
 - A friend class (`friend class B<T>;`) is substituted and grants access
   (S3C). A dependent friend specialization (`friend struct X<T>;`,
   `friend class Y<T*>;`, `friend class ns::Z<T...>;`) is kept in the
@@ -2707,10 +2744,14 @@ reports a dropped statement or part.
     `f(U)` / `f(U) requires C<U>` the friend names only the member whose
     constraints match, and `template<C U>` does not name `template<class
     U> requires C<U>` (only functionally equivalent). A friend whose
-    levels outside its own head are not all known (the pattern in a class
-    template; a friend instantiated twice, from a member class template)
-    keeps WP-1098's unconstrained comparison
-    (`member_friend_constraints_match`). The abbreviated friend
+    levels outside its own head are not all known (still in a class
+    template's pattern, `MemberFriend::enclosing` unset) keeps WP-1098's
+    unconstrained comparison (`member_friend_constraints_match`); each
+    instantiation of its class registers it again with every level known,
+    and that one is compared, so a friend in a member class template
+    `O<X>::B<Y>` is compared in `O<int>::B<int>` and `O<int>::B<long>`
+    alike (WP-1145, `member-friend-of-member-class-template-run.cpp`;
+    g++ rejects each such friend). The abbreviated friend
     `template<class T> friend int A<T>::f(C auto);` has the invented head
     as its member template head (`open_invented_head_list`).
     The answer is cached per (friend, member). A member of a class
@@ -2768,9 +2809,16 @@ reports a dropped statement or part.
     `dependent-member-friend-{variants,class-template}-run.cpp`,
     `dependent-member-friend-warning{,-clang19}.cpp`,
     `dependent-member-friend-denied.cpp`. A precompiled header or a module
-    replays its source, so its member friends are declared again. Gap:
-    the side table is not recorded in the module declaration image
-    (`-fkiln-bmi-image`, off by default).
+    replays its source, so its member friends are declared again. The
+    module declaration image (`-fkiln-bmi-image`) also replays the source
+    of any unit with a friend declaration ("a friend declaration",
+    bmi_image.rs), so the side table (`requires`, `enclosing`) needs no
+    image record (WP-1145, `member-friend-module-run.cpp`).
+  - Gap (WP-1145 follow-up): a speculative grant also decides a
+    non-dependent requires-expression in the pattern (`requires { x.n; }`
+    in `A<T>::b`), which the replay then reports as a hard access error
+    in the specialization the friend does not name
+    (`member-friend-speculative-requires-expression.cpp`, `xfail(kiln)`).
 - `template<class U> friend struct Y<U*>;` is "partial specialization
   cannot be declared as a friend" ([temp.friend]/9).
 
@@ -5246,9 +5294,24 @@ The `SpecKind` transitions are those of §4.5.
   complete (`args.rs` `defining_class_member_ptr`; WP-726,
   `tests/conformance/temp.arg.nontype/member-pointer-of-class-being-defined.cpp`).
 - **Reference arguments** (`convert_ref_nttp_arg`): the conversion must
-  exist (`sema_cce_not_implicitly_convertible`), must not bind a
-  temporary (`sema_cce_ref_binds_temporary`), and the referent must not
-  be automatic ("reference to 'x' is not a constant expression"). The
+  exist (`sema_cce_not_implicitly_convertible`), must not be a
+  derived-to-base conversion (`sema_cce_conversion_not_allowed`, below),
+  must not bind a temporary (`sema_cce_ref_binds_temporary`), and the
+  referent must not be automatic ("reference to 'x' is not a constant
+  expression"). Binding `const B &` to an object of a class derived from
+  `B` is a derived-to-base conversion ([over.ics.ref]/1), which is not
+  among the conversions [expr.const]/12 lets a converted constant
+  expression use, also as the second standard conversion after a
+  user-defined one: "conversion from 'const D' to 'const B &' is not
+  allowed in a converted constant expression" at the argument, with
+  "template parameter is declared here" at `-fclang-compat=22` only
+  (clang `CheckConvertedConstantConversions`, `cce_second_allowed`; also
+  for a value-dependent argument at the definition, and an
+  explicitly-specified argument of a function template fails deduction).
+  An lvalue of type `B` designating the base subobject
+  (`static_cast<const B &>(d)`) binds by identity and is accepted
+  (WP-561; `temp.arg.nontype/reference-derived-to-base{,-clang22}.cpp`).
+  The
   value is the built-in `&` of the bound glvalue, re-interned at the
   reference type so it prints as `T<gi>`.
 - **Disallowed bases** ([temp.arg.nontype]/6, `args.rs`

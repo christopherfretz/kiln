@@ -148,6 +148,23 @@ impl Cg<'_> {
         out
     }
 
+    /// `StartFunction`: the attributes of the sanitizers `s` of a
+    /// function's `SanOpts`.
+    pub(crate) fn sanitizer_fn_attrs(a: &mut Vec<Attr>, s: San) {
+        for (k, f) in [
+            (San::ADDRESS.union(San::KERNEL_ADDRESS), AttrKind::SanitizeAddress),
+            (San::HWADDRESS.union(San::KERNEL_HWADDRESS), AttrKind::SanitizeHWAddress),
+            (San::MEMTAG_STACK, AttrKind::SanitizeMemTag),
+            (San::THREAD, AttrKind::SanitizeThread),
+            (San::MEMORY.union(San::KERNEL_MEMORY), AttrKind::SanitizeMemory),
+            (San::FUZZER.union(San::FUZZER_NO_LINK), AttrKind::OptForFuzzing),
+        ] {
+            if s.has_any(k) {
+                a.push(Attr::Flag(f));
+            }
+        }
+    }
+
     /// Takes the sanitizers an ignorelist lists the function `f` (declared
     /// at `loc`) under out of the function being emitted (clang
     /// `StartFunction` and `CreateGlobalInitOrCleanUpFunction`).
@@ -171,12 +188,36 @@ impl Cg<'_> {
         g: kiln_llvm::GlobalId,
         dyn_init: bool,
     ) -> GlobalSanitizer {
+        let loc = self.ast.decls.get(d).loc();
+        self.report_global(Some(d), Some(loc), g, dyn_init)
+    }
+
+    /// The sanitizer metadata of the new global `g` of a string literal
+    /// at `loc` (clang `GetAddrOfConstantStringFromLiteral`'s
+    /// `reportGlobal`: no type, no `no_sanitize`). WP-1043.
+    pub(crate) fn string_lit_sanitizer(
+        &self,
+        g: kiln_llvm::GlobalId,
+        loc: Option<Loc>,
+    ) -> GlobalSanitizer {
+        self.report_global(None, loc, g, false)
+    }
+
+    /// clang `SanitizerMetadata::reportGlobal` for the global `g` of
+    /// variable `d` (none for a string literal) at `loc`.
+    fn report_global(
+        &self,
+        d: Option<DeclId>,
+        loc: Option<Loc>,
+        g: kiln_llvm::GlobalId,
+        dyn_init: bool,
+    ) -> GlobalSanitizer {
         let kinds = expand_kernel(self.opts.sanitize.kinds);
         if !kinds.has_any(San::ADDRESS.union(San::HWADDRESS).union(San::MEMTAG)) {
             return GlobalSanitizer::default();
         }
-        let no = expand_kernel(self.no_sanitize_mask(d)).intersect(kinds);
-        let listed = |k: San, cat: &str| self.global_ignored(k, d, g, cat);
+        let no = d.map_or(San::NONE, |d| expand_kernel(self.no_sanitize_mask(d)).intersect(kinds));
+        let listed = |k: San, cat: &str| self.global_ignored(k, d, loc, g, cat);
         let no_address = no.has_any(San::ADDRESS) || listed(kinds.intersect(San::ADDRESS), "");
         GlobalSanitizer {
             no_address,
@@ -192,11 +233,18 @@ impl Cg<'_> {
     }
 
     /// clang `CodeGenModule::isInNoSanitizeList(kind, GV, Loc, Ty,
-    /// category)` for the global `g` of variable `d`: `global:` (its
-    /// name), `mainfile:`, `src:` (the file of `d`'s expansion) or
-    /// `type:` (a class type, arrays drilled to their element, printed
-    /// canonically with full scope).
-    fn global_ignored(&self, k: San, d: DeclId, g: kiln_llvm::GlobalId, cat: &str) -> bool {
+    /// category)` for the global `g` of variable `d` (none: a string
+    /// literal) at `loc`: `global:` (its name), `mainfile:`, `src:` (the
+    /// file of `loc`'s expansion) or `type:` (`d`'s class type, arrays
+    /// drilled to their element, printed canonically with full scope).
+    fn global_ignored(
+        &self,
+        k: San,
+        d: Option<DeclId>,
+        loc: Option<Loc>,
+        g: kiln_llvm::GlobalId,
+        cat: &str,
+    ) -> bool {
         let Some(list) = self.opts.ignorelist.as_deref() else { return false };
         if k.is_empty() {
             return false;
@@ -209,14 +257,14 @@ impl Cg<'_> {
             return true;
         }
         let ast = self.ast;
-        let loc = ast.decls.get(d).loc();
         if let Some(sm) = self.sm
+            && let Some(loc) = loc
             && let Some((fid, _)) = sm.offset_of(sm.expansion_loc(loc))
             && list.contains(k, "src", sm.file_name(fid), cat, newer)
         {
             return true;
         }
-        let Some(mut q) = ast.decls.get(d).ty() else { return false };
+        let Some(mut q) = d.and_then(|d| ast.decls.get(d).ty()) else { return false };
         while ast.types.is_array(q) {
             match ast.types.element(q) {
                 Some(e) => q = e,
@@ -383,18 +431,7 @@ impl Cg<'_> {
             if all.has_any(San::BOUNDS) && !s.has_any(San::BOUNDS) {
                 a.push(Attr::Flag(AttrKind::NoSanitizeBounds));
             }
-            for (k, f) in [
-                (San::ADDRESS.union(San::KERNEL_ADDRESS), AttrKind::SanitizeAddress),
-                (San::HWADDRESS.union(San::KERNEL_HWADDRESS), AttrKind::SanitizeHWAddress),
-                (San::MEMTAG_STACK, AttrKind::SanitizeMemTag),
-                (San::THREAD, AttrKind::SanitizeThread),
-                (San::MEMORY.union(San::KERNEL_MEMORY), AttrKind::SanitizeMemory),
-                (San::FUZZER.union(San::FUZZER_NO_LINK), AttrKind::OptForFuzzing),
-            ] {
-                if s.has_any(k) {
-                    a.push(Attr::Flag(f));
-                }
-            }
+            Self::sanitizer_fn_attrs(a, s);
         }
         // `StartFunction`: XRay.
         let xray = h.xray.as_ref();

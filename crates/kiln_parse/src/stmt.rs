@@ -1351,6 +1351,34 @@ impl Parser<'_, '_> {
         r
     }
 
+    /// The expansion-initializer or expansion-init-list after the `:`,
+    /// parsed in a lifetime-extending context.
+    fn parse_expansion_initializer(&mut self) -> Option<ExpansionInit> {
+        // An expansion-init-list `{ a, b }` is not a braced-init-list
+        // ([stmt.expand]/1): its expressions are the elements.
+        if self.at(Punct::LBrace) {
+            // [class.temporary]/8 (CWG3043): the elements are a
+            // lifetime-extending context (a discarded class prvalue is
+            // materialized, to be extended with the element's
+            // declaration); the collected temporaries are not needed.
+            let collect = self.s.begin_for_range_init(true);
+            let l = self.parse_init_list().ok().map(ExpansionInit::List);
+            let _ = self.s.end_for_range_init(collect);
+            l
+        } else {
+            // [class.temporary]/9: an iterating or destructuring
+            // statement's expansion-initializer is a lifetime-extending
+            // context too (its temporaries persist with the reference
+            // it initializes), so a discarded class prvalue is
+            // materialized here as well; `extend_init_temporaries`
+            // extends them once the form is known.
+            let collect = self.s.begin_for_range_init(true);
+            let e = self.parse_expression().map(ExpansionInit::Expr);
+            let _ = self.s.end_for_range_init(collect);
+            e
+        }
+    }
+
     /// The head and body of an expansion statement after its `(`.
     fn parse_expansion_rest(&mut self, open: Loc, loc: Loc) -> Option<StmtId> {
         let init = if self.at_for_range_head() {
@@ -1411,20 +1439,7 @@ impl Parser<'_, '_> {
             return None;
         }
         let colon = self.bump().span.lo;
-        // An expansion-init-list `{ a, b }` is not a braced-init-list
-        // ([stmt.expand]/1): its expressions are the elements.
-        let range = if self.at(Punct::LBrace) {
-            // [class.temporary]/8 (CWG3043): the elements are a
-            // lifetime-extending context (a discarded class prvalue is
-            // materialized, to be extended with the element's
-            // declaration); the collected temporaries are not needed.
-            let collect = self.s.begin_for_range_init(true);
-            let l = self.parse_init_list().ok().map(ExpansionInit::List);
-            let _ = self.s.end_for_range_init(collect);
-            l
-        } else {
-            self.parse_expression().map(ExpansionInit::Expr)
-        };
+        let range = self.parse_expansion_initializer();
         let Some(range) = range else {
             self.skip_until(&[Punct::RParen], false, true);
             self.parse_dead_loop_body();
