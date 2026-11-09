@@ -16,6 +16,7 @@
 
 mod absolute_value;
 mod align_redecl;
+mod alloc_decl;
 mod annot;
 mod arm_builtins;
 mod asm;
@@ -23,6 +24,7 @@ mod attr_cond;
 pub mod attr_triage;
 mod bit_int;
 mod bitfield_constant;
+mod bmi_ast;
 mod builtins;
 mod cconv;
 pub mod cfg;
@@ -80,6 +82,7 @@ mod local_friend;
 pub mod lookup;
 mod loop_hint;
 mod macro_fixit;
+mod main_decl;
 mod meta;
 mod missing_noreturn;
 pub mod modules;
@@ -143,6 +146,7 @@ use kiln_ast::{Ast, AstBuilder, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
+pub use bmi_ast::CarriedSection as CarriedConstants;
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use contracts::{ContractDeclKind, ContractScope};
 pub use decl::{NameClass, TagUse};
@@ -336,6 +340,9 @@ pub struct Sema<'a, 'sm> {
     /// `LangOptions::NoBuiltinFuncs`): each is not recognized as a
     /// library builtin; `std-<name>` names a `std` one (WP-808).
     pub no_builtin_fns: Vec<String>,
+    /// `-ffreestanding` (clang `LangOptions::Freestanding`): `main` is
+    /// an ordinary name ([basic.start.main]/1; WP-1015).
+    pub freestanding: bool,
     /// `-f[no-]sized-deallocation` (clang `LangOptions::SizedDeallocation`,
     /// default on; WP-808): off, the sized global `operator delete` and
     /// `operator delete[]` are not declared implicitly, and a global
@@ -1174,6 +1181,8 @@ pub struct Sema<'a, 'sm> {
     pub(crate) ptrdiff_t_sugar: QualType,
     /// C++20 modules: the units being read (spec/modules.md).
     pub(crate) modules: modules::ModSema,
+    /// Kind-2 module files: carried constant results (spec/modules.md §11.11).
+    pub(crate) bmi: bmi_ast::BmiState,
     /// The decl-specifier nullability markers awaiting their declarator
     /// and the qualifier each stands for (`nullability.rs`).
     pub(crate) declspec_nulls: Vec<(QualType, NullSpec)>,
@@ -1243,6 +1252,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             sized_deallocation: true,
             char8: None,
             no_builtin_fns: Vec::new(),
+            freestanding: false,
             lib_builtin_name: |n, _| kiln_ast::decl::builtin::lib_by_name(n).is_some(),
             no_builtin_pending: Vec::new(),
             math_errno: true,
@@ -1454,6 +1464,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             signed_size_t_sugar: ptrdiff_t,
             ptrdiff_t_sugar: ptrdiff_t,
             modules: modules::ModSema::default(),
+            bmi: bmi_ast::BmiState::default(),
             declspec_nulls: Vec::new(),
         };
         s.declare_size_t_sugar();

@@ -42,6 +42,7 @@ mod fold;
 mod fp;
 mod func;
 mod global_init;
+pub mod ignorelist;
 mod lambda;
 mod lifetime;
 mod loop_md;
@@ -241,6 +242,15 @@ pub struct CodegenOptions {
     /// plain `getelementptr` (no `inbounds`), and a variable length
     /// array index is scaled by a plain `mul`.
     pub wrapv_pointer: bool,
+    /// `-ftrapv` (clang `SOB_Trapping`; WP-1032): signed `+ - *`,
+    /// negation, `++` and `--` check overflow and trap (`llvm.ubsantrap`)
+    /// unless `signed-integer-overflow` reports it. Overrides
+    /// [`Self::wrapv`].
+    pub trapv: bool,
+    /// `-ftrapv-handler=<name>` with `-ftrapv` (clang
+    /// `OverflowHandler`): an overflow calls `i64 <name>(i64, i64, i8,
+    /// i8, ...)` for the result instead of trapping.
+    pub trapv_handler: Option<String>,
     /// `-fno-delete-null-pointer-checks` (clang
     /// `CodeGenOpts.NullPointerIsValid`): functions are
     /// `null_pointer_is_valid`, and references, `this` and `operator new`
@@ -299,6 +309,9 @@ pub struct CodegenOptions {
     pub hardening: Hardening,
     /// The `-fsanitize=` set (WP-675, spec/codegen.md "Sanitizers").
     pub sanitize: SanitizeOptions,
+    /// The `-fsanitize-ignorelist=` and default lists (WP-1032): what
+    /// they name is not instrumented.
+    pub ignorelist: Option<std::sync::Arc<ignorelist::SanitizerIgnorelist>>,
     /// `-flto` / `-flto=thin`: the module is an LTO unit (its module flags
     /// and vtable `!type` metadata; spec/codegen.md §5.3 "LTO", WP-873).
     pub lto: Option<Lto>,
@@ -329,6 +342,10 @@ pub struct SanitizeOptions {
     pub recover: kiln_ast::sanitize::SanitizerSet,
     /// The UB checks that trap (`-fsanitize-trap=`).
     pub trap: kiln_ast::sanitize::SanitizerSet,
+    /// The checks whose traps and handler calls may merge
+    /// (`-f[no-]sanitize-merge[=]`, WP-1032); `None` when no such flag is
+    /// given (clang 22: the `undefined` group; clang 19: every check).
+    pub merge: Option<kiln_ast::sanitize::SanitizerSet>,
     /// clang `SanitizeAddressUseAfterScope`: an address sanitizer with
     /// `-fsanitize-address-use-after-scope` (the default) wants lifetime
     /// markers.
@@ -718,6 +735,8 @@ impl Default for CodegenOptions {
             static_destructors: StaticDestructors::All,
             wrapv: false,
             wrapv_pointer: false,
+            trapv: false,
+            trapv_handler: None,
             null_pointer_is_valid: false,
             no_builtin: false,
             no_builtin_fns: Vec::new(),
@@ -733,6 +752,7 @@ impl Default for CodegenOptions {
             coverage: CoverageOptions::default(),
             hardening: Hardening::default(),
             sanitize: SanitizeOptions::default(),
+            ignorelist: None,
             lto: None,
             lto_module_flags: true,
         }

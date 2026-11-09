@@ -276,7 +276,8 @@ has and kiln does not is an error (`unknown argument`, or `'<flag>' is
 not supported by kiln`), so a build never silently loses a flag's
 effect. The few flags that are accepted with no effect are listed in
 [KNOWN_ISSUES.md](KNOWN_ISSUES.md#flags-and-attributes). `kiln++ --help`
-gives a short list. The full list is spec/driver.md, "Options".
+lists the common flags by group and marks the kiln-only ones `[kiln]`.
+The full list is spec/driver.md, "Options".
 
 ### kiln-only flags
 

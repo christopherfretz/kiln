@@ -122,8 +122,8 @@ These flags are the exceptions: they are accepted and have no effect.
 | `-F <dir>` | warning; framework directories do not exist on Linux | — |
 | `-f[no-]stack-clash-protection`, `-f[no-]common`, `-fstack-usage`, `-m64`, `-pipe` and a few more | accepted silently; listed in spec/driver.md, "Codegen flags" | — |
 
-`kiln++ --help` does not list every implemented flag yet.
-spec/driver.md, "Options", is the complete list.
+`kiln++ --help` lists the flags a user is likely to need, grouped as in
+clang's help; spec/driver.md, "Options", is the complete list.
 
 **Attributes.** Every attribute clang knows is in one of three classes
 (`crates/kiln_sema/src/attr_triage.rs`, audit in

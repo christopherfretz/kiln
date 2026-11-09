@@ -87,6 +87,8 @@ pub struct ParseOptions {
     pub no_builtin: bool,
     /// The `-fno-builtin-<name>` names ([`kiln_sema::Sema::no_builtin_fns`]).
     pub no_builtin_fns: Vec<String>,
+    /// `-ffreestanding` ([`kiln_sema::Sema::freestanding`]).
+    pub freestanding: bool,
     /// `-f[no-]sized-deallocation` ([`kiln_sema::Sema::sized_deallocation`]).
     pub sized_deallocation: bool,
     /// `-f[no-]char8_t` ([`kiln_sema::Sema::char8`]; `None`: by `std`).
@@ -117,6 +119,9 @@ pub struct ParseOptions {
     /// test hook).
     #[doc(hidden)]
     pub full_redecl_scan: bool,
+    /// Record the main unit's constant results for a kind-2 module file
+    /// ([`ParsedTu::carried`], spec/modules.md §11.11).
+    pub record_carried: bool,
 }
 
 impl Default for ParseOptions {
@@ -124,6 +129,7 @@ impl Default for ParseOptions {
         ParseOptions {
             std: Std::Cxx26,
             keep_tokens: false,
+            record_carried: false,
             exceptions: true,
             rtti: true,
             gnu: false,
@@ -137,6 +143,7 @@ impl Default for ParseOptions {
             gnu_lib_builtins: false,
             no_builtin: false,
             no_builtin_fns: Vec::new(),
+            freestanding: false,
             sized_deallocation: true,
             char8: None,
             math_errno: true,
@@ -200,6 +207,12 @@ pub struct ParsedTu {
     /// Sema's memory rows at the end of the translation unit
     /// ([`kiln_sema::Sema::memory`]; sema itself is gone).
     pub sema_memory: MemReport,
+    /// The main unit's carried constant results, when
+    /// [`ParseOptions::record_carried`] (spec/modules.md §11.11).
+    pub carried: Option<kiln_sema::CarriedConstants>,
+    /// Constant evaluations answered from a kind-2 module file's carried
+    /// results instead of being run.
+    pub carried_hits: u64,
 }
 
 impl ParsedTu {
@@ -310,6 +323,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.gnu_lib_builtins = opts.gnu_lib_builtins;
     s.no_builtin = opts.no_builtin;
     s.no_builtin_fns.clone_from(&opts.no_builtin_fns);
+    s.freestanding = opts.freestanding;
     s.sized_deallocation = opts.sized_deallocation;
     s.char8 = opts.char8;
     s.lib_builtin_name = kiln_pp::is_library_builtin;
@@ -326,6 +340,13 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;
+    if opts.record_carried {
+        s.record_carried_constants();
+    }
+    let mut pp = pp;
+    if let Some(c) = pp.take_main_carried() {
+        s.install_carried_constants(&c.path, &c.bytes, Loc::INVALID);
+    }
     let main = pp.main_file().map(|f| diags.sm().file_name(f).to_owned()).unwrap_or_default();
     let mut src = TokenSource::new(pp, diags);
     src.keep_all(opts.keep_tokens);
@@ -340,6 +361,9 @@ pub fn parse_preprocessed<'a, 'sm>(
     let mut s = s;
     let cfg_dump = std::mem::take(&mut s.cfg_out);
     let sema_memory = s.memory();
+    let carried = s.take_carried_section();
+    let carried_hits = s.carried_hits();
     let (ast, oven) = s.into_parts();
-    (ParsedTu { ast, oven, inst_report, cfg_dump, sema_memory }, src.into_preprocessor())
+    let tu = ParsedTu { ast, oven, inst_report, cfg_dump, sema_memory, carried, carried_hits };
+    (tu, src.into_preprocessor())
 }

@@ -1127,8 +1127,17 @@ fn codegen_flags_classes() {
         &["-fstack-usage"],
         &["-gz"],
         &["-gz=zlib"],
-        &["-fno-trapv"],
         &["-fno-short-enums"],
+        // WP-1032: `-ftrapv` and its handler, `-fno-trapv` (GCC's), and
+        // the merge lists in every spelling.
+        &["-ftrapv"],
+        &["-fno-trapv"],
+        &["-ftrapv", "-fno-trapv"],
+        &["-ftrapv", "-ftrapv-handler=overflow_handler"],
+        &["-fsanitize-merge"],
+        &["-fno-sanitize-merge"],
+        &["-fsanitize-merge=undefined"],
+        &["-fno-sanitize-merge=signed-integer-overflow,alignment"],
         &["-ffp-model=precise"],
         // The common hardening set together, at -O2.
         &[
@@ -1171,7 +1180,7 @@ fn codegen_flags_classes() {
 fn codegen_flags_rejected() {
     let d = scratch("cgflags-rej");
     std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
-    let rejected = ["-ftrapv", "-fshort-enums", "-fsanitize=cfi", "-fsanitize-coverage=trace-pc"];
+    let rejected = ["-fshort-enums", "-fsanitize=cfi", "-fsanitize-coverage=trace-pc"];
     for f in rejected {
         let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "r.o"]);
         assert_eq!(
@@ -1192,6 +1201,11 @@ fn codegen_flags_rejected() {
         ("-gz=lzma", "unsupported argument 'lzma' to option '-gz='"),
         ("-fexcess-precision=none", "unsupported argument 'none' to option '-fexcess-precision='"),
         ("-mtune=", "unsupported argument '' to option '-mtune='"),
+        ("-fsanitize-merge=bogus", "unsupported argument 'bogus' to option '-fsanitize-merge='"),
+        (
+            "-fno-sanitize-merge=bogus",
+            "unsupported argument 'bogus' to option '-fno-sanitize-merge='",
+        ),
     ] {
         let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "r.o"]);
         assert_eq!(
@@ -1677,4 +1691,154 @@ fn sanitizer_frontend_attributes() {
     assert!(attrs(&ll, "@_Z1fi").contains(" sanitize_memory "), "{ll}");
     assert!(!attrs(&ll, "@_Z2f2i").contains("sanitize_"), "{ll}");
     assert!(!ll.contains("no_sanitize_address"), "{ll}");
+}
+
+/// spec/driver.md "Sanitizers" (WP-1032): `-fsanitize-ignorelist=` under
+/// the address sanitizer. A function named by `fun:` or defined in a `src:` file loses
+/// `sanitize_address`; a global named by `global:`, of a class named by
+/// `type:` (or an array of one) or defined in a `src:` file is
+/// `no_sanitize_address`; an `=init` entry drops only the
+/// dynamic-initialisation marker. The resource directory's default
+/// `share/asan_ignorelist.txt` applies (its `fun:*_Find_elem@*@std*`) until
+/// `-fno-sanitize-ignorelist`. Each line was checked against clang 19's
+/// output (address sanitizer IR tests cannot be exact: clang keeps value names there).
+#[test]
+fn sanitizer_ignorelist_asan() {
+    let d = scratch("ignorelist-asan");
+    std::fs::write(
+        d.join("h.h"),
+        "int src_g[3];\ninline int from_header(int *p) { return p[1]; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("list.txt"),
+        "fun:_Z4skipPi\nfun:*skip_tmpl*\nglobal:skip_g\ntype:Skipped\ntype:ns::Inner\n\
+         src:*h.h\nglobal:dyn_skip=init\ntype:Lazy=init\n",
+    )
+    .unwrap();
+    let src = "#include \"h.h\"\n\
+               struct Skipped { int v[2]; };\n\
+               struct Lazy { Lazy(); int v; };\n\
+               namespace ns { struct Inner { int v[4]; }; }\n\
+               int init();\n\
+               int skip_g[4];\nint kept_g[4];\n\
+               Skipped by_type;\nSkipped by_type_arr[2];\nns::Inner by_inner;\n\
+               int dyn_skip = init();\nint dyn_kept = init();\nLazy lazy;\n\
+               int skip(int *p) { return p[1]; }\n\
+               int kept(int *p) { return p[1]; }\n\
+               template <class T> T skip_tmpl(T *p) { return p[1]; }\n\
+               template int skip_tmpl<int>(int *);\n\
+               int use(int *p) { return from_header(p) + kept_g[1] + skip_g[1]; }\n\
+               int found(int *p) __asm__(\"my_Find_elem@1@std\");\n\
+               int found(int *p) { return p[1]; }\n";
+    std::fs::write(d.join("s.cpp"), src).unwrap();
+    let ir = |extra: &[&str]| {
+        let mut args = vec!["-fsanitize=address", "-Xclang", "-disable-llvm-passes"];
+        args.extend(extra);
+        args.extend(["-S", "-emit-llvm", "-o", "-", "s.cpp"]);
+        let o = kiln_in(&d, &args);
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{extra:?}");
+        text(&o.stdout)
+    };
+    let instrumented = |ll: &str, name: &str| -> bool {
+        let def = ll.lines().find(|l| l.starts_with("define") && l.contains(name)).unwrap();
+        let group = def.split(' ').find(|t| t.starts_with('#')).unwrap();
+        let line = format!("attributes {group} = ");
+        ll.lines().find(|l| l.starts_with(&line)).unwrap().contains(" sanitize_address ")
+    };
+    let ll = ir(&["-fsanitize-ignorelist=list.txt"]);
+    for g in [
+        "@src_g = dso_local global [3 x i32] zeroinitializer, no_sanitize_address,",
+        "@skip_g = dso_local global [4 x i32] zeroinitializer, no_sanitize_address,",
+        "@by_type = dso_local global %struct.Skipped zeroinitializer, no_sanitize_address,",
+        "@by_type_arr = dso_local global [2 x %struct.Skipped] zeroinitializer, \
+         no_sanitize_address,",
+        "@by_inner = dso_local global %\"struct.ns::Inner\" zeroinitializer, \
+         no_sanitize_address,",
+        "@dyn_skip = dso_local global i32 0, align 4",
+        "@dyn_kept = dso_local global i32 0, sanitize_address_dyninit, align 4",
+        "@lazy = dso_local global %struct.Lazy zeroinitializer, align 4",
+    ] {
+        assert!(ll.contains(g), "{g}\n{ll}");
+    }
+    // The alignment differs by host (16 on x86_64 SysV, 4 on aarch64), so check only the attributes.
+    let kept = ll.lines().find(|l| l.starts_with("@kept_g = ")).unwrap();
+    assert!(
+        kept.starts_with("@kept_g = dso_local global [4 x i32] zeroinitializer, align "),
+        "{kept}"
+    );
+    for (f, on) in [
+        ("@_Z4skipPi", false),
+        ("@_Z9skip_tmplIiET_PS0_", false),
+        ("@_Z11from_headerPi", false),
+        ("@\"my_Find_elem@1@std\"", false),
+        ("@_Z4keptPi", true),
+        ("@_Z3usePi", true),
+    ] {
+        assert_eq!(instrumented(&ll, f), on, "{f}\n{ll}");
+    }
+    // `-fno-sanitize-ignorelist` drops the default list and the earlier
+    // `-fsanitize-ignorelist=`.
+    let ll = ir(&["-fsanitize-ignorelist=list.txt", "-fno-sanitize-ignorelist"]);
+    assert!(instrumented(&ll, "@\"my_Find_elem@1@std\""), "{ll}");
+    assert!(instrumented(&ll, "@_Z4skipPi"), "{ll}");
+    assert!(!ll.contains("no_sanitize_address"), "{ll}");
+    // `-fsanitize-blacklist=` is the older spelling.
+    let ll = ir(&["-fno-sanitize-blacklist", "-fsanitize-blacklist=list.txt"]);
+    assert!(!instrumented(&ll, "@_Z4skipPi"), "{ll}");
+    assert!(instrumented(&ll, "@\"my_Find_elem@1@std\""), "{ll}");
+}
+
+/// spec/driver.md "Sanitizers" (WP-1032): a malformed ignorelist is
+/// clang's driver error, word for word (LLVM `SpecialCaseList`'s message);
+/// a regular-expression (`#!special-case-list-v1`) list is kiln's error.
+/// No job runs.
+#[test]
+fn sanitizer_ignorelist_errors() {
+    let d = scratch("ignorelist-err");
+    std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
+    for (name, body, want) in [
+        (
+            "bad1.txt",
+            "fun:ok\nbadline\n",
+            "malformed sanitizer ignorelist: 'error parsing file 'bad1.txt': malformed line 2: \
+             'badline''",
+        ),
+        (
+            "bad2.txt",
+            "[a\nfun:x\n",
+            "malformed sanitizer ignorelist: 'error parsing file 'bad2.txt': malformed section \
+             header on line 1: [a'",
+        ),
+        (
+            "bad3.txt",
+            "fun:[z-a]\n",
+            "malformed sanitizer ignorelist: 'error parsing file 'bad3.txt': malformed glob in \
+             line 1: '[z-a]': invalid glob pattern: [z-a]'",
+        ),
+        (
+            "v1.txt",
+            "#!special-case-list-v1\nfun:a.*\n",
+            "sanitizer ignorelist 'v1.txt' uses regular expressions ('#!special-case-list-v1'), \
+             which kiln does not support; use glob patterns",
+        ),
+    ] {
+        std::fs::write(d.join(name), body).unwrap();
+        let flag = format!("-fsanitize-ignorelist={name}");
+        let o = kiln_in(&d, &["-fsanitize=address", &flag, "-c", "m.cpp", "-o", "r.o"]);
+        assert_eq!(
+            (o.status.code(), text(&o.stderr)),
+            (Some(1), format!("kiln++: error: {want}\n")),
+            "{name}"
+        );
+        assert!(!d.join("r.o").exists(), "{name}");
+    }
+    let o = kiln_in(
+        &d,
+        &["-fsanitize=undefined", "-fsanitize-ignorelist=none.txt", "-c", "m.cpp", "-o", "r.o"],
+    );
+    assert_eq!(
+        (o.status.code(), text(&o.stderr).as_str()),
+        (Some(1), "kiln++: error: no such file or directory: 'none.txt'\n")
+    );
 }

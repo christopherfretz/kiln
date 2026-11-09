@@ -35,6 +35,8 @@ drv_llvm_not_found = Error (1) "no supported LLVM installation found (kiln suppo
 drv_llvm_not_on_path = Note (1) "not found on PATH: {0}";
 drv_llvm_tried = Note (2) "skipped '{0}': {1}";
 drv_llvm_unsupported = Error (4) "unsupported LLVM major {0} at '{1}' (from {2}); kiln supports LLVM {3}";
+// WP-1032: a sanitizer ignorelist LLVM's `SpecialCaseList` rejects.
+drv_malformed_sanitizer_ignorelist = Error (1) "malformed sanitizer ignorelist: '{0}'";
 // WP-920: `-MG` lists missing headers only for `-M`/`-MM`.
 drv_mg_requires_m_or_mm = Error (0) "option '-MG' requires '-M' or '-MM'";
 drv_missing_argument = Error (2) "argument to '{0}' is missing (expected {1} value)";
@@ -72,6 +74,8 @@ drv_pch_target = Error (3) "precompiled file '{0}' was compiled for the target '
 drv_pch_target_19 = Error (3) "PCH file{0:} was compiled for the target '{1}' but the current translation unit is being compiled for target '{2}'";
 drv_pch_unreadable = Error (2) "unable to read PCH file {0}: '{1}'";
 drv_precompile_not_module = Error (0) "--precompile requires a module interface or partition unit";
+// WP-1032: a `#!special-case-list-v1` ignorelist (POSIX regular expressions).
+drv_regex_sanitizer_ignorelist = Error (1) "sanitizer ignorelist '{0}' uses regular expressions ('#!special-case-list-v1'), which kiln does not support; use glob patterns";
 // WP-982: kiln-scan-deps (spec/modules.md §11.9).
 drv_scan_one_job = Error (1) "unable to handle compilation, expected exactly one compiler job in '{0}'";
 // WP-792: clang's `-ftime-trace` family, added by build systems for clang.

@@ -545,10 +545,11 @@ impl Job<'_> {
         &self,
         pp: &mut Preprocessor<'_, '_>,
         engine: &DiagEngine<'_>,
+        carried: Option<&kiln_sema::CarriedConstants>,
     ) -> bool {
         let a = self.args;
         let Some(out) = self.module_output_path() else { return true };
-        let Some(capsule) = pp.take_capsule() else {
+        let Some(mut capsule) = pp.take_capsule() else {
             if a.action == crate::args::Action::Precompile {
                 Diag::new(DiagId::drv_precompile_not_module, Span::INVALID).emit(engine);
                 return false;
@@ -569,6 +570,25 @@ impl Job<'_> {
             }
             return true;
         };
+        let kind = match carried {
+            Some(c) if !c.bytes.is_empty() => {
+                capsule
+                    .sections
+                    .push(bmi::Section { tag: bmi::SECTION_CONSTS, bytes: c.bytes.clone() });
+                format!("kind 2, carrying {} constant results", c.carried)
+            }
+            Some(c) => format!(
+                "kind 1: no constant result to carry{}",
+                c.first_skip.map(|w| format!(" (first not carried: {w})")).unwrap_or_default()
+            ),
+            None => "kind 1, as -fkiln-bmi-kind=1 requests".to_owned(),
+        };
+        if a.verbose {
+            // A `-v` line, never a warning (spec/modules.md §11.11
+            // "Fallback").
+            let mut err = self.stderr.clone();
+            let _ = writeln!(err, "note: wrote module file '{out}' as {kind}");
+        }
         let bytes = bmi::write(&capsule);
         drop(capsule);
         if let Err(e) = bmi::write_file(Path::new(&out), &bytes) {
