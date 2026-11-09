@@ -350,9 +350,12 @@ pub enum ArgError {
     /// ("unsupported option '{opt}' for target '{triple}'").
     UnsupportedForTarget(String, String),
     /// A GCC/clang flag kiln recognises but deliberately does not
-    /// implement (`-ftrapv`, coverage/profiling,
+    /// implement (`-ftrapv`, profile-guided optimization,
     /// spec/driver.md "Codegen flags"): "'{arg}' is not supported by kiln".
     UnsupportedByKiln(String),
+    /// "invalid argument '{0}' only allowed with '{1}'"
+    /// (`-fcoverage-mapping` without `-fprofile-instr-generate`).
+    OnlyAllowedWith(String, String),
     /// "invalid argument '{0}' to -{1}" (`-fpatchable-function-entry=`).
     InvalidArgumentToOption(String, String),
     /// `-fpatchable-function-entry=N,M` with `M > N`.
@@ -539,6 +542,8 @@ pub struct Args {
     pub fp: crate::fp_flags::FpFlags,
     /// The sanitizer options (spec/driver.md "Sanitizers").
     pub sanitize: crate::sanitize::SanitizeFlags,
+    /// The coverage options (spec/driver.md "Coverage flags", WP-941).
+    pub coverage: crate::coverage_flags::CoverageFlags,
     /// The debug information flags (`-g*`, `-gdwarf-N`, the prefix maps,
     /// `-gsplit-dwarf`, `-gz`; spec/driver.md "Debug information flags").
     pub debug: crate::debug_flags::DebugFlags,
@@ -638,8 +643,16 @@ const JOINED_OR_SEPARATE: &[&str] = &[
 
 /// Options taking a separate value only (`-target foo`), or `=`-joined
 /// (`--sysroot=foo`, `-resource-dir=foo`).
-const SEPARATE_OR_EQ: &[&str] =
-    &["--sysroot", "-resource-dir", "-target-feature", "-target", "--target", "-std", "--std"];
+const SEPARATE_OR_EQ: &[&str] = &[
+    "--sysroot",
+    "-resource-dir",
+    "-target-feature",
+    "-target",
+    "--target",
+    "-std",
+    "--std",
+    "-dumpdir",
+];
 
 impl Args {
     /// Parses `argv` (without the program name) as `kiln++` would.
@@ -719,7 +732,12 @@ impl Args {
                 }
                 continue;
             }
-            if let Some(r) = a.fp.parse_arg(arg).or_else(|| a.debug.parse_arg(arg)) {
+            if let Some(r) = a
+                .coverage
+                .parse_arg(arg)
+                .or_else(|| a.fp.parse_arg(arg))
+                .or_else(|| a.debug.parse_arg(arg))
+            {
                 a.errors.extend(r.err());
             } else if let Some(r) = a
                 .sanitize
@@ -745,6 +763,7 @@ impl Args {
             }
         }
         a.verify = verify.finish(&mut a.errors);
+        a.errors.extend(a.coverage.errors());
         let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
         a
     }
@@ -801,6 +820,8 @@ impl Args {
             "-idirafter" => self.dirs.push((DirGroup::After, v_owned)),
             "-F" => self.frameworks.push(v_owned),
             "-isysroot" => self.isysroot = Some(v_owned),
+            // WP-941: the gcov files' prefix.
+            "-dumpdir" => self.coverage.dumpdir = Some(v_owned),
             "--sysroot" => self.sysroot = Some(v_owned),
             "-resource-dir" => self.resource_dir = Some(v_owned),
             "-target" | "--target" => self.target = Some(v_owned),

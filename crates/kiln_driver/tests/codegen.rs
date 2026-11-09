@@ -1002,21 +1002,7 @@ fn codegen_flags_classes() {
 fn codegen_flags_rejected() {
     let d = scratch("cgflags-rej");
     std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
-    let rejected = [
-        "-ftrapv",
-        "-fshort-enums",
-        "-fsanitize=cfi",
-        "-fsanitize-coverage=trace-pc",
-        "-fcoverage-mapping",
-        "-fprofile-arcs",
-        "-ftest-coverage",
-        "--coverage",
-        "-fprofile-instr-generate",
-        "-fprofile-instr-generate=a.profraw",
-        "-fprofile-generate",
-        "-fprofile-use=a.profdata",
-        "-fprofile-instr-use=a.profdata",
-    ];
+    let rejected = ["-ftrapv", "-fshort-enums", "-fsanitize=cfi", "-fsanitize-coverage=trace-pc"];
     for f in rejected {
         let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "r.o"]);
         assert_eq!(
@@ -1043,6 +1029,58 @@ fn codegen_flags_rejected() {
             (o.status.code(), text(&o.stderr)),
             (Some(1), format!("kiln++: error: {want}\n"))
         );
+    }
+}
+
+/// spec/driver.md "Coverage flags" (WP-941): source-based coverage
+/// mapping is not implemented yet, and profile-guided optimization is a
+/// known 1.0 limitation; each is named in the error and no job runs.
+#[test]
+fn coverage_flags_rejected() {
+    let d = scratch("covflags-rej");
+    std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
+    let limit = |f: &str, what: &str| {
+        format!(
+            "'{f} ({what} is a known kiln 1.0 limitation; for coverage use --coverage or \
+             -fprofile-instr-generate)' is not supported by kiln"
+        )
+    };
+    for (flags, want) in [
+        (
+            &["-fprofile-instr-generate", "-fcoverage-mapping"][..],
+            "'-fcoverage-mapping (source-based coverage mapping is not yet implemented, a \
+             WP-941 follow-up; -fprofile-instr-generate counters work alone, and --coverage \
+             gives gcov line coverage)' is not supported by kiln"
+                .to_owned(),
+        ),
+        (
+            &["-fprofile-generate"],
+            limit("-fprofile-generate", "IR profile-guided optimization instrumentation"),
+        ),
+        (
+            &["-fprofile-use=a.profdata"],
+            limit("-fprofile-use=a.profdata", "profile-guided optimization"),
+        ),
+        (
+            &["-fprofile-instr-use=a.profdata"],
+            limit("-fprofile-instr-use=a.profdata", "profile-guided optimization"),
+        ),
+    ] {
+        let mut args = flags.to_vec();
+        args.extend(["-c", "m.cpp", "-o", "r.o"]);
+        let o = kiln_in(&d, &args);
+        assert_eq!(
+            (o.status.code(), text(&o.stderr)),
+            (Some(1), format!("kiln++: error: {want}\n")),
+            "{flags:?}"
+        );
+        assert!(!d.join("r.o").exists(), "{flags:?}");
+    }
+    // The accepted flags compile (the gcov and InstrProf IR are
+    // tests/codegen's `gcov_*` and `instrprof_*` cases).
+    for f in ["--coverage", "-fprofile-instr-generate", "-fprofile-instr-generate=a.profraw"] {
+        let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "m.o"]);
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{f}");
     }
 }
 

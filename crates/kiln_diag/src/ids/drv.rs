@@ -3,6 +3,8 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 drv_argument_not_allowed_with = Error (2) "invalid argument '{0}' not allowed with '{1}'";
+// WP-941: `-fcoverage-mapping` without `-fprofile-instr-generate`.
+drv_argument_only_allowed_with = Error (2) "invalid argument '{0}' only allowed with '{1}'";
 drv_argument_unused = Warning [UnusedCommandLineArgument] (1) "argument unused during compilation: '{0}'";
 drv_cannot_execute = Error (2) "unable to execute command: {0}: {1}";
 drv_cannot_open_output = Error (2) "unable to open output file '{0}': '{1}'";

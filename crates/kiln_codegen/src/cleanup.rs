@@ -635,7 +635,10 @@ impl Cg<'_> {
             return b;
         }
         let b = self.f.fir.create_block();
+        // `new llvm::UnreachableInst(..)`: no builder, no debug location.
+        let saved = self.f.fir.set_dbg_loc(None);
         self.f.fir.push_in(b, Op::Unreachable, LTy::VOID);
+        self.f.fir.set_dbg_loc(saved);
         self.f.cl.unreachable = Some(b);
         b
     }
@@ -1055,14 +1058,17 @@ impl Cg<'_> {
             }
             Exit::Switch { default, cases } => {
                 // `createLoadInstBefore(.., nullptr)`, appended to the
-                // exit block directly: no access group.
+                // exit block directly: no access group, and (as the
+                // `InstsToAppend` switch) no debug location.
                 let slot = self.dest_slot();
+                let saved = self.f.fir.set_dbg_loc(None);
                 let ld = self.f.fir.push_in(
                     normal_exit,
                     Op::Load { ty: LTy::I32, ptr: slot, mem: mem4() },
                     LTy::I32,
                 );
                 self.f.fir.push(Op::Switch { c: ld, default, cases }, LTy::VOID);
+                self.f.fir.set_dbg_loc(saved);
             }
         }
 

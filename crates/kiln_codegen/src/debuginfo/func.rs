@@ -67,7 +67,8 @@ impl Cg<'_> {
         } else {
             let name = self.di_fn_name(d);
             f_ = f_.s("name", &name);
-            if reduced && fname != name {
+            // clang keeps the linkage name for gcov's notes too (WP-941).
+            if (reduced || self.opts.coverage.gcov.is_some()) && fname != name {
                 f_ = f_.s("linkageName", &fname);
             }
             fl.push("DIFlagPrototyped");
@@ -111,7 +112,11 @@ impl Cg<'_> {
             };
             decl = if reduced && method { self.di_method_decl(d) } else { None };
         }
-        if self.opts.opt_level > 0 && self.opts.debug.dwarf_version.unwrap_or(5) >= 5 {
+        // clang `getCallSiteRelatedAttrs`: none for location tracking.
+        if self.opts.opt_level > 0
+            && self.opts.debug.kind != DebugInfoKind::LocTrackingOnly
+            && self.opts.debug.dwarf_version.unwrap_or(5) >= 5
+        {
             fl.push("DIFlagAllCallsDescribed");
         }
         if self.m.func(f).linkage.is_local() {
@@ -139,6 +144,46 @@ impl Cg<'_> {
         let mut fd = FirDbg::new(dbg, s);
         fd.eh_loc = self.di_body_end(body);
         self.f.fir.dbg = Some(Box::new(fd));
+    }
+
+    /// clang `StartFunction(GlobalDecl(), ...)` of a coroutine's private
+    /// `await_suspend` wrapper `f` (CGCoroutine.cpp): an artificial
+    /// `DISubprogram` with only a linkage name, in the main file. gcov
+    /// instruments only functions that have one.
+    pub(crate) fn di_wrapper_start(&mut self, f: FuncId) {
+        let Some(di) = self.di.as_deref() else { return };
+        let (dbg, cu) = (di.dbg, di.cu);
+        let file = self.di_file(Loc::INVALID);
+        let fname = self.m.func(f).name().to_owned();
+        let types = self.m.md_tuple(&[]);
+        let ty = self.m.md_specialized(
+            "DISubroutineType",
+            false,
+            Fields::default().n("types", Some(types)).0,
+        );
+        let mut fl = vec!["DIFlagArtificial"];
+        if self.opts.opt_level > 0
+            && self.opts.debug.kind != DebugInfoKind::LocTrackingOnly
+            && self.opts.debug.dwarf_version.unwrap_or(5) >= 5
+        {
+            fl.push("DIFlagAllCallsDescribed");
+        }
+        let mut sp = vec!["DISPFlagLocalToUnit"];
+        if self.opts.opt_level > 0 {
+            sp.push("DISPFlagOptimized");
+        }
+        sp.push("DISPFlagDefinition");
+        let f_ = Fields::default()
+            .s("linkageName", &fname)
+            .n("scope", Some(file))
+            .n("file", Some(file))
+            .n("type", Some(ty))
+            .flags("flags", &fl)
+            .sp_flags(&sp)
+            .n("unit", Some(cu));
+        let s = self.m.md_specialized("DISubprogram", true, f_.0);
+        self.m.func_mut(f).add_metadata(dbg, s);
+        self.f.fir.dbg = Some(Box::new(FirDbg::new(dbg, s)));
     }
 
     /// The end of the prologue (clang `StartFunction`'s
@@ -475,6 +520,10 @@ impl Cg<'_> {
         match body {
             Some(b) if ast.stmts.get(b).kind() == kiln_ast::stmt::StmtKind::CompoundStmt => {
                 ast.stmts.rbrace(b)
+            }
+            // A coroutine's `CoroutineBodyStmt` ends where its body does.
+            Some(b) if ast.stmts.get(b).kind() == kiln_ast::stmt::StmtKind::CoroutineBodyStmt => {
+                self.di_body_end(Some(ast.stmts.coroutine_body(b).body))
             }
             _ => Loc::INVALID,
         }

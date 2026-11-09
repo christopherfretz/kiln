@@ -262,6 +262,23 @@ impl Mangler<'_, '_> {
         self.out.push_str("Au7unknown");
     }
 
+    /// `DB <expression> _` (`_BitInt(N)`) or `DU <expression> _`
+    /// (`unsigned _BitInt(N)`) of a dependent width. A width expression
+    /// the mangler cannot spell falls back to `u7unknown` in its place,
+    /// keeping the signed and unsigned forms apart.
+    pub(super) fn dependent_bitint(&mut self, signed: bool, width: Option<ExprId>) {
+        let (len, subs) = (self.out.len(), self.subs.len());
+        let tag = if signed { "DB" } else { "DU" };
+        self.out.push_str(tag);
+        if !width.is_some_and(|e| self.expression(e)) {
+            self.out.truncate(len);
+            self.subs.truncate(subs);
+            self.out.push_str(tag);
+            self.out.push_str("u7unknown");
+        }
+        self.out.push('_');
+    }
+
     // ---- template-argument expressions -----------------------------------
 
     /// A value-dependent template argument (clang `mangleExpression` with

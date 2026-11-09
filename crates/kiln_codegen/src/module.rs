@@ -3307,6 +3307,7 @@ impl<'a> Cg<'a> {
         let has_di = self.di.is_some();
         let h = self.opts.hardening.clone();
         let x86 = self.is_x86();
+        self.instr_profile_trailer();
         let m = &mut self.m;
         // clang 19 emits an empty `!llvm.linker.options` when the language
         // has modules (C++20 and later); clang 20+ emits none.
@@ -3390,6 +3391,15 @@ impl<'a> Cg<'a> {
                 m.add_module_flag_i32(1, "EnableSplitLTOUnit", i32::from(split));
             }
             None => {}
+        }
+        // clang `CodeGenModule::EmitCoverageFile` (WP-941): one entry per
+        // compile unit.
+        if let (Some((notes, data)), Some(di)) = (&self.opts.coverage.gcov, self.di.as_deref()) {
+            let cu = di.cu;
+            let n = m.md_string(notes.as_bytes());
+            let d = m.md_string(data.as_bytes());
+            let e = m.md_tuple(&[Some(n), Some(d), Some(cu)]);
+            m.add_named_metadata("llvm.gcov", &[e]);
         }
         m.add_ident(&self.opts.ident);
         self.tbaa_errno();

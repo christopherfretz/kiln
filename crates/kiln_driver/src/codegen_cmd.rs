@@ -409,6 +409,13 @@ impl CodegenJob<'_> {
                 },
                 ..codegen_flag_options(a, feats.cpu.clone(), x86)
             };
+            // WP-941: coverage, and the debug locations gcov needs (clang
+            // `LocTrackingOnly` when no `-g` is given).
+            opts.coverage = coverage_options(a, job.path);
+            if opts.coverage.gcov.is_some() && opts.debug.kind == kiln_codegen::DebugInfoKind::None
+            {
+                opts.debug.kind = kiln_codegen::DebugInfoKind::LocTrackingOnly;
+            }
             // UBSan's `shift-base` depends on the language (WP-675).
             opts.sanitize.cplusplus = job.std.cplusplus;
             opts.sanitize.cxx20 = job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20;
@@ -450,6 +457,34 @@ impl CodegenJob<'_> {
         // peak holds two of the three, not all of them (WP-633).
         drop(tu);
         module.map(|m| m.to_text())
+    }
+}
+
+/// The codegen coverage options of the compile of `input` (WP-941).
+fn coverage_options(a: &Args, input: &str) -> kiln_codegen::CoverageOptions {
+    let c = &a.coverage;
+    let cwd = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+    let gcov = c.gcov().then(|| {
+        let (notes, data) =
+            c.gcov_files(input, a.output.as_deref(), Phase::of(a) == Phase::Link, &cwd);
+        (
+            if c.gcov_notes() { notes } else { String::new() },
+            if c.gcov_data() { data } else { String::new() },
+        )
+    });
+    kiln_codegen::CoverageOptions {
+        gcov,
+        instr: c.instr_generate.is_some(),
+        // clang's InstrProfiling pass creates the filename variable, so
+        // `-disable-llvm-passes` IR has none.
+        instr_path: c
+            .instr_generate
+            .clone()
+            .flatten()
+            .filter(|p| !p.is_empty() && !a.disable_llvm_passes),
+        mapping: c.mapping(),
+        comp_dir: c.comp_dir.clone().unwrap_or(cwd),
+        prefix_map: c.prefix_map.clone(),
     }
 }
 
@@ -753,6 +788,8 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
         Some(p) => p,
         // WP-675: the sanitizer passes run at every level.
         None if sanitizer_passes(args, tc).is_some() => "default<O0>",
+        // WP-941: so do the coverage passes.
+        None if coverage_passes(args).is_some() => "default<O0>",
         None if needs_always_inline(ir) => "default<O0>",
         // WP-813: the O0 pipeline's `ee-instrument` turns the entry and
         // exit attributes into `__cyg_profile_func_*` calls.
@@ -777,6 +814,7 @@ fn planned_ir_passes(args: &Args, tc: &Toolchain) -> Option<Vec<Command>> {
     }
     opt_pipeline(args.opt_flag.as_deref())
         .or_else(|| sanitizer_passes(args, tc).map(|_| "default<O0>"))
+        .or_else(|| coverage_passes(args).map(|_| "default<O0>"))
         .map(|p| opt_commands(args, tc, p))
 }
 
@@ -845,6 +883,28 @@ fn sanitizer_passes(args: &Args, tc: &Toolchain) -> Option<(String, Vec<String>)
         .optimizer_last(opt_level(args.opt_flag.as_deref()))
 }
 
+/// clang's coverage passes (WP-941, spec/codegen.md "Instrumentation"):
+/// `GCOVProfilerPass` then `InstrProfilingLoweringPass` at the pipeline
+/// start extension point, and their `cl::opt` flags.
+fn coverage_passes(args: &Args) -> Option<(String, Vec<String>)> {
+    let c = &args.coverage;
+    let mut passes = Vec::new();
+    let mut flags = Vec::new();
+    if c.gcov() {
+        passes.push("insert-gcov-profiling");
+        if c.atomic {
+            flags.push("--gcov-atomic-counter".to_owned());
+        }
+    }
+    if c.instr_generate.is_some() {
+        passes.push("instrprof");
+        if c.atomic {
+            flags.push("--instrprof-atomic-counter-update-all".to_owned());
+        }
+    }
+    (!passes.is_empty()).then(|| (passes.join(","), flags))
+}
+
 /// The `opt` run of `passes`, then for a textual or bitcode output the
 /// run that discards local value names ([`ir_passes`]). With a sanitizer
 /// the instrumentation joins the pipeline at its last extension point;
@@ -853,6 +913,12 @@ fn sanitizer_passes(args: &Args, tc: &Toolchain) -> Option<(String, Vec<String>)
 fn opt_commands(args: &Args, tc: &Toolchain, passes: &str) -> Vec<Command> {
     let mut run = Command::new(tc, Tool::Opt);
     run.arg(format!("-passes={passes}"));
+    if let Some((ep, cl)) = coverage_passes(args) {
+        run.arg(format!("--passes-ep-pipeline-start={ep}"));
+        for c in cl {
+            run.arg(c);
+        }
+    }
     let san = sanitizer_passes(args, tc);
     if let Some((ep, cl)) = &san {
         run.arg(format!("--passes-ep-optimizer-last={ep}"));
@@ -999,6 +1065,10 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
             cmd.arg("-flto");
         }
         None => {}
+    }
+    // WP-941: clang links the profile runtime for coverage.
+    for f in args.coverage.link_flags() {
+        cmd.arg(f);
     }
     // WP-813: clang links the XRay runtime for `-fxray-instrument`.
     if args.codegen.xray_instrument {
