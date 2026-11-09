@@ -44,6 +44,10 @@ pub struct ModuleOptions {
     /// module directives are recorded ([`Preprocessor::scanned_imports`])
     /// and no import is performed; a header-unit import is an error.
     pub scan: bool,
+    /// The hidden `-fkiln-bmi-image`: build an imported unit from its
+    /// module file's declaration image when it has one and the name gate
+    /// passes (spec/modules.md §11.11 "Part 2a"); otherwise replay.
+    pub image: bool,
 }
 
 /// A consumed module or import directive ([cpp.module], [cpp.import]).
@@ -655,7 +659,65 @@ impl Preprocessor<'_, '_> {
     }
 
     /// Starts reading unit `key` from the module file `path`.
-    fn begin_capsule_unit(&mut self, key: String, path: String, mut c: Capsule, span: Span) {
+    fn begin_capsule_unit(&mut self, key: String, path: String, c: Capsule, span: Span) {
+        if let Some(c) = self.try_image_unit(&key, &path, c, span) {
+            self.replay_capsule_unit(key, path, c, span);
+        }
+    }
+
+    /// Builds unit `key` from its module file's declaration image when
+    /// `-fkiln-bmi-image` is on, the capsule has one and none of its
+    /// declared names is interned yet (spec/modules.md §11.11 "Part 2a",
+    /// "ODR merging"): queues [`Marker::UnitBegin`] carrying the image and
+    /// [`Marker::UnitEnd`], lexes nothing, and returns `None`. Otherwise
+    /// returns the capsule to replay, without its image section.
+    fn try_image_unit(
+        &mut self,
+        key: &str,
+        path: &str,
+        mut c: Capsule,
+        span: Span,
+    ) -> Option<Capsule> {
+        let take = |c: &mut Capsule| {
+            let i = c.sections.iter().position(|s| s.tag == bmi::SECTION_IMAGE)?;
+            Some(c.sections.remove(i).bytes)
+        };
+        let on = self.modules.as_ref().is_some_and(|m| m.opts.image);
+        let Some(bytes) = take(&mut c).filter(|_| on && c.imports.is_empty() && !c.files.is_empty())
+        else {
+            return Some(c);
+        };
+        // A header that does not decode is used anyway: sema then reports
+        // the file as corrupt (§11.11 "Part 2a", "The reader").
+        let clash = bmi::image_names(&bytes)
+            .is_some_and(|names| names.iter().any(|n| self.interner.get(n).is_some()));
+        if clash {
+            return Some(c);
+        }
+        let carried = take_carried(path, &mut c);
+        let main = c.files.swap_remove(0);
+        drop(c);
+        let Some(main_file) = self.load_recorded(&main.path, main.text) else {
+            self.emit(Diag::new(DiagId::pp_module_file_not_found, span).arg(path));
+            return None;
+        };
+        let image = Rc::new(bmi::ImageSection { path: path.to_owned(), bytes, main_file });
+        let Some(m) = &mut self.modules else { return None };
+        m.built.insert(key.to_owned(), Vec::new());
+        self.queue(Marker::UnitBegin {
+            key: key.to_owned(),
+            header: false,
+            span,
+            carried,
+            image: Some(image),
+        });
+        self.queue(Marker::UnitEnd { key: key.to_owned() });
+        None
+    }
+
+    /// Starts replaying unit `key` from the capsule `c` of module file
+    /// `path` (§11.2).
+    fn replay_capsule_unit(&mut self, key: String, path: String, mut c: Capsule, span: Span) {
         let builtin = self.sm.add_virtual("<built-in>", c.predefines.clone()).ok();
         let carried = take_carried(&path, &mut c);
         let Some(m) = &mut self.modules else { return };
@@ -882,17 +944,24 @@ impl Preprocessor<'_, '_> {
         }
         let (path, text) = r.files.get_mut(k)?;
         let text = text.take()?;
-        // The file itself when it still holds the recorded text (its
-        // FileId is then shared with any textual inclusion of it, §6);
-        // otherwise the recorded text under the file's name (§11.3).
-        let id = match self.sm.load_regular_file_expecting(Path::new(path.as_str()), text) {
-            Ok((id, None)) => id,
-            Ok((id, Some(text))) if self.sm.text(id) == text => id,
-            Ok((_, Some(text))) | Err((_, text)) => self.sm.add_virtual(path, text).ok()?,
-        };
+        let path = path.clone();
+        let id = self.load_recorded(&path, text)?;
+        let r = self.modules.as_mut()?.replays.get_mut(i)?;
         r.ids[k] = Some(id);
         r.index.insert(id, idx);
         Some(id)
+    }
+
+    /// Loads a capsule file `path` recorded with `text`: the file itself
+    /// when it still holds the recorded text (its FileId is then shared
+    /// with any textual inclusion of it, §6); otherwise the recorded text
+    /// under the file's name (§11.3).
+    fn load_recorded(&mut self, path: &str, text: String) -> Option<FileId> {
+        match self.sm.load_regular_file_expecting(Path::new(path), text) {
+            Ok((id, None)) => Some(id),
+            Ok((id, Some(text))) if self.sm.text(id) == text => Some(id),
+            Ok((_, Some(text))) | Err((_, text)) => self.sm.add_virtual(path, text).ok(),
+        }
     }
 
     /// Imports the header unit `key` (resolved by `read_header_import`).
@@ -968,7 +1037,7 @@ impl Preprocessor<'_, '_> {
             module,
         };
         self.define_builtins();
-        self.queue(Marker::UnitBegin { key, header, span, carried: None });
+        self.queue(Marker::UnitBegin { key, header, span, carried: None, image: None });
         self.push_file(file, Some(span.lo), None, None, system, false);
         if let Some(Frame::File(f)) = self.frames.last_mut() {
             f.unit = Some(Box::new(save));

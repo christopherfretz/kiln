@@ -379,6 +379,7 @@ impl Job<'_> {
                 fingerprint: self.fingerprint(),
                 record: !a.scan_deps && (a.precompile || a.module_output.is_some()),
                 scan: a.scan_deps,
+                image: a.bmi_image,
             });
         } else if let MainInput::Capsule(_) = &main {
             let what =
