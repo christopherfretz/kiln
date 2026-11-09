@@ -73,6 +73,11 @@ impl Oven {
             .unwrap_or(OTy(t1));
         // The function whose body holds the call (thunks have none).
         let scope = self.stack.last().and_then(|f| self.funcs[f.func as usize].decl);
+        // The first register above the calling frame's: where anything
+        // the bridge has the Oven evaluate or thaw runs.
+        let cur = self.stack[self.stack.len() - 1].func;
+        let top = fb + self.funcs[cur as usize].nregs as usize + 1;
+        let top = u32::try_from(top).map_err(|_| Fault::Invalid)?;
         let ctx = MetaCtx {
             scope,
             loc: self.site(pc).loc,
@@ -80,6 +85,7 @@ impl Oven {
             trial,
             elem,
             callee: site.map(|s| s.callee),
+            top,
         };
         match op.purity() {
             Purity::Stable => {}
@@ -150,9 +156,6 @@ impl Oven {
             self.types.refresh(b);
             self.mp_refresh(b);
         }
-        let cur = self.stack[self.stack.len() - 1].func;
-        let top = fb + self.funcs[cur as usize].nregs as usize + 1;
-        let top = u32::try_from(top).map_err(|_| Fault::Invalid)?;
         let unfit = |s: &mut Self| {
             let msg = format!("kiln: internal: '{}' produced no result of its type", op.display());
             Err(s.meta_trap(vec![Note::new(ctx.loc, msg)]))

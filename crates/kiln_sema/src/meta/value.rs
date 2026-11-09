@@ -197,15 +197,7 @@ impl Sema<'_, '_> {
             return fail(loc, format!("'{}' is not a structural type", self.ty_str(t)));
         }
         let cv = self.bridge(|b| oven.meta_freeze(b, v, t, loc))?;
-        self.check_tparg(cv, "the value", loc)?;
-        let r = if self.ast.types.as_record(t).is_some() {
-            let ct = self.ast.types.qualify(t, Quals::CONST);
-            let obj = self.builder().template_param_object(ct, cv);
-            Reflectee::Object(self.object_ptr(t, PtrBase::Decl(obj), 0)?)
-        } else {
-            Reflectee::Value(cv)
-        };
-        self.intern_reflection(r, loc).map_err(MetaError::from)
+        self.constant_reflection(cv, loc)
     }
 
     /// The reflection of annotation `a`'s underlying constant
@@ -220,16 +212,60 @@ impl Sema<'_, '_> {
         let Some(cv) = self.ast.annots.get(a).value else {
             return Err(MetaError::invalid());
         };
-        let t = self.ast.types.canonical(self.ast.consts.ty(cv));
-        let t = crate::conv::strip_cv(self, t);
-        let r = if self.ast.types.as_record(t).is_some() {
+        self.constant_reflection(cv, loc)
+    }
+
+    /// The reflection of constant `cv` ([meta.reflection.result]/2
+    /// `reflect_constant`; [meta.reflection.queries] `constant_of`): a
+    /// class value is the template parameter object holding it (an
+    /// object reflection), an array value the `reflect_constant_array`
+    /// object holding its elements (P3491R3), anything else the value
+    /// itself. The image is retyped cv-unqualified first, so one value
+    /// is one object whatever spelling of its type froze it.
+    pub(super) fn constant_reflection(
+        &mut self,
+        cv: ConstValueId,
+        loc: Loc,
+    ) -> Result<ReflectionId, MetaError> {
+        let t = self.unqual(self.ast.consts.ty(cv));
+        let r = if self.ast.types.is_array(t) {
+            let ty = &mut self.ast.types;
+            let e = ty.element(t).map_or(QualType::ERROR, |q| ty.canonical(q));
+            let Some(n) = ty.array_size(t) else { return Err(MetaError::invalid()) };
+            let at = ty.constant_array(e.without_quals(), n, None);
+            let cv = self.retyped(cv, at)?;
+            self.check_tparg(cv, "an element", loc)?;
+            Reflectee::Object(self.object_ptr(at, PtrBase::Const(cv), 0)?)
+        } else if self.ast.types.as_record(t).is_some() {
+            let cv = self.retyped(cv, t)?;
+            self.check_tparg(cv, "the value", loc)?;
             let ct = self.ast.types.qualify(t, Quals::CONST);
             let obj = self.builder().template_param_object(ct, cv);
             Reflectee::Object(self.object_ptr(t, PtrBase::Decl(obj), 0)?)
         } else {
+            self.check_tparg(cv, "the value", loc)?;
             Reflectee::Value(cv)
         };
         self.intern_reflection(r, loc).map_err(MetaError::from)
+    }
+
+    /// Aggregate constant `cv` typed `ty` (re-pushed when its image has
+    /// another spelling); a scalar as is (it is typed cv-unqualified).
+    fn retyped(&mut self, cv: ConstValueId, ty: QualType) -> Result<ConstValueId, MetaError> {
+        let Some(img) = self.ast.consts.aggregate(cv) else { return Ok(cv) };
+        if img.ty == ty {
+            return Ok(cv);
+        }
+        let (bytes, relocs) = (img.bytes.to_vec(), img.relocs.to_vec());
+        let (padding, unions) = (img.padding.to_vec(), img.unions.to_vec());
+        let img = kiln_ast::consts::ByteImage {
+            ty,
+            bytes: &bytes,
+            relocs: &relocs,
+            padding: &padding,
+            unions: &unions,
+        };
+        self.ast.consts.push_aggregate(img).map_err(|_| MetaError::memory())
     }
 
     /// `reflect_object(o)` of type `t` ([meta.reflection.result]/5): `p`
@@ -616,7 +652,7 @@ impl Sema<'_, '_> {
             }
             _ => None,
         };
-        let Some(img) = v.and_then(|v| self.ast.consts.aggregate(v)) else {
+        let Some(img_cv) = v.filter(|&v| self.ast.consts.aggregate(v).is_some()) else {
             return fail(
                 loc,
                 format!(
@@ -629,16 +665,7 @@ impl Sema<'_, '_> {
         let (e, n) = (t.element(u).map_or(QualType::ERROR, |q| t.canonical(q)), t.array_size(u));
         let Some(n) = n else { return Err(MetaError::invalid()) };
         let ty = t.constant_array(e.without_quals(), n, None);
-        let (bytes, relocs) = (img.bytes.to_vec(), img.relocs.to_vec());
-        let (padding, unions) = (img.padding.to_vec(), img.unions.to_vec());
-        let img = kiln_ast::consts::ByteImage {
-            ty,
-            bytes: &bytes,
-            relocs: &relocs,
-            padding: &padding,
-            unions: &unions,
-        };
-        let cv = self.ast.consts.push_aggregate(img).map_err(|_| MetaError::memory())?;
+        let cv = self.retyped(img_cv, ty)?;
         self.check_tparg(cv, "an element", loc)?;
         Ok(cv)
     }

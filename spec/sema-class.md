@@ -2845,6 +2845,53 @@ access, out-of-line declarator scope.**
   through `finish_member_destructor` as above (non-virtual). Tests:
   `expr.prim.id.dtor/run-qualified-destructor-template-id.cpp`,
   `expr.prim.id.dtor/qualified-destructor-template-id-errors.cpp`.
+  `classify_member_destructor_template` first instantiates a
+  non-dependent class template specialization object type, so its
+  injected-class-name is found (`p->~C<long>()` on the only use of
+  `N::C<long>`; WP-1155).
+  Pseudo-destructor template-ids and dependent scopes (WP-1155; the rule
+  is [basic.lookup.qual.general]/2-4 as rewritten by P1787R6, the CWG399
+  resolution; CWG2886 is unrelated). In `p->[S::]F::~Q` on a scalar or
+  dependent object, `F` and `Q` may be simple-template-ids
+  (`act_on_pseudo_destructor_type_q(base, qual, first, first_ty, name,
+  destroyed, ..)`): the template-name is looked up in `S` (4.2), else
+  here (4.3); one found only here after an `S` is clang's "no template
+  named 'A' in namespace 'N'; did you mean simply 'A'?"
+  (`sema_no_member_template_suggest`, at the qualifier, noting an alias
+  template at its `using`) and is used; a non-template is clang's
+  "use of undeclared 'Nope'" / "'v' does not refer to a template".
+  Each type-name must name the object's type as above. An alias-template
+  name `~A` without arguments is no type-name (an alias template has no
+  injected-class-name, 4.5): `p->A<int>::~A()` and `p->N::B<int>::~B()`
+  are `sema_pseudo_dtor_not_type`, and `p->A<T>::~A()` on a dependent
+  object is not the injected-class-name rule of `member_destructor_in`
+  (`is_alias_specialization`) but `p->~A()`, failing at instantiation as
+  clang ("undeclared identifier 'A' in destructor name"; on a
+  non-dependent scalar, `p->template A<T>::~A()` is
+  `sema_pseudo_dtor_not_type` at the definition). With a
+  dependent prefix `S` (`p->T::Inner::~Inner()`, `p->T::I::~I()`,
+  `p->T::template TI<int>::~TI()`) both type-names are the
+  typename-specifiers `S::F` and `S::Q`; the expression is a qualified
+  `CXXPseudoDestructorExpr` of `S::Q` with `S::F` and its location in
+  `TemplateTables::pseudo_dtor_first`, and instantiation
+  (`rebuild_pseudo_destructor_first`) checks the substituted `F` against
+  a scalar object after the destroyed type (clang's `ScopeType`; both
+  mismatches are reported, destroyed first). On a dependent object with
+  no prefix, a name found nowhere (`p->C<T>::~D()`) is looked up in the
+  object's class at instantiation (4.3, `dependent_destructor_name`).
+  Deliberate divergences: on a dependent object, clang 19/22 reject
+  `p->T::Inner::~Inner()` and `p->N::I::~B<T>()` at instantiation ("use
+  of undeclared identifier 'T'/'N'": no unqualified fallback for a
+  member-qualified name, /2); kiln accepts both, as GCC 16 does the
+  first. GCC 16 accepts `p->template A<T>::~A()` and `p->A<int>::~A()`;
+  kiln rejects them, as clang. With `T = int` the call does nothing but
+  evaluate its object expression; in constant evaluation it ends the
+  object's lifetime ([expr.prim.id.dtor]/2). Tests:
+  `expr.prim.id.dtor/run-pseudo-destructor-template-id.cpp`,
+  `pseudo-destructor-template-id-errors.cpp`,
+  `pseudo-destructor-template-id-lifetime-constexpr.cpp`,
+  `run-dependent-scope-pseudo-destructor.cpp` (GCC oracle) and
+  `run-dependent-object-prefix-pseudo-destructor.cpp` (kiln only).
   Inside a class template (its pattern, a partial specialization, or an
   out-of-line member), a destructor name found as the pattern's
   injected-class-name names the injected-class-name type
@@ -2947,9 +2994,22 @@ access, out-of-line declarator scope.**
   nested in `*`, `&`, `&&`, a function type (return and parameters), a
   member pointer, an array, declarator parentheses and the type arguments
   of a template-id (`W<void(typename C<X>::T)>`, `W<typename C<X>::T[2]>`,
-  `rebuild_ci_compound`; WP-1152). A `decltype` operand is not rebuilt (a
-  gap: clang's `RebuildExprInCurrentInstantiation`; xfail
-  `temp.dep.type/out-of-line-current-instantiation-decltype.cpp`). After a
+  `rebuild_ci_compound`; WP-1152). The expressions inside those types are
+  rebuilt too (clang's `RebuildExprInCurrentInstantiation`; WP-1154): a
+  `decltype` operand, a value-dependent array bound, a function type's
+  `noexcept` operand and an expression template argument
+  (`decltype(typename C<X>::T())`, `W<char[C<X>::N]>`,
+  `NX<void() noexcept(C<X>::B)>`, `I<C<X>::N + 1>`), so they are
+  equivalent to the in-class ones ([temp.over.link]/5).
+  `rebuild_ci_expr(e, qual)` runs the substituter with no argument levels
+  in its current-instantiation mode (`Substituter::ci_rebuild`) inside the
+  declarator scope: types go through `rebuild_ci_type`, and a `C<X>::m`
+  whose qualifier names the current instantiation and where lookup finds
+  `m` becomes the id-expression the class forms (`ci_member_ref`; a
+  member of a dependent base or a template-id stays dependent). Tests:
+  `temp.dep.type/out-of-line-current-instantiation-decltype.cpp`,
+  `temp.dep.type/out-of-line-current-instantiation-expr-run.cpp`,
+  `-expr-members-run.cpp`, `-expr-neg.cpp`. After a
   parenthesized declarator holding the qualified declarator-id
   (`X (*C<X>::f())(T)`), the parser enters the declarator scope again for
   the outer suffixes, so `T` there is found in `C<X>` (WP-1152,
@@ -2958,8 +3018,9 @@ access, out-of-line declarator scope.**
   (`sema_dtor_type_mismatch`, `note_dtor_type_found`,
   `sema_dtor_name_undeclared`, `sema_pseudo_dtor_*`) and
   `sema_qualified_member_of_unrelated`, with clang 19's text.
-- *Gaps*: a pseudo-destructor qualifier in a dependent scope
-  (`p->T::Inner::~Inner()`); dependent
+- *Gaps*: the first type-name of a dependent-scope pseudo-destructor
+  on a class object is not checked at instantiation (only on a scalar);
+  dependent
   `operator T()` printing in dumps; the "member has the same name as its
   class" error.
 - Tests: `tests/conformance/expr.ref/`, `dcl.meaning/`,

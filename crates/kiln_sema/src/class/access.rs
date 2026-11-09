@@ -739,10 +739,19 @@ impl Sema<'_, '_> {
             // instantiate to a befriended specialization: re-checked in
             // each instantiation of the innermost function or class
             // ([`Sema::replay_dependent_access`]).
-            if self.speculative_friend.take()
-                && let Some(k) = self.dependent_access_key(&ec)
-            {
-                self.dependent_access.entry(k).or_default().push(c);
+            if self.speculative_friend.take() {
+                // In a requires-expression's requirements the check is
+                // redone, as a substitution failure, wherever the
+                // requires-expression is evaluated: never as a hard
+                // error of the enclosing entity (clang's dependent
+                // diagnostics of the `RequiresExprBodyDecl`).
+                if let Some(again) = self.requires_access_replay.as_mut() {
+                    *again = true;
+                } else if let Some(body) = self.requires_body_ctx() {
+                    self.dependent_access.entry(body).or_default().push(c);
+                } else if let Some(k) = self.dependent_access_key(&ec) {
+                    self.dependent_access.entry(k).or_default().push(c);
+                }
             }
             return true;
         }
@@ -1256,6 +1265,59 @@ impl Sema<'_, '_> {
         }
         self.replaying_access = false;
         (self.ctx, self.initializing) = saved;
+    }
+
+    /// The `RequiresExprBody` of the innermost requires-expression whose
+    /// requirements are being formed in the current context, if no
+    /// function or class lies between them.
+    fn requires_body_ctx(&self) -> Option<DeclId> {
+        let mut cur = Some(self.access_start());
+        for _ in 0..10_000 {
+            let c = cur?;
+            match self.kind_of(c) {
+                DeclKind::RequiresExprBody => return Some(c),
+                DeclKind::CXXRecord
+                | DeclKind::ClassTemplateSpecialization
+                | DeclKind::ClassTemplatePartialSpecialization
+                | DeclKind::TranslationUnit
+                | DeclKind::Namespace => return None,
+                k if k.is_function() => return None,
+                _ => cur = self.ast.decls.get(c).ctx(),
+            }
+        }
+        None
+    }
+
+    /// Whether a requires-expression with body `body` must wait for an
+    /// instantiation: a check in its requirements passed only on a
+    /// speculative friend grant or dependent base.
+    pub(crate) fn requires_access_pending(&self, body: DeclId) -> bool {
+        self.dependent_access.contains_key(&body)
+    }
+
+    /// Re-runs, where a requires-expression with body `body` is
+    /// substituted and evaluated, the access checks of its requirements
+    /// that its pattern passed only speculatively ([expr.prim.req.general]/5,
+    /// spec/sema-templates.md §4.8). Called inside the requirement's
+    /// SFINAE frame, so a failure is a substitution failure. `None` when
+    /// one still passes only speculatively (a partial substitution); else
+    /// whether all passed.
+    pub(crate) fn replay_requires_access(&mut self, body: DeclId) -> Option<bool> {
+        let Some(checks) = self.dependent_access.get(&body).cloned() else { return Some(true) };
+        let records = self.effective_context().records;
+        let saved = self.requires_access_replay.replace(false);
+        let mut ok = true;
+        for mut c in checks {
+            if let Some(o) = c.object_class {
+                c.object_class = Some(self.instantiated_record(o, &records).unwrap_or(o));
+            }
+            if !self.run_access_check(c) {
+                ok = false;
+                break;
+            }
+        }
+        let again = std::mem::replace(&mut self.requires_access_replay, saved);
+        if ok && again == Some(true) { None } else { Some(ok) }
     }
 
     /// The record of `records` (an instantiation's effective context)

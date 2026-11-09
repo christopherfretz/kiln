@@ -871,7 +871,10 @@ pub struct Sema<'a, 'sm> {
     /// specialization) that passed only because the class may instantiate
     /// to a befriended specialization, keyed by the pattern's first
     /// declaration; re-run in each instantiation (clang's dependent access
-    /// diagnostics; spec/sema-templates.md §4.8).
+    /// diagnostics; spec/sema-templates.md §4.8). Those made in a
+    /// requires-expression's requirements are keyed by its
+    /// `RequiresExprBody` and re-run where it is evaluated
+    /// ([`Sema::replay_requires_access`]).
     pub(crate) dependent_access: kiln_source::fx::FxHashMap<DeclId, Vec<class::AccessCheck>>,
     /// Set by the access check when friendship came only from such a
     /// befriended specialization.
@@ -884,6 +887,9 @@ pub struct Sema<'a, 'sm> {
     pub(crate) access_failed: kiln_source::fx::FxHashSet<(DeclId, Loc, DeclId)>,
     /// True while [`Sema::replay_dependent_access`] runs.
     pub(crate) replaying_access: bool,
+    /// While [`Sema::replay_requires_access`] runs: set when a replayed
+    /// check passes only speculatively again (instead of recording it).
+    pub(crate) requires_access_replay: Option<bool>,
     /// The entity a failed initialization names in place of "a variable"
     /// (clang `InitializedEntity::EK_Temporary` "a value" for `T{x}`,
     /// `EK_New` "a new value"): a `sema_init_conversion_failed` select.
@@ -1452,6 +1458,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             std_meta_ns: std::cell::Cell::new(None),
             access_failed: kiln_source::fx::FxHashSet::default(),
             replaying_access: false,
+            requires_access_replay: None,
             init_entity: None,
             arith_warning: None,
             init_var: None,
