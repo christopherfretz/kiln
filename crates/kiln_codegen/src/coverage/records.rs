@@ -179,7 +179,11 @@ impl Cg<'_> {
     /// member functions defined in class `rd` (and its nested classes)
     /// get zero records unless emitted. A closure type is not a
     /// top-level declaration in clang, so an unused lambda gets none
-    /// (WP-1083).
+    /// (WP-1083). Only a definition the parser saw counts (clang calls it
+    /// from `ActOnFinishInlineFunctionDef`): a member of a class template
+    /// specialization (`extern template struct X<int>;` lists one in the
+    /// translation unit) was instantiated, and its record is deferred
+    /// where its instantiation ends, in `cov_defer_insts` (WP-1107).
     pub(crate) fn cov_defer_class(&mut self, rd: DeclId, depth: usize) {
         let ast = self.ast;
         if !self.opts.coverage.mapping || depth > 64 || ast.closure_lambda(rd).is_some() {
@@ -191,6 +195,7 @@ impl Cg<'_> {
             if n.has(DeclFlags::INVALID)
                 || n.has(DeclFlags::DEPENDENT_CTX)
                 || n.has(DeclFlags::IMPLICIT)
+                || ast.instantiated_from(m).is_some()
             {
                 continue;
             }

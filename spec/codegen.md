@@ -313,7 +313,19 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `Oven::set_fold_float_ub(true)`, so a global initialized by a NaN- or
     infinity-producing division (`0.0 / 0.0`, `1.0 / 0.0`) is a constant
     rather than a dynamic initializer, as clang's (WP-410,
-    `tests/codegen/nan_global_init.cpp`).
+    `tests/codegen/nan_global_init.cpp`). It also sets
+    `Oven::set_fold_leaks(true)` (WP-1108): a fold outside a constant
+    context may end with allocations still live, as long as its value
+    does not point at one, since clang's `CheckMemoryLeaks` is only a
+    `CCEDiag` there. So `(bool)new T` folds to `true` when clang's
+    `VisitCXXNewExpr` evaluates it (a replaceable global allocation
+    function, the nothrow form or the reserved placement form, and an
+    initializer that evaluates): `if (new int(4))` emits no allocation,
+    `?:`/`&&`/`||`/`!` drop the dead side, and `static bool b = new
+    int;` is the constant `true` (`tests/codegen/new_fold.cpp`,
+    `tests/conformance/expr.new/new-condition-fold.cpp`). A constant
+    expression ([expr.const]/5.20) and sema's evaluations keep the leak
+    check.
   - `fptosi`/`fptoui` of a constant (any format) fold toward zero; a NaN,
     an infinity or a value outside the destination's range is `poison`
     (`APFloat::convertToInteger` reporting `opInvalidOp`).
@@ -1638,14 +1650,31 @@ with no coverage flag the IR is unchanged, byte for byte.
     never reference) get none that way. A lambda's conversion function
     and static invoker are implicit, so a generic lambda's
     specializations of them have no record.
+  - *Order* (WP-1107, spec/landed/codegen/WP-1107.md): the zero records
+    and their names come in clang's `DeferredEmptyCoverageMappingDecls`
+    order (a `MapVector`: first deferral wins, a later use clears the
+    entry in place, `EmitDeferredUnusedCoverageMappings` walks it at the
+    end of the TU). Entries are added where clang adds them: a top-level
+    function definition (`EmitTopLevelDecl`), an inline member definition
+    the parser finished (`HandleInlineFunctionDefinition`, at the end of
+    its class: `cov_defer_class`), and an instantiated definition where
+    its instantiation ends (`cov_defer_insts`). A member of a class
+    template specialization (`extern template struct S<long>;`, an
+    implicit instantiation) was never parsed as an inline definition, so
+    `cov_defer_class` skips it (`Ast::instantiated_from`); its record
+    comes from its own instantiation, as clang's.
+  - *Folded `new` conditions* (WP-1108): a condition whose value is a
+    new-expression (`if (new int)`, `c || new (std::nothrow) int(4)`,
+    `!new T`) folds to `true` exactly when clang's `ConditionFoldsToBool`
+    folds it (the codegen fold prepass, §3: a replaceable global
+    allocation function, the nothrow form or the reserved placement
+    form, and an initializer that evaluates), so its branch regions are
+    those of a folded condition.
   - Without `-fcoverage-mapping` none of this is emitted, and the
     counters are WP-941's, byte for byte.
-  - *Differences from clang* (spec/landed/codegen/WP-1003.md,
-    spec/landed/codegen/WP-1082.md): zero records of instantiations
-    kiln performs at a different point than clang (a class-template
-    member at its first use, clang at the end of the TU) come in a
-    different order; a condition clang's constant folder folds and
-    kiln's does not (`c || new int`) keeps both counters.
+  - *Differences from clang*: none known in the records or the mapping
+    (spec/landed/codegen/WP-1003.md, WP-1082.md; WP-1107 removed the
+    last two, the zero-record order and the `(bool)new T` fold).
 - **Runtime.** Both modes link `libclang_rt.profile-<arch>.a` from the
   LLVM 19 compiler-rt (`/usr/lib/llvm-19/lib/clang/19/lib/linux/` on
   Debian, package `libclang-rt-19-dev`); the linking `clang++` adds it.
@@ -1869,6 +1898,45 @@ with no coverage flag the IR is unchanged, byte for byte.
 - Tests: `tests/codegen/optsize_os.cpp`, `optsize_oz.cpp`,
   `delete_oz.cpp` (exact under oracle 19, structural under 22, both
   targets).
+
+### clang `annotate` (WP-1113, `annotate.rs`)
+clang's `[[clang::annotate("str", args...)]]` (sema: spec/sema.md §4.5)
+has three lowerings, the same in clang 19 and 22, so `-fclang-compat=19`
+changes nothing:
+- **Globals and functions:** one `{ptr, ptr, ptr, i32, ptr}` entry per
+  attribute in `@llvm.global.annotations` (appending, section
+  `llvm.metadata`). It is emitted after `@llvm.global_dtors` and before the
+  coverage globals and `@llvm.used` (clang `Release`).
+  - A variable is annotated when it is defined, a static local after its
+    initializer (clang `AddGlobalAnnotations`).
+  - A function is recorded when it is first created, then annotated at the
+    end of the module with its latest redeclaration (clang
+    `DeferredAnnotations`). Structors are annotated as C2/D2; thunks are
+    not.
+  - Inherited attributes come before a declaration's own. An inherited one
+    whose string the declaration already has is dropped (clang
+    `mergeDeclAttributes`).
+- **Locals and parameters:** `call void @llvm.var.annotation.p0.p0(ptr
+  %addr, ptr str, ptr file, i32 line, ptr args)` after the alloca and its
+  `dbg.declare`, before the initializer; for a parameter, after its store.
+- **Fields:** each annotation of the member chains
+  `@llvm.ptr.annotation.p0.p0` on the member's address. It comes after the
+  GEP, after the load for a reference member, and on the base address for
+  a union member. A bit-field and the binding of a reference member get
+  none.
+- **Operands, in clang's evaluation order (string, file, line, args):**
+  - The strings and file names share one cache of private `unnamed_addr`
+    `.str` constants in `llvm.metadata`, with no `align`.
+  - The file and line are presumed (`#line` applies).
+  - Args are `ptr null` when there are none. Otherwise they are a private
+    `.args` constant struct of the arguments' constant values (clang
+    `emitAbstract`: `bool` is `i1`), shared by arguments whose values have
+    the same clang `APValue` profile. Integers are profiled in 32-bit
+    chunks, so `1`, `1u` and `true` share one struct and `1L` does not; a
+    string argument is an ordinary literal and so never shares.
+- **Statements:** clang 22 accepts `annotate` on a statement and emits
+  nothing for it, and neither does kiln.
+- Details and deviations: spec/landed/codegen/WP-1113.md.
 
 ### TBAA (WP-412, `tbaa.rs`)
 - **When.** `Cg::tbaa_on`: `CodegenOptions::optimize && strict_aliasing`

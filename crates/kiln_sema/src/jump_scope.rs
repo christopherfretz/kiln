@@ -13,6 +13,11 @@
 //! address is taken (`&&l`; not an `asm goto` label), so it is
 //! checked against each scope holding such a label with the `asm goto`
 //! rule (clang `VerifyIndirectJumps`); `goto *&&l` is an ordinary goto.
+//!
+//! The walk enters the bodies of the lambdas the function contains (as
+//! clang's does, WP-455): their labels and jumps join the function's, so
+//! an outer `goto *p` is checked against a label whose address a lambda
+//! takes.
 
 use kiln_ast::decl::{DeclKind, InitStyle, VarStorage};
 use kiln_ast::expr::{CastKind, ExprKind, StorageDuration};
@@ -353,6 +358,17 @@ impl Checker<'_, '_, '_> {
         }
         for c in ast.exprs.children(e, &ast.lists) {
             self.expr(c, parent);
+        }
+        // clang's `LambdaExpr::children` ends with the body: its labels,
+        // address-taken labels and jumps join the enclosing function's
+        // (an outer `goto *p` may reach a label whose address the lambda
+        // takes; a bad jump inside it is diagnosed by both functions).
+        // A local class's members and default arguments are not walked.
+        if n.kind() == ExprKind::LambdaExpr
+            && let Some(body) = ast.exprs.lambdas.get(kiln_ast::LambdaId::new(n.a())).body
+        {
+            let mut p = *parent;
+            self.stmt(body, &mut p);
         }
     }
 

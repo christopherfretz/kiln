@@ -178,9 +178,12 @@ builds share the cache safely. `-fmodules-cache-path=<dir>` moves it,
 and `-fno-kiln-module-cache` (or an empty `-fmodules-cache-path=`)
 turns it off. An unwritable cache is not an error: kiln builds the
 module from its source, as it does with the cache off, and says so under
-`-v`. Today a cached module costs the same as building it in-process
-(1.5 s and 96 MiB for `import std;` plus a small `main`, harness build,
-aarch64), because module files hold sources. The first compile also
+`-v`. As clang does with its module cache, kiln prunes it: about once
+a week (`-fmodules-prune-interval=<seconds>`) a compile removes the
+entries unused for 31 days (`-fmodules-prune-after=<seconds>`), such as
+those of an older kiln; 0 for either turns pruning off. Today a cached
+module costs the same as building it in-process (1.5 s and 96 MiB for
+`import std;` plus a small `main`, harness build, aarch64), because module files hold sources. The first compile also
 fills the cache (2.5 s, 140 MiB).
 
 `-print-file-name=libc++.modules.json` prints libc++'s module manifest,
