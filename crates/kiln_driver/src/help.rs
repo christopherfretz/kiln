@@ -170,6 +170,11 @@ MODULES:
                           Also write the BMI when compiling an interface
   -fprebuilt-module-path=<dir>
                           Look for BMIs in <dir>
+  -fmodules-cache-path=<dir>
+                          Keep the cached std and std.compat modules in <dir>
+  -fkiln-module-cache, -fno-kiln-module-cache
+                          [kiln] Cache the std and std.compat modules for
+                          import std (default on)
 
 LINKING:
   -fuse-ld=<linker>       Link with <linker> (bfd, gold, lld, ...)
@@ -407,6 +412,8 @@ mod tests {
             "--precompile",
             "-fmodule-file=[<module>=]<file>",
             "-fprebuilt-module-path=<dir>",
+            "-fmodules-cache-path=<dir>",
+            "-fno-kiln-module-cache",
             "-fcontract-evaluation-semantic=<semantic>",
             "-fclang-compat=<major>",
             "--llvm-dir=<dir>",

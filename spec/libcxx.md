@@ -249,7 +249,7 @@ A keyword must not directly follow a letter, a digit or `_`.
 | `ADDITIONAL_COMPILE_FLAGS: f…` | Whitespace-split. Appended to the compile line in file order. |
 | `ADDITIONAL_COMPILE_FLAGS(<feature>): f…` | Appended after the plain flags when `<feature>` is exactly in the feature set, or is exactly `clang` (`DIALECT_FLAG_FEATURES`, see "Feature set"). |
 | `FILE_DEPENDENCIES: a, b` | Each file, relative to the test's directory, is copied into the scratch directory. A missing file, a glob or a `%{…}` makes the test UNSUPPORTED (`driver: FILE_DEPENDENCIES`). |
-| `MODULE_DEPENDENCIES:` | `std` and `std.compat` need no build step: kiln builds them in-process from libc++'s module sources (spec/modules.md §2). With a package tree ("Toolchain") kiln's own search would find the system libc++'s `std.cppm`, not the tree's, so the test gets `-fprebuilt-module-path=<prefix>/share/libc++/v1` for the tree's `<prefix>/include/c++/v1` when that directory holds `std.cppm` (kiln mode only; `Config::module_source_flags`). Any other module makes the test UNSUPPORTED (`driver: modules`). |
+| `MODULE_DEPENDENCIES:` | `std` and `std.compat` need no build step: kiln builds them in-process from libc++'s module sources (spec/modules.md §2). With a package tree ("Toolchain") kiln's own search would find the system libc++'s `std.cppm`, not the tree's, so the test gets `-fprebuilt-module-path=<prefix>/share/libc++/v1` for the tree's `<prefix>/include/c++/v1` when that directory holds `std.cppm` (kiln mode only; `Config::module_source_flags`). Any other module makes the test UNSUPPORTED (`driver: modules`). A `.sh.cpp` test gets `format.py`'s module build instead (see "RUN lines"; WP-984). |
 | `ALLOW_RETRIES: N` | A failing run step is retried up to `N` more times (see "Timeouts and retries"). `N` must be an integer, and the keyword may appear once; otherwise the test is an ERROR (lit's `ParserKind.INTEGER`). |
 | `RUN:` | Read only in `.sh.<ext>` tests, where they are the steps (see "RUN lines"); a line ending in `\` continues on the next `RUN:` line. Elsewhere `format.py` ignores them, and so does the driver. |
 
@@ -312,10 +312,25 @@ anything else like the run step, retried under `ALLOW_RETRIES:`. stdout
 joins stderr in the failure detail. UNSUPPORTED instead: a `%{name}`
 that is neither built in nor resolved (`driver: substitution %{name}`;
 `%{python}`, the install-layout `%{lib-dir}`/`%{include-dir}`,
-`%{gdb}`), and `RUN:` lines in a test with `MODULE_DEPENDENCIES:`
-(`driver: RUN lines with MODULE_DEPENDENCIES (format.py --precompile)`:
-`format.py` precompiles the modules into BMIs for them, which the driver
-does not reproduce).
+`%{gdb}`).
+
+A `.sh.cpp` test with `MODULE_DEPENDENCIES:` gets `format.py`'s module
+build (libc++ 19 lines 157-197, WP-984; `run.rs` `module_build`). Before
+its `RUN:` lines, `std` and then `std.compat` (when named) are
+precompiled with `%{cxx} %{flags} %{compile_flags}
+-Wno-reserved-module-identifier -Wno-reserved-user-defined-literal
+[-fmodule-file=std=%T/std.pcm] --precompile -o %T/<m>.pcm -c
+<module-dir>/<m>.cppm`. These are compile steps, using the flags without
+the module flags. `%{compile_flags}` of the `RUN:` lines then gains
+`-fmodule-file=std.compat=%T/std.compat.pcm %T/std.compat.pcm` (when
+named), then `-fmodule-file=std=%T/std.pcm %T/std.pcm`. `<module-dir>`
+is `<prefix>/share/libc++/v1` for the `<prefix>/include/c++/v1` the tests
+compile against (the package tree's, else the toolchain's libc++;
+`Config::module_dir`). Without a `std.cppm` there, the test is
+UNSUPPORTED (`driver: MODULE_DEPENDENCIES without libc++ module
+sources`). The same build runs in clang mode. This covers libc++'s
+`libcxx/selftest/modules/` (4 tests, all PASS under kiln and
+clang++-22).
 
 ### Clang mode
 

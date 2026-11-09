@@ -169,9 +169,31 @@ compiler wrapper, say), configure with
 `-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=<prefix>/bin/kiln-scan-deps`
 ([spec/modules.md](../spec/modules.md) §11.9).
 
+**`import std;`** (libc++, `-stdlib=libc++`) needs no flags. kiln builds
+libc++'s `std` and `std.compat` modules once per toolchain configuration
+into a module cache, `$XDG_CACHE_HOME/kiln/modules` (else
+`~/.cache/kiln/modules`), and later compiles reuse them. Concurrent
+builds share the cache safely. `-fmodules-cache-path=<dir>` moves it,
+and `-fno-kiln-module-cache` (or an empty `-fmodules-cache-path=`)
+turns it off. An unwritable cache is not an error: kiln builds the
+module from its source, as it does with the cache off, and says so under
+`-v`. Today a cached module costs the same as building it in-process
+(1.5 s and 96 MiB for `import std;` plus a small `main`, harness build,
+aarch64), because module files hold sources. The first compile also
+fills the cache (2.5 s, 140 MiB).
+
+`-print-file-name=libc++.modules.json` prints libc++'s module manifest,
+so CMake's **`CXX_MODULE_STD`** (3.30+) works with `kiln++`. CMake
+requires its experimental gate, set before `project()`:
+`CMAKE_EXPERIMENTAL_CXX_IMPORT_STD` =
+`0e5b6991-d74f-4b3d-a41c-cf096e0b2508` for 3.30 and 3.31,
+`a9e1cf81-9932-4810-974b-6eccaf14e457` for 4.0, and
+`d0edc3af-4c50-42ea-a356-e2862fe7a444` for 4.1 and 4.2. It also needs
+`-stdlib=libc++` and `CXX_STANDARD 23`. CMake then builds `std.cppm`
+with kiln like any other module.
+
 Not yet supported:
 
-- `import std;` through CMake (`CXX_MODULE_STD`);
 - header units as module files (`-fmodule-header`), so the scanner
   rejects `import "h";` with an error.
 

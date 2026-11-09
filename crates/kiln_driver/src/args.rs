@@ -503,6 +503,13 @@ pub struct Args {
     pub module_output: Option<(String, Option<String>)>,
     /// `-fprebuilt-module-path=<dir>`, in order.
     pub prebuilt_module_paths: Vec<String>,
+    /// `-fmodules-cache-path=<dir>` (the last one): the toolchain's
+    /// module-file cache for `std` and `std.compat` (spec/modules.md
+    /// §11.12, spec/driver.md "Module cache"); an empty value disables it.
+    pub modules_cache_path: Option<String>,
+    /// `-fno-kiln-module-cache` (false) / `-fkiln-module-cache` (true), the
+    /// last one: whether `import std;` uses the module-file cache.
+    pub module_cache: Option<bool>,
     /// Set by `kiln-scan-deps` (not an option): the preprocessor records
     /// module directives instead of importing (spec/modules.md §11.9).
     pub scan_deps: bool,
@@ -968,6 +975,8 @@ impl Args {
             "-fsyntax-only" => self.action = Action::SyntaxOnly,
             "--precompile" => self.precompile = true,
             "-fmodule-output" => self.module_output = Some((arg.to_owned(), None)),
+            "-fkiln-module-cache" => self.module_cache = Some(true),
+            "-fno-kiln-module-cache" => self.module_cache = Some(false),
             "-c" => (self.action, self.compile.object) = (Action::Compile, true),
             "-S" => (self.action, self.compile.assembly) = (Action::Compile, true),
             "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),
@@ -1156,6 +1165,8 @@ impl Args {
                     self.time_trace.push(arg.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fprebuilt-module-path=") {
                     self.prebuilt_module_paths.push(v.to_owned());
+                } else if let Some(v) = arg.strip_prefix("-fmodules-cache-path=") {
+                    self.modules_cache_path = Some(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fdump-ast-filter=") {
                     self.dump_ast_filter = Some(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fdump-ast=") {

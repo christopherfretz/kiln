@@ -1498,6 +1498,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     (spec/sema-conv.md §8).
   - Adjacent string literals are concatenated
     (`act_on_string_literal(pieces, unevaluated, ud_loc)`).
+    Pieces with two different ud-suffixes get `differing user-defined
+    suffixes ('_x' and '_y') in string literal concatenation`
+    ([lex.ext]/8). It is reported at the second suffix's piece. A piece
+    without a suffix takes the other's suffix (WP-1017; test
+    `lex.ext/differing-ud-suffixes.cpp`).
   - A user-defined literal suffix goes to Sema as `ud_loc`, and Sema
     reports clang's `no matching literal operator`.
 - **`sizeof...(x)`:**

@@ -2,9 +2,9 @@
 // algorithms and views; non-exported libc++ internals stay invisible.
 //@ expect: run
 //@ std: c++26
-//@ args: -stdlib=libc++
+//@ args: -stdlib=libc++ -Wno-reserved-module-identifier
+//@ module: std=%{libcxx_modules}/std.cppm
 //@ stdout: 4 16 36
-//@ skip(clang): clang needs a prebuilt std BMI (two-step --precompile of libc++'s std.cppm) that the harness cannot drive
 import std;
 
 int main() {
