@@ -244,8 +244,7 @@ impl Sema<'_, '_> {
         // head of an abbreviated member template is the inner one.
         let invented = self.open_invented_head_list();
         let inner_head = written || invented.is_some();
-        let inner_list =
-            invented.or_else(|| self.innermost_open_head_list().filter(|_| written));
+        let inner_list = invented.or_else(|| self.innermost_open_head_list().filter(|_| written));
         self.take_open_heads();
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         self.templ.cur = None;
@@ -358,16 +357,8 @@ impl Sema<'_, '_> {
             && outer.depth() == usize::from(pattern.depth)
             && outer.substituted() == outer.depth())
         .then(|| outer.clone());
-        let mf = MemberFriend {
-            nns,
-            depth,
-            fn_ty,
-            enclosing,
-            template,
-            args,
-            path,
-            ..pattern.clone()
-        };
+        let mf =
+            MemberFriend { nns, depth, fn_ty, enclosing, template, args, path, ..pattern.clone() };
         self.register_member_friend(fd, mf);
         Some(fd)
     }
@@ -645,7 +636,8 @@ impl Sema<'_, '_> {
             let outer = self.inst.concepts.member_constraints.get(&e).map(|(_, o)| o.clone());
             (vec![r], outer)
         };
-        if ours.len() != theirs.len() || ours.iter().zip(&theirs).any(|(a, b)| a.is_some() != b.is_some())
+        if ours.len() != theirs.len()
+            || ours.iter().zip(&theirs).any(|(a, b)| a.is_some() != b.is_some())
         {
             return false;
         }

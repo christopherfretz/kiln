@@ -285,7 +285,10 @@ impl Sema<'_, '_> {
     /// `AreConstraintExpressionsEqual` substituting each side's
     /// enclosing arguments). A constraint that fails to substitute is
     /// left out.
-    pub(crate) fn member_cmp_constraints(&mut self, x: DeclId) -> kiln_source::fx::FxHashMap<ExprId, ExprId> {
+    pub(crate) fn member_cmp_constraints(
+        &mut self,
+        x: DeclId,
+    ) -> kiln_source::fx::FxHashMap<ExprId, ExprId> {
         use crate::templ::args::LevelMode;
         let mut m = kiln_source::fx::FxHashMap::default();
         let Some((pt, outer)) = self.inst.concepts.member_constraints.get(&x).cloned() else {
