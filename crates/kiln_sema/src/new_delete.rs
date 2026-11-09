@@ -21,8 +21,8 @@ use crate::class::{CtorCall, DeletedAs, DiagSites, InitEntity, Selected, Special
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{Chunk, DeclSpec, Declarator};
 use crate::init::{InitList, InitValue, Initializer};
-use crate::switch_conv::ContextualConv;
 use crate::overload::alloc::{AllocFns, DeallocWant};
+use crate::switch_conv::ContextualConv;
 use crate::templ::ctad::CtadInit;
 use crate::{EvalContext, Sema};
 
@@ -509,8 +509,11 @@ impl Sema<'_, '_> {
         } else {
             None
         };
-        let (typed_fns, untyped_fns): (Vec<DeclId>, Vec<DeclId>) =
-            alloc.fns.iter().chain(&alloc.templates).partition(|&&d| self.is_type_aware_alloc_fn(d));
+        let (typed_fns, untyped_fns): (Vec<DeclId>, Vec<DeclId>) = alloc
+            .fns
+            .iter()
+            .chain(&alloc.templates)
+            .partition(|&&d| self.is_type_aware_alloc_fn(d));
         let mut found = None;
         if ti.is_some() && !typed_fns.is_empty() {
             found = self.find_operator_new_template(
@@ -1630,7 +1633,8 @@ impl Sema<'_, '_> {
         if !found.in_class {
             return Ok(best.first().map(|u| (u.f, u.sized)));
         }
-        let op = self.ast.decls.get(all[0]).name().as_operator().unwrap_or(OverloadedOperator::Delete);
+        let op =
+            self.ast.decls.get(all[0]).name().as_operator().unwrap_or(OverloadedOperator::Delete);
         let name = format!("operator {}", op.spelling());
         let class = self.tag_type(found.naming.unwrap_or(self.ast.tu));
         match best[..] {
@@ -1642,10 +1646,8 @@ impl Sema<'_, '_> {
                         && self.ast.decls.get(f).has(DeclFlags::INVALID)
                 }) {
                     let elem = self.ast.types.unqualified(class);
-                    let fns: Vec<DeclId> = all
-                        .iter()
-                        .map(|&f| self.templated_function(f).unwrap_or(f))
-                        .collect();
+                    let fns: Vec<DeclId> =
+                        all.iter().map(|&f| self.templated_function(f).unwrap_or(f)).collect();
                     self.no_suitable_delete(op, elem, &fns, loc);
                 }
                 Err(())
@@ -2126,7 +2128,8 @@ impl Sema<'_, '_> {
         // up first ([expr.delete]/9).
         let found = self.alloc_fns(elem, op, global || !complete, loc);
         let usual = if self.global_ops.seen_type_aware {
-            match self.typed_usual_delete(&found, pointee, aligned, want_sized, !array, (loc, true)) {
+            match self.typed_usual_delete(&found, pointee, aligned, want_sized, !array, (loc, true))
+            {
                 Ok(u) => u,
                 Err(()) => return self.recover_err(&[operand], loc),
             }
@@ -2338,10 +2341,7 @@ impl Sema<'_, '_> {
             // destructor.
             let cls = self.tag_type(class);
             let this_ty = self.ast.types.pointer_to(cls);
-            let at = self
-                .param_decls(op)
-                .first()
-                .map_or(loc, |&p| self.ast.decls.get(p).loc());
+            let at = self.param_decls(op).first().map_or(loc, |&p| self.ast.decls.get(p).loc());
             let this = self.builder().this_expr(this_ty, true, at);
             let note = self.diag(DiagId::note_implicit_delete_this_in_destructor_here, loc);
             *self.trailing_notes.borrow_mut() = vec![note.clone()];

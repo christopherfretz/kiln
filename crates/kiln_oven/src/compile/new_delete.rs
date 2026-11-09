@@ -574,8 +574,7 @@ pub(crate) fn is_type_aware_global_alloc(ast: &Ast, d: DeclId) -> bool {
         return false;
     }
     params.len() == required
-        || (params.len() == required + 1
-            && is_std_record(ast, params[required], "nothrow_t"))
+        || (params.len() == required + 1 && is_std_record(ast, params[required], "nothrow_t"))
 }
 
 /// Whether `d` is a replaceable global allocation (`Some(true)`) or

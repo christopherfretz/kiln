@@ -10,8 +10,8 @@
 //! `new_delete.rs`.
 
 use kiln_ast::decl::{DeclFlags, DeclKind};
-use kiln_ast::types::{ExcSpec, FuncInfo};
 use kiln_ast::names::{DeclName, OverloadedOperator};
+use kiln_ast::types::{ExcSpec, FuncInfo};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -221,7 +221,12 @@ impl Sema<'_, '_> {
     /// type_identity<ty>`, destroying, size and alignment parameters.
     /// `None` when it is not a usual deallocation function, or a
     /// type-aware one for another type.
-    fn usual_dealloc_info(&mut self, found: DeclId, ty: QualType, loc: Loc) -> Option<UsualDealloc> {
+    fn usual_dealloc_info(
+        &mut self,
+        found: DeclId,
+        ty: QualType,
+        loc: Loc,
+    ) -> Option<UsualDealloc> {
         let template = self.kind_of(found) == DeclKind::FunctionTemplate;
         let size_t = self.size_type();
         let al = self.global_ops.align_val_t;
@@ -340,7 +345,8 @@ impl Sema<'_, '_> {
         let (_, tmpl) = self.std_class_template("type_identity")?;
         let name = self.template_name_for(tmpl);
         let ty = self.ast.types.unqualified(ty);
-        let Ok(TemplateIdRef::Type(t)) = self.act_template_id(name, &[TemplateArg::ty(ty)], loc, loc)
+        let Ok(TemplateIdRef::Type(t)) =
+            self.act_template_id(name, &[TemplateArg::ty(ty)], loc, loc)
         else {
             return None;
         };

@@ -203,9 +203,8 @@ impl Sema<'_, '_> {
         let loc = self.ast.decls.get(f).loc();
         let ptys: Vec<QualType> =
             params.iter().map(|&p| self.ast.decls.get(p).ty().unwrap_or(QualType::INT)).collect();
-        let class = (self.kind_of(f) == DeclKind::CXXMethod)
-            .then(|| self.ast.decls.get(f).ctx())
-            .flatten();
+        let class =
+            (self.kind_of(f) == DeclKind::CXXMethod).then(|| self.ast.decls.get(f).ctx()).flatten();
         let vp = self.ast.types.pointer_to(QualType::VOID);
         let class_ptr = class.map(|c| {
             let ct = self.injected_tag_type(c).unwrap_or_else(|| self.tag_type(c));
@@ -214,9 +213,7 @@ impl Sema<'_, '_> {
         });
         // A type-aware destroying delete: clang names it rather than
         // reporting the parameter types that follow from it.
-        if !new
-            && let (Some(cp), Some(&p1)) = (class_ptr, ptys.get(1))
-        {
+        if !new && let (Some(cp), Some(&p1)) = (class_ptr, ptys.get(1)) {
             let p1 = self.ast.types.canonical(p1);
             if !self.ast.types.same_type(p1, vp)
                 && self.ast.types.same_type(p1, cp)
@@ -364,7 +361,8 @@ impl Sema<'_, '_> {
         let ct = ct.unwrap_or_else(|| self.tag_type(r));
         let class = self.scoped_ty_arg(ct);
         let rloc = self.ast.decls.get(r).loc();
-        for (n, d, new_op, delete_op) in [(0, 1, O::New, O::Delete), (2, 3, O::ArrayNew, O::ArrayDelete)]
+        for (n, d, new_op, delete_op) in
+            [(0, 1, O::New, O::Delete), (2, 3, O::ArrayNew, O::ArrayDelete)]
         {
             if found[n].is_empty() == found[d].is_empty() {
                 continue;
@@ -424,8 +422,10 @@ impl Sema<'_, '_> {
     /// argument: fully scoped (`'resumable3::promise_type'`).
     pub(crate) fn scoped_ty_arg(&self, q: QualType) -> String {
         let names = crate::names::SemaNames::new(self);
-        let opts =
-            kiln_ast::types::PrintOptions { full_scope: true, ..kiln_ast::types::PrintOptions::SUGARED };
+        let opts = kiln_ast::types::PrintOptions {
+            full_scope: true,
+            ..kiln_ast::types::PrintOptions::SUGARED
+        };
         format!("'{}'", kiln_ast::types::print_type(&self.ast.types, &names, q, opts))
     }
 
