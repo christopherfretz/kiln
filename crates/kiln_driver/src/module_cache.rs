@@ -48,13 +48,24 @@
 //! its modification time, so the last module file and the last stamp
 //! renamed into place could come from different racers and the entry was
 //! a miss for the next compile.
+//!
+//! Pruning (WP-1050), as clang prunes its implicit module cache
+//! ([`maybe_prune`]): after its first lookup, a compile checks
+//! `<root>/modules.timestamp`; once that is older than
+//! `-fmodules-prune-interval=` (7 days) it is updated and every other
+//! entry whose last use is older than `-fmodules-prune-after=` (31 days)
+//! is removed, unless a compile holds one of its locks
+//! ([`prune_entry`]). The last use is the newest modification time of the
+//! entry's files, and a hit refreshes its stamp's at most once a day
+//! ([`note_use`]); clang reads access times instead.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use kiln_diag::DiagOptions;
 
@@ -76,6 +87,26 @@ pub const DEFAULT_WAIT: Duration = Duration::from_mins(2);
 /// The environment variable that replaces [`DEFAULT_WAIT`], in
 /// milliseconds (kiln's tests).
 const WAIT_ENV: &str = "KILN_MODULE_CACHE_WAIT_MS";
+
+/// clang's default `-fmodules-prune-interval=` (seconds): the cache is
+/// checked for unused entries at most once a week.
+pub const DEFAULT_PRUNE_INTERVAL: u32 = 7 * 24 * 60 * 60;
+
+/// clang's default `-fmodules-prune-after=` (seconds): an entry unused
+/// for 31 days is removed.
+pub const DEFAULT_PRUNE_AFTER: u32 = 31 * 24 * 60 * 60;
+
+/// The file in the cache root whose modification time is the last
+/// pruning (clang's name for it).
+const TIMESTAMP: &str = "modules.timestamp";
+
+/// At most how often a hit refreshes its stamp's modification time (the
+/// entry's last use), unless `-fmodules-prune-after=` is shorter.
+const NOTE_USE_EVERY: Duration = Duration::from_hours(24);
+
+/// The suffix a pruner renames `<name>.stamp` to while it removes the
+/// entry (see [`prune_entry`]).
+const PRUNING: &str = ".pruning";
 
 /// The cache's root directory for `args` (`-fmodules-cache-path=`, then
 /// `$XDG_CACHE_HOME/kiln/modules`, then `$HOME/.cache/kiln/modules`), or
@@ -113,6 +144,41 @@ struct StdCache {
     diag_opts: DiagOptions,
     /// `-v`: where the cache says what it did.
     verbose: Option<SharedWriter>,
+    /// The pruning rules, or `None` when pruning is off.
+    prune: Option<Prune>,
+    /// Whether this compile has checked the cache for unused entries
+    /// (once per compile, after its first lookup).
+    pruned: AtomicBool,
+}
+
+/// `-fmodules-prune-interval=` and `-fmodules-prune-after=`, both
+/// positive (either 0 turns pruning off, as in clang).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Prune {
+    /// How often the cache is checked.
+    pub interval: Duration,
+    /// How long an entry may go unused.
+    pub after: Duration,
+}
+
+impl Prune {
+    /// The rules of `args` (clang's defaults for a flag not given), or
+    /// `None` when either is 0.
+    pub fn from_args(args: &Args) -> Option<Prune> {
+        let interval = args.modules_prune_interval.unwrap_or(DEFAULT_PRUNE_INTERVAL);
+        let after = args.modules_prune_after.unwrap_or(DEFAULT_PRUNE_AFTER);
+        (interval > 0 && after > 0).then(|| Prune {
+            interval: Duration::from_secs(interval.into()),
+            after: Duration::from_secs(after.into()),
+        })
+    }
+
+    /// How old an entry's last use may get before a hit refreshes it:
+    /// a day, or half of `after` when that is shorter, so that an entry
+    /// a pruner finds unused was not hit since it was last refreshed.
+    fn note_use_every(prune: Option<Prune>) -> Duration {
+        prune.map_or(NOTE_USE_EVERY, |p| NOTE_USE_EVERY.min(p.after / 2))
+    }
 }
 
 /// The cache for one importing compile, or `None` when it is off. `predefines`
@@ -153,6 +219,8 @@ pub(crate) fn for_job(
         std: job.std,
         diag_opts: job.diag_opts.clone(),
         verbose: a.verbose.then(|| job.stderr.clone()),
+        prune: Prune::from_args(a),
+        pruned: AtomicBool::new(false),
     };
     let cache = Rc::new(cache);
     Some(kiln_pp::StdModuleCache(Rc::new(move |name: &str, source: &Path| {
@@ -190,14 +258,31 @@ impl StdCache {
     /// the files its build read as its stamp lists them (the same on a
     /// hit and on a miss, for the importer's dependency file, WP-1051);
     /// `None` to build the unit from its source.
+    /// After the compile's first lookup, hit or miss, the cache is
+    /// checked for unused entries ([`maybe_prune`]).
     fn lookup(&self, name: &str, source: &Path) -> Option<(PathBuf, Vec<String>)> {
         let dir = self.entry_dir(source);
+        let found = self.lookup_in(&dir, name, source);
+        if !self.pruned.swap(true, Ordering::Relaxed)
+            && let Some(p) = self.prune
+        {
+            maybe_prune(&self.root, p, &dir, &|m: &str| self.remark(m));
+        }
+        found
+    }
+
+    /// [`Self::lookup`] in the entry `dir`.
+    fn lookup_in(&self, dir: &Path, name: &str, source: &Path) -> Option<(PathBuf, Vec<String>)> {
+        let note_every = Prune::note_use_every(self.prune);
         let pcm = dir.join(format!("{name}.pcm"));
         let stamp = dir.join(format!("{name}.stamp"));
         let lock_path = dir.join(format!("{name}.lock"));
         // A hit takes no lock: the stamp first, then the module file it
-        // vouches for.
-        if let Some(inputs) = entry_valid(&stamp, &pcm) {
+        // vouches for, then the use noted on the stamp, which also checks
+        // that no pruner took the entry meanwhile (else it is a miss).
+        if let Some(inputs) = entry_valid(&stamp, &pcm)
+            && note_use(&stamp, note_every)
+        {
             // A lock file here was left by a compile killed while it held
             // it; it is removed when free (never waiting for it).
             if lock_path.exists()
@@ -208,16 +293,24 @@ impl StdCache {
             self.remark(&format!("using '{}' for '{name}'", pcm.display()));
             return Some((pcm, inputs));
         }
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            self.remark(&format!(
-                "cannot create '{}': {e}; building '{name}' from its source",
-                dir.display()
-            ));
-            return None;
+        let mut acquired = Err(std::io::ErrorKind::NotFound.into());
+        // Twice: a pruner may remove the directory just created.
+        for _ in 0..2 {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                self.remark(&format!(
+                    "cannot create '{}': {e}; building '{name}' from its source",
+                    dir.display()
+                ));
+                return None;
+            }
+            acquired = EntryLock::acquire(&lock_path, wait_limit(), || {
+                self.remark(&format!("waiting for another compile building '{name}'"));
+            });
+            if !matches!(&acquired, Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
+                break;
+            }
         }
-        let lock = match EntryLock::acquire(&lock_path, wait_limit(), || {
-            self.remark(&format!("waiting for another compile building '{name}'"));
-        }) {
+        let lock = match acquired {
             Ok(Some(lock)) => lock,
             Ok(None) => {
                 self.remark(&format!(
@@ -235,14 +328,15 @@ impl StdCache {
             }
         };
         // Another compile may have published the entry while this one
-        // waited.
+        // waited (no pruner holds the lock now, so the use noted is kept).
         if let Some(inputs) = entry_valid(&stamp, &pcm) {
+            note_use(&stamp, note_every);
             self.remark(&format!("using '{}' for '{name}'", pcm.display()));
             return Some((pcm, inputs));
         }
         // Only a holder of this lock writes these temporary files, so any
         // there now belongs to a holder that was killed.
-        remove_temporaries(&dir, name);
+        remove_temporaries(dir, name);
         self.remark(&format!("building '{name}' into '{}'", pcm.display()));
         let files = match self.build(source, &pcm) {
             Ok(files) => files,
@@ -250,7 +344,7 @@ impl StdCache {
                 // Leave no empty entry behind (a no-op when the entry
                 // holds anything else).
                 drop(lock);
-                let _ = std::fs::remove_dir(&dir);
+                let _ = std::fs::remove_dir(dir);
                 self.remark(&format!("{why}; building '{name}' from its source"));
                 return None;
             }
@@ -481,17 +575,225 @@ fn wait_limit() -> Duration {
         .map_or(DEFAULT_WAIT, Duration::from_millis)
 }
 
+/// Notes a use of the entry whose stamp is `stamp` (a hit): sets the
+/// stamp's modification time to now when it is older than `every` (so a
+/// hit writes at most once a day), through a handle opened on it. Only
+/// the stamp is touched, never the module file, which importers'
+/// dependency files list (WP-1051). `false` when the stamp is gone or
+/// another file is at its path now: a pruner took the entry (it renames
+/// the stamp before checking the last use, [`prune_entry`]), so this is
+/// a miss. A stamp that cannot be touched (a cache another user owns)
+/// is still a hit.
+fn note_use(stamp: &Path, every: Duration) -> bool {
+    let Ok(f) = std::fs::File::open(stamp) else { return false };
+    let now = SystemTime::now();
+    if let Ok(t) = f.metadata().and_then(|m| m.modified())
+        && now.duration_since(t).is_ok_and(|age| age > every)
+    {
+        let _ = f.set_modified(now);
+    }
+    same_file(&f, stamp)
+}
+
+/// How long ago `t` was (zero for a time in the future, as clang's
+/// signed difference never exceeds a limit then).
+fn age(now: SystemTime, t: SystemTime) -> Duration {
+    now.duration_since(t).unwrap_or(Duration::ZERO)
+}
+
+/// Whether `name` is a cache key: 32 lowercase hex digits ([`Fnv128`]).
+/// Pruning looks at nothing else in the root, so a root shared with
+/// other files (clang's own module cache, say) keeps them.
+fn is_key(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_some_and(|n| {
+        n.len() == 32 && n.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
+}
+
+/// clang's module-cache pruning (`maybePruneImpl`, clang/lib/Serialization/
+/// ModuleCache.cpp in clang 22; `pruneModuleCache` in
+/// clang/lib/Frontend/CompilerInstance.cpp in clang 19), for the entries
+/// of `root` other than `current` (this compile's own):
+///
+/// - `<root>/modules.timestamp` missing: create it and stop (the first
+///   pruning is one interval after the cache's first use);
+/// - its modification time no older than `p.interval`: stop;
+/// - else set it to now, then remove every entry unused for longer than
+///   `p.after` ([`prune_entry`]).
+///
+/// Unlike clang, the compile that updates the timestamp holds an
+/// advisory lock on it and checks the time again under the lock, so one
+/// compile prunes per interval (clang: "a benign race"), and a timestamp
+/// that cannot be updated (a read-only cache) means no pruning rather
+/// than pruning on every compile. Nothing here fails the compile.
+fn maybe_prune(root: &Path, p: Prune, current: &Path, remark: &dyn Fn(&str)) {
+    let ts = root.join(TIMESTAMP);
+    let meta = match std::fs::symlink_metadata(&ts) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let _ = std::fs::OpenOptions::new().write(true).create_new(true).open(&ts);
+            return;
+        }
+        Err(_) => return,
+    };
+    let now = SystemTime::now();
+    let stale = |m: &std::fs::Metadata| m.modified().is_ok_and(|t| age(now, t) > p.interval);
+    if !meta.is_file() || !stale(&meta) {
+        return;
+    }
+    let Ok(f) = std::fs::OpenOptions::new().read(true).write(true).open(&ts) else { return };
+    if f.try_lock().is_err() {
+        return;
+    }
+    // Another compile may have pruned between the check and the lock.
+    if !f.metadata().is_ok_and(|m| m.is_file() && stale(&m)) || f.set_modified(now).is_err() {
+        return;
+    }
+    remark(&format!("pruning '{}'", root.display()));
+    let Ok(rd) = std::fs::read_dir(root) else { return };
+    for e in rd.flatten() {
+        let path = e.path();
+        // `symlink_metadata`: a link is never followed out of the root.
+        if path == current
+            || !is_key(&e.file_name())
+            || !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir())
+        {
+            continue;
+        }
+        prune_entry(&path, p.after, now, remark);
+    }
+}
+
+/// The newest modification time of the files in the entry `dir` other
+/// than lock files (which a pruner creates itself): its stamps (a hit
+/// refreshes its stamp, [`note_use`]), its module files and their
+/// temporaries (a build writes them); `None` when there is none. Not the
+/// access time clang uses: `noatime` and `relatime` mounts do not keep it,
+/// and anything reading the files (a backup, an indexer) would update it.
+fn last_use(dir: &Path) -> Option<SystemTime> {
+    let rd = std::fs::read_dir(dir).ok()?;
+    rd.flatten()
+        .filter(|e| Path::new(&e.file_name()).extension() != Some("lock".as_ref()))
+        .filter_map(|e| std::fs::symlink_metadata(e.path()).ok())
+        .filter(std::fs::Metadata::is_file)
+        .filter_map(|m| m.modified().ok())
+        .max()
+}
+
+/// The module name a file of an entry belongs to: `<name>.pcm`,
+/// `<name>.stamp`, `<name>.lock`, or a temporary or pruned form of them.
+fn entry_file_name(file: &str) -> Option<&str> {
+    for sep in [".pcm.tmp.", ".stamp.tmp."] {
+        if let Some(at) = file.find(sep) {
+            return Some(&file[..at]);
+        }
+    }
+    let file = file.strip_suffix(PRUNING).unwrap_or(file);
+    [".pcm", ".stamp", ".lock"].iter().find_map(|s| file.strip_suffix(s))
+}
+
+/// Removes the entry `dir` (every file in it, then the directory) when
+/// its [`last_use`] is older than `after`, unless a compile uses it:
+///
+/// 1. it takes the lock of every module the entry has files for (and of
+///    `std` and `std.compat`), never waiting: a lock another compile
+///    holds (it builds, or waits to) keeps the entry, as does a file for
+///    a module not locked;
+/// 2. it renames each `<name>.stamp` to `<name>.stamp.pruning`, so a hit
+///    that has not noted its use yet finds no stamp and misses (and waits
+///    for these locks), then checks the last use again, which counts a
+///    hit that noted its use before the rename (through its handle on
+///    the stamp, [`note_use`]); a use found renames the stamps back;
+/// 3. it removes the entry's files (never a directory in it, and a link
+///    as a link), releases the locks, which removes their files, and
+///    removes the directory if it is then empty.
+///
+/// A removal that fails is said under `-v` and otherwise ignored.
+fn prune_entry(dir: &Path, after: Duration, now: SystemTime, remark: &dyn Fn(&str)) {
+    let unused = |d: &Path| last_use(d).is_none_or(|t| age(now, t) > after);
+    if !unused(dir) {
+        return;
+    }
+    let files = |d: &Path| -> Vec<(String, PathBuf)> {
+        std::fs::read_dir(d)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut names: Vec<String> = vec!["std".into(), "std.compat".into()];
+    for (f, _) in files(dir) {
+        if let Some(n) = entry_file_name(&f)
+            && !names.iter().any(|m| m == n)
+        {
+            names.push(n.to_owned());
+        }
+    }
+    let mut locks = Vec::new();
+    for n in &names {
+        match EntryLock::acquire(&dir.join(format!("{n}.lock")), Duration::ZERO, || {}) {
+            Ok(Some(l)) => locks.push(l),
+            _ => return,
+        }
+    }
+    // A compile that created a lock for another module meanwhile.
+    let listed = files(dir);
+    if listed.iter().any(|(f, _)| entry_file_name(f).is_none_or(|n| !names.iter().any(|m| m == n)))
+    {
+        return;
+    }
+    let stamp = |n: &str| dir.join(format!("{n}.stamp"));
+    let pruning = |n: &str| dir.join(format!("{n}.stamp{PRUNING}"));
+    let renamed: Vec<&String> =
+        names.iter().filter(|n| std::fs::rename(stamp(n), pruning(n)).is_ok()).collect();
+    if !unused(dir) {
+        for n in renamed {
+            let _ = std::fs::rename(pruning(n), stamp(n));
+        }
+        return;
+    }
+    let held: Vec<PathBuf> = names.iter().map(|n| dir.join(format!("{n}.lock"))).collect();
+    let mut failed = false;
+    for (_, path) in files(dir) {
+        if held.contains(&path) || std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
+            continue;
+        }
+        if let Err(e) = std::fs::remove_file(&path) {
+            failed = true;
+            remark(&format!("cannot remove '{}': {e}", path.display()));
+        }
+    }
+    drop(locks);
+    match std::fs::remove_dir(dir) {
+        Ok(()) => remark(&format!("removed unused '{}'", dir.display())),
+        // Removed by another pruner, or a compile about to build there
+        // created its lock file once these locks were released.
+        Err(e)
+            if failed
+                || matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                ) => {}
+        Err(e) => remark(&format!("cannot remove '{}': {e}", dir.display())),
+    }
+}
+
 /// Removes the temporary files of `name`'s module file and stamp in
-/// `dir` (`<name>.pcm.tmp.*`, `<name>.stamp.tmp.*`): called by the holder
-/// of `name`'s lock, the only compile that writes them, so any found is
-/// left by a holder that was killed.
+/// `dir` (`<name>.pcm.tmp.*`, `<name>.stamp.tmp.*`) and a stamp a pruner
+/// renamed (`<name>.stamp.pruning`): called by the holder of `name`'s
+/// lock, the only compile that writes them (a pruner holds the lock while
+/// its renamed stamp exists), so any found is left by a holder that was
+/// killed.
 fn remove_temporaries(dir: &Path, name: &str) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     let prefixes = [format!("{name}.pcm.tmp."), format!("{name}.stamp.tmp.")];
+    let pruning = format!("{name}.stamp{PRUNING}");
     for e in rd.flatten() {
         let file_name = e.file_name();
         let Some(n) = file_name.to_str() else { continue };
-        if prefixes.iter().any(|p| n.starts_with(p.as_str())) {
+        if n == pruning || prefixes.iter().any(|p| n.starts_with(p.as_str())) {
             let _ = std::fs::remove_file(e.path());
         }
     }
@@ -584,9 +886,8 @@ fn same_file(_file: &std::fs::File, path: &Path) -> bool {
 /// Writes `bytes` to `path` through a temporary file beside it, named
 /// for this process, thread and moment, renamed into place.
 fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.subsec_nanos());
+    let nanos =
+        SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(format!(".tmp.{}.{:?}.{nanos}", std::process::id(), std::thread::current().id()));
     let tmp = PathBuf::from(tmp);
@@ -660,6 +961,66 @@ mod tests {
         assert_eq!(root_from(&no, env(Some("/x"), None)), None);
         let back = args(&["-fno-kiln-module-cache", "-fkiln-module-cache", "x.cpp"]);
         assert_eq!(root_from(&back, env(Some("/x"), None)), Some("/x/kiln/modules".into()));
+    }
+
+    /// WP-1050: the pruning rules from the flags (clang's defaults; 0
+    /// turns pruning off), and how often a hit notes its use.
+    #[test]
+    fn prune_rules() {
+        let day = Duration::from_hours(24);
+        let p = Prune::from_args(&args(&["x.cpp"])).unwrap();
+        assert_eq!((p.interval, p.after), (7 * day, 31 * day));
+        assert_eq!(Prune::note_use_every(Some(p)), day);
+        assert_eq!(Prune::note_use_every(None), day);
+        let p = Prune::from_args(&args(&["-fmodules-prune-after=600", "x.cpp"])).unwrap();
+        assert_eq!(Prune::note_use_every(Some(p)), Duration::from_mins(5));
+        assert_eq!(Prune::from_args(&args(&["-fmodules-prune-interval=0", "x.cpp"])), None);
+        assert_eq!(Prune::from_args(&args(&["-fmodules-prune-after=0", "x.cpp"])), None);
+        assert!(is_key(std::ffi::OsStr::new(&"0123456789abcdef".repeat(2))));
+        assert!(!is_key(std::ffi::OsStr::new(&"0123456789ABCDEF".repeat(2))));
+        assert!(!is_key(std::ffi::OsStr::new("modules.timestamp")));
+        for (f, n) in [
+            ("std.pcm", Some("std")),
+            ("std.compat.stamp", Some("std.compat")),
+            ("std.compat.lock", Some("std.compat")),
+            ("std.pcm.tmp.42", Some("std")),
+            ("std.compat.stamp.tmp.1.ThreadId(1).2", Some("std.compat")),
+            ("std.stamp.pruning", Some("std")),
+            ("notes.txt", None),
+        ] {
+            assert_eq!(entry_file_name(f), n, "{f}");
+        }
+    }
+
+    /// WP-1050: a hit refreshes its stamp at most once per `every`, and
+    /// misses once a pruner has renamed the stamp away.
+    #[test]
+    fn note_use_refreshes_and_sees_a_pruner() {
+        let dir = std::env::temp_dir().join(format!("kiln-note-use-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stamp = dir.join("std.stamp");
+        std::fs::write(&stamp, "s").unwrap();
+        let age_of =
+            |f: &Path| age(SystemTime::now(), std::fs::metadata(f).unwrap().modified().unwrap());
+        let set_age = |f: &Path, secs: u64| {
+            let t = SystemTime::now() - Duration::from_secs(secs);
+            std::fs::File::options().write(true).open(f).unwrap().set_modified(t).unwrap();
+        };
+        let day = Duration::from_hours(24);
+        set_age(&stamp, 3600);
+        assert!(note_use(&stamp, day));
+        assert!(age_of(&stamp) >= Duration::from_hours(1), "refreshed at most daily");
+        set_age(&stamp, 2 * 86_400);
+        assert!(note_use(&stamp, day));
+        assert!(age_of(&stamp) < Duration::from_mins(1));
+        let pruning = dir.join("std.stamp.pruning");
+        std::fs::rename(&stamp, &pruning).unwrap();
+        assert!(!note_use(&stamp, day));
+        // Restored, or another file in its place: only the first is a hit.
+        std::fs::rename(&pruning, &stamp).unwrap();
+        assert!(note_use(&stamp, day));
+        std::fs::remove_file(&stamp).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
     }
 
     #[test]

@@ -271,6 +271,8 @@ pub(crate) struct Cg<'a> {
     pub gi: crate::global_init::GlobalInits,
     /// TBAA node caches (`!tbaa`, `!tbaa.struct`).
     pub tbaa: crate::tbaa::TbaaCache,
+    /// `annotate` attribute state (WP-1113).
+    pub(crate) ann: crate::annotate::Annotations,
     /// Debug information (`-g`; spec/codegen.md "Debug information").
     pub di: Option<Box<crate::debuginfo::Di<'a>>>,
     /// Source-based coverage mapping state (WP-1003).
@@ -476,6 +478,7 @@ impl<'a> Cg<'a> {
             cov: crate::coverage::records::CovModule::default(),
             anon: mangle::AnonIds::with_reflection_mangling(opts.reflection_mangling),
             tbaa: crate::tbaa::TbaaCache::default(),
+            ann: crate::annotate::Annotations::default(),
             vis_active: opts.visibility != Visibility::Default
                 || opts.type_visibility != Visibility::Default
                 || opts.inlines_hidden
@@ -2541,6 +2544,7 @@ impl<'a> Cg<'a> {
             }
             _ => self.declare_fn(&name, first, &sig)?,
         };
+        self.ann_note_fn(&name, first);
         self.fns.insert(first, f);
         if let Some(def) = self.deferred.remove(&first) {
             self.to_emit.push(Def::Decl(def));
@@ -3122,6 +3126,7 @@ impl<'a> Cg<'a> {
             gv.linkage = Linkage::External;
             gv.dso_local = true;
         }
+        self.add_global_annotations(d, gval(g))?;
         self.note_used_attrs(d, gval(g));
         if needs_init || needs_dtor {
             self.emit_var_init_fn(d, g, needs_init)?;

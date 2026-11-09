@@ -670,10 +670,25 @@ than `ics2[k]` and the first applicable of:
    reference kind as the target, `c2` does not;
 4. /2.4 `c1` non-template, `c2` a template specialization;
 5. /2.5 both specializations and `more_specialized_function` picks `c1`'s
-   template (WP-071; `None` until then);
-6. /2.6 both non-template, same parameter-type-lists (after reversal, object
-   parameters included) and `more_constrained(c1, c2)` (WP-073; false until
-   then);
+   template (WP-071). For operators, `more_specialized_operator`
+   ([temp.func.order]/3) deduces with the parameters of `c2`'s template
+   reversed when exactly one of the two is a reversed candidate. Equally
+   specialized, the more constrained wins ([temp.func.order]/6), but the
+   /6.2.2 same-parameter-types check compares the parameters **as
+   declared**: clang ("Match GCC on not implementing
+   [temp.func.order]p6.2.1") and GCC do not reverse them (WP-1111;
+   `order.rs::constraints_comparable`). So for `t < ls` with libstdc++'s
+   `operator<(const sys_time<D>&, const leap_second&)` and the
+   constrained `operator<=>(const leap_second&, const sys_time<D>&)`
+   used reversed, neither template is more specialized and /2.8 picks
+   `operator<`; with `ls < t` (not reversed) the constrained `<=>` is
+   more specialized and wins;
+6. /2.6 both non-template, same non-object parameter-type-lists, `c2`'s
+   compared reversed when exactly one of the two is a reversed candidate
+   (clang `sameFunctionParameterTypeLists`; `best.rs::
+   same_param_type_lists`), and `more_constrained(c1, c2)` (WP-073). A
+   more constrained `operator<=>(const W&, const T&)` used reversed thus
+   beats `operator<(const T&, const W&)` before /2.8 (WP-1111);
 7. /2.7 `c1` constructor of `D`, `c2` inherited from base `B`, same
    parameter types;
 8. /2.8 `c2` rewritten, `c1` not;
@@ -683,6 +698,15 @@ than `ics2[k]` and the first applicable of:
     arguments are the same (P2582, spec/sema-templates.md §6.6.1); declared
     guide beats generated; copy deduction candidate; non-template-ctor guide
     beats template-ctor guide.
+
+The ICS comparison (/2.1) always decides before any of /2.4-2.9, so a
+rewritten or reversed candidate with a better conversion for some operand
+and no worse one wins over a non-rewritten candidate, and conversions
+better for one operand each make the use ambiguous ("use of overloaded
+operator '<' is ambiguous", a reversed candidate noted "candidate function
+(with reversed parameter order)"). Tests: `over.match.best/rewritten-*.cpp`
+(each printing the selected operator, checked against clang 19 and 22),
+`over.match.oper/p2468-eq-ne-suppression.cpp` (§5.1).
 
 Clang extras: reversed-operator acceptance kept (§5.3); the rest dropped (§9.3).
 
@@ -831,7 +855,12 @@ searching `operator!=` in the scope where `F` was found (its class for
 members, its namespace otherwise; no ADL) finds a function corresponding to
 `F` ([basic.scope.scope]/4). Verified: with a matching `operator!=`, `a ==
 a` on a non-const member `operator==` has no reversed candidate and no
-warning. A selected rewritten `==` must return cv `bool`, else clang's
+warning. The search is a qualified lookup in that scope, so a hidden
+friend `operator!=` is not found and does not suppress the reversed
+candidate of a hidden friend `operator==`, while a namespace-scope
+`operator!=` declared after the class does; a namespace-scope `!=` never
+suppresses a member `==`, nor does one in another namespace or with other
+parameter types. A selected rewritten `==` must return cv `bool`, else clang's
 `err_ovl_rewrite_equalequal_not_bool` (wording copied by 068b).
 
 ### 5.2 Building the result

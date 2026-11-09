@@ -1039,7 +1039,21 @@ impl Sema<'_, '_> {
     /// positionally corresponding function parameters have the same type
     /// ignoring top-level cv ([dcl.fct]/5), and, for conversion
     /// functions, the conversion types are the same.
+    ///
+    /// The parameters are compared in declaration order even when one
+    /// side is a reversed rewritten candidate: clang ("Match GCC on not
+    /// implementing [temp.func.order]p6.2.1") and GCC do not apply
+    /// /6.2.1, so `template<class D> bool operator<(const sys_time<D>&,
+    /// const leap_second&)` and a constrained `operator<=>(const
+    /// leap_second&, const sys_time<D>&)` used reversed are not
+    /// comparable by constraints and the non-rewritten `operator<` wins
+    /// by [over.match.best.general]/2.8 (WP-1111).
     fn constraints_comparable(&mut self, a: DeclId, sa: Side, b: DeclId, sb: Side) -> bool {
+        let unreversed = |s: Side| match s {
+            Side::Call { nargs, object, .. } => Side::Call { nargs, object, reverse: false },
+            Side::Conversion => Side::Conversion,
+        };
+        let (sa, sb) = (unreversed(sa), unreversed(sb));
         let heads = |s: &Self, t: DeclId| {
             let i = s.ast.template_info(t)?;
             let l = *s.ast.templates.param_list(i.params);
@@ -1063,7 +1077,8 @@ impl Sema<'_, '_> {
     /// The function parameter types of `ft` compared by
     /// [`Self::constraints_comparable`]: all declared parameters, after
     /// an inserted object parameter and reversed as `side` says
-    /// ([temp.func.order]/3), or the conversion type.
+    /// ([temp.func.order]/3; that caller never reverses), or the
+    /// conversion type.
     fn declared_param_types(&mut self, ft: DeclId, side: Side) -> Option<Vec<QualType>> {
         let f = self.templated_function(ft)?;
         match side {
