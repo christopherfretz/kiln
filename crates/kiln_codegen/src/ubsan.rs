@@ -794,23 +794,57 @@ impl Cg<'_> {
 
     /// The overflow check kind of integer arithmetic in `q`, if the
     /// function checks it (clang `EmitAdd`/`EmitSub`/`EmitMul`).
+    /// Under `-ftrapv` (clang `SOB_Trapping`) signed arithmetic the
+    /// sanitizer leaves alone is checked too, as the empty kind.
     pub(crate) fn ub_overflow_kind(&self, q: QualType) -> Option<San> {
-        if !self.ub_int(q) || self.f.san.is_empty() {
+        if !self.ub_int(q) {
             return None;
         }
+        let signed = self.is_signed(q);
+        let k = if signed { San::SIGNED_INTEGER_OVERFLOW } else { San::UNSIGNED_INTEGER_OVERFLOW };
+        if self.ub_on(k) {
+            return Some(k);
+        }
+        (signed && self.opts.trapv).then_some(San::NONE)
+    }
+
+    /// clang 20+ `ASTContext::isTypeIgnoredBySanitizer`: whether a
+    /// `type:` entry of the ignorelist names `q` (unqualified, as clang
+    /// prints it) for `k`. clang 19 has no `type:` check of arithmetic.
+    pub(crate) fn ub_type_ignored(&self, k: San, q: QualType) -> bool {
+        if self.opts.clang_compat < 22 {
+            return false;
+        }
+        let Some(list) = self.opts.ignorelist.as_deref() else { return false };
+        let names = match self.sm {
+            Some(sm) => AstNames::with_sources(self.ast, sm),
+            None => AstNames::new(self.ast),
+        };
+        let s = print_type(&self.ast.types, &names, q, PrintOptions::SUGARED);
+        let mut s = s.as_str();
+        while let Some(r) = ["const ", "volatile ", "restrict "].iter().find_map(|p| s.strip_prefix(p))
+        {
+            s = r;
+        }
+        list.contains(k, "type", s, "", true)
+    }
+
+    /// clang 20+ `CanElideOverflowCheck`'s ignorelist step: the sanitizer
+    /// of `q`'s signedness ignores the type.
+    fn ub_overflow_type_ignored(&self, q: QualType) -> bool {
         let k = if self.is_signed(q) {
             San::SIGNED_INTEGER_OVERFLOW
         } else {
             San::UNSIGNED_INTEGER_OVERFLOW
         };
-        self.ub_on(k).then_some(k)
+        self.ub_type_ignored(k, q)
     }
 
     /// The flags of unchecked integer arithmetic in `q` (`nsw` when
     /// `signed`): a signed check the function could make but elided keeps
     /// `nsw` even under `-fwrapv` (clang `EmitAdd`'s fallthrough).
     pub(crate) fn ub_nsw(&self, q: QualType, signed: bool) -> Flags {
-        if signed && self.ub_overflow_kind(q) == Some(San::SIGNED_INTEGER_OVERFLOW) {
+        if signed && self.ub_overflow_kind(q).is_some() {
             Flags::NSW
         } else {
             self.nsw_if(signed)
@@ -828,7 +862,7 @@ impl Cg<'_> {
         q: QualType,
     ) -> R<Option<V>> {
         let Some(k) = self.ub_overflow_kind(q) else { return Ok(None) };
-        if self.ub_can_elide(e, op, l, r, q) {
+        if self.ub_can_elide(e, op, l, r, q) || self.ub_overflow_type_ignored(q) {
             return Ok(None);
         }
         let h = match op {
@@ -846,18 +880,24 @@ impl Cg<'_> {
         let t = self.f.fir.ty(&self.m, v);
         let z = self.icn(t, 0);
         let can_overflow = !self.ast.exprs.get(e).has(kiln_ast::expr::ExprFlags::CANNOT_OVERFLOW);
-        if !self.ub_may_overflow(BinaryOp::Sub, z, v, self.is_signed(q)) || !can_overflow {
+        if !self.ub_may_overflow(BinaryOp::Sub, z, v, self.is_signed(q))
+            || self.ub_overflow_type_ignored(q)
+            || !can_overflow
+        {
             return Ok(None);
         }
-        let h = UbHandler::NegateOverflow;
+        // `-ftrapv` traps a negation as the subtraction clang emits it as.
+        let h = if k.is_empty() { UbHandler::SubOverflow } else { UbHandler::NegateOverflow };
         self.ub_overflow(e, BinaryOp::Sub, z, v, q, k, h, &[v]).map(Some)
     }
 
     /// clang skips the `atomicrmw` form of `++`, `--` and compound
     /// assignment on an `_Atomic` unsigned integer of value type `vq`
-    /// when unsigned-integer-overflow checks it.
+    /// when unsigned-integer-overflow checks it, and on any integer under
+    /// `-ftrapv` (`SOB_Trapping`).
     pub(crate) fn ub_atomic_unsigned_checked(&self, vq: QualType) -> bool {
-        self.ub_on(San::UNSIGNED_INTEGER_OVERFLOW) && self.ub_int(vq) && !self.is_signed(vq)
+        self.opts.trapv
+            || (self.ub_on(San::UNSIGNED_INTEGER_OVERFLOW) && self.ub_int(vq) && !self.is_signed(vq))
     }
 
     /// The checked increment or decrement `old ± 1` of `e`, or `None`.
@@ -867,7 +907,9 @@ impl Cg<'_> {
         let q = self.ast.exprs.get(e).ty();
         let vq = self.ast.types.as_atomic(q).unwrap_or(q);
         let Some(k) = self.ub_overflow_kind(vq) else { return Ok(None) };
-        if self.ast.exprs.get(e).has(kiln_ast::expr::ExprFlags::CANNOT_OVERFLOW) {
+        if self.ast.exprs.get(e).has(kiln_ast::expr::ExprFlags::CANNOT_OVERFLOW)
+            || self.ub_overflow_type_ignored(vq)
+        {
             return Ok(None);
         }
         let t = self.f.fir.ty(&self.m, old);
@@ -910,13 +952,97 @@ impl Cg<'_> {
         let pair = self.intrinsic_call_ty(f, vec![l, r], rty);
         let v = self.f.fir.push(Op::ExtractValue { agg: pair, idx: 0 }, ty);
         let ovf = self.f.fir.push(Op::ExtractValue { agg: pair, idx: 1 }, LTy::I1);
+        if let Some(name) = self.opts.trapv_handler.clone() {
+            let r = self.ub_overflow_handler(&name, op, signed, l, r, v, ovf);
+            self.ub_end(outer);
+            return r;
+        }
         let t = V::C(self.m.const_bool(true));
         let ok = self.bin(BinOp::Xor, Flags::NONE, ovf, t);
+        if k.is_empty() {
+            // `-ftrapv` alone: a bare trap (clang `EmitTrapCheck`).
+            let r = self.ub_trap_check(ok, h, false);
+            self.ub_end(outer);
+            return r.map(|()| v);
+        }
         let loc = self.ub_loc(Some(self.loc_of(e).unwrap_or_default()))?;
         let desc = self.ub_type(q)?;
         let r = self.ub_check(&[(ok, k)], h, &[loc, desc], dynamics);
         self.ub_end(outer);
         r.map(|()| v)
+    }
+
+    /// clang `EmitOverflowCheckedBinOp` under `-ftrapv-handler=name`
+    /// (every overflow check, the sanitizers' too): on `ovf`, the result
+    /// `v` of `l op r` is `name(sext l, sext r, op id, width)` in a block
+    /// at the function's end, merged by a `phi` after the current block.
+    #[allow(clippy::too_many_arguments)]
+    fn ub_overflow_handler(
+        &mut self,
+        name: &str,
+        op: BinaryOp,
+        signed: bool,
+        l: V,
+        r: V,
+        v: V,
+        ovf: V,
+    ) -> R<V> {
+        let ty = self.f.fir.ty(&self.m, v);
+        let Some(initial) = self.f.fir.cur() else { return err(None, "no insert point") };
+        let cont = self.f.fir.create_block();
+        self.f.fir.place_after(initial, cont);
+        let ovf_bb = self.f.fir.create_block();
+        self.f.fir.place_at_end(ovf_bb);
+        self.f.fir.push(Op::CondBr { c: ovf, t: ovf_bb, f: cont }, LTy::VOID);
+        self.f.fir.set_cur(Some(ovf_bb));
+        let f = match self.m.get_function(name) {
+            Some(f) => f,
+            None => {
+                let params = [LTy::I64, LTy::I64, LTy::I8, LTy::I8];
+                let fty = self.m.types.function(LTy::I64, &params, true);
+                match self.m.add_function(name, fty) {
+                    Ok(f) => f,
+                    Err(e) => return err(None, format!("cannot declare `{name}`: {e:?}")),
+                }
+            }
+        };
+        let w = self.m.types.int_width(ty).unwrap_or(64);
+        // clang's `CreateSExt` to `i64` (a wider operand is narrowed).
+        let wide = |cg: &mut Self, x: V| match w.cmp(&64) {
+            std::cmp::Ordering::Less => cg.cast(CastOp::SExt, x, LTy::I64),
+            std::cmp::Ordering::Equal => x,
+            std::cmp::Ordering::Greater => cg.cast(CastOp::Trunc, x, LTy::I64),
+        };
+        let (l64, r64) = (wide(self, l), wide(self, r));
+        let id = match op {
+            BinaryOp::Add => 1,
+            BinaryOp::Sub => 2,
+            _ => 3,
+        } << 1
+            | i128::from(signed);
+        let args = vec![
+            l64,
+            r64,
+            V::C(self.m.const_int(LTy::I8, id)),
+            V::C(self.m.const_int(LTy::I8, i128::from(w.min(255)))),
+        ];
+        let fn_ty = self.m.func(f).ty();
+        let fa = self.m.attr_set(&[Attr::Flag(AttrKind::NoUnwind)]);
+        let opts =
+            CallOpts { attrs: AttrList { func: fa, ..AttrList::default() }, ..CallOpts::default() };
+        let res = self.f.fir.push(
+            Op::Call { fn_ty, callee: V::C(Value::func(f)), args, opts: Box::new(opts) },
+            LTy::I64,
+        );
+        self.f.calls.push((Fir::last_inst(res), Some(f), true));
+        let res = match w.cmp(&64) {
+            std::cmp::Ordering::Less => self.cast(CastOp::Trunc, res, ty),
+            std::cmp::Ordering::Equal => res,
+            std::cmp::Ordering::Greater => self.cast(CastOp::SExt, res, ty),
+        };
+        self.f.fir.push(Op::Br { dest: cont }, LTy::VOID);
+        self.f.fir.set_cur(Some(cont));
+        Ok(self.f.fir.push(Op::Phi { ty, inc: vec![(v, initial), (res, ovf_bb)] }, ty))
     }
 
     /// clang `EmitUndefinedBehaviorIntegerDivAndRemCheck` before `l / r`
