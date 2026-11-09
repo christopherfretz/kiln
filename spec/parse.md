@@ -687,6 +687,28 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `static_assert`, `thread_local`, `alignas`, `alignof`, `char16_t`,
     `char32_t`) stay keywords in every mode, where clang makes them
     identifiers before C++11 too (a follow-up).
+  - The C++20 keywords `concept`, `consteval`, `constinit`, `co_await`,
+    `co_return`, `co_yield` and `requires` (clang `CXX20_KEYWORD` /
+    `COROUTINES_KEYWORD`, `KEYCXX20` / `KEYCOROUTINES` in TokenKinds.def;
+    clang has no `-fcoroutines` driver flag, so the mode alone decides)
+    are identifiers before C++20 (`keywords::CXX20_KEYWORDS`, removed in
+    `Parser::new`), as `char8_t` is under `-fno-char8_t`/before C++20: so
+    `consteval int f();` in C++17 is "unknown type name 'consteval'" and
+    `int requires(int co_await);` declares a function (WP-1134,
+    `lex.key/cxx20-keywords-cxx17.cpp`, `-cxx20.cpp`,
+    `dcl.constexpr/consteval-constinit-cxx17.cpp`). `__is_identifier`
+    follows the same table. clang's "did you mean 'constexpr'?" typo
+    correction of an unknown keyword-like type name is not modelled.
+  - GNU `__auto_type` (clang `KEYALL`, `TST_auto_type`) is a keyword in
+    every mode: a type-specifier that is a placeholder with keyword
+    `AutoKeyword::GnuAutoType`, warned by `-Wgnu-auto-type` (in `-Wgnu`,
+    `-pedantic`; `parse_gnu_auto_type`). It deduces as `auto` does for
+    variables, but it is no C++ placeholder anywhere else
+    (spec/sema-templates.md §6.3, "Positions that forbid a
+    placeholder"); `__auto_type(1)` is no functional cast ("expected
+    expression"). `decltype(auto)` before C++14 warns "'decltype(auto)'
+    type specifier is a C++14 extension" (`-Wc++14-extensions`,
+    `parse_decltype_auto_ext`).
 - **Bracket depth:** `bump` tracks `(`, `[` and `{` nesting, like
   clang's `ParenCount`/`BracketCount`/`BraceCount`.
 - **Expected tokens:**
@@ -1405,7 +1427,15 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `[nns] type-name :: ~ type-name`, the last `type-name ::` is not a
     nested-name-specifier but the pseudo-destructor's first type-name
     (clang's `MayBePseudoDestructor`; `parse_pseudo_destructor`). Both
-    go to `Sema::act_on_member_destructor_q` (WP-223). `~decltype(e)`
+    go to `Sema::act_on_member_destructor_q` (WP-223). On a class
+    object, the template-id of `x.~C<T>()` or `x.N::~C<T>()` is
+    classified with `Sema::classify_member_destructor_template` (the
+    qualifier, its prefix, the object's class) and goes to
+    `Sema::act_on_member_destructor_type_q`. If the name is not a
+    template, the argument list is skipped and
+    `Sema::diagnose_destructor_non_template` reports it (WP-1152). A
+    template-id on the pseudo-destructor path is still `unsupported`.
+    `~decltype(e)`
     after `.`/`->` ([expr.prim.id.dtor]/1, a computed-type-specifier) is
     parsed with `parse_decltype_specifier` and passed to
     `rebuild_member_destructor` (`~decltype(auto)` is the

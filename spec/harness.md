@@ -1081,7 +1081,10 @@ of `ci`; its contract is spec/landed/harness/WP-666.md. It builds each
 project against libstdc++ by default, and against the system libc++ 19
 (the library clang++-19 uses, so kiln and the clang-19 control link the
 same one) with `oss-build.sh --stdlib libc++`, whose build trees and
-reports are kept apart (`<compiler>-libcxx`, WP-694).
+reports are kept apart (`<compiler>-libcxx`, WP-694). Rows that use
+C++20 modules (`modules = true`) build with Ninja and the compiler's
+dependency scanner, kiln-scan-deps for kiln and clang-scan-deps-19 for
+the control (spec/landed/harness/WP-1148.md).
 
 `cargo xtask features` ("Feature table") is not part of `ci` either: it is a
 manual / M4-gate check.

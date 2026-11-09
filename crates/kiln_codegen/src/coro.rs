@@ -628,6 +628,11 @@ impl Cg<'_> {
         self.start_fp();
         self.f.func = Some(f);
         self.f.decl = decl;
+        // `StartFunction` without a declaration: the module's `SanOpts`
+        // less what an ignorelist lists the wrapper under (`fun:` its own
+        // name, `mainfile:`, `src:` the main file).
+        self.f.san = self.opts.sanitize.kinds;
+        self.ignore_sanitizers(f, None);
         self.di_wrapper_start(f);
         let ret_block = self.f.fir.create_block();
         self.f.ret_block = Some(ret_block);
@@ -683,6 +688,7 @@ impl Cg<'_> {
         }
         // FinishFunction adds x86's `min-legal-vector-width` here too.
         let mut fa = vec![Attr::Flag(AttrKind::AlwaysInline), Attr::Flag(AttrKind::MustProgress)];
+        Self::sanitizer_fn_attrs(&mut fa, self.f.san);
         if self.is_x86() {
             fa.push(Attr::string("min-legal-vector-width", &self.f.vector_width.to_string()));
         }

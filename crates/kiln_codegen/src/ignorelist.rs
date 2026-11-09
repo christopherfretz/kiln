@@ -13,11 +13,16 @@
 //! has an entry of the prefix and category whose glob matches.
 //!
 //! The parse errors are LLVM's, word for word; the driver wraps them in
-//! clang's `malformed sanitizer ignorelist: '...'`. A list starting with
-//! `#!special-case-list-v1` uses POSIX regular expressions, which kiln
-//! does not implement: [`IgnorelistError::Regex`].
+//! clang's `malformed sanitizer ignorelist: '...'`.
+//!
+//! A file's `#!special-case-list-vN` first line picks its format
+//! ([`list_version`]): version 1 patterns (sections included) are POSIX
+//! extended regular expressions (`llvm::Regex`, each `*` made `.*`, the
+//! whole anchored as `^(...)$`), later ones globs; from version 3 the
+//! `src:` and `mainfile:` queries lose their leading `./` (LLVM 22).
 
 use kiln_ast::sanitize::{GROUPS, SANITIZERS, SanitizerSet as San};
+use kiln_diag::verify::Regex;
 
 /// LLVM's limit on the subpatterns one glob's brace expansions make
 /// (`SpecialCaseList::Matcher::insert`).
@@ -29,8 +34,6 @@ pub enum IgnorelistError {
     /// LLVM `SpecialCaseList::createInternal`'s message (`error parsing
     /// file '<path>': ...`).
     Malformed(String),
-    /// A `#!special-case-list-v1` (regular expression) list: its path.
-    Regex(String),
 }
 
 /// One `[section]` of one file.
@@ -40,6 +43,9 @@ struct Section {
     mask: San,
     /// The index of its file among the lists, in command-line order.
     file: u32,
+    /// Its file's version is 3 or later: `src:` and `mainfile:` queries
+    /// lose their leading `./` (LLVM 22 `SpecialCaseList::RemoveDotSlash`).
+    dot_slash: bool,
     entries: Vec<Entry>,
 }
 
@@ -48,8 +54,72 @@ struct Section {
 struct Entry {
     prefix: Box<str>,
     category: Box<str>,
-    glob: Glob,
+    pat: Pattern,
     line: u32,
+}
+
+/// An entry's pattern: a glob, or a version 1 list's regular expression.
+#[derive(Clone, Debug)]
+enum Pattern {
+    Glob(Glob),
+    Regex(Regex),
+}
+
+impl Pattern {
+    /// LLVM `SpecialCaseList::Matcher::insert` of `pat` (`kind` names
+    /// the format in the errors).
+    fn new(pat: &str, globs: bool) -> Result<Pattern, String> {
+        if pat.is_empty() {
+            let kind = if globs { "glob" } else { "regex" };
+            return Err(format!("Supplied {kind} was blank"));
+        }
+        if globs {
+            return Glob::new(pat.as_bytes()).map(Pattern::Glob);
+        }
+        let re = format!("^({})$", pat.replace('*', ".*"));
+        Regex::new(&re).map(Pattern::Regex).map_err(str::to_owned)
+    }
+
+    fn matches(&self, s: &str) -> bool {
+        match self {
+            Pattern::Glob(g) => g.matches(s.as_bytes()),
+            Pattern::Regex(r) => r.is_match(s),
+        }
+    }
+}
+
+/// The version of a list (`text`): clang 19 (`clang22` false) reads
+/// version 1 only from an exact `#!special-case-list-v1` line, and 2
+/// otherwise; clang 22 reads the decimal digits after a first line's
+/// `#!special-case-list-v` as `consumeUnsignedInteger` does (none is 0,
+/// an overflow keeps the wrapped value), and 2 without one.
+#[must_use]
+pub fn list_version(text: &str, clang22: bool) -> u64 {
+    if !clang22 {
+        return if text.starts_with("#!special-case-list-v1\n") { 1 } else { 2 };
+    }
+    let first = text.split('\n').next().unwrap_or("");
+    let Some(rest) = first.strip_prefix("#!special-case-list-v") else { return 2 };
+    if rest.is_empty() {
+        return 2;
+    }
+    let mut v: u64 = 0;
+    for d in rest.bytes().map_while(|b| b.is_ascii_digit().then(|| u64::from(b - b'0'))) {
+        let prev = v;
+        v = v.wrapping_mul(10).wrapping_add(d);
+        if v / 10 < prev {
+            break;
+        }
+    }
+    v
+}
+
+/// LLVM `sys::path::remove_leading_dotslash` (POSIX separators).
+fn remove_leading_dotslash(mut s: &str) -> &str {
+    while s.len() > 2 && s.starts_with("./") {
+        s = s[2..].trim_start_matches('/');
+    }
+    s
 }
 
 /// The parsed lists of a compilation (clang `NoSanitizeList`).
@@ -60,18 +130,20 @@ pub struct SanitizerIgnorelist {
 
 impl SanitizerIgnorelist {
     /// Parses the lists `files` (`(path, contents)`, in clang's order:
-    /// the `-fsanitize-ignorelist=` files, then the default ones).
+    /// the `-fsanitize-ignorelist=` files, then the default ones), their
+    /// versions read as clang 22 (`clang22`) or clang 19 does.
     ///
     /// # Errors
     /// The first malformed list, as LLVM words it.
-    pub fn parse(files: &[(String, String)]) -> Result<SanitizerIgnorelist, IgnorelistError> {
+    pub fn parse(
+        files: &[(String, String)],
+        clang22: bool,
+    ) -> Result<SanitizerIgnorelist, IgnorelistError> {
         let mut l = SanitizerIgnorelist::default();
         for (i, (path, text)) in files.iter().enumerate() {
-            if text.starts_with("#!special-case-list-v1\n") {
-                return Err(IgnorelistError::Regex(path.clone()));
-            }
             let file = u32::try_from(i).unwrap_or(u32::MAX);
-            if let Err(e) = l.parse_one(text, file) {
+            let version = list_version(text, clang22);
+            if let Err(e) = l.parse_one(text, file, version) {
                 return Err(IgnorelistError::Malformed(format!(
                     "error parsing file '{path}': {e}"
                 )));
@@ -80,9 +152,12 @@ impl SanitizerIgnorelist {
         Ok(l)
     }
 
-    /// LLVM `SpecialCaseList::parse` of one file.
-    fn parse_one(&mut self, text: &str, file: u32) -> Result<(), String> {
-        self.sections.push(Section { mask: San::ALL, file, entries: Vec::new() });
+    /// LLVM `SpecialCaseList::parse` of one file of list version
+    /// `version`.
+    fn parse_one(&mut self, text: &str, file: u32, version: u64) -> Result<(), String> {
+        let globs = version > 1;
+        let dot_slash = version > 2;
+        self.sections.push(Section { mask: San::ALL, file, dot_slash, entries: Vec::new() });
         for (n, raw) in text.split('\n').enumerate() {
             let line = u32::try_from(n + 1).unwrap_or(u32::MAX);
             // `line_iterator` skips lines whose first byte is the comment
@@ -98,9 +173,9 @@ impl SanitizerIgnorelist {
                 let Some(name) = rest.strip_suffix(']') else {
                     return Err(format!("malformed section header on line {line}: {l}"));
                 };
-                let mask = section_mask(name)
+                let mask = section_mask(name, globs)
                     .map_err(|e| format!("malformed section at line {line}: '{name}': {e}"))?;
-                self.sections.push(Section { mask, file, entries: Vec::new() });
+                self.sections.push(Section { mask, file, dot_slash, entries: Vec::new() });
                 continue;
             }
             let (prefix, postfix) = l.split_once(':').unwrap_or((l, ""));
@@ -108,14 +183,12 @@ impl SanitizerIgnorelist {
                 return Err(format!("malformed line {line}: '{l}'"));
             }
             let (pattern, category) = postfix.split_once('=').unwrap_or((postfix, ""));
-            let glob = if pattern.is_empty() {
-                Err("Supplied glob was blank".to_owned())
-            } else {
-                Glob::new(pattern.as_bytes())
-            }
-            .map_err(|e| format!("malformed glob in line {line}: '{pattern}': {e}"))?;
+            let pat = Pattern::new(pattern, globs).map_err(|e| {
+                let kind = if globs { "glob" } else { "regex" };
+                format!("malformed {kind} in line {line}: '{pattern}': {e}")
+            })?;
             let s = self.sections.last_mut().expect("a section");
-            s.entries.push(Entry { prefix: prefix.into(), category: category.into(), glob, line });
+            s.entries.push(Entry { prefix: prefix.into(), category: category.into(), pat, line });
         }
         Ok(())
     }
@@ -138,11 +211,13 @@ impl SanitizerIgnorelist {
         category: &str,
     ) -> Option<(u32, u32)> {
         let mut best = None;
+        let path = prefix == "src" || prefix == "mainfile";
         for s in self.sections.iter().filter(|s| s.mask.has_any(mask)) {
+            let q = if path && s.dot_slash { remove_leading_dotslash(query) } else { query };
             for e in &s.entries {
                 if &*e.prefix == prefix
                     && &*e.category == category
-                    && e.glob.matches(query.as_bytes())
+                    && e.pat.matches(q)
                     && best.is_none_or(|b| (s.file, e.line) > b)
                 {
                     best = Some((s.file, e.line));
@@ -174,16 +249,14 @@ impl SanitizerIgnorelist {
 }
 
 /// clang `SanitizerSpecialCaseList::createSanitizerSections`: the
-/// sanitizers a section's glob names, or the glob's error.
-fn section_mask(name: &str) -> Result<San, String> {
-    if name.is_empty() {
-        return Err("Supplied glob was blank".to_owned());
-    }
-    let g = Glob::new(name.as_bytes())?;
+/// sanitizers a section's pattern (a glob, or a regular expression
+/// without `globs`) names, or the pattern's error.
+fn section_mask(name: &str, globs: bool) -> Result<San, String> {
+    let g = Pattern::new(name, globs)?;
     Ok(SANITIZERS
         .iter()
         .chain(GROUPS)
-        .filter(|(n, _)| g.matches(n.as_bytes()))
+        .filter(|(n, _)| g.matches(n))
         .fold(San::NONE, |m, (_, s)| m.union(*s)))
 }
 
@@ -471,14 +544,16 @@ mod tests {
     }
 
     fn list(text: &str) -> Result<SanitizerIgnorelist, IgnorelistError> {
-        SanitizerIgnorelist::parse(&[("l.txt".to_owned(), text.to_owned())])
+        SanitizerIgnorelist::parse(&[("l.txt".to_owned(), text.to_owned())], true)
+    }
+
+    fn list19(text: &str) -> Result<SanitizerIgnorelist, IgnorelistError> {
+        SanitizerIgnorelist::parse(&[("l.txt".to_owned(), text.to_owned())], false)
     }
 
     fn malformed(text: &str) -> String {
-        match list(text).unwrap_err() {
-            IgnorelistError::Malformed(m) => m,
-            IgnorelistError::Regex(_) => panic!("regex"),
-        }
+        let IgnorelistError::Malformed(m) = list(text).unwrap_err();
+        m
     }
 
     #[test]
@@ -505,9 +580,78 @@ mod tests {
             "error parsing file 'l.txt': malformed glob in line 1: 'a[': invalid glob pattern, unmatched '['"
         );
         assert_eq!(
-            list("#!special-case-list-v1\nfun:.*\n").unwrap_err(),
-            IgnorelistError::Regex("l.txt".to_owned())
+            malformed("#!special-case-list-v1\nfun:a(\n"),
+            "error parsing file 'l.txt': malformed regex in line 2: 'a(': parentheses not balanced"
         );
+        assert_eq!(
+            malformed("#!special-case-list-v1\nfun:=init\n"),
+            "error parsing file 'l.txt': malformed regex in line 2: '': Supplied regex was blank"
+        );
+        assert_eq!(
+            malformed("#!special-case-list-v1\n[a(]\n"),
+            "error parsing file 'l.txt': malformed section at line 2: 'a(': parentheses not balanced"
+        );
+    }
+
+    #[test]
+    fn versions_as_clang() {
+        for (t, v19, v22) in [
+            ("#!special-case-list-v1\n", 1, 1),
+            ("#!special-case-list-v1\r\n", 2, 1),
+            ("#!special-case-list-v1x\n", 2, 1),
+            ("#!special-case-list-vx\n", 2, 0),
+            ("#!special-case-list-v01\n", 2, 1),
+            ("#!special-case-list-v\n", 2, 2),
+            ("#!special-case-list-v3\n", 2, 3),
+            ("fun:x\n#!special-case-list-v1\n", 2, 2),
+        ] {
+            assert_eq!(list_version(t, false), v19, "{t:?}");
+            assert_eq!(list_version(t, true), v22, "{t:?}");
+        }
+        assert!(list_version("#!special-case-list-v99999999999999999999999\n", true) > 2);
+    }
+
+    #[test]
+    fn version_1_lists_are_regular_expressions() {
+        let l = list("#!special-case-list-v1\nfun:_Z3f.o.*\nsrc:*/h\\.h\n[address|thread]\nfun:a|b\n[undef]\nfun:u\n").unwrap();
+        assert!(l.contains(San::NULL, "fun", "_Z3fooii", "", true));
+        assert!(!l.contains(San::NULL, "fun", "x_Z3fooii", "", true));
+        assert!(l.contains(San::NULL, "src", "./inc/h.h", "", true));
+        assert!(!l.contains(San::NULL, "src", "./inc/hxh", "", true));
+        assert!(l.contains(San::THREAD, "fun", "b", "", true));
+        assert!(!l.contains(San::NULL, "fun", "b", "", true));
+        // A section regex is anchored: `undef` names no sanitizer.
+        assert!(!l.contains(San::NULL, "fun", "u", "", true));
+        // clang 19 reads the same list the same way; a glob list is not
+        // a regex one.
+        assert!(list19("#!special-case-list-v1\nfun:f.o\n").unwrap().contains(
+            San::NULL,
+            "fun",
+            "fxo",
+            "",
+            false
+        ));
+        assert!(!list("fun:f.o\n").unwrap().contains(San::NULL, "fun", "fxo", "", true));
+        assert!(!list19("#!special-case-list-v1 \nfun:f.o\n").unwrap().contains(
+            San::NULL,
+            "fun",
+            "fxo",
+            "",
+            false
+        ));
+    }
+
+    #[test]
+    fn version_3_strips_leading_dot_slash() {
+        let l = list("#!special-case-list-v3\nsrc:t.cpp\nmainfile:m.cpp\nfun:./f\n").unwrap();
+        assert!(l.contains(San::NULL, "src", "./t.cpp", "", true));
+        assert!(l.contains(San::NULL, "src", ".//./t.cpp", "", true));
+        assert!(l.contains(San::NULL, "mainfile", "./m.cpp", "", true));
+        assert!(l.contains(San::NULL, "fun", "./f", "", true));
+        let l = list("#!special-case-list-v3\nsrc:./t.cpp\n").unwrap();
+        assert!(!l.contains(San::NULL, "src", "./t.cpp", "", true));
+        let l = list("src:t.cpp\n").unwrap();
+        assert!(!l.contains(San::NULL, "src", "./t.cpp", "", true));
     }
 
     #[test]

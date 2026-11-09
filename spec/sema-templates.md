@@ -695,7 +695,7 @@ All of these are built by sema actions, which compute dependence as in
 
 | Syntax (in a dependent context) | Node |
 |---|---|
-| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression; also `D::x` / `D<T>::x` naming the current instantiation `D` when lookup finds nothing and `D` has a dependent base ([temp.dep.type]/6; `Sema::unknown_specialization_nns` rebuilds the specifier on the injected-class-name type, so instantiation looks `x` up in the specialization, an implicit member access in a member function; WP-309; the same for a nested-name-specifier component `D::N::` when `N` is found neither as a nested name nor as an ordinary name in `D`, e.g. `using G::F::F;` with a dependent base `F<U, T, int>`, WP-367); also `B::x` when `B` is a member class of the current instantiation named outside its own definition that is declared but not yet defined (`struct Block;` defined out of line after the member function naming `Block::get`), the specifier being dependent (clang `computeDeclContext` has no context for it), so `x` is looked up in the instantiated member class (WP-726, `temp.dep.type/incomplete-member-class-qualifier{,-missing}.cpp`) | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
+| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression; also `D::x` / `D<T>::x` naming the current instantiation `D` when lookup finds nothing and `D` has a dependent base ([temp.dep.type]/6; `Sema::unknown_specialization_nns` rebuilds the specifier on the injected-class-name type, so instantiation looks `x` up in the specialization, an implicit member access in a member function; WP-309; the same for a nested-name-specifier component `D::N::` when `N` is found neither as a nested name nor as an ordinary name in `D`, e.g. `using G::F::F;` with a dependent base `F<U, T, int>`, WP-367); also `B::x` when `B` is a member class of the current instantiation named outside its own definition that is declared but not yet defined (`struct Block;` defined out of line after the member function naming `Block::get`), the specifier being dependent (clang `computeDeclContext` has no context for it), so `x` is looked up in the instantiated member class (WP-726, `temp.dep.type/incomplete-member-class-qualifier{,-missing}.cpp`), and `E::x` when `E` is an opaque member enumeration of a class template not yet defined there (`enum class E : int;` defined out of line after the member function naming `E::a`; WP-600, `temp.mem.enum/opaque-member-enum-qualifier-run.cpp`) | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
 | `e.m` or `p->m` with a type-dependent object, or a member of the current instantiation that is not found when it has dependent bases | `CXXDependentScopeMemberExpr {base, arrow, nns?, name, targs?}` |
 | unqualified `f(args)` with type-dependent args, where lookup finds functions or templates (or nothing) | `UnresolvedLookupExpr {requires_adl, overloaded, decls, targs?}`, plus `CallExpr` of dependent type |
 | unqualified `operator@(args)` / `operator T(args)` (an operator- or conversion-function-id as the callee) whose lookup finds nothing ([temp.dep.general]/2, [basic.lookup.argdep]/1) | an empty `UnresolvedLookupExpr` with `requires_adl`, as for an undeclared `f(args)` (`Sema::act_on_id_expression_dn` while `deferring_call_ref`); ADL at the call or at instantiation, and no candidate is clang's `use of undeclared 'operator@'` (`sema_undeclared_use`) |
@@ -2172,7 +2172,13 @@ declaration-only `template<> struct A<int>::N;`:
    is not separately instantiable; clang `VisitEnumDecl`,
    `isDeclWithinFunction`), so `L::E::e` and `E::e` in a member function
    of `L` find their enumerators (WP-884,
-   `temp.inst/p3-local-scoped-enum-defined-with-class-run.cpp`).
+   `temp.inst/p3-local-scoped-enum-defined-with-class-run.cpp`). An
+   unscoped opaque-enum-declaration that a later enum-specifier of the same
+   class redeclares ([class.mem.general]/6) is only declared at its own
+   member and defined at the enum-specifier's, so its enumerators are
+   declared once (WP-600,
+   `class.mem.general/opaque-enum-redeclared-template-run.cpp`); one
+   defined out of line is defined with the class from that definition.
 5. `template enum ...`: a qualified name is "enumerations cannot be
    explicitly instantiated". An unqualified name, like `template<> enum
    E ...`, gives "enumeration cannot be a template" at the token after
@@ -2387,8 +2393,19 @@ diagnostic says why` (`sema_inst_part_dropped`):
   (§5.6 "Local classes", `local_late_parts`): `the default argument of
   parameter 'x' of 'g'`, `the exception specification of 'g'`, `the
   default member initializer of 'a'`, each in the local class.
+- *Declaration lookup.* `find_instantiated_decl` maps a pattern
+  declaration to its instantiation; when nothing finds it (not the
+  instantiated parent's members, not the local scope, not a re-instantiation
+  of the pattern) it returns `SubstFail`, and every caller drops the use
+  quietly. With no error in the TU that would silently drop a statement or
+  expression naming it, so the final path emits `member_dropped` (`member
+  'x' of 'A<int>' was not instantiated...`) at the use (WP-600). After an
+  error it stays silent, because the error explains the missing declaration.
+  Like the other guards, inside a SFINAE context it is a substitution
+  failure (the candidate is discarded rather than accepted with a use
+  missing).
 With the guard on, neither the conformance corpus nor the libc++ m3 gate
-reports a dropped statement or part.
+reports a dropped statement, part or declaration lookup.
 
 **Points of instantiation.**
 - `SpecInfo.point_of_instantiation` is the location of the use that first
@@ -4543,9 +4560,10 @@ Tests: `dcl.spec.auto/member-pointer-placeholder-run.cpp`,
 placeholder. The placeholder checked is the decl-specifier's own, or, when
 the declarator's function declarator nearest the name has a trailing return
 type, the one contained in that trailing type (`declarator_placeholder`;
-`using F = auto (*)(int) -> int;` is fine, `-> auto` is not). GNU
-`__auto_type` is not checked here. The position comes from the
-declarator (`auto_declarator_site`):
+`using F = auto (*)(int) -> int;` is fine, `-> auto` is not). The
+diagnostic's first selector is the keyword (`auto`, `decltype(auto)`, GNU
+`__auto_type`). The position comes from the declarator
+(`auto_declarator_site`):
 
 | Declarator | Position |
 |---|---|
@@ -4569,6 +4587,26 @@ deduction not allowed". Positions that deduce or invent are unaffected:
 variables, `new`, NTTPs, return types, structured bindings (a `typedef` one
 gets only the decomposition error, `dcl.struct.bind/specifiers.cpp`), conditions,
 range-for, conversion functions, generic lambdas and abbreviated templates.
+
+Those positions are language-mode and keyword gated as clang's
+`GetDeclSpecTypeForDeclarator` / `GetFullTypeForDeclarator` (WP-1134;
+`auto_declarator_check`, `param_placeholder_site`,
+`Sema::cxx11_deduced_return` (WP-1123), `gnu_auto_type_return_check`):
+
+| Position | Rejected |
+|---|---|
+| conversion-type-id | `__auto_type` always, any placeholder before C++14: "in conversion function type"; the conversion function is then invalid (no candidate) |
+| trailing return type | `auto` before C++14: "in function return type" |
+| return type (decl-specifier or trailing) | `__auto_type` always: "in function return type" |
+| function declarator nearest the name, no trailing return type, before C++14 | `auto`: "'auto' return without trailing return type; deduced return types are a C++14 extension"; `decltype(auto)`: "deduced return types are a C++14 extension"; recovers as `int` (not a lambda's implied `auto`, `Declarator::lambda`) |
+| `new` type-id | `__auto_type`: "in type allocated by 'new'" |
+| NTTP | any placeholder before C++17: "in template parameter until C++17" |
+| function parameter | `auto` before C++20: "in function prototype" |
+| lambda parameter | `auto` before C++14: "in lambda parameter before C++14"; `__auto_type` like `decltype(auto)`: "in lambda parameter" |
+
+Tests: `dcl.spec.auto/placeholders-cxx11.cpp`, `placeholders-cxx14.cpp`,
+`gnu-auto-type.cpp`, `gnu-auto-type-deduction.cpp`,
+`class.conv.fct/operator-auto-cxx11.cpp`, `operator-auto-cxx14.cpp`.
 Tests: `dcl.spec.auto/p5-auto-not-allowed.cpp` (every position above),
 `dcl.spec.auto/p5-auto-allowed.cpp`,
 `expr.prim.req.general/p4-auto-param.cpp`.
@@ -5217,9 +5255,24 @@ The `SpecKind` transitions are those of §4.5.
   complete (`args.rs` `defining_class_member_ptr`; WP-726,
   `tests/conformance/temp.arg.nontype/member-pointer-of-class-being-defined.cpp`).
 - **Reference arguments** (`convert_ref_nttp_arg`): the conversion must
-  exist (`sema_cce_not_implicitly_convertible`), must not bind a
-  temporary (`sema_cce_ref_binds_temporary`), and the referent must not
-  be automatic ("reference to 'x' is not a constant expression"). The
+  exist (`sema_cce_not_implicitly_convertible`), must not be a
+  derived-to-base conversion (`sema_cce_conversion_not_allowed`, below),
+  must not bind a temporary (`sema_cce_ref_binds_temporary`), and the
+  referent must not be automatic ("reference to 'x' is not a constant
+  expression"). Binding `const B &` to an object of a class derived from
+  `B` is a derived-to-base conversion ([over.ics.ref]/1), which is not
+  among the conversions [expr.const]/12 lets a converted constant
+  expression use, also as the second standard conversion after a
+  user-defined one: "conversion from 'const D' to 'const B &' is not
+  allowed in a converted constant expression" at the argument, with
+  "template parameter is declared here" at `-fclang-compat=22` only
+  (clang `CheckConvertedConstantConversions`, `cce_second_allowed`; also
+  for a value-dependent argument at the definition, and an
+  explicitly-specified argument of a function template fails deduction).
+  An lvalue of type `B` designating the base subobject
+  (`static_cast<const B &>(d)`) binds by identity and is accepted
+  (WP-561; `temp.arg.nontype/reference-derived-to-base{,-clang22}.cpp`).
+  The
   value is the built-in `&` of the bound glvalue, re-interned at the
   reference type so it prints as `T<gi>`.
 - **Disallowed bases** ([temp.arg.nontype]/6, `args.rs`
@@ -7084,8 +7137,8 @@ ambiguity errors.
 - "use 'template' keyword to treat 'f' as a dependent template name".
 - "no member named 'x' in 'A<int>'".
 - "type 'int' cannot be used prior to '::' because it has no members".
-- "'auto' not allowed in template parameter until C++17" (not reachable
-  under C++26, but kept).
+- "'auto' not allowed in template parameter until C++17" (before C++17;
+  §6.3).
 
 ## 11. Interfaces and memory accounting
 
