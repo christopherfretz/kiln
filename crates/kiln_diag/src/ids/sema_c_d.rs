@@ -98,6 +98,7 @@ sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in functi
 sema_constexpr_body_invalid_stmt = Error (2) "statement not allowed in {1:constexpr|consteval} {0:function|constructor}";
 sema_constexpr_body_invalid_stmt_cxx20 = ExtWarn [Cxx20Extensions] (1) "use of this statement in a constexpr {0:function|constructor} is a C++20 extension";
 sema_constexpr_body_invalid_stmt_cxx23 = ExtWarn [Cxx23Extensions] (1) "use of this statement in a constexpr {0:function|constructor} is a C++23 extension";
+sema_constexpr_body_no_return = Error (1) "no return statement in {0:constexpr|consteval} function";
 sema_constexpr_function_try_block_cxx20 = ExtWarn [Cxx20Extensions] (1) "function try block in constexpr {0:function|constructor} is a C++20 extension";
 sema_constexpr_invalid_template_arg = Error (3) "{0} to {1}{2} is not allowed in a template argument";
 sema_constexpr_local_var_non_literal = Error (2) "variable of non-literal type {1} cannot be defined in a constexpr {0:function|constructor} before C++23";
