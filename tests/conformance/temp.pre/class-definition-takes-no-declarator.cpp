@@ -4,30 +4,29 @@
 // out-of-line member class, an explicit instantiation recovered as a
 // specialization) demands the ';' after the class body and then parses the
 // rest as a new declaration (a member class template too). Plain
-// declarations, local classes in a
-// function template and member classes of a class template may have
-// declarators.
+// declarations, local classes in a function template and member classes of
+// a class template may have declarators.
 //@ std: c++20
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 31:30 error "expected ';' after struct"
-//@ diag: 31:31 error "a type specifier is required for all declarations"
-//@ diag: 33:30 error "expected ';' after struct"
-//@ diag: 35:62 error "expected ';' after struct"
-//@ diag: 35:63 error "a type specifier is required for all declarations"
-//@ diag: 36:28 error "expected ';' after struct"
-//@ diag: 36:29 error "a type specifier is required for all declarations"
-//@ diag: 37:17 error "explicit template instantiation cannot have a definition; if this definition is meant to be an explicit specialization, add '<>' after the 'template' keyword"
-//@ diag: 37:27 error "expected ';' after struct"
-//@ diag: 37:28 error "a type specifier is required for all declarations"
-//@ diag: 39:36 error "expected ';' after struct"
-//@ diag: 39:37 error "a type specifier is required for all declarations"
-//@ diag: 40:54 error "expected ';' after struct"
-//@ diag: 40:55 error "a type specifier is required for all declarations"
-//@ diag: 41:29 error "expected ';' after union"
-//@ diag: 41:30 error "a type specifier is required for all declarations"
-//@ diag: 42:74 error "expected ';' after struct"
-//@ diag: 42:75 error "a type specifier is required for all declarations"
+//@ diag: 30:30 error "expected ';' after struct"
+//@ diag: 30:31 error "a type specifier is required for all declarations"
+//@ diag: 32:30 error "expected ';' after struct"
+//@ diag: 34:62 error "expected ';' after struct"
+//@ diag: 34:63 error "a type specifier is required for all declarations"
+//@ diag: 35:28 error "expected ';' after struct"
+//@ diag: 35:29 error "a type specifier is required for all declarations"
+//@ diag: 36:17 error "explicit template instantiation cannot have a definition; if this definition is meant to be an explicit specialization, add '<>' after the 'template' keyword"
+//@ diag: 36:27 error "expected ';' after struct"
+//@ diag: 36:28 error "a type specifier is required for all declarations"
+//@ diag: 38:36 error "expected ';' after struct"
+//@ diag: 38:37 error "a type specifier is required for all declarations"
+//@ diag: 39:54 error "expected ';' after struct"
+//@ diag: 39:55 error "a type specifier is required for all declarations"
+//@ diag: 40:29 error "expected ';' after union"
+//@ diag: 40:30 error "a type specifier is required for all declarations"
+//@ diag: 41:74 error "expected ';' after struct"
+//@ diag: 41:75 error "a type specifier is required for all declarations"
 template<class T> struct A {} a;
 template<class T> struct C { } ;
 template<class T> struct D {}
