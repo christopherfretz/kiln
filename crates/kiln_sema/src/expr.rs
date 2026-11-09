@@ -5447,6 +5447,11 @@ impl Sema<'_, '_> {
                         return None;
                     }
                 }
+                // A one-candidate set's conversion sequence resolves a
+                // function template-id again (clang `AddOverloadCandidate`).
+                if named.is_some_and(|c| c.overloadable) {
+                    self.rerun_template_id_resolution(a, to);
+                }
                 match conv::implicit_convert(self, a, to, ConvCtx::Argument) {
                     Ok(x) => conv_args.push(x),
                     Err(err) => {
@@ -6513,6 +6518,8 @@ impl Sema<'_, '_> {
                 Some(x) => x,
                 None => return self.recover(ty, &[e], loc),
             }
+        } else if style.allows_static() {
+            self.retarget_cast_operand(e, ty)
         } else {
             e
         };
@@ -6542,6 +6549,13 @@ impl Sema<'_, '_> {
                 return self.recover(ty, &[e], loc);
             }
             return self.bad_cast(style, e, ty, loc);
+        }
+        // A function template-id resolved early: the static_cast a cast
+        // tries initializes the target (clang `TryStaticImplicitCast`,
+        // its `InitializationSequence` and then its `Perform`, which
+        // resolves it again; the early resolution is the first).
+        if style.allows_static() {
+            self.rerun_template_id_resolution(e, ty);
         }
         // clang `TryStaticImplicitCast`: a class target must be complete;
         // the use whose instantiation fails (a failed `static_assert` in

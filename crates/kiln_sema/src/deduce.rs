@@ -322,6 +322,10 @@ impl Sema<'_, '_> {
     /// and reference declarators [`Self::contains_undeduced_auto`]
     /// admits. `None` when deduction fails (the caller reports).
     pub(crate) fn deduce_from(&mut self, declared: QualType, e: ExprId) -> Option<QualType> {
+        // A function template-id resolved early: clang's `DeduceAutoType`
+        // resolves it again (`ResolveOverloadForDeduction`, or
+        // `CheckPlaceholderExpr` for `decltype(auto)`).
+        self.rerun_template_id_single(e);
         if self.undeduced_keyword(declared).is_some() {
             return Some(self.deduce_placeholder(declared, e));
         }
