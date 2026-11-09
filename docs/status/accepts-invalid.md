@@ -26,19 +26,19 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `d31c8ae3e`
+- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `f218cd816`
 - command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 222 s; peak RSS of one case 20 MiB (gnu-time)
+- wall time 266 s; peak RSS of one case 22 MiB (gnu-time)
 
 ## Totals
 
 | measure | count | of | rate |
 |---|---:|---:|---:|
-| ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 67 | 1250 | 5.4% |
-| ACCEPTS-INVALID cases (per RUN configuration) | 79 | 1946 | 4.1% |
-| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4072 | 28065 | 14.5% |
+| ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 66 | 1250 | 5.3% |
+| ACCEPTS-INVALID cases (per RUN configuration) | 78 | 1946 | 4.0% |
+| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4066 | 28065 | 14.5% |
 | REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 28 | 418 | 6.7% |
 | crashes | 0 | 2850 | 0.0% |
 | timeouts | 0 | 2850 | 0.0% |
@@ -50,7 +50,7 @@ written by hand (WP-912). The run is informational and never part of
 
 | directory | accepts-invalid files | rate | missed lines | rate | rejects-valid | crash / timeout |
 |---|---:|---:|---:|---:|---:|---:|
-| CXX/basic | 6 / 37 | 16.2% | 76 / 311 | 24.4% | 0 | 0 / 0 |
+| CXX/basic | 5 / 37 | 13.5% | 74 / 311 | 23.8% | 0 | 0 / 0 |
 | CXX/class | 1 / 46 | 2.2% | 112 / 634 | 17.7% | 1 | 0 / 0 |
 | CXX/class.access | 0 / 12 | 0.0% | 47 / 573 | 8.2% | 0 | 0 / 0 |
 | CXX/class.derived | 0 / 15 | 0.0% | 10 / 96 | 10.4% | 0 | 0 / 0 |
@@ -60,15 +60,15 @@ written by hand (WP-912). The run is informational and never part of
 | CXX/dcl.dcl | 4 / 77 | 5.2% | 262 / 1141 | 23.0% | 0 | 0 / 0 |
 | CXX/dcl.decl | 1 / 54 | 1.9% | 86 / 788 | 10.9% | 1 | 0 / 0 |
 | CXX/drs | 1 / 33 | 3.0% | 1376 / 8682 | 15.8% | 0 | 0 / 0 |
-| CXX/except | 3 / 15 | 20.0% | 26 / 104 | 25.0% | 0 | 0 / 0 |
+| CXX/except | 3 / 15 | 20.0% | 24 / 104 | 23.1% | 0 | 0 / 0 |
 | CXX/expr | 2 / 78 | 2.6% | 74 / 644 | 11.5% | 0 | 0 / 0 |
 | CXX/lex | 0 / 14 | 0.0% | 1 / 78 | 1.3% | 0 | 0 / 0 |
 | CXX/module | 0 / 6 | 0.0% | 6 / 75 | 8.0% | 0 | 0 / 0 |
 | CXX/over | 1 / 42 | 2.4% | 7 / 313 | 2.2% | 0 | 0 / 0 |
 | CXX/special | 2 / 31 | 6.5% | 12 / 224 | 5.4% | 3 | 0 / 0 |
 | CXX/stmt.stmt | 0 / 9 | 0.0% | 3 / 255 | 1.2% | 0 | 0 / 0 |
-| CXX/temp | 9 / 147 | 6.1% | 346 / 1644 | 21.0% | 2 | 0 / 0 |
-| SemaCXX | 37 / 628 | 5.9% | 1626 / 12406 | 13.1% | 21 | 0 / 0 |
+| CXX/temp | 9 / 147 | 6.1% | 345 / 1644 | 21.0% | 2 | 0 / 0 |
+| SemaCXX | 37 / 628 | 5.9% | 1625 / 12406 | 13.1% | 21 | 0 / 0 |
 
 ## Top 50 accepts-invalid files
 
@@ -98,7 +98,6 @@ Ranked by the expected errors of their worst configuration.
 | `SemaCXX/coroutine-builtins.cpp` | 1 / 1 | 3 |
 | `SemaCXX/union-member-destructor.cpp` | 1 / 1 | 3 |
 | `SemaCXX/weak-init.cpp` | 1 / 1 | 3 |
-| `CXX/basic/basic.lookup/basic.lookup.elab/p2.cpp` | 1 / 1 | 2 |
 | `CXX/basic/basic.start/basic.start.init/p3.cpp` | 1 / 5 | 2 |
 | `CXX/basic/basic.start/basic.start.main/p3.cpp` | 2 / 5 | 2 |
 | `CXX/class/class.local/p1-0x.cpp` | 1 / 1 | 2 |
@@ -126,6 +125,7 @@ Ranked by the expected errors of their worst configuration.
 | `CXX/temp/temp.decls/temp.friend/p3.cpp` | 1 / 1 | 1 |
 | `CXX/temp/temp.res/temp.dep/temp.dep.constexpr/p2.cpp` | 1 / 1 | 1 |
 | `CXX/temp/temp.spec/temp.expl.spec/p20-2.cpp` | 1 / 1 | 1 |
+| `CXX/temp/temp.spec/temp.inst/p7.cpp` | 1 / 1 | 1 |
 
 ## Top 40 missed-error clusters
 
@@ -498,7 +498,14 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
     **Fixed in WP-1017**, plus `dcl.type.elab/wrong-tag-kind.cpp`,
     `dcl.type.elab/elaborated-enum-class.cpp` and `class.friend/friend-enum.cpp`.
     Partial: a qualified ambiguity between plain types lists its
-    candidates in discovery order.
+    candidates in discovery order; an elaborated specialization through a
+    template template parameter bound to an alias template is not
+    diagnosed.
+    **WP-957**: an unqualified elaborated name hidden by a nearer typedef,
+    alias or template, and a friend class-key naming one, are rejected
+    (`dcl.type.elab/tag-hidden-by-type-name.cpp`); a dependent `alignas`
+    operand is checked at instantiation
+    (`dcl.align/alignas-dependent-incomplete.cpp`).
     **Fixed in WP-1054** (spec/landed/sema/WP-1054.md): members of a class
     template whose `class-key B<T>::M` names another template's explicit
     or partial specialization are no longer dropped silently, so
@@ -518,9 +525,19 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
     WP-1017**: dynamic `throw(T...)` lists are compared type by type with
     [except.handle]/3 matching, in clang's order. Partial: an implicit
     member whose computed specification is a type list is not compared
-    with the base, dependent lists in a template definition wait for
+    with the base (fixed in WP-957), dependent lists in a template definition wait for
     instantiation, and the nested function-type rule for parameters is not
     checked.
+    **WP-957**: implicit destructors and assignment operators are checked
+    against every overridden function, with their computed type lists
+    before C++17, one error per base; the implicit assignment operators of
+    a dynamic class now override (a dispatch miscompile)
+    (`class.virtual/exception-spec-implicit*.cpp`,
+    `class.virtual/implicit-assignment-override-run.cpp`). Still partial:
+    the nested function-type rule, and `final`/return-type checks of an
+    implicit overrider. WP-957's own share (against main `a375213ce`):
+    accepts-invalid 67 to 66 files, 79 to 78 cases; missed errors 4078 to
+    4072 lines; no new accepts-invalid or rejects-valid case.
     WP-1017's own share (its run against WP-1015's): accepts-invalid 73
     to 68 files, 86 to 80 cases; missed errors 4582 to 4276 lines; no new
     accepts-invalid or rejects-valid case.
