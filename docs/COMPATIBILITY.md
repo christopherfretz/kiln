@@ -10,7 +10,7 @@ the exact commands to reproduce each run, is in
 **Language support** is tracked separately. The standards support matrix
 is in [STANDARD_SUPPORT.md](STANDARD_SUPPORT.md): one row per paper, from
 C++98 to C++26 plus reflection, in the style of clang's `cxx_status`. Its
-summary table counts 257 rows done, 3 partial (all three in C++26: P2686,
+summary table counts 258 rows done, 3 partial (all three in C++26: P2686,
 P2786 and P3394) and 0 todo or untested, over C++98/03, C++11, C++14,
 C++17, C++20, C++23, C++26, C++26 reflection, the DR-level papers and the
 kiln extensions.
@@ -79,7 +79,8 @@ backend: <major> (<dir>)`):
 
 1. `--llvm-dir=<dir>`;
 2. the `KILN_LLVM_DIR` environment variable;
-3. for LLVM 22, then LLVM 19: `llvm-config` / `llvm-config-<N>` on `PATH`,
+3. a directory a packager compiled into the build (`KILN_DEFAULT_LLVM_DIR`);
+4. for LLVM 22, then LLVM 19: `llvm-config` / `llvm-config-<N>` on `PATH`,
    then `/usr/lib/llvm-<N>` (Debian, Ubuntu), `/usr/lib64/llvm<N>`
    (Fedora), Homebrew on Linux's `llvm@<N>` and `llvm`, `/usr`, then
    `opt-<N>` / `clang++-<N>` on `PATH`.
@@ -239,7 +240,7 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [EnTT](status/oss/entt.md) | `v3.15.0` | full ctest suite | libstdc++ 14 | **Flawless**: 68/68 | WP-690 |
 | [glog](status/oss/glog.md) | `v0.7.1` | full CTest suite | libstdc++ 14 | **Flawless**: 23/24 under both (`symbolize` fails under both: environment) | WP-700 |
 | [RE2](status/oss/re2.md) | `2025-11-05` | full test suite; Abseil, googletest and Benchmark built by the same compiler | libstdc++ 14 | **Flawless**: 20/20 | WP-710 |
-| [simdjson](status/oss/simdjson.md) | `v4.2.4` | developer-mode CTest suite (without `checkperf` and `fuzz`) | libstdc++ 14 | **Near-perfect**: 116/117 (clang 117/117) | the failing test is a negative compile test that needs `-Wuninitialized` under `-Werror`; **WP-696** (open). WP-933's re-run after WP-862 was deferred for lack of disk. WP-691 |
+| [simdjson](status/oss/simdjson.md) | `v4.2.4` | developer-mode CTest suite (without `checkperf` and `fuzz`) | libstdc++ 14 | **Near-perfect**: 116/117 (clang 117/117) | the failing test is a negative compile test that needs `-Wuninitialized` under `-Werror`, which WP-696 added (via WP-862) after this run; the re-run is WP-992, deferred for lack of disk. WP-691 |
 | [Taskflow](status/oss/taskflow.md) | `v3.10.0` | full test suite | libstdc++ 14 | **Flawless**: 2462/2462 | WP-703 |
 | [yaml-cpp](status/oss/yaml_cpp.md) | `yaml-cpp-0.9.0` | full suite (1011 googletest tests), vendored googletest built by the same compiler | libstdc++ 14 | **Flawless**: 1/1 | WP-698 |
 
@@ -386,8 +387,8 @@ are in [status/accepts-invalid.md](status/accepts-invalid.md).
 | Source-based coverage mapping | `-fcoverage-mapping` (`llvm-cov show` / `report` / `export`), `-fcoverage-compilation-dir=`, `-fcoverage-prefix-map=` | **Works**: clang 19's mapping; `llvm-cov report` equals clang 19's on the comparison programs except `macros.cpp` (3 of 33 regions); against clang 20+ fewer regions around `&&`/`||` (see KNOWN_ISSUES.md) |
 | Profile-guided optimization | `-fprofile-generate`, `-fcs-profile-generate`, `-fprofile-use`, `-fprofile-instr-use`, `-fprofile-sample-use` | **Not in 1.0** (a known limitation, rejected with an error) |
 
-Both coverage modes link LLVM 19's profile runtime
-(`libclang_rt.profile-<arch>.a`, Debian package `libclang-rt-19-dev`),
+Both coverage modes link the selected LLVM's profile runtime
+(`libclang_rt.profile-<arch>.a`, Debian package `libclang-rt-<N>-dev`),
 which the linking `clang++` adds. `scripts/coverage-compare.py` builds
 `scripts/coverage/*.cpp` (control flow, classes and templates, lambdas,
 coroutines, macros, header functions, and a libstdc++-heavy program)
@@ -406,7 +407,7 @@ compile-time cost of each mode, in
 | Check merging | `-f[no-]sanitize-merge[=]` | **Works**: `nomerge` and trap blocks as clang 22 |
 | Ignorelists | `-fsanitize-ignorelist=`, the default `asan`/`hwasan`/`msan` lists, `-fno-sanitize-ignorelist` | **Works** for `fun:`, `src:`, `mainfile:`, `global:`, `type:` and `=init`, with clang's error wording; regular-expression (`#!special-case-list-v1`) lists are rejected |
 
-The runtimes are LLVM's compiler-rt (Debian package `libclang-rt-19-dev`),
+The runtimes are LLVM's compiler-rt (Debian package `libclang-rt-<N>-dev`),
 which the linking `clang++` adds. Detail in
 [docs/design/sanitizers.md](design/sanitizers.md) and
 [spec/landed/codegen/WP-1032.md](../spec/landed/codegen/WP-1032.md).

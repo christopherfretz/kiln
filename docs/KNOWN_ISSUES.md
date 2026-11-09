@@ -59,19 +59,23 @@ is [WP-243](BACKLOG.md) and is not part of 1.0.
 ## Modules
 
 Module files (`--precompile`, `-fmodule-output`) work. They are kiln's
-own format, so see the [user guide](USER_GUIDE.md#modules). What is
-So does CMake's C++20 module support (`FILE_SET CXX_MODULES`, 3.28+ with
-Ninja) through `kiln-scan-deps`. What is missing (spec/modules.md
-§11.10):
+own format; see the [user guide](USER_GUIDE.md#modules). CMake's C++20
+module support works through `kiln-scan-deps` (`FILE_SET CXX_MODULES`,
+3.28+ with Ninja), and so does `import std;` (`CXX_MODULE_STD`). What is
+missing (spec/modules.md §11.10):
 
 - **`-fmodule-header`** and header-unit module files
   ([WP-983](BACKLOG.md)). Header units work from their headers in a
   direct compile, but the scanner rejects `import "h";` and
   `import <h>;`, so a CMake build cannot use them.
-- **Module files hold sources, not a serialised AST**, so an importer
-  re-parses the module's text. Importing libc++'s `std` module file costs
-  about what compiling `std.cppm` in-process costs
-  ([COMPATIBILITY.md](COMPATIBILITY.md#c20-modules)).
+- **Module files hold the module's source, not a serialised AST**, so an
+  importer re-parses the module's text. Since WP-985 the file also
+  carries the module's constant-evaluation results, so the importer does
+  not evaluate those again (spec/modules.md §11.11). The declaration
+  image that replaces the re-parse is off by default and does not cover
+  `std` yet ([WP-1065](BACKLOG.md) to [WP-1070](BACKLOG.md)). Importing
+  libc++'s `std` module file costs about what compiling `std.cppm`
+  in-process costs ([COMPATIBILITY.md](COMPATIBILITY.md#c20-modules)).
 - In libc++ 22's suite, one test fails because `std.compat` imported over
   `std` does not keep the two global module fragments apart
   ([status/libcxx-m5.md](status/libcxx-m5.md)). WP-460 fixed it, but the
@@ -98,13 +102,9 @@ Ninja) through `kiln-scan-deps`. What is missing (spec/modules.md
   and `local-bounds` ([WP-936](BACKLOG.md)) are accepted but emit no
   check. Other small gaps: [WP-937](BACKLOG.md). The umbrella is
   [WP-852](BACKLOG.md).
-- **`-fsanitize-ignorelist=`** files are checked for existence but not
-  applied: [WP-857](BACKLOG.md).
-- **`-ftrapv`** and `-fsanitize-merge=` are rejected:
-  [WP-856](BACKLOG.md).
 - Smaller differences from clang's sanitizer IR (value names, ASan module
-  name, constructor details) are [WP-855](BACKLOG.md),
-  [WP-858](BACKLOG.md), [WP-859](BACKLOG.md) and [WP-861](BACKLOG.md).
+  name, constructor details) are [WP-858](BACKLOG.md),
+  [WP-859](BACKLOG.md) and [WP-861](BACKLOG.md).
   They do not change what the sanitizers report.
 
 ## Flags and attributes
@@ -115,11 +115,12 @@ These flags are the exceptions: they are accepted and have no effect.
 | Flag | What happens | WP |
 |---|---|---|
 | `-ftime-trace[=]`, `-ftime-trace-granularity=`, `-ftime-trace-verbose` | warning; no trace file is written | — |
-| `-ffat-lto-objects` | objects are bitcode only, not fat | [WP-899](BACKLOG.md) |
 | `-f[no-]vectorize`, `-f[no-]slp-vectorize`, `-fstrict-vtable-pointers` | accepted; LLVM's defaults apply | [WP-900](BACKLOG.md) (deferred) |
 | `-fdiagnostics-show-template-tree` | accepted; diagnostics are printed without the tree | [WP-901](BACKLOG.md) (deferred) |
 | `-F <dir>` | warning; framework directories do not exist on Linux | — |
 | `-f[no-]stack-clash-protection`, `-f[no-]common`, `-fstack-usage`, `-m64`, `-pipe` and a few more | accepted silently; listed in spec/driver.md, "Codegen flags" | — |
+
+`-ffat-lto-objects` is rejected: fat objects are [WP-899](BACKLOG.md).
 
 `kiln++ --help` lists the flags a user is likely to need, grouped as in
 clang's help; spec/driver.md, "Options", is the complete list.
@@ -138,9 +139,6 @@ clang's help; spec/driver.md, "Options", is the complete list.
   does not run. Both are accepted. Most of class B is implemented
   (WP-813). Where it is not, the cost is a missed optimization or
   diagnostic, never wrong code.
-- Semantic and argument checks on clang attributes (rejecting a misused
-  `unavailable`, `carries_dependency`, ...) are incomplete:
-  [WP-954](BACKLOG.md).
 
 ## Diagnostics and accepts-invalid
 
@@ -159,7 +157,10 @@ kiln is measured on clang 22.1.8's own negative tests
 Most missed errors are declaration rules: types defined where the grammar
 forbids them, members named after their class, union and static member
 rules, redeclarations, and attribute checks. The clusters are
-[WP-945](BACKLOG.md) to [WP-960](BACKLOG.md). Valid code is not affected.
+[WP-945](BACKLOG.md) to [WP-960](BACKLOG.md). Most of them are fixed
+since that run, so the numbers above overstate the gap; the remaining
+cluster is [WP-960](BACKLOG.md) (`-pedantic-errors` extension
+diagnostics). Valid code is not affected.
 Code that clang rejects may compile with kiln, so build with clang or GCC
 in CI too if you rely on rejection.
 
@@ -192,7 +193,8 @@ Of the 47 projects in [COMPATIBILITY.md](COMPATIBILITY.md#libraries-and-applicat
 43 pass everything clang passes. The others:
 
 - **simdjson**: 116 of 117 tests. The one failure is a negative compile
-  test that needs `-Wuninitialized` under `-Werror`.
+  test that needs `-Wuninitialized` under `-Werror`. That warning has
+  landed since (WP-696); the re-run is [WP-992](BACKLOG.md).
 - **folly**: 3767 of 3773 in the full run. The 6 failures (`memcpy_test`)
   were fixed by WP-763 and pass in a targeted re-run.
 - **Boost metaprogramming libraries**: 99.6% of clang's passing tests.
@@ -204,6 +206,7 @@ Of the 47 projects in [COMPATIBILITY.md](COMPATIBILITY.md#libraries-and-applicat
 ## Crashes
 
 kiln reports an internal compiler error instead of crashing silently, and
-writes a reproducer ([REPORTING-BUGS.md](REPORTING-BUGS.md)). Known
-internal-error sites being hardened into diagnostics are
-[WP-971](BACKLOG.md) to [WP-974](BACKLOG.md).
+writes a reproducer ([REPORTING-BUGS.md](REPORTING-BUGS.md)). The known
+internal-error sites were turned into diagnostics (WP-971 to WP-973).
+Testing the reproducer of a preprocessed `.i` input waits on C support:
+[WP-974](BACKLOG.md).
