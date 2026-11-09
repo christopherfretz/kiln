@@ -24,11 +24,11 @@
 //! before anything is built; a malformed image is the module file's
 //! corrupt-file error and builds nothing.
 
+use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{
     Access, DeclFlags, DeclKind, EnumData, FnSpec, FnStorage, FriendKind, ModuleOwnership,
     ParamData, VarSpec, VarStorage,
 };
-use kiln_ast::consts::Scalar;
 use kiln_ast::modules::Owner;
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::StmtKind;
@@ -83,7 +83,12 @@ enum TyRec {
     IArray(QRef),
     Paren(QRef),
     Elab(u8, QRef),
-    Func { ret: QRef, params: Vec<QRef>, info: u16, exc: u8 },
+    Func {
+        ret: QRef,
+        params: Vec<QRef>,
+        info: u16,
+        exc: u8,
+    },
     Enum(u32),
     Typedef(u32),
     /// cv on array sugar (`const Quad` for `using Quad = int[4]`): the
@@ -107,14 +112,36 @@ struct ParamRec {
 enum Payload {
     Namespace,
     Export,
-    Function { ty: QRef, spec: u8, params: Vec<ParamRec>, body: Option<(u32, u32)> },
-    Var { ty: QRef, spec: u8 },
+    Function {
+        ty: QRef,
+        spec: u8,
+        params: Vec<ParamRec>,
+        body: Option<(u32, u32)>,
+    },
+    Var {
+        ty: QRef,
+        spec: u8,
+    },
     /// `scoped` is `EnumData` `SCOPED | SCOPED_STRUCT`; `def` is present
     /// for a definition, holding the computed (underlying, promotion)
     /// types of one without a fixed underlying type.
-    Enum { scoped: u8, fixed: Option<(QRef, QRef)>, def: Option<Option<(QRef, QRef)>> },
-    Enumerator { ty: QRef, value: i128 },
-    Typedef { alias: bool, underlying: QRef },
+    Enum {
+        scoped: u8,
+        fixed: Option<(QRef, QRef)>,
+        // Three states: a declaration only, a definition with a fixed
+        // type, a definition with computed types (spec/modules.md §11.11
+        // "Encoding", the enumeration payload).
+        #[allow(clippy::option_option)]
+        def: Option<Option<(QRef, QRef)>>,
+    },
+    Enumerator {
+        ty: QRef,
+        value: i128,
+    },
+    Typedef {
+        alias: bool,
+        underlying: QRef,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -668,12 +695,14 @@ fn decode(bytes: &[u8]) -> Res<Image> {
 }
 
 /// The structural checks of [`decode`].
+#[allow(clippy::too_many_lines)] // one arm per record or type kind, kept together with the format
 fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     let nt = img.types.len() as u64;
     let nd = img.decls.len();
     let qref_ok = |q: QRef, below: u64| -> bool {
         let t = u64::from(q.ty);
-        (1..=u64::from(BUILTINS)).contains(&t) || (t > u64::from(BUILTINS) && t - u64::from(BUILTINS) - 1 < below)
+        (1..=u64::from(BUILTINS)).contains(&t)
+            || (t > u64::from(BUILTINS) && t - u64::from(BUILTINS) - 1 < below)
     };
     // Per type, the highest record (plus one) it or any earlier type
     // names: types are built in order, so a record using type `j` needs
@@ -686,10 +715,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             return bad("bad type reference");
         }
         if let Some(d) = decl {
-            let ok = img.decls.get(d as usize).is_some_and(|r| match (t, &r.payload) {
-                (TyRec::Enum(_), Payload::Enum { .. }) => true,
-                (TyRec::Typedef(_), Payload::Typedef { .. }) => true,
-                _ => false,
+            let ok = img.decls.get(d as usize).is_some_and(|r| {
+                matches!(
+                    (t, &r.payload),
+                    (TyRec::Enum(_), Payload::Enum { .. })
+                        | (TyRec::Typedef(_), Payload::Typedef { .. })
+                )
             });
             if !ok {
                 return bad("bad declaration reference in a type");
@@ -718,7 +749,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         let scope = |x: u32| {
             x == NONE
-                || kind_of(x).is_some_and(|r| matches!(r.payload, Payload::Namespace | Payload::Export))
+                || kind_of(x)
+                    .is_some_and(|r| matches!(r.payload, Payload::Namespace | Payload::Export))
         };
         let is_enumerator = matches!(d.payload, Payload::Enumerator { .. });
         if is_enumerator {
@@ -858,7 +890,11 @@ impl Writer<'_, '_, '_> {
             && ty > BUILTINS
             && matches!(
                 self.img.types[(ty - BUILTINS - 1) as usize],
-                TyRec::LRef(_) | TyRec::RRef(_) | TyRec::CArray(..) | TyRec::IArray(_) | TyRec::Func { .. }
+                TyRec::LRef(_)
+                    | TyRec::RRef(_)
+                    | TyRec::CArray(..)
+                    | TyRec::IArray(_)
+                    | TyRec::Func { .. }
             )
         {
             return Err("a qualified array, reference or function type");
@@ -961,7 +997,9 @@ impl Writer<'_, '_, '_> {
         };
         let ctx = match n.ctx() {
             Some(c) if c == ast.tu => NONE,
-            Some(c) => self.recs.get(&c).copied().ok_or("a declaration in an unsupported context")?,
+            Some(c) => {
+                self.recs.get(&c).copied().ok_or("a declaration in an unsupported context")?
+            }
             None => return Err("a declaration in an unsupported context"),
         };
         let lexical = if n.has(DeclFlags::HAS_LEXICAL_CTX) {
@@ -976,11 +1014,16 @@ impl Writer<'_, '_, '_> {
         let loc = self.loc(n.loc())?;
         let prev = match ast.decls.redecl(d).and_then(|r| r.prev) {
             None => NONE,
-            Some(p) => self.recs.get(&p).copied().ok_or("a redeclaration of an entity outside the image")?,
+            Some(p) => self
+                .recs
+                .get(&p)
+                .copied()
+                .ok_or("a redeclaration of an entity outside the image")?,
         };
         Ok((n.flags().bits() & DECL_FLAGS, name, ctx, lexical, loc, prev))
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per record or type kind, kept together with the format
     fn record(&mut self, d: DeclId) -> W<Payload> {
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
@@ -1370,8 +1413,10 @@ impl Sema<'_, '_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per record or type kind, kept together with the format
     fn build_image(&mut self, img: &Image, main: FileId) {
-        let lo = |s: &Self, o: u32| if o == NONE { Loc::INVALID } else { s.diags.sm().loc(main, o) };
+        let lo =
+            |s: &Self, o: u32| if o == NONE { Loc::INVALID } else { s.diags.sm().loc(main, o) };
         let (kw, name_loc) = (lo(self, img.kw), lo(self, img.name_loc));
         self.act_on_module_directive(
             kw,
@@ -1491,7 +1536,13 @@ impl Sema<'_, '_> {
     /// The type `q` names, building image types in order up to it (each
     /// refers only to earlier ones and to records already built, which
     /// [`decode`] checked).
-    fn image_ty(&mut self, img: &Image, tys: &mut Vec<QualType>, ids: &[DeclId], q: QRef) -> QualType {
+    fn image_ty(
+        &mut self,
+        img: &Image,
+        tys: &mut Vec<QualType>,
+        ids: &[DeclId],
+        q: QRef,
+    ) -> QualType {
         let base = if q.ty <= BUILTINS {
             BuiltinType::from_index(q.ty).map_or(QualType::INT, BuiltinType::qual_type)
         } else {
@@ -1502,11 +1553,7 @@ impl Sema<'_, '_> {
             }
             tys[j]
         };
-        if q.quals == 0 {
-            base
-        } else {
-            self.ast.types.qualify(base, Quals::from_bits(q.quals))
-        }
+        if q.quals == 0 { base } else { self.ast.types.qualify(base, Quals::from_bits(q.quals)) }
     }
 
     fn image_build_ty(&mut self, t: &TyRec, tys: &[QualType], ids: &[DeclId]) -> QualType {
@@ -1518,8 +1565,9 @@ impl Sema<'_, '_> {
             };
             if q.quals == 0 { base } else { s.ast.types.qualify(base, Quals::from_bits(q.quals)) }
         };
-        let decl_ty =
-            |s: &Self, d: u32| ids.get(d as usize).and_then(|&x| s.ast.decls.get(x).ty()).unwrap_or(QualType::INT);
+        let decl_ty = |s: &Self, d: u32| {
+            ids.get(d as usize).and_then(|&x| s.ast.decls.get(x).ty()).unwrap_or(QualType::INT)
+        };
         match t {
             TyRec::Pointer(q) => {
                 let q = qt(self, *q);
@@ -1577,6 +1625,7 @@ fn image_flags(s: &mut Sema<'_, '_>, d: DeclId, flags: u8) {
 mod tests {
     use super::*;
 
+    #[allow(clippy::too_many_lines)] // a literal image covering every record and type kind
     fn sample() -> Image {
         let q = |ty| QRef { ty, quals: 0 };
         let int = BuiltinType::Int as u32;
@@ -1593,24 +1642,91 @@ mod tests {
                 TyRec::Pointer(QRef { ty: BUILTINS + 2, quals: 1 }),
             ],
             decls: vec![
-                DeclRec { flags: 0, owner: 1, name: 0, ctx: NONE, lexical: NONE, loc: 20, prev: NONE, payload: Payload::Namespace },
-                DeclRec { flags: 0, owner: 1, name: NONE, ctx: 0, lexical: NONE, loc: 30, prev: NONE, payload: Payload::Export },
                 DeclRec {
-                    flags: 4, owner: 3, name: 1, ctx: 1, lexical: NONE, loc: 40, prev: NONE,
+                    flags: 0,
+                    owner: 1,
+                    name: 0,
+                    ctx: NONE,
+                    lexical: NONE,
+                    loc: 20,
+                    prev: NONE,
+                    payload: Payload::Namespace,
+                },
+                DeclRec {
+                    flags: 0,
+                    owner: 1,
+                    name: NONE,
+                    ctx: 0,
+                    lexical: NONE,
+                    loc: 30,
+                    prev: NONE,
+                    payload: Payload::Export,
+                },
+                DeclRec {
+                    flags: 4,
+                    owner: 3,
+                    name: 1,
+                    ctx: 1,
+                    lexical: NONE,
+                    loc: 40,
+                    prev: NONE,
                     payload: Payload::Function {
                         ty: q(BUILTINS + 1),
                         spec: 0,
-                        params: vec![ParamRec { name: 0, loc: 46, ty: q(int), pflags: 0x100, flags: 0 }],
+                        params: vec![ParamRec {
+                            name: 0,
+                            loc: 46,
+                            ty: q(int),
+                            pflags: 0x100,
+                            flags: 0,
+                        }],
                         body: Some((50, 51)),
                     },
                 },
                 DeclRec {
-                    flags: 0, owner: 3, name: 2, ctx: 1, lexical: NONE, loc: 60, prev: NONE,
-                    payload: Payload::Enum { scoped: 1, fixed: Some((q(int), q(int))), def: Some(None) },
+                    flags: 0,
+                    owner: 3,
+                    name: 2,
+                    ctx: 1,
+                    lexical: NONE,
+                    loc: 60,
+                    prev: NONE,
+                    payload: Payload::Enum {
+                        scoped: 1,
+                        fixed: Some((q(int), q(int))),
+                        def: Some(None),
+                    },
                 },
-                DeclRec { flags: 0, owner: 3, name: 3, ctx: 3, lexical: NONE, loc: 70, prev: NONE, payload: Payload::Enumerator { ty: q(int), value: -3 } },
-                DeclRec { flags: 0, owner: 3, name: 4, ctx: 1, lexical: NONE, loc: 80, prev: NONE, payload: Payload::Typedef { alias: true, underlying: q(BUILTINS + 3) } },
-                DeclRec { flags: 0, owner: 1, name: 5, ctx: 0, lexical: LEX_TU, loc: 90, prev: NONE, payload: Payload::Var { ty: q(BUILTINS + 3), spec: 2 } },
+                DeclRec {
+                    flags: 0,
+                    owner: 3,
+                    name: 3,
+                    ctx: 3,
+                    lexical: NONE,
+                    loc: 70,
+                    prev: NONE,
+                    payload: Payload::Enumerator { ty: q(int), value: -3 },
+                },
+                DeclRec {
+                    flags: 0,
+                    owner: 3,
+                    name: 4,
+                    ctx: 1,
+                    lexical: NONE,
+                    loc: 80,
+                    prev: NONE,
+                    payload: Payload::Typedef { alias: true, underlying: q(BUILTINS + 3) },
+                },
+                DeclRec {
+                    flags: 0,
+                    owner: 1,
+                    name: 5,
+                    ctx: 0,
+                    lexical: LEX_TU,
+                    loc: 90,
+                    prev: NONE,
+                    payload: Payload::Var { ty: q(BUILTINS + 3), spec: 2 },
+                },
             ],
         }
     }

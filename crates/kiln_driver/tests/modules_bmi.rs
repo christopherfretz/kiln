@@ -416,7 +416,10 @@ fn kind2_declaration_image_fallback() {
         ("export module f;\nexport inline int g() { return 1; }\n", "an inline, constexpr"),
         ("export module f;\nexport struct S { int x; };\n", "a class"),
         ("export module f;\nexport template <class T> T id(T t) { return t; }\n", "a template"),
-        ("export module f;\nexport namespace n { using I = int; }\nexport using n::I;\n", "a using-declaration"),
+        (
+            "export module f;\nexport namespace n { using I = int; }\nexport using n::I;\n",
+            "a using-declaration",
+        ),
         ("export module f;\nstatic_assert(true);\n", "a static_assert"),
         ("module;\nint h();\nexport module f;\nexport int g();\n", "a global module fragment"),
         ("export module f;\nexport int v = 3;\n", "a variable with an initializer"),
@@ -424,7 +427,11 @@ fn kind2_declaration_image_fallback() {
         std::fs::write(d.join("f.cppm"), src).unwrap();
         let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "f.cppm", "-o", "f.pcm"]);
         assert_eq!(o.code, 0, "{}", o.stderr);
-        assert!(o.stderr.contains("(no declaration image: ") && o.stderr.contains(why), "{src}: {}", o.stderr);
+        assert!(
+            o.stderr.contains("(no declaration image: ") && o.stderr.contains(why),
+            "{src}: {}",
+            o.stderr
+        );
     }
 }
 
@@ -452,7 +459,8 @@ fn kind2_damaged_image_is_diagnosed() {
             _ => s.bytes.push(0),
         }
         std::fs::write(d.join("bad.pcm"), bmi::write(&c)).unwrap();
-        let o = kiln(&d, &["-fkiln-bmi-image", "-fsyntax-only", "-fmodule-file=im=bad.pcm", "u.cpp"]);
+        let o =
+            kiln(&d, &["-fkiln-bmi-image", "-fsyntax-only", "-fmodule-file=im=bad.pcm", "u.cpp"]);
         assert!(o.code == 0 || o.code == 1, "damage {i}: {}", o.stderr);
         if i % 3 != 1 {
             assert!(

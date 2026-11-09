@@ -725,7 +725,8 @@ impl Preprocessor<'_, '_> {
             Some(c.sections.remove(i).bytes)
         };
         let on = self.modules.as_ref().is_some_and(|m| m.opts.image);
-        let Some(bytes) = take(&mut c).filter(|_| on && c.imports.is_empty() && !c.files.is_empty())
+        let Some(bytes) =
+            take(&mut c).filter(|_| on && c.imports.is_empty() && !c.files.is_empty())
         else {
             return Some(c);
         };
@@ -735,8 +736,7 @@ impl Preprocessor<'_, '_> {
         // that does not decode is used anyway: sema then reports the file
         // as corrupt ("The reader").
         if let Some((main_path, names)) = bmi::image_header(&bytes) {
-            if c.files[0].path != main_path
-                || names.iter().any(|n| self.interner.get(n).is_some())
+            if c.files[0].path != main_path || names.iter().any(|n| self.interner.get(n).is_some())
             {
                 return Some(c);
             }
@@ -1005,7 +1005,7 @@ impl Preprocessor<'_, '_> {
     }
 
     /// Loads a capsule file `path` recorded with `text`: the file itself
-    /// when it still holds the recorded text (its FileId is then shared
+    /// when it still holds the recorded text (its `FileId` is then shared
     /// with any textual inclusion of it, §6); otherwise the recorded text
     /// under the file's name (§11.3).
     fn load_recorded(&mut self, path: &str, text: String) -> Option<FileId> {

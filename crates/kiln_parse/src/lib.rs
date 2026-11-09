@@ -392,6 +392,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     let image = s.take_module_image();
     let carried_hits = s.carried_hits();
     let (ast, oven) = s.into_parts();
-    let tu = ParsedTu { ast, oven, inst_report, cfg_dump, sema_memory, carried, carried_hits, image };
+    let tu =
+        ParsedTu { ast, oven, inst_report, cfg_dump, sema_memory, carried, carried_hits, image };
     (tu, src.into_preprocessor())
 }

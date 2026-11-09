@@ -23,6 +23,7 @@ mod gcc;
 
 /// Everything a worker needs; shared read-only between threads.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // independent command-line switches
 pub struct Config {
     /// Repository root; compilers run with this as their working directory.
     pub root: PathBuf,

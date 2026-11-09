@@ -136,6 +136,7 @@ impl std::fmt::Debug for BmiState {
             .field("recording", &self.recorder.as_ref().map(|r| r.entries.len()))
             .field("tables", &self.tables.iter().map(|t| (t.unit, t.map.len())).collect::<Vec<_>>())
             .field("hits", &self.hits)
+            .field("record_image", &self.record_image)
             .finish()
     }
 }

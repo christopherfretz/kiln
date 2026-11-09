@@ -593,7 +593,9 @@ impl Job<'_> {
         let consts = carried.filter(|c| !c.bytes.is_empty());
         let decl_image = image.filter(|i| i.fallback.is_none() && !i.bytes.is_empty());
         if let Some(c) = consts {
-            capsule.sections.push(bmi::Section { tag: bmi::SECTION_CONSTS, bytes: c.bytes.clone() });
+            capsule
+                .sections
+                .push(bmi::Section { tag: bmi::SECTION_CONSTS, bytes: c.bytes.clone() });
         }
         if let Some(i) = decl_image {
             capsule.sections.push(bmi::Section { tag: bmi::SECTION_IMAGE, bytes: i.bytes.clone() });
@@ -603,7 +605,9 @@ impl Job<'_> {
         };
         let mut kind = match carried {
             None => "kind 1, as -fkiln-bmi-kind=1 requests".to_owned(),
-            Some(c) if consts.is_some() => format!("kind 2, carrying {} constant results", c.carried),
+            Some(c) if consts.is_some() => {
+                format!("kind 2, carrying {} constant results", c.carried)
+            }
             Some(c) if decl_image.is_some() => {
                 format!("kind 2, carrying no constant result{}", skip(c))
             }
@@ -612,10 +616,16 @@ impl Job<'_> {
         // spec/modules.md §11.11 "Part 2a": the image, or why there is none.
         match image {
             Some(i) if i.fallback.is_none() => {
-                kind += &format!(", with a declaration image of {} declarations", i.decls);
+                let _ = std::fmt::Write::write_fmt(
+                    &mut kind,
+                    format_args!(", with a declaration image of {} declarations", i.decls),
+                );
             }
             Some(i) => {
-                kind += &format!(" (no declaration image: {})", i.fallback.unwrap_or("empty"));
+                let _ = std::fmt::Write::write_fmt(
+                    &mut kind,
+                    format_args!(" (no declaration image: {})", i.fallback.unwrap_or("empty")),
+                );
             }
             None => {}
         }
