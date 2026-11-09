@@ -567,7 +567,7 @@ impl Sema<'_, '_> {
         // inaccessible one does not invalidate the expression, so the
         // matching deallocation function is still checked below.
         if let Some(naming) = alloc.naming {
-            self.check_member_access(op_new, naming, None, loc);
+            self.check_member_access(alloc.found_decl(op_new), naming, None, loc);
         }
         if self.is_deleted_fn(op_new)
             && let Some(notes) = tmpl_notes.take()
@@ -649,8 +649,8 @@ impl Sema<'_, '_> {
             // must not be deleted (P3769R1); clang looks it up only when
             // exceptions are enabled.
             if self.exceptions {
-                if let Some(naming) = naming {
-                    self.check_member_access_distinct(od, naming, loc);
+                if let Some((naming, via)) = naming {
+                    self.check_member_access_distinct(via, naming, loc);
                 }
                 // A deleted one makes the new-expression invalid (clang
                 // `BuildCXXNew`: `DiagnoseUseOfDecl` returns an error).
@@ -1456,7 +1456,7 @@ impl Sema<'_, '_> {
         pass_align: bool,
         (op_new, ti): (DeclId, Option<QualType>),
         (loc, new_loc): (Loc, Loc),
-    ) -> Result<Option<(DeclId, Option<DeclId>)>, ()> {
+    ) -> Result<Option<(DeclId, Option<(DeclId, DeclId)>)>, ()> {
         let op = if array { OverloadedOperator::ArrayDelete } else { OverloadedOperator::Delete };
         let mut found = self.alloc_fns(elem, op, global, loc);
         let new_typed = self.is_type_aware_alloc_fn(op_new);
@@ -1491,12 +1491,17 @@ impl Sema<'_, '_> {
                 // [expr.new]/28: the usual deallocation function, sized
                 // when found in the global scope (clang `FindAllocationFunctions`).
                 let all: Vec<DeclId> = found.fns.iter().chain(&found.templates).copied().collect();
-                let over = pass_align || self.over_aligned(elem);
+                // clang `hasNewExtendedAlignment(AllocElemType)`: a typed
+                // `operator new` always takes the alignment, which does
+                // not make the cleanup aligned.
+                let over = self.over_aligned(elem);
                 let want = DeallocWant {
                     ty: elem,
                     typed: ti.is_some(),
                     aligned: over,
-                    sized: !found.in_class && self.sized_deallocation,
+                    // clang `sizedDeallocationModeFromBool(FoundGlobalDelete)`:
+                    // not gated on `-fsized-deallocation`.
+                    sized: !found.in_class,
                 };
                 self.resolve_usual_dealloc(&all, want, false, loc).iter().map(|u| u.f).collect()
             } else {
@@ -1574,7 +1579,7 @@ impl Sema<'_, '_> {
                 if self.exceptions && placement_args && !new_typed {
                     self.placement_selects_sized_delete(f, &found.fns, found.in_class, new_loc);
                 }
-                Ok(Some((f, naming)))
+                Ok(Some((f, naming.map(|n| (n, found.found_decl(f))))))
             }
             [] => Ok(None),
             _ => {
@@ -2142,7 +2147,7 @@ impl Sema<'_, '_> {
         // substitution failure in SFINAE context (libc++'s
         // `__can_be_deleted`, constraining `shared_ptr(Y*)`).
         if let (Some(f), Some(naming)) = (op_delete, found.naming)
-            && !self.check_member_access(f, naming, None, loc)
+            && !self.check_member_access(found.found_decl(f), naming, None, loc)
         {
             return self.recover_err(&[operand], loc);
         }
@@ -2311,8 +2316,8 @@ impl Sema<'_, '_> {
         // The deallocation function is access-checked at the destructor,
         // from the destructor ([class.dtor]/16, clang `CheckDestructor` →
         // `FindDeallocationFunction`).
-        if let Some(naming) = naming {
-            self.check_member_access(op, naming, None, loc);
+        if let Some((naming, via)) = naming {
+            self.check_member_access(via, naming, None, loc);
         }
         // A deleted one is used ([dcl.fct.def.delete]/2; clang
         // `FindDeallocationFunction`'s `DiagnoseUseOfDecl`).
@@ -2328,11 +2333,29 @@ impl Sema<'_, '_> {
             // A destroying operator delete is passed `this` converted to
             // its first parameter's type ([expr.delete]/7.1; clang
             // `getOperatorDeleteThisArg`).
+            // `this` is formed at the parameter (clang `CheckDestructor`),
+            // and a failed conversion (a private base) notes the
+            // destructor.
             let cls = self.tag_type(class);
             let this_ty = self.ast.types.pointer_to(cls);
-            let this = self.builder().this_expr(this_ty, true, loc);
-            if let Ok(arg) = conv::implicit_convert(self, this, p0, ConvCtx::Argument) {
-                let _ = self.ast.decls.cold.dtor_delete_this.insert(first, arg);
+            let at = self
+                .param_decls(op)
+                .first()
+                .map_or(loc, |&p| self.ast.decls.get(p).loc());
+            let this = self.builder().this_expr(this_ty, true, at);
+            let note = self.diag(DiagId::note_implicit_delete_this_in_destructor_here, loc);
+            *self.trailing_notes.borrow_mut() = vec![note.clone()];
+            let r = conv::implicit_convert(self, this, p0, ConvCtx::Argument);
+            self.trailing_notes.borrow_mut().clear();
+            match r {
+                Ok(arg) => {
+                    let _ = self.ast.decls.cold.dtor_delete_this.insert(first, arg);
+                }
+                Err(err) => {
+                    let msg = err.diag(self, this).with_note(note);
+                    self.emit(msg);
+                    return;
+                }
             }
         }
         let op = self.ast.latest(op);
@@ -2347,7 +2370,7 @@ impl Sema<'_, '_> {
         &mut self,
         class: DeclId,
         (loc, diagnose): (Loc, bool),
-    ) -> Option<(DeclId, Option<DeclId>)> {
+    ) -> Option<(DeclId, Option<(DeclId, DeclId)>)> {
         self.declare_global_new_delete();
         let ty = self.tag_type(class);
         let align = self.complete_class_align(ty);
@@ -2358,7 +2381,7 @@ impl Sema<'_, '_> {
         } else {
             self.usual_delete(&found.fns, found.in_class, aligned, true, true)?
         };
-        Some((usual.0, found.naming))
+        Some((usual.0, found.naming.map(|n| (n, found.found_decl(usual.0)))))
     }
 
     /// Whether a virtual destructor of `class` finds an unambiguous,
@@ -2369,7 +2392,7 @@ impl Sema<'_, '_> {
         match self.dtor_dealloc_fn(class, (loc, false)) {
             None => false,
             Some((op, _)) if self.is_deleted_fn(op) => false,
-            Some((op, Some(naming))) => self.member_accessible_from(op, naming, class),
+            Some((_, Some((naming, via)))) => self.member_accessible_from(via, naming, class),
             Some((_, None)) => true,
         }
     }

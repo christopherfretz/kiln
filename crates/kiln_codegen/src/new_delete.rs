@@ -591,6 +591,10 @@ impl Cg<'_> {
             0
         };
         let (esize, alloc_align) = self.size_align(base);
+        // A cookie makes the allocation `size_t`-aligned, and that is the
+        // alignment passed (a type-aware `operator new[]`) and given back
+        // to the cleanup (clang `EmitCXXNewExpr`: `cookieAlign`).
+        let alloc_align = if cookie != 0 { alloc_align.max(8) } else { alloc_align };
         let Some(fty) = ast.decls.get(op_new).ty() else {
             return err(loc, "allocation function without a type");
         };
@@ -707,6 +711,7 @@ impl Cg<'_> {
         let placement: Vec<ExprId> =
             x.placement.map(|l| ast.lists.iter(l).collect()).unwrap_or_default();
         let mut placement_vals: Vec<CallArg> = Vec::new();
+        let mut ti_tag: Option<CallArg> = None;
         let (alloc, allocation_align) = if af.reserved {
             let Some(&arg) = placement.first() else {
                 return err(loc, "placement new without a placement argument");
@@ -731,6 +736,7 @@ impl Cg<'_> {
                 let tag = self.temp(q);
                 vals.push(CallArg::Agg(tag));
                 arg_tys.push(q);
+                ti_tag = Some(CallArg::Agg(tag));
             }
             let i = vals.len();
             let size_q = params.get(i).copied().unwrap_or(QualType::unqual(t.target().size_t));
@@ -813,6 +819,7 @@ impl Cg<'_> {
                 align: alloc_align,
                 pass_align,
                 placement,
+                tag: ti_tag.map(Saved::Direct),
             };
             self.push_full_expr_cleanup(Cleanup::NewDelete(Box::new(nd)), false, true);
             let c = self.f.cl.depth();
@@ -1496,8 +1503,11 @@ impl Cg<'_> {
         // (clang `CallDeleteDuringNew::Emit`).
         let typed = self.is_type_identity(p0);
         if typed {
-            let tag = self.temp(p0);
-            vals.push(CallArg::Agg(tag));
+            let tag = match c.tag {
+                Some(s) => self.restore_saved(s),
+                None => CallArg::Agg(self.temp(p0)),
+            };
+            vals.push(tag);
             arg_tys.push(p0);
         }
         let pi = usize::from(typed);

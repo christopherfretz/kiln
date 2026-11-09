@@ -32,6 +32,18 @@ pub(crate) struct AllocFns {
     /// The class they were found in, the naming class of their access
     /// check ([class.access]/4, [expr.new]/19, [expr.delete]/12).
     pub naming: Option<DeclId>,
+    /// `(function, using-shadow)` for each class-scope function found
+    /// through a using-declaration: access is checked on the shadow
+    /// ([namespace.udecl]/19, clang's `FoundDecl`).
+    pub via: Vec<(DeclId, DeclId)>,
+}
+
+impl AllocFns {
+    /// The declaration lookup found for `f`: its using-shadow when it was
+    /// found through a using-declaration, else `f`.
+    pub(crate) fn found_decl(&self, f: DeclId) -> DeclId {
+        self.via.iter().find(|&&(t, _)| t == f).map_or(f, |&(_, s)| s)
+    }
 }
 
 /// A usual deallocation function (clang `UsualDeallocFnInfo`).
@@ -105,8 +117,15 @@ impl Sema<'_, '_> {
                 .copied()
                 .filter(|&d| self.kind_of(d) == DeclKind::FunctionTemplate)
                 .collect();
+            let via = found
+                .decls
+                .iter()
+                .zip(&found.found)
+                .filter(|(t, s)| t != s)
+                .map(|(&t, &s)| (t, s))
+                .collect();
             if !found.decls.is_empty() {
-                return AllocFns { fns, templates, in_class: true, naming: Some(def) };
+                return AllocFns { fns, templates, in_class: true, naming: Some(def), via };
             }
         }
         let tu = self.ast.tu;
@@ -122,7 +141,7 @@ impl Sema<'_, '_> {
             .into_iter()
             .filter(|&d| self.ast.decls.get(d).kind() == DeclKind::FunctionTemplate)
             .collect();
-        AllocFns { fns, templates, in_class: false, naming: None }
+        AllocFns { fns, templates, in_class: false, naming: None, via: Vec::new() }
     }
 
     /// The usual deallocation function among `fns` ([basic.stc.dynamic.

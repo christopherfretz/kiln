@@ -156,6 +156,7 @@ note_immediate_default_init_reason = Note (7) "'{0}' is an immediate {1:function
 note_immediate_function_reason = Note (6) "'{0}' is an immediate {4:function|constructor} because its body {1:evaluates the address of|contains a call to} {2:an immediate|a consteval} {5:function|constructor} '{3}'{1:| and that call is not a constant expression}";
 note_immediate_function_reason_consteval_only = Note (3) "'{0}' is an immediate {1:function|constructor} because its body contains an expression of consteval-only type {2}";
 note_implicit_deduction_guide = Note (1) "implicit deduction guide declared as '{0}'";
+note_implicit_delete_this_in_destructor_here = Note (0) "while checking implicit 'delete this' for virtual destructor";
 note_in_binding_decl_init = Note (1) "in implicit initialization of binding declaration '{0}'";
 note_in_default_initializer = Note (1) "in the default initializer of '{0}'";
 note_in_for_range = Note (2) "when looking up '{0:begin|end}' function for range expression of type {1}";
