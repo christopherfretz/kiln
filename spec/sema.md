@@ -4946,12 +4946,31 @@ under its own name, the same signature, gating and codegen
   `bzero`, `index`, `rindex`, `stpcpy`, `stpncpy`, `strdup` and
   `strndup`; under `-std=c++*` `bcmp` is an ordinary function. `memcmp`
   and `bcmp` have no implicit attributes; their twin is recorded for the
-  never-constant check and the WP-940 fold. Still not modelled: rows
-  whose only effect is `AllocSize` (`malloc`, `calloc`, `realloc`,
-  `aligned_alloc`, `memalign`), `ReturnsTwice` (`setjmp`, `vfork`,
-  `getcontext`), the scanf-family `format`, and clang's special lowering
-  of `alloca`, `bzero` / `bcopy` (memset / memmove intrinsics) and
-  `finite` (`llvm.is.fpclass`). A call in
+  never-constant check and the WP-940 fold. WP-1073 adds clang's
+  allocation functions `malloc`, `calloc`, `realloc`, `aligned_alloc`
+  and (GNU modes only) `memalign`, which get no `NoThrow` but
+  `AddKnownFunctionAttributes`'s implicit `alloc_size` (`(1)`, `(1, 2)`,
+  `(2)`, `(2)`, `(2)`; `builtin::lib_alloc`) and, for `aligned_alloc` /
+  `memalign`, `alloc_align(1)`, unless the attribute is written; these
+  feed codegen's `allocsize` / `align` (spec/codegen.md §3.1) and the
+  Oven's `__builtin_object_size` (spec/oven.md "Builtins"). The scanf
+  family (`scanf`, `fscanf`, `sscanf`, `vscanf`, `vfscanf`, `vsscanf`;
+  `builtin::lib_scanf_format`) gets an implicit `format(scanf, F, A)`
+  as the printf family below, checked by `-Wformat`'s scanf rules
+  (`format_string::walk_scanf`: conversions take pointers, `%[` sets,
+  `*` suppression consumes no argument, an invalid conversion
+  specifier consumes none either, so a later surplus argument is still
+  "data argument not used"). GNU modes recognize `alloca` (`NoThrow`)
+  and `mempcpy`, and `finite{,f,l}` (`NoThrow`, `Const`; glibc's
+  `__finite{,f,l}` in every dialect), whose twin is `__builtin_isfinite`
+  (`builtin::lib_twin`); `creal` / `cimag` / `conj` `{,f,l}` are `NoThrow`
+  and `Const` with the new `__builtin_creal` ... twins, and `bzero` /
+  `bcopy` gain `__builtin_bzero` / `__builtin_bcopy` twins. All of these
+  are lowered inline by codegen. `ReturnsTwice` (`setjmp`, `_setjmp`,
+  `sigsetjmp`, `__sigsetjmp`, `savectx`, `vfork`, `getcontext`) was
+  already modelled by codegen's `returns_twice` (`builtins::returns_twice`) on the declaration and
+  the call (WP-807, spec/codegen.md §3), and `abort` already matched
+  clang (WP-938); WP-1073 confirmed both. A call in
   a constant expression is still a call of a non-constexpr function
   (clang 19 and 22 reject `constexpr double d = ceil(1.5);` and
   `constexpr auto n = strlen("ab");`); only a fold (`__builtin_constant_p`,
@@ -4961,8 +4980,7 @@ under its own name, the same signature, gating and codegen
   WP-186) gets clang's implicit `format(printf, F, A)` first, unless a
   `format` is written. `FILE` in a row's type (`P`) is the translation
   unit's typedef, alias or (as clang's `LookupNecessaryTypesForBuiltin`)
-  tag named `FILE`. Not modelled: clang 22's `modf` to `llvm.modf` and
-  clang's implicit `alloc_size` on the library allocation functions.
+  tag named `FILE`. Not modelled: clang 22's `modf` to `llvm.modf`.
   Under `-fno-builtin` / `-ffreestanding` (`Sema::no_builtin`) no
   function is recognized, and under `-fno-builtin-<name>`
   (`Sema::no_builtin_fns`) not `<name>` (`lib_builtin_info`; clang
