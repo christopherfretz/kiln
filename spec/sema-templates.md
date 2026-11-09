@@ -2429,9 +2429,10 @@ instantiated inside a SFINAE context is a hard error there (§5.7).
   - Tests: `temp.friend/dependent-member-class-friend-run.cpp`,
     `dependent-member-friend-{variants,class-template}-run.cpp`,
     `dependent-member-friend-warning{,-clang19}.cpp`,
-    `dependent-member-friend-denied.cpp`. Gap: member friends are not
-    written to a precompiled header or module image (a member friend
-    declared in an imported class grants nothing).
+    `dependent-member-friend-denied.cpp`. A precompiled header or a module
+    replays its source, so its member friends are declared again. Gap:
+    the side table is not recorded in the module declaration image
+    (`-fkiln-bmi-image`, off by default).
 - `template<class U> friend struct Y<U*>;` is "partial specialization
   cannot be declared as a friend" ([temp.friend]/9).
 
