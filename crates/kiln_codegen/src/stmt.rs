@@ -7,6 +7,7 @@ use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_llvm::{BinOp, Flags, IntPredicate, TypeId as LTy};
 
+use crate::coverage::pgo::Key;
 use crate::cleanup::{Depth, JumpDest};
 use crate::fir::{Blk, Op, V};
 use crate::func::{Jump, RetKind, SwitchCtx};
@@ -380,6 +381,7 @@ impl Cg<'_> {
             }
             StmtKind::LabelStmt => {
                 self.emit_label(DeclId::new(n.a()));
+                self.prof_inc(Key::Stmt(s));
                 self.emit_stmt(StmtId::new(n.b()))
             }
             StmtKind::GotoStmt => {
@@ -409,7 +411,7 @@ impl Cg<'_> {
             StmtKind::CaseStmt => self.emit_case(s),
             StmtKind::DefaultStmt => {
                 let sw = self.f.sw.expect("default outside a switch");
-                self.emit_block(sw.default, false);
+                self.emit_block_with_fallthrough(sw.default, Key::Stmt(s));
                 self.emit_stmt(ast.stmts.default_sub(s))
             }
             StmtKind::CXXTryStmt => self.emit_try_stmt(s),
@@ -535,6 +537,9 @@ impl Cg<'_> {
         if let Some(b) = self.fold_bool(cond).filter(|_| deferred.is_none()) {
             let (live, dead) = if b { (d.then, d.els) } else { (d.els, d.then) };
             if kind == IfKind::Constexpr || !dead.is_some_and(|x| self.contains_label(x)) {
+                if b {
+                    self.prof_inc(Key::Stmt(s));
+                }
                 if let Some(l) = live {
                     let sc = self.begin_scope(false);
                     self.emit_stmt(l)?;
@@ -555,6 +560,7 @@ impl Cg<'_> {
             self.branch_on_bool(cond, then_b, else_b)?;
         }
         self.emit_block(then_b, false);
+        self.prof_inc(Key::Stmt(s));
         if let Some(t) = d.then {
             let sc = self.begin_scope(false);
             self.emit_stmt(t)?;
@@ -675,6 +681,7 @@ impl Cg<'_> {
         }
         let body_scope = self.begin_scope(false);
         self.emit_block(body, false);
+        self.prof_inc(Key::Stmt(s));
         if let Some(b) = d.body {
             self.emit_stmt(b)?;
         }
@@ -699,7 +706,7 @@ impl Cg<'_> {
         let cond_d = self.jump_dest_here();
         self.f.jumps.push(Jump { brk: end, cont: Some(cond_d) });
         let body_b = self.f.fir.create_block();
-        self.emit_block(body_b, false);
+        self.emit_block_with_fallthrough(body_b, Key::Stmt(s));
         if let Some(b) = d.body {
             let sc = self.begin_scope(false);
             self.emit_stmt(b)?;
@@ -775,6 +782,7 @@ impl Cg<'_> {
             }
             self.emit_block(body_b, false);
         }
+        self.prof_inc(Key::Stmt(s));
         if let Some(b) = d.body {
             let sc = self.begin_scope(false);
             self.emit_stmt(b)?;
@@ -841,6 +849,7 @@ impl Cg<'_> {
             self.branch_through_cleanup(end);
         }
         self.emit_block(body_b, false);
+        self.prof_inc(Key::Stmt(s));
         let next = self.jump_dest_here();
         self.f.jumps.push(Jump { brk: end, cont: Some(next) });
         let mut sc = self.begin_scope(false);
@@ -951,6 +960,7 @@ impl Cg<'_> {
         }
         self.end_scope(cond_scope);
         self.emit_block(epilog.blk, true);
+        self.prof_inc(Key::Stmt(s));
         self.f.sw = saved;
         Ok(())
     }
@@ -958,14 +968,28 @@ impl Cg<'_> {
     fn emit_case(&mut self, s: StmtId) -> R<()> {
         let ast = self.ast;
         let mut s = s;
-        let b = self.f.fir.create_block();
-        self.emit_block(b, false);
+        let mut b = self.f.fir.create_block();
+        self.emit_block_with_fallthrough(b, Key::Stmt(s));
+        let mut first = true;
         loop {
             let cd = *ast.stmts.case_data(s);
+            // clang `EmitCaseStmtRange`: a range always starts its own
+            // block, also at the end of a run of plain cases.
             if let Some(rhs) = cd.rhs {
-                return self.emit_case_range(cd.lhs, rhs, cd.sub);
+                if !first {
+                    b = self.f.fir.create_block();
+                    self.emit_block_with_fallthrough(b, Key::Stmt(s));
+                }
+                return self.emit_case_range(b, cd.lhs, rhs, cd.sub);
             }
             let sw = self.f.sw.expect("case outside a switch");
+            // clang `EmitCaseStmt`: with InstrProf counters, each of a
+            // run of cases takes its own block.
+            if !first && self.instr_regions() {
+                b = self.f.fir.create_block();
+                self.emit_block_with_fallthrough(b, Key::Stmt(s));
+            }
+            first = false;
             let k = if let Some(v) = self.fold_int(cd.lhs) {
                 V::C(self.m.const_int(sw.cond_ty, v))
             } else {
@@ -985,12 +1009,12 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `EmitCaseStmtRange`: the block of `case lo ... hi: sub`
-    /// (already started by [`Self::emit_case`]) and its sub-statement,
-    /// then a switch case per value when the range has fewer than 64
-    /// more, else an unsigned range test chained before the default.
-    fn emit_case_range(&mut self, lo: ExprId, hi: ExprId, sub: StmtId) -> R<()> {
-        let dest = self.f.fir.cur().expect("case block");
+    /// clang `EmitCaseStmtRange`: the block `dest` of `case lo ... hi:
+    /// sub` (already started by [`Self::emit_case`]) and its
+    /// sub-statement, then a switch case per value when the range has
+    /// fewer than 64 more, else an unsigned range test chained before the
+    /// default.
+    fn emit_case_range(&mut self, dest: Blk, lo: ExprId, hi: ExprId, sub: StmtId) -> R<()> {
         self.emit_stmt(sub)?;
         let mut sw = self.f.sw.expect("case outside a switch");
         let lo = self.fold_int(lo).expect("case value folds");

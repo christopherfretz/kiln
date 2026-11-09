@@ -14,6 +14,7 @@ use kiln_ast::{ExprId, QualType};
 use kiln_llvm::{BinOp, Flags, FloatPredicate, IntPredicate, TypeId as LTy, Value};
 
 use crate::ComplexRange;
+use crate::coverage::pgo::Key;
 use crate::expr::{Callee, LV, Opaque};
 use crate::fir::{Fir, Op, V};
 use crate::func::{Addr, CallArg, min_align};
@@ -176,7 +177,7 @@ impl Cg<'_> {
             }
             ExprKind::ConditionalOperator => {
                 let [a, b] = ast.exprs.cond_arms(e);
-                self.emit_cx_conditional(self.sub(e), a, b)
+                self.emit_cx_conditional(e, self.sub(e), a, b)
             }
             ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr
                 if !self.is_glvalue(e) =>
@@ -812,13 +813,14 @@ impl Cg<'_> {
     }
 
     /// clang `VisitAbstractConditionalOperator` on complex arms.
-    fn emit_cx_conditional(&mut self, c: ExprId, a: ExprId, b: ExprId) -> R<Cx> {
+    fn emit_cx_conditional(&mut self, e: ExprId, c: ExprId, a: ExprId, b: ExprId) -> R<Cx> {
         let lb = self.f.fir.create_block();
         let rb = self.f.fir.create_block();
         let cont = self.f.fir.create_block();
         let start = self.f.fir.cur();
         self.branch_on_bool(c, lb, rb)?;
         self.emit_block(lb, false);
+        self.prof_inc(Key::Expr(e));
         let x = self.cond_eval(start, |cg| cg.emit_complex(a))?;
         let lb = self.f.fir.cur().expect("insert point");
         self.emit_branch(cont);

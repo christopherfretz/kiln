@@ -961,6 +961,7 @@ impl Cg<'_> {
         if fn_try {
             self.enter_try(body)?;
         }
+        self.prof_inc(crate::coverage::pgo::Key::Stmt(body));
         let sc = self.begin_scope(false);
         let inits: Vec<kiln_ast::decl::CtorInit> = ast.ctor_inits(d).copied().collect();
         let memcpyize = self.is_defaulted(d)
@@ -1305,6 +1306,7 @@ impl Cg<'_> {
             self.emit_trap_unreachable();
             return Ok(());
         }
+        self.prof_inc(crate::coverage::pgo::Key::Stmt(body));
         if fn_try {
             self.enter_try(body)?;
         }

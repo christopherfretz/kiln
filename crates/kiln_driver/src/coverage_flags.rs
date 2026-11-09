@@ -179,6 +179,17 @@ impl CoverageFlags {
         if self.pgo_generate {
             e.push(pgo_error("-fprofile-generate"));
         }
+        // The counters land without their mapping (spec/driver.md
+        // "Coverage flags"): an explicit error rather than a binary that
+        // `llvm-cov` cannot read.
+        if self.mapping() {
+            e.push(ArgError::UnsupportedByKiln(
+                "-fcoverage-mapping (source-based coverage mapping is not yet implemented, \
+                 a WP-941 follow-up; -fprofile-instr-generate counters work alone, and \
+                 --coverage gives gcov line coverage)"
+                    .into(),
+            ));
+        }
         if self.mapping == Some(true) && self.instr_generate.is_none() {
             e.push(ArgError::OnlyAllowedWith(
                 "-fcoverage-mapping".into(),
@@ -284,7 +295,11 @@ mod tests {
     fn instr_flags() {
         let (f, _) = parse(&["-fprofile-instr-generate=x/%m.profraw", "-fcoverage-mapping"]);
         assert_eq!(f.instr_generate, Some(Some("x/%m.profraw".into())));
-        assert!(f.mapping() && f.errors().is_empty());
+        assert!(f.mapping());
+        assert!(matches!(&f.errors()[..], [ArgError::UnsupportedByKiln(m)]
+            if m.contains("not yet implemented")));
+        let (f, _) = parse(&["-fprofile-instr-generate", "-fcoverage-mapping", "-fno-coverage-mapping"]);
+        assert!(!f.mapping() && f.errors().is_empty());
         assert_eq!(f.link_flags(), ["-fprofile-instr-generate"]);
         let (f, _) = parse(&["-fcoverage-mapping"]);
         assert_eq!(

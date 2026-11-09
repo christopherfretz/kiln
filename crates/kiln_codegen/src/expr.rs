@@ -15,6 +15,7 @@ use kiln_llvm::{
     IntPredicate, TypeId as LTy, Value,
 };
 
+use crate::coverage::pgo::{self, Key};
 use crate::cleanup::{Cleanup, IrregularPartialArray};
 use crate::debuginfo::func::VarSlot;
 use crate::fir::{Fir, Op, V};
@@ -360,11 +361,11 @@ impl Cg<'_> {
             }
             ExprKind::ConditionalOperator => {
                 let [a, b] = ast.exprs.cond_arms(e);
-                return self.emit_conditional(self.sub(e), a, b);
+                return self.emit_conditional(e, self.sub(e), a, b);
             }
             ExprKind::BinaryConditionalOperator => {
                 let [common, c, a, b] = self.bind_common(e)?;
-                let r = self.emit_conditional(c, a, b);
+                let r = self.emit_conditional(e, c, a, b);
                 self.f.opaque.remove(&common);
                 return r;
             }
@@ -1625,10 +1626,45 @@ impl Cg<'_> {
     fn emit_logical(&mut self, e: ExprId, and: bool) -> R<V> {
         let ast = self.ast;
         let [l, r] = ast.exprs.operands(e);
-        let rt = self.lty(ast.exprs.get(e).ty());
+        let q = ast.exprs.get(e).ty();
+        let rt = self.lty(q);
+        // clang `VisitBinLAnd`/`VisitBinLOr` on vectors: both operands
+        // compared with zero, lane-wise `and`/`or`, sign-extended.
+        if self.vec_of(q).is_some() {
+            self.prof_inc(Key::Expr(e));
+            let x = self.emit_scalar(l)?;
+            let y = self.emit_scalar(r)?;
+            let t = self.f.fir.ty(&self.m, x);
+            let zero = V::C(self.m.const_zero(t));
+            let (x, y) = if self.is_float_ty(t) {
+                (
+                    self.fcmp(FloatPredicate::Une, x, zero),
+                    self.fcmp(FloatPredicate::Une, y, zero),
+                )
+            } else {
+                (self.icmp(IntPredicate::Ne, x, zero), self.icmp(IntPredicate::Ne, y, zero))
+            };
+            let op = if and { BinOp::And } else { BinOp::Or };
+            let v = self.bin(op, Flags::NONE, x, y);
+            return Ok(self.cast(CastOp::SExt, v, rt));
+        }
         if let Some(b) = self.fold_bool(l) {
             if b == and {
+                self.prof_inc(Key::Expr(e));
                 let v = self.eval_bool(r)?;
+                if self.instr_regions() && pgo::is_instrumented_condition(ast, r) {
+                    let fb = self.f.fir.create_block();
+                    let cnt = self.f.fir.create_block();
+                    if and {
+                        self.cond_br(v, cnt, fb);
+                    } else {
+                        self.cond_br(v, fb, cnt);
+                    }
+                    self.emit_block(cnt, false);
+                    self.prof_inc(Key::Expr(r));
+                    self.emit_branch(fb);
+                    self.emit_block(fb, false);
+                }
                 return Ok(self.zext_or_same(v, rt));
             }
             return Ok(V::C(self.m.const_int(rt, i128::from(!and))));
@@ -1649,8 +1685,21 @@ impl Cg<'_> {
             LTy::I1,
         );
         self.emit_block(rhs, false);
+        self.prof_inc(Key::Expr(e));
         let v = self.cond_eval(start, |cg| cg.eval_bool(r))?;
         let rb = self.f.fir.cur().expect("insert point");
+        if self.instr_regions() && pgo::is_instrumented_condition(ast, r) {
+            let cnt = self.f.fir.create_block();
+            if and {
+                self.cond_br(v, cnt, end);
+            } else {
+                self.cond_br(v, end, cnt);
+            }
+            self.emit_block(cnt, false);
+            self.prof_inc(Key::Expr(r));
+            self.emit_branch(end);
+            self.f.fir.add_incoming(Fir::last_inst(phi), v, cnt);
+        }
         self.emit_block(end, false);
         self.f.fir.add_incoming(Fir::last_inst(phi), v, rb);
         Ok(self.zext_or_same(phi, rt))
@@ -1691,10 +1740,11 @@ impl Cg<'_> {
                 let and = ast.exprs.binary_op(e) == BinaryOp::LAnd;
                 let [l, r] = ast.exprs.operands(e);
                 if self.fold_bool(l) == Some(and) {
-                    return self.branch_on_bool(r, t, f);
+                    self.prof_inc(Key::Expr(e));
+                    return self.branch_to_counter_block(r, and, t, f, None);
                 }
                 if self.fold_bool(r) == Some(and) {
-                    return self.branch_on_bool(l, t, f);
+                    return self.branch_to_counter_block(l, and, t, f, Some(e));
                 }
                 let mid = self.f.fir.create_block();
                 let start = self.f.fir.cur();
@@ -1704,7 +1754,8 @@ impl Cg<'_> {
                     self.branch_on_bool(l, t, mid)?;
                 }
                 self.emit_block(mid, false);
-                self.cond_eval(start, |cg| cg.branch_on_bool(r, t, f))
+                self.prof_inc(Key::Expr(e));
+                self.cond_eval(start, |cg| cg.branch_to_counter_block(r, and, t, f, None))
             }
             ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::LNot => {
                 self.branch_on_bool(ast.exprs.operand(e), f, t)
@@ -1717,6 +1768,7 @@ impl Cg<'_> {
                 let start = self.f.fir.cur();
                 self.branch_on_bool(c, lb, rb)?;
                 self.emit_block(lb, false);
+                self.prof_inc(Key::Expr(e));
                 self.cond_eval(start, |cg| cg.branch_on_bool(a, t, f))?;
                 self.emit_block(rb, false);
                 self.cond_eval(start, |cg| cg.branch_on_bool(b, t, f))
@@ -1742,6 +1794,30 @@ impl Cg<'_> {
                 Ok(())
             }
         }
+    }
+
+    /// clang `EmitBranchToCounterBlock`: [`Self::branch_on_bool`] of the
+    /// operand `c` of a `&&` (`and`) or `||`, through a block counting
+    /// its true (false) outcomes when InstrProf counters are on (the
+    /// counter of `c`, or of `cntr`).
+    fn branch_to_counter_block(
+        &mut self,
+        c: ExprId,
+        and: bool,
+        t: crate::fir::Blk,
+        f: crate::fir::Blk,
+        cntr: Option<ExprId>,
+    ) -> R<()> {
+        if !self.instr_regions() || !pgo::is_instrumented_condition(self.ast, c) {
+            return self.branch_on_bool(c, t, f);
+        }
+        let cnt = self.f.fir.create_block();
+        let (then, els, next) = if and { (cnt, f, t) } else { (t, cnt, f) };
+        self.branch_on_bool(c, then, els)?;
+        self.emit_block(cnt, false);
+        self.prof_inc(Key::Expr(cntr.unwrap_or(c)));
+        self.emit_branch(next);
+        Ok(())
     }
 
     /// clang `EmitBranchOnBoolExpr` / `EmitSwitchStmt`: when optimizing,
@@ -1828,24 +1904,30 @@ impl Cg<'_> {
     }
 
     /// clang `VisitAbstractConditionalOperator`.
-    fn emit_conditional(&mut self, c: ExprId, a: ExprId, b: ExprId) -> R<Option<V>> {
+    fn emit_conditional(&mut self, e: ExprId, c: ExprId, a: ExprId, b: ExprId) -> R<Option<V>> {
         if let kiln_ast::types::TypeView::Vector { kind, .. } =
             self.ast.types.canonical_view(self.ast.exprs.get(c).ty())
         {
+            self.prof_inc(Key::Expr(e));
             return self.emit_vector_conditional(c, a, b, kind).map(Some);
         }
         // An SVE vector condition (clang `isSveVLSBuiltinType`) selects as
         // a GNU vector condition does (an `svbool_t` by its lanes).
         if self.ast.types.is_sizeless(self.ast.exprs.get(c).ty()) {
+            self.prof_inc(Key::Expr(e));
             let kind = kiln_ast::types::VectorKind::Generic;
             return self.emit_vector_conditional(c, a, b, kind).map(Some);
         }
         if let Some(x) = self.fold_bool(c) {
+            if x {
+                self.prof_inc(Key::Expr(e));
+            }
             return self.emit_arm(if x { a } else { b });
         }
         if self.folds.get(a).is_some() && self.folds.get(b).is_some() {
             let cv = self.eval_bool(c)?;
-            let _ = self.zext_or_same(cv, LTy::I64);
+            let step = self.zext_or_same(cv, LTy::I64);
+            self.prof_inc_step(Key::Expr(e), Some(step));
             let x = self.emit_arm(a)?;
             let y = self.emit_arm(b)?;
             return Ok(match (x, y) {
@@ -1859,6 +1941,7 @@ impl Cg<'_> {
         let start = self.f.fir.cur();
         self.branch_on_bool(c, lb, rb)?;
         self.emit_block(lb, false);
+        self.prof_inc(Key::Expr(e));
         let x = self.cond_eval(start, |cg| cg.emit_arm(a))?;
         let lb = self.f.fir.cur().expect("insert point");
         self.br(cont);
@@ -2628,6 +2711,9 @@ impl Cg<'_> {
         let ast = self.ast;
         if let Some(x) = self.fold_bool(c) {
             let (live, dead) = if x { (a, b) } else { (b, a) };
+            if x {
+                self.prof_inc(Key::Expr(e));
+            }
             // A live throw-expression: emitted, with an undefined lvalue
             // (`HandleConditionalOperatorLValueSimpleCase`).
             if let Some(t) = self.throw_of(live) {
@@ -2651,6 +2737,7 @@ impl Cg<'_> {
         let start = self.f.fir.cur();
         self.branch_on_bool(c, lb, rb)?;
         self.emit_block(lb, false);
+        self.prof_inc(Key::Expr(e));
         let x = self.cond_eval(start, |cg| cg.lvalue_or_throw(a))?;
         let lb = self.f.fir.cur().expect("insert point");
         if x.is_some() {
@@ -4268,6 +4355,9 @@ impl Cg<'_> {
                 let [a, b] = ast.exprs.cond_arms(e);
                 let c = self.sub(e);
                 if let Some(x) = self.fold_bool(c) {
+                    if x {
+                        self.prof_inc(Key::Expr(e));
+                    }
                     return self.agg_visit(if x { a } else { b }, dest, zeroed);
                 }
                 let lb = self.f.fir.create_block();
@@ -4278,6 +4368,7 @@ impl Cg<'_> {
                 // Both arms see the same slot (`IsDestructed` included).
                 let destructed = self.f.dest_destructed;
                 self.emit_block(lb, false);
+                self.prof_inc(Key::Expr(e));
                 self.cond_eval(start, |cg| cg.agg_visit(a, dest, zeroed))?;
                 self.br(cont);
                 self.emit_block(rb, false);

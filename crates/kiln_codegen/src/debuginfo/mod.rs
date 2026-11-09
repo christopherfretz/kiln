@@ -112,7 +112,7 @@ impl DebugOptions {
 }
 
 pub(crate) mod func;
-mod md5;
+pub(crate) mod md5;
 mod stmt;
 mod types;
 

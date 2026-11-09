@@ -3299,6 +3299,7 @@ impl<'a> Cg<'a> {
         let has_di = self.di.is_some();
         let h = self.opts.hardening.clone();
         let x86 = self.is_x86();
+        self.instr_profile_trailer();
         let m = &mut self.m;
         // clang 19 emits an empty `!llvm.linker.options` when the language
         // has modules (C++20 and later); clang 20+ emits none.

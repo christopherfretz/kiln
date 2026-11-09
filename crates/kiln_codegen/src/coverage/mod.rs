@@ -4,6 +4,8 @@
 //! `llvm.instrprof.increment` counters of `CodeGenPGO` and the
 //! `__llvm_covmap` / `__llvm_covfun` mapping of `CoverageMappingGen`.
 
+pub(crate) mod pgo;
+
 /// The coverage options of a compilation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CoverageOptions {
