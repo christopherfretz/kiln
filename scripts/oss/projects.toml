@@ -22,6 +22,11 @@
 #                  repo (for autotools projects whose tags carry no generated
 #                  configure: the harness has no autoreconf)
 #   sha256         the tarball's sha256, required with archive = true
+#   modules        optional (WP-1148): the build uses C++20 modules, so CMake
+#                  generates Ninja (Unix Makefiles cannot scan) and is given
+#                  the scanner beside the compiler (kiln-scan-deps)
+#   local          optional (WP-1148): build the fixture scripts/oss/<local>
+#                  in place of a clone (url and tag may then be omitted)
 #   notes          free text
 
 # ---------------------------------------------------------------- wave 1
@@ -37,6 +42,32 @@ c_compiler = "clang-19"
 wave = 1
 verified = false
 notes = "WP-667 drives this one with its own wrapper until the harness lands."
+
+[fmt_module]
+url = "https://github.com/fmtlib/fmt"
+tag = "12.1.0"
+checkout = "fmt"
+build = "cmake"
+cxx_std = 20
+modules = true
+configure = ["-DFMT_MODULE=ON", "-DFMT_TEST=ON", "-DFMT_DOC=OFF", "-DFMT_PEDANTIC=OFF", "-DFMT_INSTALL=OFF", "-DCMAKE_PROJECT_FMT_INCLUDE=@OSS@/shims/fmt-module-tests.cmake"]
+build_targets = ["fmt_module_tests"]
+test = "ctest --output-on-failure -R '^(module-test|fmt-module-smoke)$'"
+c_compiler = "clang-19"
+wave = 1
+verified = true
+notes = "WP-1148. {fmt} as the named module `fmt` (src/fmt.cc, a FILE_SET CXX_MODULES library), generated for Ninja and scanned by kiln-scan-deps. Upstream defines no test in module mode; the shim fmt-module-tests.cmake adds upstream's test/module-test.cc (gtest, import fmt;) and fmt-module-smoke.cc, both importers. docs/status/oss/fmt_module.md."
+
+[cmake_modules]
+local = "fixtures/modules"
+build = "cmake"
+cxx_std = 20
+modules = true
+test = "test \"$(./app)\" = 'hello 42' || exit 1; if [ -x ./stdapp ]; then test \"$(./stdapp)\" = 'import std 6' && echo 'app, stdapp ok'; else echo 'app ok; no stdapp (import std needs --stdlib libc++)'; fi"
+c_compiler = "clang-19"
+wave = 1
+verified = true
+notes = "WP-1148. The selftest.sh modules fixture (scripts/oss/fixtures/modules) as a harness row: an interface unit, an interface partition, an implementation unit and an importer through FILE_SET CXX_MODULES, plus, with --stdlib libc++, `import std;` through CXX_MODULE_STD (CMake builds libc++'s std.cppm and std.compat.cppm with the compiler under test). docs/status/oss/cmake_modules.md."
 
 [nlohmann_json]
 url = "https://github.com/nlohmann/json"
