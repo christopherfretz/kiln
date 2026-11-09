@@ -183,6 +183,24 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// Whether a type-aware `operator delete` with parameter types `ptys`
+    /// is a destroying delete: its second parameter is the class pointer
+    /// and one parameter is `std::destroying_delete_t`.
+    fn is_type_aware_destroying(
+        &self,
+        ptys: &[QualType],
+        class_ptr: Option<QualType>,
+        vp: QualType,
+    ) -> bool {
+        let (Some(cp), Some(&p1)) = (class_ptr, ptys.get(1)) else {
+            return false;
+        };
+        let p1 = self.ast.types.canonical(p1);
+        !self.ast.types.same_type(p1, vp)
+            && self.ast.types.same_type(p1, cp)
+            && ptys.iter().any(|&t| self.is_destroying_delete_t(t))
+    }
+
     /// P2719 type-aware allocation and deallocation functions
     /// ([basic.stc.dynamic.allocation]/1, [basic.stc.dynamic.deallocation]/3,
     /// clang 22 `CheckOperatorNewDeleteTypes`): after the leading
@@ -213,16 +231,10 @@ impl Sema<'_, '_> {
         });
         // A type-aware destroying delete: clang names it rather than
         // reporting the parameter types that follow from it.
-        if !new && let (Some(cp), Some(&p1)) = (class_ptr, ptys.get(1)) {
-            let p1 = self.ast.types.canonical(p1);
-            if !self.ast.types.same_type(p1, vp)
-                && self.ast.types.same_type(p1, cp)
-                && ptys.iter().any(|&t| self.is_destroying_delete_t(t))
-            {
-                let m = self.diag(DiagId::sema_type_aware_destroying_operator_delete, loc);
-                self.emit(m);
-                return false;
-            }
+        if !new && self.is_type_aware_destroying(&ptys, class_ptr, vp) {
+            let m = self.diag(DiagId::sema_type_aware_destroying_operator_delete, loc);
+            self.emit(m);
+            return false;
         }
         let m = self.diag(DiagId::ext_cxx_type_aware_allocators, loc);
         self.emit(m);

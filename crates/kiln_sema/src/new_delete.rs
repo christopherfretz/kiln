@@ -26,6 +26,10 @@ use crate::switch_conv::ContextualConv;
 use crate::templ::ctad::CtadInit;
 use crate::{EvalContext, Sema};
 
+/// The deallocation function `matching_operator_delete` selects, and the
+/// using-shadow it was found through with the declaration it names.
+type MatchedDelete = (DeclId, Option<(DeclId, DeclId)>);
+
 /// The type-id of a new-expression ([expr.new]/1), as parsed: the
 /// decl-specifier type and the abstract declarator (a new-declarator,
 /// or the declarator of a parenthesized type-id).
@@ -1437,34 +1441,19 @@ impl Sema<'_, '_> {
         None
     }
 
-    /// The deallocation function matching an allocation function with
-    /// parameter types `new_params` ([expr.new]/28), looked up like the
-    /// allocation function (in the class of `elem` first unless
-    /// `global`): for a placement allocation function, the one with the
-    /// same additional parameters; otherwise the usual deallocation
-    /// function.
-    #[allow(
-        clippy::too_many_arguments,
-        clippy::fn_params_excessive_bools,
-        reason = "the new-expression's forms, as clang's FindAllocationFunctions"
-    )]
-    fn matching_operator_delete(
+    /// The lookup for the deallocation function that cleans up a
+    /// new-expression ([expr.new]/28), with clang's type-aware rules.
+    fn cleanup_delete_lookup(
         &mut self,
         elem: QualType,
+        op: OverloadedOperator,
         global: bool,
-        array: bool,
-        placement: bool,
-        placement_args: bool,
-        new_params: &[QualType],
-        pass_align: bool,
         (op_new, ti): (DeclId, Option<QualType>),
         (loc, new_loc): (Loc, Loc),
-    ) -> Result<Option<(DeclId, Option<(DeclId, DeclId)>)>, ()> {
-        let op = if array { OverloadedOperator::ArrayDelete } else { OverloadedOperator::Delete };
+    ) -> Result<AllocFns, ()> {
         let mut found = self.alloc_fns(elem, op, global, loc);
-        let new_typed = self.is_type_aware_alloc_fn(op_new);
-        let typed_mode = self.global_ops.seen_type_aware;
-        if typed_mode {
+        if self.global_ops.seen_type_aware {
+            let new_typed = self.is_type_aware_alloc_fn(op_new);
             // A destroying operator delete cannot clean up an object that
             // was never constructed: clang drops them, and an empty
             // class-scope result falls back to the global functions.
@@ -1488,32 +1477,73 @@ impl Sema<'_, '_> {
                 found.templates.retain(|&f| !self.is_type_aware_alloc_fn(f));
             }
         }
-        let naming = found.naming;
-        let selected: Vec<DeclId> = if !placement {
-            if typed_mode {
-                // [expr.new]/28: the usual deallocation function, sized
-                // when found in the global scope (clang `FindAllocationFunctions`).
-                let all: Vec<DeclId> = found.fns.iter().chain(&found.templates).copied().collect();
-                // clang `hasNewExtendedAlignment(AllocElemType)`: a typed
-                // `operator new` always takes the alignment, which does
-                // not make the cleanup aligned.
-                let over = self.over_aligned(elem);
-                let want = DeallocWant {
-                    ty: elem,
-                    typed: ti.is_some(),
-                    aligned: over,
-                    // clang `sizedDeallocationModeFromBool(FoundGlobalDelete)`:
-                    // not gated on `-fsized-deallocation`.
-                    sized: !found.in_class,
-                };
-                self.resolve_usual_dealloc(&all, want, false, loc).iter().map(|u| u.f).collect()
-            } else {
-                self.usual_delete(&found.fns, found.in_class, pass_align, true, false)
-                    .map(|u| u.0)
-                    .into_iter()
-                    .collect()
-            }
+        Ok(found)
+    }
+
+    /// The usual deallocation function that cleans up a non-placement
+    /// new-expression whose initialization throws ([expr.new]/28).
+    fn usual_cleanup_delete(
+        &mut self,
+        found: &AllocFns,
+        elem: QualType,
+        typed: bool,
+        pass_align: bool,
+        loc: Loc,
+    ) -> Vec<DeclId> {
+        let typed_mode = self.global_ops.seen_type_aware;
+        if typed_mode {
+            // [expr.new]/28: the usual deallocation function, sized
+            // when found in the global scope (clang `FindAllocationFunctions`).
+            let all: Vec<DeclId> = found.fns.iter().chain(&found.templates).copied().collect();
+            // clang `hasNewExtendedAlignment(AllocElemType)`: a typed
+            // `operator new` always takes the alignment, which does
+            // not make the cleanup aligned.
+            let over = self.over_aligned(elem);
+            let want = DeallocWant {
+                ty: elem,
+                typed,
+                aligned: over,
+                // clang `sizedDeallocationModeFromBool(FoundGlobalDelete)`:
+                // not gated on `-fsized-deallocation`.
+                sized: !found.in_class,
+            };
+            self.resolve_usual_dealloc(&all, want, false, loc).iter().map(|u| u.f).collect()
         } else {
+            self.usual_delete(&found.fns, found.in_class, pass_align, true, false)
+                .map(|u| u.0)
+                .into_iter()
+                .collect()
+        }
+    }
+
+    /// The deallocation function matching an allocation function with
+    /// parameter types `new_params` ([expr.new]/28), looked up like the
+    /// allocation function (in the class of `elem` first unless
+    /// `global`): for a placement allocation function, the one with the
+    /// same additional parameters; otherwise the usual deallocation
+    /// function.
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::fn_params_excessive_bools,
+        reason = "the new-expression's forms, as clang's FindAllocationFunctions"
+    )]
+    fn matching_operator_delete(
+        &mut self,
+        elem: QualType,
+        global: bool,
+        array: bool,
+        placement: bool,
+        placement_args: bool,
+        new_params: &[QualType],
+        pass_align: bool,
+        (op_new, ti): (DeclId, Option<QualType>),
+        (loc, new_loc): (Loc, Loc),
+    ) -> Result<Option<MatchedDelete>, ()> {
+        let op = if array { OverloadedOperator::ArrayDelete } else { OverloadedOperator::Delete };
+        let found = self.cleanup_delete_lookup(elem, op, global, (op_new, ti), (loc, new_loc))?;
+        let new_typed = self.is_type_aware_alloc_fn(op_new);
+        let naming = found.naming;
+        let selected: Vec<DeclId> = if placement {
             let vp = self.ast.types.pointer_to(QualType::VOID);
             // P2719: a type-aware placement allocation function is
             // matched by `operator delete(std::type_identity<T>, void*,
@@ -1569,6 +1599,8 @@ impl Sema<'_, '_> {
                 return Ok(None);
             }
             selected.into_iter().map(|s| s.1).collect()
+        } else {
+            self.usual_cleanup_delete(&found, elem, ti.is_some(), pass_align, loc)
         };
         match selected[..] {
             [f] => {
