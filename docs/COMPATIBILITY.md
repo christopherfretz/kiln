@@ -32,7 +32,8 @@ A **kiln-only failure** is a test (or a TU, link or example the tests
 depend on) that passes with the control compiler and fails with kiln. A
 test that fails under both compilers (for example, a container limit or a
 test that clang also rejects) does not count against kiln. Host: aarch64
-Linux (Debian), in a container.
+Linux (Debian), in a container; the x86_64 results are in "x86_64"
+below.
 
 ## Ratings
 
@@ -144,6 +145,27 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [scnlib](status/oss/scnlib.md) | `v4.0.1` | full ctest suite | libstdc++ 14 | **Flawless**: 25/25 | WP-792 |
 | [stdexec](status/oss/stdexec.md) | `nvhpc-26.05` | full test suite, including the `*_fail` tests that match error text | libstdc++ 14 | **Flawless**: 907/907 | WP-789 |
 | [Z3](status/oss/z3.md) | `z3-4.15.8` | `test-z3 /a`, and the shell on the SMT-LIB2 examples | libstdc++ 14 | **Flawless**: every test and example gives the control's output, apart from timings | WP-799 |
+
+## x86_64
+
+Everything above runs on aarch64. The x86_64 sweep
+(`.github/workflows/sweep.yml`, docs/VALIDATION.md "x86_64 sweep") builds
+the libc++ 22 suite and ten of the projects above on GitHub's x86_64
+runners, with the clang 19 control on an identical runner. The first
+sweep (WP-961, 2026-11-09) and its triage are in
+[status/x86_64-sweep.md](status/x86_64-sweep.md). Main's WP-873
+never-constant regression (both arches, fixed by WP-962) was masked with
+`-Wno-invalid-constexpr` for the project results below; the
+x86_64-only gaps found are fixed or have a follow-up WP.
+
+| suite / project | result on x86_64 vs clang 19 | rating |
+|---|---|---|
+| libc++ 22.1.8 (9247 tests) | 99.0% (aarch64 99.2%); the 2 x86_64-only failures are a narrow signed `++` bug that signed `char` exposes (WP-981) and a flaky timeout | **Near-perfect** |
+| fmt, nlohmann/json, Abseil, DuckDB, CMake, daw_json_link | every test as clang: 21/21, 97/97, 232/232, 4618/4628, 721/723, 147/147 | **Flawless** |
+| Bitcoin Core | 357/357; 475 TUs vs clang's 487: the `-m<feature>` flags are not accepted yet, so the SSE4.1/AVX2/SHA-NI code is configured out | **Flawless** (tests), follow-up for the flags |
+| OpenCV | 7/7; 473 TUs vs 537: the SSE3…AVX2 dispatch sources, the same `-m<feature>` gap | **Flawless** (tests), follow-up for the flags |
+| LLVM Support, ADT, IR | `SupportTests` 1337 and `ADTTests` 1576 as clang; `IRTests` does not build: `_Float128` is not glibc's x86-64 `__float128` typedef | **Broken** for `IRTests` (follow-up) |
+| gRPC | GRPC_COMPAT | GRPC_RATING |
 
 ## Constexpr and compile-time performance
 
