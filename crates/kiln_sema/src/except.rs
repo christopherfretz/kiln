@@ -4,7 +4,7 @@
 
 use kiln_ast::decl::{DeclFlags, DefinitionBits};
 use kiln_ast::expr::{CastKind, ExprKind};
-use kiln_ast::types::{BuiltinType, ExcSpec, FuncProto, NoexceptValue};
+use kiln_ast::types::{BuiltinType, ExcSpec, FuncProto, NoexceptValue, Quals, TypeKind};
 use kiln_ast::{DeclId, ExprId};
 use kiln_ast::{QualType, expr::ValueCategory};
 use kiln_diag::{DiagId, FixIt};
@@ -673,7 +673,7 @@ impl Sema<'_, '_> {
         f: DeclId,
         pattern: DeclId,
         expr: ExprId,
-        quals: kiln_ast::types::Quals,
+        quals: Quals,
         poi: Loc,
     ) -> Option<ExcSpec> {
         use crate::templ::stack::FrameKind;
@@ -1090,6 +1090,49 @@ impl Sema<'_, '_> {
         self.param_exc_specs_error(&target, &source)
     }
 
+    /// clang `CheckExceptionSpecSubset` for an overrider `sub` of a
+    /// virtual function `sup` ([except.spec]/8; C++14 [except.spec]/5):
+    /// true if `sub` allows an exception `sup` does not. A dynamic list
+    /// is compared type by type with [`Self::handler_can_catch`]. Not
+    /// checked (false): unresolved or value-dependent specifications,
+    /// and lists with a dependent type or a pack expansion (the
+    /// instantiation checks them), and a `computed` (implicit, defaulted
+    /// or instantiated) `sub` against a list. The nested function-type
+    /// check (`CheckParamExceptionSpec`) is not done.
+    pub(crate) fn override_exc_spec_lax(&self, sup: ExcSpec, sub: ExcSpec, computed: bool) -> bool {
+        let (sup_bound, sub_bound) = (exc_bound(sup), exc_bound(sub));
+        if sup_bound == ExcBound::Unknown || sub_bound == ExcBound::Unknown {
+            return false;
+        }
+        // kiln computes an implicit specification as non-throwing or
+        // throwing anything, never as clang's union of type lists.
+        if computed && sup_bound == ExcBound::Listed {
+            return false;
+        }
+        if sup_bound == ExcBound::Any || sub_bound == ExcBound::Cannot {
+            return false;
+        }
+        if sub_bound == ExcBound::Any || sup_bound == ExcBound::Cannot {
+            return true;
+        }
+        let (ExcSpec::Dynamic(sup_list), ExcSpec::Dynamic(sub_list)) = (sup, sub) else {
+            return false;
+        };
+        let t = &self.ast.types;
+        let handlers: Vec<QualType> = t.type_list_types(sup_list).to_vec();
+        let thrown: Vec<QualType> = t.type_list_types(sub_list).to_vec();
+        let unknown = |q: &QualType| {
+            self.is_dependent_type(*q) || t.canonical_kind(*q) == TypeKind::PackExpansion
+        };
+        if handlers.iter().chain(&thrown).any(unknown) {
+            return false;
+        }
+        thrown.into_iter().any(|e| {
+            let e = self.non_reference(e);
+            !handlers.iter().any(|&h| self.handler_can_catch(h, e))
+        })
+    }
+
     /// clang `GetUnderlyingFunction`: the function type `q` is, or that
     /// it points or refers to: its written exception specification, and
     /// the prototype of the first function node in its sugar chain, whose
@@ -1181,6 +1224,19 @@ impl Sema<'_, '_> {
         }
         if let (Some(hc), Some(ec)) = (t.as_record(h), t.as_record(e)) {
             return self.is_public_unambiguous_base(ec, hc);
+        }
+        // A pointer or member pointer handler: a reference handler must
+        // be `const T &`; then `std::nullptr_t` matches.
+        if t.is_pointer(h) || t.canonical_kind(h) == TypeKind::MemberPointer {
+            if t.is_reference(handler) {
+                let q = t.canonical(self.non_reference(handler)).quals();
+                if !q.contains(Quals::CONST) || q.contains(Quals::VOLATILE) {
+                    return false;
+                }
+            }
+            if t.builtin(e) == Some(BuiltinType::NullPtr) {
+                return true;
+            }
         }
         if !(t.is_pointer(h) && t.is_pointer(e)) {
             return false;

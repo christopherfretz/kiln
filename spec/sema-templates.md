@@ -1697,6 +1697,34 @@ Out-of-class partial specializations of a member template (WP-150):
   One declared after `Outer<X>` was instantiated is not part of it, as
   with clang.
 
+**Landed (WP-1017).** Declaration checks on a partial specialization:
+- *More specialized than the primary* ([temp.spec.partial.general]/9.2;
+  `check_partial_more_specialized`, `templ/order.rs`
+  `primary_at_least_as_specialized`). A class or variable partial
+  specialization whose primary is at least as specialized as it gets
+  `{class|variable} template partial specialization is not more
+  specialized than the primary template` + `template is declared here`
+  on the primary. The check is conservative and skips four cases, which
+  pass unchecked:
+  - packs;
+  - constraints on either side;
+  - member templates of a class template;
+  - a primary non-type parameter whose type is a placeholder or
+    dependent (`template<auto V>`, `template<class T, T V>`).
+
+  Test: `tests/conformance/temp.spec.partial.general/not-more-specialized.cpp`.
+- *Non-deducible arguments* (CWG526, [temp.deduct.type]/5.3). A non-type
+  argument that is not just the parameter's name, such as `(N)`, is a
+  non-deduced context. A call cannot deduce it, and a partial
+  specialization that uses it gets `contains a template parameter that
+  cannot be deduced`. Test:
+  `tests/conformance/temp.deduct.type/parenthesized-nttp-non-deduced.cpp`.
+- *Wrong class-key*. An explicit or partial specialization whose class-key
+  does not match the primary's, and a reference `union B<int>` to a class
+  specialization, get `use of 'X' with tag type that does not match
+  previous declaration`. It is reported at the class-key, with `previous
+  use is here` on the primary pattern (spec/sema.md §4.4).
+
 ### 4.5 Explicit specializations and instantiations
 
 **Placement** ([temp.expl.spec]).
@@ -4609,6 +4637,10 @@ The `SpecKind` transitions are those of §4.5.
     (`note_not_structural_subobject`), recursing into it. Structurality is
     recomputed (`is_structural_at`), because `DefinitionBits::STRUCTURAL`
     misses rvalue-reference members (class owner).
+  - before C++20 ([temp.param]/4 in C++17), a floating-point or class
+    type gets `a non-type template parameter cannot have type 'T' before
+    C++20`; any other non-structural type gets `... cannot have type 'T'`
+    (WP-1017; `tests/conformance/temp.param/float-nttp-cxx{17,20}.cpp`).
   - Dependent types are checked when substituted (not yet: §11.2 gaps).
 - **Class arguments** (`convert_class_nttp_arg`, hooked from
   `args.rs::convert_nttp_arg`): copy-initialize a `const T` from the
@@ -5463,6 +5495,12 @@ whose head the notes name. It evaluates:
   - Otherwise the expression must have type exactly `bool`. Anything else
     is the hard error "atomic constraint must be of type 'bool' (found
     'int')".
+  - A constraint whose satisfaction depends on itself
+    ([temp.constr.atomic]/3) is unsatisfied. The error "satisfaction of
+    constraint 'E' depends on itself" is a hard error, also inside overload
+    resolution and other SFINAE contexts (`is_sfinae_report`, clang
+    `err_constraint_depends_on_self` is `SFINAE_Report`; WP-1017). Test:
+    `temp.constr.atomic/self-dependent-constraint.cpp`.
   - The value is evaluated by the Oven with `EvalKind::Constraint` (a new
     `EvalContext` kind; Q5).
   - A non-constant result is clang's error "substitution into constraint

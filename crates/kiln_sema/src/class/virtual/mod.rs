@@ -783,6 +783,10 @@ impl Sema<'_, '_> {
         {
             return;
         }
+        let computed = matches!(
+            self.ast.decls.get(m).ty().map(|t| self.written_exc_spec(t)),
+            Some(ExcSpec::Deferred(_))
+        );
         let os: Vec<DeclId> = overridden(&self.ast, m).collect();
         for o in os {
             let oloc = self.ast.decls.get(o).loc();
@@ -794,7 +798,7 @@ impl Sema<'_, '_> {
             if mexc.is_nothrow() {
                 return;
             }
-            if oexc.is_nothrow() {
+            if self.override_exc_spec_lax(oexc, mexc, computed) {
                 // clang: overriding a GNU `nothrow` one is the
                 // `-Wmicrosoft-exception-spec` extension (WP-186).
                 let gnu = self.ast.decls.get(o).ty().map(|t| self.written_exc_spec(t))
