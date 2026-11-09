@@ -38,6 +38,8 @@ drv_opt_not_valid_on_target = Error (1) "option '{0}' cannot be specified on thi
 drv_option_ignored = Warning [OptionIgnored] (2) "'{0}' does not support '{1}'; flag ignored";
 drv_out_file_multiple = Error (0) "cannot specify -o when generating multiple output files";
 drv_precompile_not_module = Error (0) "--precompile requires a module interface or partition unit";
+// WP-982: kiln-scan-deps (spec/modules.md §11.9).
+drv_scan_one_job = Error (1) "unable to handle compilation, expected exactly one compiler job in '{0}'";
 // WP-792: clang's `-ftime-trace` family, added by build systems for clang.
 drv_time_trace_ignored = Warning [UnusedCommandLineArgument] (1) "'{0}' ignored: kiln writes no time trace (see -fkiln-instantiation-report)";
 drv_treating_input_as_cxx = Warning [Deprecated] (2) "treating '{0}' input as '{1}' when in C++ mode, this behavior is deprecated";
