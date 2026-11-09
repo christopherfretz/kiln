@@ -26,11 +26,11 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `c05d4b99b`
+- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `d87008f2b`
 - command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 311 s; peak RSS of one case 22 MiB (gnu-time)
+- wall time 250 s; peak RSS of one case 22 MiB (gnu-time)
 
 ## Totals
 
@@ -38,7 +38,7 @@ written by hand (WP-912). The run is informational and never part of
 |---|---:|---:|---:|
 | ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 63 | 1250 | 5.0% |
 | ACCEPTS-INVALID cases (per RUN configuration) | 74 | 1946 | 3.8% |
-| MISSED-ERROR lines (expected-error with no kiln error on its line) | 3844 | 28065 | 13.7% |
+| MISSED-ERROR lines (expected-error with no kiln error on its line) | 3811 | 28065 | 13.6% |
 | REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 28 | 418 | 6.7% |
 | crashes | 0 | 2850 | 0.0% |
 | timeouts | 0 | 2850 | 0.0% |
@@ -67,8 +67,8 @@ written by hand (WP-912). The run is informational and never part of
 | CXX/over | 1 / 42 | 2.4% | 7 / 313 | 2.2% | 0 | 0 / 0 |
 | CXX/special | 2 / 31 | 6.5% | 12 / 224 | 5.4% | 3 | 0 / 0 |
 | CXX/stmt.stmt | 0 / 9 | 0.0% | 3 / 255 | 1.2% | 0 | 0 / 0 |
-| CXX/temp | 8 / 147 | 5.4% | 301 / 1644 | 18.3% | 2 | 0 / 0 |
-| SemaCXX | 37 / 628 | 5.9% | 1592 / 12406 | 12.8% | 21 | 0 / 0 |
+| CXX/temp | 8 / 147 | 5.4% | 280 / 1644 | 17.0% | 2 | 0 / 0 |
+| SemaCXX | 37 / 628 | 5.9% | 1580 / 12406 | 12.7% | 21 | 0 / 0 |
 
 ## Top 50 accepts-invalid files
 
@@ -137,7 +137,7 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | no matching function for call to '…' | 13 | 37 | `CXX/dcl.dcl/basic.namespace/namespace.udecl/p12.cpp:137` |
 | constexpr variable '…' must be initialized by a constant expression | 9 | 24 | `CXX/drs/cwg18xx.cpp:480` |
 | no matching constructor | 9 | 20 | `CXX/basic/basic.lookup/basic.lookup.qual/class.qual/p2.cpp:132` |
-| constant expression | 8 | 37 | `CXX/dcl.dcl/dcl.spec/dcl.constexpr/p6.cpp:30` |
+| constant expression | 8 | 31 | `CXX/dcl.dcl/dcl.spec/dcl.constexpr/p6.cpp:30` |
 | redefinition of '…' | 8 | 26 | `CXX/basic/basic.lookup/basic.lookup.unqual/p15.cpp:12` |
 | invalid use of non-static data member '…' | 7 | 30 | `CXX/class/class.nest/p1.cpp:12` |
 | redefinition | 7 | 17 | `CXX/basic/basic.link/p9.cpp:9` |
