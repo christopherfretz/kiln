@@ -47,7 +47,8 @@ creatable), or an empty test selection.
 
 - Directories are walked recursively. Files and directories whose names start
   with `.` are ignored, and so are directories named `Inputs` (the lit
-  convention for auxiliary files).
+  convention for auxiliary files), including an `Inputs` directory named on
+  the command line (WP-917).
 - `.cpp` and `.c` files are tests. A `.h` file is a test only if its header
   contains a `//@` directive; otherwise it is an include file.
 - A file named explicitly on the command line is always a test.
