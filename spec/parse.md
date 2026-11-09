@@ -995,6 +995,17 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   and looks at the next token): `(__extension__ reinterpret_cast<T(*)[n]>(p))`
   is a parenthesized expression (libstdc++ 16 `<bits/stl_construct.h>`;
   WP-525, `ext.gnu.extension/extension-paren-expr.cpp`).
+  The unary operator is kept as a `UnaryOperator` with
+  `UnaryOp::Extension` (clang `UO_Extension`), not dropped: sema, the
+  Oven and codegen look through it (it has its operand's type, value
+  category, bit-field-ness and constant value), but the operand is no
+  longer an id-expression, so `decltype(__extension__ x)` is `int &`
+  and mangles `DT` (WP-1029, `ext.gnu.extension/extension-transparent-run.cpp`).
+- **Pack-index type as a functional cast:** a one-token type name
+  followed by `...[ balanced ]` and then `(` or `{` is a
+  simple-type-specifier starting an explicit type conversion
+  ([expr.type.conv]), so `T...[0]{}` and `T...[0]()` parse
+  (WP-1029, `dcl.type.pack.index/functional-cast-run.cpp`).
 - **`__restrict` on a reference declarator:** `restrict`, `__restrict`
   and `__restrict__` after `&`/`&&` in a declarator are consumed and
   dropped, as clang (which keeps the qualifier only on pointers and

@@ -1042,7 +1042,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | in progress |
 | WP-986 | modules: convert skip(clang) module tests (export-run, visibility, partitions-run, private-run, export-import-run, import-std-*) to module:/unit: | WP-917 | open |
 | WP-981 | oven: narrow signed `++`/`--` must promote and wrap (WP-961 x86_64 stable_sort xfail) | WP-961 | done (#419, fixed in WP-980) |
-| WP-1029 | parser drops `__extension__`; `decltype(__extension__ t)` mangles `Dt` where clang writes `DT` | WP-980 | open |
+| WP-1029 | parser drops `__extension__`; `decltype(__extension__ t)` mangles `Dt` where clang writes `DT` | WP-980 | in progress |
 | WP-1030 | mangle ImaginaryLiteral (`LCi0_2E`) and PackIndexingExpr in dependent signatures | WP-980 | open |
 | WP-1031 | `cargo xtask test tests/mangle` does not run the mangle_vs_clang differential; make it run or document the right command | WP-980 | open |
 | WP-1024 | driver: list kiln-only `--llvm-dir=<dir>` in `--help` (lib.rs:116 HELP; WP-1016 kept help byte-identical) | WP-1016 | open |
