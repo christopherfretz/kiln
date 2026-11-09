@@ -1822,8 +1822,13 @@ impl Substituter<'_, '_, '_> {
                 let r = self.function_decl(f, ctx, Some(loc));
                 self.sema.friend_template_apart = saved;
                 let r = r?;
+                // A friend redeclaring a member of another class
+                // (`friend R B<T>::f(...)`) is no member of this one: the
+                // member keeps its own pattern (that of `B<A>`, an
+                // explicit or a partial specialization's; WP-1071).
                 if let FriendTarget::Decl(x) = self.sema.ast.decls.friend_target(r)
                     && self.sema.ast.instantiated_from(x).is_none()
+                    && self.sema.declaring_class(x).is_none()
                 {
                     self.member_link(x, f);
                 }
