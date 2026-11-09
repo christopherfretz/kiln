@@ -92,7 +92,7 @@ QualRelation`:
 - `NotSimilar`;
 - `Similar { convertible, drops_outer, drops_nested }`.
 
-It implements the cv-decomposition rules, including P0388 array-of-unknown-bound unification. An array's cv is the union of its element's cv (`effective_quals`). An array is not a level of its own for [conv.qual]/3.3 ([basic.type.qualifier]/3; clang's `UnwrapSimilarTypes` merges it with its element): a cv added to an array's elements requires `const` only at the levels above the array's enclosing pointer, so `int (*)[]` converts to `volatile int (*)[]` (WP-207). The function pointer conversion ([conv.fctptr]) is `is_function_pointer_conversion`.
+It implements the cv-decomposition rules, including P0388 array-of-unknown-bound unification. An array's cv is the union of its element's cv (`effective_quals`). An array is not a level of its own for [conv.qual]/3.3 ([basic.type.qualifier]/3; clang's `UnwrapSimilarTypes` merges it with its element): a cv added to an array's elements requires `const` only at the levels above the array's enclosing pointer, so `int (*)[]` converts to `volatile int (*)[]` (WP-207). The function pointer conversion ([conv.fctptr]) is `is_function_pointer_conversion`; after glibc's x86-64 `typedef __float128 _Float128;` it also relates function types that differ only in `_Float128` against `__float128` (an extension, spec/types.md §5.1, WP-1058).
 
 Base lookup (`conv/bases.rs`): `find_base(derived, base) -> BaseSearch {
 NotDerived, Unique(BasePath), Ambiguous(Vec<BasePath>) }` searches the

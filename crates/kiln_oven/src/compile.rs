@@ -315,6 +315,7 @@ pub(crate) fn is_local_var(ast: &kiln_ast::Ast, d: DeclId) -> bool {
         DeclKind::Var => {
             let Some(v) = ast.decls.var(d) else { return false };
             matches!(v.spec.storage(), VarStorage::None | VarStorage::Register)
+                && v.spec.tls() == kiln_ast::decl::TlsKind::None
                 && n.ctx().is_some_and(|c| ast.decls.get(c).kind().is_function())
         }
         _ => false,
@@ -2864,10 +2865,24 @@ impl Compiler<'_> {
         }
         let Some(v) = ast.decls.var(d).copied() else { return };
         if !is_local_var(ast, d) {
-            if v.spec.storage() == VarStorage::Static && !v.spec.is_constexpr() {
+            // clang `EvaluateStmt`: a static or thread-local variable not
+            // usable in constant expressions; a `const` integral or
+            // enumeration one is taken as usable (its initializer is
+            // checked where it is read). WP-1123.
+            let tls = v.spec.tls() != kiln_ast::decl::TlsKind::None;
+            let usable = v.spec.is_constexpr()
+                || n.ty().is_some_and(|q| {
+                    let quals = ast.types.effective_quals(q);
+                    quals.is_const()
+                        && !quals.is_volatile()
+                        && (ast.types.is_integral(q)
+                            || matches!(ast.types.canonical_view(q), TypeView::Enum(_)))
+                });
+            if (tls || v.spec.storage() == VarStorage::Static) && !usable {
+                let what = if tls { "thread_local" } else { "static" };
                 self.trap_loc(
                     n.loc(),
-                    "control flows through the definition of a static variable".into(),
+                    format!("control flows through the definition of a {what} variable"),
                 );
             }
             return;

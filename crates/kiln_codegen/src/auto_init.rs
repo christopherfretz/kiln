@@ -195,6 +195,31 @@ impl Cg<'_> {
         Ok(())
     }
 
+    /// clang `initializeAlloca` (`CGBuiltin.cpp`) for the memory `p` of a
+    /// `__builtin_alloca` or `__builtin_alloca_with_align` (and the
+    /// library `alloca`) of `size` bytes at alignment `align`: one
+    /// `llvm.memset` of the run-time size to zero or to the `0xAA`
+    /// pattern byte, at the alloca's alignment, with `!annotation
+    /// !{!"auto-init"}`. The `_uninitialized` builtins never get here.
+    /// `-ftrivial-auto-var-init-max-size` does not apply, nor does
+    /// `[[clang::uninitialized]]` on a variable the pointer initializes.
+    pub(crate) fn auto_init_alloca(&mut self, p: V, size: V, align: u64) {
+        let byte = match self.opts.auto_var_init {
+            AutoVarInit::Uninitialized => return,
+            AutoVarInit::Zero => 0,
+            AutoVarInit::Pattern => PATTERN_BYTE,
+        };
+        if self.f.fir.cur().is_none() {
+            return;
+        }
+        self.memset_v(Addr { v: p, ty: LTy::I8, align }, byte, size, false);
+        let kind = self.m.md_kind("annotation");
+        let node = self.auto_init_md();
+        if let Some(i) = self.last_inst() {
+            self.f.fir.add_md(i, kind, node);
+        }
+    }
+
     /// The private `__const.<function>.<variable>` holding `k` (clang
     /// `createUnnamedGlobalFrom` for a local).
     pub(crate) fn auto_init_global(

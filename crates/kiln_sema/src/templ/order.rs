@@ -129,13 +129,13 @@ impl Sema<'_, '_> {
         ok &= d.first_undeduced().is_none();
         if ok {
             let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
-            // [temp.deduct.type]/17, [temp.arg.nontype]/1: a deduced
-            // integral value is converted to its parameter's type as a
-            // converted constant expression, so one that does not fit
-            // (narrows) fails the match (clang
+            // [temp.deduct.type]/17, /20, [temp.arg.nontype]/1: a deduced
+            // value must have its parameter's type, an integral one
+            // converted without narrowing (clang
             // `ConvertDeducedTemplateArgument`): `256` of an `int`
-            // primary parameter does not bind `unsigned char C`.
-            ok = params.iter().zip(&d.args).all(|(&pd, &a)| self.deduced_int_fits(pd, a));
+            // primary parameter does not bind `unsigned char C`, nor
+            // `nullptr` of an `auto` one `int N` or `auto *P`.
+            ok = params.iter().zip(&d.args).all(|(&pd, &a)| self.deduced_value_fits(pd, a));
             // [temp.arg.template]/3: a deduced template template argument
             // must match its parameter.
             ok = ok
@@ -191,25 +191,98 @@ impl Sema<'_, '_> {
         Some(deduced)
     }
 
-    /// Whether deduced argument `a` of template parameter `pd` is not an
-    /// integer that the parameter's (non-dependent, integral) type cannot
-    /// represent ([temp.arg.nontype]/1: no narrowing).
-    fn deduced_int_fits(&self, pd: DeclId, a: TemplateArg) -> bool {
+    /// Whether deduced value `a` binds non-type template parameter `pd` of
+    /// a partial specialization being matched ([temp.deduct.type]/20,
+    /// [temp.arg.nontype]/1; clang `ConvertDeducedTemplateArgument` with
+    /// `CTAK_Deduced`): a parameter typed by a placeholder deduces it from
+    /// the value's type (`auto *P` binds `&x`, not `0` or `nullptr`); an
+    /// integral one takes an integral or unscoped enumeration value it
+    /// represents (no narrowing: `1u`, `'c'`, `e1` bind `int N`, `256` not
+    /// `unsigned char C`); any other one only a value of its own type
+    /// (`int *P` does not bind `nullptr`, `double D` not `1.0f`, `E V` not
+    /// `1`). A parameter typed by another parameter got its type deduced
+    /// with it (`deduce_nttp_type`).
+    fn deduced_value_fits(&mut self, pd: DeclId, a: TemplateArg) -> bool {
         if self.kind_of(pd) != DeclKind::NonTypeTemplateParm {
             return true;
         }
-        let ArgView::Value { ty, value } = a.view() else { return true };
         let Some(pty) = self.ast.decls.get(pd).ty() else { return true };
-        let t = &self.ast.types;
-        let canon = t.canonical(crate::conv::strip_cv(self, pty));
-        if self.is_dependent_type(canon)
-            || !t.is_integral(canon)
-            || t.as_enum(canon).is_some()
-            || t.canonical(crate::conv::strip_cv(self, ty)) == canon
-        {
+        self.value_fits_param_type(pty, a)
+    }
+
+    /// `deduced_value_fits` for parameter type `pty`; a deduced pack fits
+    /// when each element does (`template<char... Cs>` against `300L`).
+    fn value_fits_param_type(&mut self, pty: QualType, a: TemplateArg) -> bool {
+        let (ty, value) = match a.view() {
+            ArgView::Value { ty, value } => (ty, value),
+            ArgView::Pack(l) => {
+                let es: Vec<TemplateArg> = self.ast.types.args(l).to_vec();
+                let pty = match self.ast.types.canonical_view(pty) {
+                    TypeView::PackExpansion { pattern, .. } => pattern,
+                    _ => pty,
+                };
+                return es.into_iter().all(|e| self.value_fits_param_type(pty, e));
+            }
+            _ => return true,
+        };
+        if ty == QualType::ERROR || pty == QualType::ERROR {
             return true;
         }
+        let aty = self.ast.types.canonical(crate::conv::strip_cv(self, ty));
+        if self.nttp_type_has_placeholder(pty) {
+            return self.nttp_placeholder_matches(pty, aty);
+        }
+        let t = &self.ast.types;
+        let canon = t.canonical(crate::conv::strip_cv(self, pty));
+        if self.is_dependent_type(canon) || aty == canon {
+            return true;
+        }
+        if !t.is_integral(canon) || t.as_enum(canon).is_some() {
+            return false;
+        }
+        if !t.is_integral(aty) && !crate::conv::rank::is_unscoped_enum(self, aty) {
+            return false;
+        }
         self.const_int(value).is_none_or(|v| self.int_fits(canon, v))
+    }
+
+    /// Whether non-type template parameter type `q` contains a placeholder
+    /// (`contains_deduced`, also looking through a pointer to member's
+    /// pointee: `auto Q::*M`).
+    pub(crate) fn nttp_type_has_placeholder(&self, q: QualType) -> bool {
+        let mut cur = q;
+        for _ in 0..256 {
+            match self.ast.types.canonical_view(cur) {
+                TypeView::MemberPointer { pointee, .. } => cur = pointee,
+                _ => return self.contains_deduced(cur),
+            }
+        }
+        false
+    }
+
+    /// Whether the type `pt` of a non-type template parameter, which
+    /// contains a placeholder, deduces from argument type `at`
+    /// ([temp.deduct.type]/20 with the placeholder as an invented type
+    /// parameter, [dcl.type.auto.deduct]/4): `auto` matches any type, `auto
+    /// *` a pointer, `auto Q::*` a pointer to member of `Q` (`deduce_match`
+    /// below the member pointer). A synthesized `auto` ([temp.func.order]/3)
+    /// is a unique type, so only a bare placeholder matches it.
+    fn nttp_placeholder_matches(&mut self, pt: QualType, at: QualType) -> bool {
+        let pt = crate::conv::strip_cv(self, pt);
+        let t = &self.ast.types;
+        if let TypeView::MemberPointer { pointee, class } = t.canonical_view(pt) {
+            let TypeView::MemberPointer { pointee: ap, class: ac } = t.canonical_view(at) else {
+                return false;
+            };
+            let same_class =
+                t.canonical(QualType::unqual(class)) == t.canonical(QualType::unqual(ac));
+            return same_class && self.nttp_placeholder_matches(pointee, ap);
+        }
+        if !self.contains_undeduced_auto(pt) {
+            let t = &self.ast.types;
+            return t.same_unqualified(t.canonical(pt), t.canonical(at));
+        }
+        self.deduce_match(pt, at).is_some()
     }
 
     /// Whether the arguments of partial specialization `p`, with
@@ -384,6 +457,17 @@ impl Sema<'_, '_> {
         if !self.partial_at_least_as_specialized(b, a, loc) {
             return true;
         }
+        // CWG1432 (open; clang's speculative fix in `getMoreSpecialized`,
+        // the class analogue of CWG1395): when both deductions succeed and
+        // exactly one side's trailing primary pack ends in an expansion,
+        // the side with the shorter pack and no expansion wins, so
+        // `C<T>` beats `C<T, U...>`. kiln's list deduction already fails
+        // an expansion against a non-pack parameter and a longer argument
+        // list ([temp.deduct.type]/9), so this is a backstop that keeps
+        // the two orders in step with clang if that deduction relaxes.
+        if let Some(r) = self.cwg1432_tie_break(a, b) {
+            return r;
+        }
         // [temp.spec.partial.order]/1, [temp.func.order]/6: equally
         // specialized, the more constrained, provided /6.2.2 makes the
         // constraints comparable: equivalent template-parameter-lists and
@@ -414,6 +498,38 @@ impl Sema<'_, '_> {
         }
         let (kb, cb) = self.partial_constraints(pb.partial);
         self.more_constrained(ka, &ca, kb, &cb)
+    }
+
+    /// The CWG1432 tie-break between equally specialized partial
+    /// specializations `a` and `b` (see `partial_more_specialized`):
+    /// `Some(true)` when `a` wins, `Some(false)` when `b` does, `None` when
+    /// the rule does not apply.
+    fn cwg1432_tie_break(&self, a: u32, b: u32) -> Option<bool> {
+        let t = &self.ast.templates;
+        let (pa, pb) = (t.partial(a)?, t.partial(b)?);
+        let (sa, ea) = self.trailing_pack_shape(pa.canonical)?;
+        let (sb, eb) = self.trailing_pack_shape(pb.canonical)?;
+        if sa == sb || ea == eb {
+            return None;
+        }
+        // The side whose pack is longer and ends in an expansion loses.
+        if sa > sb && ea {
+            return Some(false);
+        }
+        if sb > sa && eb {
+            return Some(true);
+        }
+        None
+    }
+
+    /// The size of the trailing argument pack of canonical argument list
+    /// `l` (the primary's trailing parameter pack), and whether its last
+    /// element is a pack expansion.
+    fn trailing_pack_shape(&self, l: ArgListId) -> Option<(usize, bool)> {
+        let args = self.ast.types.args(l);
+        let ArgView::Pack(p) = args.last()?.view() else { return None };
+        let es = self.ast.types.args(p);
+        Some((es.len(), es.last().is_some_and(|&e| self.is_pack_expansion_arg(e))))
     }
 
     /// Whether partial specialization row `a` is at least as specialized
@@ -480,12 +596,19 @@ impl Sema<'_, '_> {
     ///   primary's own ([temp.func.order]/6.2.2; clang
     ///   `TemplateParameterListsAreEqual` + `TemplateArgumentListAreEqual`).
     ///
+    /// A non-type parameter typed by a placeholder or by another parameter
+    /// (`template<auto V>`, `template<class T, T V>`), on either side, has
+    /// its type deduced from the synthesized argument's type
+    /// ([temp.deduct.type]/20; `deduce_nttp_type`,
+    /// [`Self::deduced_nttp_type_mismatch`]): a synthesized `auto` is a
+    /// unique type that only a placeholder or a type parameter matches, so
+    /// `template<int N> A<N>` of `template<auto N> A` is more specialized
+    /// and `template<class T, T N> A<N>` is not (WP-1105).
+    ///
     /// Not checked (false): a partial specialization of a member template
     /// of a templated class, which clang checks per instantiation of the
     /// enclosing class (`Substituter::member_partial_spec` calls this
-    /// again on the redeclared one), and a primary non-type parameter
-    /// whose type is a placeholder or another parameter (its type would
-    /// be deduced too).
+    /// again on the redeclared one).
     pub(crate) fn not_more_specialized_than_primary(&mut self, p: DeclId, loc: Loc) -> bool {
         let Some((_, info)) = self.ast.partial_spec_info(p) else { return false };
         let info = *info;
@@ -503,21 +626,6 @@ impl Sema<'_, '_> {
         if primary.iter().any(|&x| self.ast.template_parm(x).is_none()) {
             return false;
         }
-        // A primary non-type parameter typed `auto` or by another
-        // parameter (`template <auto V>`, `template <class T, T V>`) needs
-        // the parameter type itself deduced; not modelled, so no check.
-        let typed_by_param = primary.iter().any(|&x| {
-            self.kind_of(x) == DeclKind::NonTypeTemplateParm
-                && self
-                    .ast
-                    .decls
-                    .get(x)
-                    .ty()
-                    .is_none_or(|t| self.contains_deduced(t) || self.is_dependent_type(t))
-        });
-        if typed_by_param {
-            return false;
-        }
         let ps: Vec<TemplateArg> = self.ast.types.args(info.canonical).to_vec();
         let as_: Vec<TemplateArg> = primary
             .iter()
@@ -526,20 +634,27 @@ impl Sema<'_, '_> {
                 self.ast.types.canonical_arg(a)
             })
             .collect();
-        // `p` at least as specialized as the primary.
-        if !self.args_deduce(&as_, &ps, lt, loc, |_, _| true) {
+        // `p` at least as specialized as the primary. Clang 19 converted
+        // `p`'s arguments to the primary's parameter types first, so a
+        // parameter typed by another one (`template<class T, T N>`) took
+        // `template<bool B> V<int, B>` (`DeducedArgs::converted_values`).
+        let converted = self.clang_compat < 22;
+        let check = |s: &mut Self, d: &DeducedArgs| {
+            !converted || s.converted_values_fit(head, lt, &primary, &ps, &d.args, loc)
+        };
+        if !self.args_deduce(&as_, &ps, lt, converted, loc, check) {
             return true;
         }
         // The primary at least as specialized as `p`.
         let finish = |s: &mut Self, d: &DeducedArgs| {
-            if s.deduced_nttp_type_mismatch(lp.params, &d.args) {
+            if s.deduced_nttp_type_mismatch(&info, lp, &d.args, loc) {
                 return false;
             }
             let deduced = s.ast.types.arg_list(&d.args);
             let injected = s.ast.types.arg_list(&as_);
             s.partial_args_match(&info, lp.depth, deduced, injected, true, loc)
         };
-        if !self.args_deduce(&ps, &as_, lp, loc, finish) {
+        if !self.args_deduce(&ps, &as_, lp, false, loc, finish) {
             return false;
         }
         // Equally specialized: [temp.func.order]/6.
@@ -588,12 +703,14 @@ impl Sema<'_, '_> {
         ps: &[TemplateArg],
         as_: &[TemplateArg],
         l: kiln_ast::templates::TemplateParamList,
+        converted_values: bool,
         loc: Loc,
         finish: impl FnOnce(&mut Self, &DeducedArgs) -> bool,
     ) -> bool {
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(l.depth, self.ast.lists.len(l.params));
         d.expansions = true;
+        d.converted_values = converted_values;
         let mut ok = self.deduce_args(ps, as_, true, &mut d, loc) == Tdk::Success;
         if ok {
             self.empty_undeduced_packs(l.params, &mut d);
@@ -601,6 +718,115 @@ impl Sema<'_, '_> {
         }
         let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
         ok && !failed
+    }
+
+    /// [`Self::deduced_nttp_type_mismatch`] for a non-type parameter pack
+    /// of type `pt` deduced as `a`. Clang 22 checks only a placeholder
+    /// type against the elements' (`template<auto *... P>` does not deduce
+    /// from a synthesized `auto... V`); clang 19 also failed a fixed type
+    /// against a synthesized placeholder-typed element, so `template<int...
+    /// I> S<I...>` of `template<auto... V> S` is more specialized only
+    /// under `-fclang-compat=19`.
+    fn pack_nttp_type_mismatch(&mut self, pt: QualType, a: TemplateArg) -> bool {
+        let pt = match self.ast.types.canonical_view(pt) {
+            TypeView::PackExpansion { pattern, .. } => pattern,
+            _ => pt,
+        };
+        let es: Vec<TemplateArg> = match a.view() {
+            ArgView::Pack(l) => self.ast.types.args(l).to_vec(),
+            _ => vec![a],
+        };
+        let placeholder = self.nttp_type_has_placeholder(pt);
+        if !placeholder && (self.clang_compat >= 22 || self.ast.types.is_dependent(pt)) {
+            return false;
+        }
+        for e in es {
+            // An expansion `V...` has the type of its pattern `V`.
+            let e = self.arg_expansion_pattern(e).unwrap_or(e);
+            let Some(at) = self.nttp_arg_type(e) else { continue };
+            let at = self.ast.types.canonical(crate::conv::strip_cv(self, at));
+            let bad = if placeholder {
+                !self.nttp_placeholder_matches(pt, at)
+            } else {
+                self.nttp_type_has_placeholder(at)
+            };
+            if bad {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The type of non-type template argument `a` (`None` for another
+    /// kind, or an erroneous one).
+    fn nttp_arg_type(&self, a: TemplateArg) -> Option<QualType> {
+        let at = match a.view() {
+            ArgView::Expr { expr, .. } => self.ast.exprs.get(expr).ty(),
+            ArgView::Profile(pr) => self.ast.exprs.get(self.ast.types.profile_expr(pr)?).ty(),
+            ArgView::Value { ty, .. } => ty,
+            _ => return None,
+        };
+        (at != QualType::ERROR).then_some(at)
+    }
+
+    /// Under `-fclang-compat=19`: whether each argument in `ps` (a partial
+    /// specialization's) for a primary parameter typed by another one
+    /// (`T N`, primary `head` with list `l` and parameters `params`)
+    /// converts to that type with the primary's parameters `deduced` from
+    /// `ps` substituted, as clang 19 converted it when it checked the
+    /// partial specialization's arguments: the same type, an integral or
+    /// unscoped enumeration value to a non-enumeration integral type, or a
+    /// qualification conversion of a pointer.
+    fn converted_values_fit(
+        &mut self,
+        head: DeclId,
+        l: kiln_ast::templates::TemplateParamList,
+        params: &[DeclId],
+        ps: &[TemplateArg],
+        deduced: &[TemplateArg],
+        loc: Loc,
+    ) -> bool {
+        let mut levels: Option<crate::templ::args::MultiLevelArgs> = None;
+        for (&x, &a) in params.iter().zip(ps) {
+            if self.kind_of(x) != DeclKind::NonTypeTemplateParm || self.is_pack_decl(x) {
+                continue;
+            }
+            let Some(pt) = self.ast.decls.get(x).ty() else { continue };
+            if !self.ast.types.is_dependent(pt) || self.nttp_type_has_placeholder(pt) {
+                continue;
+            }
+            let Some(at) = self.nttp_arg_type(a) else { continue };
+            let args = levels.get_or_insert_with(|| {
+                let mut m = Self::outer_levels(head, l.depth);
+                let list = self.ast.types.arg_list(deduced);
+                m.push(list, head, LevelMode::Substitute);
+                m
+            });
+            let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
+            let r = Substituter::new(self, args).ty(pt, loc);
+            self.ast.templates.dependent_depth = saved;
+            let Ok(pt) = r else { return false };
+            let t = &self.ast.types;
+            let (pt, at) = (
+                t.canonical(crate::conv::strip_cv(self, pt)),
+                t.canonical(crate::conv::strip_cv(self, at)),
+            );
+            let t = &self.ast.types;
+            let fits = t.same_unqualified(pt, at)
+                || (t.is_integral(pt)
+                    && t.as_enum(pt).is_none()
+                    && (t.is_integral(at) || crate::conv::rank::is_unscoped_enum(self, at)))
+                || match (t.pointee(pt), t.pointee(at)) {
+                    (Some(pp), Some(ap)) if t.is_pointer(pt) && t.is_pointer(at) => {
+                        t.same_unqualified(pp, ap) && pp.quals().contains(ap.quals())
+                    }
+                    _ => false,
+                };
+            if !fits {
+                return false;
+            }
+        }
+        true
     }
 
     /// The canonical elements of argument list `l`, packs flattened.
@@ -641,28 +867,68 @@ impl Sema<'_, '_> {
     }
 
     /// [`Self::not_more_specialized_than_primary`]: a non-type parameter
-    /// deduced from a synthesized argument of another type (`signed char C`
-    /// from `long N`) fails deduction ([temp.deduct.type]/20, clang
+    /// of list `l` (partial specialization `p`'s) deduced from a
+    /// synthesized argument of another type fails deduction
+    /// ([temp.deduct.type]/20, clang
     /// `err_deduced_non_type_template_arg_type_mismatch`), so the primary
-    /// is not at least as specialized.
-    fn deduced_nttp_type_mismatch(&self, params: ListId, deduced: &[TemplateArg]) -> bool {
-        let t = &self.ast.types;
-        self.ast.lists.iter::<DeclId>(params).zip(deduced).any(|(x, a)| {
-            let Some(pt) = self.ast.decls.get(x).ty() else { return false };
+    /// is not at least as specialized: `signed char C` from `long N`, `int
+    /// N` or `auto *P` from the unique type of a synthesized `auto V`. A
+    /// parameter typed by a placeholder deduces it from the argument's
+    /// type (`auto` matches any, `auto *` a pointer: `deduce_match`); one
+    /// typed by another parameter of `l` must be the argument's type once
+    /// the deduced arguments are substituted (`T` deduced by
+    /// `deduce_nttp_type` from that same type matches).
+    fn deduced_nttp_type_mismatch(
+        &mut self,
+        p: &kiln_ast::templates::PartialSpecInfo,
+        l: kiln_ast::templates::TemplateParamList,
+        deduced: &[TemplateArg],
+        loc: Loc,
+    ) -> bool {
+        let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(l.params).collect();
+        let mut levels: Option<crate::templ::args::MultiLevelArgs> = None;
+        for (&x, &a) in params.iter().zip(deduced) {
             if self.kind_of(x) != DeclKind::NonTypeTemplateParm {
-                return false;
+                continue;
             }
-            let at = match a.view() {
-                ArgView::Expr { expr, .. } => self.ast.exprs.get(expr).ty(),
-                ArgView::Profile(pr) => match t.profile_expr(pr) {
-                    Some(e) => self.ast.exprs.get(e).ty(),
-                    None => return false,
-                },
-                ArgView::Value { ty, .. } => ty,
-                _ => return false,
+            let Some(pt) = self.ast.decls.get(x).ty() else { continue };
+            if self.is_pack_decl(x) {
+                if self.pack_nttp_type_mismatch(pt, a) {
+                    return true;
+                }
+                continue;
+            }
+            let Some(at) = self.nttp_arg_type(a) else { continue };
+            let at = self.ast.types.canonical(crate::conv::strip_cv(self, at));
+            if self.nttp_type_has_placeholder(pt) {
+                if !self.nttp_placeholder_matches(pt, at) {
+                    return true;
+                }
+                continue;
+            }
+            let pt = if self.ast.types.is_dependent(pt) {
+                let args = levels.get_or_insert_with(|| {
+                    let mut m = Self::outer_levels(p.template, l.depth);
+                    let list = self.ast.types.arg_list(deduced);
+                    m.push(list, p.partial, LevelMode::Substitute);
+                    m
+                });
+                let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
+                let r = Substituter::new(self, args).ty(pt, loc);
+                self.ast.templates.dependent_depth = saved;
+                match r {
+                    Ok(q) => q,
+                    Err(_) => return true,
+                }
+            } else {
+                pt
             };
-            !t.same_unqualified(t.canonical(pt), t.canonical(at))
-        })
+            let t = &self.ast.types;
+            if !t.same_unqualified(t.canonical(pt), at) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Whether function template `a` is more specialized than `b` in the
