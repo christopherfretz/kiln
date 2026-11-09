@@ -354,7 +354,13 @@ impl Sema<'_, '_> {
             (entry, key, outer)
         };
         let mut params = self.deduce_scratch.pop().unwrap_or_default();
+        // A lambda in the signature is numbered in the template's
+        // pattern (spec/sema-lambda.md §3.5, WP-1077).
+        let site = self.templated_function(ft).map(|p| self.begin_signature_mangling(ft, p));
         let r = self.deduce_spec_steps(ft, explicit, call, target, loc, &mut params);
+        if let Some(site) = site {
+            self.end_signature_mangling(site);
+        }
         self.deduce_scratch.push(params);
         #[cfg(feature = "op-stats")]
         crate::templ::deduce_stats::tally(
