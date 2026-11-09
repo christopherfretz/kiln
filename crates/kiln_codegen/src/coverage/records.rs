@@ -42,6 +42,8 @@ pub(crate) struct CovModule {
     /// the function still needs its zero record.
     deferred: FxHashMap<DeclId, bool>,
     deferred_order: Vec<DeclId>,
+    /// How many of `DeclArena::fn_def_insts` were deferred.
+    insts_seen: usize,
     /// The lexer's identifier table for the location queries (taken
     /// while a mapping is built).
     interner: Option<Box<Interner>>,
@@ -134,6 +136,37 @@ impl Cg<'_> {
         if let std::collections::hash_map::Entry::Vacant(v) = self.cov.deferred.entry(d) {
             v.insert(true);
             self.cov.deferred_order.push(d);
+        }
+    }
+
+    /// The function definitions Sema instantiated before top-level
+    /// declaration `upto` (all of them for `u32::MAX`): clang hands each
+    /// to `EmitTopLevelDecl` when it is instantiated, which defers its
+    /// zero record (`AddDeferredUnusedCoverageMapping`), so one used only
+    /// in constant evaluation still gets one (WP-1083).
+    pub(crate) fn cov_defer_insts(&mut self, upto: u32) {
+        if !self.opts.coverage.mapping {
+            return;
+        }
+        let ast = self.ast;
+        let insts = ast.decls.fn_def_insts();
+        while let Some(&(f, k)) = insts.get(self.cov.insts_seen) {
+            if k > upto {
+                break;
+            }
+            self.cov.insts_seen += 1;
+            let n = ast.decls.get(f);
+            // `EmitTopLevelDecl` defers functions and methods only (a
+            // constructor or destructor gets one from
+            // `HandleInlineFunctionDefinition`, never instantiated).
+            if !matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion)
+                || n.has(DeclFlags::INVALID)
+                || n.has(DeclFlags::DEPENDENT_CTX)
+                || ast.decls.function(f).is_some_and(|x| x.spec.is_immediate())
+            {
+                continue;
+            }
+            self.cov_defer_unused(f);
         }
     }
 
@@ -261,6 +294,7 @@ impl Cg<'_> {
         if !self.opts.coverage.mapping || !self.opts.coverage.instr {
             return;
         }
+        self.cov_defer_insts(u32::MAX);
         let order = std::mem::take(&mut self.cov.deferred_order);
         for d in order {
             if self.cov.deferred.get(&d) != Some(&true) {

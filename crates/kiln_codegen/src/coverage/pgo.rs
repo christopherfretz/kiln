@@ -544,7 +544,10 @@ impl Cg<'_> {
         let n = ast.decls.get(d);
         if n.has(kiln_ast::decl::DeclFlags::IMPLICIT)
             || ast.decls.function(d).is_none_or(|x| x.body.is_none())
-            || matches!(ast.closure_thunk(d), Some(kiln_ast::lambda::ClosureThunk::Invoker { .. }))
+            // A lambda's conversion function and static invoker are
+            // implicit, a generic lambda's specializations of them too
+            // (WP-1083).
+            || ast.closure_thunk(d).is_some()
             || n.kind() == DeclKind::CXXDestructor
                 && structor != Some(kiln_abi::mangle::Structor::Base)
         {

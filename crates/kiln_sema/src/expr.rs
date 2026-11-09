@@ -2603,7 +2603,11 @@ impl Sema<'_, '_> {
             }
         };
         let _ = CodeUnits::U8(Vec::new());
-        self.builder().string_literal(ty, kind, id, loc)
+        let e = self.builder().string_literal(ty, kind, id, loc);
+        if let [_, .., (_, end)] = pieces {
+            self.builder().record_end_loc(e, *end);
+        }
+        e
     }
 
     /// `true` / `false` ([lex.bool]).
