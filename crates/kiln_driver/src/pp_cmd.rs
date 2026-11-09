@@ -41,15 +41,70 @@ pub struct JobResult {
 /// The dependency list a preprocessor's callbacks fill (`-M`, `-MD`).
 pub(crate) type SharedDeps = Rc<RefCell<DepList>>;
 
+/// What source-based coverage (WP-1003) records from the preprocessor:
+/// the groups skipped by conditional directives, and the macro
+/// invocations written in files (with whether the macro is
+/// function-like).
+#[derive(Debug, Default)]
+pub(crate) struct PpSkips {
+    pub skipped: Vec<Span>,
+    pub expanded: Vec<(Span, bool)>,
+}
+
+/// The shared [`PpSkips`] of a preprocessor's callbacks.
+pub(crate) type SharedSkips = Rc<RefCell<PpSkips>>;
+
 /// What [`Job::build_preprocessor`] needs besides the job.
 #[derive(Debug)]
 pub(crate) struct PpInputs {
+    /// Where to record skipped groups, when coverage mapping wants them.
+    pub skipped: Option<SharedSkips>,
     /// The header search list.
     pub list: SearchList,
     /// The main input.
     pub main: MainInput,
     /// The predefines buffer (`<built-in>`).
     pub predefines: String,
+}
+
+/// The dependency callbacks (if any) plus a record of skipped groups.
+struct SkipCallbacks<'a> {
+    deps: Option<DepCallbacks<'a>>,
+    skipped: SharedSkips,
+}
+
+impl kiln_pp::PpCallbacks for SkipCallbacks<'_> {
+    fn file_changed(&mut self, change: kiln_pp::FileChange) {
+        if let Some(d) = &mut self.deps {
+            d.file_changed(change);
+        }
+    }
+
+    fn inclusion_directive(
+        &mut self,
+        req: &kiln_pp::IncludeRequest,
+        result: Option<&kiln_pp::ResolvedInclude>,
+    ) {
+        if let Some(d) = &mut self.deps {
+            d.inclusion_directive(req, result);
+        }
+    }
+
+    fn file_skipped(&mut self, result: &kiln_pp::ResolvedInclude, system: bool) {
+        if let Some(d) = &mut self.deps {
+            d.file_skipped(result, system);
+        }
+    }
+
+    fn source_range_skipped(&mut self, range: Span) {
+        self.skipped.borrow_mut().skipped.push(range);
+    }
+
+    fn macro_expands(&mut self, name: &kiln_lex::Token, def: &kiln_pp::MacroDef, range: Span) {
+        if range.lo.is_file() && name.span.lo.is_file() {
+            self.skipped.borrow_mut().expanded.push((range, def.is_function_like()));
+        }
+    }
 }
 
 /// The main input of a job: a source, or a module file whose unit is
@@ -321,7 +376,7 @@ impl Job<'_> {
         sm.set_source_path_style(self.args.source_path_style);
         let main = self.load_main(sm, engine);
         let predefines = self.predefines(engine);
-        Some(PpInputs { list, main: main?, predefines: predefines? })
+        Some(PpInputs { skipped: None, list, main: main?, predefines: predefines? })
     }
 
     /// The preprocessor of this input, exactly as `-E` configures it
@@ -341,7 +396,7 @@ impl Job<'_> {
         staged: bool,
     ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>)> {
         let a = self.args;
-        let PpInputs { list, main, predefines } = inputs;
+        let PpInputs { skipped, list, main, predefines } = inputs;
         let mut search = HeaderSearch::new(RealFs, list).with_embed_dirs(a.embed_dirs.clone());
         let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));
         if let Some(d) = &deps {
@@ -442,8 +497,13 @@ impl Job<'_> {
         } else {
             pp.set_feature_queries(Box::new(features));
         }
-        if let Some(d) = &deps {
-            pp.set_callbacks(Box::new(DepCallbacks::new(Rc::clone(d), sm)));
+        match (&deps, skipped) {
+            (Some(d), None) => pp.set_callbacks(Box::new(DepCallbacks::new(Rc::clone(d), sm))),
+            (d, Some(skipped)) => pp.set_callbacks(Box::new(SkipCallbacks {
+                deps: d.as_ref().map(|d| DepCallbacks::new(Rc::clone(d), sm)),
+                skipped,
+            })),
+            (None, None) => {}
         }
         match main {
             MainInput::File(f) => pp.enter_main_file(f),

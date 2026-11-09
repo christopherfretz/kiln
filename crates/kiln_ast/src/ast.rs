@@ -98,6 +98,65 @@ struct InstantiationMeter {
 }
 
 impl Ast {
+    /// The location of the last token of `e` (clang's `getEndLoc`): the
+    /// stored closing token (`)`, `}`) when there is one, else the end of
+    /// the last operand for a node that ends with one (a binary or prefix
+    /// operator, a conditional, a C-style cast, an implicit node), else
+    /// the node's own location (a name, a literal, a member name, a
+    /// postfix operator).
+    pub fn end_loc(&self, mut e: ExprId) -> kiln_source::Loc {
+        loop {
+            if let Some(l) = self.exprs.end_loc(e) {
+                return l;
+            }
+            let n = self.exprs.get(e);
+            let last = match n.kind() {
+                ExprKind::ImplicitCastExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::ConstantExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::BinaryOperator
+                | ExprKind::CompoundAssignOperator
+                | ExprKind::ConditionalOperator
+                | ExprKind::BinaryConditionalOperator => true,
+                ExprKind::UnaryOperator => !self.exprs.unary_op(e).is_postfix(),
+                ExprKind::CXXRewrittenBinaryOperator => {
+                    e = self.exprs.rewritten_semantic(e);
+                    continue;
+                }
+                // clang: the base's range.
+                ExprKind::DesignatedInitUpdateExpr => {
+                    e = self.exprs.designated_init_update(e)[0];
+                    continue;
+                }
+                ExprKind::CXXOperatorCallExpr => {
+                    use crate::names::OverloadedOperator as O;
+                    let op = self.exprs.operator_call_op(e);
+                    let args = self.lists.get(self.exprs.call_args(e));
+                    let postfix = matches!(op, O::PlusPlus | O::MinusMinus) && args.len() == 2;
+                    if matches!(op, O::Call | O::Subscript | O::Arrow) || postfix {
+                        return n.loc();
+                    }
+                    match args.last() {
+                        Some(&a) => {
+                            e = ExprId::new(a);
+                            continue;
+                        }
+                        None => return n.loc(),
+                    }
+                }
+                _ => false,
+            };
+            let kids = if last { self.exprs.children(e, &self.lists) } else { Vec::new() };
+            match kids.last() {
+                Some(&k) => e = k,
+                None => return n.loc(),
+            }
+        }
+    }
+
     /// The location of the first token of `e` (clang's `getBeginLoc`):
     /// a node whose own location is an operator or a name after its first
     /// operand begins where that operand does.

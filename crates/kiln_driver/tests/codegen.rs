@@ -1085,14 +1085,7 @@ fn coverage_flags_rejected() {
     };
     for (flags, want) in [
         (
-            &["-fprofile-instr-generate", "-fcoverage-mapping"][..],
-            "'-fcoverage-mapping (source-based coverage mapping is not yet implemented, a \
-             WP-941 follow-up; -fprofile-instr-generate counters work alone, and --coverage \
-             gives gcov line coverage)' is not supported by kiln"
-                .to_owned(),
-        ),
-        (
-            &["-fprofile-generate"],
+            &["-fprofile-generate"][..],
             limit("-fprofile-generate", "IR profile-guided optimization instrumentation"),
         ),
         (

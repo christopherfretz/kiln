@@ -23,7 +23,7 @@ use kiln_source::{SourceManager, Span};
 
 use crate::args::{Action, Args, Input, Lang, LinkOptKind};
 use crate::link::Command;
-use crate::pp_cmd::{Job, PpInputs, SharedDeps};
+use crate::pp_cmd::{Job, PpInputs, SharedDeps, SharedSkips};
 use crate::toolchain::{StdLib, Tool, Toolchain};
 use crate::{Io, input_std, make_engine, print_version, report_output_error, write_output};
 
@@ -305,6 +305,9 @@ impl CodegenJob<'_> {
         if crate::features::resolve(a, &job.toolchain.target).0.x86_cx16() {
             target.types.max_atomic_inline_bytes = 16;
         }
+        let mut inputs = inputs;
+        let skipped = a.coverage.mapping().then(SharedSkips::default);
+        inputs.skipped.clone_from(&skipped);
         let (pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
         let main_id = pp.main_file();
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
@@ -416,6 +419,11 @@ impl CodegenJob<'_> {
             // WP-941: coverage, and the debug locations gcov needs (clang
             // `LocTrackingOnly` when no `-g` is given).
             opts.coverage = coverage_options(a, job.path);
+            if let Some(s) = &skipped {
+                let s = s.take();
+                opts.coverage.skipped = s.skipped;
+                opts.coverage.expanded = s.expanded;
+            }
             if opts.coverage.gcov.is_some() && opts.debug.kind == kiln_codegen::DebugInfoKind::None
             {
                 opts.debug.kind = kiln_codegen::DebugInfoKind::LocTrackingOnly;
@@ -489,6 +497,8 @@ fn coverage_options(a: &Args, input: &str) -> kiln_codegen::CoverageOptions {
         mapping: c.mapping(),
         comp_dir: c.comp_dir.clone().unwrap_or(cwd),
         prefix_map: c.prefix_map.clone(),
+        skipped: Vec::new(),
+        expanded: Vec::new(),
     }
 }
 
