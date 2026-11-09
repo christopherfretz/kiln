@@ -797,10 +797,15 @@ impl Collect<'_> {
 pub(crate) fn refers_to_const_var(ast: &Ast, mut e: ExprId) -> bool {
     // Through parentheses and no-op casts (the xvalue of an implicitly
     // movable `return x;`): clang's `VisitCastExpr` visits a `CK_NoOp`
-    // operand, reaching `VisitDeclRefExpr`'s `tryEmitAsConstant`.
+    // operand, reaching `VisitDeclRefExpr`'s `tryEmitAsConstant`. And
+    // through a reference template argument (`R` of `template <const
+    // int &R>` naming `static const int cg = 3;`): clang's
+    // `VisitSubstNonTypeTemplateParmExpr` visits the replacement, the
+    // `DeclRefExpr` (WP-998).
     loop {
         match ast.exprs.get(e).kind() {
             ExprKind::ParenExpr => e = ast.exprs.operand(e),
+            ExprKind::SubstNonTypeTemplateParmExpr => e = ast.exprs.subst_replacement(e),
             ExprKind::ImplicitCastExpr if ast.exprs.cast_kind(e) == CastKind::NoOp => {
                 e = ast.exprs.operand(e);
             }

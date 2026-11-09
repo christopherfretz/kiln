@@ -989,8 +989,14 @@ impl Cg<'_> {
         {
             if self.dbg_on() {
                 let mut s = s;
-                while self.ast.exprs.get(s).kind() == ExprKind::ParenExpr {
-                    s = self.ast.exprs.operand(s);
+                loop {
+                    match self.ast.exprs.get(s).kind() {
+                        ExprKind::ParenExpr => s = self.ast.exprs.operand(s),
+                        ExprKind::SubstNonTypeTemplateParmExpr => {
+                            s = self.ast.exprs.subst_replacement(s);
+                        }
+                        _ => break,
+                    }
                 }
                 if matches!(
                     self.ast.exprs.get(s).kind(),
