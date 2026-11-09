@@ -4688,7 +4688,11 @@ under its own name, the same signature, gating and codegen
   `<ctype.h>`, `<wchar.h>`, `<math.h>` d/f/l), declared in a namespace
   scope context (TU or namespace, through linkage specs) with C
   language linkage and with the row's type ignoring the exception
-  specification, gets implicit `NoThrow` and `Const`/`Pure` attributes
+  specification (clang's `hasSameFunctionTypeIgnoringExceptionSpec`:
+  the `noreturn` bit is part of the type, so a `NoReturn` row such as
+  `abort` matches only a declaration with GNU `noreturn`; `void abort();`
+  and `[[noreturn]] void abort();`, a declaration attribute, do not,
+  WP-938), gets implicit `NoThrow` and `Const`/`Pure` attributes
   (after its written ones). Sig letter `a` is `__builtin_va_list`
   (decayed when an array), `P` the type of the TU-scope `FILE`
   (below), `R` adds `restrict` to the type
@@ -4707,7 +4711,12 @@ under its own name, the same signature, gating and codegen
   `fmaximum_num` / `fminimum_num` `{,f,l}` (`builtin::lib_min_compat`:
   not recognized at `-fclang-compat=19`) and the GNU `sincos{,f,l}`
   (clang 22, `ALL_GNU_LANGUAGES`: recognized under `-std=gnu++*` only,
-  `builtin::lib_gnu_only`; `NoThrow`, a call is `nounwind`). A call in
+  `builtin::lib_gnu_only`; `NoThrow`, a call is `nounwind`). WP-938 adds
+  `abort` (`NoThrow`, `NoReturn`), the `<complex.h>` functions (`cabs`
+  ... `ctanh`, `cpow`, `cproj` `{,f,l}`; `NoThrow`, `cproj` also
+  `Const`) and the GNU-only `stpcpy`, `stpncpy`, `strdup`, `strndup`,
+  `index`, `rindex` (`NoThrow`), clang 19 and 22's rows; a call under a
+  pending cleanup is then a `call`, not an `invoke`. A call in
   a constant expression is still a call of a non-constexpr function
   (clang 19 and 22 reject `constexpr double d = ceil(1.5);`). The printf
   family (`printf`, `fprintf`, `sprintf`, `snprintf`, `vprintf`,

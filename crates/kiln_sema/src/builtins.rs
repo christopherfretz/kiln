@@ -329,7 +329,7 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(info) = builtin::info(id) else { return };
-        if !self.c_linkage_file_scope_fn_of_type(f, info.sig) {
+        if !self.c_linkage_file_scope_fn_of_type(f, info.sig, false) {
             self.check_builtin_redecl(f, &info);
             return;
         }
@@ -491,8 +491,11 @@ impl Sema<'_, '_> {
     /// Whether `f` is a `Function` in a namespace-scope context (through
     /// linkage specifications) with C language linkage whose type is the
     /// one the `Builtins.td` signature `sig` spells, ignoring the
-    /// exception specification.
-    fn c_linkage_file_scope_fn_of_type(&mut self, f: DeclId, sig: &str) -> bool {
+    /// exception specification; `noreturn` when the row is `NoReturn`
+    /// (WP-902: clang `hasSameFunctionTypeIgnoringExceptionSpec` against
+    /// `GetBuiltinType` compares the `noreturn` bit, so only
+    /// `void abort() __attribute__((noreturn))` is the library `abort`).
+    fn c_linkage_file_scope_fn_of_type(&mut self, f: DeclId, sig: &str, noreturn: bool) -> bool {
         if self.kind_of(f) != DeclKind::Function {
             return false;
         }
@@ -511,7 +514,7 @@ impl Sema<'_, '_> {
         let want = self.ast.types.function(
             ret,
             &params,
-            FuncInfo::new().with_variadic(variadic),
+            FuncInfo::new().with_variadic(variadic).with_noreturn(noreturn),
             ExcSpec::None,
         );
         let have = self.with_exc_spec(ty, ExcSpec::None);
@@ -542,7 +545,8 @@ impl Sema<'_, '_> {
         {
             return None;
         }
-        self.c_linkage_file_scope_fn_of_type(f, info.sig).then_some(info)
+        let noreturn = info.attrs & builtin::attr::NORETURN != 0;
+        self.c_linkage_file_scope_fn_of_type(f, info.sig, noreturn).then_some(info)
     }
 
     /// Declares the builtin function `name` (first used at `loc`) if it
