@@ -377,6 +377,7 @@ impl Sema<'_, '_> {
         let params: Vec<ParamInfo> =
             d.function_params().map(<[ParamInfo]>::to_vec).unwrap_or_default();
         let explicit_obj = self.lambda_explicit_object(&params, specs);
+        self.check_param_shadows_capture(id, &params);
         // [expr.prim.lambda.closure]/5: `const` unless `mutable`,
         // `static` or with an explicit object parameter.
         let quals = if specs.mutable.is_some() || is_static || explicit_obj {

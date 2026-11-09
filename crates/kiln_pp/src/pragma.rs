@@ -341,7 +341,7 @@ impl Preprocessor<'_, '_> {
     /// clang `HandlePragmaOnce`.
     fn pragma_once(&mut self, t: &PpTok) {
         let Some(file) = self.cur_file_ref().map(|f| f.file) else { return };
-        if Some(file) == self.main_file {
+        if Some(file) == self.main_file && !self.opts.main_is_header {
             self.emit(Diag::new(DiagId::pp_pragma_once_in_main, t.tok.span));
             return;
         }
