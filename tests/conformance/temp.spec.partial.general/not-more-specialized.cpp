@@ -27,3 +27,8 @@ A<int *, char> a;
 B<1, 1> b;
 int i = v<char, int>;
 E<int, 3> e;
+// A parameter of another type than the primary's is not deduced from it
+// ([temp.deduct.type]/20), so the partial specialization is more specialized.
+template <long N> struct Ln {};
+template <signed char C> struct Ln<C> {};
+Ln<1> ln;

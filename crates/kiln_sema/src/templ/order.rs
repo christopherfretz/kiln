@@ -8,7 +8,7 @@ use kiln_ast::ExprId;
 use kiln_ast::QualType;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{ExprDeps, ExprKind};
-use kiln_ast::ids::ArgListId;
+use kiln_ast::ids::{ArgListId, ListId};
 use kiln_ast::ids::{RawId, TemplateNameId};
 use kiln_ast::templates::Requirement;
 use kiln_ast::types::{
@@ -360,7 +360,7 @@ impl Sema<'_, '_> {
 
     /// A pack parameter of `params` deduced from no elements is empty
     /// ([temp.deduct.type]/9).
-    fn empty_undeduced_packs(&mut self, params: kiln_ast::ids::ListId, d: &mut DeducedArgs) {
+    fn empty_undeduced_packs(&mut self, params: ListId, d: &mut DeducedArgs) {
         for i in 0..self.ast.lists.len(params) {
             let pack = self
                 .ast
@@ -510,7 +510,8 @@ impl Sema<'_, '_> {
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(lp.depth, self.ast.lists.len(lp.params));
         let mut ok = self.deduce_args(&ps, &as_, true, &mut d, loc) == Tdk::Success
-            && d.first_undeduced().is_none();
+            && d.first_undeduced().is_none()
+            && !self.deduced_nttp_type_mismatch(lp.params, &d.args);
         if ok {
             let deduced = self.ast.types.arg_list(&d.args);
             let injected = self.ast.types.arg_list(&as_);
@@ -518,6 +519,31 @@ impl Sema<'_, '_> {
         }
         let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
         ok && !failed
+    }
+
+    /// [`Self::primary_at_least_as_specialized`]: a non-type parameter
+    /// deduced from a synthesized argument of another type (`signed char C`
+    /// from `long N`) fails deduction ([temp.deduct.type]/20, clang
+    /// `err_deduced_non_type_template_arg_type_mismatch`), so the primary
+    /// is not at least as specialized.
+    fn deduced_nttp_type_mismatch(&self, params: ListId, deduced: &[TemplateArg]) -> bool {
+        let t = &self.ast.types;
+        self.ast.lists.iter::<DeclId>(params).zip(deduced).any(|(x, a)| {
+            let Some(pt) = self.ast.decls.get(x).ty() else { return false };
+            if self.kind_of(x) != DeclKind::NonTypeTemplateParm {
+                return false;
+            }
+            let at = match a.view() {
+                ArgView::Expr { expr, .. } => self.ast.exprs.get(expr).ty(),
+                ArgView::Profile(pr) => match t.profile_expr(pr) {
+                    Some(e) => self.ast.exprs.get(e).ty(),
+                    None => return false,
+                },
+                ArgView::Value { ty, .. } => ty,
+                _ => return false,
+            };
+            !t.same_unqualified(t.canonical(pt), t.canonical(at))
+        })
     }
 
     /// Whether function template `a` is more specialized than `b` in the
