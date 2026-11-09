@@ -331,6 +331,7 @@ sema_diagnose_if_succeeded_warning = Warning [UserDefinedWarnings] (1) "{0}";
 sema_different_asm_label = Error (0) "conflicting asm label";
 sema_different_language_linkage = Error (1) "declaration of '{0}' has a different language linkage";
 sema_dimension_expr_not_const = Error (0) "dimension expression does not evaluate to a constant unsigned int";
+sema_distant_exception_spec = Error (0) "exception specifications are not allowed beyond a single level of indirection";
 sema_division_by_zero = Warning [DivisionByZero] (1) "{0} by zero is undefined";
 sema_does_not_refer_to_template = Error (1) "'{0}' does not refer to a template";
 sema_dtor_access_base = Error (2) "base class {0} has {1:private|protected} destructor";

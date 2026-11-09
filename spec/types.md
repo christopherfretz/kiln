@@ -474,7 +474,8 @@ enum ExcSpec /* tag */ {
   declaration's convention with the note at the first declaration; an
   implicit (default) later declaration inherits it. `regparm(N)` and
   `no_caller_saved_registers` merge the same way. A virtual override
-  with a different convention is an error. Unsupported-on-target
+  with a different convention is an error, also an implicitly declared
+  one (WP-1103, spec/sema.md §4.7 *Implicit members*). Unsupported-on-target
   conventions warn (`-Wignored-attributes`) and are dropped; `swiftcall`,
   `swiftasynccall` and x86 `interrupt` are hard errors (lowering not
   implemented). Mangling follows clang: only `ms_abi` is mangled
