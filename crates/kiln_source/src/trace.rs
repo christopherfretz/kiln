@@ -838,7 +838,9 @@ impl Parser<'_> {
                 }
                 Some(b'\\') => {
                     self.i += 1;
-                    let Some(&e) = self.b.get(self.i) else { return self.err("unterminated string") };
+                    let Some(&e) = self.b.get(self.i) else {
+                        return self.err("unterminated string");
+                    };
                     self.i += 1;
                     match e {
                         b'"' => s.push('"'),
@@ -851,7 +853,8 @@ impl Parser<'_> {
                         b't' => s.push('\t'),
                         b'u' => {
                             let mut c = self.hex4()?;
-                            if (0xd800..0xdc00).contains(&c) && self.b[self.i..].starts_with(b"\\u") {
+                            if (0xd800..0xdc00).contains(&c) && self.b[self.i..].starts_with(b"\\u")
+                            {
                                 self.i += 2;
                                 let lo = self.hex4()?;
                                 if !(0xdc00..0xe000).contains(&lo) {

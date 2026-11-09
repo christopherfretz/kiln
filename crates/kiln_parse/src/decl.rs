@@ -4556,9 +4556,10 @@ impl Parser<'_, '_> {
                 let ctor = matches!(d.special, Some((SpecialName::Constructor(_), _)));
                 // `-ftime-trace`: clang's `ParseFunctionDefinition` (not
                 // for the late-parsed member bodies, as clang).
-                let _trace = kiln_source::trace::Scope::with_detail("ParseFunctionDefinition", || {
-                    self.decl_name(f)
-                });
+                let _trace =
+                    kiln_source::trace::Scope::with_detail("ParseFunctionDefinition", || {
+                        self.decl_name(f)
+                    });
                 self.parse_function_definition(f, ctor);
             }
             None => self.skip_function_body(),

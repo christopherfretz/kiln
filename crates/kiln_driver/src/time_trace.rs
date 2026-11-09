@@ -49,9 +49,9 @@ pub fn settings(args: &Args) -> Result<Option<Settings>, (String, String)> {
     }
     let granularity = match &args.time_trace.granularity {
         None => trace::DEFAULT_GRANULARITY_US,
-        Some(v) => v
-            .parse::<u64>()
-            .map_err(|_| (format!("-ftime-trace-granularity={v}"), v.clone()))?,
+        Some(v) => {
+            v.parse::<u64>().map_err(|_| (format!("-ftime-trace-granularity={v}"), v.clone()))?
+        }
     };
     Ok(Some(Settings { granularity, verbose: args.time_trace.verbose }))
 }
@@ -121,7 +121,15 @@ impl InputTrace {
     pub fn start(settings: Settings, path: String) -> InputTrace {
         trace::start(settings.granularity, settings.verbose);
         let execute = trace::begin_on("ExecuteCompiler");
-        InputTrace { path, settings, execute, backend: None, children: Vec::new(), no_sources: false, failed: false }
+        InputTrace {
+            path,
+            settings,
+            execute,
+            backend: None,
+            children: Vec::new(),
+            no_sources: false,
+            failed: false,
+        }
     }
 
     /// Opens the `Backend` span (the IR passes and code generation after

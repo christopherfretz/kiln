@@ -789,7 +789,8 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         // preprocessor job alone (`ExecuteCompiler`), as clang.
         let trace = time_trace::settings(args).ok().flatten().map(|s| {
             let out = args.output.as_deref().unwrap_or("-");
-            let mut t = time_trace::InputTrace::start(s, time_trace::path(args, None, &input.path, out));
+            let mut t =
+                time_trace::InputTrace::start(s, time_trace::path(args, None, &input.path, out));
             t.no_sources = true;
             t
         });

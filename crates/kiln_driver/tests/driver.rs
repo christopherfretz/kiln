@@ -277,7 +277,8 @@ fn time_trace_syntax_only() {
     let file = d.join("x.json");
     let file = file.to_str().unwrap();
     let eq = format!("-ftime-trace={file}");
-    let flags = ["-ftime-trace", eq.as_str(), "-ftime-trace-granularity=10", "-ftime-trace-verbose"];
+    let flags =
+        ["-ftime-trace", eq.as_str(), "-ftime-trace-granularity=10", "-ftime-trace-verbose"];
     let mut args = vec!["-std=c++26", "-fsyntax-only"];
     args.extend(flags);
     args.push("-");

@@ -128,6 +128,16 @@ impl Oven {
     #[cold]
     #[inline(never)]
     pub(crate) fn hook_call_enter(&mut self, b: &dyn SemaBridge, func: u32) {
+        let depth = self.stack.len() as u32;
+        // Calls at this depth or deeper were unwound (a failed trial, an
+        // exception) without a `Ret`: they end now, not at the caller's
+        // return (else a loop of failed trials holds one open call each).
+        if self.hooks.marks.last().is_some_and(|m| m.depth >= depth) {
+            let now = Instant::now();
+            while self.hooks.marks.last().is_some_and(|m| m.depth >= depth) {
+                self.end_call_mark(b, now);
+            }
+        }
         let ast = b.ast();
         let immediate = self.funcs[func as usize]
             .decl
@@ -135,7 +145,6 @@ impl Oven {
             .is_some_and(|f| f.spec.is_immediate());
         let name = if immediate { "ConstevalCall" } else { "ConstexprCall" };
         if let Some(span) = trace::begin_on(name) {
-            let depth = self.stack.len() as u32;
             self.hooks.marks.push(CallMark { depth, func, span });
         }
     }
@@ -158,7 +167,12 @@ impl Oven {
         trace::end_at(
             m.span,
             now,
-            || decl.map_or_else(|| "<expression>".to_owned(), |d| notes::qualified_name(b.ast(), d)),
+            || {
+                decl.map_or_else(
+                    || "<expression>".to_owned(),
+                    |d| notes::qualified_name(b.ast(), d),
+                )
+            },
             Vec::new,
         );
     }

@@ -51,7 +51,12 @@ fn setup(name: &str) -> PathBuf {
 
 fn run(cc: &Path, dir: &Path, args: &[&str]) -> Output {
     let o = Command::new(cc).args(args).current_dir(dir).output().unwrap();
-    assert!(o.status.success(), "{} {args:?}: {}", cc.display(), String::from_utf8_lossy(&o.stderr));
+    assert!(
+        o.status.success(),
+        "{} {args:?}: {}",
+        cc.display(),
+        String::from_utf8_lossy(&o.stderr)
+    );
     o
 }
 
@@ -100,7 +105,8 @@ fn written_at_clangs_path() {
     for (args, want) in cases {
         let mut a = vec!["-std=c++20"];
         a.extend_from_slice(args);
-        for cc in [Some(kilnpp()), clang.then(|| PathBuf::from("clang++-19"))].into_iter().flatten() {
+        for cc in [Some(kilnpp()), clang.then(|| PathBuf::from("clang++-19"))].into_iter().flatten()
+        {
             clear(&d);
             run(&cc, &d, &a);
             assert_eq!(traces(&d), BTreeSet::from([(*want).to_owned()]), "{} {a:?}", cc.display());
@@ -183,11 +189,18 @@ fn check_structure(j: &Json) {
             open.pop();
         }
         if let Some(&end) = open.last() {
-            assert!(e.ts + e.dur <= end, "{} [{}, +{}] crosses an enclosing event", e.name, e.ts, e.dur);
+            assert!(
+                e.ts + e.dur <= end,
+                "{} [{}, +{}] crosses an enclosing event",
+                e.name,
+                e.ts,
+                e.dur
+            );
         }
         open.push(e.ts + e.dur);
     }
-    let (b, en) = (ev.iter().filter(|e| e.ph == "b").count(), ev.iter().filter(|e| e.ph == "e").count());
+    let (b, en) =
+        (ev.iter().filter(|e| e.ph == "b").count(), ev.iter().filter(|e| e.ph == "e").count());
     assert_eq!(b, en, "unbalanced async events");
     for t in ev.iter().filter(|e| e.name.starts_with("Total ")) {
         assert!(t.tid > main && t.ph == "X", "{}", t.name);
@@ -242,7 +255,10 @@ fn event_names_and_details() {
     ] {
         assert!(has(name, detail), "no {name} event with detail {detail:?}");
     }
-    assert!(!ev.iter().any(|e| e.name == "ConstevalCall"), "per-call events need -ftime-trace-verbose");
+    assert!(
+        !ev.iter().any(|e| e.name == "ConstevalCall"),
+        "per-call events need -ftime-trace-verbose"
+    );
     let inst = ev.iter().find(|e| e.name == "InstantiateClass").unwrap();
     assert!(inst.arg("file").is_none());
 
@@ -267,7 +283,10 @@ fn granularity_drops_short_events() {
     }
     let j = trace_of("gran", &["-ftime-trace-granularity=100000000"]);
     let ev = events(&j);
-    assert!(ev.iter().all(|e| e.ph == "M" || e.name.starts_with("Total ")), "an event outlived 100 s");
+    assert!(
+        ev.iter().all(|e| e.ph == "M" || e.name.starts_with("Total ")),
+        "an event outlived 100 s"
+    );
     for t in ["Total ParseClass", "Total InstantiateClass", "Total EvaluateAsInitializer"] {
         let e = ev.iter().find(|e| e.name == t).unwrap_or_else(|| panic!("no {t}"));
         assert_eq!(e.arg("count").and_then(Json::as_u64), Some(1), "{t}");
@@ -284,4 +303,50 @@ fn no_flag_no_trace() {
     let o = run(&kilnpp(), &d, &["-std=c++20", "-c", "t.cpp"]);
     assert_eq!(String::from_utf8_lossy(&o.stderr), "");
     assert!(traces(&d).is_empty());
+}
+
+/// A call the VM unwinds without returning (a failed
+/// `__builtin_constant_p` trial) ends when the next call at its depth
+/// begins, not when its caller returns: the trials' events are disjoint
+/// siblings, one per trial (spec/oven.md "Trace hook").
+#[test]
+fn unwound_calls_end_at_the_next_call() {
+    let d = setup("unwind");
+    std::fs::write(
+        d.join("u.cpp"),
+        "constexpr int helper(int i) { int z = 0; return i / z; }\n\
+         constexpr int trials(int n) {\n\
+         \x20 int r = 0;\n\
+         \x20 for (int i = 0; i < n; ++i) r += __builtin_constant_p(helper(i));\n\
+         \x20 return r;\n\
+         }\n\
+         static_assert(trials(200) == 0);\n",
+    )
+    .unwrap();
+    let args = [
+        "-std=c++20",
+        "-S",
+        "-emit-llvm",
+        "-ftime-trace",
+        "-ftime-trace-verbose",
+        "-ftime-trace-granularity=0",
+    ];
+    run(&kilnpp(), &d, &[&args[..], &["u.cpp"]].concat());
+    let j = Json::parse(&std::fs::read_to_string(d.join("u.json")).unwrap()).unwrap();
+    check_structure(&j);
+    let mut calls: Vec<Ev> = events(&j)
+        .into_iter()
+        .filter(|e| e.name == "ConstexprCall" && e.detail() == "helper")
+        .collect();
+    assert_eq!(calls.len(), 200);
+    calls.sort_by_key(|e| e.ts);
+    for w in calls.windows(2) {
+        assert!(
+            w[0].ts + w[0].dur <= w[1].ts,
+            "trial calls overlap: [{}, +{}] and {}",
+            w[0].ts,
+            w[0].dur,
+            w[1].ts
+        );
+    }
 }

@@ -1207,7 +1207,10 @@ fn execute(
                     let phase = Phase::of(args);
                     let output = match phase {
                         Phase::Link => default_output(&input.path, Phase::Object),
-                        _ => args.output.clone().unwrap_or_else(|| default_output(&input.path, phase)),
+                        _ => args
+                            .output
+                            .clone()
+                            .unwrap_or_else(|| default_output(&input.path, phase)),
                     };
                     trace = Some(InputTrace::start(
                         s,

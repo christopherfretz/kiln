@@ -127,7 +127,7 @@ These are owned elsewhere:
 | # | clang 19 | kiln | Why |
 |---|---|---|---|
 | D1 | `runWithSufficientStackSpace` switches to a new stack, and warns "stack nearly exhausted" | the dedicated sema thread has a large stack; when `StackGuard` trips, kiln emits the fatal `kiln: stack exhausted during template instantiation; …` (or `parsing`, `constant evaluation`; §10.3) | safe Rust; no stack switching |
-| D2 | `-ftime-trace` | also `-fkiln-instantiation-report[=json]` (§11.3) | accounting principle |
+| D2 | `-ftime-trace` | the same `InstantiateClass` / `InstantiateFunction` events (spec/driver.md "Time trace", WP-1115), and also `-fkiln-instantiation-report[=json]` (§11.3) | accounting principle |
 | D3 | always keeps `SubstTemplateTypeParmType` | the same by default; `-fno-subst-sugar` drops it (T3) | memory experiments |
 | D4 | rebuilds every pattern subtree | can share non-dependent, non-local expression subtrees (§3.3, Q3) | memory; dumps stay byte-identical |
 | D5 | no limit on subsumption | more than 65,536 DNF/CNF clauses is the error `constraints too complex to compare` (Q14) | bounded time |
