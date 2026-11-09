@@ -1700,25 +1700,68 @@ Out-of-class partial specializations of a member template (WP-150):
 **Landed (WP-1017).** Declaration checks on a partial specialization:
 - *More specialized than the primary* ([temp.spec.partial.general]/9.2;
   `check_partial_more_specialized`, `templ/order.rs`
-  `primary_at_least_as_specialized`). A class or variable partial
+  `partial_not_more_specialized`). A class or variable partial
   specialization whose primary is at least as specialized as it gets
   `{class|variable} template partial specialization is not more
   specialized than the primary template` + `template is declared here`
-  on the primary. The check is conservative and skips four cases, which
+  on the primary. The check is conservative and skips three cases, which
   pass unchecked:
-  - packs;
   - constraints on either side;
   - member templates of a class template;
   - a primary non-type parameter whose type is a placeholder or
     dependent (`template<auto V>`, `template<class T, T V>`).
 
   Test: `tests/conformance/temp.spec.partial.general/not-more-specialized.cpp`.
+
+  **Packs (WP-956).** When the partial or the primary has a pack, both
+  directions are deduced, as clang's `isMoreSpecializedThanPrimary` does
+  (DR1495). The partial is rejected if the primary is at least as
+  specialized as it, or if it is not at least as specialized as the
+  primary. The second case covers `template<class...Ts> struct
+  B<Ts...>` for `template<class, class...> struct B`. Each deduction runs
+  with `DeducedArgs::expansions`, so a pack expansion in `A` is taken as
+  a whole, and packs left unmatched are deduced as empty
+  (`empty_undeduced_packs`).
+
+  A pack expansion that is the argument for a non-pack parameter stops
+  default arguments for the remaining parameters (`args.rs`
+  `open_expansion`, clang `PackExpansionIntoNonPack`). So `X0<Ts...>`
+  for `template<class T, class U, class V = U>` is a complete argument
+  list.
+
+  [temp.spec.partial.general]/9.3 ("does not specialize any template
+  argument") also unwraps pack arguments (`arg_names_param`), which
+  covers `P<T...>`, `Q<N...>` and `S<TT...>`. For a variable template,
+  the error says "to define" when the declaration is a definition (not
+  `extern`, not in a class) and "to declare" otherwise, as clang does.
+  With `expansions`, a template template parameter deduces a whole
+  template pack expansion (`deduce_arg`), so `Q<T, int, Cs...>` stays
+  more specialized.
+
+  Tests: `temp.spec.partial.general/pack-not-more-specialized.cpp`,
+  `pack-does-not-specialize.cpp` and
+  `pack-partial-specializations-valid.cpp`.
 - *Non-deducible arguments* (CWG526, [temp.deduct.type]/5.3). A non-type
   argument that is not just the parameter's name, such as `(N)`, is a
   non-deduced context. A call cannot deduce it, and a partial
   specialization that uses it gets `contains a template parameter that
   cannot be deduced`. Test:
   `tests/conformance/temp.deduct.type/parenthesized-nttp-non-deduced.cpp`.
+  **Packs (WP-956).** `check_partial_deducible` now covers partial
+  specializations with packs. It deduces the arguments against
+  themselves with `expansions` and `DeducedArgs::self_deduce`, under
+  these rules:
+  - A pack expansion that is not the last argument makes the whole list
+    non-deduced ([temp.deduct.type]/9), e.g. `U<Types..., Tail>` and
+    `Y<L<T..., V>>`.
+  - So does the expansion of an expression, e.g. `X1<0, Values + 1 ...>`.
+  - A function parameter pack that is not last is skipped, and the
+    parameters after it are still deduced ([temp.deduct.type]/5.7).
+    This is clang's `MarkUsedTemplateParameters` with `OnlyDeduced`. So
+    `Y<void(T..., V)>` reports only `T`, and `Y<void(T..., V, T...)>` is
+    valid.
+
+  Test: `temp.spec.partial.general/pack-not-deducible.cpp`.
 - *Wrong class-key*. An explicit or partial specialization whose class-key
   does not match the primary's, and a reference `union B<int>` to a class
   specialization, get `use of 'X' with tag type that does not match
@@ -4646,6 +4689,15 @@ The `SpecKind` transitions are those of §4.5.
     type gets `a non-type template parameter cannot have type 'T' before
     C++20`; any other non-structural type gets `... cannot have type 'T'`
     (WP-1017; `tests/conformance/temp.param/float-nttp-cxx{17,20}.cpp`).
+    The `_Complex` and vector types (clang extensions) get the same
+    "before C++20" error. In every mode, `void` gets `non-type template
+    parameter has incomplete type 'void'` and an `_Atomic` type gets
+    `... cannot have type '_Atomic(int)'` (WP-956;
+    `tests/conformance/temp.param/ext-scalar-nttp-cxx{17,20}.cpp`).
+    In C++20, an `_Atomic` subobject is not structural
+    (`is_structural_at`). A template redeclaration does not compare the
+    type of a parameter marked invalid (`templ/equiv.rs`). Test:
+    `temp.param/atomic-member-not-structural.cpp`.
   - Dependent types are checked when substituted (not yet: §11.2 gaps).
 - **Class arguments** (`convert_class_nttp_arg`, hooked from
   `args.rs::convert_nttp_arg`): copy-initialize a `const T` from the
@@ -6237,6 +6289,30 @@ and takes the specializations that deduce as the lookup result; the
 bases' conversion templates are not searched, as clang 19's
 `LookupDirect` (`Sema::conversion_template_specs`, WP-803,
 `tests/conformance/temp.mem/conversion-template-named-explicitly-run.cpp`).
+
+WP-956 makes several changes to conversion function templates.
+- **Overload resolution.** A specialization found by deduction like this
+  is still a template specialization (`Candidate::template`, set in
+  `overload/member.rs`). [over.match.best]/2.4-5 therefore prefers a
+  non-template over it, and orders two of them by
+  `more_specialized_conversion` (clang `TPOC_Conversion`).
+- **Explicit instantiations and specializations.** The same ordering
+  picks the target of an explicit instantiation or specialization of a
+  conversion function template (`match_function_spec_noted`). If the
+  templates are equally specialized, the result is ambiguous. In that
+  case the candidates are named by the specialization (`'X1::operator
+  char *<char>'`, `spec_decl_name_as`).
+- **Dependent names.** A conversion-function-id whose type is dependent
+  makes the name type-dependent ([temp.dep.expr]/3). Both
+  `this->operator T()` and an unqualified `operator T()` in a member
+  template become a dependent member access, and are looked up at
+  instantiation. The unqualified form is first built as an implicit
+  `this` access; this matches clang's `ActOnDependentIdExpression`. The
+  code paths are `is_dependent_conversion_name`,
+  `try_dependent_member_q`, `act_on_id_expression_dn` and
+  `implicit_dependent_member`.
+- **Tests.** `tests/conformance/temp.mem/conversion-template-dependent-ordering.cpp`
+  and `conversion-template-ambiguous.cpp`.
 
 The texts are taken from clang 19's `DiagnosticSemaKinds.td`. The goldens
 are authoritative: WP-070 checks each of them in `templates/diag/`.

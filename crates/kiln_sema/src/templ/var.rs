@@ -285,14 +285,7 @@ impl Sema<'_, '_> {
     /// arguments, every type scoped (`std::v<std::D<int>>`, not the
     /// typedef `v<_Del>` the arguments were written with).
     pub(crate) fn spec_decl_name(&self, tmpl: DeclId, args: ArgListId) -> String {
-        self.spec_decl_name_as(tmpl, args)
-    }
-
-    /// [`Self::spec_decl_name`] with the name of `named`: a conversion
-    /// function template specialization is named by its own conversion
-    /// type (`X::operator char *<char>`, not `X::operator T *<char>`).
-    pub(crate) fn spec_decl_name_as(&self, named: DeclId, args: ArgListId) -> String {
-        let mut s = self.qualified_decl_name(named);
+        let mut s = self.qualified_decl_name(tmpl);
         let names = crate::names::SemaNames::new(self);
         let canon = self.ast.types.canonical_args(args);
         kiln_ast::types::write_arg_list_scoped(&self.ast.types, &names, canon, &mut s);
@@ -550,7 +543,9 @@ impl Sema<'_, '_> {
     ) -> Result<DeclId, ()> {
         let tmpl = sid.template;
         let range = sid.range;
-        let def = d.init_style.is_some();
+        // clang: a non-`extern` declaration outside a class "defines"
+        // (`int v<T...>;` at namespace scope is a definition).
+        let def = Self::declares_definition(d, vspec) && self.kind_of(self.ctx) != DeclKind::CXXRecord;
         let conv =
             self.check_partial_args(tmpl, head, &sid.args, &sid.arg_locs, true, def, range)?;
         if let Some(i) = self.find_partial_decl(tmpl, conv.canonical, head) {

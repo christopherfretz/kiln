@@ -140,7 +140,9 @@ impl Sema<'_, '_> {
         let q = self.base_element(ty);
         let t = &self.ast.types;
         let Some(def) = t.as_record(q).and_then(|r| self.ast.definition(r)) else {
-            return !matches!(t.canonical_view(q), TypeView::RValueRef(_));
+            // An `_Atomic` subobject is not structural (clang: not a
+            // scalar of structural type, [temp.param]/7).
+            return !matches!(t.canonical_view(q), TypeView::RValueRef(_) | TypeView::Atomic(_));
         };
         let b = self.record_bits(def);
         if !b.contains(DefinitionBits::LITERAL) || !b.contains(DefinitionBits::STRUCTURAL) {

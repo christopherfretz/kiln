@@ -26,19 +26,19 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `0f9c200d3`
+- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `5762b13ef`
 - command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 86 s; peak RSS of one case 23 MiB (gnu-time)
+- wall time 124 s; peak RSS of one case 22 MiB (gnu-time)
 
 ## Totals
 
 | measure | count | of | rate |
 |---|---:|---:|---:|
-| ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 68 | 1250 | 5.4% |
-| ACCEPTS-INVALID cases (per RUN configuration) | 80 | 1946 | 4.1% |
-| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4276 | 28065 | 15.2% |
+| ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 67 | 1250 | 5.4% |
+| ACCEPTS-INVALID cases (per RUN configuration) | 79 | 1946 | 4.1% |
+| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4221 | 28065 | 15.0% |
 | REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 28 | 418 | 6.7% |
 | crashes | 0 | 2850 | 0.0% |
 | timeouts | 0 | 2850 | 0.0% |
@@ -59,7 +59,7 @@ written by hand (WP-912). The run is informational and never part of
 | CXX/dcl | 0 / 4 | 0.0% | 0 / 81 | 0.0% | 0 | 0 / 0 |
 | CXX/dcl.dcl | 4 / 77 | 5.2% | 281 / 1141 | 24.6% | 0 | 0 / 0 |
 | CXX/dcl.decl | 2 / 54 | 3.7% | 87 / 788 | 11.0% | 1 | 0 / 0 |
-| CXX/drs | 1 / 33 | 3.0% | 1487 / 8682 | 17.1% | 0 | 0 / 0 |
+| CXX/drs | 1 / 33 | 3.0% | 1465 / 8682 | 16.9% | 0 | 0 / 0 |
 | CXX/except | 3 / 15 | 20.0% | 26 / 104 | 25.0% | 0 | 0 / 0 |
 | CXX/expr | 2 / 78 | 2.6% | 74 / 644 | 11.5% | 0 | 0 / 0 |
 | CXX/lex | 0 / 14 | 0.0% | 1 / 78 | 1.3% | 0 | 0 / 0 |
@@ -67,7 +67,7 @@ written by hand (WP-912). The run is informational and never part of
 | CXX/over | 1 / 42 | 2.4% | 7 / 313 | 2.2% | 0 | 0 / 0 |
 | CXX/special | 2 / 31 | 6.5% | 12 / 224 | 5.4% | 3 | 0 / 0 |
 | CXX/stmt.stmt | 0 / 9 | 0.0% | 3 / 255 | 1.2% | 0 | 0 / 0 |
-| CXX/temp | 9 / 147 | 6.1% | 356 / 1644 | 21.7% | 2 | 0 / 0 |
+| CXX/temp | 8 / 147 | 5.4% | 323 / 1644 | 19.6% | 2 | 0 / 0 |
 | SemaCXX | 37 / 628 | 5.9% | 1673 / 12406 | 13.5% | 21 | 0 / 0 |
 
 ## Top 50 accepts-invalid files
@@ -123,9 +123,9 @@ Ranked by the expected errors of their worst configuration.
 | `CXX/over/over.match/over.match.best/over.best.ics/over.ics.user/p3-0x.cpp` | 1 / 1 | 1 |
 | `CXX/special/class.dtor/p3.cpp` | 1 / 1 | 1 |
 | `CXX/temp/temp.arg/temp.arg.nontype/p1.cpp` | 1 / 8 | 1 |
-| `CXX/temp/temp.decls/temp.class.spec/p9-0x.cpp` | 1 / 1 | 1 |
 | `CXX/temp/temp.decls/temp.friend/p3.cpp` | 1 / 1 | 1 |
 | `CXX/temp/temp.res/temp.dep/temp.dep.constexpr/p2.cpp` | 1 / 1 | 1 |
+| `CXX/temp/temp.spec/temp.expl.spec/p20-2.cpp` | 1 / 1 | 1 |
 
 ## Top 40 missed-error clusters
 
@@ -158,7 +158,6 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | not an integral constant expression | 5 | 8 | `CXX/temp/temp.res/temp.dep/temp.dep.constexpr/p2.cpp:21` |
 | expected '…' | 5 | 6 | `CXX/basic/basic.lookup/basic.lookup.unqual/p3.cpp:61` |
 | use '…' keyword to treat '…' as a dependent template name | 4 | 42 | `CXX/drs/cwg17xx.cpp:14` |
-| class template partial specialization is not more specialized than the primary template | 4 | 24 | `CXX/drs/cwg14xx.cpp:712` |
 | call to '…' is ambiguous | 4 | 18 | `CXX/drs/cwg10xx.cpp:30` |
 | call to consteval function '…' is not a constant expression | 4 | 14 | `CXX/basic/basic.def.odr/p2-typeid.cpp:59` |
 | explicit instantiation declaration of '…' with internal linkage | 4 | 14 | `CXX/drs/cwg0xx.cpp:1137` |
@@ -173,6 +172,7 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | qualified reference to '…' is a constructor name rather than a type in this context | 3 | 47 | `CXX/basic/basic.lookup/basic.lookup.qual/class.qual/p2.cpp:30` |
 | '…' attribute takes no arguments | 3 | 28 | `SemaCXX/attr-reinitializes.cpp:14` |
 | recursive evaluation of default argument | 3 | 18 | `CXX/dcl.decl/dcl.init/dcl.init.ref/p5-cxx03-extra-copy.cpp:46` |
+| type '…' cannot be used prior to '…' because it has no members | 3 | 18 | `CXX/drs/cwg13xx.cpp:263` |
 
 ## Rejects-valid cases
 
@@ -480,8 +480,16 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
     `temp.param/float-nttp-cxx17.cpp`.
     **Fixed in WP-1017**, plus `class.conv.fct/conversion-template-deduced-type.cpp`
     (CWG1878). Partial: constrained partial specializations and partial
-    specializations of member templates skip the more-specialized check,
-    and `F<T..., int>` is not diagnosed as non-deducible.
+    specializations of member templates skip the more-specialized check.
+    **WP-956** (spec/landed/sema/WP-956.md) adds packs to both checks
+    (`B<Ts...>` not more specialized, `P<T...>` specializing nothing,
+    `U<Ts..., T>` and `X1<0, N + 1 ...>` non-deducible), `_Complex`,
+    vector, `void` and `_Atomic` NTTPs, and conversion function template
+    rules (dependent `operator T()`, ordering in explicit instantiations,
+    specializations and calls). Its share: accepts-invalid 68 to 67 files,
+    80 to 79 cases; missed errors 4276 to 4221 lines; no new
+    accepts-invalid or rejects-valid case. Constrained and member-template
+    partial specializations remain (WP-1053).
 11. **Lookup and type checks** (enum must use `enum` 31, elaborated enum
     friend 30, ambiguous qualified elaborated specifier, `alignas` of an
     incomplete type, differing user-defined-literal suffixes;
