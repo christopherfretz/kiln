@@ -1730,6 +1730,21 @@ impl Substituter<'_, '_, '_> {
     /// the instantiated friend declaration.
     fn check_member_friend_access(&mut self, f: DeclId, r: DeclId, loc: Loc) {
         let first = self.sema.ast.first(f);
+        // A friend matched only here (WP-1110) redeclares the member its
+        // instantiation found.
+        if first == f
+            && (self.sema.friend_qualifier_nns.contains_key(&f)
+                || self.sema.friend_qualifiers.contains_key(&f))
+        {
+            if let FriendTarget::Decl(x) = self.sema.ast.decls.friend_target(r)
+                && self.sema.ast.first(x) != x
+                && !self.sema.ast.decls.get(x).has(DeclFlags::INVALID)
+                && self.sema.declaring_class(x).is_some()
+            {
+                self.sema.check_friend_access(x, loc);
+            }
+            return;
+        }
         if first != f
             && let Some(c) = self.sema.declaring_class(first)
             && !self.sema.ast.decls.get(f).has(DeclFlags::INVALID)

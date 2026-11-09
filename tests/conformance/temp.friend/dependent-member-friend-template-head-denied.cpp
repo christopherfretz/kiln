@@ -12,6 +12,25 @@
 //@ skip(clang): clang turns off access control for the befriending class
 //@ expect: compile-fail
 //@ strict-diags
+//@ diag: 44:58 warning "dependent nested name specifier 'A<T>' for friend class declaration is not supported; turning off access control for 'B'"
+//@ diag: 45:58 warning "dependent nested name specifier 'A<T>' for friend class declaration is not supported; turning off access control for 'B'"
+//@ diag: 46:58 warning "dependent nested name specifier 'A<T>' for friend class declaration is not supported; turning off access control for 'B'"
+//@ diag: 47:58 warning "dependent nested name specifier 'A<T>' for friend class declaration is not supported; turning off access control for 'B'"
+//@ diag: 48:39 warning "dependent nested name specifier 'A<T>' for friend class declaration is not supported; turning off access control for 'B'"
+//@ diag: 49:58 warning "dependent nested name specifier 'A<T>' for friend class declaration is not supported; turning off access control for 'B'"
+//@ diag: 56:80 error "'n' is a private member of 'B'"
+//@ diag: 50:7 note "implicitly declared private here"
+//@ diag: 57:56 error "'n' is a private member of 'B'"
+//@ diag: 50:7 note "implicitly declared private here"
+//@ diag: 53:84 error "'n' is a private member of 'B'"
+//@ diag: 60:39 note "in instantiation of function template specialization 'A<int>::h2<char, int>' requested here"
+//@ diag: 50:7 note "implicitly declared private here"
+//@ diag: 54:73 error "'n' is a private member of 'B'"
+//@ diag: 60:66 note "in instantiation of function template specialization 'A<int>::h3<1>' requested here"
+//@ diag: 50:7 note "implicitly declared private here"
+//@ diag: 55:78 error "'n' is a private member of 'B'"
+//@ diag: 60:85 note "in instantiation of function template specialization 'A<int>::h4<int>' requested here"
+//@ diag: 50:7 note "implicitly declared private here"
 class B;
 template <class T> struct A {
   template <class V> static int h(const B &b);

@@ -2514,7 +2514,14 @@ reports a dropped statement or part.
   `friend int B::f(W<T>&);`, `template<class U> friend int
   B<T>::g(U, W<T>&);`, `friend int C<T>::f(V<X, T>&);` in `V<X, T>`) and
   that no member found at definition matches is matched when the class is
-  instantiated (WP-1110; `Sema::defers_method_friend`, decl.rs): it
+  instantiated (WP-1110; `Sema::defers_method_friend`, decl.rs). A
+  dependent nested-name-specifier (`B<T>::`, or `C<T>::` resolving to the
+  class template itself) always defers: the primary pattern's members are
+  not those of every specialization it names, and its parameters alias
+  the enclosing class's. A friend member template whose specifier names
+  none of its head's parameters keeps that head as its own
+  (`Sema::friend_head_is_own`, class/member_friend.rs) instead of giving
+  it to the qualifier's class template. The deferred friend
   redeclares nothing in the pattern, without a diagnostic, and records
   its qualifier (`friend_qualifiers`), plus the written specifier when
   that is dependent (`friend_qualifier_nns`). Each instantiation declares

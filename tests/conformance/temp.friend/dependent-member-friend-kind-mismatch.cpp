@@ -9,6 +9,13 @@
 //@ skip(clang): clang accepts a mismatching [temp.friend]/5 friend with -Wunsupported-friend
 //@ expect: compile-fail
 //@ strict-diags
+//@ diag: 26:42 error "redefinition of 'Fn' as different kind of symbol"
+//@ diag: 20:15 note "previous definition is here"
+//@ diag: 27:41 error "redefinition of 'Var' as different kind of symbol"
+//@ diag: 21:14 note "previous definition is here"
+//@ diag: 28:40 error "redefinition of 'Cls' as different kind of symbol"
+//@ diag: 22:10 note "previous definition is here"
+//@ diag: 29:42 warning "dependent nested name specifier 'A<U>' for friend class declaration is not supported; turning off access control for 'Outer'"
 template <class T> struct A {
   static void Fn();
   static int Var;
