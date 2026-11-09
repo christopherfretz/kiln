@@ -1037,6 +1037,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-997 | codegen: subobject NTTP constant uses typed GEP vs clang `getelementptr (i8, …)` (ABI slice equal) | WP-933 | open |
 | WP-998 | codegen: `deref<&cg>` loads a const global clang folds (`static const int cg = 3`) | WP-933 | done (#438, WP-902; real gap was ref<cg>() through a reference NTTP, deref<&cg>() is a load in clang too) |
 | WP-999 | WP-126 remainder: oven pseudo/explicit-destructor lifetime, `p->N::~T()`, member-same-name-as-class diag, out-of-class friend templates, owned friend classes in class templates, dependent friend specializations in dump, `typename C<X>::T` rebuilt only at top level, `typename` error locations/recovery | WP-126 | open |
+| WP-1154 | rebuild expressions (`decltype`, array bounds, `noexcept`, expression template args) in an out-of-line member's signature in the current instantiation | WP-1152 | in progress |
 | WP-1152 | WP-999 correctness subset: oven explicit/pseudo-destructor lifetime, qualified destructor names `p->N::~T()`, `typename C<X>::T` rebuild under nested type constructors | WP-999 | done (#512) |
 | WP-1155 | rejects-valid: template-ids on the pseudo-destructor path (`p->~A<int>()`, `p->N::I::~B<int>()`), `p->T::Inner::~Inner()` in a dependent scope | WP-1152 | in progress |
 | WP-1003 | codegen: `-fcoverage-mapping`, emit the coverage mapping section (driver coverage_flags.rs:187 errors today) | WP-941 | done (#445) |
