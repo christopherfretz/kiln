@@ -24,6 +24,31 @@ tests that fail under kiln also fail under clang
 (`AsyncStackMetadataTest.MetadataTraceHasNoAnnotationsWithoutScope` and
 `FutureUtilTest.ToTaskInterruptOnCancelFutureWithCancellation`).
 
+## WP-933 re-run (incomplete)
+
+WP-802 fixed the `co_return` immediate invocation (`cea9ab532`; the repro
+`tests/conformance/stmt.return.coroutine/immediate-invocation-in-template-operand-run.cpp`
+now passes). WP-933 started a re-run on main `9379bd754` with its own work in
+progress. The result was 413 TUs compiled, 16 failed, 33 links and 268/618
+tests. Both causes of the 16 failed TUs are kiln-only, and both are fixed:
+
+- 15 TUs: `cannot yet mangle expression type InitListExpr` at
+  `folly/coro/Collect.h:94`, a `std::min({...})` call in an alias template
+  argument. The failure came from WP-933's own new rule that an unencodable
+  expression is a hard error. Before that rule, the braced list was mangled
+  as a placeholder. It now mangles as `il ... E`, byte-equal to clang 19 and
+  22 (`tests/codegen/mangle_init_list_operand.cpp`).
+- 1 TU, `coro_safe_AsyncClosureTest`: "function 'forward' with deduced
+  return type cannot be used before it is defined". This is a sema
+  regression since WP-789. The empty-pack length sweep gave an empty
+  `auto...` pack the undeduced `auto` type, so `vl<id(Vs)...>` instantiated
+  `id<auto>`. Repro:
+  `tests/conformance/temp.variadic/empty-auto-pack-call-in-expansion.cpp`.
+
+**Fixes committed, re-run deferred: disk.** The shared volume was below its
+free-space floor, so the full build and test run was not repeated after the
+fixes. The WP-789 counts below are still the latest complete run.
+
 ## Commands
 
 ```sh

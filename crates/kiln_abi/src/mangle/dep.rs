@@ -495,10 +495,12 @@ impl Mangler<'_, '_> {
                 self.symbol(name);
                 self.out.push('E');
             }
-            // Any other named entity, a variable, function or static data
-            // member: `L <mangled-name> E` (clang `mangleDeclRefExpr`'s
-            // external name; the substitution table is shared).
-            DeclKind::Var
+            // Any other named entity, a variable, function, static data
+            // member or non-static data member (`&R<int>::m`): `L
+            // <mangled-name> E` (clang `mangleDeclRefExpr`'s external
+            // name, its `default` case; the substitution table is shared).
+            DeclKind::Field
+            | DeclKind::Var
             | DeclKind::VarTemplateSpecialization
             | DeclKind::Function
             | DeclKind::CXXMethod
