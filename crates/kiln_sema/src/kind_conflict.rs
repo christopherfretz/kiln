@@ -137,20 +137,59 @@ impl Sema<'_, '_> {
         if found.is_empty() || found.iter().any(|&d| self.ast.first(d) == first) {
             return false;
         }
-        let names_tag = |s: &Self, td: DeclId| {
-            let Some(u) = s.ast.decls.typedef(td).map(|t| t.underlying) else { return false };
-            let t = s.ast.types.canonical(u);
-            let Some(x) = s.ast.types.as_record(t).or_else(|| s.ast.types.as_enum(t)) else {
-                return false;
-            };
-            s.ast.decls.get(x).name() == DeclName::ident(name)
-                && s.ast.decls.get(x).ctx().map(|c| s.ast.redecl_context(c))
-                    == s.ast.decls.get(td).ctx().map(|c| s.ast.redecl_context(c))
-        };
-        if found.iter().any(|&d| names_tag(self, d)) {
+        if found.iter().any(|&d| self.typedef_names_own_tag(d, name)) {
             return false;
         }
         self.diagnose_tag_reference_non_tag(keyword, name, &found, loc)
+    }
+
+    /// Whether typedef `td` names a class or enumeration `name` of its
+    /// own scope (`typedef struct A A;`), which an elaborated name looks
+    /// through.
+    fn typedef_names_own_tag(&self, td: DeclId, name: Symbol) -> bool {
+        let Some(u) = self.ast.decls.typedef(td).map(|t| t.underlying) else { return false };
+        let t = self.ast.types.canonical(u);
+        let Some(x) = self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t)) else {
+            return false;
+        };
+        self.ast.decls.get(x).name() == DeclName::ident(name)
+            && self.ast.decls.get(x).ctx().map(|c| self.ast.redecl_context(c))
+                == self.ast.decls.get(td).ctx().map(|c| self.ast.redecl_context(c))
+    }
+
+    /// `friend class-key name;` whose ordinary lookup finds a typedef,
+    /// type alias, class template or alias template (`found`, the last
+    /// one counting) that is not `prev`, the class the friend's tag
+    /// lookup chose ([dcl.type.elab]/2-4: clang `ActOnTag` sees type
+    /// names in the friend's lookup too, then `err_tag_reference_non_tag`).
+    /// `in_scope` is false for a name declared outside the innermost
+    /// enclosing namespace (the friend then declares a new class there).
+    /// True when diagnosed.
+    pub(crate) fn diagnose_friend_tag_non_tag(
+        &mut self,
+        keyword: TagKeyword,
+        name: Symbol,
+        prev: Option<DeclId>,
+        found: &[DeclId],
+        in_scope: bool,
+        loc: Loc,
+    ) -> bool {
+        let Some(&t) = found.last() else { return false };
+        let non_tag = matches!(
+            self.kind_of(t),
+            DeclKind::Typedef
+                | DeclKind::TypeAlias
+                | DeclKind::ClassTemplate
+                | DeclKind::TypeAliasTemplate
+        );
+        if !non_tag
+            || !in_scope
+            || prev.is_some_and(|p| self.ast.first(p) == self.ast.first(t))
+            || self.typedef_names_own_tag(t, name)
+        {
+            return false;
+        }
+        self.diagnose_tag_reference_non_tag(keyword, name, &found[found.len() - 1..], loc)
     }
 
     /// An elaborated-type-specifier `keyword name` whose tag lookup found
