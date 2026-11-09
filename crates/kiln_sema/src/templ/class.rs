@@ -2226,46 +2226,44 @@ impl Substituter<'_, '_, '_> {
         if invalid {
             sub.sema.ast.decls.set_flags(spec, DeclFlags::INVALID);
         }
-        // Default member initializers ([temp.inst]/3): instantiated when
-        // a constructor or an aggregate initialization uses one
-        // ([`Sema::instantiate_nsdmi`], clang
-        // `InstantiateInClassInitializer`), an anonymous member's included.
-        // Those of a local class (and of its anonymous members) are
-        // instantiated with the outermost local class's complete-class
-        // contexts, after the declaration parts (the parser replays them
-        // so; `LocalLate::Nsdmi`, WP-905).
-        let local_late =
-            sub.local_late.is_some() && (local.is_some() || sub.sema.decl_in_local_scope(spec));
         if !nsdmis.is_empty() && !invalid {
-            if local_late {
-                for (field, init) in nsdmis {
-                    if sub.sema.kind_of(field) == DeclKind::Field {
-                        sub.push_local_late(LocalLate::Nsdmi { field, init });
-                    }
-                }
-            } else if local.is_none() {
-                let ctx = (sub.args.clone(), sub.pairs.clone());
-                let _ = sub.sema.inst.nsdmi_ctx.insert(spec, ctx);
-                for (field, init) in nsdmis {
-                    if sub.sema.kind_of(field) == DeclKind::Field {
-                        sub.sema.special.nsdmi.insert(field);
-                        let _ = sub.sema.inst.deferred_nsdmis.insert(field, (spec, init));
-                    }
-                }
-            } else {
-                sub.sema.act_on_start_delayed_class(spec);
-                for (field, init) in nsdmis {
-                    if sub.sema.kind_of(field) == DeclKind::Field {
-                        sub.nsdmi(field, init);
-                    }
-                }
-                sub.sema.act_on_finish_delayed_class(spec);
-            }
+            sub.class_nsdmis(spec, local.is_some(), nsdmis);
         }
         if local.is_none() {
             sub.sema.act_on_finish_class_contexts(spec);
         }
         sub.entity = saved_entity;
+    }
+
+    /// The default member initializers `nsdmis` (instantiated field,
+    /// pattern initializer) of class `spec` ([temp.inst]/3): instantiated
+    /// when a constructor or an aggregate initialization uses one
+    /// ([`Sema::instantiate_nsdmi`], clang `InstantiateInClassInitializer`),
+    /// an anonymous member's included. Those of a local class (`local`,
+    /// and of its anonymous members) are instantiated with the outermost
+    /// local class's complete-class contexts, after the declaration parts
+    /// (the parser replays them so; `LocalLate::Nsdmi`, WP-905).
+    fn class_nsdmis(&mut self, spec: DeclId, local: bool, nsdmis: Vec<(DeclId, kiln_ast::ExprId)>) {
+        let fields: Vec<_> =
+            nsdmis.into_iter().filter(|&(f, _)| self.sema.kind_of(f) == DeclKind::Field).collect();
+        if self.local_late.is_some() && (local || self.sema.decl_in_local_scope(spec)) {
+            for (field, init) in fields {
+                self.push_local_late(LocalLate::Nsdmi { field, init });
+            }
+        } else if !local {
+            let ctx = (self.args.clone(), self.pairs.clone());
+            let _ = self.sema.inst.nsdmi_ctx.insert(spec, ctx);
+            for (field, init) in fields {
+                self.sema.special.nsdmi.insert(field);
+                let _ = self.sema.inst.deferred_nsdmis.insert(field, (spec, init));
+            }
+        } else {
+            self.sema.act_on_start_delayed_class(spec);
+            for (field, init) in fields {
+                self.nsdmi(field, init);
+            }
+            self.sema.act_on_finish_delayed_class(spec);
+        }
     }
 
     /// Instantiates pattern initializer `init` as `field`'s default
