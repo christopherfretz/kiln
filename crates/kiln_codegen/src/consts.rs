@@ -208,7 +208,7 @@ impl Cg<'_> {
         match base {
             PtrBase::Decl(d) => self.decl_addr_const(d),
             PtrBase::Function(d) => Ok(Value::func(self.get_fn(d)?)),
-            PtrBase::StringLit { lit, .. } => Ok(gval(self.lit_global(lit))),
+            PtrBase::StringLit { lit, origin } => Ok(gval(self.lit_global(lit, origin))),
             PtrBase::Const(c) => Ok(gval(self.const_object(c)?)),
             PtrBase::Temporary(t) => {
                 let ty = self.ast.decls.get(t).ty().unwrap_or(QualType::INT);
@@ -351,9 +351,14 @@ impl Cg<'_> {
         }
     }
 
-    /// The global holding string literal `lit`, terminator included.
-    pub(crate) fn lit_global(&mut self, lit: kiln_ast::StringLitId) -> kiln_llvm::GlobalId {
-        self.lit_global_sized(lit, 0)
+    /// The global holding string literal `lit` (the expression `e`),
+    /// terminator included.
+    pub(crate) fn lit_global(
+        &mut self,
+        lit: kiln_ast::StringLitId,
+        e: ExprId,
+    ) -> kiln_llvm::GlobalId {
+        self.lit_global_sized(lit, 0, e)
     }
 
     /// The string literal's constant zero-padded to at least `min_bytes`
@@ -363,12 +368,34 @@ impl Cg<'_> {
         &mut self,
         lit: kiln_ast::StringLitId,
         min_bytes: u64,
+        e: ExprId,
     ) -> kiln_llvm::GlobalId {
         let unit = u64::from(self.ast.strings.encoding(lit).unit_bytes());
         let mut bytes = self.ast.strings.bytes(lit).to_vec();
         let total = self.ast.strings.object_bytes(lit).max(min_bytes);
         bytes.resize(total as usize, 0);
-        self.string_global(&bytes, unit, total / unit)
+        self.lit_string_global(&bytes, unit, total / unit, ".str", e)
+    }
+
+    /// [`Self::string_global_named`] for the string literal `e`: a new
+    /// global gets its sanitizer metadata (clang
+    /// `GetAddrOfConstantStringFromLiteral`'s `reportGlobal` at the
+    /// literal's first token; a reused one keeps its own). WP-1043.
+    pub(crate) fn lit_string_global(
+        &mut self,
+        bytes: &[u8],
+        elem_size: u64,
+        n_elems: u64,
+        name: &str,
+        e: ExprId,
+    ) -> kiln_llvm::GlobalId {
+        let before = self.strings.len();
+        let g = self.string_global_named(bytes, elem_size, n_elems, name);
+        if self.strings.len() != before {
+            let san = self.string_lit_sanitizer(g, self.loc_of(e));
+            self.m.global_mut(g).sanitizer = san;
+        }
+        g
     }
 
     /// The constant address of a variable or function.

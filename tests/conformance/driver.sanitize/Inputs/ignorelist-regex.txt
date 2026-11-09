@@ -1,0 +1,10 @@
+#!special-case-list-v1
+# A version 1 list: POSIX extended regular expressions, each `*` read as
+# `.*` (ignorelist-regex-ir.cpp, WP-1043).
+[undef]
+fun:.*
+[signed-integer-overflow|shift]
+fun:_Z[0-9]+(skip|omit)_[ab]ii
+fun:_Z6star_.*ii
+[shift]
+fun:_Z8only_sh(i|f)ii
