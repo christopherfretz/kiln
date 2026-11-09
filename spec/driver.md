@@ -99,7 +99,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fkiln-stack-size=N[k\|m\|g]` | kiln: the stack reserved for the compiling thread (default 1 GiB; at least 4 MiB; the last valid value wins). Running out is the fatal "kiln: stack exhausted during …" (spec/sema-templates.md §10.3), never a crash |
 | `-v`, `--verbose`, `--version`, `--help` | see below |
 | `-F <dir>` | accepted; warns `ignoring framework directory` |
-| `-ftime-trace[=<path>]`, `-ftime-trace-granularity=<n>`, `-ftime-trace-verbose` | accepted, as build systems add them for clang (glaze's tests); each warns `'<flag>' ignored: kiln writes no time trace` (`drv_time_trace_ignored`, group `-Wunused-command-line-argument`, silenced by `-Qunused-arguments`), and no file is written (WP-792) |
+| `-ftime-trace[=<path>]`, `-ftime-trace-granularity=<n>`, `-ftime-trace-verbose` | write a Chrome trace per compiled input where clang writes it (see "Time trace"; WP-1115). Without a compiler job that writes one (`-fsyntax-only`, a header precompile), each spelling is `argument unused during compilation` (`-Wunused-command-line-argument`, silenced by `-Qunused-arguments`), as clang; granularity and verbose are unused without `-ftime-trace`. A granularity that is not an unsigned integer is `invalid integral value '<v>' in '<flag>'` (`drv_invalid_int_value`) |
 | `-fsyntax-only` | parse and check (see "Syntax checking") |
 | `-verify[=<prefixes>]`, `-verify-ignore-unexpected[=<levels>]` | with `-fsyntax-only`: check the diagnostics against `expected-*` comments (see "-verify") |
 | `-Xclang <arg>` | `<arg>` is parsed as a driver option (kiln has no separate `cc1`), so `-Xclang -verify` is `-verify` |
@@ -1661,6 +1661,98 @@ file that cannot be written is the driver error `compilation database
 exit 1. The executable path is kiln's own, the one difference from a
 clang fragment.
 
+## Time trace
+
+`-ftime-trace[=<path>]` (WP-1115) writes, for each input the run compiles,
+a Chrome trace in the format of clang's (LLVM `TimeProfiler`), loadable in
+Perfetto (ui.perfetto.dev) and chrome://tracing. The recorder is
+`kiln_source::trace`: thread-confined (kiln compiles a TU on one thread;
+the recorder is thread-local, so in-process parallel compiles never mix),
+monotonic (`Instant`), dependency-free, safe Rust.
+
+**Which runs.** A run with a compiler job: `-c`, `-S`, linking, `-E`,
+`-M`/`-MM`. `-fsyntax-only` and a header precompile write nothing and
+warn (the options table). One trace per input; nothing is written for an
+input whose compile, `opt` or `llc` step failed (clang's failing `cc1`
+writes none).
+
+**Where** (clang `handleTimeTrace`; `time_trace::path`):
+
+| Command line | Trace |
+|---|---|
+| `-ftime-trace=<dir>` (an existing directory) | `<dir>/<output file name>` with the extension replaced by `.json` |
+| `-ftime-trace=<file>` | `<file>` (every input writes it; the last wins, as clang) |
+| `-ftime-trace`, linking | `<-o or a>-<input file name>`, extension `.json` (clang's implicit `-dumpdir`): `-o out/app x.cpp` gives `out/app-x.json` |
+| `-ftime-trace`, otherwise | the job's output with the extension `.json`: `x.o` gives `x.json`, `-o out/o1.o` gives `out/o1.json`, `-E` to standard output gives `-.json` |
+
+An extension is replaced as LLVM's `sys::path::replace_extension` does (a
+dot in a directory is not one; a name with none gets `.json`). A trace
+that cannot be written is `unable to open output file '<path>': '<os
+error>'`, as clang's; kiln then exits 1 (clang 22 exits 0).
+
+**Format.** `{"traceEvents":[...],"beginningOfTime":N}` (N: the start, µs
+since the Unix epoch). Events, in clang's order: the complete events
+(`"ph":"X"`, `pid`, `tid` = the process id, `ts` and `dur` in µs from the
+start, `name`, `args.detail` when non-empty plus the verbose args) in the
+order they end; the `Source` events as async pairs (`"ph":"b"`/`"e"`,
+`"cat":"Source"`, `id`, the detail on `b`); one `Total <name>` per name
+(`"ph":"X"`, `ts` 0, `dur` the total, `args.count`, `args."avg ms"` the
+integral average) on `tid` main + 1, + 2, ... in decreasing total; then
+the `process_name` (`kiln`, as clang's `clang`) and `thread_name` (the
+program name, `kiln++`) metadata (`"ph":"M"`). A total counts only the
+outermost of nested same-name events.
+
+**Granularity.** `-ftime-trace-granularity=<n>` (µs, default 500): a
+shorter event is dropped but still counted in its total; `0` keeps every
+event. The `opt` and `llc` children run with `--time-trace
+--time-trace-granularity=<n> --time-trace-file=<temp>` and their events
+(shifted to kiln's time base, metadata dropped) and totals are merged in.
+
+**`-ftime-trace-verbose`.** As clang: `InstantiateClass` /
+`InstantiateFunction` get `file` and `line` (the template's presumed
+location). kiln adds `kind` and `steps` to the Oven's evaluations and
+records the per-call `ConstevalCall` / `ConstexprCall` events (gated:
+one clock read per VM call is measurable on call-heavy evaluations).
+clang 19 accepts the flag too; it behaves the same under
+`-fclang-compat=19`.
+
+**Events** (clang name: where kiln records it; detail):
+
+| Event | kiln | Detail |
+|---|---|---|
+| `ExecuteCompiler` | driver, the whole input (`time_trace::InputTrace`) | — |
+| `Frontend` | driver, the in-process frontend: pp, parse, sema, Oven, IR emission (clang has two nested `Frontend`s; kiln one) | — |
+| `Source` | `kiln_pp` `push_file` .. `end_of_file`, each `#include`d file (not the main file; not under `-E`/`-M`, as clang) | the presumed file name (`./h.h`) |
+| `ParseDeclarationOrFunctionDefinition` | `kiln_parse` `parse_external_declaration_inner`: simple declarations and linkage specifications (not `template`, `namespace`, `using`, `static_assert`, `export`, as clang) | `file:line:col` |
+| `ParseFunctionDefinition` | the namespace-scope function definitions (`decl.rs`; not the late-parsed member bodies, as clang) | the name |
+| `ParseClass` | `parse_record_body`, the late-parsed member bodies included | the name |
+| `InstantiateClass`, `InstantiateFunction` | `kiln_sema` `push_inst_frame` .. `pop_inst_frame` (class / member class; function / member function specialization) | the specialization (`Box<int>::get`) |
+| `PerformPendingInstantiations` | `end_of_tu_instantiations` | — |
+| `EvaluateAsConstantExpr`, `EvaluateAsInitializer`, `EvaluateAsRValue` | the Oven's top-level evaluations (spec/oven.md "Trace hook"): a variable's initializer, a `static_assert` condition, any other | the variable's qualified name, or the expression's range (`<t.cpp:3:19, col:25>`) |
+| `CodeGen Function` | `kiln_codegen` `emit_fn_def` | the qualified name |
+| `Backend` | driver, from after the frontend to the end of `llc` | — |
+| `Optimizer` | driver, the `opt` child (its `OptModule`, `OptFunction`, `RunPass`, ... merged) | — |
+| `CodeGenPasses` | driver, the `llc` child (its passes merged) | — |
+| `OvenCompile`, `ConstevalCall`, `ConstexprCall`, `OvenMetaOp` | kiln only: spec/oven.md "Trace hook" | |
+
+Not recorded (no kiln counterpart, or a follow-up): `ParseTemplate` (clang
+records it only for `-fdelayed-template-parsing`), the folds clang traces
+as `EvaluateAsRValue` / `EvaluateAsInt` / `EvaluateAsBooleanCondition` /
+`EvaluateForOverflow` (kiln folds outside the Oven's entry points),
+`CheckConstraintSatisfaction`, `BuildCFG`, `DebugType`, and the
+`PCH`/module events.
+
+**Deviations.** An event's `ts`/`dur` are kiln's, so the trace differs
+from clang's in its numbers, not its shape. Linking with
+`-ftime-trace=<dir>` names the trace after the input's object
+(`<dir>/x.json`), not clang's temporary. An `EvaluateAs*` range ends at
+the start of the last token, as clang's. An immediate invocation inside a
+`constexpr` variable's initializer is its own `EvaluateAsConstantExpr`
+inside the initializer's `EvaluateAsInitializer` (clang folds it into
+the one evaluation). kiln memoizes constant calls, so a verbose trace
+has one `ConstevalCall` / `ConstexprCall` per evaluated call, not per
+call in the source's recursion.
+
 ## Output, diagnostics, exit status
 
 - Driver diagnostics (bad arguments, missing inputs) are prefixed with the
@@ -2125,6 +2217,13 @@ Each deviation is covered by a test or a test note.
     (`dump_defines_and_includes`), `-MG` (`missing_headers_as_generated`),
     `-MJ` (`compilation_database_fragment`, plus `cdb.rs` unit tests) and
     linker-only inputs (`linker_inputs_alone_are_inputs`).
+- `crates/kiln_driver/tests/time_trace.rs` (WP-1115): "Time trace": the
+  path of every command-line shape, compared with `clang++-19`'s; the
+  JSON's structure (members, phases, nesting, metadata, totals); the
+  event names and details of a TU with a header, a class template and a
+  `consteval` call, plain and verbose; the granularity; no flag, no file.
+  `driver.rs` `time_trace_syntax_only`: the unused warnings and the
+  invalid granularity.
 - `crates/kiln_driver/tests/verify.rs`: `-verify` end to end under both
   names (`kiln` and `kiln++`): the report pinned against clang 19, and
   compared live with `clang++-19 -Xclang -verify` when it is installed.

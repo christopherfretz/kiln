@@ -220,6 +220,9 @@ pub struct InstFrame {
     pub(crate) start_bytes: u64,
     pub(crate) start_nodes: u64,
     pub(crate) child_ns: u64,
+    /// The frame's `-ftime-trace` span (`InstantiateClass` /
+    /// `InstantiateFunction`; spec/driver.md "Time trace").
+    pub(crate) trace: Option<kiln_source::trace::Span>,
 }
 
 /// The depth and backtrace limits (`-ftemplate-depth=`,
@@ -443,6 +446,7 @@ impl Sema<'_, '_> {
                 start_bytes: 0,
                 start_nodes: 0,
                 child_ns: 0,
+                trace: None,
             });
             let _ = self.stack_ok(crate::stack_guard::StackPhase::Instantiation, poi);
             let _ = self.inst.stack.pop();
@@ -482,6 +486,7 @@ impl Sema<'_, '_> {
                 start_bytes: 0,
                 start_nodes: 0,
                 child_ns: 0,
+                trace: None,
             });
             let note = self.diag(DiagId::note_template_recursion_depth, poi);
             let d = self
@@ -510,6 +515,15 @@ impl Sema<'_, '_> {
             start_bytes,
             start_nodes,
             child_ns: 0,
+            trace: match kind {
+                FrameKind::ClassInstantiation | FrameKind::MemberClass => {
+                    kiln_source::trace::begin("InstantiateClass")
+                }
+                FrameKind::MemberFunction | FrameKind::FunctionSpec => {
+                    kiln_source::trace::begin("InstantiateFunction")
+                }
+                _ => None,
+            },
         });
         true
     }
@@ -520,6 +534,9 @@ impl Sema<'_, '_> {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("pop_inst_frame");
         let Some(f) = self.inst.stack.pop() else { return };
+        if let Some(span) = f.trace {
+            self.end_inst_trace(span, &f);
+        }
         if let Some((depth, slot)) = &mut self.inst.drain_capture
             && *depth == self.inst.stack.len()
         {
@@ -592,6 +609,29 @@ impl Sema<'_, '_> {
         }
         f.kind == FrameKind::VarTemplateInstantiation
             || self.ast.decls.get(f.entity).ty().is_some_and(|t| self.contains_undeduced_auto(t))
+    }
+
+    /// Ends a frame's `-ftime-trace` span: the detail is the frame's note
+    /// name (`Box<int>`, `Box<int>::get`); `-ftime-trace-verbose` adds
+    /// clang's `file` / `line` args, the entity's position.
+    #[inline(never)]
+    fn end_inst_trace(&self, span: kiln_source::trace::Span, f: &InstFrame) {
+        use kiln_source::trace::{self, Arg};
+        trace::end_args(
+            span,
+            || self.frame_name(f),
+            || {
+                if !trace::verbose() {
+                    return Vec::new();
+                }
+                let loc = self.ast.decls.get(f.entity).loc();
+                let Some(p) = self.diags.sm().presumed_line_col(loc) else { return Vec::new() };
+                vec![
+                    ("file".into(), Arg::Str(p.file_name.to_owned())),
+                    ("line".into(), Arg::Int(i64::from(p.line))),
+                ]
+            },
+        );
     }
 
     /// How a frame's entity prints in its note: a class by its type
@@ -813,6 +853,7 @@ mod tests {
             start_bytes: 0,
             start_nodes: 0,
             child_ns: 0,
+            trace: None,
         }
     }
 

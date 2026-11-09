@@ -142,6 +142,8 @@ sema_function_attribute_mismatch = Error (1) "function declared with '{0}' attri
 sema_function_partial_spec = Error (0) "function template partial specialization is not allowed";
 sema_function_spec_not_in_enclosing_ns = Error (2) "function template specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_gcc_requires_variadic = Warning [GccCompat] (1) "GCC requires a function with the {0} attribute to be variadic";
+sema_generic_sel_multi_match = Error (2) "controlling expression type {0} compatible with {1} generic association types";
+sema_generic_sel_no_match = Error (1) "controlling expression type {0} not compatible with any generic association type";
 sema_gnu_array_range = Extension [GnuDesignator] (0) "use of GNU array range extension";
 // clang `warn_gnu_inline_cplusplus_without_extern` (WP-585).
 sema_gnu_inline_cpp_without_extern = Warning [GnuInlineCppWithoutExtern] (0) "'gnu_inline' attribute without 'extern' in C++ treated as externally available, this changed in Clang 10";

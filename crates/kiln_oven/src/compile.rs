@@ -270,8 +270,10 @@ pub(crate) fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
             ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Extension => {
                 e = ast.exprs.operand(e);
             }
-            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
-                e = ast.exprs.choose_chosen(e).expect("guarded");
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr
+                if ast.exprs.selected_operand(e).is_some() =>
+            {
+                e = ast.exprs.selected_operand(e).expect("guarded");
             }
             ExprKind::SubstNonTypeTemplateParmExpr => e = ast.exprs.subst_replacement(e),
             // [over.match.oper]/8: the rewritten form is its semantic
@@ -1681,9 +1683,10 @@ impl Scan<'_> {
                 }
             }
             ExprKind::ParenExpr => self.expr(ast.exprs.operand(e), ok),
-            // `__builtin_choose_expr`: only the chosen operand is evaluated.
-            ExprKind::ChooseExpr => {
-                if let Some(c) = ast.exprs.choose_chosen(e) {
+            // `__builtin_choose_expr` / `_Generic`: only the chosen
+            // operand is evaluated.
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr => {
+                if let Some(c) = ast.exprs.selected_operand(e) {
                     self.expr(c, ok);
                 }
             }
@@ -3188,8 +3191,10 @@ impl Compiler<'_> {
                 let r = self.ext_elt_regs(e).first().copied().unwrap_or(dst);
                 self.emit(Op::Mov, 0, &[dst, r]);
             }
-            ExprKind::ChooseExpr if self.ast().exprs.choose_chosen(e).is_some() => {
-                let op = self.ast().exprs.choose_chosen(e).expect("guarded");
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr
+                if self.ast().exprs.selected_operand(e).is_some() =>
+            {
+                let op = self.ast().exprs.selected_operand(e).expect("guarded");
                 self.rv_inner(op, dst);
             }
             ExprKind::CXXRewrittenBinaryOperator => {
@@ -4481,8 +4486,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
             }
-            ExprKind::ChooseExpr if self.ast().exprs.choose_chosen(e).is_some() => {
-                let op = self.ast().exprs.choose_chosen(e).expect("guarded");
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr
+                if self.ast().exprs.selected_operand(e).is_some() =>
+            {
+                let op = self.ast().exprs.selected_operand(e).expect("guarded");
                 self.lv(op, acc)
             }
             ExprKind::CXXRewrittenBinaryOperator => {
@@ -5168,8 +5175,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 return self.init_inner(op, p, ty);
             }
-            ExprKind::ChooseExpr if self.ast().exprs.choose_chosen(e).is_some() => {
-                let op = self.ast().exprs.choose_chosen(e).expect("guarded");
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr
+                if self.ast().exprs.selected_operand(e).is_some() =>
+            {
+                let op = self.ast().exprs.selected_operand(e).expect("guarded");
                 return self.init_inner(op, p, ty);
             }
             ExprKind::CXXRewrittenBinaryOperator => {
@@ -5712,8 +5721,10 @@ impl Compiler<'_> {
             // side effects ended with that evaluation (it is a full
             // constant expression, [expr.const]/16).
             ExprKind::ConstantExpr if self.kind(ty) == TyKind::Void => {}
-            ExprKind::ChooseExpr if self.ast().exprs.choose_chosen(e).is_some() => {
-                let op = self.ast().exprs.choose_chosen(e).expect("guarded");
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr
+                if self.ast().exprs.selected_operand(e).is_some() =>
+            {
+                let op = self.ast().exprs.selected_operand(e).expect("guarded");
                 self.effect(op);
             }
             ExprKind::CXXRewrittenBinaryOperator => {

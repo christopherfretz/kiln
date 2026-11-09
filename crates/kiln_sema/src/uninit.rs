@@ -268,10 +268,12 @@ impl Sema<'_, '_> {
             e = match k {
                 ExprKind::ParenExpr => ex.operand(e),
                 ExprKind::UnaryOperator if ex.unary_op(e) == UnaryOp::Extension => ex.operand(e),
-                ExprKind::ChooseExpr => match ex.choose_chosen(e) {
-                    Some(c) => c,
-                    None => break,
-                },
+                ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr => {
+                    match ex.selected_operand(e) {
+                        Some(c) => c,
+                        None => break,
+                    }
+                }
                 ExprKind::SubstNonTypeTemplateParmExpr => ex.subst_replacement(e),
                 _ if k.is_cast() => {
                     let sub = ex.operand(e);
