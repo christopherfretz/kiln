@@ -3,7 +3,6 @@
 // From clang's CXX/class/class.compare/class.compare.default/p5.cpp. Found
 // by the clang negative-test run (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, WP-873 never-constant check fails on a builtin call with unknown arguments
 //@ expect: compile-ok
 struct S {
   char buff[10] = {};
