@@ -241,6 +241,18 @@ pub struct DeclSpec {
     /// Whether `tag` is a declaration of its own (`struct S;`,
     /// `struct S { }`) rather than a reference (`struct S *p;`).
     pub tag_declares: bool,
+    /// Where this decl-specifier-seq appears, for the checks on a class
+    /// or enumeration it defines ([`TagSite`]).
+    pub tag_site: TagSite,
+    /// `tag` is a definition that no "cannot be defined in" error
+    /// invalidated when it was declared (clang's `hasTagDefinition` on a
+    /// valid tag): a function declarator then defines it in its result
+    /// type ([dcl.fct]/17).
+    pub tag_defined: bool,
+    /// A "cannot be defined in" error was reported for `tag`: a type-id
+    /// of this decl-specifier-seq is the error type (clang marks the
+    /// declarator invalid).
+    pub tag_rejected: bool,
     /// The keyword of an elaborated or class specifier.
     pub keyword: TagKeyword,
     /// The end of `enum class` / `enum struct` (the scoped keyword's
@@ -484,6 +496,38 @@ impl DeclSpec {
         let prev = if new_is_base { s } else { self.base.spelling() };
         Err(SpecError::new(DiagId::parse_invalid_decl_spec_combination, &[prev]))
     }
+}
+
+/// Where a decl-specifier-seq appears, for the rules on the class or
+/// enumeration definitions it may contain ([dcl.type.general]/3,
+/// [dcl.fct]/17, [stmt.pre]/5, [temp.alias]/2; clang's `ActOnTag` and
+/// `GetDeclSpecTypeForDeclarator` "cannot be defined in" checks; spec/sema.md
+/// §4.4.1). The parser sets it for the next decl-specifier-seq only.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum TagSite {
+    /// As the [`DeclaratorContext`] says: allowed at namespace, class and
+    /// block scope and in a for-init-statement; a parameter type, a
+    /// condition; a type-id of [`DeclaratorContext::TypeName`] is a
+    /// [`TagSite::TypeSpecifier`].
+    #[default]
+    Context,
+    /// A type-specifier-seq rejected when the tag is declared (clang's
+    /// `DSC_type_specifier` and template parameters): `typeid`, named
+    /// casts, a conversion-type-id, a non-type template parameter, a
+    /// template parameter default, a dynamic exception specification.
+    TypeSpecifier,
+    /// A type-id whose declarator rejects it ("type specifier" with the
+    /// tag's type): `sizeof`, `alignof`, a C-style cast, a parenthesized
+    /// new type-id, an exception-declaration.
+    TypeId,
+    /// The grammar admits no definition: a new-type-id, a trailing return
+    /// type, a type-id template argument (the tag is a reference and the
+    /// `{` is left to the caller).
+    NoDefinition,
+    /// The type-id of an alias-declaration (allowed).
+    Alias,
+    /// The type-id of an alias template.
+    AliasTemplate,
 }
 
 /// Where a declarator appears ([dcl.decl], clang's `DeclaratorContext`).

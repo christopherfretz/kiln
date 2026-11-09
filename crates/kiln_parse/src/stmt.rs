@@ -567,6 +567,7 @@ impl Parser<'_, '_> {
         let mut d = Declarator::new(ctx, self.loc());
         d.direct_init = true;
         self.parse_declarator(&mut d);
+        self.check_tag_defined_in_result(&ds, &d);
         let base = self.s.type_from_declspec_at(&ds, d.name_loc());
         if self.at_attr() {
             self.parse_attributes(&mut d.attrs);
@@ -693,6 +694,9 @@ impl Parser<'_, '_> {
             // ([except.pre]/1, [dcl.pre]/5).
             self.lead_decl_attrs = attrs;
             let ctx = DeclaratorContext::Block;
+            // A class definition here is rejected by the declarator
+            // (clang's `CXXCatch` context, [dcl.type.general]/3).
+            self.next_tag_site = Some(kiln_sema::TagSite::TypeId);
             let mut ds = self.parse_decl_specifiers(ctx);
             // A type-specifier-seq: no storage class.
             self.reject_type_name_storage(&mut ds);
@@ -700,6 +704,7 @@ impl Parser<'_, '_> {
             self.catch_declarator = true;
             self.in_exception_decl = true;
             self.parse_declarator(&mut d);
+            self.check_tag_defined_in_result(&ds, &d);
             self.catch_declarator = false;
             self.in_exception_decl = false;
             self.set_abstract_loc(&mut d);

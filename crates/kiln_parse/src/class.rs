@@ -1578,6 +1578,7 @@ impl Parser<'_, '_> {
             };
             if !self.at(Punct::Colon) {
                 self.parse_declarator(&mut d);
+                self.check_tag_defined_in_result(&ds, &d);
                 self.parse_trailing_requires(&mut d);
                 self.set_declarator_end(&mut d);
             }
@@ -2375,6 +2376,12 @@ impl Parser<'_, '_> {
         if self.is_valid_after_tag(could_be_bitfield) {
             return;
         }
+        self.expected_semi_after_tag(spelling);
+    }
+
+    /// Reports the `;` missing after a class or enum definition and
+    /// inserts it.
+    pub(crate) fn expected_semi_after_tag(&mut self, spelling: &str) {
         if self.at(Punct::Colon) {
             let d = self.s.diag(DiagId::parse_expected_after, self.loc()).arg(spelling).arg("';'");
             self.emit(d);

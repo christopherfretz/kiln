@@ -123,6 +123,18 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Before the body of a class defined inside another declaration:
+    /// marks every head taken, so the class's members consume none of
+    /// the heads the enclosing declaration will; the returned state
+    /// reopens them ([`Sema::restore_template_decl_state`]).
+    pub fn hide_open_heads(&mut self) -> TemplateDeclState {
+        let s = self.save_template_decl_state();
+        for h in &mut self.templ.heads {
+            h.taken = true;
+        }
+        s
+    }
+
     /// [temp.pre]/5: after "a template declaration can only declare a
     /// single entity", clang (`ParseDeclGroup`) still declares each later
     /// declarator of the group with the same template parameter lists
@@ -1123,6 +1135,20 @@ impl Sema<'_, '_> {
     pub(crate) fn is_nttp_pack_expansion(&self, p: DeclId) -> bool {
         self.kind_of(p) == DeclKind::NonTypeTemplateParm
             && self.ast.decls.get(p).ty().is_some_and(|t| pack::type_pattern(self, t).is_some())
+    }
+
+    /// True if a written template head awaits the declaration being
+    /// parsed (an alias-declaration is then an alias template, whose
+    /// type-id may not define a class: [dcl.type.general]/3).
+    pub fn has_open_template_head(&self) -> bool {
+        let floor = self.lambda_head_floor();
+        self.templ
+            .heads
+            .iter()
+            .enumerate()
+            .rev()
+            .take_while(|(i, h)| !h.taken && *i >= floor)
+            .any(|(_, h)| !h.invented)
     }
 
     /// The innermost untaken head the declaration being declared consumes

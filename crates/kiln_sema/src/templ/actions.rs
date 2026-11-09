@@ -1376,6 +1376,14 @@ impl Sema<'_, '_> {
 
     // -- concepts and requires ------------------------------------------------------
 
+    /// After `concept name =`: the concept consumes its head before its
+    /// constraint-expression, so a class defined there
+    /// (`requires (struct S {} x)`) takes none ([temp.pre]/1).
+    pub fn act_on_concept_head(&mut self) {
+        let _ = self.take_template_head(None);
+        self.templ.cur = None;
+    }
+
     /// `template<params> concept name = e;` ([temp.concept]/1); the head
     /// was consumed by [`Sema::take_template_head`].
     pub fn act_concept(

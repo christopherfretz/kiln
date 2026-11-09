@@ -726,7 +726,7 @@ impl Parser<'_, '_> {
 
     /// [`Parser::parse_c_style_cast`] after the `(` at `open`.
     fn parse_c_style_cast_rest(&mut self, open: Loc) -> PExpr {
-        let ty = self.parse_type_id();
+        let ty = self.parse_type_id_checked();
         let Some(ty) = ty else {
             self.skip_until(&[Punct::RParen], false, true);
             return None;
@@ -800,7 +800,7 @@ impl Parser<'_, '_> {
         self.s.exit_unevaluated();
         if let Some((open, is_type, _)) = scoped {
             if is_type {
-                let Some(ty) = self.parse_type_id() else {
+                let Some(ty) = self.parse_type_id_checked() else {
                     self.skip_until(&[Punct::RParen], false, true);
                     return None;
                 };
@@ -818,7 +818,7 @@ impl Parser<'_, '_> {
             && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
         {
             let open = self.bump().span.lo;
-            let Some(ty) = self.parse_type_id() else {
+            let Some(ty) = self.parse_type_id_checked() else {
                 self.skip_until(&[Punct::RParen], false, true);
                 return None;
             };

@@ -40,6 +40,24 @@ use crate::{Sema, target};
 use kiln_ast::templates::is_template_kind;
 use kiln_oven::{EvalContext, EvalKind};
 
+/// The rule a class or enumeration definition breaks
+/// ([`Sema::diag_type_defined_in`]; spec/sema.md §4.4.1).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TagDefinedIn {
+    /// A type-specifier-seq ([dcl.type.general]/3).
+    TypeSpecifier,
+    /// An enumerator's initializer (clang's `err_type_defined_in_enum`).
+    Enum,
+    /// A parameter type ([dcl.fct]/17).
+    ParamType,
+    /// A function's result type ([dcl.fct]/17).
+    ResultType,
+    /// A condition ([stmt.pre]/5).
+    Condition,
+    /// The type-id of an alias template ([dcl.type.general]/3).
+    AliasTemplate,
+}
+
 /// How a class or enumeration name is used ([dcl.type.elab],
 /// [class.pre], [dcl.enum]).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -7308,6 +7326,23 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        // clang `ActOnStartOfFunctionDef`: the return type of a definition
+        // is complete ([dcl.fct.def.general]/2), checked before the
+        // parameters. `auto f() -> struct S {}` names `S` without defining
+        // it, so its body meets an incomplete type.
+        if !self.ast.decls.get(f).has(DeclFlags::INVALID)
+            && !self.ast.types.is_dependent(ret)
+            && !self.ast.types.is_void(ret)
+            && !self.ast.types.is_reference(ret)
+            && !self.is_error_type(ret)
+            && !self.is_undeduced_auto(ret)
+            && !self.require_complete(ret, self.ast.decls.get(f).loc())
+        {
+            let loc = self.ast.decls.get(f).loc();
+            let msg = self.diag(DiagId::sema_func_def_incomplete_result, loc).arg(self.ty_arg(ret));
+            self.emit(self.incomplete_note(msg, ret));
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        }
         for p in params {
             let n = self.ast.decls.get(p).name();
             if let Some(sym) = n.as_ident() {
@@ -7729,7 +7764,11 @@ impl Sema<'_, '_> {
         is_enum: bool,
         qualifier: Option<DeclId>,
         use_: TagUse,
+        nested: bool,
     ) -> Option<kiln_ast::ids::TemplateParamListId> {
+        if nested {
+            return None;
+        }
         if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
             let head = self.take_template_head(qualifier);
             let _ = self.check_template_in_local_class(false, Loc::INVALID);
@@ -7838,6 +7877,7 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> DeclId {
         let extraneous_head = self.extraneous_tag_head.take().map(|d| self.emit(d)).is_some();
+        let nested = std::mem::take(&mut self.nested_tag);
         if use_ == TagUse::Friend {
             return self.act_on_friend_tag(keyword, name, qualifier, scoped, fixed, loc);
         }
@@ -7845,7 +7885,7 @@ impl Sema<'_, '_> {
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
         let fixed = self.check_enum_fixed_type(fixed, loc);
         let member_class_spec = self.begin_member_class_spec(name, qualifier, use_, loc);
-        let head = self.tag_template_head(is_enum, qualifier, use_);
+        let head = self.tag_template_head(is_enum, qualifier, use_, nested);
         let mut prev = None;
         let mut redefined = false;
         // A name of another kind (`kind_conflict`): the tag is declared
@@ -8057,21 +8097,70 @@ impl Sema<'_, '_> {
     /// invalid and kept out of lookup, so later uses find the first one
     /// (clang's `ActOnTag` makes it anonymous and invalid), and the parser
     /// skips its body ([`Sema::tag_body_skipped`]; spec/sema.md §4.4).
-    /// [dcl.fct]/17: "'X' cannot be defined in a parameter type" for tag
-    /// `d`, just defined in a parameter-declaration's decl-specifier-seq
-    /// (clang `GetFullTypeForDeclarator`, `err_type_defined_in_param_type`
-    /// at the tag's location).
-    pub fn diag_type_defined_in_param(&mut self, d: DeclId) {
+    /// Reports the class or enumeration `d`, just defined, as defined
+    /// where `rule` forbids it, at the tag's location (its name, else its
+    /// class-key; clang's `err_type_defined_in_*`). `by_name` streams the
+    /// tag's identifier, as clang's `ActOnTag` prototype-scope check does
+    /// (an unnamed enumeration prints as `(null)`); otherwise its type
+    /// (`'(unnamed struct at f.cpp:1:8)'`, `'X::S'`).
+    pub fn diag_type_defined_in(&mut self, d: DeclId, rule: TagDefinedIn, by_name: bool) {
         let loc = self.ast.decls.get(d).loc();
-        // clang streams the tag's (empty) name, not its type: an unnamed
-        // tag prints as `(null)`.
-        let what = if self.ast.decls.get(d).name().is_empty() {
-            "(null)".to_string()
+        let name = self.ast.decls.get(d).name();
+        // clang prints the tag's own type (`getTagDeclType`), fully scoped
+        // (`'C::S'`). A tag inside an enumeration is scoped by it at 19
+        // (`'E::S'`); clang 22 leaves the enumeration out (`'S'`).
+        let in_enum = self.tag_in_enum(d);
+        let what = if by_name {
+            if name.is_empty() {
+                "(null)".to_string()
+            } else {
+                format!("'{}'", self.decl_name_str(name))
+            }
+        } else if in_enum
+            && self.clang_compat >= 22
+            && let Some(e) = self.ast.decls.get(d).ctx()
+        {
+            let full = self.decl_ty_str(self.tag_type(d));
+            let en = self.decl_ty_str(self.tag_type(e));
+            let parent = en.rfind("::").map_or("", |i| &en[..i + 2]);
+            match full.strip_prefix(&format!("{en}::")) {
+                Some(own) => format!("'{parent}{own}'"),
+                None => format!("'{full}'"),
+            }
         } else {
-            self.ty_arg(self.tag_type(d))
+            format!("'{}'", self.decl_ty_str(self.tag_type(d)))
         };
-        let msg = self.diag(DiagId::sema_type_defined_in_param_type, loc).arg(what);
+        let id = match rule {
+            TagDefinedIn::TypeSpecifier => DiagId::sema_type_defined_in_type_specifier,
+            TagDefinedIn::Enum => DiagId::sema_type_defined_in_enum,
+            TagDefinedIn::ParamType => DiagId::sema_type_defined_in_param_type,
+            TagDefinedIn::ResultType => DiagId::sema_type_defined_in_result_type,
+            TagDefinedIn::Condition => DiagId::sema_type_defined_in_condition,
+            TagDefinedIn::AliasTemplate => DiagId::sema_type_defined_in_alias_template,
+        };
+        let mut msg = self.diag(id, loc).arg(what);
+        if rule == TagDefinedIn::ResultType {
+            // Once per function declarator: `struct S {} f(), g();`
+            // reports `S` twice at the same location.
+            msg = msg.allow_duplicate();
+        }
         self.emit(msg);
+    }
+
+    /// True if a declaration here is in a function parameter scope
+    /// (clang's `getNonFieldDeclScope(S)->isFunctionPrototypeScope()`):
+    /// a parameter-declaration-clause up to the end of its declarator,
+    /// including default arguments, the exception specification and the
+    /// trailing return type, but not a lambda body within them.
+    pub fn in_prototype_scope(&self) -> bool {
+        self.prototype_params.last().is_some_and(|f| f.depth == self.scopes.len())
+            || self.scopes.last().is_some_and(|s| s.kind == ScopeKind::Prototype)
+    }
+
+    /// True if the tag `d` was declared in an enumeration (an
+    /// enumerator's initializer; clang's `err_type_defined_in_enum`).
+    pub fn tag_in_enum(&self, d: DeclId) -> bool {
+        self.ast.decls.get(d).ctx().is_some_and(|c| self.kind_of(c) == DeclKind::Enum)
     }
 
     /// Where a tag defined while `ctx` is the current context goes: `ctx`
