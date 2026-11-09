@@ -26,19 +26,19 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `0f9c200d3`
+- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `968c7ee2f`
 - command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 86 s; peak RSS of one case 23 MiB (gnu-time)
+- wall time 173 s; peak RSS of one case 22 MiB (gnu-time)
 
 ## Totals
 
 | measure | count | of | rate |
 |---|---:|---:|---:|
-| ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 68 | 1250 | 5.4% |
-| ACCEPTS-INVALID cases (per RUN configuration) | 80 | 1946 | 4.1% |
-| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4276 | 28065 | 15.2% |
+| ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 66 | 1250 | 5.3% |
+| ACCEPTS-INVALID cases (per RUN configuration) | 77 | 1946 | 4.0% |
+| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4115 | 28065 | 14.7% |
 | REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 28 | 418 | 6.7% |
 | crashes | 0 | 2850 | 0.0% |
 | timeouts | 0 | 2850 | 0.0% |
@@ -50,25 +50,25 @@ written by hand (WP-912). The run is informational and never part of
 
 | directory | accepts-invalid files | rate | missed lines | rate | rejects-valid | crash / timeout |
 |---|---:|---:|---:|---:|---:|---:|
-| CXX/basic | 6 / 37 | 16.2% | 76 / 311 | 24.4% | 0 | 0 / 0 |
-| CXX/class | 1 / 46 | 2.2% | 128 / 634 | 20.2% | 1 | 0 / 0 |
+| CXX/basic | 4 / 37 | 10.8% | 64 / 311 | 20.6% | 0 | 0 / 0 |
+| CXX/class | 1 / 46 | 2.2% | 100 / 634 | 15.8% | 1 | 0 / 0 |
 | CXX/class.access | 0 / 12 | 0.0% | 47 / 573 | 8.2% | 0 | 0 / 0 |
 | CXX/class.derived | 0 / 15 | 0.0% | 10 / 96 | 10.4% | 0 | 0 / 0 |
 | CXX/conv | 0 / 2 | 0.0% | 2 / 16 | 12.5% | 0 | 0 / 0 |
 | CXX/cpp | 0 / 0 | - | 0 / 0 | - | 0 | 0 / 0 |
 | CXX/dcl | 0 / 4 | 0.0% | 0 / 81 | 0.0% | 0 | 0 / 0 |
-| CXX/dcl.dcl | 4 / 77 | 5.2% | 281 / 1141 | 24.6% | 0 | 0 / 0 |
+| CXX/dcl.dcl | 4 / 77 | 5.2% | 267 / 1141 | 23.4% | 0 | 0 / 0 |
 | CXX/dcl.decl | 2 / 54 | 3.7% | 87 / 788 | 11.0% | 1 | 0 / 0 |
-| CXX/drs | 1 / 33 | 3.0% | 1487 / 8682 | 17.1% | 0 | 0 / 0 |
+| CXX/drs | 1 / 33 | 3.0% | 1425 / 8682 | 16.4% | 0 | 0 / 0 |
 | CXX/except | 3 / 15 | 20.0% | 26 / 104 | 25.0% | 0 | 0 / 0 |
-| CXX/expr | 2 / 78 | 2.6% | 74 / 644 | 11.5% | 0 | 0 / 0 |
+| CXX/expr | 2 / 78 | 2.6% | 72 / 644 | 11.2% | 0 | 0 / 0 |
 | CXX/lex | 0 / 14 | 0.0% | 1 / 78 | 1.3% | 0 | 0 / 0 |
 | CXX/module | 0 / 6 | 0.0% | 6 / 75 | 8.0% | 0 | 0 / 0 |
 | CXX/over | 1 / 42 | 2.4% | 7 / 313 | 2.2% | 0 | 0 / 0 |
 | CXX/special | 2 / 31 | 6.5% | 12 / 224 | 5.4% | 3 | 0 / 0 |
 | CXX/stmt.stmt | 0 / 9 | 0.0% | 3 / 255 | 1.2% | 0 | 0 / 0 |
-| CXX/temp | 9 / 147 | 6.1% | 356 / 1644 | 21.7% | 2 | 0 / 0 |
-| SemaCXX | 37 / 628 | 5.9% | 1673 / 12406 | 13.5% | 21 | 0 / 0 |
+| CXX/temp | 9 / 147 | 6.1% | 346 / 1644 | 21.0% | 2 | 0 / 0 |
+| SemaCXX | 37 / 628 | 5.9% | 1640 / 12406 | 13.2% | 21 | 0 / 0 |
 
 ## Top 50 accepts-invalid files
 
@@ -99,8 +99,6 @@ Ranked by the expected errors of their worst configuration.
 | `SemaCXX/union-member-destructor.cpp` | 1 / 1 | 3 |
 | `SemaCXX/weak-init.cpp` | 1 / 1 | 3 |
 | `CXX/basic/basic.lookup/basic.lookup.elab/p2.cpp` | 1 / 1 | 2 |
-| `CXX/basic/basic.start/basic.start.init/p3.cpp` | 1 / 5 | 2 |
-| `CXX/basic/basic.start/basic.start.main/p3.cpp` | 2 / 5 | 2 |
 | `CXX/class/class.local/p1-0x.cpp` | 1 / 1 | 2 |
 | `CXX/dcl.dcl/dcl.spec/dcl.constexpr/p3-2b.cpp` | 1 / 1 | 2 |
 | `CXX/dcl.dcl/dcl.spec/dcl.inline/p1.cpp` | 1 / 1 | 2 |
@@ -126,6 +124,8 @@ Ranked by the expected errors of their worst configuration.
 | `CXX/temp/temp.decls/temp.class.spec/p9-0x.cpp` | 1 / 1 | 1 |
 | `CXX/temp/temp.decls/temp.friend/p3.cpp` | 1 / 1 | 1 |
 | `CXX/temp/temp.res/temp.dep/temp.dep.constexpr/p2.cpp` | 1 / 1 | 1 |
+| `CXX/temp/temp.spec/temp.expl.spec/p20-2.cpp` | 1 / 1 | 1 |
+| `CXX/temp/temp.spec/temp.inst/p7.cpp` | 1 / 1 | 1 |
 
 ## Top 40 missed-error clusters
 
@@ -144,7 +144,6 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | no member named '…' in '…' | 6 | 51 | `CXX/class/class.mem/p13.cpp:124` |
 |  | 6 | 33 | `CXX/drs/cwg5xx.cpp:514` |
 | use of undeclared identifier '…' | 6 | 27 | `CXX/drs/cwg14xx.cpp:33` |
-| declaration of '…' shadows template parameter | 6 | 22 | `CXX/dcl.dcl/dcl.spec/dcl.typedef/p2-0x.cpp:84` |
 | deleted function definitions are a C++N extension | 6 | 20 | `CXX/drs/cwg13xx.cpp:687` |
 | no matching constructor for initialization of '…' | 6 | 18 | `CXX/dcl.decl/dcl.init/dcl.init.aggr/p1.cpp:36` |
 | '…' is a private member of '…' | 6 | 14 | `CXX/class.access/p4.cpp:591` |
@@ -152,7 +151,6 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | no matching function | 6 | 9 | `CXX/temp/temp.param/p8-cxx20.cpp:47` |
 | '…' cannot be defined in a type specifier | 5 | 98 | `CXX/dcl.dcl/dcl.spec/dcl.type/p3-0x.cpp:10` |
 | '…' attribute takes at least N argument | 5 | 33 | `SemaCXX/annotate-type.cpp:43` |
-| deleted | 5 | 18 | `CXX/basic/basic.stc/basic.stc.dynamic/basic.stc.dynamic.deallocation/p2.cpp:15` |
 | must be initialized by a constant expression | 5 | 11 | `SemaCXX/attr-weak.cpp:50` |
 | static assertion expression is not an integral constant expression | 5 | 10 | `CXX/class/class.compare/class.compare.default/p4.cpp:35` |
 | not an integral constant expression | 5 | 8 | `CXX/temp/temp.res/temp.dep/temp.dep.constexpr/p2.cpp:21` |
@@ -173,6 +171,8 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | qualified reference to '…' is a constructor name rather than a type in this context | 3 | 47 | `CXX/basic/basic.lookup/basic.lookup.qual/class.qual/p2.cpp:30` |
 | '…' attribute takes no arguments | 3 | 28 | `SemaCXX/attr-reinitializes.cpp:14` |
 | recursive evaluation of default argument | 3 | 18 | `CXX/dcl.decl/dcl.init/dcl.init.ref/p5-cxx03-extra-copy.cpp:46` |
+| type '…' cannot be used prior to '…' because it has no members | 3 | 18 | `CXX/drs/cwg13xx.cpp:263` |
+| default template arguments for a function template are a C++N extension | 3 | 17 | `CXX/drs/cwg2xx.cpp:536` |
 
 ## Rejects-valid cases
 
