@@ -12,17 +12,28 @@
 //! The producing compile and the importer's replay build the same bytes
 //! for the same specialization, so the bytes are compared as they are.
 //! A key that cannot be formed (a dependent or unsupported type, a
-//! pointer or reflection argument, an implicit declaration, a position
-//! the replay does not reproduce) leaves the evaluation uncarried.
+//! pointer to a string literal or temporary, an implicit declaration, a
+//! position the replay does not reproduce) leaves the evaluation
+//! uncarried.
+//!
+//! The same value encoding carries pointer, reference and reflection
+//! results ([`value_bytes`]); the importer resolves the entities in it
+//! back to its own declarations (`value.rs`).
 
+use kiln_ast::consts::{ConstValue, MemberKind, PtrBase, Scalar};
 use kiln_ast::decl::DeclFlags;
 use kiln_ast::ids::ArgListId;
 use kiln_ast::names::DeclNameKind;
+use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::{ArgView, ExcSpec, TemplateName, TypeView};
-use kiln_ast::{Ast, DeclId, QualType};
+use kiln_ast::{Ast, ConstValueId, DeclId, QualType};
 use kiln_source::{FileId, SourceManager};
 
-use super::{Rd, Res, bad, carried_value, loc_key, put_bytes, put_u32, put_value, read_value};
+use super::{
+    Rd, Res, TAG_AGGREGATE, TAG_AGGREGATE_EX, TAG_MEMBER_NULL, TAG_MEMBER_POINTER, TAG_POINTER,
+    TAG_REFLECTION, TAG_TYPED, bad, carried_value, loc_key, put_bytes, put_u32, put_value, put_var,
+    read_plain,
+};
 
 /// The deepest nesting a key may have (entities, argument lists and
 /// types together); deeper keys are not formed.
@@ -32,12 +43,14 @@ const MAX_DEPTH: u32 = 48;
 const MAX_KEY: usize = 1 << 14;
 
 /// Entity tags.
-const ENT_SPEC: u8 = b'S';
-const ENT_MEMBER: u8 = b'M';
-const ENT_PATTERN: u8 = b'P';
-const ENT_DECL: u8 = b'D';
+pub(super) const ENT_SPEC: u8 = b'S';
+pub(super) const ENT_MEMBER: u8 = b'M';
+pub(super) const ENT_PATTERN: u8 = b'P';
+pub(super) const ENT_DECL: u8 = b'D';
 /// Top level only: a substitution frame ([`subst_key`]).
 const ENT_SUBST: u8 = b'F';
+/// The translation unit (the global namespace).
+pub(super) const ENT_TU: u8 = b'U';
 
 /// Argument tags.
 const ARG_TYPE: u8 = b'T';
@@ -46,20 +59,33 @@ const ARG_TEMPLATE: u8 = b'N';
 const ARG_PACK: u8 = b'K';
 
 /// Type tags (after the cv byte).
-const TY_BUILTIN: u8 = 0;
-const TY_BITINT: u8 = 1;
-const TY_POINTER: u8 = 2;
-const TY_LREF: u8 = 3;
-const TY_RREF: u8 = 4;
-const TY_MEMBER_POINTER: u8 = 5;
-const TY_ARRAY: u8 = 6;
-const TY_INCOMPLETE_ARRAY: u8 = 7;
-const TY_FUNCTION: u8 = 8;
-const TY_RECORD: u8 = 9;
-const TY_ENUM: u8 = 10;
-const TY_COMPLEX: u8 = 11;
-const TY_ATOMIC: u8 = 12;
-const TY_VECTOR: u8 = 13;
+pub(super) const TY_BUILTIN: u8 = 0;
+pub(super) const TY_BITINT: u8 = 1;
+pub(super) const TY_POINTER: u8 = 2;
+pub(super) const TY_LREF: u8 = 3;
+pub(super) const TY_RREF: u8 = 4;
+pub(super) const TY_MEMBER_POINTER: u8 = 5;
+pub(super) const TY_ARRAY: u8 = 6;
+pub(super) const TY_INCOMPLETE_ARRAY: u8 = 7;
+pub(super) const TY_FUNCTION: u8 = 8;
+pub(super) const TY_RECORD: u8 = 9;
+pub(super) const TY_ENUM: u8 = 10;
+pub(super) const TY_COMPLEX: u8 = 11;
+pub(super) const TY_ATOMIC: u8 = 12;
+pub(super) const TY_VECTOR: u8 = 13;
+
+/// Pointer base kinds (after [`TAG_POINTER`] and its flags).
+pub(super) const BASE_DECL: u8 = 0;
+pub(super) const BASE_FUNCTION: u8 = 1;
+pub(super) const BASE_TYPE_INFO: u8 = 2;
+/// A template parameter object, by its type and value.
+pub(super) const BASE_PARAM_OBJECT: u8 = 3;
+/// A subobject of another constant, by its type and value.
+pub(super) const BASE_CONST: u8 = 4;
+
+/// Type reflection forms (after the reflectee tag 0).
+pub(super) const REFL_TYPE: u8 = 0;
+pub(super) const REFL_ALIAS: u8 = 1;
 
 /// The writer of one key. `file` maps a file to its index in the
 /// section's path table (`None`: a file the replay does not reproduce).
@@ -68,6 +94,18 @@ struct KeyCx<'a, F> {
     sm: &'a SourceManager,
     file: F,
     out: Vec<u8>,
+    /// The longest output formed.
+    limit: usize,
+    /// Every type written inside a value must already be canonical (the
+    /// importer rebuilds the value from the canonical form, so a sugared
+    /// type would make it a different value).
+    exact: bool,
+}
+
+impl<'a, F> KeyCx<'a, F> {
+    fn key(ast: &'a Ast, sm: &'a SourceManager, file: F, out: Vec<u8>) -> Self {
+        KeyCx { ast, sm, file, out, limit: MAX_KEY, exact: false }
+    }
 }
 
 /// The key of instantiated entity `d`, or `None` when it cannot be
@@ -79,9 +117,61 @@ pub(super) fn entity_key(
     file: impl FnMut(FileId) -> Option<u32>,
     d: DeclId,
 ) -> Option<Box<[u8]>> {
-    let mut cx = KeyCx { ast, sm, file, out: Vec::new() };
+    let mut cx = KeyCx::key(ast, sm, file, Vec::new());
     cx.ent(d, 0)?;
-    (cx.out[0] != ENT_DECL).then(|| cx.out.into_boxed_slice())
+    (cx.out[0] != ENT_DECL && cx.out[0] != ENT_TU).then(|| cx.out.into_boxed_slice())
+}
+
+/// The entity bytes of any declaration `d` (as a value names it: the
+/// importer's check that a declaration it resolved is the one named).
+pub(super) fn decl_key(
+    ast: &Ast,
+    sm: &SourceManager,
+    file: impl FnMut(FileId) -> Option<u32>,
+    d: DeclId,
+) -> Option<Box<[u8]>> {
+    let mut cx = KeyCx::key(ast, sm, file, Vec::new());
+    cx.ent(d, 0)?;
+    Some(cx.out.into_boxed_slice())
+}
+
+/// The full encoding of value `v` (tag first), when it can be written
+/// and every type in it is canonical.
+pub(super) fn value_bytes(
+    ast: &Ast,
+    sm: &SourceManager,
+    file: impl FnMut(FileId) -> Option<u32>,
+    v: ConstValueId,
+    typed: bool,
+) -> Option<Box<[u8]>> {
+    let mut cx = KeyCx { ast, sm, file, out: Vec::new(), limit: usize::MAX, exact: true };
+    if typed {
+        cx.out.push(TAG_TYPED);
+        cx.vty(ast.consts.ty(v), 0)?;
+    }
+    cx.value(v, 0)?;
+    Some(cx.out.into_boxed_slice())
+}
+
+/// The length of the entity at the start of `b` (bytes a checked section
+/// holds).
+pub(super) fn ent_len(b: &[u8]) -> Option<usize> {
+    let mut ck = Ck { r: Rd(b), npaths: usize::MAX };
+    ck.ent(0).ok()?;
+    Some(b.len() - ck.r.0.len())
+}
+
+/// Checks the entry value at the start of `r` (any tag, or a
+/// [`TAG_TYPED`] prefix) and consumes it.
+pub(super) fn check_value(r: &mut Rd<'_>, npaths: usize) -> Res<()> {
+    let mut ck = Ck { r: Rd(r.0), npaths };
+    if ck.r.0.first() == Some(&TAG_TYPED) {
+        ck.r.u8()?;
+        ck.ty(0)?;
+    }
+    ck.value(0)?;
+    r.0 = ck.r.0;
+    Ok(())
 }
 
 /// The key of a substitution frame of kind `code` into `template` with
@@ -103,7 +193,7 @@ pub(super) fn subst_key(
     if ast.templates.param_list(info.params).depth != 0 {
         return None;
     }
-    let mut cx = KeyCx { ast, sm, file, out: vec![ENT_SUBST, code] };
+    let mut cx = KeyCx::key(ast, sm, file, vec![ENT_SUBST, code]);
     cx.ent(template, 1)?;
     cx.ent(entity, 1)?;
     cx.args(ast.types.canonical_args(args), 1)?;
@@ -112,13 +202,17 @@ pub(super) fn subst_key(
 
 impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
     fn room(&self, depth: u32) -> Option<()> {
-        (depth <= MAX_DEPTH && self.out.len() <= MAX_KEY).then_some(())
+        (depth <= MAX_DEPTH && self.out.len() <= self.limit).then_some(())
     }
 
     fn ent(&mut self, d: DeclId, depth: u32) -> Option<()> {
         self.room(depth)?;
         let ast = self.ast;
         let d = ast.first(d);
+        if d == ast.tu {
+            self.out.push(ENT_TU);
+            return Some(());
+        }
         if let Some((_, s)) = ast.spec_info(d) {
             let (template, args) = (s.template, s.args);
             self.out.push(ENT_SPEC);
@@ -191,8 +285,7 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
                 ArgView::Value { ty, value } => {
                     self.out.push(ARG_VALUE);
                     self.ty(ty, depth + 1)?;
-                    let v = carried_value(&ast.consts, value).ok()?;
-                    put_value(&mut self.out, &v);
+                    self.value(value, depth + 1)?;
                 }
                 ArgView::Template(n) => {
                     let n = ast.types.canonical_template_name(n);
@@ -277,6 +370,150 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
         self.out.push(tag);
         self.ty(inner, depth)
     }
+
+    /// A type inside a value: canonical already when [`KeyCx::exact`].
+    fn vty(&mut self, q: QualType, depth: u32) -> Option<()> {
+        if self.exact && self.ast.types.canonical(q) != q {
+            return None;
+        }
+        self.ty(q, depth)
+    }
+
+    /// Value `v`: part 1's encoding when it has one (the bytes of every
+    /// value part 1 carries are unchanged), else by the entities it names
+    /// (spec/modules.md §11.11 "Encoding"). Its own type is not written.
+    fn value(&mut self, v: ConstValueId, depth: u32) -> Option<()> {
+        self.room(depth)?;
+        let ast = self.ast;
+        let store = &ast.consts;
+        if let Ok(c) = carried_value(store, v) {
+            put_value(&mut self.out, &c);
+            return Some(());
+        }
+        let d = depth + 1;
+        match store.get(v) {
+            ConstValue::Scalar(Scalar::Null { kind, .. }) => {
+                self.out.extend_from_slice(&[TAG_MEMBER_NULL, kind as u8]);
+            }
+            ConstValue::Scalar(Scalar::Pointer { base, offset, designated, past, .. }) => {
+                self.out.extend_from_slice(&[
+                    TAG_POINTER,
+                    u8::from(past) | u8::from(designated.is_some()) << 1,
+                ]);
+                match base {
+                    PtrBase::Decl(x) => match ast.templates.param_object_value(x) {
+                        Some(pv) => {
+                            self.out.push(BASE_PARAM_OBJECT);
+                            self.vty(store.ty(pv), d)?;
+                            self.value(pv, d)?;
+                        }
+                        None => {
+                            self.out.push(BASE_DECL);
+                            self.ent(x, d)?;
+                        }
+                    },
+                    PtrBase::Function(x) => {
+                        self.out.push(BASE_FUNCTION);
+                        self.ent(x, d)?;
+                    }
+                    PtrBase::TypeInfo(q) => {
+                        self.out.push(BASE_TYPE_INFO);
+                        self.vty(q, d)?;
+                    }
+                    PtrBase::Const(c) => {
+                        self.out.push(BASE_CONST);
+                        self.vty(store.ty(c), d)?;
+                        self.value(c, d)?;
+                    }
+                    PtrBase::Temporary(_) | PtrBase::StringLit { .. } | PtrBase::Label { .. } => {
+                        return None;
+                    }
+                }
+                put_var(&mut self.out, offset);
+                if let Some(q) = designated {
+                    self.vty(q, d)?;
+                }
+            }
+            ConstValue::Scalar(Scalar::MemberPtr { member, kind, derived, path, .. }) => {
+                self.out.extend_from_slice(&[
+                    TAG_MEMBER_POINTER,
+                    u8::from(kind == MemberKind::Function) | u8::from(derived) << 1,
+                ]);
+                self.ent(member, d)?;
+                put_var(&mut self.out, path.len() as u64);
+                for &p in path {
+                    self.ent(p, d)?;
+                }
+            }
+            ConstValue::Scalar(Scalar::Reflection { id, .. }) => {
+                self.out.push(TAG_REFLECTION);
+                self.reflectee(ast.reflections.get(id), d)?;
+            }
+            ConstValue::Scalar(_) => return None,
+            ConstValue::Aggregate(img) => {
+                self.out.push(TAG_AGGREGATE_EX);
+                put_bytes(&mut self.out, img.bytes);
+                put_var(&mut self.out, img.padding.len() as u64);
+                for r in img.padding {
+                    put_var(&mut self.out, u64::from(r.start));
+                    put_var(&mut self.out, u64::from(r.len));
+                }
+                put_var(&mut self.out, img.relocs.len() as u64);
+                for r in img.relocs {
+                    put_var(&mut self.out, u64::from(r.at));
+                    self.vty(store.ty(r.value), d)?;
+                    self.value(r.value, d)?;
+                }
+                put_var(&mut self.out, img.unions.len() as u64);
+                for u in img.unions {
+                    put_var(&mut self.out, u64::from(u.at));
+                    self.ent(u.field, d)?;
+                }
+            }
+        }
+        self.room(depth)
+    }
+
+    /// Reflectee `r`: its tag, then what identifies it.
+    fn reflectee(&mut self, r: Reflectee, d: u32) -> Option<()> {
+        let ast = self.ast;
+        let store = &ast.consts;
+        self.out.push(r.tag());
+        match r {
+            Reflectee::Null => {}
+            Reflectee::Type(q) => match ast.types.view(q.ty()) {
+                // A kept top-level alias ([`Ast::reflection_type`]).
+                TypeView::Typedef { decl, .. } if q.quals_bits() == 0 => {
+                    self.out.push(REFL_ALIAS);
+                    self.ent(decl, d)?;
+                }
+                TypeView::TemplateSpecialization { .. } => return None,
+                _ => {
+                    self.out.push(REFL_TYPE);
+                    self.vty(q, d)?;
+                }
+            },
+            Reflectee::Decl(x) | Reflectee::Namespace(x) | Reflectee::NamespaceAlias(x) => {
+                self.ent(x, d)?;
+            }
+            Reflectee::Template(n) => {
+                let TemplateName::Template(x) = ast.types.template_name_view(n) else {
+                    return None;
+                };
+                self.ent(x, d)?;
+            }
+            Reflectee::Value(c) | Reflectee::Object(c) => {
+                self.vty(store.ty(c), d)?;
+                self.value(c, d)?;
+            }
+            Reflectee::BaseSpec(x, i) | Reflectee::FnParam(x, i) => {
+                self.ent(x, d)?;
+                put_var(&mut self.out, u64::from(i));
+            }
+            Reflectee::DataMemberSpec(_) | Reflectee::Annotation(_) => return None,
+        }
+        Some(())
+    }
 }
 
 // --- checking a decoded key --------------------------------------------
@@ -324,6 +561,7 @@ impl Ck<'_> {
                 self.ent(depth + 1)?;
                 self.ent(depth + 1)
             }
+            ENT_TU => Ok(()),
             ENT_DECL => {
                 let _kind = self.r.u8()?;
                 match self.r.u8()? {
@@ -356,7 +594,7 @@ impl Ck<'_> {
                 ARG_TYPE => self.ty(depth + 1)?,
                 ARG_VALUE => {
                     self.ty(depth + 1)?;
-                    read_value(&mut self.r)?;
+                    self.value(depth + 1)?;
                 }
                 ARG_TEMPLATE => self.ent(depth + 1)?,
                 ARG_PACK => self.args(depth + 1)?,
@@ -409,6 +647,89 @@ impl Ck<'_> {
                 self.r.u8()?;
             }
             _ => return bad("bad instantiation key"),
+        }
+        Ok(())
+    }
+
+    /// A value of any tag (the grammar [`KeyCx::value`] writes).
+    fn value(&mut self, depth: u32) -> Res<()> {
+        Self::depth(depth)?;
+        let d = depth + 1;
+        match self.r.0.first() {
+            Some(&t) if t <= TAG_AGGREGATE => return read_plain(&mut self.r).map(drop),
+            _ => {}
+        }
+        match self.r.u8()? {
+            TAG_MEMBER_NULL => {
+                if !matches!(self.r.u8()?, 1 | 2) {
+                    return bad("bad null kind");
+                }
+            }
+            TAG_POINTER => {
+                let flags = self.r.u8()?;
+                if flags > 3 {
+                    return bad("bad pointer flags");
+                }
+                match self.r.u8()? {
+                    BASE_DECL | BASE_FUNCTION => self.ent(d)?,
+                    BASE_TYPE_INFO => self.ty(d)?,
+                    BASE_PARAM_OBJECT | BASE_CONST => {
+                        self.ty(d)?;
+                        self.value(d)?;
+                    }
+                    _ => return bad("bad pointer base"),
+                }
+                self.r.var()?;
+                if flags & 2 != 0 {
+                    self.ty(d)?;
+                }
+            }
+            TAG_MEMBER_POINTER => {
+                if self.r.u8()? > 3 {
+                    return bad("bad member pointer flags");
+                }
+                self.ent(d)?;
+                for _ in 0..self.r.var_count(1)? {
+                    self.ent(d)?;
+                }
+            }
+            TAG_REFLECTION => match self.r.u8()? {
+                0 => match self.r.u8()? {
+                    REFL_TYPE => self.ty(d)?,
+                    REFL_ALIAS => self.ent(d)?,
+                    _ => return bad("bad reflection"),
+                },
+                1 | 3 | 4 | 5 => self.ent(d)?,
+                2 => {}
+                6 | 7 => {
+                    self.ty(d)?;
+                    self.value(d)?;
+                }
+                8 | 11 => {
+                    self.ent(d)?;
+                    if self.r.var()? > u64::from(u32::MAX) {
+                        return bad("bad reflection");
+                    }
+                }
+                _ => return bad("bad reflection"),
+            },
+            TAG_AGGREGATE_EX => {
+                self.r.bytes()?;
+                for _ in 0..self.r.var_count(2)? {
+                    self.r.var()?;
+                    self.r.var()?;
+                }
+                for _ in 0..self.r.var_count(3)? {
+                    self.r.var()?;
+                    self.ty(d)?;
+                    self.value(d)?;
+                }
+                for _ in 0..self.r.var_count(2)? {
+                    self.r.var()?;
+                    self.ent(d)?;
+                }
+            }
+            _ => return bad("unknown value tag"),
         }
         Ok(())
     }

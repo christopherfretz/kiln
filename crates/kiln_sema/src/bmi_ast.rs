@@ -34,11 +34,16 @@
 //!
 //! Values. Part 1 carries values that need no declaration or type
 //! identity: integers, enumerators, `bool`, floating-point values, null
-//! pointers and aggregates without pointers or unions. The value's type is
-//! not stored: it is the canonical, unqualified type of the evaluated
-//! expression (the writer checks that it is), so the importer takes it
-//! from its own copy of the expression and checks the decoded value
-//! against it before interning it.
+//! pointers and aggregates without pointers or unions. WP-1047 adds
+//! pointers, references, pointers to members, reflections and aggregates
+//! holding them, written by the entities they name in the instantiation
+//! keys' entity encoding ([`inst`]); the importer resolves each entity to
+//! its own declaration and checks that the declaration's key is the
+//! written one (`value.rs`). The value's type is not stored: it is the
+//! canonical, unqualified type of the evaluated expression (the writer
+//! checks that it is), so the importer takes it from its own copy of the
+//! expression and checks the decoded value against it before interning
+//! it.
 //!
 //! Reading is total: [`decode`] checks every length against the bytes
 //! left before allocating and returns a [`SectionError`] for any malformed
@@ -46,6 +51,7 @@
 //! used (the evaluation runs). Nothing here panics on file contents.
 
 mod inst;
+mod value;
 
 use kiln_ast::consts::{ByteImage, ByteRange, ConstStore, FloatKind, IntBits, NullKind, Scalar};
 use kiln_ast::ids::ArgListId;
@@ -80,11 +86,24 @@ struct EvalKey {
 /// A carried value, without its type.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Carried {
-    Int { signed: bool, width: u32, words: Box<[u64]> },
+    Int {
+        signed: bool,
+        width: u32,
+        words: Box<[u64]>,
+    },
     Bool(bool),
-    Float { kind: FloatKind, bits: u128 },
+    Float {
+        kind: FloatKind,
+        bits: u128,
+    },
     NullPointer,
-    Aggregate { bytes: Box<[u8]>, padding: Box<[ByteRange]> },
+    Aggregate {
+        bytes: Box<[u8]>,
+        padding: Box<[ByteRange]>,
+    },
+    /// Any other value: its whole encoding, tag first (WP-1047; decoded
+    /// against the importer's declarations when it is used).
+    Wire(Box<[u8]>),
 }
 
 /// A malformed carried-constants section (reported as the module file's
@@ -144,6 +163,8 @@ struct Table {
     /// when the table carries nothing for it.
     ent_ix: FxHashMap<FrameSig, Option<u32>>,
     map: FxHashMap<EvalKey, Carried>,
+    /// The entities [`Carried::Wire`] values name, resolved.
+    ix: value::Index,
 }
 
 /// Sema's kind-2 state.
@@ -319,6 +340,7 @@ impl Sema<'_, '_> {
                     insts,
                     ent_ix: FxHashMap::default(),
                     map,
+                    ix: value::Index::default(),
                 });
             }
             Err(SectionError(why)) => {
@@ -461,9 +483,24 @@ impl Sema<'_, '_> {
         }
         let key = self.eval_key(e, ctx, Some(t), inst)?;
         let v = self.bmi.tables[t].map.get(&key)?.clone();
-        let id = self.intern_carried(e, &v)?;
+        let ty = self.carried_type(e);
+        let id = self.intern_carried(t, ty, &v)?;
         self.bmi.hits += 1;
         Some(id)
+    }
+
+    /// The canonical, unqualified type a value of reference type `t`
+    /// refers to, or `None` when `t` is not a reference.
+    pub(super) fn carried_referee(&mut self, t: QualType) -> Option<QualType> {
+        if !matches!(
+            self.ast.types.canonical_view(t),
+            TypeView::LValueRef(_) | TypeView::RValueRef(_)
+        ) {
+            return None;
+        }
+        let p = self.ast.types.pointee(t)?;
+        let c = self.ast.types.canonical(p);
+        Some(self.ast.types.unqualified(c))
     }
 
     /// The canonical, unqualified type of `e`.
@@ -473,10 +510,9 @@ impl Sema<'_, '_> {
         self.ast.types.unqualified(c)
     }
 
-    /// Interns `v` as a value of `e`'s type, or `None` when it does not
-    /// fit that type.
-    fn intern_carried(&mut self, e: ExprId, v: &Carried) -> Option<ConstValueId> {
-        let ty = self.carried_type(e);
+    /// Interns `v`, from table `t`, as a value of type `ty` (canonical),
+    /// or `None` when it does not fit that type.
+    fn intern_carried(&mut self, t: usize, ty: QualType, v: &Carried) -> Option<ConstValueId> {
         let builtin = match self.ast.types.canonical_view(ty) {
             TypeView::Builtin(b) => Some(b),
             _ => None,
@@ -519,6 +555,7 @@ impl Sema<'_, '_> {
                 let img = ByteImage { ty, bytes, relocs: &[], padding, unions: &[] };
                 return self.ast.consts.push_aggregate(img).ok();
             }
+            Carried::Wire(b) => return self.intern_wire(t, ty, b),
         };
         self.ast.consts.push_scalar(value).ok()
     }
@@ -576,10 +613,17 @@ impl Sema<'_, '_> {
                     Err("an evaluation that changed the AST")
                 } else if (self.diags.error_count(), self.diags.warning_count()) != p.diags {
                     Err("an evaluation that emitted a diagnostic")
-                } else if self.ast.consts.ty(*v) != self.carried_type(e) {
-                    Err("a value whose type is not its expression's")
                 } else {
-                    carried_value(&self.ast.consts, *v)
+                    let ty = self.carried_type(e);
+                    let vt = self.ast.consts.ty(*v);
+                    if vt == ty {
+                        self.record_value(*v, false)
+                    } else if self.carried_referee(vt) == Some(ty) {
+                        // A reference's value: its type is the reference's.
+                        self.record_value(*v, true)
+                    } else {
+                        Err("a value whose type is not its expression's")
+                    }
                 }
             }
             Err(_) => Err("an evaluation that failed"),
@@ -607,7 +651,25 @@ impl Sema<'_, '_> {
     }
 }
 
-/// `v` as a carried value, or why it cannot be one.
+impl Sema<'_, '_> {
+    /// `v` as the writer carries it, or why it cannot; `typed` when `v`
+    /// is a reference's value, whose type the entry then names.
+    fn record_value(&mut self, v: ConstValueId, typed: bool) -> Result<Carried, Skip> {
+        let why = match carried_value(&self.ast.consts, v) {
+            Ok(c) if !typed => return Ok(c),
+            Ok(_) => "a reference value",
+            Err(why) => why,
+        };
+        let sm = self.diags.sm();
+        let bmi = &mut self.bmi;
+        let file = |f| file_index(bmi, None, sm, f);
+        inst::value_bytes(&self.ast, sm, file, v, typed).map(Carried::Wire).ok_or(why)
+    }
+}
+
+/// `v` as a carried value of part 1, or why it is not one (a value
+/// [`inst::value_bytes`] may still write: the reason is then why that
+/// could not).
 fn carried_value(store: &ConstStore, v: ConstValueId) -> Result<Carried, Skip> {
     if let Some(s) = store.scalar(v) {
         return match s {
@@ -617,17 +679,16 @@ fn carried_value(store: &ConstStore, v: ConstValueId) -> Result<Carried, Skip> {
             Scalar::Bool { value, .. } => Ok(Carried::Bool(value)),
             Scalar::Float { kind, bits, .. } => Ok(Carried::Float { kind, bits }),
             Scalar::Null { kind: NullKind::Pointer, .. } => Ok(Carried::NullPointer),
-            Scalar::Null { .. } | Scalar::MemberPtr { .. } => Err("a pointer-to-member value"),
-            Scalar::Pointer { .. } => Err("a pointer or reference value"),
-            Scalar::Reflection { .. } => Err("a reflection value"),
+            Scalar::Null { .. } | Scalar::MemberPtr { .. } => {
+                Err("a pointer-to-member value whose member has no key")
+            }
+            Scalar::Pointer { .. } => Err("a pointer or reference value whose object has no key"),
+            Scalar::Reflection { .. } => Err("a reflection value with no key"),
         };
     }
     let Some(img) = store.aggregate(v) else { return Err("an unknown value") };
-    if !img.relocs.is_empty() {
-        return Err("an aggregate holding a pointer");
-    }
-    if !img.unions.is_empty() {
-        return Err("an aggregate holding a union");
+    if !img.relocs.is_empty() || !img.unions.is_empty() {
+        return Err("an aggregate holding a value with no key");
     }
     Ok(Carried::Aggregate { bytes: img.bytes.into(), padding: img.padding.into() })
 }
@@ -639,17 +700,36 @@ const TAG_BOOL: u8 = 1;
 const TAG_FLOAT: u8 = 2;
 const TAG_NULL: u8 = 3;
 const TAG_AGGREGATE: u8 = 4;
+/// A null pointer to member (its kind follows).
+const TAG_MEMBER_NULL: u8 = 5;
+const TAG_POINTER: u8 = 6;
+const TAG_MEMBER_POINTER: u8 = 7;
+const TAG_REFLECTION: u8 = 8;
+/// An aggregate with relocations or union members.
+const TAG_AGGREGATE_EX: u8 = 9;
+/// A whole entry's value whose type is a reference to its expression's.
+const TAG_TYPED: u8 = 10;
 
 /// The first word of a versioned section. A version-1 section (WP-985)
 /// starts with its path count, which is never this.
 const VERSIONED: u32 = u32::MAX;
 
 /// The section format version written (spec/modules.md §11.11
-/// "Encoding"): 2 adds instantiation keys.
-const VERSION: u32 = 2;
+/// "Encoding"): 2 adds instantiation keys, 3 the values of tags 5 to 9
+/// (WP-1047).
+const VERSION: u32 = 3;
 
 fn put_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_le_bytes());
+}
+
+/// An unsigned LEB128 varint.
+fn put_var(out: &mut Vec<u8>, mut v: u64) {
+    while v >= 0x80 {
+        out.push(v as u8 | 0x80);
+        v >>= 7;
+    }
+    out.push(v as u8);
 }
 
 fn put_bytes(out: &mut Vec<u8>, b: &[u8]) {
@@ -677,6 +757,7 @@ fn put_value(out: &mut Vec<u8>, v: &Carried) {
             out.extend_from_slice(&bits.to_le_bytes());
         }
         Carried::NullPointer => out.push(TAG_NULL),
+        Carried::Wire(b) => out.extend_from_slice(b),
         Carried::Aggregate { bytes, padding } => {
             out.push(TAG_AGGREGATE);
             put_bytes(out, bytes);
@@ -796,10 +877,43 @@ impl<'a> Rd<'a> {
         let n = self.count(1)?;
         self.take(n)
     }
+    /// An unsigned LEB128 varint of at most 64 bits.
+    fn var(&mut self) -> Res<u64> {
+        let mut v = 0u64;
+        for i in 0..10 {
+            let b = self.u8()?;
+            if i == 9 && b > 1 {
+                return bad("varint overflow");
+            }
+            v |= u64::from(b & 0x7f) << (7 * i);
+            if b & 0x80 == 0 {
+                return Ok(v);
+            }
+        }
+        bad("varint overflow")
+    }
+    /// A varint count, checked as [`Rd::count`].
+    fn var_count(&mut self, min: usize) -> Res<usize> {
+        let n = usize::try_from(self.var()?).unwrap_or(usize::MAX);
+        if n.saturating_mul(min.max(1)) > self.0.len() {
+            return bad("length exceeds the section");
+        }
+        Ok(n)
+    }
 }
 
-/// Reads one carried value.
-fn read_value(r: &mut Rd<'_>) -> Res<Carried> {
+/// Reads one carried value whose positions name paths below `npaths`.
+fn read_value(r: &mut Rd<'_>, npaths: usize) -> Res<Carried> {
+    if r.0.first().is_some_and(|&t| t <= TAG_AGGREGATE) {
+        return read_plain(r);
+    }
+    let start = r.0;
+    inst::check_value(r, npaths)?;
+    Ok(Carried::Wire(start[..start.len() - r.0.len()].into()))
+}
+
+/// Reads one value of tags 0 to 4 (part 1).
+fn read_plain(r: &mut Rd<'_>) -> Res<Carried> {
     Ok(match r.u8()? {
         TAG_INT => {
             let signed = r.flag()?;
@@ -869,14 +983,14 @@ struct Decoded {
     map: FxHashMap<EvalKey, Carried>,
 }
 
-/// Decodes a carried-constants section of version 1 or 2. Total: any
+/// Decodes a carried-constants section of version 1, 2 or 3. Total: any
 /// malformed input is a [`SectionError`].
 fn decode(bytes: &[u8]) -> Res<Decoded> {
     let mut r = Rd(bytes);
     let v2 = bytes.get(..4) == Some(&VERSIONED.to_le_bytes()[..]);
     if v2 {
         r.take(4)?;
-        if r.u32()? != VERSION {
+        if !(2..=VERSION).contains(&r.u32()?) {
             return bad("unsupported section version");
         }
     }
@@ -928,7 +1042,7 @@ fn decode(bytes: &[u8]) -> Res<Decoded> {
             at: LocKey([w[0], w[1], w[2], w[3]]),
             expr: LocKey([w[4], w[5], w[6], w[7]]),
         };
-        let v = read_value(&mut r)?;
+        let v = read_value(&mut r, paths.len())?;
         if map.insert(key, v).is_some() {
             return bad("duplicate entry");
         }
@@ -1114,9 +1228,9 @@ mod tests {
             decode(&trailing),
             Err(SectionError("carried constants: trailing bytes".into()))
         );
-        let mut v3 = b.clone();
-        v3[4..8].copy_from_slice(&3u32.to_le_bytes());
-        assert_eq!(decode(&v3).unwrap_err(), bad::<()>("unsupported section version").unwrap_err());
+        let mut v4 = b.clone();
+        v4[4..8].copy_from_slice(&4u32.to_le_bytes());
+        assert_eq!(decode(&v4).unwrap_err(), bad::<()>("unsupported section version").unwrap_err());
         let paths_len = 4 + (4 + 6) + (4 + 3);
         let insts_at = 8 + paths_len;
         // The first key's entity tag.
