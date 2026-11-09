@@ -22,7 +22,7 @@ mod types;
 pub(crate) use local::{LocalLate, LocalMethod};
 
 use kiln_ast::DeclId;
-use kiln_ast::decl::{DeclFlags, DeclKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, EnumData};
 use kiln_ast::ids::{ArgListId, ListId, NnsId, QualType};
 use kiln_ast::types::{ArgView, Nns, TemplateArg, TemplateName, TypeFlags};
 use kiln_source::Loc;
@@ -890,6 +890,17 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             if node.kind() == DeclKind::ParmVar {
                 return self.nested_prototype_param(d, loc);
             }
+            // A local class or enumeration of a function pattern named
+            // before its declaration statement is instantiated (`void
+            // g(struct x1); struct x1 {};`, or the invalid forward
+            // reference `enum V *pv;`): declared now, without diagnostics
+            // (the pattern's were given), as clang's `FindInstantiatedDecl`
+            // does (`NeedInstantiate`, `SubstDecl`). WP-1103.
+            if matches!(node.kind(), DeclKind::CXXRecord | DeclKind::Enum)
+                && self.sema.ast.decls.function(parent).is_some()
+            {
+                return self.local_tag_used_early(d);
+            }
             // A member of a class template pattern this substitution does
             // not instantiate (named in the deduction guide of one of its
             // constructor templates, [over.match.class.deduct]/1.2, or of
@@ -1008,6 +1019,32 @@ impl Substituter<'_, '_, '_> {
             let first = self.sema.ast.first(d);
             if first == d { None } else { templates.find_member(parent, first) }
         })
+    }
+
+    /// Local class or enumeration `d` of the function pattern, declared
+    /// in the instantiation ahead of its declaration statement (see
+    /// [`Self::find_instantiated_decl`]); a definition later in the
+    /// body redeclares it.
+    fn local_tag_used_early(&mut self, d: DeclId) -> SubstResult<DeclId> {
+        let held = self.sema.diag_capture.replace(Some((self.sema.inst.stack.len(), Vec::new())));
+        let x = if let Some(data) = self.sema.ast.decls.enumeration(d).copied() {
+            // Declared only: its definition statement defines it.
+            let n = *self.sema.ast.decls.get(d);
+            let fixed = match data.int_type.filter(|_| data.is_fixed()) {
+                Some(t) => Some(self.ty(t, n.loc()).unwrap_or(QualType::INT)),
+                None => None,
+            };
+            let scoped = data.flags & (EnumData::SCOPED | EnumData::SCOPED_STRUCT);
+            let name = n.name().as_ident().filter(|_| !n.name().is_empty()).map(|s| (s, n.loc()));
+            let kw = kiln_ast::types::TagKeyword::Enum;
+            Ok(self.sema.act_on_tag(kw, name, None, crate::decl::TagUse::Declaration, scoped, fixed, n.loc()))
+        } else {
+            Ok(self.local_class(d, None))
+        };
+        let _ = self.sema.diag_capture.replace(held);
+        let x = x?;
+        self.locals.insert(d, DeclOrPack::Decl(x));
+        Ok(x)
     }
 
     /// The instantiation of the pattern of a class template or class
