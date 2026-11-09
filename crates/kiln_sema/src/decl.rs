@@ -3805,10 +3805,13 @@ impl Sema<'_, '_> {
         }
         let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());
         spec = spec.with_variadic(variadic);
-        // [basic.start.main]/2: `main` returns `int`.
-        if sym_str(self, name) == "main"
-            && self.ast.redecl_context(ctx) == self.ast.tu
-            && let Some(p) = self.ast.types.proto(ty)
+        // [basic.start.main]/2: `main` returns `int`. clang's `CheckMain`
+        // makes a `main` with a wrong return type or parameter list
+        // invalid: it redeclares nothing and is not reported as a
+        // template.
+        let mut main_invalid = false;
+        if self.is_global_main_name(ctx, name)
+            && let Some(p) = self.ast.types.proto(ty).copied()
         {
             // [basic.start.main]/3: `main` is not static or inline (clang's
             // `CheckMain` diagnoses and keeps the declaration).
@@ -3821,7 +3824,9 @@ impl Sema<'_, '_> {
             let ret = p.ret();
             if !self.ast.types.same_type(ret, QualType::INT) && !self.is_error_type(ret) {
                 self.error(DiagId::sema_main_returns_nonint, ds.type_loc.unwrap_or(ds.loc));
+                main_invalid = true;
             }
+            main_invalid |= self.check_main_params(&p, d.name_loc());
             // P3618R0 ([basic.start.main]/3): `main` is attached to the
             // global module; clang 22 warns in a named module's purview
             // outside a linkage specification (clang 19 is silent).
@@ -3840,6 +3845,10 @@ impl Sema<'_, '_> {
                 let m = self.diag(DiagId::sema_constexpr_main, l).arg(which);
                 self.emit(m);
                 spec = spec.with_constexpr_kind(ConstexprKind::None).with_implicit_inline(false);
+            }
+            if !main_invalid && self.templ.cur.is_some() {
+                self.diagnose_main_template(d.name_loc());
+                main_invalid = true;
             }
         }
         let mut prev_ok = None;
@@ -3892,6 +3901,7 @@ impl Sema<'_, '_> {
         let global_new_delete = d.op_name.is_some_and(|op| {
             !method
                 && !friend
+                && self.kind_of(self.ast.redecl_context(ctx)) != DeclKind::Namespace
                 && matches!(
                     op,
                     OverloadedOperator::New
@@ -3930,7 +3940,12 @@ impl Sema<'_, '_> {
         // An invalid declaration (an illegal storage class, an invalid
         // parameter) redeclares nothing either: clang checks it against no
         // previous declaration (`ActOnFunctionDeclarator`).
-        let prev = if global_new_delete || deferred_friend || invalid_decl || bad_local_friend {
+        let prev = if global_new_delete
+            || deferred_friend
+            || invalid_decl
+            || bad_local_friend
+            || main_invalid
+        {
             None
         } else if let LocalFriend::Redeclares(p) = local_friend
             && !self.in_templated_class(Some(lexical))
@@ -3998,6 +4013,7 @@ impl Sema<'_, '_> {
             None if !method
                 && !friend
                 && !invalid_decl
+                && !main_invalid
                 && d.qualifier.is_none()
                 && self.templ.cur.is_none()
                 && dname.as_ident().is_some() =>
@@ -4005,7 +4021,13 @@ impl Sema<'_, '_> {
                 // WP-803: a `pass_object_size` overload is never the C
                 // entity of its name (clang `IsOverload`).
                 let own = new_fn.is_static || new_fn.pass_object_size;
-                let p = self.extern_c_prev(name, false, own, d.name_loc());
+                // `main` is not overloaded: another signature conflicts
+                // ([basic.start.main]/3).
+                let main = self.is_global_main_name(ctx, name);
+                let p = match self.main_overload_prev(name).filter(|_| main) {
+                    Some(p) => Some(p),
+                    None => self.extern_c_prev(name, false, own, d.name_loc()),
+                };
                 extern_c_redecl = p.is_some();
                 p
             }
@@ -4044,6 +4066,25 @@ impl Sema<'_, '_> {
             let (t, p) = self.act_on_global_new_delete_decl(op, ty);
             ty = t;
             prev_ok = p;
+            // A static redeclaration of a global allocation function
+            // (clang `MergeFunctionDecl`, ahead of the scope check).
+            if let Some(p) = p
+                && spec.storage() == FnStorage::Static
+                && self.ast.decls.function(p).is_some_and(|x| x.spec.storage() != FnStorage::Static)
+            {
+                let msg =
+                    self.diag(DiagId::sema_static_non_static, d.name_loc()).arg(fname.clone());
+                let msg = if self.ast.decls.get(p).has(DeclFlags::IMPLICIT) {
+                    msg.with_note(
+                        self.diag(DiagId::note_previous_implicit_declaration, d.name_loc()),
+                    )
+                } else {
+                    self.note_prev(msg, p, false)
+                };
+                self.emit(msg);
+                prev_ok = None;
+                invalid_redecl = true;
+            }
             if let Some(p) = p {
                 let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
                 if !self.same_type_and_exc(pty, ty)
@@ -4522,7 +4563,23 @@ impl Sema<'_, '_> {
                 self.ast.decls.set_flags(f, DeclFlags::INVALID);
             }
         } else if let Some(op) = d.op_name {
-            if !global_new_delete
+            if matches!(
+                op,
+                OverloadedOperator::New
+                    | OverloadedOperator::ArrayNew
+                    | OverloadedOperator::Delete
+                    | OverloadedOperator::ArrayDelete
+            ) {
+                // [basic.stc.dynamic.allocation]/1,
+                // [basic.stc.dynamic.deallocation]/1-2 (`alloc_decl`).
+                if !friend
+                    && !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
+                    && (self.check_new_delete_scope(f, &fname)
+                        || !self.check_new_delete_signature(f, op, new_fn.head.is_some(), &fname))
+                {
+                    self.ast.decls.set_flags(f, DeclFlags::INVALID);
+                }
+            } else if !global_new_delete
                 && !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
                 && !self.check_operator_decl(f)
             {
@@ -5588,6 +5645,8 @@ impl Sema<'_, '_> {
         if self.kind_of(ctx) == DeclKind::CXXRecord {
             return self.act_on_static_member(ds, ty, d, name, spec);
         }
+        let local_extern = spec.storage() == VarStorage::Extern;
+        self.check_main_variable(ctx, name, local_extern, ds.loc);
         let mut prev_ok = None;
         // A redefinition (or a redeclaration with another type) is invalid
         // (clang `setInvalidDecl`), so a later lookup that also finds the

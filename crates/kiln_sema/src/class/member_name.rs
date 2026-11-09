@@ -3,9 +3,9 @@
 //! `CheckCompletedCXXClass` (spec/sema.md §4.4 "Members named as their
 //! class").
 
+use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::names::DeclName;
-use kiln_ast::DeclId;
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
@@ -43,7 +43,11 @@ impl Sema<'_, '_> {
         let members: Vec<DeclId> = self.ast.decls.members(r).collect();
         let has_ctor = members.iter().any(|&m| {
             let n = self.ast.decls.get(m);
-            let f = if n.kind() == DeclKind::FunctionTemplate { self.pattern_of(m).unwrap_or(m) } else { m };
+            let f = if n.kind() == DeclKind::FunctionTemplate {
+                self.pattern_of(m).unwrap_or(m)
+            } else {
+                m
+            };
             !n.has(DeclFlags::IMPLICIT) && self.kind_of(f) == DeclKind::CXXConstructor
         });
         if !has_ctor {

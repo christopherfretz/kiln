@@ -16,6 +16,7 @@
 
 mod absolute_value;
 mod align_redecl;
+mod alloc_decl;
 mod annot;
 mod arm_builtins;
 mod asm;
@@ -80,6 +81,7 @@ mod local_friend;
 pub mod lookup;
 mod loop_hint;
 mod macro_fixit;
+mod main_decl;
 mod meta;
 mod missing_noreturn;
 pub mod modules;
@@ -336,6 +338,9 @@ pub struct Sema<'a, 'sm> {
     /// `LangOptions::NoBuiltinFuncs`): each is not recognized as a
     /// library builtin; `std-<name>` names a `std` one (WP-808).
     pub no_builtin_fns: Vec<String>,
+    /// `-ffreestanding` (clang `LangOptions::Freestanding`): `main` is
+    /// an ordinary name ([basic.start.main]/1; WP-1015).
+    pub freestanding: bool,
     /// `-f[no-]sized-deallocation` (clang `LangOptions::SizedDeallocation`,
     /// default on; WP-808): off, the sized global `operator delete` and
     /// `operator delete[]` are not declared implicitly, and a global
@@ -1243,6 +1248,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             sized_deallocation: true,
             char8: None,
             no_builtin_fns: Vec::new(),
+            freestanding: false,
             lib_builtin_name: |n, _| kiln_ast::decl::builtin::lib_by_name(n).is_some(),
             no_builtin_pending: Vec::new(),
             math_errno: true,

@@ -92,6 +92,7 @@ note_previous_definition = Note (0) "previous definition is here";
 note_previous_exception_handler = Note (1) "for type {0}";
 note_previous_explicit_instantiation = Note (0) "previous explicit instantiation is here";
 note_previous_field_init = Note (1) "previous initialization for field {0} is here";
+note_previous_implicit_declaration = Note (0) "previous implicit declaration is here";
 note_previous_namespace_alias = Note (1) "previously defined as an alias for '{0}'";
 note_previous_template_specialization = Note (0) "previous template specialization is here";
 note_previous_use = Note (0) "previous use is here";
