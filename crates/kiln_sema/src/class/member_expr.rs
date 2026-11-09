@@ -976,9 +976,19 @@ impl Sema<'_, '_> {
             let found = self.lookup_qualified(q.ctx, name, LookupKind::Ordinary);
             self.type_named_by(&found)
         };
+        // `p->N::T::~TT()` / `p->N::TT::~TT()` with `TT` a member of `N`
+        // only: a qualifier `S::C::` looks `Q` up in `S`
+        // ([basic.lookup.qual.general]/4; clang's `getDestructorName`
+        // looks in the prefix of the specifier).
+        let in_prefix = || {
+            let c = self.nns_prefix_ctx(q.nns)?;
+            let found = self.lookup_qualified(c, name, LookupKind::Ordinary);
+            self.type_named_by(&found)
+        };
         let named = (!self.is_dependent_ctx(q.ctx))
             .then(in_qual)
             .flatten()
+            .or_else(in_prefix)
             .or_else(|| {
                 let found = self.lookup_in_class(obj.def?, name, LookupKind::Ordinary);
                 self.type_named_by(&found)
@@ -1022,6 +1032,184 @@ impl Sema<'_, '_> {
             name_loc,
             op_loc,
         )
+    }
+
+    /// The context the prefix `S` of a nested-name-specifier `S::C::`
+    /// names, when it is a namespace or a non-dependent class or
+    /// enumeration (`None` without a prefix).
+    fn nns_prefix_ctx(&self, nns: kiln_ast::ids::NnsId) -> Option<DeclId> {
+        use kiln_ast::types::Nns;
+        let p = self.ast.types.nns_prefix(nns)?;
+        match self.ast.types.nns_view(p) {
+            Nns::Global => Some(self.ast.tu),
+            Nns::Namespace { ns, .. } | Nns::NamespaceAlias { ns, .. } => Some(ns),
+            Nns::Type { ty, .. } if !self.is_dependent_type(ty) => {
+                let t = &self.ast.types;
+                let r = t.as_record(ty).or_else(|| t.as_enum(ty))?;
+                Some(self.ast.definition(r).unwrap_or(r))
+            }
+            _ => None,
+        }
+    }
+
+    /// The template-name `name` of a destructor name `~name<args>` in a
+    /// member access on `base` ([expr.prim.id.dtor]/1,
+    /// [basic.lookup.qual.general]/4): looked up in the qualifier `N`
+    /// (its injected-class-name, `p->N::C<int>::~C<int>()`), then in
+    /// `N`'s prefix, then in the object's class (`c->~C<int>()` with `C`
+    /// visible only there), then here.
+    pub fn classify_member_destructor_template(
+        &self,
+        base: ExprId,
+        arrow: bool,
+        qual: Option<crate::using::Qualifier>,
+        name: kiln_source::symbol::Symbol,
+    ) -> crate::decl::NameClass {
+        use crate::decl::NameClass;
+        let mut scopes = Vec::with_capacity(3);
+        if let Some(q) = qual {
+            if !self.is_dependent_ctx(q.ctx) {
+                scopes.push(q.ctx);
+            }
+            scopes.extend(self.nns_prefix_ctx(q.nns));
+        }
+        if !self.is_err_expr(base) {
+            let bt = self.ety(base);
+            let obj = if arrow { self.ast.types.pointee(bt) } else { Some(bt) };
+            if let Some(r) = obj.and_then(|o| self.ast.types.as_record(o))
+                && !self.is_dependent_type(self.tag_type(r))
+            {
+                scopes.push(self.ast.definition(r).unwrap_or(r));
+            } else if let Some(t) = obj.and_then(|o| self.dependent_spec_template(o))
+                && self.ast.decls.get(t).name().as_ident() == Some(name)
+            {
+                // `c->~C<X>()` on a `C<X>*` in a template: the
+                // injected-class-name of the (dependent) specialization.
+                return NameClass::TypeTemplate(t);
+            }
+        }
+        for c in scopes {
+            let found = self.classify_name(name, Some(c));
+            if matches!(found, NameClass::TypeTemplate(_)) {
+                return found;
+            }
+        }
+        self.classify_name(name, None)
+    }
+
+    /// The class template of a dependent specialization type `C<X>`.
+    fn dependent_spec_template(&self, o: QualType) -> Option<DeclId> {
+        use kiln_ast::types::TemplateName;
+        if !self.is_dependent_type(o) {
+            return None;
+        }
+        let c = self.ast.types.canonical(o);
+        let TypeView::TemplateSpecialization { name, .. } = self.ast.types.view(c.ty()) else {
+            return None;
+        };
+        let mut n = name;
+        for _ in 0..64 {
+            match self.ast.types.template_name_view(n) {
+                TemplateName::Qualified { underlying, .. } => n = underlying,
+                TemplateName::Template(d) => {
+                    return (self.kind_of(d) == DeclKind::ClassTemplate).then_some(d);
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    /// `~name<args>` in a member access where `name` (classified as
+    /// `class` by [`Sema::classify_member_destructor_template`]) names no
+    /// class template: after a qualifier "destructor name 'name' does
+    /// not refer to a template"; unqualified, a non-template is "'name'
+    /// does not refer to a template" and an undeclared name is no member
+    /// of the object's class (clang's `ActOnMemberAccessExpr` /
+    /// `getDestructorName`).
+    pub fn diagnose_destructor_non_template(
+        &mut self,
+        base: ExprId,
+        arrow: bool,
+        qualified: bool,
+        class: crate::decl::NameClass,
+        name: kiln_source::symbol::Symbol,
+        loc: Loc,
+    ) {
+        use crate::decl::NameClass;
+        let text = self.ast.symbols().as_str(name).to_owned();
+        if qualified {
+            let msg = self.diag(DiagId::sema_dtor_name_not_template, loc).arg(text);
+            self.emit(msg);
+            return;
+        }
+        let found = match class {
+            NameClass::Type(_, d) | NameClass::Value(d) | NameClass::Namespace(d) => Some(d),
+            _ => None,
+        };
+        if let Some(d) = found {
+            let at = self.ast.decls.get(d).loc();
+            let msg = self
+                .diag(DiagId::sema_does_not_refer_to_template, loc)
+                .arg(text)
+                .with_note(self.diag(DiagId::note_declared_non_template, at));
+            self.emit(msg);
+            return;
+        }
+        let bt = if self.is_err_expr(base) { QualType::ERROR } else { self.ety(base) };
+        let obj = if arrow { self.pointee_sugared(bt) } else { Some(bt) };
+        if let Some(o) = obj.filter(|o| self.ast.types.as_record(*o).is_some()) {
+            let t = self.ast.types.unqualified(o);
+            let msg = self.diag(DiagId::sema_no_member, loc).arg(text).arg(self.ty_arg(t));
+            self.emit(msg);
+            return;
+        }
+        let msg = self.diag(DiagId::sema_no_template_named, loc).arg(text);
+        self.emit(msg);
+    }
+
+    /// `x.N::~C<args>()` / `p->~C<args>()` on a class object: the
+    /// destructor of the class type `destroyed` the template-id names
+    /// ([expr.prim.id.dtor]/1), a member of the qualifier `N` when one is
+    /// written ([expr.ref]/4: the call is then not virtual,
+    /// [class.virtual]/16). `tilde` is the `~`, `loc` the template name.
+    #[allow(clippy::too_many_arguments, reason = "the parts of a member access")]
+    pub fn act_on_member_destructor_type_q(
+        &mut self,
+        base: ExprId,
+        qual: Option<crate::using::Qualifier>,
+        destroyed: QualType,
+        tilde: Loc,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        let obj = match self.destructor_object(base, loc, op_loc, arrow) {
+            Ok(o) => o,
+            Err(e) => return e,
+        };
+        let name_loc = if tilde.is_valid() { tilde } else { loc };
+        // `c->~C<long>()` on a `C<int>`: the member `~C<long>` is looked
+        // up in the object's class, so a mismatch is "no member named
+        // '~C'" (clang builds the member reference by that name).
+        if qual.is_none()
+            && let Some(def) = obj.def
+            && !self.ast.types.is_dependent(obj.ty)
+            && !self.ast.types.is_dependent(destroyed)
+            && !self.is_error_type(destroyed)
+        {
+            if let Some(c) =
+                self.ast.types.as_record(destroyed).and_then(|r| self.ast.definition(r))
+            {
+                self.ensure_implicit(c, crate::class::special::SpecialKind::Dtor);
+            }
+            let canon = self.ast.types.canonical(destroyed).ty();
+            let dn = self.ast.names.destructor(canon);
+            let DtorObject { base, b, ty, arrow, .. } = obj;
+            return self.member_access(base, b, ty, def, arrow, dn, None, name_loc);
+        }
+        let q = qual.map_or(DtorQual::None, DtorQual::Written);
+        self.finish_member_destructor(obj, destroyed, None, q, loc, name_loc, op_loc)
     }
 
     /// True if `a` and `b` are the same type ignoring top-level cv.

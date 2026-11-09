@@ -3016,6 +3016,15 @@ impl Parser<'_, '_> {
             d.outer_paren = Some((d.chunks.len(), open));
             d.parens.push((d.chunks.len(), open, close));
             self.discard_prohibited_cxx11_attrs();
+            // The inner declarator entered and left the scope of its
+            // qualified declarator-id; the suffixes after the parentheses
+            // (`X (*C<X>::f())(T)`) are still in it ([basic.lookup.unqual]/1,
+            // [dcl.meaning]; clang's `ParseDirectDeclarator` re-enters it).
+            if !d.invalid
+                && let Some(q) = d.qualifier
+            {
+                entered = self.s.act_on_enter_declarator_scope(q);
+            }
         } else if self.at_kw(Kw::Operator)
             && d.ctx != DeclaratorContext::TypeName
             && matches!(self.kw_of(self.peek(1)), Some(Kw::New | Kw::Delete))
