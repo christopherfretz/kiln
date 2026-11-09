@@ -255,6 +255,10 @@ pub(crate) fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
     loop {
         match ast.exprs.get(e).kind() {
             ExprKind::ParenExpr => e = ast.exprs.operand(e),
+            // GNU `__extension__` is transparent (clang `IgnoreParens`).
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Extension => {
+                e = ast.exprs.operand(e);
+            }
             ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
                 e = ast.exprs.choose_chosen(e).expect("guarded");
             }
@@ -1645,7 +1649,7 @@ impl Scan<'_> {
                 let op = ast.exprs.unary_op(e);
                 let x = ast.exprs.operand(e);
                 match op {
-                    UnaryOp::PreInc | UnaryOp::PreDec => self.expr(x, ok),
+                    UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::Extension => self.expr(x, ok),
                     UnaryOp::PostInc | UnaryOp::PostDec => self.expr(x, true),
                     _ => self.expr(x, false),
                 }
@@ -3425,7 +3429,7 @@ impl Compiler<'_> {
         let op = self.ast().exprs.unary_op(e);
         let x = self.ast().exprs.operand(e);
         match op {
-            UnaryOp::Plus => self.rv_inner(x, dst),
+            UnaryOp::Plus | UnaryOp::Extension => self.rv_inner(x, dst),
             UnaryOp::Minus => {
                 let r = self.rv(x);
                 match self.kind(ty) {
@@ -4626,6 +4630,7 @@ impl Compiler<'_> {
                         }
                     }
                     UnaryOp::Real | UnaryOp::Imag => self.real_imag_lv(e, acc),
+                    UnaryOp::Extension => self.lv(x, acc),
                     UnaryOp::PreInc | UnaryOp::PreDec => {
                         let place = self.lv_rmw(x, e);
                         let xty = self.ety(x);
@@ -5018,6 +5023,10 @@ impl Compiler<'_> {
         }
         match n.kind() {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
+                let op = self.ast().exprs.operand(e);
+                return self.init_inner(op, p, ty);
+            }
+            ExprKind::UnaryOperator if self.ast().exprs.unary_op(e) == UnaryOp::Extension => {
                 let op = self.ast().exprs.operand(e);
                 return self.init_inner(op, p, ty);
             }
@@ -5524,6 +5533,10 @@ impl Compiler<'_> {
             ExprKind::CXXThrowExpr => self.throw_expr(e),
             ExprKind::StmtExpr => self.stmt_expr(e, None),
             ExprKind::ParenExpr => {
+                let op = self.ast().exprs.operand(e);
+                self.effect(op);
+            }
+            ExprKind::UnaryOperator if self.ast().exprs.unary_op(e) == UnaryOp::Extension => {
                 let op = self.ast().exprs.operand(e);
                 self.effect(op);
             }

@@ -398,6 +398,10 @@ impl Sema<'_, '_> {
                 ExprKind::ParenExpr | ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
                     e = self.ast.exprs.operand(e);
                 }
+                // GNU `__extension__` (clang `IgnoreParensSingleStep`).
+                ExprKind::UnaryOperator if self.ast.exprs.unary_op(e) == UnaryOp::Extension => {
+                    e = self.ast.exprs.operand(e);
+                }
                 ExprKind::SubstNonTypeTemplateParmExpr => e = self.ast.exprs.subst_replacement(e),
                 _ => break,
             }
@@ -425,9 +429,13 @@ impl Sema<'_, '_> {
         let mut e = e;
         for _ in 0..256 {
             // clang `IgnoreParensSingleStep` also looks through a
-            // `__builtin_choose_expr` to its chosen operand.
+            // `__builtin_choose_expr` to its chosen operand and through
+            // GNU `__extension__`.
             match self.ast.exprs.get(e).kind() {
                 ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
+                ExprKind::UnaryOperator if self.ast.exprs.unary_op(e) == UnaryOp::Extension => {
+                    e = self.ast.exprs.operand(e);
+                }
                 ExprKind::ChooseExpr => match self.ast.exprs.choose_chosen(e) {
                     Some(c) => e = c,
                     None => break,
@@ -2861,6 +2869,16 @@ impl Sema<'_, '_> {
     pub fn act_on_unary(&mut self, op: UnaryOp, e: ExprId, loc: Loc) -> ExprId {
         if self.is_err_expr(e) {
             return self.recover_err(&[e], loc);
+        }
+        if op == UnaryOp::Extension {
+            // GNU `__extension__ e` is always built in and applies no
+            // conversion: it has the operand's type, value category and
+            // object kind, dependent or not (clang `BuildUnaryOp`,
+            // "extension is always a builtin operator"). It is not an
+            // id-expression, so `decltype(__extension__ x)` is `T&` for
+            // an lvalue `x` and mangles `DT` (spec/abi.md, WP-1029).
+            let t = self.ety(e);
+            return self.builder().unary(op, e, t, loc, ExprFlags::CANNOT_OVERFLOW);
         }
         let e = if op == UnaryOp::AddrOf {
             self.undo_dependent_implicit_member(e)

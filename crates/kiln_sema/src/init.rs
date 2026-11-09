@@ -2,7 +2,7 @@
 //! of scalars, references, arrays and aggregates (spec/sema.md §6).
 
 use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, FieldData, TagKind};
-use kiln_ast::expr::{ExprKind, ValueCategory};
+use kiln_ast::expr::{ExprKind, UnaryOp, ValueCategory};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::symbol::Symbol;
@@ -142,6 +142,10 @@ impl Sema<'_, '_> {
             match self.ast.exprs.get(e).kind() {
                 ExprKind::StringLiteral => return Some(e),
                 ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
+                // clang `IsStringInit` (`IgnoreParens`): GNU `__extension__`.
+                ExprKind::UnaryOperator if self.ast.exprs.unary_op(e) == UnaryOp::Extension => {
+                    e = self.ast.exprs.operand(e);
+                }
                 _ => return None,
             }
         }

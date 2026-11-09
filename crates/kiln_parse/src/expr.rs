@@ -525,8 +525,12 @@ impl Parser<'_, '_> {
             }
             Some(Kw::DataSizeof) => return self.parse_sizeof_alignof(TraitKind::DataSizeOf),
             Some(Kw::Extension) => {
+                // GNU `__extension__ e`: clang keeps a `UO_Extension`
+                // node, which `decltype` and the mangler see
+                // (spec/abi.md, WP-1029); sema looks through it.
                 self.bump();
-                return self.parse_cast_expr();
+                let e = self.parse_cast_expr()?;
+                return Some(self.s.act_on_unary(UnaryOp::Extension, e, loc));
             }
             Some(k @ (Kw::Real | Kw::Imag)) => {
                 // GNU `__real__ e` / `__imag__ e` (clang's `ParseCastExpression`).

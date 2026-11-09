@@ -4358,6 +4358,10 @@ impl Cg<'_> {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
             }
+            // GNU `__extension__` (clang `AggExprEmitter::VisitUnaryExtension`).
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Extension => {
+                self.agg_visit(ast.exprs.operand(e), dest, zeroed)
+            }
             ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
                 self.emit_coawait(e, crate::coro::Want::Agg(dest, zeroed))?;
                 Ok(())
