@@ -1966,6 +1966,20 @@ last could then come from different racers, and the entry left behind
 was a miss, rebuilt by the next compile (1 in 100 races of 4 compiles,
 about 1 in 12 of 16).
 
+**Dependency output** (WP-1051). The hook returns the module file and
+the files its build read, as the stamp lists them (on a miss, the list
+the new stamp is written from). `kiln_pp` reports the read through
+`PpCallbacks::module_file_read` and brackets every unit read from a
+module file with `PpCallbacks::module_unit`, so the dependency list
+skips what a capsule replay enters (an image reads no file at all). An
+importer's `-MD`/`-MMD` rule therefore lists the entry's `<name>.pcm`
+(absolute) and, under `-MD`, the stamped inputs as system files: the
+same bytes on a hit and on a miss, and for both kinds of module file
+(spec/driver.md "Dependency output"). The nested build passes
+`-fno-module-file-deps`, so `std.compat`'s stamp lists `std`'s inputs
+but not `std.pcm`, whose modification time changes whenever a racing
+compile renames the same bytes into place.
+
 **Fallback.** An unwritable root (a read-only directory, a path through
 a regular file), a failed build, or a failed stamp write is never an
 error. The compile builds the module in-process (part A) and says so in
@@ -2017,8 +2031,6 @@ interface or `stdapp`'s source never rebuilds the std module.
 
 - No eviction: dead entries stay until removed by hand. Each entry is
   about 9 MiB, and every kiln rebuild changes the key.
-- `-MD` on a hit still lists the libc++ headers the module read, as
-  part A does. This is correct for make, and a capsule replays them.
 
 ## Tests
 

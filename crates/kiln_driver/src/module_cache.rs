@@ -156,7 +156,7 @@ pub(crate) fn for_job(
     };
     let cache = Rc::new(cache);
     Some(kiln_pp::StdModuleCache(Rc::new(move |name: &str, source: &Path| {
-        cache.lookup(name, source)
+        cache.lookup(name, source).map(|(path, inputs)| kiln_pp::StdModuleFile { path, inputs })
     })))
 }
 
@@ -186,16 +186,18 @@ impl StdCache {
     }
 
     /// The module file for `name` (`std` or `std.compat`, whose libc++
-    /// source is `source`): a valid cached one, or one built now; `None`
-    /// to build the unit from its source.
-    fn lookup(&self, name: &str, source: &Path) -> Option<PathBuf> {
+    /// source is `source`): a valid cached one, or one built now, with
+    /// the files its build read as its stamp lists them (the same on a
+    /// hit and on a miss, for the importer's dependency file, WP-1051);
+    /// `None` to build the unit from its source.
+    fn lookup(&self, name: &str, source: &Path) -> Option<(PathBuf, Vec<String>)> {
         let dir = self.entry_dir(source);
         let pcm = dir.join(format!("{name}.pcm"));
         let stamp = dir.join(format!("{name}.stamp"));
         let lock_path = dir.join(format!("{name}.lock"));
         // A hit takes no lock: the stamp first, then the module file it
         // vouches for.
-        if entry_valid(&stamp, &pcm) {
+        if let Some(inputs) = entry_valid(&stamp, &pcm) {
             // A lock file here was left by a compile killed while it held
             // it; it is removed when free (never waiting for it).
             if lock_path.exists()
@@ -204,7 +206,7 @@ impl StdCache {
                 drop(stale);
             }
             self.remark(&format!("using '{}' for '{name}'", pcm.display()));
-            return Some(pcm);
+            return Some((pcm, inputs));
         }
         if let Err(e) = std::fs::create_dir_all(&dir) {
             self.remark(&format!(
@@ -234,9 +236,9 @@ impl StdCache {
         };
         // Another compile may have published the entry while this one
         // waited.
-        if entry_valid(&stamp, &pcm) {
+        if let Some(inputs) = entry_valid(&stamp, &pcm) {
             self.remark(&format!("using '{}' for '{name}'", pcm.display()));
-            return Some(pcm);
+            return Some((pcm, inputs));
         }
         // Only a holder of this lock writes these temporary files, so any
         // there now belongs to a holder that was killed.
@@ -253,13 +255,14 @@ impl StdCache {
                 return None;
             }
         };
-        match write_stamp(&stamp, &pcm, source, &files) {
-            Ok(()) => Some(pcm),
+        let inputs = stamp_inputs(source, &files);
+        match write_stamp(&stamp, &pcm, &inputs) {
+            Ok(()) => Some((pcm, inputs)),
             Err(e) => {
                 // The module file is fine; without a stamp the next
                 // compile rebuilds it.
                 self.remark(&format!("cannot write '{}': {e}", stamp.display()));
-                Some(pcm)
+                Some((pcm, inputs))
             }
         }
     }
@@ -274,7 +277,14 @@ impl StdCache {
         a.output = Some(pcm.display().to_string());
         a.inputs.clear();
         // Every file read, for the stamp; nothing written but the module.
-        a.deps = DepArgs { side: Some(DepHeaders::All), ..DepArgs::default() };
+        // A `std` module file `std.compat` imports from this cache is
+        // not stamped (its modification time changes whenever a racing
+        // compile renames the same bytes into place); its inputs are.
+        a.deps = DepArgs {
+            side: Some(DepHeaders::All),
+            module_files: Some(false),
+            ..DepArgs::default()
+        };
         a.module_output = None;
         // `std.compat`'s `import std;` goes through this cache as well.
         a.module_files.clear();
@@ -398,58 +408,68 @@ fn pcm_line(path: &Path) -> Option<String> {
     Some(format!("{len} {:016x} {text}", u64::from_le_bytes(sum)))
 }
 
-/// Writes the stamp of `pcm`: the module file itself, then `source` and
-/// every other file the build read. Written atomically, after `pcm`.
-fn write_stamp(stamp: &Path, pcm: &Path, source: &Path, files: &[String]) -> std::io::Result<()> {
+/// The files a build of `source` that read `files` stamps, in order:
+/// `source`, then every other file once.
+fn stamp_inputs(source: &Path, files: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    std::iter::once(source.display().to_string())
+        .chain(files.iter().cloned())
+        .filter(|f| seen.insert(PathBuf::from(f)))
+        .collect()
+}
+
+/// Writes the stamp of `pcm`: the module file itself, then every file
+/// the build read ([`stamp_inputs`]). Written atomically, after `pcm`.
+fn write_stamp(stamp: &Path, pcm: &Path, inputs: &[String]) -> std::io::Result<()> {
     let bad = || std::io::Error::other("a file the build read cannot be stamped");
     let mut text = format!("{STAMP_MAGIC}\n");
-    let mut seen = std::collections::HashSet::new();
     let pcm_line = pcm_line(pcm).ok_or_else(bad)?;
     let _ = writeln!(text, "{pcm_line}");
-    for f in std::iter::once(source).chain(files.iter().map(Path::new)) {
-        if !seen.insert(f.to_owned()) {
-            continue;
-        }
-        let line = stamp_line(f).ok_or_else(bad)?;
+    for f in inputs {
+        let line = stamp_line(Path::new(f)).ok_or_else(bad)?;
         let _ = writeln!(text, "{line}");
     }
     write_atomically(stamp, text.as_bytes())
 }
 
-/// Whether `stamp` is a stamp whose first entry is `pcm`, with the
-/// checksum `pcm` has now, and whose every other file is unchanged.
-fn stamp_valid(stamp: &Path, pcm: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(stamp) else { return false };
+/// The files the build read, in the stamp's order, when `stamp` is a
+/// stamp whose first entry is `pcm`, with the checksum `pcm` has now,
+/// and whose every other file is unchanged; else `None`.
+fn stamp_valid(stamp: &Path, pcm: &Path) -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(stamp).ok()?;
     let mut lines = text.lines();
     if lines.next() != Some(STAMP_MAGIC) {
-        return false;
+        return None;
     }
     let mut first = true;
+    let mut inputs = Vec::new();
     for line in lines {
         let mut parts = line.splitn(3, ' ');
         let (Some(_), Some(_), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
-            return false;
+            return None;
         };
         let now = if first {
             if Path::new(path) != pcm {
-                return false;
+                return None;
             }
             pcm_line(pcm)
         } else {
+            inputs.push(path.to_owned());
             stamp_line(Path::new(path))
         };
         first = false;
         if now.as_deref() != Some(line) {
-            return false;
+            return None;
         }
     }
-    !first
+    (!first).then_some(inputs)
 }
 
-/// Whether the entry `stamp` + `pcm` is a hit: a valid stamp, read
-/// first, and a module file it vouches for that is a kiln module file.
-fn entry_valid(stamp: &Path, pcm: &Path) -> bool {
-    stamp_valid(stamp, pcm) && kiln_pp::bmi::sniff(pcm) == kiln_pp::bmi::Sniffed::Kiln
+/// The files the build of the entry `stamp` + `pcm` read, when it is a
+/// hit: a valid stamp, read first, and a module file it vouches for that
+/// is a kiln module file.
+fn entry_valid(stamp: &Path, pcm: &Path) -> Option<Vec<String>> {
+    stamp_valid(stamp, pcm).filter(|_| kiln_pp::bmi::sniff(pcm) == kiln_pp::bmi::Sniffed::Kiln)
 }
 
 /// How long a miss waits for the entry's lock: `KILN_MODULE_CACHE_WAIT_MS`
@@ -665,29 +685,35 @@ mod tests {
         std::fs::write(&src, b"export module std;").unwrap();
         std::fs::write(&hdr, b"int x;").unwrap();
         let stamp = dir.join("std.stamp");
-        write_stamp(&stamp, &pcm, &src, &[hdr.display().to_string()]).unwrap();
-        assert!(stamp_valid(&stamp, &pcm));
-        assert!(!stamp_valid(&stamp, &dir.join("other.pcm")));
+        write_stamp(&stamp, &pcm, &stamp_inputs(&src, &[hdr.display().to_string()])).unwrap();
+        // The inputs come back in the order written (for the depfile).
+        let inputs = vec![src.display().to_string(), hdr.display().to_string()];
+        assert_eq!(stamp_valid(&stamp, &pcm), Some(inputs.clone()));
+        assert_eq!(
+            stamp_inputs(&src, &[hdr.display().to_string(), src.display().to_string()]),
+            inputs
+        );
+        assert!(stamp_valid(&stamp, &dir.join("other.pcm")).is_none());
         // The same bytes renamed into place by another compile (a new
         // modification time) still match; other bytes do not.
         std::fs::write(dir.join("std.pcm.new"), b"KILNBMI\0xxxxxxxx12345678").unwrap();
         std::fs::rename(dir.join("std.pcm.new"), &pcm).unwrap();
-        assert!(stamp_valid(&stamp, &pcm));
+        assert!(stamp_valid(&stamp, &pcm).is_some());
         std::fs::write(&pcm, b"KILNBMI\0xxxxxxxx12345679").unwrap();
-        assert!(!stamp_valid(&stamp, &pcm));
+        assert!(stamp_valid(&stamp, &pcm).is_none());
         std::fs::write(&pcm, b"KILNBMI\0xxxxxxxx12345678").unwrap();
-        assert!(stamp_valid(&stamp, &pcm));
+        assert!(stamp_valid(&stamp, &pcm).is_some());
         // A changed size invalidates it.
         std::fs::write(&hdr, b"int xy;").unwrap();
-        assert!(!stamp_valid(&stamp, &pcm));
-        write_stamp(&stamp, &pcm, &src, &[hdr.display().to_string()]).unwrap();
-        assert!(stamp_valid(&stamp, &pcm));
+        assert!(stamp_valid(&stamp, &pcm).is_none());
+        write_stamp(&stamp, &pcm, &stamp_inputs(&src, &[hdr.display().to_string()])).unwrap();
+        assert!(stamp_valid(&stamp, &pcm).is_some());
         std::fs::remove_file(&hdr).unwrap();
-        assert!(!stamp_valid(&stamp, &pcm));
+        assert!(stamp_valid(&stamp, &pcm).is_none());
         std::fs::write(&stamp, "garbage\n").unwrap();
-        assert!(!stamp_valid(&stamp, &pcm));
+        assert!(stamp_valid(&stamp, &pcm).is_none());
         std::fs::write(&stamp, format!("{STAMP_MAGIC}\n")).unwrap();
-        assert!(!stamp_valid(&stamp, &pcm));
+        assert!(stamp_valid(&stamp, &pcm).is_none());
         for f in [&pcm, &src, &stamp] {
             std::fs::remove_file(f).unwrap();
         }
