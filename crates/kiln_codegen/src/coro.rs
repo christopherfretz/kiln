@@ -661,7 +661,7 @@ impl Cg<'_> {
         let prologue = self.f.cl.prologue;
         self.pop_cleanup_blocks(prologue);
         self.emit_return_block();
-        self.emit_epilog();
+        self.emit_epilog()?;
         self.finish_eh();
         self.emit_unreachable_if_used();
         if let Some(e) = self.f.error.take() {

@@ -99,6 +99,10 @@ pub(crate) struct Fx {
     /// its hidden `size_t` argument (clang `SizeArguments`).
     pub object_sizes: FxHashMap<DeclId, (u32, Addr)>,
     pub ret_block: Option<Blk>,
+    /// clang `ReturnLocation` (`return.sloc.ptr`) and the
+    /// `returns_nonnull` attribute's location, when the return value is
+    /// checked (`-fsanitize=returns-nonnull-attribute`).
+    pub ret_sloc: Option<(V, Loc)>,
     pub ret_slot: Option<Addr>,
     pub ret_kind: RetKind,
     pub ret_coerce: Option<IrType>,
@@ -158,6 +162,14 @@ pub(crate) struct Fx {
     /// The aggregate slot being initialized may overlap other data
     /// (clang `AggValueSlot::Overlap_t`), consumed by the next emission.
     pub overlap: bool,
+    /// The aggregate slot being initialized was already checked by the
+    /// sanitizer (clang `AggValueSlot::IsSanitizerChecked`), consumed by
+    /// the next aggregate emission other than a wrapper.
+    pub ub_checked: bool,
+    /// The subscript whose element the next lvalue emission accesses
+    /// (clang `EmitArraySubscriptExpr`'s `Accessed`): its bounds check
+    /// excludes the one-past-the-end index.
+    pub ub_accessed: Option<kiln_ast::ExprId>,
     /// The aggregate slot an `_Atomic` assignment evaluates its right
     /// side into is volatile (clang `AggValueSlot::isVolatile`), consumed
     /// by the atomic load filling it (WP-165).
@@ -269,6 +281,7 @@ impl Fx {
             locals: FxHashMap::default(),
             object_sizes: FxHashMap::default(),
             ret_block: None,
+            ret_sloc: None,
             ret_slot: None,
             ret_kind: RetKind::Void,
             ret_coerce: None,
@@ -293,6 +306,8 @@ impl Fx {
             uses_ph: false,
             error: None,
             overlap: false,
+            ub_checked: false,
+            ub_accessed: None,
             slot_volatile: false,
             dest_destructed: false,
             arg_cleanups: Vec::new(),
@@ -492,6 +507,9 @@ impl Cg<'_> {
         self.f.ret_block = Some(ret_block);
         self.f.ret_dest = Some(JumpDest { blk: ret_block, depth: Some(0), index: 1 });
         self.f.cl.next_index = 2;
+        if thunk.is_none() {
+            self.ub_ret_nonnull_start(d);
+        }
         self.check_pure_scalable(&sig, Some(ast.decls.get(d).loc()))?;
         let mut arg_no = 0u32;
         match &sig.info.ret.kind {
@@ -673,6 +691,10 @@ impl Cg<'_> {
                 let closure = self.this_value();
                 self.lambda_prolog(l, closure)?;
             }
+            if thunk.is_none() {
+                let this = self.this_value();
+                self.ub_this_check(d, structor, this)?;
+            }
         } else if let Some(l) = ast.call_op_lambda(d)
             && let Some(&obj) = param_decls.first()
             && self.is_explicit_object_method(d)
@@ -778,7 +800,7 @@ impl Cg<'_> {
         if contracts_here {
             self.emit_postconditions(d)?;
         }
-        self.emit_epilog();
+        self.emit_epilog()?;
         if eh_spec {
             self.pop_terminate();
         }
@@ -1017,10 +1039,10 @@ impl Cg<'_> {
 
     /// clang `EmitFunctionEpilog` (a naked function has no epilogue: the
     /// return block ends in `unreachable`).
-    pub(crate) fn emit_epilog(&mut self) {
+    pub(crate) fn emit_epilog(&mut self) -> R<()> {
         if self.f.naked {
             self.f.fir.push(Op::Unreachable, LTy::VOID);
-            return;
+            return Ok(());
         }
         let mut ret_loc = None;
         let rv = match self.f.ret_kind {
@@ -1074,10 +1096,14 @@ impl Cg<'_> {
                 Some(self.coerced_load(slot, &ct))
             }
         };
+        if let Some(v) = rv {
+            self.ub_ret_nonnull_check(v)?;
+        }
         let ret = self.f.fir.push(Op::Ret { v: rv }, LTy::VOID);
         if ret_loc.is_some() {
             self.f.fir.set_inst_dbg(Fir::last_inst(ret), ret_loc);
         }
+        Ok(())
     }
 
     /// clang `findDominatingStoreToReturnValue`.
@@ -1224,14 +1250,23 @@ impl Cg<'_> {
         if let Some(v) = self.vec_load(a, q, vol) {
             return v;
         }
+        let v = self.load_scalar_mem(a, q, tb, true);
+        self.emit_from_memory(v, q)
+    }
+
+    /// The load of a non-vector [`Self::load_scalar_tb`] in its memory
+    /// form (before [`Self::emit_from_memory`]); `range`: a `bool` load
+    /// may carry `!range`.
+    pub fn load_scalar_mem(&mut self, a: Addr, q: QualType, tb: Tb, range: bool) -> V {
+        let vol = self.ast.types.effective_quals(q).is_volatile();
         let p = self.scalar_tls_addr(a.v);
         let ty = self.scalar_access_ty(a.ty, q);
         let v = self.load(ty, p, a.align, vol);
         self.tbaa_mark(v, q, tb);
-        if self.is_bool_value(q) && self.opts.optimize() && a.ty == LTy::I8 {
+        if range && self.is_bool_value(q) && self.opts.optimize() && a.ty == LTy::I8 {
             self.bool_range(v);
         }
-        self.emit_from_memory(v, q)
+        v
     }
 
     /// clang `EmitFromMemory`: a `bool` is truncated to `i1`, a

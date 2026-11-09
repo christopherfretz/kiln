@@ -11,16 +11,19 @@ use kiln_ast::decl::{
     CtorInitKind, DeclKind, Defaulted, DefinitionBits, FnStorage, TagKind, TemplLinkKind,
 };
 use kiln_ast::expr::{ConstructionKind, ExprFlags, ExprKind, StorageDuration};
+use kiln_ast::sanitize::SanitizerSet as San;
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, TypeId};
 use kiln_llvm::{BinOp, Flags, FuncId, IntPredicate, Linkage, TypeId as LTy, UnnamedAddr, Value};
+use kiln_source::Loc;
 use kiln_source::fx::FxHashSet;
 
 use crate::cleanup::Cleanup;
 use crate::fir::{Op, V};
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, Def, R, Sig, err};
+use crate::ubsan::{Tck, TypeCheck, UbDesc};
 
 /// A special member function (clang `CXXSpecialMemberKind`, the subset
 /// codegen distinguishes).
@@ -1023,7 +1026,7 @@ impl Cg<'_> {
                 CtorInitKind::Delegating => {
                     self.flush_memcpy_run(d, &mut run)?;
                     let this = self.this_addr();
-                    self.emit_agg_into(ci.init, this, false)?;
+                    self.ub_checked(|s| s.emit_agg_into(ci.init, this, false))?;
                     // clang `EmitDelegatingCXXConstructorCall`: once the
                     // target constructor returns the object is complete
                     // ([except.ctor]/4), so a throw destroys it.
@@ -1236,7 +1239,7 @@ impl Cg<'_> {
         kind: CtorInitKind,
         field: DeclId,
         init: ExprId,
-        loc: kiln_source::Loc,
+        loc: Loc,
     ) -> R<()> {
         // clang `CXXCtorInitializer::getSourceLocation`: an initializer
         // from a default member initializer is located at the member, not
@@ -1283,7 +1286,7 @@ impl Cg<'_> {
         let addr = lv.addr;
         if self.is_aggregate(fq) {
             let overlap = false;
-            self.emit_agg_into(init, addr, overlap)?;
+            self.ub_checked(|s| s.emit_agg_into(init, addr, overlap))?;
         } else {
             self.init_to_lvalue(init, lv, false)?;
         }
@@ -1603,6 +1606,12 @@ impl Cg<'_> {
     /// Binds a reference to `e` (clang `EmitReferenceBindingToExpr`): the
     /// address of the glvalue, or of a materialized temporary.
     pub(crate) fn emit_ref_binding(&mut self, e: ExprId) -> R<V> {
+        let v = self.emit_ref_binding_in(e)?;
+        self.ub_ref_binding(e, v)?;
+        Ok(v)
+    }
+
+    fn emit_ref_binding_in(&mut self, e: ExprId) -> R<V> {
         let ast = self.ast;
         if ast.exprs.get(e).kind() == ExprKind::ExprWithCleanups {
             // clang `EmitExprWithCleanupsLValue`: the bound address
@@ -1610,7 +1619,7 @@ impl Cg<'_> {
             // full-expression (a `co_await` suspension's destroy path),
             // `ForceCleanup({&V})` (WP-726).
             let sc = self.begin_scope(false);
-            let mut r = self.emit_ref_binding(self.sub(e));
+            let mut r = self.emit_ref_binding_in(self.sub(e));
             match &mut r {
                 Ok(v) => self.end_scope_reload(sc, &mut [v]),
                 Err(_) => self.end_scope(sc),
@@ -1680,6 +1689,7 @@ impl Cg<'_> {
         let info = ast.exprs.construct_info(e);
         let q = ast.exprs.get(e).ty();
         let overlap = std::mem::take(&mut self.f.overlap);
+        let checked = std::mem::take(&mut self.f.ub_checked);
         let rd = ast.decls.get(ctor).ctx().expect("constructor class");
         if info.zeroing && !zeroed {
             match info.kind {
@@ -1708,15 +1718,15 @@ impl Cg<'_> {
             return Ok(());
         }
         if self.array_elem(q).is_some() {
-            return self.construct_array(e, dest);
+            return self.construct_array(e, dest, checked);
         }
-        self.construct_one(e, dest, overlap)
+        self.construct_one(e, dest, overlap, checked)
     }
 
     /// clang `EmitCXXAggrConstructorCall` for a constant-length array: a
     /// loop over the flattened elements, each constructed in its own
     /// cleanup scope. Without exceptions no partial-destroy cleanup.
-    fn construct_array(&mut self, e: ExprId, dest: Addr) -> R<()> {
+    fn construct_array(&mut self, e: ExprId, dest: Addr, checked: bool) -> R<()> {
         let ast = self.ast;
         let mut q = ast.exprs.get(e).ty();
         let mut n = 1u64;
@@ -1753,7 +1763,7 @@ impl Cg<'_> {
         let elem_size = self.alloc_size(elem);
         let elem_align = min_align(dest.align, elem_size);
         let nn = self.i64c(i128::from(n));
-        self.construct_array_n(e, begin, elem, elem_align, nn, false)
+        self.construct_array_n(e, begin, elem, elem_align, nn, false, checked)
     }
 
     /// The element loop of clang `EmitCXXAggrConstructorCall`: `num`
@@ -1761,7 +1771,9 @@ impl Cg<'_> {
     /// its own cleanup scope; a non-constant count is checked for zero
     /// first (`isempty`). With `zero_each` every element is
     /// zero-initialized before its constructor runs (an array new's
-    /// value-initialization, clang's `zeroInitialize`).
+    /// value-initialization, clang's `zeroInitialize`). `checked`: the
+    /// sanitizer already checked the elements (`NewPointerIsChecked`).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn construct_array_n(
         &mut self,
         e: ExprId,
@@ -1770,6 +1782,7 @@ impl Cg<'_> {
         elem_align: u64,
         num: V,
         zero_each: bool,
+        checked: bool,
     ) -> R<()> {
         let ast = self.ast;
         let mut out = None;
@@ -1805,7 +1818,7 @@ impl Cg<'_> {
             }
             self.emit_null_init(at, eq, size)?;
         }
-        let r = self.construct_one(e, at, false);
+        let r = self.construct_one(e, at, false, checked);
         self.end_scope(sc);
         r?;
         let one = self.i64c(1);
@@ -1820,8 +1833,9 @@ impl Cg<'_> {
     }
 
     /// One complete-or-base object construction (clang
-    /// `EmitCXXConstructorCall`).
-    fn construct_one(&mut self, e: ExprId, dest: Addr, overlap: bool) -> R<()> {
+    /// `EmitCXXConstructorCall`). Unless `checked`, the sanitizer checks
+    /// `dest` once the arguments are evaluated.
+    fn construct_one(&mut self, e: ExprId, dest: Addr, overlap: bool, checked: bool) -> R<()> {
         let ast = self.ast;
         let ctor = ast.exprs.constructor(e);
         let info = ast.exprs.construct_info(e);
@@ -1857,9 +1871,15 @@ impl Cg<'_> {
         let mut sig = if needs_vtt { self.with_vtt(base_sig.clone()) } else { base_sig.clone() };
         let saved = self.f.dest_destructed;
         self.f.dest_destructed = false;
-        let vals = self.emit_call_args(&sig, &args);
+        let vals = self.emit_call_args_for(&sig, &args, Some(ctor));
         self.f.dest_destructed = saved;
         let mut vals = vals?;
+        if !checked && self.ub_type_check_on() {
+            let loc = self.ub_expr_loc(e);
+            let cq = self.class_type(rd);
+            let tc = TypeCheck::new(Tck::ConstructorCall, loc, cq).desc(UbDesc::Record);
+            self.ub_type_check(dest.v, tc)?;
+        }
         if self.inlines_inheriting_ctor(ctor) {
             let vtt = if needs_vtt {
                 let virt = info.kind == ConstructionKind::VirtualBase;
@@ -1977,12 +1997,13 @@ impl Cg<'_> {
             let f = self.get_fn(md)?;
             let mut sig = self.call_sig(fty, false, &arg_tys);
             let (extra, nr) = self.call_extra(md, fty, &mut sig);
-            let vals = self.emit_call_args(&sig, args)?;
+            let vals = self.emit_call_args_for(&sig, args, Some(md))?;
             self.arm_musttail(e);
             let callee = V::C(Value::func(f));
+            let from = self.f.calls.len();
             let r = self.call_vals(&sig, callee, Some(f), None, &vals, args, dest, &extra)?;
             if nr {
-                self.finish_noreturn_call();
+                self.finish_noreturn_call(from, Some(f), Some(e))?;
             }
             return Ok(r);
         }
@@ -2018,7 +2039,7 @@ impl Cg<'_> {
         let cfty = ast.decls.get(callee_md).ty().expect("method type");
         if rtl && !trivial {
             let sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
-            rtl_vals = Some(self.emit_call_args(&sig, args)?);
+            rtl_vals = Some(self.emit_call_args_for(&sig, args, Some(md))?);
         }
         let this = if arrow {
             // clang `EmitCXXMemberOrOperatorMemberCallExpr`:
@@ -2049,6 +2070,15 @@ impl Cg<'_> {
                 return Ok(Some(this.v));
             }
         }
+        if self.ub_type_check_on() {
+            // clang `EmitCXXMemberOrOperatorMemberCallExpr`'s
+            // `TCK_MemberCall` check of the object.
+            let loc = self.ub_expr_loc(e);
+            let skip = self.ub_member_skips(base);
+            let cq = self.class_type(crd);
+            let tc = TypeCheck::new(Tck::MemberCall, loc, cq).skip(skip).desc(UbDesc::Record);
+            self.ub_type_check(this.v, tc)?;
+        }
         if kind == DeclKind::CXXDestructor {
             let sig = self.call_sig_this(cfty, false, &[], Some(crd));
             if use_virtual {
@@ -2064,7 +2094,7 @@ impl Cg<'_> {
             // loads the slot.
             let vals = match rtl_vals {
                 Some(v) => v,
-                None => self.emit_call_args(&sig, args)?,
+                None => self.emit_call_args_for(&sig, args, Some(md))?,
             };
             let (mut extra, nr) = self.call_extra(md, cfty, &mut sig);
             // The allocation attributes of the method named by the call
@@ -2080,12 +2110,16 @@ impl Cg<'_> {
                 None => (&sig, &vals[..], args),
             };
             self.arm_musttail(e);
+            let from = self.f.calls.len();
             let r = self.call_vals_to(sig, fp, None, this, cv, ca, dest, &extra, &ret_extra)?;
             if let Some(p) = r {
                 self.alloc_align_assume(md, &vals, p);
             }
-            if nr {
-                self.finish_noreturn_call();
+            // Through the vtable only the call site's own `noreturn`
+            // ends the block (clang `CallBase::doesNotReturn`, no called
+            // function).
+            if nr && extra.contains(&kiln_llvm::Attr::Flag(kiln_llvm::AttrKind::NoReturn)) {
+                self.finish_noreturn_call(from, None, Some(e))?;
             }
             return Ok(r);
         }
@@ -2093,7 +2127,7 @@ impl Cg<'_> {
         let (mut extra, nr) = self.call_extra(callee_md, cfty, &mut sig);
         let vals = match rtl_vals {
             Some(v) => v,
-            None => self.emit_call_args(&sig, args)?,
+            None => self.emit_call_args_for(&sig, args, Some(md))?,
         };
         let mut ret_extra = Vec::new();
         self.alloc_call_attrs(callee_md, &vals, &mut extra, &mut ret_extra);
@@ -2105,12 +2139,13 @@ impl Cg<'_> {
             None => (&sig, &vals[..], args),
         };
         self.arm_musttail(e);
+        let from = self.f.calls.len();
         let r = self.call_vals_ret(sig, callee, Some(f), this, cv, ca, dest, &extra, &ret_extra)?;
         if let Some(p) = r {
             self.alloc_align_assume(callee_md, &vals, p);
         }
         if nr {
-            self.finish_noreturn_call();
+            self.finish_noreturn_call(from, Some(f), Some(e))?;
         }
         Ok(r)
     }
@@ -2267,7 +2302,9 @@ impl Cg<'_> {
     }
 
     /// clang `GetAddressOfBaseClass` with the path split by `base_path`:
-    /// the address of the base and its alignment.
+    /// the address of the base and its alignment. `upcast` is `Some` for
+    /// a conversion `UBSan` checks, with the location of its expression.
+    #[allow(clippy::option_option, reason = "a checked upcast may have no location")]
     pub(crate) fn base_address(
         &mut self,
         this: Addr,
@@ -2275,9 +2312,32 @@ impl Cg<'_> {
         vbase: Option<DeclId>,
         nv: u64,
         null_check: bool,
+        upcast: Option<Option<Loc>>,
     ) -> R<(V, u64)> {
+        // clang's `TCK_Upcast` / `TCK_UpcastToVirtualBase` check of the
+        // derived object (`getRecordType(Derived)`, aligned
+        // `getClassPointerAlignment(Derived)`): null-checked only by a
+        // null-checking cast with no offset, after the null branch
+        // otherwise.
+        let check = match upcast {
+            Some(loc) if self.ub_type_check_on() => {
+                let dq = self.class_type(derived);
+                let align = self.this_layout(derived).1;
+                let tck = if vbase.is_some() { Tck::UpcastToVirtualBase } else { Tck::Upcast };
+                Some(TypeCheck::new(tck, loc, dq).align(align).desc(UbDesc::Record).skip(San::NULL))
+            }
+            _ => None,
+        };
         let Some(vb) = vbase else {
-            return Ok((self.base_ptr(this.v, nv, null_check), min_align(this.align, nv)));
+            if nv == 0 {
+                if let Some(tc) = check {
+                    let skip = if null_check { San::NONE } else { San::NULL };
+                    self.ub_type_check(this.v, tc.skip(skip))?;
+                }
+                return Ok((this.v, this.align));
+            }
+            let v = self.base_ptr(this.v, nv, null_check, check)?;
+            return Ok((v, min_align(this.align, nv)));
         };
         let blocks = null_check.then(|| {
             let not_null = self.f.fir.create_block();
@@ -2291,6 +2351,9 @@ impl Cg<'_> {
             orig = self.f.fir.cur();
             self.cond_br(is_null, end, not_null);
             self.emit_block(not_null, false);
+        }
+        if let Some(tc) = check {
+            self.ub_type_check(this.v, tc)?;
         }
         let voff = self.vbase_offset_value(this, derived, vb)?;
         let off = if nv == 0 {
@@ -2314,12 +2377,21 @@ impl Cg<'_> {
 
     /// clang `GetAddressOfBaseClass` on a pointer: `p + off`, null-checked
     /// when `null_check` and the offset is not zero.
-    pub(crate) fn base_ptr(&mut self, p: V, off: u64, null_check: bool) -> V {
+    pub(crate) fn base_ptr(
+        &mut self,
+        p: V,
+        off: u64,
+        null_check: bool,
+        check: Option<TypeCheck>,
+    ) -> R<V> {
         if off == 0 {
-            return p;
+            return Ok(p);
         }
         if !null_check {
-            return self.byte_offset(p, off);
+            if let Some(tc) = check {
+                self.ub_type_check(p, tc)?;
+            }
+            return Ok(self.byte_offset(p, off));
         }
         let not_null = self.f.fir.create_block();
         let end = self.f.fir.create_block();
@@ -2328,10 +2400,16 @@ impl Cg<'_> {
         let orig = self.f.fir.cur().expect("insertion point");
         self.cond_br(is_null, end, not_null);
         self.emit_block(not_null, false);
+        if let Some(tc) = check {
+            self.ub_type_check(p, tc)?;
+        }
         let adj = self.byte_offset(p, off);
         let from = self.f.fir.cur().expect("insertion point");
         self.emit_block(end, false);
-        self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR)
+        Ok(self
+            .f
+            .fir
+            .push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR))
     }
 
     /// clang `GetAddressOfDerivedClass` on a pointer: `p - off`
