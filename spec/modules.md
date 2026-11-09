@@ -1229,6 +1229,200 @@ Next, in order:
 The section framing, the fallback note, the harness variant and the fuzz
 tests are reused as they are.
 
+#### Part 2a: the declaration and type image (WP-1048)
+
+Part 2a is the first cut of item 3. It defines the image section (tag 2,
+`SECTION_IMAGE`), its writer and its reader, and an importer path that
+builds the imported unit's declarations from the section *instead of*
+replaying the capsule. It covers a finished set of node kinds (below).
+Any other node makes the writer emit no image section, and the importer
+then replays exactly as in part 1. The capsule is always written, so a
+file with an image can still be replayed. Everything is behind the
+hidden `-fkiln-bmi-image` (spec/driver.md), **off by default**: when it
+is off at precompile no section is written, and when it is off at import
+a section that is present is ignored.
+
+**Arenas serialised.** Declarations (the purview's, in id order), the
+types they name, and the per-context name tables. Expressions and
+statements are not serialised in 2a. Every node kind whose meaning to an
+importer depends on a body or an initializer falls back: inline,
+`constexpr` and `consteval` functions, deduced return types, `const` and
+`constexpr` variables, and templates. A non-inline function's body and a
+non-`const` variable's initializer are not needed by an importer, because
+the module's object file defines them (§7, deviation 7). The reader gives
+such a function an empty body `{}` at the original brace positions, so
+"is defined" is as it was, and drops the initializer, so the variable
+stays a definition without one. Codegen never emits either, since their
+owner is an imported named unit.
+
+**Coverage (2a).** A unit qualifies when all of these hold:
+
+- it is a primary module interface unit (`export module M;`, no
+  partition) that imports nothing;
+- it has no global module fragment (no declaration from a real file
+  before `module`) and no private module fragment;
+- every purview declaration that is not a local or a parameter is one
+  of the following:
+  - a named, non-inline namespace;
+  - an `export` declaration;
+  - a namespace-scope function that is not a template, not inline,
+    `constexpr` or `consteval`, not deleted or defaulted, not `static`
+    and not `main`, with an identifier name and C++ linkage, no default
+    arguments, no attributes, and no undeduced return type;
+  - a namespace-scope variable that is not `const`, `constexpr`,
+    `inline`, `thread_local` or `static`, and is not `extern` with an
+    initializer;
+  - an enumeration (scoped or unscoped, fixed or not) or an enumerator;
+  - a `typedef` or alias declaration that is not a template;
+- no declaration is invalid or implicit, or carries attributes;
+- every type is built from builtins, pointers, references, constant
+  arrays (the bound's expression is dropped), arrays of unknown bound,
+  function types (exception specification none, `noexcept` or
+  `noexcept(true)`), the unit's own enumerations and typedefs,
+  parenthesised types, unqualified elaborated types and cv-qualifiers;
+- every location is invalid, or a file location in the unit's main file
+  (a macro expansion falls back);
+- no name lies in a namespace named `std` or is reserved.
+
+The first offending node's reason is the `-v` note's (see "Fallback").
+
+**Remapping per id space.** This is the "Identity" design, restricted to
+what 2a carries:
+
+- `DeclId`: records are numbered 0..n in the writer's id order, and a
+  record refers only to lower numbers (context, lexical context,
+  previous declaration, enumeration, types). The reader appends each
+  record through `AstBuilder`, so local index i maps to the id it gets,
+  and a reference to an index that is not yet built is malformed.
+- `QualType`: a type table in dependency order. Each entry is a
+  structural record whose operands are earlier entries, builtin indices
+  or declaration indices. It is re-interned with the type context's
+  constructors (`pointer_to`, `function`, `enum_type`, ...), so the
+  importer's types stay canonical, and cv bits travel on each reference.
+- `Symbol`: a string table, interned once per load.
+- `Loc`: an offset into the unit's main file, which the reader loads
+  through `load_regular_file_expecting` as the replay does (§11.2). It
+  shares the `FileId` and so the positions are the replay's exactly.
+  Diagnostics, `-g` and `__builtin_source_location` therefore point at
+  the module source. Only that one file is mapped, and the other capsule
+  files are not loaded at all.
+- `ExprId` / `StmtId`: none in 2a. Each empty body is a new
+  `CompoundStmt`.
+- `ConstValueId`: an enumerator's value, as (signed, 128-bit integer)
+  re-interned with the enumerator's type.
+
+**ODR merging.** A 2a image has no global module fragment, so it has no
+GMF entity to merge with other imports (WP-460's merge-by-entity case
+needs one, so it falls back). It could still collide with the importer's
+own declarations, or with another import's (for example, two modules
+that both open `namespace util`). 2a does not merge. Instead the image
+lists every declared name up front, and the preprocessor uses the image
+only if **none of those names is interned yet** (`Interner::get`). Any
+earlier declaration's name was a token, or a builtin's name, so it is
+interned. A fresh name cannot meet an earlier declaration, and later
+declarations and imports find the image's declarations through ordinary
+lookup, as they would find the replay's. Any overlap replays, so the
+semantics are part A's by construction. Real merging needs WP-460
+semantics without a second parse: an ODR key per GMF entity, and a
+structural hash for definitions. It is follow-up S5.
+
+**Laziness, and the deviation.** The format is lazy-ready: a per-record
+offset table and a lookup table sorted by (context, name). The 2a reader
+nevertheless materialises every record when the unit begins (100% of the
+records), a deliberate deviation from "the top-level lookup table is
+lazy":
+
+- sema's name lookups take `&self`, and the parser classifies peeked
+  identifiers through them, so a lookup miss cannot build declarations;
+- the token stream reaches sema only at declaration starts (module events
+  are flushed there), so no point before a lookup knows the names it
+  will need.
+
+Laziness needs a materialisation hook with `&mut` access on the lookup
+path: a pending-name table that the parser drains before classifying a
+token, or a lookup miss that queues the name and retries. That is
+follow-up S-lazy. A 2a unit carries no bodies, so its eager load costs
+one record per declaration and the replay's lexing, parsing and checking
+are gone.
+
+**Templates as patterns** (follow-up S4). A template's record will carry
+its parameter list, its pattern declaration and its body as expression
+and statement records with dependent types, which the importer
+instantiates as if it had parsed them. Its instantiations made in the
+interface are merged by (template, remapped arguments) and keep their
+carried constants (WP-1046).
+
+**Versioning and the fingerprint.** The section starts with its own
+format word (`IMAGE_VERSION = 1`, rejected if different). The file
+header's kiln version and the flags fingerprint (§11.4) already reject a
+file made by another kiln or under other flags. `-fkiln-bmi-image` is
+not part of the fingerprint: a file with an image can be used by an
+importer with the flag off (it replays) and vice versa.
+
+**Encoding** (little-endian `u32`s; every count is checked against the
+bytes left before anything is allocated):
+
+```
+image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
+           names:u32 str*            all declared names (the pp's gate)
+           types:u32 type*
+           decls:u32 offset:u32*decls blob_len:u32 decl*
+           lookup:u32 (ctx:u32 name:u32 decl:u32)*   sorted
+qref    := type:u32 quals:u8         0 = none, 1..=90 builtin, else 91+i
+type    := tag:u8 payload            pointer/lref/rref(qref),
+                                     carray(qref, size:u64),
+                                     iarray(qref), paren(qref),
+                                     elab(keyword:u8, qref),
+                                     function(ret, n, qref*, info:u16, exc:u8),
+                                     enum(decl), typedef(decl, qref)
+decl    := kind:u8 flags:u8 owner:u8 name:u32 ctx:u32 lexical:u32
+           loc:u32 prev:u32 payload  (u32::MAX = none / translation unit)
+```
+
+The owner byte holds bit 0 = in the purview and bit 1 = exported (the
+`ModuleTable` owner point of the record). The payloads are:
+
+- function: type, `FnSpec` bits, the brace offsets of the body (or
+  none), and its parameters (name, location, type, original type, index,
+  flags);
+- variable: type and `VarSpec` bits;
+- enumeration: flags, the fixed underlying and promotion types, and
+  (when complete) the computed ones;
+- enumerator: the value;
+- typedef: kind and underlying type;
+- namespace and export: nothing.
+
+**The reader.** When the module's `UnitBegin` event carries an image, the
+parser calls `act_on_unit_begin` and then the image load. The load
+decodes the whole section first: decoding is total, and every
+cross-reference (an earlier type or record, of the right kind) is checked
+there. Only then does it apply the module directive and build each
+record, setting the owner point first. A decoding error is the existing
+corrupt-module-file fatal error, and no declaration is built.
+
+**What the preprocessor does.** It reads the image only when its own flag
+is on and the gate passes. It then moves the section out of the capsule
+(the file is never held twice), maps the main file, and queues
+`UnitBegin` (carrying the image) and `UnitEnd` back to back. No capsule
+file is lexed. The unit's exported macros are none (a named module), so
+nothing else is lost.
+
+#### Part 2a coverage and follow-ups
+
+2a's image covers modules made only of the node kinds above. Every other
+module replays, and that includes `std` (it has a global module fragment,
+classes and templates). The follow-ups, in priority order:
+
+1. S2: expression and statement records, and inline, `constexpr` and
+   `consteval` functions with lazily loaded bodies;
+2. S3: classes (fields, methods, bases, special members, vtables);
+3. S4: templates as patterns;
+4. S5: global module fragments with ODR merging (replacing the name
+   gate);
+5. S6: imports, re-exports and partitions;
+6. S-lazy: the lazy lookup hook (see above);
+7. S7: locations in other files and in macro expansions.
+
 ## Tests
 
 - `tests/conformance/module.unit/`, `module.global.frag/`,
