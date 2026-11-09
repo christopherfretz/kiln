@@ -158,6 +158,7 @@ pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use implicit_fallthrough::AttrMacro;
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
+pub use never_constant::BuiltinQuery;
 pub use range_for::{RangeCollect, RangeForHead, RangeInit};
 pub use scope::ScopeKind;
 pub use template_id_typo::TemplateIdTypo;
@@ -355,6 +356,17 @@ pub struct Sema<'a, 'sm> {
     /// by the parser from the preprocessor's): the names a `no_builtin`
     /// attribute accepts (WP-808).
     pub lib_builtin_name: fn(&str, bool) -> bool,
+    /// Whether clang knows builtin `name` and constant-evaluates it
+    /// (`__has_builtin` and `__has_constexpr_builtin`, the `Constexpr`
+    /// markers of clang's `Builtins.td`) for the target, dialect and
+    /// `-fclang-compat` level of the query: `None` when clang does not
+    /// know it, else `Some(constexpr)`. Set by the parser from the
+    /// preprocessor's tables; the default knows no builtin (WP-945, the
+    /// never-constant check).
+    pub clang_constexpr_builtin: fn(&str, BuiltinQuery) -> Option<bool>,
+    /// The never-constant walk looks only at calls of builtins clang
+    /// does not constant-evaluate (`never_constant.rs`).
+    nc_strict_only: bool,
     /// The functions whose `no_builtin` attribute waits for their
     /// definition (clang checks the declarator's definition kind), with the
     /// attribute's location: a `{` body clears one, `= default` / `=
@@ -1250,6 +1262,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             no_builtin_fns: Vec::new(),
             freestanding: false,
             lib_builtin_name: |n, _| kiln_ast::decl::builtin::lib_by_name(n).is_some(),
+            clang_constexpr_builtin: |_, _| None,
+            nc_strict_only: false,
             no_builtin_pending: Vec::new(),
             math_errno: true,
             cfg_dump: false,

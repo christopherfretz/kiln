@@ -1389,6 +1389,13 @@ impl<'a> Compiler<'a> {
             // `co_await`/`co_yield` ([expr.const]/5.23, WP-351).
             return self.throw_invalid(e);
         }
+        if k.is_cast() && self.b.ast().exprs.cast_kind(e) == CastKind::BuiltinFnToFnPtr {
+            // A builtin's callee evaluated apart from its call (a call
+            // strips the cast to reach the builtin, `call_inner`): clang's
+            // `PointerExprEvaluator` has no case for the cast, so the
+            // generic note at the callee (WP-996).
+            return self.throw_invalid(e);
+        }
         if k.is_cast()
             && self.b.ast().exprs.cast_kind(e) == CastKind::IntegralToBoolean
             && matches!(self.b.ast().types.canonical_view(n.ty()), TypeView::Vector { .. })

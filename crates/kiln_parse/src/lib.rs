@@ -157,6 +157,22 @@ impl Default for ParseOptions {
 }
 
 /// The literal-encoding parameters of `target`.
+/// [`Sema::clang_constexpr_builtin`] from the preprocessor's
+/// `__has_builtin` / `__has_constexpr_builtin` tables (WP-945).
+fn clang_constexpr_builtin(name: &str, q: kiln_sema::BuiltinQuery) -> Option<bool> {
+    use kiln_pp::FeatureQueries;
+    let triple = if q.x86_64 { "x86_64-unknown-linux-gnu" } else { "aarch64-unknown-linux-gnu" };
+    let gnu = [kiln_pp::FeatureFlag::GnuMode];
+    let flags: &[kiln_pp::FeatureFlag] = if q.gnu { &gnu } else { &[] };
+    let compat = if q.clang_compat < 22 {
+        kiln_pp::ClangCompat::Clang19
+    } else {
+        kiln_pp::ClangCompat::Clang22
+    };
+    let f = kiln_pp::ClangFeatures::new(triple, q.std, flags)?.with_compat(compat);
+    (f.has_builtin(name) != 0).then(|| f.has_constexpr_builtin(name))
+}
+
 fn encoding_params(target: &Target) -> EncodingParams {
     EncodingParams {
         char_signed: target.types.char_signed,
@@ -317,6 +333,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.sized_deallocation = opts.sized_deallocation;
     s.char8 = opts.char8;
     s.lib_builtin_name = kiln_pp::is_library_builtin;
+    s.clang_constexpr_builtin = clang_constexpr_builtin;
     s.math_errno = opts.math_errno;
     s.sve = opts.sve;
     s.sve_vector_bits = opts.sve_vector_bits;
