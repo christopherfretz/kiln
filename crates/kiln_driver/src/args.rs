@@ -736,10 +736,21 @@ pub struct PchArgs {
     /// The indices in [`Args::includes`] of the driver's own `-include`s,
     /// the ones clang's driver probes for `<file>.pch` / `<file>.gch`
     /// (WP-1037). An `-Xclang -include` goes to clang's frontend as is.
-    pub probed: Vec<usize>,
+    /// With each, how clang renders the option before its value in a
+    /// warning (`-include `, `--include `, `--include=`; WP-1153).
+    pub probed: Vec<(usize, &'static str)>,
     /// Whether the last `-include-pch` overrides a PCH the first probed
     /// `-include` turns into.
     pub include_order: IncludePchOrder,
+    /// The last `-Xclang -include-pch <file>`: clang's frontend sees the
+    /// `-Xclang` options after the driver's, so it wins over any driver
+    /// `-include-pch`, before or after it (WP-1153).
+    pub xclang_include: Option<String>,
+    /// `-E`/`-M` with an `-include-pch` that cannot be read: the errors
+    /// each preprocessing job reports before it goes on without the PCH,
+    /// as clang's `-E` does (set by `crate::pch`, never by an option;
+    /// WP-1153).
+    pub unread: Vec<(kiln_diag::DiagId, Vec<String>)>,
 }
 
 /// Where the last `-include-pch` sits against the probed `-include`s
@@ -761,9 +772,14 @@ impl PchArgs {
     /// number of `-include`s parsed so far, this one included.
     fn note_valued(&mut self, opt: &str, given: bool, xclang: bool, includes: usize) {
         match opt {
-            "-include" if given && !xclang => self.probed.push(includes - 1),
+            "-include" if given && !xclang => self.probed.push((includes - 1, "-include ")),
             "-include-pch" if given => {
-                self.include_order = if xclang || !self.probed.is_empty() {
+                if xclang {
+                    self.xclang_include.clone_from(&self.include);
+                } else if self.xclang_include.is_some() {
+                    self.include.clone_from(&self.xclang_include);
+                }
+                self.include_order = if self.xclang_include.is_some() || !self.probed.is_empty() {
                     IncludePchOrder::OverridesProbe
                 } else {
                     IncludePchOrder::BeforeProbe
@@ -773,6 +789,45 @@ impl PchArgs {
         }
     }
 }
+
+/// clang's `--include` spellings of `-include` (WP-1153): `--include
+/// <h>` and `--include<h>` (`JoinedOrSeparate`, so `--include-pch p` is
+/// `--include` with the value `-pch`), and `--include=<h>` (`Joined`, so
+/// `--include=` is an empty value). clang's longer `--include-*` options
+/// win as usual ([`LONGER_THAN_INCLUDE`]): those stay unknown arguments.
+fn include_alias<'a>(arg: &'a str, next: Option<&str>) -> Option<Valued<'a>> {
+    let rest = arg.strip_prefix("--include")?;
+    if LONGER_THAN_INCLUDE
+        .iter()
+        .any(|o| arg.strip_prefix(o).is_some_and(|r| r.is_empty() || r.starts_with('=')))
+    {
+        return None;
+    }
+    Some(match rest.strip_prefix('=') {
+        Some(v) => Valued::Joined(v),
+        None if rest.is_empty() => {
+            if next.is_some() {
+                Valued::Next
+            } else {
+                Valued::Missing
+            }
+        }
+        None => Valued::Joined(rest),
+    })
+}
+
+/// clang's `--include-*` options, each `Separate` and `=`-joined (and
+/// `--include-barrier`, a flag): `--include-directory=d` is `-Id`, not
+/// `--include` with `-directory=d`. kiln does not accept them yet.
+const LONGER_THAN_INCLUDE: &[&str] = &[
+    "--include-barrier",
+    "--include-directory",
+    "--include-directory-after",
+    "--include-prefix",
+    "--include-with-prefix",
+    "--include-with-prefix-after",
+    "--include-with-prefix-before",
+];
 
 /// Options taking a value, joined (`-Ifoo`) or separate (`-I foo`).
 const JOINED_OR_SEPARATE: &[&str] = &[
@@ -880,12 +935,36 @@ impl Args {
             }
             if xclang
                 && argv.get(i).is_some_and(|n| n == "-Xclang")
-                && let Some((_, Valued::Next)) =
-                    split_valued(arg, argv.get(i + 1).map(String::as_str))
+                && (matches!(
+                    split_valued(arg, argv.get(i + 1).map(String::as_str)),
+                    Some((_, Valued::Next))
+                ) || matches!(
+                    include_alias(arg, argv.get(i + 1).map(String::as_str)),
+                    Some(Valued::Next)
+                ))
             {
                 i += 1;
             }
             if verify.parse_arg(arg) {
+                continue;
+            }
+            if let Some(value) = include_alias(arg, argv.get(i).map(String::as_str)) {
+                let given = !matches!(value, Valued::Missing);
+                match value {
+                    Valued::Joined(v) => a.valued("-include", v, &mut x),
+                    Valued::Next => {
+                        i += 1;
+                        a.valued("-include", &argv[i - 1], &mut x);
+                    }
+                    Valued::Missing => {
+                        a.errors.push(ArgError::MissingValue("--include".to_owned()));
+                    }
+                }
+                if given && !xclang {
+                    let spelling =
+                        if arg.starts_with("--include=") { "--include=" } else { "--include " };
+                    a.pch.probed.push((a.includes.len() - 1, spelling));
+                }
                 continue;
             }
             if arg == "-" || !arg.starts_with('-') {
@@ -1980,7 +2059,7 @@ mod tests {
     fn probed_includes() {
         let a = parse("-Xclang -include -Xclang x.h -include a.h -includeb.h t.cpp");
         assert_eq!(a.includes, ["x.h", "a.h", "b.h"]);
-        assert_eq!(a.pch.probed, [1, 2]);
+        assert_eq!(a.pch.probed, [(1, "-include "), (2, "-include ")]);
         assert_eq!(a.pch.include_order, IncludePchOrder::BeforeProbe);
         assert_eq!(
             parse("-include-pch p.pch -include a.h t.cpp").pch.include_order,
@@ -1995,7 +2074,74 @@ mod tests {
         // The last `-include-pch` decides.
         let a = parse("-include a.h -include-pch p.pch -include-pch q.pch t.cpp");
         assert_eq!(a.pch.include_order, IncludePchOrder::OverridesProbe);
-        assert_eq!(parse("t.cpp -include").pch.probed, [0usize; 0]);
+        assert_eq!(parse("t.cpp -include").pch.probed, []);
+    }
+
+    /// WP-1153: an `-Xclang -include-pch` wins over every driver
+    /// `-include-pch`, before or after it (clang appends the `-Xclang`
+    /// options to the frontend's command line); among `-Xclang` ones, and
+    /// among driver ones, the last wins.
+    #[test]
+    fn xclang_include_pch_wins() {
+        let pch = |s: &str| parse(s).pch;
+        let a = pch("-Xclang -include-pch -Xclang x.pch -include-pch d.pch t.cpp");
+        assert_eq!(a.include.as_deref(), Some("x.pch"));
+        assert_eq!(a.include_order, IncludePchOrder::OverridesProbe);
+        let a = pch("-include-pch d.pch -Xclang -include-pch -Xclang x.pch t.cpp");
+        assert_eq!(a.include.as_deref(), Some("x.pch"));
+        let a = pch("-Xclang -include-pch -Xclang x.pch -include-pch d.pch -Xclang -include-pch \
+                     -Xclang y.pch -include-pch e.pch t.cpp");
+        assert_eq!(a.include.as_deref(), Some("y.pch"));
+        let a = pch("-Xclang -include-pch -Xclang x.pch -include a.h -include-pch d.pch t.cpp");
+        assert_eq!(a.include.as_deref(), Some("x.pch"));
+        assert_eq!(a.include_order, IncludePchOrder::OverridesProbe);
+        assert_eq!(
+            pch("-include-pch d.pch -include-pch e.pch t.cpp").include.as_deref(),
+            Some("e.pch")
+        );
+    }
+
+    /// WP-1153: `--include <h>`, `--include<h>` and `--include=<h>` are
+    /// clang's `-include` (probed for a PCH, rendered as written); the
+    /// longer `--include-*` options are not, and `--include-pch p` is
+    /// `--include` with the value `-pch`.
+    #[test]
+    fn double_dash_include() {
+        let a = parse(
+            "--include a.h --includeb.h --include=c.h --include= -Xclang --include \
+                       -Xclang d.h t.cpp",
+        );
+        assert_eq!(a.errors, []);
+        assert_eq!(a.includes, ["a.h", "b.h", "c.h", "", "d.h"]);
+        assert_eq!(
+            a.pch.probed,
+            [(0, "--include "), (1, "--include "), (2, "--include="), (3, "--include=")]
+        );
+        let names: Vec<&str> = a.inputs.iter().map(|i| i.path.as_str()).collect();
+        assert_eq!(names, ["t.cpp"]);
+        let a = parse("--include-pch p.pch t.cpp");
+        assert_eq!(
+            (a.includes.as_slice(), a.pch.include.as_deref()),
+            (&["-pch".to_owned()][..], None)
+        );
+        assert_eq!(a.inputs.len(), 2);
+        assert_eq!(parse("t.cpp --include").errors, [ArgError::MissingValue("--include".into())]);
+        for o in [
+            "--include-directory=d",
+            "--include-directory",
+            "--include-directory-after=d",
+            "--include-prefix=p",
+            "--include-with-prefix=p",
+            "--include-with-prefix-after=p",
+            "--include-with-prefix-before=p",
+            "--include-barrier",
+        ] {
+            let a = parse(&format!("{o} t.cpp"));
+            assert_eq!(a.includes, [""; 0], "{o}");
+            assert_eq!(a.errors, [ArgError::Unknown(o.into())], "{o}");
+        }
+        // `Separate`-only: a joined value is `--include` with `-directoryd`.
+        assert_eq!(parse("--include-directoryd t.cpp").includes, ["-directoryd"]);
     }
 
     #[test]
