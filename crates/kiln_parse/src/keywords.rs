@@ -1,9 +1,9 @@
 //! The keyword table ([lex.key], plus the GNU spellings kiln accepts).
 //!
 //! The lexer produces every keyword as an identifier; the parser maps the
-//! identifier's symbol to a [`Kw`] through one hash lookup.
-
-use std::collections::HashMap;
+//! identifier's symbol to a [`Kw`] through one indexed load: the table is
+//! dense in [`Symbol::index`] (the keywords are interned when the table is
+//! built, so it spans the symbols interned up to then; spec/parse.md §3).
 
 use kiln_ast::expr::TypeTrait;
 use kiln_ast::types::UnaryTransformKind;
@@ -162,7 +162,10 @@ keywords! {
 /// Symbol-to-keyword map for one interner.
 #[derive(Debug)]
 pub struct Keywords {
-    map: HashMap<Symbol, Kw>,
+    /// Per [`Symbol::index`]: the keyword and builtin name the symbol
+    /// spells. Symbols interned after the table was built index past its
+    /// end and are neither.
+    table: Vec<Entry>,
     /// The contextual keyword `final` ([lex.name]/2).
     pub final_: Symbol,
     /// The contextual keyword `override`.
@@ -171,11 +174,17 @@ pub struct Keywords {
     pub pre_: Symbol,
     /// The contextual keyword `post` ([dcl.contract.func]).
     pub post_: Symbol,
+}
+
+/// One [`Keywords`] table slot.
+#[derive(Copy, Clone, Debug, Default)]
+struct Entry {
+    kw: Option<Kw>,
     /// The clang type-trait and type-transform names
     /// (spec/sema-templates.md §9.1, §9.2, §9.4). They are identifiers
     /// unless followed by `(` (clang's revertible type-trait keywords), so
     /// libc++'s fallbacks such as `__make_signed<T>` still parse.
-    builtins: HashMap<Symbol, BuiltinKw>,
+    builtin: Option<BuiltinKw>,
 }
 
 /// A builtin type-trait or type-transform name.
@@ -202,7 +211,14 @@ impl Keywords {
 
     /// [`Keywords::new`], with `cxx26` enabling the C++26 keywords.
     pub fn with_std(interner: &Interner, gnu: bool, cxx11: bool, cxx26: bool, compat: u32) -> Self {
-        let mut map = HashMap::new();
+        fn slot(table: &mut Vec<Entry>, sym: Symbol) -> &mut Entry {
+            let i = sym.index() as usize;
+            if table.len() <= i {
+                table.resize(i + 1, Entry::default());
+            }
+            &mut table[i]
+        }
+        let mut table: Vec<Entry> = Vec::new();
         for (k, spellings) in Kw::TABLE {
             for s in *spellings {
                 if (!gnu && *s == "typeof")
@@ -211,27 +227,26 @@ impl Keywords {
                 {
                     continue;
                 }
-                map.insert(interner.intern(s), *k);
+                slot(&mut table, interner.intern(s)).kw = Some(*k);
             }
         }
-        let mut builtins = HashMap::new();
         for &t in TypeTrait::all() {
             if compat >= 22 && t == TypeTrait::IsReferenceable {
                 continue;
             }
-            builtins.insert(interner.intern(t.spelling()), BuiltinKw::Trait(t));
+            slot(&mut table, interner.intern(t.spelling())).builtin = Some(BuiltinKw::Trait(t));
         }
         for v in 0..=u8::MAX {
             let Some(k) = UnaryTransformKind::from_u8(v) else { break };
-            builtins.insert(interner.intern(k.spelling()), BuiltinKw::Transform(k));
+            slot(&mut table, interner.intern(k.spelling())).builtin = Some(BuiltinKw::Transform(k));
         }
+        table.shrink_to_fit();
         Keywords {
-            map,
+            table,
             final_: interner.intern("final"),
             override_: interner.intern("override"),
             pre_: interner.intern("pre"),
             post_: interner.intern("post"),
-            builtins,
         }
     }
 
@@ -239,17 +254,20 @@ impl Keywords {
     /// `-fchar8_t` semantics (clang `KEYCHAR8`: C++20 and later unless
     /// `-fno-char8_t`, or `-fchar8_t`; WP-808).
     pub fn remove(&mut self, interner: &Interner, spelling: &str) {
-        self.map.remove(&interner.intern(spelling));
+        let i = interner.intern(spelling).index() as usize;
+        if let Some(e) = self.table.get_mut(i) {
+            e.kw = None;
+        }
     }
 
     /// The builtin trait or transform `sym` names, if any.
     pub fn builtin(&self, sym: Symbol) -> Option<BuiltinKw> {
-        self.builtins.get(&sym).copied()
+        self.table.get(sym.index() as usize).and_then(|e| e.builtin)
     }
 
     /// The keyword `sym` spells, if any.
     pub fn get(&self, sym: Symbol) -> Option<Kw> {
-        self.map.get(&sym).copied()
+        self.table.get(sym.index() as usize).and_then(|e| e.kw)
     }
 }
 

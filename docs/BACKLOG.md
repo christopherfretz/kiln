@@ -920,7 +920,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-898 | clang 22 frame-pointer "non-leaf-no-reserve": tests/conformance/target.acle/ir-clrex.cpp fails under --compiler clang++-19 against oracle 22 (pre-existing) | WP-846 | open |
 | WP-879 | reflection correctness bundle 4: WP-796, WP-838, WP-866, WP-867, WP-870 (GCC 16.1 parity) | WP-830 | done (#398) |
 | WP-907 | sema: complete a variable template specialization of unknown array bound for sizeof/type_of (xfail temp.inst/p4-var-template-unknown-bound.cpp) | WP-879 | open |
-| WP-908 | perf: frontend ~3x slower than g++-16 on large repeated nested template-ids (5.1 MB TU: 1.28 s vs 0.44 s -fsyntax-only; docs/status/perf.md WP-879) | WP-879 | open |
+| WP-908 | perf: frontend ~3x slower than g++-16 on large repeated nested template-ids (5.1 MB TU: 1.28 s vs 0.44 s -fsyntax-only; docs/status/perf.md WP-879) | WP-879 | done (#407, via WP-919) |
+| WP-919 | perf: frontend throughput on large nested template-id TUs (profile dup8 + real TUs, fix hotspots, dup bench entry) | WP-908 | done (#407) |
 | WP-909 | decision: default -fkiln-reflection-mangling form (WP-879 study recommends gcc; operator decides) | WP-879 | open |
 | WP-899 | driver: `-ffat-lto-objects` emits real fat objects (machine code + bitcode); now bitcode-only (crates/kiln_driver/src/codegen_flags.rs:28) | WP-873 | open |
 | WP-900 | codegen: `-fstrict-vtable-pointers` invariant.group metadata and `-f[no-]vectorize`/`-fslp-vectorize` pipeline toggles (codegen_flags.rs:146) | WP-873 | deferred |
@@ -973,3 +974,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-958 | accepts-invalid (WP-912): rejects-valid: templates and deduction (12 xfails, docs/status/accepts-invalid.md cluster 15) | WP-912 | open |
 | WP-959 | accepts-invalid (WP-912): rejects-valid: classes, special members, initialization, misc (9 xfails, cluster 16) | WP-912 | open |
 | WP-960 | accepts-invalid (WP-912): low: `-pedantic-errors` extension diagnostics; unsupported GNU extensions and driver flags | WP-912 | open |
+| WP-963 | perf (WP-919): `Sema::lookup_stamp` is 6% of dup6; cache it per scope change or pass it down a scan | WP-919 | open |
+| WP-964 | perf (WP-919): `tok_at` 11% of dup6; lookahead predicates re-walk tokens before a memo answers | WP-919 | open |
+| WP-965 | perf (WP-919): `lookup_name_scoped`/filter `Vec` results (malloc/free 6.4% of dup6); small-vector or borrowed slice | WP-919 | open |

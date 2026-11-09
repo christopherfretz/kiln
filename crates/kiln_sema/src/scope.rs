@@ -145,9 +145,13 @@ impl Scope {
 impl crate::Sema<'_, '_> {
     /// A fingerprint of the state name classification reads: the number
     /// of declarations, the AST lookup tables' generation, the current
-    /// context, the shape of the scope stack (kind, entity, number of
-    /// locals and using-directives per scope) and the open prototype
-    /// parameter lists. While it is unchanged, [`crate::Sema::classify_name`]
+    /// context, the scope stack (per scope: kind, entity, number of
+    /// locals and the last of them, number of local using-declarators and
+    /// using-directives) and the open prototype parameter lists. The last
+    /// local tells apart two scope stacks of the same shape, as when the
+    /// declaration scopes of two function templates with alike parameter
+    /// lists are reinstated in turn (WP-919): locals are only appended and
+    /// a declaration is a local of one scope. While it is unchanged, [`crate::Sema::classify_name`]
     /// answers every query the same way, so the parser may reuse a
     /// lookahead scan (spec/parse.md §2.5, the template-argument memo).
     pub fn lookup_stamp(&self) -> u64 {
@@ -155,7 +159,9 @@ impl crate::Sema<'_, '_> {
         let mut h = kiln_source::fx::FxHasher::default();
         (self.ast.decls.len(), self.ast.lookup.generation(), self.ctx).hash(&mut h);
         for s in &self.scopes {
-            (s.kind as u8, s.entity, s.locals.len(), s.using_dirs.len()).hash(&mut h);
+            let last = s.locals.last().map(|l| l.1);
+            (s.kind as u8, s.entity, s.locals.len(), last, s.local_names.len(), s.using_dirs.len())
+                .hash(&mut h);
         }
         for f in &self.prototype_params {
             (f.depth, f.params.len(), f.index).hash(&mut h);

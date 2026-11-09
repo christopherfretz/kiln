@@ -628,3 +628,87 @@ o += ["int (*fs[])() = {"] + [f"  &f<^^{ty(i, depth)}>," for i in range(n)] + ["
 o += ["int* counts[] = {"] + [f"  &S<^^{ty(i, depth)}>::count," for i in range(n)] + ["};"]
 print("\n".join(o))
 ```
+
+### WP-919: frontend throughput on repeated nested template-ids, fixed (2026-11-08)
+
+The WP-879 slope (above) is gone: dup8 `-fsyntax-only` went from 3.16x to
+1.18x g++-16's wall time, at the same RSS (17 MB vs g++-16's 181 MB). The
+design and the profiles are in spec/landed/parse/WP-919.md.
+
+**Profile** (callgrind, release kiln++, dup6 = 1.3 MB; `perf` is blocked in
+the container): 4,524M instructions before, 1,432M after (-68%). Before,
+the lookahead scans (`TokenSource::get` alone 16.7%), the SipHash keyword
+lookup (12.9%), allocation (22%, from `lookup_name_scoped`'s result vectors)
+and name classification (20%) were 80% of it; lexing and preprocessing
+4%. Each component of a nested template-id was classified by
+`Sema::classify_name` and re-scanned by `scan_name_walk` once per lookahead
+predicate before it was parsed, so the same lookups ran several times per
+token.
+
+**Fixes** (spec/parse.md §2.2, §2.5): a dense keyword table indexed by the
+symbol instead of a SipHash map; a `classify_name`/`classify_nested_name`
+memo and a `scan_name_walk` memo, both keyed under `Sema::lookup_stamp` like
+the WP-086 template-argument memo and capped at 4,096 entries;
+`decltype_scope_end` decides on the token's keyword before it scans; and an
+inlined in-window fast path for `TokenSource::get`. No output changes.
+
+**Timings.** Release kiln++ before (main b2e7a81c9) and after (wp/919),
+g++-16 16.1 and clang++-19, all `-fsyntax-only`, interleaved best of 5 on
+the same loaded host (load ~18 on 24 CPUs), wall / user / max RSS. dup4,
+dup6 and dup8 are `python3 gen.py 200 D 4 1` with D = 4, 6, 8 (0.3, 1.3,
+5.1 MB; the generator is in the WP-879 section, and
+`bench/frontend/nested-template-ids-dup.cpp` generates dup6 at bench time);
+clang 19 has no reflection. `S=.oss/src` (`scripts/oss/oss-build.sh`).
+
+```
+kiln++ -std=c++26 -freflection -fsyntax-only dupD.cpp
+g++-16 -std=c++26 -freflection -fsyntax-only dupD.cpp
+# fmt 12.1.0
+kiln++ -fsyntax-only -std=c++20 -I$S/fmt/include -I$S/fmt/test/gtest -I$S/fmt/test $S/fmt/test/format-test.cc
+# nlohmann_json v3.12.0
+kiln++ -fsyntax-only -std=c++17 -I$S/nlohmann_json/include -I$S/nlohmann_json/tests/thirdparty/doctest $S/nlohmann_json/tests/src/unit-algorithms.cpp
+# range-v3 0.12.0
+kiln++ -fsyntax-only -std=c++20 -I$S/range_v3/include -I$S/range_v3/test $S/range_v3/test/view/zip.cpp
+# Boost.Hana boost-1.89.0
+kiln++ -fsyntax-only -std=c++17 -I$S/hana/include -I$S/hana/test/_include $S/hana/test/searchable.cpp
+```
+
+(g++-16 and clang++-19 take the same arguments.)
+
+| TU | kiln before | kiln after | g++-16 | clang++-19 | before / gcc | after / gcc |
+|---|--:|--:|--:|--:|--:|--:|
+| dup4 (0.3 MB) | 0.09 s / 0.06 u / 11 MB | 0.05 s / 0.02 u / 11 MB | 0.09 s / 0.03 u / 38 MB | n/a | 1.00x | 0.56x |
+| dup6 (1.3 MB) | 0.31 s / 0.28 u / 13 MB | 0.12 s / 0.10 u / 12 MB | 0.16 s / 0.09 u / 66 MB | n/a | 1.94x | 0.75x |
+| dup8 (5.1 MB) | 1.20 s / 1.18 u / 17 MB | 0.45 s / 0.41 u / 17 MB | 0.38 s / 0.33 u / 181 MB | n/a | 3.16x | **1.18x** |
+| fmt format-test.cc | 1.66 s / 1.55 u / 113 MB | 1.61 s / 1.49 u / 113 MB | 2.02 s / 1.53 u / 387 MB | 2.08 s / 1.93 u / 277 MB | 0.82x | 0.80x |
+| json unit-algorithms.cpp | 1.15 s / 1.01 u / 84 MB | 1.03 s / 0.96 u / 84 MB | 1.07 s / 0.80 u / 284 MB | 1.39 s / 1.29 u / 232 MB | 1.07x | 0.96x |
+| range-v3 view/zip.cpp | 2.13 s / 2.00 u / 141 MB | 1.92 s / 1.72 u / 142 MB | 2.10 s / 1.81 u / 503 MB | 2.61 s / 2.40 u / 354 MB | 1.01x | 0.91x |
+| hana searchable.cpp | 0.70 s / 0.56 u / 49 MB | 0.67 s / 0.54 u / 49 MB | 1.02 s / 0.63 u / 244 MB | 1.04 s / 0.82 u / 176 MB | 0.69x | 0.66x |
+
+The real TUs never had the slope (kiln was at or under g++-16 and
+clang++-19 already), so they were no-regression checks; they got 2-10%
+faster. Diagnostics and IR are byte-identical before and after (stderr of
+all four real TUs, `-S -emit-llvm` of dup6).
+
+**Bench A/B** (`cargo xtask bench --compiler <after> --compare-with
+<before> --runs 5`, the default corpus, same host, load ~19): geometric
+mean after/before **time 0.94x, memory 0.99x** over 51 entries. The
+largest memory ratio is 1.03x (`oven/churn-list`, 10.0 vs 9.7 MB), so no
+entry's RSS grew by more than 3%. Front-end entries: `nested-template-ids`
+0.54x (the WP-086 depth-2,000 template-id), the new
+`nested-template-ids-dup` 0.47x (170 vs 359 ms, 12.4 vs 12.7 MB),
+`overload/calls` 0.66x, `templates_wide` 0.93x, `format-like-g` 0.94x;
+the rest are within noise (0.96-1.04x). Above 1.1x are only the noisy
+(spread > 10%) `oven/churn-tree` 2.33x, `frontend/expansion-outline-obj`
+1.33x and `frontend/virtual-lattice` 1.19x (a 46 vs 55 ms entry), which do
+not touch the changed code paths (`oven/churn-mixed` moved the other way,
+0.27x). Results file: `bench/results/2026-11-08T225947.json` (not
+committed).
+
+**Stamp fix.** The libc++ M3 gate caught a stale classification: two
+function templates of alike shape whose scopes are reinstated in turn
+shared memo entries (spec/parse.md §2.5). `Sema::lookup_stamp` now also
+hashes each scope's last local and its using-declarator count. Re-timed
+after it, same protocol: dup6 0.12 s (0.86x g++-16), dup8 0.44 s
+(**1.19x**), fmt 0.76x, json 0.86x, range-v3 0.85x, hana 0.73x, with RSS
+unchanged.

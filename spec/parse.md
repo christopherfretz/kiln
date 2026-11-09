@@ -363,8 +363,9 @@ clang's `Parser` over `Preprocessor::Lex`.
   stays an expression; dependent components keep the scan going.
 
 ### 2.2 Tokens
-- **Keywords** are classified by the parser (`keywords.rs`, one hash
-  lookup on the identifier's symbol). The preprocessor delivers them as
+- **Keywords** are classified by the parser (`keywords.rs`, one indexed
+  load: the table is dense in the symbol index, since the keywords are
+  interned when it is built; WP-919). The preprocessor delivers them as
   identifiers.
 - **Alternative tokens** ([lex.digraph]/2: `and`, `bitor`, `not_eq`,
   ...) become their punctuators in the token source, including when
@@ -541,7 +542,7 @@ outermost class is complete, so their tokens are saved and re-parsed
 - Pragma events (§2.3) keyed to tokens inside a saved range fire when the
   range is captured, not when it is replayed.
 
-### 2.5 The template-argument scan memo (WP-086)
+### 2.5 The lookahead scan memos (WP-086, WP-919)
 At each `<` after a template name the parser asks whether the
 template-argument-list closes before an operator could
 (`skip_template_args(i)`, [temp.names]/4). The scan classifies every name
@@ -632,9 +633,16 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp
   hashes what name classification reads: the declaration count, the
   lookup tables' generation (bumped on every insertion), the semantic
-  context, the scope stack (kind, entity, local and using-directive
-  counts) and the prototype-parameter scopes. A different stamp empties
-  the memo before the lookup.
+  context, the scope stack (per scope: kind, entity, the local count and
+  the last local, the local using-declarator and using-directive counts)
+  and the prototype-parameter scopes. A different stamp empties the memo
+  before the lookup.
+  - The last local matters when two scope stacks of the same shape are
+    reinstated in turn with no declaration in between. The deferred
+    exception specifications of two member function templates with alike
+    parameter lists are an example: by counts alone their `_Tp` would
+    share a memo entry (WP-919; libc++ 19 `tuple`'s
+    `noexcept(_And<is_nothrow_constructible<_Tp, _Up>...>::value)`).
 - The token stream changing also empties it: `begin_replay`,
   `end_replay`, `inject_semi` (and the pop of an inject frame in `bump`)
   re-number the indices, and `split_greater` rewrites the current token.
@@ -642,13 +650,29 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   fills the memo for every nested `<`, and the nested parses hit it.
   `bench/frontend/nested-template-ids.cpp` (128 aliases of a depth-2,000
   template-id) tracks it.
+- The name scan (`scan_name_walk(i)`: the qualified name, template-id or
+  splice from token `i`, which the lookahead predicates call several
+  times per component before the component is parsed) is memoized the
+  same way, by `i`, in the same memo and under the same stamp and
+  token-stream rules (WP-919). It is not memoized while a decltype
+  qualifier is pending (the walk reads it) or after the stack guard halts
+  the parse. At most 4,096 results are kept; a full table is emptied.
+- `Sema::classify_name` and `Sema::classify_nested_name` memoize their
+  result by (name, qualifier, nested) under the same stamp, at most 4,096
+  entries (`Sema::classify_memo`; WP-919). The classification is
+  side-effect free (spec/sema-class.md), so a hit answers exactly as the
+  lookup would.
+- These memos make a TU of repeated nested template-ids linear with a
+  small slope: `bench/frontend/nested-template-ids-dup.cpp` (generated at
+  bench time, 1.3 MB; spec/bench.md "Generated entries") tracks it, and
+  docs/status/perf.md "WP-919" has the g++-16 comparison.
 
 ## 3. Parser core (`parser.rs`)
 - **Token access:**
   - `tok`, `peek`, `bump`, `at(p)`, `at_kw(k)`, `eat`, `eat_kw`
   - `ident()` returns a non-keyword identifier.
   - Keywords are identifiers that `keywords.rs` maps to `Kw` with one
-    hash lookup. The table includes the GNU spellings (`__inline__`,
+    indexed load (§2.2). The table includes the GNU spellings (`__inline__`,
     `__attribute__`, ...).
   - C-only keywords that clang marks KEYNOCXX are not in the table
     (WP-183). `_Bool` is a plain identifier in C++, so `_Bool b;`
