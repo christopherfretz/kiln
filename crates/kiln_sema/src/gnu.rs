@@ -627,6 +627,7 @@ impl Sema<'_, '_> {
             return self.recover(ty, &[init], lparen);
         }
         let e = self.builder().compound_literal(ty, init, lparen);
+        self.builder().record_end_loc(e, l.rbrace);
         // A class literal is a temporary ([class.temporary]/4).
         if class { self.maybe_bind_temporary(e) } else { e }
     }

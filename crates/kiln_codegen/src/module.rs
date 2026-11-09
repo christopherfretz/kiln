@@ -605,9 +605,13 @@ impl<'a> Cg<'a> {
             self.walk_epoch = e;
         }
         self.emit_ref_vars(ctx, true)?;
+        let ends = if ctx == ast.tu { self.member_ends(&members) } else { Vec::new() };
         for (i, &d) in members.iter().enumerate() {
             if let Some(&e) = epochs.get(i) {
                 self.walk_epoch = e;
+            }
+            if let Some(&k) = ends.get(i) {
+                self.cov_defer_insts(k);
             }
             self.emit_ref_vars(d, false)?;
             if !ast.templates.is_late_explicit_inst(ast.first(d)) {
@@ -656,6 +660,28 @@ impl<'a> Cg<'a> {
         for (i, d) in members.iter().enumerate().rev() {
             if let Some(&e) = at.get(d) {
                 cur = e;
+            }
+            out[i] = cur;
+        }
+        out
+    }
+
+    /// The index of the top-level declaration each member of the
+    /// translation unit belongs to (its first recorded end at or after
+    /// it, `DeclArena::top_level_ends`; the count of ends past the last).
+    fn member_ends(&self, members: &[DeclId]) -> Vec<u32> {
+        let ends = self.ast.decls.top_level_ends();
+        let mut at: FxHashMap<DeclId, u32> = FxHashMap::default();
+        for (k, &(last, _)) in ends.iter().enumerate() {
+            if let Some(l) = last {
+                at.entry(l).or_insert(u32::try_from(k).unwrap_or(u32::MAX));
+            }
+        }
+        let mut out = vec![u32::try_from(ends.len()).unwrap_or(u32::MAX); members.len()];
+        let mut cur = out.first().copied().unwrap_or(0);
+        for (i, d) in members.iter().enumerate().rev() {
+            if let Some(&k) = at.get(d) {
+                cur = k;
             }
             out[i] = cur;
         }

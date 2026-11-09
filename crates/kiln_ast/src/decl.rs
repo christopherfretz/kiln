@@ -1838,6 +1838,10 @@ pub struct DeclArena {
     /// order: the last member of the translation unit's member list and
     /// the class-completion epoch there ([`DeclArena::end_top_level_decl`]).
     top_level_ends: Vec<(Option<DeclId>, u32)>,
+    /// Function definitions instantiated, in the order they completed,
+    /// each with the number of top-level ends recorded by then
+    /// ([`DeclArena::note_fn_def_inst`]).
+    fn_def_insts: Vec<(DeclId, u32)>,
     /// Cold per-declaration data.
     pub cold: ColdDeclData,
     /// Every declaration [`DeclArena::set_ty`] retypes (WP-658; see
@@ -1937,6 +1941,7 @@ impl Default for DeclArena {
             }],
             completed_records: Vec::new(),
             top_level_ends: Vec::new(),
+            fn_def_insts: Vec::new(),
             cold: ColdDeclData::default(),
             ty_journal: crate::journal::Journal::default(),
         }
@@ -2944,6 +2949,23 @@ impl DeclArena {
         &self.top_level_ends
     }
 
+    /// Sema finished instantiating the definition of function `f`: clang
+    /// hands it to code generation there (`HandleTopLevelDecl`), before
+    /// the top-level declaration being parsed, whose index is recorded
+    /// (`top_level_ends().len()`; the count of all ends for one done at
+    /// the end of the translation unit).
+    pub fn note_fn_def_inst(&mut self, f: DeclId) {
+        let k = u32::try_from(self.top_level_ends.len()).unwrap_or(u32::MAX);
+        self.fn_def_insts.push((f, k));
+    }
+
+    /// The instantiated function definitions in completion order, each
+    /// with the index of the top-level declaration it precedes
+    /// ([`DeclArena::note_fn_def_inst`]).
+    pub fn fn_def_insts(&self) -> &[(DeclId, u32)] {
+        &self.fn_def_insts
+    }
+
     /// Sets a field's default member initializer (write-once).
     pub fn set_field_init(&mut self, f: DeclId, init: ExprId) -> Result<(), AlreadySet> {
         set_once(&mut self.field_mut(f).init, init, "FieldData.init", RawId::raw)
@@ -3101,7 +3123,7 @@ impl DeclArena {
         all - VecDims::of("min_args", &self.min_args).live_bytes()
     }
 
-    fn vec_rows(&self) -> [VecDims; 18] {
+    fn vec_rows(&self) -> [VecDims; 19] {
         [
             VecDims::of("nodes", &self.nodes),
             VecDims::of("functions", &self.functions),
@@ -3121,6 +3143,7 @@ impl DeclArena {
             VecDims::of("ctor_inits", &self.ctor_inits),
             VecDims::of("completed_records", &self.completed_records),
             VecDims::of("top_level_ends", &self.top_level_ends),
+            VecDims::of("fn_def_insts", &self.fn_def_insts),
         ]
     }
 }
