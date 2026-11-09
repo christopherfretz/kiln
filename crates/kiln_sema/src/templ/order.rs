@@ -274,7 +274,8 @@ impl Sema<'_, '_> {
             let TypeView::MemberPointer { pointee: ap, class: ac } = t.canonical_view(at) else {
                 return false;
             };
-            let same_class = t.canonical(QualType::unqual(class)) == t.canonical(QualType::unqual(ac));
+            let same_class =
+                t.canonical(QualType::unqual(class)) == t.canonical(QualType::unqual(ac));
             return same_class && self.nttp_placeholder_matches(pointee, ap);
         }
         if !self.contains_undeduced_auto(pt) {

@@ -126,6 +126,7 @@ pub struct DeductionInfo {
 /// The arguments deduced so far for the parameters of one template
 /// (one depth, §6.2). An undeduced parameter holds [`TemplateArg::NULL`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools, reason = "independent deduction modes")]
 pub struct DeducedArgs {
     /// The depth of the parameters being deduced.
     pub depth: u16,
