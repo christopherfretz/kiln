@@ -577,6 +577,9 @@ pub struct Oven {
     /// Floating arithmetic that yields a NaN or divides by zero goes on
     /// with the `APFloat` result ([`Oven::set_fold_float_ub`]).
     pub(crate) fold_float_ub: bool,
+    /// A fold may leave allocations undeallocated
+    /// ([`Oven::set_fold_leaks`]).
+    pub(crate) fold_leaks: bool,
     /// String literal objects of evaluated `StringLiteral` exprs, one per
     /// expression ([lex.string]/9: distinct evaluations need not share).
     pub(crate) lit_exprs: FxHashMap<ExprId, u32>,
@@ -674,6 +677,7 @@ impl Oven {
             provisional: Vec::new(),
             provisional_objs: FxHashMap::default(),
             fold_float_ub: false,
+            fold_leaks: false,
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
             lets: FxHashMap::default(),
@@ -716,6 +720,19 @@ impl Oven {
     /// never memoized. Codegen sets it; sema never does.
     pub fn set_fold_float_ub(&mut self, on: bool) {
         self.fold_float_ub = on;
+    }
+
+    /// Lets a fold outside a constant context ([`Oven::fold_rvalue`])
+    /// succeed with allocations still live at its end, as long as its
+    /// value does not point at one: clang's `CheckMemoryLeaks` is only a
+    /// core-constant-expression note there (`CCEDiag`), so its codegen
+    /// folds `(bool)new int(4)` to `true` (`ConstantFoldsToSimpleInteger`,
+    /// coverage `ConditionFoldsToBool`; WP-1108). The allocations are
+    /// reclaimed with the context, as any other. A constant expression
+    /// ([expr.const]/5.20) and every evaluation sema runs keep the leak
+    /// check. Codegen sets it; sema never does.
+    pub fn set_fold_leaks(&mut self, on: bool) {
+        self.fold_leaks = on;
     }
 
     /// Sets how many call frames a failure's backtrace shows
