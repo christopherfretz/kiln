@@ -670,6 +670,42 @@ mod ci_tests {
         assert_eq!(listed, want, "{}", path.display());
     }
 
+    /// The x86_64 sweep never gates a merge (WP-961, docs/VALIDATION.md
+    /// "x86_64 sweep"): `.github/workflows/sweep.yml` triggers only on
+    /// `workflow_dispatch` and pushes to `sweep/**`, and every project of its
+    /// OSS matrix is a row of `scripts/oss/projects.toml`.
+    #[test]
+    fn sweep_never_gates() {
+        let root = util::repo_root();
+        let path = root.join(".github/workflows/sweep.yml");
+        let yml = std::fs::read_to_string(&path).unwrap();
+        // The `on:` map: its lines up to the next top-level key.
+        let on: String = yml[yml.find("\non:\n").expect("an on: map") + 5..]
+            .lines()
+            .take_while(|l| l.is_empty() || l.starts_with([' ', '#']))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let triggers: Vec<&str> = on
+            .lines()
+            .filter(|l| l.len() > 2 && l.starts_with("  ") && !l[2..].starts_with([' ', '#']))
+            .map(|l| l.trim().trim_end_matches(':'))
+            .collect();
+        assert_eq!(triggers, ["workflow_dispatch", "push"], "{}", path.display());
+        assert!(on.contains("branches: [\"sweep/**\"]"), "{}", path.display());
+        for gate in ["pull_request", "merge_group"] {
+            let mut code = yml.lines().filter(|l| !l.trim_start().starts_with('#'));
+            assert!(!code.any(|l| l.contains(gate)), "{} names {gate}", path.display());
+        }
+        let toml = std::fs::read_to_string(root.join("scripts/oss/projects.toml")).unwrap();
+        let line = yml
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("project: ["))
+            .expect("sweep.yml has a `project: [...]` matrix line");
+        for p in line.trim_end_matches(']').split(',').map(str::trim) {
+            assert!(toml.contains(&format!("\n[{p}]\n")), "{p} is not in projects.toml");
+        }
+    }
+
     /// The debugger tests cannot silently skip in GitHub CI (WP-816,
     /// spec/harness.md "Debugger tests"): `.github/workflows/ci-lane.yml`
     /// sets `KILN_REQUIRE_DEBUGGERS: "1"`, and every job that runs a corpus
