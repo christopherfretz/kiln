@@ -384,8 +384,9 @@ impl Sema<'_, '_> {
         n.loc()
     }
 
-    /// clang `Stmt::getEndLoc` for the statements a branch fix-it spans.
-    fn uninit_stmt_end(&self, s: StmtId) -> Loc {
+    /// clang `Stmt::getEndLoc` for the statements a branch fix-it spans
+    /// (and a discarded `if constexpr` branch's, `templ/subst/stmts.rs`).
+    pub(crate) fn uninit_stmt_end(&self, s: StmtId) -> Loc {
         let st = &self.ast.stmts;
         let n = st.get(s);
         match n.kind() {

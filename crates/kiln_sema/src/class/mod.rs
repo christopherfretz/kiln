@@ -18,6 +18,7 @@ mod ctorinit;
 pub(crate) mod friend;
 pub(crate) mod inhctor;
 mod member_expr;
+pub(crate) mod member_friend;
 mod member_name;
 mod member_rules;
 pub(crate) mod members;

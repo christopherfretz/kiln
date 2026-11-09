@@ -444,6 +444,8 @@ pub(crate) struct Builder<'a, 'f> {
     gap_rc: Counter,
     leaf: FxHashSet<ExprId>,
     kids: Vec<ExprId>,
+    /// `-fclang-compat=20` or later: clang 20+'s mapping rules (WP-1082).
+    v20: bool,
 }
 
 impl<'a, 'f> Builder<'a, 'f> {
@@ -452,6 +454,7 @@ impl<'a, 'f> Builder<'a, 'f> {
         l: Locs<'a>,
         rc: &'a RegionCounters,
         fold: &'f mut dyn FnMut(ExprId) -> Option<i128>,
+        clang_compat: u32,
     ) -> Self {
         Builder {
             sh: Shape { ast, l },
@@ -468,6 +471,7 @@ impl<'a, 'f> Builder<'a, 'f> {
             gap_rc: Counter::Zero,
             leaf: FxHashSet::default(),
             kids: Vec::new(),
+            v20: clang_compat >= 20,
         }
     }
 
@@ -614,20 +618,38 @@ impl<'a, 'f> Builder<'a, 'f> {
         (self.fold)(e)
     }
 
-    /// `createBranchRegion`.
-    fn branch(&mut self, c: Option<ExprId>, t: Counter, f: Counter) {
+    /// `createBranchRegion`. A condition that folds to a constant gets
+    /// zero counters (clang 19); clang 20+ zeroes only the side the
+    /// constant never takes.
+    fn branch(&mut self, c: Option<ExprId>, mut t: Counter, mut f: Counter) {
         let Some(c) = c else { return };
         let ast = self.ast();
         if !(is_instrumented_condition(ast, c) || self.leaf.contains(&strip_cond(ast, c))) {
             return;
         }
         let (s, e) = (self.start(N::E(c)), self.end(N::E(c)));
-        let i = if self.folds(c).is_some() {
-            self.push(Counter::Zero, Some(s), Some(e), Some(Counter::Zero))
-        } else {
-            self.push(t, Some(s), Some(e), Some(f))
-        };
+        match self.folds(c) {
+            Some(v) if self.v20 => {
+                if v != 0 {
+                    f = Counter::Zero;
+                } else {
+                    t = Counter::Zero;
+                }
+            }
+            Some(_) => (t, f) = (Counter::Zero, Counter::Zero),
+            None => {}
+        }
+        let i = self.push(t, Some(s), Some(e), Some(f));
         self.pop(i);
+    }
+
+    /// `OutCount != ParentCount` (clang 19), clang 20+'s
+    /// `IsCounterEqual`: equal when their difference simplifies to zero.
+    fn same_count(&mut self, out: Counter, parent: Counter) -> bool {
+        if out == parent {
+            return true;
+        }
+        self.v20 && self.sub(out, parent) == Counter::Zero
     }
 
     /// `adjustForOutOfOrderTraversal`.
@@ -1071,6 +1093,12 @@ impl<'a, 'f> Builder<'a, 'f> {
                 self.generic(N::E(syn));
             }
             ExprKind::OpaqueValueExpr => {}
+            // clang 20+ `VisitStmtExpr`: a termination inside the
+            // statement expression does not leave it.
+            ExprKind::StmtExpr if self.v20 => {
+                self.visit_stmt(ex.stmt_expr_body(e));
+                self.has_term = false;
+            }
             _ => self.generic(n),
         }
     }
@@ -1081,7 +1109,7 @@ impl<'a, 'f> Builder<'a, 'f> {
     }
 
     fn after_loop(&mut self, out: Counter, parent: Counter, body_term: bool) {
-        if out != parent {
+        if !self.same_count(out, parent) {
             self.push(out, None, None, None);
             self.gap_rc = out;
             if body_term {
@@ -1153,13 +1181,16 @@ impl<'a, 'f> Builder<'a, 'f> {
         }
         let x = self.sub(cond, body);
         let out = self.add(brk, x);
-        if out != parent {
+        let differs = !self.same_count(out, parent);
+        if differs {
             self.push(out, None, None, None);
             self.gap_rc = out;
         }
         let f = self.sub(cond, body);
         self.branch(d.cond, body, f);
-        if body_term {
+        // clang 20+ keeps the body's termination only when the loop exit
+        // starts a region.
+        if body_term && (differs || !self.v20) {
             self.has_term = true;
         }
     }
@@ -1306,8 +1337,13 @@ impl<'a, 'f> Builder<'a, 'f> {
         }
         sum = self.add(sum, Counter::Zero);
         if !has_default {
-            let dt = self.sub(parent, sum);
-            let df = self.sub(parent, dt);
+            // clang 20+ counts the cases as the condition's true side.
+            let (dt, df) = if self.v20 {
+                (sum, self.sub(parent, sum))
+            } else {
+                let dt = self.sub(parent, sum);
+                (dt, self.sub(parent, dt))
+            };
             self.branch(Some(d.cond), dt, df);
         }
     }
@@ -1447,7 +1483,7 @@ impl<'a, 'f> Builder<'a, 'f> {
         } else {
             out = self.add(out, ec);
         }
-        if out != parent {
+        if !self.same_count(out, parent) {
             self.push(out, None, None, None);
             self.gap_rc = out;
         }
@@ -1482,7 +1518,7 @@ impl<'a, 'f> Builder<'a, 'f> {
         let fc = self.sub(parent, tc);
         let x = self.propagate(fc, N::E(f), true);
         out = self.add(out, x);
-        if out != parent {
+        if !self.same_count(out, parent) {
             self.push(out, None, None, None);
             self.gap_rc = out;
         }
@@ -1505,8 +1541,13 @@ impl<'a, 'f> Builder<'a, 'f> {
         let out = self.propagate(tc, N::E(lhs), true);
         let le = self.end(N::E(lhs));
         self.file_exit(le);
-        self.extend(N::E(rhs));
         let rexec = self.rce(e);
+        // clang 20+: the right operand's count from the end of the left.
+        if self.v20 {
+            let g = self.gap_between(le, self.start(N::E(rhs)));
+            self.fill_gap(g, rexec);
+        }
+        self.extend(N::E(rhs));
         self.propagate(rexec, N::E(rhs), true);
         let rcnt = self.rce(rhs);
         if !and && self.folds(lhs).is_some_and(|v| v != 0) {

@@ -43,6 +43,10 @@ fn merge_access(path: Access, decl: Access) -> Access {
 struct EffectiveContext {
     records: Vec<DeclId>,
     functions: Vec<DeclId>,
+    /// The [temp.friend]/5 `FriendDecl`s naming one of them, and whether
+    /// only speculatively (a member of a pattern;
+    /// [`Sema::member_friend_grants`]).
+    member_friends: Vec<(DeclId, bool)>,
 }
 
 /// What is being accessed (clang `AccessTarget`).
@@ -77,7 +81,7 @@ impl Sema<'_, '_> {
         None
     }
 
-    fn effective_context(&self) -> EffectiveContext {
+    fn effective_context(&mut self) -> EffectiveContext {
         self.effective_context_at(self.access_start())
     }
 
@@ -93,8 +97,12 @@ impl Sema<'_, '_> {
     }
 
     /// The effective context of a declaration in context `start`.
-    fn effective_context_at(&self, start: DeclId) -> EffectiveContext {
-        let mut ec = EffectiveContext { records: Vec::new(), functions: Vec::new() };
+    fn effective_context_at(&mut self, start: DeclId) -> EffectiveContext {
+        let mut ec = EffectiveContext {
+            records: Vec::new(),
+            functions: Vec::new(),
+            member_friends: Vec::new(),
+        };
         let mut cur = Some(start);
         for _ in 0..10_000 {
             let Some(c) = cur else { break };
@@ -116,6 +124,10 @@ impl Sema<'_, '_> {
                 DeclKind::TranslationUnit | DeclKind::Namespace => break,
                 _ => cur = n.ctx(),
             }
+        }
+        if !self.member_friends.by_friend.is_empty() {
+            let members: Vec<DeclId> = ec.records.iter().chain(&ec.functions).copied().collect();
+            ec.member_friends = self.member_friend_grants(&members);
         }
         ec
     }
@@ -180,6 +192,17 @@ impl Sema<'_, '_> {
                 DeclKind::ClassTemplate => {
                     ec.records.iter().any(|&r| self.friend_template_of(r) == Some(f))
                 }
+                // `template<class T> friend class A<T>::Member;`
+                // ([temp.friend]/5): matched when the context was formed.
+                DeclKind::Friend => match ec.member_friends.iter().find(|m| m.0 == f) {
+                    Some(&(_, speculative)) => {
+                        if speculative {
+                            self.speculative_friend.set(true);
+                        }
+                        true
+                    }
+                    None => false,
+                },
                 // A befriended specialization of the function template
                 // whose definition is being parsed may be the context once
                 // instantiated: decided then (clang's `MightInstantiateTo`
@@ -221,7 +244,7 @@ impl Sema<'_, '_> {
 
     /// The (first declaration of the) template `d` is a specialization,
     /// partial specialization or pattern of.
-    fn friend_template_of(&self, d: DeclId) -> Option<DeclId> {
+    pub(crate) fn friend_template_of(&self, d: DeclId) -> Option<DeclId> {
         let t = match self.ast.spec_info(d) {
             Some((_, s)) => Some(s.template),
             None => self
@@ -787,7 +810,7 @@ impl Sema<'_, '_> {
     /// is accessible, else the error `mk(protected)` with clang's
     /// access-path notes.
     pub(crate) fn special_member_access(
-        &self,
+        &mut self,
         m: DeclId,
         naming: DeclId,
         mk: impl FnOnce(&Self, bool) -> Diag,
@@ -800,7 +823,7 @@ impl Sema<'_, '_> {
     /// constructs ([namespace.udecl]/19; clang `CheckConstructorAccess`
     /// takes the `ConstructorUsingShadowDecl`'s class).
     pub(crate) fn special_member_access_on(
-        &self,
+        &mut self,
         m: DeclId,
         naming: DeclId,
         object: DeclId,
@@ -825,7 +848,7 @@ impl Sema<'_, '_> {
     /// ([class.compare.default]/2, spec/sema-class.md §4.12). `None` if
     /// accessible, else `mk(protected)` with the access-path notes.
     pub(crate) fn cmp_member_access(
-        &self,
+        &mut self,
         found: DeclId,
         naming: DeclId,
         object: DeclId,
@@ -851,7 +874,7 @@ impl Sema<'_, '_> {
     /// its own class. `None` if accessible, else `mk(protected)` with the
     /// access-path notes.
     pub(crate) fn subobject_member_access(
-        &self,
+        &mut self,
         m: DeclId,
         base: bool,
         mk: impl FnOnce(&Self, bool) -> Diag,
@@ -875,7 +898,7 @@ impl Sema<'_, '_> {
     /// [class.copy.ctor]/10): for a base class subobject (`base`) its
     /// members are named through an object of the derived class `from`;
     /// for a member subobject, through an object of its own class.
-    pub(crate) fn special_accessible_from(&self, m: DeclId, from: DeclId, base: bool) -> bool {
+    pub(crate) fn special_accessible_from(&mut self, m: DeclId, from: DeclId, base: bool) -> bool {
         let Some(declaring) = self.declaring_class(m) else { return true };
         let declaring = self.ast.definition(declaring).unwrap_or(declaring);
         let object = if base { Some(self.ast.first(from)) } else { Some(declaring) };
@@ -890,7 +913,7 @@ impl Sema<'_, '_> {
     /// `CheckAllocationAccess` with diagnostics suppressed, as
     /// `ShouldDeleteSpecialMember` calls `FindDeallocationFunction`).
     pub(crate) fn member_accessible_from(
-        &self,
+        &mut self,
         found: DeclId,
         naming: DeclId,
         from: DeclId,
@@ -1374,13 +1397,14 @@ impl Sema<'_, '_> {
     /// Points `s` at context `from`, recomputing its effective context
     /// only when `from` changed (reflection access queries, WP-478: a
     /// loop over one class's members allocates nothing per call).
-    pub(crate) fn set_access_scope(&self, s: &mut AccessScope, from: DeclId) {
+    pub(crate) fn set_access_scope(&mut self, s: &mut AccessScope, from: DeclId) {
         if s.from == Some(from) {
             return;
         }
         let ec = self.effective_context_at(from);
         s.ec.records.clone_from(&ec.records);
         s.ec.functions.clone_from(&ec.functions);
+        s.ec.member_friends.clone_from(&ec.member_friends);
         s.from = Some(from);
     }
 
@@ -1443,7 +1467,12 @@ pub(crate) struct AccessScope {
 
 impl Default for AccessScope {
     fn default() -> Self {
-        Self { ec: EffectiveContext { records: Vec::new(), functions: Vec::new() }, from: None }
+        let ec = EffectiveContext {
+            records: Vec::new(),
+            functions: Vec::new(),
+            member_friends: Vec::new(),
+        };
+        Self { ec, from: None }
     }
 }
 

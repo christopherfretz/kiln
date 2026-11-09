@@ -53,15 +53,6 @@ KNOWN: dict = {
     "written signature (return-type template arguments, decltype and noexcept "
     "operands), so those feed its hash and a noexcept `&&` takes a counter; kiln "
     "walks the body only (WP-941 follow-up)",
-    ("control_flow.cpp", "map", "22"): "kiln writes clang 19's mapping in every "
-    "compat mode; clang 20+ adds gap regions between `&&`/`||` operands and "
-    "counters on constant-folded branch regions (WP-1003 follow-up)",
-    ("macros.cpp", "map"): "clang ends the string literal `\"fail: \" #c` at the "
-    "`#c` stringizing, a nested expansion, and maps a region there; kiln ends it "
-    "in CHECK's body (WP-1003 follow-up)",
-    ("macros.cpp", "map", "22"): "as for LLVM 19, plus clang 20+ maps a "
-    "`do ... while (0)` macro body with an extra region and a counter on its "
-    "folded branch (WP-1003 follow-up)",
 }
 
 
