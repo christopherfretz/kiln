@@ -1776,8 +1776,8 @@ mod tests {
             module: "m".into(),
             kw: 0,
             name_loc: 7,
-            names: vec!["ns".into(), "f".into(), "E".into(), "a".into(), "T".into(), "v".into()],
-            pnames: vec!["x".into()],
+            names: ["ns", "f", "E", "a", "T", "v", "g", "y", "L"].map(String::from).to_vec(),
+            pnames: vec!["x".into(), "p".into()],
             types: vec![
                 TyRec::Func { ret: q(int), params: vec![q(int)], info: 0, exc: 0 },
                 TyRec::Enum(3),
@@ -1821,8 +1821,9 @@ mod tests {
                             ty: q(int),
                             pflags: 0x100,
                             flags: 0,
+                            default: NONE,
                         }],
-                        body: Some((50, 51)),
+                        body: FnBody::Braces(50, 51),
                     },
                 },
                 DeclRec {
@@ -1867,9 +1868,98 @@ mod tests {
                     lexical: LEX_TU,
                     loc: 90,
                     prev: NONE,
-                    payload: Payload::Var { ty: q(BUILTINS + 3), spec: 2 },
+                    payload: Payload::Var { ty: q(BUILTINS + 3), spec: 2, init: NONE, eval: NONE },
+                },
+                // constexpr int g(int p = 7) { int y = p; return 7 + y; } L:
+                DeclRec {
+                    flags: 0,
+                    owner: 3,
+                    name: 6,
+                    ctx: 1,
+                    lexical: NONE,
+                    loc: 100,
+                    prev: NONE,
+                    payload: Payload::Function {
+                        ty: q(BUILTINS + 1),
+                        spec: 0x18,
+                        params: vec![ParamRec {
+                            name: 1,
+                            loc: 102,
+                            ty: q(int),
+                            pflags: 0x100,
+                            flags: 4,
+                            default: 0,
+                        }],
+                        body: FnBody::Stmt(2),
+                    },
+                },
+                DeclRec {
+                    flags: 4,
+                    owner: 3,
+                    name: 7,
+                    ctx: 7,
+                    lexical: NONE,
+                    loc: 106,
+                    prev: NONE,
+                    payload: Payload::Var { ty: q(int), spec: 0, init: 1, eval: NONE },
+                },
+                DeclRec {
+                    flags: 0,
+                    owner: 3,
+                    name: 8,
+                    ctx: 7,
+                    lexical: NONE,
+                    loc: 130,
+                    prev: NONE,
+                    payload: Payload::Label,
                 },
             ],
+            bodies: Bodies {
+                consts: vec![body::ConstRec::Int {
+                    ty: q(int),
+                    signed: true,
+                    width: 32,
+                    words: vec![7],
+                }],
+                strings: vec![(0, b"hi".to_vec())],
+                exprs: vec![
+                    // 7 (a wide literal)
+                    body::ExprRec {
+                        kind: 0,
+                        bits: 0x10,
+                        aux: 0,
+                        cold: 0,
+                        ty: q(int),
+                        loc: 101,
+                        words: vec![0],
+                    },
+                    // p
+                    body::ExprRec {
+                        kind: 7,
+                        bits: 1,
+                        aux: 0,
+                        cold: 1,
+                        ty: q(int),
+                        loc: 107,
+                        words: vec![body::PARAM, 0, NONE, 108],
+                    },
+                    // 7 + y (the operands' shapes only matter to Sema)
+                    body::ExprRec {
+                        kind: 10,
+                        bits: 0,
+                        aux: 0,
+                        cold: 0,
+                        ty: q(int),
+                        loc: 110,
+                        words: vec![0, 1],
+                    },
+                ],
+                stmts: vec![
+                    body::StmtRec { kind: 1, aux: 0, loc: 105, words: vec![1, 8] },
+                    body::StmtRec { kind: 14, aux: 0, loc: 109, words: vec![2, NONE] },
+                    body::StmtRec { kind: 0, aux: 0, loc: 104, words: vec![2, 0, 1, 120] },
+                ],
+            },
         }
     }
 
@@ -1892,7 +1982,25 @@ mod tests {
         let mut img = sample();
         img.decls[2].prev = 1; // a function redeclaring an export
         assert!(decode(&encode(&img)).is_err());
+        let mut img = sample();
+        img.bodies.exprs[2].words = vec![2, 1]; // an operand naming itself
+        assert!(decode(&encode(&img)).is_err());
+        let mut img = sample();
+        img.bodies.stmts[0].words = vec![1, 6]; // a declaration statement of a global
+        assert!(decode(&encode(&img)).is_err());
+        let mut img = sample();
+        img.bodies.stmts[2].words = vec![2, 0, 2, 120]; // a block containing itself
+        assert!(decode(&encode(&img)).is_err());
+        let mut img = sample();
+        if let Payload::Function { body, .. } = &mut img.decls[7].payload {
+            *body = FnBody::Stmt(1); // not a compound statement
+        }
+        assert!(decode(&encode(&img)).is_err());
+        let mut img = sample();
+        img.decls[9].ctx = 0; // a label outside a function
+        assert!(decode(&encode(&img)).is_err());
     }
+
 
     /// [module.import] / spec/modules.md §11.11 "Part 2a": a damaged image
     /// (truncated, flipped bytes, corrupt lengths) is an error, never a
