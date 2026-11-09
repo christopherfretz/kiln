@@ -458,7 +458,12 @@ the local run is still the merge gate (docs/AGENTS.md rule 3).
 
 ### x86_64 sweep
 
-The development container is aarch64 and cannot run x86-64 code, so the
+The development container is aarch64 and cannot run x86-64 code. It can
+compile for `--target=x86_64-linux-gnu` against libstdc++ 14 when Debian's
+`libstdc++-14-dev-amd64-cross` and `libc6-dev-amd64-cross` are installed
+(the driver finds their `gcc-cross` installation as clang does,
+spec/driver.md "Toolchain"), which is how x86-64-only header paths are
+checked locally (WP-1002). The
 heavy suites (libc++, the OSS corpus) run on x86-64 only through
 `.github/workflows/sweep.yml` (WP-961) on the `ubuntu-24.04` runners, in
 the same `gcc:16.1.0-trixie` container as the gate. It is never a merge
@@ -486,7 +491,8 @@ release candidate's commit to a `sweep/<name>` branch (`git push origin
 <sha>:refs/heads/sweep/rc-<version>`), or start it from the Actions tab
 (workflow_dispatch, which can skip the libc++ part, the OSS part or the
 clang control). A newer push of the same branch cancels the older run.
-Wall time is about the slowest OSS job's. Compare the libc++ summary with
+Wall time is about the slowest OSS job's: gRPC, about 2 h 20 min under
+either compiler, inside the 355-minute job limit. Compare the libc++ summary with
 the aarch64 numbers (`scripts/libcxx-results.py --baseline <aarch64
 results>` marks the x86_64-only failures), record the run in
 docs/status/x86_64-sweep.md, and delete the branch. The first run and its
