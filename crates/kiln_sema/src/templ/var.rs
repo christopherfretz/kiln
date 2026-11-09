@@ -163,10 +163,21 @@ impl Sema<'_, '_> {
         let pty = self.ast.decls.get(pattern).ty().unwrap_or(QualType::ERROR);
         let ctx = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
         let pairs = self.inst_context_pairs(ctx);
+        // A member template of an instantiated class whose declared type
+        // no longer depends on anything keeps it, as clang substitutes the
+        // member template's own type: `decltype([]{})` there names the
+        // closure type created when the class was instantiated, not a new
+        // one (spec/sema-lambda.md §9).
+        let member_ty = matches!(matched, Ok(None))
+            .then(|| self.pattern_of(tmpl))
+            .flatten()
+            .filter(|_| self.inst_template(tmpl) != tmpl)
+            .and_then(|p| self.ast.decls.get(p).ty())
+            .filter(|&t| !self.is_instantiation_dependent_type(t) && !self.contains_placeholder(t));
         let ty = self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &args);
             sub.map_contexts(&pairs);
-            let ty = sub.ty(pty, ploc);
+            let ty = member_ty.map_or_else(|| sub.ty(pty, ploc), Ok);
             // [dcl.align]/1: the pattern's alignment-specifiers, with a
             // dependent operand substituted (clang `InstantiateAttrs`).
             if ty.is_ok() {

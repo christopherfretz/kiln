@@ -338,6 +338,11 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         if !lit_opts.char8() {
             kw.remove(s.ast.symbols(), "char8_t");
         }
+        if std < Std::Cxx20 {
+            for k in crate::keywords::CXX20_KEYWORDS {
+                kw.remove(s.ast.symbols(), k);
+            }
+        }
         s.set_std(std);
         let sm = src.source_manager();
         let cur = src.get(0);
