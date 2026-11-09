@@ -1788,7 +1788,7 @@ impl Cg<'_> {
         self.dbg_restore(saved);
         self.f.fir.add_incoming(Fir::last_inst(phi), v, rb);
         if self.dbg_on() {
-            let l = match self.f.fir.dbg.as_deref().map(|d| d.scope()) {
+            let l = match self.f.fir.dbg.as_deref().map(crate::fir::FirDbg::scope) {
                 Some(scope) if and => Some(self.di_location_at(0, 0, scope)),
                 _ => None,
             };
