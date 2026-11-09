@@ -271,7 +271,10 @@ fn db_sources(name: &str) -> PathBuf {
 /// Writes `compile_commands.json` from `(directory, file, words-or-command,
 /// output)` entries: `Ok(words)` is an `arguments` array, `Err(text)` a
 /// `command` string.
-fn write_db(d: &Path, entries: &[(&Path, &str, Result<&[&str], &str>, Option<&str>)]) -> PathBuf {
+type DbEntry<'a> = (&'a Path, &'a str, Result<&'a [&'a str], &'a str>, Option<&'a str>);
+
+fn write_db(d: &Path, entries: &[DbEntry<'_>]) -> PathBuf {
+    use std::fmt::Write as _;
     let items: Vec<String> = entries
         .iter()
         .map(|(dir, file, cmd, out)| {
@@ -280,12 +283,12 @@ fn write_db(d: &Path, entries: &[(&Path, &str, Result<&[&str], &str>, Option<&st
             match cmd {
                 Ok(words) => {
                     let w: Vec<String> = words.iter().map(|w| js(w)).collect();
-                    s.push_str(&format!(", \"arguments\": [{}]", w.join(", ")));
+                    write!(s, ", \"arguments\": [{}]", w.join(", ")).unwrap();
                 }
-                Err(text) => s.push_str(&format!(", \"command\": {}", js(text))),
+                Err(text) => write!(s, ", \"command\": {}", js(text)).unwrap(),
             }
             if let Some(o) = out {
-                s.push_str(&format!(", \"output\": {}", js(o)));
+                write!(s, ", \"output\": {}", js(o)).unwrap();
             }
             s + "}"
         })
@@ -563,17 +566,17 @@ fn full_shape(text: &str) -> Vec<Vec<Vec<String>>> {
 /// command) and context hashes.
 #[test]
 fn differential_against_clang_scan_deps() {
-    let d = db_sources("differential");
-    // No unit imports a module twice (kiln lists it once, clang twice).
-    std::fs::write(d.join("main.cpp"), "import m;\nint main() { return f(); }\n").unwrap();
-    let cxx: &[&str] = &["clang++", "-std=c++20", "-c"];
     fn with<'a>(cxx: &[&'a str], src: &'a str, o: &[&'a str]) -> Vec<&'a str> {
         let mut v = cxx.to_vec();
         v.push(src);
         v.extend(o);
         v
     }
-    let (m, main, p, imp, mi, plain) = (
+    let root = db_sources("differential");
+    // No unit imports a module twice (kiln lists it once, clang twice).
+    std::fs::write(root.join("main.cpp"), "import m;\nint main() { return f(); }\n").unwrap();
+    let cxx: &[&str] = &["clang++", "-std=c++20", "-c"];
+    let (iface, main, part, imp, mi, plain) = (
         with(cxx, "m.cppm", &["-o", "m.o"]),
         with(cxx, "main.cpp", &[]),
         with(cxx, "p.cppm", &["-o", "p.o"]),
@@ -583,15 +586,15 @@ fn differential_against_clang_scan_deps() {
     );
     let s_cmd = "clang++ -std=c++20 -c s.cppm -o 's.o'";
     let db = write_db(
-        &d,
+        &root,
         &[
-            (&d, "m.cppm", Ok(&m), None),
-            (&d, "main.cpp", Ok(&main), Some("main.o")),
-            (&d.join("sub"), "s.cppm", Err(s_cmd), Some("s.o")),
-            (&d, "p.cppm", Ok(&p), Some("p.o")),
-            (&d, "impl.cppm", Ok(&imp), Some("impl.o")),
-            (&d, "m.cpp", Ok(&mi), Some("mi.o")),
-            (&d, "plain.cpp", Ok(&plain), None),
+            (&root, "m.cppm", Ok(&iface), None),
+            (&root, "main.cpp", Ok(&main), Some("main.o")),
+            (&root.join("sub"), "s.cppm", Err(s_cmd), Some("s.o")),
+            (&root, "p.cppm", Ok(&part), Some("p.o")),
+            (&root, "impl.cppm", Ok(&imp), Some("impl.o")),
+            (&root, "m.cpp", Ok(&mi), Some("mi.o")),
+            (&root, "plain.cpp", Ok(&plain), None),
         ],
     );
     let db = db.to_str().unwrap();
@@ -606,15 +609,20 @@ fn differential_against_clang_scan_deps() {
         for format in ["make", "p1689", "experimental-full"] {
             let fmt = format!("-format={format}");
             let opts = ["-j", "1", fmt.as_str(), "-compilation-database", db];
-            let c = Command::new(&real).args(opts).current_dir(&d).output().unwrap();
-            let k = scan_with(&real, &d, &opts, None);
-            let c_out = String::from_utf8_lossy(&c.stdout).into_owned();
-            assert_eq!((k.code, c.status.code()), (0, Some(0)), "{real} {format}: {}", k.stderr);
+            let clang = Command::new(&real).args(opts).current_dir(&root).output().unwrap();
+            let kiln = scan_with(&real, &root, &opts, None);
+            let c_out = String::from_utf8_lossy(&clang.stdout).into_owned();
+            assert_eq!(
+                (kiln.code, clang.status.code()),
+                (0, Some(0)),
+                "{real} {format}: {}",
+                kiln.stderr
+            );
             if format == "experimental-full" {
-                let shape = full_shape(&k.stdout);
+                let shape = full_shape(&kiln.stdout);
                 assert!(shape.len() == 7 && shape.iter().all(|t| t.len() == 1), "{shape:?}");
                 assert_eq!(shape, full_shape(&c_out), "{real} {format}");
-                assert_eq!(k.stdout.ends_with('\n'), c_out.ends_with('\n'), "{real} {format}");
+                assert_eq!(kiln.stdout.ends_with('\n'), c_out.ends_with('\n'), "{real} {format}");
             } else if format == "make" && v == "19" {
                 // clang 19 names an interface unit's rule by its temporary
                 // `.pcm` job; compare the prerequisites.
@@ -630,9 +638,9 @@ fn differential_against_clang_scan_deps() {
                         })
                         .collect()
                 };
-                assert_eq!(deps(&k.stdout), deps(&c_out), "{real} {format}");
+                assert_eq!(deps(&kiln.stdout), deps(&c_out), "{real} {format}");
             } else {
-                assert_eq!(k.stdout, c_out, "{real} {format}");
+                assert_eq!(kiln.stdout, c_out, "{real} {format}");
             }
         }
     }

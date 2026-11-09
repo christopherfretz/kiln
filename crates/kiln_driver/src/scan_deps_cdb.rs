@@ -135,7 +135,7 @@ pub(crate) fn split_command(cmd: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut chars = cmd.chars().peekable();
     loop {
-        while chars.peek().is_some_and(|c| c.is_ascii_whitespace()) {
+        while chars.peek().is_some_and(char::is_ascii_whitespace) {
             chars.next();
         }
         if chars.peek().is_none() {
@@ -186,7 +186,8 @@ const MAX_DEPTH: usize = 64;
 impl Parser<'_> {
     fn err(&self, what: &'static str) -> Error {
         let before = &self.s[..self.pos.min(self.s.len())];
-        let line = before.iter().filter(|&&b| b == b'\n').count() + 1;
+        // One more than the newlines before `pos`.
+        let line = before.split(|&b| b == b'\n').count();
         let start = before.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
         Error::Syntax { line, col: self.pos - start + 1, what }
     }
