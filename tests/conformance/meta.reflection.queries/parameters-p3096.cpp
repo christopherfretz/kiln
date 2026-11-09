@@ -1,15 +1,13 @@
 // [meta.reflection.queries] P2996R13 with P3096R12 (function parameter
 // reflection): is_function_parameter, is_explicit_object_parameter,
 // has_default_argument, is_vararg_function, return_type_of and
-// variable_of. A parameter reflection comes only from parameters_of
-// (WP-478); until it exists the positive parameter checks below are kept,
-// disabled, and enabled with it. What is checked now: a variable that
-// is a parameter, named inside its function, is a variable, not a
-// function parameter reflection; the predicates are false for
-// everything else; return_type_of takes a function or a function type
-// (the declared return type, deduced once the function is defined);
-// is_vararg_function takes either too. Answers checked against GCC 16.1
-// (-freflection), the disabled block included.
+// variable_of. A parameter reflection comes from parameters_of; a
+// variable that is a parameter, named inside its function, is a
+// variable, not a function parameter reflection; the predicates are
+// false for everything else; return_type_of takes a function or a
+// function type (the declared return type, deduced once the function is
+// defined); is_vararg_function takes either too. Answers checked
+// against GCC 16.1 (-freflection).
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
@@ -45,7 +43,6 @@ void body(int p, int q = 1) {
   static_assert(parent_of(^^p) == (^^body) && has_automatic_storage_duration(^^p));
 }
 
-#if 0  // enable once parameters_of (WP-478) exists
 static_assert(is_function_parameter(parameters_of(^^g)[0]));
 static_assert(!is_variable(parameters_of(^^g)[0]));
 static_assert(!has_default_argument(parameters_of(^^g)[0]));
@@ -65,4 +62,3 @@ void f(int x) {
   static_assert(variable_of(rp) == ^^x);
   static_assert(is_function_parameter(rp) && !is_variable(rp));
 }
-#endif

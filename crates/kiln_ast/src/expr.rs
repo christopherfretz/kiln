@@ -2775,6 +2775,14 @@ impl ExprArena {
         self.nodes[e.index() as usize].deps |= ExprDeps::INSTANTIATION;
     }
 
+    /// Marks `e` value- and instantiation-dependent: a requires-expression
+    /// whose requirements passed an access check only speculatively in a
+    /// template pattern is evaluated in each instantiation. Call it before
+    /// any parent of `e` is built.
+    pub fn mark_value_dependent(&mut self, e: ExprId) {
+        self.nodes[e.index() as usize].deps |= ExprDeps::VALUE_INST;
+    }
+
     /// Marks `e` type-, value- and instantiation-dependent: a variable
     /// captured by copy in a lambda whose explicit object parameter has a
     /// dependent type ([temp.dep.expr]/3, P0847) has a type that depends

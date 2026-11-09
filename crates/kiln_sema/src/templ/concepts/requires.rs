@@ -173,16 +173,34 @@ impl Substituter<'_, '_, '_> {
                 }
             }
         }
+        // The pattern's requirements that passed an access check only
+        // speculatively are checked again here, as substitution failures
+        // with no note (clang `TransformRequiresExpr`: the body's
+        // `PerformDependentDiagnostics` under a SFINAE trap, then
+        // `setSatisfied(false)`; spec/sema-templates.md §4.8). Still
+        // speculative (a partial substitution): left dependent.
+        let mut pending = false;
+        if ok && !dependent && self.sema.requires_access_pending(rq.body) {
+            match self.sfinae(rq.body, at, |s| s.sema.replay_requires_access(rq.body)) {
+                Some((Some(true), Ok(()))) => {}
+                Some((None, Ok(()))) => pending = true,
+                _ => ok = false,
+            }
+        }
         self.sema.exit_unevaluated();
-        if ok && dependent {
-            return Ok(self.sema.builder().requires_expr(
+        if ok && (dependent || pending) {
+            let x = self.sema.builder().requires_expr(
                 rq.body,
                 &new_params,
                 &new_reqs,
                 QualType::BOOL,
                 at,
                 rbrace,
-            ));
+            );
+            if pending {
+                self.sema.ast.exprs.mark_value_dependent(x);
+            }
+            return Ok(x);
         }
         // An unsatisfied requirement settles the value even when a local
         // parameter's type still names a retained level

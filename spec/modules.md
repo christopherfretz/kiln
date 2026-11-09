@@ -313,18 +313,27 @@ declarations still merge as entities ([module.global.frag]/1: the global
 module is one module; [basic.def.odr]/15), as clang's
 `makeMergedDefinitionVisible` does. A declaration of another named unit's
 global module fragment is never visible to the current unit except by a
-merge (`module_hidden_global`), so:
+merge, and neither is a global-module declaration of a non-module unit or
+header unit the current unit does not import: the importer's own
+declarations before the `import` that builds a module unit in-process
+belong, for that unit, to another translation unit (WP-1156). Both are
+*hidden global* declarations (`module_hidden_global`), so:
 
 - *Lookup* takes the found declaration when it is visible, else a visible
   redeclaration of the same entity (`module_visible_redecl`, clang
   `findAcceptableDecl`; a template's through its pattern's chain): the
   lookup table holds only the latest redeclaration, which may be the
   hidden one.
-- *A redefinition* whose previous definition is such a hidden GMF
+- *A redefinition* whose previous definition is such a hidden global
   declaration is not diagnosed: the previous definition (and the template
   it describes) is merged into the current unit (`module_merge_hidden_
   definition`). A class or enumeration body is then skipped like a
-  redefinition's (§4.4 of spec/sema.md); a variable, a variable template
+  redefinition's (§4.4 of spec/sema.md), and so is the body of a class
+  template's explicit or partial specialization ([temp.expl.spec]/1,
+  [temp.spec.partial.general]/1; WP-1156: libstdc++'s
+  `numeric_limits<_Float32>`, whose tokens differ between units once
+  glibc's `<math.h>` has defined `__builtin_nansf32` as a macro, so the
+  position check above cannot match it); a variable, a variable template
   specialization and a function keep the new definition as a
   redeclaration of the entity; a concept is created out of lookup.
 - *An opaque enum redeclaration* (which creates no declaration of its
@@ -2820,6 +2829,14 @@ interface or `stdapp`'s source never rebuilds the std module.
 - `module.global.frag/gmf-merge-importer.cpp` (+ `Inputs/gmi-*.cppm`):
   entities declared in both an importer's and an imported unit's GMF
   merge (§6, "Merging by entity"; WP-460), compared with clang.
+- `module.global.frag/gmf-spec-merge.cpp` (+ `Inputs/gmf-spec-merge.cppm`,
+  WP-1156): a class and a class template's explicit and partial
+  specializations defined by an importer before its `import` and after
+  it merge with the imported unit's GMF definitions.
+  `gmf-floatn-limits.cpp` and `gmf-floatn-limits-run.cpp` (+
+  `Inputs/gmf-floatn-*.cppm`): libstdc++'s `numeric_limits<_Float32>`/
+  `<_Float64>` specializations across the module boundary, with `<math.h>`
+  before and after `<limits>` on each side.
 - `module.import/header-unit*.cpp`: header units (macros visible): kiln
   builds them in-process, clang through the harness's `header-unit:`
   lines (`-fmodule-header`, WP-986).
@@ -2939,8 +2956,8 @@ interface or `stdapp`'s source never rebuilds the std module.
   `fmt_module` ({fmt} 12.1.0 with `FMT_MODULE=ON` and an importer) build
   with Ninja through kiln-scan-deps against a clang 19 control
   (docs/status/oss/{cmake_modules,fmt_module}.md);
-  `module.global.frag/gmf-floatn-limits.cpp` is the `fmt_module`
-  libstdc++ failure, xfail.
+  `module.global.frag/gmf-floatn-limits.cpp` reduces the `fmt_module`
+  libstdc++ failure, fixed by WP-1156 (§6).
 - Kind 2 (WP-985, §11.11): `crates/kiln_sema/src/bmi_ast.rs` unit
   tests (the section's round trip, no bytes without a carried entry,
   trailing bytes and an out-of-range path index rejected, and a fuzz
