@@ -480,12 +480,19 @@ impl Sema<'_, '_> {
     ///   primary's own ([temp.func.order]/6.2.2; clang
     ///   `TemplateParameterListsAreEqual` + `TemplateArgumentListAreEqual`).
     ///
+    /// A non-type parameter typed by a placeholder or by another parameter
+    /// (`template<auto V>`, `template<class T, T V>`), on either side, has
+    /// its type deduced from the synthesized argument's type
+    /// ([temp.deduct.type]/20; `deduce_nttp_type`,
+    /// [`Self::deduced_nttp_type_mismatch`]): a synthesized `auto` is a
+    /// unique type that only a placeholder or a type parameter matches, so
+    /// `template<int N> A<N>` of `template<auto N> A` is more specialized
+    /// and `template<class T, T N> A<N>` is not (WP-1105).
+    ///
     /// Not checked (false): a partial specialization of a member template
     /// of a templated class, which clang checks per instantiation of the
     /// enclosing class (`Substituter::member_partial_spec` calls this
-    /// again on the redeclared one), and a primary non-type parameter
-    /// whose type is a placeholder or another parameter (its type would
-    /// be deduced too).
+    /// again on the redeclared one).
     pub(crate) fn not_more_specialized_than_primary(&mut self, p: DeclId, loc: Loc) -> bool {
         let Some((_, info)) = self.ast.partial_spec_info(p) else { return false };
         let info = *info;
@@ -503,21 +510,6 @@ impl Sema<'_, '_> {
         if primary.iter().any(|&x| self.ast.template_parm(x).is_none()) {
             return false;
         }
-        // A primary non-type parameter typed `auto` or by another
-        // parameter (`template <auto V>`, `template <class T, T V>`) needs
-        // the parameter type itself deduced; not modelled, so no check.
-        let typed_by_param = primary.iter().any(|&x| {
-            self.kind_of(x) == DeclKind::NonTypeTemplateParm
-                && self
-                    .ast
-                    .decls
-                    .get(x)
-                    .ty()
-                    .is_none_or(|t| self.contains_deduced(t) || self.is_dependent_type(t))
-        });
-        if typed_by_param {
-            return false;
-        }
         let ps: Vec<TemplateArg> = self.ast.types.args(info.canonical).to_vec();
         let as_: Vec<TemplateArg> = primary
             .iter()
@@ -532,7 +524,7 @@ impl Sema<'_, '_> {
         }
         // The primary at least as specialized as `p`.
         let finish = |s: &mut Self, d: &DeducedArgs| {
-            if s.deduced_nttp_type_mismatch(lp.params, &d.args) {
+            if s.deduced_nttp_type_mismatch(&info, lp, &d.args, loc) {
                 return false;
             }
             let deduced = s.ast.types.arg_list(&d.args);
@@ -641,28 +633,75 @@ impl Sema<'_, '_> {
     }
 
     /// [`Self::not_more_specialized_than_primary`]: a non-type parameter
-    /// deduced from a synthesized argument of another type (`signed char C`
-    /// from `long N`) fails deduction ([temp.deduct.type]/20, clang
+    /// of list `l` (partial specialization `p`'s) deduced from a
+    /// synthesized argument of another type fails deduction
+    /// ([temp.deduct.type]/20, clang
     /// `err_deduced_non_type_template_arg_type_mismatch`), so the primary
-    /// is not at least as specialized.
-    fn deduced_nttp_type_mismatch(&self, params: ListId, deduced: &[TemplateArg]) -> bool {
-        let t = &self.ast.types;
-        self.ast.lists.iter::<DeclId>(params).zip(deduced).any(|(x, a)| {
-            let Some(pt) = self.ast.decls.get(x).ty() else { return false };
+    /// is not at least as specialized: `signed char C` from `long N`, `int
+    /// N` or `auto *P` from the unique type of a synthesized `auto V`. A
+    /// parameter typed by a placeholder deduces it from the argument's
+    /// type (`auto` matches any, `auto *` a pointer: `deduce_match`); one
+    /// typed by another parameter of `l` must be the argument's type once
+    /// the deduced arguments are substituted (`T` deduced by
+    /// `deduce_nttp_type` from that same type matches).
+    fn deduced_nttp_type_mismatch(
+        &mut self,
+        p: &kiln_ast::templates::PartialSpecInfo,
+        l: kiln_ast::templates::TemplateParamList,
+        deduced: &[TemplateArg],
+        loc: Loc,
+    ) -> bool {
+        let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(l.params).collect();
+        let mut levels: Option<crate::templ::args::MultiLevelArgs> = None;
+        for (&x, &a) in params.iter().zip(deduced) {
             if self.kind_of(x) != DeclKind::NonTypeTemplateParm {
-                return false;
+                continue;
             }
+            let Some(pt) = self.ast.decls.get(x).ty() else { continue };
+            let t = &self.ast.types;
             let at = match a.view() {
                 ArgView::Expr { expr, .. } => self.ast.exprs.get(expr).ty(),
                 ArgView::Profile(pr) => match t.profile_expr(pr) {
                     Some(e) => self.ast.exprs.get(e).ty(),
-                    None => return false,
+                    None => continue,
                 },
                 ArgView::Value { ty, .. } => ty,
-                _ => return false,
+                _ => continue,
             };
-            !t.same_unqualified(t.canonical(pt), t.canonical(at))
-        })
+            if at == QualType::ERROR {
+                continue;
+            }
+            let at = t.canonical(crate::conv::strip_cv(self, at));
+            if self.contains_undeduced_auto(pt) {
+                let pt = crate::conv::strip_cv(self, pt);
+                if self.deduce_match(pt, at).is_none() {
+                    return true;
+                }
+                continue;
+            }
+            let pt = if self.ast.types.is_dependent(pt) {
+                let args = levels.get_or_insert_with(|| {
+                    let mut m = Self::outer_levels(p.template, l.depth);
+                    let list = self.ast.types.arg_list(deduced);
+                    m.push(list, p.partial, LevelMode::Substitute);
+                    m
+                });
+                let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
+                let r = Substituter::new(self, args).ty(pt, loc);
+                self.ast.templates.dependent_depth = saved;
+                match r {
+                    Ok(q) => q,
+                    Err(_) => return true,
+                }
+            } else {
+                pt
+            };
+            let t = &self.ast.types;
+            if !t.same_unqualified(t.canonical(pt), at) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Whether function template `a` is more specialized than `b` in the
