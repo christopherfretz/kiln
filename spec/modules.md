@@ -1829,50 +1829,85 @@ GMF entity to merge with other imports (WP-460's merge-by-entity case
 needs one, so it falls back). It could still collide with the importer's
 own declarations, or with another import's (for example, two modules
 that both open `namespace util`). 2a does not merge. Instead the image
-lists every declared name up front, and the preprocessor uses the image
-only if **none of those names has been seen yet**. A name is seen when
-it is interned (`Interner::get`) and is not one of the preprocessor's
-*unseen names* (WP-1096):
+lists its *gated names* up front, and the preprocessor uses the image
+only if **none of them has been seen at global scope yet** (WP-1096,
+narrowed by WP-1162).
 
-- A component of a module or partition name (`m`, `a` and `b` of
-  `a.b`, `p` of `:p`) that the module or import directive interned for
-  the first time joins the unseen names: the directive is consumed by
-  the preprocessor, so the name is no token the parser sees, and it
-  declares nothing. The test is that the symbol's index is at least the
-  interner's length just after the directive's first keyword (`export`,
-  `import`, `module`) was read (symbols are dense, in interning
-  order); a name
-  interned before, by any token, macro, builtin or sema, stays seen.
-  `std` never joins: sema declares namespace `std` implicitly (`new`,
-  `typeid`, structured bindings), with no token.
-- An unseen name becomes seen when the preprocessor returns it as an
-  identifier token (`Preprocessor::next_item`), when it is among a
-  pragma's tokens (they reach the parser too), and when an image that is
-  used declares it.
+The gated names are those of the image's declarations whose context is
+the translation unit, seen through export blocks, unnamed namespaces and
+unscoped enumerations (whose names are visible in the enclosing scope);
+the writer computes them, and the header lists them as indices into the
+declared names. Every other declaration of the image sits in one of its
+classes, named namespaces or functions, or is a template parameter: an
+importer's declaration can meet it only inside a scope that a gated name
+declares (`m::g` is a member of the gated namespace `m`, `Box::get` of
+the gated class `Box`), so a gated name covers it.
+
+A name is seen at global scope when an identifier token with that
+spelling reached the parser (`Preprocessor::next_item`) outside every
+opaque brace, or among a pragma's tokens (wherever the pragma is), or
+when an image that is used gates it. The preprocessor tracks the braces
+of the tokens it returns (`kiln_pp::name_gate`, one bit per symbol and a
+few comparisons per token, only under `-fkiln-bmi-image`). A `{` is
+transparent, and its names count, when it opens a linkage specification
+(`extern` and string literals before it), an export block (`export {`),
+an enumeration body (`enum` since the last `;`, `{` or `}`: unscoped
+enumerators are declared in the enclosing scope; scoped ones count too,
+which only costs a replay) or an inline or unnamed namespace (the lookup
+of a namespace name searches the inline namespace set, [namespace.def]/2,
+so `inline namespace v { namespace m {} }` meets the image's `m`). Every
+other `{` (a class or function body, a named non-inline namespace, an
+initializer, a lambda, a requires-expression) is opaque.
+
+The rule tracks what reached the parser rather than what sema declared
+because the gate runs in the preprocessor, ahead of the parser's
+lookahead: sema may not yet have declared the tokens before the
+`import`. Every importer declaration of a global-scope name (a
+declarator-id, a namespace or class name, a using-declaration, an alias,
+an enumerator) is such a token at global scope, in this file, a header
+or an earlier replay, and an earlier image's gated names are marked. Sema
+declares no identifier at global scope by itself that an image could
+carry (`std` and reserved names fall back). What the gate does not
+count cannot meet a gated declaration:
+
+- an identifier that never reached the parser: a macro name or an
+  unexpanded macro body (`#define USE m::f`), an `#if` operand, a
+  module or partition name component (`import m;` interns `m`, but
+  the directive is consumed by the preprocessor);
+- a member of the importer's class, a declaration in its named
+  namespace (`namespace o { int twice; }` against the image's
+  `::twice`), a local, an operand inside an initializer.
+
+The only declarations inside an opaque brace that land at global scope
+are block-scope `extern` and friend declarations of functions and
+variables. Those cannot correspond to a declaration attached to the
+imported module ([basic.link]/11: ill-formed, no diagnostic required),
+and with other signatures they overload in either case. What the gate
+does count without a declaration (a use, an expression, a declaration
+in another scope spelled at global scope such as `using X = m::T;`) only
+costs a replay.
 
 So `export module m; export namespace m { ... }` and the dotted
 `export module a.b; export namespace a { namespace b { ... } }` are
-built from their images, while an importer that declared `namespace m`
-or `int g;` before `import m;`, a global module fragment `#include` that
-declares `namespace m`, or an earlier image or replay that declared `m`,
-still replays. The rule tracks what reached the parser rather than what
-sema declared because the gate runs in the preprocessor, ahead of the
-parser's lookahead: sema may not yet have declared the tokens before
-the `import`. Any earlier declaration's name was such a token, or a
-builtin's or sema's own name interned before the directive, so it is
-seen. Other names that reach no parser (macro names, `#if` operands)
-still count as seen; that only costs a replay. A fresh name cannot meet
-an earlier declaration, and later declarations and imports find the
+built from their images, as is a unit whose names the importer spelled
+before the import only in a macro, as members of its own class, in its
+own namespace, as locals, or declared in another scope (`int g;` against
+the image's `m::g`). An importer that declared `namespace m`, a global
+`twice` overload, `extern "C++" { namespace m {} }`, an enumerator `m`
+or `inline namespace v { namespace m {} }` before `import m;`, a global
+module fragment `#include` that declares `namespace m`, or an earlier
+image or replay that declared `m`, still replays. A fresh name cannot
+meet an earlier declaration, and later declarations and imports find the
 image's declarations through ordinary lookup, as they would find the
-replay's. Any overlap replays, so the semantics are part A's by
-construction. With `-v` the driver notes each import whose module file
-holds an image: `imported 'm' from its declaration image`, or
-`replayed 'm': ` and why (the first seen name, an import of other
-units, or another main file). The names of a carried body's
-locals (S2) are not gated: they are in the parameter-name table, since
-no lookup outside the body can find them. Real merging needs WP-460
-semantics without a second parse: an ODR key per GMF entity, and a
-structural hash for definitions. It is follow-up S5.
+replay's. Any overlap at global scope replays, so the semantics are part
+A's by construction. With `-v` the driver notes each import whose module
+file holds an image: `imported 'm' from its declaration image`, or
+`replayed 'm': ` and why (the first seen gated name, an import of other
+units, or another main file). The names of a carried body's locals (S2)
+are not gated: they are in the parameter-name table, since no lookup
+outside the body can find them. Real merging needs WP-460 semantics
+without a second parse: an ODR key per GMF entity, and a structural hash
+for definitions. It is follow-up S5.
 
 **Laziness, and the deviation.** The format is lazy-ready: a per-record
 offset table and a lookup table sorted by (context, name). The 2a reader
@@ -2127,7 +2162,9 @@ bytes left before anything is allocated):
 
 ```
 image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
-           names:u32 str*            declared names (the pp's gate)
+           names:u32 str*            declared names
+           gated:u32 u32*            ascending indices into names: the
+                                     global-scope names (the pp's gate)
            pnames:u32 str*           parameter and local names (not gated)
            types:u32 type*
            decls:u32 offset:u32*decls blob_len:u32 decl*

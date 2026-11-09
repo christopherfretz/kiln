@@ -46,7 +46,7 @@ mod spec;
 use body::{Bodies, BodyState, Root};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 5;
+pub(crate) const IMAGE_VERSION: u32 = 6;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -388,8 +388,11 @@ struct Image {
     module: String,
     kw: u32,
     name_loc: u32,
-    /// The unit's declared names (the preprocessor's gate).
+    /// The unit's declared names.
     names: Vec<String>,
+    /// The names (indices into `names`, ascending) of its declarations at
+    /// global namespace scope: the preprocessor's gate ([`gated_names`]).
+    gated: Vec<u32>,
     /// Parameter and local names (not gated).
     pnames: Vec<String>,
     types: Vec<TyRec>,
@@ -783,11 +786,17 @@ fn encode(img: &Image) -> Vec<u8> {
     w.str(&img.module);
     w.u32(img.kw);
     w.u32(img.name_loc);
-    for list in [&img.names, &img.pnames] {
-        w.len(list.len());
-        for s in list {
-            w.str(s);
-        }
+    w.len(img.names.len());
+    for s in &img.names {
+        w.str(s);
+    }
+    w.len(img.gated.len());
+    for &g in &img.gated {
+        w.u32(g);
+    }
+    w.len(img.pnames.len());
+    for s in &img.pnames {
+        w.str(s);
     }
     w.len(img.types.len());
     for t in &img.types {
@@ -1229,7 +1238,19 @@ fn decode(bytes: &[u8]) -> Res<Image> {
         for _ in 0..n {
             v.push(r.str()?);
         }
-        if which == 0 { img.names = v } else { img.pnames = v }
+        if which == 0 {
+            img.names = v;
+            let n = r.count(4)?;
+            img.gated = Vec::with_capacity(n);
+            for _ in 0..n {
+                match r.u32()? {
+                    g if (g as usize) < img.names.len() => img.gated.push(g),
+                    _ => return bad("a gated name out of range"),
+                }
+            }
+        } else {
+            img.pnames = v;
+        }
     }
     let nt = r.count(MIN_TYPE)?;
     img.types = Vec::with_capacity(nt);
@@ -1934,6 +1955,51 @@ struct Writer<'s, 'a, 'b> {
 }
 
 /// A reserved identifier ([lex.name]/3): `__x` or `_X`.
+/// The names of `img`'s declarations at global namespace scope, which
+/// the importer's preprocessor checks before it uses the image
+/// (spec/modules.md §11.11 "Part 2a", "ODR merging"): those whose
+/// context is the translation unit, seen through export blocks, unnamed
+/// namespaces and unscoped enumerations (whose names are visible in the
+/// enclosing scope). Any other declaration sits in a class, a named
+/// namespace, a function or a template parameter list of the image, so
+/// an importer's declaration can meet it only through a gated name.
+fn gated_names(img: &Image) -> Vec<u32> {
+    let mut on = vec![false; img.names.len()];
+    for r in &img.decls {
+        if (r.name as usize) >= on.len()
+            || body::is_local(img, r)
+            || matches!(r.payload, Payload::Ttp { .. } | Payload::Nttp { .. })
+        {
+            continue;
+        }
+        let mut ctx = r.ctx;
+        let mut steps = 0;
+        let top = loop {
+            if ctx == NONE {
+                break true;
+            }
+            let Some(c) = img.decls.get(ctx as usize).filter(|_| steps < img.decls.len()) else {
+                break false;
+            };
+            let transparent = match &c.payload {
+                Payload::Export => true,
+                Payload::Namespace => c.name == NONE,
+                Payload::Enum { scoped, .. } => *scoped == 0,
+                _ => false,
+            };
+            if !transparent {
+                break false;
+            }
+            ctx = c.ctx;
+            steps += 1;
+        };
+        if top {
+            on[r.name as usize] = true;
+        }
+    }
+    (0u32..).zip(on).filter_map(|(i, on)| on.then_some(i)).collect()
+}
+
 fn reserved(s: &str) -> bool {
     let b = s.as_bytes();
     b.first() == Some(&b'_') && b.get(1).is_some_and(|&c| c == b'_' || c.is_ascii_uppercase())
@@ -3042,6 +3108,7 @@ impl Sema<'_, '_> {
         if let Err(why) = w.collect() {
             return none(why);
         }
+        w.img.gated = gated_names(&w.img);
         let decls = w.img.decls.len();
         let bytes = encode(&w.img);
         // The writer's own output must pass the reader's checks (a body
@@ -3647,6 +3714,7 @@ mod tests {
             kw: 0,
             name_loc: 7,
             names: ["ns", "f", "E", "a", "T", "v", "g"].map(String::from).to_vec(),
+            gated: Vec::new(),
             pnames: ["x", "p", "y", "L"].map(String::from).to_vec(),
             types: vec![
                 TyRec::Func { ret: q(int), params: vec![q(int)], info: 0, exc: 0 },
@@ -3854,7 +3922,9 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let img = sample();
+        let mut img = sample();
+        img.gated = gated_names(&img);
+        assert!(!img.gated.is_empty());
         let bytes = encode(&img);
         assert_eq!(decode(&bytes), Ok(img));
     }
