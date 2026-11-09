@@ -587,9 +587,12 @@ impl Sema<'_, '_> {
         // parameters of no deduced context undeduced. A pack expansion
         // of `A` is deduced as a whole (`Ts *...` from `Ts *...`), and one
         // that is not last makes the whole list non-deduced
-        // ([temp.deduct.type]/9: `F<T..., int>` deduces no `T`).
+        // ([temp.deduct.type]/9: `F<T..., int>` deduces no `T`); a function
+        // parameter pack that is not last is skipped, the rest still
+        // deduced ([temp.deduct.type]/5.7: `X<void(Ts..., T)>` deduces `T`).
         let mut d = DeducedArgs::new(list.depth, params.len());
         d.expansions = true;
+        d.self_deduce = true;
         self.inst.sfinae.borrow_mut().push(crate::templ::stack::SfinaeState::default());
         let r = self.deduce_args(&args, &args, true, &mut d, loc);
         let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
