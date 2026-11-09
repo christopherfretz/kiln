@@ -456,6 +456,44 @@ impl Sema<'_, '_> {
         self.module_check_exported(e, block.then_some(loc));
     }
 
+    /// True if the current context is an export declaration, seen
+    /// through linkage specifications only (clang's `CurContext` in
+    /// `diagnoseQualifiedDeclaration`): `export void S::f() {}` and
+    /// `export extern "C++" { void S::f() {} }`, not `export namespace N {
+    /// void S::f() {} }`.
+    pub(crate) fn module_in_export_decl(&self) -> bool {
+        let mut c = self.ctx;
+        for _ in 0..10_000 {
+            match self.kind_of(c) {
+                DeclKind::Export => return true,
+                DeclKind::LinkageSpec => match self.ast.decls.get(c).ctx() {
+                    Some(p) => c = p,
+                    None => return false,
+                },
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// [module.interface]/1, /6: an export-declaration declares namespace
+    /// members only, so a qualified redeclaration of a member of the
+    /// class (or enumeration) `dc` directly in one is diagnosed at the
+    /// declarator-id `loc` (clang's `err_export_non_namespace_scope_name`).
+    /// The declaration is still declared as written (clang drops a member
+    /// function or variable, then diagnoses uses of the class's members
+    /// in its body; kiln does not cascade). True if diagnosed.
+    pub(crate) fn module_check_export_member(&mut self, dc: DeclId, name: &str, loc: Loc) -> bool {
+        if matches!(self.kind_of(dc), DeclKind::Namespace | DeclKind::TranslationUnit)
+            || !self.module_in_export_decl()
+        {
+            return false;
+        }
+        let m = self.diag(DiagId::sema_module_export_non_namespace_scope_name, loc).arg(name);
+        self.emit(m);
+        true
+    }
+
     /// The innermost unnamed namespace the current context is in.
     fn module_enclosing_anon_ns(&self) -> Option<DeclId> {
         let n = self.ast.decls.get(self.ctx);

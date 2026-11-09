@@ -8596,6 +8596,9 @@ impl Sema<'_, '_> {
             }
             if qualified_member && let Some(q) = qualifier {
                 self.check_qualified_member_tag(q, n, nloc);
+                // `export struct S::N {}` ([module.interface]/1; WP-1159).
+                let s = self.ast.symbols().as_str(n).to_owned();
+                self.module_check_export_member(q, &s, nloc);
             }
         }
         let ctx = qualifier.unwrap_or_else(|| self.tag_home(self.tag_decl_context(use_)));

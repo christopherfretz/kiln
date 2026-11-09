@@ -355,6 +355,7 @@ sema_module_export_in_anon_ns = Error (0) "export declaration appears within ano
 sema_module_export_in_private = Error (0) "export declaration cannot be used in a private module fragment";
 sema_module_export_internal = Error (1) "declaration of '{0}' with internal linkage cannot be exported";
 sema_module_export_nested = Error (0) "export declaration appears within another export declaration";
+sema_module_export_non_namespace_scope_name = Error (1) "cannot export '{0}' as it is not at namespace scope";
 sema_module_export_not_interface = Error (0) "export declaration can only be used within a module interface";
 sema_module_export_redecl_module_linkage = Error (1) "cannot export redeclaration '{0}' here since the previous declaration has module linkage";
 sema_module_export_using_internal = Error (2) "using declaration referring to '{0}' with {1:internal|module} linkage cannot be exported";

@@ -224,6 +224,11 @@ included). The defects found so far, each with the test that records it:
   used. g++ 14 and kiln instantiate the specialization's member and reject
   the invalid ones (WP-1054).
   `temp.inst/member-elaborated-qualifier-nested{,-run}.cpp`.
+- clang 19 rejects an importer's use of an exported class template's static
+  data member defined out of class in the module interface (`declaration
+  of 'x' in the global module follows declaration in module m`); clang 22
+  and kiln accept it. `module.interface/export-member-template-var-run.cpp`
+  carries `requires: clang>=22` (WP-1159).
 
 `cargo xtask libcxx` is deliberately outside `ci`. It runs libc++'s own
 tests (a pinned upstream release, fetched by `scripts/fetch-libcxx-tests.sh`)
