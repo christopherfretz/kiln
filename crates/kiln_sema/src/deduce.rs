@@ -410,7 +410,7 @@ impl Sema<'_, '_> {
     /// without the cv-qualifiers written on it ([temp.deduct.call]/4.2
     /// allows the extra qualification). `p`'s own top-level cv is the
     /// caller's.
-    fn deduce_match(&mut self, p: QualType, a: QualType) -> Option<QualType> {
+    pub(crate) fn deduce_match(&mut self, p: QualType, a: QualType) -> Option<QualType> {
         let t = &self.ast.types;
         let pq = t.canonical(p).quals();
         // Declarator parentheses and pointers are matched as written, so

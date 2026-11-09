@@ -4652,8 +4652,26 @@ or `[[clang::uninitialized]]`.
   pointer (`getelementptr inbounds i8`); the loop body's `phi` walks the
   elements, `memcpy`ing one element's pattern from a `@__const` global
   (element alignment) to each, and advances by the element size.
+- **alloca** (WP-1118; clang `initializeAlloca` in `CGBuiltin.cpp`,
+  `Cg::auto_init_alloca` from `checked.rs` `emit_alloca`). The memory of
+  `__builtin_alloca` and `__builtin_alloca_with_align` (and the library
+  `alloca`, a builtin in GNU modes such as `-std=gnu++26`) is filled right after its
+  `alloca i8, i64 %n`: one `llvm.memset` of the same `%n` with byte 0
+  (`=zero`) or `0xAA` (`=pattern`, `i8 -86`), at the alloca's alignment
+  (`__BIGGEST_ALIGNMENT__` or the requested one), non-volatile, with
+  `!annotation !{!"auto-init"}`. `__builtin_alloca_uninitialized` and
+  `__builtin_alloca_with_align_uninitialized` are never filled.
+  `-ftrivial-auto-var-init-max-size` does not apply (clang checks no
+  size), and `[[clang::uninitialized]]` on a variable the pointer
+  initializes does not stop it (the attribute is about the variable's
+  own bytes). kiln's C++26 default (`zero`) fills alloca memory too:
+  the default is `-ftrivial-auto-var-init=zero`, although
+  [basic.indet] only covers automatic variables. clang's
+  `-ftrivial-auto-var-init-stop-after=N` counter (`stopAutoInit`, which
+  counts alloca fills with variable fills) is not implemented: the
+  driver does not accept the flag.
 - **Size limit.** The §7r limit and remark apply to every fill except
-  a VLA's. A limit of 0 is none.
+  a VLA's and an alloca's. A limit of 0 is none.
 - **`[[clang::uninitialized]]`** (`AttrKind::UNINITIALIZED`, GNU
   `__attribute__((uninitialized))` too): on a local variable it turns
   the fill off, as `[[indeterminate]]` does (unlike that one it has no
@@ -4671,10 +4689,12 @@ or `[[clang::uninitialized]]`.
 - Tests: `tests/codegen/auto_var_init_prefill.cpp` (`=zero`),
   `auto_var_init_pattern.cpp`, `auto_var_init_vector.cpp` (`=pattern`,
   `min-oracle: 22`: clang 19 spells the constants without `splat`),
-  `auto_var_init_max_size.cpp`; `crates/kiln_driver/tests/erroneous_init.rs`;
+  `auto_var_init_max_size.cpp`, `auto_var_init_alloca.cpp` (`=zero`),
+  `auto_var_init_alloca_pattern.cpp`; `crates/kiln_driver/tests/erroneous_init.rs`;
   `tests/conformance/basic.indet/` `run-erroneous-prefill.cpp` (the C++26
   default), `run-pattern.cpp` (compared with clang),
-  `uninitialized-attr.cpp`.
+  `run-alloca-zero.cpp`, `run-alloca-pattern.cpp` (compared with clang),
+  `run-alloca-default.cpp` (the C++26 default), `uninitialized-attr.cpp`.
 ## 7ab. Landed (WP-466): linkage, 3-lane stores, file-scope compound literals, end-of-TU variables
 - **`const volatile` linkage** ([basic.link]/3.2; spec/sema.md): a
   namespace-scope `const volatile` variable that is not `static` has

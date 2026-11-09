@@ -1443,6 +1443,19 @@ impl Sema<'_, '_> {
                         }
                         ty = ret;
                         info = info.with_trailing_return(true);
+                    } else if i == 0
+                        && d.name.is_some()
+                        && self.std < kiln_lex::Std::Cxx14
+                        && let Some(id) = self.cxx11_deduced_return(base)
+                    {
+                        // [dcl.spec.auto] in C++11: the declarator of a
+                        // function with a placeholder decl-specifier has a
+                        // trailing return type (clang
+                        // `GetFullTypeForDeclarator`, the chunk next to the
+                        // name; recovers as `int`; a lambda declarator has
+                        // no name and an implicit `auto`). WP-1123.
+                        self.error(id, spec_loc);
+                        ty = QualType::INT;
                     }
                     let t = &self.ast.types;
                     if t.is_array(ty) || t.is_function(ty) {
@@ -2433,6 +2446,22 @@ impl Sema<'_, '_> {
         )
     }
 
+    /// The C++11 error for a function declarator without a trailing
+    /// return type whose decl-specifier type `base` is a placeholder
+    /// (clang `err_auto_missing_trailing_retty` for `auto`,
+    /// `err_deduced_return_type` for `decltype(auto)`); `None` otherwise.
+    fn cxx11_deduced_return(&self, base: QualType) -> Option<DiagId> {
+        match self.ast.types.view(base.ty()) {
+            TypeView::Auto { keyword: AutoKeyword::Auto, deduced: None, .. } => {
+                Some(DiagId::sema_auto_missing_trailing_return)
+            }
+            TypeView::Auto { keyword: AutoKeyword::DecltypeAuto, deduced: None, .. } => {
+                Some(DiagId::sema_deduced_return_type_cxx14)
+            }
+            _ => None,
+        }
+    }
+
     /// `decltype(auto)` under a pointer, reference or array declarator
     /// ([dcl.type.auto.deduct]/5): clang's selector (`pointer to`,
     /// `reference to`, `array of`).
@@ -3343,6 +3372,16 @@ impl Sema<'_, '_> {
             && matches!(d.special, Some((SpecialName::Destructor(_), _)))
         {
             self.error(DiagId::sema_consteval_dtor, l);
+        }
+        // Before C++20 a destructor is not constexpr either ([dcl.constexpr]
+        // /3 in C++17: a constexpr function returns a literal type); clang
+        // keeps the specifier, so a C++11 definition also gets the `void`
+        // return type error (WP-1123).
+        if let Some(l) = ds.constexpr
+            && self.std < kiln_lex::Std::Cxx20
+            && matches!(d.special, Some((SpecialName::Destructor(_), _)))
+        {
+            self.error(DiagId::sema_constexpr_dtor, l);
         }
         let mut invalid = invalid;
         // The calling convention of a constructor, destructor or

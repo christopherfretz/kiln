@@ -8,7 +8,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::types::{
     ArgView, ExcSpec, ExprOperand, TemplateArg, TemplateName, TypeFlags, TypeOfOperand, TypeView,
 };
-use kiln_ast::{DeclId, QualType};
+use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -21,6 +21,23 @@ use crate::templ::args::{ArgLookup, LevelMode};
 use crate::templ::written::WrittenKey;
 
 impl Substituter<'_, '_, '_> {
+    /// `decltype(e)` with `e` substituted (clang `TransformDecltypeType`).
+    fn decltype_ty(&mut self, expr: ExprId, loc: Loc) -> SubstResult<QualType> {
+        self.sema.enter_decltype();
+        let e = self.expr(expr);
+        self.sema.exit_decltype(e.ok());
+        let e = e?;
+        self.sema.act_on_decltype(e, loc, loc).ok_or(SubstFail)
+    }
+
+    /// GNU `typeof(e)` with `e` substituted (spec/sema.md §5.8).
+    fn typeof_expr_ty(&mut self, e: ExprId, unqual: bool, loc: Loc) -> SubstResult<QualType> {
+        self.sema.enter_unevaluated();
+        let e = self.expr(e);
+        self.sema.exit_unevaluated();
+        self.sema.act_on_typeof_expr(e?, loc, unqual).ok_or(SubstFail)
+    }
+
     /// Substitutes into type `q` (its qualifiers kept, collapsing as the
     /// constructors do).
     pub fn ty(&mut self, q: QualType, loc: Loc) -> SubstResult<QualType> {
@@ -584,12 +601,13 @@ impl Substituter<'_, '_, '_> {
                 let b = self.ty(base, loc)?;
                 self.sema.build_unary_transform(kind, b, loc).ok_or(SubstFail)
             }
-            TypeView::Decltype { expr, .. } => {
-                self.sema.enter_decltype();
-                let e = self.expr(expr);
-                self.sema.exit_decltype(e.ok());
-                let e = e?;
-                self.sema.act_on_decltype(e, loc, loc).ok_or(SubstFail)
+            TypeView::Decltype { expr, .. } => self.decltype_ty(expr, loc),
+            // A canonical `decltype(e)` (in a conversion-function-id's
+            // name, [temp.dep.expr]/3): its first expression stands for
+            // it, as a canonical array bound's does (WP-1126).
+            TypeView::DependentDecltype(p) => {
+                let e = self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?;
+                self.decltype_ty(e, loc)
             }
             // `typename [: r :]` with a dependent operand
             // (spec/reflection.md §5): the substituted operand's type.
@@ -609,10 +627,11 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.ast.types.typeof_type(t, unqual))
             }
             TypeView::TypeOf { operand: TypeOfOperand::Expr(e), unqual, .. } => {
-                self.sema.enter_unevaluated();
-                let e = self.expr(e);
-                self.sema.exit_unevaluated();
-                self.sema.act_on_typeof_expr(e?, loc, unqual).ok_or(SubstFail)
+                self.typeof_expr_ty(e, unqual, loc)
+            }
+            TypeView::TypeOf { operand: TypeOfOperand::Profile(p), unqual, .. } => {
+                let e = self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?;
+                self.typeof_expr_ty(e, unqual, loc)
             }
             TypeView::Auto { keyword, deduced, concept, args, pack } => match deduced {
                 // Deduced from a type-dependent initializer
