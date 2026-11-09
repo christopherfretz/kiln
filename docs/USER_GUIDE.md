@@ -270,8 +270,48 @@ raise `-fkiln-stack-size` if you hit it.
   instantiation counts, AST nodes, bytes and self/inclusive time. Use it
   to find which templates dominate a slow TU.
 - `-fkiln-memory-report` prints kiln's arena usage by subsystem.
-- `-ftime-trace` is accepted, because build systems add it for clang,
-  but it writes no file and warns. Use the reports above instead.
+- `-ftime-trace` writes a Chrome trace of each compile, as clang's
+  does: see [Time traces](#time-traces).
+
+### Time traces
+
+`-ftime-trace` writes a JSON trace of where a compile spends its time,
+in the format of clang's `-ftime-trace`. Open it in
+[Perfetto](https://ui.perfetto.dev) or `chrome://tracing`.
+
+```
+kiln++ -std=c++26 -c -ftime-trace foo.cpp           # writes foo.json
+kiln++ -c -ftime-trace foo.cpp -o out/foo.o         # writes out/foo.json
+kiln++ -c -ftime-trace=traces/ foo.cpp              # writes traces/foo.json
+kiln++ -c -ftime-trace=t.json foo.cpp               # writes t.json
+kiln++ -ftime-trace foo.cpp -o app                  # links; writes app-foo.json
+```
+
+- `-ftime-trace-granularity=<us>` drops events shorter than `<us>`
+  microseconds (default 500; `0` keeps everything). The `Total <name>`
+  rows still count the dropped events.
+- `-ftime-trace-verbose` adds the file and line of each instantiated
+  template and, for kiln's constant evaluator, one event per
+  `consteval` / `constexpr` call (`ConstevalCall`, `ConstexprCall`)
+  with the callee's name. Per-call events slow a call-heavy constant
+  evaluation, so they are off by default.
+- With `-fsyntax-only` no trace is written, and `-ftime-trace` warns
+  `argument unused during compilation`, as clang does.
+
+The events are clang's where kiln has the same phase: `ExecuteCompiler`,
+`Frontend`, `Source` (one per included header), `ParseClass`,
+`ParseFunctionDefinition`, `InstantiateClass`, `InstantiateFunction`,
+`PerformPendingInstantiations`, `CodeGen Function`, `Backend`,
+`Optimizer`, `CodeGenPasses` and the LLVM passes inside them. Constant
+evaluation appears as clang's `EvaluateAsInitializer` (a `constexpr`
+variable; the detail is its name), `EvaluateAsRValue` (a
+`static_assert`) and `EvaluateAsConstantExpr` (anything else, such as a
+`consteval` call; the detail is the source range), plus kiln's
+`OvenCompile` (a function compiled for the evaluator) and `OvenMetaOp`
+(a reflection operation). To find the expensive `static_assert`s and
+`constexpr` variables of a TU, sort the `EvaluateAs*` events by
+duration, or read the `Total` rows. The event table is in
+spec/driver.md, "Time trace".
 
 The `-fkiln-*` report flags and their formats are experimental and may
 change in a minor release ([STABILITY.md](STABILITY.md)).
@@ -307,8 +347,6 @@ All `-fkiln-*` flags are experimental.
 - `-fcontract-evaluation-semantic=` uses GCC's spelling. clang 22 has no
   P2900 contracts.
 - `-fconstexpr-ops-limit=` (GCC's) is accepted and sets the step budget.
-- `-ftime-trace[=]`, `-ftime-trace-granularity=` and
-  `-ftime-trace-verbose` warn and write nothing.
 - The PGO flags are rejected (see [Coverage](#coverage)).
 - `--target=` accepts only aarch64 and x86_64 Linux triples.
 - `-x c` and `.c` inputs can only be preprocessed. `kiln++` warns about a

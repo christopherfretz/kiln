@@ -31,6 +31,7 @@ pub mod scan_deps;
 pub mod syntax_cmd;
 pub mod templ_opts;
 pub mod time;
+pub mod time_trace;
 pub mod toolchain;
 pub mod version;
 pub mod x86_features;
@@ -475,6 +476,12 @@ fn driver_warnings(
     if !args.quiet_unused_arguments && !tc.target.is_aarch64() {
         unused_xray.extend(args.codegen.sign_return_address_written.iter().cloned());
     }
+    // WP-1115: the `-ftime-trace` family without a compiler job that
+    // writes the trace (`-fsyntax-only`), or the modifiers without
+    // `-ftime-trace`.
+    if !args.quiet_unused_arguments {
+        unused_xray.extend(time_trace::unused(args).iter().cloned());
+    }
     // WP-1000: the x86 feature flags clang claims on `AArch64` without an
     // error (`-msse4`, `-msse4.2`, `-m[no-]3dnow[a]`), and on x86 its
     // warning for the dropped `-m3dnow` / `-m3dnowa`.
@@ -615,10 +622,10 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     for f in &args.frameworks {
         Diag::new(DiagId::drv_framework_dir_ignored, Span::INVALID).arg(f).emit(&drv);
     }
-    if !args.quiet_unused_arguments {
-        for f in &args.time_trace {
-            Diag::new(DiagId::drv_time_trace_ignored, Span::INVALID).arg(f).emit(&drv);
-        }
+    // spec/driver.md "Time trace": clang checks the granularity only when
+    // a compiler job writes the trace.
+    if let Err((flag, value)) = time_trace::settings(&args) {
+        Diag::new(DiagId::drv_invalid_int_value, Span::INVALID).arg(flag).arg(value).emit(&drv);
     }
     let tc = toolchain_of(&args, &drv);
     for e in &features::resolve(&args, &tc.target).1 {
@@ -778,8 +785,24 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             diag_opts: &diag_opts,
             stderr: io.stderr.clone(),
         };
+        // spec/driver.md "Time trace": `-E` / `-M` trace the
+        // preprocessor job alone (`ExecuteCompiler`), as clang.
+        let trace = time_trace::settings(args).ok().flatten().map(|s| {
+            let out = args.output.as_deref().unwrap_or("-");
+            let mut t =
+                time_trace::InputTrace::start(s, time_trace::path(args, None, &input.path, out));
+            t.no_sources = true;
+            t
+        });
         let r = job.run();
         errors += r.errors;
+        if let Some(mut t) = trace {
+            t.failed = r.errors > 0;
+            if let Err((path, e)) = t.finish(&args.program) {
+                report_output_error(&diag_opts, &io.stderr, &path, &e);
+                errors += 1;
+            }
+        }
         output.push_str(&r.output);
         if let Some(files) = r.deps {
             let text = deps::deps_text(args, &input.path, &files);

@@ -113,7 +113,6 @@ These flags are the exceptions: they are accepted and have no effect.
 
 | Flag | What happens | WP |
 |---|---|---|
-| `-ftime-trace[=]`, `-ftime-trace-granularity=`, `-ftime-trace-verbose` | warning; no trace file is written | — |
 | `-ffat-lto-objects` | objects are bitcode only, not fat | [WP-899](BACKLOG.md) |
 | `-f[no-]vectorize`, `-f[no-]slp-vectorize`, `-fstrict-vtable-pointers` | accepted; LLVM's defaults apply | [WP-900](BACKLOG.md) (deferred) |
 | `-fdiagnostics-show-template-tree` | accepted; diagnostics are printed without the tree | [WP-901](BACKLOG.md) (deferred) |
