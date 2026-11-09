@@ -118,7 +118,9 @@ use crate::templ::pack::PackOperand;
 use crate::templ::stack::FrameKind;
 use crate::templ::subst::Substituter;
 
-/// Deepest concept expansion normalized (the rest are atoms).
+/// Deepest concept expansion normalized (the rest are atoms). Only
+/// concept-ids and fold expansions count: a long `||` chain (a 70-clause
+/// disjunction) is no deeper an expansion than its operands.
 const MAX_EXPANSION: u32 = 64;
 
 impl Sema<'_, '_> {
@@ -153,14 +155,14 @@ impl Sema<'_, '_> {
         match n.kind() {
             ExprKind::ParenExpr => {
                 let o = self.ast.exprs.operand(e);
-                return self.normalize(o, ctx, depth + 1);
+                return self.normalize(o, ctx, depth);
             }
             ExprKind::BinaryOperator
                 if matches!(self.ast.exprs.binary_op(e), BinaryOp::LAnd | BinaryOp::LOr) =>
             {
                 let [l, r] = self.ast.exprs.operands(e);
-                let a = self.normalize(l, ctx, depth + 1);
-                let b = self.normalize(r, ctx, depth + 1);
+                let a = self.normalize(l, ctx, depth);
+                let b = self.normalize(r, ctx, depth);
                 let node = if self.ast.exprs.binary_op(e) == BinaryOp::LAnd {
                     NormNode::And(a, b)
                 } else {
