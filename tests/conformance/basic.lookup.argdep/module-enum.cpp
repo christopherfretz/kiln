@@ -7,8 +7,9 @@
 // or a class, for k declared in the inline namespace P::I.
 //@ expect: run
 //@ std: c++20
-//@ args: %{test_dir}/Inputs/adl-e.cppm %{test_dir}/Inputs/adl-f.cppm -fmodule-file=E=%{test_dir}/Inputs/adl-e.cppm -fmodule-file=F=%{test_dir}/Inputs/adl-f.cppm
-//@ skip(clang): clang needs a two-step --precompile build of the Inputs modules that the harness cannot drive
+//@ module: E=Inputs/adl-e.cppm
+//@ module: F=Inputs/adl-f.cppm
+//@ skip(clang): clang rejects h(get_en()) with "use of undeclared identifier 'h'" (spec/modules.md §10 deviation 10)
 //@ exit: 3
 import F;
 int main() { return h(get_en()) + k(get_cl()); }

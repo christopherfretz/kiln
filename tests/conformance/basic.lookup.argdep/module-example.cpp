@@ -12,11 +12,12 @@
 // valid `x` of the same block scope, so the later errors are still reported.
 //@ expect: compile-fail
 //@ std: c++20
-//@ args: -fmodule-file=M=%{test_dir}/Inputs/adl-m.cppm -fmodule-file=N=%{test_dir}/Inputs/adl-n.cppm -fmodule-file=Q=%{test_dir}/Inputs/adl-q.cppm
-//@ skip(clang): clang needs a two-step --precompile build of the Inputs modules that the harness cannot drive
+//@ module: M=Inputs/adl-m.cppm
+//@ module: N=Inputs/adl-n.cppm
+//@ module: Q=Inputs/adl-q.cppm
 //@ strict-diags
-//@ diag: 27:6 error "no type named 'f' in namespace 'R'"
-//@ diag: 29:3 error "no matching function for call to 'f'"
+//@ diag: 28:6 error "no type named 'f' in namespace 'R'"
+//@ diag: 30:3 error "no matching function for call to 'f'"
 module Q;
 import N;
 namespace S {

@@ -15,20 +15,22 @@
 // are checked by kiln_driver's `module_missing_import_notes` test.
 //@ expect: compile-fail
 //@ std: c++20
-//@ args: -fmodule-file=mr.a=%{test_dir}/Inputs/mr-a.cppm -fmodule-file=mr.b=%{test_dir}/Inputs/mr-b.cppm -fmodule-file=mr.b:part=%{test_dir}/Inputs/mr-p.cppm
-//@ skip(clang): clang needs a two-step --precompile build of the Inputs modules that the harness cannot drive
+//@ module: mr.a=Inputs/mr-a.cppm
+//@ module: mr.b:part=Inputs/mr-p.cppm
+//@ module: mr.b=Inputs/mr-b.cppm
+//@ requires: clang>=22
 //@ strict-diags
-//@ diag: 33:1 error "unknown type name 'LinkageGlobalType'"
-//@ diag: 34:10 error "use of undeclared identifier 'linkage_other'"
-//@ diag: 35:10 error "declaration of 'a_fn' must be imported from module 'mr.a' before it is required"
-//@ diag: 37:10 error "declaration of 'part_fn' must be imported from module 'mr.b' before it is required"
-//@ diag: 39:14 error "missing '#include'; 'gmf_qual' must be declared before it is used"
-//@ diag: 40:10 error "missing '#include'; 'gmf_fn' must be declared before it is used"
-//@ diag: 41:10 error "missing '#include'; 'gmf_fn' must be declared before it is used"
-//@ diag: 42:14 error "declaration of 'linkage_fn' must be imported from module 'mr.b' before it is required"
-//@ diag: 43:12 error "declaration of 'linkage_global' must be imported from module 'mr.b' before it is required"
-//@ diag: 44:1 error "missing '#include'; 'GmfType' must be declared before it is used"
-//@ diag: 45:5 error "declaration of 'LinkageType' must be imported from module 'mr.b' before it is required"
+//@ diag: 35:1 error "unknown type name 'LinkageGlobalType'"
+//@ diag: 36:10 error "use of undeclared identifier 'linkage_other'"
+//@ diag: 37:10 error "declaration of 'a_fn' must be imported from module 'mr.a' before it is required"
+//@ diag: 39:10 error "declaration of 'part_fn' must be imported from module 'mr.b' before it is required"
+//@ diag: 41:14 error "missing '#include'; 'gmf_qual' must be declared before it is used"
+//@ diag: 42:10 error "missing '#include'; 'gmf_fn' must be declared before it is used"
+//@ diag: 43:10 error "missing '#include'; 'gmf_fn' must be declared before it is used"
+//@ diag: 44:14 error "declaration of 'linkage_fn' must be imported from module 'mr.b' before it is required"
+//@ diag: 45:12 error "declaration of 'linkage_global' must be imported from module 'mr.b' before it is required"
+//@ diag: 46:1 error "missing '#include'; 'GmfType' must be declared before it is used"
+//@ diag: 47:5 error "declaration of 'LinkageType' must be imported from module 'mr.b' before it is required"
 import mr.b;
 LinkageGlobalType lgt;
 int v0 = linkage_other();

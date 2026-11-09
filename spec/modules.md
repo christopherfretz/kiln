@@ -1368,13 +1368,31 @@ interface or `stdapp`'s source never rebuilds the std module.
 - `module.interface/export-run.cpp`, `visibility.cpp`,
   `module.unit/partitions-run.cpp`, `module.private.frag/private-run.cpp`,
   `module.import/export-import-run.cpp`: multi-unit programs whose module
-  sources are in `Inputs/` (passed as extra inputs and with
-  `-fmodule-file`); `skip(clang)` because clang needs a two-step BMI
-  build the harness does not drive.
+  sources are in `Inputs/`, named by `module:` (and `unit:`) lines
+  (spec/harness.md "Directives"). The `run` tests are two-step under
+  kiln and clang alike (§11.7); the compile tests give kiln the sources
+  (part A) and clang module files. All run under clang 19 and 22 as the
+  compiler (WP-986; `visibility.cpp` and `module.reach/missing-import.cpp`
+  are `requires: clang>=22`: clang 19 reports a module-linkage name as
+  "must be imported" where clang 22 and kiln say "undeclared").
+- `module.unit/single-invocation-run.cpp`: part A's single `kiln++`
+  invocation over the module sources (kiln only, WP-986).
+- Coverage note (WP-986): no module test is `skip(clang)` for a harness
+  limit any more. The remaining `skip(clang)` module tests are
+  deliberate deviations or kiln-only forms: `basic.lookup.argdep/
+  module-enum*.cpp` (deviation 10), `basic.stc.thread/module-tls-run.cpp`
+  (deviation 9), `module.global.frag/gmf-dup-run.cpp` (deviation 7),
+  `module.import/import-std-vector.cpp` (kiln's implicit `std` lookup,
+  §11.12), `single-invocation-run.cpp`, and
+  `module.import/import-identifier-type.cpp` (clang treats a line-initial
+  `import` identifier as a directive). `cpp.module/p3034-probe.cpp` is
+  `xfail(clang)` (clang accepts macro module names).
 - `module.global.frag/gmf-merge-importer.cpp` (+ `Inputs/gmi-*.cppm`):
   entities declared in both an importer's and an imported unit's GMF
   merge (§6, "Merging by entity"; WP-460), compared with clang.
-- `module.import/header-unit*.cpp`: header units (macros visible).
+- `module.import/header-unit*.cpp`: header units (macros visible): kiln
+  builds them in-process, clang through the harness's `header-unit:`
+  lines (`-fmodule-header`, WP-986).
 - `module.import/import-std-{vector,format,ranges,compat,hidden}.cpp`:
   `import std;` / `import std.compat;` under C++20, 23 and 26
   (self-checking `run` tests). Since WP-984, all but `vector` name
@@ -1427,14 +1445,16 @@ interface or `stdapp`'s source never rebuilds the std module.
   `module.interface/two-step-run.cpp` (non-inline function and variable
   defined once, exported inline variable, exported function and class
   templates instantiated by the importers, a static data member, two
-  importers), `module.unit/two-step-partitions-run.cpp` (interface and
+  importers), `module.unit/partitions-run.cpp` (interface and
   implementation partitions, an implementation unit),
   `module.unit/two-step-impl-unit-run.cpp`,
-  `basic.start.dynamic/two-step-module-init-run.cpp` (observable
-  initialization order, once only), `module.global.frag/two-step-gmf-dup-run.cpp`
+  `basic.start.dynamic/module-init-run.cpp` (observable
+  initialization order, once only), `module.global.frag/gmf-dup-run.cpp`
   (kiln only: clang emits the GMF class's vtable in every importer,
   deviation 7), and `module.interface/two-step-visibility.cpp` (the
-  visibility diagnostics through a module file).
+  visibility diagnostics through a module file). WP-986 folded the
+  duplicate `two-step-partitions-run`, `two-step-module-init-run` and
+  `two-step-gmf-dup-run` into the converted originals.
 - `crates/kiln_pp/src/bmi.rs` unit tests: round trip, foreign and
   version-mismatched files, every truncation and single-byte flip of a
   small capsule (a diagnostic, never a panic), a damaged body behind a

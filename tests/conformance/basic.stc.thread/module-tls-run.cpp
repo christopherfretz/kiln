@@ -8,14 +8,15 @@
 // variables in every importer, which fails to link: spec/modules.md §10.)
 //@ expect: run
 //@ std: c++20
-//@ args: %{test_dir}/Inputs/tlm.cppm %{test_dir}/Inputs/tlm-user.cpp
-//@ args: -fmodule-file=tlm=%{test_dir}/Inputs/tlm.cppm -pthread
+//@ args: -pthread
+//@ module: tlm=Inputs/tlm.cppm
+//@ unit: Inputs/tlm-user.cpp
 //@ stdout: main 1 3 20 103 1
 //@ stdout: thread 4 4 50 106 1
 //@ stdout: ~T 50
 //@ stdout: main 7 28 2
 //@ stdout: ~T 20
-//@ skip(clang): clang needs a two-step --precompile build of the Inputs module that the harness cannot drive
+//@ skip(clang): clang re-defines tlm's thread-local variables in every importer, which then fails to link (spec/modules.md §10 deviation 9)
 import tlm;
 extern "C" int printf(const char *, ...);
 extern "C" int pthread_create(unsigned long *, const void *, void *(*)(void *), void *);

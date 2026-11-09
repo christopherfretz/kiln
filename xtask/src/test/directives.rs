@@ -348,6 +348,11 @@ pub struct TestSpec {
     /// any other TU) a `run` test compiles separately, against the module
     /// files, and links (`spec/harness.md` "Modules").
     pub units: Vec<PathBuf>,
+    /// `header-unit: "<path>"` / `header-unit: <name>`: the header units
+    /// the test imports, which a clang builds first with `-fmodule-header`
+    /// and reads with `-fmodule-file=` (kiln builds them in-process;
+    /// `spec/harness.md` "Modules"; WP-986).
+    pub header_units: Vec<HeaderUnit>,
     /// `two-step`: kiln, too, compiles the `module:` units to module files
     /// (the test then imports those) instead of reading their sources.
     /// Implied for `run` tests.
@@ -397,6 +402,15 @@ pub struct ClangRun<'a> {
 pub struct LlvmRun<'a> {
     pub role: &'a str,
     pub major: Option<u32>,
+}
+
+/// One `header-unit:` line: `"<path>"` (a user header, relative to the
+/// test's directory) or `<name>` (a system header, found on the include
+/// path).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeaderUnit {
+    pub system: bool,
+    pub name: String,
 }
 
 impl TestSpec {
@@ -573,6 +587,9 @@ struct Parser {
     units: Vec<PathBuf>,
     /// Line of the first `unit:` (0: none).
     unit_line: usize,
+    header_units: Vec<HeaderUnit>,
+    /// Line of the first `header-unit:` (0: none).
+    header_unit_line: usize,
     /// Line of `two-step` (0: absent).
     two_step_line: usize,
     pch: Option<PathBuf>,
@@ -645,6 +662,8 @@ impl Parser {
             module_line: 0,
             units: Vec::new(),
             unit_line: 0,
+            header_units: Vec::new(),
+            header_unit_line: 0,
             two_step_line: 0,
             pch: None,
             pch_line: 0,
@@ -832,6 +851,7 @@ impl Parser {
             "skip" | "xfail" => self.marker(line, name, qualifier, value),
             "requires" => self.requires_directive(line, value),
             "module" => self.module_directive(line, value),
+            "header-unit" => self.header_unit_directive(line, value),
             "unit" => {
                 if value.is_empty() || value.contains(char::is_whitespace) {
                     self.err(line, "expected `unit: <path>`");
@@ -989,6 +1009,30 @@ impl Parser {
                 self.module_line = line;
             }
             self.modules.push((name.to_owned(), PathBuf::from(path)));
+        }
+    }
+
+    fn header_unit_directive(&mut self, line: usize, value: &str) {
+        let (system, name) =
+            if let Some(n) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+                (false, n)
+            } else if let Some(n) = value.strip_prefix('<').and_then(|v| v.strip_suffix('>')) {
+                (true, n)
+            } else {
+                self.err(line, "expected `header-unit: \"<path>\"` or `header-unit: <name>`");
+                return;
+            };
+        if name.is_empty() || name.contains(char::is_whitespace) {
+            self.err(line, "expected `header-unit: \"<path>\"` or `header-unit: <name>`");
+        } else if Path::new(name).is_absolute() {
+            self.err(line, "a `header-unit` path is relative to the test's directory");
+        } else if self.header_units.iter().any(|h| h.system == system && h.name == name) {
+            self.err(line, format!("duplicate `header-unit` `{value}`"));
+        } else {
+            if self.header_unit_line == 0 {
+                self.header_unit_line = line;
+            }
+            self.header_units.push(HeaderUnit { system, name: name.to_owned() });
         }
     }
 
@@ -1352,6 +1396,19 @@ impl Parser {
                 "`module` only applies to `compile-ok`, `compile-fail`, `no-crash` and `run` tests",
             );
         }
+        if self.header_unit_line != 0
+            && (verify
+                || !matches!(
+                    expect,
+                    Expect::CompileOk | Expect::CompileFail | Expect::NoCrash | Expect::Run
+                ))
+        {
+            let line = self.header_unit_line;
+            self.err(
+                line,
+                "`header-unit` only applies to `compile-ok`, `compile-fail`, `no-crash` and `run` tests",
+            );
+        }
         if self.unit_line != 0 && expect != Expect::Run {
             let line = self.unit_line;
             self.err(line, "`unit` only applies to `run` tests");
@@ -1418,6 +1475,7 @@ impl Parser {
             requires_clang_below: self.requires_clang_below,
             modules: self.modules,
             units: self.units,
+            header_units: self.header_units,
             two_step: self.two_step_line != 0,
             pch: self.pch,
             min_oracle: self.min_oracle,
@@ -1931,6 +1989,27 @@ mod tests {
         }
         let e = errs("//@ expect: pp\n//@ pch: p.h\n");
         assert!(e.iter().any(|e| e.contains("`pch` only applies")), "{e:?}");
+    }
+
+    /// WP-986: `header-unit: "<path>"` / `header-unit: <name>`
+    /// (`spec/harness.md` "Directives").
+    #[test]
+    fn header_unit_directive() {
+        assert!(ok("int x;\n").header_units.is_empty());
+        let s =
+            ok("//@ expect: run\n//@ header-unit: \"Inputs/hu.h\"\n//@ header-unit: <cstddef>\n");
+        let hus: Vec<_> = s.header_units.iter().map(|h| (h.system, h.name.as_str())).collect();
+        assert_eq!(hus, [(false, "Inputs/hu.h"), (true, "cstddef")]);
+        let e = errs("//@ header-unit: <a.h>\n//@ header-unit: <a.h>\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `header-unit`")), "{e:?}");
+        assert!(ok("//@ header-unit: <a.h>\n//@ header-unit: \"a.h\"\n").header_units.len() == 2);
+        for bad in ["", "a.h", "\"\"", "<>", "\"/abs.h\"", "<a b.h>", "\"a.h"] {
+            assert!(!errs(&format!("//@ header-unit: {bad}\n")).is_empty(), "{bad:?}");
+        }
+        let e = errs("//@ expect: pp\n//@ header-unit: <a.h>\n");
+        assert!(e.iter().any(|e| e.contains("`header-unit` only applies")), "{e:?}");
+        let e = errs("//@ verify\n//@ header-unit: <a.h>\n");
+        assert!(e.iter().any(|e| e.contains("`header-unit` only applies")), "{e:?}");
     }
 
     /// WP-386: `requires: llvm>=N` / `llvm<N` against the backends that
