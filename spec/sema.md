@@ -236,6 +236,18 @@ translation unit that fails costs about what it costs clang:
   as clang does (`Diag::allow_duplicate`). The diagnostic is at the
   member access's location (`(g.f)` at its `(`). Under SFINAE nothing is
   recovered. `expr.ref/bound-member-recovery-by-call.cpp`.
+- **Nothing fails silently** (WP-1054). A declaration kiln cannot form
+  produces an error, a SFINAE failure or a "not yet implemented" note,
+  never nothing: recovery may stay quiet only because an earlier error
+  already covers the failure. For class template instantiation this is
+  checked, not just promised: `Sema::emit` counts every error-class
+  emission (printed, captured under SFINAE, or suppressed), and a member
+  whose instantiation fails with no new emission, in a TU without errors,
+  is reported as `kiln: internal error: member 'x' of 'A<int>' was not
+  instantiated and no diagnostic says why` (`failure_mark` /
+  `failed_silently_since`, `class_body_with`; spec/sema-templates.md §4.6
+  "No silent drop"). A member declaration's substitution failure is a
+  hard error, never SFINAE ([temp.inst]/3, [temp.deduct.general]/8).
 
 ## 2. Scopes (`scope.rs`)
 - **Kinds:** `ScopeKind` is one of TranslationUnit, Namespace,

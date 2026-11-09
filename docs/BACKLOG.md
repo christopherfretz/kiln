@@ -996,9 +996,9 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-968 | debug info: keep alias-template sugar (kiln_codegen debuginfo/types.rs:135) | WP-910 | open |
 | WP-969 | debug info: subprogram for the global-init function; local variables for structured bindings (kiln_codegen debuginfo/func.rs) | WP-910 | open |
 | WP-970 | codegen: lower SVE tuple locals as a struct of vectors under clang-compat 22 | WP-910 | open |
-| WP-971 | ICE (WP-911): codegen kind-mismatch expect/unreachable sites (class.rs 45, expr.rs 37, stmt.rs, complex.rs, cleanup.rs, fir.rs) become "unsupported construct" diagnostics | WP-911 | open |
-| WP-972 | ICE (WP-911): audit kiln_ast builder.rs (41) / expr.rs (23) node-shape expects for user-reachable ones | WP-911 | open |
-| WP-973 | ICE (WP-911): kiln_pp preprocessor.rs (8) / ifeval.rs (3) token-state unreachable!: which can malformed directives reach | WP-911 | open |
+| WP-971 | ICE (WP-911): codegen kind-mismatch expect/unreachable sites (class.rs 45, expr.rs 37, stmt.rs, complex.rs, cleanup.rs, fir.rs) become "unsupported construct" diagnostics | WP-911 | done (#439) |
+| WP-972 | ICE (WP-911): audit kiln_ast builder.rs (41) / expr.rs (23) node-shape expects for user-reachable ones | WP-911 | done (#440) |
+| WP-973 | ICE (WP-911): kiln_pp preprocessor.rs (8) / ifeval.rs (3) token-state unreachable!: which can malformed directives reach | WP-911 | done (#439, WP-971) |
 | WP-974 | driver (WP-911): test the `.i` crash reproducer once C -fsyntax-only works (git sha in --version is WP-942) | WP-911 | open |
 | WP-987 | parameter-type tags: NTTP "cannot be defined in a type specifier", sizeof(struct{}) in a default arg, conversion-type tag, lambda inside NTTP type (kiln_parse decl.rs check_tag_defined_in_param) | WP-962 | done (#433, WP-946) |
 | WP-988 | missing "passing argument to parameter here" note on an incomplete-element initializer_list parameter (kiln_sema init.rs std_initializer_list_init) | WP-962 | open |
@@ -1072,7 +1072,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1049 | driver --help: reverse test that every option the argument parser accepts is listed in help.rs (or on an explicit hidden list), next to every_listed_option_is_accepted (crates/kiln_driver/src/help.rs:366) | WP-1027 | open |
 | WP-1052 | exception-spec tails: implicit member exception-spec type lists (except.rs:1109), dependent and pack throw lists in template definitions (except.rs:1127) incl. clang eager dependent throw(T) error, nested function-type rule (except.rs:1100) | WP-1017 | open |
 | WP-1053 | partial-spec ordering tails: constrained partial specs (order.rs:477), member-template partial specs (order.rs:465), non-deducible F<T..., int> | WP-1017 | open |
-| WP-1054 | SILENT DROP: class template members whose declaration fails at instantiation are dropped without a diagnostic, so instantiation-time wrong-tag errors are missed (clang dcl.type.elab/p3.cpp:60) | WP-1017 | open |
+| WP-1054 | SILENT DROP: class template members whose declaration fails at instantiation are dropped without a diagnostic, so instantiation-time wrong-tag errors are missed (clang dcl.type.elab/p3.cpp:60) | WP-1017 | done (#435) |
 | WP-1050 | module cache eviction: bound the std/std.compat module cache size and age (kiln_driver module_cache.rs) | WP-984 | open |
 | WP-1051 | -MD on a module cache hit lists every libc++ header the std module read; match clang dependency output for import std | WP-984 | open |
 | WP-1055 | never-constant: bcmp missing from the library-builtin rows (kiln_ast decl.rs:3821), so bcmp(p,p,1)+x in gnu++20 is not reported (accepts-invalid) | WP-945 | open |
@@ -1089,3 +1089,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1068 | modules image S6: imports, re-exports and partitions (bmi_image.rs:1224) | WP-1048 | open |
 | WP-1069 | modules image S-lazy: lazy top-level lookup instead of eager build; needs mutable lookup path (kiln_parse modules.rs:121, bmi_image.rs:1383) | WP-1048 | open |
 | WP-1070 | modules image S7: locations in other files and macro expansions (bmi_image.rs:868); then flip -fkiln-bmi-image on once std is covered | WP-1048 | open |
+| WP-1075 | rejects-valid: break/continue inside a statement-expression in a loop condition, for(;({break;1;});) (kiln_sema stmt.rs:1350, :1358) | WP-971 | open |
+| WP-1076 | hang: kiln times out (>20 s) on clang CodeGenCXX/mangle-ms-back-references-pr13207.cpp, CodeGenCXX/pr29160.cpp, Preprocessor/bigoutput.c | WP-971 | open |
+| WP-1071 | sema: relookup_member handles overload sets and using-declarations of a specialization member (kiln_sema templ/subst/mod.rs:971, today not yet implemented) | WP-1054 | open |
+| WP-1072 | rejects-valid: dependent friend class A<T>::Member gets no access to private members (xfail temp.friend/dependent-member-class-friend-run.cpp) | WP-1054 | open |

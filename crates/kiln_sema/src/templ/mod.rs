@@ -347,6 +347,11 @@ pub struct TemplState {
     /// Where each dependent type and nested-name-specifier component was
     /// written, sorted (§5.8; [`Sema::written_loc`]).
     pub(crate) written_locs: kiln_source::fx::FxHashMap<written::WrittenKey, Vec<Loc>>,
+    /// The class-key of each dependent `class-key T::name`, by the
+    /// name's written location: a tag-kind mismatch found at
+    /// instantiation is reported there (§5.8, clang's elaborated keyword
+    /// location).
+    pub(crate) tag_keyword_locs: kiln_source::fx::FxHashMap<Loc, Loc>,
     /// The `->` of each function declared with a dependent trailing
     /// return type: its dependent names are found after it (§5.8), not
     /// among the parameters' (`auto f(int (*p)(T::type)) -> T::type`).
