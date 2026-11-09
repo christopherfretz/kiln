@@ -46,4 +46,9 @@ using B6 = Food<B5, B4, B3, B2, B1, B0, B0, B0, B0, B0,
 int f(A9) { return 1; }
 int f(B6) { return 2; }
 
-int main() { return f(A9{}) + f(B6{}) == 3 ? 0 : 1; }
+// Taken by address, not called: clang 19 and 22 spend over a minute on
+// the call `f(A9{})` itself (overload resolution against `f(B6)`).
+int (*volatile pa)(A9) = f;
+int (*volatile pb)(B6) = f;
+
+int main() { return pa && pb ? 0 : 1; }
