@@ -893,8 +893,8 @@ impl Args {
             a.action = Action::Precompile;
         }
         a.errors.extend(a.coverage.errors());
-        a.errors.extend(a.unknown_at_compat_19());
         let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
+        a.errors.extend(a.unknown_at_compat_19());
         a
     }
 
