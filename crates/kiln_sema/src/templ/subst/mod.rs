@@ -1111,8 +1111,8 @@ impl Substituter<'_, '_, '_> {
             };
             let scoped = data.flags & (EnumData::SCOPED | EnumData::SCOPED_STRUCT);
             let name = n.name().as_ident().filter(|_| !n.name().is_empty()).map(|s| (s, n.loc()));
-            let kw = kiln_ast::types::TagKeyword::Enum;
-            Ok(self.sema.act_on_tag(kw, name, None, crate::decl::TagUse::Declaration, scoped, fixed, n.loc()))
+            let (kw, use_) = (kiln_ast::types::TagKeyword::Enum, crate::decl::TagUse::Declaration);
+            Ok(self.sema.act_on_tag(kw, name, None, use_, scoped, fixed, n.loc()))
         } else {
             Ok(self.local_class(d, None))
         };
