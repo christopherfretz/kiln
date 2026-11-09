@@ -410,6 +410,23 @@ impl Cg<'_> {
             || self.f.decl.is_some_and(|d| self.has_fn_attr(d, kiln_ast::attr::AttrKind::OPTNONE))
     }
 
+    /// The checks whose traps and handler calls may merge (clang 20+
+    /// `-fsanitize-merge=`, default the `undefined` group; clang 19
+    /// merges every check).
+    fn ub_merge_set(&self) -> San {
+        self.opts.sanitize.merge.unwrap_or(if self.opts.clang_compat >= 22 {
+            San::UNDEFINED
+        } else {
+            San::ALL
+        })
+    }
+
+    /// Whether a check that must not merge carries `nomerge` (clang 20+;
+    /// any compatibility level once `-f[no-]sanitize-merge` is given).
+    fn ub_nomerge_attr(&self) -> bool {
+        self.opts.clang_compat >= 22 || self.opts.sanitize.merge.is_some()
+    }
+
     /// clang `EmitCheck`: branches on `checks` to the trap or the handler
     /// `h` called with the static data `statics` and the values `dynamics`
     /// (in a check scope).
@@ -435,10 +452,9 @@ impl Cg<'_> {
                 None => c,
             });
         }
-        // clang 20+ `-fsanitize-merge=` (default: the `undefined` group)
-        // keeps the other checks' traps and calls apart.
-        let kind_no_merge =
-            self.opts.clang_compat >= 22 && checks.iter().any(|&(_, k)| !San::UNDEFINED.has_any(k));
+        // `-fsanitize-merge=` keeps the other checks' traps and calls apart.
+        let merge = self.ub_merge_set();
+        let kind_no_merge = checks.iter().any(|&(_, k)| !merge.has_any(k));
         if let Some(t) = trap {
             self.ub_trap_check(t, h, kind_no_merge)?;
         }
@@ -537,7 +553,7 @@ impl Cg<'_> {
         self.emit_block(tb, false);
         let trap = kiln_llvm::intrinsics::ubsantrap(&mut self.m);
         let mut site = vec![Attr::Flag(AttrKind::NoReturn), Attr::Flag(AttrKind::NoUnwind)];
-        if no_merge && self.opts.clang_compat >= 22 {
+        if no_merge && self.ub_nomerge_attr() {
             site.insert(0, Attr::Flag(AttrKind::NoMerge));
         }
         let id = V::C(self.m.const_int(LTy::I8, i128::from(h.id())));
@@ -599,7 +615,7 @@ impl Cg<'_> {
             }
         };
         let mut site = Vec::new();
-        if self.opts.clang_compat >= 22 && (kind_no_merge || self.ub_no_merge()) {
+        if self.ub_nomerge_attr() && (kind_no_merge || self.ub_no_merge()) {
             site.push(Attr::Flag(AttrKind::NoMerge));
         }
         if !may_return {

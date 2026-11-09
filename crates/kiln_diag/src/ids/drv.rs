@@ -26,6 +26,8 @@ drv_invalid_stdlib_name = Error (1) "invalid library name in argument '{0}'";
 drv_invalid_value = Error (2) "invalid value '{1}' in '{0}'";
 drv_language_not_recognized = Error (1) "language not recognized: '{0}'";
 drv_linker_input_unused = Warning [UnusedCommandLineArgument] (1) "{0}: 'linker' input unused";
+// WP-1032: a sanitizer ignorelist LLVM's `SpecialCaseList` rejects.
+drv_malformed_sanitizer_ignorelist = Error (1) "malformed sanitizer ignorelist: '{0}'";
 // WP-920: `-MG` lists missing headers only for `-M`/`-MM`.
 drv_mg_requires_m_or_mm = Error (0) "option '-MG' requires '-M' or '-MM'";
 drv_missing_argument = Error (2) "argument to '{0}' is missing (expected {1} value)";
@@ -38,6 +40,8 @@ drv_opt_not_valid_on_target = Error (1) "option '{0}' cannot be specified on thi
 drv_option_ignored = Warning [OptionIgnored] (2) "'{0}' does not support '{1}'; flag ignored";
 drv_out_file_multiple = Error (0) "cannot specify -o when generating multiple output files";
 drv_precompile_not_module = Error (0) "--precompile requires a module interface or partition unit";
+// WP-1032: a `#!special-case-list-v1` ignorelist (POSIX regular expressions).
+drv_regex_sanitizer_ignorelist = Error (1) "sanitizer ignorelist '{0}' uses regular expressions ('#!special-case-list-v1'), which kiln does not support; use glob patterns";
 // WP-792: clang's `-ftime-trace` family, added by build systems for clang.
 drv_time_trace_ignored = Warning [UnusedCommandLineArgument] (1) "'{0}' ignored: kiln writes no time trace (see -fkiln-instantiation-report)";
 drv_treating_input_as_cxx = Warning [Deprecated] (2) "treating '{0}' input as '{1}' when in C++ mode, this behavior is deprecated";

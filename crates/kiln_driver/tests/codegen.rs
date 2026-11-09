@@ -988,8 +988,17 @@ fn codegen_flags_classes() {
         &["-fstack-usage"],
         &["-gz"],
         &["-gz=zlib"],
-        &["-fno-trapv"],
         &["-fno-short-enums"],
+        // WP-1032: `-ftrapv` and its handler, `-fno-trapv` (GCC's), and
+        // the merge lists in every spelling.
+        &["-ftrapv"],
+        &["-fno-trapv"],
+        &["-ftrapv", "-fno-trapv"],
+        &["-ftrapv", "-ftrapv-handler=overflow_handler"],
+        &["-fsanitize-merge"],
+        &["-fno-sanitize-merge"],
+        &["-fsanitize-merge=undefined"],
+        &["-fno-sanitize-merge=signed-integer-overflow,alignment"],
         &["-ffp-model=precise"],
         // The common hardening set together, at -O2.
         &[
@@ -1032,7 +1041,7 @@ fn codegen_flags_classes() {
 fn codegen_flags_rejected() {
     let d = scratch("cgflags-rej");
     std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
-    let rejected = ["-ftrapv", "-fshort-enums", "-fsanitize=cfi", "-fsanitize-coverage=trace-pc"];
+    let rejected = ["-fshort-enums", "-fsanitize=cfi", "-fsanitize-coverage=trace-pc"];
     for f in rejected {
         let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "r.o"]);
         assert_eq!(
@@ -1053,6 +1062,11 @@ fn codegen_flags_rejected() {
         ("-gz=lzma", "unsupported argument 'lzma' to option '-gz='"),
         ("-fexcess-precision=none", "unsupported argument 'none' to option '-fexcess-precision='"),
         ("-mtune=", "unsupported argument '' to option '-mtune='"),
+        ("-fsanitize-merge=bogus", "unsupported argument 'bogus' to option '-fsanitize-merge='"),
+        (
+            "-fno-sanitize-merge=bogus",
+            "unsupported argument 'bogus' to option '-fno-sanitize-merge='",
+        ),
     ] {
         let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "r.o"]);
         assert_eq!(
