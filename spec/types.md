@@ -349,6 +349,26 @@ the keywords `_Float32`, `_Float64`, `_Float128`, `_Float32x` or
 built-in type stays (`kiln_parse/src/decl.rs`). The same declaration in
 user code is the usual error.
 
+On x86-64 glibc's `<bits/floatn.h>` declares `typedef __float128
+_Float128;` instead. clang has no `_Float128` keyword, so there the
+typedef makes the two one type and glibc's `*f128` functions (`logf128`,
+`modff128`, ...) take and return `__float128`; code built for clang (LLVM's
+`llvm/Support/float128.h` under `__clang__`) passes them to
+`__float128 (*)(__float128)` parameters. kiln keeps the types distinct
+(WP-1000 decision (B): libstdc++ declares separate `_Float128` and
+`__float128` overloads), but once a system header has declared exactly
+that typedef (`Sema::glibc_float128_alias`, for the rest of the TU), two
+function types that differ only in `_Float128` against `__float128` in
+their return or parameter types, at the top level or under pointers,
+references and `_Complex`, with cv-qualifiers kept, are related by a
+function pointer conversion ([conv.fctptr]; `conv::qual::is_function_conversion`,
+in either direction, combinable with dropping `noexcept`): an exact match
+in overload resolution, a direct reference binding, a no-op cast in the
+IR (both lower and pass as `fp128`). The returned value keeps its
+declared type (`decltype(logf128(0))` is `_Float128`, `__float128` in
+clang). Without that typedef the conversion is an error, as in GCC 14
+(WP-1058; tests `basic.extended.fp/float128-glibc-typedef-*.cpp`).
+
 The builtin signature strings (`kiln_ast::decl::builtin`, clang's
 `Builtins.def` letters) gain three kiln-private letters for the types
 clang lacks: `k` `_Float32`, `K` `_Float64`, `y` `__bf16` (`x` is

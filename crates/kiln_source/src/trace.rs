@@ -257,15 +257,19 @@ pub fn end_at(
     detail: impl FnOnce() -> String,
     args: impl FnOnce() -> Vec<(Cow<'static, str>, Arg)>,
 ) {
-    let dur = micros(now.saturating_duration_since(span.start));
     // Decide under the borrow, format outside it: a detail may read the
     // recorder's state (`enabled`) but must never find it borrowed.
+    // Both ends are rounded on the recorder's clock (not the start and
+    // the length apart), so an event that ends within another still
+    // does once rounded.
     let keep = REC.with(|r| {
         let mut r = r.borrow_mut();
         let r = r.as_mut()?;
-        r.close(span.name, dur).then(|| r.us_since_start(span.start))
+        let ts = r.us_since_start(span.start);
+        let dur = r.us_since_start(now).saturating_sub(ts);
+        r.close(span.name, dur).then_some((ts, dur))
     });
-    let Some(ts) = keep else { return };
+    let Some((ts, dur)) = keep else { return };
     let ev = Event {
         name: Cow::Borrowed(span.name),
         detail: detail(),
@@ -323,9 +327,10 @@ pub fn source_end() {
         let mut r = r.borrow_mut();
         let Some(r) = r.as_mut() else { return };
         let Some((start, detail)) = r.sources.pop() else { return };
-        let dur = micros(now.saturating_duration_since(start));
+        // Rounded on the recorder's clock at both ends, as in `end_at`.
+        let ts = r.us_since_start(start);
+        let dur = r.us_since_start(now).saturating_sub(ts);
         if r.close("Source", dur) {
-            let ts = r.us_since_start(start);
             r.events.push(Event {
                 name: Cow::Borrowed("Source"),
                 detail,
