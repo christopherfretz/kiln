@@ -295,7 +295,7 @@ pub(crate) fn holding_vars(ast: &kiln_ast::Ast, d: DeclId) -> Vec<DeclId> {
 
 /// Whether `q` is a literal type ([basic.types.general]/10), as sema
 /// records it for each class (`DefinitionBits::LITERAL`).
-fn is_literal_type(ast: &kiln_ast::Ast, q: QualType) -> bool {
+pub(crate) fn is_literal_type(ast: &kiln_ast::Ast, q: QualType) -> bool {
     let mut t = q;
     while let Some(e) = ast.types.element(t) {
         t = e;
@@ -674,6 +674,72 @@ impl Oven {
                 ty
             }
             None => {
+                c.konst(n, 1);
+                c.ty(QualType::BOOL)
+            }
+        };
+        c.close_scope();
+        c.emit(Op::Ret, 1, &[n]);
+        let nregs = c.end_unit();
+        let f = &mut self.funcs[idx as usize];
+        f.entry = entry;
+        f.state = FState::Ready;
+        f.nregs = nregs;
+        f.ret = RetKind::Scalar(ty);
+        idx
+    }
+
+    /// The function of a potential-constant frame job (`frame.rs`,
+    /// WP-1150): register 0 its result, registers 1 to `decls.len()` the
+    /// addresses of the objects of `decls` (each variable designates its
+    /// object), then the object [`crate::frame::FrameHow::Init`]
+    /// initializes. Returns `e`'s value, or `true` once `e` is evaluated
+    /// for its side effects or has initialized the object.
+    pub(crate) fn compile_frame(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        e: ExprId,
+        decls: &[DeclId],
+        how: crate::frame::FrameHow,
+    ) -> u32 {
+        use crate::frame::FrameHow;
+        let idx = self.funcs.len() as u32;
+        self.funcs.push(Func {
+            decl: None,
+            entry: UNCOMPILED,
+            state: FState::Stub,
+            nregs: 0,
+            ret: RetKind::Void,
+            params: Vec::new(),
+            memo: false,
+            this_reg: None,
+            this_ty: None,
+            base_obj: false,
+            structor: false,
+        });
+        let mut c = Compiler::new(self, b);
+        let entry = c.here();
+        let n = c.reg();
+        for &d in decls {
+            let r = c.reg();
+            c.locals.insert(d, Local::Mem(r));
+        }
+        let target = c.reg();
+        c.open_scope(&[], true);
+        let ty = match how {
+            FrameHow::Value => {
+                let ty = c.ety(e);
+                c.rv_into(e, n);
+                ty
+            }
+            FrameHow::Discard => {
+                c.effect(e);
+                c.konst(n, 1);
+                c.ty(QualType::BOOL)
+            }
+            FrameHow::Init(d, ty) => {
+                c.locals.insert(d, Local::Mem(target));
+                c.init(e, target, ty);
                 c.konst(n, 1);
                 c.ty(QualType::BOOL)
             }

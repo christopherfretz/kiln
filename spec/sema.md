@@ -8344,7 +8344,12 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
       quietly, notes a side effect (clang `EvaluateIgnoredValue`,
       `noteSideEffect`) and the walk goes on: past a call with unknown
       arguments and past a callee's quiet failure alike, as clang refuses
-      every nested call in this mode;
+      every nested call in this mode. A discarded glvalue is evaluated
+      as an lvalue only (clang `EvaluateIgnoredValue`), so naming a
+      by-value parameter or a local, its member (not through `->`), its
+      address, or a comma, parentheses or a `void` cast of these notes
+      nothing (WP-1150); a reference parameter, `this`, or a read of a
+      parameter's value notes a side effect;
     - destroying an object fails quietly (clang `HandleDestruction`)
       when its class has a non-trivial destructor, and, once a side
       effect has been noted, for a block's local variables and a
@@ -8355,9 +8360,14 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
       member access, or discarded by a cast) it only notes a side
       effect;
     - an `if`, `while`, `for` or `do` condition must be known (an unknown
-      one, a condition variable, a structured binding or a range-based
-      `for` stops the walk); a loop runs while it is true, `break` leaves
-      it and `continue` goes to its increment and condition. Each
+      one, a structured binding or a range-based `for` stops the walk).
+      A condition variable is defined like a local below, and an unknown
+      one stops the walk (clang `EvaluateCond`, `ESR_Failed`). A loop
+      runs while its condition is true, `break` leaves it and `continue`
+      goes to its increment and condition. Each `while` iteration, and
+      each `for` iteration's condition variable, condition, body and
+      increment, is a scope for its locals (clang `BlockScopeRAII`,
+      `IterScope`). Each
       statement evaluated takes a step: a walk that runs out (clang
       `-fconstexpr-steps`, default 1048576) fails with "constexpr
       evaluation hit maximum step limit; possible infinite loop?" at the
@@ -8367,13 +8377,32 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
       `case` or `default` label, searched as clang does (into blocks,
       `if` branches, loop bodies and labelled statements; a skipped
       static variable still fails), and `break` leaves it; no matching
-      label skips the body;
+      label skips the body. The search does not enter a try-block or a
+      statement expression, so a label found only there (clang
+      `ESR_CaseNotFound` from `EvaluateSwitch`) fails with "this use of
+      statement expressions is not supported in a constant expression"
+      at the label (WP-1150);
     - a `try` statement (and a function-try-block's body) runs its try
       block only; a label is its sub-statement; a `goto` (forward,
       backward or computed) fails with "subexpression not valid in a
       constant expression" at the statement;
-    - the walk stops at a `return`, an `[[assume]]`, and an unknown
-      value naming a local variable;
+    - the walk stops at a `return` and an `[[assume]]`;
+    - locals (WP-1150). clang keeps a body's locals in the call frame
+      while the parameters stay unknown. Likewise the walk tracks each
+      block-scope variable and condition variable the Oven can hold in a
+      potential-constant frame (spec/oven.md, `Oven::frame_local`: no
+      pointer, reference, union, `mutable` or volatile subobject, no
+      destructor). A full-expression, condition or initializer that
+      names no parameter, `this` or untracked local is evaluated in
+      that frame (`Oven::evaluate_in_frame`): modifications stay, and a
+      failure is reported with its notes. A reference local bound to a
+      tracked local designates it. A local whose initializer is unknown,
+      or that is not tracked, is unknown: reading it notes a side
+      effect. Once a side effect has been noted, every local is unknown
+      (clang fails quietly on any local access after `noteSideEffect`).
+      A loop's cycle test also compares the frame's bytes. After 4096
+      frame evaluations in one body, the walk treats its locals as
+      unknown;
   - the walk also fails, as clang's `EvaluateStmt` (WP-1123), at the
     definition of a static or `thread_local` local variable not usable in
     constant expressions ("control flows through the definition of a
@@ -8429,12 +8458,10 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   - a function declared in a system header is never checked, even under
     `-Wsystem-headers` (clang skips `CheckConstexprFunctionBody` there;
     libstdc++'s `<cmath>` overloads call `__builtin_acosf`);
-  Kiln never reports a function clang accepts; it misses some clang
-  reports because clang tracks the values of local and condition
-  variables (`int z = 0; if (z) ...`, `for (int k = 0; k < 3; ++k)`)
-  and evaluates a discarded parameter (`(void)x;`) without noting a
-  side effect (WP-873 and WP-1133 follow-ups;
-  `never-constant-local-values-cxx20.cpp` is their xfail). Under the default `-fclang-compat=22` a local of
+  Kiln never reports a function clang accepts. It misses some clang
+  reports: a local holding a pointer is not tracked (`int *p = nullptr;
+  *p;`), and an expression naming both a parameter and a tracked local
+  is not evaluated in clang's order (WP-1150 follow-ups). Under the default `-fclang-compat=22` a local of
   non-literal type is not itself a failure from C++23 (P2448R2), as in
   clang 22.
 - Tests: `expr.add/integer-overflow-folded.cpp`,
@@ -8449,7 +8476,8 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `dcl.constexpr/never-constant-{call,temporaries,loop-break,switch,try-goto}-cxx20.cpp`,
   `dcl.constexpr/never-constant-infinite-loop{,-steps}-cxx20.cpp`,
   `dcl.constexpr/never-constant-walk-end-cxx23.cpp`,
-  `dcl.constexpr/never-constant-local-values-cxx20.cpp` (xfail),
+  `dcl.constexpr/never-constant-local-values-cxx20.cpp`,
+  `dcl.constexpr/never-constant-{local-tracking,discarded-parameter,switch-search}-cxx20.cpp`,
   `dcl.constexpr/never-constant-default-cxx23.cpp`,
   `dcl.constexpr/never-constant-no-error-cxx20.cpp`,
   `dcl.constexpr/potential-constant-builtin-{fabs,strcmp,not-constexpr}.cpp`,
