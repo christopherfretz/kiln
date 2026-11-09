@@ -6213,7 +6213,8 @@ impl Sema<'_, '_> {
         let n = *self.ast.exprs.get(inner);
         let v = self.ast.exprs.decl(inner);
         let first = self.ast.first(v);
-        let member = self.ast.instantiated_from(first).is_some() && self.inst_owner(first).is_some();
+        let member =
+            self.ast.instantiated_from(first).is_some() && self.inst_owner(first).is_some();
         if self.kind_of(v) != DeclKind::Var || !(member || self.is_implicit_var_spec(first)) {
             return e;
         }

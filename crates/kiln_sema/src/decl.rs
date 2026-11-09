@@ -6051,9 +6051,12 @@ impl Sema<'_, '_> {
         // sees the bound its definition gives (clang `getCompletedType`
         // in `TryReferenceInitialization` and deduction; WP-907).
         if let Initializer::Expr(e) = init
-            && self.ast.decls.get(v).ty().is_some_and(|t| {
-                self.ast.types.is_reference(t) || self.contains_undeduced_auto(t)
-            })
+            && self
+                .ast
+                .decls
+                .get(v)
+                .ty()
+                .is_some_and(|t| self.ast.types.is_reference(t) || self.contains_undeduced_auto(t))
         {
             init = Initializer::Expr(self.complete_expr_array_bound(e));
         }
