@@ -192,6 +192,42 @@ impl Oven {
         Some(g)
     }
 
+    /// Makes global `g`, the variable whose initializer the running thunk
+    /// evaluates, designate that thunk's result object at `p` until
+    /// [`Oven::unbind_object`] (`Op::BindObject`, WP-1100): during its own
+    /// initialization a variable's name designates the object under
+    /// construction ([basic.life]/1, [class.cdtor]; clang's
+    /// `EvaluatingDecl`), so its initialized members can be read.
+    pub(crate) fn bind_object(&mut self, g: u32, p: u64) {
+        self.unbind_object();
+        let prev = std::mem::replace(&mut self.globals[g as usize].state, GState::Bound(p));
+        self.bound_obj = Some((g, prev));
+    }
+
+    /// Ends the binding [`Oven::bind_object`] made, restoring the global's
+    /// previous state: `(global, object)` of it, if any.
+    pub(crate) fn unbind_object(&mut self) -> Option<(u32, u64)> {
+        let (g, prev) = self.bound_obj.take()?;
+        let st = &mut self.globals[g as usize].state;
+        let GState::Bound(p) = *st else { return None };
+        *st = prev;
+        Some((g, p))
+    }
+
+    /// Runs `f`, a separate evaluation started while another one's
+    /// variable may be bound to its object under construction: that
+    /// binding is lifted for `f` (another initializer naming the variable
+    /// reads its placeholder, as clang reads the variable outside its
+    /// lifetime) and made again after it.
+    pub(crate) fn unbound<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let outer = self.unbind_object();
+        let r = f(self);
+        if let Some((g, p)) = outer {
+            self.bind_object(g, p);
+        }
+        r
+    }
+
     /// The static storage of global `g` while its initializer runs (reused
     /// by later evaluations of the same variable).
     fn placeholder(&mut self, g: u32, ty: OTy, d: DeclId) -> u64 {
@@ -228,7 +264,12 @@ impl Oven {
         let addr = std::mem::take(&mut self.addr_next);
         let f = self.compile_thunk(b, e, object, addr);
         self.let_pending.clear();
-        self.exec(b, f, fb)?;
+        let run = self.exec(b, f, fb);
+        // The variable's name designated its result object while the
+        // initializer ran (`Op::BindObject`); from here on, its
+        // placeholder again.
+        self.unbind_object();
+        run?;
         let v = self.regs[fb as usize];
         // clang's `CheckConstantExpression` location: the variable for an
         // initializer (`EvaluateAsInitializer`), else the expression.
@@ -1613,7 +1654,7 @@ impl Oven {
         // Its own initialization: its contract assertions are evaluated
         // ([expr.const.init]/4.1 ignores only the variable's own).
         self.run.contracts_off = false;
-        let r = self.eval_at(b, init, Some(d), top);
+        let r = self.unbound(|o| o.eval_at(b, init, Some(d), top));
         self.mem.free_heap_of(ctx, &self.types);
         self.mem.release(mark, &self.types);
         self.ctx_depth -= 1;
@@ -1840,7 +1881,7 @@ impl Oven {
             PtrBase::Decl(d) => {
                 let g = self.global_index(b.ast(), d);
                 match self.globals[g as usize].state {
-                    GState::Resolved(p) => p,
+                    GState::Resolved(p) | GState::Bound(p) => p,
                     GState::Unresolved => self.resolve_global(b, g, top),
                 }
             }
@@ -1866,7 +1907,7 @@ impl Oven {
                     }
                 };
                 match self.globals[g as usize].state {
-                    GState::Resolved(p) => p,
+                    GState::Resolved(p) | GState::Bound(p) => p,
                     GState::Unresolved => self.resolve_global(b, g, top),
                 }
             }
