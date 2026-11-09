@@ -26,11 +26,11 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `0f9c200d3`
+- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `0de463067`
 - command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 86 s; peak RSS of one case 23 MiB (gnu-time)
+- wall time 184 s; peak RSS of one case 22 MiB (gnu-time)
 
 ## Totals
 
@@ -38,7 +38,7 @@ written by hand (WP-912). The run is informational and never part of
 |---|---:|---:|---:|
 | ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 68 | 1250 | 5.4% |
 | ACCEPTS-INVALID cases (per RUN configuration) | 80 | 1946 | 4.1% |
-| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4276 | 28065 | 15.2% |
+| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4270 | 28065 | 15.2% |
 | REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 28 | 418 | 6.7% |
 | crashes | 0 | 2850 | 0.0% |
 | timeouts | 0 | 2850 | 0.0% |
@@ -57,7 +57,7 @@ written by hand (WP-912). The run is informational and never part of
 | CXX/conv | 0 / 2 | 0.0% | 2 / 16 | 12.5% | 0 | 0 / 0 |
 | CXX/cpp | 0 / 0 | - | 0 / 0 | - | 0 | 0 / 0 |
 | CXX/dcl | 0 / 4 | 0.0% | 0 / 81 | 0.0% | 0 | 0 / 0 |
-| CXX/dcl.dcl | 4 / 77 | 5.2% | 281 / 1141 | 24.6% | 0 | 0 / 0 |
+| CXX/dcl.dcl | 4 / 77 | 5.2% | 275 / 1141 | 24.1% | 0 | 0 / 0 |
 | CXX/dcl.decl | 2 / 54 | 3.7% | 87 / 788 | 11.0% | 1 | 0 / 0 |
 | CXX/drs | 1 / 33 | 3.0% | 1487 / 8682 | 17.1% | 0 | 0 / 0 |
 | CXX/except | 3 / 15 | 20.0% | 26 / 104 | 25.0% | 0 | 0 / 0 |
@@ -363,7 +363,7 @@ against clang 19 and clang 22) and one follow-up row in
 The generated tables above are from a later run (WP-1017, after items 2-6
 and 9-12 were fixed; WP-1015 fixed 2-6): accepts-invalid fell from 89 to 68
 files and from 110 to 80 cases; missed `expected-error` lines fell from
-4930 to 4276. Rejects-valid fell from 47 to 28 cases through fixes from
+4930 to 4276 (4270 after WP-1054). Rejects-valid fell from 47 to 28 cases through fixes from
 other work packages (WP-958 and earlier); the driver now skips 83 cases
 with clang flags it does not know, so 418 no-diagnostics cases run.
 
@@ -490,10 +490,21 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
     `lex.ext/differing-ud-suffixes.cpp`.
     **Fixed in WP-1017**, plus `dcl.type.elab/wrong-tag-kind.cpp`,
     `dcl.type.elab/elaborated-enum-class.cpp` and `class.friend/friend-enum.cpp`.
-    Partial: members of a class template whose declaration fails at
-    instantiation are dropped without a diagnostic, so instantiation-time
-    wrong-tag errors are missed; a qualified ambiguity between plain types
-    lists its candidates in discovery order.
+    Partial: a qualified ambiguity between plain types lists its
+    candidates in discovery order.
+    **Fixed in WP-1054** (spec/landed/sema/WP-1054.md): members of a class
+    template whose `class-key B<T>::M` names another template's explicit
+    or partial specialization are no longer dropped silently, so
+    instantiation-time "no class named" and wrong-tag errors are reported
+    (`CXX/dcl.dcl/dcl.spec/dcl.type/dcl.type.elab/p3.cpp` line 60), and a
+    member dropped with no diagnostic is now an internal error
+    (`temp.inst/member-elaborated-qualifier-*.cpp`). Its share: missed
+    errors 4276 to 4270 lines (accepts-invalid files and cases
+    unchanged), and six spurious "redefinition of 'X' as different kind
+    of symbol" errors on `template<class T> friend class A<T>::X;` are
+    gone (`CXX/drs/cwg6xx.cpp`, `cwg18xx.cpp`, `cwg19xx.cpp`,
+    `class.friend/p3-cxx0x.cpp`, `temp.friend/p5.cpp`); no new
+    accepts-invalid or rejects-valid case.
 12. **Exception specifications more lax than the base** (29;
     [except.spec]/8). Repros: `class.virtual/exception-spec-dynamic.cpp`,
     `class.virtual/exception-spec-dynamic-pack-nested.cpp`. **Fixed in
