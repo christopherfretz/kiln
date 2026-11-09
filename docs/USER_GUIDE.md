@@ -342,6 +342,9 @@ raise `-fkiln-stack-size` if you hit it.
 - `-fkiln-memory-report` prints kiln's arena usage by subsystem.
 - `-ftime-trace` writes a Chrome trace of each compile, as clang's
   does: see [Time traces](#time-traces).
+- `-fconstexpr-stats` and `-fconstexpr-profile` summarize where constant
+  evaluation spent its time and memory, per function and per
+  evaluation site: see [Constexpr profile](#constexpr-profile).
 
 ### Time traces
 
@@ -383,6 +386,77 @@ variable; the detail is its name), `EvaluateAsRValue` (a
 duration, or read the `Total` rows. The event table is in
 spec/driver.md, "Time trace".
 
+### Constexpr profile
+
+`-fconstexpr-stats` prints a short summary of the TU's constant
+evaluation on stderr, one stable `constexpr: <group> key=value ...` line
+per group, so it is easy to grep or diff between builds:
+
+```
+$ kiln++ -std=c++26 -fsyntax-only -fconstexpr-stats fib.cpp
+constexpr: evaluations count=3 failed=0 immediate=1 wall-us=1858
+constexpr: steps count=476
+constexpr: calls count=179 memo-hits=16 memo-misses=24 memo-hit-rate=40.0%
+constexpr: memory allocs=1 bytes=40 peak-live=40 reclaimed=40 peak-arena=40
+constexpr: interned frozen-bytes=48 refl-bytes=0 static-bytes=16
+constexpr: meta-ops count=0 splice-fast=0
+constexpr: trials count=1 failed=0 steps=354 wall-us=52
+constexpr: compile functions=3 wall-us=196
+```
+
+- `evaluations`: the TU's constant evaluations (`static_assert`s,
+  `constexpr` variables, `consteval` calls, template arguments, ...),
+  how many were not constant, how many were immediate (`consteval`)
+  invocations, and their total time.
+- `steps`, `calls`: the evaluator's steps (what `-fconstexpr-steps`
+  limits) and calls, and how often a call's result was reused from the
+  memo table.
+- `memory`: constexpr `new` allocations, their bytes, the most bytes
+  live at once in one evaluation, the bytes freed before the evaluation
+  ended, and the evaluator's largest arena.
+- `interned`, `meta-ops`: constant data kept for code generation, and
+  reflection operations.
+- `trials`: evaluations kiln attempted without the program asking (to
+  decide whether an initializer is constant, or to fold an expression)
+  and how many of them were not constant.
+- `compile`: functions compiled to the evaluator's bytecode.
+
+`-fconstexpr-profile` prints the top functions and the top evaluation
+sites, ranked by steps:
+
+```
+$ kiln++ -std=c++26 -fsyntax-only -fconstexpr-profile fib.cpp
+===-- kiln constexpr profile: fib.cpp --===
+functions (top 3 of 3, by inclusive steps):
+   calls    memo   incl steps   self steps    incl ms    self ms  peak bytes  functions
+      38      16          708          708      0.089      0.089           0  fib [consteval]   (fib.cpp:1:15)
+       1       0          105          105      0.039      0.039           0  sum   (fib.cpp:2:15)
+       1       0           17           17      0.021      0.021          40  heap   (fib.cpp:3:15)
+evaluation sites (top 3 of 3, by inclusive steps):
+   evals  failed   incl steps   self steps    incl ms    self ms  peak bytes  evaluation sites
+       1       0          354            0      2.477      2.417           0  consteval   (fib.cpp:5:9)
+       1       0          105            0      0.107      0.067           0  init b   (fib.cpp:6:15)
+       1       0           17            0      0.084      0.063          40  init c   (fib.cpp:7:15)
+  total: 3 evaluations, 476 steps, 2.668 ms; 1 trials, 354 steps; 40 calls
+```
+
+- "incl" counts a function's callees, "self" does not. `memo` is how
+  many of the calls were answered from the memo table without running.
+  `peak bytes` is the most constexpr heap live during one call.
+- `-fconstexpr-profile=json` writes the same rows as NDJSON on stderr;
+  `-fconstexpr-profile=<file>` writes to a file, as JSON when the name
+  ends in `.json`.
+- `-fconstexpr-profile-limit=N` shows N rows per table (default 20;
+  `0` shows all).
+
+Step and call counts are exact and the same on every run; times are
+wall-clock. Without either flag kiln keeps no profile, so it costs
+nothing. With `-fconstexpr-stats` the cost is negligible;
+`-fconstexpr-profile` times every constexpr call, which slows a
+call-heavy evaluation (see spec/landed/oven/WP-1116.md). A module
+importer reports only its own evaluations, not the module's. The
+format is in spec/driver.md, "Constexpr profile".
+
 The `-fkiln-*` report flags and their formats are experimental and may
 change in a minor release ([STABILITY.md](STABILITY.md)).
 
@@ -406,6 +480,7 @@ The full list is spec/driver.md, "Options".
 | `--llvm-dir=<dir>` | the LLVM installation to use (see [Run-time dependencies](#run-time-dependencies)) |
 | `-fkiln-reflection-mangling=gcc\|kiln\|kiln-hashed` | mangling of reflection template arguments (default `gcc`, link-compatible with GCC 16.1) |
 | `-fkiln-instantiation-report[=all\|json\|text]`, `-fkiln-memory-report` | reports (above) |
+| `-fconstexpr-stats`, `-fconstexpr-profile[=text\|json\|<file>]`, `-fconstexpr-profile-limit=N` | constexpr profile (above) |
 | `-f[no-]kiln-module-cache` | use the `std` module cache (default on; see [The `std` module cache](#the-std-module-cache)) |
 | `-fkiln-source-path-style=clang\|gcc` | how `__builtin_FILE()` and `std::source_location` spell a file name: as clang does (default) or as GCC does |
 | `-fkiln-reproducible-time` | fixed `__DATE__`/`__TIME__`/`__TIMESTAMP__` (see [Environment variables](#environment-variables)) |

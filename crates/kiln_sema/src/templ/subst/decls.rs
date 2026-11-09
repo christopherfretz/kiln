@@ -322,8 +322,9 @@ impl Substituter<'_, '_, '_> {
             && !matches!(ast.types.view(ast.types.canonical(t).ty()), TypeView::IncompleteArray(_))
     }
 
-    /// Whether `t` is a placeholder under pointer and reference
-    /// declarators (`auto`, `auto*`, `const auto&`), or a deduced class
+    /// Whether `t` is a placeholder under pointer, member-pointer and
+    /// reference declarators and function return types (`auto`, `auto*`,
+    /// `const auto&`, `auto T::*`, `auto (*)(int) -> auto`), or a deduced class
     /// type (`std::array const`, [dcl.type.class.deduct]; clang's
     /// `isUndeducedType`).
     fn has_placeholder(ast: &kiln_ast::Ast, t: QualType) -> bool {
@@ -339,7 +340,12 @@ impl Substituter<'_, '_, '_> {
                 TypeView::Auto { .. } | TypeView::DeducedTemplateSpecialization { .. } => {
                     return true;
                 }
-                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
+                TypeView::Pointer(p)
+                | TypeView::LValueRef(p)
+                | TypeView::RValueRef(p)
+                | TypeView::Paren(p)
+                | TypeView::MemberPointer { pointee: p, .. } => cur = p,
+                TypeView::Function(f) => cur = f.ret(),
                 _ => return false,
             }
         }
@@ -1849,7 +1855,8 @@ impl Substituter<'_, '_, '_> {
             let nns = self.nns(mf.nns, loc)?;
             let ty = self.ty(ty, loc)?;
             let depth = self.args.retained_depth(mf.depth());
-            return Ok(self.sema.instantiate_member_friend(&mf, nns, ty, depth, loc));
+            let at = (depth, self.args);
+            return Ok(self.sema.instantiate_member_friend(&mf, nns, ty, at, loc));
         }
         match self.sema.ast.decls.friend_target(d) {
             FriendTarget::Type { ty, owned_tag } => {

@@ -815,7 +815,17 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   - a constant aggregate goes through `emitStoresForConstant`. That means
     a single store, memset-0 plus a few stores, a bytewise memset, or a
     memcpy from a `@__const.<fn>.<var>` private global, in that order of
-    preference. Constants are never promoted to globals at -O0. An
+    preference. The global is clang's `createUnnamedGlobalFrom`
+    (`Cg::unnamed_global_from`, WP-1144): `<fn>` is the declaring
+    function's symbol, or its class name for a constructor or destructor
+    (`~S`; clang `getNameAsString`, no template arguments); one global is
+    cached per variable and reused while its constant is the same
+    (raising its alignment), so a lambda or local class that names the
+    variable without odr-using it ([basic.def.odr]/5,
+    `Cg::constant_local_lvalue`; clang `EmitDeclRefLValue` when
+    `canEmitSpuriousReferenceToVariable` fails) reads the same global, or
+    creates it when the variable's own initialization did not. Test
+    `basic.def.odr/potential-results-lambda-ir.cpp`. Constants are never promoted to globals at -O0. An
     aggregate is constant when it is constexpr, or when it is POD and
     its initializer folds. The exception is a trivial copy or move of
     an empty class, which reads nothing and so folds whatever its source
@@ -2805,7 +2815,11 @@ off and sema rejects `try`/`throw`).
   deactivated, innermost first, once the object is complete, using a
   placeholder for clang's dominating instruction). An element slot of
   such a list is `IsDestructed` (no temporary cleanup for a
-  `CXXBindTemporaryExpr` written in place).
+  `CXXBindTemporaryExpr` written in place). An ignored expression's slot
+  never is (`emit_ignored` clears `dest_destructed`, clang
+  `AggValueSlot::ignored()`): the left operand of a comma initializing a
+  class variable (`P q = ((void)D{1}, P{2});`) still destroys its
+  temporary (WP-1117; `class.temporary/discarded-not-extended-run.cpp`).
 - **new-expressions** ([expr.new]/28): `CallDeleteDuringNew` as an EH
   cleanup around the initializer, with the pointer, size and placement
   arguments saved to `cond-cleanup.save` slots inside a conditional
@@ -4680,9 +4694,7 @@ or `[[clang::uninitialized]]`.
   chooses; the constant evaluator ignores it). Elsewhere it is ignored
   with clang's warning `'clang::uninitialized' attribute only applies to
   local variables [-Wignored-attributes]`.
-- **Not modelled:** clang's per-declaration cache of `__const` globals
-  (kiln makes one per fill, which LLVM merges; clang's names match since
-  each fill has its own variable); the pattern of an SVE scalable
+- **Not modelled:** the pattern of an SVE scalable
   vector, which kiln_llvm cannot spell as a constant, so it is filled
   with zero (clang: a splat); in the memset-plus-stores budget a vector
   constant counts as one store, where clang walks a

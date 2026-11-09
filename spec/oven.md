@@ -1005,31 +1005,45 @@ evaluates, `ctx_depth > 0`) are events of their own, inside the outer one.
 WP-455 edit the Oven in parallel, so they stay thin):
 - `lib.rs` `Oven::evaluate` and `Oven::evaluate_chars`: `let hook =
   self.hook_eval_begin(&ctx);` first, and `if let Some(m) = hook {
-  self.hook_eval_end(bridge, m, e, &ctx, c.steps) }` after the evaluation;
+  self.hook_eval_end(bridge, m, e, &ctx, &c, r.is_ok()) }` after the
+  evaluation (the cost and the outcome: WP-1116);
 - `vm.rs` `enter`: `self.hook_compile(b, callee)` instead of
   `compile_func`, and `if self.hooks.calls { self.hook_call_enter(b,
   callee) }` after the frame is pushed;
 - `vm.rs` `Op::Ret`: `if self.hooks.calls { self.hook_call_ret(b) }` after
   the frame is popped;
+- (WP-1116) `vm.rs` `enter`, a memo hit: `if self.hooks.calls {
+  self.hook_memo_hit(callee, v.steps, v.peak) }` before the hit is
+  charged (no frame is pushed, so no other hook sees the call);
+- (WP-1116) `vm.rs` `exec` and `trial`: `if self.hooks.calls {
+  self.hook_call_unwind(b, entry) }` right after `run_loop`, before the
+  memo table's pending peaks are restored;
+- (WP-1116) `vm/exc.rs` `unwind`: `if self.hooks.calls {
+  self.hook_call_ret(b) }` after each frame an exception pops;
 - `vm/meta.rs`: `hook_meta_begin()` / `Oven::hook_meta_end(t, op)` around
   `SemaBridge::meta`.
 
-A frame unwound by an exception (`vm/exc.rs`) or a failure is not hooked:
-its call event ends at the first of: the next call entered at its depth
-or above it (`hook_call_enter`), the next `Ret` that pops below it, and
-`hook_eval_end` (a call that throws is charged the handler search; a
-loop of failed `__builtin_constant_p` trials holds at most one open call,
-not one per trial).
+A frame unwound by an exception ends where `vm/exc.rs` pops it; one
+abandoned by a failure or the end of a trial ends where `exec` / `trial`
+return (`hook_call_unwind`). These three sites (WP-1116) make the
+profile's per-call steps and peaks exact: a call that ended lazily, at
+the next call entered at its depth (`hook_call_enter`, still the
+fallback) or at `hook_eval_end`, would be charged the caller's steps
+that ran in between, and its peak would be read after the memo table
+had restored the enclosing call's. Each is one `hooks.calls` test, the
+same as `Op::Ret`'s.
 
 **API for a sink** (`pub(crate)`; WP-1116 extends it):
-- `Hooks { on, calls, marks }`, the field `Oven::hooks`: `on` is read from
-  the recorder (`kiln_source::trace::enabled`) at each top-level
-  evaluation (`ctx_depth == 0`) and gates every hook; `calls`
-  (`on && verbose`) gates the per-call ones. A second sink ORs its own
-  switch into both in `Hooks::refresh`.
+- `Hooks { on, calls, trace_calls, marks, prof }`, the field
+  `Oven::hooks`: `on` is read from the recorder
+  (`kiln_source::trace::enabled`) and the profile's level at each
+  top-level evaluation (`ctx_depth == 0`) and gates every hook; `calls`
+  (`trace && verbose`, or `-fconstexpr-profile`) gates the per-call ones;
+  `trace_calls` is the trace's half of it. `Hooks::refresh` ORs the
+  sinks' switches.
 - `hook_eval_begin(&mut self, &EvalContext) -> Option<EvalMark>` /
   `hook_eval_end(&mut self, &dyn SemaBridge, EvalMark, Option<ExprId>,
-  &EvalContext, steps)`: one pair per evaluation; the end closes the
+  &EvalContext, &Cost, ok)`: one pair per evaluation; the end closes the
   calls the evaluation left open.
 - `hook_call_enter(&mut self, &dyn SemaBridge, func)` /
   `hook_call_ret(&mut self, &dyn SemaBridge)`: `marks` is the stack of
@@ -1037,8 +1051,11 @@ not one per trial).
   depth with the callee's frame pushed); a sink that aggregates per call
   site reads `func` (`Oven::funcs[func].decl`) and the caller's
   `Frame::call_pc` (`Oven::site`) there.
+- `hook_memo_hit(&mut self, func, steps, peak)`,
+  `hook_call_unwind(&mut self, &dyn SemaBridge, depth)` (WP-1116).
 - `hook_compile(&mut self, &mut dyn SemaBridge, func)`,
-  `hook_meta_begin(&self) -> Option<Span>` / `hook_meta_end(Span, MetaOp)`.
+  `hook_meta_begin(&mut self) -> Option<Span>` / `hook_meta_end(Span,
+  MetaOp)`.
 
 **Off cost.** With no sink, `hook_eval_begin` reads one thread-local bool
 per top-level evaluation and the VM tests the plain bool `hooks.calls`
@@ -1047,6 +1064,92 @@ line); no clock read, no allocation. `Frame` does not grow. A/B on
 `cargo xtask bench --filter oven/` against the parent commit: within
 noise (WP-1115 landing note). The bench entry `oven/time-trace` measures
 the traced cost.
+
+### Profile counters — Landed (WP-1116)
+`-fconstexpr-stats` and `-fconstexpr-profile` (spec/driver.md "Constexpr
+profile") read a sink inside the trace hook methods
+(`crates/kiln_oven/src/profile.rs`, `Hooks::prof`) plus the Oven's
+existing counters. `Oven::set_profile(Level)` arms it before the first
+evaluation (`kiln_parse::ConstexprLimits::profile`):
+
+- `Level::Off` (default): no sink; the hooks behave as WP-1115's.
+- `Level::Stats` (`-fconstexpr-stats` alone): `Hooks::on` is set, so
+  every evaluation takes `hook_eval_begin`'s out-of-line half (one
+  thread-local read), each compile two clock reads and each meta
+  operation one increment. `Hooks::calls` stays off: the VM's per-call
+  cost is WP-1115's off cost.
+- `Level::Calls` (`-fconstexpr-profile`): `Hooks::calls` is set too, and
+  every VM call takes `hook_call_enter` / a return hook (two clock
+  reads, a mark push and pop, a row update).
+
+**The summary's counters**, by line:
+
+| Line | Key | Meaning |
+|---|---|---|
+| `evaluations` | `count`, `failed` | recorded top-level evaluations (`EvalStats::totals`) and those that were not constant |
+| | `immediate` | those with `EvalKind::Consteval` (immediate invocations) |
+| | `wall-us` | their wall time, each context's own (a nested one is not counted twice) |
+| `steps` | `count` | their VM steps (memo hits charged their recorded steps: the step budget's count) |
+| `calls` | `count` | their calls, a memo hit counting the calls it stands for (`-fconstexpr-report`'s `calls`) |
+| | `memo-hits`, `memo-misses`, `memo-hit-rate` | the memo table's lookups in the TU, trials included (`Memo::hits` / `misses`; the rate to one decimal, `-` with no lookup) |
+| `memory` | `allocs`, `bytes` | constexpr `new` / `std::allocator` allocations and their bytes (recorded evaluations) |
+| | `peak-live` | the most bytes live at once in one evaluation (`Memory::peak`: frames, heap, reflection) |
+| | `reclaimed` | bytes allocated and freed before the evaluation ended: `allocated` minus the frame and heap bytes still held (WP-060) |
+| | `peak-arena` | the largest arena high-water mark |
+| `interned` | `frozen-bytes`, `refl-bytes`, `static-bytes` | constant pool bytes interned, reflection data made, static storage materialized |
+| `meta-ops` | `count` | reflection meta operations (`SemaBridge::meta` calls through `hook_meta_begin`) |
+| | `splice-fast` | splices answered without a meta operation (`EvalTotals::splice_fast`) |
+| `trials` | `count`, `failed`, `steps`, `wall-us` | unrecorded evaluation contexts (`try_fold`, `fold_*`, constant-initialization checks, `evaluate_potential`, ...): every `eval_job` (`EvalStats::jobs`, `JobTotals`) minus the recorded ones |
+| `compile` | `functions`, `wall-us` | functions compiled to VM code and the time spent compiling them |
+
+**The profile's rows.** `Profile::funcs` is indexed by `Oven::funcs`
+(one `Row` per VM function, merged per declaration when reported);
+`Profile::sites` is keyed by (`EvalContext::loc`, `EvalKind`). Each row
+keeps `count`, `memo_hits`, `failed`, inclusive / exclusive steps and
+nanoseconds, and `peak`. The accounting, on the `Hooks::marks` stack:
+
+- An evaluation pushes a mark of depth 0 (`EVAL`, never closed by a
+  call's end) at `hook_eval_begin` and pops it at `hook_eval_end`,
+  charging its site. A call pushes one at `hook_call_enter` and pops it
+  when its frame is gone (`Op::Ret`, an exception's unwind, the end of
+  `exec` / `trial`, or the next call at its depth).
+- A mark's inclusive steps are the step counter's advance across it;
+  its exclusive ones subtract its children's (calls, memo hits, nested
+  evaluations). The step counter restarts for each outermost evaluation
+  and for a variable's initialization evaluated inside another
+  (`RunState::nesting`): a child at another nesting adds its time to the
+  parent's children but not its steps, which the counter never charged
+  to the parent.
+- A recursive function's inclusive steps and time are charged once, when
+  its outermost activation ends (`Row::active` counts open
+  activations); its exclusive ones and its count, at every activation.
+- A memo hit is a call (`count`, `memo_hits`) whose inclusive and
+  exclusive steps are the steps it stands for, with no time.
+- A call's peak is the most bytes live during it above those live at its
+  entry: `hook_call_enter` sets `Memory::peak` to the bytes live then,
+  and its end raises it back to the saved peak (a maximum), so the
+  evaluation's own `peak_bytes` is unchanged. A site's peak is the
+  evaluation's `peak_bytes`.
+- Trials push no site mark; their calls are charged to the function rows
+  (the `total` line counts them separately).
+
+Ranking and rendering are `ProfileRows::render` (spec/driver.md
+"Constexpr profile"). Step counts are exact: the profile reads the same
+counter as the step budget, at every call boundary.
+
+**Where it touches the Oven** (for WP-1100 / WP-455 rebases):
+`hooks.rs` (the sink, all hook bodies), `profile.rs` (new), the three
+unwind sites and the memo-hit site above, `lib.rs` (`hook_eval_end`'s
+arguments, `Cost::reclaimed`, `EvalRecord::reclaimed_bytes`,
+`EvalStats::note_job` in `eval_job`, `reclaimed` in `end_outermost` and
+`eval_nested`), `mem.rs` (`Memory::held`), `stats.rs` (`JobTotals`,
+`reclaimed_bytes`, `failed`).
+
+**Overhead.** Off: no sink; the VM's cost is WP-1115's off cost (one
+predictable `hooks.calls` test per call and return, now also per memo
+hit, per `exec` / `trial` return and per exception-popped frame). On:
+the WP-1116 landing note records `cargo xtask bench --filter oven/` with
+each flag.
 
 ### Builtins — normative (WP-088)
 The §9.5 builtin functions of spec/sema-templates.md, with clang 19's
@@ -3761,6 +3864,42 @@ value for a `void` `ConstantExpr` and codegen emits no code for it
 `tests/conformance/expr.const/immediate-invocation-nested-void{-run,-neg,-reflection}.cpp`,
 `tests/conformance/expr.const/immediate-invocation-void-run.cpp`.
 
+### Valued immediate invocations — Landed (WP-1140)
+An immediate invocation is evaluated exactly once. Sema stores each
+outermost invocation's value (`set_constant_value`, sema.md §5.10)
+as soon as it is evaluated, before any fold of the enclosing
+initializer, and a value is stored only for a successful evaluation,
+so a stored value is final. The compiler then treats a `ConstantExpr`
+with a value as a leaf wherever it is compiled, instead of compiling
+its operand again: the whole-initializer fold of a constant-initialized
+variable (`try_fold`), the variable's own constant-initialization check
+(`check_constexpr_init`, `check_constinit`), `fold_constant_init` for
+codegen, and every enclosing evaluation that reaches the wrapper.
+- `rv_inner`: a scalar with bits (`scalar_bits`) is a constant; a
+  pointer is the address of its thawed object (`THAW_PTR`).
+- `init_inner` (`valued_leaf`): a scalar (not a vector, complex or wide
+  integer) is stored as `rv_inner` reads it; a class object is copied
+  (`Op::Copy`, aux 1) from the static object its value thaws to
+  (`bi::THAW_OBJ`, cached per `ConstValueId` in `Oven::thawed`, so the
+  bytes and relocations are written once per compilation). The copy is
+  the guaranteed-elision initialization the call itself would perform:
+  no constructor runs.
+- Not leaves (the call is evaluated again): a glvalue (`lv`; the value
+  is the address it designates), a vector, complex or wide integer, a
+  class with a `mutable` member (its thawed object is not readable,
+  [expr.const]/5.9) or a virtual table pointer, a nested invocation
+  (`CONSTANT_ELIDED`, never valued), and an invocation in a default
+  argument or default member initializer: those are elided where they
+  are written and evaluated at each use (sema.md §5.10), because the
+  use site (`source_location::current()`) can change the value.
+
+The trial folds that run before the full-expression ends
+(`int_overflow.rs` `overflow_value_inner`) see the wrapper still
+unvalued and evaluate the call themselves (clang's
+`EvaluateForOverflow` does too). Tests:
+`tests/conformance/expr.const/immediate-invocation-evaluated-once-run.cpp`,
+`crates/kiln_driver/tests/time_trace.rs` (`immediate_invocation_evaluated_once`).
+
 ### Reflection runtime (M6; `-freflection`)
 Specified in **`spec/reflection.md`** §3:
 - the `info` value (`TyKind::Reflection`, bits `index - 1`) and the
@@ -4005,6 +4144,48 @@ the current element (the next one follows). A pattern (not expanded) is
 never compiled. Test: `tests/conformance/stmt.expand/oven-memory.cpp`
 (48 elements, each copy allocating 256 bytes: `peak_bytes<=512`).
 
+### Switch dispatch — Landed (WP-1144)
+A `switch` (`compile.rs` `switch_stmt`) compiles its condition, then one
+compare-and-branch per case value (a GNU range: two compares) to an
+out-of-line stub per label, then the default (or the end). Each stub
+charges the steps clang's label hunt would charge (`EvaluateStmt` with a
+`Case`: one per statement visited before the label, stepping into a
+`for`/`if` init-statement) and jumps to the label's code. A label that is
+a direct child of the body (or of a label chain there) is an ordinary
+jump target: that path, which is every switch without nested labels,
+emits exactly the code it did before WP-1144.
+
+A label may also be anywhere in a sub-statement of the body
+([stmt.switch]/2; Duff's device): inside a `do`, `while` or `for` body,
+a nested block, or an `if` branch. Jumping straight to it would skip the
+`ScopeEnter`/`Alloc` of every block between the body and the label, so
+the jump descends instead. Such a switch has a selector register `sel`
+(0 at entry); label k's stub sets `sel = k + 1` and jumps toward the
+first statement on its path. Each statement on a nested label's path
+that opens a scope with code (a block, an `if`, a loop's init or
+per-iteration scope) is a *hunt site*: the jump lands before the scope
+entry, and right after it `JmpIfNot sel` skips to the ordinary code,
+else a jump (one label below) or a compare per label (several) goes on
+toward the next site. At the label the jump lands on a pad that clears
+`sel` and enters the label's code, so the ordinary path, and every later
+iteration of the enclosing loops (increment, condition, `continue`,
+`break`), runs with `sel == 0`: a site costs one not-taken branch then.
+A site whose scope emits nothing is no site; a statement off every path
+is compiled as before. The jump bypasses only declarations sema allows
+([stmt.dcl]/3: vacuous initialization), and block locals are allocated
+at scope entry, so a bypassed variable exists, uninitialized, at the
+label. A label the descent cannot reach (none known) traps at the label
+with "a 'case' label in this statement is not supported yet".
+
+Where clang's evaluator diverges from the program's run-time result,
+kiln follows the run time: a bypassed class object with a trivial
+default constructor is usable after the label (clang starts only
+variables with no initializer), and a `for` entered by the jump goes on
+with its increment (clang re-runs the loop from its init-statement).
+Tests: `tests/conformance/stmt.switch/nested-labels{,-run,
+-clang-divergence}.cpp`, `tests/conformance/expr.const/duffs-device.cpp`;
+bench `bench/oven/switch-dense.cpp` (the ordinary path).
+
 ### Coroutines — rejected (WP-351)
 A coroutine is never a constexpr function ([dcl.constexpr]/3; Sema
 rejects `constexpr`/`consteval` coroutines and drops the implicit
@@ -4142,6 +4323,14 @@ their registers are kept to the end of the loop statement
   delete and bound notes, the `allocs`/peak counters, and memo purity
   (an allocating call is evaluated every time: two leaking calls report
   two leaks with the cache on).
+- `crates/kiln_oven/src/profile.rs` unit tests and
+  `crates/kiln_driver/tests/constexpr_profile.rs` (WP-1116, "Profile
+  counters"; [expr.const]/22): exact steps and calls of a recursion, a
+  loop (equal to `-fconstexpr-report`'s), a known constexpr heap peak
+  and reclaimed bytes, failed evaluations and trials, consteval memo
+  hits, the deterministic ranking with its tie-breaks, the limit, NDJSON
+  well-formedness, nothing printed without the flags, and an importer
+  reporting only its own evaluations (also `module_cache.rs`).
 - `crates/kiln_driver/tests/oven_classes.rs` (WP-076, through the real
   front end): member pointer freeze/thaw/cast round trips, 20000-operand
   spines, static temporaries, constant destruction, class `allocs`.

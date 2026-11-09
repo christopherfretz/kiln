@@ -13,10 +13,13 @@
 //!    `-mfunction-return=`, `-m[no-]speculative-load-hardening`,
 //!    `-f[no-]split-stack`, `-finstrument-functions[-after-inlining]`,
 //!    `-finstrument-function-entry-bare`, `-f[no-]xray-instrument`,
-//!    `-fxray-instruction-threshold=`, `-fxray-ignore-loops`; and WP-873's
+//!    `-fxray-instruction-threshold=`, `-f[no-]xray-ignore-loops`; WP-842's
+//!    `-mbranch-protection=` and `-msign-return-address=` (`AArch64`);
+//!    WP-961's `-mbranches-within-32B-boundaries` (x86-64); WP-873's
 //!    `-flto[=full|thin|auto|jobserver]`, `-fno-lto`, `-f[no-]split-lto-unit`;
 //!    and WP-1032's `-ftrapv`, `-fno-trapv` (a kiln spelling: clang has
-//!    none, GCC's cancels `-ftrapv`) and `-ftrapv-handler=`);
+//!    none, GCC's cancels `-ftrapv`) and `-ftrapv-handler=`), the target
+//!    checks of which are [`CodegenFlags::target_errors`];
 //! 2. accepted and ignored: no observable effect in kiln
 //!    (`-f[no-]stack-clash-protection`,
 //!    `-f[no-]common`, `-fstack-usage`, the defaults
@@ -26,9 +29,14 @@
 //!    `-f[no-]slp-vectorize`, `-f[no-]tree-[slp-]vectorize`,
 //!    `-fno-fat-lto-objects`; WP-982: `-f[no-]modules-reduced-bmi`;
 //!    spec/driver.md "Codegen flags");
-//! 3. rejected with "'<flag>' is not supported by kiln"
-//!    (`-fshort-enums`, the other `-fxray-*` options,
-//!    `-finstrument-functions-exclude-*` and `-ffat-lto-objects`).
+//! 3. rejected with "'<flag>' is not supported by kiln": `-fshort-enums`
+//!    and `-ffat-lto-objects`, and, only with `-fxray-instrument`, the
+//!    other `-fxray-*` options ([`CodegenFlags::xray_errors`]; without it
+//!    they are clang's "argument unused during compilation",
+//!    [`CodegenFlags::unused_xray_args`]).
+//!
+//! GCC's `-finstrument-functions-exclude-*` is not a clang option and is
+//! an unknown argument, as in clang.
 //!
 //! The floating-point flags are `crate::fp_flags`'s, the coverage and
 //! profiling flags `crate::coverage_flags`'s (WP-941), and the sanitizer

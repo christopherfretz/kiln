@@ -35,9 +35,9 @@ use kiln_ast::{AttrId, ConstValueId, ExprId, ListId, NnsId, RawId, StmtId, Strin
 use kiln_source::fx::FxHashSet;
 
 use super::{
-    Access, ConstexprKind, DeclFlags, DeclId, DeclKind, DeclName, DeclRec, FileId, FnBody, FnSpec,
-    FxHashMap, Image, LEX_TU, Loc, NONE, Payload, QRef, QualType, Rd, Res, Sema, W, Wr, Writer,
-    bad, var_spec,
+    Access, ConstexprKind, DEP, DeclFlags, DeclId, DeclKind, DeclName, DeclRec, FileId, FnBody,
+    FnSpec, FxHashMap, Image, LEX_TU, Loc, NONE, Payload, QRef, QualType, Rd, Res, Sema, W, Wr,
+    Writer, bad, var_spec,
 };
 
 /// A parameter reference in a declaration field: `PARAM | i` names the
@@ -79,6 +79,9 @@ pub(super) struct ExprRec {
     pub(super) aux: u8,
     /// Which cold annotations follow the slots ([`COLD_END`] ...).
     pub(super) cold: u8,
+    /// `ExprDeps` bits: type, value and instantiation dependence (S4: a
+    /// pattern's body; 0 elsewhere).
+    pub(super) deps: u8,
     pub(super) ty: QRef,
     pub(super) loc: u32,
     pub(super) words: Vec<u32>,
@@ -551,7 +554,7 @@ pub(super) fn encode_bodies(w: &mut Wr, b: &Bodies) {
         w.0.extend_from_slice(bytes);
     }
     arena(w, &b.exprs, |w, e| {
-        for x in [e.kind, e.bits, e.aux, e.cold] {
+        for x in [e.kind, e.bits, e.aux, e.cold, e.deps] {
             w.u8(x);
         }
         w.q(e.ty);
@@ -655,9 +658,10 @@ pub(super) fn decode_bodies(r: &mut Rd<'_>) -> Res<Bodies> {
         }
         b.strings.push((enc, bytes));
     }
-    b.exprs = decode_arena(r, 4 + 5 + 4 + 4, |r| {
-        let (kind, bits, aux, cold) = (r.u8()?, r.u8()?, r.u8()?, r.u8()?);
-        Ok(ExprRec { kind, bits, aux, cold, ty: r.q()?, loc: r.u32()?, words: decode_words(r)? })
+    b.exprs = decode_arena(r, 5 + 5 + 4 + 4, |r| {
+        let (kind, bits, aux, cold, deps) = (r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?);
+        let (ty, loc) = (r.q()?, r.u32()?);
+        Ok(ExprRec { kind, bits, aux, cold, deps, ty, loc, words: decode_words(r)? })
     })?;
     b.stmts = decode_arena(r, 1 + 2 + 4 + 4, |r| {
         Ok(StmtRec { kind: r.u8()?, aux: r.u16()?, loc: r.u32()?, words: decode_words(r)? })
@@ -733,6 +737,7 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
                     | Payload::Var { .. }
                     | Payload::Enumerator { .. }
                     | Payload::Implicit { .. }
+                    | Payload::Nttp { .. }
             )
         }
         Dc::Member => {
@@ -872,6 +877,7 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             || (e.bits >> 2) & 3 == 3
             || !expr_aux_ok(k, e.aux)
             || e.cold & !COLD_ALL != 0
+            || e.deps & !ExprDeps::TYPE_VALUE_INST.bits() != 0
         {
             return bad("bad expression bits");
         }
@@ -1161,8 +1167,8 @@ impl Writer<'_, '_, '_> {
                 let n = *ast.exprs.get(e);
                 let k = n.kind();
                 let ki = EXPR_KINDS.iter().position(|&x| x == k).ok_or(expr_reason(k))?;
-                if !n.deps().is_none() {
-                    return Err("a dependent expression");
+                if n.deps().intersects(ExprDeps::UNEXPANDED_PACK.with(ExprDeps::ERROR)) {
+                    return Err("a pack expansion or an invalid expression");
                 }
                 if !expr_aux_ok(k, n.aux()) {
                     return Err("an expression the image does not carry");
@@ -1307,6 +1313,7 @@ impl Writer<'_, '_, '_> {
                     bits,
                     aux: aux as u8,
                     cold,
+                    deps: n.deps().bits(),
                     ty,
                     loc,
                     words,
@@ -1512,7 +1519,7 @@ impl Writer<'_, '_, '_> {
         if !matches!(self.img.decls[ctx as usize].payload, Payload::Function { .. }) {
             return Err("a local declaration the image does not carry");
         }
-        let allowed = LOCAL_FLAGS | DeclFlags::HAS_LEXICAL_CTX.bits();
+        let allowed = LOCAL_FLAGS | DEP | DeclFlags::HAS_LEXICAL_CTX.bits();
         if n.flags().bits() & !allowed != 0 {
             return Err("an invalid or attributed local declaration");
         }
@@ -1543,7 +1550,7 @@ impl Writer<'_, '_, '_> {
             }
         };
         let loc = self.loc(n.loc())?;
-        let flags = n.flags().bits() & LOCAL_FLAGS;
+        let flags = n.flags().bits() & (LOCAL_FLAGS | DEP);
         let o = ast.modules.owner(d);
         let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
         let i = u32::try_from(self.img.decls.len()).map_err(|_| "a body too large")?;
@@ -1788,7 +1795,13 @@ impl Sema<'_, '_> {
             let (a, bb, used) = self.image_slots(shape, &vals, Node::E(built.expr(0)));
             let ty = self.image_ty(img, tys, ids, e.ty);
             let loc = if e.loc == NONE { Loc::INVALID } else { self.diags.sm().loc(main, e.loc) };
-            let node = ExprNode::from_raw(k, e.bits, ExprDeps::NONE, e.aux, ty, loc, a, bb);
+            let mut deps = ExprDeps::NONE;
+            for d in [ExprDeps::TYPE, ExprDeps::VALUE, ExprDeps::INSTANTIATION] {
+                if e.deps & d.bits() != 0 {
+                    deps |= d;
+                }
+            }
+            let node = ExprNode::from_raw(k, e.bits, deps, e.aux, ty, loc, a, bb);
             let id = self.ast.exprs.push(node);
             debug_assert_eq!(id, built.expr(i as u32));
             let mut rest = vals[used..].iter().copied();

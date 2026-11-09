@@ -2261,6 +2261,9 @@ impl Cg<'_> {
                 if let Some(lv) = self.constant_ref_lvalue(e, d, q)? {
                     return Ok(lv);
                 }
+                if let Some(lv) = self.constant_local_lvalue(e, d, q)? {
+                    return Ok(lv);
+                }
                 if ast.exprs.get(e).has(ExprFlags::REFERS_TO_ENCLOSING)
                     && let Some(lv) = self.captured_var_lvalue(d, q)?
                 {
@@ -2400,6 +2403,45 @@ impl Cg<'_> {
         let Some(c) = self.folds.get(init) else { return Ok(None) };
         let k = self.const_value(c, dq, Some(init), true)?;
         Ok(Some(self.ref_lvalue(V::C(k), q)))
+    }
+
+    /// clang `EmitDeclRefLValue` on a local, non-reference variable named
+    /// without being odr-used ([basic.def.odr]/5: it is usable in constant
+    /// expressions) where `canEmitSpuriousReferenceToVariable` fails: from
+    /// a lambda or local class of the function declaring it, which need
+    /// not have captured it ([expr.prim.lambda.capture]/8). Its constant
+    /// value is spilled to the variable's `__const` global, the one its
+    /// own initialization copies from when that constant is the same
+    /// ([`Cg::unnamed_global_from`]). `None` when the initializer did not
+    /// fold.
+    fn constant_local_lvalue(&mut self, e: ExprId, d: DeclId, q: QualType) -> R<Option<LV>> {
+        let ast = self.ast;
+        if ast.exprs.non_odr_use(e) != NonOdrUse::Constant
+            || !is_local(ast, d)
+            || is_static_local(ast, d)
+            || ast.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::Extern)
+        {
+            return Ok(None);
+        }
+        if !ast.exprs.get(e).has(ExprFlags::REFERS_TO_ENCLOSING) && self.f.locals.contains_key(&d) {
+            return Ok(None);
+        }
+        let Some(dq) = ast.decls.get(d).ty() else { return Ok(None) };
+        if self.referee(dq).is_some() {
+            return Ok(None);
+        }
+        let Some(init) = std::iter::once(d)
+            .chain(ast.redecls_of(d))
+            .find_map(|x| ast.decls.var(x).and_then(|v| v.init))
+        else {
+            return Ok(None);
+        };
+        let Some(c) = self.folds.get(init) else { return Ok(None) };
+        let k = self.const_value(c, dq, Some(init), true)?;
+        let align = self.var_align(d);
+        let g = self.unnamed_global_from(d, k, align);
+        let addr = Addr { v: V::C(gval(g)), ty: self.mty(dq), align };
+        Ok(Some(LV { addr, q, bf: None, vidx: None, tb: Tb::Type }))
     }
 
     /// The global holding a namespace-scope or static reference variable.
@@ -3505,8 +3547,19 @@ impl Cg<'_> {
 
     // ---- ignored expressions -------------------------------------------
 
-    /// clang `EmitIgnoredExpr`.
+    /// clang `EmitIgnoredExpr`. Its aggregate slots are its own
+    /// (`AggValueSlot::ignored()`, not destructed by an owner): the
+    /// enclosing slot's `dest_destructed` does not apply, else the bound
+    /// temporary of a comma's left operand in a variable's initializer
+    /// (`P q = ((void)D{1}, P{2});`) would never be destroyed (WP-1117).
     pub(crate) fn emit_ignored(&mut self, e: ExprId) -> R<()> {
+        let saved = std::mem::take(&mut self.f.dest_destructed);
+        let r = self.emit_ignored_x(e);
+        self.f.dest_destructed = saved;
+        r
+    }
+
+    fn emit_ignored_x(&mut self, e: ExprId) -> R<()> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
         if matches!(ast.exprs.get(e).kind(), ExprKind::CoawaitExpr | ExprKind::CoyieldExpr) {
@@ -5799,9 +5852,7 @@ impl Cg<'_> {
             self.memset(at, b.unwrap_or(0), size, vol);
             return Ok(());
         }
-        let fname = self.f.func.map(|f| self.m.func(f).name().to_owned()).unwrap_or_default();
-        let name = format!("__const.{fname}.{}", mangle::decl_name(self.ast, d));
-        let g = self.private_const(&name, k, at.align);
+        let g = self.unnamed_global_from(d, k, at.align);
         self.memcpy(at, V::C(gval(g)), at.align, size, vol);
         Ok(())
     }

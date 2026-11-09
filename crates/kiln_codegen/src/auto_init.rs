@@ -228,9 +228,7 @@ impl Cg<'_> {
         k: Value,
         align: u64,
     ) -> kiln_llvm::GlobalId {
-        let fname = self.f.func.map(|f| self.m.func(f).name().to_owned()).unwrap_or_default();
-        let name = format!("__const.{fname}.{}", kiln_abi::mangle::decl_name(self.ast, d));
-        self.private_const(&name, k, align)
+        self.unnamed_global_from(d, k, align)
     }
 
     /// clang `emitStoresForConstant`'s `canDoSingleStore`.
