@@ -2992,22 +2992,27 @@ impl Oven {
         let p = Ptr::decode(raw);
         let Some(a) = self.alloc_any(p) else { return Ok(()) };
         let key = Ptr::alloc_key(raw);
-        // The objects in this allocation a constructor or destructor is
-        // running for, by offset and class: a base subobject at offset 0
-        // shares its complete object's offset but not its type, and no two
-        // live subobjects of one class share an address ([intro.object]/9),
-        // so the pair is the object's identity (WP-1101).
-        let structors: Vec<(u32, OTy)> = self
-            .stack
-            .iter()
-            .filter_map(|fr| {
+        // Whether a constructor or destructor is running for the object of
+        // class `t` at offset `b` of this allocation. The class matters: a
+        // base subobject at offset 0 shares its complete object's offset
+        // but not its type, and no two live subobjects of one class share
+        // an address ([intro.object]/9), so the pair is the object's
+        // identity (WP-1101). An empty base is not in `Types::fields`, so
+        // the walk never enters one. Asked only at a volatile record, so
+        // a non-volatile path never scans the stack.
+        let structor = |b: u64, t: OTy| {
+            self.stack.iter().any(|fr| {
                 let f = &self.funcs[fr.func as usize];
-                let r = f.this_reg.filter(|_| f.structor)?;
-                let cls = f.this_ty?;
-                let this = self.regs.get((fr.fb + r) as usize).map(|&v| v as u64)?;
-                (this != 0 && Ptr::alloc_key(this) == key).then(|| (Ptr::decode(this).off, cls))
+                let (Some(r), Some(cls)) = (f.this_reg.filter(|_| f.structor), f.this_ty) else {
+                    return false;
+                };
+                let this = self.regs.get((fr.fb + r) as usize).map_or(0, |&v| v as u64);
+                cls == t
+                    && this != 0
+                    && Ptr::alloc_key(this) == key
+                    && u64::from(Ptr::decode(this).off) == b
             })
-            .collect();
+        };
         let mut vol = match a.origin {
             Origin::Var(d) => self.volatile_decls.contains(&d),
             Origin::Temp(e) | Origin::Heap(e, _) => self.volatile_exprs.contains(&e),
@@ -3017,10 +3022,7 @@ impl Oven {
         let (mut t, mut base) = (a.ty, 0u64);
         let target = u64::from(p.off);
         loop {
-            if vol
-                && matches!(self.types.kind(t), TyKind::Record { .. })
-                && u32::try_from(base).is_ok_and(|b| structors.contains(&(b, t)))
-            {
+            if vol && matches!(self.types.kind(t), TyKind::Record { .. }) && structor(base, t) {
                 vol = false;
             }
             if t == ty && base == target {
@@ -3041,19 +3043,13 @@ impl Oven {
                     let contains = |f: &&crate::ty::FieldInfo| {
                         rel >= f.offset && rel < f.offset + self.types.size(f.ty).max(1)
                     };
-                    // A union's active member, else the member toward the
-                    // object (not an empty base sharing its byte, whose
-                    // structor must not exempt it), else the first holding
-                    // the byte.
+                    // A union's active member, else the first holding the byte.
                     let active = union
                         .then(|| self.mem.unions.get(&Ptr::union_key(raw, base, t)).copied())
                         .flatten()
                         .and_then(|i| self.types.fields(t).get(i as usize))
-                        .filter(|f| contains(f))
-                        .copied();
-                    let Some(f) = active
-                        .or_else(|| self.types.member_toward(t, rel, ty).filter(|f| contains(&f)))
-                        .or_else(|| self.types.near(t, rel).find(|f| contains(f)).copied())
+                        .filter(|f| contains(f));
+                    let Some(f) = active.or_else(|| self.types.near(t, rel).find(|f| contains(f)))
                     else {
                         break;
                     };
