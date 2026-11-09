@@ -921,6 +921,7 @@ impl Cg<'_> {
             .map(|(p, f)| (DONE, p, f, None))
             .collect();
         self.emit_ctor_list("llvm.global_dtors", &dtors)?;
+        self.cov_emit();
         self.emit_used_lists()
     }
 
@@ -964,6 +965,11 @@ impl Cg<'_> {
             }
         }
         Ok(())
+    }
+
+    /// clang `addUsedGlobal`.
+    pub(crate) fn gi_add_used(&mut self, v: Value) {
+        self.gi.used.push(v);
     }
 
     /// clang `SetCommonAttributes`: a `used` entity goes into

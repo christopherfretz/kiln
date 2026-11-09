@@ -16,7 +16,8 @@
 //! macro's expansion and for an included file's tokens.
 
 use kiln_lex::{LexOptions, Lexer, TokFlags, TokKind};
-use kiln_source::{FileId, Interner, Loc, SourceManager, Span};
+use kiln_source::symbol::Interner;
+use kiln_source::{FileId, Loc, SourceManager, Span};
 
 /// What produced a [`SkippedRange`] (clang `SkippedRange::Kind`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

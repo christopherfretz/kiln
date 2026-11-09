@@ -763,7 +763,7 @@ impl Cg<'_> {
 
     /// The linkage clang gives a definition of function `d`
     /// (`getFunctionLinkage`, as [`Cg::set_def_linkage`] sets it).
-    fn fn_def_linkage(&self, d: DeclId) -> Linkage {
+    pub(crate) fn fn_def_linkage(&self, d: DeclId) -> Linkage {
         if self.fn_internal(d) {
             Linkage::Internal
         } else if self.is_available_externally_fn(self.ast.first(d)) {
