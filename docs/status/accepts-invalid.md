@@ -26,11 +26,11 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `f855ffb2c`
+- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `570d1da2b`
 - command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 193 s; peak RSS of one case 21 MiB (gnu-time)
+- wall time 154 s; peak RSS of one case 21 MiB (gnu-time)
 
 ## Totals
 
@@ -38,7 +38,7 @@ written by hand (WP-912). The run is informational and never part of
 |---|---:|---:|---:|
 | ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 64 | 1250 | 5.1% |
 | ACCEPTS-INVALID cases (per RUN configuration) | 75 | 1946 | 3.9% |
-| MISSED-ERROR lines (expected-error with no kiln error on its line) | 3905 | 28065 | 13.9% |
+| MISSED-ERROR lines (expected-error with no kiln error on its line) | 3900 | 28065 | 13.9% |
 | REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 28 | 418 | 6.7% |
 | crashes | 0 | 2850 | 0.0% |
 | timeouts | 0 | 2850 | 0.0% |
@@ -59,7 +59,7 @@ written by hand (WP-912). The run is informational and never part of
 | CXX/dcl | 0 / 4 | 0.0% | 0 / 81 | 0.0% | 0 | 0 / 0 |
 | CXX/dcl.dcl | 4 / 77 | 5.2% | 248 / 1141 | 21.7% | 0 | 0 / 0 |
 | CXX/dcl.decl | 1 / 54 | 1.9% | 86 / 788 | 10.9% | 1 | 0 / 0 |
-| CXX/drs | 1 / 33 | 3.0% | 1314 / 8682 | 15.1% | 0 | 0 / 0 |
+| CXX/drs | 1 / 33 | 3.0% | 1309 / 8682 | 15.1% | 0 | 0 / 0 |
 | CXX/except | 3 / 15 | 20.0% | 24 / 104 | 23.1% | 0 | 0 / 0 |
 | CXX/expr | 2 / 78 | 2.6% | 72 / 644 | 11.2% | 0 | 0 / 0 |
 | CXX/lex | 0 / 14 | 0.0% | 1 / 78 | 1.3% | 0 | 0 / 0 |
@@ -363,7 +363,7 @@ against clang 19 and clang 22) and one follow-up row in
 The generated tables above are from a later run (WP-1017, after items 2-6
 and 9-12 were fixed; WP-1015 fixed 2-6): accepts-invalid fell from 89 to 68
 files and from 110 to 80 cases; missed `expected-error` lines fell from
-4930 to 4276 (4072 after WP-946 and WP-1054). Rejects-valid fell from 47 to 28 cases through fixes from
+4930 to 4276 (4072 after WP-946 and WP-1054; WP-1078 regenerated the tables at 3900). Rejects-valid fell from 47 to 28 cases through fixes from
 other work packages (WP-958 and earlier); the driver now skips 83 cases
 with clang flags it does not know, so 418 no-diagnostics cases run.
 
@@ -555,7 +555,11 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
     references to 'enum' types" (`dcl.enum/forward-ref-enum{,-ok}.cpp`).
     Still open: "not allowed beyond a single level of indirection"
     (`CXX/except/except.spec/p2-places.cpp`), and a C++17 nested
-    `noexcept(false)` parameter.
+    `noexcept(false)` parameter. WP-1078's share (against main
+    `f855ffb2c`): accepts-invalid 64 to 64 files, 75 to 75 cases (the
+    target lines sit in files with other missed errors); missed errors
+    3905 to 3900 lines, all in `CXX/drs`; rejects-valid 28 to 28; no new
+    accepts-invalid or rejects-valid case.
 13. **Extension diagnostics under `-pedantic-errors`** (missing `typename`
     as a C++20 extension 52, variadic templates as a C++11 extension 26 and
     similar). kiln does not emit the extension warnings that these tests
