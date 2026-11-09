@@ -546,6 +546,7 @@ impl Job<'_> {
         pp: &mut Preprocessor<'_, '_>,
         engine: &DiagEngine<'_>,
         carried: Option<&kiln_sema::CarriedConstants>,
+        image: Option<&kiln_sema::ModuleImage>,
     ) -> bool {
         let a = self.args;
         let Some(out) = self.module_output_path() else { return true };
@@ -570,19 +571,35 @@ impl Job<'_> {
             }
             return true;
         };
-        let kind = match carried {
-            Some(c) if !c.bytes.is_empty() => {
-                capsule
-                    .sections
-                    .push(bmi::Section { tag: bmi::SECTION_CONSTS, bytes: c.bytes.clone() });
-                format!("kind 2, carrying {} constant results", c.carried)
-            }
-            Some(c) => format!(
-                "kind 1: no constant result to carry{}",
-                c.first_skip.map(|w| format!(" (first not carried: {w})")).unwrap_or_default()
-            ),
-            None => "kind 1, as -fkiln-bmi-kind=1 requests".to_owned(),
+        let consts = carried.filter(|c| !c.bytes.is_empty());
+        let decl_image = image.filter(|i| i.fallback.is_none() && !i.bytes.is_empty());
+        if let Some(c) = consts {
+            capsule.sections.push(bmi::Section { tag: bmi::SECTION_CONSTS, bytes: c.bytes.clone() });
+        }
+        if let Some(i) = decl_image {
+            capsule.sections.push(bmi::Section { tag: bmi::SECTION_IMAGE, bytes: i.bytes.clone() });
+        }
+        let skip = |c: &kiln_sema::CarriedConstants| {
+            c.first_skip.map(|w| format!(" (first not carried: {w})")).unwrap_or_default()
         };
+        let mut kind = match carried {
+            None => "kind 1, as -fkiln-bmi-kind=1 requests".to_owned(),
+            Some(c) if consts.is_some() => format!("kind 2, carrying {} constant results", c.carried),
+            Some(c) if decl_image.is_some() => {
+                format!("kind 2, carrying no constant result{}", skip(c))
+            }
+            Some(c) => format!("kind 1: no constant result to carry{}", skip(c)),
+        };
+        // spec/modules.md §11.11 "Part 2a": the image, or why there is none.
+        match image {
+            Some(i) if i.fallback.is_none() => {
+                kind += &format!(", with a declaration image of {} declarations", i.decls);
+            }
+            Some(i) => {
+                kind += &format!(" (no declaration image: {})", i.fallback.unwrap_or("empty"));
+            }
+            None => {}
+        }
         if a.verbose {
             // A `-v` line, never a warning (spec/modules.md §11.11
             // "Fallback").

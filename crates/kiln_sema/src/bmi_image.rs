@@ -1277,9 +1277,6 @@ impl Sema<'_, '_> {
             if img.kw == NONE || img.name_loc == NONE || !offs.into_iter().all(off_ok) {
                 return bad("an offset past the end of the module's source");
             }
-            if self.diags.sm().file_name(main) != img.main {
-                return bad("the main file does not match");
-            }
             Ok(img)
         });
         match checked {

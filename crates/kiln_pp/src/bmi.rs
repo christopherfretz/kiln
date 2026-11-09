@@ -406,11 +406,12 @@ pub enum Sniffed {
     Missing,
 }
 
-/// The declared names an image section lists up front (spec/modules.md
-/// §11.11 "Part 2a", "Encoding"), which the importer's preprocessor checks
+/// The main file path and the declared names an image section lists up
+/// front (spec/modules.md §11.11 "Part 2a", "Encoding"), which the
+/// importer's preprocessor checks
 /// against its interner before it uses the image; `None` when the header
 /// does not decode (the reader then reports the file as corrupt).
-pub fn image_names(bytes: &[u8]) -> Option<Vec<&str>> {
+pub fn image_header(bytes: &[u8]) -> Option<(&str, Vec<&str>)> {
     let mut at = 0usize;
     let u32_at = |at: &mut usize| -> Option<u32> {
         let b = bytes.get(*at..at.checked_add(4)?)?;
@@ -424,7 +425,7 @@ pub fn image_names(bytes: &[u8]) -> Option<Vec<&str>> {
         std::str::from_utf8(b).ok()
     };
     let _version = u32_at(&mut at)?;
-    let _main = str_at(&mut at)?;
+    let main = str_at(&mut at)?;
     let _module = str_at(&mut at)?;
     let _kw = u32_at(&mut at)?;
     let _name_loc = u32_at(&mut at)?;
@@ -432,7 +433,8 @@ pub fn image_names(bytes: &[u8]) -> Option<Vec<&str>> {
     if n.saturating_mul(4) > bytes.len() - at {
         return None;
     }
-    (0..n).map(|_| str_at(&mut at)).collect()
+    let names = (0..n).map(|_| str_at(&mut at)).collect::<Option<Vec<_>>>()?;
+    Some((main, names))
 }
 
 /// Sniffs the file at `path`, reading at most 8 bytes.
