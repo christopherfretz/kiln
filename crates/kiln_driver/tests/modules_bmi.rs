@@ -835,7 +835,7 @@ fn kind2_image_gate_module_names() {
 
     // WP-1162: `m` spelled without a global-scope declaration of it.
     let tail = "import m;\nint main() { return m::f() - 40; }\n";
-    for (i, head) in [
+    for (idx, head) in [
         "#define M m::f\n",
         "struct S { int m; };\n",
         "namespace o { namespace m { int k; } }\n",
@@ -845,13 +845,13 @@ fn kind2_image_gate_module_names() {
     .into_iter()
     .enumerate()
     {
-        let f = format!("s{i}.cpp");
-        w(&f, &format!("{head}{tail}"));
-        let notes = image_notes(&d, &["-fsyntax-only", m, &f]);
+        let file = format!("s{idx}.cpp");
+        w(&file, &format!("{head}{tail}"));
+        let notes = image_notes(&d, &["-fsyntax-only", m, &file]);
         assert_eq!(notes, image("m"), "{head}");
     }
     // ... and with one at global scope, however it is nested.
-    for (i, head) in [
+    for (idx, head) in [
         "extern \"C++\" { namespace m { int k; } }\n",
         "inline namespace v { namespace m { int k; } }\n",
         "namespace { namespace m { int k; } }\n",
@@ -861,12 +861,12 @@ fn kind2_image_gate_module_names() {
     .into_iter()
     .enumerate()
     {
-        let f = format!("r{i}.cpp");
-        w(&f, &format!("{head}{tail}"));
-        let o = kiln(&d, &["-v", "-fkiln-bmi-image", "-fsyntax-only", m, &f]);
+        let file = format!("r{idx}.cpp");
+        w(&file, &format!("{head}{tail}"));
+        let out = kiln(&d, &["-v", "-fkiln-bmi-image", "-fsyntax-only", m, &file]);
         let notes: Vec<&str> =
-            o.stderr.lines().filter(|l| l.starts_with("note: replayed '")).collect();
-        assert_eq!(notes, replay("m", "m"), "{head}: {}", o.stderr);
+            out.stderr.lines().filter(|l| l.starts_with("note: replayed '")).collect();
+        assert_eq!(notes, replay("m", "m"), "{head}: {}", out.stderr);
     }
 }
 
