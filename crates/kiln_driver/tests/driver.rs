@@ -286,7 +286,11 @@ fn time_trace_syntax_only() {
     assert_eq!(o.code, 0, "{}", o.stderr);
     let want: String = flags
         .iter()
-        .map(|f| format!("kiln++: warning: argument unused during compilation: '{f}' [-Wunused-command-line-argument]\n"))
+        .map(|f| {
+            "kiln++: warning: argument unused during compilation: '".to_owned()
+                + f
+                + "' [-Wunused-command-line-argument]\n"
+        })
         .collect();
     assert_eq!(o.stderr, want);
     assert!(!Path::new(file).exists());

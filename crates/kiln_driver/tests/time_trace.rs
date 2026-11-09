@@ -66,7 +66,7 @@ fn traces(dir: &Path) -> BTreeSet<String> {
     let mut walk = |d: &Path, prefix: &str| {
         for e in std::fs::read_dir(d).unwrap().flatten() {
             let n = e.file_name().to_string_lossy().into_owned();
-            if n.ends_with(".json") {
+            if Path::new(&n).extension().is_some_and(|x| x == "json") {
                 s.insert(format!("{prefix}{n}"));
             }
         }
@@ -152,7 +152,7 @@ fn events(j: &Json) -> Vec<Ev<'_>> {
         .collect()
 }
 
-/// What Perfetto / chrome://tracing need, and what clang writes: the two
+/// What Perfetto / `chrome://tracing` need, and what clang writes: the two
 /// top-level members; every event with `pid`, `tid`, `ph`, `ts`, `name`;
 /// complete events with `dur`, properly nested on the main thread; `b`/`e`
 /// pairs with `cat` and `id`; the `process_name` and `thread_name`

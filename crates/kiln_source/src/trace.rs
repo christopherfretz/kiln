@@ -117,7 +117,9 @@ impl Span {
     }
 }
 
-struct Open {
+/// One name's `Total`: the spans of it open now, and the outermost
+/// ones closed so far.
+struct NameTotal {
     name: Cow<'static, str>,
     open: u32,
     count: u64,
@@ -129,35 +131,29 @@ struct Recorder {
     begin_us: u64,
     granularity: u64,
     events: Vec<Event>,
-    totals: Vec<Open>,
+    totals: Vec<NameTotal>,
     sources: Vec<(Instant, String)>,
 }
 
 impl Recorder {
-    fn slot(&mut self, name: &str) -> &mut Open {
-        let i = match self.totals.iter().position(|t| t.name == name) {
-            Some(i) => i,
-            None => {
-                self.totals.push(Open {
-                    name: Cow::Owned(name.to_owned()),
-                    open: 0,
-                    count: 0,
-                    dur: 0,
-                });
-                self.totals.len() - 1
-            }
-        };
+    fn slot(&mut self, name: &str) -> &mut NameTotal {
+        let i = self.totals.iter().position(|t| t.name == name).unwrap_or_else(|| {
+            self.totals.push(NameTotal {
+                name: Cow::Owned(name.to_owned()),
+                open: 0,
+                count: 0,
+                dur: 0,
+            });
+            self.totals.len() - 1
+        });
         &mut self.totals[i]
     }
 
     fn open(&mut self, name: &'static str) {
-        let i = match self.totals.iter().position(|t| t.name == name) {
-            Some(i) => i,
-            None => {
-                self.totals.push(Open { name: Cow::Borrowed(name), open: 0, count: 0, dur: 0 });
-                self.totals.len() - 1
-            }
-        };
+        let i = self.totals.iter().position(|t| t.name == name).unwrap_or_else(|| {
+            self.totals.push(NameTotal { name: Cow::Borrowed(name), open: 0, count: 0, dur: 0 });
+            self.totals.len() - 1
+        });
         self.totals[i].open += 1;
     }
 
@@ -189,8 +185,7 @@ fn micros(d: std::time::Duration) -> u64 {
 pub fn start(granularity_us: u64, verbose: bool) {
     let begin_us = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_micros()).unwrap_or(u64::MAX))
-        .unwrap_or(0);
+        .map_or(0, |d| u64::try_from(d.as_micros()).unwrap_or(u64::MAX));
     REC.with(|r| {
         *r.borrow_mut() = Some(Recorder {
             start: Instant::now(),
@@ -363,10 +358,14 @@ pub fn range_detail(sm: &crate::SourceManager, begin: crate::Loc, end: crate::Lo
     if end != begin {
         match sm.presumed_line_col(end) {
             Some(e) if e.file_name != b.file_name => {
-                s.push_str(&format!(", {}:{}:{}", e.file_name, e.line, e.col));
+                let _ = write!(s, ", {}:{}:{}", e.file_name, e.line, e.col);
             }
-            Some(e) if e.line != b.line => s.push_str(&format!(", line:{}:{}", e.line, e.col)),
-            Some(e) if e.col != b.col => s.push_str(&format!(", col:{}", e.col)),
+            Some(e) if e.line != b.line => {
+                let _ = write!(s, ", line:{}:{}", e.line, e.col);
+            }
+            Some(e) if e.col != b.col => {
+                let _ = write!(s, ", col:{}", e.col);
+            }
             Some(_) => {}
             None => s.push_str(", <invalid sloc>"),
         }

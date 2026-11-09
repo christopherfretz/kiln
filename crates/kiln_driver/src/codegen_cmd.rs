@@ -1165,8 +1165,19 @@ fn render(step: &Step<'_>, quote_all: bool) -> String {
     }
 }
 
+/// Starts `input`'s trace (spec/driver.md "Time trace"): its path is
+/// derived from the job's output, the object file when linking.
+fn start_trace(args: &Args, s: time_trace::Settings, input: &str) -> InputTrace {
+    let phase = Phase::of(args);
+    let output = match phase {
+        Phase::Link => default_output(input, Phase::Object),
+        _ => args.output.clone().unwrap_or_else(|| default_output(input, phase)),
+    };
+    InputTrace::start(s, time_trace::path(args, Some(phase), input, &output))
+}
+
 /// Runs the plan; returns the exit status.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn execute(
     args: &Args,
     tc: &Toolchain,
@@ -1203,20 +1214,7 @@ fn execute(
         match step {
             Step::Frontend { input, dest } => {
                 failed |= end_trace(trace.take(), args, diag_opts, io);
-                if let Some(s) = trace_settings {
-                    let phase = Phase::of(args);
-                    let output = match phase {
-                        Phase::Link => default_output(&input.path, Phase::Object),
-                        _ => args
-                            .output
-                            .clone()
-                            .unwrap_or_else(|| default_output(&input.path, phase)),
-                    };
-                    trace = Some(InputTrace::start(
-                        s,
-                        time_trace::path(args, Some(phase), &input.path, &output),
-                    ));
-                }
+                trace = trace_settings.map(|s| start_trace(args, s, &input.path));
                 let text = {
                     let _frontend = kiln_source::trace::Scope::new("Frontend");
                     frontend(args, tc, input, stdin_text, diag_opts, io)
