@@ -915,11 +915,11 @@ built through `FILE_SET CXX_MODULES` with Ninja and `kiln++` as the
 compiler; the program runs, the scanner CMake found must be kiln's link,
 and touching the interface recompiles it, the implementation unit and the
 consumer but not the partition. `import std;` through CMake
-(`CXX_MODULE_STD`) is §11.11.
+(`CXX_MODULE_STD`) is §11.12.
 
 ### 11.10 Step 2 (follow-up work packages)
 
-- **`import std;` module file.** Landed as §11.11 (WP-984).
+- **`import std;` module file.** Landed as §11.12 (WP-984).
 - **Header units as files.** `-fmodule-header[=user|system]` writes a
   capsule of kind "header unit" (its exported macros are those of its
   replay, §3), `-fmodule-file=<hdr.pcm>` imports it, and `import "h";`
@@ -932,7 +932,7 @@ consumer but not the partition. `import std;` through CMake
   costs), so importers do not redo compile-time work: kiln's main reason
   to build it.
 
-### 11.11 `import std;` module files: the cache and CMake (WP-984)
+### 11.12 `import std;` module files: the cache and CMake (WP-984)
 
 `import std;` and `import std.compat;` worked from the start (§8): with
 nothing on the command line naming the module, kiln builds libc++'s
@@ -1089,12 +1089,12 @@ interface or `stdapp`'s source never rebuilds the std module.
   (self-checking `run` tests). Since WP-984, all but `vector` name
   libc++'s sources with `module: std=%{libcxx_modules}/std.cppm` (and
   `std.compat`), so they run two-step under clang too (spec/harness.md
-  "Modules"). `vector` stays the test of kiln's implicit lookup (§11.11)
+  "Modules"). `vector` stays the test of kiln's implicit lookup (§11.12)
   and is `skip(clang)`.
 - `module.import/import-std-two-step.cpp` (WP-984): `import std;` with
   `std.pcm` built by a separate `--precompile`, under kiln and clang 22.
 - `crates/kiln_driver/tests/module_cache.rs` (WP-984): the cache of
-  §11.11 against a miniature libc++ sysroot. It covers:
+  §11.12 against a miniature libc++ sysroot. It covers:
   - a miss then a hit;
   - `std.compat` filling both entries;
   - invalidation by a header edit, a damaged module file, a new
@@ -1104,7 +1104,7 @@ interface or `stdapp`'s source never rebuilds the std module.
   - location and switches;
   - `-print-file-name=libc++.modules.json`.
 - `scripts/oss/selftest.sh` `cmake_modules`: `CXX_MODULE_STD` through
-  CMake (§11.11).
+  CMake (§11.12).
 - libc++'s `libcxx/selftest/modules/*.sh.cpp`: `format.py`'s module
   build (§8).
 - `module.import/import-identifier*.cpp`, `import-not-found.cpp`,

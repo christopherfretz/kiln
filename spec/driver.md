@@ -1129,13 +1129,13 @@ accepted and ignored ("Codegen flags").
 
 `std` and `std.compat` found by step 4 above are imported from module
 files in a per-user cache, built there on first use (spec/modules.md
-§11.11 has the design):
+§11.12 has the design):
 
 - **Location.** `-fmodules-cache-path=<dir>` (made absolute), else
   `$XDG_CACHE_HOME/kiln/modules` when `XDG_CACHE_HOME` is an absolute
   path (the XDG rule: a relative one is ignored), else `$HOME/.cache/kiln/modules`. An entry is
   `<root>/<key>/<name>.pcm` plus `<name>.stamp`, where `<key>` is 32 hex
-  digits (spec/modules.md §11.11 "Key").
+  digits (spec/modules.md §11.12 "Key").
 - **Turning it off.** `-fno-kiln-module-cache` (`-fkiln-module-cache`
   turns it back on; the last one wins) or an empty
   `-fmodules-cache-path=`. Without a home directory there is no cache.
@@ -1157,7 +1157,7 @@ files in a per-user cache, built there on first use (spec/modules.md
   hit (`using '<pcm>' for 'std'`).
 - **Concurrency.** Racing compiles on a miss each build the module and
   rename it into place; the last rename wins and every one of them gets
-  a complete file (spec/modules.md §11.11 "Concurrency").
+  a complete file (spec/modules.md §11.12 "Concurrency").
 - **No eviction.** Entries for configurations no longer used stay until
   removed by hand (`rm -r ~/.cache/kiln/modules`; each is about 9 MiB).
 - `-print-file-name=libc++.modules.json` prints libc++'s module
@@ -1165,7 +1165,7 @@ files in a per-user cache, built there on first use (spec/modules.md
   (`<prefix>/lib/<triple>/` then `<prefix>/lib/`, where
   `<prefix>/include/c++/v1` holds the headers), so CMake's
   `CXX_MODULE_STD` finds `std.cppm` through its relative `source-path`
-  (spec/modules.md §11.11 "CMake").
+  (spec/modules.md §11.12 "CMake").
 
 ## Dependency scanning
 

@@ -1,5 +1,5 @@
 // [std.modules], [module.import]: `import std;` with no module flags.
-// Kiln finds libc++'s std.cppm itself (spec/modules.md §11.11: its module
+// Kiln finds libc++'s std.cppm itself (spec/modules.md §11.12: its module
 // cache, else the in-process build); std::vector, std::string and
 // algorithms are usable, and the exported `using` declarations name the
 // library's entities. import-std-two-step.cpp is the portable form.

@@ -328,7 +328,7 @@ impl Job<'_> {
     /// The module options of a compile that imports (spec/modules.md §2,
     /// §11.6): the module files named on the command line, the prebuilt
     /// paths, libc++'s module directory and the `std` module cache
-    /// (§11.11; `cache_key` is the predefines and the search list).
+    /// (§11.12; `cache_key` is the predefines and the search list).
     /// `None` after reporting an error.
     fn module_options(
         &self,
@@ -376,7 +376,7 @@ impl Job<'_> {
         let a = self.args;
         let PpInputs { list, main, predefines } = inputs;
         // The module cache's key takes the predefines and the search list
-        // (spec/modules.md §11.11); `-E`/`-M` import nothing.
+        // (spec/modules.md §11.12); `-E`/`-M` import nothing.
         let cache_key = staged.then(|| (predefines.clone(), list.verbose_text()));
         let mut search = HeaderSearch::new(RealFs, list).with_embed_dirs(a.embed_dirs.clone());
         let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));
