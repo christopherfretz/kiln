@@ -5,6 +5,7 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind, FnStorage, PayloadClass};
 use kiln_ast::templates::is_template_kind;
+use kiln_ast::types::RefQual;
 use kiln_ast::{DeclId, ExprId, QualType, TemplateParamListId};
 
 use crate::Sema;
@@ -131,17 +132,60 @@ impl Sema<'_, '_> {
         old_head: Option<TemplateParamListId>,
         new: NewFn,
     ) -> bool {
-        let r = self.fn_corresponds_in(old, old_head, new);
+        let r = self.fn_corresponds_in(old, old_head, new, false);
         #[cfg(feature = "op-stats")]
         crate::templ::deduce_stats::compared(r);
         r
     }
 
+    /// The member function among `cands` (redeclaration lookup in the
+    /// class, declaration order) that the non-static member function
+    /// `new` would correspond to but for its ref-qualifier: same
+    /// parameter-type-list, template head and requires-clause, ref-
+    /// qualifiers differing with one of them absent ([over.load]/2.3 of
+    /// C++20; clang `IsOverload`'s `DiagnoseInconsistentRefQualifiers`).
+    /// Neither has an explicit object parameter; cv-qualifiers are not
+    /// compared (the caller does, by language mode).
+    pub(crate) fn ref_qualifier_mix_prev(
+        &mut self,
+        cands: &[DeclId],
+        new: NewFn,
+    ) -> Option<DeclId> {
+        for &d in cands {
+            let k = self.kind_of(d);
+            let (p, head) = if k == DeclKind::FunctionTemplate {
+                if new.head.is_none() {
+                    continue;
+                }
+                let Some(p) = self.pattern_of(d) else { continue };
+                (p, self.ast.template_info(d).map(|i| i.params))
+            } else if k == DeclKind::CXXMethod && new.head.is_none() {
+                (d, None)
+            } else {
+                continue;
+            };
+            if self.kind_of(p) != DeclKind::CXXMethod
+                || self.has_explicit_object(p)
+                || self.ast.decls.get(p).has(DeclFlags::INVALID)
+            {
+                continue;
+            }
+            if self.fn_corresponds_in(p, head, new, true) {
+                return Some(p);
+            }
+        }
+        None
+    }
+
+    /// `ref_mix`: compare as [`Sema::ref_qualifier_mix_prev`] does
+    /// (object parameters ignored but for a ref-qualifier present on
+    /// exactly one side) instead of requiring corresponding ones.
     fn fn_corresponds_in(
         &mut self,
         old: DeclId,
         old_head: Option<TemplateParamListId>,
         new: NewFn,
+        ref_mix: bool,
     ) -> bool {
         // The parameters are those of the declared type, whose return type
         // only differs from it when deduced: that is formed (interned)
@@ -161,9 +205,14 @@ impl Sema<'_, '_> {
         }
         let old_static =
             self.ast.decls.function(old).is_some_and(|f| f.spec.storage() == FnStorage::Static);
-        if self.kind_of(old) == DeclKind::CXXMethod
-            && !old_static
-            && !new.is_static
+        let both_non_static =
+            self.kind_of(old) == DeclKind::CXXMethod && !old_static && !new.is_static;
+        if ref_mix {
+            let (ro, rn) = (po.info().ref_qual(), pn.info().ref_qual());
+            if !both_non_static || ro == rn || (ro != RefQual::None && rn != RefQual::None) {
+                return false;
+            }
+        } else if both_non_static
             && (po.info().this_quals() != pn.info().this_quals()
                 || po.info().ref_qual() != pn.info().ref_qual())
         {

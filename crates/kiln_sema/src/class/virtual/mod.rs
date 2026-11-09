@@ -152,6 +152,9 @@ impl Sema<'_, '_> {
             } else {
                 self.overridden_methods(site.class, site.name, ty)
             };
+            if !is_static && self.std < kiln_lex::Std::Cxx23 {
+                self.check_override_ref_mix(site.class, site.name, ty, d.name_loc());
+            }
             if !out.overridden.is_empty() && !is_static {
                 *spec = spec.with_virtual(true);
             }
@@ -368,7 +371,7 @@ impl Sema<'_, '_> {
     /// Visits the bases of `class` depth-first, left to right (a virtual
     /// base once), not descending below a base where `visit` returns
     /// true.
-    fn overridden_walk(
+    pub(crate) fn overridden_walk(
         &self,
         class: DeclId,
         seen_v: &mut FxHashSet<DeclId>,

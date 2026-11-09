@@ -217,6 +217,7 @@ sema_redundant_parens_around_declarator = WarningOff [RedundantParens] (0) "redu
 sema_ref_capture_with_ref_default = Error (0) "'&' cannot precede a capture when the capture default is '&'";
 sema_ref_init_ambiguous = Error (2) "reference initialization of type {0} with initializer of type {1} is ambiguous";
 sema_ref_non_value = Error (1) "{0} does not refer to a value";
+sema_ref_qualifier_overload = Error (2) "cannot overload a member function {0:without a ref-qualifier|with ref-qualifier '&'|with ref-qualifier '&&'} with a member function {1:without a ref-qualifier|with ref-qualifier '&'|with ref-qualifier '&&'}";
 sema_ref_uninit_use = Warning [Uninitialized] (1) "reference {0} is not yet bound to a value when used here";
 sema_refconst_no_ctor = Warning (2) "{0:struct|interface|union|class|enum} {1} does not declare any constructor to initialize its non-modifiable members";
 sema_reference_bind_drops_quals = Error (4) "binding reference of type {0} to value of type {1} drops {2} qualifier{3:|s}";

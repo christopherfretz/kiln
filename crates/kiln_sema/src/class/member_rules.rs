@@ -5,8 +5,9 @@
 //! anonymous bit-field rule of `CheckFieldDecl` (spec/sema.md §4.4
 //! "Union, bit-field and static data member rules").
 
-use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclKind, FieldData};
+use kiln_ast::types::RefQual;
+use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -97,5 +98,107 @@ impl Sema<'_, '_> {
             }
         }
         None
+    }
+}
+
+impl Sema<'_, '_> {
+    /// A non-static member function `new` declared in its class with the
+    /// parameter-type-list of an earlier member function whose ref-
+    /// qualifier differs, one of them having none. Before C++23 the two
+    /// cannot be overloaded ([over.load]/2.3; clang
+    /// `err_ref_qualifier_overload`, at the name with a note at the
+    /// earlier one; both stay declared). From C++23 their object
+    /// parameters correspond when their cv-qualifiers agree
+    /// ([basic.scope.scope]/3): the earlier one is then returned as the
+    /// declaration `new` redeclares, which a member function cannot be
+    /// ("class member cannot be redeclared").
+    pub(crate) fn ref_qualifier_mix(
+        &mut self,
+        dname: kiln_ast::names::DeclName,
+        new: crate::overload::redecl::NewFn,
+        loc: Loc,
+    ) -> Option<DeclId> {
+        if new.is_static {
+            return None;
+        }
+        let cands = self.prev_candidates_dn(dname, None);
+        let p = self.ref_qualifier_mix_prev(&cands, new)?;
+        let (pq, pr) = self.method_object_quals(p);
+        let info = self.ast.types.proto(new.ty).map(|x| x.info()).unwrap_or_default();
+        if self.std >= kiln_lex::Std::Cxx23 {
+            return (pq == info.this_quals()).then_some(p);
+        }
+        let m = self
+            .diag(DiagId::sema_ref_qualifier_overload, loc)
+            .arg(info.ref_qual() as u8)
+            .arg(pr as u8);
+        let m = self.note_prev(m, p, false);
+        self.emit(m);
+        None
+    }
+
+    /// The virtual-override form of the ref-qualifier rule (CWG2496, clang
+    /// 19 before C++23): a non-static member function of `class` with the
+    /// parameter-type-list of a virtual function of a base whose ref-
+    /// qualifier differs, one of them having none, whatever their
+    /// cv-qualifiers (clang's `AddOverriddenMethods` runs `IsOverload`
+    /// on each virtual base member, which reports the mix). One error per
+    /// such base function, at `loc`, with a note at it; neither overrides
+    /// the other.
+    pub(crate) fn check_override_ref_mix(
+        &mut self,
+        class: DeclId,
+        name: kiln_ast::names::DeclName,
+        ty: QualType,
+        loc: Loc,
+    ) {
+        let Some(info) = self.ast.types.proto(ty).map(|p| p.info()) else { return };
+        let mut mixed = Vec::new();
+        let mut seen_v = kiln_source::fx::FxHashSet::default();
+        self.overridden_walk(class, &mut seen_v, 0, &mut |s, b| {
+            for x in s.ast.lookup_local(b, name).iter() {
+                if s.kind_of(x) != DeclKind::CXXMethod {
+                    continue;
+                }
+                let m = s.ast.first(x);
+                if !crate::class::is_virtual(&s.ast, m) {
+                    continue;
+                }
+                let mty = s.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
+                if !s.is_method_overload(ty, mty) {
+                    return true;
+                }
+                if s.same_params_ref_mix(ty, mty) && !mixed.contains(&m) {
+                    mixed.push(m);
+                }
+            }
+            false
+        });
+        for m in mixed {
+            let (_, pr) = self.method_object_quals(m);
+            let msg = self
+                .diag(DiagId::sema_ref_qualifier_overload, loc)
+                .arg(info.ref_qual() as u8)
+                .arg(pr as u8)
+                .allow_duplicate();
+            let msg = self.note_prev(msg, m, false);
+            self.emit(msg);
+        }
+    }
+
+    /// Whether function types `a` and `b` have the same parameter-type-
+    /// list and variadic-ness and differing ref-qualifiers, one of them
+    /// none.
+    fn same_params_ref_mix(&self, a: QualType, b: QualType) -> bool {
+        let t = &self.ast.types;
+        let (Some(pa), Some(pb)) = (t.proto(a), t.proto(b)) else { return false };
+        let (ia, ib) = (pa.info(), pb.info());
+        let (xa, xb) = (t.params(pa), t.params(pb));
+        let (ra, rb) = (ia.ref_qual(), ib.ref_qual());
+        xa.len() == xb.len()
+            && xa.iter().zip(xb).all(|(x, y)| t.same_type(*x, *y))
+            && ia.variadic() == ib.variadic()
+            && ra != rb
+            && (ra == RefQual::None || rb == RefQual::None)
     }
 }

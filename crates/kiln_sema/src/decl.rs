@@ -4033,6 +4033,13 @@ impl Sema<'_, '_> {
             }
             p => p,
         };
+        // [over.load]/2.3 (C++20), [basic.scope.scope]/3 (C++23).
+        let prev = match prev {
+            None if method && in_class && !friend && !invalid_decl && !explicit_object => {
+                self.ref_qualifier_mix(dname, new_fn, d.name_loc())
+            }
+            p => p,
+        };
         // `template<class T> struct X; void X();` (clang's IDNS
         // redeclaration lookup; `kind_conflict`).
         if prev.is_none()
