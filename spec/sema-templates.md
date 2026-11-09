@@ -1179,6 +1179,97 @@ asks exactly one of:
 template named `N<Ts...>`) is the value-dependent `k + sizeof...(P1) +
 ...` (`pack.rs` `size_of_expansions`), so `N<Ts...>` stays dependent.
 
+#### 3.1.1 Classes declared in a dependent context (WP-1084, WP-904)
+
+**Which classes.** A class declared in a dependent context is a templated
+entity ([temp.pre]/8). Such a class carries `DeclFlags::DEPENDENT_CTX`,
+and its `Record` type is dependent (the table above). This covers:
+- a local class of a function template, of a generic lambda's call
+  operator, or of a member function of a class template;
+- a local class of a member function of such a local class;
+- a member class of a class template.
+
+Such a class is the current instantiation ([temp.dep.type]/1) only where
+the lookup context is nested in it, i.e. inside its own definition and
+its members' definitions. This is clang's `isCurrentInstantiation`.
+Everywhere else in the template it is a dependent type that is not the
+current instantiation. `Sema::is_unentered_dependent_class` (in
+`templ/actions.rs`) answers that question for a nested-name-specifier.
+It is never true during instantiation, because the instantiated classes
+are not dependent, and never inside the declarator of an out-of-line
+member of the class. `is_unentered_dependent_qualifier` also accepts a
+typedef of such a class.
+
+Lookup into the class still happens at definition time: kiln finds the
+member, and it decides only *how the name is treated*. Three rules
+follow.
+
+1. **Types named through it are dependent qualified names**
+   ([temp.res.general]/4). Take `L::N`, where `N` is a type member of
+   such a class `L` and the name is outside `L`:
+   - The parser's lookahead scans it as a dependent name
+     (`scan_name_walk_in`, `NameClass::Dependent`).
+   - It is a type, with no `typename`, only where [temp.res.general]/4
+     implies one: a member declaration, a parameter, and so on.
+   - In a template argument, or in a declaration where a type is
+     required, the parser reports clang's "missing 'typename' prior to
+     dependent type name" at definition time (`parse_template_type_name`,
+     `check_missing_typename_in_class`).
+   - An expression (`L::N()`, `sizeof(L::N)`) builds a
+     `DependentScopeDeclRefExpr` (`dep_member_nns`). A statement such as
+     `L::N *p;` is a multiplication, and `p` is undeclared at definition
+     time.
+   - Values found in the class (static members, member functions,
+     enumerators) are still bound at definition time. Only a type
+     defers.
+
+   **Instantiation.** When a `DependentScopeDeclRefExpr` whose name now
+   finds a type is instantiated, kiln reports clang's `err_typename_missing`.
+   This applies to this case and also to `T::N()` with `T = S`:
+   - The message is "missing 'typename' prior to dependent type name
+     'L::N'", with the instantiated qualifier, at the start of the
+     qualifier (`subst/exprs.rs`).
+   - The expression is an error.
+   - If the template is never instantiated, nothing is reported, as in
+     clang.
+
+2. **A dependent base is not searched by unqualified lookup**
+   ([temp.dep.general]/3, clang `lookupInBases`).
+   - In a template definition (the instantiation stack is empty), the
+     class-scope step of unqualified lookup (`lookup_in_class_unqual` in
+     `lookup.rs`) skips each base, direct or indirect, that is
+     `DEPENDENT_CTX` and does not enclose the lookup context.
+   - So `struct B : A { int g() { return z; } };`, with `A` a local
+     class, reports "use of undeclared identifier 'z'" at definition
+     time, and a type name gives "unknown type name 'I'".
+   - If an enclosing scope declares the name, that declaration is found
+     instead: `::shadowed`, not `A::shadowed`.
+   - Qualified lookup (`A::z`, `B::z`), member access (`this->z`), and
+     kiln's own class lookups (special members, operators, allocation
+     functions) still search every base.
+   - Instantiation searches every base.
+   - A base that is not declared in a dependent context, such as a
+     namespace-scope class, is searched as before.
+
+3. **A dependent call whose name only a dependent base declares**
+   (`z(u)`, `u` of type `T`). The name is unresolved at definition time
+   and argument-dependent lookup finds nothing at instantiation. If the
+   name is found in a class enclosing the call, the instantiated call
+   gives clang's "explicit qualification required to use member 'z' from
+   dependent base class", with "member is declared here" notes
+   (`overload/call.rs`, through `diagnose_member_found_in_class`). It
+   does not give "use of undeclared identifier".
+
+Tests:
+- `tests/conformance/temp.res/local-class-missing-typename.cpp`;
+- `tests/conformance/temp.res/member-class-dependent-clang-ported.cpp`,
+  ported from clang's CWG108 and `typename-specifier.cpp`;
+- `tests/conformance/temp.dep/local-class-dependent-base.cpp`;
+- `tests/conformance/temp.dep/local-class-dependent-patterns-run.cpp`,
+  which covers the valid patterns: CTAD, a local class as a template
+  argument, `typename L::N`, qualified access into a dependent base, a
+  non-dependent base, and a local class of a member function template.
+
 ### 3.2 Expression dependence (`ExprDeps`)
 
 Dependence is computed once by each `AstBuilder` constructor, from its
