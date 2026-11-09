@@ -26,6 +26,9 @@ pub struct DepList {
     pub system: bool,
     files: Vec<String>,
     seen: HashSet<String>,
+    /// The listed files added as system headers (a PCH records the flag
+    /// of each of its input files, WP-1023).
+    system_files: HashSet<String>,
     /// An `#include` named a file that was not found (clang's
     /// `SeenMissingHeader`: no dependency file is written).
     missing: bool,
@@ -41,10 +44,18 @@ impl DepList {
     }
 
     /// The list `args` asks for (`-M`, `-MM`, `-MD`, `-MMD`), if any.
+    /// An `-include-pch` file's input files come first, as clang lists
+    /// them when it reads the PCH (WP-1023).
     pub fn for_args(args: &Args) -> Option<DepList> {
-        args.deps.headers().map(|h| DepList {
-            generated: args.deps.missing_generated,
-            ..DepList::new(h == DepHeaders::All)
+        args.deps.headers().map(|h| {
+            let mut list = DepList {
+                generated: args.deps.missing_generated,
+                ..DepList::new(h == DepHeaders::All)
+            };
+            for (f, system) in &args.pch.deps {
+                list.add(f, *system);
+            }
+            list
         })
     }
 
@@ -60,8 +71,16 @@ impl DepList {
         }
         let name = remove_dots(name);
         if self.seen.insert(name.clone()) {
+            if system {
+                self.system_files.insert(name.clone());
+            }
             self.files.push(name);
         }
+    }
+
+    /// Whether the listed `name` was added as a system header.
+    pub fn is_system(&self, name: &str) -> bool {
+        self.system_files.contains(name)
     }
 
     /// The files.

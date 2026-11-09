@@ -698,8 +698,10 @@ impl Parser<'_, '_> {
             self.reject_type_name_storage(&mut ds);
             let mut d = Declarator::new(ctx, self.loc());
             self.catch_declarator = true;
+            self.in_exception_decl = true;
             self.parse_declarator(&mut d);
             self.catch_declarator = false;
+            self.in_exception_decl = false;
             self.set_abstract_loc(&mut d);
             let base = self.s.type_from_declspec_at(&ds, d.name_loc());
             self.s.act_on_exception_decl(&ds, base, &d)

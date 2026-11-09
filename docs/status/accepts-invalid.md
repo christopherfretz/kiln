@@ -26,19 +26,19 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `321baa9de`
+- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `3f6b868d0`
 - command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 285 s; peak RSS of one case 22 MiB (gnu-time)
+- wall time 95 s; peak RSS of one case 23 MiB (gnu-time)
 
 ## Totals
 
 | measure | count | of | rate |
 |---|---:|---:|---:|
-| ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 89 | 1250 | 7.1% |
-| ACCEPTS-INVALID cases (per RUN configuration) | 110 | 1946 | 5.7% |
-| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4930 | 28065 | 17.6% |
+| ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 73 | 1250 | 5.8% |
+| ACCEPTS-INVALID cases (per RUN configuration) | 86 | 1946 | 4.4% |
+| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4582 | 28065 | 16.3% |
 | REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 47 | 418 | 11.2% |
 | crashes | 0 | 2850 | 0.0% |
 | timeouts | 0 | 2850 | 0.0% |
@@ -50,25 +50,25 @@ written by hand (WP-912). The run is informational and never part of
 
 | directory | accepts-invalid files | rate | missed lines | rate | rejects-valid | crash / timeout |
 |---|---:|---:|---:|---:|---:|---:|
-| CXX/basic | 9 / 37 | 24.3% | 98 / 311 | 31.5% | 2 | 0 / 0 |
-| CXX/class | 3 / 46 | 6.5% | 159 / 634 | 25.1% | 1 | 0 / 0 |
+| CXX/basic | 6 / 37 | 16.2% | 78 / 311 | 25.1% | 2 | 0 / 0 |
+| CXX/class | 1 / 46 | 2.2% | 128 / 634 | 20.2% | 1 | 0 / 0 |
 | CXX/class.access | 1 / 12 | 8.3% | 58 / 573 | 10.1% | 0 | 0 / 0 |
 | CXX/class.derived | 1 / 15 | 6.7% | 21 / 96 | 21.9% | 1 | 0 / 0 |
 | CXX/conv | 0 / 2 | 0.0% | 2 / 16 | 12.5% | 0 | 0 / 0 |
 | CXX/cpp | 0 / 0 | - | 0 / 0 | - | 0 | 0 / 0 |
 | CXX/dcl | 0 / 4 | 0.0% | 0 / 81 | 0.0% | 0 | 0 / 0 |
-| CXX/dcl.dcl | 5 / 77 | 6.5% | 301 / 1141 | 26.4% | 2 | 0 / 0 |
-| CXX/dcl.decl | 3 / 54 | 5.6% | 103 / 788 | 13.1% | 1 | 0 / 0 |
-| CXX/drs | 3 / 33 | 9.1% | 1869 / 8682 | 21.5% | 0 | 0 / 0 |
+| CXX/dcl.dcl | 4 / 77 | 5.2% | 296 / 1141 | 25.9% | 2 | 0 / 0 |
+| CXX/dcl.decl | 2 / 54 | 3.7% | 87 / 788 | 11.0% | 1 | 0 / 0 |
+| CXX/drs | 1 / 33 | 3.0% | 1653 / 8682 | 19.0% | 0 | 0 / 0 |
 | CXX/except | 4 / 15 | 26.7% | 32 / 104 | 30.8% | 0 | 0 / 0 |
-| CXX/expr | 4 / 78 | 5.1% | 88 / 644 | 13.7% | 0 | 0 / 0 |
+| CXX/expr | 2 / 78 | 2.6% | 74 / 644 | 11.5% | 0 | 0 / 0 |
 | CXX/lex | 1 / 14 | 7.1% | 2 / 78 | 2.6% | 0 | 0 / 0 |
 | CXX/module | 0 / 6 | 0.0% | 6 / 75 | 8.0% | 0 | 0 / 0 |
-| CXX/over | 2 / 42 | 4.8% | 13 / 313 | 4.2% | 0 | 0 / 0 |
-| CXX/special | 2 / 31 | 6.5% | 14 / 224 | 6.2% | 5 | 0 / 0 |
+| CXX/over | 1 / 42 | 2.4% | 7 / 313 | 2.2% | 0 | 0 / 0 |
+| CXX/special | 2 / 31 | 6.5% | 13 / 224 | 5.8% | 5 | 0 / 0 |
 | CXX/stmt.stmt | 0 / 9 | 0.0% | 3 / 255 | 1.2% | 0 | 0 / 0 |
-| CXX/temp | 10 / 147 | 6.8% | 368 / 1644 | 22.4% | 8 | 0 / 0 |
-| SemaCXX | 41 / 628 | 6.5% | 1793 / 12406 | 14.5% | 27 | 0 / 0 |
+| CXX/temp | 9 / 147 | 6.1% | 366 / 1644 | 22.3% | 8 | 0 / 0 |
+| SemaCXX | 38 / 628 | 6.1% | 1756 / 12406 | 14.2% | 27 | 0 / 0 |
 
 ## Top 50 accepts-invalid files
 
@@ -81,10 +81,8 @@ Ranked by the expected errors of their worst configuration.
 | `SemaCXX/cxx2b-p2266-disable-with-msvc-compat.cpp` | 1 / 2 | 21 |
 | `SemaCXX/attr-annotate.cpp` | 1 / 1 | 12 |
 | `SemaCXX/array-alignment.cpp` | 1 / 1 | 11 |
-| `CXX/basic/basic.stc/basic.stc.dynamic/basic.stc.dynamic.allocation/p1.cpp` | 1 / 1 | 10 |
 | `SemaCXX/attr-lifetime-capture-by.cpp` | 1 / 1 | 10 |
 | `SemaCXX/addr-label-in-coroutines.cpp` | 1 / 1 | 9 |
-| `CXX/expr/expr.prim/expr.prim.lambda/p13.cpp` | 2 / 2 | 7 |
 | `SemaCXX/attr-no-specializations.cpp` | 1 / 1 | 7 |
 | `SemaCXX/attr-suppress.cpp` | 1 / 1 | 7 |
 | `SemaCXX/cxx20-p0388-unbound-ary.cpp` | 1 / 2 | 7 |
@@ -94,31 +92,22 @@ Ranked by the expected errors of their worst configuration.
 | `CXX/class.access/class.friend/p9-cxx0x.cpp` | 1 / 1 | 5 |
 | `CXX/except/except.spec/p2-dynamic-types.cpp` | 1 / 1 | 5 |
 | `CXX/basic/basic.stc/basic.stc.dynamic/basic.stc.dynamic.deallocation/p2.cpp` | 1 / 1 | 4 |
-| `CXX/dcl.decl/dcl.meaning/dcl.fct.default/p7.cpp` | 1 / 1 | 4 |
-| `CXX/basic/basic.stc/basic.stc.dynamic/basic.stc.dynamic.deallocation/p1.cpp` | 1 / 1 | 3 |
 | `CXX/class.derived/class.abstract/p2.cpp` | 1 / 1 | 3 |
 | `CXX/dcl.dcl/dcl.attr/dcl.attr.depend/p2.cpp` | 1 / 1 | 3 |
-| `CXX/drs/cwg22xx.cpp` | 1 / 7 | 3 |
-| `CXX/drs/cwg24xx.cpp` | 2 / 6 | 3 |
 | `CXX/expr/expr.unary/expr.new/p20-0x.cpp` | 3 / 3 | 3 |
-| `CXX/over/over.load/p2-0x.cpp` | 2 / 2 | 3 |
 | `CXX/special/class.temporary/p1.cpp` | 1 / 1 | 3 |
 | `CXX/temp/temp.spec/temp.expl.spec/p21.cpp` | 1 / 1 | 3 |
 | `SemaCXX/coroutine-builtins.cpp` | 1 / 1 | 3 |
 | `SemaCXX/union-member-destructor.cpp` | 1 / 1 | 3 |
 | `SemaCXX/weak-init.cpp` | 1 / 1 | 3 |
 | `CXX/basic/basic.lookup/basic.lookup.elab/p2.cpp` | 1 / 1 | 2 |
-| `CXX/basic/basic.start/basic.start.init/p3.cpp` | 2 / 5 | 2 |
-| `CXX/basic/basic.start/basic.start.main/p3.cpp` | 4 / 5 | 2 |
+| `CXX/basic/basic.start/basic.start.init/p3.cpp` | 1 / 5 | 2 |
+| `CXX/basic/basic.start/basic.start.main/p3.cpp` | 2 / 5 | 2 |
 | `CXX/class/class.local/p1-0x.cpp` | 1 / 1 | 2 |
-| `CXX/class/class.mem/p14.cpp` | 1 / 1 | 2 |
-| `CXX/class/class.static/class.static.data/p4.cpp` | 1 / 1 | 2 |
 | `CXX/dcl.dcl/dcl.spec/dcl.constexpr/p3-2b.cpp` | 1 / 1 | 2 |
 | `CXX/dcl.dcl/dcl.spec/dcl.inline/p1.cpp` | 1 / 1 | 2 |
 | `CXX/dcl.decl/dcl.meaning/dcl.fct/p23.cpp` | 1 / 1 | 2 |
-| `CXX/expr/expr.prim/expr.prim.lambda/expr.prim.lambda.capture/p5.cpp` | 1 / 1 | 2 |
 | `CXX/temp/temp.fct.spec/temp.deduct/temp.deduct.type/p17.cpp` | 1 / 1 | 2 |
-| `CXX/temp/temp.param/p9.cpp` | 1 / 1 | 2 |
 | `CXX/temp/temp.spec/temp.explicit/p8.cpp` | 1 / 1 | 2 |
 | `SemaCXX/PR38235.cpp` | 1 / 1 | 2 |
 | `SemaCXX/attr-abi-tag-syntax.cpp` | 1 / 1 | 2 |
@@ -126,6 +115,17 @@ Ranked by the expected errors of their worst configuration.
 | `SemaCXX/coroutine-vla.cpp` | 1 / 1 | 2 |
 | `SemaCXX/gh134265.cpp` | 2 / 2 | 2 |
 | `SemaCXX/gh138775.cpp` | 1 / 1 | 2 |
+| `SemaCXX/warn-unused-label-error.cpp` | 1 / 1 | 2 |
+| `CXX/basic/basic.link/p9.cpp` | 1 / 1 | 1 |
+| `CXX/basic/basic.lookup/basic.lookup.unqual/p7.cpp` | 1 / 1 | 1 |
+| `CXX/dcl.dcl/dcl.spec/dcl.type/dcl.spec.auto/p3-1z.cpp` | 1 / 1 | 1 |
+| `CXX/dcl.decl/dcl.meaning/dcl.fct/p9-0x.cpp` | 1 / 1 | 1 |
+| `CXX/except/except.spec/p13-friend.cpp` | 1 / 1 | 1 |
+| `CXX/except/except.spec/p15.cpp` | 2 / 2 | 1 |
+| `CXX/except/except.spec/p5-delayed.cpp` | 1 / 1 | 1 |
+| `CXX/expr/expr.prim/expr.prim.lambda/p2-template-parameter.cpp` | 1 / 1 | 1 |
+| `CXX/lex/lex.literal/lex.ext/p8.cpp` | 1 / 1 | 1 |
+| `CXX/over/over.match/over.match.best/over.best.ics/over.ics.user/p3-0x.cpp` | 1 / 1 | 1 |
 
 ## Top 40 missed-error clusters
 
@@ -137,7 +137,6 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | variadic macros are a CN feature | 14 | 14 | `CXX/drs/cwg0xx.cpp:10` |
 | constexpr variable '…' must be initialized by a constant expression | 9 | 27 | `CXX/drs/cwg18xx.cpp:480` |
 | no matching constructor | 9 | 20 | `CXX/basic/basic.lookup/basic.lookup.qual/class.qual/p2.cpp:132` |
-| member '…' has the same name as its class | 8 | 74 | `CXX/class/class.mem/p13.cpp:8` |
 | constant expression | 8 | 67 | `CXX/dcl.dcl/dcl.spec/dcl.constexpr/p6.cpp:30` |
 | redefinition of '…' | 8 | 26 | `CXX/basic/basic.lookup/basic.lookup.unqual/p15.cpp:12` |
 | invalid use of non-static data member '…' | 7 | 30 | `CXX/class/class.nest/p1.cpp:12` |
@@ -162,17 +161,18 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | reference to '…' is ambiguous | 5 | 6 | `CXX/basic/basic.lookup/basic.lookup.qual/namespace.qual/p5.cpp:28` |
 | use '…' keyword to treat '…' as a dependent template name | 4 | 42 | `CXX/drs/cwg17xx.cpp:14` |
 | class template partial specialization is not more specialized than the primary template | 4 | 30 | `CXX/drs/cwg14xx.cpp:706` |
-| a lambda parameter cannot shadow an explicitly captured entity | 4 | 23 | `CXX/drs/cwg22xx.cpp:14` |
-| initializing multiple members of union | 4 | 23 | `CXX/class/class.union/class.union.anon/p4.cpp:8` |
-| static data member '…' already has an initializer | 4 | 21 | `CXX/class/class.static/class.static.data/p4.cpp:15` |
 | call to '…' is ambiguous | 4 | 18 | `CXX/drs/cwg10xx.cpp:30` |
-| default argument references local variable '…' of enclosing function | 4 | 16 | `CXX/dcl.decl/dcl.meaning/dcl.fct.default/p7.cpp:5` |
 | invalid application of '…' to an incomplete type '…' | 4 | 16 | `CXX/dcl.decl/dcl.meaning/dcl.array/p3.cpp:12` |
 | call to consteval function '…' is not a constant expression | 4 | 14 | `CXX/basic/basic.def.odr/p2-typeid.cpp:59` |
 | explicit instantiation declaration of '…' with internal linkage | 4 | 14 | `CXX/drs/cwg0xx.cpp:1137` |
 | assigning to '…' from incompatible type '…' | 4 | 13 | `SemaCXX/conditional-expr.cpp:429` |
 | ambiguous | 4 | 12 | `CXX/dcl.dcl/basic.namespace/namespace.udecl/p8-cxx0x.cpp:197` |
-| variable templates are a C++N extension | 4 | 12 | `CXX/drs/cwg19xx.cpp:86` |
+| call to deleted constructor of '…' | 4 | 11 | `CXX/class/class.init/class.copy.elision/p3.cpp:141` |
+| unknown type name '…' | 4 | 10 | `CXX/drs/cwg1xx.cpp:100` |
+| call to deleted constructor | 4 | 8 | `CXX/class/class.init/class.copy.elision/p3.cpp:224` |
+| redefinition of '…' as different kind of symbol | 4 | 8 | `CXX/temp/temp.deduct.guide/p1.cpp:52` |
+| not an integral constant expression | 4 | 7 | `SemaCXX/constant-expression-cxx11.cpp:405` |
+| missing '…' prior to dependent type name '…' is a C++N extension | 3 | 52 | `CXX/drs/cwg1xx.cpp:98` |
 
 ## Rejects-valid cases
 
@@ -379,6 +379,11 @@ against clang 19 and clang 22) and one follow-up row in
 [BACKLOG.md](../BACKLOG.md) with origin WP-912. Paths below are relative to
 `tests/conformance/`.
 
+The generated tables above are from a later run (WP-1015, after items 2-6
+were fixed): accepts-invalid fell from 89 to 73 files and from 110 to 86
+cases; missed `expected-error` lines fell from 4930 to 4582; rejects-valid
+stayed at 47 cases.
+
 ### Accepts invalid code
 
 1. **Types defined where the grammar forbids them** (type specifier 98 / 5,
@@ -394,34 +399,50 @@ against clang 19 and clang 22) and one follow-up row in
    be defined in a type specifier"), `sizeof(struct S {})` in a default
    argument, and `class.conv.fct/type-defined-in-conversion-type.cpp`.
 2. **Member with the name of its class** (74 / 8; [class.mem]/22,
-   [class.ctor] "ISO C++ forbids ... constructor name"). Repro:
-   `class.mem/static-member-named-as-class.cpp`.
+   [class.ctor] "ISO C++ forbids ... constructor name"). Fixed in WP-1015:
+   static data members, member types and templates, unscoped enumerators,
+   using-declarations, and a non-static data member when the class has a
+   user-declared constructor (`class.mem/member-named-as-class{,-ok}.cpp`,
+   `class.mem/static-member-named-as-class.cpp`).
 3. **Allocation functions and `main`** (38 lines "replacement function cannot
    be declared inline", namespace-scope and `static` `operator new`;
-   [basic.stc.dynamic.allocation]/1, [basic.start.main]/3). Repros:
-   `basic.stc.dynamic/operator-new-in-namespace.cpp`,
-   `basic.stc.dynamic/operator-new-static.cpp`,
-   `basic.stc.dynamic/operator-delete-no-param.cpp`,
-   `basic.start.main/main-template.cpp`, `basic.start.main/main-variable.cpp`.
+   [basic.stc.dynamic.allocation]/1, [basic.start.main]/3). Fixed in
+   WP-1015: `operator new`/`delete` scope, `static`, return type, template
+   arity, first parameter and its default argument; `main` parameters,
+   template, deleted, not overloaded, a global variable `main`; all `main`
+   rules off under `-ffreestanding` (`basic.stc.dynamic/new-delete-*.cpp`,
+   `basic.start.main/*.cpp`). Still open: clang's `-Wmain` warnings, and
+   destroying and type-aware forms are not checked.
 4. **Unions, static data members, bit-fields** (union multiple initializers
    23, static member already initialized 21, anonymous bit-field qualifiers
-   22; [class.union]/2, [class.static.data]/4, [class.bit]). Repros:
-   `class.union/virtual-member-function.cpp`,
-   `class.union/two-default-member-initializers.cpp`,
-   `class.union.anon/two-default-member-initializers.cpp`,
-   `class.static.data/initializer-twice.cpp`.
+   22; [class.union]/2, [class.static.data]/4, [class.bit]). Fixed in
+   WP-1015 (`class.union/*.cpp`, `class.union.anon/two-default-member-initializers.cpp`,
+   `class.static.data/initializer-*.cpp`,
+   `class.bit/anonymous-bit-field-qualifiers*.cpp`). Still open: C++03
+   non-trivial union members (`CXX/class/class.union/p1.cpp`).
 5. **Redeclarations and overloadable declarations** (redeclaration of a
    using-declaration 37, non-friend qualified member 37, class member
    redeclared 34, ref-qualified and unqualified overloads; [over.load]/2,
-   [namespace.udecl]/10, [class.mem]/5). Repro:
-   `over.load/ref-qualifier-mix.cpp`.
+   [namespace.udecl]/10, [class.mem]/5). Fixed in WP-1015: the ref-qualifier
+   mix (and its C++23 redeclaration form and CWG2496 override), member tags
+   redeclared or qualified, repeated dependent using-declarators
+   (`over.load/ref-qualifier-*.cpp`, `class.virtual/override-ref-qualifier-*.cpp`,
+   `class.mem.general/member-*tag*.cpp`, `dcl.meaning/qualified-member-tag*.cpp`,
+   `namespace.udecl/dependent-using-*.cpp`). Still open: a ref-qualifier mix
+   in a class template, which clang reports only at instantiation.
 6. **Default arguments, `inline`, lambda shadowing** (lambda shadow 23,
    shadows template parameter 24; [dcl.fct.default]/7, [dcl.fct.spec]/4,
-   [expr.prim.lambda.capture]/5, [temp.param]/12). Repros:
-   `dcl.fct.default/local-variable-in-default-arg.cpp`,
-   `dcl.fct.spec/inline-block-scope-function.cpp`,
-   `expr.prim.lambda.capture/param-shadows-capture.cpp`,
-   `temp.param/friend-template-default-arg.cpp`.
+   [expr.prim.lambda.capture]/5, [temp.param]/12). Fixed in WP-1015: `this`,
+   capturing lambdas and odr-used locals in default arguments, default
+   arguments outside a function declaration's own clause, block-scope
+   `inline`, a lambda parameter shadowing an explicit capture, default
+   template arguments on friend templates
+   (`dcl.fct.default/*-default-arg*.cpp`, `dcl.fct.spec/inline-block-scope-*.cpp`,
+   `expr.prim.lambda.capture/param-shadows-capture*.cpp`,
+   `temp.param/friend-template-default-arg*.cpp`). Still open: a friend
+   class template in a local class; a braced default argument is not
+   searched for `this` or parameters; template parameter shadowing in a
+   typedef.
 7. **Constant evaluation: undefined behaviour and not-yet-seen initializers**
    (constant expression 67 / 8, no constant initializer 54 / 2, constexpr
    variable must be initialized 27 / 9; [expr.const]/10, [dcl.constexpr]/6).
