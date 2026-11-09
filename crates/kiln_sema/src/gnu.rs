@@ -29,9 +29,9 @@ use crate::target;
 /// not take.
 #[derive(Debug)]
 pub struct StmtExprScope {
-    outer_odr: Vec<ExprId>,
-    outer_imm: crate::consteval::SavedImm,
-    outer_cleanup: crate::class::CleanupState,
+    odr: Vec<ExprId>,
+    imm: crate::consteval::SavedImm,
+    cleanup: crate::class::CleanupState,
 }
 
 impl Sema<'_, '_> {
@@ -51,15 +51,15 @@ impl Sema<'_, '_> {
     /// full-expressions, so the enclosing one's pending odr-uses and
     /// cleanups are set aside until [`Sema::act_on_stmt_expr`]. Without
     /// the cleanups, the first full-expression inside took the
-    /// `ExprWithCleanups` of a temporary created before the `({` (`D{1}.v
-    /// + ({ 0; })`), and that temporary lived to the end of the block
-    /// (clang's `PushExpressionEvaluationContext` saves `Cleanup` as
+    /// `ExprWithCleanups` of a temporary created before the `({`
+    /// (`D{1}.v + ({ 0; })`), and that temporary lived to the end of the
+    /// block (clang's `PushExpressionEvaluationContext` saves `Cleanup` as
     /// `ParentCleanup`; WP-1081).
     pub fn act_on_start_stmt_expr(&mut self) -> StmtExprScope {
         StmtExprScope {
-            outer_odr: std::mem::take(&mut self.pending_odr),
-            outer_imm: self.take_immediate_state(false),
-            outer_cleanup: std::mem::take(&mut self.cleanup),
+            odr: std::mem::take(&mut self.pending_odr),
+            imm: self.take_immediate_state(false),
+            cleanup: std::mem::take(&mut self.cleanup),
         }
     }
 
@@ -107,13 +107,13 @@ impl Sema<'_, '_> {
         lparen: Loc,
         rparen: Loc,
     ) -> ExprId {
-        let inner = std::mem::replace(&mut self.pending_odr, scope.outer_odr);
+        let inner = std::mem::replace(&mut self.pending_odr, scope.odr);
         self.pending_odr.extend(inner);
-        self.restore_immediate_state(scope.outer_imm);
+        self.restore_immediate_state(scope.imm);
         // clang's `PopExpressionEvaluationContext`: `Cleanup.mergeFrom(
         // ParentCleanup)` (the statements' own full-expressions have
         // already consumed theirs).
-        let inner = std::mem::replace(&mut self.cleanup, scope.outer_cleanup);
+        let inner = std::mem::replace(&mut self.cleanup, scope.cleanup);
         self.cleanup.needs |= inner.needs;
         self.cleanup.side_effects |= inner.side_effects;
         let result = self.stmt_expr_result(body);
