@@ -687,24 +687,22 @@ impl Sema<'_, '_> {
         let lit = self.ast.builder().int_literal(size_t, i, Radix::Decimal, loc);
         let mut args = [TemplateArg::expr(lit, None), TemplateArg::ty(dty)];
         let mut converted = true;
-        if self.clang_compat < 22 {
-            if let Some((_, tmpl)) = self.std_class_template("tuple_element") {
-                match self.check_template_args(tmpl, &args, &[], loc) {
-                    Ok(conv) => {
-                        if let Some(&a) = self.ast.types.args(conv.sugared).first() {
-                            args[0] = a;
-                        }
+        if self.clang_compat < 22
+            && let Some((_, tmpl)) = self.std_class_template("tuple_element")
+        {
+            match self.check_template_args(tmpl, &args, &[], loc) {
+                Ok(conv) => {
+                    if let Some(&a) = self.ast.types.args(conv.sugared).first() {
+                        args[0] = a;
                     }
-                    // Diagnosed; the template-id is not formed (clang's
-                    // `CheckTemplateIdType` fails the same way).
-                    Err(()) => converted = false,
                 }
+                // Diagnosed; the template-id is not formed (clang's
+                // `CheckTemplateIdType` fails the same way).
+                Err(()) => converted = false,
             }
         }
         let mut qual = None;
-        let found = if !converted {
-            None
-        } else {
+        let found = if converted {
             match self.std_trait_ty("tuple_element", &args, loc, true) {
                 Ok((c, nns)) => {
                     qual = Some(nns);
@@ -714,6 +712,8 @@ impl Sema<'_, '_> {
                 Err(true) => return None,
                 Err(false) => None,
             }
+        } else {
+            None
         };
         let td = found.as_ref().and_then(|f| {
             f.decls.first().copied().filter(|&d| crate::lookup::is_type_kind(self.kind_of(d)))
