@@ -49,6 +49,8 @@ struct TypeSet {
     non_record: bool,
     /// An arithmetic or enumeration type is among them.
     arith_or_enum: bool,
+    /// `_BitInt(N)` types (canonical, unqualified).
+    bit_ints: Vec<QualType>,
 }
 
 /// clang's qualifier numbering (`Const = 1, Restrict = 2, Volatile = 4`),
@@ -94,8 +96,10 @@ struct Params<'p> {
 }
 
 impl Sema<'_, '_> {
-    /// The arithmetic types (clang `InitArithmeticTypes`).
-    fn arith_types(&self) -> Arith {
+    /// The arithmetic types (clang `InitArithmeticTypes`): the
+    /// `_BitInt(N)` types among the operands' are promoted integral types
+    /// after the standard ones ([over.built]/2, [basic.extended.int]).
+    fn arith_types(&self, sets: &[TypeSet]) -> Arith {
         let mut types = vec![QualType::FLOAT, QualType::DOUBLE, QualType::LONGDOUBLE];
         // `__float128` exists on the x86 targets (whose `long double`
         // is the x87 format).
@@ -113,6 +117,11 @@ impl Sema<'_, '_> {
             QualType::ULONGLONG,
             QualType::UINT128,
         ]);
+        for t in sets.iter().flat_map(|s| &s.bit_ints) {
+            if !types.contains(t) {
+                types.push(*t);
+            }
+        }
         let last_promoted = types.len();
         types.extend([
             QualType::BOOL,
@@ -259,6 +268,11 @@ impl Sema<'_, '_> {
                 }
             }
             TypeView::Builtin(BuiltinType::NullPtr) => set.nullptr = true,
+            TypeView::BitInt { .. } => {
+                if !set.bit_ints.contains(&t) {
+                    set.bit_ints.push(t);
+                }
+            }
             _ => {
                 let Some(r) = rec.filter(|_| udc) else { return };
                 if !self.require_complete_silent(t, Loc::INVALID) {
@@ -308,7 +322,7 @@ impl Sema<'_, '_> {
         memo.clear();
         let mut b = Builder { set, memo: &mut memo, vis, arith_or_enum, sets: &sets };
         let n = types.len();
-        let ar = self.arith_types();
+        let ar = self.arith_types(&sets);
         match op {
             OO::Plus | OO::Minus if n == 1 => {
                 if op == OO::Plus {
@@ -494,7 +508,7 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        let ar = self.arith_types();
+        let ar = self.arith_types(&sets);
         self.arith_pairs(&mut b, &ar, 0);
         self.ovl.builtin_memo = memo;
     }

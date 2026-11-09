@@ -1606,6 +1606,17 @@ impl Parser<'_, '_> {
             let named = self.s.tag_type(d);
             return Some(self.s.ast.types.elaborated(kw, Some(q.nns), named));
         }
+        // `typename A::X x = a;` with `X` a member class template: a
+        // placeholder for a deduced class type ([dcl.type.class.deduct]/1).
+        if let NameClass::TypeTemplate(d) = class
+            && !template_kw
+            && !self.at(Punct::Less)
+            && kw == TagKeyword::Typename
+            && self.s.is_ctad_template(d)
+        {
+            self.s.check_type_name_access(name, Some(q.ctx), d, name_loc);
+            return Some(self.s.ctad_placeholder(d, Some(q.nns), (name_loc, name_loc)));
+        }
         let NameClass::Type(t, d) = class else {
             // `typename D::X` for the current instantiation `D` with a
             // dependent base: looked up at instantiation ([temp.dep.type]/6).

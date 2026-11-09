@@ -136,6 +136,33 @@ Per-run detail: [status/libcxx.md](status/libcxx.md),
 [status/libcxx-m5.md](status/libcxx-m5.md),
 [status/libstdcxx.md](status/libstdcxx.md).
 
+## C++20 modules
+
+Named modules, partitions, implementation units, global and private
+module fragments, header units and `import std;` / `import std.compat;`
+(libc++) work. They work both in one invocation, where an importer
+compiles the interface source it is given, and in clang's two-step build:
+
+- `--precompile` (or `-c -fmodule-output`) writes a module file.
+- Importers name it with `-fmodule-file=<name>=<path>` or
+  `-fprebuilt-module-path=`.
+- `-c m.pcm` compiles the interface's object.
+
+kiln's module files are its own format, so clang's `.pcm` files are
+refused with a diagnostic, and vice versa. A module file built with a
+different `-std`, target, or ABI-relevant option is rejected with
+clang's mismatch diagnostics. Importing libc++'s `std` module file costs
+1.05x the memory of compiling `std.cppm` in-process, in the same time.
+This is slower than importing a clang BMI, because kiln module files hold
+sources rather than a serialised AST
+([spec/modules.md](../spec/modules.md) §11).
+
+Not yet supported:
+
+- dependency scanning, so CMake's module support (`FILE_SET
+  CXX_MODULES`, `CXX_MODULE_STD`) does not work yet;
+- header units as module files (`-fmodule-header`).
+
 ## Libraries and applications
 
 47 projects: 43 **Flawless**, 3 **Near-perfect** (simdjson, folly, the Boost metaprogramming libraries), 1 **Partial** (folly::coro: its known failures are fixed (WP-802, WP-933), and the re-run is deferred for lack of disk). The libc++ column is the WP-694 run against

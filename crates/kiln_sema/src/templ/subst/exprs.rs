@@ -1951,7 +1951,17 @@ impl Substituter<'_, '_, '_> {
             ArgView::Profile(p) => self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?,
             _ => return self.unimplemented("non-type template argument of this kind", loc),
         };
-        Ok(self.sema.ast.builder().subst_nttp_expr(shown, r, loc))
+        // A parameter of reference type (also `decltype(auto)` deduced as
+        // one) keeps its argument's type: `decltype` of it is the
+        // reference ([dcl.type.decltype]/1.3), also when the referent is a
+        // template parameter object.
+        let flags = match a.view() {
+            ArgView::Value { ty, .. } if self.sema.ast.types.is_reference(ty) => {
+                ExprFlags::REFERENCE_PARAMETER
+            }
+            _ => ExprFlags::NONE,
+        };
+        Ok(self.sema.ast.builder().subst_nttp_expr_flagged(shown, r, loc, flags))
     }
 
     /// A non-type parameter pack substituted earlier while its expansion

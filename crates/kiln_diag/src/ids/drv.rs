@@ -36,6 +36,7 @@ drv_llvm_unsupported = Error (4) "unsupported LLVM major {0} at '{1}' (from {2})
 // WP-920: `-MG` lists missing headers only for `-M`/`-MM`.
 drv_mg_requires_m_or_mm = Error (0) "option '-MG' requires '-M' or '-MM'";
 drv_missing_argument = Error (2) "argument to '{0}' is missing (expected {1} value)";
+drv_module_file_nameless = Warning [EagerLoadCxxNamedModules] (0) "the form '-fmodule-file=<BMI-path>' is deprecated for standard C++ named modules;consider to use '-fmodule-file=<module-name>=<BMI-path>' instead";
 drv_no_input_files = Error (0) "no input files";
 drv_no_such_file = Error (1) "no such file or directory: '{0}'";
 drv_not_implemented = Error (1) "{0} is not implemented yet";
@@ -43,6 +44,7 @@ drv_opt_not_valid_on_target = Error (1) "option '{0}' cannot be specified on thi
 // ----- WP-228 (driver flags a target does not support)
 drv_option_ignored = Warning [OptionIgnored] (2) "'{0}' does not support '{1}'; flag ignored";
 drv_out_file_multiple = Error (0) "cannot specify -o when generating multiple output files";
+drv_precompile_not_module = Error (0) "--precompile requires a module interface or partition unit";
 // WP-792: clang's `-ftime-trace` family, added by build systems for clang.
 drv_time_trace_ignored = Warning [UnusedCommandLineArgument] (1) "'{0}' ignored: kiln writes no time trace (see -fkiln-instantiation-report)";
 drv_treating_input_as_cxx = Warning [Deprecated] (2) "treating '{0}' input as '{1}' when in C++ mode, this behavior is deprecated";

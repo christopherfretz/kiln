@@ -409,6 +409,11 @@ impl Oven {
             return None;
         }
         let info = var_info(ast, d);
+        // A volatile read is a compile-time trap that resolves nothing
+        // (`compile.rs` `LValueToRValue`), not a read of an external object.
+        if ast.decls.get(d).ty().is_none_or(|q| ast.types.effective_quals(q).is_volatile()) {
+            return None;
+        }
         let entry = self.global_map.get(&ast.first(d)).copied();
         let state = match entry.map(|g| (g, self.globals[g as usize].state)) {
             None => GState::Unresolved,
@@ -421,8 +426,7 @@ impl Oven {
             }
             let VarEvalState::Value(cv) = info.state else { return None };
             let GState::Resolved(p) = state else { return None };
-            let c = ast.types.canonical(info.ty);
-            if ast.types.is_reference(c) || ast.types.effective_quals(info.ty).is_volatile() {
+            if ast.types.is_reference(ast.types.canonical(info.ty)) {
                 return None;
             }
             let bits = match ast.consts.scalar(cv)? {

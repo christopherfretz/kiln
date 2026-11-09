@@ -101,6 +101,8 @@ sema_constexpr_never_constant = WarningError [InvalidConstexpr] (2) "{1:constexp
 sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
 sema_constexpr_nonstatic_member = Error (0) "non-static data member cannot be constexpr; did you intend to make it static?";
 sema_constexpr_redecl_mismatch = Error (3) "{0:non-constexpr|constexpr|consteval} declaration of '{1}' follows {2:non-constexpr|constexpr|consteval} declaration";
+// [dcl.constexpr]/1: a constexpr variable declaration shall be a definition (clang err_invalid_constexpr_var_decl).
+sema_constexpr_var_decl_not_definition = Error (0) "constexpr variable declaration must be a definition";
 sema_constexpr_var_non_constant = Error (1) "constexpr variable '{0}' must be initialized by a constant expression";
 sema_constexpr_var_non_literal = Error (1) "constexpr variable cannot have non-literal type {0}";
 sema_constexpr_var_requires_const_destruction = Error (1) "constexpr variable '{0}' must have constant destruction";

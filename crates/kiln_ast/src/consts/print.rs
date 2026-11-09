@@ -388,7 +388,7 @@ impl Printer<'_> {
                 out.push('0');
             }
             Scalar::Null { .. } => out.push_str("nullptr"),
-            Scalar::Pointer { ty, base, offset, designated } => {
+            Scalar::Pointer { ty, base, offset, designated, .. } => {
                 self.pointer(ty, base, offset, designated, out);
             }
             Scalar::MemberPtr { member, .. } => {

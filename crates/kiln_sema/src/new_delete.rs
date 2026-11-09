@@ -67,6 +67,11 @@ pub struct NewPlacement {
 pub(crate) struct GlobalOps {
     declared: bool,
     pub(crate) align_val_t: Option<QualType>,
+    /// The implicit `namespace std` made for `std::align_val_t` when the
+    /// program has not declared one: invisible to ordinary lookup (`int
+    /// std;` stays valid, clang's `getOrCreateStdNamespace`), but a later
+    /// `namespace std {` reopens it.
+    pub(crate) implicit_std: Option<DeclId>,
 }
 
 impl Sema<'_, '_> {
@@ -169,8 +174,9 @@ impl Sema<'_, '_> {
             return self.std_qualified(ns, e);
         }
         let ns = ns.unwrap_or_else(|| {
-            let h = DeclHead::new(tu, std, Loc::INVALID).flags(DeclFlags::IMPLICIT);
-            self.builder().namespace(h, false, None)
+            let ns = self.builder().hidden_namespace(tu, std);
+            self.global_ops.implicit_std = Some(ns);
+            ns
         });
         let size = self.size_type();
         let h = DeclHead::new(ns, avt, Loc::INVALID).flags(DeclFlags::IMPLICIT);

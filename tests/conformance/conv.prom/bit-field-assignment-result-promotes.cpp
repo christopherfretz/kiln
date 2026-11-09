@@ -3,7 +3,6 @@
 // clang's SemaCXX/bitfield.cpp. Found by the clang negative-test run
 // (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, an assignment or increment result loses its bit-field-ness for promotion
 //@ expect: compile-ok
 template <class T, class U> constexpr bool same = false;
 template <class T> constexpr bool same<T, T> = true;

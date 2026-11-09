@@ -108,6 +108,12 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
     if ast.decls.compound_literal_of(d).is_some() {
         info.usable = q.is_const() && !q.is_volatile();
     }
+    // [expr.const]/10.9: a volatile object is never read, even through a
+    // glvalue whose type drops the qualifier (`const_cast`), so a volatile
+    // variable's object is external (WP-948; clang `findCompleteObject`).
+    if q.is_volatile() {
+        info.usable = false;
+    }
     info.lax = !info.usable
         && q.is_const()
         && !q.is_volatile()
@@ -680,6 +686,7 @@ impl Oven {
                         base: PtrBase::Function(d),
                         offset: 0,
                         designated: None,
+                        past: false,
                     })
                 }
                 None => Err(Freeze::Fault(FailKind::NotConstant)),
@@ -700,6 +707,12 @@ impl Oven {
                 "pointer to an object outside its lifetime is not a constant expression",
             )]));
         };
+        // One past the end of a subobject whose end is not its complete
+        // object's (`&s.a + 1`, `&a[0].base + 1`): the frozen value keeps
+        // the bit, which the offset alone cannot tell from a pointer to
+        // the next subobject (canonical form: [`Scalar::Pointer`] `past`;
+        // WP-948).
+        let past = p.past && offset < u64::from(a.size);
         // A variable with automatic storage duration reached through the
         // globals path (outside its frame, or read by a lax fold) has no
         // constant address ([expr.const]/14).
@@ -753,7 +766,7 @@ impl Oven {
                 }
                 _ => return Err(Freeze::Fault(FailKind::NotConstant)),
             };
-            return Ok(Scalar::Pointer { ty: q, base, offset, designated });
+            return Ok(Scalar::Pointer { ty: q, base, offset, designated, past });
         }
         // A temporary extended by the variable being initialized
         // ([class.temporary]/6): its value is frozen with the result.
@@ -769,7 +782,13 @@ impl Oven {
             if !self.let_pending.iter().any(|&(x, _)| x == t) {
                 self.let_pending.push((t, Ptr::with_off(raw, 0, false)));
             }
-            return Ok(Scalar::Pointer { ty: q, base: PtrBase::Temporary(t), offset, designated });
+            return Ok(Scalar::Pointer {
+                ty: q,
+                base: PtrBase::Temporary(t),
+                offset,
+                designated,
+                past,
+            });
         }
         if let (Origin::Var(d), Some(o)) = (a.origin, self.run.object)
             && d == o
@@ -789,6 +808,7 @@ impl Oven {
                 base: PtrBase::Decl(ast.first(d)),
                 offset,
                 designated,
+                past,
             });
         }
         if self.run.silent {
@@ -1734,14 +1754,15 @@ impl Oven {
         ty: OTy,
         top: u32,
     ) -> u128 {
-        let Some(Scalar::Pointer { base, offset, designated, .. }) = b.consts().scalar(cv) else {
+        let Some(Scalar::Pointer { base, offset, designated, past, .. }) = b.consts().scalar(cv)
+        else {
             return 0;
         };
         let tag = match designated {
             Some(d) => u128::from(self.types.intern(b, d).0 + 1) << 64,
             None => 0,
         };
-        u128::from(self.thaw_ptr_raw(b, base, offset, ty, top)) | tag
+        u128::from(self.thaw_ptr_raw(b, base, offset, past, ty, top)) | tag
     }
 
     fn thaw_ptr_raw(
@@ -1749,6 +1770,7 @@ impl Oven {
         b: &mut dyn SemaBridge,
         base: PtrBase,
         offset: u64,
+        past: bool,
         ty: OTy,
         top: u32,
     ) -> u64 {
@@ -1803,12 +1825,16 @@ impl Oven {
         };
         let rp = Ptr::decode(root);
         let Some(a) = self.alloc_any(rp).copied() else { return root };
-        let past = match pointee {
-            Some(pt) if !matches!(self.types.kind(pt), TyKind::Void | TyKind::Opaque) => {
-                offset >= u64::from(a.size) || !self.types.has_subobject(a.ty, offset, pt)
-            }
-            _ => offset >= u64::from(a.size),
-        };
+        // A stored past-the-end bit (`Scalar::Pointer` `past`), else one
+        // inferred: at the end of the complete object, or where no
+        // subobject of the pointee type starts.
+        let past = past
+            || match pointee {
+                Some(pt) if !matches!(self.types.kind(pt), TyKind::Void | TyKind::Opaque) => {
+                    offset >= u64::from(a.size) || !self.types.has_subobject(a.ty, offset, pt)
+                }
+                _ => offset >= u64::from(a.size),
+            };
         Ptr::with_off(root, offset, past)
     }
 }

@@ -1045,17 +1045,21 @@ yet") and debug information.
 
 C++20 modules are enabled for `-fsyntax-only` and code generation from
 `-std=c++20` on; `-E` and `-M*` print module and import directives as text
-(spec/modules.md §2). There is no binary module interface: an imported
-module is built in-process from its interface source, so the flags name
-sources, not BMIs. A module (or partition `M:P`) is looked up in this
-order:
+(spec/modules.md §2). An imported module comes either from its interface
+source, built in-process (part A), or from a kiln module file written by
+an earlier compile (spec/modules.md §11; WP-917). A module (or partition
+`M:P`) is looked up in this order:
 
 1. `-fmodule-file=<name>=<path>` (repeatable; the first one naming the
    module wins). The path is used as given (relative to the working
-   directory).
-2. `-fprebuilt-module-path=<dir>` (repeatable, in order): `<dir>/<name>.cppm`,
-   `.ixx`, then `.cpp`; a partition `M:P` as `<dir>/M-P.*`.
-3. `std` and `std.compat` only: `<llvm>/share/libc++/v1/std.cppm` /
+   directory) and may name a module file or a module source; which one is
+   decided by the file's first bytes, not its extension.
+2. `-fprebuilt-module-path=<dir>` (repeatable, in order): `<dir>/<name>.pcm`,
+   then the sources `<dir>/<name>.cppm`, `.ixx`, `.cpp`; a partition `M:P`
+   as `<dir>/M-P.*`.
+3. A module that an imported module file itself imported, at the path that
+   file recorded.
+4. `std` and `std.compat` only: `<llvm>/share/libc++/v1/std.cppm` /
    `std.compat.cppm`, where `<llvm>` is the toolchain's LLVM directory
    ("LLVM discovery"; clang 19's and 22's libc++ have the
    same layout).
@@ -1064,12 +1068,45 @@ A module not found is `fatal error: module 'M' not found` at the module
 name. Header units (`import "h";`, `import <h>;`) are found like
 `#include` and need no flag.
 
+Module files are clang's driver interface with kiln's own file format
+(spec/modules.md §11.3; kiln never reads or writes clang's, and says so):
+
+- `--precompile <unit> [-o <out>]` writes the module file of a module
+  interface or partition unit (default `<stem>.pcm` in the working
+  directory) and nothing else. `-x c++-module` or a `.cppm`/`.ixx`
+  extension marks an input as C++ (the unit's `export module` line, not
+  the extension, makes it a module unit); any other unit is `error: --precompile requires a module interface or
+  partition unit`.
+- `-fmodule-output[=<path>]` with `-c` (or a link) also writes the module
+  file of each module interface input: at `<path>`, else next to the
+  object (`-o x/m.o` -> `x/m.pcm`), else `<stem>.pcm`. On an input that is
+  not an interface unit it is unused (`warning: argument unused during
+  compilation: '-fmodule-output'`). The module file is the one
+  `--precompile` writes, byte for byte.
+- A module file is a compile input: `-c m.pcm` compiles the interface unit
+  it holds, so `--precompile` then `-c` gives the object one `-c` gives.
+- `-fmodule-file=<path>` (no name) is clang's deprecated form: the module
+  file's own module name is read from it, with clang's warning
+  `the form '-fmodule-file=<BMI-path>' is deprecated ...
+  [-Weager-load-cxx-named-modules]`. A source there is an error.
+- A module file records the configuration it was built with (standard,
+  target, language and codegen options that change meaning; spec/modules.md
+  §11.4). Importing it into a compile that differs is one `error: module
+  file 'm.pcm' was built with '-std=c++20' but the current compilation uses
+  '-std=c++23'` per differing option, then `fatal error: module file
+  'm.pcm' cannot be loaded due to a configuration mismatch with the
+  current compilation`. A missing, foreign (clang), wrong-module, or
+  damaged module file is a fatal error naming it; never a crash.
+
 To link a program, every module unit whose non-inline definitions are used
-is also compiled as an input of the same command (or separately with
-`-c`): `kiln++ -std=c++20 -fmodule-file=m=m.cppm m.cppm main.cpp`. An
-importer emits only declarations for the non-inline functions and
-variables of the units it imports. `--precompile`, `-fmodule-output` and
-`-fmodule-header` are not supported (part B, spec/modules.md §9).
+is also compiled as an input (or separately with `-c`, from its source or
+its module file): `kiln++ -std=c++20 -fmodule-file=m=m.cppm m.cppm
+main.cpp`, or in two steps `kiln++ -std=c++20 -c m.cppm -fmodule-output -o
+m.o && kiln++ -std=c++20 -fmodule-file=m=m.pcm main.cpp m.o`. An importer
+emits only declarations for the non-inline functions and variables of the
+units it imports. `-fmodule-header`, header-unit module files and
+dependency scanning (`-fmodules-reduced-bmi`, P1689 output) are not
+supported yet (spec/modules.md §11.9).
 
 ## Dependency output
 
