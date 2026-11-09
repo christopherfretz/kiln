@@ -458,6 +458,7 @@ impl Oven {
                     && a.frame != LAX_READ;
                 fails.then_some(Err(Failed(None)))
             }
+            GState::Bound(_) => None,
             GState::Unresolved => {
                 // A reference's object may be bound to an unknown one
                 // (`bind_unknown`), which the read reaches.

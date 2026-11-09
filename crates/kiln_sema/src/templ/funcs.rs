@@ -639,6 +639,14 @@ impl Sema<'_, '_> {
         self.match_function_spec_noted(templates, explicit, name, ty, inst, loc, true)
     }
 
+    /// How a candidate of an ambiguous explicit instantiation or
+    /// specialization is named: a conversion function template
+    /// specialization by its own name (`X::operator char *<char>`, clang),
+    /// any other by its template and arguments.
+    fn spec_name_noted(&self, conv: bool, spec: DeclId, tmpl: DeclId, args: ArgListId) -> String {
+        if conv { self.qualified_decl_name(spec) } else { self.spec_decl_name(tmpl, args) }
+    }
+
     /// [`Self::match_function_spec_in`]; `notes` false lists no
     /// candidate that failed deduction (a conversion function template
     /// that does not deduce is not found by lookup, [temp.mem]/6, so
@@ -709,9 +717,20 @@ impl Sema<'_, '_> {
                 TypeView::Function(p) => p.num_params() as usize,
                 _ => 0,
             };
+            // [temp.deduct.partial]/3.3 uses the function types; for
+            // conversion function templates, which have no parameters,
+            // that orders them by their conversion types, as in a call
+            // (clang `TPOC_Other` deduces from the whole function type).
+            let conv = name.kind() == DeclNameKind::Conversion;
             let best = (0..matches.len()).find(|&i| {
                 (0..matches.len()).all(|j| {
-                    i == j || self.more_specialized(matches[i].template, matches[j].template, n)
+                    let (a, b) = (matches[i].template, matches[j].template);
+                    i == j
+                        || if conv {
+                            self.more_specialized_conversion(a, b)
+                        } else {
+                            self.more_specialized(a, b, n)
+                        }
                 })
             });
             if let Some(i) = best {
@@ -730,22 +749,27 @@ impl Sema<'_, '_> {
                     let at = self.loc_of(self.ast.latest(m.template));
                     let note = self
                         .diag(DiagId::note_explicit_instantiation_candidate, at)
-                        .arg(self.spec_decl_name(info.template, info.print_args))
+                        .arg(self.spec_name_noted(conv, m.spec, info.template, info.print_args))
                         .arg(self.template_args_desc(info.template, info.args));
                     e = e.with_note(note);
                 }
                 self.emit(e);
                 return None;
             }
-            // clang lists the candidates last-declared first.
+            // clang lists the candidates last-declared first, except
+            // conversion function templates: its `LookupDirect` walks the
+            // class's conversions in declaration order.
             let mut e = self.diag(DiagId::sema_fn_template_spec_ambiguous, loc).arg(fname);
-            for m in matches.iter().rev() {
+            if !conv {
+                matches.reverse();
+            }
+            for m in &matches {
                 let Some((_, info)) = self.ast.spec_info(m.spec).map(|(i, s)| (i, *s)) else {
                     continue;
                 };
                 let note = self
                     .diag(DiagId::note_fn_template_spec_matched, self.loc_of(m.template))
-                    .arg(self.spec_decl_name(info.template, info.print_args))
+                    .arg(self.spec_name_noted(conv, m.spec, info.template, info.print_args))
                     .arg(self.template_args_desc(info.template, info.args));
                 e = e.with_note(note);
             }

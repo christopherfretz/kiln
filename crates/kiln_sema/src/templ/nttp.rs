@@ -55,11 +55,27 @@ impl Sema<'_, '_> {
             self.emit(here(d));
             return false;
         }
+        // `void` is incomplete and `_Atomic` types are not scalar
+        // ([temp.param]/4; clang `CheckNonTypeTemplateParameterType`), in
+        // every language mode.
+        if t.is_void(ty) {
+            let d = self.diag(DiagId::sema_nttp_incomplete, loc).arg(self.ty_arg(ty));
+            self.emit(here(d));
+            return false;
+        }
+        if matches!(t.canonical_view(ty), TypeView::Atomic(_)) {
+            let d = self.diag(DiagId::sema_nttp_bad_type, loc).arg(self.ty_arg(ty));
+            self.emit(here(d));
+            return false;
+        }
         let pre20 = self.std < kiln_lex::Std::Cxx20;
         // [temp.param]/4 (C++17): a floating-point type is structural
         // only from C++20 on (clang `err_template_nontype_parm_bad_
-        // structural_type`).
-        if pre20 && t.is_floating(ty) {
+        // structural_type`), and so are the extension scalars clang
+        // admits with it (`_Complex float`, `_Complex int`, vectors).
+        let ext_scalar =
+            matches!(t.canonical_view(ty), TypeView::Complex(_) | TypeView::Vector { .. });
+        if pre20 && (t.is_floating(ty) || ext_scalar) {
             let d = self.diag(DiagId::sema_nttp_bad_type_before_cxx20, loc).arg(self.ty_arg(ty));
             self.emit(here(d));
             return false;
@@ -124,7 +140,9 @@ impl Sema<'_, '_> {
         let q = self.base_element(ty);
         let t = &self.ast.types;
         let Some(def) = t.as_record(q).and_then(|r| self.ast.definition(r)) else {
-            return !matches!(t.canonical_view(q), TypeView::RValueRef(_));
+            // An `_Atomic` subobject is not structural (clang: not a
+            // scalar of structural type, [temp.param]/7).
+            return !matches!(t.canonical_view(q), TypeView::RValueRef(_) | TypeView::Atomic(_));
         };
         let b = self.record_bits(def);
         if !b.contains(DefinitionBits::LITERAL) || !b.contains(DefinitionBits::STRUCTURAL) {

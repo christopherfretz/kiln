@@ -1446,6 +1446,16 @@ impl Substituter<'_, '_, '_> {
             }
             None => None,
         };
+        // `operator T()` in a member function ([temp.dep.expr]/3): an
+        // implicit `this->operator U`, whose conversion templates are
+        // found by deduction rather than by name ([temp.mem]/6).
+        if qual.is_none()
+            && matches!(self.sema.ast.names.view(name), DeclNameView::Conversion(_))
+            && self.sema.current_this().is_some()
+        {
+            let this = self.this_expr(true, loc);
+            return Ok(self.sema.act_on_member_q(this, None, name, loc, loc, true));
+        }
         Ok(self.sema.act_on_id_expression_dn(name, loc, qual))
     }
 
