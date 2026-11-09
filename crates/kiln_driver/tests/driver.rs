@@ -141,7 +141,7 @@ fn delegated_probes() {
 #[test]
 fn version_macro_names_kiln() {
     let o = kiln(&["-E", "-P", "-"], "__VERSION__ __clang__\n");
-    assert_eq!(o.stdout, format!("\"kiln {}\" 1\n", kiln_driver::version()));
+    assert_eq!(o.stdout, format!("\"kiln {}\" 1\n", kiln_driver::version::VERSION));
     let o = kiln(&["--version"], "");
     assert!(!o.stdout.contains("clang version"), "{}", o.stdout);
 }

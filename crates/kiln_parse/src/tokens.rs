@@ -268,7 +268,20 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
 
     /// The token at absolute index `i` (`Eof` past the end). An index
     /// already released reads as the oldest token kept.
+    #[inline]
     pub fn get(&mut self, i: usize) -> Token {
+        // The window holds it (the lookahead's usual case; the `Eof`
+        // token, when read, is the window's last).
+        if let Some(&t) = self.toks.get(i.wrapping_sub(self.base)) {
+            return t;
+        }
+        self.get_slow(i)
+    }
+
+    /// [`TokenSource::get`] past the window: reads on, or the oldest
+    /// token kept.
+    #[inline(never)]
+    fn get_slow(&mut self, i: usize) -> Token {
         if let Some(e) = self.eof
             && i >= e
         {

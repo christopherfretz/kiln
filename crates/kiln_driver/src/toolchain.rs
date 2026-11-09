@@ -255,14 +255,46 @@ pub const DEFAULT_GCC: Option<&str> = match option_env!("KILN_DEFAULT_GCC") {
     _ => None,
 };
 
-/// kiln's default resource directory: `$KILN_RESOURCE_DIR`, else the
-/// nearest `resource/` with a `predefines/` directory above the
-/// executable, else the source tree's `resource/` (development builds).
+/// The resource directory below an installation prefix (spec/driver.md
+/// "Installation layout"): `<prefix>/lib/kiln/<major>`, beside
+/// `<prefix>/bin/kiln`, as clang's `lib/clang/<major>`.
+pub const INSTALL_RESOURCE_SUBDIR: [&str; 2] = ["lib", "kiln"];
+
+/// The installed resource directory for the executable `exe` (symlinks
+/// already resolved): `<exe dir>/../lib/kiln/<major>`.
+pub fn install_resource_dir(exe: &Path) -> Option<PathBuf> {
+    let prefix = exe.parent()?.parent()?;
+    let mut d = prefix.to_path_buf();
+    d.extend(INSTALL_RESOURCE_SUBDIR);
+    d.push(crate::version::MAJOR.to_string());
+    Some(d)
+}
+
+/// kiln's default resource directory (spec/driver.md "Toolchain"), the
+/// first of:
+///
+/// 1. `$KILN_RESOURCE_DIR` (non-empty);
+/// 2. the installed resource directory of the executable, resolved
+///    through symlinks ([`install_resource_dir`]), if it has a
+///    `predefines/` directory;
+/// 3. the nearest `resource/` with a `predefines/` directory above the
+///    executable (a checkout's `target/<profile>/kiln`);
+/// 4. in a development build, the source tree's `resource/`; in a `dist`
+///    build (feature `dist`, `cargo xtask dist`), which must never name
+///    the build host's checkout, the installed path of 2 even though it is
+///    missing, so the error names where the files belong.
 pub fn default_resource_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("KILN_RESOURCE_DIR").filter(|d| !d.is_empty()) {
         return PathBuf::from(d);
     }
-    if let Ok(exe) = std::env::current_exe() {
+    let exe = std::env::current_exe().ok().map(|e| std::fs::canonicalize(&e).unwrap_or(e));
+    let installed = exe.as_deref().and_then(install_resource_dir);
+    if let Some(d) = &installed
+        && d.join("predefines").is_dir()
+    {
+        return d.clone();
+    }
+    if let Some(exe) = &exe {
         for anc in exe.ancestors().skip(1) {
             let cand = anc.join("resource");
             if cand.join("predefines").is_dir() {
@@ -270,11 +302,29 @@ pub fn default_resource_dir() -> PathBuf {
             }
         }
     }
+    fallback_resource_dir(installed)
+}
+
+/// Step 4 of [`default_resource_dir`] in a development build: the source
+/// tree's `resource/`.
+#[cfg(not(feature = "dist"))]
+fn fallback_resource_dir(_installed: Option<PathBuf>) -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     manifest
         .parent()
         .and_then(Path::parent)
         .map_or_else(|| PathBuf::from("resource"), |r| r.join("resource"))
+}
+
+/// Step 4 of [`default_resource_dir`] in a `dist` build: the installed
+/// path, which does not exist (no build-host path is compiled in).
+#[cfg(feature = "dist")]
+fn fallback_resource_dir(installed: Option<PathBuf>) -> PathBuf {
+    installed.unwrap_or_else(|| {
+        let mut d: PathBuf = INSTALL_RESOURCE_SUBDIR.iter().collect();
+        d.push(crate::version::MAJOR.to_string());
+        d
+    })
 }
 
 impl Toolchain {

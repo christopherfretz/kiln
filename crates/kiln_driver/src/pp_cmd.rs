@@ -166,8 +166,8 @@ impl Job<'_> {
         cfg.pthread = p.pthread;
         cfg.threadsafe_statics = p.threadsafe_statics.unwrap_or(true);
         cfg.sized_deallocation = p.sized_deallocation.unwrap_or(true);
-        cfg.kiln_version = crate::version_pair();
-        cfg.version_macro = Some(format!("kiln {}", crate::version()));
+        cfg.kiln_version = crate::version::triple();
+        cfg.version_macro = Some(format!("kiln {}", crate::version::VERSION));
         cfg.clang_compat = p.clang_compat;
         cfg.reflection = p.reflection_for(&self.std);
         cfg.std_float_aliases =
@@ -256,7 +256,7 @@ impl Job<'_> {
             let _ = write!(
                 err,
                 "kiln -cc1 version {} default target {}\n{}",
-                crate::version(),
+                crate::version::VERSION,
                 self.toolchain.target.triple,
                 list.verbose_text()
             );

@@ -427,14 +427,78 @@ behavior is deprecated [-Wdeprecated]`. The `-W` options apply to it
 and no job runs. C is preprocessed (`-E`, deviation 1); compiling it
 (`-fsyntax-only`, codegen) is "not implemented yet" (WP-243).
 
+## Installation layout
+
+`cargo xtask dist` (spec/harness.md "Dist") packages kiln as a
+relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
+
+```
+<prefix>/bin/kiln
+<prefix>/bin/kiln++ -> kiln              relative symlink ("Driver modes")
+<prefix>/lib/kiln/<major>/include/       resource/include: clang 19's builtin
+                                         headers, contracts, module.modulemap
+<prefix>/lib/kiln/<major>/predefines/    resource/predefines/*.txt
+<prefix>/share/doc/kiln/                 README.md, LICENSE-MIT, LICENSE-APACHE,
+                                         COMPATIBILITY.md, STABILITY.md
+```
+
+- `<major>` is the major version ("Version"): two major versions install
+  side by side under one prefix, each binary finding its own resource
+  directory. `lib/kiln/<major>` is the resource directory: `kiln
+  -print-resource-dir` prints it ("Toolchain", step 3), and it holds what
+  a source checkout's `resource/` holds except the test-only reference
+  data (`include-paths/`, `predefines/structure.diff`).
+- Nothing else is read from the tree, and nothing in it names the build
+  host: the `dist` build compiles the source-tree fallback out and remaps
+  the checkout, target directory, `$CARGO_HOME` and `$RUSTUP_HOME`
+  prefixes in panic locations and debug information
+  (`--remap-path-prefix` to `/kiln`, `/kiln/target`, `/cargo`, `/rustup`).
+  `--version`'s `InstalledDir:` is the directory the executable was run
+  from.
+- `bin/kiln` is stripped of debug information but keeps its symbol table
+  (so backtraces and the ICE report name functions) and carries a
+  `.gnu_debuglink` to `kiln.debug`. The `-symbols` archive is the same
+  tree with the unstripped binary; `objcopy --only-keep-debug
+  <symbols>/bin/kiln <prefix>/bin/kiln.debug` makes the file the link
+  names (its CRC matches; `cargo xtask dist --check` checks it), or the
+  symbols tree can be used directly.
+- **Run-time dependencies.** kiln runs LLVM's tools and links through
+  `clang++` ("Code generation", "Tools"): an LLVM 19 (or 22) installation
+  with `llc`, `llvm-as` and `clang++`, found through `$KILN_LLVM_DIR`
+  (default `/usr/lib/llvm-19`) or the versioned names on `PATH`. The C++ standard
+  library is the system's libstdc++ (GCC's installation, "Toolchain") or
+  libc++ (`-stdlib=libc++`, from the LLVM directory). The binary itself
+  needs only the C library: the newest glibc symbol version it references
+  (`readelf -V bin/kiln`) is the floor, GLIBC_2.39 for the aarch64 build
+  of WP-927 (Rust's `std::process` uses `pidfd_spawnp`), built in the CI
+  container (Debian trixie, glibc 2.41).
+
 ## Toolchain
 
 `Toolchain::new(target, sysroot, resource_dir)` locates:
 
-- **Resource directory:** `-resource-dir`, else `$KILN_RESOURCE_DIR`, else
-  the nearest `resource/` with a `predefines/` directory above the
-  executable, else the source tree's `resource/`. kiln's predefines base
-  files are `<resource>/predefines/<triple>.<std>.txt`.
+- **Resource directory:** the first of (WP-927; "Installation layout"):
+  1. `-resource-dir=<dir>` (or `-resource-dir <dir>`);
+  2. `$KILN_RESOURCE_DIR`, when set and not empty;
+  3. the install layout's `<prefix>/lib/kiln/<major>`, where `<prefix>` is
+     the parent of the directory holding the executable after resolving
+     every symlink (`std::env::current_exe`, then canonicalized: a
+     `kiln++` symlink, a symlink to it on `PATH` and a hard link all find
+     the tree they belong to), when it has a `predefines/` directory;
+  4. the nearest `resource/` with a `predefines/` directory above the
+     executable (a source checkout whose target directory is inside it);
+  5. in a source build, the source tree's `resource/` (compiled in from
+     `CARGO_MANIFEST_DIR`). A `dist` build (`kiln_driver`'s cargo feature
+     `dist`, which `cargo xtask dist` sets) has no such path, so that a
+     release binary never holds or prints the build host's checkout; its
+     last resort is step 3's directory even though it is missing, so that
+     the error names where the files belong.
+
+  `toolchain::default_resource_dir` is steps 2-5;
+  `toolchain::install_resource_dir(exe)` is step 3's path. kiln's
+  predefines base files are `<resource>/predefines/<triple>.<std>.txt`
+  and its builtin headers `<resource>/include`. Test:
+  `crates/kiln_driver/tests/install_layout.rs`.
 - **LLVM:** `$KILN_LLVM_DIR`, default `/usr/lib/llvm-19` (a build with
   `KILN_DEFAULT_LLVM_DIR` set in its environment uses that instead, for a
   package whose LLVM is installed elsewhere; `toolchain::DEFAULT_LLVM_DIR`).
@@ -588,7 +652,8 @@ The `<built-in>` buffer is `kiln_pp::build_predefines(base, cfg, -D/-U)`.
   never below C++26): `__cpp_impl_reflection 202603L` (GCC 16.1's value,
   `g++-16 -std=c++26 -freflection -dM -E`; libstdc++ 16's `<meta>` keys on
   it; spec/reflection.md §1 item 4-5).
-- kiln adds `__KILN__ 1`, `__KILN_MAJOR__` and `__KILN_MINOR__`. kiln
+- kiln adds `__KILN__ 1`, `__KILN_MAJOR__`, `__KILN_MINOR__` and
+  `__KILN_PATCH__` (WP-927), the components of the version ("Version"). kiln
   defines `__clang__` and the clang version macros exactly as clang 19 does,
   so headers take their clang paths.
 
@@ -1023,6 +1088,28 @@ Driver diagnostics, in clang's wording:
 - `--help` prints a short summary of the implemented options and the
   two names' language rule (the usage line says `kiln` under both names).
 
+## Version
+
+kiln's version is the workspace's `[workspace.package] version`
+(`Cargo.toml`), semantic versioning with the compatibility scope of
+docs/STABILITY.md; it is changed there and nowhere else (WP-927).
+`kiln_driver::version` is the only reader:
+
+- `VERSION` (`CARGO_PKG_VERSION`) is what `--version`, `-v`,
+  `__VERSION__` (`kiln <v>`), `!llvm.ident` (`kiln version <v>`) and the release archive names
+  (`kiln-<v>-<triple>.tar.xz`) show;
+- `MAJOR`, `MINOR`, `PATCH` are `__KILN_MAJOR__`, `__KILN_MINOR__`,
+  `__KILN_PATCH__` ("Predefines") and `MAJOR` names the installed
+  resource directory `lib/kiln/<major>` ("Installation layout");
+- `GIT_SHA` is the 12-digit commit the binary was built from, recorded
+  by `crates/kiln_driver/build.rs`: `$KILN_GIT_SHA` at build time when it
+  is 7-40 hex digits, else `git rev-parse --short=12 HEAD` when the
+  workspace is the root of a git work tree (a source archive unpacked
+  inside another repository does not take that repository's commit),
+  else none; a build without git or `.git` records nothing and succeeds.
+  `long_version()` is `<v> (<sha>)`. The identity text is "Identity"
+  (WP-920); `-dumpversion` prints the compatibility version, not `<v>`.
+
 ## Identity (operator decision Q3, WP-920)
 
 kiln keeps clang's macros, so headers and build systems that test them
@@ -1034,7 +1121,8 @@ version <v> ...` ("`-v`, `--version`, `--help`"), and `__VERSION__` is
 `"kiln <v>"`. No output of kiln's own says `clang version`; the one
 exception is a link run with `-v`, which relays the backing clang++'s own
 banner to standard error (the link is that program's work). `<v>` is
-`kiln_driver::version()`, the one accessor every identity string reads.
+`kiln_driver::version::VERSION` ("Version"), which every identity string
+reads.
 
 `-dumpversion` prints the **compatibility version**, the one the clang
 macros spell (`22.1.8`, `19.1.7` under `-fclang-compat=19`), not kiln's

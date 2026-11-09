@@ -169,7 +169,7 @@ WP-920 head), reflection on (the new C++26 default) against
 
 Flat: every difference is inside the run-to-run spread. Predefines: 620
 macros on, 619 off (`__cpp_impl_reflection`; `-dM -E` at C++26), 614 at
-C++23. `cargo xtask bench` on the same head reported 42 of 50 entries
+C++23 (measured before WP-927's `__KILN_PATCH__`, which adds one to each). `cargo xtask bench` on the same head reported 42 of 50 entries
 slower than the recorded baselines (bench entries default to
 `-std=c++26`, so reflection is on in all of them), by a near-constant
 10-30 ms on the smallest ones, while the A/B above of the same binary is

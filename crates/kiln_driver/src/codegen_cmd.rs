@@ -186,7 +186,7 @@ pub fn opt_size(flag: Option<&str>) -> u8 {
 
 /// The identification string of kiln's modules (`!llvm.ident`).
 pub fn ident() -> String {
-    format!("kiln version {}", crate::version())
+    format!("kiln version {}", crate::version::VERSION)
 }
 
 /// The [`CodegenOptions`] fields set by the driver's codegen flags

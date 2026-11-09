@@ -25,6 +25,7 @@ pub mod syntax_cmd;
 pub mod templ_opts;
 pub mod time;
 pub mod toolchain;
+pub mod version;
 pub mod x86_targets;
 
 use std::io::{self, Read, Write};
@@ -90,19 +91,6 @@ impl Io {
             stdin: Box::new(io::stdin()),
         }
     }
-}
-
-/// kiln's version (`0.0.1`): the one source of every identity string
-/// (`--version`, `-v`, `__VERSION__`, `!llvm.ident`; spec/driver.md
-/// "Identity").
-pub fn version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}
-
-/// `(major, minor)` of kiln's version (`__KILN_MAJOR__`, `__KILN_MINOR__`).
-pub fn version_pair() -> (u32, u32) {
-    let mut it = version().split('.').map(|p| p.parse().unwrap_or(0));
-    (it.next().unwrap_or(0), it.next().unwrap_or(0))
 }
 
 /// A diagnostic engine writing to `stderr` in `opts.format`, with
@@ -300,7 +288,7 @@ pub(crate) fn print_version(w: &mut dyn Write, tc: &Toolchain, verbose: bool) {
         w,
         "kiln version {} (C++26 frontend, LLVM IR backend)\nTarget: {}\nThread model: posix\n\
          InstalledDir: {dir}\n",
-        version(),
+        version::VERSION,
         tc.target.triple
     );
     if verbose && let Some(g) = &tc.gcc {

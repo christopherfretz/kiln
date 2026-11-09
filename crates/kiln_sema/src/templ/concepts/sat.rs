@@ -142,8 +142,25 @@ impl Sema<'_, '_> {
             self.inst.concepts.counters.cache_hits += 1;
             return id;
         }
+        // A constraint whose satisfaction needs itself (a constructor
+        // template constrained on `__is_constructible` of its own class,
+        // asked for the same arguments) is unsatisfied, as in clang's
+        // `err_constraint_depends_on_self`, instead of recursing forever.
+        if cacheable && self.inst.concepts.checking.contains(&key) {
+            let d = self
+                .diag(DiagId::sema_constraint_depends_on_self, self.expr_loc(exprs[0]))
+                .arg(self.expr_text_as_written(exprs[0]));
+            self.emit(d);
+            return self.inst.concepts.push(Satisfaction { ok: false, records: Vec::new() });
+        }
         self.inst.concepts.counters.count += 1;
+        if cacheable {
+            self.inst.concepts.checking.push(key);
+        }
         let s = self.satisfy(tmpl, exprs, levels, shown, loc);
+        if cacheable {
+            self.inst.concepts.checking.pop();
+        }
         let id = self.inst.concepts.push(s);
         if cacheable {
             self.inst.concepts.sat_cache.insert(key, id);
