@@ -2,7 +2,6 @@
 // direct-initializes a move-only closure member; the closure is itself
 // move-only and the source is left empty.
 //@ expect: run
-//@ args: -stdlib=libc++
 //@ stdout: 42 1 43 1
 #include <cstdio>
 #include <memory>
