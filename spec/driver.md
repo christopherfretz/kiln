@@ -1296,9 +1296,17 @@ files in a per-user cache, built there on first use (spec/modules.md
   (`kiln++: module cache: cannot create '<dir>': <reason>; building 'std'
   from its source`), as do a miss (`building 'std' into '<pcm>'`) and a
   hit (`using '<pcm>' for 'std'`).
-- **Concurrency.** Racing compiles on a miss each build the module and
-  rename it into place; the last rename wins and every one of them gets
-  a complete file (spec/modules.md §11.12 "Concurrency").
+- **Concurrency.** A hit takes no lock. Racing compiles on a miss take
+  the entry's `<name>.lock` (an advisory lock the kernel releases when
+  its holder dies); one builds and publishes, the others wait and use
+  its module file. Every one of them succeeds, the entry ends as one
+  `<name>.pcm` and one `<name>.stamp` (no temporary or lock file), and a
+  killed compile leaves nothing the next one does not clear. A waiter
+  gives up after 120 s (`KILN_MODULE_CACHE_WAIT_MS`) and builds the
+  module from its source; `-v` says `waiting for another compile building
+  'std'` and, then, `gave up waiting for '<lock>'; building 'std' from
+  its source`, or `cannot lock '<lock>': <reason>; ...` (spec/modules.md
+  §11.12 "Concurrency", WP-1074).
 - **No eviction.** Entries for configurations no longer used stay until
   removed by hand (`rm -r ~/.cache/kiln/modules`; each is about 9 MiB).
 - `-print-file-name=libc++.modules.json` prints libc++'s module
