@@ -22,7 +22,8 @@
 //!    although clang honours it (WP-873: `-fdiagnostics-show-template-tree`,
 //!    `-f[no-]strict-vtable-pointers`, `-f[no-]vectorize`,
 //!    `-f[no-]slp-vectorize`, `-f[no-]tree-[slp-]vectorize`,
-//!    `-fno-fat-lto-objects`; spec/driver.md "Codegen flags");
+//!    `-fno-fat-lto-objects`; WP-982: `-f[no-]modules-reduced-bmi`;
+//!    spec/driver.md "Codegen flags");
 //! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
 //!    `-fshort-enums`, the other `-fxray-*` options,
 //!    `-finstrument-functions-exclude-*` and `-ffat-lto-objects`). The floating-point flags are
@@ -699,6 +700,8 @@ mod tests {
             "-ftree-vectorize",
             "-fno-tree-slp-vectorize",
             "-fno-fat-lto-objects",
+            "-fmodules-reduced-bmi",
+            "-fno-modules-reduced-bmi",
         ] {
             let (f, r) = parse(&[a]);
             assert_eq!(r, [Some(Ok(()))], "{a}");
