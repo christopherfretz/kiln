@@ -1035,7 +1035,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1012 | debuginfo: DIFlag order vs clang (debuginfo/func.rs:97) | WP-941 | open |
 | WP-1013 | debuginfo: `.str` constants carry `!dbg` where clang has none | WP-941 | open |
 | WP-1014 | llvm: coro.done intrinsic attributes (kiln_llvm intrinsics.rs:987) | WP-941 | open |
-| WP-1018 | oven: by-value parameter object lifetime ends at callee return ([expr.call]/7 impl-defined; match clang); flips expr.const/call-out-of-lifetime.cpp | WP-948 | open |
+| WP-1018 | oven: by-value parameter object lifetime ends at callee return ([expr.call]/7 impl-defined; match clang); flips expr.const/call-out-of-lifetime.cpp | WP-948 | in progress |
 | WP-1019 | oven: mark volatile locals, heap objects and volatile members (Alloc flag bit); flips expr.const/read-volatile-local-and-heap.cpp | WP-948 | open |
 | WP-1020 | oven: `qb[3].x` at member offset 0 skips the Field op (compile.rs ~4843), so past-end note wording differs (wording only) | WP-948 | open |
 | WP-1021 | oven: RefChk for reference parameters/members and clang-compat 19 mode | WP-948 | open |
@@ -1097,12 +1097,12 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1075 | rejects-valid: break/continue inside a statement-expression in a loop condition, for(;({break;1;});) (kiln_sema stmt.rs:1350, :1358) | WP-971 | done (#443) |
 | WP-1076 | hang: kiln times out (>20 s) on clang CodeGenCXX/mangle-ms-back-references-pr13207.cpp, CodeGenCXX/pr29160.cpp, Preprocessor/bigoutput.c | WP-971 | done (#447) |
 | WP-1071 | sema: relookup_member handles overload sets and using-declarations of a specialization member (kiln_sema templ/subst/mod.rs:971, today not yet implemented) | WP-1054 | open |
-| WP-1072 | rejects-valid: dependent friend class A<T>::Member gets no access to private members (xfail temp.friend/dependent-member-class-friend-run.cpp) | WP-1054 | open |
+| WP-1072 | rejects-valid: dependent friend class A<T>::Member gets no access to private members (xfail temp.friend/dependent-member-class-friend-run.cpp) | WP-1054 | in progress |
 | WP-1073 | builtins: model returns_twice (setjmp, vfork, getcontext), allocsize (malloc family), scanf format on library builtins, and clang inline lowering of abort/alloca/bzero/bcopy/mempcpy/conj/creal/cimag/finite (kiln_ast decl.rs:3792, kiln_codegen builtins.rs) | WP-914 | open |
 | WP-1074 | tests: flaky kiln_driver module_cache racing_misses_all_succeed under load (tests/module_cache.rs:193) | WP-914 | done (#450) |
 | WP-1077 | linkage: closure type in a function template signature (decltype of a lambda) is emitted internal where clang uses linkonce_odr (kiln_abi mangle.rs ~600 tag_externally_visible) | WP-1060 | open |
 | WP-1081 | expansion statements: break/continue in template for headers (statement expressions in the init/range) not modelled or tested against clang (kiln_parse stmt.rs parse_for_rest) | WP-1075 | open |
-| WP-1078 | accepts-invalid: implicit copy/move assignment overriding a final function and the implicit overrider return-type check are not diagnosed (kiln_sema class/special/implicit.rs:1368, class/virtual/mod.rs:414; needs note while declaring the implicit copy assignment operator) | WP-957 | in progress |
+| WP-1078 | accepts-invalid: implicit copy/move assignment overriding a final function and the implicit overrider return-type check are not diagnosed (kiln_sema class/special/implicit.rs:1368, class/virtual/mod.rs:414; needs note while declaring the implicit copy assignment operator) | WP-957 | open |
 | WP-1079 | accepts-invalid: overrider nested function-type exception-spec rule (exception specifications of argument types differ) (kiln_sema except.rs:1172, class/virtual/mod.rs:785) | WP-957 | open |
 | WP-1080 | accepts-invalid: enum F; with no fixed underlying type is not diagnosed (ISO C++ forbids forward references to enum types) (kiln_sema decl.rs:7911) | WP-957 | open |
 | WP-1082 | coverage: port clang 20+ mapping for compat 22 (gaps between logical-operator operands, counters on folded branches, branch counter order, do-while(0) macro region) (kiln_codegen coverage/mapping.rs:1472, :598) | WP-1003 | open |
