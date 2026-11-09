@@ -832,7 +832,46 @@ fn produce_one(
     check_args.output = None;
     check_args.pch.header_main = args.is_header_input(input);
     let stdin = None;
-    let r = syntax_only(&check_args, tc, std, lang, &input.path, stdin, diag_opts, io);
+    let out = match &args.output {
+        Some(o) if !link_follows => o.clone(),
+        _ if args.is_header_input(input) || phase == Phase::Link => format!("{}.pch", input.path),
+        _ => codegen_cmd::default_output(&input.path, phase),
+    };
+    // spec/driver.md "Time trace": the precompile job's trace (`Frontend`,
+    // then `WriteAST`), named as clang's (`<-o or a>-<input>.json` when
+    // the final phase is a link).
+    let mut trace = crate::time_trace::settings(args).ok().flatten().map(|s| {
+        let path = crate::time_trace::path(args, Some(phase), &input.path, &out);
+        crate::time_trace::InputTrace::start(s, path)
+    });
+    let r = {
+        let _frontend = trace.as_ref().map(|_| kiln_source::trace::Scope::new("Frontend"));
+        syntax_only(&check_args, tc, std, lang, &input.path, stdin, diag_opts, io)
+    };
+    let errors = write_pch(args, tc, input, std, r, &out, diag_opts, io);
+    if let Some(mut t) = trace.take() {
+        t.failed = errors > 0;
+        if let Err((path, e)) = t.finish(&args.program) {
+            // clang: reported, the exit status unchanged.
+            report_output_error(diag_opts, &io.stderr, &path, &e);
+        }
+    }
+    errors
+}
+
+/// Writes the PCH record of the checked header (`r`, its job's result)
+/// to `out`, then the `-MD` file. The errors.
+#[allow(clippy::too_many_arguments)]
+fn write_pch(
+    args: &Args,
+    tc: &Toolchain,
+    input: &Input,
+    std: LangStd,
+    r: crate::pp_cmd::JobResult,
+    out: &str,
+    diag_opts: &DiagOptions,
+    io: &mut Io,
+) -> u32 {
     if r.errors > 0 {
         return r.errors;
     }
@@ -864,20 +903,17 @@ fn produce_one(
         macros: macros(args),
         files,
     };
-    let out = match &args.output {
-        Some(o) if !link_follows => o.clone(),
-        _ if args.is_header_input(input) || phase == Phase::Link => format!("{}.pch", input.path),
-        _ => codegen_cmd::default_output(&input.path, phase),
-    };
-    if let Err(err) = bmi::write_file(Path::new(&out), rec.write().as_bytes()) {
+    let _write_ast = kiln_source::trace::Scope::with_detail("WriteAST", || out.to_owned());
+    if let Err(err) = bmi::write_file(Path::new(out), rec.write().as_bytes()) {
         let why = if err.kind() == std::io::ErrorKind::NotFound {
             "No such file or directory".to_owned()
         } else {
             err.to_string()
         };
-        report_output_error(diag_opts, &io.stderr, &out, &why);
+        report_output_error(diag_opts, &io.stderr, out, &why);
         return 1;
     }
+    drop(_write_ast);
     // The user's `-MD` / `-MMD` file: the same list, filtered.
     if let Some(h) = args.deps.headers() {
         let mut user = DepList::new(h == DepHeaders::All);

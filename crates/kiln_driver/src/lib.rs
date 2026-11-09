@@ -796,7 +796,24 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         };
         if matches!(args.action, Action::SyntaxOnly | Action::Precompile) {
             let stdin = if input.path == "-" { stdin_text.clone() } else { None };
-            let r = syntax_only(args, &tc, std, lang, &input.path, stdin, &diag_opts, &io);
+            // spec/driver.md "Time trace": `--precompile` traces its job
+            // (`Frontend`, then the module file's `WriteAST`), named
+            // after the module file.
+            let trace = time_trace::settings(args).ok().flatten().map(|s| {
+                let out = pp_cmd::precompile_output(args, &input.path);
+                time_trace::InputTrace::start(s, time_trace::path(args, None, &input.path, &out))
+            });
+            let r = {
+                let _frontend = trace.as_ref().map(|_| kiln_source::trace::Scope::new("Frontend"));
+                syntax_only(args, &tc, std, lang, &input.path, stdin, &diag_opts, &io)
+            };
+            if let Some(mut t) = trace {
+                t.failed = r.errors > 0;
+                if let Err((path, e)) = t.finish(&args.program) {
+                    // clang: reported, the exit status unchanged.
+                    report_output_error(&diag_opts, &io.stderr, &path, &e);
+                }
+            }
             errors += r.errors;
             output.push_str(&r.output);
             if let Some(list) = r.dep_list

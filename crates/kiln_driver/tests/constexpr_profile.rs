@@ -513,7 +513,8 @@ fn module_source_named_directly_is_the_importers() {
     assert_eq!(s(func(&p, "tri"), "loc"), "m.cppm:2:22");
     assert_eq!((n(total(&p), "evaluations"), s(total(&p), "file")), (3, "u.cpp"));
     let r = ndjson(&std::fs::read_to_string(d.join("r.json")).unwrap());
-    let mut locs: Vec<&str> = r.iter().filter_map(|j| j.get("loc").and_then(Json::as_str)).collect();
+    let mut locs: Vec<&str> =
+        r.iter().filter_map(|j| j.get("loc").and_then(Json::as_str)).collect();
     locs.sort_unstable();
     assert_eq!(locs, at);
 }

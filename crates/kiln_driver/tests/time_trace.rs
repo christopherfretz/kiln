@@ -318,7 +318,8 @@ fn link_dir_names_each_input() {
     std::fs::write(d.join("u.cpp"), "int u() { return 1; }\n").unwrap();
     let a = ["-std=c++20", "-ftime-trace=tr", "t.cpp", "u.cpp", "-o", "out/app"];
     let shape = |n: &str, stem: &str| {
-        let Some(hex) = n.strip_prefix(&format!("tr/{stem}-")).and_then(|r| r.strip_suffix(".json"))
+        let Some(hex) =
+            n.strip_prefix(&format!("tr/{stem}-")).and_then(|r| r.strip_suffix(".json"))
         else {
             return false;
         };
@@ -368,6 +369,108 @@ fn unwritable_trace_exits_zero() {
             let out = if args[1] == "-c" { "t.o" } else { "out/t.ii" };
             assert!(d.join(out).is_file(), "{} {args:?}: no {out}", cc.display());
         }
+    }
+}
+
+/// Sema's own folds under clang 22's events, nested as clang's
+/// (spec/driver.md "Time trace"): `EvaluateForOverflow` per operator of
+/// a full-expression ([expr.pre]/4), `CheckConstraintSatisfaction` for
+/// the call's template-id ([temp.constr.constr]) holding the atom's
+/// `EvaluateAsConstantExpr` (the concept-id inline: one event),
+/// `BuildCFG` holding a branch's `EvaluateAsBooleanCondition` >
+/// `EvaluateAsRValue`, `EvaluateAsInt` for a constant switch condition
+/// ([stmt.switch]); with `-g`, `DebugType` and `DebugGlobalVariable`.
+#[test]
+fn sema_fold_events_nest_as_clangs() {
+    let d = setup("sema");
+    std::fs::write(
+        d.join("e.cpp"),
+        "template <class T> concept C = sizeof(T) > 1;\n\
+         template <C T> int f(T t) { return (int)t; }\n\
+         int h(int x) {\n\
+         \x20 if (sizeof(int) == 4) return f(3L) + x * 2;\n\
+         }\n\
+         int g() { switch (3) { case 3: return 1; } return 0; }\n\
+         struct S { int m; };\n\
+         S s;\n",
+    )
+    .unwrap();
+    let args =
+        ["-std=c++20", "-c", "-Wno-return-type", "-ftime-trace", "-ftime-trace-granularity=0"];
+    run(&kilnpp(), &d, &[&args[..], &["-g", "e.cpp"]].concat());
+    let j = Json::parse(&std::fs::read_to_string(d.join("e.json")).unwrap()).unwrap();
+    check_structure(&j);
+    let ev = events(&j);
+    let find = |name: &str, detail: &str| -> Vec<&Ev> {
+        ev.iter().filter(|e| e.name == name && e.detail() == detail).collect()
+    };
+    let one = |name: &str, detail: &str| -> &Ev {
+        let v = find(name, detail);
+        assert_eq!(v.len(), 1, "{name} {detail:?}: {} events", v.len());
+        v[0]
+    };
+    let within = |inner: &Ev, outer: &Ev| {
+        assert!(
+            outer.ts <= inner.ts && inner.ts + inner.dur <= outer.ts + outer.dur,
+            "{} {:?} is not inside {} {:?}",
+            inner.name,
+            inner.detail(),
+            outer.name,
+            outer.detail()
+        );
+    };
+    one("EvaluateForOverflow", "<e.cpp:4:32, col:44>");
+    assert_eq!(ev.iter().filter(|e| e.name == "CheckConstraintSatisfaction").count(), 1);
+    let sat = one("CheckConstraintSatisfaction", "<e.cpp:4:32>");
+    within(one("EvaluateAsConstantExpr", "<e.cpp:1:32, col:44>"), sat);
+    let cfg: Vec<&Ev> = ev.iter().filter(|e| e.name == "BuildCFG").collect();
+    let cond = one("EvaluateAsBooleanCondition", "<e.cpp:4:7, col:22>");
+    let rvalue = one("EvaluateAsRValue", "<e.cpp:4:7, col:22>");
+    within(rvalue, cond);
+    assert!(cfg.iter().any(|c| c.ts <= cond.ts && cond.ts + cond.dur <= c.ts + c.dur));
+    one("EvaluateAsInt", "<e.cpp:6:19>");
+    assert!(!find("DebugType", "int").is_empty());
+    one("DebugGlobalVariable", "s");
+
+    run(&kilnpp(), &d, &[&args[..], &["e.cpp"]].concat());
+    let j = Json::parse(&std::fs::read_to_string(d.join("e.json")).unwrap()).unwrap();
+    assert!(!events(&j).iter().any(|e| e.name.starts_with("Debug")), "debug events need -g");
+}
+
+/// `--precompile` and a header precompile trace their job, `Frontend` and
+/// the output's `WriteAST`, under clang's names: `m.json` for `-o m.pcm`,
+/// `<-o>-h.json` for a header (its final phase is a link).
+#[test]
+fn precompile_traces_write_ast() {
+    let d = setup("precompile");
+    std::fs::write(d.join("m.cppm"), "export module m;\nexport int sq(int x) { return x * x; }\n")
+        .unwrap();
+    let ccs = if have("clang++-19") {
+        vec![kilnpp(), PathBuf::from("clang++-19")]
+    } else {
+        vec![kilnpp()]
+    };
+    for cc in &ccs {
+        let gran = "-ftime-trace-granularity=0";
+        run(cc, &d, &["-std=c++20", "--precompile", "m.cppm", "-o", "m.pcm", "-ftime-trace", gran]);
+        run(
+            cc,
+            &d,
+            &["-std=c++20", "-x", "c++-header", "h.h", "-o", "h.pch", "-ftime-trace", gran],
+        );
+        for (trace, out) in [("m.json", "m.pcm"), ("h.pch-h.json", "h.pch")] {
+            let j = Json::parse(&std::fs::read_to_string(d.join(trace)).unwrap()).unwrap();
+            check_structure(&j);
+            let ev = events(&j);
+            for (name, detail) in [("ExecuteCompiler", ""), ("Frontend", ""), ("WriteAST", out)] {
+                assert!(
+                    ev.iter().any(|e| e.name == name && e.detail() == detail),
+                    "{}: {trace} has no {name} {detail:?}",
+                    cc.display()
+                );
+            }
+        }
+        clear(&d);
     }
 }
 

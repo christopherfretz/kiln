@@ -608,14 +608,9 @@ impl Job<'_> {
     /// `<stem>.pcm`. `None` when no module file is requested.
     pub(crate) fn module_output_path(&self) -> Option<String> {
         let a = self.args;
-        let stem = || {
-            let s = Path::new(self.path)
-                .file_stem()
-                .map_or_else(|| self.path.to_owned(), |s| s.to_string_lossy().into_owned());
-            format!("{s}.pcm")
-        };
+        let stem = || module_file_stem(self.path);
         if a.action == crate::args::Action::Precompile {
-            return Some(a.output.clone().unwrap_or_else(stem));
+            return Some(precompile_output(a, self.path));
         }
         if !matches!(a.action, crate::args::Action::Compile | crate::args::Action::Link) {
             return None;
@@ -732,6 +727,9 @@ impl Job<'_> {
             let mut err = self.stderr.clone();
             let _ = writeln!(err, "note: wrote module file '{out}' as {kind}");
         }
+        // spec/driver.md "Time trace": clang's `WriteAST`, the module
+        // file's serialization and write.
+        let _write_ast = kiln_source::trace::Scope::with_detail("WriteAST", || out.clone());
         let bytes = bmi::write(&capsule);
         drop(capsule);
         if let Err(e) = bmi::write_file(Path::new(&out), &bytes) {
@@ -777,6 +775,20 @@ impl Job<'_> {
         drop(pp);
         result.deps = deps.map(|d| d.borrow().files().to_vec());
     }
+}
+
+/// `<stem of path>.pcm`, the module file named after its source.
+fn module_file_stem(path: &str) -> String {
+    let s = Path::new(path)
+        .file_stem()
+        .map_or_else(|| path.to_owned(), |s| s.to_string_lossy().into_owned());
+    format!("{s}.pcm")
+}
+
+/// The module file `--precompile` writes for `path`: `-o`, else
+/// `<stem>.pcm`.
+pub(crate) fn precompile_output(args: &Args, path: &str) -> String {
+    args.output.clone().unwrap_or_else(|| module_file_stem(path))
 }
 
 /// The module a nameless `-fmodule-file=<path>` holds, read from its
