@@ -26,6 +26,17 @@
 # (.oss/build/<project>/<compiler>-libcxx/), so the libstdc++ baseline is
 # kept.
 #
+# A row with `modules = true` (WP-1148, C++20 modules through CMake) is
+# generated for Ninja, since CMake's Makefiles generator cannot scan, and
+# CMake is told the scanner: kiln-scan-deps beside kiln++ (the kiln-cxx
+# wrapper has no clang-scan-deps beside it, so CMake would otherwise take a
+# system clang-scan-deps-22 for kiln), or clang-scan-deps-<N> beside the
+# control clang++-<N>. The scanner is run directly, not through kiln-cxx,
+# so `--stdlib libc++` also goes into CMAKE_CXX_FLAGS. Ninja 1.12 is not a
+# jobserver client: it runs with --jobs, at most 4, as meson does. A row
+# with `local = "<dir>"` builds the fixture scripts/oss/<dir> in place of a
+# clone.
+#
 # Environment: KILN_OSS_CXX (the kiln++ to test; default
 # $CARGO_TARGET_DIR/harness/kiln++; ignored by a staged row), KILN_OSS_ROOT
 # (default <kiln>/.oss).
@@ -123,6 +134,7 @@ P_TEST="${P_TEST//@OSS@/$KILN/scripts/oss}"
 [ ${#PREFIXES[@]} -eq 0 ] || P_CONFIGURE+=("-DCMAKE_PREFIX_PATH=$(IFS=';'; echo "${PREFIXES[*]}")")
 
 SRC="$OSS/src/$P_CHECKOUT"
+[ -z "$P_LOCAL" ] || SRC="$HERE/$P_LOCAL"
 BUILD="$OSS/build/$PROJECT/$COMPILER$SFX${INSTALL:+-dep}"
 mkdir -p "$OSS/src" "$BUILD"
 export KILN_OSS_LOG="$BUILD/compile.jsonl"
@@ -132,7 +144,9 @@ export KILN_OSS_VMEM_KB="${KILN_OSS_VMEM_KB:-$P_VMEM_KB}"
 : > "$KILN_OSS_LOG"
 rm -f "$BUILD/report.json" "$BUILD/configure.log" "$BUILD/build.log" "$BUILD/test.log"
 
-if [ -n "$P_ARCHIVE" ]; then
+if [ -n "$P_LOCAL" ]; then
+  [ -d "$SRC" ] || { echo "oss-build: the local fixture $SRC does not exist" >&2; exit 2; }
+elif [ -n "$P_ARCHIVE" ]; then
   # A release tarball (WP-920: autotools projects whose git tags carry no
   # generated `configure`; the harness has no autoreconf). `url` is the
   # tarball, `sha256` pins it, and $SRC/.oss-archive records the tag.
@@ -168,15 +182,33 @@ case "${MAKEFLAGS:-}" in
   *) JFLAG=(-j "$JOBS") ;;
 esac
 
+# Modules (WP-1148): Ninja, the scanner, and the stdlib flag for it.
+GEN=(-G "Unix Makefiles") MODFLAGS=()
+if [ -n "$P_MODULES" ]; then
+  [ "$P_BUILD" = cmake ] || { echo "oss-build: modules = true needs a cmake project" >&2; exit 2; }
+  command -v ninja > /dev/null || { echo "oss-build: modules rows need ninja (apt-get install ninja-build)" >&2; exit 2; }
+  if [ "$COMPILER" = kiln ] && [ -z "$P_STAGE_OF" ]; then
+    SCAN="$(dirname "$CXX")/kiln-scan-deps"
+  else
+    b="$(basename "$CXX")"; SCAN="$(dirname "$CXX")/${b/clang++/clang-scan-deps}"
+  fi
+  [ -x "$SCAN" ] || { echo "oss-build: no scanner $SCAN beside $CXX" >&2; exit 2; }
+  echo "oss-build: modules: Ninja $(ninja --version), scanner $SCAN"
+  GEN=(-G Ninja)
+  MODFLAGS=("-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=$SCAN")
+  [ "$STDLIB" = libc++ ] && MODFLAGS+=("-DCMAKE_CXX_FLAGS=-stdlib=libc++")
+  [ "$JOBS" -le 4 ] || JOBS=4
+fi
+
 T0=$(date +%s.%N)
 BUILD_RC="" TEST_RC=""
 export KILN_OSS_PHASE=configure
 case "$P_BUILD" in
   cmake)
-    nice -n 10 cmake --fresh -S "$SRCDIR" -B "$BUILD" -G "Unix Makefiles" \
+    nice -n 10 cmake --fresh -S "$SRCDIR" -B "$BUILD" "${GEN[@]}" \
       -DCMAKE_CXX_COMPILER="$WRAP" -DCMAKE_C_COMPILER="$P_C_COMPILER" \
       -DCMAKE_CXX_STANDARD="$P_CXX_STD" -DCMAKE_BUILD_TYPE=Release \
-      "${P_CONFIGURE[@]}" > "$BUILD/configure.log" 2>&1
+      "${MODFLAGS[@]}" "${P_CONFIGURE[@]}" > "$BUILD/configure.log" 2>&1
     CONF_RC=$? ;;
   meson)
     # meson's only Linux backend is ninja, which is not a jobserver client:
@@ -203,8 +235,13 @@ if [ "$CONF_RC" = 0 ]; then
   export KILN_OSS_PHASE=build
   case "$P_BUILD" in
     cmake)
-      nice -n 10 make -C "$BUILD" clean > /dev/null 2>&1
-      nice -n 10 make -k "${JFLAG[@]}" -C "$BUILD" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1
+      if [ -n "$P_MODULES" ]; then
+        nice -n 10 ninja -C "$BUILD" -t clean > /dev/null 2>&1
+        nice -n 10 ninja -C "$BUILD" -k 0 -j "$JOBS" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1
+      else
+        nice -n 10 make -C "$BUILD" clean > /dev/null 2>&1
+        nice -n 10 make -k "${JFLAG[@]}" -C "$BUILD" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1
+      fi
       BUILD_RC=$? ;;
     meson)
       nice -n 10 meson compile -C "$BUILD/meson" -j "$JOBS" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1

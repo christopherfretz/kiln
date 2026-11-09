@@ -826,7 +826,7 @@ from the heap and were never returned. With the threshold pinned
 (`MALLOC_MMAP_THRESHOLD_=131072`) the same reader measured 86 MiB. The
 streaming reader (§11.3) never allocates a whole-file buffer.
 
-### 11.9 Dependency scanning and CMake (WP-982)
+### 11.9 Dependency scanning and CMake (WP-982, WP-1148)
 
 CMake 3.28+ identifies kiln as clang (it defines `__clang__`; the version
 it computes, `CMAKE_CXX_COMPILER_VERSION`, follows `__clang_major__`, so 22
@@ -861,17 +861,25 @@ sees) and double the install size; a link costs nothing and cannot drift
 from the compiler it scans for. The install tree (`cargo xtask dist`,
 spec/driver.md "Installation layout") and the dev tree (`kiln_driver`'s
 build script, in the cargo profile directory) both hold `kiln-scan-deps`,
-`clang-scan-deps-22` and `clang-scan-deps` beside `kiln++`, so CMake's
-search finds kiln's scanner before any system clang's with nothing set.
-To name it explicitly (another compat major, or a wrapper as
-`CMAKE_CXX_COMPILER`), pass
+`clang-scan-deps-22`, `clang-scan-deps-19` (the name CMake looks for
+under `-fclang-compat=19`, WP-1148) and `clang-scan-deps` beside
+`kiln++`, so CMake's search finds kiln's scanner before any system
+clang's with nothing set. To name it explicitly (a wrapper as
+`CMAKE_CXX_COMPILER`, as the OSS harness's kiln-cxx), pass
 `-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=<kiln prefix>/bin/kiln-scan-deps`.
+
+**Flavour.** Under the program name `clang-scan-deps-19` (or
+`clang-scan-deps-19.<minor>`) the scanner behaves as clang-scan-deps 19
+where 19 and 22 differ: the failure header (`Error while scanning
+dependencies for <src>:`, unquoted, in place of 22's `Diagnostics while
+scanning dependencies for '<src>':`) and the `-format=experimental-full`
+shape below. Every other name behaves as 22.
 
 The scanner behaves as clang-scan-deps 22 for the options CMake and
 build tools pass (spec/driver.md "Dependency scanning"):
 
-- The command after `--` is parsed by kiln's driver; it must be one
-  compile of one input (otherwise clang's `unable to handle compilation,
+- The command after `--` (or each entry of `-compilation-database`) is
+  parsed by kiln's driver; it must be one compile of one input (otherwise clang's `unable to handle compilation,
   expected exactly one compiler job in '<command>'`).
 - `-format=p1689`: the P1689r5 document, byte for byte clang's: keys
   sorted, two-space indent, `revision` 0, `version` 1, one rule with
@@ -899,18 +907,77 @@ build tools pass (spec/driver.md "Dependency scanning"):
 - `import "h";` / `import <h>;` (a header unit) is `error: header unit "h"
   cannot be imported: kiln-scan-deps does not support header units yet`
   at the header name, a scan failure; header units are §11.10.
-- No `--` is clang's `The compilation command line must be provided
-  either via '-compilation-database' or after '--'.` (exit 1); an unknown
-  `-format` value is `<prog>: for the --format option: Cannot find option
-  named '<v>'`.
+- No `--` and no `-compilation-database`, or both, is clang's `The
+  compilation command line must be provided either via
+  '-compilation-database' or after '--'.` (exit 1); an unknown `-format`
+  value is `<prog>: for the --format option: Cannot find option named
+  '<v>'`.
+- `-compilation-database <file>` (WP-1148) scans every entry of a JSON
+  compilation database, as clang-scan-deps 19 and 22 do. Each entry is
+  an object with `directory`, `file` and either `arguments` (a list,
+  which wins when both are present) or `command` (one string, split as a
+  POSIX shell does: quotes, backslash escapes, no expansion), and
+  optionally `output`; a missing key is checked in the order `file`,
+  `command`/`arguments`, `directory`, and an unknown key is an error,
+  with clang's wording (`Error while opening JSON database: <reason>` on
+  stderr, exit 1, nothing on stdout: `Expected array.`, `Expected
+  object.`, `Missing key: "file".`, `Missing key: "command" or
+  "arguments".`, `Missing key: "directory".`, `Expected sequence as
+  value.`, `Expected string as value.`, `Unknown key: ""<k>""`, or the
+  open error). Trailing commas are accepted, a scalar is taken by its
+  text and a repeated key keeps its first value, as LLVM's YAML-based
+  JSON reader does; `[]` is a clean empty scan. Each entry is scanned
+  in its `directory` (relative to the scanner's working directory),
+  which is restored before the output is written. The outputs, in
+  entry order: `make` concatenates one rule per entry, its files
+  spelled as the directory joined with the path (so `./p.cppm` for
+  `"directory": "."`); `p1689` is one document whose rules are sorted
+  (stably) by `primary-output` (the entry's `output`, else empty), each
+  `source-path` is the entry's `file`, and a `requires` of a module
+  another rule provides gets that rule's `source-path`;
+  `experimental-full` is one translation unit per entry. A failed entry
+  prints its diagnostics under the header, is left out of the output
+  (an empty `commands` in `experimental-full`), and makes the exit
+  status 1; the other entries are still scanned.
+- `-format=experimental-full` (WP-1148) is clang's build-system JSON:
+  `{"modules": [], "translation-units": [...]}` with one element per
+  input, each `{"commands": [{...}]}` holding `clang-context-hash`,
+  `clang-module-deps` (always `[]`: kiln scans no Clang module maps),
+  `command-line` (the compile's arguments after the program name),
+  `executable` (the program, resolved on `PATH` when it has no `/`),
+  `file-deps` (every file the scan read, absolute: relative ones joined
+  to `<cwd>/.` after `--`, as clang spells them, or to the entry's
+  directory), and `input-file` (as given); for clang 22 also
+  `named-module` (the unit's module, `M` or `M:P`, for an interface or
+  any partition) and `named-module-deps` (the imports, as in `requires`;
+  omitted when empty). The 22 flavour prints the keys in that streaming
+  order, `named-module` and `named-module-deps` before
+  `clang-module-deps`, with no newline at the end; the 19 flavour sorts
+  the keys, has no named-module fields and ends with a newline. Both use
+  LLVM's two-space JSON layout. `clang-context-hash` is kiln's: the
+  FNV-1a 64-bit hash of the kiln version and the compile's arguments
+  without its inputs, `-o`, the dependency-file options and their
+  values, printed in uppercase base 36, so two compiles that would build
+  the same module agree.
 
 Deviations: the `-format=make` output names files as kiln's `-M` does
 (`hdr.h`) where clang-scan-deps normalises them (`./hdr.h`); the
 header-unit and one-job messages are kiln's (clang's header-unit error
 says the header "is not known to be a header unit"; its one-job message
 quotes its own expanded command); system headers in the dependency file
-are spelled with kiln's toolchain paths. `-compilation-database` and
-`-format=experimental-full` are not supported (an error).
+are spelled with kiln's toolchain paths. With `-compilation-database`:
+a JSON syntax error is reported as `Error while opening JSON database:
+<file>:<line>:<col>: error: <what>` (clang's text is its YAML parser's);
+an entry whose directory does not exist fails with `error: cannot change
+to directory '<dir>': <reason>` under the header (clang scans through a
+virtual working directory and reports the missing input instead); the
+make rules come in entry order (clang's come in completion order, the
+same only with `-j 1`); and each module or import is listed once, where
+clang repeats a duplicated `import M;` (kiln's preprocessor records an
+import once, `kiln_pp::modules`). In `experimental-full`, `command-line`
+is the compile as given, where clang prints its own expanded `-cc1`
+line, and an interface unit is one command, where clang 19 prints two (a
+`-cc1` that builds the module file, then the object compile).
 
 Every flag CMake 3.31 puts on these lines was already kiln's (WP-917,
 WP-799): `-x c++` / `-x c++-module`, `-fmodule-output=`,
@@ -928,6 +995,17 @@ compiler; the program runs, the scanner CMake found must be kiln's link,
 and touching the interface recompiles it, the implementation unit and the
 consumer but not the partition. `import std;` through CMake
 (`CXX_MODULE_STD`) is §11.12.
+
+Real builds go through the OSS harness (WP-1148, spec/harness.md): a
+`modules = true` row of `scripts/oss/projects.toml` is generated for
+Ninja and given `-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=` (kiln-scan-deps
+beside the kiln++ under test, or clang-scan-deps-19 for the clang 19
+control), with `-DCMAKE_CXX_FLAGS=-stdlib=libc++` under `--stdlib
+libc++` because the scanner is run directly, not through kiln-cxx.
+`fmt_module` builds {fmt} 12.1.0 as the named module `fmt` with an
+importer, and `cmake_modules` builds the fixture above (with `import
+std;` under libc++); their results are docs/status/oss/fmt_module.md and
+docs/status/oss/cmake_modules.md.
 
 ### 11.10 Step 2 (follow-up work packages)
 
@@ -2560,8 +2638,28 @@ interface or `stdapp`'s source never rebuilds the std module.
   the names, option parsing and JSON quoting. `xtask/src/dist.rs`
   checks the links in the install layout and scans a unit with the
   installed `clang-scan-deps-22` in its smoke test.
+- Compilation databases and the full format (WP-1148, §11.9):
+  `crates/kiln_driver/tests/scan_deps.rs` `compilation_database_p1689`
+  (per-entry `directory`, `arguments` over `command`, `output`, rule
+  order, an import naming another entry's source; the empty database),
+  `compilation_database_make` (database order, a failing entry beside
+  good ones, clang 19's header under `clang-scan-deps-19`),
+  `compilation_database_errors` (clang's messages for an unreadable,
+  malformed or ill-shaped database and for both `--` and a database),
+  `experimental_full_shapes` (the 22 and 19 shapes) and
+  `differential_against_clang_scan_deps`: one module graph across
+  directories through kiln and the real clang-scan-deps 19 and 22
+  (where installed), P1689, make and full compared after the documented
+  deviations; `kiln_driver::scan_deps_cdb` unit tests cover the database
+  parser and shell splitting.
 - CMake (WP-982): `scripts/oss/selftest.sh` `cmake_modules` builds
-  `scripts/oss/fixtures/modules` (§11.9).
+  `scripts/oss/fixtures/modules` (§11.9). WP-1148: the OSS harness rows
+  `cmake_modules` (that fixture, `import std` under libc++) and
+  `fmt_module` ({fmt} 12.1.0 with `FMT_MODULE=ON` and an importer) build
+  with Ninja through kiln-scan-deps against a clang 19 control
+  (docs/status/oss/{cmake_modules,fmt_module}.md);
+  `module.global.frag/gmf-floatn-limits.cpp` is the `fmt_module`
+  libstdc++ failure, xfail.
 - Kind 2 (WP-985, §11.11): `crates/kiln_sema/src/bmi_ast.rs` unit
   tests (the section's round trip, no bytes without a carried entry,
   trailing bytes and an out-of-range path index rejected, and a fuzz

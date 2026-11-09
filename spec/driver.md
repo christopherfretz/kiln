@@ -576,7 +576,10 @@ any other value is the error `unsupported argument '<v>' to option
 A third mode is the dependency scanner: a basename `kiln-scan-deps`,
 `clang-scan-deps` or `clang-scan-deps-<version>` runs
 `kiln_driver::scan_deps` instead of the compiler ("Dependency scanning";
-the build script makes these links too, WP-982).
+the build script makes these links too, WP-982). `clang-scan-deps-19`
+(and `clang-scan-deps-19.<minor>`) scans as clang-scan-deps 19 does: its
+error wording and its `-format=experimental-full` shape (WP-1148,
+spec/modules.md §11.9 "Flavour").
 
 The program's basename, as invoked, prefixes the driver diagnostics
 (`kiln++: error: no input files`, `kiln: warning: ...`), as clang prints
@@ -616,7 +619,8 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
 <prefix>/bin/kiln++ -> kiln              relative symlink ("Driver modes")
 <prefix>/bin/kiln-scan-deps -> kiln      the dependency scanner, also as
 <prefix>/bin/clang-scan-deps-22 -> kiln  the names CMake looks for
-<prefix>/bin/clang-scan-deps -> kiln     ("Dependency scanning")
+<prefix>/bin/clang-scan-deps-19 -> kiln  ("Dependency scanning"; -19 scans
+<prefix>/bin/clang-scan-deps -> kiln     with clang 19's shapes, WP-1148)
 <prefix>/lib/kiln/<major>/include/       resource/include: clang 19's builtin
                                          headers, contracts, module.modulemap
 <prefix>/lib/kiln/<major>/predefines/    resource/predefines/*.txt
@@ -1416,8 +1420,11 @@ files in a per-user cache, built there on first use (spec/modules.md
 spec/modules.md §11.9) is clang-scan-deps for CMake and other build
 tools: `kiln-scan-deps [options] -- <compiler> <compile flags>` runs
 kiln's preprocessor on the one compile after `--` and prints its module
-dependencies. It is the `kiln` binary under another name ("Driver
-modes"); `clang-scan-deps-22` and `clang-scan-deps` are the same links,
+dependencies; `kiln-scan-deps [options] -compilation-database <cdb.json>`
+scans every entry of a compilation database (WP-1148). It is the `kiln`
+binary under another name ("Driver modes"); `clang-scan-deps-22`,
+`clang-scan-deps-19` (clang 19's wording and full-format shape) and
+`clang-scan-deps` are the same links,
 installed beside `kiln++` so CMake finds it without configuration;
 `-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=<prefix>/bin/kiln-scan-deps`
 names it explicitly. The compiler after `--` is parsed as `kiln++`
@@ -1430,7 +1437,8 @@ whatever its name (`clang++`, a path to `kiln++`); its flags are kiln's.
 | `-o <file>` | write the output to `<file>` instead of stdout |
 | `-MT`/`-MD`/`-MF`/`-MMD`/`-MQ` in the command | the dependency file of the scanned files, after a clean scan ("Dependency output") |
 | `-j <n>`, `-mode <m>`, `-resource-dir-recipe <r>`, `-optimize-args[=...]`, `-eager-load-pcm`, `-reuse-filemanager`, `-skip-excluded-pp-ranges`, `-brief-result`, `-round-trip-args` | accepted and ignored (clang-scan-deps tuning; one input is one scan) |
-| `-compilation-database <f>`, `-format=experimental-full` | an error (not supported) |
+| `-compilation-database <f>` (`--compilation-database`, `-compilation-database=<f>`) | scan each entry of the JSON compilation database `<f>` (`directory`, `file`, `command` or `arguments`, `output`), in `directory`, as clang does; exclusive with `--` (WP-1148) |
+| `-format=experimental-full` | clang's build-system JSON (`modules`, `translation-units` with `commands`), in the 22 or (as `clang-scan-deps-19`) the 19 shape (WP-1148) |
 | `-help`, `--help` | the option summary, exit 0 |
 | anything else | `<prog>: Unknown command line argument '<a>'.  Try: '<prog> --help'`, exit 1 |
 
