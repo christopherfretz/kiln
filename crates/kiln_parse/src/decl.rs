@@ -3778,7 +3778,9 @@ impl Parser<'_, '_> {
                             .s
                             .act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
                     self.type_id_constraint = Loc::INVALID;
+                    let mark = self.s.lambda_mark();
                     let ty = self.parse_type_id_no_ctad().unwrap_or(QualType::ERROR);
+                    self.s.act_on_trailing_return_type(ty, mark);
                     if !d.trailing_constraint.is_valid() {
                         d.trailing_constraint = self.type_id_constraint;
                     }

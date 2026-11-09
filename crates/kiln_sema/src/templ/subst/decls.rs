@@ -322,8 +322,9 @@ impl Substituter<'_, '_, '_> {
             && !matches!(ast.types.view(ast.types.canonical(t).ty()), TypeView::IncompleteArray(_))
     }
 
-    /// Whether `t` is a placeholder under pointer and reference
-    /// declarators (`auto`, `auto*`, `const auto&`), or a deduced class
+    /// Whether `t` is a placeholder under pointer, member-pointer and
+    /// reference declarators and function return types (`auto`, `auto*`,
+    /// `const auto&`, `auto T::*`, `auto (*)(int) -> auto`), or a deduced class
     /// type (`std::array const`, [dcl.type.class.deduct]; clang's
     /// `isUndeducedType`).
     fn has_placeholder(ast: &kiln_ast::Ast, t: QualType) -> bool {
@@ -339,7 +340,12 @@ impl Substituter<'_, '_, '_> {
                 TypeView::Auto { .. } | TypeView::DeducedTemplateSpecialization { .. } => {
                     return true;
                 }
-                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
+                TypeView::Pointer(p)
+                | TypeView::LValueRef(p)
+                | TypeView::RValueRef(p)
+                | TypeView::Paren(p)
+                | TypeView::MemberPointer { pointee: p, .. } => cur = p,
+                TypeView::Function(f) => cur = f.ret(),
                 _ => return false,
             }
         }
@@ -1180,21 +1186,43 @@ impl Substituter<'_, '_, '_> {
             // substituted.
             // Each substituted type is checked ([except.spec]/2); an
             // invalid one drops the specification (clang
-            // `SubstExceptionSpec`). Not while deducing: clang checks a
-            // C++98 function template specialization's after deduction,
-            // as a hard error (`InitFunctionInstantiation`), which kiln
-            // does not yet (WP-1052 follow-up).
+            // `SubstExceptionSpec`). While deducing (a C++98 function
+            // template specialization's, substituted with its declaration)
+            // the check is a hard error in the specialization's
+            // instantiation, not a deduction failure: clang's
+            // `InitFunctionInstantiation` turns the deduction context into
+            // one (WP-1137).
             ExcSpec::Dynamic(l) => {
                 let tys = self.sema.ast.types.type_list_types(l).to_vec();
                 let tys = self.expand_types(&tys, loc)?;
-                if self.sema.inst.stack.is_sfinae() {
-                    if tys.is_empty() {
-                        ExcSpec::DynamicNone
-                    } else {
-                        ExcSpec::Dynamic(self.sema.ast.types.type_list(&tys))
+                let spec = self.entity.filter(|_| self.sema.inst.stack.is_sfinae());
+                // A member template of a class template specialization
+                // whose list was dropped there (a type failed when the
+                // class was instantiated) has none: clang substitutes the
+                // specialization from that member, kiln from the original
+                // pattern.
+                let own = spec
+                    .and_then(|s| self.sema.spec_args(s))
+                    .and_then(|(t, _)| self.sema.templated_function(t))
+                    .filter(|&own| own != pat);
+                if let Some(ty) = own.and_then(|o| self.sema.ast.decls.get(o).ty())
+                    && self.sema.written_exc_spec(ty) == ExcSpec::None
+                {
+                    return Ok(ExcSpec::None);
+                }
+                let checked = match spec {
+                    Some(spec) => self.sema.as_spec_instantiation(spec, |s| {
+                        s.finish_substituted_dynamic_exc(l, &tys, pat, loc)
+                    }),
+                    None if !self.sema.inst.stack.is_sfinae() => {
+                        Some(self.sema.finish_substituted_dynamic_exc(l, &tys, pat, loc))
                     }
-                } else {
-                    self.sema.finish_substituted_dynamic_exc(l, &tys, pat, loc)
+                    None => None,
+                };
+                match checked {
+                    Some(e) => e,
+                    None if tys.is_empty() => ExcSpec::DynamicNone,
+                    None => ExcSpec::Dynamic(self.sema.ast.types.type_list(&tys)),
                 }
             }
             // The canonical form of a value-dependent `noexcept(expr)`:
@@ -1821,7 +1849,8 @@ impl Substituter<'_, '_, '_> {
             let nns = self.nns(mf.nns, loc)?;
             let ty = self.ty(ty, loc)?;
             let depth = self.args.retained_depth(mf.depth());
-            return Ok(self.sema.instantiate_member_friend(&mf, nns, ty, depth, loc));
+            let at = (depth, self.args);
+            return Ok(self.sema.instantiate_member_friend(&mf, nns, ty, at, loc));
         }
         match self.sema.ast.decls.friend_target(d) {
             FriendTarget::Type { ty, owned_tag } => {

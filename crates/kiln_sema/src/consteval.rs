@@ -790,25 +790,32 @@ impl Sema<'_, '_> {
         let report_after =
             var.filter(|&v| var_defer && escalating.is_none() && self.checked_var(v));
         let results: Vec<_> = outer.iter().map(|&(c, _)| self.eval_immediate(c)).collect();
+        // Each invocation is evaluated once (WP-1140): its value is
+        // stored before the initializer is folded below, so that fold,
+        // the variable's own constant-initialization check and codegen
+        // read it as a leaf (spec/oven.md "Valued immediate invocations")
+        // instead of running the call again.
+        for (&(c, _), r) in outer.iter().zip(&results) {
+            if let Ok(v) = *r {
+                let _ = self.ast.exprs.set_constant_value(c, v);
+            }
+        }
         // A constant-initialized variable's initializer (clang evaluates
         // it as a whole): its invocations keep their wrappers, unvalued
-        // in clang's dump.
-        let deferred = var.is_some_and(|v| self.checks_constant_init(v))
-            && results.iter().all(Result::is_ok)
+        // in clang's dump. One that is not a permitted result of its own
+        // (a prvalue owning heap the full-expression frees) is validated
+        // by that check instead: a constexpr or constinit variable's
+        // after it ([`Sema::report_deferred_immediates`]), another's here.
+        // The initializer is folded at most once for both.
+        let all_ok = results.iter().all(Result::is_ok);
+        let folds = var.is_some_and(|v| self.checks_constant_init(v))
+            && (all_ok || (report_after.is_none() && escalating.is_none()))
             && self.try_fold(e).is_some();
-        // One that is not a permitted result of its own (a prvalue owning
-        // heap the full-expression frees) is validated by that check
-        // instead: a constexpr or constinit variable's after it
-        // ([`Sema::report_deferred_immediates`]), another's here.
-        let validated = report_after.is_none()
-            && escalating.is_none()
-            && results.iter().any(Result::is_err)
-            && var.is_some_and(|v| self.checks_constant_init(v))
-            && self.try_fold(e).is_some();
+        let deferred = folds && all_ok;
+        let validated = folds && !all_ok;
         for (&(c, callee), r) in outer.iter().zip(results) {
             match r {
-                Ok(v) => {
-                    let _ = self.ast.exprs.set_constant_value(c, v);
+                Ok(_) => {
                     if deferred {
                         self.ast.exprs.set_constant_value_hidden(c);
                     }

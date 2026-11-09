@@ -185,6 +185,9 @@ pub(crate) fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         ArgError::RegexIgnorelist(f) => {
             Diag::new(DiagId::drv_regex_sanitizer_ignorelist, Span::INVALID).arg(f)
         }
+        ArgError::MemtagStackRequiresMte => {
+            Diag::new(DiagId::drv_stack_tagging_requires_hardware_feature, Span::INVALID)
+        }
         ArgError::PatchableEntryOffset => {
             Diag::new(DiagId::drv_unsupported_fpatchable_function_entry_argument, Span::INVALID)
         }
@@ -628,11 +631,13 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         Diag::new(DiagId::drv_invalid_int_value, Span::INVALID).arg(flag).arg(value).emit(&drv);
     }
     let tc = toolchain_of(&args, &drv);
-    for e in &features::resolve(&args, &tc.target).1 {
+    let (target_features, feature_errors) = features::resolve(&args, &tc.target);
+    for e in &feature_errors {
         emit_arg_error(e, &drv);
     }
     // spec/driver.md "Sanitizers".
     let (sanitize, sanitize_errors) = args.sanitize(!tc.target.is_aarch64(), tc.target.triple);
+    let mte = target_features.enabled().iter().any(|f| f == "mte");
     for e in &sanitize_errors {
         emit_arg_error(e, &drv);
     }
@@ -643,6 +648,10 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     }
     // WP-1032: the lists LLVM's `SpecialCaseList` rejects.
     for e in &args.sanitize.ignorelist_errors(sanitize.opts.kinds, &tc.resource_dir) {
+        emit_arg_error(e, &drv);
+    }
+    // WP-1138: clang checks the target feature after the option errors.
+    for e in &sanitize.hardware_errors(tc.target.is_aarch64(), mte) {
         emit_arg_error(e, &drv);
     }
     if args.help {

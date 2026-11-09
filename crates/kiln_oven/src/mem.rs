@@ -957,6 +957,12 @@ impl Memory {
         self.trial.clear();
     }
 
+    /// Frame and heap bytes live now: what of [`Memory::allocated`] is
+    /// not yet reclaimed (`reclaimed_bytes`).
+    pub fn held(&self) -> u64 {
+        self.frame.top + self.heap_live
+    }
+
     /// Live bytes now (`peak_bytes` is their maximum).
     pub fn live_bytes(&self) -> u64 {
         self.frame.top + self.heap_live + self.refl

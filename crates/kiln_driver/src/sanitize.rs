@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 
-use kiln_ast::sanitize::{SanitizerSet as S, parse_name};
+use kiln_ast::sanitize::{GROUPS, SanitizerSet as S, parse_name};
 use kiln_codegen::SanitizeOptions;
 use kiln_codegen::ignorelist::{IgnorelistError, SanitizerIgnorelist};
 
@@ -68,6 +68,11 @@ pub struct Sanitize {
     pub use_after_return: Option<&'static str>,
     /// `-fsanitize-memory-track-origins=` (0 when off).
     pub track_origins: u32,
+    /// clang would enable `memtag-stack` (named or by the `memtag`
+    /// group, not removed, and the target supports it), which kiln does
+    /// not implement but checks for the `mte` feature
+    /// ([`Sanitize::hardware_errors`]).
+    pub memtag_stack: bool,
 }
 
 /// The pass sanitizers' runtimes, named on the link line.
@@ -199,19 +204,29 @@ impl SanitizeFlags {
     ) -> (Sanitize, Vec<ArgError>) {
         let mut errors = Vec::new();
         let trap = self.trap_kinds(&mut errors);
+        // clang's `getSupportedSanitizers` complement for the Linux
+        // targets (WP-1138: x86-64 Linux has `shadow-call-stack`; no Linux
+        // target has `objc-cast`).
         let target_unsupported = if x86 {
-            S(S::SHADOW_CALL_STACK.0 | S::MEMTAG.0)
+            S(S::MEMTAG.0 | S::OBJC_CAST.0)
         } else {
-            S(S::NUMERICAL.0 | S::KERNEL_MEMORY.0)
+            S(S::NUMERICAL.0 | S::KERNEL_MEMORY.0 | S::OBJC_CAST.0)
         };
         let mut kinds = S::NONE;
         let mut all_remove = if opt0 { S::OBJECT_SIZE } else { S::NONE };
         let mut diagnosed = S::NONE;
+        // clang's group bits: the groups a later `-fno-sanitize=` names
+        // (`all` names every one) and the ones already diagnosed.
+        let mut removed_groups: Vec<&str> = Vec::new();
+        let mut diagnosed_groups: Vec<&str> = Vec::new();
+        let mut memtag_stack = false;
         for l in self.lists.iter().rev() {
             match l.list {
                 List::Add => {
                     let (explicit, expanded) = parse_values(l, false, &mut errors);
                     let explicit = explicit.without(all_remove);
+                    memtag_stack |= expanded.without(all_remove).has(S::MEMTAG_STACK)
+                        && !target_unsupported.has(S::MEMTAG_STACK);
                     if let Some(k) = Some(explicit.intersect(S::VPTR).intersect(trap))
                         .filter(|k| !k.is_empty() && !diagnosed.has_any(*k))
                     {
@@ -221,10 +236,40 @@ impl SanitizeFlags {
                         ));
                         diagnosed = diagnosed.union(k);
                     }
+                    // clang `setGroupBits`: a group is supported when one
+                    // of its members is, so a named group none of whose
+                    // members the target has is diagnosed as a single
+                    // sanitizer is (WP-1138: `-fsanitize=memtag` on x86-64).
+                    let groups: Vec<&str> = l
+                        .values
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|v| {
+                            GROUPS.iter().any(|(n, s)| {
+                                n == v
+                                    && target_unsupported.has(*s)
+                                    && !removed_groups.contains(n)
+                                    && !diagnosed_groups.contains(n)
+                            })
+                        })
+                        .collect();
                     let k = explicit.intersect(target_unsupported).without(diagnosed);
-                    if !k.is_empty() {
-                        errors.push(ArgError::UnsupportedForTarget(describe(l, k), triple.into()));
+                    if !k.is_empty() || !groups.is_empty() {
+                        let vals: Vec<&str> = l
+                            .values
+                            .iter()
+                            .map(String::as_str)
+                            .filter(|v| {
+                                groups.contains(v)
+                                    || parse_name(v, true).is_some_and(|s| s.has_any(k))
+                            })
+                            .collect();
+                        errors.push(ArgError::UnsupportedForTarget(
+                            format!("{}{}", l.opt, vals.join(",")),
+                            triple.into(),
+                        ));
                         diagnosed = diagnosed.union(k);
+                        diagnosed_groups.extend(groups);
                     }
                     if explicit.has_any(S::VPTR) && !rtti {
                         errors.push(ArgError::NotAllowedWith(
@@ -256,6 +301,11 @@ impl SanitizeFlags {
                 }
                 List::Remove => {
                     all_remove = all_remove.union(parse_values(l, true, &mut errors).1);
+                    for v in &l.values {
+                        removed_groups.extend(
+                            GROUPS.iter().filter(|(n, _)| v == "all" || n == v).map(|g| g.0),
+                        );
+                    }
                 }
                 _ => {}
             }
@@ -321,6 +371,7 @@ impl SanitizeFlags {
             use_after_scope,
             use_after_return: self.use_after_return,
             track_origins: self.track_origins.unwrap_or(0),
+            memtag_stack,
         };
         (s, errors)
     }
@@ -506,6 +557,19 @@ fn describe(l: &ListArg, mask: S) -> String {
 }
 
 impl Sanitize {
+    /// clang `SanitizerArgs::addArgs`'s check after the option errors:
+    /// `memtag-stack` on `AArch64` needs the `mte` target feature
+    /// (`-march=...+memtag`; WP-1138). `mte` is whether the target
+    /// features finally enable it.
+    #[must_use]
+    pub fn hardware_errors(&self, aarch64: bool, mte: bool) -> Vec<ArgError> {
+        if aarch64 && self.memtag_stack && !mte {
+            vec![ArgError::MemtagStackRequiresMte]
+        } else {
+            Vec::new()
+        }
+    }
+
     /// The `-fsanitize=` the linking `clang++` gets, so that it adds the
     /// runtimes (docs/design/sanitizers.md §2): the pass sanitizers, and
     /// `undefined` when a UB check reports through the runtime.
@@ -730,6 +794,61 @@ mod tests {
         assert!(!r.opts.kinds.has_any(S(S::VPTR.0 | S::OBJECT_SIZE.0)));
         let (_, e) = flags("-fsanitize-coverage=trace-pc");
         assert_eq!(e, [ArgError::UnsupportedByKiln("-fsanitize-coverage=trace-pc".into())]);
+    }
+
+    /// clang 19 and 22 `SanitizerArgs` on x86-64 and `AArch64` Linux
+    /// (WP-1138): a group none of whose members the target supports is
+    /// "unsupported option ... for target" as a single sanitizer is, and
+    /// `memtag-stack` on `AArch64` needs the `mte` feature.
+    #[test]
+    fn memtag_target_support() {
+        const X86: &str = "x86_64-unknown-linux-gnu";
+        let x86 = |s: &str| {
+            let (f, mut e) = flags(s);
+            let (r, e2) = f.resolve(true, false, true, X86);
+            e.extend(e2);
+            (r, e)
+        };
+        let t = |o: &str| ArgError::UnsupportedForTarget(o.into(), X86.into());
+        for v in ["memtag", "memtag-stack", "memtag-heap", "memtag-globals"] {
+            let o = format!("-fsanitize={v}");
+            let (r, e) = x86(&o);
+            assert_eq!(e, [t(&o)], "{o}");
+            assert!(!r.memtag_stack && r.hardware_errors(false, false).is_empty());
+        }
+        // `describeSanitizeArg`: the values naming the diagnosed kinds;
+        // the group bit is diagnosed apart from its members.
+        assert_eq!(x86("-fsanitize=memtag-stack,memtag").1, [t("-fsanitize=memtag-stack,memtag")]);
+        assert_eq!(
+            x86("-fsanitize=memtag-heap,memtag-stack -fsanitize=address,memtag").1,
+            [t("-fsanitize=memtag"), t("-fsanitize=memtag-heap,memtag-stack")]
+        );
+        // A later `-fno-sanitize=` of the group (or `all`) removes it; of
+        // its members only, not.
+        assert_eq!(x86("-fsanitize=memtag -fno-sanitize=memtag").1, []);
+        assert_eq!(x86("-fsanitize=memtag -fno-sanitize=all").1, []);
+        assert_eq!(
+            x86("-fsanitize=memtag -fno-sanitize=memtag-stack,memtag-heap,memtag-globals").1,
+            [t("-fsanitize=memtag")]
+        );
+        assert_eq!(x86("-fno-sanitize=memtag -fsanitize=memtag").1, [t("-fsanitize=memtag")]);
+        // x86-64 Linux has `shadow-call-stack` (kiln does not implement
+        // it); no Linux target has `objc-cast`.
+        assert_eq!(
+            x86("-fsanitize=shadow-call-stack").1,
+            [ArgError::UnsupportedByKiln("-fsanitize=shadow-call-stack".into())]
+        );
+        assert_eq!(x86("-fsanitize=objc-cast").1, [t("-fsanitize=objc-cast")]);
+        // AArch64: memtag is the target's, not kiln's; `memtag-stack`
+        // also needs `+memtag`.
+        let (r, e) = resolve("-fsanitize=memtag");
+        assert_eq!(e, [ArgError::UnsupportedByKiln("-fsanitize=memtag".into())]);
+        assert!(r.memtag_stack);
+        assert_eq!(r.hardware_errors(true, false), [ArgError::MemtagStackRequiresMte]);
+        assert_eq!(r.hardware_errors(true, true), []);
+        assert!(resolve("-fsanitize=memtag-stack").0.memtag_stack);
+        assert!(!resolve("-fsanitize=memtag-heap,memtag-globals").0.memtag_stack);
+        assert!(!resolve("-fsanitize=memtag -fno-sanitize=memtag-stack").0.memtag_stack);
     }
 
     #[test]
