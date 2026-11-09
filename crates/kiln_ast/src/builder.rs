@@ -1378,6 +1378,15 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// Records the last token of `e` where its children do not end it
+    /// (clang `getEndLoc`, WP-1083): the last piece of a concatenated
+    /// `StringLiteral` (a stringized `#x` piece lies in scratch space,
+    /// which coverage maps as a nested expansion), the `}` of a scalar
+    /// `CompoundLiteralExpr` (whose `InitListExpr` kiln folds away).
+    pub fn record_end_loc(&mut self, e: ExprId, end: Loc) {
+        let _ = self.ast.exprs.cold.end_loc.insert(e, end);
+    }
+
     /// `true` / `false` ([lex.bool]).
     pub fn bool_literal(&mut self, ty: QualType, value: bool, loc: Loc) -> ExprId {
         let deps = self.type_deps(ty);
