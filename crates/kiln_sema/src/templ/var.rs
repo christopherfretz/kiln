@@ -769,11 +769,17 @@ impl Sema<'_, '_> {
                     }
                 });
             }
+            // A definition instantiates the initializer before the type
+            // is compared, so an array of unknown bound is compared with
+            // the bound its initializer gives ([dcl.array]/3; clang
+            // `InstantiateVariableDefinition` first; WP-907).
+            if effect && !declaration {
+                self.instantiate_var_spec_init(v, name_loc);
+            }
             if !self.check_explicit_var_inst_type(sid.template, v, declared) || !effect {
                 return;
             }
             if !declaration {
-                self.instantiate_var_spec_init(v, name_loc);
                 self.mark_used(v);
                 if self.var_pattern_def(v).is_none() {
                     // Defined later: instantiated, and emitted, at the end

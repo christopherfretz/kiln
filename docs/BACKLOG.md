@@ -931,7 +931,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-897 | clang 22 __builtin_arm_gcsss takes void* (crates/kiln_ast/src/decl.rs:6073 is clang 19 "vC*vC*") | WP-846 | open |
 | WP-898 | clang 22 frame-pointer "non-leaf-no-reserve": tests/conformance/target.acle/ir-clrex.cpp fails under --compiler clang++-19 against oracle 22 (pre-existing) | WP-846 | open |
 | WP-879 | reflection correctness bundle 4: WP-796, WP-838, WP-866, WP-867, WP-870 (GCC 16.1 parity) | WP-830 | done (#398) |
-| WP-907 | sema: complete a variable template specialization of unknown array bound for sizeof/type_of (xfail temp.inst/p4-var-template-unknown-bound.cpp) | WP-879 | open |
+| WP-907 | sema: complete a variable template specialization of unknown array bound for sizeof/type_of (xfail temp.inst/p4-var-template-unknown-bound.cpp) | WP-879 | in progress |
 | WP-908 | perf: frontend ~3x slower than g++-16 on large repeated nested template-ids (5.1 MB TU: 1.28 s vs 0.44 s -fsyntax-only; docs/status/perf.md WP-879) | WP-879 | done (#407, via WP-919) |
 | WP-919 | perf: frontend throughput on large nested template-id TUs (profile dup8 + real TUs, fix hotspots, dup bench entry) | WP-908 | done (#407) |
 | WP-909 | decision: default -fkiln-reflection-mangling form (WP-879 study recommends gcc; operator decides) | WP-879 | open |

@@ -278,7 +278,9 @@ impl Sema<'_, '_> {
         let rref = self.ast.types.rvalue_ref_to(auto);
         let range_var = self.implicit_range_var(name, rref, range_loc);
         let init = match range {
-            RangeInit::Expr(e) => Initializer::Expr(e),
+            // `auto&& __range` is deduced from, and bound to, a range of
+            // unknown bound completed by its definition (WP-907).
+            RangeInit::Expr(e) => Initializer::Expr(self.complete_expr_array_bound(e)),
             RangeInit::List(l) => Initializer::List(l),
         };
         if self.finish_range_var(
