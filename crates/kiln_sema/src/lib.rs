@@ -1087,6 +1087,18 @@ pub struct Sema<'a, 'sm> {
     /// clang's `EST_Uninstantiated`): the first declaration maps to its
     /// pattern; its type carries `ExcSpec::Deferred(pattern)`.
     pub(crate) uninstantiated_exc: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// The `)` of each dynamic exception specification naming a
+    /// dependent type, by its types (function types are interned, so a
+    /// declaration's list may be an earlier one's): where clang reports a type its
+    /// substitution makes invalid ([except.spec]/2; `SubstExceptionSpec`
+    /// at the function type's end).
+    pub(crate) dyn_exc_rparen: kiln_source::fx::FxHashMap<Vec<QualType>, Vec<Loc>>,
+    /// Destructors first declared without an exception specification
+    /// (clang `hasImplicitExceptionSpec`, which reads the type as
+    /// written): their type's `ExcSpec::Deferred` is later replaced by
+    /// the computed specification, which a redeclaration still compares
+    /// as implicit ([except.spec]/4, DR1492).
+    pub(crate) implicit_exc_dtors: kiln_source::fx::FxHashSet<DeclId>,
     /// Function template specializations and members of class template
     /// specializations whose dependent annotations are substituted when
     /// needed (spec/annotations.md §5): the specialization maps to its
@@ -1500,6 +1512,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             delayed_exc_equiv: Vec::new(),
             unparsed_default_args: kiln_source::fx::FxHashMap::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
+            dyn_exc_rparen: kiln_source::fx::FxHashMap::default(),
+            implicit_exc_dtors: kiln_source::fx::FxHashSet::default(),
             uninstantiated_annots: kiln_source::fx::FxHashMap::default(),
             base_annotation_packs: false,
             annot_of_attr: kiln_source::fx::FxHashMap::default(),
