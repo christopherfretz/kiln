@@ -247,7 +247,7 @@ A keyword must not directly follow a letter, a digit or `_`.
 | `UNSUPPORTED: e1, e2` | If any expression is true, the test is UNSUPPORTED (`UNSUPPORTED: <it>`). |
 | `XFAIL: e1, e2` / `XFAIL: *` | If any expression is true, the test is expected to fail. |
 | `ADDITIONAL_COMPILE_FLAGS: f…` | Whitespace-split. Appended to the compile line in file order. |
-| `ADDITIONAL_COMPILE_FLAGS(<feature>): f…` | Appended after the plain flags when `<feature>` is exactly in the feature set. |
+| `ADDITIONAL_COMPILE_FLAGS(<feature>): f…` | Appended after the plain flags when `<feature>` is exactly in the feature set, or is exactly `clang` (`DIALECT_FLAG_FEATURES`, see "Feature set"). |
 | `FILE_DEPENDENCIES: a, b` | Each file, relative to the test's directory, is copied into the scratch directory. A missing file, a glob or a `%{…}` makes the test UNSUPPORTED (`driver: FILE_DEPENDENCIES`). |
 | `MODULE_DEPENDENCIES:` | `std` and `std.compat` need no build step: kiln builds them in-process from libc++'s module sources (spec/modules.md §2). With a package tree ("Toolchain") kiln's own search would find the system libc++'s `std.cppm`, not the tree's, so the test gets `-fprebuilt-module-path=<prefix>/share/libc++/v1` for the tree's `<prefix>/include/c++/v1` when that directory holds `std.cppm` (kiln mode only; `Config::module_source_flags`). Any other module makes the test UNSUPPORTED (`driver: modules`). |
 | `ALLOW_RETRIES: N` | A failing run step is retried up to `N` more times (see "Timeouts and retries"). `N` must be an integer, and the keyword may appear once; otherwise the test is an ERROR (lit's `ParserKind.INTEGER`). |
@@ -360,6 +360,19 @@ lit derives it for every compiler that understands `-Wno-<group>` flags
 `ADDITIONAL_COMPILE_FLAGS(gcc-style-warnings): -Wno-...` lines, which kiln
 accepts (`depr.numeric.limits.has.denorm/deprecated.verify.cpp` needs its
 `-Wno-unused-value`).
+
+`ADDITIONAL_COMPILE_FLAGS(clang):` flags apply to kiln (and in clang mode)
+although `clang` is not a feature: kiln implements clang's dialect and
+flags, so a flag libc++ adds for clang is one kiln needs too. libc++ 22
+`simd_unary.pass.cpp` adds `-flax-vector-conversions=integer` against the
+runner's `-flax-vector-conversions=none` (`vec_ext.h` `__negate` returns
+the plain-`char` vector `!v` into an `unsigned char` mask, an error under
+`none` in clang as in kiln); it passed in the WP-461 run only because
+kiln did not accept `-flax-vector-conversions=` yet, so the runner
+dropped the flag, and failed from WP-445 on. Only the exact name `clang`
+counts: not `clang-<N>`, `apple-clang` or `clang-modules-build`, and
+`REQUIRES:`, `UNSUPPORTED:` and `XFAIL:` never see it (WP-980,
+`directives.rs` `clang_dialect_flags`).
 
 `c++26`, `c++experimental`, `large_tests`, `long_tests`,
 `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`,
@@ -748,7 +761,8 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
 - `boolexpr.rs`: grammar, precedence, regex subset, parse errors.
 - `directives.rs`: classification table, keywords, verdicts, `END.`,
   `lit.local.cfg`; `local_cfg_substitutions_and_features`,
-  `local_cfg_mirror`, `run_lines` (WP-386).
+  `local_cfg_mirror`, `run_lines` (WP-386); `clang_dialect_flags`
+  (WP-980).
 - `script.rs`: `expansion`, `checks`, `line_kinds`, `quoting` (WP-386).
 - `cluster.rs`: normalization, message extraction, counting, crash keys.
 - `run.rs`: verdict order, outcome rules; `env_exclusions` (the lists

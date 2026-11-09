@@ -108,6 +108,16 @@ const FEATURES: &[&str] = &[
     "kiln",
 ];
 
+/// Compiler identities whose `ADDITIONAL_COMPILE_FLAGS(<identity>):` flags
+/// apply although the identity is not in the feature set: kiln implements
+/// clang's dialect and flags, so a flag libc++ adds for clang
+/// (`simd_unary.pass.cpp`'s `-flax-vector-conversions=integer` against the
+/// runner's `-flax-vector-conversions=none`, `-Wno-deprecated`) is one kiln
+/// needs too. Only the exact name `clang`: not `clang-<N>`,
+/// `apple-clang` or `clang-modules-build`. `REQUIRES:` / `UNSUPPORTED:` /
+/// `XFAIL:` never see it (spec/libcxx.md "Directives", WP-980).
+pub const DIALECT_FLAG_FEATURES: &[&str] = &["clang"];
+
 /// The static feature set plus the [`target_features`] of
 /// [`target_triple`], without the ones derived from the headers (see
 /// [`detect`]).

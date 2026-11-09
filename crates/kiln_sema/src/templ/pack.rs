@@ -1129,10 +1129,17 @@ impl Sema<'_, '_> {
             return;
         }
         match n.kind() {
+            // A substituted function parameter pack names its elements,
+            // not a pack of a level still to substitute (as a
+            // `SubstNonTypeTemplateParmPackExpr` names none); its type is
+            // the pattern parameter's, so it must not fall through to the
+            // type walk below (WP-980: an empty one in a generic lambda's
+            // fold kept the instantiated expansion unexpanded).
             ExprKind::PackExpansionExpr
             | ExprKind::CXXFoldExpr
             | ExprKind::SizeOfPackExpr
-            | ExprKind::PackIndexingExpr => return,
+            | ExprKind::PackIndexingExpr
+            | ExprKind::FunctionParmPackExpr => return,
             ExprKind::DeclRefExpr => {
                 let d = self.ast.exprs.decl(e);
                 if self.is_pack_decl(d) && !out.contains(&d) {

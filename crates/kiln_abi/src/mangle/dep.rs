@@ -548,6 +548,33 @@ impl Mangler<'_, '_> {
         ok
     }
 
+    /// `L <type> <value> E`, or `sZ <param>` for a substituted
+    /// `sizeof...` (a non-dependent `SizeOfPackExpr` in clang, which still
+    /// names its pack).
+    fn integer_literal(&mut self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let pack = ast.templates.size_of_pack_origin.get(e);
+        if let Some(p) = pack.and_then(|&d| ast.template_parm(d)) {
+            self.out.push_str("sZ");
+            self.template_param_at(u32::from(p.depth), u32::from(p.index));
+            return true;
+        }
+        let ty = ast.exprs.get(e).ty();
+        let Some(v) = ast.exprs.int_value(e) else {
+            // A literal outside the 64-bit signed range
+            // (`18446744073709551615ull`) keeps its value as a constant:
+            // `L <type> <decimal> E` all the same (WP-980).
+            let Some(c) = ast.exprs.literal_const(e) else { return false };
+            self.value_in_arg(ty, c, false);
+            return true;
+        };
+        self.out.push('L');
+        self.ty(ty);
+        self.out.push_str(&v.to_string());
+        self.out.push('E');
+        true
+    }
+
     fn expression_node(&mut self, e: ExprId, arity: usize) -> bool {
         let ast = self.ast;
         if self.substituted_value(e) {
@@ -557,21 +584,7 @@ impl Mangler<'_, '_> {
         let e = self.skip_transparent(e);
         let n = ast.exprs.get(e);
         match n.kind() {
-            ExprKind::IntegerLiteral => {
-                // A substituted `sizeof...` (a non-dependent
-                // `SizeOfPackExpr` in clang) still names its pack.
-                let pack = ast.templates.size_of_pack_origin.get(e);
-                if let Some(p) = pack.and_then(|&d| ast.template_parm(d)) {
-                    self.out.push_str("sZ");
-                    self.template_param_at(u32::from(p.depth), u32::from(p.index));
-                    return true;
-                }
-                let Some(v) = ast.exprs.int_value(e) else { return false };
-                self.out.push('L');
-                self.ty(n.ty());
-                self.out.push_str(&v.to_string());
-                self.out.push('E');
-            }
+            ExprKind::IntegerLiteral => return self.integer_literal(e),
             ExprKind::CharacterLiteral => {
                 self.out.push('L');
                 self.ty(n.ty());
@@ -772,27 +785,9 @@ impl Mangler<'_, '_> {
         let node = ast.exprs.get(expr);
         match node.kind() {
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => return self.call_expression(expr),
-            ExprKind::UnaryOperator => {
-                let code = match ast.exprs.unary_op(expr) {
-                    UnaryOp::PostInc | UnaryOp::PreInc => "pp",
-                    UnaryOp::PostDec | UnaryOp::PreDec => "mm",
-                    UnaryOp::AddrOf => "ad",
-                    UnaryOp::Deref => "de",
-                    UnaryOp::Plus => "ps",
-                    UnaryOp::Minus => "ng",
-                    UnaryOp::Not => "co",
-                    UnaryOp::LNot => "nt",
-                    _ => return false,
-                };
-                self.out.push_str(code);
-                return self.expression(ast.exprs.operand(expr));
-            }
-            ExprKind::BinaryOperator => {
-                let code = binary_code(ast.exprs.binary_op(expr));
-                self.out.push_str(code);
-                let [lhs, rhs] = ast.exprs.operands(expr);
-                return self.expression(lhs) && self.expression(rhs);
-            }
+            ExprKind::UnaryOperator
+            | ExprKind::BinaryOperator
+            | ExprKind::CompoundAssignOperator => return self.operator_operands(expr),
             ExprKind::ConditionalOperator => {
                 let Some(cond) = ExprId::try_new(node.a()) else { return false };
                 let [then, els] = ast.exprs.cond_arms(expr);
@@ -862,9 +857,61 @@ impl Mangler<'_, '_> {
                 self.ty(node.ty());
                 return self.expression(ast.exprs.operand(expr));
             }
+            ExprKind::CXXDeleteExpr => return self.delete_expression(expr),
             _ => return false,
         }
         true
+    }
+
+    /// A built-in unary or binary operator, compound assignments
+    /// included: `<operator-name> <expression>+`.
+    fn operator_operands(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        let node = ast.exprs.get(expr);
+        if node.kind() == ExprKind::UnaryOperator {
+            let code = match ast.exprs.unary_op(expr) {
+                UnaryOp::PostInc | UnaryOp::PreInc => "pp",
+                UnaryOp::PostDec | UnaryOp::PreDec => "mm",
+                UnaryOp::AddrOf => "ad",
+                UnaryOp::Deref => "de",
+                UnaryOp::Plus => "ps",
+                UnaryOp::Minus => "ng",
+                UnaryOp::Not => "co",
+                UnaryOp::LNot => "nt",
+                // clang has no operator name for these and mangles the
+                // operand alone (WP-980).
+                UnaryOp::Real | UnaryOp::Imag | UnaryOp::Extension => "",
+                UnaryOp::Coawait => return false,
+            };
+            self.out.push_str(code);
+            return self.expression(ast.exprs.operand(expr));
+        }
+        self.out.push_str(binary_code(ast.exprs.binary_op(expr)));
+        // A compound assignment is clang's `CompoundAssignOperator`, a
+        // `BinaryOperator` to the mangler (`pL`, `mI`, ...; WP-980): its
+        // left operand is `a`, the right in the side record.
+        let [lhs, rhs] = if node.kind() == ExprKind::CompoundAssignOperator {
+            let Some(lhs) = ExprId::try_new(node.a()) else { return false };
+            [lhs, ast.exprs.compound_assign(expr).rhs]
+        } else {
+            ast.exprs.operands(expr)
+        };
+        self.expression(lhs) && self.expression(rhs)
+    }
+
+    /// `[gs] dl|da <expression>` (clang `CXXDeleteExprClass`; WP-980).
+    fn delete_expression(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        let node = ast.exprs.get(expr);
+        if node.has(kiln_ast::expr::ExprFlags::GLOBAL) {
+            self.out.push_str("gs");
+        }
+        self.out.push_str(if node.has(kiln_ast::expr::ExprFlags::ARRAY_FORM) {
+            "da"
+        } else {
+            "dl"
+        });
+        self.expression(ast.exprs.delete_operand(expr))
     }
 
     /// The member-access, pseudo-destructor, functional-cast and

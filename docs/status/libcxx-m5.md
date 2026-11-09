@@ -79,6 +79,30 @@ an XPASS is the cue to drop its row.
 | wording: the constraint note prints the substituted expression | 1 | none yet | `libcxx/algorithms/cpp17_iterator_concepts.verify` |
 | wording: `std::hash<std::monostate>` printed qualified | 1 | WP-432 | `variant.hash/hash.depr.verify` |
 
+## Regressions fixed in WP-980
+
+Tests that passed in the WP-461 run and failed on main (found by the
+WP-961 sweep). Each was bisected to the change that exposed it
+(spec/landed/abi/WP-980.md).
+
+| cluster | count | regressor | first error | fix | test |
+|---|---:|---|---|---|---|
+| chrono | 22 (std/time) | 9cab5cf2e (WP-818, PR #383) | "cannot yet mangle expression type MaterializeTemporaryExpr" in `operator<<`'s requires-clause | the mangler skips temporaries, as clang does (also WP-933) | `tests/mangle/materialized_temporary.cpp` |
+| mdspan | 5 | c8ce199c7 (WP-802, PR #363) | "constant evaluation of CXXFoldExpr" (rank-0 `layout_right`/`layout_stride` `operator()`) | the pack-length sweep stops at a `FunctionParmPackExpr` | `temp.variadic/p7-empty-function-parameter-pack-in-generic-lambda-fold.cpp` |
+| simd | 1 | 87f7d8f0f (WP-445, PR #189) | `simd_unary`: `!v` on an `unsigned char` vector rejected under `-flax-vector-conversions=none` | the runner applies `ADDITIONAL_COMPILE_FLAGS(clang)` to kiln | `ext.clang.vector_type/lax-*-logical-not-char-vector.cpp`, `directives.rs` `clang_dialect_flags` |
+| stable_sort | 1 | none (signed plain `char` only) | `++` on `signed char` 127 faulted in the Oven | narrow signed `++`/`--` promote to `int` and wrap | `expr.pre.incr/narrow-signed-wrap-*.cpp` |
+
+Subset counts with libc++ 22.1.8 on aarch64, before (main at
+122d1442c, the branch base) and after:
+
+| subset | before | after |
+|---|---|---|
+| std/time + std/containers/views/mdspan + std/experimental/simd (554) | 523 pass, 28 fail, 3 unsupported | 551 pass, 0 fail, 3 unsupported |
+| libcxx/time + alg.sort/stable.sort (32) | not measured | 21 pass, 0 fail, 11 unsupported |
+
+stable_sort's `test<char>()` passes on aarch64 either way because plain
+`char` is unsigned there; it failed only on x86-64.
+
 ## Fixed in WP-674
 
 The `M5_TRIAGED` rows this fixes are gone from the ledger (each test was
