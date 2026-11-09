@@ -866,6 +866,11 @@ impl Sema<'_, '_> {
         // Bases ([class.prop]/3, [dcl.init.aggr]/1.4).
         let bases: Vec<BaseSpec> = self.ast.decls.bases(r, &self.ast.lists).copied().collect();
         let mut bases_with_fields = false;
+        // Before C++17 (P0017R1) an aggregate has no base classes at all
+        // (C++11/14 [dcl.init.aggr]/1; clang `setBases`; WP-1090).
+        if self.std < kiln_lex::Std::Cxx17 && !bases.is_empty() {
+            bits = bits.without(DefinitionBits::AGGREGATE);
+        }
         for b in &bases {
             let Some(bd) = self.ast.types.as_record(b.ty).and_then(|d| self.ast.definition(d))
             else {
