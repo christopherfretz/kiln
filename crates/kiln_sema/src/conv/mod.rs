@@ -898,6 +898,15 @@ fn bind_reference(
                     s.emit(d);
                     return Ok(s.recover_err(&[e], at));
                 }
+                // [class.abstract]/3: the /5.4.1 temporary is an object
+                // of an abstract class (clang's `checkAbstractType`).
+                if !class_src
+                    && let Ok(x) = r
+                    && !s.is_err_expr(x)
+                    && s.require_non_abstract_alloc(at, referee)
+                {
+                    return Ok(s.recover_err(&[x], at));
+                }
                 return r;
             }
             if !class_src && !plain_lref {

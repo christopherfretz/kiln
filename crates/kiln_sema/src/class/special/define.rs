@@ -1885,7 +1885,7 @@ impl Sema<'_, '_> {
                 continue;
             }
             if let Some(dtor) = self.subobject_dtor(vb) {
-                // todo(WP-067b): err_access_dtor_vbase.
+                self.check_vbase_dtor_access(dtor, vb, class);
                 self.mark_function_referenced(dtor, loc);
                 self.diagnose_deleted_use(dtor, loc);
             }

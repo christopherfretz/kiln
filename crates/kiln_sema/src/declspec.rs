@@ -705,6 +705,9 @@ pub struct Declarator {
     /// A constructor, destructor, conversion-function or operator-function
     /// declarator-id and where it was written (`name` is `None` then).
     pub special: Option<(SpecialName, Loc)>,
+    /// Where a conversion-function-id's type-specifier was written
+    /// (`operator const auto *`: the `auto`), else invalid.
+    pub conv_type_loc: Loc,
     /// The virt-specifier `override` ([class.virtual]/1).
     pub virt_override: Option<Loc>,
     /// The virt-specifier `final`.
@@ -906,6 +909,7 @@ impl Declarator {
             grouping: false,
             asm_label: None,
             special: None,
+            conv_type_loc: Loc::INVALID,
             site: DeclSite::Plain,
             outer_paren: None,
             parens: Vec::new(),

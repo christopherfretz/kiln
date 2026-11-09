@@ -30,9 +30,14 @@ KILN_CXX="${KILN_OSS_CXX:-}"
 # (`clang-scan-deps-22` beside kiln++, a link to the kiln binary); the
 # check refuses a system clang-scan-deps. Then an incremental rebuild:
 # touching the interface recompiles it, the implementation unit and the
-# consumer, but not the partition. Skipped without cmake >= 3.28 or ninja,
-# except under --cmake-modules, which runs only this check and FAILs then
-# (and without a kiln++); GitHub CI runs it so (WP-1034).
+# consumer, but not the partition. WP-984: the project builds with libc++,
+# and its `stdapp` does `import std;` through CXX_MODULE_STD (CMake builds
+# libc++'s std.cppm with kiln, from the libc++.modules.json kiln prints;
+# cmake >= 3.30); touching the interface or stdapp's source never
+# rebuilds the std module. XDG_CACHE_HOME stays under $M.
+# Skipped without cmake >= 3.28 or ninja, except under --cmake-modules,
+# which runs only this check and FAILs then (and without a kiln++); GitHub
+# CI runs it so (WP-1034).
 cmake_modules() {
   local M="$TMP/modules" v
   v="$(cmake --version 2>/dev/null | sed -n 's/^cmake version \([0-9]*\)\.\([0-9]*\).*/\1 \2/p')"
@@ -43,21 +48,37 @@ cmake_modules() {
   fi
   echo "cmake modules: $(cmake --version | head -1), ninja $(ninja --version), kiln++ $KILN_CXX"
   mkdir -p "$M" && cp -R "$FIX/modules" "$M/src"
-  cmake -S "$M/src" -B "$M/b" -G Ninja -DCMAKE_CXX_COMPILER="$KILN_CXX" > "$M/configure.log" 2>&1
+  local std_ok=0
+  [ "$(echo "$v" | awk '{print ($1 > 3 || ($1 == 3 && $2 >= 30))}')" = 1 ] && std_ok=1
+  XDG_CACHE_HOME="$M/xdg" cmake -S "$M/src" -B "$M/b" -G Ninja -DCMAKE_CXX_COMPILER="$KILN_CXX" -DCMAKE_CXX_FLAGS=-stdlib=libc++ > "$M/configure.log" 2>&1
   check "cmake modules: configure" "[ $? -eq 0 ]"
   local scanner; scanner="$(sed -n 's/^CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS:FILEPATH=//p' "$M/b/CMakeCache.txt" 2>/dev/null)"
   check "cmake modules: the scanner is kiln's alias" "[ -n '$scanner' ] && [ \"\$(readlink -f '$scanner')\" = \"\$(readlink -f '$KILN_CXX')\" ]"
-  ninja -C "$M/b" > "$M/build.log" 2>&1
+  XDG_CACHE_HOME="$M/xdg" ninja -C "$M/b" -v > "$M/build.log" 2>&1
   check "cmake modules: build" "[ $? -eq 0 ]"
   check "cmake modules: app prints hello 42" "[ \"\$('$M/b/app')\" = 'hello 42' ]"
+  if [ "$std_ok" = 1 ]; then
+    check "cmake modules: CMake found import std support" "! grep -q 'no import std' '$M/configure.log'"
+    check "cmake modules: std.cppm built by kiln" "grep -F -- '-c ' '$M/build.log' | grep -qF 'libc++/v1/std.cppm'"
+    check "cmake modules: stdapp prints import std 6" "[ \"\$('$M/b/stdapp')\" = 'import std 6' ]"
+  else
+    echo "SKIP cmake modules: import std needs cmake >= 3.30"
+  fi
   sleep 1 && touch "$M/src/greet.cppm"
-  ninja -C "$M/b" -v > "$M/rebuild.log" 2>&1
+  XDG_CACHE_HOME="$M/xdg" ninja -C "$M/b" -v > "$M/rebuild.log" 2>&1
   check "cmake modules: rebuild after touching the interface" "[ $? -eq 0 ]"
   local o
   for o in greet.dir/greet.cppm.o greet.dir/greet-impl.cpp.o app.dir/main.cpp.o; do
     check "cmake modules: touch greet.cppm recompiles $o" "grep -qF -- '-o CMakeFiles/$o -c ' '$M/rebuild.log'"
   done
   check "cmake modules: touch greet.cppm leaves the partition" "! grep -qF -- '-o CMakeFiles/greet.dir/greet-part.cppm.o -c ' '$M/rebuild.log'"
+  check "cmake modules: touch greet.cppm leaves the std module" "! grep -qF 'libc++/v1/std' '$M/rebuild.log'"
+  if [ "$std_ok" = 1 ]; then
+    sleep 1 && touch "$M/src/stdmain.cpp"
+    XDG_CACHE_HOME="$M/xdg" ninja -C "$M/b" -v > "$M/rebuild-std.log" 2>&1
+    check "cmake modules: rebuild after touching stdmain.cpp" "[ $? -eq 0 ] && grep -qF -- '-o CMakeFiles/stdapp.dir/stdmain.cpp.o -c ' '$M/rebuild-std.log'"
+    check "cmake modules: touch stdmain.cpp leaves the std module" "! grep -qF 'libc++/v1/std' '$M/rebuild-std.log'"
+  fi
   check "cmake modules: then nothing to do" "ninja -C '$M/b' | grep -q 'no work to do'"
 }
 ONLY_CMAKE_MODULES=""
@@ -65,7 +86,7 @@ if [ "${1:-}" = --cmake-modules ]; then
   ONLY_CMAKE_MODULES=1
   if [ -n "$KILN_CXX" ]; then cmake_modules; else check "cmake modules: a kiln++ (KILN_OSS_CXX)" false; fi
   if [ "$FAILS" -gt 0 ]; then
-    for l in configure build rebuild; do
+    for l in configure build rebuild rebuild-std; do
       [ -f "$TMP/modules/$l.log" ] && { echo "--- $l.log (tail)"; tail -n 40 "$TMP/modules/$l.log"; }
     done
   fi

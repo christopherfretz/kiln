@@ -503,6 +503,28 @@ impl Toolchain {
         }
     }
 
+    /// libc++'s module manifest, `libc++.modules.json` (what
+    /// `-print-file-name=libc++.modules.json` prints, and what `cmake`
+    /// reads for `CXX_MODULE_STD`): beside the libc++ whose module sources
+    /// [`Self::libcxx_module_dir`] names, so its relative `source-path`
+    /// entries resolve to those sources: `<prefix>/lib/<triple>/` or
+    /// `<prefix>/lib/`, else the LLVM directory's `lib/`.
+    pub fn libcxx_modules_json(&self) -> Option<PathBuf> {
+        const NAME: &str = "libc++.modules.json";
+        let dir = self.libcxx_module_dir();
+        // `<prefix>/share/libc++/v1` -> `<prefix>`.
+        let prefix = dir.parent().and_then(Path::parent).and_then(Path::parent);
+        let mut candidates = Vec::new();
+        if let Some(prefix) = prefix {
+            candidates.push(prefix.join("lib").join(self.target.triple).join(NAME));
+            candidates.push(prefix.join("lib").join(NAME));
+        }
+        if let Some(llvm) = self.llvm_dir() {
+            candidates.push(llvm.join("lib").join(NAME));
+        }
+        candidates.into_iter().find(|p| p.is_file())
+    }
+
     /// clang `Generic_GCC::addGCCLibStdCxxIncludePaths`.
     fn libstdcxx_dirs(&self, v: &mut Vec<SearchDirSpec>) {
         let Some(g) = &self.gcc else { return };

@@ -64,11 +64,6 @@ Ninja) through `kiln-scan-deps`. What is missing (spec/modules.md
   ([WP-983](BACKLOG.md)). Header units work from their headers in a
   direct compile, but the scanner rejects `import "h";` and
   `import <h>;`, so a CMake build cannot use them.
-- **`import std;` through CMake** (`CXX_MODULE_STD`) and an `import std;`
-  module-file cache ([WP-984](BACKLOG.md)). Outside CMake, `import std;`
-  compiles libc++'s `std.cppm` in every importing translation unit unless
-  you precompile it yourself (`--precompile std.cppm`, then
-  `-fmodule-file=std=std.pcm`, and link `std.o`).
 - **Module files hold sources, not a serialised AST**, so an importer
   re-parses the module's text. Importing libc++'s `std` module file costs
   about what compiling `std.cppm` in-process costs
@@ -118,8 +113,8 @@ These flags are the exceptions: they are accepted and have no effect.
 | `-F <dir>` | warning; framework directories do not exist on Linux | — |
 | `-f[no-]stack-clash-protection`, `-f[no-]common`, `-fstack-usage`, `-m64`, `-pipe` and a few more | accepted silently; listed in spec/driver.md, "Codegen flags" | — |
 
-`kiln++ --help` does not list every implemented flag yet.
-spec/driver.md, "Options", is the complete list.
+`kiln++ --help` lists the flags a user is likely to need, grouped as in
+clang's help; spec/driver.md, "Options", is the complete list.
 
 **Attributes.** Every attribute clang knows is in one of three classes
 (`crates/kiln_sema/src/attr_triage.rs`, audit in

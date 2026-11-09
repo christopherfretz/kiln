@@ -8,7 +8,7 @@ use kiln_ast::ExprId;
 use kiln_ast::QualType;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{ExprDeps, ExprKind};
-use kiln_ast::ids::ArgListId;
+use kiln_ast::ids::{ArgListId, ListId};
 use kiln_ast::ids::{RawId, TemplateNameId};
 use kiln_ast::templates::Requirement;
 use kiln_ast::types::{
@@ -360,7 +360,7 @@ impl Sema<'_, '_> {
 
     /// A pack parameter of `params` deduced from no elements is empty
     /// ([temp.deduct.type]/9).
-    fn empty_undeduced_packs(&mut self, params: kiln_ast::ids::ListId, d: &mut DeducedArgs) {
+    fn empty_undeduced_packs(&mut self, params: ListId, d: &mut DeducedArgs) {
         for i in 0..self.ast.lists.len(params) {
             let pack = self
                 .ast
@@ -446,6 +446,104 @@ impl Sema<'_, '_> {
         let r = ok && !failed;
         let _ = self.templ.partial_order.insert((a, b), r);
         r
+    }
+
+    /// Whether the primary template of partial specialization `p` is at
+    /// least as specialized as `p` ([temp.spec.partial.general]/9.2,
+    /// DR1495; clang `isMoreSpecializedThanPrimary`): `p`'s parameters
+    /// deduce from the primary's own parameters as unique synthesized
+    /// arguments, and substituting them gives those arguments back. Then
+    /// `p` is not more specialized than the primary. Conservative: false
+    /// whenever either side has a pack or constraints (ordered by
+    /// constraints, WP-1017 follow-up), when a primary non-type parameter
+    /// has a placeholder or dependent type, and for a member template of a
+    /// templated class (checked per instantiation by clang).
+    pub(crate) fn primary_at_least_as_specialized(&mut self, p: DeclId, loc: Loc) -> bool {
+        let Some((_, info)) = self.ast.partial_spec_info(p) else { return false };
+        let info = *info;
+        let lp = *self.ast.templates.param_list(info.params);
+        if info.has_pack || lp.depth > 0 {
+            return false;
+        }
+        let head = self.head_template(info.template);
+        let Some(ti) = self.ast.template_info(head).copied() else { return false };
+        let lt = *self.ast.templates.param_list(ti.params);
+        if lt.depth != lp.depth {
+            return false;
+        }
+        let (mut cp, mut ct) = (Vec::new(), Vec::new());
+        self.head_constraints(lp.params, lp.requires, &mut cp);
+        self.head_constraints(lt.params, lt.requires, &mut ct);
+        if !cp.is_empty() || !ct.is_empty() {
+            return false;
+        }
+        let primary: Vec<DeclId> = self.ast.lists.iter::<DeclId>(lt.params).collect();
+        if primary.iter().any(|&x| self.ast.template_parm(x).is_none_or(|i| i.pack)) {
+            return false;
+        }
+        // A primary non-type parameter typed `auto` or by another
+        // parameter (`template <auto V>`, `template <class T, T V>`) needs
+        // the parameter type itself deduced; not modelled, so no check.
+        let typed_by_param = primary.iter().any(|&x| {
+            self.kind_of(x) == DeclKind::NonTypeTemplateParm
+                && self
+                    .ast
+                    .decls
+                    .get(x)
+                    .ty()
+                    .is_none_or(|t| self.contains_deduced(t) || self.is_dependent_type(t))
+        });
+        if typed_by_param {
+            return false;
+        }
+        let ps: Vec<TemplateArg> = self.ast.types.args(info.canonical).to_vec();
+        if ps.len() != primary.len() || ps.iter().any(|&a| self.is_pack_arg(a)) {
+            return false;
+        }
+        let as_: Vec<TemplateArg> = primary
+            .iter()
+            .map(|&x| {
+                let a = self.template_param_arg(x);
+                self.ast.types.canonical_arg(a)
+            })
+            .collect();
+        self.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        let mut d = DeducedArgs::new(lp.depth, self.ast.lists.len(lp.params));
+        let mut ok = self.deduce_args(&ps, &as_, true, &mut d, loc) == Tdk::Success
+            && d.first_undeduced().is_none()
+            && !self.deduced_nttp_type_mismatch(lp.params, &d.args);
+        if ok {
+            let deduced = self.ast.types.arg_list(&d.args);
+            let injected = self.ast.types.arg_list(&as_);
+            ok = self.partial_args_match(&info, lp.depth, deduced, injected, true, loc);
+        }
+        let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+        ok && !failed
+    }
+
+    /// [`Self::primary_at_least_as_specialized`]: a non-type parameter
+    /// deduced from a synthesized argument of another type (`signed char C`
+    /// from `long N`) fails deduction ([temp.deduct.type]/20, clang
+    /// `err_deduced_non_type_template_arg_type_mismatch`), so the primary
+    /// is not at least as specialized.
+    fn deduced_nttp_type_mismatch(&self, params: ListId, deduced: &[TemplateArg]) -> bool {
+        let t = &self.ast.types;
+        self.ast.lists.iter::<DeclId>(params).zip(deduced).any(|(x, a)| {
+            let Some(pt) = self.ast.decls.get(x).ty() else { return false };
+            if self.kind_of(x) != DeclKind::NonTypeTemplateParm {
+                return false;
+            }
+            let at = match a.view() {
+                ArgView::Expr { expr, .. } => self.ast.exprs.get(expr).ty(),
+                ArgView::Profile(pr) => match t.profile_expr(pr) {
+                    Some(e) => self.ast.exprs.get(e).ty(),
+                    None => return false,
+                },
+                ArgView::Value { ty, .. } => ty,
+                _ => return false,
+            };
+            !t.same_unqualified(t.canonical(pt), t.canonical(at))
+        })
     }
 
     /// Whether function template `a` is more specialized than `b` in the
