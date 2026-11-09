@@ -632,6 +632,56 @@ impl Oven {
         ]))
     }
 
+    /// [dcl.ref]/5, [expr.const]/22: a reference constant expression
+    /// refers to an object, never one past the end of one (clang
+    /// `CheckLValueConstantExpression`, `note_constexpr_past_end`; both
+    /// clang 19 and 22, WP-1021). A pointer may (an extension).
+    fn check_ref_past_end(
+        &self,
+        b: &dyn SemaBridge,
+        q: QualType,
+        pointee: OTy,
+        p: Ptr,
+        a: &crate::mem::Alloc,
+        loc: Loc,
+    ) -> Result<(), Freeze> {
+        let offset = u64::from(p.off);
+        let size = u64::from(a.size);
+        if !b.ast().types.is_reference(q) || !(p.past || offset >= size) {
+            return Ok(());
+        }
+        if self.run.silent {
+            return Err(Freeze::Fault(FailKind::NotConstant));
+        }
+        let ast = b.ast();
+        // A subobject designator (`&s.a + 1`, `a[2]`) against the
+        // complete object (`&x + 1`).
+        let what = if pointee != a.ty || offset < size { "subobject of " } else { "" };
+        let (name, at, here) = match a.origin {
+            Origin::Global(d) | Origin::External(d) | Origin::Var(d) => {
+                let mut name = String::new();
+                kiln_ast::dump::AstNames::new(ast).write_name(d, &mut name);
+                (format!("'{name}'"), ast.decls.get(d).loc(), "declared here")
+            }
+            Origin::Let(t) => (
+                "temporary".to_owned(),
+                let_mte(ast, t).map_or(Loc::INVALID, |e| ast.exprs.get(e).loc()),
+                "temporary created here",
+            ),
+            _ => return Err(Freeze::Fault(FailKind::NotConstant)),
+        };
+        let mut notes = vec![Note::new(
+            loc,
+            format!(
+                "dereferenced pointer past the end of {what}{name} is not a constant expression"
+            ),
+        )];
+        if at != Loc::INVALID {
+            notes.push(Note::new(at, here));
+        }
+        Err(Freeze::Notes(notes))
+    }
+
     /// Whether automatic variable `d` is constexpr-referenceable from the
     /// initializing declaration of the variable being initialized
     /// (P2686R5 [expr.const.init]/2, C++26): that variable is automatic
@@ -751,6 +801,7 @@ impl Oven {
             return Err(Freeze::Fault(FailKind::NotConstant));
         }
         if p.is_static() && (!automatic || referenceable) {
+            self.check_ref_past_end(b, q, pointee, p, &a, loc)?;
             let base = match a.origin {
                 Origin::Global(d) | Origin::External(d) => PtrBase::Decl(d),
                 Origin::Str(lit, Some(origin)) => PtrBase::StringLit { lit, origin },
@@ -779,6 +830,7 @@ impl Oven {
             // result, so its variable is dynamically initialized and the
             // destructor registered at exit ([basic.start.term]; WP-231).
             self.check_let_destruction(b, t)?;
+            self.check_ref_past_end(b, q, pointee, p, &a, loc)?;
             if !self.let_pending.iter().any(|&(x, _)| x == t) {
                 self.let_pending.push((t, Ptr::with_off(raw, 0, false)));
             }

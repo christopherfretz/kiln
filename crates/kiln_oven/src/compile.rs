@@ -2861,17 +2861,7 @@ impl Compiler<'_> {
                 let m = self.next;
                 let ext = self.begin_extended(init);
                 self.bind_ref(init, r);
-                if self.o.clang_compat >= 22 {
-                    // [expr.add]/4: clang 22 rejects a reference to the
-                    // object past the end (WP-948).
-                    let rq = n.ty().unwrap_or(QualType::INT);
-                    let pq = self.b.ast().types.pointee(rq).unwrap_or(rq);
-                    let ty = self.ty(pq);
-                    let pc = self.emit(Op::RefChk, 0, &[r, ty.0]);
-                    // clang notes the initializer's start (`arr[3]`).
-                    let loc = self.begin(init);
-                    self.o.sites.push(Site { pc: pc as u32, loc, e: Some(init) });
-                }
+                self.ref_chk(r, n.ty().unwrap_or(QualType::INT), init);
                 self.end_extended(&ext);
                 self.next = m;
             }
@@ -5616,11 +5606,31 @@ impl Compiler<'_> {
         r
     }
 
+    /// [expr.add]/4: clang 22 rejects binding a reference of type `rq`
+    /// (in register `r`) to the object past the end (WP-948), for a
+    /// variable or a data member (WP-1021); clang 19 and a parameter do
+    /// not check. clang notes the initializer's start (`arr[3]`).
+    fn ref_chk(&mut self, r: u32, rq: QualType, init: ExprId) {
+        if self.o.clang_compat < 22 {
+            return;
+        }
+        let pq = self.b.ast().types.pointee(rq).unwrap_or(rq);
+        let ty = self.ty(pq);
+        let pc = self.emit(Op::RefChk, 0, &[r, ty.0]);
+        let loc = self.begin(init);
+        self.o.sites.push(Site { pc: pc as u32, loc, e: Some(init) });
+    }
+
     fn init_field(&mut self, x: ExprId, p: u32, fi: crate::ty::FieldInfo, e: ExprId) {
         let q = self.elem_ptr(p, fi.offset, e);
         if is_reference_decl(self.ast(), fi.decl) {
             let r = self.reg();
             self.bind_ref(x, r);
+            // A lambda's init-capture is not checked (clang 22).
+            if self.ast().exprs.get(e).kind() != ExprKind::LambdaExpr {
+                let rq = self.ast().decls.get(fi.decl).ty().unwrap_or(QualType::INT);
+                self.ref_chk(r, rq, x);
+            }
             self.emit_at(Op::InitStore, 0, &[q, r, fi.ty.0], x);
             return;
         }
