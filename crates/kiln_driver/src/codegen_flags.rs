@@ -71,10 +71,19 @@ pub struct CodegenFlags {
     pub wrapv: Option<bool>,
     /// The last of `-fwrapv-pointer` / `-fno-wrapv-pointer` (clang 20+).
     pub wrapv_pointer: Option<bool>,
-    /// The last of `-ftrapv` (true) / `-fno-trapv` (WP-1032).
+    /// `-ftrapv` (WP-1032; clang has no `-fno-trapv`, WP-1044).
     pub trapv: bool,
     /// The last `-ftrapv-handler=<name>` (empty: none).
     pub trapv_handler: Option<String>,
+    /// The last cc1 `-Xclang -ftrapv-handler -Xclang <name>`: it wins
+    /// over every `-ftrapv-handler=` (clang appends the `-Xclang`
+    /// arguments after the ones it renders; WP-1044).
+    pub trapv_handler_cc1: Option<String>,
+    /// The driver's separate `-ftrapv-handler <name>`, as written
+    /// (`-ftrapv-handler <name>`): clang's `Separate` option is cc1-only,
+    /// so the driver claims nothing and warns "argument unused during
+    /// compilation" (WP-1044).
+    pub trapv_handler_separate: Vec<String>,
     /// The last of `-fstrict-overflow` / `-fno-strict-overflow`.
     pub strict_overflow: Option<bool>,
     /// The last of `-fdelete-null-pointer-checks` /
@@ -226,7 +235,15 @@ impl CodegenFlags {
             "-fwrapv" => set(&mut self.wrapv, true),
             "-fno-wrapv" => set(&mut self.wrapv, false),
             "-ftrapv" => self.trapv = true,
-            "-fno-trapv" => self.trapv = false,
+            // clang 19 and 22 have no `-fno-trapv` (GCC's spelling):
+            // "unknown argument '-fno-trapv'; did you mean '-fno-wrapv'?"
+            // (WP-1044).
+            "-fno-trapv" => {
+                return Some(Err(ArgError::UnknownSuggest(
+                    arg.to_owned(),
+                    "-fno-wrapv".to_owned(),
+                )));
+            }
             "-fwrapv-pointer" => set(&mut self.wrapv_pointer, true),
             "-fno-wrapv-pointer" => set(&mut self.wrapv_pointer, false),
             "-fstrict-overflow" => set(&mut self.strict_overflow, true),
@@ -538,6 +555,27 @@ impl CodegenFlags {
             );
         }
         v
+    }
+
+    /// A separate `-ftrapv-handler <name>` (WP-1044), behind `-Xclang`
+    /// (`xclang`) or not.
+    pub(crate) fn trapv_handler_arg(&mut self, name: &str, xclang: bool) {
+        if xclang {
+            self.trapv_handler_cc1 = Some(name.to_owned());
+        } else {
+            self.trapv_handler_separate.push(format!("-ftrapv-handler {name}"));
+        }
+    }
+
+    /// The handler `-ftrapv` calls (clang `-ftrapv-handler`), if any: the
+    /// cc1 one, else the last `-ftrapv-handler=`; none without `-ftrapv`
+    /// or for an empty name.
+    pub fn trapv_handler(&self) -> Option<String> {
+        self.trapv_handler_cc1
+            .as_ref()
+            .or(self.trapv_handler.as_ref())
+            .filter(|h| self.trapv && !h.is_empty())
+            .cloned()
     }
 
     /// The `XRay` options given without `-fxray-instrument`, as written

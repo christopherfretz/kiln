@@ -30,7 +30,9 @@ use kiln_ast::modules::Owner;
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Nns, Quals, TagKeyword, TypeView};
+use kiln_ast::types::{
+    ArgView, BuiltinType, ExcSpec, FuncInfo, Nns, Quals, TagKeyword, TemplateArg, TypeView,
+};
 use kiln_ast::{DeclHead, DeclId, NnsId, QualType, TypeId};
 use kiln_source::fx::{FxHashMap, FxHashSet};
 use kiln_source::{FileId, Loc};
@@ -39,11 +41,12 @@ use crate::Sema;
 use crate::modules::Directive;
 
 mod body;
+mod spec;
 
 use body::{Bodies, BodyState, Root};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 4;
+pub(crate) const IMAGE_VERSION: u32 = 5;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -120,6 +123,41 @@ enum TyRec {
     Record(u32),
     /// The type of a template type parameter record (S4).
     Ttp(u32),
+    /// `X<args>` (S4b): the template record, the arguments as written
+    /// and the underlying type (a [`TyRec::Record`] naming a
+    /// specialization reference), `None` when dependent.
+    Tst {
+        template: u32,
+        args: Vec<ArgRec>,
+        under: Option<QRef>,
+    },
+    /// A substituted template type parameter (S4b): the replacement, the
+    /// template record whose parameter it replaced, the parameter index
+    /// and the pack element plus one (0: not a pack element).
+    Subst {
+        repl: QRef,
+        assoc: u32,
+        index: u32,
+        pack: u32,
+    },
+    /// The injected-class-name type of a class template's pattern (S4b).
+    Injected(u32),
+}
+
+/// A template argument (S4b): a type, or an integral or `bool` value of
+/// a type.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ArgRec {
+    Type(QRef),
+    Value(QRef, i128),
+}
+
+impl ArgRec {
+    fn q(self) -> QRef {
+        match self {
+            ArgRec::Type(q) | ArgRec::Value(q, _) => q,
+        }
+    }
 }
 
 /// One step of a type's nested-name-specifier.
@@ -287,6 +325,8 @@ enum Payload {
         index: u16,
         typename_kw: bool,
         begin: u32,
+        /// Its default template argument, a type (S4b).
+        default: Option<QRef>,
     },
     /// A non-type template parameter (S4).
     Nttp {
@@ -305,6 +345,20 @@ enum Payload {
         rangle: u32,
         depth: u16,
         params: Vec<u32>,
+    },
+    /// A specialization reference (S4b): a specialization of template
+    /// record `template` the unit made implicitly, `complete` when its
+    /// class definition was instantiated, and its converted arguments.
+    Spec {
+        template: u32,
+        complete: bool,
+        args: Vec<ArgRec>,
+    },
+    /// A member reference (S4b): the member of class specialization
+    /// reference `spec` instantiated from pattern member `pattern`.
+    Member {
+        spec: u32,
+        pattern: u32,
     },
 }
 
@@ -360,6 +414,8 @@ const K_IMPLICIT: u8 = 14;
 const K_TTP: u8 = 15;
 const K_NTTP: u8 = 16;
 const K_TEMPLATE: u8 = 17;
+const K_SPEC: u8 = 18;
+const K_MEMBER: u8 = 19;
 
 impl Payload {
     fn code(&self) -> u8 {
@@ -381,6 +437,8 @@ impl Payload {
             Payload::Ttp { .. } => K_TTP,
             Payload::Nttp { .. } => K_NTTP,
             Payload::Template { .. } => K_TEMPLATE,
+            Payload::Spec { .. } => K_SPEC,
+            Payload::Member { .. } => K_MEMBER,
         }
     }
 }
@@ -555,6 +613,19 @@ impl Wr {
         self.len(s.len());
         self.0.extend_from_slice(s.as_bytes());
     }
+    fn args(&mut self, args: &[ArgRec]) {
+        self.len(args.len());
+        for a in args {
+            match *a {
+                ArgRec::Type(q) => (self.u8(0), self.q(q)).1,
+                ArgRec::Value(q, v) => {
+                    self.u8(1);
+                    self.q(q);
+                    self.0.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+        }
+    }
     fn q(&mut self, q: QRef) {
         self.u32(q.ty);
         self.u8(q.quals);
@@ -668,11 +739,13 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.u32(*init);
         }
         Payload::Implicit { kind } => w.u8(*kind),
-        Payload::Ttp { depth, index, typename_kw, begin } => {
+        Payload::Ttp { depth, index, typename_kw, begin, default } => {
             w.u16(*depth);
             w.u16(*index);
             w.u8(u8::from(*typename_kw));
             w.u32(*begin);
+            w.u32(default.map_or(0, |q| q.ty));
+            w.u8(default.map_or(0, |q| q.quals));
         }
         Payload::Nttp { ty, depth, index } => {
             w.q(*ty);
@@ -690,9 +763,19 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
                 w.u32(p);
             }
         }
+        Payload::Spec { template, complete, args } => {
+            w.u32(*template);
+            w.u8(u8::from(*complete));
+            w.args(args);
+        }
+        Payload::Member { spec, pattern } => {
+            w.u32(*spec);
+            w.u32(*pattern);
+        }
     }
 }
 
+#[allow(clippy::too_many_lines)] // the sections in format order, kept together with the format
 fn encode(img: &Image) -> Vec<u8> {
     let mut w = Wr(Vec::new());
     w.u32(IMAGE_VERSION);
@@ -744,6 +827,21 @@ fn encode(img: &Image) -> Vec<u8> {
             TyRec::Sugar(k) => (w.u8(12), w.u8(*k)).1,
             TyRec::Record(d) => (w.u8(13), w.u32(*d)).1,
             TyRec::Ttp(d) => (w.u8(15), w.u32(*d)).1,
+            TyRec::Tst { template, args, under } => {
+                w.u8(16);
+                w.u32(*template);
+                w.args(args);
+                w.u32(under.map_or(0, |q| q.ty));
+                w.u8(under.map_or(0, |q| q.quals));
+            }
+            TyRec::Injected(d) => (w.u8(17), w.u32(*d)).1,
+            TyRec::Subst { repl, assoc, index, pack } => {
+                w.u8(18);
+                w.q(*repl);
+                w.u32(*assoc);
+                w.u32(*index);
+                w.u32(*pack);
+            }
             TyRec::ElabQ(k, steps, q) => {
                 w.u8(14);
                 w.u8(*k);
@@ -866,6 +964,18 @@ impl<'a> Rd<'a> {
         }
         Ok(QRef { ty, quals })
     }
+    fn args(&mut self) -> Res<Vec<ArgRec>> {
+        let n = self.count(6)?;
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            v.push(match self.u8()? {
+                0 => ArgRec::Type(self.q()?),
+                1 => ArgRec::Value(self.q()?, self.i128()?),
+                _ => return bad("bad template argument"),
+            });
+        }
+        Ok(v)
+    }
     fn pair(&mut self) -> Res<Option<(QRef, QRef)>> {
         match self.u8()? {
             0 => Ok(None),
@@ -972,7 +1082,13 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
                 1 => true,
                 _ => return bad("bad flag byte"),
             };
-            Payload::Ttp { depth, index, typename_kw, begin: r.u32()? }
+            let begin = r.u32()?;
+            let default = match r.q()? {
+                QRef { ty: 0, quals: 0 } => None,
+                QRef { ty: 0, .. } => return bad("bad type reference"),
+                q => Some(q),
+            };
+            Payload::Ttp { depth, index, typename_kw, begin, default }
         }
         K_NTTP => Payload::Nttp { ty: r.q()?, depth: r.u16()?, index: r.u16()? },
         K_TEMPLATE => {
@@ -986,6 +1102,16 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
             }
             Payload::Template { kind, pattern, tloc, langle, rangle, depth, params }
         }
+        K_SPEC => {
+            let template = r.u32()?;
+            let complete = match r.u8()? {
+                0 => false,
+                1 => true,
+                _ => return bad("bad flag byte"),
+            };
+            Payload::Spec { template, complete, args: r.args()? }
+        }
+        K_MEMBER => Payload::Member { spec: r.u32()?, pattern: r.u32()? },
         _ => return bad("unknown declaration kind"),
     };
     Ok(DeclRec { flags, owner, access, name, ctx, lexical, loc, prev, payload })
@@ -1019,9 +1145,15 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
             v.extend_from_slice(params);
             (v, Vec::new())
         }
-        TyRec::Enum(d) | TyRec::Typedef(d) | TyRec::Record(d) | TyRec::Ttp(d) => {
-            (Vec::new(), vec![*d])
+        TyRec::Enum(d)
+        | TyRec::Typedef(d)
+        | TyRec::Record(d)
+        | TyRec::Ttp(d)
+        | TyRec::Injected(d) => (Vec::new(), vec![*d]),
+        TyRec::Tst { template, args, under } => {
+            (args.iter().map(|a| a.q()).chain(*under).collect(), vec![*template])
         }
+        TyRec::Subst { repl, assoc, .. } => (vec![*repl], vec![*assoc]),
         TyRec::Sugar(_) => (Vec::new(), Vec::new()),
     }
 }
@@ -1034,9 +1166,11 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
         | Payload::Label
         | Payload::Access
         | Payload::Implicit { .. }
-        | Payload::Ttp { .. }
         | Payload::Template { .. }
+        | Payload::Member { .. }
         | Payload::Record { def: None, .. } => Vec::new(),
+        Payload::Ttp { default, .. } => default.iter().copied().collect(),
+        Payload::Spec { args, .. } => args.iter().map(|a| a.q()).collect(),
         Payload::Record { def: Some(d), .. } => d.bases.iter().map(|b| b.ty).collect(),
         Payload::Function { ty, params, .. } => {
             std::iter::once(*ty).chain(params.iter().map(|p| p.ty)).collect()
@@ -1068,7 +1202,9 @@ fn same_kind(a: &Payload, b: &Payload) -> bool {
             | Payload::Export
             | Payload::Ttp { .. }
             | Payload::Nttp { .. }
-            | Payload::Template { .. },
+            | Payload::Template { .. }
+            | Payload::Spec { .. }
+            | Payload::Member { .. },
             _,
         ) => false,
         _ => a.code() == b.code(),
@@ -1142,6 +1278,25 @@ fn decode(bytes: &[u8]) -> Res<Image> {
             },
             13 => TyRec::Record(r.u32()?),
             15 => TyRec::Ttp(r.u32()?),
+            16 => {
+                let template = r.u32()?;
+                let args = r.args()?;
+                let under = match r.q()? {
+                    QRef { ty: 0, quals: 0 } => None,
+                    QRef { ty: 0, .. } => return bad("bad type reference"),
+                    q => Some(q),
+                };
+                TyRec::Tst { template, args, under }
+            }
+            17 => TyRec::Injected(r.u32()?),
+            18 => {
+                let repl = r.q()?;
+                let (assoc, index, pack) = (r.u32()?, r.u32()?, r.u32()?);
+                if pack > 0xffff {
+                    return bad("bad pack index");
+                }
+                TyRec::Subst { repl, assoc, index, pack }
+            }
             14 => {
                 let k = r.u8()?;
                 if tag_keyword(k).is_none() {
@@ -1211,19 +1366,38 @@ fn base_class(img: &Image, q: QRef, complete: &dyn Fn(u32) -> bool) -> Option<u3
     for _ in 0..64 {
         let j = t.checked_sub(BUILTINS + 1)? as usize;
         t = match img.types.get(j)? {
-            TyRec::Elab(_, q) | TyRec::ElabQ(_, _, q) | TyRec::Paren(q) => q.ty,
+            TyRec::Elab(_, q)
+            | TyRec::ElabQ(_, _, q)
+            | TyRec::Paren(q)
+            | TyRec::Tst { under: Some(q), .. } => q.ty,
             TyRec::Typedef(d) => match img.decls.get(*d as usize)?.payload {
                 Payload::Typedef { underlying, .. } => underlying.ty,
                 _ => return None,
             },
             TyRec::Record(d) => {
-                let ok = matches!(img.decls.get(*d as usize)?.payload, Payload::Record { .. });
-                return (ok && complete(*d)).then_some(*d);
+                let ok = match img.decls.get(*d as usize)?.payload {
+                    Payload::Record { .. } => complete(*d),
+                    // A specialization the importer completes (S4b).
+                    Payload::Spec { complete, .. } => complete,
+                    _ => false,
+                };
+                return ok.then_some(*d);
             }
             _ => return None,
         };
     }
     None
+}
+
+/// Whether `q` is a dependent base class type of a class template's
+/// pattern (S4b): a type parameter or a dependent specialization.
+fn dependent_base(img: &Image, q: QRef) -> bool {
+    q.quals == 0
+        && q.ty > BUILTINS
+        && matches!(
+            img.types.get((q.ty - BUILTINS - 1) as usize),
+            Some(TyRec::Ttp(_) | TyRec::Tst { under: None, .. })
+        )
 }
 
 /// Whether record `d` stays out of the lookup table: a local, a template
@@ -1253,6 +1427,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             return bad("bad type reference");
         }
         for d in decl {
+            let class_tmpl = |x: u32| {
+                matches!(
+                    img.decls.get(x as usize).map(|r| &r.payload),
+                    Some(Payload::Template { kind: 1, .. })
+                )
+            };
             let ok = img.decls.get(d as usize).is_some_and(|r| {
                 matches!(
                     (t, &r.payload),
@@ -1261,7 +1441,13 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         | (TyRec::Record(_), Payload::Record { .. })
                         | (TyRec::ElabQ(..), Payload::Namespace)
                         | (TyRec::Ttp(_), Payload::Ttp { .. })
-                )
+                        | (
+                            TyRec::Injected(_) | TyRec::Tst { .. },
+                            Payload::Template { kind: 1, .. }
+                        )
+                        | (TyRec::Subst { .. }, Payload::Template { .. })
+                ) || matches!((t, &r.payload),
+                    (TyRec::Record(_), Payload::Spec { template, .. }) if class_tmpl(*template))
             });
             if !ok {
                 return bad("bad declaration reference in a type");
@@ -1272,6 +1458,18 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             && FuncInfo::from_bits(*info).bits() != *info
         {
             return bad("bad function type bits");
+        }
+        // A specialization type's underlying type is the record type of
+        // a specialization reference of the same template.
+        if let TyRec::Tst { template, under: Some(u), .. } = t {
+            let ok = u.quals == 0
+                && u.ty > BUILTINS
+                && matches!(img.types.get((u.ty - BUILTINS - 1) as usize),
+                    Some(TyRec::Record(r)) if matches!(img.decls.get(*r as usize).map(|x| &x.payload),
+                        Some(Payload::Spec { template: st, .. }) if st == template));
+            if !ok {
+                return bad("bad specialization type");
+            }
         }
         pdep.push(acc);
     }
@@ -1295,12 +1493,75 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     // template claimed it as its pattern or a parameter.
     let mut dependent: Vec<usize> = Vec::new();
     let mut claimed = vec![false; nd];
+    // S4b: per class template pattern, its parameter count.
+    let mut tmpl_params: FxHashMap<usize, usize> = FxHashMap::default();
     for (i, d) in img.decls.iter().enumerate() {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         while stack.last().is_some_and(|&(_, end)| end <= i) {
             stack.pop();
         }
         chain.push(if (d.prev as usize) < i { chain[d.prev as usize] } else { i });
+        // S4b: a specialization or member reference is no declaration of
+        // the unit: it has no name or context and may lie anywhere after
+        // what it names (inside a class definition too).
+        if matches!(d.payload, Payload::Spec { .. } | Payload::Member { .. }) {
+            if d.flags & !DECL_FLAGS != 0
+                || d.owner > 3
+                || d.access != 0
+                || d.name != NONE
+                || d.ctx != NONE
+                || d.lexical != NONE
+                || d.prev != NONE
+            {
+                return bad("bad specialization reference");
+            }
+            let ok = match &d.payload {
+                Payload::Spec { template, complete, args } => {
+                    kind_of(*template).is_some_and(|t| match &t.payload {
+                        Payload::Template { kind, params, .. } => {
+                            (*kind == 1 || !*complete)
+                                && params.len() == args.len()
+                                && params.iter().zip(args).all(|(&p, a)| {
+                                    match (&img.decls[p as usize].payload, a) {
+                                        (Payload::Ttp { .. }, ArgRec::Type(q)) => qref_at(*q, i),
+                                        (Payload::Nttp { .. }, ArgRec::Value(q, _)) => {
+                                            q.ty <= BUILTINS && q.quals == 0
+                                        }
+                                        _ => false,
+                                    }
+                                })
+                        }
+                        _ => false,
+                    })
+                }
+                Payload::Member { spec, pattern } => {
+                    kind_of(*spec).is_some_and(|sr| match sr.payload {
+                        Payload::Spec { template, complete: true, .. } => {
+                            match img.decls[template as usize].payload {
+                                Payload::Template { kind: 1, pattern: p, .. } => kind_of(*pattern)
+                                    .is_some_and(|m| {
+                                        m.ctx == p
+                                            && m.lexical == NONE
+                                            && matches!(
+                                                m.payload,
+                                                Payload::Function { .. }
+                                                    | Payload::Var { .. }
+                                                    | Payload::Field { .. }
+                                            )
+                                    }),
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    })
+                }
+                _ => false,
+            };
+            if !ok {
+                return bad("bad specialization reference");
+            }
+            continue;
+        }
         // A local declaration (a body's variable or label): its context
         // is an earlier function record; it is never looked up by name.
         if let Some(f) = kind_of(d.ctx).filter(|c| matches!(c.payload, Payload::Function { .. })) {
@@ -1343,7 +1604,39 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         {
             return bad("bad declaration flags");
         }
-        if d.flags & DEP != 0 {
+        // A member of a class template's pattern (S4b) is claimed by its
+        // class, which must be claimed itself.
+        let dep_class = kind_of(d.ctx)
+            .is_some_and(|c| c.flags & DEP != 0 && matches!(c.payload, Payload::Record { .. }));
+        if dep_class {
+            if d.flags & DEP == 0 || !claimed[d.ctx as usize] {
+                return bad("a member of an unclaimed dependent class");
+            }
+            claimed[i] = true;
+            if d.lexical != NONE {
+                // An out-of-line member definition claims the parameters
+                // of its own template-head, just before it.
+                let n = tmpl_params.get(&(d.ctx as usize)).copied().unwrap_or(usize::MAX);
+                if n == usize::MAX || n > i {
+                    return bad("an out-of-line member of a nested dependent class");
+                }
+                // The parameters belong to the definition's own scope.
+                let scope = if d.lexical == LEX_TU { NONE } else { d.lexical };
+                for (k, j) in (i - n..i).enumerate() {
+                    let ok = match img.decls[j].payload {
+                        Payload::Ttp { depth: 0, index, .. }
+                        | Payload::Nttp { depth: 0, index, .. } => {
+                            usize::from(index) == k && img.decls[j].ctx == scope
+                        }
+                        _ => false,
+                    };
+                    if !ok || claimed[j] {
+                        return bad("bad template parameter list");
+                    }
+                    claimed[j] = true;
+                }
+            }
+        } else if d.flags & DEP != 0 {
             // Only template parameters and patterns (claimed below).
             dependent.push(i);
         }
@@ -1373,6 +1666,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             let ok = match (&d.payload, d.lexical) {
                 (Payload::Implicit { .. }, _) => {
                     top.is_none() && closed(d.ctx) && d.lexical == NONE
+                }
+                // A class template's record follows its pattern's record,
+                // inside the pattern's definition (S4b).
+                (Payload::Template { kind: 1, pattern, .. }, NONE) if top == Some(*pattern) => {
+                    stack.len() == 1 && scope(d.ctx)
                 }
                 (_, NONE) => top.map_or_else(|| scope(d.ctx), |t| d.ctx == t),
                 _ => top.is_none() && (scope(d.ctx) || (closed(d.ctx) && d.prev != NONE)),
@@ -1507,7 +1805,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     def_end[chain[i]] = end;
                     let complete = |x: u32| chain.get(x as usize).is_some_and(|&c| def_end[c] <= i);
                     for b in &df.bases {
-                        if b.access > 3 || base_class(img, b.ty, &complete).is_none() {
+                        let ok = base_class(img, b.ty, &complete).is_some()
+                            || (d.flags & DEP != 0 && dependent_base(img, b.ty));
+                        if b.access > 3 || !ok {
                             return bad("bad base class");
                         }
                     }
@@ -1532,16 +1832,21 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             Payload::Template { kind, pattern, depth, params, .. } => {
                 // S4 slice: a function template at namespace scope, its
                 // pattern the namespace-scope function just declared.
+                // S4b: or a class template at namespace scope, its
+                // pattern the class record just before it.
                 let p = *pattern as usize;
-                let ok = *kind == 0
+                let ok = *kind <= 1
                     && *depth == 0
                     && d.flags & DEP == 0
                     && scope(d.ctx)
                     && d.lexical == NONE
                     && d.prev == NONE
+                    && (*kind == 0 || p + 1 == i)
                     && kind_of(*pattern).is_some_and(|r| {
-                        matches!(r.payload, Payload::Function { kind: 0, .. })
-                            && r.flags & DEP != 0
+                        matches!(
+                            (*kind, &r.payload),
+                            (0, Payload::Function { kind: 0, .. }) | (1, Payload::Record { .. })
+                        ) && r.flags & DEP != 0
                             && r.name == d.name
                             && r.ctx == d.ctx
                             && r.owner == d.owner
@@ -1553,6 +1858,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     return bad("bad template");
                 }
                 claimed[p] = true;
+                if *kind == 1 {
+                    tmpl_params.insert(p, params.len());
+                }
                 for (k, &x) in params.iter().enumerate() {
                     let ok = kind_of(x).is_some_and(|r| {
                         r.ctx == d.ctx
@@ -1575,7 +1883,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             | Payload::Typedef { .. }
             | Payload::Access
             | Payload::Label
-            | Payload::Let { .. } => {}
+            | Payload::Let { .. }
+            | Payload::Spec { .. }
+            | Payload::Member { .. } => {}
         }
     }
     if dependent.iter().any(|&i| !claimed[i]) {
@@ -1722,6 +2032,12 @@ impl Writer<'_, '_, '_> {
         if let Some(&i) = self.tmemo.get(&t) {
             return Ok(i);
         }
+        if let Some(rec) = self.template_ty(t)? {
+            let i = BUILTINS + 1 + self.img.types.len() as u32;
+            self.img.types.push(rec);
+            self.tmemo.insert(t, i);
+            return Ok(i);
+        }
         let types = &self.s.ast.types;
         let rec = match types.view(t) {
             TypeView::Builtin(b) => {
@@ -1837,8 +2153,15 @@ impl Writer<'_, '_, '_> {
         if n.has(DeclFlags::DEPENDENT_CTX)
             && !parm
             && !matches!(self.s.ast.templ_link(d).get(), Some((TemplLinkKind::Pattern, _)))
+            && !self.dep_member(d)
         {
             return Err("a declaration in a template");
+        }
+        if n.has(DeclFlags::HAS_LEXICAL_CTX)
+            && self.dep_member(d)
+            && n.ctx().and_then(|c| ast.described_template(ast.first(c))).is_none()
+        {
+            return Err("an out-of-line member of a class nested in a template");
         }
         let m = n.misc();
         if m.friend() != FriendKind::None {
@@ -1992,7 +2315,7 @@ impl Writer<'_, '_, '_> {
             }
             DeclKind::AccessSpec => Payload::Access,
             DeclKind::TemplateTypeParm | DeclKind::NonTypeTemplateParm => self.template_parm(d)?,
-            DeclKind::FunctionTemplate => self.template(d)?,
+            DeclKind::FunctionTemplate | DeclKind::ClassTemplate => self.template(d)?,
             _ => return Err("a declaration the image does not carry yet"),
         })
     }
@@ -2013,7 +2336,15 @@ impl Writer<'_, '_, '_> {
         if p.params.is_some() {
             return Err("a template template parameter");
         }
-        if t.defaults.contains(d) || t.inherited_defaults.contains(d) {
+        let default = match t.defaults.get(d).map(TemplateArg::view) {
+            None => None,
+            Some(ArgView::Type(q)) if !t.inherited_defaults.contains(d) => Some(q),
+            Some(_) if ast.decls.get(d).kind() == DeclKind::TemplateTypeParm => {
+                return Err("a default template argument");
+            }
+            Some(_) => return Err("a default template argument of a non-type parameter"),
+        };
+        if t.inherited_defaults.contains(d) {
             return Err("a default template argument");
         }
         if p.depth != 0 {
@@ -2021,6 +2352,9 @@ impl Writer<'_, '_, '_> {
         }
         let n = ast.decls.get(d);
         if n.kind() == DeclKind::NonTypeTemplateParm {
+            if default.is_some() {
+                return Err("a default template argument of a non-type parameter");
+            }
             let ty = self.qref(n.ty().ok_or("a malformed template parameter")?)?;
             return Ok(Payload::Nttp { ty, depth: p.depth, index: p.index });
         }
@@ -2028,7 +2362,14 @@ impl Writer<'_, '_, '_> {
             Some(&l) => self.loc(l)?,
             None => NONE,
         };
-        Ok(Payload::Ttp { depth: p.depth, index: p.index, typename_kw: p.typename_kw, begin })
+        let default = default.map(|q| self.qref(q)).transpose()?;
+        Ok(Payload::Ttp {
+            depth: p.depth,
+            index: p.index,
+            typename_kw: p.typename_kw,
+            begin,
+            default,
+        })
     }
 
     /// A template record (S4): a function template at namespace scope.
@@ -2037,6 +2378,7 @@ impl Writer<'_, '_, '_> {
         let ast = &s.ast;
         let info = *ast.template_info(d).ok_or("a malformed template")?;
         let pattern = info.pattern.ok_or("a malformed template")?;
+        let kind = u8::from(ast.decls.get(d).kind() == DeclKind::ClassTemplate);
         let redecl = |x: DeclId| ast.decls.redecl(x).is_some_and(|r| r.prev.is_some());
         if redecl(d) || redecl(pattern) {
             return Err("a redeclared template");
@@ -2060,8 +2402,11 @@ impl Writer<'_, '_, '_> {
         for p in ast.lists.iter::<DeclId>(list.params) {
             params.push(*self.recs.get(&p).ok_or("a template parameter the image does not carry")?);
         }
+        if kind == 1 && pat + 1 != self.img.decls.len() as u32 {
+            return Err("a class template whose pattern is not just before it");
+        }
         Ok(Payload::Template {
-            kind: 0,
+            kind,
             pattern: pat,
             tloc: self.loc(list.template_loc)?,
             langle: self.loc(list.l_angle)?,
@@ -2118,11 +2463,19 @@ impl Writer<'_, '_, '_> {
         // The pattern of a function template (S4): its body is always
         // carried, as dependent records, for importers to instantiate.
         let pattern = match fd.templ.get() {
-            None => false,
+            None => self.dep_member(d),
             Some((TemplLinkKind::Pattern, _)) if kind == 0 => true,
             Some((TemplLinkKind::Pattern, _)) => return Err("a member function template"),
             Some(_) => return Err("a template specialization"),
         };
+        // A pattern constructor's mem-initializers live in the template
+        // state as parsed (`InstState::pattern_mem_inits`), not in the
+        // declaration: not carried yet (S4b).
+        if pattern
+            && (s.inst.pattern_mem_inits.contains_key(&d) || s.inst.failed_mem_inits.contains(&d))
+        {
+            return Err("mem-initializers of a constructor in a class template");
+        }
         let spec = fd.spec;
         let bits = spec.bits();
         if spec.is_virtual() || spec.is_pure() || spec.is_override() || spec.is_final() {
@@ -2243,9 +2596,14 @@ impl Writer<'_, '_, '_> {
         for (k, x) in list.into_iter().enumerate() {
             let target = match x.kind {
                 CtorInitKind::Base => {
+                    // The target is the type as written in the
+                    // mem-initializer (`B<int>`, an alias): match it
+                    // canonically.
+                    let tq = QualType::unqual(TypeId::new(x.target));
+                    let want = ast.types.canonical(tq).ty();
                     let pos = bases.iter().position(|&b| {
                         let q = ast.decls.base_spec(b).ty;
-                        ast.types.canonical(q).ty().index() == x.target
+                        ast.types.canonical(q).ty() == want
                     });
                     pos.ok_or("a ctor-initializer of an indirect base")? as u32
                 }
@@ -2289,8 +2647,19 @@ impl Writer<'_, '_, '_> {
     fn class(&mut self, d: DeclId, i: u32) -> W<Payload> {
         let ast = &self.s.ast;
         let rd = ast.decls.record(d).ok_or("a malformed class")?;
-        if !rd.templ.is_none() || rd.lambda.is_some() {
-            return Err("a template or closure type");
+        if rd.lambda.is_some() {
+            return Err("a closure type");
+        }
+        match rd.templ.get() {
+            None => {}
+            Some((TemplLinkKind::Pattern, _))
+                if ast
+                    .described_template(ast.first(d))
+                    .is_some_and(|t| ast.decls.get(t).kind() == DeclKind::ClassTemplate) => {}
+            Some((TemplLinkKind::Specialization, _)) => {
+                return Err("an explicit or partial specialization");
+            }
+            _ => return Err("a member template or a template in a template"),
         }
         self.cold_gate(d)?;
         let tag = rd.tag as u8;
@@ -2426,8 +2795,18 @@ impl Writer<'_, '_, '_> {
         // declared special members, recorded after every class closed.
         let mut open: Vec<u32> = Vec::new();
         let mut implicit: Vec<(DeclId, u32, u8)> = Vec::new();
+        // The implicit instantiations the unit made, and everything
+        // declared in them (members of a class specialization).
+        let mut skipped: FxHashSet<DeclId> = FxHashSet::default();
         for d in ast.decls.ids() {
             let n = ast.decls.get(d);
+            let in_skipped = |c: Option<DeclId>| c.is_some_and(|c| skipped.contains(&c));
+            if in_skipped(n.ctx())
+                || (n.has(DeclFlags::HAS_LEXICAL_CTX) && in_skipped(ast.decls.lexical_ctx(d)))
+            {
+                let _ = skipped.insert(d);
+                continue;
+            }
             let o = mt.owner(d);
             if !o.purview {
                 // Predefined declarations have no location in a real
@@ -2455,7 +2834,9 @@ impl Writer<'_, '_, '_> {
             }) {
                 // An implicit instantiation the unit made: an importer
                 // instantiates the carried template again on use (S4); a
-                // carried body naming one falls back.
+                // carried body or type naming one names it through a
+                // specialization reference (S4b).
+                let _ = skipped.insert(d);
                 continue;
             }
             if n.has(DeclFlags::IMPLICIT) {
@@ -2470,6 +2851,9 @@ impl Writer<'_, '_, '_> {
                     .function(d)
                     .is_some_and(|f| f.spec.defaulted() == Defaulted::Implicit);
                 let class = n.ctx().and_then(|c| self.recs.get(&c).copied());
+                if class.is_some_and(|c| self.img.decls[c as usize].flags & DEP != 0) {
+                    return Err("an implicit member of a class template");
+                }
                 match class {
                     Some(c)
                         if implicit_default
@@ -2484,8 +2868,16 @@ impl Writer<'_, '_, '_> {
             kind_gate(n.kind())?;
             self.cold_gate(d)?;
             let h = self.head(d)?;
+            // The specialization references its types name come first
+            // (S4b): `record` must not add records before its own.
+            self.prescan(d);
             let i = self.img.decls.len() as u32;
             let payload = self.record(d, i)?;
+            if self.img.decls.len() as u32 != i {
+                return Err("a specialization named while its user is recorded");
+            }
+            let tmpl_of_open = matches!(payload,
+                Payload::Template { kind: 1, pattern, .. } if open.last() == Some(&pattern));
             match &payload {
                 Payload::Enumerator { .. } => {
                     if open_enum != Some(h.ctx) {
@@ -2495,7 +2887,7 @@ impl Writer<'_, '_, '_> {
                 Payload::Enum { def: Some(_), .. } => open_enum = Some(i),
                 _ => open_enum = None,
             }
-            if !matches!(payload, Payload::Enumerator { .. }) {
+            if !matches!(payload, Payload::Enumerator { .. }) && !tmpl_of_open {
                 // Close the classes this declaration is not a member of.
                 while let Some(&top) = open.last() {
                     if h.lexical == NONE && h.ctx == top {
@@ -2588,13 +2980,13 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::CXXDestructor
         | K::CXXConversion
         | K::FunctionTemplate
+        | K::ClassTemplate
         | K::TemplateTypeParm
         | K::NonTypeTemplateParm => Ok(()),
         K::IndirectField => Err("an anonymous union or struct member"),
         K::Friend => Err("a friend declaration"),
         K::ClassTemplateSpecialization
         | K::ClassTemplatePartialSpecialization
-        | K::ClassTemplate
         | K::VarTemplate
         | K::TypeAliasTemplate
         | K::Concept
@@ -2892,7 +3284,11 @@ impl Sema<'_, '_> {
                 }
                 Payload::Record { tag, def } => {
                     let tag = tag_of(*tag);
+                    if patterns.contains(&(i as u32)) {
+                        self.ast.templates.pattern_next = true;
+                    }
                     let c = self.builder().record(h, tag, prev);
+                    self.ast.templates.pattern_next = false;
                     if let Some(df) = def {
                         let _ = self.builder().begin_record_definition(c);
                         let bases: Vec<kiln_ast::decl::BaseSpec> = df
@@ -2932,11 +3328,15 @@ impl Sema<'_, '_> {
                     defaulted.push((f, r.flags));
                     f
                 }
-                Payload::Ttp { depth, index, typename_kw, begin } => {
+                Payload::Ttp { depth, index, typename_kw, begin, default } => {
                     let t =
                         self.builder().template_type_parm(h, *depth, *index, false, *typename_kw);
                     if *begin != NONE {
                         let _ = self.ast.decls.cold.begin_loc.insert(t, lo(self, *begin));
+                    }
+                    if let Some(q) = default {
+                        let dq = self.image_ty(img, &mut tys, &ids, *q);
+                        let _ = self.builder().set_template_default(t, TemplateArg::ty(dq));
                     }
                     t
                 }
@@ -2944,15 +3344,27 @@ impl Sema<'_, '_> {
                     let pty = self.image_ty(img, &mut tys, &ids, *ty);
                     self.builder().non_type_template_parm(h, pty, *depth, *index, false)
                 }
-                Payload::Template { pattern, tloc, langle, rangle, depth, params, .. } => {
+                Payload::Template { kind, pattern, tloc, langle, rangle, depth, params } => {
                     let ps: Vec<DeclId> = params.iter().map(|&p| ids[p as usize]).collect();
                     let (t, l, rr) = (lo(self, *tloc), lo(self, *langle), lo(self, *rangle));
                     let list = self.builder().template_param_list(t, l, rr, *depth, &ps, None);
                     let pat = ids[*pattern as usize];
-                    self.builder().template_decl(DeclKind::FunctionTemplate, pat, list, None)
+                    let k = if *kind == 1 {
+                        DeclKind::ClassTemplate
+                    } else {
+                        DeclKind::FunctionTemplate
+                    };
+                    self.builder().template_decl(k, pat, list, None)
                 }
+                Payload::Spec { .. } => {
+                    let loc = lo(self, r.loc);
+                    self.image_spec(img, &mut tys, &ids, r, loc).unwrap_or(self.ast.tu)
+                }
+                Payload::Member { .. } => self.image_member(&ids, r),
             };
-            image_flags(self, d, r.flags);
+            if !matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. }) {
+                image_flags(self, d, r.flags);
+            }
             debug_assert_eq!(ids.len(), i);
             ids.push(d);
         }
@@ -3027,6 +3439,7 @@ impl Sema<'_, '_> {
                 let _ = self.ast.decls.set_default_arg(params_all[g], built.expr(p.default));
             }
         }
+        self.image_mark_specs(img, &ids, main);
         // Defaulted and implicit special members the module used are
         // defined again (spec/modules.md §11.11 "Classes").
         for (f, flags) in defaulted {
@@ -3184,6 +3597,30 @@ impl Sema<'_, '_> {
                 self.ast.types.qualify(q, Quals::from_bits(*c))
             }
             TyRec::Sugar(k) => self.builtin_sugar()[usize::from(*k).min(2)],
+            TyRec::Tst { template, args, under } => {
+                let args: Vec<TemplateArg> = args
+                    .iter()
+                    .map(|a| {
+                        let ty = qt(self, a.q());
+                        self.image_arg(ty, a)
+                    })
+                    .collect();
+                let under = under.map(|u| qt(self, u));
+                let tmpl = ids.get(*template as usize).map_or(self.ast.tu, |&t| self.ast.first(t));
+                let name = self.ast.types.template_name_of(tmpl);
+                let list = self.ast.types.arg_list(&args);
+                self.ast.types.template_specialization(name, list, under, false)
+            }
+            TyRec::Injected(t) => match ids.get(*t as usize) {
+                Some(&t) => self.injected_type_of(t).unwrap_or(QualType::INT),
+                None => QualType::INT,
+            },
+            TyRec::Subst { repl, assoc, index, pack } => {
+                let r = qt(self, *repl);
+                let a = ids.get(*assoc as usize).copied().unwrap_or(self.ast.tu);
+                let pack = pack.checked_sub(1);
+                self.ast.types.subst_template_type_parm(r, a, *index, pack)
+            }
         }
     }
 }
@@ -3660,7 +4097,7 @@ mod tests {
                 DEP,
                 pname,
                 302,
-                Payload::Ttp { depth: 0, index: 0, typename_kw: false, begin: 296 },
+                Payload::Ttp { depth: 0, index: 0, typename_kw: false, begin: 296, default: None },
             ),
             head(
                 DEP,
@@ -3747,6 +4184,228 @@ mod tests {
         ];
         for (what, f) in corrupt {
             let mut img = template_sample();
+            f(&mut img);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
+    }
+
+    /// Stage S4b: `template_sample` plus `namespace ns { template <class
+    /// T = int> struct Box { T v; T w; }; Box<int> bx; }` and a use of the
+    /// specialization's `v`: the pattern, the class template record
+    /// just after it, the specialization and member reference records,
+    /// and the specialization, injected-class-name and substituted
+    /// parameter types.
+    #[allow(clippy::too_many_lines)] // one sample image, its records in format order
+    fn class_template_sample() -> Image {
+        let q = |ty| QRef { ty, quals: 0 };
+        let int = BuiltinType::Int as u32;
+        let mut img = template_sample();
+        let name = img.names.len() as u32;
+        img.names.extend(["Box", "v", "w", "bx"].map(String::from));
+        let pname = img.pnames.len() as u32;
+        img.pnames.push("T".into());
+        let t = BUILTINS + 1 + img.types.len() as u32;
+        img.types.extend([
+            TyRec::Ttp(14),
+            TyRec::Injected(16),
+            TyRec::Pointer(q(t + 1)),
+            TyRec::Record(19),
+            TyRec::Tst { template: 16, args: vec![ArgRec::Type(q(int))], under: Some(q(t + 3)) },
+            TyRec::Subst { repl: q(int), assoc: 16, index: 0, pack: 0 },
+        ]);
+        let head = |flags, name, ctx, access, loc, payload| DeclRec {
+            flags,
+            owner: 3,
+            access,
+            name,
+            ctx,
+            lexical: NONE,
+            loc,
+            prev: NONE,
+            payload,
+        };
+        let field = |ty| Payload::Field { ty, flags: 0, width: NONE, init: NONE };
+        img.decls.extend([
+            head(
+                DEP,
+                pname,
+                1,
+                0,
+                402,
+                Payload::Ttp {
+                    depth: 0,
+                    index: 0,
+                    typename_kw: false,
+                    begin: 396,
+                    default: Some(q(int)),
+                },
+            ),
+            head(
+                DEP,
+                name,
+                1,
+                0,
+                420,
+                Payload::Record { tag: 0, def: Some(RecDef { bits: 0, end: 19, bases: vec![] }) },
+            ),
+            head(
+                0,
+                name,
+                1,
+                0,
+                420,
+                Payload::Template {
+                    kind: 1,
+                    pattern: 15,
+                    tloc: 390,
+                    langle: 394,
+                    rangle: 410,
+                    depth: 0,
+                    params: vec![14],
+                },
+            ),
+            head(DEP, name + 1, 15, 1, 430, field(q(t))),
+            head(DEP, name + 2, 15, 1, 440, field(q(t + 2))),
+            head(
+                0,
+                NONE,
+                NONE,
+                0,
+                450,
+                Payload::Spec { template: 16, complete: true, args: vec![ArgRec::Type(q(int))] },
+            ),
+            head(0, NONE, NONE, 0, NONE, Payload::Member { spec: 19, pattern: 17 }),
+            head(
+                0,
+                name + 3,
+                1,
+                0,
+                450,
+                Payload::Var { ty: q(t + 4), spec: 0, init: NONE, eval: NONE },
+            ),
+            head(
+                0,
+                name + 3,
+                1,
+                0,
+                460,
+                Payload::Var { ty: q(t + 5), spec: 0, init: NONE, eval: NONE },
+            ),
+        ]);
+        // A pattern body's `T{}.member`: a dependent construction and a
+        // dependent member access (its name in `pnames`, its operator's
+        // location a cold annotation).
+        let e = img.bodies.exprs.len() as u32;
+        img.pnames.push("member".into());
+        img.bodies.exprs.extend([
+            body::ExprRec {
+                kind: 47,
+                bits: 0,
+                aux: 1,
+                cold: 0,
+                deps: 7,
+                ty: q(t),
+                loc: 470,
+                words: vec![0],
+            },
+            body::ExprRec {
+                kind: 48,
+                bits: 1,
+                aux: 0,
+                cold: 16,
+                deps: 7,
+                ty: q(t),
+                loc: 474,
+                words: vec![e, pname + 1, 473],
+            },
+        ]);
+        img
+    }
+
+    #[test]
+    fn class_template_round_trip() {
+        let img = class_template_sample();
+        assert_eq!(decode(&encode(&img)), Ok(img.clone()));
+        fuzz(&encode(&img));
+    }
+
+    /// spec/modules.md §11.11 "Class templates" and "Specialization
+    /// references" (S4b): the class template follows its pattern, which
+    /// claims its members; a specialization names a carried class
+    /// template; a member reference names a specialization and a member
+    /// of its template's pattern; anything else is an error.
+    #[test]
+    fn rejects_corrupt_class_template_records() {
+        fn payload(i: &mut Image, r: usize, p: Payload) {
+            i.decls[r].payload = p;
+        }
+        type Corrupt = (&'static str, fn(&mut Image));
+        let corrupt: [Corrupt; 17] = [
+            ("template not after its pattern", |i| i.decls.swap(16, 17)),
+            ("member name out of range", |i| {
+                let n = i.bodies.exprs.len();
+                i.bodies.exprs[n - 1].words[1] = i.pnames.len() as u32;
+            }),
+            ("member access without its operator location", |i| {
+                let n = i.bodies.exprs.len();
+                i.bodies.exprs[n - 1].cold = 0;
+            }),
+            ("dependent member template keyword", |i| {
+                let n = i.bodies.exprs.len();
+                i.bodies.exprs[n - 1].aux = 2;
+            }),
+            ("construction argument out of range", |i| {
+                let n = i.bodies.exprs.len();
+                i.bodies.exprs[n - 2].words = vec![1, n as u32];
+            }),
+            ("independent member", |i| i.decls[17].flags = 0),
+            ("spec of a function template", |i| {
+                let p = Payload::Spec { template: 13, complete: true, args: vec![] };
+                payload(i, 19, p);
+            }),
+            ("spec of a non-template", |i| {
+                let p = Payload::Spec { template: 15, complete: false, args: vec![] };
+                payload(i, 19, p);
+            }),
+            ("spec after its use", |i| {
+                let p = Payload::Spec { template: 21, complete: false, args: vec![] };
+                payload(i, 19, p);
+            }),
+            ("member of a non-spec", |i| payload(i, 20, Payload::Member { spec: 16, pattern: 17 })),
+            ("member of a non-pattern", |i| {
+                payload(i, 20, Payload::Member { spec: 19, pattern: 12 });
+            }),
+            ("member pattern of another template", |i| {
+                payload(i, 20, Payload::Member { spec: 19, pattern: 11 });
+            }),
+            ("spec type naming a function template", |i| {
+                let n = i.types.len();
+                if let TyRec::Tst { template, .. } = &mut i.types[n - 2] {
+                    *template = 13;
+                }
+            }),
+            ("injected type of a function template", |i| {
+                let n = i.types.len();
+                i.types[n - 5] = TyRec::Injected(13);
+            }),
+            ("subst type naming a non-template", |i| {
+                let n = i.types.len();
+                i.types[n - 1] =
+                    TyRec::Subst { repl: QRef { ty: 1, quals: 0 }, assoc: 15, index: 0, pack: 0 };
+            }),
+            ("default argument above its parameter", |i| {
+                if let Payload::Ttp { default, .. } = &mut i.decls[14].payload {
+                    *default = Some(QRef { ty: BUILTINS + 1 + i.types.len() as u32 - 1, quals: 0 });
+                }
+            }),
+            ("spec argument out of range", |i| {
+                if let Payload::Spec { args, .. } = &mut i.decls[19].payload {
+                    args.push(ArgRec::Type(QRef { ty: u32::MAX - 1, quals: 0 }));
+                }
+            }),
+        ];
+        for (what, f) in corrupt {
+            let mut img = class_template_sample();
             f(&mut img);
             assert!(decode(&encode(&img)).is_err(), "{what}");
         }

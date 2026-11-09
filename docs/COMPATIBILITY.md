@@ -406,9 +406,9 @@ compile-time cost of each mode, in
 |---|---|---|
 | UndefinedBehaviorSanitizer | `-fsanitize=undefined` and its members, `integer`, recover/trap/abort modes | **Works**: the frontend IR equals clang 19's and 22's for every check but vptr and function (not implemented yet); reports come from clang's runtime |
 | AddressSanitizer, HWASan, TSan, MSan, LeakSanitizer, libFuzzer | `-fsanitize=address`, `hwaddress`, `thread`, `memory`, `leak`, `fuzzer` | **Works**: clang's attributes and pass pipeline; under ASan and MSan kiln does not name local values, so stack reports show no variable names |
-| Trapping overflow | `-ftrapv`, `-ftrapv-handler=` | **Works**: IR as clang's |
+| Trapping overflow | `-ftrapv`, `-ftrapv-handler=` | **Works**: IR as clang's; on `__int128` (where clang crashes) the handler is not used and the operation traps |
 | Check merging | `-f[no-]sanitize-merge[=]` | **Works**: `nomerge` and trap blocks as clang 22 |
-| Ignorelists | `-fsanitize-ignorelist=`, the default `asan`/`hwasan`/`msan` lists, `-fno-sanitize-ignorelist` | **Works** for `fun:`, `src:`, `mainfile:`, `global:`, `type:` and `=init`, with clang's error wording; regular-expression (`#!special-case-list-v1`) lists are rejected |
+| Ignorelists | `-fsanitize-ignorelist=`, the default `asan`/`hwasan`/`msan` lists, `-fno-sanitize-ignorelist` | **Works** for `fun:`, `src:`, `mainfile:`, `global:`, `type:` and `=init`, with clang's error wording, including regular-expression (`#!special-case-list-v1`) lists and the version 3 `./` rule of clang 22 |
 
 The runtimes are LLVM's compiler-rt (Debian package `libclang-rt-<N>-dev`),
 which the linking `clang++` adds. Detail in
