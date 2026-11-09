@@ -10,9 +10,7 @@
 //! closure and returns the `LambdaExpr`. [`Sema::act_on_lambda_error`]
 //! abandons a lambda whose body could not be parsed.
 
-use kiln_ast::decl::{
-    Access, ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, ParamData,
-};
+use kiln_ast::decl::{Access, ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, ParamData};
 use kiln_ast::ids::{AttrId, ExprId, LambdaId, StmtId};
 use kiln_ast::lambda::{CaptureDefault, CaptureKind, ClosureThunk, LambdaData};
 use kiln_ast::names::{DeclName, OverloadedOperator};
@@ -325,7 +323,10 @@ impl Sema<'_, '_> {
         }
         if matches!(
             self.ast.decls.get(dc).kind(),
-            DeclKind::TranslationUnit | DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export
+            DeclKind::TranslationUnit
+                | DeclKind::Namespace
+                | DeclKind::LinkageSpec
+                | DeclKind::Export
         ) {
             return true;
         }
