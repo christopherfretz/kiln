@@ -976,8 +976,17 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         // specialization): already diagnosed. With no error in the TU it is
         // a kiln bug, and the use that names it would be dropped silently:
         // an internal error instead (§4.6 "No silent drop", WP-600).
+        self.lookup_dropped(node.name(), inst_parent, loc);
+        Err(SubstFail)
+    }
+
+    /// The guard on `find_instantiated_decl`'s last resort: a declaration
+    /// named `name` that no instantiation of `inst_parent` provides, with
+    /// no error in the TU to explain it, is a kiln bug reported as an
+    /// internal error rather than a use silently dropped (§4.6, WP-600).
+    fn lookup_dropped(&mut self, name: kiln_ast::names::DeclName, inst_parent: DeclId, loc: Loc) {
         if self.sema.diags.error_count() == 0 {
-            let name = self.sema.decl_name_str(node.name());
+            let name = self.sema.decl_name_str(name);
             let d = self
                 .sema
                 .diag(kiln_diag::DiagId::sema_inst_member_dropped, loc)
@@ -985,7 +994,6 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 .arg(self.ctx_arg(inst_parent));
             self.sema.emit(d);
         }
-        Err(SubstFail)
     }
 
     /// Whether instantiated class or enumeration `inst` was instantiated
