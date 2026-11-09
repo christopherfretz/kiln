@@ -16,7 +16,7 @@ use kiln_source::Loc;
 
 use crate::Sema;
 use crate::init::Initializer;
-use crate::overload::IcsOptions;
+use crate::overload::{Ics, IcsOptions};
 
 /// Recursion bound for the explanation walk (a class cannot contain
 /// itself, but a broken one may refer to itself through errors).
@@ -309,9 +309,28 @@ impl Sema<'_, '_> {
         // exist and must not bind the reference to a temporary.
         let info = self.arg_info(e);
         let ety = self.ety(e);
-        if self.try_implicit_conversion(&info, pty, IcsOptions::NONE).is_bad() {
+        let ics = self.try_implicit_conversion(&info, pty, IcsOptions::NONE);
+        if ics.is_bad() {
             let d = self
                 .diag(DiagId::sema_cce_not_implicitly_convertible, at)
+                .arg(self.ty_arg(ety))
+                .arg(self.ty_arg(pty));
+            let d = self.note_nttp_param(d, ploc);
+            self.emit(d);
+            return Err(());
+        }
+        // [expr.const]/12: binding to a base class subobject is a
+        // derived-to-base conversion ([over.ics.ref]/1), which a
+        // converted constant expression may not use, also after a
+        // user-defined conversion (`const B&` given a `D`, WP-561).
+        let scs = match &ics {
+            Ics::Standard(s) => Some(s),
+            Ics::UserDefined(u) => Some(&u.after),
+            _ => None,
+        };
+        if scs.is_some_and(|s| !self.cce_second_allowed(s)) {
+            let d = self
+                .diag(DiagId::sema_cce_conversion_not_allowed, at)
                 .arg(self.ty_arg(ety))
                 .arg(self.ty_arg(pty));
             let d = self.note_nttp_param(d, ploc);
