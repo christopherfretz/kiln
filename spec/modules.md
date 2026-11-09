@@ -974,7 +974,7 @@ What an image must hold, the id it is keyed by, and where it stands:
 | types | `QualType` into the type context | replayed; a carried value's type is its expression's | type table, re-interned |
 | expressions, statements, attributes, lists | `ExprId`, `StmtId`, `AttrId`, `ListId` | replayed | bodies the importer can use (inline, constexpr, templates), per declaration |
 | template specializations and implicit instantiations | sema's instantiation tables | replayed | carried, merged by (template, arguments) |
-| constant values | `ConstValueId` in the `ConstStore` | **carried**: integers, enumerators, `bool`, floating point, null pointers, aggregates without pointers or unions | pointers, references, member pointers, reflections (they name declarations) |
+| constant values | `ConstValueId` in the `ConstStore` | **carried**: integers, enumerators, `bool`, floating point, null pointers; pointers, references and pointers to members by the entities they name, reflections, and aggregates holding any of these (WP-1047); not yet pointers to string literals, temporaries and labels, nor data member specification and annotation reflections | the same encoding, its entities remapped; the values part 1 leaves out |
 | Oven state (frozen heap objects, memo tables) | the Oven | not carried | frozen objects as constant values; memo tables stay per TU |
 | source positions | `FileId`, `Loc` | keys only (see "Identity") | location table over the capsule's file table |
 | identifiers | `Symbol` (`kiln_source::Interner`) | replayed | string table, re-interned |
@@ -1001,7 +1001,11 @@ evaluation happens, which the replay reproduces exactly:
 
 The value's type is not stored. It is the canonical, unqualified type of
 the evaluated expression; the writer checks that it is, and the reader
-takes it from its own replayed copy of the expression. Outside any instantiation the two positions are the whole key
+takes it from its own replayed copy of the expression. The one exception
+is a reference's value (a reference variable's initializer, a reference
+template argument), whose type is the reference type while the
+expression's is the referee: it is written `typed`, with the reference
+type, and both sides check that its referee is the expression's type. Outside any instantiation the two positions are the whole key
 (instantiation index 0), and a result is used only while the importer
 reads the unit the file holds (`module_current_unit` is that unit's), so
 the same header text read by the importer itself never matches. Inside
@@ -1038,6 +1042,8 @@ the same specialization and compare them as they are:
     that was (a template, the namespace scope). Its position is the
     replay-stable (path index, offset) pair of "Identity". Implicit
     declarations have no `D` key, and a top-level key is never `D`.
+  - `U`: the translation unit itself (the global namespace, as a
+    reflection or a `D` key's context).
 - **Substitution frames** that record their arguments (concept check,
   constraint check, deduced, explicit and prior argument substitution,
   default template argument): `F`, a one-byte frame code, the template,
@@ -1045,9 +1051,13 @@ the same specialization and compare them as they are:
   Only a template whose parameters are its outermost level (depth 0) is
   keyed; then the arguments are all the substitution uses.
 - **Arguments**: a count, then per argument `T` type, `V` type and value
-  (part 1's value encoding; a pointer, reference or reflection argument
-  has no key, WP-1047), `N` template (an entity), `K` pack (an argument
-  list).
+  (part 1's value encoding, extended by WP-1047 to the values that
+  name entities, see "Encoding": a pointer or reference argument is its
+  object's entity plus its byte offset, a reflection argument its
+  reflectee's entity, type or value, so `X<&g>` and `Wrap<^^S>` merge),
+  `N` template (an entity), `K` pack (an argument list). A value naming
+  something without a key (a string literal, an unkeyed entity) gives
+  the argument list no key.
 - **Types** structurally: the canonical type's cv byte, then a tag and
   its operands (builtin, `_BitInt`, pointer, references, member pointer,
   arrays, function with parameters, flags and a `noexcept` bit, record
@@ -1111,7 +1121,7 @@ crate that reads them: the carried constants are `kiln_sema::bmi_ast`.
 Section 1, little-endian:
 
 ```
-marker   u32 0xffffffff, then u32 version (2)
+marker   u32 0xffffffff, then u32 version (3)
 paths    u32 count, then each path (u32 length, UTF-8)
 insts    u32 count, then each instantiation key (u32 length, bytes,
          see "Instantiation keys"), numbered from 1 in first-use order
@@ -1128,13 +1138,44 @@ entries  u32 count (at least 1), then each entry:
          4 aggregate: bytes (u32 length), u32 padding count, then
                       (u32 start, u32 length) ranges, sorted, non-empty,
                       not adjacent, within the bytes
+         the values naming entities (version 3, WP-1047); `var` is an
+         unsigned LEB128 varint (at most 10 bytes), `ty` a type and `ent`
+         an entity as in "Instantiation keys":
+         5 member null:    u8 NullKind (a null pointer to member)
+         6 pointer:        u8 flags (bit 0 past the end, bit 1 designated),
+                           u8 base, then
+                             0 declaration (a variable): ent
+                             1 function: ent
+                             2 typeid object: ty
+                             3 template parameter object: ty, value
+                             4 constant object: ty, value
+                           var byte offset, [ty designated subobject]
+         7 member pointer: u8 flags (bit 0 function, bit 1 derived),
+                           ent member, var count, count x ent path
+         8 reflection:     u8 reflectee tag (`Reflectee::tag`), then
+                             type: u8 0 then ty, or 1 then ent (an alias)
+                             declaration, namespace, namespace alias,
+                             template: ent
+                             null: nothing
+                             value, object: ty, value
+                             base, parameter: ent, var index
+         9 aggregate+:     bytes (u32 length), var padding count, then
+                           (var start, var length); var reloc count, then
+                           (var at, ty, value); var union count, then
+                           (var at, ent active member)
+        10 typed:          ty (a reference type), then the value
 ```
+
+A value part 1 could carry keeps part 1's bytes (tags 0-4), also inside
+an aggregate+ or a key; tags 5-10 appear only in version 3 sections.
+Values nest at most 48 levels, like keys (an entry's value has no length cap).
 
 - **Versioned.** Version 1 (WP-985) had no marker, version or
   instantiation table, and no `inst` field; its first word is the path
   count, never `0xffffffff`. The reader reads version 1 as written (every
-  entry at index 0) and rejects any version but 1 and 2 (`unsupported
-  section version`). Only carried keys are written: an instantiation key
+  entry at index 0) and rejects any version but 1, 2 and 3 (`unsupported
+  section version`). Version 2 (WP-1046) is version 3 without tags 5-10
+  and the `U` entity. Only carried keys are written: an instantiation key
   no kept entry uses is dropped and the rest renumbered.
 - **Deterministic.** Paths are in first-use order and entries in
   first-evaluation order (no hash-map iteration), so the same inputs give
@@ -1145,7 +1186,16 @@ entries  u32 count (at least 1), then each entry:
   float bits, padding ranges, path indices, duplicate keys and trailing
   bytes. Each instantiation key is parsed in full against the grammar of
   "Instantiation keys" (tags, nesting depth, path indices, values),
-  duplicate keys and out-of-range `inst` indices are rejected. Any failure is a `SectionError`, turned into §11.4's
+  duplicate keys and out-of-range `inst` indices are rejected, and so is
+  every value of tags 5-10 (tags, flags, varints over 10 bytes or
+  64 bits, offsets and counts beyond `u32`, entities, types). An entity
+  in a value resolves to the importer's own declaration: a `D` entity
+  by its kind and position (among the first, non-implicit declarations;
+  two at one position resolve to neither), an `S` among its template's
+  specializations, an `M`/`P` through the specialization's members.
+  Every resolved declaration is checked by writing its key again and
+  comparing the bytes, so a value names exactly the writer's entity or
+  is not used (`bmi_ast/value.rs`). Any failure is a `SectionError`, turned into §11.4's
   `fatal error: module file 'x.pcm' is corrupt: carried constants:
   <reason>`. The framing errors (`a kind-2 file without sections`,
   `unknown section`, `sections out of order`) are `BmiError`s with the
@@ -1203,8 +1253,11 @@ file and does not force kind 1. Sema then records every evaluation
   statement and emitted no error or warning (a carried result would
   silence a diagnostic the importer must give, and an evaluation that
   instantiated a template must still instantiate it);
-- it succeeded, its value's type is its expression's, and the value is
-  self-contained (see "Inventory");
+- it succeeded, its value's type is its expression's (or it is a
+  reference's value, see "Identity"), and every entity, type and value it
+  names has a key (see "Encoding"); a pointer to a string literal, a
+  temporary or a label, and a data member specification or annotation
+  reflection have none;
 - no other evaluation with the same key gave a different result (the
   same evaluation made again, a constraint checked twice, keeps its
   result).
@@ -1231,14 +1284,18 @@ no key`, `a consteval block`, `an
 evaluation at a position a replay does not reproduce`, `an evaluation that
 changed the AST`, `an evaluation that emitted a diagnostic`, `an
 evaluation that failed`, `a value whose type is not its expression's`, `a
-pointer or reference value`, `a pointer-to-member value`, `a reflection
-value`, `an aggregate holding a pointer`, `an aggregate holding a union`,
-`two evaluations at one position`. When the unit made no evaluation at
+pointer or reference value whose object has no key`, `a pointer-to-member
+value whose member has no key`, `a reflection value with no key`, `an
+aggregate holding a value with no key`, `a reference value` (a reference's
+value naming something without a key), `two evaluations at one
+position`. The reason is printed only when nothing was carried. When the unit made no evaluation at
 all, the parenthesis is left out. The reader accepts both kinds, so
 mixing them in one build is fine.
 
 On libc++ 19's `std.cppm`, part 1 carried 2900 results, and part 2
-item 1 carries 8774, 5744 of them inside template instantiations (most
+item 1 carries 8774, 5744 of them inside template instantiations
+(WP-1047 adds one: the file grows by 167 bytes, from
+9,840,072 to 9,840,239) (most
 of the rest in alias template substitution and default-argument checking
 frames, which record no arguments). Before part 2, of the evaluations
 that were not carried, 10142 happened inside a template instantiation, 141
@@ -2433,6 +2490,18 @@ interface or `stdapp`'s source never rebuilds the std module.
   kinds), `kind2_falls_back_to_kind1` (the fallback reason and the forced
   kind) and `kind2_damaged_files_are_diagnosed` (truncated and flipped
   kind-2 files are fatal errors, and 24 damaged sections behind a valid
-  checksum give a diagnostic or a fallback evaluation, never a panic);
+  checksum give a diagnostic or a fallback evaluation, never a panic),
+  `kind2_carries_pointer_and_reflection_values` (WP-1047: the importer
+  of `module.interface/Inputs/cv.cppm` and `cr.cppm` re-evaluates none of
+  their constant evaluations under kind 2 but the failed trial
+  evaluations, and its IR is the same under both kinds);
+  `crates/kiln_sema/src/bmi_ast.rs` `wire_*` and `fuzz_wire_values`
+  (every value of tags 5-10 and a key holding pointer and reflection
+  arguments round-trip; their truncations, flips and overlong varints are
+  rejected without a panic); the `-run` tests
+  `module.interface/carried-pointers-run.cpp` and
+  `carried-reflections-run.cpp` (address and specialization identity
+  across the two units, `&X<&g>::x`, `&Wrap<^^S>::x`, template parameter
+  objects);
   and every `module:` test under `cargo xtask test --bmi-kind 1` and
   `--bmi-kind 2` (spec/harness.md "Module-file kinds"), both in `ci`.
