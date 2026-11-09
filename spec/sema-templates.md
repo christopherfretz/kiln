@@ -1657,6 +1657,18 @@ silently (`diag = None`) at those sites. S3O lists them.
      arguments are checked the same way after deduction, a failure being
      a substitution failure shown without the deduced arguments (WP-669,
      `tests/conformance/temp.arg.template/p3-deduced-argument-checked.cpp`);
+   - check each deduced value against its parameter's type
+     ([temp.deduct.type]/17, /20, [temp.arg.nontype]/1;
+     `deduced_value_fits`, clang `ConvertDeducedTemplateArgument`): a
+     non-enumeration integral type takes an integral or unscoped
+     enumeration value that fits it, any other fixed type only a value of
+     that type, a dependent type anything (its deduction checked it), and
+     a placeholder type a value whose type it deduces from (`auto *P`
+     takes `&x` but not `0` or `nullptr`; `auto Q::*M` takes `&Q::m`;
+     `nttp_placeholder_matches`); a deduced pack element by element. So
+     `nullptr`, `&x`, `1.0` or a scoped enumerator of a `template<auto V>`
+     primary does not bind `template<int N> A<N>` (WP-1105,
+     `tests/conformance/temp.spec.partial.match/nttp-deduced-value-type-run.cpp`);
    - finish the deduction: substitute the deduced args into `p.args` and
      require canonical equality with `A`;
    - check `p`'s associated constraints (§8). For a class template, their
@@ -1671,7 +1683,19 @@ silently (`diag = None`) at those sites. S3O lists them.
    element, it is that partial. Otherwise the pattern is the most
    specialized partial, found by function-template partial ordering of
    the rewritten `template<p.params> void f(X<p.args>)` (§6.7), with
-   constraints as the tie-breaker. The tie-breaker applies only when the
+   constraints as the tie-breaker. Before it, two partials that each
+   deduce from the other are ordered by CWG1432 (no resolution; clang's
+   speculative fix in `getMoreSpecialized`, `cwg1432_tie_break`): when the
+   trailing argument pack (the primary's trailing parameter pack) differs
+   in size between them and ends in a pack expansion in exactly one, the
+   one with the longer pack ending in the expansion is less specialized.
+   kiln's list deduction already fails a pack expansion against a
+   non-pack parameter and an argument list longer than the parameters
+   (§6.2), so `C<T>` is more specialized than `C<T, U...>` by deduction
+   alone; the rule is a backstop that keeps the order clang's (WP-1105,
+   `tests/conformance/temp.spec.partial.order/cwg1432-trailing-pack-run.cpp`,
+   `tests/conformance/temp.func.order/cwg1432-trailing-pack-run.cpp`).
+   The tie-breaker applies only when the
    two are equally specialized by deduction, their template parameter
    lists are equivalent ignoring constraints ([temp.over.link]/6, same
    length, kinds, packness and non-type parameter types) and their
@@ -1831,8 +1855,27 @@ Out-of-class partial specializations of a member template (WP-150):
   of a class template, whose arguments are dependent; it is checked when
   the enclosing class is instantiated (`Substituter::member_partial_spec`
   runs both checks on the redeclared one, with the instantiation note), as
-  clang does. Still skipped: a primary non-type parameter whose type is a
-  placeholder or dependent (`template<auto V>`, `template<class T, T V>`).
+  clang does. A non-type parameter whose type is a placeholder or another
+  parameter (`template<auto V>`, `template<class T, T V>`), on either
+  side, has that type deduced from the synthesized argument's type
+  ([temp.deduct.type]/20; `deduce_nttp_type`, then
+  `deduced_nttp_type_mismatch` substitutes the deduced arguments into it
+  and compares): a synthesized `auto` is a unique type only a placeholder
+  or a type parameter matches, so `template<int N> A<N>` of
+  `template<auto N> A` is more specialized while `template<class T, T N>
+  A<N>`, `template<auto N> F<N>` of `template<int N> F`, `template<class T,
+  int N> B<T, N>` of `template<class T, T N> B` and `template<bool B> V<int,
+  B>` of `template<class T, T> V` are not (WP-1105,
+  `tests/conformance/temp.spec.partial.general/placeholder-typed-primary-not-more-specialized.cpp`,
+  `.../param-typed-primary-converted-arg-not-more-specialized.cpp`). Under
+  `-fclang-compat=19` the partial's arguments for a primary parameter
+  typed by another one are first converted to that type, as clang 19
+  converted them (`DeducedArgs::converted_values`, `converted_values_fit`:
+  the same type, an integral or unscoped enumeration value to a
+  non-enumeration integral type, a pointer qualification conversion), so
+  `V<int, B>` is accepted there; a non-convertible one is still rejected,
+  with kiln's wording rather than clang 19's `value of type 'int*' is not
+  implicitly convertible to 'int'`.
 - *Deducible* ([temp.spec.partial.general]/8, `check_partial_deducible`):
   the arguments are deduced from themselves; a parameter left undeduced
   gets `contains a template parameter that cannot be deduced`
