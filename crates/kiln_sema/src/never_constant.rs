@@ -142,6 +142,12 @@ impl Sema<'_, '_> {
             return;
         }
         let loc = self.ast.decls.get(f).loc();
+        // clang skips the (expensive) check for a function declared in a
+        // system header, even under `-Wsystem-headers` (libstdc++'s
+        // `<cmath>` overloads call builtins clang does not evaluate).
+        if self.diags.sm().is_in_system_header(loc) {
+            return;
+        }
         let fail = if self.called_without_arguments(f) {
             // kiln's Oven folds some builtins clang does not evaluate
             // (`__builtin_floor`, `fabs`) and notes others its own way
@@ -347,7 +353,15 @@ impl Sema<'_, '_> {
         // does (WP-945): the operands decide, never the Oven's value.
         let calls = self.builtin_calls(e, 0);
         if self.nc_strict_only && !calls.strict {
-            return Value::Unknown;
+            // The strict pass: only a builtin call may fail; anything else
+            // contributes its value when the Oven has one (`fabs(-2.0)`).
+            return match evaluable && !self.names_unknown(e, 0) {
+                true => match self.nc_eval(e) {
+                    v @ Value::Known(_) => v,
+                    _ => Value::Unknown,
+                },
+                false => Value::Unknown,
+            };
         }
         if calls.strict {
             // Taken apart below.
