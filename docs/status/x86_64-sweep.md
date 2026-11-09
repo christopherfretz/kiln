@@ -30,7 +30,7 @@ The one-off flag masks main's WP-873 never-constant regression (see
 "Triage"), which otherwise hides most of abseil, grpc, bitcoin_core and
 daw_json_link. It was only on the `sweep/x86-3` and `sweep/x86-4`
 branches; `sweep.yml` on main has no such flag. All four `sweep/x86-*`
-branches are deleted.
+branches are deleted (a run continues when its branch is deleted).
 
 ## libc++ 22.1.8 (x86-2; x86-4 is identical)
 
@@ -70,7 +70,10 @@ Tests are "passed / total".
   10 fail under both).
 - **grpc** `v1.85.1`: x86-2 0/118, 65/918 TUs: 822 TUs hit the WP-873
   regression through abseil's headers and 31 the missing `__rdtsc`
-  (fixed). GRPC_X86_4
+  (fixed). The full builds, kiln with the one-off flag (x86-4) and the
+  clang control (x86-2), were still running when this page was written
+  (5732 TUs on a 4-vCPU runner; the aarch64 builds took 4–5 h); their
+  `oss-grpc-*` artifacts hold the result.
 - **bitcoin_core** `v32.1`: x86-2 220/357 (WP-873). With the one-off flag
   (x86-3, x86-4): 357/357, 475/475 TUs; clang 357/357, 487/487 TUs. The
   12 TUs are the SSE4.1/AVX2/SHA-NI/SSE4.2/CLMUL code that CMake's
