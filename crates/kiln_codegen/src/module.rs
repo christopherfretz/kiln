@@ -2413,8 +2413,9 @@ impl<'a> Cg<'a> {
                 out.push(Attr::string("tune-cpu", t));
             }
         } else {
+            // WP-1151: the `AArch64` `-mcpu=` CPU (canonical name).
             if !native {
-                out.push(Attr::string("target-cpu", "generic"));
+                out.push(Attr::string("target-cpu", cpu.unwrap_or("generic")));
             }
             out.push(Attr::string("target-features", &self.features_attr(d)));
             if let Some(t) = tune {

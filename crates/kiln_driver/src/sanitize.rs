@@ -55,6 +55,10 @@ pub struct SanitizeFlags {
     pub track_origins: Option<u32>,
     /// The last of `-shared-libsan` (true) / `-static-libsan`.
     pub shared_libsan: Option<bool>,
+    /// `AArch64` x18 is reserved: `-ffixed-x18` was given or the
+    /// `--target=` OS reserves it ([`x18_reserved_by_default`]; set by
+    /// the argument parser, WP-1151).
+    pub x18_reserved: bool,
 }
 
 /// The resolved sanitizer state.
@@ -94,7 +98,38 @@ const INCOMPATIBLE: &[(S, S)] = &[
     (S::LEAK, S(S::THREAD.0 | S::MEMORY.0)),
     (S::KERNEL_ADDRESS, S(S::ADDRESS.0 | S::LEAK.0 | S::THREAD.0 | S::MEMORY.0)),
     (S::HWADDRESS, S(S::ADDRESS.0 | S::THREAD.0 | S::MEMORY.0 | S::KERNEL_ADDRESS.0)),
+    // WP-1151.
+    (
+        S::KERNEL_HWADDRESS,
+        S(S::ADDRESS.0
+            | S::HWADDRESS.0
+            | S::LEAK.0
+            | S::THREAD.0
+            | S::MEMORY.0
+            | S::KERNEL_ADDRESS.0),
+    ),
+    (S::MEMTAG, S(S::ADDRESS.0 | S::KERNEL_ADDRESS.0 | S::HWADDRESS.0 | S::KERNEL_HWADDRESS.0)),
 ];
+
+/// The sanitizers kiln does not implement that clang's driver checks
+/// further (WP-1151): the [`INCOMPATIBLE`] pairs and the AArch64
+/// `shadow-call-stack` / `-ffixed-x18` rule.
+const CLANG_CHECKED: S =
+    S(S::MEMTAG.0 | S::SHADOW_CALL_STACK.0 | S::KERNEL_ADDRESS.0 | S::KERNEL_HWADDRESS.0);
+
+/// LLVM's `AArch64::isX18ReservedByDefault` of a `--target=` triple (of
+/// those kiln accepts: Android and OpenHarmony; also Darwin, Fuchsia and
+/// Windows): `-fsanitize=shadow-call-stack` then needs no `-ffixed-x18`.
+#[must_use]
+pub fn x18_reserved_by_default(triple: &str) -> bool {
+    let mut parts = triple.split('-').skip(1);
+    parts.any(|p| {
+        ["android", "ohos", "fuchsia", "windows", "darwin", "macos", "ios", "tvos", "watchos"]
+            .iter()
+            .any(|os| p.starts_with(os))
+            || p == "apple"
+    })
+}
 
 fn split(v: &str) -> Vec<String> {
     v.split(',').map(str::to_owned).collect()
@@ -220,6 +255,7 @@ impl SanitizeFlags {
         let mut removed_groups: Vec<&str> = Vec::new();
         let mut diagnosed_groups: Vec<&str> = Vec::new();
         let mut memtag_stack = false;
+        let mut clang_checked = S::NONE;
         for l in self.lists.iter().rev() {
             match l.list {
                 List::Add => {
@@ -227,6 +263,12 @@ impl SanitizeFlags {
                     let explicit = explicit.without(all_remove);
                     memtag_stack |= expanded.without(all_remove).has(S::MEMTAG_STACK)
                         && !target_unsupported.has(S::MEMTAG_STACK);
+                    clang_checked = clang_checked.union(
+                        expanded
+                            .without(all_remove)
+                            .without(target_unsupported)
+                            .intersect(CLANG_CHECKED),
+                    );
                     if let Some(k) = Some(explicit.intersect(S::VPTR).intersect(trap))
                         .filter(|k| !k.is_empty() && !diagnosed.has_any(*k))
                     {
@@ -310,18 +352,30 @@ impl SanitizeFlags {
                 _ => {}
             }
         }
+        // WP-1151: clang checks the AArch64 shadow call stack's register
+        // after the per-option errors, before the incompatible pairs.
+        if !x86 && clang_checked.has(S::SHADOW_CALL_STACK) && !self.x18_reserved {
+            errors.push(ArgError::OnlyAllowedWith(
+                self.last_arg_for(S::SHADOW_CALL_STACK),
+                "-ffixed-x18".into(),
+            ));
+        }
+        // The pairs over what clang enables, kiln's sanitizers and the
+        // checked others (WP-1151).
+        let mut enabled = kinds.union(clang_checked);
         for &(group, incompatible) in INCOMPATIBLE {
-            if kinds.has_any(group) {
-                let bad = kinds.intersect(incompatible);
+            if enabled.has_any(group) {
+                let bad = enabled.intersect(incompatible);
                 if !bad.is_empty() {
                     errors.push(ArgError::NotAllowedWith(
                         self.last_arg_for(group),
                         self.last_arg_for(bad),
                     ));
-                    kinds = kinds.without(bad);
+                    enabled = enabled.without(bad);
                 }
             }
         }
+        kinds = kinds.intersect(enabled);
         // clang's `parseSanitizeArgs` for the recover lists.
         let mut recover = S::RECOVERABLE_BY_DEFAULT;
         for l in &self.lists {
@@ -849,6 +903,76 @@ mod tests {
         assert!(resolve("-fsanitize=memtag-stack").0.memtag_stack);
         assert!(!resolve("-fsanitize=memtag-heap,memtag-globals").0.memtag_stack);
         assert!(!resolve("-fsanitize=memtag -fno-sanitize=memtag-stack").0.memtag_stack);
+    }
+
+    /// spec/driver.md "Sanitizers" (WP-1151): clang's `IncompatibleGroups`
+    /// over the sanitizers kiln does not implement (memtag, the kernel
+    /// ones) and the `AArch64` shadow call stack's `-ffixed-x18`.
+    #[test]
+    fn clang_checked_pairs() {
+        let errs = |s: &str| {
+            resolve(s)
+                .1
+                .into_iter()
+                .filter(|e| !matches!(e, ArgError::UnsupportedByKiln(_)))
+                .collect::<Vec<_>>()
+        };
+        let na = |a: &str, b: &str| ArgError::NotAllowedWith(a.into(), b.into());
+        let x18 =
+            ArgError::OnlyAllowedWith("-fsanitize=shadow-call-stack".into(), "-ffixed-x18".into());
+        assert_eq!(
+            errs("-fsanitize=memtag,address"),
+            [na("-fsanitize=memtag", "-fsanitize=address")]
+        );
+        assert_eq!(
+            errs("-fsanitize=address -fsanitize=memtag-stack"),
+            [na("-fsanitize=memtag-stack", "-fsanitize=address")]
+        );
+        assert_eq!(
+            errs("-fsanitize=memtag-heap,kernel-hwaddress"),
+            [na("-fsanitize=memtag-heap", "-fsanitize=kernel-hwaddress")]
+        );
+        // `KernelHWAddress` comes first and takes `address` away.
+        assert_eq!(
+            errs("-fsanitize=memtag,kernel-hwaddress,address"),
+            [
+                na("-fsanitize=kernel-hwaddress", "-fsanitize=address"),
+                na("-fsanitize=memtag", "-fsanitize=kernel-hwaddress"),
+            ]
+        );
+        assert_eq!(errs("-fsanitize=memtag,address -fno-sanitize=memtag").len(), 0);
+        // The kiln sanitizer of a bad pair is dropped.
+        assert!(!resolve("-fsanitize=memtag,address").0.opts.kinds.has_any(S::ADDRESS));
+        assert_eq!(errs("-fsanitize=shadow-call-stack"), [x18.clone()]);
+        assert_eq!(errs("-fsanitize=shadow-call-stack -fno-sanitize=shadow-call-stack"), []);
+        // Before the pairs.
+        assert_eq!(
+            errs("-fsanitize=address,thread,shadow-call-stack"),
+            [x18, na("-fsanitize=address", "-fsanitize=thread")]
+        );
+        let (mut f, _) = flags("-fsanitize=shadow-call-stack");
+        f.x18_reserved = true;
+        assert!(
+            f.resolve(true, false, false, "aarch64-unknown-linux-gnu")
+                .1
+                .iter()
+                .all(|e| matches!(e, ArgError::UnsupportedByKiln(_)))
+        );
+        // x86-64 needs no `-ffixed-x18`.
+        let (f, _) = flags("-fsanitize=shadow-call-stack");
+        assert_eq!(f.resolve(true, false, true, "x86_64-unknown-linux-gnu").1.len(), 1);
+        for (t, r) in [
+            ("aarch64-linux-gnu", false),
+            ("aarch64-unknown-linux-android", true),
+            ("aarch64-linux-android21", true),
+            ("aarch64-linux-ohos", true),
+            ("aarch64-unknown-fuchsia", true),
+            ("arm64-apple-darwin", true),
+            ("aarch64-pc-windows-msvc", true),
+            ("aarch64-none-elf", false),
+        ] {
+            assert_eq!(x18_reserved_by_default(t), r, "{t}");
+        }
     }
 
     #[test]
