@@ -11,8 +11,9 @@
 // false for it. Answers checked against GCC 16.1 (-freflection) except
 // one: GCC 16.1 answers is_namespace_member(^^int) == true for a
 // fundamental type, which is not a member of any namespace (kiln follows
-// the IS). is_base is false here: no reflection of a direct base
-// relationship exists before bases_of (WP-478).
+// the IS). is_base is true only for a direct base relationship, as
+// bases_of returns; the relationship has the access of its
+// base-specifier.
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
@@ -84,3 +85,11 @@ static_assert(!is_public(^^gv) && !is_public(^^S) && !is_public(^^int) && !is_pr
 static_assert(!is_public(^^S::SE::se));
 
 static_assert(!is_base(^^S) && !is_base(^^S::m) && !is_base(info{}));
+struct B1 {};
+struct B2 {};
+struct D : B1, private B2 {};
+constexpr info db0 = bases_of(^^D, access_context::unchecked())[0];
+constexpr info db1 = bases_of(^^D, access_context::unchecked())[1];
+static_assert(is_base(db0) && is_base(db1));
+static_assert(is_public(db0) && !is_private(db0) && is_private(db1) && !is_public(db1));
+static_assert(!is_class_member(db0) && !is_namespace_member(db0));

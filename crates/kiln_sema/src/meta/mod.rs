@@ -62,7 +62,7 @@ impl Sema<'_, '_> {
             MetaOp::Query(q) if names::is_names_op(q) => self.meta_names(q, args, out, ctx, oven),
             MetaOp::Query(q) => self.meta_query(q, args, out, ctx, oven),
             // [meta.reflection.queries] lists these two with the
-            // predicates (WP-476); their families belong to WP-480/481.
+            // predicates; only the reflectee kind decides them.
             MetaOp::Annot(AnnotOp::IsAnnotation) | MetaOp::Define(DefineOp::IsDataMemberSpec) => {
                 self.meta_kind_pred(op, args, out)
             }
