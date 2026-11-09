@@ -996,21 +996,50 @@ ctor as trivial (tests/conformance/class.copy.ctor/trivial-through-overload-reso
 An `= default` on first declaration gets it at `}` (`mark_function`, already
 `LATE`), by the same selection when the class has `NEEDS_OVL_*` for it
 (WP-292: `{ M m; S(S&&) = default; }` with `M` declaring only a defaulted
-copy is trivially move-constructible). Eligibility ([special]/6) of
-constrained special members is WP-073's;
-for non-template classes every non-deleted declared special member is eligible.
+copy is trivially move-constructible). Only eligible members count
+([special]/6, §4.7.2).
 A variadic special member is never trivial (clang `SpecialMemberIsTrivial`,
 `note_nontrivial_variadic`; WP-1090). That covers `T(...)`, which is a default
 constructor by [class.default.ctor]/1, deleted or not, and
 `T(const T&, ...) = delete`, which is a copy constructor, so `T` is not
 trivially copyable and not `__builtin_bit_cast`-able. A default constructor
-with parameters (`T(int = 0)`, deleted or not) or a constructor template is
-user-declared and non-trivial. `T() = delete` and `T() = default` stay
-trivial. A user-declared kind counts as trivial only if every declared member
-of that kind is trivial, so `N(...) = delete; N() = default;` has no trivial
-default constructor. clang ORs over the declared members and gives
-`__has_trivial_constructor(N)` = 1; that difference is a follow-up, because it
-needs [special]/6 eligibility first.
+with parameters (`T(int = 0)`, deleted or not) or a constructor template
+whose parameters all have defaults is user-declared and non-trivial.
+`T() = delete` and `T() = default` stay trivial.
+
+**Two bits per kind (WP-1109).** Triviality is per eligible member, so a
+class can have both a trivial and a non-trivial member of one kind
+(`N(...) = delete; N() = default;`). As clang, kiln keeps two class bits per
+kind (the destructor has only the first, as it is selected):
+- `TRIVIAL_*` = clang `HasTrivialSpecialMembers`: some eligible declared
+  member of the kind is trivial, or the implicit one (declared or not yet)
+  would be; for a default constructor or a move member it also needs the
+  class to have one (`Sema::has_trivial`).
+- `NONTRIVIAL_{DEFAULT_CTOR,COPY_CTOR,MOVE_CTOR,COPY_ASSIGN,MOVE_ASSIGN}`
+  = clang `hasNonTrivial*`: some eligible declared member is non-trivial,
+  or the implicit one is needed and would be non-trivial; for a copy member
+  "needed" is always (`Sema::has_nontrivial`, the destructor's being
+  `!TRIVIAL_DTOR`).
+
+Readers use the one clang uses:
+- `TRIVIALLY_COPYABLE` ([class.prop]/1) is "no `NONTRIVIAL_*` copy/move and
+  `TRIVIAL_DTOR`" (`with_trivially_copyable`), so a deleted or ineligible
+  non-trivial copy constructor does not matter.
+- `__is_pod` / `isCXX11PODType` (clang `isTrivial`) and debug info's
+  `DIFlagNonTrivial` read `TRIVIAL_DEFAULT_CTOR` and `TRIVIALLY_COPYABLE`;
+  `N` is POD.
+- `__is_trivial` and `__has_trivial_*` (beyond the POD shortcut) and the
+  `__has_nothrow_*` shortcuts need "all eligible trivial":
+  `Sema::all_trivial` = `has_trivial && !has_nontrivial`; `N` is not
+  trivial.
+- `isValidVarArgType` (sema and the oven) reads `NONTRIVIAL_*`.
+- Code generation never skips a call by class bits alone: a construct
+  expression is elided only when the constructor overload resolution
+  selected is trivial (`FnSpec::is_trivial`). A new-expression's default
+  construction (`new_class_default`) always selects the constructor, so a
+  deleted, ambiguous or inaccessible one is diagnosed, and builds no
+  `CXXConstructExpr` only when the selected one is trivial
+  (`tests/conformance/expr.new/default-init-deleted-ctor.cpp`).
 
 Aggregate bit ([dcl.init.aggr]/1, `special_member_bits` and `class_bits`):
 - from C++20 (P1008), any user-declared constructor makes the class a
@@ -1021,6 +1050,8 @@ Aggregate bit ([dcl.init.aggr]/1, `special_member_bits` and `class_bits`):
 - before C++17 (P0017R1), any base class makes the class a non-aggregate.
 
 Tests: `class.default.ctor/variadic-and-default-arg-not-trivial.cpp`,
+`class.prop/trivial-eligible-special-members.cpp`,
+`class.default.ctor/eligible-ctor-side-effects-run.cpp`,
 `dcl.init.aggr/deleted-ctor-aggregate-cxx{14,17}.cpp`,
 `class.union/cxx03-deleted-default-ctor.cpp`.
 
@@ -1279,6 +1310,41 @@ template, including an abbreviated one (`h(auto)`), is diagnosed
 keyword with a removal fix-it ([temp.mem]/3, clang
 `err_virtual_member_function_template`), and the function is then not
 virtual. `tests/conformance/class.virtual/requires-clause.cpp`.
+
+#### 4.7.2 Eligible special members ([special]/6; WP-1109)
+A special member function is eligible if it is not deleted (kiln, as
+clang, keeps deleted ones eligible), its constraints are satisfied, and no
+other special member of the same kind with the same parameter-type-list is
+more constrained. `select_eligible_special_members` (class/special/
+prospective.rs) runs at `}` right after destructor selection (§4.7.1), for
+every non-dependent class (so per class template instantiation), and marks
+each ineligible user-declared constructor and assignment operator
+`FnSpec::not_selected`, as clang `SetEligibleMethods`:
+- a member whose constraints are not satisfied is ineligible;
+- of the satisfied ones, member `i` is ineligible when another satisfied
+  member `j` of the same kind is constrained and either `i` is
+  unconstrained or `j` is at least as constrained as `i`
+  (`at_least_as_constrained`, clang `IsAtLeastAsConstrained`, so two
+  equally constrained members make each other ineligible);
+- "same kind" (clang `AreSpecialMemberFunctionsSameKind`): any two
+  non-template default constructors; copy/move members with the same first
+  parameter type and the same object parameter (explicit object parameter
+  type, or cv- and ref-qualifiers of the implicit one).
+A class with no constrained special member skips the pass. Constructor
+templates are never marked: one whose parameters all have defaults is a
+user-provided, non-trivial default constructor (§4.3).
+`scan_declared` (§4.1) counts only eligible members into the class bits
+(§4.3, `TRIVIAL_*`/`NONTRIVIAL_*`), but an ineligible member still gets its
+own `FnSpec` triviality (clang dumps `default trivial ineligible`).
+Overload resolution is unaffected: an ineligible member with the same
+signature as an eligible one is never the best viable function. The
+Itanium pass-in-registers decision (`kiln_abi::call::can_pass_in_registers`,
+spec/abi.md) and the implicit-lifetime and `__is_trivially_relocatable`
+traits skip deleted and `not_selected` members, as clang
+`canPassInRegisters` skips `isDeleted() || isIneligibleOrNotSelected()`.
+Tests: `class.prop/trivial-eligible-special-members.cpp`,
+`class.default.ctor/eligible-ctor-side-effects-run.cpp`,
+`tests/codegen/abi_matrix_eligible.cpp`.
 
 ### 4.8 Destruction of variables
 Sema does not insert destructor calls for named objects: a variable, parameter

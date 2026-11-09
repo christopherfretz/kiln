@@ -6158,6 +6158,15 @@ and aggregate element types.
   `CAN_CONST_DEFAULT_INIT` once the class is complete), so `new const
   A[n]` with `A() {}` is accepted and `new const P[n]` for an aggregate
   `P { int x; }` is the error above (WP-336).
+  A class element's default- or value-initialization
+  (`new_class_default`) always selects the default constructor, so a
+  deleted, implicitly deleted, ambiguous or inaccessible one is
+  diagnosed; no `CXXConstructExpr` is built only when the selected one
+  is trivial (then `()` is an `ImplicitValueInitExpr`). A class-wide
+  "has a trivial default constructor" bit is not enough: since
+  [special]/6 triviality is per eligible member, a class can have a
+  trivial and a non-trivial or deleted one (spec/sema-class.md §4.3,
+  §4.7.2; WP-1109).
   Class element types report "not supported yet" for default- and
   parenthesized initialization (they need `CXXConstructExpr`,
   WP-067b); braced aggregate initialization works.

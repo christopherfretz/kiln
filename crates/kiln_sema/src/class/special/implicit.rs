@@ -64,14 +64,33 @@ pub(crate) fn needs_ovl_from(bits: DefinitionBits, k: SpecialKind) -> bool {
     }
 }
 
+/// `bits` with `TRIVIALLY_COPYABLE` recomputed from the triviality bits
+/// ([class.prop]/1; clang `isTriviallyCopyable`): no non-trivial copy or
+/// move constructor or assignment operator (`NONTRIVIAL_*`: every
+/// eligible one trivial, or deleted and trivial) and a trivial
+/// destructor.
+pub(crate) fn with_trivially_copyable(bits: DefinitionBits) -> DefinitionBits {
+    use DefinitionBits as B;
+    let copyable = !bits.contains(B::NONTRIVIAL_COPY_CTOR)
+        && !bits.contains(B::NONTRIVIAL_MOVE_CTOR)
+        && !bits.contains(B::NONTRIVIAL_COPY_ASSIGN)
+        && !bits.contains(B::NONTRIVIAL_MOVE_ASSIGN)
+        && bits.contains(B::TRIVIAL_DTOR);
+    if copyable { bits.with(B::TRIVIALLY_COPYABLE) } else { bits.without(B::TRIVIALLY_COPYABLE) }
+}
+
 /// What the scan of a class's declared special members found.
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools, reason = "independent facts of the scan")]
 struct Declared {
     /// Kinds with a user-declared (non-implicit) member.
     user: u8,
-    /// Kinds with a declared member that is not trivial.
+    /// Kinds with an eligible ([special]/6) declared member that is not
+    /// trivial (clang `DeclaredNonTrivialSpecialMembers`).
     non_trivial: u8,
+    /// Kinds with an eligible declared member that is trivial (clang
+    /// `HasTrivialSpecialMembers` once the kind is declared).
+    trivial: u8,
     /// Some user-declared constructor (template included) is `constexpr`
     /// and not a copy/move constructor.
     constexpr_ctor: bool,
@@ -175,6 +194,26 @@ impl Sema<'_, '_> {
             }
             _ => bits.contains(k.trivial_bit()),
         }
+    }
+
+    /// clang `hasNonTrivial*`: whether class `r` has a non-trivial `k`
+    /// (an eligible declared one, or the implicit one still to be
+    /// declared). For the destructor, not [`Sema::has_trivial`].
+    pub(crate) fn has_nontrivial(&self, r: DeclId, k: SpecialKind) -> bool {
+        let bits = self.defn_bits(r);
+        match k.nontrivial_bit() {
+            Some(b) => bits.contains(b),
+            None => !bits.contains(DefinitionBits::TRIVIAL_DTOR),
+        }
+    }
+
+    /// Whether class `r` has a `k` and every eligible one ([special]/6)
+    /// is trivial (clang `hasTrivial*() && !hasNonTrivial*()`, as
+    /// `__has_trivial_*` reads them): whichever overload resolution
+    /// selects, no call is needed. The test for skipping a call by the
+    /// class bits alone (WP-1109).
+    pub(crate) fn all_trivial(&self, r: DeclId, k: SpecialKind) -> bool {
+        self.has_trivial(r, k) && !self.has_nontrivial(r, k)
     }
 
     /// clang `hasCopyConstructorWithConstParam` /
@@ -706,7 +745,6 @@ impl Sema<'_, '_> {
     fn scan_declared(&mut self, r: DeclId, class_trivial: DefinitionBits) -> Declared {
         let mut out = Declared::default();
         let members: Vec<DeclId> = self.ast.members(r).collect();
-        let vbases = class_trivial.contains(DefinitionBits::HAS_VIRTUAL_BASES);
         // An in-class defaulted destructor is constexpr unless virtual
         // bases forbid it (before C++26, P3533R2); an in-class defaulted
         // default constructor when its subobjects allow it
@@ -724,7 +762,8 @@ impl Sema<'_, '_> {
                 }
                 continue;
             }
-            let f = if self.kind_of(m) == DeclKind::FunctionTemplate {
+            let is_template = self.kind_of(m) == DeclKind::FunctionTemplate;
+            let f = if is_template {
                 match self.pattern_of(m) {
                     Some(p) => p,
                     None => continue,
@@ -749,10 +788,14 @@ impl Sema<'_, '_> {
             let spec = self.ast.decls.function(f).map(|x| x.spec).unwrap_or_default();
             // [class.dtor]/4: a prospective destructor that was not
             // selected is not the destructor (clang counts only the
-            // selected one, `addedSelectedDestructor`).
-            if spec.not_selected() {
+            // selected one, `addedSelectedDestructor`). Another special
+            // member that is not eligible ([special]/6) is still declared
+            // (it suppresses the implicit one) but does not count for
+            // triviality (clang `SetEligibleMethods`).
+            if spec.not_selected() && fkind == DeclKind::CXXDestructor {
                 continue;
             }
+            let eligible = !spec.not_selected();
             if fkind == DeclKind::CXXConstructor {
                 out.any_ctor = true;
                 if self.is_user_provided(f) || spec.is_explicit() {
@@ -769,7 +812,23 @@ impl Sema<'_, '_> {
             {
                 out.constexpr_ctor = true;
             }
-            let Some(k) = kind else { continue };
+            let Some(k) = kind else {
+                // A constructor template whose parameters all have default
+                // arguments is a default constructor for clang's
+                // triviality (`ComputeSpecialMemberFunctionsEligiblity`
+                // lists it; user-provided, so non-trivial): beside
+                // `T() = default` it leaves `T` non-trivial
+                // ([class.prop]/2) though with a trivial default
+                // constructor.
+                if is_template
+                    && fkind == DeclKind::CXXConstructor
+                    && self.special_params(f).iter().all(|&p| self.param_has_default(p))
+                {
+                    out.user |= SpecialKind::DefaultCtor.bit();
+                    out.non_trivial |= SpecialKind::DefaultCtor.bit();
+                }
+                continue;
+            };
             out.user |= k.bit();
             match k {
                 SpecialKind::DefaultCtor => {
@@ -788,37 +847,55 @@ impl Sema<'_, '_> {
                 }
                 _ => {}
             }
-            // A copy/move whose subobject members need overload resolution
-            // is trivial when every selected member is (clang
-            // `SpecialMemberIsTrivial` from `CheckCompletedCXXClass`).
-            let ovl = k != SpecialKind::Dtor
-                && k.needs_ovl_bit().is_some_and(|n| class_trivial.contains(n))
-                && !class_trivial.contains(DefinitionBits::POLYMORPHIC)
-                && !vbases;
-            if self.is_user_provided(f) {
-                out.non_trivial |= k.bit();
-            } else if ovl {
-                let const_arg = self.special_params(f).first().is_some_and(|&p| {
-                    let t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-                    match self.ast.types.canonical_view(t) {
-                        TypeView::LValueRef(t) => self.ast.types.effective_quals(t).is_const(),
-                        _ => false,
-                    }
-                });
-                if self.defaulted_is_trivial(f, k, true)
-                    && self.selected_all_trivial(r, k, const_arg)
-                {
-                    self.ast.decls.mark_function(f, FnSpec::new().with_trivial(true));
+            // The member's own triviality is decided for an ineligible one
+            // too (clang marks it `trivial` all the same); only an
+            // eligible one counts for the class.
+            let trivial = self.declared_member_trivial(r, f, k, class_trivial);
+            if trivial {
+                self.ast.decls.mark_function(f, FnSpec::new().with_trivial(true));
+            }
+            if eligible {
+                if trivial {
+                    out.trivial |= k.bit();
                 } else {
                     out.non_trivial |= k.bit();
                 }
-            } else if self.defaulted_is_trivial(f, k, class_trivial.contains(k.trivial_bit())) {
-                self.ast.decls.mark_function(f, FnSpec::new().with_trivial(true));
-            } else {
-                out.non_trivial |= k.bit();
             }
         }
         out
+    }
+
+    /// Whether the user-declared special member `f` (of kind `k`) of
+    /// class `r` is trivial ([class.default.ctor]/3, [class.copy.ctor]/11,
+    /// [class.copy.assign]/9, [class.dtor]/8), from the class's
+    /// subobject bits `class_trivial`. A copy/move whose subobject members
+    /// need overload resolution is trivial when every selected member is
+    /// (clang `SpecialMemberIsTrivial` from `CheckCompletedCXXClass`).
+    fn declared_member_trivial(
+        &mut self,
+        r: DeclId,
+        f: DeclId,
+        k: SpecialKind,
+        class_trivial: DefinitionBits,
+    ) -> bool {
+        let ovl = k != SpecialKind::Dtor
+            && k.needs_ovl_bit().is_some_and(|n| class_trivial.contains(n))
+            && !class_trivial.contains(DefinitionBits::POLYMORPHIC)
+            && !class_trivial.contains(DefinitionBits::HAS_VIRTUAL_BASES);
+        if self.is_user_provided(f) {
+            false
+        } else if ovl {
+            let const_arg = self.special_params(f).first().is_some_and(|&p| {
+                let t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                match self.ast.types.canonical_view(t) {
+                    TypeView::LValueRef(t) => self.ast.types.effective_quals(t).is_const(),
+                    _ => false,
+                }
+            });
+            self.defaulted_is_trivial(f, k, true) && self.selected_all_trivial(r, k, const_arg)
+        } else {
+            self.defaulted_is_trivial(f, k, class_trivial.contains(k.trivial_bit()))
+        }
     }
 
     /// The special-member definition bits of class `r` at its `}`, on top
@@ -956,13 +1033,15 @@ impl Sema<'_, '_> {
             }
             let cb = self.defn_bits(c);
             if union {
-                if !cb.contains(DefinitionBits::TRIVIAL_COPY_CTOR) {
+                // clang `addedMember`: a variant member with a
+                // non-trivial (`hasNonTrivial*`) copy/move member.
+                if cb.contains(DefinitionBits::NONTRIVIAL_COPY_CTOR) {
                     bits = bits.with(DefinitionBits::DEFAULTED_COPY_CTOR_DELETED);
                 }
-                if !cb.contains(DefinitionBits::TRIVIAL_MOVE_CTOR) {
+                if cb.contains(DefinitionBits::NONTRIVIAL_MOVE_CTOR) {
                     bits = bits.with(DefinitionBits::DEFAULTED_MOVE_CTOR_DELETED);
                 }
-                if !cb.contains(DefinitionBits::TRIVIAL_MOVE_ASSIGN) {
+                if cb.contains(DefinitionBits::NONTRIVIAL_MOVE_ASSIGN) {
                     assign_deleted |= K::MoveAssign.bit();
                 }
                 // P3074R7 [class.dtor]/7.2.2: from C++26 only a variant
@@ -1051,29 +1130,33 @@ impl Sema<'_, '_> {
             bits = bits.with(DefinitionBits::USER_PROVIDED_DEFAULT_CTOR);
         }
         let implicit = self.implicit_bits(d);
-        // Triviality (clang `hasNonTrivial*` for copy/move/dtor,
-        // `hasTrivialDefaultConstructor` for the default ctor).
+        // Triviality from the eligible members ([special]/6; clang
+        // `HasTrivialSpecialMembers` and `DeclaredNonTrivialSpecialMembers`,
+        // read through `hasTrivial*` / `hasNonTrivial*`;
+        // spec/sema-class.md §4.7.2).
         for k in K::ALL {
             let ht = bits.contains(k.trivial_bit());
-            let trivial = if decl.user & k.bit() != 0 {
-                decl.non_trivial & k.bit() == 0
-            } else if needs_from(bits, implicit, k) {
-                ht
+            let needs = needs_from(bits, implicit, k);
+            let (trivial, declared_nt) = if decl.user & k.bit() != 0 {
+                (decl.trivial & k.bit() != 0, decl.non_trivial & k.bit() != 0)
+            } else if needs {
+                (ht, false)
             } else {
                 // Not declared and never will be: a move (no non-trivial
                 // one) or the default ctor (none at all).
-                k != K::DefaultCtor
+                (k != K::DefaultCtor, false)
             };
             bits = if trivial { bits.with(k.trivial_bit()) } else { bits.without(k.trivial_bit()) };
+            if let Some(nb) = k.nontrivial_bit() {
+                let nt = declared_nt
+                    || match k {
+                        K::CopyCtor | K::CopyAssign => !trivial,
+                        _ => needs && !trivial,
+                    };
+                bits = if nt { bits.with(nb) } else { bits.without(nb) };
+            }
         }
-        let copyable = [K::CopyCtor, K::MoveCtor, K::CopyAssign, K::MoveAssign, K::Dtor]
-            .iter()
-            .all(|k| bits.contains(k.trivial_bit()));
-        bits = if copyable {
-            bits.with(DefinitionBits::TRIVIALLY_COPYABLE)
-        } else {
-            bits.without(DefinitionBits::TRIVIALLY_COPYABLE)
-        };
+        bits = with_trivially_copyable(bits);
         // Parameter forms of the implicit copy members
         // ([class.copy.ctor]/7, [class.copy.assign]/2).
         let mut ctor_const_direct = true;
@@ -1355,7 +1438,15 @@ impl Sema<'_, '_> {
                 // (clang `addedMember` / `addedEligibleSpecialMember`), so a
                 // class deriving from or containing `d` sees it trivial.
                 let b = k.trivial_bit();
-                self.set_finishing_bits(d, |x| if t { x.with(b) } else { x.without(b) });
+                let nb = k.nontrivial_bit();
+                self.set_finishing_bits(d, |x| {
+                    let x = if t { x.with(b) } else { x.without(b) };
+                    match nb {
+                        Some(nb) if t => x.without(nb),
+                        Some(nb) => x.with(nb),
+                        None => x,
+                    }
+                });
                 t
             }
             _ => bits.contains(k.trivial_bit()),
@@ -1374,16 +1465,7 @@ impl Sema<'_, '_> {
             && k.needs_ovl_bit().is_some_and(|n| bits.contains(n))
             && self.special.finishing.iter().any(|x| x.0 == d)
         {
-            self.set_finishing_bits(d, |x| {
-                let copyable = [K::CopyCtor, K::MoveCtor, K::CopyAssign, K::MoveAssign, K::Dtor]
-                    .iter()
-                    .all(|k| x.contains(k.trivial_bit()));
-                if copyable {
-                    x.with(DefinitionBits::TRIVIALLY_COPYABLE)
-                } else {
-                    x.without(DefinitionBits::TRIVIALLY_COPYABLE)
-                }
-            });
+            self.set_finishing_bits(d, with_trivially_copyable);
         }
         // [class.virtual]/2, /7: an implicit destructor overrides the
         // bases' virtual destructors, an implicit assignment operator a
