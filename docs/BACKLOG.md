@@ -1082,7 +1082,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1061 | abi: audit qualifier spelling in non-member unresolved names (kiln_abi mangle/dep.rs:1344 unresolved_prefix_in; WP-1029 fixed member access only) | WP-1029 | open |
 | WP-1062 | abi: mangle a lambda expression in a template parameter type (kiln_codegen module.rs:526); xfail temp.param/lambda-in-parameter-type-mangle-run.cpp | WP-946 | open |
 | WP-1063 | accepts-invalid: `template<class T> enum E {}` lacks enumeration cannot be a template; nested template-id lacks templates can only be declared in namespace or class scope (kiln_sema decl.rs:7911 act_on_tag) | WP-946 | open |
-| WP-1064 | modules image S2: expression and statement records, inline/constexpr/consteval functions, variable initializers (kiln_sema bmi_image.rs:1054, :1094) | WP-1048 | open |
+| WP-1064 | modules image S2: expression and statement records, inline/constexpr/consteval functions, variable initializers (kiln_sema bmi_image.rs:1054, :1094) | WP-1048 | in progress |
 | WP-1065 | modules image S3: classes (kiln_sema bmi_image.rs:1314 kind_gate) | WP-1048 | open |
 | WP-1066 | modules image S4: templates as patterns (kiln_sema bmi_image.rs:1293) | WP-1048 | open |
 | WP-1067 | modules image S5: global module fragment with ODR merging (WP-460 semantics) replacing the name gate (bmi_image.rs:1251, kiln_pp modules.rs:739) | WP-1048 | open |
