@@ -26,8 +26,8 @@
 
 use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{
-    Access, ConstexprKind, DeclFlags, DeclKind, EnumData, FnSpec, FnStorage, FriendKind,
-    InitStyle, ModuleOwnership, ParamData, VarSpec, VarStorage,
+    Access, ConstexprKind, DeclFlags, DeclKind, EnumData, FnSpec, FnStorage, FriendKind, InitStyle,
+    ModuleOwnership, ParamData, VarSpec, VarStorage,
 };
 use kiln_ast::modules::Owner;
 use kiln_ast::names::DeclName;
@@ -1713,10 +1713,15 @@ impl Sema<'_, '_> {
                 self.ast.decls.finish_eval(v, value);
             }
         }
-        for (g, p) in img.decls.iter().flat_map(|d| match &d.payload {
-            Payload::Function { params, .. } => params.as_slice(),
-            _ => &[],
-        }).enumerate() {
+        for (g, p) in img
+            .decls
+            .iter()
+            .flat_map(|d| match &d.payload {
+                Payload::Function { params, .. } => params.as_slice(),
+                _ => &[],
+            })
+            .enumerate()
+        {
             if p.default != NONE {
                 let _ = self.ast.decls.set_default_arg(params_all[g], built.expr(p.default));
             }
@@ -2063,7 +2068,6 @@ mod tests {
         img.decls[9].ctx = 0; // a label outside a function
         assert!(decode(&encode(&img)).is_err());
     }
-
 
     /// [module.import] / spec/modules.md §11.11 "Part 2a": a damaged image
     /// (truncated, flipped bytes, corrupt lengths) is an error, never a

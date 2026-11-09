@@ -994,7 +994,7 @@ impl ExprNode {
         ExprNode { kind, bits, deps, aux, ty, loc, a, b }
     }
     /// A header from its stored fields, for the module image's loader
-    /// (kiln_sema `bmi_body`, spec/modules.md §11.11 "Part 2a"), which
+    /// (`kiln_sema` `bmi_body`, spec/modules.md §11.11 "Part 2a"), which
     /// validated them; `bits` is [`ExprNode::raw_bits`].
     #[allow(clippy::too_many_arguments, reason = "one argument per header field")]
     pub const fn from_raw(

@@ -23,9 +23,8 @@ use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::consts::{FloatKind, IntBits, NullKind, Scalar};
 use kiln_ast::decl::{DeclMisc, NewDecl, Payload as AstPayload, VarEvalState};
 use kiln_ast::expr::{
-    BinaryOp, CastKind, CharKind, CompoundAssignExtra, DeclRefExtra,
-    ExprDeps, ExprKind, ExprNode, InitListExtra, NonOdrUse, Radix, StorageDuration, StringKind,
-    TraitKind, TypeTrait, UnaryOp,
+    BinaryOp, CastKind, CharKind, CompoundAssignExtra, DeclRefExtra, ExprDeps, ExprKind, ExprNode,
+    InitListExtra, NonOdrUse, Radix, StorageDuration, StringKind, TraitKind, TypeTrait, UnaryOp,
 };
 use kiln_ast::names::OverloadedOperator;
 use kiln_ast::stmt::{CaseData, IfData, LoopData, RangeForData, StmtKind, StmtNode, SwitchData};
@@ -363,9 +362,7 @@ fn expr_aux_ok(k: ExprKind, aux: u8) -> bool {
         X::UnaryExprOrTypeTraitExpr => TraitKind::from_u8(aux).is_some(),
         X::TypeTraitExpr => usize::from(aux) < TypeTrait::all().len(),
         X::ConstantExpr => aux <= 3,
-        X::MaterializeTemporaryExpr => {
-            StorageDuration::from_u8(aux & 3).is_some() && aux >> 3 == 0
-        }
+        X::MaterializeTemporaryExpr => StorageDuration::from_u8(aux & 3).is_some() && aux >> 3 == 0,
         X::ExprWithCleanups => aux <= 1,
         _ => aux == 0,
     }
@@ -412,7 +409,8 @@ fn layout(shape: [Slot; 2], cold: u8) -> Vec<F> {
             Slot::Side(sd) => v.extend_from_slice(side_fields(sd)),
         }
     }
-    for (bit, f) in [(COLD_END, F::Loc), (COLD_WRITTEN, F::Qt), (COLD_RHS, F::Loc), (COLD_BEGIN, F::Loc)]
+    for (bit, f) in
+        [(COLD_END, F::Loc), (COLD_WRITTEN, F::Qt), (COLD_RHS, F::Loc), (COLD_BEGIN, F::Loc)]
     {
         if cold & bit != 0 {
             v.push(f);
@@ -534,11 +532,7 @@ pub(super) fn encode_bodies(w: &mut Wr, b: &Bodies) {
     });
 }
 
-fn decode_arena<T>(
-    r: &mut Rd<'_>,
-    min: usize,
-    one: impl Fn(&mut Rd<'_>) -> Res<T>,
-) -> Res<Vec<T>> {
+fn decode_arena<T>(r: &mut Rd<'_>, min: usize, one: impl Fn(&mut Rd<'_>) -> Res<T>) -> Res<Vec<T>> {
     let n = r.count(4 + min)?;
     let mut offsets = Vec::with_capacity(n);
     for _ in 0..n {
@@ -665,7 +659,10 @@ fn string_encoding(e: u8) -> Option<StringEncoding> {
 /// Whether record `i` is a local declaration (its context a function).
 pub(super) fn is_local(img: &Image, d: &DeclRec) -> bool {
     d.ctx != NONE
-        && img.decls.get(d.ctx as usize).is_some_and(|c| matches!(c.payload, Payload::Function { .. }))
+        && img
+            .decls
+            .get(d.ctx as usize)
+            .is_some_and(|c| matches!(c.payload, Payload::Function { .. }))
 }
 
 /// The number of parameters in the image.
@@ -693,7 +690,10 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     let Some(d) = img.decls.get(w as usize) else { return false };
     match dc {
         Dc::Value => {
-            matches!(d.payload, Payload::Function { .. } | Payload::Var { .. } | Payload::Enumerator { .. })
+            matches!(
+                d.payload,
+                Payload::Function { .. } | Payload::Var { .. } | Payload::Enumerator { .. }
+            )
         }
         Dc::Var => matches!(d.payload, Payload::Var { .. }),
         Dc::Local => matches!(d.payload, Payload::Var { .. }) && is_local(img, d),
@@ -735,9 +735,9 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             F::EL => w[1..].iter().all(|&x| (x as usize) < e_lim),
             F::SL => w[1..].iter().all(|&x| (x as usize) < s_lim),
             F::DL(dc) => w[1..].iter().all(|&x| dc_ok(img, nparams, x, dc)),
-            F::QL => w[1..]
-                .chunks(2)
-                .all(|q| q[1] <= 7 && qref_ok(QRef { ty: q[0], quals: q[1] as u8 })),
+            F::QL => {
+                w[1..].chunks(2).all(|q| q[1] <= 7 && qref_ok(QRef { ty: q[0], quals: q[1] as u8 }))
+            }
             F::Path => w[0] <= 1,
             F::AL => w[1..].chunks(2).all(|a| word_attr(a[0], Loc::INVALID).is_some()),
             F::Nns => {
@@ -793,7 +793,10 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
         let Some(&k) = EXPR_KINDS.get(usize::from(e.kind)) else {
             return bad("unknown expression kind");
         };
-        if e.bits & 3 == 3 || (e.bits >> 2) & 3 == 3 || !expr_aux_ok(k, e.aux) || e.cold & !COLD_ALL != 0
+        if e.bits & 3 == 3
+            || (e.bits >> 2) & 3 == 3
+            || !expr_aux_ok(k, e.aux)
+            || e.cold & !COLD_ALL != 0
         {
             return bad("bad expression bits");
         }
@@ -936,9 +939,7 @@ impl Writer<'_, '_, '_> {
     /// Whether a function's body is carried as statements (an importer
     /// may inline or evaluate it).
     pub(super) fn carries_body(spec: FnSpec) -> bool {
-        spec.is_inline()
-            || spec.implicit_inline()
-            || spec.constexpr_kind() != ConstexprKind::None
+        spec.is_inline() || spec.implicit_inline() || spec.constexpr_kind() != ConstexprKind::None
     }
 
     /// A raw slot value read as field `f`.
@@ -1136,8 +1137,12 @@ impl Writer<'_, '_, '_> {
             match *f {
                 Fv::E(Some(e)) => v.push(Node::E(e)),
                 Fv::S(Some(s)) => v.push(Node::S(s)),
-                Fv::EL(l) => v.extend(lists.get(l).iter().filter_map(|&w| ExprId::from_raw(w)).map(Node::E)),
-                Fv::SL(l) => v.extend(lists.get(l).iter().filter_map(|&w| StmtId::from_raw(w)).map(Node::S)),
+                Fv::EL(l) => {
+                    v.extend(lists.get(l).iter().filter_map(|&w| ExprId::from_raw(w)).map(Node::E))
+                }
+                Fv::SL(l) => {
+                    v.extend(lists.get(l).iter().filter_map(|&w| StmtId::from_raw(w)).map(Node::S))
+                }
                 _ => {}
             }
         }
@@ -1202,7 +1207,8 @@ impl Writer<'_, '_, '_> {
                 let n = *ast.exprs.get(e);
                 let ty = self.qref(n.ty())?;
                 let loc = self.loc(n.loc())?;
-                let i = u32::try_from(self.img.bodies.exprs.len()).map_err(|_| "a body too large")?;
+                let i =
+                    u32::try_from(self.img.bodies.exprs.len()).map_err(|_| "a body too large")?;
                 self.img.bodies.exprs.push(ExprRec {
                     kind,
                     bits,
@@ -1216,7 +1222,8 @@ impl Writer<'_, '_, '_> {
             }
             Node::S(s) => {
                 let loc = self.loc(ast.stmts.get(s).loc())?;
-                let i = u32::try_from(self.img.bodies.stmts.len()).map_err(|_| "a body too large")?;
+                let i =
+                    u32::try_from(self.img.bodies.stmts.len()).map_err(|_| "a body too large")?;
                 self.img.bodies.stmts.push(StmtRec { kind, aux, loc, words });
                 self.bs.smap.insert(s, i);
             }
@@ -1255,8 +1262,9 @@ impl Writer<'_, '_, '_> {
                 out.push(items.len() as u32);
                 for w in items {
                     let id = match f {
-                        Fv::EL(_) => ExprId::from_raw(w)
-                            .and_then(|e| self.bs.emap.get(&e).copied()),
+                        Fv::EL(_) => {
+                            ExprId::from_raw(w).and_then(|e| self.bs.emap.get(&e).copied())
+                        }
                         _ => StmtId::from_raw(w).and_then(|s| self.bs.smap.get(&s).copied()),
                     };
                     out.push(id.ok_or("a malformed body")?);
@@ -1284,7 +1292,9 @@ impl Writer<'_, '_, '_> {
                 out.push(items.len() as u32);
                 for w in items {
                     let a = *self.s.ast.attrs.get(AttrId::from_raw(w).ok_or("a malformed body")?);
-                    out.push(attr_word(&a).ok_or("a statement attribute the image does not carry")?);
+                    out.push(
+                        attr_word(&a).ok_or("a statement attribute the image does not carry")?,
+                    );
                     out.push(self.loc(a.loc)?);
                 }
             }
@@ -1352,7 +1362,9 @@ impl Writer<'_, '_, '_> {
             Some(Scalar::Float { ty, kind, bits }) => {
                 ConstRec::Float { ty: self.qref(ty)?, kind: kind as u8, bits }
             }
-            Some(Scalar::Null { ty, kind }) => ConstRec::Null { ty: self.qref(ty)?, kind: kind as u8 },
+            Some(Scalar::Null { ty, kind }) => {
+                ConstRec::Null { ty: self.qref(ty)?, kind: kind as u8 }
+            }
             _ => return Ok(None),
         };
         let i = self.img.bodies.consts.len() as u32;
@@ -1457,7 +1469,9 @@ impl Writer<'_, '_, '_> {
             match r {
                 Root::Body(rec, s) => {
                     let i = self.walk(Node::S(s))?;
-                    if let Payload::Function { body, .. } = &mut self.img.decls[rec as usize].payload {
+                    if let Payload::Function { body, .. } =
+                        &mut self.img.decls[rec as usize].payload
+                    {
                         *body = FnBody::Stmt(i);
                     }
                 }
@@ -1470,7 +1484,9 @@ impl Writer<'_, '_, '_> {
                 Root::Default(p, e) => {
                     let i = self.walk(Node::E(e))?;
                     let (rec, k) = self.bs.param_pos[p as usize];
-                    if let Payload::Function { params, .. } = &mut self.img.decls[rec as usize].payload {
+                    if let Payload::Function { params, .. } =
+                        &mut self.img.decls[rec as usize].payload
+                    {
                         params[k as usize].default = i;
                     }
                 }
@@ -1573,7 +1589,8 @@ pub(super) struct Built {
 
 impl Built {
     pub(super) fn expr(&self, i: u32) -> ExprId {
-        ExprId::from_raw(self.ebase + i).unwrap_or_else(|| unreachable!("expression ids start at 1"))
+        ExprId::from_raw(self.ebase + i)
+            .unwrap_or_else(|| unreachable!("expression ids start at 1"))
     }
     pub(super) fn stmt(&self, i: u32) -> StmtId {
         StmtId::from_raw(self.sbase + i).unwrap_or_else(|| unreachable!("statement ids start at 1"))
@@ -1603,7 +1620,9 @@ impl Sema<'_, '_> {
                 ConstRec::Float { kind, bits, .. } => {
                     FloatKind::from_u8(*kind).map(|kind| Scalar::Float { ty, kind, bits: *bits })
                 }
-                ConstRec::Null { kind, .. } => null_kind(*kind).map(|kind| Scalar::Null { ty, kind }),
+                ConstRec::Null { kind, .. } => {
+                    null_kind(*kind).map(|kind| Scalar::Null { ty, kind })
+                }
             };
             // A value the pools reject (checked, never trusted) becomes 0.
             let id = match s.map(|s| self.ast.consts.push_scalar(s)) {
@@ -1617,9 +1636,11 @@ impl Sema<'_, '_> {
             let enc = string_encoding(*enc).unwrap_or(StringEncoding::Ordinary);
             let id = match self.ast.strings.try_intern(enc, bytes) {
                 Ok(id) => id,
-                Err(_) => self.ast.strings.try_intern(StringEncoding::Ordinary, &[]).unwrap_or_else(
-                    |_| unreachable!("the empty ordinary string is always internable"),
-                ),
+                Err(_) => {
+                    self.ast.strings.try_intern(StringEncoding::Ordinary, &[]).unwrap_or_else(
+                        |_| unreachable!("the empty ordinary string is always internable"),
+                    )
+                }
             };
             strs.push(id);
         }
@@ -1752,7 +1773,9 @@ impl Sema<'_, '_> {
             F::QL => {
                 let v: Vec<u32> = w[1..]
                     .chunks(2)
-                    .map(|q| self.image_ty(img, tys, ids, QRef { ty: q[0], quals: q[1] as u8 }).to_raw())
+                    .map(|q| {
+                        self.image_ty(img, tys, ids, QRef { ty: q[0], quals: q[1] as u8 }).to_raw()
+                    })
                     .collect();
                 self.ast.lists.push_raw(&v).raw()
             }
@@ -1771,7 +1794,12 @@ impl Sema<'_, '_> {
                         }
                         _ => Nns::Type {
                             prefix: cur,
-                            ty: self.image_ty(img, tys, ids, QRef { ty: w[p + 1], quals: w[p + 2] as u8 }),
+                            ty: self.image_ty(
+                                img,
+                                tys,
+                                ids,
+                                QRef { ty: w[p + 1], quals: w[p + 2] as u8 },
+                            ),
                             template_kw: w[p + 3] != 0,
                         },
                     };
@@ -1825,8 +1853,10 @@ impl Sema<'_, '_> {
                     } else {
                         let ex = &mut self.ast.exprs;
                         let st = &mut self.ast.stmts;
-                        let req_e = |x: u32| e(x).unwrap_or_else(|| unreachable!("validated operand"));
-                        let req_s = |x: u32| s(x).unwrap_or_else(|| unreachable!("validated operand"));
+                        let req_e =
+                            |x: u32| e(x).unwrap_or_else(|| unreachable!("validated operand"));
+                        let req_s =
+                            |x: u32| s(x).unwrap_or_else(|| unreachable!("validated operand"));
                         match sd {
                             Side::Arms => ex.push_cond_arms(req_e(v[0]), req_e(v[1])),
                             Side::CompoundAssign => ex.push_compound_assign(CompoundAssignExtra {
@@ -1884,7 +1914,8 @@ impl Sema<'_, '_> {
                                 end: d(v[3]),
                                 cond: e(v[4]),
                                 inc: e(v[5]),
-                                loop_var: d(v[6]).unwrap_or_else(|| unreachable!("validated operand")),
+                                loop_var: d(v[6])
+                                    .unwrap_or_else(|| unreachable!("validated operand")),
                                 body: req_s(v[7]),
                                 colon: Loc::from_raw(v[8]),
                             }),
