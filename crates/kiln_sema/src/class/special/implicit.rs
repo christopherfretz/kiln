@@ -1121,7 +1121,7 @@ impl Sema<'_, '_> {
         // Triviality from the eligible members ([special]/6; clang
         // `HasTrivialSpecialMembers` and `DeclaredNonTrivialSpecialMembers`,
         // read through `hasTrivial*` / `hasNonTrivial*`;
-        // spec/sema-class.md §4.2.1).
+        // spec/sema-class.md §4.7.2).
         for k in K::ALL {
             let ht = bits.contains(k.trivial_bit());
             let needs = needs_from(bits, implicit, k);

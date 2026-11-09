@@ -1253,7 +1253,7 @@ impl DefinitionBits {
     /// `TRIVIAL_DEFAULT_CTOR` (clang `hasTrivialDefaultConstructor`: some
     /// eligible one is trivial) both can hold, as for
     /// `struct N { N(...) = delete; N() = default; };` ([special]/6;
-    /// spec/sema-class.md §4.2.1, WP-1109).
+    /// spec/sema-class.md §4.7.2, WP-1109).
     pub const NONTRIVIAL_DEFAULT_CTOR: DefinitionBits = DefinitionBits(1 << 57);
     /// clang `hasNonTrivialCopyConstructor`; see `NONTRIVIAL_DEFAULT_CTOR`.
     pub const NONTRIVIAL_COPY_CTOR: DefinitionBits = DefinitionBits(1 << 58);

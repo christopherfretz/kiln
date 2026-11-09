@@ -9050,7 +9050,7 @@ impl Sema<'_, '_> {
         let bits = self.virtual_class_bits(r, bits);
         // Special members (spec/sema-class.md §4.1, §4.2, §4.4), after
         // selecting the destructor among prospective ones (sema-class.md §4.7.1)
-        // and the eligible other special members (§4.2.1).
+        // and the eligible other special members (§4.7.2).
         self.select_destructor(r);
         self.select_eligible_special_members(r);
         let bits = self.special_member_bits(r, bits);

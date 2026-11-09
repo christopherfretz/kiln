@@ -901,6 +901,13 @@ unadjusted alignment, as the classification does (WP-583).
   copy constructor suffices" shortcut (that is the MSVC x64 rule), so a
   class with a trivial copy constructor and a user-provided move
   constructor goes in memory. Golden: `tests/codegen/class_nontrivial_move_abi.cpp`.
+  Only eligible members count ([special]/6, WP-1109): a copy/move
+  constructor that is deleted or `not_selected` (constraints unsatisfied,
+  or less constrained than one of the same signature; spec/sema-class.md
+  §4.7.2) is skipped, as clang skips `isDeleted() ||
+  isIneligibleOrNotSelected()`, so `K(const K&) requires B = default;
+  K(const K&) {}` goes in registers for `B` true. Golden:
+  `tests/codegen/abi_matrix_eligible.cpp`.
 - *Call IR order* (codegen): a call whose aggregate result is ignored
   gets no destination, so its `sret`/coerce temporary is made after the
   arguments' `agg.tmp`s (clang `AggExprEmitter::withReturnValueSlot`);

@@ -1,5 +1,5 @@
 //! Prospective destructors ([class.dtor]/4; spec/sema-class.md §4.7.1)
-//! and eligible special member functions ([special]/6; §4.2.1).
+//! and eligible special member functions ([special]/6; §4.7.2).
 //!
 //! A class may declare several destructors that differ in their trailing
 //! requires-clauses. At the end of the definition of a non-dependent
