@@ -663,8 +663,9 @@ impl Sema<'_, '_> {
         TupleLike::Error
     }
 
-    /// The integral template argument `i` of type `std::size_t` (clang
-    /// builds `get<i>` and `tuple_element<i, E>` with it).
+    /// The integral template argument `i` of type `std::size_t`, as the
+    /// reflection library traits pass it (`std::tuple_element<i, T>`,
+    /// `std::array<T, 0>`).
     pub(crate) fn size_t_arg(&mut self, i: u64) -> TemplateArg {
         let size_t = self.size_type();
         let canon = self.ast.types.canonical(size_t);
@@ -674,25 +675,45 @@ impl Sema<'_, '_> {
 
     /// `std::tuple_element<i, E>::type` (clang `getTupleLikeElementType`).
     fn tuple_element_type(&mut self, loc: Loc, i: u64, dty: QualType) -> Option<QualType> {
-        // clang 22 writes the index as an integer literal of type
-        // `std::size_t`, so the qualifier prints `tuple_element<0UL, E>`.
-        let index = if self.clang_compat >= 22 {
-            let size_t = self.size_type();
-            let lit = self.ast.builder().int_literal(size_t, i, Radix::Decimal, loc);
-            TemplateArg::expr(lit, None)
-        } else {
-            self.size_t_arg(i)
-        };
-        let args = [index, TemplateArg::ty(dty)];
-        let mut qual = None;
-        let found = match self.std_trait_ty("tuple_element", &args, loc, true) {
-            Ok((c, nns)) => {
-                qual = Some(nns);
-                let ty = self.intern("type");
-                Some(self.lookup_in_class(c, ty, LookupKind::Ordinary))
+        // The index is an integer literal of type `std::size_t` converted
+        // to the template parameter's type ([dcl.struct.bind]/4, a
+        // template-argument; [temp.arg.nontype]/2), so `template<unsigned
+        // I, class T> struct tuple_element` still finds its specialization
+        // `tuple_element<0, T>`. clang 22 keeps the literal as written (the
+        // qualifier prints `tuple_element<0UL, E>`); clang 19 writes the
+        // converted value (`tuple_element<0, E>`, `'\x00'` for an
+        // `unsigned char` index).
+        let size_t = self.size_type();
+        let lit = self.ast.builder().int_literal(size_t, i, Radix::Decimal, loc);
+        let mut args = [TemplateArg::expr(lit, None), TemplateArg::ty(dty)];
+        let mut converted = true;
+        if self.clang_compat < 22
+            && let Some((_, tmpl)) = self.std_class_template("tuple_element")
+        {
+            match self.check_template_args(tmpl, &args, &[], loc) {
+                Ok(conv) => {
+                    if let Some(&a) = self.ast.types.args(conv.sugared).first() {
+                        args[0] = a;
+                    }
+                }
+                // Diagnosed; the template-id is not formed (clang's
+                // `CheckTemplateIdType` fails the same way).
+                Err(()) => converted = false,
             }
-            Err(true) => return None,
-            Err(false) => None,
+        }
+        let mut qual = None;
+        let found = if converted {
+            match self.std_trait_ty("tuple_element", &args, loc, true) {
+                Ok((c, nns)) => {
+                    qual = Some(nns);
+                    let ty = self.intern("type");
+                    Some(self.lookup_in_class(c, ty, LookupKind::Ordinary))
+                }
+                Err(true) => return None,
+                Err(false) => None,
+            }
+        } else {
+            None
         };
         let td = found.as_ref().and_then(|f| {
             f.decls.first().copied().filter(|&d| crate::lookup::is_type_kind(self.kind_of(d)))
