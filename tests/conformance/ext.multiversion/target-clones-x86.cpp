@@ -5,7 +5,7 @@
 // supports AArch64 multiversioning only; WP-1000).
 //@ args: --target=x86_64-unknown-linux-gnu -ffreestanding
 //@ expect: compile-ok
-//@ xfail(kiln): WP-1000 follow-up (WP-1044), x86-64 function multiversioning (target_clones resolvers) is not implemented
+//@ xfail(kiln): WP-1000 follow-up (WP-1056), x86-64 function multiversioning (target_clones resolvers) is not implemented
 #include <immintrin.h>
 __attribute__((target_clones("avx2", "default"))) int sum(const int *p) {
 #ifdef __AVX2__

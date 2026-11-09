@@ -18,7 +18,7 @@ If you hit something not listed here, please
   them on an older-glibc image is [WP-943](BACKLOG.md).
 - **x86 function multiversioning** (`target_clones`, several
   `target("...")` versions of one function) is an error on x86-64:
-  [WP-1044](BACKLOG.md). The `-m<feature>` flags and single
+  [WP-1056](BACKLOG.md). The `-m<feature>` flags and single
   `target("...")` functions work. `-mgeneral-regs-only`, `-msoft-float`,
   `-mretpoline` and a few other x86 code-generation flags are still
   `unknown argument` (spec/driver.md "x86-64 target features").
@@ -28,7 +28,7 @@ If you hit something not listed here, please
     the same type as it does under clang, so LLVM's `IRTests` does not
     build. kiln keeps `_Float128` and `__float128` distinct, as GCC 13+
     does; making glibc's `*f128` functions usable as `__float128` ones
-    is [WP-1043](BACKLOG.md).
+    is [WP-1055](BACKLOG.md).
   - gRPC's full x86_64 results are pending: [WP-1002](BACKLOG.md).
 - **LLVM 19 and 22 only.** LLVM 20 and 21 are not supported.
 - **Identification.** `--version` prints `kiln version <v>` without the
