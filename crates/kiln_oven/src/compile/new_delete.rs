@@ -159,6 +159,11 @@ impl Compiler<'_> {
             return;
         }
         let elem = self.ty(x.allocated_ty);
+        if self.ast().types.effective_quals(x.allocated_ty).is_volatile() {
+            // [expr.const]/10.8: its accesses are diagnosed (WP-1019).
+            aux |= new_aux::VOLATILE;
+            self.o.volatile_exprs.insert(e);
+        }
         let init = x.init;
         let loc_new = self.ast().exprs.get(e).loc();
         let oi = self.o.push_origin(Origin::Heap(e, 0));

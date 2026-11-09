@@ -268,6 +268,7 @@ sema_unreachable_fallthrough_attr = WarningOff [UnreachableCodeFallthrough] (0) 
 sema_unreachable_loop_increment = WarningOff [UnreachableCodeLoopIncrement] (0) "loop will run at most once (loop increment never executed)";
 sema_unsigned_abs = Warning [AbsoluteValue] (1) "taking the absolute value of unsigned type {0} has no effect";
 sema_unsupported_fmv_feature = Warning [IgnoredAttributes] (1) "unsupported '{0}' in the 'target_version' attribute string; 'target_version' attribute ignored";
+sema_unsupported_friend = Warning [UnsupportedFriend] (2) "dependent nested name specifier '{0}' for friend class declaration is not supported; turning off access control for '{1}'";
 sema_unsupported_lifetime_extension = Warning [Dangling] (1) "lifetime extension of {0:temporary|backing array of initializer list} created by aggregate initialization using a default member initializer is not yet supported; lifetime of {0:temporary|backing array} will end at the end of the full-expression";
 sema_unsupported_string_concat = Error (0) "unsupported non-standard concatenation of string literals";
 sema_unsupported_target_attribute = Warning [IgnoredAttributes] (1) "unsupported '{0}' in the 'target' attribute string; 'target' attribute ignored";

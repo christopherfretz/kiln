@@ -249,37 +249,8 @@ impl Cg<'_> {
             .is_some_and(|p| t.is_pointer(p.ret()) || (refs && t.is_reference(p.ret())))
     }
 
-    /// The C library allocation functions clang recognizes as builtins
-    /// (`extern "C"` at namespace scope, pointer result) and gives an
-    /// implicit `alloc_size` and, for `aligned_alloc`, `alloc_align`
-    /// (clang `Sema::AddKnownFunctionAttributes`): the zero-based
-    /// `allocsize` indices and alignment parameter.
-    fn lib_alloc(&self, d: DeclId) -> Option<(Attr, Option<usize>)> {
-        let ast = self.ast;
-        let t = &ast.types;
-        let n = ast.decls.get(d);
-        if n.kind() != DeclKind::Function
-            || !n.ctx().is_some_and(|c| self.is_tu_level(c))
-            || !mangle::is_extern_c(ast, ast.first(d))
-        {
-            return None;
-        }
-        let p = *t.proto(n.ty()?)?;
-        if p.variadic() || !t.is_pointer(p.ret()) {
-            return None;
-        }
-        let name = ast.symbols().as_str(n.name().as_ident()?);
-        match (name, t.params(&p).len()) {
-            ("malloc", 1) => Some((Attr::AllocSize(0, None), None)),
-            ("calloc", 2) => Some((Attr::AllocSize(0, Some(1)), None)),
-            ("realloc", 2) => Some((Attr::AllocSize(1, None), None)),
-            ("aligned_alloc", 2) => Some((Attr::AllocSize(1, None), Some(0))),
-            _ => None,
-        }
-    }
-
-    /// GNU `alloc_size(n[, m])` on function `d` (or the implicit one of a
-    /// C library allocation function), as the zero-based parameter
+    /// GNU `alloc_size(n[, m])` on function `d` (or the implicit one sema
+    /// gives a C library allocation function, WP-1073), as the zero-based parameter
     /// indices of `allocsize` (clang `AllocSizeAttr`; the LLVM index
     /// counts `this`, as the one-based source index does).
     pub(crate) fn fn_alloc_size(&self, d: DeclId) -> Option<Attr> {
@@ -290,12 +261,12 @@ impl Cg<'_> {
             let b = if n.b == 0 { None } else { Some(self.attr_index(n.b)?.checked_sub(1)?) };
             return Some(Attr::AllocSize(self.attr_index(n.a)?.checked_sub(1)?, b));
         }
-        self.lib_alloc(d).map(|x| x.0)
+        None
     }
 
     /// The zero-based argument (excluding `this`) giving the alignment of
-    /// `d`'s result: GNU `alloc_align(n)`, the implicit one of
-    /// `aligned_alloc`, or the `std::align_val_t` of a
+    /// `d`'s result: GNU `alloc_align(n)` (or sema's implicit one of
+    /// `aligned_alloc` / `memalign`, WP-1073), or the `std::align_val_t` of a
     /// replaceable `operator new` (clang `AllocAlignAttr`).
     pub(crate) fn fn_alloc_align(&self, d: DeclId) -> Option<usize> {
         if let Some(n) = self.fn_attr(d, kiln_ast::attr::AttrKind::ALLOC_ALIGN) {
@@ -307,9 +278,6 @@ impl Cg<'_> {
                 self.ast.decls.get(f).kind() == DeclKind::CXXMethod && !self.is_static_method(f),
             );
             return self.attr_index(n.a)?.checked_sub(1 + this).map(|i| i as usize);
-        }
-        if let Some((_, a)) = self.lib_alloc(d) {
-            return a;
         }
         self.alloc_fn(d).filter(|a| a.replaceable && a.is_new).and_then(|a| a.align_param)
     }

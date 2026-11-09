@@ -550,6 +550,38 @@ impl Oven {
                     ),
                 )
             }
+            // clang note_constexpr_access_volatile_obj and
+            // note_constexpr_volatile_here ([expr.const]/10.8, WP-1019).
+            Fault::Volatile { ak: k, member, p } => {
+                let mut loc = site.loc;
+                if let Some((src, whole)) = self.trivial_copy_src(pc) {
+                    let (at, call) = self.trivial_copy_frame(ast, site, src, whole);
+                    frame = Some(call);
+                    loc = at;
+                }
+                let origin = self.alloc_any(Ptr::decode(p)).map(|a| a.origin);
+                let what = match (member, origin) {
+                    (Some(f), _) => {
+                        extra.push(Note::new(ast.decls.get(f).loc(), "volatile member declared here"));
+                        format!("member '{}'", name_of(ast, f))
+                    }
+                    (None, Some(Origin::Var(d))) => {
+                        extra.push(Note::new(ast.decls.get(d).loc(), "volatile object declared here"));
+                        format!("object '{}'", name_of(ast, d))
+                    }
+                    (None, o) => {
+                        // A heap object's note has no location (clang's
+                        // `DynamicAllocLValue` base is no expression).
+                        let at = match o {
+                            Some(Origin::Temp(e)) => ast.exprs.get(e).loc(),
+                            _ => Loc::INVALID,
+                        };
+                        extra.push(Note::new(at, "volatile temporary created here"));
+                        "temporary".to_owned()
+                    }
+                };
+                (loc, format!("{} volatile {what} is not allowed in a constant expression", ak::verb(k)))
+            }
             Fault::VoidCast { from, to, p } => (site.loc, self.void_cast_note(ast, site.e, from, to, p)),
             Fault::NullCallee => {
                 let callee =
@@ -1586,6 +1618,15 @@ impl Oven {
             }
             MemFault::Stale if is_heap_ptr(p) => {
                 format!("{verb} heap allocated object that has been deleted")
+            }
+            // clang makes a parameter object in the caller's frame and
+            // ends it on return ([expr.call]/7): "outside its lifetime",
+            // with no note on the declaration (WP-1018). Kiln makes a
+            // scalar one in the callee's.
+            MemFault::Dead(Origin::Var(d)) if ast.decls.get(d).kind() == DeclKind::ParmVar => {
+                format!(
+                    "{verb} object outside its lifetime is not allowed in a constant expression"
+                )
             }
             MemFault::Dead(Origin::Var(d)) => {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));

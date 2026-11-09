@@ -3,10 +3,11 @@
 // A<int>::Member::get may read B's private member. clang 19 and 22 accept
 // it (they warn -Wunsupported-friend and turn off access control for B);
 // kiln used to reject the declaration as "redefinition of 'Member' as
-// different kind of symbol" and, since WP-1054, accepts the declaration
-// but still denies the access.
+// different kind of symbol", then (WP-1054) accepted it but denied the
+// access; WP-1072 models the rule.
 //@ expect: run
-//@ xfail(kiln): WP-1054 follow-up, a friend member class of a dependent specialization (`A<T>::Member`) grants no access
+//@ strict-diags
+//@ diag: 18:41 warning "for friend class declaration is not supported; turning off access control for 'B'"
 //@ stdout: 7
 #include <cstdio>
 class B;

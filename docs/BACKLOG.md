@@ -1035,7 +1035,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1012 | debuginfo: DIFlag order vs clang (debuginfo/func.rs:97) | WP-941 | open |
 | WP-1013 | debuginfo: `.str` constants carry `!dbg` where clang has none | WP-941 | open |
 | WP-1014 | llvm: coro.done intrinsic attributes (kiln_llvm intrinsics.rs:987) | WP-941 | open |
-| WP-1018 | oven: by-value parameter object lifetime ends at callee return ([expr.call]/7 impl-defined; match clang); flips expr.const/call-out-of-lifetime.cpp | WP-948 | open |
+| WP-1018 | oven: by-value parameter object lifetime ends at callee return ([expr.call]/7 impl-defined; match clang); flips expr.const/call-out-of-lifetime.cpp | WP-948 | in progress |
 | WP-1019 | oven: mark volatile locals, heap objects and volatile members (Alloc flag bit); flips expr.const/read-volatile-local-and-heap.cpp | WP-948 | open |
 | WP-1020 | oven: `qb[3].x` at member offset 0 skips the Field op (compile.rs ~4843), so past-end note wording differs (wording only) | WP-948 | open |
 | WP-1021 | oven: RefChk for reference parameters/members and clang-compat 19 mode | WP-948 | open |
@@ -1071,7 +1071,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1048 | modules kind 2 part 2: serialised decl/type/expression image, fresh DeclIds, ODR merging, lazy loading (cuts import std time) | WP-985 | done (#434, part 2a; rest is WP-1064..1070) |
 | WP-1049 | driver --help: reverse test that every option the argument parser accepts is listed in help.rs (or on an explicit hidden list), next to every_listed_option_is_accepted (crates/kiln_driver/src/help.rs:366) | WP-1027 | open |
 | WP-1052 | exception-spec tails: implicit member exception-spec type lists (except.rs:1109), dependent and pack throw lists in template definitions (except.rs:1127) incl. clang eager dependent throw(T) error, nested function-type rule (except.rs:1100) | WP-1017 | open |
-| WP-1053 | partial-spec ordering tails: constrained partial specs (order.rs:477), member-template partial specs (order.rs:465), non-deducible F<T..., int> | WP-1017 | open |
+| WP-1053 | partial-spec ordering tails: constrained partial specs (order.rs:477), member-template partial specs (order.rs:465), non-deducible F<T..., int> | WP-1017 | in progress |
 | WP-1054 | SILENT DROP: class template members whose declaration fails at instantiation are dropped without a diagnostic, so instantiation-time wrong-tag errors are missed (clang dcl.type.elab/p3.cpp:60) | WP-1017 | done (#435) |
 | WP-1050 | module cache eviction: bound the std/std.compat module cache size and age (kiln_driver module_cache.rs) | WP-984 | open |
 | WP-1051 | -MD on a module cache hit lists every libc++ header the std module read; match clang dependency output for import std | WP-984 | open |
@@ -1087,7 +1087,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1093 | modules image S2 follow-up: statement attributes with arguments ([[assume]], GNU attributes) in carried bodies (kiln_sema bmi_image/body.rs:173 attr_word) | WP-1064 | open |
 | WP-1094 | modules image S2 follow-up: lambdas (closure classes, after WP-1065), lifetime-extended temporaries with a constant value, coroutines, asm, contract assertions, computed goto, expansion statements in carried bodies (kiln_sema bmi_image/body.rs:1412, :1458, :1550, :1575) | WP-1064 | open |
 | WP-1095 | modules image: compact body encoding (varints, delta locations) and building from the bytes without the Vec-per-record model: S2 costs ~2 KB per small body (13k-line constexpr module 670 KB -> 4.6 MB) and importer peak RSS 16.0 -> 25.8 MiB (kiln_sema bmi_image/body.rs:511 encode_bodies, :538 decode_arena) | WP-1064 | open |
-| WP-1096 | modules image gate: a namespace named like its module (export module m; namespace m) always replays because import m interned the name (kiln_pp modules.rs:739) | WP-1064 | open |
+| WP-1096 | modules image gate: a namespace named like its module (export module m; namespace m) always replays because import m interned the name (kiln_pp modules.rs:739) | WP-1064 | in progress |
 | WP-1065 | modules image S3: classes (kiln_sema bmi_image.rs:1314 kind_gate) | WP-1048 | open |
 | WP-1066 | modules image S4: templates as patterns (kiln_sema bmi_image.rs:1293) | WP-1048 | open |
 | WP-1067 | modules image S5: global module fragment with ODR merging (WP-460 semantics) replacing the name gate (bmi_image.rs:1251, kiln_pp modules.rs:739) | WP-1048 | open |
@@ -1097,18 +1097,18 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1075 | rejects-valid: break/continue inside a statement-expression in a loop condition, for(;({break;1;});) (kiln_sema stmt.rs:1350, :1358) | WP-971 | done (#443) |
 | WP-1076 | hang: kiln times out (>20 s) on clang CodeGenCXX/mangle-ms-back-references-pr13207.cpp, CodeGenCXX/pr29160.cpp, Preprocessor/bigoutput.c | WP-971 | done (#447) |
 | WP-1071 | sema: relookup_member handles overload sets and using-declarations of a specialization member (kiln_sema templ/subst/mod.rs:971, today not yet implemented) | WP-1054 | open |
-| WP-1072 | rejects-valid: dependent friend class A<T>::Member gets no access to private members (xfail temp.friend/dependent-member-class-friend-run.cpp) | WP-1054 | open |
+| WP-1072 | rejects-valid: dependent friend class A<T>::Member gets no access to private members (xfail temp.friend/dependent-member-class-friend-run.cpp) | WP-1054 | in progress |
 | WP-1073 | builtins: model returns_twice (setjmp, vfork, getcontext), allocsize (malloc family), scanf format on library builtins, and clang inline lowering of abort/alloca/bzero/bcopy/mempcpy/conj/creal/cimag/finite (kiln_ast decl.rs:3792, kiln_codegen builtins.rs) | WP-914 | open |
-| WP-1074 | tests: flaky kiln_driver module_cache racing_misses_all_succeed under load (tests/module_cache.rs:193) | WP-914 | open |
+| WP-1074 | tests: flaky kiln_driver module_cache racing_misses_all_succeed under load (tests/module_cache.rs:193) | WP-914 | done (#450) |
 | WP-1077 | linkage: closure type in a function template signature (decltype of a lambda) is emitted internal where clang uses linkonce_odr (kiln_abi mangle.rs ~600 tag_externally_visible) | WP-1060 | open |
-| WP-1081 | expansion statements: break/continue in template for headers (statement expressions in the init/range) not modelled or tested against clang (kiln_parse stmt.rs parse_for_rest) | WP-1075 | open |
+| WP-1081 | expansion statements: break/continue in template for headers (statement expressions in the init/range) not modelled or tested against clang (kiln_parse stmt.rs parse_for_rest) | WP-1075 | in progress |
 | WP-1078 | accepts-invalid: implicit copy/move assignment overriding a final function and the implicit overrider return-type check are not diagnosed (kiln_sema class/special/implicit.rs:1368, class/virtual/mod.rs:414; needs note while declaring the implicit copy assignment operator) | WP-957 | open |
 | WP-1079 | accepts-invalid: overrider nested function-type exception-spec rule (exception specifications of argument types differ) (kiln_sema except.rs:1172, class/virtual/mod.rs:785) | WP-957 | open |
 | WP-1080 | accepts-invalid: enum F; with no fixed underlying type is not diagnosed (ISO C++ forbids forward references to enum types) (kiln_sema decl.rs:7911) | WP-957 | open |
-| WP-1082 | coverage: port clang 20+ mapping for compat 22 (gaps between logical-operator operands, counters on folded branches, branch counter order, do-while(0) macro region) (kiln_codegen coverage/mapping.rs:1472, :598) | WP-1003 | open |
-| WP-1083 | coverage fidelity tail: zero records for constant-evaluation-only instantiations (coverage/records.rs:116, module.rs:735), extra records for generic lambdas (records.rs:238), duplicate zero-length regions (mapping.rs:1659), stringizing as nested expansion (mapping.rs:60), skipped-range end after init-capture (skipped.rs:113), qualified base-init start (ctorinit.rs:92), compound literal end (ast.rs:107) | WP-1003 | open |
+| WP-1082 | coverage: port clang 20+ mapping for compat 22 (gaps between logical-operator operands, counters on folded branches, branch counter order, do-while(0) macro region) (kiln_codegen coverage/mapping.rs:1472, :598) | WP-1003 | in progress |
+| WP-1083 | coverage fidelity tail: zero records for constant-evaluation-only instantiations (coverage/records.rs:116, module.rs:735), extra records for generic lambdas (records.rs:238), duplicate zero-length regions (mapping.rs:1659), stringizing as nested expansion (mapping.rs:60), skipped-range end after init-capture (skipped.rs:113), qualified base-init start (ctorinit.rs:92), compound literal end (ast.rs:107) | WP-1003 | in progress |
 | WP-1084 | accepts-invalid: a local class inside a template is not a dependent type, so unqualified lookup into a dependent local base and O::In2() without typename are accepted (kiln_sema templ/actions.rs:160 is_dependent_type, class/access.rs:311 has_dependent_bases_in) | WP-905 | open |
 | WP-1088 | C++26 P2719 type-aware operator new/delete: declaration rules and selection (kiln_sema alloc_decl.rs:52, new_delete.rs) | WP-1040 | in progress |
 | WP-1089 | accepts-invalid: access to a destroying operator delete brought in by a using-declaration is not checked (kiln_sema new_delete.rs; clang cxx2a-destroying-delete.cpp:40,45,48) | WP-1040 | in progress |
-| WP-1090 | sema: a deleted variadic default constructor s8(...) = delete is counted as trivial (special-member triviality bits; clang class.union/p1.cpp m8) | WP-1040 | open |
+| WP-1090 | sema: a deleted variadic default constructor s8(...) = delete is counted as trivial (special-member triviality bits; clang class.union/p1.cpp m8) | WP-1040 | in progress |
 | WP-1091 | accepts-invalid tail (WP-1040): elaborated struct T* in a function body not checked for template-parameter shadowing (clang temp.local/p6.cpp:63); lambda capture shadowing (expr.prim.lambda.capture/p5.cpp:7); __restrict and _Nonnull on explicit object parameters; block-scope function template definitions (function definition is not allowed here) | WP-1040 | open |

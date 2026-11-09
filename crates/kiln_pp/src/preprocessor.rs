@@ -361,6 +361,13 @@ pub struct Preprocessor<'a, 'd> {
     /// The main file has a line starting with `module`, `import` or
     /// `export` ([`Preprocessor::module_lines`]).
     pub(crate) module_lines: bool,
+    /// Identifiers first interned as a component of a module or
+    /// partition name in a module or import directive, and neither
+    /// returned as a token (nor in a pragma's tokens) nor declared by a
+    /// declaration image since: the image gate does not count them as
+    /// seen (spec/modules.md §11.11, "ODR merging"). Usually empty or a
+    /// few names.
+    pub(crate) unseen_names: Vec<Symbol>,
 }
 
 impl std::fmt::Debug for Preprocessor<'_, '_> {
@@ -441,6 +448,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             comment_handler: None,
             modules: None,
             module_lines: false,
+            unseen_names: Vec::new(),
         };
         pp.modules = pp.opts.modules.clone().map(|o| Box::new(crate::modules::ModState::new(o)));
         pp.define_builtins();
@@ -646,17 +654,47 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     /// follows them in the source.
     pub fn next_item(&mut self) -> PpItem {
         if let Some(m) = self.markers.pop_front() {
+            self.marker_out(&m);
             return PpItem::Marker(m);
         }
         if let Some(t) = self.pending.take() {
             return PpItem::Token(t);
         }
         let t = self.lex().tok;
+        if !self.unseen_names.is_empty()
+            && let TokKind::Identifier(s) = t.kind
+        {
+            self.seen_name(s);
+        }
         if let Some(m) = self.markers.pop_front() {
             self.pending = Some(t);
+            self.marker_out(&m);
             return PpItem::Marker(m);
         }
         PpItem::Token(t)
+    }
+
+    /// A pragma's tokens reach the parser too: their identifiers count as
+    /// seen for the image gate ([`Preprocessor::seen_name`]).
+    fn marker_out(&mut self, m: &Marker) {
+        if !self.unseen_names.is_empty()
+            && let Marker::Pragma { tokens, .. } = m
+        {
+            for t in tokens {
+                if let TokKind::Identifier(s) = t.kind {
+                    self.seen_name(s);
+                }
+            }
+        }
+    }
+
+    /// `s` reached the consumer (or a declaration image declares it):
+    /// from now on the image gate counts it as seen (spec/modules.md
+    /// §11.11, "ODR merging").
+    pub(crate) fn seen_name(&mut self, s: Symbol) {
+        if let Some(i) = self.unseen_names.iter().position(|&u| u == s) {
+            self.unseen_names.swap_remove(i);
+        }
     }
 
     pub(crate) fn emit(&self, d: Diag) {

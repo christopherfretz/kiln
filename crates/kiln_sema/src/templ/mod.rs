@@ -1267,6 +1267,39 @@ impl Sema<'_, '_> {
         list
     }
 
+    /// The untaken written heads directly around the declaration being
+    /// declared, outermost first: each one's depth and parameter count
+    /// (the heads [`Self::take_template_head`] would match).
+    pub(crate) fn open_written_heads(&self) -> Vec<(u16, u16)> {
+        let floor = self.lambda_head_floor();
+        let mut open = Vec::new();
+        for (i, h) in self.templ.heads.iter().enumerate().rev() {
+            if h.taken || i < floor {
+                break;
+            }
+            if !h.invented {
+                let n = u16::try_from(h.params.len()).unwrap_or(u16::MAX);
+                open.push((h.depth, n));
+            }
+        }
+        open.reverse();
+        open
+    }
+
+    /// Takes every untaken head around the declaration being declared,
+    /// matching none to a class: a [temp.friend]/5 friend's heads are its
+    /// own (`template<class T> friend class A<T>::B;`).
+    pub(crate) fn take_open_heads(&mut self) {
+        self.templ.cur = None;
+        let floor = self.lambda_head_floor();
+        for (i, h) in self.templ.heads.iter_mut().enumerate().rev() {
+            if h.taken || i < floor {
+                break;
+            }
+            h.taken = true;
+        }
+    }
+
     /// Forgets the pending `template<>` headers after a qualifier that
     /// named nothing (diagnosed): they cannot be matched to its classes,
     /// so none is reported extraneous (clang's invalid `CXXScopeSpec`).

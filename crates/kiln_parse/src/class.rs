@@ -983,6 +983,7 @@ impl Parser<'_, '_> {
                 true,
             );
         }
+        let qloc = self.loc();
         let Ok(qual) = self.parse_nested_name_nns() else {
             return (None, false);
         };
@@ -1061,6 +1062,10 @@ impl Parser<'_, '_> {
                 }
             }
         };
+        // A qualified base is written from its nested-name-specifier
+        // (clang: the `ElaboratedTypeLoc`'s begin, where the initializer
+        // and its construction start).
+        let loc = if q.is_some() { qloc } else { loc };
         (Some(MemInitInfo { id, loc, init, pack_expansion }), true)
     }
 

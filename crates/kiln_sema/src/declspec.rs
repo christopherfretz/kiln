@@ -7,7 +7,7 @@
 
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, TypeAttrKind};
-use kiln_ast::{AttrId, DeclId, ExprId, QualType};
+use kiln_ast::{AttrId, DeclId, ExprId, NnsId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
@@ -233,6 +233,9 @@ pub struct DeclSpec {
     pub type_loc: Option<Loc>,
     /// The type of a [`TypeSpecKind::Named`] specifier.
     pub named: Option<QualType>,
+    /// The name of a dependent elaborated-type-specifier (`Member` in
+    /// `class A<T>::Member`): where a [temp.friend]/5 friend is reported.
+    pub dependent_tag_name: Option<Loc>,
     /// The width operand of a [`TypeSpecKind::BitInt`] specifier and the
     /// `_BitInt` keyword's location.
     pub bit_int_width: Option<(ExprId, Loc)>,
@@ -704,6 +707,9 @@ pub struct Declarator {
     /// The context named by a nested-name-specifier on the declarator-id
     /// (`int N::x = 1;`).
     pub qualifier: Option<DeclId>,
+    /// That nested-name-specifier as written (`A<T>::` of a
+    /// [temp.friend]/5 friend `template<class T> friend void A<T>::f();`).
+    pub qualifier_nns: Option<NnsId>,
     /// That nested-name-specifier begins with the global `::`
     /// (`A (::N::x);`): clang's walk of its prefixes for a `Global`
     /// specifier.
@@ -941,6 +947,7 @@ impl Declarator {
             ctx,
             name: None,
             qualifier: None,
+            qualifier_nns: None,
             chunks: Vec::new(),
             bit_width: None,
             attrs: Vec::new(),

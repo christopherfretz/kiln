@@ -1915,6 +1915,20 @@ and returns the scope it names:
     such a type name in the innermost enclosing namespace gets the same
     error (`diagnose_friend_tag_non_tag`); one outside it declares a new
     class there. Tests: `dcl.type.elab/tag-hidden-by-type-name{,-ok}.cpp`.
+  - *Forward reference to an enumeration* (WP-1078, [dcl.enum]/2,
+    [dcl.type.elab]/3; clang `ext_forward_ref_enum` as an error, C++
+    mode without `-fms-compatibility`, which kiln does not have). An
+    unscoped enum without an enum-base that is not a definition, `enum
+    F;` or a first-use `enum K *`, gets `ISO C++ forbids forward
+    references to 'enum' types` at the name (`check_forward_ref_enum`),
+    unless it names an enumeration already defined or already declared
+    with a fixed underlying type (scoped ones are fixed). The tag is
+    still declared, so later uses do not cascade. It covers members,
+    parameters, typedefs, `friend enum E;` (after `-Wfriend-enum`), a
+    local declaration hiding an outer enumeration and every repeat of
+    `enum Z;`; a class template reports it once, at the template.
+    Not done: clang's pedantic `-Wgnu-redeclared-enum` for `enum E;`
+    after a definition. Tests: `dcl.enum/forward-ref-enum{,-ok}.cpp`.
   - *Unknown specialization*. `struct A<T>::K` naming a member of another
     class template's unknown specialization ([temp.dep.type]/6) is
     dependent and is not looked up. It used to be rejected when the
@@ -3717,9 +3731,32 @@ specification as written (`TypeNames` prints ` noexcept`,
   lax against a non-throwing base; before C++17 a computed type list
   (`implicit_thrown_types`: the union of the implicit callees' dynamic
   lists, any type when one is noexcept(false)) is compared type by type
-  (`list_allows_more`). Not checked: the nested function-type rule
-  (`CheckParamExceptionSpec`), and `final` or return-type rules for an
-  implicit overrider. Tests: `class.virtual/exception-spec-dynamic.cpp`,
+  (`list_allows_more`). An implicit overrider is also held to the
+  `final` and return-type rules ([class.virtual]/4, /8; WP-1078,
+  `check_implicit_overrider`): clang's `declaration of 'operator=' overrides
+  a 'final' function` and `virtual function 'operator=' has a different
+  return type`, at the class name, once per overridden function. They run
+  inside a `SynthKind::Declaring` context, so the first error of each
+  implicit declaration carries `while declaring the implicit copy
+  assignment operator for 'D'` (clang `DeclaringSpecialMember`); in a
+  class template specialization it precedes the instantiation note.
+  *Nested function types* (WP-1078; clang `CheckParamExceptionSpec`,
+  C++14 [except.spec]/5, kept by clang in every mode): when the
+  overrider's specification passes the subset check (or is
+  non-throwing), function types among the return and parameter types
+  (through a pointer, reference or pointer to member) must have
+  equivalent specifications (`override_nested_exc_spec_error`):
+  `exception specifications of return types differ` / `... of argument
+  types differ`, at the overrider, no note. Equivalent means both
+  non-throwing, both throwing (but no specification and
+  `noexcept(false)` differ), or the same set of listed types. Like clang
+  19 and 22 (whose loop indexes the source with a constant), each of the
+  base's parameter types is compared with the overrider's FIRST
+  parameter type; [conv.fctptr] conversions share the helper
+  (`param_exc_specs_error`) and the quirk. Tests:
+  `class.virtual/implicit-overrider{,-ok}.cpp`,
+  `except.spec/override-nested-exception-spec-{cxx14,cxx17,ok}.cpp`,
+  `class.virtual/exception-spec-dynamic.cpp`,
   `class.virtual/exception-spec-dynamic-pack-nested.cpp`,
   `class.virtual/exception-spec-implicit{,-dynamic}{,-ok}.cpp`,
   `class.virtual/implicit-assignment-override-run.cpp`.
@@ -4946,12 +4983,31 @@ under its own name, the same signature, gating and codegen
   `bzero`, `index`, `rindex`, `stpcpy`, `stpncpy`, `strdup` and
   `strndup`; under `-std=c++*` `bcmp` is an ordinary function. `memcmp`
   and `bcmp` have no implicit attributes; their twin is recorded for the
-  never-constant check and the WP-940 fold. Still not modelled: rows
-  whose only effect is `AllocSize` (`malloc`, `calloc`, `realloc`,
-  `aligned_alloc`, `memalign`), `ReturnsTwice` (`setjmp`, `vfork`,
-  `getcontext`), the scanf-family `format`, and clang's special lowering
-  of `alloca`, `bzero` / `bcopy` (memset / memmove intrinsics) and
-  `finite` (`llvm.is.fpclass`). A call in
+  never-constant check and the WP-940 fold. WP-1073 adds clang's
+  allocation functions `malloc`, `calloc`, `realloc`, `aligned_alloc`
+  and (GNU modes only) `memalign`, which get no `NoThrow` but
+  `AddKnownFunctionAttributes`'s implicit `alloc_size` (`(1)`, `(1, 2)`,
+  `(2)`, `(2)`, `(2)`; `builtin::lib_alloc`) and, for `aligned_alloc` /
+  `memalign`, `alloc_align(1)`, unless the attribute is written; these
+  feed codegen's `allocsize` / `align` (spec/codegen.md §3.1) and the
+  Oven's `__builtin_object_size` (spec/oven.md "Builtins"). The scanf
+  family (`scanf`, `fscanf`, `sscanf`, `vscanf`, `vfscanf`, `vsscanf`;
+  `builtin::lib_scanf_format`) gets an implicit `format(scanf, F, A)`
+  as the printf family below, checked by `-Wformat`'s scanf rules
+  (`format_string::walk_scanf`: conversions take pointers, `%[` sets,
+  `*` suppression consumes no argument, an invalid conversion
+  specifier consumes none either, so a later surplus argument is still
+  "data argument not used"). GNU modes recognize `alloca` (`NoThrow`)
+  and `mempcpy`, and `finite{,f,l}` (`NoThrow`, `Const`; glibc's
+  `__finite{,f,l}` in every dialect), whose twin is `__builtin_isfinite`
+  (`builtin::lib_twin`); `creal` / `cimag` / `conj` `{,f,l}` are `NoThrow`
+  and `Const` with the new `__builtin_creal` ... twins, and `bzero` /
+  `bcopy` gain `__builtin_bzero` / `__builtin_bcopy` twins. All of these
+  are lowered inline by codegen. `ReturnsTwice` (`setjmp`, `_setjmp`,
+  `sigsetjmp`, `__sigsetjmp`, `savectx`, `vfork`, `getcontext`) was
+  already modelled by codegen's `returns_twice` (`builtins::returns_twice`) on the declaration and
+  the call (WP-807, spec/codegen.md §3), and `abort` already matched
+  clang (WP-938); WP-1073 confirmed both. A call in
   a constant expression is still a call of a non-constexpr function
   (clang 19 and 22 reject `constexpr double d = ceil(1.5);` and
   `constexpr auto n = strlen("ab");`); only a fold (`__builtin_constant_p`,
@@ -4961,8 +5017,7 @@ under its own name, the same signature, gating and codegen
   WP-186) gets clang's implicit `format(printf, F, A)` first, unless a
   `format` is written. `FILE` in a row's type (`P`) is the translation
   unit's typedef, alias or (as clang's `LookupNecessaryTypesForBuiltin`)
-  tag named `FILE`. Not modelled: clang 22's `modf` to `llvm.modf` and
-  clang's implicit `alloc_size` on the library allocation functions.
+  tag named `FILE`. Not modelled: clang 22's `modf` to `llvm.modf`.
   Under `-fno-builtin` / `-ffreestanding` (`Sema::no_builtin`) no
   function is recognized, and under `-fno-builtin-<name>`
   (`Sema::no_builtin_fns`) not `<name>` (`lib_builtin_info`; clang
@@ -5362,6 +5417,16 @@ for them.
   - `act_on_start_stmt_expr` sets aside the enclosing
     full-expression's pending odr-uses (§5.2), and `act_on_stmt_expr`
     restores them.
+  - It also sets aside the enclosing full-expression's pending
+    cleanups (`Sema::cleanup`, `class/temporary.rs`).
+    `act_on_stmt_expr` restores them, merged with whatever is left
+    inside (clang's `ParentCleanup`, `Cleanup.mergeFrom`). Each statement inside is a full-expression
+    of its own. Without this, the first one would take the outer
+    cleanups and wrap them in its `ExprWithCleanups`. A temporary
+    before the statement expression (`D{1}.v + ({ 0; })`) would then
+    live to the end of the enclosing block instead of its
+    full-expression (WP-1081;
+    `tests/conformance/ext.gnu.stmt.expr/temporary-before-stmt-expr-run.cpp`).
   - The final expression statement goes through
     `act_on_stmt_expr_result`: decay, then copy-initialization of a
     prvalue of its cv-unqualified type. A class prvalue is kept as is;
@@ -8644,8 +8709,13 @@ innermost enclosing loop). Kiln follows clang (19 and 22 agree, C++):
 - **Oracle disagreement.** GCC rejects every `break`/`continue` in a
   loop or switch header ("break statement not within loop or switch");
   kiln follows clang.
-- **Not covered:** expansion statements' headers (`template for`), and
-  clang's dropping of the erroneous jump (a `StmtError`), which lets it
+- **Newer clang.** clang's main branch (the P1306 and labelled-loop
+  work) opens every loop only for its body (`Scope::EnterLoopBody`;
+  `LeaveLoopBody` before a `do`'s condition), so a jump in a `while`,
+  `do` or `for` header targets the enclosing statement there. Kiln
+  follows the released clangs; revisit when the oracle moves past 22.
+- **Expansion statements' headers** (`template for`): §7.6a.
+- **Not covered:** clang's dropping of the erroneous jump (a `StmtError`), which lets it
   still report "no case matching constant switch condition" after
   `switch (({ continue; 1; }))` with no loop; kiln keeps the statement and
   misses that warning.
@@ -9135,6 +9205,47 @@ not supported yet`.
   jump-scope, fall-off and reachability analyses (`children` yields the
   init, prelude and expansions of an expanded statement and the init and
   body of a pattern).
+- **Jumps in the header** (WP-1081). A GNU statement expression can put
+  `break`, `continue`, `return` or `goto` in the init-statement or the
+  expansion-initializer. clang 22 has no P1306, so the oracles are GCC
+  16.1, clang's P1306 branch (`ParseForStatement`,
+  `EmitCXXExpansionStmtInstantiation`) and its constant evaluator; they
+  agree on everything below except where noted.
+  - *Sema.* The parser opens the expansion statement as a loop
+    (`act_on_start_loop` in `parse_expansion_rest`) for its body only, as
+    for a range-based `for` (§7.4a). A header `break`/`continue` needs an
+    enclosing loop, or a switch for `break`. An outer expansion statement
+    is such a loop. Without one, it is "'break' statement not in loop or
+    switch statement" / "'continue' statement not in loop statement" at
+    the keyword. This is checked on the pattern, so a template definition
+    is diagnosed. A lambda in the header starts a new function.
+  - *Run time.* The init-statement, an iterating range and a
+    destructuring initializer belong to the preamble, which runs once
+    before the elements. Their `break`/`continue` reach the enclosing
+    loop or switch. An enumerating element initializes the
+    for-range-declaration inside its own element block
+    (`{ decl = E_i; body }`). There `continue` ends that element and
+    `break` leaves the expansion statement, although Sema required an
+    enclosing target. Codegen (`kiln_codegen`), the CFG
+    (`cfg_expansion`: init and prelude outside the per-element jump
+    frames) and the Oven all follow that structure. `return` leaves the
+    function and `goto` leaves to its label. Destructors run on every
+    path: the init-statement's variable, and a destructuring
+    initializer's temporary, when a jump leaves the preamble.
+  - *CFG.* The init-statement's `break` leaving an enclosing `for(;;)`
+    makes -Wreturn-type fire. An element's `break` does not. GCC warns
+    the same way; clang's CFG does not model expansion statements.
+  - *Constant evaluation.* A taken jump out of the statement expression
+    is clang's "this use of statement expressions is not supported in a
+    constant expression" at the statement holding it (§7.4a). An untaken
+    jump, or a loop wholly inside the statement expression, evaluates
+    normally. GCC 16.1 evaluates the jumps; kiln follows clang.
+  - *Iterating range.* `__range` is `static constexpr` (P1306R5), so a
+    statement-expression jump in the range is "constexpr variable
+    '__range' must be initialized by a constant expression" plus the
+    statement-expression note. GCC 16.1 accepts it with a non-constexpr
+    range (CWG3131, which clang's branch does not implement).
+  - Tests: `tests/conformance/stmt.expand/header-jump-{run,errors,cfg,consteval,consteval-neg}.cpp`.
 - **N = 0.** No block is built, so a body that is ill-formed for every
   element is never instantiated.
 - **Feature macro.** `__cpp_expansion_statements` 202506L at C++26 at

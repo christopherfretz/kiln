@@ -64,6 +64,10 @@ pub(crate) enum SynthKind {
     /// The evaluation of a special member's implicit exception
     /// specification (clang `ExceptionSpecEvaluation`, [except.spec]/8).
     ExceptionSpec,
+    /// The implicit declaration of a special member, whose override
+    /// checks run in it (clang `DeclaringSpecialMember`; the member is the
+    /// implicit declaration, the location its class's).
+    Declaring(SpecialKind),
 }
 
 /// How a constructor initializes the subobjects it has no
@@ -267,6 +271,12 @@ impl Sema<'_, '_> {
                 SynthKind::ExceptionSpec => self
                     .diag(DiagId::note_exception_spec_evaluation_here, c.loc)
                     .arg(self.qualified_decl_name(c.member)),
+                SynthKind::Declaring(kind) => {
+                    let class = self.ast.decls.get(c.member).ctx().unwrap_or(self.ast.tu);
+                    self.diag(DiagId::note_in_declaration_of_implicit_special_member, c.loc)
+                        .arg(kind.index())
+                        .arg(self.ty_arg(self.tag_type(class)))
+                }
                 SynthKind::Comparison(_) | SynthKind::Inheriting => {
                     let SynthKind::Comparison(k) = c.kind else { unreachable!("filtered") };
                     let class = self.cmp_class(c.member).unwrap_or(self.ast.tu);

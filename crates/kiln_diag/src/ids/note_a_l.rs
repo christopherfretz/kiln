@@ -158,6 +158,7 @@ note_immediate_function_reason_consteval_only = Note (3) "'{0}' is an immediate 
 note_implicit_deduction_guide = Note (1) "implicit deduction guide declared as '{0}'";
 note_implicit_delete_this_in_destructor_here = Note (0) "while checking implicit 'delete this' for virtual destructor";
 note_in_binding_decl_init = Note (1) "in implicit initialization of binding declaration '{0}'";
+note_in_declaration_of_implicit_special_member = Note (2) "while declaring the implicit {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} for {1}";
 note_in_default_initializer = Note (1) "in the default initializer of '{0}'";
 note_in_for_range = Note (2) "when looking up '{0:begin|end}' function for range expression of type {1}";
 note_include_header_or_declare = Note (2) "include the header <{0}> or explicitly provide a declaration for '{1}'";
