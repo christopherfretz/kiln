@@ -6,7 +6,7 @@
 
 use kiln_ast::DeclId;
 use kiln_ast::QualType;
-use kiln_ast::decl::{DeclKind, FnStorage};
+use kiln_ast::decl::{DeclFlags, DeclKind, FnStorage};
 use kiln_ast::names::OverloadedOperator;
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -46,9 +46,11 @@ impl Sema<'_, '_> {
     /// an allocation function's first parameter has no default argument.
     /// Reports the first violation (clang's order) and returns false.
     ///
-    /// Conservative: a destroying `operator delete` ([expr.delete]/10.1)
-    /// and a type-aware form taking `std::type_identity<T>` first (P2719)
-    /// are not checked, nor is a function with an undeduced return type.
+    /// A destroying `operator delete` ([basic.stc.dynamic.deallocation]/5)
+    /// takes `C *` first instead (`check_destroying_delete`). Conservative:
+    /// a type-aware form taking `std::type_identity<T>` first (P2719, a
+    /// clang 22 extension kiln does not implement) is not checked, nor is a
+    /// function with an undeduced return type.
     pub(crate) fn check_new_delete_signature(
         &mut self,
         f: DeclId,
@@ -57,9 +59,7 @@ impl Sema<'_, '_> {
         fname: &str,
     ) -> bool {
         use OverloadedOperator as O;
-        if self.ast.is_destroying_operator_delete(f) {
-            return true;
-        }
+        let destroying = self.ast.is_destroying_operator_delete(f);
         let new = matches!(op, O::New | O::ArrayNew);
         let loc = self.ast.decls.get(f).loc();
         let Some(ty) = self.ast.decls.get(f).ty() else { return true };
@@ -79,8 +79,17 @@ impl Sema<'_, '_> {
             return true;
         }
         let vp = self.ast.types.pointer_to(QualType::VOID);
-        let (want_ret, want_first) =
-            if new { (vp, self.size_type()) } else { (QualType::VOID, vp) };
+        let class = self.ast.decls.get(f).ctx().filter(|_| destroying);
+        let (want_ret, want_first) = match class {
+            // [basic.stc.dynamic.deallocation]/5: within class `C`, the
+            // first parameter of a destroying operator delete is `C *`.
+            Some(c) => {
+                let ct = self.injected_tag_type(c).unwrap_or_else(|| self.tag_type(c));
+                (QualType::VOID, self.ast.types.pointer_to(ct))
+            }
+            None if new => (vp, self.size_type()),
+            None => (QualType::VOID, vp),
+        };
         if !self.ast.types.same_type(ret, want_ret) {
             let id = if self.ast.types.is_dependent(ret) {
                 DiagId::sema_operator_new_delete_dependent_result_type
@@ -109,14 +118,27 @@ impl Sema<'_, '_> {
         if !self.ast.types.same_unqualified(first, want_first) {
             // clang 19 says "first parameter" (the `_19` rows, picked by
             // the engine); both print the canonical `size_t`.
-            let id = match (new, self.ast.types.is_dependent(first)) {
-                (true, true) => DiagId::sema_operator_new_dependent_param_type,
-                (true, false) => DiagId::sema_operator_new_param_type,
-                (false, true) => DiagId::sema_operator_delete_dependent_param_type,
-                (false, false) => DiagId::sema_operator_delete_param_type,
+            let dependent = self.ast.types.is_dependent(first);
+            let id = match (new, destroying, dependent) {
+                (true, _, true) => DiagId::sema_operator_new_dependent_param_type,
+                (true, _, false) => DiagId::sema_operator_new_param_type,
+                (false, true, true) => DiagId::sema_destroying_operator_delete_dependent_param_type,
+                (false, true, false) => DiagId::sema_destroying_operator_delete_param_type,
+                (false, false, true) => DiagId::sema_operator_delete_dependent_param_type,
+                (false, false, false) => DiagId::sema_operator_delete_param_type,
             };
-            let want_first = self.ast.types.canonical(want_first);
+            // The injected-class-name prints with its parameters' names.
+            let want_first =
+                if destroying { want_first } else { self.ast.types.canonical(want_first) };
             return self.new_delete_err(id, loc, fname, want_first);
+        }
+        if let Some(c) = class
+            && !self.ast.decls.get(c).flags().contains(DeclFlags::DEPENDENT_CTX)
+            && !self.destroying_delete_is_usual(templated, &params)
+        {
+            let m = self.diag(DiagId::sema_destroying_operator_delete_not_usual, loc);
+            self.emit(m);
+            return false;
         }
         if new && params.first().is_some_and(|&p| self.param_has_default(p)) {
             let m = self.diag(DiagId::sema_operator_new_default_arg, loc).arg(fname.to_owned());
@@ -124,6 +146,35 @@ impl Sema<'_, '_> {
             return false;
         }
         true
+    }
+
+    /// [basic.stc.dynamic.deallocation]/5: a destroying operator delete
+    /// is a usual deallocation function: after `C *` and
+    /// `std::destroying_delete_t`, an optional `std::size_t` then an
+    /// optional `std::align_val_t`, and not a template (clang
+    /// `isUsualDeallocationFunction`; a trailing `...` is allowed).
+    fn destroying_delete_is_usual(&self, templated: bool, params: &[DeclId]) -> bool {
+        if templated {
+            return false;
+        }
+        let tys: Vec<QualType> =
+            params.iter().skip(2).filter_map(|&p| self.ast.decls.get(p).ty()).collect();
+        if tys.iter().any(|&t| self.is_error_type(t)) {
+            return true;
+        }
+        let size_t = self.size_type();
+        let mut rest = tys.as_slice();
+        if let [t, tail @ ..] = rest
+            && self.ast.types.same_type(*t, size_t)
+        {
+            rest = tail;
+        }
+        if let [t, tail @ ..] = rest
+            && self.is_align_val_t(*t)
+        {
+            rest = tail;
+        }
+        rest.is_empty()
     }
 
     fn new_delete_err(&mut self, id: DiagId, loc: Loc, fname: &str, want: QualType) -> bool {
