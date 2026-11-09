@@ -2472,6 +2472,59 @@ instantiation unless stated.
     attribute only applies to classes` [-Wignored-attributes]; takes no
     arguments. A coroutine whose return type's class carries it gets the
     LLVM function attribute of that name (spec/codegen.md §7o).
+  - **`unavailable`, `require_constant_initialization`, `annotate`**
+    (GNU syntax or `clang::`, `AttrKind` 276 to 278, WP-954;
+    spec/landed/sema/WP-954.md):
+    - `unavailable` / `unavailable("msg")` (`annotate_attr.rs`, clang
+      `handleAttrWithMessage`): at most one argument (`'X' attribute
+      takes no more than 1 argument`), a string literal (`expected
+      string literal as argument of 'unavailable' attribute`, the
+      unscoped name, at the argument). A use of the entity is `'f' is
+      unavailable` (`: msg` appended) with the note `'f' has been
+      explicitly marked unavailable here` at the redeclaration that
+      carries it, through the `deprecated` machinery (`deprecated.rs`):
+      the same uses (names, members, types, enumerators), inherited by
+      later redeclarations, delayed with the deprecations of a
+      declaration. A use inside an unavailable function or class is no
+      error (clang `isDeclUnavailable` on the context).
+    - `require_constant_initialization` (`const_init_attr.rs`, clang
+      `ConstInitAttr`): only a variable with static or thread storage
+      duration (`only applies to global variables`, an error, and the
+      attribute is dropped). Its initializing declaration has a
+      constant initializer ([basic.start.static]/2), checked as for
+      `constinit` (`check_constinit` falls back to it, and its
+      immediate invocations are checked with the whole initializer,
+      `consteval.rs` `checked_var`, WP-465);
+      else `variable does not have a constant initializer` at the
+      variable, the note `required by 'require_constant_initialization'
+      attribute here` at the attribute, then the evaluation's notes
+      (a destruction failure is not one). Before C++11 the initializer
+      is checked as clang's `Expr::isConstantInitializer`: aggregates,
+      trivial default, copy and move construction and the no-op casts
+      are walked, any other subexpression must fold, and the one that
+      does not gets the single note `subexpression not valid in a
+      constant expression`. Added on a redeclaration after the
+      initializing declaration (or the definition) that lacks it: the
+      warning `'require_constant_initialization' attribute added after
+      initialization of variable` [-Wignored-attributes], the note `add
+      the 'require_constant_initialization' attribute to the
+      initializing declaration here`, and it is dropped. A constexpr
+      variable is not checked again.
+    - `annotate("str", args...)` (`annotate_attr.rs`, clang
+      `handleAnnotateAttr` / `ConstantFoldAttrArgs`): at least one
+      argument (`takes at least 1 argument`), the first a string
+      literal (`expected string literal as argument of 'annotate'
+      attribute`). The others are decayed (arrays kept) and each must
+      be a constant expression, evaluated by the Oven (a `void` one as
+      `e, true`): else `'X' attribute requires parameter N to be a
+      constant expression` (N 1-based among them) with the
+      evaluation's notes, and the attribute is dropped. If one is
+      value-dependent all are checked when the declaration is
+      instantiated (`copy_attrs`). On a statement clang 22 accepts it
+      and kiln ignores it; clang 19 (`-fclang-compat=19`) keeps `cannot
+      be applied to a statement`. Not yet: codegen
+      (`llvm.global.annotations`, `llvm.var.annotation`,
+      `llvm.ptr.annotation`), and pack expansions in the arguments.
   - **Class B attributes** (WP-813, `class_b_attrs.rs`, `AttrKind` 240
     to 273): the hardening, instrumentation, inlining and pointer-fact
     attributes (`no_stack_protector`, `patchable_function_entry`,
@@ -2728,6 +2781,8 @@ instantiation unless stated.
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
   | ENUM_EXTENSIBILITY | 1 for `open`, 0 for `closed` | — |
   | INIT_PRIORITY | the checked priority (`u32`; the raw `ExprId` before `check_decl_attrs`) | — |
+  | UNAVAILABLE | `ExprId` of the string-literal message, or 0 | — |
+  | ANNOTATE | `ExprId` of the string literal | `ListId` of the other arguments (`ExprId`s, decayed), or 0 |
   | ENABLE_IF | `ExprId` of the condition (contextually converted to `bool` unless type-dependent) | `ExprId` of the string-literal message |
 
 - **Semantics:**
@@ -2995,7 +3050,18 @@ instantiation unless stated.
       non-bit-field non-static data member (error `... only applies to
       non-bit-field non-static data members`). `carries_dependency`:
       only a function or parameter (error `... only applies to
-      parameters, Objective-C methods, and functions`); from C++26
+      parameters, Objective-C methods, and functions`); on a parameter
+      of a function declarator that declares no function or lambda (a
+      pointer to function, a typedef, an alias; [dcl.attr.depend]/1)
+      the error `'[[carries_dependency]]' attribute only allowed on
+      parameter in a function declaration or lambda` and it is dropped
+      (`carries_dep_attr.rs`, from the parser's parameter clause). On a
+      redeclaration of a function (or its parameter i) when no earlier
+      one has it ([dcl.attr.depend]/2): `function declared
+      '[[carries_dependency]]' after its first declaration` (`parameter
+      declared ...`) with the note `declaration missing
+      '[[carries_dependency]]' attribute is here` at the first
+      declaration (or its parameter i) (WP-954); from C++26
       (P3475R2, WP-743) it is no standard attribute:
       `__has_cpp_attribute(carries_dependency)` is 0 and
       `[[carries_dependency]]` (arguments too, skipped) warns `unknown
