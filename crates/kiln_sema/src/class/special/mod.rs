@@ -38,6 +38,7 @@ pub(crate) use define::{
     CtorCall, DeletedAs, DiagSites, ImplicitInit, InitEntity, SynthContext, SynthKind,
 };
 pub(crate) use deletion::Selected;
+pub(crate) use excspec::ImplicitThrows;
 use uses::PendingDeleted;
 
 /// The six special member functions ([special]/1), in clang's

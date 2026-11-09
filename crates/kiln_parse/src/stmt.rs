@@ -565,6 +565,13 @@ impl Parser<'_, '_> {
     /// condition variable (if any) and the condition expression -- for a
     /// declaration, a reference to the variable -- not yet converted.
     fn parse_condition(&mut self) -> Option<Cond> {
+        self.parse_condition_in(false)
+    }
+
+    /// A condition; `for_cond` for the condition of a `for` loop, where a
+    /// `continue` in a condition variable's declaration is an error
+    /// (clang `ForConditionScopeRAII`).
+    fn parse_condition_in(&mut self, for_cond: bool) -> Option<Cond> {
         if !self.is_cxx_condition_declaration() {
             // clang 19 corrects the condition's delayed typos when it
             // finishes the condition's full-expression (WP-399).
@@ -578,6 +585,16 @@ impl Parser<'_, '_> {
             }
             return e.map(|e| (None, e));
         }
+        let saved = for_cond.then(|| self.s.begin_for_cond_var());
+        let r = self.parse_condition_decl();
+        if let Some(saved) = saved {
+            self.s.end_for_cond_var(saved);
+        }
+        r
+    }
+
+    /// A condition that declares a variable ([stmt.pre]/1).
+    fn parse_condition_decl(&mut self) -> Option<Cond> {
         let ctx = DeclaratorContext::Condition;
         let mut ds = self.parse_decl_specifiers(ctx);
         // [stmt.pre]/1: a type-specifier-seq, so no storage class.
@@ -983,9 +1000,10 @@ impl Parser<'_, '_> {
     fn parse_while(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
         self.s.push_scope(ScopeKind::Control);
+        // A jump in the condition targets this loop (spec/sema.md §7.4a).
+        self.s.act_on_start_loop();
         let cond = self.parse_loop_condition("while", true, loc);
         let rparen = self.prev_end();
-        self.s.act_on_start_loop();
         let body = self.parse_sub_statement();
         self.s.act_on_end_loop();
         self.s.pop_scope();
@@ -1003,15 +1021,17 @@ impl Parser<'_, '_> {
         self.s.push_scope(ScopeKind::Control);
         self.s.act_on_start_loop();
         let body = self.parse_sub_statement();
-        self.s.act_on_end_loop();
         self.s.pop_scope();
         if self.eat_kw(Kw::While).is_none() {
+            self.s.act_on_end_loop();
             self.error_here(DiagId::parse_expected_while);
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);
             return None;
         }
+        // A jump in the condition targets this loop (spec/sema.md §7.4a).
         let cond = self.parse_loop_condition("while", false, loc);
+        self.s.act_on_end_loop();
         let Some((_, cond)) = cond else {
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);
@@ -1360,9 +1380,21 @@ impl Parser<'_, '_> {
             }
             return self.parse_for_range(open, loc, init);
         }
+        // The condition, the increment and the body: a jump in the
+        // condition or the increment targets this loop (spec/sema.md
+        // §7.4a).
+        self.s.act_on_start_loop();
+        let r = self.parse_for_tail(open, loc, init);
+        self.s.act_on_end_loop();
+        r
+    }
+
+    /// The condition, increment, `)` and body of a for-statement whose
+    /// loop is open.
+    fn parse_for_tail(&mut self, open: Loc, loc: Loc, init: Option<StmtId>) -> Option<StmtId> {
         let (mut var, mut cond) = (None, None);
         if !self.at(Punct::Semi) {
-            let Some((v, c)) = self.parse_condition() else {
+            let Some((v, c)) = self.parse_condition_in(true) else {
                 self.skip_until(&[Punct::RParen], false, true);
                 self.skip_sub_statement();
                 return None;
@@ -1392,9 +1424,7 @@ impl Parser<'_, '_> {
         }
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         let rparen = self.prev_end();
-        self.s.act_on_start_loop();
         let body = self.parse_sub_statement();
-        self.s.act_on_end_loop();
         let s = self.s.act_on_for(init, var, cond, inc, body, loc);
         self.s.note_loop_body(EmptyBodyStmt::For, s, rparen, body);
         Some(s)

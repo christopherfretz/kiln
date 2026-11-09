@@ -6183,7 +6183,21 @@ impl Sema<'_, '_> {
             // `'extern' variable has an initializer`).
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
-        let init = self.reject_objectless_method_init(init);
+        let mut init = self.reject_objectless_method_init(init);
+        // A reference bound to, or a placeholder deduced from, a variable
+        // template specialization or static data member of unknown bound
+        // sees the bound its definition gives (clang `getCompletedType`
+        // in `TryReferenceInitialization` and deduction; WP-907).
+        if let Initializer::Expr(e) = init
+            && self
+                .ast
+                .decls
+                .get(v)
+                .ty()
+                .is_some_and(|t| self.ast.types.is_reference(t) || self.contains_undeduced_auto(t))
+        {
+            init = Initializer::Expr(self.complete_expr_array_bound(e));
+        }
         self.act_on_init_inner(v, init);
         self.check_cleanup_deduced(v);
         self.check_static_tls(v, paren);
@@ -8099,6 +8113,14 @@ impl Sema<'_, '_> {
                     nloc,
                 );
             }
+            if let Some(&p) = found.last()
+                && use_ == TagUse::Reference
+                && qualifier.is_none()
+                && self.diagnose_tag_hidden_by_type_name(keyword, n, p, nloc)
+            {
+                // clang's recovery: the elaborated name still denotes the tag.
+                return p;
+            }
             if let Some(&p) = found.last() {
                 if self.tag_matches(p, keyword) {
                     prev = Some(p);
@@ -8478,8 +8500,16 @@ impl Sema<'_, '_> {
             .copied()
             .filter(|&p| in_class || within(self, found_as.unwrap_or(p)))
             .or_else(hidden);
+        // A typedef, alias or template found first is not a class
+        // ([dcl.type.elab]/2); clang's recovery keeps the class found, else
+        // declares the friend.
+        let types = self.lookup_name(n, LookupKind::Type);
+        let types_in_scope = types.naming.is_some()
+            || types.found.last().or(types.decls.last()).is_some_and(|&d| within(self, d));
+        let non_tag =
+            self.diagnose_friend_tag_non_tag(keyword, n, prev, &types.decls, types_in_scope, nloc);
         if let Some(p) = prev {
-            if self.tag_matches(p, keyword) {
+            if non_tag || self.tag_matches(p, keyword) {
                 self.mark_type_referenced(p);
                 return p;
             }

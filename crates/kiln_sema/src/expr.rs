@@ -4967,6 +4967,17 @@ impl Sema<'_, '_> {
                 ExprFlags::NONE,
             );
         }
+        // An argument naming a variable template specialization or a
+        // static data member of unknown bound is completed by its
+        // definition, for deduction against or binding to a reference
+        // parameter (clang `getCompletedType`; WP-907).
+        let completed: Vec<ExprId>;
+        let args = if args.iter().any(|&a| self.names_incomplete_array(a)) {
+            completed = args.iter().map(|&a| self.complete_expr_array_bound(a)).collect();
+            &completed[..]
+        } else {
+            args
+        };
         let mut kids = vec![callee];
         kids.extend_from_slice(args);
         // Braced-init-list arguments (placeholders until the parameter
@@ -6177,30 +6188,42 @@ impl Sema<'_, '_> {
         self.builder().trait_of_expr(kind, e, st, loc)
     }
 
+    /// Whether `e` is a (parenthesized) non-dependent `DeclRefExpr` of
+    /// array-of-unknown-bound type ([`Self::complete_expr_array_bound`]).
+    fn names_incomplete_array(&self, e: ExprId) -> bool {
+        let n = self.ast.exprs.get(self.ignore_parens(e));
+        n.kind() == ExprKind::DeclRefExpr
+            && !n.is_type_dependent()
+            && matches!(self.ast.types.canonical_view(n.ty()), TypeView::IncompleteArray(_))
+    }
+
     /// clang `completeExprArrayBound`: a (parenthesized) reference to a
-    /// static data member of a class template specialization declared as
+    /// static data member of a class template specialization, or to an
+    /// implicit variable template specialization (WP-907), declared as
     /// an array of unknown bound instantiates the member's definition,
     /// whose initializer or declarator gives the bound ([temp.inst]/4,
     /// [dcl.array]/3), and names that definition with its type, so that
     /// `sizeof(Ops)` sees the complete array. Anything else is returned
-    /// unchanged.
-    fn complete_expr_array_bound(&mut self, e: ExprId) -> ExprId {
+    /// unchanged. clang's other `getCompletedType` sites are a call
+    /// argument (deduced against a reference parameter, or bound to
+    /// one) and a reference or placeholder variable's initializer,
+    /// the range of a range-based `for` included (WP-907).
+    pub(crate) fn complete_expr_array_bound(&mut self, e: ExprId) -> ExprId {
+        if !self.names_incomplete_array(e) {
+            return e;
+        }
         let inner = self.ignore_parens(e);
         let n = *self.ast.exprs.get(inner);
-        if n.kind() != ExprKind::DeclRefExpr
-            || n.is_type_dependent()
-            || !matches!(self.ast.types.canonical_view(n.ty()), TypeView::IncompleteArray(_))
-        {
-            return e;
-        }
         let v = self.ast.exprs.decl(inner);
-        if self.kind_of(v) != DeclKind::Var
-            || self.ast.instantiated_from(self.ast.first(v)).is_none()
-            || self.inst_owner(self.ast.first(v)).is_none()
-        {
+        let first = self.ast.first(v);
+        let member =
+            self.ast.instantiated_from(first).is_some() && self.inst_owner(first).is_some();
+        if self.kind_of(v) != DeclKind::Var || !(member || self.is_implicit_var_spec(first)) {
             return e;
         }
-        let loc = self.expr_loc(inner);
+        // The point of instantiation is the operand's location, an outer
+        // parenthesis included (clang `E->getExprLoc()`).
+        let loc = self.expr_loc(e);
         self.instantiate_static_member_def(self.ast.first(v), loc);
         // The latest declaration that knows the bound: the instantiated
         // definition (clang names `getDefinition()`).

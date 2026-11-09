@@ -342,6 +342,9 @@ impl Mangler<'_, '_> {
         let ast = self.ast;
         let ex = &ast.exprs;
         loop {
+            if ast.templates.pack_index_origin.contains(e) {
+                return false;
+            }
             e = match ex.get(e).kind() {
                 ExprKind::ParenExpr | ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
                     ex.operand(e)
@@ -440,6 +443,10 @@ impl Mangler<'_, '_> {
     fn skip_transparent(&self, mut e: ExprId) -> ExprId {
         let ex = &self.ast.exprs;
         loop {
+            // A substituted pack index stops here: it writes nothing.
+            if self.ast.templates.pack_index_origin.contains(e) {
+                return e;
+            }
             e = match ex.get(e).kind() {
                 ExprKind::ParenExpr
                 | ExprKind::ImplicitCastExpr
@@ -455,6 +462,9 @@ impl Mangler<'_, '_> {
 
     fn is_primary(&self, e: ExprId) -> bool {
         let ast = self.ast;
+        if ast.templates.pack_index_origin.contains(e) {
+            return true;
+        }
         match ast.exprs.get(e).kind() {
             // A substituted `sizeof...` is `sZ`, not a literal.
             ExprKind::IntegerLiteral => !ast.templates.size_of_pack_origin.contains(e),
@@ -643,6 +653,11 @@ impl Mangler<'_, '_> {
         }
         let converted = self.implicitly_converted_to(e);
         let e = self.skip_transparent(e);
+        // The element a substituted `pack...[i]` selected: clang keeps a
+        // `PackIndexingExpr` and writes nothing for it (WP-1060).
+        if ast.templates.pack_index_origin.contains(e) {
+            return true;
+        }
         let n = ast.exprs.get(e);
         match n.kind() {
             ExprKind::IntegerLiteral => return self.integer_literal(e),
@@ -678,7 +693,12 @@ impl Mangler<'_, '_> {
                 self.float_literal(n.ty(), kind.bits(), bits);
             }
             // `L <array type> E`: a string literal names only its type.
-            ExprKind::StringLiteral => {
+            // A lambda-expression (clang `mangleExpression`,
+            // `LambdaExprClass`) has no ABI production either: clang
+            // writes a literal of the closure type. A closure in a
+            // template parameter's type has no mangling number, so it is
+            // clang's `$_N` (`DTclL3$_0EEE`; WP-1062).
+            ExprKind::StringLiteral | ExprKind::LambdaExpr => {
                 self.out.push('L');
                 self.ty(n.ty());
                 self.out.push('E');

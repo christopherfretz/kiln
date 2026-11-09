@@ -1902,6 +1902,19 @@ and returns the scope it names:
     qualified reference that finds no tag declares a hidden, invalid
     recovery tag, so later uses get no cascade. Test:
     `dcl.type.elab/ambiguous-qualified-elab.cpp`.
+  - *Tag hidden by a type name* (WP-957, [basic.lookup.elab]/1,
+    [dcl.type.elab]/2). The elaborated lookup ignores only non-type names,
+    so an unqualified `struct A` reference whose tag lookup found an outer
+    class while a nearer scope declares `A` as a typedef, type alias,
+    class template or alias template gets `typedef 'A' cannot be
+    referenced with the 'struct' specifier` (`type alias`, `template`,
+    `alias template`) + `declared here`
+    (`diagnose_tag_hidden_by_type_name`). A typedef naming a class `A` of
+    its own scope (`typedef struct A A;`) is looked through, as clang's
+    `ActOnTag` does. A `friend class-key A;` whose ordinary lookup finds
+    such a type name in the innermost enclosing namespace gets the same
+    error (`diagnose_friend_tag_non_tag`); one outside it declares a new
+    class there. Tests: `dcl.type.elab/tag-hidden-by-type-name{,-ok}.cpp`.
   - *Unknown specialization*. `struct A<T>::K` naming a member of another
     class template's unknown specialization ([temp.dep.type]/6) is
     dependent and is not looked up. It used to be rejected when the
@@ -2172,7 +2185,9 @@ instantiation unless stated.
   - `no_unique_address`
   - `alignas`/`aligned`, `packed`. `alignas(type-id)` checks its operand as
     `alignof` does: `invalid application of 'alignas' to an incomplete type
-    'T'` ([dcl.align]/3; WP-1017, `dcl.align/alignas-void.cpp`).
+    'T'` ([dcl.align]/3; WP-1017, `dcl.align/alignas-void.cpp`). A
+    dependent operand is checked when the declaration is instantiated
+    (`copy_attrs`; WP-957, `dcl.align/alignas-dependent-incomplete.cpp`).
   - `used`, `noinline`, `always_inline`, `weak`, `const`, `pure`, `cold`,
     `hot` (`AttrKind::HOT`, WP-172)
   - `optnone` / `minsize` (GNU syntax or `clang::`; `gnu::` and
@@ -3684,10 +3699,23 @@ specification as written (`TypeNames` prints ` noexcept`,
   Clang also rejects some of those at definition time; kiln does not.
   The checks clang runs when the overrider is declared (no written
   specification) are reported before the delayed ones, across the whole
-  outermost class. Not checked: the nested function-type rule
-  (`CheckParamExceptionSpec`) and implicit members whose computed
-  specification is a type list. Tests: `class.virtual/exception-spec-dynamic.cpp`,
-  `class.virtual/exception-spec-dynamic-pack-nested.cpp`.
+  outermost class. Each overridden function is checked, one error per
+  base (clang checks every one; the diagnostic opts out of dedup).
+  *Implicit members* (WP-957): an implicit destructor or copy or move
+  assignment operator overrides like a declared one (the assignment
+  operators of a dynamic class are declared eagerly and record their
+  overrides, clang's `AddOverriddenMethods`; before WP-957 a call through
+  the base dispatched to the base's function). Its computed
+  specification is checked against each base: a noexcept(false) one is
+  lax against a non-throwing base; before C++17 a computed type list
+  (`implicit_thrown_types`: the union of the implicit callees' dynamic
+  lists, any type when one is noexcept(false)) is compared type by type
+  (`list_allows_more`). Not checked: the nested function-type rule
+  (`CheckParamExceptionSpec`), and `final` or return-type rules for an
+  implicit overrider. Tests: `class.virtual/exception-spec-dynamic.cpp`,
+  `class.virtual/exception-spec-dynamic-pack-nested.cpp`,
+  `class.virtual/exception-spec-implicit{,-dynamic}{,-ok}.cpp`,
+  `class.virtual/implicit-assignment-override-run.cpp`.
 - *Function references* ([dcl.init.ref]/4, [conv.fctptr]). A function
   type `T noexcept` is reference-compatible with `T`; the rule and its
   identity ranking are in spec/sema-conv.md (WP-290). More tests:
@@ -8405,7 +8433,9 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     Like clang these repeat in every instantiation (emitted with
     `allow_duplicate`).
 - **Jumps:**
-  - `break` and `continue` outside a loop or switch are errors.
+  - `break` and `continue` outside a loop or switch are errors. Which
+    loop is open at a jump in a GNU statement expression in a loop or
+    switch header is §7.4a.
   - `return`:
     - a value in a `void` function is an error
     - a missing value in a non-`void` function is an error
@@ -8460,6 +8490,77 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
 - `[[noreturn]]`: the fall-off analysis (§4.3) treats a call as not
   returning when any redeclaration of the callee is `[[noreturn]]`,
   including member calls.
+
+### 7.4a Jumps in loop and switch headers (WP-1075)
+A GNU statement expression can put a `break` or `continue` in a loop's
+or switch's header ([stmt.break]/1, [stmt.cont]/1 name only the
+innermost enclosing loop). Kiln follows clang (19 and 22 agree, C++):
+- **Where a loop is open.** Sema's breakable stack (`FnState::breakables`,
+  clang's `BreakScope | ContinueScope`) gets the loop pushed:
+  - `while`: from its condition, including a condition variable, to the
+    end of the statement;
+  - `do`: from its body to the end of its condition;
+  - `for`: after its init-statement, from its condition through its
+    increment and body;
+  - range-based `for`: from its body only, so its init-statement and
+    range belong to the enclosing statement;
+  - `switch`: from its body only (a `break` scope), so a jump in its
+    init-statement or condition targets the enclosing loop or switch.
+
+  The parser (`parse_while`, `parse_do`, `parse_for_rest`) and template
+  substitution (`templ/subst/stmts.rs`) push at those points. A jump with
+  no open target is "'break' statement not in loop or switch statement" /
+  "'continue' statement not in loop statement" at the keyword, as before.
+  A lambda or local class body starts a new function, so a jump there
+  never reaches a loop of the enclosing function.
+- **Condition variable of a `for`.** A `continue` whose target is the
+  `for` loop whose condition variable is being initialized would skip
+  that initialization on its way to the increment, so it is clang's
+  "cannot jump from this continue statement to the loop increment; jump
+  bypasses initialization of loop condition variable"
+  (`sema_continue_from_cond_var_init`, `err_continue_from_cond_var_init`)
+  at the `continue`, whether or not the loop has an increment
+  (`begin_for_cond_var`/`end_for_cond_var` mark the declaration). A
+  `while` loop's condition variable is valid: its `continue` re-evaluates
+  the condition. Template substitution does not recheck it; the
+  definition already did.
+- **Codegen** (`kiln_codegen/src/stmt.rs`) mirrors clang's
+  `BreakContinueStack`, with the same windows: `while` pushes its targets
+  before the condition (`continue` re-evaluates the condition), `do`
+  before the body and pops after the condition (`continue` goes to
+  `do.cond`), `for` after the init (`continue` goes to the increment, or
+  to the condition without one; the increment's own `continue` re-runs
+  the increment), range-based `for` and `switch` after their headers.
+- **CFG** (§7.5.1): clang's analysis graph differs from its codegen here,
+  and kiln's warnings follow the graph. A `while` or `do` condition's
+  `break` and `continue`, and the `continue` of a `for` header, go to the
+  enclosing loop; the `break` of a `for` header and of a range-based
+  `for`'s init or range goes to that loop's exit (a header frame pushed
+  before the init); a `switch`'s init, condition variable and condition
+  `break` go to the switch's exit. A jump that has no target in the graph
+  is clang's `badCFG`: the function gets `Status::NoCfg`, and no
+  CFG-based warning (-Wreturn-type, -Wuninitialized, unreachable code) is
+  reported for it.
+- **Constant evaluation.** clang rejects any jump that leaves a statement
+  expression during constant evaluation ("this use of statement
+  expressions is not supported in a constant expression", at the
+  statement of the statement expression that holds the jump). The Oven
+  checks this before its own "outside a loop" trap, so a header jump
+  gets clang's note. A loop wholly inside a statement expression
+  evaluates normally.
+- **Oracle disagreement.** GCC rejects every `break`/`continue` in a
+  loop or switch header ("break statement not within loop or switch");
+  kiln follows clang.
+- **Not covered:** expansion statements' headers (`template for`), and
+  clang's dropping of the erroneous jump (a `StmtError`), which lets it
+  still report "no case matching constant switch condition" after
+  `switch (({ continue; 1; }))` with no loop; kiln keeps the statement and
+  misses that warning.
+
+Tests: `tests/conformance/stmt.break/stmt-expr-loop-header-{run,cfg}.cpp`,
+`tests/conformance/stmt.cont/stmt-expr-loop-header-errors.cpp`,
+`tests/conformance/stmt.while/ir-stmt-expr-loop-header-jump.cpp`,
+`tests/conformance/ext.gnu.stmt.expr/constexpr-loop-header-jump.cpp`.
 
 ### 7.5 Landed (WP-100): try-blocks (`try_stmt.rs`)
 - `act_on_exception_decl` ([except.handle]/1-3): an rvalue-reference

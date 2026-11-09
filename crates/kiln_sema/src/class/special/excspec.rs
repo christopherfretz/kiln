@@ -130,11 +130,8 @@ impl Sema<'_, '_> {
     }
 
     /// [except.spec]/7-8 for member `f` of kind `k` of class `class`:
-    /// clang's `SpecialMemberExceptionSpecInfo` visits the potentially
-    /// constructed bases for a constructor (all bases otherwise) and every
-    /// field; a default constructor looks at default member initializers
-    /// instead of the members' default constructors. Destructors of
-    /// subobjects do not affect a constructor (clang 19).
+    /// whether every function it calls on a subobject is non-throwing
+    /// (see [`Self::visit_implicit_callees`]).
     fn implicit_nothrow(
         &mut self,
         f: DeclId,
@@ -142,6 +139,86 @@ impl Sema<'_, '_> {
         k: SpecialKind,
         inherited: &[crate::class::inhctor::InheritedBase],
         depth: usize,
+    ) -> bool {
+        self.visit_implicit_callees(f, class, k, inherited, &mut |s, c| match c {
+            Callee::Member(m, at) => s.resolve_exc(m, depth + 1, at),
+            Callee::ThrowingInit => false,
+        })
+    }
+
+    /// The exceptions the implicit (or defaulted-on-first-declaration)
+    /// destructor or assignment operator `f` allows, as clang's
+    /// `ImplicitExceptionSpecification` accumulates them before C++17:
+    /// the union of the dynamic lists of the subobject members it calls,
+    /// [`ImplicitThrows::Any`] once one of them may throw anything, and
+    /// [`ImplicitThrows::Unknown`] when a callee's specification is
+    /// dependent or not yet computed. Used by the overrider check
+    /// ([except.spec]/5 in C++14), which kiln's `noexcept`/`noexcept(false)`
+    /// resolution cannot answer for a base with a type list.
+    pub(crate) fn implicit_thrown_types(&mut self, f: DeclId) -> ImplicitThrows {
+        let first = self.ast.first(f);
+        let Some(k) = self.special_kind_of(first) else { return ImplicitThrows::Unknown };
+        if !matches!(k, SpecialKind::Dtor | SpecialKind::CopyAssign | SpecialKind::MoveAssign) {
+            return ImplicitThrows::Unknown;
+        }
+        let Some(ctx) = self.ast.decls.get(first).ctx() else { return ImplicitThrows::Unknown };
+        let class = self.class_def(ctx);
+        let cflags = self.ast.decls.get(class).flags();
+        if cflags.contains(DeclFlags::INVALID) || cflags.contains(DeclFlags::DEPENDENT_CTX) {
+            return ImplicitThrows::Unknown;
+        }
+        let mut out = ImplicitThrows::List(Vec::new());
+        self.visit_implicit_callees(first, class, k, &[], &mut |s, c| {
+            let Callee::Member(m, at) = c else {
+                out = ImplicitThrows::Any;
+                return false;
+            };
+            s.resolve_exc(m, 1, at);
+            match s.exc_of(s.ast.first(m)) {
+                ExcSpec::Dynamic(l) => {
+                    if let ImplicitThrows::List(v) = &mut out {
+                        for &t in s.ast.types.type_list_types(l) {
+                            if !v.iter().any(|&x| s.ast.types.same_type(x, t)) {
+                                v.push(t);
+                            }
+                        }
+                    }
+                    true
+                }
+                ExcSpec::Deferred(_)
+                | ExcSpec::DependentNoexcept(_)
+                | ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. } => {
+                    out = ImplicitThrows::Unknown;
+                    false
+                }
+                e if e.is_nothrow() => true,
+                _ => {
+                    out = ImplicitThrows::Any;
+                    false
+                }
+            }
+        });
+        out
+    }
+
+    /// The functions special member `f` of kind `k` of class `class`
+    /// calls on its subobjects, in order, each passed to `visit` with
+    /// the subobject's location until `visit` returns false (the result
+    /// is then false): clang's `SpecialMemberExceptionSpecInfo` visits
+    /// the potentially constructed bases for a constructor (all bases
+    /// otherwise) and every field; a default constructor looks at
+    /// default member initializers instead of the members' default
+    /// constructors (a potentially-throwing one is
+    /// [`Callee::ThrowingInit`]). Destructors of subobjects do not
+    /// affect a constructor (clang 19). A subobject with no selected
+    /// member is skipped (the enclosing member is then deleted).
+    fn visit_implicit_callees(
+        &mut self,
+        f: DeclId,
+        class: DeclId,
+        k: SpecialKind,
+        inherited: &[crate::class::inhctor::InheritedBase],
+        visit: &mut dyn FnMut(&mut Self, Callee) -> bool,
     ) -> bool {
         use SpecialKind as K;
         if k == K::DefaultCtor {
@@ -159,13 +236,13 @@ impl Sema<'_, '_> {
             // clang `getSubobjectLoc`.
             let at = b.loc;
             if let Some(ib) = inherited.iter().find(|ib| ib.base == first) {
-                if !self.resolve_exc(ib.ctor, depth + 1, at) {
+                if !visit(self, Callee::Member(ib.ctor, at)) {
                     return false;
                 }
                 continue;
             }
             let rhs = if const_arg { Quals::CONST } else { Quals::NONE };
-            if !self.subobject_nothrow(bc, k, rhs, Quals::NONE, depth, at) {
+            if !self.visit_exc_subobject(bc, k, rhs, Quals::NONE, at, visit) {
                 return false;
             }
         }
@@ -186,7 +263,7 @@ impl Sema<'_, '_> {
                 if init.is_none() {
                     continue;
                 }
-                if init.is_some_and(|e| self.can_throw(e)) {
+                if init.is_some_and(|e| self.can_throw(e)) && !visit(self, Callee::ThrowingInit) {
                     return false;
                 }
                 continue;
@@ -204,7 +281,7 @@ impl Sema<'_, '_> {
                 _ => quals,
             };
             let lhs = if k.is_assign() { quals } else { Quals::NONE };
-            if !self.subobject_nothrow(rec, k, rhs, lhs, depth, at) {
+            if !self.visit_exc_subobject(rec, k, rhs, lhs, at, visit) {
                 return false;
             }
         }
@@ -240,21 +317,43 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Whether the member of kind `k` selected for a subobject of class
-    /// `rec` is non-throwing (true when none is selected: the enclosing
-    /// member is then deleted).
-    fn subobject_nothrow(
+    /// `visit` on the member of kind `k` selected for a subobject of
+    /// class `rec` (true, not visited, when none is selected).
+    fn visit_exc_subobject(
         &mut self,
         rec: DeclId,
         k: SpecialKind,
         rhs: Quals,
         lhs: Quals,
-        depth: usize,
         at: Loc,
+        visit: &mut dyn FnMut(&mut Self, Callee) -> bool,
     ) -> bool {
         match self.select_special(rec, k, rhs, lhs) {
-            Selected::Found(m) | Selected::Deleted(m) => self.resolve_exc(m, depth + 1, at),
+            Selected::Found(m) | Selected::Deleted(m) => visit(self, Callee::Member(m, at)),
             _ => true,
         }
     }
+}
+
+/// A function an implicit special member calls on a subobject
+/// ([`Sema::visit_implicit_callees`]).
+#[derive(Clone, Copy)]
+enum Callee {
+    /// The selected special member of a base or member subobject (or an
+    /// inherited constructor), with the subobject's location.
+    Member(DeclId, Loc),
+    /// A potentially-throwing default member initializer.
+    ThrowingInit,
+}
+
+/// What an implicit special member may throw before C++17
+/// ([`Sema::implicit_thrown_types`]).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum ImplicitThrows {
+    /// A callee's specification is dependent or not computed.
+    Unknown,
+    /// Any exception.
+    Any,
+    /// The listed types (none: non-throwing).
+    List(Vec<QualType>),
 }
