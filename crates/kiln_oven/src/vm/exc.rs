@@ -239,6 +239,9 @@ impl Oven {
                     return Err((f, exc.pc as usize));
                 }
                 let Some(fr) = self.stack.pop() else { break };
+                if self.hooks.calls {
+                    self.hook_call_ret(b);
+                }
                 if fr.mark != BOTTOM {
                     self.mem.release(fr.mark, &self.types);
                 }

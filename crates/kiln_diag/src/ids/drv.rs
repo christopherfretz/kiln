@@ -85,6 +85,9 @@ drv_precompile_not_module = Error (0) "--precompile requires a module interface 
 drv_regex_sanitizer_ignorelist = Error (1) "sanitizer ignorelist '{0}' uses regular expressions ('#!special-case-list-v1'), which kiln does not support; use glob patterns";
 // WP-982: kiln-scan-deps (spec/modules.md §11.9).
 drv_scan_one_job = Error (1) "unable to handle compilation, expected exactly one compiler job in '{0}'";
+// WP-1138: clang `SanitizerArgs::addArgs`, `-fsanitize=memtag-stack` on
+// AArch64 without the `mte` target feature.
+drv_stack_tagging_requires_hardware_feature = Error (0) "'-fsanitize=memtag-stack' requires hardware support (+memtag). For Armv8 or Armv9, try compiling with -march=armv8a+memtag or -march=armv9a+memtag";
 drv_treating_input_as_cxx = Warning [Deprecated] (2) "treating '{0}' input as '{1}' when in C++ mode, this behavior is deprecated";
 drv_unable_to_execute = Error (1) "unable to execute command: Executable \"{0}\" doesn't exist!";
 drv_unknown_argument = Error (1) "unknown argument: '{0}'";
