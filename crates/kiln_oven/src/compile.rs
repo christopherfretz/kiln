@@ -587,7 +587,7 @@ impl Oven {
         c.konst(t, u128::from(ty & 3));
         let n = c.reg();
         let begin = c.begin(p);
-        c.object_size(p, p, t, n, begin, false);
+        c.object_size(p, p, t, n, begin, false, Some(ty & 3));
         c.close_scope();
         c.emit(Op::Ret, 1, &[n]);
         let nregs = c.end_unit();
