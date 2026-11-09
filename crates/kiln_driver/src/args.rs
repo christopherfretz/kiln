@@ -724,6 +724,15 @@ pub struct PchArgs {
     /// The input is a header being precompiled (clang's `IsHeaderFile`;
     /// set by `crate::pch` on its producer's copy of the arguments).
     pub header_main: bool,
+    /// The indices in [`Args::includes`] of the driver's own `-include`s,
+    /// the ones clang's driver probes for `<file>.pch` / `<file>.gch`
+    /// (WP-1037). An `-Xclang -include` goes to clang's frontend as is.
+    pub probed: Vec<usize>,
+    /// The last `-include-pch` overrides a PCH the first probed
+    /// `-include` turns into: it follows that `-include`, or it is an
+    /// `-Xclang` one (clang's frontend sees those after the driver's
+    /// options, and its last `-include-pch` wins).
+    pub include_overrides_probe: bool,
 }
 
 /// Options taking a value, joined (`-Ifoo`) or separate (`-I foo`).
@@ -842,6 +851,7 @@ impl Args {
             }
             // Valued options.
             if let Some((opt, value)) = split_valued(arg, argv.get(i).map(String::as_str)) {
+                let given = !matches!(value, Valued::Missing);
                 match value {
                     Valued::Joined(v) => a.valued(opt, v, &mut x),
                     Valued::Next => {
@@ -849,6 +859,15 @@ impl Args {
                         a.valued(opt, &argv[i - 1], &mut x);
                     }
                     Valued::Missing => a.errors.push(ArgError::MissingValue(opt.to_owned())),
+                }
+                // WP-1037: which `-include`s clang's driver probes for a
+                // PCH, and whether the last `-include-pch` comes after.
+                match opt {
+                    "-include" if given && !xclang => a.pch.probed.push(a.includes.len() - 1),
+                    "-include-pch" if given => {
+                        a.pch.include_overrides_probe = xclang || !a.pch.probed.is_empty();
+                    }
+                    _ => {}
                 }
                 continue;
             }
@@ -1874,6 +1893,25 @@ mod tests {
         assert_eq!(a.errors, []);
         assert_eq!(a.includes, ["a.h", "b.h"]);
         assert_eq!(parse("t.cpp -include").errors, [ArgError::MissingValue("-include".into())]);
+    }
+
+    /// WP-1037: the driver's own `-include`s are probed for a PCH, an
+    /// `-Xclang -include` is not; an `-include-pch` after the first probed
+    /// `-include`, or through `-Xclang`, overrides the probed PCH.
+    #[test]
+    fn probed_includes() {
+        let a = parse("-Xclang -include -Xclang x.h -include a.h -includeb.h t.cpp");
+        assert_eq!(a.includes, ["x.h", "a.h", "b.h"]);
+        assert_eq!(a.pch.probed, [1, 2]);
+        assert!(!a.pch.include_overrides_probe);
+        assert!(!parse("-include-pch p.pch -include a.h t.cpp").pch.include_overrides_probe);
+        assert!(parse("-include a.h -include-pch p.pch t.cpp").pch.include_overrides_probe);
+        let a = parse("-Xclang -include-pch -Xclang p.pch -include a.h t.cpp");
+        assert!(a.pch.include_overrides_probe);
+        // The last `-include-pch` decides.
+        let a = parse("-include a.h -include-pch p.pch -include-pch q.pch t.cpp");
+        assert!(a.pch.include_overrides_probe);
+        assert_eq!(parse("t.cpp -include").pch.probed, [0usize; 0]);
     }
 
     #[test]
