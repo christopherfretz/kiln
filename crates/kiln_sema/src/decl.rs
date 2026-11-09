@@ -7845,6 +7845,23 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [`Sema::act_on_tag`]'s elaborated-type-specifier `struct n` whose
+    /// unqualified lookup finds a type or template template parameter:
+    /// "declaration of 'n' shadows template parameter" (clang
+    /// `DiagnoseTemplateParameterShadow` from `ActOnTag`). True if so.
+    fn diagnose_tag_ref_template_param(&mut self, n: Symbol, nloc: Loc) -> bool {
+        if !self.in_template() {
+            return false;
+        }
+        let found = self.lookup_name(n, LookupKind::Ordinary);
+        let [p] = found.decls[..] else { return false };
+        if !matches!(self.kind_of(p), DeclKind::TemplateTypeParm | DeclKind::TemplateTemplateParm) {
+            return false;
+        }
+        self.diag_template_param_shadow(n, nloc, p);
+        true
+    }
+
     /// A qualified tag name `A::X` that names no tag of `A`: another kind
     /// of member redefined (`struct A<T>::D` for a member template `D`),
     /// else clang's `err_not_tag_in_scope`.
@@ -8104,6 +8121,7 @@ impl Sema<'_, '_> {
         // anonymous tag).
         let mut conflict = false;
         let mut respecialized = false;
+        let mut param_shadow = false;
         if let Some((n, nloc)) = name {
             // [class.mem.general]/22: a member class, enumeration or
             // class template named as its class is diagnosed and declared
@@ -8115,7 +8133,16 @@ impl Sema<'_, '_> {
                 self.check_template_param_shadow(n, nloc);
             }
             let opaque_enum = is_enum && fixed.is_some();
-            let found = if class_shadow {
+            // [temp.local]/6, [dcl.type.elab]/2: `struct T *p;` whose
+            // name finds a type or template template parameter redeclares
+            // it (clang `ActOnTag`: diagnosed, then the lookup result is
+            // dropped and a new tag declared). Tag lookup does not find a
+            // non-type parameter.
+            param_shadow = use_ == TagUse::Reference
+                && qualifier.is_none()
+                && !class_shadow
+                && self.diagnose_tag_ref_template_param(n, nloc);
+            let found = if class_shadow || param_shadow {
                 Vec::new()
             } else {
                 self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc)
@@ -8240,6 +8267,25 @@ impl Sema<'_, '_> {
             }
         }
         let ctx = qualifier.unwrap_or_else(|| self.tag_home(self.tag_decl_context(use_)));
+        // The parameter hid the lookup: the tag the reference declares is
+        // the home context's own, if it has one (clang's redeclaration
+        // lookup in the injection scope).
+        if param_shadow
+            && let Some((n, _)) = name
+            && let Some(p) = self
+                .ast
+                .lookup_local(ctx, DeclName::ident(n))
+                .iter()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .find(|&d| is_tag_kind(self.kind_of(d)))
+        {
+            if !self.tag_matches(p, keyword) {
+                self.diag_wrong_tag(sym_str(self, n), loc, p);
+            }
+            return p;
+        }
         let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
         if plain_ref
             && !conflict

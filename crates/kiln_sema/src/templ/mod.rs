@@ -96,6 +96,12 @@ impl Sema<'_, '_> {
             self.templ.cur = h.list;
         }
     }
+
+    /// The parameters of the template heads from index `base` on (a
+    /// generic lambda's own heads), in order.
+    pub(crate) fn head_params_from(&self, base: usize) -> Vec<DeclId> {
+        self.templ.heads.iter().skip(base).flat_map(|h| h.params.iter().copied()).collect()
+    }
 }
 
 /// The template-declaration state the first declarator of a group
@@ -693,6 +699,12 @@ impl Sema<'_, '_> {
         {
             return;
         }
+        self.diag_template_param_shadow(name, loc, p);
+    }
+
+    /// "declaration of 'name' shadows template parameter" at `loc`, with
+    /// a note at the template parameter `p` ([temp.local]/6).
+    pub(crate) fn diag_template_param_shadow(&self, name: Symbol, loc: Loc, p: DeclId) {
         let msg = self
             .diag(DiagId::sema_template_param_shadow, loc)
             .arg(format!("'{}'", self.ast.symbols().as_str(name)));

@@ -376,9 +376,11 @@ impl Sema<'_, '_> {
         let closure = top.closure;
         // [expr.prim.lambda.general]/6: a *template-parameter-list* or an
         // `auto` parameter makes the call operator a member template.
-        let generic = self.templ.heads.len() > top.heads;
+        let base_heads = top.heads;
+        let generic = self.templ.heads.len() > base_heads;
         let lbracket = self.ast.exprs.lambdas.get(id).lbracket;
         if generic {
+            self.check_capture_shadows_template_param(id, base_heads);
             self.finish_invented_head();
             self.take_innermost_head();
         }
