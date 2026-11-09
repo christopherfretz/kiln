@@ -30,6 +30,7 @@ sema_spec_after_instantiation = Error (1) "explicit specialization of '{0}' afte
 sema_spec_member_not_instantiated = Error (1) "specialization of member '{0}' does not specialize an instantiated member";
 sema_spec_redecl_global_scope = Error (2) "{0:class template|class template partial|variable template|variable template partial|function template} specialization of '{1}' must occur at global scope";
 sema_special_redeclared = Error (1) "{0:constructor|destructor|conversion function} cannot be redeclared";
+sema_specialization_not_primary_template = Error (2) "cannot reference member of primary template because deduced class template specialization {0} is {1:instantiated from a partial|an explicit} specialization";
 // [expr.prim.id.qual]/2 (WP-474)
 sema_splice_declarative_scope = Error (0) "a splice-scope-specifier cannot be used in a declarative nested-name-specifier";
 // [namespace.udir]/1 (WP-474)

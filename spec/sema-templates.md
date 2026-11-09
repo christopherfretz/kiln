@@ -2426,6 +2426,22 @@ reports a dropped statement or part.
   mismatch in a non-template class or of a non-dependent friend
   (WP-273; `temp.friend/qualified-friend-template-*.cpp`,
   `qualified-friend-mismatch-at-instantiation.cpp`).
+- A friend that redeclares a member function of a class
+  (`friend R B<T>::f(W<T>&);`, matched to the member of `B`'s pattern when
+  the class template is defined) is declared in each instantiation with
+  the instantiated class as its qualifier: `B<A>` when `B` is a member of
+  the class's dependent context, else the member found again in the
+  explicit or partial specialization `B<A>` names (`relookup_member`,
+  see the `find_instantiated_decl` row of the substitution table). It thus redeclares that
+  member and befriends it ([class.friend]/10). It takes no storage class
+  from a static member ([class.friend]/6), and it is not recorded as a
+  member instantiated from the friend pattern, so the member keeps its
+  own pattern and definition (WP-1071;
+  `class.friend/friend-member-of-specialization-run.cpp`). Gap: a
+  non-template class's member befriended with a dependent type
+  (`friend int B::f(W<T>&);`) is rejected at definition ("does not match
+  any declaration in 'B'"; xfail
+  `class.friend/friend-member-dependent-signature-run.cpp`).
 - A friend class (`friend class B<T>;`) is substituted and grants access
   (S3C). A dependent friend specialization (`friend struct X<T>;`,
   `friend class Y<T*>;`, `friend class ns::Z<T...>;`) is kept in the
@@ -3035,7 +3051,7 @@ like clang's.
 | `UnaryTransform` | substitute the operand, then apply the builtin (§9.2) |
 | `PackExpansion`, `PackIndexing` | §7 |
 | `InjectedClassName` | §4.7 |
-| `Record`/`Enum`/`Typedef` of a decl in a dependent context | `find_instantiated_decl(d)`: a local goes through `locals`, and a local in `failed_locals` (its declaration statement failed: the declarator and the rest of its statement) is a silent substitution failure, already diagnosed ([temp.inst]/3; WP-316); a member goes through `member_map` of the enclosing specialization (of the instantiated parent, else of its defined redeclaration: a member class declared before its definition has two instantiated declarations and only the defined one records members; WP-582), and the member class is instantiated if completeness is needed. A member whose instantiated parent was not instantiated from its parent (a nested `In::Deep` reached through `B<T>` that selected an explicit or partial specialization) is looked up by name in that parent (`relookup_member`): none is `no member named 'In' in 'B<int>'` at the written qualifier, one tag of the same kind is used, anything else is "not yet implemented"; it is never a silent failure (WP-1054) |
+| `Record`/`Enum`/`Typedef` of a decl in a dependent context | `find_instantiated_decl(d)`: a local goes through `locals`, and a local in `failed_locals` (its declaration statement failed: the declarator and the rest of its statement) is a silent substitution failure, already diagnosed ([temp.inst]/3; WP-316); a member goes through `member_map` of the enclosing specialization (of the instantiated parent, else of its defined redeclaration: a member class declared before its definition has two instantiated declarations and only the defined one records members; WP-582), and the member class is instantiated if completeness is needed. A member whose instantiated parent was not instantiated from its parent (a nested `In::Deep` reached through `B<T>` that selected an explicit or partial specialization) is looked up by name in that parent (`relookup_member`; WP-1054, WP-1071): a class or enum as a nested-name-specifier component ([basic.lookup.qual]/1: a typedef, alias or using-declaration naming a class qualifies too, and an ambiguous or inaccessible one is diagnosed as for a written qualifier); a function by its substituted type among the overloads found (`friend R B<T>::f(W<T>&)` against an explicitly specialized `B<long>` with several `f`s); any other member as the one declaration of its kind found. None is `no member named 'In' in 'B<int>'` at the written qualifier, an ambiguity `member 'In' found in multiple base classes`, and the found member's access is checked; it is never a silent failure. In a deduction guide (the innermost instantiation frame's entity or template is a `CXXDeductionGuide`), a member of the primary template whose deduced specialization is explicit or partial is a substitution failure instead, `cannot reference member of primary template because deduced class template specialization 'X<int>' is an explicit specialization` ([over.match.class.deduct]/1; clang's `FindInstantiatedDecl`, `err_specialization_not_primary_template`; clang 19 accepts) |
 | `Auto` | a deduced `Auto` substitutes its deduced type; an undeduced one stays and is deduced in the instantiation |
 | `QualifiedArray{quals, base}` | cv applied to array sugar (`const A` with `using A = T[3]`): substitute `base`, then `qualify` pushes `quals` into the new element type ([dcl.array]/6; WP-301) |
 

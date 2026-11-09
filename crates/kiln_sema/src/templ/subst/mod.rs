@@ -931,14 +931,23 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         {
             return Err(self.no_member(node.name(), inst_parent, loc));
         }
-        // `inst_parent` is not an instantiation of `parent`: an explicit
-        // or another partial specialization, reached through a qualifier
-        // `X<args>::M::` that kiln resolved to the pattern only because it
-        // was parsed entering context (`class B<T>::In::Deep` in another
-        // template). The name is a member of an unknown specialization
-        // ([temp.dep.type]/6), looked up again in the class it names
-        // (WP-1054; clang's dependent nested-name-specifier).
         if !self.instantiated_from_parent(inst_parent, parent) {
+            // A member of the primary template named in a deduction guide
+            // built from its constructor, when the deduced specialization
+            // is an explicit or partial one: the guide's constraint or
+            // signature does not hold for it (clang's
+            // `FindInstantiatedDecl`, `err_specialization_not_primary_template`;
+            // a substitution failure in deduction, WP-1071).
+            if self.in_guide_substitution() {
+                return Err(self.not_primary_template(inst_parent, loc));
+            }
+            // An explicit or another partial specialization reached
+            // through a qualifier `X<args>::M::` that kiln resolved to the
+            // pattern only because it was parsed entering context (`class
+            // B<T>::In::Deep`, `friend R B<T>::f(...)` in another
+            // template). The name is a member of an unknown specialization
+            // ([temp.dep.type]/6), looked up again in the class it names
+            // (WP-1054, WP-1071; clang's dependent nested-name-specifier).
             return self.relookup_member(d, inst_parent, loc);
         }
         // A member not instantiated (an invalid member of the
@@ -963,23 +972,89 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
 
     /// Pattern member `d` named, through a qualifier, as a member of
     /// `inst`, which was not instantiated from its class: the member of
-    /// that name in `inst` when it is one declaration of the same kind,
-    /// else `no member named 'x' in 'C'` (clang's diagnostic for the
+    /// `inst` its name designates there ([temp.dep.type]/6,
+    /// [temp.res.general]/1: a member of an unknown specialization is
+    /// looked up at instantiation).
+    ///
+    /// - A class or enumeration is named before `::` (`B<T>::In::Deep`):
+    ///   the lookup is a nested-name-specifier's ([basic.lookup.qual]/1),
+    ///   so a typedef, an alias or a using-declaration in `inst` names the
+    ///   class it denotes ([namespace.udecl]/1), and nothing, an
+    ///   ambiguity ([class.member.lookup]/6), a non-class type, or an
+    ///   inaccessible member is diagnosed as for a written `inst::In::`.
+    /// - A function (a friend `R B<T>::f(P)` that redeclares a member):
+    ///   the member of the overload set the lookup finds, using-declarations
+    ///   looked through ([namespace.udecl]/14 hides a base's corresponding
+    ///   declaration, so at most one corresponds), whose type is `d`'s
+    ///   substituted ([basic.scope.scope]/4).
+    /// - Anything else: the one declaration of the same kind found.
+    ///
+    /// Otherwise `no member named 'x' in 'C'` (clang's diagnostic for the
     /// dependent name).
     fn relookup_member(&mut self, d: DeclId, inst: DeclId, loc: Loc) -> SubstResult<DeclId> {
         let name = self.sema.ast.decls.get(d).name();
         let Some(sym) = name.as_ident() else {
             return Err(self.no_member(name, inst, loc));
         };
-        let found = self.sema.lookup_qualified(inst, sym, crate::lookup::LookupKind::Ordinary);
-        match found.decls.as_slice() {
-            [] => Err(self.no_member(name, inst, loc)),
-            &[m] if self.sema.kind_of(m) == self.sema.kind_of(d) => {
-                self.sema.check_found_access(&found, loc);
-                Ok(m)
-            }
-            _ => self.unimplemented("a member of a specialization named through its pattern", loc),
+        let kind = self.sema.kind_of(d);
+        if matches!(kind, DeclKind::CXXRecord | DeclKind::Enum) {
+            let (c, _) =
+                self.sema.act_on_nested_name_spelled(Some(inst), sym, loc).ok_or(SubstFail)?;
+            return Ok(c);
         }
+        let found = self.sema.lookup_qualified(inst, sym, crate::lookup::LookupKind::Ordinary);
+        if self.sema.diagnose_member_ambiguity(&found, name, loc) {
+            return Err(SubstFail);
+        }
+        let pick = match (kind, found.decls.as_slice()) {
+            (_, []) => None,
+            (DeclKind::Function | DeclKind::CXXMethod, decls) => {
+                let want = self.sema.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+                let want = self.ty(want, loc)?;
+                let want = self.sema.ast.types.canonical(want);
+                decls.iter().position(|&m| {
+                    matches!(self.sema.kind_of(m), DeclKind::Function | DeclKind::CXXMethod)
+                        && self
+                            .sema
+                            .ast
+                            .decls
+                            .get(m)
+                            .ty()
+                            .is_some_and(|t| self.sema.ast.types.canonical(t) == want)
+                })
+            }
+            (_, &[m]) if self.sema.kind_of(m) == kind => Some(0),
+            _ => None,
+        };
+        let Some(i) = pick else { return Err(self.no_member(name, inst, loc)) };
+        let m = found.decls[i];
+        let one = crate::lookup::Found {
+            decls: vec![m],
+            found: vec![found.found.get(i).copied().unwrap_or(m)],
+            naming: found.naming,
+            ambiguity: None,
+        };
+        self.sema.check_found_access(&one, loc);
+        Ok(m)
+    }
+
+    /// `cannot reference member of primary template because deduced class
+    /// template specialization 'X<...>' is an explicit specialization` (or
+    /// one instantiated from a partial specialization); the failure it
+    /// proves.
+    fn not_primary_template(&mut self, inst: DeclId, loc: Loc) -> SubstFail {
+        let first = self.sema.ast.first(inst);
+        let explicit =
+            self.sema.ast.spec_info(first).is_some_and(|(_, s)| {
+                s.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization
+            });
+        let e = self
+            .sema
+            .diag(kiln_diag::DiagId::sema_specialization_not_primary_template, loc)
+            .arg(self.ctx_arg(inst))
+            .arg(u8::from(explicit));
+        self.sema.emit(e);
+        SubstFail
     }
 
     /// Emits `no member named 'name' in 'inst'`; the failure it proves.
@@ -1015,6 +1090,22 @@ impl Substituter<'_, '_, '_> {
     /// arguments name: `X<P...>` substituted, made complete. Fails (a
     /// substitution failure) when the substituted type is still dependent
     /// or names no class.
+    /// Whether the innermost instantiation frame substitutes into a
+    /// deduction guide (its deduced arguments or its constraints,
+    /// [over.match.class.deduct]/1): a member of the class template's
+    /// pattern then names a member of the deduced specialization.
+    fn in_guide_substitution(&self) -> bool {
+        self.sema.inst.stack.frames.last().is_some_and(|f| {
+            [f.entity, f.template].into_iter().any(|g| {
+                let g = match self.sema.kind_of(g) {
+                    DeclKind::FunctionTemplate => self.sema.pattern_of(g).unwrap_or(g),
+                    _ => g,
+                };
+                self.sema.kind_of(g) == DeclKind::CXXDeductionGuide
+            })
+        })
+    }
+
     fn pattern_specialization(&mut self, parent: DeclId, loc: Loc) -> SubstResult<DeclId> {
         if !self.is_class_pattern(parent) {
             return self.unimplemented("reference to a member of a dependent context", loc);
