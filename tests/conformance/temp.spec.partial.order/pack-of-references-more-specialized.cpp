@@ -3,7 +3,6 @@
 // clang's CXX/temp/temp.decls/temp.variadic/partial-ordering.cpp. Found by
 // the clang negative-test run (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, variadic partial ordering reports an ambiguity
 //@ expect: compile-ok
 template <typename... Types> struct tuple;
 template <typename Tuple> struct X1 {

@@ -283,6 +283,10 @@ pub enum Action {
     /// `-c` / `-S` / `-emit-llvm` (`codegen_cmd`; [`CompileArgs`] says
     /// which).
     Compile,
+    /// `--precompile`: a module interface or partition to its module file
+    /// only (spec/modules.md §11.6). It wins over `-c`, `-S` and
+    /// `-emit-llvm`, as in clang.
+    Precompile,
 }
 
 /// Which of `-c`, `-S` and `-emit-llvm` were given (`spec/driver.md`
@@ -475,11 +479,22 @@ pub struct Args {
     /// in order: the path prefixes `__FILE__` and source locations replace
     /// (`SourceManager::remap_macro_path`).
     pub macro_prefix_map: Vec<(String, String)>,
-    /// `-fmodule-file=<name>=<path>`: module interface sources
-    /// (spec/modules.md §2).
+    /// `-fmodule-file=<name>=<path>`: module files or module interface
+    /// sources (spec/modules.md §2, §11.6).
     pub module_files: Vec<(String, String)>,
+    /// `-fmodule-file=<path>` without a name: module files whose header
+    /// names the module (spec/modules.md §11.6), in order.
+    pub nameless_module_files: Vec<String>,
+    /// `--precompile` (see [`Action::Precompile`]).
+    pub precompile: bool,
+    /// `-fmodule-output` / `-fmodule-output=<path>` (the last one): the
+    /// option as written and its path (spec/modules.md §11.6).
+    pub module_output: Option<(String, Option<String>)>,
     /// `-fprebuilt-module-path=<dir>`, in order.
     pub prebuilt_module_paths: Vec<String>,
+    /// Set by `kiln-scan-deps` (not an option): the preprocessor records
+    /// module directives instead of importing (spec/modules.md §11.9).
+    pub scan_deps: bool,
     /// `-nostdinc`.
     pub nostdinc: bool,
     /// `-nostdinc++`.
@@ -500,6 +515,9 @@ pub struct Args {
     /// `--gcc-install-dir=<dir>`: the GCC installation itself
     /// (`<prefix>/lib/gcc/<triple>/<version>`).
     pub gcc_install_dir: Option<String>,
+    /// `--llvm-dir=<dir>`: the LLVM installation (spec/driver.md "LLVM
+    /// discovery").
+    pub llvm_dir: Option<String>,
     /// `-stdlib=`.
     pub stdlib: Option<StdLib>,
     /// `-f[no-]experimental-library`: `__has_feature(experimental_library)`
@@ -763,6 +781,9 @@ impl Args {
             }
         }
         a.verify = verify.finish(&mut a.errors);
+        if a.precompile && matches!(a.action, Action::Link | Action::Compile) {
+            a.action = Action::Precompile;
+        }
         a.errors.extend(a.coverage.errors());
         let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
         a
@@ -875,6 +896,8 @@ impl Args {
         match arg {
             "-E" => self.action = Action::Preprocess,
             "-fsyntax-only" => self.action = Action::SyntaxOnly,
+            "--precompile" => self.precompile = true,
+            "-fmodule-output" => self.module_output = Some((arg.to_owned(), None)),
             "-c" => (self.action, self.compile.object) = (Action::Compile, true),
             "-S" => (self.action, self.compile.assembly) = (Action::Compile, true),
             "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),
@@ -1008,10 +1031,16 @@ impl Args {
                 } else if let Some(v) = arg.strip_prefix("--embed-dir=") {
                     self.embed_dirs.push(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fmodule-file=") {
-                    // `<path>` alone names a BMI: none in part A, ignored.
-                    if let Some((name, path)) = v.split_once('=') {
-                        self.module_files.push((name.to_owned(), path.to_owned()));
+                    // `<path>` alone names a module file, whose header the
+                    // driver reads for the name (spec/modules.md §11.6).
+                    match v.split_once('=') {
+                        Some((name, path)) => {
+                            self.module_files.push((name.to_owned(), path.to_owned()));
+                        }
+                        None => self.nameless_module_files.push(v.to_owned()),
                     }
+                } else if let Some(v) = arg.strip_prefix("-fmodule-output=") {
+                    self.module_output = Some((arg.to_owned(), Some(v.to_owned())));
                 } else if let Some((opt, v)) = ["-ffile-prefix-map=", "-fmacro-prefix-map="]
                     .iter()
                     .find_map(|p| arg.strip_prefix(p).map(|v| (p, v)))
@@ -1059,9 +1088,12 @@ impl Args {
 
     /// The standard library flags: `-stdlib=` (also `--stdlib=`),
     /// `-f[no-]experimental-library`, `--gcc-toolchain=` and
-    /// `--gcc-install-dir=` (joined only, as clang).
+    /// `--gcc-install-dir=` (joined only, as clang), and kiln's
+    /// `--llvm-dir=` (joined only).
     fn stdlib_flag(&mut self, arg: &str) -> bool {
-        if let Some(v) = arg.strip_prefix("--gcc-toolchain=") {
+        if let Some(v) = arg.strip_prefix("--llvm-dir=") {
+            self.llvm_dir = Some(v.to_owned());
+        } else if let Some(v) = arg.strip_prefix("--gcc-toolchain=") {
             self.gcc_toolchain = Some(v.to_owned());
         } else if let Some(v) = arg.strip_prefix("--gcc-install-dir=") {
             self.gcc_install_dir = Some(v.to_owned());
@@ -1501,6 +1533,15 @@ mod tests {
         assert_eq!(a.errors, []);
         let a = parse("--gcc-toolchain /opt/gcc t.cpp");
         assert_eq!(a.errors, [ArgError::Unknown("--gcc-toolchain".into())]);
+    }
+
+    /// WP-1016: kiln's joined-only `--llvm-dir=`; the last one wins.
+    #[test]
+    fn llvm_dir_option() {
+        let a = parse("--llvm-dir=/a --llvm-dir=/opt/llvm-22 t.cpp");
+        assert_eq!((a.llvm_dir.as_deref(), a.errors.as_slice()), (Some("/opt/llvm-22"), &[][..]));
+        let a = parse("--llvm-dir /opt/llvm-22 t.cpp");
+        assert_eq!(a.errors, [ArgError::Unknown("--llvm-dir".into())]);
     }
 
     #[test]

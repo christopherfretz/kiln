@@ -259,6 +259,17 @@ impl Sema<'_, '_> {
             .unwrap_or_default()
     }
 
+    /// The non-object parameters of member function `f`: those of a
+    /// special member's parameter-type-list ([class.copy.assign]/1, an
+    /// explicit object parameter excluded; clang `getNonObjectParameter`).
+    pub(crate) fn special_params(&self, f: DeclId) -> Vec<DeclId> {
+        let mut v = self.param_decls(f);
+        if self.has_explicit_object(f) && !v.is_empty() {
+            v.remove(0);
+        }
+        v
+    }
+
     /// Whether parameter `p` has a default argument (possibly not parsed
     /// yet).
     pub(crate) fn param_has_default(&self, p: DeclId) -> bool {
@@ -300,7 +311,7 @@ impl Sema<'_, '_> {
         if kind == DeclKind::CXXDestructor {
             return Some(SpecialKind::Dtor);
         }
-        let params = self.param_decls(f);
+        let params = self.special_params(f);
         let pty = |i: usize| -> QualType {
             self.ast.decls.get(params[i]).ty().unwrap_or(QualType::ERROR)
         };
@@ -322,7 +333,8 @@ impl Sema<'_, '_> {
             };
         }
         // [class.copy.assign]/1: a non-template non-static `operator=`
-        // with exactly one parameter of type X, X&, X&& (cv any).
+        // with exactly one non-object parameter of type X, X&, X&& (cv
+        // any); an explicit object parameter does not count.
         let name = self.ast.decls.get(f).name();
         if !matches!(
             self.ast.names.view(name),

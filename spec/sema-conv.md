@@ -41,7 +41,7 @@ takes `&Sema` or `&mut Sema`. Helpers:
 - `wchar_t`, `char8_t`, `char16_t` and `char32_t`, which promote to the first of int/uint/long/ulong/llong/ullong that holds them (aarch64's unsigned 32-bit `wchar_t` becomes `unsigned int`);
 - an unscoped enum without a fixed type, which uses the same list over its value range;
 - an enum with a fixed underlying type, which promotes to that type, as recorded on `EnumData`;
-- bit-fields, which promote to `int` when it holds every value, else `unsigned int`, else nothing ([conv.prom]/5);
+- bit-fields, which promote to `int` when it holds every value, else `unsigned int`, else nothing ([conv.prom]/5); an assignment, prefix `++`/`--` or comma whose result designates a bit-field promotes the same way (WP-958);
 - `bool`, which promotes to `int`.
 
 Scoped enums never promote.

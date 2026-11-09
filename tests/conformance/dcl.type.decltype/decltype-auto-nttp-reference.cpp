@@ -3,7 +3,6 @@
 // clang's CXX/dcl.dcl/dcl.spec/dcl.type/dcl.type.decltype/p1.cpp. Found by
 // the clang negative-test run (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, decltype(auto) non-type parameter deduction drops the reference
 //@ expect: compile-ok
 template <class T, class U> constexpr bool same = false;
 template <class T> constexpr bool same<T, T> = true;

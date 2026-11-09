@@ -4,7 +4,6 @@
 // CXX/temp/temp.res/temp.dep/temp.dep.constexpr/p2.cpp. Found by the clang
 // negative-test run (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, a reference to a value-dependent constant is evaluated in the template definition
 //@ expect: compile-ok
 template <int n> struct S;
 template <int n> struct T {

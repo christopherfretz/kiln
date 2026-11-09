@@ -128,11 +128,20 @@ impl Sema<'_, '_> {
         }
         ok &= d.first_undeduced().is_none();
         if ok {
+            let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
+            // [temp.deduct.type]/17, [temp.arg.nontype]/1: a deduced
+            // integral value is converted to its parameter's type as a
+            // converted constant expression, so one that does not fit
+            // (narrows) fails the match (clang
+            // `ConvertDeducedTemplateArgument`): `256` of an `int`
+            // primary parameter does not bind `unsigned char C`.
+            ok = params.iter().zip(&d.args).all(|(&pd, &a)| self.deduced_int_fits(pd, a));
             // [temp.arg.template]/3: a deduced template template argument
             // must match its parameter.
-            let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
-            ok = self
-                .check_deduced_template_template_args(partial, list.depth, &params, &d.args, poi);
+            ok = ok
+                && self.check_deduced_template_template_args(
+                    partial, list.depth, &params, &d.args, poi,
+                );
         }
         let r = if ok {
             let deduced = self.ast.types.arg_list(&d.args);
@@ -180,6 +189,27 @@ impl Sema<'_, '_> {
             }
         }
         Some(deduced)
+    }
+
+    /// Whether deduced argument `a` of template parameter `pd` is not an
+    /// integer that the parameter's (non-dependent, integral) type cannot
+    /// represent ([temp.arg.nontype]/1: no narrowing).
+    fn deduced_int_fits(&self, pd: DeclId, a: TemplateArg) -> bool {
+        if self.kind_of(pd) != DeclKind::NonTypeTemplateParm {
+            return true;
+        }
+        let ArgView::Value { ty, value } = a.view() else { return true };
+        let Some(pty) = self.ast.decls.get(pd).ty() else { return true };
+        let t = &self.ast.types;
+        let canon = t.canonical(crate::conv::strip_cv(self, pty));
+        if self.is_dependent_type(canon)
+            || !t.is_integral(canon)
+            || t.as_enum(canon).is_some()
+            || t.canonical(crate::conv::strip_cv(self, ty)) == canon
+        {
+            return true;
+        }
+        self.const_int(value).is_none_or(|v| self.int_fits(canon, v))
     }
 
     /// Whether the arguments of partial specialization `p`, with

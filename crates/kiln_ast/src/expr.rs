@@ -248,6 +248,9 @@ impl ExprFlags {
     /// effects, so it is never evaluated and emits nothing (clang
     /// `BI__builtin_assume` under `HasSideEffects`; WP-805).
     pub const ASSUME_IGNORED: ExprFlags = ExprFlags(1 << 6);
+    /// `SubstNonTypeTemplateParmExpr`: the parameter has (deduced)
+    /// reference type (clang `isReferenceParameter`).
+    pub const REFERENCE_PARAMETER: ExprFlags = ExprFlags(1 << 4);
     /// `CXXNewExpr` / `CXXDeleteExpr`: `::new` / `::delete` (dump `global`).
     pub const GLOBAL: ExprFlags = ExprFlags(1 << 4);
     /// `CXXNewExpr`: an array new; `CXXDeleteExpr`: deletes an array

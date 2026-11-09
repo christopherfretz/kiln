@@ -66,6 +66,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-stdlib=libstdc++` / `libc++` | C++ standard library headers (default libstdc++) |
 | `--gcc-toolchain=<dir>` | joined only: the GCC installation search looks under `<dir>` instead of `<sysroot>/usr` (see "Toolchain") |
 | `--gcc-install-dir=<dir>` | joined only: `<dir>` (`.../lib/gcc/<triple>/<version>`) is the GCC installation; wins over `--gcc-toolchain=`; without a `crtbegin.o` in it, `'<dir>' does not contain a GCC installation` and no GCC |
+| `--llvm-dir=<dir>` | joined only, last wins (WP-1016): `<dir>` is the LLVM installation kiln drives ("LLVM discovery"); not one, or not LLVM 19 or 22, is an error |
 | `-fexperimental-library`, `-fno-experimental-library` | libc++'s experimental library: `__has_feature(experimental_library)` and `__has_extension(experimental_library)` are 1 (a `kiln_pp` feature overlay, as clang's cc1 flag; libc++ derives `_LIBCPP_ENABLE_EXPERIMENTAL` from it), and the link step gets `-fexperimental-library` (clang adds `-lc++experimental`); the last wins (`Args::experimental_library`, WP-461) |
 | `--target=<triple>` | `aarch64`/`arm64` or `x86_64`/`amd64` Linux; anything else is an error |
 | `-march=<arch>[+ext...]`, `-mcpu=<cpu>[+ext...]`, `-msve-vector-bits=<N\|scalable>`, `-target-feature <±feat>` (usually via `-Xclang`) | AArch64 target features and the `__ARM_*` predefines ("Target features" below, WP-459, WP-469) |
@@ -187,7 +188,9 @@ default pipeline, which decides itself by `-O` level) and
 `-f[no-]strict-vtable-pointers` (clang adds `invariant.group` loads and
 `launder.invariant.group` barriers; deliberately ignored: the IR without
 them is valid, only less optimized). Each is a deviation from clang's IR
-for that flag (WP-873 follow-ups). An empty `-mtune=` is `unsupported argument '<v>' to option '<opt>'`.
+for that flag (WP-873 follow-ups). WP-982: `-f[no-]modules-reduced-bmi`
+(clang 18+ writes a smaller BMI; kiln's module file has one form, the
+source capsule, spec/modules.md §11.9). An empty `-mtune=` is `unsupported argument '<v>' to option '<opt>'`.
 (`-fexcess-precision=`, `-f[no-]math-errno` and `-ffp-model=` are in
 "Floating-point flags", WP-806.)
 
@@ -316,7 +319,11 @@ implemented or an error; none is accepted and ignored.
   - `__FLT_EVAL_METHOD__` stays 0.
 - **Backend.** Function attributes carry the semantics. `llc` gets
   `-fp-contract=fast` only for exactly `-ffp-contract=fast` (clang's
-  `AllowFPOpFusion`; `fast-honor-pragmas` does not).
+  `AllowFPOpFusion`; `fast-honor-pragmas` does not), except x86 with
+  LLVM 22 or newer: that `llc` warns its X86 backend ignores the option
+  and fuses on the IR's `contract` flags, which every FP operation
+  carries under `-ffp-contract=fast` (the object code is the same;
+  WP-1016).
 - **Link and denormals.** The link passes the last of `-ffast-math`,
   `-funsafe-math-optimizations` and `-ffp-model=fast|aggressive` (unless
   a negation follows) to `clang++`, which adds GCC's `crtfastmath.o`.
@@ -457,6 +464,11 @@ any other value is the error `unsupported argument '<v>' to option
 '--driver-mode='`. `kiln_driver::run` runs as `kiln++`;
 `kiln_driver::run_as(argv0, ...)` takes the name.
 
+A third mode is the dependency scanner: a basename `kiln-scan-deps`,
+`clang-scan-deps` or `clang-scan-deps-<version>` runs
+`kiln_driver::scan_deps` instead of the compiler ("Dependency scanning";
+the build script makes these links too, WP-982).
+
 The program's basename, as invoked, prefixes the driver diagnostics
 (`kiln++: error: no input files`, `kiln: warning: ...`), as clang prints
 `clang++-19: error:`; `--driver-mode=` does not change it. `--version`
@@ -493,6 +505,9 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
 ```
 <prefix>/bin/kiln
 <prefix>/bin/kiln++ -> kiln              relative symlink ("Driver modes")
+<prefix>/bin/kiln-scan-deps -> kiln      the dependency scanner, also as
+<prefix>/bin/clang-scan-deps-22 -> kiln  the names CMake looks for
+<prefix>/bin/clang-scan-deps -> kiln     ("Dependency scanning")
 <prefix>/lib/kiln/<major>/include/       resource/include: clang 19's builtin
                                          headers, contracts, module.modulemap
 <prefix>/lib/kiln/<major>/predefines/    resource/predefines/*.txt
@@ -521,9 +536,10 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
   names (its CRC matches; `cargo xtask dist --check` checks it), or the
   symbols tree can be used directly.
 - **Run-time dependencies.** kiln runs LLVM's tools and links through
-  `clang++` ("Code generation", "Tools"): an LLVM 19 (or 22) installation
-  with `llc`, `llvm-as` and `clang++`, found through `$KILN_LLVM_DIR`
-  (default `/usr/lib/llvm-19`) or the versioned names on `PATH`. The C++ standard
+  `clang++` ("Code generation", "Tools"): an LLVM 22 or 19 installation
+  with `opt`, `llc`, `llvm-as` and `clang++`, found as "LLVM discovery"
+  says (docs/COMPATIBILITY.md "Runtime dependencies" is the user-facing
+  list). The C++ standard
   library is the system's libstdc++ (GCC's installation, "Toolchain") or
   libc++ (`-stdlib=libc++`, from the LLVM directory). The binary itself
   needs only the C library: the newest glibc symbol version it references
@@ -533,7 +549,7 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
 
 ## Toolchain
 
-`Toolchain::new(target, sysroot, resource_dir)` locates:
+`Toolchain::new(target, sysroot, resource_dir, llvm_dir)` locates:
 
 - **Resource directory:** the first of (WP-927; "Installation layout"):
   1. `-resource-dir=<dir>` (or `-resource-dir <dir>`);
@@ -557,16 +573,11 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
   predefines base files are `<resource>/predefines/<triple>.<std>.txt`
   and its builtin headers `<resource>/include`. Test:
   `crates/kiln_driver/tests/install_layout.rs`.
-- **LLVM:** `$KILN_LLVM_DIR`, default `/usr/lib/llvm-19` (a build with
-  `KILN_DEFAULT_LLVM_DIR` set in its environment uses that instead, for a
-  package whose LLVM is installed elsewhere; `toolchain::DEFAULT_LLVM_DIR`).
-  This is where libc++'s headers are found. Its major version (`Toolchain::llvm_major`:
-  the leading integer of `<dir>/bin/llvm-config --version`, probed once
-  per directory per process; if that tool is missing or fails, the `N` of
-  a directory named `llvm-N`, after resolving symlinks; else 19) selects
-  the IR that differs between LLVM 19 and 22 (spec/codegen.md,
-  coroutines and §6). A tree whose name says nothing about its version
-  (`/opt/llvm`) is keyed correctly by the probe.
+- **LLVM:** the installation "LLVM discovery" (below) selects
+  (`Toolchain::llvm`, a `llvm::LlvmSelection`). This is where kiln's
+  tools and libc++'s headers are found. Its major (`Toolchain::llvm_major`;
+  22 when none was found, `llvm::DEFAULT_LLVM_MAJOR`) selects the IR that
+  differs between LLVM 19 and 22 (spec/codegen.md, coroutines and §6).
 - **GCC:** clang 19/22 `GCCInstallationDetector::init`. The prefix is
   `--gcc-toolchain=<dir>` (a trailing `/` dropped) if given, else
   `<sysroot>/usr`. Under it, for `lib64` then `lib` and the target's
@@ -614,6 +625,73 @@ toolchain's (clang 19 `Linux::AddClangCXXStdlibIncludeArgs` followed by
 `-nostdinc` drops all of them. `-cxx-isystem` applies only to C++. The
 list is realized by `kiln_pp::SearchList::build` (`spec/pp.md` "Header
 search"), which drops nonexistent and duplicate directories.
+
+### LLVM discovery (WP-1016)
+
+kiln 1.0 supports LLVM **22 and 19** (`llvm::SUPPORTED_LLVM_MAJORS`, in
+preference order; 22 is the default, operator decision Q6). Supporting
+another major is one entry there plus its tests; LLVM 20 and 21 are
+refused. `llvm::Search::run` takes the first valid candidate of:
+
+1. `--llvm-dir=<dir>` (joined form only; the last one wins);
+2. `$KILN_LLVM_DIR`, when set and not empty;
+3. the build's `KILN_DEFAULT_LLVM_DIR` (a compile-time environment
+   variable, for a distribution package whose LLVM lives elsewhere);
+4. for each supported major `N` in preference order (all of 22's
+   candidates before any of 19's):
+   1. `llvm-config` on `PATH` when its installation has major `N`, then
+      `llvm-config-N`; the installation is the directory above the one
+      holding the tool after resolving symlinks (what `llvm-config
+      --prefix` prints; nothing is run);
+   2. `/usr/lib/llvm-N` (Debian, Ubuntu, apt.llvm.org),
+      `/usr/lib64/llvmN` (Fedora's versioned compat packages),
+      `/home/linuxbrew/.linuxbrew/opt/llvm@N`,
+      `/home/linuxbrew/.linuxbrew/opt/llvm` (Homebrew on Linux), `/usr`
+      (Fedora's main `llvm`/`clang` packages);
+   3. `opt-N`, then `clang++-N`, on `PATH`: the installation above its
+      resolved location.
+
+A directory is a valid installation when `bin/opt`, `bin/llc` and
+`bin/clang++` exist and its major is supported. The major
+(`llvm::dir_major`) is the single numeric entry of `lib/clang/` (clang's
+resource directory, so normally nothing is run), else the leading integer
+of `bin/llvm-config --version` (run once per directory per process), else
+the `N` of a directory named `llvm-N`, `llvmN` or `llvm@N` (before or
+after resolving symlinks). The same directory is checked once.
+
+- An explicit choice (1 or 2) that is not valid is an error before
+  anything runs, whatever the action (`--help` excepted), exit status 1;
+  the search does not fall through:
+  `error: '<dir>' (from --llvm-dir) is not a usable LLVM installation: <why>`
+  (`no such directory`, `no 'bin/llc'`, `cannot tell its version (...)`),
+  or `error: unsupported LLVM major 21 at '<dir>' (from KILN_LLVM_DIR);
+  kiln supports LLVM 19 and 22`.
+- An implicit candidate that is not valid is skipped. When none is valid,
+  the first command that needs a tool (a link, `-c`, a probe delegated to
+  `clang++`) reports `error: no supported LLVM installation found (kiln
+  supports LLVM 19 and 22)` with a note `skipped '<dir>': <why>` per
+  directory that exists or was looked at, a note `not found on PATH:
+  <names>`, and a note saying what to install and how to name an
+  installation. Actions that need no tool (`-fsyntax-only`, `-E`,
+  `-S -emit-llvm`, which writes LLVM 22 IR) still work, using
+  `/usr/share/libc++/v1` for `-stdlib=libc++` headers.
+- **`-fclang-compat` and the backend are independent.** The default
+  `-fclang-compat` stays 22 whatever LLVM is selected: the compat level
+  is what the program sees (`__clang_major__`, clang-version-specific
+  semantics and diagnostics), the backend is how its IR is spelled
+  (`Toolchain::llvm_major`), and every pairing works
+  (`-fclang-compat=19` with LLVM 22 and `-fclang-compat=22` with LLVM 19
+  are tested). Making the default follow the backend would change a
+  program's meaning with whatever LLVM happens to be installed.
+- `--version` and `-v` print the selection on the line after
+  `InstalledDir:` ("`-v`, `--version`, `--help`").
+
+Tests: `crates/kiln_driver/src/llvm.rs` (the search on fake trees: the
+precedence, each step, per-major preference, skipped and explicit
+invalid candidates, unsupported majors, nothing found, the messages) and
+`crates/kiln_driver/tests/llvm_discovery.rs` (the driver with fake
+installations through the flag and the variable: errors, precedence,
+delegated probes, `-v`/`--version`).
 
 ## Target features
 
@@ -856,10 +934,11 @@ the current directory (standard input is `-`). `-o -` is standard output.
   location as an error (`cg_error`). The `-fconstexpr-report` is written for every job.
   With an error, nothing is written to the output and no further step of
   that input runs; other inputs still compile; the link does not run.
-- **Tools.** Each tool is `$KILN_LLVM_DIR/bin/<tool>` (default
-  `/usr/lib/llvm-19` or the build's `KILN_DEFAULT_LLVM_DIR`), else the versioned name (`llc-19`, `llvm-as-19`,
-  `clang++-19`) on `PATH`. The IR is piped to the tool's standard input
-  (`-o <out> -`).
+- **Tools.** Each tool is `<llvm>/bin/<tool>` (`opt`, `llc`, `llvm-as`,
+  `clang++`), `<llvm>` being the installation "LLVM discovery" selects. A
+  tool missing from it is `unable to execute command: Executable "<tool>"
+  doesn't exist!`; with no installation found, the not-found error. The
+  IR is piped to the tool's standard input (`-o <out> -`).
 - **`llc`** gets `-O0` (default), `-O1` (`-O`, `-O1`, `-Og`), `-O2`
   (`-O2`, `-Os`, `-Oz`) or `-O3` (`-O3`, `-O4`, `-Ofast`), then
   `-relocation-model=static` with `-fno-pic`/`-fno-pie`, else
@@ -930,7 +1009,7 @@ the current directory (standard input is `-`). `-o -` is standard output.
   `(i64 immarg, ptr captures(none))`), which that backend's `opt` and
   `llc` verify. **The IR kiln writes is the IR of its backend** (WP-783):
   `-S -emit-llvm` writes the same module the `-c` path hands to `llc`,
-  in the spelling the configured LLVM's (`KILN_LLVM_DIR`) `opt`, `llc`
+  in the spelling the selected LLVM's ("LLVM discovery") `opt`, `llc`
   and `llvm-as` read, whatever the `-fclang-compat`. (Before WP-783 the
   `-S -emit-llvm` text at `-fclang-compat=22` was rewritten to LLVM 22's
   sizeless markers even for an LLVM 19 or 21 backend, which those tools
@@ -976,31 +1055,96 @@ yet") and debug information.
 
 C++20 modules are enabled for `-fsyntax-only` and code generation from
 `-std=c++20` on; `-E` and `-M*` print module and import directives as text
-(spec/modules.md §2). There is no binary module interface: an imported
-module is built in-process from its interface source, so the flags name
-sources, not BMIs. A module (or partition `M:P`) is looked up in this
-order:
+(spec/modules.md §2). An imported module comes either from its interface
+source, built in-process (part A), or from a kiln module file written by
+an earlier compile (spec/modules.md §11; WP-917). A module (or partition
+`M:P`) is looked up in this order:
 
 1. `-fmodule-file=<name>=<path>` (repeatable; the first one naming the
    module wins). The path is used as given (relative to the working
-   directory).
-2. `-fprebuilt-module-path=<dir>` (repeatable, in order): `<dir>/<name>.cppm`,
-   `.ixx`, then `.cpp`; a partition `M:P` as `<dir>/M-P.*`.
-3. `std` and `std.compat` only: `<llvm>/share/libc++/v1/std.cppm` /
+   directory) and may name a module file or a module source; which one is
+   decided by the file's first bytes, not its extension.
+2. `-fprebuilt-module-path=<dir>` (repeatable, in order): `<dir>/<name>.pcm`,
+   then the sources `<dir>/<name>.cppm`, `.ixx`, `.cpp`; a partition `M:P`
+   as `<dir>/M-P.*`.
+3. A module that an imported module file itself imported, at the path that
+   file recorded.
+4. `std` and `std.compat` only: `<llvm>/share/libc++/v1/std.cppm` /
    `std.compat.cppm`, where `<llvm>` is the toolchain's LLVM directory
-   (`KILN_LLVM_DIR`, default as above; clang 22's libc++ has the
+   ("LLVM discovery"; clang 19's and 22's libc++ have the
    same layout).
 
 A module not found is `fatal error: module 'M' not found` at the module
 name. Header units (`import "h";`, `import <h>;`) are found like
 `#include` and need no flag.
 
+Module files are clang's driver interface with kiln's own file format
+(spec/modules.md §11.3; kiln never reads or writes clang's, and says so):
+
+- `--precompile <unit> [-o <out>]` writes the module file of a module
+  interface or partition unit (default `<stem>.pcm` in the working
+  directory) and nothing else. `-x c++-module` or a `.cppm`/`.ixx`
+  extension marks an input as C++ (the unit's `export module` line, not
+  the extension, makes it a module unit); any other unit is `error: --precompile requires a module interface or
+  partition unit`.
+- `-fmodule-output[=<path>]` with `-c` (or a link) also writes the module
+  file of each module interface input: at `<path>`, else next to the
+  object (`-o x/m.o` -> `x/m.pcm`), else `<stem>.pcm`. On an input that is
+  not an interface unit it is unused (`warning: argument unused during
+  compilation: '-fmodule-output'`). The module file is the one
+  `--precompile` writes, byte for byte.
+- A module file is a compile input: `-c m.pcm` compiles the interface unit
+  it holds, so `--precompile` then `-c` gives the object one `-c` gives.
+- `-fmodule-file=<path>` (no name) is clang's deprecated form: the module
+  file's own module name is read from it, with clang's warning
+  `the form '-fmodule-file=<BMI-path>' is deprecated ...
+  [-Weager-load-cxx-named-modules]`. A source there is an error.
+- A module file records the configuration it was built with (standard,
+  target, language and codegen options that change meaning; spec/modules.md
+  §11.4). Importing it into a compile that differs is one `error: module
+  file 'm.pcm' was built with '-std=c++20' but the current compilation uses
+  '-std=c++23'` per differing option, then `fatal error: module file
+  'm.pcm' cannot be loaded due to a configuration mismatch with the
+  current compilation`. A missing, foreign (clang), wrong-module, or
+  damaged module file is a fatal error naming it; never a crash.
+
 To link a program, every module unit whose non-inline definitions are used
-is also compiled as an input of the same command (or separately with
-`-c`): `kiln++ -std=c++20 -fmodule-file=m=m.cppm m.cppm main.cpp`. An
-importer emits only declarations for the non-inline functions and
-variables of the units it imports. `--precompile`, `-fmodule-output` and
-`-fmodule-header` are not supported (part B, spec/modules.md §9).
+is also compiled as an input (or separately with `-c`, from its source or
+its module file): `kiln++ -std=c++20 -fmodule-file=m=m.cppm m.cppm
+main.cpp`, or in two steps `kiln++ -std=c++20 -c m.cppm -fmodule-output -o
+m.o && kiln++ -std=c++20 -fmodule-file=m=m.pcm main.cpp m.o`. An importer
+emits only declarations for the non-inline functions and variables of the
+units it imports. `-fmodule-header` and header-unit module files are not
+supported yet (spec/modules.md §11.10); `-fmodules-reduced-bmi` is
+accepted and ignored ("Codegen flags").
+
+## Dependency scanning
+
+`kiln-scan-deps` (WP-982; design, output and deviations in
+spec/modules.md §11.9) is clang-scan-deps for CMake and other build
+tools: `kiln-scan-deps [options] -- <compiler> <compile flags>` runs
+kiln's preprocessor on the one compile after `--` and prints its module
+dependencies. It is the `kiln` binary under another name ("Driver
+modes"); `clang-scan-deps-22` and `clang-scan-deps` are the same links,
+installed beside `kiln++` so CMake finds it without configuration;
+`-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=<prefix>/bin/kiln-scan-deps`
+names it explicitly. The compiler after `--` is parsed as `kiln++`
+whatever its name (`clang++`, a path to `kiln++`); its flags are kiln's.
+
+| option | effect |
+|---|---|
+| `-format=p1689` (`--format`, `-format p1689`) | P1689r5 JSON, as clang-scan-deps 22 |
+| `-format=make` (the default) | the make rule `<obj>: <src> <headers>` |
+| `-o <file>` | write the output to `<file>` instead of stdout |
+| `-MT`/`-MD`/`-MF`/`-MMD`/`-MQ` in the command | the dependency file of the scanned files, after a clean scan ("Dependency output") |
+| `-j <n>`, `-mode <m>`, `-resource-dir-recipe <r>`, `-optimize-args[=...]`, `-eager-load-pcm`, `-reuse-filemanager`, `-skip-excluded-pp-ranges`, `-brief-result`, `-round-trip-args` | accepted and ignored (clang-scan-deps tuning; one input is one scan) |
+| `-compilation-database <f>`, `-format=experimental-full` | an error (not supported) |
+| `-help`, `--help` | the option summary, exit 0 |
+| anything else | `<prog>: Unknown command line argument '<a>'.  Try: '<prog> --help'`, exit 1 |
+
+Exit status 0 after a clean scan, 1 otherwise (diagnostics under
+`Diagnostics while scanning dependencies for '<src>':`, the empty
+document on stdout). Warnings are not printed.
 
 ## Dependency output
 
@@ -1289,7 +1433,12 @@ and `codegen`.
   Target: <triple>
   Thread model: posix
   InstalledDir: <dir of the executable>
+  LLVM backend: <major> (<llvm dir>)
   ```
+
+  The last line (WP-1016) names the installation "LLVM discovery"
+  selected; with none, `LLVM backend: none (kiln supports LLVM 19 and
+  22)`. It never says `clang version` (the identity rule, "Identity").
 
 - `-v` prints the same to standard error, plus the selected GCC
   installation. For each input it then prints clang's search-list block:
@@ -1562,6 +1711,10 @@ Each deviation is covered by a test or a test note.
   (spec/abi.md §7).
 - `crates/kiln_codegen/tests/ir_vs_clang.rs`: the IR-diff corpus through
   `kiln_driver::run` (spec/codegen.md §6).
+- `crates/kiln_driver/tests/scan_deps.rs` (WP-982): the dependency
+  scanner against clang-scan-deps 22's output (spec/modules.md Tests);
+  `scripts/oss/selftest.sh` `cmake_modules`: a CMake `FILE_SET
+  CXX_MODULES` build with Ninja, run and rebuilt incrementally.
 - `run` conformance tests compile and link through the driver.
 - Unit tests sit in each module.
 - Parity: `cargo xtask test tests/differential/pp tests/conformance/cpp.*

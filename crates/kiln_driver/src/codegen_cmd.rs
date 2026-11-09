@@ -87,6 +87,7 @@ pub fn is_source(input: &Input) -> bool {
             | "ii"
             | "cppm"
             | "ixx"
+            | "pcm"
             | "h"
             | "hh"
             | "hpp"
@@ -304,8 +305,8 @@ impl CodegenJob<'_> {
         if crate::features::resolve(a, &job.toolchain.target).0.x86_cx16() {
             target.types.max_atomic_inline_bytes = 16;
         }
-        let main_id = inputs.main;
         let (pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
+        let main_id = pp.main_file();
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
         let popts = ParseOptions {
             std: job.std.lex,
@@ -333,8 +334,11 @@ impl CodegenJob<'_> {
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
-        let (mut tu, pp) =
+        let (mut tu, mut pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
+        if engine.error_count() == 0 {
+            job.write_module_file(&mut pp, engine);
+        }
         *deps_out = crate::pp_cmd::finish_deps(pp, deps);
         let mut module = None;
         if engine.error_count() == 0 {
@@ -394,7 +398,7 @@ impl CodegenJob<'_> {
                 cxx_modules: job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20,
                 debug: kiln_codegen::DebugOptions {
                     main_file: if job.path == "-" { String::new() } else { job.path.to_owned() },
-                    main_id: Some(main_id),
+                    main_id,
                     language: kiln_codegen::DebugOptions::language_for(
                         job.std.cplusplus,
                         job.std.lex >= kiln_lex::Std::Cxx11,
@@ -973,8 +977,13 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String, input: &str) -> C
     }
     // clang `AllowFPOpFusion`: `-ffp-contract=fast` (not
     // `fast-honor-pragmas`) fuses across statements in the backend too;
-    // the other fast-math options reach it as function attributes.
-    if args.fp_model().backend_fuse {
+    // the other fast-math options reach it as function attributes. LLVM
+    // 22's `llc` warns that the X86 backend ignores `-fp-contract` (it
+    // fuses on the IR's `contract` flags, which every FP operation carries
+    // under `-ffp-contract=fast`, as with clang), so it is not passed
+    // there; the object code is the same (WP-1016).
+    let x86_ignores_fusion = !tc.target.is_aarch64() && tc.llvm_major() >= 22;
+    if args.fp_model().backend_fuse && !x86_ignores_fusion {
         cmd.arg("-fp-contract=fast");
     }
     // The module's `Code Model` flag says the same; explicit, as clang
@@ -1379,7 +1388,7 @@ mod tests {
     fn searched_toolchain() -> Toolchain {
         Toolchain {
             gcc_from_driver: false,
-            ..Toolchain::new(crate::toolchain::Target::host(), None, None)
+            ..Toolchain::new(crate::toolchain::Target::host(), None, None, None)
         }
     }
 

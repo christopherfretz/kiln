@@ -4,7 +4,6 @@
 // the clang negative-test run (WP-912).
 //@ std: c++20
 //@ requires: clang>=22
-//@ xfail(kiln): WP-912 follow-up, base-specifier lookup does not skip namespaces
 //@ expect: compile-ok
 struct x {};
 namespace {

@@ -747,7 +747,8 @@ enum Scalar<'a> {                       // `ty` is the canonical, cv-unqualified
     Float { ty, kind: FloatKind, bits: u128 },    // exact encoding (−0.0 ≠ +0.0, NaN payloads)
     Null { ty, kind: NullKind },                  // Pointer | MemberData | MemberFunction
     Pointer { ty, base: PtrBase, offset: u64,     // also references; byte offset
-              designated: Option<QualType> },     // `void *`: the designated object's type
+              designated: Option<QualType>,       // `void *`: the designated object's type
+              past: bool },                       // one past the end of a subobject (WP-948)
     MemberPtr { ty, member: DeclId, kind: MemberKind, derived: bool, path: &'a [DeclId] },
     Reflection { ty, id: ReflectionId },          // std::meta::info (M6)
 }
@@ -897,7 +898,14 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
     `None` for every other pointer), and it is part of the value's
     identity: `(void*)&s` and `(void*)&s.x` (same type, base and offset)
     are different values, as [temp.type]/2.4 and clang's lvalue path keep
-    them apart, and mangle differently (`cv <type> ad ...`). Together with
+    them apart, and mangle differently (`cv <type> ad ...`). `past`
+    (WP-948) marks a pointer one past the end of a subobject that does
+    not end its complete object (`&s.a + 1`, `arr[0] + 2` in a 2x2
+    array): its offset is that of the next member or element, which it
+    must not reach through ([expr.add]/4, footnote; clang's lvalue path
+    keeps the subobject). It is canonically `false` at or past the end of
+    the complete object and for every pointer into it, so it is set only
+    when it changes what the pointer may access (store flag `F_PAST`). Together with
     the offset it names the subobject. A template argument pointing to
     the first element of an array variable is re-keyed to the array
     (`Sema::undecayed_void_ptr_arg`): clang ignores that decay.

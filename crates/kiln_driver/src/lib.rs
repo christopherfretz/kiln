@@ -20,9 +20,11 @@ pub mod deps;
 pub mod features;
 pub mod fp_flags;
 pub mod link;
+pub mod llvm;
 pub mod pp_cmd;
 pub mod rsp;
 pub mod sanitize;
+pub mod scan_deps;
 pub mod syntax_cmd;
 pub mod templ_opts;
 pub mod time;
@@ -162,7 +164,7 @@ pub(crate) fn write_memory_report(r: &kiln_ast::mem::MemReport, out: &mut impl W
     let _ = out.write_all(s.as_bytes());
 }
 
-fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
+pub(crate) fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
     let d = match e {
         ArgError::Unknown(a) => Diag::new(DiagId::drv_unknown_argument, Span::INVALID).arg(a),
         ArgError::MissingValue(o) => {
@@ -296,6 +298,11 @@ pub(crate) fn print_version(w: &mut dyn Write, tc: &Toolchain, verbose: bool) {
         version::VERSION,
         tc.target.triple
     );
+    // WP-1016: the selected LLVM (spec/driver.md "LLVM discovery").
+    let _ = match &tc.llvm {
+        Ok(i) => writeln!(w, "LLVM backend: {} ({})", i.major, i.dir.display()),
+        Err(_) => writeln!(w, "LLVM backend: none (kiln supports LLVM {})", llvm::supported_text()),
+    };
     if verbose && let Some(g) = &tc.gcc {
         for c in &tc.gcc_candidates {
             let _ = writeln!(w, "Found candidate GCC installation: {c}");
@@ -398,6 +405,9 @@ fn write_results(
     let mut status = i32::from(errors > 0);
     let out_path = if args.deps.only.is_some() {
         args.deps.file.as_deref().or(args.output.as_deref())
+    } else if args.action == Action::Precompile {
+        // `-o` names the module file, written by the job.
+        None
     } else {
         args.output.as_deref()
     };
@@ -520,8 +530,8 @@ fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::In
 }
 
 /// The toolchain of `args` (`--target`, `--sysroot`, `-resource-dir`,
-/// `--gcc-install-dir` / `--gcc-toolchain`), reporting a bad target or GCC
-/// directory to `drv`. Shared with the crash reproducer ([`crash`]).
+/// `--gcc-install-dir` / `--gcc-toolchain`, `--llvm-dir`), reporting a bad
+/// target, GCC directory or explicitly named LLVM to `drv`. Shared with the crash reproducer ([`crash`]).
 pub(crate) fn toolchain_of(args: &Args, drv: &DiagEngine<'_>) -> Toolchain {
     let target = match &args.target {
         None => Target::host(),
@@ -530,7 +540,17 @@ pub(crate) fn toolchain_of(args: &Args, drv: &DiagEngine<'_>) -> Toolchain {
             Target::host()
         }),
     };
-    let mut tc = Toolchain::new(target, args.sysroot.as_deref(), args.resource_dir.as_deref());
+    let mut tc = Toolchain::new(
+        target,
+        args.sysroot.as_deref(),
+        args.resource_dir.as_deref(),
+        args.llvm_dir.as_deref(),
+    );
+    if let Err(e) = &tc.llvm
+        && e.is_explicit()
+    {
+        e.emit(drv);
+    }
     let gcc_search = match (&args.gcc_install_dir, &args.gcc_toolchain) {
         (Some(d), _) => GccSearch::InstallDir(d),
         (None, Some(d)) => GccSearch::Toolchain(d),
@@ -558,6 +578,11 @@ pub fn run(command_line: &[String], io: Io) -> i32 {
 #[allow(clippy::too_many_lines, reason = "the driver's phases in order, one dispatch per action")]
 pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     let command_line = rsp::expand(command_line);
+    // `kiln-scan-deps` and its `clang-scan-deps*` aliases (spec/modules.md
+    // §11.9).
+    if scan_deps::is_scanner_name(args::program_basename(argv0)) {
+        return scan_deps::run(argv0, &command_line, io);
+    }
     let args = Args::parse_as(argv0, &command_line);
     // The hidden `-fkiln-crash-for-testing=` (spec/driver.md "Internal
     // compiler errors"); per thread, so set (or cleared) on every run.
@@ -604,6 +629,12 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         let _ = io.stdout.write_all(HELP.as_bytes());
         return 0;
     }
+    // An explicitly named LLVM that is not usable stops everything, before
+    // any probe delegates to it (spec/driver.md "LLVM discovery").
+    if tc.llvm.as_ref().is_err_and(llvm::LlvmError::is_explicit) {
+        drv.flush();
+        return 1;
+    }
     if let Some(rc) = immediate(&args, &tc, &mut io, &drv) {
         return rc;
     }
@@ -642,6 +673,18 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         return 1;
     }
 
+    if args.action == Action::Precompile && inputs.len() > 1 && args.output.is_some() {
+        let sm = SourceManager::new();
+        let e = make_engine(
+            &sm,
+            &codegen_cmd::driver_diag_options(&diag_opts),
+            io.stderr.clone(),
+            Some(&args.program),
+        );
+        Diag::new(DiagId::drv_out_file_multiple, Span::INVALID).emit(&e);
+        e.flush();
+        return 1;
+    }
     let stdin_text = inputs.iter().any(|i| i.path == "-").then(|| read_stdin(&mut io.stdin));
     if matches!(args.action, Action::Compile | Action::Link) && args.deps.only.is_none() {
         return codegen_cmd::compile(
@@ -684,7 +727,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
                 continue;
             }
         };
-        if args.action == Action::SyntaxOnly {
+        if matches!(args.action, Action::SyntaxOnly | Action::Precompile) {
             let stdin = if input.path == "-" { stdin_text.clone() } else { None };
             let r = syntax_only(&args, &tc, std, lang, &input.path, stdin, &diag_opts, &io);
             errors += r.errors;

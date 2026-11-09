@@ -235,10 +235,23 @@ impl Sema<'_, '_> {
     /// The associated entities of argument `e`; an overload-set argument
     /// adds those of every function it names (/3, last bullet).
     pub(crate) fn assoc_arg(&self, e: ExprId, out: &mut AssocSet) {
-        let x = self.ignore_parens(e);
+        let mut x = self.ignore_parens(e);
+        // The address of an overload set names it too (clang
+        // `OverloadExpr::find`: `&f`, `(&f)`, `&(f)`).
+        if self.ast.exprs.get(x).kind() == kiln_ast::expr::ExprKind::UnaryOperator
+            && self.ast.exprs.unary_op(x) == kiln_ast::expr::UnaryOp::AddrOf
+        {
+            let sub = self.ignore_parens(self.ast.exprs.operand(x));
+            if self.ast.exprs.get(sub).kind() == kiln_ast::expr::ExprKind::UnresolvedLookupExpr {
+                x = sub;
+            }
+        }
         let n = self.ast.exprs.get(x);
         if n.kind() == kiln_ast::expr::ExprKind::UnresolvedLookupExpr {
             for d in self.ast.unresolved_decls(x) {
+                // A function template contributes its pattern's type
+                // (clang looks through to the templated declaration).
+                let d = self.templated_or_self(self.ast.strip_shadow(d));
                 if let Some(t) = self.ast.decls.get(d).ty() {
                     self.assoc_type(t, out, 0);
                 }

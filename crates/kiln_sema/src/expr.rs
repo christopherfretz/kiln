@@ -5396,8 +5396,19 @@ impl Sema<'_, '_> {
             let x = *self.ast.exprs.get(e);
             let used = self.ctx;
             let arg = self.builder().default_arg(p, used, x.ty(), x.value_category(), Loc::INVALID);
+            // The call's location (clang's `Call->getExprLoc()`): since
+            // clang 22 a member call's is the member name's, so a
+            // `__builtin_LINE()` default argument of `x.\n f()` is `f`'s
+            // line ([support.srcloc.cons]/2); before, the call's start.
             let call_begin = self.begin_loc(callee);
-            self.note_default_arg_use(arg, p, call_begin);
+            let call_loc = if self.clang_compat >= 22
+                && self.ast.exprs.get(callee).kind() == ExprKind::MemberExpr
+            {
+                self.ast.exprs.get(callee).loc()
+            } else {
+                call_begin
+            };
+            self.note_default_arg_use(arg, p, call_loc);
             self.note_default_use(arg, p, call_begin);
             conv_args.push(arg);
         }

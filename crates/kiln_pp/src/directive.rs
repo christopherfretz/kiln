@@ -260,6 +260,11 @@ impl<'a> Preprocessor<'a, '_> {
     /// `#error` / `#warning` ([cpp.error]).
     fn do_error_warning(&mut self, name: PpTok, error: bool) {
         let msg = self.rest_of_line_text(&name);
+        if self.modules.as_ref().is_some_and(|m| m.opts.scan) {
+            // As clang-scan-deps, whose source minimizer drops `#error`
+            // and `#warning` (spec/modules.md §11.9).
+            return;
+        }
         let id = if error { DiagId::pp_error_directive } else { DiagId::pp_warning_directive };
         self.emit(Diag::new(id, name.tok.span).arg(msg));
     }
@@ -1260,7 +1265,7 @@ impl Preprocessor<'_, '_> {
             name_span: ft.tok.span,
             directive_span: name.tok.span,
         };
-        let res = self.resolver.resolve(self.sm, &req);
+        let res = self.resolve_include(&req);
         self.callbacks.inclusion_directive(&req, res.as_ref());
         if self.opts.dump_includes {
             self.queue(Marker::Include {
@@ -1377,7 +1382,7 @@ impl Preprocessor<'_, '_> {
         };
         let found = {
             crate::profile::time!(t_has_include_ns);
-            self.resolver.resolve(self.sm, &req).is_some()
+            self.resolve_include(&req).is_some()
         };
         Ok((found, close.tok.span))
     }
@@ -1658,7 +1663,7 @@ impl Preprocessor<'_, '_> {
             name_span: h.tok.span,
             query_only: true,
         };
-        let v = match self.resolver.resolve_embed(self.sm, &req) {
+        let v = match self.resolve_embed_req(&req) {
             None => 0,
             Some(d) if d.bytes.is_empty() => 2,
             Some(_) => 1,
@@ -1688,7 +1693,7 @@ impl Preprocessor<'_, '_> {
             name_span: ft.tok.span,
             query_only: false,
         };
-        let Some(data) = self.resolver.resolve_embed(self.sm, &req) else {
+        let Some(data) = self.resolve_embed_req(&req) else {
             self.emit(Diag::new(DiagId::pp_file_not_found, ft.tok.span).arg(&req.name));
             return;
         };

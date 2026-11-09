@@ -2,6 +2,7 @@
 //! (`spec/libcxx.md` "Classification" and "Directives").
 
 use super::boolexpr::{Expr, Piece};
+use super::features::DIALECT_FLAG_FEATURES;
 
 /// What a test file asks for, from its suffix (libc++'s `format.py`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -209,14 +210,17 @@ impl Directives {
     }
 
     /// The flags for this configuration: the plain ones, then the
-    /// conditional ones whose feature is in `features`, in file order
+    /// conditional ones whose feature is in `features` or is a dialect
+    /// identity kiln implements ([`DIALECT_FLAG_FEATURES`]), in file order
     /// within each group.
     pub fn flags_for(&self, features: &[&str]) -> Vec<String> {
         let mut v = self.compile_flags.clone();
         v.extend(
             self.conditional_flags
                 .iter()
-                .filter(|(f, _)| features.contains(&f.as_str()))
+                .filter(|(f, _)| {
+                    features.contains(&f.as_str()) || DIALECT_FLAG_FEATURES.contains(&f.as_str())
+                })
                 .map(|(_, flag)| flag.clone()),
         );
         v
@@ -525,6 +529,25 @@ int main(int, char**) { return 0; }
             d.flags_for(FEATURES),
             ["-D_LIBCPP_DISABLE_DEPRECATION_WARNINGS", "-DX=1", "-fconstexpr-steps=12345678"]
         );
+        assert_eq!(d.verdict(FEATURES), Ok(None));
+    }
+
+    #[test]
+    fn clang_dialect_flags() {
+        // libc++ 22 `simd_unary.pass.cpp`: kiln speaks clang's dialect, so
+        // the `(clang)` flags apply; other identities' do not, and the
+        // identity stays out of XFAIL/UNSUPPORTED (WP-980).
+        let src = "\
+// XFAIL: clang
+// UNSUPPORTED: clang-19
+// ADDITIONAL_COMPILE_FLAGS(clang): -flax-vector-conversions=integer
+// ADDITIONAL_COMPILE_FLAGS(apple-clang): -Wapple
+// ADDITIONAL_COMPILE_FLAGS(clang-19): -Wnineteen
+// ADDITIONAL_COMPILE_FLAGS(clang-modules-build): -fno-modules
+// ADDITIONAL_COMPILE_FLAGS(gcc): -Wno-bool-compare
+";
+        let d = Directives::parse(src).unwrap();
+        assert_eq!(d.flags_for(FEATURES), ["-flax-vector-conversions=integer"]);
         assert_eq!(d.verdict(FEATURES), Ok(None));
     }
 

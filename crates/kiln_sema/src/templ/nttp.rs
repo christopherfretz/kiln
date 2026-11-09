@@ -359,10 +359,10 @@ impl Sema<'_, '_> {
                 }
                 // Re-keyed at the reference type: printed without `&`
                 // (`T<gi>`), as clang.
-                Some(Scalar::Pointer { base, offset, designated, .. }) => Ok(self
+                Some(Scalar::Pointer { base, offset, designated, past, .. }) => Ok(self
                     .ast
                     .consts
-                    .push_scalar(Scalar::Pointer { ty: canon, base, offset, designated })
+                    .push_scalar(Scalar::Pointer { ty: canon, base, offset, designated, past })
                     .unwrap_or(v)),
                 _ => Ok(v),
             }
@@ -385,8 +385,13 @@ impl Sema<'_, '_> {
     /// keys both by the declaration): its designated type is the
     /// variable's ([temp.type]/2.4, [temp.arg.nontype]).
     pub(crate) fn undecayed_void_ptr_arg(&mut self, v: ConstValueId) -> ConstValueId {
-        let Some(Scalar::Pointer { ty, base: PtrBase::Decl(d), offset: 0, designated: Some(t) }) =
-            self.ast.consts.scalar(v)
+        let Some(Scalar::Pointer {
+            ty,
+            base: PtrBase::Decl(d),
+            offset: 0,
+            designated: Some(t),
+            past: false,
+        }) = self.ast.consts.scalar(v)
         else {
             return v;
         };
@@ -402,6 +407,7 @@ impl Sema<'_, '_> {
                     base: PtrBase::Decl(d),
                     offset: 0,
                     designated: Some(whole),
+                    past: false,
                 };
                 self.ast.consts.push_scalar(s).unwrap_or(v)
             }

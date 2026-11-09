@@ -26,9 +26,17 @@ drv_invalid_stdlib_name = Error (1) "invalid library name in argument '{0}'";
 drv_invalid_value = Error (2) "invalid value '{1}' in '{0}'";
 drv_language_not_recognized = Error (1) "language not recognized: '{0}'";
 drv_linker_input_unused = Warning [UnusedCommandLineArgument] (1) "{0}: 'linker' input unused";
+// WP-1016: LLVM discovery (spec/driver.md "LLVM discovery").
+drv_llvm_dir_invalid = Error (3) "'{0}' (from {1}) is not a usable LLVM installation: {2}";
+drv_llvm_install_hint = Note (1) "install LLVM {0} with clang (docs/COMPATIBILITY.md \"Runtime dependencies\"), or name an installation with --llvm-dir=<dir> or KILN_LLVM_DIR";
+drv_llvm_not_found = Error (1) "no supported LLVM installation found (kiln supports LLVM {0})";
+drv_llvm_not_on_path = Note (1) "not found on PATH: {0}";
+drv_llvm_tried = Note (2) "skipped '{0}': {1}";
+drv_llvm_unsupported = Error (4) "unsupported LLVM major {0} at '{1}' (from {2}); kiln supports LLVM {3}";
 // WP-920: `-MG` lists missing headers only for `-M`/`-MM`.
 drv_mg_requires_m_or_mm = Error (0) "option '-MG' requires '-M' or '-MM'";
 drv_missing_argument = Error (2) "argument to '{0}' is missing (expected {1} value)";
+drv_module_file_nameless = Warning [EagerLoadCxxNamedModules] (0) "the form '-fmodule-file=<BMI-path>' is deprecated for standard C++ named modules;consider to use '-fmodule-file=<module-name>=<BMI-path>' instead";
 drv_no_input_files = Error (0) "no input files";
 drv_no_such_file = Error (1) "no such file or directory: '{0}'";
 drv_not_implemented = Error (1) "{0} is not implemented yet";
@@ -36,6 +44,9 @@ drv_opt_not_valid_on_target = Error (1) "option '{0}' cannot be specified on thi
 // ----- WP-228 (driver flags a target does not support)
 drv_option_ignored = Warning [OptionIgnored] (2) "'{0}' does not support '{1}'; flag ignored";
 drv_out_file_multiple = Error (0) "cannot specify -o when generating multiple output files";
+drv_precompile_not_module = Error (0) "--precompile requires a module interface or partition unit";
+// WP-982: kiln-scan-deps (spec/modules.md §11.9).
+drv_scan_one_job = Error (1) "unable to handle compilation, expected exactly one compiler job in '{0}'";
 // WP-792: clang's `-ftime-trace` family, added by build systems for clang.
 drv_time_trace_ignored = Warning [UnusedCommandLineArgument] (1) "'{0}' ignored: kiln writes no time trace (see -fkiln-instantiation-report)";
 drv_treating_input_as_cxx = Warning [Deprecated] (2) "treating '{0}' input as '{1}' when in C++ mode, this behavior is deprecated";

@@ -2407,6 +2407,12 @@ impl Sema<'_, '_> {
     ) -> (Option<DeclId>, Option<DeclId>) {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("member_redecl_prev");
+        // Redeclaration lookup in the class declares the implicit members
+        // it can find (`friend F &F::operator=(const F &);`, clang
+        // `DeclareImplicitMemberFunctionsWithName`).
+        if let Some(q) = qualifier {
+            self.declare_implicit_named(q, dname);
+        }
         let found = self.prev_candidates_dn(dname, qualifier);
         let p = self.pick_prev_function(&found, new);
         let other = if other_kind { self.non_function_member(&found) } else { None };
@@ -6129,6 +6135,8 @@ impl Sema<'_, '_> {
             self.check_constexpr_init(v, e);
         } else if !spec.is_inline() && self.is_in_class_static(self.init_written_in(v)) {
             self.check_in_class_static_init(v, e);
+        } else {
+            self.fix_const_int_init(v, e);
         }
         self.warn_constant_evaluated_init(v, e);
         self.check_contract_init(v, e);
@@ -6434,6 +6442,36 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [expr.const]/2: a potentially-constant variable is usable in
+    /// constant expressions only from its initializing declaration on, so
+    /// the value of a namespace-scope `const` integral or enumeration
+    /// variable is fixed where its initializer is: one that reads a
+    /// variable whose initializer is not yet seen (`extern const int a;
+    /// const int b = a; const int a = 1;`) stays not constant, rather than
+    /// being folded from a later definition at the point of use. Silent
+    /// (the variable may never be used in a constant expression); clang's
+    /// `CheckCompleteVariableDeclaration` caches the same evaluation.
+    fn fix_const_int_init(&mut self, v: DeclId, e: ExprId) {
+        let vn = *self.ast.decls.get(v);
+        let Some(ty) = vn.ty() else { return };
+        let q = self.ast.types.effective_quals(ty);
+        let c = self.ast.types.canonical(ty);
+        if !q.is_const()
+            || q.is_volatile()
+            || !(self.ast.types.is_integral(c) || self.ast.types.as_enum(c).is_some())
+            || vn.has(DeclFlags::INVALID)
+            || !self.has_static_storage(v)
+            || self.is_dependent_type(ty)
+            || self.has_errors_in(e)
+            || self.expr_is_value_dependent(e)
+            || self.ast.decls.begin_eval(v).is_err()
+        {
+            return;
+        }
+        let cv = self.fold_constant_init(e, v);
+        self.ast.decls.finish_eval(v, cv);
+    }
+
     /// Remembers where `constinit` was written on `v`.
     pub(crate) fn record_constinit(&mut self, v: DeclId, ds: &DeclSpec) {
         if let Some(at) = ds.constinit
@@ -6681,13 +6719,61 @@ impl Sema<'_, '_> {
         self.initializing = None;
     }
 
+    /// [dcl.constexpr]/1: a constexpr variable declaration shall be a
+    /// definition (`extern constexpr int m;`); clang
+    /// `ActOnUninitializedDecl` reports it first and stops. An in-class
+    /// static data member is inline, so a definition (C++17). Whether `v`
+    /// was diagnosed (and marked invalid).
+    fn constexpr_decl_not_definition(&mut self, v: DeclId) -> bool {
+        let vn = *self.ast.decls.get(v);
+        let bad = vn.kind() == DeclKind::Var
+            && !vn.has(DeclFlags::INVALID)
+            && self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
+            && !self.is_in_class_static(v)
+            && !self.ast.is_member_spec_declaration(v)
+            && !self.is_var_definition(v);
+        if bad {
+            self.error(DiagId::sema_constexpr_var_decl_not_definition, vn.loc());
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
+        bad
+    }
+
+    /// Whether `v`, outside its class, redeclares a static data member
+    /// whose in-class declaration has the initializer (nothing to
+    /// default-initialize). [depr.static.constexpr]: a redundant
+    /// out-of-class redeclaration of an inline static data member
+    /// initialized in its class is reported when it is `constexpr`.
+    fn out_of_class_static_redecl(&mut self, v: DeclId) -> bool {
+        if self.is_in_class_static(v) {
+            return false;
+        }
+        let in_class = self
+            .ast
+            .redecls_of(v)
+            .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x));
+        if let Some(x) = in_class {
+            if self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr()) {
+                let loc = self.ast.decls.get(v).loc();
+                self.error(DiagId::sema_redundant_constexpr_static_def, loc);
+            }
+            return true;
+        }
+        // [class.static.data]/4: the definition of a `const` static data
+        // member initialized in its class has no initializer.
+        self.ast
+            .redecls_of(v)
+            .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
+    }
+
     fn default_init_var(&mut self, v: DeclId) {
         if self.ast.decls.decomp_bindings(v).is_some() {
             self.decomposition_requires_init(v);
             return;
         }
         let vn = *self.ast.decls.get(v);
-        if vn.kind() != DeclKind::Var
+        if self.constexpr_decl_not_definition(v)
+            || vn.kind() != DeclKind::Var
             || self.uninit_array_or_reference(v)
             || vn.has(DeclFlags::INVALID)
             || self.is_member_spec_declaration(v)
@@ -6708,28 +6794,8 @@ impl Sema<'_, '_> {
             }
             return;
         }
-        // [depr.static.constexpr]: a redundant out-of-class redeclaration
-        // of an inline static data member initialized in its class.
-        if !self.is_in_class_static(v) {
-            let in_class = self
-                .ast
-                .redecls_of(v)
-                .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x));
-            if let Some(x) = in_class {
-                if self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr()) {
-                    self.error(DiagId::sema_redundant_constexpr_static_def, vn.loc());
-                }
-                return;
-            }
-            // [class.static.data]/4: the definition of a `const` static
-            // data member initialized in its class has no initializer.
-            if self
-                .ast
-                .redecls_of(v)
-                .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
-            {
-                return;
-            }
+        if self.out_of_class_static_redecl(v) {
+            return;
         }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let ty = vn.ty().unwrap_or(QualType::ERROR);
@@ -8742,6 +8808,15 @@ impl Sema<'_, '_> {
                     .into_iter()
                     .find(|&p| self.ast.decls.get(p).kind() == DeclKind::Namespace);
             }
+            if prev.is_none()
+                && self.ast.primary_context(self.ast.redecl_context(self.ctx)) == self.ast.tu
+                && sym_str(self, n) == "std"
+            {
+                // The implicit `namespace std` around an implicit
+                // `std::align_val_t` is hidden from lookup but extended by
+                // the program's first `namespace std {`.
+                prev = self.global_ops.implicit_std;
+            }
         } else {
             // [namespace.unnamed]/1: every unnamed namespace of a scope is
             // the same namespace, across the scope's redeclarations and
@@ -9916,6 +9991,23 @@ impl Sema<'_, '_> {
             return class;
         }
         self.classify_found(&found)
+    }
+
+    /// The [`NameClass`] of the class-name of a base-specifier: a
+    /// type-only lookup ([class.derived.general]/2), so a namespace of an
+    /// inner scope does not hide a class of an outer one (clang 22; clang
+    /// 19 looks it up as a nested-name-specifier name).
+    pub fn classify_base_class_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        let class = self.classify_nested_name(name, qualifier);
+        if self.clang_compat < 22 || !matches!(class, NameClass::Namespace(_)) {
+            return class;
+        }
+        let q = qualifier.map(|q| self.type_name_qualifier(q));
+        let found = match q {
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Type),
+            None => self.lookup_name(name, LookupKind::Type),
+        };
+        if found.decls.is_empty() { class } else { self.classify_found(&found) }
     }
 
     /// The [`NameClass`] of a non-empty ordinary (or nested-name) lookup

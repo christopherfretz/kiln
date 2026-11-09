@@ -513,6 +513,50 @@ impl SourceManager {
         self.load(path, true)
     }
 
+    /// [`load_regular_file`](Self::load_regular_file) when the caller
+    /// already holds the file's expected text (a module file's copy of it,
+    /// spec/modules.md §11.3): when the file is not loaded yet and its size
+    /// is `text`'s length, `text` becomes its buffer without reading the
+    /// file. Returns the id, and `text` back when it was not used (the
+    /// file was loaded before, or its size differs and it was read).
+    ///
+    /// # Errors
+    /// As [`load_regular_file`](Self::load_regular_file), with `text` back.
+    pub fn load_regular_file_expecting(
+        &self,
+        path: &Path,
+        text: String,
+    ) -> Result<(FileId, Option<String>), (LoadError, String)> {
+        let opened = fs::File::open(path).and_then(|f| f.metadata().map(|m| (f, m)));
+        let (file, meta) = match opened {
+            Ok(fm) => fm,
+            Err(e) => return Err((e.into(), text)),
+        };
+        if !meta.is_file() || meta.len() != text.len() as u64 {
+            drop(file);
+            return match self.load(path, true) {
+                Ok(id) => Ok((id, Some(text))),
+                Err(e) => Err((e, text)),
+            };
+        }
+        let key = match file_key(path, &meta) {
+            Ok(k) => k,
+            Err(e) => return Err((e.into(), text)),
+        };
+        drop(file);
+        let mut by_path = lock(&self.by_path);
+        if let Some(&id) = by_path.get(&key) {
+            return Ok((id, Some(text)));
+        }
+        match self.push_file(path.to_string_lossy().into(), text, LoadReport::default()) {
+            Ok(id) => {
+                by_path.insert(key, id);
+                Ok((id, None))
+            }
+            Err(e) => Err((e.into(), String::new())),
+        }
+    }
+
     fn load(&self, path: &Path, regular_only: bool) -> Result<FileId, LoadError> {
         let mut file = fs::File::open(path)?;
         let meta = file.metadata()?;
