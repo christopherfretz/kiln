@@ -153,6 +153,14 @@ impl Sema<'_, '_> {
                         Some(&p) => {
                             let opts =
                                 if i == 0 && !oper_fn { first_opts } else { IcsOptions::NONE };
+                            // A function template-id resolved early: the
+                            // candidate's conversion sequence resolves it
+                            // again (clang `TryCopyInitialization`, or a
+                            // template's `CheckNonDependentConversions`,
+                            // whose sequence the candidate reuses).
+                            if let Some(e) = a.expr {
+                                self.rerun_template_id_resolution(e, p);
+                            }
                             self.try_implicit_conversion(
                                 &a,
                                 p,

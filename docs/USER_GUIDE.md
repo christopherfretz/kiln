@@ -396,11 +396,11 @@ per group, so it is easy to grep or diff between builds:
 $ kiln++ -std=c++26 -fsyntax-only -fconstexpr-stats fib.cpp
 constexpr: evaluations count=3 failed=0 immediate=1 wall-us=1858
 constexpr: steps count=476
-constexpr: calls count=179 memo-hits=16 memo-misses=24 memo-hit-rate=40.0%
+constexpr: calls count=179 memo-hits=8 memo-misses=13 memo-hit-rate=38.1%
 constexpr: memory allocs=1 bytes=40 peak-live=40 reclaimed=40 peak-arena=40
 constexpr: interned frozen-bytes=48 refl-bytes=0 static-bytes=16
 constexpr: meta-ops count=0 splice-fast=0
-constexpr: trials count=1 failed=0 steps=354 wall-us=52
+constexpr: trials count=0 failed=0 steps=0 wall-us=0
 constexpr: compile functions=3 wall-us=196
 ```
 
@@ -429,7 +429,7 @@ $ kiln++ -std=c++26 -fsyntax-only -fconstexpr-profile fib.cpp
 ===-- kiln constexpr profile: fib.cpp --===
 functions (top 3 of 3, by inclusive steps):
    calls    memo   incl steps   self steps    incl ms    self ms  peak bytes  functions
-      38      16          708          708      0.089      0.089           0  fib [consteval]   (fib.cpp:1:15)
+      19       8          354          354      0.053      0.053           0  fib [consteval]   (fib.cpp:1:15)
        1       0          105          105      0.039      0.039           0  sum   (fib.cpp:2:15)
        1       0           17           17      0.021      0.021          40  heap   (fib.cpp:3:15)
 evaluation sites (top 3 of 3, by inclusive steps):
@@ -437,7 +437,7 @@ evaluation sites (top 3 of 3, by inclusive steps):
        1       0          354            0      2.477      2.417           0  consteval   (fib.cpp:5:9)
        1       0          105            0      0.107      0.067           0  init b   (fib.cpp:6:15)
        1       0           17            0      0.084      0.063          40  init c   (fib.cpp:7:15)
-  total: 3 evaluations, 476 steps, 2.668 ms; 1 trials, 354 steps; 40 calls
+  total: 3 evaluations, 476 steps, 2.668 ms; 0 trials, 0 steps; 21 calls
 ```
 
 - "incl" counts a function's callees, "self" does not. `memo` is how

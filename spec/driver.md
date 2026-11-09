@@ -1501,9 +1501,24 @@ store Oven state, is a follow-up; it would share the module-file format
   are recorded, but compiling C is "not implemented yet" (WP-243).
 - **`-include-pch <file>`.** This is separate-only, as in clang:
   `-include-pchX` is `-include` with the value `-pchX`. It is also
-  accepted as `-Xclang -include-pch -Xclang <file>`, and the last one
-  wins. The record is validated (see Diagnostics) and its header is then
+  accepted as `-Xclang -include-pch -Xclang <file>`. The last driver
+  one wins, but an `-Xclang` one wins over every driver one, before or
+  after it, since clang appends the `-Xclang` options to its frontend's
+  command line (WP-1153; the last `-Xclang` one among several). The
+  record is validated (see Diagnostics) and its header is then
   processed as if `-include`d ([Replay](#replay)).
+- **`--include <h>`, `--include<h>` and `--include=<h>`** are clang's
+  spellings of `-include <h>` (clang 19 and 22; WP-1153). `--include` is
+  joined or separate, so `--include-pch p.pch` is `--include` with the
+  value `-pch` and `p.pch` an input, as in clang; `--include=` is
+  `=`-joined, so `--include=` alone includes the empty name. They are
+  probed for a PCH (below), and its warning spells them as clang renders
+  them: `'--include foo.h'` (for both the separate and the joined form)
+  or `'--include=foo.h'`. clang's longer options `--include-directory`,
+  `--include-directory-after`, `--include-prefix`,
+  `--include-with-prefix[-after|-before]` (each also `=`-joined) and
+  `--include-barrier` are not `--include`; kiln does not accept them
+  yet (unknown argument).
 - **`-Xclang -include -Xclang <h>`** is `-include <h>`, which CMake uses.
   It is not probed for a PCH (below): clang passes it to its frontend as
   is.
@@ -1534,6 +1549,8 @@ store Oven state, is a follow-up; it would share the module-file format
   any case, and the last `-include-pch` wins: an explicit one after it,
   or any `-Xclang -include-pch` (clang's frontend sees those after the
   driver's options), replaces it; an explicit one before it is replaced.
+  The probe's warnings come either way (`-Xclang -include-pch x.pch
+  -include bar.h -include foo.h` still warns about `foo.h.pch`).
 - **`-include-pch <dir>`** uses the first file in `<dir>` that is a kiln
   PCH whose language options, target and macros match the compile (the
   checks of Diagnostics steps 1-4, silently; with `-fno-validate-pch` the
@@ -1653,6 +1670,21 @@ producer's working directory when the consumer's is different. `-E` and
 `-M*` replay the producer's main and the consumer's includes without
 validating.
 
+**`-E` and `-M*` with a PCH that cannot be read** (WP-1153) go on
+without it, as clang's `-E` does: it reads only the header's name from
+the PCH (`ASTReader::getOriginalSourceFile`). Each preprocessing job
+reports `error: unable to read PCH file p.pch: 'No such file or
+directory'` (a missing or unreadable file) or `error: input is not a PCH
+file: 'p.pch'` (no PCH magic), with neither of the compile's fatal
+errors, then writes its text (or `-M` rule) without the header; the
+exit status is 1, and `-o` is not written, as for any error. The other
+read errors (a newer or older record, a corrupt one, a clang PCH) are
+reported as the compile reports them, with the same result; a fatal one
+drops the job's later diagnostics. A directory with no acceptable PCH
+stops before preprocessing, as in clang. Test:
+`crates/kiln_driver/tests/pch.rs` (`include_probes_for_pch`, compared
+with clang++-19, and `preprocess_unreadable_pch`).
+
 **Dependency files.** As in clang, the producer's depfile lists the
 producer input and every file it read. The consumer's depfile lists the
 PCH's inputs first and then its own files. `-MMD` drops the system files
@@ -1669,6 +1701,9 @@ from both.
   `-Wp,-include,<h>` is probed, since kiln splices `-Wp,` into the
   driver's arguments; clang does not probe it.
 - `-fpch-preprocess` is an unknown argument.
+- clang's `-E` reads the header name from one of its own PCHs and
+  preprocesses it; kiln reports a clang PCH (above) and goes on without
+  it.
 - A PCH is not an object: `-fpch-codegen` emits nothing.
 
 ## Dependency output
@@ -1897,11 +1932,11 @@ order (spec/oven.md "Profile counters" defines each):
 ```text
 constexpr: evaluations count=3 failed=0 immediate=1 wall-us=1858
 constexpr: steps count=476
-constexpr: calls count=179 memo-hits=16 memo-misses=24 memo-hit-rate=40.0%
+constexpr: calls count=179 memo-hits=8 memo-misses=13 memo-hit-rate=38.1%
 constexpr: memory allocs=1 bytes=40 peak-live=40 reclaimed=40 peak-arena=40
 constexpr: interned frozen-bytes=48 refl-bytes=0 static-bytes=16
 constexpr: meta-ops count=0 splice-fast=0
-constexpr: trials count=1 failed=0 steps=354 wall-us=52
+constexpr: trials count=0 failed=0 steps=0 wall-us=0
 constexpr: compile functions=3 wall-us=196
 ```
 
@@ -1944,7 +1979,7 @@ The text form:
 ===-- kiln constexpr profile: fib.cpp --===
 functions (top 3 of 3, by inclusive steps):
    calls    memo   incl steps   self steps    incl ms    self ms  peak bytes  functions
-      38      16          708          708      0.089      0.089           0  fib [consteval]   (fib.cpp:1:15)
+      19       8          354          354      0.053      0.053           0  fib [consteval]   (fib.cpp:1:15)
        1       0          105          105      0.039      0.039           0  sum   (fib.cpp:2:15)
        1       0           17           17      0.021      0.021          40  heap   (fib.cpp:3:15)
 evaluation sites (top 3 of 3, by inclusive steps):
@@ -1952,18 +1987,15 @@ evaluation sites (top 3 of 3, by inclusive steps):
        1       0          354            0      2.477      2.417           0  consteval   (fib.cpp:5:9)
        1       0          105            0      0.107      0.067           0  init b   (fib.cpp:6:15)
        1       0           17            0      0.084      0.063          40  init c   (fib.cpp:7:15)
-  total: 3 evaluations, 476 steps, 2.668 ms; 1 trials, 354 steps; 40 calls
+  total: 3 evaluations, 476 steps, 2.668 ms; 0 trials, 0 steps; 21 calls
 ```
-
-(`fib`'s 708 steps are the immediate invocation's 354 plus those of a
-trial that folds `int a = fib(10);`'s whole initializer again, WP-1129.)
 
 The NDJSON form has one object per row, then a totals object:
 
 ```text
-{"function":"fib","consteval":true,"loc":"fib.cpp:1:15","calls":38,"memo_hits":16,"incl_steps":708,"self_steps":708,"incl_us":94,"self_us":94,"peak_bytes":0}
+{"function":"fib","consteval":true,"loc":"fib.cpp:1:15","calls":19,"memo_hits":8,"incl_steps":354,"self_steps":354,"incl_us":53,"self_us":53,"peak_bytes":0}
 {"site":"consteval","loc":"fib.cpp:5:9","evaluations":1,"failed":0,"incl_steps":354,"self_steps":0,"incl_us":2019,"self_us":1955,"peak_bytes":0}
-{"total":true,"file":"fib.cpp","functions":3,"sites":3,"evaluations":3,"steps":476,"wall_us":2293,"trials":1,"trial_steps":354,"calls":40}
+{"total":true,"file":"fib.cpp","functions":3,"sites":3,"evaluations":3,"steps":476,"wall_us":2293,"trials":0,"trial_steps":0,"calls":21}
 ```
 
 A text row's location is the file's base name; a JSON `loc` is the

@@ -1540,6 +1540,14 @@ impl Sema<'_, '_> {
             self.exit_unevaluated();
         }
         let e = self.builder().requires_expr(body, params, reqs, QualType::BOOL, loc, rbrace);
+        // A requirement that passed an access check only on a speculative
+        // friend grant (or a dependent base) in a template pattern does
+        // not decide the value: it is evaluated in each instantiation,
+        // where the check is redone ([`Sema::replay_requires_access`],
+        // spec/sema-templates.md §4.8).
+        if self.requires_access_pending(body) {
+            self.ast.exprs.mark_value_dependent(e);
+        }
         if !self.ast.exprs.get(e).deps().is_none() {
             return e;
         }

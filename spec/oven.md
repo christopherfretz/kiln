@@ -3940,12 +3940,25 @@ codegen, and every enclosing evaluation that reaches the wrapper.
   are written and evaluated at each use (sema.md §5.10), because the
   use site (`source_location::current()`) can change the value.
 
-The trial folds that run before the full-expression ends
-(`int_overflow.rs` `overflow_value_inner`) see the wrapper still
-unvalued and evaluate the call themselves (clang's
-`EvaluateForOverflow` does too). Tests:
+The trial folds that run before the full-expression ends (the
+implicit-conversion and overflow warnings, `impcast.rs`,
+`int_overflow.rs`) run after sema has evaluated the outermost
+invocations (`evaluate_immediates_early`, sema.md §5.10, WP-1129), so
+they read the stored values: a valued wrapper is a leaf (0 steps), and
+a scalar prvalue call reached by stripping the wrapper is answered by
+the bridge without an evaluation (clang's `EvaluateForOverflow`
+evaluates the call a second time). A default argument's invocation is
+still elided where it is written, but codegen's fold prepass reuses the
+value sema's check of a use stored (`default_immediate_value`) instead
+of evaluating the call again. One remaining second evaluation: the
+shift-count check of `<<`/`>>` (sema `diagnose_shift_count`), which
+folds its operand when the operator is built. Tests:
 `tests/conformance/expr.const/immediate-invocation-evaluated-once-run.cpp`,
-`crates/kiln_driver/tests/time_trace.rs` (`immediate_invocation_evaluated_once`).
+`tests/conformance/expr.const/budget/immediate-invocation-once*.cpp`,
+`crates/kiln_driver/tests/time_trace.rs` (`immediate_invocation_evaluated_once`,
+`immediate_invocation_trial_folds_once`),
+`crates/kiln_driver/tests/constexpr_profile.rs`
+(`immediate_invocations_are_not_folded_again`).
 
 ### Reflection runtime (M6; `-freflection`)
 Specified in **`spec/reflection.md`** §3:

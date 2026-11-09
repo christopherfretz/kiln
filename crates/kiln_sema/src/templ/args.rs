@@ -1223,7 +1223,9 @@ impl Sema<'_, '_> {
             TypeView::Auto { keyword: kiln_ast::types::AutoKeyword::Auto, .. }
         ) {
             // `template<auto V>` ([temp.arg.nontype]/1): the type is
-            // deduced from the argument (decayed, unqualified).
+            // deduced from the argument (decayed, unqualified); clang's
+            // `DeduceAutoType` resolves a function template-id again.
+            self.rerun_template_id_single(e);
             let d = conv::decay(self, e);
             pty = conv::strip_cv(self, self.ast.exprs.get(d).ty());
         } else if self.is_ctad_placeholder(pty) {

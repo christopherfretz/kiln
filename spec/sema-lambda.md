@@ -274,14 +274,57 @@ it (`Sema::act_on_trailing_return_type`, `ManglingState.trailing_lambdas`),
 so calls whose signature has none do no extra work; the substitution's
 type is discarded (the trailing return type is a non-deduced context and
 deduction substitutes it again). A partially explicit pack is left
-unsubstituted there (it stays open to deduction). The address of a
-template-id is resolved once per use (one explicit step), where clang
-resolves it again in some conversions (copy-initialization, assignment,
-`static_cast`, argument passing, `auto`), and a non-template that
-matches an address's target stops kiln from deducing the templates,
-which clang still deduces; both are xfail repros (WP-1086 follow-ups,
+unsubstituted there (it stays open to deduction).
+A template-id whose explicit arguments complete one specialization is
+resolved early (`overload/address.rs` `resolve_single_template_id`; the
+early resolution and the specialization stand for clang's first
+resolution and its build), but clang keeps it an overload set and runs
+`ResolveAddressOfOverloadedFunction` (a function target, deducing each
+template from it and the explicit arguments) or
+`ResolveSingleFunctionTemplateSpecialization` (no function target) again
+at each step that meets it; each run's explicit step numbers the lambdas
+once more (WP-1142, clang 19 and 22 agree). Kiln re-runs the same
+deductions there, discarding their result (`Sema::rerun_template_id_resolution`,
+`rerun_template_id_single`, with the enclosing full-expression's pending
+deleted uses and held warnings set aside, `holding_pending_uses`):
+the implicit conversion (`conv::implicit_convert`, clang
+`PerformImplicitConversion`; not a condition, resolved before; not a
+reference binding, which resolves once and reuses the result), a
+candidate's conversion sequence (`best.rs` `add_candidate`,
+`TryCopyInitialization`/`CheckNonDependentConversions`), a call by an
+unqualified name with one candidate (`convert_call_args`), the deduction
+of a function-like `P` (`deduce_call_arg`, `ResolveOverloadForDeduction`),
+`auto` deduction (`deduce_from`, `new auto`, an `auto` template
+parameter; `DeduceAutoType`), a braced scalar or aggregate element (the
+list checker's verifying pass, `init.rs`), and the perform step of a
+`static_cast`, C-style or functional cast (`act_on_cast`,
+`TryStaticImplicitCast`). Counting the early resolution and the
+specialization, `f<int>` takes 2 numbers when discarded, compared or
+bound to a reference (`static_cast<FR>`, `reinterpret_cast`), 3 in a
+copy- or direct-initialization of a pointer, an assignment, a pointer
+cast, a qualified call's argument, a reference parameter, `auto &`; 4 in
+a braced initializer, `auto`, `auto *`, an unqualified call with one
+candidate, an `auto` or explicitly typed `F` template argument; 5 for a
+deduced `F` and `auto x{f<int>}`.
+When the target deduces a different specialization than the explicit
+arguments complete (`f<int>` with `U = void` defaulted, target
+`int (*)(int *, int)`), a cast, an assignment and an argument retarget
+it like an initialization does ([over.over]/1; `retarget_cast_operand`,
+`mismatched_template_id`, `ConvCtx::Assignment | Argument` in
+`retarget_template_id`). The counts there still differ from clang (more
+when the early specialization mismatches, fewer when there is none):
+xfail repros `lambda-in-signature-explicit-args-mismatched-spec-two-units-run.cpp`
+and `…-no-early-spec-two-units-run.cpp` (WP-1142 follow-ups).
+The address of an overload set deduces its templates from the target
+even when a non-template matches it, then prefers the non-template
+([over.over]/5; clang `FindAllFunctionsThatMatchTargetTypeExactly`, then
+`EliminateAllTemplateMatches`; `prefer_non_templates`, WP-1143), and only
+the templates whose kind of member the target can point to
+(`AddMatchingTemplateFunction`). Tests:
 `lambda-in-signature-explicit-args-address-two-units-run.cpp`,
-`lambda-in-signature-address-nontemplate-match-two-units-run.cpp`).
+`…-explicit-args-conversions-two-units-run.cpp`,
+`lambda-in-signature-address-nontemplate-match-two-units-run.cpp`,
+`tests/conformance/over.over/template-id-retarget-cast-assign-argument-run.cpp`.
 `tests/mangle/lambda_in_signature_explicit_args.cpp` covers every shape
 checked.
 

@@ -1369,6 +1369,12 @@ pub struct ColdExprData {
     /// one, the location and context of the use. Computed by sema (which
     /// owns the source manager and the function-name printer).
     pub source_loc: ColdMap<ExprId, SourceLocValues>,
+    /// The value of an immediate invocation (`ConstantExpr`) in a default
+    /// argument or default member initializer, which has none of its own
+    /// (it is evaluated at each use, §5.10): sema's evaluation at a use
+    /// without source-location values, which every such use shares
+    /// (codegen reads it instead of evaluating the call again, WP-1129).
+    pub default_imm: ColdMap<ExprId, ConstValueId>,
     /// The initialized member of a union's `CXXParenListInitExpr`
     /// (clang `getInitializedFieldInUnion`).
     pub union_field: ColdMap<ExprId, DeclId>,
@@ -1513,6 +1519,7 @@ impl Default for ColdExprData {
             array_trait: ColdMap::new("array_trait"),
             trait_rhs_loc: ColdMap::new("trait_rhs_loc"),
             source_loc: ColdMap::new("source_loc"),
+            default_imm: ColdMap::new("default_imm"),
             union_field: ColdMap::new("union_field"),
             cast_written: ColdMap::new("cast_written"),
             offsetof_pattern: ColdMap::new("offsetof_pattern"),
@@ -2332,6 +2339,19 @@ impl ExprArena {
         self.cold.source_loc.insert(e, v)
     }
 
+    /// The value sema found for immediate invocation `e` of a default
+    /// argument or default member initializer at its uses without
+    /// source-location values (`ColdExprData::default_imm`).
+    pub fn default_immediate_value(&self, e: ExprId) -> Option<ConstValueId> {
+        self.cold.default_imm.get(e).copied()
+    }
+
+    /// Records [`ExprArena::default_immediate_value`] (the first one wins:
+    /// every such use evaluates the same expression in the same context).
+    pub fn set_default_immediate_value(&mut self, e: ExprId, v: ConstValueId) {
+        let _ = self.cold.default_imm.insert(e, v);
+    }
+
     /// Replaces the recorded source-location values of `e`: a function's
     /// pretty name is final only once its return type is deduced (clang
     /// computes `SourceLocExpr` values lazily, after the body). `false`
@@ -2755,6 +2775,14 @@ impl ExprArena {
         self.nodes[e.index() as usize].deps |= ExprDeps::INSTANTIATION;
     }
 
+    /// Marks `e` value- and instantiation-dependent: a requires-expression
+    /// whose requirements passed an access check only speculatively in a
+    /// template pattern is evaluated in each instantiation. Call it before
+    /// any parent of `e` is built.
+    pub fn mark_value_dependent(&mut self, e: ExprId) {
+        self.nodes[e.index() as usize].deps |= ExprDeps::VALUE_INST;
+    }
+
     /// Marks `e` type-, value- and instantiation-dependent: a variable
     /// captured by copy in a lambda whose explicit object parameter has a
     /// dependent type ([temp.dep.expr]/3, P0847) has a type that depends
@@ -3085,6 +3113,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.trait_rhs_loc.mem_row().prefixed("cold"));
         r.push(self.cold.source_loc.mem_row().prefixed("cold"));
         r.push(self.cold.union_field.mem_row().prefixed("cold"));
+        r.push(self.cold.default_imm.mem_row().prefixed("cold"));
         r.push(self.cold.cast_written.mem_row().prefixed("cold"));
         r.push(self.cold.offsetof_pattern.mem_row().prefixed("cold"));
         r.push(self.cold.splice_args.mem_row().prefixed("cold"));

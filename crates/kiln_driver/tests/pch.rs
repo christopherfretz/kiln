@@ -459,6 +459,59 @@ fn stale_missing_and_foreign() {
     );
 }
 
+/// WP-1153: `-E` with a PCH it cannot read reports it, as the compile
+/// would (one error for a missing file or a non-PCH, as clang's `-E`),
+/// goes on without it and exits 1; `-o` is not written, as for any `-E`
+/// error. clang's own cases are compared in [`include_probes_for_pch`].
+#[test]
+fn preprocess_unreadable_pch() {
+    let d = scratch("pp-unread");
+    std::fs::write(d.join("m.cpp"), "int a;\n#error boom\nint b;\n").unwrap();
+    std::fs::write(d.join("bad.pch"), "garbage\n").unwrap();
+    std::fs::write(d.join("new.pch"), "KILNPCH 9\n").unwrap();
+    std::fs::write(d.join("cut.pch"), "KILNPCH 1\nkiln x\n").unwrap();
+    std::fs::write(d.join("clang.pch"), b"CPCH\x01\x02").unwrap();
+    let boom = "m.cpp:2:2: error: boom\n    2 | #error boom\n      |  ^\n2 errors generated.\n";
+    for (compat, pch, err) in [
+        (
+            "-fclang-compat=19",
+            "nope.pch",
+            "unable to read PCH file nope.pch: 'No such file or directory'",
+        ),
+        (
+            "-fclang-compat=22",
+            "nope.pch",
+            "unable to read PCH file nope.pch: 'No such file or directory'",
+        ),
+        ("-fclang-compat=19", "bad.pch", "input is not a PCH file: 'bad.pch'"),
+        ("-fclang-compat=22", "bad.pch", "input is not a PCH file: 'bad.pch'"),
+        ("-fclang-compat=19", "new.pch", "PCH file uses a newer PCH format that cannot be read"),
+    ] {
+        let o = kiln(&d, &[compat, "-include-pch", pch, "-E", "-P", "m.cpp"]);
+        assert_eq!((o.code, o.stdout.as_str()), (1, "int a;\nint b;\n"), "{pch}");
+        assert_eq!(o.stderr, format!("error: {err}\n{boom}"), "{pch}");
+    }
+    // A fatal error (a corrupt record, a clang PCH) drops the later
+    // diagnostics, as fatal errors do; the text is still written.
+    for (pch, err) in [
+        ("cut.pch", "fatal error: malformed or corrupted AST file: 'truncated in kiln PCH record"),
+        ("clang.pch", "fatal error: file 'clang.pch' is a precompiled header built by clang"),
+    ] {
+        let o = kiln(&d, &["-fclang-compat=19", "-include-pch", pch, "-E", "-P", "m.cpp"]);
+        assert_eq!((o.code, o.stdout.as_str()), (1, "int a;\nint b;\n"), "{pch}");
+        assert!(o.stderr.starts_with(err), "{pch}: {}", o.stderr);
+        assert_eq!(o.stderr.lines().count(), 2, "{pch}: {}", o.stderr);
+        assert!(o.stderr.ends_with("\n1 error generated.\n"), "{pch}: {}", o.stderr);
+    }
+    let o = kiln(&d, &["-include-pch", "bad.pch", "-E", "m.cpp", "-o", "m.i"]);
+    assert_eq!((o.code, o.stdout.as_str()), (1, ""));
+    assert!(!d.join("m.i").exists());
+    // `-fsyntax-only` still stops at the PCH.
+    let o = kiln(&d, &["-include-pch", "bad.pch", "-fsyntax-only", "m.cpp"]);
+    assert_eq!(o.code, 1);
+    assert!(!o.stderr.contains("boom"), "{}", o.stderr);
+}
+
 /// `-MMD` leaves the PCH's system headers out, as for any compile.
 #[test]
 fn user_only_depfile() {
@@ -551,6 +604,23 @@ fn probe_cases(cc: &Path, pre: &[&str], name: &str) -> Vec<(String, i32, String,
         &["-DV=1", "-include", "v.h"],
         // A `.pch` is used whatever it holds (a directory: one in it).
         &["-include", "n.h"],
+        // WP-1153: `--include` and `--include=` are `-include`, probed
+        // too, and warnings spell them as written.
+        &["--include", "foo.h"],
+        &["--includefoo.h"],
+        &["--include=foo.h"],
+        &["-include", "bar.h", "--include", "foo.h"],
+        &["-include", "bar.h", "--include=foo.h"],
+        // WP-1153: an `-Xclang -include-pch` wins over a driver one on
+        // either side of it.
+        &["-Xclang", "-include-pch", "-Xclang", "x.pch", "-include-pch", "foo.h.pch"],
+        &["-include-pch", "foo.h.pch", "-Xclang", "-include-pch", "-Xclang", "x.pch"],
+        &["-Xclang", "-include-pch", "-Xclang", "x.pch", "-include", "bar.h", "-include", "foo.h"],
+        // WP-1153: `-E` with a PCH it cannot read reports it and goes on
+        // (exit status 1).
+        &["-include-pch", "z.h.pch"],
+        &["-include-pch", "nope.pch"],
+        &["-include", "z.h"],
     ];
     let mut out = Vec::new();
     for c in cases {
@@ -564,7 +634,13 @@ fn probe_cases(cc: &Path, pre: &[&str], name: &str) -> Vec<(String, i32, String,
     // A `.pch` that is not one is the frontend's error. (Not `-E`: there
     // clang reports only `input is not a PCH file` and goes on.)
     let o = go(&["-include", "z.h", "-fsyntax-only", "m.cpp"]);
-    out.push(("-include z.h".into(), o.code, String::new(), o.stderr));
+    out.push(("-fsyntax-only -include z.h".into(), o.code, String::new(), o.stderr));
+    // `-M` goes on too, and each `-E` job reports the PCH (WP-1153).
+    let o = go(&["-include-pch", "z.h.pch", "-M", "m.cpp"]);
+    out.push(("-M z.h.pch".into(), o.code, o.stdout, o.stderr));
+    let o = go(&["-include-pch", "nope.pch", "-E", "-P", "m.cpp", "m.cpp"]);
+    let lines: Vec<&str> = o.stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    out.push(("-E two jobs".into(), o.code, lines.join("\n"), o.stderr));
     // The driver warns once per job.
     let o = go(&["-include", "j.h", "-fsyntax-only", "-x", "c++", "/dev/null", "/dev/null"]);
     out.push(("two jobs".into(), o.code, String::new(), o.stderr.replace(&prog, "<cc>")));
@@ -577,8 +653,8 @@ fn probe_cases(cc: &Path, pre: &[&str], name: &str) -> Vec<(String, i32, String,
 /// with clang++-19 where installed.
 #[test]
 fn include_probes_for_pch() {
-    let k = probe_cases(&kilnpp(), &["-fclang-compat=19"], "probe-kiln");
-    let get = |c: &str| k.iter().find(|r| r.0 == c).unwrap_or_else(|| panic!("{c}"));
+    let kiln_res = probe_cases(&kilnpp(), &["-fclang-compat=19"], "probe-kiln");
+    let get = |c: &str| kiln_res.iter().find(|r| r.0 == c).unwrap_or_else(|| panic!("{c}"));
     let used = get("-include foo.h");
     assert_eq!((used.1, used.3.as_str()), (0, ""));
     assert!(used.2.starts_with("pch=1 h=1 b=FROM_B"), "{}", used.2);
@@ -592,18 +668,18 @@ fn include_probes_for_pch() {
     assert!(nf.2.starts_with("pch=FROM_PCH h=1 b=1"), "{}", nf.2);
     assert!(get("-include foo.h -include-pch x.pch").2.starts_with("pch=FROM_PCH h=FROM_H b=1"));
     assert!(get("-include g.h").2.contains(" g=FROM_G gch=1 "));
-    let j = get("-include j.h");
+    let ign = get("-include j.h");
     assert_eq!(
-        j.3,
+        ign.3,
         "<cc>: warning: precompiled header 'j.h.gch' was ignored because it is not a clang PCH \
          file [-Wignored-gch]\n"
     );
-    assert!(j.2.contains(" j=1 "));
+    assert!(ign.2.contains(" j=1 "));
     assert_eq!(get("-include j.h -Werror").1, 1);
     assert!(get("-include e.h").3.contains("'e.h.gch' was ignored because it contains no clang"));
     assert!(get("-DV=2 -include v.h").2.ends_with("v=FROM_V v1=FROM_V1 v2=1"));
     assert_eq!(
-        get("-include z.h").3,
+        get("-fsyntax-only -include z.h").3,
         "error: input is not a PCH file: 'z.h.pch'\nfatal error: file 'z.h.pch' is not a valid \
          precompiled PCH file: file doesn't start with AST file magic\n2 errors generated.\n"
     );
@@ -613,9 +689,51 @@ fn include_probes_for_pch() {
          generated.\n"
     );
     assert_eq!(get("two jobs").3.matches("warning: precompiled header 'j.h.gch'").count(), 2);
+    for c in ["--include foo.h", "--includefoo.h", "--include=foo.h"] {
+        assert_eq!((get(c).1, get(c).2.as_str(), get(c).3.as_str()), (used.1, used.2.as_str(), ""));
+    }
+    for (c, spelled) in [
+        ("-include bar.h --include foo.h", "--include foo.h"),
+        ("-include bar.h --include=foo.h", "--include=foo.h"),
+    ] {
+        assert_eq!(get(c).2, nf.2);
+        assert_eq!(get(c).3, nf.3.replace("'-include foo.h'", &format!("'{spelled}'")));
+    }
+    for c in [
+        "-Xclang -include-pch -Xclang x.pch -include-pch foo.h.pch",
+        "-include-pch foo.h.pch -Xclang -include-pch -Xclang x.pch",
+    ] {
+        assert!(get(c).2.starts_with("pch=FROM_PCH h=FROM_H b=1"), "{c}: {}", get(c).2);
+    }
+    let x = get("-Xclang -include-pch -Xclang x.pch -include bar.h -include foo.h");
+    assert!(x.2.starts_with("pch=FROM_PCH h=1 b=1"), "{}", x.2);
+    assert_eq!(x.3, nf.3);
+    let junk = get("-include-pch z.h.pch");
+    assert_eq!(
+        (junk.1, junk.3.as_str()),
+        (1, "error: input is not a PCH file: 'z.h.pch'\n1 error generated.\n")
+    );
+    assert!(junk.2.starts_with("pch=FROM_PCH h=FROM_H b=FROM_B"), "{}", junk.2);
+    assert_eq!(get("-include z.h").3, junk.3);
+    let gone = get("-include-pch nope.pch");
+    assert_eq!(
+        (gone.1, gone.2.as_str(), gone.3.as_str()),
+        (
+            1,
+            junk.2.as_str(),
+            "error: unable to read PCH file nope.pch: 'No such file or directory'\n1 error \
+             generated.\n"
+        )
+    );
+    let m = get("-M z.h.pch");
+    assert_eq!((m.1, m.2.as_str(), m.3.as_str()), (1, "m.o: m.cpp\n", junk.3.as_str()));
+    let two = get("-E two jobs");
+    assert_eq!(two.1, 1);
+    assert_eq!(two.2, format!("{}\n{}", gone.2, gone.2));
+    assert_eq!(two.3, gone.3.repeat(2));
     if have("clang++-19") {
         let c = probe_cases(Path::new("clang++-19"), &[], "probe-clang");
-        for (kr, cr) in k.iter().zip(&c) {
+        for (kr, cr) in kiln_res.iter().zip(&c) {
             assert_eq!(kr, cr, "kiln++ (left) and clang++-19 (right) differ");
         }
     }

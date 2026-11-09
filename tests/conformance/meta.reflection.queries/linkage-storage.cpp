@@ -4,8 +4,9 @@
 // storage-duration predicates (has_static_storage_duration,
 // has_thread_storage_duration, has_automatic_storage_duration). Linkage
 // belongs to a name ([basic.link]/2), so a type alias, a non-static data
-// member, an enumerator of a scoped enumeration, a fundamental type and a
-// local entity have none; a reflection of a type answers for the class or
+// member, an enumerator of a scoped enumeration, a fundamental type, a
+// closure type (at namespace or class scope too) and a local entity have
+// none; a reflection of a type answers for the class or
 // enumeration's own name. Answers checked against GCC 16.1
 // (-freflection) except one: GCC 16.1 answers has_linkage(^^NA) == true
 // for a namespace alias, which [basic.link] does not give linkage (kiln
@@ -39,6 +40,9 @@ extern "C" void cfun();
 extern "C" int cvar;
 extern "C" { int cvar2; }
 void g(int);
+auto lam = [] {};
+inline auto ilam = [] {};
+struct SL { static constexpr auto m = [] {}; };
 
 static_assert(has_external_linkage(^^N) && has_external_linkage(^^N::nv));
 static_assert(has_external_linkage(^^N::NS) && has_linkage(^^N::NS));
@@ -55,6 +59,8 @@ static_assert(!has_linkage(^^S::m) && !has_linkage(^^S::MA) && !has_linkage(^^A)
 static_assert(has_external_linkage(^^EC) && !has_linkage(^^EC::a));
 static_assert(has_external_linkage(^^CT));
 static_assert(!has_linkage(^^int) && !has_linkage(^^S*) && !has_linkage(info{}));
+static_assert(!has_linkage(^^decltype(lam)) && !has_linkage(^^decltype(ilam)));
+static_assert(!has_linkage(^^decltype(SL::m)));
 static_assert(!has_module_linkage(^^ev) && !has_module_linkage(^^S));
 
 static_assert(has_c_language_linkage(^^cfun) && has_c_language_linkage(^^cvar));
