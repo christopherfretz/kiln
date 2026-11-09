@@ -143,7 +143,7 @@ impl Sema<'_, '_> {
         }
         let id = match head {
             None => {
-                if !d.trailing_requires.is_some_and(|r| !self.is_err_expr(r)) {
+                if d.trailing_requires.is_none_or(|r| self.is_err_expr(r)) {
                     return;
                 }
                 DiagId::sema_non_temp_friend_decl_with_requires_clause_must_be_def
