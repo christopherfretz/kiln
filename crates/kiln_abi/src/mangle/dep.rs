@@ -690,6 +690,38 @@ impl Mangler<'_, '_> {
         true
     }
 
+    /// `noexcept(e)` (`nx <expression>`), `throw e` / `throw`
+    /// (`tw <expression>` / `tr`) and `typeid(type)` / `typeid(expr)`
+    /// (`ti <type>` / `te <expression>`).
+    fn keyword_expression(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        let node = ast.exprs.get(expr);
+        if node.kind() == ExprKind::CXXNoexceptExpr {
+            let Some(sub) = ExprId::try_new(node.a()) else { return false };
+            self.out.push_str("nx");
+            return self.expression(sub);
+        }
+        if node.kind() == ExprKind::CXXThrowExpr {
+            let Some(sub) = ast.exprs.throw_operand(expr) else {
+                self.out.push_str("tr");
+                return true;
+            };
+            self.out.push_str("tw");
+            return self.expression(sub);
+        }
+        match ast.exprs.typeid_operand(expr) {
+            kiln_ast::expr::TypeidOperand::Type(t) => {
+                self.out.push_str("ti");
+                self.ty(t);
+                true
+            }
+            kiln_ast::expr::TypeidOperand::Expr(sub) => {
+                self.out.push_str("te");
+                self.expression(sub)
+            }
+        }
+    }
+
     /// An operator, call, cast, `sizeof`/`alignof` or pack expansion.
     /// `converted` is the type `expr` is implicitly converted to.
     fn operator_expression(&mut self, expr: ExprId, converted: Option<QualType>) -> bool {
@@ -749,34 +781,13 @@ impl Mangler<'_, '_> {
                     }
                 }
             }
-            ExprKind::CXXNoexceptExpr => {
-                let Some(sub) = ExprId::try_new(node.a()) else { return false };
-                self.out.push_str("nx");
-                return self.expression(sub);
-            }
             // A braced-init-list as an operand (a call argument,
             // `f({1, V...})`): `il <expression>* E` (clang
             // `mangleExpression` `InitListExprClass`).
             ExprKind::InitListExpr => return self.init_list(expr),
-            // `tw <expression>`, `tr` for a rethrow.
-            ExprKind::CXXThrowExpr => match ast.exprs.throw_operand(expr) {
-                Some(sub) => {
-                    self.out.push_str("tw");
-                    return self.expression(sub);
-                }
-                None => self.out.push_str("tr"),
-            },
-            // `ti <type>`, `te <expression>`.
-            ExprKind::CXXTypeidExpr => match ast.exprs.typeid_operand(expr) {
-                kiln_ast::expr::TypeidOperand::Type(t) => {
-                    self.out.push_str("ti");
-                    self.ty(t);
-                }
-                kiln_ast::expr::TypeidOperand::Expr(sub) => {
-                    self.out.push_str("te");
-                    return self.expression(sub);
-                }
-            },
+            ExprKind::CXXThrowExpr | ExprKind::CXXTypeidExpr | ExprKind::CXXNoexceptExpr => {
+                return self.keyword_expression(expr);
+            }
             ExprKind::CXXScalarValueInitExpr => {
                 self.out.push_str("cv");
                 self.ty(node.ty());
