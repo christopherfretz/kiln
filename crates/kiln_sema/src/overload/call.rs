@@ -126,6 +126,18 @@ impl Sema<'_, '_> {
             self.module_diagnose_hidden(&f, name, n.loc());
             cands.extend(f.decls.iter().copied().zip(f.found.iter().copied()));
         }
+        // A dependent call whose name a dependent base of an enclosing
+        // class declares, which the definition's unqualified lookup did not
+        // search ([temp.dep.general]/3): clang's `DiagnoseEmptyLookup`
+        // "explicit qualification required to use member 'z' from
+        // dependent base class" (spec/sema-templates.md §3.1.1, WP-1084).
+        if cands.is_empty()
+            && adl
+            && !self.inst.stack.is_empty()
+            && self.diagnose_member_found_in_class(name, n.loc(), false).is_some()
+        {
+            return None;
+        }
         if cands.is_empty() {
             self.diagnose_undeclared_call_name(name, n.loc());
             return None;
