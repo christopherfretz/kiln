@@ -8988,8 +8988,7 @@ impl Sema<'_, '_> {
         let mut entities: Vec<DeclId> = found.iter().map(|&d| self.ast.first(d)).collect();
         entities.sort_unstable();
         entities.dedup();
-        (entities.len() == 1 && self.kind_of(first) != DeclKind::FunctionTemplate)
-            .then_some(first)
+        (entities.len() == 1 && self.kind_of(first) != DeclKind::FunctionTemplate).then_some(first)
     }
 
     fn fits(&self, ty: QualType, v: i128) -> bool {

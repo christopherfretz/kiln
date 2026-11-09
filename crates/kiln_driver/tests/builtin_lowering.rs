@@ -210,7 +210,9 @@ fn check(target: &'static str, compat: u32) -> BTreeSet<&'static str> {
         .iter()
         .filter(|n| {
             n.starts_with("__")
-                && kiln_driver::pp_cmd::RESERVED_LIBRARY_BUILTINS.binary_search(&n.as_str()).is_err()
+                && kiln_driver::pp_cmd::RESERVED_LIBRARY_BUILTINS
+                    .binary_search(&n.as_str())
+                    .is_err()
                 && (n.starts_with("__builtin_") || !keywords.contains(*n))
         })
         .collect();
