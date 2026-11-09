@@ -1720,6 +1720,26 @@ impl Substituter<'_, '_, '_> {
                 {
                     self.member_link(x, f);
                 }
+                // [class.friend]/10: a friend that redeclares a member
+                // function names it (clang `CheckFriendAccess` in
+                // `VisitFunctionDecl`): the pattern's member, or its
+                // instantiation for a dependently-scoped `X<T>::f`. A
+                // failure the pattern already reported is not repeated at
+                // the same location.
+                let first = self.sema.ast.first(f);
+                if first != f
+                    && let Some(c) = self.sema.declaring_class(first)
+                    && !self.sema.ast.decls.get(f).has(DeclFlags::INVALID)
+                {
+                    let member = if self.sema.in_dependent_class(c) {
+                        self.find_instantiated_decl(first, loc).ok()
+                    } else {
+                        Some(first)
+                    };
+                    if let Some(m) = member.filter(|&m| self.sema.declaring_class(m).is_some()) {
+                        self.sema.check_friend_access(m, loc);
+                    }
+                }
                 Ok(Some(r))
             }
         }

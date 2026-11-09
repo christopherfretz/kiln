@@ -193,6 +193,23 @@ impl Sema<'_, '_> {
             let _ = self.builder().attach_attrs(f, &attrs);
         }
         let target = self.finish_template_pattern(f).unwrap_or(f);
+        // [class.friend]/10: befriending a member function of another
+        // class names it, so it must be accessible here (clang
+        // `CheckFriendAccess`, only for a declaration that redeclares a
+        // member of a class it found through its qualifier).
+        if d.qualifier.is_some()
+            && !local
+            && self.ast.first(target) != target
+            && self.declaring_class(target).is_some()
+            && !self.ast.decls.get(target).has(kiln_ast::decl::DeclFlags::INVALID)
+            && self.inst.stack.is_empty()
+            && self.declaring_class(target).is_some_and(|c| !self.in_dependent_class(c))
+        {
+            // A member of a dependent class is checked in each
+            // instantiation (`TemplateDeclInstantiator`), as is one only
+            // a befriended specialization may name.
+            self.check_friend_access(target, d.name_loc());
+        }
         let fd = self.builder().friend(record, d.name_loc(), FriendTarget::Decl(target));
         let first = self.ast.first(target);
         self.push_friend(first);

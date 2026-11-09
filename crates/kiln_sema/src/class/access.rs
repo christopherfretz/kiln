@@ -742,6 +742,44 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// [class.friend]/10 with [class.access]/4: a friend declaration that
+    /// redeclares member function `member` (`friend void A::f();`) names
+    /// it, so it must be accessible from the befriending class (clang
+    /// `CheckFriendAccess`: a redeclaration lookup, so no inheritance path
+    /// and no instance context). Reported at the friend's declarator-id
+    /// `loc` with clang's "friend function ... is a private member of"
+    /// and the access-path notes; never delayed.
+    pub(crate) fn check_friend_access(&mut self, member: DeclId, loc: Loc) -> bool {
+        let first = self.ast.first(member);
+        let decl_access = self.ast.decls.get(first).misc().access();
+        if matches!(decl_access, Access::Public | Access::None) {
+            return true;
+        }
+        let Some(declaring) = self.declaring_class(first) else { return true };
+        let instance_member = self.is_instance_member(self.templated_or_self(first));
+        let t = Target { member: Some(first), decl_access, declaring, instance_member, object: None };
+        let naming = self.ast.definition(declaring).unwrap_or(declaring);
+        let ec = self.effective_context();
+        let unpriv = self.unprivileged_access(naming, t.declaring, t.decl_access);
+        self.speculative_friend.set(false);
+        if self.is_accessible(&ec, &t, naming, unpriv) {
+            // Accepted in a pattern only because it may instantiate to a
+            // befriended specialization: each instantiation of the friend
+            // checks again.
+            self.speculative_friend.set(false);
+            return true;
+        }
+        let name = self.decl_name(first);
+        let msg = self
+            .diag(DiagId::sema_access_friend_function, loc)
+            .arg(name)
+            .arg(u8::from(unpriv == Access::Protected))
+            .arg(self.ty_arg(self.tag_type(t.declaring)));
+        let msg = self.access_path_notes(msg, &ec, &t, naming);
+        self.emit(msg);
+        false
+    }
+
     /// The access check of a use of special member `m` of class `naming`
     /// from the current context (spec/sema-class.md §4.8; clang
     /// `CheckDestructorAccess` / `CheckConstructorAccess`): `None` if it
@@ -908,6 +946,30 @@ impl Sema<'_, '_> {
         self.check_base_access_impl(derived_ty, base_ty, path, loc, BaseUse::LambdaObject)
     }
 
+    /// clang `MarkVirtualBaseDestructorsReferenced`: the destructor `dtor`
+    /// of virtual base `vb` of `class` (one that is not a direct base) is
+    /// named with `class` as the object class, and must be reachable
+    /// through an accessible path from `class` ([class.dtor]/13,
+    /// [class.access.base]/4): `inherited virtual base class 'B' has
+    /// private destructor` at the class name. Returns whether it is
+    /// accessible.
+    pub(crate) fn check_vbase_dtor_access(&mut self, dtor: DeclId, vb: DeclId, class: DeclId) -> bool {
+        let loc = self.ast.decls.get(class).loc();
+        let cty = self.tag_type(class);
+        let vty = self.tag_type(vb);
+        let msg = self.special_member_access_on(dtor, vb, class, |s, prot| {
+            s.diag(DiagId::sema_access_dtor_vbase, loc).arg(s.ty_arg(vty)).arg(u8::from(prot))
+        });
+        // Every virtual base is reported at the class name, and again by
+        // each implicit special member that marks them (as clang does).
+        if let Some(msg) = msg {
+            self.emit(msg.allow_duplicate());
+            return false;
+        }
+        let Some(path) = base_paths(self, class, vb).into_iter().next() else { return true };
+        self.check_base_access_impl(cty, vty, &path, loc, BaseUse::DtorVbase)
+    }
+
     fn check_base_access_impl(
         &mut self,
         derived_ty: QualType,
@@ -955,9 +1017,13 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_explicit_object_lambda_capture_type, loc)
                 .arg(self.ty_arg(derived_ty))
                 .arg(1u8),
+            BaseUse::DtorVbase => self
+                .diag(DiagId::sema_access_dtor_vbase, loc)
+                .arg(self.ty_arg(base_ty))
+                .arg(u8::from(acc == Access::Protected)),
         };
         let msg = self.access_path_notes(msg, &ec, &t, derived);
-        self.emit(msg);
+        self.emit(if usage == BaseUse::DtorVbase { msg.allow_duplicate() } else { msg });
         false
     }
 
@@ -1384,4 +1450,6 @@ enum BaseUse {
     Covariant,
     /// A lambda's explicit object parameter ([expr.prim.lambda.closure]/5).
     LambdaObject,
+    /// The destructor of an inherited virtual base ([class.dtor]/13).
+    DtorVbase,
 }
