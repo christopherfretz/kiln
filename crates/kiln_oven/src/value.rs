@@ -257,10 +257,13 @@ impl Oven {
             RetKind::Sret(ty) => self.freeze_aggregate(b, ty, v as u64, loc),
         };
         // [expr.const]/5.20: every allocation is deallocated within the
-        // evaluation (checked after the result, as clang).
+        // evaluation (checked after the result, as clang). Codegen's folds
+        // outside a constant context only note it
+        // ([`crate::Oven::set_fold_leaks`]).
+        let leaks_ok = self.fold_leaks && self.run.fold && !self.run.const_context;
         let r = r.and_then(|cv| match self.leak_notes(b) {
-            None => Ok(cv),
-            Some(n) => Err(Freeze::Notes(n)),
+            Some(n) if !leaks_ok => Err(Freeze::Notes(n)),
+            _ => Ok(cv),
         });
         let cv = r.map_err(|f| match f {
             Freeze::Fault(k) => EvalFailure::silent(k),
