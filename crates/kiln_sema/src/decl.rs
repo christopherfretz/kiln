@@ -698,7 +698,13 @@ impl Sema<'_, '_> {
         clippy::too_many_lines,
         reason = "one branch per dependent type form: template-id, dependent template-id, dependent name"
     )]
-    fn rebuild_ci_type(&mut self, base: QualType, qual: DeclId, loc: Loc, depth: u32) -> QualType {
+    pub(crate) fn rebuild_ci_type(
+        &mut self,
+        base: QualType,
+        qual: DeclId,
+        loc: Loc,
+        depth: u32,
+    ) -> QualType {
         if depth > 32 || !self.is_dependent_type(base) {
             return base;
         }
@@ -706,17 +712,28 @@ impl Sema<'_, '_> {
         if let Some(t) = self.rebuild_ci_derived(base, view, qual, loc, depth) {
             return t;
         }
+        if let Some(t) = self.rebuild_ci_expr_type(base, view, qual, loc, depth) {
+            return t;
+        }
         if let TypeView::TemplateSpecialization { name, args, alias, .. } = view {
             let list = self.ast.types.args(args).to_vec();
             let mut out = Vec::with_capacity(list.len());
             let mut changed = false;
             for a in list {
-                if let kiln_ast::types::ArgView::Type(t) = a.view() {
-                    let r = self.rebuild_ci_type(t, qual, loc, depth + 1);
-                    changed |= r != t;
-                    out.push(kiln_ast::types::TemplateArg::ty(r));
-                } else {
-                    out.push(a);
+                match a.view() {
+                    kiln_ast::types::ArgView::Type(t) => {
+                        let r = self.rebuild_ci_type(t, qual, loc, depth + 1);
+                        changed |= r != t;
+                        out.push(kiln_ast::types::TemplateArg::ty(r));
+                    }
+                    // `W<C<X>::N + 1>`: the expression rebuilt
+                    // ([temp.over.link]/5, WP-1154).
+                    kiln_ast::types::ArgView::Expr { expr: e, .. } => {
+                        let r = self.rebuild_ci_expr(e, qual);
+                        changed |= r != e;
+                        out.push(if r == e { a } else { self.ast.builder().template_arg_expr(r) });
+                    }
+                    _ => out.push(a),
                 }
             }
             if !changed {
@@ -874,7 +891,7 @@ impl Sema<'_, '_> {
     /// template's own parameters or a partial specialization's
     /// arguments) and, through it, a member class
     /// (`typename A::B<P>::C::`, [temp.dep.type]/6).
-    fn rebuild_ci_nns_record(
+    pub(crate) fn rebuild_ci_nns_record(
         &mut self,
         nns: kiln_ast::ids::NnsId,
         qual: DeclId,
@@ -948,6 +965,78 @@ impl Sema<'_, '_> {
             return None;
         };
         Some(self.ast.types.qualify(t, ty.quals()))
+    }
+
+    /// [`Sema::rebuild_ci_type`] through the types that carry an
+    /// expression: `decltype(e)` and an array bound that depends on a
+    /// value (`decltype(typename C<X>::T())`, `W<char[C<X>::N]>`), whose
+    /// operands are rebuilt by [`Sema::rebuild_ci_expr`] (clang's
+    /// `RebuildExprInCurrentInstantiation` under
+    /// `RebuildTypeInCurrentInstantiation`; WP-1154). `None` when `view`
+    /// is none of those.
+    fn rebuild_ci_expr_type(
+        &mut self,
+        base: QualType,
+        view: TypeView,
+        qual: DeclId,
+        loc: Loc,
+        depth: u32,
+    ) -> Option<QualType> {
+        let t = match view {
+            TypeView::Decltype { expr, .. } => {
+                let levels = crate::templ::args::MultiLevelArgs::new();
+                let entered = self.act_on_enter_declarator_scope(qual);
+                let r = {
+                    let mut s = crate::templ::subst::Substituter::new(self, &levels);
+                    s.ci_rebuild = Some(qual);
+                    s.decltype_ty(expr, loc)
+                };
+                self.act_on_exit_declarator_scope(entered);
+                r.ok()?
+            }
+            TypeView::DependentSizedArray { elem, size } => {
+                let kiln_ast::types::ExprOperand::Expr(e) = size else { return Some(base) };
+                let r = self.rebuild_ci_type(elem, qual, loc, depth + 1);
+                let n = self.rebuild_ci_expr(e, qual);
+                if r == elem && n == e {
+                    return Some(base);
+                }
+                let mut d = Declarator::new(DeclaratorContext::TypeName, loc);
+                d.site = DeclSite::Subst;
+                d.chunks.push(Chunk::Array { size: Some(n), loc });
+                let t = self.type_for_declarator_at(r, loc, &d);
+                if self.is_error_type(t) {
+                    return Some(base);
+                }
+                t
+            }
+            _ => return None,
+        };
+        Some(self.ast.types.qualify(t, base.quals()))
+    }
+
+    /// Expression `e`, written in a type before the declarator-id of an
+    /// out-of-line member of the class template whose pattern is `qual`,
+    /// rebuilt in the current instantiation (clang's
+    /// `RebuildExprInCurrentInstantiation`, [temp.dep.type]/1, /6): the
+    /// types it names through [`Sema::rebuild_ci_type`] and a
+    /// `C<X>::m` naming a member of the current instantiation as that
+    /// member, as the class's own declaration names it, so the two
+    /// declarations' expressions are equivalent ([temp.over.link]/5).
+    /// `e` itself when nothing depends or the rebuild fails.
+    pub(crate) fn rebuild_ci_expr(&mut self, e: ExprId, qual: DeclId) -> ExprId {
+        if !self.ast.exprs.get(e).deps().intersects(kiln_ast::expr::ExprDeps::TYPE_VALUE_INST) {
+            return e;
+        }
+        let levels = crate::templ::args::MultiLevelArgs::new();
+        let entered = self.act_on_enter_declarator_scope(qual);
+        let r = {
+            let mut s = crate::templ::subst::Substituter::new(self, &levels);
+            s.ci_rebuild = Some(qual);
+            s.expr(e)
+        };
+        self.act_on_exit_declarator_scope(entered);
+        r.unwrap_or(e)
     }
 
     /// Before the initializer of `v`, declared with a qualified
