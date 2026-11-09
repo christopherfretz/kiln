@@ -7,26 +7,64 @@
 //!
 //! The tests use a miniature libc++ in a `--sysroot` (`std.cppm` and
 //! `std.compat.cppm` over one header) so that a build takes milliseconds,
-//! and every cache lives under the target directory: nothing here writes
-//! to the user's `~/.cache`.
+//! and every cache lives under the target directory (or, where advisory
+//! locks do not work there, a temporary directory removed afterwards):
+//! nothing here writes to the user's `~/.cache`. WP-1074 added the races
+//! with more compiles, a killed one, and a held or stuck entry lock.
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 
 fn kilnpp() -> PathBuf {
     Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++")
 }
 
-/// A fresh directory under the target directory.
+/// Whether an advisory lock (`flock`) on a file in `dir` excludes another
+/// open of it. It does not on some virtualised file systems (a macOS
+/// directory mounted into a Linux container), where racing compiles all
+/// build (spec/modules.md §11.12 "Concurrency").
+fn locks_exclude(dir: &Path) -> bool {
+    let probe = dir.join(format!("kiln-lock-probe-{}", std::process::id()));
+    let open = || {
+        std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&probe)
+    };
+    let excludes = match (open(), open()) {
+        (Ok(a), Ok(b)) => {
+            a.lock().is_ok() && matches!(b.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+        }
+        _ => false,
+    };
+    let _ = std::fs::remove_file(&probe);
+    excludes
+}
+
+/// Where the tests' directories go: the target directory, unless locks do
+/// not exclude there and they do in the system's temporary directory.
+fn scratch_base() -> &'static Path {
+    static BASE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    BASE.get_or_init(|| {
+        let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        let tmp = std::env::temp_dir();
+        if !locks_exclude(&target) && locks_exclude(&tmp) { tmp } else { target }
+    })
+}
+
+/// A fresh directory under [`scratch_base`].
 fn scratch(name: &str) -> PathBuf {
-    let d = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("kiln-module-cache-{}-{name}", std::process::id()));
+    let d = scratch_base().join(format!("kiln-module-cache-{}-{name}", std::process::id()));
     if d.exists() {
         std::fs::remove_dir_all(&d).unwrap();
     }
     std::fs::create_dir_all(&d).unwrap();
     d
+}
+
+/// Removes a test's directory when it is not under the target directory.
+fn done(d: &Path) {
+    if !d.starts_with(env!("CARGO_TARGET_TMPDIR")) {
+        std::fs::remove_dir_all(d).unwrap();
+    }
 }
 
 const STD: &str = "module;\n#include <answer.h>\nexport module std;\n\
@@ -143,6 +181,7 @@ fn miss_builds_then_hit_reuses() {
     std::fs::remove_file(d.join("u.o")).unwrap();
     ok(&d, &["-fmodules-cache-path=cache", "-c", "u.cpp", "-o", "u.o"]);
     assert!(d.join("u.o").is_file());
+    done(&d);
 }
 
 #[test]
@@ -161,6 +200,7 @@ fn std_compat_caches_both_modules() {
     let r = remarks(&ok(&d, &["-v", "-fmodules-cache-path=cache", "-fsyntax-only", "u.cpp"]));
     assert_eq!(r.len(), 1, "{r:?}");
     assert!(r[0].starts_with("using"), "{r:?}");
+    done(&d);
 }
 
 #[test]
@@ -187,34 +227,220 @@ fn changed_inputs_rebuild() {
     ok(&d, &["-DX=1", "-fmodules-cache-path=cache", "-fsyntax-only", "u.cpp"]);
     ok(&d, &["-fno-exceptions", "-fmodules-cache-path=cache", "-fsyntax-only", "u.cpp"]);
     assert_eq!(entries(&d.join("cache")).len(), 4);
+    done(&d);
+}
+
+/// Starts `kiln++ -std=c++20 --sysroot=sys -stdlib=libc++
+/// -fmodules-cache-path=cache <args>` in `dir`, with standard error piped.
+fn spawn(dir: &Path, args: &[&str]) -> Child {
+    Command::new(kilnpp())
+        .args(["-std=c++20", "--sysroot=sys", "-stdlib=libc++", "-fmodules-cache-path=cache"])
+        .args(args)
+        .current_dir(dir)
+        .env("XDG_CACHE_HOME", dir.join("xdg"))
+        .env("HOME", dir.join("home"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+/// `n` compiles of `c.cpp` started together on a cold cache, each with
+/// `-v`; their standard errors, after checking that every one succeeded.
+fn race(d: &Path, n: usize) -> Vec<String> {
+    let children: Vec<_> =
+        (0..n).map(|i| spawn(d, &["-v", "-c", "c.cpp", "-o", &format!("c{i}.o")])).collect();
+    children
+        .into_iter()
+        .map(|c| {
+            let o = c.wait_with_output().unwrap();
+            let err = String::from_utf8_lossy(&o.stderr).into_owned();
+            assert!(o.status.success(), "{err}");
+            err
+        })
+        .collect()
+}
+
+/// After a race: one entry in `<d>/<cache>`, holding the two module files
+/// and their stamps and nothing else (no temporary or lock file), which
+/// the next compile uses.
+fn check_settled(d: &Path, cache: &str) {
+    let e = entries(&d.join(cache));
+    assert_eq!(e.len(), 1, "{e:?}");
+    assert_eq!(names(&e[0]), ["std.compat.pcm", "std.compat.stamp", "std.pcm", "std.stamp"]);
+    let path = format!("-fmodules-cache-path={cache}");
+    let r = remarks(&ok(d, &["-v", &path, "-fsyntax-only", "c.cpp"]));
+    assert!(r.iter().all(|l| l.starts_with("using")), "{r:?}");
 }
 
 #[test]
 fn racing_misses_all_succeed() {
     let Some(d) = setup("race") else { return };
-    let children: Vec<_> = (0..4)
-        .map(|i| {
-            Command::new(kilnpp())
-                .args(["-std=c++20", "--sysroot=sys", "-stdlib=libc++"])
-                .args(["-fmodules-cache-path=cache", "-c", "c.cpp", "-o"])
-                .arg(format!("c{i}.o"))
-                .current_dir(&d)
-                .stdin(Stdio::null())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap()
-        })
-        .collect();
-    for c in children {
-        let o = c.wait_with_output().unwrap();
-        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    race(&d, 4);
+    check_settled(&d, "cache");
+    done(&d);
+}
+
+/// WP-1074: before the entry lock, every racer built and renamed both
+/// files, and the module file and the stamp left last could come from
+/// different racers (about 1 in 12 races of 16), so the next compile
+/// missed. Now exactly one racer builds; the others wait and use it.
+#[test]
+fn many_racing_misses_build_once() {
+    let Some(d) = setup("race16") else { return };
+    let errs = race(&d, 16);
+    let built: usize = errs
+        .iter()
+        .map(|e| remarks(e).iter().filter(|l| l.starts_with("building 'std.compat' into")).count())
+        .sum();
+    // Where locks do not exclude, every racer may build.
+    if locks_exclude(scratch_base()) {
+        assert_eq!(built, 1, "{errs:#?}");
+    } else {
+        assert!(built >= 1, "{errs:#?}");
     }
-    let e = entries(&d.join("cache"));
-    assert_eq!(e.len(), 1, "{e:?}");
-    // No temporary file is left behind, and the entry is valid.
-    assert_eq!(names(&e[0]), ["std.compat.pcm", "std.compat.stamp", "std.pcm", "std.stamp"]);
+    check_settled(&d, "cache");
+    done(&d);
+}
+
+/// WP-1074: a racer killed (SIGKILL) at some point of its compile, maybe
+/// while it holds the lock and builds, neither fails the others nor
+/// leaves a file behind.
+#[test]
+fn killed_racer_leaves_no_trace() {
+    let Some(d) = setup("killed") else { return };
+    for (round, delay) in [0u64, 15, 40].into_iter().enumerate() {
+        let cache = format!("-fmodules-cache-path=cache{round}");
+        let mut victim = spawn(&d, &[&cache, "-c", "c.cpp", "-o", "k.o"]);
+        let others: Vec<_> =
+            (0..5).map(|i| spawn(&d, &[&cache, "-c", "c.cpp", "-o", &format!("c{i}.o")])).collect();
+        std::thread::sleep(std::time::Duration::from_millis(delay));
+        let _ = victim.kill();
+        let _ = victim.wait();
+        for c in others {
+            let o = c.wait_with_output().unwrap();
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        }
+        // The next compile finishes whatever the victim left, if anything.
+        ok(&d, &[&cache, "-fsyntax-only", "c.cpp"]);
+        check_settled(&d, &format!("cache{round}"));
+    }
+    done(&d);
+}
+
+/// The entry directory `d`'s cache settles on for `c.cpp`, made a miss
+/// again: both stamps removed.
+fn emptied_entry(d: &Path) -> PathBuf {
+    ok(d, &["-fmodules-cache-path=cache", "-fsyntax-only", "c.cpp"]);
+    let e = entries(&d.join("cache")).remove(0);
+    std::fs::remove_file(e.join("std.stamp")).unwrap();
+    std::fs::remove_file(e.join("std.compat.stamp")).unwrap();
+    e
+}
+
+/// Holds `<entry>/std.compat.lock` as a compile building `std.compat`
+/// would.
+fn hold_lock(entry: &Path) -> std::fs::File {
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(entry.join("std.compat.lock"))
+        .unwrap();
+    f.lock().unwrap();
+    f
+}
+
+/// WP-1074: a miss waits while another compile holds the entry's lock;
+/// when the holder goes away (here it closes the lock file; a killed one
+/// is released by the kernel the same way) it builds, clearing the
+/// temporary files the holder left, and removes the lock file.
+#[test]
+fn miss_waits_for_the_lock_holder() {
+    let Some(d) = setup("held") else { return };
+    if !locks_exclude(scratch_base()) {
+        eprintln!("advisory locks do not exclude here; skipping");
+        return done(&d);
+    }
+    let e = emptied_entry(&d);
+    let left = ["std.compat.pcm.tmp.4242", "std.pcm.tmp.4242", "std.stamp.tmp.4242.ThreadId(1).7"];
+    for f in left {
+        std::fs::write(e.join(f), "partial").unwrap();
+    }
+    let held = hold_lock(&e);
+    let mut child = spawn(&d, &["-v", "-fsyntax-only", "c.cpp"]);
+    let mut err = std::io::BufReader::new(child.stderr.take().unwrap());
+    let mut text = String::new();
+    // Read up to the wait remark: the child now waits on the lock.
+    loop {
+        let mut line = String::new();
+        assert!(std::io::BufRead::read_line(&mut err, &mut line).unwrap() > 0, "{text}");
+        text.push_str(&line);
+        if line.contains("waiting for another compile building 'std.compat'") {
+            break;
+        }
+    }
+    assert!(child.try_wait().unwrap().is_none(), "{text}");
+    drop(held);
+    std::io::Read::read_to_string(&mut err, &mut text).unwrap();
+    assert!(child.wait().unwrap().success(), "{text}");
+    let r = remarks(&text);
+    assert!(r[1].starts_with("building 'std.compat' into"), "{r:?}");
+    check_settled(&d, "cache");
+    done(&d);
+}
+
+/// WP-1074: a holder that never finishes delays a miss by the wait limit
+/// (`KILN_MODULE_CACHE_WAIT_MS`, here 200 ms) at most; the miss then
+/// builds the module from its source and succeeds.
+#[test]
+fn stuck_holder_falls_back() {
+    let Some(d) = setup("stuck") else { return };
+    if !locks_exclude(scratch_base()) {
+        eprintln!("advisory locks do not exclude here; skipping");
+        return done(&d);
+    }
+    let e = emptied_entry(&d);
+    let held = hold_lock(&e);
+    let o = Command::new(kilnpp())
+        .args(["-std=c++20", "--sysroot=sys", "-stdlib=libc++", "-fmodules-cache-path=cache"])
+        .args(["-v", "-c", "c.cpp", "-o", "c.o"])
+        .current_dir(&d)
+        .env("KILN_MODULE_CACHE_WAIT_MS", "200")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{err}");
+    let r = remarks(&err);
+    assert!(r[0].starts_with("waiting for another compile building 'std.compat'"), "{r:?}");
+    assert!(r[1].starts_with("gave up waiting for '"), "{r:?}");
+    assert!(r[1].ends_with("std.compat.lock'; building 'std.compat' from its source"), "{r:?}");
+    // Built from its source, `std.compat` imported `std` through the
+    // cache; its own entry is untouched, still a miss and still held.
+    assert!(r[2].starts_with("building 'std' into"), "{r:?}");
+    assert_eq!(names(&e), ["std.compat.lock", "std.compat.pcm", "std.pcm", "std.stamp"]);
+    drop(held);
+    ok(&d, &["-fmodules-cache-path=cache", "-fsyntax-only", "c.cpp"]);
+    check_settled(&d, "cache");
+    done(&d);
+}
+
+/// WP-1074: a lock file a killed compile left in a valid entry is removed
+/// by the next hit.
+#[test]
+fn hit_removes_a_stale_lock_file() {
+    let Some(d) = setup("stale-lock") else { return };
+    ok(&d, &["-fmodules-cache-path=cache", "-fsyntax-only", "c.cpp"]);
+    let e = entries(&d.join("cache")).remove(0);
+    std::fs::write(e.join("std.compat.lock"), "").unwrap();
+    std::fs::write(e.join("std.lock"), "").unwrap();
     let r = remarks(&ok(&d, &["-v", "-fmodules-cache-path=cache", "-fsyntax-only", "c.cpp"]));
     assert!(r.iter().all(|l| l.starts_with("using")), "{r:?}");
+    check_settled(&d, "cache");
+    done(&d);
 }
 
 #[test]
@@ -229,6 +455,7 @@ fn unwritable_cache_falls_back() {
     assert!(r[0].ends_with("; building 'std' from its source"), "{r:?}");
     // Silently without `-v`.
     assert_eq!(ok(&d, &["-fmodules-cache-path=file/cache", "-c", "u.cpp"]), "");
+    done(&d);
 }
 
 #[test]
@@ -265,6 +492,7 @@ fn location_and_switches() {
     ));
     assert!(r.is_empty(), "{r:?}");
     assert!(!d.join("given").exists());
+    done(&d);
 }
 
 #[test]
@@ -285,4 +513,5 @@ fn print_file_name_finds_the_manifest() {
         let rel = rest.split('"').nth(1).unwrap();
         assert!(printed.parent().unwrap().join(rel).is_file(), "{rel} from {}", printed.display());
     }
+    done(&d);
 }

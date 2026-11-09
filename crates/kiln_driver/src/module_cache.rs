@@ -12,7 +12,8 @@
 //! reports any real error in the importer's own context.
 //!
 //! The cache is format-agnostic: it stores whatever `--precompile`
-//! writes, and checks only that a hit is a kiln module file.
+//! writes, and checks only that a hit is a kiln module file and reads its
+//! trailing checksum (spec/modules.md §11.3), which every kind has.
 //!
 //! Layout: `<root>/<key>/<name>.pcm` and `<root>/<key>/<name>.stamp`.
 //! `<root>` is `-fmodules-cache-path=`, else `$XDG_CACHE_HOME/kiln/modules`,
@@ -21,24 +22,39 @@
 //! fingerprint (spec/modules.md §11.4), the predefines (every `-D`, `-U`,
 //! `-include` and target macro), the header search list, and the libc++
 //! module directory with the text of its `std.cppm` and
-//! `std.compat.cppm`. The stamp lists every file the build read with its
-//! size and modification time (clang's module-cache validation); a hit
-//! needs every one unchanged, so a libc++ header edited in place rebuilds
-//! the module.
+//! `std.compat.cppm`. The stamp names the module file by its size and
+//! trailing checksum (its content), then lists every file the build read
+//! with its size and modification time (clang's module-cache validation);
+//! a hit needs every one unchanged, so a libc++ header edited in place
+//! rebuilds the module.
 //!
-//! Concurrency: the module file is written to a temporary file and
-//! renamed into place (`bmi::write_file`), then the stamp the same way, so
-//! a reader never sees a torn file; a reader takes the stamp first and the
-//! module file second, so a stamp it accepts was written after the module
-//! file it then reads. Two compiles that miss together both build, both
-//! rename, and both succeed; the builds are deterministic, so either file
-//! is the right one.
+//! Concurrency (WP-1074): a hit takes no lock. It reads the stamp first
+//! and the module file second; the stamp vouches for the module file's
+//! bytes, and every compile building one key writes the same bytes, so a
+//! module file renamed into place by any of them matches any of their
+//! stamps. A miss takes the entry's `<name>.lock` (an advisory `flock`,
+//! released by the kernel when its holder dies), checks the entry again,
+//! and only then builds: one compile builds, the others wait and then use
+//! what it published. The holder clears any temporary file a killed
+//! holder left, writes the module file and then the stamp (each through a
+//! temporary file renamed into place), and removes the lock file before
+//! releasing it; a waiter that then holds a removed file opens the path
+//! again. A waiter gives up after [`DEFAULT_WAIT`]
+//! (`KILN_MODULE_CACHE_WAIT_MS`) and builds the module from its source
+//! instead, so a stuck compile delays others but never fails them. Where
+//! `flock` does not exclude (some network and virtualised file systems),
+//! racers all build, as before the lock, and the checksum keeps the entry
+//! they leave valid. Before WP-1074 the stamp named the module file by
+//! its modification time, so the last module file and the last stamp
+//! renamed into place could come from different racers and the entry was
+//! a miss for the next compile.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use kiln_diag::DiagOptions;
 
@@ -49,7 +65,17 @@ use crate::syntax_cmd::SyntaxJob;
 use crate::toolchain::{LangStd, Toolchain};
 
 /// The first line of a stamp file.
-const STAMP_MAGIC: &str = "kiln-module-cache-stamp 1";
+/// Version 2 (WP-1074) names the module file by its checksum, not its
+/// modification time.
+const STAMP_MAGIC: &str = "kiln-module-cache-stamp 2";
+
+/// How long a miss waits for another compile building the same module
+/// before it builds the module from its source instead.
+pub const DEFAULT_WAIT: Duration = Duration::from_secs(120);
+
+/// The environment variable that replaces [`DEFAULT_WAIT`], in
+/// milliseconds (kiln's tests).
+const WAIT_ENV: &str = "KILN_MODULE_CACHE_WAIT_MS";
 
 /// The cache's root directory for `args` (`-fmodules-cache-path=`, then
 /// `$XDG_CACHE_HOME/kiln/modules`, then `$HOME/.cache/kiln/modules`), or
@@ -166,8 +192,17 @@ impl StdCache {
         let dir = self.entry_dir(source);
         let pcm = dir.join(format!("{name}.pcm"));
         let stamp = dir.join(format!("{name}.stamp"));
-        // The stamp first, then the module file it vouches for.
-        if stamp_valid(&stamp, &pcm) && kiln_pp::bmi::sniff(&pcm) == kiln_pp::bmi::Sniffed::Kiln {
+        // A hit takes no lock: the stamp first, then the module file it
+        // vouches for.
+        let lock_path = dir.join(format!("{name}.lock"));
+        if entry_valid(&stamp, &pcm) {
+            // A lock file here was left by a compile killed while it held
+            // it; it is removed when free (never waiting for it).
+            if lock_path.exists()
+                && let Ok(Some(stale)) = EntryLock::acquire(&lock_path, Duration::ZERO, || {})
+            {
+                drop(stale);
+            }
             self.remark(&format!("using '{}' for '{name}'", pcm.display()));
             return Some(pcm);
         }
@@ -178,12 +213,41 @@ impl StdCache {
             ));
             return None;
         }
+        let lock = match EntryLock::acquire(&lock_path, wait_limit(), || {
+            self.remark(&format!("waiting for another compile building '{name}'"));
+        }) {
+            Ok(Some(lock)) => lock,
+            Ok(None) => {
+                self.remark(&format!(
+                    "gave up waiting for '{}'; building '{name}' from its source",
+                    lock_path.display()
+                ));
+                return None;
+            }
+            Err(e) => {
+                self.remark(&format!(
+                    "cannot lock '{}': {e}; building '{name}' from its source",
+                    lock_path.display()
+                ));
+                return None;
+            }
+        };
+        // Another compile may have published the entry while this one
+        // waited.
+        if entry_valid(&stamp, &pcm) {
+            self.remark(&format!("using '{}' for '{name}'", pcm.display()));
+            return Some(pcm);
+        }
+        // Only a holder of this lock writes these temporary files, so any
+        // there now belongs to a holder that was killed.
+        remove_temporaries(&dir, name);
         self.remark(&format!("building '{name}' into '{}'", pcm.display()));
         let files = match self.build(source, &pcm) {
             Ok(files) => files,
             Err(why) => {
-                // Leave no empty entry behind (a no-op when another
-                // compile has filled it).
+                // Leave no empty entry behind (a no-op when the entry
+                // holds anything else).
+                drop(lock);
                 let _ = std::fs::remove_dir(&dir);
                 self.remark(&format!("{why}; building '{name}' from its source"));
                 return None;
@@ -309,13 +373,38 @@ fn stamp_line(path: &Path) -> Option<String> {
     Some(format!("{} {} {text}", m.len(), mtime_text(&m)))
 }
 
+/// The stamp line of the module file `path`: `<size> <checksum> <path>`,
+/// where `<checksum>` is the file's trailing checksum (spec/modules.md
+/// §11.3) in hex: its content's identity, the same for every compile that
+/// builds the same module (the writer is deterministic). So a stamp
+/// accepts a module file another racing compile renamed into place after
+/// it, as long as the bytes are the same. `None` when it cannot be read,
+/// is too short to be a module file, or its path cannot be written on one
+/// line.
+fn pcm_line(path: &Path) -> Option<String> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let text = path.to_str()?;
+    if text.contains('\n') {
+        return None;
+    }
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    if len < 16 {
+        return None;
+    }
+    f.seek(SeekFrom::Start(len - 8)).ok()?;
+    let mut sum = [0u8; 8];
+    f.read_exact(&mut sum).ok()?;
+    Some(format!("{len} {:016x} {text}", u64::from_le_bytes(sum)))
+}
+
 /// Writes the stamp of `pcm`: the module file itself, then `source` and
 /// every other file the build read. Written atomically, after `pcm`.
 fn write_stamp(stamp: &Path, pcm: &Path, source: &Path, files: &[String]) -> std::io::Result<()> {
     let bad = || std::io::Error::other("a file the build read cannot be stamped");
     let mut text = format!("{STAMP_MAGIC}\n");
     let mut seen = std::collections::HashSet::new();
-    let pcm_line = stamp_line(pcm).ok_or_else(bad)?;
+    let pcm_line = pcm_line(pcm).ok_or_else(bad)?;
     let _ = writeln!(text, "{pcm_line}");
     for f in std::iter::once(source).chain(files.iter().map(Path::new)) {
         if !seen.insert(f.to_owned()) {
@@ -327,8 +416,8 @@ fn write_stamp(stamp: &Path, pcm: &Path, source: &Path, files: &[String]) -> std
     write_atomically(stamp, text.as_bytes())
 }
 
-/// Whether `stamp` is a stamp whose first entry is `pcm` and whose every
-/// file is unchanged.
+/// Whether `stamp` is a stamp whose first entry is `pcm`, with the
+/// checksum `pcm` has now, and whose every other file is unchanged.
 fn stamp_valid(stamp: &Path, pcm: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(stamp) else { return false };
     let mut lines = text.lines();
@@ -341,15 +430,135 @@ fn stamp_valid(stamp: &Path, pcm: &Path) -> bool {
         let (Some(_), Some(_), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
             return false;
         };
-        if first && Path::new(path) != pcm {
-            return false;
-        }
+        let now = if first {
+            if Path::new(path) != pcm {
+                return false;
+            }
+            pcm_line(pcm)
+        } else {
+            stamp_line(Path::new(path))
+        };
         first = false;
-        if stamp_line(Path::new(path)).as_deref() != Some(line) {
+        if now.as_deref() != Some(line) {
             return false;
         }
     }
     !first
+}
+
+/// Whether the entry `stamp` + `pcm` is a hit: a valid stamp, read
+/// first, and a module file it vouches for that is a kiln module file.
+fn entry_valid(stamp: &Path, pcm: &Path) -> bool {
+    stamp_valid(stamp, pcm) && kiln_pp::bmi::sniff(pcm) == kiln_pp::bmi::Sniffed::Kiln
+}
+
+/// How long a miss waits for the entry's lock: `KILN_MODULE_CACHE_WAIT_MS`
+/// when it is a number, else [`DEFAULT_WAIT`].
+fn wait_limit() -> Duration {
+    std::env::var(WAIT_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .map_or(DEFAULT_WAIT, Duration::from_millis)
+}
+
+/// Removes the temporary files of `name`'s module file and stamp in
+/// `dir` (`<name>.pcm.tmp.*`, `<name>.stamp.tmp.*`): called by the holder
+/// of `name`'s lock, the only compile that writes them, so any found is
+/// left by a holder that was killed.
+fn remove_temporaries(dir: &Path, name: &str) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let prefixes = [format!("{name}.pcm.tmp."), format!("{name}.stamp.tmp.")];
+    for e in rd.flatten() {
+        let file_name = e.file_name();
+        let Some(n) = file_name.to_str() else { continue };
+        if prefixes.iter().any(|p| n.starts_with(p.as_str())) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// The exclusive lock of one cache entry's module, held while it is
+/// built and published: an advisory lock (`flock`) on `<name>.lock` in
+/// the entry. The kernel releases it when its holder exits, killed or
+/// not. Dropping it removes the lock file, then releases the lock, so a
+/// finished entry holds no lock file.
+#[derive(Debug)]
+struct EntryLock {
+    file: std::fs::File,
+    path: PathBuf,
+}
+
+impl EntryLock {
+    /// Locks `path`, creating it, waiting at most `wait` for another
+    /// holder; `on_wait` is called once when the lock is held by another.
+    /// `Ok(None)` when the wait ran out.
+    fn acquire(
+        path: &Path,
+        wait: Duration,
+        on_wait: impl FnOnce(),
+    ) -> std::io::Result<Option<EntryLock>> {
+        let deadline = Instant::now() + wait;
+        let mut on_wait = Some(on_wait);
+        loop {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(path)?;
+            let mut delay = Duration::from_millis(1);
+            loop {
+                match file.try_lock() {
+                    Ok(()) => break,
+                    Err(std::fs::TryLockError::WouldBlock) => {
+                        let now = Instant::now();
+                        if now >= deadline {
+                            return Ok(None);
+                        }
+                        if let Some(f) = on_wait.take() {
+                            f();
+                        }
+                        std::thread::sleep(delay.min(deadline - now));
+                        delay = (delay * 2).min(Duration::from_millis(50));
+                    }
+                    Err(std::fs::TryLockError::Error(e)) => return Err(e),
+                }
+            }
+            // The holder before this one removed the file it held before
+            // releasing it: this lock is on a removed file, so take the
+            // path again.
+            if same_file(&file, path) {
+                return Ok(Some(EntryLock { file, path: path.to_owned() }));
+            }
+        }
+    }
+}
+
+impl Drop for EntryLock {
+    fn drop(&mut self) {
+        // Removed while still held: a compile that opens the path after
+        // this creates a new file, and one that opened this file before
+        // finds it removed once it locks it.
+        let _ = std::fs::remove_file(&self.path);
+        let _ = self.file.unlock();
+    }
+}
+
+/// Whether the open `file` is the file now at `path`.
+#[cfg(unix)]
+fn same_file(file: &std::fs::File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    match (file.metadata(), std::fs::metadata(path)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+/// Whether the open `file` is the file now at `path` (no file identity
+/// here; a file still at `path` is taken to be it).
+#[cfg(not(unix))]
+fn same_file(_file: &std::fs::File, path: &Path) -> bool {
+    path.is_file()
 }
 
 /// Writes `bytes` to `path` through a temporary file beside it, named
@@ -452,13 +661,22 @@ mod tests {
         let pcm = dir.join("std.pcm");
         let src = dir.join("std.cppm");
         let hdr = dir.join("h.h");
-        std::fs::write(&pcm, b"KILNBMI\0x").unwrap();
+        std::fs::write(&pcm, b"KILNBMI\0xxxxxxxx12345678").unwrap();
         std::fs::write(&src, b"export module std;").unwrap();
         std::fs::write(&hdr, b"int x;").unwrap();
         let stamp = dir.join("std.stamp");
         write_stamp(&stamp, &pcm, &src, &[hdr.display().to_string()]).unwrap();
         assert!(stamp_valid(&stamp, &pcm));
         assert!(!stamp_valid(&stamp, &dir.join("other.pcm")));
+        // The same bytes renamed into place by another compile (a new
+        // modification time) still match; other bytes do not.
+        std::fs::write(dir.join("std.pcm.new"), b"KILNBMI\0xxxxxxxx12345678").unwrap();
+        std::fs::rename(dir.join("std.pcm.new"), &pcm).unwrap();
+        assert!(stamp_valid(&stamp, &pcm));
+        std::fs::write(&pcm, b"KILNBMI\0xxxxxxxx12345679").unwrap();
+        assert!(!stamp_valid(&stamp, &pcm));
+        std::fs::write(&pcm, b"KILNBMI\0xxxxxxxx12345678").unwrap();
+        assert!(stamp_valid(&stamp, &pcm));
         // A changed size invalidates it.
         std::fs::write(&hdr, b"int xy;").unwrap();
         assert!(!stamp_valid(&stamp, &pcm));
