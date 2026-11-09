@@ -544,7 +544,7 @@ impl Sema<'_, '_> {
         let loc = range.lo;
         let Some((_, info)) = self.ast.partial_spec_info(p) else { return };
         let tmpl = info.template;
-        if !self.primary_at_least_as_specialized(p, loc) {
+        if !self.partial_not_more_specialized(p, loc) {
             return;
         }
         let var = self.kind_of(p) == DeclKind::Var;
@@ -565,16 +565,15 @@ impl Sema<'_, '_> {
         let loc = range.lo;
         let Some((_, info)) = self.ast.partial_spec_info(p) else { return };
         let info = *info;
-        if info.has_pack {
-            return;
-        }
         let list = *self.ast.templates.param_list(info.params);
         let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
         let args: Vec<TemplateArg> = self.ast.types.args(info.canonical).to_vec();
-        if args.iter().any(|&a| self.is_pack_arg(a)) {
-            return;
-        }
         let mut d = DeducedArgs::new(list.depth, params.len());
+        // A pack expansion deduces its pack as a whole, unless it is
+        // not last or its pattern is a non-deduced context
+        // ([temp.deduct.type]/5.7, /9: `X<Ts..., T>`, `X<0, N+1 ...>`).
+        d.expansions = true;
+        d.self_deduce = true;
         if self.deduce_args(&args, &args, true, &mut d, loc) != Tdk::Success {
             return;
         }

@@ -2313,6 +2313,14 @@ impl Sema<'_, '_> {
         if x.kind == CandidateKind::ConvFn || y.kind == CandidateKind::ConvFn {
             return x.kind == y.kind && self.more_specialized_conversion(t1, t2);
         }
+        // So do they in an explicit call `x.operator const char *()`
+        // (clang `TPOC_Conversion` for a `CXXConversionDecl` candidate).
+        let conv = |s: &Self, t: DeclId| {
+            s.templated_function(t).is_some_and(|f| s.kind_of(f) == DeclKind::CXXConversion)
+        };
+        if conv(self, t1) && conv(self, t2) {
+            return self.more_specialized_conversion(t1, t2);
+        }
         if !set.oper {
             return self.more_specialized(t1, t2, nargs);
         }

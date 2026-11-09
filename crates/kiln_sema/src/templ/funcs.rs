@@ -704,9 +704,20 @@ impl Sema<'_, '_> {
                 TypeView::Function(p) => p.num_params() as usize,
                 _ => 0,
             };
+            // [temp.deduct.partial]/3.3 uses the function types; for
+            // conversion function templates, which have no parameters,
+            // that orders them by their conversion types, as in a call
+            // (clang `TPOC_Other` deduces from the whole function type).
+            let conv = name.kind() == DeclNameKind::Conversion;
             let best = (0..matches.len()).find(|&i| {
                 (0..matches.len()).all(|j| {
-                    i == j || self.more_specialized(matches[i].template, matches[j].template, n)
+                    let (a, b) = (matches[i].template, matches[j].template);
+                    i == j
+                        || if conv {
+                            self.more_specialized_conversion(a, b)
+                        } else {
+                            self.more_specialized(a, b, n)
+                        }
                 })
             });
             if let Some(i) = best {

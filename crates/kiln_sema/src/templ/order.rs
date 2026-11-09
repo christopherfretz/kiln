@@ -448,21 +448,28 @@ impl Sema<'_, '_> {
         r
     }
 
-    /// Whether the primary template of partial specialization `p` is at
-    /// least as specialized as `p` ([temp.spec.partial.general]/9.2,
-    /// DR1495; clang `isMoreSpecializedThanPrimary`): `p`'s parameters
-    /// deduce from the primary's own parameters as unique synthesized
-    /// arguments, and substituting them gives those arguments back. Then
-    /// `p` is not more specialized than the primary. Conservative: false
-    /// whenever either side has a pack or constraints (ordered by
-    /// constraints, WP-1017 follow-up), when a primary non-type parameter
-    /// has a placeholder or dependent type, and for a member template of a
+    /// Whether partial specialization `p` is not more specialized than
+    /// its primary template ([temp.spec.partial.general]/9.2, DR1495;
+    /// clang `isMoreSpecializedThanPrimary`, which asks
+    /// `getMoreSpecialized` in both directions):
+    /// - the primary is at least as specialized as `p`: `p`'s parameters
+    ///   deduce from the primary's own parameters as unique synthesized
+    ///   arguments, and substituting them gives those arguments back
+    ///   (`A<U, T>`, `B<Ts...>` of `B<class, class...>`); or
+    /// - with a pack on either side, `p` is not at least as specialized
+    ///   as the primary: the primary's parameters do not deduce from
+    ///   `p`'s arguments (`C<0, Ts...>` of `C<int, class, class...>`:
+    ///   the expansion `Ts...` cannot match the non-pack `class`).
+    ///
+    /// Conservative: false whenever either side has constraints (ordered
+    /// by constraints, WP-1053), when a primary non-type parameter has a
+    /// placeholder or dependent type, and for a member template of a
     /// templated class (checked per instantiation by clang).
-    pub(crate) fn primary_at_least_as_specialized(&mut self, p: DeclId, loc: Loc) -> bool {
+    pub(crate) fn partial_not_more_specialized(&mut self, p: DeclId, loc: Loc) -> bool {
         let Some((_, info)) = self.ast.partial_spec_info(p) else { return false };
         let info = *info;
         let lp = *self.ast.templates.param_list(info.params);
-        if info.has_pack || lp.depth > 0 {
+        if lp.depth > 0 {
             return false;
         }
         let head = self.head_template(info.template);
@@ -478,7 +485,7 @@ impl Sema<'_, '_> {
             return false;
         }
         let primary: Vec<DeclId> = self.ast.lists.iter::<DeclId>(lt.params).collect();
-        if primary.iter().any(|&x| self.ast.template_parm(x).is_none_or(|i| i.pack)) {
+        if primary.iter().any(|&x| self.ast.template_parm(x).is_none()) {
             return false;
         }
         // A primary non-type parameter typed `auto` or by another
@@ -496,8 +503,10 @@ impl Sema<'_, '_> {
         if typed_by_param {
             return false;
         }
+        let packs = info.has_pack
+            || primary.iter().any(|&x| self.ast.template_parm(x).is_some_and(|i| i.pack));
         let ps: Vec<TemplateArg> = self.ast.types.args(info.canonical).to_vec();
-        if ps.len() != primary.len() || ps.iter().any(|&a| self.is_pack_arg(a)) {
+        if !packs && (ps.len() != primary.len() || ps.iter().any(|&a| self.is_pack_arg(a))) {
             return false;
         }
         let as_: Vec<TemplateArg> = primary
@@ -508,8 +517,16 @@ impl Sema<'_, '_> {
             })
             .collect();
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        // The primary at least as specialized as `p`.
         let mut d = DeducedArgs::new(lp.depth, self.ast.lists.len(lp.params));
-        let mut ok = self.deduce_args(&ps, &as_, true, &mut d, loc) == Tdk::Success
+        // [temp.deduct.type]/9: the primary's pack expansion is deduced
+        // as a whole by one of `p`'s (as in partial ordering).
+        d.expansions = true;
+        let mut ok = self.deduce_args(&ps, &as_, true, &mut d, loc) == Tdk::Success;
+        if ok && info.has_pack {
+            self.empty_undeduced_packs(lp.params, &mut d);
+        }
+        ok = ok
             && d.first_undeduced().is_none()
             && !self.deduced_nttp_type_mismatch(lp.params, &d.args);
         if ok {
@@ -517,11 +534,25 @@ impl Sema<'_, '_> {
             let injected = self.ast.types.arg_list(&as_);
             ok = self.partial_args_match(&info, lp.depth, deduced, injected, true, loc);
         }
+        // `p` at least as specialized as the primary: only a pack can
+        // make this fail (a non-pack argument always deduces a primary
+        // parameter; clang 22's type check of a deduced non-type
+        // argument is not modelled).
+        let mut not_reverse = false;
+        if !ok && packs {
+            let mut r = DeducedArgs::new(lt.depth, primary.len());
+            r.expansions = true;
+            let fwd = self.deduce_args(&as_, &ps, true, &mut r, loc) == Tdk::Success;
+            if fwd {
+                self.empty_undeduced_packs(lt.params, &mut r);
+            }
+            not_reverse = !fwd || r.first_undeduced().is_some();
+        }
         let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
-        ok && !failed
+        (ok && !failed) || not_reverse
     }
 
-    /// [`Self::primary_at_least_as_specialized`]: a non-type parameter
+    /// [`Self::partial_not_more_specialized`]: a non-type parameter
     /// deduced from a synthesized argument of another type (`signed char C`
     /// from `long N`) fails deduction ([temp.deduct.type]/20, clang
     /// `err_deduced_non_type_template_arg_type_mismatch`), so the primary

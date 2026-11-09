@@ -322,6 +322,11 @@ impl Sema<'_, '_> {
                 continue;
             }
             if wi < written.len() {
+                // A pack expansion for a parameter that is not a pack may
+                // cover the ones after it too: they take no default
+                // (clang `PackExpansionIntoNonPack`; `X<Ts...>` of
+                // `X<class, class, class = int>`).
+                open_expansion |= self.is_pack_expansion_arg(written[wi]);
                 let a = self.check_template_arg(tmpl, depth, p, written[wi], arg_loc(wi), &out)?;
                 if let (true, ArgView::Expr { expr, .. }) =
                     (self.inst_dependent_nttp_arg(p, a), a.view())

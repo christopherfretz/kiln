@@ -419,7 +419,19 @@ impl Sema<'_, '_> {
             if m.targs.is_some() {
                 continue;
             }
+            let n = set.cands.len();
             self.add_candidate(&mut set, d, f, CandidateKind::Method, IcsOptions::NONE);
+            // `x.operator const char *()` names the specializations its
+            // conversion templates deduce ([temp.mem]/6): they stay
+            // template specializations for [over.match.best.general]/2.4-5
+            // (clang `getPrimaryTemplate`), ordered by their conversion
+            // types ([temp.deduct.partial]/3.2).
+            if self.kind_of(d) == DeclKind::CXXConversion
+                && let Some((_, info)) = self.ast.spec_info(d)
+                && let Some(c) = set.cands.get_mut(n)
+            {
+                c.template = Some(info.template);
+            }
         }
         let out = self.resolve_set(&mut set);
         self.ovl.lists.truncate(mark);
