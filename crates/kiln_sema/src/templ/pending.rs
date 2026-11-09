@@ -106,6 +106,7 @@ impl Sema<'_, '_> {
                     }
                     f.start = None;
                     f.child_ns = 0;
+                    f.trace = None;
                     self.inst.stack.push(f);
                     true
                 });
