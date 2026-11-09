@@ -78,6 +78,8 @@ cargo xtask libcxx [options] [<dir>...]
 | `--compile-timeout <secs>` | Limit of each compile and link step. Default 120 s for `harness` and `release`, 300 s for `debug` (also with `--compiler`: the default follows `--profile`). |
 | `--mem-limit <MiB>` | Address-space cap for every process (`spec/harness.md` "Resource limits"). kiln steps get kiln's stack reservation on top. Default 8192. `0` means no cap. |
 | `--report <file.md>` | Write the generated region of a status page (see "Report"). |
+| `--results <file.tsv>` | Write one line per test (see "Results file"). |
+| `--shard <K/N>` | Run only shard K of N (1 ≤ K ≤ N; anything else is a usage error): of the sorted selection (after `--filter`), the tests whose 0-based index is K − 1 modulo N. Round robin, so the shards of one selection are disjoint, cover it, and get a similar mix of directories. The start line is preceded by `xtask libcxx: shard K/N: <n> of <total> tests`. The x86_64 sweep (`.github/workflows/sweep.yml`, WP-961) runs the full suite as 6 shards. |
 | `--keep` | Keep the scratch directories under `<target>/xtask-libcxx/` and the run's `TMPDIR` root `<temp>/kiln-tmp-<pid>-<nanos>/` (see "Commands"). |
 | `--no-fail` | Exit 0 even when the run has failures. |
 | `-v` | Print every result, with the tail of the failing step's stderr. |
@@ -723,6 +725,23 @@ that have it anywhere). Clusters are ranked by first, then any, then text.
 Each cluster has an example test (preferring one where it is the first key)
 and that test's raw message.
 
+## Results file
+
+`--results <file.tsv>` (WP-961) writes the run's results in selection
+order, for merging shards or comparing two runs (the report's tables are
+not mergeable). Line 1 is the header `# outcome<TAB>test<TAB>detail<TAB>first-key<TAB>wall-s`;
+then one line per test with five tab-separated fields: the outcome tag
+(`PASS`, `FAIL`, `XFAIL`, `XPASS`, `UNSUPPORTED`, `KILLED`, `TIMEOUT`,
+`ERROR`), the path relative to `libcxx/test`, the detail (the failing
+stage — `compile`, `link`, `run`, `expected-fail-but-succeeded` — for
+FAIL, KILLED and TIMEOUT; the reason for UNSUPPORTED and ERROR), the first
+cluster key ("Classification" in "Report"), and the wall time in seconds
+with two decimals. An empty field is `-`; a tab or newline inside a field
+becomes a space. `scripts/libcxx-results.py` merges such files (exit 2 if
+a test is in two of them) into the counts per outcome for the whole
+selection, `std/` and `libcxx/`, the pass rate, and the list of failing
+tests, each marked against an optional `--baseline` run.
+
 ## Tests backing this spec
 
 Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
@@ -751,6 +770,9 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
 - `report.rs`: counts, page rendering (with the `kiln build profile` row
   and the two peak-RSS rows, measured and unavailable), marker splicing.
 - `mod.rs`: options, discovery, `lit.local.cfg` lookup;
+  `shards_partition_the_selection` (`--shard` parsing; the shards are
+  disjoint, cover the selection, round robin) and `results_file_lines`
+  (the `--results` header, fields, `-` and tab replacement, WP-961);
   `profiles_and_compile_timeouts` (`--profile`, the per-profile compile
   limit, `--compile-timeout`, the profile named for a `--compiler` binary);
   `tag_selection`

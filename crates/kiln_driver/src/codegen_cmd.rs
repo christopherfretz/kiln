@@ -898,6 +898,12 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String, input: &str) -> C
     if let Some(cm) = args.codegen.code_model {
         cmd.arg(format!("-code-model={}", cm.name()));
     }
+    // clang `addX86AlignBranchArgs` (WP-961): the assembler pads branches
+    // so none crosses or ends on a 32-byte boundary. Off x86 the option is
+    // a driver error (`features::resolve`).
+    if args.codegen.branches_within_32b && !tc.target.is_aarch64() {
+        cmd.arg("-x86-branches-within-32B-boundaries");
+    }
     // spec/driver.md "Debug information": clang's debugger tuning, and
     // `-gsplit-dwarf`'s `.dwo` file.
     if args.debug.kind() != kiln_codegen::DebugInfoKind::None {
