@@ -6234,8 +6234,8 @@ and aggregate element types.
   implicitly `noexcept` ([except.spec]/11).
 - **The allocated type** ([expr.new]/1-2): not a function type, a
   reference or an incomplete type; `auto` is deduced from a single
-  parenthesized or braced argument (`new auto(x)`; `new auto*(p)` is
-  unsupported). The new-declarator's first bound is converted to `size_t`
+  parenthesized or braced argument (`new auto(x)`; `new auto*(p)`
+  deduces as `auto *x = p`, tests/conformance/expr.new/new-auto-pointer.cpp). The new-declarator's first bound is converted to `size_t`
   ([expr.new]/8). From C++14 that is an implicit conversion (clang
   `PerformImplicitConversion`, `AssignmentAction::Converting`): a class
   bound uses its non-explicit conversion functions (templates deduced
