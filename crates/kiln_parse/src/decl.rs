@@ -937,13 +937,18 @@ impl Parser<'_, '_> {
                 // for C++ compilers that are not GCC >= 13; kiln reports
                 // itself as clang. In a system header such a typedef of a
                 // P1467 keyword or GCC `_FloatNx` keyword declares nothing
-                // (spec/types.md §5.1).
+                // (spec/types.md §5.1). x86-64's `typedef __float128
+                // _Float128;` is remembered: clang makes the two one type
+                // there, so their function types interconvert (WP-1058).
                 Kw::Float32 | Kw::Float64 | Kw::StdFloat128 | Kw::Float32x | Kw::Float64x
                     if matches!(ds.storage, Some((StorageSpec::Typedef, _)))
                         && ds.has_type_specifier()
                         && self.peek_is(1, Punct::Semi)
                         && self.s.diags.sm().is_in_system_header(loc) =>
                 {
+                    if k == Kw::StdFloat128 && ds.base == TypeSpecKind::Float128 {
+                        self.s.glibc_float128_alias = true;
+                    }
                     self.bump();
                     break;
                 }
@@ -3806,6 +3811,7 @@ impl Parser<'_, '_> {
             let mut types = Vec::new();
             let mut ok = true;
             while !self.at(Punct::RParen) && !self.at_eof() {
+                let begin = self.loc();
                 let Some(t) = self.parse_type_id() else {
                     ok = false;
                     self.skip_until(&[Punct::RParen], false, false);
@@ -3817,7 +3823,7 @@ impl Parser<'_, '_> {
                     Some(l) => self.s.act_pack_expansion_type(t, l),
                     None => t,
                 };
-                types.push(t);
+                types.push((t, begin));
                 if self.eat(Punct::Comma).is_none() {
                     break;
                 }

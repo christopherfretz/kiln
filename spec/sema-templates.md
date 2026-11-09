@@ -6711,9 +6711,25 @@ WP-956 makes several changes to conversion function templates.
   `this` access; this matches clang's `ActOnDependentIdExpression`. The
   code paths are `is_dependent_conversion_name`,
   `try_dependent_member_q`, `act_on_id_expression_dn` and
-  `implicit_dependent_member`.
-- **Tests.** `tests/conformance/temp.mem/conversion-template-dependent-ordering.cpp`
-  and `conversion-template-ambiguous.cpp`.
+  `implicit_dependent_member`. A qualified `Base<T>::operator T()` or
+  `D::operator T()`, `x.operator T()`, `p->operator T()` and
+  `&C<T>::operator T` take the same path through their dependent
+  qualifier or object.
+- **Substituting the name.** The `DeclName` holds the canonical
+  conversion type, and `member_name` substitutes that type (clang's
+  `TransformDeclarationNameInfo` transforms the written type instead;
+  the result is canonicalized in both). A canonical dependent type keeps
+  each expression as its profile. Substitution therefore treats a
+  profile as its first expression: a non-dependent profiled template
+  argument (the `2` of `Arr<T, 2>` or `V_t<T, 2>`) in `template_arg`, and a canonical `decltype(e)` or `typeof(e)` in
+  `ty_node`, as for a canonical array bound (WP-1126). Lookup that finds
+  nothing at instantiation is clang's `no member named 'operator int *'
+  in 'S<int>'`. clang prints a template-id target type by its template
+  name alone (`'operator Arr'`), and kiln prints the arguments too
+  (`'operator Arr<int, 2>'`).
+- **Tests.** `tests/conformance/temp.mem/conversion-template-dependent-ordering.cpp`,
+  `conversion-template-ambiguous.cpp`, and
+  `tests/conformance/temp.dep.expr/conversion-function-id-dependent-{run,forms-run,nttp-run,not-found}.cpp`.
 
 The texts are taken from clang 19's `DiagnosticSemaKinds.td`. The goldens
 are authoritative: WP-070 checks each of them in `templates/diag/`.
