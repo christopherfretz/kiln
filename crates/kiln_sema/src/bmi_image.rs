@@ -46,7 +46,7 @@ mod body;
 use body::{Bodies, BodyState, Root};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 4;
+pub(crate) const IMAGE_VERSION: u32 = 3;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -3262,20 +3262,24 @@ mod tests {
     /// panic.
     #[test]
     fn fuzz_never_panics() {
-        let bytes = encode(&sample());
+        fuzz(&encode(&sample()));
+        fuzz(&encode(&class_sample()));
+    }
+
+    fn fuzz(bytes: &[u8]) {
         for n in 0..bytes.len() {
             assert!(decode(&bytes[..n]).is_err(), "prefix {n} decoded");
         }
         for i in 0..bytes.len() {
             for x in [0x01u8, 0x80, 0xff, 0x7f, 0x10] {
-                let mut b = bytes.clone();
+                let mut b = bytes.to_vec();
                 b[i] ^= x;
                 let _ = decode(&b);
             }
         }
         for i in 0..bytes.len().saturating_sub(3) {
             for v in [u32::MAX, u32::MAX / 2, 0x0100_0000, 0, NONE - 1] {
-                let mut b = bytes.clone();
+                let mut b = bytes.to_vec();
                 b[i..i + 4].copy_from_slice(&v.to_le_bytes());
                 let _ = decode(&b);
             }
@@ -3285,7 +3289,7 @@ mod tests {
             s ^= s << 13;
             s ^= s >> 7;
             s ^= s << 17;
-            let mut b = bytes.clone();
+            let mut b = bytes.to_vec();
             let i = (s as usize) % b.len();
             b[i] = (s >> 32) as u8;
             let j = ((s >> 16) as usize) % b.len();

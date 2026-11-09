@@ -1362,7 +1362,7 @@ calls two of the functions in a `static_assert` and at run time.
 
 - `std` still falls back (its global module fragment, S5), so "on" is
   the replay and matches "off" within noise; the rest of what it needs
-  is listed in "What `import std;` still needs after S2".
+  is listed in "What `import std;` still needs after S3".
 - An imported `constexpr` function evaluates no slower from the image
   than textually included: 0.04 s against 0.06 s textual and 0.07 s for
   the replay (clang 19: 0.33 s and 0.36 s with
@@ -1384,6 +1384,46 @@ calls two of the functions in a `static_assert` and at run time.
 - Commands as for Part 2a; the textual runs compile the module's body
   as a header; clang adds `-fconstexpr-steps=100000000` for the
   constexpr module.
+
+**Part 2a, stage S3: classes (WP-1065).** Same method (harness profile,
+aarch64, `/usr/bin/time`, median of 3, load ~19). Two workloads: the
+corpus's largest module that takes the image
+(`module.interface/Inputs/img-class.cppm`, 108 image records: bases,
+constructors with ctor-initializers, a destructor, nested classes,
+static members, qualified member types), imported by
+`image-class-run.cpp`; and a class-heavy synthetic interface: 200
+namespaces of four exported classes each (a point with operators, a
+base, a derived class with a member subobject, ctor-initializers and an
+out-of-line member, a class with a member enumeration, typedef and
+private fields) plus a `constexpr` variable computed through them (8001
+lines, 10,000 image records), whose importer evaluates members of two
+namespaces in a `static_assert` and runs members of two others.
+
+| run | largest corpus module | class-heavy module |
+|---|---|---|
+| kiln `--precompile`, image off | 0.03 s, 11.2 MiB, 26,458 B | 0.09 s, 16.3 MiB, 277,178 B |
+| kiln `--precompile`, image on | 0.03 s, 11.4 MiB, 42,713 B | 0.12 s, 25.5 MiB, 1,888,335 B |
+| kiln import, image off, `-fsyntax-only` | 0.04 s, 11.1 MiB | 0.10 s, 15.3 MiB |
+| kiln import, image on, `-fsyntax-only` | 0.05 s, 10.7 MiB | **0.05 s**, 16.6 MiB |
+| kiln import, image off, `-c` | 0.06 s, 61.9 MiB | 0.12 s, 61.7 MiB |
+| kiln import, image on, `-c` | 0.07 s, 61.9 MiB | 0.11 s, 61.5 MiB |
+| clang 19 `--precompile` | 0.01 s, 85.4 MiB, 41,572 B | 0.10 s, 93.3 MiB, 1,746,980 B |
+| clang 19 import, `-fsyntax-only` | 0.01 s, 85.4 MiB | 0.01 s, 85.3 MiB |
+| clang 19 import, `-c` | 0.02 s, 93.7 MiB | 0.01 s, 93.2 MiB |
+
+- The class-heavy import halves (`-fsyntax-only` 0.10 s to 0.05 s); the
+  importer's peak RSS rises 1.3 MiB (15.3 to 16.6 MiB) for the eager
+  decode. Under `-c` the gain is 0.01 s, since codegen of the used
+  inline members dominates. The corpus module is too small to separate
+  from noise (one record decode against one tiny parse).
+- The image grows the file 6.8x (277,178 B to 1,888,335 B, about 160 B
+  per record) and precompile's peak RSS from 16.3 to 25.5 MiB: the
+  fixed-width records of S2, whose compact encoding is WP-1095.
+- On/off equivalence: identical diagnostics and LLVM IR from the image
+  and from the replay for both importers (and for every module test of
+  the corpus under `cargo xtask test --bmi-image`), and the same exit
+  status at run time; the blank-source check (as for S2) shows the
+  image was used.
 
 **Part 2 item 1, results inside instantiations (WP-1046).** Same method
 (harness profile, aarch64, `/usr/bin/time`, load ~20; precompile median of
@@ -1498,6 +1538,7 @@ its owner is an imported named unit. Templates still fall back (S4).
     and a compound body (no function-try-block). Since S2 it may be
     inline, `constexpr` or `consteval` (its body is carried, "Bodies"),
     have a deduced return type, and have default arguments;
+  - since S3, a class and its members as "Classes (S3)" below lists;
   - a namespace-scope variable that is not a template or
     `thread_local`. Since S2 it may be `const`, `constexpr`,
     `constinit` or `inline`, and have an initializer (carried as
@@ -1506,19 +1547,23 @@ its owner is an imported named unit. Templates still fall back (S4).
     compiled and not carried (since S2);
   - an enumeration (scoped or unscoped, fixed or not) or an enumerator;
   - a `typedef` or alias declaration that is not a template;
-- no declaration is invalid or implicit, or carries attributes;
+- no declaration is invalid or implicit (since S3, except the implicit
+  special members of a carried class), or carries attributes;
 - every type is built from builtins, pointers, references, constant
   arrays (the bound's expression is dropped), arrays of unknown bound,
   function types (exception specification none, `noexcept` or
-  `noexcept(true)`), the unit's own enumerations and typedefs,
-  parenthesised types, unqualified elaborated types and cv-qualifiers;
+  `noexcept(true)`), the unit's own enumerations, typedefs and (since
+  S3) classes, parenthesised types, elaborated types and cv-qualifiers.
+  Since S3 an elaborated type may be qualified (`ns::S`, `::ns::C::T`)
+  when every qualifier step is `::`, one of the image's namespaces or
+  one of its classes;
 - every location is invalid, or a file location in the unit's main file
   (a macro expansion falls back);
 - no name lies in a namespace named `std` or is reserved.
 
 The first offending node's reason is the `-v` note's (see "Fallback").
 Before the per-kind checks, a declaration kind 2a never carries names
-its family: "a class", "a template", "a using-declaration,
+its family: "a template", "a using-declaration,
 using-directive or namespace alias", "a linkage specification", or "a
 declaration the image does not carry yet" for the rest. Inside a carried
 body, the expression, statement and local-declaration kinds are those of
@@ -1633,7 +1678,8 @@ interface are merged by (template, remapped arguments) and keep their
 carried constants (WP-1046).
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 2` since S2, rejected if different). The file
+format word (`IMAGE_VERSION = 3` since S3, 2 for S2; rejected if
+different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
 not part of the fingerprint: a file with an image can be used by an
@@ -1670,9 +1716,13 @@ type    := tag:u8 payload            1 pointer(qref), 2 lref(qref),
                                      9 enum(decl:u32),
                                      10 typedef(decl:u32),
                                      11 qarray(cv:u8, qref),
-                                     12 sugar(k:u8)
-decl    := kind:u8 flags:u8 owner:u8 name:u32 ctx:u32 lexical:u32
-           loc:u32 prev:u32 payload
+                                     12 sugar(k:u8),
+                                     13 record(decl:u32),
+                                     14 elabq(keyword:u8, n:u32,
+                                       step*n, qref)
+step    := 0 | 1 decl:u32 | 2 qref template:u8   `::`, namespace, type
+decl    := kind:u8 flags:u8 owner:u8 access:u8 name:u32 ctx:u32
+           lexical:u32 loc:u32 prev:u32 payload
 ```
 
 In a record, `u32::MAX` means none (for `ctx`, the translation unit),
@@ -1681,19 +1731,43 @@ the translation unit. Tag 11 is a cv-qualified array spelled through a
 typedef, parentheses or an elaborated name (`const Quad&` where `Quad`
 names an array type): the reader rebuilds it with the type context's
 `qualify`, which pushes the qualifiers onto the element type as
-[dcl.array]/6 and [basic.type.qualifier]/3 require. An elaborated type
-carries no nested-name-specifier. The exception byte is 0 (none), 1
+[dcl.array]/6 and [basic.type.qualifier]/3 require. Tag 7 is an
+unqualified elaborated type; tag 14 (S3) one with a nested-name-specifier,
+whose steps are `::` (first only), a namespace record of the image, or a
+type (a class of the image, through any carried type) with its
+`template` keyword bit; a namespace step counts as a dependency in the
+type table's order. The exception byte is 0 (none), 1
 (`noexcept`), 2 (`noexcept(true)`) or 3 (`throw()`).
 
 The owner byte holds bit 0 = in the purview and bit 1 = exported (the
-`ModuleTable` owner point of the record). The payloads are:
+`ModuleTable` owner point of the record). The access byte (S3) is a
+class member's `Access` (1 public, 2 protected, 3 private) and 0
+elsewhere. A name word at or above `0xFFFF_FE00` is a special name
+(S3): `0xFFFF_FF00` constructor, `0xFFFF_FF01` destructor,
+`0xFFFF_FF02` conversion function, `0xFFFF_FE00 + op` `operator@`; the
+importer recomputes the name from the class or type. The kind byte is
+1 namespace, 2 export, 3 function, 4 variable, 5 enumeration, 6
+enumerator, 7 typedef, 8 alias, 9 label, 10 lifetime-extended
+temporary, 11 class, 12 field, 13 access specifier, 14 implicit
+special member. The payloads are:
 
-- function: type, `FnSpec` bits (u32), the parameters (n, then per
+- function: the declaration kind (0 function, 1 member function, 2
+  constructor, 3 destructor, 4 conversion function; 0 exactly when the
+  context is not a class), type, `FnSpec` bits (u32), a byte that is 1
+  when the exception specification is deferred to the function (an
+  implicitly `noexcept` destructor; the type is written without one),
+  the parameters (n, then per
   parameter: name index into `pnames` or none, location, type, the
   parameter flags u16, the storage flags u8 and the default argument, an
   expression index or `u32::MAX`), then the body: 0 (none), 1 and the
   offsets of its braces (a dropped non-inline body), or 2 and a
-  statement index (a carried body, S2);
+  statement index (a carried body, S2), then the ctor-initializers (S3;
+  n, then per initializer: `CtorInitKind` u8, target u32, written
+  index u8, the initializer's expression index, location). A `Base`
+  initializer's target is the base's position in the class's base
+  list; a `Field` initializer's is a field record of the same class
+  (which may follow the constructor); a `Delegating` one's is 0. Only a
+  constructor with a carried body has initializers;
 - variable: type, `VarSpec` bits (u32), the initializer (an expression
   index or `u32::MAX`) and the evaluation state (`u32::MAX` not
   evaluated, `u32::MAX - 1` not a constant, else a constant index);
@@ -1705,7 +1779,20 @@ The owner byte holds bit 0 = in the purview and bit 1 = exported (the
   and when complete the computed ones;
 - enumerator: its type and the value (16 bytes, little-endian `i128`);
 - typedef and alias: the underlying type;
-- namespace and export: nothing.
+- namespace and export: nothing;
+- class (S3): the `TagKind` byte, then 0 (a declaration) or 1 and the
+  definition: its `DefinitionBits` (u64, without `COMPLETE` and
+  `BEING_DEFINED`), the end (the first record after its members) and
+  the base-specifiers (n, then per base: type, location, access);
+- field (S3): type, the carried `FieldData` flags (`mutable`, the
+  initializer style, has a default member initializer), the bit-field
+  width and the default member initializer (expression indices or
+  `u32::MAX`);
+- access specifier (S3): nothing (its access is the header's);
+- implicit special member (S3): the `SpecialKind` (0 default
+  constructor, 1 copy and 2 move constructor, 3 copy and 4 move
+  assignment, 5 destructor); its context is a complete class that
+  precedes it, and the record lies after that class's end.
 
 **Bodies (S2, WP-1064).** The four body sections follow the lookup
 table. Every expression and statement record is the AST node's header
@@ -1717,7 +1804,8 @@ expression or statement index (or an optional one, `u32::MAX` for
 none), a declaration reference of a given class, a constant or string
 index, a location, a type (`qref`, two words), a counted list of
 expressions, statements, declarations or types, a cast's base path (0
-none, 1 empty), a nested-name-specifier (a count, then components:
+none, else 1 + the number of steps, then each step's class record and
+base position, S3), a nested-name-specifier (a count, then components:
 0 `::`, 1 namespace and record, 2 type and `qref` and bool), and a
 statement's attribute list. A declaration reference is a record index,
 `0x8000_0000 | i` for the image's i-th parameter (counting the
@@ -1739,7 +1827,10 @@ record's kind byte is the index):
   `noexcept`; constant expressions; materialized temporaries,
   expressions with cleanups and opaque values; GNU statement
   expressions; `throw`; default arguments; `&&label`; array init loops
-  and their index;
+  and their index; since S3 member access, `this`, member calls,
+  constructions (`CXXConstructExpr`, `T(args)`), default member
+  initializers, bound temporaries (the destructor to run) and
+  derived-to-base casts with their path;
 - statements: compound, declaration, expression, null, `if`, `switch`,
   `case`, `default`, `break`, `continue`, `while`, `do`, `for`,
   range-`for`, `return`, label, `goto`, and attributed statements whose
@@ -1773,11 +1864,13 @@ behave identically.
 
 Falls back (each with its `-v` reason):
 
-- any expression on a class (member access, `this`, construction,
-  temporaries with destructors, `new`/`delete`, `typeid`,
-  `dynamic_cast`): S3;
-- lambdas, which declare a local class ("a local declaration the image
-  does not carry"): S3;
+- `new`/`delete` ("a new or delete expression": the global allocation
+  functions are implicit declarations the image does not carry),
+  `typeid` and `dynamic_cast` ("a typeid or dynamic_cast expression"),
+  `std::initializer_list` construction, inherited constructors,
+  pseudo-destructor calls: follow-ups of S3 (WP-1065 in the backlog);
+- lambdas ("a lambda expression"; a closure is a local class): S3
+  follow-up;
 - template expressions, requires-expressions and concepts: S4;
 - `try` blocks and function-try-blocks, coroutines, expansion
   statements, `asm`, contract assertions, computed `goto`, and
@@ -1786,6 +1879,72 @@ Falls back (each with its `-v` reason):
 - a lifetime-extended temporary with a constant value (bound to a
   `static` or `constexpr` reference) or at namespace scope;
 - any location in a macro expansion or another file: S7.
+
+**Classes (S3, WP-1065).** A class (`struct`, `class` or `union`) is
+a class record; its members are the records between it and its end:
+fields, access specifiers, member functions, constructors, the
+destructor and conversion functions, static data members, nested
+classes, member enumerations and member typedefs, each with its access
+byte. A member function defined outside its class is a later record
+whose context is the class and whose lexical context is the enclosing
+namespace, after the class's end, with the in-class declaration as
+`prev`. What is carried and what is recomputed:
+
+- carried: the `DefinitionBits` of the definition (triviality, the
+  implicit members' constexpr-ness and parameter shapes, empty/standard
+  layout, ...), frozen as sema computed them at the closing brace, so
+  the importer does not redo [class.prop] or [class.default.ctor]
+  analysis; the base-specifiers; every field with its default member
+  initializer and bit-field width; every member function's body as for
+  S2 (an inline member body is carried, a non-inline one is braces only,
+  [class.mfct]/1, because the module's object file defines it); a
+  constructor's ctor-initializers;
+- recomputed: the implicit special members. The record says only which
+  ones sema had declared (sema declares them lazily, [class.copy.ctor]/6
+  and peers, plus whatever the module's own bodies used); the importer
+  calls the same `declare_implicit` on the completed class, so their
+  signatures, `noexcept` and `constexpr` come from the carried bits and
+  match the replay's, and any other one is declared on demand as
+  usual. Their definitions are synthesized on first ODR-use as for a
+  replayed class. Layout, the record's size and the field offsets are
+  recomputed by the importer's codegen and constant evaluator from the
+  members; special names are recomputed from the class.
+
+The importer builds each class with `begin_record_definition`, its
+members in order, and closes it with `complete_record_definition` and
+the carried bits; it then builds the bodies and attaches the fields'
+initializers and widths, the ctor-initializers (a base by its position
+in the built class's base list, a field by its record) and the bodies.
+The decoder checks, before anything is built, that members lie inside
+their class, that an out-of-line member and an implicit member name a
+complete earlier class, that a class is defined once and its end lies
+inside its parent's, that bases are earlier complete classes (not
+itself), that access bytes are 1 to 3 exactly on class members, that
+function kinds match their context, that only constructors have
+ctor-initializers, and every initializer's target.
+
+A class falls back (with its `-v` reason) when it is polymorphic or has
+a virtual function ("a polymorphic class", "a virtual function"), has a
+virtual base, inherits constructors or assignment operators, is an
+anonymous union or struct (or a member of one, or names one through a
+typedef), is a template or a closure type, is incomplete, has
+implicit special members that sema declared eagerly to resolve
+overloads ("a class whose implicit special members need overload
+resolution": a member or base with a non-trivial or ambiguous special
+member; WP-1065 follow-up), declares a friend (WP-1072/WP-1097), a
+class-specific allocation function, a defaulted comparison or an
+out-of-line defaulted function, a `[[no_unique_address]]` field, any
+other side data sema keeps in its member maps ("a declaration with
+side data the image does not carry", for example a member named
+through a qualified name), or any `DefinitionBits` outside
+`DEF_BITS`. A function declared through a typedef of a function type,
+a conversion function named through a typedef, and an implicit
+declaration that is not a carried special member (a builtin such as
+`__builtin_printf` that a body names declares a library function, "a
+builtin or library function") fall back too. A qualified type whose
+qualifier names a namespace that is not in the image ("a qualifier
+naming a namespace outside the image"), a namespace alias, a dependent
+name or a splice falls back.
 
 **The reader.** When the module's `UnitBegin` event carries an image, the
 parser calls `act_on_unit_begin` and then the image load. The load
@@ -1812,7 +1971,18 @@ classes and templates). The follow-ups, in priority order:
    `consteval` functions. **Done (WP-1064)**, see "Bodies"; bodies are
    loaded eagerly, but every record stays addressable by index for
    S-lazy (WP-1069);
-2. S3: classes (fields, methods, bases, special members, vtables);
+2. S3: classes (fields, methods, bases, special members). **Done for
+   non-polymorphic classes (WP-1065)**, see "Classes (S3)". Its
+   follow-ups: polymorphic classes and virtual functions (vtables, key
+   functions, the `dynamic_cast`/`typeid` RTTI they need), virtual
+   bases, friends (WP-1072/WP-1097), anonymous unions and structs,
+   classes whose implicit members need overload resolution, inherited
+   constructors, defaulted comparisons and out-of-line defaulted
+   functions, class-specific allocation functions,
+   `[[no_unique_address]]`, the member side maps (qualified member
+   names), and in bodies `new`/`delete` (the implicit global allocation
+   functions), `typeid`/`dynamic_cast`, `std::initializer_list` and
+   lambdas;
 3. S4: templates as patterns;
 4. S5: global module fragments with ODR merging (replacing the name
    gate);
@@ -1820,16 +1990,23 @@ classes and templates). The follow-ups, in priority order:
 6. S-lazy: the lazy lookup hook (see above);
 7. S7: locations in other files and in macro expansions.
 
-**What `import std;` still needs after S2.** libc++'s `std.cppm` falls
+**What `import std;` still needs after S3.** libc++'s `std.cppm` falls
 back on its first node, the global module fragment (S5): every header is
 included there, and the purview is only `export namespace std { using
-std::...; }`. With S2 in, the constructs between `std` and the image
+std::...; }`. With S3 in, the constructs between `std` and the image
 are, by stage:
 
-- S3: classes (all of the containers, `string`, iterators, allocators,
-  `format`), and in bodies member access, `this`, constructors,
-  destructors, temporaries and `new`/`delete`, and lambdas (a local
-  class);
+- S3 follow-ups: classes are carried since WP-1065, but not yet the
+  polymorphic ones (`exception`, `ios_base`, `locale::facet`,
+  `memory_resource`, `error_category`), virtual bases (`basic_istream`
+  and `basic_ostream` over `basic_ios`), friends (granted across
+  libc++, `__wrap_iter`'s for one), anonymous unions (`optional`,
+  `variant`, `string`'s representation) or classes whose implicit
+  members need overload resolution (most wrappers of a member with a
+  user-declared special member), `[[no_unique_address]]` (allocators,
+  `unique_ptr`'s deleter through `_LIBCPP_COMPRESSED_PAIR`), and in bodies
+  `new`/`delete` and lambdas; every one of these is inside a template
+  in libc++ and so also waits for S4;
 - S4: templates, concepts and requires-expressions, which are most of
   the headers;
 - S5: the global module fragment itself, and entity merging with other
