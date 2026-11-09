@@ -387,6 +387,20 @@ impl Substituter<'_, '_, '_> {
                     ExcSpec::Dynamic(l) => {
                         let tys = self.sema.ast.types.type_list_types(l).to_vec();
                         let tys = self.expand_types(&tys, loc)?;
+                        // Each substituted type is checked as a written one
+                        // ([except.spec]/2), at the function type's begin; a
+                        // failure fails the substitution (clang
+                        // `TransformExceptionSpec` from
+                        // `TransformFunctionProtoType`: in deduction a
+                        // substitution failure, else the declaration is
+                        // invalid).
+                        let mut tys = tys;
+                        for t in &mut tys {
+                            *t = self
+                                .sema
+                                .check_specified_exception_type(*t, at)
+                                .ok_or(SubstFail)?;
+                        }
                         // `throw(Ts...)` with an empty pack is `throw()`, non-throwing
                         // ([except.spec]/12 as of C++14).
                         if tys.is_empty() {
