@@ -8,6 +8,7 @@ use std::process::ExitCode;
 
 mod bench;
 mod clang_ast;
+mod clang_neg;
 mod diag_split;
 mod dist;
 mod entity_lint;
@@ -45,6 +46,9 @@ commands:
   libcxx      run libc++'s own tests (llvmorg-19.1.7 libcxx/test; --tag picks another
               checkout) with kiln; --gate m3 is the M3 gate; not part of ci (`cargo xtask libcxx --help`; contract
               in spec/libcxx.md; needs scripts/fetch-libcxx-tests.sh)
+  clang-neg   run clang's own C++ `-verify` tests through kiln and measure what kiln
+              wrongly accepts (docs/status/accepts-invalid.md); informational, not part
+              of ci (`cargo xtask clang-neg --help`; contract in spec/clang-neg.md)
   libstdcxx   compile each public libstdc++ header alone with kiln and clang++-19 and
               report per-header status (docs/status/libstdcxx.md); informational, not
               part of ci (`cargo xtask libstdcxx --help`; contract in spec/libstdcxx.md)
@@ -81,6 +85,7 @@ fn main() -> ExitCode {
         Some("test") => test::main(args),
         Some("bench") => bench::main(args),
         Some("clang-ast") => clang_ast::main(args),
+        Some("clang-neg") => clang_neg::main(args),
         Some("diag-split") => diag_split::main(args),
         Some("gen-pp-corpus") => gen_pp::main(args),
         Some("gen-reflect") => gen_reflect::main(args),

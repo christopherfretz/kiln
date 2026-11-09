@@ -57,6 +57,18 @@ pub enum TagUse {
     Friend,
 }
 
+/// The bound on [`ClassifyMemo`]'s entries: the table is cleared when
+/// full, so it never holds more than this many results.
+const CLASSIFY_MEMO_MAX: usize = 4096;
+
+/// [`Sema::classify_name`]'s memo: (name, qualifier, nested-name lookup)
+/// to the class, valid while [`Sema::lookup_stamp`] is `stamp`.
+#[derive(Debug, Default)]
+pub(crate) struct ClassifyMemo {
+    stamp: u64,
+    map: kiln_source::fx::FxHashMap<(Symbol, Option<DeclId>, bool), NameClass>,
+}
+
 /// What a name denotes, for the parser's decisions
 /// ([basic.lookup], clang's `Sema::ClassifyName`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -9662,7 +9674,51 @@ impl Sema<'_, '_> {
     /// What an identifier names here (for parser decisions,
     /// [basic.lookup.unqual]); `qualifier` is the context named by a
     /// preceding nested-name-specifier.
+    ///
+    /// Memoized under [`Sema::lookup_stamp`] (spec/parse.md §2.5): the
+    /// parser's lookahead classifies each name of a nested template-id
+    /// several times before parsing it.
     pub fn classify_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        self.classify_memoized(name, qualifier, false, || {
+            self.classify_name_uncached(name, qualifier)
+        })
+    }
+
+    /// [`Sema::classify_name`] through the memo; `nested` keys
+    /// [`Sema::classify_nested_name`]'s results apart.
+    fn classify_memoized(
+        &self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+        nested: bool,
+        f: impl FnOnce() -> NameClass,
+    ) -> NameClass {
+        let stamp = self.lookup_stamp();
+        let key = (name, qualifier, nested);
+        {
+            let mut m = self.classify_memo.borrow_mut();
+            if m.stamp != stamp {
+                m.stamp = stamp;
+                m.map.clear();
+            }
+            if let Some(&c) = m.map.get(&key) {
+                return c;
+            }
+        }
+        let c = f();
+        let mut m = self.classify_memo.borrow_mut();
+        // A nested classification may have refreshed the memo; keep only
+        // results computed under the current stamp, and bound the table.
+        if m.stamp == stamp {
+            if m.map.len() >= CLASSIFY_MEMO_MAX {
+                m.map.clear();
+            }
+            let _ = m.map.insert(key, c);
+        }
+        c
+    }
+
+    fn classify_name_uncached(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
         let qualifier = qualifier.map(|q| self.type_name_qualifier(q));
         if let Some(q) = qualifier
             && self.kind_of(q) == DeclKind::ClassTemplate
@@ -9760,6 +9816,12 @@ impl Sema<'_, '_> {
     /// whose specializations are types ([basic.lookup.qual]/1), so a
     /// variable `fs` does not hide the namespace alias in `fs::path(..)`.
     pub fn classify_nested_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        self.classify_memoized(name, qualifier, true, || {
+            self.classify_nested_name_uncached(name, qualifier)
+        })
+    }
+
+    fn classify_nested_name_uncached(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
         let class = self.classify_name(name, qualifier);
         if !matches!(class, NameClass::Value(_) | NameClass::FunctionTemplate(_)) {
             return class;
