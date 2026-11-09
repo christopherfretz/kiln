@@ -542,6 +542,36 @@ fault counts and trap ids unchanged.
   inside another evaluation. Not recorded in the stats; a success is
   memoized as any call (`Func::memo`), so a later use of the function
   costs a lookup.
+- Potential-constant frames (WP-1150, `frame.rs`, clang
+  `Expr::isPotentialConstantExpr`'s call frame, spec/sema.md "Never
+  constant"): the never-constant walk keeps the values of a body's local
+  variables while its parameters stay unknown.
+  - `Oven::frame_local(bridge, d, init, frame) ->
+    Result<Option<FrameObject>, EvalFailure>` allocates local `d`'s
+    object as a writable static (`Origin::Var(d)`, so it survives the
+    per-evaluation reset) and initializes it from `init` (`None`: left
+    uninitialized). `Ok(None)` means `d` is not tracked: a reference, a
+    volatile object, a non-literal type or one needing destruction, or a
+    type with a pointer, virtual pointer, union, `mutable` or volatile
+    subobject (an evaluation could leave a pointer into its own frame or
+    heap there), or past 64 KiB of tracked objects. A failed
+    initialization frees the object and returns its failure.
+  - `Oven::evaluate_in_frame(bridge, e, frame, FrameEval) ->
+    Result<ConstValueId, EvalFailure>` evaluates the full-expression `e`
+    for its scalar value (`Value`) or its side effects (`Discard`, giving
+    `true`), and a modification of a tracked object stays.
+  - In both, each `(DeclId, FrameObject)` of `frame` designates that
+    object when its variable is named, and any other variable (a
+    parameter) is not a constant expression when read. The evaluation is
+    manifestly constant-evaluated, with notes, and calls fail quietly as
+    in a potential evaluation. It is not recorded, and fails if it leaks
+    an allocation. Inside another evaluation, nothing is tracked or
+    evaluated.
+  - `Oven::frame_free(o)` frees a tracked object (its scope ended),
+    `Oven::frame_snapshot(frame)` gives its objects' bytes and
+    initialization (the walk's loop-cycle test), and `Oven::frame_end()`
+    forgets the stubs compiled for the walk, which are cached by
+    expression, evaluation and frame variables (`compile_frame`).
 - `Oven::is_constant_initialized(bridge, var) -> bool`
   ([basic.start.static]/2): silent, not recorded; uses the variable's
   cached evaluation state when known.

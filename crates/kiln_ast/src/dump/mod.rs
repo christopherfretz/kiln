@@ -2409,6 +2409,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             ExprKind::CXXBindTemporaryExpr => self.line.push_str(" (CXXTemporary)"),
             // clang 19 always rebuilds a default member initializer.
             ExprKind::CXXDefaultInitExpr => self.line.push_str(" has rewritten init"),
+            ExprKind::CXXDefaultArgExpr if exprs.default_arg_rewritten(e).is_some() => {
+                self.line.push_str(" has rewritten init");
+            }
             ExprKind::CXXThisExpr => {
                 if exprs.this_is_implicit(e) {
                     self.line.push_str(" implicit");
