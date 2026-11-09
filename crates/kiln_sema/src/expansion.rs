@@ -218,10 +218,8 @@ impl Sema<'_, '_> {
         let mut h = DeclHead::new(self.ctx, DeclName::ident(sym), loc);
         h.flags = h.flags.with(DeclFlags::IMPLICIT);
         let storage = if automatic { VarStorage::None } else { VarStorage::Static };
-        let spec = VarSpec::new()
-            .with_storage(storage)
-            .with_constexpr(true)
-            .with_init_style(InitStyle::C);
+        let spec =
+            VarSpec::new().with_storage(storage).with_constexpr(true).with_init_style(InitStyle::C);
         self.builder().var(h, ty, spec, None)
     }
 
