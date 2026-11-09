@@ -116,6 +116,7 @@ note_reference_is_return_value = Note (1) "{0} returns a reference";
 note_reference_temporary_list_init = Note (1) "in initialization of temporary of type {0} created to list-initialize this reference";
 note_referenced_type_template = Note (1) "{0:class|type alias} template declared here";
 note_remove_abs = Note (1) "remove the call to '{0}' since unsigned values cannot be negative";
+note_remove_enum_friend = Note (1) "remove '{0}' to befriend an enum";
 note_remove_parens_for_variable_declaration = Note (0) "remove parentheses to silence this warning";
 note_reorder_ctor = Note (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
 note_replace_default_with_delete = Note (0) "replace 'default' with 'delete'";

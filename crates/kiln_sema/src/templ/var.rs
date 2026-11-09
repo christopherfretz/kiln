@@ -570,6 +570,7 @@ impl Sema<'_, '_> {
         if self.kind_of(self.ctx) == DeclKind::CXXRecord {
             self.set_member_access(p);
         }
+        self.check_partial_more_specialized(p, range);
         self.check_partial_deducible(p, range);
         Ok(p)
     }

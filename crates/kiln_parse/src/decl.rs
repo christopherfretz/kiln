@@ -1920,7 +1920,7 @@ impl Parser<'_, '_> {
 
     /// The class-key or `enum` (with its `class`/`struct`) at `k`: the tag
     /// keyword and the enum's `EnumData` scoped flags.
-    fn parse_tag_key(&mut self, ds: &mut DeclSpec, k: Kw) -> (TagKeyword, u32) {
+    fn parse_tag_key(&mut self, ds: &mut DeclSpec, k: Kw) -> (TagKeyword, u32, Loc) {
         let keyword = match k {
             Kw::Struct => TagKeyword::Struct,
             Kw::Class => TagKeyword::Class,
@@ -1928,16 +1928,32 @@ impl Parser<'_, '_> {
             _ => TagKeyword::Enum,
         };
         let mut scoped = 0;
+        let mut scoped_loc = Loc::INVALID;
         if keyword == TagKeyword::Enum {
             if let Some(l) = self.eat_kw(Kw::Class) {
                 scoped = EnumData::SCOPED;
+                scoped_loc = l;
                 ds.scoped_key_end = Some(l.with_offset(5));
             } else if let Some(l) = self.eat_kw(Kw::Struct) {
                 scoped = EnumData::SCOPED | EnumData::SCOPED_STRUCT;
+                scoped_loc = l;
                 ds.scoped_key_end = Some(l.with_offset(6));
             }
         }
-        (keyword, scoped)
+        (keyword, scoped, scoped_loc)
+    }
+
+    /// [dcl.type.elab]/4 (clang `warn_friend_enum`): `friend enum E;`
+    /// befriends nothing; the note offers to drop the enum-key.
+    fn diag_friend_enum(&mut self, kw_loc: Loc, scoped: u32) {
+        let key = match scoped {
+            0 => "enum",
+            s if s & EnumData::SCOPED_STRUCT != 0 => "enum struct",
+            _ => "enum class",
+        };
+        let note = self.s.diag(DiagId::note_remove_enum_friend, kw_loc).arg(key);
+        let w = self.s.diag(DiagId::sema_friend_enum, kw_loc).with_note(note);
+        self.emit(w);
     }
 
     /// The attributes after a class-key or enum-key. After a class-key,
@@ -1967,7 +1983,7 @@ impl Parser<'_, '_> {
 
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
         let kw_loc = self.bump().span.lo;
-        let (keyword, scoped) = self.parse_tag_key(ds, k);
+        let (keyword, scoped, scoped_loc) = self.parse_tag_key(ds, k);
         let mut attrs = self.parse_tag_key_attrs(keyword);
         let qual_loc = self.tok().span.lo;
         self.incomplete_standalone_tag_qualifier(ds, keyword, qual_loc);
@@ -2006,6 +2022,20 @@ impl Parser<'_, '_> {
             final_loc = self.parse_class_virt_specifiers();
         }
         let use_ = self.tag_use(ds, is_class, final_loc, ctx);
+        let elaborated_scoped =
+            scoped != 0 && fixed.is_none() && matches!(use_, TagUse::Reference | TagUse::Friend);
+        if elaborated_scoped {
+            // [dcl.type.elab]/1: an elaborated-type-specifier uses `enum`,
+            // not `enum class` (clang `ext_elaborated_enum_class`).
+            let e = self
+                .s
+                .diag(DiagId::sema_elaborated_enum_class, scoped_loc)
+                .arg(u8::from(scoped & EnumData::SCOPED_STRUCT != 0));
+            self.emit(e);
+        }
+        if keyword == TagKeyword::Enum && use_ == TagUse::Friend {
+            self.diag_friend_enum(kw_loc, scoped);
+        }
         // [expr.prim.id.qual]/3: the nested-name-specifier of a
         // class-head-name or enum-head-name is declarative and cannot
         // contain a splice-scope-specifier; the definition declares
@@ -2031,7 +2061,7 @@ impl Parser<'_, '_> {
             self.s.check_standalone_tag_qualifier(keyword, qual_loc);
         }
         if let (Some(q), Some((n, nloc)), TagUse::Reference | TagUse::Friend) = (qual, name, use_)
-            && self.s.is_dependent_ctx(q.ctx)
+            && (self.s.is_dependent_ctx(q.ctx) || self.s.is_unknown_specialization_tag(q.ctx, n))
         {
             self.dependent_tag_reference(ds, q.nns, (n, nloc), keyword, kw_loc);
             return;
@@ -2045,6 +2075,9 @@ impl Parser<'_, '_> {
         // A definition after a failed qualifier is parsed as an unnamed
         // class, declaring nothing.
         let name = if qual_failed { None } else { name };
+        // Recovering as plain `enum`: a reference, not an
+        // opaque-enum-declaration.
+        let scoped = if elaborated_scoped { 0 } else { scoped };
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs, use_);
         if use_ == TagUse::Definition && self.s.tag_body_skipped(d) {

@@ -971,12 +971,7 @@ impl Substituter<'_, '_, '_> {
             return Err(SubstFail);
         };
         if !self.sema.tag_matches(d, keyword) {
-            let msg = self
-                .sema
-                .diag(DiagId::sema_use_with_wrong_tag, loc)
-                .arg(crate::decl::sym_str(self.sema, name));
-            let msg = self.sema.note_prev(msg, d, false);
-            self.sema.emit(msg);
+            self.sema.diag_wrong_tag(crate::decl::sym_str(self.sema, name), loc, d);
             return Err(SubstFail);
         }
         self.sema.mark_type_referenced(d);

@@ -229,6 +229,14 @@ impl Sema<'_, '_> {
             TagForm::ExplicitSpec
         };
         let name = self.template_name_for(tmpl);
+        // [dcl.type.elab]/3: a specialization's class-key agrees with the
+        // primary's (clang `ActOnClassTemplateSpecialization`).
+        if matches!(form, TagForm::Partial | TagForm::ExplicitSpec)
+            && let Some(pat) = self.pattern_of(tmpl)
+            && !self.tag_matches(pat, keyword)
+        {
+            self.diag_wrong_tag(self.decl_name(tmpl), kw_loc, pat);
+        }
         match form {
             TagForm::Partial => {
                 let r = self.act_on_partial_spec(keyword, tmpl, args, &locs, use_, range);
@@ -273,6 +281,13 @@ impl Sema<'_, '_> {
                     return Ok((None, self.ast.types.elaborated(keyword, None, t)));
                 }
                 let spec = self.get_class_spec(tmpl, args, &locs, name_loc)?;
+                if !self.tag_matches(spec, keyword) {
+                    // clang `ActOnTagTemplateIdType`, naming the
+                    // specialization type.
+                    let rec = self.tag_type(spec);
+                    let t = self.ast.types.template_specialization(name, list, Some(rec), false);
+                    self.diag_wrong_tag(self.ty_str(t), kw_loc, spec);
+                }
                 Ok((Some(spec), self.spec_tag_type(keyword, name, args, spec)))
             }
         }
@@ -414,6 +429,7 @@ impl Sema<'_, '_> {
         if self.kind_of(self.ctx) == DeclKind::CXXRecord {
             self.set_member_access(p);
         }
+        self.check_partial_more_specialized(p, range);
         self.check_partial_deducible(p, range);
         Ok(p)
     }
@@ -517,6 +533,28 @@ impl Sema<'_, '_> {
             self.ast.types.canonical(t)
         };
         ty(d) == ty(p)
+    }
+
+    /// [temp.spec.partial.general]/9.2 (DR1495; clang's
+    /// `checkMoreSpecializedThanPrimary`): partial specialization `p` is
+    /// more specialized than its primary template, else
+    /// `-Winvalid-partial-specialization` (an error by default) at its
+    /// name, with the primary's location noted.
+    pub(crate) fn check_partial_more_specialized(&mut self, p: DeclId, range: Span) {
+        let loc = range.lo;
+        let Some((_, info)) = self.ast.partial_spec_info(p) else { return };
+        let tmpl = info.template;
+        if !self.primary_at_least_as_specialized(p, loc) {
+            return;
+        }
+        let var = self.kind_of(p) == DeclKind::Var;
+        let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(tmpl).loc());
+        let d = self
+            .diag(DiagId::sema_partial_spec_not_more_specialized, loc)
+            .range(range)
+            .arg(u32::from(var))
+            .with_note(note);
+        self.emit(d);
     }
 
     /// [temp.spec.partial.general]/8 (clang's

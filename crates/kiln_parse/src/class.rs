@@ -2118,6 +2118,11 @@ impl Parser<'_, '_> {
             d.invalid = true;
         }
         d.special = Some((SpecialName::Conversion(ty), loc));
+        d.conv_type_loc = if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+            ds.constraint_loc
+        } else {
+            ds.type_loc.unwrap_or(ds.loc)
+        };
     }
 
     /// conversion-declarator ([class.conv.fct]/1): ptr-operators only,

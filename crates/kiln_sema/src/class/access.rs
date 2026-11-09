@@ -757,7 +757,8 @@ impl Sema<'_, '_> {
         }
         let Some(declaring) = self.declaring_class(first) else { return true };
         let instance_member = self.is_instance_member(self.templated_or_self(first));
-        let t = Target { member: Some(first), decl_access, declaring, instance_member, object: None };
+        let t =
+            Target { member: Some(first), decl_access, declaring, instance_member, object: None };
         let naming = self.ast.definition(declaring).unwrap_or(declaring);
         let ec = self.effective_context();
         let unpriv = self.unprivileged_access(naming, t.declaring, t.decl_access);
@@ -953,7 +954,12 @@ impl Sema<'_, '_> {
     /// [class.access.base]/4): `inherited virtual base class 'B' has
     /// private destructor` at the class name. Returns whether it is
     /// accessible.
-    pub(crate) fn check_vbase_dtor_access(&mut self, dtor: DeclId, vb: DeclId, class: DeclId) -> bool {
+    pub(crate) fn check_vbase_dtor_access(
+        &mut self,
+        dtor: DeclId,
+        vb: DeclId,
+        class: DeclId,
+    ) -> bool {
         let loc = self.ast.decls.get(class).loc();
         let cty = self.tag_type(class);
         let vty = self.tag_type(vb);

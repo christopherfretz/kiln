@@ -1537,7 +1537,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             // Dedup is per instantiation (spec/diag.md §7.4).
             d = d.context(self.inst.stack.context_key());
             let sev = self.diags.severity_at(id, d.loc());
-            if self.inst.stack.is_sfinae() {
+            // clang's `NoSFINAE` errors (`SFINAE_Report`) print even in
+            // a SFINAE context, with the context notes.
+            if self.inst.stack.is_sfinae() && !is_sfinae_report(id) {
                 if self.inst.suppress_access.get() && is_access_error(id) {
                     if let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
                         && s.first.is_none()
@@ -2121,6 +2123,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             s
         })
     }
+}
+
+/// clang's `NoSFINAE` errors: reported even in a SFINAE context, not a
+/// substitution failure (a constraint whose satisfaction depends on
+/// itself, [temp.constr.atomic]/3).
+fn is_sfinae_report(id: DiagId) -> bool {
+    matches!(id, DiagId::sema_constraint_depends_on_self)
 }
 
 /// clang's `SFINAEFailure` warnings: in a SFINAE context they are a

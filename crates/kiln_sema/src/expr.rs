@@ -5954,7 +5954,20 @@ impl Sema<'_, '_> {
         loc: Loc,
         range: Option<kiln_source::Span>,
     ) -> bool {
-        let name = Self::trait_name(kind);
+        self.check_trait_operand_named(kind, Self::trait_name(kind), ty, loc, range)
+    }
+
+    /// [`Self::check_trait_operand`] with the operator spelled `name` in
+    /// the diagnostics (`alignas(type-id)`, [dcl.align]/3: as
+    /// `alignas(alignof(type-id))`; clang `CheckAlignasTypeArgument`).
+    pub(crate) fn check_trait_operand_named(
+        &mut self,
+        kind: TraitKind,
+        name: &'static str,
+        ty: QualType,
+        loc: Loc,
+        range: Option<kiln_source::Span>,
+    ) -> bool {
         if self.is_error_type(ty) {
             return false;
         }
