@@ -4005,6 +4005,48 @@ the current element (the next one follows). A pattern (not expanded) is
 never compiled. Test: `tests/conformance/stmt.expand/oven-memory.cpp`
 (48 elements, each copy allocating 256 bytes: `peak_bytes<=512`).
 
+### Switch dispatch — Landed (WP-1144)
+A `switch` (`compile.rs` `switch_stmt`) compiles its condition, then one
+compare-and-branch per case value (a GNU range: two compares) to an
+out-of-line stub per label, then the default (or the end). Each stub
+charges the steps clang's label hunt would charge (`EvaluateStmt` with a
+`Case`: one per statement visited before the label, stepping into a
+`for`/`if` init-statement) and jumps to the label's code. A label that is
+a direct child of the body (or of a label chain there) is an ordinary
+jump target: that path, which is every switch without nested labels,
+emits exactly the code it did before WP-1144.
+
+A label may also be anywhere in a sub-statement of the body
+([stmt.switch]/2; Duff's device): inside a `do`, `while` or `for` body,
+a nested block, or an `if` branch. Jumping straight to it would skip the
+`ScopeEnter`/`Alloc` of every block between the body and the label, so
+the jump descends instead. Such a switch has a selector register `sel`
+(0 at entry); label k's stub sets `sel = k + 1` and jumps toward the
+first statement on its path. Each statement on a nested label's path
+that opens a scope with code (a block, an `if`, a loop's init or
+per-iteration scope) is a *hunt site*: the jump lands before the scope
+entry, and right after it `JmpIfNot sel` skips to the ordinary code,
+else a jump (one label below) or a compare per label (several) goes on
+toward the next site. At the label the jump lands on a pad that clears
+`sel` and enters the label's code, so the ordinary path, and every later
+iteration of the enclosing loops (increment, condition, `continue`,
+`break`), runs with `sel == 0`: a site costs one not-taken branch then.
+A site whose scope emits nothing is no site; a statement off every path
+is compiled as before. The jump bypasses only declarations sema allows
+([stmt.dcl]/3: vacuous initialization), and block locals are allocated
+at scope entry, so a bypassed variable exists, uninitialized, at the
+label. A label the descent cannot reach (none known) traps at the label
+with "a 'case' label in this statement is not supported yet".
+
+Where clang's evaluator diverges from the program's run-time result,
+kiln follows the run time: a bypassed class object with a trivial
+default constructor is usable after the label (clang starts only
+variables with no initializer), and a `for` entered by the jump goes on
+with its increment (clang re-runs the loop from its init-statement).
+Tests: `tests/conformance/stmt.switch/nested-labels{,-run,
+-clang-divergence}.cpp`, `tests/conformance/expr.const/duffs-device.cpp`;
+bench `bench/oven/switch-dense.cpp` (the ordinary path).
+
 ### Coroutines — rejected (WP-351)
 A coroutine is never a constexpr function ([dcl.constexpr]/3; Sema
 rejects `constexpr`/`consteval` coroutines and drops the implicit
