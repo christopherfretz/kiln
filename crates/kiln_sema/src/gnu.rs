@@ -25,11 +25,13 @@ use crate::target;
 /// The state saved across a statement expression
 /// ([`Sema::act_on_start_stmt_expr`]): the enclosing full-expression's
 /// pending potential odr-uses, which the statements inside must not
-/// resolve.
+/// resolve, and its pending cleanups, which their full-expressions must
+/// not take.
 #[derive(Debug)]
 pub struct StmtExprScope {
     outer_odr: Vec<ExprId>,
     outer_imm: crate::consteval::SavedImm,
+    outer_cleanup: crate::class::CleanupState,
 }
 
 impl Sema<'_, '_> {
@@ -46,12 +48,18 @@ impl Sema<'_, '_> {
     }
 
     /// The `({` of a statement expression: its statements are separate
-    /// full-expressions, so the enclosing one's pending odr-uses are set
-    /// aside until [`Sema::act_on_stmt_expr`].
+    /// full-expressions, so the enclosing one's pending odr-uses and
+    /// cleanups are set aside until [`Sema::act_on_stmt_expr`]. Without
+    /// the cleanups, the first full-expression inside took the
+    /// `ExprWithCleanups` of a temporary created before the `({` (`D{1}.v
+    /// + ({ 0; })`), and that temporary lived to the end of the block
+    /// (clang's `PushExpressionEvaluationContext` saves `Cleanup` as
+    /// `ParentCleanup`; WP-1081).
     pub fn act_on_start_stmt_expr(&mut self) -> StmtExprScope {
         StmtExprScope {
             outer_odr: std::mem::take(&mut self.pending_odr),
             outer_imm: self.take_immediate_state(false),
+            outer_cleanup: std::mem::take(&mut self.cleanup),
         }
     }
 
@@ -102,6 +110,12 @@ impl Sema<'_, '_> {
         let inner = std::mem::replace(&mut self.pending_odr, scope.outer_odr);
         self.pending_odr.extend(inner);
         self.restore_immediate_state(scope.outer_imm);
+        // clang's `PopExpressionEvaluationContext`: `Cleanup.mergeFrom(
+        // ParentCleanup)` (the statements' own full-expressions have
+        // already consumed theirs).
+        let inner = std::mem::replace(&mut self.cleanup, scope.outer_cleanup);
+        self.cleanup.needs |= inner.needs;
+        self.cleanup.side_effects |= inner.side_effects;
         let result = self.stmt_expr_result(body);
         let ty = result.map_or(QualType::VOID, |e| self.ast.exprs.get(e).ty());
         let dependent_ctx = self.in_template();

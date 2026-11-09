@@ -5299,6 +5299,16 @@ for them.
   - `act_on_start_stmt_expr` sets aside the enclosing
     full-expression's pending odr-uses (§5.2), and `act_on_stmt_expr`
     restores them.
+  - It also sets aside the enclosing full-expression's pending
+    cleanups (`Sema::cleanup`, `class/temporary.rs`).
+    `act_on_stmt_expr` restores them, merged with whatever is left
+    inside (clang's `ParentCleanup`, `Cleanup.mergeFrom`). Each statement inside is a full-expression
+    of its own. Without this, the first one would take the outer
+    cleanups and wrap them in its `ExprWithCleanups`. A temporary
+    before the statement expression (`D{1}.v + ({ 0; })`) would then
+    live to the end of the enclosing block instead of its
+    full-expression (WP-1081;
+    `tests/conformance/ext.gnu.stmt.expr/temporary-before-stmt-expr-run.cpp`).
   - The final expression statement goes through
     `act_on_stmt_expr_result`: decay, then copy-initialization of a
     prvalue of its cv-unqualified type. A class prvalue is kept as is;
@@ -8508,8 +8518,13 @@ innermost enclosing loop). Kiln follows clang (19 and 22 agree, C++):
 - **Oracle disagreement.** GCC rejects every `break`/`continue` in a
   loop or switch header ("break statement not within loop or switch");
   kiln follows clang.
-- **Not covered:** expansion statements' headers (`template for`), and
-  clang's dropping of the erroneous jump (a `StmtError`), which lets it
+- **Newer clang.** clang's main branch (the P1306 and labelled-loop
+  work) opens every loop only for its body (`Scope::EnterLoopBody`;
+  `LeaveLoopBody` before a `do`'s condition), so a jump in a `while`,
+  `do` or `for` header targets the enclosing statement there. Kiln
+  follows the released clangs; revisit when the oracle moves past 22.
+- **Expansion statements' headers** (`template for`): §7.6a.
+- **Not covered:** clang's dropping of the erroneous jump (a `StmtError`), which lets it
   still report "no case matching constant switch condition" after
   `switch (({ continue; 1; }))` with no loop; kiln keeps the statement and
   misses that warning.
@@ -8999,6 +9014,47 @@ not supported yet`.
   jump-scope, fall-off and reachability analyses (`children` yields the
   init, prelude and expansions of an expanded statement and the init and
   body of a pattern).
+- **Jumps in the header** (WP-1081). A GNU statement expression can put
+  `break`, `continue`, `return` or `goto` in the init-statement or the
+  expansion-initializer. clang 22 has no P1306, so the oracles are GCC
+  16.1, clang's P1306 branch (`ParseForStatement`,
+  `EmitCXXExpansionStmtInstantiation`) and its constant evaluator; they
+  agree on everything below except where noted.
+  - *Sema.* The parser opens the expansion statement as a loop
+    (`act_on_start_loop` in `parse_expansion_rest`) for its body only, as
+    for a range-based `for` (§7.4a). A header `break`/`continue` needs an
+    enclosing loop, or a switch for `break`. An outer expansion statement
+    is such a loop. Without one, it is "'break' statement not in loop or
+    switch statement" / "'continue' statement not in loop statement" at
+    the keyword. This is checked on the pattern, so a template definition
+    is diagnosed. A lambda in the header starts a new function.
+  - *Run time.* The init-statement, an iterating range and a
+    destructuring initializer belong to the preamble, which runs once
+    before the elements. Their `break`/`continue` reach the enclosing
+    loop or switch. An enumerating element initializes the
+    for-range-declaration inside its own element block
+    (`{ decl = E_i; body }`). There `continue` ends that element and
+    `break` leaves the expansion statement, although Sema required an
+    enclosing target. Codegen (`kiln_codegen`), the CFG
+    (`cfg_expansion`: init and prelude outside the per-element jump
+    frames) and the Oven all follow that structure. `return` leaves the
+    function and `goto` leaves to its label. Destructors run on every
+    path: the init-statement's variable, and a destructuring
+    initializer's temporary, when a jump leaves the preamble.
+  - *CFG.* The init-statement's `break` leaving an enclosing `for(;;)`
+    makes -Wreturn-type fire. An element's `break` does not. GCC warns
+    the same way; clang's CFG does not model expansion statements.
+  - *Constant evaluation.* A taken jump out of the statement expression
+    is clang's "this use of statement expressions is not supported in a
+    constant expression" at the statement holding it (§7.4a). An untaken
+    jump, or a loop wholly inside the statement expression, evaluates
+    normally. GCC 16.1 evaluates the jumps; kiln follows clang.
+  - *Iterating range.* `__range` is `static constexpr` (P1306R5), so a
+    statement-expression jump in the range is "constexpr variable
+    '__range' must be initialized by a constant expression" plus the
+    statement-expression note. GCC 16.1 accepts it with a non-constexpr
+    range (CWG3131, which clang's branch does not implement).
+  - Tests: `tests/conformance/stmt.expand/header-jump-{run,errors,cfg,consteval,consteval-neg}.cpp`.
 - **N = 0.** No block is built, so a body that is ill-formed for every
   element is never instantiated.
 - **Feature macro.** `__cpp_expansion_statements` 202506L at C++26 at
