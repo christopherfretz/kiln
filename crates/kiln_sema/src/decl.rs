@@ -3971,9 +3971,13 @@ impl Sema<'_, '_> {
         // invalid: it redeclares nothing and is not reported as a
         // template.
         let mut main_invalid = false;
-        if self.is_global_main_name(ctx, name)
+        let fn_static = matches!(ds.storage, Some((StorageSpec::Static, _)));
+        let c_linkage_main =
+            !method && !friend && self.is_c_linkage_main_name(lexical, name, fn_static);
+        if (self.is_global_main_name(ctx, name) || c_linkage_main)
             && let Some(p) = self.ast.types.proto(ty).copied()
         {
+            self.warn_main_decl(&p, c_linkage_main, d.name_loc());
             // [basic.start.main]/3: `main` is not static or inline (clang's
             // `CheckMain` diagnoses and keeps the declaration).
             if let Some((StorageSpec::Static, l)) = ds.storage {
@@ -4006,6 +4010,9 @@ impl Sema<'_, '_> {
                 let m = self.diag(DiagId::sema_constexpr_main, l).arg(which);
                 self.emit(m);
                 spec = spec.with_constexpr_kind(ConstexprKind::None).with_implicit_inline(false);
+            }
+            if !main_invalid {
+                self.warn_main_one_arg(&p, d.name_loc());
             }
             if !main_invalid && self.templ.cur.is_some() {
                 self.diagnose_main_template(d.name_loc());
@@ -5827,8 +5834,7 @@ impl Sema<'_, '_> {
         if self.kind_of(ctx) == DeclKind::CXXRecord {
             return self.act_on_static_member(ds, ty, d, name, spec);
         }
-        let local_extern = spec.storage() == VarStorage::Extern;
-        self.check_main_variable(ctx, name, local_extern, ds.loc);
+        self.check_main_variable(ctx, name, spec.storage(), ds.loc);
         let mut prev_ok = None;
         // A redefinition (or a redeclaration with another type) is invalid
         // (clang `setInvalidDecl`), so a later lookup that also finds the

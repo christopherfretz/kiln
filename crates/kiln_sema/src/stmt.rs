@@ -1510,6 +1510,9 @@ impl Sema<'_, '_> {
         let Some((fdecl, mut ret)) = self.func.as_ref().map(|f| (f.decl, f.ret)) else {
             return self.builder().return_stmt(value, None, loc);
         };
+        if let Some(e) = value {
+            self.warn_main_returns_bool(fdecl, e, loc);
+        }
         if self.func.as_ref().is_some_and(|f| f.auto_ret.is_some()) {
             // A return in a discarded statement of a non-templated
             // function takes no part in return type deduction
