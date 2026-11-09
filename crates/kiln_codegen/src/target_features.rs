@@ -41,7 +41,13 @@ impl Cg<'_> {
             .into_iter()
             .map(|(n, on)| format!("{}{n}", if on { '+' } else { '-' }))
             .collect();
-        Some(parse(&s, &module, self.opts.clang_compat >= 22))
+        let m = crate::TargetAttrModule {
+            features: &module,
+            cpu_features: &self.opts.target_cpu_features,
+            written: &self.opts.target_features_written,
+            v22: self.opts.clang_compat >= 22,
+        };
+        Some(parse(&s, &m))
     }
 
     /// The `AArch64` features of function `d` (`None`: the module's): the
@@ -76,10 +82,10 @@ impl Cg<'_> {
     }
 
     /// The x86-64 features of function `d` (`None`: the module's): the
-    /// `-march=` CPU's ([`crate::CodegenOptions::target_features`];
-    /// `x86-64`'s without one), unless its `target("...")` attribute names
-    /// a CPU (`arch=`), then the map of that attribute (clang
-    /// `getFunctionFeatureMap`).
+    /// module's map ([`crate::CodegenOptions::target_features`];
+    /// `x86-64`'s without one), or the whole map of `d`'s `target("...")`
+    /// attribute (clang `getFunctionFeatureMap`: the CPU's features, the
+    /// command line's as written, then the attribute's; WP-1000).
     fn x86_feature_map(&self, d: Option<DeclId>) -> FeatureMap {
         const X86_64: [&str; 7] = ["cmov", "cx8", "fxsr", "mmx", "sse", "sse2", "x87"];
         // The command-line features that are no CPU's (WP-813: the
@@ -87,18 +93,16 @@ impl Cg<'_> {
         const OPTION_FEATURES: [&str; 1] = ["+retpoline-indirect-calls"];
         let mut f: FeatureMap = FeatureMap::new();
         let attr = d.and_then(|d| self.target_attr_features(d));
-        let own_cpu = attr.as_ref().is_some_and(|a| a.cpu.is_some());
-        let cpu_features =
-            self.opts.target_features.iter().any(|e| !OPTION_FEATURES.contains(&&**e));
-        if !cpu_features && !own_cpu {
-            f.extend(X86_64.iter().map(|n| ((*n).to_owned(), true)));
-        }
-        // A CPU-naming attribute replaces the `-march=` CPU's features,
-        // not the options' (clang `FeaturesAsWritten`).
-        let module = (self.opts.target_features.iter())
-            .filter(|e| !own_cpu || OPTION_FEATURES.contains(&&***e));
-        let attr = attr.iter().flat_map(|a| &a.features);
-        for e in module.chain(attr) {
+        let features = match &attr {
+            Some(a) => &a.features,
+            None => {
+                if self.opts.target_features.iter().all(|e| OPTION_FEATURES.contains(&&**e)) {
+                    f.extend(X86_64.iter().map(|n| ((*n).to_owned(), true)));
+                }
+                &self.opts.target_features
+            }
+        };
+        for e in features {
             if let Some((sign, name)) = e.split_at_checked(1) {
                 f.insert(name.to_owned(), sign == "+");
             }

@@ -335,16 +335,30 @@ pub fn native_features(cpuinfo: &str, v22: bool) -> Vec<&'static str> {
 /// - Then `sse4.2` enables `popcnt` and `crc32`, `sse` `mmx` and `avx`
 ///   `xsave`, unless an item disabled that feature.
 pub fn feature_map(cpu: &[&str], items: &[String], v22: bool) -> BTreeMap<String, bool> {
+    let mut map = cpu_map(cpu, v22);
+    apply_items(&mut map, items, v22);
+    map
+}
+
+/// The first step of [`feature_map`]: `sse2` and the CPU's features.
+pub fn cpu_map(cpu: &[&str], v22: bool) -> BTreeMap<String, bool> {
     let mut map: BTreeMap<String, bool> = BTreeMap::new();
     set_enabled(&mut map, "sse2", true, v22);
     let drop = if v22 { NOT_22 } else { NOT_19 };
     for f in cpu.iter().filter(|f| !drop.contains(f)) {
         set_enabled(&mut map, f, true, v22);
     }
-    let items = if v22 { items.to_vec() } else { evex512_items(&map, items) };
+    map
+}
+
+/// The rest of [`feature_map`]: the `+name`/`-name` items applied to
+/// `map` (clang 19's `evex512` reordering first), then the additions.
+/// Returns the items as applied.
+pub fn apply_items(map: &mut BTreeMap<String, bool>, items: &[String], v22: bool) -> Vec<String> {
+    let items = if v22 { items.to_vec() } else { evex512_items(map, items) };
     for f in &items {
         if let Some((sign, name)) = f.split_at_checked(1) {
-            set_enabled(&mut map, name, sign == "+", v22);
+            set_enabled(map, name, sign == "+", v22);
         }
     }
     let disabled = |n: &str| items.iter().any(|f| f.strip_prefix('-') == Some(n));
@@ -354,7 +368,7 @@ pub fn feature_map(cpu: &[&str], items: &[String], v22: bool) -> BTreeMap<String
             map.insert(add.to_owned(), true);
         }
     }
-    map
+    items
 }
 
 /// clang 19's reordering of the items over the CPU's map `map`: the

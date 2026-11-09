@@ -12,16 +12,19 @@ use crate::module::Cg;
 impl Cg<'_> {
     /// clang `checkFunctionCallABI` on x86-64, at the location of call
     /// `e` to `callee` with arguments `args`: passing or returning a
-    /// vector wider than 128 bits warns that its ABI depends on the `avx`
-    /// (wider than 256 bits: `avx512f`) target feature. kiln has no
-    /// per-function target features, so neither caller nor callee has
-    /// it and clang's mismatch error cannot arise. The first argument
-    /// warned about ends the check; otherwise the return type is checked.
+    /// vector wider than 128 bits depends on the `avx` (wider than 256
+    /// bits: `avx512f`) target feature. When neither the caller nor the
+    /// callee has it (their `-march=` / `-m<feature>` / `target("...")`
+    /// features), that is a warning; when only one has it, the error
+    /// `err_avx_calling_convention` (WP-1000); when both do, nothing. The
+    /// first argument diagnosed ends the check; otherwise the return type
+    /// is checked.
     ///
     /// `this_arg`: the call passes an object argument first, which clang
     /// counts when it picks the parameter whose type it prints (a
-    /// member's second parameter for its first argument). clang 22 skips
-    /// a callee that is not externally visible.
+    /// member's second parameter for its first argument). clang 22 does
+    /// not warn for a callee that is not externally visible (the error
+    /// stands).
     pub(crate) fn psabi_call_check(
         &mut self,
         e: ExprId,
@@ -29,7 +32,7 @@ impl Cg<'_> {
         args: &[ExprId],
         this_arg: bool,
     ) {
-        if !self.is_x86() || (self.opts.clang_compat >= 22 && self.fn_internal(callee)) {
+        if !self.is_x86() {
             return;
         }
         let ast = self.ast;
@@ -48,13 +51,43 @@ impl Cg<'_> {
             let ty = params.get(i).copied().unwrap_or_else(|| ast.exprs.get(a).ty());
             if let Some(f) = self.avx_feature(ty) {
                 let shown = params.get(i + skip).copied().unwrap_or(ty);
-                self.warn_avx(span, true, shown, f);
-                return;
+                if self.check_avx(span, callee, true, shown, f) {
+                    return;
+                }
             }
         }
         if let Some(f) = self.avx_feature(p.ret()) {
-            self.warn_avx(span, false, p.ret(), f);
+            self.check_avx(span, callee, false, p.ret(), f);
         }
+    }
+
+    /// clang `checkAVXParam`: whether a diagnostic was given for a value
+    /// of type `q` needing `feature` in the call to `callee`.
+    fn check_avx(
+        &mut self,
+        span: Span,
+        callee: DeclId,
+        argument: bool,
+        q: QualType,
+        feature: &str,
+    ) -> bool {
+        let has = |m: &crate::target_features::FeatureMap| m.get(feature) == Some(&true);
+        let caller = has(&self.feature_map(self.f.decl));
+        let callee_has = has(&self.feature_map(Some(callee)));
+        let id = match (caller, callee_has) {
+            (true, true) => return false,
+            (false, false) if self.opts.clang_compat >= 22 && self.fn_internal(callee) => {
+                return false;
+            }
+            (false, false) => DiagId::cg_avx_calling_convention,
+            _ => DiagId::cg_avx_calling_convention_mismatch,
+        };
+        let ast = self.ast;
+        let shown =
+            vector_diag_arg(&ast.types, ast, q, self.opts.clang_compat >= 22).unwrap_or_default();
+        let d = Diag::new(id, span).arg(u8::from(argument)).arg(shown).arg(feature.to_owned());
+        self.diags.push(d);
+        true
     }
 
     /// clang `getExprLoc` of call `e`: a member call's member name, an
@@ -97,16 +130,5 @@ impl Cg<'_> {
             129..=256 => Some("avx"),
             _ => Some("avx512f"),
         }
-    }
-
-    fn warn_avx(&mut self, span: Span, argument: bool, q: QualType, feature: &str) {
-        let ast = self.ast;
-        let shown =
-            vector_diag_arg(&ast.types, ast, q, self.opts.clang_compat >= 22).unwrap_or_default();
-        let d = Diag::new(DiagId::cg_avx_calling_convention, span)
-            .arg(u8::from(argument))
-            .arg(shown)
-            .arg(feature.to_owned());
-        self.diags.push(d);
     }
 }
