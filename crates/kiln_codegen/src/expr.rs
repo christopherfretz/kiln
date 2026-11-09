@@ -206,9 +206,12 @@ impl Cg<'_> {
                 return self.emit_scalar_opt(ast.exprs.operand(e));
             }
             // clang `getChosenSubExpr`: only the chosen operand is emitted.
-            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
-                return self
-                    .emit_scalar_opt(ast.exprs.choose_chosen(e).expect("match guard checked it"));
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr
+                if ast.exprs.selected_operand(e).is_some() =>
+            {
+                return self.emit_scalar_opt(
+                    ast.exprs.selected_operand(e).expect("match guard checked it"),
+                );
             }
             // clang `ScalarExprEmitter::VisitCompoundLiteralExpr`: a load
             // of the literal's temporary.
@@ -1036,7 +1039,8 @@ impl Cg<'_> {
         // `CK_NoOp` cast (`static_cast<const T&>(f())`, `(const T&)f()`,
         // `const_cast<T&>(f())`; `VisitCastExpr` visits the operand), the
         // right operand of a glvalue comma (`VisitBinComma`) and the
-        // chosen operand of `__builtin_choose_expr` (`VisitChooseExpr`).
+        // chosen operand of `__builtin_choose_expr` or `_Generic`
+        // (`VisitChooseExpr`, `VisitGenericSelectionExpr`).
         // A glvalue `co_await`/`co_yield` is its `await_resume` call
         // (clang `emitSuspendExpression` visits the resume call), so it
         // is loaded the same way (WP-789).
@@ -1055,9 +1059,7 @@ impl Cg<'_> {
             } else if k == ExprKind::BinaryOperator && ast.exprs.binary_op(inner) == BinaryOp::Comma
             {
                 ast.exprs.operands(inner)[1]
-            } else if k == ExprKind::ChooseExpr
-                && let Some(c) = ast.exprs.choose_chosen(inner)
-            {
+            } else if let Some(c) = ast.exprs.selected_operand(inner) {
                 c
             } else {
                 break;
@@ -2478,8 +2480,10 @@ impl Cg<'_> {
         let q = n.ty();
         match n.kind() {
             ExprKind::ParenExpr => self.emit_lvalue(ast.exprs.operand(e)),
-            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
-                self.emit_lvalue(ast.exprs.choose_chosen(e).expect("match guard checked it"))
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr
+                if ast.exprs.selected_operand(e).is_some() =>
+            {
+                self.emit_lvalue(ast.exprs.selected_operand(e).expect("match guard checked it"))
             }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
                 Some(d) => {
@@ -4406,11 +4410,15 @@ impl Cg<'_> {
                 self.emit_coawait(e, crate::coro::Want::Agg(dest, zeroed))?;
                 Ok(())
             }
-            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => self.agg_visit(
-                ast.exprs.choose_chosen(e).expect("match guard checked it"),
-                dest,
-                zeroed,
-            ),
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr
+                if ast.exprs.selected_operand(e).is_some() =>
+            {
+                self.agg_visit(
+                    ast.exprs.selected_operand(e).expect("match guard checked it"),
+                    dest,
+                    zeroed,
+                )
+            }
             // clang `AggExprEmitter::VisitCXXRewrittenBinaryOperator`: the
             // semantic form (`(y <=> x)` reversed, or `0 <=> (y <=> x)`).
             ExprKind::CXXRewrittenBinaryOperator => {

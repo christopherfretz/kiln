@@ -445,10 +445,12 @@ impl Sema<'_, '_> {
         for _ in 0..MAX_DEPTH {
             match ex.get(e).kind() {
                 ExprKind::ParenExpr => e = ex.operand(e),
-                ExprKind::ChooseExpr => match ex.choose_chosen(e) {
-                    Some(c) => e = c,
-                    None => break,
-                },
+                ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr => {
+                    match ex.selected_operand(e) {
+                        Some(c) => e = c,
+                        None => break,
+                    }
+                }
                 ExprKind::UnaryOperator if ex.unary_op(e) == UnaryOp::Extension => {
                     e = ex.operand(e);
                 }
