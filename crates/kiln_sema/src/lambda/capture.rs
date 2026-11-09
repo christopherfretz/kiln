@@ -26,6 +26,7 @@ use super::{LambdaIntroducer, LambdaScope};
 use crate::Sema;
 use crate::class::InitEntity;
 use crate::conv::bases::{BaseSearch, ambiguous_paths_string, find_base};
+use crate::declspec::ParamInfo;
 use crate::init::Initializer;
 use crate::lookup::LookupKind;
 
@@ -855,6 +856,45 @@ impl Sema<'_, '_> {
     /// The explicit captures of lambda `id` ([expr.prim.lambda.capture]/2-8;
     /// clang `ActOnLambdaExpressionAfterIntroducer`).
     #[allow(clippy::too_many_lines, reason = "one arm per capture form, as clang")]
+    /// [expr.prim.lambda.capture]/5: a lambda parameter does not have the
+    /// name of an explicit capture (simple, init or pack capture; implicit
+    /// captures do not count). Reported at the parameter's name with a note
+    /// at the capture (clang `err_parameter_shadow_capture`). Checked in
+    /// the pattern only.
+    pub(crate) fn check_param_shadows_capture(&mut self, id: LambdaId, params: &[ParamInfo]) {
+        if !self.inst.stack.is_empty() {
+            return;
+        }
+        let caps: Vec<(DeclId, Loc)> = self
+            .ast
+            .exprs
+            .lambdas
+            .get(id)
+            .captures
+            .iter()
+            .filter(|c| !c.implicit)
+            .filter_map(|c| Some((c.var?, c.loc)))
+            .collect();
+        if caps.is_empty() {
+            return;
+        }
+        for p in params {
+            let Some((sym, ploc)) = p.name else { continue };
+            let name = DeclName::ident(sym);
+            let Some(&(var, cloc)) =
+                caps.iter().find(|&&(v, _)| self.ast.decls.get(v).name() == name)
+            else {
+                continue;
+            };
+            let note = self
+                .diag(DiagId::note_var_explicitly_captured_here, cloc)
+                .arg(self.decl_arg(var))
+                .arg(true);
+            let msg = self.diag(DiagId::sema_parameter_shadow_capture, ploc).with_note(note);
+            self.emit(msg);
+        }
+    }
+
     pub(crate) fn act_on_explicit_captures(&mut self, id: LambdaId, intro: &LambdaIntroducer) {
         // Each name with whether it is an init-capture and its variable.
         let mut names: Vec<(Symbol, bool, Option<DeclId>)> = Vec::new();

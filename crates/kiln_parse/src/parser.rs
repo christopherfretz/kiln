@@ -168,6 +168,9 @@ pub struct Parser<'a, 'sm> {
     /// `ParseDirectDeclarator` consumes one wherever a name may follow;
     /// sema rejects it). Taken by the first direct declarator.
     pub(crate) catch_declarator: bool,
+    /// A handler's exception-declaration is being parsed (clang does not
+    /// run `CheckExtraCXXDefaultArguments` on it, [dcl.fct.default]/3).
+    pub(crate) in_exception_decl: bool,
     /// The type-constraint location of the constrained placeholder the
     /// last type-id contained (its decl-specifier's, or one in its
     /// trailing return types), for the enclosing declarator's
@@ -368,6 +371,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             pack_hint: false,
             addr_operand_at: None,
             catch_declarator: false,
+            in_exception_decl: false,
             type_id_constraint: Loc::INVALID,
             named_cast_type_id: false,
             param_typename: ParamTypename::Implicit,

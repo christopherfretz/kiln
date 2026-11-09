@@ -1938,6 +1938,19 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// [dcl.fct.default]/3: a default argument on parameter `p` of a
+    /// function declarator that is not a function declaration's (a
+    /// function pointer, a `typedef`, a type-id, a parameter's own
+    /// declarator): clang's `err_param_default_argument_nonfunc` at the
+    /// parameter's name (or where it would be); the argument is dropped.
+    pub fn act_on_nonfunc_default_arg(&mut self, p: &mut ParamInfo, at: Loc) {
+        if p.default_arg == DefaultArg::None {
+            return;
+        }
+        self.error(DiagId::sema_param_default_argument_nonfunc, at);
+        p.default_arg = DefaultArg::None;
+    }
+
     pub fn act_on_param_default_init(&mut self, p: &mut ParamInfo, init: Initializer) {
         let roots: Vec<ExprId> = match &init {
             Initializer::Expr(e) => vec![*e],
@@ -2008,6 +2021,12 @@ impl Sema<'_, '_> {
             s.note_default_init_full_expr();
             s.act_on_full_expr(e)
         });
+        if !self.check_default_arg_locals(e) {
+            p.invalid = true;
+            if let Some(d) = p.decl {
+                self.ast.decls.set_flags(d, DeclFlags::INVALID);
+            }
+        }
         self.store_param_default(p, e);
     }
 
@@ -2031,23 +2050,48 @@ impl Sema<'_, '_> {
     /// Lambda bodies are not searched (their captures are checked with
     /// the lambda).
     pub fn check_default_arg_refs(&mut self, e: ExprId) -> bool {
+        use kiln_ast::expr::NonOdrUse;
+        let mut ok = true;
         let mut stack = vec![e];
         while let Some(x) = stack.pop() {
             let n = self.ast.exprs.get(x);
             match n.kind() {
-                ExprKind::LambdaExpr => continue,
+                ExprKind::LambdaExpr => {
+                    // [expr.prim.lambda.capture]/9: a lambda in a default
+                    // argument captures nothing; an init-capture's
+                    // initializer is checked; the body is not.
+                    let caps = self.ast.exprs.lambda(x).captures.clone();
+                    for c in caps.iter() {
+                        if c.init {
+                            if let Some(i) = c.var.and_then(|v| self.ast.decls.var(v)?.init) {
+                                stack.push(i);
+                            }
+                            continue;
+                        }
+                        let m = self.diag(DiagId::sema_lambda_capture_default_arg, c.loc);
+                        self.emit(m);
+                        ok = false;
+                        break;
+                    }
+                    continue;
+                }
+                ExprKind::CXXThisExpr => {
+                    // [dcl.fct.default]/8.
+                    self.error(DiagId::sema_param_default_argument_references_this, n.loc());
+                    ok = false;
+                }
                 ExprKind::DeclRefExpr => {
                     let d = self.ast.exprs.decl(x);
-                    if self.kind_of(d) == DeclKind::ParmVar
-                        && self.ast.exprs.non_odr_use(x) != kiln_ast::expr::NonOdrUse::Unevaluated
-                    {
+                    let nou = self.ast.exprs.non_odr_use(x);
+                    let kind = self.kind_of(d);
+                    if kind == DeclKind::ParmVar && nou != NonOdrUse::Unevaluated {
                         let name = self.ast.decls.get(d).name();
                         let text = self.decl_name_str(name);
                         let msg = self
                             .diag(DiagId::sema_param_default_argument_references_param, n.loc())
                             .arg(text);
                         self.emit(msg);
-                        return false;
+                        ok = false;
                     }
                 }
                 _ => {}
@@ -2056,7 +2100,91 @@ impl Sema<'_, '_> {
             kids.reverse();
             stack.extend(kids);
         }
-        true
+        ok
+    }
+
+    /// [dcl.fct.default]/7: a local variable is not odr-used in a default
+    /// argument (clang's `CheckDefaultArgumentVisitor`, "default argument
+    /// references local variable"). Run on the converted full-expression
+    /// `e`, so a use the lvalue-to-rvalue conversion makes a constant
+    /// non-odr-use is accepted. Every use is reported; false then. Lambda
+    /// bodies are not searched, init-captures are; not re-run when
+    /// instantiating.
+    pub(crate) fn check_default_arg_locals(&mut self, e: ExprId) -> bool {
+        use kiln_ast::expr::NonOdrUse;
+        if !self.inst.stack.is_empty() {
+            return true;
+        }
+        let mut ok = true;
+        // Inside a template definition uses are not marked; the
+        // lvalue-to-rvalue operands are the constant candidates
+        // ([basic.def.odr]/5), as `act_on_full_expr` computes them.
+        let mut constant = Vec::new();
+        let templ = self.in_template();
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            let n = self.ast.exprs.get(x);
+            match n.kind() {
+                ExprKind::ImplicitCastExpr
+                    if templ && self.ast.exprs.cast_kind(x) == CastKind::LValueToRValue =>
+                {
+                    self.potential_results(self.ast.exprs.operand(x), &mut constant);
+                }
+                ExprKind::LambdaExpr => {
+                    let caps = self.ast.exprs.lambda(x).captures.clone();
+                    for c in caps.iter().rev().filter(|c| c.init) {
+                        if let Some(i) = c.var.and_then(|v| self.ast.decls.var(v)?.init) {
+                            stack.push(i);
+                        }
+                    }
+                    continue;
+                }
+                ExprKind::DeclRefExpr => {
+                    let d = self.ast.exprs.decl(x);
+                    if self.ast.exprs.non_odr_use(x) == NonOdrUse::None
+                        && self.is_local_var_entity(d)
+                        && !(templ && self.constant_in_template(d, x, &constant))
+                    {
+                        let name = self.ast.decls.get(d).name();
+                        let text = self.decl_name_str(name);
+                        let at = self.begin_loc(x);
+                        let msg = self
+                            .diag(DiagId::sema_param_default_argument_references_local, at)
+                            .arg(text);
+                        self.emit(msg);
+                        ok = false;
+                    }
+                }
+                _ => {}
+            }
+            let mut kids = self.ast.exprs.children(x, &self.ast.lists);
+            kids.reverse();
+            stack.extend(kids);
+        }
+        ok
+    }
+
+    /// Whether reference `x` to `d` in a template definition would not be
+    /// an odr-use (`constant`: the lvalue-to-rvalue operands).
+    fn constant_in_template(&mut self, d: DeclId, x: ExprId, constant: &[ExprId]) -> bool {
+        let is_ref =
+            self.ast.types.is_reference(self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR));
+        (is_ref || constant.contains(&x)) && self.usable_in_constant_expressions(d)
+    }
+
+    /// A variable declared at block scope (clang `VarDecl::isLocalVarDecl`,
+    /// including `static`, `extern` and `thread_local` ones), or a
+    /// structured binding of one.
+    fn is_local_var_entity(&self, d: DeclId) -> bool {
+        let v = match self.kind_of(d) {
+            DeclKind::Var => d,
+            DeclKind::Binding => match self.ast.decls.binding_decomp(d) {
+                Some(v) => v,
+                None => return false,
+            },
+            _ => return false,
+        };
+        self.ast.decls.lexical_ctx(v).is_some_and(|c| self.kind_of(c).is_function())
     }
 
     /// Attaches clang's "passing argument to parameter 'p' here" note.
@@ -3795,8 +3923,14 @@ impl Sema<'_, '_> {
             }
             _ => ty,
         };
-        if ds.inline.is_some() {
-            spec = spec.with_inline(true);
+        if let Some(l) = ds.inline {
+            // [dcl.inline]/5: not on a block-scope function declaration
+            // (clang `err_inline_declaration_block_scope`, at `inline`).
+            if block && !method {
+                self.inline_block_scope(d, l);
+            } else {
+                spec = spec.with_inline(true);
+            }
         }
         if ds.constexpr.is_some() {
             spec = spec.with_constexpr_kind(ConstexprKind::Constexpr).with_implicit_inline(true);
@@ -8031,6 +8165,7 @@ impl Sema<'_, '_> {
         ns: DeclId,
     ) -> DeclId {
         let head = self.take_template_head(None);
+        self.check_friend_class_template_defaults(head);
         // [namespace.memdef]/3 stops the search at the innermost enclosing
         // namespace, so a member class template of an enclosing class
         // (or its injected-class-name) is found by ordinary lookup and
@@ -8152,7 +8287,8 @@ impl Sema<'_, '_> {
         }
         // The friend's own template head declares nothing (clang matches
         // it against the template's only on instantiation).
-        let _ = self.take_template_head(None);
+        let head = self.take_template_head(None);
+        self.check_friend_class_template_defaults(head);
         self.templ.cur = None;
         let Some((t, p)) = t.and_then(|t| self.pattern_of(t).map(|p| (t, p))) else {
             let msg = if let Some(&other) = found.first() {

@@ -3161,6 +3161,14 @@ impl Parser<'_, '_> {
                 } else {
                     self.parse_default_argument(&mut p);
                 }
+                // [dcl.fct.default]/3: only the parameter clause of a
+                // function declaration (or a lambda) takes default
+                // arguments. clang's `CheckExtraCXXDefaultArguments` is
+                // not run for an exception-declaration.
+                if !fn_decl && site != DeclSite::RequiresParam && !self.in_exception_decl {
+                    let at = pd.name.map_or(pd.loc, |(_, l)| l);
+                    self.s.act_on_nonfunc_default_arg(&mut p, at);
+                }
             }
             p.range = (start, self.prev_end());
             let pack_like = pd.ellipsis.is_some() || self.s.has_unexpanded_pack(p.ty);

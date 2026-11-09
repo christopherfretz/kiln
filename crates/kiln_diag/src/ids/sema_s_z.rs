@@ -146,6 +146,7 @@ sema_template_kw_refers_to_non_template = Error (1) "'{0}' following the 'templa
 sema_template_kw_refers_to_type_template = Error (2) "'{0}' is expected to be a non-type template, but instantiated to a {1:class|type alias} template";
 sema_template_nontype_parm_different_type = Error (2) "template non-type parameter has a different type {0} in template {1:|template parameter }redeclaration";
 sema_template_outside_namespace_or_class = Error (0) "templates can only be declared in namespace or class scope";
+sema_template_param_default_friend_template = Error (0) "default template argument not permitted on a friend template";
 sema_template_param_default_redefined = Error (0) "template parameter redefines default argument";
 sema_template_param_different_kind = Error (1) "template parameter has a different kind in template {0:|template parameter }redeclaration";
 sema_template_param_list_different_arity = Error (2) "{0:too few|too many} template parameters in template {1:|template parameter }redeclaration";
