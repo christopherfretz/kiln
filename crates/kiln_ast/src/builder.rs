@@ -537,13 +537,31 @@ impl<'a> AstBuilder<'a> {
     /// `record_type`); redeclarations share it. Call
     /// [`AstBuilder::begin_record_definition`] for a definition.
     pub fn record(&mut self, h: DeclHead, tag: TagKind, prev: Option<DeclId>) -> DeclId {
+        self.record_in(h, tag, prev, false)
+    }
+
+    /// A lambda's closure type ([expr.prim.lambda.closure]/1), as
+    /// [`AstBuilder::record`]. `never_dependent`: its type is not
+    /// dependent even inside a template's head (clang
+    /// `LDK_NeverDependent`; spec/sema-lambda.md §9).
+    pub fn closure_record(&mut self, h: DeclHead, never_dependent: bool) -> DeclId {
+        self.record_in(h, TagKind::Class, None, never_dependent)
+    }
+
+    fn record_in(
+        &mut self,
+        h: DeclHead,
+        tag: TagKind,
+        prev: Option<DeclId>,
+        never_dependent: bool,
+    ) -> DeclId {
         let replaces = self.latest_of(prev);
         let redecl = self.redecl_link(prev);
         let ty = if let Some(p) = prev {
             self.ast.decls.get(self.ast.first(p)).ty()
         } else {
             let d = self.ast.decls.next_id();
-            let dep = self.nested_in_template();
+            let dep = !never_dependent && self.nested_in_template();
             Some(QualType::unqual(self.ast.types.record_type_dependent(d, dep)))
         };
         let payload = Payload::Record(RecordData {
@@ -3337,7 +3355,12 @@ impl<'a> AstBuilder<'a> {
                     .captures
                     .get(i)
                     .is_some_and(|c| c.ellipsis.is_valid() || c.implicit);
-                let d = self.deps(e);
+                // Only packs (and errors): the closure type carries the
+                // rest, as clang's `computeDependence(LambdaExpr *)`. A
+                // never-dependent closure capturing a parameter of a
+                // member template is not dependent (spec/sema-lambda.md
+                // §9).
+                let d = self.deps(e).without(ExprDeps::TYPE_VALUE_INST);
                 deps |= if expands { d.without(ExprDeps::UNEXPANDED_PACK) } else { d };
             }
         }

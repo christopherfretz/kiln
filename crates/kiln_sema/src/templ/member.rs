@@ -364,7 +364,11 @@ impl Substituter<'_, '_, '_> {
         ds.inline = None;
         let dr = self.pattern_declarator(p, DeclaratorContext::Member)?;
         let saved = std::mem::replace(&mut self.sema.inst.deferring_init, true);
+        // No initializer follows, so the variable is not a lambda
+        // numbering context for the members declared after it.
+        let saved_var = self.sema.lambda_mangle.var;
         let v = self.sema.act_on_declarator(&ds, ty, &dr);
+        self.sema.lambda_mangle.var = saved_var;
         self.sema.inst.deferring_init = saved;
         v.ok_or(SubstFail)
     }
