@@ -853,7 +853,12 @@ impl Parser<'_, '_> {
                 self.skip_until(&[Punct::RParen], false, true);
                 return None;
             }
-            let e = if self.at_string() {
+            // clang parses only a `StringArgument` position as an
+            // unevaluated string; `annotate`'s other arguments are
+            // expressions (`u8"s"`, `L"w"`; WP-1113).
+            let annotate_expr = !args.is_empty()
+                && kiln_ast::attr::normalize_attr_name(&text) == "annotate";
+            let e = if self.at_string() && !annotate_expr {
                 self.parse_string_literal(true)
             } else {
                 self.parse_assignment_expr()

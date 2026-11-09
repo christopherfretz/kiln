@@ -1855,6 +1855,45 @@ with no coverage flag the IR is unchanged, byte for byte.
   `delete_oz.cpp` (exact under oracle 19, structural under 22, both
   targets).
 
+### clang `annotate` (WP-1113, `annotate.rs`)
+clang's `[[clang::annotate("str", args...)]]` (sema: spec/sema.md §4.5)
+has three lowerings, the same in clang 19 and 22, so `-fclang-compat=19`
+changes nothing:
+- **Globals and functions:** one `{ptr, ptr, ptr, i32, ptr}` entry per
+  attribute in `@llvm.global.annotations` (appending, section
+  `llvm.metadata`). It is emitted after `@llvm.global_dtors` and before the
+  coverage globals and `@llvm.used` (clang `Release`).
+  - A variable is annotated when it is defined, a static local after its
+    initializer (clang `AddGlobalAnnotations`).
+  - A function is recorded when it is first created, then annotated at the
+    end of the module with its latest redeclaration (clang
+    `DeferredAnnotations`). Structors are annotated as C2/D2; thunks are
+    not.
+  - Inherited attributes come before a declaration's own. An inherited one
+    whose string the declaration already has is dropped (clang
+    `mergeDeclAttributes`).
+- **Locals and parameters:** `call void @llvm.var.annotation.p0.p0(ptr
+  %addr, ptr str, ptr file, i32 line, ptr args)` after the alloca and its
+  `dbg.declare`, before the initializer; for a parameter, after its store.
+- **Fields:** each annotation of the member chains
+  `@llvm.ptr.annotation.p0.p0` on the member's address. It comes after the
+  GEP, after the load for a reference member, and on the base address for
+  a union member. A bit-field and the binding of a reference member get
+  none.
+- **Operands, in clang's evaluation order (string, file, line, args):**
+  - The strings and file names share one cache of private `unnamed_addr`
+    `.str` constants in `llvm.metadata`, with no `align`.
+  - The file and line are presumed (`#line` applies).
+  - Args are `ptr null` when there are none. Otherwise they are a private
+    `.args` constant struct of the arguments' constant values (clang
+    `emitAbstract`: `bool` is `i1`), shared by arguments whose values have
+    the same clang `APValue` profile. Integers are profiled in 32-bit
+    chunks, so `1`, `1u` and `true` share one struct and `1L` does not; a
+    string argument is an ordinary literal and so never shares.
+- **Statements:** clang 22 accepts `annotate` on a statement and emits
+  nothing for it, and neither does kiln.
+- Details and deviations: spec/landed/codegen/WP-1113.md.
+
 ### TBAA (WP-412, `tbaa.rs`)
 - **When.** `Cg::tbaa_on`: `CodegenOptions::optimize && strict_aliasing`
   (clang creates `CodeGenTBAA` iff `OptimizationLevel > 0 &&
