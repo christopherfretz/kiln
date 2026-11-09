@@ -1,8 +1,7 @@
 // [basic.def.odr]/4: the potential results of a class member access
 // `e.m` include those of `e`, so `ca.v` with `ca` a constexpr object is
 // not an odr-use of `ca` and a by-copy default capture does not capture
-// it: the closure is empty.
-//@ xfail(kiln): WP-865 follow-up, potential results miss member access, subscript and .*
+// it: the closure is empty (WP-1144).
 //@ expect: run
 
 struct A { int v; };

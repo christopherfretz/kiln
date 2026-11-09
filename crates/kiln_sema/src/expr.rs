@@ -682,7 +682,7 @@ impl Sema<'_, '_> {
             if n.kind() == ExprKind::ImplicitCastExpr
                 && self.ast.exprs.cast_kind(x) == CastKind::LValueToRValue
             {
-                self.potential_results(self.ast.exprs.operand(x), &mut constant);
+                self.l2r_potential_results(self.ast.exprs.operand(x), &mut constant);
             }
             self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
@@ -706,22 +706,112 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// The `DeclRefExpr`s among the potential results of the operand `e`
+    /// of an lvalue-to-rvalue conversion that can make them non-odr-uses
+    /// ([basic.def.odr]/5.2): none when `e` has a volatile-qualified or
+    /// class type (clang `CheckLValueToRValueConversionOperand`), and only
+    /// those naming a variable whose type is not a class with a mutable
+    /// member (clang `rebuildPotentialResultsAsNonOdrUsed`,
+    /// `NOUR_Constant`, which looks at the variable's own type only, not
+    /// an array's elements). Whether the variable is usable in constant
+    /// expressions is the caller's check.
+    pub(crate) fn l2r_potential_results(&self, e: ExprId, out: &mut Vec<ExprId>) {
+        let ty = self.ast.exprs.get(e).ty();
+        if self.ast.types.effective_quals(ty).is_volatile()
+            || self.ast.types.as_record(ty).is_some()
+        {
+            return;
+        }
+        let from = out.len();
+        self.potential_results(e, out);
+        let mut i = from;
+        while i < out.len() {
+            let d = self.ast.exprs.decl(out[i]);
+            let mutable =
+                self.ast.decls.get(d).ty().and_then(|t| self.ast.types.as_record(t)).is_some_and(
+                    |r| {
+                        self.defn_bits(r)
+                            .contains(kiln_ast::decl::DefinitionBits::HAS_MUTABLE_FIELDS)
+                    },
+                );
+            if mutable {
+                out.swap_remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     /// The `DeclRefExpr`s among the potential results of `e`
-    /// ([basic.def.odr]/3).
+    /// ([basic.def.odr]/3; clang `rebuildPotentialResultsAsNonOdrUsed`):
+    /// an id-expression; through the array operand of a subscript, the
+    /// object expression of a `.` naming a non-static data member (`->`
+    /// has a prvalue pointer operand, so it has none), the left operand
+    /// of `.*`, parentheses, both arms of a conditional, the right
+    /// operand of a comma; and, as clang extensions, `__extension__`, the
+    /// associations of `_Generic` and the first operand of
+    /// `__builtin_choose_expr` (below).
     pub(crate) fn potential_results(&self, e: ExprId, out: &mut Vec<ExprId>) {
-        let n = self.ast.exprs.get(e);
+        let x = &self.ast.exprs;
+        let n = x.get(e);
         match n.kind() {
             ExprKind::DeclRefExpr => out.push(e),
-            ExprKind::ParenExpr => self.potential_results(self.ast.exprs.operand(e), out),
+            ExprKind::ParenExpr | ExprKind::ConstantExpr => {
+                self.potential_results(x.operand(e), out);
+            }
+            ExprKind::UnaryOperator if x.unary_op(e) == UnaryOp::Extension => {
+                self.potential_results(x.operand(e), out);
+            }
             ExprKind::ConditionalOperator => {
-                let [t, f] = self.ast.exprs.cond_arms(e);
+                let [t, f] = x.cond_arms(e);
                 self.potential_results(t, out);
                 self.potential_results(f, out);
             }
-            ExprKind::BinaryOperator if self.ast.exprs.binary_op(e) == BinaryOp::Comma => {
-                self.potential_results(self.ast.exprs.operands(e)[1], out);
+            ExprKind::BinaryOperator => match x.binary_op(e) {
+                BinaryOp::Comma => self.potential_results(x.operands(e)[1], out),
+                BinaryOp::PtrMemD => self.potential_results(x.operands(e)[0], out),
+                _ => {}
+            },
+            ExprKind::MemberExpr
+                if !n.has(ExprFlags::ARROW)
+                    && self.ast.decls.get(x.decl(e)).kind() == DeclKind::Field =>
+            {
+                self.potential_results(x.operand(e), out);
             }
+            ExprKind::ArraySubscriptExpr => {
+                for o in x.operands(e) {
+                    let o = self.ignore_implicit(o);
+                    if self.ast.types.is_array(x.get(o).ty()) {
+                        self.potential_results(o, out);
+                    }
+                }
+            }
+            ExprKind::GenericSelectionExpr => {
+                for a in x.generic_assocs(e, &self.ast.lists) {
+                    self.potential_results(a.expr, out);
+                }
+            }
+            // clang means both operands, but rebuilds the first one twice
+            // (`Rebuild(CE->getLHS())` for each, 19 and 22), so a variable
+            // named in the second stays an odr-use; kept for the closure
+            // layout.
+            ExprKind::ChooseExpr => self.potential_results(x.choose_operands(e)[1], out),
             _ => {}
+        }
+    }
+
+    /// clang `Expr::IgnoreImplicit`: `e` without its implicit casts and
+    /// full-expression, materialization and binding wrappers.
+    fn ignore_implicit(&self, mut e: ExprId) -> ExprId {
+        loop {
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::ImplicitCastExpr
+                | ExprKind::ConstantExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr => e = self.ast.exprs.operand(e),
+                _ => return e,
+            }
         }
     }
 

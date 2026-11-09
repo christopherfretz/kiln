@@ -1479,6 +1479,42 @@ store Oven state, is a follow-up; it would share the module-file format
   wins. The record is validated (see Diagnostics) and its header is then
   processed as if `-include`d ([Replay](#replay)).
 - **`-Xclang -include -Xclang <h>`** is `-include <h>`, which CMake uses.
+  It is not probed for a PCH (below): clang passes it to its frontend as
+  is.
+- **`-include <h>` finds a PCH (WP-1037).** This is clang's driver
+  (Clang.cpp `AddPreprocessingOptions`; clang 19 and 22 agree). Each of
+  the driver's own `-include`s (joined or separate; not `-Xclang`, not
+  `-Wp,`) is probed in every job that preprocesses: one per source or
+  header input, not for `.i`/`.ii`, objects or module files. `<h>` is
+  taken as spelled, relative to the working directory; the include path
+  is not searched (`-I inc -include q.h` does not see `inc/q.h.pch`).
+  1. `<h>.pch`, if that path exists. Nothing else is checked here: a
+     file that is not a PCH is the consumer's error (`fatal error: file
+     'foo.h.pch' is not a valid ...`), a directory is searched as below.
+  2. Otherwise `<h>.gch`, GCC's name, if it is a PCH: a file that starts
+     with kiln's or clang's PCH magic, or a directory with such a file in
+     it. A `.gch` that is neither is ignored with `warning: precompiled
+     header 'foo.h.gch' was ignored because it is not a clang PCH file
+     [-Wignored-gch]` (`precompiled header directory 'foo.h.gch' was
+     ignored because it contains no clang PCH files` for a directory).
+
+  Only the first such `-include` (the first on the command line, whether
+  or not it found one) becomes `-include-pch <h>.pch` (or `.gch`), in
+  its place. A later one that finds a PCH stays an `-include`, with
+  `warning: precompiled header 'bar.h.pch' was ignored because '-include
+  bar.h' is not first '-include'` (no group: only `-w` silences it).
+  Every warning repeats once per job, as clang's do; `-Werror` makes
+  them errors and the compile stops. The rewritten `-include` is gone in
+  any case, and the last `-include-pch` wins: an explicit one after it,
+  or any `-Xclang -include-pch` (clang's frontend sees those after the
+  driver's options), replaces it; an explicit one before it is replaced.
+- **`-include-pch <dir>`** uses the first file in `<dir>` that is a kiln
+  PCH whose language options, target and macros match the compile (the
+  checks of Diagnostics steps 1-4, silently; with `-fno-validate-pch` the
+  first readable record). clang takes the directory's order; kiln takes
+  file names in sorted order, so the choice is reproducible. With none:
+  `error: no suitable precompiled header file found in directory
+  '<dir>'`.
 - **`-fno-validate-pch`** (cc1; `-Xclang`) skips validation.
 - **`-Winvalid-pch`** is accepted and is a known warning group. In clang
   it is an empty group: no diagnostic belongs to it. Every PCH problem
@@ -1602,10 +1638,11 @@ from both.
   is reported as `content changed`. Clang compares mtimes: it reports
   `mtime changed (was N, now M)`, or misses an edit made within the same
   second.
-- `-include foo.h` does not probe for `foo.h.pch` or `foo.h.gch`. Only
-  `-include-pch` reads a PCH.
-- A `.gch` directory is not supported, and `-fpch-preprocess` is an
-  unknown argument.
+- The `.gch` probe accepts kiln's and clang's PCH magic, not an object
+  file with a `__clangast` section, which clang also accepts.
+  `-Wp,-include,<h>` is probed, since kiln splices `-Wp,` into the
+  driver's arguments; clang does not probe it.
+- `-fpch-preprocess` is an unknown argument.
 - A PCH is not an object: `-fpch-codegen` emits nothing.
 
 ## Dependency output
@@ -2403,7 +2440,11 @@ Each deviation is covered by a test or a test note.
   when it is installed; object and link; output naming; include order and
   the producer's working directory; each option, target and macro mismatch
   under both compat levels; stale, deleted, missing and foreign PCH files;
-  `-MMD`. `args.rs` `longest_option_wins` and `pch_flags`, `pch.rs`
+  `-MMD`; `include_probes_for_pch` (WP-1037), the `-include` probe's
+  cases (`.pch`, `.gch` file and directory, first-only, `-include-pch`
+  order, `-Werror`, the per-job warnings), each compared with clang++-19
+  using its own PCHs when it is installed. `args.rs`
+  `longest_option_wins`, `pch_flags` and `probed_includes`, `pch.rs`
   `record_round_trip`. The harness's `pch:` tests are
   `tests/conformance/cpp.include/pch-*.cpp`, and
   `scripts/oss/selftest.sh` builds a CMake `target_precompile_headers`
