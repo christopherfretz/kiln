@@ -472,3 +472,151 @@ fn user_only_depfile() {
         format!("p.pch: {dir}/cmake_pch.hxx.cxx {dir}/cmake_pch.hxx\n")
     );
 }
+
+/// WP-1037: clang's driver probe of `-include <h>` (Clang.cpp
+/// `AddPreprocessingOptions`). One compiler's results for the probe
+/// cases, in a fresh directory: each case's exit code, its `-E -P` output
+/// lines and its standard error with the program name replaced by `<cc>`.
+/// The PCHs are built by the same compiler, so clang++-19 runs the same
+/// cases with its own PCHs as the oracle.
+fn probe_cases(cc: &Path, pre: &[&str], name: &str) -> Vec<(String, i32, String, String)> {
+    let d = scratch(name);
+    let w = |f: &str, s: &str| std::fs::write(d.join(f), s).unwrap();
+    std::fs::create_dir_all(d.join("inc")).unwrap();
+    for dir in ["e.h.gch", "n.h.pch", "v.h.gch"] {
+        std::fs::create_dir_all(d.join(dir)).unwrap();
+    }
+    w("foo.h", "#define FROM_H 1\n");
+    w("pchsrc.h", "#define FROM_PCH 1\n#define FROM_H 1\n");
+    w("bar.h", "#define FROM_B 1\n");
+    w("inc/q.h", "#define FROM_Q 1\n");
+    w("g.h", "#define FROM_G 1\n");
+    w("gsrc.h", "#define FROM_GCH 1\n");
+    w("j.h", "#define FROM_J 1\n");
+    w("j.h.gch", "not a precompiled header\n");
+    w("e.h", "#define FROM_E 1\n");
+    w("n.h", "#define FROM_N 1\n");
+    w("z.h", "#define FROM_Z 1\n");
+    w("z.h.pch", "garbage\n");
+    w("v.h", "#define FROM_V 1\n");
+    w("v1.h", "#define FROM_V1 1\n");
+    w("v2.h", "#define FROM_V2 1\n");
+    w(
+        "m.cpp",
+        "pch=FROM_PCH h=FROM_H b=FROM_B q=FROM_Q g=FROM_G gch=FROM_GCH j=FROM_J e=FROM_E \
+         v=FROM_V v1=FROM_V1 v2=FROM_V2\n",
+    );
+    let go = |args: &[&str]| {
+        let mut a = pre.to_vec();
+        a.extend_from_slice(args);
+        run(cc, &d, &a)
+    };
+    for (src, out, extra) in [
+        ("pchsrc.h", "foo.h.pch", None),
+        ("pchsrc.h", "inc/q.h.pch", None),
+        ("bar.h", "x.pch", None),
+        ("gsrc.h", "g.h.gch", None),
+        ("v1.h", "v.h.gch/a.pch", Some("-DV=1")),
+        ("v2.h", "v.h.gch/b.pch", Some("-DV=2")),
+    ] {
+        let mut a = vec!["-x", "c++-header", src, "-o", out];
+        a.extend(extra);
+        let o = go(&a);
+        assert_eq!(o.code, 0, "{} {a:?}: {}", cc.display(), o.stderr);
+    }
+    let prog = cc.file_name().unwrap().to_string_lossy().into_owned();
+    let cases: &[&[&str]] = &[
+        // The `.pch` beside the header is used, looked up as spelled.
+        &["-include", "foo.h"],
+        &["-include", "./foo.h"],
+        &["-include", "inc/q.h"],
+        // Not in the include path, and not through `-Xclang`.
+        &["-I", "inc", "-include", "q.h"],
+        &["-Xclang", "-include", "-Xclang", "foo.h"],
+        // Only the first `-include`.
+        &["-include", "bar.h", "-include", "foo.h"],
+        &["-include", "j.h", "-include", "foo.h"],
+        // The last `-include-pch` wins; `-Xclang` ones come last.
+        &["-include", "foo.h", "-include-pch", "x.pch"],
+        &["-include-pch", "x.pch", "-include", "foo.h"],
+        &["-Xclang", "-include-pch", "-Xclang", "x.pch", "-include", "foo.h"],
+        // `.gch`: a PCH file, a file that is not one, an empty directory,
+        // a directory of PCHs (the acceptable one is used).
+        &["-include", "g.h"],
+        &["-include", "j.h"],
+        &["-include", "j.h", "-Wno-ignored-gch"],
+        &["-include", "j.h", "-Werror"],
+        &["-include", "e.h"],
+        &["-DV=2", "-include", "v.h"],
+        &["-DV=1", "-include", "v.h"],
+        // A `.pch` is used whatever it holds (a directory: one in it).
+        &["-include", "n.h"],
+    ];
+    let mut out = Vec::new();
+    for c in cases {
+        let mut a = c.to_vec();
+        a.extend_from_slice(&["-E", "-P", "m.cpp"]);
+        let o = go(&a);
+        let lines: Vec<&str> = o.stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+        let err = o.stderr.replace(&format!("{prog}:"), "<cc>:");
+        out.push((c.join(" "), o.code, lines.join("\n"), err));
+    }
+    // A `.pch` that is not one is the frontend's error. (Not `-E`: there
+    // clang reports only `input is not a PCH file` and goes on.)
+    let o = go(&["-include", "z.h", "-fsyntax-only", "m.cpp"]);
+    out.push(("-include z.h".into(), o.code, String::new(), o.stderr));
+    // The driver warns once per job.
+    let o = go(&["-include", "j.h", "-fsyntax-only", "-x", "c++", "/dev/null", "/dev/null"]);
+    out.push(("two jobs".into(), o.code, String::new(), o.stderr.replace(&prog, "<cc>")));
+    out
+}
+
+/// WP-1037: `-include foo.h` uses `foo.h.pch`, else a `foo.h.gch` that
+/// is a PCH, as clang's driver does; only for the first `-include`, with
+/// clang's warnings; the last `-include-pch` wins. Compared case by case
+/// with clang++-19 where installed.
+#[test]
+fn include_probes_for_pch() {
+    let k = probe_cases(&kilnpp(), &["-fclang-compat=19"], "probe-kiln");
+    let get = |c: &str| k.iter().find(|r| r.0 == c).unwrap_or_else(|| panic!("{c}"));
+    let used = get("-include foo.h");
+    assert_eq!((used.1, used.3.as_str()), (0, ""));
+    assert!(used.2.starts_with("pch=1 h=1 b=FROM_B"), "{}", used.2);
+    assert!(get("-I inc -include q.h").2.starts_with("pch=FROM_PCH h=FROM_H b=FROM_B q=1"));
+    let nf = get("-include bar.h -include foo.h");
+    assert_eq!(
+        nf.3,
+        "<cc>: warning: precompiled header 'foo.h.pch' was ignored because '-include foo.h' \
+         is not first '-include'\n"
+    );
+    assert!(nf.2.starts_with("pch=FROM_PCH h=1 b=1"), "{}", nf.2);
+    assert!(get("-include foo.h -include-pch x.pch").2.starts_with("pch=FROM_PCH h=FROM_H b=1"));
+    assert!(get("-include g.h").2.contains(" g=FROM_G gch=1 "));
+    let j = get("-include j.h");
+    assert_eq!(
+        j.3,
+        "<cc>: warning: precompiled header 'j.h.gch' was ignored because it is not a clang PCH \
+         file [-Wignored-gch]\n"
+    );
+    assert!(j.2.contains(" j=1 "));
+    assert_eq!(get("-include j.h -Werror").1, 1);
+    assert!(get("-include e.h").3.contains("'e.h.gch' was ignored because it contains no clang"));
+    assert!(get("-DV=2 -include v.h").2.ends_with("v=FROM_V v1=FROM_V1 v2=1"));
+    assert_eq!(
+        get("-include z.h").3,
+        "error: input is not a PCH file: 'z.h.pch'\nfatal error: file 'z.h.pch' is not a valid \
+         precompiled PCH file: file doesn't start with AST file magic\n2 errors generated.\n"
+    );
+    assert_eq!(
+        get("-include n.h").3,
+        "error: no suitable precompiled header file found in directory 'n.h.pch'\n1 error \
+         generated.\n"
+    );
+    assert_eq!(get("two jobs").3.matches("warning: precompiled header 'j.h.gch'").count(), 2);
+    if have("clang++-19") {
+        let c = probe_cases(Path::new("clang++-19"), &[], "probe-clang");
+        for (kr, cr) in k.iter().zip(&c) {
+            assert_eq!(kr, cr, "kiln++ (left) and clang++-19 (right) differ");
+        }
+    }
+}

@@ -256,6 +256,9 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 | Kw::Complex
                 | Kw::Alignas
                 | Kw::Attribute
+                // `__auto_type(x)` is never an expression (clang: "expected
+                // expression").
+                | Kw::GnuAutoType
                 | Kw::Declspec => Tpr::True,
                 // GNU `__extension__` is a unary operator as well as a
                 // decl-specifier prefix (clang's `ParseCastExpression`):
