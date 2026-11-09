@@ -231,16 +231,25 @@ fn file_index(
     }
 }
 
-/// How evaluations inside a frame of kind `k` are keyed: `Some(None)`
-/// by the frame's entity alone (the frames that instantiate a
-/// definition, initializer or default argument of one specialization),
-/// `Some(Some(code))` by the frame's template, entity and arguments (the
-/// substitutions whose frame records all their arguments), `None` not at
-/// all (alias templates, default-argument checks, partial
-/// specialization matching and the rest).
-fn frame_keying(k: FrameKind) -> Option<Option<u8>> {
+/// How evaluations inside an instantiation frame are keyed.
+#[derive(Clone, Copy)]
+enum Keying {
+    /// By the frame's entity alone (the frames that instantiate a
+    /// definition, initializer or default argument of one
+    /// specialization).
+    Entity,
+    /// By the frame's template, entity and arguments, with this frame
+    /// code (the substitutions whose frame records all their arguments).
+    Subst(u8),
+    /// Not at all (alias templates, default-argument checks, partial
+    /// specialization matching and the rest).
+    None,
+}
+
+/// How evaluations inside a frame of kind `k` are keyed.
+fn frame_keying(k: FrameKind) -> Keying {
     use FrameKind as K;
-    Some(match k {
+    match k {
         K::ClassInstantiation
         | K::MemberClass
         | K::MemberFunction
@@ -252,15 +261,15 @@ fn frame_keying(k: FrameKind) -> Option<Option<u8>> {
         | K::Nsdmi
         | K::DefaultFunctionArg
         | K::ExceptionSpec
-        | K::LambdaSubstitution => None,
-        K::ConceptCheck => Some(0),
-        K::ConstraintsCheck => Some(1),
-        K::DeducedArgSubstitution => Some(2),
-        K::ExplicitArgSubstitution => Some(3),
-        K::PriorArgSubstitution => Some(4),
-        K::DefaultTemplateArg => Some(5),
-        _ => return None,
-    })
+        | K::LambdaSubstitution => Keying::Entity,
+        K::ConceptCheck => Keying::Subst(0),
+        K::ConstraintsCheck => Keying::Subst(1),
+        K::DeducedArgSubstitution => Keying::Subst(2),
+        K::ExplicitArgSubstitution => Keying::Subst(3),
+        K::PriorArgSubstitution => Keying::Subst(4),
+        K::DefaultTemplateArg => Keying::Subst(5),
+        _ => Keying::None,
+    }
 }
 
 /// What identifies the innermost frame's key: its keying, entity,
@@ -346,11 +355,11 @@ impl Sema<'_, '_> {
     fn frame_sig(&self) -> Result<Option<FrameSig>, Skip> {
         let Some(f) = self.inst.stack.frames.last() else { return Ok(None) };
         match frame_keying(f.kind) {
-            Some(None) => Ok(Some((None, f.entity, f.entity, None))),
-            Some(Some(code)) if f.args.is_some() => {
+            Keying::Entity => Ok(Some((None, f.entity, f.entity, None))),
+            Keying::Subst(code) if f.args.is_some() => {
                 Ok(Some((Some(code), f.entity, f.template, f.args)))
             }
-            _ => Err(SKIP_SUBST),
+            Keying::Subst(_) | Keying::None => Err(SKIP_SUBST),
         }
     }
 
@@ -378,14 +387,14 @@ impl Sema<'_, '_> {
         }
         let key = self.frame_key(None, sig);
         let Some(rec) = &mut self.bmi.recorder else { return Err(SKIP_INST_KEY) };
-        let id = key.map(|k| match rec.inst_index.get(&k) {
-            Some(&i) => i,
-            None => {
-                rec.insts.push(k.clone());
-                let i = rec.insts.len() as u32;
-                rec.inst_index.insert(k, i);
-                i
+        let id = key.map(|k| {
+            if let Some(&i) = rec.inst_index.get(&k) {
+                return i;
             }
+            rec.insts.push(k.clone());
+            let i = rec.insts.len() as u32;
+            rec.inst_index.insert(k, i);
+            i
         });
         rec.ent_ix.insert(sig, id);
         id.ok_or(SKIP_INST_KEY)
