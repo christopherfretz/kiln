@@ -24,7 +24,9 @@
 //! `KILN_CASE=<name>` (the file stem) runs one case and prints both IR
 //! texts for each triple. A `//@ args: <opts>` line in a case adds
 //! `<opts>` (whitespace-separated) to both command lines, after the
-//! [`pinned_flags`].
+//! [`pinned_flags`]. With `-fcoverage-mapping` among them clang also gets
+//! `-mllvm -enable-name-compression=false` (kiln's mapping filenames are
+//! uncompressed, WP-1003).
 //!
 //! A `//@ module: <name>=<path>` line (path relative to the case) names a
 //! module interface unit the case imports: kiln builds it in-process from
@@ -343,6 +345,12 @@ fn clang_ir(file: &Path, triple: &str) -> Option<Result<String, String>> {
     let mut base = vec!["-O0", "-std=c++26", target.as_str()];
     base.extend(pinned_flags(triple));
     base.extend(extra.iter().map(String::as_str));
+    // kiln writes the coverage mapping's filenames uncompressed (WP-1003,
+    // spec/codegen.md §5.4); clang is asked for the same, which makes
+    // the encoded mapping and its translation-unit hash comparable.
+    if extra.iter().any(|a| a == "-fcoverage-mapping") {
+        base.extend(["-mllvm", "-enable-name-compression=false"]);
+    }
     let modules = module_inputs(file);
     let scratch = std::env::temp_dir().join(format!(
         "kiln-ir-vs-clang-{}-{}-{triple}",

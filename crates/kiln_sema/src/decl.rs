@@ -7015,10 +7015,25 @@ impl Sema<'_, '_> {
         if self.is_in_class_static(v) {
             return false;
         }
-        let in_class = self
-            .ast
-            .redecls_of(v)
-            .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x));
+        // Only a redeclaration of a static data member (semantically in
+        // its class) can find its in-class declaration; a namespace-scope
+        // variable's previous declarations are not walked for it
+        // (WP-1076).
+        let member = self.ast.decls.get(v).ctx().is_some_and(|c| {
+            matches!(
+                self.kind_of(c),
+                DeclKind::CXXRecord
+                    | DeclKind::ClassTemplateSpecialization
+                    | DeclKind::ClassTemplatePartialSpecialization
+            )
+        });
+        let in_class = member
+            .then(|| {
+                self.ast
+                    .redecls_of(v)
+                    .find(|&x| x != v && self.is_in_class_static(x) && self.is_var_definition(x))
+            })
+            .flatten();
         if let Some(x) = in_class {
             if self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr()) {
                 let loc = self.ast.decls.get(v).loc();
@@ -7028,9 +7043,11 @@ impl Sema<'_, '_> {
         }
         // [class.static.data]/4: the definition of a `const` static data
         // member initialized in its class has no initializer.
-        self.ast
-            .redecls_of(v)
-            .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
+        member
+            && self
+                .ast
+                .redecls_of(v)
+                .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
     }
 
     fn default_init_var(&mut self, v: DeclId) {
