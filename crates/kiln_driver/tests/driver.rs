@@ -265,27 +265,38 @@ fn linker_inputs_alone_are_inputs() {
     );
 }
 
-/// spec/driver.md "Options": clang's `-ftime-trace` family (glaze adds
-/// `-ftime-trace` for clang) is accepted with a
-/// `-Wunused-command-line-argument` warning per spelling, silenced by
-/// `-Qunused-arguments`; the compile is unaffected (WP-792).
+/// spec/driver.md "Time trace": with `-fsyntax-only` clang runs no
+/// compiler job that writes a trace, so each spelling of the family is
+/// `argument unused during compilation` (silenced by
+/// `-Qunused-arguments`) and nothing is written; a granularity that is not
+/// an unsigned integer is an error whenever a trace would be written
+/// (WP-1115; the compiling cases are in `tests/time_trace.rs`).
 #[test]
-fn time_trace_ignored() {
-    let flags = ["-ftime-trace", "-ftime-trace=t.json", "-ftime-trace-granularity=10"];
+fn time_trace_syntax_only() {
+    let d = scratch("tt");
+    let file = d.join("x.json");
+    let file = file.to_str().unwrap();
+    let eq = format!("-ftime-trace={file}");
+    let flags = ["-ftime-trace", eq.as_str(), "-ftime-trace-granularity=10", "-ftime-trace-verbose"];
     let mut args = vec!["-std=c++26", "-fsyntax-only"];
     args.extend(flags);
     args.push("-");
     let o = kiln(&args, "int f();\n");
     assert_eq!(o.code, 0, "{}", o.stderr);
-    for f in flags {
-        let w = format!(
-            "kiln++: warning: '{f}' ignored: kiln writes no time trace (see -fkiln-instantiation-report) [-Wunused-command-line-argument]\n"
-        );
-        assert!(o.stderr.contains(&w), "{}", o.stderr);
-    }
+    let want: String = flags
+        .iter()
+        .map(|f| format!("kiln++: warning: argument unused during compilation: '{f}' [-Wunused-command-line-argument]\n"))
+        .collect();
+    assert_eq!(o.stderr, want);
+    assert!(!Path::new(file).exists());
     args.insert(0, "-Qunused-arguments");
     let o = kiln(&args, "int f();\n");
     assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+    let o = kiln(&["-E", "-ftime-trace", "-ftime-trace-granularity=abc", "-"], "");
+    assert_eq!(
+        (o.code, o.stderr.as_str()),
+        (1, "kiln++: error: invalid integral value 'abc' in '-ftime-trace-granularity=abc'\n")
+    );
 }
 
 #[test]
