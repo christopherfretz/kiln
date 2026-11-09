@@ -683,7 +683,12 @@ impl Job<'_> {
         let mut kind = match carried {
             None => "kind 1, as -fkiln-bmi-kind=1 requests".to_owned(),
             Some(c) if consts.is_some() => {
-                format!("kind 2, carrying {} constant results", c.carried)
+                let inst = if c.inst_carried > 0 {
+                    format!(", {} inside template instantiations", c.inst_carried)
+                } else {
+                    String::new()
+                };
+                format!("kind 2, carrying {} constant results{inst}", c.carried)
             }
             Some(c) if decl_image.is_some() => {
                 format!("kind 2, carrying no constant result{}", skip(c))
