@@ -1092,7 +1092,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1075 | rejects-valid: break/continue inside a statement-expression in a loop condition, for(;({break;1;});) (kiln_sema stmt.rs:1350, :1358) | WP-971 | open |
 | WP-1076 | hang: kiln times out (>20 s) on clang CodeGenCXX/mangle-ms-back-references-pr13207.cpp, CodeGenCXX/pr29160.cpp, Preprocessor/bigoutput.c | WP-971 | open |
 | WP-1071 | sema: relookup_member handles overload sets and using-declarations of a specialization member (kiln_sema templ/subst/mod.rs:971, today not yet implemented) | WP-1054 | open |
-| WP-1072 | rejects-valid: dependent friend class A<T>::Member gets no access to private members (xfail temp.friend/dependent-member-class-friend-run.cpp) | WP-1054 | open |
+| WP-1072 | rejects-valid: dependent friend class A<T>::Member gets no access to private members (xfail temp.friend/dependent-member-class-friend-run.cpp) | WP-1054 | in progress |
 | WP-1073 | builtins: model returns_twice (setjmp, vfork, getcontext), allocsize (malloc family), scanf format on library builtins, and clang inline lowering of abort/alloca/bzero/bcopy/mempcpy/conj/creal/cimag/finite (kiln_ast decl.rs:3792, kiln_codegen builtins.rs) | WP-914 | open |
 | WP-1074 | tests: flaky kiln_driver module_cache racing_misses_all_succeed under load (tests/module_cache.rs:193) | WP-914 | open |
 | WP-1077 | linkage: closure type in a function template signature (decltype of a lambda) is emitted internal where clang uses linkonce_odr (kiln_abi mangle.rs ~600 tag_externally_visible) | WP-1060 | open |
