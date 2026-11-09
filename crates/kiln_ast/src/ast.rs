@@ -138,6 +138,21 @@ impl Ast {
                     e = self.exprs.coawait_operand(e, &self.lists);
                     continue;
                 }
+                // clang `CXXConstructExpr::getEndLoc`: without parens or
+                // braces, the last argument not defaulted.
+                ExprKind::CXXConstructExpr => {
+                    let args = self.lists.get(self.exprs.construct_args(e));
+                    let last = args.iter().rev().map(|&a| ExprId::new(a)).find(|&a| {
+                        self.exprs.get(a).kind() != ExprKind::CXXDefaultArgExpr
+                    });
+                    match last {
+                        Some(a) => {
+                            e = a;
+                            continue;
+                        }
+                        None => return n.loc(),
+                    }
+                }
                 // clang: the base's range.
                 ExprKind::DesignatedInitUpdateExpr => {
                     e = self.exprs.designated_init_update(e)[0];
