@@ -96,7 +96,7 @@ directives are also ERRORs.
 | `mem<=N` | Address-space budget of every process the test runs, in MiB (a positive integer; written without a `:` value). It lowers `--mem-limit` for this test (the cap is the smaller of the two) and applies even under `--mem-limit 0`. See "Resource limits". |
 | `requires: target-<arch>` | Run only when the test's **effective target** has architecture `<arch>` (`aarch64` or `x86_64`; any other value is an ERROR). The effective target is the last `--target=<triple>`, `--target <triple>` or `-target <triple>` in the test's `args`; without one it is the compiler's default target, taken to be the host the harness runs on (`std::env::consts::ARCH`), as it is for kiln and clang. The triple's architecture is its first `-` component, with `arm64` read as `aarch64` and `amd64` as `x86_64`. Otherwise **SKIP** with the reason `requires target-<arch>; the test targets <arch> (`<triple>`)` or, without a `--target`, `requires target-<arch>; the default target is <host>`. For a `run` test whose expectations (diagnostic text, output) hold only on one target, since a run test cannot cross-run; a compile-only test pins `args: --target=<triple>` instead (WP-228), which then needs no `requires`. A `run` test that pins a `--target` other than the host's skips rather than failing to run its binary (WP-239). |
 | `requires: host-<feature>` | Run only when the CPU the harness runs on has `<feature>` (`sve`; any other value is an ERROR) and the test's effective target (as for `target-`) has the host's architecture. The features are read from the `Features` (or `flags`) line of Linux's `/proc/cpuinfo`, or from the space-separated `KILN_HOST_FEATURES` when set; elsewhere the host has none. Otherwise **SKIP** with the reason `requires host-<feature>; the host CPU lacks <feature>` or `requires host-<feature>; the test targets <arch>, not the host`. Checked before `target-`. For a `run` test whose binary executes instructions of an optional extension (SVE, WP-810); such a test also carries `requires: target-aarch64`. |
-| `requires: sanitizer-runtime` | Run only when every clang that links the test's program finds the UBSan and ASan runtimes (compiler-rt's `libclang_rt.ubsan_standalone` and `libclang_rt.asan` for the host, in either the `lib/linux/<name>-<arch>.a` or the per-target `lib/<triple>/<name>.a` layout; Debian ships them apart, as `libclang-rt-N-dev`). Those clangs are kiln's linker driver, `<llvm_dir>/bin/clang++` ("Oracle toolchain"), when kiln compiles the test, the compiler under test when it is clang, and the oracle when it is clang and the test compares with it; each is probed once per run. Otherwise **SKIP** with the reason `requires sanitizer-runtime; <role> (<path>) has no UBSan/ASan runtime`. The test's program runs with no address-space cap (`mem<=` and `--mem-limit` still bound the compiles): ASan reserves its shadow memory, gigabytes of address space, before `main`. For `run` tests that link a sanitizer runtime (WP-1032). |
+| `requires: sanitizer-runtime` | Run only when every clang that links the test's program finds the UBSan and ASan runtimes (compiler-rt's `libclang_rt.ubsan_standalone` and `libclang_rt.asan` for the host, in either the `lib/linux/<name>-<arch>.a` or the per-target `lib/<triple>/<name>.a` layout; Debian ships them apart, as `libclang-rt-N-dev`). Those clangs are kiln's linker driver, `<llvm_dir>/bin/clang++` ("Oracle toolchain"), when kiln compiles the test, the compiler under test when it is clang, and the oracle when it is clang and the test compares with it; each is probed once per run. Otherwise **SKIP** with the reason `requires sanitizer-runtime; <role> (<path>) has no UBSan/ASan runtime`. The test's program runs with no address-space cap (`mem<=` and `--mem-limit` still bound the compiles): ASan reserves its shadow memory, gigabytes of address space, before `main`. Under **`KILN_REQUIRE_SANITIZER_RUNTIME=1`** (exactly `1`, as `KILN_REQUIRE_DEBUGGERS`; GitHub CI sets it) the missing runtime is an **ERROR** instead, `KILN_REQUIRE_SANITIZER_RUNTIME=1 and the test requires sanitizer-runtime; ...` (WP-1034). For `run` tests that link a sanitizer runtime (WP-1032). |
 | `requires: clang>=X[.Y[.Z]]` | Run only when every clang the test runs is at least version `X.Y.Z` (missing components are 0). The clangs the test runs are the compiler under test when its kind is clang, and the oracle when its kind is clang and the test compares with it (`oracle` in effect, or `layout`/`vtables`/`ir`, and an oracle configured). The version is the `X.Y.Z` after `clang version ` in the `--version` line; a clang whose version cannot be read never meets the requirement. Otherwise **SKIP** with the reason `requires clang>=X.Y.Z; the compiler is clang <version>` (or `the oracle is ...`; `... names no clang version` when it cannot be read). With no clang involved (kiln without an oracle, or a non-clang oracle) the requirement is met. For tests that a known defect of an older clang breaks (docs/VALIDATION.md, known oracle defects; WP-239). |
 | `requires: clang<X[.Y[.Z]]` | The complement: run only when every clang the test runs is OLDER than `X.Y.Z`; same clangs, same version reading (an unreadable version never meets it), and the SKIP reason `requires clang<X.Y.Z; the oracle is clang <version>`. Both bounds may appear (the lower is reported first). For an expectation a later clang release changed and kiln has not followed yet — the oracle-switch residual (docs/status/wp-184-oracle-switch.md); kiln alone (no clang run) still runs the test. WP-355. |
 | `min-oracle: N` | Run only when every clang the test runs (the same clangs as `requires: clang>=`) is release `N` or later (`N` a positive major version); otherwise **SKIP** with the reason `min-oracle N; the compiler is clang <version>`. The line `crates/kiln_codegen/tests/ir_vs_clang.rs` reads for an IR case that follows a newer clang where an older one differs (that test compares such a case only under oracle `N` or later); kiln alone (no clang run) still runs the test, at its usual `-fclang-compat`. WP-405. |
@@ -1005,6 +1005,34 @@ Scratch files live in `<target>/xtask-test/run-<pid>-<nanos>/t<index>/`. Each
 test's directory is removed when the test finishes, and the run directory is
 removed at the end of the run.
 
+## The mangling differential
+
+`crates/kiln_codegen/tests/mangle_vs_clang.rs` (WP-980) compiles every
+`tests/mangle/*.cpp` with `clang++-19 -S -emit-llvm` for
+`aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`, and checks
+that kiln's Itanium mangler (spec/codegen.md) produces each defined
+symbol clang emits; it fails below `MIN_SYMBOLS` checked symbols per
+triple, so a broken clang run cannot pass it vacuously. It prints one
+line per triple, `mangle_vs_clang [<triple>]: <files> files, <n> clang
+symbols checked`. Without `clang++-19` it skips with a note, except
+under `KILN_REQUIRE_LLVM=1` (GitHub CI), where that is a failure; the
+same holds for `abi_run_vs_clang` (WP-1034).
+
+It runs under (WP-1034, closing WP-1031):
+
+- `cargo xtask ci` and `ci --quick`, in the `unit` step (the `unit
+  codegen` job in GitHub CI): `cargo test -p kiln_codegen --test
+  mangle_vs_clang -- --nocapture`, its own command, so the counts reach
+  the log ("CI", step 1);
+- `cargo xtask test <paths>` without `--compiler` when a path is, is
+  inside, or contains `tests/mangle` (`cargo xtask test tests/mangle`,
+  or the default roots' parent `tests`): after the corpus run, the same
+  `cargo test` command; its failure makes the exit status 1, and a
+  `cargo` that cannot be spawned 2. The corpus run alone only compiles
+  the files (`expect: compile`), it does not compare symbols. With
+  `--compiler` the differential is not run (it tests kiln's mangler,
+  not the compiler under test). The decision is `names_mangle_corpus`.
+
 ## CI
 
 The libc++ suite driver (`cargo xtask libcxx`) is not part of `ci`. It is a
@@ -1043,7 +1071,10 @@ runs, stopping at the first failing step:
    cargo process shares the target directory), and a rerun rebuilds it. Any
    other failure, or a second E0463, fails `ci`. `ci` copies each step's
    stderr through as it arrives. The decision is
-   `test::report::ci_should_retry`;
+   `test::report::ci_should_retry`. `cargo test --workspace` (and the
+   `codegen` unit group) skips `mangling_matches_clang`, which then runs
+   as a command of its own, `cargo test -p kiln_codegen --test
+   mangle_vs_clang -- --nocapture` ("The mangling differential", WP-1034);
 2. `cargo build -p kiln_driver` (the binary the kiln-mode run tests, in the
    target dir as for `--compiler`'s default);
 
@@ -1128,9 +1159,19 @@ environment (aarch64 Debian 13, clang 19.1.7, GCC 14 for libstdc++
 detection, plus GCC 16.1 in `/usr/local` as the GCC oracle), with
 `clang-19 llvm-19 lld-19 libc++-19-dev libc++abi-19-dev` installed,
 `KILN_REQUIRE_LLVM=1`, `KILN_GCC=/usr/local/bin/g++`,
-`KILN_REQUIRE_GCC=1` and `KILN_REQUIRE_DEBUGGERS=1`, so nothing is
-skipped there (docs/VALIDATION.md "GitHub Actions", WP-226, WP-502,
-WP-816). The corpus jobs (`self-check`, `kiln-22`, `kiln-19`) and the
+`KILN_REQUIRE_GCC=1`, `KILN_REQUIRE_DEBUGGERS=1` and
+`KILN_REQUIRE_SANITIZER_RUNTIME=1`, so no capability skip happens there
+(docs/VALIDATION.md "GitHub Actions", WP-226, WP-502, WP-816, WP-1034):
+a test whose capability is missing is an ERROR, not a SKIP. The corpus
+jobs install compiler-rt for both clangs (`libclang-rt-19-dev
+libclang-rt-22-dev`, the setup action's `sanitizer-runtimes` input), so
+the `requires: sanitizer-runtime` tests run on both architectures
+(`ci_tests::workflow_installs_the_sanitizer_runtimes`). Shard 1 of
+`kiln-22` also installs `cmake ninja-build` (the `cmake` input) and,
+after its corpus step, runs `scripts/oss/selftest.sh --cmake-modules`
+with the `target/debug/kiln++` it built: the CMake modules end-to-end
+(WP-982), which there fails rather than skips without CMake 3.28 and
+ninja (`ci_tests::workflow_runs_the_cmake_modules_e2e`). The corpus jobs (`self-check`, `kiln-22`, `kiln-19`) and the
 `unit xtask` job (the debugger fixtures) also install `gdb lldb-19`
 (the setup action's `debuggers` input) in a container started with
 `--cap-add=SYS_PTRACE`; `ci_tests::workflow_installs_the_debuggers`
@@ -1406,6 +1447,13 @@ or infrastructure error. Parse errors name their line.
   default roots) and `ci_tests::workflow_installs_the_debuggers` (main.rs:
   `ci-lane.yml` sets the requirement and every corpus job installs the
   debuggers in a `SYS_PTRACE` container).
+- WP-1034: `sanitizer_runtime_gate_skips_or_errors` (runner.rs: a missing
+  sanitizer runtime is a SKIP, an ERROR under
+  `KILN_REQUIRE_SANITIZER_RUNTIME=1`), `mangle_corpus_paths` (tests.rs:
+  which `xtask test` paths run the mangling differential), `cargo_steps`
+  (main.rs: the unit step's split-out differential command), and
+  `ci_tests::workflow_installs_the_sanitizer_runtimes` /
+  `workflow_runs_the_cmake_modules_e2e` (main.rs).
 - `kiln_abi::dump_blocks` unit tests: block splitting, builtin records,
   `Original map` and duplicate construction vtables.
 - `tests/conformance/class.derived/layout-*.cpp` and

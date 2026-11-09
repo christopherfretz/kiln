@@ -749,19 +749,12 @@ mod ci_tests {
         }
     }
 
-    /// The debugger tests cannot silently skip in GitHub CI (WP-816,
-    /// spec/harness.md "Debugger tests"): `.github/workflows/ci-lane.yml`
-    /// sets `KILN_REQUIRE_DEBUGGERS: "1"`, and every job that runs a corpus
-    /// step installs gdb and lldb-19 (`debuggers: "true"`) in a container
-    /// with `CAP_SYS_PTRACE`.
-    #[test]
-    fn workflow_installs_the_debuggers() {
+    /// ci-lane.yml's text and its jobs, each a two-space-indented `name:`
+    /// line and the lines that follow it.
+    fn lane_workflow() -> (String, Vec<(String, String)>) {
         let path = util::repo_root().join(".github/workflows/ci-lane.yml");
         let yml = std::fs::read_to_string(&path).unwrap();
-        assert!(yml.contains("\n  KILN_REQUIRE_DEBUGGERS: \"1\"\n"), "{}", path.display());
-        assert!(yml.contains("options: --cap-add=SYS_PTRACE"), "{}", path.display());
         let jobs = &yml[yml.find("\njobs:\n").expect("a jobs: map")..];
-        // Each job is a two-space-indented `name:` line and what follows.
         let mut blocks: Vec<(String, String)> = Vec::new();
         for line in jobs.lines().skip(2) {
             let top = line.len() > 2 && !line[2..].starts_with([' ', '#']);
@@ -772,14 +765,67 @@ mod ci_tests {
                 b.push('\n');
             }
         }
+        (yml, blocks)
+    }
+
+    /// The jobs that run the corpus (self-check, kiln-22, kiln-19).
+    fn corpus_jobs(blocks: &[(String, String)]) -> Vec<&(String, String)> {
         let corpus: Vec<&(String, String)> = blocks
             .iter()
             .filter(|(_, b)| b.contains("--step kiln") || b.contains("--step self-check"))
             .collect();
-        assert!(corpus.len() >= 3, "self-check, kiln-22, kiln-19 in {}", path.display());
-        for (name, b) in corpus {
+        assert!(corpus.len() >= 3, "self-check, kiln-22, kiln-19 in ci-lane.yml");
+        corpus
+    }
+
+    /// The debugger tests cannot silently skip in GitHub CI (WP-816,
+    /// spec/harness.md "Debugger tests"): `.github/workflows/ci-lane.yml`
+    /// sets `KILN_REQUIRE_DEBUGGERS: "1"`, and every job that runs a corpus
+    /// step installs gdb and lldb-19 (`debuggers: "true"`) in a container
+    /// with `CAP_SYS_PTRACE`.
+    #[test]
+    fn workflow_installs_the_debuggers() {
+        let (yml, blocks) = lane_workflow();
+        assert!(yml.contains("\n  KILN_REQUIRE_DEBUGGERS: \"1\"\n"));
+        assert!(yml.contains("options: --cap-add=SYS_PTRACE"));
+        for (name, b) in corpus_jobs(&blocks) {
             assert!(b.contains("debuggers: \"true\""), "job `{name}` installs no debuggers");
             assert!(b.contains("container: *debugger-container"), "job `{name}` lacks ptrace");
         }
+    }
+
+    /// WP-1034: the `requires: sanitizer-runtime` tests run in CI on both
+    /// lanes rather than skip (spec/harness.md "Directives").
+    #[test]
+    fn workflow_installs_the_sanitizer_runtimes() {
+        let (yml, blocks) = lane_workflow();
+        let env = format!("\n  {}: \"1\"\n", test::REQUIRE_SANITIZER_RUNTIME_ENV);
+        assert!(yml.contains(&env), "ci-lane.yml sets no {env}");
+        for (name, b) in corpus_jobs(&blocks) {
+            assert!(b.contains("sanitizer-runtimes: \"true\""), "job `{name}` lacks compiler-rt");
+        }
+        let action = util::repo_root().join(".github/actions/kiln-ci/action.yml");
+        let action = std::fs::read_to_string(action).unwrap();
+        assert!(action.contains("libclang-rt-19-dev libclang-rt-22-dev"));
+    }
+
+    /// WP-1034: one corpus job runs the `CMake` modules end-to-end with the
+    /// kiln++ it built, and installs cmake and ninja for it.
+    #[test]
+    fn workflow_runs_the_cmake_modules_e2e() {
+        let (_, blocks) = lane_workflow();
+        let runs: Vec<&String> = blocks
+            .iter()
+            .filter(|(_, b)| b.contains("scripts/oss/selftest.sh --cmake-modules"))
+            .map(|(n, _)| n)
+            .collect();
+        assert!(!runs.is_empty(), "no ci-lane.yml job runs selftest.sh --cmake-modules");
+        for (name, b) in blocks.iter().filter(|(n, _)| runs.contains(&n)) {
+            assert!(b.contains("cmake: "), "job `{name}` installs no cmake");
+            assert!(b.contains("--step kiln"), "job `{name}` builds no kiln++ first");
+        }
+        let action = util::repo_root().join(".github/actions/kiln-ci/action.yml");
+        let action = std::fs::read_to_string(action).unwrap();
+        assert!(action.contains("cmake ninja-build"));
     }
 }
