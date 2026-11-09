@@ -5,11 +5,11 @@
 // external one and the program failed to link. The name is the info
 // type's mangling in the default (gcc, WP-909) form, GCC's `Dm`; under
 // -fkiln-reflection-mangling=kiln it is `u6__info`
-// (typeid-info-kiln-run.cpp). Checked against pinned output (no oracle).
+// (typeid-info-kiln-run.cpp). The output is compared with GCC 16.1's.
 //@ expect: run
 //@ args: -freflection --gcc-toolchain=%{gcc_toolchain}
 //@ skip(clang): clang does not implement P2996 reflection
-//@ oracle: none
+//@ oracle: gcc
 //@ stdout: Dm 1 1
 #include <cstdio>
 #include <meta>
