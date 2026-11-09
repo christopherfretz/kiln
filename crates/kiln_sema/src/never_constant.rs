@@ -657,7 +657,10 @@ impl Sema<'_, '_> {
             w.no_steps = true;
         }
         let known = f.known();
-        if !known || f.names.unknown() || self.nc_impure(e, 0) {
+        // A frame evaluation that succeeded read nothing unknown (it
+        // fails quietly at the first such read), so it notes no side
+        // effect (`int j = (x, 0);`).
+        if !known || (f.names.unknown() && !f.framed) || self.nc_impure(e, 0) {
             w.side = true;
         }
         known || !(f.names.untracked || (f.names.tracked && !f.framed))
@@ -755,12 +758,23 @@ impl Sema<'_, '_> {
     }
 
     /// The outcome of `e` (naming `names`) whose evaluation in the walk's
-    /// frame failed with `f`: the failure when clang reports it (with
-    /// every name known, it is clang's), else a failure the walk finds
-    /// with the unknown names unknown, else unknown.
+    /// frame failed with `f`: the failure when clang reports it, else,
+    /// when `e` names something the walk does not know, a failure the
+    /// walk finds with every local unknown, else unknown.
+    ///
+    /// The frame evaluation fails quietly at the first read of a
+    /// parameter, `this` or an untracked local (`Oven::frame_job`,
+    /// WP-1163), so a failure with notes came before it in clang's
+    /// order, while every local was still known. Past that read clang
+    /// fails quietly on every local (C++14 `findCompleteObject` once
+    /// `HasSideEffects` is set) but still reports a failure of an
+    /// operand that names none: what [`Sema::nc_expr`] finds.
     fn nc_frame_failure(&mut self, f: EvalFailure, names: Names, e: ExprId, depth: u32) -> Value {
-        if Self::reportable(&f) && !names.unknown() {
+        if Self::reportable(&f) {
             return Value::Fails(f);
+        }
+        if !names.unknown() {
+            return Value::Unknown;
         }
         match self.nc_expr(e, depth + 1) {
             p @ Value::Fails(_) => p,

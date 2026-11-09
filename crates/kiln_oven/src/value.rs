@@ -272,6 +272,7 @@ impl Oven {
     ) -> Result<ConstValueId, EvalFailure> {
         let void_ok = std::mem::take(&mut self.void_next);
         let addr = std::mem::take(&mut self.addr_next);
+        let unchecked = std::mem::take(&mut self.unchecked_next);
         let f = self.compile_thunk(b, e, object, addr);
         self.let_pending.clear();
         let run = self.exec(b, f, fb);
@@ -318,7 +319,7 @@ impl Oven {
         });
         let cv = r.map_err(|f| match f {
             Freeze::Fault(k) => EvalFailure::silent(k),
-            Freeze::Notes(n) if self.run.silent => {
+            Freeze::Notes(n) if self.run.silent || unchecked => {
                 drop(n);
                 EvalFailure::silent(FailKind::NotConstant)
             }

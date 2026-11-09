@@ -120,6 +120,13 @@ impl Oven {
             self.mem.free_static(p, &self.types);
             return Err(f);
         }
+        if self.frame_escapes(p) {
+            // Its value is a pointer into the evaluation's frame or heap
+            // space, which [`crate::mem::Memory::reset`] ends: clang
+            // knows it, the walk does not.
+            self.mem.free_static(p, &self.types);
+            return Err(EvalFailure::silent(FailKind::NotConstant));
+        }
         if quals.is_const()
             && let Ok(a) = self.mem.alloc_of(Ptr::decode(p))
         {
@@ -151,7 +158,14 @@ impl Oven {
             FrameEval::Value => FrameHow::Value,
             FrameEval::Discard => FrameHow::Discard,
         };
-        self.frame_job(bridge, e, frame, how, 0)
+        let r = self.frame_job(bridge, e, frame, how, 0)?;
+        if frame.iter().any(|&(_, o)| self.frame_escapes(o.0)) {
+            // A tracked object now holds a pointer that dangles once the
+            // evaluation ends ([`Oven::frame_escapes`]): its value is
+            // lost, as after a side effect.
+            return Err(EvalFailure::silent(FailKind::NotConstant));
+        }
+        Ok(r)
     }
 
     /// Stops tracking the object `o` ([`Oven::frame_local`]): it is freed.
@@ -184,25 +198,72 @@ impl Oven {
         self.frame.stubs.clear();
     }
 
-    /// Whether an object of type `ty` can be tracked: no evaluation can
-    /// leave a pointer in it.
+    /// Whether an object of type `ty` can be tracked: scalars (pointers
+    /// included, WP-1163; not pointers to members), and arrays and
+    /// classes of them, with no virtual pointer, union, `mutable` or
+    /// volatile subobject. A pointer it holds is checked after every
+    /// evaluation ([`Oven::frame_escapes`]).
     fn frame_trackable(&self, ty: OTy, depth: u32) -> bool {
         let info = self.types.info(ty);
-        if depth > 32
-            || info.has_ptr
-            || info.has_vptr
-            || info.has_union
-            || info.has_mutable
-            || info.has_volatile
+        if depth > 32 || info.has_vptr || info.has_union || info.has_mutable || info.has_volatile
         {
             return false;
         }
         match info.kind {
-            TyKind::Bool | TyKind::Int { .. } | TyKind::Float(_) | TyKind::WideInt { .. } => true,
+            TyKind::Bool
+            | TyKind::Int { .. }
+            | TyKind::Float(_)
+            | TyKind::WideInt { .. }
+            | TyKind::Ptr(_)
+            | TyKind::NullPtr => true,
             TyKind::Array { elem, .. } => self.frame_trackable(elem, depth + 1),
-            TyKind::Record { union, .. } => !union,
+            TyKind::Record { union, .. } => {
+                !union && self.types.fields(ty).iter().all(|f| self.frame_trackable(f.ty, depth + 1))
+            }
             _ => false,
         }
+    }
+
+    /// Whether the tracked object at `o` holds a pointer that does not
+    /// outlive the evaluation that stored it (WP-1163): one into the
+    /// frame or heap space, which [`crate::mem::Memory::reset`] ends.
+    /// Null, a function pointer, a pointer that points at nothing and
+    /// one to a static object (a variable, a string literal, a tracked
+    /// object; a stale one fails its generation check) keep.
+    fn frame_escapes(&self, o: u64) -> bool {
+        let Ok(a) = self.mem.alloc_of(Ptr::decode(o)) else { return false };
+        if !self.types.info(a.ty).has_ptr {
+            return false;
+        }
+        let s = &self.mem.stat;
+        let (base, size) = (u64::from(a.base), u64::from(a.size));
+        (base / GRAN..(base + size).div_ceil(GRAN)).any(|g| {
+            if s.ptr.get(g as usize).is_none_or(|&m| m == 0) {
+                return false;
+            }
+            let v = s.read(g * GRAN, 8) as u64;
+            !(v == 0 || Ptr::is_nowhere(v) || Ptr::decode(v).is_static())
+        })
+    }
+
+    /// Whether `fault` of the running frame job is the read or
+    /// modification of a parameter or local variable the frame does not
+    /// track (WP-1163): clang knows no value for it (a parameter) or
+    /// fails quietly after the first one (C++14 `findCompleteObject`
+    /// once `HasSideEffects` is set), so the job fails quietly and the
+    /// walk takes the expression apart ([`Oven::frame_job`]).
+    pub(crate) fn frame_unknown_read(&self, b: &dyn SemaBridge, fault: &crate::vm::Fault) -> bool {
+        use crate::mem::MemFault;
+        self.frame.how.is_some()
+            && matches!(fault, crate::vm::Fault::Mem {
+                f: MemFault::External(d, _) | MemFault::Unknown(d), ..
+            } if crate::compile::is_local_var(b.ast(), *d))
+    }
+
+    /// Whether a frame job is running: `this` fails quietly in it
+    /// ([`Oven::frame_unknown_read`]).
+    pub(crate) fn frame_running(&self) -> bool {
+        self.frame.how.is_some()
     }
 
     /// Runs a frame job: `e` evaluated as `how` with `frame` bound (and,
