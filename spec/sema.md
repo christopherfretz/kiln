@@ -628,6 +628,32 @@ clang's `AttributedType`; the canonical type is unchanged
 - order: a declarator chunk's qualifiers apply right after the chunk
   (`chunk_nullability`, clang's `processTypeAttrs` on the chunk).
 
+GNU `__restrict` (`__restrict__`) after a function declarator's
+parameter list is a method qualifier like `const` (`FuncInfo::this_quals`,
+WP-1091): in a non-static member function `this` is `T * __restrict`
+(`this_pointer_type`; restrict qualifies the pointer, not the object, so
+the implicit object parameter keeps only the cv-qualifiers,
+`method_object_quals`); it is no basis for overloading (`void f()
+__restrict; void f();` in a class is "class member cannot be
+redeclared"); clang's diagnostics spell it `__restrict` ("non-member
+function cannot have 'const __restrict' qualifier"); a repeated one is
+`-Wduplicate-decl-specifier` ("duplicate 'restrict' declaration
+specifier"). Its mangling is spec/codegen.md's. Test:
+class.this/restrict-method-qualifier-run.cpp.
+
+A nullability keyword after a function declarator's parameter list
+(`void f() _Nonnull;`, `using F = void() _Nullable;`) is parsed and
+dropped, as clang keeps it with the method qualifiers outside the type
+(`Declarator::fn_nullability`, WP-1091). The qualifier checks of a
+static member function ([class.static.mfct]/2), a non-member function
+and an explicit object member function ([dcl.fct]/6) see it: when it is
+the only qualifier the error quotes an empty spelling ("non-member
+function cannot have '' qualifier") at the start of the declaration's
+decl-specifiers (`diag_nullability_only_fn_quals`); with a cv- or
+ref-qualifier it is not quoted. Tests:
+dcl.fct/explicit-object-restrict-nullability-qualifier.cpp,
+dcl.fct/fn-restrict-nullability-qualifier-context.cpp.
+
 Decl-specifier qualifiers apply to the decl-specifier type when it can
 have nullability (`declspec_nullability`; `_Nonnull NP x` with `NP` a
 pointer typedef). Otherwise, as clang's `distributeNullabilityTypeAttr`,
@@ -1218,9 +1244,13 @@ Redeclaration and linkage rules:
 ### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
 - A decl-specifier `restrict`/`__restrict` (C99 6.7.3p2, clang
   `BuildQualifiedType`; WP-371) on a type that is not a pointer,
-  reference or member pointer (and not dependent, an undeduced
-  placeholder or an error) is "restrict requires a pointer or reference
-  ('int' is invalid)" at the qualifier, which is dropped
+  reference or member pointer (and not dependent or an error) is
+  "restrict requires a pointer or reference ('int' is invalid)" at the
+  qualifier, which is dropped. A placeholder is checked before deduction,
+  so `auto __restrict p = &i;` is "('auto' is invalid)" and a
+  parameter's `auto`/`C auto` (`void g(auto __restrict x)`, `this auto
+  __restrict self`) is "('C auto' is invalid)" before it becomes an
+  invented template parameter (`reject_placeholder_restrict`, WP-1091)
   (`type_from_declspec_at`, so `__restrict int *p;` qualifies `int` and
   is diagnosed). As clang forms each declarator's type anew
   ([dcl.decl.general]/3), it is reported once per declarator: the
@@ -2046,7 +2076,11 @@ instantiation unless stated.
   after the name and enum-base, with "declaration does not declare
   anything" at `enum`; a template-declaration in a block is clang 22's
   "templates can only be declared in namespace or class scope" at
-  `template` and is dropped (clang 19: "expected expression"); a friend
+  `template` and is dropped (clang 19: "expected expression"); when the
+  declaration is a function template definition (its declarator's
+  parameter list is followed by `{`) clang 22 reports "function
+  definition is not allowed here" at the `{` instead and skips the body
+  (spec/parse.md §2.4, WP-1091); a friend
   class template declared in a local class is "templates cannot be
   declared inside of a local class". Tests: temp.pre/, temp.mem/p2-*.cpp.
 - **inline after definition** ([dcl.inline]/6, `Sema::inline_after_definition`,
@@ -2062,8 +2096,23 @@ instantiation unless stated.
   friend class template or class named like an enclosing template
   parameter is "declaration of 'T' shadows template parameter". A
   `friend struct T` does not find a non-type template parameter (tag
-  lookup). Not re-checked at instantiation; an elaborated `struct T *`
-  in a function body is not checked. Tests: temp.local/p6-shadow-alias-params*.cpp.
+  lookup). Not re-checked at instantiation. An unqualified elaborated
+  reference `struct T *p` (in a member, a function body or an operand)
+  whose ordinary lookup finds a template type or template template
+  parameter is the same error at the name, with the note (clang
+  `ActOnTag`); the reference then names the tag `T` already in the
+  enclosing namespace, else declares one there, so a second reference
+  is not diagnosed again and does not make `T` ambiguous
+  (`diagnose_tag_ref_template_param`, WP-1091). A lambda capture
+  (simple, by-reference, init- or pack capture) named like a template
+  parameter of the lambda's own template-parameter-list
+  ([expr.prim.lambda.capture]/5) is the same error at the capture with
+  the note at the parameter (`check_capture_shadows_template_param`,
+  once the explicit or invented head is complete; an enclosing
+  template's parameters do not count; WP-1091). Tests:
+  temp.local/p6-shadow-alias-params*.cpp,
+  temp.local/p6-elaborated-ref-shadows-template-param*.cpp,
+  expr.prim.lambda.capture/capture-shadows-template-param*.cpp.
 - **C++03 union members** ([class.union]/1 in C++03, `cxx03_nontrivial_member`,
   WP-1042): before C++11 a union member, or a member of an anonymous
   struct, of (an array of) a class type with a non-trivial copy
