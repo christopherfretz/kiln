@@ -1362,6 +1362,10 @@ Tests: `conformance/target.acle/` (`ir-*-19.cpp` exact under oracle 19,
   prelude declarations are all consteval-only, and each element's
   constexpr `R` is substituted as a constant
   (`tests/conformance/stmt.expand/reflection-info-range-run.cpp`).
+  A namespace-scope one is not emitted either, whatever its linkage
+  (`extern constexpr info r = ^^S;`, an `export`ed one of a module
+  interface, WP-1047): `emit_global_var` returns before it too
+  (`tests/conformance/basic.types.general/consteval-only-extern-run.cpp`).
 
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
 The normative description is spec/driver.md "Code generation". In short:

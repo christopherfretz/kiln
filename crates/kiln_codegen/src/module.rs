@@ -989,6 +989,15 @@ impl<'a> Cg<'a> {
         if ast.weakref_target(d).is_some() {
             return Ok(());
         }
+        // A consteval-only variable has no storage at namespace scope
+        // either, whatever its linkage (`extern constexpr info r`, an
+        // exported one of a module interface; spec/codegen.md
+        // "Consteval-only variables").
+        if let Some(q) = ast.decls.get(d).ty()
+            && self.is_consteval_only(q)
+        {
+            return Ok(());
+        }
         // [dcl.link]/8: `extern "C" int x;` declares, like `extern`.
         let ext = v.spec.storage() == VarStorage::Extern || ast.decls.is_single_line_linkage(d);
         // [temp.expl.spec]/14: `template<> int C<char>::n;` declares: uses
