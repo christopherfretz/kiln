@@ -120,6 +120,31 @@ pub struct Input {
     pub header: bool,
 }
 
+/// The `-ftime-trace` family (spec/driver.md "Time trace").
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TimeTraceArgs {
+    /// `-ftime-trace` or `-ftime-trace=<path>` was given.
+    pub on: bool,
+    /// The last `-ftime-trace=<path>`'s path (`None` after a bare
+    /// `-ftime-trace`, or an empty path).
+    pub path: Option<String>,
+    /// `-ftime-trace-granularity=<n>`, as written (checked when used).
+    pub granularity: Option<String>,
+    /// `-ftime-trace-verbose`.
+    pub verbose: bool,
+    /// Every flag of the family as written, in order (for clang's
+    /// "argument unused" warnings when no trace is written).
+    pub written: Vec<String>,
+}
+
+impl TimeTraceArgs {
+    fn flag(&mut self, arg: &str, path: Option<&str>) {
+        self.on = true;
+        self.path = path.filter(|p| !p.is_empty()).map(str::to_owned);
+        self.written.push(arg.to_owned());
+    }
+}
+
 /// `-M` / `-MM` / `-MD` / `-MMD`: which headers the dependency output lists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DepHeaders {
@@ -481,10 +506,8 @@ pub struct Args {
     /// `-F` directories (ignored with a warning).
     pub frameworks: Vec<String>,
     /// `-ftime-trace[=<path>]`, `-ftime-trace-granularity=<n>` and
-    /// `-ftime-trace-verbose` as written: accepted for build systems that
-    /// add them for clang, warned about, and otherwise ignored (kiln
-    /// writes no time trace; its own reports are `-fkiln-*-report`).
-    pub time_trace: Vec<String>,
+    /// `-ftime-trace-verbose` (spec/driver.md "Time trace").
+    pub time_trace: TimeTraceArgs,
     /// `--embed-dir=<dir>`.
     pub embed_dirs: Vec<String>,
     /// `-include <file>`, in order: `#include "<file>"` at the end of the
@@ -1005,7 +1028,11 @@ impl Args {
             | "-fno-pch-debuginfo" => {}
             "-###" => self.print_commands = true,
             "-Qunused-arguments" => self.quiet_unused_arguments = true,
-            "-ftime-trace" | "-ftime-trace-verbose" => self.time_trace.push(arg.to_owned()),
+            "-ftime-trace" => self.time_trace.flag(arg, None),
+            "-ftime-trace-verbose" => {
+                self.time_trace.verbose = true;
+                self.time_trace.written.push(arg.to_owned());
+            }
             "-disable-llvm-passes" => self.disable_llvm_passes = true,
             "-moutline-atomics" => self.outline_atomics = Some(true),
             "-mno-outline-atomics" => self.outline_atomics = Some(false),
@@ -1172,10 +1199,11 @@ impl Args {
                             .errors
                             .push(ArgError::InvalidValue((*opt).to_owned(), v.to_owned())),
                     }
-                } else if arg.starts_with("-ftime-trace=")
-                    || arg.starts_with("-ftime-trace-granularity=")
-                {
-                    self.time_trace.push(arg.to_owned());
+                } else if let Some(v) = arg.strip_prefix("-ftime-trace=") {
+                    self.time_trace.flag(arg, Some(v));
+                } else if let Some(v) = arg.strip_prefix("-ftime-trace-granularity=") {
+                    self.time_trace.granularity = Some(v.to_owned());
+                    self.time_trace.written.push(arg.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fprebuilt-module-path=") {
                     self.prebuilt_module_paths.push(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fmodules-cache-path=") {
