@@ -1955,7 +1955,12 @@ impl Sema<'_, '_> {
     /// qualifier" (`id`).
     ///
     /// [`Declarator::fn_nullability`]: crate::declspec::Declarator::fn_nullability
-    pub(crate) fn diag_nullability_only_fn_quals(&mut self, id: DiagId, d: &Declarator, begin: Loc) {
+    pub(crate) fn diag_nullability_only_fn_quals(
+        &mut self,
+        id: DiagId,
+        d: &Declarator,
+        begin: Loc,
+    ) {
         if d.fn_nullability.is_none() {
             return;
         }

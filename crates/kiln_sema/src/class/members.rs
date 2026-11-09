@@ -11,8 +11,8 @@ use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{Quals, RefQual, TypeView};
 use kiln_ast::{DeclHead, DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
-use kiln_source::fx::FxHashSet;
 use kiln_source::Loc;
+use kiln_source::fx::FxHashSet;
 use kiln_source::symbol::Symbol;
 
 use super::BaseSpecInfo;
