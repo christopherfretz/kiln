@@ -483,7 +483,15 @@ impl<'a> IrTypes<'a> {
             if f.bit_width.is_some() && discrete {
                 i = self.accumulate_discrete_bitfields(fields, i, layout, &mut members, &mut seq);
             } else if f.bit_width.is_some() {
-                i = self.accumulate_bitfields(fields, i, def, layout, nv_base, &mut members, &mut seq);
+                i = self.accumulate_bitfields(
+                    fields,
+                    i,
+                    def,
+                    layout,
+                    nv_base,
+                    &mut members,
+                    &mut seq,
+                );
             } else if self.is_empty_field(&f) {
                 i += 1;
             } else {

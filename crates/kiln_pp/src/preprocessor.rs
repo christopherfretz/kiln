@@ -690,7 +690,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         }
         let mut t = self.lex_raw_from(top);
         let phys = t.has(TokFlags::START_OF_LINE);
-        let Some(Frame::File(f)) = self.frames.last_mut() else { unreachable!() };
+        let Some(Frame::File(f)) = self.frames.last_mut() else { unreachable!("top is a file") };
         if !f.pend.is_empty() && !matches!(t.kind, TokKind::Eod | TokKind::Eof) {
             t.flags |= f.pend;
             f.pend = TokFlags::empty();
@@ -709,7 +709,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         {
             return e;
         }
-        let Frame::File(f) = &mut self.frames[i] else { unreachable!() };
+        let Frame::File(f) = &mut self.frames[i] else { unreachable!("i is a file") };
         let t = if let Some(t) = f.back.pop() {
             t
         } else {
@@ -724,7 +724,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                         .emit(self.diags);
                 }
             }
-            let Frame::File(f) = &mut self.frames[i] else { unreachable!() };
+            let Frame::File(f) = &mut self.frames[i] else { unreachable!("i is a file") };
             let comments = if f.lx.has_comments() { f.lx.take_comments() } else { Vec::new() };
             if !f.lx.diagnostics().is_empty() {
                 let ds = f.lx.take_diagnostics();
@@ -923,7 +923,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     /// without the identifier handling): pastes, then applies the frame's
     /// start-of-line / leading-space flags.
     fn macro_next(&mut self) -> PpTok {
-        let Some(Frame::Macro(m)) = self.frames.last_mut() else { unreachable!() };
+        let Some(Frame::Macro(m)) = self.frames.last_mut() else { unreachable!("top is a macro") };
         let first = m.idx == 0;
         let mut t = m.toks[m.idx];
         m.idx += 1;
@@ -931,7 +931,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         if paste {
             t = self.paste_in_frame(t);
         }
-        let Some(Frame::Macro(m)) = self.frames.last_mut() else { unreachable!() };
+        let Some(Frame::Macro(m)) = self.frames.last_mut() else { unreachable!("top is a macro") };
         if first {
             t.set_flag(TokFlags::START_OF_LINE, m.at_sol);
             t.set_flag(TokFlags::LEADING_SPACE, m.has_ls);
@@ -955,7 +955,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     /// propagating its line-start / leading-space state to what is below
     /// (clang `HandleEndOfTokenLexer` + `PropagateLineStartLeadingSpaceInfo`).
     pub(crate) fn pop_macro(&mut self) {
-        let Some(Frame::Macro(m)) = self.frames.pop() else { unreachable!() };
+        let Some(Frame::Macro(m)) = self.frames.pop() else { unreachable!("top is a macro") };
         if let Some(d) = &m.def {
             d.enabled.set(true);
         }
@@ -1003,7 +1003,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                         seen.push(t);
                         t = self.lex_raw_from(i);
                     }
-                    let Frame::File(f) = &mut self.frames[i] else { unreachable!() };
+                    let Frame::File(f) = &mut self.frames[i] else { unreachable!("i is a file") };
                     if seen.is_empty() {
                         f.back.push(first);
                     } else {
@@ -1032,7 +1032,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             let _ = t;
             return true;
         }
-        let Some(Frame::File(mut f)) = self.frames.pop() else { unreachable!() };
+        let Some(Frame::File(mut f)) = self.frames.pop() else { unreachable!("top is a file") };
         let exited = f.file;
         if let Some(save) = f.unit.take() {
             self.end_unit(save);
