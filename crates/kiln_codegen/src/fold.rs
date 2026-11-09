@@ -122,7 +122,7 @@ impl SemaBridge for Bridge<'_> {
 
 /// Folds every candidate expression of the translation unit.
 pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds {
-    let (cands, inits, imm, statics, dtors, ps_args) = {
+    let (cands, inits, imm, statics, dtors, ps_args, arr_lists) = {
         let mut c = Collect {
             ast,
             compat: oven.clang_compat(),
@@ -133,19 +133,22 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             statics: Vec::new(),
             dtors: FxHashMap::default(),
             ps_args: Vec::new(),
+            arr_lists: Vec::new(),
+            cover: None,
         };
         c.tu();
-        (c.out, c.inits, c.imm, c.statics, c.dtors, c.ps_args)
+        (c.out, c.inits, c.imm, c.statics, c.dtors, c.ps_args, c.arr_lists)
     };
     let mut b = Bridge { ast, abi: target, cxx_year: oven.cxx_year() };
     let mut folds = Folds::default();
     let mut refolded = FxHashSet::default();
+    let mut tried = FxHashSet::default();
     // clang's `ConstantEmitter` folds in modes that evaluate past
     // floating arithmetic yielding a NaN or dividing by zero
     // (`keepEvaluatingAfterUndefinedBehavior`).
     oven.set_fold_float_ub(true);
     for e in cands {
-        if folds.expr.contains_key(&e) {
+        if !tried.insert(e) {
             continue;
         }
         // A constant initializer is manifestly constant-evaluated
@@ -191,6 +194,7 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             folds.expr.insert(e, v);
         }
     }
+    array_lists(&mut b, oven, &mut folds, &tried, arr_lists);
     for (e, init) in statics {
         if let Some(v) = folds.get(init).filter(|_| !refolded.contains(&init)) {
             folds.expr.entry(e).or_insert(v);
@@ -229,6 +233,51 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         }
     }
     folds
+}
+
+/// clang `AggExprEmitter::EmitArrayInit` (WP-1008): an array
+/// initializer list of trivially copyable elements whose explicit
+/// elements take more than 16 bytes is copied from a private `constinit`
+/// global when `ConstantEmitter::tryEmitForInitializer` emits it. That
+/// emitter folds each element it cannot spell directly with
+/// `EvaluateAsRValue` outside a constant context, so the list folds as a
+/// trial rvalue here, once. A list whose covering initializer folded is
+/// never emitted (its value is), and an expression the main pass already
+/// tried keeps that answer.
+fn array_lists(
+    b: &mut Bridge<'_>,
+    oven: &mut Oven,
+    folds: &mut Folds,
+    tried: &FxHashSet<ExprId>,
+    lists: Vec<(ExprId, Option<ExprId>)>,
+) {
+    let mut covered = FxHashSet::default();
+    for (e, cover) in lists {
+        if cover.is_some_and(|c| covered.contains(&c) || folds.expr.contains_key(&c)) {
+            covered.insert(e);
+            continue;
+        }
+        if tried.contains(&e) || folds.expr.contains_key(&e) {
+            continue;
+        }
+        let ty = b.ast.exprs.get(e).ty();
+        let Some(elem) = b.ast.types.element(ty) else { continue };
+        let n = match b.ast.exprs.get(e).kind() {
+            ExprKind::CXXParenListInitExpr => {
+                b.ast.lists.get(b.ast.exprs.paren_list_inits(e)).len()
+            }
+            _ => b.ast.lists.get(b.ast.exprs.init_list_inits(e)).len(),
+        };
+        let size = kiln_abi::type_size_align(b.ast, elem, b.abi).size;
+        if (n as u64).saturating_mul(size) <= 16 {
+            continue;
+        }
+        if let Some(v) =
+            oven.fold_rvalue(b, e).filter(|&v| kiln_oven::automatic_referent(b.ast, v).is_none())
+        {
+            folds.expr.insert(e, v);
+        }
+    }
 }
 
 /// The value sema computed for `constexpr` variable `d`'s initializer.
@@ -314,6 +363,15 @@ struct Collect<'a> {
     dtors: FxHashMap<DeclId, (DeclId, Option<ExprId>, bool)>,
     /// The `pass_object_size(t)` arguments with their `t` ([`Folds::obj_size`]).
     ps_args: Vec<(ExprId, u32)>,
+    /// WP-1008: the array initializer lists clang's `EmitArrayInit` may
+    /// copy from a `constinit` global, in pre-order, each with the
+    /// nearest enclosing initializer whose folded value would be emitted
+    /// in its place ([`Collect::cover`]).
+    arr_lists: Vec<(ExprId, Option<ExprId>)>,
+    /// The innermost enclosing initializer that covers the expressions
+    /// being walked: an array list, or a variable initializer whose value
+    /// is emitted as a constant when it folds.
+    cover: Option<ExprId>,
 }
 
 impl Collect<'_> {
@@ -412,7 +470,20 @@ impl Collect<'_> {
         if constant_init {
             self.inits.insert(init, d);
         }
+        // The folded value replaces the whole initializer when the
+        // variable is static or an automatic aggregate clang emits as a
+        // constant (`IsConstantAggregate`, `Cg::emit_var_init`), so no
+        // array list inside it is emitted. Any other variable (one in a
+        // statement expression inside a list, say) starts uncovered.
+        let covers = is_static
+            || (v.spec.is_constexpr() && !ast.types.is_reference(ty))
+            || (matches!(
+                ast.types.canonical_view(ty),
+                TypeView::ConstantArray(_) | TypeView::Record(_)
+            ) && crate::class::is_pod(ast, ty));
+        let saved = std::mem::replace(&mut self.cover, covers.then_some(init));
         self.expr(init);
+        self.cover = saved;
     }
 
     fn stmt(&mut self, s: StmtId) {
@@ -687,6 +758,23 @@ impl Collect<'_> {
             | ExprKind::CXXConstructExpr
             | ExprKind::CXXTemporaryObjectExpr => {
                 self.ps_args.extend(crate::builtins::object_size_args(ast, e));
+            }
+            // clang `AggExprEmitter::EmitArrayInit` tries an array of
+            // trivially copyable elements as a constant (WP-1008); the size
+            // condition needs the layout ([`array_lists`]).
+            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+                if ast.types.is_array(n.ty())
+                    && !n.is_type_dependent()
+                    && !n.is_value_dependent()
+                    && crate::class::is_trivially_copyable(ast, n.ty()) =>
+            {
+                self.arr_lists.push((e, self.cover));
+                let saved = self.cover.replace(e);
+                for c in ast.exprs.children(e, &ast.lists) {
+                    self.expr(c);
+                }
+                self.cover = saved;
+                return;
             }
             // clang `EmitCXXNewAllocSize` tries the array bound as a constant.
             ExprKind::CXXNewExpr => self.out.extend(ast.exprs.new_extra(e).array_size),
