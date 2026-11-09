@@ -476,6 +476,10 @@ impl Cg<'_> {
             Some(b) if ast.stmts.get(b).kind() == kiln_ast::stmt::StmtKind::CompoundStmt => {
                 ast.stmts.rbrace(b)
             }
+            // A coroutine's `CoroutineBodyStmt` ends where its body does.
+            Some(b) if ast.stmts.get(b).kind() == kiln_ast::stmt::StmtKind::CoroutineBodyStmt => {
+                self.di_body_end(Some(ast.stmts.coroutine_body(b).body))
+            }
             _ => Loc::INVALID,
         }
     }
