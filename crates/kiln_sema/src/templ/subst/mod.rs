@@ -1105,10 +1105,10 @@ impl Substituter<'_, '_, '_> {
         let x = if let Some(data) = self.sema.ast.decls.enumeration(d).copied() {
             // Declared only: its definition statement defines it.
             let n = *self.sema.ast.decls.get(d);
-            let fixed = match data.int_type.filter(|_| data.is_fixed()) {
-                Some(t) => Some(self.ty(t, n.loc()).unwrap_or(QualType::INT)),
-                None => None,
-            };
+            let fixed = data
+                .int_type
+                .filter(|_| data.is_fixed())
+                .map(|t| self.ty(t, n.loc()).unwrap_or(QualType::INT));
             let scoped = data.flags & (EnumData::SCOPED | EnumData::SCOPED_STRUCT);
             let name = n.name().as_ident().filter(|_| !n.name().is_empty()).map(|s| (s, n.loc()));
             let (kw, use_) = (kiln_ast::types::TagKeyword::Enum, crate::decl::TagUse::Declaration);
