@@ -15,8 +15,8 @@ use std::io::Write;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions};
-use kiln_lex::TokKind;
 use kiln_lex::Interner;
+use kiln_lex::TokKind;
 use kiln_pp::bmi::UnitKind;
 use kiln_source::{SourceManager, Span};
 
@@ -67,9 +67,10 @@ fn parse_opts(prog: &str, opts: &[String]) -> Result<ScanOpts, String> {
             if let Some(v) = inline {
                 return Ok(v.to_owned());
             }
-            let v = opts.get(*i).cloned().ok_or_else(|| {
-                format!("{prog}: for the {name} option: requires a value!")
-            })?;
+            let v = opts
+                .get(*i)
+                .cloned()
+                .ok_or_else(|| format!("{prog}: for the {name} option: requires a value!"))?;
             *i += 1;
             Ok(v)
         };
@@ -92,8 +93,12 @@ fn parse_opts(prog: &str, opts: &[String]) -> Result<ScanOpts, String> {
             // Scheduling and caching knobs of clang's scanner: kiln scans
             // one command on one thread (documented no-ops).
             "-j" | "-mode" | "-resource-dir-recipe" => drop(value(&mut i)?),
-            "-optimize-args" | "-eager-load-pcm" | "-reuse-filemanager"
-            | "-skip-excluded-pp-ranges" | "-brief-result" | "-round-trip-args" => {}
+            "-optimize-args"
+            | "-eager-load-pcm"
+            | "-reuse-filemanager"
+            | "-skip-excluded-pp-ranges"
+            | "-brief-result"
+            | "-round-trip-args" => {}
             "-compilation-database" => {
                 return Err(format!(
                     "{prog}: -compilation-database is not supported; pass the command after '--'"
@@ -231,7 +236,8 @@ fn write_or_report(path: Option<&str>, text: &str, io: &mut Io, prog: &str) -> b
     match crate::write_output(path, text, &mut io.stdout) {
         Ok(()) => true,
         Err(e) => {
-            let _ = writeln!(io.stderr, "{prog}: error: cannot open '{}': {e}", path.unwrap_or("-"));
+            let _ =
+                writeln!(io.stderr, "{prog}: error: cannot open '{}': {e}", path.unwrap_or("-"));
             false
         }
     }
@@ -419,6 +425,9 @@ mod tests {
     #[test]
     fn empty_document() {
         let args = Args::parse_as("kiln++", &[]);
-        assert_eq!(p1689(&args, "a.cpp", None), "{\n  \"revision\": 0,\n  \"rules\": [],\n  \"version\": 1\n}\n");
+        assert_eq!(
+            p1689(&args, "a.cpp", None),
+            "{\n  \"revision\": 0,\n  \"rules\": [],\n  \"version\": 1\n}\n"
+        );
     }
 }

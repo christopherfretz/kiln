@@ -51,7 +51,10 @@ fn sources(name: &str) -> PathBuf {
     let d = scratch(name);
     let files: &[(&str, &str)] = &[
         ("hdr.h", "#define HDR 1\n"),
-        ("m.cppm", "module;\n#include \"hdr.h\"\nexport module m;\nexport import :p;\nimport :impl;\n"),
+        (
+            "m.cppm",
+            "module;\n#include \"hdr.h\"\nexport module m;\nexport import :p;\nimport :impl;\n",
+        ),
         ("p.cppm", "export module m:p;\nexport int g() { return 2; }\n"),
         ("impl.cppm", "module m:impl;\nint h() { return 3; }\n"),
         ("m.cpp", "module m;\n#include \"hdr.h\"\nint f() { return g() + h() + HDR; }\n"),
@@ -69,7 +72,9 @@ fn sources(name: &str) -> PathBuf {
 const EMPTY: &str = "{\n  \"revision\": 0,\n  \"rules\": [],\n  \"version\": 1\n}\n";
 
 fn doc(rule: &str) -> String {
-    format!("{{\n  \"revision\": 0,\n  \"rules\": [\n    {{\n{rule}    }}\n  ],\n  \"version\": 1\n}}\n")
+    format!(
+        "{{\n  \"revision\": 0,\n  \"rules\": [\n    {{\n{rule}    }}\n  ],\n  \"version\": 1\n}}\n"
+    )
 }
 
 fn provides(name: &str, interface: bool, src: &str) -> String {
@@ -113,12 +118,18 @@ fn partitions_report_is_interface() {
     let d = sources("partitions");
     let o = p1689(&d, &["-c", "p.cppm", "-o", "p.o"]);
     assert_eq!(o.code, 0, "{}", o.stderr);
-    assert_eq!(o.stdout, doc(&format!("      \"primary-output\": \"p.o\",\n{}\n", provides("m:p", true, "p.cppm"))));
+    assert_eq!(
+        o.stdout,
+        doc(&format!("      \"primary-output\": \"p.o\",\n{}\n", provides("m:p", true, "p.cppm")))
+    );
     let o = p1689(&d, &["-c", "impl.cppm", "-o", "impl.o"]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(
         o.stdout,
-        doc(&format!("      \"primary-output\": \"impl.o\",\n{}\n", provides("m:impl", false, "impl.cppm")))
+        doc(&format!(
+            "      \"primary-output\": \"impl.o\",\n{}\n",
+            provides("m:impl", false, "impl.cppm")
+        ))
     );
 }
 
@@ -129,7 +140,10 @@ fn implementation_unit_requires_its_module() {
     let d = sources("impl-unit");
     let o = p1689(&d, &["-c", "m.cpp", "-o", "m.cpp.o"]);
     assert_eq!(o.code, 0, "{}", o.stderr);
-    assert_eq!(o.stdout, doc(&format!("      \"primary-output\": \"m.cpp.o\",\n{}\n", requires(&["m"]))));
+    assert_eq!(
+        o.stdout,
+        doc(&format!("      \"primary-output\": \"m.cpp.o\",\n{}\n", requires(&["m"])))
+    );
 }
 
 /// [module.import]: a consumer requires each module once; a TU with no
@@ -139,7 +153,10 @@ fn consumers_and_plain_units() {
     let d = sources("consumer");
     let o = p1689(&d, &["-c", "main.cpp", "-o", "main.o"]);
     assert_eq!(o.code, 0, "{}", o.stderr);
-    assert_eq!(o.stdout, doc(&format!("      \"primary-output\": \"main.o\",\n{}\n", requires(&["m"]))));
+    assert_eq!(
+        o.stdout,
+        doc(&format!("      \"primary-output\": \"main.o\",\n{}\n", requires(&["m"])))
+    );
     let o = p1689(&d, &["-c", "plain.cpp"]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(o.stdout, doc("      \"primary-output\": \"plain.o\"\n"));
@@ -186,7 +203,11 @@ fn missing_input() {
     let o = p1689(&d, &["-c", "nofile.cppm", "-o", "n.o"]);
     assert_eq!(o.code, 1);
     assert_eq!(o.stdout, EMPTY);
-    assert!(o.stderr.starts_with("Diagnostics while scanning dependencies for 'nofile.cppm':\n"), "{}", o.stderr);
+    assert!(
+        o.stderr.starts_with("Diagnostics while scanning dependencies for 'nofile.cppm':\n"),
+        "{}",
+        o.stderr
+    );
     assert!(o.stderr.contains("no such file or directory: 'nofile.cppm'"), "{}", o.stderr);
 }
 
@@ -197,10 +218,18 @@ fn missing_input() {
 #[test]
 fn scanner_options_and_names() {
     let d = sources("options");
-    let o = scan_with("kiln-scan-deps", &d, &["-format=p1689", "-o", "out.json"], Some(&["-c", "p.cppm", "-o", "p.o"]));
+    let o = scan_with(
+        "kiln-scan-deps",
+        &d,
+        &["-format=p1689", "-o", "out.json"],
+        Some(&["-c", "p.cppm", "-o", "p.o"]),
+    );
     assert_eq!((o.code, o.stdout.as_str()), (0, ""), "{}", o.stderr);
     let file = std::fs::read_to_string(d.join("out.json")).unwrap();
-    assert_eq!(file, doc(&format!("      \"primary-output\": \"p.o\",\n{}\n", provides("m:p", true, "p.cppm"))));
+    assert_eq!(
+        file,
+        doc(&format!("      \"primary-output\": \"p.o\",\n{}\n", provides("m:p", true, "p.cppm")))
+    );
 
     let o = scan_with("clang-scan-deps", &d, &["-format=p1689"], None);
     assert_eq!(o.code, 1);
@@ -210,7 +239,10 @@ fn scanner_options_and_names() {
     );
     let o = scan_with("clang-scan-deps-22", &d, &["-format=bogus"], Some(&["-c", "p.cppm"]));
     assert_eq!(o.code, 1);
-    assert_eq!(o.stderr, "clang-scan-deps-22: for the --format option: Cannot find option named 'bogus'\n");
+    assert_eq!(
+        o.stderr,
+        "clang-scan-deps-22: for the --format option: Cannot find option named 'bogus'\n"
+    );
     // The default format is make: a rule for the object.
     let o = scan_with("kiln-scan-deps", &d, &[], Some(&["-c", "p.cppm", "-o", "p.o"]));
     assert_eq!(o.code, 0, "{}", o.stderr);
