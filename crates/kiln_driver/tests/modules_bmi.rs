@@ -358,7 +358,7 @@ const CT_ERR: &str =
     include_str!("../../../tests/conformance/module.interface/carried-instantiations-errors.cpp");
 
 /// Kind 2 carries the results of evaluations inside the module's own
-/// template instantiations (static data members, static_asserts, local
+/// template instantiations (static data members, `static_assert`s, local
 /// constexpr variables, `if constexpr`, array bounds, non-type
 /// arguments, and a body instantiated at the unit's end): a kind-2
 /// importer re-runs none of the expensive ones, and its diagnostics and
@@ -415,21 +415,20 @@ fn kind2_carries_instantiation_results() {
 
     // A damaged section with instantiation keys behind a valid checksum
     // is a diagnostic or a fallback, never a crash.
-    use kiln_pp::bmi;
-    let capsule = bmi::read(&two).unwrap();
-    let len = capsule.section(bmi::SECTION_CONSTS).unwrap().len() as u64;
-    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let capsule = kiln_pp::bmi::read(&two).unwrap();
+    let len = capsule.section(kiln_pp::bmi::SECTION_CONSTS).unwrap().len() as u64;
+    let mut rng = 0x9e37_79b9_7f4a_7c15u64;
     for i in 0..24 {
         let mut c = capsule.clone();
-        let s = c.sections.iter_mut().find(|s| s.tag == bmi::SECTION_CONSTS).unwrap();
-        seed ^= seed << 13;
-        seed ^= seed >> 7;
-        seed ^= seed << 17;
+        let s = c.sections.iter_mut().find(|s| s.tag == kiln_pp::bmi::SECTION_CONSTS).unwrap();
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
         match i % 2 {
-            0 => s.bytes.truncate((seed % len) as usize),
-            _ => s.bytes[(seed % len) as usize] ^= 0xff,
+            0 => s.bytes.truncate((rng % len) as usize),
+            _ => s.bytes[(rng % len) as usize] ^= 0xff,
         }
-        std::fs::write(d.join("bad.pcm"), bmi::write(&c)).unwrap();
+        std::fs::write(d.join("bad.pcm"), kiln_pp::bmi::write(&c)).unwrap();
         let o = kiln(&d, &["-fsyntax-only", "-fmodule-file=ct=bad.pcm", "run.cpp"]);
         assert!(o.code == 0 || o.code == 1, "damage {i}: {}", o.stderr);
     }
