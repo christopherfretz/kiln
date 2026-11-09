@@ -355,7 +355,7 @@ const REPO: &str = "https://github.com/christopherfretz/kiln";
 fn install_doc(root: &Path, rel: &str, doc: &Path) -> Result<(), String> {
     let from = root.join(rel);
     let to = doc.join(from.file_name().unwrap_or_default());
-    if !rel.ends_with(".md") {
+    if Path::new(rel).extension().is_none_or(|e| e != "md") {
         return copy_file(&from, &to, 0o644);
     }
     let text = std::fs::read_to_string(&from).map_err(io_err("read", &from))?;
@@ -365,7 +365,7 @@ fn install_doc(root: &Path, rel: &str, doc: &Path) -> Result<(), String> {
 }
 
 /// `text`, the checkout document `src` (relative to `root`), with each
-/// relative link (crate::doclinks::links) retargeted for the flat
+/// relative link (`crate::doclinks::links`) retargeted for the flat
 /// `share/doc/kiln/` layout: a link to another of [`DOCS`] becomes its
 /// file name, a link to any other checkout file or directory becomes its
 /// [`REPO`] URL at the release tag `v<version>` (`raw/` for an HTML

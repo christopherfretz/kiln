@@ -307,7 +307,7 @@ mod tests {
             "arch" => "x86-64-v2",
             "cpu" => "generic",
             "library" => "libc++",
-            "lib" => "m",
+            "lib" => "z",
             "level" => "2",
             "kind" => "thin",
             "visibility" => "hidden",
@@ -329,7 +329,7 @@ mod tests {
             "options" => "ids",
             "prefixes" => "expected",
             "size" => "64m",
-            "scheme" => "gcc",
+            "scheme" => "kiln-hashed",
             "style" => "gcc",
             "text" => "main",
             "name" => "ld",
@@ -387,7 +387,8 @@ mod tests {
     #[test]
     fn lists_the_option_groups_and_marks_kiln_only() {
         let entries = entries();
-        let all: Vec<&str> = entries.iter().flat_map(|(f, _)| f.iter().map(String::as_str)).collect();
+        let all: Vec<&str> =
+            entries.iter().flat_map(|(f, _)| f.iter().map(String::as_str)).collect();
         for want in [
             "-g",
             "-g<level>",
@@ -410,9 +411,14 @@ mod tests {
         for (forms, desc) in &entries {
             let kiln_only = forms.iter().any(|f| {
                 f.starts_with("-fkiln-")
-                    || ["--llvm-dir=", "-fclang-compat=", "-fconstexpr-memory=", "-fconstexpr-report="]
-                        .iter()
-                        .any(|p| f.starts_with(p))
+                    || [
+                        "--llvm-dir=",
+                        "-fclang-compat=",
+                        "-fconstexpr-memory=",
+                        "-fconstexpr-report=",
+                    ]
+                    .iter()
+                    .any(|p| f.starts_with(p))
             });
             assert_eq!(desc.starts_with("[kiln]"), kiln_only, "{forms:?}: {desc}");
         }

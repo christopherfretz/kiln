@@ -165,11 +165,9 @@ pub fn check_tree(dir: &Path) -> Vec<String> {
                 continue;
             }
             let (path, anchor) = split_anchor(target);
-            let Some(resolved) = (if path.is_empty() {
-                Some(rel.clone())
-            } else {
-                resolve(rel, path)
-            }) else {
+            let Some(resolved) =
+                (if path.is_empty() { Some(rel.clone()) } else { resolve(rel, path) })
+            else {
                 bad.push(format!("{rel}: {target} (outside the tree)"));
                 continue;
             };
@@ -197,7 +195,7 @@ fn collect_md(dir: &Path, prefix: &str, out: &mut Vec<String>) {
         let p = e.path();
         if p.is_dir() {
             collect_md(&p, &rel, out);
-        } else if name.ends_with(".md") {
+        } else if p.extension().is_some_and(|e| e == "md") {
             out.push(rel);
         }
     }
@@ -242,8 +240,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("A.md"), "# A\n## Part one\n[b](B.md) [s](#part-one)\n").unwrap();
-        std::fs::write(d.join("B.md"), "[a](A.md#part-one) [x](A.md#nope) [m](M.md) [u](../U.md)\n")
-            .unwrap();
+        std::fs::write(
+            d.join("B.md"),
+            "[a](A.md#part-one) [x](A.md#nope) [m](M.md) [u](../U.md)\n",
+        )
+        .unwrap();
         assert_eq!(
             check_tree(&d),
             ["B.md: A.md#nope (no such anchor)", "B.md: M.md", "B.md: ../U.md (outside the tree)"]
