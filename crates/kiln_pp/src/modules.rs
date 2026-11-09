@@ -689,10 +689,14 @@ impl Preprocessor<'_, '_> {
         };
         // A header that does not decode is used anyway: sema then reports
         // the file as corrupt (§11.11 "Part 2a", "The reader").
-        let clash = bmi::image_names(&bytes)
-            .is_some_and(|names| names.iter().any(|n| self.interner.get(n).is_some()));
-        if clash {
+        let names = bmi::image_names(&bytes).unwrap_or_default();
+        if names.iter().any(|n| self.interner.get(n).is_some()) {
             return Some(c);
+        }
+        // Interned now, so that a later import in the same lookahead
+        // whose image declares one of them replays instead.
+        for n in names {
+            self.interner.intern(n);
         }
         let carried = take_carried(path, &mut c);
         let main = c.files.swap_remove(0);

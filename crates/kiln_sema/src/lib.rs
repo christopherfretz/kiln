@@ -25,6 +25,7 @@ pub mod attr_triage;
 mod bit_int;
 mod bitfield_constant;
 mod bmi_ast;
+mod bmi_image;
 mod builtins;
 mod cconv;
 pub mod cfg;
@@ -147,6 +148,7 @@ use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
 pub use bmi_ast::CarriedSection as CarriedConstants;
+pub use bmi_image::ModuleImage;
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use contracts::{ContractDeclKind, ContractScope};
 pub use decl::{NameClass, TagUse};
