@@ -172,6 +172,29 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [stdexec](status/oss/stdexec.md) | `nvhpc-26.05` | full test suite, including the `*_fail` tests that match error text | libstdc++ 14 | **Flawless**: 907/907 | WP-789 |
 | [Z3](status/oss/z3.md) | `z3-4.15.8` | `test-z3 /a`, and the shell on the SMT-LIB2 examples | libstdc++ 14 | **Flawless**: every test and example gives the control's output, apart from timings | WP-799 |
 
+## Rejecting invalid code
+
+The tables above measure valid code. How often kiln accepts code that it
+should reject is measured on clang's own negative tests: the `-verify`
+tests of `clang/test/CXX` and `clang/test/SemaCXX` at `llvmorg-22.1.8`, run
+through kiln by `cargo xtask clang-neg` (WP-912,
+[spec/clang-neg.md](../spec/clang-neg.md)). Only lines are compared, never
+wording: an `expected-error` counts as reported when kiln has an error on
+its line. Run of 2026-11-08 on kiln `6c742784e`:
+
+| measure | result |
+|---|---|
+| Test files where clang expects an error and kiln reports none (in some configuration) | 7.2% (90 of 1249) |
+| `expected-error` lines with no kiln error on them | 17.9% (5015 of 28043) |
+| Configurations of `expected-no-diagnostics` tests where kiln reports an error (rejects valid) | 11.7% (49 of 418) |
+| Crashes, timeouts, out of memory | 7 crashes (2 root causes), 0, 0 of 2850 cases |
+
+Most of the missed errors are declaration rules: types defined where the
+grammar forbids them, members named after their class, union and static
+member rules, redeclarations, and clang attribute checks. The breakdown,
+the triage clusters with their reduced tests, and the rejects-valid cases
+are in [status/accepts-invalid.md](status/accepts-invalid.md).
+
 ## Constexpr and compile-time performance
 
 The wave-4 constexpr-heavy projects were built once with kiln and once
