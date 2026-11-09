@@ -242,6 +242,13 @@ pub(crate) mod flags {
     /// `mutable` subobjects: reads of them are diagnosed
     /// ([expr.const]/5.9, `Oven::mutable_path`).
     pub const MUTABLE_OUTSIDE: u8 = 32;
+    /// A frame or heap object that is volatile, or holds a volatile
+    /// member subobject: its accesses take `Oven::mutable_path`, which
+    /// diagnoses one of a volatile (sub)object ([expr.const]/10.8,
+    /// `Oven::volatile_path`, WP-1019). It shares its bit with
+    /// [`MUTABLE_OUTSIDE`], which only static objects carry, so every
+    /// fast path's existing bit test covers it.
+    pub const VOLATILE: u8 = MUTABLE_OUTSIDE;
     /// A heap allocation made by `std::allocator<T>::allocate`: storage
     /// for `T[n]` whose elements are outside their lifetime until
     /// constructed (`Space::life`, spec/oven.md "Transient allocation").

@@ -746,6 +746,9 @@ pub(crate) mod new_aux {
     /// `Op::Placement` with `ARRAY`: only check the bound (an instruction
     /// at the bound's location, so its notes point there).
     pub const BOUND: u32 = 32;
+    /// The allocated type is volatile (the allocation is marked
+    /// `mem::flags::VOLATILE`, WP-1019).
+    pub const VOLATILE: u32 = 64;
 }
 
 impl Op {

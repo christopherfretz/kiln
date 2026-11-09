@@ -92,6 +92,9 @@ pub(crate) struct TyInfo {
     /// whose lifetime began outside the evaluation are diagnosed,
     /// [expr.const]/5.9).
     pub has_mutable: bool,
+    /// Contains a volatile-qualified member subobject (an allocation
+    /// holding one is marked [`crate::mem::flags::VOLATILE`], WP-1019).
+    pub has_volatile: bool,
     /// Union subobjects at fixed offsets: `union_pos[upos.0..upos.1]`.
     pub upos: (u32, u32),
     /// The bytes `[lo, hi)` spanning every union subobject in `upos`
@@ -116,6 +119,9 @@ pub(crate) struct FieldInfo {
     pub base: bool,
     /// A `mutable` member ([dcl.stc]/10).
     pub mutable: bool,
+    /// A member of volatile-qualified type (or array of one): its
+    /// subobjects are volatile ([basic.type.qualifier]/1, WP-1019).
+    pub volatile: bool,
 }
 
 /// The value class of a scalar type (how many registers, which ops).
@@ -690,6 +696,7 @@ impl Types {
             has_ptr: e.has_ptr || matches!(e.kind, TyKind::Ptr(_) | TyKind::NullPtr),
             has_vptr: e.has_vptr,
             has_mutable: e.has_mutable,
+            has_volatile: e.has_volatile,
             upos: (start, end),
             uhull: self.union_hull(start, end),
         });
@@ -728,6 +735,7 @@ impl Types {
             has_ptr: false,
             has_vptr: false,
             has_mutable: false,
+            has_volatile: false,
             upos: (0, 0),
             uhull: (0, 0),
         })
@@ -830,6 +838,7 @@ impl Types {
                     has_ptr: e.has_ptr || matches!(e.kind, TyKind::Ptr(_) | TyKind::NullPtr),
                     has_vptr: e.has_vptr,
                     has_mutable: e.has_mutable,
+                    has_volatile: e.has_volatile,
                     upos: (start, end),
                     uhull: self.union_hull(start, end),
                 });
@@ -1005,7 +1014,7 @@ impl Types {
                 (!empty).then_some((rdef, b.ty, ast.first(rd)))
             })
             .collect();
-        let fdecls: Vec<(DeclId, QualType, Option<u32>, bool)> = ast
+        let fdecls: Vec<(DeclId, QualType, Option<u32>, bool, bool)> = ast
             .members(def)
             .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
             .map(|m| {
@@ -1015,7 +1024,8 @@ impl Types {
                     .and_then(|f| f.bit_width)
                     .map(|e| eval_int(ast, e).map_or(0, |v| v.min(1 << 20) as u32));
                 let mutable = ast.decls.field(m).is_some_and(kiln_ast::decl::FieldData::is_mutable);
-                (m, ast.decls.get(m).ty().unwrap_or(QualType::INT), w, mutable)
+                let q = ast.decls.get(m).ty().unwrap_or(QualType::INT);
+                (m, q, w, mutable, ast.types.effective_quals(q).is_volatile())
             })
             .collect();
         let first = ast.first(d);
@@ -1080,6 +1090,7 @@ impl Types {
         let (mut has_union, mut has_ptr) = (union, false);
         let mut has_vptr = poly;
         let mut has_mutable = false;
+        let mut has_volatile = false;
         let mut upos = Vec::new();
         if union {
             upos.push((0, me));
@@ -1092,6 +1103,7 @@ impl Types {
             has_ptr |= bi.has_ptr;
             has_vptr |= bi.has_vptr;
             has_mutable |= bi.has_mutable;
+            has_volatile |= bi.has_volatile;
             for k in bi.upos.0..bi.upos.1 {
                 let (o, u) = self.union_pos[k as usize];
                 upos.push((off + o, u));
@@ -1104,15 +1116,17 @@ impl Types {
                 width: None,
                 base: true,
                 mutable: false,
+                volatile: false,
             });
         }
-        for (i, &(m, fq, w, mutable)) in fdecls.iter().enumerate() {
+        for (i, &(m, fq, w, mutable, volatile)) in fdecls.iter().enumerate() {
             let fty = self.intern(bridge, fq);
             let bits = offs.get(i).copied().unwrap_or(0);
             let fi = *self.info(fty);
             has_union |= fi.has_union;
             has_vptr |= fi.has_vptr;
             has_mutable |= mutable || fi.has_mutable;
+            has_volatile |= volatile || fi.has_volatile;
             has_ptr |= fi.has_ptr || matches!(fi.kind, TyKind::Ptr(_) | TyKind::NullPtr);
             if fi.has_union {
                 for k in fi.upos.0..fi.upos.1 {
@@ -1129,6 +1143,7 @@ impl Types {
                     width: Some(w),
                     base: false,
                     mutable,
+                    volatile,
                 }),
                 None => fields.push(FieldInfo {
                     decl: m,
@@ -1138,6 +1153,7 @@ impl Types {
                     width: None,
                     base: false,
                     mutable,
+                    volatile,
                 }),
             }
         }
@@ -1167,6 +1183,7 @@ impl Types {
                 has_ptr,
                 has_vptr,
                 has_mutable,
+                has_volatile,
                 upos: (ustart, uend),
                 uhull: self.union_hull(ustart, uend),
             });
@@ -1182,6 +1199,7 @@ impl Types {
                 has_ptr |= vi.has_ptr;
                 has_vptr |= vi.has_vptr;
                 has_mutable |= vi.has_mutable;
+                has_volatile |= vi.has_volatile;
                 for k in vi.upos.0..vi.upos.1 {
                     let (o, u) = self.union_pos[k as usize];
                     upos.push((off + o, u));
@@ -1194,6 +1212,7 @@ impl Types {
                     width: None,
                     base: true,
                     mutable: false,
+                    volatile: false,
                 });
             }
         }
@@ -1211,6 +1230,7 @@ impl Types {
         info.has_ptr = has_ptr;
         info.has_vptr = has_vptr;
         info.has_mutable = has_mutable;
+        info.has_volatile = has_volatile;
         info.upos = (ustart, uend);
         info.uhull = uhull;
         self.index_fields(me);

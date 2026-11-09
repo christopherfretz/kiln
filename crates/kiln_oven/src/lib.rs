@@ -63,7 +63,7 @@ use kiln_ast::types::RecordLayout;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::Diag;
 use kiln_source::Loc;
-use kiln_source::fx::FxHashMap;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 pub use failure::{EvalFailure, FailKind, Note, Overflow};
 pub use meta::materialize::{ExcCtor, MetaThrow, Shape};
@@ -542,6 +542,12 @@ pub struct Oven {
     /// being initialized: the bytes before it have begun, it and those
     /// after it have not, an aggregate holding it has.
     pub(crate) ctor_steps: FxHashMap<u32, Box<[CtorStep]>>,
+    /// The variables and expressions (temporaries, `new` expressions)
+    /// whose objects are volatile as a whole: the origins of the frame
+    /// and heap allocations [`mem::flags::VOLATILE`] marks without a volatile
+    /// member on the path (`Oven::volatile_path`, WP-1019).
+    pub(crate) volatile_decls: FxHashSet<DeclId>,
+    pub(crate) volatile_exprs: FxHashSet<ExprId>,
     /// Compiled top-level thunks, by expression, the object it
     /// initializes and whether it yields a glvalue's address
     /// ([`Oven::compile_thunk`]).
@@ -653,6 +659,8 @@ impl Oven {
             func_map: FxHashMap::default(),
             base_funcs: FxHashMap::default(),
             ctor_steps: FxHashMap::default(),
+            volatile_decls: FxHashSet::default(),
+            volatile_exprs: FxHashSet::default(),
             thunks: FxHashMap::default(),
             thunks_at: FxHashMap::default(),
             srcloc_root: None,
