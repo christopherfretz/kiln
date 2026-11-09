@@ -203,7 +203,7 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOpti
         static_destructors: f.static_destructors,
         wrapv: f.wrapv(),
         trapv: f.trapv,
-        trapv_handler: f.trapv_handler.clone().filter(|h| f.trapv && !h.is_empty()),
+        trapv_handler: f.trapv_handler(),
         wrapv_pointer: f.wrapv_pointer(a.predef.clang_compat == ClangCompat::Clang22),
         null_pointer_is_valid: f.null_pointer_is_valid(),
         no_builtin: a.no_builtin(),
@@ -443,8 +443,11 @@ impl CodegenJob<'_> {
             opts.sanitize.cplusplus = job.std.cplusplus;
             opts.sanitize.cxx20 = job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20;
             // WP-1032: the ignorelists the driver validated.
-            opts.ignorelist =
-                a.sanitize.ignorelist(opts.sanitize.kinds, &job.toolchain.resource_dir);
+            opts.ignorelist = a.sanitize.ignorelist(
+                opts.sanitize.kinds,
+                &job.toolchain.resource_dir,
+                opts.clang_compat >= 22,
+            );
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).
             tu.oven.set_clang_compat(opts.clang_compat);
