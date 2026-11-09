@@ -11,7 +11,9 @@ Environment: KILN_OSS_CXX, KILN_OSS_LOG, KILN_OSS_PHASE (configure | build |
 test, recorded as `phase`), KILN_OSS_VMEM_KB (default 3000000, the
 `ulimit -v`), KILN_OSS_TIMEOUT (seconds, default 600), KILN_OSS_STDLIB
 (`libc++` puts `-stdlib=libc++` before the argv, WP-694; unset or
-`libstdc++` adds nothing).
+`libstdc++` adds nothing). Every invocation gets `-fno-crash-diagnostics`
+first (WP-911), so a crashing compiler never writes a reproducer to $TMPDIR
+for each crashing TU of a build.
 """
 
 import fcntl
@@ -28,7 +30,7 @@ import time
 SOURCE_EXT = (".cpp", ".cc", ".cxx", ".c++", ".cp", ".C", ".CPP")
 LINK_EXT = (".o", ".a", ".so", ".obj", ".lo")
 DIAG_RE = re.compile(
-    r"error:|panicked|fatal|undefined reference|multiple definition|memory allocation of|LLVM ERROR"
+    r"error:|panicked|internal compiler error|fatal|undefined reference|multiple definition|memory allocation of|LLVM ERROR"
 )
 OOM_RE = re.compile(
     r"memory allocation of \d+ bytes failed|out of memory|std::bad_alloc|Cannot allocate memory"
@@ -85,7 +87,14 @@ def classify(rc, timed_out, text, source):
         return "ok"
     if OOM_RE.search(text):
         return "oom"
-    if "panicked at" in text or "has overflowed its stack" in text or rc == 101:
+    # kiln's crash banner (WP-911, spec/driver.md "Internal compiler
+    # errors") or Rust's default panic report from an older kiln++.
+    if (
+        "internal compiler error: " in text
+        or "panicked at" in text
+        or "has overflowed its stack" in text
+        or rc == 101
+    ):
         return "panic"
     if rc < 0:
         return "oom" if rc == -signal.SIGKILL else "panic"
@@ -118,7 +127,7 @@ def main():
         return 2
     # libc++ mode (WP-694): the flag goes first so a project's own
     # `-stdlib=` (the last one wins) still decides.
-    cmd = [cxx] + (["-stdlib=libc++"] if stdlib == "libc++" else []) + args
+    cmd = [cxx, "-fno-crash-diagnostics"] + (["-stdlib=libc++"] if stdlib == "libc++" else []) + args
     log = os.environ.get("KILN_OSS_LOG")
     vmem_kb = int(os.environ.get("KILN_OSS_VMEM_KB") or 3000000)
     limit_s = float(os.environ.get("KILN_OSS_TIMEOUT") or 600)

@@ -251,9 +251,11 @@ impl CodegenJob<'_> {
         }
         let mut ir = None;
         let mut deps = None;
-        if let Some(inputs) = job.pp_inputs(&sm, &engine) {
-            ir = self.lower(&sm, &engine, &interner, inputs, &mut deps);
-        }
+        crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
+            if let Some(inputs) = job.pp_inputs(&sm, &engine) {
+                ir = self.lower(&sm, &engine, &interner, inputs, &mut deps);
+            }
+        });
         engine.flush();
         if let Some(s) = engine.summary()
             && diag_opts.format == kiln_diag::Format::Text
@@ -420,8 +422,14 @@ impl CodegenJob<'_> {
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).
             tu.oven.set_clang_compat(opts.clang_compat);
+            // The ICE breadcrumb (spec/driver.md "Internal compiler errors").
+            let phase = kiln_source::activity::enter(
+                kiln_source::activity::Phase::Codegen,
+                kiln_source::Loc::INVALID,
+            );
             let (r, warnings) =
                 kiln_codegen::emit_with_debug(&mut tu.ast, &mut tu.oven, &target, &opts, Some(sm));
+            drop(phase);
             for w in warnings {
                 w.emit(engine);
             }

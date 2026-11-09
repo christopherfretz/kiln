@@ -9,11 +9,18 @@
 use std::collections::BTreeMap;
 
 /// The message of an `error:` (or `fatal error:`) diagnostic line, if the
-/// line is one. The location prefix (`file:line:col: `) is dropped.
+/// line is one. The location prefix (`file:line:col: `) is dropped. kiln's
+/// internal-compiler-error banner is not a diagnostic: [`crash_key`] owns
+/// it.
 pub fn error_message(line: &str) -> Option<&str> {
     let i = line.find("error: ")?;
-    Some(line[i + "error: ".len()..].trim())
+    let msg = line[i + "error: ".len()..].trim();
+    (!msg.starts_with(ICE)).then_some(msg)
 }
+
+/// The head of kiln's crash banner after `kiln: error: ` (spec/driver.md
+/// "Internal compiler errors").
+const ICE: &str = "internal compiler error: ";
 
 /// Normalizes one diagnostic message into its cluster text.
 pub fn normalize(msg: &str) -> String {
@@ -174,11 +181,30 @@ pub fn staged(stage: &str, keys: Vec<(String, String)>) -> Vec<(String, String)>
 }
 
 /// The cluster of a compiler crash: the panic location's file and the
-/// normalized panic message (`thread 'main' panicked at src/x.rs:1:2:`
-/// followed by the message line).
+/// normalized panic message. kiln's banner (spec/driver.md "Internal
+/// compiler errors") gives the message on its `internal compiler error: `
+/// line and the location on a later `note: in compiler source <loc>
+/// (thread '…')` line; Rust's default report (`thread 'main' panicked at
+/// src/x.rs:1:2:` followed by the message line) is still recognized.
 pub fn crash_key(stderr: &str) -> Option<(String, String)> {
     let mut lines = stderr.lines();
     while let Some(l) = lines.next() {
+        if let Some(i) = l.find(ICE) {
+            let msg = l[i + ICE.len()..].trim();
+            let loc = lines
+                .clone()
+                .find_map(|n| {
+                    let j = n.find("note: in compiler source ")?;
+                    let rest = &n[j + "note: in compiler source ".len()..];
+                    Some(rest.split(" (thread").next().unwrap_or(rest).trim())
+                })
+                .unwrap_or("?");
+            let file = loc.split(':').next().unwrap_or(loc);
+            return Some((
+                format!("crash: panicked at {file}: {}", normalize(msg)),
+                format!("panicked at {loc}: {msg}"),
+            ));
+        }
         if let Some(i) = l.find("panicked at ") {
             let loc = l[i + "panicked at ".len()..].trim_end_matches(':');
             let file = loc.split(':').next().unwrap_or(loc);
@@ -293,6 +319,19 @@ mod tests {
             "panicked at crates/kiln_sema/src/expr.rs:812:9: index out of bounds: the len is 3 but the index is 7"
         );
         assert_eq!(crash_key("error: x").map(|k| k.0), None);
+        // kiln's own banner (spec/driver.md "Internal compiler errors").
+        let ice = "a.cpp:1:1: error: x\nkiln++: error: internal compiler error: index 7 out of 3\n\
+                   kiln++: note: while compiling 'a.cpp' (phase: sema)\n\
+                   kiln++: note: in compiler source crates/kiln_sema/src/expr.rs:812:9 (thread 'kiln')\n";
+        assert_eq!(
+            crash_key(ice).unwrap(),
+            (
+                "crash: panicked at crates/kiln_sema/src/expr.rs: index N out of N".to_owned(),
+                "panicked at crates/kiln_sema/src/expr.rs:812:9: index 7 out of 3".to_owned()
+            )
+        );
+        let keys: Vec<String> = error_keys(ice).into_iter().map(|k| k.0).collect();
+        assert_eq!(keys, ["x"]);
         assert_eq!(crash_key("PLEASE submit a bug report to ...").unwrap().0, "crash: LLVM crash");
     }
 }
