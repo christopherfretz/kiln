@@ -1854,7 +1854,9 @@ fn memtag_sanitizers_by_target() {
         let f = format!("-fsanitize={v}");
         assert_eq!(
             errors("x86_64-linux-gnu", &[&f]),
-            format!("kiln++: error: unsupported option '{f}' for target 'x86_64-unknown-linux-gnu'\n")
+            format!(
+                "kiln++: error: unsupported option '{f}' for target 'x86_64-unknown-linux-gnu'\n"
+            )
         );
     }
     let hw = "kiln++: error: '-fsanitize=memtag-stack' requires hardware support (+memtag). \

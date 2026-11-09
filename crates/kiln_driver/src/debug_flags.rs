@@ -360,7 +360,8 @@ mod tests {
         assert_eq!(errs(&["-fdebug-default-version=7"]), []);
         assert_eq!(errs(&["-fdebug-default-version=7", "-g0"]), []);
         assert_eq!(errs(&["-fdebug-default-version=7", "-fdebug-default-version=4", "-g"]), []);
-        for (a, x) in [("7", "-g"), ("1", "-g"), ("x", "-g"), ("", "-g"), ("+4", "-g"), ("7", "-gdwarf-4")]
+        for (a, x) in
+            [("7", "-g"), ("1", "-g"), ("x", "-g"), ("", "-g"), ("+4", "-g"), ("7", "-gdwarf-4")]
         {
             let flag = format!("{dv}{a}");
             assert_eq!(

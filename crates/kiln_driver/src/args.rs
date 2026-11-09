@@ -889,8 +889,7 @@ impl Args {
         if a.precompile && matches!(a.action, Action::Link | Action::Compile) {
             a.action = Action::Precompile;
         }
-        a.errors.extend(a.coverage.errors());
-        a.errors.extend(a.debug.errors());
+        a.errors.extend(a.coverage.errors().into_iter().chain(a.debug.errors()));
         let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
         a
     }
