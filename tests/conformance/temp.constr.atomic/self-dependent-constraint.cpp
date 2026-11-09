@@ -4,12 +4,12 @@
 // depends on itself, so it is not satisfied (clang:
 // err_constraint_depends_on_self) and the static_assert fails. kiln looped
 // without bound before WP-912 (clang's SemaCXX/
-// overload-resolution-deferred-templates.cpp timed out); clang's
-// "satisfaction of constraint ... depends on itself" error at the
-// requires-clause is not reported yet (it is raised inside the trait's
-// SFINAE context).
+// overload-resolution-deferred-templates.cpp timed out). The
+// "satisfaction of constraint ... depends on itself" error is a hard error
+// even inside the trait's SFINAE context (clang NoSFINAE; WP-1017).
 //@ std: c++20
 //@ expect: compile-fail
+//@ diag: 16:14 error "satisfaction of constraint '__is_constructible(Movable, T)' depends on itself"
 //@ diag: 20:15 error "static assertion failed"
 struct Movable {
   template <typename T>

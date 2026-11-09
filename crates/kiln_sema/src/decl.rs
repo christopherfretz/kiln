@@ -3164,6 +3164,18 @@ impl Sema<'_, '_> {
         }
         self.set_member_access(decl);
         let templ = self.finish_template_pattern(decl);
+        if templ.is_some()
+            && let Some((SpecialName::Conversion(ct), _)) = d.special
+            && let Some(kw) = self.placeholder_keyword(ct)
+        {
+            // [class.conv.fct]/9 (CWG1878): a conversion function template
+            // has no deduced return type (clang `ActOnConversionDeclarator`).
+            let m = self
+                .diag(DiagId::sema_auto_not_allowed, d.conv_type_loc)
+                .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
+                .arg(crate::templ::ctad_site::site::CONVERSION_TEMPLATE);
+            self.emit(m);
+        }
         if let Some(t) = templ {
             self.set_member_access(t);
             if d.qualifier.is_some() && self.templ.member_spec.is_some() {
@@ -3402,6 +3414,15 @@ impl Sema<'_, '_> {
             }
             _ => "noexcept".to_owned(),
         }
+    }
+
+    /// clang's `err_use_with_wrong_tag` at the class-key or `enum` at
+    /// `kw` naming `name`, which found tag `prev` of another kind
+    /// ([dcl.type.elab]/3), with its "previous use is here" note.
+    pub(crate) fn diag_wrong_tag(&self, name: impl Into<String>, kw: Loc, prev: DeclId) {
+        let note = self.diag(DiagId::note_previous_use, self.ast.decls.get(prev).loc());
+        let msg = self.diag(DiagId::sema_use_with_wrong_tag, kw).arg(name.into()).with_note(note);
+        self.emit(msg);
     }
 
     pub(crate) fn note_prev(
@@ -7072,6 +7093,15 @@ impl Sema<'_, '_> {
         if self.uninit_incomplete(v, ty, loc) {
             return;
         }
+        // [class.abstract]/3 for a class template specialization the
+        // declarator could not yet tell to be abstract: now instantiated
+        // (clang `ActOnUninitializedDecl`'s `RequireNonAbstractType`, of
+        // the base element type).
+        let abs = if self.ast.types.is_array(ty) { self.base_element(ty) } else { ty };
+        if self.require_non_abstract(loc, abs, crate::class::AbstractUse::Variable) {
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            return;
+        }
         let quals = self.ast.types.effective_quals(ty);
         let elem = self.base_element(ty);
         if spec.is_constexpr() {
@@ -7614,6 +7644,18 @@ impl Sema<'_, '_> {
                 .filter(|&d| self.kind_of(d) == DeclKind::ClassTemplate)
                 .filter_map(|d| self.pattern_of(d).map(|p| self.ast.latest(p)))
                 .collect(),
+            // `struct AB::x *p;` finding two tags through two
+            // using-directives ([namespace.udir]/6): ambiguous, recovering
+            // with the last tag found (clang `err_ambiguous_reference`).
+            (Some(q), TagUse::Reference) => {
+                let found = self.lookup_qualified(q, n, LookupKind::Tag);
+                if self.is_ambiguous_lookup(&found) {
+                    // clang lists these candidates latest-nominated first.
+                    let rev: Vec<DeclId> = found.decls.iter().rev().copied().collect();
+                    self.diagnose_ambiguous_reference(DeclName::ident(n), &rev, false, nloc);
+                }
+                found.decls
+            }
             (Some(q), _) => self.lookup_qualified(q, n, LookupKind::Tag).decls,
             // `struct X *p;` naming tags of two namespaces, e.g. an inline
             // namespace's and its parent's ([namespace.def.general]/7,
@@ -7929,10 +7971,12 @@ impl Sema<'_, '_> {
                         respecialized = true;
                     }
                 } else {
-                    let msg =
-                        self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
-                    let msg = self.note_prev(msg, p, false);
-                    self.emit(msg);
+                    self.diag_wrong_tag(sym_str(self, n), loc, p);
+                    if use_ == TagUse::Reference {
+                        // clang's recovery: the tag found is the one named.
+                        self.mark_type_referenced(p);
+                        return p;
+                    }
                 }
             }
             if let (Some(p), true) = (prev, is_enum) {
@@ -8010,6 +8054,9 @@ impl Sema<'_, '_> {
                 if !self.diagnose_tag_reference_non_tag(keyword, n, &o, nloc) {
                     self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_, head.is_some());
                 }
+                // The recovery tag of a reference is invalid and hidden, so
+                // a later `struct A::X` is not found (clang's recovery).
+                conflict |= use_ == TagUse::Reference;
             }
             if qualified_member && let Some(q) = qualifier {
                 self.check_qualified_member_tag(q, n, nloc);
@@ -8225,7 +8272,7 @@ impl Sema<'_, '_> {
         if let (Some((n, nloc)), Some(q)) = (name, qualifier)
             && keyword != TagKeyword::Enum
             && self.has_pending_head()
-            && let Some(d) = self.act_on_qualified_friend_class_template(keyword, n, nloc, q)
+            && let Some(d) = self.act_on_qualified_friend_class_template(keyword, n, (loc, nloc), q)
         {
             return d;
         }
@@ -8253,7 +8300,7 @@ impl Sema<'_, '_> {
             false
         };
         if self.has_pending_head() {
-            return self.act_on_friend_class_template(keyword, n, nloc, ns);
+            return self.act_on_friend_class_template(keyword, n, (loc, nloc), ns);
         }
         // [temp.local]/6: `friend class T;` naming a template parameter
         // redeclares it (clang's `DiagnoseTemplateParameterShadow` in
@@ -8297,9 +8344,7 @@ impl Sema<'_, '_> {
                 self.mark_type_referenced(p);
                 return p;
             }
-            let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
-            let msg = self.note_prev(msg, p, false);
-            self.emit(msg);
+            self.diag_wrong_tag(sym_str(self, n), loc, p);
         }
         let mut h = DeclHead::new(ns, DeclName::ident(n), nloc);
         h.lexical = Some(self.ctx);
@@ -8318,7 +8363,7 @@ impl Sema<'_, '_> {
         &mut self,
         keyword: TagKeyword,
         n: Symbol,
-        nloc: Loc,
+        (kw, nloc): (Loc, Loc),
         ns: DeclId,
     ) -> DeclId {
         let head = self.take_template_head(None);
@@ -8341,9 +8386,7 @@ impl Sema<'_, '_> {
         if let Some((t, p)) = member.and_then(|t| self.pattern_of(t).map(|p| (t, p))) {
             self.templ.cur = None;
             if !self.tag_matches(p, keyword) {
-                let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
-                let msg = self.note_prev(msg, p, false);
-                self.emit(msg);
+                self.diag_wrong_tag(sym_str(self, n), kw, p);
             }
             self.mark_type_referenced(p);
             self.friend_class_template = Some(t);
@@ -8398,9 +8441,7 @@ impl Sema<'_, '_> {
                     self.friend_class_template = self.finish_template_pattern(d);
                     return d;
                 }
-                let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
-                let msg = self.note_prev(msg, p, false);
-                self.emit(msg);
+                self.diag_wrong_tag(sym_str(self, n), kw, p);
             } else if head.is_some() {
                 // clang: "redefinition of 'X' as different kind of symbol".
                 let msg =
@@ -8434,7 +8475,7 @@ impl Sema<'_, '_> {
         &mut self,
         keyword: TagKeyword,
         n: Symbol,
-        nloc: Loc,
+        (kw, nloc): (Loc, Loc),
         q: DeclId,
     ) -> Option<DeclId> {
         let found = self.lookup_qualified(q, n, LookupKind::All).decls;
@@ -8467,9 +8508,7 @@ impl Sema<'_, '_> {
             return Some(d);
         };
         if !self.tag_matches(p, keyword) {
-            let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
-            let msg = self.note_prev(msg, p, false);
-            self.emit(msg);
+            self.diag_wrong_tag(sym_str(self, n), kw, p);
         }
         self.mark_type_referenced(p);
         self.friend_class_template = Some(t);
@@ -11557,8 +11596,19 @@ impl Sema<'_, '_> {
             (AttrArg::Expr(e), Some(l)) => Some(AttrArg::Expr(self.act_pack_expansion(e, l))),
             (AttrArg::Type(t), None) => {
                 use crate::templ::pack::PackOperand;
-                (!self.diagnose_unexpanded_pack(PackOperand::Type(t), "expression", begin))
-                    .then_some(arg)
+                if self.diagnose_unexpanded_pack(PackOperand::Type(t), "expression", begin) {
+                    return None;
+                }
+                // [dcl.align]/3: as `alignas(alignof(type-id))`, so the
+                // type is complete (clang `CheckAlignasTypeArgument`).
+                self.check_trait_operand_named(
+                    kiln_ast::expr::TraitKind::AlignOf,
+                    "alignas",
+                    t,
+                    begin,
+                    None,
+                )
+                .then_some(arg)
             }
             (AttrArg::Expr(e), None) => {
                 use crate::templ::pack::PackOperand;

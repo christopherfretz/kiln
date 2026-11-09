@@ -339,6 +339,7 @@ impl Cg<'_> {
         let this_class = self.f.this_class;
         let saved = std::mem::replace(&mut self.f, Fx::empty());
         self.f.san = saved.san;
+        self.f.san_ignored = saved.san_ignored;
         let r = self.emit_outlined_body(f, ptys, stmts, &cap, decl, this_class);
         self.f = saved;
         let noreturn = r?;
@@ -673,6 +674,7 @@ impl Cg<'_> {
         let this_class = self.f.this_class;
         let saved = std::mem::replace(&mut self.f, Fx::empty());
         self.f.san = saved.san;
+        self.f.san_ignored = saved.san_ignored;
         let r = self.emit_element_body(f, ptys, e, &cap, decl, this_class, (sc.brk, sc.ret), ret);
         self.f = saved;
         let noreturn = r?;

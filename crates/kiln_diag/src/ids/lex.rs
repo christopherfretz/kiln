@@ -26,6 +26,7 @@ lex_raw_delim_invalid_char = Error (1) "invalid character '{0}' character in raw
 lex_raw_delim_too_long = Error (0) "raw string delimiter longer than 16 characters; use PREFIX( )PREFIX to delimit raw string";
 lex_reserved_ud_suffix = WarningError [ReservedUserDefinedLiteral] (0) "invalid suffix on literal; C++11 requires a space between literal and identifier";
 lex_spaceship_compat = WarningOff [Cxx20Compat] (0) "'<=>' is a single token in C++20; add a space to avoid a change in behavior";
+lex_string_concat_mixed_suffix = Error (2) "differing user-defined suffixes ('{0}' and '{1}') in string literal concatenation";
 lex_trigraph_converted = Warning [Trigraphs] (1) "trigraph converted to '{0}' character";
 lex_trigraph_ignored = Warning [Trigraphs] (0) "trigraph ignored";
 lex_ucn_basic_scs = Error (1) "character '{0}' cannot be specified by a universal character name";

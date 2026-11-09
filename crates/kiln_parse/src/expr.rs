@@ -2633,6 +2633,26 @@ impl Parser<'_, '_> {
             error |= s.has_error;
             pieces.push((s, t.span.lo));
         }
+        // [lex.string.concat]/2: every ud-suffix of the concatenation is
+        // the first one (clang `err_string_concat_mixed_suffix`, at each
+        // differing token).
+        let mut first_suffix: Option<&str> = None;
+        for (p, loc) in &pieces {
+            let Some(sfx) = p.ud_suffix else { continue };
+            match first_suffix {
+                None => first_suffix = Some(sfx),
+                Some(f) if f != sfx => {
+                    let m = self
+                        .s
+                        .diag(DiagId::lex_string_concat_mixed_suffix, *loc)
+                        .arg(f.to_owned())
+                        .arg(sfx.to_owned());
+                    self.s.emit(m);
+                    error = true;
+                }
+                Some(_) => {}
+            }
+        }
         if error {
             return Some(self.s.act_on_error_expr(&[], toks[0].span.lo));
         }
