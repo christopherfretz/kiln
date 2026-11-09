@@ -9699,11 +9699,27 @@ not supported yet`.
     other (WP-1117; spec/sema-class.md §5.4;
     `element-discarded-temporary{,-constexpr}-run.cpp`). In an ordinary
     declaration it is only bound and dies with the full-expression.
-    *Left*: a default argument's temporaries stay with the call's
-    full-expression; a destructuring statement's expansion-initializer
-    (`auto&& [u...] = ((void)D{1}, t)`) is not a lifetime-extending
-    context at parse time, so its discarded class prvalues are not
-    materialized.
+    *Default arguments* (WP-1149; [intro.execution]/5): a default
+    argument's temporaries are created in the full-expression of the
+    call that uses it, so one used in an element is extended with the
+    element's (`{dv(), 8}` with `int dv(const D& = D{7})` prints
+    `w7 ~D7 w8`), including a default argument's own default argument.
+    The parameter's default argument is one expression shared by every
+    call, so, as clang does in a lifetime-extending context, each use
+    (`CXXDefaultArgExpr`) is given its own copy with fresh
+    `MaterializeTemporaryExpr`s (`fresh_temporaries`, a structural copy
+    of the path from the root to each `FullExpression` temporary,
+    `ExprArena::clone_with_children`), recorded in the cold map
+    `default_arg_rewritten`; `Ast::default_arg_expr` returns the copy, so
+    codegen and the Oven evaluate and destroy it as the use's own, and
+    the Oven's `extended_temps`/`extends_temporaries` walks enter it.
+    `extend_init_temporaries` then extends the copy's temporaries like the
+    initializer's own. The same rewrite serves a destructuring
+    expansion-initializer and the P2718 for-range-initializer
+    (`extend_range_default_args`, `range_for.rs`; spec/sema-class.md).
+    GCC 16.1 extends no element temporaries and rejects reading one in
+    constant evaluation, so the tests carry kiln goldens
+    (`element-default-argument-temporaries-run.cpp`, `oracle: none`).
   - *Element immediate invocations* (WP-1106; [expr.const]/16): an
     immediate invocation in an element is evaluated at the end of its
     declaration's full-expression. The element's `ConstantExpr` was built
@@ -9761,10 +9777,36 @@ not supported yet`.
     unless bound by automatic reference, below). The
     initializer's temporaries persist for the lifetime of that reference,
     to the end of the whole statement ([class.temporary]/9, CWG3043;
-    `expansion_decomp` calls `extend_init_temporaries`, a no-op for the
-    `static constexpr` form, whose temporaries are part of its constant
-    initialization). GCC 16.1 agrees
-    (`tests/conformance/stmt.expand/destructuring-temporaries-run.cpp`).
+    `expansion_destructuring` calls `extend_init_temporaries` on the
+    declaration that won, after `expansion_decomp` or the constexpr
+    `expansion_fallback` attempts, so a discarded attempt marks nothing;
+    a no-op for the `static constexpr` form, whose temporaries are part
+    of its constant initialization). The expansion-initializer is a
+    lifetime-extending context (WP-1149): the parser, and
+    `Substituter::expansion_stmt` when it substitutes a pattern's
+    initializer, open an `extend_collector`, so a discarded class prvalue
+    (`((void)D{1}, f())`, a comma's left operand) is materialized and
+    extended, and so are the temporaries of the default arguments it uses
+    (above). `expansion_decomp` re-marks the initializer's temporaries for
+    the declaration's full-expression (`note_shared_temporaries`), so an
+    lvalue initializer (`id(T2{...})`) gets its `ExprWithCleanups`.
+    GCC 16.1 agrees, including default arguments
+    (`tests/conformance/stmt.expand/destructuring-temporaries-run.cpp`,
+    `destructuring-initializer-temporaries-run.cpp`).
+    *Shared pattern nodes* (WP-1149): `extend_init_temporaries` sets a
+    `MaterializeTemporaryExpr`'s storage in place (`extend_temporary`,
+    write-once). The Substituter reuses a non-dependent subtree of a
+    pattern in every instantiation, and a nested statement's elements
+    reuse its initializer, so one node can be marked by several
+    declarations. That is safe: the node is at the same syntactic
+    position in each, so the mark is the same decision every time, and
+    codegen and the Oven create a temporary per evaluation keyed on its
+    storage duration, not on the extending declaration; the first
+    declaration's `LifetimeExtendedTemporaryDecl` is only a dump label.
+    A rewritten default-argument use shared the same way reuses its
+    copy. A dependent temporary is rebuilt per instantiation
+    (`shared-pattern-temporaries-run.cpp`, GCC oracle, run time and
+    constant evaluation).
     The iterating form's `__range` is `static constexpr` or a
     `constexpr` reference to a glvalue (Automatic, below), so its
     temporaries are part of its constant initialization and never

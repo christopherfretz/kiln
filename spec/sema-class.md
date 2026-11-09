@@ -1858,6 +1858,15 @@ own temporary, in reverse order of construction. Before C++23 nothing is
 collected, and only the temporary bound directly to `__range` is extended.
 Templates collect again when the range is substituted (`templ/subst/stmts.rs`
 `range_for`).
+A default argument is shared by every call, so its temporaries are not
+collected while parsing the initializer: `extend_range_default_args`
+(`class/temporary.rs`, WP-1149) gives each `CXXDefaultArgExpr` use in the
+initializer, nested ones included, its own copy with fresh temporaries
+(`default_arg_rewritten`, clang's `has rewritten init`; spec/sema.md §7.6a)
+and extends those to `__range`, so `for (int x : mk())` with
+`A mk(const D& = D{7})` prints `w1 w2 ~D7`. GCC 16.1 agrees; clang 19 and 22
+do not extend them in a template, nor clang 22 a nested one
+(`stmt.ranged/p2718-default-argument-run.cpp`, GCC oracle).
 
 A discarded class prvalue in a lifetime-extending context (an open
 `extend_collector`: the for-range-initializer from C++23, and an enumerating
@@ -3066,7 +3075,9 @@ walk per query) and the final overriders (`class/virtual/graph.rs`
   (076) adopts `SubobjectId` for base-class pointer paths.
 - **Q3 Default initializer reuse.** clang 19 rebuilds NSDMIs and default
   arguments at every use (`has rewritten init`). S3O §7 already shares
-  default arguments, never cloning. *Recommend* the same for NSDMIs: the use
+  default arguments, cloning only in a lifetime-extending context
+  (WP-1149: a use gets a copy with its own extended temporaries,
+  `default_arg_rewritten`). *Recommend* the same for NSDMIs: the use
   node carries `used_ctx`; if the stored initializer is an
   `ExprWithCleanups`, the use site sets `cleanup.needs`; `SourceLocExpr` and
   immediate invocations are evaluated against the nearest enclosing
