@@ -1657,6 +1657,18 @@ silently (`diag = None`) at those sites. S3O lists them.
      arguments are checked the same way after deduction, a failure being
      a substitution failure shown without the deduced arguments (WP-669,
      `tests/conformance/temp.arg.template/p3-deduced-argument-checked.cpp`);
+   - check each deduced value against its parameter's type
+     ([temp.deduct.type]/17, /20, [temp.arg.nontype]/1;
+     `deduced_value_fits`, clang `ConvertDeducedTemplateArgument`): a
+     non-enumeration integral type takes an integral or unscoped
+     enumeration value that fits it, any other fixed type only a value of
+     that type, a dependent type anything (its deduction checked it), and
+     a placeholder type a value whose type it deduces from (`auto *P`
+     takes `&x` but not `0` or `nullptr`; `auto Q::*M` takes `&Q::m`;
+     `nttp_placeholder_matches`); a deduced pack element by element. So
+     `nullptr`, `&x`, `1.0` or a scoped enumerator of a `template<auto V>`
+     primary does not bind `template<int N> A<N>` (WP-1105,
+     `tests/conformance/temp.spec.partial.match/nttp-deduced-value-type-run.cpp`);
    - finish the deduction: substitute the deduced args into `p.args` and
      require canonical equality with `A`;
    - check `p`'s associated constraints (§8). For a class template, their
@@ -1671,7 +1683,19 @@ silently (`diag = None`) at those sites. S3O lists them.
    element, it is that partial. Otherwise the pattern is the most
    specialized partial, found by function-template partial ordering of
    the rewritten `template<p.params> void f(X<p.args>)` (§6.7), with
-   constraints as the tie-breaker. The tie-breaker applies only when the
+   constraints as the tie-breaker. Before it, two partials that each
+   deduce from the other are ordered by CWG1432 (no resolution; clang's
+   speculative fix in `getMoreSpecialized`, `cwg1432_tie_break`): when the
+   trailing argument pack (the primary's trailing parameter pack) differs
+   in size between them and ends in a pack expansion in exactly one, the
+   one with the longer pack ending in the expansion is less specialized.
+   kiln's list deduction already fails a pack expansion against a
+   non-pack parameter and an argument list longer than the parameters
+   (§6.2), so `C<T>` is more specialized than `C<T, U...>` by deduction
+   alone; the rule is a backstop that keeps the order clang's (WP-1105,
+   `tests/conformance/temp.spec.partial.order/cwg1432-trailing-pack-run.cpp`,
+   `tests/conformance/temp.func.order/cwg1432-trailing-pack-run.cpp`).
+   The tie-breaker applies only when the
    two are equally specialized by deduction, their template parameter
    lists are equivalent ignoring constraints ([temp.over.link]/6, same
    length, kinds, packness and non-type parameter types) and their
@@ -1831,8 +1855,36 @@ Out-of-class partial specializations of a member template (WP-150):
   of a class template, whose arguments are dependent; it is checked when
   the enclosing class is instantiated (`Substituter::member_partial_spec`
   runs both checks on the redeclared one, with the instantiation note), as
-  clang does. Still skipped: a primary non-type parameter whose type is a
-  placeholder or dependent (`template<auto V>`, `template<class T, T V>`).
+  clang does. A non-type parameter whose type is a placeholder or another
+  parameter (`template<auto V>`, `template<class T, T V>`), on either
+  side, has that type deduced from the synthesized argument's type
+  ([temp.deduct.type]/20; `deduce_nttp_type`, then
+  `deduced_nttp_type_mismatch` substitutes the deduced arguments into it
+  and compares): a synthesized `auto` is a unique type only a placeholder
+  or a type parameter matches, so `template<int N> A<N>` of
+  `template<auto N> A` is more specialized while `template<class T, T N>
+  A<N>`, `template<auto N> F<N>` of `template<int N> F`, `template<class T,
+  int N> B<T, N>` of `template<class T, T N> B` and `template<bool B> V<int,
+  B>` of `template<class T, T> V` are not (WP-1105,
+  `tests/conformance/temp.spec.partial.general/placeholder-typed-primary-not-more-specialized.cpp`,
+  `.../param-typed-primary-converted-arg-not-more-specialized.cpp`). Under
+  `-fclang-compat=19` the partial's arguments for a primary parameter
+  typed by another one are first converted to that type, as clang 19
+  converted them (`DeducedArgs::converted_values`, `converted_values_fit`:
+  the same type, an integral or unscoped enumeration value to a
+  non-enumeration integral type, a pointer qualification conversion), so
+  `V<int, B>` is accepted there; a non-convertible one is still rejected,
+  with kiln's wording rather than clang 19's `value of type 'int*' is not
+  implicitly convertible to 'int'`.
+  A primary non-type pack (`template<auto... Vs>`) is checked element-wise
+  (`pack_nttp_type_mismatch`; an expansion element has its pattern's
+  type): a placeholder-typed partial pack (`auto *...Ps`) must match each
+  synthesized element's type, so it is more specialized; a fixed-type one
+  (`int...`, `int *...`) is not more specialized than an `auto...` primary
+  (clang 22), while `-fclang-compat=19` accepts it as clang 19 did
+  (`.../placeholder-pack-partial-run.cpp`,
+  `.../placeholder-pack-fixed-type-not-more-specialized.cpp`,
+  `.../placeholder-pack-fixed-type-clang19.cpp`).
   **Packs (WP-956, with WP-1053).** Further pack cases:
   - A pack expansion that is the argument for a non-pack parameter stops
     default arguments for the remaining parameters (`args.rs`
@@ -4463,14 +4515,14 @@ range-for, conversion functions, generic lambdas and abbreviated templates.
 Those positions are language-mode and keyword gated as clang's
 `GetDeclSpecTypeForDeclarator` / `GetFullTypeForDeclarator` (WP-1134;
 `auto_declarator_check`, `param_placeholder_site`,
-`cxx11_deduced_return_check`, `gnu_auto_type_return_check`):
+`Sema::cxx11_deduced_return` (WP-1123), `gnu_auto_type_return_check`):
 
 | Position | Rejected |
 |---|---|
 | conversion-type-id | `__auto_type` always, any placeholder before C++14: "in conversion function type"; the conversion function is then invalid (no candidate) |
 | trailing return type | `auto` before C++14: "in function return type" |
 | return type (decl-specifier or trailing) | `__auto_type` always: "in function return type" |
-| function declarator nearest the name, no trailing return type, before C++14 | `auto`: "'auto' return without trailing return type; deduced return types are a C++14 extension"; `decltype(auto)`: "deduced return types are a C++14 extension" (not a lambda's implied `auto`, `Declarator::lambda`) |
+| function declarator nearest the name, no trailing return type, before C++14 | `auto`: "'auto' return without trailing return type; deduced return types are a C++14 extension"; `decltype(auto)`: "deduced return types are a C++14 extension"; recovers as `int` (not a lambda's implied `auto`, `Declarator::lambda`) |
 | `new` type-id | `__auto_type`: "in type allocated by 'new'" |
 | NTTP | any placeholder before C++17: "in template parameter until C++17" |
 | function parameter | `auto` before C++20: "in function prototype" |
@@ -6680,9 +6732,25 @@ WP-956 makes several changes to conversion function templates.
   `this` access; this matches clang's `ActOnDependentIdExpression`. The
   code paths are `is_dependent_conversion_name`,
   `try_dependent_member_q`, `act_on_id_expression_dn` and
-  `implicit_dependent_member`.
-- **Tests.** `tests/conformance/temp.mem/conversion-template-dependent-ordering.cpp`
-  and `conversion-template-ambiguous.cpp`.
+  `implicit_dependent_member`. A qualified `Base<T>::operator T()` or
+  `D::operator T()`, `x.operator T()`, `p->operator T()` and
+  `&C<T>::operator T` take the same path through their dependent
+  qualifier or object.
+- **Substituting the name.** The `DeclName` holds the canonical
+  conversion type, and `member_name` substitutes that type (clang's
+  `TransformDeclarationNameInfo` transforms the written type instead;
+  the result is canonicalized in both). A canonical dependent type keeps
+  each expression as its profile. Substitution therefore treats a
+  profile as its first expression: a non-dependent profiled template
+  argument (the `2` of `Arr<T, 2>` or `V_t<T, 2>`) in `template_arg`, and a canonical `decltype(e)` or `typeof(e)` in
+  `ty_node`, as for a canonical array bound (WP-1126). Lookup that finds
+  nothing at instantiation is clang's `no member named 'operator int *'
+  in 'S<int>'`. clang prints a template-id target type by its template
+  name alone (`'operator Arr'`), and kiln prints the arguments too
+  (`'operator Arr<int, 2>'`).
+- **Tests.** `tests/conformance/temp.mem/conversion-template-dependent-ordering.cpp`,
+  `conversion-template-ambiguous.cpp`, and
+  `tests/conformance/temp.dep.expr/conversion-function-id-dependent-{run,forms-run,nttp-run,not-found}.cpp`.
 
 The texts are taken from clang 19's `DiagnosticSemaKinds.td`. The goldens
 are authoritative: WP-070 checks each of them in `templates/diag/`.

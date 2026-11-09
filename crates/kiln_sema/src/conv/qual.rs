@@ -1,7 +1,7 @@
 //! Qualification conversions ([conv.qual]) and function pointer
 //! conversions ([conv.fctptr]).
 
-use kiln_ast::types::{ExcSpec, Quals, TypeView};
+use kiln_ast::types::{BuiltinType, ExcSpec, Quals, TypeView};
 use kiln_ast::{QualType, TypeId};
 
 use crate::Sema;
@@ -230,7 +230,10 @@ pub(crate) fn drop_noexcept(s: &mut Sema<'_, '_>, f: QualType) -> Option<QualTyp
 /// True if function type `from` converts to function type `to` by
 /// dropping its non-throwing exception specification ([conv.fctptr]),
 /// its GNU `noreturn` (a clang extension, spec/types.md §5.4), or both
-/// (clang `IsFunctionConversion`).
+/// (clang `IsFunctionConversion`); and, once glibc's x86-64 `typedef
+/// __float128 _Float128;` was seen ([`Sema::glibc_float128_alias`]), by
+/// spelling `_Float128` as `__float128` or back in its return and
+/// parameter types (WP-1058; clang has one type there, kiln keeps two).
 pub(crate) fn is_function_conversion(s: &mut Sema<'_, '_>, from: QualType, to: QualType) -> bool {
     let (Some(pf), Some(pt)) = (s.ast.types.proto(from).copied(), s.ast.types.proto(to).copied())
     else {
@@ -247,12 +250,75 @@ pub(crate) fn is_function_conversion(s: &mut Sema<'_, '_>, from: QualType, to: Q
         exc = ExcSpec::None;
         changed = true;
     }
+    if !changed && !s.glibc_float128_alias {
+        return false;
+    }
+    let mut ret = pf.ret();
+    let mut params = s.ast.types.params(&pf).to_vec();
+    let mut to = to;
+    if s.glibc_float128_alias {
+        if let Some((r, p)) = f128_spelled_as_vendor(s, ret, &params) {
+            (ret, params) = (r, p);
+            changed = true;
+        }
+        let tparams = s.ast.types.params(&pt).to_vec();
+        if let Some((r, p)) = f128_spelled_as_vendor(s, pt.ret(), &tparams) {
+            let texc = s.ast.types.exc_spec(&pt);
+            to = s.ast.types.function(r, &p, pt.info(), texc);
+            changed = true;
+        }
+    }
     if !changed {
         return false;
     }
-    let params = s.ast.types.params(&pf).to_vec();
-    let f = s.ast.types.function(pf.ret(), &params, info, exc);
+    let f = s.ast.types.function(ret, &params, info, exc);
     s.ast.types.same_type(f, to)
+}
+
+/// A function type's return and parameter types with every `_Float128`
+/// replaced by `__float128` (through pointers, references and
+/// `_Complex`, keeping cv-qualifiers), or `None` if none is spelled so.
+fn f128_spelled_as_vendor(
+    s: &mut Sema<'_, '_>,
+    ret: QualType,
+    params: &[QualType],
+) -> Option<(QualType, Vec<QualType>)> {
+    let mut changed = false;
+    let mut map = |s: &mut Sema<'_, '_>, t: QualType| {
+        let n = f128_as_vendor(s, t);
+        changed |= n.is_some();
+        n.unwrap_or(t)
+    };
+    let r = map(s, ret);
+    let p: Vec<QualType> = params.iter().map(|&t| map(s, t)).collect();
+    changed.then_some((r, p))
+}
+
+/// `t` with `_Float128` replaced by `__float128` (see
+/// [`f128_spelled_as_vendor`]), or `None` if it has none.
+fn f128_as_vendor(s: &mut Sema<'_, '_>, t: QualType) -> Option<QualType> {
+    let c = s.ast.types.canonical(t);
+    let inner = match s.ast.types.canonical_view(c) {
+        TypeView::Builtin(BuiltinType::StdFloat128) => QualType::FLOAT128,
+        TypeView::Pointer(p) => {
+            let n = f128_as_vendor(s, p)?;
+            s.ast.types.pointer_to(n)
+        }
+        TypeView::LValueRef(p) => {
+            let n = f128_as_vendor(s, p)?;
+            s.ast.types.lvalue_ref_to(n)
+        }
+        TypeView::RValueRef(p) => {
+            let n = f128_as_vendor(s, p)?;
+            s.ast.types.rvalue_ref_to(n)
+        }
+        TypeView::Complex(e) => {
+            let n = f128_as_vendor(s, e)?;
+            s.ast.types.complex(n)
+        }
+        _ => return None,
+    };
+    Some(s.ast.types.qualify(inner, c.quals()))
 }
 
 /// True if function type `referee` is reference-compatible with

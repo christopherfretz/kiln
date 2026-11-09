@@ -252,25 +252,6 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
-    /// Before C++14 a function declarator directly declaring a name
-    /// with decl-specifier type `base` a placeholder and no trailing
-    /// return type is ill-formed ([dcl.spec.auto] C++14; clang
-    /// `GetFullTypeForDeclarator`: `err_auto_missing_trailing_return` for
-    /// `auto`, `err_deduced_return_type` otherwise), reported at the
-    /// type-specifier `loc`. True if reported.
-    pub(crate) fn cxx11_deduced_return_check(&mut self, base: QualType, loc: Loc) -> bool {
-        if self.std >= kiln_lex::Std::Cxx14 {
-            return false;
-        }
-        let id = match self.placeholder_keyword(base) {
-            Some(AutoKeyword::Auto) => DiagId::sema_auto_missing_trailing_return,
-            Some(AutoKeyword::DecltypeAuto) => DiagId::sema_deduced_return_type,
-            _ => return false,
-        };
-        self.error(id, loc);
-        true
-    }
-
     /// GNU `__auto_type` as the return type `ret` of a function
     /// declarator, never a deduced return type (clang
     /// `GetFullTypeForDeclarator`): "'`__auto_type`' not allowed in

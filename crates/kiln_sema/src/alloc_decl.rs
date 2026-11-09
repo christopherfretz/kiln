@@ -447,7 +447,11 @@ impl Sema<'_, '_> {
     /// reference or pointer to one.
     pub(crate) fn is_type_identity(&self, t: QualType) -> bool {
         let c = self.ast.types.canonical(t).without_quals();
-        if let Some(r) = self.ast.types.as_record(c) {
+        // A class or enumeration `std::type_identity` that is not a
+        // usable class template still makes the function type-aware
+        // (clang `IsPotentiallyTypeAwareOperatorNewOrDelete`'s
+        // `MalformedDecl`).
+        if let Some(r) = self.ast.types.as_record(c).or_else(|| self.ast.types.as_enum(c)) {
             return self.ast.is_std_named(r, "type_identity");
         }
         if let kiln_ast::types::TypeView::TemplateSpecialization { name, .. } =
