@@ -1405,7 +1405,15 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `[nns] type-name :: ~ type-name`, the last `type-name ::` is not a
     nested-name-specifier but the pseudo-destructor's first type-name
     (clang's `MayBePseudoDestructor`; `parse_pseudo_destructor`). Both
-    go to `Sema::act_on_member_destructor_q` (WP-223). `~decltype(e)`
+    go to `Sema::act_on_member_destructor_q` (WP-223). On a class
+    object, the template-id of `x.~C<T>()` or `x.N::~C<T>()` is
+    classified with `Sema::classify_member_destructor_template` (the
+    qualifier, its prefix, the object's class) and goes to
+    `Sema::act_on_member_destructor_type_q`. If the name is not a
+    template, the argument list is skipped and
+    `Sema::diagnose_destructor_non_template` reports it (WP-1152). A
+    template-id on the pseudo-destructor path is still `unsupported`.
+    `~decltype(e)`
     after `.`/`->` ([expr.prim.id.dtor]/1, a computed-type-specifier) is
     parsed with `parse_decltype_specifier` and passed to
     `rebuild_member_destructor` (`~decltype(auto)` is the
