@@ -24,7 +24,7 @@ one, and the library picture is [status/libstdcxx.md](status/libstdcxx.md)
 | [C++20](#c20) | `-std=c++20` (`c++2a`) | `202002L` | 54 | 0 | 0 | 0 |
 | [C++23](#c23) | `-std=c++23` (`c++2b`) | `202302L` | 35 | 0 | 0 | 0 |
 | [C++26](#c26) | `-std=c++26` (`c++2c`) | `202400L` | 32 | 3 | 0 | 0 |
-| [C++26 reflection](#c26-reflection) | `-std=c++26` plus `-freflection` | `202400L` | 16 | 0 | 0 | 0 |
+| [C++26 reflection](#c26-reflection) | `-std=c++26` (on by default; `-fno-reflection` opts out, WP-920) | `202400L` | 16 | 0 | 0 | 0 |
 | [DR-level papers](#dr-level-papers) | every `-std=` | — | 19 | 0 | 0 | 0 |
 | [kiln extensions](#kiln-extensions) | every `-std=` | — | 5 | 0 | 0 | 0 |
 
@@ -230,7 +230,7 @@ required observable.
 | P0784R7 | `constexpr` dynamic allocation, `constexpr` destructors | `__cpp_constexpr_dynamic_alloc` 201907L / 201907L | done | `conformance/expr.new/churn-tree.cpp`<br>`conformance/expr.new/churn-list.cpp` | |
 | P1073R3 | `consteval` (immediate functions) | `__cpp_consteval` 202211L / 202211L | done | `conformance/dcl.constexpr/consteval-run.cpp`<br>`conformance/dcl.constexpr/consteval-escalation.cpp` | 202211L is P2564R3 (C++23 DR, row below). |
 | P1143R2 | `constinit` | `__cpp_constinit` 201907L / 201907L | done | `conformance/dcl.constinit/constinit.cpp` | |
-| P1103R3 | Modules | `__cpp_modules` 1 / 1 | done | `conformance/module.import/import-order.cpp`<br>`conformance/module.interface/export-errors.cpp`<br>`conformance/module.interface/export-using.cpp` | In-process: an importer compiles the interface source it is given, with no BMI ([spec/modules.md](../spec/modules.md) part A). Header units and `import std;` included. |
+| P1103R3 | Modules | `__cpp_modules` 1 / 1 | done | `conformance/module.import/import-order.cpp`<br>`conformance/module.interface/export-errors.cpp`<br>`conformance/module.interface/export-using.cpp` | In-process (an importer compiles the interface source it is given, [spec/modules.md](../spec/modules.md) part A) or two-step through kiln module files: `--precompile`, `-fmodule-output`, `-fmodule-file=`, `-fprebuilt-module-path=`, `.pcm` inputs and clang's mismatch diagnostics (part B §11, WP-917; `conformance/module.interface/two-step-run.cpp`). Header units and `import std;` included. Dependency scanning (`kiln-scan-deps`, P1689r5) and CMake `FILE_SET CXX_MODULES` builds (§11.9, WP-982); header-unit module files are not yet. |
 | P0388R4 | Conversions to arrays of unknown bound | — | done | `conformance/over.ics.rank/unknown-bound-array-ref.cpp` | |
 | P0960R3 | Parenthesized aggregate initialization | `__cpp_aggregate_paren_init` 201902L / 201902L | done | `conformance/dcl.init.general/paren-aggregate-array-of-class.cpp`<br>`conformance/dcl.init.aggr/paren-excess.cpp` | |
 | P1091R3 | Structured bindings: `static`, `thread_local`, lambda capture | — | done | `conformance/dcl.struct.bind/run-static.cpp`<br>`conformance/dcl.struct.bind/run-lambda.cpp`<br>`conformance/dcl.struct.bind/specifiers.cpp` | With P1381R1. |
@@ -345,7 +345,7 @@ observable beyond constant evaluation, which follows [expr.const].
 
 One row per M6 work package (docs/ROADMAP.md M6). The contract is
 [spec/reflection.md](../spec/reflection.md), and the papers are listed in
-its §1. All rows need `-freflection` (§1.4). The reference compiler is GCC 16.1.
+its §1. All rows need C++26, where reflection is on unless `-fno-reflection` (§1.4; before WP-920 they needed `-freflection`). The reference compiler is GCC 16.1.
 This table is per work package, not per paper, so `cargo xtask features` does
 not check it: its first header cell is not `Paper`.
 
@@ -416,9 +416,9 @@ off, or diagnosed with a `-W` group, unless a program asks for it.
 
 ## Macro gaps
 
-kiln's `__cpp_*` set under `-std=c++26` is clang 19's, plus the P0847, P1061 and P2893 macros, `__cpp_constexpr` 202406L (P2747) and `__cpp_constexpr_exceptions` 202411L (P3068, which clang 22 does not define) `__cpp_modules` 1 from C++20 (clang 22's value; clang 19 does not define it) and `__cpp_expansion_statements` 202506L (P1306, which clang 22 does not define) and `__cpp_contracts` 202502L (P2900, which clang 22 does not define) and `__cpp_trivial_union` 202603L (P3074, which clang 22 does not define) and, at `-fclang-compat=22`, `__cpp_template_parameters` 202502L (P2841, which clang 22 implements without the macro), so it differs from clang 22 as follows:
+kiln's `__cpp_*` set at each `-std=` is clang 22's (WP-851 raised `__cpp_static_assert` to 202306L in every mode and `__cpp_constexpr` to 202002L at C++20, as clang 22 does), plus `__cpp_constexpr_exceptions` 202411L (P3068), `__cpp_expansion_statements` 202506L (P1306), `__cpp_contracts` 202502L (P2900), `__cpp_trivial_union` 202603L (P3074) and, at `-fclang-compat=22`, `__cpp_template_parameters` 202502L (P2841), none of which clang 22 defines. The macros follow kiln's features, not `-fclang-compat`: at `-fclang-compat=19` the set is the same, so it differs from clang 19's where clang 19 lacks a feature or a value bump. WP-933 diffed `-x c++ -dM -E /dev/null` against clang++-22 for `-std=c++11` to `c++26`; the only `__cpp_*` differences are:
 
-| Macro | kiln (= clang 19) | clang 22 | Row | Action |
+| Macro | kiln | clang 22 | Row | Action |
 |---|---|---|---|---|
 | `__cpp_trivial_relocatability` | — | 202502L | P2786 (partial) | None: P2786R13 was removed from C++26 at Kona (Nov 2025), so kiln stays at clang's value (undefined) and the macro is exempt from the M4 C++26 exit (see the P2786 row). |
 | `__cpp_expansion_statements` | 202506L | — | P1306 (done) | None: kiln ships P1306R5 ahead of clang 22 (clang 23 defines 202506L), so it defines the macro at C++26 whatever the `-fclang-compat` (`KILN_FEATURES`); exempt from matching clang 22, as for `__cpp_constexpr_exceptions`. |
@@ -426,14 +426,14 @@ kiln's `__cpp_*` set under `-std=c++26` is clang 19's, plus the P0847, P1061 and
 | `__cpp_trivial_union` | 202603L | — | P3074R7 (done) | None: the Croydon DIS value (P3074R7 with P3726R2), defined at `-std=c++26` whatever the `-fclang-compat`; neither clang 22 nor GCC 16.1 defines it. Undefined below C++26. |
 | `__cpp_template_parameters` | 202502L | — | P2841R7 (done) | None: clang 22 implements P2841R7 without defining the macro; kiln defines the DIS value at `-std=c++26` with `-fclang-compat=22` (at 19 it rejects the forms, as clang 19, and leaves it undefined). Undefined below C++26. |
 
-Below C++26 kiln's set is clang 19's at each `-std=`, and two macros clang 22
-raised in every mode differ (found by WP-646's per-standard tables):
-
-| Macro | `-std=` | kiln (= clang 19) | clang 22 | Row | Action |
-|---|---|---|---|---|---|
-| `__cpp_static_assert` | c++11, c++14 | 200410 | 202306L | N1720 (partial) | Follow-up: raise it in every mode once P2741's user-generated messages are checked below C++26. |
-| `__cpp_static_assert` | c++17 to c++23 | 201411L | 202306L | N3928 (partial) | Same follow-up. |
-| `__cpp_constexpr` | c++20 | 201907L | 202002L | P1330R0 (partial) | Follow-up: clang 22 credits P1330 (changing the active union member) at C++20; kiln already evaluates it there (the `class.union` tests in its row), so only the value is stale. |
+Outside `__cpp_*`, kiln also predefines `__KILN__`, `__KILN_MAJOR__` and
+`__KILN_MINOR__` (WP-020) and, as GCC does, the P1467 extended floating-point
+macros (`__STDCPP_FLOAT16_T__` ... `__STDCPP_BFLOAT16_T__` from C++23, plus the
+`__FLT32_*__`, `__FLT64_*__`, `__FLT128_*__`, `__FLT32X_*__`, `__FLT64X_*__`,
+`__BFLT16_*__` limits and `__FLT16_IS_IEC_60559__` in every mode) that
+libstdc++ keys `std::float32_t` and friends on (spec/pp.md); clang 22 defines
+none of them. Tests: `conformance/cpp.predefined/static-assert-macro-cxx11.cpp` and
+`static-assert-constexpr-macros-cxx{14,17,20}.cpp`.
 
 kiln no longer advertises a macro without the feature: `__cpp_auto_cast` (P0849),
 `__cpp_placeholder_variables` (P2169) and `__cpp_static_assert` 202306L (P2741),

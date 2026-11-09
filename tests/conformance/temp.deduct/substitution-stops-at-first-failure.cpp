@@ -4,7 +4,6 @@
 // CXX/temp/temp.fct.spec/temp.deduct/sfinae-1.cpp. Found by the clang
 // negative-test run (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, substitution continues into parameter types after the return type failed
 //@ expect: compile-ok
 template <typename T> struct it_is_a_trap {
   typedef typename T::trap type;

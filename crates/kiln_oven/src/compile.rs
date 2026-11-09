@@ -2800,6 +2800,17 @@ impl Compiler<'_> {
                 let m = self.next;
                 let ext = self.begin_extended(init);
                 self.bind_ref(init, r);
+                if self.o.clang_compat >= 22 {
+                    // [expr.add]/4: clang 22 rejects a reference to the
+                    // object past the end (WP-948).
+                    let rq = n.ty().unwrap_or(QualType::INT);
+                    let pq = self.b.ast().types.pointee(rq).unwrap_or(rq);
+                    let ty = self.ty(pq);
+                    let pc = self.emit(Op::RefChk, 0, &[r, ty.0]);
+                    // clang notes the initializer's start (`arr[3]`).
+                    let loc = self.begin(init);
+                    self.o.sites.push(Site { pc: pc as u32, loc, e: Some(init) });
+                }
                 self.end_extended(&ext);
                 self.next = m;
             }
@@ -3517,6 +3528,21 @@ impl Compiler<'_> {
                     // C++17 removed `++` on bool; `--` never existed. Sema
                     // rejects both; treat as `= true` for robustness.
                     self.konst(new, 1);
+                } else if s && w < 32 {
+                    // [expr.pre.incr]/1: `x += 1`, computed in the
+                    // promoted `int` (which cannot overflow from a
+                    // narrower type) and converted back modulo 2^w
+                    // ([conv.integral]/3); clang's `canOverflow()` is
+                    // false here. Unsigned narrow types wrap already.
+                    let wide = self.reg();
+                    self.emit_at(
+                        if inc { Op::IAdd } else { Op::ISub },
+                        int_aux(32, true),
+                        &[wide, old, one],
+                        e,
+                    );
+                    let aux = 32 | 1 << 8 | w << 9 | 1 << 17;
+                    self.emit(Op::ICast, aux, &[new, wide]);
                 } else {
                     self.emit_at(
                         if inc { Op::IAdd } else { Op::ISub },
@@ -3740,8 +3766,13 @@ impl Compiler<'_> {
             }
             // Interned member pointers: equal values share an index.
             // Interned reflections likewise ([expr.eq]/6, P2996).
-            (TyKind::MemPtr { .. } | TyKind::Reflection, _)
-            | (_, TyKind::MemPtr { .. } | TyKind::Reflection) => {
+            (TyKind::MemPtr { func, .. }, _) | (_, TyKind::MemPtr { func, .. }) => {
+                if func {
+                    self.emit_at(Op::MpCmp, 0, &[ra, rb], e);
+                }
+                self.emit(Op::ICmp, int_aux(64, false) | c << 9, &[dst, ra, rb]);
+            }
+            (TyKind::Reflection, _) | (_, TyKind::Reflection) => {
                 self.emit(Op::ICmp, int_aux(64, false) | c << 9, &[dst, ra, rb]);
             }
             (k, _) => {
@@ -3833,7 +3864,15 @@ impl Compiler<'_> {
             if let (TyKind::Ptr(pa), TyKind::Ptr(_)) = (ak_, bk) {
                 let ra = self.opnd(a, ga, false);
                 let rb = self.opnd(b, gb, false);
-                self.emit_at(Op::PtrSub, 0, &[dst, ra, rb, pa.0], e);
+                // [expr.add]/5: pointers to a zero-size element type
+                // (`int[0]`) have no element count between them; aux 1
+                // sends the VM to its zero-size check (clang
+                // `note_constexpr_pointer_subtraction_zero_size`, WP-948).
+                let zero = u32::from(
+                    matches!(self.o.types.kind(pa), TyKind::Array { .. })
+                        && self.o.types.size(pa) == 0,
+                );
+                self.emit_at(Op::PtrSub, zero, &[dst, ra, rb, pa.0], e);
                 return;
             }
             let ptr_side = match (ak_, bk) {

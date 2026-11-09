@@ -52,6 +52,8 @@ The loop:
 | `doctest` | 1 | `v2.5.3` | tests at parity | tests at parity |
 | `fmt` | 1 | `12.1.0` | tests at parity | tests at parity |
 | `googletest` | 1 | `v1.17.0` | tests at parity | tests at parity |
+| `hunspell_autotools` | 1 | `v1.7.2` | tests at parity | not run |
+| `jsoncpp_meson` | 1 | `1.9.6` | tests at parity | not run |
 | `magic_enum` | 1 | `v0.9.7` | tests at parity | tests at parity |
 | `nlohmann_json` | 1 | `v3.12.0` | tests at parity | tests at parity |
 | `range_v3` | 1 | `0.12.0` | tests at parity | tests at parity |
@@ -138,6 +140,43 @@ harness's 3 GB address-space cap. Geomean kiln/g++-16:
 | `scnlib` | 0.66x | 0.57x | |
 | `glaze` | 0.56x | 0.28x | over 2 TUs. g++-16 runs out of the 3 GB cap ("virtual memory exhausted") on `json_test`, `yaml_test` and `beve_test`, where kiln peaks at 1244, 1658 and 759 MB |
 | `reflect_cpp` | 0.68x | 0.21x | |
+
+## Build systems and the reflection default (WP-920)
+
+**Meson and autotools rows.** `jsoncpp_meson` (Meson 1.12.1 and ninja
+1.13.2 from a venv: `python3 -m venv .oss/venv && .oss/venv/bin/pip
+install meson==1.12.1 ninja==1.13.2`; `oss-build.sh` puts `.oss/venv/bin`
+on `PATH`) and `hunspell_autotools` (the v1.7.2 release tarball, checked
+by sha256, `./configure CXX=kiln-cxx`, `make -k check`). Both are at
+parity: jsoncpp 3/3 tests (its unit test reports 68 cases passed), 7/7
+TUs, 3/3 links, 11 s kiln vs 21 s clang; hunspell 130/130 tests, 36/36
+TUs, 10/10 links, 22 s vs 26 s. Meson needs the wrapper's version shim
+(`KILN_OSS_VERSION_SHIM`; docs/COMPATIBILITY.md "Build systems").
+
+**Reflection default cost** (operator decision Q7; 2026-11-08, aarch64
+container, 24 cores, load average 12-15 from other jobs). A/B of one
+release binary (`cargo build --profile release -p kiln_driver` at the
+WP-920 head), reflection on (the new C++26 default) against
+`-fno-reflection`, alternating, 15 runs each, wall median and peak RSS:
+
+| TU (`kiln++ -std=c++26 -resource-dir resource ...`) | on | `-fno-reflection` | delta |
+|---|---|---|---|
+| `-fsyntax-only` of `int main() {}` | 23.7 ms, 11.3 MB | 23.0 ms, 11.3 MB | +3.1% (noise: min 18.5 vs 18.1 ms) |
+| `-fsyntax-only -fconstexpr-steps=100000000 bench/oven/fib.cpp` | 20.6 ms, 11.3 MB | 22.2 ms, 11.3 MB | -6.9% |
+| `-fsyntax-only -stdlib=libc++ bench/frontend/templates.cpp` | 319.8 ms, 44.0 MB | 331.4 ms, 44.1 MB | -3.5% |
+| `-E -o /dev/null -stdlib=libc++ bench/pp/headers.cpp` | 1136.2 ms, 102.4 MB | 1141.7 ms, 102.3 MB | -0.5% |
+| `-fsyntax-only` of `<vector>`, `<string>`, `<map>` and a `main` using them | 249.5 ms, 25.1 MB | 248.6 ms, 25.1 MB | +0.4% |
+
+Flat: every difference is inside the run-to-run spread. Predefines: 620
+macros on, 619 off (`__cpp_impl_reflection`; `-dM -E` at C++26), 614 at
+C++23 (measured before WP-927's `__KILN_PATCH__`, which adds one to each). `cargo xtask bench` on the same head reported 42 of 50 entries
+slower than the recorded baselines (bench entries default to
+`-std=c++26`, so reflection is on in all of them), by a near-constant
+10-30 ms on the smallest ones, while the A/B above of the same binary is
+flat and another branch's release binary started a trivial TU just as
+slowly in the same minute (25.7 ms median): that is the box's load, not
+the default. Re-record nothing from this run. Reproduce: run each table
+row alternately with and without `-fno-reflection`, with any `kiln++`.
 
 ## Results
 
@@ -1328,3 +1367,35 @@ Failure clusters (kiln): none.
 
 kiln test run: `99% tests passed, 1 tests failed out of 118`
 <!-- /oss:grpc -->
+
+<!-- oss:jsoncpp_meson -->
+### jsoncpp_meson (1.9.6)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 7 / 0 | 7 / 0 |
+| links ok / failed | 3 / 0 | 3 / 0 |
+| tests passed / total | 3 / 3 | 3 / 3 |
+| wall | 11 s | 21 s |
+| peak TU RSS | 156 MB | 215 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:jsoncpp_meson -->
+
+<!-- oss:hunspell_autotools -->
+### hunspell_autotools (v1.7.2)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 36 / 0 | 36 / 0 |
+| links ok / failed | 10 / 0 | 10 / 0 |
+| tests passed / total | 130 / 130 | 130 / 130 |
+| wall | 22 s | 26 s |
+| peak TU RSS | 115 MB | 192 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:hunspell_autotools -->

@@ -4,7 +4,6 @@
 // subsumption.cpp. Found by the clang negative-test run (WP-912).
 //@ std: c++20
 //@ requires: clang>=22
-//@ xfail(kiln): WP-912 follow-up, subsumption gives up on a large normal form and reports an ambiguity
 //@ expect: compile-ok
 template <typename T> concept C0 = true;
 template <typename T> concept C1 = true;

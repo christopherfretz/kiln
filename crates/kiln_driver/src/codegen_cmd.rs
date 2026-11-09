@@ -87,6 +87,7 @@ pub fn is_source(input: &Input) -> bool {
             | "ii"
             | "cppm"
             | "ixx"
+            | "pcm"
             | "h"
             | "hh"
             | "hpp"
@@ -304,8 +305,8 @@ impl CodegenJob<'_> {
         if crate::features::resolve(a, &job.toolchain.target).0.x86_cx16() {
             target.types.max_atomic_inline_bytes = 16;
         }
-        let main_id = inputs.main;
         let (pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
+        let main_id = pp.main_file();
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
         let popts = ParseOptions {
             std: job.std.lex,
@@ -314,7 +315,7 @@ impl CodegenJob<'_> {
             rtti: a.predef.rtti.unwrap_or(true),
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
-            reflection: a.predef.reflection,
+            reflection: a.predef.reflection_for(&job.std),
             coro_aligned_allocation: a.predef.coro_aligned_allocation,
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
@@ -334,8 +335,11 @@ impl CodegenJob<'_> {
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
-        let (mut tu, pp) =
+        let (mut tu, mut pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
+        if engine.error_count() == 0 {
+            job.write_module_file(&mut pp, engine);
+        }
         *deps_out = crate::pp_cmd::finish_deps(pp, deps);
         let mut module = None;
         if engine.error_count() == 0 {
@@ -395,7 +399,7 @@ impl CodegenJob<'_> {
                 cxx_modules: job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20,
                 debug: kiln_codegen::DebugOptions {
                     main_file: if job.path == "-" { String::new() } else { job.path.to_owned() },
-                    main_id: Some(main_id),
+                    main_id,
                     language: kiln_codegen::DebugOptions::language_for(
                         job.std.cplusplus,
                         job.std.lex >= kiln_lex::Std::Cxx11,
@@ -410,6 +414,13 @@ impl CodegenJob<'_> {
                 },
                 ..codegen_flag_options(a, feats.cpu.clone(), x86)
             };
+            // WP-941: coverage, and the debug locations gcov needs (clang
+            // `LocTrackingOnly` when no `-g` is given).
+            opts.coverage = coverage_options(a, job.path);
+            if opts.coverage.gcov.is_some() && opts.debug.kind == kiln_codegen::DebugInfoKind::None
+            {
+                opts.debug.kind = kiln_codegen::DebugInfoKind::LocTrackingOnly;
+            }
             // UBSan's `shift-base` depends on the language (WP-675).
             opts.sanitize.cplusplus = job.std.cplusplus;
             opts.sanitize.cxx20 = job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20;
@@ -451,6 +462,34 @@ impl CodegenJob<'_> {
         // peak holds two of the three, not all of them (WP-633).
         drop(tu);
         module.map(|m| m.to_text())
+    }
+}
+
+/// The codegen coverage options of the compile of `input` (WP-941).
+fn coverage_options(a: &Args, input: &str) -> kiln_codegen::CoverageOptions {
+    let c = &a.coverage;
+    let cwd = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+    let gcov = c.gcov().then(|| {
+        let (notes, data) =
+            c.gcov_files(input, a.output.as_deref(), Phase::of(a) == Phase::Link, &cwd);
+        (
+            if c.gcov_notes() { notes } else { String::new() },
+            if c.gcov_data() { data } else { String::new() },
+        )
+    });
+    kiln_codegen::CoverageOptions {
+        gcov,
+        instr: c.instr_generate.is_some(),
+        // clang's InstrProfiling pass creates the filename variable, so
+        // `-disable-llvm-passes` IR has none.
+        instr_path: c
+            .instr_generate
+            .clone()
+            .flatten()
+            .filter(|p| !p.is_empty() && !a.disable_llvm_passes),
+        mapping: c.mapping(),
+        comp_dir: c.comp_dir.clone().unwrap_or(cwd),
+        prefix_map: c.prefix_map.clone(),
     }
 }
 
@@ -520,6 +559,24 @@ pub fn compile(
     }
     let temp = TempDir::new();
     let plan = plan(args, tc, inputs, phase, &temp);
+    if args.deps.cdb_fragment.is_some() {
+        let jobs: Vec<_> = inputs
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| is_source(i))
+            .map(|(n, &input)| {
+                // As `plan`: a link compiles each source to a temporary
+                // object.
+                let output = if phase == Phase::Link {
+                    temp.file(&format!("{n}-{}", default_output(&input.path, Phase::Object)))
+                } else {
+                    args.output.clone().unwrap_or_else(|| default_output(&input.path, phase))
+                };
+                crate::cdb::CdbJob { input, output: Some(output) }
+            })
+            .collect();
+        crate::cdb::write(args, tc, &jobs, &drv);
+    }
     if args.print_commands {
         print_version(&mut io.stderr, tc, false);
         let mut err = io.stderr.clone();
@@ -736,6 +793,8 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
         Some(p) => p,
         // WP-675: the sanitizer passes run at every level.
         None if sanitizer_passes(args, tc).is_some() => "default<O0>",
+        // WP-941: so do the coverage passes.
+        None if coverage_passes(args).is_some() => "default<O0>",
         None if needs_always_inline(ir) => "default<O0>",
         // WP-813: the O0 pipeline's `ee-instrument` turns the entry and
         // exit attributes into `__cyg_profile_func_*` calls.
@@ -760,6 +819,7 @@ fn planned_ir_passes(args: &Args, tc: &Toolchain) -> Option<Vec<Command>> {
     }
     opt_pipeline(args.opt_flag.as_deref())
         .or_else(|| sanitizer_passes(args, tc).map(|_| "default<O0>"))
+        .or_else(|| coverage_passes(args).map(|_| "default<O0>"))
         .map(|p| opt_commands(args, tc, p))
 }
 
@@ -828,6 +888,28 @@ fn sanitizer_passes(args: &Args, tc: &Toolchain) -> Option<(String, Vec<String>)
         .optimizer_last(opt_level(args.opt_flag.as_deref()))
 }
 
+/// clang's coverage passes (WP-941, spec/codegen.md "Instrumentation"):
+/// `GCOVProfilerPass` then `InstrProfilingLoweringPass` at the pipeline
+/// start extension point, and their `cl::opt` flags.
+fn coverage_passes(args: &Args) -> Option<(String, Vec<String>)> {
+    let c = &args.coverage;
+    let mut passes = Vec::new();
+    let mut flags = Vec::new();
+    if c.gcov() {
+        passes.push("insert-gcov-profiling");
+        if c.atomic {
+            flags.push("--gcov-atomic-counter".to_owned());
+        }
+    }
+    if c.instr_generate.is_some() {
+        passes.push("instrprof");
+        if c.atomic {
+            flags.push("--instrprof-atomic-counter-update-all".to_owned());
+        }
+    }
+    (!passes.is_empty()).then(|| (passes.join(","), flags))
+}
+
 /// The `opt` run of `passes`, then for a textual or bitcode output the
 /// run that discards local value names ([`ir_passes`]). With a sanitizer
 /// the instrumentation joins the pipeline at its last extension point;
@@ -836,6 +918,12 @@ fn sanitizer_passes(args: &Args, tc: &Toolchain) -> Option<(String, Vec<String>)
 fn opt_commands(args: &Args, tc: &Toolchain, passes: &str) -> Vec<Command> {
     let mut run = Command::new(tc, Tool::Opt);
     run.arg(format!("-passes={passes}"));
+    if let Some((ep, cl)) = coverage_passes(args) {
+        run.arg(format!("--passes-ep-pipeline-start={ep}"));
+        for c in cl {
+            run.arg(c);
+        }
+    }
     let san = sanitizer_passes(args, tc);
     if let Some((ep, cl)) = &san {
         run.arg(format!("--passes-ep-optimizer-last={ep}"));
@@ -890,8 +978,13 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String, input: &str) -> C
     }
     // clang `AllowFPOpFusion`: `-ffp-contract=fast` (not
     // `fast-honor-pragmas`) fuses across statements in the backend too;
-    // the other fast-math options reach it as function attributes.
-    if args.fp_model().backend_fuse {
+    // the other fast-math options reach it as function attributes. LLVM
+    // 22's `llc` warns that the X86 backend ignores `-fp-contract` (it
+    // fuses on the IR's `contract` flags, which every FP operation carries
+    // under `-ffp-contract=fast`, as with clang), so it is not passed
+    // there; the object code is the same (WP-1016).
+    let x86_ignores_fusion = !tc.target.is_aarch64() && tc.llvm_major() >= 22;
+    if args.fp_model().backend_fuse && !x86_ignores_fusion {
         cmd.arg("-fp-contract=fast");
     }
     // The module's `Code Model` flag says the same; explicit, as clang
@@ -923,6 +1016,29 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String, input: &str) -> C
 
 /// `clang++` over the objects and linker inputs (`(position, path)`),
 /// with the linker options in command-line order.
+/// The flags that pick the linking clang++'s target and installation
+/// (also passed with the `-print-*` probes it answers, WP-920).
+pub(crate) fn toolchain_link_args(args: &Args, tc: &Toolchain) -> Vec<String> {
+    let mut v = Vec::new();
+    if args.target.is_some() {
+        v.push(format!("--target={}", tc.target.triple));
+    }
+    if let Some(s) = &args.sysroot {
+        v.push(format!("--sysroot={s}"));
+    }
+    if let Some(d) = &args.gcc_toolchain {
+        v.push(format!("--gcc-toolchain={d}"));
+    }
+    if let Some(d) = &args.gcc_install_dir {
+        v.push(format!("--gcc-install-dir={d}"));
+    } else if let Some(g) = tc.gcc.as_ref().filter(|_| tc.gcc_from_driver) {
+        // The headers came from `toolchain::DEFAULT_GCC`'s installation;
+        // link against the same one rather than clang++'s own choice.
+        v.push(format!("--gcc-install-dir={}", g.path));
+    }
+    v
+}
+
 fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Command {
     let mut cmd = Command::new(tc, Tool::Linker);
     // `-v` reaches the linking `clang++` too, so its own `-v` lines (the
@@ -931,21 +1047,8 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
     if args.verbose {
         cmd.arg("-v");
     }
-    if args.target.is_some() {
-        cmd.arg(format!("--target={}", tc.target.triple));
-    }
-    if let Some(s) = &args.sysroot {
-        cmd.arg(format!("--sysroot={s}"));
-    }
-    if let Some(d) = &args.gcc_toolchain {
-        cmd.arg(format!("--gcc-toolchain={d}"));
-    }
-    if let Some(d) = &args.gcc_install_dir {
-        cmd.arg(format!("--gcc-install-dir={d}"));
-    } else if let Some(g) = tc.gcc.as_ref().filter(|_| tc.gcc_from_driver) {
-        // The headers came from `toolchain::DEFAULT_GCC`'s installation;
-        // link against the same one rather than clang++'s own choice.
-        cmd.arg(format!("--gcc-install-dir={}", g.path));
+    for a in toolchain_link_args(args, tc) {
+        cmd.arg(a);
     }
     if let Some(o) = &args.opt_flag {
         cmd.arg(o.clone());
@@ -972,6 +1075,10 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
             cmd.arg("-flto");
         }
         None => {}
+    }
+    // WP-941: clang links the profile runtime for coverage.
+    for f in args.coverage.link_flags() {
+        cmd.arg(f);
     }
     // WP-813: clang links the XRay runtime for `-fxray-instrument`.
     if args.codegen.xray_instrument {
@@ -1282,7 +1389,7 @@ mod tests {
     fn searched_toolchain() -> Toolchain {
         Toolchain {
             gcc_from_driver: false,
-            ..Toolchain::new(crate::toolchain::Target::host(), None, None)
+            ..Toolchain::new(crate::toolchain::Target::host(), None, None, None)
         }
     }
 

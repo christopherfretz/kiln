@@ -104,6 +104,16 @@ fn block(st: &mut [u32; 4], chunk: &[u8]) {
 
 /// The MD5 digest of `data` as 32 lowercase hex digits.
 pub(crate) fn hex(data: &[u8]) -> String {
+    let mut out = String::with_capacity(32);
+    for b in digest(data) {
+        out.push(char::from_digit(u32::from(b >> 4), 16).unwrap_or('0'));
+        out.push(char::from_digit(u32::from(b & 15), 16).unwrap_or('0'));
+    }
+    out
+}
+
+/// The 16-byte MD5 digest of `data` (LLVM `MD5::final`).
+pub(crate) fn digest(data: &[u8]) -> [u8; 16] {
     let mut st = [0x6745_2301u32, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476];
     let mut chunks = data.chunks_exact(64);
     for c in &mut chunks {
@@ -119,12 +129,9 @@ pub(crate) fn hex(data: &[u8]) -> String {
     for c in tail[..n].chunks_exact(64) {
         block(&mut st, c);
     }
-    let mut out = String::with_capacity(32);
-    for w in st {
-        for b in w.to_le_bytes() {
-            out.push(char::from_digit(u32::from(b >> 4), 16).unwrap_or('0'));
-            out.push(char::from_digit(u32::from(b & 15), 16).unwrap_or('0'));
-        }
+    let mut out = [0u8; 16];
+    for (o, w) in out.chunks_exact_mut(4).zip(st) {
+        o.copy_from_slice(&w.to_le_bytes());
     }
     out
 }

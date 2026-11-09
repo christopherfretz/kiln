@@ -18,7 +18,8 @@ kiln extensions.
 ## Method
 
 Each project is built with kiln (`kiln++`) as the C++ compiler, through
-the project's own build system (CMake), at a pinned tag
+the project's own build system (CMake; Meson and autotools for the two
+rows under "Build systems"), at a pinned tag
 ([scripts/oss/projects.toml](../scripts/oss/projects.toml)). Then the
 project's own test suite runs. A control build of the same tree, with the
 same flags and test filter, uses clang++-19 (g++-16 for mp-units, which
@@ -54,6 +55,68 @@ apply to the platform.
 A rating reflects the last measured run. When a fix has landed since, the
 notes say so, and the rating moves up at the next run.
 
+## Runtime dependencies
+
+kiln writes LLVM IR and hands it to LLVM's own tools, so it needs an LLVM
+installation at run time. kiln 1.0 supports **LLVM 22** (the default,
+preferred when both are installed) and **LLVM 19**; LLVM 20 and 21 are
+refused with `unsupported LLVM major N; kiln supports LLVM 19 and 22`.
+From that installation kiln uses:
+
+- `opt`, `llc` and `llvm-as`: optimization, code generation, `-emit-llvm
+  -c` bitcode;
+- the `clang++` driver: linking (kiln runs `<llvm>/bin/clang++` for the
+  link step and for the toolchain probes it delegates, such as
+  `-print-file-name=`), so a clang package is required, not only LLVM;
+- compiler-rt (clang's runtime libraries): only for `-fsanitize=` and
+  `-fprofile-instr-generate`/`--coverage`;
+- a C++ standard library's headers and libraries: libstdc++ (GCC's, the
+  default) or libc++ (`-stdlib=libc++`, from the LLVM installation).
+
+**How kiln finds LLVM** (spec/driver.md "LLVM discovery"; the first that
+qualifies wins, and `kiln++ --version` prints the choice as `LLVM
+backend: <major> (<dir>)`):
+
+1. `--llvm-dir=<dir>`;
+2. the `KILN_LLVM_DIR` environment variable;
+3. for LLVM 22, then LLVM 19: `llvm-config` / `llvm-config-<N>` on `PATH`,
+   then `/usr/lib/llvm-<N>` (Debian, Ubuntu), `/usr/lib64/llvm<N>`
+   (Fedora), Homebrew on Linux's `llvm@<N>` and `llvm`, `/usr`, then
+   `opt-<N>` / `clang++-<N>` on `PATH`.
+
+A directory qualifies when it has `bin/opt`, `bin/llc` and `bin/clang++`
+and is LLVM 19 or 22. A directory named with `--llvm-dir` or
+`KILN_LLVM_DIR` that does not qualify is an error, never silently
+replaced by another one; when nothing qualifies, kiln lists what it
+looked at. The `-fclang-compat` level (the clang version kiln emulates,
+22 by default) is independent of the LLVM it drives.
+
+**Installing.** Debian and Ubuntu, from [apt.llvm.org](https://apt.llvm.org)
+(the script adds the repository for the release):
+
+```
+wget https://apt.llvm.org/llvm.sh && sudo bash llvm.sh 22
+sudo apt install llvm-22 clang-22 libclang-rt-22-dev libc++-22-dev libc++abi-22-dev
+```
+
+Debian 13 (trixie) has LLVM 19 in its own archive:
+
+```
+sudo apt install llvm-19 clang-19 libclang-rt-19-dev libc++-19-dev libc++abi-19-dev
+```
+
+Fedora's main `llvm`/`clang` packages work when they are release 19 or 22
+(they install into `/usr`); otherwise the versioned compatibility
+packages install under `/usr/lib64/llvm<N>`:
+
+```
+sudo dnf install llvm22 clang22 compiler-rt22 libstdc++-devel
+```
+
+libstdc++'s headers come with `g++` (Debian, Ubuntu) or
+`libstdc++-devel` (Fedora). With LLVM somewhere else, point kiln at it:
+`kiln++ --llvm-dir=/opt/llvm-22 ...` or `export KILN_LLVM_DIR=/opt/llvm-22`.
+
 ## Standard libraries
 
 kiln does not ship a standard library. It compiles the platform's
@@ -73,9 +136,48 @@ Per-run detail: [status/libcxx.md](status/libcxx.md),
 [status/libcxx-m5.md](status/libcxx-m5.md),
 [status/libstdcxx.md](status/libstdcxx.md).
 
+## C++20 modules
+
+Named modules, partitions, implementation units, global and private
+module fragments, header units and `import std;` / `import std.compat;`
+(libc++) work. They work both in one invocation, where an importer
+compiles the interface source it is given, and in clang's two-step build:
+
+- `--precompile` (or `-c -fmodule-output`) writes a module file.
+- Importers name it with `-fmodule-file=<name>=<path>` or
+  `-fprebuilt-module-path=`.
+- `-c m.pcm` compiles the interface's object.
+
+kiln's module files are its own format, so clang's `.pcm` files are
+refused with a diagnostic, and vice versa. A module file built with a
+different `-std`, target, or ABI-relevant option is rejected with
+clang's mismatch diagnostics. Importing libc++'s `std` module file costs
+1.05x the memory of compiling `std.cppm` in-process, in the same time.
+This is slower than importing a clang BMI, because kiln module files hold
+sources rather than a serialised AST
+([spec/modules.md](../spec/modules.md) §11).
+
+**CMake** (3.28+, tested with 3.31 and Ninja) builds `FILE_SET
+CXX_MODULES` targets with kiln unchanged: `kiln-scan-deps`, kiln's
+clang-scan-deps (P1689r5, the same output as clang-scan-deps 22), is
+installed beside `kiln++` also as `clang-scan-deps-22` and
+`clang-scan-deps`, which is where CMake looks first, and kiln++ reads the
+`@<file>.modmap` module maps CMake writes. Interfaces, partitions,
+implementation units and consumers build, and touching an interface
+rebuilds exactly its dependents. To name the scanner explicitly (with a
+compiler wrapper, say), configure with
+`-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=<prefix>/bin/kiln-scan-deps`
+([spec/modules.md](../spec/modules.md) §11.9).
+
+Not yet supported:
+
+- `import std;` through CMake (`CXX_MODULE_STD`);
+- header units as module files (`-fmodule-header`), so the scanner
+  rejects `import "h";` with an error.
+
 ## Libraries and applications
 
-47 projects: 43 **Flawless**, 3 **Near-perfect** (simdjson, folly, the Boost metaprogramming libraries), 1 **Partial** (folly::coro, fixed since and awaiting a re-run). The libc++ column is the WP-694 run against
+47 projects: 43 **Flawless**, 3 **Near-perfect** (simdjson, folly, the Boost metaprogramming libraries), 1 **Partial** (folly::coro: its known failures are fixed (WP-802, WP-933), and the re-run is deferred for lack of disk). The libc++ column is the WP-694 run against
 libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 "kiln passed / total"; the clang count is the same unless it is given.
 
@@ -105,7 +207,7 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [EnTT](status/oss/entt.md) | `v3.15.0` | full ctest suite | libstdc++ 14 | **Flawless**: 68/68 | WP-690 |
 | [glog](status/oss/glog.md) | `v0.7.1` | full CTest suite | libstdc++ 14 | **Flawless**: 23/24 under both (`symbolize` fails under both: environment) | WP-700 |
 | [RE2](status/oss/re2.md) | `2025-11-05` | full test suite; Abseil, googletest and Benchmark built by the same compiler | libstdc++ 14 | **Flawless**: 20/20 | WP-710 |
-| [simdjson](status/oss/simdjson.md) | `v4.2.4` | developer-mode CTest suite (without `checkperf` and `fuzz`) | libstdc++ 14 | **Near-perfect**: 116/117 (clang 117/117) | the failing test is a negative compile test that needs `-Wuninitialized` under `-Werror`; **WP-696** (open). WP-691 |
+| [simdjson](status/oss/simdjson.md) | `v4.2.4` | developer-mode CTest suite (without `checkperf` and `fuzz`) | libstdc++ 14 | **Near-perfect**: 116/117 (clang 117/117) | the failing test is a negative compile test that needs `-Wuninitialized` under `-Werror`; **WP-696** (open). WP-933's re-run after WP-862 was deferred for lack of disk. WP-691 |
 | [Taskflow](status/oss/taskflow.md) | `v3.10.0` | full test suite | libstdc++ 14 | **Flawless**: 2462/2462 | WP-703 |
 | [yaml-cpp](status/oss/yaml_cpp.md) | `yaml-cpp-0.9.0` | full suite (1011 googletest tests), vendored googletest built by the same compiler | libstdc++ 14 | **Flawless**: 1/1 | WP-698 |
 
@@ -131,7 +233,7 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [ctre](status/oss/ctre.md) | `v3.11.0` | all 25 test TUs (`static_assert` tests) | libstdc++ 14 | **Flawless**: 25/25 TUs | WP-792 |
 | [daw_json_link](status/oss/daw_json_link.md) | `v3.38.1` | full ctest suite | libstdc++ 14 | **Flawless**: 147/147 | WP-792 |
 | [DuckDB](status/oss/duckdb.md) | `v1.5.6` | `unittest` (Catch2 and the default sqllogictest files) and the shell | libstdc++ 14 | **Flawless**: 4615/4628 under both | the same 13 fail under both because of the host. WP-799 |
-| [folly::coro](status/oss/folly_coro.md) | `v2026.10.26.00` | folly's coroutine tests | libstdc++ 14 | **Partial**: 583/618 (clang 616/618), 94.6% of clang's passes | one link failure (a consteval call in a `co_return` operand of a coroutine template) accounts for all 33 kiln-only failures. WP-802 fixed it (`cea9ab532`); the project was not re-run. WP-789 |
+| [folly::coro](status/oss/folly_coro.md) | `v2026.10.26.00` | folly's coroutine tests | libstdc++ 14 | **Partial**: 583/618 (clang 616/618), 94.6% of clang's passes | one link failure (a consteval call in a `co_return` operand of a coroutine template) accounts for all 33 kiln-only failures. WP-802 fixed it (`cea9ab532`). WP-933's partial re-run found two more kiln-only compile failures (an init-list mangling and an empty `auto...` pack); both are fixed, and the full re-run is deferred for lack of disk. WP-789, WP-933 |
 | [Glaze](status/oss/glaze.md) | `v9.1.0` | full ctest suite | libstdc++ 14 | **Flawless**: 100/102 under both | the same 2 TUs fail under both with libstdc++ 14. WP-792 |
 | [gRPC](status/oss/grpc.md) | `v1.85.1` | the C++ core and its submodule dependencies; kiln-built `protoc` and `grpc_cpp_plugin` | libstdc++ 14 | **Flawless**: 117/118 under both | `end2end_http2_test` hits the 300 s limit under both. WP-811 |
 | [libunifex](status/oss/libunifex.md) | `v0.4.0` | full test suite | libstdc++ 14 | **Flawless**: 91/94 under both | the 3 io_uring tests are not permitted in the container. WP-789 |
@@ -145,6 +247,53 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [scnlib](status/oss/scnlib.md) | `v4.0.1` | full ctest suite | libstdc++ 14 | **Flawless**: 25/25 | WP-792 |
 | [stdexec](status/oss/stdexec.md) | `nvhpc-26.05` | full test suite, including the `*_fail` tests that match error text | libstdc++ 14 | **Flawless**: 907/907 | WP-789 |
 | [Z3](status/oss/z3.md) | `z3-4.15.8` | `test-z3 /a`, and the shell on the SMT-LIB2 examples | libstdc++ 14 | **Flawless**: every test and example gives the control's output, apart from timings | WP-799 |
+
+## Build systems
+
+kiln defines clang's macros but names itself kiln in text (operator
+decision Q3; spec/driver.md "Identity"). What each build system reads,
+and what it concludes about kiln (WP-920):
+
+- **CMake** (3.31, every project above): the compiler ID comes from
+  compiling `CMakeCXXCompilerId.cpp`, which tests `__clang__` and reads
+  `__clang_major__`/`__clang_minor__`/`__clang_patchlevel__`. CMake reports
+  `The CXX compiler identification is Clang 22.1.8` (the compatibility
+  version, 19.1.7 under `-fclang-compat=19`) and uses its Clang rules. The
+  implicit link directories and libraries come from the `-v` link lines,
+  which the backing clang++ prints. CMake matches `clang version` text
+  only for CUDA, HIP and assembler vendor detection, which kiln does not
+  serve. Works unchanged. C++20 modules (`FILE_SET CXX_MODULES`, Ninja)
+  find kiln's scanner beside the compiler ("C++20 modules" above).
+- **Autotools** (hunspell's configure: autoconf 2.69, automake, libtool): `AC_PROG_CXX` decides
+  "GNU C++" from `__GNUC__` (kiln: 4.2.1, as clang). It runs `--version`,
+  `-v`, `-V` and `-qversion` only to log them in `config.log`. libtool
+  asks `-print-prog-name=ld` for the linker and reads `-shared -v` for
+  the C++ runtime libraries (`postdeps`). Works unchanged:
+  [hunspell](status/oss.md) row below.
+- **Meson** (1.12.1, `mesonbuild/compilers/detect.py`): it runs
+  `--version` and requires the word `clang` or `Clang` somewhere in the
+  output; anything else is `Unknown compiler(s)` and configure stops
+  (`Free Software Foundation` would make it GCC). It then takes the first
+  `\d{1,2}(\.\d+)+` token as the version, and detects the linker with
+  `-Wl,--version` (which kiln now runs as a linker-only job, as clang).
+  kiln's `--version` (`kiln version 0.0.1 ...`) has no `clang`, so plain
+  Meson rejects kiln. This cannot be fixed without the word: the options
+  are (a) leave `--version` clean and have Meson users go through a
+  wrapper or a Meson native file that names kiln as clang (what the
+  harness does today, below); (b) a `--version` line that contains
+  `clang` without saying `clang version`, such as `clang-compatible
+  22.1.8 (kiln version 0.0.1)`, which Meson reads as Clang 22.1.8; or
+  (c) (b) behind an opt-in flag or environment variable. Choosing is an
+  operator decision; kiln ships (a). The OSS harness's compiler wrapper
+  (`scripts/oss/kiln-cxx`) prints `clang-compatible <-dumpversion>
+  (kiln-cxx Meson shim, WP-920)` before kiln's own banner, only under
+  `KILN_OSS_VERSION_SHIM` (set by `oss-build.sh` for Meson rows) and only
+  when the banner lacks `clang`.
+
+| project | build system | version / tag | scope validated | std lib(s) | rating and result vs clang | notes / WP |
+|---|---|---|---|---|---|---|
+| hunspell | autotools | `v1.7.2` (release tarball) | `make check`, 130 tests | libstdc++ 14 | **Flawless**: 130/130 | WP-920 |
+| jsoncpp | Meson | `1.9.6` | `meson test`, 3 tests (the unit test runs 68 cases) | libstdc++ 14 | **Flawless**: 3/3 | WP-920; through the harness's Meson shim |
 
 ## x86_64
 
@@ -160,7 +309,7 @@ x86_64-only gaps found are fixed or have a follow-up WP.
 
 | suite / project | result on x86_64 vs clang 19 | rating |
 |---|---|---|
-| libc++ 22.1.8 (9247 tests) | 99.0% (aarch64 99.2%); the 2 x86_64-only failures are a narrow signed `++` bug that signed `char` exposes (WP-981) and a flaky timeout | **Near-perfect** |
+| libc++ 22.1.8 (9247 tests) | 99.0% (aarch64 99.2%); the 2 x86_64-only failures are a narrow signed `++` bug that signed `char` exposes (WP-981, fixed in WP-980) and a flaky timeout | **Near-perfect** |
 | fmt, nlohmann/json, Abseil, DuckDB, CMake, daw_json_link | every test as clang: 21/21, 97/97, 232/232, 4618/4628, 721/723, 147/147 | **Flawless** |
 | Bitcoin Core | 357/357; 475 TUs vs clang's 487: the `-m<feature>` flags are not accepted yet, so the SSE4.1/AVX2/SHA-NI code is configured out | **Flawless** (tests), follow-up for the flags |
 | OpenCV | 7/7; 473 TUs vs 537: the SSE3…AVX2 dispatch sources, the same `-m<feature>` gap | **Flawless** (tests), follow-up for the flags |
@@ -189,6 +338,24 @@ grammar forbids them, members named after their class, union and static
 member rules, redeclarations, and clang attribute checks. The breakdown,
 the triage clusters with their reduced tests, and the rejects-valid cases
 are in [status/accepts-invalid.md](status/accepts-invalid.md).
+
+## Coverage and profiling
+
+| feature | flags | status |
+|---|---|---|
+| gcov line coverage | `--coverage` (`-fprofile-arcs -ftest-coverage`, `-fprofile-dir=`, `-fprofile-update=`) | **Works**: `llvm-cov gcov` line counts equal clang 19's on every comparison program |
+| Source-based coverage counters | `-fprofile-instr-generate[=<file>]` | **Works**: `llvm-profdata show --counts` records (names, hashes, counters) equal clang 19's |
+| Source-based coverage mapping | `-fcoverage-mapping` (`llvm-cov show` / `report`) | **Not yet** (rejected with an error; follow-up of WP-941) |
+| Profile-guided optimization | `-fprofile-generate`, `-fcs-profile-generate`, `-fprofile-use`, `-fprofile-instr-use`, `-fprofile-sample-use` | **Not in 1.0** (a known limitation, rejected with an error) |
+
+Both coverage modes link LLVM 19's profile runtime
+(`libclang_rt.profile-<arch>.a`, Debian package `libclang-rt-19-dev`),
+which the linking `clang++` adds. `scripts/coverage-compare.py` builds
+`scripts/coverage/*.cpp` (control flow, classes and templates, lambdas,
+coroutines, macros, and a libstdc++-heavy program) with kiln and with
+clang++-19 and compares the reports. Detail, and the compile-time cost of
+each mode, in
+[spec/landed/codegen/WP-941.md](../spec/landed/codegen/WP-941.md).
 
 ## Constexpr and compile-time performance
 

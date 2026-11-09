@@ -195,9 +195,15 @@ impl Cg<'_> {
         }
         self.emit_stmt(c.promise_stmt)?;
         if let Some(p) = self.f.locals.get(&c.promise).copied() {
-            // clang inserts `bitcast ptr %promise to ptr` before coro.id.
-            let cast = Op::Cast { op: CastOp::BitCast, flags: Flags::NONE, v: p.v, to: LTy::PTR };
-            let pv = self.f.fir.insert_before(id_inst, cast, LTy::PTR);
+            // clang 19 inserts `bitcast ptr %promise to ptr` before coro.id;
+            // clang 22 passes the promise alloca itself.
+            let pv = if self.opts.clang_compat < 22 {
+                let cast =
+                    Op::Cast { op: CastOp::BitCast, flags: Flags::NONE, v: p.v, to: LTy::PTR };
+                self.f.fir.insert_before(id_inst, cast, LTy::PTR)
+            } else {
+                p.v
+            };
             self.f.fir.set_call_arg(id_inst, 1, pv);
         }
         // `GetReturnObjectManager::EmitGroInit`.
@@ -583,8 +589,11 @@ impl Cg<'_> {
         let a0 = self.m.attr_set(&[Attr::Flag(AttrKind::NonNull), noundef.clone()]);
         let a1 = self.m.attr_set(std::slice::from_ref(&noundef));
         let ret = if rty == LTy::VOID { None } else { Some(self.m.attr_set(&[noundef])) };
+        // clang 19 `PrivateLinkage`, clang 22 `InternalLinkage`.
+        let linkage =
+            if self.opts.clang_compat < 22 { Linkage::Private } else { Linkage::Internal };
         let func = self.m.func_mut(f);
-        func.linkage = Linkage::Private;
+        func.linkage = linkage;
         if let Some(r) = ret {
             func.attrs.ret = r;
         }
@@ -612,6 +621,7 @@ impl Cg<'_> {
         self.start_fp();
         self.f.func = Some(f);
         self.f.decl = decl;
+        self.di_wrapper_start(f);
         let ret_block = self.f.fir.create_block();
         self.f.ret_block = Some(ret_block);
         self.f.ret_dest = Some(JumpDest { blk: ret_block, depth: Some(0), index: 1 });
@@ -646,6 +656,8 @@ impl Cg<'_> {
                 self.store(v, slot.v, slot.align, false);
             }
         }
+        // FinishFunction: the epilog keeps the suspend call's location.
+        self.di_finish_function(kiln_source::Loc::INVALID);
         let prologue = self.f.cl.prologue;
         self.pop_cleanup_blocks(prologue);
         self.emit_return_block();

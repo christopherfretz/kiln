@@ -1287,8 +1287,8 @@ The normative description is spec/driver.md "Code generation". In short:
   `clang++-19`, passing `-fuse-ld=`, `-l`, `-L`, `-Wl,`, `-static`,
   `-nostdlib`, `-shared`, `-rdynamic`, `-pie` and `-no-pie` through in
   command-line order.
-- Tools come from `$KILN_LLVM_DIR/bin` (default `/usr/lib/llvm-19`), else
-  the versioned name on `PATH`.
+- Tools come from `<llvm>/bin` of the LLVM installation spec/driver.md
+  "LLVM discovery" selects (LLVM 22 by default, or 19).
 - `-O<n>` selects `llc`'s level and is passed to the link; the IR is
   always the `-O0` IR. `-g` adds DWARF debug information (§5.1).
   `-###` and `-v` print the steps.
@@ -1440,6 +1440,76 @@ unit as clang 19's `-flto` does (`CodeGenOpts.PrepareForLTO` /
   against clang 19, `ir_vs_clang`), `tests/conformance/lex.phases/
   lto-two-tu-*-run.cpp` (two TUs built, linked and run, with the default
   linker and `-fuse-ld=lld`).
+
+### 5.4 Instrumentation (WP-941; `coverage/`)
+`CodegenOptions::coverage` (`CoverageOptions`, set from spec/driver.md
+"Coverage flags") instruments the module as clang 19's frontend does;
+with no coverage flag the IR is unchanged, byte for byte.
+- **gcov** (`--coverage`, `-fprofile-arcs`, `-ftest-coverage`): the
+  module gets clang's `!llvm.gcov = !{!{!"<notes>.gcno", !"<data>.gcda",
+  <cu>}}`; the counters and the notes are written by `opt`'s
+  `insert-gcov-profiling` (clang `GCOVProfilerPass`), which finds lines
+  through debug locations. Without `-g` kiln therefore emits clang's
+  location-tracking-only debug information (`DebugInfoKind::
+  LocTrackingOnly`: the compile unit with `emissionKind: NoDebug`,
+  subprograms and statement/expression locations, no types or
+  variables), so `llvm-cov gcov` reports the lines clang's build does.
+- **InstrProf counters** (`-fprofile-instr-generate`, `coverage/pgo.rs`):
+  clang `CodeGenPGO`. Each instrumented definition gets
+  `@__profn_<name>` (`private`, the PGO function name: the mangled name,
+  `<file>;<name>` for an internal one) and `llvm.instrprof.increment(
+  name, hash, num_counters, index)` at clang's points: the function
+  entry, and the `MapRegionCounters` regions (loops and their bodies,
+  `if`/`else`, `case`/`default` and labels, `&&`/`||` right operands,
+  `?:` arms, `catch` handlers, `co_await`/`co_yield` resume points), in
+  the pre-order of clang's `RecursiveASTVisitor` with its quirks (a
+  local class's member functions and a block-scope function declaration
+  number into the enclosing function; a lambda's body and a defaulted
+  function's body are not walked). The hash is clang 19's V3
+  `PGOHash` (MD5 of the region kinds). An `&&`/`||` that is folded or
+  branched to its parent's targets keeps clang's counter placement. A
+  consteval function is never emitted, so it has no record (it has
+  none under clang either); constexpr functions are instrumented where
+  they are emitted. The counters are lowered by `opt`'s `instrprof`
+  pass (clang `InstrProfilingLoweringPass`) into `__llvm_prf_cnts` /
+  `__llvm_prf_data`; under `-disable-llvm-passes` the intrinsics stay.
+  `-fprofile-instr-generate=<path>` also emits clang's
+  `@__llvm_profile_filename` (`hidden`, `comdat`) unless
+  `-disable-llvm-passes` is given (clang's lowering creates it, so
+  without the pass there is none).
+- **Not yet:** `-fcoverage-mapping` (the `__llvm_covmap`/`__llvm_covfun`
+  records of clang `CoverageMappingGen`; `llvm-cov show`/`report` need
+  them), a WP-941 follow-up the driver rejects. `llvm-profdata merge` /
+  `show` of kiln's `.profraw` work and equal clang's.
+- **Runtime.** Both modes link `libclang_rt.profile-<arch>.a` from the
+  LLVM 19 compiler-rt (`/usr/lib/llvm-19/lib/clang/19/lib/linux/` on
+  Debian, package `libclang-rt-19-dev`); the linking `clang++` adds it.
+- **Debug locations** met on the way (they affect `-g` too, and were
+  gcov's line differences against clang): a coroutine's ramp wrapper
+  (the `.resume`-less outer function clang 19 emits `private`, clang 22
+  `internal`) has an artificial `DISubprogram` with only a linkage name
+  whose file is the compile unit's (clang `getOrCreateFile` of an invalid
+  location); the cleanup switch and the shared `unreachable` block have no
+  location; `mem2reg` phis take LLVM `RenamePass`'s merged location; a
+  `co_await`/`co_yield`'s end location is its operand's; and a default
+  argument is emitted with debug locations off (clang `EmitCallArg`'s
+  `DisableDebugLocationUpdates`), so its expressions keep the call's
+  location instead of the parameter declaration's. A value `&&` (clang
+  `VisitBinLAnd`) branches from its right-hand side into the merge block
+  with no location and gives the phi an artificial line-0 location; a
+  value `||` (`VisitBinLOr`) keeps the branch's location and leaves the
+  phi without one (otherwise gcov counts a multi-line `&&`'s first line
+  once more per right-hand evaluation).
+- **clang 22** (`-fclang-compat=22`): coroutine `coro.id` takes the
+  promise without the `bitcast` and the wrapper is `internal`; the
+  comparison normalizes LLVM 19's `i1 @llvm.coro.end` to LLVM 22's
+  `void` form plus `@llvm.coro.is_in_ramp` (`tests/ir_norm`).
+- Tests: `tests/codegen/{gcov,instrprof}_*.cpp` (IR against clang 19 and
+  22, `ir_vs_clang`), `scripts/coverage-compare.py` (builds and runs
+  `scripts/coverage/*.cpp` with both compilers and requires equal
+  `llvm-profdata show --counts` records and `llvm-cov gcov` line counts,
+  except the differences its `KNOWN` table names, which must stay
+  different). Results and the compile-time overhead: spec/landed/codegen/WP-941.md.
 
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90
@@ -1893,8 +1963,8 @@ unit as clang 19's `-flto` does (`CodeGenOpts.PrepareForLTO` /
 
 ## 6a. Landed (WP-386): clang 22 codegen at `-fclang-compat=22`
 `CodegenOptions` carries `clang_compat` (the driver's `-fclang-compat`)
-and `llvm_major` (`llvm-config --version` of `KILN_LLVM_DIR`, probed once
-per process; spec/driver.md "Toolchain"). What clang 20-22 changed is
+and `llvm_major` (the selected LLVM installation's major, spec/driver.md
+"LLVM discovery"). What clang 20-22 changed is
 keyed on the compat level, and additionally on the backend's major where
 LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 
@@ -3475,8 +3545,8 @@ visits the resume call; `Cg::emit_glvalue_load`; WP-789,
 **LLVM 22 `coro.end` (WP-355).** LLVM 22's `llvm.coro.end` returns
 `void`; whether code runs in the ramp function is
 `i1 @llvm.coro.is_in_ramp()`. The IR follows the backend's version
-(`CodegenOptions::llvm_major`: `llvm-config --version` of the driver's
-`KILN_LLVM_DIR`, spec/driver.md; not `-fclang-compat`), since each LLVM rejects the other's signature. With
+(`CodegenOptions::llvm_major`: the major of the driver's selected LLVM,
+spec/driver.md "LLVM discovery"; not `-fclang-compat`), since each LLVM rejects the other's signature. With
 LLVM 22 the `CoroEnd` cleanup is `call void @llvm.coro.end(...)`, then
 `%r = call i1 @llvm.coro.is_in_ramp()`, and the branch is inverted as
 clang 22's: the ramp function continues through the cleanups (freeing

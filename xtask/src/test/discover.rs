@@ -40,6 +40,12 @@ pub fn discover(
     for input in inputs {
         let meta = fs::metadata(input).map_err(|e| format!("{}: {e}", input.display()))?;
         if meta.is_dir() {
+            // An `Inputs/` directory named on the command line (a script
+            // passing every directory a change touched) holds no tests
+            // either; its files are still tests when named one by one.
+            if is_inputs_dir(input) {
+                continue;
+            }
             walk(root, input, &mut out).map_err(|e| format!("{}: {e}", input.display()))?;
         } else {
             // Named explicitly: always a test, whatever the extension.
@@ -52,6 +58,13 @@ pub fn discover(
         out.retain(|t| t.name.contains(f));
     }
     Ok(out)
+}
+
+/// Whether `dir` is an `Inputs` directory (the lit convention: auxiliary
+/// files, never tests).
+fn is_inputs_dir(dir: &Path) -> bool {
+    let dir = fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    dir.file_name().is_some_and(|n| n == "Inputs")
 }
 
 fn walk(root: &Path, dir: &Path, out: &mut Vec<TestCase>) -> std::io::Result<()> {
@@ -114,5 +127,27 @@ fn case(root: &Path, path: &Path) -> TestCase {
         is_header: ext == Some("h"),
         name,
         path: abs,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inputs_directories_hold_no_tests() {
+        let dir = std::env::temp_dir().join(format!("kiln-discover-{}", std::process::id()));
+        fs::create_dir_all(dir.join("Inputs")).unwrap();
+        fs::write(dir.join("a.cpp"), "").unwrap();
+        fs::write(dir.join("Inputs/u.cpp"), "").unwrap();
+        let names = |inputs: &[PathBuf]| -> Vec<String> {
+            let cases = discover(&dir, inputs, None).unwrap();
+            cases.into_iter().map(|c| c.name).collect()
+        };
+        assert_eq!(names(std::slice::from_ref(&dir)), ["a.cpp"]);
+        assert!(names(&[dir.join("Inputs")]).is_empty());
+        assert!(names(&[dir.join("Inputs/.")]).is_empty());
+        assert_eq!(names(&[dir.join("Inputs/u.cpp")]), ["Inputs/u.cpp"]);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

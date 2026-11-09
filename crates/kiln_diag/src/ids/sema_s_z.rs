@@ -211,6 +211,9 @@ sema_typedef_not_identifier = Error (0) "typedef name must be an identifier";
 sema_typedef_template = Error (0) "a typedef cannot be a template";
 sema_typeid_incomplete = Error (1) "'typeid' of incomplete type {0}";
 sema_typeid_no_rtti = Error (0) "use of typeid requires -frtti";
+// [dcl.type.class.deduct]/1: a typename-specifier naming a template
+// outside a variable's declared type (clang `err_deduced_tst`, WP-958).
+sema_typename_deduced_tst = Error (2) "typename specifier refers to {0:class template|function template|variable template|alias template|template template parameter|template} member in {1}; argument deduction not allowed here";
 sema_typename_nested_not_found = Error (2) "no type named '{0}' in {1}";
 sema_typename_nested_not_found_enable_if = Error (1) "no type named 'type' in {0}; 'enable_if' cannot be used to disable this declaration";
 sema_typename_nested_not_found_requirement = Error (1) "failed requirement '{0}'; 'enable_if' cannot be used to disable this declaration";

@@ -373,6 +373,9 @@ impl Sema<'_, '_> {
                 .nns_flags(q.nns)
                 .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
                 && qk != DeclKind::CXXRecord
+            // clang's `isProvablyNotDerivedFrom` cannot prove a class with a
+            // dependent base is not derived from itself: that waits too.
+            || self.ast.first(q.ctx) == self.ast.first(class) && self.has_dependent_bases(class)
         {
             return self.dependent_class_using(class, q, name, name_loc, inheriting);
         }

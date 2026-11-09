@@ -29,6 +29,9 @@ pub struct DepList {
     /// An `#include` named a file that was not found (clang's
     /// `SeenMissingHeader`: no dependency file is written).
     missing: bool,
+    /// `-MG`: a missing header is listed by its spelled name instead
+    /// (clang `AddMissingHeaderDeps`).
+    pub generated: bool,
 }
 
 impl DepList {
@@ -39,7 +42,10 @@ impl DepList {
 
     /// The list `args` asks for (`-M`, `-MM`, `-MD`, `-MMD`), if any.
     pub fn for_args(args: &Args) -> Option<DepList> {
-        args.deps.headers().map(|h| DepList::new(h == DepHeaders::All))
+        args.deps.headers().map(|h| DepList {
+            generated: args.deps.missing_generated,
+            ..DepList::new(h == DepHeaders::All)
+        })
     }
 
     /// Whether an `#include` failed to find its file.
@@ -115,9 +121,18 @@ impl PpCallbacks for DepCallbacks<'_> {
         }
     }
 
-    fn inclusion_directive(&mut self, _req: &IncludeRequest, result: Option<&ResolvedInclude>) {
+    fn inclusion_directive(&mut self, req: &IncludeRequest, result: Option<&ResolvedInclude>) {
         match result {
-            None => self.list.borrow_mut().missing = true,
+            None => {
+                let mut list = self.list.borrow_mut();
+                if list.generated {
+                    // clang `DependencyFileGenerator::sawDependency` with
+                    // `IsMissing`: listed as a user header.
+                    list.add(&req.name, false);
+                } else {
+                    list.missing = true;
+                }
+            }
             Some(r) => self.pending = r.path.clone().map(|p| (r.file, p)),
         }
     }

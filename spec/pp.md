@@ -482,7 +482,7 @@ tests check all five.
 
 | Class | Macro | 19 | 22 |
 |---|---|---|---|
-| version | `__VERSION__` | `"Debian Clang 19.1.7 (3+b1)"` | `"Debian Clang 22.1.8 (1~deb13u4)"` |
+| version | `__VERSION__` | `"Debian Clang 19.1.7 (3+b1)"` | `"Debian Clang 22.1.8 (1~deb13u4)"` (clang's; kiln predefines `"kiln <version>"` at every level, operator decision Q3, WP-920, spec/driver.md "Identity") |
 | version | `__clang_major__` / `__clang_patchlevel__` | `19` / `7` | `22` / `8` |
 | version | `__clang_version__` | `"19.1.7 (3+b1)"` | `"22.1.8 (1~deb13u4)"` |
 | type width | `__BOOL_WIDTH__` | `8` | `1` |

@@ -1890,9 +1890,20 @@ impl Substituter<'_, '_, '_> {
                     })
                     .or_else(|| self.sema.ast.decls.get(p).ty());
                 // An empty pack (the length sweep, §7.1): the parameter's
-                // type substituted.
+                // type substituted. A placeholder parameter (`auto...`)
+                // has no element to deduce from, so the expression keeps
+                // the dependent `auto` (clang's dependent `AutoType`): a
+                // call `f(Vs)...` in the swept pattern must not deduce
+                // `f<auto>` and instantiate it.
                 let ty = match ty {
-                    Some(t) if self.sema.ast.types.args(l).is_empty() => self.ty(t, loc)?,
+                    Some(t) if self.sema.ast.types.args(l).is_empty() => {
+                        let t = self.ty(t, loc)?;
+                        if self.sema.contained_placeholder(t).is_some() {
+                            self.sema.dependent_auto(t)
+                        } else {
+                            t
+                        }
+                    }
                     Some(t) => t,
                     None => return Err(SubstFail),
                 };
@@ -1940,7 +1951,17 @@ impl Substituter<'_, '_, '_> {
             ArgView::Profile(p) => self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?,
             _ => return self.unimplemented("non-type template argument of this kind", loc),
         };
-        Ok(self.sema.ast.builder().subst_nttp_expr(shown, r, loc))
+        // A parameter of reference type (also `decltype(auto)` deduced as
+        // one) keeps its argument's type: `decltype` of it is the
+        // reference ([dcl.type.decltype]/1.3), also when the referent is a
+        // template parameter object.
+        let flags = match a.view() {
+            ArgView::Value { ty, .. } if self.sema.ast.types.is_reference(ty) => {
+                ExprFlags::REFERENCE_PARAMETER
+            }
+            _ => ExprFlags::NONE,
+        };
+        Ok(self.sema.ast.builder().subst_nttp_expr_flagged(shown, r, loc, flags))
     }
 
     /// A non-type parameter pack substituted earlier while its expansion

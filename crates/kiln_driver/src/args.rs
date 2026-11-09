@@ -139,12 +139,52 @@ pub struct DepArgs {
     pub targets: Vec<(String, bool)>,
     /// `-MP`: a phony target per header.
     pub phony: bool,
+    /// `-MG`: a header that is not found is listed as a dependency by its
+    /// spelled name (a generated header) instead of being an error
+    /// (WP-596, WP-920; valid only with `-M` / `-MM`).
+    pub missing_generated: bool,
+    /// `-MJ <file>`: write clang's JSON compilation-database fragment
+    /// for each compile job (WP-920).
+    pub cdb_fragment: Option<String>,
 }
 
 impl DepArgs {
     /// Which headers to list, if dependencies were requested at all.
     pub fn headers(&self) -> Option<DepHeaders> {
         self.only.or(self.side)
+    }
+}
+
+/// The toolchain probes: options that print one fact about the toolchain
+/// and stop, whatever else is given (clang `HandleImmediateArgs`;
+/// spec/driver.md "Toolchain probes", WP-920).
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProbeArgs {
+    /// `-dumpversion`: the clang compatibility version (`22.1.8`).
+    pub dumpversion: bool,
+    /// `-dumpmachine`: the target triple.
+    pub dumpmachine: bool,
+    /// `-print-search-dirs` (the linking clang++'s answer).
+    pub search_dirs: bool,
+    /// `-print-libgcc-file-name` (the linking clang++'s answer).
+    pub libgcc_file_name: bool,
+    /// The last `-print-file-name=<name>`.
+    pub file_name: Option<String>,
+    /// The last `-print-prog-name=<name>` (the linking clang++'s answer).
+    pub prog_name: Option<String>,
+    /// `-print-target-triple`.
+    pub target_triple: bool,
+    /// `-print-multiarch`: Debian's multiarch name of the target.
+    pub multiarch: bool,
+    /// `-print-sysroot`: `--sysroot`, else an empty line.
+    pub sysroot: bool,
+}
+
+impl ProbeArgs {
+    /// Whether any probe was given.
+    pub fn any(&self) -> bool {
+        *self != ProbeArgs::default()
     }
 }
 
@@ -209,13 +249,25 @@ pub struct PredefArgs {
     /// `-O` level, and every definition but an `always_inline` one is
     /// `noinline` (clang `CodeGenOptions::OnlyAlwaysInlining`).
     pub no_inline: bool,
-    /// `-f[no-]reflection` (P2996 spike, WP-267): the `^^`/`[: :]` tokens
-    /// and the kiln reflection intrinsics. Default off; `__cpp_reflection`
-    /// is not defined either way.
-    pub reflection: bool,
+    /// The last of `-f[no-]reflection` (P2996; WP-267, WP-920): the
+    /// `^^`/`[: :]` tokens and the kiln reflection intrinsics. `None`: on
+    /// at C++26 and off below it ([`PredefArgs::reflection_for`]).
+    pub reflection: Option<bool>,
     /// `-fclang-compat=<major>`: whose predefined macros and feature-query
     /// answers kiln reproduces (spec/pp.md "clang compatibility level").
     pub clang_compat: ClangCompat,
+}
+
+impl PredefArgs {
+    /// Whether reflection is on for an input in `std` (operator decision
+    /// Q7, WP-920): the last `-f[no-]reflection`, else on exactly at
+    /// C++26 (`-std=c++26` / `gnu++26` / `c++2c`). Below C++26 an explicit
+    /// `-freflection` is accepted but the lexer still makes no reflection
+    /// tokens and `__cpp_impl_reflection` stays undefined, as before
+    /// (spec/reflection.md §1.4).
+    pub fn reflection_for(&self, std: &crate::toolchain::LangStd) -> bool {
+        self.reflection.unwrap_or(std.cplusplus && std.lex >= kiln_lex::Std::Cxx26)
+    }
 }
 
 /// What to do.
@@ -231,6 +283,10 @@ pub enum Action {
     /// `-c` / `-S` / `-emit-llvm` (`codegen_cmd`; [`CompileArgs`] says
     /// which).
     Compile,
+    /// `--precompile`: a module interface or partition to its module file
+    /// only (spec/modules.md §11.6). It wins over `-c`, `-S` and
+    /// `-emit-llvm`, as in clang.
+    Precompile,
 }
 
 /// Which of `-c`, `-S` and `-emit-llvm` were given (`spec/driver.md`
@@ -298,9 +354,12 @@ pub enum ArgError {
     /// ("unsupported option '{opt}' for target '{triple}'").
     UnsupportedForTarget(String, String),
     /// A GCC/clang flag kiln recognises but deliberately does not
-    /// implement (`-ftrapv`, coverage/profiling,
+    /// implement (`-ftrapv`, profile-guided optimization,
     /// spec/driver.md "Codegen flags"): "'{arg}' is not supported by kiln".
     UnsupportedByKiln(String),
+    /// "invalid argument '{0}' only allowed with '{1}'"
+    /// (`-fcoverage-mapping` without `-fprofile-instr-generate`).
+    OnlyAllowedWith(String, String),
     /// "invalid argument '{0}' to -{1}" (`-fpatchable-function-entry=`).
     InvalidArgumentToOption(String, String),
     /// `-fpatchable-function-entry=N,M` with `M > N`.
@@ -395,6 +454,8 @@ pub struct Args {
     pub help: bool,
     /// `-print-resource-dir` / `--print-resource-dir`.
     pub print_resource_dir: bool,
+    /// The toolchain probes (`-dumpversion`, `-print-*`; WP-920).
+    pub probe: ProbeArgs,
     /// `-E` printing options.
     pub print: PrintArgs,
     /// `-D` / `-U`, in order.
@@ -418,11 +479,22 @@ pub struct Args {
     /// in order: the path prefixes `__FILE__` and source locations replace
     /// (`SourceManager::remap_macro_path`).
     pub macro_prefix_map: Vec<(String, String)>,
-    /// `-fmodule-file=<name>=<path>`: module interface sources
-    /// (spec/modules.md §2).
+    /// `-fmodule-file=<name>=<path>`: module files or module interface
+    /// sources (spec/modules.md §2, §11.6).
     pub module_files: Vec<(String, String)>,
+    /// `-fmodule-file=<path>` without a name: module files whose header
+    /// names the module (spec/modules.md §11.6), in order.
+    pub nameless_module_files: Vec<String>,
+    /// `--precompile` (see [`Action::Precompile`]).
+    pub precompile: bool,
+    /// `-fmodule-output` / `-fmodule-output=<path>` (the last one): the
+    /// option as written and its path (spec/modules.md §11.6).
+    pub module_output: Option<(String, Option<String>)>,
     /// `-fprebuilt-module-path=<dir>`, in order.
     pub prebuilt_module_paths: Vec<String>,
+    /// Set by `kiln-scan-deps` (not an option): the preprocessor records
+    /// module directives instead of importing (spec/modules.md §11.9).
+    pub scan_deps: bool,
     /// `-nostdinc`.
     pub nostdinc: bool,
     /// `-nostdinc++`.
@@ -443,6 +515,9 @@ pub struct Args {
     /// `--gcc-install-dir=<dir>`: the GCC installation itself
     /// (`<prefix>/lib/gcc/<triple>/<version>`).
     pub gcc_install_dir: Option<String>,
+    /// `--llvm-dir=<dir>`: the LLVM installation (spec/driver.md "LLVM
+    /// discovery").
+    pub llvm_dir: Option<String>,
     /// `-stdlib=`.
     pub stdlib: Option<StdLib>,
     /// `-f[no-]experimental-library`: `__has_feature(experimental_library)`
@@ -485,6 +560,8 @@ pub struct Args {
     pub fp: crate::fp_flags::FpFlags,
     /// The sanitizer options (spec/driver.md "Sanitizers").
     pub sanitize: crate::sanitize::SanitizeFlags,
+    /// The coverage options (spec/driver.md "Coverage flags", WP-941).
+    pub coverage: crate::coverage_flags::CoverageFlags,
     /// The debug information flags (`-g*`, `-gdwarf-N`, the prefix maps,
     /// `-gsplit-dwarf`, `-gz`; spec/driver.md "Debug information flags").
     pub debug: crate::debug_flags::DebugFlags,
@@ -568,6 +645,7 @@ const JOINED_OR_SEPARATE: &[&str] = &[
     "-isysroot",
     "-isystem",
     "-MF",
+    "-MJ",
     "-MQ",
     "-MT",
     "-D",
@@ -583,8 +661,16 @@ const JOINED_OR_SEPARATE: &[&str] = &[
 
 /// Options taking a separate value only (`-target foo`), or `=`-joined
 /// (`--sysroot=foo`, `-resource-dir=foo`).
-const SEPARATE_OR_EQ: &[&str] =
-    &["--sysroot", "-resource-dir", "-target-feature", "-target", "--target", "-std", "--std"];
+const SEPARATE_OR_EQ: &[&str] = &[
+    "--sysroot",
+    "-resource-dir",
+    "-target-feature",
+    "-target",
+    "--target",
+    "-std",
+    "--std",
+    "-dumpdir",
+];
 
 impl Args {
     /// Parses `argv` (without the program name) as `kiln++` would.
@@ -664,7 +750,12 @@ impl Args {
                 }
                 continue;
             }
-            if let Some(r) = a.fp.parse_arg(arg).or_else(|| a.debug.parse_arg(arg)) {
+            if let Some(r) = a
+                .coverage
+                .parse_arg(arg)
+                .or_else(|| a.fp.parse_arg(arg))
+                .or_else(|| a.debug.parse_arg(arg))
+            {
                 a.errors.extend(r.err());
             } else if let Some(r) = a
                 .sanitize
@@ -690,6 +781,10 @@ impl Args {
             }
         }
         a.verify = verify.finish(&mut a.errors);
+        if a.precompile && matches!(a.action, Action::Link | Action::Compile) {
+            a.action = Action::Precompile;
+        }
+        a.errors.extend(a.coverage.errors());
         let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
         a
     }
@@ -746,6 +841,8 @@ impl Args {
             "-idirafter" => self.dirs.push((DirGroup::After, v_owned)),
             "-F" => self.frameworks.push(v_owned),
             "-isysroot" => self.isysroot = Some(v_owned),
+            // WP-941: the gcov files' prefix.
+            "-dumpdir" => self.coverage.dumpdir = Some(v_owned),
             "--sysroot" => self.sysroot = Some(v_owned),
             "-resource-dir" => self.resource_dir = Some(v_owned),
             "-target" | "--target" => self.target = Some(v_owned),
@@ -766,6 +863,7 @@ impl Args {
                 kind: LinkOptKind::Silent,
             }),
             "-MF" => self.deps.file = Some(v_owned),
+            "-MJ" => self.deps.cdb_fragment = Some(v_owned),
             "-MT" => self.deps.targets.push((v_owned, false)),
             "-MQ" => self.deps.targets.push((v_owned, true)),
             "-x" => match Lang::from_x(v) {
@@ -798,6 +896,8 @@ impl Args {
         match arg {
             "-E" => self.action = Action::Preprocess,
             "-fsyntax-only" => self.action = Action::SyntaxOnly,
+            "--precompile" => self.precompile = true,
+            "-fmodule-output" => self.module_output = Some((arg.to_owned(), None)),
             "-c" => (self.action, self.compile.object) = (Action::Compile, true),
             "-S" => (self.action, self.compile.assembly) = (Action::Compile, true),
             "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),
@@ -825,6 +925,15 @@ impl Args {
             "-v" | "--verbose" => self.verbose = true,
             "--help" | "-help" => self.help = true,
             "-print-resource-dir" | "--print-resource-dir" => self.print_resource_dir = true,
+            "-dumpversion" => self.probe.dumpversion = true,
+            "-dumpmachine" => self.probe.dumpmachine = true,
+            "-print-search-dirs" | "--print-search-dirs" => self.probe.search_dirs = true,
+            "-print-libgcc-file-name" | "--print-libgcc-file-name" => {
+                self.probe.libgcc_file_name = true;
+            }
+            "-print-target-triple" | "--print-target-triple" => self.probe.target_triple = true,
+            "-print-multiarch" | "--print-multiarch" => self.probe.multiarch = true,
+            "-print-sysroot" | "--print-sysroot" => self.probe.sysroot = true,
             "-P" => self.print.no_line_markers = true,
             "-C" => self.print.comments = true,
             "-CC" => self.print.macro_comments = true,
@@ -840,6 +949,7 @@ impl Args {
             "-MD" | "--write-dependencies" => self.deps.side = Some(DepHeaders::All),
             "-MMD" | "--write-user-dependencies" => self.deps.side = Some(DepHeaders::User),
             "-MP" => self.deps.phony = true,
+            "-MG" => self.deps.missing_generated = true,
             "-trigraphs" | "--trigraphs" | "-ftrigraphs" => self.trigraphs = Some(true),
             "-fno-trigraphs" => self.trigraphs = Some(false),
             "-fdollars-in-identifiers" => self.dollars = Some(true),
@@ -908,13 +1018,29 @@ impl Args {
                             v.to_owned(),
                         )),
                     }
+                } else if let Some(v) = arg
+                    .strip_prefix("-print-file-name=")
+                    .or_else(|| arg.strip_prefix("--print-file-name="))
+                {
+                    self.probe.file_name = Some(v.to_owned());
+                } else if let Some(v) = arg
+                    .strip_prefix("-print-prog-name=")
+                    .or_else(|| arg.strip_prefix("--print-prog-name="))
+                {
+                    self.probe.prog_name = Some(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("--embed-dir=") {
                     self.embed_dirs.push(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fmodule-file=") {
-                    // `<path>` alone names a BMI: none in part A, ignored.
-                    if let Some((name, path)) = v.split_once('=') {
-                        self.module_files.push((name.to_owned(), path.to_owned()));
+                    // `<path>` alone names a module file, whose header the
+                    // driver reads for the name (spec/modules.md §11.6).
+                    match v.split_once('=') {
+                        Some((name, path)) => {
+                            self.module_files.push((name.to_owned(), path.to_owned()));
+                        }
+                        None => self.nameless_module_files.push(v.to_owned()),
                     }
+                } else if let Some(v) = arg.strip_prefix("-fmodule-output=") {
+                    self.module_output = Some((arg.to_owned(), Some(v.to_owned())));
                 } else if let Some((opt, v)) = ["-ffile-prefix-map=", "-fmacro-prefix-map="]
                     .iter()
                     .find_map(|p| arg.strip_prefix(p).map(|v| (p, v)))
@@ -962,9 +1088,12 @@ impl Args {
 
     /// The standard library flags: `-stdlib=` (also `--stdlib=`),
     /// `-f[no-]experimental-library`, `--gcc-toolchain=` and
-    /// `--gcc-install-dir=` (joined only, as clang).
+    /// `--gcc-install-dir=` (joined only, as clang), and kiln's
+    /// `--llvm-dir=` (joined only).
     fn stdlib_flag(&mut self, arg: &str) -> bool {
-        if let Some(v) = arg.strip_prefix("--gcc-toolchain=") {
+        if let Some(v) = arg.strip_prefix("--llvm-dir=") {
+            self.llvm_dir = Some(v.to_owned());
+        } else if let Some(v) = arg.strip_prefix("--gcc-toolchain=") {
             self.gcc_toolchain = Some(v.to_owned());
         } else if let Some(v) = arg.strip_prefix("--gcc-install-dir=") {
             self.gcc_install_dir = Some(v.to_owned());
@@ -1186,8 +1315,8 @@ impl Args {
             "-Os" | "-Oz" => (p.opt, p.ofast) = (OptLevel::Size, false),
             "-fexceptions" | "-fcxx-exceptions" => p.exceptions = Some(true),
             "-fno-exceptions" | "-fno-cxx-exceptions" => p.exceptions = Some(false),
-            "-freflection" => p.reflection = true,
-            "-fno-reflection" => p.reflection = false,
+            "-freflection" => p.reflection = Some(true),
+            "-fno-reflection" => p.reflection = Some(false),
             "-frtti" => p.rtti = Some(true),
             "-fno-rtti" => p.rtti = Some(false),
             "-fchar8_t" => p.char8_t = Some(true),
@@ -1296,14 +1425,17 @@ impl VerifyRaw {
     }
 }
 
-enum Valued<'a> {
+pub(crate) enum Valued<'a> {
     Joined(&'a str),
     Next,
     Missing,
 }
 
 /// If `arg` is a valued option, the option and where its value is.
-fn split_valued<'a>(arg: &'a str, next: Option<&str>) -> Option<(&'static str, Valued<'a>)> {
+pub(crate) fn split_valued<'a>(
+    arg: &'a str,
+    next: Option<&str>,
+) -> Option<(&'static str, Valued<'a>)> {
     for &opt in SEPARATE_OR_EQ {
         if arg == opt {
             return Some((opt, if next.is_some() { Valued::Next } else { Valued::Missing }));
@@ -1401,6 +1533,15 @@ mod tests {
         assert_eq!(a.errors, []);
         let a = parse("--gcc-toolchain /opt/gcc t.cpp");
         assert_eq!(a.errors, [ArgError::Unknown("--gcc-toolchain".into())]);
+    }
+
+    /// WP-1016: kiln's joined-only `--llvm-dir=`; the last one wins.
+    #[test]
+    fn llvm_dir_option() {
+        let a = parse("--llvm-dir=/a --llvm-dir=/opt/llvm-22 t.cpp");
+        assert_eq!((a.llvm_dir.as_deref(), a.errors.as_slice()), (Some("/opt/llvm-22"), &[][..]));
+        let a = parse("--llvm-dir /opt/llvm-22 t.cpp");
+        assert_eq!(a.errors, [ArgError::Unknown("--llvm-dir".into())]);
     }
 
     #[test]

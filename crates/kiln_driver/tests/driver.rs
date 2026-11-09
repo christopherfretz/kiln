@@ -68,6 +68,203 @@ fn print_resource_dir() {
     assert!(Path::new(o.stdout.trim_end()).join("include").is_dir(), "{}", o.stdout);
 }
 
+/// spec/driver.md "Toolchain probes" (WP-920): `-dumpversion` prints the
+/// clang compatibility version, the one `__clang_major__`,
+/// `__clang_minor__` and `__clang_patchlevel__` spell (configure probes
+/// compare it with clang thresholds), not kiln's own version.
+#[test]
+fn dumpversion_is_the_clang_compat_version() {
+    for (compat, want) in [(None, "22.1.8\n"), (Some("-fclang-compat=19"), "19.1.7\n")] {
+        let mut args = vec!["-dumpversion"];
+        args.extend(compat);
+        let o = kiln(&args, "");
+        assert_eq!((o.code, o.stdout.as_str(), o.stderr.as_str()), (0, want, ""));
+        let mut args = vec!["-E", "-P", "-"];
+        args.extend(compat);
+        let o = kiln(&args, "__clang_major__.__clang_minor__.__clang_patchlevel__\n");
+        assert_eq!(o.stdout.replace(' ', ""), want);
+    }
+}
+
+/// spec/driver.md "Toolchain probes": the target probes answer from the
+/// target kiln compiles for, without a compile; the first probe in clang's
+/// order (`HandleImmediateArgs`) wins.
+#[test]
+fn target_probes() {
+    let t = "--target=x86_64-linux-gnu";
+    let cases: [(&[&str], &str); 7] = [
+        (&["-dumpmachine", t], "x86_64-unknown-linux-gnu\n"),
+        (&["-print-target-triple", t], "x86_64-unknown-linux-gnu\n"),
+        (&["-print-multiarch", t], "x86_64-linux-gnu\n"),
+        (&["-print-sysroot"], "\n"),
+        (&["-print-sysroot", "--sysroot=/some/root"], "/some/root\n"),
+        (&["-dumpversion", "-dumpmachine", t], "x86_64-unknown-linux-gnu\n"),
+        (&["-print-sysroot", "-dumpversion"], "22.1.8\n"),
+    ];
+    for (args, want) in cases {
+        let o = kiln(args, "");
+        assert_eq!((o.code, o.stdout.as_str(), o.stderr.as_str()), (0, want, ""), "{args:?}");
+    }
+}
+
+/// spec/driver.md "Toolchain probes": `-print-file-name=` answers from the
+/// resource directory first, and that, `-print-prog-name=`,
+/// `-print-libgcc-file-name` and `-print-search-dirs` otherwise come from
+/// the backing clang++ (the one kiln links with), which knows the GCC
+/// installation and the runtime libraries.
+#[test]
+fn delegated_probes() {
+    let d = scratch("probes");
+    std::fs::create_dir_all(d.join("include")).unwrap();
+    let res = d.to_str().unwrap();
+    let o = kiln(&["-resource-dir", res, "-print-file-name=include"], "");
+    assert_eq!((o.code, o.stdout.clone()), (0, format!("{res}/include\n")), "{}", o.stderr);
+    let o = kiln(&["-print-file-name=kiln-no-such-file.zz"], "");
+    assert_eq!((o.code, o.stdout.as_str()), (0, "kiln-no-such-file.zz\n"), "{}", o.stderr);
+    let o = kiln(&["-print-prog-name=ld"], "");
+    assert!(o.code == 0 && o.stdout.ends_with("ld\n"), "{} {}", o.stdout, o.stderr);
+    let o = kiln(&["-print-libgcc-file-name"], "");
+    assert!(
+        o.code == 0 && Path::new(o.stdout.trim_end()).extension().is_some_and(|e| e == "a"),
+        "{} {}",
+        o.stdout,
+        o.stderr
+    );
+    let o = kiln(&["-print-search-dirs"], "");
+    assert!(o.code == 0 && o.stdout.starts_with("programs: ="), "{} {}", o.stdout, o.stderr);
+    assert!(o.stdout.contains("\nlibraries: ="), "{}", o.stdout);
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// spec/driver.md "Identity" (operator decision Q3, WP-920): `__VERSION__`
+/// names kiln; the clang macros stay so headers take their clang branches.
+#[test]
+fn version_macro_names_kiln() {
+    let o = kiln(&["-E", "-P", "-"], "__VERSION__ __clang__\n");
+    assert_eq!(o.stdout, format!("\"kiln {}\" 1\n", kiln_driver::version::VERSION));
+    let o = kiln(&["--version"], "");
+    assert!(!o.stdout.contains("clang version"), "{}", o.stdout);
+}
+
+/// spec/driver.md "Reflection" (operator decision Q7, WP-920): reflection
+/// is on at C++26 by default and the last `-f[no-]reflection` wins; below
+/// C++26 `__cpp_impl_reflection` stays undefined whatever the flag.
+#[test]
+fn reflection_default_follows_the_standard() {
+    let cases: [(&[&str], &str); 6] = [
+        (&["-std=c++26"], "202603L\n"),
+        (&["-std=gnu++26"], "202603L\n"),
+        (&["-std=c++26", "-fno-reflection"], "__cpp_impl_reflection\n"),
+        (&["-std=c++26", "-fno-reflection", "-freflection"], "202603L\n"),
+        (&["-std=c++23"], "__cpp_impl_reflection\n"),
+        (&["-std=c++23", "-freflection"], "__cpp_impl_reflection\n"),
+    ];
+    for (std, want) in cases {
+        let mut args = vec!["-E", "-P", "-"];
+        args.extend_from_slice(std);
+        let o = kiln(&args, "__cpp_impl_reflection\n");
+        assert_eq!((o.code, o.stdout.as_str()), (0, want), "{std:?}: {}", o.stderr);
+    }
+}
+
+/// spec/driver.md "`-dD`, `-dI`": `-dD` keeps every `#define`/`#undef` in
+/// the output (the predefines first), `-dI` every `#include` as a comment
+/// line, as clang's.
+#[test]
+fn dump_defines_and_includes() {
+    let d = scratch("dd");
+    std::fs::write(d.join("x.h"), "int h;\n").unwrap();
+    std::fs::write(d.join("t.cpp"), "#define A 1\nA\n#include \"x.h\"\n#undef A\nA\n").unwrap();
+    let t = d.join("t.cpp");
+    let t = t.to_str().unwrap();
+    let o = kiln(&["-E", "-dD", "-P", t], "");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("#define __cplusplus "), "{}", o.stdout);
+    assert!(o.stdout.ends_with("\n#define A 1\n1\nint h;\n#undef A\nA\n"), "{}", o.stdout);
+    let o = kiln(&["-E", "-dI", "-P", t], "");
+    assert_eq!(o.stdout, "\n1\n#include \"x.h\" /* clang -E -dI */\nint h;\n\nA\n");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// spec/driver.md "Dependency files" (WP-596, WP-920): `-MG` lists a
+/// missing header as a dependency (a generated one) under `-M`/`-MM`, and
+/// needs one of them.
+#[test]
+fn missing_headers_as_generated() {
+    let d = scratch("mg");
+    std::fs::write(d.join("t.cpp"), "#include \"gen.h\"\n#include <gen2.h>\n").unwrap();
+    let t = d.join("t.cpp");
+    let t = t.to_str().unwrap();
+    let o = kiln(&["-MM", "-MG", "-MP", t], "");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        o.stdout.replace(" \\\n  ", " "),
+        format!("t.o: {t} gen.h gen2.h\ngen.h:\ngen2.h:\n")
+    );
+    let o = kiln(&["-MM", t], "");
+    assert_eq!(o.code, 1);
+    assert!(o.stderr.contains("'gen.h' file not found"), "{}", o.stderr);
+    for action in ["-E", "-c"] {
+        let o = kiln(&[action, "-MG", t], "");
+        assert_eq!(o.code, 1);
+        assert_eq!(o.stderr, "kiln++: error: option '-MG' requires '-M' or '-MM'\n");
+    }
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// spec/driver.md "`-MJ`" (WP-920): one JSON compilation-database line per
+/// frontend job, clang's format; `-###` writes none.
+#[test]
+fn compilation_database_fragment() {
+    let d = scratch("mj");
+    std::fs::write(d.join("t.cpp"), "int x;\n").unwrap();
+    let t = d.join("t.cpp");
+    let t = t.to_str().unwrap();
+    let j = d.join("t.json");
+    let j = j.to_str().unwrap();
+    let o = kiln(&["-###", "-c", t, "-o", "t.o", "-MJ", j], "");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(!d.join("t.json").exists());
+    let obj = d.join("t.o");
+    let obj = obj.to_str().unwrap();
+    let o = kiln(&["-c", t, "-o", obj, "-DX=1", "-MJ", j, "--target=x86_64-linux-gnu"], "");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let text = std::fs::read_to_string(j).unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    let head = format!(
+        "{{ \"directory\": \"{}\", \"file\": \"{t}\", \"output\": \"{obj}\", \"arguments\": [\"",
+        cwd.display()
+    );
+    assert!(text.starts_with(&head), "{text}");
+    let tail = format!(
+        "\"-xc++\", \"{t}\", \"-o\", \"{obj}\", \"--driver-mode=g++\", \"-c\", \"-D\", \"X=1\", \"--target=x86_64-linux-gnu\", \"--target=x86_64-unknown-linux-gnu\"]}},\n"
+    );
+    assert!(text.ends_with(&tail), "{text}");
+    let o = kiln(&["-fsyntax-only", t, "-MJ", j], "");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let text = std::fs::read_to_string(j).unwrap();
+    assert!(text.contains(&format!("\"file\": \"{t}\", \"arguments\": [")), "{text}");
+    let o = kiln(&["-fsyntax-only", t, "-MJ", "/kiln-no-such-dir/t.json"], "");
+    assert_eq!(o.code, 1);
+    assert_eq!(
+        o.stderr,
+        "kiln++: error: compilation database '/kiln-no-such-dir/t.json' could not be opened: No such file or directory\n"
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// spec/driver.md "Inputs": linker inputs alone are inputs, as clang's
+/// (`-Wl,--version` runs only the linker: Meson's linker probe, WP-920).
+#[test]
+fn linker_inputs_alone_are_inputs() {
+    let o = kiln(&["-c", "-Wl,--version"], "");
+    assert_eq!(o.code, 0);
+    assert_eq!(
+        o.stderr,
+        "kiln++: warning: -Wl,--version: 'linker' input unused [-Wunused-command-line-argument]\n"
+    );
+}
+
 /// spec/driver.md "Options": clang's `-ftime-trace` family (glaze adds
 /// `-ftime-trace` for clang) is accepted with a
 /// `-Wunused-command-line-argument` warning per spelling, silenced by
@@ -366,7 +563,11 @@ fn verbose_search_lists_match_clang() {
         };
         assert!(clang.status.success(), "clang++-19 {args:?} failed");
         let want = search_block(&String::from_utf8_lossy(&clang.stderr), "clang -cc1 version");
-        let o = kiln(&args, "");
+        // libc++'s headers are the LLVM installation's: clang 19's here
+        // (kiln's default is LLVM 22, spec/driver.md "LLVM discovery").
+        let mut kargs = args.to_vec();
+        kargs.push("--llvm-dir=/usr/lib/llvm-19");
+        let o = kiln(&kargs, "");
         assert_eq!(o.code, 0, "{}", o.stderr);
         let got = search_block(&o.stderr, "kiln -cc1 version");
         assert_eq!(got, want, "{target} {stdlib} ({})", path.display());

@@ -32,6 +32,7 @@ mod complex;
 mod consts;
 mod contracts;
 mod coro;
+mod coverage;
 mod debuginfo;
 mod dyncast;
 mod eh;
@@ -78,6 +79,7 @@ pub mod x86_intrinsic_table {
 }
 
 pub use builtins::{UNLOWERED_BUILTINS, is_unlowered_builtin};
+pub use coverage::CoverageOptions;
 pub use debuginfo::{DebugInfoKind, DebugOptions};
 use kiln_abi::Target;
 use kiln_ast::Ast;
@@ -282,6 +284,9 @@ pub struct CodegenOptions {
     /// Debug information (`-g` and friends; spec/codegen.md "Debug
     /// information", WP-814).
     pub debug: DebugOptions,
+    /// Coverage instrumentation (WP-941, spec/codegen.md
+    /// "Instrumentation").
+    pub coverage: CoverageOptions,
     /// The hardening and instrumentation flags (WP-813).
     pub hardening: Hardening,
     /// The `-fsanitize=` set (WP-675, spec/codegen.md "Sanitizers").
@@ -701,6 +706,7 @@ impl Default for CodegenOptions {
             contract_default_handler: true,
             cxx_modules: true,
             debug: DebugOptions::default(),
+            coverage: CoverageOptions::default(),
             hardening: Hardening::default(),
             sanitize: SanitizeOptions::default(),
             lto: None,

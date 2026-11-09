@@ -403,6 +403,15 @@ pub enum Scalar<'a> {
         /// identity: `(void *)&s` and `(void *)&s.first` are different
         /// pointer values ([temp.type]/2.4).
         designated: Option<QualType>,
+        /// One past the end of the object it designates ([basic.compound]/3):
+        /// `offset` is that object's end, which may coincide with the start
+        /// of an unrelated object (`&s.a + 1` and `&s.b`). Such a pointer
+        /// may be compared and subtracted but not dereferenced
+        /// ([expr.const]/10.8, WP-948), so the bit is part of the value's
+        /// identity. Canonically `false` for a pointer at (or past) the end
+        /// of its complete object, whose past-ness `offset` already
+        /// implies, and for every pointer into its object.
+        past: bool,
     },
     /// A non-null pointer to member.
     MemberPtr {

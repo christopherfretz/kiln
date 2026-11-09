@@ -3,7 +3,6 @@
 // const M&. From clang's CXX/special/class.copy/p18-cxx11.cpp. Found by the
 // clang negative-test run (WP-912).
 //@ std: c++11
-//@ xfail(kiln): WP-912 follow-up, the implicit copy assignment's parameter form ignores a deleted subobject operator
 //@ expect: compile-ok
 struct M {
   M &operator=(M &&);

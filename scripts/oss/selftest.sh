@@ -6,7 +6,8 @@
 # oss-report.py on the two-cluster fixture under fixtures/, plain, with
 # --perf (WP-792) and with --update, and the libc++ mode (WP-694): the
 # wrapper's `-stdlib=libc++` and oss-report.py --stdlib libc++. Prints one
-# PASS/FAIL line per check and exits 1 on any FAIL.
+# PASS/FAIL line per check and exits 1 on any FAIL. With a kiln++, it also
+# builds fixtures/modules with CMake and Ninja (WP-982, cmake_modules).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIX="$HERE/fixtures"
@@ -121,8 +122,39 @@ stdlib_one() { # <label> <compiler or empty>
   local label="$1" cxx="$2" log="$TMP/$1-libcxx.jsonl"
   (cd "$TMP" && KILN_OSS_CXX="$cxx" KILN_OSS_LOG="$log" KILN_OSS_STDLIB=libc++ "$HERE/kiln-cxx" -O1 hello.cpp -o "hello-$label-libcxx" >/dev/null 2>&1)
   check "$label: libc++ hello builds and runs" "[ \"\$('$TMP/hello-$label-libcxx')\" = hello ]"
-  check "$label: libc++ argv starts with -stdlib=libc++" "field '$log' 0 'r[\"kind\"]==\"ok\" and r[\"argv\"][1]==\"-stdlib=libc++\"'"
+  check "$label: libc++ argv starts with -fno-crash-diagnostics -stdlib=libc++" "field '$log' 0 'r[\"kind\"]==\"ok\" and r[\"argv\"][1:3]==[\"-fno-crash-diagnostics\",\"-stdlib=libc++\"]'"
   check "$label: libc++ binary needs libc++.so" "readelf -d '$TMP/hello-$label-libcxx' | grep -q 'libc++.so' && ! readelf -d '$TMP/hello-$label-libcxx' | grep -q 'libstdc++'"
+}
+# C++20 modules through CMake (WP-982, spec/modules.md §11.9): the
+# fixtures/modules project with kiln++ as CMAKE_CXX_COMPILER and Ninja.
+# CMake finds the scanner by the same alias mechanism as an installed tree
+# (`clang-scan-deps-22` beside kiln++, a link to the kiln binary); the
+# check refuses a system clang-scan-deps. Then an incremental rebuild:
+# touching the interface recompiles it, the implementation unit and the
+# consumer, but not the partition. Skipped without cmake >= 3.28 or ninja.
+cmake_modules() {
+  local M="$TMP/modules" v
+  v="$(cmake --version 2>/dev/null | sed -n 's/^cmake version \([0-9]*\)\.\([0-9]*\).*/\1 \2/p')"
+  if ! command -v ninja > /dev/null || [ -z "$v" ] || [ "$(echo "$v" | awk '{print ($1 > 3 || ($1 == 3 && $2 >= 28))}')" != 1 ]; then
+    echo "SKIP cmake modules: needs cmake >= 3.28 and ninja"; return
+  fi
+  mkdir -p "$M" && cp -R "$FIX/modules" "$M/src"
+  cmake -S "$M/src" -B "$M/b" -G Ninja -DCMAKE_CXX_COMPILER="$KILN_CXX" > "$M/configure.log" 2>&1
+  check "cmake modules: configure" "[ $? -eq 0 ]"
+  local scanner; scanner="$(sed -n 's/^CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS:FILEPATH=//p' "$M/b/CMakeCache.txt" 2>/dev/null)"
+  check "cmake modules: the scanner is kiln's alias" "[ -n '$scanner' ] && [ \"\$(readlink -f '$scanner')\" = \"\$(readlink -f '$KILN_CXX')\" ]"
+  ninja -C "$M/b" > "$M/build.log" 2>&1
+  check "cmake modules: build" "[ $? -eq 0 ]"
+  check "cmake modules: app prints hello 42" "[ \"\$('$M/b/app')\" = 'hello 42' ]"
+  sleep 1 && touch "$M/src/greet.cppm"
+  ninja -C "$M/b" -v > "$M/rebuild.log" 2>&1
+  check "cmake modules: rebuild after touching the interface" "[ $? -eq 0 ]"
+  local o
+  for o in greet.dir/greet.cppm.o greet.dir/greet-impl.cpp.o app.dir/main.cpp.o; do
+    check "cmake modules: touch greet.cppm recompiles $o" "grep -qF -- '-o CMakeFiles/$o -c ' '$M/rebuild.log'"
+  done
+  check "cmake modules: touch greet.cppm leaves the partition" "! grep -qF -- '-o CMakeFiles/greet.dir/greet-part.cppm.o -c ' '$M/rebuild.log'"
+  check "cmake modules: then nothing to do" "ninja -C '$M/b' | grep -q 'no work to do'"
 }
 run_one clang ""
 check "clang: default compiler is clang++-19" "field '$TMP/clang.jsonl' 0 'r[\"argv\"][0]==\"clang++-19\"'"
@@ -135,6 +167,7 @@ if [ -n "$KILN_CXX" ]; then
   stdlib_one kiln "$KILN_CXX"
   (cd "$TMP" && KILN_OSS_CXX="$KILN_CXX" KILN_OSS_LOG="$TMP/oom.jsonl" KILN_OSS_VMEM_KB=30000 "$HERE/kiln-cxx" -c hello.cpp -o o.o >/dev/null 2>&1)
   check "kiln: 30 MB address-space cap is kind oom" "field '$TMP/oom.jsonl' 0 'r[\"kind\"]==\"oom\" and r[\"rc\"]!=0 and r[\"diag\"]!=\"\"'"
+  cmake_modules
 else
   echo "SKIP kiln: no kiln++ (set KILN_OSS_CXX or build --profile harness)"
 fi
@@ -144,6 +177,20 @@ check "timeout: rc 124 and kind timeout" "[ $? -eq 124 ] && field '$TMP/to.jsonl
 # A lit summary (LLVM check-*) gives `tests` (WP-782).
 printf 'Failed Tests (1):\n  LLVM :: a.ll\n\nTotal Discovered Tests: 10\n  Unsupported      : 2 (20.00%%)\n  Passed           : 6 (60.00%%)\n  Expectedly Failed: 1 (10.00%%)\n  Failed           : 1 (10.00%%)\nmake: *** [check-llvm] Error 1\n' > "$TMP/lit.log"
 check "lit summary counts" "python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import projects; s, c = projects.test_summary(sys.argv[2]); sys.exit(0 if c == {\"passed\": 9, \"failed\": 1, \"total\": 10} else 1)' '$HERE' '$TMP/lit.log'"
+
+# meson test's and automake's summaries give `tests` (WP-920).
+printf 'Summary of Failures:\n\n 3/4 a FAIL 0.01s\n\nOk:                3   \nExpected Fail:     0   \nFail:              1   \nUnexpected Pass:   0   \nSkipped:           1   \nTimeout:           0   \n\nFull log written to x\n' > "$TMP/meson.log"
+check "meson test summary counts" "python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import projects; s, c = projects.test_summary(sys.argv[2]); sys.exit(0 if c == {\"passed\": 4, \"failed\": 1, \"total\": 5} else 1)' '$HERE' '$TMP/meson.log'"
+printf '# TOTAL: 3\n# PASS:  2\n# SKIP:  0\n# XFAIL: 0\n# FAIL:  1\n# XPASS: 0\n# ERROR: 0\nmake: x\n# TOTAL: 2\n# PASS:  1\n# SKIP:  1\n# XFAIL: 0\n# FAIL:  0\n# XPASS: 0\n# ERROR: 0\n' > "$TMP/automake.log"
+check "automake summaries summed" "python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import projects; s, c = projects.test_summary(sys.argv[2]); sys.exit(0 if c == {\"passed\": 4, \"failed\": 1, \"total\": 5} else 1)' '$HERE' '$TMP/automake.log'"
+printf '[a]\nurl="u"\ntag="t"\nbuild="autotools"\ncxx_std=17\ntest="true"\nwave=1\narchive=true\n' > "$TMP/ar.toml"
+check "an archive row needs its sha256" "python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import projects; projects.load(sys.argv[2])' '$HERE' '$TMP/ar.toml' > '$TMP/ar.out' 2>&1; grep -q 'needs the tarball' '$TMP/ar.out'"
+# kiln-cxx's meson --version shim (WP-920): only for a compiler whose
+# banner lacks `clang`, and only with KILN_OSS_VERSION_SHIM.
+printf '#!/bin/sh\nfor a; do :; done\ncase "$a" in --version) echo "kiln version 9.9.9";; -dumpversion) echo 22.1.8;; esac\n' > "$TMP/fakecxx" && chmod +x "$TMP/fakecxx"
+check "version shim: a clang line first, then the banner" "[ \"\$(KILN_OSS_VERSION_SHIM=1 KILN_OSS_CXX='$TMP/fakecxx' '$HERE/kiln-cxx' --version | tr '\\n' '|')\" = 'clang-compatible 22.1.8 (kiln-cxx Meson shim, WP-920)|kiln version 9.9.9|' ]"
+check "version shim: off without the variable" "[ \"\$(KILN_OSS_CXX='$TMP/fakecxx' '$HERE/kiln-cxx' --version)\" = 'kiln version 9.9.9' ]"
+check "version shim: clang's banner untouched" "! KILN_OSS_VERSION_SHIM=1 KILN_OSS_CXX=clang++-19 '$HERE/kiln-cxx' --version | grep -q 'Meson shim'"
 
 # oss-report.py on the fixture: two clusters, the 3x reject first.
 python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" demo > "$TMP/report.md"

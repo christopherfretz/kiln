@@ -237,6 +237,18 @@ pub(crate) enum Fault {
         array: bool,
     },
     PtrSub,
+    /// Subtraction of two pointers into one object (or two nulls) whose
+    /// element type has size zero ([expr.add]/5, clang
+    /// `note_constexpr_pointer_subtraction_zero_size`, WP-948).
+    ZeroSizeSub {
+        elem: OTy,
+    },
+    /// An equality comparison involving a pointer to virtual member
+    /// function `member` ([expr.eq]/4.3, clang
+    /// `note_constexpr_mem_pointer_weak_comparison`, WP-948).
+    MpVirtCmp {
+        member: DeclId,
+    },
     /// Subtraction of pointers into different complete objects (or a
     /// null one): clang 19's generic note, clang 22's
     /// `note_constexpr_pointer_arith_unspecified`.
@@ -997,7 +1009,11 @@ impl Oven {
                     pc += 5;
                 }
                 Op::PtrSub => {
-                    match self.ptr_sub(reg!(1) as u64, reg!(2) as u64, OTy(arg!(3) as u32)) {
+                    let (p, q, elem) = (reg!(1) as u64, reg!(2) as u64, OTy(arg!(3) as u32));
+                    if aux != 0 && Ptr::alloc_key(p) == Ptr::alloc_key(q) {
+                        fail!(Fault::ZeroSizeSub { elem });
+                    }
+                    match self.ptr_sub(p, q, elem) {
                         Ok(d) => reg!(0) = d as u128,
                         Err(f) => fail!(f),
                     }
@@ -1263,6 +1279,8 @@ impl Oven {
                 | Op::MpAddr
                 | Op::MpActive
                 | Op::MpFn
+                | Op::MpCmp
+                | Op::RefChk
                 | Op::SetVptr
                 | Op::CovAdj
                 | Op::DynCast
@@ -1685,6 +1703,34 @@ impl Oven {
                     if let Err(f) = self.active_check(reg!(0) as u64, idx, cls, aux) {
                         fail!(f);
                     }
+                }
+                pc += 3;
+            }
+            Op::MpCmp => {
+                // [expr.eq]/4.1-2: a comparison with the null member
+                // pointer is specified.
+                let both = reg!(0) != 0 && reg!(1) != 0;
+                for v in [reg!(0), reg!(1)].into_iter().filter(|_| both) {
+                    if let Some(e) = self.mp.get(v)
+                        && e.virt
+                    {
+                        fail!(Fault::MpVirtCmp { member: e.member });
+                    }
+                }
+                pc += 3;
+            }
+            Op::RefChk => {
+                let (raw, ty) = (reg!(0) as u64, OTy(arg!(1) as u32));
+                let p = Ptr::decode(raw);
+                let past = raw != 0
+                    && !p.is_fn()
+                    && self.types.size(ty) != 0
+                    && self
+                        .mem
+                        .alloc_of(p)
+                        .is_ok_and(|a| p.past || u64::from(p.off) >= u64::from(a.size));
+                if past {
+                    fail!(Fault::Mem { f: MemFault::PastEnd, ak: ak::READ, ty, p: raw });
                 }
                 pc += 3;
             }
@@ -3967,9 +4013,20 @@ impl Oven {
             // A member call (clang's `checkDynamicType` with
             // `AK_MemberCall`): the lifetime of `std::allocator` storage
             // and the active members of the unions on the path to the
-            // object ([class.union.general]/6, WP-224); other faults
-            // surface in the body, at the accesses that make them.
-            let Ok((_, abs, a)) = self.mem.check_storage(raw, size, false) else { return Ok(()) };
+            // object ([class.union.general]/6, WP-224); a `this` that
+            // designates no object within its lifetime: one past the end
+            // ("member call on dereferenced one-past-the-end pointer"), a
+            // dead or reused allocation ("member call on object outside
+            // its lifetime"; [expr.const]/10.8, [basic.life]/7, WP-948).
+            // Other faults (an object not usable in constant expressions,
+            // say) surface in the body, at the accesses that make them.
+            let (abs, a) = match self.mem.check_storage(raw, size, false) {
+                Ok((_, abs, a)) => (abs, a),
+                Err(f @ (MemFault::PastEnd | MemFault::Dead(_) | MemFault::Stale)) => {
+                    return Err(Fault::Mem { f, ak: ak::MEMBER_CALL, ty, p: raw });
+                }
+                Err(_) => return Ok(()),
+            };
             if a.flags & flags::STD_ALLOC != 0 && !self.mem.heap.is_live(abs, size) {
                 return Err(Fault::Mem { f: MemFault::Lifetime, ak: ak::MEMBER_CALL, ty, p: raw });
             }

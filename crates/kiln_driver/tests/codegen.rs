@@ -376,10 +376,16 @@ fn missing_tools() {
         .env("PATH", d.join("no-bin"))
         .output()
         .unwrap();
+    // An explicit KILN_LLVM_DIR that is not an installation is an error
+    // before anything runs (spec/driver.md "LLVM discovery", WP-1016).
     assert_eq!(o.status.code(), Some(1));
     assert_eq!(
         text(&o.stderr),
-        "kiln++: error: unable to execute command: Executable \"llc-19\" doesn't exist!\n"
+        format!(
+            "kiln++: error: '{}' (from KILN_LLVM_DIR) is not a usable LLVM installation: \
+             no such directory\n",
+            d.join("no-llvm").display()
+        )
     );
     assert!(!d.join("add.o").exists());
 }
@@ -581,7 +587,9 @@ fn coro_wrappers_before_passes_match_clang19() {
     }
     args.extend(["-o", "-", src]);
     let d = scratch("coro-wrappers");
-    let mut kargs = vec!["-fclang-compat=19"];
+    // clang 19's IR is LLVM 19's: drive that backend (kiln's default is
+    // LLVM 22, spec/driver.md "LLVM discovery").
+    let mut kargs = vec!["-fclang-compat=19", "--llvm-dir=/usr/lib/llvm-19"];
     kargs.extend(&args);
     let k = kiln_in(&d, &kargs);
     assert_eq!(k.status.code(), Some(0), "{}", text(&k.stderr));
@@ -708,6 +716,36 @@ fn alias_ifunc_diagnostics() {
 /// entity is an error at code generation, once, with the representative
 /// definition as the note; nothing is written. Every structor variant
 /// taking one label is a single entity and is no error.
+#[test]
+fn unmangleable_expression_is_an_error() {
+    // spec/abi.md "Expressions": a template-argument expression form with
+    // no Itanium encoding yet is a hard error at its location (clang's
+    // `cannot yet mangle expression type`), never a fallback name that
+    // could collide with another overload's (WP-593). clang adds the
+    // expression's range; kiln's caret has none.
+    let d = scratch("unmangleable");
+    let src = "template <bool B> struct E { using type = int; };\n\
+               template <class T> typename E<(__builtin_bit_cast(unsigned, T(1)) > 0)>::type \
+               f(T) { return 1; }\nint g() { return f(1); }\n";
+    let first = "t.cpp:2:32: error: cannot yet mangle expression type BuiltinBitCastExpr";
+    std::fs::write(d.join("t.cpp"), src).unwrap();
+    let _ = std::fs::remove_file(d.join("t.ll"));
+    let o = kiln_in(&d, &["-std=c++26", "-S", "-emit-llvm", "t.cpp"]);
+    let err = text(&o.stderr);
+    assert_eq!(err.lines().next(), Some(first), "{err}");
+    assert!(err.ends_with("1 error generated.\n"), "{err}");
+    assert_eq!(o.status.code(), Some(1));
+    assert!(!d.join("t.ll").exists());
+    if have("clang++-19") {
+        let c = Command::new("clang++-19")
+            .args(["-std=c++26", "-S", "-emit-llvm", "-o", "c.ll", "t.cpp"])
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert_eq!(text(&c.stderr).lines().next(), Some(first), "clang++-19");
+    }
+}
+
 #[test]
 fn duplicate_mangled_name() {
     let d = scratch("dupname");
@@ -1002,21 +1040,7 @@ fn codegen_flags_classes() {
 fn codegen_flags_rejected() {
     let d = scratch("cgflags-rej");
     std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
-    let rejected = [
-        "-ftrapv",
-        "-fshort-enums",
-        "-fsanitize=cfi",
-        "-fsanitize-coverage=trace-pc",
-        "-fcoverage-mapping",
-        "-fprofile-arcs",
-        "-ftest-coverage",
-        "--coverage",
-        "-fprofile-instr-generate",
-        "-fprofile-instr-generate=a.profraw",
-        "-fprofile-generate",
-        "-fprofile-use=a.profdata",
-        "-fprofile-instr-use=a.profdata",
-    ];
+    let rejected = ["-ftrapv", "-fshort-enums", "-fsanitize=cfi", "-fsanitize-coverage=trace-pc"];
     for f in rejected {
         let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "r.o"]);
         assert_eq!(
@@ -1043,6 +1067,58 @@ fn codegen_flags_rejected() {
             (o.status.code(), text(&o.stderr)),
             (Some(1), format!("kiln++: error: {want}\n"))
         );
+    }
+}
+
+/// spec/driver.md "Coverage flags" (WP-941): source-based coverage
+/// mapping is not implemented yet, and profile-guided optimization is a
+/// known 1.0 limitation; each is named in the error and no job runs.
+#[test]
+fn coverage_flags_rejected() {
+    let d = scratch("covflags-rej");
+    std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
+    let limit = |f: &str, what: &str| {
+        format!(
+            "'{f} ({what} is a known kiln 1.0 limitation; for coverage use --coverage or \
+             -fprofile-instr-generate)' is not supported by kiln"
+        )
+    };
+    for (flags, want) in [
+        (
+            &["-fprofile-instr-generate", "-fcoverage-mapping"][..],
+            "'-fcoverage-mapping (source-based coverage mapping is not yet implemented, a \
+             WP-941 follow-up; -fprofile-instr-generate counters work alone, and --coverage \
+             gives gcov line coverage)' is not supported by kiln"
+                .to_owned(),
+        ),
+        (
+            &["-fprofile-generate"],
+            limit("-fprofile-generate", "IR profile-guided optimization instrumentation"),
+        ),
+        (
+            &["-fprofile-use=a.profdata"],
+            limit("-fprofile-use=a.profdata", "profile-guided optimization"),
+        ),
+        (
+            &["-fprofile-instr-use=a.profdata"],
+            limit("-fprofile-instr-use=a.profdata", "profile-guided optimization"),
+        ),
+    ] {
+        let mut args = flags.to_vec();
+        args.extend(["-c", "m.cpp", "-o", "r.o"]);
+        let o = kiln_in(&d, &args);
+        assert_eq!(
+            (o.status.code(), text(&o.stderr)),
+            (Some(1), format!("kiln++: error: {want}\n")),
+            "{flags:?}"
+        );
+        assert!(!d.join("r.o").exists(), "{flags:?}");
+    }
+    // The accepted flags compile (the gcov and InstrProf IR are
+    // tests/codegen's `gcov_*` and `instrprof_*` cases).
+    for f in ["--coverage", "-fprofile-instr-generate", "-fprofile-instr-generate=a.profraw"] {
+        let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "m.o"]);
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{f}");
     }
 }
 
@@ -1100,6 +1176,63 @@ fn fp_environment_flags_rejected() {
         args.extend(["-c", "m.cpp", "-o", "a.o"]);
         let o = kiln_in(&d, &args);
         assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{flags:?}");
+    }
+}
+
+/// `-ffp-contract=fast` fuses across statements with either backend, but
+/// LLVM 22's `llc` warns that the X86 backend ignores `-fp-contract` (it
+/// reads the IR's `contract` flags), so kiln passes it only to the others
+/// (WP-1016). Pinned to `x86_64` so an `AArch64` host checks it too.
+#[test]
+fn fp_contract_fast_backend_flag() {
+    let (l19, l22) = ("/usr/lib/llvm-19", "/usr/lib/llvm-22");
+    if !Path::new(l19).is_dir() || !Path::new(l22).is_dir() {
+        eprintln!("skipping: {l19} / {l22} not found");
+        return;
+    }
+    let d = scratch("fp-contract-backend");
+    std::fs::write(
+        d.join("f.cpp"),
+        "float f(float a, float b, float c) { float m = a * b; return m + c; }\n",
+    )
+    .unwrap();
+    for (target, llvm, passed) in [
+        ("x86_64-linux-gnu", l22, false),
+        ("x86_64-linux-gnu", l19, true),
+        ("aarch64-linux-gnu", l22, true),
+        ("aarch64-linux-gnu", l19, true),
+    ] {
+        let (t, l) = (format!("--target={target}"), format!("--llvm-dir={llvm}"));
+        let o = kiln_in(&d, &["-###", &t, &l, "-ffp-contract=fast", "-O2", "-c", "f.cpp"]);
+        let err = text(&o.stderr);
+        assert_eq!(o.status.code(), Some(0), "{err}");
+        assert_eq!(err.contains("\"-fp-contract=fast\""), passed, "{target} {llvm}: {err}");
+    }
+    // The statements still fuse on x86 with both backends, silently.
+    for llvm in [l22, l19] {
+        let l = format!("--llvm-dir={llvm}");
+        for (contract, fused) in [("-ffp-contract=fast", true), ("-ffp-contract=on", false)] {
+            let args = ["--target=x86_64-linux-gnu", &l, "-march=haswell", contract, "-O2"];
+            let o = kiln_in(&d, &[&args[..], &["-S", "f.cpp", "-o", "-"]].concat());
+            assert_eq!(
+                (o.status.code(), text(&o.stderr).as_str()),
+                (Some(0), ""),
+                "{llvm} {contract}"
+            );
+            assert_eq!(text(&o.stdout).contains("vfmadd"), fused, "{llvm} {contract}");
+        }
+        let o = kiln_in(
+            &d,
+            &[
+                "--target=x86_64-linux-gnu",
+                &l,
+                "-ffp-model=fast",
+                "-fcx-limited-range",
+                "-c",
+                "f.cpp",
+            ],
+        );
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{llvm}");
     }
 }
 

@@ -103,6 +103,32 @@ pub enum Marker {
         /// The `embed` directive-name token.
         span: Span,
     },
+    /// `-dD` ([`crate::PpOptions::dump_defines`]): a macro was defined
+    /// (by `#define`, including the predefines buffer's).
+    Define {
+        /// The macro.
+        def: Rc<MacroDef>,
+    },
+    /// `-dD`: `#undef` of `name`.
+    Undef {
+        /// The macro name token.
+        span: Span,
+        /// Its name.
+        name: Symbol,
+    },
+    /// `-dI` ([`crate::PpOptions::dump_includes`]): an inclusion
+    /// directive, queued before the included file's tokens (also when
+    /// the file is skipped or not found).
+    Include {
+        /// The directive-name token (`include`, `include_next`, `import`).
+        span: Span,
+        /// The directive name.
+        directive: &'static str,
+        /// The header name without its delimiters.
+        name: String,
+        /// `<...>` (else `"..."`).
+        angled: bool,
+    },
 }
 
 /// One open `#if` group.
@@ -501,7 +527,11 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                 m.builtin_file = Some(b);
             }
         }
-        if self.modules.is_some() {
+        if let Some(m) = &mut self.modules {
+            if let Some(rec) = m.record.as_mut() {
+                // The main file is file 0 of a module file.
+                rec.file(file);
+            }
             self.module_lines = crate::modules::has_module_lines(self.sm.text(file));
         }
     }

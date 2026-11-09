@@ -389,6 +389,9 @@ translation unit that fails costs about what it costs clang:
   member-pointer scan), so a variable does not hide the namespace or
   class: `std::ifstream fs(fs::path("x"))` with a namespace alias `fs`
   is a functional cast (WP-336).
+- **The class-name of a base-specifier** ([class.derived.general]/2) is a
+  type-only lookup (`Sema::classify_base_class_name`): a namespace in an
+  inner scope does not hide a class of an outer one (clang 22; WP-958).
 - **Argument-dependent lookup** ([basic.lookup.argdep]; WP-068a,
   `overload/adl.rs`, spec/sema-overload.md §2.2): a call's unqualified,
   unparenthesized callee whose ordinary lookup found only namespace-scope
@@ -5552,8 +5555,10 @@ and aggregate element types.
   `(void*, size_t)` and `(void*, size_t, align_val_t)`, all
   `noexcept`. `std::align_val_t` is the program's own declaration, else
   an implicit `enum class align_val_t : size_t` in an implicit
-  namespace `std` (clang's `getStdAlignValT`). The nothrow forms exist
-  only if the program (`<new>`) declares them.
+  namespace `std` (clang's `getStdAlignValT`). That implicit namespace
+  is hidden from ordinary lookup, so `int std;` stays valid, until the
+  program's first `namespace std {` reopens it (`implicit_std`, WP-958).
+  The nothrow forms exist only if the program (`<new>`) declares them.
 - **User declarations** of a global `operator new`/`delete`
   (`act_on_global_new_delete_decl`) redeclare a matching implicit one; a
   deallocation function without an exception specification is
@@ -7457,7 +7462,8 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `dcl.constexpr/never-constant-no-error-cxx20.cpp`,
   `dcl.constexpr/potential-constant-builtin-{fabs,strcmp,not-constexpr}.cpp`,
   `dcl.constexpr/potential-constant-builtins-spread.cpp`,
-  `dcl.constexpr/potential-constant-consteval-operator-template.cpp`.
+  `dcl.constexpr/potential-constant-consteval-operator-template.cpp`,
+  `dcl.constexpr/never-constant-direct-callee-cxx20.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

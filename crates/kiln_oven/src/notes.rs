@@ -434,6 +434,17 @@ impl Oven {
             Fault::PtrArith { .. } => {
                 (site.loc, "subexpression not valid in a constant expression".into())
             }
+            Fault::ZeroSizeSub { elem } => (
+                site.loc,
+                format!("subtraction of pointers to type '{}' of zero size", self.tname(ast, elem)),
+            ),
+            Fault::MpVirtCmp { member } => (
+                site.loc,
+                format!(
+                    "comparison of pointer to virtual member function '{}' has unspecified value",
+                    name_of(ast, member)
+                ),
+            ),
             Fault::PtrSub => {
                 (site.loc, "subtracted pointers are not elements of the same array".into())
             }
@@ -1663,8 +1674,13 @@ impl Oven {
                     // redeclaration read) of a variable that is not.
                     let parm = ast.decls.get(d).kind() == DeclKind::ParmVar;
                     let at = if parm || vi.usable { d } else { used_redecl(ast, site.e, d) };
-                    extra.push(Note::new(ast.decls.get(at).loc(), "declared here"));
-                    if ast.decls.compound_literal_of(d).is_some() {
+                    let volatile = !parm && ast.types.effective_quals(vi.ty).is_volatile();
+                    let here = if volatile { "volatile object declared here" } else { "declared here" };
+                    extra.push(Note::new(ast.decls.get(at).loc(), here));
+                    if volatile {
+                        // clang note_constexpr_access_volatile_obj ([expr.const]/10.9).
+                        format!("read of volatile object '{name}' is not allowed in a constant expression")
+                    } else if ast.decls.compound_literal_of(d).is_some() {
                         // clang `handleLValueToRValueConversion`: a read
                         // of a non-`const` namespace-scope array literal
                         // (WP-466).

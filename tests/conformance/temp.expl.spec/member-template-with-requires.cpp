@@ -3,7 +3,6 @@
 // clang's CXX/temp/temp.spec/temp.expl.spec/p8.cpp. Found by the clang
 // negative-test run (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, the constrained member template redeclaration is not matched
 //@ expect: compile-ok
 template <typename T> concept C = sizeof(T) <= sizeof(long);
 template <typename T> struct A {

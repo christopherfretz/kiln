@@ -4,7 +4,6 @@
 // clang's CXX/basic/basic.lookup/basic.lookup.argdep/p2-template-id.cpp.
 // Found by the clang negative-test run (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, ADL ignores the associated namespaces of an overload-set argument
 //@ expect: compile-ok
 namespace N1 {
 struct X {};

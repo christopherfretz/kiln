@@ -71,7 +71,8 @@ What to know when consuming these:
   `__clang__ 1`, `__clang_major__ 19`, `__clang_minor__ 1`,
   `__clang_patchlevel__ 7`, `__clang_version__ "19.1.7 (3+b1)"`,
   `__VERSION__ "Debian Clang 19.1.7 (3+b1)"` (the `Debian` and `(3+b1)` parts
-  are the distro's vendor string), `__llvm__ 1`, `__GNUC__ 4`,
+  are the distro's vendor string; kiln predefines `"kiln <version>"` instead
+  since WP-920, operator decision Q3, spec/driver.md "Identity"), `__llvm__ 1`, `__GNUC__ 4`,
   `__GNUC_MINOR__ 2`, `__GNUC_PATCHLEVEL__ 1`, `__GNUG__ 4`,
   `__GXX_ABI_VERSION 1002`.
 - **Time and location builtins:** `__DATE__`, `__TIME__`, `__TIMESTAMP__`,

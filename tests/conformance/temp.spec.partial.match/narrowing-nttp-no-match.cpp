@@ -4,7 +4,6 @@
 // CXX/temp/temp.decls/temp.class.spec/p9.cpp. Found by the clang negative-
 // test run (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, partial-specialization matching ignores non-type value conversion
 //@ expect: compile-ok
 template <int, int, int> struct int_values {
   static const unsigned value = 0;

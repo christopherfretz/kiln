@@ -48,7 +48,8 @@ creatable), or an empty test selection.
 
 - Directories are walked recursively. Files and directories whose names start
   with `.` are ignored, and so are directories named `Inputs` (the lit
-  convention for auxiliary files).
+  convention for auxiliary files), including an `Inputs` directory named on
+  the command line (WP-917).
 - `.cpp` and `.c` files are tests. A `.h` file is a test only if its header
   contains a `//@` directive; otherwise it is an include file.
 - A file named explicitly on the command line is always a test.
@@ -98,14 +99,16 @@ directives are also ERRORs.
 | `requires: clang>=X[.Y[.Z]]` | Run only when every clang the test runs is at least version `X.Y.Z` (missing components are 0). The clangs the test runs are the compiler under test when its kind is clang, and the oracle when its kind is clang and the test compares with it (`oracle` in effect, or `layout`/`vtables`/`ir`, and an oracle configured). The version is the `X.Y.Z` after `clang version ` in the `--version` line; a clang whose version cannot be read never meets the requirement. Otherwise **SKIP** with the reason `requires clang>=X.Y.Z; the compiler is clang <version>` (or `the oracle is ...`; `... names no clang version` when it cannot be read). With no clang involved (kiln without an oracle, or a non-clang oracle) the requirement is met. For tests that a known defect of an older clang breaks (docs/VALIDATION.md, known oracle defects; WP-239). |
 | `requires: clang<X[.Y[.Z]]` | The complement: run only when every clang the test runs is OLDER than `X.Y.Z`; same clangs, same version reading (an unreadable version never meets it), and the SKIP reason `requires clang<X.Y.Z; the oracle is clang <version>`. Both bounds may appear (the lower is reported first). For an expectation a later clang release changed and kiln has not followed yet — the oracle-switch residual (docs/status/wp-184-oracle-switch.md); kiln alone (no clang run) still runs the test. WP-355. |
 | `min-oracle: N` | Run only when every clang the test runs (the same clangs as `requires: clang>=`) is release `N` or later (`N` a positive major version); otherwise **SKIP** with the reason `min-oracle N; the compiler is clang <version>`. The line `crates/kiln_codegen/tests/ir_vs_clang.rs` reads for an IR case that follows a newer clang where an older one differs (that test compares such a case only under oracle `N` or later); kiln alone (no clang run) still runs the test, at its usual `-fclang-compat`. WP-405. |
-| `module: <name>=<path>` | A module interface unit the test imports, `<path>` relative to the test's directory (an absolute path is an ERROR); repeatable, each `<name>` once, listed in dependency order. Only for `compile-ok` (not `verify`), `compile-fail` and `no-crash` tests. kiln gets `-fmodule-file=<name>=<source>` (it builds the unit in-process); clang first precompiles each unit, in order, with `<clang> -std=<std> <args> <earlier units' -fmodule-file=...> --precompile -x c++-module <source> -o <scratch>/<name>.pcm` and then gets `-fmodule-file=<name>=<bmi>`; either way the flags follow `args` and precede the test file. A missing unit or one clang rejects is **ERROR**; a compiler that is neither kiln nor clang **SKIP**s. The same lines `ir_vs_clang` reads (spec/codegen.md §6, "IR-diff corpus"). WP-405. |
+| `module: <name>=<path>` | A module interface (or partition) unit the test imports, `<path>` relative to the test's directory (an absolute path is an ERROR); repeatable, each `<name>` once (a partition as `M:P`), listed in dependency order. Only for `compile-ok` (not `verify`), `compile-fail`, `no-crash` and `run` tests. Single-step (the default for compile kinds): kiln gets `-fmodule-file=<name>=<source>` (it builds the unit in-process, spec/modules.md part A); clang first precompiles each unit, in order, with `<clang> -std=<std> <args> <earlier units' -fmodule-file=...> --precompile -x c++-module <source> -o <scratch>/oracle-<name>.pcm` and then gets `-fmodule-file=<name>=<bmi>`. Two-step (`two-step`, and always for `run`; WP-917): kiln, too, writes module files, with `-fmodule-output=<scratch>/<name>.pcm -c -x c++-module <source> -o <scratch>/<name>.o` (`--precompile` alone when no object is needed), and gets `-fmodule-file=<name>=<scratch>/<name>.pcm`; clang compiles each `.pcm` with `-c` for its object. `:` in a name is `-` in the file name. Either way the flags follow `args` and precede the test file. A missing unit or one clang rejects is **ERROR**, one kiln rejects or crashes on **FAIL**; a compiler that is neither kiln nor clang **SKIP**s, and the GCC oracle is not run. The same lines `ir_vs_clang` reads (spec/codegen.md §6, "IR-diff corpus"). WP-405, WP-917. |
+| `unit: <path>` | A further translation unit of a `run` test (an implementation unit, or a plain unit that imports the modules), `<path>` relative to the test's directory; repeatable. Each is compiled with `-c` after the test file, with the `module:` flags, to `<scratch>/[oracle-]unit<N>.o`; the program links the modules' objects, the units' and the test's (`-Qunused-arguments <args> <objects> -o ...`). The diags compared are the test file's compile's; a failing module, unit or link step fails the test (kiln) or makes it ERROR (oracle). WP-917. |
+| `two-step` | No value. Compile kinds with `module:` lines only (a `run` test is always two-step; anything else is an ERROR): kiln compiles the units to module files and imports those instead of the sources, so the test exercises the module file reader (spec/modules.md §11). WP-917. |
 | `requires: llvm>=N` / `requires: llvm<N` | Run only when every LLVM backend that consumes the test's IR has major version at least `N` (`>=`) or below `N` (`<`); `N` is a bare major (`llvm>=22.1` is an ERROR), each form at most once. The backends are kiln's when kiln is the compiler under test or the compared oracle (the major of the oracle release whose `/usr/lib/llvm-N` kiln gets as `KILN_LLVM_DIR`, "Oracle toolchain") and every clang the test runs (as for `clang>=`; a clang's LLVM major is its own major, an unreadable version never meets it). Otherwise **SKIP** with the reason `requires llvm>=N; kiln's backend is LLVM <M>` (or `the compiler`/`the oracle`; `... has no known LLVM`). Checked after the `clang` requirements. For IR goldens whose syntax an older LLVM rejects (clang 22's `dead_on_return`, AArch64 `"frame-pointer"="non-leaf-no-reserve"`; spec/codegen.md §6a) and for a workaround only an older backend needs. Unlike `clang>=`, it is never met vacuously by kiln: kiln's backend always counts. WP-386. |
 | `skip[(kiln\|clang\|gcc)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind (`skip(gcc)`: when GCC is the compiler under test; it contradicts `oracle: gcc`, an ERROR). The oracle is a clang, so `skip(clang)` also implies `oracle: none`: a `run`, `pp` or `verify` test clang cannot compile is not compared with the oracle when kiln runs it (its own expectations, `stdout`/`exit`, `.expected` or `expected-*` comments, are the reference), and `oracle: clang` with `skip(clang)` is an error. `layout`, `vtables` and `ir` tests compare with the oracle only (no golden), so `skip(clang)` on them is an ERROR (`skip(clang)` does not apply to ... tests; a test neither compiler should run uses unqualified `skip:`). Running kiln alone would check nothing but that it compiles, which `compile-ok` already says. WP-258. |
 | `xfail[(kiln\|clang\|gcc)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
 | `meta-header: skip <reason>` | **SKIP** the test in the header-differential mode (`--meta-header`), with the reason `meta-header mode: <reason>`; no effect otherwise. For a test whose answer through GCC's library code is known to differ from kiln's built-in one (a step budget the real `std::vector` exceeds, wording that names a `kiln_meta.h` signature). A missing reason, or any other value, is an ERROR. WP-484. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
-`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, `meta-header`, each `requires` kind (`target-`, `host-`, `clang>=`, `clang<`), `min-oracle`, `verify`, each `module` name, and each `skip`/`xfail` qualifier may appear
+`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, `meta-header`, each `requires` kind (`target-`, `host-`, `clang>=`, `clang<`), `min-oracle`, `verify`, `two-step`, each `module` name and `unit` path, and each `skip`/`xfail` qualifier may appear
 at most once; `oven` at most once per
 location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
@@ -232,7 +235,11 @@ and, when it is kiln, `KILN_LLVM_DIR=/usr/lib/llvm-N`; the oracle is
 `clang++-N` with the same flags (an explicit `--oracle` replaces the
 compiler, not N: kiln still gets release N's directory). Clang ignores
 `KILN_LLVM_DIR`, so a clang under test or a clang oracle runs as before.
-kiln_driver's own default (no `KILN_LLVM_DIR`) is still `/usr/lib/llvm-19`.
+kiln_driver's own default (no `KILN_LLVM_DIR`) is the discovered
+installation, LLVM 22 when installed (spec/driver.md "LLVM discovery",
+WP-1016), so the harness's export only matters for oracle 19, and a
+crate test that compares kiln with clang 19's IR or objects names
+`--llvm-dir=/usr/lib/llvm-19` itself (`ir_vs_clang`'s `KILN_LLVM_DIR`).
 `requires: clang>=N` compares with the oracle's `--version`, so it follows
 the release without further configuration.
 
@@ -1100,7 +1107,7 @@ on `KILN_ORACLE` (today `kiln_codegen`'s `ir_vs_clang`); steps 2–4 are as
 above. Everything else in the workspace either pins clang 19 itself or
 uses no oracle, so it already ran, with the same result, in the
 default-oracle pass: the crates' tests name `clang++-19` and
-`/usr/lib/llvm-19`, and the harness's own end-to-end tests
+`/usr/lib/llvm-19` (kiln's backend through `--llvm-dir=`), and the harness's own end-to-end tests
 (`xtask/src/test/tests.rs` `clang_opts`) pin release 19 as compiler,
 oracle and toolchain (`Options::toolchain`, so `requires: llvm` does not
 follow `KILN_ORACLE` there either). A test target that reads `KILN_ORACLE` must be
@@ -1309,6 +1316,10 @@ or infrastructure error. Parse errors name their line.
   `pass-module.cpp` (two chained units precompiled by clang),
   `skip-min-oracle.cpp` and `error-module-missing-file.cpp`; the
   `tests/codegen/module_*.cpp` corpus under kiln and clang.
+- `unit:` / `two-step` (WP-917): `module_and_min_oracle_directives`
+  (directives.rs); the `two-step-*` conformance tests (module.interface,
+  module.unit, module.global.frag, basic.start.dynamic) under kiln and
+  under clang 19 and 22 as the compiler.
 - `skip(clang)` (WP-258): `skip_clang_implies_oracle_none` and
   `skip_clang_rejected_without_golden` (directives.rs; the ERROR for
   `layout`/`vtables`/`ir`).

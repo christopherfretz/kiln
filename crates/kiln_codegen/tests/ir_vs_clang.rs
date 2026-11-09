@@ -231,8 +231,16 @@ fn min_oracle(file: &Path) -> Option<u32> {
     src.lines().find_map(|l| l.strip_prefix("//@ min-oracle:")).and_then(|v| v.trim().parse().ok())
 }
 
+/// The LLVM installation kiln drives here: LLVM 19's, named explicitly
+/// (kiln's own default is 22 since WP-1016, spec/driver.md "LLVM
+/// discovery"), since the oracle-19 byte-exact comparison and the
+/// [`DEVIATIONS`] that cite `llvm_major` assume LLVM 19 IR. Without it,
+/// discovery picks.
+const KILN_LLVM_DIR: &str = "/usr/lib/llvm-19";
+
 /// Compiles `file` for `triple` with the in-process driver, at the
-/// oracle's compat level (`kiln++` defaults to 22 since WP-394).
+/// oracle's compat level (`kiln++` defaults to 22 since WP-394), driving
+/// [`KILN_LLVM_DIR`].
 fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
     let out = SharedBuffer::new();
     let err = SharedBuffer::new();
@@ -259,16 +267,17 @@ fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
     .chain(
         module_inputs(file).into_iter().map(|(n, p)| format!("-fmodule-file={n}={}", p.display())),
     )
+    .chain(Path::new(KILN_LLVM_DIR).is_dir().then(|| format!("--llvm-dir={KILN_LLVM_DIR}")))
     .chain(std::iter::once(file.display().to_string()))
     .collect();
     let code = run(&args, io);
     if code != 0 {
         return Err(format!("kiln exited {code}:\n{}", err.contents()));
     }
-    // kiln writes its backend's lifetime-marker form (WP-783); compare in
-    // the oracle's.
+    // kiln writes its backend's lifetime-marker (WP-783) and unlowered
+    // `llvm.coro.end` (WP-941) forms; compare in the oracle's.
     if oracle_version() == "22" {
-        return Ok(ir_norm::lifetime_markers_llvm22(&out.contents()));
+        return Ok(ir_norm::coro_end_llvm22(&ir_norm::lifetime_markers_llvm22(&out.contents())));
     }
     Ok(out.contents())
 }
