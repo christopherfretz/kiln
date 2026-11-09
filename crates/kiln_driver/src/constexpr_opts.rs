@@ -270,6 +270,37 @@ mod tests {
         );
         assert!(matches!(o.parse_arg("-fconstexpr-memory=1t"), Some(Err(_))));
         assert!(matches!(o.parse_arg("-fconstexpr-report="), Some(Err(_))));
+        assert_eq!(
+            o.parse_arg("-fconstexpr-profile="),
+            Some(Err(ArgError::MissingValue("-fconstexpr-profile=".into())))
+        );
+        assert_eq!(
+            o.parse_arg("-fconstexpr-profile-limit=x"),
+            Some(Err(ArgError::InvalidInt("-fconstexpr-profile-limit=x".into(), "x".into())))
+        );
+        assert_eq!(o.parse_arg("-fconstexpr-statsx"), None);
         assert_eq!(o, ConstexprOpts::default());
+    }
+
+    /// `-fconstexpr-stats`, `-fconstexpr-profile[=<format>|<file>]` and
+    /// `-fconstexpr-profile-limit=<n>` (spec/driver.md "Constexpr
+    /// profile"); the last `-fconstexpr-profile` wins.
+    #[test]
+    fn profile_flags() {
+        let o = ConstexprOpts::default();
+        assert!(!o.profiling());
+        assert_eq!(o.limits().profile, Level::Off);
+        let o = opts(&["-fconstexpr-stats"]);
+        assert!(o.stats && o.profiling());
+        assert_eq!(o.limits().profile, Level::Stats);
+        let o = opts(&["-fconstexpr-profile"]);
+        assert_eq!(o.profile, Some(ProfileOut::Text));
+        assert_eq!(o.limits().profile, Level::Calls);
+        assert_eq!(opts(&["-fconstexpr-profile=json"]).profile, Some(ProfileOut::Json));
+        assert_eq!(opts(&["-fconstexpr-profile=text"]).profile, Some(ProfileOut::Text));
+        let o = opts(&["-fconstexpr-profile=json", "-fconstexpr-profile=p.json"]);
+        assert_eq!(o.profile, Some(ProfileOut::File("p.json".into())));
+        let o = opts(&["-fconstexpr-profile-limit=0", "-fconstexpr-stats", "-fconstexpr-profile"]);
+        assert_eq!((o.profile_limit, o.limits().profile), (Some(0), Level::Calls));
     }
 }

@@ -46,8 +46,8 @@ mod memo;
 mod memptr;
 mod meta;
 mod notes;
-mod reclaim;
 pub mod profile;
+mod reclaim;
 pub mod report;
 mod softfloat;
 mod stats;
@@ -1715,10 +1715,7 @@ impl Oven {
             arena: self.mem.arena_peak.saturating_sub(arena0),
             allocs: self.mem.heap_allocs,
             refl: self.run.counters.refl,
-            reclaimed: self
-                .mem
-                .allocated
-                .saturating_sub(self.mem.held().saturating_sub(held0)),
+            reclaimed: self.mem.allocated.saturating_sub(self.mem.held().saturating_sub(held0)),
         };
         self.mem.free_heap_of(ctx, &self.types);
         self.mem.release(mark, &self.types);

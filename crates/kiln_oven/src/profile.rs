@@ -168,6 +168,28 @@ pub struct ProfileRows {
     pub funcs: Vec<ProfileRow>,
     /// Top-level evaluation sites.
     pub sites: Vec<ProfileRow>,
+    /// The TU's totals (the `total` line).
+    pub totals: ProfileTotals,
+}
+
+/// The totals of a [`ProfileRows`]: recorded evaluations from
+/// [`crate::stats::EvalTotals`] (each context's own steps and time, so a
+/// nested evaluation is not counted twice), unrecorded trial evaluations
+/// from [`crate::stats::JobTotals`]. Function rows include the trials'
+/// calls; site rows do not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProfileTotals {
+    /// Recorded evaluations.
+    pub evaluations: u64,
+    /// Their steps.
+    pub steps: u64,
+    /// Their wall time in microseconds.
+    pub wall_us: u64,
+    /// Trial evaluations (not recorded: folds, constant-initialization
+    /// checks).
+    pub trials: u64,
+    /// Their steps.
+    pub trial_steps: u64,
 }
 
 /// How [`ProfileRows::render`] writes the report.
@@ -211,10 +233,8 @@ impl ProfileRows {
                 format!("{f}:{line}:{col}")
             })
         };
-        let steps: u64 = sites.iter().map(|r| r.row.incl_steps).sum();
-        let evals: u64 = sites.iter().map(|r| r.row.count).sum();
+        let t = self.totals;
         let calls: u64 = funcs.iter().map(|r| r.row.count).sum();
-        let ns_total: u64 = sites.iter().map(|r| r.row.incl_ns).sum();
         let mut out = String::new();
         if opts.json {
             for r in &funcs[..nf] {
@@ -250,14 +270,16 @@ impl ProfileRows {
             }
             let _ = writeln!(
                 out,
-                "{{\"total\":true,\"file\":{},\"functions\":{},\"sites\":{},\"evaluations\":{},\"steps\":{},\"calls\":{},\"wall_us\":{}}}",
+                "{{\"total\":true,\"file\":{},\"functions\":{},\"sites\":{},\"evaluations\":{},\"steps\":{},\"wall_us\":{},\"trials\":{},\"trial_steps\":{},\"calls\":{}}}",
                 json_str(file),
                 funcs.len(),
                 sites.len(),
-                evals,
-                steps,
-                calls,
-                ns_total / 1000
+                t.evaluations,
+                t.steps,
+                t.wall_us,
+                t.trials,
+                t.trial_steps,
+                calls
             );
             return out;
         }
@@ -304,8 +326,12 @@ impl ProfileRows {
         more(&mut out, ns, sites.len());
         let _ = writeln!(
             out,
-            "  total: {evals} evaluations, {steps} steps, {calls} calls, {:.3} ms",
-            ms(ns_total)
+            "  total: {} evaluations, {} steps, {:.3} ms; {} trials, {} steps; {calls} calls",
+            t.evaluations,
+            t.steps,
+            ms(t.wall_us * 1000),
+            t.trials,
+            t.trial_steps
         );
         out
     }
@@ -368,7 +394,15 @@ impl Oven {
                 ProfileRow { name, immediate: false, loc, row }
             })
             .collect();
-        Some(ProfileRows { funcs, sites })
+        let (t, j) = (self.stats.totals(), self.stats.jobs());
+        let totals = ProfileTotals {
+            evaluations: t.evaluations,
+            steps: t.steps,
+            wall_us: t.wall_us,
+            trials: j.jobs.saturating_sub(t.evaluations),
+            trial_steps: j.steps.saturating_sub(t.steps),
+        };
+        Some(ProfileRows { funcs, sites, totals })
     }
 
     /// The `-fconstexpr-stats` summary: one `constexpr: <what> key=value
@@ -416,7 +450,8 @@ impl Oven {
             j.steps.saturating_sub(t.steps),
             j.wall_us.saturating_sub(t.wall_us)
         );
-        let _ = writeln!(s, "constexpr: compile functions={compiles} wall-us={}", compile_ns / 1000);
+        let _ =
+            writeln!(s, "constexpr: compile functions={compiles} wall-us={}", compile_ns / 1000);
         s
     }
 }
@@ -477,6 +512,7 @@ mod tests {
                 row("e", 1, 7, 1),
             ],
             sites: Vec::new(),
+            totals: ProfileTotals::default(),
         };
         let opts = RenderOptions { json: true, limit: 0 };
         let out = rows.render("t.cpp", opts, &locs);
@@ -493,13 +529,25 @@ mod tests {
         let rows = ProfileRows {
             funcs: (0..5).map(|i| row("f", i, u64::from(i), 1)).collect(),
             sites: vec![row("static_assert", 1, 10, 1)],
+            totals: ProfileTotals {
+                evaluations: 1,
+                steps: 10,
+                wall_us: 2000,
+                trials: 3,
+                trial_steps: 4,
+            },
         };
         let out = rows.render("t.cpp", RenderOptions { json: false, limit: 2 }, &locs);
         assert!(out.starts_with("===-- kiln constexpr profile: t.cpp --===\n"), "{out}");
         assert!(out.contains("functions (top 2 of 5, by inclusive steps):"), "{out}");
         assert!(out.contains("  ... 3 more rows (use -fconstexpr-profile-limit=0)"), "{out}");
         assert!(out.contains("(t.cpp:4:1)"), "{out}");
-        assert!(out.contains("  total: 1 evaluations, 10 steps, 5 calls,"), "{out}");
+        assert!(
+            out.contains(
+                "  total: 1 evaluations, 10 steps, 2.000 ms; 3 trials, 4 steps; 5 calls\n"
+            ),
+            "{out}"
+        );
     }
 
     #[test]
