@@ -129,6 +129,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-dI` | with `-E`: the text, plus every `#include`/`#include_next`/`#import` directive as `#include "x.h" /* clang -E -dI */` before the header's text (clang's spelling, WP-920) |
 | `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name names a module file whose header gives the module (spec/modules.md §11.6) |
 | `-fmodules-cache-path=<dir>`, `-f[no-]kiln-module-cache` | where the `std` / `std.compat` module cache lives, and turning it off (see "Module cache") |
+| `-fmodules-prune-interval=<seconds>`, `-fmodules-prune-after=<seconds>` | how often the module cache is pruned, and after how long unused an entry is removed (clang's flags and defaults; 0 turns pruning off; see "Module cache") |
 | `-f[no-]fast-math`, its parts, `-ffp-model=`, `-ffp-contract=`, `-fdenormal-fp-math=`, the FP environment flags | see "Floating-point flags" (WP-806) |
 | `-fstack-protector*`, `-f[no-]unwind-tables`, `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-ffunction-sections`, `-fdata-sections`, `-mtune=`, `-f[no-]wrapv`, `-f[no-]strict-overflow`, `-f[no-]delete-null-pointer-checks`, `-Wp,<list>`, `-Xpreprocessor <arg>`, and the ignored and rejected sets | see "Codegen flags" (WP-605) |
 | `-fcrash-diagnostics[=compiler\|all\|off]`, `-fno-crash-diagnostics` | whether an internal compiler error writes the crash reproducer (default on; `=off` and the negative turn it off, the last wins); see "Internal compiler errors" (WP-911) |
@@ -1311,8 +1312,31 @@ files in a per-user cache, built there on first use (spec/modules.md
 - **Dependency output.** An importer's `-MD`/`-MMD` rule lists the
   entry's module file (absolute), the same on a hit and a miss, and
   under `-MD` the entry's stamped inputs ("Dependency output", WP-1051).
-- **No eviction.** Entries for configurations no longer used stay until
-  removed by hand (`rm -r ~/.cache/kiln/modules`; each is about 9 MiB).
+- **Pruning** (WP-1050), as clang prunes its module cache. Every
+  configuration, and every rebuilt kiln, has its own entry of about
+  9 MiB. A compile using the cache checks `<root>/modules.timestamp`
+  after its first lookup: created when missing, else, once older than
+  the interval, updated, and every other entry unused for longer than
+  prune-after is removed (spec/modules.md §11.12 "Pruning" has the
+  rules, and how they differ from clang's).
+
+  | flag | default | meaning |
+  |---|---|---|
+  | `-fmodules-prune-interval=<seconds>` | 604800 (7 days) | at most how often the cache is pruned; 0 never |
+  | `-fmodules-prune-after=<seconds>` | 2678400 (31 days) | an entry unused this long is removed; 0 never |
+
+  The values are clang's `unsigned` (decimal, `0x` hex, `0` octal, at
+  most 4294967295); anything else is clang's `invalid integral value
+  '<v>' in '<arg>'`. An entry's last use is the newest modification time
+  of its files; a hit sets its stamp's to now when it is a day old or
+  older (never the module file's, which dependency files list), where
+  clang reads access times. An entry whose lock another compile holds is
+  kept, as is anything in the root that is not an entry directory (32 hex
+  digits), and links are not followed. Removal failures are silent;
+  under `-v` the cache says `pruning '<root>'`, `removed unused
+  '<entry>'` and `cannot remove '<path>': <reason>`. Removing the cache
+  by hand (`rm -r ~/.cache/kiln/modules`) is always safe when no compile
+  runs.
 - `-print-file-name=libc++.modules.json` prints libc++'s module
   manifest for the libc++ that `-stdlib=libc++` selects
   (`<prefix>/lib/<triple>/` then `<prefix>/lib/`, where

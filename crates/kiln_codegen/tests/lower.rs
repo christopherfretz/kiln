@@ -42,6 +42,11 @@ fn kiln_ir(src: &str) -> Result<String, String> {
 
 /// Lowers `src` with kiln for the IR of LLVM `llvm_major`.
 fn kiln_ir_for(src: &str, llvm_major: u32) -> Result<String, String> {
+    kiln_ir_compat(src, llvm_major, 19)
+}
+
+/// [`kiln_ir_for`] at `-fclang-compat=<clang_compat>`.
+fn kiln_ir_compat(src: &str, llvm_major: u32, clang_compat: u32) -> Result<String, String> {
     let sm = SourceManager::new();
     let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
@@ -54,7 +59,7 @@ fn kiln_ir_for(src: &str, llvm_major: u32) -> Result<String, String> {
         file,
         &engine,
         target.clone(),
-        &ParseOptions { clang_compat: 19, ..ParseOptions::default() },
+        &ParseOptions { clang_compat, ..ParseOptions::default() },
         ConstexprLimits::default(),
     );
     let errors: Vec<String> =
@@ -68,7 +73,7 @@ fn kiln_ir_for(src: &str, llvm_major: u32) -> Result<String, String> {
         ident: IDENT.to_owned(),
         llvm_major,
         // The oracle is clang 19 (`clang-19` below).
-        clang_compat: 19,
+        clang_compat,
         ..CodegenOptions::default()
     };
     let m = emit(&mut tu.ast, &mut tu.oven, &target, &opts).map_err(|e| format!("codegen: {e}"))?;
@@ -288,6 +293,32 @@ fn wide_signed_mul_overflow_is_inline() {
     if let Some(r) = opt(&ir) {
         r.unwrap_or_else(|e| panic!("IR does not verify: {e}\n{ir}"));
     }
+}
+
+/// clang's `annotate` on a statement ([dcl.attr.grammar]/5, [stmt.pre]/1;
+/// WP-1113): clang 22 accepts it and emits nothing for it, so the IR is
+/// that of the same statements without it (spec/codegen.md "clang
+/// `annotate`"). clang 19 rejects it, so `tests/codegen` cannot hold it.
+#[test]
+fn statement_annotate_emits_nothing() {
+    let body = |a: [&str; 4]| {
+        format!(
+            "int stmt(int x) {{\n  {}x = 2;\n  {}{{ x++; }}\n  \
+             {}for (int i = 0; i < 2; ++i) x += i;\n  {}return x;\n}}\n",
+            a[0], a[1], a[2], a[3]
+        )
+    };
+    let with = body([
+        "[[clang::annotate(\"st\")]] ",
+        "[[clang::annotate(\"st2\")]] ",
+        "[[clang::annotate(\"st3\", 1)]] ",
+        "[[clang::annotate(\"st4\")]] ",
+    ]);
+    let major = CodegenOptions::default().llvm_major;
+    let ir = kiln_ir_compat(&with, major, 22).unwrap_or_else(|e| panic!("kiln failed: {e}"));
+    let plain = kiln_ir_compat(&body([""; 4]), major, 22).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!ir.contains("annotation"), "{ir}");
+    assert_eq!(ir, plain);
 }
 
 /// [intro.abstract]/5 (P1494R5): `__builtin_observable_checkpoint()`

@@ -499,8 +499,9 @@ impl Sema<'_, '_> {
     /// The checks on an implicitly declared destructor or copy or move
     /// assignment operator `f` (of kind `kind`, type `ty`, declared at
     /// its class's location `at`) that overrides `overridden`
-    /// ([class.virtual]/4, /8): the return type of each overridden
-    /// function and its `final`, as for a declared overrider, under
+    /// ([class.virtual]/4, /8): the calling convention and return type
+    /// of each overridden function and its `final`, as for a declared
+    /// overrider, under
     /// clang's `while declaring the implicit ... for 'C'` context note
     /// (clang `DeclareImplicitCopyAssignment` → `CheckFunctionDeclaration`
     /// → `AddOverriddenMethods`, under `DeclaringSpecialMember`).
@@ -525,6 +526,9 @@ impl Sema<'_, '_> {
             inst_depth,
         });
         for &o in overridden {
+            // As for a declared overrider: calling convention, return
+            // type, `final`, each for every overridden function.
+            self.check_override_cc(name, at, ty, o);
             self.check_override_return(name, at, ty, o);
             self.check_overrides_final(name, at, o);
         }

@@ -10,7 +10,8 @@
 //! and every cache lives under the target directory (or, where advisory
 //! locks do not work there, a temporary directory removed afterwards):
 //! nothing here writes to the user's `~/.cache`. WP-1074 added the races
-//! with more compiles, a killed one, and a held or stuck entry lock.
+//! with more compiles, a killed one, and a held or stuck entry lock;
+//! WP-1050 the pruning of unused entries.
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
@@ -153,10 +154,10 @@ fn remarks(stderr: &str) -> Vec<String> {
         .collect()
 }
 
-/// The entry directories under `root`.
+/// The entry directories under `root` (not its `modules.timestamp`).
 fn entries(root: &Path) -> Vec<PathBuf> {
     let Ok(rd) = std::fs::read_dir(root) else { return Vec::new() };
-    let mut v: Vec<PathBuf> = rd.map(|e| e.unwrap().path()).collect();
+    let mut v: Vec<PathBuf> = rd.map(|e| e.unwrap().path()).filter(|p| p.is_dir()).collect();
     v.sort();
     v
 }
@@ -591,5 +592,148 @@ fn print_file_name_finds_the_manifest() {
         let rel = rest.split('"').nth(1).unwrap();
         assert!(printed.parent().unwrap().join(rel).is_file(), "{rel} from {}", printed.display());
     }
+    done(&d);
+}
+
+const DAY: u64 = 24 * 60 * 60;
+
+/// Sets the modification time of the file `f` to `secs` seconds ago.
+fn age_file(f: &Path, secs: u64) {
+    let t = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+    std::fs::File::options().write(true).open(f).unwrap().set_modified(t).unwrap();
+}
+
+/// How long ago the file `f` was modified, in seconds.
+fn age_of(f: &Path) -> u64 {
+    let t = std::fs::metadata(f).unwrap().modified().unwrap();
+    std::time::SystemTime::now().duration_since(t).map_or(0, |d| d.as_secs())
+}
+
+/// A made-up entry `<root>/<key>` whose module file and stamp were last
+/// written `secs` seconds ago.
+fn fake_entry(root: &Path, key: &str, secs: u64) -> PathBuf {
+    let e = root.join(key);
+    std::fs::create_dir_all(&e).unwrap();
+    for f in ["std.pcm", "std.stamp"] {
+        std::fs::write(e.join(f), "old").unwrap();
+        age_file(&e.join(f), secs);
+    }
+    e
+}
+
+/// WP-1050 (spec/driver.md "Module cache", spec/modules.md §11.12
+/// "Pruning"): as clang prunes its module cache. The first use creates
+/// `modules.timestamp` and prunes nothing; once it is older than the
+/// interval (7 days), a compile updates it and removes every other entry
+/// unused for longer than 31 days, but not one whose lock another compile
+/// holds, nor anything in the root that is not an entry, nor anything a
+/// link there points to. A hit notes its use on the stamp (not on the
+/// module file); within the interval nothing is scanned.
+#[test]
+fn prune_removes_unused_entries() {
+    let Some(d) = setup("prune") else { return };
+    let root = d.join("cache");
+    let args = ["-v", "-fmodules-cache-path=cache", "-fsyntax-only", "u.cpp"];
+    let r = remarks(&ok(&d, &args));
+    assert!(r.iter().all(|l| !l.starts_with("pruning")), "{r:?}");
+    let ts = root.join("modules.timestamp");
+    assert!(ts.is_file());
+    let own = entries(&root).remove(0);
+    let old = fake_entry(&root, &"a".repeat(32), 40 * DAY);
+    std::fs::write(old.join("std.pcm.tmp.42"), "partial").unwrap();
+    age_file(&old.join("std.pcm.tmp.42"), 40 * DAY);
+    let young = fake_entry(&root, &"b".repeat(32), DAY);
+    let other = fake_entry(&root, "not-an-entry", 40 * DAY);
+    let held = fake_entry(&root, &"c".repeat(32), 40 * DAY);
+    let lock = locks_exclude(scratch_base()).then(|| hold_lock(&held));
+    let outside = fake_entry(&d, "outside", 40 * DAY);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, root.join("d".repeat(32))).unwrap();
+    // This compile's own entry, unused as long, is kept: its hit notes
+    // the use first.
+    age_file(&own.join("std.stamp"), 40 * DAY);
+    age_file(&own.join("std.pcm"), 40 * DAY);
+    // Within the interval: nothing scanned.
+    age_file(&ts, 6 * DAY);
+    let r = remarks(&ok(&d, &args));
+    assert!(r.iter().all(|l| !l.starts_with("pruning")), "{r:?}");
+    assert!(old.is_dir() && age_of(&ts) >= 6 * DAY);
+    assert!(age_of(&own.join("std.stamp")) < 60, "a hit notes its use");
+    assert!(age_of(&own.join("std.pcm")) >= 40 * DAY, "the module file is not touched");
+    // A week later: pruned once.
+    age_file(&own.join("std.stamp"), 40 * DAY);
+    age_file(&ts, 8 * DAY);
+    let r = remarks(&ok(&d, &args));
+    assert!(r.contains(&format!("pruning '{}'", root.display())), "{r:?}");
+    let removed: Vec<&String> = r.iter().filter(|l| l.starts_with("removed")).collect();
+    let mut want = vec![format!("removed unused '{}'", old.display())];
+    if lock.is_none() {
+        // Where locks do not exclude, a held lock keeps nothing.
+        want.push(format!("removed unused '{}'", held.display()));
+    }
+    let mut removed: Vec<String> = removed.into_iter().cloned().collect();
+    removed.sort();
+    assert_eq!(removed, want, "{r:?}");
+    assert!(!old.exists());
+    assert!(age_of(&ts) < 60);
+    assert_eq!(names(&young), ["std.pcm", "std.stamp"]);
+    assert_eq!(names(&other), ["std.pcm", "std.stamp"]);
+    assert_eq!(names(&outside), ["std.pcm", "std.stamp"]);
+    assert_eq!(names(&own), ["std.pcm", "std.stamp"]);
+    if lock.is_some() {
+        assert_eq!(names(&held), ["std.compat.lock", "std.pcm", "std.stamp"]);
+    }
+    assert!(r.iter().all(|l| !l.starts_with("cannot")), "{r:?}");
+    // Once the holder is gone, the next pruning removes it.
+    if lock.is_some() {
+        drop(lock);
+        age_file(&ts, 8 * DAY);
+        let r = remarks(&ok(&d, &args));
+        assert!(r.contains(&format!("removed unused '{}'", held.display())), "{r:?}");
+    }
+    assert!(!held.exists() && young.is_dir() && outside.is_dir());
+    done(&d);
+}
+
+/// WP-1050: `-fmodules-prune-interval=` and `-fmodules-prune-after=` as in
+/// clang: seconds, 0 for either turns pruning off, an invalid value is an
+/// error; `--help` lists both.
+#[test]
+fn prune_flags() {
+    let Some(d) = setup("prune-flags") else { return };
+    let root = d.join("cache");
+    let base = ["-v", "-fmodules-cache-path=cache", "-fsyntax-only", "u.cpp"];
+    ok(&d, &base);
+    let ts = root.join("modules.timestamp");
+    let old = fake_entry(&root, &"a".repeat(32), 40 * DAY);
+    age_file(&ts, 8 * DAY);
+    for off in ["-fmodules-prune-interval=0", "-fmodules-prune-after=0"] {
+        let r = remarks(&ok(&d, &[&base[..], &[off]].concat()));
+        assert!(r.iter().all(|l| !l.starts_with("pruning")), "{off}: {r:?}");
+        assert!(old.is_dir() && age_of(&ts) >= 8 * DAY, "{off}");
+    }
+    // Two minutes since the last pruning, an hour since the last use:
+    // within the default interval, but not within these.
+    age_file(&ts, 120);
+    age_file(&old.join("std.pcm"), 7200);
+    age_file(&old.join("std.stamp"), 7200);
+    let r = remarks(&ok(&d, &base));
+    assert!(r.iter().all(|l| !l.starts_with("pruning")), "{r:?}");
+    let short = ["-fmodules-prune-interval=60", "-fmodules-prune-after=3600"];
+    let r = remarks(&ok(&d, &[&base[..], &short].concat()));
+    assert!(r.contains(&format!("removed unused '{}'", old.display())), "{r:?}");
+    assert!(!old.exists());
+    // clang's `unsigned` values.
+    let o = run(&d, &["-fmodules-prune-after=-1", "-fsyntax-only", "u.cpp"]);
+    assert_ne!(o.code, 0);
+    assert!(
+        o.stderr.contains("invalid integral value '-1' in '-fmodules-prune-after=-1'"),
+        "{}",
+        o.stderr
+    );
+    let help = Command::new(kilnpp()).arg("--help").output().unwrap();
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(help.contains("-fmodules-prune-interval=<seconds>"), "{help}");
+    assert!(help.contains("-fmodules-prune-after=<seconds>"), "{help}");
     done(&d);
 }

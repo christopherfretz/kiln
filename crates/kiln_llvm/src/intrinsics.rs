@@ -1021,3 +1021,19 @@ fn coro_await_suspend(m: &mut Module, which: Coro) -> FuncId {
     };
     declare(m, name, ret, &[(p, &[]), (p, &[]), (p, &[])], &[], Shape::Throws)
 }
+
+/// `void @llvm.var.annotation.p0.p0(ptr, ptr, ptr, i32, ptr)` and `ptr
+/// @llvm.ptr.annotation.p0.p0(ptr, ptr, ptr, i32, ptr)` (`[[clang::annotate]]`
+/// on a local variable / a field, WP-1113): `nocallback nofree nosync
+/// nounwind willreturn memory(inaccessiblemem: readwrite)`, the same in
+/// LLVM 19 and 22.
+pub fn annotation(m: &mut Module, on_ptr: bool) -> FuncId {
+    let p = ptr(m);
+    let (base, ret) =
+        if on_ptr { ("llvm.ptr.annotation", p) } else { ("llvm.var.annotation", TypeId::VOID) };
+    let name = overloaded_name(m, base, &[p, p]);
+    let params: [(TypeId, &[Attr]); 5] =
+        [(p, &[]), (p, &[]), (p, &[]), (TypeId::I32, &[]), (p, &[])];
+    let mem = MemoryEffects { inaccessiblemem: ModRef::ReadWrite, ..MemoryEffects::default() };
+    declare(m, &name, ret, &params, &[], Shape::Basic(Some(mem)))
+}
