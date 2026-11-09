@@ -2089,9 +2089,8 @@ mod tests {
         assert!(a.pch.emit);
         assert_eq!(a.includes, ["p.hxx"]);
         assert!(a.is_header_input(&a.inputs[0]));
-        let a = parse(
-            "-Xclang -include-pch -Xclang p.hxx.pch -Xclang -include -Xclang p.hxx -c m.cpp",
-        );
+        let a =
+            parse("-Xclang -include-pch -Xclang p.hxx.pch -Xclang -include -Xclang p.hxx -c m.cpp");
         assert!(a.errors.is_empty(), "{:?}", a.errors);
         assert_eq!(a.pch.include.as_deref(), Some("p.hxx.pch"));
         assert_eq!(a.includes, ["p.hxx"]);

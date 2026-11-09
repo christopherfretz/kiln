@@ -284,19 +284,23 @@ fn options(args: &Args, tc: &Toolchain, std: LangStd) -> Vec<(&'static str, OptV
     v.push(("GNU extensions", b(std.gnu), Compat::All));
     v.push(("exception handling", b(get("exceptions") == "-fexceptions"), Compat::All));
     v.push(("run-time type information", b(get("rtti") == "-frtti"), Compat::All));
-    v.push(("freestanding implementation", b(get("freestanding") == "-ffreestanding"), Compat::All));
     v.push((
-        "__OPTIMIZE__ predefined macro",
-        b(p.opt != kiln_pp::OptLevel::None),
-        Compat::Below22,
+        "freestanding implementation",
+        b(get("freestanding") == "-ffreestanding"),
+        Compat::All,
     ));
+    v.push(("__OPTIMIZE__ predefined macro", b(p.opt != kiln_pp::OptLevel::None), Compat::Below22));
     v.push((
         "__OPTIMIZE_SIZE__ predefined macro",
         b(p.opt == kiln_pp::OptLevel::Size),
         Compat::Below22,
     ));
     v.push(("signed char", b(get("char") == "-fsigned-char"), Compat::All));
-    v.push(("sized deallocation", b(get("sized-deallocation") == "-fsized-deallocation"), Compat::All));
+    v.push((
+        "sized deallocation",
+        b(get("sized-deallocation") == "-fsized-deallocation"),
+        Compat::All,
+    ));
     v.push(("C++26 reflection", b(get("reflection") == "-freflection"), Compat::All));
     v.push((
         "reflection mangling",
@@ -482,11 +486,13 @@ fn check(
             continue;
         }
         let d = match (old, &cur) {
-            (OptVal::Bool(o), OptVal::Bool(c)) => Diag::new(DiagId::drv_pch_config_bool, Span::INVALID)
-                .arg(desc)
-                .arg(u8::from(*o))
-                .arg(pch)
-                .arg(u8::from(*c)),
+            (OptVal::Bool(o), OptVal::Bool(c)) => {
+                Diag::new(DiagId::drv_pch_config_bool, Span::INVALID)
+                    .arg(desc)
+                    .arg(u8::from(*o))
+                    .arg(pch)
+                    .arg(u8::from(*c))
+            }
             _ => Diag::new(DiagId::drv_pch_config_value, Span::INVALID).arg(desc).arg(pch),
         };
         d.emit(e);
@@ -652,10 +658,7 @@ fn produce_one(
         cwd: here.display().to_string(),
         main: input.path.clone(),
         includes: args.includes.clone(),
-        opts: options(args, tc, std)
-            .into_iter()
-            .map(|(d, v, _)| (d.to_owned(), v))
-            .collect(),
+        opts: options(args, tc, std).into_iter().map(|(d, v, _)| (d.to_owned(), v)).collect(),
         target: tc.target.triple.to_owned(),
         macros: macros(args),
         files,
@@ -727,7 +730,10 @@ mod tests {
     /// clang `collectMacroDefinitions` (WP-1023).
     #[test]
     fn macro_states() {
-        let a = Args::parse_as("kiln++", &["-DA", "-DB=2", "-UA", "-DC=x\ny", "-DB=3"].map(String::from));
+        let a = Args::parse_as(
+            "kiln++",
+            &["-DA", "-DB=2", "-UA", "-DC=x\ny", "-DB=3"].map(String::from),
+        );
         assert_eq!(
             macros(&a),
             [("A".into(), None), ("B".into(), Some("3".into())), ("C".into(), Some("x".into()))]
