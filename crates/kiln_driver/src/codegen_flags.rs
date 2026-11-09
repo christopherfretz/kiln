@@ -14,21 +14,26 @@
 //!    `-f[no-]split-stack`, `-finstrument-functions[-after-inlining]`,
 //!    `-finstrument-function-entry-bare`, `-f[no-]xray-instrument`,
 //!    `-fxray-instruction-threshold=`, `-fxray-ignore-loops`; and WP-873's
-//!    `-flto[=full|thin|auto|jobserver]`, `-fno-lto`, `-f[no-]split-lto-unit`);
+//!    `-flto[=full|thin|auto|jobserver]`, `-fno-lto`, `-f[no-]split-lto-unit`;
+//!    and WP-1032's `-ftrapv`, `-fno-trapv` (a kiln spelling: clang has
+//!    none, GCC's cancels `-ftrapv`) and `-ftrapv-handler=`);
 //! 2. accepted and ignored: no observable effect in kiln
 //!    (`-f[no-]stack-clash-protection`,
-//!    `-f[no-]common`, `-fstack-usage`, the defaults `-fno-trapv`,
+//!    `-f[no-]common`, `-fstack-usage`, the defaults
 //!    `-fno-short-enums` and `-m64`, and `-pipe`), or deliberately ignored
 //!    although clang honours it (WP-873: `-fdiagnostics-show-template-tree`,
 //!    `-f[no-]strict-vtable-pointers`, `-f[no-]vectorize`,
 //!    `-f[no-]slp-vectorize`, `-f[no-]tree-[slp-]vectorize`,
 //!    `-fno-fat-lto-objects`; WP-982: `-f[no-]modules-reduced-bmi`;
 //!    spec/driver.md "Codegen flags");
-//! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
-//!    `-fshort-enums`, the other `-fxray-*` options,
-//!    `-finstrument-functions-exclude-*` and `-ffat-lto-objects`). The floating-point flags are
-//!    `crate::fp_flags`'s; the coverage and profiling flags
-//!    `crate::coverage_flags`'s (WP-941).
+//! 3. rejected with "'<flag>' is not supported by kiln"
+//!    (`-fshort-enums`, the other `-fxray-*` options,
+//!    `-finstrument-functions-exclude-*` and `-ffat-lto-objects`).
+//!
+//! The floating-point flags are `crate::fp_flags`'s, the coverage and
+//! profiling flags `crate::coverage_flags`'s (WP-941), and the sanitizer
+//! flags, `-f[no-]sanitize-merge[=]` and `-fsanitize-ignorelist=` among
+//! them, `crate::sanitize`'s.
 //!
 //! `-Wp,<args>` and `-Xpreprocessor <arg>` are spliced into the command
 //! line before parsing ([`splice_preprocessor_args`]).
@@ -58,6 +63,10 @@ pub struct CodegenFlags {
     pub wrapv: Option<bool>,
     /// The last of `-fwrapv-pointer` / `-fno-wrapv-pointer` (clang 20+).
     pub wrapv_pointer: Option<bool>,
+    /// The last of `-ftrapv` (true) / `-fno-trapv` (WP-1032).
+    pub trapv: bool,
+    /// The last `-ftrapv-handler=<name>` (empty: none).
+    pub trapv_handler: Option<String>,
     /// The last of `-fstrict-overflow` / `-fno-strict-overflow`.
     pub strict_overflow: Option<bool>,
     /// The last of `-fdelete-null-pointer-checks` /
@@ -148,7 +157,6 @@ const IGNORED: &[&str] = &[
     "-fcommon",
     "-fno-common",
     "-fstack-usage",
-    "-fno-trapv",
     "-fno-short-enums",
     // Every target kiln has is 64-bit (`-m32` stays unknown).
     "-m64",
@@ -179,7 +187,6 @@ const IGNORED: &[&str] = &[
 
 /// Flags rejected (class 3), exactly as written.
 const REJECTED: &[&str] = &[
-    "-ftrapv",
     "-fshort-enums",
     // Bitcode plus object code in one `.o` (WP-873 follow-up).
     "-ffat-lto-objects",
@@ -210,6 +217,8 @@ impl CodegenFlags {
             "-fno-c++-static-destructors" => self.static_destructors = StaticDestructors::None,
             "-fwrapv" => set(&mut self.wrapv, true),
             "-fno-wrapv" => set(&mut self.wrapv, false),
+            "-ftrapv" => self.trapv = true,
+            "-fno-trapv" => self.trapv = false,
             "-fwrapv-pointer" => set(&mut self.wrapv_pointer, true),
             "-fno-wrapv-pointer" => set(&mut self.wrapv_pointer, false),
             "-fstrict-overflow" => set(&mut self.strict_overflow, true),
@@ -276,6 +285,7 @@ impl CodegenFlags {
                 "thin" => self.lto = Some(true),
                 _ => return unsupported(),
             },
+            "-ftrapv-handler" => self.trapv_handler = Some(v.to_owned()),
             "-mtune" => {
                 if v.is_empty() {
                     return unsupported();
@@ -392,7 +402,8 @@ impl CodegenFlags {
     /// Signed overflow is defined: the last of `-f[no-]wrapv`, else
     /// `-fno-strict-overflow` (clang `RenderSCPOptions`… `-fwrapv`).
     pub fn wrapv(&self) -> bool {
-        self.wrapv.or(self.strict_overflow.map(|s| !s)).unwrap_or(false)
+        // `-ftrapv` wins (clang `SOB_Trapping`, set after `SOB_Defined`).
+        !self.trapv && self.wrapv.or(self.strict_overflow.map(|s| !s)).unwrap_or(false)
     }
 
     /// Pointer overflow is defined: at `-fclang-compat=19` the same as
@@ -651,9 +662,8 @@ mod tests {
         ] {
             assert_eq!(parse(&[a]).1, [Some(Ok(()))], "{a}");
         }
-        for a in ["-ftrapv", "-fshort-enums"] {
-            assert_eq!(parse(&[a]).1, [Some(Err(ArgError::UnsupportedByKiln(a.into())))], "{a}");
-        }
+        let a = "-fshort-enums";
+        assert_eq!(parse(&[a]).1, [Some(Err(ArgError::UnsupportedByKiln(a.into())))], "{a}");
         assert_eq!(parse(&["-fbogus"]).1, [None]);
         assert_eq!(parse(&["-mtune=x86-64"]).0.mtune.as_deref(), Some("x86-64"));
     }

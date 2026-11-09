@@ -135,3 +135,12 @@ depend on the host's GCC installations (WP-228).
 - The quote (`"..."`) list is empty because there are no `-iquote` or `-I`
   flags. The resource dir always comes after the C++ stdlib dirs and before
   `/usr/local/include`.
+
+## share/ — default sanitizer ignorelists
+
+Unmodified copies of clang 19.1.7's `share/asan_ignorelist.txt`,
+`hwasan_ignorelist.txt` and `msan_ignorelist.txt` (Apache-2.0 WITH
+LLVM-exception, as `include/LICENSE.TXT`). As clang does, kiln applies the
+list of each enabled sanitizer unless `-fno-sanitize-ignorelist` is given
+(`spec/driver.md` "Sanitizers", WP-1032). clang's `cfi_ignorelist.txt` and
+`dfsan_abilist.txt` are left out: kiln supports neither sanitizer.

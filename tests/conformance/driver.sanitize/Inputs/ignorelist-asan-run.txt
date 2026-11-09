@@ -1,0 +1,3 @@
+# The ASan instrumentation ignorelist-asan-run.cpp turns off (WP-1032).
+[address]
+fun:_Z12skipped_readPKci
