@@ -80,7 +80,7 @@ impl SpecialKind {
     /// implicit special member eagerly to resolve overloads (clang
     /// `needsOverloadResolutionFor*`); a module's declaration image does
     /// not carry such a class yet (spec/modules.md §11.11 "Classes").
-    pub(crate) fn any_needs_overload(bits: kiln_ast::decl::DefinitionBits) -> bool {
+    pub(crate) fn any_needs_overload(bits: DefinitionBits) -> bool {
         SpecialKind::ALL.into_iter().any(|k| implicit::needs_ovl_from(bits, k))
     }
 
