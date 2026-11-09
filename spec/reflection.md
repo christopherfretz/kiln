@@ -44,16 +44,22 @@ Section references in brackets are to the C++26 IS.
    mode (`cargo xtask test --meta-header`, spec/harness.md) runs that
    corpus again over the real header, so the two cannot drift. libc++ 22
    ships no `<meta>`.
-4. **Flag** (D6). Everything here requires `-freflection` and
-   `-std=c++26`; without the flag the lexer produces none of `^^`, `[:`,
-   `:]` and no rule below is reachable (implemented:
-   `reflection/flag-off.cpp`). Turning it on by default at `-std=c++26` is
-   an operator decision taken after M6.
-5. **Feature macros** (WP-484), GCC 16.1's values under
-   `-freflection`: `__cpp_impl_reflection 202603L`; with `<meta>`,
+4. **Flag** (D6; default per operator decision Q7, WP-920). Everything
+   here requires C++26 (`-std=c++26`/`gnu++26`), where reflection is **on
+   by default**; `-fno-reflection` turns it off and the last of
+   `-freflection`/`-fno-reflection` wins (`-freflection` alone is a
+   no-op there; implemented: `reflection/default-on.cpp`). Off, the lexer
+   produces none of `^^`, `[:`, `:]` and no rule below is reachable
+   (implemented: `reflection/flag-off-26.cpp`). Below C++26 nothing
+   changes from before WP-920: reflection is off whatever the flag, an
+   explicit `-freflection` is accepted silently but lexes no reflection
+   token and predefines no `__cpp_impl_reflection` (implemented:
+   `reflection/flag-off.cpp`, `reflection/below-26-flag.cpp`). The cost
+   of the default is recorded in docs/status/oss.md "WP-920".
+5. **Feature macros** (WP-484), GCC 16.1's values with reflection on: `__cpp_impl_reflection 202603L`; with `<meta>`,
    `__cpp_lib_reflection 202603L` and `__cpp_lib_define_static 202506L`.
    GCC 16.1 defines no separate consteval-block or annotation macro.
-   kiln predefines `__cpp_impl_reflection` under `-freflection` at C++26
+   kiln predefines `__cpp_impl_reflection` whenever reflection is on
    (WP-525: libstdc++ 16's `<meta>` is empty without it; spec/driver.md
    "Predefines"); the library macros are the header's own (`<version>`
    keys them on `__cpp_impl_reflection`), and both are GCC-compared by

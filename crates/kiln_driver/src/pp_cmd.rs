@@ -168,8 +168,9 @@ impl Job<'_> {
         cfg.threadsafe_statics = p.threadsafe_statics.unwrap_or(true);
         cfg.sized_deallocation = p.sized_deallocation.unwrap_or(true);
         cfg.kiln_version = crate::version::triple();
+        cfg.version_macro = Some(format!("kiln {}", crate::version::VERSION));
         cfg.clang_compat = p.clang_compat;
-        cfg.reflection = p.reflection;
+        cfg.reflection = p.reflection_for(&self.std);
         cfg.std_float_aliases =
             self.args.stdlib.unwrap_or_default() != crate::toolchain::StdLib::LibCxx;
         Some(build_predefines(&base, &cfg, &self.args.macros))
@@ -184,7 +185,7 @@ impl Job<'_> {
         o.dollar_in_identifiers = a.dollars.unwrap_or(true);
         o.keep_comments = a.print.comments || a.print.macro_comments;
         o.keep_macro_comments = a.print.macro_comments;
-        o.reflection = a.predef.reflection;
+        o.reflection = a.predef.reflection_for(&self.std);
         o.char8 = a.predef.char8_t;
         o.predefines = predefines;
         if let Some(epoch) = time::reproducible_epoch(a.reproducible_time) {
@@ -299,6 +300,15 @@ impl Job<'_> {
         }
         let mut opts = self.pp_options(predefines);
         opts.parser_pragmas = staged;
+        if !staged {
+            // `-E -dD`/`-dI` print the directives in place (`-dM` and
+            // `-M` print no text); `-M -MG` lists a missing header
+            // instead of reporting it.
+            let printing = a.deps.only.is_none() && !a.print.macros_only;
+            opts.dump_defines = printing && a.print.defines_too;
+            opts.dump_includes = printing && a.print.includes_too;
+            opts.suppress_include_not_found = a.deps.missing_generated && a.deps.only.is_some();
+        }
         // Modules for the modes that run sema, from C++20 (spec/modules.md
         // §2); `-E`/`-M` keep the directives as text.
         if staged && self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx20 {

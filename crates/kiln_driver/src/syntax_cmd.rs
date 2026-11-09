@@ -191,7 +191,7 @@ impl SyntaxJob<'_> {
             rtti: a.predef.rtti.unwrap_or(true),
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
-            reflection: a.predef.reflection,
+            reflection: a.predef.reflection_for(&job.std),
             coro_aligned_allocation: a.predef.coro_aligned_allocation,
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),

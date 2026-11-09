@@ -18,7 +18,8 @@ kiln extensions.
 ## Method
 
 Each project is built with kiln (`kiln++`) as the C++ compiler, through
-the project's own build system (CMake), at a pinned tag
+the project's own build system (CMake; Meson and autotools for the two
+rows under "Build systems"), at a pinned tag
 ([scripts/oss/projects.toml](../scripts/oss/projects.toml)). Then the
 project's own test suite runs. A control build of the same tree, with the
 same flags and test filter, uses clang++-19 (g++-16 for mp-units, which
@@ -145,6 +146,52 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [scnlib](status/oss/scnlib.md) | `v4.0.1` | full ctest suite | libstdc++ 14 | **Flawless**: 25/25 | WP-792 |
 | [stdexec](status/oss/stdexec.md) | `nvhpc-26.05` | full test suite, including the `*_fail` tests that match error text | libstdc++ 14 | **Flawless**: 907/907 | WP-789 |
 | [Z3](status/oss/z3.md) | `z3-4.15.8` | `test-z3 /a`, and the shell on the SMT-LIB2 examples | libstdc++ 14 | **Flawless**: every test and example gives the control's output, apart from timings | WP-799 |
+
+## Build systems
+
+kiln defines clang's macros but names itself kiln in text (operator
+decision Q3; spec/driver.md "Identity"). What each build system reads,
+and what it concludes about kiln (WP-920):
+
+- **CMake** (3.31, every project above): the compiler ID comes from
+  compiling `CMakeCXXCompilerId.cpp`, which tests `__clang__` and reads
+  `__clang_major__`/`__clang_minor__`/`__clang_patchlevel__`. CMake reports
+  `The CXX compiler identification is Clang 22.1.8` (the compatibility
+  version, 19.1.7 under `-fclang-compat=19`) and uses its Clang rules. The
+  implicit link directories and libraries come from the `-v` link lines,
+  which the backing clang++ prints. CMake matches `clang version` text
+  only for CUDA, HIP and assembler vendor detection, which kiln does not
+  serve. Works unchanged.
+- **Autotools** (hunspell's configure: autoconf 2.69, automake, libtool): `AC_PROG_CXX` decides
+  "GNU C++" from `__GNUC__` (kiln: 4.2.1, as clang). It runs `--version`,
+  `-v`, `-V` and `-qversion` only to log them in `config.log`. libtool
+  asks `-print-prog-name=ld` for the linker and reads `-shared -v` for
+  the C++ runtime libraries (`postdeps`). Works unchanged:
+  [hunspell](status/oss.md) row below.
+- **Meson** (1.12.1, `mesonbuild/compilers/detect.py`): it runs
+  `--version` and requires the word `clang` or `Clang` somewhere in the
+  output; anything else is `Unknown compiler(s)` and configure stops
+  (`Free Software Foundation` would make it GCC). It then takes the first
+  `\d{1,2}(\.\d+)+` token as the version, and detects the linker with
+  `-Wl,--version` (which kiln now runs as a linker-only job, as clang).
+  kiln's `--version` (`kiln version 0.0.1 ...`) has no `clang`, so plain
+  Meson rejects kiln. This cannot be fixed without the word: the options
+  are (a) leave `--version` clean and have Meson users go through a
+  wrapper or a Meson native file that names kiln as clang (what the
+  harness does today, below); (b) a `--version` line that contains
+  `clang` without saying `clang version`, such as `clang-compatible
+  22.1.8 (kiln version 0.0.1)`, which Meson reads as Clang 22.1.8; or
+  (c) (b) behind an opt-in flag or environment variable. Choosing is an
+  operator decision; kiln ships (a). The OSS harness's compiler wrapper
+  (`scripts/oss/kiln-cxx`) prints `clang-compatible <-dumpversion>
+  (kiln-cxx Meson shim, WP-920)` before kiln's own banner, only under
+  `KILN_OSS_VERSION_SHIM` (set by `oss-build.sh` for Meson rows) and only
+  when the banner lacks `clang`.
+
+| project | build system | version / tag | scope validated | std lib(s) | rating and result vs clang | notes / WP |
+|---|---|---|---|---|---|---|
+| hunspell | autotools | `v1.7.2` (release tarball) | `make check`, 130 tests | libstdc++ 14 | **Flawless**: 130/130 | WP-920 |
+| jsoncpp | Meson | `1.9.6` | `meson test`, 3 tests (the unit test runs 68 cases) | libstdc++ 14 | **Flawless**: 3/3 | WP-920; through the harness's Meson shim |
 
 ## x86_64
 

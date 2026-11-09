@@ -41,7 +41,11 @@ Options are parsed the way clang parses them. A valued option takes its
 value joined (`-Ifoo`, `-std=c++20`, `--target=x`) or as the next argument
 (`-I foo`, `-target x`). `-std`, `--sysroot`, `-resource-dir`, and
 `-target`/`--target` also accept `=`. A lone `-` and any argument not
-starting with `-` are inputs.
+starting with `-` are inputs. Linker inputs (`-l<lib>`, `-Wl,<args>`,
+`-Xlinker <arg>`) count as inputs for `no input files`, as clang's: with
+nothing else, `kiln++ -Wl,--version` runs the link step alone (the
+linker prints its version; Meson's linker probe, WP-920), and `-c
+-Wl,--version` warns `'linker' input unused`.
 
 | option | effect |
 |---|---|
@@ -66,7 +70,9 @@ starting with `-` are inputs.
 | `--target=<triple>` | `aarch64`/`arm64` or `x86_64`/`amd64` Linux; anything else is an error |
 | `-march=<arch>[+ext...]`, `-mcpu=<cpu>[+ext...]`, `-msve-vector-bits=<N\|scalable>`, `-target-feature <±feat>` (usually via `-Xclang`) | AArch64 target features and the `__ARM_*` predefines ("Target features" below, WP-459, WP-469) |
 | `--embed-dir=<dir>` | `#embed` search directory |
-| `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP` | dependency output (see below) |
+| `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP`, `-MG` | dependency output (see below) |
+| `-MJ <file>` | the JSON compilation-database fragment (see "`-MJ`", WP-920) |
+| `-dumpversion`, `-dumpmachine`, `-print-*` | toolchain probes (see "Toolchain probes", WP-920) |
 | `-trigraphs`, `-ftrigraphs`, `-fno-trigraphs` | trigraphs (default: on only for strict C and C++ before 17) |
 | `-f[no-]dollars-in-identifiers` | `$` in identifiers (default on) |
 | `-O*` | also selects `llc`'s level and the `opt` pipeline, and is passed to the link (see "Code generation") |
@@ -83,7 +89,7 @@ starting with `-` are inputs.
 | `-ffile-prefix-map=<old>=<new>`, `-fmacro-prefix-map=<old>=<new>` | `__FILE__`, `__BASE_FILE__`, `__builtin_FILE()`, `std::source_location` and `std::meta::source_location_of` spell a path starting with `<old>` with `<new>` instead (`SourceManager::remap_macro_path`; clang `processPathForFileMacro`). Entries are tried in descending order of `<old>`, the first match wins, and the match is a plain string prefix. A value without `=` is `invalid value` (deviation 20). `-ffile-prefix-map=` also remaps debug information file names, as `-fdebug-prefix-map=` does ("Debug information flags") |
 | `-fcontract-evaluation-semantic=<ignore\|observe\|enforce\|quick_enforce>` | the contract evaluation semantic of the translation unit (GCC's spelling; `quick-enforce` also accepted; default `enforce`; `ParseOptions::contract_semantic`, `Ast::contract_semantic`); any other value is `unsupported argument`. Until WP-707 only `ignore` compiles a program with contracts to IR; the others are `unsupported: contract evaluation (WP-707)` (spec/contracts.md §6) |
 | `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
-| `-f[no-]reflection` | kiln: the P2996 reflection spike (WP-267; default off; the last one wins): `^^`, `[:`, `:]` are lexed (C++26 only), and `^^`, type splices and the kiln intrinsics are accepted (spec/sema.md §8a, spec/parse.md §5.2). `__cpp_reflection` is not predefined. Passed to the preprocessor, the parser and sema for `-E`, `-fsyntax-only` and codegen jobs |
+| `-f[no-]reflection` | P2996 reflection (WP-267; on by default at C++26 since WP-920, operator decision Q7; the last one wins; below C++26 off whatever the flag, an explicit `-freflection` accepted and ignored; spec/reflection.md §1.4): `^^`, `[:`, `:]` are lexed, and `^^`, type splices and the kiln intrinsics are accepted (spec/sema.md §8a, spec/parse.md §5.2). `__cpp_reflection` is not predefined. Passed to the preprocessor, the parser and sema for `-E`, `-fsyntax-only` and codegen jobs |
 | `-fkiln-reflection-mangling=<kiln\|gcc\|kiln-hashed>` | kiln: how a `std::meta::info` template argument is spelled in a symbol (`kiln_abi::ReflectionMangling`, `CodegenOptions::reflection_mangling`; WP-501). `kiln` (the default): `L u6__info <kind> <operand> E`; `gcc`: GCC 16.1's `L Dm <kind> <operand> E` with `info` itself `Dm`, link-compatible with `g++-16`; `kiln-hashed`: `L u6__info h<32 hex> E`, a prototype. All three give the reflection its reflectee's linkage (spec/reflection.md §8.3). Any other value is `invalid value`; the last one wins. Codegen jobs only |
 | `-f[no-]coro-aligned-allocation` | aligned coroutine frame allocation (default off, as clang; the last one wins): sema looks up the `std::align_val_t` forms of the frame's `operator new`/`delete` first (spec/sema.md §7.13). Passed to sema for `-fsyntax-only` and codegen jobs |
 | `-fconstexpr-report=<path>` | kiln: write the per-TU NDJSON constant-evaluation report (spec/oven.md "Reporting protocol"); `-fsyntax-only` and every codegen job |
@@ -117,7 +123,8 @@ starting with `-` are inputs.
 | `-fvisibility=default\|hidden\|protected\|internal`, `-fvisibility-ms-compat`, `-f[no-]visibility-inlines-hidden` | the default symbol visibility (`CodegenOptions::visibility` / `type_visibility` / `inlines_hidden`, spec/codegen.md "Symbol visibility and `dso_local`", WP-544): the last `-fvisibility=` or `-fvisibility-ms-compat` wins; `internal` is `hidden`, as clang; `-fvisibility-ms-compat` is hidden value visibility with default type visibility (vtables, RTTI), accepted silently as by clang. `-fvisibility-inlines-hidden` hides inline functions that are not explicit instantiations (the last of the pair wins). An unknown value is clang's `-cc1` error `invalid value '<v>' in '-fvisibility=<v>'` (no `kiln++:` prefix, once per input, as the `-std=` one), unless a later `-fvisibility=`/`-fvisibility-ms-compat` replaces it (clang forwards only the last) |
 | `-g`, `-g0`..`-g3`, `-ggdb*`, `-gline-tables-only`, `-gdwarf-N`, `-gsplit-dwarf`, `-gz`, ... | DWARF debug information; see "Debug information flags" below (WP-814) |
 | `-l<lib>`, `-L<dir>`, `-B<dir>`, `-Wl,<args>`, `-Xlinker <arg>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs |
-| `-dD`, `-dI` | parsed; "not implemented yet" (WP-017) |
+| `-dD` | with `-E`: the text, plus every `#define`/`#undef` where it occurs, the predefines' and command line's first (as clang's; WP-920) |
+| `-dI` | with `-E`: the text, plus every `#include`/`#include_next`/`#import` directive as `#include "x.h" /* clang -E -dI */` before the header's text (clang's spelling, WP-920) |
 | `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name is accepted and ignored |
 | `-f[no-]fast-math`, its parts, `-ffp-model=`, `-ffp-contract=`, `-fdenormal-fp-math=`, the FP environment flags | see "Floating-point flags" (WP-806) |
 | `-fstack-protector*`, `-f[no-]unwind-tables`, `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-ffunction-sections`, `-fdata-sections`, `-mtune=`, `-f[no-]wrapv`, `-f[no-]strict-overflow`, `-f[no-]delete-null-pointer-checks`, `-Wp,<list>`, `-Xpreprocessor <arg>`, and the ignored and rejected sets | see "Codegen flags" (WP-605) |
@@ -645,9 +652,10 @@ The `<built-in>` buffer is `kiln_pp::build_predefines(base, cfg, -D/-U)`.
   - `-stdlib=libc++`: no `__STDCPP_FLOAT16_T__` ... `__STDCPP_BFLOAT16_T__`
     (`std_float_aliases`; libc++ has no `<stdfloat>`, spec/pp.md P1467
     macros).
-- `-freflection` at C++26: `__cpp_impl_reflection 202603L` (GCC 16.1's
-  value, `g++-16 -std=c++26 -freflection -dM -E`; libstdc++ 16's `<meta>`
-  keys on it; spec/reflection.md §1 item 5).
+- Reflection on (the default at C++26 unless `-fno-reflection`, WP-920;
+  never below C++26): `__cpp_impl_reflection 202603L` (GCC 16.1's value,
+  `g++-16 -std=c++26 -freflection -dM -E`; libstdc++ 16's `<meta>` keys on
+  it; spec/reflection.md §1 item 4-5).
 - kiln adds `__KILN__ 1`, `__KILN_MAJOR__`, `__KILN_MINOR__` and
   `__KILN_PATCH__` (WP-927), the components of the version ("Version"). kiln
   defines `__clang__` and the clang version macros exactly as clang 19 does,
@@ -981,6 +989,34 @@ This is clang's `DependencyCollector` and `DependencyFileGenerator`.
   error the preprocessor lexes on to the end, its diagnostics dropped,
   so the list is complete. An `#include` whose file is not found writes
   no file (clang's `SeenMissingHeader`).
+- `-MG` (WP-596, WP-920): under `-M`/`-MM`, an `#include` whose file is
+  not found is no error; the header is listed as spelled (a generated
+  file the build will make) and preprocessing goes on without it, as
+  clang's. Without `-M` or `-MM` it is the driver error `option '-MG'
+  requires '-M' or '-MM'` (`drv_mg_requires_m_or_mm`).
+
+### `-MJ`
+
+`-MJ <file>` writes clang's JSON compilation-database fragment
+(`Clang::DumpCompilationDatabase`, `crates/kiln_driver/src/cdb.rs`): one
+line per frontend job (`-E`, `-M`, `-fsyntax-only`, each source of `-S`,
+`-c` or a link),
+
+```
+{ "directory": "<cwd>", "file": "<input>", "output": "<out>", "arguments": ["<exe>", "-x<type>", "<input>", "-o", "<out>", "--driver-mode=g++", <the command line>, "--target=<triple>"]},
+```
+
+which build systems concatenate into `compile_commands.json`. `output` is
+left out under `-fsyntax-only`; a link names each source's temporary
+object; `--driver-mode=g++` only under `kiln++`. The command line is
+clang's rendering: without the inputs, `-o`, `-x`, `-MJ` and the other
+dependency options, a separately valued option as two strings (`-D`,
+`X=1`), `-target X` as `--target=X`. The file is truncated once per run
+and written whatever the jobs' outcome; `-###` writes none (clang's). A
+file that cannot be written is the driver error `compilation database
+'<file>' could not be opened: <reason>` (`drv_compilation_database`),
+exit 1. The executable path is kiln's own, the one difference from a
+clang fragment.
 
 ## Output, diagnostics, exit status
 
@@ -1212,7 +1248,7 @@ and `codegen`.
 - `-print-resource-dir` / `--print-resource-dir` prints the resource
   directory (`-resource-dir`, else the default, "Toolchain") and a
   newline to standard output and exits 0, whatever else is given, as
-  clang does (WP-667).
+  clang does (WP-667). It is one of the toolchain probes below.
 - `--help` prints a short summary of the implemented options and the
   two names' language rule (the usage line says `kiln` under both names).
 
@@ -1224,7 +1260,7 @@ docs/STABILITY.md; it is changed there and nowhere else (WP-927).
 `kiln_driver::version` is the only reader:
 
 - `VERSION` (`CARGO_PKG_VERSION`) is what `--version`, `-v`,
-  `!llvm.ident` (`kiln version <v>`) and the release archive names
+  `__VERSION__` (`kiln <v>`), `!llvm.ident` (`kiln version <v>`) and the release archive names
   (`kiln-<v>-<triple>.tar.xz`) show;
 - `MAJOR`, `MINOR`, `PATCH` are `__KILN_MAJOR__`, `__KILN_MINOR__`,
   `__KILN_PATCH__` ("Predefines") and `MAJOR` names the installed
@@ -1235,8 +1271,57 @@ docs/STABILITY.md; it is changed there and nowhere else (WP-927).
   workspace is the root of a git work tree (a source archive unpacked
   inside another repository does not take that repository's commit),
   else none; a build without git or `.git` records nothing and succeeds.
-  `long_version()` is `<v> (<sha>)`. The identity text that shows it is
-  WP-920's.
+  `long_version()` is `<v> (<sha>)`. The identity text is "Identity"
+  (WP-920); `-dumpversion` prints the compatibility version, not `<v>`.
+
+## Identity (operator decision Q3, WP-920)
+
+kiln keeps clang's macros, so headers and build systems that test them
+take their clang paths: `__clang__`, `__clang_major__`/`__clang_minor__`/
+`__clang_patchlevel__` (the compatibility level, `-fclang-compat=`),
+`__clang_version__`, `__llvm__`, and GCC's `__GNUC__ 4.2.1`. It does not
+call itself clang in text: `--version`, `-v` and `-###` print `kiln
+version <v> ...` ("`-v`, `--version`, `--help`"), and `__VERSION__` is
+`"kiln <v>"`. No output of kiln's own says `clang version`; the one
+exception is a link run with `-v`, which relays the backing clang++'s own
+banner to standard error (the link is that program's work). `<v>` is
+`kiln_driver::version::VERSION` ("Version"), which every identity string
+reads.
+
+`-dumpversion` prints the **compatibility version**, the one the clang
+macros spell (`22.1.8`, `19.1.7` under `-fclang-compat=19`), not kiln's
+own `<v>`: configure scripts compare it with clang release thresholds
+(a CMake or autotools check for "clang >= 15" would fail on `0.0.1`), and
+it agrees with `__clang_major__.__clang_minor__.__clang_patchlevel__`.
+clang prints the same triple; GCC prints its major version only.
+
+What the build systems key on (WP-920; docs/COMPATIBILITY.md "Build
+systems" has the detail): CMake identifies the compiler from the macros
+(`Clang`, the compatibility version); autotools from `__GNUC__` (GNU)
+and libtool from `-print-prog-name=ld` and `-v` link lines; Meson from
+`--version` text, where it requires the word `clang` and so does not
+recognise kiln without the harness's shim (`scripts/oss/kiln-cxx`,
+`KILN_OSS_VERSION_SHIM`).
+
+## Toolchain probes (WP-920)
+
+Each prints one answer to standard output and exits 0 without compiling,
+whatever inputs are given; with several, the first in clang's order
+(`Driver::HandleImmediateArgs`) wins: `-dumpmachine`, `-dumpversion`,
+`-print-search-dirs`, `-print-resource-dir`, `-print-file-name=`,
+`-print-prog-name=`, `-print-libgcc-file-name`, `-print-multiarch`,
+`-print-target-triple`, `-print-sysroot`. Unknown arguments are still
+reported next to the answer (clang stays silent).
+
+| probe | answer |
+|---|---|
+| `-dumpversion` | the compatibility version ("Identity") |
+| `-dumpmachine`, `-print-target-triple` | the normalized target triple (`x86_64-unknown-linux-gnu`) |
+| `-print-multiarch` | the Debian multiarch name (`x86_64-linux-gnu`, `aarch64-linux-gnu`); GCC's probe, which clang 19 rejects |
+| `-print-sysroot` | `--sysroot`, else an empty line; GCC's probe |
+| `-print-resource-dir` | the resource directory |
+| `-print-file-name=<f>` | `<resource dir>/<f>` if it exists, else the backing clang++'s answer (which searches the GCC installation and library paths and echoes `<f>` when nothing matches) |
+| `-print-prog-name=<p>`, `-print-libgcc-file-name`, `-print-search-dirs` | the backing clang++'s answer, run with the toolchain arguments kiln links with (`--target=`, `--sysroot=`, `--gcc-toolchain=`, `--gcc-install-dir=`; `toolchain_link_args`): links go through that program, so its tools, runtime library and search directories are the honest ones |
 
 ## Reproducible time
 
@@ -1364,7 +1449,14 @@ Each deviation is covered by a test or a test note.
   - reproducible time;
   - the driver modes (`driver_modes`): the name, `--driver-mode=`, `-x`
     precedence, the C++-mode warning under `-W` options, `kiln` taking
-    `.c`/`.h`/`.i`/stdin as C.
+    `.c`/`.h`/`.i`/stdin as C;
+  - WP-920: the toolchain probes (`dumpversion_is_the_clang_compat_version`,
+    `target_probes`, `delegated_probes`), `__VERSION__`
+    (`version_macro_names_kiln`), the reflection default
+    (`reflection_default_follows_the_standard`), `-dD`/`-dI`
+    (`dump_defines_and_includes`), `-MG` (`missing_headers_as_generated`),
+    `-MJ` (`compilation_database_fragment`, plus `cdb.rs` unit tests) and
+    linker-only inputs (`linker_inputs_alone_are_inputs`).
 - `crates/kiln_driver/tests/verify.rs`: `-verify` end to end under both
   names (`kiln` and `kiln++`): the report pinned against clang 19, and
   compared live with `clang++-19 -Xclang -verify` when it is installed.

@@ -10,6 +10,8 @@ drv_cannot_read_input = Fatal (2) "cannot read '{0}': {1}";
 drv_cannot_read_predefines = Fatal (2) "cannot read the predefined macros '{0}': {1}";
 drv_command_failed = Error (2) "{0} command failed with exit code {1} (use -v to see invocation)";
 drv_command_signalled = Error (1) "{0} command failed due to signal (use -v to see invocation)";
+// WP-920: `-MJ <file>` (clang's JSON compilation-database fragment).
+drv_compilation_database = Error (2) "compilation database '{0}' could not be opened: {1}";
 drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
 drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
 drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
@@ -22,6 +24,8 @@ drv_invalid_stdlib_name = Error (1) "invalid library name in argument '{0}'";
 drv_invalid_value = Error (2) "invalid value '{1}' in '{0}'";
 drv_language_not_recognized = Error (1) "language not recognized: '{0}'";
 drv_linker_input_unused = Warning [UnusedCommandLineArgument] (1) "{0}: 'linker' input unused";
+// WP-920: `-MG` lists missing headers only for `-M`/`-MM`.
+drv_mg_requires_m_or_mm = Error (0) "option '-MG' requires '-M' or '-MM'";
 drv_missing_argument = Error (2) "argument to '{0}' is missing (expected {1} value)";
 drv_no_input_files = Error (0) "no input files";
 drv_no_such_file = Error (1) "no such file or directory: '{0}'";

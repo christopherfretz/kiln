@@ -35,6 +35,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KILN="$(cd "$HERE/../.." && pwd)"
 OSS="${KILN_OSS_ROOT:-$KILN/.oss}"
 WRAP="$HERE/kiln-cxx"
+# meson and ninja (WP-920) come from a venv under the OSS root, never a
+# system install: `python3 -m venv .oss/venv && .oss/venv/bin/pip install
+# meson==1.12.1 ninja==1.13.2`.
+[ -d "$OSS/venv/bin" ] && PATH="$OSS/venv/bin:$PATH"
 
 usage() { sed -n '2,3p' "$0" | sed 's/^# //' >&2; exit 2; }
 PROJECT="" COMPILER=kiln RUN_TEST=1 JOBS=4 INSTALL="" WHICH="" STDLIB="${KILN_OSS_STDLIB:-libstdc++}"
@@ -128,7 +132,23 @@ export KILN_OSS_VMEM_KB="${KILN_OSS_VMEM_KB:-$P_VMEM_KB}"
 : > "$KILN_OSS_LOG"
 rm -f "$BUILD/report.json" "$BUILD/configure.log" "$BUILD/build.log" "$BUILD/test.log"
 
-if [ -d "$SRC/.git" ]; then
+if [ -n "$P_ARCHIVE" ]; then
+  # A release tarball (WP-920: autotools projects whose git tags carry no
+  # generated `configure`; the harness has no autoreconf). `url` is the
+  # tarball, `sha256` pins it, and $SRC/.oss-archive records the tag.
+  if [ -f "$SRC/.oss-archive" ]; then
+    have="$(cat "$SRC/.oss-archive")"
+    [ "$have" = "$P_TAG" ] || echo "oss-build: warning: $SRC holds '$have', the toml pins '$P_TAG' (delete the checkout to refetch)" >&2
+  else
+    tarball="$OSS/src/$P_CHECKOUT.tarball"
+    echo "oss-build: fetching $P_URL"
+    curl -sSfL --retry 3 -o "$tarball" "$P_URL" || { echo "oss-build: download failed" >&2; exit 1; }
+    echo "$P_SHA256  $tarball" | sha256sum -c --quiet - || { echo "oss-build: $P_URL does not match the toml's sha256" >&2; rm -f "$tarball"; exit 1; }
+    mkdir -p "$SRC" && tar -xf "$tarball" -C "$SRC" --strip-components=1 || { echo "oss-build: cannot unpack $tarball" >&2; exit 1; }
+    rm -f "$tarball"
+    echo "$P_TAG" > "$SRC/.oss-archive"
+  fi
+elif [ -d "$SRC/.git" ]; then
   have="$(git -C "$SRC" describe --tags --exact-match 2>/dev/null || echo '?')"
   [ "$have" = "$P_TAG" ] || echo "oss-build: warning: $SRC is at '$have', the toml pins '$P_TAG' (delete the checkout to refetch)" >&2
 else
@@ -162,11 +182,20 @@ case "$P_BUILD" in
     # meson's only Linux backend is ninja, which is not a jobserver client:
     # bound it to --jobs (at most 4) instead.
     [ "$JOBS" -le 4 ] || JOBS=4
+    command -v meson > /dev/null && command -v ninja > /dev/null || { echo "oss-build: meson rows need meson and ninja: python3 -m venv $OSS/venv && $OSS/venv/bin/pip install meson==1.12.1 ninja==1.13.2" >&2; exit 2; }
+    # kiln-cxx's --version shim (WP-920): meson needs `clang` in it.
+    export KILN_OSS_VERSION_SHIM=1
     CXX="$WRAP" CC="$P_C_COMPILER" nice -n 10 meson setup --wipe "$BUILD/meson" "$SRCDIR" \
       --buildtype=release -Dcpp_std="c++$P_CXX_STD" "${P_CONFIGURE[@]}" > "$BUILD/configure.log" 2>&1
     CONF_RC=$? ;;
   make)
     CONF_RC=0 ;;
+  autotools)
+    # Out of source, from the tarball's generated configure (WP-920).
+    mkdir -p "$BUILD/autotools" && find "$BUILD/autotools" -mindepth 1 -delete
+    (cd "$BUILD/autotools" && nice -n 10 "$SRCDIR/configure" CXX="$WRAP" CC="$P_C_COMPILER" \
+      CXXFLAGS="-O2 -std=c++$P_CXX_STD" "${P_CONFIGURE[@]}") > "$BUILD/configure.log" 2>&1
+    CONF_RC=$? ;;
 esac
 echo "oss-build: configure rc=$CONF_RC ($BUILD/configure.log)"
 
@@ -184,6 +213,9 @@ if [ "$CONF_RC" = 0 ]; then
       # In-source: the project's own Makefile, told which compilers to use.
       nice -n 10 make -k "${JFLAG[@]}" -C "$SRCDIR" CXX="$WRAP" CC="$P_C_COMPILER" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1
       BUILD_RC=$? ;;
+    autotools)
+      nice -n 10 make -k "${JFLAG[@]}" -C "$BUILD/autotools" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1
+      BUILD_RC=$? ;;
   esac
   echo "oss-build: build rc=$BUILD_RC ($BUILD/build.log)"
   if [ -n "$INSTALL" ]; then
@@ -192,7 +224,7 @@ if [ "$CONF_RC" = 0 ]; then
   fi
   if [ -n "$RUN_TEST" ]; then
     export KILN_OSS_PHASE=test
-    tdir="$BUILD"; [ "$P_BUILD" = meson ] && tdir="$BUILD/meson"; [ "$P_BUILD" = make ] && tdir="$SRCDIR"
+    tdir="$BUILD"; [ "$P_BUILD" = meson ] && tdir="$BUILD/meson"; [ "$P_BUILD" = make ] && tdir="$SRCDIR"; [ "$P_BUILD" = autotools ] && tdir="$BUILD/autotools"
     # Test scratch is per build tree: suites that default to a fixed path
     # under /tmp (leveldb's /tmp/leveldbtest-<uid>) must not collide when the
     # kiln and clang builds, or two checkouts, run their tests at once.

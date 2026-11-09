@@ -12,6 +12,7 @@ use kiln_lex::{Encoding, Punct, TokFlags, TokKind, Token};
 use kiln_source::{FileId, Loc, SourceManager};
 
 use crate::callbacks::{FileChange, PragmaMessageKind};
+use crate::macros::MacroDef;
 use crate::preprocessor::{Marker, PpItem, Preprocessor};
 
 /// Options of [`print_preprocessed`].
@@ -113,7 +114,6 @@ pub fn print_preprocessed(pp: &mut Preprocessor<'_, '_>, opts: PrintOptions, out
 pub fn print_macros(pp: &mut Preprocessor<'_, '_>, out: &mut String) {
     while pp.next().kind != TokKind::Eof {}
     let interner = pp.interner();
-    let sm = pp.source_manager();
     let mut defs: Vec<_> = pp
         .macros()
         .iter()
@@ -122,40 +122,48 @@ pub fn print_macros(pp: &mut Preprocessor<'_, '_>, out: &mut String) {
         .collect();
     defs.sort_unstable_by(|a, b| a.0.cmp(b.0));
     for (name, d) in defs {
-        out.push_str("#define ");
-        out.push_str(name);
-        if d.is_function_like() {
-            out.push('(');
-            let params = d.params();
-            for (i, &p) in params.iter().enumerate() {
-                let s = interner.as_str(p);
-                if i + 1 == params.len() && d.is_variadic() {
-                    if s == "__VA_ARGS__" {
-                        out.push_str("...");
-                    } else {
-                        out.push_str(s);
-                        out.push_str("...");
-                    }
+        push_macro_definition(out, name, d, pp);
+        out.push('\n');
+    }
+}
+
+/// clang `PrintMacroDefinition`: one `#define NAME[(params)] body` line,
+/// newline-terminated (the `-dM` and `-dD` format).
+fn push_macro_definition(out: &mut String, name: &str, d: &MacroDef, pp: &Preprocessor<'_, '_>) {
+    let interner = pp.interner();
+    let sm = pp.source_manager();
+    out.push_str("#define ");
+    out.push_str(name);
+    if d.is_function_like() {
+        out.push('(');
+        let params = d.params();
+        for (i, &p) in params.iter().enumerate() {
+            let s = interner.as_str(p);
+            if i + 1 == params.len() && d.is_variadic() {
+                if s == "__VA_ARGS__" {
+                    out.push_str("...");
                 } else {
                     out.push_str(s);
-                    if i + 1 < params.len() {
-                        out.push(',');
-                    }
+                    out.push_str("...");
+                }
+            } else {
+                out.push_str(s);
+                if i + 1 < params.len() {
+                    out.push(',');
                 }
             }
-            out.push(')');
         }
-        let mut body = d.body().peekable();
-        if body.peek().is_none_or(|t| !t.flags.contains(TokFlags::LEADING_SPACE)) {
+        out.push(')');
+    }
+    let mut body = d.body().peekable();
+    if body.peek().is_none_or(|t| !t.flags.contains(TokFlags::LEADING_SPACE)) {
+        out.push(' ');
+    }
+    for t in body {
+        if t.flags.contains(TokFlags::LEADING_SPACE) {
             out.push(' ');
         }
-        for t in body {
-            if t.flags.contains(TokFlags::LEADING_SPACE) {
-                out.push(' ');
-            }
-            out.push_str(&kiln_lex::spelling(sm, &t, pp.lex_options()));
-        }
-        out.push('\n');
+        out.push_str(&kiln_lex::spelling(sm, &t, pp.lex_options()));
     }
 }
 
@@ -613,6 +621,34 @@ impl Printer<'_, '_, '_, '_> {
                 self.emitted_tokens = true;
             }
             Marker::Module { .. } | Marker::UnitBegin { .. } | Marker::UnitEnd { .. } => {}
+            Marker::Define { def } => {
+                // clang `MacroDefined` under `-dD`.
+                self.move_to_loc(def.span().lo, true);
+                let name = self.pp.interner().as_str(def.name()).to_owned();
+                let mut line = String::new();
+                push_macro_definition(&mut line, &name, &def, self.pp);
+                self.out.push_str(&line);
+                self.emitted_directive = true;
+            }
+            Marker::Undef { span, name } => {
+                // clang `MacroUndefined` under `-dD`.
+                self.move_to_loc(span.lo, true);
+                self.out.push_str("#undef ");
+                self.out.push_str(self.pp.interner().as_str(name));
+                self.emitted_directive = true;
+            }
+            Marker::Include { span, directive, name, angled } => {
+                // clang `InclusionDirective` under `-dI`.
+                self.move_to_loc(span.lo, true);
+                self.out.push('#');
+                self.out.push_str(directive);
+                self.out.push(' ');
+                self.out.push(if angled { '<' } else { '"' });
+                self.out.push_str(&name);
+                self.out.push(if angled { '>' } else { '"' });
+                self.out.push_str(" /* clang -E -dI */");
+                self.emitted_directive = true;
+            }
             Marker::Embed { span } => {
                 self.embed = self
                     .sm

@@ -315,6 +315,9 @@ impl<'a> Preprocessor<'a, '_> {
         }
         let def = Rc::new(def);
         self.callbacks.macro_defined(name, &def);
+        if self.opts.dump_defines {
+            self.queue(Marker::Define { def: Rc::clone(&def) });
+        }
         self.note_macro_change(name, Some(&def), def.name_span.lo);
         self.macros.map.insert(name, def);
     }
@@ -371,6 +374,9 @@ impl<'a> Preprocessor<'a, '_> {
         self.check_eod("undef", false);
         let old = self.macros.get_rc(name).cloned();
         self.callbacks.macro_undefined(name, ntok.tok.span, old.as_deref());
+        if self.opts.dump_defines {
+            self.queue(Marker::Undef { span: ntok.tok.span, name });
+        }
         if let Some(old) = old {
             if self.is_language_builtin(&old) {
                 self.emit(Diag::new(DiagId::pp_builtin_macro_undefined, ntok.tok.span));
@@ -1256,8 +1262,19 @@ impl Preprocessor<'_, '_> {
         };
         let res = self.resolver.resolve(self.sm, &req);
         self.callbacks.inclusion_directive(&req, res.as_ref());
+        if self.opts.dump_includes {
+            self.queue(Marker::Include {
+                span: name.tok.span,
+                directive: dir,
+                name: req.name.clone(),
+                angled,
+            });
+        }
         let Some(r) = res else {
-            self.emit(Diag::new(DiagId::pp_file_not_found, ft.tok.span).arg(&req.name));
+            // `-MG`: a generated header; the dependency callbacks saw it.
+            if !self.opts.suppress_include_not_found {
+                self.emit(Diag::new(DiagId::pp_file_not_found, ft.tok.span).arg(&req.name));
+            }
             return;
         };
         // clang: the characteristic is the max of the directory's and the

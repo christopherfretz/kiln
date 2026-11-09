@@ -11,9 +11,10 @@ Environment: KILN_OSS_CXX, KILN_OSS_LOG, KILN_OSS_PHASE (configure | build |
 test, recorded as `phase`), KILN_OSS_VMEM_KB (default 3000000, the
 `ulimit -v`), KILN_OSS_TIMEOUT (seconds, default 600), KILN_OSS_STDLIB
 (`libc++` puts `-stdlib=libc++` before the argv, WP-694; unset or
-`libstdc++` adds nothing). Every invocation gets `-fno-crash-diagnostics`
-first (WP-911), so a crashing compiler never writes a reproducer to $TMPDIR
-for each crashing TU of a build.
+`libstdc++` adds nothing), KILN_OSS_VERSION_SHIM (set by oss-build.sh for
+meson rows, WP-920: see version_shim). Every invocation gets
+`-fno-crash-diagnostics` first (WP-911), so a crashing compiler never writes
+a reproducer to $TMPDIR for each crashing TU of a build.
 """
 
 import fcntl
@@ -118,6 +119,31 @@ def classify(rc, timed_out, text, source):
     return "other"
 
 
+def version_shim(cxx):
+    """Meson's compiler detection (mesonbuild/compilers/detect.py) needs
+    `clang` or `Clang` somewhere in `--version`'s stdout and takes the first
+    `N.N[.N]` token there as the clang version; kiln's own banner says
+    `kiln version 0.0.1` and no `clang` (operator decision Q3, WP-920,
+    docs/COMPATIBILITY.md "Build systems"). For meson rows only, the harness
+    puts one line naming the clang compatibility level (`-dumpversion`)
+    before that banner. It is the harness's line, not kiln's: kiln++ never
+    prints it. Returns the exit status, or None to run the compiler as
+    usual (it already says clang)."""
+    try:
+        real = subprocess.run([cxx, "--version"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if real.returncode != 0 or "clang" in real.stdout or "Clang" in real.stdout:
+        return None
+    try:
+        ver = subprocess.run([cxx, "-dumpversion"], capture_output=True, text=True, timeout=60).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    sys.stdout.write(f"clang-compatible {ver} (kiln-cxx Meson shim, WP-920)\n{real.stdout}")
+    sys.stderr.write(real.stderr)
+    return 0
+
+
 def main():
     args = sys.argv[1:]
     cxx = os.environ.get("KILN_OSS_CXX") or "clang++-19"
@@ -125,6 +151,10 @@ def main():
     if stdlib not in ("libstdc++", "libc++"):
         sys.stderr.write(f"kiln-cxx: KILN_OSS_STDLIB must be libstdc++ or libc++, not '{stdlib}'\n")
         return 2
+    if args == ["--version"] and os.environ.get("KILN_OSS_VERSION_SHIM"):
+        rc = version_shim(cxx)
+        if rc is not None:
+            return rc
     # libc++ mode (WP-694): the flag goes first so a project's own
     # `-stdlib=` (the last one wins) still decides.
     cmd = [cxx, "-fno-crash-diagnostics"] + (["-stdlib=libc++"] if stdlib == "libc++" else []) + args

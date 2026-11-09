@@ -139,12 +139,52 @@ pub struct DepArgs {
     pub targets: Vec<(String, bool)>,
     /// `-MP`: a phony target per header.
     pub phony: bool,
+    /// `-MG`: a header that is not found is listed as a dependency by its
+    /// spelled name (a generated header) instead of being an error
+    /// (WP-596, WP-920; valid only with `-M` / `-MM`).
+    pub missing_generated: bool,
+    /// `-MJ <file>`: write clang's JSON compilation-database fragment
+    /// for each compile job (WP-920).
+    pub cdb_fragment: Option<String>,
 }
 
 impl DepArgs {
     /// Which headers to list, if dependencies were requested at all.
     pub fn headers(&self) -> Option<DepHeaders> {
         self.only.or(self.side)
+    }
+}
+
+/// The toolchain probes: options that print one fact about the toolchain
+/// and stop, whatever else is given (clang `HandleImmediateArgs`;
+/// spec/driver.md "Toolchain probes", WP-920).
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProbeArgs {
+    /// `-dumpversion`: the clang compatibility version (`22.1.8`).
+    pub dumpversion: bool,
+    /// `-dumpmachine`: the target triple.
+    pub dumpmachine: bool,
+    /// `-print-search-dirs` (the linking clang++'s answer).
+    pub search_dirs: bool,
+    /// `-print-libgcc-file-name` (the linking clang++'s answer).
+    pub libgcc_file_name: bool,
+    /// The last `-print-file-name=<name>`.
+    pub file_name: Option<String>,
+    /// The last `-print-prog-name=<name>` (the linking clang++'s answer).
+    pub prog_name: Option<String>,
+    /// `-print-target-triple`.
+    pub target_triple: bool,
+    /// `-print-multiarch`: Debian's multiarch name of the target.
+    pub multiarch: bool,
+    /// `-print-sysroot`: `--sysroot`, else an empty line.
+    pub sysroot: bool,
+}
+
+impl ProbeArgs {
+    /// Whether any probe was given.
+    pub fn any(&self) -> bool {
+        *self != ProbeArgs::default()
     }
 }
 
@@ -209,13 +249,25 @@ pub struct PredefArgs {
     /// `-O` level, and every definition but an `always_inline` one is
     /// `noinline` (clang `CodeGenOptions::OnlyAlwaysInlining`).
     pub no_inline: bool,
-    /// `-f[no-]reflection` (P2996 spike, WP-267): the `^^`/`[: :]` tokens
-    /// and the kiln reflection intrinsics. Default off; `__cpp_reflection`
-    /// is not defined either way.
-    pub reflection: bool,
+    /// The last of `-f[no-]reflection` (P2996; WP-267, WP-920): the
+    /// `^^`/`[: :]` tokens and the kiln reflection intrinsics. `None`: on
+    /// at C++26 and off below it ([`PredefArgs::reflection_for`]).
+    pub reflection: Option<bool>,
     /// `-fclang-compat=<major>`: whose predefined macros and feature-query
     /// answers kiln reproduces (spec/pp.md "clang compatibility level").
     pub clang_compat: ClangCompat,
+}
+
+impl PredefArgs {
+    /// Whether reflection is on for an input in `std` (operator decision
+    /// Q7, WP-920): the last `-f[no-]reflection`, else on exactly at
+    /// C++26 (`-std=c++26` / `gnu++26` / `c++2c`). Below C++26 an explicit
+    /// `-freflection` is accepted but the lexer still makes no reflection
+    /// tokens and `__cpp_impl_reflection` stays undefined, as before
+    /// (spec/reflection.md §1.4).
+    pub fn reflection_for(&self, std: &crate::toolchain::LangStd) -> bool {
+        self.reflection.unwrap_or(std.cplusplus && std.lex >= kiln_lex::Std::Cxx26)
+    }
 }
 
 /// What to do.
@@ -395,6 +447,8 @@ pub struct Args {
     pub help: bool,
     /// `-print-resource-dir` / `--print-resource-dir`.
     pub print_resource_dir: bool,
+    /// The toolchain probes (`-dumpversion`, `-print-*`; WP-920).
+    pub probe: ProbeArgs,
     /// `-E` printing options.
     pub print: PrintArgs,
     /// `-D` / `-U`, in order.
@@ -568,6 +622,7 @@ const JOINED_OR_SEPARATE: &[&str] = &[
     "-isysroot",
     "-isystem",
     "-MF",
+    "-MJ",
     "-MQ",
     "-MT",
     "-D",
@@ -766,6 +821,7 @@ impl Args {
                 kind: LinkOptKind::Silent,
             }),
             "-MF" => self.deps.file = Some(v_owned),
+            "-MJ" => self.deps.cdb_fragment = Some(v_owned),
             "-MT" => self.deps.targets.push((v_owned, false)),
             "-MQ" => self.deps.targets.push((v_owned, true)),
             "-x" => match Lang::from_x(v) {
@@ -825,6 +881,15 @@ impl Args {
             "-v" | "--verbose" => self.verbose = true,
             "--help" | "-help" => self.help = true,
             "-print-resource-dir" | "--print-resource-dir" => self.print_resource_dir = true,
+            "-dumpversion" => self.probe.dumpversion = true,
+            "-dumpmachine" => self.probe.dumpmachine = true,
+            "-print-search-dirs" | "--print-search-dirs" => self.probe.search_dirs = true,
+            "-print-libgcc-file-name" | "--print-libgcc-file-name" => {
+                self.probe.libgcc_file_name = true;
+            }
+            "-print-target-triple" | "--print-target-triple" => self.probe.target_triple = true,
+            "-print-multiarch" | "--print-multiarch" => self.probe.multiarch = true,
+            "-print-sysroot" | "--print-sysroot" => self.probe.sysroot = true,
             "-P" => self.print.no_line_markers = true,
             "-C" => self.print.comments = true,
             "-CC" => self.print.macro_comments = true,
@@ -840,6 +905,7 @@ impl Args {
             "-MD" | "--write-dependencies" => self.deps.side = Some(DepHeaders::All),
             "-MMD" | "--write-user-dependencies" => self.deps.side = Some(DepHeaders::User),
             "-MP" => self.deps.phony = true,
+            "-MG" => self.deps.missing_generated = true,
             "-trigraphs" | "--trigraphs" | "-ftrigraphs" => self.trigraphs = Some(true),
             "-fno-trigraphs" => self.trigraphs = Some(false),
             "-fdollars-in-identifiers" => self.dollars = Some(true),
@@ -908,6 +974,16 @@ impl Args {
                             v.to_owned(),
                         )),
                     }
+                } else if let Some(v) = arg
+                    .strip_prefix("-print-file-name=")
+                    .or_else(|| arg.strip_prefix("--print-file-name="))
+                {
+                    self.probe.file_name = Some(v.to_owned());
+                } else if let Some(v) = arg
+                    .strip_prefix("-print-prog-name=")
+                    .or_else(|| arg.strip_prefix("--print-prog-name="))
+                {
+                    self.probe.prog_name = Some(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("--embed-dir=") {
                     self.embed_dirs.push(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fmodule-file=") {
@@ -1186,8 +1262,8 @@ impl Args {
             "-Os" | "-Oz" => (p.opt, p.ofast) = (OptLevel::Size, false),
             "-fexceptions" | "-fcxx-exceptions" => p.exceptions = Some(true),
             "-fno-exceptions" | "-fno-cxx-exceptions" => p.exceptions = Some(false),
-            "-freflection" => p.reflection = true,
-            "-fno-reflection" => p.reflection = false,
+            "-freflection" => p.reflection = Some(true),
+            "-fno-reflection" => p.reflection = Some(false),
             "-frtti" => p.rtti = Some(true),
             "-fno-rtti" => p.rtti = Some(false),
             "-fchar8_t" => p.char8_t = Some(true),
@@ -1296,14 +1372,17 @@ impl VerifyRaw {
     }
 }
 
-enum Valued<'a> {
+pub(crate) enum Valued<'a> {
     Joined(&'a str),
     Next,
     Missing,
 }
 
 /// If `arg` is a valued option, the option and where its value is.
-fn split_valued<'a>(arg: &'a str, next: Option<&str>) -> Option<(&'static str, Valued<'a>)> {
+pub(crate) fn split_valued<'a>(
+    arg: &'a str,
+    next: Option<&str>,
+) -> Option<(&'static str, Valued<'a>)> {
     for &opt in SEPARATE_OR_EQ {
         if arg == opt {
             return Some((opt, if next.is_some() { Valued::Next } else { Valued::Missing }));

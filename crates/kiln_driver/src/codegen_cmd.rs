@@ -314,7 +314,7 @@ impl CodegenJob<'_> {
             rtti: a.predef.rtti.unwrap_or(true),
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
-            reflection: a.predef.reflection,
+            reflection: a.predef.reflection_for(&job.std),
             coro_aligned_allocation: a.predef.coro_aligned_allocation,
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
@@ -519,6 +519,24 @@ pub fn compile(
     }
     let temp = TempDir::new();
     let plan = plan(args, tc, inputs, phase, &temp);
+    if args.deps.cdb_fragment.is_some() {
+        let jobs: Vec<_> = inputs
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| is_source(i))
+            .map(|(n, &input)| {
+                // As `plan`: a link compiles each source to a temporary
+                // object.
+                let output = if phase == Phase::Link {
+                    temp.file(&format!("{n}-{}", default_output(&input.path, Phase::Object)))
+                } else {
+                    args.output.clone().unwrap_or_else(|| default_output(&input.path, phase))
+                };
+                crate::cdb::CdbJob { input, output: Some(output) }
+            })
+            .collect();
+        crate::cdb::write(args, tc, &jobs, &drv);
+    }
     if args.print_commands {
         print_version(&mut io.stderr, tc, false);
         let mut err = io.stderr.clone();
@@ -922,6 +940,29 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String, input: &str) -> C
 
 /// `clang++` over the objects and linker inputs (`(position, path)`),
 /// with the linker options in command-line order.
+/// The flags that pick the linking clang++'s target and installation
+/// (also passed with the `-print-*` probes it answers, WP-920).
+pub(crate) fn toolchain_link_args(args: &Args, tc: &Toolchain) -> Vec<String> {
+    let mut v = Vec::new();
+    if args.target.is_some() {
+        v.push(format!("--target={}", tc.target.triple));
+    }
+    if let Some(s) = &args.sysroot {
+        v.push(format!("--sysroot={s}"));
+    }
+    if let Some(d) = &args.gcc_toolchain {
+        v.push(format!("--gcc-toolchain={d}"));
+    }
+    if let Some(d) = &args.gcc_install_dir {
+        v.push(format!("--gcc-install-dir={d}"));
+    } else if let Some(g) = tc.gcc.as_ref().filter(|_| tc.gcc_from_driver) {
+        // The headers came from `toolchain::DEFAULT_GCC`'s installation;
+        // link against the same one rather than clang++'s own choice.
+        v.push(format!("--gcc-install-dir={}", g.path));
+    }
+    v
+}
+
 fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Command {
     let mut cmd = Command::new(tc, Tool::Linker);
     // `-v` reaches the linking `clang++` too, so its own `-v` lines (the
@@ -930,21 +971,8 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
     if args.verbose {
         cmd.arg("-v");
     }
-    if args.target.is_some() {
-        cmd.arg(format!("--target={}", tc.target.triple));
-    }
-    if let Some(s) = &args.sysroot {
-        cmd.arg(format!("--sysroot={s}"));
-    }
-    if let Some(d) = &args.gcc_toolchain {
-        cmd.arg(format!("--gcc-toolchain={d}"));
-    }
-    if let Some(d) = &args.gcc_install_dir {
-        cmd.arg(format!("--gcc-install-dir={d}"));
-    } else if let Some(g) = tc.gcc.as_ref().filter(|_| tc.gcc_from_driver) {
-        // The headers came from `toolchain::DEFAULT_GCC`'s installation;
-        // link against the same one rather than clang++'s own choice.
-        cmd.arg(format!("--gcc-install-dir={}", g.path));
+    for a in toolchain_link_args(args, tc) {
+        cmd.arg(a);
     }
     if let Some(o) = &args.opt_flag {
         cmd.arg(o.clone());

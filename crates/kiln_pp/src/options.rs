@@ -35,6 +35,16 @@ impl ClangCompat {
             ClangCompat::Clang22 => 22,
         }
     }
+
+    /// The full clang version (`19.1.7`, `22.1.8`): `__clang_major__`,
+    /// `__clang_minor__` and `__clang_patchlevel__` joined, and what the
+    /// driver's `-dumpversion` prints (WP-920).
+    pub fn version(self) -> &'static str {
+        match self {
+            ClangCompat::Clang19 => "19.1.7",
+            ClangCompat::Clang22 => "22.1.8",
+        }
+    }
 }
 
 /// Options of one preprocessor run.
@@ -87,6 +97,16 @@ pub struct PpOptions {
     /// `-f[no-]char8_t`: a `u8` character literal in `#if` is unsigned
     /// as `char8_t` (`None`: from C++20 on).
     pub char8: Option<bool>,
+    /// `-MG`: an `#include` whose file is not found is skipped without
+    /// an error (clang `SetSuppressIncludeNotFoundError`); the dependency
+    /// callbacks still see it.
+    pub suppress_include_not_found: bool,
+    /// `-dD`: queue a [`crate::Marker::Define`] / [`crate::Marker::Undef`]
+    /// for every `#define` / `#undef` (the `-E` printer prints them).
+    pub dump_defines: bool,
+    /// `-dI`: queue a [`crate::Marker::Include`] for every `#include`,
+    /// `#include_next` and `#import`.
+    pub dump_includes: bool,
 }
 
 impl PpOptions {
@@ -108,6 +128,9 @@ impl PpOptions {
             modules: None,
             parser_pragmas: false,
             char8: None,
+            suppress_include_not_found: false,
+            dump_defines: false,
+            dump_includes: false,
         }
     }
 
