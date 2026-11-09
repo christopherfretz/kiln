@@ -1983,6 +1983,18 @@ impl<'a> TypeFinder<'a> {
                 t.md(n);
             }
         }
+        // Not in LLVM's `TypeFinder`: the global and function metadata
+        // attachments (a `DISubprogram`'s class-type template argument,
+        // `value: %struct.W { ... }`). LLVM's printer leaves such a type
+        // out and its text does not parse back (clang 19's `-emit-llvm`
+        // of `f<W{&g}>` with `-g`); kiln's IR is text, so the types come
+        // last. A module whose text parsed before prints the same.
+        for g in m.ordered_globals() {
+            g.md.iter().for_each(|&(_, n)| t.md(n));
+        }
+        for f in m.ordered_funcs() {
+            f.md.iter().for_each(|&(_, n)| t.md(n));
+        }
         t.out
     }
 
