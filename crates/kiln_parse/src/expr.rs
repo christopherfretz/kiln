@@ -1463,7 +1463,7 @@ impl Parser<'_, '_> {
         if self.at(Punct::Less) {
             // `p->~X<T>()`: the simple-template-id names the destroyed
             // class type.
-            let class = self.s.classify_member_destructor_template(e, arrow, None, name);
+            let class = self.s.classify_member_destructor_template(e, arrow, None, name, nl);
             if matches!(
                 class,
                 NameClass::Type(..)
@@ -1551,7 +1551,7 @@ impl Parser<'_, '_> {
             if self.at(Punct::Less) {
                 // `p->N::C<int>::~C<int>()`: the simple-template-id names
                 // the destroyed class type.
-                let class = self.s.classify_member_destructor_template(e, arrow, Some(q), name);
+                let class = self.s.classify_member_destructor_template(e, arrow, Some(q), name, nl);
                 if matches!(
                     class,
                     NameClass::Type(..)
@@ -1725,8 +1725,15 @@ impl Parser<'_, '_> {
         };
         let nl = self.bump().span.lo;
         if self.at(Punct::Less) {
-            self.unsupported("a qualified destructor name with a template-id", nl);
-            return None;
+            return self.parse_pseudo_destructor_template_id(
+                e,
+                qual,
+                (first, fl),
+                (name, nl),
+                tl,
+                loc,
+                arrow,
+            );
         }
         Some(self.s.act_on_member_destructor_q(
             e,
@@ -1738,6 +1745,49 @@ impl Parser<'_, '_> {
             loc,
             arrow,
         ))
+    }
+
+    /// `p->[S::]F::~Q<args>()` at the `<` (the name `Q` consumed, `tl` the
+    /// `~`, `nl` the name; [expr.prim.id.dtor]/2, [basic.lookup.qual.general]/4.2-4.4):
+    /// `Q` is a template looked up in `S` (4.2), or where the expression
+    /// is when there is no `S` (4.3); with a dependent `S` the template-id
+    /// is `S::template Q<args>`, resolved at instantiation (WP-1155).
+    #[allow(clippy::too_many_arguments, reason = "the parts of a member access")]
+    fn parse_pseudo_destructor_template_id(
+        &mut self,
+        e: ExprId,
+        qual: Option<kiln_sema::using::Qualifier>,
+        first: (kiln_source::symbol::Symbol, Loc),
+        (name, nl): (kiln_source::symbol::Symbol, Loc),
+        tl: Loc,
+        loc: Loc,
+        arrow: bool,
+    ) -> PExpr {
+        if let Some(q) = qual
+            && self.s.is_dependent_ctx(q.ctx)
+        {
+            let (args, _, _) = self.parse_template_arg_list()?;
+            let l = self.s.ast.types.arg_list(&args);
+            let t = self.s.act_dependent_name(
+                q.nns,
+                name,
+                Some(l),
+                kiln_ast::types::TagKeyword::None,
+            );
+            return Some(self.s.act_on_pseudo_destructor_type_q(e, qual, first, t, tl, nl, loc, arrow));
+        }
+        let class = self.s.classify_pseudo_destructor_template(qual, name, nl);
+        if !matches!(class, NameClass::TypeTemplate(_)) {
+            let _ = self.parse_template_arg_list();
+            self.s.diagnose_pseudo_destructor_non_template(class, name, nl);
+            return None;
+        }
+        match self.parse_template_id_rest(class, name, nl) {
+            Ok(TemplateIdRef::Type(t)) => {
+                Some(self.s.act_on_pseudo_destructor_type_q(e, qual, first, t, tl, nl, loc, arrow))
+            }
+            _ => None,
+        }
     }
 
     /// True at a nested-name-specifier after `.`/`->`: `::`, `N::`,
