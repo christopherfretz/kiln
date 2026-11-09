@@ -202,8 +202,8 @@ impl LlvmError {
                     .arg(supported_text())
             }
             LlvmError::NotFound { tried, not_on_path } => {
-                let mut d = Diag::new(DiagId::drv_llvm_not_found, Span::INVALID)
-                    .arg(supported_text());
+                let mut d =
+                    Diag::new(DiagId::drv_llvm_not_found, Span::INVALID).arg(supported_text());
                 let note = |id| Diag::new(id, Span::INVALID);
                 for (dir, why) in tried {
                     d = d.with_note(
@@ -256,11 +256,12 @@ impl Search {
 
     /// Runs the search.
     pub fn run(&self) -> LlvmSelection {
-        for (dir, origin) in
-            [(&self.flag, Origin::Flag), (&self.env, Origin::Env)].into_iter().filter_map(
-                |(d, o)| d.as_ref().map(|d| (d, o)),
-            )
-        {
+        let explicit = match (&self.flag, &self.env) {
+            (Some(d), _) => Some((d, Origin::Flag)),
+            (None, Some(d)) => Some((d, Origin::Env)),
+            (None, None) => None,
+        };
+        if let Some((dir, origin)) = explicit {
             let dir = PathBuf::from(dir);
             return match check(&dir) {
                 Ok(major) => Ok(LlvmInstall { dir, major, origin }),
@@ -689,7 +690,15 @@ mod tests {
         assert!(tried.contains(&(s.path("/usr/lib/llvm-19"), Reject::Missing)));
         assert_eq!(
             not_on_path,
-            ["llvm-config", "llvm-config-22", "opt-22", "clang++-22", "llvm-config-19", "opt-19", "clang++-19"]
+            [
+                "llvm-config",
+                "llvm-config-22",
+                "opt-22",
+                "clang++-22",
+                "llvm-config-19",
+                "opt-19",
+                "clang++-19"
+            ]
         );
     }
 
@@ -705,7 +714,8 @@ mod tests {
 
     #[test]
     fn error_text() {
-        let e = LlvmError::Unsupported { dir: "/opt/llvm-21".into(), origin: Origin::Env, major: 21 };
+        let e =
+            LlvmError::Unsupported { dir: "/opt/llvm-21".into(), origin: Origin::Env, major: 21 };
         assert_eq!(
             rendered(&e),
             "kiln++: error: unsupported LLVM major 21 at '/opt/llvm-21' (from KILN_LLVM_DIR); \

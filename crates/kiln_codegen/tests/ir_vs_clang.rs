@@ -267,9 +267,7 @@ fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
     .chain(
         module_inputs(file).into_iter().map(|(n, p)| format!("-fmodule-file={n}={}", p.display())),
     )
-    .chain(
-        Path::new(KILN_LLVM_DIR).is_dir().then(|| format!("--llvm-dir={KILN_LLVM_DIR}")),
-    )
+    .chain(Path::new(KILN_LLVM_DIR).is_dir().then(|| format!("--llvm-dir={KILN_LLVM_DIR}")))
     .chain(std::iter::once(file.display().to_string()))
     .collect();
     let code = run(&args, io);
