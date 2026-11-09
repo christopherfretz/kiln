@@ -996,6 +996,19 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         r
     }
 
+    /// Whether `class` is a class or alias template whose argument list
+    /// `<` at `open` .. `>` at `close` is not dependent and is followed by
+    /// `::` (`O<int>::`): a non-dependent qualifier component for
+    /// [`Parser::scan_name_walk_in`] (WP-1084).
+    fn nondependent_template_qualifier(&self, class: NameClass, open: usize, close: usize) -> bool {
+        matches!(class, NameClass::TypeTemplate(d)
+        if matches!(
+            self.s.ast.decls.get(d).kind(),
+            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate
+        )) && self.tok_at(close + 1).kind == TokKind::Punct(Punct::ColonColon)
+            && !self.template_args_dependent(open, close)
+    }
+
     /// [`Parser::scan_name_walk`] from token `i`, the first component
     /// after a `::` whose scope `scope` is already known.
     fn scan_name_walk_in(
@@ -1075,17 +1088,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                         dep_tid = true;
                     }
                 }
-                if let NameClass::TypeTemplate(d) = class
-                    && !split
-                    && self.tok_at(close + 1).kind == TokKind::Punct(Punct::ColonColon)
-                    && matches!(
-                        self.s.ast.decls.get(d).kind(),
-                        DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate
-                    )
-                    && !self.template_args_dependent(end, close)
-                {
-                    nondep_class = true;
-                }
+                nondep_class |= !split && self.nondependent_template_qualifier(class, end, close);
                 class = type_if_args(class);
                 if split {
                     return Ok((close, true, class, name, qual));
