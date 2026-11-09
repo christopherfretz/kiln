@@ -80,6 +80,10 @@ pub struct BenchSpec {
     /// (checked on every kiln run, `--record` included; other compilers
     /// are not judged by it).
     pub budget_time_ms: Option<f64>,
+    /// `generate: <generator> <params>`: the measured source is generated
+    /// at bench time into the run's scratch directory (spec/bench.md
+    /// "Generated entries"); the entry file is only its header.
+    pub generate: Option<super::generate::Generator>,
 }
 
 /// Directives that belong to `cargo xtask test` and mean nothing here.
@@ -110,6 +114,7 @@ const KEYS: &[&str] = &[
     "threshold-steps",
     "threshold-bytes",
     "budget-time",
+    "generate",
 ];
 
 /// Parses an entry's directive header. All errors are collected.
@@ -122,6 +127,7 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
     let mut thresholds = ThresholdOverrides::default();
     let mut xfail_kiln = None;
     let mut budget_time_ms = None;
+    let mut generate = None;
     for d in directives {
         let mut err = |m: String| errors.push(DirectiveError { line: d.line, message: m });
         if d.key.replace(' ', "") == "xfail(kiln)" {
@@ -176,22 +182,19 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
                 Err(e) => err(e),
             },
             k @ ("threshold-time" | "threshold-mem" | "threshold-steps" | "threshold-bytes") => {
-                let slot = match k {
-                    "threshold-time" => &mut thresholds.time_pct,
-                    "threshold-mem" => &mut thresholds.mem_pct,
-                    "threshold-steps" => &mut thresholds.steps_pct,
-                    _ => &mut thresholds.bytes_pct,
-                };
-                match parse_pct(value) {
-                    Some(_) if slot.is_some() => err(format!("duplicate `{k}`")),
-                    Some(p) => *slot = Some(p),
-                    None => err(format!("bad `{k}` value `{value}` (a non-negative percentage)")),
+                if let Err(e) = set_threshold(&mut thresholds, k, value) {
+                    err(e);
                 }
             }
             "budget-time" => match value.parse::<f64>() {
                 _ if budget_time_ms.is_some() => err("duplicate `budget-time`".into()),
                 Ok(ms) if ms.is_finite() && ms > 0.0 => budget_time_ms = Some(ms),
                 _ => err(format!("bad `budget-time` value `{value}` (a positive number of ms)")),
+            },
+            "generate" => match super::generate::Generator::parse(value) {
+                _ if generate.is_some() => err("duplicate `generate`".into()),
+                Ok(g) => generate = Some(g),
+                Err(e) => err(e),
             },
             k => err(format!("unknown directive `{k}`")),
         }
@@ -210,7 +213,26 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
         thresholds,
         xfail_kiln,
         budget_time_ms,
+        generate,
     })
+}
+
+/// One `threshold-*:` directive into its slot of `t`.
+fn set_threshold(t: &mut ThresholdOverrides, k: &str, value: &str) -> Result<(), String> {
+    let slot = match k {
+        "threshold-time" => &mut t.time_pct,
+        "threshold-mem" => &mut t.mem_pct,
+        "threshold-steps" => &mut t.steps_pct,
+        _ => &mut t.bytes_pct,
+    };
+    match parse_pct(value) {
+        Some(_) if slot.is_some() => Err(format!("duplicate `{k}`")),
+        Some(p) => {
+            *slot = Some(p);
+            Ok(())
+        }
+        None => Err(format!("bad `{k}` value `{value}` (a non-negative percentage)")),
+    }
 }
 
 /// `oven:` budgets mean nothing in `mode: pp` and `mode: run`: one error per
@@ -367,8 +389,20 @@ mod tests {
                 thresholds: ThresholdOverrides::default(),
                 xfail_kiln: None,
                 budget_time_ms: None,
+                generate: None,
             }
         );
+    }
+
+    #[test]
+    fn generate_directive() {
+        use super::super::generate::Generator;
+        let s = parse_spec("//@ generate: nested-dup 200 6 4\n").unwrap();
+        assert_eq!(s.generate, Some(Generator::NestedDup { n: 200, depth: 6, width: 4 }));
+        let e = errs("//@ generate: nested-dup 1 1 2\n//@ generate: nested-dup 1 1 2\n");
+        assert!(e.iter().any(|m| m.contains("duplicate `generate`")), "{e:?}");
+        let e = errs("//@ generate: shapes 1\n");
+        assert!(e.iter().any(|m| m.contains("unknown generator `shapes`")), "{e:?}");
     }
 
     #[test]

@@ -921,6 +921,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-879 | reflection correctness bundle 4: WP-796, WP-838, WP-866, WP-867, WP-870 (GCC 16.1 parity) | WP-830 | done (#398) |
 | WP-907 | sema: complete a variable template specialization of unknown array bound for sizeof/type_of (xfail temp.inst/p4-var-template-unknown-bound.cpp) | WP-879 | open |
 | WP-908 | perf: frontend ~3x slower than g++-16 on large repeated nested template-ids (5.1 MB TU: 1.28 s vs 0.44 s -fsyntax-only; docs/status/perf.md WP-879) | WP-879 | open |
+| WP-919 | perf: frontend throughput on large nested template-id TUs (profile dup8 + real TUs, fix hotspots, dup bench entry) | WP-908 | in progress |
 | WP-909 | decision: default -fkiln-reflection-mangling form (WP-879 study recommends gcc; operator decides) | WP-879 | open |
 | WP-899 | driver: `-ffat-lto-objects` emits real fat objects (machine code + bitcode); now bitcode-only (crates/kiln_driver/src/codegen_flags.rs:28) | WP-873 | open |
 | WP-900 | codegen: `-fstrict-vtable-pointers` invariant.group metadata and `-f[no-]vectorize`/`-fslp-vectorize` pipeline toggles (codegen_flags.rs:146) | WP-873 | deferred |
