@@ -209,6 +209,12 @@ impl Sema<'_, '_> {
     /// does (the errno-free rounding, `fabs`, `copysign`, `fma`, `fmax` /
     /// `fmin`, `fmaximum_num` / `fminimum_num` functions); everywhere
     /// else the call stays an ordinary call.
+    ///
+    /// WP-1073: the printf rows get an implicit `format(printf)` and the
+    /// scanf rows `format(scanf)`; `malloc`, `calloc`, `realloc`,
+    /// `aligned_alloc` and `memalign` get `alloc_size` (and the last two
+    /// `alloc_align(1)`), each unless written. The `finite` family's twin
+    /// is `__builtin_isfinite`.
     pub(crate) fn add_known_function_attrs(&mut self, f: DeclId, attrs: &mut Vec<AttrId>) {
         if let Some(p) = self.ast.prev(f) {
             if self.kind_of(f) == DeclKind::Function

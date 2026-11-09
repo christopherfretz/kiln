@@ -1341,6 +1341,20 @@ literal is one instruction and one step, not an interpreted loop.
   speculative region without the side-effect default): the size, or
   `None` for any failure, silently and with the trial's effects
   reclaimed.
+  WP-1073: an operand based on the result of a call to a function with
+  `alloc_size` (written, or sema's implicit one on `malloc` / `calloc` /
+  ...; clang `tryEvaluateBuiltinObjectSize`'s `InvalidBase` path,
+  `getBytesReturnedByAllocSizeCall`) is decided statically by the
+  compiler (`alloc_size_object`) before the trial: the base is the call
+  itself or a local `const` pointer variable initialized by it (through
+  one cast); the size is the product of the constant size arguments
+  (integer literals, `constexpr` variables, `sizeof`, `+ - *`; any
+  overflow of `size_t` gives up), and `+` / `-` of a constant moves the
+  offset by that many pointees. The result is size minus offset, 0 when
+  the offset is negative or past the end. A cast to a non-`void`
+  pointer type inside the operand (below the outer casts stripped
+  above) invalidates the designator, so type 3 then falls back to the
+  trial, as in clang. A non-constant size falls back to the trial.
   The alignment builtins on integers (kbc 26, `ALIGN`, WP-416; clang
   `ExprConstant` `BI__builtin_align_up` / `_down` / `__builtin_is_aligned`):
   the alignment is checked first, at its own location: one that is not a
