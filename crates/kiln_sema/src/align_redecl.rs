@@ -119,7 +119,14 @@ impl Sema<'_, '_> {
         is_def: bool,
     ) {
         let Some(old) = self.ast.prev(new) else { return };
-        let def = self.definition_before(new);
+        // The earlier definition matters only to an `alignas` of `new`'s
+        // own; finding a variable's walks every previous declaration, so
+        // a run of plain redeclarations would be quadratic (WP-1076).
+        let alignas = own.iter().any(|&a| {
+            let n = self.ast.attrs.get(a);
+            n.kind == AttrKind::ALIGNED && n.syntax == AttrSyntax::Keyword
+        });
+        let def = if alignas { self.definition_before(new) } else { None };
         self.merge_aligned(Some(new), new, old, def, own, is_def);
     }
 
