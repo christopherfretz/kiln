@@ -859,11 +859,18 @@ impl Parser<'_, '_> {
             } else {
                 self.parse_assignment_expr()
             };
-            let Some(e) = e else {
+            let Some(mut e) = e else {
                 ok = false;
                 self.skip_until(&[Punct::RParen], false, false);
                 break;
             };
+            // clang `AcceptsExprPack` (WP-954): `annotate`'s arguments may
+            // be pack expansions, expanded at instantiation.
+            if kiln_ast::attr::normalize_attr_name(&text) == "annotate"
+                && let Some(l) = self.eat(Punct::Ellipsis)
+            {
+                e = self.s.act_pack_expansion(e, l);
+            }
             // clang drops an attribute whose argument is invalid; kiln
             // does so for the string-literal attributes above.
             if string_literal_arg(&text, 0) && self.s.contains_errors(e) {

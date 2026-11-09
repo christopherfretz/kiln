@@ -17,6 +17,7 @@ use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
 
 use crate::decl::AttrArg;
+use crate::templ::pack::PackOperand;
 use crate::Sema;
 
 impl Sema<'_, '_> {
@@ -88,7 +89,15 @@ impl Sema<'_, '_> {
         let mut rest = Vec::with_capacity(args.len() - 1);
         for arg in &args[1..] {
             match arg {
-                AttrArg::Expr(e) => rest.push(*e),
+                // [temp.variadic]/12: a pack is named only in an
+                // expansion (`args...`, clang `AcceptsExprPack`).
+                AttrArg::Expr(e) => {
+                    let at = self.begin_loc(*e);
+                    if self.diagnose_unexpanded_pack(PackOperand::Expr(*e), "expression", at) {
+                        return None;
+                    }
+                    rest.push(*e);
+                }
                 _ => {
                     self.error(DiagId::parse_expected_expression, loc);
                     return None;

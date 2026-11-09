@@ -44,6 +44,9 @@ struct [[clang::annotate("cls")]] AC {
 template <int N> struct AT {
   [[clang::annotate("dep", N + 1)]] int f() { return N; }
 };
+template <int... Is> struct AP {
+  [[clang::annotate("pack", Is...)]] int g() { return sizeof...(Is); }
+};
 
 void gone() __attribute__((unavailable("use other")));
 inline void gone2() __attribute__((unavailable)) { gone(); }
@@ -59,5 +62,5 @@ int main() {
   int z = 0;
   pd(dep(&z));
   printf("%d %d %d %d %d %d\n", a, b.v, t, later, M::sm,
-         ref + ann_v + ann_args() + AC().x + AT<5>().f() - 47);
+         ref + ann_v + ann_args() + AC().x + AT<5>().f() + AP<1, 2>().g() - 49);
 }

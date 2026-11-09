@@ -6,23 +6,28 @@
 //@ std: c++20
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 35:24 error "'annotate' attribute requires parameter 1 to be a constant expression"
-//@ diag: 35:24 note "read of non-const variable 'nc' is not allowed in a constant expression"
-//@ diag: 27:5 note "declared here"
-//@ diag: 36:24 error "'annotate' attribute requires parameter 1 to be a constant expression"
-//@ diag: 36:24 note "non-constexpr function 'f' cannot be used in a constant expression"
-//@ diag: 28:5 note "declared here"
-//@ diag: 37:27 error "'annotate' attribute requires parameter 2 to be a constant expression"
-//@ diag: 37:29 note "non-constexpr function 'f' cannot be used in a constant expression"
-//@ diag: 28:5 note "declared here"
-//@ diag: 38:3 error "'annotate' attribute takes at least 1 argument"
-//@ diag: 39:3 error "'annotate' attribute takes at least 1 argument"
-//@ diag: 40:19 error "expected string literal as argument of 'annotate' attribute"
-//@ diag: 41:25 error "expected string literal as argument of 'annotate' attribute"
-//@ diag: 45:26 error "'annotate' attribute requires parameter 1 to be a constant expression"
-//@ diag: 51:14 note "in instantiation of template class 'A<2, W>' requested here"
-//@ diag: 45:26 note "read of non-const variable 'value' is not allowed in a constant expression"
-//@ diag: 50:23 note "declared here"
+//@ diag: 40:24 error "'annotate' attribute requires parameter 1 to be a constant expression"
+//@ diag: 40:24 note "read of non-const variable 'nc' is not allowed in a constant expression"
+//@ diag: 32:5 note "declared here"
+//@ diag: 41:24 error "'annotate' attribute requires parameter 1 to be a constant expression"
+//@ diag: 41:24 note "non-constexpr function 'f' cannot be used in a constant expression"
+//@ diag: 33:5 note "declared here"
+//@ diag: 42:27 error "'annotate' attribute requires parameter 2 to be a constant expression"
+//@ diag: 42:29 note "non-constexpr function 'f' cannot be used in a constant expression"
+//@ diag: 33:5 note "declared here"
+//@ diag: 43:3 error "'annotate' attribute takes at least 1 argument"
+//@ diag: 44:3 error "'annotate' attribute takes at least 1 argument"
+//@ diag: 45:19 error "expected string literal as argument of 'annotate' attribute"
+//@ diag: 46:25 error "expected string literal as argument of 'annotate' attribute"
+//@ diag: 50:26 error "'annotate' attribute requires parameter 1 to be a constant expression"
+//@ diag: 56:14 note "in instantiation of template class 'A<2, W>' requested here"
+//@ diag: 50:26 note "read of non-const variable 'value' is not allowed in a constant expression"
+//@ diag: 55:23 note "declared here"
+//@ diag: 60:60 error "'annotate' attribute requires parameter 2 to be a constant expression"
+//@ diag: 61:7 note "in instantiation of template class 'Q<nc>' requested here"
+//@ diag: 60:60 note "read of non-const variable 'nc' is not allowed in a constant expression"
+//@ diag: 32:5 note "declared here"
+//@ diag: 62:56 error "expression contains unexpanded parameter pack 'Is'"
 constexpr int ci = 3;
 int nc = 4;
 int f();
@@ -49,3 +54,9 @@ struct V { static constexpr int value = 5; };
 A<1, V> a1;
 struct W { static int value; };
 void use() { A<2, W>().m2(); }
+template <int... Is> struct P { [[clang::annotate("p", Is...)]] void f(); };
+P<1, 2> p2;
+P<> p0;
+template <int &...Rs> struct Q { [[clang::annotate("q", 0, Rs...)]] void f(); };
+Q<nc> q;
+template <int... Is> struct U { [[clang::annotate("u", Is)]] void f(); };
