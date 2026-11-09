@@ -486,32 +486,66 @@ against clang 19 and clang 22) and one follow-up row in
     `dcl.constexpr/potential-constant-builtin-strcmp.cpp`,
     `dcl.constexpr/potential-constant-builtin-fabs.cpp`,
     `dcl.constexpr/potential-constant-consteval-operator-template.cpp`.
-15. **Templates and deduction**: `temp.spec.partial.order/`,
-    `temp.spec.partial.match/narrowing-nttp-no-match.cpp`,
-    `temp.arg.explicit/pack-explicit-then-deduced.cpp`,
-    `temp.deduct/substitution-stops-at-first-failure.cpp`,
-    `temp.dep.constexpr/reference-to-value-dependent-constant.cpp`,
-    `temp.expl.spec/member-template-with-requires.cpp`,
-    `temp.constr.order/large-normal-form-subsumption.cpp`,
-    `dcl.type.class.deduct/typename-member-class-template.cpp`,
-    `dcl.type.decltype/decltype-auto-nttp-reference.cpp`,
-    `namespace.udecl/using-own-class-dependent.cpp`,
-    `basic.lookup.argdep/address-of-overload-set.cpp`,
-    `class.derived/base-lookup-ignores-namespace.cpp`.
+15. **Templates and deduction**: all fixed in WP-958
+    (spec/landed/sema/WP-958.md):
+    - `temp.spec.partial.order/pack-of-references-more-specialized.cpp`:
+      partial ordering now deduces a `P` pack-expansion pattern from an `A`
+      pack-expansion pattern ([temp.deduct.partial]/8).
+    - `temp.spec.partial.match/narrowing-nttp-no-match.cpp`: a deduced
+      integral value that narrows to its parameter's type fails the match.
+    - `temp.arg.explicit/pack-explicit-then-deduced.cpp`: an explicitly
+      given pack stays extendable by deduction ([temp.arg.explicit]/9).
+    - `temp.deduct/substitution-stops-at-first-failure.cpp`: a leading
+      return type was substituted after the parameter types; now before
+      them ([temp.deduct.general]/7).
+    - `temp.dep.constexpr/reference-to-value-dependent-constant.cpp`: a
+      reference was not potentially-constant ([expr.const]/3), so a
+      reference to a value-dependent constant was not value-dependent.
+    - `temp.expl.spec/member-template-with-requires.cpp`: an out-of-line
+      member template of a specialization compared its constraints
+      unsubstituted; they are now compared substituted.
+    - `temp.constr.order/large-normal-form-subsumption.cpp`: a hard limit,
+      not a perf cliff. `||`/`&&` chains counted as concept expansion
+      depth (64+ operands became an atom), and subsumption needed both
+      DNF(P) and CNF(Q) under one clause cap; it now builds one form.
+    - `dcl.type.class.deduct/typename-member-class-template.cpp`:
+      `typename T::X x = e;` naming a member class template is a
+      placeholder for a deduced class type.
+    - `dcl.type.decltype/decltype-auto-nttp-reference.cpp`: `decltype` of
+      a reference NTTP of class type stripped the reference.
+    - `namespace.udecl/using-own-class-dependent.cpp`: a class with a
+      dependent base cannot be proved not derived from itself; the check
+      waits for instantiation.
+    - `basic.lookup.argdep/address-of-overload-set.cpp`: ADL did not look
+      through `&f`.
+    - `class.derived/base-lookup-ignores-namespace.cpp`: a base-specifier's
+      class-name is now a type-only lookup.
 16. **Classes, special members, initialization, misc**: an empty braced list
     for a user `initializer_list` type without a default constructor is
     rejected and then overflows the stack (the `CXX/drs/cwg10xx.cpp` crash
     in all six configurations;
     kiln_sema `init.rs` `std_initializer_list_init` handles only non-empty
-    lists): `dcl.init.list/empty-initializer-list-no-default-ctor.cpp`.
-    Also `dcl.init.list/single-element-explicit-ctor.cpp`,
-    `class.copy.assign/implicit-form-const-ref.cpp`,
-    `class.copy.ctor/mutable-member-template-ctor-not-trivial.cpp`,
-    `dcl.fct.def.default/explicit-object-copy-assign.cpp`,
-    `conv.prom/`, `over.built/bitint-candidates.cpp`,
-    `expr.const/duffs-device.cpp`,
-    `basic.stc.dynamic/global-variable-named-std.cpp`,
-    `cpp.predefined/builtin-line-default-arg-member-call.cpp`.
+    lists): `dcl.init.list/empty-initializer-list-no-default-ctor.cpp`
+    (WP-962). Also `expr.const/duffs-device.cpp` (WP-962). Fixed in
+    WP-958:
+    - `dcl.init.list/single-element-explicit-ctor.cpp`: a one-element list
+      of the same class, for a non-aggregate too, is that element's
+      conversion (CWG1467, CWG2076), not a constructor call.
+    - `class.copy.assign/implicit-form-const-ref.cpp`: redeclaration
+      lookup in a class did not declare the implicit members.
+    - `class.copy.ctor/mutable-member-template-ctor-not-trivial.cpp`: a
+      mutable member is copied from a non-const lvalue, which may select a
+      non-trivial template.
+    - `dcl.fct.def.default/explicit-object-copy-assign.cpp`: an
+      explicit-object defaulted assignment was not a special member.
+    - `conv.prom/bit-field-assignment-result-promotes.cpp`: an assignment
+      designating a bit-field did not promote as the bit-field.
+    - `over.built/bitint-candidates.cpp`: `_BitInt(N)` operand types were
+      missing from the built-in candidates.
+    - `basic.stc.dynamic/global-variable-named-std.cpp`: the implicit
+      `namespace std` for `std::align_val_t` was visible to lookup.
+    - `cpp.predefined/builtin-line-default-arg-member-call.cpp`: a member
+      call's location (clang 22) is the member name's.
 
 Fixed in WP-912: an atomic constraint that depends on its own satisfaction
 (`__is_constructible` of the constrained type inside its own concept) looped
