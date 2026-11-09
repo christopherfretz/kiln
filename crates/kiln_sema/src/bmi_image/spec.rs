@@ -159,14 +159,30 @@ impl Writer<'_, '_, '_> {
     /// `None` when `d` is no such member.
     pub(super) fn member_rec(&mut self, d: DeclId) -> W<Option<u32>> {
         let ast = &self.s.ast;
-        if !matches!(ast.templ_link(d).get(), Some((TemplLinkKind::MemberOfSpecialization, _))) {
-            return Ok(None);
-        }
+        let class = ast.decls.get(d).ctx().ok_or("a malformed member")?;
+        // Templatable members carry a link; fields and the like sit in
+        // the sparse map, under a class specialization.
+        let pattern = match ast.templ_link(d).get() {
+            Some((TemplLinkKind::MemberOfSpecialization, i)) => {
+                let m = ast.templates.member_spec(i).ok_or("a malformed member")?;
+                if m.kind != SpecKind::ImplicitInstantiation {
+                    return Err("an explicitly specialized member");
+                }
+                m.instantiated_from
+            }
+            None if ast.decls.get(class).kind() == DeclKind::CXXRecord
+                && ast.spec_info(ast.first(class)).is_some() =>
+            {
+                match ast.templates.instantiated_from_map(d) {
+                    Some(p) => p,
+                    None => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
         if let Some(&r) = self.recs.get(&d) {
             return Ok(Some(r));
         }
-        let class = ast.decls.get(d).ctx().ok_or("a malformed member")?;
-        let pattern = ast.instantiated_from(d).ok_or("a malformed member")?;
         if ast.decls.get(d).has(DeclFlags::IMPLICIT) {
             return Err("an implicit member of a class template specialization");
         }
@@ -236,6 +252,18 @@ impl Writer<'_, '_, '_> {
                     Some(q) if q.ty() == t && q.quals_bits() == 0 => TyRec::Record(r),
                     _ => return Err("a type the image does not carry"),
                 }
+            }
+            TypeView::SubstTemplateTypeParm { replacement, associated, index, pack_index } => {
+                let assoc = self.recs.get(&self.s.ast.first(associated)).copied().ok_or(ARG)?;
+                if !matches!(self.img.decls[assoc as usize].payload, Payload::Template { .. }) {
+                    return Err(ARG);
+                }
+                let pack = match pack_index {
+                    None => 0,
+                    Some(i) if i < 0xffff => i + 1,
+                    Some(_) => return Err(ARG),
+                };
+                TyRec::Subst { repl: self.qref(replacement)?, assoc, index, pack }
             }
             _ => return Ok(None),
         }))

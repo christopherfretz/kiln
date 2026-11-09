@@ -1527,6 +1527,7 @@ impl Writer<'_, '_, '_> {
         };
         let np = self.bs.param_pos.len();
         if !dc_ok(&self.img, np, w, dc) {
+            eprintln!("DBG1139 dc {dc:?} w {w} payload {:?}", self.img.decls.get(w as usize).map(|r| &r.payload));
             return Err(if dc == Dc::Local {
                 "a local declaration the image does not carry"
             } else {
@@ -1582,6 +1583,10 @@ impl Writer<'_, '_, '_> {
         let flags = n.flags().bits() & (LOCAL_FLAGS | DEP);
         let o = ast.modules.owner(d);
         let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
+        // The type first: naming a specialization may add its record.
+        if let Some(t) = n.ty() {
+            self.qref(t)?;
+        }
         let i = u32::try_from(self.img.decls.len()).map_err(|_| "a body too large")?;
         let payload = match kind {
             DeclKind::Label => Payload::Label,
@@ -1596,6 +1601,9 @@ impl Writer<'_, '_, '_> {
             }
             _ => self.var_payload(d, i)?,
         };
+        if self.img.decls.len() != i as usize {
+            return Err("a specialization named while its user is recorded");
+        }
         self.img.decls.push(DeclRec {
             flags,
             owner,

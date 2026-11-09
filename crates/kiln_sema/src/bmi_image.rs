@@ -129,6 +129,15 @@ enum TyRec {
         args: Vec<ArgRec>,
         under: Option<QRef>,
     },
+    /// A substituted template type parameter (S4b): the replacement, the
+    /// template record whose parameter it replaced, the parameter index
+    /// and the pack element plus one (0: not a pack element).
+    Subst {
+        repl: QRef,
+        assoc: u32,
+        index: u32,
+        pack: u32,
+    },
     /// The injected-class-name type of a class template's pattern (S4b).
     Injected(u32),
 }
@@ -819,6 +828,13 @@ fn encode(img: &Image) -> Vec<u8> {
                 w.u8(under.map_or(0, |q| q.quals));
             }
             TyRec::Injected(d) => (w.u8(17), w.u32(*d)).1,
+            TyRec::Subst { repl, assoc, index, pack } => {
+                w.u8(18);
+                w.q(*repl);
+                w.u32(*assoc);
+                w.u32(*index);
+                w.u32(*pack);
+            }
             TyRec::ElabQ(k, steps, q) => {
                 w.u8(14);
                 w.u8(*k);
@@ -1124,6 +1140,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
         TyRec::Tst { template, args, under } => {
             (args.iter().map(|a| a.q()).chain(*under).collect(), vec![*template])
         }
+        TyRec::Subst { repl, assoc, .. } => (vec![*repl], vec![*assoc]),
         TyRec::Sugar(_) => (Vec::new(), Vec::new()),
     }
 }
@@ -1259,6 +1276,14 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 TyRec::Tst { template, args, under }
             }
             17 => TyRec::Injected(r.u32()?),
+            18 => {
+                let repl = r.q()?;
+                let (assoc, index, pack) = (r.u32()?, r.u32()?, r.u32()?);
+                if pack > 0xffff {
+                    return bad("bad pack index");
+                }
+                TyRec::Subst { repl, assoc, index, pack }
+            }
             14 => {
                 let k = r.u8()?;
                 if tag_keyword(k).is_none() {
@@ -1333,9 +1358,15 @@ fn base_class(img: &Image, q: QRef, complete: &dyn Fn(u32) -> bool) -> Option<u3
                 Payload::Typedef { underlying, .. } => underlying.ty,
                 _ => return None,
             },
+            TyRec::Tst { under: Some(q), .. } => q.ty,
             TyRec::Record(d) => {
-                let ok = matches!(img.decls.get(*d as usize)?.payload, Payload::Record { .. });
-                return (ok && complete(*d)).then_some(*d);
+                let ok = match img.decls.get(*d as usize)?.payload {
+                    Payload::Record { .. } => complete(*d),
+                    // A specialization the importer completes (S4b).
+                    Payload::Spec { complete, .. } => complete,
+                    _ => false,
+                };
+                return ok.then_some(*d);
             }
             _ => return None,
         };
@@ -1394,6 +1425,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         | (TyRec::ElabQ(..), Payload::Namespace)
                         | (TyRec::Ttp(_), Payload::Ttp { .. })
                         | (TyRec::Injected(_) | TyRec::Tst { .. }, Payload::Template { kind: 1, .. })
+                        | (TyRec::Subst { .. }, Payload::Template { .. })
                 ) || matches!((t, &r.payload),
                     (TyRec::Record(_), Payload::Spec { template, .. }) if class_tmpl(*template))
             });
@@ -1936,7 +1968,7 @@ impl Writer<'_, '_, '_> {
         let r = self.recs.get(&d).copied().ok_or("a type declared outside the image")?;
         match self.s.ast.decls.get(d).ty() {
             Some(q) if q.ty() == t && q.quals_bits() == 0 => Ok(r),
-            _ => Err("a type the image does not carry"),
+            _ => { eprintln!("DBG1139 type_decl {:?}", self.s.ast.decls.get(d).kind()); Err("a type the image does not carry") },
         }
     }
 
@@ -2039,7 +2071,7 @@ impl Writer<'_, '_, '_> {
                 }
                 TyRec::QArray(quals.bits(), self.qref(QualType::unqual(base))?)
             }
-            _ => return Err("a type the image does not carry"),
+            v => { eprintln!("DBG1139 ty {v:?}"); return Err("a type the image does not carry") },
         };
         let i = BUILTINS + 1 + self.img.types.len() as u32;
         self.img.types.push(rec);
@@ -2397,6 +2429,14 @@ impl Writer<'_, '_, '_> {
             Some((TemplLinkKind::Pattern, _)) => return Err("a member function template"),
             Some(_) => return Err("a template specialization"),
         };
+        // A pattern constructor's mem-initializers live in the template
+        // state as parsed (`InstState::pattern_mem_inits`), not in the
+        // declaration: not carried yet (S4b).
+        if pattern
+            && (s.inst.pattern_mem_inits.contains_key(&d) || s.inst.failed_mem_inits.contains(&d))
+        {
+            return Err("mem-initializers of a constructor in a class template");
+        }
         let spec = fd.spec;
         let bits = spec.bits();
         if spec.is_virtual() || spec.is_pure() || spec.is_override() || spec.is_final() {
@@ -2517,9 +2557,14 @@ impl Writer<'_, '_, '_> {
         for (k, x) in list.into_iter().enumerate() {
             let target = match x.kind {
                 CtorInitKind::Base => {
+                    // The target is the type as written in the
+                    // mem-initializer (`B<int>`, an alias): match it
+                    // canonically.
+                    let tq = QualType::unqual(TypeId::new(x.target));
+                    let want = ast.types.canonical(tq).ty();
                     let pos = bases.iter().position(|&b| {
                         let q = ast.decls.base_spec(b).ty;
-                        ast.types.canonical(q).ty().index() == x.target
+                        ast.types.canonical(q).ty() == want
                     });
                     pos.ok_or("a ctor-initializer of an indirect base")? as u32
                 }
@@ -2963,7 +3008,8 @@ impl Sema<'_, '_> {
         // The writer's own output must pass the reader's checks (a body
         // shape the schema and the AST disagree on is a fallback, never
         // a corrupt module file).
-        if decode(&bytes).is_err() {
+        if let Err(e) = decode(&bytes) {
+            eprintln!("DBG1139 decode {e:?}");
             return none("an internal image inconsistency");
         }
         Some(ModuleImage { bytes, decls, fallback: None })
@@ -3519,6 +3565,12 @@ impl Sema<'_, '_> {
                 Some(&t) => self.injected_type_of(t).unwrap_or(QualType::INT),
                 None => QualType::INT,
             },
+            TyRec::Subst { repl, assoc, index, pack } => {
+                let r = qt(self, *repl);
+                let a = ids.get(*assoc as usize).copied().unwrap_or(self.ast.tu);
+                let pack = pack.checked_sub(1);
+                self.ast.types.subst_template_type_parm(r, a, *index, pack)
+            }
         }
     }
 }
