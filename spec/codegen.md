@@ -1452,7 +1452,11 @@ cut the front-end cost of `-g` without changing a byte of the IR.
   leaves alone with the empty kind: `with.overflow` plus a bare trap,
   clang's `EmitTrapCheck`, whose trap block is shared like the
   sanitizer's. With `-ftrapv`, a handler name routes every overflow check through
-  clang's `EmitOverflowCheckedBinOp` handler block. The merge set
+  clang's `EmitOverflowCheckedBinOp` handler block; an operation wider
+  than 64 bits (`__int128`) keeps the check it has without the handler
+  (the handler's `(i64, i64, i8, i8, ...)` cannot carry its operands;
+  clang 19 and 22 emit an invalid `sext i128` there and crash, WP-1044,
+  `ubsan.rs` `ub_overflow`). The merge set
   splits trap blocks and adds `nomerge` as clang 20+.
 - **Ignorelists** (WP-1032; `ignorelist.rs`, `class_b.rs`
   `ignored_sanitizers` / `global_sanitizer`): a function an entry
@@ -1461,7 +1465,16 @@ cut the front-end cost of `-g` without changing a byte of the IR.
   outlined and implicit helpers); a global loses its address/hwaddress
   instrumentation and, for `=init`, `sanitize_address_dyninit`; at
   `-fclang-compat=22` a `type:` entry elides overflow and implicit
-  conversion checks of that type. Rules in spec/driver.md "Sanitizers".
+  conversion checks of that type. A string-literal global (WP-1043,
+  `consts.rs` `lit_string_global`, clang
+  `GetAddrOfConstantStringFromLiteral`) is checked only when the
+  literal creates it, against `global:` (its name: `.str.N`,
+  `__func__.<mangled>`), `mainfile:` and `src:` (the file of the
+  literal's expansion), with no `type:` lookup. An `await_suspend`
+  wrapper (`coro.rs`), emitted by clang without a declaration, gets the
+  module's sanitizers (attributes and checks) less the entries naming
+  its own symbol by `fun:` or the main file by `src:`/`mainfile:`.
+  Rules in spec/driver.md "Sanitizers".
 
 - **UBSan type and value checks** (WP-871; docs/design/sanitizers.md
   §1.5 has the coverage table). Each is clang 19's function of the
