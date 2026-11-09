@@ -45,9 +45,12 @@ of any of these. It may add new ones.
   as clang 19 does for the same target ([spec/abi.md](../spec/abi.md)):
   layout, calling convention and mangled names match clang's, and a
   release that finds it differs from clang treats that as a bug and says
-  so in its notes. Names whose mangling clang does not define yet
-  (reflection, `-fkiln-reflection-mangling`) are covered from the release
-  that documents them as final in spec/abi.md.
+  so in its notes. Reflection template arguments, whose mangling clang
+  does not define, use GCC 16.1's form by default (`L Dm … E`,
+  `-fkiln-reflection-mangling=gcc`): that is what 1.0 ships and what
+  this promise covers for them, byte-identical to GCC 16.1's names. The
+  `kiln` and `kiln-hashed` values of the flag are experimental and are
+  not covered.
 - **The install layout** (spec/driver.md "Installation layout"):
   `bin/kiln`, `bin/kiln++`, `lib/kiln/<major>/` and how kiln finds its
   resource directory.
@@ -62,7 +65,8 @@ of any of these. It may add new ones.
   interface sources.
 - **`-fkiln-*` flags are experimental.** The kiln-specific extensions
   (`-fkiln-stack-size`, `-fkiln-instantiation-report`,
-  `-fkiln-memory-report`, `-fkiln-reflection-mangling`,
+  `-fkiln-memory-report`, the `kiln` and `kiln-hashed` values of
+  `-fkiln-reflection-mangling`,
   `-fkiln-source-path-style`, `-fkiln-outline-expansions`,
   `-fkiln-dump-cfg`, `-fkiln-reproducible-time` and the others), the
   `__kiln_*` builtins and the formats of the reports they write may
