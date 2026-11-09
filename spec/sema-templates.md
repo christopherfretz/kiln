@@ -2689,6 +2689,31 @@ reports a dropped statement, part or declaration lookup.
   non-dependent base reached through a dependent base are accessible in
   `R<int>` (the implicit access records `*this`'s class as its object;
   `class.protected/dependent-base-current-object.cpp`, WP-680).
+  In a requires-expression's requirements ([expr.prim.req.general]/5)
+  such a check (a befriended specialization, a [temp.friend]/5 member
+  friend of the pattern, a dependent base) never decides the value and is
+  never replayed as a hard error. It is recorded against the
+  requires-expression's `RequiresExprBody` (the innermost one in the
+  context chain before a function or class; `Sema::requires_body_ctx`),
+  the requires-expression is made value-dependent (so a non-dependent one
+  is not evaluated where it is formed, and an enclosing `if constexpr`,
+  `static_assert` or initializer waits too), and each substitution that
+  evaluates it re-runs the recorded checks inside the requirement's
+  SFINAE frame (`Sema::replay_requires_access`): a failure makes it false
+  with no satisfaction note; a check that is still only speculative (a
+  partial substitution) leaves it dependent. This is clang's rule: the
+  `RequiresExprBodyDecl` is its own access context, its dependent access
+  diagnostics are performed by `TemplateInstantiator::TransformRequiresExpr`
+  under a `SFINAETrap`, and an error there only `setSatisfied(false)`
+  (no note: clang's FIXME). So `requires { B::sn; }` in `A<T>` with
+  `friend struct A<int>;` is true in `A<int>` and false in `A<long>`
+  (clang 19 and 22 agree; g++ 14 and 16.1 instead check it at the
+  definition, without the friend, and reject).
+  A non-dependent use outside the requires-expression is replayed as
+  before, also in a discarded `if constexpr` branch (clang does; g++
+  does not), so `if constexpr (requires { B::sn; }) return B::sn;` is an
+  error in `A<long>` (`expr.prim.req.general/speculative-access-*.cpp`,
+  WP-1165).
   Type names are checked as other names (spec/sema-class.md §2.4).
 - **A member of every specialization ([temp.friend]/5; WP-1072).**
   `template<class T> friend class A<T>::Member;` (any class-key) and
@@ -2814,11 +2839,16 @@ reports a dropped statement, part or declaration lookup.
     of any unit with a friend declaration ("a friend declaration",
     bmi_image.rs), so the side table (`requires`, `enclosing`) needs no
     image record (WP-1145, `member-friend-module-run.cpp`).
-  - Gap (WP-1145 follow-up): a speculative grant also decides a
-    non-dependent requires-expression in the pattern (`requires { x.n; }`
-    in `A<T>::b`), which the replay then reports as a hard access error
-    in the specialization the friend does not name
-    (`member-friend-speculative-requires-expression.cpp`, `xfail(kiln)`).
+  - A speculative grant in a requires-expression's requirements is
+    decided per specialization like the other dependent checks (above;
+    WP-1165): `requires { x.n; }` and `requires { B::sn; }` in
+    `A<T>::b(U, const B &)` are false in `A<int>::b<int>` when the friend
+    names `A<T>::b(U, const B &, int)` and true when it names `b` itself
+    (`member-friend-speculative-requires-expression.cpp`, and an overload
+    the module's friend does not name in `member-friend-module-run.cpp`).
+    A use of `x.n` outside the requires-expression, even in its
+    discarded `if constexpr` branch, is still replayed as an error in
+    such a specialization, as clang does for a befriended specialization.
 - `template<class U> friend struct Y<U*>;` is "partial specialization
   cannot be declared as a friend" ([temp.friend]/9).
 
