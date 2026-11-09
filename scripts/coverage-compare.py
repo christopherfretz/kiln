@@ -29,7 +29,8 @@ other comparison is equal, 1 otherwise.
 
 The profile runtime is the oracle LLVM's compiler-rt
 (`<llvm>/lib/clang/<N>/lib/linux/libclang_rt.profile-<arch>.a`), which
-the link (`clang++`) adds for both compilers. `--llvm 22` with
+the link (`clang++`) adds for both compilers. Without it (a tiny link is
+probed first) the script prints SKIP and exits 0. `--llvm 22` with
 `--clang clang++-22` compares under `-fclang-compat=22` with the LLVM 22
 tools.
 """
@@ -257,6 +258,25 @@ def compare_map(name, src, compilers, tools, args):
     return ks == cs and kl == cl
 
 
+def missing_profile_runtime(compilers, scratch):
+    """The first link driver that cannot link `-fprofile-instr-generate`
+    (no `libclang_rt.profile`; `--coverage` links the same runtime), with
+    its error, or None. A tiny program is linked with each one."""
+    work = Path(tempfile.mkdtemp(prefix="cov-probe-", dir=scratch))
+    (work / "probe.cpp").write_text("int main() { return 0; }\n")
+    for label, cc, extra in compilers:
+        # The link command of build_and_run.
+        link = [LINK] if LINK else [cc, *(x for x in extra if x.startswith("--llvm-dir"))]
+        p = run([*link, "-fprofile-instr-generate", "probe.cpp", "-o", f"probe-{label}"],
+                work, check=False)
+        if p.returncode != 0:
+            lines = p.stderr.splitlines()
+            err = next((l for l in lines if "cannot find" in l),
+                       next((l for l in lines if "error" in l), "link failed"))
+            return f"{link[0]}: {err}"
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--kiln", default=default_kiln())
@@ -286,6 +306,10 @@ def main():
     args.scratch = scratch
     ok = True
     try:
+        missing = missing_profile_runtime(compilers, scratch)
+        if missing:
+            print(f"SKIP: no profile runtime (libclang_rt.profile) to link with: {missing}")
+            return 0
         for src in files:
             print(src.name)
             modes = (("instr", compare_instr, prof), ("gcov", compare_gcov, cov),

@@ -1372,7 +1372,8 @@ fn cov_rows(report: &str) -> Vec<String> {
 /// coroutine, unused functions), the program runs, `llvm-profdata merge`
 /// and `llvm-cov report/show` read it, and the report is clang 19's, in
 /// both compat modes with that LLVM's tools. The link uses clang++-19
-/// (its profile runtime; the LLVM 22 one is not installed everywhere).
+/// (its profile runtime; the LLVM 22 one is not installed everywhere), and
+/// the test skips where clang 19's profile runtime is missing too.
 #[test]
 fn coverage_mapping_end_to_end() {
     let need = ["clang++-19", "llvm-profdata-19", "llvm-cov-19"];
@@ -1381,6 +1382,23 @@ fn coverage_mapping_end_to_end() {
         return;
     }
     let d = scratch("covmap-e2e");
+    // The link needs clang 19's profile runtime (`libclang_rt.profile`),
+    // which not every install carries (the CI runners have none): probe
+    // it with a tiny link and skip without it.
+    std::fs::write(d.join("probe.cpp"), "int main() { return 0; }\n").unwrap();
+    let probe = Command::new("clang++-19")
+        .args(["-fprofile-instr-generate", "probe.cpp", "-o", "probe"])
+        .current_dir(&d)
+        .output()
+        .unwrap();
+    if !probe.status.success() {
+        let why = text(&probe.stderr);
+        let mut lines = why.lines();
+        let why = lines.clone().find(|l| l.contains("cannot find"));
+        let why = why.or_else(|| lines.find(|l| l.contains("error"))).unwrap_or("link failed");
+        eprintln!("SKIP: clang++-19 has no profile runtime (libclang_rt.profile): {why}");
+        return;
+    }
     std::fs::write(d.join("cov.h"), COV_H).unwrap();
     std::fs::write(d.join("m.cpp"), COV_MAIN).unwrap();
     // regions missed, functions missed, lines missed, branches missed.
