@@ -25,19 +25,61 @@ declarations are in `tests/support/kiln_meta_queries.h`.
   string literal object, a `std::type_info` object or a lifetime-extended
   temporary. A reference that is not usable in constant expressions fails
   with `reference 'R' is not usable in constant expressions` (WP-879).
-- **`constant_of(r)`** gives `Value(cv)` with `cv = int_const(canonical
-  type, value)`. A constant of an integral or enumeration type from an
-  enumerator, a template argument value or a variable usable in constant
-  expressions is supported: a `constexpr` one, or a constant-initialized
-  `const` non-volatile integral one. If the value was not yet evaluated,
-  it is evaluated in a lent Oven.
+- **`constant_of(r)`** ([meta.reflection.queries]; WP-503). With `R`
+  the splice of `r`, it is `reflect_constant_array(R)` for an array,
+  `reflect_function(R)` for a function and `reflect_constant(R)` for
+  anything else ([meta.reflection.result], P3491R3). An annotation gives
+  its underlying constant. All of these go through one builder,
+  `Sema::constant_reflection` (`kiln_sema/src/meta/value.rs`), which
+  `reflect_constant` and annotations share:
+  - A scalar (integral, enumeration, floating-point, pointer, pointer
+    to member, `info`) gives `Value(cv)`.
+  - A class value gives the `Object` of its template parameter object
+    (`const T`).
+  - An array value gives the `Object` of the `reflect_constant_array`
+    object, `PtrBase::Const` of the elements' image typed
+    `E[N]` (cv-unqualified `E`).
+  - Before interning, an aggregate image is retyped cv-unqualified, so
+    one value is one object whatever spelling of its type froze it:
+    `constant_of(^^arr) == reflect_constant_array(arr)`.
+  - The value must be structural (`'T' is not a structural type`), and
+    a valid constant template argument (`check_tparg`: no pointer to a
+    string literal, temporary or subobject that is not allowed).
+
+  The value is found from the reflectee:
+  - A **`Value`** is its own constant.
+  - An **enumerator** gives its value.
+  - A **variable usable in constant expressions** (`constexpr`, or a
+    constant-initialized `const` non-volatile integral) gives its
+    initializer value, evaluated in a lent Oven if not yet evaluated.
+    A reference variable gives the constant of the object it refers to.
+  - A **structured binding** gives the constant of its tuple-like
+    variable, or else of its binding expression folded over a usable
+    decomposition.
+  - A **function**, and a static member function, gives `r` itself
+    (`reflect_function`).
+  - An **`Object`** gives:
+    - `r` itself for a whole template parameter object or a whole
+      `PtrBase::Const` object (they are their own constants).
+    - The variable's value for a whole variable usable in constant
+      expressions.
+    - For any other (sub)object, the value read from the Oven heap:
+      `Oven::meta_freeze_at` (`kiln_oven/src/meta/value.rs`) thaws
+      the pointer into the calling frame's registers above
+      `MetaCtx::top`, loads the scalar or freezes the aggregate at that
+      address and gives its constant. The complete object must be a
+      variable usable in constant expressions, a template parameter
+      object or a `Const` object, or it fails with `the value of 'v' is
+      not usable in a constant expression`.
 - **`operator_of(r)`** gives the `operators` enumerator as an integer.
   The numbering is GCC 16.1's `[meta.reflection.operators]` order (see
   `kiln_meta_queries.h`).
-- **`symbol_of(op)` / `u8symbol_of(op)`** give a frozen NUL-terminated
-  `const char*` / `const char8_t*` in the same way `name_of` does (the `x`
-  encoding). The switch to `string_view` waits for WP-475's
-  materialization.
+- **`symbol_of(op)` / `u8symbol_of(op)`** give a `std::string_view` /
+  `std::u8string_view` of the operator's spelling, made the same way as
+  `identifier_of` (spec/reflection.md §3.5, `MetaOut::Str`). The view's
+  data is NUL-terminated (`operators.cpp`). The callee's declared return
+  type picks the result shape: a record gives the view, a pointer the
+  frozen string.
 - **`variable_of(r)`** gives the `ParmVar` of the function definition
   whose body is being evaluated, for a `FnParam` of that function.
 - **`type_of(r)`** of an annotation is the type of its underlying
@@ -84,7 +126,12 @@ declarations are in `tests/support/kiln_meta_queries.h`.
     adds a default argument or a `= default`.
   - `variable_of`: the answer depends on which function is being
     evaluated. The oven table classes it `PointDependent`, and
-    spec/reflection.md §3.3 follows the table.
+    spec/reflection.md §3.3 follows the table. Decided in WP-503 to keep
+    it: [meta.reflection.queries] lets `variable_of(r)` answer only
+    inside the function whose parameter `r` is. So the same call
+    (same callee, same `info` bits) answers differently in different
+    function bodies, and a call memo keyed only on the arguments would
+    be wrong.
 
   These rows raise `run.impure`, so a caller of one is never memoized.
   `type_of` is `Stable` but raises `run.impure` itself for a variable
@@ -101,25 +148,31 @@ declarations are in `tests/support/kiln_meta_queries.h`.
 ## 3. Failures
 A failing query is not a constant expression. Its `MetaError` note
 follows the shape of GCC 16.1's `std::meta::exception::what()`. Wording
-parity is out of scope. The negative tests are `entity-neg.cpp` and
-`operators-parameters-neg.cpp`.
+parity is out of scope. The negative tests are `entity-neg.cpp`,
+`operators-parameters-neg.cpp` and `constant-of-neg.cpp`.
 
 | Op | Fails when | Note |
 |---|---|---|
 | `type_of` | `r` has no type ([meta.reflection.queries] *has-type*) | `'X' has no type` |
 | `parent_of` | `r` is null, the global namespace, a type without a declaration, a value or object, or a function or variable with C language linkage (`has_parent` false) | `reflection does not represent an entity with parent` |
 | `object_of` | `r` is not a variable of static storage duration | `reflection does not represent an object with static storage duration, or a reference to such an object` |
-| `constant_of` | `r` is not a value, enumerator, object or variable | `reflection does not represent an annotation or a valid argument to a splice-expression` |
+| `constant_of` | `r` is not a value, annotation, enumerator, object, variable, structured binding or function (a non-static member, a type, a namespace) | `reflection does not represent an annotation or a valid argument to a splice-expression` |
 | `constant_of` | the entity has no type | `reflection does not have a type` |
-| `constant_of` | the variable is not usable in constant expressions | `the value of 'v' is not usable in a constant expression` |
+| `constant_of` | the variable, binding or (sub)object's complete object is not usable in constant expressions | `the value of 'v' is not usable in a constant expression` |
+| `constant_of` | the value's type is not structural (a `mutable` or non-public member) | `'T' is not a structural type` |
+| `constant_of` | the value is not a valid constant template argument (a pointer to a string literal) | `the value refers to a string literal, which is not a valid constant template argument` |
 | `operator_of` | `r` is not an operator function (template) | `reflection does not represent an operator function or operator function template` |
 | `symbol_of`, `u8symbol_of` | `op` is not an `operators` enumerator | `operators argument is not a valid operator` |
 | `return_type_of` | `r` is not a function or function type | `reflection does not represent a function or function type with a return type` |
 | `variable_of` | `r` is not a parameter of the function being evaluated | `reflection does not represent parameter of current function` |
 
 **Not implemented yet.** These fail with a `kiln:` note:
-- `constant_of` of a class, array, floating or reference variable, or of
-  an `Object` (WP-479).
+- `constant_of` of a subobject the Oven cannot read: a `_BitInt` wider
+  than 128 bits (`constant_of an object of type 'T' is not implemented
+  yet`).
+- `constant_of` of an explicit-object member function: the
+  "not a valid argument to a splice-expression" note, because only
+  static member functions are handled yet.
 
 ## 4. Row semantics that need a word
 - **Linkage** ([basic.link]) belongs to a name. A type alias, a
@@ -142,22 +195,35 @@ parity is out of scope. The negative tests are `entity-neg.cpp` and
 - **`has_template_arguments`** is true for a class, function or variable
   template specialization, and for an alias template specialization
   that is kept as written.
-- **`is_data_member_spec` is always false** until WP-480 builds
-  `DataMemberSpec`.
-- **`is_annotation`** is true for `Reflectee::Annotation`. Nothing
-  builds one until WP-481.
-- **`is_base` is false** for every reflection that exists today. Before
-  `bases_of` (WP-478), nothing yields a `BaseSpec`.
+- **`is_data_member_spec`** is true for `Reflectee::DataMemberSpec`
+  (`data_member_spec`; `meta.reflection.define.aggregate/`).
+- **`is_annotation`** is true for `Reflectee::Annotation`
+  (`annotations_of`; `meta.reflection.annotation/`).
+- **`is_base`** is true for a direct base relationship (`BaseSpec`,
+  from `bases_of`). It has the access of its base-specifier, and it is
+  neither a class nor a namespace member (`members.cpp`).
 
 ## 5. Deviations from GCC 16.1 (kiln follows the IS)
-- `has_linkage(^^NA)` for a namespace alias: GCC says true.
-- `is_namespace_member(^^int)`: GCC says true.
-- A namespace-scope lambda's closure type: GCC gives it linkage.
+Rechecked against g++ 16.1 `-std=c++26 -freflection` in WP-503:
+- `has_linkage(^^NA)` for a namespace alias: GCC says true
+  (`linkage-storage.cpp`).
+- `is_namespace_member(^^int)`: GCC says true (`members.cpp`).
+- `constant_of` of an array: GCC gives a reflection of a fresh variable,
+  not the content-interned `reflect_constant_array` object the IS
+  requires. So in GCC:
+  - `constant_of(^^arr) != reflect_constant_array(arr)`, and
+    `constant_of(constant_of(^^arr))` differs from `constant_of(^^arr)`;
+  - `constant_of` of a reference to a string literal array throws
+    `reflect_constant failed`.
+
+  `constant-of-values.cpp` lines 55, 60 and 89 fail under GCC.
+- No longer a deviation: a closure type at namespace or class scope has
+  no linkage in GCC 16.1 either (`linkage-storage.cpp`).
 
 ## 6. Status
-Every row in §1–§4 is implemented. `parameters_of` belongs to WP-478,
-and `template_of` / `template_arguments_of` belong to WP-482. The
-positive tests in `parameters-p3096.cpp` that need `parameters_of` are
-kept disabled until it exists. The IS example lines that need
-`bases_of`, `is_union_type`, references or class constants are disabled
-in the same way.
+Every row in §1–§4 is implemented, apart from the §3 gaps.
+`parameters_of` (WP-478) and `template_of` / `template_arguments_of`
+(WP-482) are specified elsewhere. No test in
+`meta.reflection.queries/` is disabled (WP-503 enabled the
+`parameters-p3096.cpp`, `parent-dealias.cpp` and `values-objects.cpp`
+blocks).

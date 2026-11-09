@@ -24,10 +24,8 @@ enum class operators {
 };
 using enum operators;
 
-// Until WP-475's string_view materialization: a pointer to a string
-// literal object, like name_of.
-consteval const char* symbol_of(operators op);
-consteval const char8_t* u8symbol_of(operators op);
+consteval std::string_view symbol_of(operators op);
+consteval std::u8string_view u8symbol_of(operators op);
 
 consteval info object_of(info r);
 consteval info constant_of(info r);

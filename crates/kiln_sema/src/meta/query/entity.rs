@@ -9,7 +9,7 @@ use kiln_ast::names::{DeclNameView, OverloadedOperator as Op};
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::TypeView;
 use kiln_ast::{ConstValueId, DeclId, QualType, ReflectionId};
-use kiln_oven::{MetaError, Oven};
+use kiln_oven::{MetaCtx, MetaError, Oven};
 use kiln_source::Loc;
 
 use super::super::fail;
@@ -370,80 +370,188 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// `constant_of(r)` ([meta.reflection.queries]): `reflect_constant`
-    /// of the value `r` designates. A value is its own constant; an
-    /// enumerator's is its value as the enumeration type; a variable's
-    /// (or an object's) is the value of its constant initializer when the
-    /// variable is usable in constant expressions and of integral,
-    /// enumeration or `bool` type (other types wait for WP-479's
-    /// `reflect_constant`).
+    /// `constant_of(r)` ([meta.reflection.queries]): an annotation's
+    /// underlying constant; otherwise, with `R` the splice of `r`,
+    /// `reflect_constant_array(R)` of an array, `reflect_function(R)` of a
+    /// function, `reflect_constant(R)` of anything else
+    /// ([`Sema::constant_reflection`]). A value is its own constant; an
+    /// enumerator's is its value; a variable's its constant initializer's
+    /// when it is usable in constant expressions ([expr.const]/4), a
+    /// reference's that of the object it refers to; an object's (a
+    /// subobject's) is read from its complete object, which must be a
+    /// variable usable in constant expressions or a static constant.
     pub(in crate::meta) fn reflect_constant_of(
         &mut self,
         r: ReflectionId,
-        loc: Loc,
+        ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<ReflectionId, MetaError> {
+        let loc = ctx.loc;
+        let not_splice = |loc| {
+            fail(
+                loc,
+                "reflection does not represent an annotation or a valid argument to a \
+                 splice-expression",
+            )
+        };
         let d = match self.ast.reflections.get(r) {
             Reflectee::Value(_) => return Ok(r),
             // An annotation's underlying constant (P3394R4).
             Reflectee::Annotation(a) => return self.annotation_constant(a, loc),
-            Reflectee::Object(cv) => match self.ast.consts.scalar(cv) {
-                Some(Scalar::Pointer { base: PtrBase::Decl(d), offset: 0, .. }) => d,
-                _ => return fail(loc, "kiln: constant_of this object is not implemented yet"),
-            },
-            Reflectee::Decl(d)
-                if matches!(
-                    self.kind_of(d),
-                    DeclKind::EnumConstant | DeclKind::Var | DeclKind::VarTemplateSpecialization
-                ) =>
-            {
-                d
-            }
-            _ => {
-                return fail(
-                    loc,
-                    "reflection does not represent an annotation or a valid argument to a splice-expression",
-                );
-            }
+            Reflectee::Object(p) => return self.object_constant(r, p, ctx, oven),
+            Reflectee::Decl(d) => d,
+            _ => return not_splice(loc),
         };
+        match self.kind_of(d) {
+            DeclKind::EnumConstant | DeclKind::Var | DeclKind::VarTemplateSpecialization => {}
+            // `reflect_function([: r :])`: the function itself; a
+            // non-static member function is no splice-expression's
+            // operand outside a member access ([expr.prim.splice]/2).
+            DeclKind::Function => {
+                return Ok(self.intern_reflection(Reflectee::Decl(self.entity_decl(d)), loc)?);
+            }
+            DeclKind::CXXMethod if self.is_static_method(self.ast.first(d)) => {
+                return Ok(self.intern_reflection(Reflectee::Decl(self.entity_decl(d)), loc)?);
+            }
+            DeclKind::Binding => return self.binding_constant(d, ctx, oven),
+            _ => return not_splice(loc),
+        }
         let Some(ty) = self.ast.decls.get(d).ty().filter(|&t| t != QualType::ERROR) else {
             return fail(loc, "reflection does not have a type");
         };
         let ty = self.ast.types.canonical(ty);
+        if self.ast.types.is_reference(ty) {
+            let o = self.referenced_object(d, loc, oven)?;
+            let Reflectee::Object(p) = self.ast.reflections.get(o) else {
+                return Err(MetaError::invalid());
+            };
+            return self.object_constant(o, p, ctx, oven);
+        }
         let value = if self.kind_of(d) == DeclKind::EnumConstant {
-            self.ast.decls.enumerator(d).and_then(|e| e.value)
+            let v = self.ast.decls.enumerator(d).and_then(|e| e.value);
+            v.and_then(|v| self.const_int(v)).map(|v| self.int_const(ty, v))
         } else {
-            self.var_constant_value(d, ty, loc, oven)?
+            self.var_constant_value(d, ty, oven)
         };
-        match value.and_then(|v| self.const_int(v)) {
-            Some(v) => {
-                let cv = self.int_const(ty, v);
-                Ok(self.intern_reflection(Reflectee::Value(cv), loc)?)
-            }
+        let Some(cv) = value else { return self.not_usable(d, loc) };
+        self.constant_of_value(cv, loc)
+    }
+
+    /// `constant_of(^^b)` of structured binding `b` ([dcl.struct.bind]):
+    /// a tuple-like binding's is its holding variable's; any other's is
+    /// the value of its binding expression (an element or member of the
+    /// decomposition variable `e`), when `e` is usable in constant
+    /// expressions.
+    fn binding_constant(
+        &mut self,
+        b: DeclId,
+        ctx: &MetaCtx,
+        oven: &mut Oven,
+    ) -> Result<ReflectionId, MetaError> {
+        let loc = ctx.loc;
+        if let Some(v) = self.ast.decls.binding_var(b) {
+            let r = self.intern_reflection(Reflectee::Decl(v), loc)?;
+            return self.reflect_constant_of(r, ctx, oven);
+        }
+        let e = self.ast.decls.binding_decomp(b);
+        let x = self.ast.decls.binding_expr(b);
+        let (Some(e), Some(x)) = (e, x) else { return self.not_usable(b, loc) };
+        let ety = self.ast.decls.get(e).ty().map(|t| self.ast.types.canonical(t));
+        let usable = ety.is_some_and(|t| self.var_constant_value(e, t, oven).is_some());
+        let value = if usable { self.lend_oven(oven, |s| s.try_fold(x)) } else { None };
+        let Some(cv) = value else { return self.not_usable(b, loc) };
+        self.constant_of_value(cv, loc)
+    }
+
+    /// `reflect_constant` (or `reflect_constant_array`) of constant `cv`
+    /// for `constant_of`: its type must be structural (an array's
+    /// element type, [meta.reflection.array]).
+    fn constant_of_value(&mut self, cv: ConstValueId, loc: Loc) -> Result<ReflectionId, MetaError> {
+        let ty = &self.ast.types;
+        let mut t = ty.canonical(self.ast.consts.ty(cv));
+        while let Some(e) = ty.element(t).filter(|_| ty.is_array(t)) {
+            t = ty.canonical(e);
+        }
+        let t = t.without_quals();
+        if !self.is_structural(t) {
+            return fail(loc, format!("'{}' is not a structural type", self.ty_str(t)));
+        }
+        self.constant_reflection(cv, loc)
+    }
+
+    /// `constant_of` of the object (or subobject) pointer `p` designates
+    /// (`r` reflects it): the value it holds, when its complete object is
+    /// usable in constant expressions ([expr.const]/4): a variable so
+    /// usable, a template parameter object, a `reflect_constant_array`
+    /// or string literal object, a temporary bound to a reference
+    /// constant.
+    fn object_constant(
+        &mut self,
+        r: ReflectionId,
+        p: ConstValueId,
+        ctx: &MetaCtx,
+        oven: &mut Oven,
+    ) -> Result<ReflectionId, MetaError> {
+        let loc = ctx.loc;
+        let Some(Scalar::Pointer { ty: pty, base, offset, .. }) = self.ast.consts.scalar(p) else {
+            return Err(MetaError::invalid());
+        };
+        let obj = self.ast.types.pointee(pty).map(|q| self.ast.types.canonical(q).without_quals());
+        let Some(obj) = obj else { return Err(MetaError::invalid()) };
+        let whole =
+            |s: &Self, q: QualType| offset == 0 && s.ast.types.canonical(q).without_quals() == obj;
+        match base {
+            PtrBase::Decl(d) => match self.kind_of(d) {
+                // Its own constant: `reflect_constant` of its value is it.
+                DeclKind::TemplateParamObject
+                    if self.ast.decls.get(d).ty().is_some_and(|q| whole(self, q)) =>
+                {
+                    return Ok(r);
+                }
+                DeclKind::TemplateParamObject => {}
+                DeclKind::Var | DeclKind::VarTemplateSpecialization => {
+                    let Some(dty) = self.ast.decls.get(d).ty().filter(|&t| t != QualType::ERROR)
+                    else {
+                        return self.not_usable(d, loc);
+                    };
+                    let dty = self.ast.types.canonical(dty);
+                    let Some(v) = self.var_constant_value(d, dty, oven) else {
+                        return self.not_usable(d, loc);
+                    };
+                    if whole(self, dty) {
+                        return self.constant_of_value(v, loc);
+                    }
+                }
+                _ => return self.not_usable(d, loc),
+            },
+            // A `reflect_constant_array` object is its own constant.
+            PtrBase::Const(c) if whole(self, self.ast.consts.ty(c)) => return Ok(r),
+            _ => {}
+        }
+        match self.bridge(|b| oven.meta_freeze_at(b, p, ctx))? {
+            Some(cv) => self.constant_of_value(cv, loc),
             None => fail(
                 loc,
                 format!(
-                    "the value of '{}' is not usable in a constant expression",
-                    self.decl_name(d)
+                    "kiln: constant_of an object of type '{}' is not implemented yet",
+                    self.ty_str(obj)
                 ),
             ),
         }
     }
 
     /// The constant value of variable `d` (of canonical type `ty`) when
-    /// it is usable in constant expressions ([expr.const]): `constexpr`,
-    /// or `const` non-volatile of integral or enumeration type, with a
-    /// constant initializer (evaluated now if it was not yet).
+    /// it is usable in constant expressions ([expr.const]/4):
+    /// `constexpr`, or `const` non-volatile of integral or enumeration
+    /// type, with a constant initializer (evaluated now if it was not
+    /// yet); a reference's is the pointer to the object it binds.
     fn var_constant_value(
         &mut self,
         d: DeclId,
         ty: QualType,
-        loc: Loc,
         oven: &mut Oven,
-    ) -> Result<Option<ConstValueId>, MetaError> {
-        if self.ast.decls.var(d).is_none() {
-            return Ok(None);
-        }
+    ) -> Option<ConstValueId> {
+        self.ast.decls.var(d)?;
         let constexpr = self
             .ast
             .redecls_of(d)
@@ -455,20 +563,17 @@ impl Sema<'_, '_> {
         // or a const non-volatile integral or enumeration variable.
         let const_int = integral && quals.is_const() && !quals.is_volatile();
         if !(constexpr || reference || const_int) {
-            return Ok(None);
+            return None;
         }
-        if !integral {
-            return fail(
-                loc,
-                format!(
-                    "kiln: constant_of a variable of type '{}' is not implemented yet",
-                    self.ty_str(ty)
-                ),
-            );
-        }
-        Ok(self.var_init_value(d, oven))
+        self.var_init_value(d, oven)
     }
 
+    fn not_usable<T>(&self, d: DeclId, loc: Loc) -> Result<T, MetaError> {
+        fail(
+            loc,
+            format!("the value of '{}' is not usable in a constant expression", self.decl_name(d)),
+        )
+    }
     /// The value of the constant initializer of variable `d` (evaluated
     /// now if it was not yet); `None` when it has none.
     fn var_init_value(&mut self, d: DeclId, oven: &mut Oven) -> Option<ConstValueId> {

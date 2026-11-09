@@ -320,6 +320,10 @@ pub struct TemplateTables {
     /// identifier `N`, looked up in the object's class at instantiation
     /// (clang's identifier-only `PseudoDestructorTypeStorage`; WP-457).
     pub pseudo_dtor_name: ColdMap<ExprId, kiln_source::symbol::Symbol>,
+    /// A `CXXPseudoDestructorExpr` `p->S::F::~Q()` with a dependent `S`:
+    /// the first type-name `S::F` and where `F` is, checked against the
+    /// object's type at instantiation (clang's `ScopeType`; WP-1155).
+    pub pseudo_dtor_first: ColdMap<ExprId, (QualType, Loc)>,
     /// The `template` keyword after the qualifier of a qualified name
     /// (`N::template v<T>`; clang's `TemplateKWLoc`), which the printer
     /// writes back (WP-308).
@@ -450,6 +454,7 @@ impl Default for TemplateTables {
             pack_index_origin: ColdMap::new("pack_index_origin"),
             member_op_loc: ColdMap::new("member_op_loc"),
             pseudo_dtor_name: ColdMap::new("pseudo_dtor_name"),
+            pseudo_dtor_first: ColdMap::new("pseudo_dtor_first"),
             template_kw: ColdMap::new("template_kw"),
             ttp_owner: ColdMap::new("ttp_owner"),
             expr_nns: ColdMap::new("expr_nns"),
@@ -735,6 +740,7 @@ impl HeapSize for TemplateTables {
         r.push(self.pack_index_origin.mem_row());
         r.push(self.member_op_loc.mem_row());
         r.push(self.pseudo_dtor_name.mem_row());
+        r.push(self.pseudo_dtor_first.mem_row());
         r.push(self.template_kw.mem_row());
         r.push(self.expr_nns.mem_row());
         r.push(MemRow::of_vec("templ.specs", &self.specs));

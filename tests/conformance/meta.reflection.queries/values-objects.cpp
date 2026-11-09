@@ -5,11 +5,9 @@
 // storage duration, no linkage, no parent); object_of of an object is
 // itself. constant_of of a variable usable in constant expressions or of
 // an enumerator is a value reflection of the constant's value and type;
-// constant_of of an object reflection is the object's value. Kiln today
-// produces constants of integral, enumeration and bool type only;
-// class, array and reference-typed constants, reflect_constant and
-// reflect_object wait for WP-479, so the IS examples' lines needing them
-// are kept, disabled. Answers checked against GCC 16.1 (-freflection).
+// constant_of of an object reflection is the object's value (other
+// types: constant-of-values.cpp). Answers checked against GCC 16.1
+// (-freflection).
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
@@ -19,12 +17,10 @@ using namespace std::meta;
 namespace ex_object_of {
 // [meta.reflection.queries], object_of's example.
 int x;
-#if 0  // enable with object_of of a reference variable (WP-479)
 int& y = x;
 
 static_assert(^^x != ^^y);
 static_assert(object_of(^^x) == object_of(^^y));
-#endif
 static_assert(object_of(^^x) == object_of(^^x));
 }
 
@@ -35,7 +31,6 @@ constexpr int y = 0;
 
 static_assert(^^x != ^^y);
 static_assert(constant_of(^^x) == constant_of(^^y));
-#if 0  // enable with reflect_constant, reflect_object and class constants (WP-479)
 static_assert(constant_of(^^x) == reflect_constant(0));
 
 struct S { int m; };
@@ -43,7 +38,6 @@ constexpr S s {42};
 static_assert(is_object(constant_of(^^s)) && is_object(reflect_object(s)));
 static_assert(constant_of(^^s) != reflect_object(s));
 static_assert(constant_of(^^s) == constant_of(reflect_object(s)));
-#endif
 }
 
 constexpr int ci = 4;

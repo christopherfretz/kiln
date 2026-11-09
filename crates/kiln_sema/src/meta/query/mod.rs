@@ -79,7 +79,7 @@ impl Sema<'_, '_> {
             }
             QueryOp::ConstantOf => {
                 self.use_reflected_var(r, loc, oven);
-                MetaOut::Info(self.reflect_constant_of(r, loc, oven)?)
+                MetaOut::Info(self.reflect_constant_of(r, ctx, oven)?)
             }
             QueryOp::ParentOf => match self.parent_of(self.ast.reflections.get(r)) {
                 Some(p) => MetaOut::Info(self.intern_reflection(p, loc)?),
@@ -95,8 +95,8 @@ impl Sema<'_, '_> {
     }
 
     /// `is_annotation` / `is_data_member_spec`: the reflection is an
-    /// annotation / a data member description. Nothing builds either yet
-    /// (WP-481 / WP-480), so both are false for every reflection today.
+    /// annotation ([meta.reflection.annotation]) / a data member
+    /// description made by `data_member_spec` ([meta.reflection.define.aggregate]).
     pub(in crate::meta) fn meta_kind_pred(
         &mut self,
         op: MetaOp,

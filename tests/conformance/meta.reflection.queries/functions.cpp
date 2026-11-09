@@ -4,7 +4,7 @@
 // is_user_provided, is_user_declared, is_explicit, is_noexcept, is_const,
 // is_volatile, is_lvalue_reference_qualified,
 // is_rvalue_reference_qualified, is_conversion_function,
-// is_operator_function, is_literal_operator: negative only) and the special-member set
+// is_operator_function, is_literal_operator) and the special-member set
 // (is_special_member_function, is_constructor, is_default_constructor,
 // is_copy_constructor, is_move_constructor, is_assignment,
 // is_copy_assignment, is_move_assignment, is_destructor). A function
