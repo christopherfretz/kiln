@@ -144,7 +144,7 @@ const INCOMPATIBLE: &[(S, S)] = &[
 ];
 
 /// The sanitizers kiln does not implement that clang's driver checks
-/// further (WP-1151): the [`INCOMPATIBLE`] pairs and the AArch64
+/// further (WP-1151): the [`INCOMPATIBLE`] pairs and the `AArch64`
 /// `shadow-call-stack` / `-ffixed-x18` rule.
 const CLANG_CHECKED: S = S(S::MEMTAG.0
     | S::SHADOW_CALL_STACK.0
@@ -156,7 +156,7 @@ const CLANG_CHECKED: S = S(S::MEMTAG.0
     | S::KCFI.0);
 
 /// LLVM's `AArch64::isX18ReservedByDefault` of a `--target=` triple (of
-/// those kiln accepts: Android and OpenHarmony; also Darwin, Fuchsia and
+/// those kiln accepts: Android and `OpenHarmony`; also Darwin, Fuchsia and
 /// Windows): `-fsanitize=shadow-call-stack` then needs no `-ffixed-x18`.
 #[must_use]
 pub fn x18_reserved_by_default(triple: &str) -> bool {
@@ -981,7 +981,7 @@ mod tests {
         assert_eq!(errs("-fsanitize=memtag,address -fno-sanitize=memtag").len(), 0);
         // The kiln sanitizer of a bad pair is dropped.
         assert!(!resolve("-fsanitize=memtag,address").0.opts.kinds.has_any(S::ADDRESS));
-        assert_eq!(errs("-fsanitize=shadow-call-stack"), [x18.clone()]);
+        assert_eq!(errs("-fsanitize=shadow-call-stack"), std::slice::from_ref(&x18));
         assert_eq!(errs("-fsanitize=shadow-call-stack -fno-sanitize=shadow-call-stack"), []);
         // Before the pairs.
         assert_eq!(

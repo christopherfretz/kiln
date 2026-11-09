@@ -1907,7 +1907,7 @@ fn error_texts(stderr: &str) -> Vec<String> {
 /// pairs of the memtag sanitizers with the address family come before the
 /// `+memtag` hardware error, and `-fsanitize=shadow-call-stack` on
 /// `AArch64` needs `-ffixed-x18` unless the target OS reserves x18
-/// (Android, OpenHarmony). Checked literally and against clang++-19/22
+/// (Android, `OpenHarmony`). Checked literally and against clang++-19/22
 /// where installed.
 #[test]
 fn memtag_pairs_and_shadow_call_stack() {
