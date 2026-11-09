@@ -572,7 +572,7 @@ impl Oven {
         out
     }
 
-    fn grow_regs(&mut self, need: usize) {
+    pub(crate) fn grow_regs(&mut self, need: usize) {
         if self.regs.len() < need {
             self.regs.resize(need.next_power_of_two(), 0);
         }

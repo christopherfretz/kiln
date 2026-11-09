@@ -38,6 +38,7 @@ mod bigint;
 mod compile;
 mod complex;
 mod failure;
+mod frame;
 mod hooks;
 mod kbc;
 mod leaf;
@@ -67,6 +68,7 @@ use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
 pub use failure::{EvalFailure, FailKind, Note, Overflow};
+pub use frame::{FrameEval, FrameObject};
 pub use meta::materialize::{ExcCtor, MetaThrow, Shape};
 pub use meta::member_cache::{
     CachedList, MemberCache, MemberEntry, MemberList, filter_members, member_kind,
@@ -439,6 +441,10 @@ enum Job {
     /// The object size of pointer `p` for type `ty`
     /// ([`Oven::fold_object_size`]).
     ObjectSize { p: ExprId, ty: u32 },
+    /// A full-expression of a `constexpr` function body in a
+    /// potential-constant frame ([`Oven::frame_local`],
+    /// [`Oven::evaluate_in_frame`]; the frame in `frame`).
+    Frame(ExprId),
 }
 
 impl Job {
@@ -448,7 +454,8 @@ impl Job {
             Job::Expr(e)
             | Job::Chars { size: e, .. }
             | Job::Subst { at: e, .. }
-            | Job::ObjectSize { p: e, .. } => ast.exprs.get(e).loc(),
+            | Job::ObjectSize { p: e, .. }
+            | Job::Frame(e) => ast.exprs.get(e).loc(),
             Job::Call { at, .. } => at,
         }
     }
@@ -598,6 +605,8 @@ pub struct Oven {
     pub(crate) msg_chars: Vec<u8>,
     /// The parameter bindings of a [`Job::Subst`].
     pub(crate) subst_binds: Vec<(DeclId, ExprId)>,
+    /// The potential-constant frame jobs (`frame.rs`, WP-1150).
+    pub(crate) frame: frame::FrameState,
     pub(crate) mem: Memory,
     /// Remembered `union_path` answers (WP-760, `vm/umemo.rs`).
     pub(crate) umemo: vm::umemo::UnionMemo,
@@ -689,6 +698,7 @@ impl Oven {
             let_pending: Vec::new(),
             msg_chars: Vec::new(),
             subst_binds: Vec::new(),
+            frame: frame::FrameState::default(),
             mem: Memory::new(budget.bytes),
             umemo: vm::umemo::UnionMemo::default(),
             regs: vec![0; 256],
@@ -1548,6 +1558,7 @@ impl Oven {
             Job::Subst { cond, at } => o.eval_subst(b, cond, at, fb),
             Job::Call { f, at } => o.eval_call(b, f, at, fb),
             Job::ObjectSize { p, ty } => o.eval_object_size(b, p, ty, fb),
+            Job::Frame(e) => o.eval_frame(b, e, fb),
         })
     }
 

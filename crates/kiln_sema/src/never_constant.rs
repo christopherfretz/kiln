@@ -28,23 +28,38 @@
 //! on destroying any local variable or temporary fails quietly
 //! (`HandleDestruction`), and so does destroying one with a non-trivial
 //! destructor at any time (the call is refused): the walk stops at the
-//! end of such a block or full-expression ([`Walk`]). Conditions must be
-//! known; loops run while theirs is (a `break` ends one, a loop whose
-//! iteration repeats ends at clang's step limit, `-fconstexpr-steps`,
-//! with clang's note at the statement clang would be on); a `switch`
-//! runs its body from the selected label, searching nested statements as
-//! clang does; a `try` runs its try-block; a `goto` fails ("not valid").
-//! The walk stops at a `return`, an `[[assume]]`, a condition variable, a
+//! end of such a block or full-expression ([`Walk`]). A discarded
+//! expression that only names a parameter or local variable (`x;`,
+//! `(void)x;`, `s.m;`, `&x;`) is evaluated as an lvalue and notes no side
+//! effect (clang `EvaluateIgnoredValue`); one naming a reference
+//! parameter or `this` does. Conditions must be known; loops run while
+//! theirs is (a `break` ends one, a loop whose iteration repeats ends at
+//! clang's step limit, `-fconstexpr-steps`, with clang's note at the
+//! statement clang would be on); a `switch` runs its body from the
+//! selected label, searching nested statements as clang does, and fails
+//! when the label is inside a statement clang does not search (a
+//! `try`-block, a statement expression: clang `EvaluateSwitch`'s
+//! "statement expressions" note); a `try` runs its try-block; a `goto`
+//! fails ("not valid"). The walk stops at a `return`, an `[[assume]]`, a
 //! range-based `for`, a structured binding and an unknown value naming a
-//! local variable. It fails at the definition of a static or thread-local
-//! variable not usable in constant expressions and at the end of a
-//! non-`void` function's body; a constructor's body is walked only if
-//! each of its mem-initializers (default member initializers included)
-//! is known.
+//! local variable it does not track. It fails at the definition of a
+//! static or thread-local variable not usable in constant expressions and
+//! at the end of a non-`void` function's body; a constructor's body is
+//! walked only if each of its mem-initializers (default member
+//! initializers included) is known.
 //!
-//! The walk treats every local variable as unknown, where clang tracks
-//! their values, so it misses some functions clang reports; it never
-//! reports one clang accepts (WP-873).
+//! Local variables and condition variables have values, as in clang's
+//! call frame (WP-1150): until the first side effect (after which clang
+//! fails quietly to access any of them), a local variable of a type no
+//! evaluation can leave a pointer in (arithmetic, enumeration, and arrays
+//! and classes of those without a destructor) is a frame object
+//! ([`kiln_oven::Oven::frame_local`]), initialized and later read and
+//! modified by the Oven ([`Sema::eval_in_frame`]) with the parameters
+//! still unknown; a reference variable bound to one names it. Any other
+//! local variable is unknown, so the walk misses some functions clang
+//! reports; it never reports one clang accepts. A loop whose iteration
+//! leaves the frame as it found it repeats forever; any other runs
+//! iteration by iteration.
 //!
 //! Builtin calls follow clang's table, never the Oven, which folds more
 //! (the P0533 `<cmath>` builtins and their library twins) and notes some
@@ -64,7 +79,7 @@ use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::types::TypeView;
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
-use kiln_oven::{EvalFailure, FailKind, Note};
+use kiln_oven::{EvalFailure, FailKind, FrameEval, FrameObject, Note};
 use kiln_source::Loc;
 
 use crate::Sema;
@@ -160,6 +175,20 @@ struct Scope {
     locals: bool,
     /// One has a non-trivial destructor (whose call clang refuses).
     dtor: bool,
+    /// The length of [`Walk::frame`] when it opened: its locals follow.
+    mark: usize,
+}
+
+/// A local variable the walk knows the value of (WP-1150).
+#[derive(Clone, Copy)]
+struct Tracked {
+    /// The variable.
+    d: DeclId,
+    /// Its object (a reference: its referent's).
+    obj: FrameObject,
+    /// The object is the variable's own (freed with it), not a
+    /// referent's.
+    own: bool,
 }
 
 /// The state of clang's evaluator along the walk.
@@ -180,25 +209,66 @@ struct Walk {
     /// A statement expression ran, whose statements clang counts as
     /// steps and the walk does not: no step-limit failure is reported.
     no_steps: bool,
+    /// Local variables have values (the Oven is in, not the strict pass).
+    track: bool,
+    /// The local variables the walk knows the values of, in scope order.
+    tracked: Vec<Tracked>,
+    /// The frame `tracked` makes (each variable and its object).
+    frame: Vec<(DeclId, FrameObject)>,
+    /// Objects of variables whose scope ended, to free.
+    dead: Vec<FrameObject>,
 }
 
 impl Walk {
     /// Opens a block scope.
     fn open(&mut self) {
-        self.scopes.push(Scope::default());
+        self.scopes.push(Scope { mark: self.tracked.len(), ..Scope::default() });
+    }
+
+    /// Ends the tracked variables of the block scope `s` closes.
+    fn end_scope(&mut self, s: Scope) {
+        if s.mark >= self.tracked.len() {
+            return;
+        }
+        for t in self.tracked.drain(s.mark..) {
+            if t.own {
+                self.dead.push(t.obj);
+            }
+        }
+        self.frame.truncate(s.mark);
     }
 
     /// Closes the innermost block scope without destroying its locals
     /// (clang `ScopeRAII::destroy(false)`).
     fn discard(&mut self) {
-        self.scopes.pop();
+        let s = self.scopes.pop().unwrap_or_default();
+        self.end_scope(s);
     }
 
     /// Closes the innermost block scope, destroying its locals: whether
     /// that succeeds (clang `ScopeRAII::destroy`).
     fn destroy(&mut self) -> bool {
         let s = self.scopes.pop().unwrap_or_default();
+        self.end_scope(s);
         !(s.dtor || (self.side && s.locals))
+    }
+
+    /// Tracks local variable `d` (its object `obj`, its own if `own`).
+    fn track_var(&mut self, d: DeclId, obj: FrameObject, own: bool) {
+        self.tracked.push(Tracked { d, obj, own });
+        self.frame.push((d, obj));
+    }
+
+    /// The object of tracked variable `d`.
+    fn object_of(&self, d: DeclId) -> Option<FrameObject> {
+        self.tracked.iter().rev().find(|t| t.d == d).map(|t| t.obj)
+    }
+
+    /// Whether the values of local variables are known: they are tracked
+    /// and no side effect happened (from then on clang fails quietly to
+    /// access any, C++14 `findCompleteObject`).
+    fn knows_locals(&self) -> bool {
+        self.track && !self.side
     }
 
     /// Closes the innermost block scope after its statement ended with

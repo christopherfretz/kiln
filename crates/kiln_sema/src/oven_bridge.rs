@@ -482,6 +482,69 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.with_oven(Some(at), |oven, b| oven.evaluate_potential(b, e))
     }
 
+    /// [`Oven::frame_local`] of local variable `d` of a `constexpr`
+    /// function body (its initializer `init`) in the never-constant
+    /// walk's frame `frame` (WP-1150), reported at `at`.
+    pub(crate) fn frame_local(
+        &mut self,
+        d: DeclId,
+        init: Option<ExprId>,
+        frame: &[(DeclId, kiln_oven::FrameObject)],
+        at: Loc,
+    ) -> Result<Option<kiln_oven::FrameObject>, EvalFailure> {
+        if let Some(e) = init
+            && !self.eval_stack_ok(e)
+        {
+            return Ok(None);
+        }
+        if self.oven.is_none() {
+            return Ok(None);
+        }
+        self.flush_member_refs();
+        if self.special.has_pending() {
+            self.flush_pending_deleted();
+        }
+        self.with_oven(Some(at), |oven, b| oven.frame_local(b, d, init, frame))
+    }
+
+    /// [`Oven::evaluate_in_frame`] of `e` in the never-constant walk's
+    /// frame `frame` (WP-1150), reported at `at`.
+    pub(crate) fn eval_in_frame(
+        &mut self,
+        e: ExprId,
+        frame: &[(DeclId, kiln_oven::FrameObject)],
+        how: kiln_oven::FrameEval,
+        at: Loc,
+    ) -> Result<ConstValueId, EvalFailure> {
+        if !self.eval_stack_ok(e) || self.oven.is_none() {
+            return Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant));
+        }
+        self.flush_member_refs();
+        if self.special.has_pending() {
+            self.flush_pending_deleted();
+        }
+        self.with_oven(Some(at), |oven, b| oven.evaluate_in_frame(b, e, frame, how))
+    }
+
+    /// [`Oven::frame_free`] of `o`; nothing without the Oven.
+    pub(crate) fn frame_free(&mut self, o: kiln_oven::FrameObject) {
+        if let Some(oven) = self.oven.as_mut() {
+            oven.frame_free(o);
+        }
+    }
+
+    /// [`Oven::frame_snapshot`] of `frame` (empty without the Oven).
+    pub(crate) fn frame_snapshot(&self, frame: &[(DeclId, kiln_oven::FrameObject)]) -> Vec<u8> {
+        self.oven.as_ref().map(|o| o.frame_snapshot(frame)).unwrap_or_default()
+    }
+
+    /// [`Oven::frame_end`]; nothing without the Oven.
+    pub(crate) fn frame_end(&mut self) {
+        if let Some(oven) = self.oven.as_mut() {
+            oven.frame_end();
+        }
+    }
+
     /// The stack guard's check before entering the Oven (P4 (c)): the
     /// evaluation may instantiate, which re-enters sema.
     #[inline]
