@@ -37,3 +37,6 @@ constexpr int capture(const int *p) {
   return l();
 }
 static_assert(capture(a) == 4);
+extern const int ub[];
+constexpr const int (&rub)[] = ub;
+static_assert(&rub == &ub);

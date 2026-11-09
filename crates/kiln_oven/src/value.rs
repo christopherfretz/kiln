@@ -647,7 +647,9 @@ impl Oven {
     ) -> Result<(), Freeze> {
         let offset = u64::from(p.off);
         let size = u64::from(a.size);
-        if !b.ast().types.is_reference(q) || !(p.past || offset >= size) {
+        // An object of unknown or zero size (`extern int a[];`) has no
+        // end the offset could reach.
+        if !b.ast().types.is_reference(q) || !(p.past || (size != 0 && offset >= size)) {
             return Ok(());
         }
         if self.run.silent {
