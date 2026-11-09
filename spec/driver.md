@@ -496,6 +496,8 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
 <prefix>/lib/kiln/<major>/include/       resource/include: clang 19's builtin
                                          headers, contracts, module.modulemap
 <prefix>/lib/kiln/<major>/predefines/    resource/predefines/*.txt
+<prefix>/lib/kiln/<major>/share/         resource/share/*.txt: the default
+                                         sanitizer ignorelists (WP-1032)
 <prefix>/share/doc/kiln/                 README.md, LICENSE-MIT, LICENSE-APACHE,
                                          COMPATIBILITY.md, STABILITY.md
 ```

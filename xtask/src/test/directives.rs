@@ -325,6 +325,10 @@ pub struct TestSpec {
     /// [`HOST_FEATURES`] the host the harness runs on must have, the test
     /// targeting the host's architecture; otherwise the test is a SKIP.
     pub requires_host: Option<String>,
+    /// `requires: sanitizer-runtime` (WP-1032): every clang that links the
+    /// test's program must find the UBSan and ASan runtimes (compiler-rt);
+    /// otherwise the test is a SKIP. The runner probes for them.
+    pub requires_sanitizer_runtime: bool,
     /// `verify`: the outcome is clang's `-verify` check of the test's
     /// `expected-*` comments, under the compiler and the oracle.
     pub verify: bool,
@@ -549,6 +553,7 @@ struct Parser {
     mem_mib: Option<u64>,
     requires_target: Option<String>,
     requires_host: Option<String>,
+    requires_sanitizer_runtime: bool,
     /// Line of `verify` (0: absent).
     verify_line: usize,
     /// Line of the first `diag:` / `strict-diags` (0: none).
@@ -621,6 +626,7 @@ impl Parser {
             mem_mib: None,
             requires_target: None,
             requires_host: None,
+            requires_sanitizer_runtime: false,
             verify_line: 0,
             diag_line: 0,
             requires_clang: None,
@@ -1041,14 +1047,21 @@ impl Parser {
     /// `requires: target-<arch>` (`<arch>` one of [`TARGET_ARCHES`]),
     /// `requires: host-<feature>` (one of [`HOST_FEATURES`]),
     /// `requires: clang>=X[.Y[.Z]]`, `requires: clang<X[.Y[.Z]]`,
-    /// `requires: llvm>=N` or `requires: llvm<N`; each kind at most once.
+    /// `requires: llvm>=N`, `requires: llvm<N` or
+    /// `requires: sanitizer-runtime`; each kind at most once.
     fn requires_directive(&mut self, line: usize, value: &str) {
         let usage = format!(
             "expected `requires: target-<arch>` (<arch> one of {}), `requires: clang>=X[.Y[.Z]]`, \
-             `requires: clang<X[.Y[.Z]]`, `requires: llvm>=N` or `requires: llvm<N`",
+             `requires: clang<X[.Y[.Z]]`, `requires: llvm>=N`, `requires: llvm<N` or \
+             `requires: sanitizer-runtime`",
             TARGET_ARCHES.join(" ")
         );
-        if let Some(f) = value.strip_prefix("host-") {
+        if value == "sanitizer-runtime" {
+            if self.requires_sanitizer_runtime {
+                self.err(line, "duplicate `requires: sanitizer-runtime`");
+            }
+            self.requires_sanitizer_runtime = true;
+        } else if let Some(f) = value.strip_prefix("host-") {
             if !HOST_FEATURES.contains(&f) {
                 self.err(
                     line,
@@ -1367,6 +1380,7 @@ impl Parser {
             mem_mib: self.mem_mib,
             requires_target: self.requires_target,
             requires_host: self.requires_host,
+            requires_sanitizer_runtime: self.requires_sanitizer_runtime,
             verify,
             requires_clang: self.requires_clang,
             requires_clang_below: self.requires_clang_below,
@@ -1706,6 +1720,15 @@ mod tests {
         assert!(e.iter().any(|e| e.contains("expected `requires: target-<arch>`")), "{e:?}");
         let e = errs("//@ requires: target-x86_64\n//@ requires: target-x86_64\n");
         assert!(e.iter().any(|e| e.contains("duplicate `requires: target-`")), "{e:?}");
+    }
+
+    #[test]
+    fn requires_sanitizer_runtime_directive() {
+        let s = ok("//@ expect: run\n//@ requires: sanitizer-runtime\n");
+        assert!(s.requires_sanitizer_runtime);
+        assert!(!ok("//@ expect: run\n").requires_sanitizer_runtime);
+        let e = errs("//@ requires: sanitizer-runtime\n//@ requires: sanitizer-runtime\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `requires: sanitizer-runtime`")), "{e:?}");
     }
 
     /// WP-810: `requires: host-sve` parses, rejects unknown features and
