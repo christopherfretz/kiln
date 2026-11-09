@@ -331,6 +331,7 @@ sema_member_template_field = Error (1) "data member {0} cannot be a member templ
 sema_member_type_via_access = Error (3) "cannot refer to type member '{0}' in {1} with '{2:.|->}'";
 sema_mempointer_in_nonclass_type = Error (1) "member pointer refers into non-class type {0}";
 sema_mismatched_visibility = Error (0) "visibility does not match previous declaration";
+sema_mismatching_type_aware_cleanup_deallocator = Error (3) "type aware '{0}' requires a matching type aware {1:|placement }'{2}' to be declared in the same scope";
 sema_missing_constinit = Warning [MissingConstinit] (1) "'constinit' specifier missing on initializing declaration of '{0}'";
 sema_missing_default_arg = Error (1) "missing default argument on parameter '{0}'";
 sema_missing_default_arg_unnamed = Error (0) "missing default argument on parameter";

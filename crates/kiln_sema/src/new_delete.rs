@@ -188,7 +188,7 @@ impl Sema<'_, '_> {
 
     /// The type of tag `d` in namespace `ns`, printed `std::name` as
     /// clang prints the bare `TagType` it uses.
-    fn std_qualified(&mut self, ns: DeclId, d: DeclId) -> QualType {
+    pub(crate) fn std_qualified(&mut self, ns: DeclId, d: DeclId) -> QualType {
         let t = self.tag_type(d);
         let ns = self.ast.first(ns);
         let n = self.ast.types.nns(Nns::Namespace { prefix: None, ns });
