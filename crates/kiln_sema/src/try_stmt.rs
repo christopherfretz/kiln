@@ -51,6 +51,10 @@ impl Sema<'_, '_> {
         base: QualType,
         d: &Declarator,
     ) -> Option<DeclId> {
+        // [temp.local]/6 (clang `ActOnExceptionDeclarator`; WP-1042).
+        if let Some((n, l)) = d.name {
+            self.check_template_param_shadow(n, l);
+        }
         let type_loc = ds.type_loc.unwrap_or(ds.loc);
         let base = self.catch_placeholder_check(base, type_loc, d);
         self.warn_redundant_parens(None, d);

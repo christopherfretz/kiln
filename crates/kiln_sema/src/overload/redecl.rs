@@ -139,7 +139,8 @@ impl Sema<'_, '_> {
     }
 
     /// The member function among `cands` (redeclaration lookup in the
-    /// class, declaration order) that the non-static member function
+    /// class, declaration order; conversion functions included) that the
+    /// non-static member function
     /// `new` would correspond to but for its ref-qualifier: same
     /// parameter-type-list, template head and requires-clause, ref-
     /// qualifiers differing with one of them absent ([over.load]/2.3 of
@@ -159,12 +160,14 @@ impl Sema<'_, '_> {
                 }
                 let Some(p) = self.pattern_of(d) else { continue };
                 (p, self.ast.template_info(d).map(|i| i.params))
-            } else if k == DeclKind::CXXMethod && new.head.is_none() {
+            } else if matches!(k, DeclKind::CXXMethod | DeclKind::CXXConversion)
+                && new.head.is_none()
+            {
                 (d, None)
             } else {
                 continue;
             };
-            if self.kind_of(p) != DeclKind::CXXMethod
+            if !matches!(self.kind_of(p), DeclKind::CXXMethod | DeclKind::CXXConversion)
                 || self.has_explicit_object(p)
                 || self.ast.decls.get(p).has(DeclFlags::INVALID)
             {
@@ -208,6 +211,10 @@ impl Sema<'_, '_> {
         let both_non_static =
             self.kind_of(old) == DeclKind::CXXMethod && !old_static && !new.is_static;
         if ref_mix {
+            // Conversion functions are non-static members too (only
+            // compared here; their redeclarations match by type).
+            let both_non_static =
+                both_non_static || (self.kind_of(old) == DeclKind::CXXConversion && !new.is_static);
             let (ro, rn) = (po.info().ref_qual(), pn.info().ref_qual());
             if !both_non_static || ro == rn || (ro != RefQual::None && rn != RefQual::None) {
                 return false;
