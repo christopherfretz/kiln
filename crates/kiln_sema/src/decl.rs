@@ -2831,6 +2831,21 @@ impl Sema<'_, '_> {
         if d.qualifier.is_none() {
             self.check_template_param_shadow(name, name_loc);
         }
+        // [class.mem.general]/22: a static data member, member typedef or
+        // member variable template named as its class (a member function
+        // so named is a constructor declarator, diagnosed as one). clang
+        // drops such a typedef.
+        if d.qualifier.is_none()
+            && ds.friend.is_none()
+            && d.ctx == DeclaratorContext::Member
+            && (ds.is_typedef() || !self.ast.types.is_function(ty))
+            && (ds.is_typedef() || matches!(ds.storage, Some((StorageSpec::Static, _))))
+            && self.diagnose_class_name_shadow(self.ctx, name, name_loc)
+            && ds.is_typedef()
+        {
+            self.templ.cur = None;
+            return None;
+        }
         let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
         if let Some(l) = ds.noreturn
@@ -3638,7 +3653,13 @@ impl Sema<'_, '_> {
         let ty = self.apply_vector_attrs(ty, &mut attrs, true, VectorAttrPos::Decl);
         attrs.extend(type_attrs);
         let ty = self.apply_cc_attrs(ty, &mut attrs, false);
+        // [class.mem.general]/22: a member alias (template) named as its
+        // class.
+        let shadow = self.diagnose_class_name_shadow(self.ctx, name, name_loc);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
+        if shadow {
+            self.ast.decls.set_flags(td, DeclFlags::INVALID);
+        }
         // [temp.variadic]/12: `using U = Ts;`.
         if self.diagnose_unexpanded_declarator(ty, "declaration type", name_loc) {
             self.declarator_type_invalid = false;
@@ -7553,12 +7574,21 @@ impl Sema<'_, '_> {
         let mut conflict = false;
         let mut respecialized = false;
         if let Some((n, nloc)) = name {
+            // [class.mem.general]/22: a member class, enumeration or
+            // class template named as its class is diagnosed and declared
+            // as a new member (it redeclares nothing).
+            let class_shadow = qualifier.is_none()
+                && use_ != TagUse::Reference
+                && self.diagnose_class_name_shadow(self.ctx, n, nloc);
             if qualifier.is_none() && use_ != TagUse::Reference {
                 self.check_template_param_shadow(n, nloc);
             }
             let opaque_enum = is_enum && fixed.is_some();
-            let found =
-                self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc);
+            let found = if class_shadow {
+                Vec::new()
+            } else {
+                self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc)
+            };
             if found.is_empty() && qualifier.is_none() {
                 conflict = self.diagnose_tag_kind_conflict(
                     keyword,
@@ -8219,6 +8249,7 @@ impl Sema<'_, '_> {
     }
 
     pub fn act_on_finish_record_definition(&mut self, r: DeclId, then_semi: bool) {
+        self.check_field_named_as_class(r);
         self.scopes.pop();
         let mut build = self.classes.pop_if(|c| c.record == r);
         self.defining.retain(|&d| d != r);
@@ -8439,6 +8470,11 @@ impl Sema<'_, '_> {
             let msg = self.diag(id, loc).arg(sym_str(self, name));
             let msg = self.note_prev(msg, p, true);
             self.emit(msg);
+        }
+        // [class.mem.general]/22: an enumerator of an unscoped member
+        // enumeration named as the class.
+        if !scoped && let Some(parent) = self.ast.decls.get(e).ctx() {
+            let _ = self.diagnose_class_name_shadow(parent, name, loc);
         }
         // An enumerator of a dependent enumeration (a member of a template)
         // keeps its initializer as written and has no value until
@@ -9335,7 +9371,10 @@ impl Sema<'_, '_> {
                 self.lookup_current_scope(name)
             }
             .into_iter()
-            .find(|&d| !is_tag_kind(self.kind_of(d)));
+            .find(|&d| !is_tag_kind(self.kind_of(d)))
+            // [class.mem.general]/22: the injected-class-name is a member
+            // of the class too (clang `CheckAnonMemberRedeclaration`).
+            .or_else(|| (in_class && self.is_class_named(ctx, name)).then_some(ctx));
             if let Some(p) = prev {
                 let msg = self
                     .diag(DiagId::sema_anon_record_member_redecl, mn.loc())

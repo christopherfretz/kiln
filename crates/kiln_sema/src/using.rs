@@ -430,6 +430,16 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
+        // [class.mem.general]/22: a member named by a using-declarator has
+        // a name different from the class; a non-static data member only
+        // when the class has a user-declared constructor, checked as the
+        // class completes (`check_field_named_as_class`).
+        if let Some(n) = name.as_ident()
+            && found.decls.iter().any(|&t| self.kind_of(t) != DeclKind::Field)
+            && self.diagnose_class_name_shadow(class, n, name_loc)
+        {
+            return None;
+        }
         // [namespace.udecl]/10 (clang `CheckUsingDeclRedeclaration`): a
         // using-declarator in a class repeats an earlier one only when both
         // name the member through the same class. Through another class
