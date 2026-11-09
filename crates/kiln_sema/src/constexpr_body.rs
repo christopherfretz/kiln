@@ -49,7 +49,7 @@ impl Sema<'_, '_> {
     }
 
     /// The never-constant check of the definition of `f` with `body`
-    /// (never_constant.rs), once the body is attached.
+    /// (`never_constant.rs`), once the body is attached.
     pub(crate) fn check_constexpr_body_vars(&mut self, f: DeclId, body: StmtId) {
         if !self.is_lambda_call_op(f) {
             self.check_never_constant(f, body);

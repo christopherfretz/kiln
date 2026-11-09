@@ -144,7 +144,7 @@ pub struct FnState {
     /// The body gets clang's `CheckConstexprFunctionDefinition` rules at
     /// its end if the function is `constexpr`/`consteval`: not for the
     /// call operator of a lambda that is not declared so explicitly
-    /// (constexpr_body.rs).
+    /// (`constexpr_body.rs`).
     pub(crate) constexpr_rules: bool,
 }
 
