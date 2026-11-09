@@ -1207,6 +1207,52 @@ With libc++ 22's `std.cppm`, kind 2 carries 2961 results (10,655,331 B
 against 10,485,735 B), and the imports again match kind 1 within noise
 (`-c` 1.94 s against 2.02 s, 105 MiB).
 
+**Part 2a, the declaration image (WP-1048).** Same method (harness
+profile, aarch64, `/usr/bin/time`, median of 3, `-std=c++26`), image off
+(`-fno-kiln-bmi-image`, the default) against on (`-fkiln-bmi-image` at
+both the precompile and the import). Three workloads: `import std;`
+(libc++ 19, a `vector`, `ranges::sort`, `string` and `println` program),
+the constexpr-heavy module above, and a synthetic interface inside 2a's
+coverage: 200 exported namespaces, each with a scoped enumeration of 8
+enumerators, an alias, a `typedef`, a variable and 10 non-inline
+functions with loop bodies (3201 lines, 4800 image records), whose
+importer calls two of the functions.
+
+| run | `import std;` (libc++ 19) | constexpr-heavy module | image-eligible module |
+|---|---|---|---|
+| kiln `--precompile`, image off | 1.13 s, 98.1 MiB, 9,129,636 B | 0.24 s, 10.9 MiB, 26,075 B | 0.11 s, 15.4 MiB, 385,446 B |
+| kiln `--precompile`, image on | 1.16 s, 98.2 MiB, 9,129,636 B (no image) | 0.24 s, 10.9 MiB, 26,075 B (no image) | 0.11 s, 17.0 MiB, 763,088 B |
+| kiln import, image off, `-fsyntax-only` | 1.25 s, 93.7 MiB | 0.04 s, 10.8 MiB | 0.11 s, 14.5 MiB |
+| kiln import, image on, `-fsyntax-only` | 1.21 s, 96.0 MiB (replay) | 0.04 s, 10.5 MiB (replay) | **0.03 s, 12.2 MiB** |
+| kiln import, image off, `-c` | 1.57 s, 96.5 MiB | 0.06 s, 60.9 MiB | 0.13 s, 60.9 MiB |
+| kiln import, image on, `-c` | 1.67 s, 95.7 MiB (replay) | 0.06 s, 60.9 MiB (replay) | **0.05 s, 60.9 MiB** |
+| clang 19 `--precompile` | 1.72 s, 259.0 MiB, 31,179,192 B | 3.96 s, 85.6 MiB, 26,556 B | 0.11 s, 91.3 MiB, 1,827,160 B |
+| clang 19 import, `-fsyntax-only` | 0.20 s, 143.3 MiB | 0.05 s, 84.8 MiB | 0.01 s, 84.4 MiB |
+| clang 19 import, `-c` | 0.37 s, 160.6 MiB | 0.06 s, 91.7 MiB | 0.01 s, 91.9 MiB |
+| clang 22 `--precompile` | 1.79 s, 291.9 MiB, 32,250,900 B | 4.17 s, 88.3 MiB, 30,024 B | 0.11 s, 94.6 MiB, 1,861,336 B |
+| clang 22 import, `-fsyntax-only` | 0.39 s, 175.5 MiB | 0.05 s, 87.0 MiB | 0.01 s, 86.5 MiB |
+| clang 22 import, `-c` | 0.56 s, 190.6 MiB | 0.06 s, 94.0 MiB | 0.02 s, 94.0 MiB |
+
+- `std` and the constexpr-heavy module fall back (a global module
+  fragment; `constexpr` functions), so "on" is the replay, and the rows
+  match "off" within noise. `std`'s gain waits for S2–S5.
+- The image-eligible module's import drops from 0.11 s to 0.03 s
+  (`-fsyntax-only`) and from 0.13 s to 0.05 s (`-c`, whose 60.9 MiB is
+  LLVM's), and the importer's peak RSS from 14.5 MiB to 12.2 MiB: the
+  loader holds the section once (moved out of the capsule) and maps only
+  the main file. The image grows the file by 377,642 B, about 79 B per
+  record, and doubles this module file (its functions' bodies are kept in the
+  capsule for `-c m.pcm`).
+- Materialised fraction: 100% (4800 of 4800 records; the importer names
+  4 of them). The eager load is the remaining gap to clang's 0.01 s
+  (S-lazy).
+- Commands: `kiln++ -std=c++26 [-fkiln-bmi-image] --precompile m.cppm -o
+  m.pcm`, then `kiln++ -std=c++26 [-fkiln-bmi-image] -fmodule-file=m=m.pcm
+  -fsyntax-only|-c use.cpp`; for `std`, add `-stdlib=libc++
+  -Wno-reserved-module-identifier` and use
+  `/usr/lib/llvm-19/share/libc++/v1/std.cppm`. clang the same, without
+  the kiln flag.
+
 #### Part 2
 
 Next, in order:
@@ -1241,13 +1287,15 @@ types they name, and the per-context name tables. Expressions and
 statements are not serialised in 2a. Every node kind whose meaning to an
 importer depends on a body or an initializer falls back: inline,
 `constexpr` and `consteval` functions, deduced return types, `const` and
-`constexpr` variables, and templates. A non-inline function's body and a
-non-`const` variable's initializer are not needed by an importer, because
-the module's object file defines them (§7, deviation 7). The reader gives
-such a function an empty body `{}` at the original brace positions, so
-"is defined" is as it was, and drops the initializer, so the variable
-stays a definition without one. Codegen never emits either, since their
-owner is an imported named unit.
+`constexpr` variables, and templates. A non-inline function's body is
+not needed by an importer, because the module's object file defines it
+(§7, deviation 7). The writer drops it, and the reader gives the function
+an empty body `{}` at the original brace positions, so "is defined" is as
+it was; codegen never emits it, since its owner is an imported named
+unit. A variable with an initializer falls back in 2a, even a non-`const`
+one: the writer stays conservative until expression records (S2) can
+carry the initializer. A variable without one (`export int counter;`) is
+carried as a definition.
 
 **Coverage (2a).** A unit qualifies when all of these hold:
 
@@ -1279,6 +1327,14 @@ owner is an imported named unit.
 - no name lies in a namespace named `std` or is reserved.
 
 The first offending node's reason is the `-v` note's (see "Fallback").
+Before the per-kind checks, a declaration kind 2a never carries names
+its family: "a class", "a template", "a using-declaration,
+using-directive or namespace alias", "a linkage specification", "a
+static_assert declaration", or "a declaration the image does not carry
+yet" for the rest. A variable with an initializer is not carried in 2a
+(its value would need expression records), so the coverage list above is
+exact only with that addition: every carried variable has no
+initializer.
 
 **Remapping per id space.** This is the "Identity" design, restricted to
 what 2a carries:
@@ -1337,7 +1393,8 @@ path: a pending-name table that the parser drains before classifying a
 token, or a lookup miss that queues the name and retries. That is
 follow-up S-lazy. A 2a unit carries no bodies, so its eager load costs
 one record per declaration and the replay's lexing, parsing and checking
-are gone.
+are gone (measured in "Measurements": 0.11 s to 0.03 s for 4800
+records).
 
 **Templates as patterns** (follow-up S4). A template's record will carry
 its parameter list, its pattern declaration and its body as expression
@@ -1358,32 +1415,48 @@ bytes left before anything is allocated):
 
 ```
 image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
-           names:u32 str*            all declared names (the pp's gate)
+           names:u32 str*            declared names (the pp's gate)
+           pnames:u32 str*           parameter names (not gated)
            types:u32 type*
            decls:u32 offset:u32*decls blob_len:u32 decl*
            lookup:u32 (ctx:u32 name:u32 decl:u32)*   sorted
+str     := len:u32 utf8*
 qref    := type:u32 quals:u8         0 = none, 1..=90 builtin, else 91+i
-type    := tag:u8 payload            pointer/lref/rref(qref),
-                                     carray(qref, size:u64),
-                                     iarray(qref), paren(qref),
-                                     elab(keyword:u8, qref),
-                                     function(ret, n, qref*, info:u16, exc:u8),
-                                     enum(decl), typedef(decl, qref)
+type    := tag:u8 payload            1 pointer(qref), 2 lref(qref),
+                                     3 rref(qref), 4 carray(qref, size:u64),
+                                     5 iarray(qref), 6 paren(qref),
+                                     7 elab(keyword:u8, qref),
+                                     8 function(ret:qref, n:u32, qref*,
+                                       info:u16, exc:u8),
+                                     9 enum(decl:u32),
+                                     10 typedef(decl:u32),
+                                     11 qarray(cv:u8, qref)
 decl    := kind:u8 flags:u8 owner:u8 name:u32 ctx:u32 lexical:u32
-           loc:u32 prev:u32 payload  (u32::MAX = none / translation unit)
+           loc:u32 prev:u32 payload
 ```
+
+In a record, `u32::MAX` means none (for `ctx`, the translation unit),
+and `lexical` is `u32::MAX` when it equals `ctx` and `u32::MAX - 1` for
+the translation unit. Tag 11 is a cv-qualified array spelled through a
+typedef, parentheses or an elaborated name (`const Quad&` where `Quad`
+names an array type): the reader rebuilds it with the type context's
+`qualify`, which pushes the qualifiers onto the element type as
+[dcl.array]/6 and [basic.type.qualifier]/3 require. An elaborated type
+carries no nested-name-specifier. The exception byte is 0 (none), 1
+(`noexcept`), 2 (`noexcept(true)`) or 3 (`throw()`).
 
 The owner byte holds bit 0 = in the purview and bit 1 = exported (the
 `ModuleTable` owner point of the record). The payloads are:
 
-- function: type, `FnSpec` bits, the brace offsets of the body (or
-  none), and its parameters (name, location, type, original type, index,
-  flags);
+- function: type, `FnSpec` bits (u8), the parameters (n, then per
+  parameter: name index into `pnames` or none, location, type, the
+  parameter flags u16 and the storage flags u8), then the body: 0, or 1
+  and the offsets of its braces;
 - variable: type and `VarSpec` bits;
-- enumeration: flags, the fixed underlying and promotion types, and
-  (when complete) the computed ones;
-- enumerator: the value;
-- typedef: kind and underlying type;
+- enumeration: scoped, the fixed underlying and promotion types (or 0),
+  and when complete the computed ones;
+- enumerator: its type and the value (16 bytes, little-endian `i128`);
+- typedef and alias: the underlying type;
 - namespace and export: nothing.
 
 **The reader.** When the module's `UnitBegin` event carries an image, the

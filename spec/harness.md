@@ -21,6 +21,7 @@ cargo xtask test [options] [paths...]
 | `--meta-header` | The header-differential mode: the reflection tests compile against GCC 16.1's real `<meta>` instead of kiln's `tests/support/kiln_meta.h` (see "Header-differential mode"). Needs kiln as the compiler under test and a GCC oracle whose install prefix can be found (a usage error, exit 2, otherwise). |
 | `--debug-sweep` | The debug-info sweep: compile each positive test with and without `-g` instead of checking its expectations (see "Debug-info sweep"). Not with `--meta-header` (usage error). |
 | `--bmi-kind 1\|2` | The module-file kind variant: only the tests with `module:` lines, every one two-step, with kiln writing kind-`N` module files (see "Module-file kinds"). Needs kiln as the compiler (otherwise a usage error). WP-985. |
+| `--bmi-image` | With `--bmi-kind 2` (implied when no kind is given; with `--bmi-kind 1` a usage error): kiln's module-file builds and its importing compiles also get `-fkiln-bmi-image`, so units that qualify are imported through the declaration image (see "Module-file kinds"). WP-1048. |
 | `--external <dir>` | Instead of the corpus, the never-crash run of a directory outside the repository (see "External corpora"). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
 | `--shard K/N` | Run only shard `K` of `N` (`1 <= K <= N`, else a usage error): of the sorted test list (after `--filter`), test `i` (0-based) runs iff `i % N == K - 1`. Round-robin, so a slow directory is spread over every shard, and shards `1..N` of one `N` are exactly the unsharded run, each test in one shard. A shard of a list shorter than `N` may be empty, which is not an error (an empty selection before sharding still is). The run's first line says `(shard K/N of M)`. Not with `--external` (usage error). `ci --shard` passes it to both corpus runs (WP-692, "CI"). |
@@ -737,6 +738,15 @@ both kinds read back to the same diagnostics, program output and IR as the
 single-step run. `ci` runs it twice (below). The IR goldens of
 `tests/codegen` with `module:` lines are already two-step through
 `ir_vs_clang` (spec/codegen.md §6), and they run under the default kind.
+
+`--bmi-image` adds `-fkiln-bmi-image` to the same kind-2 run: each of
+kiln's module-file builds and each kiln compile that is given
+`-fmodule-file=` gets it (never the oracle, never a single-step source
+build), so a unit inside the image's coverage (spec/modules.md §11.11
+"Part 2a") is written with an image and imported from it, and every other
+unit falls back to replay as before. The run therefore checks that
+image-built imports give the same diagnostics, program output and IR as
+replay. `ci` does not run it while the flag is off by default.
 
 ### Parity report
 
