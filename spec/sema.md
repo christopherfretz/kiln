@@ -7256,6 +7256,48 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `tests/conformance/dcl.constexpr/non-literal-local-template-cxx{20,23}.cpp`,
   `tests/conformance/dcl.constexpr/non-literal-local-lambda-cxx20.cpp`,
   `tests/conformance/expr.const/invalid-local-silent.cpp`.
+- **Literal return and parameter types (WP-1123; clang
+  `CheckConstexprReturnType` / `CheckConstexprParameterTypes`).** Before
+  C++23 ([dcl.constexpr]/3, removed by P2448R2) the return type of a
+  constexpr or consteval function other than a constructor, and each of
+  its parameter types, is a literal type; `void` is not one before C++14
+  ([basic.types]/10). `check_constexpr_definition` checks them after the
+  virtual-base rule and before the body rules, in clang's order (return
+  type, then parameters; the first failure wins):
+  "{constexpr|consteval} function's return type 'T' is not a literal
+  type" at the function's name, or "{constexpr|consteval}
+  {function|constructor}'s Nth parameter type 'T' is not a literal type"
+  at the parameter (after its type when unnamed), each with the
+  `RequireLiteralType` note (as the variable rule above; before C++20 a
+  user-provided destructor gets "'C' is not literal because it has a
+  user-provided destructor", from C++20 "its destructor is not
+  constexpr"); the function is made invalid, so no body rule or
+  never-constant check follows. Not checked: from C++23 (not even under
+  `-Winvalid-constexpr`), a dependent, undeduced or erroneous type, an
+  incomplete class (its definition reports it), and an instantiation (as
+  clang, which checks only the written definition; a non-dependent type
+  in a template is diagnosed at the template). An explicitly `constexpr`
+  or `consteval` lambda is checked; an implicitly constexpr one whose
+  return or parameter type is not literal is silently not constexpr
+  (`implicit_constexpr_lambda_body_vars`). Tests
+  `tests/conformance/dcl.constexpr/non-literal-return-param-cxx{11,17,20,23}.cpp`,
+  `non-literal-return-param-consteval-cxx20.cpp`.
+- **`constexpr` destructor before C++20 (WP-1123; clang
+  `err_constexpr_dtor`).** "destructor cannot be declared constexpr" at
+  the specifier, for every declaration of a destructor
+  (`act_on_special_member_declarator`). As clang the specifier is kept,
+  so in C++11 a definition also gets the `void` return-type error above.
+  Tests `tests/conformance/class.dtor/constexpr-dtor-cxx{11,17}.cpp`.
+- **C++11 deduced return type (WP-1123; clang `GetFullTypeForDeclarator`).**
+  Before C++14 a function declarator whose decl-specifier type is a
+  placeholder has a trailing return type ([dcl.spec.auto], N3638):
+  "'auto' return without trailing return type; deduced return types are
+  a C++14 extension" for `auto`, "deduced return types are a C++14
+  extension" for `decltype(auto)`, at the type specifier, only for the
+  function declarator next to the name (not `auto (*f())()`, not a
+  lambda's implicit `auto`); the return type recovers as `int`
+  (`type_for_declarator_at`). Test
+  `tests/conformance/dcl.spec.auto/no-trailing-return-cxx11.cpp`.
 
 ### 5.21 Template rules from the libstdc++ clusters (WP-323)
 - **Default arguments in dependent template-ids** ([temp.arg.general]/9,
@@ -8210,7 +8252,23 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     `?:` as in `enable_if` conditions); a known `if` condition picks the
     branch, a loop with an absent or known-true condition has its first
     iteration walked, and the walk stops at an unknown condition, a
-    `switch`, a `try`, a label or a `return`;
+    `switch`, a `try`, a label, an `[[assume]]` or a `return`;
+  - the walk also fails, as clang's `EvaluateStmt` (WP-1123), at the
+    definition of a static or `thread_local` local variable not usable in
+    constant expressions ("control flows through the definition of a
+    {static|thread_local} variable" at the variable, before its
+    initializer; a block-scope `extern` declaration defines nothing), and
+    at the `}` of a body that does not return when the function returns
+    non-`void` ("control reached end of constexpr function"; not a
+    constructor, destructor or function-try-block). Both are skipped once
+    the walk has passed a statement or initializer whose unknown value
+    involves a call (clang goes on past a call with unknown arguments but
+    stops quietly after a callee's failure, which the walk cannot tell
+    apart; `nc_note_unknown`), and the end of a block that defines a local
+    whose value is unknown, or whose destructor is not trivial, stops the
+    walk (clang fails quietly destroying it). The Oven's `evaluate_call`
+    applies the same static rule, `thread_local` and a `const` integral or
+    enumeration static (taken as usable) included;
   - the callee of a direct call (a decayed reference to a function, in a
     `CallExpr` or `CXXOperatorCallExpr`) is not evaluated as a value:
     naming a builtin or a consteval function there is no failure, only
@@ -8268,6 +8326,10 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `expr.ass/compound-assign-overflow.cpp`,
   `dcl.constexpr/never-constant-overflow-cxx{20,23,26}.cpp`,
   `dcl.constexpr/never-constant-body-cxx{20,23}.cpp`,
+  `dcl.constexpr/never-constant-lambda-member-cxx20.cpp`,
+  `dcl.constexpr/never-constant-end-static-cxx23.cpp`,
+  `dcl.constexpr/never-constant-after-call-cxx20.cpp` (xfail, the
+  quiet-callee limit above),
   `dcl.constexpr/never-constant-default-cxx23.cpp`,
   `dcl.constexpr/never-constant-no-error-cxx20.cpp`,
   `dcl.constexpr/potential-constant-builtin-{fabs,strcmp,not-constexpr}.cpp`,
