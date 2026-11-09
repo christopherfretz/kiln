@@ -1993,7 +1993,12 @@ impl Sema<'_, '_> {
             Initializer::List(l) if !p.invalid => {
                 let mut leaves = Vec::new();
                 Self::init_list_leaves(l, &mut leaves);
-                leaves.into_iter().fold(true, |ok, e| self.check_default_arg_refs(e) && ok)
+                // Every clause is checked, so no short-circuiting `all`.
+                let mut ok = true;
+                for e in leaves {
+                    ok &= self.check_default_arg_refs(e);
+                }
+                ok
             }
             _ => true,
         };
