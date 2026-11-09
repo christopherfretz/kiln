@@ -86,6 +86,9 @@ enum TyRec {
     Func { ret: QRef, params: Vec<QRef>, info: u16, exc: u8 },
     Enum(u32),
     Typedef(u32),
+    /// cv on array sugar (`const Quad` for `using Quad = int[4]`): the
+    /// base, qualified through `TypeContext::qualify`.
+    QArray(u8, QRef),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -356,6 +359,11 @@ fn encode(img: &Image) -> Vec<u8> {
             }
             TyRec::Enum(d) => (w.u8(9), w.u32(*d)).1,
             TyRec::Typedef(d) => (w.u8(10), w.u32(*d)).1,
+            TyRec::QArray(c, q) => {
+                w.u8(11);
+                w.u8(*c);
+                w.q(*q);
+            }
         }
     }
     // Declarations: an offset table into the record blob, so a reader
@@ -529,7 +537,8 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Option<u32>) {
         | TyRec::CArray(q, _)
         | TyRec::IArray(q)
         | TyRec::Paren(q)
-        | TyRec::Elab(_, q) => (vec![*q], None),
+        | TyRec::Elab(_, q)
+        | TyRec::QArray(_, q) => (vec![*q], None),
         TyRec::Func { ret, params, .. } => {
             let mut v = Vec::with_capacity(params.len() + 1);
             v.push(*ret);
@@ -616,6 +625,14 @@ fn decode(bytes: &[u8]) -> Res<Image> {
             }
             9 => TyRec::Enum(r.u32()?),
             10 => TyRec::Typedef(r.u32()?),
+            11 => {
+                let c = r.u8()?;
+                let q = r.q()?;
+                if c == 0 || c > 7 || q.quals != 0 {
+                    return bad("bad qualified array");
+                }
+                TyRec::QArray(c, q)
+            }
             _ => return bad("unknown type kind"),
         };
         img.types.push(t);
@@ -896,6 +913,16 @@ impl Writer<'_, '_, '_> {
             }
             TypeView::Enum(d) => TyRec::Enum(self.type_decl(d, t)?),
             TypeView::Typedef { decl, .. } => TyRec::Typedef(self.type_decl(decl, t)?),
+            TypeView::QualifiedArray { quals, base } => {
+                let sugar = matches!(
+                    types.view(base),
+                    TypeView::Typedef { .. } | TypeView::Paren(_) | TypeView::Elaborated { .. }
+                );
+                if !sugar || quals.bits() == 0 {
+                    return Err("a qualified array type the image does not carry");
+                }
+                TyRec::QArray(quals.bits(), self.qref(QualType::unqual(base))?)
+            }
             _ => return Err("a type the image does not carry"),
         };
         let i = BUILTINS + 1 + self.img.types.len() as u32;
@@ -1188,6 +1215,7 @@ impl Writer<'_, '_, '_> {
             if n.kind() == DeclKind::TranslationUnit {
                 continue;
             }
+            kind_gate(n.kind())?;
             let (flags, name, ctx, lexical, loc, prev) = self.head(d)?;
             let payload = self.record(d)?;
             let i = self.img.decls.len() as u32;
@@ -1214,6 +1242,55 @@ impl Writer<'_, '_, '_> {
             self.recs.insert(d, i);
         }
         Ok(())
+    }
+}
+
+/// The declaration kinds the image carries; the fallback reason for the
+/// others.
+fn kind_gate(k: DeclKind) -> W<()> {
+    use DeclKind as K;
+    match k {
+        K::Namespace
+        | K::Export
+        | K::Function
+        | K::Var
+        | K::Enum
+        | K::EnumConstant
+        | K::Typedef
+        | K::TypeAlias => Ok(()),
+        K::CXXRecord
+        | K::ClassTemplateSpecialization
+        | K::ClassTemplatePartialSpecialization
+        | K::Field
+        | K::IndirectField
+        | K::AccessSpec
+        | K::Friend
+        | K::CXXMethod
+        | K::CXXConstructor
+        | K::CXXDestructor
+        | K::CXXConversion => Err("a class"),
+        K::ClassTemplate
+        | K::FunctionTemplate
+        | K::VarTemplate
+        | K::TypeAliasTemplate
+        | K::Concept
+        | K::VarTemplateSpecialization
+        | K::VarTemplatePartialSpecialization
+        | K::FriendTemplate
+        | K::CXXDeductionGuide
+        | K::TemplateTypeParm
+        | K::NonTypeTemplateParm
+        | K::TemplateTemplateParm => Err("a template"),
+        K::NamespaceAlias
+        | K::UsingDirective
+        | K::Using
+        | K::UsingEnum
+        | K::UsingShadow
+        | K::ConstructorUsingShadow
+        | K::UsingPack => Err("a using-declaration, using-directive or namespace alias"),
+        K::LinkageSpec => Err("a linkage specification"),
+        K::StaticAssert => Err("a static_assert declaration"),
+        _ => Err("a declaration the image does not carry yet"),
     }
 }
 
@@ -1480,6 +1557,10 @@ impl Sema<'_, '_> {
                 self.ast.types.function(r, &ps, FuncInfo::from_bits(*info), exc)
             }
             TyRec::Enum(d) | TyRec::Typedef(d) => decl_ty(self, *d),
+            TyRec::QArray(c, q) => {
+                let q = qt(self, *q);
+                self.ast.types.qualify(q, Quals::from_bits(*c))
+            }
         }
     }
 }

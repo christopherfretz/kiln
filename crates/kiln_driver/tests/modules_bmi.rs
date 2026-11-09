@@ -348,3 +348,118 @@ fn kind2_damaged_files_are_diagnosed() {
         }
     }
 }
+
+/// An interface the declaration image carries entirely (spec/modules.md
+/// §11.11 "Part 2a").
+const IM: &str = "export module im;\n\
+                  namespace ns {\n\
+                  export int add(int a, int b);\n\
+                  int add(int a, int b) { return a + b; }\n\
+                  export enum class E : short { a, b = 7 };\n\
+                  export using P = const int *;\n\
+                  }\n\
+                  export long twice(long x) { return 2 * x; }\n";
+const IUSE: &str = "import im;\n\
+                    static_assert(static_cast<int>(ns::E::b) == 7);\n\
+                    int main() { ns::P p = nullptr; return ns::add(1, 2) + twice(2) == 7 && !p ? 0 : 1; }\n";
+
+fn setup_im(name: &str) -> PathBuf {
+    let d = scratch(name);
+    std::fs::write(d.join("im.cppm"), IM).unwrap();
+    std::fs::write(d.join("u.cpp"), IUSE).unwrap();
+    d
+}
+
+/// `-fkiln-bmi-image` writes the declaration image (deterministically,
+/// with a `-v` note), an importer with the flag builds the unit from it
+/// without parsing the unit's source (a capsule whose source is blanked
+/// still imports), and one without the flag ignores it.
+#[test]
+fn kind2_declaration_image() {
+    use kiln_pp::bmi;
+    let d = setup_im("image");
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "im.cppm", "-o", "im.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of 12 declarations"), "{}", o.stderr);
+    ok(&d, &["-fkiln-bmi-image", "--precompile", "im.cppm", "-o", "im2.pcm"]);
+    let good = std::fs::read(d.join("im.pcm")).unwrap();
+    assert_eq!(good, std::fs::read(d.join("im2.pcm")).unwrap(), "the image is deterministic");
+    assert!(bmi::read(&good).unwrap().section(bmi::SECTION_IMAGE).is_some());
+    ok(&d, &["--precompile", "im.cppm", "-o", "plain.pcm"]);
+    let plain = bmi::read(&std::fs::read(d.join("plain.pcm")).unwrap()).unwrap();
+    assert!(plain.section(bmi::SECTION_IMAGE).is_none(), "the image is off by default");
+
+    for flag in ["-fkiln-bmi-image", "-fno-kiln-bmi-image"] {
+        ok(&d, &[flag, "-fsyntax-only", "-fmodule-file=im=im.pcm", "u.cpp"]);
+        ok(&d, &["-c", "im.pcm", "-o", "im.o"]);
+        ok(&d, &[flag, "-fmodule-file=im=im.pcm", "u.cpp", "im.o", "-o", "u"]);
+        assert!(Command::new(d.join("u")).status().unwrap().success(), "{flag} program");
+    }
+
+    // Blank the unit's source in the capsule (same length): only an
+    // importer that does not replay it still compiles.
+    let mut c = bmi::read(&good).unwrap();
+    let text = &mut c.files[0].text;
+    *text = text.chars().map(|ch| if ch == '\n' { '\n' } else { ' ' }).collect();
+    std::fs::write(d.join("blank.pcm"), bmi::write(&c)).unwrap();
+    ok(&d, &["-fkiln-bmi-image", "-fsyntax-only", "-fmodule-file=im=blank.pcm", "u.cpp"]);
+    let o = kiln(&d, &["-fsyntax-only", "-fmodule-file=im=blank.pcm", "u.cpp"]);
+    assert_eq!(o.code, 1, "replaying a blank source fails: {}", o.stderr);
+}
+
+/// A unit with a node the image does not carry is written without one,
+/// and `-v` names the first such node (§11.11 "Part 2a", "Fallback").
+#[test]
+fn kind2_declaration_image_fallback() {
+    let d = scratch("image-fallback");
+    for (src, why) in [
+        ("export module f;\nexport inline int g() { return 1; }\n", "an inline, constexpr"),
+        ("export module f;\nexport struct S { int x; };\n", "a class"),
+        ("export module f;\nexport template <class T> T id(T t) { return t; }\n", "a template"),
+        ("export module f;\nexport namespace n { using I = int; }\nexport using n::I;\n", "a using-declaration"),
+        ("export module f;\nstatic_assert(true);\n", "a static_assert"),
+        ("module;\nint h();\nexport module f;\nexport int g();\n", "a global module fragment"),
+        ("export module f;\nexport int v = 3;\n", "a variable with an initializer"),
+    ] {
+        std::fs::write(d.join("f.cppm"), src).unwrap();
+        let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "f.cppm", "-o", "f.pcm"]);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert!(o.stderr.contains("(no declaration image: ") && o.stderr.contains(why), "{src}: {}", o.stderr);
+    }
+}
+
+/// A damaged image section behind a valid checksum is the corrupt-file
+/// error (or, for a flip that still decodes, at worst a different
+/// module), never a panic.
+#[test]
+fn kind2_damaged_image_is_diagnosed() {
+    use kiln_pp::bmi;
+    let d = setup_im("image-damaged");
+    ok(&d, &["-fkiln-bmi-image", "--precompile", "im.cppm", "-o", "im.pcm"]);
+    let capsule = bmi::read(&std::fs::read(d.join("im.pcm")).unwrap()).unwrap();
+    let sec = capsule.section(bmi::SECTION_IMAGE).unwrap().to_vec();
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    for i in 0..30 {
+        let mut c = capsule.clone();
+        let s = c.sections.iter_mut().find(|s| s.tag == bmi::SECTION_IMAGE).unwrap();
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        let at = (seed % sec.len() as u64) as usize;
+        match i % 3 {
+            0 => s.bytes.truncate(at),
+            1 => s.bytes[at] ^= 0xff,
+            _ => s.bytes.push(0),
+        }
+        std::fs::write(d.join("bad.pcm"), bmi::write(&c)).unwrap();
+        let o = kiln(&d, &["-fkiln-bmi-image", "-fsyntax-only", "-fmodule-file=im=bad.pcm", "u.cpp"]);
+        assert!(o.code == 0 || o.code == 1, "damage {i}: {}", o.stderr);
+        if i % 3 != 1 {
+            assert!(
+                o.stderr.contains("fatal error: ") && o.stderr.contains("declaration image"),
+                "damage {i}: {}",
+                o.stderr
+            );
+        }
+    }
+}

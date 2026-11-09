@@ -687,19 +687,22 @@ impl Preprocessor<'_, '_> {
         else {
             return Some(c);
         };
-        // A header that does not decode is used anyway: sema then reports
-        // the file as corrupt (§11.11 "Part 2a", "The reader").
-        let (main_path, names) = bmi::image_header(&bytes).unwrap_or_default();
         // An image names its unit's main file; one that is not the
-        // capsule's first file, or that declares a name the importer
-        // has already seen (§11.11 "Part 2a", ODR merging), replays.
-        if c.files[0].path != main_path || names.iter().any(|n| self.interner.get(n).is_some()) {
-            return Some(c);
-        }
-        // Interned now, so that a later import in the same lookahead
-        // whose image declares one of them replays instead.
-        for n in names {
-            self.interner.intern(n);
+        // capsule's first file, or that declares a name the importer has
+        // already seen (§11.11 "Part 2a", ODR merging), replays. A header
+        // that does not decode is used anyway: sema then reports the file
+        // as corrupt ("The reader").
+        if let Some((main_path, names)) = bmi::image_header(&bytes) {
+            if c.files[0].path != main_path
+                || names.iter().any(|n| self.interner.get(n).is_some())
+            {
+                return Some(c);
+            }
+            // Interned now, so that a later import in the same lookahead
+            // whose image declares one of them replays instead.
+            for n in names {
+                self.interner.intern(n);
+            }
         }
         let carried = take_carried(path, &mut c);
         let main = c.files.swap_remove(0);
