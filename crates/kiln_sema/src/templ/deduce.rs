@@ -126,6 +126,7 @@ pub struct DeductionInfo {
 /// The arguments deduced so far for the parameters of one template
 /// (one depth, §6.2). An undeduced parameter holds [`TemplateArg::NULL`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools, reason = "independent deduction modes")]
 pub struct DeducedArgs {
     /// The depth of the parameters being deduced.
     pub depth: u16,
@@ -155,6 +156,13 @@ pub struct DeducedArgs {
     /// parameter type, so a template template parameter's template-id
     /// takes `A`'s extra arguments as its defaults (`deduce_ttp_id_args`).
     pub ordering: bool,
+    /// A non-type parameter typed by another template parameter
+    /// (`template<class T, T N>`) does not deduce its type from the
+    /// argument's (`deduce_nttp_type`): clang 19's check that a partial
+    /// specialization is more specialized than its primary saw the
+    /// argument already converted to that type (`-fclang-compat=19`;
+    /// `not_more_specialized_than_primary`).
+    pub converted_values: bool,
     /// Deducing a partial specialization's arguments against themselves
     /// ([temp.spec.partial.general]/8, `check_partial_deducible`): a
     /// function parameter pack that is not last is skipped (a non-deduced
@@ -179,6 +187,7 @@ impl DeducedArgs {
             pack_elem: None,
             empty_expanded: Vec::new(),
             ordering: false,
+            converted_values: false,
             self_deduce: false,
             loc: Loc::INVALID,
         }
@@ -757,7 +766,9 @@ impl Sema<'_, '_> {
         }
         let Some(decl) = e.and_then(|e| self.nttp_decl_of_expr(e)) else { return Tdk::Success };
         let Some(pt) = self.ast.decls.get(decl).ty() else { return Tdk::Success };
-        if !self.ast.types.is_dependent(pt) {
+        if !self.ast.types.is_dependent(pt)
+            || (d.converted_values && !self.nttp_type_has_placeholder(pt))
+        {
             return Tdk::Success;
         }
         let at = match a.view() {
