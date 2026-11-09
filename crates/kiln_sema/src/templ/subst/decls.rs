@@ -1715,6 +1715,37 @@ impl Substituter<'_, '_, '_> {
         })
     }
 
+    /// [class.friend]/10: a friend that redeclares a member function
+    /// names it (clang `CheckFriendAccess` in `VisitFunctionDecl`): the
+    /// pattern's member, or its instantiation for a dependently-scoped
+    /// `X<T>::f`. A failure the pattern already reported is not repeated
+    /// at the same location. `f` is the pattern's friend function, `r`
+    /// the instantiated friend declaration.
+    fn check_member_friend_access(&mut self, f: DeclId, r: DeclId, loc: Loc) {
+        let first = self.sema.ast.first(f);
+        if first != f
+            && let Some(c) = self.sema.declaring_class(first)
+            && !self.sema.ast.decls.get(f).has(DeclFlags::INVALID)
+        {
+            let member = if self.sema.in_dependent_class(c) {
+                // The member the instantiated friend redeclares
+                // (matched by signature when it was declared); a
+                // qualifier that selected an explicit or partial
+                // specialization has no instantiation of `first`
+                // (WP-1071).
+                match self.sema.ast.decls.friend_target(r) {
+                    FriendTarget::Decl(x) if self.sema.ast.first(x) != x => Some(x),
+                    _ => self.find_instantiated_decl(first, loc).ok(),
+                }
+            } else {
+                Some(first)
+            };
+            if let Some(m) = member.filter(|&m| self.sema.declaring_class(m).is_some()) {
+                self.sema.check_friend_access(m, loc);
+            }
+        }
+    }
+
     /// The class whose member function the pattern's friend `d`
     /// redeclares (`friend R B<T>::f(W<T>&);`, matched to a member of
     /// `B`'s pattern when the friend was declared): the instantiation is
@@ -1842,34 +1873,7 @@ impl Substituter<'_, '_, '_> {
                 {
                     self.member_link(x, f);
                 }
-                // [class.friend]/10: a friend that redeclares a member
-                // function names it (clang `CheckFriendAccess` in
-                // `VisitFunctionDecl`): the pattern's member, or its
-                // instantiation for a dependently-scoped `X<T>::f`. A
-                // failure the pattern already reported is not repeated at
-                // the same location.
-                let first = self.sema.ast.first(f);
-                if first != f
-                    && let Some(c) = self.sema.declaring_class(first)
-                    && !self.sema.ast.decls.get(f).has(DeclFlags::INVALID)
-                {
-                    let member = if self.sema.in_dependent_class(c) {
-                        // The member the instantiated friend redeclares
-                        // (matched by signature when it was declared); a
-                        // qualifier that selected an explicit or partial
-                        // specialization has no instantiation of `first`
-                        // (WP-1071).
-                        match self.sema.ast.decls.friend_target(r) {
-                            FriendTarget::Decl(x) if self.sema.ast.first(x) != x => Some(x),
-                            _ => self.find_instantiated_decl(first, loc).ok(),
-                        }
-                    } else {
-                        Some(first)
-                    };
-                    if let Some(m) = member.filter(|&m| self.sema.declaring_class(m).is_some()) {
-                        self.sema.check_friend_access(m, loc);
-                    }
-                }
+                self.check_member_friend_access(f, r, loc);
                 Ok(Some(r))
             }
         }

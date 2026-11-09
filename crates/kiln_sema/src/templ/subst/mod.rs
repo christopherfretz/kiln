@@ -998,7 +998,8 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         };
         let kind = self.sema.kind_of(d);
         if matches!(kind, DeclKind::CXXRecord | DeclKind::Enum) {
-            let (c, _) = self.sema.act_on_nested_name_spelled(Some(inst), sym, loc).ok_or(SubstFail)?;
+            let (c, _) =
+                self.sema.act_on_nested_name_spelled(Some(inst), sym, loc).ok_or(SubstFail)?;
             return Ok(c);
         }
         let found = self.sema.lookup_qualified(inst, sym, crate::lookup::LookupKind::Ordinary);
@@ -1043,9 +1044,10 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     /// proves.
     fn not_primary_template(&mut self, inst: DeclId, loc: Loc) -> SubstFail {
         let first = self.sema.ast.first(inst);
-        let explicit = self.sema.ast.spec_info(first).is_some_and(|(_, s)| {
-            s.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization
-        });
+        let explicit =
+            self.sema.ast.spec_info(first).is_some_and(|(_, s)| {
+                s.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization
+            });
         let e = self
             .sema
             .diag(kiln_diag::DiagId::sema_specialization_not_primary_template, loc)
