@@ -27,8 +27,8 @@ int main() {
   P p = it::twice(P{21});
   printf("%d %g %d %ld %d %d %d ", it::add(2, 3), it::add(1.5, 2.0), it::scale<int, 3>(4),
          it::scale<long, 2>(5L), it::square<5>(), p.v, *it::addr(v));
-  printf("%d %d %d %d %ld %d | ", it::pick(8, 1, true), it::pick(2, 0),
-         (int)it::narrow<unsigned char>(265), it::sum_to(5), it::heavy(1L), it::heavy_one() - 1);
+  printf("%d %d %d %d %d %d | ", it::pick(8, 1, true), it::pick(2, 0),
+         (int)it::narrow<unsigned char>(265), it::sum_to(5), it::heavy(1), it::heavy_one() - 1);
   printf("%d %d\n", T, N);
   return 0;
 }
