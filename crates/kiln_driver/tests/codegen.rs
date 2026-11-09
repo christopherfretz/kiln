@@ -935,6 +935,181 @@ fn x86_call_without_feature() {
     }
 }
 
+/// spec/driver.md "x86-64 target features" (WP-1000): intrinsic gating
+/// follows the `-m` flags and `target("...")` attributes on any host
+/// (`--target` pinned, `-ffreestanding` so only the builtin headers are
+/// read). A `target` attribute's map starts from the command line's
+/// features as written (clang `getFunctionFeatureMap`), so `-mno-crc32`
+/// still holds inside `target("sha")`. Where clang++-19 is installed the
+/// whole stderr is compared with it.
+#[test]
+fn x86_target_feature_gating() {
+    let d = scratch("x86gate");
+    std::fs::write(
+        d.join("t.cpp"),
+        "#include <immintrin.h>\n\
+         unsigned f(unsigned c, unsigned char v) { return _mm_crc32_u8(c, v); }\n\
+         __attribute__((target(\"avx2\"))) __m256i g(__m256i a, __m256i b) { return _mm256_add_epi32(a, b); }\n\
+         __m128i s(__m128i a, __m128i b) { return _mm_sha1msg1_epu32(a, b); }\n",
+    )
+    .unwrap();
+    let cases: [(&[&str], &[&str]); 3] = [
+        (&["-msse4.2", "-msha"], &[]),
+        (
+            &["-msse4.2"],
+            &[
+                "t.cpp:4:42: error: always_inline function '_mm_sha1msg1_epu32' requires target feature 'sha'",
+            ],
+        ),
+        (
+            &["-march=x86-64-v3", "-msha", "-mno-crc32"],
+            &[
+                "t.cpp:2:50: error: always_inline function '_mm_crc32_u8' requires target feature 'crc32'",
+            ],
+        ),
+    ];
+    for (flags, errors) in cases {
+        let mut args = vec!["-fclang-compat=19", "--target=x86_64-linux-gnu", "-ffreestanding"];
+        args.extend_from_slice(flags);
+        args.extend_from_slice(&["-S", "-emit-llvm", "-o", "k.ll", "t.cpp"]);
+        let o = kiln_in(&d, &args);
+        let err = text(&o.stderr);
+        let got: Vec<&str> = err.lines().filter(|l| l.contains(": error: ")).collect();
+        assert_eq!(got.len(), errors.len(), "{flags:?}: {err}");
+        for (g, w) in got.iter().zip(errors) {
+            assert!(g.starts_with(w), "{flags:?}: {err}");
+        }
+        assert_eq!(o.status.code(), Some(i32::from(!errors.is_empty())), "{flags:?}");
+        if have("clang++-19") {
+            let c = Command::new("clang++-19")
+                .current_dir(&d)
+                .args(&args[1..])
+                .arg("-o")
+                .arg("c.ll")
+                .output()
+                .unwrap();
+            assert_eq!(err, text(&c.stderr), "{flags:?}");
+        }
+    }
+}
+
+/// spec/driver.md "x86-64 target features" (WP-1000): x86 feature flags
+/// on an `AArch64` target and `AArch64` ones on x86-64 are clang's
+/// "unsupported option for target" errors, a bad `-march=` /
+/// `-mapx-features=` value is "unsupported argument", and `-m3dnow` is
+/// clang's dropped-feature warning. The driver's stderr matches
+/// clang++-19's (`kiln++` for the program name) where it is installed.
+#[test]
+fn x86_flag_driver_diagnostics() {
+    let d = scratch("x86flags");
+    std::fs::write(d.join("e.cpp"), "int x;\n").unwrap();
+    let cases: [(&str, &str, &str); 7] = [
+        (
+            "aarch64-linux-gnu",
+            "-mavx2",
+            "error: unsupported option '-mavx2' for target 'aarch64-linux-gnu'",
+        ),
+        (
+            "aarch64-linux-gnu",
+            "-mapx-features=egpr",
+            "error: unsupported option '-mapx-features=' for target 'aarch64-linux-gnu'",
+        ),
+        (
+            "aarch64-linux-gnu",
+            "-march=haswell",
+            "error: unsupported argument 'haswell' to option '-march='",
+        ),
+        (
+            "x86_64-linux-gnu",
+            "-mcpu=cortex-a57",
+            "error: unsupported option '-mcpu=' for target 'x86_64-linux-gnu'",
+        ),
+        (
+            "x86_64-linux-gnu",
+            "-msve-vector-bits=256",
+            "error: unsupported option '-msve-vector-bits=' for target 'x86_64-linux-gnu'",
+        ),
+        (
+            "x86_64-linux-gnu",
+            "-mapx-features=bogus",
+            "error: unsupported argument 'bogus' to option '-mapx-features='",
+        ),
+        ("x86_64-linux-gnu", "-m3dnow", "warning: the clang compiler does not support '-m3dnow'"),
+    ];
+    for (target, flag, want) in cases {
+        let t = format!("--target={target}");
+        let args = ["-fclang-compat=19", t.as_str(), flag, "-fsyntax-only", "e.cpp"];
+        let o = kiln_in(&d, &args);
+        let err = text(&o.stderr);
+        assert_eq!(err, format!("kiln++: {want}\n"), "{target} {flag}");
+        assert_eq!(o.status.code(), Some(i32::from(want.starts_with("error"))), "{flag}");
+        if have("clang++-19") {
+            let c = Command::new("clang++-19").current_dir(&d).args(&args[1..]).output().unwrap();
+            assert_eq!(err.replacen("kiln++", "clang++-19", 1), text(&c.stderr), "{target} {flag}");
+        }
+    }
+}
+
+/// spec/codegen.md psABI (WP-1000): passing a 256-bit vector by value is
+/// clang's `-Wpsabi` warning when neither caller nor callee has `avx`
+/// (clang 22: not for a callee with internal linkage), and its
+/// `err_avx_calling_convention` error when exactly one of them has it.
+#[test]
+fn x86_avx_calling_convention() {
+    let d = scratch("x86psabi");
+    std::fs::write(
+        d.join("t.cpp"),
+        "typedef long long v4 __attribute__((vector_size(32)));\n\
+         v4 ext(v4 a);\n\
+         static v4 in(v4 a) { return a; }\n\
+         __attribute__((target(\"avx\"))) v4 ax(v4 a);\n\
+         v4 c1(v4 a) { return ext(a); }\n\
+         v4 c2(v4 a) { return in(a); }\n\
+         __attribute__((target(\"avx\"))) v4 c3(v4 a) { return ext(a); }\n\
+         v4 c4(v4 a) { return ax(a); }\n\
+         __attribute__((target(\"avx2\"))) v4 c5(v4 a) { return ax(a); }\n",
+    )
+    .unwrap();
+    let diag = |l: &str| {
+        l.split_once(": ")
+            .map(|(loc, rest)| format!("{loc} {}", &rest[..rest.find(':').unwrap_or(0)]))
+            .unwrap_or_default()
+    };
+    let cases: [(&str, &[&str], &[&str]); 3] = [
+        (
+            "19",
+            &[],
+            &["t.cpp:5:22 warning", "t.cpp:6:22 warning", "t.cpp:7:53 error", "t.cpp:8:22 error"],
+        ),
+        ("22", &[], &["t.cpp:5:22 warning", "t.cpp:7:53 error", "t.cpp:8:22 error"]),
+        ("19", &["-mavx"], &[]),
+    ];
+    for (compat, flags, want) in cases {
+        let compat = format!("-fclang-compat={compat}");
+        let mut args = vec![compat.as_str(), "--target=x86_64-linux-gnu"];
+        args.extend_from_slice(flags);
+        args.extend_from_slice(&["-S", "-emit-llvm", "-o", "k.ll", "t.cpp"]);
+        let o = kiln_in(&d, &args);
+        let err = text(&o.stderr);
+        let got: Vec<String> = err
+            .lines()
+            .filter(|l| l.starts_with("t.cpp:") && l.contains("changes the ABI"))
+            .map(diag)
+            .collect();
+        assert_eq!(got, want, "{compat} {flags:?}: {err}");
+        if compat.ends_with("19") && have("clang++-19") {
+            let c = Command::new("clang++-19")
+                .current_dir(&d)
+                .args(&args[1..])
+                .arg("-o")
+                .arg("c.ll")
+                .output()
+                .unwrap();
+            assert_eq!(err, text(&c.stderr), "{flags:?}");
+        }
+    }
+}
+
 /// spec/driver.md "Codegen flags" (WP-605): every honoured or ignored
 /// GCC/clang codegen flag compiles `int main(){}` to an object; every
 /// rejected one is the driver error "'<flag>' is not supported by kiln".
@@ -1022,8 +1197,8 @@ fn codegen_flags_classes() {
         ],
     ];
     for flags in accepted {
-        // `-mcpu=` is AArch64-only: on x86-64 it is "unsupported argument",
-        // as clang ("Target features"), so the host target decides.
+        // `-mcpu=` is AArch64-only: on x86-64 it is "unsupported option
+        // for target", as clang ("Target features"), so the host target decides.
         if flags.contains(&"-mcpu=native") && !cfg!(target_arch = "aarch64") {
             continue;
         }
