@@ -1520,7 +1520,8 @@ function's body is not needed by an importer, because the module's
 object file defines it (§7, deviation 7). The writer drops it, and the
 reader gives the function an empty body `{}` at the original brace
 positions, so "is defined" is as it was; codegen never emits it, since
-its owner is an imported named unit. Templates still fall back (S4).
+its owner is an imported named unit. Function templates are carried as
+patterns (S4, below); other templates still fall back.
 
 **Coverage (2a).** A unit qualifies when all of these hold:
 
@@ -1691,7 +1692,9 @@ exactly as if it had parsed it:
   `UnresolvedLookupExpr`, `DependentScopeDeclRefExpr`,
   `CXXUnresolvedConstructExpr`: the name and the candidate set found at
   definition time, [temp.dep.candidate]), so the instantiation's second
-  phase sees the same first-phase result.
+  phase sees the same first-phase result. (Not in the first slice: a
+  pattern body holding any of these falls back with "a template
+  expression".)
 - *Rebuilding.* The reader replays the parser's sequence through the
   same builders: it opens a parameter scope (`dependent_depth`), builds
   each parameter with `template_type_parm` / `non_type_template_parm`,
@@ -1733,6 +1736,35 @@ exactly as if it had parsed it:
   argument lists in expressions, dependent member access, dependent
   access checks, folds).
 
+*First slice (WP-1066).* Carried: namespace-scope function templates
+(depth 0) whose parameters are type and non-type parameters without
+packs, defaults or constraints, whose pattern is neither a member nor
+redeclared, and whose body uses only the carried expression kinds with
+dependent types (a dependent call through an unresolved name, a
+dependent construction `T()` and a dependent member access are "a
+template expression"). A pattern's parameters and locals carry
+`DEPENDENT_CTX` like the pattern; the reader raises `dependent_depth`
+while it builds a record whose header has the bit (the arena's flags
+are monotone, so the bit cannot be set afterwards). The validator
+requires every `DEPENDENT_CTX` record to be claimed by exactly one
+template record (as its pattern, one of its parameters, or a local or
+parameter of its pattern), a template's parameters to be type or
+non-type parameter records of its context in index order at its depth,
+and its pattern an earlier unclaimed dependent function of the same
+name, context and owner. An expression's `deps` byte may hold only the
+type, value and instantiation bits (an unexpanded pack or an error
+falls back). Implicit instantiations made in the interface are skipped
+by the writer (`spec_info` kind implicit instantiation or undeclared);
+a carried body or initializer that refers to one ("a body referring to
+a declaration outside the image") makes the unit fall back. Every
+other template kind falls back with the reasons tested in
+`kind2_declaration_image_fallback`. Follow-ups, in order: class
+templates and their members (records with dependent bases and
+`instantiated_from` links), member function templates, specialization
+reference records (bodies that call a template), unresolved-lookup and
+dependent-member expression kinds, defaults and packs, then explicit
+and partial specializations.
+
 **Versioning and the fingerprint.** The section starts with its own
 format word (`IMAGE_VERSION = 4` since S4, 3 for S3, 2 for S2; rejected if
 different). The file
@@ -1759,7 +1791,9 @@ const   := 0 qref signed:u8 width:u32 u64*   integer (ceil(width/64) words)
          | 1 qref value:u8                   bool
          | 2 qref kind:u8 bits:u128          floating
          | 3 qref kind:u8                    null pointer / member
-expr    := kind:u8 bits:u8 aux:u8 cold:u8 ty:qref loc:u32 n:u32 word*n
+expr    := kind:u8 bits:u8 aux:u8 cold:u8 deps:u8 ty:qref loc:u32
+           n:u32 word*n          deps: ExprDeps bits (S4; 1 type,
+                                     2 value, 4 instantiation)
 stmt    := kind:u8 aux:u16 loc:u32 n:u32 word*n
 str     := len:u32 utf8*
 qref    := type:u32 quals:u8         0 = none, 1..=90 builtin, else 91+i
@@ -1775,7 +1809,8 @@ type    := tag:u8 payload            1 pointer(qref), 2 lref(qref),
                                      12 sugar(k:u8),
                                      13 record(decl:u32),
                                      14 elabq(keyword:u8, n:u32,
-                                       step*n, qref)
+                                       step*n, qref),
+                                     15 ttp(decl:u32)   S4
 step    := 0 | 1 decl:u32 | 2 qref template:u8   `::`, namespace, type
 decl    := kind:u8 flags:u8 owner:u8 access:u8 name:u32 ctx:u32
            lexical:u32 loc:u32 prev:u32 payload
@@ -1805,7 +1840,9 @@ importer recomputes the name from the class or type. The kind byte is
 1 namespace, 2 export, 3 function, 4 variable, 5 enumeration, 6
 enumerator, 7 typedef, 8 alias, 9 label, 10 lifetime-extended
 temporary, 11 class, 12 field, 13 access specifier, 14 implicit
-special member. The payloads are:
+special member, 15 template type parameter, 16 non-type template
+parameter, 17 template (S4). The flags byte may hold `DEPENDENT_CTX`
+(64) on parameters and patterns of templates (S4). The payloads are:
 
 - function: the declaration kind (0 function, 1 member function, 2
   constructor, 3 destructor, 4 conversion function; 0 exactly when the
@@ -1848,7 +1885,14 @@ special member. The payloads are:
 - implicit special member (S3): the `SpecialKind` (0 default
   constructor, 1 copy and 2 move constructor, 3 copy and 4 move
   assignment, 5 destructor); its context is a complete class that
-  precedes it, and the record lies after that class's end.
+  precedes it, and the record lies after that class's end;
+- template type parameter (S4): depth u16, index u16, a byte that is 1
+  for `typename` (0 for `class`), and the location of that keyword
+  (`u32::MAX` when none); its name is a `pnames` index or none;
+- non-type template parameter (S4): type, depth u16, index u16;
+- template (S4): the template kind (0 a function template), the pattern
+  record, the `template`, `<` and `>` locations, the depth u16 and the
+  parameter records (n, then each).
 
 **Bodies (S2, WP-1064).** The four body sections follow the lookup
 table. Every expression and statement record is the AST node's header
@@ -1927,7 +1971,9 @@ Falls back (each with its `-v` reason):
   pseudo-destructor calls: follow-ups of S3 (WP-1065 in the backlog);
 - lambdas ("a lambda expression"; a closure is a local class): S3
   follow-up;
-- template expressions, requires-expressions and concepts: S4;
+- template expressions, requires-expressions and concepts: S4 (in a
+  function template's pattern, "a template expression" until the
+  unresolved-lookup kinds land, see "Templates as patterns");
 - `try` blocks and function-try-blocks, coroutines, expansion
   statements, `asm`, contract assertions, computed `goto`, and
   attributes with arguments (`[[assume(...)]]`): follow-ups under
@@ -2043,7 +2089,9 @@ classes and templates). The follow-ups, in priority order:
    names), and in bodies `new`/`delete` (the implicit global allocation
    functions), `typeid`/`dynamic_cast`, `std::initializer_list` and
    lambdas;
-3. S4: templates as patterns;
+3. S4: templates as patterns. **First slice landed: namespace-scope
+   function templates (WP-1066)**, see "Templates as patterns" and its
+   follow-ups;
 4. S5: global module fragments with ODR merging (replacing the name
    gate);
 5. S6: imports, re-exports and partitions;
