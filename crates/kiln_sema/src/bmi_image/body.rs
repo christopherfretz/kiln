@@ -19,6 +19,7 @@
 //! Any node, side record or cold annotation outside the schema makes the
 //! writer emit no image (the fallback path).
 
+use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::consts::{FloatKind, IntBits, NullKind, Scalar};
 use kiln_ast::decl::{DeclMisc, NewDecl, Payload as AstPayload, VarEvalState};
 use kiln_ast::expr::{
@@ -30,7 +31,7 @@ use kiln_ast::names::OverloadedOperator;
 use kiln_ast::stmt::{CaseData, IfData, LoopData, RangeForData, StmtKind, StmtNode, SwitchData};
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::Nns;
-use kiln_ast::{ConstValueId, ExprId, ListId, NnsId, RawId, StmtId, StringLitId};
+use kiln_ast::{AttrId, ConstValueId, ExprId, ListId, NnsId, RawId, StmtId, StringLitId};
 use kiln_source::fx::FxHashSet;
 
 use super::*;
@@ -119,6 +120,7 @@ pub(super) enum Dc {
     /// A local variable (a declaration statement's).
     Local,
     Label,
+    Let,
     Param,
     /// A function, or the translation unit.
     Ctx,
@@ -154,6 +156,38 @@ pub(super) enum F {
     /// A nested-name-specifier: a count, then its components outermost
     /// first (0 `::`; 1 namespace + record; 2 type + [`QRef`] + bool).
     Nns,
+    /// A statement's attributes: a count, then two words each, the
+    /// argument-free kind, syntax and flags ([`attr_word`]) and the
+    /// location.
+    AL,
+}
+
+/// The statement attributes the image carries: argument-free ones.
+const STMT_ATTRS: [AttrKind; 3] = [AttrKind::FALLTHROUGH, AttrKind::LIKELY, AttrKind::UNLIKELY];
+
+/// An attribute's kind, syntax and flags in one word (`kind | syntax <<
+/// 16 | flags << 24`), if the image carries it.
+fn attr_word(a: &AttrNode) -> Option<u32> {
+    let flags = AttrNode::FALLTHROUGH_SCOPED | AttrNode::GNU_SCOPED;
+    let syntax = match a.syntax {
+        AttrSyntax::Cxx11 => 0u32,
+        AttrSyntax::Gnu => 1,
+        _ => return None,
+    };
+    (STMT_ATTRS.contains(&a.kind) && a.flags & !flags == 0 && a.a == 0 && a.b == 0)
+        .then(|| u32::from(a.kind.0) | syntax << 16 | u32::from(a.flags) << 24)
+}
+
+/// The inverse of [`attr_word`] (with `loc`).
+fn word_attr(w: u32, loc: Loc) -> Option<AttrNode> {
+    let kind = AttrKind((w & 0xffff) as u16);
+    let syntax = match (w >> 16) & 0xff {
+        0 => AttrSyntax::Cxx11,
+        1 => AttrSyntax::Gnu,
+        _ => return None,
+    };
+    let a = AttrNode { kind, syntax, flags: (w >> 24) as u8, loc, a: 0, b: 0 };
+    (attr_word(&a) == Some(w)).then_some(a)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -241,7 +275,7 @@ pub(super) const EXPR_KINDS: [ExprKind; 40] = {
 };
 
 /// The statement kinds the image carries (append only).
-pub(super) const STMT_KINDS: [StmtKind; 17] = {
+pub(super) const STMT_KINDS: [StmtKind; 18] = {
     use StmtKind as K;
     [
         K::CompoundStmt,
@@ -261,6 +295,7 @@ pub(super) const STMT_KINDS: [StmtKind; 17] = {
         K::ReturnStmt,
         K::LabelStmt,
         K::GotoStmt,
+        K::AttributedStmt,
     ]
 };
 
@@ -299,7 +334,7 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::TypeTraitExpr => [f(F::QL), f(F::Bool)],
         X::CXXNoexceptExpr => [f(F::E), f(F::Bool)],
         X::ConstantExpr => [f(F::E), f(F::OCv)],
-        X::MaterializeTemporaryExpr => [f(F::E), f(F::OD(Dc::Var))],
+        X::MaterializeTemporaryExpr => [f(F::E), f(F::OD(Dc::Let))],
         X::StmtExpr => [f(F::S), Z],
         X::CXXDefaultArgExpr => [f(F::D(Dc::Param)), f(F::D(Dc::Ctx))],
         X::AddrLabelExpr => [f(F::D(Dc::Label)), Z],
@@ -354,6 +389,7 @@ fn stmt_shape(k: StmtKind) -> [Slot; 2] {
         K::ReturnStmt => [f(F::OE), f(F::OD(Dc::Var))],
         K::LabelStmt => [f(F::D(Dc::Label)), f(F::S)],
         K::GotoStmt => [f(F::D(Dc::Label)), Z],
+        K::AttributedStmt => [f(F::AL), f(F::S)],
         _ => [Z, Z],
     }
 }
@@ -394,7 +430,7 @@ fn tokens<'w>(fields: &[F], words: &'w [u32]) -> Option<Vec<(F, &'w [u32])>> {
         let n = match f {
             F::Qt => 2,
             F::EL | F::SL | F::DL(_) => 1 + *words.get(p)? as usize,
-            F::QL => 1 + 2 * (*words.get(p)? as usize),
+            F::QL | F::AL => 1 + 2 * (*words.get(p)? as usize),
             F::Nns => {
                 let n = *words.get(p)? as usize;
                 let mut q = p + 1;
@@ -662,6 +698,7 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         Dc::Var => matches!(d.payload, Payload::Var { .. }),
         Dc::Local => matches!(d.payload, Payload::Var { .. }) && is_local(img, d),
         Dc::Label => matches!(d.payload, Payload::Label),
+        Dc::Let => matches!(d.payload, Payload::Let { .. }),
         Dc::Param => false,
         Dc::Ctx => matches!(d.payload, Payload::Function { .. }),
         Dc::Namespace => matches!(d.payload, Payload::Namespace),
@@ -702,6 +739,7 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                 .chunks(2)
                 .all(|q| q[1] <= 7 && qref_ok(QRef { ty: q[0], quals: q[1] as u8 })),
             F::Path => w[0] <= 1,
+            F::AL => w[1..].chunks(2).all(|a| word_attr(a[0], Loc::INVALID).is_some()),
             F::Nns => {
                 let mut p = 1;
                 while p < w.len() {
@@ -876,6 +914,7 @@ enum Fv {
     DL(ListId, Dc),
     QL(ListId),
     Nns(Option<NnsId>),
+    AL(ListId),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -928,6 +967,7 @@ impl Writer<'_, '_, '_> {
             F::Path if raw == ListId::EMPTY.raw() => Fv::Raw(1),
             F::Path => return Err("a derived-to-base conversion"),
             F::Nns => Fv::Nns(NnsId::from_raw(raw)),
+            F::AL => Fv::AL(ListId::from_raw(raw).ok_or(BAD)?),
         })
     }
 
@@ -1239,6 +1279,15 @@ impl Writer<'_, '_, '_> {
                 }
             }
             Fv::Nns(n) => self.nns(n, out)?,
+            Fv::AL(l) => {
+                let items: Vec<u32> = lists.get(l).to_vec();
+                out.push(items.len() as u32);
+                for w in items {
+                    let a = *self.s.ast.attrs.get(AttrId::from_raw(w).ok_or("a malformed body")?);
+                    out.push(attr_word(&a).ok_or("a statement attribute the image does not carry")?);
+                    out.push(self.loc(a.loc)?);
+                }
+            }
         }
         Ok(())
     }
@@ -1342,7 +1391,7 @@ impl Writer<'_, '_, '_> {
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
         let kind = n.kind();
-        if !matches!(kind, DeclKind::Var | DeclKind::Label) {
+        if !matches!(kind, DeclKind::Var | DeclKind::Label | DeclKind::LifetimeExtendedTemporary) {
             return Err("a local declaration the image does not carry");
         }
         let ctx = n.ctx().and_then(|c| self.recs.get(&c).copied()).ok_or(OUTSIDE)?;
@@ -1361,8 +1410,7 @@ impl Writer<'_, '_, '_> {
         } else {
             NONE
         };
-        if n.misc() != DeclMisc::default() && kind == DeclKind::Label
-            || n.misc().local_extern()
+        if n.misc().local_extern()
             || n.misc().name_independent()
             || n.misc().access() != Access::None
         {
@@ -1383,7 +1431,19 @@ impl Writer<'_, '_, '_> {
         let o = ast.modules.owner(d);
         let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
         let i = u32::try_from(self.img.decls.len()).map_err(|_| "a body too large")?;
-        let payload = if kind == DeclKind::Label { Payload::Label } else { self.var_payload(d, i)? };
+        let payload = match kind {
+            DeclKind::Label => Payload::Label,
+            DeclKind::LifetimeExtendedTemporary => {
+                let ld = *ast.decls.lifetime_extended(d).ok_or("a malformed temporary")?;
+                if ld.value.is_some() {
+                    return Err("a lifetime-extended temporary with a constant value");
+                }
+                let ty = n.ty().ok_or("a malformed temporary")?;
+                let extending = self.recs.get(&ld.extending).copied().ok_or(OUTSIDE)?;
+                Payload::Let { ty: self.qref(ty)?, extending, index: ld.mangling_index }
+            }
+            _ => self.var_payload(d, i)?,
+        };
         self.img.decls.push(DeclRec { flags, owner, name, ctx, lexical, loc, prev: NONE, payload });
         self.recs.insert(d, i);
         Ok(i)
@@ -1493,7 +1553,6 @@ fn stmt_reason(k: StmtKind) -> &'static str {
         K::CXXExpansionStmt => "an expansion statement",
         K::GCCAsmStmt => "an asm statement",
         K::ContractAssertStmt => "a contract assertion",
-        K::AttributedStmt => "an attributed statement",
         _ => "a statement the image does not carry yet",
     }
 }
@@ -1718,6 +1777,22 @@ impl Sema<'_, '_> {
                     cur = Some(self.ast.types.nns(n));
                 }
                 RawId::raw_opt(cur)
+            }
+            F::AL => {
+                let v: Vec<u32> = w[1..]
+                    .chunks(2)
+                    .map(|a| {
+                        let loc = if a[1] == NONE {
+                            Loc::INVALID
+                        } else {
+                            self.diags.sm().loc(main, a[1])
+                        };
+                        let node = word_attr(a[0], loc)
+                            .unwrap_or_else(|| unreachable!("validated attribute"));
+                        self.ast.attrs.push(node).raw()
+                    })
+                    .collect();
+                self.ast.lists.push_raw(&v).raw()
             }
         }
     }

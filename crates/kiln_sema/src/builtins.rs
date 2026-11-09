@@ -56,6 +56,13 @@ impl Sema<'_, '_> {
     /// `__signed_size_t`, `__ptrdiff_t`) while no declaration of those
     /// names is visible, so the aliases are implicit and linked into no
     /// lookup table (`__size_t x;` stays an unknown type name, as clang).
+    /// The implicit sugar typedefs [`Sema::declare_size_t_sugar`]
+    /// declares, in the module image's order (`__size_t`,
+    /// `__signed_size_t`, `__ptrdiff_t`).
+    pub(crate) fn builtin_sugar(&self) -> [QualType; 3] {
+        [self.size_t_sugar, self.signed_size_t_sugar, self.ptrdiff_t_sugar]
+    }
+
     pub(crate) fn declare_size_t_sugar(&mut self) {
         if self.target.pointer_bytes == 0 {
             return;

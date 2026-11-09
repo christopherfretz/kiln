@@ -98,6 +98,11 @@ enum TyRec {
     /// cv on array sugar (`const Quad` for `using Quad = int[4]`): the
     /// base, qualified through `TypeContext::qualify`.
     QArray(u8, QRef),
+    /// One of the implicit builtin typedefs every translation unit
+    /// declares (`__size_t` 0, `__signed_size_t` 1, `__ptrdiff_t` 2:
+    /// the types of `sizeof` and pointer subtraction); the importer
+    /// names its own.
+    Sugar(u8),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -149,6 +154,14 @@ enum Payload {
     },
     /// A label (a local declaration only).
     Label,
+    /// A `LifetimeExtendedTemporary` (a local declaration only): the
+    /// temporary's type, the local variable record whose reference
+    /// binding extends it, and its mangling index.
+    Let {
+        ty: QRef,
+        extending: u32,
+        index: u32,
+    },
     /// `scoped` is `EnumData` `SCOPED | SCOPED_STRUCT`; `def` is present
     /// for a definition, holding the computed (underlying, promotion)
     /// types of one without a fixed underlying type.
@@ -211,6 +224,7 @@ const K_ENUMERATOR: u8 = 6;
 const K_TYPEDEF: u8 = 7;
 const K_ALIAS: u8 = 8;
 const K_LABEL: u8 = 9;
+const K_LET: u8 = 10;
 
 impl Payload {
     fn code(&self) -> u8 {
@@ -224,6 +238,7 @@ impl Payload {
             Payload::Typedef { alias: false, .. } => K_TYPEDEF,
             Payload::Typedef { alias: true, .. } => K_ALIAS,
             Payload::Label => K_LABEL,
+            Payload::Let { .. } => K_LET,
         }
     }
 }
@@ -392,6 +407,11 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.u32(*eval);
         }
         Payload::Label => {}
+        Payload::Let { ty, extending, index } => {
+            w.q(*ty);
+            w.u32(*extending);
+            w.u32(*index);
+        }
         Payload::Enum { scoped, fixed, def } => {
             w.u8(*scoped);
             w.pair(*fixed);
@@ -459,6 +479,7 @@ fn encode(img: &Image) -> Vec<u8> {
                 w.u8(*c);
                 w.q(*q);
             }
+            TyRec::Sugar(k) => (w.u8(12), w.u8(*k)).1,
         }
     }
     // Declarations: an offset table into the record blob, so a reader
@@ -610,6 +631,7 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
         }
         K_VAR => Payload::Var { ty: r.q()?, spec: r.u32()?, init: r.u32()?, eval: r.u32()? },
         K_LABEL => Payload::Label,
+        K_LET => Payload::Let { ty: r.q()?, extending: r.u32()?, index: r.u32()? },
         K_ENUM => {
             let scoped = r.u8()?;
             let fixed = r.pair()?;
@@ -645,6 +667,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Option<u32>) {
             (v, None)
         }
         TyRec::Enum(d) | TyRec::Typedef(d) => (Vec::new(), Some(*d)),
+        TyRec::Sugar(_) => (Vec::new(), None),
     }
 }
 
@@ -655,7 +678,9 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
         Payload::Function { ty, params, .. } => {
             std::iter::once(*ty).chain(params.iter().map(|p| p.ty)).collect()
         }
-        Payload::Var { ty, .. } | Payload::Enumerator { ty, .. } => vec![*ty],
+        Payload::Var { ty, .. } | Payload::Enumerator { ty, .. } | Payload::Let { ty, .. } => {
+            vec![*ty]
+        }
         Payload::Enum { fixed, def, .. } => {
             let mut v = Vec::new();
             for (a, b) in fixed.iter().chain(def.iter().flatten()) {
@@ -732,6 +757,10 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 }
                 TyRec::QArray(c, q)
             }
+            12 => match r.u8()? {
+                k @ 0..=2 => TyRec::Sugar(k),
+                _ => return bad("unknown builtin typedef"),
+            },
             _ => return bad("unknown type kind"),
         };
         img.types.push(t);
@@ -836,11 +865,24 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         return bad("bad local variable");
                     }
                 }
+                Payload::Let { ty, extending, .. } => {
+                    let ext = kind_of(*extending);
+                    if !qref_at(*ty, i)
+                        || !ext.is_some_and(|x| {
+                            matches!(x.payload, Payload::Var { .. }) && x.ctx == d.ctx
+                        })
+                    {
+                        return bad("bad lifetime-extended temporary");
+                    }
+                }
                 _ => return bad("bad local declaration"),
             }
             continue;
         }
-        if d.flags & !DECL_FLAGS != 0 || d.owner > 3 || matches!(d.payload, Payload::Label) {
+        if d.flags & !DECL_FLAGS != 0
+            || d.owner > 3
+            || matches!(d.payload, Payload::Label | Payload::Let { .. })
+        {
             return bad("bad declaration flags");
         }
         let scope = |x: u32| {
@@ -914,7 +956,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     return bad("bad enumerator type");
                 }
             }
-            Payload::Namespace | Payload::Export | Payload::Typedef { .. } | Payload::Label => {}
+            Payload::Namespace
+            | Payload::Export
+            | Payload::Typedef { .. }
+            | Payload::Label
+            | Payload::Let { .. } => {}
         }
     }
     // The lookup table: exactly the named non-local records, sorted.
@@ -1045,6 +1091,10 @@ impl Writer<'_, '_, '_> {
                 TyRec::Func { ret, params, info, exc }
             }
             TypeView::Enum(d) => TyRec::Enum(self.type_decl(d, t)?),
+            TypeView::Typedef { .. } if self.s.builtin_sugar().iter().any(|q| q.ty() == t) => {
+                let k = self.s.builtin_sugar().iter().position(|q| q.ty() == t).unwrap_or(0);
+                TyRec::Sugar(k as u8)
+            }
             TypeView::Typedef { decl, .. } => TyRec::Typedef(self.type_decl(decl, t)?),
             TypeView::QualifiedArray { quals, base } => {
                 let sugar = matches!(
@@ -1604,6 +1654,11 @@ impl Sema<'_, '_> {
                     v
                 }
                 Payload::Label => self.image_label(ctx, name, h.loc),
+                Payload::Let { ty, extending, index } => {
+                    let lty = self.image_ty(img, &mut tys, &ids, *ty);
+                    let ext = ids[*extending as usize];
+                    self.builder().lifetime_extended_temporary(ext, *index, lty, h.loc)
+                }
                 Payload::Enum { scoped, fixed, def } => {
                     let fixed = fixed.map(|(a, b)| {
                         (
@@ -1751,6 +1806,7 @@ impl Sema<'_, '_> {
                 let q = qt(self, *q);
                 self.ast.types.qualify(q, Quals::from_bits(*c))
             }
+            TyRec::Sugar(k) => self.builtin_sugar()[usize::from(*k).min(2)],
         }
     }
 }
