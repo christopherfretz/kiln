@@ -994,7 +994,7 @@ pub(crate) fn missing_exc_spec_fixit_loc(d: &Declarator) -> Option<Loc> {
     })??;
     // The innermost function declarator's qualifiers ([`Declarator::
     // fn_qual_locs`]): a ref-qualifier follows any cv-qualifiers.
-    let [c, v, r] = d.fn_qual_locs;
+    let [c, v, r, _] = d.fn_qual_locs;
     let last = match (r, ref_qual) {
         (Some(r), kiln_ast::types::RefQual::LValue) => Some((r, 1)),
         (Some(r), kiln_ast::types::RefQual::RValue) => Some((r, 2)),

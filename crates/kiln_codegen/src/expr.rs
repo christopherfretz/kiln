@@ -5105,6 +5105,9 @@ impl Cg<'_> {
         let n_elems = ast.types.array_size(q).unwrap_or(0);
         let (inits, filler, _) = agg_init_parts(ast, e);
         let esz = self.size_align(eq).0;
+        if self.array_init_from_constant(e, q, eq, inits.len() as u64 * esz, dest) {
+            return Ok(());
+        }
         let ety = self.mty(eq);
         let ealign = min_align(dest.align, esz);
         let begin = dest.v;
@@ -5219,6 +5222,35 @@ impl Cg<'_> {
             self.f.fir.erase(d);
         }
         Ok(())
+    }
+
+    /// clang `EmitArrayInit` (WP-1008, spec/codegen.md "Constant
+    /// emission of initializers"): when the explicit elements take more
+    /// than 16 bytes, the elements are trivially copyable and the list
+    /// folded ([`crate::fold`]), the array is copied from a private
+    /// `constinit` global holding its value (clang
+    /// `ConstantEmitter::tryEmitForInitializer`, `EmitFinalDestCopy`).
+    /// Whether it was.
+    fn array_init_from_constant(
+        &mut self,
+        e: ExprId,
+        q: QualType,
+        eq: QualType,
+        explicit_bytes: u64,
+        dest: Addr,
+    ) -> bool {
+        if explicit_bytes <= 16 || !crate::class::is_trivially_copyable(self.ast, eq) {
+            return false;
+        }
+        let Some(c) = self.folds.get(e) else { return false };
+        let Ok(k) = self.const_value(c, q, Some(e), true) else { return false };
+        let (size, align) = self.size_align(q);
+        let g = self.private_const("constinit", k, align);
+        // A `new GlobalVariable` without `unnamed_addr`.
+        self.m.global_mut(g).unnamed_addr = kiln_llvm::UnnamedAddr::None;
+        let ty = self.mty(q);
+        self.agg_copy(q, dest, Addr { v: V::C(gval(g)), ty, align }, size, false);
+        true
     }
 
     pub(crate) fn is_trivial_filler(&self, e: ExprId) -> bool {

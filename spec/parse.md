@@ -810,8 +810,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `Declarator::attrs`, so it appertains to the declared entity. After a
     conversion-type-id the attributes are parsed with the type (they
     appertain to the type, as in clang).
-  - on a function chunk: cv-qualifiers (a duplicate warns
-    `duplicate 'const' declaration specifier`), a ref-qualifier, and an
+  - on a function chunk: cv-qualifiers and GNU `__restrict` (a
+    duplicate warns `duplicate 'const' declaration specifier`; their
+    locations in `Declarator::fn_qual_locs`), clang nullability keywords
+    (kept only as `Declarator::fn_nullability`, spec/sema.md §4.1.1;
+    WP-1091), a ref-qualifier, and an
     explicit object parameter (`this T self`, [dcl.fct]/6) in
     `Declarator::explicit_object`; in the tentative parse `this` followed
     by a decl-specifier starts a parameter-declaration-clause, so
@@ -946,7 +949,15 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `= delete("reason");` (P2573) go to `act_on_defaulted` /
     `act_on_deleted`. When Sema made no function the body is skipped.
     Where a definition is not allowed (block scope), `{` is
-    `function definition is not allowed here`.
+    `function definition is not allowed here`. A block-scope
+    template-declaration whose declaration is a function definition
+    (`block_template_function_body`: past the template heads, a
+    declarator with a parameter list and then `{`, not a class, concept,
+    alias, `= ...`, `;` or function-try-block) gets the same error at
+    the `{` under clang 22 and its body is skipped; any other
+    block-scope template-declaration is
+    `sema_template_outside_namespace_or_class` at `template` (clang 19:
+    `expected expression` for both; WP-1091).
   - `= delete` / `= default` on a later declarator or a non-function:
     `'= delete' is a function definition and must occur in a
     standalone declaration`, `only functions can have deleted

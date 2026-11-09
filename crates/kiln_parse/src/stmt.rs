@@ -211,15 +211,120 @@ impl Parser<'_, '_> {
     /// class scope (clang 22 `CheckTemplateDeclScope`; clang 19 parses
     /// `template` as an expression). The declaration is skipped, as clang
     /// drops it.
+    ///
+    /// A function template definition there is clang 22's "function
+    /// definition is not allowed here" at its body's `{` instead (clang
+    /// `ParseSingleDeclarationAfterTemplate` rejects the definition before
+    /// the declaration reaches `CheckTemplateDeclScope`); the definition
+    /// is skipped through its body.
     fn block_scope_template(&mut self, loc: Loc) -> Option<StmtId> {
-        let id = if self.s.clang_compat >= 22 {
-            DiagId::sema_template_outside_namespace_or_class
+        if self.s.clang_compat >= 22 {
+            if let Some(body) = self.block_template_function_body() {
+                while self.pos() < body && !self.at_eof() {
+                    self.bump();
+                }
+                let at = self.loc();
+                self.s.error(DiagId::parse_function_definition_not_allowed, at);
+                let end = self.skip_balanced(body).unwrap_or(body + 1);
+                while self.pos() < end && !self.at_eof() {
+                    self.bump();
+                }
+                return None;
+            }
+            self.s.error(DiagId::sema_template_outside_namespace_or_class, loc);
         } else {
-            DiagId::parse_expected_expression
-        };
-        self.s.error(id, loc);
+            self.s.error(DiagId::parse_expected_expression, loc);
+        }
         self.skip_statement();
         None
+    }
+
+    /// At a block-scope `template <`: the index of the `{` opening the
+    /// function body if the template-declaration is a function definition
+    /// (a declarator with a parenthesized group followed by `{`, no `=`,
+    /// `,`, `;` or `try` before it at bracket depth 0), by a token scan.
+    fn block_template_function_body(&self) -> Option<usize> {
+        let kind = |i: usize| self.tok_at(i).kind;
+        let mut i = self.pos();
+        // The template-heads.
+        while self.kw_of(self.tok_at(i)) == Some(Kw::Template)
+            && kind(i + 1) == TokKind::Punct(Punct::Less)
+        {
+            i += 2;
+            let mut angle = 1u32;
+            while angle > 0 {
+                match kind(i) {
+                    TokKind::Eof
+                    | TokKind::Punct(
+                        Punct::Semi | Punct::RParen | Punct::RSquare | Punct::RBrace,
+                    ) => return None,
+                    TokKind::Punct(Punct::LParen | Punct::LSquare | Punct::LBrace) => {
+                        i = self.skip_balanced(i)?;
+                        continue;
+                    }
+                    TokKind::Punct(Punct::Less) => angle += 1,
+                    TokKind::Punct(Punct::Greater) => angle -= 1,
+                    TokKind::Punct(Punct::GreaterGreater) => angle = angle.checked_sub(2)?,
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
+        if i == self.pos() {
+            return None;
+        }
+        if matches!(
+            self.kw_of(self.tok_at(i)),
+            Some(
+                Kw::Struct
+                    | Kw::Class
+                    | Kw::Union
+                    | Kw::Enum
+                    | Kw::Concept
+                    | Kw::Using
+                    | Kw::Typedef
+                    | Kw::Template
+            )
+        ) {
+            return None;
+        }
+        // The declaration, up to its first `{` at depth 0.
+        let mut paren = false;
+        loop {
+            match kind(i) {
+                TokKind::Eof
+                | TokKind::Punct(
+                    Punct::Semi
+                    | Punct::Equal
+                    | Punct::Comma
+                    | Punct::RParen
+                    | Punct::RSquare
+                    | Punct::RBrace,
+                ) => return None,
+                TokKind::Punct(Punct::LParen | Punct::LSquare) => {
+                    paren |= kind(i) == TokKind::Punct(Punct::LParen);
+                    i = self.skip_balanced(i)?;
+                }
+                TokKind::Punct(Punct::LBrace) => return paren.then_some(i),
+                // clang does not take a function-try-block for a body here.
+                _ if self.kw_of(self.tok_at(i)) == Some(Kw::Try) => return None,
+                // `requires requires (params) { requirements }`: the
+                // requirement-body is no function body.
+                _ if self.kw_of(self.tok_at(i)) == Some(Kw::Requires)
+                    && self.kw_of(self.tok_at(i + 1)) == Some(Kw::Requires) =>
+                {
+                    i += 2;
+                    if kind(i) == TokKind::Punct(Punct::LParen) {
+                        i = self.skip_balanced(i)?;
+                    }
+                    if kind(i) != TokKind::Punct(Punct::LBrace) {
+                        return None;
+                    }
+                    i = self.skip_balanced(i)?;
+                }
+                _ => i += 1,
+            }
+        }
     }
 
     fn parse_statement_after_attrs(&mut self) -> Option<StmtId> {
