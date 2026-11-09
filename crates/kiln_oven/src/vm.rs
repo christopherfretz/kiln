@@ -1248,6 +1248,12 @@ impl Oven {
                     let (d, g) = (fb + arg!(0), arg!(1));
                     let p = match self.globals[g].state {
                         GState::Resolved(p) => p,
+                        GState::Bound(p) => {
+                            // The object under construction: a call that
+                            // names it is not memoized (WP-1100).
+                            self.run.impure += 1;
+                            p
+                        }
                         GState::Unresolved => {
                             let cur = self.stack[self.stack.len() - 1].func;
                             let top = fb + self.funcs[cur as usize].nregs as usize + 1;
@@ -1313,7 +1319,8 @@ impl Oven {
                 | Op::ContractSkip
                 | Op::ContractFail
                 | Op::ContractTrial
-                | Op::Fold => {
+                | Op::Fold
+                | Op::BindObject => {
                     (pc, fb) = self.run_cold(b, op, pc, fb)?;
                 }
             }
@@ -1730,6 +1737,11 @@ impl Oven {
                         fail!(Fault::MpVirtCmp { member: e.member });
                     }
                 }
+                pc += 3;
+            }
+            Op::BindObject => {
+                let (p, g) = (reg!(0) as u64, arg!(1) as u32);
+                self.bind_object(g, p);
                 pc += 3;
             }
             Op::RefChk => {
@@ -2980,18 +2992,27 @@ impl Oven {
         let p = Ptr::decode(raw);
         let Some(a) = self.alloc_any(p) else { return Ok(()) };
         let key = Ptr::alloc_key(raw);
-        // The offsets of the objects in this allocation a constructor or
-        // destructor is running for.
-        let structors: Vec<u32> = self
-            .stack
-            .iter()
-            .filter_map(|fr| {
+        // Whether a constructor or destructor is running for the object of
+        // class `t` at offset `b` of this allocation. The class matters: a
+        // base subobject at offset 0 shares its complete object's offset
+        // but not its type, and no two live subobjects of one class share
+        // an address ([intro.object]/9), so the pair is the object's
+        // identity (WP-1101). An empty base is not in `Types::fields`, so
+        // the walk never enters one. Asked only at a volatile record, so
+        // a non-volatile path never scans the stack.
+        let structor = |b: u64, t: OTy| {
+            self.stack.iter().any(|fr| {
                 let f = &self.funcs[fr.func as usize];
-                let r = f.this_reg.filter(|_| f.structor)?;
-                let this = self.regs.get((fr.fb + r) as usize).map(|&v| v as u64)?;
-                (this != 0 && Ptr::alloc_key(this) == key).then(|| Ptr::decode(this).off)
+                let (Some(r), Some(cls)) = (f.this_reg.filter(|_| f.structor), f.this_ty) else {
+                    return false;
+                };
+                let this = self.regs.get((fr.fb + r) as usize).map_or(0, |&v| v as u64);
+                cls == t
+                    && this != 0
+                    && Ptr::alloc_key(this) == key
+                    && u64::from(Ptr::decode(this).off) == b
             })
-            .collect();
+        };
         let mut vol = match a.origin {
             Origin::Var(d) => self.volatile_decls.contains(&d),
             Origin::Temp(e) | Origin::Heap(e, _) => self.volatile_exprs.contains(&e),
@@ -3001,10 +3022,7 @@ impl Oven {
         let (mut t, mut base) = (a.ty, 0u64);
         let target = u64::from(p.off);
         loop {
-            if vol
-                && matches!(self.types.kind(t), TyKind::Record { .. })
-                && u32::try_from(base).is_ok_and(|b| structors.contains(&b))
-            {
+            if vol && matches!(self.types.kind(t), TyKind::Record { .. }) && structor(base, t) {
                 vol = false;
             }
             if t == ty && base == target {
