@@ -2805,6 +2805,16 @@ impl ExprArena {
         first.0
     }
 
+    /// A `GenericSelectionExpr`'s children: the controlling expression
+    /// (not a type operand), then every association's expression.
+    fn generic_children(n: &ExprNode, lists: &IdLists, v: &mut impl Extend<ExprId>) {
+        let w = lists.get(ListId::new(n.a));
+        if !n.has(ExprFlags::ARG_IS_TYPE) {
+            v.extend(ExprId::from_raw(w[0]));
+        }
+        v.extend(w[2..].chunks_exact(3).filter_map(|c| ExprId::from_raw(c[2])));
+    }
+
     /// [`ExprArena::children`] fed to `v` in order.
     fn children_each(&self, e: ExprId, lists: &IdLists, v: &mut impl Extend<ExprId>) {
         let n = self.get(e);
@@ -2900,13 +2910,7 @@ impl ExprArena {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)).take(5));
             }
             ExprKind::PseudoObjectExpr => self.pseudo_children(n, lists, v),
-            ExprKind::GenericSelectionExpr => {
-                let w = lists.get(ListId::new(n.a));
-                if !n.has(ExprFlags::ARG_IS_TYPE) {
-                    v.extend(id(w[0]));
-                }
-                v.extend(w[2..].chunks_exact(3).filter_map(|c| id(c[2])));
-            }
+            ExprKind::GenericSelectionExpr => Self::generic_children(n, lists, v),
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
             | ExprKind::AtomicExpr

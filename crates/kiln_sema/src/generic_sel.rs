@@ -75,41 +75,8 @@ impl Sema<'_, '_> {
         {
             self.check_unevaluated_side_effects(c);
         }
-        let mut type_error = false;
-        for (i, a) in assocs.iter().enumerate() {
-            let Some(t) = a.ty else { continue };
-            if self.is_dependent_type(t) {
-                dependent = true;
-                continue;
-            }
-            if let Some(d) = self.assoc_type_check(t, a.ty_loc, is_expr) {
-                // clang: the unreachable-association warning never makes
-                // the selection invalid, even as an error (-Werror).
-                let fatal = d.id().is_some_and(|id| {
-                    id != DiagId::sema_unreachable_association
-                        && self.diags.severity_at(id, a.ty_loc) >= Severity::Error
-                });
-                if fatal {
-                    type_error = true;
-                }
-                self.emit(d);
-            }
-            // C11 6.5.1.1p2: no two associations name compatible types.
-            for b in &assocs[i + 1..] {
-                let Some(u) = b.ty else { continue };
-                if self.is_dependent_type(u) || !self.ast.types.same_type(t, u) {
-                    continue;
-                }
-                let note = self.diag(DiagId::note_compat_assoc, a.ty_loc).arg(self.ty_arg(t));
-                let d = self
-                    .diag(DiagId::sema_assoc_compatible_types, b.ty_loc)
-                    .arg(self.ty_arg(u))
-                    .arg(self.ty_arg(t))
-                    .with_note(note);
-                self.emit(d);
-                type_error = true;
-            }
-        }
+        let (type_error, dep_assoc) = self.check_assoc_types(assocs, is_expr);
+        dependent |= dep_assoc;
         if type_error {
             return self.recover_err(&kids, loc);
         }
@@ -145,6 +112,49 @@ impl Sema<'_, '_> {
             return self.recover_err(&kids, loc);
         };
         self.builder().generic_selection(ctrl, assocs, Some(selected), loc, rparen)
+    }
+
+    /// The checks on every non-dependent association type (clang
+    /// `CreateGenericSelectionExpr`'s loop): `(error, dependent)`, where
+    /// `error` is a diagnostic that invalidates the selection and
+    /// `dependent` is set by a dependent association type.
+    fn check_assoc_types(&mut self, assocs: &[GenericAssoc], is_expr: bool) -> (bool, bool) {
+        let (mut type_error, mut dependent) = (false, false);
+        for (i, a) in assocs.iter().enumerate() {
+            let Some(t) = a.ty else { continue };
+            if self.is_dependent_type(t) {
+                dependent = true;
+                continue;
+            }
+            if let Some(d) = self.assoc_type_check(t, a.ty_loc, is_expr) {
+                // clang: the unreachable-association warning never makes
+                // the selection invalid, even as an error (-Werror).
+                let fatal = d.id().is_some_and(|id| {
+                    id != DiagId::sema_unreachable_association
+                        && self.diags.severity_at(id, a.ty_loc) >= Severity::Error
+                });
+                if fatal {
+                    type_error = true;
+                }
+                self.emit(d);
+            }
+            // C11 6.5.1.1p2: no two associations name compatible types.
+            for b in &assocs[i + 1..] {
+                let Some(u) = b.ty else { continue };
+                if self.is_dependent_type(u) || !self.ast.types.same_type(t, u) {
+                    continue;
+                }
+                let note = self.diag(DiagId::note_compat_assoc, a.ty_loc).arg(self.ty_arg(t));
+                let d = self
+                    .diag(DiagId::sema_assoc_compatible_types, b.ty_loc)
+                    .arg(self.ty_arg(u))
+                    .arg(self.ty_arg(t))
+                    .with_note(note);
+                self.emit(d);
+                type_error = true;
+            }
+        }
+        (type_error, dependent)
     }
 
     /// The diagnostic for a non-dependent association type `t` at `at`, if

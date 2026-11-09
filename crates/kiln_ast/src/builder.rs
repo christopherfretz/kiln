@@ -1990,11 +1990,11 @@ impl<'a> AstBuilder<'a> {
             }
         };
         for a in assocs {
-            all = all | self.deps(a.expr);
+            all |= self.deps(a.expr);
             if let Some(t) = a.ty {
-                all = all | self.type_deps(t);
+                all |= self.type_deps(t);
             }
-            words.extend([a.ty.map_or(0, |t| t.raw()), a.ty_loc.to_raw(), a.expr.raw()]);
+            words.extend([RawId::raw_opt(a.ty), a.ty_loc.to_raw(), a.expr.raw()]);
         }
         let list = self.ast.lists.push_raw(&words).raw();
         let picked = selected.and_then(|i| assocs.get(i)).map(|a| a.expr);
