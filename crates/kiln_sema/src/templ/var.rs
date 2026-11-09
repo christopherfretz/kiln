@@ -285,7 +285,14 @@ impl Sema<'_, '_> {
     /// arguments, every type scoped (`std::v<std::D<int>>`, not the
     /// typedef `v<_Del>` the arguments were written with).
     pub(crate) fn spec_decl_name(&self, tmpl: DeclId, args: ArgListId) -> String {
-        let mut s = self.qualified_decl_name(tmpl);
+        self.spec_decl_name_as(tmpl, args)
+    }
+
+    /// [`Self::spec_decl_name`] with the name of `named`: a conversion
+    /// function template specialization is named by its own conversion
+    /// type (`X::operator char *<char>`, not `X::operator T *<char>`).
+    pub(crate) fn spec_decl_name_as(&self, named: DeclId, args: ArgListId) -> String {
+        let mut s = self.qualified_decl_name(named);
         let names = crate::names::SemaNames::new(self);
         let canon = self.ast.types.canonical_args(args);
         kiln_ast::types::write_arg_list_scoped(&self.ast.types, &names, canon, &mut s);

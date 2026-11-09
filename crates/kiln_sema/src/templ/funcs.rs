@@ -734,9 +734,10 @@ impl Sema<'_, '_> {
                         continue;
                     };
                     let at = self.loc_of(self.ast.latest(m.template));
+                    let named = if conv { m.spec } else { info.template };
                     let note = self
                         .diag(DiagId::note_explicit_instantiation_candidate, at)
-                        .arg(self.spec_decl_name(info.template, info.print_args))
+                        .arg(self.spec_decl_name_as(named, info.print_args))
                         .arg(self.template_args_desc(info.template, info.args));
                     e = e.with_note(note);
                 }
@@ -749,9 +750,10 @@ impl Sema<'_, '_> {
                 let Some((_, info)) = self.ast.spec_info(m.spec).map(|(i, s)| (i, *s)) else {
                     continue;
                 };
+                let named = if conv { m.spec } else { info.template };
                 let note = self
                     .diag(DiagId::note_fn_template_spec_matched, self.loc_of(m.template))
-                    .arg(self.spec_decl_name(info.template, info.print_args))
+                    .arg(self.spec_decl_name_as(named, info.print_args))
                     .arg(self.template_args_desc(info.template, info.args));
                 e = e.with_note(note);
             }
