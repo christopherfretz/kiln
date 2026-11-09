@@ -339,6 +339,7 @@ impl Sema<'_, '_> {
     /// nominated class's own name (WP-724), the constructors of a direct
     /// base (WP-114). A dependent qualifier makes
     /// an `UnresolvedUsingValue` redone at instantiation.
+    #[allow(clippy::too_many_lines, reason = "one arm per using-declarator form")]
     fn class_using_declarator(
         &mut self,
         class: DeclId,

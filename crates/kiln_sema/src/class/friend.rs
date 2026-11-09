@@ -109,6 +109,10 @@ impl Sema<'_, '_> {
 
     /// [`Sema::act_on_friend`]: the befriended function or type, recorded
     /// in the class being defined (`RecordCold.friends` at `}`).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one step per friend rule, as clang's ActOnFriendFunctionDecl"
+    )]
     pub(crate) fn declare_friend(
         &mut self,
         ds: &DeclSpec,

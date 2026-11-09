@@ -853,9 +853,6 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The explicit captures of lambda `id` ([expr.prim.lambda.capture]/2-8;
-    /// clang `ActOnLambdaExpressionAfterIntroducer`).
-    #[allow(clippy::too_many_lines, reason = "one arm per capture form, as clang")]
     /// [expr.prim.lambda.capture]/5: a lambda parameter does not have the
     /// name of an explicit capture (simple, init or pack capture; implicit
     /// captures do not count). Reported at the parameter's name with a note
@@ -895,6 +892,9 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The explicit captures of lambda `id` ([expr.prim.lambda.capture]/2-8;
+    /// clang `ActOnLambdaExpressionAfterIntroducer`).
+    #[allow(clippy::too_many_lines, reason = "one arm per capture form, as clang")]
     pub(crate) fn act_on_explicit_captures(&mut self, id: LambdaId, intro: &LambdaIntroducer) {
         // Each name with whether it is an init-capture and its variable.
         let mut names: Vec<(Symbol, bool, Option<DeclId>)> = Vec::new();

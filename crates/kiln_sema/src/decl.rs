@@ -2061,7 +2061,7 @@ impl Sema<'_, '_> {
                     // argument captures nothing; an init-capture's
                     // initializer is checked; the body is not.
                     let caps = self.ast.exprs.lambda(x).captures.clone();
-                    for c in caps.iter() {
+                    for c in &caps {
                         if c.init {
                             if let Some(i) = c.var.and_then(|v| self.ast.decls.var(v)?.init) {
                                 stack.push(i);

@@ -124,7 +124,8 @@ impl Sema<'_, '_> {
         let cands = self.prev_candidates_dn(dname, None);
         let p = self.ref_qualifier_mix_prev(&cands, new)?;
         let (pq, pr) = self.method_object_quals(p);
-        let info = self.ast.types.proto(new.ty).map(|x| x.info()).unwrap_or_default();
+        let info =
+            self.ast.types.proto(new.ty).map(kiln_ast::types::FuncProto::info).unwrap_or_default();
         if self.std >= kiln_lex::Std::Cxx23 {
             return (pq == info.this_quals()).then_some(p);
         }
@@ -152,7 +153,9 @@ impl Sema<'_, '_> {
         ty: QualType,
         loc: Loc,
     ) {
-        let Some(info) = self.ast.types.proto(ty).map(|p| p.info()) else { return };
+        let Some(info) = self.ast.types.proto(ty).map(kiln_ast::types::FuncProto::info) else {
+            return;
+        };
         let mut mixed = Vec::new();
         let mut seen_v = kiln_source::fx::FxHashSet::default();
         self.overridden_walk(class, &mut seen_v, 0, &mut |s, b| {
