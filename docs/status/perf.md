@@ -771,3 +771,53 @@ check at each use and again by codegen's fold of the use
 `-Winteger-overflow` trial fold (`int_overflow.rs`
 `overflow_value_inner`) runs before the invocations are valued and is
 not memoized (`return fib(27) + g();` runs about 635k `fib` calls).
+
+### WP-1129: trial folds and codegen read the invocation's value (2026-11-09)
+
+The two re-evaluations WP-1140 left open are gone. A full-expression's
+completion checks (`-Wconstant-conversion`-style implicit-conversion
+warnings, `impcast.rs`, and the `-Winteger-overflow` trial fold,
+`int_overflow.rs`) ran before its immediate invocations were evaluated
+and evaluated each call again, silently and without the memo; now sema
+evaluates the outermost invocations first (`evaluate_immediates_early`)
+and the trials read the stored value. Codegen's fold prepass reuses the
+value sema's check of a default argument's or default member
+initializer's use stored (`default_immediate_value`) instead of
+evaluating the call again. spec/sema.md §5.10, spec/oven.md "Valued
+immediate invocations".
+
+TUs: the WP-1140 `common.h` above (saved as `common-wp1129.h`, `N`
+4096) with one context each, and a generated TU with 4,000 trial-folded
+invocations of distinct arguments (no memo hits):
+
+```c++
+// nsdmi:   struct S { long x = fib(27); Table t = build(); }; int main() { S s; ... }
+// defarg:  long f(long x = fib(27)); int h(Table t = build()); int main() { return (int)(f() + h()) & 1; }
+// ovf:     int g(); int main() { return (int)(fib(27) + g()) & 1; }
+// heavy:   consteval int sum(int n) { int r = 0; for (int i = 0; i < n; ++i) r += i ^ n; return r; }
+//          then for i in 0..2000: int f<i>(int x) { return x + sum(200 + i); }
+//                                 short g<i>() { return sum(5000 + i) & 0x7fff; }
+```
+
+Commands: `kiln++ -std=c++2c -fconstexpr-steps=1000000000 -c -o /dev/null
+<ctx>.cpp` (heavy: `kiln++ -std=c++26 -S -emit-llvm -o /dev/null
+heavy.cpp`) and the same with `clang++-19` (heavy: `-std=c++2c`);
+`/usr/bin/time -f "%e %M"`, median of 3; `build` evaluations and `fib`
+calls from `-ftime-trace -ftime-trace-verbose -ftime-trace-granularity=0`
+(`ConstevalCall` events). Harness profile; before = main 2e843c6f9.
+
+| context | before → after | kiln before | kiln after | clang++-19 |
+|---|---|---|---|---|
+| nsdmi | `build` 2 → 1 | 0.31 s / 61.4 MB | 0.25 s / 61.4 MB | 2.29 s / 99.5 MB |
+| defarg | `build` 2 → 1 | 0.32 s / 60.7 MB | 0.25 s / 60.7 MB | 2.43 s / 99.9 MB |
+| ovf | `fib` calls 1271270 → 28 | 0.10 s / 55.4 MB | 0.08 s / 55.4 MB | 1.01 s / 93.2 MB |
+| heavy | trial steps 26427000 → 0 | 1.24 s / 26.0 MB | 0.70 s / 26.0 MB | 30.58 s / 101.1 MB |
+
+`bench/reflect` S2, S3 and S7 (`kiln++ -std=c++26 -freflection
+--gcc-toolchain=<GCC 16.1 prefix> -S -emit-llvm -o /dev/null`) are
+unchanged within noise (0.85, 0.50 and 0.73 s; 56, 35 and 43 MB). Still
+open: defarg's `f() + h()` overflow trial evaluates the default
+argument's `fib(27)` (635649 unmemoized `fib` calls) before failing on
+the non-constexpr `f`; the shift-count check of `<<`/`>>`
+(`diagnose_shift_count`) folds its operand, invocations included, when
+the operator is built.

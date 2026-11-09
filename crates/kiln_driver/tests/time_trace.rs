@@ -402,3 +402,55 @@ fn immediate_invocation_evaluated_once() {
     assert_eq!(count("esc<int>"), 1);
     assert_eq!((count("mk"), count("sq")), (5, 5));
 }
+
+/// The completion checks of a full-expression (the implicit-conversion
+/// and overflow warnings) fold it before its immediate invocations are
+/// reported; they read the values evaluated first instead of running
+/// the calls again ([expr.const]/16, WP-1129), and codegen reuses the
+/// value of a default argument's invocation that sema's check of a use
+/// stored. One `ConstevalCall` per invocation: in an addition, a
+/// narrowing return, a comparison, a negation, a conditional's
+/// condition, a nested invocation, an immediate-escalating function
+/// template's body, and a default argument.
+#[test]
+fn immediate_invocation_trial_folds_once() {
+    let d = setup("trial-once");
+    std::fs::write(
+        d.join("t.cpp"),
+        "consteval int sq(int k) { return k * k; }\n\
+         #define F(n) consteval int n(int k) { return sq(k); }\n\
+         F(ad) F(nr) F(cm) F(ng) F(cd) F(in) F(ot) F(es) F(df)\n\
+         int add(int x) { return x + ad(3); }\n\
+         char narrow() { return nr(4); }\n\
+         bool cmp(int x) { return x < cm(5); }\n\
+         unsigned neg() { return -ng(6); }\n\
+         int cond() { return cd(7) ? 1 : 2; }\n\
+         int nest(int x) { return x + ot(in(2)); }\n\
+         template <class T> constexpr int esc(T x) { return x + es(T(2)); }\n\
+         int def(int x = df(8)) { return x; }\n\
+         int uses() { def(); return def(); }\n\
+         int main() { return add(1) + narrow() + cmp(2) + neg() + cond() + nest(3) + esc(4) + uses(); }\n",
+    )
+    .unwrap();
+    let args = [
+        "-std=c++20",
+        "-S",
+        "-emit-llvm",
+        "-ftime-trace",
+        "-ftime-trace-verbose",
+        "-ftime-trace-granularity=0",
+    ];
+    run(&kilnpp(), &d, &[&args[..], &["t.cpp"]].concat());
+    let j = Json::parse(&std::fs::read_to_string(d.join("t.json")).unwrap()).unwrap();
+    check_structure(&j);
+    let ev = events(&j);
+    let count =
+        |f: &str| ev.iter().filter(|e| e.name == "ConstevalCall" && e.detail() == f).count();
+    for f in ["ad", "nr", "cm", "ng", "cd", "in", "ot", "es"] {
+        assert_eq!(count(f), 1, "{f} evaluated {} times", count(f));
+    }
+    // The second use of `def`'s default argument is evaluated too, and
+    // answered from the memo table (a memo hit has no event); codegen
+    // evaluates neither use again.
+    assert_eq!(count("df"), 1, "df evaluated {} times", count("df"));
+}

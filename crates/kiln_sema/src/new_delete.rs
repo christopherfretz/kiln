@@ -853,6 +853,9 @@ impl Sema<'_, '_> {
             }
             return r;
         }
+        // As `Sema::deduce_from`: clang's `DeduceAutoType` resolves a
+        // function template-id again.
+        self.rerun_template_id_single(e);
         let t = &self.ast.types;
         let base = if t.is_array(ety) {
             let el = t.element(ety).unwrap_or(QualType::ERROR);

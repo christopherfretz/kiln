@@ -340,6 +340,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         #[cfg(feature = "op-stats")]
         let _caller =
             kiln_oven::trial_stats::CallerGuard::new("try_fold", std::panic::Location::caller());
+        if let Some(v) = self.early_immediate_value(e) {
+            return Some(v);
+        }
         if !self.eval_stack_ok(e) {
             return None;
         }
@@ -429,6 +432,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         #[cfg(feature = "op-stats")]
         let _caller =
             kiln_oven::trial_stats::CallerGuard::new("fold_rvalue", std::panic::Location::caller());
+        if let Some(v) = self.early_immediate_value(e) {
+            return Some(v);
+        }
         if !self.eval_stack_ok(e) {
             return None;
         }
@@ -448,6 +454,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             "fold_for_overflow",
             std::panic::Location::caller(),
         );
+        if let Some(v) = self.early_immediate_value(e) {
+            return (Some(v), Vec::new());
+        }
         if !self.eval_stack_ok(e) {
             return (None, Vec::new());
         }
