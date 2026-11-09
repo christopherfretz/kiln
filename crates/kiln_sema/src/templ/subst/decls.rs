@@ -697,7 +697,7 @@ impl Substituter<'_, '_, '_> {
             let exc = if lazy_exc {
                 kiln_ast::types::ExcSpec::Deferred(d)
             } else {
-                self.exc_spec(p, loc)?
+                self.exc_spec(p, d, loc)?
             };
             Ok((params, ret, exc))
         });
@@ -1047,18 +1047,19 @@ impl Substituter<'_, '_, '_> {
             // `InitFunctionInstantiation` -> `EST_Uninstantiated`), from
             // the specialization's own context. A local-scope pattern's is
             // substituted now, as clang.
-            let exc = if matches!(
+            let exc = if (matches!(
                 self.sema.ast.types.exc_spec(&p),
                 kiln_ast::types::ExcSpec::NoexceptExpr {
                     value: kiln_ast::types::NoexceptValue::Dependent(_),
                     ..
                 }
-            ) && !self.sema.decl_in_local_scope(pat)
+            ) || self.sema.deferred_dynamic_exc_spec(&p))
+                && !self.sema.decl_in_local_scope(pat)
             {
                 self.sema.uninstantiated_exc.insert(spec, pat);
                 kiln_ast::types::ExcSpec::Deferred(spec)
             } else {
-                self.exc_spec(&p, loc)?
+                self.exc_spec(&p, pat, loc)?
             };
             Ok((params, ret, exc))
         });
@@ -1166,6 +1167,7 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn exc_spec(
         &mut self,
         p: &kiln_ast::types::FuncProto,
+        pat: DeclId,
         loc: Loc,
     ) -> SubstResult<kiln_ast::types::ExcSpec> {
         use kiln_ast::types::{ExcSpec, NoexceptValue};
@@ -1176,15 +1178,23 @@ impl Substituter<'_, '_, '_> {
             }
             // The type-id-list of a dynamic exception specification is
             // substituted.
+            // Each substituted type is checked ([except.spec]/2); an
+            // invalid one drops the specification (clang
+            // `SubstExceptionSpec`). Not while deducing: clang checks a
+            // C++98 function template specialization's after deduction,
+            // as a hard error (`InitFunctionInstantiation`), which kiln
+            // does not yet (WP-1052 follow-up).
             ExcSpec::Dynamic(l) => {
                 let tys = self.sema.ast.types.type_list_types(l).to_vec();
                 let tys = self.expand_types(&tys, loc)?;
-                // `throw(Ts...)` with an empty pack is `throw()`, non-throwing
-                // ([except.spec]/12 as of C++14).
-                if tys.is_empty() {
-                    ExcSpec::DynamicNone
+                if self.sema.inst.stack.is_sfinae() {
+                    if tys.is_empty() {
+                        ExcSpec::DynamicNone
+                    } else {
+                        ExcSpec::Dynamic(self.sema.ast.types.type_list(&tys))
+                    }
                 } else {
-                    ExcSpec::Dynamic(self.sema.ast.types.type_list(&tys))
+                    self.sema.finish_substituted_dynamic_exc(l, &tys, pat, loc)
                 }
             }
             // The canonical form of a value-dependent `noexcept(expr)`:
