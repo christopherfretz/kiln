@@ -575,9 +575,10 @@ pub struct Args {
     /// source-location builtins and `std::meta::source_location_of`
     /// (`SourceManager::presumed_file_name`; the last one wins).
     pub source_path_style: SourcePathStyle,
-    /// `-fkiln-reflection-mangling=<kiln|gcc>`: how `std::meta::info`
-    /// template arguments mangle (spec/reflection.md §8.3; the hidden
-    /// `kiln-hashed` is a prototype; the last one wins).
+    /// `-fkiln-reflection-mangling=<gcc|kiln>`: how `std::meta::info`
+    /// template arguments mangle (spec/reflection.md §8.3; `gcc` by
+    /// default, WP-909; the hidden `kiln-hashed` is a prototype; the
+    /// last one wins).
     pub reflection_mangling: kiln_abi::ReflectionMangling,
     /// The hidden `-fkiln-bmi-kind=1|2`: the module file kind written
     /// (spec/modules.md §11.11; `None` is kind 2 when it applies).
@@ -1912,7 +1913,10 @@ mod tests {
     #[test]
     fn reflection_mangling() {
         use kiln_abi::ReflectionMangling as M;
-        assert_eq!(parse("a.cpp").reflection_mangling, M::Kiln);
+        // The default is the gcc form (WP-909).
+        assert_eq!(parse("a.cpp").reflection_mangling, M::Gcc);
+        let a = parse("-fkiln-reflection-mangling=kiln a.cpp");
+        assert_eq!((a.reflection_mangling, a.errors), (M::Kiln, vec![]));
         let a = parse("-fkiln-reflection-mangling=gcc a.cpp");
         assert_eq!((a.reflection_mangling, a.errors), (M::Gcc, vec![]));
         let a = parse("-fkiln-reflection-mangling=gcc -fkiln-reflection-mangling=kiln a.cpp");

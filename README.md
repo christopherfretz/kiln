@@ -40,8 +40,8 @@ Each number links to the page that records how it was measured.
   (`check-llvm`: 38434 tests passed, at 0.94x clang's summed TU time and
   0.63x its peak TU RSS), Boost and folly.
   [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#libraries-and-applications)
-- **Language support:** 258 of 261 rows of the C++98 to C++26 paper table
-  are done and 3 are partial.
+- **Language support:** 260 of 261 rows of the C++98 to C++26 paper table
+  are done and 1 is partial.
   [docs/STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md)
 
 ## Quick start
@@ -113,7 +113,7 @@ milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
 | Area | State | Detail |
 |---|---|---|
 | C++98 to C++23 | done | [STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md) |
-| C++26 (Croydon DIS draft), reflection, contracts | done except 3 partial papers | [STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md) |
+| C++26 (Croydon DIS draft), reflection, contracts | done except 1 partial paper (P2786, removed from the DIS) | [STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md) |
 | libc++ 22 / libc++ 19 / libstdc++ 14 | 99.2% / 98.3% / every header | [COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries) |
 | Debug info, sanitizers, gcov and source coverage | supported; gaps listed | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) |
 | Modules | supported, with module files and CMake dependency scanning; no header-unit module files yet | [USER_GUIDE.md](docs/USER_GUIDE.md#modules) |
