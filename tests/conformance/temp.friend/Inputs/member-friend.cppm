@@ -2,7 +2,8 @@
 // abbreviated member function templates of A<T> through a qualifier that
 // names W's parameter (matched when W is instantiated, WP-1110/WP-1145),
 // and a class B befriending a member function template of every A<T>
-// ([temp.friend]/5, WP-1130).
+// ([temp.friend]/5, WP-1130) but not its overload A<T>::b(U, const B &,
+// long), whose requires-expressions are false in each A<T> (WP-1165).
 export module mfr;
 export template <class T> concept C = sizeof(T) > 1;
 export template <class T> class W;
@@ -13,6 +14,7 @@ export template <class T> struct A {
   template <class U> static int o(U, W<T> &) requires C<U>;
   template <class U> static int o(U, W<T> &);
   template <C U> static int b(U, const B &);
+  template <class U> static int b(U, const B &, long);
 };
 export template <class T> class W {
   int s = 3;
@@ -23,6 +25,7 @@ export template <class T> class W {
 export class B {
   template <class T> template <C U> friend int A<T>::b(U, const B &);
   int n = 5;
+  static constexpr int sn = 10;
 public:
   B() {}
 };
@@ -33,4 +36,9 @@ template <class T> template <class U> int A<T>::o(U, W<T> &w) {
   if constexpr (requires { w.s; }) return w.s;
   else return 0;
 }
-template <class T> template <C U> int A<T>::b(U, const B &x) { return x.n; }
+template <class T> template <C U> int A<T>::b(U, const B &x) {
+  return x.n + (requires { B::sn; } ? B::sn : 0);
+}
+template <class T> template <class U> int A<T>::b(U, const B &x, long) {
+  return (requires { x.n; } ? 1 : 0) + (requires { B::sn; } ? 2 : 0);
+}
