@@ -2241,13 +2241,17 @@ impl ExprArena {
                 c.b = lists.push(kids).raw();
             }
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
-                let (args, callee) = if n.a == 0 { (kids, None) } else { (&kids[1..], kids.first()) };
+                let (args, callee) =
+                    if n.a == 0 { (kids, None) } else { (&kids[1..], kids.first()) };
                 c.a = callee.map_or(0, |x| x.raw());
                 c.b = lists.push(args).raw();
             }
             ExprKind::CXXParenListInitExpr => {
-                let (args, filler) =
-                    if n.b == 0 { (kids, None) } else { kids.split_last().map(|(f, a)| (a, Some(f)))? };
+                let (args, filler) = if n.b == 0 {
+                    (kids, None)
+                } else {
+                    kids.split_last().map(|(f, a)| (a, Some(f)))?
+                };
                 c.a = lists.push(args).raw();
                 c.b = filler.map_or(0, |x| x.raw());
             }
