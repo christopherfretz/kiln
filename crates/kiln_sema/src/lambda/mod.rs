@@ -154,7 +154,7 @@ impl ManglingState {
 
 /// The [`ManglingState`] numbering sites a function template
 /// specialization's signature replaced ([`Sema::begin_signature_mangling`]).
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct SignatureSite {
     var: Option<DeclId>,
     default_arg: Option<DeclId>,
@@ -572,7 +572,11 @@ impl Sema<'_, '_> {
     /// parsed) do not apply to the closures created there
     /// ([`ManglingState::signature`]). Returns them for
     /// [`Self::end_signature_mangling`].
-    pub(crate) fn begin_signature_mangling(&mut self, tmpl: DeclId, pattern: DeclId) -> SignatureSite {
+    pub(crate) fn begin_signature_mangling(
+        &mut self,
+        tmpl: DeclId,
+        pattern: DeclId,
+    ) -> SignatureSite {
         let ctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
         let m = &mut self.lambda_mangle;
         SignatureSite {
