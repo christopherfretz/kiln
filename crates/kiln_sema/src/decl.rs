@@ -1984,9 +1984,7 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        if unexpanded
-            || !list_refs_ok
-            || !roots.into_iter().all(|e| self.check_default_arg_refs(e))
+        if unexpanded || !list_refs_ok || !roots.into_iter().all(|e| self.check_default_arg_refs(e))
         {
             p.invalid = true;
             if let Some(d) = p.decl {
@@ -8305,6 +8303,10 @@ impl Sema<'_, '_> {
         ns: DeclId,
     ) -> DeclId {
         let head = self.take_template_head(None);
+        // [temp.mem]/2: no member templates in a local class, friend
+        // class templates included (clang `CheckClassTemplate`'s
+        // `CheckTemplateDeclScope`); the friend is still declared.
+        let _ = self.check_template_in_local_class(false, Loc::INVALID);
         self.check_friend_class_template_defaults(head);
         // [namespace.memdef]/3 stops the search at the innermost enclosing
         // namespace, so a member class template of an enclosing class

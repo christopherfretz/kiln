@@ -271,6 +271,23 @@ impl Parser<'_, '_> {
                 // `template [: r :] ...`: a splice template-id
                 // ([expr.prim.splice], [expr.prim.id.qual]).
                 Kw::Template if self.peek_is(1, Punct::SpliceOpen) => {}
+                // [temp.pre]/2: a template-declaration appears only in
+                // namespace or class scope (clang 22 `CheckTemplateDeclScope`;
+                // clang 19 parses `template` as an expression). The
+                // declaration is skipped, as clang drops it. Explicit
+                // instantiations and specializations keep the error below.
+                Kw::Template
+                    if self.peek_is(1, Punct::Less) && !self.peek_is(2, Punct::Greater) =>
+                {
+                    let id = if self.s.clang_compat >= 22 {
+                        DiagId::sema_template_outside_namespace_or_class
+                    } else {
+                        DiagId::parse_expected_expression
+                    };
+                    self.s.error(id, loc);
+                    self.skip_statement();
+                    return None;
+                }
                 Kw::Namespace | Kw::Template => {
                     self.unsupported(&format!("'{}' here", k.spelling()), loc);
                     self.skip_statement();

@@ -1869,7 +1869,12 @@ impl Sema<'_, '_> {
                 {
                     let up = self.ast.types.unqualified(pt);
                     let unq = self.ast.types.pointer_to(up);
-                    c = self.builder().implicit_cast(CastKind::NoOp, c, unq, ValueCategory::PRValue);
+                    c = self.builder().implicit_cast(
+                        CastKind::NoOp,
+                        c,
+                        unq,
+                        ValueCategory::PRValue,
+                    );
                 }
                 match conv::implicit_convert(self, c, p0, ConvCtx::Argument) {
                     Ok(x) => c = x,
