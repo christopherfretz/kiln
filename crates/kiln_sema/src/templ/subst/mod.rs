@@ -667,7 +667,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                     Some(p) => Some(self.nns(p, loc)?),
                     None => None,
                 };
-                let ty = self.ty(ty, loc)?;
+                // A member class of a pattern (`B<T>::In::`) is diagnosed
+                // at its own component (§5.8).
+                let at = match self.sema.ast.types.view(ty.ty()) {
+                    kiln_ast::types::TypeView::Record(_) => self.written(WrittenKey::Nns(n), loc),
+                    _ => loc,
+                };
+                let ty = self.ty(ty, at)?;
                 Nns::Type { prefix, ty, template_kw }
             }
             Nns::Identifier { prefix, name } => {
@@ -916,17 +922,66 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             .member_spec_info(first_parent)
             .is_some_and(|(_, m)| m.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization)
         {
-            let name = self.sema.decl_name_str(node.name());
-            let e = self
-                .sema
-                .diag(kiln_diag::DiagId::sema_no_member, loc)
-                .arg(name)
-                .arg(self.ctx_arg(inst_parent));
-            self.sema.emit(e);
+            return Err(self.no_member(node.name(), inst_parent, loc));
+        }
+        // `inst_parent` is not an instantiation of `parent`: an explicit
+        // or another partial specialization, reached through a qualifier
+        // `X<args>::M::` that kiln resolved to the pattern only because it
+        // was parsed entering context (`class B<T>::In::Deep` in another
+        // template). The name is a member of an unknown specialization
+        // ([temp.dep.type]/6), looked up again in the class it names
+        // (WP-1054; clang's dependent nested-name-specifier).
+        if !self.instantiated_from_parent(inst_parent, parent) {
+            return self.relookup_member(d, inst_parent, loc);
         }
         // A member not instantiated (an invalid member of the
         // specialization): already diagnosed.
         Err(SubstFail)
+    }
+
+    /// Whether instantiated class or enumeration `inst` was instantiated
+    /// from pattern `parent` (directly, or as a member of an
+    /// instantiated class).
+    fn instantiated_from_parent(&self, inst: DeclId, parent: DeclId) -> bool {
+        let ast = &self.sema.ast;
+        let parent = ast.first(parent);
+        [inst, ast.first(inst)].into_iter().any(|i| {
+            ast.instantiated_from(i).is_some_and(|f| ast.first(f) == parent)
+                || ast.definition(i).and_then(|d| ast.instantiated_from(d)).is_some_and(|f| ast.first(f) == parent)
+        })
+    }
+
+    /// Pattern member `d` named, through a qualifier, as a member of
+    /// `inst`, which was not instantiated from its class: the member of
+    /// that name in `inst` when it is one declaration of the same kind,
+    /// else `no member named 'x' in 'C'` (clang's diagnostic for the
+    /// dependent name).
+    fn relookup_member(&mut self, d: DeclId, inst: DeclId, loc: Loc) -> SubstResult<DeclId> {
+        let name = self.sema.ast.decls.get(d).name();
+        let Some(sym) = name.as_ident() else {
+            return Err(self.no_member(name, inst, loc));
+        };
+        let found = self.sema.lookup_qualified(inst, sym, crate::lookup::LookupKind::Ordinary);
+        match found.decls.as_slice() {
+            [] => Err(self.no_member(name, inst, loc)),
+            &[m] if self.sema.kind_of(m) == self.sema.kind_of(d) => {
+                self.sema.check_found_access(&found, loc);
+                Ok(m)
+            }
+            _ => self.unimplemented("a member of a specialization named through its pattern", loc),
+        }
+    }
+
+    /// Emits `no member named 'name' in 'inst'`; the failure it proves.
+    fn no_member(&mut self, name: kiln_ast::names::DeclName, inst: DeclId, loc: Loc) -> SubstFail {
+        let name = self.sema.decl_name_str(name);
+        let e = self
+            .sema
+            .diag(kiln_diag::DiagId::sema_no_member, loc)
+            .arg(name)
+            .arg(self.ctx_arg(inst));
+        self.sema.emit(e);
+        SubstFail
     }
 }
 

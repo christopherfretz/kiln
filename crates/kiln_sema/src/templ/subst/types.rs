@@ -993,7 +993,9 @@ impl Substituter<'_, '_, '_> {
             return Err(SubstFail);
         };
         if !self.sema.tag_matches(d, keyword) {
-            self.sema.diag_wrong_tag(crate::decl::sym_str(self.sema, name), loc, d);
+            // At the class-key, as clang (the name is `loc`).
+            let kw = self.sema.tag_keyword_loc(loc);
+            self.sema.diag_wrong_tag(crate::decl::sym_str(self.sema, name), kw, d);
             return Err(SubstFail);
         }
         self.sema.mark_type_referenced(d);
