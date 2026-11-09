@@ -24,6 +24,7 @@ pub mod syntax_cmd;
 pub mod templ_opts;
 pub mod time;
 pub mod toolchain;
+pub mod version;
 pub mod x86_targets;
 
 use std::io::{self, Read, Write};
@@ -89,12 +90,6 @@ impl Io {
             stdin: Box::new(io::stdin()),
         }
     }
-}
-
-/// `(major, minor)` of kiln's version (`__KILN_MAJOR__`, `__KILN_MINOR__`).
-pub fn version_pair() -> (u32, u32) {
-    let mut it = env!("CARGO_PKG_VERSION").split('.').map(|p| p.parse().unwrap_or(0));
-    (it.next().unwrap_or(0), it.next().unwrap_or(0))
 }
 
 /// A diagnostic engine writing to `stderr` in `opts.format`, with

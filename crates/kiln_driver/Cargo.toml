@@ -14,6 +14,12 @@ path = "src/lib.rs"
 name = "kiln"
 path = "src/main.rs"
 
+[features]
+# A distribution build (`cargo xtask dist`, spec/driver.md "Installation
+# layout"): the resource-directory search ends at the installed path and the
+# source tree's path is not compiled in.
+dist = []
+
 [dependencies]
 kiln_source.workspace = true
 kiln_diag.workspace = true

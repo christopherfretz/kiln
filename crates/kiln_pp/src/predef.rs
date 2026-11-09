@@ -82,8 +82,9 @@ pub struct PredefConfig {
     pub threadsafe_statics: bool,
     /// `-fsized-deallocation` (default on).
     pub sized_deallocation: bool,
-    /// kiln's version (`__KILN_MAJOR__`, `__KILN_MINOR__`).
-    pub kiln_version: (u32, u32),
+    /// kiln's version (`__KILN_MAJOR__`, `__KILN_MINOR__`,
+    /// `__KILN_PATCH__`).
+    pub kiln_version: (u32, u32, u32),
     /// Whose predefined macros (`-fclang-compat=`): the base files are
     /// clang 19's; [`ClangCompat::Clang22`] applies `CLANG22_COMMON`
     /// (and `CLANG22_AARCH64` on `AArch64`).
@@ -160,7 +161,7 @@ impl PredefConfig {
             pthread: false,
             threadsafe_statics: true,
             sized_deallocation: true,
-            kiln_version: (0, 0),
+            kiln_version: (0, 0, 0),
             clang_compat: ClangCompat::Clang22,
             std_float_aliases: true,
             reflection: false,
@@ -399,6 +400,7 @@ pub fn build_predefines(base: &str, cfg: &PredefConfig, cmdline: &[CmdMacro]) ->
     let _ = writeln!(out, "#define __KILN__ 1");
     let _ = writeln!(out, "#define __KILN_MAJOR__ {}", cfg.kiln_version.0);
     let _ = writeln!(out, "#define __KILN_MINOR__ {}", cfg.kiln_version.1);
+    let _ = writeln!(out, "#define __KILN_PATCH__ {}", cfg.kiln_version.2);
     out.push_str("# 1 \"<built-in>\" 3\n");
     for (n, v) in &m {
         let _ = writeln!(out, "#define {n} {v}");
@@ -866,7 +868,7 @@ mod tests {
         assert!(
             s.starts_with(
                 "#define __KILN__ 1\n#define __KILN_MAJOR__ 0\n#define __KILN_MINOR__ 0\n\
-                 # 1 \"<built-in>\" 3\n#define __ARM_ARCH 8\n#define __ARM_FP 0xE\n\
+                 #define __KILN_PATCH__ 0\n# 1 \"<built-in>\" 3\n#define __ARM_ARCH 8\n#define __ARM_FP 0xE\n\
                  #define __ARM_NEON 1\n#define __ARM_NEON_FP 0xE\n#define __BFLT16_DECIMAL_DIG__ 4\n"
             ),
             "{s}"
