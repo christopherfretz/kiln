@@ -263,7 +263,9 @@ fn fp_intrinsic(b: u32) -> Option<(&'static str, usize)> {
 /// errno-free functions are intrinsics, which are exactly the
 /// [`fp_intrinsic`] ones; WP-186 adds `memcpy` / `memmove` / `memset`
 /// and the integer `abs` family, which clang lowers through their
-/// builtin id too (`memcpy` -> `llvm.memcpy`, spec/codegen.md §3). The
+/// builtin id too (`memcpy` -> `llvm.memcpy`, spec/codegen.md §3), and
+/// WP-1073 `alloca`, `mempcpy`, `bzero`, `bcopy`, `finite` (as
+/// `__builtin_isfinite`) and `creal` / `cimag` / `conj`. The
 /// others (`strlen`, `sqrt`, `cbrt`, ...) stay library calls.
 ///
 /// WP-806: where [`Cg::errno_lowering`] holds (`-fno-math-errno`) the
@@ -272,7 +274,31 @@ fn fp_intrinsic(b: u32) -> Option<(&'static str, usize)> {
 /// forms stay calls in clang 19).
 pub(crate) fn lib_intrinsic(cg: &Cg<'_>, d: DeclId) -> Option<u32> {
     let t = cg.ast.decls.lib_builtin(d)?;
-    let mem = matches!(t, id::MEMCPY | id::MEMMOVE | id::MEMSET | id::ABS | id::LABS | id::LLABS);
+    // WP-1073: and clang's inline lowering of `alloca`, `mempcpy`,
+    // `bzero` / `bcopy`, `finite` and the complex parts.
+    let mem = matches!(
+        t,
+        id::MEMCPY
+            | id::MEMMOVE
+            | id::MEMSET
+            | id::ABS
+            | id::LABS
+            | id::LLABS
+            | id::ALLOCA
+            | id::MEMPCPY
+            | id::BZERO
+            | id::BCOPY
+            | id::ISFINITE
+            | id::CREAL
+            | id::CREALF
+            | id::CREALL
+            | id::CIMAG
+            | id::CIMAGF
+            | id::CIMAGL
+            | id::CONJ
+            | id::CONJF
+            | id::CONJL
+    );
     let errno = || {
         let name = id::info(t)?.name.strip_prefix("__builtin_")?;
         cg.errno_gen().then(|| id::errno_intrinsic(name, cg.opts.clang_compat >= 22))?
@@ -701,6 +727,17 @@ impl Cg<'_> {
                     return err(self.loc_of(e), "__builtin_complex needs two arguments");
                 };
                 let im = self.emit_scalar(a1)?;
+                self.f.cx_ret = Some((re, im));
+                return Ok(BuiltinCall::Emitted(None));
+            }
+            // WP-1073: clang `BI__builtin_creal` / `cimag` / `conj` and
+            // the library forms: the operand's parts (`conj` negates the
+            // imaginary part).
+            id::CREAL | id::CREALF | id::CREALL => self.emit_complex(a0)?.0,
+            id::CIMAG | id::CIMAGF | id::CIMAGL => self.emit_complex(a0)?.1,
+            id::CONJ | id::CONJF | id::CONJL => {
+                let (re, im) = self.emit_complex(a0)?;
+                let im = self.fneg(im);
                 self.f.cx_ret = Some((re, im));
                 return Ok(BuiltinCall::Emitted(None));
             }
@@ -1317,6 +1354,55 @@ impl Cg<'_> {
                 } else {
                     dv
                 }
+            }
+            // WP-1073: clang `BIbzero` / `BIbcopy`: `memset(d, 0, n)` and
+            // `memmove(d, s, n)` (`bcopy(s, d, n)`: the source first, then
+            // the destination; both null checks name parameter 0, as in
+            // clang).
+            id::BZERO | id::BCOPY => {
+                let n_at = if b == id::BZERO { 1 } else { 2 };
+                let (Some(x), Some(n)) = (arg(0), arg(n_at)) else {
+                    return err(self.loc_of(e), "memory builtin without its arguments");
+                };
+                let (xv, xa) = self.ptr_align(x)?;
+                let second = if b == id::BCOPY {
+                    let Some(y) = arg(1) else {
+                        return err(self.loc_of(e), "memory builtin without its arguments");
+                    };
+                    Some((y, self.ptr_align(y)?))
+                } else {
+                    None
+                };
+                let nv = self.emit_scalar(n)?;
+                self.ub_nonnull_arg(callee, 0, x, xv)?;
+                let (f, args, aligns) = match second {
+                    Some((y, (yv, ya))) => {
+                        self.ub_nonnull_arg(callee, 0, y, yv)?;
+                        let f = kiln_llvm::intrinsics::memmove(&mut self.m, LTy::I64);
+                        (f, vec![yv, xv, nv], [ya, xa])
+                    }
+                    None => {
+                        let f = kiln_llvm::intrinsics::memset(&mut self.m, LTy::I64);
+                        (f, vec![xv, V::C(self.m.const_int(LTy::I8, 0)), nv], [xa, 0])
+                    }
+                };
+                let fn_ty = self.m.func(f).ty();
+                let vb = self.m.const_bool(false);
+                let none = self.m.attr_set(&[]);
+                let pa = self.m.attr_set(&[Attr::Align(aligns[0])]);
+                let pb = if aligns[1] == 0 { none } else { self.m.attr_set(&[Attr::Align(aligns[1])]) };
+                let opts = CallOpts {
+                    attrs: AttrList { params: vec![pa, pb, none, none], ..AttrList::default() },
+                    ..CallOpts::default()
+                };
+                let mut args = args;
+                args.push(V::C(vb));
+                let c = self.f.fir.push(
+                    Op::Call { fn_ty, callee: V::C(Value::func(f)), args, opts: Box::new(opts) },
+                    LTy::VOID,
+                );
+                self.f.calls.push((Fir::last_inst(c), Some(f), true));
+                return Ok(BuiltinCall::Emitted(None));
             }
             // WP-150: clang `EmitBuiltinExpr` for `memset` and the GCC
             // integer builtins.
