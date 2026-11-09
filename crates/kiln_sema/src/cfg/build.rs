@@ -806,7 +806,12 @@ impl Sema<'_, '_> {
         let mark = b.dtors.len();
         let is_for = self.ast.stmts.get(s).kind() == StmtKind::ForStmt;
         if is_for {
-            b.jumps.push(Jump { is_loop: false, brk: Vec::new(), cont: Vec::new(), dtor_mark: mark });
+            b.jumps.push(Jump {
+                is_loop: false,
+                brk: Vec::new(),
+                cont: Vec::new(),
+                dtor_mark: mark,
+            });
         }
         if let Some(i) = d.init {
             self.cfg_stmt(i, b);

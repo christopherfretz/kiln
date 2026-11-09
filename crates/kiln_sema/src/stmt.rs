@@ -1369,7 +1369,8 @@ impl Sema<'_, '_> {
     /// would jump to the increment past that variable's initialization
     /// (clang `err_continue_from_cond_var_init`).
     pub fn act_on_continue(&mut self, loc: Loc) -> StmtId {
-        let target = self.func.as_ref().map(|f| (f.breakables.iter().rposition(|&b| b), f.for_cond_var));
+        let target =
+            self.func.as_ref().map(|f| (f.breakables.iter().rposition(|&b| b), f.for_cond_var));
         match target {
             Some((Some(i), cv)) if cv == Some(i) => {
                 self.error(DiagId::sema_continue_from_cond_var_init, loc);
