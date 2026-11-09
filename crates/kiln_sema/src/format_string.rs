@@ -308,7 +308,11 @@ impl Sema<'_, '_> {
                         at: byte_loc(self, at),
                         args: vec![conversion_spelling(s[at])],
                     });
-                    match covered.get_mut(next) {
+                    // clang sets no argument index on an invalid
+                    // specifier: it consumes none and covers the first
+                    // argument (`HandleInvalidConversionSpecifier` of
+                    // index 0); with no data arguments the walk stops.
+                    match covered.first_mut() {
                         Some(c) => *c = true,
                         None => return Some((out, Cover::Stopped)),
                     }
@@ -410,7 +414,11 @@ impl Sema<'_, '_> {
                         at: byte_loc(self, at),
                         args: vec![conversion_spelling(s[at])],
                     });
-                    match covered.get_mut(next) {
+                    // clang sets no argument index on an invalid
+                    // specifier: it consumes none and covers the first
+                    // argument (`HandleInvalidConversionSpecifier` of
+                    // index 0); with no data arguments the walk stops.
+                    match covered.first_mut() {
                         Some(c) => *c = true,
                         None => return Some((out, Cover::Stopped)),
                     }
