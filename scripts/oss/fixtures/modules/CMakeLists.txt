@@ -25,7 +25,11 @@ target_sources(greet
   PUBLIC FILE_SET CXX_MODULES FILES greet.cppm greet-part.cppm
   PRIVATE greet-impl.cpp)
 # Accepted as a no-op by kiln (spec/driver.md "Dependency scanning").
-target_compile_options(greet PRIVATE -fmodules-reduced-bmi)
+# clang 19 (the harness's control compiler, oss-build.sh cmake_modules)
+# does not know it.
+if(NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 20)
+  target_compile_options(greet PRIVATE -fmodules-reduced-bmi)
+endif()
 add_executable(app main.cpp)
 target_link_libraries(app PRIVATE greet)
 if("23" IN_LIST CMAKE_CXX_COMPILER_IMPORT_STD)
