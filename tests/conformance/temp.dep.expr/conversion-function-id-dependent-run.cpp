@@ -4,11 +4,12 @@
 // at instantiation, not at definition ([temp.res.general]/9). libstdc++
 // 14's <experimental/simd> (`_ZeroExtendProxy`, simd.h:2271) has this
 // shape in a member template it never instantiates; kiln rejects it on
-// both arches (found by the WP-1002 x86_64 libstdc++ sweep).
+// both arches (found by the WP-1002 x86_64 libstdc++ sweep). The canonical
+// `V<T, 2>` keeps `2` as an expression profile, which substitution now
+// turns back into its expression (WP-1126).
 //@ expect: run
 //@ std: c++20
 //@ stdout: 1 1
-//@ xfail(kiln): WP-1002 follow-up, a dependent conversion-function-id is looked up at definition (`use of undeclared 'operator ...'`) and its NTTP argument fails substitution
 #include <cstdio>
 template <class T, int N> struct V { using type = T[N]; };
 template <class T, int N> using V_t = typename V<T, N>::type;
