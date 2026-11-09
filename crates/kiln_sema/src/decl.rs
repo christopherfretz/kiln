@@ -3618,10 +3618,15 @@ impl Sema<'_, '_> {
     }
 
     /// `exc` spelled as in a function type (`noexcept`, `throw()`,
-    /// `noexcept(expr)`), without the leading space.
+    /// `throw(T, U)`, `noexcept(expr)`), without the leading space.
     pub(crate) fn exc_spec_spelling(&self, exc: ExcSpec) -> String {
         match exc {
             ExcSpec::DynamicNone => "throw()".to_owned(),
+            ExcSpec::Dynamic(l) => {
+                let tys: Vec<String> =
+                    self.ast.types.type_list_types(l).iter().map(|&t| self.ty_str(t)).collect();
+                format!("throw({})", tys.join(", "))
+            }
             ExcSpec::NothrowAttr => "__attribute__((nothrow))".to_owned(),
             ExcSpec::NoexceptExpr { expr, .. } => {
                 let mut s = String::from("noexcept(");
@@ -4714,10 +4719,31 @@ impl Sema<'_, '_> {
                 let delayed = late_exc
                     || matches!(self.written_exc_spec(pty), ExcSpec::Deferred(_))
                         && self.same_ignoring_exc_spec(pty, ty);
+                // [except.spec]/5 beyond non-throwing or not: dynamic
+                // lists name the same types, and a list is not matched by
+                // an unlisted potentially-throwing specification (clang
+                // `CheckEquivalentExceptionSpecImpl`; ignored under
+                // `-fno-exceptions` before C++17).
+                let list_equiv = if !delayed
+                    && (self.exceptions || self.std >= kiln_lex::Std::Cxx17)
+                    && self.same_ignoring_exc_spec(pty, ty)
+                {
+                    let op_new = d.op_name.is_some_and(|op| {
+                        matches!(op, OverloadedOperator::New | OverloadedOperator::ArrayNew)
+                    });
+                    self.redecl_exc_equiv(
+                        self.written_exc_spec(pty),
+                        self.written_exc_spec(ty),
+                        op_new,
+                    )
+                } else {
+                    crate::except::ExcEquiv::Unknown
+                };
                 // [except.spec]/5: a redeclaration without a specification.
                 let mut missing_err = false;
                 if !delayed
-                    && !self.same_type_and_exc(pty, ty)
+                    && (!self.same_type_and_exc(pty, ty)
+                        || list_equiv == crate::except::ExcEquiv::Missing)
                     && self.written_exc_spec(ty) == ExcSpec::None
                     && self.same_ignoring_exc_spec(pty, ty)
                 {
@@ -4742,7 +4768,9 @@ impl Sema<'_, '_> {
                 };
                 if missing_err {
                     invalid_redecl = true;
-                } else if self.same_type_and_exc(pty, cmp) {
+                } else if self.same_type_and_exc(pty, cmp)
+                    && list_equiv != crate::except::ExcEquiv::Mismatch
+                {
                     prev_ok = Some(p);
                     // [dcl.spec.auto.general]/13: the redeclaration has
                     // the deduced return type.

@@ -3835,6 +3835,7 @@ impl Parser<'_, '_> {
             let mut types = Vec::new();
             let mut ok = true;
             while !self.at(Punct::RParen) && !self.at_eof() {
+                let begin = self.loc();
                 let Some(t) = self.parse_type_id() else {
                     ok = false;
                     self.skip_until(&[Punct::RParen], false, false);
@@ -3846,7 +3847,7 @@ impl Parser<'_, '_> {
                     Some(l) => self.s.act_pack_expansion_type(t, l),
                     None => t,
                 };
-                types.push(t);
+                types.push((t, begin));
                 if self.eat(Punct::Comma).is_none() {
                     break;
                 }

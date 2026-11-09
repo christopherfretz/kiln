@@ -201,6 +201,21 @@ impl Sema<'_, '_> {
         out
     }
 
+    /// The exception specification the destructor `f` of a non-dependent
+    /// class gets when it is declared without one ([except.spec]/8; clang
+    /// `ImplicitExceptionSpecification`, `AdjustDestructorExceptionSpec`):
+    /// non-throwing, the union of its callees' dynamic lists, or
+    /// potentially-throwing (`None` here, clang's `noexcept(false)`).
+    /// `None` (the Option) when a callee's specification is not known.
+    pub(crate) fn implicit_dtor_exc(&mut self, f: DeclId) -> Option<ExcSpec> {
+        match self.implicit_thrown_types(f) {
+            ImplicitThrows::Unknown => None,
+            ImplicitThrows::Any => Some(ExcSpec::None),
+            ImplicitThrows::List(v) if v.is_empty() => Some(ExcSpec::BasicNoexcept),
+            ImplicitThrows::List(v) => Some(ExcSpec::Dynamic(self.ast.types.type_list(&v))),
+        }
+    }
+
     /// The functions special member `f` of kind `k` of class `class`
     /// calls on its subobjects, in order, each passed to `visit` with
     /// the subobject's location until `visit` returns false (the result
