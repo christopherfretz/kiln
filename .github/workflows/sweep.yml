@@ -96,7 +96,7 @@ jobs:
         with: { name: kiln-dist, path: "${{ runner.temp }}/dist" }
       - name: install kiln, libc++ 22, the tests and the locales
         run: |
-          mkdir -p /opt/kiln
+          mkdir -p /opt/kiln libcxx-out
           tar -xJf "$RUNNER_TEMP"/dist/kiln-*-linux-gnu.tar.xz -C /opt/kiln --strip-components=1
           /opt/kiln/bin/kiln++ --version | head -1
           root="$GITHUB_WORKSPACE/.toolchain/libcxx-22-root"
@@ -111,15 +111,15 @@ jobs:
         run: |
           cargo xtask libcxx std libcxx --tag llvmorg-22.1.8 --compiler /opt/kiln/bin/kiln++ \
             --shard ${{ matrix.shard }}/${{ strategy.job-total }} --no-fail -j 4 --timeout 20 \
-            --mem-limit 3072 --results "$RUNNER_TEMP/libcxx-${{ matrix.shard }}.tsv" \
-            --report "$RUNNER_TEMP/libcxx-${{ matrix.shard }}.md"
+            --mem-limit 3072 --results "libcxx-out/libcxx-${{ matrix.shard }}.tsv" \
+            --report "libcxx-out/libcxx-${{ matrix.shard }}.md"
+      # A workspace-relative path: in a container job `runner.temp` is
+      # the host's path, and the upload kept the `__w/_temp` prefix.
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: libcxx-${{ matrix.shard }}
-          path: |
-            ${{ runner.temp }}/libcxx-${{ matrix.shard }}.tsv
-            ${{ runner.temp }}/libcxx-${{ matrix.shard }}.md
+          path: libcxx-out/
           if-no-files-found: error
 
   libcxx-summary:
@@ -135,7 +135,7 @@ jobs:
         run: |
           ls results
           python3 scripts/libcxx-results.py --label "libc++ 22.1.8 suite, x86_64" \
-            results/libcxx-*.tsv | tee libcxx-summary.md >> "$GITHUB_STEP_SUMMARY"
+            $(find results -name 'libcxx-*.tsv' | sort) | tee libcxx-summary.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with: { name: libcxx-summary, path: libcxx-summary.md }
 
