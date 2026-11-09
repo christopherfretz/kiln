@@ -23,6 +23,7 @@ mod gcc;
 
 /// Everything a worker needs; shared read-only between threads.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // independent command-line switches
 pub struct Config {
     /// Repository root; compilers run with this as their working directory.
     pub root: PathBuf,
@@ -81,6 +82,9 @@ pub struct Config {
     /// `--bmi-kind`: the module-file variant (`spec/harness.md`
     /// "Module-file kinds"); `None` outside it.
     pub bmi_kind: Option<u8>,
+    /// `--bmi-image`: kiln's two-step module builds and their importers
+    /// also pass `-fkiln-bmi-image`.
+    pub bmi_image: bool,
 }
 
 /// The debug-info sweep's configuration.
@@ -607,13 +611,18 @@ impl Test<'_> {
             f.push(self.header_unit_bmi(i, oracle));
             f
         });
-        hu.chain(spec.modules[..n].iter().map(|(name, path)| {
-            let file = if source { self.module_source(path) } else { self.bmi(name, oracle) };
-            let mut f = std::ffi::OsString::from(format!("-fmodule-file={name}="));
-            f.push(file);
-            f
-        }))
-        .collect()
+        let mut flags: Vec<std::ffi::OsString> = hu
+            .chain(spec.modules[..n].iter().map(|(name, path)| {
+                let file = if source { self.module_source(path) } else { self.bmi(name, oracle) };
+                let mut f = std::ffi::OsString::from(format!("-fmodule-file={name}="));
+                f.push(file);
+                f
+            }))
+            .collect();
+        if self.cfg.bmi_image && !oracle && !source && kiln {
+            flags.push("-fkiln-bmi-image".into());
+        }
+        flags
     }
 
     /// The module file of `header-unit:` line `i` (the oracle's apart).

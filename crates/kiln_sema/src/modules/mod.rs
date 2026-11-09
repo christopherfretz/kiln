@@ -208,7 +208,7 @@ impl Sema<'_, '_> {
         true
     }
 
-    fn module_owner_changed(&mut self) {
+    pub(crate) fn module_owner_changed(&mut self) {
         let o = self.module_owner();
         let next = self.ast.decls.next_id();
         self.ast.modules.set_owner_from(next, o);
@@ -962,6 +962,14 @@ impl Sema<'_, '_> {
             v[i].1 = v[i].1.max(v[i + 1].1);
             v.remove(i + 1);
         }
+    }
+
+    /// The main unit's module declaration, for the declaration image
+    /// (spec/modules.md §11.11 "Part 2a"): its first token and `module`
+    /// keyword, and whether a private module fragment follows.
+    pub(crate) fn module_main_frame(&self) -> Option<(Loc, Loc, bool)> {
+        let f = self.modules.frames.first()?;
+        Some((f.module_kw, f.module_loc, f.private_loc.is_valid()))
     }
 
     /// The current unit's index (spec/modules.md §6 dedup records).
