@@ -443,6 +443,12 @@ impl Sema<'_, '_> {
                 self.builder().lifetime_extended_temporary(range_var, index, n.ty(), n.loc());
             let _ = self.ast.exprs.extend_temporary(mte, let_decl, StorageDuration::Automatic);
         }
+        // So are its default arguments' ([intro.execution]/5), each
+        // rebuilt for its use (clang `BuildCXXDefaultArgExpr` in a
+        // lifetime-extending context).
+        if self.range_lifetime_extension {
+            self.extend_range_default_args(range_var, range_init, 0);
+        }
         let auto = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
         let begin_sym = self.intern(&format!("__begin{}", parts.depth));
         let end_sym = self.intern(&format!("__end{}", parts.depth));

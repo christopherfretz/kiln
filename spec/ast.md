@@ -454,7 +454,14 @@ its source expression (or 0), shared by every use. A `CXXMemberCallExpr`
 callee keeps the parentheses as written (`(o.f)()`, `((o.*pm))()`,
 [expr.call]/1); `member_call_object` looks through them to the
 `MemberExpr` or `.*`/`->*` operator, as clang's
-`getImplicitObjectArgument` does.
+`getImplicitObjectArgument` does. A `CXXDefaultArgExpr` used in a
+lifetime-extending context may carry its own copy of the parameter's
+default argument (cold `default_arg_rewritten`, write-once through
+`set_default_arg_rewritten`; dump `has rewritten init`), which
+`Ast::default_arg_expr` returns in place of the shared one (WP-1149,
+spec/sema.md §7.6a). `ExprArena::clone_with_children(e, lists, kids)`
+copies one node with new children (same kind, type, flags and cold
+payloads) for the structural kinds that rewrite needs, `None` otherwise.
 
 Builtin *functions* (`__builtin_memcpy`, `__builtin_is_constant_evaluated`,
 `__builtin_is_within_lifetime`, `__builtin_constant_p`, ...) are ordinary
