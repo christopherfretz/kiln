@@ -517,6 +517,12 @@ pub(crate) mod bi {
     /// the Oven does not model padding bits, so nothing else happens
     /// (`Oven::clear_padding`). The result is 0.
     pub const CLEAR_PADDING: u32 = 36;
+    /// The static object holding constant `t1` (a raw `ConstValueId`, an
+    /// aggregate of type `t2`), thawed: the address of the value of an
+    /// immediate invocation sema already evaluated, which `Op::Copy`
+    /// then copies into the result object (WP-1140; spec/oven.md "Valued
+    /// immediate invocations").
+    pub const THAW_OBJ: u32 = 37;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).

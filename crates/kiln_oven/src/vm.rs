@@ -628,6 +628,14 @@ impl Oven {
                 None => 0,
             };
             Ok(p)
+        } else if aux & 0xff == crate::kbc::bi::THAW_OBJ {
+            let cur = self.stack[self.stack.len() - 1].func;
+            let top = fb + self.funcs[cur as usize].nregs as usize + 1;
+            let p = match <kiln_ast::ConstValueId as kiln_ast::RawId>::from_raw(t1) {
+                Some(cv) => self.thaw(b, cv, top as u32),
+                None => 0,
+            };
+            Ok(u128::from(p))
         } else if aux & 0xff == crate::kbc::bi::ASSUME_ALIGNED {
             self.bi_assume_aligned(b, aux >> 8 != 0, a as u64, bb, c).map(|()| a)
         } else if aux & 0xff == crate::kbc::bi::PTR_ALIGN {
