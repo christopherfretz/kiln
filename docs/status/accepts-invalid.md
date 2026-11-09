@@ -26,11 +26,11 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `419861d61`
+- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `380e9ec83`
 - command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 225 s; peak RSS of one case 21 MiB (gnu-time)
+- wall time 101 s; peak RSS of one case 21 MiB (gnu-time)
 
 ## Totals
 
@@ -38,7 +38,7 @@ written by hand (WP-912). The run is informational and never part of
 |---|---:|---:|---:|
 | ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 63 | 1250 | 5.0% |
 | ACCEPTS-INVALID cases (per RUN configuration) | 74 | 1946 | 3.8% |
-| MISSED-ERROR lines (expected-error with no kiln error on its line) | 3815 | 28065 | 13.6% |
+| MISSED-ERROR lines (expected-error with no kiln error on its line) | 3789 | 28065 | 13.5% |
 | REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 27 | 418 | 6.5% |
 | crashes | 0 | 2850 | 0.0% |
 | timeouts | 0 | 2850 | 0.0% |
@@ -67,7 +67,7 @@ written by hand (WP-912). The run is informational and never part of
 | CXX/over | 1 / 42 | 2.4% | 7 / 313 | 2.2% | 0 | 0 / 0 |
 | CXX/special | 2 / 31 | 6.5% | 12 / 224 | 5.4% | 3 | 0 / 0 |
 | CXX/stmt.stmt | 0 / 9 | 0.0% | 3 / 255 | 1.2% | 0 | 0 / 0 |
-| CXX/temp | 8 / 147 | 5.4% | 305 / 1644 | 18.6% | 2 | 0 / 0 |
+| CXX/temp | 8 / 147 | 5.4% | 279 / 1644 | 17.0% | 2 | 0 / 0 |
 | SemaCXX | 37 / 628 | 5.9% | 1573 / 12406 | 12.7% | 20 | 0 / 0 |
 
 ## Top 50 accepts-invalid files
@@ -504,8 +504,17 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
     `temp.param/float-nttp-cxx17.cpp`.
     **Fixed in WP-1017**, plus `class.conv.fct/conversion-template-deduced-type.cpp`
     (CWG1878). Partial: constrained partial specializations and partial
-    specializations of member templates skip the more-specialized check,
-    and `F<T..., int>` is not diagnosed as non-deducible.
+    specializations of member templates skip the more-specialized check.
+    **WP-956** (spec/landed/sema/WP-956.md) adds packs to both checks
+    (`B<Ts...>` not more specialized, `P<T...>` specializing nothing,
+    `U<Ts..., T>` and `X1<0, N + 1 ...>` non-deducible; WP-1053 landed
+    overlapping pack and constraint checks in parallel), `_Complex`,
+    vector, `void` and `_Atomic` NTTPs, and conversion function template
+    rules (dependent `operator T()`, ordering in explicit instantiations,
+    specializations and calls). Its share (against main 5c63149e3):
+    accepts-invalid files and cases unchanged (63, 74); missed errors
+    3815 to 3789 lines (`temp.mem/p5.cpp`, `temp.param/p7.cpp`); no new
+    accepts-invalid or rejects-valid case.
 11. **Lookup and type checks** (enum must use `enum` 31, elaborated enum
     friend 30, ambiguous qualified elaborated specifier, `alignas` of an
     incomplete type, differing user-defined-literal suffixes;

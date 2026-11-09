@@ -1650,6 +1650,16 @@ impl Sema<'_, '_> {
         let nns = qualifier.map(|q| q.nns);
         let begin = qualifier.map(|q| q.loc);
         let qualifier = qualifier.map(|q| q.ctx);
+        // An unqualified conversion-function-id naming a dependent type
+        // (`operator T()`) is type-dependent ([temp.dep.expr]/3): in a
+        // member function it is an implicit `this->operator T`, looked up
+        // at instantiation (clang `ActOnDependentIdExpression`).
+        if qualifier.is_none()
+            && self.is_dependent_conversion_name(name)
+            && self.current_this().is_some()
+        {
+            return self.builder().dependent_member(None, true, name, false, None, None, loc);
+        }
         self.declare_global_new_delete_for(name, qualifier);
         match qualifier {
             Some(q) => self.declare_implicit_named(q, name),
