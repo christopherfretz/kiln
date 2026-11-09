@@ -16,15 +16,19 @@ If you hit something not listed here, please
   for other platforms is not planned for 1.0.
 - **glibc 2.39 or newer** is needed to run the release binaries. Building
   them on an older-glibc image is [WP-943](BACKLOG.md).
-- **x86 `-m<feature>` flags** (`-mavx2`, `-msse4.1`, `-mno-<feature>`, ...)
-  are `unknown argument`. Projects that build SIMD variants with them
-  (Bitcoin Core, OpenCV) configure that code out:
-  [WP-1000](BACKLOG.md). `-march=` and `-mcpu=` work.
+- **x86 function multiversioning** (`target_clones`, several
+  `target("...")` versions of one function) is an error on x86-64:
+  [WP-1044](BACKLOG.md). The `-m<feature>` flags and single
+  `target("...")` functions work. `-mgeneral-regs-only`, `-msoft-float`,
+  `-mretpoline` and a few other x86 code-generation flags are still
+  `unknown argument` (spec/driver.md "x86-64 target features").
 - **x86_64-only gaps** found by the first x86_64 sweep, in
   [status/x86_64-sweep.md](status/x86_64-sweep.md):
   - glibc's x86-64 `typedef __float128 _Float128` does not make the two
     the same type as it does under clang, so LLVM's `IRTests` does not
-    build: [WP-1001](BACKLOG.md).
+    build. kiln keeps `_Float128` and `__float128` distinct, as GCC 13+
+    does; making glibc's `*f128` functions usable as `__float128` ones
+    is [WP-1043](BACKLOG.md).
   - gRPC's full x86_64 results are pending: [WP-1002](BACKLOG.md).
 - **LLVM 19 and 22 only.** LLVM 20 and 21 are not supported.
 - **Identification.** `--version` prints `kiln version <v>` without the

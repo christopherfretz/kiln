@@ -469,8 +469,11 @@ pub(crate) fn syntax_only(
 /// 'c++' when in C++ mode` once per promoted input (spec/driver.md "Input
 /// languages"), then `-Woption-ignored` for `-m[no-]outline-atomics` (the
 /// last one written) on a non-`AArch64` target, once per source input, as
-/// clang warns once per compile job. `true` when `-Werror` made one an
-/// error (clang then runs no job).
+/// clang warns once per compile job, and the x86 feature flags' warnings
+/// (WP-1000: `argument unused during compilation` for the ones clang
+/// claims on `AArch64`, `the clang compiler does not support '-m3dnow'` on
+/// x86-64). `true` when `-Werror` made one an error (clang then runs no
+/// job).
 fn driver_warnings(
     args: &Args,
     tc: &Toolchain,
