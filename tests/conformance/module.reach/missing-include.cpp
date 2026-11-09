@@ -8,8 +8,8 @@
 // one only under `#pragma once`, gets the plain "missing '#include'".
 //@ expect: compile-fail
 //@ std: c++20
-//@ args: -isystem %{test_dir}/Inputs/sys -fmodule-file=mr.h=%{test_dir}/Inputs/mr-h.cppm
-//@ skip(clang): clang needs a two-step --precompile build of the Inputs module that the harness cannot drive
+//@ args: -isystem %{test_dir}/Inputs/sys
+//@ module: mr.h=Inputs/mr-h.cppm
 //@ strict-diags
 //@ diag: 20:9 error "missing '#include \"Inputs/mr-g.h\"'; 'guarded_fn' must be declared before it is used"
 //@ diag: 21:9 error "missing '#include \"Inputs/mr-g.h\"'; 'nested_fn' must be declared before it is used"

@@ -1,9 +1,12 @@
 // [module.import]/5, [cpp.import]/4: `import "header";` imports a header
 // unit: the header's declarations are attached to the global module and
-// the macros it defines are visible after the import.
+// the macros it defines are visible after the import. kiln builds the
+// header unit in-process at the import; a clang builds it first with
+// `-fmodule-header=user` (spec/harness.md `header-unit:`).
 //@ expect: run
 //@ std: c++20
-//@ skip(clang): clang needs -fmodule-header to build Inputs/hu.h as a header unit first, which the harness cannot drive
+//@ args: -Wno-experimental-header-units
+//@ header-unit: "Inputs/hu.h"
 import "Inputs/hu.h";
 
 #ifndef HU_VALUE
