@@ -1225,6 +1225,9 @@ impl Oven {
                     let v = reg!(0);
                     self.regs[fb] = v;
                     let Some(fr) = self.stack.pop() else { return Ok(()) };
+                    if self.hooks.calls {
+                        self.hook_call_ret(b);
+                    }
                     if fr.mark != BOTTOM {
                         // The caller destroys the parameters ([expr.call]/6).
                         if self.mem.life_above(fr.mark)
@@ -2148,7 +2151,7 @@ impl Oven {
         base: usize,
     ) -> Result<Option<(usize, usize)>, Fault> {
         if matches!(self.funcs[callee as usize].state, FState::Stub | FState::Undefined) {
-            self.compile_func(b, callee);
+            self.hook_compile(b, callee);
         }
         let f = &self.funcs[callee as usize];
         if f.state != FState::Ready {
@@ -2224,6 +2227,9 @@ impl Oven {
             memo,
             serial,
         });
+        if self.hooks.calls {
+            self.hook_call_enter(b, callee);
+        }
         Ok(Some((entry, nb)))
     }
 

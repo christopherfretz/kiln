@@ -38,6 +38,7 @@ mod bigint;
 mod compile;
 mod complex;
 mod failure;
+mod hooks;
 mod kbc;
 mod leaf;
 mod mem;
@@ -626,6 +627,9 @@ pub struct Oven {
     pub(crate) refl_seen: meta::intern::ReflSeen,
     /// The data member descriptions of the translation unit (§6.1).
     pub(crate) dms: meta::define::DmsTable,
+    /// The instrumentation hooks' switches (`hooks.rs`, spec/oven.md
+    /// "Trace hook").
+    pub(crate) hooks: hooks::Hooks,
 }
 
 /// The inclusive cost of the nested evaluations run so far by the running
@@ -702,6 +706,7 @@ impl Oven {
             meta: meta::materialize::MetaState::default(),
             refl_seen: meta::intern::ReflSeen::default(),
             dms: meta::define::DmsTable::default(),
+            hooks: hooks::Hooks::default(),
         }
     }
 
@@ -823,6 +828,7 @@ impl Oven {
         e: ExprId,
         ctx: EvalContext,
     ) -> Result<ConstValueId, EvalFailure> {
+        let hook = self.hook_eval_begin(&ctx);
         self.plain_next = ctx.plain;
         self.void_next = ctx.kind == EvalKind::Consteval;
         // A glvalue immediate invocation ([expr.const]/16) is a constant
@@ -835,6 +841,9 @@ impl Oven {
         self.plain_next = false;
         self.void_next = false;
         self.addr_next = false;
+        if let Some(m) = hook {
+            self.hook_eval_end(bridge, m, Some(e), &ctx, c.steps);
+        }
         self.stats.push(EvalRecord {
             loc: ctx.loc,
             kind: ctx.kind,
@@ -872,8 +881,12 @@ impl Oven {
         data: ExprId,
         ctx: EvalContext,
     ) -> (Vec<u8>, Result<(), EvalFailure>) {
+        let hook = self.hook_eval_begin(&ctx);
         let job = Job::Chars { size, data };
         let (r, c) = self.eval_job(bridge, job, None, false, false, true);
+        if let Some(m) = hook {
+            self.hook_eval_end(bridge, m, None, &ctx, c.steps);
+        }
         self.stats.push(EvalRecord {
             loc: ctx.loc,
             kind: ctx.kind,

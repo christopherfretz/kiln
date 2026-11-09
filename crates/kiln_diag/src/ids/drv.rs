@@ -78,8 +78,6 @@ drv_precompile_not_module = Error (0) "--precompile requires a module interface 
 drv_regex_sanitizer_ignorelist = Error (1) "sanitizer ignorelist '{0}' uses regular expressions ('#!special-case-list-v1'), which kiln does not support; use glob patterns";
 // WP-982: kiln-scan-deps (spec/modules.md §11.9).
 drv_scan_one_job = Error (1) "unable to handle compilation, expected exactly one compiler job in '{0}'";
-// WP-792: clang's `-ftime-trace` family, added by build systems for clang.
-drv_time_trace_ignored = Warning [UnusedCommandLineArgument] (1) "'{0}' ignored: kiln writes no time trace (see -fkiln-instantiation-report)";
 drv_treating_input_as_cxx = Warning [Deprecated] (2) "treating '{0}' input as '{1}' when in C++ mode, this behavior is deprecated";
 drv_unable_to_execute = Error (1) "unable to execute command: Executable \"{0}\" doesn't exist!";
 drv_unknown_argument = Error (1) "unknown argument: '{0}'";

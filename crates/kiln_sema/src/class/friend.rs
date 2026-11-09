@@ -166,7 +166,8 @@ impl Sema<'_, '_> {
         if let Some(fd) = self.declare_member_friend_fn(ds, base, d, record) {
             return Some(fd);
         }
-        let head = self.take_template_head(d.qualifier);
+        let own_head = self.friend_head_is_own(d);
+        let head = self.take_template_head(if own_head { None } else { d.qualifier });
         if self.check_template_in_local_class(true, ds.lead_cxx11.unwrap_or(ds.loc)) {
             return None;
         }

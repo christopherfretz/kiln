@@ -820,6 +820,7 @@ impl Ast {
             | K::CoyieldExpr
             | K::StmtExpr
             | K::ChooseExpr
+            | K::GenericSelectionExpr
             | K::VAArgExpr
             | K::AtomicExpr
             | K::ShuffleVectorExpr
