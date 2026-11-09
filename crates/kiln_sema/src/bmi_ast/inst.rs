@@ -36,6 +36,8 @@ const ENT_SPEC: u8 = b'S';
 const ENT_MEMBER: u8 = b'M';
 const ENT_PATTERN: u8 = b'P';
 const ENT_DECL: u8 = b'D';
+/// Top level only: a substitution frame ([`subst_key`]).
+const ENT_SUBST: u8 = b'F';
 
 /// Argument tags.
 const ARG_TYPE: u8 = b'T';
@@ -80,6 +82,32 @@ pub(super) fn entity_key(
     let mut cx = KeyCx { ast, sm, file, out: Vec::new() };
     cx.ent(d, 0)?;
     (cx.out[0] != ENT_DECL).then(|| cx.out.into_boxed_slice())
+}
+
+/// The key of a substitution frame of kind `code` into `template` with
+/// the innermost arguments `args`, at `entity` (the template itself, or
+/// the parameter whose type or default argument is substituted). Only a
+/// template whose parameters are its outermost level (depth 0) is keyed:
+/// then `args` are all the arguments the substitution uses, and an
+/// enclosing specialization's are in the template's own key.
+pub(super) fn subst_key(
+    ast: &Ast,
+    sm: &SourceManager,
+    file: impl FnMut(FileId) -> Option<u32>,
+    code: u8,
+    template: DeclId,
+    entity: DeclId,
+    args: ArgListId,
+) -> Option<Box<[u8]>> {
+    let info = ast.template_info(template)?;
+    if ast.templates.param_list(info.params).depth != 0 {
+        return None;
+    }
+    let mut cx = KeyCx { ast, sm, file, out: vec![ENT_SUBST, code] };
+    cx.ent(template, 1)?;
+    cx.ent(entity, 1)?;
+    cx.args(ast.types.canonical_args(args), 1)?;
+    Some(cx.out.into_boxed_slice())
 }
 
 impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
@@ -260,10 +288,15 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
 pub(super) fn check_key(b: &[u8], npaths: usize) -> Res<()> {
     let mut ck = Ck { r: Rd(b), npaths };
     match b.first() {
-        Some(&ENT_SPEC | &ENT_MEMBER | &ENT_PATTERN) => {}
+        Some(&ENT_SPEC | &ENT_MEMBER | &ENT_PATTERN) => ck.ent(0)?,
+        Some(&ENT_SUBST) => {
+            ck.r.take(2)?;
+            ck.ent(1)?;
+            ck.ent(1)?;
+            ck.args(1)?;
+        }
         _ => return bad("bad instantiation key"),
     }
-    ck.ent(0)?;
     if !ck.r.0.is_empty() {
         return bad("bad instantiation key");
     }

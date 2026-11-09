@@ -49,6 +49,7 @@ mod inst;
 
 use kiln_ast::consts::{ByteImage, ByteRange, ConstStore, FloatKind, IntBits, NullKind, Scalar};
 use kiln_ast::types::{BuiltinType, TypeView};
+use kiln_ast::ids::ArgListId;
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
 use kiln_oven::{EvalContext, EvalFailure, EvalKind};
 use kiln_source::fx::FxHashMap;
@@ -128,7 +129,7 @@ pub(crate) struct Recorder {
     inst_index: FxHashMap<Box<[u8]>, u32>,
     /// The [`EvalKey::inst`] of each instantiated entity seen, `None`
     /// when its key cannot be formed.
-    ent_ix: FxHashMap<DeclId, Option<u32>>,
+    ent_ix: FxHashMap<FrameSig, Option<u32>>,
     first_skip: Option<Skip>,
 }
 
@@ -141,7 +142,7 @@ struct Table {
     insts: FxHashMap<Box<[u8]>, u32>,
     /// The [`EvalKey::inst`] of each instantiated entity seen, `None`
     /// when the table carries nothing for it.
-    ent_ix: FxHashMap<DeclId, Option<u32>>,
+    ent_ix: FxHashMap<FrameSig, Option<u32>>,
     map: FxHashMap<EvalKey, Carried>,
 }
 
@@ -225,29 +226,41 @@ fn file_index(bmi: &mut BmiState, table: Option<usize>, sm: &SourceManager, f: F
     }
 }
 
-/// Whether evaluations inside a frame of kind `k` are keyed by the
-/// frame's entity: the frames that instantiate a definition, initializer
-/// or default argument of one specialization. The others substitute into
-/// a signature, check constraints or default template arguments, whose
-/// evaluations depend on more than the entity.
-fn keyed_frame(k: FrameKind) -> bool {
+/// How evaluations inside a frame of kind `k` are keyed: `Some(None)`
+/// by the frame's entity alone (the frames that instantiate a
+/// definition, initializer or default argument of one specialization),
+/// `Some(Some(code))` by the frame's template, entity and arguments (the
+/// substitutions whose frame records all their arguments), `None` not at
+/// all (alias templates, default-argument checks, partial
+/// specialization matching and the rest).
+fn frame_keying(k: FrameKind) -> Option<Option<u8>> {
     use FrameKind as K;
-    matches!(
-        k,
+    Some(match k {
         K::ClassInstantiation
-            | K::MemberClass
-            | K::MemberFunction
-            | K::FunctionSpec
-            | K::StaticDataMember
-            | K::VarTemplateInstantiation
-            | K::VarTemplateInit
-            | K::Enum
-            | K::Nsdmi
-            | K::DefaultFunctionArg
-            | K::ExceptionSpec
-            | K::LambdaSubstitution
-    )
+        | K::MemberClass
+        | K::MemberFunction
+        | K::FunctionSpec
+        | K::StaticDataMember
+        | K::VarTemplateInstantiation
+        | K::VarTemplateInit
+        | K::Enum
+        | K::Nsdmi
+        | K::DefaultFunctionArg
+        | K::ExceptionSpec
+        | K::LambdaSubstitution => None,
+        K::ConceptCheck => Some(0),
+        K::ConstraintsCheck => Some(1),
+        K::DeducedArgSubstitution => Some(2),
+        K::ExplicitArgSubstitution => Some(3),
+        K::PriorArgSubstitution => Some(4),
+        K::DefaultTemplateArg => Some(5),
+        _ => return None,
+    })
 }
+
+/// What identifies the innermost frame's key: its keying, entity,
+/// template and arguments.
+type FrameSig = (Option<u8>, DeclId, DeclId, Option<ArgListId>);
 
 const SKIP_SUBST: Skip = "an evaluation in a substitution that is not an instantiation";
 const SKIP_INST_KEY: Skip = "an instantiation whose arguments have no key";
@@ -323,27 +336,42 @@ impl Sema<'_, '_> {
         Some(EvalKey { inst, kind, at, expr })
     }
 
-    /// The key bytes of the innermost instantiation's entity, when the
-    /// frame is keyed and the key can be formed.
-    fn inst_entity_key(&mut self, table: Option<usize>, entity: DeclId) -> Option<Box<[u8]>> {
+    /// The innermost frame's signature, `Ok(None)` outside any frame, or
+    /// `Err` for a frame whose evaluations are not keyed.
+    fn frame_sig(&self) -> Result<Option<FrameSig>, Skip> {
+        let Some(f) = self.inst.stack.frames.last() else { return Ok(None) };
+        match frame_keying(f.kind) {
+            Some(None) => Ok(Some((None, f.entity, f.entity, None))),
+            Some(Some(code)) if f.args.is_some() => {
+                Ok(Some((Some(code), f.entity, f.template, f.args)))
+            }
+            _ => Err(SKIP_SUBST),
+        }
+    }
+
+    /// The key bytes of frame `sig`, when they can be formed.
+    fn frame_key(&mut self, table: Option<usize>, sig: FrameSig) -> Option<Box<[u8]>> {
         let sm = self.diags.sm();
         let bmi = &mut self.bmi;
-        inst::entity_key(&self.ast, sm, |f| file_index(bmi, table, sm, f), entity)
+        let file = |f| file_index(bmi, table, sm, f);
+        match sig {
+            (None, entity, ..) => inst::entity_key(&self.ast, sm, file, entity),
+            (Some(code), entity, template, Some(args)) => {
+                inst::subst_key(&self.ast, sm, file, code, template, entity, args)
+            }
+            _ => None,
+        }
     }
 
     /// The writer's [`EvalKey::inst`] for an evaluation made now, or why
     /// it has none.
     fn record_inst(&mut self) -> Result<u32, Skip> {
-        let Some(f) = self.inst.stack.frames.last() else { return Ok(0) };
-        if !keyed_frame(f.kind) {
-            return Err(SKIP_SUBST);
-        }
-        let entity = f.entity;
+        let Some(sig) = self.frame_sig()? else { return Ok(0) };
         let Some(rec) = &self.bmi.recorder else { return Err(SKIP_INST_KEY) };
-        if let Some(&c) = rec.ent_ix.get(&entity) {
+        if let Some(&c) = rec.ent_ix.get(&sig) {
             return c.ok_or(SKIP_INST_KEY);
         }
-        let key = self.inst_entity_key(None, entity);
+        let key = self.frame_key(None, sig);
         let Some(rec) = &mut self.bmi.recorder else { return Err(SKIP_INST_KEY) };
         let id = key.map(|k| match rec.inst_index.get(&k) {
             Some(&i) => i,
@@ -354,29 +382,29 @@ impl Sema<'_, '_> {
                 i
             }
         });
-        rec.ent_ix.insert(entity, id);
+        rec.ent_ix.insert(sig, id);
         id.ok_or(SKIP_INST_KEY)
     }
 
     /// Table `t`'s [`EvalKey::inst`] for an evaluation made now, or
-    /// `None` when the table carries nothing for the instantiation.
+    /// `None` when the table carries nothing for the frame.
     fn table_inst(&mut self, t: usize) -> Option<u32> {
-        let Some(f) = self.inst.stack.frames.last() else { return Some(0) };
-        if !keyed_frame(f.kind) {
-            return None;
-        }
-        let entity = f.entity;
+        let sig = match self.frame_sig() {
+            Ok(None) => return Some(0),
+            Ok(Some(sig)) => sig,
+            Err(_) => return None,
+        };
         let table = &self.bmi.tables[t];
         if table.insts.is_empty() {
             return None;
         }
-        if let Some(&c) = table.ent_ix.get(&entity) {
+        if let Some(&c) = table.ent_ix.get(&sig) {
             return c;
         }
-        let key = self.inst_entity_key(Some(t), entity);
+        let key = self.frame_key(Some(t), sig);
         let table = &mut self.bmi.tables[t];
         let id = key.and_then(|k| table.insts.get(&k).copied());
-        table.ent_ix.insert(entity, id);
+        table.ent_ix.insert(sig, id);
         id
     }
 
