@@ -447,8 +447,8 @@ Part B is §11. Step 1 (WP-917) delivers the source-capsule module file,
 `-fprebuilt-module-path=` lookup, `.pcm` inputs, the mismatch diagnostics
 and the harness's two-step mode (§11.1-§11.8). The serialised-AST format,
 in which a reader appends a unit with fresh `DeclId`s and its `UnitInfo`
-and ODR merging replaces §6 dedup, is step 2 (§11.9), as are dependency
-scanning, CMake and header-unit files.
+and ODR merging replaces §6 dedup, is step 2 (§11.10), as are header-unit
+files; dependency scanning and CMake are §11.9 (WP-982).
 
 ## 10. Deviations
 
@@ -525,8 +525,8 @@ scanning, CMake and header-unit files.
 Part B adds a module file (a *BMI*) so that a module interface is compiled
 once and its importers are compiled separately, with clang's driver
 spellings. Step 1 (this section's §11.1-§11.8, WP-917) is the format, the
-driver and the harness; step 2 (§11.9) is dependency scanning, CMake,
-header-unit files and a serialised-AST format.
+driver and the harness; step 2 is dependency scanning and CMake (§11.9,
+WP-982), then header-unit files and a serialised-AST format (§11.10).
 
 ### 11.1 Decision: a staged source capsule
 
@@ -555,7 +555,7 @@ manager's buffers, so nothing is held twice). Option (b)
 would bring `import std;` towards clang's 0.27 s, but needs a serialiser
 for every AST node, type, template and constant-evaluator object, and
 makes every later AST change a format change. It is the stage-2 format
-(§11.9), behind the same magic with a different kind byte; the driver,
+(§11.10), behind the same magic with a different kind byte; the driver,
 the lookup order, the diagnostics and the harness of this section do not
 change when it lands.
 
@@ -755,7 +755,7 @@ clang's spellings (spec/driver.md, "Modules"):
   unit is an interface is decided by its module declaration, not its
   suffix).
 - `-fmodule-header`, `-fmodule-header=user|system`, `.pcm` header units:
-  step 2 (§11.9); still `error: unsupported option`.
+  step 2 (§11.10); still `error: unsupported option`.
 
 Part A's single invocation (`kiln++ -fmodule-file=m=m.cppm m.cppm
 main.cpp`) is unchanged.
@@ -814,28 +814,111 @@ from the heap and were never returned. With the threshold pinned
 (`MALLOC_MMAP_THRESHOLD_=131072`) the same reader measured 86 MiB. The
 streaming reader (§11.3) never allocates a whole-file buffer.
 
-### 11.9 Step 2 (follow-up work packages)
+### 11.9 Dependency scanning and CMake (WP-982)
 
-- **Dependency scanning and CMake.** CMake 3.28+ identifies kiln as clang
-  (it defines `__clang__`), and for clang 16+ with the GNU front-end
-  variant scans with `${CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS} -format=p1689
-  -- <compiler> <flags> -x c++ <src> -c -o <obj> -MT <ddi> -MD -MF <dep>`,
-  writing P1689r5 JSON to stdout; it finds the scanner with `find_program`
-  for `clang-scan-deps-<major>`, `clang-scan-deps`, hinting the compiler's
-  directory. Its module map is a response file (`@<file>`) of
-  `-fmodule-file=<name>=<bmi>`, `-fmodule-output=<bmi>` and `-x
-  c++-module` lines, and `--precompile` is its BMI-only flag. kiln ships a
-  `kiln-scan-deps` (one binary, dispatching on `argv[0]`, installed also as
-  `clang-scan-deps-<compat major>` beside `kiln++`) that runs kiln's
-  preprocessor on the command after `--` and prints P1689r5
-  (`provides`/`requires`, `is-interface`, `source-path`) plus the make
-  dependency file. If kiln stops identifying as clang to CMake (question
-  Q3), CMake falls back to its GNU rule, `-fdeps-format=p1689r5
-  -fdeps-file=<ddi> -fdeps-target=<obj>` with `-fmodules-ts
-  -fmodule-mapper=` maps, which kiln then implements instead (both are
-  small: the scan is a preprocessor run). A CMake end-to-end test (an
-  interface, a partition, an implementation unit, `import std;`) runs in
-  `cargo xtask` with Ninja.
+CMake 3.28+ identifies kiln as clang (it defines `__clang__`; the version
+it computes, `CMAKE_CXX_COMPILER_VERSION`, follows `__clang_major__`, so 22
+by default and 19 under `-fclang-compat=19`) with the GNU front-end
+variant, and for clang 16+ builds `FILE_SET CXX_MODULES` targets (Ninja
+generator) in three steps per source, as `Modules/Compiler/Clang-CXX.cmake`
+and `Clang-FindBinUtils.cmake` of CMake 3.31 spell them:
+
+1. scan: `${CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS} -format=p1689 --
+   <compiler> <flags> -x c++ <src> -c -o <obj> -resource-dir <dir> -MT
+   <obj>.ddi -MD -MF <obj>.ddi.d > <obj>.ddi.tmp`, P1689r5 on stdout;
+2. collate: `cmake -E cmake_ninja_dyndep --modmapfmt=clang`, which writes
+   one module map per source;
+3. compile: `<compiler> <flags> -MD -MT <obj> -MF <obj>.d @<obj>.modmap
+   -o <obj> -c <src>`, the map holding `-x c++-module` and
+   `-fmodule-output=<bmi>` for an interface or partition and one
+   `-fmodule-file=<name>=<bmi>` per module the source needs, transitively.
+
+CMake finds the scanner with `find_program` for
+`clang-scan-deps-<major>.<minor>`, `clang-scan-deps-<major>`,
+`clang-scan-deps<major>` and `clang-scan-deps`, looking first in the
+compiler's resolved directory and its spelled directory, then on `PATH`.
+
+**Decision: one binary, dispatching on `argv[0]`.** `kiln-scan-deps` is
+not a second executable: like `kiln++`, it is a link to the one `kiln`
+binary, whose driver (`kiln_driver::scan_deps`) runs the scanner when the
+program name is `kiln-scan-deps`, `clang-scan-deps` or
+`clang-scan-deps-<version>`. A separate binary would duplicate the whole
+front end (the scan is a run of kiln's own preprocessor, with its include
+search, predefines and `-fclang-compat`, so the scan sees what the compile
+sees) and double the install size; a link costs nothing and cannot drift
+from the compiler it scans for. The install tree (`cargo xtask dist`,
+spec/driver.md "Installation layout") and the dev tree (`kiln_driver`'s
+build script, in the cargo profile directory) both hold `kiln-scan-deps`,
+`clang-scan-deps-22` and `clang-scan-deps` beside `kiln++`, so CMake's
+search finds kiln's scanner before any system clang's with nothing set.
+To name it explicitly (another compat major, or a wrapper as
+`CMAKE_CXX_COMPILER`), pass
+`-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=<kiln prefix>/bin/kiln-scan-deps`.
+
+The scanner behaves as clang-scan-deps 22 for the options CMake and
+build tools pass (spec/driver.md "Dependency scanning"):
+
+- The command after `--` is parsed by kiln's driver; it must be one
+  compile of one input (otherwise clang's `unable to handle compilation,
+  expected exactly one compiler job in '<command>'`).
+- `-format=p1689`: the P1689r5 document, byte for byte clang's: keys
+  sorted, two-space indent, `revision` 0, `version` 1, one rule with
+  `primary-output` (the `-o` value, else `<stem>.o`), `provides` (an
+  importable unit: `logical-name` (`M` or `M:P`), `is-interface` (false
+  only for an implementation partition), `source-path` as given) and
+  `requires` (each imported module once, in source order: `import :p;`
+  in `M` requires `M:p`, an implementation unit `module M;` requires
+  `M`); an empty array is omitted. `-format=make` (the default) prints
+  the make rule. `-o <file>` writes the output to a file.
+- `-MT`/`-MD`/`-MF` in the command write the dependency file of the files
+  the scan read (spec/driver.md "Dependency output"), only after a clean
+  scan.
+- The scan runs the full preprocessor in module-scan mode
+  (`kiln_pp::ModuleOptions::scan`): module and import directives are
+  recorded instead of performed (no module file is read), and `#error`
+  and `#warning` are skipped, as clang-scan-deps's source minimizer drops
+  them; everything else (`#include`, conditionals, macros, `__has_include`)
+  is evaluated, so a scan sees exactly the imports the compile will.
+- A failed scan (a missing input, an unterminated conditional, an
+  argument error) prints `Diagnostics while scanning dependencies for
+  '<src>':` and the diagnostics (no caret snippet, no error count) to
+  stderr, the empty document `{"revision": 0, "rules": [], "version": 1}`
+  to stdout, writes no dependency file and exits 1.
+- `import "h";` / `import <h>;` (a header unit) is `error: header unit "h"
+  cannot be imported: kiln-scan-deps does not support header units yet`
+  at the header name, a scan failure; header units are §11.10.
+- No `--` is clang's `The compilation command line must be provided
+  either via '-compilation-database' or after '--'.` (exit 1); an unknown
+  `-format` value is `<prog>: for the --format option: Cannot find option
+  named '<v>'`.
+
+Deviations: the `-format=make` output names files as kiln's `-M` does
+(`hdr.h`) where clang-scan-deps normalises them (`./hdr.h`); the
+header-unit and one-job messages are kiln's (clang's header-unit error
+says the header "is not known to be a header unit"; its one-job message
+quotes its own expanded command); system headers in the dependency file
+are spelled with kiln's toolchain paths. `-compilation-database` and
+`-format=experimental-full` are not supported (an error).
+
+Every flag CMake 3.31 puts on these lines was already kiln's (WP-917,
+WP-799): `-x c++` / `-x c++-module`, `-fmodule-output=`,
+`-fmodule-file=<name>=<bmi>`, the `@<file>.modmap` response file,
+`-MD`/`-MT`/`-MF`, `-resource-dir`, `-std=gnu++20`, and at link
+`-Xlinker --dependency-file=`. `-fmodules-reduced-bmi` (clang 18+; CMake
+3.31 does not pass it, other build systems do) is accepted and ignored:
+kiln's module file has one form, the source capsule (§11.1), which is
+already as small as a reduced BMI gets.
+
+The end-to-end check is `scripts/oss/selftest.sh` `cmake_modules`: an
+interface, an interface partition, an implementation unit and a consumer
+built through `FILE_SET CXX_MODULES` with Ninja and `kiln++` as the
+compiler; the program runs, the scanner CMake found must be kiln's link,
+and touching the interface recompiles it, the implementation unit and the
+consumer but not the partition. `import std;` through CMake
+(`CXX_MODULE_STD`) is WP-984.
+
+### 11.10 Step 2 (follow-up work packages)
+
 - **`import std;` module file.** `kiln++ --precompile -std=c++23
   <llvm>/share/libc++/v1/std.cppm -o std.pcm` already works through this
   section's driver; step 2 adds the toolchain-level cache (where a build
@@ -931,3 +1014,17 @@ streaming reader (§11.3) never allocates a whole-file buffer.
   warning and the `--precompile` error, the mismatch, missing,
   wrong-module and clang-file diagnostics, and 40 truncated or flipped
   module files through the driver (each a fatal error, exit code 1).
+- Dependency scanning (WP-982, §11.9): `crates/kiln_driver/tests/scan_deps.rs`
+  compares the P1689r5 document with clang-scan-deps 22's bytes for a
+  primary interface importing its partitions (with a GMF `#include`
+  and the dependency file), an interface and an implementation
+  partition, an implementation unit, a consumer and a plain TU
+  (`<stem>.o`), a skipped `#error`, the header-unit and missing-input
+  failures (stderr, empty document, exit 1, no dependency file), `-o`,
+  the default make format, the missing `--` and bad `-format` messages,
+  through each scanner name; `kiln_driver::scan_deps` unit tests cover
+  the names, option parsing and JSON quoting. `xtask/src/dist.rs`
+  checks the links in the install layout and scans a unit with the
+  installed `clang-scan-deps-22` in its smoke test.
+- CMake (WP-982): `scripts/oss/selftest.sh` `cmake_modules` builds
+  `scripts/oss/fixtures/modules` (§11.9).

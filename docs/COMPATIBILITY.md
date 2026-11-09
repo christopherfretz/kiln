@@ -95,11 +95,23 @@ This is slower than importing a clang BMI, because kiln module files hold
 sources rather than a serialised AST
 ([spec/modules.md](../spec/modules.md) §11).
 
+**CMake** (3.28+, tested with 3.31 and Ninja) builds `FILE_SET
+CXX_MODULES` targets with kiln unchanged: `kiln-scan-deps`, kiln's
+clang-scan-deps (P1689r5, the same output as clang-scan-deps 22), is
+installed beside `kiln++` also as `clang-scan-deps-22` and
+`clang-scan-deps`, which is where CMake looks first, and kiln++ reads the
+`@<file>.modmap` module maps CMake writes. Interfaces, partitions,
+implementation units and consumers build, and touching an interface
+rebuilds exactly its dependents. To name the scanner explicitly (with a
+compiler wrapper, say), configure with
+`-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=<prefix>/bin/kiln-scan-deps`
+([spec/modules.md](../spec/modules.md) §11.9).
+
 Not yet supported:
 
-- dependency scanning, so CMake's module support (`FILE_SET
-  CXX_MODULES`, `CXX_MODULE_STD`) does not work yet;
-- header units as module files (`-fmodule-header`).
+- `import std;` through CMake (`CXX_MODULE_STD`);
+- header units as module files (`-fmodule-header`), so the scanner
+  rejects `import "h";` with an error.
 
 ## Libraries and applications
 
@@ -188,7 +200,8 @@ and what it concludes about kiln (WP-920):
   implicit link directories and libraries come from the `-v` link lines,
   which the backing clang++ prints. CMake matches `clang version` text
   only for CUDA, HIP and assembler vendor detection, which kiln does not
-  serve. Works unchanged.
+  serve. Works unchanged. C++20 modules (`FILE_SET CXX_MODULES`, Ninja)
+  find kiln's scanner beside the compiler ("C++20 modules" above).
 - **Autotools** (hunspell's configure: autoconf 2.69, automake, libtool): `AC_PROG_CXX` decides
   "GNU C++" from `__GNUC__` (kiln: 4.2.1, as clang). It runs `--version`,
   `-v`, `-V` and `-qversion` only to log them in `config.log`. libtool
