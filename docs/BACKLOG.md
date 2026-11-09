@@ -710,6 +710,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-726 | M8 wave 3: folly v2026.10.26.00 through its own CMake build + bounded tests with kiln++ via scripts/oss; every failure → reduced conformance test + fix | WP-724 | folly builds: 725/726 TUs, 3767/3773 tests, 31 clusters incl. aligned-new miscompile (#338) |
 | WP-667 | robustness M8 wave 1: build fmt (latest release tag) with kiln++ as CXX through its own CMake build + test suite at parity with the clang-19 control build; every failure → cluster, reduced tests/conformance case, fix in kiln (one commit per cluster) or a documented follow-up; `docs/status/oss/fmt.md` | robustness outline 11-07 | done (PR #309; fmt 12.1.0 at parity; -print-resource-dir, link -v, sanitizer/lifetimebound attrs known; follow-ups WP-673..675) |
 | WP-814 | DWARF debug info: -g driver flags, DI model + printer, line tables, variables, types, debugger harness (tests/debuginfo), dwarfdump stats vs clang | WP-667 | done (#372) |
+| WP-910 | debuginfo is total: -g never hard-errors on valid code (info base type, value: null, SVE vscale arrays, unnamed globals), reflection DI, xtask test --debug-sweep | WP-814 | done (#408) |
 | WP-816 | run tests/debuginfo (gdb + lldb-19 scripted sessions) in GitHub CI: debuggers in the corpus jobs, default root, KILN_REQUIRE_DEBUGGERS=1 | WP-814 | done (#378) |
 | WP-817 | perf: cut the front-end cost of -g (static DI keys, hash-once metadata interning, printer fast paths, -g bench entries) | WP-814 | done (#377) |
 | WP-813 | no silent drops part 7: class B attributes (inlining, pointer facts, instrumentation, hardening) implemented as clang implements them, with paired driver flags | WP-667 | done (#371) |
@@ -921,7 +922,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-898 | clang 22 frame-pointer "non-leaf-no-reserve": tests/conformance/target.acle/ir-clrex.cpp fails under --compiler clang++-19 against oracle 22 (pre-existing) | WP-846 | open |
 | WP-879 | reflection correctness bundle 4: WP-796, WP-838, WP-866, WP-867, WP-870 (GCC 16.1 parity) | WP-830 | done (#398) |
 | WP-907 | sema: complete a variable template specialization of unknown array bound for sizeof/type_of (xfail temp.inst/p4-var-template-unknown-bound.cpp) | WP-879 | open |
-| WP-908 | perf: frontend ~3x slower than g++-16 on large repeated nested template-ids (5.1 MB TU: 1.28 s vs 0.44 s -fsyntax-only; docs/status/perf.md WP-879) | WP-879 | open |
+| WP-908 | perf: frontend ~3x slower than g++-16 on large repeated nested template-ids (5.1 MB TU: 1.28 s vs 0.44 s -fsyntax-only; docs/status/perf.md WP-879) | WP-879 | done (#407, via WP-919) |
+| WP-919 | perf: frontend throughput on large nested template-id TUs (profile dup8 + real TUs, fix hotspots, dup bench entry) | WP-908 | done (#407) |
 | WP-909 | decision: default -fkiln-reflection-mangling form (WP-879 study recommends gcc; operator decides) | WP-879 | open |
 | WP-899 | driver: `-ffat-lto-objects` emits real fat objects (machine code + bitcode); now bitcode-only (crates/kiln_driver/src/codegen_flags.rs:28) | WP-873 | open |
 | WP-900 | codegen: `-fstrict-vtable-pointers` invariant.group metadata and `-f[no-]vectorize`/`-fslp-vectorize` pipeline toggles (codegen_flags.rs:146) | WP-873 | deferred |
@@ -973,3 +975,11 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-958 | accepts-invalid (WP-912): rejects-valid: templates and deduction (12 xfails, docs/status/accepts-invalid.md cluster 15) | WP-912 | open |
 | WP-959 | accepts-invalid (WP-912): rejects-valid: classes, special members, initialization, misc (9 xfails, cluster 16) | WP-912 | open |
 | WP-960 | accepts-invalid (WP-912): low: `-pedantic-errors` extension diagnostics; unsupported GNU extensions and driver flags | WP-912 | open |
+| WP-963 | perf (WP-919): `Sema::lookup_stamp` is 6% of dup6; cache it per scope change or pass it down a scan | WP-919 | open |
+| WP-964 | perf (WP-919): `tok_at` 11% of dup6; lookahead predicates re-walk tokens before a memo answers | WP-919 | open |
+| WP-965 | perf (WP-919): `lookup_name_scoped`/filter `Vec` results (malloc/free 6.4% of dup6); small-vector or borrowed slice | WP-919 | open |
+| WP-966 | sema: honour a function's `target("sve")` in the SVE type check (crates/kiln_sema/src/sve.rs ~179 `check_sve_support`; xfail ext.arm.sve/target-attribute-sve-locals.cpp) | WP-910 | open |
+| WP-967 | debug info: clang's spelling of float and integer-suffix template argument names (kiln_ast types/print.rs:472, kiln_codegen debuginfo/types.rs:584) | WP-910 | open |
+| WP-968 | debug info: keep alias-template sugar (kiln_codegen debuginfo/types.rs:135) | WP-910 | open |
+| WP-969 | debug info: subprogram for the global-init function; local variables for structured bindings (kiln_codegen debuginfo/func.rs) | WP-910 | open |
+| WP-970 | codegen: lower SVE tuple locals as a struct of vectors under clang-compat 22 | WP-910 | open |

@@ -397,7 +397,12 @@ impl Cg<'_> {
             None => None,
         };
         let tparams = self.di_template_params(d);
-        let mut f = Fields::default().s("name", &name);
+        // A namespace-scope structured binding's variable has no name;
+        // clang leaves the field out (LLVM rejects `name: ""`).
+        let mut f = Fields::default();
+        if !name.is_empty() {
+            f = f.s("name", &name);
+        }
         if !in_fn && gname != name {
             f = f.s("linkageName", &gname);
         }

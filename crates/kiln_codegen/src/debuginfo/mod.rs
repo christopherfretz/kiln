@@ -200,11 +200,6 @@ pub(crate) struct Di<'a> {
     /// The `dbg` metadata kind.
     pub dbg: MdKindId,
     pub cu: MetadataId,
-    /// The compile unit's file name and checksum, which clang's
-    /// `getOrCreateFile` of an invalid location re-creates as a file
-    /// split against the compilation directory.
-    cu_name: Box<str>,
-    cu_checksum: Option<Box<str>>,
     /// `!DIExpression()`.
     pub empty_expr: MetadataId,
     /// `!{}`.
@@ -227,8 +222,6 @@ pub(crate) struct Di<'a> {
     pub regions: FxHashMap<DeclId, MetadataId>,
     /// `__vtbl_ptr_type *`.
     pub vtbl_ptr: Option<MetadataId>,
-    /// The first construct debug information cannot describe yet.
-    pub error: Option<crate::CodegenError>,
     /// Member function declarations by first declaration.
     pub decl_sps: FxHashMap<DeclId, MetadataId>,
     /// Namespaces by first declaration.
@@ -258,7 +251,6 @@ impl<'a> Cg<'a> {
         }
         let checksum = o.main_id.map(|f| md5::hex(sm.text(f).as_bytes()));
         let cu_file = self.di_create_file(name, checksum.as_deref(), true);
-        let cu_name: Box<str> = name.into();
         let kind = match o.kind {
             DebugInfoKind::LocTrackingOnly => "NoDebug",
             DebugInfoKind::LineDirectivesOnly => "DebugDirectivesOnly",
@@ -283,8 +275,6 @@ impl<'a> Cg<'a> {
             sm,
             dbg,
             cu,
-            cu_name,
-            cu_checksum: checksum.map(Into::into),
             empty_expr,
             files: FxHashMap::default(),
             locs: FxHashMap::default(),
@@ -295,7 +285,6 @@ impl<'a> Cg<'a> {
             retained_classes: Vec::new(),
             regions: FxHashMap::default(),
             vtbl_ptr: None,
-            error: None,
             decl_sps: FxHashMap::default(),
             namespaces: FxHashMap::default(),
             gves: FxHashMap::default(),
@@ -329,15 +318,11 @@ impl<'a> Cg<'a> {
     }
 
     /// clang `getOrCreateFile`: the file of `loc`'s presumed position
-    /// (for an invalid location, the compile unit's file name and checksum
-    /// through `createFile`, so split against the compilation directory).
+    /// ([`Self::di_main_file`] for an invalid location).
     pub(crate) fn di_file(&mut self, loc: Loc) -> MetadataId {
         let Some(di) = self.di.as_deref() else { unreachable_md() };
         let sm = di.sm;
-        let Some(p) = sm.presumed_line_col(loc) else {
-            let (name, checksum) = (di.cu_name.clone(), di.cu_checksum.clone());
-            return self.di_create_file(&name, checksum.as_deref(), false);
-        };
+        let Some(p) = sm.presumed_line_col(loc) else { return self.di_main_file() };
         let name = sm.presumed_file_name(&p, loc);
         if let Some(&f) = di.files.get(name.as_str()) {
             return f;
@@ -345,6 +330,29 @@ impl<'a> Cg<'a> {
         // A `#line` name has no buffer to checksum.
         let checksum =
             (p.file_name == sm.file_name(p.file)).then(|| md5::hex(sm.text(p.file).as_bytes()));
+        let f = self.di_create_file(&name, checksum.as_deref(), false);
+        if let Some(di) = self.di.as_deref_mut() {
+            di.files.insert(name.into(), f);
+        }
+        f
+    }
+
+    /// clang `getOrCreateFile` of an invalid location (an implicit
+    /// declaration such as `__SVInt32_t`; WP-910): the compile unit's file
+    /// name made a file like any other (split against the compilation
+    /// directory), not the unit's own `DIFile`.
+    pub(crate) fn di_main_file(&mut self) -> MetadataId {
+        let o = &self.opts.debug;
+        let mut name = if o.main_file.is_empty() { "<stdin>" } else { o.main_file.as_str() };
+        while let Some(r) = name.strip_prefix("./") {
+            name = r;
+        }
+        let name = name.to_owned();
+        let Some(di) = self.di.as_deref() else { unreachable_md() };
+        if let Some(&f) = di.files.get(name.as_str()) {
+            return f;
+        }
+        let checksum = o.main_id.map(|f| md5::hex(di.sm.text(f).as_bytes()));
         let f = self.di_create_file(&name, checksum.as_deref(), false);
         if let Some(di) = self.di.as_deref_mut() {
             di.files.insert(name.into(), f);
@@ -424,11 +432,6 @@ impl<'a> Cg<'a> {
                 let _ = self.m.md_set_field(cu, k, MdField::Node(Some(t)));
             }
         }
-    }
-
-    /// The first unsupported construct met by debug information.
-    pub(crate) fn take_debug_info_error(&mut self) -> Option<crate::CodegenError> {
-        self.di.as_deref_mut().and_then(|d| d.error.take())
     }
 
     // ---- function locations (clang `CodeGenFunction` + `CGDebugInfo`) ---

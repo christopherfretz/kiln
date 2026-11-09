@@ -123,6 +123,7 @@ pub fn spec() -> BenchSpec {
         thresholds: ThresholdOverrides::default(),
         xfail_kiln: None,
         budget_time_ms: None,
+        generate: None,
     }
 }
 

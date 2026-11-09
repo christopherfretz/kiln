@@ -892,6 +892,9 @@ pub struct Sema<'a, 'sm> {
     /// check allocates no stack per call (WP-645). A nested walk finds it
     /// empty and starts its own.
     pub(crate) walk_stack: std::cell::RefCell<Vec<ExprId>>,
+    /// The name-classification memo ([`Sema::classify_name`], spec/parse.md
+    /// §2.5): results valid while [`Sema::lookup_stamp`] is unchanged.
+    pub(crate) classify_memo: std::cell::RefCell<decl::ClassifyMemo>,
     /// [`Sema::walk_stack`] for the implicit-conversion walk, whose work
     /// items carry the context location.
     pub(crate) conv_walk_stack: Vec<(ExprId, Loc, bool)>,
@@ -1374,6 +1377,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             module_vtables: kiln_source::fx::FxHashSet::default(),
             synth_noted: std::cell::Cell::new(0),
             walk_stack: std::cell::RefCell::new(Vec::new()),
+            classify_memo: std::cell::RefCell::default(),
             conv_walk_stack: Vec::new(),
             equiv_scratch: std::cell::RefCell::default(),
             cand_scratch: Vec::new(),
