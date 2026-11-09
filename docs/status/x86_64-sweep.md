@@ -113,7 +113,7 @@ Tests are "passed / total".
   `cpp.predefined/x86-feature-macros-*.cpp`,
   `target.x86/ir-target-features-*.cpp`). The sweep has not been re-run
   for the TU counts. x86 function multiversioning (`target_clones`) is
-  still rejected: WP-1056, xfail
+  still rejected: WP-1059, xfail
   `tests/conformance/ext.multiversion/target-clones-x86.cpp`.
 - glibc's x86-64 `bits/floatn.h` says `typedef __float128 _Float128;`.
   kiln makes `_Float128` its own P1467 type and drops that typedef, so a
@@ -121,7 +121,7 @@ Tests are "passed / total".
   under clang. llvm_project's `ConstantFolding.cpp`, and with it
   `IRTests`. **Filed** (follow-up): decided in WP-1000 to keep the two
   types distinct (as GCC 13+ and libstdc++, with `std::float128_t`);
-  the remaining fix is WP-1055, xfail
+  the remaining fix is WP-1058, xfail
   `tests/conformance/basic.extended.fp/float128-glibc-typedef-x86.cpp`.
 - `std/algorithms/alg.sorting/alg.sort/stable.sort/stable_sort.pass.cpp`:
   `static_assert(test<char>())` fails. The cause is not x86_64: constexpr

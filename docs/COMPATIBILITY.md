@@ -351,7 +351,7 @@ x86_64-only gaps found are fixed or have a follow-up WP.
 | fmt, nlohmann/json, Abseil, DuckDB, CMake, daw_json_link | every test as clang: 21/21, 97/97, 232/232, 4618/4628, 721/723, 147/147 | **Flawless** |
 | Bitcoin Core | 357/357; 475 TUs vs clang's 487: the `-m<feature>` flags were not accepted, so the SSE4.1/AVX2/SHA-NI code was configured out. WP-1000 added the flags; not re-swept yet | **Flawless** (tests); TU count to re-measure |
 | OpenCV | 7/7; 473 TUs vs 537: the SSE3…AVX2 dispatch sources, the same `-m<feature>` gap (WP-1000, not re-swept yet) | **Flawless** (tests); TU count to re-measure |
-| LLVM Support, ADT, IR | `SupportTests` 1337 and `ADTTests` 1576 as clang; `IRTests` does not build: glibc's x86-64 `_Float128` functions are not `__float128` ones in kiln (WP-1055) | **Broken** for `IRTests` (follow-up) |
+| LLVM Support, ADT, IR | `SupportTests` 1337 and `ADTTests` 1576 as clang; `IRTests` does not build: glibc's x86-64 `_Float128` functions are not `__float128` ones in kiln (WP-1058) | **Broken** for `IRTests` (follow-up) |
 | gRPC | the missing `__rdtsc` (31 TUs) is fixed; the full x86_64 build was still running at the first sweep | **Not run** (pending) |
 
 ## Rejecting invalid code
