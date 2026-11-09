@@ -3031,6 +3031,7 @@ impl Cg<'_> {
             let slot = self.field_slot(base, field, fq)?;
             let p = self.load_reference(slot.addr.v, slot.addr.align, fq);
             self.tbaa_mark(p, fq, tb);
+            let p = self.emit_field_annotations(field, p)?;
             let (_, align) = self.pointee_layout(referee);
             let ty = self.mty(referee);
             return Ok(LV {
@@ -3043,6 +3044,7 @@ impl Cg<'_> {
         }
         let mut lv = self.field_slot(base, field, q)?;
         lv.tb = tb;
+        lv.addr.v = self.emit_field_annotations(field, lv.addr.v)?;
         Ok(lv)
     }
 
@@ -5324,6 +5326,7 @@ impl Cg<'_> {
             _ if is_static_local(ast, d) => {
                 let g = self.static_local(d)?;
                 self.static_local_init(d, g)?;
+                self.add_global_annotations(d, gval(g))?;
                 self.di_global_var(d, g);
                 return Ok(());
             }
@@ -5383,6 +5386,7 @@ impl Cg<'_> {
             };
             self.di_declare_var(d, slot);
         }
+        self.emit_var_annotations(d, addr.v)?;
         // Default-initialization by a trivial constructor emits nothing
         // (but a non-trivial destructor still gets its cleanup).
         let init = v.init.filter(|&i| {

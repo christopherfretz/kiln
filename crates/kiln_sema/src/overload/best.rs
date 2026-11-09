@@ -402,7 +402,12 @@ impl Sema<'_, '_> {
     /// are more constrained than which ([over.match.best.general]/2.6,
     /// clang `getMoreConstrainedFunction`): both non-templates with the
     /// same non-object parameter-type-lists, the constraints those of the
-    /// members they were instantiated from.
+    /// members they were instantiated from. When exactly one of the two
+    /// is a reversed rewritten candidate, its parameter-type-list is
+    /// compared reversed (clang `sameFunctionParameterTypeLists`; P2468
+    /// /2.6 "after reversal"), so a more constrained `operator<=>(const
+    /// W&, const T&)` used reversed beats `operator<(const T&, const
+    /// W&)` (WP-1111).
     fn order_constrained_candidates(&mut self, set: &mut OverloadCandidateSet) {
         // Fast path (no allocation): no viable non-template candidate
         // has a trailing requires-clause.
@@ -414,7 +419,7 @@ impl Sema<'_, '_> {
         if !set.cands.iter().any(constrained) {
             return;
         }
-        let fs: Vec<(u32, DeclId, Vec<ExprId>)> = set
+        let fs: Vec<(u32, DeclId, Vec<ExprId>, bool)> = set
             .cands
             .iter()
             .enumerate()
@@ -422,12 +427,14 @@ impl Sema<'_, '_> {
             .filter_map(|(i, c)| {
                 let f = c.decl?;
                 let r = self.ast.templates.trailing_requires.get(f).copied();
-                Some((u32::try_from(i).ok()?, f, r.into_iter().collect()))
+                let rev = c.rewrite.is_reversed();
+                Some((u32::try_from(i).ok()?, f, r.into_iter().collect(), rev))
             })
             .collect();
-        for (i, (c1, f1, r1)) in fs.iter().enumerate() {
-            for (c2, f2, r2) in &fs[i + 1..] {
-                if r1.is_empty() && r2.is_empty() || !self.same_param_type_lists(*f1, *f2) {
+        for (i, (c1, f1, r1, v1)) in fs.iter().enumerate() {
+            for (c2, f2, r2, v2) in &fs[i + 1..] {
+                if r1.is_empty() && r2.is_empty() || !self.same_param_type_lists(*f1, *f2, v1 != v2)
+                {
                     continue;
                 }
                 if self.more_constrained(*f1, r1, *f2, r2) {
@@ -440,9 +447,10 @@ impl Sema<'_, '_> {
     }
 
     /// clang `sameFunctionParameterTypeLists`: the same variadic-ness and
-    /// non-object parameter types, and for two implicit object member
-    /// functions the same cv- and ref-qualifiers.
-    fn same_param_type_lists(&mut self, f1: DeclId, f2: DeclId) -> bool {
+    /// non-object parameter types (`f2`'s in reverse order when
+    /// `reversed`), and for two implicit object member functions the same
+    /// cv- and ref-qualifiers.
+    fn same_param_type_lists(&mut self, f1: DeclId, f2: DeclId, reversed: bool) -> bool {
         let (mut p1, mut p2) = (Vec::new(), Vec::new());
         let v1 = self.fn_param_types(f1, &mut p1);
         let v2 = self.fn_param_types(f2, &mut p2);
@@ -451,7 +459,11 @@ impl Sema<'_, '_> {
         if v1 != v2 || p1.len() - s1 != p2.len() - s2 {
             return false;
         }
-        if !p1[s1..].iter().zip(&p2[s2..]).all(|(&a, &b)| self.ast.types.same_type(a, b)) {
+        let q2 = &mut p2[s2..];
+        if reversed {
+            q2.reverse();
+        }
+        if !p1[s1..].iter().zip(q2.iter()).all(|(&a, &b)| self.ast.types.same_type(a, b)) {
             return false;
         }
         let quals = |s: &Self, f: DeclId| {

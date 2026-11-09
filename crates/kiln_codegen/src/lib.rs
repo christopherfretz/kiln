@@ -17,6 +17,7 @@
 )]
 
 mod alias;
+mod annotate;
 mod arm;
 mod asm;
 mod atomic;

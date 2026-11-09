@@ -528,6 +528,16 @@ impl Toolchain {
     /// clang `Generic_GCC::addGCCLibStdCxxIncludePaths`.
     fn libstdcxx_dirs(&self, v: &mut Vec<SearchDirSpec>) {
         let Some(g) = &self.gcc else { return };
+        // clang `addGCCLibStdCxxIncludePaths`, first: `<libdir>/../<triple>
+        // /include/c++/<v>` (a cross GCC, such as Debian's `gcc-cross`
+        // packages), whose target directory is `.../<v>/<triple>`.
+        let cross = format!("{}/../../../../{}/include/c++/{}", g.path, g.triple, g.version);
+        if Path::new(&cross).is_dir() {
+            v.push(SearchDirSpec::new(cross.clone(), DirGroup::System));
+            v.push(SearchDirSpec::new(format!("{cross}/{}", g.triple), DirGroup::System));
+            v.push(SearchDirSpec::new(format!("{cross}/backward"), DirGroup::System));
+            return;
+        }
         let inc = format!("{}/../../../../include", g.path);
         let base = format!("{inc}/c++/{}", g.version);
         if !Path::new(&base).is_dir() {
@@ -608,7 +618,7 @@ impl Toolchain {
     }
 }
 
-/// The newest GCC under `<prefix>/{lib64,lib}/gcc/<triple>/<version>`
+/// The newest GCC under `<prefix>/{lib64,lib}/{gcc,gcc-cross}/<triple>/<version>`
 /// (with a `crtbegin.o`) for the target's candidate triples, ties going to
 /// the first found, and every version directory seen, sorted (clang's
 /// `ScanLibDirForGCCTriple` over `CandidateLibDirs`; its
@@ -618,8 +628,11 @@ fn detect_gcc(prefix: &str, target: &Target) -> (Option<GccInstall>, Vec<String>
     let mut best: Option<(Vec<u32>, GccInstall)> = None;
     let mut seen = std::collections::BTreeSet::new();
     for lib in ["lib64", "lib"] {
-        for triple in target.gcc_triples {
-            let dir = format!("{prefix}/{lib}/gcc/{triple}");
+        // clang `ScanLibDirForGCCTriple`'s suffixes: `gcc/<triple>`, then
+        // Debian's cross compilers under `gcc-cross/<triple>`.
+        for (triple, sub) in target.gcc_triples.iter().flat_map(|t| [(t, "gcc"), (t, "gcc-cross")])
+        {
+            let dir = format!("{prefix}/{lib}/{sub}/{triple}");
             let Ok(rd) = std::fs::read_dir(&dir) else { continue };
             for e in rd.flatten() {
                 let version = e.file_name().to_string_lossy().into_owned();

@@ -924,6 +924,7 @@ impl Cg<'_> {
             .map(|(p, f)| (DONE, p, f, None))
             .collect();
         self.emit_ctor_list("llvm.global_dtors", &dtors)?;
+        self.emit_global_annotations()?;
         self.cov_emit();
         self.emit_used_lists()
     }
@@ -1085,7 +1086,7 @@ impl Cg<'_> {
     }
 
     /// An `appending` array global of `elems` of type `elem`.
-    fn appending_global(
+    pub(crate) fn appending_global(
         &mut self,
         name: &str,
         elem: LTy,

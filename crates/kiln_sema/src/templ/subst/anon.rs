@@ -222,8 +222,8 @@ impl Substituter<'_, '_, '_> {
         self.copy_attrs(spec, def, true);
     }
 
-    /// Copies `def`'s attributes onto `spec`: only `aligned`/`cleanup`
-    /// when `only_aligned`.
+    /// Copies `def`'s attributes onto `spec`: only `aligned`/`cleanup`/
+    /// `annotate` when `only_aligned`.
     fn copy_attrs(&mut self, spec: DeclId, def: DeclId, only_aligned: bool) {
         self.copy_annotations(spec, def);
         let ast = &self.sema.ast;
@@ -233,8 +233,12 @@ impl Substituter<'_, '_, '_> {
             .iter::<AttrId>(list)
             .map(|a| *ast.attrs.get(a))
             // A local variable's `cleanup` names a function, not a dependent
-            // entity (WP-807).
-            .filter(|n| !only_aligned || matches!(n.kind, AttrKind::ALIGNED | AttrKind::CLEANUP))
+            // entity (WP-807); clang's `annotate` is lowered on every
+            // instantiated variable (WP-1113).
+            .filter(|n| {
+                !only_aligned
+                    || matches!(n.kind, AttrKind::ALIGNED | AttrKind::CLEANUP | AttrKind::ANNOTATE)
+            })
             // clang does not clone a visibility attribute (`Clone = 0`):
             // codegen reads the pattern's (spec/codegen.md "Symbol
             // visibility"); a `mode` is applied to the substituted type.
