@@ -56,17 +56,23 @@ is [WP-243](BACKLOG.md) and is not part of 1.0.
 
 ## Modules
 
-<!-- update when WP-917 lands: BMI support, --precompile, -fmodule-output; what remains is P1689 scanning and an `import std` BMI -->
+Module files (`--precompile`, `-fmodule-output`) work. They are kiln's
+own format, so see the [user guide](USER_GUIDE.md#modules). What is
+missing (spec/modules.md §11.9):
 
-- There is **no binary module interface** (BMI). An imported module is
-  compiled from its interface source, again in every importing
-  translation unit, so a module imported by many TUs costs a compile per
-  importer.
-- `--precompile`, `-fmodule-output` and `-fmodule-header` are not
-  supported. `-fmodule-file=<path>` without a module name is accepted and
-  ignored. Use `-fmodule-file=<name>=<source>`.
-- CMake's C++20 module support (`CXX_SCAN_FOR_MODULES`, P1689 dependency
-  scanning) does not work with kiln yet.
+- **Dependency scanning** (P1689 output, `-fmodules-reduced-bmi`), so
+  CMake's C++20 module support (`CXX_SCAN_FOR_MODULES`, `FILE_SET
+  CXX_MODULES`) does not work with kiln yet.
+- **`-fmodule-header`** and header-unit module files. Header units work
+  from their headers.
+- **No `import std;` module-file cache.** `import std;` compiles libc++'s
+  `std.cppm` in every importing translation unit unless you precompile it
+  yourself (`--precompile std.cppm`, then `-fmodule-file=std=std.pcm`,
+  and link `std.o`).
+- **Module files hold sources, not a serialised AST**, so an importer
+  re-parses the module's text. Importing libc++'s `std` module file costs
+  about what compiling `std.cppm` in-process costs
+  ([COMPATIBILITY.md](COMPATIBILITY.md#c20-modules)).
 - In libc++ 22's suite, one test fails because `std.compat` imported over
   `std` does not keep the two global module fragments apart
   ([status/libcxx-m5.md](status/libcxx-m5.md)). WP-460 fixed it, but the

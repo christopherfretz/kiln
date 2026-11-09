@@ -22,9 +22,10 @@ limits are in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - C++26 contracts (P2900): `pre`, `post`, `contract_assert`, the four
   evaluation semantics (`-fcontract-evaluation-semantic=`), and a
   replaceable violation handler.
-- C++20 modules built from interface sources, header units, and
-  `import std;`.
-  <!-- update when WP-917 lands: binary module interfaces, --precompile, -fmodule-output -->
+- C++20 modules, header units and `import std;`, in one invocation or in
+  clang's two-step build: `--precompile`, `-fmodule-output`,
+  `-fmodule-file=`, `-fprebuilt-module-path=`. kiln's module files are
+  its own format.
 - Coroutines, exceptions, RTTI, `thread_local`, and clang's and GCC's
   common extensions and builtins.
 

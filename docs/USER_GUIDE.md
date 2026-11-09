@@ -144,28 +144,49 @@ probes"). For code that must tell kiln apart, test `__KILN__` and
 ### Modules
 
 C++20 modules work for `-fsyntax-only` and code generation from
-`-std=c++20` on. kiln has no binary module interface (BMI) yet. An
-imported module is compiled in-process from its interface source, so the
-flags name sources:
+`-std=c++20` on. They work in one invocation, where an importer compiles
+the interface source it is given, and in clang's two-step build with
+module files. kiln's module files use the `.pcm` extension and clang's
+flags, but the format is kiln's own (spec/modules.md §11): kiln refuses
+clang's module files with a diagnostic, and clang refuses kiln's.
 
-- `-fmodule-file=<name>=<path>` maps a module (or partition) name to its
-  interface source.
-- `-fprebuilt-module-path=<dir>` searches `<dir>` for `<name>.cppm`,
-  `.ixx` or `.cpp` (a partition `M:P` as `M-P.*`).
+- `--precompile m.cppm [-o m.pcm]` writes the module file of an interface
+  or partition unit, and nothing else.
+- `-c m.cppm -fmodule-output[=path]` writes the object and the module
+  file in one compile. Without a path the module file goes next to the
+  object (`-o x/m.o` gives `x/m.pcm`).
+- `-c m.pcm` compiles a module file into the interface's object.
+- `-fmodule-file=<name>=<path>` maps a module (or partition) name to a
+  module file or to its interface source. kiln tells them apart by
+  content, not by extension.
+- `-fprebuilt-module-path=<dir>` searches `<dir>` for `<name>.pcm`, then
+  `<name>.cppm`, `.ixx` or `.cpp` (a partition `M:P` as `M-P.*`).
 - `import std;` and `import std.compat;` are found in the LLVM
   directory's `share/libc++/v1/`.
 - Header units (`import <h>;`) are found like `#include`.
 
 To link, compile every module unit whose definitions you use, either as
-an input of the same command or separately with `-c`:
+an input of the same command or separately:
 
 ```sh
+# one invocation
 kiln++ -std=c++20 -fmodule-file=m=m.cppm m.cppm main.cpp -o prog
+# two steps
+kiln++ -std=c++20 -c m.cppm -fmodule-output -o m.o
+kiln++ -std=c++20 -fmodule-file=m=m.pcm main.cpp m.o -o prog
 ```
 
-`--precompile`, `-fmodule-output` and `-fmodule-header` are not
-supported yet. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md#modules).
-<!-- update when WP-917 lands: BMI ("source capsule"), --precompile, -fmodule-output[=], two-step compiles, mismatch diagnostics -->
+A module file records the options it was built with that change meaning
+(standard, target, language and codegen options). Importing it into a
+compile with different options is an error naming each option, as in
+clang. A missing, damaged or clang-built module file is a fatal error,
+never a crash. Module files may only be read by the kiln build that wrote
+them ([STABILITY.md](STABILITY.md#not-covered-may-change-in-any-release)).
+Rebuild them when you upgrade kiln.
+
+Dependency scanning (P1689, so CMake's module support),
+`-fmodule-header` and header-unit module files are not supported yet. See
+[KNOWN_ISSUES.md](KNOWN_ISSUES.md#modules).
 
 ## The Oven: compile-time evaluation
 
@@ -341,7 +362,8 @@ report, how to reduce a reproducer, and the controls:
 `KILN_BACKTRACE=1`.
 
 Exit status: 0 on success, 1 when an error was reported (including after
-a crash), and 70 after a crash under `-fno-crash-diagnostics`.
+a crash), and 70 after a crash under `-fno-crash-diagnostics` or when
+kiln cannot create its compile thread (lower `-fkiln-stack-size=`).
 
 If a crash looks security-relevant, for example it is triggered by
 untrusted input in a service that compiles it, follow

@@ -100,15 +100,13 @@ kiln is preparing its 1.0 release (version 0.0.1 until then). The
 current milestone, M8, builds real open-source projects with kiln. The
 milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
-<!-- update when WP-917 lands: Modules row (BMI, --precompile) -->
-
 | Area | State | Detail |
 |---|---|---|
 | C++98 to C++23 | done | [STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md) |
 | C++26 (Croydon DIS draft), reflection, contracts | done except 3 partial papers | [STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md) |
 | libc++ 22 / libc++ 19 / libstdc++ 14 | 99.2% / 98.3% / every header | [COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries) |
 | Debug info, sanitizers, gcov and source coverage | supported; gaps listed | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) |
-| Modules | supported, built from interface sources (no BMI yet) | [USER_GUIDE.md](docs/USER_GUIDE.md#modules) |
+| Modules | supported, with module files; no dependency scanning yet | [USER_GUIDE.md](docs/USER_GUIDE.md#modules) |
 | C | preprocessing only | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#c-mode) |
 | Platforms | Linux aarch64, Linux x86_64 | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#platforms) |
 
