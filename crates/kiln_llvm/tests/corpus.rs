@@ -1900,6 +1900,43 @@ fn debug_info() {
     );
 }
 
+/// §2.6: a struct type used only by a constant in a function's metadata
+/// attachment (a class-type template argument in its `DISubprogram`)
+/// still gets its definition, after the types LLVM's `TypeFinder` finds,
+/// so the text parses back (LLVM's own printer leaves it out).
+#[test]
+fn debug_attachment_struct_constant() {
+    let mut m = aarch64();
+    let w = m.types.named_struct("struct.W");
+    m.types.set_body(w, &[TypeId::I32], false).unwrap();
+    let seven = m.const_int(TypeId::I32, 7);
+    let c = m.const_struct(w, &[seven]).unwrap();
+    let v = m.md_const(c).unwrap();
+    let tp = m.md_specialized(
+        "DITemplateValueParameter",
+        false,
+        vec![("name", MdField::Str("x".into())), ("value", MdField::Node(Some(v)))],
+    );
+    let tps = m.md_tuple(&[Some(tp)]);
+    let sp = m.md_specialized(
+        "DISubprogram",
+        true,
+        vec![("name", MdField::Str("f".into())), ("templateParams", MdField::Node(Some(tps)))],
+    );
+    let dbg = m.md_kind("dbg");
+    let mut b = define(&mut m, "f", TypeId::VOID, &[]);
+    b.ret(None).unwrap();
+    b.func().add_metadata(dbg, sp);
+    // Not `check`: `opt -S` drops the definition again, so the text is no
+    // fixed point. It must still assemble and verify.
+    let text = m.to_text();
+    let w = text.find("%struct.W = type { i32 }\n").expect(&text);
+    let f = text.find("define dso_local void @f() !dbg !").expect(&text);
+    assert!(w < f, "{text}");
+    assert!(text.contains("!DITemplateValueParameter(name: \"x\", value: %struct.W { i32 7 })"));
+    common::llvm_accepts(&text);
+}
+
 /// §2.6: LLVM 19 debug records print on their own line before the
 /// instruction they are attached to, with the expression inline.
 #[test]
