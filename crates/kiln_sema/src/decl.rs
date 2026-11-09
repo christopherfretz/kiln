@@ -4162,6 +4162,14 @@ impl Sema<'_, '_> {
                 if !invalid_redecl {
                     pattern_prev = self.pattern_friend_prev(ctx, dname, new_fn);
                 }
+                // [dcl.inline]/6 holds now too (clang `MergeFunctionDecl`).
+                if let Some(p) = pattern_prev
+                    && ds.inline.is_some()
+                    && self.inline_after_definition(p, &fname, d.name_loc())
+                {
+                    invalid_redecl = true;
+                    pattern_prev = None;
+                }
             }
             None
         } else if friend && d.qualifier.is_none() && self.friend_template_apart {
@@ -4528,7 +4536,13 @@ impl Sema<'_, '_> {
                     // (clang `err_constexpr_redecl_mismatch`).
                     // An invalid previous declaration is not checked.
                     let (ok, nk) = (pspec.constexpr_kind(), spec.constexpr_kind());
-                    if ok != nk && !self.ast.decls.get(p).flags().contains(DeclFlags::INVALID) {
+                    if ds.inline.is_some() && self.inline_after_definition(p, &fname, d.name_loc())
+                    {
+                        prev_ok = None;
+                        invalid_redecl = true;
+                    } else if ok != nk
+                        && !self.ast.decls.get(p).flags().contains(DeclFlags::INVALID)
+                    {
                         let msg = self
                             .diag(DiagId::sema_constexpr_redecl_mismatch, d.name_loc())
                             .arg(nk as u8)
@@ -5795,6 +5809,27 @@ impl Sema<'_, '_> {
             return (true, None);
         }
         (independent, local)
+    }
+
+    /// [dcl.inline]/6: a function declared `inline` (at `at`) after a
+    /// non-inline definition `p`'s entity has (clang
+    /// `err_inline_decl_follows_def`, with a note at the definition).
+    /// Whether it was reported.
+    pub(crate) fn inline_after_definition(&mut self, p: DeclId, n: &str, at: Loc) -> bool {
+        let Some(def) = self.ast.definition(p) else { return false };
+        let Some(f) = self.ast.decls.function(def) else { return false };
+        if f.body.is_none()
+            || f.spec.is_inline()
+            || f.spec.implicit_inline()
+            || f.spec.is_deleted()
+            || f.spec.defaulted() != kiln_ast::decl::Defaulted::No
+        {
+            return false;
+        }
+        let msg = self.diag(DiagId::sema_inline_decl_follows_def, at).arg(n);
+        let msg = self.note_prev(msg, def, true);
+        self.emit(msg);
+        true
     }
 
     /// The previous declaration a variable redeclares when lookup finds

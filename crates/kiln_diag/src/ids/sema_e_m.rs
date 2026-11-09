@@ -221,6 +221,7 @@ sema_init_vector_element_failed = Error (3) "cannot initialize a vector element 
 sema_initializer_overrides = ExtWarn [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";
 sema_initializer_overrides_destructed = Error (1) "initializer would partially override prior initialization of object of type {0} with non-trivial destruction";
 sema_initializer_union_overrides = WarningError [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";
+sema_inline_decl_follows_def = Error (1) "inline declaration of '{0}' follows non-inline definition";
 sema_inline_declaration_block_scope = Error (1) "inline declaration of '{0}' not allowed in block scope";
 sema_inline_main = Error (0) "'main' is not allowed to be declared inline";
 sema_inline_namespace_mismatch = Error (0) "non-inline namespace cannot be reopened as inline";
