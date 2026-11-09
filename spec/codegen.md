@@ -1484,7 +1484,7 @@ unit as clang 19's `-flto` does (`CodeGenOpts.PrepareForLTO` /
   lto-two-tu-*-run.cpp` (two TUs built, linked and run, with the default
   linker and `-fuse-ld=lld`).
 
-### 5.4 Instrumentation (WP-941, WP-1003; `coverage/`)
+### 5.4 Instrumentation (WP-941, WP-1003, WP-1082; `coverage/`)
 `CodegenOptions::coverage` (`CoverageOptions`, set from spec/driver.md
 "Coverage flags") instruments the module as clang 19's frontend does;
 with no coverage flag the IR is unchanged, byte for byte.
@@ -1522,7 +1522,8 @@ with no coverage flag the IR is unchanged, byte for byte.
   without the pass there is none).
 - **Coverage mapping** (`-fcoverage-mapping` with the counters,
   `coverage/{mapping,records,encode,skipped}.rs`, WP-1003): clang 19
-  `CoverageMappingGen`, in every `-fclang-compat` mode.
+  `CoverageMappingGen`, plus clang 20+'s rules under
+  `-fclang-compat=20` or later (WP-1082, below).
   - *Regions.* `mapping.rs` ports `CounterCoverageMappingBuilder`
     statement for statement over the `pgo.rs` counters: code regions
     for bodies, statements, conditions and `?:`/`&&`/`||` operands; gap
@@ -1535,8 +1536,30 @@ with no coverage flag the IR is unchanged, byte for byte.
     (`getPreciseTokenLocEnd`), a `= default` body is one region (in a
     class at the `default` keyword, out of class at the declarator's
     last token), and a constructor call ends at its `)`/`}` or its last
-    written argument. Locations the AST does not keep (a condition's
-    `)`, a `;`, a case's `:`) are re-lexed from the spelling.
+    written argument. A concatenated string literal ends at its last
+    piece, a compound literal `(T){...}` at its `}`, and a qualified
+    base initializer `N::B(x)` starts at `N` (clang's
+    `ElaboratedTypeLoc`; the diagnostic location moves with it).
+    Locations the AST does not keep (a condition's `)`, a `;`, a case's
+    `:`) are re-lexed from the spelling. A `#x` stringizing in a macro
+    body is a nested expansion: its token is mapped at the `#x` (clang
+    `getNonScratchExpansionLoc`), so the literal ends there and gets a
+    region of its own.
+  - *clang 20+* (`-fclang-compat=20` or later, `Builder::v20`):
+    - an `&&`/`||` right operand's count starts at the end of the left
+      operand (a gap region between them when they are apart);
+    - a branch whose condition folds to a constant keeps its counter on
+      the side the constant takes and zeroes only the other side (clang
+      19 zeroes both);
+    - a `switch` without `default` has the cases' sum as its true side
+      and the rest as its false side (clang 19 has them the other way);
+    - an out count equal to the parent's after counter-expression
+      simplification (`IsCounterEqual`) starts no region, and a
+      `do ... while` body's termination survives the loop only when its
+      exit starts one, which gives a `do { ... } while (0)` macro body
+      its region;
+    - a statement expression's `return` does not terminate the
+      enclosing region.
   - *Skipped regions* (`skipped.rs`, clang `CoverageSourceInfo`): the
     groups the preprocessor skipped (`kiln_pp::PpCallbacks::
     source_range_skipped`), comments and empty-line runs, each with
@@ -1560,17 +1583,26 @@ with no coverage flag the IR is unchanged, byte for byte.
     instantiated class template; templates themselves get none) gets a
     zero record
     (`FuncHash` 0, one zero code region over its body) and its PGO name
-    in `__llvm_coverage_names`, so `llvm-cov` reports it at 0%.
+    in `__llvm_coverage_names`, so `llvm-cov` reports it at 0%. An
+    instantiated function, member function or conversion function
+    definition gets one too, as clang's `HandleTopLevelDecl` at the end
+    of `InstantiateFunctionDefinition`, even when only constant
+    evaluation used it (`kiln_ast::Decls::note_fn_def_inst` records the
+    instantiation and the top-level declaration it happened in;
+    `CovModule::cov_defer_insts` defers them in that order before each
+    later top-level member). Constructors, destructors, immediate
+    functions and the std builtins (`std::move`, ..., which their calls
+    never reference) get none that way. A lambda's conversion function
+    and static invoker are implicit, so a generic lambda's
+    specializations of them have no record.
   - Without `-fcoverage-mapping` none of this is emitted, and the
     counters are WP-941's, byte for byte.
-  - *Differences from clang* (spec/landed/codegen/WP-1003.md): clang
-    20+ (the `-fclang-compat=22` oracle) adds gap regions between
-    `&&`/`||` operands and real counters on folded branch regions,
-    which kiln does not write; a function template specialization or
-    class-template member instantiated only for constant evaluation gets
-    no zero record (clang gives it one); the string literal from `#x`
-    in a macro body maps no nested expansion region; generic lambdas'
-    and some immediate-invocation helpers' records differ.
+  - *Differences from clang* (spec/landed/codegen/WP-1003.md,
+    spec/landed/codegen/WP-1082.md): zero records of instantiations
+    kiln performs at a different point than clang (a class-template
+    member at its first use, clang at the end of the TU) come in a
+    different order; a condition clang's constant folder folds and
+    kiln's does not (`c || new int`) keeps both counters.
 - **Runtime.** Both modes link `libclang_rt.profile-<arch>.a` from the
   LLVM 19 compiler-rt (`/usr/lib/llvm-19/lib/clang/19/lib/linux/` on
   Debian, package `libclang-rt-19-dev`); the linking `clang++` adds it.
@@ -1594,8 +1626,8 @@ with no coverage flag the IR is unchanged, byte for byte.
   promise without the `bitcast` and the wrapper is `internal`; the
   comparison normalizes LLVM 19's `i1 @llvm.coro.end` to LLVM 22's
   `void` form plus `@llvm.coro.is_in_ramp` (`tests/ir_norm`).
-- Tests: `tests/codegen/{gcov,instrprof}_*.cpp` (IR against clang 19 and
-  22, `ir_vs_clang`), `scripts/coverage-compare.py` (builds and runs
+- Tests: `tests/codegen/{gcov,instrprof,coverage}_*.cpp` (IR against
+  clang 19 and 22, `ir_vs_clang`), `scripts/coverage-compare.py` (builds and runs
   `scripts/coverage/*.cpp` with both compilers and requires equal
   `llvm-profdata show --counts` records and `llvm-cov gcov` line counts,
   except the differences its `KNOWN` table names, which must stay

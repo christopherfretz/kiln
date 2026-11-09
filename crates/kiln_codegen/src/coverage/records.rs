@@ -158,11 +158,14 @@ impl Cg<'_> {
             let n = ast.decls.get(f);
             // `EmitTopLevelDecl` defers functions and methods only (a
             // constructor or destructor gets one from
-            // `HandleInlineFunctionDefinition`, never instantiated).
+            // `HandleInlineFunctionDefinition`, never instantiated). A
+            // std builtin (`std::move`, ...) is never referenced by its
+            // calls, so clang never instantiates it for them.
             if !matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion)
                 || n.has(DeclFlags::INVALID)
                 || n.has(DeclFlags::DEPENDENT_CTX)
                 || ast.decls.function(f).is_some_and(|x| x.spec.is_immediate())
+                || self.is_std_builtin(f)
             {
                 continue;
             }
@@ -172,12 +175,14 @@ impl Cg<'_> {
 
     /// clang `HandleInlineFunctionDefinition`'s coverage part: the
     /// member functions defined in class `rd` (and its nested classes)
-    /// get zero records unless emitted.
+    /// get zero records unless emitted. A closure type is not a
+    /// top-level declaration in clang, so an unused lambda gets none
+    /// (WP-1083).
     pub(crate) fn cov_defer_class(&mut self, rd: DeclId, depth: usize) {
-        if !self.opts.coverage.mapping || depth > 64 {
+        let ast = self.ast;
+        if !self.opts.coverage.mapping || depth > 64 || ast.closure_lambda(rd).is_some() {
             return;
         }
-        let ast = self.ast;
         let members: Vec<DeclId> = ast.decls.members(rd).collect();
         for m in members {
             let n = ast.decls.get(m);
