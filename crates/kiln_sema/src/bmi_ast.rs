@@ -663,7 +663,10 @@ impl Sema<'_, '_> {
         let sm = self.diags.sm();
         let bmi = &mut self.bmi;
         let file = |f| file_index(bmi, None, sm, f);
-        inst::value_bytes(&self.ast, sm, file, v, typed).map(Carried::Wire).ok_or(why)
+        let oven = self.oven.as_deref();
+        inst::value_bytes(&self.ast, oven, sm, file, v, typed)
+            .map(Carried::Wire)
+            .map_err(|w| w.unwrap_or(why))
     }
 }
 
@@ -716,8 +719,10 @@ const VERSIONED: u32 = u32::MAX;
 
 /// The section format version written (spec/modules.md §11.11
 /// "Encoding"): 2 adds instantiation keys, 3 the values of tags 5 to 9
-/// (WP-1047).
-const VERSION: u32 = 3;
+/// (WP-1047), 4 string literal, temporary and label pointer bases and
+/// alias template specialization, data member specification and
+/// annotation reflections (WP-1160).
+const VERSION: u32 = 4;
 
 fn put_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_le_bytes());
