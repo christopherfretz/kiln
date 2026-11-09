@@ -1106,6 +1106,8 @@ impl Sema<'_, '_> {
             return None;
         };
         self.act_on_namespace_name_use(t, target_loc);
+        // [temp.local]/6 (WP-1042).
+        self.check_template_param_shadow(name, name_loc);
         let ns = self.ast.resolve_alias(t);
         let mut prev = None;
         for p in self.lookup_current_scope(name) {

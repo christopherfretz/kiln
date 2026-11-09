@@ -1775,6 +1775,14 @@ impl Sema<'_, '_> {
             let m = self.diag(DiagId::sema_param_constexpr_spec, l).arg(which);
             self.emit(m);
         }
+        // [temp.local]/6 (a template parameter's own list is checked at
+        // its end; WP-1042).
+        if !nttp
+            && self.inst.stack.is_empty()
+            && let Some((n, l)) = d.name
+        {
+            self.check_template_param_shadow(n, l);
+        }
         let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
         // [dcl.align]/1: not on a function parameter.
@@ -3814,6 +3822,8 @@ impl Sema<'_, '_> {
         if let Some(id) = self.pending_alias_vla.take() {
             self.error(id, name_loc);
         }
+        // [temp.local]/6, as for a typedef (WP-1042).
+        self.check_template_param_shadow(name, name_loc);
         let mut d = Declarator::new(DeclaratorContext::File, name_loc);
         d.name = Some((name, name_loc));
         let ds = DeclSpec::new(name_loc);
@@ -8285,8 +8295,9 @@ impl Sema<'_, '_> {
         // [temp.local]/6: `friend class T;` naming a template parameter
         // redeclares it (clang's `DiagnoseTemplateParameterShadow` in
         // `ActOnTag`); the friend then declares a new class `T`, so
-        // `friend class Ts...;` expands no pack.
-        self.check_template_param_shadow(n, nloc);
+        // `friend class Ts...;` expands no pack. Tag lookup does not find
+        // a non-type parameter: `friend struct T;` then declares `::T`.
+        self.check_template_param_shadow_in(n, nloc, true);
         let lookup = self.lookup_name(n, LookupKind::Tag);
         let found = lookup.decls;
         // The innermost enclosing namespace's own tag of that name, also
@@ -8351,6 +8362,8 @@ impl Sema<'_, '_> {
         // class templates included (clang `CheckClassTemplate`'s
         // `CheckTemplateDeclScope`); the friend is still declared.
         let _ = self.check_template_in_local_class(false, Loc::INVALID);
+        // [temp.local]/6 (clang `CheckClassTemplate`; WP-1042).
+        self.check_template_param_shadow(n, nloc);
         self.check_friend_class_template_defaults(head);
         // [namespace.memdef]/3 stops the search at the innermost enclosing
         // namespace, so a member class template of an enclosing class
