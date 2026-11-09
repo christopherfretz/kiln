@@ -231,7 +231,10 @@ impl CodegenFlags {
             // "unknown argument '-fno-trapv'; did you mean '-fno-wrapv'?"
             // (WP-1044).
             "-fno-trapv" => {
-                return Some(Err(ArgError::UnknownSuggest(arg.to_owned(), "-fno-wrapv".to_owned())));
+                return Some(Err(ArgError::UnknownSuggest(
+                    arg.to_owned(),
+                    "-fno-wrapv".to_owned(),
+                )));
             }
             "-fwrapv-pointer" => set(&mut self.wrapv_pointer, true),
             "-fno-wrapv-pointer" => set(&mut self.wrapv_pointer, false),

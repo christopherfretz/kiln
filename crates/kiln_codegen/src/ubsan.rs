@@ -1014,7 +1014,8 @@ impl Cg<'_> {
         let w = self.m.types.int_width(ty).unwrap_or(64);
         // clang's `CreateSExt` to `i64` (only an operation of at most 64
         // bits gets here: `ub_overflow`).
-        let wide = |cg: &mut Self, x: V| if w < 64 { cg.cast(CastOp::SExt, x, LTy::I64) } else { x };
+        let wide =
+            |cg: &mut Self, x: V| if w < 64 { cg.cast(CastOp::SExt, x, LTy::I64) } else { x };
         let (l64, r64) = (wide(self, l), wide(self, r));
         let id = match op {
             BinaryOp::Add => 1,

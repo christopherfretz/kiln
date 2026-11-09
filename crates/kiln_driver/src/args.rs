@@ -849,21 +849,10 @@ impl Args {
             }
             // Valued options.
             if let Some((opt, value)) = split_valued(arg, argv.get(i).map(String::as_str)) {
-                if opt == "-ftrapv-handler"
-                    && let Valued::Next = value
-                {
+                if let Valued::Next = value {
                     i += 1;
-                    a.codegen.trapv_handler_arg(&argv[i - 1], xclang);
-                    continue;
                 }
-                match value {
-                    Valued::Joined(v) => a.valued(opt, v, &mut x),
-                    Valued::Next => {
-                        i += 1;
-                        a.valued(opt, &argv[i - 1], &mut x);
-                    }
-                    Valued::Missing => a.errors.push(ArgError::MissingValue(opt.to_owned())),
-                }
+                a.split_valued_arg(opt, value, argv.get(i - 1), xclang, &mut x);
                 continue;
             }
             if is_sanitize_merge(arg) {
@@ -904,9 +893,7 @@ impl Args {
             a.action = Action::Precompile;
         }
         a.errors.extend(a.coverage.errors());
-        if !a.clang22() {
-            a.errors.extend(a.sanitize_merge_written.iter().cloned().map(ArgError::Unknown));
-        }
+        a.errors.extend(a.unknown_at_compat_19());
         let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
         a
     }
@@ -925,6 +912,15 @@ impl Args {
     #[must_use]
     pub fn fp_model(&self) -> crate::fp_flags::FpModel {
         self.fp.resolve(self.predef.ofast, self.clang22(), &mut Vec::new())
+    }
+
+    /// The options clang 19 does not know, as its "unknown argument" at
+    /// `-fclang-compat=19` (WP-1044: the sanitize-merge flags).
+    fn unknown_at_compat_19(&self) -> Vec<ArgError> {
+        if self.clang22() {
+            return Vec::new();
+        }
+        self.sanitize_merge_written.iter().cloned().map(ArgError::Unknown).collect()
     }
 
     /// Whether clang 22's driver rules apply (`-fclang-compat=22`, the
@@ -961,6 +957,28 @@ impl Args {
             .filter(|i| i.lang.is_none())
             .filter_map(|&i| Lang::of_input(&i.path, self.mode).1.map(|p| (i, p)))
             .collect()
+    }
+
+    /// A valued option [`split_valued`] found: `next` is the argument
+    /// after it, its value when `value` is [`Valued::Next`].
+    fn split_valued_arg(
+        &mut self,
+        opt: &str,
+        value: Valued<'_>,
+        next: Option<&String>,
+        xclang: bool,
+        x: &mut Option<(Lang, bool)>,
+    ) {
+        match (value, next) {
+            (Valued::Next, Some(v)) if opt == "-ftrapv-handler" => {
+                self.codegen.trapv_handler_arg(v, xclang);
+            }
+            (Valued::Joined(v), _) => self.valued(opt, v, x),
+            (Valued::Next, Some(v)) => self.valued(opt, v, x),
+            (Valued::Next | Valued::Missing, _) => {
+                self.errors.push(ArgError::MissingValue(opt.to_owned()));
+            }
+        }
     }
 
     fn valued(&mut self, opt: &str, v: &str, x: &mut Option<(Lang, bool)>) {
