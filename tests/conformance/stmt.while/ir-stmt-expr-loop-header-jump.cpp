@@ -5,6 +5,7 @@
 // condition), a for condition and increment (exit; the increment), and a
 // switch condition (the enclosing loop). WP-1075; spec/sema.md §7.4a.
 //@ expect: ir
+//@ min-oracle: 22
 int g(int);
 int while_cond(int n) { while (({ if (g(n)) break; if (g(n + 1)) continue; n < 10; })) ++n; return n; }
 int do_cond(int n) { do { ++n; } while (({ if (g(n)) break; if (g(n + 1)) continue; true; })); return n; }
