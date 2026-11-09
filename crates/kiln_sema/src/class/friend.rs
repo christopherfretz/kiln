@@ -120,6 +120,94 @@ impl Sema<'_, '_> {
             && self.declaring_class(target).is_some_and(|c| !self.in_dependent_class(c))
     }
 
+    /// [temp.friend]/9: a non-template friend declaration with a
+    /// requires-clause, and a friend function template with a constraint
+    /// that depends on a template parameter of an enclosing template,
+    /// must be definitions (clang `ActOnFunctionDeclarator`:
+    /// `err_non_temp_friend_decl_with_requires_clause_must_be_def`,
+    /// `err_friend_decl_with_enclosing_temp_constraint_must_be_def`, at
+    /// the start of the declaration after any template head). Checked as
+    /// written, for a friend `f` that is not a definition; `f` is marked
+    /// invalid as in clang, which then reports nothing else about its
+    /// default arguments. A requires-clause outside a templated entity
+    /// is reported by `act_on_trailing_requires` instead.
+    fn check_constrained_friend_def(
+        &mut self,
+        f: DeclId,
+        head: Option<TemplateParamListId>,
+        ds: &DeclSpec,
+        d: &Declarator,
+    ) {
+        if !self.in_template() {
+            return;
+        }
+        let id = match head {
+            None => {
+                if !d.trailing_requires.is_some_and(|r| !self.is_err_expr(r)) {
+                    return;
+                }
+                DiagId::sema_non_temp_friend_decl_with_requires_clause_must_be_def
+            }
+            // An invalid template (`template<C<T> U>` for a unary `C`)
+            // was reported already.
+            Some(list)
+                if !self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID)
+                    && self.constraints_name_enclosing(list, d.trailing_requires) =>
+            {
+                DiagId::sema_friend_decl_with_enclosing_temp_constraint_must_be_def
+            }
+            Some(_) => return,
+        };
+        // Each declarator of `friend void f() requires C<T>, g() requires
+        // C<T>;` is reported at the same place.
+        let e = self.diag(id, ds.lead_cxx11.unwrap_or(ds.loc)).allow_duplicate();
+        self.emit(e);
+        self.ast.decls.set_flags(f, kiln_ast::decl::DeclFlags::INVALID);
+    }
+
+    /// Whether a constraint of a friend function template with head
+    /// `list` (a parameter's type-constraint, the head's requires-clause
+    /// or the trailing requires-clause `trailing`) names a template
+    /// parameter of an enclosing template, directly or through the
+    /// injected-class-name or a member typedef of the current
+    /// instantiation (clang `FriendConstraintsDependOnEnclosingTemplate`,
+    /// [temp.friend]/9). As in clang, a static data member or member
+    /// class of the enclosing template does not count.
+    fn constraints_name_enclosing(
+        &self,
+        list: TemplateParamListId,
+        trailing: Option<kiln_ast::ExprId>,
+    ) -> bool {
+        let l = *self.ast.templates.param_list(list);
+        if l.depth == 0 {
+            return false;
+        }
+        let mut cs: Vec<kiln_ast::ExprId> = self
+            .ast
+            .lists
+            .iter::<DeclId>(l.params)
+            .filter_map(|p| self.ast.template_parm(p).and_then(|i| i.constraint))
+            .collect();
+        cs.extend(l.requires);
+        cs.extend(trailing);
+        cs.retain(|&c| !self.is_err_expr(c));
+        if cs.is_empty() {
+            return false;
+        }
+        // A slot for every parameter index (`TemplateParmInfo::index` is
+        // a `u16`); only non-defining constrained friend templates get
+        // here.
+        let width = usize::from(u16::MAX) + 1;
+        let mut used = vec![false; width];
+        (0..u32::from(l.depth)).any(|depth| {
+            used.fill(false);
+            for &c in &cs {
+                self.mark_used_expr(c, depth, &mut used, 0);
+            }
+            used.contains(&true)
+        })
+    }
+
     /// [`Sema::declare_friend`]: true (after reporting it) if a friend
     /// declarator's type is not a function type, or contains an
     /// unexpanded pack ([temp.variadic]/12: `friend void f(Ts);`, which
@@ -233,6 +321,9 @@ impl Sema<'_, '_> {
         }
         if ds.invalid || d.invalid {
             self.ast.decls.set_flags(f, kiln_ast::decl::DeclFlags::INVALID);
+        }
+        if !def && self.inst.stack.is_empty() {
+            self.check_constrained_friend_def(f, head, ds, d);
         }
         if self.inst.stack.is_empty() {
             self.check_friend_default_args(f, d, def);

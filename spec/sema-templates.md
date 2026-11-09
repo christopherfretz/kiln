@@ -2571,11 +2571,33 @@ reports a dropped statement, part or declaration lookup.
   pattern's trailing requires-clause), so `friend int f(Base) requires
   (sizeof(T) > 0) {}` in `A<char>` and `A<int>` is two functions, not a
   redefinition (WP-779,
-  `temp.friend/p9-constrained-friend-distinct-general.cpp`). Gap: the
-  paragraph's two "must be a definition" errors (clang
-  `err_non_temp_friend_decl_with_requires_clause_must_be_def`,
-  `err_friend_decl_with_enclosing_temp_constraint_must_be_def`) are not
-  diagnosed.
+  `temp.friend/p9-constrained-friend-distinct-general.cpp`). Such a
+  friend must be a definition (`{`, `:`, `try`, `= default`, `= delete`;
+  WP-1164): in a templated class, `declare_friend`
+  (`check_constrained_friend_def`) reports a non-defining non-template
+  friend with a requires-clause as `non-template friend declaration with
+  a requires clause must be a definition` (clang
+  `err_non_temp_friend_decl_with_requires_clause_must_be_def`), and a
+  non-defining friend template whose type-constraint, head or trailing
+  requires-clause names a parameter of an enclosing template level
+  (`constraints_name_enclosing`, via `mark_used_expr` for each outer
+  depth; an alias or the injected-class-name of the enclosing template
+  counts, a static data member or member class does not, as clang's
+  `FriendConstraintsDependOnEnclosingTemplate`) as `friend declaration
+  with a constraint that depends on an enclosing template parameter must
+  be a definition` (`err_friend_decl_with_enclosing_temp_constraint_must_be_def`).
+  Both are at the declaration's start after its template head (the first
+  declaration specifier or C++11 attribute), once per declarator, and
+  make the friend invalid, so its default argument is not reported too
+  and nothing is instantiated from it. clang 19 and 22 agree
+  (`temp.friend/p9-constrained-friend-must-be-definition.cpp`; the
+  defining forms, instantiated twice, in
+  `p9-constrained-friend-definitions-run.cpp`). A [temp.friend]/5
+  member-template friend (`template<class U> friend R A<U>::f()
+  requires C<U>;`) is not checked here: its constraint names only its own
+  parameter (clang 22 reports it as a non-template friend; WP-1130's
+  `dependent-member-friend-constraints-overloads-run.cpp` relies on
+  accepting it).
 - A friend function or function template declared with a qualified name
   in a templated class (`template<class U> friend R N::f(X<U>);`,
   `friend R N::g(T);`) whose template head or type is dependent is not
@@ -2656,9 +2678,11 @@ reports a dropped statement, part or declaration lookup.
   diagnostic (a non-template one they diagnose), so the test is
   `skip(clang)`
   (`qualified-member-template-friend-mismatch-at-instantiation.cpp`).
-  Gap: [temp.friend]/9 ("friend declaration with a constraint that
-  depends on an enclosing template parameter must be a definition") is
-  not diagnosed; clang and g++ reject such a non-defining friend.
+  A qualified non-defining friend whose constraint names an enclosing
+  template parameter is rejected by [temp.friend]/9 as above (WP-1164).
+  Gap: kiln still also reports the declaration as matching nothing (at
+  definition for a non-template, at instantiation for a template); clang
+  marks it invalid before the redeclaration check.
 - A friend class (`friend class B<T>;`) is substituted and grants access
   (S3C). A dependent friend specialization (`friend struct X<T>;`,
   `friend class Y<T*>;`, `friend class ns::Z<T...>;`) is kept in the

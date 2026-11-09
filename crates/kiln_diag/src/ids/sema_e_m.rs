@@ -129,6 +129,8 @@ sema_fp_conversion_rank = ExtWarn [FloatConversionRank] (3) "ISO C++ does not al
 sema_frame_address = WarningOff [FrameAddress] (1) "calling '{0}' with a nonzero argument is unsafe";
 sema_friend_decl_with_def_arg_must_be_def = Error (0) "friend declaration specifying a default argument must be a definition";
 sema_friend_decl_with_def_arg_redeclared = Error (0) "friend declaration specifying a default argument must be the only declaration";
+// clang `err_friend_decl_with_enclosing_temp_constraint_must_be_def` ([temp.friend]/9, WP-1164)
+sema_friend_decl_with_enclosing_temp_constraint_must_be_def = Error (0) "friend declaration with a constraint that depends on an enclosing template parameter must be a definition";
 sema_friend_def_in_local_class = Error (0) "friend function cannot be defined in a local class";
 sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match any declaration in {1}";
 sema_friend_enum = Warning [FriendEnum] (0) "elaborated enum specifier cannot be declared as a friend";
