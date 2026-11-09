@@ -1920,11 +1920,9 @@ impl Sema<'_, '_> {
     pub fn act_on_misplaced_param_placeholder(
         &mut self,
         loc: Loc,
-        decltype_auto: bool,
+        kw: kiln_ast::types::AutoKeyword,
         site: u8,
     ) -> QualType {
-        use kiln_ast::types::AutoKeyword;
-        let kw = if decltype_auto { AutoKeyword::DecltypeAuto } else { AutoKeyword::Auto };
         self.auto_not_allowed(loc, kw, site);
         QualType::INT
     }

@@ -2495,6 +2495,11 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// operator `call_op`.
     fn lambda_sig(&mut self, call_op: Option<DeclId>) {
         let ast = self.ast;
+        // Its template parameters mangle with their real depth (clang
+        // `mangleTemplateParameter` prints `TL<d-1>_` for any non-zero
+        // depth): non-zero only for a never-dependent closure in a member
+        // template's signature (spec/sema-lambda.md §9), `UlTL0__E_`.
+        let saved_real = std::mem::replace(&mut self.real_depth, true);
         // The explicit template parameters (not those invented for
         // `auto` parameters) and the template-head's requires-clause
         // (clang `mangleLambdaSig`, cxx-abi issues 31 and 24).
@@ -2534,6 +2539,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             self.out.push('v');
         }
         self.fn_depth = saved;
+        self.real_depth = saved_real;
     }
 
     fn source_name(&mut self, s: &str) {

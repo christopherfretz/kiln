@@ -46,6 +46,11 @@ def load(path=TOML):
     with open(path, "rb") as f:
         data = tomllib.load(f)
     for name, p in data.items():
+        # A `local` row (WP-1148) builds a fixture under scripts/oss/: no
+        # url or tag to clone.
+        if p.get("local"):
+            p.setdefault("url", "")
+            p.setdefault("tag", "local")
         missing = [k for k in REQUIRED if k not in p]
         if missing:
             raise SystemExit(f"{path}: [{name}] lacks {', '.join(missing)}")
@@ -69,6 +74,8 @@ def load(path=TOML):
         p.setdefault("stage_cc", "bin/clang")
         p.setdefault("archive", False)
         p.setdefault("sha256", "")
+        p.setdefault("modules", False)
+        p.setdefault("local", "")
         if p["archive"] and not SHA256_RE.match(p["sha256"]):
             raise SystemExit(f"{path}: [{name}] archive = true needs the tarball's sha256")
         if not (isinstance(p["vmem_kb"], int) and 0 < p["vmem_kb"] <= VMEM_MAX_KB):
@@ -302,6 +309,8 @@ def main():
             print(f"P_{k.upper()}={q(str(p[k]))}")
         print(f"P_SUBMODULES={'1' if p['submodules'] else ''}")
         print(f"P_ARCHIVE={'1' if p['archive'] else ''}")
+        print(f"P_MODULES={'1' if p['modules'] else ''}")
+        print(f"P_LOCAL={q(p['local'])}")
         print("P_CONFIGURE=(" + " ".join(q(x) for x in p["configure"]) + ")")
         print("P_BUILD_TARGETS=(" + " ".join(q(x) for x in p["build_targets"]) + ")")
         print("P_DEPS=(" + " ".join(q(x) for x in p["deps"]) + ")")
