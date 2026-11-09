@@ -1028,7 +1028,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1005 | abi: lambda `$_N` numbering order differs from clang (kiln_abi mangle.rs:41) | WP-941 | open |
 | WP-1006 | abi: non-visible unnamed enum mangles `Ut_` vs clang `$_N` (mangle.rs:2339; xfail basic.link/unnamed-enum-internal-name-run.cpp) | WP-941 | open |
 | WP-1007 | codegen: instr function hash skips signature expressions (coverage/pgo.rs:140; coverage-compare KNOWN signature_exprs.cpp) | WP-941 | open |
-| WP-1008 | oven: compile-time evaluation choice differs from clang (fmt make_tm, basic_format_args), so libstdc++ header coverage differs | WP-941 | open |
+| WP-1008 | oven: compile-time evaluation choice differs from clang (fmt make_tm, basic_format_args), so libstdc++ header coverage differs | WP-941 | in progress |
 | WP-1009 | codegen: branch_on_bool `&&`/`\|\|`/`if` -g locations vs clang EmitBranchOnBoolExpr (IR only; expr.rs:1816) | WP-941 | open |
 | WP-1010 | debuginfo: coroutine wrapper debug locations (coro.rs:624, debuginfo/func.rs:153) | WP-941 | open |
 | WP-1011 | debuginfo: conversion-operator DI name (debuginfo/types.rs:958) | WP-941 | open |
