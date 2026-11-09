@@ -409,6 +409,9 @@ pub enum ArgError {
     /// "malformed sanitizer ignorelist: '{0}'": LLVM `SpecialCaseList`'s
     /// message (WP-1032).
     MalformedIgnorelist(String),
+    /// `-fsanitize=memtag-stack` on `AArch64` without the `mte` feature
+    /// (WP-1138; clang's "requires hardware support (+memtag)").
+    MemtagStackRequiresMte,
 }
 
 /// The parsed command line.
@@ -892,7 +895,7 @@ impl Args {
         if a.precompile && matches!(a.action, Action::Link | Action::Compile) {
             a.action = Action::Precompile;
         }
-        a.errors.extend(a.coverage.errors());
+        a.errors.extend(a.coverage.errors().into_iter().chain(a.debug.errors()));
         let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
         a.errors.extend(a.unknown_at_compat_19());
         a
