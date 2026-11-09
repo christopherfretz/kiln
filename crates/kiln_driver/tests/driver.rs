@@ -563,7 +563,11 @@ fn verbose_search_lists_match_clang() {
         };
         assert!(clang.status.success(), "clang++-19 {args:?} failed");
         let want = search_block(&String::from_utf8_lossy(&clang.stderr), "clang -cc1 version");
-        let o = kiln(&args, "");
+        // libc++'s headers are the LLVM installation's: clang 19's here
+        // (kiln's default is LLVM 22, spec/driver.md "LLVM discovery").
+        let mut kargs = args.to_vec();
+        kargs.push("--llvm-dir=/usr/lib/llvm-19");
+        let o = kiln(&kargs, "");
         assert_eq!(o.code, 0, "{}", o.stderr);
         let got = search_block(&o.stderr, "kiln -cc1 version");
         assert_eq!(got, want, "{target} {stdlib} ({})", path.display());

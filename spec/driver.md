@@ -66,6 +66,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-stdlib=libstdc++` / `libc++` | C++ standard library headers (default libstdc++) |
 | `--gcc-toolchain=<dir>` | joined only: the GCC installation search looks under `<dir>` instead of `<sysroot>/usr` (see "Toolchain") |
 | `--gcc-install-dir=<dir>` | joined only: `<dir>` (`.../lib/gcc/<triple>/<version>`) is the GCC installation; wins over `--gcc-toolchain=`; without a `crtbegin.o` in it, `'<dir>' does not contain a GCC installation` and no GCC |
+| `--llvm-dir=<dir>` | joined only, last wins (WP-1016): `<dir>` is the LLVM installation kiln drives ("LLVM discovery"); not one, or not LLVM 19 or 22, is an error |
 | `-fexperimental-library`, `-fno-experimental-library` | libc++'s experimental library: `__has_feature(experimental_library)` and `__has_extension(experimental_library)` are 1 (a `kiln_pp` feature overlay, as clang's cc1 flag; libc++ derives `_LIBCPP_ENABLE_EXPERIMENTAL` from it), and the link step gets `-fexperimental-library` (clang adds `-lc++experimental`); the last wins (`Args::experimental_library`, WP-461) |
 | `--target=<triple>` | `aarch64`/`arm64` or `x86_64`/`amd64` Linux; anything else is an error |
 | `-march=<arch>[+ext...]`, `-mcpu=<cpu>[+ext...]`, `-msve-vector-bits=<N\|scalable>`, `-target-feature <±feat>` (usually via `-Xclang`) | AArch64 target features and the `__ARM_*` predefines ("Target features" below, WP-459, WP-469) |
