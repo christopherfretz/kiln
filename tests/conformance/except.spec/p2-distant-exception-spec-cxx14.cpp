@@ -7,39 +7,43 @@
 // the place an abstract declarator's name would go, and for a pointer to
 // member at its nested-name-specifier. The type is still built, but the
 // declaration is invalid, so the rest of its declaration group is not
-// declared (g2). kiln accepted all of these. WP-1102.
+// declared (g2), and an invalid function redeclares nothing (h2). kiln
+// accepted all of these. WP-1102.
 //@ std: c++14
 //@ expect: compile-fail
 //@ args: -ferror-limit=0
 //@ strict-diags
-//@ diag: 41:9 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 42:11 error "exception specifications are not allowed beyond a single level of indirection"
 //@ diag: 43:9 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 44:8 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 45:16 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 46:8 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 47:12 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 49:15 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 50:16 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 50:40 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 51:15 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 52:23 error "exception specifications are not allowed in type aliases"
-//@ diag: 52:19 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 54:11 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 55:11 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 57:35 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 44:11 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 46:11 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 47:9 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 48:8 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 49:16 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 50:8 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 51:12 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 53:15 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 54:16 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 54:40 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 55:15 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 56:23 error "exception specifications are not allowed in type aliases"
+//@ diag: 56:19 error "exception specifications are not allowed beyond a single level of indirection"
 //@ diag: 58:11 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 59:24 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 61:11 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 62:24 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 59:11 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 61:35 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 62:11 error "exception specifications are not allowed beyond a single level of indirection"
 //@ diag: 63:24 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 65:9 error "exception specifications are not allowed beyond a single level of indirection"
-//@ diag: 66:14 error "use of undeclared identifier 'g2'"
+//@ diag: 65:11 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 66:24 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 67:24 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 69:9 error "exception specifications are not allowed beyond a single level of indirection"
+//@ diag: 70:14 error "use of undeclared identifier 'g2'"
 
 struct S;
 template <class T> struct X {};
 void (**j)() throw(int);
 void (**(*h())())() throw(int);
+void (*h2())() throw(int);
+void (**(*h2())())() throw(int);
 void (**k)() noexcept(false);
 void (*arr[2])() throw();
 extern void (*&r)() noexcept;

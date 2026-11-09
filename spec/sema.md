@@ -3579,6 +3579,29 @@ specification as written (`TypeNames` prints ` noexcept`,
   emits a nested declarator's outer chunk first. From C++17 the
   specification is part of the type and is allowed. Tests:
   `tests/conformance/except.spec/exception-spec-in-typedef-*.cpp`.
+- **Beyond one level of indirection** before C++17 (C++14
+  [except.spec]/2, WP-1102; clang `CheckDistantExceptionSpec`):
+  `type_for_declarator_at` checks each pointer, reference, array and
+  pointer-to-member chunk it applies (`is_distant_exception_spec`): when
+  the type built so far is a pointer or pointer to member (through
+  sugar, `exc_pointee`) to a function type with a written specification,
+  `exception specifications are not allowed beyond a single level of
+  indirection` (`sema_distant_exception_spec`). It is at the
+  declarator-id, at the place an abstract declarator's name would go
+  (`abstract_at`), and for a pointer to member at its
+  nested-name-specifier. The type is still built (no pointer to member
+  is formed: `int`) and the declaration is invalid
+  (`declarator_distant_exc`, taken by `act_on_declarator` and
+  `act_on_param_declarator`); like clang's `Declarator::InvalidType` it
+  sticks for the rest of the declaration group
+  (`declarator_type_invalid`), whose later declarators are not declared.
+  So `void (**j)() throw(int);`, `void (**(*h())())() noexcept;`, an
+  array of such pointers, a parameter, a template argument, a
+  `new`/`sizeof`/cast type-id are errors, and `void (*fp)() noexcept`,
+  `void (*h())() noexcept`, `void (**k)(void pfa() throw(int))` are
+  not. From C++17 the specification is part of the type and allowed
+  anywhere. Tests: `except.spec/p2-distant-exception-spec-cxx14.cpp`,
+  `except.spec/p2-distant-exception-spec-ok-cxx{14,17}.cpp`.
 - **`noexcept`** is `ExcSpec::BasicNoexcept`.
 - **`act_on_noexcept_spec(e, loc, start)`** ([except.spec]/2): `e` is
   a contextually converted constant expression of type `bool`
@@ -3732,10 +3755,14 @@ specification as written (`TypeNames` prints ` noexcept`,
   (`implicit_thrown_types`: the union of the implicit callees' dynamic
   lists, any type when one is noexcept(false)) is compared type by type
   (`list_allows_more`). An implicit overrider is also held to the
-  `final` and return-type rules ([class.virtual]/4, /8; WP-1078,
-  `check_implicit_overrider`): clang's `declaration of 'operator=' overrides
-  a 'final' function` and `virtual function 'operator=' has a different
-  return type`, at the class name, once per overridden function. They run
+  calling-convention, `final` and return-type rules ([class.virtual]/4,
+  /8; WP-1078, WP-1103, `check_implicit_overrider`): clang's `virtual
+  function '~D' has different calling convention attributes`
+  (`check_override_cc`, clang `CheckOverridingFunctionAttributes`; test
+  `dcl.attr.cconv/override-cc-implicit-dtor.cpp`), `declaration of
+  'operator=' overrides a 'final' function` and `virtual function
+  'operator=' has a different return type`, at the class name, once per
+  overridden function, in that order. They run
   inside a `SynthKind::Declaring` context, so the first error of each
   implicit declaration carries `while declaring the implicit copy
   assignment operator for 'D'` (clang `DeclaringSpecialMember`); in a
@@ -3753,9 +3780,14 @@ specification as written (`TypeNames` prints ` noexcept`,
   19 and 22 (whose loop indexes the source with a constant), each of the
   base's parameter types is compared with the overrider's FIRST
   parameter type; [conv.fctptr] conversions share the helper
-  (`param_exc_specs_error`) and the quirk. Tests:
+  (`param_exc_specs_error`) and the quirk. The specifications compared
+  are the written ones (`underlying_fn_proto` walks sugar,
+  `sugared_pointee`): from C++17 `void (*)() noexcept(false)` and
+  `void (*)()` are one type, so the overrider overrides, yet the two
+  differ (WP-1102). Tests:
   `class.virtual/implicit-overrider{,-ok}.cpp`,
   `except.spec/override-nested-exception-spec-{cxx14,cxx17,ok}.cpp`,
+  `except.spec/override-nested-exception-spec-noexcept-false-cxx{17,26}.cpp`,
   `class.virtual/exception-spec-dynamic.cpp`,
   `class.virtual/exception-spec-dynamic-pack-nested.cpp`,
   `class.virtual/exception-spec-implicit{,-dynamic}{,-ok}.cpp`,

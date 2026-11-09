@@ -2918,7 +2918,8 @@ impl Sema<'_, '_> {
             && ds.friend.is_none()
             && !matches!(ds.storage, Some((StorageSpec::Static, _)));
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
-        let distant_invalid = std::mem::take(&mut self.declarator_distant_exc);
+        // Left set for `act_on_function`, which takes it.
+        let distant_invalid = self.declarator_distant_exc;
         // clang's `Declarator::InvalidType` sticks for the rest of the group.
         self.declarator_type_invalid |= distant_invalid;
         self.declarator_field = false;
@@ -4107,6 +4108,10 @@ impl Sema<'_, '_> {
         // `R::h(int);` after "a type specifier is required", or after an
         // unknown type name; WP-411).
         invalid_decl |= d.special.is_none() && (ds.type_error || !ds.has_type_specifier());
+        // So is one whose type has an exception specification beyond one
+        // level of indirection (`void (**(*h())())() throw(int);`; clang
+        // `D.isInvalidType()`, WP-1102).
+        invalid_decl |= std::mem::take(&mut self.declarator_distant_exc);
         let mut invalid_redecl = invalid_decl;
         // A redeclaration of an invalid declaration (below).
         let mut prev_invalid = false;
