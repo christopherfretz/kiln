@@ -1849,7 +1849,8 @@ impl Substituter<'_, '_, '_> {
             let nns = self.nns(mf.nns, loc)?;
             let ty = self.ty(ty, loc)?;
             let depth = self.args.retained_depth(mf.depth());
-            return Ok(self.sema.instantiate_member_friend(&mf, nns, ty, depth, loc));
+            let at = (depth, self.args);
+            return Ok(self.sema.instantiate_member_friend(&mf, nns, ty, at, loc));
         }
         match self.sema.ast.decls.friend_target(d) {
             FriendTarget::Type { ty, owned_tag } => {
