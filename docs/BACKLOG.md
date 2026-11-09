@@ -1032,7 +1032,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1019 | oven: mark volatile locals, heap objects and volatile members (Alloc flag bit); flips expr.const/read-volatile-local-and-heap.cpp | WP-948 | open |
 | WP-1020 | oven: `qb[3].x` at member offset 0 skips the Field op (compile.rs ~4843), so past-end note wording differs (wording only) | WP-948 | open |
 | WP-1021 | oven: RefChk for reference parameters/members and clang-compat 19 mode | WP-948 | open |
-| WP-982 | modules step 2: kiln-scan-deps (P1689r5, clang-scan-deps-<major> name), CMake FILE_SET CXX_MODULES end-to-end test | WP-917 | open |
+| WP-982 | modules step 2: kiln-scan-deps (P1689r5, clang-scan-deps-<major> name), CMake FILE_SET CXX_MODULES end-to-end test | WP-917 | in progress |
 | WP-983 | modules: header units as BMIs (-fmodule-header[=user|system], header-unit capsule kind, import "h" finds the .pcm) | WP-917 | open |
 | WP-984 | modules: import std; BMI cache keyed by fingerprint, CMake CXX_MODULE_STD, two-step import std harness test | WP-917 | open |
 | WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | open |

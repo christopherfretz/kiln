@@ -40,6 +40,10 @@ pub struct ModuleOptions {
     /// The libc++ module source directory (`<llvm>/share/libc++/v1`),
     /// holding `std.cppm` and `std.compat.cppm`.
     pub std_dir: Option<PathBuf>,
+    /// Dependency scanning (`kiln-scan-deps`, spec/modules.md §11.9):
+    /// module directives are recorded ([`Preprocessor::scanned_imports`])
+    /// and no import is performed; a header-unit import is an error.
+    pub scan: bool,
 }
 
 /// A consumed module or import directive ([cpp.module], [cpp.import]).
@@ -140,6 +144,9 @@ pub(crate) struct ModState {
     /// The main unit's module declaration: its key and, when it is
     /// importable, its kind.
     main_unit: Option<(String, Option<UnitKind>)>,
+    /// With [`ModuleOptions::scan`]: the main unit's named-module imports
+    /// (`M`, `M:P`), in order, without duplicates.
+    scanned: Vec<String>,
 }
 
 impl ModState {
@@ -302,16 +309,28 @@ impl Preprocessor<'_, '_> {
             _ => None,
         };
         let header = match &d.kind {
-            DirectiveKind::Import { header: true, key, name_span, .. } => {
-                Some((key.clone(), *name_span))
+            DirectiveKind::Import { header: true, key, display, name_span } => {
+                Some((key.clone(), display.clone(), *name_span))
             }
             _ => None,
         };
         self.queue(Marker::Module { span: t.span, export, import, directive: Some(d) });
+        if let Some(m) = self.modules.as_mut().filter(|m| m.opts.scan) {
+            // Scanning records what the unit needs and reads nothing.
+            if let Some((key, _)) = perform
+                && !m.scanned.contains(&key)
+            {
+                m.scanned.push(key);
+            }
+            if let Some((_, shown, span)) = header {
+                self.emit(Diag::new(DiagId::pp_scan_header_unit, span).arg(shown));
+            }
+            return;
+        }
         if let Some((key, span)) = perform {
             self.import_module(&key, span);
         }
-        if let Some((key, span)) = header {
+        if let Some((key, _, span)) = header {
             self.import_header(key, span);
         }
     }
@@ -716,6 +735,13 @@ impl Preprocessor<'_, '_> {
     /// one.
     pub fn main_module_unit(&self) -> Option<(String, Option<UnitKind>)> {
         self.modules.as_ref()?.main_unit.clone()
+    }
+
+    /// With [`ModuleOptions::scan`]: the named modules the main unit
+    /// imports (`M`, `M:P`; an implementation unit's implicit import of
+    /// its interface included), in order, without duplicates.
+    pub fn scanned_imports(&self) -> &[String] {
+        self.modules.as_ref().map_or(&[], |m| &m.scanned)
     }
 
     /// Whose lookups a request made now belongs to: that of the innermost
