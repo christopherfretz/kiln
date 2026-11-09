@@ -1,5 +1,5 @@
-// Constant emission of array initializers (WP-1008, spec/codegen.md
-// "Constant emission of initializers"): clang `AggExprEmitter::
+// Constant emission of array initializers (WP-1008,
+// spec/landed/codegen/WP-1008.md "Constant emission of initializers"): clang `AggExprEmitter::
 // EmitArrayInit` copies an array of trivially copyable elements whose
 // explicit elements take more than 16 bytes from a private `constinit`
 // global when `ConstantEmitter::tryEmitForInitializer` can emit the list,
@@ -127,4 +127,30 @@ using A5 = S[5];
 void temporary() {
   const A5& r = A5{1, 2, 3, 4, 5};
   use(r);
+}
+
+// A class with constexpr constructors (an argument-list view): a single
+// object, local or temporary, calls its constructor (clang's
+// `EmitCXXConstructExpr` never folds one), while an array list of them
+// is a `constinit` copy.
+class Args {
+  unsigned long long desc_;
+  union {
+    const int* ints_;
+    const char* chars_;
+  };
+
+public:
+  constexpr Args() : desc_(0), ints_(nullptr) {}
+  constexpr Args(const int* a, int c) : desc_(c | 4), ints_(a) {}
+};
+void take(Args);
+void args_local() {
+  Args a;
+  use(&a);
+  take(Args(nullptr, 3));
+}
+void args_array() {
+  Args a[2] = {Args(), Args(nullptr, 2)};
+  use(&a);
 }
