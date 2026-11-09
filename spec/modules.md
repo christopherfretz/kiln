@@ -1237,8 +1237,11 @@ value`, `an aggregate holding a pointer`, `an aggregate holding a union`,
 all, the parenthesis is left out. The reader accepts both kinds, so
 mixing them in one build is fine.
 
-On libc++ 19's `std.cppm`, 2900 results are carried. Of the evaluations
-that are not carried, 10142 happen inside a template instantiation, 141
+On libc++ 19's `std.cppm`, part 1 carried 2900 results, and part 2
+item 1 carries 8774, 5744 of them inside template instantiations (most
+of the rest in alias template substitution and default-argument checking
+frames, which record no arguments). Before part 2, of the evaluations
+that were not carried, 10142 happened inside a template instantiation, 141
 are two evaluations at one position, 74 failed, 23
 are at positions a replay does not reproduce, 13 have a value whose type
 is not its expression's, 6 are aggregates holding a pointer, and one
@@ -1380,6 +1383,61 @@ calls two of the functions in a `static_assert` and at run time.
 - Commands as for Part 2a; the textual runs compile the module's body
   as a header; clang adds `-fconstexpr-steps=100000000` for the
   constexpr module.
+
+**Part 2 item 1, results inside instantiations (WP-1046).** Same method
+(harness profile, aarch64, `/usr/bin/time`, load ~20; precompile median of
+3, imports median of 5, interleaved). "Part 1" is the base commit's binary
+(cfa635ab3), "Part 2" this one. The harness profile has 16 codegen units
+and no LTO, and the base binary happens to be about 15% faster than every
+other build of this period on a plain constexpr TU (0.17 s against 0.20 to
+0.21 s for five unrelated branches), so compare kind 1 with kind 2 within
+a binary. Workloads: the `import std;` program of Part 2a, `import std;`
+with an empty `main` (a use of the section that finds nothing), and a
+template-heavy constexpr interface: 64 instantiations `H<i>` of a class
+whose static member runs a 50,000-iteration loop, checked by a
+`static_assert`, a function template `pick<i>` with a local `constexpr`
+variable and `if constexpr`, and `Buf<i>` whose bound is `H<i>::slot`,
+imported by a program that names them in a `static_assert` and at run
+time.
+
+| run | `import std;` (libc++ 19) | `import std;`, empty `main` | template-heavy module |
+|---|---|---|---|
+| Part 1 `--precompile`, kind 1 | 1.13 s, 98.9 MiB, 8,993,259 B | | 0.17 s, 13.4 MiB, 25,990 B |
+| Part 1 `--precompile`, kind 2 | 1.06 s, 99.5 MiB, 9,131,988 B | | 0.17 s, 13.4 MiB, 32,087 B |
+| Part 2 `--precompile`, kind 1 | 1.16 s, 98.2 MiB, 8,990,956 B | | 0.22 s, 12.9 MiB, 25,990 B |
+| Part 2 `--precompile`, kind 2 | 1.15 s, 101.3 MiB, 9,840,073 B | | 0.23 s, 13.3 MiB, 70,695 B |
+| Part 1 import, kind 1, `-c` | 1.44 s, 97.4 MiB | 1.11 s, 91.7 MiB | 0.18 s, 60.9 MiB |
+| Part 1 import, kind 2, `-c` | 1.42 s, 96.6 MiB | 1.11 s, 91.2 MiB | 0.19 s, 60.9 MiB |
+| Part 2 import, kind 1, `-c` | 1.52 s, 96.5 MiB | 1.19 s, 91.8 MiB | 0.24 s, 60.9 MiB |
+| Part 2 import, kind 2, `-c` | 1.54 s, 98.4 MiB | 1.18 s, 92.1 MiB | **0.06 s**, 60.9 MiB |
+| Part 2 import, kind 1, `-fsyntax-only` | 1.20 s, 95.6 MiB | | 0.22 s, 12.0 MiB |
+| Part 2 import, kind 2, `-fsyntax-only` | 1.20 s, 98.2 MiB | | **0.04 s**, 11.7 MiB |
+| clang 19 `--precompile` | | | 3.50 s, 86.4 MiB |
+| clang 19 import, `-c` | 0.37 s, 160.4 MiB | | 0.01 s, 90.8 MiB |
+
+- Carried: `std` 8774 results (part 1: 2889 from this build), 5744 of
+  them inside instantiations: about 5744 of the 10,142 are now carried. The
+  importer's `-fconstexpr-report=` evaluations: 20,350 (kind 1), 17,464
+  (part 1), 9006 (part 2). The template-heavy module carries 513 (part 1:
+  129), 384 inside instantiations, and its importer drops from 578
+  evaluations and 3,329,216 steps (part 1: 449 and 3,264,640) to 65 and 0.
+- Section size: `std`'s grows from 138,729 B to 849,117 B (6.1x, about
+  97 B per result against 48 B: each instantiation's key is written once,
+  but every entry has a `u32` index and eight `u32` position fields); the
+  template-heavy module's from 6,097 B to 44,705 B. A compact encoding is
+  a follow-up.
+- Imports that find little in the section do not slow down: a second run
+  of `std`'s `-c` import over 9 interleaved rounds gives 1.54 s for kind 1
+  and 1.53 s for kind 2, and the empty `main` 1.19 s and 1.18 s. The
+  table costs about 1 to 2 MiB of RSS on `std`. `std`'s own constant work
+  is about 15 ms, so its import time is still the replay's. The eager
+  decode stays: a lazy table would save at most the decode, which is
+  within noise here.
+- Kind-1 files are byte-identical between the two binaries apart from the
+  resource directory's path (its length prefixes and the checksum).
+- Commands as for Part 2a, with `-fkiln-bmi-kind=1|2` at the precompile;
+  the report runs add `-fconstexpr-report=r.json` to the import, and the
+  `-v` note gives the carried counts.
 
 #### Part 2
 
