@@ -414,8 +414,9 @@ impl Sema<'_, '_> {
                 None => return self.recover_err(&kids, loc),
             }
         }
-        // [dcl.type.auto.deduct]: `new auto(e)`.
-        if self.is_undeduced_auto(elem) {
+        // [dcl.type.auto.deduct]: `new auto(e)`, and a placeholder under
+        // pointer and member-pointer declarators (`new auto Q::*(&Q::m)`).
+        if self.is_undeduced_auto(elem) || self.contains_undeduced_auto(elem) {
             if let Some(&(_, at)) = arrays.first() {
                 self.error(DiagId::sema_new_array_of_auto, at);
                 return self.recover_err(&kids, loc);
@@ -819,6 +820,20 @@ impl Sema<'_, '_> {
         if self.is_error_type(ety) {
             return None;
         }
+        // Below a declarator, deduction is as for a call
+        // ([temp.deduct.call]/2-4): `new auto Q::*(&R::m)` is clang's
+        // `err_auto_new_deduction_failure`.
+        if !self.is_undeduced_auto(declared) {
+            let r = self.deduce_from(declared, e);
+            if r.is_none() {
+                let msg = self
+                    .diag(DiagId::sema_new_auto_incompatible_arg, loc)
+                    .arg(self.ty_arg(declared))
+                    .arg(self.ty_arg(ety));
+                self.emit(msg);
+            }
+            return r;
+        }
         let t = &self.ast.types;
         let base = if t.is_array(ety) {
             let el = t.element(ety).unwrap_or(QualType::ERROR);
@@ -835,7 +850,8 @@ impl Sema<'_, '_> {
     }
 
     /// True if `t` is, or is a compound type built on, an undeduced
-    /// placeholder (`new auto*(p)`, unsupported).
+    /// placeholder; one the deduction walk does not reach (an array of
+    /// it) is unsupported.
     fn contains_auto(&self, t: QualType) -> bool {
         let mut t = t;
         loop {

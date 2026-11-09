@@ -12,6 +12,8 @@ sema_neon_vector_bad_size = Error (0) "Neon vector size must be 64 or 128 bits";
 sema_nested_name_spec_non_tag = Error (1) "type {0} cannot be used prior to '::' because it has no members";
 sema_new_array_of_auto = Error (0) "cannot allocate array of 'auto'";
 sema_new_array_size_unknown = Error (0) "array size must be specified in new expression with no initializer";
+// ----- WP-1135 (clang `err_auto_new_deduction_failure`)
+sema_new_auto_incompatible_arg = Error (2) "new expression for type {0} has incompatible constructor argument of type {1}";
 sema_new_auto_multiple_args = Error (1) "new expression for type {0} contains multiple constructor arguments";
 sema_new_auto_requires_ctor_arg = Error (1) "new expression for type {0} requires a constructor argument";
 sema_new_dangling_initializer_list = Warning [DanglingInitializerList] (1) "array backing {0:initializer list subobject of the allocated object|the allocated initializer list} will be destroyed at the end of the full-expression";

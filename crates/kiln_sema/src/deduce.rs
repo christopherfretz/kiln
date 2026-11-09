@@ -404,7 +404,8 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Matches `p` (pointers down to a placeholder) against `a`, returning
+    /// Matches `p` (pointers, member pointers and function return types
+    /// down to a placeholder) against `a`, returning
     /// `p` with the placeholder replaced; the placeholder deduces `a`
     /// without the cv-qualifiers written on it ([temp.deduct.call]/4.2
     /// allows the extra qualification). `p`'s own top-level cv is the
@@ -424,7 +425,9 @@ impl Sema<'_, '_> {
                     self.ast.types.qualify(r, p.quals())
                 });
             }
-            v @ (TypeView::Pointer(_) | TypeView::Function(_)) => v,
+            v @ (TypeView::Pointer(_) | TypeView::MemberPointer { .. } | TypeView::Function(_)) => {
+                v
+            }
             _ => t.canonical_view(p),
         };
         match view {
@@ -453,6 +456,21 @@ impl Sema<'_, '_> {
                 let TypeView::Pointer(ap) = t.canonical_view(a) else { return None };
                 let inner = self.deduce_match(pp, ap)?;
                 let r = self.ast.types.pointer_to(inner);
+                Some(if pq.is_empty() { r } else { self.ast.types.qualify(r, pq) })
+            }
+            // `auto Q::*` against `int R::*`: the classes match exactly
+            // (no derived-to-base adjustment, [temp.deduct.call]/4), the
+            // pointee recurses. The written class keeps its sugar.
+            TypeView::MemberPointer { pointee, class } => {
+                let TypeView::MemberPointer { pointee: ap, class: ac } = t.canonical_view(a)
+                else {
+                    return None;
+                };
+                if t.canonical(class.into()).ty() != t.canonical(ac.into()).ty() {
+                    return None;
+                }
+                let inner = self.deduce_match(pointee, ap)?;
+                let r = self.ast.types.member_pointer(inner, class);
                 Some(if pq.is_empty() { r } else { self.ast.types.qualify(r, pq) })
             }
             // Below a declarator: a reference matches exactly.

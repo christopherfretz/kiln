@@ -1276,8 +1276,8 @@ Redeclaration and linkage rules:
 - `auto` and `decltype(auto)` variables ([dcl.type.auto.deduct]): a
   top-level placeholder deduces the decayed, cv-stripped initializer
   type plus the written cv-qualifiers, or `decltype(e)`. A
-  placeholder under pointer and reference declarators (`auto *`,
-  `const auto &`, `auto &&`) is deduced as for a function call
+  placeholder under pointer, member-pointer and reference declarators
+  (`auto *`, `auto Q::*`, `const auto &`, `auto &&`) is deduced as for a function call
   ([temp.deduct.call]/2-4) with `auto` as the template parameter.
   A type-constraint on the placeholder (`C<A> decltype(auto) x = e;`)
   is checked against the deduced placeholder type
