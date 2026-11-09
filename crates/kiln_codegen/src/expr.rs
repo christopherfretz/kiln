@@ -198,6 +198,11 @@ impl Cg<'_> {
         let q = n.ty();
         Ok(Some(match n.kind() {
             ExprKind::ParenExpr => return self.emit_scalar_opt(ast.exprs.operand(e)),
+            // GNU `__extension__` of a possibly `void` operand (arm_neon.h
+            // `__extension__ ({ ... })` statement macros).
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Extension => {
+                return self.emit_scalar_opt(ast.exprs.operand(e));
+            }
             // clang `getChosenSubExpr`: only the chosen operand is emitted.
             ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
                 return self.emit_scalar_opt(ast.exprs.choose_chosen(e).expect("guarded"));
@@ -3488,6 +3493,13 @@ impl Cg<'_> {
         if matches!(ast.exprs.get(e).kind(), ExprKind::CoawaitExpr | ExprKind::CoyieldExpr) {
             self.emit_coawait(e, crate::coro::Want::Ignored)?;
             return Ok(());
+        }
+        // GNU `__extension__` is transparent: its operand is the ignored
+        // expression (`__extension__ ({ ... });`, arm_neon.h store macros).
+        if ast.exprs.get(e).kind() == ExprKind::UnaryOperator
+            && ast.exprs.unary_op(e) == UnaryOp::Extension
+        {
+            return self.emit_ignored(ast.exprs.operand(e));
         }
         if !self.is_glvalue(e) {
             if self.is_aggregate(q) {

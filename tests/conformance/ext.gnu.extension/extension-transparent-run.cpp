@@ -3,13 +3,14 @@
 // value, type and value category of its operand ([expr.unary] as a GNU
 // extension), constant evaluation ([expr.const]), bit-field and
 // overloaded-function operands, string-literal array initialization,
-// case labels, template arguments, statement expressions and
+// case labels, template arguments, statement expressions, `void`
+// operands (discarded, in a comma or a conditional) and
 // `__imag__` of an imaginary literal. `decltype(__extension__ g)` is
 // `int &` because the operand is no longer an id-expression
 // ([dcl.type.decltype]/1.3), which also changes its mangling (`DT`,
 // tests/mangle/extension_decltype.cpp). Verified against clang 19.
 //@ expect: run
-//@ stdout: 33
+//@ stdout: 39
 extern "C" int printf(const char *, ...);
 template <class A, class B> constexpr bool same = false;
 template <class A> constexpr bool same<A, A> = true;
@@ -39,13 +40,24 @@ static_assert(big == 4611686018427387904LL);
 int sw(int v) {
   switch (v) { case __extension__ 1: return 10; default: return 0; }
 }
+// A `void` operand, as in arm_neon.h's `__extension__ ({ ... })` store
+// macros: discarded, in a comma and in a conditional.
+constexpr int voids(int v) {
+  __extension__ (void)v;
+  __extension__ ({ v += 1; (void)0; });
+  (__extension__ ({ v += 1; (void)0; }), __extension__ (void)0);
+  v > 0 ? __extension__ ({ v += 1; (void)0; }) : (void)0;
+  return v;
+}
+static_assert(voids(1) == 4);
 int run(int v) {
   B b{};
+  __extension__ ({ b.m = voids(v); (void)0; });
   __extension__ b.bf = 2;
   int r = __extension__ b.bf;
   int y = __extension__ ({ int t = v; t * 2; });
   int z = (__extension__ h)(1);
   constexpr int k = __extension__ f();
-  return r + y + *gp + sw(1) + z + k + (int)__imag__ cd;
+  return r + y + *gp + sw(1) + z + k + (int)__imag__ cd + b.m;
 }
 int main() { printf("%d\n", run(3)); }
