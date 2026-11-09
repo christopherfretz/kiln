@@ -349,18 +349,30 @@ fn every_scalar_kind_roundtrips() {
     ] {
         let id = roundtrip(
             &mut st,
-            Scalar::Pointer { ty: ty(INT_PTR), base, offset: 0, designated: None },
+            Scalar::Pointer { ty: ty(INT_PTR), base, offset: 0, designated: None, past: false },
         );
         assert_eq!(st.kind(id), ValueKind::Pointer);
         if !matches!(base, PtrBase::Function(_)) {
             roundtrip(
                 &mut st,
-                Scalar::Pointer { ty: ty(INT_PTR), base, offset: 12, designated: None },
+                Scalar::Pointer {
+                    ty: ty(INT_PTR),
+                    base,
+                    offset: 12,
+                    designated: None,
+                    past: false,
+                },
             );
             // Offsets beyond 32 bits go to the word pool.
             roundtrip(
                 &mut st,
-                Scalar::Pointer { ty: ty(INT_PTR), base, offset: 1 << 40, designated: None },
+                Scalar::Pointer {
+                    ty: ty(INT_PTR),
+                    base,
+                    offset: 1 << 40,
+                    designated: None,
+                    past: false,
+                },
             );
             // A `void *`'s designated type is part of its identity: the
             // same address naming a different subobject is a different
@@ -370,10 +382,16 @@ fn every_scalar_kind_roundtrips() {
                 base,
                 offset: 4,
                 designated: None,
+                past: false,
             });
             for (off, d) in [(4, INT), (4, PAIR), (1 << 40, INT)] {
-                let at =
-                    Scalar::Pointer { ty: ty(INT_PTR), base, offset: off, designated: Some(ty(d)) };
+                let at = Scalar::Pointer {
+                    ty: ty(INT_PTR),
+                    base,
+                    offset: off,
+                    designated: Some(ty(d)),
+                    past: false,
+                };
                 let id = roundtrip(&mut st, at);
                 assert_ne!(Ok(id), plain);
             }
@@ -386,6 +404,7 @@ fn every_scalar_kind_roundtrips() {
         base: PtrBase::StringLit { lit: StringLitId::new(1), origin: ExprId::new(origin) },
         offset: 1,
         designated: None,
+        past: false,
     };
     let (p9, p10) = (roundtrip(&mut st, at(9)), roundtrip(&mut st, at(10)));
     assert_ne!(p9, p10);
@@ -436,6 +455,7 @@ fn reloc_widths() {
             base: PtrBase::Decl(DeclId::new(1)),
             offset: 0,
             designated: None,
+            past: false,
         })
         .unwrap();
     let n = st.push_scalar(Scalar::Null { ty: ty(INT_PTR), kind: NullKind::Pointer }).unwrap();
@@ -478,6 +498,7 @@ fn aggregate_with_nested_relocations() {
             base: PtrBase::Decl(DeclId::new(1)),
             offset: 0,
             designated: None,
+            past: false,
         })
         .unwrap();
     let bytes = le(&[7, 0, 0, 0]);
@@ -495,6 +516,7 @@ fn aggregate_with_nested_relocations() {
             base: PtrBase::Const(inner),
             offset: 0,
             designated: None,
+            past: false,
         })
         .unwrap();
     let bytes2 = le(&[9, 0, 0, 0]);
@@ -725,6 +747,7 @@ fn malformed_scalars_are_rejected() {
             base: PtrBase::Function(DeclId::new(4)),
             offset: 1,
             designated: None,
+            past: false,
         },
     );
     bad(
@@ -734,6 +757,7 @@ fn malformed_scalars_are_rejected() {
             base: PtrBase::Const(ConstValueId::new(99)),
             offset: 0,
             designated: None,
+            past: false,
         },
     );
     assert!(st.is_empty());
@@ -862,6 +886,7 @@ fn print_scalars() {
                 base: PtrBase::Decl(DeclId::new(1)),
                 offset: 0,
                 designated: None,
+                past: false,
             }),
             "&x",
             "&x",
@@ -872,6 +897,7 @@ fn print_scalars() {
                 base: PtrBase::Decl(DeclId::new(1)),
                 offset: 0,
                 designated: None,
+                past: false,
             }),
             "&x",
             "x",
@@ -882,6 +908,7 @@ fn print_scalars() {
                 base: PtrBase::Temporary(DeclId::new(7)),
                 offset: 0,
                 designated: None,
+                past: false,
             }),
             "&ref_tmp",
             "ref_tmp",
@@ -892,6 +919,7 @@ fn print_scalars() {
                 base: PtrBase::Decl(DeclId::new(2)),
                 offset: 8,
                 designated: None,
+                past: false,
             }),
             "&arr[2]",
             "&arr[2]",
@@ -902,6 +930,7 @@ fn print_scalars() {
                 base: PtrBase::Decl(DeclId::new(2)),
                 offset: 0,
                 designated: None,
+                past: false,
             }),
             "&arr[0]",
             "&arr[0]",
@@ -912,6 +941,7 @@ fn print_scalars() {
                 base: PtrBase::Decl(DeclId::new(2)),
                 offset: 12,
                 designated: None,
+                past: false,
             }),
             "&arr[3]",
             "&arr[3]",
@@ -922,6 +952,7 @@ fn print_scalars() {
                 base: PtrBase::Decl(DeclId::new(2)),
                 offset: 0,
                 designated: None,
+                past: false,
             }),
             "&arr",
             "&arr",
@@ -932,6 +963,7 @@ fn print_scalars() {
                 base: PtrBase::Decl(DeclId::new(2)),
                 offset: 6,
                 designated: None,
+                past: false,
             }),
             "&arr+6",
             "&arr+6",
@@ -942,6 +974,7 @@ fn print_scalars() {
                 base: PtrBase::Decl(DeclId::new(2)),
                 offset: 16,
                 designated: None,
+                past: false,
             }),
             "&arr+16",
             "&arr+16",
@@ -952,6 +985,7 @@ fn print_scalars() {
                 base: PtrBase::Decl(DeclId::new(3)),
                 offset: 4,
                 designated: None,
+                past: false,
             }),
             "&s.in.y",
             "&s.in.y",
@@ -962,6 +996,7 @@ fn print_scalars() {
                 base: PtrBase::Decl(DeclId::new(3)),
                 offset: 12,
                 designated: None,
+                past: false,
             }),
             "&s.arr[1]",
             "&s.arr[1]",
@@ -972,22 +1007,41 @@ fn print_scalars() {
                 base: PtrBase::Decl(DeclId::new(3)),
                 offset: 0,
                 designated: None,
+                past: false,
             }),
             "&s.x",
             "&s.x",
         ),
         (
-            push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(hi), offset: 0, designated: None }),
+            push(Scalar::Pointer {
+                ty: ty(INT_PTR),
+                base: lit(hi),
+                offset: 0,
+                designated: None,
+                past: false,
+            }),
             "\"hi\"",
             "\"hi\"",
         ),
         (
-            push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(hi), offset: 1, designated: None }),
+            push(Scalar::Pointer {
+                ty: ty(INT_PTR),
+                base: lit(hi),
+                offset: 1,
+                designated: None,
+                past: false,
+            }),
             "&\"hi\"[1]",
             "&\"hi\"[1]",
         ),
         (
-            push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(wide), offset: 2, designated: None }),
+            push(Scalar::Pointer {
+                ty: ty(INT_PTR),
+                base: lit(wide),
+                offset: 2,
+                designated: None,
+                past: false,
+            }),
             "&u\"ab\"[1]",
             "&u\"ab\"[1]",
         ),
@@ -997,6 +1051,7 @@ fn print_scalars() {
                 base: PtrBase::Function(DeclId::new(4)),
                 offset: 0,
                 designated: None,
+                past: false,
             }),
             "&f",
             "&f",
@@ -1007,6 +1062,7 @@ fn print_scalars() {
                 base: PtrBase::TypeInfo(ty(SHORT)),
                 offset: 0,
                 designated: None,
+                past: false,
             }),
             "&typeid(short)",
             "&typeid(short)",
@@ -1035,6 +1091,7 @@ fn print_scalars() {
             base: PtrBase::Decl(DeclId::new(9)),
             offset: 4,
             designated: None,
+            past: false,
         })
         .unwrap();
     assert_eq!(st.display(p, &strings, &NoEnv, &PrintOptions::DEFAULT), "&#d9+4");
@@ -1082,6 +1139,7 @@ fn print_exact_and_enum_cast() {
             base: PtrBase::Const(big),
             offset: 0,
             designated: None,
+            past: false,
         })
         .unwrap();
     assert!(!exact(&st, p, &opts).1);

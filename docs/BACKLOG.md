@@ -959,7 +959,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-945 | accepts-invalid (WP-912): HIGH: WP-873 never-constant false positives on builtins (fabs, strcmp) and a consteval operator template; crates/kiln_sema/src/never_constant.rs (3 xfails) | WP-912 | open |
 | WP-946 | accepts-invalid (WP-912): types defined where the grammar forbids (parameter, conversion type, type specifier) + out-of-line member enum-parameter panic; crates/kiln_sema/src/decl.rs:7586 act_on_tag, crates/kiln_ast/src/decl.rs:2477 | WP-912 | open |
 | WP-947 | accepts-invalid (WP-912): empty braced list for a user `initializer_list` type rejected, then stack overflow (cwg10xx crash); crates/kiln_sema/src/init.rs:686 std_initializer_list_init | WP-912 | open |
-| WP-948 | accepts-invalid (WP-912): Oven UB checks: past-end member access and calls, out-of-lifetime calls, volatile read via cast, zero-size array pointer subtraction, virtual member-pointer compare; not-yet-visible initializers | WP-912 | open |
+| WP-948 | accepts-invalid (WP-912): Oven UB checks: past-end member access and calls, out-of-lifetime calls, volatile read via cast, zero-size array pointer subtraction, virtual member-pointer compare; not-yet-visible initializers | WP-912 | in progress |
 | WP-949 | accepts-invalid (WP-912): member with the name of its class [class.mem]/22 | WP-912 | open |
 | WP-950 | accepts-invalid (WP-912): allocation-function and `main` declaration rules | WP-912 | open |
 | WP-951 | accepts-invalid (WP-912): union, static data member and bit-field rules | WP-912 | open |

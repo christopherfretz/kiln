@@ -6096,6 +6096,8 @@ impl Sema<'_, '_> {
             self.check_constexpr_init(v, e);
         } else if !spec.is_inline() && self.is_in_class_static(self.init_written_in(v)) {
             self.check_in_class_static_init(v, e);
+        } else {
+            self.fix_const_int_init(v, e);
         }
         self.warn_constant_evaluated_init(v, e);
         self.check_contract_init(v, e);
@@ -6401,6 +6403,36 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [expr.const]/2: a potentially-constant variable is usable in
+    /// constant expressions only from its initializing declaration on, so
+    /// the value of a namespace-scope `const` integral or enumeration
+    /// variable is fixed where its initializer is: one that reads a
+    /// variable whose initializer is not yet seen (`extern const int a;
+    /// const int b = a; const int a = 1;`) stays not constant, rather than
+    /// being folded from a later definition at the point of use. Silent
+    /// (the variable may never be used in a constant expression); clang's
+    /// `CheckCompleteVariableDeclaration` caches the same evaluation.
+    fn fix_const_int_init(&mut self, v: DeclId, e: ExprId) {
+        let vn = *self.ast.decls.get(v);
+        let Some(ty) = vn.ty() else { return };
+        let q = self.ast.types.effective_quals(ty);
+        let c = self.ast.types.canonical(ty);
+        if !q.is_const()
+            || q.is_volatile()
+            || !(self.ast.types.is_integral(c) || self.ast.types.as_enum(c).is_some())
+            || vn.has(DeclFlags::INVALID)
+            || !self.has_static_storage(v)
+            || self.is_dependent_type(ty)
+            || self.has_errors_in(e)
+            || self.expr_is_value_dependent(e)
+            || self.ast.decls.begin_eval(v).is_err()
+        {
+            return;
+        }
+        let cv = self.eval_const(e, EvalContext::init(v, vn.loc())).ok();
+        self.ast.decls.finish_eval(v, cv);
+    }
+
     /// Remembers where `constinit` was written on `v`.
     pub(crate) fn record_constinit(&mut self, v: DeclId, ds: &DeclSpec) {
         if let Some(at) = ds.constinit
@@ -6654,6 +6686,21 @@ impl Sema<'_, '_> {
             return;
         }
         let vn = *self.ast.decls.get(v);
+        // [dcl.constexpr]/1: a constexpr variable declaration shall be a
+        // definition (`extern constexpr int m;`); clang
+        // `ActOnUninitializedDecl` reports it first and stops. An in-class
+        // static data member is inline, so a definition (C++17).
+        if vn.kind() == DeclKind::Var
+            && !vn.has(DeclFlags::INVALID)
+            && self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
+            && !self.is_in_class_static(v)
+            && !self.ast.is_member_spec_declaration(v)
+            && !self.is_var_definition(v)
+        {
+            self.error(DiagId::sema_constexpr_var_decl_not_definition, vn.loc());
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            return;
+        }
         if vn.kind() != DeclKind::Var
             || self.uninit_array_or_reference(v)
             || vn.has(DeclFlags::INVALID)
