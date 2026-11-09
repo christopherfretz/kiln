@@ -366,7 +366,7 @@ impl Sema<'_, '_> {
             && !(alignment.is_some() && bit_width.is_some())
             && !(nua && bit_width.is_some())
             && !(bit_width == Some(0) && name.is_some())
-            && alignment.is_none_or(|a| a.is_power_of_two());
+            && alignment.is_none_or(u32::is_power_of_two);
         if !ok {
             return None;
         }

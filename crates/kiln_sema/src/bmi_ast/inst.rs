@@ -460,48 +460,7 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
                     TAG_POINTER,
                     u8::from(past) | u8::from(designated.is_some()) << 1,
                 ]);
-                match base {
-                    PtrBase::Decl(x) => {
-                        if let Some(pv) = ast.templates.param_object_value(x) {
-                            self.out.push(BASE_PARAM_OBJECT);
-                            self.vty(store.ty(pv), d)?;
-                            self.value(pv, d)?;
-                        } else {
-                            self.out.push(BASE_DECL);
-                            self.ent(x, d)?;
-                        }
-                    }
-                    PtrBase::Function(x) => {
-                        self.out.push(BASE_FUNCTION);
-                        self.ent(x, d)?;
-                    }
-                    PtrBase::TypeInfo(q) => {
-                        self.out.push(BASE_TYPE_INFO);
-                        self.vty(q, d)?;
-                    }
-                    PtrBase::Const(c) => {
-                        self.out.push(BASE_CONST);
-                        self.vty(store.ty(c), d)?;
-                        self.value(c, d)?;
-                    }
-                    PtrBase::StringLit { origin, .. } => {
-                        self.out.push(BASE_STRING);
-                        let r = self.expr_at(origin);
-                        self.or_why(
-                            r,
-                            "a pointer to a string literal outside the replayed source",
-                        )?;
-                    }
-                    PtrBase::Label { label, origin } => {
-                        self.out.push(BASE_LABEL);
-                        let r = self.ent(label, d).and_then(|()| self.expr_at(origin));
-                        self.or_why(r, "a label address whose label has no key")?;
-                    }
-                    PtrBase::Temporary(t) => {
-                        let r = self.temporary(t, d);
-                        self.or_why(r, "a pointer to a temporary whose declaration has no key")?;
-                    }
-                }
+                self.ptr_base(base, d)?;
                 put_var(&mut self.out, offset);
                 if let Some(q) = designated {
                     self.vty(q, d)?;
@@ -547,6 +506,53 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
         self.room(depth)
     }
 
+    /// Pointer base `base` of a pointer value: its base tag, then what
+    /// identifies the object it points into.
+    fn ptr_base(&mut self, base: PtrBase, d: u32) -> Option<()> {
+        let ast = self.ast;
+        let store = &ast.consts;
+        match base {
+            PtrBase::Decl(x) => {
+                if let Some(pv) = ast.templates.param_object_value(x) {
+                    self.out.push(BASE_PARAM_OBJECT);
+                    self.vty(store.ty(pv), d)?;
+                    self.value(pv, d)?;
+                } else {
+                    self.out.push(BASE_DECL);
+                    self.ent(x, d)?;
+                }
+            }
+            PtrBase::Function(x) => {
+                self.out.push(BASE_FUNCTION);
+                self.ent(x, d)?;
+            }
+            PtrBase::TypeInfo(q) => {
+                self.out.push(BASE_TYPE_INFO);
+                self.vty(q, d)?;
+            }
+            PtrBase::Const(c) => {
+                self.out.push(BASE_CONST);
+                self.vty(store.ty(c), d)?;
+                self.value(c, d)?;
+            }
+            PtrBase::StringLit { origin, .. } => {
+                self.out.push(BASE_STRING);
+                let r = self.expr_at(origin);
+                self.or_why(r, "a pointer to a string literal outside the replayed source")?;
+            }
+            PtrBase::Label { label, origin } => {
+                self.out.push(BASE_LABEL);
+                let r = self.ent(label, d).and_then(|()| self.expr_at(origin));
+                self.or_why(r, "a label address whose label has no key")?;
+            }
+            PtrBase::Temporary(t) => {
+                let r = self.temporary(t, d);
+                self.or_why(r, "a pointer to a temporary whose declaration has no key")?;
+            }
+        }
+        Some(())
+    }
+
     /// Lifetime-extended temporary `t`: its extending declaration and
     /// mangling index (what the replay creates it with, so the importer
     /// finds its own), its type, and the value the evaluation froze for
@@ -559,17 +565,13 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
         self.ent(l.extending, d)?;
         put_var(&mut self.out, u64::from(l.mangling_index));
         self.ty(ast.decls.get(t).ty()?, d)?;
-        match l.value {
-            Some(v) => {
-                self.out.push(1);
-                self.vty(ast.consts.ty(v), d)?;
-                self.value(v, d)
-            }
-            None => {
-                self.out.push(0);
-                Some(())
-            }
-        }
+        let Some(v) = l.value else {
+            self.out.push(0);
+            return Some(());
+        };
+        self.out.push(1);
+        self.vty(ast.consts.ty(v), d)?;
+        self.value(v, d)
     }
 
     /// Reflectee `r`: its tag, then what identifies it.
