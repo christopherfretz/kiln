@@ -677,8 +677,11 @@ impl Sema<'_, '_> {
         // A member's signature substituted while its class template is
         // instantiated (clang `getCurrentMangleNumberContext`, `Normal`
         // with `inTemplateInstantiation()`: numbered in the class; WP-1077).
+        // A variable whose initializer triggered the instantiation is not
+        // the closure's context (`void *g = S<int>::f()();`); a static
+        // data member of the class is.
         if kind == DeclKind::CXXRecord
-            && self.lambda_mangle.var.is_none()
+            && self.lambda_mangle.var.is_none_or(|v| self.ast.decls.get(v).ctx() != Some(ctx))
             && self.inst.stack.depth() > 0
         {
             return Some((ctx, None));
