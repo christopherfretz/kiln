@@ -154,6 +154,12 @@ impl Cg<'_> {
         })
     }
 
+    /// `q` is a `std::type_identity` specialization, the first parameter
+    /// of a type-aware allocation or deallocation function (P2719).
+    pub(crate) fn is_type_identity(&self, q: QualType) -> bool {
+        self.ast.types.as_record(q).is_some_and(|r| self.in_std(r, "type_identity"))
+    }
+
     /// `q` is the enumeration `std::<name>` (clang `isAlignValT`).
     fn is_std_enum(&self, q: QualType, name: &str) -> bool {
         self.ast.types.as_enum(q).is_some_and(|e| self.in_std(e, name))
@@ -553,6 +559,10 @@ impl Cg<'_> {
             0
         };
         let (esize, alloc_align) = self.size_align(base);
+        // A cookie makes the allocation `size_t`-aligned, and that is the
+        // alignment passed (a type-aware `operator new[]`) and given back
+        // to the cleanup (clang `EmitCXXNewExpr`: `cookieAlign`).
+        let alloc_align = if cookie != 0 { alloc_align.max(8) } else { alloc_align };
         let Some(fty) = ast.decls.get(op_new).ty() else {
             return err(loc, "allocation function without a type");
         };
@@ -669,6 +679,7 @@ impl Cg<'_> {
         let placement: Vec<ExprId> =
             x.placement.map(|l| ast.lists.iter(l).collect()).unwrap_or_default();
         let mut placement_vals: Vec<CallArg> = Vec::new();
+        let mut ti_tag: Option<CallArg> = None;
         let (alloc, allocation_align) = if af.reserved {
             let Some(&arg) = placement.first() else {
                 return err(loc, "placement new without a placement argument");
@@ -683,13 +694,26 @@ impl Cg<'_> {
             placement_vals.push(CallArg::Scalar(p.v));
             (p.v, if p.decl { p.align } else { alloc_align })
         } else {
-            let size_q = params.first().copied().unwrap_or(QualType::unqual(t.target().size_t));
-            let mut vals = vec![CallArg::Scalar(size)];
-            let mut arg_tys = vec![size_q];
+            // A type-aware allocation function (P2719) is passed
+            // `std::type_identity<T>{}` first (clang `EmitCXXNewExpr`).
+            let mut vals = Vec::new();
+            let mut arg_tys = Vec::new();
+            if let Some(&q) = params.first()
+                && self.is_type_identity(q)
+            {
+                let tag = self.temp(q);
+                vals.push(CallArg::Agg(tag));
+                arg_tys.push(q);
+                ti_tag = Some(CallArg::Agg(tag));
+            }
+            let i = vals.len();
+            let size_q = params.get(i).copied().unwrap_or(QualType::unqual(t.target().size_t));
+            vals.push(CallArg::Scalar(size));
+            arg_tys.push(size_q);
             if pass_align {
                 let al = self.i64c(i128::from(alloc_align));
                 vals.push(CallArg::Scalar(al));
-                arg_tys.push(params.get(1).copied().unwrap_or(size_q));
+                arg_tys.push(params.get(i + 1).copied().unwrap_or(size_q));
             }
             let skip = vals.len();
             for (k, &a) in placement.iter().enumerate() {
@@ -763,6 +787,7 @@ impl Cg<'_> {
                 align: alloc_align,
                 pass_align,
                 placement,
+                tag: ti_tag.map(Saved::Direct),
             };
             self.push_full_expr_cleanup(Cleanup::NewDelete(Box::new(nd)), false, true);
             let c = self.f.cl.depth();
@@ -880,6 +905,10 @@ impl Cg<'_> {
             return false;
         };
         let params = ast.types.params(&proto);
+        // A type-aware usual one (P2719) always takes the size.
+        if params.first().is_some_and(|&q| self.is_type_identity(q)) {
+            return true;
+        }
         params.len() >= 2
             && !self.is_std_enum(params[1], "align_val_t")
             && ast.types.canonical(params[1])
@@ -1435,10 +1464,25 @@ impl Cg<'_> {
             return err(loc, "deallocation function without parameters");
         };
         let size_t = QualType::unqual(t.target().size_t);
-        let mut vals = vec![self.restore_saved(c.ptr)];
-        let mut arg_tys = vec![p0];
+        let mut vals = Vec::new();
+        let mut arg_tys = Vec::new();
+        // A type-aware one (P2719) is passed `std::type_identity<T>{}`
+        // first, and for a placement form the size and alignment too
+        // (clang `CallDeleteDuringNew::Emit`).
+        let typed = self.is_type_identity(p0);
+        if typed {
+            let tag = match c.tag {
+                Some(s) => self.restore_saved(s),
+                None => CallArg::Agg(self.temp(p0)),
+            };
+            vals.push(tag);
+            arg_tys.push(p0);
+        }
+        let pi = usize::from(typed);
+        vals.push(self.restore_saved(c.ptr));
+        arg_tys.push(params.get(pi).copied().unwrap_or(p0));
         if c.placement.is_empty() {
-            let mut i = 1;
+            let mut i = 1 + pi;
             if let Some(&q) = params.get(i)
                 && t.is_integral(q)
                 && !self.is_std_enum(q, "align_val_t")
@@ -1453,9 +1497,15 @@ impl Cg<'_> {
                 vals.push(CallArg::Scalar(self.i64c(i128::from(c.align))));
                 arg_tys.push(size_t);
             }
-        } else if c.pass_align {
-            vals.push(CallArg::Scalar(self.i64c(i128::from(c.align))));
-            arg_tys.push(size_t);
+        } else {
+            if typed {
+                vals.push(self.restore_saved(c.size));
+                arg_tys.push(size_t);
+            }
+            if c.pass_align {
+                vals.push(CallArg::Scalar(self.i64c(i128::from(c.align))));
+                arg_tys.push(size_t);
+            }
         }
         for &(a, q) in &c.placement {
             vals.push(self.restore_saved(a));
@@ -1514,10 +1564,22 @@ impl Cg<'_> {
         let Some(&p0) = params.first() else {
             return err(loc, "deallocation function without parameters");
         };
-        let mut vals = vec![CallArg::Scalar(ptr)];
-        let mut arg_tys = vec![p0];
-        let mut i = 1;
+        let mut vals = Vec::new();
+        let mut arg_tys = Vec::new();
+        let mut i = 0;
         let mut tag_slot = None;
+        // A type-aware one (P2719) takes the (empty) `std::type_identity
+        // <T>` tag by value first (clang `EmitDeleteCall`).
+        if self.is_type_identity(p0) {
+            let tag = self.temp(p0);
+            tag_slot = Some(tag.v);
+            vals.push(CallArg::Agg(tag));
+            arg_tys.push(p0);
+            i = 1;
+        }
+        vals.push(CallArg::Scalar(ptr));
+        arg_tys.push(params.get(i).copied().unwrap_or(p0));
+        i += 1;
         // A destroying operator delete ([expr.delete]/10) takes the
         // (empty) `std::destroying_delete_t` tag by value next.
         if ast.is_destroying_operator_delete(od)

@@ -960,7 +960,9 @@ is exactly part A's. It no longer runs the Oven for an evaluation whose
 result the file carries. That is the work kiln most wants to avoid
 repeating, and the constexpr report shows when it is avoided. Part 2
 replaces the replay with the image designed below, behind the same
-section framing.
+section framing. Its item 1 (WP-1046) is done: the section also carries
+results of evaluations inside template instantiations (see
+"Instantiation keys").
 
 #### Inventory
 
@@ -999,11 +1001,72 @@ evaluation happens, which the replay reproduces exactly:
 
 The value's type is not stored. It is the canonical, unqualified type of
 the evaluated expression; the writer checks that it is, and the reader
-takes it from its own replayed copy of the expression. A result is used
-only while the importer reads the unit the file holds
-(`module_current_unit` is that unit's and no instantiation is in
-progress), so the same header text read by the importer itself never
-matches.
+takes it from its own replayed copy of the expression. Outside any instantiation the two positions are the whole key
+(instantiation index 0), and a result is used only while the importer
+reads the unit the file holds (`module_current_unit` is that unit's), so
+the same header text read by the importer itself never matches. Inside
+an instantiation the positions are within the pattern, shared by every
+instantiation of it, so the key also names the instantiation (see
+"Instantiation keys"). Such a result is used whenever the importer makes
+that evaluation in that instantiation, first from the table of the unit
+being read and then from any other: a unit's pending instantiations
+(function bodies used outside a constant context, [temp.point]/7) run at
+the importer's end of TU, after the replay. That the importer's
+instantiation gives the same result as the writer's is [temp.point]/7's
+rule, whose violation is ill-formed, no diagnostic required.
+
+#### Instantiation keys (Part 2 item 1, WP-1046)
+
+An evaluation made while an instantiation is in progress is keyed by
+the innermost instantiation frame (spec/ast.md §8.4, `InstFrame`),
+written as a byte string that names no `DeclId`, so the
+producing compile and the importer's replay build the same bytes for
+the same specialization and compare them as they are:
+
+- **Entity frames** (class, member class, member function, function
+  specialization, static data member, variable template and its
+  initializer, enumeration, default member initializer, default function
+  argument, exception specification, lambda): the frame's entity.
+  - `S` template, canonical arguments: a specialization (a class,
+    function or variable template's).
+  - `M` context, pattern: a member of a specialization instantiated
+    from member `pattern`; `P` context, pattern: any other declaration
+    instantiated from a pattern (a local class, a closure type, a
+    local variable).
+  - `D` kind, name kind, name (identifier bytes or operator code),
+    position: a declaration that was not instantiated, inside nothing
+    that was (a template, the namespace scope). Its position is the
+    replay-stable (path index, offset) pair of "Identity". Implicit
+    declarations have no `D` key, and a top-level key is never `D`.
+- **Substitution frames** that record their arguments (concept check,
+  constraint check, deduced, explicit and prior argument substitution,
+  default template argument): `F`, a one-byte frame code, the template,
+  the entity (the template or the parameter), the canonical arguments.
+  Only a template whose parameters are its outermost level (depth 0) is
+  keyed; then the arguments are all the substitution uses.
+- **Arguments**: a count, then per argument `T` type, `V` type and value
+  (part 1's value encoding; a pointer, reference or reflection argument
+  has no key, WP-1047), `N` template (an entity), `K` pack (an argument
+  list).
+- **Types** structurally: the canonical type's cv byte, then a tag and
+  its operands (builtin, `_BitInt`, pointer, references, member pointer,
+  arrays, function with parameters, flags and a `noexcept` bit, record
+  and enumeration as entities, `_Complex`, `_Atomic`, vectors). A
+  dependent or other type gives no key.
+- Keys nest at most 48 levels and 16 KiB; deeper or longer keys are not
+  formed.
+
+The frames this leaves out are not keyed, and their evaluations stay
+uncarried: alias template substitution and default-argument checking
+(they record no arguments), and the other substitution frames
+(constraint substitution, partial specialization deduction).
+
+The writer interns each distinct key once and caches the key per frame
+(entity, template, arguments), so a frame's key is built once however
+many evaluations it makes. The reader does the same per table, and an
+unknown key costs one hash lookup per frame. The evaluation's two
+positions stay part of the key: within one instantiation they tell its
+evaluations apart.
 
 Part 2's remapping, one table per id space, built as the image loads:
 
@@ -1048,8 +1111,12 @@ crate that reads them: the carried constants are `kiln_sema::bmi_ast`.
 Section 1, little-endian:
 
 ```
+marker   u32 0xffffffff, then u32 version (2)
 paths    u32 count, then each path (u32 length, UTF-8)
+insts    u32 count, then each instantiation key (u32 length, bytes,
+         see "Instantiation keys"), numbered from 1 in first-use order
 entries  u32 count (at least 1), then each entry:
+  inst   u32     (0: outside any instantiation; else an index into insts)
   kind   u8      (see "Identity"; low nibble 0..6, bits 6-7 zero)
   at     4 x u32 (expansion path index, offset, spelling path index, offset)
   expr   4 x u32 (the same, for the expression's first token)
@@ -1063,6 +1130,12 @@ entries  u32 count (at least 1), then each entry:
                       not adjacent, within the bytes
 ```
 
+- **Versioned.** Version 1 (WP-985) had no marker, version or
+  instantiation table, and no `inst` field; its first word is the path
+  count, never `0xffffffff`. The reader reads version 1 as written (every
+  entry at index 0) and rejects any version but 1 and 2 (`unsupported
+  section version`). Only carried keys are written: an instantiation key
+  no kept entry uses is dropped and the rest renumbered.
 - **Deterministic.** Paths are in first-use order and entries in
   first-evaluation order (no hash-map iteration), so the same inputs give
   the same bytes, and the driver test checks this.
@@ -1070,7 +1143,9 @@ entries  u32 count (at least 1), then each entry:
   bytes left before sizing anything by it, validates UTF-8, flags,
   widths, words (`IntBits::from_words`: no bits above the width),
   float bits, padding ranges, path indices, duplicate keys and trailing
-  bytes. Any failure is a `SectionError`, turned into §11.4's
+  bytes. Each instantiation key is parsed in full against the grammar of
+  "Instantiation keys" (tags, nesting depth, path indices, values),
+  duplicate keys and out-of-range `inst` indices are rejected. Any failure is a `SectionError`, turned into §11.4's
   `fatal error: module file 'x.pcm' is corrupt: carried constants:
   <reason>`. The framing errors (`a kind-2 file without sections`,
   `unknown section`, `sections out of order`) are `BmiError`s with the
@@ -1121,7 +1196,8 @@ file and does not force kind 1. Sema then records every evaluation
 `eval_const` makes while it reads the main unit (`module_current_unit()
 == 0`), and keeps a result only if all of these hold:
 
-- no template instantiation is in progress (one position, many results);
+- no template instantiation is in progress, or the innermost one has an
+  instantiation key (see "Instantiation keys");
 - a key exists (see "Identity");
 - the evaluation is pure: it added no declaration, expression or
   statement and emitted no error or warning (a carried result would
@@ -1129,7 +1205,9 @@ file and does not force kind 1. Sema then records every evaluation
   instantiated a template must still instantiate it);
 - it succeeded, its value's type is its expression's, and the value is
   self-contained (see "Inventory");
-- no other evaluation had the same key.
+- no other evaluation with the same key gave a different result (the
+  same evaluation made again, a constraint checked twice, keeps its
+  result).
 
 The rest are evaluated again by the importer, as in kind 1.
 
@@ -1141,13 +1219,15 @@ is the default. The choice is never a warning. Under `-v` the driver
 prints one of:
 
 ```
-note: wrote module file 'm.pcm' as kind 2, carrying N constant results
+note: wrote module file 'm.pcm' as kind 2, carrying N constant results[, M inside template instantiations]
 note: wrote module file 'm.pcm' as kind 1: no constant result to carry (first not carried: <reason>)
 note: wrote module file 'm.pcm' as kind 1, as -fkiln-bmi-kind=1 requests
 ```
 
 The `<reason>` is the first evaluation that was not carried, one of: `an
-evaluation inside a template instantiation`, `a consteval block`, `an
+evaluation in a substitution that is not an instantiation` (a frame
+"Instantiation keys" leaves out), `an instantiation whose arguments have
+no key`, `a consteval block`, `an
 evaluation at a position a replay does not reproduce`, `an evaluation that
 changed the AST`, `an evaluation that emitted a diagnostic`, `an
 evaluation that failed`, `a value whose type is not its expression's`, `a
@@ -1157,8 +1237,11 @@ value`, `an aggregate holding a pointer`, `an aggregate holding a union`,
 all, the parenthesis is left out. The reader accepts both kinds, so
 mixing them in one build is fine.
 
-On libc++ 19's `std.cppm`, 2900 results are carried. Of the evaluations
-that are not carried, 10142 happen inside a template instantiation, 141
+On libc++ 19's `std.cppm`, part 1 carried 2900 results, and part 2
+item 1 carries 8774, 5744 of them inside template instantiations (most
+of the rest in alias template substitution and default-argument checking
+frames, which record no arguments). Before part 2, of the evaluations
+that were not carried, 10142 happened inside a template instantiation, 141
 are two evaluations at one position, 74 failed, 23
 are at positions a replay does not reproduce, 13 have a value whose type
 is not its expression's, 6 are aggregates holding a pointer, and one
@@ -1302,13 +1385,68 @@ calls two of the functions in a `static_assert` and at run time.
   as a header; clang adds `-fconstexpr-steps=100000000` for the
   constexpr module.
 
+**Part 2 item 1, results inside instantiations (WP-1046).** Same method
+(harness profile, aarch64, `/usr/bin/time`, load ~20; precompile median of
+3, imports median of 5, interleaved). "Part 1" is the base commit's binary
+(cfa635ab3), "Part 2" this one. The harness profile has 16 codegen units
+and no LTO, and the base binary happens to be about 15% faster than every
+other build of this period on a plain constexpr TU (0.17 s against 0.20 to
+0.21 s for five unrelated branches), so compare kind 1 with kind 2 within
+a binary. Workloads: the `import std;` program of Part 2a, `import std;`
+with an empty `main` (a use of the section that finds nothing), and a
+template-heavy constexpr interface: 64 instantiations `H<i>` of a class
+whose static member runs a 50,000-iteration loop, checked by a
+`static_assert`, a function template `pick<i>` with a local `constexpr`
+variable and `if constexpr`, and `Buf<i>` whose bound is `H<i>::slot`,
+imported by a program that names them in a `static_assert` and at run
+time.
+
+| run | `import std;` (libc++ 19) | `import std;`, empty `main` | template-heavy module |
+|---|---|---|---|
+| Part 1 `--precompile`, kind 1 | 1.13 s, 98.9 MiB, 8,993,259 B | | 0.17 s, 13.4 MiB, 25,990 B |
+| Part 1 `--precompile`, kind 2 | 1.06 s, 99.5 MiB, 9,131,988 B | | 0.17 s, 13.4 MiB, 32,087 B |
+| Part 2 `--precompile`, kind 1 | 1.16 s, 98.2 MiB, 8,990,956 B | | 0.22 s, 12.9 MiB, 25,990 B |
+| Part 2 `--precompile`, kind 2 | 1.15 s, 101.3 MiB, 9,840,073 B | | 0.23 s, 13.3 MiB, 70,695 B |
+| Part 1 import, kind 1, `-c` | 1.44 s, 97.4 MiB | 1.11 s, 91.7 MiB | 0.18 s, 60.9 MiB |
+| Part 1 import, kind 2, `-c` | 1.42 s, 96.6 MiB | 1.11 s, 91.2 MiB | 0.19 s, 60.9 MiB |
+| Part 2 import, kind 1, `-c` | 1.52 s, 96.5 MiB | 1.19 s, 91.8 MiB | 0.24 s, 60.9 MiB |
+| Part 2 import, kind 2, `-c` | 1.54 s, 98.4 MiB | 1.18 s, 92.1 MiB | **0.06 s**, 60.9 MiB |
+| Part 2 import, kind 1, `-fsyntax-only` | 1.20 s, 95.6 MiB | | 0.22 s, 12.0 MiB |
+| Part 2 import, kind 2, `-fsyntax-only` | 1.20 s, 98.2 MiB | | **0.04 s**, 11.7 MiB |
+| clang 19 `--precompile` | | | 3.50 s, 86.4 MiB |
+| clang 19 import, `-c` | 0.37 s, 160.4 MiB | | 0.01 s, 90.8 MiB |
+
+- Carried: `std` 8774 results (part 1: 2889 from this build), 5744 of
+  them inside instantiations: about 5744 of the 10,142 are now carried. The
+  importer's `-fconstexpr-report=` evaluations: 20,350 (kind 1), 17,464
+  (part 1), 9006 (part 2). The template-heavy module carries 513 (part 1:
+  129), 384 inside instantiations, and its importer drops from 578
+  evaluations and 3,329,216 steps (part 1: 449 and 3,264,640) to 65 and 0.
+- Section size: `std`'s grows from 138,729 B to 849,117 B (6.1x, about
+  97 B per result against 48 B: each instantiation's key is written once,
+  but every entry has a `u32` index and eight `u32` position fields); the
+  template-heavy module's from 6,097 B to 44,705 B. A compact encoding is
+  a follow-up.
+- Imports that find little in the section do not slow down: a second run
+  of `std`'s `-c` import over 9 interleaved rounds gives 1.54 s for kind 1
+  and 1.53 s for kind 2, and the empty `main` 1.19 s and 1.18 s. The
+  table costs about 1 to 2 MiB of RSS on `std`. `std`'s own constant work
+  is about 15 ms, so its import time is still the replay's. The eager
+  decode stays: a lazy table would save at most the decode, which is
+  within noise here.
+- Kind-1 files are byte-identical between the two binaries apart from the
+  resource directory's path (its length prefixes and the checksum).
+- Commands as for Part 2a, with `-fkiln-bmi-kind=1|2` at the precompile;
+  the report runs add `-fconstexpr-report=r.json` to the import, and the
+  `-v` note gives the carried counts.
+
 #### Part 2
 
 Next, in order:
 
-1. carried results for evaluations inside instantiations, keyed by the
-   instantiation (template, remapped arguments) rather than the position:
-   the 10,142 above, and the bulk of a template-heavy constexpr workload;
+1. **done (WP-1046)**: carried results for evaluations inside
+   instantiations, keyed by the instantiation (see "Instantiation keys");
+   measured under "Measurements", "Part 2 item 1";
 2. pointer, reference and reflection values (they need `DeclId`
    remapping);
 3. the declaration and type image with ODR merging (see "Identity"),
@@ -1828,6 +1966,20 @@ last could then come from different racers, and the entry left behind
 was a miss, rebuilt by the next compile (1 in 100 races of 4 compiles,
 about 1 in 12 of 16).
 
+**Dependency output** (WP-1051). The hook returns the module file and
+the files its build read, as the stamp lists them (on a miss, the list
+the new stamp is written from). `kiln_pp` reports the read through
+`PpCallbacks::module_file_read` and brackets every unit read from a
+module file with `PpCallbacks::module_unit`, so the dependency list
+skips what a capsule replay enters (an image reads no file at all). An
+importer's `-MD`/`-MMD` rule therefore lists the entry's `<name>.pcm`
+(absolute) and, under `-MD`, the stamped inputs as system files: the
+same bytes on a hit and on a miss, and for both kinds of module file
+(spec/driver.md "Dependency output"). The nested build passes
+`-fno-module-file-deps`, so `std.compat`'s stamp lists `std`'s inputs
+but not `std.pcm`, whose modification time changes whenever a racing
+compile renames the same bytes into place.
+
 **Fallback.** An unwritable root (a read-only directory, a path through
 a regular file), a failed build, or a failed stamp write is never an
 error. The compile builds the module in-process (part A) and says so in
@@ -1879,8 +2031,6 @@ interface or `stdapp`'s source never rebuilds the std module.
 
 - No eviction: dead entries stay until removed by hand. Each entry is
   about 9 MiB, and every kiln rebuild changes the key.
-- `-MD` on a hit still lists the libc++ headers the module read, as
-  part A does. This is correct for make, and a capsule replays them.
 
 ## Tests
 

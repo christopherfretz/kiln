@@ -26,6 +26,11 @@ sema_capture_class_member = Error (1) "class member '{0}' cannot appear in captu
 sema_capture_more_than_once = Error (1) "'{0}' can appear only once in a capture list";
 sema_capture_not_automatic = Error (1) "'{0}' cannot be captured because it does not have automatic storage duration";
 sema_capture_not_variable = Error (1) "'{0}' in capture list does not name a variable";
+sema_carries_dependency_missing_on_first_decl = Error (1) "{0:function|parameter} declared '[[carries_dependency]]' after its first declaration";
+// WP-954: [dcl.attr.depend]: clang `err_carries_dependency_param_not_function_decl`,
+// `err_carries_dependency_missing_on_first_decl`,
+// `note_carries_dependency_missing_first_decl`.
+sema_carries_dependency_param_not_function_decl = Error (0) "'[[carries_dependency]]' attribute only allowed on parameter in a function declaration or lambda";
 sema_case_empty_range = Warning (0) "empty case range specified";
 sema_case_not_in_switch = Error (0) "'case' statement not in switch statement";
 sema_cast_nonnull_to_bool = Warning [PointerBoolConversion] (2) "nonnull {0:function call|parameter} '{1}' will evaluate to 'true' on first encounter";
@@ -148,6 +153,7 @@ sema_coroutine_promise_incompatible_return_functions = Error (1) "the coroutine 
 sema_coroutine_promise_new_requires_nothrow = Error (1) "{0} is required to have a non-throwing noexcept specification when the promise type declares 'get_return_object_on_allocation_failure()'";
 sema_coroutine_promise_type_incomplete = Error (1) "this function cannot be a coroutine: {0} is an incomplete type";
 sema_coroutine_promise_unhandled_exception_required = Error (1) "{0} is required to declare the member 'unhandled_exception()'";
+sema_coroutine_type_aware_allocator_ignored = Warning [CoroTypeAwareAllocationFunction] (1) "type aware {0} will not be used for coroutine allocation";
 sema_coroutine_type_missing_specialization = Error (1) "this function cannot be a coroutine: missing definition of specialization {0}";
 sema_coroutine_unevaluated_context = Error (1) "'{0}' cannot be used in an unevaluated context";
 sema_coroutine_unfound_nothrow_new = Error (2) "unable to find {1:'::operator new(size_t, nothrow_t)'|'::operator new(size_t, align_val_t, nothrow_t)'} for {0}";

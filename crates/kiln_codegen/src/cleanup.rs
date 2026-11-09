@@ -166,6 +166,9 @@ pub(crate) struct NewDelete {
     pub pass_align: bool,
     /// The placement arguments and their types.
     pub placement: Vec<(Saved, QualType)>,
+    /// A type-aware allocation's `std::type_identity<T>` temporary, which
+    /// the deallocation call reuses (clang `CallDeleteDuringNew`).
+    pub tag: Option<Saved>,
 }
 
 /// The operands of a [`Cleanup::ArrayDelete`].

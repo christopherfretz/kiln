@@ -1382,7 +1382,13 @@ impl Parser<'_, '_> {
     fn parse_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext) -> bool {
         let start = self.pos();
         let loc = self.name_begin();
-        if self.at_template_type_name_checked(ctx, loc) {
+        // `friend T::X;` ([class.friend]/3): a dependent qualified name
+        // that is the whole friend type declaration is a type, as in
+        // clang's class-member implicit-typename context (WP-1084).
+        let friend_dep_type = ds.friend.is_some()
+            && matches!(self.scan_name(start), Some((end, NameClass::Dependent, _))
+                if end > start + 1 && Self::punct_of(self.tok_at(end)) == Some(Punct::Semi));
+        if friend_dep_type || self.at_template_type_name_checked(ctx, loc) {
             self.parse_template_type_name_spec(ds, ctx, start, loc);
             return true;
         }
@@ -3391,7 +3397,7 @@ impl Parser<'_, '_> {
                 self.parse_attributes(&mut pd.attrs);
             }
             self.misplaced_param_pack_ellipsis(&ds, &mut pd, site);
-            let mut p = self.s.act_on_param_declarator(&ds, &pd);
+            let mut p = self.param_declarator(&ds, &pd, fn_decl);
             // The point of declaration: before the default argument
             // ([basic.scope.pdecl]/1).
             self.s.act_on_prototype_param(&mut p);
@@ -3440,6 +3446,15 @@ impl Parser<'_, '_> {
             }
         }
         (params, variadic)
+    }
+
+    /// `act_on_param_declarator`, then [dcl.attr.depend]/1 for a parameter
+    /// of a function declarator that declares no function or lambda
+    /// (`fn_decl`; an exception declaration counts as one) (WP-954).
+    fn param_declarator(&mut self, ds: &DeclSpec, pd: &Declarator, fn_decl: bool) -> ParamInfo {
+        let mut p = self.s.act_on_param_declarator(ds, pd);
+        self.s.act_on_param_decl_attrs(&mut p, fn_decl || self.in_exception_decl);
+        p
     }
 
     /// A `...` after parameter declarator `pd` that names an unexpanded

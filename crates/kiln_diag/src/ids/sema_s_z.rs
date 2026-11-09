@@ -197,6 +197,13 @@ sema_transparent_union_zero_fields = Warning [IgnoredAttributes] (0) "transparen
 sema_try_disabled = Error (0) "cannot use 'try' with exceptions disabled";
 sema_type_attribute_deprecated_on_decl = Warning [DeprecatedAttributes] (1) "applying attribute '{0}' to a declaration is deprecated; apply it to the type instead";
 sema_type_attribute_wrong_type = Warning [IgnoredAttributes] (2) "{0} only applies to function types; type here is {1}";
+sema_type_aware_allocator_missing_matching_operator = Error (3) "declaration of type aware '{0}' in {1} must have matching type aware '{2}'";
+sema_type_aware_destroying_operator_delete = Error (0) "destroying delete is not permitted to be type aware";
+sema_type_aware_new_delete_too_few_parameters = Error (3) "type aware {1:|destroying }'{0}' must have at least {2} parameters";
+sema_type_aware_operator_delete_dependent_param_type = Error (4) "type aware {1:|destroying }'{0}' cannot take a dependent type as its {2} parameter; use {3} instead";
+sema_type_aware_operator_delete_param_type = Error (4) "{2} parameter of type aware{1:| destroying} '{0}' must have type {3}";
+sema_type_aware_operator_new_dependent_param_type = Error (4) "type aware '{0}' cannot take a dependent type as its {1} parameter; use {2} ({3}) instead";
+sema_type_aware_operator_new_param_type = Error (4) "type aware '{0}' takes type {2} ({3}) as {1} parameter";
 sema_type_defined_in_alias_template = Error (1) "{0} cannot be defined in a type alias template";
 sema_type_defined_in_condition = Error (1) "{0} cannot be defined in a condition";
 sema_type_defined_in_enum = Error (1) "{0} cannot be defined in an enumeration";
@@ -227,6 +234,10 @@ sema_typename_nested_not_type = Error (2) "typename specifier refers to non-type
 sema_udl_no_operator = Error (2) "no matching literal operator for call to {0} with argument of type {1}";
 sema_udl_no_operator_raw = Error (3) "no matching literal operator for call to {0} with argument of type {1} or {2}, and no matching literal operator template";
 sema_udl_no_operator_string = Error (3) "no matching literal operator for call to {0} with arguments of types {1} and {2}, and no matching literal operator template";
+// WP-954: clang `err_unavailable`, `err_unavailable_message`,
+// `note_availability_specified_here` (unavailable).
+sema_unavailable = Error (1) "'{0}' is unavailable";
+sema_unavailable_msg = Error (2) "'{0}' is unavailable: {1}";
 sema_undeclared_label = Error (1) "use of undeclared label '{0}'";
 sema_undeclared_use = Error (1) "use of undeclared '{0}'";
 sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";

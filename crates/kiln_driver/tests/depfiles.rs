@@ -264,3 +264,100 @@ fn every_path_a_header_is_reached_by_is_a_dependency() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// WP-1051 (spec/driver.md "Dependency output", [module.import]): a
+/// named-module import lists neither the files read inside its module
+/// file nor, by default, the module file; `-fmodule-file-deps` adds the
+/// module file as it was found (an `-fmodule-file=<name>=` path as
+/// spelled, `./` kept, a `-fprebuilt-module-path` one made absolute), `-MMD` keeps it and `-MP` gives it a phony rule; `--precompile`
+/// lists the module files it imports unless `-fno-module-file-deps`; and
+/// a nameless `-fmodule-file=` path comes first whatever the switches.
+/// Each rule is checked literally and, with clang++-19 installed, against
+/// clang building its own module files from the same sources in a twin
+/// directory.
+#[test]
+fn module_imports_list_module_files_as_clang_does() {
+    let root = std::env::temp_dir().join(format!("kiln-depfiles-{}-modules", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (kd, cd) = (root.join("kl"), root.join("cl"));
+    let files = [
+        ("b.cppm", "export module b;\nexport int bval() { return 1; }\n"),
+        (
+            "m.cppm",
+            "module;\n#include \"mhdr.h\"\nexport module m;\nexport int mval() { return MH; }\n",
+        ),
+        (
+            "m2.cppm",
+            "module;\n#include \"mhdr.h\"\nexport module m2;\nimport b;\n\
+             export int m2val() { return MH + bval(); }\n",
+        ),
+        ("mhdr.h", "#define MH 41\n"),
+        ("user.h", "#define USER_X 0\n"),
+        ("u.cpp", "#include \"user.h\"\nimport m;\nint main() { return mval() + USER_X; }\n"),
+    ];
+    for d in [&kd, &cd] {
+        std::fs::create_dir_all(d).unwrap();
+        for (f, text) in files {
+            std::fs::write(d.join(f), text).unwrap();
+        }
+    }
+    let clang = have("clang++-19");
+    // (arguments, the rule written to `x.d`, with `@` for the directory)
+    let cases = [
+        ("--precompile b.cppm -o b.pcm", "b.pcm: b.cppm\n"),
+        ("--precompile m.cppm -o m.pcm", "m.pcm: m.cppm mhdr.h\n"),
+        ("--precompile m2.cppm -o m2.pcm -fmodule-file=b=b.pcm", "m2.pcm: m2.cppm mhdr.h b.pcm\n"),
+        (
+            "--precompile m2.cppm -o m2.pcm -fmodule-file=b=b.pcm -fno-module-file-deps",
+            "m2.pcm: m2.cppm mhdr.h\n",
+        ),
+        (
+            "--precompile m2.cppm -o m2.pcm -fprebuilt-module-path=.",
+            "m2.pcm: m2.cppm mhdr.h @/./b.pcm\n",
+        ),
+        ("-fsyntax-only -MT u.o -fmodule-file=m=m.pcm u.cpp", "u.o: u.cpp user.h\n"),
+        (
+            "-fsyntax-only -MT u.o -MP -fmodule-file=m=m.pcm -fmodule-file-deps u.cpp",
+            "u.o: u.cpp user.h m.pcm\nuser.h:\nm.pcm:\n",
+        ),
+        (
+            "-fsyntax-only -MT u.o -fprebuilt-module-path=. -fmodule-file-deps u.cpp",
+            "u.o: u.cpp user.h @/./m.pcm\n",
+        ),
+        ("-fsyntax-only -MT u.o -fmodule-file=./m.pcm u.cpp", "u.o: ./m.pcm u.cpp user.h\n"),
+        (
+            "-fsyntax-only -MT u.o -fmodule-file=m=.//m.pcm -fmodule-file-deps u.cpp",
+            "u.o: u.cpp user.h .//m.pcm\n",
+        ),
+        (
+            "-fsyntax-only -MT u.o -fmodule-file=m.pcm -fno-module-file-deps u.cpp",
+            "u.o: m.pcm u.cpp user.h\n",
+        ),
+    ];
+    for (line, want) in cases {
+        let args: Vec<&str> =
+            ["-std=c++20", "-MMD", "-MF", "x.d"].into_iter().chain(line.split(' ')).collect();
+        // The rule unwrapped (where it wraps depends on the directory's
+        // length; clang's wrapping is compared below).
+        let rule = |d: &Path| {
+            read(d, "x.d").replace(" \\\n  ", " ").replace(&d.display().to_string(), "@")
+        };
+        let _ = std::fs::remove_file(kd.join("x.d"));
+        kiln(&kd, &args);
+        assert_eq!(rule(&kd), want, "kiln++ {args:?}");
+        if clang {
+            let _ = std::fs::remove_file(cd.join("x.d"));
+            let o = run(Path::new("clang++-19"), &cd, &args);
+            assert!(
+                o.status.success(),
+                "clang++-19 {args:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            assert_eq!(rule(&cd), want, "clang++-19 {args:?}");
+            // `kl` and `cl` have the same length, so the wrapping matches.
+            let raw = |d: &Path| read(d, "x.d").replace(&d.display().to_string(), "@");
+            assert_eq!(raw(&kd), raw(&cd), "{args:?}");
+        }
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+}

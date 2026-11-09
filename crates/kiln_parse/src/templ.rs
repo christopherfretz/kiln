@@ -1814,7 +1814,8 @@ impl Parser<'_, '_> {
                 }
             }
             Some(q) => {
-                if self.s.is_dependent_ctx(q.ctx) {
+                if self.s.is_dependent_ctx(q.ctx) || self.s.is_unentered_dependent_qualifier(q.ctx)
+                {
                     self.diagnose_missing_typename(q, ctx, start);
                 }
                 self.parse_qualified_type_rest(q, TagKeyword::None)
@@ -1865,7 +1866,7 @@ impl Parser<'_, '_> {
         ctx: DeclaratorContext,
         start: Loc,
     ) {
-        if self.typename_required(ctx) && self.s.is_unentered_dependent_class(q.ctx) {
+        if self.typename_required(ctx) && self.s.is_unentered_dependent_qualifier(q.ctx) {
             self.diagnose_missing_typename(q, ctx, start);
         }
     }

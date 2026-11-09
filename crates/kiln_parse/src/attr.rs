@@ -36,6 +36,9 @@ fn takes_expr_args(name: &str) -> bool {
     matches!(
         n,
         "deprecated"
+            | "unavailable"
+            | "annotate"
+            | "require_constant_initialization"
             | "nodiscard"
             | "aligned"
             | "warn_unused_result"
@@ -165,7 +168,9 @@ fn takes_ident_list(name: &str) -> bool {
 /// dropped, without parsing the argument as an expression.
 fn string_literal_arg(name: &str, i: usize) -> bool {
     match kiln_ast::attr::normalize_attr_name(name) {
-        "target" | "target_version" => i == 0,
+        // WP-954: clang's `StringArgument` first also for `unavailable`'s
+        // optional message and `annotate`'s annotation.
+        "target" | "target_version" | "unavailable" | "annotate" => i == 0,
         "target_clones" | "no_sanitize" => true,
         _ => false,
     }
@@ -853,11 +858,18 @@ impl Parser<'_, '_> {
             } else {
                 self.parse_assignment_expr()
             };
-            let Some(e) = e else {
+            let Some(mut e) = e else {
                 ok = false;
                 self.skip_until(&[Punct::RParen], false, false);
                 break;
             };
+            // clang `AcceptsExprPack` (WP-954): `annotate`'s arguments may
+            // be pack expansions, expanded at instantiation.
+            if kiln_ast::attr::normalize_attr_name(&text) == "annotate"
+                && let Some(l) = self.eat(Punct::Ellipsis)
+            {
+                e = self.s.act_pack_expansion(e, l);
+            }
             // clang drops an attribute whose argument is invalid; kiln
             // does so for the string-literal attributes above.
             if string_literal_arg(&text, 0) && self.s.contains_errors(e) {

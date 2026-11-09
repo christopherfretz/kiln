@@ -2,8 +2,9 @@
 // declaration of a function if it appears on any. Found by the clang
 // negative-test run (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, carries_dependency placement is not checked
 //@ expect: compile-fail
-//@ diag: 9:3 error "function declared '[[carries_dependency]]' after its first declaration"
+//@ strict-diags
+//@ diag: 10:3 error "function declared '[[carries_dependency]]' after its first declaration"
+//@ diag: 9:6 note "declaration missing '[[carries_dependency]]' attribute is here"
 void f(int);
 [[carries_dependency]] void f(int);

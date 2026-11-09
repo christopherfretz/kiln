@@ -255,6 +255,7 @@ sema_regparm_wrong_platform = Error (0) "'regparm' is not valid on this platform
 sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
 sema_reorder_ctor = WarningOff [ReorderCtor] (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
 sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order does not match the declaration order";
+sema_require_const_init_added_too_late = Warning [IgnoredAttributes] (0) "'require_constant_initialization' attribute added after initialization of variable";
 sema_requires_positive_value = Error (2) "{1:invalid value '{0}'; must be positive|value '{0}' is too large}";
 sema_ret_addr_label = Warning [ReturnStackAddress] (0) "returning address of label, which is local";
 // WP-204: clang's `checkExprLifetime` for a return ([stmt.return],
