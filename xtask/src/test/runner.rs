@@ -216,6 +216,22 @@ impl Test<'_> {
         None
     }
 
+    /// Builds a compile-kind test's `module:` units for the compiler under
+    /// test (a `run` test builds them with its program); `Some` is the
+    /// verdict when that fails.
+    fn prebuild_modules(&mut self, spec: &TestSpec) -> Option<(Status, Option<String>, String)> {
+        if spec.expect == Expect::Run {
+            return None;
+        }
+        let p = self.build_modules(&self.cfg.compiler.clone(), spec, false).err()?;
+        Some(match p {
+            Problem::Killed { mib, details } => {
+                (Status::Killed, Some(format!("memory limit {mib} MiB")), details)
+            }
+            Problem::Fail(d) | Problem::Broken(d) => (Status::Error, None, d),
+        })
+    }
+
     fn evaluate(&mut self) -> (Status, Option<String>, String) {
         let source = match fs::read(&self.case.path) {
             Ok(b) => String::from_utf8_lossy(&b).into_owned(),
@@ -251,7 +267,7 @@ impl Test<'_> {
         if let Some(reason) = self.mode_skip(&spec, &source) {
             return (Status::Skip, Some(reason), String::new());
         }
-        if !(spec.modules.is_empty() && spec.units.is_empty()) && !kind.speaks_clang() {
+        if (!spec.modules.is_empty() || !spec.units.is_empty()) && !kind.speaks_clang() {
             let reason = "not supported by this compiler (`module:` needs kiln or clang)";
             return (Status::Skip, Some(reason.to_owned()), String::new());
         }
@@ -280,15 +296,8 @@ impl Test<'_> {
                 return (Status::Skip, Some(reason), String::new());
             }
         }
-        if spec.expect != Expect::Run
-            && let Err(p) = self.build_modules(&self.cfg.compiler.clone(), &spec, false)
-        {
-            return match p {
-                Problem::Killed { mib, details } => {
-                    (Status::Killed, Some(format!("memory limit {mib} MiB")), details)
-                }
-                Problem::Fail(d) | Problem::Broken(d) => (Status::Error, None, d),
-            };
+        if let Some(verdict) = self.prebuild_modules(&spec) {
+            return verdict;
         }
         let outcome = match spec.expect {
             Expect::CompileOk => self.compile_ok(&spec),
@@ -407,9 +416,9 @@ impl Test<'_> {
 
     /// Separate compilation of the module units (spec/modules.md §11.7):
     /// `run` tests with `module:` or `unit:` lines, and `two-step`.
-    fn two_step(&self, spec: &TestSpec) -> bool {
+    fn two_step(spec: &TestSpec) -> bool {
         spec.two_step
-            || (spec.expect == Expect::Run && !(spec.modules.is_empty() && spec.units.is_empty()))
+            || (spec.expect == Expect::Run && (!spec.modules.is_empty() || !spec.units.is_empty()))
     }
 
     /// The `-fmodule-file=<name>=<file>` flags of the first `n` `module:`
@@ -417,7 +426,7 @@ impl Test<'_> {
     /// test is [two-step](Self::two_step); otherwise `program` reads the
     /// module file [`Self::build_modules`] wrote.
     fn module_flags(&self, program: &Path, spec: &TestSpec, n: usize) -> Vec<std::ffi::OsString> {
-        let source = self.is_kiln(program) && !self.two_step(spec);
+        let source = self.is_kiln(program) && !Self::two_step(spec);
         let oracle = program != self.cfg.compiler;
         spec.modules[..n]
             .iter()
@@ -455,7 +464,7 @@ impl Test<'_> {
         spec: &TestSpec,
         objects: bool,
     ) -> Result<Vec<PathBuf>, Problem> {
-        if spec.modules.is_empty() || (self.is_kiln(program) && !self.two_step(spec)) {
+        if spec.modules.is_empty() || (self.is_kiln(program) && !Self::two_step(spec)) {
             return Ok(Vec::new());
         }
         self.scratch()?;
@@ -1003,22 +1012,46 @@ impl Test<'_> {
         Ok(o)
     }
 
+    /// Builds a `run` test's binary `exe` with the compiler under test,
+    /// in one command or [two steps](Self::two_step); the output returned
+    /// is the test file's compile's.
+    fn compile_run_test(&mut self, spec: &TestSpec, exe: &Path) -> Result<Output, Problem> {
+        if !Self::two_step(spec) {
+            return self.compile(spec, &[], Some(exe));
+        }
+        let o = self.build_two_step(&self.cfg.compiler.clone(), spec, exe)?;
+        if o.code().is_none() || o.stderr_str().contains("panicked at") {
+            let what = if o.timed_out() { "hung" } else { "crashed" };
+            return Err(Problem::Fail(format!(
+                "compiler {what} ({})\n{}",
+                o.describe_end(),
+                indent(&o.stderr_str())
+            )));
+        }
+        Ok(o)
+    }
+
+    /// Builds a `run` test's binary `exe` with `oracle`; a rejection is
+    /// [`Problem::Broken`].
+    fn compile_run_oracle(&mut self, oracle: &Path, spec: &TestSpec, exe: &Path) -> Check {
+        if !Self::two_step(spec) {
+            return self.oracle_compile(oracle, spec, &[], Some(exe)).map(drop);
+        }
+        let o = self.build_two_step(oracle, spec, exe)?;
+        if o.success() {
+            return Ok(());
+        }
+        Err(Problem::Broken(format!(
+            "the oracle ({}) rejected the test ({})\n{}",
+            oracle.display(),
+            o.describe_end(),
+            indent(&o.stderr_str())
+        )))
+    }
+
     fn run(&mut self, spec: &TestSpec) -> Check {
         let exe = self.scratch()?.join("test.out");
-        let o = if self.two_step(spec) {
-            let o = self.build_two_step(&self.cfg.compiler.clone(), spec, &exe)?;
-            if o.code().is_none() || o.stderr_str().contains("panicked at") {
-                let what = if o.timed_out() { "hung" } else { "crashed" };
-                return Err(Problem::Fail(format!(
-                    "compiler {what} ({})\n{}",
-                    o.describe_end(),
-                    indent(&o.stderr_str())
-                )));
-            }
-            o
-        } else {
-            self.compile(spec, &[], Some(&exe))?
-        };
+        let o = self.compile_run_test(spec, &exe)?;
         if !o.success() {
             return Err(Problem::Fail(format!(
                 "compiling the test failed ({})\n{}",
@@ -1065,19 +1098,7 @@ impl Test<'_> {
             && let Some(oracle) = self.cfg.oracle.clone()
         {
             let oexe = self.dir.join("oracle.out");
-            if self.two_step(spec) {
-                let o = self.build_two_step(&oracle, spec, &oexe)?;
-                if !o.success() {
-                    return Err(Problem::Broken(format!(
-                        "the oracle ({}) rejected the test ({})\n{}",
-                        oracle.display(),
-                        o.describe_end(),
-                        indent(&o.stderr_str())
-                    )));
-                }
-            } else {
-                self.oracle_compile(&oracle, spec, &[], Some(&oexe))?;
-            }
+            self.compile_run_oracle(&oracle, spec, &oexe)?;
             let theirs = self.execute_binary(&oexe, spec, stdin.as_deref(), true)?;
             if theirs.code().is_none() {
                 // The oracle's binary is the reference; if it hangs or
