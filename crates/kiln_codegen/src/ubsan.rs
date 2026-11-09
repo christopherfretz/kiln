@@ -1871,7 +1871,7 @@ impl Cg<'_> {
         loc: Option<Loc>,
     ) -> R<()> {
         let (c, kind, k) = self.ub_trunc_helper(src, from, dst, to);
-        if !self.ub_on(k) {
+        if !self.ub_on(k) || self.ub_type_ignored(k, to) {
             return Ok(());
         }
         let statics = self.ub_conv_statics(loc, from, to, kind)?;
@@ -1889,6 +1889,16 @@ impl Cg<'_> {
         loc: Option<Loc>,
         trunc: bool,
     ) -> R<()> {
+        // clang 22 skips the check when an ignorelist `type:` names the
+        // destination under the truncation kind of its signedness.
+        let k = if self.is_signed(to) {
+            San::IMPLICIT_SIGNED_INTEGER_TRUNCATION
+        } else {
+            San::IMPLICIT_UNSIGNED_INTEGER_TRUNCATION
+        };
+        if self.ub_type_ignored(k, to) {
+            return Ok(());
+        }
         let sn = self.ub_is_negative(src, from);
         let dn = self.ub_is_negative(dst, to);
         let c = self.icmp(IntPredicate::Eq, sn, dn);

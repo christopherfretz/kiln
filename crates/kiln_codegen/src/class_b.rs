@@ -22,6 +22,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::RawId;
 use kiln_ast::sanitize::{SanitizerSet as San, no_sanitize_set};
 use kiln_llvm::{Attr, AttrKind, AttrSetId, GlobalSanitizer, TypeId as LTy};
+use kiln_source::Loc;
 
 use crate::module::{Cg, Sig};
 
@@ -118,23 +119,129 @@ impl Cg<'_> {
         }
     }
 
+    /// clang `CodeGenModule::isInNoSanitizeList(kind, Fn, Loc)` for each
+    /// sanitizer of `kinds`: those an ignorelist lists the function `name`
+    /// under, by `fun:` (its mangled name), `mainfile:`, or `src:` (the
+    /// file of `loc`'s expansion, the main file without one).
+    pub(crate) fn ignored_sanitizers(&self, kinds: San, name: &str, loc: Option<Loc>) -> San {
+        let Some(list) = self.opts.ignorelist.as_deref() else { return San::NONE };
+        let main = self.opts.source_filename.as_str();
+        let file = match (self.sm, loc) {
+            (Some(sm), Some(l)) => sm
+                .offset_of(sm.expansion_loc(l))
+                .map_or(main, |(fid, _)| sm.file_name(fid)),
+            _ => main,
+        };
+        let newer = self.opts.clang_compat >= 22;
+        let mut out = San::NONE;
+        for &(_, k) in kiln_ast::sanitize::SANITIZERS {
+            if !kinds.has_any(k) {
+                continue;
+            }
+            if list.contains(k, "fun", name, "", newer)
+                || list.contains(k, "mainfile", main, "", newer)
+                || list.contains(k, "src", file, "", newer)
+            {
+                out = out.union(k);
+            }
+        }
+        out
+    }
+
+    /// Takes the sanitizers an ignorelist lists the function `f` (declared
+    /// at `loc`) under out of the function being emitted (clang
+    /// `StartFunction` and `CreateGlobalInitOrCleanUpFunction`).
+    pub(crate) fn ignore_sanitizers(&mut self, f: kiln_llvm::FuncId, loc: Option<Loc>) {
+        if self.opts.ignorelist.is_none() {
+            return;
+        }
+        let name = self.m.func(f).name().to_owned();
+        let ignored = self.ignored_sanitizers(self.opts.sanitize.kinds, &name, loc);
+        self.f.san_ignored = ignored;
+        self.f.san = self.f.san.without(ignored);
+    }
+
     /// The sanitizer metadata of the global of variable `d` (clang
     /// `SanitizerMetadata::reportGlobal`), `dyn_init` when it has a
     /// dynamic initializer; nothing unless an address, hardware-address
     /// or memory-tagging sanitizer is on.
-    pub(crate) fn global_sanitizer(&self, d: DeclId, dyn_init: bool) -> GlobalSanitizer {
+    pub(crate) fn global_sanitizer(
+        &self,
+        d: DeclId,
+        g: kiln_llvm::GlobalId,
+        dyn_init: bool,
+    ) -> GlobalSanitizer {
         let kinds = expand_kernel(self.opts.sanitize.kinds);
         if !kinds.has_any(San::ADDRESS.union(San::HWADDRESS).union(San::MEMTAG)) {
             return GlobalSanitizer::default();
         }
         let no = expand_kernel(self.no_sanitize_mask(d)).intersect(kinds);
-        let no_address = no.has_any(San::ADDRESS);
+        let listed = |k: San, cat: &str| self.global_ignored(k, d, g, cat);
+        let no_address = no.has_any(San::ADDRESS) || listed(kinds.intersect(San::ADDRESS), "");
         GlobalSanitizer {
             no_address,
-            no_hwaddress: no.has_any(San::HWADDRESS),
-            memtag: kinds.has_any(San::MEMTAG_GLOBALS) && !no.has_any(San::MEMTAG),
-            dyninit: dyn_init && !no_address && kinds.has_any(San::ADDRESS),
+            no_hwaddress: no.has_any(San::HWADDRESS)
+                || listed(kinds.intersect(San::HWADDRESS), ""),
+            memtag: kinds.has_any(San::MEMTAG_GLOBALS)
+                && !no.has_any(San::MEMTAG)
+                && !listed(kinds.intersect(San::MEMTAG), ""),
+            dyninit: dyn_init
+                && !no_address
+                && kinds.has_any(San::ADDRESS)
+                && !listed(San::ADDRESS.union(San::KERNEL_ADDRESS), "init"),
         }
+    }
+
+    /// clang `CodeGenModule::isInNoSanitizeList(kind, GV, Loc, Ty,
+    /// category)` for the global `g` of variable `d`: `global:` (its
+    /// name), `mainfile:`, `src:` (the file of `d`'s expansion) or
+    /// `type:` (a class type, arrays drilled to their element, printed
+    /// canonically with full scope).
+    fn global_ignored(&self, k: San, d: DeclId, g: kiln_llvm::GlobalId, cat: &str) -> bool {
+        let Some(list) = self.opts.ignorelist.as_deref() else { return false };
+        if k.is_empty() {
+            return false;
+        }
+        let newer = self.opts.clang_compat >= 22;
+        let main = self.opts.source_filename.as_str();
+        if list.contains(k, "global", self.m.global(g).name(), cat, newer)
+            || list.contains(k, "mainfile", main, cat, newer)
+        {
+            return true;
+        }
+        let ast = self.ast;
+        let loc = ast.decls.get(d).loc();
+        if let Some(sm) = self.sm
+            && let Some((fid, _)) = sm.offset_of(sm.expansion_loc(loc))
+            && list.contains(k, "src", sm.file_name(fid), cat, newer)
+        {
+            return true;
+        }
+        let Some(mut q) = ast.decls.get(d).ty() else { return false };
+        while ast.types.is_array(q) {
+            match ast.types.element(q) {
+                Some(e) => q = e,
+                None => break,
+            }
+        }
+        let q = ast.types.canonical(q);
+        if ast.types.as_record(q).is_none() {
+            return false;
+        }
+        let names = match self.sm {
+            Some(sm) => kiln_ast::dump::AstNames::with_sources(ast, sm),
+            None => kiln_ast::dump::AstNames::new(ast),
+        };
+        let opts = kiln_ast::types::PrintOptions {
+            full_scope: true,
+            ..kiln_ast::types::PrintOptions::SUGARED
+        };
+        let s = kiln_ast::types::print_type(&ast.types, &names, q, opts);
+        let mut s = s.as_str();
+        while let Some(r) = ["const ", "volatile "].iter().find_map(|p| s.strip_prefix(p)) {
+            s = r;
+        }
+        list.contains(k, "type", s, cat, newer)
     }
 
     /// The class B attribute nodes of kind `k` on the redeclarations of
@@ -273,7 +380,7 @@ impl Cg<'_> {
             a.push(Attr::Flag(AttrKind::DisableSanitizerInstrumentation));
         } else if self.opts.sanitize.any() {
             let all = self.opts.sanitize.kinds;
-            let s = self.fn_sanitizers(start);
+            let s = self.fn_sanitizers(start).without(self.f.san_ignored);
             if all.has_any(San::BOUNDS) && !s.has_any(San::BOUNDS) {
                 a.push(Attr::Flag(AttrKind::NoSanitizeBounds));
             }
