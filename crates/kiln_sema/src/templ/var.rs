@@ -543,7 +543,10 @@ impl Sema<'_, '_> {
     ) -> Result<DeclId, ()> {
         let tmpl = sid.template;
         let range = sid.range;
-        let def = d.init_style.is_some();
+        // clang: a non-`extern` declaration outside a class "defines"
+        // (`int v<T...>;` at namespace scope is a definition).
+        let def =
+            Self::declares_definition(d, vspec) && self.kind_of(self.ctx) != DeclKind::CXXRecord;
         let conv =
             self.check_partial_args(tmpl, head, &sid.args, &sid.arg_locs, true, def, range)?;
         if let Some(i) = self.find_partial_decl(tmpl, conv.canonical, head) {

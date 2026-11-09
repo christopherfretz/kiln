@@ -80,9 +80,13 @@ impl Sema<'_, '_> {
         }
         let declared: Vec<DeclId> = self.ast.constructors(r).iter().collect();
         // clang skips an ineligible constructor ([special]/6: its
-        // constraints are not satisfied).
+        // constraints are not satisfied, or another is at least as
+        // constrained).
         for c in declared {
-            if self.is_deleted_fn(c) || !self.fn_spec(c).is_trivial() {
+            if self.is_deleted_fn(c)
+                || !self.fn_spec(c).is_trivial()
+                || self.fn_spec(c).not_selected()
+            {
                 continue;
             }
             let loc = self.ast.decls.get(c).loc();

@@ -1101,7 +1101,7 @@ impl Sema<'_, '_> {
         let Some(ty) = self.ast.decls.get(d).ty() else { return };
         let e = self.base_element(ty);
         let Some(r) = self.ast.types.as_record(e) else { return };
-        if !self.trivial_default_ctor(r) {
+        if !self.has_trivial(r, crate::class::SpecialKind::DefaultCtor) {
             let at = self.ast.decls.get(d).loc();
             self.error(DiagId::sema_loader_uninitialized_trivial_ctor, at);
             self.ast.decls.set_flags(d, kiln_ast::decl::DeclFlags::INVALID);

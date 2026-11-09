@@ -1127,12 +1127,13 @@ impl Sema<'_, '_> {
         let class = self.ast.definition(rec)?;
         let class = conv::bases::complete_class(self, class)?;
         let defn = self.ast.decls.record(class).map(|r| r.defn).unwrap_or_default();
-        if defn.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR) {
-            // Default-initialization does nothing; value-initialization
-            // zero-initializes ([dcl.init.general]/9.1.2).
-            return value_init.then(|| Ok(self.builder().implicit_value_init(ty)));
-        }
+        // The constructor is always selected, so a deleted, ambiguous or
+        // inaccessible one is diagnosed even when the class also has a
+        // trivial eligible default constructor ([special]/6: triviality is
+        // per eligible member, not "the" constructor; WP-1109).
         let sel = self.select_special(class, SpecialKind::DefaultCtor, Quals::NONE, Quals::NONE);
+        let trivial = defn.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR)
+            && matches!(sel, Selected::Found(m) if self.fn_spec(m).is_trivial());
         let call = CtorCall { value_init, ..CtorCall::new(&[]) };
         let sites = DiagSites { access: at, deleted: at, deleted_as: DeletedAs::Call };
         let e = self.use_ctor(
@@ -1145,6 +1146,15 @@ impl Sema<'_, '_> {
             InitEntity::Var,
             sites,
         );
+        if trivial {
+            // The selected constructor is trivial: default-initialization
+            // does nothing; value-initialization zero-initializes
+            // ([dcl.init.general]/9.1.2).
+            return match e {
+                Some(_) => value_init.then(|| Ok(self.builder().implicit_value_init(ty))),
+                None => Some(Err(())),
+            };
+        }
         Some(e.ok_or(()))
     }
 
