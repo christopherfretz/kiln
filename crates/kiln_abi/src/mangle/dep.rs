@@ -548,6 +548,33 @@ impl Mangler<'_, '_> {
         ok
     }
 
+    /// `L <type> <value> E`, or `sZ <param>` for a substituted
+    /// `sizeof...` (a non-dependent `SizeOfPackExpr` in clang, which still
+    /// names its pack).
+    fn integer_literal(&mut self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let pack = ast.templates.size_of_pack_origin.get(e);
+        if let Some(p) = pack.and_then(|&d| ast.template_parm(d)) {
+            self.out.push_str("sZ");
+            self.template_param_at(u32::from(p.depth), u32::from(p.index));
+            return true;
+        }
+        let ty = ast.exprs.get(e).ty();
+        let Some(v) = ast.exprs.int_value(e) else {
+            // A literal outside the 64-bit signed range
+            // (`18446744073709551615ull`) keeps its value as a constant:
+            // `L <type> <decimal> E` all the same (WP-980).
+            let Some(c) = ast.exprs.literal_const(e) else { return false };
+            self.value_in_arg(ty, c, false);
+            return true;
+        };
+        self.out.push('L');
+        self.ty(ty);
+        self.out.push_str(&v.to_string());
+        self.out.push('E');
+        true
+    }
+
     fn expression_node(&mut self, e: ExprId, arity: usize) -> bool {
         let ast = self.ast;
         if self.substituted_value(e) {
@@ -557,28 +584,7 @@ impl Mangler<'_, '_> {
         let e = self.skip_transparent(e);
         let n = ast.exprs.get(e);
         match n.kind() {
-            ExprKind::IntegerLiteral => {
-                // A substituted `sizeof...` (a non-dependent
-                // `SizeOfPackExpr` in clang) still names its pack.
-                let pack = ast.templates.size_of_pack_origin.get(e);
-                if let Some(p) = pack.and_then(|&d| ast.template_parm(d)) {
-                    self.out.push_str("sZ");
-                    self.template_param_at(u32::from(p.depth), u32::from(p.index));
-                    return true;
-                }
-                let Some(v) = ast.exprs.int_value(e) else {
-                    // A literal outside the 64-bit signed range
-                    // (`18446744073709551615ull`) keeps its value as a
-                    // constant: `L <type> <decimal> E` all the same (WP-980).
-                    let Some(c) = ast.exprs.literal_const(e) else { return false };
-                    self.value_in_arg(n.ty(), c, false);
-                    return true;
-                };
-                self.out.push('L');
-                self.ty(n.ty());
-                self.out.push_str(&v.to_string());
-                self.out.push('E');
-            }
+            ExprKind::IntegerLiteral => return self.integer_literal(e),
             ExprKind::CharacterLiteral => {
                 self.out.push('L');
                 self.ty(n.ty());
