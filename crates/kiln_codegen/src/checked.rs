@@ -247,6 +247,9 @@ impl Cg<'_> {
     /// clang `Builtin::BI__builtin_alloca{,_with_align}`: a dynamic
     /// `alloca i8, i64 %n` where the call is, aligned to the target's
     /// `__BIGGEST_ALIGNMENT__` or to the requested alignment in bits.
+    /// Under `-ftrivial-auto-var-init=zero|pattern` (and kiln's C++26
+    /// default) the memory is then filled ([`Cg::auto_init_alloca`]),
+    /// except for the `_uninitialized` variants.
     pub(crate) fn emit_alloca(&mut self, b: u32, e: ExprId, args: &[ExprId]) -> R<V> {
         let Some(&n) = args.first() else {
             return err(self.loc_of(e), "__builtin_alloca needs a size");
@@ -264,7 +267,11 @@ impl Cg<'_> {
         } else {
             self.target.biggest_align
         };
-        Ok(self.f.fir.push(Op::DynAlloca { ty: LTy::I8, count, align }, LTy::PTR))
+        let p = self.f.fir.push(Op::DynAlloca { ty: LTy::I8, count, align }, LTy::PTR);
+        if !matches!(b, id::ALLOCA_UNINITIALIZED | id::ALLOCA_WITH_ALIGN_UNINITIALIZED) {
+            self.auto_init_alloca(p, count, align);
+        }
+        Ok(p)
     }
 }
 
