@@ -522,7 +522,14 @@ impl Mangler<'_, '_> {
                     self.template_param_at(u32::from(p.depth), u32::from(p.index));
                     return true;
                 }
-                let Some(v) = ast.exprs.int_value(e) else { return false };
+                let Some(v) = ast.exprs.int_value(e) else {
+                    // A literal outside the 64-bit signed range
+                    // (`18446744073709551615ull`) keeps its value as a
+                    // constant: `L <type> <decimal> E` all the same (WP-980).
+                    let Some(c) = ast.exprs.literal_const(e) else { return false };
+                    self.value_in_arg(n.ty(), c, false);
+                    return true;
+                };
                 self.out.push('L');
                 self.ty(n.ty());
                 self.out.push_str(&v.to_string());
@@ -662,7 +669,10 @@ impl Mangler<'_, '_> {
                     UnaryOp::Minus => "ng",
                     UnaryOp::Not => "co",
                     UnaryOp::LNot => "nt",
-                    _ => return false,
+                    // clang has no operator name for these and mangles
+                    // the operand alone (WP-980).
+                    UnaryOp::Real | UnaryOp::Imag | UnaryOp::Extension => "",
+                    UnaryOp::Coawait => return false,
                 };
                 self.out.push_str(code);
                 return self.expression(ast.exprs.operand(expr));
@@ -748,6 +758,19 @@ impl Mangler<'_, '_> {
                 });
                 self.ty(node.ty());
                 return self.expression(ast.exprs.operand(expr));
+            }
+            // `[gs] dl|da <expression>` (clang `CXXDeleteExprClass`;
+            // WP-980).
+            ExprKind::CXXDeleteExpr => {
+                if node.has(kiln_ast::expr::ExprFlags::GLOBAL) {
+                    self.out.push_str("gs");
+                }
+                self.out.push_str(if node.has(kiln_ast::expr::ExprFlags::ARRAY_FORM) {
+                    "da"
+                } else {
+                    "dl"
+                });
+                return self.expression(ast.exprs.delete_operand(expr));
             }
             _ => return false,
         }
