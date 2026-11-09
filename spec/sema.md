@@ -3780,8 +3780,24 @@ specification as written (`TypeNames` prints ` noexcept`,
   specification `ExcSpec::None` (clang's `EST_None`), reported at the
   list's `)` (`dyn_exc_rparen`) with `in instantiation of exception
   specification for 'f3<Inc>' requested here`. Under C++98 the list is
-  substituted with the declaration. Inside template argument deduction
-  (SFINAE) the substituted list is not checked (follow-up).
+  substituted with the declaration; inside template argument deduction
+  the substituted list is checked as the specialization's instantiation,
+  not as a substitution failure (WP-1137, `as_spec_instantiation`; clang
+  `InitFunctionInstantiation` turns the deduction frame into a
+  `TemplateInstantiation` one), so a failing type is a hard error with
+  `in instantiation of function template specialization 'h<Inc>'
+  requested here`. A member template of a
+  class specialization whose list was dropped there has none. A list in
+  a function type nested in a substituted type (`void (*)() throw(T)`) is
+  checked type by type at that function type's first token
+  (`templ/subst/types.rs`, clang `TransformExceptionSpec`); a failure
+  fails the substitution: a substitution failure in deduction, else an
+  invalid declaration (WP-1137).
+  From C++17 the dynamic list kept after `-Wdynamic-exception-spec` lives
+  only in the written (sugared) function type; the override check
+  (`resolved_exc`) and the implicit-specification redeclaration check
+  (`exc_of` in excspec.rs) read it with `written_exc_spec`, so they
+  behave as before C++17 (WP-1137).
 - **GNU `nothrow`** (WP-186, `apply_nothrow_attrs` in `decl_attrs.rs`;
   clang `handleFunctionTypeAttr` `AT_NoThrow`): `__attribute__((nothrow))`
   or `[[gnu::nothrow]]` anywhere in a declaration whose declared type is
