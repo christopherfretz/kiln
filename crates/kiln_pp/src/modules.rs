@@ -482,12 +482,7 @@ impl Preprocessor<'_, '_> {
     /// above), other than `std`, names no entity yet: it joins
     /// [`Preprocessor::unseen_names`], so that it does not count as
     /// seen for the image gate (spec/modules.md §11.11, "ODR merging").
-    fn read_module_name(
-        &mut self,
-        t: &mut Token,
-        kw: &str,
-        mark: u32,
-    ) -> Option<(String, Span)> {
+    fn read_module_name(&mut self, t: &mut Token, kw: &str, mark: u32) -> Option<(String, Span)> {
         let start = t.span;
         let mut name = String::new();
         loop {
