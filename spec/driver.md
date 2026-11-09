@@ -127,6 +127,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-dD` | with `-E`: the text, plus every `#define`/`#undef` where it occurs, the predefines' and command line's first (as clang's; WP-920) |
 | `-dI` | with `-E`: the text, plus every `#include`/`#include_next`/`#import` directive as `#include "x.h" /* clang -E -dI */` before the header's text (clang's spelling, WP-920) |
 | `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name names a module file whose header gives the module (spec/modules.md §11.6) |
+| `-fmodules-cache-path=<dir>`, `-f[no-]kiln-module-cache` | where the `std` / `std.compat` module cache lives, and turning it off (see "Module cache") |
 | `-f[no-]fast-math`, its parts, `-ffp-model=`, `-ffp-contract=`, `-fdenormal-fp-math=`, the FP environment flags | see "Floating-point flags" (WP-806) |
 | `-fstack-protector*`, `-f[no-]unwind-tables`, `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-ffunction-sections`, `-fdata-sections`, `-mtune=`, `-f[no-]wrapv`, `-f[no-]strict-overflow`, `-f[no-]delete-null-pointer-checks`, `-Wp,<list>`, `-Xpreprocessor <arg>`, and the ignored and rejected sets | see "Codegen flags" (WP-605) |
 | `-fcrash-diagnostics[=compiler\|all\|off]`, `-fno-crash-diagnostics` | whether an internal compiler error writes the crash reproducer (default on; `=off` and the negative turn it off, the last wins); see "Internal compiler errors" (WP-911) |
@@ -1126,7 +1127,8 @@ an earlier compile (spec/modules.md §11; WP-917). A module (or partition
 4. `std` and `std.compat` only: `<llvm>/share/libc++/v1/std.cppm` /
    `std.compat.cppm`, where `<llvm>` is the toolchain's LLVM directory
    ("LLVM discovery"; clang 19's and 22's libc++ have the
-   same layout).
+   same layout). The module file comes from the module cache ("Module
+   cache"), which builds it from that source on a miss.
 
 A module not found is `fatal error: module 'M' not found` at the module
 name. Header units (`import "h";`, `import <h>;`) are found like
@@ -1171,6 +1173,48 @@ emits only declarations for the non-inline functions and variables of the
 units it imports. `-fmodule-header` and header-unit module files are not
 supported yet (spec/modules.md §11.10); `-fmodules-reduced-bmi` is
 accepted and ignored ("Codegen flags").
+
+### Module cache (WP-984)
+
+`std` and `std.compat` found by step 4 above are imported from module
+files in a per-user cache, built there on first use (spec/modules.md
+§11.12 has the design):
+
+- **Location.** `-fmodules-cache-path=<dir>` (made absolute), else
+  `$XDG_CACHE_HOME/kiln/modules` when `XDG_CACHE_HOME` is an absolute
+  path (the XDG rule: a relative one is ignored), else `$HOME/.cache/kiln/modules`. An entry is
+  `<root>/<key>/<name>.pcm` plus `<name>.stamp`, where `<key>` is 32 hex
+  digits (spec/modules.md §11.12 "Key").
+- **Turning it off.** `-fno-kiln-module-cache` (`-fkiln-module-cache`
+  turns it back on; the last one wins) or an empty
+  `-fmodules-cache-path=`. Without a home directory there is no cache.
+  The cache is also off for `kiln-scan-deps`, which imports nothing. A
+  kiln-specific flag, not clang's `-fno-implicit-module-maps` family,
+  because clang has no equivalent: clang never builds `std` implicitly.
+  `-fmodules-cache-path=` is clang's spelling for the Clang-modules
+  cache, which kiln reuses for the one cache it has.
+- **Precedence.** Only step 4 consults the cache: `-fmodule-file=std=`
+  or a `std.pcm` / `std.cppm` in a `-fprebuilt-module-path` wins, as
+  without it.
+- **Failure is never an error.** A cache directory that cannot be
+  created, a module that fails to build there, or a stamp that cannot be
+  written falls back to building the module from its source in-process
+  (part A), which reports the module's own errors as before. Under `-v`
+  each case prints one line on standard error
+  (`kiln++: module cache: cannot create '<dir>': <reason>; building 'std'
+  from its source`), as do a miss (`building 'std' into '<pcm>'`) and a
+  hit (`using '<pcm>' for 'std'`).
+- **Concurrency.** Racing compiles on a miss each build the module and
+  rename it into place; the last rename wins and every one of them gets
+  a complete file (spec/modules.md §11.12 "Concurrency").
+- **No eviction.** Entries for configurations no longer used stay until
+  removed by hand (`rm -r ~/.cache/kiln/modules`; each is about 9 MiB).
+- `-print-file-name=libc++.modules.json` prints libc++'s module
+  manifest for the libc++ that `-stdlib=libc++` selects
+  (`<prefix>/lib/<triple>/` then `<prefix>/lib/`, where
+  `<prefix>/include/c++/v1` holds the headers), so CMake's
+  `CXX_MODULE_STD` finds `std.cppm` through its relative `source-path`
+  (spec/modules.md §11.12 "CMake").
 
 ## Dependency scanning
 
@@ -1761,7 +1805,7 @@ reported next to the answer (clang stays silent).
 | `-print-multiarch` | the Debian multiarch name (`x86_64-linux-gnu`, `aarch64-linux-gnu`); GCC's probe, which clang 19 rejects |
 | `-print-sysroot` | `--sysroot`, else an empty line; GCC's probe |
 | `-print-resource-dir` | the resource directory |
-| `-print-file-name=<f>` | `<resource dir>/<f>` if it exists, else the backing clang++'s answer (which searches the GCC installation and library paths and echoes `<f>` when nothing matches) |
+| `-print-file-name=<f>` | `<resource dir>/<f>` if it exists; for `libc++.modules.json`, libc++'s module manifest ("Module cache"); else the backing clang++'s answer (which searches the GCC installation and library paths and echoes `<f>` when nothing matches) |
 | `-print-prog-name=<p>`, `-print-libgcc-file-name`, `-print-search-dirs` | the backing clang++'s answer, run with the toolchain arguments kiln links with (`--target=`, `--sysroot=`, `--gcc-toolchain=`, `--gcc-install-dir=`; `toolchain_link_args`): links go through that program, so its tools, runtime library and search directories are the honest ones |
 
 ## Reproducible time
@@ -1966,7 +2010,12 @@ Each deviation is covered by a test or a test note.
 - `crates/kiln_driver/tests/scan_deps.rs` (WP-982): the dependency
   scanner against clang-scan-deps 22's output (spec/modules.md Tests);
   `scripts/oss/selftest.sh` `cmake_modules`: a CMake `FILE_SET
-  CXX_MODULES` build with Ninja, run and rebuilt incrementally.
+  CXX_MODULES` build with Ninja, run and rebuilt incrementally, with a
+  `CXX_MODULE_STD` target (WP-984).
+- `crates/kiln_driver/tests/module_cache.rs` (WP-984): the `std` module
+  cache against a miniature libc++ sysroot (miss then hit, both modules,
+  invalidation, racing misses, an unwritable root, location and
+  switches, `-print-file-name=libc++.modules.json`).
 - `run` conformance tests compile and link through the driver.
 - Unit tests sit in each module.
 - Parity: `cargo xtask test tests/differential/pp tests/conformance/cpp.*

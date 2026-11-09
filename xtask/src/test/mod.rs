@@ -420,6 +420,9 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     let gcc = gcc_oracle(opts)?;
     let gcc_toolchain = gcc.as_ref().and_then(|(path, _)| crate::oracle::gcc_toolchain_of(path));
     let meta_header = meta_header_dir(opts, &root, gcc_toolchain.as_deref())?;
+    let libcxx_modules = std::iter::once(&compiler)
+        .chain(oracle.as_ref())
+        .find_map(|c| crate::util::libcxx_module_dir_of(c, &toolchain.llvm_dir()));
 
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let scratch = target.join("xtask-test").join(format!("run-{}-{nanos}", std::process::id()));
@@ -436,6 +439,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         oracle_clang,
         gcc: gcc.as_ref().map(|(path, _)| path.clone()),
         gcc_toolchain,
+        libcxx_modules,
         meta_header,
         llvm_dir: toolchain.llvm_dir(),
         llvm_major: toolchain.version,

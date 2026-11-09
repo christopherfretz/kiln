@@ -22,6 +22,7 @@ pub mod fp_flags;
 mod help;
 pub mod link;
 pub mod llvm;
+pub mod module_cache;
 mod pch;
 pub mod pp_cmd;
 pub mod rsp;
@@ -222,6 +223,13 @@ fn immediate(args: &Args, tc: &Toolchain, io: &mut Io, drv: &DiagEngine<'_>) -> 
         let own = std::path::Path::new(&tc.resource_dir).join(name);
         if !name.is_empty() && own.exists() {
             return line(&own.display().to_string());
+        }
+        // libc++'s module manifest, for build systems' `import std;`
+        // (CMake's `CXX_MODULE_STD`; spec/driver.md "Module cache").
+        if name == "libc++.modules.json"
+            && let Some(json) = tc.libcxx_modules_json()
+        {
+            return line(&json.display().to_string());
         }
         return Some(delegate(args, tc, io, drv, &[format!("-print-file-name={name}")]));
     }

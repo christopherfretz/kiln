@@ -2,9 +2,10 @@
 // in the global namespace (::size_t, ::strlen, ::printf).
 //@ expect: run
 //@ std: c++20
-//@ args: -stdlib=libc++
+//@ args: -stdlib=libc++ -Wno-reserved-module-identifier
+//@ module: std=%{libcxx_modules}/std.cppm
+//@ module: std.compat=%{libcxx_modules}/std.compat.cppm
 //@ stdout: 5 5
-//@ skip(clang): clang needs a prebuilt std.compat BMI (two-step --precompile of libc++'s std.compat.cppm) that the harness cannot drive
 import std.compat;
 
 int main() {
