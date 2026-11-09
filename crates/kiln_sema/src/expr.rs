@@ -2290,6 +2290,9 @@ impl Sema<'_, '_> {
             self.count_var_ref(d);
         }
         self.diagnose_deprecated(d, loc);
+        if n.kind() == DeclKind::Function {
+            self.diagnose_main_use(d, loc);
+        }
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
         // [expr.prim.id.unqual]/3: naming a variable captured by an
         // enclosing lambda (spec/sema-lambda.md §3).

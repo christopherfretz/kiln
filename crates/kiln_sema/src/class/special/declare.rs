@@ -225,7 +225,7 @@ impl Sema<'_, '_> {
         // function makes the declaration invalid (clang
         // `CheckExplicitObjectMemberFunction` runs first).
         let eo = if !xobj || matches!(shape, Shape::Conv(_) | Shape::Assign) {
-            self.explicit_object_member(ds, &params, true)
+            self.explicit_object_member(ds, &params, true, false)
         } else {
             None
         };
@@ -409,6 +409,28 @@ impl Sema<'_, '_> {
                 matched = Some(c);
                 break;
             }
+        }
+        // [over.load]/2.3 (C++20), [basic.scope.scope]/3 (C++23): a
+        // conversion function or `operator=` differing from an earlier one
+        // only in a ref-qualifier present on just one of them (WP-1041).
+        // Like clang, not for member templates, and a conversion to a
+        // dependent type only at instantiation (which declares it here).
+        let ref_mix_shape = match shape {
+            Shape::Conv(t) => !self.ast.types.is_dependent(t),
+            Shape::Assign => true,
+            _ => false,
+        };
+        if matched.is_none() && in_class && !*invalid && !xobj_member && !templ && ref_mix_shape {
+            let new = crate::overload::redecl::NewFn {
+                ty,
+                is_static: false,
+                head: None,
+                requires: d.trailing_requires,
+                enable_if,
+                member_using: false,
+                pass_object_size: false,
+            };
+            matched = self.ref_qualifier_mix(name, new, sloc);
         }
         if matched.is_none()
             && !in_class

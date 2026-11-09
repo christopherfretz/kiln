@@ -661,6 +661,14 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return;
         }
+        // A parameter of an enclosing template's head (WP-1042).
+        if self.inst.stack.is_empty() {
+            self.check_template_param_shadow(n, loc);
+        }
+        let Some(s) = self.scopes.iter_mut().rev().find(|s| s.kind == ScopeKind::TemplateParams)
+        else {
+            return;
+        };
         s.locals.push((n, p, Ns::Ordinary));
     }
 
@@ -668,12 +676,21 @@ impl Sema<'_, '_> {
     /// parameter) whose ordinary lookup finds a template parameter
     /// redeclares it (clang's `DiagnoseTemplateParameterShadow`).
     pub(crate) fn check_template_param_shadow(&self, name: Symbol, loc: Loc) {
+        self.check_template_param_shadow_in(name, loc, false);
+    }
+
+    /// [`Sema::check_template_param_shadow`]; `tag`: for a tag name, which
+    /// a non-type parameter does not hide (tag lookup skips it).
+    pub(crate) fn check_template_param_shadow_in(&self, name: Symbol, loc: Loc, tag: bool) {
         if !self.in_template() {
             return;
         }
         let found = self.lookup_name(name, crate::lookup::LookupKind::Ordinary);
         let [p] = found.decls[..] else { return };
-        if !kiln_ast::templates::is_template_parm_kind(self.kind_of(p)) {
+        let k = self.kind_of(p);
+        if !kiln_ast::templates::is_template_parm_kind(k)
+            || (tag && k == DeclKind::NonTypeTemplateParm)
+        {
             return;
         }
         let msg = self

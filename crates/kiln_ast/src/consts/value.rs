@@ -209,7 +209,8 @@ impl FloatKind {
         self.bits() / 8
     }
 
-    pub(crate) fn from_u8(v: u8) -> Option<Self> {
+    /// The kind with discriminant `v` (the module image).
+    pub fn from_u8(v: u8) -> Option<Self> {
         Self::ALL.get(usize::from(v)).copied()
     }
 }

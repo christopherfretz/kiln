@@ -88,6 +88,22 @@ impl Parser<'_, '_> {
 
     // -- template declarations ---------------------------------------------------------
 
+    /// Whether the `enum` at the current token declares or defines the
+    /// enumeration (`enum class E : int;`, `enum E {`) rather than naming
+    /// it in an elaborated-type-specifier.
+    fn at_enum_declaration(&self) -> bool {
+        let mut n = 1;
+        if matches!(self.kw_of(self.peek(1)), Some(Kw::Class | Kw::Struct)) {
+            n += 1;
+        }
+        if matches!(self.peek(n).kind, TokKind::Identifier(_)) {
+            n += 1;
+        }
+        self.peek_is(n, Punct::LBrace)
+            || self.peek_is(n, Punct::Semi)
+            || self.peek_is(n, Punct::Colon)
+    }
+
     /// Whether the `enum` at the current token names its enumeration with
     /// a nested-name-specifier (`enum class A<int>::E`).
     fn at_qualified_enum(&self) -> bool {
@@ -100,8 +116,8 @@ impl Parser<'_, '_> {
                 && (self.peek_is(n + 1, Punct::ColonColon) || self.peek_is(n + 1, Punct::Less)))
     }
 
-    /// An unqualified `enum` after `template<>` or an explicit
-    /// instantiation's `template`: like clang, "enumeration cannot be a
+    /// An unqualified `enum` after a template head, `template<>` or an
+    /// explicit instantiation's `template`: like clang, "enumeration cannot be a
     /// template" at the token after the name and enum-base and
     /// "declaration does not declare anything" at `enum`; the declaration
     /// is skipped.
@@ -432,6 +448,14 @@ impl Parser<'_, '_> {
             Some(Kw::StaticAssert) => {
                 self.error_here(DiagId::parse_expected_unqualified_id);
                 self.skip_unsupported_declaration();
+                return;
+            }
+            // [temp.pre]/2: an enumeration is not a templated entity of
+            // its own (`template<class T> enum E {};`); a member
+            // enumeration of a class template (`A<T>::E`) is, and
+            // `template<class T> enum E v;` is a variable template.
+            Some(Kw::Enum) if !self.at_qualified_enum() && self.at_enum_declaration() => {
+                self.enum_template_declaration();
                 return;
             }
             _ => {}

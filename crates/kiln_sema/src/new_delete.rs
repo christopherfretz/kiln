@@ -8,7 +8,9 @@
 //! calls (array cookies) are WP-067b / WP-076.
 
 use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, EnumData, FnSpec};
-use kiln_ast::expr::{ExprDeps, ExprFlags, ExprKind, NewExtra, NewInitStyle, Radix};
+use kiln_ast::expr::{
+    CastKind, ExprDeps, ExprFlags, ExprKind, NewExtra, NewInitStyle, Radix, ValueCategory,
+};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{ExcSpec, FuncInfo, Nns, Quals, TagKeyword};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
@@ -1780,22 +1782,25 @@ impl Sema<'_, '_> {
         while self.ast.types.is_array(elem) {
             elem = self.ast.types.element(elem).unwrap_or(QualType::ERROR);
         }
-        // [expr.delete]/6: the destructor is invoked.
-        let destructed = if complete {
-            let at = self.expr_loc(operand);
-            match self.mark_element_dtor_referenced(elem, (at, DiagId::sema_access_dtor), loc) {
-                Some(d) => d,
-                None => return self.recover_err(&[operand], loc),
-            }
-        } else {
-            false
-        };
         let align = if complete {
             crate::target::size_align(&self.ast, elem, &self.abi).map_or(1, |(_, a)| a)
         } else {
             1
         };
         let aligned = align > self.abi.default_new_align;
+        // [expr.delete]/6: the destructor is invoked. A `delete[]` needs
+        // to know first (it decides the size below); a single-object
+        // delete chooses the deallocation function first (clang
+        // `ActOnCXXDelete`): a destroying operator delete does not invoke
+        // a non-virtual destructor (CWG2889, clang 20).
+        let destructed = if array && complete {
+            match self.delete_dtor(operand, elem, loc) {
+                Some(d) => d,
+                None => return self.recover_err(&[operand], loc),
+            }
+        } else {
+            false
+        };
         // [expr.delete]/10: a usual deallocation function; the sized one
         // when the type is complete and the size is known: a `delete[]`
         // knows it only from an array cookie, i.e. for elements with a
@@ -1807,7 +1812,10 @@ impl Sema<'_, '_> {
         let found = self.alloc_fns(elem, op, global || !complete, loc);
         let usual = self.usual_delete(&found.fns, found.in_class, aligned, want_sized, !array);
         if usual.is_none() && found.in_class {
-            self.no_suitable_delete(op, elem, &found.fns, loc);
+            // A class whose `operator delete` was already diagnosed.
+            if !found.fns.iter().any(|&f| self.ast.decls.get(f).has(DeclFlags::INVALID)) {
+                self.no_suitable_delete(op, elem, &found.fns, loc);
+            }
             return self.recover_err(&[operand], loc);
         }
         let op_delete = usual.map(|u| u.0);
@@ -1819,6 +1827,22 @@ impl Sema<'_, '_> {
         if let (Some(f), Some(naming)) = (op_delete, found.naming)
             && !self.check_member_access(f, naming, None, loc)
         {
+            return self.recover_err(&[operand], loc);
+        }
+        let destroying = op_delete.is_some_and(|f| self.ast.is_destroying_operator_delete(f));
+        if !array
+            && complete
+            && !(destroying && self.clang_compat >= 22 && !self.has_virtual_dtor(elem))
+            && self.delete_dtor(operand, elem, loc).is_none()
+        {
+            return self.recover_err(&[operand], loc);
+        }
+        // A deleted deallocation function is used ([dcl.fct.def.delete]/2;
+        // clang `DiagnoseUseOfDecl`).
+        if let Some(f) = op_delete
+            && self.is_deleted_fn(f)
+        {
+            self.diagnose_deleted_use(f, loc);
             return self.recover_err(&[operand], loc);
         }
         if let Some(f) = op_delete {
@@ -1837,6 +1861,21 @@ impl Sema<'_, '_> {
                 && let Some(&p0) = ps.first()
                 && !self.ast.types.same_type(self.ety(c), p0)
             {
+                // The operand's cv-qualifiers do not matter: only access
+                // and ambiguity are checked (clang `ActOnCXXDelete`).
+                let ct = self.ety(c);
+                if let Some(pt) = self.ast.types.pointee(ct)
+                    && !self.ast.types.effective_quals(pt).is_empty()
+                {
+                    let up = self.ast.types.unqualified(pt);
+                    let unq = self.ast.types.pointer_to(up);
+                    c = self.builder().implicit_cast(
+                        CastKind::NoOp,
+                        c,
+                        unq,
+                        ValueCategory::PRValue,
+                    );
+                }
                 match conv::implicit_convert(self, c, p0, ConvCtx::Argument) {
                     Ok(x) => c = x,
                     Err(err) => {
@@ -1854,6 +1893,14 @@ impl Sema<'_, '_> {
 
 /// The expressions of the top-level clauses of `l`.
 impl Sema<'_, '_> {
+    /// The destructor check of a delete-expression whose operand `operand`
+    /// points to (arrays of) `elem` ([expr.delete]/6, /12): whether a
+    /// non-trivial destructor is invoked; `None` after an error.
+    fn delete_dtor(&mut self, operand: ExprId, elem: QualType, loc: Loc) -> Option<bool> {
+        let at = self.expr_loc(operand);
+        self.mark_element_dtor_referenced(elem, (at, DiagId::sema_access_dtor), loc)
+    }
+
     /// Whether class type `t` has a virtual destructor ([class.dtor]/10).
     fn has_virtual_dtor(&self, t: QualType) -> bool {
         let Some(def) = self.ast.types.as_record(t).and_then(|r| self.ast.definition(r)) else {
