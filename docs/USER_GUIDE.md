@@ -269,12 +269,20 @@ spec/modules.md §11.12).
   kiln++: module cache: building 'std' into '<entry>/std.pcm'
   kiln++: module cache: cannot create '<dir>': <reason>; building 'std' from its source
   kiln++: module cache: waiting for another compile building 'std'
+  kiln++: module cache: pruning '<root>'
+  kiln++: module cache: removed unused '<entry>'
   ```
 
 - **`-MD`/`-MMD`** list the entry's `std.pcm`, and `-MD` also lists the
   libc++ files it was built from.
-- **Removing it.** kiln never evicts entries. Delete the directory by
-  hand (`rm -r ~/.cache/kiln/modules`); each entry is about 9 MiB.
+- **Pruning.** Each entry is about 9 MiB. As clang does with its module
+  cache, kiln prunes the cache: at most once per
+  `-fmodules-prune-interval=<seconds>` (default 604800, 7 days), a
+  compile removes every entry unused for
+  `-fmodules-prune-after=<seconds>` (default 2678400, 31 days), such as
+  those of an older kiln. 0 for either turns pruning off. Deleting the
+  directory by hand (`rm -r ~/.cache/kiln/modules`) is safe when no
+  compile is running.
 
 A cached `std` costs about what building it in the compile costs, 1.5 s
 and about 96 MiB for `import std;` plus a small `main`. The compile that
