@@ -133,6 +133,14 @@ panic and never silently wrong IR.
   cannot hold an alloca's address, so the initializer is emitted at run
   time and uses load the variable, as clang's `ConstantEmitter` falls back
   (WP-467, `tests/conformance/expr.const/constexpr-ref-automatic-run.cpp`).
+  An array initializer list (or parenthesized list) of trivially
+  copyable elements whose explicit elements are more than 16 bytes is a
+  candidate too, folded with `Oven::fold_rvalue` (clang
+  `AggExprEmitter::EmitArrayInit` trying `tryEmitForInitializer`; WP-1008,
+  "Constant emission of initializers" in
+  `spec/landed/codegen/WP-1008.md`). A list nested in an initializer
+  that is already folded or tried as a whole, or in a list that folds,
+  is not folded again.
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
   memory form (bool is `i8`) and a scalar form (bool is `i1`), plus string
@@ -792,9 +800,13 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   - a non-constant aggregate goes through `EmitAggExpr`, with
     `CheckAggExprForMemSetUse` (size > 16 and nonzero*4 <= size gives a
     memset);
-  - `EmitArrayInit`: element 0 is stored at the base, element i at
-    `gep inbounds elem, base, i64 i`, and a phi filler loop covers
-    elements without an initializer.
+  - `EmitArrayInit`: an array list of trivially copyable elements whose
+    explicit elements are more than 16 bytes and fold is one memcpy from
+    a `private constant` `@constinit` global (WP-1008). Otherwise element
+    0 is stored at the base, element i at `gep inbounds elem, base, i64
+    i`, and a phi filler loop covers elements without an initializer.
+    The full decision rules, from `EmitAutoVarInit` to
+    `EmitCXXConstructExpr`, are in `spec/landed/codegen/WP-1008.md`.
 - Constants (`consts.rs`): a union constant is its active member followed
   by `[N x i8] undef` padding, typed as the union when the element types
   match its IR type, else as a literal struct. The active member is the
