@@ -361,6 +361,13 @@ impl Sema<'_, '_> {
                     e = ast.exprs.operand(e);
                 }
                 ExprKind::SubstNonTypeTemplateParmExpr => e = ast.exprs.subst_replacement(e),
+                // clang `IgnoreParens` looks through a resolved selection.
+                ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr => {
+                    match ast.exprs.selected_operand(e) {
+                        Some(s) => e = s,
+                        None => return false,
+                    }
+                }
                 ExprKind::IntegerLiteral
                 | ExprKind::FloatingLiteral
                 | ExprKind::CharacterLiteral
