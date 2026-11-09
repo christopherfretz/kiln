@@ -26,21 +26,21 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `6c742784e`
+- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `321baa9de`
 - command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 158 s; peak RSS of one case 1033 MiB (gnu-time)
+- wall time 285 s; peak RSS of one case 22 MiB (gnu-time)
 
 ## Totals
 
 | measure | count | of | rate |
 |---|---:|---:|---:|
-| ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 90 | 1249 | 7.2% |
-| ACCEPTS-INVALID cases (per RUN configuration) | 111 | 1939 | 5.7% |
-| MISSED-ERROR lines (expected-error with no kiln error on its line) | 5015 | 28043 | 17.9% |
-| REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 49 | 418 | 11.7% |
-| crashes | 7 | 2850 | 0.2% |
+| ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 89 | 1250 | 7.1% |
+| ACCEPTS-INVALID cases (per RUN configuration) | 110 | 1946 | 5.7% |
+| MISSED-ERROR lines (expected-error with no kiln error on its line) | 4930 | 28065 | 17.6% |
+| REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 47 | 418 | 11.2% |
+| crashes | 0 | 2850 | 0.0% |
 | timeouts | 0 | 2850 | 0.0% |
 | out of memory | 0 | 2850 | 0.0% |
 
@@ -58,8 +58,8 @@ written by hand (WP-912). The run is informational and never part of
 | CXX/cpp | 0 / 0 | - | 0 / 0 | - | 0 | 0 / 0 |
 | CXX/dcl | 0 / 4 | 0.0% | 0 / 81 | 0.0% | 0 | 0 / 0 |
 | CXX/dcl.dcl | 5 / 77 | 6.5% | 301 / 1141 | 26.4% | 2 | 0 / 0 |
-| CXX/dcl.decl | 3 / 53 | 5.7% | 103 / 784 | 13.1% | 1 | 1 / 0 |
-| CXX/drs | 3 / 33 | 9.1% | 1857 / 8664 | 21.4% | 0 | 6 / 0 |
+| CXX/dcl.decl | 3 / 54 | 5.6% | 103 / 788 | 13.1% | 1 | 0 / 0 |
+| CXX/drs | 3 / 33 | 9.1% | 1869 / 8682 | 21.5% | 0 | 0 / 0 |
 | CXX/except | 4 / 15 | 26.7% | 32 / 104 | 30.8% | 0 | 0 / 0 |
 | CXX/expr | 4 / 78 | 5.1% | 88 / 644 | 13.7% | 0 | 0 / 0 |
 | CXX/lex | 1 / 14 | 7.1% | 2 / 78 | 2.6% | 0 | 0 / 0 |
@@ -67,8 +67,8 @@ written by hand (WP-912). The run is informational and never part of
 | CXX/over | 2 / 42 | 4.8% | 13 / 313 | 4.2% | 0 | 0 / 0 |
 | CXX/special | 2 / 31 | 6.5% | 14 / 224 | 6.2% | 5 | 0 / 0 |
 | CXX/stmt.stmt | 0 / 9 | 0.0% | 3 / 255 | 1.2% | 0 | 0 / 0 |
-| CXX/temp | 10 / 147 | 6.8% | 370 / 1644 | 22.5% | 8 | 0 / 0 |
-| SemaCXX | 42 / 628 | 6.7% | 1888 / 12406 | 15.2% | 29 | 0 / 0 |
+| CXX/temp | 10 / 147 | 6.8% | 368 / 1644 | 22.4% | 8 | 0 / 0 |
+| SemaCXX | 41 / 628 | 6.5% | 1793 / 12406 | 14.5% | 27 | 0 / 0 |
 
 ## Top 50 accepts-invalid files
 
@@ -104,7 +104,6 @@ Ranked by the expected errors of their worst configuration.
 | `CXX/over/over.load/p2-0x.cpp` | 2 / 2 | 3 |
 | `CXX/special/class.temporary/p1.cpp` | 1 / 1 | 3 |
 | `CXX/temp/temp.spec/temp.expl.spec/p21.cpp` | 1 / 1 | 3 |
-| `SemaCXX/GH63151.cpp` | 1 / 1 | 3 |
 | `SemaCXX/coroutine-builtins.cpp` | 1 / 1 | 3 |
 | `SemaCXX/union-member-destructor.cpp` | 1 / 1 | 3 |
 | `SemaCXX/weak-init.cpp` | 1 / 1 | 3 |
@@ -126,6 +125,7 @@ Ranked by the expected errors of their worst configuration.
 | `SemaCXX/attr-target-clones-aarch64.cpp` | 1 / 1 | 2 |
 | `SemaCXX/coroutine-vla.cpp` | 1 / 1 | 2 |
 | `SemaCXX/gh134265.cpp` | 2 / 2 | 2 |
+| `SemaCXX/gh138775.cpp` | 1 / 1 | 2 |
 
 ## Top 40 missed-error clusters
 
@@ -146,7 +146,7 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | no member named '…' in '…' | 6 | 51 | `CXX/class/class.mem/p13.cpp:124` |
 |  | 6 | 33 | `CXX/drs/cwg5xx.cpp:514` |
 | use of undeclared identifier '…' | 6 | 27 | `CXX/drs/cwg14xx.cpp:33` |
-| declaration of '…' shadows template parameter | 6 | 24 | `CXX/dcl.dcl/dcl.spec/dcl.typedef/p2-0x.cpp:84` |
+| declaration of '…' shadows template parameter | 6 | 22 | `CXX/dcl.dcl/dcl.spec/dcl.typedef/p2-0x.cpp:84` |
 | deleted function definitions are a C++N extension | 6 | 20 | `CXX/drs/cwg13xx.cpp:687` |
 | no matching constructor for initialization of '…' | 6 | 18 | `CXX/dcl.decl/dcl.init/dcl.init.aggr/p1.cpp:36` |
 | never produces a constant expression | 6 | 17 | `CXX/dcl.dcl/dcl.spec/dcl.constexpr/p3.cpp:275` |
@@ -165,6 +165,7 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | a lambda parameter cannot shadow an explicitly captured entity | 4 | 23 | `CXX/drs/cwg22xx.cpp:14` |
 | initializing multiple members of union | 4 | 23 | `CXX/class/class.union/class.union.anon/p4.cpp:8` |
 | static data member '…' already has an initializer | 4 | 21 | `CXX/class/class.static/class.static.data/p4.cpp:15` |
+| call to '…' is ambiguous | 4 | 18 | `CXX/drs/cwg10xx.cpp:30` |
 | default argument references local variable '…' of enclosing function | 4 | 16 | `CXX/dcl.decl/dcl.meaning/dcl.fct.default/p7.cpp:5` |
 | invalid application of '…' to an incomplete type '…' | 4 | 16 | `CXX/dcl.decl/dcl.meaning/dcl.array/p3.cpp:12` |
 | call to consteval function '…' is not a constant expression | 4 | 14 | `CXX/basic/basic.def.odr/p2-typeid.cpp:59` |
@@ -172,7 +173,6 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | assigning to '…' from incompatible type '…' | 4 | 13 | `SemaCXX/conditional-expr.cpp:429` |
 | ambiguous | 4 | 12 | `CXX/dcl.dcl/basic.namespace/namespace.udecl/p8-cxx0x.cpp:197` |
 | variable templates are a C++N extension | 4 | 12 | `CXX/drs/cwg19xx.cpp:86` |
-| call to deleted constructor of '…' | 4 | 11 | `CXX/class/class.init/class.copy.elision/p3.cpp:141` |
 
 ## Rejects-valid cases
 
@@ -181,7 +181,7 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | `CXX/basic/basic.lookup/basic.lookup.argdep/p2-template-id.cpp` | RUN 1 -std=gnu++17 -verify=expected | use of undeclared identifier 'h' |
 | `CXX/basic/basic.stc/basic.stc.dynamic/p2-nodef.cpp` | RUN 1 -std=gnu++17 -verify=expected | redefinition of 'std' as different kind of symbol |
 | `CXX/class.derived/p2.cpp` | RUN 1 -std=gnu++17 -verify=expected | expected class name |
-| `CXX/class/class.compare/class.compare.default/p5.cpp` | RUN 1 -std=c++2a -verify=expected | constexpr function never produces a constant expression |
+| `CXX/class/class.compare/class.compare.default/p5.cpp` | RUN 1 -std=c++2a -verify=expected | standard library implementation of 'std::strong_ordering' is not supported; member 'equivalent' is missing |
 | `CXX/dcl.dcl/basic.namespace/namespace.udecl/p10.cpp` | RUN 1 -std=gnu++17 -verify=expected | using declaration refers to its own class |
 | `CXX/dcl.dcl/dcl.spec/dcl.type/dcl.type.decltype/p1.cpp` | RUN 1 -std=c++20 -verify=expected | type alias redefinition with different types ('const ClassNTTP::X &' vs 'decltype()' (aka 'ClassNTTP::X')) |
 | `CXX/dcl.decl/dcl.fct.def/dcl.fct.def.general/p8.cpp` | RUN 1 -std=c++11 -verify=expected | value-initialization of a class temporary is not supported yet |
@@ -208,9 +208,7 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | `SemaCXX/builtin-std-move-nobuiltin.cpp` | RUN 4 -std=c++20 -verify=expected | static assertion failed due to requirement 'addr(std::move(builtin)) == &nobuiltin' |
 | `SemaCXX/builtins-overflow.cpp` | RUN 1 -std=c++17 -verify=expected | constant expression evaluates to -126 which cannot be narrowed to type 'char' |
 | `SemaCXX/concepts-subsumption.cpp` | RUN 1 -std=c++20 -verify=expected | call to 'foo' is ambiguous |
-| `SemaCXX/consteval-operators.cpp` | RUN 1 -std=c++2a -verify=expected | consteval function never produces a constant expression |
 | `SemaCXX/constexpr-duffs-device.cpp` | RUN 1 -std=c++1y -verify=expected | static assertion expression is not an integral constant expression |
-| `SemaCXX/constexpr-vectors.cpp` | RUN 1 -std=c++14 -verify=expected | constexpr function never produces a constant expression |
 | `SemaCXX/cxx14-compat.cpp` | RUN 2 -std=c++17 -verify=expected | typename specifier refers to non-type member 'X' in 'A' |
 | `SemaCXX/cxx2b-deducing-this-constexpr.cpp` | RUN 1 -std=c++2b -verify=expected | only special member functions and comparison operators may be defaulted |
 | `SemaCXX/goto2.cpp` | RUN 1 -std=c++17 -verify=expected | unknown type name '__label__' |
@@ -230,15 +228,7 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 
 ## Crashes, timeouts and out-of-memory
 
-| file | configuration | outcome |
-|---|---|---|
-| `CXX/dcl.decl/dcl.meaning/dcl.fct/p8.cpp` | RUN 1 -std=gnu++17 -verify=expected | crash: panicked at crates/kiln_ast/src/decl.rs: member added to a complete class (frozen at `}`, spec/ast.md §… |
-| `CXX/drs/cwg10xx.cpp` | RUN 2 -std=c++11 -verify=expected | crash: exit status: 134 |
-| `CXX/drs/cwg10xx.cpp` | RUN 3 -std=c++14 -verify=expected,since-cxx14 | crash: exit status: 134 |
-| `CXX/drs/cwg10xx.cpp` | RUN 4 -std=c++17 -verify=expected,since-cxx14 | crash: exit status: 134 |
-| `CXX/drs/cwg10xx.cpp` | RUN 5 -std=c++20 -verify=expected,since-cxx14 | crash: exit status: 134 |
-| `CXX/drs/cwg10xx.cpp` | RUN 6 -std=c++23 -verify=expected,since-cxx14 | crash: exit status: 134 |
-| `CXX/drs/cwg10xx.cpp` | RUN 7 -std=c++2c -verify=expected,since-cxx14 | crash: exit status: 134 |
+None.
 
 ## kiln "not supported yet" errors
 
@@ -394,11 +384,15 @@ against clang 19 and clang 22) and one follow-up row in
 1. **Types defined where the grammar forbids them** (type specifier 98 / 5,
    parameter type 77 / 1, conversion type, result type; [dcl.fct]/17,
    [class.conv.fct]/1, [dcl.type]/3). kiln accepts a class or enum defined
-   in a parameter or conversion-function type; an `enum {}` in the parameter
-   list of an out-of-line member definition panics (the one `CXX/dcl.dcl`
-   crash). Repros: `dcl.fct/type-defined-in-parameter.cpp`,
-   `dcl.fct/type-defined-in-member-parameter-crash.cpp` (crash),
-   `class.conv.fct/type-defined-in-conversion-type.cpp`.
+   in a conversion-function type, a type specifier or a result type.
+   Fixed in WP-962: a tag defined in a parameter type (function, lambda,
+   requires-expression) is "cannot be defined in a parameter type", and the
+   `enum {}` in the parameter list of an out-of-line member definition no
+   longer panics (the former `CXX/dcl.decl` crash);
+   `dcl.fct/type-defined-in-{parameter,parameter-kinds,member-parameter-crash}.cpp`
+   pass. Still open (WP-946): a non-type template parameter's type ("cannot
+   be defined in a type specifier"), `sizeof(struct S {})` in a default
+   argument, and `class.conv.fct/type-defined-in-conversion-type.cpp`.
 2. **Member with the name of its class** (74 / 8; [class.mem]/22,
    [class.ctor] "ISO C++ forbids ... constructor name"). Repro:
    `class.mem/static-member-named-as-class.cpp`.
@@ -491,13 +485,15 @@ against clang 19 and clang 22) and one follow-up row in
 ### Rejects valid code
 
 14. **Never-constant false positives** (from WP-873's
-    `-Winvalid-constexpr`, kiln_sema `never_constant.rs`): builtins
-    (`__builtin_strcmp`, `__builtin_fabs`) and a consteval operator template
-    are reported as never constant. High priority: the diagnostic is an
-    error by default, so valid programs are rejected. Repros:
-    `dcl.constexpr/potential-constant-builtin-strcmp.cpp`,
-    `dcl.constexpr/potential-constant-builtin-fabs.cpp`,
-    `dcl.constexpr/potential-constant-consteval-operator-template.cpp`.
+    `-Winvalid-constexpr`, kiln_sema `never_constant.rs`). Fixed in WP-962:
+    builtins (`__builtin_strcmp`, `__builtin_fabs`, `__builtin_bswap64`)
+    and a consteval operator template were reported as never constant,
+    because the walk evaluated the call's callee operand on its own and
+    took the Oven's "not supported yet" note (or the consteval-pointer
+    note) as proof. The direct callee is no longer evaluated, an Oven
+    limitation is never proof, and only builtins clang 19 does not evaluate
+    (`Oven::No` rows) are reported. The three repros pass, with
+    `dcl.constexpr/potential-constant-{builtins-spread,builtin-bswap-cxx17,unsupported-node-cxx17,builtin-not-constexpr}.cpp`.
 15. **Templates and deduction**: `temp.spec.partial.order/`,
     `temp.spec.partial.match/narrowing-nttp-no-match.cpp`,
     `temp.arg.explicit/pack-explicit-then-deduced.cpp`,
@@ -510,13 +506,15 @@ against clang 19 and clang 22) and one follow-up row in
     `namespace.udecl/using-own-class-dependent.cpp`,
     `basic.lookup.argdep/address-of-overload-set.cpp`,
     `class.derived/base-lookup-ignores-namespace.cpp`.
-16. **Classes, special members, initialization, misc**: an empty braced list
-    for a user `initializer_list` type without a default constructor is
-    rejected and then overflows the stack (the `CXX/drs/cwg10xx.cpp` crash
-    in all six configurations;
-    kiln_sema `init.rs` `std_initializer_list_init` handles only non-empty
-    lists): `dcl.init.list/empty-initializer-list-no-default-ctor.cpp`.
-    Also `dcl.init.list/single-element-explicit-ctor.cpp`,
+16. **Classes, special members, initialization, misc**. Fixed in WP-962:
+    an empty braced list for an `initializer_list` specialization without a
+    default constructor was rejected and then overflowed the stack (the
+    `CXX/drs/cwg10xx.cpp` crash in all six configurations: the
+    specialization's own copy constructor was taken as an initializer-list
+    constructor and re-entered with the same list). It now builds an empty
+    `initializer_list` ([dcl.init.list]/3.6), and a visited guard stops any
+    such re-entry: `dcl.init.list/empty-initializer-list-no-default-ctor{,-run}.cpp`.
+    Still open: `dcl.init.list/single-element-explicit-ctor.cpp`,
     `class.copy.assign/implicit-form-const-ref.cpp`,
     `class.copy.ctor/mutable-member-template-ctor-not-trivial.cpp`,
     `dcl.fct.def.default/explicit-object-copy-assign.cpp`,

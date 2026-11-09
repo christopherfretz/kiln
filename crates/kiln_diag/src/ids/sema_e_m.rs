@@ -194,6 +194,7 @@ sema_init_conversion_failed = Error (5) "cannot initialize {0:a variable|a param
 sema_init_delegating_alone = Error (0) "an initializer for a delegating constructor must appear alone";
 sema_init_element_not_constant = Error (0) "initializer element is not a compile-time constant";
 sema_init_for_function_type = Error (1) "cannot create object of function type {0}";
+sema_init_incomplete_type = Error (1) "initialization of incomplete type {0}";
 sema_init_list_bad_dest = Error (1) "initializer list cannot be used on the left hand side of operator '{0}'";
 sema_init_list_constant_narrowing = WarningError [Cxx11Narrowing] (2) "constant expression evaluates to {0} which cannot be narrowed to type {1}";
 sema_init_list_constant_narrowing_const_reference = WarningError [Cxx11NarrowingConstReference] (2) "constant expression evaluates to {0} which cannot be narrowed to type {1}";

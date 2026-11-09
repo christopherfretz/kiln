@@ -18,7 +18,7 @@ use kiln_sema::{
 };
 use kiln_sema::{ContractDeclKind, DeclSite};
 use kiln_source::symbol::Symbol;
-use kiln_source::{Loc, Span};
+use kiln_source::{Loc, Span, activity};
 
 use crate::class::LateToks;
 use crate::fp_pragma::FpAt;
@@ -129,10 +129,12 @@ impl Parser<'_, '_> {
         self.module_flush();
         // [temp.point]/7: the end of the translation unit is a point of
         // instantiation of every pending definition.
+        let phase = activity::enter(activity::Phase::Sema, Loc::INVALID);
         self.s.end_of_tu_instantiations();
         // Then clang's `ActOnEndOfTranslationUnit` checks (delegating
         // constructor cycles), after the pending instantiations as there.
         self.s.act_on_end_of_translation_unit();
+        drop(phase);
     }
 
     /// A declaration at namespace scope ([dcl.pre] declaration).
@@ -193,6 +195,7 @@ impl Parser<'_, '_> {
         }
         self.discard_attrs_before_unattributed_decl();
         let loc = self.loc();
+        activity::at(loc);
         // A loop-hint pragma at namespace scope (clang's annotation token
         // fails `ParseExternalDeclaration` and the declaration after it is
         // skipped through its `;`).
@@ -1952,6 +1955,16 @@ impl Parser<'_, '_> {
         attrs
     }
 
+    /// [dcl.fct]/17: types shall not be defined in parameter types (clang
+    /// `GetFullTypeForDeclarator`, after the body); the parameter is
+    /// invalid. A non-type template parameter is left to WP-946.
+    fn check_tag_defined_in_param(&mut self, ds: &mut DeclSpec, d: DeclId, ctx: DeclaratorContext) {
+        if ctx == DeclaratorContext::Prototype && !self.nttp_specs {
+            self.s.diag_type_defined_in_param(d);
+            ds.invalid = true;
+        }
+    }
+
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
         let kw_loc = self.bump().span.lo;
         let (keyword, scoped) = self.parse_tag_key(ds, k);
@@ -2048,6 +2061,7 @@ impl Parser<'_, '_> {
                 self.parse_record_body(d, final_loc, ctx == DeclaratorContext::TypeName);
             }
             self.s.act_on_exit_declarator_scope(entered);
+            self.check_tag_defined_in_param(ds, d, ctx);
         }
         ds.tag = Some(d);
         ds.tag_declares = use_ != TagUse::Reference;

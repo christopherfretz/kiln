@@ -121,6 +121,9 @@ starting with `-` are inputs.
 | `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name is accepted and ignored |
 | `-f[no-]fast-math`, its parts, `-ffp-model=`, `-ffp-contract=`, `-fdenormal-fp-math=`, the FP environment flags | see "Floating-point flags" (WP-806) |
 | `-fstack-protector*`, `-f[no-]unwind-tables`, `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-ffunction-sections`, `-fdata-sections`, `-mtune=`, `-f[no-]wrapv`, `-f[no-]strict-overflow`, `-f[no-]delete-null-pointer-checks`, `-Wp,<list>`, `-Xpreprocessor <arg>`, and the ignored and rejected sets | see "Codegen flags" (WP-605) |
+| `-fcrash-diagnostics[=compiler\|all\|off]`, `-fno-crash-diagnostics` | whether an internal compiler error writes the crash reproducer (default on; `=off` and the negative turn it off, the last wins); see "Internal compiler errors" (WP-911) |
+| `-fcrash-diagnostics-dir=<dir>` | where the crash reproducer is written (default `$TMPDIR`, else `/tmp`) (WP-911) |
+| `-fkiln-crash-for-testing=<phase>` | hidden (kiln's tests): panic on purpose in `<phase>`; see "Internal compiler errors" (WP-911) |
 
 ### Response files (WP-799)
 
@@ -158,6 +161,7 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 | `-fwrapv`, `-fno-wrapv`, `-f[no-]wrapv-pointer`, `-fno-strict-overflow`, `-fstrict-overflow` | signed overflow wraps (`CodegenOptions::wrapv`): the last of `-f[no-]wrapv`, else `-fno-strict-overflow`; no `nsw` on signed arithmetic, increments, negation, shifts or VLA sizes. Pointer overflow wraps (`wrapv_pointer`): at `-fclang-compat=19` exactly when `wrapv`; at 22 the last of `-f[no-]wrapv-pointer`, else `-fno-strict-overflow`; no `inbounds` on pointer arithmetic and subscripts, and at 22 none on field GEPs either. The Oven is unchanged: signed overflow in a constant expression stays non-constant ([expr.const]/5), unlike GCC, which folds it as wrapping under `-fwrapv` (deliberate divergence, deferred) |
 | `-fno-delete-null-pointer-checks`, `-fdelete-null-pointer-checks` | `CodegenOptions::null_pointer_is_valid`: every definition gets `null_pointer_is_valid`; reference parameters, returns and `this` lose `nonnull` (`this` gets `dereferenceable_or_null`), `nonnull`/`returns_nonnull` attributes, the `operator new` result and loaded references lose `nonnull` (and `!nonnull` metadata), as clang |
 | `-fpatchable-function-entry=N[,M]`, `-fzero-call-used-regs=<kind>`, `-mfunction-return=keep\|thunk-extern` (x86), `-fcf-protection[=full\|branch\|return\|none]` (x86), `-mspeculative-load-hardening`, `-fsplit-stack`, `-finstrument-functions`, `-finstrument-functions-after-inlining`, `-finstrument-function-entry-bare`, `-fxray-instrument`, `-fxray-instruction-threshold=N`, `-fxray-ignore-loops` (WP-813) | `CodegenOptions::hardening` (`kiln_codegen::Hardening`): the function attributes and module flags clang 19 emits for each, with the class B attributes overriding them per function (spec/landed/codegen/WP-813.md). `-mspeculative-load-hardening` on x86 also adds `+retpoline-indirect-calls` to the target features; `-finstrument-functions*` at `-O0` runs `default<O0>` so ee-instrument emits the calls; `-fxray-instrument` is passed on to the link. Errors as clang: a bad `-fpatchable-function-entry=` (`invalid argument 'x' to -fpatchable-function-entry=`, or the offset larger than the count), `-fxray-instrument` with `-fpatchable-function-entry=`, a bad `-fxray-instruction-threshold=` under `-fxray-instrument` are driver errors; a bad `-mfunction-return=` / `-fzero-call-used-regs=` / `-fcf-protection=` value (the last of each wins), `-mfunction-return=` off x86 and (when generating code) `-fcf-protection` off x86 are clang's `-cc1` errors, printed without the `kiln++:` prefix and in cc1's order (an invalid `-mfunction-return=` on x86 is reported twice, as clang 19 does). Without `-fxray-instrument` the other `-fxray-*` options are `argument unused during compilation` |
+| `-mbranches-within-32B-boundaries` (x86; WP-961) | `llc -x86-branches-within-32B-boundaries`, as clang 19's `addX86AlignBranchArgs`: the integrated assembler pads so no branch (fused, `jcc`, `jmp`) crosses or ends on a 32-byte boundary. Off x86, clang's driver error `unsupported option '-mbranches-within-32B-boundaries' for target '<triple>'`. There is no negative form (clang has none). Test: `crates/kiln_driver/tests/hardening.rs` `branches_within_32b_boundaries`, `flag_errors` |
 | `-flto`, `-flto=full\|thin\|auto\|jobserver`, `-fno-lto`, `-f[no-]split-lto-unit` (WP-873) | the last of `-flto[=...]` / `-fno-lto` decides (clang `getLTOMode`: `auto` and `jobserver` are full LTO; another value is `unsupported argument`). The module is an LTO unit (spec/codegen.md "LTO": the `ThinLTO` / `EnableSplitLTOUnit` module flags and vtable `!type` metadata); `opt` runs the level's pre-link pipeline (`lto-pre-link<Ox>` / `thinlto-pre-link<Ox>`, at `-O0` too) instead of `default<Ox>`. `-c` (and each compile before a link) writes a bitcode-only `.o` through `opt`: full LTO with `-module-summary`, thin LTO with `--thinlto-bc` (plus `--thinlto-split-lto-unit` under `-fsplit-lto-unit`, default off for thin, always on for full), as clang; `-S -emit-llvm` carries the summary too; `-S` alone writes textual IR as clang does. `-flto[=thin]` is passed on to the link (lld or the system linker with the LLVM gold plugin). `-disable-llvm-passes` runs no pipeline and writes no summary. `-ffat-lto-objects` is accepted and ignored (the object stays bitcode only; follow-up), `-fno-fat-lto-objects` is the default |
 | `-mbranch-protection=<spec>`, `-msign-return-address=none\|non-leaf\|all` (AArch64; WP-846) | `CodegenOptions::branch_protection` (`kiln_abi::BranchProtection`, clang 19 `CollectARMPACBTIOptions` and `ARM::parseBranchProtection`): the last of the two wins. `<spec>` is `none`, `standard` (`pac-ret+bti+gcs`) or a `+`-separated list of `bti`, `gcs` and `pac-ret` followed by any of `leaf`, `b-key`, `pc`; `-msign-return-address=` signs with the A key only. Every definition, declaration and call site gets clang's `"sign-return-address"`/`"sign-return-address-key"`, `"branch-target-enforcement"`, `"branch-protection-pauth-lr"` and `"guarded-control-stack"` attributes, the module gets the matching `Min` flags (value 1; 2 at `-fclang-compat=22`, as clang 22), and the predefines gain `__ARM_FEATURE_PAC_DEFAULT` (bit 0 A key, 1 B key, 2 leaf, 3 PAuth-LR), `__ARM_FEATURE_BTI_DEFAULT` and `__ARM_FEATURE_GCS_DEFAULT` (spec/pp.md "AArch64 target macros"). `__attribute__((target("branch-protection=<spec>")))` replaces the function's attributes (an invalid spec is `invalid or misplaced branch protection specification '<item>'`; off AArch64 the attribute is ignored with `unsupported 'branch-protection' in the 'target' attribute string`). An invalid spec is `unsupported argument '<item>' to option '-mbranch-protection='`; off AArch64 `-mbranch-protection=` is `unsupported option '-mbranch-protection=' for target '<triple>'` and `-msign-return-address=` is unused. kiln models no `-march=` extension enabling PAuth-LR, so `standard` never adds `pc` (spec/landed/codegen/WP-846.md) |
 | `-Wp,<a>,<b>,...`, `-Xpreprocessor <arg>` | spliced into the argument list before parsing (`codegen_flags::splice_preprocessor_args`), as GCC: `-Wp,-MD,<f>` / `-Wp,-MMD,<f>` become `-MD -MF <f>` / `-MMD -MF <f>`, any other list is split at commas (empty pieces dropped), so `-Wp,-D_FORTIFY_SOURCE=2` is `-D_FORTIFY_SOURCE=2`; `-Xpreprocessor <arg>` is `<arg>` |
@@ -995,8 +999,9 @@ This is clang's `DependencyCollector` and `DependencyFileGenerator`.
   (typically a `ulimit -v` cap below the reservation) the driver prints
   `<prog>: error: cannot create the compile thread with a <n>-byte stack:
   <os reason> (lower it with -fkiln-stack-size=)` and exits with status 70
-  (WP-682); it never exits silently. A panic on the compile thread, already
-  reported by the panic hook, also exits with 70.
+  (WP-682); it never exits silently. A panic (an internal compiler
+  error) exits with 1, or 70 under `-fno-crash-diagnostics`; see
+  "Internal compiler errors".
 - With errors, `-o <file>` is not written and neither are dependency
   files. Standard output still receives the text, as clang does.
 - An output that cannot be opened reports
@@ -1025,6 +1030,165 @@ Driver diagnostics, in clang's wording:
 - warning `argument unused during compilation: '<o>' [-Wunused-command-line-argument]`
 - warning `'<arch>' does not support '<flag>'; flag ignored [-Woption-ignored]`
 - warning `treating '<c type>' input as '<c++ type>' when in C++ mode, this behavior is deprecated [-Wdeprecated]`
+
+## Internal compiler errors
+
+A panic anywhere in the compiler is an internal compiler error (ICE): a
+kiln bug, never the program's fault. The `kiln` binary installs a panic
+hook before it does anything else (`crates/kiln_driver/src/crash.rs`,
+WP-911), so an ICE is reported the way clang reports a crash and not as
+Rust's `thread '...' panicked at` text. In-process users of the driver
+library (the tests) install no hook and see Rust's default behaviour.
+
+### The report
+
+On standard error, each line prefixed with the program's basename like
+other driver diagnostics:
+
+```
+kiln++: error: internal compiler error: <panic message, first line>
+  <further lines of the message, indented>
+kiln++: note: while compiling '<input>' (phase: <phase>, at <file>:<line>:<col>)
+kiln++: note: in compiler source <crate file>:<line>:<col> (thread '<name>')
+kiln <version> (<git sha>)
+kiln++: note: please submit a bug report to https://github.com/christopherfretz/kiln/issues and include the crash reproducer
+kiln++: note: set KILN_BACKTRACE=1 to include the compiler backtrace
+kiln++: note: preprocessed source and associated run script are located at:
+kiln++: note: diagnostic msg: <dir>/<stem>-<random>.ii
+kiln++: note: diagnostic msg: <dir>/<stem>-<random>.sh
+```
+
+- `<input>` is the input being compiled, `<stdin>` for `-`. A panic
+  outside any input (argument handling, linking) says `while running the
+  driver`.
+- `<phase>` and the location come from the current-activity breadcrumb
+  (`kiln_source::activity`), a thread-local cell holding a phase and a
+  `Loc`. The pipeline updates it at a few coarse points, and an update is
+  one thread-local store:
+  - `preprocess`: when an `-E` job starts;
+  - `parse`: at each top-level declaration, with its location (so the
+    location is the start of the declaration being parsed);
+  - `oven`: around each constant evaluation, with the expression's
+    location, restoring the previous activity afterwards;
+  - `sema`: end-of-translation-unit analysis (pending instantiations,
+    final checks);
+  - `codegen`: LLVM IR generation;
+  - `driver`: everything else.
+
+  `, at <loc>` is left out when no location is known. The location is
+  resolved, as a presumed location, only after the panic, in the
+  input's own source manager.
+- The `in compiler source` line gives the panic's location in kiln's
+  source and the thread's name (the compile thread is `kiln`).
+- The version line is `kiln <version> (<sha>)`: the version and the
+  commit of "Version" (`kiln_driver::version::GIT_SHA`), with `unknown`
+  when the build recorded no commit.
+- The backtrace: with `KILN_BACKTRACE` or `RUST_BACKTRACE` set to
+  anything other than empty or `0`, the backtrace note is replaced by
+  `note: compiler backtrace:` followed by the Rust backtrace of the
+  panicking thread. Otherwise none is captured.
+- The last three lines are the reproducer (below). Under
+  `-fno-crash-diagnostics` they are left out.
+
+### Exit status
+
+kiln matches clang 19's driver:
+
+- **1** after the reproducer is written, or after an attempt to write
+  it that failed. clang's driver exits 1 once it has printed its
+  `diagnostic msg:` lines.
+- **70** (`EX_SOFTWARE`) under `-fno-crash-diagnostics`. clang's driver
+  then passes on the status of the crashed `-cc1`, and its driver treats
+  70 as a `-cc1` crash. Before WP-911 every kiln panic exited 70.
+
+A failure to create the compile thread still exits 70 (see "Output,
+diagnostics, exit status").
+
+### The reproducer
+
+Unless `-fno-crash-diagnostics` (or `-fcrash-diagnostics=off`) is given,
+kiln writes two files:
+
+- `<dir>/<stem>-<random>.ii`: the crashing input, preprocessed as `-E`
+  would do it with the same flags (same macros, include paths and
+  `-std=`; dependency output, `-o` and `-v` are dropped), with
+  linemarkers. It is `.i` for a C input.
+- `<dir>/<stem>-<random>.sh`: a POSIX shell script with three comment
+  lines (the compiler identity, the original command line after
+  response-file expansion, and the working directory), then `cd` to that
+  directory, then the same command with the input replaced by the
+  `.ii`. Each word is quoted for the shell. A relative program path is
+  made absolute, and the program keeps its name so the driver mode is
+  the same.
+
+The parts of the names:
+
+- `<dir>` is `-fcrash-diagnostics-dir=<dir>`, else `$TMPDIR` (when set
+  and not empty), else `/tmp`. It is created if missing, as clang does.
+- `<stem>` is the input's file stem (`stdin` for `-`).
+- `<random>` is six hexadecimal digits. The `.sh` is created exclusively,
+  and a name that already exists is retried with new digits.
+
+Edge cases:
+
+- The `.ii` is produced on a separate thread whose panics are caught. If
+  preprocessing the input also panics, only the `.sh` is written (it
+  runs the original command on the original input), and the report says
+  `note: diagnostic msg: preprocessing the input also crashed; only the
+  run script was written`.
+- For a panic outside any input, only the `.sh` is written, with a
+  similar `diagnostic msg:`.
+- A directory that cannot be created or a file that cannot be written
+  is reported as a `diagnostic msg:` line naming the reason.
+- A file on a `diagnostic msg:` line is `<dir>` joined with its name, so
+  it is absolute when `<dir>` is. The other `diagnostic msg:` lines are
+  prose (the harness tells them apart this way).
+
+`-fcrash-diagnostics` and `-fcrash-diagnostics=compiler|all` turn the
+reproducer back on. The last of these flags, `-fno-crash-diagnostics`
+and `-fcrash-diagnostics=off` wins.
+
+### Threads
+
+The hook records only the first panic of the process and prints nothing
+itself. The panic unwinds to `main`, which prints the report once:
+
+- A panic on a helper thread that the compile thread re-raises (as
+  `std::thread::scope` does) is the same crash, so the second record is
+  dropped. The link step's scoped threads are the only helper threads
+  today; codegen is single-threaded.
+- A second panic on the panicking thread before `main` has reported
+  (a panic in a destructor during unwinding) makes the Rust runtime
+  abort. The hook therefore prints the banner at once, followed by
+  `note: a second panic while unwinding aborts the compiler: <message>`,
+  with no reproducer. The process then aborts with `SIGABRT`.
+
+### Constraints
+
+- Every Cargo profile keeps `panic = "unwind"`. With `abort` the report
+  could still print from the hook, but the reproducer (written after
+  unwinding to `main`) and the exit code would be lost.
+- Stack exhaustion is not a panic. The stack guard reports it as a fatal
+  diagnostic (§1 P4), and an overflow it misses is a `SIGSEGV` that no
+  hook sees.
+- On the non-crashing path the cost is the breadcrumb stores plus one
+  `catch_unwind` frame and a recorded input path per input.
+
+### The test hook
+
+The hidden `-fkiln-crash-for-testing=<phase>` makes kiln panic on purpose
+with `crash requested by -fkiln-crash-for-testing=<phase>`. The phases
+are `driver`, `preprocess` (also `lex` or `pp`), `parse`, `sema`, `oven`
+and `codegen`.
+
+- The panic happens when that phase is entered. For `parse` it happens
+  at the first top-level declaration, for `oven` at the first constant
+  evaluation, and for `driver` right after argument parsing.
+- The request is per thread. A `preprocess` request also crashes the
+  reproducer's own preprocessing, which is how the `.sh`-only path is
+  tested.
+- An unknown phase is `invalid value`. The flag is not listed in
+  `--help`.
 
 ## `-v`, `--version`, `--help`
 
@@ -1217,6 +1381,23 @@ Each deviation is covered by a test or a test note.
   `-Wp,-MD,<f>` and a `-ffunction-sections` object. The IR effects are
   `tests/codegen/{stack_protector*,unwind_tables_*,no_plt*,wrapv,no_strict_overflow,no_delete_null_pointer_checks}.cpp`;
   `-Wp,-D` is `tests/conformance/cpp.predefined/wp-preprocessor-args.cpp`.
+- `crates/kiln_driver/tests/crash.rs` (WP-911): internal compiler
+  errors through the real `kiln++` with `-fkiln-crash-for-testing=`. It
+  checks:
+  - the banner line by line and exit 1;
+  - the `.ii` (linemarkers, the source) and the `.sh` (quoting, the input
+    replaced), and that replaying the `.sh` crashes again;
+  - `$TMPDIR` as the default directory;
+  - `-fno-crash-diagnostics` (exit 70, nothing written);
+  - backtraces only on request;
+  - a preprocessing crash (`.sh` only);
+  - a crash outside any input (`.sh` only);
+  - standard input.
+
+  The `crash.rs` unit tests cover quoting, the run script, the
+  suffixes and the thread funnel. The `kiln_source::activity` unit tests
+  cover the breadcrumb, and `tests/conformance/driver.crash/` the
+  harness's `expect: ice` tests (spec/harness.md).
 - `crates/kiln_driver/tests/record_layouts.rs`: the `tests/layout/`
   corpus (at least 40 programs). Each is dumped by
   `kiln++ -fdump-record-layouts` and by `clang -Xclang

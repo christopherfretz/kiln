@@ -16,7 +16,8 @@ use kiln_pp::{
     PrintOptions, RealFs, SearchDirSpec, SearchList, build_predefines, print_macros,
     print_preprocessed,
 };
-use kiln_source::{FileId, SourceManager, Span};
+use kiln_source::activity::{self, Phase};
+use kiln_source::{FileId, Loc, SourceManager, Span};
 
 use crate::args::Args;
 use crate::deps::{DepCallbacks, DepList, on_search_event};
@@ -224,9 +225,12 @@ impl Job<'_> {
         }
         let engine = make_engine(&sm, &diag_opts, self.stderr.clone(), None);
         let mut result = JobResult::default();
-        if let Some(inputs) = self.pp_inputs(&sm, &engine) {
-            self.preprocess(&sm, &engine, &interner, inputs, &mut result);
-        }
+        crate::crash::catching(self.path, self.stdin_text.as_deref(), &sm, || {
+            if let Some(inputs) = self.pp_inputs(&sm, &engine) {
+                let _phase = activity::enter(Phase::Preprocess, Loc::INVALID);
+                self.preprocess(&sm, &engine, &interner, inputs, &mut result);
+            }
+        });
         engine.flush();
         if let Some(s) = engine.summary()
             && diag_opts.format == kiln_diag::Format::Text
@@ -245,6 +249,8 @@ impl Job<'_> {
         sm: &SourceManager,
         engine: &DiagEngine<'_>,
     ) -> Option<PpInputs> {
+        // The ICE breadcrumb (spec/driver.md "Internal compiler errors").
+        let _phase = activity::enter(Phase::Preprocess, Loc::INVALID);
         let cplusplus = self.std.cplusplus;
         let header_sysroot =
             self.args.isysroot.as_deref().or(self.args.sysroot.as_deref()).unwrap_or("");

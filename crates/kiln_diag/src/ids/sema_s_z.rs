@@ -195,6 +195,7 @@ sema_try_disabled = Error (0) "cannot use 'try' with exceptions disabled";
 sema_type_attribute_deprecated_on_decl = Warning [DeprecatedAttributes] (1) "applying attribute '{0}' to a declaration is deprecated; apply it to the type instead";
 sema_type_attribute_wrong_type = Warning [IgnoredAttributes] (2) "{0} only applies to function types; type here is {1}";
 sema_type_defined_in_for_range = Error (0) "types may not be defined in a for range declaration";
+sema_type_defined_in_param_type = Error (1) "{0} cannot be defined in a parameter type";
 sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
 sema_typecheck_decl_incomplete_type = Error (1) "variable has incomplete type {0}";
 sema_typecheck_expect_scalar_operand = Error (1) "operand of type {0} where arithmetic or pointer type is required";
