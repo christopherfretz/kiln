@@ -161,8 +161,10 @@ impl Cg<'_> {
             // `HandleInlineFunctionDefinition`, never instantiated). A
             // std builtin (`std::move`, ...) is never referenced by its
             // calls, so clang never instantiates it for them.
-            if !matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion)
-                || n.has(DeclFlags::INVALID)
+            if !matches!(
+                n.kind(),
+                DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion
+            ) || n.has(DeclFlags::INVALID)
                 || n.has(DeclFlags::DEPENDENT_CTX)
                 || ast.decls.function(f).is_some_and(|x| x.spec.is_immediate())
                 || self.is_std_builtin(f)
