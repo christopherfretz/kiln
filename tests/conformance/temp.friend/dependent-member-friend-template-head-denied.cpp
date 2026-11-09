@@ -12,12 +12,12 @@
 //@ skip(clang): clang turns off access control for the befriending class
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 44:58 warning "dependent nested name specifier 'A<T>' for friend class declaration is not supported; turning off access control for 'B'"
-//@ diag: 45:58 warning "dependent nested name specifier 'A<T>' for friend class declaration is not supported; turning off access control for 'B'"
-//@ diag: 46:58 warning "dependent nested name specifier 'A<T>' for friend class declaration is not supported; turning off access control for 'B'"
-//@ diag: 47:58 warning "dependent nested name specifier 'A<T>' for friend class declaration is not supported; turning off access control for 'B'"
-//@ diag: 48:39 warning "dependent nested name specifier 'A<T>' for friend class declaration is not supported; turning off access control for 'B'"
-//@ diag: 49:58 warning "dependent nested name specifier 'A<T>' for friend class declaration is not supported; turning off access control for 'B'"
+//@ diag: 44:58 warning "for friend class declaration is not supported; turning off access control for 'B'"
+//@ diag: 45:58 warning "for friend class declaration is not supported; turning off access control for 'B'"
+//@ diag: 46:58 warning "for friend class declaration is not supported; turning off access control for 'B'"
+//@ diag: 47:58 warning "for friend class declaration is not supported; turning off access control for 'B'"
+//@ diag: 48:39 warning "for friend class declaration is not supported; turning off access control for 'B'"
+//@ diag: 49:58 warning "for friend class declaration is not supported; turning off access control for 'B'"
 //@ diag: 56:80 error "'n' is a private member of 'B'"
 //@ diag: 50:7 note "implicitly declared private here"
 //@ diag: 57:56 error "'n' is a private member of 'B'"

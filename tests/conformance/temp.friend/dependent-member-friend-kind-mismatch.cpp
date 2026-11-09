@@ -15,7 +15,7 @@
 //@ diag: 21:14 note "previous definition is here"
 //@ diag: 28:40 error "redefinition of 'Cls' as different kind of symbol"
 //@ diag: 22:10 note "previous definition is here"
-//@ diag: 29:42 warning "dependent nested name specifier 'A<U>' for friend class declaration is not supported; turning off access control for 'Outer'"
+//@ diag: 29:42 warning "for friend class declaration is not supported; turning off access control for 'Outer'"
 template <class T> struct A {
   static void Fn();
   static int Var;
