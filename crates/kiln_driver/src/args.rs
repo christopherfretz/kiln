@@ -409,6 +409,9 @@ pub enum ArgError {
     /// A `#!special-case-list-v1` (regular expression) ignorelist: its
     /// path (WP-1032).
     RegexIgnorelist(String),
+    /// `-fsanitize=memtag-stack` on `AArch64` without the `mte` feature
+    /// (WP-1138; clang's "requires hardware support (+memtag)").
+    MemtagStackRequiresMte,
 }
 
 /// The parsed command line.
@@ -887,6 +890,7 @@ impl Args {
             a.action = Action::Precompile;
         }
         a.errors.extend(a.coverage.errors());
+        a.errors.extend(a.debug.errors());
         let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
         a
     }

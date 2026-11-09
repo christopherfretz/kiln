@@ -36,8 +36,12 @@ pub struct DebugFlags {
     /// The last level flag (`-g`, `-g0..3`, `-ggdb*`, `-gline-tables-only`,
     /// `-gmlt`, `-gline-directives-only`, `-gdwarf*`): `None` if none.
     pub level: Option<DebugInfoKind>,
-    /// The last `-gdwarf-N` version (`-gdwarf` alone: the default).
-    pub dwarf_version: Option<u32>,
+    /// The last of `-gdwarf-N` (`Some(Some(N))`) and `-gdwarf`
+    /// (`Some(None)`: the default version).
+    pub dwarf: Option<Option<u32>>,
+    /// The last `-fdebug-default-version=` value, as written: checked
+    /// only when DWARF is emitted ([`DebugFlags::errors`]).
+    pub default_version: Option<String>,
     /// `-gno-column-info` was last.
     pub no_column_info: bool,
     /// The last of `-fstandalone-debug` / `-fno-standalone-debug`
@@ -154,7 +158,7 @@ impl DebugFlags {
     fn set_dwarf(&mut self, v: Option<u32>) {
         // clang: `-gdwarf-N` is in `g_Group` and turns debug information on.
         self.level = Some(DebugInfoKind::Constructor);
-        self.dwarf_version = Some(v.unwrap_or(5));
+        self.dwarf = Some(v);
     }
 
     /// The `=`-valued flags.
@@ -180,14 +184,7 @@ impl DebugFlags {
                     }
                 });
             }
-            "-fdebug-default-version" => match v.parse::<u32>() {
-                Ok(n @ 2..=5) => {
-                    if self.dwarf_version.is_none() {
-                        self.dwarf_version = Some(n);
-                    }
-                }
-                _ => return Some(Err(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned()))),
-            },
+            "-fdebug-default-version" => self.default_version = Some(v.to_owned()),
             _ => return None,
         }
         Some(Ok(()))
@@ -208,6 +205,49 @@ impl DebugFlags {
         }
     }
 
+    /// clang `RenderDebugOptions`' `EmitDwarf`: debug information is on,
+    /// or a `-gdwarf[-N]` was given (`-gdwarf-4 -g0` still passes
+    /// `-dwarf-version=4`).
+    fn emit_dwarf(&self) -> bool {
+        self.dwarf.is_some() || self.kind() != DebugInfoKind::None
+    }
+
+    /// clang `ParseDebugDefaultVersion`: the last
+    /// `-fdebug-default-version=` as a version 2..=5 (decimal digits),
+    /// `Err` with "invalid integral value" otherwise.
+    fn parse_default_version(&self) -> Result<Option<u32>, ArgError> {
+        let Some(v) = &self.default_version else { return Ok(None) };
+        match v.parse::<u32>() {
+            Ok(n @ 2..=5) if v.bytes().all(|b| b.is_ascii_digit()) => Ok(Some(n)),
+            _ => Err(ArgError::InvalidInt(format!("-fdebug-default-version={v}"), v.clone())),
+        }
+    }
+
+    /// The DWARF version clang passes as `-dwarf-version=` (clang
+    /// `getDwarfVersion`), `None` when DWARF is not emitted: the last
+    /// `-gdwarf-N`, wherever it stands, else (no `-gdwarf*`, or `-gdwarf`
+    /// last) the last `-fdebug-default-version=`, else 5.
+    pub fn dwarf_version(&self) -> Option<u32> {
+        if !self.emit_dwarf() {
+            return None;
+        }
+        Some(match self.dwarf {
+            Some(Some(n)) => n,
+            _ => self.parse_default_version().ok().flatten().unwrap_or(5),
+        })
+    }
+
+    /// The errors found once the whole command line is read: an invalid
+    /// last `-fdebug-default-version=` when DWARF is emitted (clang
+    /// reads it only then, so `-fdebug-default-version=7` alone, or an
+    /// invalid one followed by a valid one, is accepted).
+    pub fn errors(&self) -> Vec<ArgError> {
+        if !self.emit_dwarf() {
+            return Vec::new();
+        }
+        self.parse_default_version().err().into_iter().collect()
+    }
+
     /// The codegen options: `cwd` is the compilation directory unless
     /// `-fdebug-compilation-dir=` names one; `split_file` is the `.dwo`
     /// name under `-gsplit-dwarf`.
@@ -216,13 +256,9 @@ impl DebugFlags {
         let on = kind != DebugInfoKind::None;
         DebugOptions {
             kind,
-            // clang passes `-dwarf-version=` whenever debug information is
-            // on or a version was given; the module flag follows it.
-            dwarf_version: if on {
-                Some(self.dwarf_version.unwrap_or(5))
-            } else {
-                self.dwarf_version
-            },
+            // clang passes `-dwarf-version=` whenever DWARF is emitted;
+            // the module flag follows it.
+            dwarf_version: self.dwarf_version(),
             column_info: !self.no_column_info,
             prefix_map: self.prefix_map.clone(),
             comp_dir: self.comp_dir.clone().unwrap_or_else(|| cwd.to_owned()),
@@ -285,6 +321,55 @@ mod tests {
         assert_eq!(f.kind(), DebugInfoKind::None);
         assert_eq!(f.options("/w", None).dwarf_version, Some(4));
         assert_eq!(parse(&[]).0.options("/w", None).dwarf_version, None);
+    }
+
+    /// clang 19 and 22 `getDwarfVersion` / `ParseDebugDefaultVersion`
+    /// (WP-1138), measured with `clang++ -###`: the last
+    /// `-fdebug-default-version=` counts, an explicit `-gdwarf-N` wins
+    /// over it in either order, `-gdwarf` last falls back to it, and it
+    /// is read (and checked) only when DWARF is emitted.
+    #[test]
+    fn debug_default_version() {
+        let v = |a: &[&str]| parse(a).0.dwarf_version();
+        let errs = |a: &[&str]| parse(a).0.errors();
+        let dv = "-fdebug-default-version=";
+        assert_eq!(v(&["-fdebug-default-version=4"]), None);
+        assert_eq!(v(&["-fdebug-default-version=4", "-g"]), Some(4));
+        assert_eq!(v(&["-g", "-fdebug-default-version=4"]), Some(4));
+        // The last one wins.
+        assert_eq!(v(&["-fdebug-default-version=3", "-fdebug-default-version=4", "-g"]), Some(4));
+        assert_eq!(v(&["-fdebug-default-version=4", "-fdebug-default-version=3", "-g"]), Some(3));
+        // `-gdwarf-N` wins in either order; `-gdwarf` does not override.
+        assert_eq!(v(&["-fdebug-default-version=4", "-gdwarf-3"]), Some(3));
+        assert_eq!(v(&["-gdwarf-3", "-fdebug-default-version=4"]), Some(3));
+        assert_eq!(v(&["-fdebug-default-version=4", "-gdwarf"]), Some(4));
+        assert_eq!(v(&["-gdwarf", "-fdebug-default-version=4"]), Some(4));
+        assert_eq!(v(&["-gdwarf-3", "-gdwarf", "-fdebug-default-version=4"]), Some(4));
+        assert_eq!(v(&["-gdwarf", "-gdwarf-3", "-fdebug-default-version=4"]), Some(3));
+        assert_eq!(v(&["-gdwarf-2", "-gdwarf"]), Some(5));
+        // `-g0` turns DWARF off unless a `-gdwarf*` was given.
+        assert_eq!(v(&["-fdebug-default-version=4", "-g0"]), None);
+        assert_eq!(v(&["-g", "-fdebug-default-version=4", "-g0"]), None);
+        assert_eq!(v(&["-gdwarf-3", "-g0", "-fdebug-default-version=4"]), Some(3));
+        assert_eq!(v(&["-fdebug-default-version=4", "-gdwarf", "-g0"]), Some(4));
+        assert_eq!(v(&["-fdebug-default-version=4", "-gmlt"]), Some(4));
+        assert_eq!(v(&["-fdebug-default-version=2", "-ggdb"]), Some(2));
+        assert_eq!(v(&["-fdebug-default-version=05", "-g"]), Some(5));
+        // Checked only when DWARF is emitted, and only the last one.
+        assert_eq!(parse(&["-fdebug-default-version=7"]).1, [Some(Ok(()))]);
+        assert_eq!(errs(&["-fdebug-default-version=7"]), []);
+        assert_eq!(errs(&["-fdebug-default-version=7", "-g0"]), []);
+        assert_eq!(errs(&["-fdebug-default-version=7", "-fdebug-default-version=4", "-g"]), []);
+        for (a, x) in [("7", "-g"), ("1", "-g"), ("x", "-g"), ("", "-g"), ("+4", "-g"), ("7", "-gdwarf-4")]
+        {
+            let flag = format!("{dv}{a}");
+            assert_eq!(
+                errs(&["-fdebug-default-version=4", &flag, x]),
+                [ArgError::InvalidInt(flag.clone(), a.into())],
+                "{flag} {x}"
+            );
+        }
+        assert_eq!(v(&["-fdebug-default-version=x", "-g"]), Some(5));
     }
 
     #[test]

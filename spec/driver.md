@@ -221,10 +221,22 @@ Every `-g` flag is implemented, accepted as clang's default, or an error.
   limited debug information with constructor type homing); `-g1`,
   `-ggdb1`, `-gmlt`, `-gline-tables-only` give line tables only;
   `-gline-directives-only` gives `DebugDirectivesOnly`; `-g0`, `-ggdb0`
-  and no flag give none. `-gdwarf-2`..`-gdwarf-5` and `-gdwarf` (5) set
-  the `"Dwarf Version"` module flag and also enable `-g`;
-  `-fdebug-default-version=N` (2..5) sets the version when no
-  `-gdwarf-N` does.
+  and no flag give none. `-gdwarf-2`..`-gdwarf-5` and `-gdwarf` set
+  the `"Dwarf Version"` module flag and also enable `-g`.
+- **DWARF version** (WP-1138, clang 19/22 `getDwarfVersion` and
+  `ParseDebugDefaultVersion`; same in both): the last of `-gdwarf-N` /
+  `-gdwarf` counts, `-gdwarf` meaning the default version; the default
+  version is the last `-fdebug-default-version=N`, else 5. A `-gdwarf-N`
+  wins over `-fdebug-default-version=` in either order. Neither applies,
+  and no `"Dwarf Version"` flag is emitted, unless DWARF is (a `-g`
+  level other than none, or any `-gdwarf*`), so `-fdebug-default-version=4`
+  alone and `-fdebug-default-version=4 -g -g0` give no debug information.
+  The last `-fdebug-default-version=` value is checked only then, and
+  only it: anything but the decimal digits of 2..5 (`05` is valid, `+4`
+  and `7` are not) is `invalid integral value '<v>' in
+  '-fdebug-default-version=<v>'`, also when a `-gdwarf-N` overrides it.
+  Tests: `debug_flags.rs` `debug_default_version`,
+  `crates/kiln_driver/tests/driver.rs` `debug_default_version_last_wins`.
 - **Kind modifiers:** `-fstandalone-debug` / `-fno-limit-debug-info`
   (every used type in full) and `-fno-standalone-debug` /
   `-flimit-debug-info`, the last wins;
@@ -360,11 +372,35 @@ docs/design/sanitizers.md) reads the sanitizer options as clang 19's
   name or one the list may not take, `invalid argument '<a>' not allowed
   with '<b>'` for an incompatible pair (each side the last argument that
   enabled it), `unsupported option '<opt><v>' for target '<triple>'`.
+- Target support (WP-1138, clang 19/22 `getSupportedSanitizers` for
+  Linux; same in both): x86-64 lacks the `memtag` group (`memtag-stack`,
+  `memtag-heap`, `memtag-globals`) and `objc-cast`; `AArch64` lacks
+  `numerical`, `kernel-memory` and `objc-cast`. Both have every other
+  sanitizer in kiln's table (x86-64 has `shadow-call-stack`). As
+  `SanitizerArgs::setGroupBits`, a group none of whose members the
+  target has is unsupported by name: its bit is diagnosed apart from its
+  members' (`-fsanitize=memtag-heap,memtag-stack
+  -fsanitize=address,memtag` on x86-64 gives two errors, `memtag` first),
+  each error names the values of that argument that enable a diagnosed
+  kind, and a later `-fno-sanitize=` removes the group only if it names
+  the group or `all`. On `AArch64`, `memtag` and `memtag-stack` also need
+  the `mte` target feature (`-march=...+memtag`; kiln reads the final
+  feature set, `-Xclang -target-feature -Xclang +mte` included, where
+  clang 19 and 22 differ, and knows no `-mcpu=` features): without it,
+  after the option errors,
+  `'-fsanitize=memtag-stack' requires hardware support (+memtag). For
+  Armv8 or Armv9, try compiling with -march=armv8a+memtag or
+  -march=armv9a+memtag` (`drv_stack_tagging_requires_hardware_feature`),
+  also under `-fsyntax-only` and `-E`; `memtag-heap` and `memtag-globals`
+  need no feature. Tests: `sanitize.rs` `memtag_target_support`,
+  `crates/kiln_driver/tests/driver.rs` `memtag_sanitizers_by_target`.
 - Sanitizers kiln implements: address, hwaddress, thread, memory, leak,
   fuzzer, fuzzer-no-link, the `undefined` group, unsigned-integer-overflow
   and unsigned-shift-base. Any other clang sanitizer (cfi, dataflow,
-  safe-stack, kcfi, memtag, the kernel variants, ...) is
-  `drv_unsupported_flag` (`'-fsanitize=<x>' is not supported by kiln`).
+  safe-stack, kcfi, memtag, shadow-call-stack, the kernel variants, ...)
+  the target supports is `drv_unsupported_flag` (`'-fsanitize=<x>' is
+  not supported by kiln`); on `AArch64` without `mte`, memtag-stack gets
+  that and the hardware error.
   Of `undefined`, codegen emits signed-integer-overflow,
   integer-divide-by-zero, shift-base, shift-exponent, return,
   unreachable, vla-bound, null, alignment, object-size, array-bounds,
