@@ -929,42 +929,41 @@ impl Sema<'_, '_> {
             T::IsDestructible | T::IsNothrowDestructible | T::IsTriviallyDestructible => {
                 self.is_destructible(t, q, loc)
             }
+            // clang `hasTrivial*() && !hasNonTrivial*()`: every eligible
+            // member of the kind is trivial ([special]/6; WP-1109).
             T::HasTrivialDefaultConstructor => {
                 self.is_pod_type(q)
-                    || self.element_record(q).is_some_and(|r| {
-                        self.has_special(r, SpecialKind::DefaultCtor)
-                            && self.trivial_default_ctor(r)
-                    })
+                    || self
+                        .element_record(q)
+                        .is_some_and(|r| self.all_trivial(r, SpecialKind::DefaultCtor))
             }
             T::HasTrivialMoveConstructor => {
                 self.is_pod_type(q)
-                    || self.element_record(q).is_some_and(|r| {
-                        self.has_special(r, SpecialKind::MoveCtor)
-                            && self.bits_of(r).contains(DefinitionBits::TRIVIAL_MOVE_CTOR)
-                    })
+                    || self
+                        .element_record(q)
+                        .is_some_and(|r| self.all_trivial(r, SpecialKind::MoveCtor))
             }
             T::HasTrivialCopy => {
                 self.is_pod_type(q)
                     || tys.is_reference(q)
-                    || self.defined_record(q).is_some_and(|r| {
-                        self.bits_of(r).contains(DefinitionBits::TRIVIAL_COPY_CTOR)
-                    })
+                    || self
+                        .defined_record(q)
+                        .is_some_and(|r| self.all_trivial(r, SpecialKind::CopyCtor))
             }
             T::HasTrivialMoveAssign => {
                 self.is_pod_type(q)
-                    || self.element_record(q).is_some_and(|r| {
-                        self.has_special(r, SpecialKind::MoveAssign)
-                            && self.bits_of(r).contains(DefinitionBits::TRIVIAL_MOVE_ASSIGN)
-                    })
+                    || self
+                        .element_record(q)
+                        .is_some_and(|r| self.all_trivial(r, SpecialKind::MoveAssign))
             }
             T::HasTrivialAssign => {
                 if !tys.is_reference(q) && tys.effective_quals(q).is_const() {
                     return false;
                 }
                 self.is_pod_type(q)
-                    || self.defined_record(q).is_some_and(|r| {
-                        self.bits_of(r).contains(DefinitionBits::TRIVIAL_COPY_ASSIGN)
-                    })
+                    || self
+                        .defined_record(q)
+                        .is_some_and(|r| self.all_trivial(r, SpecialKind::CopyAssign))
             }
             T::HasTrivialDestructor => {
                 self.is_pod_type(q)
@@ -1079,14 +1078,6 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The trivial default constructor half of a trivial class
-    /// ([class.prop]/2).
-    pub(crate) fn trivial_default_ctor(&self, r: DeclId) -> bool {
-        let b = self.bits_of(r);
-        b.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR)
-            && !b.contains(DefinitionBits::USER_PROVIDED_DEFAULT_CTOR)
-    }
-
     /// [basic.types.general]/9 trivial types (clang `isTrivialType`).
     fn is_trivial_type(&self, q: QualType) -> bool {
         let e = self.base_element(q);
@@ -1104,9 +1095,11 @@ impl Sema<'_, '_> {
             return true;
         }
         match self.defined_record(e) {
+            // [class.prop]/2: one or more eligible default constructors,
+            // all trivial (clang `isTrivialType`).
             Some(r) => {
                 self.has_special(r, SpecialKind::DefaultCtor)
-                    && self.trivial_default_ctor(r)
+                    && self.all_trivial(r, SpecialKind::DefaultCtor)
                     && self.bits_of(r).contains(DefinitionBits::TRIVIALLY_COPYABLE)
             }
             None => false,
@@ -1132,9 +1125,12 @@ impl Sema<'_, '_> {
         }
         match self.defined_record(e) {
             Some(r) => {
+                // clang `CXXRecordDecl::isTrivial`: a trivial default
+                // constructor (`hasTrivialDefaultConstructor`; a
+                // non-trivial one beside it does not count).
                 let b = self.bits_of(r);
                 self.has_special(r, SpecialKind::DefaultCtor)
-                    && self.trivial_default_ctor(r)
+                    && self.has_trivial(r, SpecialKind::DefaultCtor)
                     && b.contains(DefinitionBits::TRIVIALLY_COPYABLE)
                     && b.contains(DefinitionBits::STANDARD_LAYOUT)
             }

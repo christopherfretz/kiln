@@ -808,8 +808,8 @@ impl Compiler<'_> {
         let ast = self.ast();
         let Some(r) = ast.types.as_record(q) else { return false };
         let bits = record_bits(ast, r);
-        !bits.contains(DefinitionBits::TRIVIAL_COPY_CTOR)
-            || !bits.contains(DefinitionBits::TRIVIAL_MOVE_CTOR)
+        bits.contains(DefinitionBits::NONTRIVIAL_COPY_CTOR)
+            || bits.contains(DefinitionBits::NONTRIVIAL_MOVE_CTOR)
             || !bits.contains(DefinitionBits::TRIVIAL_DTOR)
     }
 

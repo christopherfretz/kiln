@@ -5502,9 +5502,9 @@ impl Sema<'_, '_> {
         use crate::class::SpecialKind as K;
         let Some(r) = self.ast.types.as_record(t) else { return false };
         let Some(r) = self.ast.definition(r) else { return false };
-        !self.has_trivial(r, K::CopyCtor)
-            || (self.has_special(r, K::MoveCtor) && !self.has_trivial(r, K::MoveCtor))
-            || !self.has_trivial(r, K::Dtor)
+        self.has_nontrivial(r, K::CopyCtor)
+            || self.has_nontrivial(r, K::MoveCtor)
+            || self.has_nontrivial(r, K::Dtor)
     }
 
     /// The type and value category of a call returning `ret`
