@@ -104,6 +104,16 @@ pub(crate) struct ImmState {
     /// reported after the variable's check; `true` for one of a
     /// template definition reported again ([`Sema::recheck_shared_invocation`]).
     after_var: Vec<(DeclId, ExprId, DeclId, bool)>,
+    /// The results of the outermost immediate invocations of a
+    /// full-expression evaluated before its trial folds
+    /// ([`Sema::evaluate_immediates_early`]), consumed by
+    /// [`Sema::finish_immediate_invocations`] (WP-1129).
+    early: Vec<(ExprId, Result<ConstValueId, EvalFailure>)>,
+    /// The scalar prvalue calls of those that succeeded, with their
+    /// values: a trial fold that strips the wrapper (`strip_impcast`)
+    /// reads the value instead of evaluating the call
+    /// ([`Sema::early_immediate_value`]).
+    early_values: HashMap<ExprId, ConstValueId>,
 }
 
 /// The pending state of an enclosing full-expression set aside by
@@ -627,7 +637,15 @@ impl Sema<'_, '_> {
             let at = self.begin_loc(c);
             let r = self
                 .eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at));
-            let Err(fail) = r else { continue };
+            let fail = match r {
+                // Codegen reads it at each use without source-location
+                // values instead of evaluating the call again (WP-1129).
+                Ok(v) => {
+                    self.ast.exprs.set_default_immediate_value(c, v);
+                    continue;
+                }
+                Err(fail) => fail,
+            };
             let Some(callee) = self.invocation_callee(c) else { continue };
             match escalating {
                 Some(g) => {
@@ -743,6 +761,69 @@ impl Sema<'_, '_> {
         self.eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at))
     }
 
+    /// The result of immediate invocation `c` of the full-expression being
+    /// finished: the one [`Sema::evaluate_immediates_early`] stored, else
+    /// a fresh evaluation.
+    fn immediate_result(&mut self, c: ExprId) -> Result<ConstValueId, EvalFailure> {
+        match self.imm.early.iter().position(|&(x, _)| x == c) {
+            Some(i) => {
+                if !self.imm.early_values.is_empty() {
+                    self.imm.early_values.remove(&self.ast.exprs.operand(c));
+                }
+                self.imm.early.swap_remove(i).1
+            }
+            None => self.eval_immediate(c),
+        }
+    }
+
+    /// The value of `e` if it is the call of an immediate invocation that
+    /// [`Sema::evaluate_immediates_early`] evaluated (a scalar prvalue):
+    /// the trial folds of the full-expression's completion checks read it
+    /// instead of evaluating the call again.
+    pub(crate) fn early_immediate_value(&self, e: ExprId) -> Option<ConstValueId> {
+        if self.imm.early_values.is_empty() {
+            return None;
+        }
+        self.imm.early_values.get(&e).copied()
+    }
+
+    /// Evaluates the outermost immediate invocations of full-expression
+    /// `e` before the checks of its completion that fold it (the
+    /// implicit-conversion and overflow warnings, clang's
+    /// `CheckCompletedExpr`), storing each successful value, so those
+    /// trial folds read the value as a leaf (spec/oven.md "Valued
+    /// immediate invocations") instead of running the call themselves:
+    /// each invocation is evaluated once ([expr.const]/16, WP-1129). The
+    /// results are reported by [`Sema::finish_immediate_invocations`], in
+    /// the same order as before.
+    pub(crate) fn evaluate_immediates_early(&mut self, e: ExprId) {
+        let p = &self.imm.pending;
+        if p.candidates.is_empty() || p.default_init {
+            return;
+        }
+        let candidates = std::mem::take(&mut self.imm.pending.candidates);
+        let (outer, ..) = self.classify_immediate(e, &candidates, &[], &[]);
+        self.imm.pending.candidates = candidates;
+        for (c, _) in outer {
+            if self.ast.exprs.constant_value(c).is_some()
+                || self.imm.early.iter().any(|&(x, _)| x == c)
+            {
+                continue;
+            }
+            let r = self.eval_immediate(c);
+            if let Ok(v) = r {
+                let _ = self.ast.exprs.set_constant_value(c, v);
+                let op = self.ast.exprs.operand(c);
+                if !self.ast.exprs.get(op).value_category().is_glvalue()
+                    && self.ast.consts.scalar(v).is_some()
+                {
+                    self.imm.early_values.insert(op, v);
+                }
+            }
+            self.imm.early.push((c, r));
+        }
+    }
+
     /// Whether `v` is constexpr or constinit: its initializer is checked as
     /// a whole before its immediate invocations are reported (WP-465).
     fn checked_var(&self, v: DeclId) -> bool {
@@ -789,7 +870,7 @@ impl Sema<'_, '_> {
             self.func.as_ref().map(|s| s.decl).filter(|&f| self.is_immediate_escalating(f));
         let report_after =
             var.filter(|&v| var_defer && escalating.is_none() && self.checked_var(v));
-        let results: Vec<_> = outer.iter().map(|&(c, _)| self.eval_immediate(c)).collect();
+        let results: Vec<_> = outer.iter().map(|&(c, _)| self.immediate_result(c)).collect();
         // Each invocation is evaluated once (WP-1140): its value is
         // stored before the initializer is folded below, so that fold,
         // the variable's own constant-initialization check and codegen

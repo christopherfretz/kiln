@@ -80,7 +80,8 @@ impl Sema<'_, '_> {
     /// member is named by an unqualified name only in a call
     /// ([expr.prim.id.general]/4, [expr.unary.op]/4). Without a matching
     /// non-template, the specializations of its static member function
-    /// templates deduced from the target ([over.over]/3, /5).
+    /// templates deduced from the target ([over.over]/3, /5; deduced
+    /// either way, see [`Self::prefer_non_templates`]).
     fn implicit_member_candidates(&mut self, x: ExprId, target: QualType) -> Vec<(DeclId, DeclId)> {
         let fnty = self.address_target(target);
         if fnty.1 {
@@ -89,10 +90,21 @@ impl Sema<'_, '_> {
         let cands = self.set_candidates(x);
         let direct: Vec<(DeclId, DeclId)> =
             cands.into_iter().filter(|&(d, _)| self.address_matches(d, fnty)).collect();
-        if !direct.is_empty() {
-            return direct;
-        }
-        self.address_template_candidates(x, target)
+        let templates = self.address_template_candidates(x, target);
+        Self::prefer_non_templates(direct, templates)
+    }
+
+    /// [over.over]/5: the matching non-templates when there are any,
+    /// else the matching specializations. clang deduces the templates
+    /// either way (`FindAllFunctionsThatMatchTargetTypeExactly` visits
+    /// every candidate, then `EliminateAllTemplateMatches`), and the
+    /// deduction substitutes their signatures, numbering the lambdas in
+    /// them (spec/sema-lambda.md §3.5, WP-1143): callers compute both.
+    fn prefer_non_templates(
+        direct: Vec<(DeclId, DeclId)>,
+        templates: Vec<(DeclId, DeclId)>,
+    ) -> Vec<(DeclId, DeclId)> {
+        if direct.is_empty() { templates } else { direct }
     }
 
     /// Whether the implicit member overload set `x` has a static member
@@ -278,7 +290,11 @@ impl Sema<'_, '_> {
         }
         let mut out: Vec<(DeclId, DeclId, DeclId)> = Vec::new();
         for (d, f) in cands {
-            if self.kind_of(d) != DeclKind::FunctionTemplate {
+            // clang `AddMatchingTemplateFunction`: only the templates
+            // whose kind of member the target can point to are deduced.
+            if self.kind_of(d) != DeclKind::FunctionTemplate
+                || self.is_implicit_object_member(self.templated_or_self(d)) != member
+            {
                 continue;
             }
             let Ok(spec) = self.deduce_funcaddr(d, explicit, fnty, loc) else { continue };
@@ -310,7 +326,8 @@ impl Sema<'_, '_> {
     /// non-member `target` ([over.over]/2-3; P2418's
     /// `__output_buffer<C>{..., __prepare_write, ...}`): only its static
     /// member functions can (a non-static one needs `&C::f`). Templates
-    /// only when no non-template matches.
+    /// only when no non-template matches (deduced either way, see
+    /// [`Self::prefer_non_templates`]).
     fn member_address_candidates(&mut self, x: ExprId, target: QualType) -> Vec<(DeclId, DeclId)> {
         let Some(m) = self.ovl.members.get(&x) else { return Vec::new() };
         let (explicit, loc) = (m.targs, self.ast.exprs.get(x).loc());
@@ -329,10 +346,8 @@ impl Sema<'_, '_> {
         } else {
             self.matching_candidates(cands.clone(), target)
         };
-        if !found.is_empty() {
-            return found;
-        }
-        self.template_candidates(cands, explicit, loc, target)
+        let templates = self.template_candidates(cands, explicit, loc, target);
+        Self::prefer_non_templates(found, templates)
     }
 
     /// The function an expression of overloaded-function type `e`
@@ -356,11 +371,9 @@ impl Sema<'_, '_> {
             };
         }
         let (ule, _) = self.overload_operand(e)?;
-        let mut m = self.address_candidates(ule, target);
-        if m.is_empty() {
-            m = self.address_template_candidates(ule, target);
-        }
-        match m.as_slice() {
+        let direct = self.address_candidates(ule, target);
+        let templates = self.address_template_candidates(ule, target);
+        match Self::prefer_non_templates(direct, templates).as_slice() {
             [(d, _)] => Some(*d),
             _ => None,
         }
@@ -470,6 +483,92 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// `e`, a function template-id resolved early
+    /// ([`Sema::resolve_single_template_id`]), possibly parenthesized and
+    /// under `&`, resolved once more for `target`: clang keeps the
+    /// template-id an overload set and runs
+    /// `ResolveAddressOfOverloadedFunction` at each step of a conversion
+    /// that meets it (the implicit conversion sequence, the
+    /// initialization's check, its perform step, `auto` deduction), and
+    /// each run deduces the set's templates again
+    /// (`AddressOfFunctionResolver`): from `target`'s function type
+    /// ([temp.deduct.funcaddr], `FindAllFunctionsThatMatchTargetTypeExactly`),
+    /// or from the explicit arguments alone for a target that is not one
+    /// (`ResolveSingleFunctionTemplateSpecialization`). Kiln's resolution
+    /// is the one already made; only the deductions' side effect is
+    /// clang's: the explicit-argument step substitutes the signature, so
+    /// each run numbers the lambdas in it (spec/sema-lambda.md §3.5,
+    /// WP-1142). A class target is no [over.over] target.
+    pub(crate) fn rerun_template_id_resolution(&mut self, e: ExprId, target: QualType) {
+        if self.ovl.template_id_refs.is_empty() {
+            return;
+        }
+        let Some(&ule) = self.ovl.template_id_refs.get(&self.addr_operand(e)) else { return };
+        let Some(explicit) = self.ast.templates.expr_targs.get(ule).copied() else { return };
+        let to = self.non_reference(target);
+        if self.ast.types.as_record(to).is_some() || self.is_dependent_type(target) {
+            return;
+        }
+        let (fnty, member) = self.address_target(target);
+        if !self.ast.types.is_function(fnty) {
+            self.holding_pending_uses(|s| {
+                let _ = s.single_template_spec(ule);
+            });
+            return;
+        }
+        let loc = self.ast.exprs.get(ule).loc();
+        self.holding_pending_uses(|s| {
+            for (d, _) in s.ule_candidates(ule) {
+                // `AddMatchingTemplateFunction` deduces only the templates
+                // whose kind of member the target can point to.
+                if s.kind_of(d) != DeclKind::FunctionTemplate
+                    || s.is_implicit_object_member(s.templated_or_self(d)) != member
+                {
+                    continue;
+                }
+                let _ = s.deduce_funcaddr(d, Some(explicit), fnty, loc);
+            }
+        });
+    }
+
+    /// Runs `f`, a re-resolution of a template-id the enclosing
+    /// full-expression already holds, with that full-expression's pending
+    /// uses (a deleted specialization, held-back warnings) set aside: an
+    /// explicit non-type argument's conversion completes a constant
+    /// full-expression ([`Sema::act_on_constant_full_expr`]), which would
+    /// otherwise report them inside the deduction's SFINAE trap, losing
+    /// them. They are reported at the enclosing full-expression's end.
+    pub(crate) fn holding_pending_uses<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let deleted = std::mem::take(&mut self.special.pending_deleted);
+        let warnings = std::mem::take(&mut self.special.pending_tid_warnings);
+        let r = f(self);
+        let inner = std::mem::replace(&mut self.special.pending_deleted, deleted);
+        self.special.pending_deleted.extend(inner);
+        let inner = std::mem::replace(&mut self.special.pending_tid_warnings, warnings);
+        self.special.pending_tid_warnings.extend(inner);
+        r
+    }
+
+    /// `e`, a function template-id resolved early, possibly parenthesized
+    /// and under `&`, resolved once more without a function target type:
+    /// clang's `ResolveSingleFunctionTemplateSpecialization`, which
+    /// deduces each of its templates from the explicit arguments alone
+    /// (numbering the lambdas of their signatures again, as
+    /// [`Self::rerun_template_id_resolution`]). A deduction from a
+    /// function-like `P` (`ResolveOverloadForDeduction`) deduces the same
+    /// templates the same way: the early resolution leaves at most one
+    /// that succeeds, so neither stops early.
+    pub(crate) fn rerun_template_id_single(&mut self, e: ExprId) {
+        if self.ovl.template_id_refs.is_empty() {
+            return;
+        }
+        if let Some(&ule) = self.ovl.template_id_refs.get(&self.addr_operand(e)) {
+            self.holding_pending_uses(|s| {
+                let _ = s.single_template_spec(ule);
+            });
+        }
+    }
+
     /// The overload set (its `UnresolvedLookupExpr`) the operand `e`
     /// is, possibly parenthesized and under `&`, a function template-id
     /// resolved early included (clang keeps it an overload set).
@@ -559,14 +658,12 @@ impl Sema<'_, '_> {
                 }
                 return None;
             };
-            let mut matches = self.address_candidates(ule, target);
-            if matches.is_empty() {
-                // [over.over]/3: a function template's specialization
-                // deduced from the target ([temp.deduct.funcaddr]); /5: a
-                // non-template beats it, and of several the more
-                // specialized.
-                matches = self.address_template_candidates(ule, target);
-            }
+            // [over.over]/3: a function template's specialization deduced
+            // from the target ([temp.deduct.funcaddr]); /5: a non-template
+            // beats it, and of several the more specialized.
+            let direct = self.address_candidates(ule, target);
+            let templates = self.address_template_candidates(ule, target);
+            let matches = Self::prefer_non_templates(direct, templates);
             if let [(d, f)] = matches[..] {
                 let naming = self.ovl.ule_found.get(&ule).and_then(|x| x.naming);
                 let nns = self.ast.templates.expr_nns.get(ule).copied();
@@ -732,6 +829,43 @@ impl Sema<'_, '_> {
             self.inst.pending.retain(|p| p.decl != d);
         }
         Some(r)
+    }
+
+    /// The operand of a `static_cast` (or of a C-style or functional
+    /// cast, which tries one first) to `to`: `e` itself, or, when `e` is
+    /// a function template-id resolved early to a specialization whose
+    /// type `to` does not ask for, the template-id resolved against `to`
+    /// ([`Self::retarget_template_id`]): clang's `TryStaticImplicitCast`
+    /// initializes the target from the set, so `(FP)f<int>` names the
+    /// specialization `FP` deduces rather than reinterpreting the one the
+    /// explicit arguments alone give ([expr.static.cast]/4, [over.over]/1).
+    pub(crate) fn retarget_cast_operand(&mut self, e: ExprId, to: QualType) -> ExprId {
+        if self.mismatched_template_id(e, to).is_none() {
+            return e;
+        }
+        self.retarget_template_id(e, to).unwrap_or(e)
+    }
+
+    /// The overload set (its `UnresolvedLookupExpr`) of `e`, a function
+    /// template-id resolved early, possibly parenthesized and under `&`,
+    /// when its specialization is not the function the function-like
+    /// target `to` asks for ([over.over]/1): clang keeps the template-id
+    /// a set, so the target deduces among its templates instead
+    /// ([`Self::retarget_template_id`]).
+    pub(crate) fn mismatched_template_id(&mut self, e: ExprId, to: QualType) -> Option<ExprId> {
+        if self.ovl.template_id_refs.is_empty() {
+            return None;
+        }
+        let r = self.addr_operand(e);
+        let &ule = self.ovl.template_id_refs.get(&r)?;
+        let target = self.address_target(to);
+        if !self.ast.types.is_function(target.0)
+            || self.ast.exprs.get(ule).ty() != QualType::OVERLOAD
+        {
+            return None;
+        }
+        let d = self.referenced_decl_of_callee(r)?;
+        (!self.address_matches(d, target)).then_some(ule)
     }
 
     /// [`Sema::resolve_address_of_overloaded`] of the overloaded member

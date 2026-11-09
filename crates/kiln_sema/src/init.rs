@@ -1783,6 +1783,10 @@ impl Sema<'_, '_> {
         match l.items.first() {
             Some(InitItem { value: InitValue::Expr(e), designator }) if designator.is_empty() => {
                 self.check_narrowing(*e, ty, ty);
+                // clang's verifying pass checks the element first
+                // (`InitListChecker` `CheckScalarType`, VerifyOnly):
+                // a function template-id is resolved for it too.
+                self.rerun_template_id_resolution(*e, ty);
                 inits.push(self.convert_for_init(*e, ty, ConvCtx::Initialization));
             }
             Some(InitItem { value: InitValue::List(inner), designator })
@@ -2291,6 +2295,10 @@ impl Sema<'_, '_> {
                     // diagnosed at its list's brace.
                     let at = Some(self.begin_loc(e)).filter(|l| l.is_valid()).unwrap_or(at);
                     self.check_narrowing(e, ty, ty);
+                    // clang's verifying pass checks the element first
+                    // (`CheckSubElementType`, VerifyOnly): a function
+                    // template-id is resolved for it too.
+                    self.rerun_template_id_resolution(e, ty);
                     let x = self.init_from_expr(ty, e, ConvCtx::Initialization, at);
                     // A class element converted by a conversion function:
                     // the second standard conversion narrows too

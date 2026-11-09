@@ -6,15 +6,14 @@
 // explicit-argument step, which numbers the trailing return type's lambda
 // in the pattern (spec/sema-lambda.md §3.5). So `fq<int>` copy-initializing
 // a pointer takes three numbers and `fq<long>`'s closure is `UlvE3_`;
-// `auto p = &fp<int>` and `take(ft<int>)` take four (`UlvE4_`). Kiln
-// resolves each once (two numbers), so Inputs/lambda-in-signature-
-// explicit-args-address-defs.cpp, which calls clang's names, does not
-// link. `pick` keeps `fq<int>` returning `int` so the address converts.
+// `auto p = &fp<int>` and `take(ft<int>)` take four (`UlvE4_`).
+// Inputs/lambda-in-signature-explicit-args-address-defs.cpp calls clang's
+// names, so the program links only if kiln resolves as often (WP-1142).
+// `pick` keeps `fq<int>` returning `int` so the address converts.
 //@ std: c++20
 //@ expect: run
 //@ args: %{test_dir}/Inputs/lambda-in-signature-explicit-args-address-defs.cpp
 //@ stdout: 3 3
-//@ xfail(kiln): WP-1086 follow-up, overload/address.rs resolves an explicit template-id for a target once where clang re-runs the explicit-argument step per resolution pass
 #include <cstdio>
 template <class T> struct is_int { static constexpr bool v = false; };
 template <> struct is_int<int> { static constexpr bool v = true; };
