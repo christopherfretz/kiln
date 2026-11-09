@@ -3406,6 +3406,7 @@ impl Sema<'_, '_> {
         // clang `CheckCommaOperands`: the left operand is a
         // discarded-value expression ([expr.comma]/1).
         let l = self.ignored_value_conversions(l);
+        let l = self.materialize_discarded(l);
         let ty = self.ety(r);
         let res = self.builder().binary(BinaryOp::Comma, l, r, ty, loc);
         self.mark_bitfield_if(res, r);
@@ -6425,6 +6426,7 @@ impl Sema<'_, '_> {
                 // [expr.static.cast]/6: the operand is a discarded-value
                 // expression (clang `CastOperation::CheckToVoid`).
                 let e = self.ignored_value_conversions(e);
+                let e = self.materialize_discarded(e);
                 return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
             if style == CastStyle::Const {

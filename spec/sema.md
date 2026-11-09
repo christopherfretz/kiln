@@ -9445,11 +9445,20 @@ not supported yet`.
     implements the earlier resolution (no extension: `~D2 x2`), and
     upstream clang implements the DIS (llvm#218710; clang 22 has no
     P1306), so the run tests carry kiln goldens (`oracle: none`).
-    *Left* (`element-discarded-temporary-run.cpp`, `xfail(kiln)`): a
-    discarded class prvalue (`(void)D{1}`, a comma's left operand) is
-    bound (`CXXBindTemporaryExpr`) but never materialized, so it still
-    dies with the declaration's full-expression; and a default
-    argument's temporaries stay with the call's full-expression.
+    A discarded class prvalue (`(void)D{1}`, a comma's left operand) is
+    a temporary created in the element too ([expr.context]/2,
+    [expr.static.cast]/6): the expansion-init-list is a
+    lifetime-extending context (the parser, and `expansion_stmt` when it
+    substitutes a pattern's list, open an `extend_collector`), so
+    `materialize_discarded` materializes it and it is extended like any
+    other (WP-1117; spec/sema-class.md §5.4;
+    `element-discarded-temporary{,-constexpr}-run.cpp`). In an ordinary
+    declaration it is only bound and dies with the full-expression.
+    *Left*: a default argument's temporaries stay with the call's
+    full-expression; a destructuring statement's expansion-initializer
+    (`auto&& [u...] = ((void)D{1}, t)`) is not a lifetime-extending
+    context at parse time, so its discarded class prvalues are not
+    materialized.
   - *Element immediate invocations* (WP-1106; [expr.const]/16): an
     immediate invocation in an element is evaluated at the end of its
     declaration's full-expression. The element's `ConstantExpr` was built

@@ -1859,6 +1859,20 @@ collected, and only the temporary bound directly to `__range` is extended.
 Templates collect again when the range is substituted (`templ/subst/stmts.rs`
 `range_for`).
 
+A discarded class prvalue in a lifetime-extending context (an open
+`extend_collector`: the for-range-initializer from C++23, and an enumerating
+expansion-init-list, spec/sema.md §7.6a) undergoes the temporary
+materialization conversion ([expr.context]/2, C++17): `materialize_discarded`
+(`class/temporary.rs`), called for the operand of a cast to `void`
+([expr.static.cast]/6) and a comma's left operand ([expr.comma]/1), so
+`for (int x : ((void)D{1}, a))` destroys `D{1}` after the loop (clang 19
+`IgnoredValueConversions` under `isInLifetimeExtendingContext`;
+`stmt.ranged/p2718-discarded-run.cpp`). Elsewhere such a prvalue is only bound
+(`CXXBindTemporaryExpr`) and dies with its full-expression
+(`class.temporary/discarded-not-extended-run.cpp`). Only class types are
+materialized (clang also materializes scalars, whose lifetime is not
+observable). WP-1117.
+
 **Lifetime analysis (WP-204, WP-227, WP-674, WP-891; `class/temporary/lifetime.rs`,
 `class/temporary/gsl.rs`; clang 19 `CheckExprLifetime.cpp`).** One walk
 serves six entities, run after the initializer is built (and, for a

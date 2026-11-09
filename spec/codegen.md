@@ -2804,7 +2804,11 @@ off and sema rejects `try`/`throw`).
   deactivated, innermost first, once the object is complete, using a
   placeholder for clang's dominating instruction). An element slot of
   such a list is `IsDestructed` (no temporary cleanup for a
-  `CXXBindTemporaryExpr` written in place).
+  `CXXBindTemporaryExpr` written in place). An ignored expression's slot
+  never is (`emit_ignored` clears `dest_destructed`, clang
+  `AggValueSlot::ignored()`): the left operand of a comma initializing a
+  class variable (`P q = ((void)D{1}, P{2});`) still destroys its
+  temporary (WP-1117; `class.temporary/discarded-not-extended-run.cpp`).
 - **new-expressions** ([expr.new]/28): `CallDeleteDuringNew` as an EH
   cleanup around the initializer, with the pointer, size and placement
   arguments saved to `cond-cleanup.save` slots inside a conditional
