@@ -391,7 +391,8 @@ fn immediate_invocation_evaluated_once() {
     let j = Json::parse(&std::fs::read_to_string(d.join("o.json")).unwrap()).unwrap();
     check_structure(&j);
     let ev = events(&j);
-    let count = |f: &str| ev.iter().filter(|e| e.name == "ConstevalCall" && e.detail() == f).count();
+    let count =
+        |f: &str| ev.iter().filter(|e| e.name == "ConstevalCall" && e.detail() == f).count();
     for ctx in ["lo", "cx", "ci", "dy", "es"] {
         for kind in ["p", "s"] {
             let f = format!("{ctx}_{kind}");
