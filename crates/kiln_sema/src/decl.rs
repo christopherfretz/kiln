@@ -6441,7 +6441,7 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        let cv = self.eval_const(e, EvalContext::init(v, vn.loc())).ok();
+        let cv = self.fold_constant_init(e, v);
         self.ast.decls.finish_eval(v, cv);
     }
 
