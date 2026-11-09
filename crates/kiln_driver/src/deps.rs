@@ -37,13 +37,22 @@ pub struct DepList {
     /// `-MG`: a missing header is listed by its spelled name instead
     /// (clang `AddMissingHeaderDeps`).
     pub generated: bool,
-    /// List the module files named imports read (clang
-    /// `IncludeModuleFiles`: `-fmodule-file-deps`, on by default for
-    /// `--precompile`).
-    pub module_files: bool,
-    /// List the module file an import took from the toolchain's `std`
-    /// module cache (on unless `-fno-module-file-deps`).
-    pub cache_module_files: bool,
+    /// Which module files imports read are listed (WP-1051).
+    pub module_files: ModuleFileDeps,
+}
+
+/// Which module files an import reads [`DepList`] lists (WP-1051).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ModuleFileDeps {
+    /// None (`-fno-module-file-deps`).
+    Off,
+    /// Only an entry of the toolchain's `std` module cache (the default
+    /// without `--precompile`).
+    #[default]
+    Cache,
+    /// Every one (clang `IncludeModuleFiles`: `-fmodule-file-deps`, the
+    /// default for `--precompile`).
+    All,
 }
 
 impl DepList {
@@ -61,8 +70,12 @@ impl DepList {
         args.deps.headers().map(|h| {
             let mut list = DepList {
                 generated: args.deps.missing_generated,
-                module_files: args.deps.module_files.unwrap_or(args.precompile),
-                cache_module_files: args.deps.module_files.unwrap_or(true),
+                module_files: match args.deps.module_files {
+                    Some(false) => ModuleFileDeps::Off,
+                    Some(true) => ModuleFileDeps::All,
+                    None if args.precompile => ModuleFileDeps::All,
+                    None => ModuleFileDeps::Cache,
+                },
                 ..DepList::new(h == DepHeaders::All)
             };
             for f in &args.nameless_module_files {
@@ -77,13 +90,16 @@ impl DepList {
 
     /// An import read the module file `read` (clang `visitModuleFile`,
     /// WP-1051): the module file is listed when asked for
-    /// ([`DepList::module_files`], [`DepList::cache_module_files`]), and
+    /// ([`DepList::module_files`]), and
     /// a cache entry's inputs as system files (under `-MD`, so that a
     /// libc++ edited in place recompiles the importer, as the headers
     /// of an `#include <vector>` do).
     pub fn module_file_read(&mut self, read: &ModuleFileRead<'_>) {
-        let listed =
-            if read.cache_inputs.is_some() { self.cache_module_files } else { self.module_files };
+        let listed = match self.module_files {
+            ModuleFileDeps::Off => false,
+            ModuleFileDeps::Cache => read.cache_inputs.is_some(),
+            ModuleFileDeps::All => true,
+        };
         if !listed {
             return;
         }
@@ -469,16 +485,16 @@ mod tests {
             module: "m",
             cache_inputs: cache.then_some(&inputs[..]),
         };
-        let mut l = DepList { module_files: false, cache_module_files: true, ..DepList::new(true) };
+        let mut l = DepList { module_files: ModuleFileDeps::Cache, ..DepList::new(true) };
         l.module_file_read(&read("./m.pcm", false));
         l.module_file_read(&read("/c/std.pcm", true));
         l.module_file_read(&read("/c/std.pcm", true));
         assert_eq!(l.files(), ["/c/std.pcm", "/sys/std.cppm", "/sys/v1/a.h"]);
-        let mut l = DepList { module_files: true, cache_module_files: true, ..DepList::new(false) };
+        let mut l = DepList { module_files: ModuleFileDeps::All, ..DepList::new(false) };
         l.module_file_read(&read("./m.pcm", false));
         l.module_file_read(&read("/c/std.pcm", true));
         assert_eq!(l.files(), ["./m.pcm", "/c/std.pcm"]);
-        let mut l = DepList::new(true);
+        let mut l = DepList { module_files: ModuleFileDeps::Off, ..DepList::new(true) };
         l.module_file_read(&read("./m.pcm", false));
         l.module_file_read(&read("/c/std.pcm", true));
         assert!(l.files().is_empty());
