@@ -379,7 +379,10 @@ impl Substituter<'_, '_, '_> {
                         // invalid).
                         let mut tys = tys;
                         for t in &mut tys {
-                            *t = self.sema.check_specified_exception_type(*t, at).ok_or(SubstFail)?;
+                            *t = self
+                                .sema
+                                .check_specified_exception_type(*t, at)
+                                .ok_or(SubstFail)?;
                         }
                         // `throw(Ts...)` with an empty pack is `throw()`, non-throwing
                         // ([except.spec]/12 as of C++14).
