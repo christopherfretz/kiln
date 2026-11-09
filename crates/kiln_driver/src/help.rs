@@ -261,7 +261,7 @@ KILN DEVELOPMENT:
                           [kiln] Expansion statement outlining threshold
   -fkiln-reflection-mangling=<scheme>
                           [kiln] Mangling of reflection template arguments:
-                          kiln (default), gcc or kiln-hashed
+                          gcc (default), kiln or kiln-hashed
   -fkiln-reproducible-time
                           [kiln] Fixed __DATE__, __TIME__ and __TIMESTAMP__
   -fkiln-source-path-style=<style>

@@ -10,8 +10,8 @@ the exact commands to reproduce each run, is in
 **Language support** is tracked separately. The standards support matrix
 is in [STANDARD_SUPPORT.md](STANDARD_SUPPORT.md): one row per paper, from
 C++98 to C++26 plus reflection, in the style of clang's `cxx_status`. Its
-summary table counts 257 rows done, 3 partial (all three in C++26: P2686,
-P2786 and P3394) and 0 todo or untested, over C++98/03, C++11, C++14,
+summary table counts 260 rows done, 1 partial (P2786, in C++26) and 0
+todo or untested, over C++98/03, C++11, C++14,
 C++17, C++20, C++23, C++26, C++26 reflection, the DR-level papers and the
 kiln extensions.
 
@@ -355,7 +355,7 @@ x86_64-only gaps found are fixed or have a follow-up WP.
 | Bitcoin Core | 357/357; 475 TUs vs clang's 487: the `-m<feature>` flags were not accepted, so the SSE4.1/AVX2/SHA-NI code was configured out. WP-1000 added the flags; not re-swept yet | **Flawless** (tests); TU count to re-measure |
 | OpenCV | 7/7; 473 TUs vs 537: the SSE3…AVX2 dispatch sources, the same `-m<feature>` gap (WP-1000, not re-swept yet) | **Flawless** (tests); TU count to re-measure |
 | LLVM Support, ADT, IR | `SupportTests` 1337 and `ADTTests` 1576 as clang; `IRTests` does not build: glibc's x86-64 `_Float128` functions are not `__float128` ones in kiln (WP-1058) | **Broken** for `IRTests` (follow-up) |
-| gRPC | the missing `__rdtsc` (31 TUs) is fixed; the full x86_64 build was still running at the first sweep | **Not run** (pending) |
+| gRPC | 117/118 as clang (the same `end2end_http2_test` 300 s timeout under both), 5732/5732 TUs, 120/120 links; geomean CPU time 0.96× and RSS 0.44× of clang's, peak TU RSS 311 MB vs 796 MB | **Flawless** |
 
 ## Rejecting invalid code
 

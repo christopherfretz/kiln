@@ -173,9 +173,14 @@ fn per_kind_table() {
     }
     src.push_str("};\n");
     std::fs::write(d.join("k.cpp"), &src).unwrap();
-    for (mode, col) in [("kiln", 2), ("gcc", 3)] {
+    // No flag is the gcc form (the default, WP-909).
+    for (mode, col) in [("kiln", 2), ("gcc", 3), ("default", 3)] {
         let flag = format!("-fkiln-reflection-mangling={mode}");
-        kiln(&d, &[&flag, "-S", "-emit-llvm", "-o", "k.ll", "k.cpp"]);
+        let mut args = vec!["-S", "-emit-llvm", "-o", "k.ll", "k.cpp"];
+        if mode != "default" {
+            args.insert(0, &flag);
+        }
+        kiln(&d, &args);
         let ll = std::fs::read_to_string(d.join("k.ll")).unwrap();
         let got = table(&ll);
         assert_eq!(got.len(), KINDS.len(), "{mode}");
@@ -218,14 +223,14 @@ Seen seen_b();
 /// that name the same reflection-keyed specializations get one entity
 /// each (equal addresses, one `typeid`, one shared static counter), and
 /// the objects carry them as weak (`W`/`V`), never TU-local. Run in the
-/// default (kiln, `Lu6__info…`) form and in the gcc (`LDm…`) form.
+/// default (gcc, `LDm…`) form and in the kiln (`Lu6__info…`) form.
 #[test]
 fn two_translation_units_link() {
     if !(have("clang++-19") && have("nm")) {
         eprintln!("skipping: clang++-19 / nm not found");
         return;
     }
-    for (flag, info) in [(None, "u6__info"), (Some("-fkiln-reflection-mangling=gcc"), "Dm")] {
+    for (flag, info) in [(None, "Dm"), (Some("-fkiln-reflection-mangling=kiln"), "u6__info")] {
         two_tu(flag, info);
     }
 }
@@ -315,9 +320,9 @@ int use() {
 }
 ";
 
-/// GCC link compatibility (spec/reflection.md §8.3): with
-/// `-fkiln-reflection-mangling=gcc`, kiln names every reflection-keyed
-/// symbol exactly as g++-16 does. Skipped unless `KILN_GCC` names g++-16.
+/// GCC link compatibility (spec/reflection.md §8.3): in the default
+/// form (`-fkiln-reflection-mangling=gcc`, WP-909), kiln names every
+/// reflection-keyed symbol exactly as g++-16 does. Skipped unless `KILN_GCC` names g++-16.
 #[test]
 fn gcc_link_compat() {
     let Some(gcc) = std::env::var_os("KILN_GCC").filter(|g| !g.is_empty()) else {
@@ -330,7 +335,7 @@ fn gcc_link_compat() {
     }
     let d = scratch("gcc");
     std::fs::write(d.join("t.cpp"), COMPAT).unwrap();
-    kiln(&d, &["-fkiln-reflection-mangling=gcc", "-c", "t.cpp", "-o", "k.o"]);
+    kiln(&d, &["-c", "t.cpp", "-o", "k.o"]);
     run(Command::new(&gcc)
         .args(["-std=c++26", "-freflection", "-c", "t.cpp", "-o", "g.o"])
         .current_dir(&d));

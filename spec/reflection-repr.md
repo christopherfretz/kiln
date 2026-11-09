@@ -185,13 +185,14 @@ are template-argument-equivalent iff the ids are equal: every reflectee
 kind names its own specialization and equal reflections share one
 (`nttp-info-kinds.cpp`).
 
-Mangling: until the Itanium ABI defines reflection mangling, kiln emits a
-vendor-extended literal `L u6__info <kind> <entity> E` whose body is GCC
-16.1's encoding of the reflectee (`_Z1kILu6__infotyiEEiv` for `k<^^int>`;
-spec/reflection.md §8.3 has the grammar, WP-501). The string depends on
-the reflectee alone, so it is the same in every TU and a specialization
-keyed by a reflection takes the reflectee's linkage;
-`-fkiln-reflection-mangling=gcc` writes GCC's own `L Dm … E`.
+Mangling: until the Itanium ABI defines reflection mangling, kiln emits
+GCC 16.1's literal `L Dm <kind> <entity> E` by default (WP-909), the
+reflectee's encoding (`_Z1kILDmtyiEEiv` for `k<^^int>`; spec/reflection.md
+§8.3 has the grammar, WP-501, WP-879). The string depends on the
+reflectee alone, so it is the same in every TU and a specialization keyed
+by a reflection takes the reflectee's linkage;
+`-fkiln-reflection-mangling=kiln` writes the vendor-extended
+`L u6__info … E` instead.
 
 ## 5. Printing
 

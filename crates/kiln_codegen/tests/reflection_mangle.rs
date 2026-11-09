@@ -5,10 +5,12 @@
 //! the cross-TU and GCC link tests are `kiln_driver/tests/
 //! reflection_mangling.rs`).
 //!
-//! The default grammar: `<expr-primary> ::= L u6__info <kind> <entity> E`,
-//! with `u6__info` a substitution candidate and `<kind> <entity>` GCC
-//! 16.1's reflection encoding, so the string is a function of the
-//! reflectee alone and the specializations are `linkonce_odr`.
+//! The kiln form (`-fkiln-reflection-mangling=kiln`, which these tests
+//! pin; the default is the gcc form, WP-909): `<expr-primary> ::= L
+//! u6__info <kind> <entity> E`, with `u6__info` a substitution candidate
+//! and `<kind> <entity>` GCC 16.1's reflection encoding, so the string is
+//! a function of the reflectee alone and the specializations are
+//! `linkonce_odr`.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -256,7 +258,7 @@ fn two_thousand_specializations() {
 /// [expr.typeid]/1 (WP-879): the C++ runtime defines no `type_info` for
 /// `std::meta::info`, so `typeid(info)` defines it where used, a weak
 /// `linkonce_odr` `__fundamental_type_info` in a comdat, as g++-16 does
-/// for `_ZTIDm`. In the default (kiln) form it is `_ZTIu6__info`; nothing
+/// for `_ZTIDm`. In the kiln form it is `_ZTIu6__info`; nothing
 /// else in the module names the info type.
 #[test]
 fn info_type_info_is_a_local_weak_definition() {

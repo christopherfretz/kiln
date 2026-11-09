@@ -92,7 +92,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fcontract-evaluation-semantic=<ignore\|observe\|enforce\|quick_enforce>` | the contract evaluation semantic of the translation unit (GCC's spelling; `quick-enforce` also accepted; default `enforce`; `ParseOptions::contract_semantic`, `Ast::contract_semantic`); any other value is `unsupported argument`. All four semantics compile to IR and are evaluated in the Oven (spec/contracts.md §6, WP-707) |
 | `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
 | `-f[no-]reflection` | P2996 reflection (WP-267; on by default at C++26 since WP-920, operator decision Q7; the last one wins; below C++26 off whatever the flag, an explicit `-freflection` accepted and ignored; spec/reflection.md §1.4): `^^`, `[:`, `:]` are lexed, and `^^`, type splices and the kiln intrinsics are accepted (spec/sema.md §8a, spec/parse.md §5.2). `__cpp_reflection` is not predefined. Passed to the preprocessor, the parser and sema for `-E`, `-fsyntax-only` and codegen jobs |
-| `-fkiln-reflection-mangling=<kiln\|gcc\|kiln-hashed>` | kiln: how a `std::meta::info` template argument is spelled in a symbol (`kiln_abi::ReflectionMangling`, `CodegenOptions::reflection_mangling`; WP-501). `kiln` (the default): `L u6__info <kind> <operand> E`; `gcc`: GCC 16.1's `L Dm <kind> <operand> E` with `info` itself `Dm`, link-compatible with `g++-16`; `kiln-hashed`: `L u6__info h<32 hex> E`, a prototype. All three give the reflection its reflectee's linkage (spec/reflection.md §8.3). Any other value is `invalid value`; the last one wins. Codegen jobs only |
+| `-fkiln-reflection-mangling=<gcc\|kiln\|kiln-hashed>` | kiln: how a `std::meta::info` template argument is spelled in a symbol (`kiln_abi::ReflectionMangling`, `CodegenOptions::reflection_mangling`; WP-501). `gcc` (the default, WP-909): GCC 16.1's `L Dm <kind> <operand> E` with `info` itself `Dm`, link-compatible with `g++-16`; `kiln`: `L u6__info <kind> <operand> E`; `kiln-hashed`: `L u6__info h<32 hex> E`, a prototype. All three give the reflection its reflectee's linkage (spec/reflection.md §8.3). Any other value is `invalid value`; the last one wins. Codegen jobs only |
 | `-f[no-]coro-aligned-allocation` | aligned coroutine frame allocation (default off, as clang; the last one wins): sema looks up the `std::align_val_t` forms of the frame's `operator new`/`delete` first (spec/sema.md §7.13). Passed to sema for `-fsyntax-only` and codegen jobs |
 | `-fconstexpr-report=<path>` | kiln: write the per-TU NDJSON constant-evaluation report (spec/oven.md "Reporting protocol"); `-fsyntax-only` and every codegen job |
 | `-fconstexpr-stats`, `-fconstexpr-profile[=text\|json\|<file>]`, `-fconstexpr-profile-limit=N` | kiln: after the translation unit, the constant-evaluation summary and the per-function / per-site profile (see "Constexpr profile"; WP-1116); `-fsyntax-only` and every codegen job. An empty `-fconstexpr-profile=` is `drv_missing_value`; a limit that is not an unsigned integer is `drv_invalid_int_value` |
@@ -649,6 +649,8 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
   `--gcc-toolchain=<dir>` (a trailing `/` dropped) if given, else
   `<sysroot>/usr`. Under it, for `lib64` then `lib` and the target's
   candidate triples in clang's order, every `<prefix>/<lib>/gcc/<triple>/<version>`
+  and then `<prefix>/<lib>/gcc-cross/<triple>/<version>` (Debian's cross
+  compilers, such as `libstdc++-14-dev-amd64-cross`; WP-1002)
   whose name parses as a GCC version is a candidate (`-v`: `Found
   candidate GCC installation: <path>` for each, sorted, as clang's
   `CandidateGCCInstallPaths` set); the newest with a `crtbegin.o` and a
@@ -656,8 +658,9 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
   `Selected GCC installation: <path>`). `--gcc-install-dir=<dir>` skips
   the search and names the installation (triple and version are the
   names of `<dir>`'s parent and of `<dir>`). Test:
-  `crates/kiln_driver/tests/driver.rs` `gcc_toolchain_matches_clang` (a
-  fake tree; `-v` compared with clang 19). A build with
+  `crates/kiln_driver/tests/driver.rs` `gcc_toolchain_matches_clang` and
+  `gcc_cross_toolchain_matches_clang` (fake trees; `-v` compared with
+  clang 19). A build with
   `KILN_DEFAULT_GCC=<driver>` in its environment (`toolchain::DEFAULT_GCC`;
   for a distribution whose C++ compiler is a GCC outside `/usr` behind a
   wrapper, such as RHEL's gcc-toolset) instead takes, when there is no
@@ -672,7 +675,10 @@ toolchain's (clang 19 `Linux::AddClangCXXStdlibIncludeArgs` followed by
 `AddClangSystemIncludeArgs`):
 
 1. C++ only, unless `-nostdinc++` or `-nostdlibinc`:
-   - **libstdc++:** `<gcc>/../../../../include/c++/<v>`, then
+   - **libstdc++:** if `<gcc>/../../../../<triple>/include/c++/<v>`
+     exists (a cross GCC's), it, `.../<v>/<triple>` and `.../backward`
+     (clang `addGCCLibStdCxxIncludePaths`'s first form; WP-1002). Else
+     `<gcc>/../../../../include/c++/<v>`, then
      `.../<v>/<triple>` if it exists (Debian multiarch), else
      `.../<v>/<triple>/<multilib>` (listed even when missing, as clang
      `addLibStdCXXIncludePaths`), and `.../backward`. With
