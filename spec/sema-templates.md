@@ -5158,9 +5158,24 @@ The `SpecKind` transitions are those of §4.5.
   complete (`args.rs` `defining_class_member_ptr`; WP-726,
   `tests/conformance/temp.arg.nontype/member-pointer-of-class-being-defined.cpp`).
 - **Reference arguments** (`convert_ref_nttp_arg`): the conversion must
-  exist (`sema_cce_not_implicitly_convertible`), must not bind a
-  temporary (`sema_cce_ref_binds_temporary`), and the referent must not
-  be automatic ("reference to 'x' is not a constant expression"). The
+  exist (`sema_cce_not_implicitly_convertible`), must not be a
+  derived-to-base conversion (`sema_cce_conversion_not_allowed`, below),
+  must not bind a temporary (`sema_cce_ref_binds_temporary`), and the
+  referent must not be automatic ("reference to 'x' is not a constant
+  expression"). Binding `const B &` to an object of a class derived from
+  `B` is a derived-to-base conversion ([over.ics.ref]/1), which is not
+  among the conversions [expr.const]/12 lets a converted constant
+  expression use, also as the second standard conversion after a
+  user-defined one: "conversion from 'const D' to 'const B &' is not
+  allowed in a converted constant expression" at the argument, with
+  "template parameter is declared here" at `-fclang-compat=22` only
+  (clang `CheckConvertedConstantConversions`, `cce_second_allowed`; also
+  for a value-dependent argument at the definition, and an
+  explicitly-specified argument of a function template fails deduction).
+  An lvalue of type `B` designating the base subobject
+  (`static_cast<const B &>(d)`) binds by identity and is accepted
+  (WP-561; `temp.arg.nontype/reference-derived-to-base{,-clang22}.cpp`).
+  The
   value is the built-in `&` of the bound glvalue, re-interned at the
   reference type so it prints as `T<gi>`.
 - **Disallowed bases** ([temp.arg.nontype]/6, `args.rs`
