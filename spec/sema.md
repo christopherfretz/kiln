@@ -4842,7 +4842,11 @@ under its own name, the same signature, gating and codegen
   `<ctype.h>`, `<wchar.h>`, `<math.h>` d/f/l), declared in a namespace
   scope context (TU or namespace, through linkage specs) with C
   language linkage and with the row's type ignoring the exception
-  specification, gets implicit `NoThrow` and `Const`/`Pure` attributes
+  specification (clang's `hasSameFunctionTypeIgnoringExceptionSpec`:
+  the `noreturn` bit is part of the type, so a `NoReturn` row such as
+  `abort` matches only a declaration with GNU `noreturn`; `void abort();`
+  and `[[noreturn]] void abort();`, a declaration attribute, do not,
+  WP-938), gets implicit `NoThrow` and `Const`/`Pure` attributes
   (after its written ones). Sig letter `a` is `__builtin_va_list`
   (decayed when an array), `P` the type of the TU-scope `FILE`
   (below), `R` adds `restrict` to the type
@@ -4856,23 +4860,32 @@ under its own name, the same signature, gating and codegen
   codegen lowers a direct call of the errno-free `<math.h>` functions
   and (WP-186) of `memcpy` / `memmove` / `memset` / `abs` / `labs` /
   `llabs` as the twin (spec/codegen.md §3, "library builtins"); sema
-  and the Oven do not read it. WP-419 adds
+  does not read it, and the Oven reads it only for the functions clang's
+  evaluator evaluates (WP-940, spec/oven.md "Builtins": `strlen`,
+  `memcmp`, ... evaluate behind a constant-expression note). WP-419 adds
   C23's `roundeven{,f,l}` (clang 19 and 22), clang 22's
   `fmaximum_num` / `fminimum_num` `{,f,l}` (`builtin::lib_min_compat`:
   not recognized at `-fclang-compat=19`) and the GNU `sincos{,f,l}`
   (clang 22, `ALL_GNU_LANGUAGES`: recognized under `-std=gnu++*` only,
-  `builtin::lib_gnu_only`; `NoThrow`, a call is `nounwind`). WP-1055
-  (audit against clang 19/22 `Builtins.td`) adds `memcmp` and, GNU
-  modes only, `bcmp`, `bcopy`, `bzero`, `index`, `rindex`, `stpcpy`,
-  `stpncpy`, `strdup` and `strndup`; under `-std=c++*` `bcmp` is an
-  ordinary function. Still not modelled: rows whose only effect is
-  `AllocSize` (`malloc`, `calloc`, `realloc`, `aligned_alloc`,
-  `memalign`), `ReturnsTwice` (`setjmp`, `vfork`, `getcontext`), the
-  scanf-family `format`, and clang's special lowering of `abort`
-  (`invoke`), `alloca`, `bzero` / `bcopy` (memset / memmove intrinsics)
-  and `finite` (`llvm.is.fpclass`). A call in
+  `builtin::lib_gnu_only`; `NoThrow`, a call is `nounwind`). WP-938 adds
+  `abort` (`NoThrow`, `NoReturn`), the `<complex.h>` functions (`cabs`
+  ... `ctanh`, `cpow`, `cproj` `{,f,l}`; `NoThrow`, `cproj` also
+  `Const`), clang 19 and 22's rows; a call under a pending cleanup is
+  then a `call`, not an `invoke`. WP-1055 (audit against clang 19/22
+  `Builtins.td`) adds `memcmp` and, GNU modes only, `bcmp`, `bcopy`,
+  `bzero`, `index`, `rindex`, `stpcpy`, `stpncpy`, `strdup` and
+  `strndup`; under `-std=c++*` `bcmp` is an ordinary function. `memcmp`
+  and `bcmp` have no implicit attributes; their twin is recorded for the
+  never-constant check and the WP-940 fold. Still not modelled: rows
+  whose only effect is `AllocSize` (`malloc`, `calloc`, `realloc`,
+  `aligned_alloc`, `memalign`), `ReturnsTwice` (`setjmp`, `vfork`,
+  `getcontext`), the scanf-family `format`, and clang's special lowering
+  of `alloca`, `bzero` / `bcopy` (memset / memmove intrinsics) and
+  `finite` (`llvm.is.fpclass`). A call in
   a constant expression is still a call of a non-constexpr function
-  (clang 19 and 22 reject `constexpr double d = ceil(1.5);`). The printf
+  (clang 19 and 22 reject `constexpr double d = ceil(1.5);` and
+  `constexpr auto n = strlen("ab");`); only a fold (`__builtin_constant_p`,
+  a GNU-folded array bound, codegen) evaluates the `lib_evaluated` set. The printf
   family (`printf`, `fprintf`, `sprintf`, `snprintf`, `vprintf`,
   `vfprintf`, `vsprintf`, `vsnprintf`; `builtin::lib_printf_format`,
   WP-186) gets clang's implicit `format(printf, F, A)` first, unless a
