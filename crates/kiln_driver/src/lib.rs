@@ -13,6 +13,7 @@ mod cdb;
 pub mod codegen_cmd;
 pub mod codegen_flags;
 pub mod constexpr_opts;
+pub mod crash;
 pub mod debug_flags;
 pub mod deps;
 pub mod features;
@@ -514,6 +515,31 @@ fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::In
         .collect()
 }
 
+/// The toolchain of `args` (`--target`, `--sysroot`, `-resource-dir`,
+/// `--gcc-install-dir` / `--gcc-toolchain`), reporting a bad target or GCC
+/// directory to `drv`. Shared with the crash reproducer ([`crash`]).
+pub(crate) fn toolchain_of(args: &Args, drv: &DiagEngine<'_>) -> Toolchain {
+    let target = match &args.target {
+        None => Target::host(),
+        Some(t) => Target::parse(t).unwrap_or_else(|| {
+            Diag::new(DiagId::drv_unsupported_target, Span::INVALID).arg(t).emit(drv);
+            Target::host()
+        }),
+    };
+    let mut tc = Toolchain::new(target, args.sysroot.as_deref(), args.resource_dir.as_deref());
+    let gcc_search = match (&args.gcc_install_dir, &args.gcc_toolchain) {
+        (Some(d), _) => GccSearch::InstallDir(d),
+        (None, Some(d)) => GccSearch::Toolchain(d),
+        (None, None) => GccSearch::Default,
+    };
+    if gcc_search != GccSearch::Default
+        && let Err(dir) = tc.select_gcc(gcc_search)
+    {
+        Diag::new(DiagId::drv_invalid_gcc_install_dir, Span::INVALID).arg(dir).emit(drv);
+    }
+    tc
+}
+
 /// Runs the driver on `argv` (without the program name) as `kiln++`: every
 /// input is C++ unless `-x` or `--driver-mode=gcc` says otherwise. Returns
 /// the exit code: 0 on success, 1 on any error (clang's convention).
@@ -529,6 +555,16 @@ pub fn run(command_line: &[String], io: Io) -> i32 {
 pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     let command_line = rsp::expand(command_line);
     let args = Args::parse_as(argv0, &command_line);
+    // The hidden `-fkiln-crash-for-testing=` (spec/driver.md "Internal
+    // compiler errors"); per thread, so set (or cleared) on every run.
+    kiln_source::activity::set_crash_for_testing(args.crash_for_testing);
+    if args.crash_for_testing == Some(kiln_source::activity::Phase::Driver) {
+        // Entering the requested phase panics: a crash outside any input.
+        drop(kiln_source::activity::enter(
+            kiln_source::activity::Phase::Driver,
+            kiln_source::Loc::INVALID,
+        ));
+    }
     let mut diag_opts = DiagOptions::from_args(&args.diag_args);
     diag_opts.clang_compat = args.predef.clang_compat.major();
     let dsm = SourceManager::new();
@@ -547,24 +583,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             Diag::new(DiagId::drv_time_trace_ignored, Span::INVALID).arg(f).emit(&drv);
         }
     }
-    let target = match &args.target {
-        None => Target::host(),
-        Some(t) => Target::parse(t).unwrap_or_else(|| {
-            Diag::new(DiagId::drv_unsupported_target, Span::INVALID).arg(t).emit(&drv);
-            Target::host()
-        }),
-    };
-    let mut tc = Toolchain::new(target, args.sysroot.as_deref(), args.resource_dir.as_deref());
-    let gcc_search = match (&args.gcc_install_dir, &args.gcc_toolchain) {
-        (Some(d), _) => GccSearch::InstallDir(d),
-        (None, Some(d)) => GccSearch::Toolchain(d),
-        (None, None) => GccSearch::Default,
-    };
-    if gcc_search != GccSearch::Default
-        && let Err(dir) = tc.select_gcc(gcc_search)
-    {
-        Diag::new(DiagId::drv_invalid_gcc_install_dir, Span::INVALID).arg(dir).emit(&drv);
-    }
+    let tc = toolchain_of(&args, &drv);
     for e in &features::resolve(&args, &tc.target).1 {
         emit_arg_error(e, &drv);
     }

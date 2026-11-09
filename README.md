@@ -102,6 +102,13 @@ What a version number promises (driver flags, diagnostic ids, predefined
 macros, ABI; not diagnostic wording or IR text) is in
 [docs/STABILITY.md](docs/STABILITY.md).
 
+## Reporting bugs
+
+File issues at https://github.com/christopherfretz/kiln/issues. A crash
+prints an "internal compiler error" report and writes a reproducer (a
+preprocessed `.ii` and a `.sh` that reruns the command). Attach both
+files. See [docs/REPORTING-BUGS.md](docs/REPORTING-BUGS.md).
+
 ## License
 
 Dual-licensed under MIT or Apache-2.0, at your option. `resource/include`
