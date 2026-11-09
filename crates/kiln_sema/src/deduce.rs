@@ -2,7 +2,7 @@
 //! types ([dcl.spec.auto], [dcl.type.auto.deduct]; spec/sema.md §4.3.1).
 
 use kiln_ast::decl::{DeclFlags, DeclKind};
-use kiln_ast::expr::{ExprKind, ValueCategory};
+use kiln_ast::expr::{ExprFlags, ExprKind, ValueCategory};
 use kiln_ast::types::{AutoKeyword, Quals, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -238,10 +238,14 @@ impl Sema<'_, '_> {
         }
         if n.kind() == ExprKind::SubstNonTypeTemplateParmExpr
             && self.ast.types.as_record(n.ty()).is_some()
+            && !n.has(ExprFlags::REFERENCE_PARAMETER)
+            && self.names_template_param_object(self.ast.exprs.subst_replacement(e))
         {
             // A template parameter object ([temp.param]/8): the
             // parameter's (deduced) class type, without the `const` of
-            // the object ([dcl.type.decltype]/1.3).
+            // the object ([dcl.type.decltype]/1.3). A parameter of
+            // reference type (`const X &`, `auto &`, or `decltype(auto)`
+            // deduced as one) names its argument: the reference type.
             return crate::conv::strip_cv(self, n.ty());
         }
         match n.value_category() {
@@ -249,6 +253,14 @@ impl Sema<'_, '_> {
             ValueCategory::XValue => self.ast.types.rvalue_ref_to(n.ty()),
             ValueCategory::PRValue => n.ty(),
         }
+    }
+
+    /// Whether `e` (a substituted non-type template argument) names a
+    /// template parameter object ([temp.param]/8).
+    fn names_template_param_object(&self, e: ExprId) -> bool {
+        let x = &self.ast.exprs;
+        x.get(e).kind() == ExprKind::DeclRefExpr
+            && self.kind_of(x.decl(e)) == DeclKind::TemplateParamObject
     }
 
     /// The keyword of an undeduced placeholder type `q` (`auto`,
