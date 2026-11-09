@@ -10,7 +10,7 @@
 // there.
 //@ args: --target=x86_64-unknown-linux-gnu
 //@ expect: compile-ok
-//@ xfail(kiln): WP-961 follow-up, glibc's x86-64 `typedef __float128 _Float128` is dropped so `_Float128` functions are not `__float128` ones (seen building llvm_project, ConstantFolding.cpp)
+//@ xfail(kiln): WP-1000 follow-up (WP-1058), glibc's x86-64 `typedef __float128 _Float128` is dropped so `_Float128` functions are not `__float128` ones (seen building llvm_project, ConstantFolding.cpp)
 # 1 "/usr/include/x86_64-linux-gnu/bits/floatn.h" 1 3
 typedef __float128 _Float128;
 extern "C" _Float128 logf128(_Float128);

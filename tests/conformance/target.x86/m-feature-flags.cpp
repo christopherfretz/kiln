@@ -1,14 +1,12 @@
 // clang's x86 feature flags `-m<feature>` / `-mno-<feature>`
 // (`m_x86_Features_Group`: `-msse4.2`, `-mavx2`, `-mpclmul`, `-msha`, ...)
 // add or remove one target feature on top of `-march`, with its
-// `__<FEATURE>__` macro. kiln knows only `-march=<cpu>`, so every such
-// flag is an unknown argument: CMake's CPU-dispatch probes fail and the
-// SIMD paths are compiled out (x86_64 sweep: OpenCV built 473 of clang's
-// 537 TUs, SSE3 to AVX2 "not supported by C++ compiler"; Bitcoin Core
-// lost its SSE4.1, AVX2, SHA-NI, SSE4.2 and CLMUL variants).
+// `__<FEATURE>__` macro (spec/driver.md "x86-64 target features",
+// WP-1000). Before WP-1000 every such flag was an unknown argument, so
+// CMake's CPU-dispatch probes failed and the SIMD paths were compiled out
+// (x86_64 sweep: OpenCV and Bitcoin Core).
 //@ args: --target=x86_64-unknown-linux-gnu -msse4.2 -mavx2 -mpclmul -msha -mno-avx512f
 //@ expect: compile-ok
-//@ xfail(kiln): WP-961 follow-up, x86 -m<feature>/-mno-<feature> flags are unknown arguments (seen building opencv and bitcoin_core on x86_64)
 #if !defined(__SSE4_2__) || !defined(__AVX2__) || !defined(__PCLMUL__) || !defined(__SHA__)
 #error "the -m<feature> flags did not enable their features"
 #endif

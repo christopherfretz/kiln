@@ -3833,11 +3833,15 @@ guarantees it a constant initializer and a trivial destructor
 - **Calls: `-Wpsabi`** (`psabi.rs`, clang
   `X86_64TargetCodeGenInfo::checkFunctionCallABI`). On x86-64 only, each
   direct call, member call and constructor call checks its arguments in
-  order, then the return type. The first vector wider than 128 bits warns
-  `AVX vector argument|return of type T without 'F' enabled changes the
-  ABI` (`cg_avx_calling_convention`, group `psabi`), with F = `avx` up to
-  256 bits and `avx512f` beyond, and ends the check. kiln has no
-  per-function target features, so clang's mismatch error cannot arise.
+  order, then the return type. The first vector wider than 128 bits,
+  with F = `avx` up to 256 bits and `avx512f` beyond, is checked against
+  the caller's and the callee's feature maps (WP-1000: the command line's,
+  or a `target("...")` attribute's, spec/driver.md "x86-64 target
+  features"), and ends the check: neither has F warns `AVX vector
+  argument|return of type T without 'F' enabled changes the ABI`
+  (`cg_avx_calling_convention`, group `psabi`); exactly one has it is
+  the same text as an error (`cg_avx_calling_convention_mismatch`, clang
+  `err_avx_calling_convention`); both have it is silent.
   - T is the callee's declared (sugared) parameter type. For a call that
     passes an object argument, it is the parameter after that one (clang
     counts `this`). Through `...` it is the argument's own type, and for
@@ -3847,8 +3851,10 @@ guarantees it a constant initializer and a trivial destructor
     call, the member name for a member call, the operator for most
     overloaded operators.
   - Calls through a pointer are not checked. At `-fclang-compat=22`, a
-    callee that is not externally visible is skipped too.
-  - Tests: `ext.vector/ir-psabi-x86_64.cpp`, `ir-psabi-internal-x86_64*.cpp`.
+    callee that is not externally visible does not get the warning (the
+    error still applies).
+  - Tests: `ext.vector/ir-psabi-x86_64.cpp`, `ir-psabi-internal-x86_64*.cpp`,
+    `crates/kiln_driver/tests/codegen.rs` `x86_avx_calling_convention`.
 - **`bool` ext-vector `?:` conditions** (clang 20+) select on the
   condition's `<N x i1>` lanes with one `select`
   (`emit_vector_conditional`; `ext.vector/ir-bool-conditional*.cpp`,

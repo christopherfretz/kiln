@@ -615,6 +615,11 @@ pub struct Args {
     pub sve_vector_bits: Option<String>,
     /// `-target-feature <+name|-name>` (clang's `-Xclang` option), in order.
     pub target_features: Vec<String>,
+    /// The x86 `-m<feature>` / `-mno-<feature>` flags as written, in order
+    /// (WP-1000; resolved by [`crate::features::resolve`] once the target
+    /// and `-fclang-compat=` are known: spec/driver.md "x86-64 target
+    /// features").
+    pub x86_feature_flags: Vec<String>,
     /// `-f[no-]omit-frame-pointer` (the last wins; `Some(true)` omits);
     /// `None` is the target's default (spec/codegen.md "Frame pointer").
     pub omit_frame_pointer: Option<bool>,
@@ -945,9 +950,12 @@ impl Args {
     }
 
     /// `-march=` / `-mcpu=` / `-msve-vector-bits=` (the last of each wins; resolved by
-    /// [`crate::features::resolve`]). Returns false if `arg` is neither.
+    /// [`crate::features::resolve`]) and the x86 feature flags. Returns
+    /// false if `arg` is none of them.
     fn target_flag(&mut self, arg: &str) -> bool {
-        if let Some(v) = arg.strip_prefix("-march=") {
+        if crate::x86_features::is_flag(arg) {
+            self.x86_feature_flags.push(arg.to_owned());
+        } else if let Some(v) = arg.strip_prefix("-march=") {
             self.march = Some(v.to_owned());
         } else if let Some(v) = arg.strip_prefix("-mcpu=") {
             self.mcpu = Some(v.to_owned());
