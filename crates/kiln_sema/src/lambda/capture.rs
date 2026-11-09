@@ -892,6 +892,40 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [temp.local]/6: an explicit capture (simple, by-reference or init)
+    /// with the name of a parameter of the lambda's own
+    /// *template-parameter-list* redeclares it: "declaration of 'x'
+    /// shadows template parameter" at the capture, with a note at the
+    /// parameter (clang, `expr.prim.lambda.capture/p5.cpp`). An enclosing
+    /// template's parameters do not count. Checked in the pattern only;
+    /// `heads` is the template-head depth before the lambda.
+    pub(crate) fn check_capture_shadows_template_param(&mut self, id: LambdaId, heads: usize) {
+        if !self.inst.stack.is_empty() {
+            return;
+        }
+        let tparams = self.head_params_from(heads);
+        if tparams.is_empty() {
+            return;
+        }
+        let caps: Vec<(DeclId, Loc)> = self
+            .ast
+            .exprs
+            .lambdas
+            .get(id)
+            .captures
+            .iter()
+            .filter(|c| !c.implicit)
+            .filter_map(|c| Some((c.var?, c.loc)))
+            .collect();
+        for (var, cloc) in caps {
+            let name = self.ast.decls.get(var).name();
+            let Some(sym) = name.as_ident() else { continue };
+            if let Some(&p) = tparams.iter().find(|&&p| self.ast.decls.get(p).name() == name) {
+                self.diag_template_param_shadow(sym, cloc, p);
+            }
+        }
+    }
+
     /// The explicit captures of lambda `id` ([expr.prim.lambda.capture]/2-8;
     /// clang `ActOnLambdaExpressionAfterIntroducer`).
     #[allow(clippy::too_many_lines, reason = "one arm per capture form, as clang")]

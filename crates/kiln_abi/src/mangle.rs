@@ -2139,10 +2139,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
         }
         let Some(p) = n.ty().and_then(|t| ast.types.proto(ast.types.canonical(t))) else { return };
         let info = p.info();
+        // clang's `mangleNestedName` writes a method's `const` and
+        // `volatile` only: `void T::f() __restrict` is `_ZN1T1fEv` (the
+        // member-pointer type keeps `r`: `M1TrFvvE`).
         let q = info.this_quals();
-        if q.is_restrict() {
-            self.out.push('r');
-        }
         if q.is_volatile() {
             self.out.push('V');
         }

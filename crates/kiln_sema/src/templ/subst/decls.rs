@@ -763,9 +763,17 @@ impl Substituter<'_, '_, '_> {
             }
         }
         ds.friend = friend;
+        // A friend redeclaring a static member function takes its storage
+        // from the member; none is written ([class.friend]/6).
+        if friend.is_some() {
+            ds.storage = None;
+        }
         let mut dr = self.pattern_declarator(d, ctx)?;
         if friend.is_some() {
-            dr.qualifier = self.sema.friend_qualifiers.get(&d).copied();
+            dr.qualifier = match self.sema.friend_qualifiers.get(&d) {
+                Some(&q) => Some(q),
+                None => self.friend_member_class(d, loc),
+            };
         }
         if matches!(
             self.sema.ast.decls.get(d).name().kind(),
@@ -1707,6 +1715,57 @@ impl Substituter<'_, '_, '_> {
         })
     }
 
+    /// [class.friend]/10: a friend that redeclares a member function
+    /// names it (clang `CheckFriendAccess` in `VisitFunctionDecl`): the
+    /// pattern's member, or its instantiation for a dependently-scoped
+    /// `X<T>::f`. A failure the pattern already reported is not repeated
+    /// at the same location. `f` is the pattern's friend function, `r`
+    /// the instantiated friend declaration.
+    fn check_member_friend_access(&mut self, f: DeclId, r: DeclId, loc: Loc) {
+        let first = self.sema.ast.first(f);
+        if first != f
+            && let Some(c) = self.sema.declaring_class(first)
+            && !self.sema.ast.decls.get(f).has(DeclFlags::INVALID)
+        {
+            let member = if self.sema.in_dependent_class(c) {
+                // The member the instantiated friend redeclares
+                // (matched by signature when it was declared); a
+                // qualifier that selected an explicit or partial
+                // specialization has no instantiation of `first`
+                // (WP-1071).
+                match self.sema.ast.decls.friend_target(r) {
+                    FriendTarget::Decl(x) if self.sema.ast.first(x) != x => Some(x),
+                    _ => self.find_instantiated_decl(first, loc).ok(),
+                }
+            } else {
+                Some(first)
+            };
+            if let Some(m) = member.filter(|&m| self.sema.declaring_class(m).is_some()) {
+                self.sema.check_friend_access(m, loc);
+            }
+        }
+    }
+
+    /// The class whose member function the pattern's friend `d`
+    /// redeclares (`friend R B<T>::f(W<T>&);`, matched to a member of
+    /// `B`'s pattern when the friend was declared): the instantiation is
+    /// declared with the instantiated class as its qualifier, so it
+    /// redeclares the member of `B<A>` (or of the explicit or partial
+    /// specialization `B<A>` names, looked up again), not a namespace
+    /// function ([class.friend]/10, [temp.friend]/1; WP-1071).
+    fn friend_member_class(&mut self, d: DeclId, loc: Loc) -> Option<DeclId> {
+        let first = self.sema.ast.first(d);
+        if first == d || self.sema.kind_of(first) != DeclKind::CXXMethod {
+            return None;
+        }
+        let c = self.sema.declaring_class(first)?;
+        if !self.sema.in_dependent_class(c) {
+            return Some(c);
+        }
+        let m = self.find_instantiated_decl(first, loc).ok()?;
+        self.sema.declaring_class(m)
+    }
+
     /// A friend declaration of the pattern ([temp.friend]).
     pub(crate) fn friend_decl(&mut self, d: DeclId) -> SubstResult<Option<DeclId>> {
         let loc = self.sema.ast.decls.get(d).loc();
@@ -1804,31 +1863,17 @@ impl Substituter<'_, '_, '_> {
                 let r = self.function_decl(f, ctx, Some(loc));
                 self.sema.friend_template_apart = saved;
                 let r = r?;
+                // A friend redeclaring a member of another class
+                // (`friend R B<T>::f(...)`) is no member of this one: the
+                // member keeps its own pattern (that of `B<A>`, an
+                // explicit or a partial specialization's; WP-1071).
                 if let FriendTarget::Decl(x) = self.sema.ast.decls.friend_target(r)
                     && self.sema.ast.instantiated_from(x).is_none()
+                    && self.sema.declaring_class(x).is_none()
                 {
                     self.member_link(x, f);
                 }
-                // [class.friend]/10: a friend that redeclares a member
-                // function names it (clang `CheckFriendAccess` in
-                // `VisitFunctionDecl`): the pattern's member, or its
-                // instantiation for a dependently-scoped `X<T>::f`. A
-                // failure the pattern already reported is not repeated at
-                // the same location.
-                let first = self.sema.ast.first(f);
-                if first != f
-                    && let Some(c) = self.sema.declaring_class(first)
-                    && !self.sema.ast.decls.get(f).has(DeclFlags::INVALID)
-                {
-                    let member = if self.sema.in_dependent_class(c) {
-                        self.find_instantiated_decl(first, loc).ok()
-                    } else {
-                        Some(first)
-                    };
-                    if let Some(m) = member.filter(|&m| self.sema.declaring_class(m).is_some()) {
-                        self.sema.check_friend_access(m, loc);
-                    }
-                }
+                self.check_member_friend_access(f, r, loc);
                 Ok(Some(r))
             }
         }
