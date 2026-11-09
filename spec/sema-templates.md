@@ -2613,7 +2613,8 @@ reports a dropped statement or part.
   head(s) (a member function template's second head is allowed), and
   records a `MemberFriend` keyed by its `FriendDecl`: the template-id's
   template (first declaration) and written arguments, the member class
-  path, the member's name, and a function's declared type.
+  path, the member's name, and a function's declared type and trailing
+  requires-clause.
   - Access: `effective_context` collects, for each class of the context
     (records and functions, walking outward) that is a member of a class
     `S`, the member friends registered against the class template of
@@ -2633,11 +2634,34 @@ reports a dropped statement or part.
     member template's head must be equivalent to the friend's
     ([temp.over.link]/6: same length, parameter kinds and packs,
     non-type parameter types after the outer substitution, template
-    template parameter heads; requires-clauses and type-constraints are
-    not compared), and the friend's type, with its head's parameters
-    renamed to the member template's, must be the member template
-    pattern's type (`member_friend_heads_match`; WP-1098). The
-    answer is cached per (friend, member). A member of a class
+    template parameter heads), and the friend's type, with its head's
+    parameters renamed to the member template's, must be the member
+    template pattern's type (`member_friend_heads_match`; WP-1098).
+  - Constraints ([temp.over.link]/6-7, [basic.scope.scope]/4; WP-1130):
+    the friend's type-constraints (one per parameter of the member
+    template head, an abbreviated head's `C auto` included), the head's
+    requires-clause and the trailing requires-clause must be present
+    exactly where the member's are and be equivalent
+    ([temp.over.link]/5, by canonical profile) to them; for a friend
+    without a member template head, its trailing requires-clause and the
+    non-template member's. Each side is compared substituted, as clang's
+    `AreConstraintExpressionsEqual` compares a redeclaration with the
+    enclosing levels substituted: the friend's with the deduced
+    arguments of its own head (and, for a friend instantiated with its
+    class template, that instantiation's arguments), the member
+    template's level retained; the member's (its pattern's, kept by a
+    class template specialization, `member_constraints`) with its
+    class's arguments (`member_cmp_constraints`). So of an overload set
+    `f(U)` / `f(U) requires C<U>` the friend names only the member whose
+    constraints match, and `template<C U>` does not name `template<class
+    U> requires C<U>` (only functionally equivalent). A friend whose
+    levels outside its own head are not all known (the pattern in a class
+    template; a friend instantiated twice, from a member class template)
+    keeps WP-1098's unconstrained comparison
+    (`member_friend_constraints_match`). The abbreviated friend
+    `template<class T> friend int A<T>::f(C auto);` has the invented head
+    as its member template head (`open_invented_head_list`).
+    The answer is cached per (friend, member). A member of a class
     template's pattern or of a partial specialization (no specialization
     arguments yet) is a speculative friend: the check is recorded and
     replayed in each instantiation (`dependent_access`, above), so
@@ -2645,7 +2669,10 @@ reports a dropped statement or part.
     note.
   - In a class template, each instantiation substitutes the specifier
     and the declared type (the friend's own parameters at their retained
-    depth) and registers a new member friend (`instantiate_member_friend`).
+    depth) and registers a new member friend (`instantiate_member_friend`),
+    which keeps the pattern's member template head and requires-clause
+    with the instantiation's arguments (`MemberFriend::enclosing`) to
+    substitute their outer levels.
   - clang does not model the rule: it turns off access control for the
     befriending class (clang `Sema::ActOnTemplatedFriendTag` /
     `ActOnFriendFunctionDecl`, `FriendDecl` marked unsupported). kiln
@@ -2655,7 +2682,10 @@ reports a dropped statement or part.
     specialization or function type (g++ denies these too;
     `temp.friend/dependent-member-friend-denied.cpp`, and a member
     template whose head or type differs,
-    `dependent-member-friend-template-head-denied.cpp`, `skip(clang)`).
+    `dependent-member-friend-template-head-denied.cpp`, or whose
+    constraints differ, `dependent-member-friend-constraints-denied.cpp`
+    and `dependent-member-friend-constraints-overloads-run.cpp`;
+    `skip(clang)`).
     Where clang accepts a declaration form, kiln follows it: the nested
     path `A<T>::X::Y`, a member function template, and any class-key
     (the befriended member's tag kind is not checked).

@@ -1306,6 +1306,16 @@ impl Sema<'_, '_> {
         (!h.taken && i >= floor).then_some(h.list).flatten()
     }
 
+    /// The parameter list of an untaken invented head innermost around
+    /// the declaration (`template<class T> friend void A<T>::f(C auto);`:
+    /// the abbreviated member template's head, [dcl.fct]/22; WP-1130).
+    pub(crate) fn open_invented_head_list(&self) -> Option<TemplateParamListId> {
+        let floor = self.lambda_head_floor();
+        let i = self.templ.heads.len().checked_sub(1)?;
+        let h = &self.templ.heads[i];
+        (h.invented && !h.taken && i >= floor).then_some(h.list).flatten()
+    }
+
     /// Takes every untaken head around the declaration being declared,
     /// matching none to a class: a [temp.friend]/5 friend's heads are its
     /// own (`template<class T> friend class A<T>::B;`).
