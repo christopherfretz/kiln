@@ -205,7 +205,7 @@ impl QualType {
         match NonZeroU32::new(raw) {
             Some(n) => Self(n),
             // Invariant: a `TypeId` index is never 0, so `raw` is nonzero.
-            None => unreachable!("invariant: a TypeId index is never 0"),
+            None => panic!("invariant: a TypeId index is never 0"),
         }
     }
 
