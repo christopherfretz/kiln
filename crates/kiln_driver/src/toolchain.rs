@@ -630,8 +630,7 @@ fn detect_gcc(prefix: &str, target: &Target) -> (Option<GccInstall>, Vec<String>
     for lib in ["lib64", "lib"] {
         // clang `ScanLibDirForGCCTriple`'s suffixes: `gcc/<triple>`, then
         // Debian's cross compilers under `gcc-cross/<triple>`.
-        for (triple, sub) in
-            target.gcc_triples.iter().flat_map(|t| [(t, "gcc"), (t, "gcc-cross")])
+        for (triple, sub) in target.gcc_triples.iter().flat_map(|t| [(t, "gcc"), (t, "gcc-cross")])
         {
             let dir = format!("{prefix}/{lib}/{sub}/{triple}");
             let Ok(rd) = std::fs::read_dir(&dir) else { continue };

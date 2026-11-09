@@ -683,7 +683,8 @@ fn gcc_cross_toolchain_matches_clang() {
         let tcs = tc.display().to_string();
         let target = format!("--target={triple}");
         let gcc = format!("--gcc-toolchain={tcs}");
-        let args = [&target, &gcc, "-resource-dir", clang_res, "-E", "-v", "-x", "c++", "/dev/null"];
+        let args =
+            [&target, &gcc, "-resource-dir", clang_res, "-E", "-v", "-x", "c++", "/dev/null"];
         let Ok(clang) = std::process::Command::new("clang++-19").args(args).output() else {
             eprintln!("skipped: no clang++-19");
             return;
@@ -693,7 +694,8 @@ fn gcc_cross_toolchain_matches_clang() {
         let o = kiln(&args, "");
         assert_eq!(o.code, 0, "{}", o.stderr);
         assert!(
-            o.stderr.contains(&format!("Selected GCC installation: {tcs}/lib/gcc-cross/{triple}/14")),
+            o.stderr
+                .contains(&format!("Selected GCC installation: {tcs}/lib/gcc-cross/{triple}/14")),
             "{}",
             o.stderr
         );
