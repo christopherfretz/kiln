@@ -88,6 +88,9 @@ environment:
   KILN_REQUIRE_DEBUGGERS
                       1: an `expect: debugger` test whose gdb or lldb-19 is not on
                       PATH is an ERROR, not a SKIP (GitHub CI sets it)
+  KILN_REQUIRE_SANITIZER_RUNTIME
+                      1: a `requires: sanitizer-runtime` test whose clangs find no
+                      UBSan/ASan runtime is an ERROR, not a SKIP (GitHub CI sets it)
 
 exit status: 0 all passed (xfail/skip allowed), 1 a test failed/xpassed/errored/was killed,
 2 usage or infrastructure error.
@@ -156,6 +159,10 @@ pub struct Options {
     /// missing is an ERROR, not a SKIP. Set by the entry points from the
     /// environment, as [`Options::require_gcc`].
     pub require_debuggers: bool,
+    /// `KILN_REQUIRE_SANITIZER_RUNTIME=1`: a `requires: sanitizer-runtime`
+    /// test whose runtime is missing is an ERROR, not a SKIP. Set by the
+    /// entry points from the environment, as [`Options::require_gcc`].
+    pub require_sanitizer_runtime: bool,
     pub no_oracle: bool,
     /// `--meta-header`: the header-differential mode.
     pub meta_header: bool,
@@ -192,6 +199,7 @@ impl Default for Options {
             no_gcc: false,
             require_gcc: false,
             require_debuggers: false,
+            require_sanitizer_runtime: false,
             no_oracle: false,
             meta_header: false,
             debug_sweep: false,
@@ -313,14 +321,51 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
     }
     opts.require_gcc = crate::oracle::require_gcc_from_env();
     opts.require_debuggers = require_debuggers_from_env();
-    match execute(&opts) {
-        Ok(results) if results.iter().any(|r| r.status.is_failure()) => ExitCode::from(1),
-        Ok(_) => ExitCode::SUCCESS,
+    opts.require_sanitizer_runtime = require_sanitizer_runtime_from_env();
+    let code = match execute(&opts) {
+        Ok(results) if results.iter().any(|r| r.status.is_failure()) => 1,
+        Ok(_) => 0,
         Err(e) => {
             eprintln!("xtask test: error: {e}");
-            ExitCode::from(2)
+            return ExitCode::from(2);
+        }
+    };
+    // The files of tests/mangle are inputs of the mangling differential
+    // (WP-1034): as harness tests they only compile, so naming them also
+    // runs the differential, kiln's mangler against clang++-19.
+    if opts.compiler.is_none() && names_mangle_corpus(&repo_root(), &opts.paths) {
+        let shown = "cargo test -p kiln_codegen --test mangle_vs_clang -- --nocapture";
+        println!("xtask test: tests/mangle: the mangling differential ({shown})");
+        let status = std::process::Command::new(env!("CARGO"))
+            .args(["test", "-p", "kiln_codegen", "--test", "mangle_vs_clang"])
+            .args(["--", "--nocapture"])
+            .status();
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(_) => {
+                println!("xtask test: the mangling differential FAILED");
+                return ExitCode::from(1);
+            }
+            Err(e) => {
+                eprintln!("xtask test: error: could not run {shown}: {e}");
+                return ExitCode::from(2);
+            }
         }
     }
+    ExitCode::from(code)
+}
+
+/// Whether the command-line `paths` select any of `tests/mangle` (a path in
+/// it, or a directory holding it): `cargo xtask test tests/mangle` then also
+/// runs the mangling differential (spec/harness.md "The mangling
+/// differential"). The default roots do not include it.
+fn names_mangle_corpus(root: &Path, paths: &[PathBuf]) -> bool {
+    let dir = root.join("tests").join("mangle");
+    let Ok(dir) = std::fs::canonicalize(&dir) else { return false };
+    paths.iter().any(|p| {
+        let p = if p.exists() || p.is_absolute() { p.clone() } else { root.join(p) };
+        std::fs::canonicalize(&p).is_ok_and(|p| p.starts_with(&dir) || dir.starts_with(&p))
+    })
 }
 
 /// The stand-in header directory of the header-differential mode
@@ -425,6 +470,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         pp_compare: opts.pp_compare,
         mem_limit: process::MemLimit::from_mib(opts.mem_limit_mib),
         require_debuggers: opts.require_debuggers,
+        require_sanitizer_runtime: opts.require_sanitizer_runtime,
         debug_sweep: opts.debug_sweep.then(|| runner::DebugSweep {
             dwarfdump: debug_sweep_dwarfdump(&toolchain.llvm_dir()),
         }),
@@ -492,6 +538,17 @@ pub fn require_debuggers_from(value: Option<&str>) -> bool {
 /// read it, so the harness's own tests never see CI's.
 pub fn require_debuggers_from_env() -> bool {
     require_debuggers_from(std::env::var(REQUIRE_DEBUGGERS_ENV).ok().as_deref())
+}
+
+/// `KILN_REQUIRE_SANITIZER_RUNTIME=1` (GitHub CI, WP-1034): a
+/// `requires: sanitizer-runtime` test whose clangs lack compiler-rt's
+/// runtimes is an ERROR, not a SKIP.
+pub const REQUIRE_SANITIZER_RUNTIME_ENV: &str = "KILN_REQUIRE_SANITIZER_RUNTIME";
+
+/// [`REQUIRE_SANITIZER_RUNTIME_ENV`] of the environment (exactly `1`, as
+/// [`require_debuggers_from`]). Only the entry points read it.
+pub fn require_sanitizer_runtime_from_env() -> bool {
+    require_debuggers_from(std::env::var(REQUIRE_SANITIZER_RUNTIME_ENV).ok().as_deref())
 }
 
 /// The GCC oracle of this run and its `--version` line: [`resolve_gcc`],

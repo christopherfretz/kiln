@@ -67,6 +67,10 @@ pub struct Config {
     /// on `PATH` is an ERROR rather than a SKIP (`spec/harness.md`
     /// "Debugger tests").
     pub require_debuggers: bool,
+    /// `KILN_REQUIRE_SANITIZER_RUNTIME=1`: a `requires: sanitizer-runtime`
+    /// test whose clangs lack compiler-rt's runtimes is an ERROR rather
+    /// than a SKIP (`spec/harness.md` "Directives", WP-1034).
+    pub require_sanitizer_runtime: bool,
     /// `--debug-sweep`: the debug-info sweep (`spec/harness.md` "Debug-info
     /// sweep"); `None` outside it.
     pub debug_sweep: Option<DebugSweep>,
@@ -363,7 +367,8 @@ impl Test<'_> {
         if spec.requires_sanitizer_runtime
             && let Some(r) = self.missing_sanitizer_runtime(&spec)
         {
-            return (Status::Skip, Some(r), String::new());
+            let (status, why) = sanitizer_runtime_gate(r, self.cfg.require_sanitizer_runtime);
+            return (status, Some(why), String::new());
         }
         if let Some(reason) = self.mode_skip(&spec, &source) {
             return (Status::Skip, Some(reason), String::new());
@@ -1988,6 +1993,19 @@ fn debugger_gate_in(
     })
 }
 
+/// A `requires: sanitizer-runtime` test whose runtime is `missing` (the
+/// SKIP reason of `Test::missing_sanitizer_runtime`): a SKIP, or under
+/// `require` (`KILN_REQUIRE_SANITIZER_RUNTIME=1`, GitHub CI) an ERROR, so
+/// CI never passes with the runtime tests silently skipped (WP-1034).
+fn sanitizer_runtime_gate(missing: String, require: bool) -> (Status, String) {
+    if require {
+        let env = super::REQUIRE_SANITIZER_RUNTIME_ENV;
+        (Status::Error, format!("{env}=1 and the test {missing}"))
+    } else {
+        (Status::Skip, missing)
+    }
+}
+
 /// The first of `checks` that no output line after the previous match
 /// contains (checks match successive lines, in order).
 fn first_missing_check<'c>(out: &str, checks: &'c [String]) -> Option<&'c str> {
@@ -2288,6 +2306,17 @@ mod compat_tests {
 
     /// spec/harness.md "Oracle toolchain": kiln imitates the oracle, or
     /// the clang a `requires:` names when the oracle does not meet it.
+    /// WP-1034: a missing sanitizer runtime is a SKIP, or an ERROR that
+    /// names `KILN_REQUIRE_SANITIZER_RUNTIME` when CI requires the runtimes.
+    #[test]
+    fn sanitizer_runtime_gate_skips_or_errors() {
+        let why = "requires sanitizer-runtime; the oracle (clang++-22) has no UBSan/ASan runtime";
+        assert_eq!(super::sanitizer_runtime_gate(why.into(), false), (Status::Skip, why.into()));
+        let (status, msg) = super::sanitizer_runtime_gate(why.into(), true);
+        assert_eq!(status, Status::Error);
+        assert_eq!(msg, format!("KILN_REQUIRE_SANITIZER_RUNTIME=1 and the test {why}"));
+    }
+
     #[test]
     fn compat_level() {
         assert_eq!(compat_for(22, None, None), 22);
