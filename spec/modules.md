@@ -1467,6 +1467,52 @@ templates of five namespaces in a `static_assert` and in `main`.
   [-fkiln-bmi-image] --precompile th.cppm` and `kiln++ -std=c++26
   [-fkiln-bmi-image] -fmodule-file=th=th.pcm {-fsyntax-only | -c} u.cpp`.
 
+**Part 2a, stage S4 second slice: class templates (WP-1139).** Same
+method (harness profile, aarch64, `/usr/bin/time`, median of 3, load
+~20, `-std=c++26`). Two workloads: the corpus module
+`module.interface/Inputs/img-class-template.cppm` (73 image records),
+imported by `image-class-template-run.cpp`; and a class-template-heavy
+synthetic interface: 200 exported namespaces each holding `Box`, `Arr`
+(a nested class, an out-of-line member, a static data member defined
+out of line), `Fixed<int N>`, `Base`/`Derived` (a dependent base),
+`W`, `Def` (type defaults), `Acc` and the function templates `boxed`
+and `unbox` as in the corpus module (7401 lines, 13,800 image
+records), whose importer uses five namespaces in a `static_assert` and
+in `main`.
+
+| run | corpus module | class-template-heavy module |
+|---|---|---|
+| kiln `--precompile`, image off | 0.04 s, 11.3 MiB, 25,088 B | 0.12 s, 14.7 MiB, 303,307 B |
+| kiln `--precompile`, image on | 0.06 s, 11.4 MiB, 33,981 B | 0.15 s, 24.0 MiB, 1,746,634 B |
+| kiln import, image off, `-fsyntax-only` | 0.05 s, 11.4 MiB | 0.12 s, 15.4 MiB |
+| kiln import, image on, `-fsyntax-only` | 0.04 s, 11.5 MiB | **0.06 s**, 16.2 MiB |
+| kiln import, image off, `-c` | 0.09 s, 60.2 MiB | 0.14 s, 60.5 MiB |
+| kiln import, image on, `-c` | 0.09 s, 60.2 MiB | 0.09 s, 60.5 MiB |
+| clang 19 `--precompile` | 0.05 s, 85.9 MiB | 0.10 s, 96.6 MiB |
+| clang 19 import, `-fsyntax-only` | 0.01 s, 85.8 MiB | 0.01 s, 87.7 MiB |
+
+- The class-template-heavy import halves (`-fsyntax-only` 0.12 s to
+  0.06 s; `-c` 0.14 s to 0.09 s), for 0.8 MiB more peak RSS (the eager
+  decode of 13,800 records). The image grows the file 5.8x (about
+  105 B per record) and precompile's peak RSS from 14.7 to 24.0 MiB.
+- On/off equivalence: identical LLVM IR, identical member-instantiation
+  diagnostics and the interface's carried constants reused
+  (`kind2_declaration_image_class_templates`); both programs print the
+  same output.
+- `import std;` (libc++ 19 `std.cppm`): still 0 image records; the unit
+  falls back at its first node, "a global module fragment" (S5), and
+  its purview is using-declarations (S6). Inside the headers the next
+  class-template gaps are the "Still falling back" list above (packs,
+  member templates, partial specializations and non-type arguments
+  are on nearly every libc++ class template).
+- Re-run: the synthetic interface is `export module cth;` and 200
+  copies of `export namespace n<i> { ... }` holding the class templates
+  above plus `template <class T> struct Acc { T s; constexpr Acc
+  &add(T x); constexpr T sum_to(int n) const; }` (a loop); the commands
+  are `kiln++ -std=c++26 [-fkiln-bmi-image] --precompile cth.cppm` and
+  `kiln++ -std=c++26 {-fkiln-bmi-image | -fno-kiln-bmi-image}
+  -fmodule-file=cth=cth.pcm {-fsyntax-only | -c} u.cpp`.
+
 **Part 2 item 1, results inside instantiations (WP-1046).** Same method
 (harness profile, aarch64, `/usr/bin/time`, load ~20; precompile median of
 3, imports median of 5, interleaved). "Part 1" is the base commit's binary
