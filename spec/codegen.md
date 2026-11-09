@@ -313,7 +313,19 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `Oven::set_fold_float_ub(true)`, so a global initialized by a NaN- or
     infinity-producing division (`0.0 / 0.0`, `1.0 / 0.0`) is a constant
     rather than a dynamic initializer, as clang's (WP-410,
-    `tests/codegen/nan_global_init.cpp`).
+    `tests/codegen/nan_global_init.cpp`). It also sets
+    `Oven::set_fold_leaks(true)` (WP-1108): a fold outside a constant
+    context may end with allocations still live, as long as its value
+    does not point at one, since clang's `CheckMemoryLeaks` is only a
+    `CCEDiag` there. So `(bool)new T` folds to `true` when clang's
+    `VisitCXXNewExpr` evaluates it (a replaceable global allocation
+    function, the nothrow form or the reserved placement form, and an
+    initializer that evaluates): `if (new int(4))` emits no allocation,
+    `?:`/`&&`/`||`/`!` drop the dead side, and `static bool b = new
+    int;` is the constant `true` (`tests/codegen/new_fold.cpp`,
+    `tests/conformance/expr.new/new-condition-fold.cpp`). A constant
+    expression ([expr.const]/5.20) and sema's evaluations keep the leak
+    check.
   - `fptosi`/`fptoui` of a constant (any format) fold toward zero; a NaN,
     an infinity or a value outside the destination's range is `poison`
     (`APFloat::convertToInteger` reporting `opInvalidOp`).
@@ -1623,14 +1635,31 @@ with no coverage flag the IR is unchanged, byte for byte.
     never reference) get none that way. A lambda's conversion function
     and static invoker are implicit, so a generic lambda's
     specializations of them have no record.
+  - *Order* (WP-1107, spec/landed/codegen/WP-1107.md): the zero records
+    and their names come in clang's `DeferredEmptyCoverageMappingDecls`
+    order (a `MapVector`: first deferral wins, a later use clears the
+    entry in place, `EmitDeferredUnusedCoverageMappings` walks it at the
+    end of the TU). Entries are added where clang adds them: a top-level
+    function definition (`EmitTopLevelDecl`), an inline member definition
+    the parser finished (`HandleInlineFunctionDefinition`, at the end of
+    its class: `cov_defer_class`), and an instantiated definition where
+    its instantiation ends (`cov_defer_insts`). A member of a class
+    template specialization (`extern template struct S<long>;`, an
+    implicit instantiation) was never parsed as an inline definition, so
+    `cov_defer_class` skips it (`Ast::instantiated_from`); its record
+    comes from its own instantiation, as clang's.
+  - *Folded `new` conditions* (WP-1108): a condition whose value is a
+    new-expression (`if (new int)`, `c || new (std::nothrow) int(4)`,
+    `!new T`) folds to `true` exactly when clang's `ConditionFoldsToBool`
+    folds it (the codegen fold prepass, §3: a replaceable global
+    allocation function, the nothrow form or the reserved placement
+    form, and an initializer that evaluates), so its branch regions are
+    those of a folded condition.
   - Without `-fcoverage-mapping` none of this is emitted, and the
     counters are WP-941's, byte for byte.
-  - *Differences from clang* (spec/landed/codegen/WP-1003.md,
-    spec/landed/codegen/WP-1082.md): zero records of instantiations
-    kiln performs at a different point than clang (a class-template
-    member at its first use, clang at the end of the TU) come in a
-    different order; a condition clang's constant folder folds and
-    kiln's does not (`c || new int`) keeps both counters.
+  - *Differences from clang*: none known in the records or the mapping
+    (spec/landed/codegen/WP-1003.md, WP-1082.md; WP-1107 removed the
+    last two, the zero-record order and the `(bool)new T` fold).
 - **Runtime.** Both modes link `libclang_rt.profile-<arch>.a` from the
   LLVM 19 compiler-rt (`/usr/lib/llvm-19/lib/clang/19/lib/linux/` on
   Debian, package `libclang-rt-19-dev`); the linking `clang++` adds it.
