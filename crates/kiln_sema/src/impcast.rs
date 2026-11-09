@@ -569,7 +569,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let mut i = start;
-        let word =|c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'.' || c == b'\'';
+        let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'.' || c == b'\'';
         if text.get(i).is_some_and(|&c| word(c)) {
             while let Some(&c) = text.get(i) {
                 // An exponent sign continues a number (`1.5e+3`).

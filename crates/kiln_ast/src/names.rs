@@ -86,7 +86,7 @@ impl DeclName {
             5 => DeclNameKind::LiteralOperator,
             6 => DeclNameKind::DeductionGuide,
             // Invariant: `pack` only stores the seven tags above.
-            _ => unreachable!(),
+            _ => unreachable!("invariant: `pack` only stores the seven DeclName tags"),
         }
     }
 
