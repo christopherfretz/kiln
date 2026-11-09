@@ -20,6 +20,7 @@ cargo xtask test [options] [paths...]
 | `--no-gcc` | Drop the GCC comparisons only. |
 | `--meta-header` | The header-differential mode: the reflection tests compile against GCC 16.1's real `<meta>` instead of kiln's `tests/support/kiln_meta.h` (see "Header-differential mode"). Needs kiln as the compiler under test and a GCC oracle whose install prefix can be found (a usage error, exit 2, otherwise). |
 | `--debug-sweep` | The debug-info sweep: compile each positive test with and without `-g` instead of checking its expectations (see "Debug-info sweep"). Not with `--meta-header` (usage error). |
+| `--bmi-kind 1\|2` | The module-file kind variant: only the tests with `module:` lines, every one two-step, with kiln writing kind-`N` module files (see "Module-file kinds"). Needs kiln as the compiler (otherwise a usage error). WP-985. |
 | `--external <dir>` | Instead of the corpus, the never-crash run of a directory outside the repository (see "External corpora"). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
 | `--shard K/N` | Run only shard `K` of `N` (`1 <= K <= N`, else a usage error): of the sorted test list (after `--filter`), test `i` (0-based) runs iff `i % N == K - 1`. Round-robin, so a slow directory is spread over every shard, and shards `1..N` of one `N` are exactly the unsharded run, each test in one shard. A shard of a list shorter than `N` may be empty, which is not an error (an empty selection before sharding still is). The run's first line says `(shard K/N of M)`. Not with `--external` (usage error). `ci --shard` passes it to both corpus runs (WP-692, "CI"). |
@@ -714,6 +715,22 @@ report. The check runs after the test kind's own checks pass. Row order is
 the report's own (bytes descending, then count, then first instantiated),
 so it is deterministic.
 
+### Module-file kinds
+
+`--bmi-kind N` (`N` = 1 or 2) checks the module file reader under each
+kind (spec/modules.md §11.11). The selection keeps only the test files that
+contain `//@ module:` (after `--filter`, before `--shard`; the runner also
+SKIPs any other test, with the reason "no `module:` lines
+(`--bmi-kind`)"). Every remaining test runs two-step, as if it said
+`two-step` ("Directives"), and each of kiln's module-file builds gets
+`-fkiln-bmi-kind=N` after the test's `args`. The oracle side is unchanged.
+A `module:` unit that carries no constant result is written as kind 1
+under either value (the `-v` note says so). The run therefore checks that
+both kinds read back to the same diagnostics, program output and IR as the
+single-step run. `ci` runs it twice (below). The IR goldens of
+`tests/codegen` with `module:` lines are already two-step through
+`ir_vs_clang` (spec/codegen.md §6), and they run under the default kind.
+
 ### Parity report
 
 `--report-parity <file>` writes, after the run, a markdown summary between
@@ -1078,12 +1095,12 @@ runs, stopping at the first failing step:
 2. `cargo build -p kiln_driver` (the binary the kiln-mode run tests, in the
    target dir as for `--compiler`'s default);
 
-then the two corpus runs, both over the default paths (`tests/conformance`,
+then the corpus runs, all over the default paths (`tests/conformance`,
 `tests/debuginfo`, `tests/differential` and `tests/stress`) with the default oracle
 `clang++-N` (N from `KILN_ORACLE`, default 22; "Oracle toolchain"), the
 default GCC oracle ("GCC oracle") and the
 default `--mem-limit` (8192 MiB). A bad `KILN_ORACLE` fails `ci` (exit 2)
-before step 0, and so does `KILN_REQUIRE_GCC=1` without a usable GCC. Both run even
+before step 0, and so does `KILN_REQUIRE_GCC=1` without a usable GCC. All run even
 if the first fails, so one cannot hide the other:
 
 3. **clang self-check**: `cargo xtask test --compiler clang++-N` (printed
@@ -1094,11 +1111,16 @@ if the first fails, so one cannot hide the other:
 4. **kiln mode**: `cargo xtask test --compiler <the kiln built in step 2>`.
    It is never skipped. It needs clang N (the oracle, and kiln's linker), so
    without clang it ends in an infrastructure error and `ci` fails.
+5. **module-file kinds** (WP-985): `cargo xtask test --compiler <that
+   kiln> --bmi-kind 1`, then `--bmi-kind 2` (printed as `corpus (kiln
+   --bmi-kind N)`; "Module-file kinds"). They run with run 4, are
+   selected by `--step kiln`, take the same `--shard`, and are judged like
+   it.
 
 `ci` then prints one line per corpus run, `xtask ci: corpus (<run>): <line>`,
 where `<line>` is the run's summary line ("Output"), `skipped (<reason>)`, or
 `error: <message>`. **`ci` passes only if** every step of 1–2 succeeds and
-neither corpus run has a FAIL, XPASS, ERROR or KILLED (XFAIL and SKIP are allowed)
+no corpus run has a FAIL, XPASS, ERROR or KILLED (XFAIL and SKIP are allowed)
 or an infrastructure error; otherwise it exits 1. The decision is
 `test::report::ci_corpus_passes`. A kiln gap is therefore recorded as
 `xfail(kiln):` (or `skip(kiln):`) with the reason, never left failing.

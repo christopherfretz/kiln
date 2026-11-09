@@ -1,4 +1,5 @@
-//! Module files (spec/modules.md §11): the *source capsule* format.
+//! Module files (spec/modules.md §11): the *source capsule* format
+//! (kind 1) and the sectioned format that extends it (kind 2, §11.11).
 //!
 //! A capsule records the inputs of a module interface unit's
 //! preprocessing (its files, every include and embed lookup with its
@@ -6,6 +7,12 @@
 //! rebuilds the unit exactly as the interface compile read it. This module
 //! holds the data model, the writer and the reader; recording and replay
 //! are in `modules.rs`.
+//!
+//! A kind-2 file is a capsule followed by a list of *sections*: opaque,
+//! tagged byte blobs whose contents the crates above the preprocessor
+//! define (the carried constant results of `kiln_sema::bmi_ast`, tag
+//! [`SECTION_CONSTS`]). This module frames and checks them; it never
+//! interprets their bytes.
 //!
 //! Reading is total: every malformed input is a [`BmiError`], never a
 //! panic, and no allocation is sized by an unchecked length.
@@ -22,8 +29,17 @@ pub const MAGIC: [u8; 8] = *b"KILNBMI\0";
 pub const CLANG_MAGIC: [u8; 4] = *b"CPCH";
 /// The layout version this reader accepts and this writer produces.
 pub const FORMAT_VERSION: u32 = 1;
-/// The kind byte of a source capsule (2 is reserved for a serialised AST).
+/// The kind byte of a source capsule.
 pub const KIND_CAPSULE: u8 = 1;
+/// The kind byte of a capsule followed by sections (spec/modules.md
+/// §11.11): written when [`Capsule::sections`] is not empty.
+pub const KIND_SECTIONS: u8 = 2;
+/// The section of carried constant-evaluation results (spec/modules.md
+/// §11.11, "Constant state"; encoded by `kiln_sema::bmi_ast`).
+pub const SECTION_CONSTS: u32 = 1;
+/// The highest section tag this reader knows. Tags above it are reserved
+/// for the serialised AST of part 2 (§11.11, "Sections").
+pub const SECTION_MAX: u32 = SECTION_CONSTS;
 /// The includer index of the predefines buffer (`<built-in>`).
 pub const INCLUDER_BUILTIN: u32 = u32::MAX;
 /// The includer index of a request without an includer.
@@ -175,6 +191,51 @@ pub struct Capsule {
     pub includes: Vec<IncludeEntry>,
     /// The embed log.
     pub embeds: Vec<EmbedEntry>,
+    /// Kind-2 sections, by strictly increasing tag; empty for a kind-1
+    /// file (spec/modules.md §11.11).
+    pub sections: Vec<Section>,
+}
+
+/// The carried-constants section of an imported kind-2 module file and
+/// the file's path (for the corrupt-file diagnostic), handed to the
+/// parser with the unit's [`crate::Marker::UnitBegin`].
+#[derive(Debug, PartialEq, Eq)]
+pub struct CarriedSection {
+    /// The module file's path, as shown in diagnostics.
+    pub path: String,
+    /// The [`SECTION_CONSTS`] bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// One kind-2 section: a tag and its bytes, which this crate does not
+/// interpret (spec/modules.md §11.11).
+#[derive(Clone, PartialEq, Eq)]
+pub struct Section {
+    /// What the bytes hold ([`SECTION_CONSTS`]).
+    pub tag: u32,
+    /// The section's contents.
+    pub bytes: Vec<u8>,
+}
+
+impl fmt::Debug for Section {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Section({}, {} bytes)", self.tag, self.bytes.len())
+    }
+}
+
+impl Capsule {
+    /// The kind byte this capsule is written with: [`KIND_SECTIONS`] when
+    /// it has sections, else [`KIND_CAPSULE`].
+    #[must_use]
+    pub fn file_kind(&self) -> u8 {
+        if self.sections.is_empty() { KIND_CAPSULE } else { KIND_SECTIONS }
+    }
+
+    /// The bytes of section `tag`, if present.
+    #[must_use]
+    pub fn section(&self, tag: u32) -> Option<&[u8]> {
+        self.sections.iter().find(|s| s.tag == tag).map(|s| s.bytes.as_slice())
+    }
 }
 
 /// The fixed fields at the start of a module file, readable without the
@@ -353,7 +414,7 @@ pub fn write(c: &Capsule) -> Vec<u8> {
     let mut w = W(Vec::with_capacity(size + c.predefines.len() + 4096));
     w.0.extend_from_slice(&MAGIC);
     w.u32(FORMAT_VERSION);
-    w.u8(KIND_CAPSULE);
+    w.u8(c.file_kind());
     w.str(&c.version);
     w.str(&c.sha);
     w.str(&c.module);
@@ -401,6 +462,15 @@ pub fn write(c: &Capsule) -> Vec<u8> {
             None => w.u8(0),
         }
     }
+    if !c.sections.is_empty() {
+        let mut sorted: Vec<&Section> = c.sections.iter().collect();
+        sorted.sort_by_key(|s| s.tag);
+        w.len(sorted.len());
+        for s in sorted {
+            w.u32(s.tag);
+            w.bytes(&s.bytes);
+        }
+    }
     let sum = checksum(&w.0);
     w.u64(sum);
     w.0
@@ -435,6 +505,8 @@ pub fn write_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// yet read; every length is checked against it before anything is
 /// allocated. `sum` is the running checksum of everything read.
 struct R<'a> {
+    /// The kind byte (checked by [`prefix`]).
+    kind: u8,
     src: &'a mut dyn io::Read,
     left: u64,
     sum: u64,
@@ -572,10 +644,10 @@ fn prefix(src: &mut dyn io::Read, len: u64) -> Res<R<'_>> {
     if format != FORMAT_VERSION {
         return Err(BmiError::Format(format));
     }
-    if p[12] != KIND_CAPSULE {
+    if p[12] != KIND_CAPSULE && p[12] != KIND_SECTIONS {
         return corrupt("unknown module file kind");
     }
-    Ok(R { src, left: len - (PREFIX_LEN + 8) as u64, sum: fnv(FNV_OFFSET, &p) })
+    Ok(R { kind: p[12], src, left: len - (PREFIX_LEN + 8) as u64, sum: fnv(FNV_OFFSET, &p) })
 }
 
 fn header(r: &mut R<'_>) -> Res<Header> {
@@ -718,6 +790,24 @@ fn body(r: &mut R<'_>) -> Res<Capsule> {
             bytes,
         });
     }
+    let mut sections = Vec::new();
+    if r.kind == KIND_SECTIONS {
+        let n = r.count(8)?;
+        if n == 0 {
+            return corrupt("a kind-2 file without sections");
+        }
+        sections.reserve(n);
+        for _ in 0..n {
+            let tag = r.u32()?;
+            if tag == 0 || tag > SECTION_MAX {
+                return corrupt("unknown section");
+            }
+            if sections.last().is_some_and(|s: &Section| s.tag >= tag) {
+                return corrupt("sections out of order");
+            }
+            sections.push(Section { tag, bytes: r.bytes()? });
+        }
+    }
     if r.left != 0 {
         return corrupt("trailing bytes");
     }
@@ -732,6 +822,7 @@ fn body(r: &mut R<'_>) -> Res<Capsule> {
         files,
         includes: include_log,
         embeds,
+        sections,
     })
 }
 
@@ -818,7 +909,22 @@ mod tests {
                 },
                 bytes: Some(vec![1, 2, 3]),
             }],
+            sections: vec![],
         }
+    }
+
+    /// A kind-2 file: [`sample`] with a carried-constants section.
+    fn sample2() -> Capsule {
+        let mut c = sample();
+        c.sections.push(Section { tag: SECTION_CONSTS, bytes: vec![7, 0, 0, 0, 9] });
+        c
+    }
+
+    /// Re-frames `body` (a file without its checksum) with a valid one.
+    fn resum(mut body: Vec<u8>) -> Vec<u8> {
+        let s = checksum(&body);
+        body.extend_from_slice(&s.to_le_bytes());
+        body
     }
 
     #[test]
@@ -884,6 +990,68 @@ mod tests {
             m.extend_from_slice(&s.to_le_bytes());
             let _ = read(&m);
         }
+    }
+
+    /// Kind 2 round-trips, is deterministic, and is kind 1 plus the
+    /// sections: the kind byte is the only other difference.
+    #[test]
+    fn kind2_round_trip() {
+        let c = sample2();
+        let b = write(&c);
+        assert_eq!(b[12], KIND_SECTIONS);
+        assert_eq!(read(&b), Ok(c.clone()));
+        assert_eq!(write(&c), b, "deterministic");
+        assert_eq!(peek(&b).unwrap().module, "m:p");
+        let one = write(&sample());
+        assert_eq!(one[12], KIND_CAPSULE);
+        assert_eq!(b[13..one.len() - 8], one[13..one.len() - 8]);
+    }
+
+    /// Kind 2: every truncation and flip is an error, never a panic.
+    #[test]
+    fn kind2_truncate_and_flip() {
+        let b = write(&sample2());
+        for n in 0..b.len() {
+            assert!(read(&b[..n]).is_err(), "truncated to {n}");
+        }
+        for i in 0..b.len() {
+            for bit in [0x01u8, 0x80, 0xff] {
+                let mut m = b.clone();
+                m[i] ^= bit;
+                assert!(read(&m).is_err(), "flip {bit:#x} at {i}");
+            }
+        }
+    }
+
+    /// Behind a valid checksum: a kind-2 file without sections, an
+    /// unknown (reserved) section tag, sections out of order, and a kind-1
+    /// file with trailing section bytes are all errors.
+    #[test]
+    fn kind2_section_framing() {
+        let one = write(&sample());
+        let body1 = one[..one.len() - 8].to_vec();
+        let with = |kind: u8, tail: &[u8]| {
+            let mut m = body1.clone();
+            m[12] = kind;
+            m.extend_from_slice(tail);
+            read(&resum(m))
+        };
+        let sec = |tag: u32, bytes: &[u8]| {
+            let mut v = tag.to_le_bytes().to_vec();
+            v.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            v.extend_from_slice(bytes);
+            v
+        };
+        let count = |n: u32| n.to_le_bytes().to_vec();
+        assert!(with(KIND_SECTIONS, &count(0)).is_err(), "no sections");
+        assert!(with(KIND_SECTIONS, &[count(1), sec(0, &[1])].concat()).is_err(), "tag 0");
+        let reserved = [count(1), sec(SECTION_MAX + 1, &[1])].concat();
+        assert!(with(KIND_SECTIONS, &reserved).is_err(), "reserved tag");
+        let twice = [count(2), sec(1, &[1]), sec(1, &[2])].concat();
+        assert!(with(KIND_SECTIONS, &twice).is_err(), "out of order");
+        assert!(with(KIND_SECTIONS, &[count(1), sec(1, &[])].concat()).is_ok(), "empty section");
+        assert!(with(KIND_CAPSULE, &[count(1), sec(1, &[1])].concat()).is_err(), "kind 1");
+        assert!(with(3, &[]).is_err(), "unknown kind");
     }
 
     #[test]

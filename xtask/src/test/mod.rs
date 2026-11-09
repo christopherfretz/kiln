@@ -168,6 +168,10 @@ pub struct Options {
     pub meta_header: bool,
     /// `--debug-sweep`: the debug-info sweep.
     pub debug_sweep: bool,
+    /// `--bmi-kind 1|2`: the module-file variant (`spec/harness.md`
+    /// "Module-file kinds"): only `module:` tests, kiln always two-step,
+    /// writing module files of this kind.
+    pub bmi_kind: Option<u8>,
     /// `--external <dir>`: the never-crash run of [`external`].
     pub external: Option<PathBuf>,
     pub filter: Option<String>,
@@ -203,6 +207,7 @@ impl Default for Options {
             no_oracle: false,
             meta_header: false,
             debug_sweep: false,
+            bmi_kind: None,
             external: None,
             filter: None,
             shard: None,
@@ -239,6 +244,14 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "--external" => o.external = Some(PathBuf::from(value("--external")?)),
             "--filter" => o.filter = Some(value("--filter")?),
             "--shard" => o.shard = Some(Shard::parse(&value("--shard")?)?),
+            "--bmi-kind" => {
+                let v = value("--bmi-kind")?;
+                o.bmi_kind = Some(match v.as_str() {
+                    "1" => 1,
+                    "2" => 2,
+                    _ => return Err(format!("bad --bmi-kind `{v}` (1|2)")),
+                });
+            }
             "-j" | "--jobs" => {
                 let v = value("--jobs")?;
                 o.jobs = Some(
@@ -407,7 +420,12 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
             .map(|p| if p.exists() || p.is_absolute() { p.clone() } else { root.join(p) })
             .collect()
     };
-    let cases = discover::discover(&root, &inputs, opts.filter.as_deref())?;
+    let mut cases = discover::discover(&root, &inputs, opts.filter.as_deref())?;
+    if opts.bmi_kind.is_some() {
+        // The module-file variant runs only tests with `module:` lines
+        // (the runner skips any other, should one slip through).
+        cases.retain(|c| std::fs::read_to_string(&c.path).is_ok_and(|t| t.contains("//@ module:")));
+    }
     if cases.is_empty() {
         return Err("no tests selected".into());
     }
@@ -427,6 +445,9 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     let compiler_kind = compiler_id.kind;
     if opts.meta_header && compiler_kind != CompilerKind::Kiln {
         return Err("--meta-header runs kiln only (the compiler is not kiln)".into());
+    }
+    if opts.bmi_kind.is_some() && compiler_kind != CompilerKind::Kiln {
+        return Err("--bmi-kind runs kiln only (the compiler is not kiln)".into());
     }
     if opts.meta_header && opts.debug_sweep {
         return Err("--meta-header and --debug-sweep do not combine".into());
@@ -474,6 +495,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         debug_sweep: opts.debug_sweep.then(|| runner::DebugSweep {
             dwarfdump: debug_sweep_dwarfdump(&toolchain.llvm_dir()),
         }),
+        bmi_kind: opts.bmi_kind,
     };
     let jobs = opts
         .jobs

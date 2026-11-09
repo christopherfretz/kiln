@@ -85,6 +85,9 @@ pub enum Event {
         header: bool,
         /// The import that started it.
         span: Span,
+        /// The carried constant results of a kind-2 module file
+        /// (spec/modules.md §11.11).
+        carried: Option<std::rc::Rc<kiln_pp::bmi::CarriedSection>>,
     },
     /// The tokens of the imported unit `key` ended.
     UnitEnd {
@@ -383,8 +386,8 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
             Marker::Module { directive: Some(d), .. } => {
                 self.events.push_back((next, Event::ModuleDirective(d)));
             }
-            Marker::UnitBegin { key, header, span } => {
-                self.events.push_back((next, Event::UnitBegin { key, header, span }));
+            Marker::UnitBegin { key, header, span, carried } => {
+                self.events.push_back((next, Event::UnitBegin { key, header, span, carried }));
             }
             Marker::UnitEnd { key } => self.events.push_back((next, Event::UnitEnd { key })),
             Marker::Module { span, import, directive: None, .. } => {
