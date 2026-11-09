@@ -487,7 +487,10 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
                     PtrBase::StringLit { origin, .. } => {
                         self.out.push(BASE_STRING);
                         let r = self.expr_at(origin);
-                        self.or_why(r, "a pointer to a string literal outside the replayed source")?;
+                        self.or_why(
+                            r,
+                            "a pointer to a string literal outside the replayed source",
+                        )?;
                     }
                     PtrBase::Label { label, origin } => {
                         self.out.push(BASE_LABEL);
@@ -583,9 +586,12 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
                     self.ent(decl, d)?;
                 }
                 // A kept alias template specialization, canonical inside.
-                TypeView::TemplateSpecialization { name, args, underlying: Some(u), alias: true }
-                    if q.quals_bits() == 0 =>
-                {
+                TypeView::TemplateSpecialization {
+                    name,
+                    args,
+                    underlying: Some(u),
+                    alias: true,
+                } if q.quals_bits() == 0 => {
                     let r = self.alias_spec(name, args, u, d);
                     self.or_why(r, "a reflection of an alias template specialization with no key")?;
                 }
@@ -682,9 +688,8 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
         } else {
             let first = ast.first(n.decl);
             let count = ast.decls.bases(n.decl, &ast.lists).count() as u32;
-            let i = (0..count).find(|&i| {
-                ast.lists.iter::<AnnId>(ast.annots.of_base(first, i)).any(|x| x == a)
-            })?;
+            let i = (0..count)
+                .find(|&i| ast.lists.iter::<AnnId>(ast.annots.of_base(first, i)).any(|x| x == a))?;
             (ast.lists.iter::<AnnId>(ast.annots.of_base(first, i)).collect(), Some(i))
         };
         match base {

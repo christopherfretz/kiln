@@ -359,8 +359,7 @@ impl Sema<'_, '_> {
         } else {
             None
         };
-        let alignment =
-            if flags & DMS_ALIGN != 0 { Some(r.u32().ok()?) } else { None };
+        let alignment = if flags & DMS_ALIGN != 0 { Some(r.u32().ok()?) } else { None };
         let bit_width = if flags & DMS_WIDTH != 0 { Some(r.u32().ok()?) } else { None };
         let nua = flags & DMS_NUA != 0;
         let ok = (name.is_some() || bit_width.is_some())
