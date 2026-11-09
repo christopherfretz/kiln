@@ -317,7 +317,11 @@ implemented or an error; none is accepted and ignored.
   - `__FLT_EVAL_METHOD__` stays 0.
 - **Backend.** Function attributes carry the semantics. `llc` gets
   `-fp-contract=fast` only for exactly `-ffp-contract=fast` (clang's
-  `AllowFPOpFusion`; `fast-honor-pragmas` does not).
+  `AllowFPOpFusion`; `fast-honor-pragmas` does not), except x86 with
+  LLVM 22 or newer: that `llc` warns its X86 backend ignores the option
+  and fuses on the IR's `contract` flags, which every FP operation
+  carries under `-ffp-contract=fast` (the object code is the same;
+  WP-1016).
 - **Link and denormals.** The link passes the last of `-ffast-math`,
   `-funsafe-math-optimizations` and `-ffp-model=fast|aggressive` (unless
   a negation follows) to `clang++`, which adds GCC's `crtfastmath.o`.

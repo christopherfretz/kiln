@@ -1179,6 +1179,63 @@ fn fp_environment_flags_rejected() {
     }
 }
 
+/// `-ffp-contract=fast` fuses across statements with either backend, but
+/// LLVM 22's `llc` warns that the X86 backend ignores `-fp-contract` (it
+/// reads the IR's `contract` flags), so kiln passes it only to the others
+/// (WP-1016). Pinned to x86_64 so an AArch64 host checks it too.
+#[test]
+fn fp_contract_fast_backend_flag() {
+    let (l19, l22) = ("/usr/lib/llvm-19", "/usr/lib/llvm-22");
+    if !Path::new(l19).is_dir() || !Path::new(l22).is_dir() {
+        eprintln!("skipping: {l19} / {l22} not found");
+        return;
+    }
+    let d = scratch("fp-contract-backend");
+    std::fs::write(
+        d.join("f.cpp"),
+        "float f(float a, float b, float c) { float m = a * b; return m + c; }\n",
+    )
+    .unwrap();
+    for (target, llvm, passed) in [
+        ("x86_64-linux-gnu", l22, false),
+        ("x86_64-linux-gnu", l19, true),
+        ("aarch64-linux-gnu", l22, true),
+        ("aarch64-linux-gnu", l19, true),
+    ] {
+        let (t, l) = (format!("--target={target}"), format!("--llvm-dir={llvm}"));
+        let o = kiln_in(&d, &["-###", &t, &l, "-ffp-contract=fast", "-O2", "-c", "f.cpp"]);
+        let err = text(&o.stderr);
+        assert_eq!(o.status.code(), Some(0), "{err}");
+        assert_eq!(err.contains("\"-fp-contract=fast\""), passed, "{target} {llvm}: {err}");
+    }
+    // The statements still fuse on x86 with both backends, silently.
+    for llvm in [l22, l19] {
+        let l = format!("--llvm-dir={llvm}");
+        for (contract, fused) in [("-ffp-contract=fast", true), ("-ffp-contract=on", false)] {
+            let args = ["--target=x86_64-linux-gnu", &l, "-march=haswell", contract, "-O2"];
+            let o = kiln_in(&d, &[&args[..], &["-S", "f.cpp", "-o", "-"]].concat());
+            assert_eq!(
+                (o.status.code(), text(&o.stderr).as_str()),
+                (Some(0), ""),
+                "{llvm} {contract}"
+            );
+            assert_eq!(text(&o.stdout).contains("vfmadd"), fused, "{llvm} {contract}");
+        }
+        let o = kiln_in(
+            &d,
+            &[
+                "--target=x86_64-linux-gnu",
+                &l,
+                "-ffp-model=fast",
+                "-fcx-limited-range",
+                "-c",
+                "f.cpp",
+            ],
+        );
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{llvm}");
+    }
+}
+
 /// `-ffunction-sections` / `-fdata-sections` and `-march=native` reach
 /// `llc` (spec/driver.md "Codegen flags"); `-Wp,-MD,<file>` is `-MD -MF
 /// <file>`.
