@@ -1153,16 +1153,20 @@ instantiated is numbered in the class specialization
 (`closure_signature_fn`: the pattern's, through `tag_externally_visible`
 and `has_internal_linkage`), so it and the specializations naming it are
 `linkonce_odr`. The specialization's own name keeps the pattern's
-unnumbered closure, `_Z3retIiEDTL3$_0EET_`, as clang. One difference
-remains (xfail repro): kiln substitutes a trailing return type only once
-for a call with explicit template arguments, where clang substitutes it
-twice and the lambda takes two numbers (`ret2<int>` is `UlvE0_` in clang,
-`UlvE_` in kiln). A member template's signature substituted during class
+unnumbered closure, `_Z3retIiEDTL3$_0EET_`, as clang. A call with a non-empty explicit
+template argument list substitutes the signature, a trailing return type
+included, once more in the explicit-argument step, so `ret2<int>`'s
+closure is `UlvE0_` (WP-1086; the counting rule is spec/sema-lambda.md
+§3.5). A member template's signature substituted during class
 instantiation has a never-dependent closure (clang `LDK_NeverDependent`,
 spec/sema-lambda.md §9, WP-1141): `decltype` of it is the closure type,
 `_ZN1SIiE4mretIiEENS0_UlvE_ET_`, and a generic one's parameters keep
 their depth, `NS0_UlTL0__E_E` (`tests/mangle/lambda_in_member_template_signature.cpp`).
-Details: `spec/landed/abi/WP-1077.md`.
+One difference remains (xfail repro): clang resolves the address of an
+explicit template-id more than once in some conversions and deduces
+templates for an address that a non-template matches, which number more
+closures than kiln (spec/sema-lambda.md §3.5). Details:
+`spec/landed/abi/WP-1077.md`.
 
 ### 8.16 Landed (WP-204): constrained templates (`mangle/constraint.rs`)
 clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by

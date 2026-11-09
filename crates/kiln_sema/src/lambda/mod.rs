@@ -114,6 +114,12 @@ pub(crate) struct ManglingState {
     /// With the template's semantic context, where those closures are
     /// created.
     pub(crate) signature: Option<(DeclId, DeclId)>,
+    /// The trailing return types, as parsed, that hold a
+    /// lambda-expression ([`Sema::act_on_trailing_return_type`]): a
+    /// call with explicit template arguments substitutes such a return
+    /// type with them too, so its closures take numbers twice
+    /// (spec/sema-lambda.md §3.5, WP-1086).
+    pub(crate) trailing_lambdas: kiln_source::fx::FxHashSet<QualType>,
     /// The last number given per numbering context (a function, or the
     /// variable, data member or parameter whose initializer holds the
     /// lambda) and <lambda-sig> (the explicit template parameters, the
@@ -665,6 +671,33 @@ impl Sema<'_, '_> {
             template_default: std::mem::take(&mut m.template_default),
             signature: m.signature.replace((pattern, ctx)),
         }
+    }
+
+    /// The number of lambda-expressions built so far: the parser's mark
+    /// before a trailing return type, for
+    /// [`Self::act_on_trailing_return_type`].
+    #[must_use]
+    pub fn lambda_mark(&self) -> usize {
+        self.ast.exprs.lambdas.len()
+    }
+
+    /// After trailing return type `ty`, parsed when
+    /// [`Self::lambda_mark`] was `mark`: a type that holds a
+    /// lambda-expression is remembered, so that deduction with explicit
+    /// template arguments substitutes it in that step too (clang
+    /// `SubstituteExplicitTemplateArguments`), numbering its closures
+    /// as clang does ([`ManglingState::trailing_lambdas`], WP-1086).
+    pub fn act_on_trailing_return_type(&mut self, ty: QualType, mark: usize) {
+        if self.ast.exprs.lambdas.len() > mark {
+            self.lambda_mangle.trailing_lambdas.insert(ty);
+        }
+    }
+
+    /// True if trailing return type `ty` holds a lambda-expression
+    /// ([`Self::act_on_trailing_return_type`]).
+    pub(crate) fn trailing_return_has_lambda(&self, ty: QualType) -> bool {
+        !self.lambda_mangle.trailing_lambdas.is_empty()
+            && self.lambda_mangle.trailing_lambdas.contains(&ty)
     }
 
     /// After a signature begun by [`Self::begin_signature_mangling`].
