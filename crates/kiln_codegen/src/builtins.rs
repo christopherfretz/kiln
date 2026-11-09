@@ -1375,22 +1375,20 @@ impl Cg<'_> {
                 };
                 let nv = self.emit_scalar(n)?;
                 self.ub_nonnull_arg(callee, 0, x, xv)?;
-                let (f, args, aligns) = match second {
-                    Some((y, (yv, ya))) => {
-                        self.ub_nonnull_arg(callee, 0, y, yv)?;
-                        let f = kiln_llvm::intrinsics::memmove(&mut self.m, LTy::I64);
-                        (f, vec![yv, xv, nv], [ya, xa])
-                    }
-                    None => {
-                        let f = kiln_llvm::intrinsics::memset(&mut self.m, LTy::I64);
-                        (f, vec![xv, V::C(self.m.const_int(LTy::I8, 0)), nv], [xa, 0])
-                    }
+                let (f, args, aligns) = if let Some((y, (yv, ya))) = second {
+                    self.ub_nonnull_arg(callee, 0, y, yv)?;
+                    let f = kiln_llvm::intrinsics::memmove(&mut self.m, LTy::I64);
+                    (f, vec![yv, xv, nv], [ya, xa])
+                } else {
+                    let f = kiln_llvm::intrinsics::memset(&mut self.m, LTy::I64);
+                    (f, vec![xv, V::C(self.m.const_int(LTy::I8, 0)), nv], [xa, 0])
                 };
                 let fn_ty = self.m.func(f).ty();
                 let vb = self.m.const_bool(false);
                 let none = self.m.attr_set(&[]);
                 let pa = self.m.attr_set(&[Attr::Align(aligns[0])]);
-                let pb = if aligns[1] == 0 { none } else { self.m.attr_set(&[Attr::Align(aligns[1])]) };
+                let pb =
+                    if aligns[1] == 0 { none } else { self.m.attr_set(&[Attr::Align(aligns[1])]) };
                 let opts = CallOpts {
                     attrs: AttrList { params: vec![pa, pb, none, none], ..AttrList::default() },
                     ..CallOpts::default()

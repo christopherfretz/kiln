@@ -613,7 +613,8 @@ impl Compiler<'_> {
                 }
                 let (size, off, inner) = self.alloc_base(ptr, depth + 1)?;
                 let d = k.checked_mul(w)?;
-                let off = if op == BinaryOp::Add { off.checked_add(d)? } else { off.checked_sub(d)? };
+                let off =
+                    if op == BinaryOp::Add { off.checked_add(d)? } else { off.checked_sub(d)? };
                 Some((size, off, valid && inner))
             }
             ExprKind::ImplicitCastExpr if exprs.cast_kind(p) == CastKind::LValueToRValue => {
@@ -741,7 +742,8 @@ impl Compiler<'_> {
             ExprKind::BinaryOperator => {
                 let op = exprs.binary_op(e);
                 let [l, r] = exprs.operands(e);
-                let (a, b) = (self.alloc_size_int(l, depth + 1)?, self.alloc_size_int(r, depth + 1)?);
+                let (a, b) =
+                    (self.alloc_size_int(l, depth + 1)?, self.alloc_size_int(r, depth + 1)?);
                 match op {
                     BinaryOp::Add => a.checked_add(b)?,
                     BinaryOp::Sub => a.checked_sub(b)?,

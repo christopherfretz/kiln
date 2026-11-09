@@ -11,11 +11,11 @@
 
 use crate::lookup::LookupKind;
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
-use kiln_ast::ids::RawId;
 use kiln_ast::consts::{PtrBase, Scalar};
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, LinkageLang, builtin};
 use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, ValueCategory};
 use kiln_ast::expr::{SourceLocKind, SourceLocValues};
+use kiln_ast::ids::RawId;
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TargetTypes;
 use kiln_ast::types::{BuiltinType, CallConv, ExcSpec, FuncInfo, NoexceptValue, Quals, VectorKind};
@@ -242,14 +242,8 @@ impl Sema<'_, '_> {
             && !has_format
         {
             let b = u32::from(fmt) | u32::from(first) << 16;
-            let n = AttrNode {
-                kind: AttrKind::FORMAT,
-                syntax: AttrSyntax::Gnu,
-                flags: 1,
-                loc,
-                a,
-                b,
-            };
+            let n =
+                AttrNode { kind: AttrKind::FORMAT, syntax: AttrSyntax::Gnu, flags: 1, loc, a, b };
             attrs.push(self.ast.attrs.push(n));
         }
         // WP-806: an errno-setting math function is `const` without

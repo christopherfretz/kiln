@@ -436,7 +436,7 @@ impl Sema<'_, '_> {
             };
             covered[next] = true;
             next += 1;
-            if let Some(ty) = self.scan_mismatch(want, a)? {
+            if let Some(ty) = self.scan_mismatch(want, a).ok()? {
                 out.push(Pending {
                     id: DiagId::sema_format_conversion_type,
                     at: self.begin_loc(a),
@@ -448,15 +448,15 @@ impl Sema<'_, '_> {
         Some((out, cover))
     }
 
-    /// `Some(Some(type))` when argument `a` does not point to what `w`
-    /// specifies (the argument's type as clang reports it), `Some(None)`
-    /// when it does, `None` when the case is not modelled (a `std::nullptr_t`
+    /// `Ok(Some(type))` when argument `a` does not point to what `w`
+    /// specifies (the argument's type as clang reports it), `Ok(None)`
+    /// when it does, `Err(())` when the case is not modelled (a `std::nullptr_t`
     /// argument, whose spelling differs between clang 19 and 22, a `%z`
     /// mismatch, an extended character or floating type, a pointee clang
     /// may treat specially). Signedness is not checked; a `const` pointee
     /// never matches; an unscoped enumeration matches as its underlying
     /// type. Class arguments are not checked.
-    fn scan_mismatch(&self, w: ScanWant, a: ExprId) -> Option<Option<String>> {
+    fn scan_mismatch(&self, w: ScanWant, a: ExprId) -> Result<Option<String>, ()> {
         use BuiltinType as B;
         let mut e = a;
         for _ in 0..8 {
@@ -475,12 +475,12 @@ impl Sema<'_, '_> {
         let ty: QualType = self.ety(e);
         let types = &self.ast.types;
         if types.is_dependent(ty) || types.as_record(ty).is_some() {
-            return Some(None);
+            return Ok(None);
         }
         if types.builtin(self.ety(self.ignore_paren_imp_casts(a))) == Some(B::NullPtr) {
-            return None;
+            return Err(());
         }
-        let bad = Some(Some(self.ty_arg(ty)));
+        let bad = Ok(Some(self.ty_arg(ty)));
         let Some(p) = types.pointee(ty).filter(|_| types.is_pointer(ty)) else {
             return bad;
         };
@@ -489,18 +489,18 @@ impl Sema<'_, '_> {
             return bad;
         }
         if types.is_pointer(p) {
-            return if w == ScanWant::VoidPtrPtr { Some(None) } else { bad };
+            return if w == ScanWant::VoidPtrPtr { Ok(None) } else { bad };
         }
         if types.as_record(p).is_some() || conv::is_scoped_enum(self, p) {
             return bad;
         }
         let p = match conv::rank::enum_data(self, p) {
-            Some(en) => en.int_type?,
+            Some(en) => en.int_type.ok_or(())?,
             None => p,
         };
         let Some(b) = types.builtin(p) else {
             // An array, function or member pointer pointee.
-            return None;
+            return Err(());
         };
         let ok = match w {
             ScanWant::Int { len, size, .. } => {
@@ -511,33 +511,35 @@ impl Sema<'_, '_> {
                     B::Long | B::ULong => 1,
                     B::LongLong | B::ULongLong => 2,
                     B::WChar | B::Char8 | B::Char16 | B::Char32 | B::Int128 | B::UInt128 => {
-                        return None;
+                        return Err(());
                     }
-                    B::Bool if len != 0 => return None,
+                    B::Bool if len != 0 => return Err(()),
                     _ => i8::MAX,
                 };
                 let ok = have == len;
                 if size && !ok {
-                    return None;
+                    return Err(());
                 }
                 ok
             }
             ScanWant::Float(k) => match b {
                 B::Float | B::Double | B::LongDouble => {
-                    k == [B::Float, B::Double, B::LongDouble].iter().position(|&x| x == b)?
-                        as u8
+                    k == [B::Float, B::Double, B::LongDouble]
+                        .iter()
+                        .position(|&x| x == b)
+                        .ok_or(())? as u8
                 }
-                _ if types.is_floating(p) => return None,
+                _ if types.is_floating(p) => return Err(()),
                 _ => false,
             },
             ScanWant::Char => match b {
                 B::Char | B::SChar | B::UChar => true,
-                B::Char8 => return None,
+                B::Char8 => return Err(()),
                 _ => false,
             },
             ScanWant::VoidPtrPtr => false,
         };
-        if ok { Some(None) } else { bad }
+        if ok { Ok(None) } else { bad }
     }
 
     /// clang's spelling of the type a conversion specifies.
@@ -744,8 +746,13 @@ fn scan_want_name(w: ScanWant) -> String {
         ScanWant::Int { len, unsigned, .. } => {
             let i = usize::try_from(len + 2).unwrap_or(2).min(4);
             if unsigned {
-                ["unsigned char", "unsigned short", "unsigned int", "unsigned long", "unsigned long long"]
-                    [i]
+                [
+                    "unsigned char",
+                    "unsigned short",
+                    "unsigned int",
+                    "unsigned long",
+                    "unsigned long long",
+                ][i]
             } else {
                 ["char", "short", "int", "long", "long long"][i]
             }
