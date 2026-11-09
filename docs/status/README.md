@@ -1,22 +1,82 @@
-# Status (2026-10-28)
+# Status pages (index, 2026-11-09)
 
-| Milestone | State | Evidence |
-|---|---|---|
-| M0 bootstrap | done | `cargo xtask ci`, GitHub CI green |
-| M1 preprocessor parity | done | [pp-parity.md](pp-parity.md): 291/291 token-wise vs clang 19; [perf.md](perf.md): pp 0.52x–1.42x clang time |
-| M2 C-ish subset | done (2026-10-28) | 47 AST golden dirs vs clang, 99 [expr.const] tests, Oven ≈0.02x clang time; IR-diff corpus 92/92 byte-identical to clang -O0 (46 programs × 2 triples); 33 printf `run` tests vs clang |
-| M3 classes/templates | planning | first blockers per libc++ header: [libcxx-syntax.md](libcxx-syntax.md) |
+Measured status of kiln, one page per measurement. Each page says how it
+was produced and how to re-run it. The milestones and their exit criteria
+are in [../ROADMAP.md](../ROADMAP.md). The summary for users is
+[../COMPATIBILITY.md](../COMPATIBILITY.md), and the gaps are in
+[../KNOWN_ISSUES.md](../KNOWN_ISSUES.md). Language features of every
+standard, C++98 to C++26, are in
+[../STANDARD_SUPPORT.md](../STANDARD_SUPPORT.md), checked by
+`cargo xtask features`.
 
-libstdc++ consumption track (WP-188): [libstdcxx.md](libstdcxx.md), every public GCC 14 libstdc++ header as a one-line TU (`cargo xtask libstdcxx`): 39/109 ok at c++26, 44/109 at c++20; blocker clusters with corpus repros.
+## Headline numbers
 
-Language features of every standard, C++98 to C++26 (and the M4 checklist): [../STANDARD_SUPPORT.md](../STANDARD_SUPPORT.md), checked by `cargo xtask features`.
+Each number is from the page named, at the run that page records.
 
-Harness through kiln: 565/575 pass, 8 xfail (among them the 5 header-dependent `run` tests: `decltype` in libstdc++'s c++config.h), 2 fail (reflection, contracts).
-Workspace: ~1,400 Rust tests across 12 crates, all `#![forbid(unsafe_code)]`.
-- `libcxx.md` — libc++ 19 end-to-end status (ROADMAP M3b): sample/full-suite pass rates, failure clusters → WPs.
-- `libcxx-m5.md` — libc++ 22 full suite (ROADMAP M5): failure clusters by class (correctness, diagnostic wording, harness, environment), fixes, proposed WPs; the run row is in `libcxx.md`.
-- `x86_64-sweep.md` — WP-961 x86_64 sweep on GitHub's runners (`.github/workflows/sweep.yml`): libc++ 22 and ten OSS projects vs the clang 19 control, run URLs, x86_64-only triage.
-- `deviations.md` — deliberate deviations from the oracle where kiln follows the standard over a clang defect, with the spec paragraph and pinning test of each.
-- `reflection-spike.md` — WP-267 P2996 design spike behind `-freflection`: what the Oven/SemaBridge boundary absorbed, what had to bend, pre-M6 rows, full-P2996 cost.
-- `header-search-syscalls.md` — WP-820 file-system system calls per TU (header search, file loading) against clang 19: fmt, libc++, a 157 `-I` synthetic tree; exact commands to re-run.
-- `accepts-invalid.md` — WP-912 clang 22 `clang/test/{CXX,SemaCXX}` negative tests through kiln (`cargo xtask clang-neg`): file-level accepts-invalid and line-level missed-error rates, rejects-valid, crashes, triage clusters with repros.
+- libc++ 22.1.8 suite at `-std=c++26`: 99.2% of 9247 tests
+  ([libcxx-m5.md](libcxx-m5.md)). libc++ 19.1.7: 98.3% of `std/`
+  ([libcxx.md](libcxx.md)).
+- Compile time and memory against clang 19 on the `bench/` corpus:
+  geometric mean 0.21x time, 0.17x peak RSS ([perf.md](perf.md)).
+- Open-source projects built with their own build systems and test
+  suites: 47, of which 43 at parity with clang 19
+  ([../COMPATIBILITY.md](../COMPATIBILITY.md#libraries-and-applications);
+  the runs are in [oss.md](oss.md) and [oss/](oss/)).
+- clang 22's negative tests: kiln reports no error in 7.1% of files where
+  clang expects one, with 0 crashes in 2850 cases
+  ([accepts-invalid.md](accepts-invalid.md)).
+
+## Pages
+
+Standard libraries:
+
+- `libcxx.md`: libc++ 19 end to end (ROADMAP M3b), sample and full-suite
+  pass rates, failure clusters, and the run rows of every libc++ run.
+- `libcxx-m5.md`: libc++ 22 full suite (ROADMAP M5), failure clusters by
+  class (correctness, diagnostic wording, harness, environment), fixes.
+- `libcxx-m3.md`: the frozen M3 gate subset. `libcxx-longtail.md`: the
+  WP-276 long tail of the libc++ 19 sample. `libcxx-syntax.md`: first
+  blockers per libc++ header under `-fsyntax-only` (historical, M3).
+- `libstdcxx.md`: every public GCC 14 libstdc++ header as a one-line TU
+  (`cargo xtask libstdcxx`).
+
+Open-source projects and platforms:
+
+- `oss.md` and `oss/`: ROADMAP M8 builds, one page per project.
+- `x86_64-sweep.md`: the WP-961 x86_64 sweep on GitHub's runners
+  (`.github/workflows/sweep.yml`): libc++ 22 and ten projects against the
+  clang 19 control, with x86_64-only triage.
+
+Performance:
+
+- `perf.md`: `cargo xtask bench` against clang 19 (generated; do not edit
+  by hand).
+- `perf-reference-workload.md`: the reference workload under kiln
+  (WP-551).
+- `header-search-syscalls.md`: file-system system calls per TU against
+  clang 19 (WP-820).
+- `bench-regressions-WP-798.md`: triage of one bench regression report.
+- `upstream/`: drafts of LLVM issue reports found while comparing with
+  clang.
+
+Correctness and diagnostics:
+
+- `pp-parity.md`: `kiln -E` against `clang -E` on the preprocessor corpus
+  (ROADMAP M1).
+- `accepts-invalid.md`: clang 22's `clang/test/{CXX,SemaCXX}` negative
+  tests through kiln (`cargo xtask clang-neg`, WP-912), with triage
+  clusters and repros.
+- `silent-drops.md`: the WP-805 audit of constructs kiln ignored instead
+  of implementing or rejecting.
+- `deviations.md`: deliberate deviations from the oracle where kiln
+  follows the standard over a clang defect, each with its spec paragraph
+  and pinning test.
+- `debuginfo.md`: `-g` against clang 19 (WP-814).
+
+Design records:
+
+- `reflection-spike.md`: the WP-267 P2996 design spike.
+- `wp-184-oracle-switch.md`: the clang/LLVM 19 to 22 oracle switch.
+- `cxx-features.md`: moved to `../STANDARD_SUPPORT.md`.
+- `wp-NNN-progress.md`: progress logs of early work packages (M2 and
+  M3), kept as history. They do not describe the current state.
