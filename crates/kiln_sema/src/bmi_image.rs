@@ -2034,6 +2034,10 @@ impl Writer<'_, '_, '_> {
         let ast = &s.ast;
         let info = *ast.template_info(d).ok_or("a malformed template")?;
         let pattern = info.pattern.ok_or("a malformed template")?;
+        let redecl = |x: DeclId| ast.decls.redecl(x).is_some_and(|r| r.prev.is_some());
+        if redecl(d) || redecl(pattern) {
+            return Err("a redeclared template");
+        }
         if info.constraint.is_some() || ast.templates.trailing_requires.contains(pattern) {
             return Err("a constrained template");
         }
@@ -3620,6 +3624,130 @@ mod tests {
     fn fuzz_never_panics() {
         fuzz(&encode(&sample()));
         fuzz(&encode(&class_sample()));
+        fuzz(&encode(&template_sample()));
+    }
+
+    /// Stage S4: `sample` plus `namespace ns { template <class T, int N>
+    /// T tf(T x); }`: the two parameter records, the pattern (dependent,
+    /// unlisted) and the template record claiming them.
+    fn template_sample() -> Image {
+        let q = |ty| QRef { ty, quals: 0 };
+        let mut img = sample();
+        let name = img.names.len() as u32;
+        img.names.push("tf".into());
+        let pname = img.pnames.len() as u32;
+        img.pnames.extend(["T", "N"].map(String::from));
+        let t = BUILTINS + 1 + img.types.len() as u32;
+        img.types.extend([
+            TyRec::Ttp(10),
+            TyRec::Func { ret: q(t), params: vec![q(t)], info: 0, exc: 0 },
+        ]);
+        let head = |flags, name, loc, payload| DeclRec {
+            flags,
+            owner: 3,
+            access: 0,
+            name,
+            ctx: 1,
+            lexical: NONE,
+            loc,
+            prev: NONE,
+            payload,
+        };
+        img.decls.extend([
+            head(
+                DEP,
+                pname,
+                302,
+                Payload::Ttp { depth: 0, index: 0, typename_kw: false, begin: 296 },
+            ),
+            head(
+                DEP,
+                pname + 1,
+                308,
+                Payload::Nttp { ty: q(BuiltinType::Int as u32), depth: 0, index: 1 },
+            ),
+            head(
+                DEP,
+                name,
+                314,
+                Payload::Function {
+                    kind: 0,
+                    deferred: false,
+                    inits: vec![],
+                    ty: q(t + 1),
+                    spec: 0,
+                    params: vec![ParamRec {
+                        name: 0,
+                        loc: 318,
+                        ty: q(t),
+                        pflags: 0x100,
+                        flags: DEP,
+                        default: NONE,
+                    }],
+                    body: FnBody::Braces(320, 321),
+                },
+            ),
+            head(
+                0,
+                name,
+                314,
+                Payload::Template {
+                    kind: 0,
+                    pattern: 12,
+                    tloc: 290,
+                    langle: 294,
+                    rangle: 310,
+                    depth: 0,
+                    params: vec![10, 11],
+                },
+            ),
+        ]);
+        img
+    }
+
+    #[test]
+    fn template_round_trip() {
+        let img = template_sample();
+        assert_eq!(decode(&encode(&img)), Ok(img));
+    }
+
+    /// spec/modules.md §11.11 "Templates as patterns" (stage S4): every
+    /// dependent record belongs to exactly one template, whose pattern
+    /// and parameters are well formed; anything else is an error.
+    #[test]
+    fn rejects_corrupt_template_records() {
+        fn set_tpl(i: &mut Image, f: fn(&mut u32, &mut Vec<u32>)) {
+            if let Payload::Template { pattern, params, .. } = &mut i.decls[13].payload {
+                f(pattern, params);
+            }
+        }
+        type Corrupt = (&'static str, fn(&mut Image));
+        let corrupt: [Corrupt; 11] = [
+            ("unclaimed parameter", |i| set_tpl(i, |_, p| p.truncate(1))),
+            ("parameter order", |i| set_tpl(i, |_, p| p.swap(0, 1))),
+            ("parameter twice", |i| set_tpl(i, |_, p| p[1] = 10)),
+            ("pattern not dependent", |i| set_tpl(i, |p, _| *p = 7)),
+            ("pattern is a parameter", |i| set_tpl(i, |p, _| *p = 11)),
+            ("no template", |i| {
+                i.decls.pop();
+            }),
+            ("dependent template", |i| i.decls[13].flags = DEP),
+            ("independent parameter", |i| i.decls[10].flags = 0),
+            ("pattern name", |i| i.decls[12].name = 0),
+            ("pattern claimed twice", |i| {
+                let t = i.decls[13].clone();
+                i.decls.push(t);
+            }),
+            ("parameter depth", |i| {
+                i.decls[11].payload =
+                    Payload::Nttp { ty: QRef { ty: 1, quals: 0 }, depth: 1, index: 1 };
+            }),
+        ];
+        for (what, f) in corrupt {
+            let mut img = template_sample();
+            f(&mut img);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
     }
 
     fn fuzz(bytes: &[u8]) {
