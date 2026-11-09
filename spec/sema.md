@@ -6920,7 +6920,8 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   explicitly (`consteval` alone included, which kiln used to skip).
   Tests: `tests/conformance/dcl.constexpr/no-return-cxx{11,14,20,23}.cpp`,
   `no-return-invalid-constexpr-cxx26.cpp`,
-  `no-return-type-warning-after-{error,goto}-cxx20.cpp`.
+  `no-return-type-warning-after-{error,goto}-cxx20.cpp`,
+  `tests/conformance/dcl.fct.def.coroutine/consteval-lambda-coroutine.cpp`.
   Tests of the variable rule:
   `tests/conformance/dcl.constexpr/non-literal-local-cxx{20,23,23-19}.cpp`,
   `tests/conformance/dcl.constexpr/non-literal-local-template-cxx{20,23}.cpp`,
