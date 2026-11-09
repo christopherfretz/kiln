@@ -95,6 +95,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fkiln-reflection-mangling=<kiln\|gcc\|kiln-hashed>` | kiln: how a `std::meta::info` template argument is spelled in a symbol (`kiln_abi::ReflectionMangling`, `CodegenOptions::reflection_mangling`; WP-501). `kiln` (the default): `L u6__info <kind> <operand> E`; `gcc`: GCC 16.1's `L Dm <kind> <operand> E` with `info` itself `Dm`, link-compatible with `g++-16`; `kiln-hashed`: `L u6__info h<32 hex> E`, a prototype. All three give the reflection its reflectee's linkage (spec/reflection.md §8.3). Any other value is `invalid value`; the last one wins. Codegen jobs only |
 | `-f[no-]coro-aligned-allocation` | aligned coroutine frame allocation (default off, as clang; the last one wins): sema looks up the `std::align_val_t` forms of the frame's `operator new`/`delete` first (spec/sema.md §7.13). Passed to sema for `-fsyntax-only` and codegen jobs |
 | `-fconstexpr-report=<path>` | kiln: write the per-TU NDJSON constant-evaluation report (spec/oven.md "Reporting protocol"); `-fsyntax-only` and every codegen job |
+| `-fconstexpr-stats`, `-fconstexpr-profile[=text\|json\|<file>]`, `-fconstexpr-profile-limit=N` | kiln: after the translation unit, the constant-evaluation summary and the per-function / per-site profile (see "Constexpr profile"; WP-1116); `-fsyntax-only` and every codegen job. An empty `-fconstexpr-profile=` is `drv_missing_value`; a limit that is not an unsigned integer is `drv_invalid_int_value` |
 | `-ftemplate-depth=N`, `-ftemplate-backtrace-limit=N`, `-fkiln-instantiation-report[=all\|json\|text]` | template limits and the instantiation report (spec/sema-templates.md §10.3, §11.3) |
 | `-fkiln-stack-size=N[k\|m\|g]` | kiln: the stack reserved for the compiling thread (default 1 GiB; at least 4 MiB; the last valid value wins). Running out is the fatal "kiln: stack exhausted during …" (spec/sema-templates.md §10.3), never a crash |
 | `-v`, `--verbose`, `--version`, `--help` | see below |
@@ -1747,6 +1748,102 @@ the one evaluation). kiln memoizes constant calls, so a verbose trace
 has one `ConstevalCall` / `ConstexprCall` per evaluated call, not per
 call in the source's recursion.
 
+## Constexpr profile
+
+`-fconstexpr-stats` and `-fconstexpr-profile[=<format>|<file>]`
+(WP-1116, kiln extensions) report where the Oven spent its time and
+memory in one translation unit. Both run in `-fsyntax-only` and every
+codegen job, after the `-fconstexpr-report` and the instantiation report;
+the profile is written first, then the summary. A module interface built
+in-process for an importer (a module cache miss, "Module cache") prints
+neither: the importer reports only its own evaluations. A module source
+named directly by `-fmodule-file=<name>=<source>` is compiled in the
+importer's own Oven, so its evaluations are the importer's. Without
+either flag nothing is printed and no counter is kept (spec/oven.md
+"Profile counters").
+
+**`-fconstexpr-stats`** prints eight lines on stderr, always in this
+order, each `constexpr: <group> key=value ...` with keys in a fixed
+order (spec/oven.md "Profile counters" defines each):
+
+```text
+constexpr: evaluations count=3 failed=0 immediate=1 wall-us=1858
+constexpr: steps count=476
+constexpr: calls count=179 memo-hits=16 memo-misses=24 memo-hit-rate=40.0%
+constexpr: memory allocs=1 bytes=40 peak-live=40 reclaimed=40 peak-arena=40
+constexpr: interned frozen-bytes=48 refl-bytes=0 static-bytes=16
+constexpr: meta-ops count=0 splice-fast=0
+constexpr: trials count=1 failed=0 steps=354 wall-us=52
+constexpr: compile functions=3 wall-us=196
+```
+
+**`-fconstexpr-profile`** selects the output as
+`-fkiln-instantiation-report` does:
+
+| Spelling | Output |
+|---|---|
+| `-fconstexpr-profile`, `=text` | text on stderr |
+| `=json` | NDJSON on stderr |
+| `=<file>` ending in `.json` | NDJSON to `<file>` |
+| `=<file>`, otherwise | text to `<file>` |
+
+The last spelling wins. A file that cannot be written is `unable to open
+output file` (`drv_cannot_open_output`, an error). `-fconstexpr-profile-limit=N`
+(default 20; 0 is unlimited) caps the rows of each table; the rows left
+out are counted on a `... K more rows` line (text only; NDJSON stops
+silently, its `total` row still counts every function and site).
+
+The report has two tables, each ranked by inclusive steps (descending),
+then count (descending), then location (file, line, column), then name,
+so it is the same on every run but for its times:
+
+- **functions**: each constexpr or consteval function the Oven ran,
+  with its qualified name and declaration location (`[consteval]` marks
+  an immediate function), its calls (memo hits included, and also
+  counted on their own), inclusive and exclusive steps, time and the
+  peak constexpr heap live during a call. The rows include the trial
+  evaluations' calls (folds, constant-initialization checks), which have
+  no site row.
+- **evaluation sites**: each recorded top-level evaluation
+  ([expr.const]/22 manifestly constant-evaluated contexts:
+  `static_assert`, an immediate invocation, a `constexpr` variable's
+  initializer `init <variable>`, a template argument, ...), its count,
+  failures, steps, time and peak.
+
+The text form:
+
+```text
+===-- kiln constexpr profile: fib.cpp --===
+functions (top 3 of 3, by inclusive steps):
+   calls    memo   incl steps   self steps    incl ms    self ms  peak bytes  functions
+      38      16          708          708      0.089      0.089           0  fib [consteval]   (fib.cpp:1:15)
+       1       0          105          105      0.039      0.039           0  sum   (fib.cpp:2:15)
+       1       0           17           17      0.021      0.021          40  heap   (fib.cpp:3:15)
+evaluation sites (top 3 of 3, by inclusive steps):
+   evals  failed   incl steps   self steps    incl ms    self ms  peak bytes  evaluation sites
+       1       0          354            0      2.477      2.417           0  consteval   (fib.cpp:5:9)
+       1       0          105            0      0.107      0.067           0  init b   (fib.cpp:6:15)
+       1       0           17            0      0.084      0.063          40  init c   (fib.cpp:7:15)
+  total: 3 evaluations, 476 steps, 2.668 ms; 1 trials, 354 steps; 40 calls
+```
+
+(`fib`'s 708 steps are the immediate invocation's 354 plus those of a
+trial that folds `int a = fib(10);`'s whole initializer again, WP-1129.)
+
+The NDJSON form has one object per row, then a totals object:
+
+```text
+{"function":"fib","consteval":true,"loc":"fib.cpp:1:15","calls":38,"memo_hits":16,"incl_steps":708,"self_steps":708,"incl_us":94,"self_us":94,"peak_bytes":0}
+{"site":"consteval","loc":"fib.cpp:5:9","evaluations":1,"failed":0,"incl_steps":354,"self_steps":0,"incl_us":2019,"self_us":1955,"peak_bytes":0}
+{"total":true,"file":"fib.cpp","functions":3,"sites":3,"evaluations":3,"steps":476,"wall_us":2293,"trials":1,"trial_steps":354,"calls":40}
+```
+
+A text row's location is the file's base name; a JSON `loc` is the
+presumed file name as spelled. Times are wall-clock, so only the
+counts are reproducible. Step and call counts are exact: every step is
+counted, nothing is sampled. A site's exclusive time includes compiling
+its functions to bytecode.
+
 ## Output, diagnostics, exit status
 
 - Driver diagnostics (bad arguments, missing inputs) are prefixed with the
@@ -2218,6 +2315,18 @@ Each deviation is covered by a test or a test note.
   `consteval` call, plain and verbose; the granularity; no flag, no file.
   `driver.rs` `time_trace_syntax_only`: the unused warnings and the
   invalid granularity.
+- `crates/kiln_driver/tests/constexpr_profile.rs` (WP-1116): "Constexpr
+  profile": exact steps and calls of a recursion, a loop and a memoized
+  consteval recursion (also in a variable's initializer, with its trial);
+  heap peak and reclaimed bytes of `new`/`delete`; a failed evaluation
+  and a failed trial; NDJSON well-formedness; ranking tie-breaks and
+  run-to-run determinism; the text layout, the limit, the file outputs
+  and an unwritable file; the summary's lines; codegen jobs; nothing
+  printed without the flags and an unchanged `-fconstexpr-report` with
+  them; an importer of a BMI. `module_cache.rs`
+  `constexpr_profile_is_the_importers_only`: an in-process module build
+  prints nothing. `constexpr_opts.rs` unit tests: the spellings and
+  their errors.
 - `crates/kiln_driver/tests/verify.rs`: `-verify` end to end under both
   names (`kiln` and `kiln++`): the report pinned against clang 19, and
   compared live with `clang++-19 -Xclang -verify` when it is installed.
