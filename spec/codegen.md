@@ -430,7 +430,21 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `-fmath-errno`, §3.2; WP-419's `roundeven` / `fmaximum_num` / `fminimum_num`
     below) are emitted as their `__builtin_` twin
     (`DeclArena::lib_builtin`, `builtins::lib_intrinsic`; WP-186,
-    `tests/codegen/builtins_lib_intrinsic.cpp`). Not done (follow-ups):
+    `tests/codegen/builtins_lib_intrinsic.cpp`). WP-1073 adds clang
+    `EmitBuiltinExpr`'s inline lowering of: `alloca` (GNU; a dynamic
+    `alloca i8` of the operand, aligned to `__BIGGEST_ALIGNMENT__`), `mempcpy`
+    (GNU; `llvm.memcpy` then the `getelementptr` past the end), `bzero` /
+    `bcopy` (GNU; `__builtin_bzero` / `__builtin_bcopy`: `llvm.memset` of
+    zero, and `llvm.memmove` with the source and destination swapped
+    back), `finite` / `__finite` `{,f,l}` (as `__builtin_isfinite`) and `creal` / `cimag` / `conj` `{,f,l}` (the
+    operand's parts, `conj` an `fneg` of the imaginary part)
+    (`tests/codegen/lib_gnu_inline.cpp`, `lib_gnu_inline_std.cpp`,
+    `lib_complex_parts.cpp`, `lib_alloc_size*.cpp`). `abort` stays a
+    `noreturn nounwind` call (WP-938; already clang's) and the
+    `returns_twice` functions (`setjmp` ...) carry `returns_twice` on
+    the declaration and the call (`builtins::returns_twice`, WP-807;
+    already clang's, confirmed by WP-1073's
+    `ext.gnu.returns_twice/setjmp-modified-local-run.cpp`). Not done (follow-ups):
     clang's -O0 fold of a library call the constant evaluator accepts
     (`strlen("abc")` is `i64 3`, `memcmp` of literals), clang 22's
     `modf` to `llvm.modf`; `-fno-builtin` / `-fno-builtin-<name>` and
@@ -907,11 +921,13 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   with GNU `malloc` and a pointer result a `noalias` result (clang
   `RestrictAttr`) and turns GNU `alloc_size(n[, m])` into
   `allocsize(n-1[,m-1])` (the LLVM index counts `this`, like the
-  one-based source index). `extern "C"` namespace-scope `malloc`,
-  `calloc`, `realloc` and `aligned_alloc` with a pointer result are the
-  library builtins clang gives an implicit `allocsize` (`(0)`, `(0,1)`,
-  `(1)`, `(1)`; `aligned_alloc` also an implicit `alloc_align(1)`) (clang
-  `AddKnownFunctionAttributes`).
+  one-based source index). The library allocation functions `malloc`,
+  `calloc`, `realloc`, `aligned_alloc` and (GNU) `memalign` get clang's
+  implicit `alloc_size` / `alloc_align` from sema (clang
+  `AddKnownFunctionAttributes`; spec/sema.md "Library functions",
+  WP-1073), so codegen reads them as written attributes: `allocsize`
+  `(0)`, `(0,1)`, `(1)`, `(1)`, `(1)`. (Before WP-1073 codegen matched
+  the first four by name itself; the IR was already clang's.)
 - **Direct calls** (`alloc_call_attrs`, from `emit_call` and the
   non-virtual member call): a direct call of a replaceable `operator
   new` gets `allocsize(0)`, `noalias` and `nonnull` unless nothrow;

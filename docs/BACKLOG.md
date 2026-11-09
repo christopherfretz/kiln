@@ -1071,7 +1071,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1048 | modules kind 2 part 2: serialised decl/type/expression image, fresh DeclIds, ODR merging, lazy loading (cuts import std time) | WP-985 | done (#434, part 2a; rest is WP-1064..1070) |
 | WP-1049 | driver --help: reverse test that every option the argument parser accepts is listed in help.rs (or on an explicit hidden list), next to every_listed_option_is_accepted (crates/kiln_driver/src/help.rs:366) | WP-1027 | open |
 | WP-1052 | exception-spec tails: implicit member exception-spec type lists (except.rs:1109), dependent and pack throw lists in template definitions (except.rs:1127) incl. clang eager dependent throw(T) error, nested function-type rule (except.rs:1100) | WP-1017 | open |
-| WP-1053 | partial-spec ordering tails: constrained partial specs (order.rs:477), member-template partial specs (order.rs:465), non-deducible F<T..., int> | WP-1017 | open |
+| WP-1053 | partial-spec ordering tails: constrained partial specs (order.rs:477), member-template partial specs (order.rs:465), non-deducible F<T..., int> | WP-1017 | in progress |
 | WP-1054 | SILENT DROP: class template members whose declaration fails at instantiation are dropped without a diagnostic, so instantiation-time wrong-tag errors are missed (clang dcl.type.elab/p3.cpp:60) | WP-1017 | done (#435) |
 | WP-1050 | module cache eviction: bound the std/std.compat module cache size and age (kiln_driver module_cache.rs) | WP-984 | open |
 | WP-1051 | -MD on a module cache hit lists every libc++ header the std module read; match clang dependency output for import std | WP-984 | open |
@@ -1101,7 +1101,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1073 | builtins: model returns_twice (setjmp, vfork, getcontext), allocsize (malloc family), scanf format on library builtins, and clang inline lowering of abort/alloca/bzero/bcopy/mempcpy/conj/creal/cimag/finite (kiln_ast decl.rs:3792, kiln_codegen builtins.rs) | WP-914 | open |
 | WP-1074 | tests: flaky kiln_driver module_cache racing_misses_all_succeed under load (tests/module_cache.rs:193) | WP-914 | done (#450) |
 | WP-1077 | linkage: closure type in a function template signature (decltype of a lambda) is emitted internal where clang uses linkonce_odr (kiln_abi mangle.rs ~600 tag_externally_visible) | WP-1060 | open |
-| WP-1081 | expansion statements: break/continue in template for headers (statement expressions in the init/range) not modelled or tested against clang (kiln_parse stmt.rs parse_for_rest) | WP-1075 | open |
+| WP-1081 | expansion statements: break/continue in template for headers (statement expressions in the init/range) not modelled or tested against clang (kiln_parse stmt.rs parse_for_rest) | WP-1075 | in progress |
 | WP-1078 | accepts-invalid: implicit copy/move assignment overriding a final function and the implicit overrider return-type check are not diagnosed (kiln_sema class/special/implicit.rs:1368, class/virtual/mod.rs:414; needs note while declaring the implicit copy assignment operator) | WP-957 | open |
 | WP-1079 | accepts-invalid: overrider nested function-type exception-spec rule (exception specifications of argument types differ) (kiln_sema except.rs:1172, class/virtual/mod.rs:785) | WP-957 | open |
 | WP-1080 | accepts-invalid: enum F; with no fixed underlying type is not diagnosed (ISO C++ forbids forward references to enum types) (kiln_sema decl.rs:7911) | WP-957 | open |

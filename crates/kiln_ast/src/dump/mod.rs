@@ -2094,7 +2094,14 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             let _ = write!(self.line, " {}", node.a);
         }
         if node.kind == AttrKind::FORMAT {
-            let _ = write!(self.line, " printf {} {}", node.b & 0xffff, node.b >> 16);
+            // kiln_sema's archetype numbering; only `printf`, `strftime`
+            // and `scanf` are told apart.
+            let arch = match node.a {
+                2 => "strftime",
+                3 => "scanf",
+                _ => "printf",
+            };
+            let _ = write!(self.line, " {arch} {} {}", node.b & 0xffff, node.b >> 16);
         }
         if matches!(node.kind, AttrKind::VISIBILITY | AttrKind::TYPE_VISIBILITY) {
             self.line.push_str(match node.visibility() {
