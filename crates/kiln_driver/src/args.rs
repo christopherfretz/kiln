@@ -357,7 +357,7 @@ pub enum ArgError {
     /// ("unsupported option '{opt}' for target '{triple}'").
     UnsupportedForTarget(String, String),
     /// A GCC/clang flag kiln recognises but deliberately does not
-    /// implement (`-ftrapv`, profile-guided optimization,
+    /// implement (`-fshort-enums`, profile-guided optimization,
     /// spec/driver.md "Codegen flags"): "'{arg}' is not supported by kiln".
     UnsupportedByKiln(String),
     /// "invalid argument '{0}' only allowed with '{1}'"
@@ -372,6 +372,12 @@ pub enum ArgError {
     NotAllowedWith(String, String),
     /// "no such file or directory: '{0}'" (`-fsanitize-ignorelist=`).
     NoSuchFile(String),
+    /// "malformed sanitizer ignorelist: '{0}'": LLVM `SpecialCaseList`'s
+    /// message (WP-1032).
+    MalformedIgnorelist(String),
+    /// A `#!special-case-list-v1` (regular expression) ignorelist: its
+    /// path (WP-1032).
+    RegexIgnorelist(String),
 }
 
 /// The parsed command line.
@@ -558,6 +564,9 @@ pub struct Args {
     /// template arguments mangle (spec/reflection.md §8.3; the hidden
     /// `kiln-hashed` is a prototype; the last one wins).
     pub reflection_mangling: kiln_abi::ReflectionMangling,
+    /// The hidden `-fkiln-bmi-kind=1|2`: the module file kind written
+    /// (spec/modules.md §11.11; `None` is kind 2 when it applies).
+    pub bmi_kind: Option<u8>,
     /// Errors, in order.
     pub errors: Vec<ArgError>,
     /// The `-fconstexpr-*` options.
@@ -1064,6 +1073,14 @@ impl Args {
                             "-fkiln-source-path-style=".to_owned(),
                             v.to_owned(),
                         )),
+                    }
+                } else if let Some(v) = arg.strip_prefix("-fkiln-bmi-kind=") {
+                    match v {
+                        "1" => self.bmi_kind = Some(1),
+                        "2" => self.bmi_kind = Some(2),
+                        _ => self
+                            .errors
+                            .push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())),
                     }
                 } else if let Some(v) = arg.strip_prefix("-fkiln-reflection-mangling=") {
                     match kiln_abi::ReflectionMangling::parse(v) {

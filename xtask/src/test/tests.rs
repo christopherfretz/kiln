@@ -66,6 +66,7 @@ fn cli_parsing() {
             require_gcc: false,
             require_debuggers: false,
             debug_sweep: false,
+            bmi_kind: None,
         }
     );
     assert_eq!(parse_args(strings(&["--help"])).unwrap(), None);
@@ -943,6 +944,14 @@ fn ci_gate_honours_failure_counts() {
 
 /// `--meta-header` and `meta-header: skip` (spec/harness.md
 /// "Header-differential mode").
+#[test]
+fn bmi_kind_option() {
+    assert_eq!(parse_args(strings(&["--bmi-kind", "1"])).unwrap().unwrap().bmi_kind, Some(1));
+    assert_eq!(parse_args(strings(&["--bmi-kind=2"])).unwrap().unwrap().bmi_kind, Some(2));
+    assert!(parse_args(strings(&["--bmi-kind", "3"])).is_err());
+    assert!(parse_args(strings(&["--bmi-kind"])).is_err());
+}
+
 #[test]
 fn meta_header_mode_selection() {
     let o = parse_args(strings(&["--meta-header"])).unwrap().unwrap();

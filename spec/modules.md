@@ -628,11 +628,19 @@ All integers are little-endian. A file is:
 ```
 magic      8 bytes   "KILNBMI\0"
 format     u32       1
-kind       u8        1 = source capsule (2 reserved: serialised AST)
+kind       u8        1 = source capsule, 2 = capsule plus sections (§11.11)
 header     version string, sha string, module key, unit kind (u8)
 body       predefines, fingerprint, imports, files, include log, embed log
+sections   kind 2 only: u32 count (at least 1), then per section
+           u32 tag and its bytes (u32 length), tags strictly increasing
 checksum   u64       FNV-1a 64 of every preceding byte
 ```
+
+A kind-1 file has no section list and is byte for byte what it was before
+kind 2 existed; the reader accepts both kinds, and the format version
+stays 1. Tag 1 is the carried constant results (§11.11); tag 0 and
+unknown tags are "corrupt" (a newer kiln writes a newer kiln version,
+which is a version mismatch before any section is read).
 
 A string is a `u32` byte length and UTF-8; a list is a `u32` count and its
 elements; an optional value is a `u8` tag (0 absent, 1 present) and the
@@ -663,9 +671,11 @@ no includer).
 
 The format version changes whenever the layout does; the reader accepts
 only its own. `kiln_pp::bmi` holds the format because a capsule is
-preprocessor input; no new crate is needed. A `kiln_bmi` crate (between
-`kiln_sema` and the driver) comes with the stage-2 format, which
-serialises the AST.
+preprocessor input; no new crate is needed. A section's contents belong
+to the crate that reads them: the carried constants are
+`kiln_sema::bmi_ast` (they key on sema's evaluation contexts and intern
+into its constant store), and `kiln_pp::bmi` frames them as opaque bytes
+(§11.11 "Encoding").
 
 ### 11.4 Fingerprint and mismatch diagnostics
 
@@ -756,6 +766,8 @@ clang's spellings (spec/driver.md, "Modules"):
   suffix).
 - `-fmodule-header`, `-fmodule-header=user|system`, `.pcm` header units:
   step 2 (§11.10); still `error: unsupported option`.
+- `-fkiln-bmi-kind=1|2` (hidden, WP-985): the module file kind written,
+  for tests and measurements (§11.11 "Fallback").
 
 Part A's single invocation (`kiln++ -fmodule-file=m=m.cppm m.cppm
 main.cpp`) is unchanged.
@@ -924,13 +936,292 @@ consumer but not the partition. `import std;` through CMake
   capsule of kind "header unit" (its exported macros are those of its
   replay, §3), `-fmodule-file=<hdr.pcm>` imports it, and `import "h";`
   finds it by the header's path.
-- **Serialised-AST format (kind 2).** A reader that appends a unit's
-  declarations with fresh `DeclId`s and its `UnitInfo`, with ODR merging
-  in place of §6 dedup; lookup does not change (§1). It is also where
-  already-evaluated constant state can be carried (constexpr variable
-  values, consteval results, template instantiations with their oven
-  costs), so importers do not redo compile-time work: kiln's main reason
-  to build it.
+- **Serialised-AST format (kind 2).** Designed in §11.11 "Kind 2: the
+  serialised-AST module file (WP-985)". Part 1 (WP-985) carries the
+  unit's self-contained constant results beside the capsule, so an
+  importer does not run the Oven again for them. Part 2 is the
+  declaration, type and expression image that replaces the replay (a
+  reader that appends a unit's declarations with fresh `DeclId`s and its
+  `UnitInfo`, with ODR merging in place of §6 dedup; lookup does not
+  change, §1), and with it carried pointer, reflection and
+  instantiation results (§11.11 "Part 2").
+
+### 11.11 Kind 2: the serialised-AST module file (WP-985)
+
+Kind 2 is the module file that lets an importer skip work the interface
+unit already did. A full AST image (option (b) of §11.1) needs a
+serialiser for every declaration, type, expression, statement, template
+and evaluator object, and a reader that remaps every id. That is several
+work packages. **Part 1 (WP-985) is a clean cut**: a kind-2 file is the
+kind-1 capsule plus *sections*, and the one section it defines carries the
+unit's self-contained constant-evaluation results. The importer still
+replays the capsule (§11.2), so every declaration, lookup and diagnostic
+is exactly part A's. It no longer runs the Oven for an evaluation whose
+result the file carries. That is the work kiln most wants to avoid
+repeating, and the constexpr report shows when it is avoided. Part 2
+replaces the replay with the image designed below, behind the same
+section framing.
+
+#### Inventory
+
+What an image must hold, the id it is keyed by, and where it stands:
+
+| state | id / owner | part 1 | part 2 |
+|---|---|---|---|
+| declarations, redeclaration groups, `UnitInfo` (owner, attachment, visibility) | `DeclId`, `RedeclId`; `Ast`, `Ast::modules` | replayed | image, appended (see "Identity") |
+| types | `QualType` into the type context | replayed; a carried value's type is its expression's | type table, re-interned |
+| expressions, statements, attributes, lists | `ExprId`, `StmtId`, `AttrId`, `ListId` | replayed | bodies the importer can use (inline, constexpr, templates), per declaration |
+| template specializations and implicit instantiations | sema's instantiation tables | replayed | carried, merged by (template, arguments) |
+| constant values | `ConstValueId` in the `ConstStore` | **carried**: integers, enumerators, `bool`, floating point, null pointers, aggregates without pointers or unions | pointers, references, member pointers, reflections (they name declarations) |
+| Oven state (frozen heap objects, memo tables) | the Oven | not carried | frozen objects as constant values; memo tables stay per TU |
+| source positions | `FileId`, `Loc` | keys only (see "Identity") | location table over the capsule's file table |
+| identifiers | `Symbol` (`kiln_source::Interner`) | replayed | string table, re-interned |
+| macros, include state, pragmas | `kiln_pp` | replayed (the capsule) | replayed: a named module exports no macros (§3), and the capsule stays the source of truth for diagnostics |
+| lookup tables, scopes | sema | rebuilt by the replay | rebuilt from the appended declarations (§1: lookup does not change) |
+
+#### Identity and remapping
+
+Part 1 needs no id remapping. A carried result is keyed by *where* the
+evaluation happens, which the replay reproduces exactly:
+
+- `kind`: one byte, the `EvalKind` (static assertion, initializer,
+  template argument, immediate invocation, `if constexpr`, constraint,
+  other) with bit 4 = the enum range check and bit 5 = "evaluates an
+  object's initializer". These are the context fields that change a
+  result. A consteval block (it can inject declarations) and a `plain`
+  evaluation are never carried.
+- two positions, the construct's (`EvalContext::loc`) and the evaluated
+  expression's first token, each as (path index, offset) of its expansion
+  location and then of its spelling location. Paths are the source
+  manager's names, stored once in the section's path table. A file named
+  `<...>` (the `<built-in>` buffer, scratch buffers) or with no name
+  gives no key: the replay does not reproduce its offsets.
+
+The value's type is not stored. It is the canonical, unqualified type of
+the evaluated expression; the writer checks that it is, and the reader
+takes it from its own replayed copy of the expression. A result is used
+only while the importer reads the unit the file holds
+(`module_current_unit` is that unit's and no instantiation is in
+progress), so the same header text read by the importer itself never
+matches.
+
+Part 2's remapping, one table per id space, built as the image loads:
+
+- `DeclId`: the file numbers the unit's declarations 0..n. The reader
+  appends them, so local index i becomes `base + i`. A reference to
+  another unit's declaration is (module key, local index), resolved
+  through that module's load; a reference to a global-module-fragment or
+  header entity is an ODR key (enclosing context's key, name, kind,
+  signature), resolved by lookup.
+- `QualType`: a type table in dependency order. Each entry is the type's
+  structure with remapped operands, re-interned through the type context,
+  so the importer's canonical types stay canonical. cv bits stay on the
+  `QualType`.
+- `ExprId` / `StmtId`: appended with a base offset, written only for
+  bodies an importer can use, and loaded per declaration.
+- `FileId` / `Loc`: (file index, offset) into the capsule's file table.
+  Files load through `load_regular_file_expecting` as today (§11.2), and
+  macro expansions are rebuilt from recorded expansion records only when
+  a diagnostic needs them.
+- `Symbol`: a string table, interned once per load.
+- Constant values: part 1's encoding plus pointer (remapped base
+  declaration and path), member pointer and reflection (remapped entity).
+
+**§6 dedup becomes ODR merging.** Today an importer's and a unit's
+copies of a GMF entity are merged because both come from the same
+`FileId` and offset (§6, "Merging by entity"). With an image there is no
+second parse to compare against. A GMF declaration in the file merges
+into the importer's redeclaration group with the same ODR key; two
+definitions are compared by a structural hash and, if they differ, give
+clang's "different definitions in different modules" error. Implicit
+instantiations merge the same way, keyed by (template, remapped
+arguments), and keep the first result. This is also how a carried
+instantiation's result reaches an importer that instantiates the same
+specialization.
+
+#### Encoding
+
+All in safe Rust in existing crates (no new crate, no new dependency).
+`kiln_pp::bmi` frames sections (§11.3: a count, then strictly increasing
+tags, each with its length) as opaque bytes. Their contents belong to the
+crate that reads them: the carried constants are `kiln_sema::bmi_ast`.
+Section 1, little-endian:
+
+```
+paths    u32 count, then each path (u32 length, UTF-8)
+entries  u32 count (at least 1), then each entry:
+  kind   u8      (see "Identity"; low nibble 0..6, bits 6-7 zero)
+  at     4 x u32 (expansion path index, offset, spelling path index, offset)
+  expr   4 x u32 (the same, for the expression's first token)
+  value  u8 tag, then
+         0 integer:   u8 signed, u32 width (1..=2^24-1), ceil(width/64) x u64 words
+         1 bool:      u8 0|1
+         2 float:     u8 kind (FloatKind), u128 bits (no bits above the kind's width)
+         3 null pointer
+         4 aggregate: bytes (u32 length), u32 padding count, then
+                      (u32 start, u32 length) ranges, sorted, non-empty,
+                      not adjacent, within the bytes
+```
+
+- **Deterministic.** Paths are in first-use order and entries in
+  first-evaluation order (no hash-map iteration), so the same inputs give
+  the same bytes, and the driver test checks this.
+- **Hardened reader.** `bmi_ast::decode` checks every count against the
+  bytes left before sizing anything by it, validates UTF-8, flags,
+  widths, words (`IntBits::from_words`: no bits above the width),
+  float bits, padding ranges, path indices, duplicate keys and trailing
+  bytes. Any failure is a `SectionError`, turned into §11.4's
+  `fatal error: module file 'x.pcm' is corrupt: carried constants:
+  <reason>`. The framing errors (`a kind-2 file without sections`,
+  `unknown section`, `sections out of order`) are `BmiError`s with the
+  same diagnostic. A decoded value that does not fit its expression's
+  type (width, signedness, float kind, `bool`, pointer type, aggregate
+  size), or that the constant store rejects as non-canonical, is not
+  used: the evaluation runs. The whole file is still covered by the
+  checksum (§11.3), so a damaged section is only seen when the checksum
+  was recomputed. Nothing panics on file contents (the fuzz tests below).
+
+#### Laziness, measured
+
+Part 1 decodes the section eagerly, once per imported unit, when the
+replay enters the unit, into one hash map. Laziness does not pay off
+here: the replay makes every evaluation the table can answer, in order.
+For libc++ 19's `std` the section is 139,200 bytes (1.5% of the file,
+2900 entries, 48 bytes each). Its decoding cost is below the measurement
+noise: with kind-1 and kind-2 imports interleaved, kind 2 is never slower
+(`-c` median of 5 runs, 1.43 s against 1.46 s), and its peak memory is
+the same within 1 MiB. Part 2 must be lazy: an offset table per
+declaration, with bodies, specializations and constant values loaded on
+first use. Its target is clang's import cost (0.23 s, measured below),
+and it is measured the same way.
+
+#### Constant state keyed by the fingerprint
+
+A carried result is valid only for the compile that produced it. The
+section travels inside the module file, whose fingerprint (§11.4) and
+kiln version are checked before any section is read. So a result is used
+only under the same `-std=`, target, exceptions, RTTI, `char`
+signedness, `char8_t`, sized deallocation, freestanding, reflection
+flags, `-fclang-compat=` and kiln build, and with the writer's
+predefines and file texts (the replay is hermetic, §11.2). The kiln
+version check covers the Oven: a kiln that evaluates differently is a
+different version. Two things outside the fingerprint are deliberately
+the writer's, as with clang's BMI, which stores evaluated values:
+
+- the evaluation limits (`-fconstexpr-steps=`, `-fconstexpr-depth=`): a
+  result the writer computed is used even if the importer's limit is
+  lower;
+- `__DATE__` / `__TIME__`: a carried value derived from them keeps the
+  writer's.
+
+#### What is carried (the writer)
+
+The driver turns recording on only for a compile that writes a module
+file and does not force kind 1. Sema then records every evaluation
+`eval_const` makes while it reads the main unit (`module_current_unit()
+== 0`), and keeps a result only if all of these hold:
+
+- no template instantiation is in progress (one position, many results);
+- a key exists (see "Identity");
+- the evaluation is pure: it added no declaration, expression or
+  statement and emitted no error or warning (a carried result would
+  silence a diagnostic the importer must give, and an evaluation that
+  instantiated a template must still instantiate it);
+- it succeeded, its value's type is its expression's, and the value is
+  self-contained (see "Inventory");
+- no other evaluation had the same key.
+
+The rest are evaluated again by the importer, as in kind 1.
+
+#### Fallback
+
+The default writes kind 2 when at least one result is carried, and kind 1
+otherwise. The hidden `-fkiln-bmi-kind=1` always writes kind 1, and `=2`
+is the default. The choice is never a warning. Under `-v` the driver
+prints one of:
+
+```
+note: wrote module file 'm.pcm' as kind 2, carrying N constant results
+note: wrote module file 'm.pcm' as kind 1: no constant result to carry (first not carried: <reason>)
+note: wrote module file 'm.pcm' as kind 1, as -fkiln-bmi-kind=1 requests
+```
+
+The `<reason>` is the first evaluation that was not carried, one of: `an
+evaluation inside a template instantiation`, `a consteval block`, `an
+evaluation at a position a replay does not reproduce`, `an evaluation that
+changed the AST`, `an evaluation that emitted a diagnostic`, `an
+evaluation that failed`, `a value whose type is not its expression's`, `a
+pointer or reference value`, `a pointer-to-member value`, `a reflection
+value`, `an aggregate holding a pointer`, `an aggregate holding a union`,
+`two evaluations at one position`. When the unit made no evaluation at
+all, the parenthesis is left out. The reader accepts both kinds, so
+mixing them in one build is fine.
+
+On libc++ 19's `std.cppm`, 2900 results are carried. Of the evaluations
+that are not carried, 10142 happen inside a template instantiation, 141
+are two evaluations at one position, 74 failed, 23
+are at positions a replay does not reproduce, 13 have a value whose type
+is not its expression's, 6 are aggregates holding a pointer, and one
+changed the AST. libc++ 22 gives the same mix (2961 carried, 9637 inside
+instantiations). Of the 28 interface-unit builds in the 16 `module:` tests, 3 are kind 2
+(`gmi_inner`, `gmi_outer`, and `two-step-visibility`'s `m`). The other 25
+make no constant evaluation at all and are kind 1.
+
+#### Measurements
+
+Harness profile, aarch64, one session, `/usr/bin/time -v` (wall time and
+peak RSS, median of 3; kind-1/kind-2 `-c` imports median of 5,
+interleaved). Workloads: the `import std;` program of §11.1 against
+libc++ 19's `std.cppm`, and a synthetic constexpr-heavy interface (eight
+`constexpr long` initializers of 500,000 loop iterations each and a
+512-entry prime table as a `constexpr` aggregate, with a
+`static_assert`) whose importer reads them in a `static_assert` and
+`main`.
+
+| run | `import std;` (libc++ 19) | constexpr-heavy module |
+|---|---|---|
+| kiln `--precompile`, kind 1 | 1.05 s, 97.7 MiB, 8,990,697 B | 0.25 s, 10.8 MiB, 23,384 B |
+| kiln `--precompile`, kind 2 | 1.06 s, 99.5 MiB, 9,129,897 B | 0.25 s, 10.7 MiB, 25,966 B |
+| kiln import, kind 1, `-fsyntax-only` | 1.12 s, 95.9 MiB | 0.25 s, 10.5 MiB |
+| kiln import, kind 2, `-fsyntax-only` | 1.09 s, 95.6 MiB | **0.02 s**, 10.3 MiB |
+| kiln import, kind 1, `-c` | 1.46 s, 96.1 MiB | 0.27 s, 60.6 MiB |
+| kiln import, kind 2, `-c` | 1.43 s, 97.0 MiB | **0.05 s**, 60.6 MiB |
+| kiln part A (`-fmodule-file=std=std.cppm`), `-fsyntax-only` | 1.13 s, 91.1 MiB | |
+| clang 19 `--precompile` | 1.55 s, 261.7 MiB, 31,255,932 B | 4.80 s, 85.3 MiB |
+| clang 19 import, `-fsyntax-only` | 0.23 s, 141.1 MiB | 0.06 s, 84.6 MiB |
+| clang 19 import, `-c` | 0.46 s, 158.9 MiB | |
+| clang 22 `--precompile` (libc++ 19 headers) | 1.71 s, 294.8 MiB, 32,373,840 B | 4.67 s, 88.0 MiB |
+| clang 22 import, `-fsyntax-only` | 0.40 s, 169.3 MiB | 0.06 s, 86.5 MiB |
+| clang 22 import, `-c` | 0.56 s, 184.9 MiB | |
+
+The constant state carried, from the importer's `-fconstexpr-report=`:
+
+- constexpr-heavy module: kind 1 re-evaluates 4,074,689 Oven steps, and
+  kind 2 evaluates nothing (0 steps, 0 evaluations), so the import drops
+  from 0.25 s to 0.02 s and becomes faster than clang's 0.06 s;
+- `std`: an importer makes 17,222 evaluations instead of 20,119. `std`'s
+  own constant work is small (618 steps, 17 ms in all), so its import
+  time is still the replay's (§11.8), which is part 2's to remove.
+
+With libc++ 22's `std.cppm`, kind 2 carries 2961 results (10,655,331 B
+against 10,485,735 B), and the imports again match kind 1 within noise
+(`-c` 1.94 s against 2.02 s, 105 MiB).
+
+#### Part 2
+
+Next, in order:
+
+1. carried results for evaluations inside instantiations, keyed by the
+   instantiation (template, remapped arguments) rather than the position:
+   the 10,142 above, and the bulk of a template-heavy constexpr workload;
+2. pointer, reference and reflection values (they need `DeclId`
+   remapping);
+3. the declaration and type image with ODR merging (see "Identity"),
+   loaded lazily, which retires the replay and brings `import std;`
+   towards clang's 0.23 s.
+
+The section framing, the fallback note, the harness variant and the fuzz
+tests are reused as they are.
 
 ### 11.12 `import std;` module files: the cache and CMake (WP-984)
 
@@ -1169,3 +1460,23 @@ interface or `stdapp`'s source never rebuilds the std module.
   installed `clang-scan-deps-22` in its smoke test.
 - CMake (WP-982): `scripts/oss/selftest.sh` `cmake_modules` builds
   `scripts/oss/fixtures/modules` (§11.9).
+- Kind 2 (WP-985, §11.11): `crates/kiln_sema/src/bmi_ast.rs` unit
+  tests (the section's round trip, no bytes without a carried entry,
+  trailing bytes and an out-of-range path index rejected, and a fuzz
+  test: every truncation rejected, then five flips of every byte, four
+  `u32` values (large, zero) written at every offset and 4000
+  deterministic random multi-byte mutations, each decoded without a
+  panic); `crates/kiln_pp/src/bmi.rs` `kind2_*` (the framing round trip,
+  every truncation and byte flip of a kind-2 file, an empty section list,
+  tag 0, an unknown tag, a repeated tag, sections after a kind-1 body, an
+  unknown kind);
+  `crates/kiln_driver/tests/modules_bmi.rs` `kind2_carries_constant_results`
+  (the `-v` notes, the kind byte, determinism, the importer's constexpr
+  report showing no evaluation of the unit under kind 2 and its full
+  re-evaluation under kind 1, linked programs and `-c m.pcm` under both
+  kinds), `kind2_falls_back_to_kind1` (the fallback reason and the forced
+  kind) and `kind2_damaged_files_are_diagnosed` (truncated and flipped
+  kind-2 files are fatal errors, and 24 damaged sections behind a valid
+  checksum give a diagnostic or a fallback evaluation, never a panic);
+  and every `module:` test under `cargo xtask test --bmi-kind 1` and
+  `--bmi-kind 2` (spec/harness.md "Module-file kinds"), both in `ci`.

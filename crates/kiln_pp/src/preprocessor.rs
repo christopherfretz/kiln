@@ -90,6 +90,9 @@ pub enum Marker {
         header: bool,
         /// The import's module or header name.
         span: Span,
+        /// The carried constant results of a kind-2 module file
+        /// (spec/modules.md §11.11).
+        carried: Option<Rc<crate::bmi::CarriedSection>>,
     },
     /// The tokens of imported unit `key` ended.
     UnitEnd {

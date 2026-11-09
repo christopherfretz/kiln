@@ -395,6 +395,21 @@ clang++-19 and compares the reports. Detail, and the compile-time cost of
 each mode, in
 [spec/landed/codegen/WP-941.md](../spec/landed/codegen/WP-941.md).
 
+## Sanitizers
+
+| feature | flags | status |
+|---|---|---|
+| UndefinedBehaviorSanitizer | `-fsanitize=undefined` and its members, `integer`, recover/trap/abort modes | **Works**: the frontend IR equals clang 19's and 22's for every check but vptr and function (not implemented yet); reports come from clang's runtime |
+| AddressSanitizer, HWASan, TSan, MSan, LeakSanitizer, libFuzzer | `-fsanitize=address`, `hwaddress`, `thread`, `memory`, `leak`, `fuzzer` | **Works**: clang's attributes and pass pipeline; under ASan and MSan kiln does not name local values, so stack reports show no variable names |
+| Trapping overflow | `-ftrapv`, `-ftrapv-handler=` | **Works**: IR as clang's |
+| Check merging | `-f[no-]sanitize-merge[=]` | **Works**: `nomerge` and trap blocks as clang 22 |
+| Ignorelists | `-fsanitize-ignorelist=`, the default `asan`/`hwasan`/`msan` lists, `-fno-sanitize-ignorelist` | **Works** for `fun:`, `src:`, `mainfile:`, `global:`, `type:` and `=init`, with clang's error wording; regular-expression (`#!special-case-list-v1`) lists are rejected |
+
+The runtimes are LLVM's compiler-rt (Debian package `libclang-rt-19-dev`),
+which the linking `clang++` adds. Detail in
+[docs/design/sanitizers.md](design/sanitizers.md) and
+[spec/landed/codegen/WP-1032.md](../spec/landed/codegen/WP-1032.md).
+
 ## Constexpr and compile-time performance
 
 The wave-4 constexpr-heavy projects were built once with kiln and once

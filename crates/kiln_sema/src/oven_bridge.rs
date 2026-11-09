@@ -302,7 +302,15 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         if self.special.has_pending() {
             self.flush_pending_deleted();
         }
-        self.with_oven(Some(ctx.loc), |oven, b| oven.evaluate(b, e, ctx))
+        if let Some(v) = self.carried_lookup(e, &ctx) {
+            return Ok(v);
+        }
+        let probe = self.carried_probe(e, &ctx);
+        let r = self.with_oven(Some(ctx.loc), |oven, b| oven.evaluate(b, e, ctx));
+        if let Some(p) = probe {
+            self.carried_record(&p, e, &r);
+        }
+        r
     }
 
     /// The characters of a `static_assert` message: its `size` and
