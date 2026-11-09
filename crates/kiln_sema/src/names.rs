@@ -148,6 +148,8 @@ impl<'s> SemaNames<'s> {
         // scope: a local type prints without the scope of the function
         // that holds it (`(unnamed enum at …)` in `A::k`, not `A::…`).
         let is_type = matches!(self.ast.decls.get(d).kind(), DeclKind::CXXRecord | DeclKind::Enum);
+        let is_enumerator = self.ast.decls.get(d).kind() == DeclKind::EnumConstant;
+        let own_ctx = cur;
         while let Some(c) = cur {
             let n = self.ast.decls.get(c);
             if is_type && (n.kind().is_function() || n.kind() == DeclKind::FunctionTemplate) {
@@ -159,6 +161,20 @@ impl<'s> SemaNames<'s> {
                     chain.push(self.simple(c).unwrap_or_else(|| "(anonymous namespace)".into()));
                     name_in_scope = n.name();
                 }
+                // [dcl.enum]/11: an unscoped enumerator is declared in the
+                // scope enclosing its enumeration, so clang's
+                // `printNestedNameSpecifier` skips an unscoped enumeration
+                // (`S::m`, not `S::(unnamed enum ...)::m`; WP-929). clang 19
+                // skips only an enumerator's own enumeration (a type defined
+                // in an enumerator's initializer is `E::S`); clang 22 skips
+                // every unscoped one (`S`).
+                DeclKind::Enum
+                    if (self.clang_compat >= 22 || (is_enumerator && cur == own_ctx))
+                        && !self
+                            .ast
+                            .decls
+                            .enumeration(self.ast.definition(c).unwrap_or(c))
+                            .is_some_and(kiln_ast::decl::EnumData::is_scoped) => {}
                 DeclKind::CXXRecord | DeclKind::Enum => {
                     let mut s = String::new();
                     self.write_unscoped(c, &mut s);

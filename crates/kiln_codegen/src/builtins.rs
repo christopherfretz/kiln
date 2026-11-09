@@ -956,6 +956,12 @@ impl Cg<'_> {
                     kiln_llvm::intrinsics::thread_pointer(&mut self.m, self.opts.llvm_major >= 20);
                 self.intrinsic_call(f, vec![])
             }
+            // clang `BI__builtin_readcyclecounter`: `llvm.readcyclecounter()`
+            // on every target (WP-1057).
+            id::READCYCLECOUNTER => {
+                let f = kiln_llvm::intrinsics::readcyclecounter(&mut self.m);
+                self.intrinsic_call(f, vec![])
+            }
             // clang `BI__builtin_return_address`: `llvm.returnaddress(i32 N)`.
             id::RETURN_ADDRESS => {
                 let level = self.emit_scalar(a0)?;

@@ -370,6 +370,20 @@ impl Sema<'_, '_> {
                 .map(|e| e.1)
                 .collect();
         }
+        // An unscoped enumerator declared after block-scope functions of
+        // its name (clang accepts it, WP-929) is found with them: an
+        // ambiguity, latest first.
+        if kind == LookupKind::Ordinary && self.kind_of(raw) == DeclKind::EnumConstant {
+            let mut v: Vec<DeclId> = s
+                .locals
+                .iter()
+                .rev()
+                .filter(|e| e.0 == name && e.2 == Ns::Ordinary && (e.1 == raw || fnlike(e.1)))
+                .map(|e| e.1)
+                .collect();
+            v.dedup();
+            return v;
+        }
         if kind != LookupKind::Ordinary || !fnlike(raw) {
             return vec![raw];
         }
@@ -540,6 +554,14 @@ impl Sema<'_, '_> {
                 }
                 continue;
             }
+            // [dcl.enum]/11: an unscoped enumeration's enumerators are
+            // declared in the enclosing scope, where the lookup finds them
+            // together with whatever else that scope declares (an overload
+            // set of the same name makes `enum { f, g = f }` ambiguous;
+            // WP-929).
+            if s.kind == ScopeKind::Enum && !self.is_scoped_enum(entity) {
+                continue;
+            }
             let local = self.ast.lookup_local(entity, dname);
             if !matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit) {
                 let own = self.filter(local.iter_ordinary(), kind);
@@ -643,13 +665,51 @@ impl Sema<'_, '_> {
     /// `IdentifierResolver` chain), then the namespace's lookup table;
     /// duplicates are then removed by moving the last entry into the
     /// duplicate's place (`LookupResult::resolveKind`).
+    /// Whether the current context is written inside the definition of
+    /// class `c` (its lexical parents reach `c`): an out-of-line member
+    /// definition is not.
+    fn lexically_within(&self, c: DeclId) -> bool {
+        let mut cur = Some(self.ctx);
+        let mut n = 0;
+        while let Some(x) = cur
+            && n < 1024
+        {
+            if self.ast.first(x) == c {
+                return true;
+            }
+            cur = self.ast.decls.lexical_ctx(x).or_else(|| self.ast.decls.get(x).ctx());
+            n += 1;
+        }
+        false
+    }
+
     pub(crate) fn ambiguity_order(&self, decls: &[DeclId], unqualified: bool) -> Vec<DeclId> {
         if !unqualified {
             return decls.to_vec();
         }
+        // An unscoped enumerator belongs to the scope enclosing its
+        // enumeration ([dcl.enum]/11), where clang lists it among the
+        // scope's own declarations, latest first (WP-929).
         let ctx_of = |d: DeclId| {
-            self.ast.decls.get(d).ctx().map(|c| self.ast.first(self.ast.redecl_context(c)))
+            let mut c = self.ast.decls.get(d).ctx()?;
+            if self.kind_of(c) == DeclKind::Enum && !self.is_scoped_enum(c) {
+                c = self.ast.decls.get(c).ctx()?;
+            }
+            Some(self.ast.first(self.ast.redecl_context(c)))
         };
+        // Members of one class looked up from inside its definition
+        // (clang's scope chain, not the class's lookup table): latest
+        // first, as the namespace-scope ones below. Not in an out-of-line
+        // member (`int S::g() { ... }`), which looks into the class.
+        if let Some(c) = decls.first().and_then(|&d| ctx_of(d))
+            && self.kind_of(c) == DeclKind::CXXRecord
+            && decls.iter().all(|&d| ctx_of(d) == Some(c))
+            && self.lexically_within(c)
+        {
+            let mut v = decls.to_vec();
+            v.sort_by_key(|d| std::cmp::Reverse(d.index()));
+            return v;
+        }
         let Some(scope) = self.scopes.iter().rev().find(|s| {
             matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit)
                 && s.entity.is_some_and(|e| {

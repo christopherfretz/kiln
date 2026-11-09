@@ -942,7 +942,9 @@ impl ConstructInfo {
     /// Decodes [`ConstructInfo::to_aux`].
     pub fn from_aux(aux: u8) -> Self {
         ConstructInfo {
-            kind: ConstructionKind::from_u8(aux & 3).expect("2-bit construction kind"),
+            kind: ConstructionKind::from_u8(aux & 3).expect(
+                "invariant: ConstructInfo::to_aux encodes every ConstructionKind in 2 bits",
+            ),
             list: aux & (1 << 2) != 0,
             std_init_list: aux & (1 << 3) != 0,
             zeroing: aux & (1 << 4) != 0,
@@ -1629,7 +1631,7 @@ impl ExprArena {
         match n.kind {
             ExprKind::DeclRefExpr => DeclId::new(n.a),
             ExprKind::MemberExpr => DeclId::new(n.b),
-            k => panic!("{k:?} references no declaration"),
+            k => panic!("invariant: decl() is called on a DeclRefExpr or MemberExpr, found {k:?}"),
         }
     }
 
@@ -1646,7 +1648,8 @@ impl ExprArena {
 
     /// The operator of a `UnaryOperator`.
     pub fn unary_op(&self, e: ExprId) -> UnaryOp {
-        UnaryOp::from_u8(self.expect_kind(e, ExprKind::UnaryOperator).aux).expect("valid opcode")
+        UnaryOp::from_u8(self.expect_kind(e, ExprKind::UnaryOperator).aux)
+            .expect("invariant: the builder stores a valid opcode in aux")
     }
 
     /// The operator of a `BinaryOperator` / `CompoundAssignOperator`.
@@ -1657,7 +1660,7 @@ impl ExprArena {
             "expected a binary operator, found {:?}",
             n.kind
         );
-        BinaryOp::from_u8(n.aux).expect("valid opcode")
+        BinaryOp::from_u8(n.aux).expect("invariant: the builder stores a valid opcode in aux")
     }
 
     /// The side record of a `CompoundAssignOperator`.
@@ -1669,7 +1672,7 @@ impl ExprArena {
     pub fn cast_kind(&self, e: ExprId) -> CastKind {
         let n = self.get(e);
         assert!(n.kind.is_cast(), "expected a cast, found {:?}", n.kind);
-        CastKind::from_u8(n.aux).expect("valid cast kind")
+        CastKind::from_u8(n.aux).expect("invariant: the builder stores a valid CastKind in aux")
     }
 
     /// The type as written of a named or functional cast, when it is not
@@ -1719,7 +1722,7 @@ impl ExprArena {
     /// The kind of a `CharacterLiteral`.
     pub fn char_kind(&self, e: ExprId) -> CharKind {
         CharKind::from_u8(self.expect_kind(e, ExprKind::CharacterLiteral).aux)
-            .expect("valid char kind")
+            .expect("invariant: the builder stores a valid CharKind in aux")
     }
 
     /// The code point of a `CharacterLiteral`.
@@ -1730,7 +1733,7 @@ impl ExprArena {
     /// The kind of a `StringLiteral`.
     pub fn string_kind(&self, e: ExprId) -> StringKind {
         StringKind::from_u8(self.expect_kind(e, ExprKind::StringLiteral).aux)
-            .expect("valid string kind")
+            .expect("invariant: the builder stores a valid StringKind in aux")
     }
 
     /// The value of a `CXXBoolLiteralExpr`.
@@ -1740,7 +1743,8 @@ impl ExprArena {
 
     /// The radix of an `IntegerLiteral` as written.
     pub fn radix(&self, e: ExprId) -> Radix {
-        Radix::from_u8(self.expect_kind(e, ExprKind::IntegerLiteral).aux).expect("valid radix")
+        Radix::from_u8(self.expect_kind(e, ExprKind::IntegerLiteral).aux)
+            .expect("invariant: the builder stores a valid Radix in aux")
     }
 
     /// Why a `DeclRefExpr` / `MemberExpr` is not an odr-use.
@@ -1751,7 +1755,7 @@ impl ExprArena {
             "expected DeclRefExpr or MemberExpr, found {:?}",
             n.kind
         );
-        NonOdrUse::from_u8(n.aux).expect("valid non-odr-use kind")
+        NonOdrUse::from_u8(n.aux).expect("invariant: the builder stores a valid NonOdrUse in aux")
     }
 
     /// Records why a `DeclRefExpr` / `MemberExpr` is not an odr-use (sema's
@@ -1897,7 +1901,9 @@ impl ExprArena {
                 ExprKind::UnaryOperator if n.aux == UnaryOp::Extension as u8 => {
                     e = ExprId::new(n.a);
                 }
-                k => panic!("update_string_init_type on {k:?}"),
+                k => panic!(
+                    "invariant: update_string_init_type is called on a (parenthesized or __extension__) StringLiteral, found {k:?}"
+                ),
             }
         }
     }
@@ -1973,7 +1979,8 @@ impl ExprArena {
     /// The operator of a `CXXOperatorCallExpr` (spec/sema-overload.md §8).
     pub fn operator_call_op(&self, e: ExprId) -> crate::names::OverloadedOperator {
         let n = self.expect_kind(e, ExprKind::CXXOperatorCallExpr);
-        crate::names::OverloadedOperator::from_u8(n.aux).expect("operator kind")
+        crate::names::OverloadedOperator::from_u8(n.aux)
+            .expect("invariant: the builder stores a valid OverloadedOperator in aux")
     }
 
     /// The operand of a `CXXRewrittenBinaryOperator`: its semantic form
@@ -1986,7 +1993,10 @@ impl ExprArena {
     /// of the two operands as written.
     pub fn rewritten_written(&self, e: ExprId) -> (BinaryOp, ListId) {
         let n = self.expect_kind(e, ExprKind::CXXRewrittenBinaryOperator);
-        (BinaryOp::from_u8(n.aux).expect("valid opcode"), ListId::new(n.b))
+        (
+            BinaryOp::from_u8(n.aux).expect("invariant: the builder stores a valid opcode in aux"),
+            ListId::new(n.b),
+        )
     }
 
     /// The implied object argument of a `CXXMemberCallExpr`: the base of
@@ -2048,13 +2058,18 @@ impl ExprArena {
     /// constructor is inherited from a virtual base.
     pub fn inherited_ctor_info(&self, e: ExprId) -> (ConstructionKind, bool) {
         let aux = self.expect_kind(e, ExprKind::CXXInheritedCtorInitExpr).aux;
-        (ConstructionKind::from_u8(aux & 3).expect("2-bit kind"), aux & 4 != 0)
+        (
+            ConstructionKind::from_u8(aux & 3)
+                .expect("invariant: the builder encodes every ConstructionKind in 2 bits"),
+            aux & 4 != 0,
+        )
     }
 
     /// The storage duration of a `MaterializeTemporaryExpr`.
     pub fn temporary_storage(&self, e: ExprId) -> StorageDuration {
         let aux = self.expect_kind(e, ExprKind::MaterializeTemporaryExpr).aux;
-        StorageDuration::from_u8(aux & 3).expect("2-bit storage duration")
+        StorageDuration::from_u8(aux & 3)
+            .expect("invariant: the builder encodes every StorageDuration in 2 bits")
     }
 
     /// True if a `MaterializeTemporaryExpr` is bound to an lvalue
@@ -2222,7 +2237,10 @@ impl ExprArena {
     pub fn typeid_operand(&self, e: ExprId) -> TypeidOperand {
         let n = self.expect_kind(e, ExprKind::CXXTypeidExpr);
         if n.has(ExprFlags::ARG_IS_TYPE) {
-            TypeidOperand::Type(QualType::from_raw(n.a).expect("typeid type operand"))
+            TypeidOperand::Type(
+                QualType::from_raw(n.a)
+                    .expect("invariant: an ARG_IS_TYPE typeid stores a QualType (never 0) in a"),
+            )
         } else {
             TypeidOperand::Expr(ExprId::new(n.a))
         }
@@ -2279,7 +2297,7 @@ impl ExprArena {
     /// The kind of a `UnaryExprOrTypeTraitExpr`.
     pub fn trait_kind(&self, e: ExprId) -> TraitKind {
         TraitKind::from_u8(self.expect_kind(e, ExprKind::UnaryExprOrTypeTraitExpr).aux)
-            .expect("valid trait kind")
+            .expect("invariant: the builder stores a valid TraitKind in aux")
     }
 
     /// The type operand of a `UnaryExprOrTypeTraitExpr` (`None` for an
@@ -2294,7 +2312,12 @@ impl ExprArena {
     pub fn va_arg(&self, e: ExprId) -> (ExprId, QualType, Loc) {
         let n = self.expect_kind(e, ExprKind::VAArgExpr);
         let ty_loc = self.cold.trait_rhs_loc.get(e).copied().unwrap_or(n.loc);
-        (ExprId::new(n.a), QualType::from_raw(n.b).expect("VAArgExpr: written type"), ty_loc)
+        (
+            ExprId::new(n.a),
+            QualType::from_raw(n.b)
+                .expect("invariant: a VAArgExpr stores its written QualType (never 0) in b"),
+            ty_loc,
+        )
     }
 
     /// The (unevaluated) operand of a `CXXNoexceptExpr`.
@@ -2316,7 +2339,7 @@ impl ExprArena {
             n.kind,
             ExprKind::TypeTraitExpr | ExprKind::ArrayTypeTraitExpr | ExprKind::ExpressionTraitExpr
         ));
-        TypeTrait::from_u8(n.aux).expect("valid type trait")
+        TypeTrait::from_u8(n.aux).expect("invariant: the builder stores a valid TypeTrait in aux")
     }
 
     /// The type operands of a `TypeTraitExpr` (a `ListId` of `QualType`s).
@@ -2390,7 +2413,7 @@ impl ExprArena {
     /// The queried type of an `ArrayTypeTraitExpr`.
     pub fn array_trait_type(&self, e: ExprId) -> QualType {
         QualType::from_raw(self.expect_kind(e, ExprKind::ArrayTypeTraitExpr).a)
-            .expect("array trait type")
+            .expect("invariant: an ArrayTypeTraitExpr stores its QualType (never 0) in a")
     }
 
     /// The cold record of an `ArrayTypeTraitExpr`.
@@ -2407,7 +2430,7 @@ impl ExprArena {
     /// The initialization style of a `CXXNewExpr`.
     pub fn new_init_style(&self, e: ExprId) -> NewInitStyle {
         NewInitStyle::from_u8(self.expect_kind(e, ExprKind::CXXNewExpr).aux)
-            .expect("valid new init style")
+            .expect("invariant: the builder stores a valid NewInitStyle in aux")
     }
 
     /// The operand of a `CXXDeleteExpr` (converted to a pointer prvalue).
@@ -2568,7 +2591,7 @@ impl ExprArena {
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 n.aux |= 1 << 5;
             }
-            k => panic!("expected DeclRefExpr or CXXConstructExpr, found {k:?}"),
+            k => panic!("invariant: only a DeclRefExpr or a construction escalates, found {k:?}"),
         }
     }
 
@@ -2640,7 +2663,9 @@ impl ExprArena {
         (
             ExprId::new(n.a),
             n.aux & 1 != 0,
-            QualType::from_raw(n.b).expect("CXXPseudoDestructorExpr: destroyed type"),
+            QualType::from_raw(n.b).expect(
+                "invariant: a CXXPseudoDestructorExpr stores its destroyed QualType (never 0) in b",
+            ),
         )
     }
 
@@ -2918,7 +2943,8 @@ impl ExprArena {
     pub fn binary_conditional_operands(&self, e: ExprId, lists: &IdLists) -> [ExprId; 4] {
         let n = self.expect_kind(e, ExprKind::BinaryConditionalOperator);
         let mut it = lists.iter::<ExprId>(ListId::new(n.a));
-        let mut next = || it.next().expect("four operands");
+        let mut next =
+            || it.next().expect("invariant: binary_conditional pushes exactly four operands");
         [next(), next(), next(), next()]
     }
 
@@ -2926,7 +2952,10 @@ impl ExprArena {
     /// written; not evaluated).
     pub fn pseudo_syntactic(&self, e: ExprId, lists: &IdLists) -> ExprId {
         let n = self.expect_kind(e, ExprKind::PseudoObjectExpr);
-        lists.iter::<ExprId>(ListId::new(n.a)).next().expect("syntactic form")
+        lists
+            .iter::<ExprId>(ListId::new(n.a))
+            .next()
+            .expect("invariant: pseudo_object pushes the syntactic form first")
     }
 
     /// The semantic expressions of a `PseudoObjectExpr`, in evaluation
@@ -2941,7 +2970,9 @@ impl ExprArena {
     /// value of the whole expression.
     pub fn pseudo_result(&self, e: ExprId, lists: &IdLists) -> ExprId {
         let n = self.expect_kind(e, ExprKind::PseudoObjectExpr);
-        lists.at::<ExprId>(ListId::new(n.a), n.b as usize + 1).expect("result expression")
+        lists
+            .at::<ExprId>(ListId::new(n.a), n.b as usize + 1)
+            .expect("invariant: pseudo_object checks its result index is in range")
     }
 
     /// The operand as written of a `CoawaitExpr`, `CoyieldExpr` or
@@ -2950,10 +2981,13 @@ impl ExprArena {
         let n = self.get(e);
         match n.kind {
             ExprKind::DependentCoawaitExpr => ExprId::new(n.a),
-            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
-                lists.iter::<ExprId>(ListId::new(n.a)).next().expect("operand")
+            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => lists
+                .iter::<ExprId>(ListId::new(n.a))
+                .next()
+                .expect("invariant: coawait_expr / dependent_coawait push the operand first"),
+            k => {
+                panic!("invariant: coawait_operand is called on a co_await / co_yield, found {k:?}")
             }
-            k => panic!("expected a coroutine expression, found {k:?}"),
         }
     }
 
