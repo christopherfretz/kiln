@@ -921,10 +921,14 @@ impl Sema<'_, '_> {
         true
     }
 
-    /// True if `d` is a namespace-scope declaration of another named
-    /// unit's global module fragment (not a header unit, not a purview):
-    /// never visible from the current unit except by a merge
-    /// ([module.global.frag]/3: the GMF is not exported).
+    /// True if `d` is a namespace-scope declaration of the global module
+    /// that the current unit does not see: one of another named unit's
+    /// global module fragment (never visible except by a merge,
+    /// [module.global.frag]/3: the GMF is not exported), or one of a
+    /// non-module unit or header unit the current unit does not import —
+    /// the importer's own declarations before the `import` that built
+    /// the current module unit in-process (another translation unit,
+    /// [basic.def.odr]/15; WP-1156).
     fn module_hidden_global(&self, d: DeclId) -> bool {
         let mt = &self.ast.modules;
         if !mt.active || !self.inst.stack.is_empty() {
@@ -935,7 +939,10 @@ impl Sema<'_, '_> {
         if o.unit == self.modules.cur() || o.purview {
             return false;
         }
-        mt.units.get(usize::from(o.unit)).is_some_and(|u| u.kind.is_named())
+        let u = usize::from(o.unit);
+        mt.units.get(u).is_some_and(|info| {
+            info.kind.is_named() || !self.modules.visible.get(u).copied().unwrap_or(false)
+        })
     }
 
     /// Merges the one declaration `d` into the current unit.
